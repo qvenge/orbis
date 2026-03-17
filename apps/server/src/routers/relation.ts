@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { eq, and, or, sql } from 'drizzle-orm';
+import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../trpc.ts';
 import { relations, entities } from '../db/schema.ts';
 import { createRelationInput, deleteRelationInput } from '@orbis/shared';
@@ -18,7 +19,7 @@ export const relationRouter = router({
       .where(and(eq(entities.id, input.targetId), eq(entities.userId, ctx.userId)));
 
     if (!source || !target) {
-      throw new Error('Both entities must exist and belong to you');
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Both entities must exist and belong to you' });
     }
 
     const id = crypto.randomUUID();

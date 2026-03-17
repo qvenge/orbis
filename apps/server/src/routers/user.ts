@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
+import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../trpc.ts';
 import { userSettings } from '../db/schema.ts';
 import { updateSettingsInput, DEFAULT_ASPECT_STATUSES, VIEW_ASPECT_MAP } from '@orbis/shared';
@@ -82,7 +83,7 @@ export const userRouter = router({
         .from(userSettings)
         .where(eq(userSettings.userId, ctx.userId));
 
-      if (!settings) throw new Error('User settings not found');
+      if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'User settings not found' });
 
       const views = (settings.installedViews as string[]) ?? [];
       if (views.includes(input.viewId)) {
@@ -117,7 +118,7 @@ export const userRouter = router({
         .from(userSettings)
         .where(eq(userSettings.userId, ctx.userId));
 
-      if (!settings) throw new Error('User settings not found');
+      if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'User settings not found' });
 
       const views = ((settings.installedViews as string[]) ?? []).filter(
         (v) => v !== input.viewId,

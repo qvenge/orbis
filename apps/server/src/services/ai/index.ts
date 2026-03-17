@@ -5,9 +5,11 @@ import { generateTools } from './tools.ts';
 import { buildSystemPrompt } from './system-prompt.ts';
 import { executeToolCall } from './executor.ts';
 import { getConversationHistory, appendMessage } from './context.ts';
+import { buildCards } from './card-builder.ts';
+import { generateSuggestions } from './suggestion-generator.ts';
 import { aspectDefinitions, userSettings } from '../../db/schema.ts';
 import { DEFAULT_ASPECT_STATUSES } from '@orbis/shared';
-import type { AIChatResponse, ActionResult, Card, AIChatInput } from '@orbis/shared';
+import type { AIChatResponse, ActionResult, AIChatInput } from '@orbis/shared';
 import type { Database } from '../../db/client.ts';
 
 export async function handleChat(
@@ -85,7 +87,6 @@ export async function handleChat(
       });
     }
 
-    // Save assistant message with tool calls
     const assistantWithTools: LLMMessage = {
       role: 'assistant',
       content: response.content,
@@ -93,7 +94,6 @@ export async function handleChat(
     };
     appendMessage(userId, assistantWithTools);
 
-    // Send tool results back
     const toolResultMessage: LLMMessage = {
       role: 'user',
       content: '',
@@ -101,76 +101,15 @@ export async function handleChat(
     };
     appendMessage(userId, toolResultMessage);
 
-    // Follow-up call for final response
     const followUpMessages = [...history, userMessage, assistantWithTools, toolResultMessage];
     response = await llm.chat({ messages: followUpMessages, tools, systemPrompt });
   }
 
-  // 10. Save final assistant message
+  // 9. Save final assistant message
   appendMessage(userId, { role: 'assistant', content: response.content });
 
-  // 11. Build cards from actions
-  const cards: Card[] = [];
-  for (const action of allActions) {
-    if (action.type === 'entity_created' && action.entity) {
-      cards.push({ type: 'entity', entity: action.entity });
-    } else if (action.type === 'entity_updated' && action.entity) {
-      cards.push({ type: 'entity', entity: action.entity });
-    } else if (action.type === 'entity_list' && action.entities) {
-      cards.push({ type: 'entity_list', entities: action.entities, title: 'Search Results' });
-    } else if (action.type === 'summary_generated' && action.data) {
-      const d = action.data as Record<string, unknown>;
-      const sType = d.summaryType as string;
-      if (sType === 'budget') {
-        cards.push({
-          type: 'budget_summary',
-          totalIncome: d.totalIncome as number,
-          totalExpenses: d.totalExpenses as number,
-          balance: d.balance as number,
-          currency: settings.defaultCurrency ?? 'RUB',
-        } as Card);
-      } else if (sType === 'fitness') {
-        cards.push({
-          type: 'fitness_progress',
-          period: `${d.year}/${d.month}`,
-          workouts: d.workouts as number,
-          totalVolume: d.totalVolume as number,
-          totalDuration: d.totalDuration as number,
-          avgEffort: d.avgEffort as number,
-        } as Card);
-      } else if (sType === 'nutrition') {
-        cards.push({
-          type: 'nutrition_summary',
-          period: `${d.year}/${d.month}`,
-          dailyAvgCalories: d.dailyAvgCalories as number,
-          dailyAvgProtein: d.dailyAvgProtein as number,
-          dailyAvgCarbs: d.dailyAvgCarbs as number,
-          dailyAvgFat: d.dailyAvgFat as number,
-          totalMeals: d.totalMeals as number,
-        } as Card);
-      } else if (sType === 'habits') {
-        cards.push({
-          type: 'habit_streaks',
-          habits: d.habits as Array<{ name: string; emoji: string | null; streak: number; checkedInToday: boolean }>,
-        } as Card);
-      } else if (sType === 'day') {
-        cards.push({
-          type: 'day_summary',
-          date: d.date as string,
-          tasks: d.tasks as number,
-          completed: d.completed as number,
-          events: d.events as number,
-        } as Card);
-      } else if (sType === 'week') {
-        cards.push({
-          type: 'week_plan',
-          days: d.days as Array<{ date: string; weekday: string; tasks: number; events: number }>,
-        } as Card);
-      }
-    }
-  }
-
-  // 12. Generate suggestions
+  // 10. Build cards and suggestions
+  const cards = buildCards(allActions, settings.defaultCurrency ?? 'RUB');
   const suggestions = generateSuggestions(allActions, input.context?.activeView);
 
   return {
@@ -179,62 +118,4 @@ export async function handleChat(
     cards,
     suggestions,
   };
-}
-
-function generateSuggestions(actions: ActionResult[], activeView?: string): string[] {
-  const suggestions: string[] = [];
-
-  // Action-based suggestions
-  for (const action of actions) {
-    if (action.type === 'entity_created') {
-      suggestions.push('Undo');
-      const aspects = action.entity?.aspects as Record<string, unknown> | undefined;
-      if (aspects?.['orbis/task']) {
-        suggestions.push('Set priority');
-        suggestions.push('Set due date');
-      }
-      if (aspects?.['orbis/financial']) {
-        suggestions.push('Budget status');
-      }
-      if (aspects?.['orbis/fitness']) {
-        suggestions.push('Fitness progress');
-      }
-      if (aspects?.['orbis/nutrition']) {
-        suggestions.push('Nutrition this month');
-      }
-    }
-    if (action.type === 'summary_generated') {
-      suggestions.push('Show details');
-    }
-  }
-
-  // View-based suggestions (when no action context)
-  if (suggestions.length === 0 && activeView) {
-    if (activeView === 'budget') {
-      suggestions.push('Budget status', 'Recent expenses');
-    } else if (activeView === 'fitness') {
-      suggestions.push('Fitness progress', 'Log a workout');
-    } else if (activeView === 'nutrition') {
-      suggestions.push('Nutrition this month', 'Log a meal');
-    } else if (activeView === 'habits') {
-      suggestions.push('Show my habits', 'Check in on habits');
-    } else if (activeView === 'calendar') {
-      suggestions.push("What's on today?", 'Plan my week');
-    }
-  }
-
-  // Time-of-day defaults
-  if (suggestions.length === 0) {
-    const hour = new Date().getHours();
-    if (hour >= 6 && hour < 12) {
-      suggestions.push('Plan my day', "What's on today?");
-    } else if (hour >= 18 || hour < 6) {
-      suggestions.push('How was my day?', 'Budget status');
-    } else {
-      suggestions.push("What's today?", 'Show my tasks');
-    }
-    suggestions.push('Show my habits');
-  }
-
-  return suggestions.slice(0, 4);
 }

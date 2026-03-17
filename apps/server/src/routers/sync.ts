@@ -9,54 +9,53 @@ export const syncRouter = router({
     const incomingEntities = input.changes.entities as Array<Record<string, unknown>>;
     let conflictCount = 0;
 
-    for (const entityData of incomingEntities) {
-      if (!entityData.id) continue;
-      const id = String(entityData.id);
+    // Wrap in transaction for atomicity
+    await ctx.db.transaction(async (tx) => {
+      for (const entityData of incomingEntities) {
+        if (!entityData.id) continue;
+        const id = String(entityData.id);
 
-      // Check if entity exists
-      const [existing] = await ctx.db
-        .select({ id: entities.id, updatedAt: entities.updatedAt })
-        .from(entities)
-        .where(and(eq(entities.id, id), eq(entities.userId, ctx.userId)));
+        const [existing] = await tx
+          .select({ id: entities.id, updatedAt: entities.updatedAt })
+          .from(entities)
+          .where(and(eq(entities.id, id), eq(entities.userId, ctx.userId)));
 
-      if (existing) {
-        // LWW: only update if incoming is newer
-        const incomingUpdatedAt = entityData.updatedAt ? new Date(String(entityData.updatedAt)) : new Date();
-        if (incomingUpdatedAt > existing.updatedAt) {
-          const { id: _id, userId: _uid, createdAt: _cat, ...updateFields } = entityData;
-          await ctx.db
-            .update(entities)
-            .set({
-              ...updateFields,
-              updatedAt: incomingUpdatedAt,
-              syncedAt: new Date(),
-            } as Record<string, unknown>)
-            .where(and(eq(entities.id, id), eq(entities.userId, ctx.userId)));
+        if (existing) {
+          const incomingUpdatedAt = entityData.updatedAt ? new Date(String(entityData.updatedAt)) : new Date();
+          if (incomingUpdatedAt > existing.updatedAt) {
+            const { id: _id, userId: _uid, createdAt: _cat, ...updateFields } = entityData;
+            await tx
+              .update(entities)
+              .set({
+                ...updateFields,
+                updatedAt: incomingUpdatedAt,
+                syncedAt: new Date(),
+              } as Record<string, unknown>)
+              .where(and(eq(entities.id, id), eq(entities.userId, ctx.userId)));
+          } else {
+            conflictCount++;
+          }
         } else {
-          // Server version is newer — conflict (server wins)
-          conflictCount++;
+          await tx
+            .insert(entities)
+            .values({
+              id,
+              userId: ctx.userId,
+              title: String(entityData.title ?? 'Untitled'),
+              emoji: entityData.emoji ? String(entityData.emoji) : null,
+              body: String(entityData.body ?? ''),
+              bodyRefs: (entityData.bodyRefs as string[]) ?? [],
+              tags: (entityData.tags as string[]) ?? [],
+              meta: (entityData.meta as Record<string, unknown>) ?? {},
+              aspects: (entityData.aspects as Record<string, unknown>) ?? {},
+              createdAt: entityData.createdAt ? new Date(String(entityData.createdAt)) : new Date(),
+              updatedAt: entityData.updatedAt ? new Date(String(entityData.updatedAt)) : new Date(),
+              syncedAt: new Date(),
+            })
+            .onConflictDoNothing();
         }
-      } else {
-        // Insert new
-        await ctx.db
-          .insert(entities)
-          .values({
-            id,
-            userId: ctx.userId,
-            title: String(entityData.title ?? 'Untitled'),
-            emoji: entityData.emoji ? String(entityData.emoji) : null,
-            body: String(entityData.body ?? ''),
-            bodyRefs: (entityData.bodyRefs as string[]) ?? [],
-            tags: (entityData.tags as string[]) ?? [],
-            meta: (entityData.meta as Record<string, unknown>) ?? {},
-            aspects: (entityData.aspects as Record<string, unknown>) ?? {},
-            createdAt: entityData.createdAt ? new Date(String(entityData.createdAt)) : new Date(),
-            updatedAt: entityData.updatedAt ? new Date(String(entityData.updatedAt)) : new Date(),
-            syncedAt: new Date(),
-          })
-          .onConflictDoNothing();
       }
-    }
+    });
 
     if (conflictCount > 0) {
       console.log(`[Sync] ${conflictCount} conflict(s) resolved (server wins) for user ${ctx.userId}`);

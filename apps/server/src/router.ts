@@ -1,5 +1,5 @@
 import { router } from './trpc.ts';
-import { entityRouter } from './routers/entity.ts';
+import { entityRouter } from './routers/entity/index.ts';
 import { relationRouter } from './routers/relation.ts';
 import { aspectRouter } from './routers/aspect.ts';
 import { userRouter } from './routers/user.ts';
