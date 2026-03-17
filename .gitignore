@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+.vite/
+.turbo/
+bun.lock
+.claude/
+.agents/
+__pycache__/
+skills-lock.json

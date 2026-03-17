@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "types": ["bun-types"],
+    "paths": {
+      "@orbis/shared": ["../../packages/shared/src"]
+    }
+  },
+  "include": ["src", "../../packages/shared/src"]
+}
