@@ -14,10 +14,6 @@ export function ChatPanel() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleSend = (text: string) => {
-    sendMessage(text);
-  };
-
   return (
     <div className="flex h-full flex-col bg-surface">
       {/* Messages */}
@@ -37,17 +33,17 @@ export function ChatPanel() {
               <ChatMessage
                 key={msg.id}
                 message={msg}
-                onSuggestionSelect={handleSend}
+                onSuggestionSelect={sendMessage}
                 onEntityClick={openEntity}
               />
             ))}
             {isLoading && (
-              <div className="flex justify-start">
+              <div className="flex justify-start" aria-live="polite" aria-label="Loading response">
                 <div className="px-3 py-2">
                   <span className="inline-flex gap-0.5 text-text-muted">
                     <span className="animate-pulse">.</span>
-                    <span className="animate-pulse" style={{ animationDelay: '0.2s' }}>.</span>
-                    <span className="animate-pulse" style={{ animationDelay: '0.4s' }}>.</span>
+                    <span className="animate-pulse delay-[200ms]">.</span>
+                    <span className="animate-pulse delay-[400ms]">.</span>
                   </span>
                 </div>
               </div>
@@ -58,7 +54,7 @@ export function ChatPanel() {
       </div>
 
       {/* Input */}
-      <ChatInput onSend={handleSend} disabled={isLoading} />
+      <ChatInput onSend={sendMessage} disabled={isLoading} />
     </div>
   );
 }

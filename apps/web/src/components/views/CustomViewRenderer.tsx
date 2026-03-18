@@ -2,6 +2,7 @@ import { ArrowLeft } from 'lucide-react';
 import type { CustomViewConfig, Entity } from '@orbis/shared';
 import { useNavigationStore } from '../../stores/navigation.ts';
 import { trpc } from '../../lib/trpc.ts';
+import { IconButton } from '../ui/IconButton.tsx';
 import { GenericListView } from './GenericListView.tsx';
 import { GenericTableView } from './GenericTableView.tsx';
 import { GenericChartView } from './GenericChartView.tsx';
@@ -39,7 +40,7 @@ function computeAggregations(
 }
 
 export function CustomViewRenderer({ config }: CustomViewRendererProps) {
-  const { openHub, openEntity } = useNavigationStore();
+  const { navigate, openEntity } = useNavigationStore();
 
   const { data, isLoading } = trpc.entity.list.useQuery({
     aspects: [config.aspectId],
@@ -58,9 +59,7 @@ export function CustomViewRenderer({ config }: CustomViewRendererProps) {
     <div className="flex h-full flex-col overflow-y-auto">
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-        <button onClick={openHub} className="rounded-md p-1 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text">
-          <ArrowLeft className="h-4 w-4" />
-        </button>
+        <IconButton icon={ArrowLeft} label="Go back" onClick={() => navigate('hub')} />
         <h2 className="text-sm font-semibold text-text">{config.name}</h2>
         <span className="text-[10px] text-text-muted">{entities.length} items</span>
       </div>

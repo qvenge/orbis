@@ -1,4 +1,5 @@
 import { Plus, Trash2 } from 'lucide-react';
+import { AspectCard } from '../ui/AspectCard.tsx';
 
 interface Milestone {
   title: string;
@@ -38,9 +39,7 @@ export function GoalAspectCard({ data, onChange }: GoalAspectCardProps) {
   };
 
   return (
-    <div className="rounded-lg border border-border bg-surface-dim p-3">
-      <p className="mb-3 text-xs font-medium uppercase tracking-wider text-text-muted">Goal</p>
-
+    <AspectCard title="Goal">
       <div className="grid grid-cols-3 gap-3">
         {/* Current Value */}
         <div>
@@ -147,6 +146,6 @@ export function GoalAspectCard({ data, onChange }: GoalAspectCardProps) {
           <Plus className="h-3 w-3" /> Add milestone
         </button>
       </div>
-    </div>
+    </AspectCard>
   );
 }

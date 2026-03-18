@@ -1,5 +1,7 @@
+import { useMemo } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { MEAL_TYPES } from '@orbis/shared';
+import { AspectCard } from '../ui/AspectCard.tsx';
 
 interface FoodItem {
   name: string;
@@ -39,7 +41,7 @@ function computeTotals(items: FoodItem[]) {
 
 export function NutritionAspectCard({ data, onChange }: NutritionAspectCardProps) {
   const items = parseItems(data.items);
-  const totals = computeTotals(items);
+  const totals = useMemo(() => computeTotals(items), [items]);
 
   const updateItem = (index: number, field: keyof FoodItem, value: string | number) => {
     const updated = items.map((item, i) =>
@@ -75,9 +77,7 @@ export function NutritionAspectCard({ data, onChange }: NutritionAspectCardProps
   };
 
   return (
-    <div className="rounded-lg border border-border bg-surface-dim p-3">
-      <p className="mb-3 text-xs font-medium uppercase tracking-wider text-text-muted">Nutrition</p>
-
+    <AspectCard title="Nutrition">
       <div className="grid grid-cols-2 gap-3">
         {/* Meal Type */}
         <div>
@@ -190,6 +190,6 @@ export function NutritionAspectCard({ data, onChange }: NutritionAspectCardProps
           <Plus className="h-3 w-3" /> Add item
         </button>
       </div>
-    </div>
+    </AspectCard>
   );
 }

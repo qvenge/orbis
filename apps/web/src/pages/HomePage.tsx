@@ -24,7 +24,7 @@ const CustomViewRenderer = lazy(() => import('../components/views/CustomViewRend
 
 export function HomePage() {
   const { user, signOut } = useAuthStore();
-  const { activeView, customViewId } = useNavigationStore();
+  const { activeView, customViewId, selectedEntityId } = useNavigationStore();
   const { settings } = useSettingsStore();
   const [chatOpen, setChatOpen] = useState(true);
 
@@ -41,7 +41,7 @@ export function HomePage() {
         .find((v) => v.id === customViewId) ?? { id: '', name: 'View', aspectId: '', layout: 'list' as const, columns: [] };
       return <CustomViewRenderer config={config} />;
     }
-    if (activeView === 'detail') return <EntityDetail />;
+    if (activeView === 'detail') return <EntityDetail key={selectedEntityId} />;
     return <EntityList />;
   }
 

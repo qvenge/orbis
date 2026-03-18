@@ -1,4 +1,5 @@
 import { TASK_STATUSES, TASK_PRIORITIES } from '@orbis/shared';
+import { AspectCard } from '../ui/AspectCard.tsx';
 
 interface TaskAspectCardProps {
   data: Record<string, unknown>;
@@ -15,9 +16,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 
 export function TaskAspectCard({ data, onChange }: TaskAspectCardProps) {
   return (
-    <div className="rounded-lg border border-border bg-surface-dim p-3">
-      <p className="mb-3 text-xs font-medium uppercase tracking-wider text-text-muted">Task</p>
-
+    <AspectCard title="Task">
       <div className="grid grid-cols-2 gap-3">
         {/* Status */}
         <div>
@@ -79,6 +78,6 @@ export function TaskAspectCard({ data, onChange }: TaskAspectCardProps) {
           />
         </div>
       </div>
-    </div>
+    </AspectCard>
   );
 }

@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Check, CheckSquare, Calendar, Wallet, Dumbbell, UtensilsCrossed, RotateCw, FileText, Target, Cog } from 'lucide-react';
 import { trpc } from '../../lib/trpc.ts';
 import type { Entity } from '@orbis/shared';
@@ -25,7 +26,7 @@ const ASPECT_ICONS: Record<string, React.ComponentType<{ className?: string }>> 
   'orbis/goal': Target,
 };
 
-export function EntityRow({ entity, onClick }: EntityRowProps) {
+export const EntityRow = memo(function EntityRow({ entity, onClick }: EntityRowProps) {
   const utils = trpc.useUtils();
   const updateEntity = trpc.entity.update.useMutation({
     onSuccess: () => utils.entity.list.invalidate(),
@@ -59,9 +60,10 @@ export function EntityRow({ entity, onClick }: EntityRowProps) {
   const aspectKeys = Object.keys(aspects ?? {}).filter((k) => k !== 'orbis/task');
 
   return (
-    <div
+    <button
+      type="button"
       onClick={onClick}
-      className={`flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors duration-150 hover:bg-surface-hover ${isDone ? 'opacity-60' : ''}`}
+      className={`flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors duration-150 hover:bg-surface-hover ${isDone ? 'opacity-60' : ''}`}
     >
       {/* Task checkbox - circular */}
       {task != null ? (
@@ -105,9 +107,9 @@ export function EntityRow({ entity, onClick }: EntityRowProps) {
           {formatDate(String(task.due_date))}
         </span>
       ) : null}
-    </div>
+    </button>
   );
-}
+});
 
 function isOverdue(dateStr: string): boolean {
   return new Date(dateStr) < new Date(new Date().toDateString());

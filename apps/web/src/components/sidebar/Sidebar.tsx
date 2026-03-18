@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo, memo } from 'react';
 import { Inbox, Calendar, LayoutGrid, Settings, Pin, X } from 'lucide-react';
 import { useNavigationStore } from '../../stores/navigation.ts';
 import { useSettingsStore } from '../../stores/settings.ts';
 import { trpc } from '../../lib/trpc.ts';
+import { IconButton } from '../ui/IconButton.tsx';
 
 interface PinnedEntity {
   id: string;
@@ -10,14 +11,17 @@ interface PinnedEntity {
 }
 
 export function Sidebar() {
-  const { activeView, selectedEntityId, goBack, openCalendar, openHub, openSettings, openEntity } = useNavigationStore();
+  const { activeView, selectedEntityId, goBack, navigate, openEntity } = useNavigationStore();
   const { settings, fetchSettings, unpinEntity } = useSettingsStore();
 
   useEffect(() => {
     fetchSettings();
   }, [fetchSettings]);
 
-  const pinnedEntities = (settings?.pinnedEntities ?? []) as PinnedEntity[];
+  const pinnedEntities = useMemo(() => {
+    const raw = (settings?.pinnedEntities ?? []) as PinnedEntity[];
+    return [...raw].sort((a, b) => a.order - b.order);
+  }, [settings?.pinnedEntities]);
 
   return (
     <aside className="hidden w-[200px] shrink-0 flex-col border-r border-border bg-surface-dim md:flex">
@@ -36,7 +40,7 @@ export function Sidebar() {
         </button>
 
         <button
-          onClick={openCalendar}
+          onClick={() => navigate('calendar')}
           className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors duration-150 ${
             activeView === 'calendar'
               ? 'bg-surface-hover text-text'
@@ -48,7 +52,7 @@ export function Sidebar() {
         </button>
 
         <button
-          onClick={openHub}
+          onClick={() => navigate('hub')}
           className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors duration-150 ${
             activeView === 'hub' || activeView === 'budget' || activeView === 'fitness' || activeView === 'nutrition' || activeView === 'habits' || activeView === 'custom-view'
               ? 'bg-surface-hover text-text'
@@ -69,17 +73,15 @@ export function Sidebar() {
               </span>
             </div>
             <div className="mt-2 space-y-0.5">
-              {pinnedEntities
-                .sort((a, b) => a.order - b.order)
-                .map((pin) => (
-                  <PinnedEntityRow
-                    key={pin.id}
-                    entityId={pin.id}
-                    isActive={selectedEntityId === pin.id}
-                    onOpen={() => openEntity(pin.id)}
-                    onUnpin={() => unpinEntity(pin.id)}
-                  />
-                ))}
+              {pinnedEntities.map((pin) => (
+                <PinnedEntityRow
+                  key={pin.id}
+                  entityId={pin.id}
+                  isActive={selectedEntityId === pin.id}
+                  onOpen={() => openEntity(pin.id)}
+                  onUnpin={() => unpinEntity(pin.id)}
+                />
+              ))}
             </div>
           </div>
         )}
@@ -88,7 +90,7 @@ export function Sidebar() {
       {/* Footer */}
       <div className="border-t border-border p-2">
         <button
-          onClick={openSettings}
+          onClick={() => navigate('settings')}
           className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors duration-150 ${
             activeView === 'settings'
               ? 'bg-surface-hover text-text'
@@ -104,7 +106,7 @@ export function Sidebar() {
   );
 }
 
-function PinnedEntityRow({
+const PinnedEntityRow = memo(function PinnedEntityRow({
   entityId,
   isActive,
   onOpen,
@@ -129,15 +131,16 @@ function PinnedEntityRow({
         {entity.emoji && <span className="text-xs">{entity.emoji}</span>}
         <span className="truncate text-xs">{entity.title}</span>
       </button>
-      <button
+      <IconButton
+        icon={X}
+        label="Unpin entity"
+        size="sm"
         onClick={(e) => {
           e.stopPropagation();
           onUnpin();
         }}
-        className="hidden shrink-0 rounded p-0.5 text-text-muted hover:text-text group-hover:block"
-      >
-        <X className="h-3 w-3" />
-      </button>
+        className="hidden group-hover:block"
+      />
     </div>
   );
-}
+});

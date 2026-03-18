@@ -1,8 +1,10 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { skipToken } from '@tanstack/react-query';
 import { trpc } from '../../lib/trpc.ts';
 import { useNavigationStore } from '../../stores/navigation.ts';
+import { IconButton } from '../ui/IconButton.tsx';
+import { AspectCard } from '../ui/AspectCard.tsx';
 import { TaskAspectCard } from './TaskAspectCard.tsx';
 import { FitnessAspectCard } from './FitnessAspectCard.tsx';
 import { NutritionAspectCard } from './NutritionAspectCard.tsx';
@@ -28,19 +30,12 @@ export function EntityDetail() {
     },
   });
 
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [tags, setTags] = useState('');
+  // State initialized from entity data; component is keyed by selectedEntityId
+  // so it remounts on entity change (no useEffect sync needed)
+  const [title, setTitle] = useState(entity?.title ?? '');
+  const [body, setBody] = useState(entity?.body ?? '');
+  const [tags, setTags] = useState(entity?.tags.join(', ') ?? '');
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  // Sync local state from server data
-  useEffect(() => {
-    if (entity) {
-      setTitle(entity.title);
-      setBody(entity.body ?? '');
-      setTags(entity.tags.join(', '));
-    }
-  }, [entity]);
 
   const debouncedSave = useCallback(
     (updates: Record<string, unknown>) => {
@@ -92,12 +87,7 @@ export function EntityDetail() {
     <div className="flex h-full flex-col overflow-y-auto">
       {/* Header */}
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-        <button
-          onClick={goBack}
-          className="rounded-md p-1 text-text-secondary transition-colors duration-150 hover:bg-surface-hover hover:text-text"
-        >
-          <ArrowLeft className="h-4 w-4" />
-        </button>
+        <IconButton icon={ArrowLeft} label="Go back" onClick={goBack} />
         <input
           type="text"
           value={title}
@@ -138,10 +128,7 @@ export function EntityDetail() {
               return <GoalAspectCard key={key} data={aspectData} onChange={change} />;
             default:
               return (
-                <div key={key} className="rounded-lg border border-border bg-surface-dim p-3">
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wider text-text-muted">
-                    {key.replace('orbis/', '')}
-                  </p>
+                <AspectCard key={key} title={key.replace('orbis/', '')}>
                   <div className="space-y-1">
                     {Object.entries(aspectData).map(([field, value]) => (
                       <div key={field} className="flex justify-between text-sm">
@@ -150,7 +137,7 @@ export function EntityDetail() {
                       </div>
                     ))}
                   </div>
-                </div>
+                </AspectCard>
               );
           }
         })}

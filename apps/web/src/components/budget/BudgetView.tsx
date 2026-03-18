@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { useNavigationStore } from '../../stores/navigation.ts';
+import { IconButton } from '../ui/IconButton.tsx';
 import { PeriodNav } from '../common/PeriodNav.tsx';
 import { BudgetOverview } from './BudgetOverview.tsx';
 import { BudgetTransactions } from './BudgetTransactions.tsx';
 import { QuickAddBar } from './QuickAddBar.tsx';
 
 export function BudgetView() {
-  const { openHub } = useNavigationStore();
+  const { navigate } = useNavigationStore();
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -36,12 +37,7 @@ export function BudgetView() {
       {/* Header */}
       <div className="shrink-0 border-b border-border">
         <div className="flex items-center gap-3 px-4 py-3">
-          <button
-            onClick={openHub}
-            className="rounded-md p-1 text-text-secondary transition-colors duration-150 hover:bg-surface-hover hover:text-text"
-          >
-            <ArrowLeft className="h-4 w-4" />
-          </button>
+          <IconButton icon={ArrowLeft} label="Go back" onClick={() => navigate('hub')} />
           <h2 className="text-sm font-semibold text-text">Budget</h2>
           <div className="flex-1" />
           <PeriodNav year={year} month={month} onPrev={handlePrev} onNext={handleNext} />

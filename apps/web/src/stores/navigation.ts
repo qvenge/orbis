@@ -10,8 +10,10 @@ function getWeekStart(date: Date): Date {
   return d;
 }
 
+type View = 'list' | 'detail' | 'calendar' | 'hub' | 'budget' | 'fitness' | 'nutrition' | 'habits' | 'settings' | 'custom-view';
+
 interface NavigationState {
-  activeView: 'list' | 'detail' | 'calendar' | 'hub' | 'budget' | 'fitness' | 'nutrition' | 'habits' | 'settings' | 'custom-view';
+  activeView: View;
   selectedEntityId: string | null;
   customViewId: string | null;
   calendarWeek: Date;
@@ -23,17 +25,10 @@ interface NavigationState {
     sortBy: 'created_at' | 'updated_at' | 'title';
     sortOrder: 'asc' | 'desc';
   };
+  navigate: (view: View, params?: { entityId?: string; customViewId?: string }) => void;
   openEntity: (id: string) => void;
   goBack: () => void;
   setFilters: (filters: Partial<NavigationState['filters']>) => void;
-  openCalendar: () => void;
-  openHub: () => void;
-  openBudget: () => void;
-  openFitness: () => void;
-  openNutrition: () => void;
-  openHabits: () => void;
-  openSettings: () => void;
-  openCustomView: (id: string) => void;
   setCalendarWeek: (date: Date) => void;
   prevWeek: () => void;
   nextWeek: () => void;
@@ -51,18 +46,16 @@ export const useNavigationStore = create<NavigationState>((set) => ({
     sortOrder: 'desc',
   },
 
+  navigate: (view, params) =>
+    set({
+      activeView: view,
+      selectedEntityId: params?.entityId ?? null,
+      customViewId: params?.customViewId ?? null,
+    }),
   openEntity: (id) => set({ activeView: 'detail', selectedEntityId: id }),
   goBack: () => set({ activeView: 'list', selectedEntityId: null }),
   setFilters: (filters) =>
     set((s) => ({ filters: { ...s.filters, ...filters } })),
-  openCalendar: () => set({ activeView: 'calendar' }),
-  openHub: () => set({ activeView: 'hub' }),
-  openBudget: () => set({ activeView: 'budget' }),
-  openFitness: () => set({ activeView: 'fitness' }),
-  openNutrition: () => set({ activeView: 'nutrition' }),
-  openHabits: () => set({ activeView: 'habits' }),
-  openSettings: () => set({ activeView: 'settings' }),
-  openCustomView: (id) => set({ activeView: 'custom-view', customViewId: id }),
   setCalendarWeek: (date) => set({ calendarWeek: getWeekStart(date) }),
   prevWeek: () =>
     set((s) => {

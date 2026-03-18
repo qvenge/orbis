@@ -1,4 +1,5 @@
 import { Plus, Trash2 } from 'lucide-react';
+import { AspectCard } from '../ui/AspectCard.tsx';
 
 interface Exercise {
   name: string;
@@ -49,9 +50,7 @@ export function FitnessAspectCard({ data, onChange }: FitnessAspectCardProps) {
   };
 
   return (
-    <div className="rounded-lg border border-border bg-surface-dim p-3">
-      <p className="mb-3 text-xs font-medium uppercase tracking-wider text-text-muted">Fitness</p>
-
+    <AspectCard title="Fitness">
       <div className="grid grid-cols-2 gap-3">
         {/* Workout Type */}
         <div>
@@ -171,6 +170,6 @@ export function FitnessAspectCard({ data, onChange }: FitnessAspectCardProps) {
           className="mt-1 block w-full resize-none rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text placeholder:text-text-muted focus:border-primary focus:outline-none"
         />
       </div>
-    </div>
+    </AspectCard>
   );
 }

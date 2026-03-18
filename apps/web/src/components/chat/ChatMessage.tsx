@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { ChatMessage as ChatMessageType } from '../../stores/chat.ts';
 import { EntityCard } from './EntityCard.tsx';
 import { SuggestionChips } from './SuggestionChips.tsx';
@@ -14,7 +15,7 @@ interface ChatMessageProps {
   onEntityClick?: (id: string) => void;
 }
 
-export function ChatMessage({ message, onSuggestionSelect, onEntityClick }: ChatMessageProps) {
+export const ChatMessage = memo(function ChatMessage({ message, onSuggestionSelect, onEntityClick }: ChatMessageProps) {
   const isUser = message.role === 'user';
 
   return (
@@ -88,4 +89,4 @@ export function ChatMessage({ message, onSuggestionSelect, onEntityClick }: Chat
       </div>
     </div>
   );
-}
+});

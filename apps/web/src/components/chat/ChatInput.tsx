@@ -59,6 +59,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
         <button
           onClick={isListening ? stopListening : startListening}
           disabled={disabled}
+          aria-label={isListening ? 'Stop voice input' : 'Start voice input'}
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors duration-150 disabled:opacity-30 ${
             isListening
               ? 'animate-pulse bg-danger text-white'
@@ -71,6 +72,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       <button
         onClick={handleSend}
         disabled={disabled || !text.trim()}
+        aria-label="Send message"
         className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-white transition-colors duration-150 hover:bg-primary-dark disabled:opacity-30"
       >
         <SendHorizontal className="h-4 w-4" />

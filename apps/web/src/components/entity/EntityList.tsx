@@ -1,6 +1,7 @@
 import { Inbox } from 'lucide-react';
 import { trpc } from '../../lib/trpc.ts';
 import { useNavigationStore } from '../../stores/navigation.ts';
+import type { Entity } from '@orbis/shared';
 import { EntityRow } from './EntityRow.tsx';
 import { FilterBar } from './FilterBar.tsx';
 import { QuickCapture } from './QuickCapture.tsx';
@@ -21,7 +22,7 @@ export function EntityList() {
     <div className="flex h-full flex-col">
       <FilterBar />
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" aria-live="polite">
         {isLoading ? (
           <div className="flex items-center justify-center p-12">
             <div className="h-5 w-5 animate-spin rounded-full border-2 border-border-light border-t-primary" />
@@ -41,7 +42,7 @@ export function EntityList() {
             {data.items.map((entity) => (
               <EntityRow
                 key={entity.id}
-                entity={entity as any}
+                entity={entity as Entity}
                 onClick={() => openEntity(entity.id)}
               />
             ))}

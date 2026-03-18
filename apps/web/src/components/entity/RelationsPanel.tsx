@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo, memo } from 'react';
 import {
   GitBranch,
   Lock,
@@ -48,13 +48,15 @@ export function RelationsPanel({ entityId }: RelationsPanelProps) {
   const { relations, backlinks } = data;
 
   // Group relations by type and direction
-  const parents = relations.filter((r) => r.relation_type === 'parent' && r.direction === 'incoming');
-  const children = relations.filter((r) => r.relation_type === 'parent' && r.direction === 'outgoing');
-  const blockedBy = relations.filter((r) => r.relation_type === 'blocks' && r.direction === 'incoming');
-  const blocks = relations.filter((r) => r.relation_type === 'blocks' && r.direction === 'outgoing');
-  const related = relations.filter(
-    (r) => r.relation_type === 'related_to' || r.relation_type === 'derived_from',
-  );
+  const { parents, children, blockedBy, blocks, related } = useMemo(() => ({
+    parents: relations.filter((r) => r.relation_type === 'parent' && r.direction === 'incoming'),
+    children: relations.filter((r) => r.relation_type === 'parent' && r.direction === 'outgoing'),
+    blockedBy: relations.filter((r) => r.relation_type === 'blocks' && r.direction === 'incoming'),
+    blocks: relations.filter((r) => r.relation_type === 'blocks' && r.direction === 'outgoing'),
+    related: relations.filter(
+      (r) => r.relation_type === 'related_to' || r.relation_type === 'derived_from',
+    ),
+  }), [relations]);
 
   const hasAny = relations.length > 0 || backlinks.length > 0;
 
@@ -160,7 +162,7 @@ interface ResolvedRelation {
   direction: 'outgoing' | 'incoming';
 }
 
-function RelationSection({
+const RelationSection = memo(function RelationSection({
   title,
   items,
   onNavigate,
@@ -204,7 +206,7 @@ function RelationSection({
       </div>
     </div>
   );
-}
+});
 
 function AddRelationForm({
   entityId,

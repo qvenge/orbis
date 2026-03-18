@@ -1,4 +1,5 @@
 import { HABIT_TYPES } from '@orbis/shared';
+import { AspectCard } from '../ui/AspectCard.tsx';
 
 interface HabitAspectCardProps {
   data: Record<string, unknown>;
@@ -13,20 +14,20 @@ export function HabitAspectCard({ data, onChange }: HabitAspectCardProps) {
   const frequencyType = (data.frequency as Record<string, unknown>)?.type as string | undefined;
   const frequencyValue = (data.frequency as Record<string, unknown>)?.value as number | undefined;
 
+  const activeToggle = (
+    <label className="flex items-center gap-1.5 text-xs text-text-muted">
+      <input
+        type="checkbox"
+        checked={active}
+        onChange={(e) => onChange({ ...data, active: e.target.checked })}
+        className="rounded border-border accent-primary"
+      />
+      Active
+    </label>
+  );
+
   return (
-    <div className="rounded-lg border border-border bg-surface-dim p-3">
-      <div className="mb-3 flex items-center justify-between">
-        <p className="text-xs font-medium uppercase tracking-wider text-text-muted">Habit</p>
-        <label className="flex items-center gap-1.5 text-xs text-text-muted">
-          <input
-            type="checkbox"
-            checked={active}
-            onChange={(e) => onChange({ ...data, active: e.target.checked })}
-            className="rounded border-border accent-primary"
-          />
-          Active
-        </label>
-      </div>
+    <AspectCard title="Habit" headerRight={activeToggle}>
 
       <div className="grid grid-cols-2 gap-3">
         {/* Habit Type */}
@@ -133,6 +134,6 @@ export function HabitAspectCard({ data, onChange }: HabitAspectCardProps) {
           <p className="text-[10px] text-text-muted">Best streak</p>
         </div>
       </div>
-    </div>
+    </AspectCard>
   );
 }

@@ -28,7 +28,7 @@ export type { ViewMeta };
 export function HubLauncher() {
   const [showCatalog, setShowCatalog] = useState(false);
   const { settings } = useSettingsStore();
-  const { openBudget, openFitness, openNutrition, openHabits, openCustomView } = useNavigationStore();
+  const { navigate } = useNavigationStore();
 
   const installedViews = (settings?.installedViews as string[]) ?? [];
   const installed = VIEW_CATALOG.filter((v) => installedViews.includes(v.id));
@@ -36,11 +36,16 @@ export function HubLauncher() {
     (settings?.viewPreferences as Record<string, unknown>)?.customViews as CustomViewConfig[] ?? []
   );
 
+  const VIEW_TO_ROUTE: Record<string, 'budget' | 'fitness' | 'nutrition' | 'habits'> = {
+    [VIEW_IDS.BUDGET]: 'budget',
+    [VIEW_IDS.FITNESS]: 'fitness',
+    [VIEW_IDS.NUTRITION]: 'nutrition',
+    [VIEW_IDS.HABITS]: 'habits',
+  };
+
   const handleViewClick = (viewId: string) => {
-    if (viewId === VIEW_IDS.BUDGET) openBudget();
-    else if (viewId === VIEW_IDS.FITNESS) openFitness();
-    else if (viewId === VIEW_IDS.NUTRITION) openNutrition();
-    else if (viewId === VIEW_IDS.HABITS) openHabits();
+    const route = VIEW_TO_ROUTE[viewId];
+    if (route) navigate(route);
   };
 
   return (
@@ -105,7 +110,7 @@ export function HubLauncher() {
               {customViews.map((view) => (
                 <button
                   key={view.id}
-                  onClick={() => openCustomView(view.id)}
+                  onClick={() => navigate('custom-view', { customViewId: view.id })}
                   className="flex flex-col items-center gap-2 rounded-lg border border-border bg-surface-dim p-5 transition-colors duration-150 hover:bg-surface-hover"
                 >
                   <div className="rounded-lg bg-surface-hover p-3">
