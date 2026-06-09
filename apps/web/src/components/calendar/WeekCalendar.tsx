@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { trpc } from '../../lib/trpc.ts';
 import { useNavigationStore } from '../../stores/navigation.ts';
 import { CalendarHeader } from './CalendarHeader.tsx';
@@ -18,6 +18,17 @@ interface ScheduleAspect {
 
 export function WeekCalendar() {
   const { calendarWeek, openEntity } = useNavigationStore();
+
+  // Mobile day selector — default to today's index within the week
+  const todayDayIndex = useMemo(() => {
+    const today = new Date();
+    const idx = Math.floor(
+      (today.getTime() - calendarWeek.getTime()) / (1000 * 60 * 60 * 24),
+    );
+    return idx >= 0 && idx < 7 ? idx : 0;
+  }, [calendarWeek]);
+
+  const [mobileDay, setMobileDay] = useState(todayDayIndex);
 
   const weekEnd = useMemo(() => {
     const end = new Date(calendarWeek);
@@ -90,32 +101,106 @@ export function WeekCalendar() {
     (today.getTime() - calendarWeek.getTime()) / (1000 * 60 * 60 * 24),
   );
 
+  function renderDayHeader(day: typeof dayDates[number], i: number, isToday: boolean) {
+    return (
+      <div
+        key={i}
+        className="flex flex-1 flex-col items-center border-l border-border py-2"
+      >
+        <span className="text-[10px] uppercase text-text-muted">{day.name}</span>
+        <span
+          className={`mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-xs font-medium ${
+            isToday ? 'bg-primary text-white' : 'text-text'
+          }`}
+        >
+          {day.dayNum}
+        </span>
+      </div>
+    );
+  }
+
+  function renderDayColumn(dayIdx: number) {
+    return (
+      <div key={dayIdx} className="relative flex-1 border-l border-border">
+        {/* Hour lines */}
+        {HOURS.map((h) => (
+          <div key={h} className="h-12 border-b border-border/30" />
+        ))}
+
+        {/* Current time line */}
+        {dayIdx === nowDayIndex && nowDayIndex >= 0 && nowDayIndex < 7 && (
+          <div
+            className="absolute left-0 right-0 z-10 border-t-2 border-danger"
+            style={{ top: `${nowMinutes * (48 / 60)}px` }}
+          >
+            <div className="absolute -left-1 -top-1 h-2 w-2 rounded-full bg-danger" />
+          </div>
+        )}
+
+        {/* Events */}
+        {eventsByDay[dayIdx]?.map((event) => {
+          const start = new Date(event.schedule.start_at);
+          const startHour = start.getHours();
+          const startMinute = start.getMinutes();
+
+          let durationMin = event.schedule.duration_min ?? 60;
+          if (event.schedule.end_at) {
+            const end = new Date(event.schedule.end_at);
+            durationMin = Math.round((end.getTime() - start.getTime()) / 60000);
+          }
+
+          return (
+            <CalendarEvent
+              key={event.entityId}
+              title={event.title}
+              startHour={startHour}
+              startMinute={startMinute}
+              durationMin={durationMin}
+              color={event.schedule.color_override}
+              location={event.schedule.location}
+              onClick={() => openEntity(event.entityId)}
+            />
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full flex-col">
       <CalendarHeader />
 
-      {/* Day headers */}
-      <div className="flex border-b border-border">
-        {/* Time gutter */}
-        <div className="w-12 shrink-0" />
+      {/* Mobile day selector pills */}
+      <div className="flex gap-1 overflow-x-auto border-b border-border px-3 py-2 scrollbar-none md:hidden">
         {dayDates.map((day, i) => {
           const dateStr = `${day.date.getFullYear()}-${String(day.date.getMonth() + 1).padStart(2, '0')}-${String(day.date.getDate()).padStart(2, '0')}`;
           const isToday = dateStr === todayStr;
+          const isSelected = mobileDay === i;
           return (
-            <div
+            <button
               key={i}
-              className="flex flex-1 flex-col items-center border-l border-border py-2"
+              onClick={() => setMobileDay(i)}
+              className={`flex shrink-0 flex-col items-center rounded-lg px-3 py-1.5 transition-colors ${
+                isSelected
+                  ? 'bg-primary text-white'
+                  : isToday
+                    ? 'bg-surface-hover text-primary'
+                    : 'text-text-muted hover:bg-surface-hover'
+              }`}
             >
-              <span className="text-[10px] uppercase text-text-muted">{day.name}</span>
-              <span
-                className={`mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-xs font-medium ${
-                  isToday ? 'bg-primary text-white' : 'text-text'
-                }`}
-              >
-                {day.dayNum}
-              </span>
-            </div>
+              <span className="text-[10px] uppercase">{day.name}</span>
+              <span className="text-sm font-medium">{day.dayNum}</span>
+            </button>
           );
+        })}
+      </div>
+
+      {/* Desktop: 7-day headers */}
+      <div className="hidden border-b border-border md:flex">
+        <div className="w-12 shrink-0" />
+        {dayDates.map((day, i) => {
+          const dateStr = `${day.date.getFullYear()}-${String(day.date.getMonth() + 1).padStart(2, '0')}-${String(day.date.getDate()).padStart(2, '0')}`;
+          return renderDayHeader(day, i, dateStr === todayStr);
         })}
       </div>
 
@@ -132,51 +217,15 @@ export function WeekCalendar() {
           ))}
         </div>
 
-        {/* Day columns */}
-        {dayDates.map((_, dayIdx) => (
-          <div key={dayIdx} className="relative flex-1 border-l border-border">
-            {/* Hour lines */}
-            {HOURS.map((h) => (
-              <div key={h} className="h-12 border-b border-border/30" />
-            ))}
+        {/* Mobile: single day column */}
+        <div className="flex flex-1 md:hidden">
+          {renderDayColumn(mobileDay)}
+        </div>
 
-            {/* Current time line */}
-            {dayIdx === nowDayIndex && nowDayIndex >= 0 && nowDayIndex < 7 && (
-              <div
-                className="absolute left-0 right-0 z-10 border-t-2 border-danger"
-                style={{ top: `${nowMinutes * (48 / 60)}px` }}
-              >
-                <div className="absolute -left-1 -top-1 h-2 w-2 rounded-full bg-danger" />
-              </div>
-            )}
-
-            {/* Events */}
-            {eventsByDay[dayIdx]?.map((event) => {
-              const start = new Date(event.schedule.start_at);
-              const startHour = start.getHours();
-              const startMinute = start.getMinutes();
-
-              let durationMin = event.schedule.duration_min ?? 60;
-              if (event.schedule.end_at) {
-                const end = new Date(event.schedule.end_at);
-                durationMin = Math.round((end.getTime() - start.getTime()) / 60000);
-              }
-
-              return (
-                <CalendarEvent
-                  key={event.entityId}
-                  title={event.title}
-                  startHour={startHour}
-                  startMinute={startMinute}
-                  durationMin={durationMin}
-                  color={event.schedule.color_override}
-                  location={event.schedule.location}
-                  onClick={() => openEntity(event.entityId)}
-                />
-              );
-            })}
-          </div>
-        ))}
+        {/* Desktop: all 7 day columns */}
+        <div className="hidden flex-1 md:flex">
+          {dayDates.map((_, dayIdx) => renderDayColumn(dayIdx))}
+        </div>
       </div>
     </div>
   );

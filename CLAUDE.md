@@ -48,7 +48,7 @@ Auth: Supabase JWT. Web gets token via `supabase.auth.getSession()`, sends as `A
 
 Single `entities` table with JSONB `aspects` column — entities are typed by their aspects (task, financial, fitness, nutrition, habit, note, goal). The `relations` table links entities (parent, blocks, related_to, derived_from). Aspect definitions stored in `aspect_definitions` table. User preferences in `user_settings`.
 
-Schema: `apps/server/src/db/schema.ts`. Validation schemas: `packages/shared/src/schemas.ts`. Constants/enums: `packages/shared/src/constants.ts`.
+Schema: `apps/server/src/db/schema.ts`. Migrations: `apps/server/src/db/migrations/` (configured via `apps/server/drizzle.config.ts`). Validation schemas: `packages/shared/src/schemas.ts`. Constants/enums: `packages/shared/src/constants.ts`.
 
 ### Frontend state
 
@@ -68,7 +68,9 @@ Schema: `apps/server/src/db/schema.ts`. Validation schemas: `packages/shared/src
 
 ## Environment
 
-Copy `.env.example` → `.env`:
+Env is split per app — each reads its own file from its own cwd. The root `.env.example` documents the union of variables; copy the relevant subset into each app.
+
+`apps/server/.env`:
 
 ```
 SUPABASE_URL          # Supabase project URL
@@ -78,4 +80,9 @@ ANTHROPIC_API_KEY     # Claude API key (for AI chat)
 PORT                  # Server port (default: 3001)
 ```
 
-Web uses `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (Vite public env prefix).
+`apps/web/.env`:
+
+```
+VITE_SUPABASE_URL         # same as SUPABASE_URL
+VITE_SUPABASE_ANON_KEY    # same as SUPABASE_ANON_KEY
+```

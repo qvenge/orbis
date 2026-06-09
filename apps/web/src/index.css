@@ -64,3 +64,15 @@ input, select, textarea {
 ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--color-border-light); }
 ::selection { background: rgba(99, 102, 241, 0.3); }
+
+/* Touch devices: show hover-only elements */
+@media (hover: none) {
+  .touch-action\:block { display: block !important; }
+}
+
+/* Slide-in animation for mobile drawer */
+@keyframes slide-in-from-left {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+.animate-in.slide-in-from-left { animation: slide-in-from-left 0.2s ease-out; }

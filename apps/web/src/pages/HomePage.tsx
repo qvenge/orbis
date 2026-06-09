@@ -1,12 +1,13 @@
 import { useState, lazy, Suspense } from 'react';
-import { MessageSquare, List } from 'lucide-react';
+import { MessageSquare, List, Menu } from 'lucide-react';
 import { useAuthStore } from '../stores/auth.ts';
 import { useNavigationStore } from '../stores/navigation.ts';
-import { Sidebar } from '../components/sidebar/Sidebar.tsx';
+import { Sidebar, MobileSidebar } from '../components/sidebar/Sidebar.tsx';
 import { EntityList } from '../components/entity/EntityList.tsx';
 import { OfflineIndicator } from '../components/common/OfflineIndicator.tsx';
 import { ViewSkeleton } from '../components/common/ViewSkeleton.tsx';
 import { StatusStrip } from '../components/common/StatusStrip.tsx';
+import { MobileBottomNav } from '../components/common/MobileBottomNav.tsx';
 import { useSettingsStore } from '../stores/settings.ts';
 import type { CustomViewConfig } from '@orbis/shared';
 
@@ -22,11 +23,24 @@ const HabitsView = lazy(() => import('../components/habits/HabitsView.tsx').then
 const SettingsPanel = lazy(() => import('../components/settings/SettingsPanel.tsx').then((m) => ({ default: m.SettingsPanel })));
 const CustomViewRenderer = lazy(() => import('../components/views/CustomViewRenderer.tsx').then((m) => ({ default: m.CustomViewRenderer })));
 
+const VIEW_LABELS: Record<string, string> = {
+  list: 'Entities',
+  detail: 'Detail',
+  calendar: 'Calendar',
+  hub: 'Hub',
+  budget: 'Budget',
+  fitness: 'Fitness',
+  nutrition: 'Nutrition',
+  habits: 'Habits',
+  settings: 'Settings',
+  'custom-view': 'View',
+};
+
 export function HomePage() {
   const { user, signOut } = useAuthStore();
-  const { activeView, customViewId, selectedEntityId } = useNavigationStore();
+  const { activeView, customViewId, selectedEntityId, toggleSidebar } = useNavigationStore();
   const { settings } = useSettingsStore();
-  const [chatOpen, setChatOpen] = useState(true);
+  const [chatOpen, setChatOpen] = useState(() => window.innerWidth >= 768);
 
   function renderMainContent() {
     if (activeView === 'calendar') return <WeekCalendar />;
@@ -49,21 +63,38 @@ export function HomePage() {
     <div className="flex h-dvh flex-col bg-surface">
       <OfflineIndicator />
       <StatusStrip />
+      <MobileSidebar />
+
       {/* Header */}
       <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-        <span className="text-sm font-semibold tracking-wide text-text">Orbis</span>
+        <div className="flex items-center gap-2">
+          {/* Mobile hamburger */}
+          <button
+            onClick={toggleSidebar}
+            className="flex items-center justify-center rounded-md p-2 text-text-secondary transition-colors hover:bg-surface-hover md:hidden"
+            aria-label="Open menu"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+          <span className="text-sm font-semibold tracking-wide text-text">Orbis</span>
+          {/* Mobile view indicator */}
+          <span className="text-xs text-text-muted md:hidden">
+            / {VIEW_LABELS[activeView] ?? activeView}
+          </span>
+        </div>
         <div className="flex items-center gap-2">
           {/* Mobile chat toggle */}
           <button
             onClick={() => setChatOpen((o) => !o)}
-            className="flex items-center justify-center rounded-md p-1.5 text-text-secondary transition-colors hover:bg-surface-hover md:hidden"
+            className="flex items-center justify-center rounded-md p-2 text-text-secondary transition-colors hover:bg-surface-hover md:hidden"
+            aria-label={chatOpen ? 'Show content' : 'Show chat'}
           >
-            {chatOpen ? <List className="h-4 w-4" /> : <MessageSquare className="h-4 w-4" />}
+            {chatOpen ? <List className="h-5 w-5" /> : <MessageSquare className="h-5 w-5" />}
           </button>
           <span className="hidden text-xs text-text-muted sm:block">{user?.email}</span>
           <button
             onClick={signOut}
-            className="rounded-md px-2.5 py-1 text-xs text-text-secondary transition-colors duration-150 hover:bg-surface-hover hover:text-text"
+            className="rounded-md px-2.5 py-2 text-xs text-text-secondary transition-colors duration-150 hover:bg-surface-hover hover:text-text"
           >
             Sign out
           </button>
@@ -90,6 +121,9 @@ export function HomePage() {
           </Suspense>
         </div>
       </div>
+
+      {/* Mobile bottom navigation */}
+      <MobileBottomNav chatOpen={chatOpen} onToggleChat={() => setChatOpen((o) => !o)} />
     </div>
   );
 }

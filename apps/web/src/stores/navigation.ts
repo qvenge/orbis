@@ -17,6 +17,7 @@ interface NavigationState {
   selectedEntityId: string | null;
   customViewId: string | null;
   calendarWeek: Date;
+  sidebarOpen: boolean;
   filters: {
     tags?: string[];
     aspects?: string[];
@@ -28,6 +29,8 @@ interface NavigationState {
   navigate: (view: View, params?: { entityId?: string; customViewId?: string }) => void;
   openEntity: (id: string) => void;
   goBack: () => void;
+  toggleSidebar: () => void;
+  closeSidebar: () => void;
   setFilters: (filters: Partial<NavigationState['filters']>) => void;
   setCalendarWeek: (date: Date) => void;
   prevWeek: () => void;
@@ -40,6 +43,7 @@ export const useNavigationStore = create<NavigationState>((set) => ({
   selectedEntityId: null,
   customViewId: null,
   calendarWeek: getWeekStart(new Date()),
+  sidebarOpen: false,
   filters: {
     archived: false,
     sortBy: 'updated_at',
@@ -51,9 +55,12 @@ export const useNavigationStore = create<NavigationState>((set) => ({
       activeView: view,
       selectedEntityId: params?.entityId ?? null,
       customViewId: params?.customViewId ?? null,
+      sidebarOpen: false,
     }),
-  openEntity: (id) => set({ activeView: 'detail', selectedEntityId: id }),
+  openEntity: (id) => set({ activeView: 'detail', selectedEntityId: id, sidebarOpen: false }),
   goBack: () => set({ activeView: 'list', selectedEntityId: null }),
+  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+  closeSidebar: () => set({ sidebarOpen: false }),
   setFilters: (filters) =>
     set((s) => ({ filters: { ...s.filters, ...filters } })),
   setCalendarWeek: (date) => set({ calendarWeek: getWeekStart(date) }),
