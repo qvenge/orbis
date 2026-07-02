@@ -12,3 +12,6 @@ bun.lock
 .agents/
 __pycache__/
 skills-lock.json
+spikes/**/.env
+spikes/**/node_modules
+spikes/spike-01-rls/supabase/.temp
