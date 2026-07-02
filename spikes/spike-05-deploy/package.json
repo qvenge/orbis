@@ -1,0 +1,17 @@
+{
+  "name": "spike-05-deploy",
+  "private": true,
+  "type": "module",
+  "description": "SPIKE-05: деплой-связность — hello-world Bun API с проверками связности к Supabase",
+  "scripts": {
+    "start": "bun src/index.ts",
+    "dev": "bun --watch src/index.ts"
+  },
+  "dependencies": {
+    "hono": "^4.6.0",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0"
+  }
+}
