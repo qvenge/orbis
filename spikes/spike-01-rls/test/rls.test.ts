@@ -151,15 +151,20 @@ describe('(в) пул не путает identity', () => {
 });
 
 describe('(г) identity умирает вместе с транзакцией', () => {
-  test('после withIdentity на том же коннекшне auth.uid() и claims пусты', async () => {
+  test('после withIdentity на том же коннекшне claims пусты (первоисточник auth.uid)', async () => {
+    // Прямой вызов auth.uid() под orbis_app требует grants на схему auth,
+    // которые локальный postgres-суперпользователь… не выдал (см. findings);
+    // в политиках auth.uid() инлайнится и работает. Остаток identity проверяем
+    // по первоисточнику — request.jwt.claims, из которого auth.uid() читает sub.
     const { db, client } = makeDb({ max: 1 });
     try {
       await withIdentity(db, USER_A, (tx) => tx.select().from(spikeItems));
       const after = await client`
-        select auth.uid() as uid,
-               nullif(current_setting('request.jwt.claims', true), '') as claims`;
-      expect(after[0]!.uid).toBeNull();
+        select nullif(current_setting('request.jwt.claims', true), '') as claims`;
       expect(after[0]!.claims).toBeNull();
+      // Поведенческое следствие «auth.uid() пуст»: без identity строки не видны
+      const bare = await db.select().from(spikeItems);
+      expect(bare.length).toBe(0);
     } finally {
       await client.end();
     }
@@ -172,9 +177,14 @@ describe('(д) deny-by-default без identity', () => {
     try {
       const rows = await db.select().from(spikeItems);
       expect(rows.length).toBe(0);
-      await expect(
-        db.insert(spikeItems).values({ ownerId: USER_A, title: 'no-identity' }),
-      ).rejects.toThrow();
+      // drizzle-запрос — thenable, не Promise: expect().rejects его не понимает
+      let code: string | undefined;
+      try {
+        await db.insert(spikeItems).values({ ownerId: USER_A, title: 'no-identity' });
+      } catch (e) {
+        code = (e as { code?: string }).code ?? ((e as { cause?: { code?: string } }).cause?.code);
+      }
+      expect(code).toBe('42501');
     } finally {
       await client.end();
     }
@@ -236,8 +246,9 @@ describe('(и) rollback-путь', () => {
       const doomed = await admin`select 1 from spike_items where title = 'doomed'`;
       expect(doomed.length).toBe(0);
 
-      const after = await client`select auth.uid() as uid`;
-      expect(after[0]!.uid).toBeNull();
+      const after = await client`
+        select nullif(current_setting('request.jwt.claims', true), '') as claims`;
+      expect(after[0]!.claims).toBeNull();
     } finally {
       await client.end();
     }
