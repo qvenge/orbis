@@ -74,15 +74,15 @@ flowchart LR
 ```mermaid
 flowchart TD
     ChatFastPath["Chat fast-path (apps/web, §7.5)"]
-    QuickCapture["quick-capture (apps/web, §7.5)"]
+    QuickCapture["quick-capture (apps/web)"]
     ChatToolCall["Chat LLM tool-call (apps/web → apps/server ai-роутер)"]
     MCPAgent["MCP-агент (внешний, через apps/server MCP-сервер, §9.3)"]
 
     Buffer["retry-буфер (apps/web, §5.3)"]
 
     ChatFastPath --> Buffer
-    QuickCapture --> Buffer
     Buffer --> TRPC["tRPC-процедура (apps/server, §9.1)"]
+    QuickCapture --> TRPC
     ChatToolCall --> TRPC
     MCPAgent --> TRPC
 
@@ -98,7 +98,7 @@ flowchart TD
 
 Пояснения к диаграмме:
 
-- **Retry-буфер** стоит на стороне `apps/web` перед tRPC и участвует только в пути fast-path-create (Chat fast-path, quick-capture) — офлайн-правки существующих сущностей и LLM-путь через него не идут (PRD 01 §5.3, §7.9).
+- **Retry-буфер** стоит на стороне `apps/web` перед tRPC и участвует только в пути fast-path-create (Chat fast-path, §7.5) — офлайн-правки существующих сущностей и LLM-путь через него не идут (PRD 01 §5.3, §7.9). Quick-capture (PRD 02 §3.7) в буфер не заходит: это отдельный не-чатовый путь без AI и без fast-path-грамматики, идущий в tRPC напрямую — контракт буфера (PRD 01 §5.3) охватывает только fast-path-create.
 - **Ветвление по политике подтверждений** относится только к путям LLM tool-call и MCP-агента; fast-path/quick-capture — прямая, детерминированная команда пользователя, политика §7.10 к ней не применяется. На диаграмме это показано на уровне потока; внутри самого семистадийного конвейера (§9.2) классификация уровня фактически происходит после стадий 1–2 (структурная валидация) и до стадии 5 (apply) — здесь показан только факт наличия этой проверки для LLM/MCP-путей.
 - **Executor 7 стадий** (§9.2): validate envelope → validate aspects → load state → validate all before first write → apply in transaction → inverse ops + cards → audit. Все семь стадий выполняются в `apps/server`, вне зависимости от источника мутации.
 - **Журнал actions + Postgres — одна транзакция**: карточка чата и запись в `chat_messages.metadata.actions` появляются только после успешного `apply` (§7.8).
@@ -139,7 +139,7 @@ flowchart TD
 
 ## §4. Sequence-диаграммы ключевых флоу
 
-Участники диаграмм — модули из §1: `apps/web` (и его внутренние роли — retry-буфер, чат-UI), `apps/server` (и его внутренние роли — tRPC, executor, LLMProvider, политика подтверждений, MCP-сервер), PostgreSQL.
+Участники диаграмм — модули из §1: `apps/web` (и его внутренние роли — retry-буфер, чат-UI), `apps/server` (и его внутренние роли — tRPC, executor, LLMProvider, политика подтверждений, MCP-сервер), PostgreSQL. Имена tRPC-процедур на диаграммах (`ai.sendMessage`, `entity.get` и т.п.) иллюстративны; контракт сигнатур процедур в PRD не фиксируется и живёт в коде (PRD 01 §9.1).
 
 ### §4.1 Fast-path + retry-буфер
 
@@ -427,7 +427,7 @@ erDiagram
 
 - `aspect_definitions.id` не является surrogate PK: уникальность обеспечивают два partial unique index — `UNIQUE (id) WHERE owner_id IS NULL` для встроенных аспектов и `UNIQUE (owner_id, id)` для кастомных (PRD 01 §4.3). На диаграмме `id` намеренно не помечен `PK`.
 - `ai_usage` — составной первичный ключ `(owner_id, date, model)`, без собственного суррогатного `id` (PRD 01 §4.7).
-- `chat_threads.entity_id` — nullable: `NULL` означает глобальный тред пользователя (мессенджер-модель), не связанный ни с одной сущностью; связь `entities ||--o| chat_threads` на диаграмме относится только к тредам сущностей — не более одного треда на сущность (PRD 01 §4.5).
+- `chat_threads.entity_id` — nullable: `NULL` означает глобальный тред пользователя (мессенджер-модель), не связанный ни с одной сущностью; связь `entities |o--o| chat_threads` на диаграмме относится только к тредам сущностей — не более одного треда на сущность (PRD 01 §4.5).
 - Типы `text_array` на диаграмме соответствуют Postgres `text[]` (ограничение синтаксиса Mermaid ER на символы в имени типа); `date`, `jsonb`, `bigint`, `boolean`, `timestamptz` — типы колонок как в PRD 01 §4.
 - Владение — `owner_id` на каждой таблице, где оно применимо (кроме `relations` и `chat_messages`, чьё владение резолвится транзитивно через связанные `entities`/`chat_threads` — RLS-политика PRD 01 §4.10).
 
