@@ -229,7 +229,7 @@ describe('(з) generic plan / prepared statements', () => {
     } finally {
       await client.end();
     }
-  });
+  }, 30000); // 9 сетевых транзакций: против hosted-пулера дефолтных 5с не хватает
 });
 
 describe('(и) rollback-путь', () => {
