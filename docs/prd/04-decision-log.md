@@ -116,9 +116,9 @@
 | Механика RLS через Bun API | Транзакционно-локальная identity, PostgreSQL-роль без `BYPASSRLS`, service-role не fallback при сбое обычной идентификации. Блокирующий спайк фазы 0 — SPIKE-01. | SPIKE-01 (00-product §9, фаза 0), implementation-план |
 | Принцип «один путь мутаций» | PWA никогда не обращается к Supabase Data API напрямую — все мутации идут только через tRPC → executor. | 01-architecture §9.1 |
 | 7-стадийный конвейер executor'а | validate envelope → validate aspects → load state → validate all before first write → apply in transaction → inverse ops + cards → audit. | 01-architecture §9.2 |
-| Нейминг `owner_id` / `actor_user_id` | Двусмысленный `user_id` запрещён во всей схеме и коде. | 01-architecture §4.10; D11 |
+| Нейминг `owner_id` / `actor_user_id` | Двусмысленный `user_id` запрещён во всей схеме и коде. | D11 этого файла |
 | Retention журнала 90/180/30 дней | Полные записи действий — 90 дней; диагностика отклонённых команд — 30 дней; идемпотентные receipts команд — 180 дней. | 01-architecture §7.8 |
-| Модель тредов CHAT-01…08 | Детерминированный тред на owner + scope (глобальный или сущности); экран/период/фильтры — runtime-контекст сообщения, не идентичность треда. | 01-architecture §4.5 |
+| Модель тредов CHAT-01…08 | Детерминированный тред на owner + scope (глобальный или сущности); экран/период/фильтры — runtime-контекст сообщения, не идентичность треда. | 01-architecture §4.5 (остальное — в леджере) |
 | Версионированные промпты с fixture-тестами | Системные промпты версионируются и регрессируются fixture-тестами при изменении. | implementation-план (AI-слой) |
 | Запрет free-form JSON extraction при доступном native tool calling | Где провайдер поддерживает native tool calling, извлечение структурированных данных из свободного текста ответа запрещено. | implementation-план (AI-слой) |
 | Лимиты multi-step-циклов LLM | Максимум шагов агентного цикла (tool-call → результат → следующий вызов) — явная константа Orbis, не дефолт Vercel AI SDK. | implementation-план (AI-слой) |
