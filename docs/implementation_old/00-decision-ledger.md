@@ -3,10 +3,14 @@
 | Field | Value |
 |---|---|
 | Date | 2026-06-14 |
-| Status | Active discussion record |
-| Authority | Accepted decisions from the implementation discussion |
+| Status | **SUPERSEDED (2026-07-02)** — см. ниже |
+| Authority | Архив; действующие решения — в спеке v3.1 и будущем `docs/prd/04-decision-log.md` |
 
-This is the current source of truth for decisions accepted after PRD v3. If this file conflicts with another document in `docs/implementation`, this file wins until the thematic documents are rewritten. It does not silently override `docs/prd`: section 12 lists the PRD amendments required before implementation.
+> **⚠️ SUPERSEDED.** Этот файл больше не является source of truth. Направление пересмотрено спекой `docs/superpowers/specs/2026-07-02-prd-v3.1-online-first-agent-loop-design.md` (онлайн-первый разрез + агентная петля): PowerSync/offline-first/Yjs/нормализация DATA-01…08 отменены (решения D1–D4), часть решений перенесена как carried (политика подтверждений AI-09…14, RLS-механика AUTH-08…10, конвейер executor'а, retention и др. — полный список в спеке §2). При создании `docs/prd/04-decision-log.md` живые решения переезжают туда, этот файл остаётся историческим архивом.
+
+Historical text below (do not apply without checking the v3.1 spec):
+
+This was the source of truth for decisions accepted after PRD v3. If this file conflicts with another document in `docs/implementation`, this file wins until the thematic documents are rewritten. It does not silently override `docs/prd`: section 12 lists the PRD amendments required before implementation.
 
 Status vocabulary:
 
