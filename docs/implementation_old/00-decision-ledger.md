@@ -4,9 +4,9 @@
 |---|---|
 | Date | 2026-06-14 |
 | Status | **SUPERSEDED (2026-07-02)** — см. ниже |
-| Authority | Архив; действующие решения — в спеке v3.1 и будущем `docs/prd/04-decision-log.md` |
+| Authority | Архив; действующий журнал решений — [`docs/prd/04-decision-log.md`](../prd/04-decision-log.md) |
 
-> **⚠️ SUPERSEDED.** Этот файл больше не является source of truth. Направление пересмотрено спекой `docs/superpowers/specs/2026-07-02-prd-v3.1-online-first-agent-loop-design.md` (онлайн-первый разрез + агентная петля): PowerSync/offline-first/Yjs/нормализация DATA-01…08 отменены (решения D1–D4), часть решений перенесена как carried (политика подтверждений AI-09…14, RLS-механика AUTH-08…10, конвейер executor'а, retention и др. — полный список в спеке §2). При создании `docs/prd/04-decision-log.md` живые решения переезжают туда, этот файл остаётся историческим архивом.
+> **⚠️ SUPERSEDED.** Этот файл больше не является source of truth. Направление пересмотрено спекой `docs/superpowers/specs/2026-07-02-prd-v3.1-online-first-agent-loop-design.md` (онлайн-первый разрез + агентная петля): PowerSync/offline-first/Yjs/нормализация DATA-01…08 отменены (решения D1–D4), часть решений перенесена как carried (политика подтверждений AI-09…14, RLS-механика AUTH-08…10, конвейер executor'а, retention и др. — полный список в спеке §2). Живые решения перенесены в [`docs/prd/04-decision-log.md`](../prd/04-decision-log.md) (D1–D11 + carried-список); этот файл остаётся историческим архивом.
 
 Historical text below (do not apply without checking the v3.1 spec):
 
