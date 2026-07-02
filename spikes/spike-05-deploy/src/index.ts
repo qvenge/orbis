@@ -1,3 +1,4 @@
+import { timingSafeEqual } from 'node:crypto';
 import { Hono } from 'hono';
 import { sql } from './db';
 
@@ -21,7 +22,16 @@ app.get('/db-check', async (c) => {
 // Требует применённого setup-db (роль orbis_app + spike_items + политика) и
 // DATABASE_URL с ролью orbis_app. Защищён токеном.
 app.get('/spike-check', async (c) => {
-  if (c.req.header('x-spike-token') !== process.env.SPIKE_CHECK_TOKEN) {
+  // Fail-closed: без настроенного токена эндпоинт не работает; сравнение —
+  // constant-time (то же требование, что у PAT-контракта, PRD 01 §9.3).
+  const expected = process.env.SPIKE_CHECK_TOKEN;
+  const provided = c.req.header('x-spike-token');
+  const authorized =
+    !!expected &&
+    !!provided &&
+    provided.length === expected.length &&
+    timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+  if (!authorized) {
     return c.json({ error: 'unauthorized' }, 401);
   }
   const a = crypto.randomUUID();
