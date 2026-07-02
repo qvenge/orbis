@@ -2,17 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Поднять каркас монорепо Orbis под решённый стек — так, чтобы на нём можно было начать Слайс 1 («Обед 340»): рабочие `typecheck`/`lint`/`test`/CI, дизайн-система с токенами, скелеты server (tRPC + Supabase auth), web (React PWA + Tailwind v4 + Radix + PowerSync-клиент с локальной SQLite) и acceptance-харнесс для проверяемых контрактов PRD.
+**Ревизия 2026-07-02 под v3.1 (онлайн-первый разрез)** — план подрезан под `docs/superpowers/specs/2026-07-02-prd-v3.1-online-first-agent-loop-design.md` §7: минус клиентская локальная БД и её коннектор, плюс retry-буфер и `entity_origins`. Источник контрактов — `docs/prd/` (00–04) v3.1 и `docs/implementation/00-architecture.md`.
 
-**Architecture:** Bun-монорепо из трёх workspace-пакетов — `packages/shared` (Zod-схемы, типы, константы, грамматика запросов), `apps/server` (Hono + tRPC + Drizzle + Supabase + LLMProvider + PowerSync backend), `apps/web` (Vite + React PWA + Tailwind v4 + Radix + Zustand + PowerSync client). Источник истины — PRD `docs/prd/` (01-architecture — фундамент). Веха 0 ставит скелеты и инструменты, НЕ фичи: фичи идут слайсами 1–5.
+**Goal:** Поднять каркас монорепо Orbis под решённый стек — так, чтобы на нём можно было начать Слайс 1 («Агентная петля + ввод»): рабочие `typecheck`/`lint`/`test`/CI, дизайн-система с токенами, скелеты server (tRPC + Supabase auth), web (React PWA + Tailwind v4 + Radix + TanStack Query + retry-буфер fast-path-ввода) и acceptance-харнесс для проверяемых контрактов PRD.
 
-**Tech Stack:** Bun + TypeScript · tRPC v11 · Drizzle ORM · PostgreSQL (Supabase, локально через Supabase CLI) · PowerSync (Postgres↔SQLite) · Vite + React 19 PWA · Tailwind v4 + Radix · Zustand · LLMProvider поверх Vercel AI SDK (в Вехе 0 — только интерфейс-скелет) · Biome (lint+format) · Bun test + Vitest + React Testing Library · GitHub Actions CI.
+**Architecture:** Bun-монорепо из трёх workspace-пакетов — `packages/shared` (Zod-схемы, типы, константы, грамматика запросов), `apps/server` (Hono + tRPC + Drizzle + Supabase + LLMProvider), `apps/web` (Vite + React PWA + Tailwind v4 + Radix + Zustand + TanStack Query + retry-буфер). Источник истины — PRD `docs/prd/` (01-architecture — фундамент). Веха 0 ставит скелеты и инструменты, НЕ фичи: фичи идут слайсами (фаза 0 + слайсы 1–3, см. «Очерки слайсов»).
+
+**Tech Stack:** Bun + TypeScript · tRPC v11 · Drizzle ORM · PostgreSQL (Supabase, локально через Supabase CLI) · Vite + React 19 PWA · Tailwind v4 + Radix · Zustand · TanStack Query (server-state-кэш) · LLMProvider поверх Vercel AI SDK (в Вехе 0 — только интерфейс-скелет) · Biome (lint+format) · Bun test + Vitest + React Testing Library · GitHub Actions CI.
 
 **Решения по инструментам (зафиксированы при пересмотре стека):**
 - Линтер/формат — **Biome** (один бинарь, без ESLint+Prettier).
 - Тесты — **Bun test** для `shared`/`server`, **Vitest + React Testing Library + jsdom** для `web`.
-- Локальная БД — **Supabase CLI** (Docker): Postgres + Auth локально, без облака.
-- PowerSync — в Вехе 0 ставится клиентский SDK с **локальной SQLite** (offline-first работает с первого слайса); коннектор Postgres↔SQLite (логическая репликация) подключается в **Слайсе 3**.
+- Локальная БД — **Supabase CLI** (Docker): Postgres + Auth локально, без облака; PostgreSQL — единственный источник истины, у клиента собственной базы нет (01-architecture §4.12).
+- Офлайн — **retry-буфер** ввода (не режим работы, D2 спеки): буферизуются только create-мутации fast-path; персист — localStorage-скелет в Вехе 0 (интерфейс хранения отделён от логики, чтобы заменить на IndexedDB позже).
+
+**Примечание о версиях:** версии в сниппетах плана (Zod `^3.24`, Biome `2`, tRPC `v11`, React `19`) — актуальны на дату написания; перепроверить при исполнении.
 
 **ВАЖНО — без коммитов без спроса:** владелец коммитит сам или по явной просьбе. Шаги плана НЕ делают `git commit`, кроме тех, что помечены явно как контрольная точка — и даже их выполнять только если владелец разрешил коммиты в этой сессии. По умолчанию — оставлять изменения в рабочей копии.
 
@@ -47,7 +51,9 @@ orbis/
 │     ├─ router.ts              # T7: appRouter (ping)
 │     ├─ db/
 │     │  ├─ client.ts           # T5: Drizzle client
-│     │  └─ schema.ts           # T5: 8 таблиц (скелет)
+│     │  └─ schema.ts           # T5: 8 таблиц (entities, relations, aspect_definitions,
+│     │                         #     user_settings, chat_threads, chat_messages, ai_usage,
+│     │                         #     entity_origins) — скелет
 │     └─ llm/
 │        └─ provider.ts         # T8: LLMProvider интерфейс + типы (скелет)
 ├─ apps/web/
@@ -63,10 +69,16 @@ orbis/
 │  │  │  └─ globals.css         # T9: Tailwind v4 import + база
 │  │  ├─ ui/                    # T9: Button, Card (Radix + токены)
 │  │  ├─ trpc.ts                # T7: tRPC React client
-│  │  └─ db/
-│  │     └─ powersync.ts        # T10: PowerSync client + локальная SQLite-схема (скелет)
+│  │  └─ lib/
+│  │     └─ retry-buffer/       # T10: retry-буфер fast-path-create (01 §5.3)
+│  │        ├─ index.ts         # T10: RetryBuffer интерфейс + реализация
+│  │        ├─ storage.ts       # T10: localStorage-персист (заменяемый на IndexedDB позже)
+│  │        └─ retry-buffer.test.ts   # T10: RED/GREEN тесты enqueue/flush/cancel
 │  └─ tests/setup.ts            # T3: jsdom + RTL setup
-└─ packages/shared/src/query/   # T11: acceptance-харнесс (фикстуры + RED-тесты контрактов)
+├─ packages/shared/src/query/   # T11: грамматика (типы AST) + общие фикстуры
+└─ packages/shared/src/contracts/  # T11: acceptance-харнесс — 5 skipped-тестов новых
+                                #     контрактов v3.1 (fast-path, идемпотентность,
+                                #     optimistic-check, политика подтверждений, CSV-дедуп)
 ```
 
 ---
@@ -355,7 +367,7 @@ Expected: все три шага зелёные локально (это то, �
 - Create: `apps/server/drizzle.config.ts`, `apps/server/src/db/schema.ts`, `apps/server/src/db/client.ts`
 - Create: `apps/server/.env.example`
 
-**Контекст:** таблицы — по 01-architecture §4 (entities, relations, aspect_definitions, user_settings, chat_threads, chat_messages, ai_usage, sync_log). Здесь — структура столбцов и индексы; RLS-политики и сид аспектов — Слайс 1. Цель Вехи 0: схема компилируется, миграция генерируется и применяется к локальному Supabase.
+**Контекст:** таблицы — по 01-architecture §4 (entities, relations, aspect_definitions, user_settings, chat_threads, chat_messages, ai_usage, entity_origins). Здесь — структура столбцов и индексы; RLS-политики и сид аспектов — Слайс 1. Цель Вехи 0: схема компилируется, миграция генерируется и применяется к локальному Supabase.
 
 - [ ] **Step 1: Supabase CLI — поднять локальный стек**
 
@@ -368,16 +380,16 @@ Run: `bun add --cwd apps/server drizzle-orm postgres && bun add -d --cwd apps/se
 
 - [ ] **Step 3: `db/schema.ts`** — 8 таблиц по 01 §4
 
-Точные столбцы — из 01-architecture §4.1–§4.8. Ключевые места: `entities` (id uuid PK, user_id, title, emoji, body text default '', body_refs text[] default {}, tags text[] default {}, meta jsonb default {}, aspects jsonb default {}, created_at, updated_at, synced_at nullable, archived bool default false); `relations` (+ updated_at, + deleted_at nullable; partial unique `(source_id,target_id,relation_type) WHERE deleted_at IS NULL`; CHECK source≠target); `aspect_definitions` (id text PK, user_id nullable, name, namespace, description, icon, schema jsonb, ai_instructions, tag_mappings text[], aggregations jsonb, view_config jsonb, created_at); `user_settings` (user_id PK, display_name, timezone default 'Europe/Moscow', default_currency default 'RUB', week_start_day default 'monday', plan text default 'dev', aspect_statuses jsonb, tag_colors jsonb, installed_views text[], pinned_entities jsonb, view_preferences jsonb, updated_at); `chat_threads` (id uuid PK, user_id, entity_id uuid nullable, title, archived bool, created_at, updated_at); `chat_messages` (id uuid PK, thread_id, role text, content text, metadata jsonb, created_at); `ai_usage` (user_id, date, input_tokens, output_tokens, request_count, model — PK (user_id,date,model)); `sync_log` (id, user_id, device_id, last_sync_at, entity_count, conflicts jsonb, created_at).
+Точные столбцы — из 01-architecture §4.1–§4.8. Ключевые места (нейминг владельца — `owner_id` везде, не `user_id`): `entities` (id uuid PK, owner_id, title, emoji, body text default '', body_refs text[] default {}, tags text[] default {}, meta jsonb default {}, aspects jsonb default {}, created_at, updated_at, archived bool default false); `relations` (id, source_id, target_id, relation_type, meta jsonb default {}, created_at, updated_at; удаление — обычный `DELETE`, без `deleted_at`; unique index — полный `UNIQUE (source_id,target_id,relation_type)` без partial-условия; CHECK source≠target); `aspect_definitions` (id text, owner_id nullable, name, namespace, description, icon, schema jsonb, ai_instructions, tag_mappings text[], aggregations jsonb, view_config jsonb, created_at; уникальность — два partial unique index, без surrogate PK); `user_settings` (owner_id PK, plan text default 'dev', timezone default 'Europe/Moscow', defaultCurrency default 'RUB', weekStartDay default 'monday', tagColors jsonb default {}, installedViews text[] default {}, pinnedEntities jsonb default [], viewPreferences jsonb default {}, updated_at — имена столбцов настроек в camelCase, историческое соответствие коду, 01 §4.4); `chat_threads` (id uuid PK, owner_id, entity_id uuid nullable, title, archived bool, created_at, updated_at; два partial unique index — глобальный тред и тред сущности, см. грабля ниже); `chat_messages` (id uuid PK, thread_id, role text, content text, metadata jsonb default {}, created_at — append-only, без updated_at); `ai_usage` (owner_id, date, model, input_tokens bigint default 0, output_tokens bigint default 0, request_count integer default 0 — PK (owner_id,date,model)); `entity_origins` (id uuid PK, owner_id, entity_id uuid FK → entities, namespace text, external_id text, created_at — UNIQUE (owner_id, namespace, external_id), 01 §4.8).
 
-Скелет (привести все 8; здесь — образец двух, остальные по тому же образцу и таблицам 01 §4):
+Скелет (привести все 8; здесь — образец трёх, остальные по тому же образцу и таблицам 01 §4):
 ```typescript
 import { pgTable, uuid, text, jsonb, timestamp, boolean, unique, check } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const entities = pgTable('entities', {
   id: uuid('id').primaryKey(),
-  userId: uuid('user_id').notNull(),
+  ownerId: uuid('owner_id').notNull(),
   title: text('title').notNull(),
   emoji: text('emoji'),
   body: text('body').notNull().default(''),
@@ -387,7 +399,6 @@ export const entities = pgTable('entities', {
   aspects: jsonb('aspects').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-  syncedAt: timestamp('synced_at', { withTimezone: true }),
   archived: boolean('archived').notNull().default(false),
 });
 
@@ -399,14 +410,24 @@ export const relations = pgTable('relations', {
   meta: jsonb('meta').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-  deletedAt: timestamp('deleted_at', { withTimezone: true }),
 }, (t) => ({
-  uniqLive: unique('rel_uniq_live').on(t.sourceId, t.targetId, t.relationType).nullsNotDistinct(),
+  uniqLive: unique('rel_uniq').on(t.sourceId, t.targetId, t.relationType),
   noSelf: check('rel_no_self', sql`${t.sourceId} <> ${t.targetId}`),
 }));
-// ... остальные 6 таблиц по 01-architecture §4 ...
+
+export const entityOrigins = pgTable('entity_origins', {
+  id: uuid('id').primaryKey(),
+  ownerId: uuid('owner_id').notNull(),
+  entityId: uuid('entity_id').notNull(),
+  namespace: text('namespace').notNull(),
+  externalId: text('external_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  uniqOrigin: unique('entity_origins_uniq').on(t.ownerId, t.namespace, t.externalId),
+}));
+// ... остальные 5 таблиц по 01-architecture §4 (aspect_definitions, user_settings, chat_threads, chat_messages, ai_usage) ...
 ```
-Примечание: partial unique `WHERE deleted_at IS NULL` (01 §4.2) — drizzle-kit может не выразить partial-условие декларативно; если так, добавить его SQL-ом в сгенерированную миграцию вручную (отметить комментарием в миграции).
+Примечание-грабля: drizzle-kit может не выражать partial unique индексы декларативно — конкретный пример в этой схеме: unique-тред `WHERE entity_id IS NULL` в `chat_threads` (01 §4.5, два partial unique index — `UNIQUE (owner_id) WHERE entity_id IS NULL` и `UNIQUE (owner_id, entity_id) WHERE entity_id IS NOT NULL`). Если декларативно не выразилось — SQL дописывается в сгенерированную миграцию вручную (отметить комментарием в миграции). У `relations` и `entity_origins` unique-индексы теперь полные (без partial-условия) — этой граблей не задеты.
 
 - [ ] **Step 4: `drizzle.config.ts` + `db/client.ts`**
 
@@ -433,7 +454,7 @@ export const db = drizzle(client, { schema });
 - [ ] **Step 5: Сгенерировать и применить миграцию**
 
 Run: `cd apps/server && bunx drizzle-kit generate && bunx drizzle-kit migrate`
-Expected: создаётся SQL-миграция со всеми 8 таблицами; применяется к локальному Supabase без ошибок. Проверка: `bunx supabase db diff` не показывает расхождений (или таблицы видны в Studio на `54323`). Если partial unique не попал — дописать в миграцию `CREATE UNIQUE INDEX rel_uniq_live ON relations (source_id,target_id,relation_type) WHERE deleted_at IS NULL;` и переприменить.
+Expected: создаётся SQL-миграция со всеми 8 таблицами; применяется к локальному Supabase без ошибок. Проверка: `bunx supabase db diff` не показывает расхождений (или таблицы видны в Studio на `54323`). Если partial unique для `chat_threads` не попал в миграцию декларативно — дописать вручную `CREATE UNIQUE INDEX chat_threads_global_uniq ON chat_threads (owner_id) WHERE entity_id IS NULL;` и `CREATE UNIQUE INDEX chat_threads_entity_uniq ON chat_threads (owner_id, entity_id) WHERE entity_id IS NOT NULL;`, затем переприменить.
 
 - [ ] **Step 6: Typecheck**
 
@@ -461,7 +482,7 @@ import { entitySchema } from './entity';
 test('entitySchema принимает минимальную сущность и проставляет дефолты', () => {
   const e = entitySchema.parse({
     id: '018e4a2c-0000-7000-8000-000000000000',
-    userId: '018e4a2c-0000-7000-8000-000000000001',
+    ownerId: '018e4a2c-0000-7000-8000-000000000001',
     title: 'Обед',
     createdAt: '2026-06-16T10:00:00Z',
     updatedAt: '2026-06-16T10:00:00Z',
@@ -497,7 +518,7 @@ import { z } from 'zod';
 
 export const entitySchema = z.object({
   id: z.string().uuid(),
-  userId: z.string().uuid(),
+  ownerId: z.string().uuid(),
   title: z.string().min(1),
   emoji: z.string().nullable().default(null),
   body: z.string().default(''),
@@ -507,7 +528,6 @@ export const entitySchema = z.object({
   aspects: z.record(z.any()).default({}),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
-  syncedAt: z.string().datetime().nullable().default(null),
   archived: z.boolean().default(false),
 });
 export type Entity = z.infer<typeof entitySchema>;
@@ -525,10 +545,10 @@ export const relationSchema = z.object({
   meta: z.record(z.any()).default({}),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
-  deletedAt: z.string().datetime().nullable().default(null),
 });
 export type Relation = z.infer<typeof relationSchema>;
 ```
+Примечание: Zod-схему для `entity_origins` в Вехе 0 не добавляем — это server-only таблица (provenance импорта), клиентского контракта у неё нет до слайса 2 (CSV-импорт, 03 §3.4.1); добавление — YAGNI до появления слайса импорта.
 
 - [ ] **Step 5: Реэкспорт в `index.ts`**
 
@@ -560,26 +580,28 @@ Run: `bun add --cwd apps/server @supabase/supabase-js && bun add --cwd apps/web 
 
 - [ ] **Step 2: `trpc.ts`** — контекст с валидацией Supabase JWT (по 01 §9 / api-принципам)
 
+Нейминг контекста — `actorUserId` (не `userId`): identity течёт только через request-контекст, двусмысленное имя `user_id`/`userId` запрещено (D11, workspace-ready граница).
+
 ```typescript
 import { initTRPC, TRPCError } from '@trpc/server';
 import { createClient } from '@supabase/supabase-js';
 
-export interface Context { userId: string | null; }
+export interface Context { actorUserId: string | null; }
 
 export async function createContext({ req }: { req: Request }): Promise<Context> {
   const token = req.headers.get('authorization')?.replace('Bearer ', '');
-  if (!token) return { userId: null };
+  if (!token) return { actorUserId: null };
   const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
   const { data } = await supabase.auth.getUser(token);
-  return { userId: data.user?.id ?? null };
+  return { actorUserId: data.user?.id ?? null };
 }
 
 const t = initTRPC.context<Context>().create();
 export const router = t.router;
 export const publicProcedure = t.procedure;
 export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
-  if (!ctx.userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-  return next({ ctx: { userId: ctx.userId } });
+  if (!ctx.actorUserId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  return next({ ctx: { actorUserId: ctx.actorUserId } });
 });
 ```
 
@@ -590,7 +612,7 @@ import { router, publicProcedure, protectedProcedure } from './trpc';
 
 export const appRouter = router({
   ping: publicProcedure.query(() => ({ ok: true })),
-  whoami: protectedProcedure.query(({ ctx }) => ({ userId: ctx.userId })),
+  whoami: protectedProcedure.query(({ ctx }) => ({ actorUserId: ctx.actorUserId })),
 });
 export type AppRouter = typeof appRouter;
 ```
@@ -618,12 +640,12 @@ import { expect, test } from 'bun:test';
 import { appRouter } from './router';
 
 test('ping возвращает ok', async () => {
-  const caller = appRouter.createCaller({ userId: null });
+  const caller = appRouter.createCaller({ actorUserId: null });
   expect(await caller.ping()).toEqual({ ok: true });
 });
 
 test('whoami без авторизации бросает UNAUTHORIZED', async () => {
-  const caller = appRouter.createCaller({ userId: null });
+  const caller = appRouter.createCaller({ actorUserId: null });
   await expect(caller.whoami()).rejects.toThrow();
 });
 ```
@@ -653,7 +675,7 @@ Expected: `/health` → `{"status":"ok"}`; `/trpc/ping` → результат �
 - Create: `apps/server/src/llm/provider.ts`, `apps/server/src/llm/types.ts`
 - Create: `apps/server/src/llm/provider.test.ts`
 
-**Контекст (01 §7.7):** реализация — поверх Vercel AI SDK, но **типы AI SDK не протекают наружу**. В Вехе 0 — только наши типы + интерфейс + заглушка-реализация (echo), без реального вызова модели. Реальная интеграция — Слайс 4.
+**Контекст (01 §7.7):** реализация — поверх Vercel AI SDK, но **типы AI SDK не протекают наружу**. В Вехе 0 — только наши типы + интерфейс + заглушка-реализация (echo), без реального вызова модели. Реальная интеграция — Слайс 1 (LLM-путь с тулами входит в скоуп Слайса 1, PRD 00-product §9).
 
 - [ ] **Step 1: `types.ts`** — наши типы (не из AI SDK)
 
@@ -687,7 +709,7 @@ test('EchoProvider возвращает наши типы без tool-call', asy
 });
 ```
 
-- [ ] **Step 3: `provider.ts`** — заглушка (реальный Vercel-AI-SDK-провайдер — Слайс 4)
+- [ ] **Step 3: `provider.ts`** — заглушка (реальный Vercel-AI-SDK-провайдер — Слайс 1)
 
 ```typescript
 import type { LLMProvider, LLMRequest, LLMResponse } from './types';
@@ -792,39 +814,151 @@ Expected: тест Button зелёный; production-сборка проходи
 
 ---
 
-### Task 10: PowerSync client — локальная SQLite (offline-only скелет)
+### Task 10: Retry-буфер — скелет
 
 **Files:**
-- Modify: `apps/web/package.json` (deps: PowerSync web SDK + react)
-- Create: `apps/web/src/db/powersync.ts`, `apps/web/src/db/schema.ts` (клиентская SQLite-схема)
-- Create: `apps/web/src/db/powersync.test.ts`
+- Create: `apps/web/src/lib/retry-buffer/index.ts`, `apps/web/src/lib/retry-buffer/storage.ts`
+- Create: `apps/web/src/lib/retry-buffer/retry-buffer.test.ts`
 
-**Контекст (01 §4.12, §5):** PowerSync держит локальную SQLite (WASM/OPFS), работает offline-only без коннектора. Коннектор Postgres↔SQLite — Слайс 3. В Вехе 0: SDK установлен, клиентская SQLite-схема `entities`/`relations` объявлена, БД открывается, локальная вставка+чтение работают (смоук offline-first). Точные имена API PowerSync уточнить по актуальной версии SDK при исполнении.
+**Контекст (PRD 01 §5.3, §4.12; решение D2 спеки 2026-07-02):** офлайн в Orbis — не режим работы, а буфер на входе. Буферизуются **только** create-мутации fast-path-ввода (01 §7.5): каждая — с client-generated UUIDv7, складывается в локальную очередь, если запрос не ушёл на сервер. Буфер — единственное персистентное клиентское состояние (01 §4.12: у клиента нет собственной БД). Прежний скелет клиентской локальной БД (Task 10 версии v3) удалён целиком — общего кода нет, модуль пишется с нуля.
 
-- [ ] **Step 1: Установить PowerSync web SDK**
+Контракт (PRD 01 §5.3):
+```ts
+interface QueuedCreate {
+  clientId: string;      // UUIDv7, генерируется при постановке
+  tool: string;          // имя тула реестра, например 'entity_create'
+  payload: unknown;
+  createdAt: string;     // ISO, для отображения в списке ожидающих
+}
 
-Run: `bun add --cwd apps/web @powersync/web @powersync/react`
-Expected: пакеты добавлены. (Если имена пакетов в актуальной версии отличаются — взять из текущей документации PowerSync для web/React; цель неизменна: web SDK + React-биндинги.)
+interface RetryBuffer {
+  enqueue(op: Omit<QueuedCreate, 'clientId' | 'createdAt'>): QueuedCreate;
+  flush(send: (op: QueuedCreate) => Promise<FlushOutcome>): Promise<void>;
+  cancel(clientId: string): void;   // отмена до отправки (02-core-os §2.6)
+  size(): number;                    // бейдж Chat «ждут отправки: N»
+}
 
-- [ ] **Step 2: Клиентская SQLite-схема `db/schema.ts`**
+type FlushOutcome = 'confirmed' | 'transport_failure' | 'business_rejection';
+// confirmed → удалить из очереди; transport_failure → оставить (ретрай);
+// business_rejection → удалить + отдать ошибку наружу
+```
 
-Объявить таблицы `entities` и `relations` средствами PowerSync schema-builder, зеркало серверной структуры (id, title, body, tags, meta, aspects как text/json-колонки SQLite — JSONB на клиенте хранится строкой). Точный синтаксис — из PowerSync SDK (`new Schema({...})` с `Table`/`column`).
+- [ ] **Step 1: Написать падающие тесты — enqueue→flush(confirmed)→удаление, различение исходов**
 
-- [ ] **Step 3: `db/powersync.ts`** — инициализация локальной БД (без коннектора)
+`apps/web/src/lib/retry-buffer/retry-buffer.test.ts`:
+```typescript
+import { createRetryBuffer, type FlushOutcome } from './index';
 
-Создать и открыть PowerSync-базу с этой схемой, экспортировать инстанс. Коннектор НЕ подключать (offline-only). Экспортировать функцию `initLocalDb()` и helper для вставки/запроса сущности.
+test('enqueue кладёт запись в очередь; flush(confirmed) удаляет её', async () => {
+  const buffer = createRetryBuffer();
+  const queued = buffer.enqueue({ tool: 'entity_create', payload: { title: 'Обед 340' } });
+  expect(buffer.size()).toBe(1);
+  expect(queued.clientId).toBeTruthy();
 
-- [ ] **Step 4: Смоук-тест локальной вставки/чтения**
+  await buffer.flush(async () => 'confirmed');
 
-`apps/web/src/db/powersync.test.ts`: открыть локальную БД (в jsdom-окружении PowerSync использует WASM; если в Vitest/jsdom WASM-драйвер недоступен — пометить тест как интеграционный и проверять схему/инициализацию мокнутым драйвером, а реальный смоук вынести в ручной прогон `bun run --cwd apps/web dev` с тестовой кнопкой). Минимум: тест проверяет, что схема объявлена и `initLocalDb()` не бросает.
+  expect(buffer.size()).toBe(0);
+});
+
+test('transport_failure оставляет запись в очереди; business_rejection удаляет её с ошибкой', async () => {
+  const buffer = createRetryBuffer();
+  buffer.enqueue({ tool: 'entity_create', payload: { title: 'A' } }); // получит transport_failure
+  buffer.enqueue({ tool: 'entity_create', payload: { title: 'B' } }); // получит business_rejection
+
+  const outcomes: FlushOutcome[] = ['transport_failure', 'business_rejection'];
+  await buffer.flush(async () => outcomes.shift() ?? 'confirmed'); // noUncheckedIndexedAccess-safe
+
+  expect(buffer.size()).toBe(1); // осталась только transport_failure-запись, ретраится следующим flush()
+});
+```
+(Тест на `cancel()` — не в скелете Вехи 0: интерфейс реализуется и покрыт typecheck'ом, поведенческий UI-тест «отмена до отправки» — Слайс 1, 02-core-os §2.6, когда появится сам индикатор «ждут отправки: N».)
+
+- [ ] **Step 2: Прогнать — упадёт (нет модуля)**
 
 Run: `bun run --cwd apps/web test`
-Expected: тест зелёный (или явно помечен интеграционным со ссылкой на ручной смоук). Зафиксировать в комментарии, какой путь выбран и почему — не оставлять молчаливый пропуск.
+Expected: FAIL — `Cannot find module './index'`.
 
-- [ ] **Step 5: Typecheck**
+- [ ] **Step 3: `storage.ts`** — персист в localStorage за отдельным интерфейсом
 
-Run: `bun run --cwd apps/web typecheck`
-Expected: зелёно.
+```typescript
+import type { QueuedCreate } from './index';
+
+const STORAGE_KEY = 'orbis:retry-buffer:v1';
+
+export interface QueueStorage {
+  load(): QueuedCreate[];
+  save(items: QueuedCreate[]): void;
+}
+
+export const localStorageQueue: QueueStorage = {
+  load: () => JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '[]'),
+  save: (items) => localStorage.setItem(STORAGE_KEY, JSON.stringify(items)),
+};
+```
+`QueueStorage` — единственная точка замены на IndexedDB позже; логика буфера не знает, где физически хранятся записи.
+
+- [ ] **Step 4: `index.ts`** — минимальная реализация `createRetryBuffer`
+
+```typescript
+import type { QueueStorage } from './storage';
+import { localStorageQueue } from './storage';
+
+export interface QueuedCreate {
+  clientId: string;
+  tool: string;
+  payload: unknown;
+  createdAt: string;
+}
+
+export type FlushOutcome = 'confirmed' | 'transport_failure' | 'business_rejection';
+
+export interface RetryBuffer {
+  enqueue(op: Omit<QueuedCreate, 'clientId' | 'createdAt'>): QueuedCreate;
+  flush(send: (op: QueuedCreate) => Promise<FlushOutcome>): Promise<void>;
+  cancel(clientId: string): void;
+  size(): number;
+}
+
+export function createRetryBuffer(storage: QueueStorage = localStorageQueue): RetryBuffer {
+  let queue: QueuedCreate[] = storage.load();
+
+  return {
+    enqueue(op) {
+      // UUIDv7 (01 §5.3) — генератор из packages/shared при исполнении слайса;
+      // crypto.randomUUID() здесь placeholder-скелет (v4, не сортируемый по времени).
+      const item: QueuedCreate = { ...op, clientId: crypto.randomUUID(), createdAt: new Date().toISOString() };
+      queue = [...queue, item];
+      storage.save(queue);
+      return item;
+    },
+    async flush(send) {
+      for (const item of [...queue]) {
+        const outcome = await send(item);
+        if (outcome === 'confirmed' || outcome === 'business_rejection') {
+          queue = queue.filter((q) => q.clientId !== item.clientId);
+          storage.save(queue);
+        }
+        // transport_failure — запись остаётся, ретрай следующим вызовом flush()
+      }
+    },
+    cancel(clientId) {
+      queue = queue.filter((q) => q.clientId !== clientId);
+      storage.save(queue);
+    },
+    size: () => queue.length,
+  };
+}
+```
+
+- [ ] **Step 5: Прогон — зелено**
+
+Run: `bun run --cwd apps/web test && bun run --cwd apps/web typecheck`
+Expected: оба теста зелёные (enqueue→flush(confirmed)→удаление; transport_failure остаётся/business_rejection удаляется); typecheck без ошибок.
+
+- [ ] **Step 6: Контрольная точка (коммит — только по явному разрешению владельца в этой сессии)**
+
+Run: `git add apps/web/src/lib/retry-buffer && git commit -m "feat(web): retry-буфер fast-path-create — enqueue/flush/cancel (PRD 01 §5.3)"`
+Expected: по умолчанию НЕ выполняется — см. шапку плана («без коммитов без спроса»); коммит делается только если владелец в этой сессии явно разрешил коммиты. Иначе изменения остаются в рабочей копии до Task 12.
 
 ---
 
@@ -833,42 +967,132 @@ Expected: зелёно.
 **Files:**
 - Create: `packages/shared/src/query/grammar.ts` (типы AST грамматики — скелет)
 - Create: `packages/shared/src/query/fixtures.ts` (общие фикстуры сущностей)
-- Create: `packages/shared/src/query/equivalence.test.ts` (RED, пропущен до Слайса 2)
-- Create: `packages/shared/src/sync/conflict.fixtures.ts`, `packages/shared/src/sync/conflict.test.ts` (RED, пропущен до Слайса 3)
+- Create: `packages/shared/src/contracts/fast-path.test.ts` (RED, пропущен до Слайса 1)
+- Create: `packages/shared/src/contracts/retry-idempotency.test.ts` (RED, пропущен до Слайса 1)
+- Create: `packages/shared/src/contracts/optimistic-check.test.ts` (RED, пропущен до Слайса 1)
+- Create: `packages/shared/src/contracts/confirmation-policy.test.ts` (RED, пропущен до Слайса 1)
+- Create: `packages/shared/src/contracts/csv-dedup.test.ts` (RED, пропущен до Слайса 2)
 
-**Контекст:** PRD содержит проверяемые контракты — эквивалентность двух SQL-бэкендов query-движка (01 §6.2) и матрица конфликтов (01 §5.2). Веха 0 кодирует их как **исполняемый каркас тестов**, которые сейчас намеренно RED/skipped и станут GREEN в слайсах 2 и 3. Это и есть «spec-тесты из спеки».
+**Контекст:** PRD содержит проверяемые контракты поведения. Веха 0 кодирует их как **исполняемый каркас тестов** — намеренно RED/skipped, они станут GREEN в слайсах, где реализуется соответствующая механика. Это и есть «PRD-контракт = исполняемый skipped-тест» — метод, а не конкретный набор тестов v3: тест на сравнение результата двух SQL-бэкендов query-движка и тест матрицы конфликтов синхронизации (оба — v3) удалены целиком — оба контракта вырезаны из PRD v3.1 (один бэкенд query-движка, 01 §6.2; конфликты — LWW + optimistic-check, а не матрица, 01 §5.2). Метод переиспользован для пяти новых контрактов v3.1.
 
 - [ ] **Step 1: Типы AST грамматики (скелет, по 01 §6.1)**
 
-`grammar.ts`: объявить TS-типы фильтра запроса (теги, исключения, аспект, поле=значения с `|`, отрицания `!`/`&`, date-токены, числовые сравнения/диапазоны, `children_of`/`parents_of`, `excludeBlocked`, `sortBy`, `search`, `limit`, `display`, `title`) как discriminated unions. Без парсера — только типы (парсер в Слайсе 2).
+`grammar.ts`: объявить TS-типы фильтра запроса (теги, исключения, аспект, поле=значения с `|`, отрицания `!`/`&`, date-токены, числовые сравнения/диапазоны, `children_of`/`parents_of`, `excludeBlocked`, `sortBy`, `search`, `limit`, `display`, `title`) как discriminated unions. Без парсера — только типы (парсер клиентского fast-path и серверного SQL-компилятора — Слайс 1/2, оба потребляют эти типы, 00-architecture §1/§3).
 
 - [ ] **Step 2: Общие фикстуры**
 
-`fixtures.ts`: экспортировать ~10 сущностей-образцов (задачи с разными status/priority/due_date, заметка, финансовая запись) как массив `Entity[]` — единый вход для обоих бэкендов.
+`fixtures.ts`: экспортировать ~10 сущностей-образцов (задачи с разными status/priority/due_date, заметка, финансовая запись) как массив `Entity[]` — единый вход для будущих golden-тестов грамматика→SQL (01 §6.2) и для контрактных тестов ниже.
 
-- [ ] **Step 3: Скелет теста эквивалентности (skipped)**
+- [ ] **Step 3: Скелет контрактного теста fast-path-грамматики (skipped, PRD 01 §7.5)**
 
-`equivalence.test.ts`:
+`contracts/fast-path.test.ts`:
 ```typescript
 import { describe, test } from 'bun:test';
-// Контракт 01 §6.2: серверный (Postgres) и клиентский (SQLite) бэкенды
-// на одних фикстурах и одном запросе обязаны возвращать идентичный результат.
-describe.skip('query-движок: эквивалентность бэкендов (Слайс 2)', () => {
-  test('today + сортировка по priority даёт один результат на обоих бэкендах', () => {
-    // TODO Слайс 2: прогнать один и тот же запрос через оба бэкенда и сравнить id-список
+// Контракт 01 §7.5: клиентский детерминированный парсер (apps/web, без LLM) распознаёт
+// частотные паттерны ввода и уступает LLM-пути при любой неуверенности.
+describe.skip('fast-path: детерминированный парсер (Слайс 1)', () => {
+  test('"обед 340" → orbis/financial expense, amount=340.00, категория по aliases', () => {
+    // Слайс 1: см. таблицу паттернов 01 §7.5
+  });
+  test('"+150000 зарплата" → orbis/financial income, amount=150000.00', () => {
+    // Слайс 1
+  });
+  test('"кофе 4 usd" → expense с явной currency=USD', () => {
+    // Слайс 1
+  });
+  test('неизвестная категория / несколько сумм / вопросительная форма → уступает LLM-пути', () => {
+    // Слайс 1: правила передачи в LLM, 01 §7.5
   });
 });
 ```
-(`describe.skip` — намеренный RED-каркас; в Слайсе 2 снимается skip и реализуется.)
 
-- [ ] **Step 4: Скелет теста матрицы конфликтов (skipped)**
+- [ ] **Step 4: Скелет контрактного теста идемпотентности досылки (skipped, PRD 01 §5.3)**
 
-`conflict.test.ts`: `describe.skip('sync: матрица конфликтов (Слайс 3)', ...)` с тест-кейсами-заголовками по строкам матрицы 01 §5.2 (title LWW, tags LWW массива, meta key-level, aspects aspect-level, body конфликт-копия, relations tombstone) — тела с комментарием-ссылкой на §5.2, реализация в Слайсе 3.
+`contracts/retry-idempotency.test.ts`:
+```typescript
+import { describe, test } from 'bun:test';
+// Контракт 01 §5.3: сервер обязан принимать повторный create с тем же client-UUID
+// как один и тот же результат — идемпотентность обязательна и онлайн, не только офлайн.
+describe.skip('retry-буфер: идемпотентность досылки по client-UUID (Слайс 1)', () => {
+  test('повторный entity_create с тем же clientId не создаёт дубль, возвращает тот же результат', () => {
+    // Слайс 1: см. 01 §5.3 + sequence-диаграмму 00-architecture §4.1
+  });
+  test('transport_failure остаётся в очереди и ретраится; business_rejection удаляется с ошибкой', () => {
+    // Слайс 1
+  });
+});
+```
 
-- [ ] **Step 5: Прогон — каркас виден, skipped**
+- [ ] **Step 5: Скелет контрактного теста optimistic-check (skipped, PRD 01 §5.2)**
+
+`contracts/optimistic-check.test.ts`:
+```typescript
+import { describe, test } from 'bun:test';
+// Контракт 01 §5.2: правка body обязана передать updated_at прочитанной версии;
+// расхождение с серверным значением — отказ, а не тихая перезапись.
+describe.skip('конкурентность: optimistic-check по updated_at для body (Слайс 1)', () => {
+  test('правка с текущим updated_at применяется, версия обновляется', () => {
+    // Слайс 1
+  });
+  test('правка с устаревшим updated_at отклоняется структурированной ошибкой 409', () => {
+    // Слайс 1: см. sequence-диаграмму 00-architecture §4.4
+  });
+  test('поля вне body (например tags) разрешаются простым LWW, без optimistic-check', () => {
+    // Слайс 1
+  });
+});
+```
+
+- [ ] **Step 6: Скелет контрактного теста политики подтверждений (skipped, PRD 01 §7.10)**
+
+`contracts/confirmation-policy.test.ts`:
+```typescript
+import { describe, test } from 'bun:test';
+// Контракт 01 §7.10: уровень подтверждения (execute/preview/explicit-confirmation/forbidden)
+// определяет политика Orbis после структурной валидации tool-call, не модель.
+describe.skip('политика подтверждений AI-действий: классификация уровней (Слайс 1)', () => {
+  test('execute — исполняется немедленно, карточка и журнал постфактум', () => {
+    // Слайс 1
+  });
+  test('preview — исполняется с информационным diff-предпросмотром', () => {
+    // Слайс 1
+  });
+  test('explicit-confirmation — не исполняется до подтверждения; approve ревалидирует состояние без повторного вызова модели', () => {
+    // Слайс 1: см. sequence-диаграмму 00-architecture §4.2
+  });
+  test('forbidden — отклоняется структурированной ошибкой до исполнения', () => {
+    // Слайс 1
+  });
+});
+```
+
+- [ ] **Step 7: Скелет контрактного теста дедупа CSV (skipped, PRD 03 §3.4.1)**
+
+`contracts/csv-dedup.test.ts`:
+```typescript
+import { describe, test } from 'bun:test';
+// Контракт 03 §3.4.1: уникальность (owner_id, namespace, external_id) в entity_origins
+// ловит повтор той же строки источника; критерий (1)+(2)+(3) — вероятные дубли между источниками.
+describe.skip('CSV-импорт: дедуп через entity_origins (Слайс 2)', () => {
+  test('совпадение (owner_id, namespace, external_id) → статус "уже импортирована", без новой записи', () => {
+    // Слайс 2
+  });
+  test('amount+direction точно, occurred_on ±1 день, counterparty-similarity ≥0.85 → "вероятный дубль"', () => {
+    // Слайс 2: нормализация и порог — 03 §3.4.1
+  });
+  test('ни origin, ни содержательное совпадение → статус "новая"', () => {
+    // Слайс 2
+  });
+  test('Undo импорта физически удаляет entity_origins → повторный импорт того же файла без ложных "уже импортирована"', () => {
+    // Слайс 2
+  });
+});
+```
+
+- [ ] **Step 8: Прогон — каркас виден, skipped**
 
 Run: `bun test --cwd packages/shared`
-Expected: тесты эквивалентности и конфликтов числятся как skipped (не fail, не молча отсутствуют); существующие зелёные тесты (entity) проходят. Так контракты PRD зафиксированы исполняемо и ждут своих слайсов.
+Expected: все пять контрактных тестов числятся как skipped (не fail, не молча отсутствуют); существующие зелёные тесты (entity) проходят. Так контракты PRD v3.1 зафиксированы исполняемо и ждут своих слайсов.
 
 ---
 
@@ -892,12 +1116,11 @@ Expected: страница «Orbis» рендерится с применённ�
 
 ## Очерки слайсов (детализируются JIT перед стартом каждого)
 
-Полный bite-sized план каждого слайса пишется отдельным документом непосредственно перед его исполнением — детали будут точнее после Вехи 0. Здесь — границы и главные задачи.
+Полный bite-sized план каждой фазы/слайса пишется отдельным документом непосредственно перед его исполнением — детали будут точнее после Вехи 0. Здесь — границы и главные задачи; канонический состав — PRD 00-product §9 (пометки «слайс N» в 02-core-os.md и 03-budget.md ссылаются на эту разбивку, не дублируют её). Слайс «Sync» из v3 удалён целиком вместе с клиентской локальной БД и её коннектором (D1 спеки 2026-07-02).
 
-- **Слайс 1 — «Обед 340» (сквозной путь, локально).** 7 Zod-схем аспектов в `shared` (01 §3) · RLS-политики + сид аспектов и 12 категорий + 3 pinned-сущности (01 §3, 02 §7) · `entity` tRPC-роутер (create/get/update/list) с записью в локальную SQLite и зеркалом в Postgres · клиентский fast-path-парсер (01 §7.5: «обед 340» → expense + резолв категории по aliases) · минимальный список сущностей на дизайн-системе. Контракт: запись расхода ≤ 2 сек, без сети, без LLM.
-- **Слайс 2 — Query-движок + Browser.** Парсер грамматики (01 §6.1) → AST · два SQL-бэкенда (Postgres / SQLite) · снять `skip` с теста эквивалентности (T11) — сделать GREEN · pinned-сайдбар со smart lists · Entity Browser: detail-экран, native-рендеринг task/schedule, фильтры. Визуальный query-builder — Фаза 3 (строки запросов правятся вручную).
-- **Слайс 3 — Sync (PowerSync).** Коннектор Postgres↔SQLite (логическая репликация) · sync-правила · серверный conflict-резолвер по матрице 01 §5.2 — снять `skip` с теста конфликтов (T11), GREEN · детерминированные ID (01 §5.5) · UX офлайн-очереди (02 §2.6) · конфликт-копии body.
-- **Слайс 4 — AI-чат.** Реальный `LLMProvider` поверх Vercel AI SDK (замена EchoProvider) · динамические тулы из реестра (01 §7.6, §9.2) · `ai` tRPC-роутер · треды (глобальный + сущности) · базовые memory-факты и журнал действий/Undo (01 §7.8) · чат-UI с карточками (02 §2.3). MCP — Фаза 2.
-- **Слайс 5 — Agenda-lite + онбординг.** Экран Agenda (02 §4: просроченное сверху, дни +7) · материализация recurring-инстансов (01 §5.5) · полный онбординг-сидинг при создании пользователя (02 §7) · бейджи вкладок.
+- **Фаза 0 — спайки (блокирующие, до старта Слайса 1).** **SPIKE-01**: RLS через Drizzle/Bun — pooled-переиспользование соединений не путает identity пользователей, service-role — не fallback. **SPIKE-05**: деплой-связность — хостинг (регион, session-pool, персистентный контейнер, секреты, бэкапы, стоимость). Продакшен нужен рано: агентная петля живёт только на задеплоенном приложении.
+- **Слайс 1 — «Агентная петля + ввод» (продакшен).** Сущности/проекты/задачи/заметки — CRUD через executor со статусами и связями `parent`; Browser-lite (список, сайдбар pinned, три сидированных smart lists, минимальный detail-экран: title/теги/body/аспекты/подзадачи); Chat — глобальный тред и треды сущностей, fast-path (расходы копятся с первого дня без Budget-view — данные существуют до views), LLM-путь с тулами, карточки, журнал и Undo, политика подтверждений — снять `skip` с контрактных тестов fast-path/идемпотентности/optimistic-check/политики подтверждений (T11), сделать GREEN; MCP-сервер — PAT, тот же реестр тулов, паттерн «что нового»; retry-буфер (растёт из скелета T10), онбординг-сидирование (категории, smart lists, настройки, глобальный тред), экспорт данных, деплой в продакшен. **Приёмка:** агент создал в Orbis проект «Orbis», перенёс документацию (спеки/планы — note-сущности), и разработка Слайса 2 дальше ведётся через задачи в самом Orbis — агент двигает статусы и пишет заметки, владелец наблюдает и отвечает в тредах с телефона.
+- **Слайс 2 — «Финансовый контур + время».** Budget Overview и конверты (сразу показывают историю, накопленную со Слайса 1), quick-add бар, recurring-платежи и события с Coming up и переходом planned→fact, Agenda-lite, rollover на границе месяца, CSV-импорт банковских выписок (дедуп на `entity_origins` — снять `skip` с контрактного теста CSV-дедупа, T11, GREEN), экран памяти AI с эскалацией повторных исправлений в правила, полный detail-экран сущности (блокировки, backlinks). На выходе: полный финансовый контур, покрытие транзакций измеримо метрикой (00-product §8).
+- **Слайс 3 — «Полировка и глубина».** Suggestion chips, бейджи вкладок, deep links, визуальная форма query-builder поверх грамматики (T11: типы AST из query/grammar.ts получают парсер и SQL-компилятор), перф-бюджеты как гейты релиза, аспект `orbis/goal` и планирование горизонтов (день/неделя/месяц/год/жизнь) как AI-сценарии поверх уже готового механизма `progress_source`. На выходе: продукт, которым не страшно пользоваться как единственным хранилищем жизни.
 
-После Вехи 0: детализировать Слайс 1 отдельным планом (`writing-plans`), затем исполнять.
+После Вехи 0: детализировать фазу 0 (спайки) и Слайс 1 отдельными планами (`writing-plans`), затем исполнять.
