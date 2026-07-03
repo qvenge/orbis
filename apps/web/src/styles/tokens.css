@@ -1,0 +1,74 @@
+/*
+ * Orbis design tokens — Tailwind v4 @theme.
+ *
+ * Visual language: «ночная обсерватория» — глубокий чернильно-синий фон,
+ * тёплый «бумажный» текст и латунный акцент (тёплый свет на холодной темноте).
+ * Dark-first: продукт живёт в вечернем использовании и чат-интерфейсе.
+ *
+ * Контраст (WCAG 2.x): text/surface 15.0:1, text-secondary/surface 7.4:1,
+ * accent-foreground/accent 9.0:1, danger/surface 7.5:1 — все ключевые пары ≥ AA.
+ */
+@theme {
+  /* --- Цвет: фон и уровни поверхностей (холодный чернильный, hue ~250) --- */
+  --color-bg: #0c0d12;
+  --color-surface: #14161d;
+  --color-surface-2: #1c1f28;
+  --color-line: #2a2d38;
+
+  /* --- Цвет: текст (тёплый off-white — «бумага на ночном небе») --- */
+  --color-text: #eceae4;
+  --color-text-secondary: #a9a59b;
+  --color-text-muted: #787369;
+
+  /* --- Цвет: акцент (латунь/янтарь) и опасность (мягкий коралл) --- */
+  --color-accent: #e3b258;
+  --color-accent-foreground: #221805;
+  --color-danger: #ef8b7c;
+  --color-danger-foreground: #2b0f0a;
+
+  /* --- Шрифты: системные, без webfont — геометрично-гуманистический стек --- */
+  --font-sans:
+    "Avenir Next", Avenir, "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto,
+    "Helvetica Neue", sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  /* --- Типографическая шкала (~1.2), высота строк дышит под чат --- */
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.375rem;
+  --text-base: 1rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg: 1.1875rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl: 1.4375rem;
+  --text-xl--line-height: 1.875rem;
+  --text-2xl: 1.6875rem;
+  --text-2xl--line-height: 2.125rem;
+  --text-3xl: 2.0625rem;
+  --text-3xl--line-height: 2.5rem;
+
+  /* --- Радиусы: мягкие, но собранные --- */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-control: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-card: 0.875rem;
+  --radius-xl: 1.25rem;
+
+  /* --- Тени: для тёмного UI — тонкий верхний блик + мягкая глубина --- */
+  --shadow-control: inset 0 1px 0 0 rgb(255 255 255 / 0.12), 0 1px 2px 0 rgb(0 0 0 / 0.35);
+  --shadow-card:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.04), 0 1px 2px 0 rgb(0 0 0 / 0.4),
+    0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --shadow-pop:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.06), 0 4px 8px -2px rgb(0 0 0 / 0.4),
+    0 16px 40px -8px rgb(0 0 0 / 0.6);
+
+  /* --- Движение: быстрое и спокойное --- */
+  --ease-swift: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-settle: cubic-bezier(0.22, 1, 0.36, 1);
+  --default-transition-duration: 160ms;
+  --default-transition-timing-function: var(--ease-swift);
+}

@@ -1,37 +1,25 @@
 import { initTRPC, TRPCError } from '@trpc/server';
-import { createClient } from '@supabase/supabase-js';
-import { db, type Database } from './db/client.ts';
+import { verifyAccessToken } from './auth';
 
-export interface Context {
-  userId: string | null;
-  db: Database;
-  [key: string]: unknown;
-}
+// Identity течёт только через request-контекст; имя — actorUserId, не userId (D11).
+// type, а не interface: у interface нет неявной index signature, и он не проходит
+// требование Record<string, unknown> у createContext в @hono/trpc-server.
+export type Context = {
+  actorUserId: string | null;
+};
 
 export async function createContext({ req }: { req: Request }): Promise<Context> {
-  const token = req.headers.get('authorization')?.replace('Bearer ', '');
-  let userId: string | null = null;
-
-  if (token) {
-    const supabase = createClient(
-      process.env.SUPABASE_URL!,
-      process.env.SUPABASE_ANON_KEY!,
-    );
-    const { data } = await supabase.auth.getUser(token);
-    userId = data.user?.id ?? null;
-  }
-
-  return { userId, db };
+  const header = req.headers.get('authorization');
+  const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
+  if (!token) return { actorUserId: null };
+  return { actorUserId: await verifyAccessToken(token) };
 }
 
 const t = initTRPC.context<Context>().create();
 
 export const router = t.router;
 export const publicProcedure = t.procedure;
-
-export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
-  if (!ctx.userId) {
-    throw new TRPCError({ code: 'UNAUTHORIZED' });
-  }
-  return next({ ctx: { ...ctx, userId: ctx.userId } });
+export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
+  if (!ctx.actorUserId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  return next({ ctx: { actorUserId: ctx.actorUserId } });
 });
