@@ -11,6 +11,10 @@
   },
   "dependencies": {
     "@orbis/shared": "workspace:*",
+    "@supabase/supabase-js": "^2.110.0",
+    "@tanstack/react-query": "^5.101.2",
+    "@trpc/client": "^11.18.0",
+    "@trpc/react-query": "^11.18.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
