@@ -1,1 +1,3 @@
-export const PLACEHOLDER_SHARED = true;
+export * from './constants';
+export * from './schemas/entity';
+export * from './schemas/relation';
