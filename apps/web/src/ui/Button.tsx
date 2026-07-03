@@ -4,7 +4,7 @@ type Variant = 'primary' | 'ghost';
 
 const base =
   'inline-flex select-none items-center justify-center gap-2 rounded-control px-4 py-2 ' +
-  'text-sm font-medium outline-none transition focus-visible:ring-2 focus-visible:ring-accent/60 ' +
+  'text-sm font-medium outline-hidden transition focus-visible:ring-2 focus-visible:ring-accent/60 ' +
   'disabled:pointer-events-none disabled:opacity-50';
 
 const variants: Record<Variant, string> = {
