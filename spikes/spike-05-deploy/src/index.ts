@@ -39,12 +39,13 @@ app.get('/spike-check', async (c) => {
   const results: Record<string, boolean> = {};
 
   try {
-    // identity заполняется + WITH CHECK happy-path
+    // identity заполняется — доказываем поведением политики (auth.uid() напрямую
+    // под orbis_app недоступен: grants на схему auth не выданы, в политике — инлайнится)
     await sql.begin(async (tx) => {
       await tx`select set_config('request.jwt.claims', ${JSON.stringify({ sub: a, role: 'authenticated' })}, true)`;
       await tx`insert into spike_items (owner_id, title) values (${a}, 'probe-a')`;
-      const uid = await tx`select auth.uid() as uid`;
-      results['uid_populated'] = uid[0]?.uid === a;
+      const own = await tx`select 1 from spike_items where owner_id = ${a} and title = 'probe-a'`;
+      results['identity_via_policy'] = own.length === 1;
     });
 
     // cross-user reject: под B строки A не видны
@@ -58,9 +59,9 @@ app.get('/spike-check', async (c) => {
     const bare = await sql`select 1 from spike_items where owner_id = ${a}`;
     results['deny_by_default'] = bare.length === 0;
 
-    // чистый checkout: uid пуст вне транзакции
-    const uidAfter = await sql`select auth.uid() as uid`;
-    results['clean_checkout'] = uidAfter[0]?.uid == null;
+    // чистый checkout: claims пусты вне транзакции (первоисточник auth.uid)
+    const after = await sql`select nullif(current_setting('request.jwt.claims', true), '') as claims`;
+    results['clean_checkout'] = after[0]?.claims == null;
 
     // уборка: под A удаляем пробную строку
     await sql.begin(async (tx) => {
