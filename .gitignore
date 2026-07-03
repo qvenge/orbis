@@ -7,11 +7,11 @@ dist/
 .DS_Store
 .vite/
 .turbo/
-bun.lock
 .claude/
 .agents/
 __pycache__/
 skills-lock.json
 spikes/**/.env
 spikes/**/node_modules
+spikes/**/bun.lock
 spikes/spike-01-rls/supabase/.temp
