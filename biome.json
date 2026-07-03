@@ -6,6 +6,8 @@
       "!**/dist",
       "!**/node_modules",
       "!**/*.gen.ts",
+      "!**/src/db/migrations",
+      "!supabase",
       "!spikes",
       "!docs",
       "!.superpowers",

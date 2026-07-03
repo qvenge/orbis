@@ -5,13 +5,20 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
-    "@orbis/shared": "workspace:*",
-    "hono": "^4.6.0",
     "@hono/trpc-server": "^0.3.4",
+    "@orbis/shared": "workspace:*",
     "@trpc/server": "^11.0.0",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.6.0",
+    "postgres": "^3.4.9",
     "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.10"
   }
 }
