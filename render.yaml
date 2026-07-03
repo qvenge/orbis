@@ -1,0 +1,19 @@
+# Render Blueprint — SPIKE-05: hello-world Bun API (фаза 0).
+# Деплой: dashboard.render.com → New → Blueprint → выбрать этот репозиторий/ветку.
+services:
+  - type: web
+    name: orbis-spike05
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: spike/phase-0
+    rootDir: spikes/spike-05-deploy
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false # задаётся в UI: DSN роли orbis_app через session-пулер :5432
+      - key: PG_PREPARE
+        value: "true"
+      - key: SPIKE_CHECK_TOKEN
+        sync: false # задаётся в UI: случайный токен

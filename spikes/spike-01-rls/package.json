@@ -1,0 +1,19 @@
+{
+  "name": "spike-01-rls",
+  "private": true,
+  "type": "module",
+  "description": "SPIKE-01: доказательство транзакционно-локальной identity через RLS на стеке Bun + drizzle-orm + postgres-js",
+  "scripts": {
+    "setup-db": "bun scripts/setup-db.ts",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.44.0",
+    "jose": "^6.0.0",
+    "postgres": "^3.4.5"
+  },
+  "devDependencies": {
+    "@supabase/supabase-js": "^2.49.0",
+    "@types/bun": "^1.2.0"
+  }
+}

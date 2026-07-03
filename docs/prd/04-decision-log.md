@@ -107,6 +107,14 @@
 - **Заменяет:** расширяет AUTH-04 леджера (общий тезис «будущий sharing не меняет владение» без чек-листа) в явный workspace-ready чек-лист
 - **Детали:** 01-architecture §4.10, §5.4
 
+### D12. Хостинг и регион (итог фазы 0)
+
+- **Решение:** Supabase Free, регион **eu-central-1 (Франкфурт)** — выбран владельцем без замера; Data API проекта отключён (один путь мутаций, 01-architecture §9.1). API-хостинг — **Render free (Frankfurt)**, Docker-деплой Blueprint'ом из GitHub; принятый компромисс free-тарифа: сон через 15 мин простоя, cold start ~1 мин (polling агентной петли держит сервис тёплым; путь апгрейда — Render Starter $7/мес или Fly.io ~$2.24/мес). Статика PWA — решится в Слайсе 1 (кандидат — Cloudflare Pages). Подключение к БД — только через Supavisor `aws-1-eu-central-1`: session `:5432` для персистентного пула API; transaction `:6543` требует `prepare:false`. Прямое подключение `db.<ref>.supabase.co` — IPv6-only, не используется.
+- **Статус:** принято 2026-07-03
+- **Обоснование:** матрица провайдеров по фактам 07.2026 (Koyeb закрыт для новых, Fly.io без free, Railway без Франкфурта и с недостаточным free-кредитом, Cloud Run троттлит idle-пул) — Render единственный «free + без карты + Франкфурт + открытый egress». Прод-проверки: латентность API↔DB 3.9–4.2 мс (co-location), RLS-механика подтверждена с хостинга.
+- **Заменяет:** конкретизирует carried DEPLOY-03/04 леджера (минус PowerSync Cloud)
+- **Детали:** docs/implementation/01-phase0-findings.md; матрица — spikes/spike-05-deploy/README.md
+
 ---
 
 ## Carried-решения (из decision-ledger, статус carried)
