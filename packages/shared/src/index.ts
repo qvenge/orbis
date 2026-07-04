@@ -1,3 +1,4 @@
+export * from './aspect-registry';
 export * from './constants';
 export * from './ids';
 export * from './query/grammar';
