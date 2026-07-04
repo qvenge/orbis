@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { makeAiDeps } from './ai/send-message';
 import { makeCreateContext } from './context';
 import { makeDb } from './db/client';
+import { makeMcpHandler } from './mcp/transport';
 import { appRouter } from './router';
 
 // Один пул соединений на процесс; в request-контекст db попадает ссылкой (Task 12)
@@ -15,6 +16,8 @@ const ai = makeAiDeps();
 const app = new Hono();
 
 app.use('/trpc/*', trpcServer({ router: appRouter, createContext: makeCreateContext(db, ai) }));
+// MCP-эндпоинт внешних агентов (§9.3): Streamable HTTP, PAT-only (transport.ts)
+app.all('/mcp', makeMcpHandler({ db }));
 app.get('/health', (c) => c.json({ status: 'ok' }));
 
 export default {
