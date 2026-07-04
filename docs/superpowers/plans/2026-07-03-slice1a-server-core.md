@@ -277,9 +277,12 @@ SELECT results_eq('SELECT count(*)::int FROM chat_messages', ARRAY[1],
   'сообщения видимы через владение тредом');
 SELECT results_eq($$SELECT count(*)::int FROM aspect_definitions WHERE id = 'orbis/pgtap-probe'$$,
   ARRAY[1], 'встроенные аспекты читаемы');
-SELECT throws_ok(
-  $$UPDATE aspect_definitions SET name = 'hack' WHERE id = 'orbis/pgtap-probe'$$,
-  '42501', NULL, 'встроенные аспекты не правятся под authenticated');
+-- UPDATE builtin-строки под authenticated НЕ бросает 42501: USING-фильтр политики
+-- update_own молча отдаёт «UPDATE 0» (семантика RLS). Проверяем неизменность строки.
+UPDATE aspect_definitions SET name = 'hack' WHERE id = 'orbis/pgtap-probe';
+SELECT results_eq(
+  $$SELECT name FROM aspect_definitions WHERE id = 'orbis/pgtap-probe'$$,
+  ARRAY['Probe'::text], 'встроенные аспекты не правятся под authenticated (UPDATE отфильтрован USING)');
 
 -- Как пользователь B: чужой тред закрыт на чтение и вставку
 SELECT set_config('request.jwt.claims',
@@ -313,7 +316,8 @@ const admin = process.env.DATABASE_URL_ADMIN;
 if (!admin) throw new Error('test-rls: DATABASE_URL_ADMIN не задан');
 const out = await $`psql ${admin} -v ON_ERROR_STOP=1 -f apps/server/test/rls/rls.pgtap.sql`.text();
 console.log(out);
-if (/^not ok/m.test(out)) {
+// psql в aligned-режиме печатает строки с ведущими пробелами — без \s* был бы false-green
+if (/^\s*not ok/m.test(out)) {
   console.error('pgTAP: есть проваленные проверки');
   process.exit(1);
 }
