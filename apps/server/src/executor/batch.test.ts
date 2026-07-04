@@ -443,7 +443,7 @@ describe('batch_execute: границы протокола (§9.2)', () => {
 });
 
 describe('batch_execute: занятый id — reject, не replay (fix round ревью)', () => {
-  test('10. [проба ревьюера] entity_create на id живого конверта не обходит один-budget-parent: VALIDATION id_conflict, полный откат, без audit', async () => {
+  test('10. [проба ревьюера] entity_create на id живого конверта не обходит один-budget-parent: CONFLICT id_conflict, полный откат, без audit', async () => {
     const envX = await createEntity({
       title: 'Конверт X',
       aspects: { 'orbis/budget': budgetData() },
@@ -486,7 +486,7 @@ describe('batch_execute: занятый id — reject, не replay (fix round р
         { sink },
       ),
     );
-    expect(r.error.code).toBe('VALIDATION');
+    expect(r.error.code).toBe('CONFLICT'); // единый wire-контракт id_conflict → 409
     expect((r.error.details as { reason?: string }).reason).toBe('id_conflict');
 
     // ровно одна живая budget-parent у txn; связи от envX нет
@@ -510,9 +510,27 @@ describe('batch_execute: занятый id — reject, не replay (fix round р
         ),
       ),
     );
-    expect(rf.error.code).toBe('VALIDATION');
+    expect(rf.error.code).toBe('CONFLICT'); // apply-стадия: RLS скрыла строку от prepare
     expect((rf.error.details as { reason?: string }).reason).toBe('id_conflict');
     expect(await entityCount(foreign.id)).toBe(1); // чужая строка нетронута, дубля нет
+
+    // дубль явного id внутри одного batch — тот же CONFLICT id_conflict
+    const dupId = newId();
+    const rd = err(
+      await execute(
+        db,
+        batchReq(
+          [
+            { tool: 'entity_create', input: { id: dupId, title: 'Первый', tags: [] } },
+            { tool: 'entity_create', input: { id: dupId, title: 'Дубль', tags: [] } },
+          ],
+          newId(),
+        ),
+      ),
+    );
+    expect(rd.error.code).toBe('CONFLICT');
+    expect((rd.error.details as { reason?: string }).reason).toBe('id_conflict');
+    expect(await entityCount(dupId)).toBe(0); // полный откат — не создан даже первый
   });
 });
 

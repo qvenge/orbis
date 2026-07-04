@@ -530,13 +530,18 @@ async function prepareEntityCreate(
   // budget-parent»), а inverse-архивация ссылалась бы на несозданную сущность.
   // FOR UPDATE держит замок до конца tx: конкурентный create того же id сериализуется.
   // Чужой/невидимый id RLS скрывает от SELECT — его единообразно отклонит стадия 5.
+  //
+  // Код всех id_conflict-путей — CONFLICT, не VALIDATION (финальное ревью): единый
+  // wire-контракт с chat.appendMessage — 1b MCP и 1c retry-буфер ключуются на кодах,
+  // 409 = конфликт ресурса. Текст нейтрален и одинаков — не подтверждает занятость
+  // конкретного UUID (оракул чужих id, минор Task 9).
   if (batch && input.id !== undefined) {
     if (batch.entities.has(id)) {
-      throw new ExecError(
-        'VALIDATION',
-        'entity_create в batch: id уже занят сущностью, созданной этим же batch',
-        { id, reason: 'id_conflict' },
-      );
+      // Дубль явного id внутри одного batch
+      throw new ExecError('CONFLICT', 'id непригоден для создания — сгенерируйте новый UUID', {
+        id,
+        reason: 'id_conflict',
+      });
     }
     const occupied = await ctx.tx
       .select({ id: entities.id })
@@ -544,11 +549,11 @@ async function prepareEntityCreate(
       .where(eq(entities.id, id))
       .for('update');
     if (occupied.length > 0) {
-      throw new ExecError(
-        'VALIDATION',
-        'entity_create в batch: id уже занят существующей сущностью (reject, не replay — §7.8)',
-        { id, reason: 'id_conflict' },
-      );
+      // id занят видимой (своей) существующей сущностью — reject, не replay (§7.8)
+      throw new ExecError('CONFLICT', 'id непригоден для создания — сгенерируйте новый UUID', {
+        id,
+        reason: 'id_conflict',
+      });
     }
   }
 
@@ -609,24 +614,24 @@ async function prepareEntityCreate(
       const row = inserted[0];
       if (!row) {
         // Конфликт id в batch — всегда отказ (единообразно со стадией 3 batch):
-        // сюда доходит чужая/невидимая RLS строка, которую стадия 3 не увидела
+        // сюда доходит чужая/невидимая RLS строка, которую стадия 3 не увидела.
+        // CONFLICT (409) и нейтральный текст — см. комментарий у стадии 3 batch.
         if (inBatch) {
-          throw new ExecError(
-            'VALIDATION',
-            'entity_create в batch: id уже занят существующей сущностью (reject, не replay — §7.8)',
-            { id, reason: 'id_conflict' },
-          );
+          throw new ExecError('CONFLICT', 'id непригоден для создания — сгенерируйте новый UUID', {
+            id,
+            reason: 'id_conflict',
+          });
         }
         // Одиночный вызов. Своя строка (RLS видит) → идемпотентный replay без стадий 6–7;
-        // чужая (RLS скрывает SELECT) → это НЕ replay, а занятый id — структурированный отказ.
+        // чужая (RLS скрывает SELECT) → это НЕ replay, а занятый id — CONFLICT (409),
+        // единый wire-контракт id_conflict (см. стадию 3 batch и errors.ts).
         const existing = await applyCtx.tx.select().from(entities).where(eq(entities.id, id));
         const own = existing[0];
         if (!own) {
-          throw new ExecError(
-            'VALIDATION',
-            'entity_create: id уже занят недоступной сущностью — сгенерируйте новый UUID',
-            { id, reason: 'id_conflict' },
-          );
+          throw new ExecError('CONFLICT', 'id непригоден для создания — сгенерируйте новый UUID', {
+            id,
+            reason: 'id_conflict',
+          });
         }
         return { result: toWire(own), replay: true };
       }

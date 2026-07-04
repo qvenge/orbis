@@ -78,6 +78,27 @@ describe('entity.create / entity.get (§9.2)', () => {
     expect(e.code).toBe('BAD_REQUEST');
   });
 
+  test('create с client-UUID, занятым чужой сущностью → CONFLICT (409), id_conflict в cause', async () => {
+    // Единый wire-контракт id_conflict (финальное ревью): entity_create маппится
+    // на тот же CONFLICT/409, что и chat.appendMessage — 1b MCP и 1c retry-буфер
+    // ключуются на кодах, а не на текстах.
+    const owner = callerFor(freshUserId());
+    const created = await owner.entity.create({
+      input: { title: 'Своя', tags: [] },
+      source: 'fast_path',
+    });
+    const e = await trpcError(
+      callerFor(freshUserId()).entity.create({
+        input: { id: created.id, title: 'Чужая', tags: [] },
+        source: 'fast_path',
+      }),
+    );
+    expect(e.code).toBe('CONFLICT');
+    const cause = e.cause as unknown as { code: string; details?: { reason?: string } };
+    expect(cause.code).toBe('CONFLICT');
+    expect(cause.details?.reason).toBe('id_conflict');
+  });
+
   test('get несуществующей (или чужой под RLS) сущности → NOT_FOUND', async () => {
     const caller = callerFor(freshUserId());
     const e = await trpcError(caller.entity.get({ id: crypto.randomUUID() }));

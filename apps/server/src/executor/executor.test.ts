@@ -219,7 +219,7 @@ describe('executor: entity_create', () => {
     expect(sink.entries.length).toBe(1); // стадии 6–7 пропущены
   });
 
-  test('4b. конфликт id с ЧУЖОЙ сущностью → структурированная ошибка, не replay', async () => {
+  test('4b. конфликт id с ЧУЖОЙ сущностью → CONFLICT id_conflict, не replay', async () => {
     const id = newId();
     const mine = await execute(db, req('entity_create', { id, title: 'Своя', tags: [] }));
     expect(mine.ok).toBe(true);
@@ -229,7 +229,13 @@ describe('executor: entity_create', () => {
       req('entity_create', { id, title: 'Чужая', tags: [] }, { actorUserId: userB }),
     );
     expect(foreign.ok).toBe(false);
-    if (!foreign.ok) expect(foreign.error.code).toBe('VALIDATION');
+    if (!foreign.ok) {
+      // Единый wire-контракт id_conflict (финальное ревью): CONFLICT → 409, как в chat
+      expect(foreign.error.code).toBe('CONFLICT');
+      expect((foreign.error.details as { reason?: string }).reason).toBe('id_conflict');
+      // Текст нейтрален — не подтверждает занятость чужого UUID (оракул)
+      expect(foreign.error.message).not.toContain('занят');
+    }
     expect(await countEntities(id)).toBe(1); // строка userA нетронута, дубля нет
   });
 

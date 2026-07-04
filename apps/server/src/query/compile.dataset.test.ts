@@ -4,6 +4,7 @@
 // owner-фильтр, изоляцию даёт RLS (§4.10). Проверяется состав И порядок.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type FieldCatalog, parseQuery } from '@orbis/shared';
+import { sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -39,6 +40,12 @@ const ID = {
   archived: '019eb300-d5e1-7000-8000-00000000000c',
   taskB: '019eb300-d5e1-7000-8000-00000000000d',
   finB: '019eb300-d5e1-7000-8000-00000000000e',
+  taskNext7: '019eb300-d5e1-7000-8000-000000000011',
+  taskAfter7: '019eb300-d5e1-7000-8000-000000000012',
+  taskAfter7b: '019eb300-d5e1-7000-8000-000000000013',
+  taskWaiting1: '019eb300-d5e1-7000-8000-000000000014',
+  taskWaiting2: '019eb300-d5e1-7000-8000-000000000015',
+  fin030: '019eb300-d5e1-7000-8000-000000000016',
 } as const;
 
 /**
@@ -214,6 +221,72 @@ const DATASET_A: (typeof entities.$inferInsert)[] = [
     updatedAt: new Date('2026-07-03T14:00:00Z'),
     archived: true,
   },
+  // ─── Строки финального ревью: Upcoming (next_7d/after_7d), «Ожидание», §13.6 ───
+  // updated_at всех новых строк — «ранняя половина» (< 2026-07-02), чтобы не менять
+  // выдачу курсорного теста 3.
+  {
+    id: ID.taskNext7,
+    ownerId: USER_A,
+    title: 'Задача через три дня',
+    tags: ['task'],
+    aspects: { 'orbis/task': { status: 'planned', priority: 'medium', due_date: '2026-07-06' } },
+    createdAt: new Date('2026-06-29T09:00:00Z'),
+    updatedAt: new Date('2026-07-01T11:30:00Z'),
+  },
+  {
+    id: ID.taskAfter7,
+    ownerId: USER_A,
+    title: 'Задача через две недели',
+    tags: ['task'],
+    aspects: { 'orbis/task': { status: 'planned', priority: 'high', due_date: '2026-07-15' } },
+    createdAt: new Date('2026-06-29T10:00:00Z'),
+    updatedAt: new Date('2026-07-01T11:40:00Z'),
+  },
+  {
+    id: ID.taskAfter7b,
+    ownerId: USER_A,
+    title: 'Задача в конце месяца',
+    tags: ['task'],
+    aspects: { 'orbis/task': { status: 'planned', priority: 'low', due_date: '2026-07-20' } },
+    createdAt: new Date('2026-06-29T11:00:00Z'),
+    updatedAt: new Date('2026-07-01T11:50:00Z'),
+  },
+  {
+    // Без due_date: ждущая задача не попадает ни в «Сегодня», ни в Upcoming
+    id: ID.taskWaiting1,
+    ownerId: USER_A,
+    title: 'Делегированная задача (ждёт давно)',
+    tags: ['task'],
+    aspects: { 'orbis/task': { status: 'waiting', priority: 'medium' } },
+    createdAt: new Date('2026-06-20T09:00:00Z'),
+    updatedAt: new Date('2026-06-29T10:00:00Z'),
+  },
+  {
+    id: ID.taskWaiting2,
+    ownerId: USER_A,
+    title: 'Ожидание ответа подрядчика',
+    tags: ['task'],
+    aspects: { 'orbis/task': { status: 'waiting' } },
+    createdAt: new Date('2026-06-30T09:00:00Z'),
+    updatedAt: new Date('2026-07-01T15:00:00Z'),
+  },
+  {
+    // §13.6: сущность с amount '0.30' — цель запроса грамматики amount=0.30
+    id: ID.fin030,
+    ownerId: USER_A,
+    title: 'Комиссия 0.30',
+    tags: ['expense'],
+    aspects: {
+      'orbis/financial': {
+        amount: '0.30',
+        direction: 'expense',
+        category_ref: CAT,
+        occurred_on: '2026-06-27',
+      },
+    },
+    createdAt: new Date('2026-06-27T13:00:00Z'),
+    updatedAt: new Date('2026-07-01T13:30:00Z'),
+  },
 ];
 
 /**
@@ -367,10 +440,11 @@ describe('датасет §6.2: состав И порядок под RLS', () =
     expect(ids(await run(USER_A, 'amount>500'))).toEqual([ID.fin1000]);
   });
 
-  test('2a. amount=0.10..0.30 находит "0.10" и "0.20" (границы включительно)', async () => {
+  test('2a. amount=0.10..0.30 находит "0.10", "0.20" и "0.30" (границы включительно)', async () => {
     expect(ids(await run(USER_A, 'amount=0.10..0.30, sortBy=amount:asc'))).toEqual([
       ID.fin010,
       ID.fin020,
+      ID.fin030, // верхняя граница диапазона — включительно
     ]);
   });
 
@@ -397,10 +471,10 @@ describe('датасет §6.2: состав И порядок под RLS', () =
   test('4a. archived: по умолчанию скрыта, archived=any включает архивную', async () => {
     const base = ids(await run(USER_A, 'aspect=orbis/task'));
     expect(base).not.toContain(ID.archived);
-    expect(base).toHaveLength(7);
+    expect(base).toHaveLength(12);
     const withArchived = ids(await run(USER_A, 'aspect=orbis/task, archived=any'));
     expect(withArchived).toContain(ID.archived);
-    expect(withArchived).toHaveLength(8);
+    expect(withArchived).toHaveLength(13);
   });
 
   test('4b. search= находит по слову из body', async () => {
@@ -415,13 +489,30 @@ describe('датасет §6.2: состав И порядок под RLS', () =
     const priorities = rows.map(
       (r) => (r.aspects as Record<string, { priority?: string }>)['orbis/task']?.priority ?? null,
     );
-    expect(priorities).toEqual(['high', 'high', 'medium', 'medium', 'low', null]);
+    expect(priorities).toEqual([
+      'high',
+      'high',
+      'high',
+      'medium',
+      'medium',
+      'medium',
+      'medium',
+      'low',
+      'low',
+      null,
+      null,
+    ]);
     expect(ids(rows)).toEqual([
       ID.taskToday,
+      ID.taskAfter7,
       ID.taskBlocked,
+      ID.taskWaiting1,
       ID.taskOverdue,
       ID.taskBlocked2,
+      ID.taskNext7,
+      ID.taskAfter7b,
       ID.taskBlocker,
+      ID.taskWaiting2,
       ID.taskInbox,
     ]);
   });
@@ -437,6 +528,77 @@ describe('датасет §6.2: состав И порядок под RLS', () =
       'updated_at>2026-07-02T00:00:00Z, archived=any',
     ]) {
       expect(await run(USER_B, q)).toHaveLength(0);
+    }
+  });
+});
+
+describe('блоки Upcoming и «Ожидание» (02 §3.3) исполняются на датасете', () => {
+  test('7. Upcoming «Ближайшие 7 дней»: next_7d включает сегодня, блокировка НЕ скрывает', async () => {
+    // Дословная форма блока из 02 §3.3 (без excludeBlocked — горизонт планирования).
+    const rows = await run(
+      USER_A,
+      'aspect=orbis/task, due_date=next_7d, status=!done&!cancelled,\n' +
+        '         sortBy=due_date:asc|priority:desc, display=list, title=Ближайшие 7 дней',
+    );
+    // 2026-07-03: {taskToday, taskBlocked} — обе high, их взаимный порядок sortBy
+    // не определяет; затем taskBlocked2 (medium, видна — excludeBlocked здесь нет),
+    // 2026-07-06: taskNext7. taskDone — по статусу, taskOverdue — вне диапазона,
+    // taskAfter7* — за горизонтом, taskWaiting* — без due_date, taskB — RLS.
+    expect(ids(rows).slice(0, 2).sort()).toEqual([ID.taskToday, ID.taskBlocked].sort());
+    expect(ids(rows).slice(2)).toEqual([ID.taskBlocked2, ID.taskNext7]);
+  });
+
+  test('7a. Upcoming «Позже»: after_7d — строго после горизонта, по сроку', async () => {
+    const rows = await run(
+      USER_A,
+      'aspect=orbis/task, due_date=after_7d, status=!done&!cancelled,\n' +
+        '         sortBy=due_date:asc, limit=30, display=compact, title=Позже',
+    );
+    expect(ids(rows)).toEqual([ID.taskAfter7, ID.taskAfter7b]);
+  });
+
+  test('7b. «Ожидание»: status=waiting, давно ждущие сверху (updated_at:asc)', async () => {
+    const rows = await run(
+      USER_A,
+      'aspect=orbis/task, status=waiting,\n' +
+        '         sortBy=updated_at:asc, display=compact, title=Ожидание',
+    );
+    expect(ids(rows)).toEqual([ID.taskWaiting1, ID.taskWaiting2]);
+  });
+});
+
+describe('§13.6: decimal-точность в БД и persisted JSON', () => {
+  test('0.10+0.20=0.30 в numeric, carryover -0.10+0.40, amount=0.30, JSON без IEEE-754', async () => {
+    // (а) сумма в БД: строго '0.30' — сравнение текстом из ::numeric, не через float
+    const [sum] = await withIdentity(db, USER_A, async (tx) => [
+      ...(await tx.execute(sql`
+        SELECT sum((aspects->'orbis/financial'->>'amount')::numeric)::text AS total
+        FROM entities WHERE id IN (${ID.fin010}, ${ID.fin020})`)),
+    ]);
+    expect(sum?.total).toBe('0.30');
+
+    // (б) carryover (01-арх §3.3): -0.10 + 0.40 = 0.30 той же numeric-арифметикой
+    const [carry] = await withIdentity(db, USER_A, async (tx) => [
+      ...(await tx.execute(sql`SELECT (('-0.10')::numeric + ('0.40')::numeric)::text AS v`)),
+    ]);
+    expect(carry?.v).toBe('0.30');
+
+    // (в) грамматика: amount=0.30 находит ровно сущность с amount '0.30'
+    expect(ids(await run(USER_A, 'amount=0.30'))).toEqual([ID.fin030]);
+
+    // (г) persisted JSON: amount всех financial-сущностей датасета — jsonb-строка,
+    // IEEE-754 number в БД отсутствует (под обоими пользователями, RLS скоупит выборку)
+    for (const [user, expected] of [
+      [USER_A, 5],
+      [USER_B, 1],
+    ] as const) {
+      const rows = await withIdentity(db, user, async (tx) => [
+        ...(await tx.execute(sql`
+          SELECT jsonb_typeof(aspects->'orbis/financial'->'amount') AS t
+          FROM entities WHERE aspects ? 'orbis/financial'`)),
+      ]);
+      expect(rows).toHaveLength(expected);
+      expect(rows.every((r) => r.t === 'string')).toBe(true);
     }
   });
 });
