@@ -11,6 +11,7 @@ dist/
 .agents/
 __pycache__/
 skills-lock.json
+.playwright-mcp/
 spikes/**/.env
 spikes/**/node_modules
 spikes/**/bun.lock
