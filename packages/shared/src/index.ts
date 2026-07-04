@@ -1,5 +1,6 @@
 export * from './aspect-registry';
 export * from './constants';
+export * from './contracts/tools';
 export * from './ids';
 export * from './query/grammar';
 export * from './query/parse';
