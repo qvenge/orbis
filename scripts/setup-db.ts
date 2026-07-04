@@ -19,12 +19,22 @@ try {
     await sql.unsafe(`ALTER ROLE orbis_app PASSWORD '${password.replaceAll("'", "''")}'`);
   }
   await sql`GRANT authenticated TO orbis_app`;
-  // Верификация вместо тихого провала (findings грабля 1)
+  // Верификация вместо тихого провала (findings грабля 1).
+  // rolinherit обязан быть false: INHERIT + членство в authenticated активировало бы
+  // table-гранты БЕЗ SET ROLE — deny-by-default вне транзакций молча исчез бы
+  // (существующая роль, созданная где-то ещё с INHERIT, иначе прошла бы верификацию).
   const [check] = await sql`
-    SELECT rolbypassrls, rolsuper,
+    SELECT rolbypassrls, rolsuper, rolinherit, rolcanlogin,
            pg_has_role('orbis_app', 'authenticated', 'MEMBER') AS is_member
     FROM pg_roles WHERE rolname = 'orbis_app'`;
-  if (!check || check.rolbypassrls || check.rolsuper || !check.is_member) {
+  if (
+    !check ||
+    check.rolbypassrls ||
+    check.rolsuper ||
+    check.rolinherit ||
+    !check.rolcanlogin ||
+    !check.is_member
+  ) {
     throw new Error(`setup-db: роль в неожиданном состоянии: ${JSON.stringify(check)}`);
   }
   console.log('setup-db: orbis_app готова (NOBYPASSRLS, NOINHERIT, member of authenticated)');
