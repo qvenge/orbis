@@ -63,7 +63,11 @@ export interface QueryTagsFilter {
   values: string[];
 }
 
-/** Исключение тегов: `excludeTags=x` — исключить сущности с любым из тегов (§6.1). */
+/**
+ * Исключение тегов: `excludeTags=x|y` — исключить сущности, имеющие хотя бы один
+ * из перечисленных тегов. Семантика множественных значений выведена симметрично `tags=`
+ * (PRD 01 §6.1 фиксирует только форму `excludeTags=x`); при расхождении с PRD канон — PRD.
+ */
 export interface QueryExcludeTagsFilter {
   kind: 'excludeTags';
   values: string[];

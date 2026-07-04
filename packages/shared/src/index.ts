@@ -2,6 +2,7 @@ export * from './aspect-registry';
 export * from './constants';
 export * from './ids';
 export * from './query/grammar';
+export * from './query/parse';
 export * from './schemas/aspects';
 export * from './schemas/entity';
 export * from './schemas/relation';
