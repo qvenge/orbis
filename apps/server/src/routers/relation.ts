@@ -25,7 +25,7 @@ export const relationRouter = router({
         {
           actorUserId: ctx.actorUserId,
           actorKind: 'owner',
-          source: 'fast_path', // прямое действие владельца в UI
+          source: 'ui', // прямое действие владельца в UI
           operations: [{ tool: 'relation_create', input }],
         },
         { sink },
@@ -40,7 +40,7 @@ export const relationRouter = router({
       {
         actorUserId: ctx.actorUserId,
         actorKind: 'owner',
-        source: 'fast_path',
+        source: 'ui', // прямое действие владельца в UI
         operations: [{ tool: 'relation_delete', input }],
       },
       { sink },

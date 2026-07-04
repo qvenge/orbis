@@ -26,6 +26,13 @@ const t = initTRPC.context<Context>().create({
     // НЕ Error. `!(cause instanceof Error)` обязателен: системные ошибки
     // (ECONNREFUSED/UND_ERR_* из fetch/undici) — это Error со СТРОКОВЫМ code,
     // и без этой проверки они утекали бы клиенту с сырым message и stack.
+    //
+    // Эта structured-ветка — СТРАХОВКА, а не основной путь: наши структурированные
+    // ошибки (execErrorToTRPC) уже маппятся на не-INTERNAL коды (BAD_REQUEST/CONFLICT/…)
+    // и выходят выше на первом guard. Фактическая защита их message — именно тот guard;
+    // сюда structured-cause долетел бы лишь при изменении коэрсии `cause` в tRPC (напр.,
+    // будущая обёртка нашего cause в Error с INTERNAL-кодом) — тогда ветка не даст
+    // затереть его нейтральным текстом.
     const cause = error.cause;
     if (
       cause &&

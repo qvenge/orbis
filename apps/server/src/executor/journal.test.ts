@@ -9,9 +9,17 @@ import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { ensureEntityThread } from '../chat/threads';
 import { withIdentity } from '../db/with-identity';
+import { ExecError } from '../errors';
 import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
-import type { ActionRecord, ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from './types';
+import type {
+  ActionRecord,
+  ExecuteOk,
+  ExecuteRequest,
+  ExecuteResult,
+  JournalWrite,
+  WireEntity,
+} from './types';
 
 requireEnv();
 
@@ -266,5 +274,37 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       );
       expect(n).toBe(1);
     }
+  });
+
+  test('6. write отклоняет entry с ≠1 action → VALIDATION: инвариант «один action на сообщение» (§7.8), на metadata.actions[0] опирается findLastUndoable (undo.ts)', async () => {
+    const user = freshUserId();
+    const action: ActionRecord = {
+      id: newId(),
+      type: 'entity_updated',
+      entity_id: null,
+      actor_user_id: user,
+      actor_kind: 'owner',
+      source: 'ui',
+      operations: [],
+      inverse: [],
+    };
+    // Нарушение контракта: два action в одном audit-сообщении — undo взял бы только
+    // actions[0], второй молча потерялся бы. write обязан отклонить ДО любой записи.
+    const bad = {
+      ownerId: user,
+      action: [action, action],
+      card: { tool: 'entity_update', entity_id: null, title: 'нарушение' },
+    } as unknown as JournalWrite;
+
+    let caught: unknown;
+    try {
+      await withIdentity(db, user, (tx) => sink.write(tx, bad));
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ExecError);
+    expect((caught as ExecError).code).toBe('VALIDATION');
+    // ничего не записано: guard срабатывает до ensureGlobalThread/appendMessage
+    expect((await messagesInThread(globalThreadId(user))).length).toBe(0);
   });
 });

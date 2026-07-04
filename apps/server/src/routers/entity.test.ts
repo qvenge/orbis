@@ -3,10 +3,11 @@
 // против живой БД. Роутеры — только трансляция: вход → executor/компилятор,
 // результат → wire, ошибки executor'а → TRPCError (§9.1, §5.2, §6.4).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { entitySchema, entityThreadId } from '@orbis/shared';
+import { entitySchema, entityThreadId, globalThreadId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import type { ActionRecord } from '../executor/types';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -184,6 +185,35 @@ describe('entity.update: optimistic-check §5.2 (перенесённый кон
     // body без expectedUpdatedAt — VALIDATION → BAD_REQUEST (§5.2)
     const noCheck = await trpcError(caller.entity.update({ id: created.id, body: 'v4' }));
     expect(noCheck.code).toBe('BAD_REQUEST');
+  });
+
+  test('audit-сообщение update атрибутировано source=ui (прямое действие владельца в UI, не fast_path)', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const created = await caller.entity.create({
+      input: { title: 'Атрибуция', tags: [] },
+      source: 'fast_path',
+    });
+    await caller.entity.update({ id: created.id, title: 'Атрибуция 2' });
+
+    // audit обоих действий — в глобальном треде владельца (роутер не шлёт threadId, §7.8)
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const rows = await admin.execute(
+        sql`SELECT metadata FROM chat_messages
+            WHERE thread_id = ${globalThreadId(user)} ORDER BY created_at, id`,
+      );
+      const actionOf = (r: (typeof rows)[number]) =>
+        (r.metadata as { actions?: ActionRecord[] }).actions?.[0];
+      const updateMsg = [...rows].find((r) => actionOf(r)?.type === 'entity_updated');
+      const action = updateMsg ? actionOf(updateMsg) : undefined;
+      expect(action?.source).toBe('ui');
+      // create по-прежнему несёт клиентский source (fast_path), не 'ui'
+      const createMsg = [...rows].find((r) => actionOf(r)?.type === 'entity_created');
+      expect((createMsg ? actionOf(createMsg) : undefined)?.source).toBe('fast_path');
+    } finally {
+      await adminClient.end();
+    }
   });
 });
 

@@ -3,7 +3,10 @@
 import type { Tx } from '../db/with-identity';
 
 export type ActorKind = 'owner' | 'ai' | 'agent';
-export type MutationSource = 'chat' | 'fast_path' | 'quick_capture' | 'mcp' | 'system';
+// 'ui' — прямое действие владельца в UI (entity.update / relation.*), отличимое в
+// журнале от клиентского create ('fast_path'|'quick_capture'), внутреннего чата
+// ('chat'), MCP-агента ('mcp') и системного отката ('system').
+export type MutationSource = 'chat' | 'fast_path' | 'quick_capture' | 'mcp' | 'ui' | 'system';
 
 export interface ExecuteRequest {
   actorUserId: string; // владелец графа (D11); в MVP актор-владелец = owner

@@ -115,7 +115,7 @@ export const entityRouter = router({
         {
           actorUserId: ctx.actorUserId,
           actorKind: 'owner',
-          source: 'fast_path', // прямое действие владельца в UI (не chat/mcp/system)
+          source: 'ui', // прямое действие владельца в UI (не chat/mcp/system)
           operations: [{ tool: 'entity_update', input }],
         },
         { sink },

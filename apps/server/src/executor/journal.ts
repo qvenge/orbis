@@ -11,6 +11,7 @@ import { appendMessage } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
 import { chatMessages, chatThreads } from '../db/schema';
 import type { Tx } from '../db/with-identity';
+import { ExecError } from '../errors';
 import { pgErrorInfo } from './executor';
 import type { ActionCard, ActionRecord, JournalSink, JournalWrite } from './types';
 import { AuditIdConflictError } from './types';
@@ -19,10 +20,22 @@ import { AuditIdConflictError } from './types';
 export function makeChatJournalSink(): JournalSink {
   return {
     async write(tx: Tx, entry: JournalWrite): Promise<void> {
+      // Инвариант §7.8 «один action на audit-сообщение»: undo.ts (findLastUndoable/
+      // findActionMessage) читает metadata.actions[0]. Несколько action в одном
+      // сообщении молча потеряли бы всё, кроме первого, при отмене — поэтому нормализуем
+      // и проверяем ровно один ДО любой записи (guard страхует будущий формат/баг
+      // вызывающего; отказ — VALIDATION, как прочие ошибки конвейера §9.2).
+      const asList = entry.action as ActionRecord | readonly ActionRecord[];
+      const actions: readonly ActionRecord[] = Array.isArray(asList) ? asList : [asList];
+      if (actions.length !== 1) {
+        throw new ExecError('VALIDATION', 'audit-сообщение должно нести ровно один action (§7.8)', {
+          count: actions.length,
+        });
+      }
       const threadId = entry.threadId ?? (await ensureGlobalThread(tx, entry.ownerId));
       const id = entry.id ?? newId();
       const metadata: Record<string, unknown> = {
-        actions: [entry.action],
+        actions,
         cards: [entry.card],
       };
       // Результаты операций batch — сохранённый ответ идемпотентного повтора (§7.8)
