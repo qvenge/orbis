@@ -520,6 +520,36 @@ async function prepareEntityCreate(
     validateAspectData(ctx.registry, aspectId, data);
   }
 
+  // Стадия 3 (ТОЛЬКО batch): занятый id — reject, не replay. Идемпотентность batch
+  // ключуется по batch_id (§7.8), а не по id операции: replay-семантика одиночного
+  // entity_create (§5.3) внутри batch НЕ действует — занятый id в batch всегда ошибка
+  // вызывающего. Без этой проверки в виртуальное состояние лёг бы ФАНТОМ с новыми
+  // значениями, скрыв реальные аспекты от инвариантов графа (обход «одного
+  // budget-parent»), а inverse-архивация ссылалась бы на несозданную сущность.
+  // FOR UPDATE держит замок до конца tx: конкурентный create того же id сериализуется.
+  // Чужой/невидимый id RLS скрывает от SELECT — его единообразно отклонит стадия 5.
+  if (batch && input.id !== undefined) {
+    if (batch.entities.has(id)) {
+      throw new ExecError(
+        'VALIDATION',
+        'entity_create в batch: id уже занят сущностью, созданной этим же batch',
+        { id, reason: 'id_conflict' },
+      );
+    }
+    const occupied = await ctx.tx
+      .select({ id: entities.id })
+      .from(entities)
+      .where(eq(entities.id, id))
+      .for('update');
+    if (occupied.length > 0) {
+      throw new ExecError(
+        'VALIDATION',
+        'entity_create в batch: id уже занят существующей сущностью (reject, не replay — §7.8)',
+        { id, reason: 'id_conflict' },
+      );
+    }
+  }
+
   // Стадия 4: доменные инварианты + entitlements-гейт — всё ДО первой записи
   await assertFinancial(ctx, id, aspects, batch);
   gateEntitlements(ctx, 'entity_create');
@@ -564,6 +594,7 @@ async function prepareEntityCreate(
     inverse: [{ op: 'entity_update', payload: { id, archived: true } }],
   };
 
+  const inBatch = batch !== undefined;
   return {
     journal,
     // Стадия 5: идемпотентная вставка по client-UUID (§5.3, §9.1)
@@ -575,7 +606,16 @@ async function prepareEntityCreate(
         .returning();
       const row = inserted[0];
       if (!row) {
-        // Конфликт id. Своя строка (RLS видит) → идемпотентный replay без стадий 6–7;
+        // Конфликт id в batch — всегда отказ (единообразно со стадией 3 batch):
+        // сюда доходит чужая/невидимая RLS строка, которую стадия 3 не увидела
+        if (inBatch) {
+          throw new ExecError(
+            'VALIDATION',
+            'entity_create в batch: id уже занят существующей сущностью (reject, не replay — §7.8)',
+            { id, reason: 'id_conflict' },
+          );
+        }
+        // Одиночный вызов. Своя строка (RLS видит) → идемпотентный replay без стадий 6–7;
         // чужая (RLS скрывает SELECT) → это НЕ replay, а занятый id — структурированный отказ.
         const existing = await applyCtx.tx.select().from(entities).where(eq(entities.id, id));
         const own = existing[0];

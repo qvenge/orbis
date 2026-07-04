@@ -22,6 +22,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const userA = freshUserId();
+const userB = freshUserId();
 const CATEGORY_REF = '019e4466-aaaa-7e07-b5d4-64be9721da51';
 const T0 = new Date('2026-07-05T12:00:00.000Z');
 
@@ -110,9 +111,27 @@ function first<T>(items: readonly T[]): T {
   return v;
 }
 
-async function createEntity(input: Record<string, unknown>): Promise<WireEntity> {
-  const r = ok(await execute(db, singleReq('entity_create', { tags: [], ...input })));
+async function createEntity(
+  input: Record<string, unknown>,
+  over: Partial<ExecuteRequest> = {},
+): Promise<WireEntity> {
+  const r = ok(
+    await execute(db, { ...singleReq('entity_create', { tags: [], ...input }), ...over }),
+  );
   return r.results[0] as WireEntity;
+}
+
+/** Титул и archived сущности — админ-DSN (истина в БД, мимо RLS). */
+async function entityState(id: string): Promise<{ title: string; archived: boolean }> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const rows = await admin.execute(sql`SELECT title, archived FROM entities WHERE id = ${id}`);
+    const row = rows[0];
+    if (!row) throw new Error(`entityState: сущность ${id} не найдена`);
+    return row as { title: string; archived: boolean };
+  } finally {
+    await adminClient.end();
+  }
 }
 
 beforeAll(async () => {
@@ -420,5 +439,151 @@ describe('batch_execute: границы протокола (§9.2)', () => {
       ),
     );
     expect(r.error.code).toBe('VALIDATION');
+  });
+});
+
+describe('batch_execute: занятый id — reject, не replay (fix round ревью)', () => {
+  test('10. [проба ревьюера] entity_create на id живого конверта не обходит один-budget-parent: VALIDATION id_conflict, полный откат, без audit', async () => {
+    const envX = await createEntity({
+      title: 'Конверт X',
+      aspects: { 'orbis/budget': budgetData() },
+    });
+    const env1 = await createEntity({
+      title: 'Конверт 1',
+      aspects: { 'orbis/budget': budgetData() },
+    });
+    const txn = await createEntity({
+      title: 'Транзакция',
+      aspects: { 'orbis/financial': finData() },
+    });
+    ok(
+      await execute(
+        db,
+        singleReq('relation_create', {
+          source_id: env1.id,
+          target_id: txn.id,
+          relation_type: 'parent',
+        }),
+      ),
+    );
+
+    // Проба: фантом без аспектов на занятый id должен был бы скрыть orbis/budget
+    // от гейта budget-parent; batch обязан быть отклонён целиком (reject, не replay)
+    const sink = new InMemoryJournalSink();
+    const r = err(
+      await execute(
+        db,
+        batchReq(
+          [
+            { tool: 'entity_create', input: { id: envX.id, title: 'Фантом', tags: [] } },
+            {
+              tool: 'relation_create',
+              input: { source_id: envX.id, target_id: txn.id, relation_type: 'parent' },
+            },
+          ],
+          newId(),
+        ),
+        { sink },
+      ),
+    );
+    expect(r.error.code).toBe('VALIDATION');
+    expect((r.error.details as { reason?: string }).reason).toBe('id_conflict');
+
+    // ровно одна живая budget-parent у txn; связи от envX нет
+    expect(await relCount(env1.id, txn.id, 'parent')).toBe(1);
+    expect(await relCount(envX.id, txn.id, 'parent')).toBe(0);
+    // audit не записан — фантомного inverse (архивации живого конверта) не существует
+    expect(sink.entries.length).toBe(0);
+    // сам конверт не тронут
+    const state = await entityState(envX.id);
+    expect(state.title).toBe('Конверт X');
+    expect(state.archived).toBe(false);
+
+    // чужой/невидимый занятый id — единообразно тот же отказ
+    const foreign = await createEntity({ title: 'Чужая' }, { actorUserId: userB });
+    const rf = err(
+      await execute(
+        db,
+        batchReq(
+          [{ tool: 'entity_create', input: { id: foreign.id, title: 'Фантом чужого', tags: [] } }],
+          newId(),
+        ),
+      ),
+    );
+    expect(rf.error.code).toBe('VALIDATION');
+    expect((rf.error.details as { reason?: string }).reason).toBe('id_conflict');
+    expect(await entityCount(foreign.id)).toBe(1); // чужая строка нетронута, дубля нет
+  });
+});
+
+describe('гибридная CTE ацикличности: виртуальные рёбра batch (fix round ревью)', () => {
+  test('11. цикл длины 2 целиком из виртуальных рёбер одного batch → INVARIANT с path', async () => {
+    const a = await createEntity({ title: 'Вирт-A' });
+    const b = await createEntity({ title: 'Вирт-B' });
+    const r = err(
+      await execute(
+        db,
+        batchReq(
+          [
+            {
+              tool: 'relation_create',
+              input: { source_id: a.id, target_id: b.id, relation_type: 'blocks' },
+            },
+            {
+              tool: 'relation_create',
+              input: { source_id: b.id, target_id: a.id, relation_type: 'blocks' },
+            },
+          ],
+          newId(),
+        ),
+      ),
+    );
+    expect(r.error.code).toBe('INVARIANT');
+    expect((r.error.details as { invariant?: string }).invariant).toBe('blocks_cycle');
+    // попытка B→A при виртуальном A→B: путь «B → A → B»
+    expect((r.error.details as { path?: string[] }).path).toEqual([b.id, a.id, b.id]);
+    // атомарность: и первое (само по себе валидное) ребро не записано
+    expect(await relCount(a.id, b.id, 'blocks')).toBe(0);
+    expect(await relCount(b.id, a.id, 'blocks')).toBe(0);
+  });
+
+  test('12. цикл из смеси БД-ребра и рёбер batch: в БД A→B, batch [B→C, C→A] → INVARIANT, точный path', async () => {
+    const a = await createEntity({ title: 'Смесь-A' });
+    const b = await createEntity({ title: 'Смесь-B' });
+    const c = await createEntity({ title: 'Смесь-C' });
+    ok(
+      await execute(
+        db,
+        singleReq('relation_create', {
+          source_id: a.id,
+          target_id: b.id,
+          relation_type: 'blocks',
+        }),
+      ),
+    );
+    const r = err(
+      await execute(
+        db,
+        batchReq(
+          [
+            {
+              tool: 'relation_create',
+              input: { source_id: b.id, target_id: c.id, relation_type: 'blocks' },
+            },
+            {
+              tool: 'relation_create',
+              input: { source_id: c.id, target_id: a.id, relation_type: 'blocks' },
+            },
+          ],
+          newId(),
+        ),
+      ),
+    );
+    expect(r.error.code).toBe('INVARIANT');
+    expect((r.error.details as { invariant?: string }).invariant).toBe('blocks_cycle');
+    // попытка C→A при БД-ребре A→B и виртуальном B→C: путь «C → A → B → C»
+    expect((r.error.details as { path?: string[] }).path).toEqual([c.id, a.id, b.id, c.id]);
+    expect(await relCount(b.id, c.id, 'blocks')).toBe(0); // batch откатен целиком
+    expect(await relCount(a.id, b.id, 'blocks')).toBe(1); // БД-ребро цело
   });
 });
