@@ -74,6 +74,17 @@ describe('схемы аспектов (01 §3.1–§3.7)', () => {
       ASPECT_SCHEMAS['orbis/task'].safeParse({ status: 'inbox', prioritty: 'high' }).success,
     ).toBe(false);
   });
+  test('JSON Schema: знаковость денег живёт в pattern (ajv-контракт реестра, решение 7)', () => {
+    const fin = aspectJsonSchema('orbis/financial') as {
+      properties: { amount: { pattern: string } };
+    };
+    expect(fin.properties.amount.pattern).toBe('^(?!0+(\\.0+)?$)\\d+(\\.\\d+)?$');
+    const budget = aspectJsonSchema('orbis/budget') as {
+      properties: { limit: { pattern: string }; carryover: { pattern: string } };
+    };
+    expect(budget.properties.limit.pattern).toBe('^\\d+(\\.\\d+)?$');
+    expect(budget.properties.carryover.pattern).toBe('^-?\\d+(\\.\\d+)?$');
+  });
   test('JSON Schema: enum-порядок сохранён (сортировка §6.1)', () => {
     const js = aspectJsonSchema('orbis/task') as {
       properties: { status: { enum: string[] }; priority: { enum: string[] } };

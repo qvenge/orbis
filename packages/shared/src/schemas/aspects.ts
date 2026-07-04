@@ -9,13 +9,18 @@ const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'ISO date YYYY-MM-DD'
 const timestampString = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/, 'ISO 8601 timestamp');
-/** Денежная decimal-строка (§3.3): base-10 без экспоненты. */
+/**
+ * Денежные decimal-строки (§3.3): base-10 без экспоненты. Знаковость — В ПАТТЕРНАХ,
+ * а не в .refine: refine не попадает в сгенерированную JSON Schema, а стадия 2
+ * executor'а валидирует через ajv ПО РЕЕСТРУ (решение 7) — реестр обязан нести знак сам.
+ */
 export const decimalString = z.string().regex(/^-?\d+(\.\d+)?$/, 'decimal-строка');
-const positiveDecimal = decimalString.refine(
-  (v) => !v.startsWith('-') && Number.parseFloat(v) > 0,
-  'строго положительная decimal-строка',
-);
-const nonNegativeDecimal = decimalString.refine((v) => !v.startsWith('-'), '>= 0');
+/** Строго > 0: без минуса и не «все нули»; чисто строковая проверка, без IEEE-754. */
+const positiveDecimal = z
+  .string()
+  .regex(/^(?!0+(\.0+)?$)\d+(\.\d+)?$/, 'строго положительная decimal-строка');
+/** ≥ 0: без минуса ('-0' отклоняется как неканоническая форма — осознанно). */
+const nonNegativeDecimal = z.string().regex(/^\d+(\.\d+)?$/, 'неотрицательная decimal-строка');
 
 export const scheduleAspectSchema = z
   .object({
