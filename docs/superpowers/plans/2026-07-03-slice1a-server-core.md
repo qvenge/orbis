@@ -484,10 +484,13 @@ try {
   await sql`GRANT authenticated TO orbis_app`;
   // Верификация вместо тихого провала (findings грабля 1)
   const [check] = await sql`
-    SELECT rolbypassrls, rolsuper,
+    SELECT rolbypassrls, rolsuper, rolinherit, rolcanlogin,
            pg_has_role('orbis_app', 'authenticated', 'MEMBER') AS is_member
     FROM pg_roles WHERE rolname = 'orbis_app'`;
-  if (!check || check.rolbypassrls || check.rolsuper || !check.is_member) {
+  // rolinherit обязан быть false: INHERIT + членство в authenticated активировало бы
+  // table-гранты БЕЗ SET ROLE — deny-by-default вне транзакций молча исчез бы.
+  if (!check || check.rolbypassrls || check.rolsuper || check.rolinherit
+      || !check.rolcanlogin || !check.is_member) {
     throw new Error(`setup-db: роль в неожиданном состоянии: ${JSON.stringify(check)}`);
   }
   console.log('setup-db: orbis_app готова (NOBYPASSRLS, NOINHERIT, member of authenticated)');
@@ -531,10 +534,14 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
     });
     expect(inside?.uid).toBe(userA);
     expect(inside?.who).toBe('authenticated');
-    // свежий checkout после транзакции чист (пул max=3, гоняем несколько раз)
+    // свежий checkout после транзакции чист (пул max=3, гоняем несколько раз).
+    // auth.uid() под orbis_app недоступен в принципе (NOINHERIT, GRANT USAGE ON SCHEMA auth
+    // тихо не выдаётся — findings грабля 1) — читаем тот же GUC, из которого auth.uid() берёт sub.
     for (let i = 0; i < 5; i++) {
-      const r = await db.execute(sql`SELECT auth.uid()::text AS uid, current_user AS who`);
-      expect(r[0]?.uid ?? null).toBeNull();
+      const r = await db.execute(sql`
+        SELECT nullif(current_setting('request.jwt.claims', true), '') AS claims,
+               current_user AS who`);
+      expect(r[0]?.claims ?? null).toBeNull();
       expect(r[0]?.who).toBe('orbis_app');
     }
   });
@@ -550,8 +557,15 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
     const theirs = await withIdentity(db, userB, async (tx) =>
       tx.execute(sql`SELECT count(*)::int AS n FROM entities WHERE id = ${id}`));
     expect(theirs[0]?.n).toBe(0);
-    const anon = await db.execute(sql`SELECT count(*)::int AS n FROM entities WHERE id = ${id}`);
-    expect(anon[0]?.n).toBe(0);
+    // вне identity deny жёстче, чем «0 строк»: у orbis_app (NOINHERIT) нет table-грантов вовсе
+    let anonCode: string | undefined;
+    try {
+      await db.execute(sql`SELECT count(*)::int AS n FROM entities WHERE id = ${id}`);
+    } catch (e) {
+      const err = e as { code?: string; cause?: { code?: string } };
+      anonCode = err.code ?? err.cause?.code;
+    }
+    expect(anonCode).toBe('42501');
   });
 
   test('rollback-путь: identity и данные умирают вместе с транзакцией', async () => {
@@ -582,10 +596,9 @@ describe('withIdentity (RLS-механика, findings B7)', () => {
     expect(b).toBe(userB);
   });
 
-});
-
-afterAll(async () => {
-  await client.end();
+  afterAll(async () => {
+    await client.end();
+  });
 });
 ```
 
@@ -668,7 +681,7 @@ export async function withIdentity<T>(
 
 - [ ] **Step 4: Прогон и коммит**
 
-Run: `bun test src/db/with-identity.test.ts` → PASS (все 6). Затем полная цепочка: `bun run lint && bun run typecheck && bun run test` из корня.
+Run: `bun test src/db/with-identity.test.ts` → PASS (все 5). Затем полная цепочка: `bun run lint && bun run typecheck && bun run test` из корня.
 
 ```bash
 git add scripts/setup-db.ts apps/server/src/db/with-identity.ts apps/server/src/db/with-identity.test.ts apps/server/test/helpers.ts package.json apps/server/.env.example
