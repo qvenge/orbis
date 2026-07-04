@@ -61,6 +61,37 @@ export function compileCount(ast: QueryAst, ctx: CompileContext): SQL {
   return sql`SELECT count(*) FROM entities WHERE ${compileWhere(ast, ctx, aspectsInQuery(ast))}`;
 }
 
+/** Числовые типы каталога, допустимые в sum (decimal-строки §3.3 и явные числа). */
+const SUMMABLE_TYPES: ReadonlySet<FieldType> = new Set(['decimal', 'number', 'integer']);
+
+/**
+ * Агрегация `user_query` (§9.2, решение 7 плана 1b): count(*) + sum(поле) одним SELECT
+ * по той же WHERE-выборке, что compileQuery, но БЕЗ limit — агрегат по всей выборке.
+ * Поле резолвится каталогом тем же путём, что фильтры (fieldRef, с учётом `aspect=`
+ * из запроса); допустимы только числовые типы. Сумма считается через ::numeric и
+ * отдаётся текстом — точность decimal-строк не теряется во float (§3.3).
+ */
+export function compileSum(ast: QueryAst, ctx: CompileContext, field: string): SQL {
+  const aspects = aspectsInQuery(ast);
+  let ref: FieldRef;
+  try {
+    ref = fieldRef(field, ctx, aspects);
+  } catch (e) {
+    // В отличие от фильтров, поле здесь приходит из input тула, а не из разобранного
+    // запроса — нерезолв каталогом штатен, текст «рассинхрон с парсером» был бы ложью.
+    if (e instanceof QueryCompileError) {
+      throw new QueryCompileError(
+        `поле '${field}' не разрешилось каталогом: нет такого поля или неоднозначно без aspect=`,
+      );
+    }
+    throw e;
+  }
+  if (ref.core || !SUMMABLE_TYPES.has(ref.type)) {
+    throw new QueryCompileError(`sum по полю '${field}' невозможен: тип '${ref.type}' не числовой`);
+  }
+  return sql`SELECT count(*) AS count, sum(${numericExpr(ref)})::text AS sum FROM entities WHERE ${compileWhere(ast, ctx, aspects)}`;
+}
+
 /**
  * Каталог полей из реестра (§4.10): под RLS видны builtin (owner IS NULL) + свои.
  * Кэша нет намеренно — в 1a читается на запрос, оптимизация позже (бриф Task 8).
