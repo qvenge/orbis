@@ -68,25 +68,45 @@ export function applyTaskCompletion(
   }
 }
 
+/** orbis/schedule.recurrence на той же сущности — признак шаблона повторения (§3.1). */
+function hasScheduleRecurrence(aspects: AspectsMap): boolean {
+  const schedule = aspects['orbis/schedule'];
+  return (
+    schedule !== undefined &&
+    typeof schedule.recurrence === 'object' &&
+    schedule.recurrence !== null
+  );
+}
+
+/**
+ * true, если валидность аспектов зависит от входящей derived_from-связи (§3.3):
+ * recurring=true без recurrence легален только на инстансе шаблона. Вызывающая
+ * сторона (executor) резолвит наличие связи (БД + связи, создаваемые тем же batch)
+ * и передаёт результат в assertFinancialInvariant.
+ */
+export function financialRecurringNeedsDerivedFrom(aspects: AspectsMap): boolean {
+  const fin = aspects['orbis/financial'];
+  return fin?.recurring === true && !hasScheduleRecurrence(aspects);
+}
+
 /**
  * Financial-инвариант §3.3 над ФИНАЛЬНЫМ состоянием аспектов сущности:
- * - recurring=true валиден только при orbis/schedule.recurrence на той же сущности
- *   (ветка derived_from появится с relations в Task 10);
+ * - recurring=true валиден при orbis/schedule.recurrence на той же сущности (шаблон)
+ *   ИЛИ при входящей derived_from-связи (инстанс шаблона) — hasIncomingDerivedFrom
+ *   резолвится вызывающей стороной (Task 10);
  * - не-шаблон (recurring falsy) обязан иметь occurred_on.
  */
-export function assertFinancialInvariant(aspects: AspectsMap): void {
+export function assertFinancialInvariant(
+  aspects: AspectsMap,
+  hasIncomingDerivedFrom = false,
+): void {
   const fin = aspects['orbis/financial'];
   if (!fin) return;
   if (fin.recurring === true) {
-    const schedule = aspects['orbis/schedule'];
-    const recurrence =
-      schedule && typeof schedule.recurrence === 'object' && schedule.recurrence !== null
-        ? schedule.recurrence
-        : undefined;
-    if (!recurrence) {
+    if (!hasScheduleRecurrence(aspects) && !hasIncomingDerivedFrom) {
       throw new ExecError(
         'INVARIANT',
-        'orbis/financial.recurring=true валиден только на шаблоне с orbis/schedule.recurrence (§3.3)',
+        'orbis/financial.recurring=true валиден только на шаблоне с orbis/schedule.recurrence или на инстансе с входящей derived_from (§3.3)',
         { invariant: 'financial_recurring_requires_recurrence' },
       );
     }

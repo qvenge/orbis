@@ -45,8 +45,19 @@ export interface WireEntity {
   archived: boolean;
 }
 
+/** Wire-форма связи (§4.2): таймстампы — toISOString, как у сущностей. */
+export interface WireRelation {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  relationType: string;
+  meta: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---------------------------------------------------------------------------
-// JournalSink — ВРЕМЕННЫЙ интерфейс стадий 6–7 (Task 9).
+// JournalSink — ВРЕМЕННЫЙ интерфейс стадий 6–7 (Task 9/10).
 // Executor вычисляет inverse-операции (§7.8) и данные карточки и зовёт sink.write(...)
 // В ТОМ ЖЕ tx. Боевой синк в chat_messages подключает Task 11, передавая свою
 // реализацию в execute(..., { sink }) — БЕЗ правки executor.ts.
@@ -77,22 +88,65 @@ export interface ActionCard {
 }
 
 export interface JournalWrite {
+  /**
+   * Явный PK audit-сообщения. Batch (§7.8) передаёт детерминированный
+   * batchAuditMessageId(ownerId, batchId) — уникальность этого id и делает повтор
+   * batch проверяемым. Отсутствует → id выбирает реализация синка.
+   */
+  id?: string;
   ownerId: string;
   threadId?: string; // нет → глобальный тред владельца (резолвит боевой синк, Task 11)
   action: ActionRecord;
   card: ActionCard;
+  /** Результаты операций batch — источник ответа идемпотентного повтора (§7.8). */
+  results?: unknown[];
+}
+
+/**
+ * Конфликт PK audit-сообщения: запись с таким id уже существует (batch применён
+ * конкурентом/ранее). Семантика PG 23505: боевой синк (Task 11) обязан замапить
+ * unique_violation по PK chat_messages на этот класс — executor по нему откатывает
+ * tx и возвращает сохранённый результат (§7.8).
+ */
+export class AuditIdConflictError extends Error {
+  readonly code = '23505';
+  readonly auditId: string;
+
+  constructor(auditId: string) {
+    super(`audit-сообщение ${auditId} уже существует (повтор batch, §7.8)`);
+    this.name = 'AuditIdConflictError';
+    this.auditId = auditId;
+  }
 }
 
 export interface JournalSink {
+  /**
+   * Запись стадий 6–7 В ТОМ ЖЕ tx. Контракт: если entry.id задан и запись с таким id
+   * уже существует — реализация ОБЯЗАНА бросить AuditIdConflictError (ничего не записав).
+   */
   write(tx: Tx, entry: JournalWrite): Promise<void>;
+  /** Поиск audit-записи по детерминированному id — идемпотентность batch (§7.8). */
+  findByAuditId(tx: Tx, id: string): Promise<JournalWrite | undefined>;
 }
 
-/** In-memory реализация для тестов (стадии 6–7 наблюдаемы без chat_messages). */
+/**
+ * In-memory реализация для тестов (стадии 6–7 наблюдаемы без chat_messages):
+ * честная уникальность по id с той же семантикой, что PK БД (23505 → AuditIdConflictError).
+ * ВАЖНО: гонку конкурентных одинаковых batch'ей полноценно закрывает только реальный
+ * PK chat_messages (Task 11) — in-memory хранилище не транзакционно.
+ */
 export class InMemoryJournalSink implements JournalSink {
   readonly entries: JournalWrite[] = [];
 
   async write(_tx: Tx, entry: JournalWrite): Promise<void> {
+    if (entry.id !== undefined && this.entries.some((e) => e.id === entry.id)) {
+      throw new AuditIdConflictError(entry.id);
+    }
     this.entries.push(entry);
+  }
+
+  async findByAuditId(_tx: Tx, id: string): Promise<JournalWrite | undefined> {
+    return this.entries.find((e) => e.id === id);
   }
 }
 
