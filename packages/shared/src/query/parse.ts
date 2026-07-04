@@ -87,8 +87,10 @@ function isValidCalendarTimestamp(m: RegExpExecArray): boolean {
   if (Number(m[4]) > 23 || Number(m[5]) > 59 || Number(m[6]) > 59) return false;
   const offset = m[7] as string;
   if (offset !== 'Z') {
-    // Смещение таймзоны: часы ≤ 23, минуты ≤ 59 (форму гарантировал регэксп).
-    if (Number(offset.slice(1, 3)) > 23 || Number(offset.slice(4, 6)) > 59) return false;
+    // Смещение таймзоны: Postgres принимает только до ±15:59 (MAX_TZDISP_HOUR=15) —
+    // часы ≤ 15, минуты ≤ 59 (форму гарантировал регэксп); +23:00 прошёл бы парсер
+    // и упал бы уже кастом ::timestamptz в SQL.
+    if (Number(offset.slice(1, 3)) > 15 || Number(offset.slice(4, 6)) > 59) return false;
   }
   return true;
 }

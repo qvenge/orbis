@@ -221,6 +221,13 @@ describe('parseQuery: пограничная лексика (fix round)', () => 
     expect(parse('updated_at>2026-02-28T23:59:59Z').ok).toBe(true);
     expect(parse('updated_at>2028-02-29T12:00:00+03:00').ok).toBe(true);
   });
+  test('offset-часы за пределом Postgres (MAX_TZDISP_HOUR=15): ±16:00 — ошибка, +14:00 — ок', () => {
+    // Postgres принимает смещение только до ±15:59; +23:00 прошёл бы парсер
+    // и упал бы кастом ::timestamptz уже в SQL — ловим на парсинге (§6.4).
+    expect(fail('updated_at>2026-07-01T10:00:00+16:00').message).toMatch(/timestamp/i);
+    expect(fail('updated_at>2026-07-01T10:00:00-16:00').message).toMatch(/timestamp/i);
+    expect(parse('updated_at>2026-07-01T10:00:00+14:00').ok).toBe(true);
+  });
   test('aspect= принимает одно значение: | — ошибка с позицией, а не литерал с тихой пустотой', () => {
     const e = fail('aspect=orbis/task|orbis/note');
     expect(e.message).toMatch(/aspect/i);
