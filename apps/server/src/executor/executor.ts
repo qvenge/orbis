@@ -19,7 +19,7 @@ import {
   relationDeleteInput,
 } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { Db } from '../db/client';
 import { entities, relations } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -50,6 +50,7 @@ import type {
   ExecuteRequest,
   ExecuteResult,
   ExecutorDeps,
+  InternalUndoMode,
   JournalSink,
   JournalWrite,
   WireEntity,
@@ -68,6 +69,8 @@ interface ExecCtx {
   actionId: string;
   clock: () => Date;
   sink: JournalSink;
+  /** Внутренний режим undo (§7.8) — см. InternalUndoMode; только из undo.ts. */
+  internalUndo?: InternalUndoMode;
 }
 
 interface OpOutcome {
@@ -129,6 +132,15 @@ const NOOP_SINK: JournalSink = {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Внутренняя (undo, §7.8) форма relation_create: + meta восстанавливаемой связи —
+ * inverse relation_delete сохраняет meta, и откат обязан вернуть её. В публичный
+ * контракт §9.2 meta не входит (форма недостижима через tRPC/тулы).
+ */
+const relationCreateInternalInput = relationCreateInput
+  .extend({ meta: z.record(z.unknown()).optional() })
+  .strict();
+
 export async function execute(
   db: Db,
   req: ExecuteRequest,
@@ -141,17 +153,28 @@ export async function execute(
 
     // Ветка batch (§7.8, §9.2): явный batchId, несколько операций или тул batch_execute
     if (single === undefined || req.batchId !== undefined || single.tool === 'batch_execute') {
-      return await executeBatch(db, req, sink, clock);
+      return await executeBatch(db, req, sink, clock, deps.internalUndo);
     }
 
     const actionId = newId();
     return await withIdentity(db, req.actorUserId, async (tx) => {
       const registry = await loadAspectRegistry(tx);
-      const ctx: ExecCtx = { tx, registry, req, actionId, clock, sink };
+      const ctx: ExecCtx = {
+        tx,
+        registry,
+        req,
+        actionId,
+        clock,
+        sink,
+        internalUndo: deps.internalUndo,
+      };
       const plan = await prepareOp(ctx, single.tool, single.input); // стадии 1–4
       const out = await plan.apply(ctx); // стадия 5
-      // Стадии 6–7; идемпотентный replay по client-UUID их пропускает (§5.3)
-      if (out.replay !== true) await writeJournal(ctx, plan.journal);
+      // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
+      // undo-сообщение — undo не порождает нового action (undo неотменяем, §7.8).
+      // Иначе — обычный журнал; идемпотентный replay по client-UUID его пропускает (§5.3)
+      if (ctx.internalUndo) await ctx.internalUndo.writeUndoMessage(tx);
+      else if (out.replay !== true) await writeJournal(ctx, plan.journal);
       return {
         ok: true as const,
         actionId,
@@ -175,6 +198,7 @@ async function executeBatch(
   req: ExecuteRequest,
   sink: JournalSink,
   clock: () => Date,
+  internalUndo?: InternalUndoMode,
 ): Promise<ExecuteResult> {
   // Нормализация двух входных форм: тул batch_execute с envelope {batch_id, operations}
   // (§9.2) либо operations>1 + req.batchId (транспортная форма ExecuteRequest)
@@ -217,11 +241,14 @@ async function executeBatch(
   try {
     return await withIdentity(db, req.actorUserId, async (tx) => {
       const registry = await loadAspectRegistry(tx);
-      const ctx: ExecCtx = { tx, registry, req, actionId: batchId, clock, sink };
+      const ctx: ExecCtx = { tx, registry, req, actionId: batchId, clock, sink, internalUndo };
 
-      // Повтор batch_id: вернуть сохранённый результат, ничего не применяя (§7.8, §13.4)
-      const existing = await sink.findByAuditId(tx, auditId);
-      if (existing) return replayFromAudit(batchId, existing);
+      // Повтор batch_id: вернуть сохранённый результат, ничего не применяя (§7.8, §13.4).
+      // Внутренний режим undo не идемпотентен по batch_id (id технический) — не проверяем.
+      if (!internalUndo) {
+        const existing = await sink.findByAuditId(tx, auditId);
+        if (existing) return replayFromAudit(batchId, existing);
+      }
 
       // Стадия 1 (гейт batch): допустимы только мутирующие тулы, вложенный batch запрещён.
       // Парс envelope каждой операции — внутри её prepare*.
@@ -247,7 +274,13 @@ async function executeBatch(
         results.push((await plan.apply(ctx)).result);
       }
 
-      // Стадии 6–7: ОДИН action на весь batch, id = batch_id; inverse — в обратном
+      // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
+      // undo-сообщение (undo не порождает нового action — undo неотменяем, §7.8)
+      if (internalUndo) {
+        await internalUndo.writeUndoMessage(tx);
+        return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
+      }
+      // Обычный batch: ОДИН action на весь batch, id = batch_id; inverse — в обратном
       // порядке исполнения (§7.8). PK audit-сообщения — batchAuditMessageId.
       const action: ActionRecord = {
         id: batchId,
@@ -296,7 +329,9 @@ function collectDeclaredDerivedFrom(ops: Array<{ tool: string; input: unknown }>
   const targets = new Set<string>();
   for (const op of ops) {
     if (op.tool !== 'relation_create') continue;
-    const parsed = relationCreateInput.safeParse(op.input);
+    // Внутренняя форма шире публичной (meta опциональна): для публичных input'ов
+    // различий нет, а inverse-операции undo несут meta — пре-пасс не должен их терять
+    const parsed = relationCreateInternalInput.safeParse(op.input);
     if (parsed.success && parsed.data.relation_type === 'derived_from') {
       targets.add(parsed.data.target_id);
     }
@@ -466,7 +501,7 @@ async function hasIncomingDerivedFrom(
 }
 
 /** Код/constraint ошибки PG: drizzle может обернуть причину драйвера в цепочку .cause. */
-function pgErrorInfo(e: unknown): { code?: string; constraint?: string } {
+export function pgErrorInfo(e: unknown): { code?: string; constraint?: string } {
   let cur: unknown = e;
   for (let depth = 0; cur !== null && typeof cur === 'object' && depth < 5; depth++) {
     const err = cur as {
@@ -651,8 +686,11 @@ async function prepareEntityUpdate(
     throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.id });
   }
 
-  // §5.2: правка body требует optimistic-check по updated_at; патчи без body — LWW
-  if (input.body !== undefined) {
+  // §5.2: правка body требует optimistic-check по updated_at; патчи без body — LWW.
+  // Внутренний режим undo (§7.8) требование ПРОПУСКАЕТ: Undo восстанавливает
+  // зафиксированное в журнале прежнее состояние поверх текущего — это осознанный
+  // LWW-откат, а не пользовательская правка (inverse не несёт expectedUpdatedAt).
+  if (input.body !== undefined && ctx.internalUndo === undefined) {
     if (input.expectedUpdatedAt === undefined) {
       throw new ExecError('VALIDATION', 'правка body требует expectedUpdatedAt (§5.2)', {
         id: input.id,
@@ -675,12 +713,26 @@ async function prepareEntityUpdate(
   let nextAspects = currentAspects;
   let touched: string[] = [];
   if (input.aspects) {
-    const m = mergeAspects(currentAspects, input.aspects);
-    nextAspects = m.merged;
-    touched = m.touched;
-    const mergedTask = nextAspects['orbis/task'];
-    if (touched.includes('orbis/task') && mergedTask) {
-      applyTaskCompletion(currentAspects['orbis/task'], mergedTask, now);
+    if (ctx.internalUndo) {
+      // Внутренний режим undo (§7.8): inverse несёт прежнее значение ВСЕГО затронутого
+      // аспект-ключа — восстанавливаем ключ ЦЕЛИКОМ заменой (null → ключа не было).
+      // Shallow-merge §9.2 оставил бы поля, добавленные отменяемым действием, а
+      // нормализации §3.2 исказили бы зафиксированное состояние — не применяются.
+      const replaced: AspectsMap = { ...currentAspects };
+      touched = Object.keys(input.aspects);
+      for (const [aspectId, value] of Object.entries(input.aspects)) {
+        if (value === null) delete replaced[aspectId];
+        else replaced[aspectId] = { ...value };
+      }
+      nextAspects = replaced;
+    } else {
+      const m = mergeAspects(currentAspects, input.aspects);
+      nextAspects = m.merged;
+      touched = m.touched;
+      const mergedTask = nextAspects['orbis/task'];
+      if (touched.includes('orbis/task') && mergedTask) {
+        applyTaskCompletion(currentAspects['orbis/task'], mergedTask, now);
+      }
     }
     for (const aspectId of touched) {
       const data = nextAspects[aspectId];
@@ -866,8 +918,14 @@ async function prepareRelationCreate(
   rawInput: unknown,
   batch?: BatchState,
 ): Promise<PreparedOp> {
-  // Стадия 1
-  const input = parseEnvelope(relationCreateInput, rawInput, 'relation_create');
+  // Стадия 1. Внутренний режим undo принимает meta восстанавливаемой связи (§7.8):
+  // inverse relation_delete сохраняет meta, откат обязан вернуть её как было
+  const input = parseEnvelope(
+    ctx.internalUndo ? relationCreateInternalInput : relationCreateInput,
+    rawInput,
+    'relation_create',
+  );
+  const meta = ctx.internalUndo ? ((input as { meta?: Record<string, unknown> }).meta ?? {}) : {};
   const key: RelationKey = {
     sourceId: input.source_id,
     targetId: input.target_id,
@@ -944,7 +1002,7 @@ async function prepareRelationCreate(
             sourceId: key.sourceId,
             targetId: key.targetId,
             relationType: key.relationType,
-            meta: {},
+            meta,
             createdAt: now,
             updatedAt: now,
           })

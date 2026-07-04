@@ -150,7 +150,29 @@ export class InMemoryJournalSink implements JournalSink {
   }
 }
 
+/**
+ * ВНУТРЕННИЙ режим executor'а — доступен ТОЛЬКО из undo.ts (Task 11). Не входит в
+ * envelope-схемы §9.2 и недостижим через tRPC/тулы: передаётся через ExecutorDeps,
+ * которые конструирует исключительно серверный код (в роутеры Task 12 не идёт).
+ *
+ * Обоснование (§7.8): Undo восстанавливает зафиксированное в журнале прежнее
+ * состояние ПОВЕРХ текущего — это осознанный LWW-откат, а не пользовательская
+ * правка, поэтому в этом режиме:
+ * - body-патчи применяются БЕЗ требования expectedUpdatedAt (§5.2);
+ * - аспект-ключи восстанавливаются ЦЕЛИКОМ (замена ключа, а не shallow-merge §9.2,
+ *   и без нормализаций §3.2 — иначе пофазовый откат ненадёжен);
+ * - relation_create принимает meta восстанавливаемой связи;
+ * - вместо записи action вызывается writeUndoMessage: undo не порождает нового
+ *   action (undo неотменяем).
+ */
+export interface InternalUndoMode {
+  /** Пишет undo-сообщение {type:'undo', undoes} В ТОМ ЖЕ tx после применения операций. */
+  writeUndoMessage(tx: Tx): Promise<void>;
+}
+
 /** Зависимости execute; Task 11 передаёт боевой синк здесь. */
 export interface ExecutorDeps {
   sink?: JournalSink;
+  /** Только из undo.ts — см. InternalUndoMode. */
+  internalUndo?: InternalUndoMode;
 }
