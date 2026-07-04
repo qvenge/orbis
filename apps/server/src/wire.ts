@@ -5,13 +5,22 @@
 // БД хранит микросекунды, но драйвер парсит timestamptz в Date (мс), поэтому сравнение
 // expectedUpdatedAt (клиент видел wire-форму) с row.updatedAt.toISOString() симметрично.
 import type { ChatRole, WireChatMessage } from './chat/messages';
-import type { chatMessages, chatThreads, entities, relations } from './db/schema';
+import type {
+  aspectDefinitions,
+  chatMessages,
+  chatThreads,
+  entities,
+  relations,
+  userSettings,
+} from './db/schema';
 import type { WireEntity, WireRelation } from './executor/types';
 
 type EntityRow = typeof entities.$inferSelect;
 type RelationRow = typeof relations.$inferSelect;
 type ChatMessageRow = typeof chatMessages.$inferSelect;
 type ChatThreadRow = typeof chatThreads.$inferSelect;
+type UserSettingsRow = typeof userSettings.$inferSelect;
+type AspectDefinitionRow = typeof aspectDefinitions.$inferSelect;
 
 export function toWireEntity(row: EntityRow): WireEntity {
   return {
@@ -103,5 +112,73 @@ export function toWireThread(row: ChatThreadRow): WireThread {
     archived: row.archived,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+/** Один pinned-элемент сайдбара (§4.4): сущность + порядок. */
+export interface PinnedEntity {
+  id: string;
+  order: number;
+}
+
+/** Wire-форма user_settings (§4.4): столбцы уже camelCase, updated_at → ISO. */
+export interface WireUserSettings {
+  ownerId: string;
+  plan: string;
+  timezone: string;
+  defaultCurrency: string;
+  weekStartDay: string;
+  tagColors: Record<string, unknown>;
+  installedViews: string[];
+  pinnedEntities: PinnedEntity[];
+  viewPreferences: Record<string, unknown>;
+  updatedAt: string;
+}
+
+export function toWireUserSettings(row: UserSettingsRow): WireUserSettings {
+  return {
+    ownerId: row.ownerId,
+    plan: row.plan,
+    timezone: row.timezone,
+    defaultCurrency: row.defaultCurrency,
+    weekStartDay: row.weekStartDay,
+    tagColors: row.tagColors as Record<string, unknown>,
+    installedViews: row.installedViews,
+    pinnedEntities: row.pinnedEntities as PinnedEntity[], // jsonb [{id, order}] — как есть
+    viewPreferences: row.viewPreferences as Record<string, unknown>,
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+/** Wire-форма aspect_definitions (§4.3): owner_id NULL = встроенный аспект. */
+export interface WireAspectDefinition {
+  id: string;
+  ownerId: string | null;
+  name: string;
+  namespace: string;
+  description: string | null;
+  icon: string | null;
+  schema: Record<string, unknown>;
+  aiInstructions: string | null;
+  tagMappings: string[];
+  aggregations: Record<string, unknown> | null;
+  viewConfig: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export function toWireAspectDefinition(row: AspectDefinitionRow): WireAspectDefinition {
+  return {
+    id: row.id,
+    ownerId: row.ownerId,
+    name: row.name,
+    namespace: row.namespace,
+    description: row.description,
+    icon: row.icon,
+    schema: row.schema as Record<string, unknown>,
+    aiInstructions: row.aiInstructions,
+    tagMappings: row.tagMappings,
+    aggregations: row.aggregations as Record<string, unknown> | null,
+    viewConfig: row.viewConfig as Record<string, unknown> | null,
+    createdAt: row.createdAt.toISOString(),
   };
 }

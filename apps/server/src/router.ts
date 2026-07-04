@@ -1,9 +1,11 @@
 // apps/server/src/router.ts
 // Сборка appRouter (§9.1): entity/relation/chat/ai — Task 12; user/aspect — Task 13.
 import { aiRouter } from './routers/ai';
+import { aspectRouter } from './routers/aspect';
 import { chatRouter } from './routers/chat';
 import { entityRouter } from './routers/entity';
 import { relationRouter } from './routers/relation';
+import { userRouter } from './routers/user';
 import { protectedProcedure, publicProcedure, router } from './trpc';
 
 export const appRouter = router({
@@ -13,6 +15,8 @@ export const appRouter = router({
   relation: relationRouter,
   chat: chatRouter,
   ai: aiRouter,
+  user: userRouter,
+  aspect: aspectRouter,
 });
 
 export type AppRouter = typeof appRouter;
