@@ -105,6 +105,24 @@
 
 ---
 
+### Task 2b: Ужесточение политики entity_origins + раннер-гэп (вставлена по находке ревью Task 2)
+
+**Files:**
+- Create: `apps/server/src/db/migrations/0002_entity_origins_ownership.sql` (drizzle `generate --custom`)
+- Modify: `apps/server/test/rls/rls.pgtap.sql` (негатив + plan(N)), `scripts/test-rls.ts` (гэп раннера), комментарий-нит rls.pgtap.sql:156
+
+**Contract:** Ревью Task 2 подтвердило живой пробой: под A `INSERT INTO entity_origins (owner_id=A, entity_id=<сущность B>)` проходит — политика проверяет только owner_id; FK NO ACTION + RI мимо RLS = кросс-пользовательский примитив (загрязнение provenance; блокировка будущего hard-delete чужой строкой). Фикс:
+1. Миграция 0002: `DROP POLICY owner_owns_row ON entity_origins; CREATE POLICY owner_owns_row_and_entity ON entity_origins FOR ALL USING (owner_id = (SELECT auth.uid())) WITH CHECK (owner_id = (SELECT auth.uid()) AND EXISTS (SELECT 1 FROM entities e WHERE e.id = entity_origins.entity_id AND e.owner_id = (SELECT auth.uid())));` — читаемость строк не меняется (USING прежний), запись требует владения сущностью.
+2. pgTAP: негатив «INSERT origins с entity_id чужой сущности под A → 42501» + позитив «со своей — проходит»; plan(N) пересчитать.
+3. `scripts/test-rls.ts`: падать и на диагностике plan-mismatch (`/# Looks like you planned/`) — гэп раннера из ревью.
+4. Комментарий-нит «(обе созданы выше)» → «(сущности A созданы выше)».
+
+- [ ] **Step 1 (RED):** сначала pgTAP-негатив против старой политики → прогон красный ровно на нём (это одновременно регрессионный репро дыры).
+- [ ] **Step 2 (GREEN):** миграция + прогон 31/31 (или сколько выйдет) дважды; `db:prepare` цепочка.
+- [ ] **Step 3:** полная цепочка + commit `fix(rls): entity_origins WITH CHECK требует владения entity_id; раннер ловит plan-mismatch`.
+
+---
+
 ### Task 3: PAT-аутентификация внешних агентов
 
 **Files:**
