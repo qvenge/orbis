@@ -51,12 +51,16 @@ export function classifyToolCall(facts: ToolCallFacts): ConfirmationLevel {
 }
 
 /**
- * Извлечение фактов формы вызова из (def, input). Работает ДО структурной валидации
- * мутаций (она — стадия 1 executor'а): archives читается прямым свойством, batch-envelope
- * — safeParse с fallback «не batch» (невалидный input всё равно упадёт стадией 1 —
- * классификация исполниться ему не даст). Акторные факты (actorKind, explicitCommand)
- * добавляет вызывающий из ToolCallCtx; known: true — сюда доходит только найденный
- * реестром def, ряд «!known» dispatch строит сам по результату резолва.
+ * Извлечение фактов формы вызова из (def, input). Контракт (fix round Task 5; §7.10
+ * дословно: уровень получает tool-call ПОСЛЕ структурной валидации input'а): dispatch
+ * передаёт сюда уже envelope-ВАЛИДИРОВАННЫЙ input (validateMutationEnvelope /
+ * validateBatchOperations) — классификация невалидированного payload'а в dispatch не
+ * происходит. Ветки на сырой input (не-объект → archives false, невалидный
+ * batch-envelope → fallback «не batch») сохранены как защитные и покрыты юнитами:
+ * функция не падает на мусоре, а невалидный вызов отклоняет валидация вызывающего.
+ * Акторные факты (actorKind, explicitCommand) добавляет вызывающий из ToolCallCtx;
+ * known: true — сюда доходит только найденный реестром def, ряд «!known» dispatch
+ * строит сам по результату резолва.
  */
 export function factsFromToolCall(
   def: { name: string; kind: 'read' | 'mutate' },
@@ -78,7 +82,8 @@ export function factsFromToolCall(
   return {
     ...base,
     // Архивация — только entity_update (§9.2: archived есть лишь в его envelope);
-    // archived в чужом strict-envelope — невалидный input, честный отказ стадии 1
+    // archived в чужом strict-envelope — невалидный input, честный отказ
+    // envelope-валидации dispatch (fix round) ещё до классификации
     archives: def.name === 'entity_update' && isRecord(input) && input.archived === true,
     isBatch: false,
   };

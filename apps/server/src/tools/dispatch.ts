@@ -11,13 +11,18 @@
 // (4) thread_post — отдельная ветка мимо executor (см. runThreadPost), но тоже
 // через классификатор §7.10.
 import {
+  attachAspectInput,
   type BatchExecuteInput,
   batchExecuteInput,
+  entityCreateInput,
   entityGetInput,
   entityQueryInput,
+  entityUpdateInput,
   newId,
   parseQuery,
   type QueryAst,
+  relationCreateInput,
+  relationDeleteInput,
 } from '@orbis/shared';
 import type { z } from 'zod';
 import { appendMessage } from '../chat/messages';
@@ -50,6 +55,7 @@ import {
   type Card,
   loadAspectToolRows,
   type OrbisToolDef,
+  type ThreadPostInput,
   threadPostInput,
   userQueryInput,
 } from './registry';
@@ -133,14 +139,16 @@ export async function dispatchTool(
       // политики): по MVP-таблице одиночная не-архивирующая мутация → execute, но
       // уровень спрашиваем у классификатора — правило в одном месте. preview для
       // thread_post таблицей недостижим (не batch) — карточки предпросмотра нет.
+      // Envelope-валидация — ДО классификации (§7.10 дословно, fix round Task 5).
+      const parsed = parseEnvelope(threadPostInput, input, 'thread_post');
       const level = classifyToolCall({
-        ...factsFromToolCall(pre.def, input),
+        ...factsFromToolCall(pre.def, parsed),
         actorKind: ctx.actorKind,
         explicitCommand: ctx.explicitCommand,
       });
       const gated = levelGate(level, pre.def.name);
       if (gated !== null) return gated;
-      return await runThreadPost(ctx, input);
+      return await runThreadPost(ctx, parsed);
     }
     return await runMutation(ctx, pre.def, input, pre.keyFieldsByAspect, pre.execToolByName);
   } catch (e) {
@@ -175,6 +183,13 @@ function errorResult(code: string, message: string, details?: unknown): ToolDisp
  * pending-механизм (сохранённый payload + карточка-запрос + approve с ревалидацией)
  * подключает Task 6, заменяя эту ветку на status 'pending_confirmation'. Это явная
  * схема двух шагов, не забытый хвост — тесты фиксируют временное поведение.
+ *
+ * КОНТРАКТ ДЛЯ TASK 6 (fix round Task 5): сюда уровень приходит только ПОСЛЕ
+ * envelope-валидации input'а (validateMutationEnvelope / validateBatchOperations в
+ * runMutation) — pending создаётся из envelope-валидированного payload'а. Полная
+ * провалидированность (стадии 3–4 конвейера §9.2: expectedUpdatedAt/§5.2, доменные
+ * инварианты над текущим состоянием) — обязанность dry-run'а при создании pending
+ * ЛИБО ревалидации approve — решение Task 6.
  */
 function levelGate(
   level: ConfirmationLevel,
@@ -334,14 +349,17 @@ async function runMutation(
 ): Promise<ToolDispatchResult> {
   // Имя тула для executor'а: у attach_* он ждёт форму attach_<aspect_id с заменой
   // только «/»> — восстанавливаем из aspectId (см. OrbisToolDef.aspectId).
-  // Трансляция batch-envelope (вложенные операции тоже в реестровых именах, fix round
-  // Task 4) — ДО классификации: §7.10 назначает уровень структурно валидному вызову,
-  // поэтому невалидный envelope и неизвестные имена операций падают VALIDATION здесь,
-  // не маскируясь уровнем политики.
+  // Структурная валидация ДО классификации (§7.10 дословно: уровень получает tool-call
+  // ПОСЛЕ структурной валидации input'а): невалидный envelope — честная VALIDATION с
+  // zod-issues (путь самокоррекции модели), а не wouldBe; для batch — трансляция имён
+  // (fix round Task 4) плюс валидация каждого operations[].input схемой его тула.
+  // Факты классификатора дальше извлекаются из уже ПРОВАЛИДИРОВАННОГО payload'а.
   const tool = execToolName(def);
   const batchPayload =
-    def.name === 'batch_execute' ? translateBatchInput(input, execToolByName) : undefined;
-  const payload = batchPayload ?? input;
+    def.name === 'batch_execute'
+      ? validateBatchOperations(translateBatchInput(input, execToolByName))
+      : undefined;
+  const payload = batchPayload ?? validateMutationEnvelope(def, input);
 
   // §7.10: уровень определяет политика по типизированным фактам вызова, не модель;
   // forbidden и explicit-confirmation разворачиваются ДО execute — в БД и журнал (§7.8)
@@ -461,6 +479,63 @@ function translateBatchInput(
   };
 }
 
+/**
+ * Envelope-схемы мутирующих core-тулов §9.2 (shared) — для структурной валидации ДО
+ * классификации §7.10 (fix round Task 5). batch_execute и thread_post здесь не нужны:
+ * batch валидируют translateBatchInput + validateBatchOperations, thread_post — своя
+ * ветка dispatchTool; ключи — исполнительные имена (у core они совпадают с реестровыми).
+ */
+const MUTATION_ENVELOPES: Record<string, z.ZodTypeAny> = {
+  entity_create: entityCreateInput,
+  entity_update: entityUpdateInput,
+  relation_create: relationCreateInput,
+  relation_delete: relationDeleteInput,
+};
+
+/**
+ * Структурная валидация envelope одиночной мутации ДО классификации (§7.10 дословно:
+ * уровень получает структурно валидный вызов). Возвращает ПРОВАЛИДИРОВАННЫЙ payload
+ * (safeParse.data) — из него же извлекаются факты классификатора; стадия 1 executor'а
+ * остаётся второй линией (тот же контракт схем).
+ */
+function validateMutationEnvelope(def: OrbisToolDef, input: unknown): unknown {
+  const schema = def.aspectId !== undefined ? attachAspectInput : MUTATION_ENVELOPES[def.name];
+  if (schema === undefined) {
+    // недостижимо: все мутирующие тулы реестра покрыты (batch/thread_post — свои ветки)
+    throw new Error(`validateMutationEnvelope: нет схемы envelope для «${def.name}»`);
+  }
+  return parseEnvelope(schema, input, def.name);
+}
+
+/**
+ * Структурная валидация вложенных операций batch ДО классификации §7.10 (fix round
+ * Task 5): operations[].input проверяется схемой соответствующего мутирующего тула
+ * (имена уже в executor-форме после translateBatchInput). Имена, непригодные для batch
+ * (read-тулы, thread_post, вложенный batch_execute), не валидируются — их отклоняет
+ * стадия 1 executor'а собственной честной ошибкой, валидировать их envelope бессмысленно.
+ * Возвращает payload с ПРОВАЛИДИРОВАННЫМИ input'ами операций.
+ */
+function validateBatchOperations(payload: BatchExecuteInput): BatchExecuteInput {
+  return {
+    batch_id: payload.batch_id,
+    operations: payload.operations.map((op, index) => {
+      const schema = op.tool.startsWith('attach_')
+        ? attachAspectInput
+        : MUTATION_ENVELOPES[op.tool];
+      if (schema === undefined) return op;
+      const parsed = schema.safeParse(op.input);
+      if (!parsed.success) {
+        throw new ExecError('VALIDATION', `batch_execute: невалидный input операции «${op.tool}»`, {
+          index,
+          tool: op.tool,
+          issues: parsed.error.issues,
+        });
+      }
+      return { tool: op.tool, input: parsed.data as Record<string, unknown> };
+    }),
+  };
+}
+
 /** keyFields карточки (02 §2.3): значения полей из viewConfig.keyFields каждого аспекта. */
 function keyFieldsByAspect(rows: AspectToolRow[]): Map<string, string[]> {
   return new Map(
@@ -504,9 +579,12 @@ function entityCard(
  * appendUserMessage владельца. Поэтому action в журнал §7.8 не пишется, а исполнение
  * идёт мимо executor: ensureEntityThread + appendMessage одним withIdentity-tx.
  * kind 'mutate' в реестре — для политики §7.10 (уровень одиночной мутации).
+ * Envelope валидирует dispatchTool ДО классификации (§7.10) — сюда приходит parsed.
  */
-async function runThreadPost(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
-  const parsed = parseEnvelope(threadPostInput, input, 'thread_post');
+async function runThreadPost(
+  ctx: ToolCallCtx,
+  parsed: ThreadPostInput,
+): Promise<ToolDispatchResult> {
   const message = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
     // Тред создаётся только для видимой актору сущности; чужая и несуществующая
     // под RLS неразличимы — единый NOT_FOUND (бросает ensureEntityThread)

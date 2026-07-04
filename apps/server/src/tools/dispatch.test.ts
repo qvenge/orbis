@@ -342,6 +342,44 @@ describe('dispatchTool: политика подтверждений §7.10 (за
     expect(r.status).toBe('ok');
     if (r.status === 'ok') expect(r.card?.kind).toBe('entity_card');
   });
+
+  test('fix round: schema-invalid entity_update с archived:true → честная VALIDATION с issues, НЕ wouldBe (§7.10: уровень — ПОСЛЕ структурной валидации)', async () => {
+    // Без envelope-валидации до классификации модель получала бы wouldBe вместо
+    // zod-issues (терялся путь самокоррекции), а Task 6 создал бы pending из
+    // невалидированного payload'а — нарушение «executor применяет тот же payload,
+    // который был провалидирован в момент запроса подтверждения» (§7.10)
+    const target = await seedEntity(userA, { title: 'Невалидный патч', tags: [] });
+    const r = await dispatchTool(ctxFor(), 'entity_update', {
+      id: target.id,
+      archived: true,
+      title: 123, // невалидный тип
+    });
+    expectError(r, 'VALIDATION');
+    if (r.status === 'error') {
+      const details = r.error.details as { wouldBe?: string; issues?: unknown[] };
+      expect(details.wouldBe).toBeUndefined();
+      expect(Array.isArray(details.issues)).toBe(true);
+    }
+  });
+
+  test('fix round: batch архиваций с невалидным uuid операции → VALIDATION с index/issues, НЕ wouldBe', async () => {
+    const ops = Array.from({ length: 11 }, () => ({
+      tool: 'entity_update',
+      input: { id: newId(), archived: true },
+    }));
+    ops[5] = { tool: 'entity_update', input: { id: 'не-uuid', archived: true } };
+    const r = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: ops,
+    });
+    expectError(r, 'VALIDATION');
+    if (r.status === 'error') {
+      const details = r.error.details as { wouldBe?: string; index?: number; issues?: unknown[] };
+      expect(details.wouldBe).toBeUndefined();
+      expect(details.index).toBe(5);
+      expect(Array.isArray(details.issues)).toBe(true);
+    }
+  });
 });
 
 describe('dispatchTool: чтения без политики (§7.10, ряд «read → execute» — юнит классификатора)', () => {
