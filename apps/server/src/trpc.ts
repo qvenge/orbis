@@ -101,8 +101,8 @@ export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
 });
 
 // §9.3 (Task 3): PAT-агент проходит protectedProcedure (identity есть identity),
-// но операции владельца аккаунта — экспорт, настройки, онбординг-сид (approve/reject
-// подтверждений закроет Task 6, §7.10) — только под actorKind 'owner'. Read-пути
+// но операции владельца аккаунта — экспорт, настройки, онбординг-сид, approve/reject
+// pending-подтверждений (§7.10, Task 6) — только под actorKind 'owner'. Read-пути
 // (getSettings, entity.*, chat.*) агенту остаются открыты.
 export const ownerOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.actorKind !== 'owner') {

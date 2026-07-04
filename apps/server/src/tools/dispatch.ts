@@ -4,11 +4,11 @@
 // ряд «!known → forbidden» политики §7.10, error/FORBIDDEN_LEVEL); (2) чтения — под
 // withIdentity, без ветвлений политики (ряд «read → execute»); (3) мутации — уровень
 // назначает classifyToolCall (policy/confirmation) ДО execute: forbidden →
-// FORBIDDEN_LEVEL, explicit-confirmation → ВРЕМЕННО VALIDATION с details.wouldBe
-// (pending-механизм подключает Task 6 — см. levelGate), preview → исполнение +
-// confirmation_card mode='preview', execute — немедленно; исполнение — через execute
-// с боевым JournalSink (audit в ctx.threadId, без него — в глобальный тред);
-// (4) thread_post — отдельная ветка мимо executor (см. runThreadPost), но тоже
+// FORBIDDEN_LEVEL, explicit-confirmation → createPending (policy/pending, §7.10) →
+// status 'pending_confirmation' с карточкой-запросом, БЕЗ исполнения, preview →
+// исполнение + confirmation_card mode='preview', execute — немедленно; исполнение —
+// через execute с боевым JournalSink (audit в ctx.threadId, без него — в глобальный
+// тред); (4) thread_post — отдельная ветка мимо executor (см. runThreadPost), но тоже
 // через классификатор §7.10.
 import {
   attachAspectInput,
@@ -40,6 +40,7 @@ import {
   entityUpdatePreviewDiff,
   factsFromToolCall,
 } from '../policy/confirmation';
+import { createPending, operationsNoun } from '../policy/pending';
 import {
   type CompileContext,
   compileCount,
@@ -148,6 +149,15 @@ export async function dispatchTool(
       });
       const gated = levelGate(level, pre.def.name);
       if (gated !== null) return gated;
+      if (level === 'explicit-confirmation') {
+        // Недостижимо MVP-таблицей (одиночная не-архивирующая мутация → execute);
+        // fail-closed на случай её эволюции: thread_post исполняется МИМО executor,
+        // и approve (batch-обёртка конвейера, policy/pending) исполнить его не сможет —
+        // честный отказ вместо неисполнимого pending
+        return errorResult('VALIDATION', 'thread_post не поддерживает pending-подтверждение', {
+          tool: 'thread_post',
+        });
+      }
       return await runThreadPost(ctx, parsed);
     }
     return await runMutation(ctx, pre.def, input, pre.keyFieldsByAspect, pre.execToolByName);
@@ -177,19 +187,18 @@ function errorResult(code: string, message: string, details?: unknown): ToolDisp
 }
 
 /**
- * §7.10: маппинг уровня в ранний отказ; null — уровень исполняемый (execute/preview),
- * вызов идёт дальше. forbidden → FORBIDDEN_LEVEL (403 маппингом errors.ts).
- * ФАЗИРОВКА: explicit-confirmation в 1b — ВРЕМЕННО структурная ошибка с details.wouldBe;
- * pending-механизм (сохранённый payload + карточка-запрос + approve с ревалидацией)
- * подключает Task 6, заменяя эту ветку на status 'pending_confirmation'. Это явная
- * схема двух шагов, не забытый хвост — тесты фиксируют временное поведение.
+ * §7.10: маппинг уровня в ранний отказ; null — уровень не отказной: execute/preview
+ * исполняются, explicit-confirmation обрабатывает вызывающий (runMutation →
+ * createPending, policy/pending). forbidden → FORBIDDEN_LEVEL (403 маппингом errors.ts).
  *
- * КОНТРАКТ ДЛЯ TASK 6 (fix round Task 5): сюда уровень приходит только ПОСЛЕ
+ * КОНТРАКТ PENDING (fix round Task 5 → Task 6): сюда уровень приходит только ПОСЛЕ
  * envelope-валидации input'а (validateMutationEnvelope / validateBatchOperations в
  * runMutation) — pending создаётся из envelope-валидированного payload'а. Полная
- * провалидированность (стадии 3–4 конвейера §9.2: expectedUpdatedAt/§5.2, доменные
- * инварианты над текущим состоянием) — обязанность dry-run'а при создании pending
- * ЛИБО ревалидации approve — решение Task 6.
+ * провалидированность (стадии 2–4 конвейера §9.2: aspects-схемы реестра,
+ * expectedUpdatedAt/§5.2, доменные инварианты над текущим состоянием) — обязанность
+ * РЕВАЛИДАЦИИ APPROVE (полный конвейер executor'а, см. policy/pending.ts): dry-run
+ * при создании не спасал бы от изменения состояния за время ожидания — ревалидация
+ * на approve обязательна в любом случае, двойная валидация избыточна.
  */
 function levelGate(
   level: ConfirmationLevel,
@@ -201,13 +210,6 @@ function levelGate(
       'FORBIDDEN_LEVEL',
       forbiddenMessage ?? `вызов тула «${tool}» запрещён политикой подтверждений (§7.10)`,
       { tool },
-    );
-  }
-  if (level === 'explicit-confirmation') {
-    return errorResult(
-      'VALIDATION',
-      `«${tool}» требует подтверждения — механизм появится следующей задачей`,
-      { tool, wouldBe: 'explicit-confirmation' },
     );
   }
   return null;
@@ -230,16 +232,6 @@ function captureSink(inner: JournalSink): { sink: JournalSink; entries: JournalW
       findByAuditId: (tx, id) => inner.findByAuditId(tx, id),
     },
   };
-}
-
-/** Русский плюрал для summary batch-preview: 1 операция, 2 операции, 5 операций. */
-function operationsNoun(n: number): string {
-  const mod100 = n % 100;
-  if (mod100 >= 11 && mod100 <= 14) return 'операций';
-  const mod10 = n % 10;
-  if (mod10 === 1) return 'операция';
-  if (mod10 >= 2 && mod10 <= 4) return 'операции';
-  return 'операций';
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +363,24 @@ async function runMutation(
   });
   const gated = levelGate(level, def.name);
   if (gated !== null) return gated;
+
+  if (level === 'explicit-confirmation') {
+    // §7.10: действие НЕ исполняется — в тред пишется карточка-запрос с immutable
+    // payload'ом (уже envelope-валидированным и с транслированными batch-именами);
+    // до approve ничего не записано ни в граф, ни в журнал §7.8. Исполнение и
+    // ревалидацию текущего состояния делает approve (policy/pending.ts)
+    const pending = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
+      createPending(tx, {
+        threadId: ctx.threadId,
+        actor: { userId: ctx.actorUserId, kind: ctx.actorKind, source: ctx.source },
+        tool,
+        input: payload,
+        level,
+        clock: ctx.clock,
+      }),
+    );
+    return { status: 'pending_confirmation', pendingId: pending.pendingId, card: pending.card };
+  }
 
   // execute | preview — действие исполняется (§7.10: предпросмотр информационный, не
   // блокирующий); для preview перехватываем JournalWrite — diff строится из inverse (§7.8)

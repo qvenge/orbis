@@ -254,10 +254,10 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
 });
 
 describe('dispatchTool: политика подтверждений §7.10 (закрывает контракт-заглушку shared/contracts/confirmation-policy)', () => {
-  test('archives инициативой AI (entity_update archived:true, explicitCommand=false) → временная VALIDATION с wouldBe; ничего не исполнено', async () => {
-    // ФАЗИРОВКА: Task 6 заменит эту ошибку на status:'pending_confirmation'
-    // (карточка-запрос + сохранённый payload + approve) — тест фиксирует ВРЕМЕННОЕ
-    // поведение 1b и будет переписан там же; это явная схема двух шагов.
+  test('archives инициативой AI (entity_update archived:true, explicitCommand=false) → pending_confirmation; ничего не исполнено', async () => {
+    // Task 6: explicit-уровень создаёт pending-карточку (policy/pending) вместо
+    // временной VALIDATION Task 5; сам pending-механизм покрыт policy/pending.test.ts —
+    // здесь фиксируется контракт dispatch: status + card + отсутствие следа в графе/журнале.
     const host = await seedEntity(userA, { title: 'Хост-тред политики', tags: [] });
     const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
     const target = await seedEntity(userA, { title: 'Кандидат на архив', tags: [] });
@@ -266,19 +266,27 @@ describe('dispatchTool: политика подтверждений §7.10 (за
       id: target.id,
       archived: true,
     });
-    expectError(r, 'VALIDATION');
-    if (r.status === 'error') {
-      expect((r.error.details as { wouldBe?: string }).wouldBe).toBe('explicit-confirmation');
-    }
-    // §7.10: до подтверждения ничего не записано — ни в граф, ни в журнал
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation') return;
+    expect(r.card).toEqual({
+      kind: 'confirmation_card',
+      mode: 'explicit',
+      pendingId: r.pendingId,
+      summary: 'entity_update',
+    });
+    // §7.10: до подтверждения ничего не записано — ни в граф, ни в журнал; в тред
+    // легла только карточка-запрос (без metadata.actions — это НЕ запись журнала §7.8)
     const rows = await withIdentity(db, userA, (tx) =>
       tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, target.id)),
     );
     expect(rows[0]?.archived).toBe(false);
-    expect((await messagesIn(userA, threadId)).length).toBe(0);
+    const msgs = await messagesIn(userA, threadId);
+    expect(msgs.length).toBe(1);
+    expect(msgs[0]?.id).toBe(r.pendingId);
+    expect((msgs[0]?.metadata as { actions?: unknown }).actions).toBeUndefined();
   });
 
-  test('batch из 11 архиваций → временная ошибка с wouldBe (ряд archives); все сущности остались неархивированными', async () => {
+  test('batch из 11 архиваций → pending_confirmation (ряд archives); все сущности остались неархивированными', async () => {
     const ids: string[] = [];
     for (let i = 0; i < 11; i++) {
       ids.push((await seedEntity(userA, { title: `Архив-${i}`, tags: ['pol-arch'] })).id);
@@ -287,9 +295,9 @@ describe('dispatchTool: политика подтверждений §7.10 (за
       batch_id: newId(),
       operations: ids.map((id) => ({ tool: 'entity_update', input: { id, archived: true } })),
     });
-    expectError(r, 'VALIDATION');
-    if (r.status === 'error') {
-      expect((r.error.details as { wouldBe?: string }).wouldBe).toBe('explicit-confirmation');
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status === 'pending_confirmation' && r.card.kind === 'confirmation_card') {
+      expect(r.card.summary).toBe('11 операций');
     }
     const rows = await withIdentity(db, userA, (tx) =>
       tx.select({ archived: entities.archived }).from(entities).where(inArray(entities.id, ids)),
@@ -298,7 +306,7 @@ describe('dispatchTool: политика подтверждений §7.10 (за
     expect(rows.every((row) => row.archived === false)).toBe(true);
   });
 
-  test('batch из 11 обычных операций → wouldBe (ряд масштаба > 10); ничего не создано', async () => {
+  test('batch из 11 обычных операций → pending_confirmation (ряд масштаба > 10); ничего не создано', async () => {
     const ids = Array.from({ length: 11 }, () => newId());
     const r = await dispatchTool(ctxFor(), 'batch_execute', {
       batch_id: newId(),
@@ -307,10 +315,7 @@ describe('dispatchTool: политика подтверждений §7.10 (за
         input: { id, title: `Массовая-${i}`, tags: [] },
       })),
     });
-    expectError(r, 'VALIDATION');
-    if (r.status === 'error') {
-      expect((r.error.details as { wouldBe?: string }).wouldBe).toBe('explicit-confirmation');
-    }
+    expect(r.status).toBe('pending_confirmation');
     const rows = await withIdentity(db, userA, (tx) =>
       tx.select({ id: entities.id }).from(entities).where(inArray(entities.id, ids)),
     );
@@ -343,9 +348,9 @@ describe('dispatchTool: политика подтверждений §7.10 (за
     if (r.status === 'ok') expect(r.card?.kind).toBe('entity_card');
   });
 
-  test('fix round: schema-invalid entity_update с archived:true → честная VALIDATION с issues, НЕ wouldBe (§7.10: уровень — ПОСЛЕ структурной валидации)', async () => {
-    // Без envelope-валидации до классификации модель получала бы wouldBe вместо
-    // zod-issues (терялся путь самокоррекции), а Task 6 создал бы pending из
+  test('fix round: schema-invalid entity_update с archived:true → честная VALIDATION с issues, НЕ pending (§7.10: уровень — ПОСЛЕ структурной валидации)', async () => {
+    // Без envelope-валидации до классификации модель получала бы отказ уровня вместо
+    // zod-issues (терялся путь самокоррекции), а pending создавался бы из
     // невалидированного payload'а — нарушение «executor применяет тот же payload,
     // который был провалидирован в момент запроса подтверждения» (§7.10)
     const target = await seedEntity(userA, { title: 'Невалидный патч', tags: [] });
@@ -356,13 +361,12 @@ describe('dispatchTool: политика подтверждений §7.10 (за
     });
     expectError(r, 'VALIDATION');
     if (r.status === 'error') {
-      const details = r.error.details as { wouldBe?: string; issues?: unknown[] };
-      expect(details.wouldBe).toBeUndefined();
+      const details = r.error.details as { issues?: unknown[] };
       expect(Array.isArray(details.issues)).toBe(true);
     }
   });
 
-  test('fix round: batch архиваций с невалидным uuid операции → VALIDATION с index/issues, НЕ wouldBe', async () => {
+  test('fix round: batch архиваций с невалидным uuid операции → VALIDATION с index/issues, НЕ pending', async () => {
     const ops = Array.from({ length: 11 }, () => ({
       tool: 'entity_update',
       input: { id: newId(), archived: true },
@@ -374,8 +378,7 @@ describe('dispatchTool: политика подтверждений §7.10 (за
     });
     expectError(r, 'VALIDATION');
     if (r.status === 'error') {
-      const details = r.error.details as { wouldBe?: string; index?: number; issues?: unknown[] };
-      expect(details.wouldBe).toBeUndefined();
+      const details = r.error.details as { index?: number; issues?: unknown[] };
       expect(details.index).toBe(5);
       expect(Array.isArray(details.issues)).toBe(true);
     }
