@@ -51,7 +51,11 @@ export const relationDeleteInput = relationCreateInput;
 export const batchExecuteInput = z
   .object({
     batch_id: z.string().uuid(),
-    operations: z.array(z.object({ tool: z.string(), input: z.record(z.unknown()) })).min(1),
+    // Элемент тоже strict — парность с рукописной JSON Schema реестра тулов
+    // (additionalProperties: false вложенного конверта, §9.2)
+    operations: z
+      .array(z.object({ tool: z.string(), input: z.record(z.unknown()) }).strict())
+      .min(1),
   })
   .strict();
 

@@ -62,6 +62,27 @@ function expectError(r: Awaited<ReturnType<typeof dispatchTool>>, code: string):
 
 beforeAll(async () => {
   await truncateAll();
+  // Кастомный аспект userA с «-» в id: реестр публикует attach_user_sleep_log,
+  // executor ждёт attach_user_sleep-log — тесты маппинга (одиночный и в batch)
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    await admin.insert(aspectDefinitions).values({
+      id: 'user/sleep-log',
+      ownerId: userA,
+      name: 'Sleep Log',
+      namespace: 'user',
+      schema: {
+        type: 'object',
+        properties: { hours: { type: 'number' } },
+        required: ['hours'],
+        additionalProperties: false,
+      },
+      aiInstructions: 'Пиши часы сна числом.',
+      viewConfig: { keyFields: ['hours'] },
+    });
+  } finally {
+    await adminClient.end();
+  }
 });
 
 afterAll(async () => {
@@ -166,26 +187,6 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
   test('attach_* кастомного аспекта с «-» в id: имя реестра мапится в executor-форму через aspectId', async () => {
     // Реестр: attach_user_sleep_log («-» → «_»); executor ждёт attach_user_sleep-log
     // (замена только «/») — без маппинга по aspectId вызов не резолвился бы (решение 3)
-    const { db: admin, client: adminClient } = adminDb();
-    try {
-      await admin.insert(aspectDefinitions).values({
-        id: 'user/sleep-log',
-        ownerId: userA,
-        name: 'Sleep Log',
-        namespace: 'user',
-        schema: {
-          type: 'object',
-          properties: { hours: { type: 'number' } },
-          required: ['hours'],
-          additionalProperties: false,
-        },
-        aiInstructions: 'Пиши часы сна числом.',
-        viewConfig: { keyFields: ['hours'] },
-      });
-    } finally {
-      await adminClient.end();
-    }
-
     const target = await seedEntity(userA, { title: 'Сон', tags: [] });
     const r = await dispatchTool(ctxFor(), 'attach_user_sleep_log', {
       entity_id: target.id,
@@ -214,6 +215,39 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     expect(msgs.length).toBe(1);
     const md = msgs[0]?.metadata as { actions?: ActionRecord[] };
     expect(md.actions?.[0]?.type).toBe('batch');
+  });
+
+  test('batch_execute: вложенный attach по ПУБЛИЧНОМУ имени реестра (дефисный кастомный аспект) → успех', async () => {
+    // fix round: operations[].tool приходят в реестровых именах — dispatch обязан
+    // транслировать их в executor-форму так же, как top-level вызов (через aspectId)
+    const id = newId();
+    const r = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_create', input: { id, title: 'batch + attach', tags: [] } },
+        { tool: 'attach_user_sleep_log', input: { entity_id: id, data: { hours: 6 } } },
+      ],
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    const results = r.result as WireEntity[];
+    expect(results.length).toBe(2);
+    expect(results[1]?.aspects['user/sleep-log']).toEqual({ hours: 6 });
+  });
+
+  test('batch_execute: неизвестное имя операции → структурная VALIDATION с индексом элемента', async () => {
+    const r = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_create', input: { title: 'x', tags: [] } },
+        { tool: 'no_such_tool', input: {} },
+      ],
+    });
+    expectError(r, 'VALIDATION');
+    if (r.status === 'error') {
+      expect((r.error.details as { index: number; tool: string }).index).toBe(1);
+      expect((r.error.details as { index: number; tool: string }).tool).toBe('no_such_tool');
+    }
   });
 });
 
@@ -322,6 +356,24 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
       entityIds: [],
       aggregate: { op: 'count', value: '2' },
     });
+  });
+
+  test('count по children_of=this без контекста сущности → структурная VALIDATION, не throw (fix round)', async () => {
+    // QueryCompileError count-пути обязан мапиться в error-результат, как в sum/entity_query
+    const r = await dispatchTool(ctxFor(), 'user_query', {
+      query: 'children_of=this',
+      aggregate: 'count',
+    });
+    expectError(r, 'VALIDATION');
+  });
+
+  test('internalOnly fail-closed: user_query при source=mcp → структурная ошибка (fix round)', async () => {
+    // Не полагаемся только на фильтрацию списка тулов в MCP-адаптере (Task 10)
+    const r = await dispatchTool(ctxFor({ actorKind: 'agent', source: 'mcp' }), 'user_query', {
+      query: 'aspect=orbis/financial, tags=uqtest',
+      aggregate: 'count',
+    });
+    expectError(r, 'VALIDATION');
   });
 
   test('sum без field → VALIDATION; sum по нечисловому полю → VALIDATION; неизвестное поле → VALIDATION', async () => {

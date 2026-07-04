@@ -8,7 +8,15 @@
 // ВАЖНО (фазировка): уровни политики §7.10 подключает следующая задача (Task 5,
 // classifyToolCall) — точка врезки одна, runMutation; до неё все мутации исполняются
 // немедленно (уровень execute), pending/forbidden-ветвление появится там же.
-import { entityGetInput, entityQueryInput, newId, parseQuery, type QueryAst } from '@orbis/shared';
+import {
+  type BatchExecuteInput,
+  batchExecuteInput,
+  entityGetInput,
+  entityQueryInput,
+  newId,
+  parseQuery,
+  type QueryAst,
+} from '@orbis/shared';
 import type { z } from 'zod';
 import { appendMessage } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
@@ -66,11 +74,29 @@ export async function dispatchTool(
     // execute открывает собственный tx, вложить его в текущий нельзя.
     const pre = await withIdentity(ctx.db, ctx.actorUserId, async (tx): Promise<Resolution> => {
       const rows = await loadAspectToolRows(tx);
-      const def = buildToolDefs(rows).find((d) => d.name === name);
+      const defs = buildToolDefs(rows);
+      const def = defs.find((d) => d.name === name);
       if (!def) return { kind: 'unknown' };
+      // internalOnly — fail-closed прямо в диспатче (fix round): фильтрация списка
+      // тулов в MCP-адаптере (Task 10) — вторая линия, не единственная
+      if (def.internalOnly === true && ctx.source === 'mcp') {
+        return {
+          kind: 'done',
+          out: errorResult(
+            'VALIDATION',
+            `тул «${name}» внутренний — внешним агентам (MCP) недоступен (§9.2)`,
+            { tool: name },
+          ),
+        };
+      }
       if (def.kind === 'read')
         return { kind: 'done', out: await runRead(tx, ctx, def.name, input) };
-      return { kind: 'mutate', def, keyFieldsByAspect: keyFieldsByAspect(rows) };
+      return {
+        kind: 'mutate',
+        def,
+        keyFieldsByAspect: keyFieldsByAspect(rows),
+        execToolByName: execToolNames(defs),
+      };
     });
     if (pre.kind === 'unknown') {
       return errorResult('VALIDATION', `неизвестный тул «${name}»`, { tool: name });
@@ -78,7 +104,7 @@ export async function dispatchTool(
     if (pre.kind === 'done') return pre.out;
     // await обязателен: return без await вывел бы reject за пределы try/catch ниже
     if (pre.def.name === 'thread_post') return await runThreadPost(ctx, input);
-    return await runMutation(ctx, pre.def, input, pre.keyFieldsByAspect);
+    return await runMutation(ctx, pre.def, input, pre.keyFieldsByAspect, pre.execToolByName);
   } catch (e) {
     // Доменные отказы (NOT_FOUND, VALIDATION, ...) — структурированный error-результат;
     // инфраструктурные ошибки и баги не маскируются (та же дисциплина, что в execute)
@@ -92,7 +118,13 @@ export async function dispatchTool(
 type Resolution =
   | { kind: 'unknown' }
   | { kind: 'done'; out: ToolDispatchResult }
-  | { kind: 'mutate'; def: OrbisToolDef; keyFieldsByAspect: Map<string, string[]> };
+  | {
+      kind: 'mutate';
+      def: OrbisToolDef;
+      keyFieldsByAspect: Map<string, string[]>;
+      /** Реестровое имя → executor-форма (для трансляции вложенных операций batch). */
+      execToolByName: Map<string, string>;
+    };
 
 function errorResult(code: string, message: string, details?: unknown): ToolDispatchResult {
   return { status: 'error', error: { code, message, details } };
@@ -147,7 +179,10 @@ async function runUserQuery(tx: Tx, ctx: ToolCallCtx, input: unknown): Promise<T
   const ast = parseAstOrThrow(parsed.query, cctx);
 
   if (parsed.aggregate === 'count') {
-    const rows = await tx.execute(compileCount(ast, cctx));
+    // compileOrThrow обязателен и здесь: QueryCompileError (например children_of=this
+    // вне контекста) — структурная VALIDATION, не throw мимо catch (fix round)
+    const compiledCount = compileOrThrow(() => compileCount(ast, cctx));
+    const rows = await tx.execute(compiledCount);
     const count = Number(rows[0]?.count);
     return {
       status: 'ok',
@@ -197,6 +232,7 @@ async function runMutation(
   def: OrbisToolDef,
   input: unknown,
   keyFieldsMap: Map<string, string[]>,
+  execToolByName: Map<string, string>,
 ): Promise<ToolDispatchResult> {
   // Точка врезки политики §7.10: уровни подтверждения подключает следующая задача
   // (Task 5, classifyToolCall врезается ровно здесь — между резолвом тула и execute);
@@ -204,8 +240,10 @@ async function runMutation(
   //
   // Имя тула для executor'а: у attach_* он ждёт форму attach_<aspect_id с заменой
   // только «/»> — восстанавливаем из aspectId (см. OrbisToolDef.aspectId).
-  const tool =
-    def.aspectId !== undefined ? `attach_${def.aspectId.replaceAll('/', '_')}` : def.name;
+  // Вложенные операции batch приходят тоже в реестровых именах — транслируются
+  // тем же маппингом ДО execute (fix round; неизвестное имя → VALIDATION с индексом).
+  const tool = execToolName(def);
+  const payload = def.name === 'batch_execute' ? translateBatchInput(input, execToolByName) : input;
   const r = await execute(
     ctx.db,
     {
@@ -213,7 +251,7 @@ async function runMutation(
       actorKind: ctx.actorKind,
       source: ctx.source,
       threadId: ctx.threadId,
-      operations: [{ tool, input }],
+      operations: [{ tool, input: payload }],
       clock: ctx.clock,
     },
     { sink },
@@ -237,6 +275,43 @@ async function runMutation(
       )
     : undefined;
   return { status: 'ok', result, ...(card !== undefined && { card }) };
+}
+
+/** Имя тула в executor-форме: у attach_* «/» → «_», «-» сохраняется (см. aspectId). */
+function execToolName(def: OrbisToolDef): string {
+  return def.aspectId !== undefined ? `attach_${def.aspectId.replaceAll('/', '_')}` : def.name;
+}
+
+/** Маппинг реестровое имя → executor-форма по всем тулам (для операций batch). */
+function execToolNames(defs: OrbisToolDef[]): Map<string, string> {
+  return new Map(defs.map((d) => [d.name, execToolName(d)]));
+}
+
+/**
+ * Трансляция envelope batch_execute: operations[].tool — реестровые имена (их публикует
+ * buildToolRegistry и видят LLM/MCP) → executor-форма. Имя вне реестра — структурная
+ * VALIDATION с индексом элемента. Известные, но непригодные для batch имена (read-тулы,
+ * thread_post, вложенный batch_execute) транслируются как есть — их отклоняет стадия 1
+ * executor'а собственной честной ошибкой.
+ */
+function translateBatchInput(
+  input: unknown,
+  execToolByName: Map<string, string>,
+): BatchExecuteInput {
+  const parsed = parseEnvelope(batchExecuteInput, input, 'batch_execute');
+  return {
+    batch_id: parsed.batch_id,
+    operations: parsed.operations.map((op, index) => {
+      const tool = execToolByName.get(op.tool);
+      if (tool === undefined) {
+        throw new ExecError('VALIDATION', `batch_execute: неизвестный тул операции «${op.tool}»`, {
+          index,
+          tool: op.tool,
+        });
+      }
+      return { tool, input: op.input };
+    }),
+  };
 }
 
 /** keyFields карточки (02 §2.3): значения полей из viewConfig.keyFields каждого аспекта. */
