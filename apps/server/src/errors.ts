@@ -4,7 +4,8 @@
 // (chat/threads.ts), которым зависимость от executor/ не положена.
 // Коды: VALIDATION (стадии 1–2), NOT_FOUND, STALE_VERSION (§5.2), INVARIANT (§4.2/§3.3,
 // для цикла blocks в details — path, Task 10), FORBIDDEN_LEVEL (зарезервирован §7.10, 1b),
-// LIMIT (entitlements §8).
+// LIMIT (entitlements §8), CONFLICT (client-UUID занят недоступным ресурсом —
+// id_conflict, fix round Task 12).
 import { TRPCError } from '@trpc/server';
 
 export type ExecErrorCode =
@@ -13,7 +14,8 @@ export type ExecErrorCode =
   | 'STALE_VERSION'
   | 'INVARIANT'
   | 'FORBIDDEN_LEVEL'
-  | 'LIMIT';
+  | 'LIMIT'
+  | 'CONFLICT';
 
 export class ExecError extends Error {
   readonly code: ExecErrorCode;
@@ -45,6 +47,7 @@ const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
   INVARIANT: 'UNPROCESSABLE_CONTENT',
   FORBIDDEN_LEVEL: 'FORBIDDEN', // зарезервирован §7.10 (1b)
   LIMIT: 'TOO_MANY_REQUESTS',
+  CONFLICT: 'CONFLICT', // занятый client-UUID (id_conflict) — 409, как и STALE_VERSION
 };
 
 export function execErrorToTRPC(error: StructuredError): TRPCError {

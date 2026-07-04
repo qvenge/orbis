@@ -106,6 +106,54 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
   });
 });
 
+describe('chat.appendUserMessage: идемпотентный повтор по client-UUID (fix round, зеркально §5.3)', () => {
+  test('повтор с тем же id → 200, та же строка, счётчик сообщений не вырос', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const { threadId } = await caller.chat.ensureThread({});
+    const id = newId();
+    const first = await caller.chat.appendUserMessage({ id, threadId, content: 'ретрай' });
+    const replay = await caller.chat.appendUserMessage({ id, threadId, content: 'ретрай' });
+    expect(replay).toEqual(first); // идемпотентный повтор — форма та же, флага не нужно
+    expect((await caller.chat.listMessages({ threadId })).length).toBe(1);
+  });
+
+  test('повтор с тем же id, но другим content → возвращается ИСХОДНАЯ строка', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const { threadId } = await caller.chat.ensureThread({});
+    const id = newId();
+    const first = await caller.chat.appendUserMessage({ id, threadId, content: 'оригинал' });
+    const replay = await caller.chat.appendUserMessage({ id, threadId, content: 'другое' });
+    expect(replay.content).toBe('оригинал'); // содержимое первой записи, не перезапись
+    expect(replay).toEqual(first);
+    expect((await caller.chat.listMessages({ threadId })).length).toBe(1);
+  });
+
+  test('id занят сообщением чужого пользователя → CONFLICT, без SQL-текста в message', async () => {
+    // id занимает ЧУЖОЕ сообщение — под RLS оно невидимо второму пользователю
+    const stranger = freshUserId();
+    const strangerCaller = callerFor(stranger);
+    const strangerThread = await strangerCaller.chat.ensureThread({});
+    const id = newId();
+    await strangerCaller.chat.appendUserMessage({
+      id,
+      threadId: strangerThread.threadId,
+      content: 'чужое',
+    });
+
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const { threadId } = await caller.chat.ensureThread({});
+    const e = await trpcError(caller.chat.appendUserMessage({ id, threadId, content: 'моё' }));
+    expect(e.code).toBe('CONFLICT');
+    // нейтральный текст: без раскрытия SQL-структуры и параметров
+    expect(e.message).not.toContain('insert into');
+    expect(e.message.toLowerCase()).not.toContain('failed query');
+    expect(e.message).not.toContain('params:');
+  });
+});
+
 describe('ai.undo / ai.undoLast (§7.8)', () => {
   test('undoLast гасит последний create: сущность архивирована, actionId — отменённого действия', async () => {
     const user = freshUserId();

@@ -3,7 +3,7 @@
 // §4.6 (append-only). Только трансляция: примитивы — chat/threads.ts и chat/messages.ts.
 import { and, desc, eq, lt } from 'drizzle-orm';
 import { z } from 'zod';
-import { appendMessage } from '../chat/messages';
+import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { chatMessages, chatThreads } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -63,7 +63,8 @@ export const chatRouter = router({
     ),
 
   // id — client-generated UUIDv7 (§2.1); role всегда 'user' — assistant/system пишет
-  // только сервер (audit §7.8, ответы 1b)
+  // только сервер (audit §7.8, ответы 1b). Повтор с тем же id — идемпотентный replay
+  // (штатный ретрай отправки, зеркально §5.3); чужой id → CONFLICT (fix round Task 12)
   appendUserMessage: protectedProcedure
     .input(
       z
@@ -86,7 +87,7 @@ export const chatRouter = router({
           if (visible.length === 0) {
             throw new ExecError('NOT_FOUND', 'тред не найден', { threadId: input.threadId });
           }
-          return appendMessage(tx, { ...input, role: 'user' });
+          return appendMessageIdempotent(tx, { ...input, role: 'user' });
         });
       } catch (e) {
         mapExecError(e);
