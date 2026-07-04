@@ -48,6 +48,11 @@ function mapStopReason(reason: SdkFinishReason): LLMResponse['stopReason'] {
       // 'stop' — штатный конец хода; 'content-filter' | 'error' | 'other' —
       // аварийные резоны детерминированно сводим к end_turn: ответ отдаётся
       // как есть, tool-цикл (Task 9) на них не продолжается.
+      if (reason !== 'stop') {
+        // Минимальный лог refusal (кандидат Task 7 Minor-2, закрыт Task 9): после
+        // маппинга аварийный резон неотличим от штатного end_turn — фиксируем здесь
+        console.warn(`[llm/anthropic] нештатный finishReason «${reason}» сведён к end_turn`);
+      }
       return 'end_turn';
   }
 }

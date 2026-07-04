@@ -1,5 +1,7 @@
 import { MIN_COMPATIBLE_CLIENT_VERSION } from '@orbis/shared';
 import { initTRPC, TRPCError } from '@trpc/server';
+// import type — стирается: type-граф trpc остаётся чист от runtime-модулей AI-слоя
+import type { AiDeps } from './ai/send-message';
 import type { Db } from './db/client';
 
 // Identity течёт только через request-контекст; имя — actorUserId, не userId (D11).
@@ -19,6 +21,13 @@ export type Context = {
   db: Db;
   /** Значение заголовка CLIENT_VERSION_HEADER; null — заголовок не прислан (curl/смоуки). */
   clientVersion: string | null;
+  /**
+   * Зависимости AI-слоя (Task 9): провайдер/модель — один инстанс на процесс
+   * (index.ts), тесты инжектируют ScriptedProvider и entitlements-резолвер.
+   * Опционален: контексты, не трогающие ai.sendMessage, его не несут —
+   * фолбэк роутера (defaultAiDeps) собирает боевые deps по env лениво.
+   */
+  ai?: AiDeps;
 };
 
 // Глобальный errorFormatter (Task 14, из ревью Task 12): неожиданные ошибки

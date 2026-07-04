@@ -75,7 +75,18 @@ export interface ToolCallCtx {
 }
 
 export type ToolDispatchResult =
-  | { status: 'ok'; result: unknown; card?: Card }
+  | {
+      status: 'ok';
+      result: unknown;
+      card?: Card;
+      /**
+       * id action'а журнала §7.8 (undo-адресуемый) — только у мутаций через executor
+       * и только когда действие реально журналировалось (идемпотентный replay ничего
+       * не журналил — как undoActionId карточки). Потребитель — actions-резюме
+       * ai.sendMessage (Task 9) для мгновенного UI-обновления.
+       */
+      actionId?: string;
+    }
   | { status: 'pending_confirmation'; pendingId: string; card: Card } // §7.10 explicit-confirmation (Task 6)
   | { status: 'error'; error: { code: string; message: string; details?: unknown } };
 
@@ -399,6 +410,10 @@ async function runMutation(
   );
   if (!r.ok) return { status: 'error', error: r.error };
 
+  // id action'а для actions-резюме (Task 9): та же семантика, что у undoActionId
+  // карточки — идемпотентный replay ничего не журналил, action этого вызова нет
+  const actionId = r.idempotentReplay ? undefined : r.actionId;
+
   // batch: результат — массив по операциям; на уровне preview — confirmation_card с
   // кратким summary «N операций» (пополевого diff у группы нет — масштаб задаёт размер)
   if (batchPayload !== undefined) {
@@ -408,9 +423,10 @@ async function runMutation(
         status: 'ok',
         result: r.results,
         card: { kind: 'confirmation_card', mode: 'preview', summary: `${n} ${operationsNoun(n)}` },
+        ...(actionId !== undefined && { actionId }),
       };
     }
-    return { status: 'ok', result: r.results };
+    return { status: 'ok', result: r.results, ...(actionId !== undefined && { actionId }) };
   }
 
   const result = r.results[0];
@@ -433,6 +449,7 @@ async function runMutation(
           def.name === 'entity_update' ? `Обновление «${(result as WireEntity).title}»` : def.name,
         ...(diff !== undefined && { diff }),
       },
+      ...(actionId !== undefined && { actionId }),
     };
   }
 
@@ -446,10 +463,15 @@ async function runMutation(
         result as WireEntity,
         keyFieldsMap,
         // идемпотентный replay ничего не журналил — action для Undo не существует
-        r.idempotentReplay ? undefined : r.actionId,
+        actionId,
       )
     : undefined;
-  return { status: 'ok', result, ...(card !== undefined && { card }) };
+  return {
+    status: 'ok',
+    result,
+    ...(card !== undefined && { card }),
+    ...(actionId !== undefined && { actionId }),
+  };
 }
 
 /** Имя тула в executor-форме: у attach_* «/» → «_», «-» сохраняется (см. aspectId). */
