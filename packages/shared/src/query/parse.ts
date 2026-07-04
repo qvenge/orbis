@@ -51,10 +51,47 @@ const RESERVED_KEYS = new Set([
 const DATE_TOKENS = new Set<QueryDateToken>(['today', 'overdue', 'next_7d', 'after_7d']);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** Абсолютный ISO 8601 для сравнений core-timestamp (§6.1) — тот же паттерн, что в реестре (§3.1). */
-const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+/**
+ * Абсолютный ISO 8601 для сравнений core-timestamp (§6.1) — та же форма, что в реестре (§3.1).
+ * Группы захвата — для календарной проверки компонент (`isValidCalendarTimestamp`).
+ */
+const ISO_TIMESTAMP_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 /** Числовой литерал сравнений/диапазонов: base-10 без экспоненты, знак допустим (§3.3, §6.1). */
 const DECIMAL_LITERAL_RE = /^-?\d+(\.\d+)?$/;
+
+/** Год високосный по григорианскому правилу. */
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+/** Число дней в месяце (месяц 1–12). */
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return isLeapYear(year) ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+/**
+ * Календарная валидность компонент ISO-timestamp (§6.4: невалидный запрос — структурная
+ * ошибка парсинга, а не падение каста ::timestamptz в SQL). Прямая проверка диапазонов
+ * компонент — НЕ через Date.parse: V8 молча перекатывает 2026-02-30 на 2 марта без NaN.
+ * `m` — результат `ISO_TIMESTAMP_RE.exec` (форма уже гарантирована регэкспом).
+ */
+function isValidCalendarTimestamp(m: RegExpExecArray): boolean {
+  // Группы 1–7 обязательны по регэкспу — undefined невозможен.
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12) return false;
+  if (day < 1 || day > daysInMonth(year, month)) return false;
+  if (Number(m[4]) > 23 || Number(m[5]) > 59 || Number(m[6]) > 59) return false;
+  const offset = m[7] as string;
+  if (offset !== 'Z') {
+    // Смещение таймзоны: часы ≤ 23, минуты ≤ 59 (форму гарантировал регэксп).
+    if (Number(offset.slice(1, 3)) > 23 || Number(offset.slice(4, 6)) > 59) return false;
+  }
+  return true;
+}
 
 /** Разбирает запрос §6.1; ошибки парсинга возвращает структурно, с позицией (§6.4). */
 export function parseQuery(input: string, catalog: FieldCatalog): ParseResult {
@@ -80,7 +117,7 @@ function parseQueryOrThrow(input: string, catalog: FieldCatalog): QueryAst {
   // стоит он до или после поля («запрос содержит aspect=», §6.1).
   const aspectsInQuery = new Set<string>();
   for (const p of parts) {
-    if (p.op === '=' && p.key === 'aspect') aspectsInQuery.add(unquote(p.value, p.valueOffset));
+    if (p.op === '=' && p.key === 'aspect') aspectsInQuery.add(parseAspectValue(p));
   }
 
   const filters: QueryFilter[] = [];
@@ -316,7 +353,7 @@ function dispatchPart(p: ParsedPart, ctx: Ctx): void {
       return;
     case 'aspect':
       // В aspectsInQuery уже добавлен пре-пассом.
-      ctx.filters.push({ kind: 'aspect', aspect: unquote(p.value, p.valueOffset) });
+      ctx.filters.push({ kind: 'aspect', aspect: parseAspectValue(p) });
       return;
     case 'children_of':
       ctx.filters.push({ kind: 'children_of', of: parseEntityRef(p) });
@@ -382,6 +419,22 @@ function assignOnce<K extends 'sortBy' | 'search' | 'limit' | 'display' | 'title
 ): void {
   if (ctx.ast[key] !== undefined) fail(`повторный параметр '${key}'`, p.keyOffset);
   ctx.ast[key] = value;
+}
+
+/**
+ * `aspect=` принимает ровно одно значение. Неквотированный `|` без ошибки стал бы литералом
+ * `orbis/task|orbis/note` — гарантированно пустой результат, «тихая пустота» против духа §6.4.
+ * Несколько аспектов — повторением конструкции: `aspect=a, aspect=b` (AND, §6).
+ */
+function parseAspectValue(p: ParsedPart): string {
+  const pipe = findOutsideQuotes(p.value, '|');
+  if (pipe !== -1) {
+    fail(
+      `aspect принимает одно значение; для нескольких аспектов повторите aspect= через запятую`,
+      p.valueOffset + pipe,
+    );
+  }
+  return unquote(p.value, p.valueOffset);
 }
 
 /** Список значений через `|` (tags/excludeTags): элементы непусты, кавычки снимаются. */
@@ -475,8 +528,12 @@ function parseRange(p: ParsedPart, dots: number, field: ResolvedField): QueryFil
 function parseComparable(el: Part, field: ResolvedField): QueryComparableValue {
   const text = unquote(el.text, el.offset);
   if (field.core && field.type === 'timestamp') {
-    if (!ISO_TIMESTAMP_RE.test(text)) {
+    const m = ISO_TIMESTAMP_RE.exec(text);
+    if (!m) {
       fail(`ожидается ISO 8601 timestamp для '${field.name}', получено '${text}'`, el.offset);
+    }
+    if (!isValidCalendarTimestamp(m)) {
+      fail(`календарно-невалидный ISO 8601 timestamp '${text}'`, el.offset);
     }
     return { kind: 'timestamp', value: text };
   }
