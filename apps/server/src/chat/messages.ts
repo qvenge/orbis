@@ -59,11 +59,15 @@ export async function appendMessage(tx: Tx, msg: AppendMessageInput): Promise<Wi
  * catch 23505: пойманный 23505 абортит tx (25P02), и SELECT после него невозможен.
  * Занятый ЧУЖИМ (невидимым под RLS) сообщением id — структурированный CONFLICT
  * с нейтральным текстом, без раскрытия SQL/параметров.
+ *
+ * replayed (fix round Task 9): true — вставки не было, вернулась исходная строка.
+ * Потребитель — ai.sendMessage: ретрай с тем же client-id при уже существующем
+ * ответе не должен гнать tool-цикл заново (replay ответа вместо второго прогона).
  */
 export async function appendMessageIdempotent(
   tx: Tx,
   msg: AppendMessageInput,
-): Promise<WireChatMessage> {
+): Promise<{ message: WireChatMessage; replayed: boolean }> {
   const inserted = await tx
     .insert(chatMessages)
     .values({
@@ -76,7 +80,7 @@ export async function appendMessageIdempotent(
     .onConflictDoNothing({ target: chatMessages.id })
     .returning();
   const row = inserted[0];
-  if (row) return toWireChatMessage(row);
+  if (row) return { message: toWireChatMessage(row), replayed: false };
 
   // Конфликт PK. Своя строка (RLS видит) → идемпотентный повтор: исходная запись,
   // содержимое повторного запроса игнорируется (append-only, §4.6 — правок нет).
@@ -89,5 +93,5 @@ export async function appendMessageIdempotent(
       reason: 'id_conflict',
     });
   }
-  return toWireChatMessage(own);
+  return { message: toWireChatMessage(own), replayed: true };
 }

@@ -142,6 +142,15 @@ describe('batchExecuteInput', () => {
         .success,
     ).toBe(false);
   });
+
+  test('strict вложенного конверта: лишний ключ элемента operations отклоняется (парность с JSON Schema §9.2)', () => {
+    expect(
+      batchExecuteInput.safeParse({
+        batch_id: UUID,
+        operations: [{ tool: 'entity_create', input: { title: 'x', tags: [] }, extra: 1 }],
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe('entityQueryInput / entityGetInput', () => {

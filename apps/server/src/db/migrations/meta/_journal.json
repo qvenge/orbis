@@ -15,6 +15,13 @@
       "when": 1783156220278,
       "tag": "0001_rls_and_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783182443251,
+      "tag": "0002_entity_origins_ownership",
+      "breakpoints": true
     }
   ]
 }

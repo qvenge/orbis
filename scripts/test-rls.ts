@@ -10,3 +10,10 @@ if (/^\s*not ok/m.test(out)) {
   console.error('pgTAP: есть проваленные проверки');
   process.exit(1);
 }
+// Гэп раннера (находка ревью Task 2): при рассинхроне plan(N) с числом реально
+// выполненных проверок pgTAP печатает ДИАГНОСТИКУ '# Looks like you planned...'
+// БЕЗ 'not ok' — молчаливый ложно-зелёный. Ловим её отдельно.
+if (/# Looks like you planned/.test(out)) {
+  console.error('pgTAP: план не сошёлся с числом выполненных проверок');
+  process.exit(1);
+}

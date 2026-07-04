@@ -7,6 +7,7 @@ import type { Context } from './trpc';
 // ping/whoami БД не трогают — стаб вместо пула соединений
 const ctx: Context = {
   actorUserId: null,
+  actorKind: 'owner',
   clientVersion: null,
   db: null as unknown as Context['db'],
 };
@@ -47,6 +48,72 @@ test('устаревший клиент получает отказ версии
     (e: unknown) => e,
   );
   expect((err as TRPCError).code).toBe('PRECONDITION_FAILED');
+});
+
+// §9.3 (Task 3): ownerOnlyProcedure — агент (PAT) не управляет аккаунтом владельца.
+// db — стаб: FORBIDDEN обязан лететь из middleware ДО какого-либо обращения к БД.
+const agentUserId = crypto.randomUUID();
+const agentCtx: Context = { ...ctx, actorUserId: agentUserId, actorKind: 'agent' };
+
+test('ownerOnly под агентом: seedOnboarding/updateSettings/exportData → FORBIDDEN до БД', async () => {
+  const caller = appRouter.createCaller(agentCtx);
+  const calls: Array<() => Promise<unknown>> = [
+    () => caller.user.seedOnboarding(),
+    () => caller.user.updateSettings({}),
+    () => caller.user.exportData(),
+  ];
+  for (const call of calls) {
+    const err = await call().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(TRPCError);
+    expect((err as TRPCError).code).toBe('FORBIDDEN');
+  }
+});
+
+// §9.3 (Task 10b): мутационная поверхность tRPC — поверхность владельца; единственный
+// путь мутаций PAT-агента — /mcp → dispatchTool → политика §7.10. Входы структурно
+// валидны (uuid и т.п.), чтобы zod-парсинг не подменил FORBIDDEN на BAD_REQUEST;
+// db-стуб null доказывает, что гейт срабатывает ДО обращения к БД (пропусти он агента —
+// упало бы не-FORBIDDEN ошибкой БД).
+test('мутации графа/журнала под агентом: entity/relation/chat/undo → FORBIDDEN до БД', async () => {
+  const caller = appRouter.createCaller(agentCtx);
+  const uuid = crypto.randomUUID();
+  const calls: Array<() => Promise<unknown>> = [
+    () => caller.entity.create({ input: { title: 'x', tags: [] }, source: 'quick_capture' }),
+    () => caller.entity.update({ id: uuid, title: 'x' }),
+    () =>
+      caller.relation.create({
+        source_id: uuid,
+        target_id: crypto.randomUUID(),
+        relation_type: 'related_to',
+      }),
+    () =>
+      caller.relation.delete({
+        source_id: uuid,
+        target_id: crypto.randomUUID(),
+        relation_type: 'related_to',
+      }),
+    () => caller.chat.ensureThread({}),
+    () => caller.chat.appendUserMessage({ id: crypto.randomUUID(), threadId: uuid, content: 'x' }),
+    () => caller.ai.undo({ actionId: uuid }),
+    () => caller.ai.undoLast(),
+  ];
+  for (const call of calls) {
+    const err = await call().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(TRPCError);
+    expect((err as TRPCError).code).toBe('FORBIDDEN');
+  }
+});
+
+test('агент проходит protectedProcedure (whoami) без заголовка версии', async () => {
+  // Identity есть identity: PAT-агент аутентифицирован, version-гейт без заголовка молчит
+  const caller = appRouter.createCaller(agentCtx);
+  expect(await caller.whoami()).toEqual({ actorUserId: agentUserId });
 });
 
 test('равная/новая версия, отсутствие и мусорный заголовок проходят', async () => {

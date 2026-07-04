@@ -26,7 +26,7 @@ const createCaller = createCallerFactory(appRouter);
 
 /** Caller от лица владельца: ctx как в бою (§9.1); clientVersion=null — гейт версии пропускает. */
 function callerFor(user: string) {
-  return createCaller({ actorUserId: user, db, clientVersion: null });
+  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
 }
 
 /** Ошибка вызова процедуры — TRPCError, с внятным падением при неожиданном успехе. */

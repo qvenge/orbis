@@ -10,7 +10,7 @@ import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
 import { exportData, type OrbisExport } from '../export';
 import { seedOnboarding } from '../seed/onboarding';
-import { protectedProcedure, router } from '../trpc';
+import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireUserSettings, type WireUserSettings } from '../wire';
 
 // Партиал настроек §1.6/§7.3: правятся «Общие» (timezone/currency/weekStartDay) и
@@ -31,8 +31,10 @@ const updateSettingsInput = z
   .strict();
 
 export const userRouter = router({
+  // §9.3: сид/настройки/экспорт — управление аккаунтом, PAT-агенту закрыто (ownerOnly);
+  // read-путь getSettings остаётся protectedProcedure — агенту нужны timezone/currency.
   // Идемпотентно (02 §7): { seeded: false } — уже было. Один withIdentity-tx.
-  seedOnboarding: protectedProcedure.mutation(({ ctx }) =>
+  seedOnboarding: ownerOnlyProcedure.mutation(({ ctx }) =>
     withIdentity(ctx.db, ctx.actorUserId, (tx) => seedOnboarding(tx, ctx.actorUserId)),
   ),
 
@@ -51,7 +53,7 @@ export const userRouter = router({
       }),
   ),
 
-  updateSettings: protectedProcedure.input(updateSettingsInput).mutation(
+  updateSettings: ownerOnlyProcedure.input(updateSettingsInput).mutation(
     ({ ctx, input }): Promise<WireUserSettings> =>
       withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
         // LWW-правка конфигурации (§5.2): body-optimistic-check не применяется — это не сущность
@@ -67,7 +69,7 @@ export const userRouter = router({
       }),
   ),
 
-  exportData: protectedProcedure.query(
+  exportData: ownerOnlyProcedure.query(
     ({ ctx }): Promise<OrbisExport> =>
       withIdentity(ctx.db, ctx.actorUserId, (tx) => exportData(tx, ctx.actorUserId)),
   ),

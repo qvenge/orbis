@@ -3,7 +3,10 @@
 import type { Tx } from '../db/with-identity';
 
 export type ActorKind = 'owner' | 'ai' | 'agent';
-export type MutationSource = 'chat' | 'fast_path' | 'quick_capture' | 'mcp' | 'system';
+// 'ui' — прямое действие владельца в UI (entity.update / relation.*), отличимое в
+// журнале от клиентского create ('fast_path'|'quick_capture'), внутреннего чата
+// ('chat'), MCP-агента ('mcp') и системного отката ('system').
+export type MutationSource = 'chat' | 'fast_path' | 'quick_capture' | 'mcp' | 'ui' | 'system';
 
 export interface ExecuteRequest {
   actorUserId: string; // владелец графа (D11); в MVP актор-владелец = owner
@@ -175,4 +178,13 @@ export interface ExecutorDeps {
   sink?: JournalSink;
   /** Только из undo.ts — см. InternalUndoMode. */
   internalUndo?: InternalUndoMode;
+  /**
+   * Вызывается ПЕРВЫМ statement'ом withIdentity-tx execute — до реестра, replay-проверки
+   * и стадий 1–7. Единственный потребитель — сериализация pending-подтверждений §7.10
+   * (policy/pending, fix round Task 6): advisory-lock по pendingId + перепроверка
+   * «не отклонён» В ТОМ ЖЕ tx, где пишется audit-сообщение, — иначе approve и reject
+   * образуют write-skew (оба проходят свои проверки до чужого коммита). Санкционировано
+   * координатором как минимальное расширение; других потребителей не заводить без нужды.
+   */
+  beforeStages?: (tx: Tx) => Promise<void>;
 }

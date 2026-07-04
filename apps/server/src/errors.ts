@@ -17,7 +17,8 @@ export type ExecErrorCode =
   | 'INVARIANT'
   | 'FORBIDDEN_LEVEL'
   | 'LIMIT'
-  | 'CONFLICT';
+  | 'CONFLICT'
+  | 'LLM_UNAVAILABLE'; // §7.9: сбой LLM-провайдера — явная ошибка, не очередь (Task 9)
 
 export class ExecError extends Error {
   readonly code: ExecErrorCode;
@@ -50,6 +51,10 @@ const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
   FORBIDDEN_LEVEL: 'FORBIDDEN', // зарезервирован §7.10 (1b)
   LIMIT: 'TOO_MANY_REQUESTS',
   CONFLICT: 'CONFLICT', // занятый client-UUID (id_conflict) — 409, как и STALE_VERSION
+  // §7.9: сбой провайдера — 503. tRPC v11 имеет SERVICE_UNAVAILABLE (JSON-RPC-совместимые
+  // коды @trpc/server) — семантически точнее ближайших альтернатив (TIMEOUT/BAD_GATEWAY):
+  // сервис временно недоступен, клиент показывает «повторить» (кнопка ретрая 1c)
+  LLM_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
 };
 
 export function execErrorToTRPC(error: StructuredError): TRPCError {

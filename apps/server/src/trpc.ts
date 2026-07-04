@@ -1,5 +1,7 @@
 import { MIN_COMPATIBLE_CLIENT_VERSION } from '@orbis/shared';
 import { initTRPC, TRPCError } from '@trpc/server';
+// import type — стирается: type-граф trpc остаётся чист от runtime-модулей AI-слоя
+import type { AiDeps } from './ai/send-message';
 import type { Db } from './db/client';
 
 // Identity течёт только через request-контекст; имя — actorUserId, не userId (D11).
@@ -10,9 +12,22 @@ import type { Db } from './db/client';
 // требование Record<string, unknown> у createContext в @hono/trpc-server.
 export type Context = {
   actorUserId: string | null;
+  /**
+   * Транспортный актор запроса (§9.3): 'owner' — JWT Supabase (и неаутентифицированные
+   * запросы), 'agent' — PAT внешнего агента. Уже, чем ActorKind executor'а ('ai' — не
+   * транспорт: внутренний AI действует внутри запросов владельца).
+   */
+  actorKind: 'owner' | 'agent';
   db: Db;
   /** Значение заголовка CLIENT_VERSION_HEADER; null — заголовок не прислан (curl/смоуки). */
   clientVersion: string | null;
+  /**
+   * Зависимости AI-слоя (Task 9): провайдер/модель — один инстанс на процесс
+   * (index.ts), тесты инжектируют ScriptedProvider и entitlements-резолвер.
+   * Опционален: контексты, не трогающие ai.sendMessage, его не несут —
+   * фолбэк роутера (defaultAiDeps) собирает боевые deps по env лениво.
+   */
+  ai?: AiDeps;
 };
 
 // Глобальный errorFormatter (Task 14, из ревью Task 12): неожиданные ошибки
@@ -26,6 +41,13 @@ const t = initTRPC.context<Context>().create({
     // НЕ Error. `!(cause instanceof Error)` обязателен: системные ошибки
     // (ECONNREFUSED/UND_ERR_* из fetch/undici) — это Error со СТРОКОВЫМ code,
     // и без этой проверки они утекали бы клиенту с сырым message и stack.
+    //
+    // Эта structured-ветка — СТРАХОВКА, а не основной путь: наши структурированные
+    // ошибки (execErrorToTRPC) уже маппятся на не-INTERNAL коды (BAD_REQUEST/CONFLICT/…)
+    // и выходят выше на первом guard. Фактическая защита их message — именно тот guard;
+    // сюда structured-cause долетел бы лишь при изменении коэрсии `cause` в tRPC (напр.,
+    // будущая обёртка нашего cause в Error с INTERNAL-кодом) — тогда ветка не даст
+    // затереть его нейтральным текстом.
     const cause = error.cause;
     if (
       cause &&
@@ -85,4 +107,22 @@ export const publicProcedure = t.procedure.use(versionGate);
 export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
   if (!ctx.actorUserId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   return next({ ctx: { actorUserId: ctx.actorUserId } });
+});
+
+// §9.3 (Task 3, ужесточено Task 10b): ownerOnly гейтит ЛЮБУЮ мутацию состояния через
+// tRPC — создание/правку сущностей, связи, запись тредов/сообщений чата, Undo, а также
+// управление аккаунтом (экспорт, настройки, онбординг-сид, approve/reject §7.10).
+// Мутационная поверхность tRPC — поверхность ВЛАДЕЛЬЦА (веб-UI); единственный путь
+// мутаций PAT-агента — /mcp → dispatchTool → политика подтверждений §7.10 → executor.
+// Без этого гейта агент мутировал граф напрямую через tRPC в обход подтверждений,
+// и журнал писал ложную атрибуцию owner/ui — проверено вживую до фикса. Read-пути
+// (getSettings, entity.get/query/count, relation.listFor, chat.listMessages) остаются
+// на protectedProcedure: агент читает легитимно, RLS скоупит владельцем. Прежний
+// комментарий здесь перечислял лишь «операции владельца аккаунта» и тем ложно
+// подразумевал, что политику §7.10 агент другим транспортом не обойдёт.
+export const ownerOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
+  if (ctx.actorKind !== 'owner') {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'операция доступна только владельцу' });
+  }
+  return next();
 });

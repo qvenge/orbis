@@ -154,11 +154,13 @@ export async function execute(
 
     // Ветка batch (§7.8, §9.2): явный batchId, несколько операций или тул batch_execute
     if (single === undefined || req.batchId !== undefined || single.tool === 'batch_execute') {
-      return await executeBatch(db, req, sink, clock, deps.internalUndo);
+      return await executeBatch(db, req, sink, clock, deps.internalUndo, deps.beforeStages);
     }
 
     const actionId = newId();
     return await withIdentity(db, req.actorUserId, async (tx) => {
+      // Шов сериализации §7.10 — первым statement'ом tx (см. ExecutorDeps.beforeStages)
+      if (deps.beforeStages) await deps.beforeStages(tx);
       const registry = await loadAspectRegistry(tx);
       const ctx: ExecCtx = {
         tx,
@@ -200,6 +202,7 @@ async function executeBatch(
   sink: JournalSink,
   clock: () => Date,
   internalUndo?: InternalUndoMode,
+  beforeStages?: ExecutorDeps['beforeStages'],
 ): Promise<ExecuteResult> {
   // Нормализация двух входных форм: тул batch_execute с envelope {batch_id, operations}
   // (§9.2) либо operations>1 + req.batchId (транспортная форма ExecuteRequest)
@@ -241,6 +244,10 @@ async function executeBatch(
 
   try {
     return await withIdentity(db, req.actorUserId, async (tx) => {
+      // Шов сериализации §7.10 — первым statement'ом tx, ДО replay-проверки и стадий
+      // (см. ExecutorDeps.beforeStages): конкурентный reject либо закоммичен (проверка
+      // beforeStages его увидит), либо ждёт этот tx и увидит audit-сообщение
+      if (beforeStages) await beforeStages(tx);
       const registry = await loadAspectRegistry(tx);
       const ctx: ExecCtx = { tx, registry, req, actionId: batchId, clock, sink, internalUndo };
 
