@@ -28,6 +28,8 @@ const ID = {
   taskOverdue: '019eb300-d5e1-7000-8000-000000000003',
   taskBlocked: '019eb300-d5e1-7000-8000-000000000004',
   taskBlocker: '019eb300-d5e1-7000-8000-000000000005',
+  taskBlocked2: '019eb300-d5e1-7000-8000-00000000000f',
+  noteBlocker: '019eb300-d5e1-7000-8000-000000000010',
   taskInbox: '019eb300-d5e1-7000-8000-000000000006',
   taskDone: '019eb300-d5e1-7000-8000-000000000007',
   fin010: '019eb300-d5e1-7000-8000-000000000008',
@@ -91,6 +93,27 @@ const DATASET_A: (typeof entities.$inferInsert)[] = [
     aspects: { 'orbis/task': { status: 'in_progress', priority: 'low' } },
     createdAt: new Date('2026-06-26T10:00:00Z'),
     updatedAt: new Date('2026-07-03T10:00:00Z'),
+  },
+  {
+    // COALESCE-семантика excludeBlocked: заблокирована сущностью БЕЗ orbis/task —
+    // такой блокер считается живым (§6.1), задача уходит из «Сегодня».
+    id: ID.taskBlocked2,
+    ownerId: USER_A,
+    title: 'Задача, заблокированная заметкой без task-аспекта',
+    tags: ['task'],
+    aspects: { 'orbis/task': { status: 'planned', priority: 'medium', due_date: '2026-07-03' } },
+    createdAt: new Date('2026-06-26T11:00:00Z'),
+    updatedAt: new Date('2026-07-01T10:30:00Z'),
+  },
+  {
+    // Блокер-заметка: orbis/task-аспекта нет вовсе — путь COALESCE(...,'') в SQL.
+    id: ID.noteBlocker,
+    ownerId: USER_A,
+    title: 'Заметка-блокер без task-аспекта',
+    tags: ['note'],
+    aspects: { 'orbis/note': { content_type: 'plain' } },
+    createdAt: new Date('2026-06-26T12:00:00Z'),
+    updatedAt: new Date('2026-07-01T10:45:00Z'),
   },
   {
     id: ID.taskInbox,
@@ -247,6 +270,20 @@ const RELATIONS_A: (typeof relations.$inferInsert)[] = [
     targetId: ID.taskBlocked,
     relationType: 'blocks',
   },
+  {
+    // Блокер без orbis/task-аспекта — жив по COALESCE-семантике (§6.1).
+    id: crypto.randomUUID(),
+    sourceId: ID.noteBlocker,
+    targetId: ID.taskBlocked2,
+    relationType: 'blocks',
+  },
+  {
+    // «Отпущенный» блокер: status=done НЕ блокирует — taskToday остаётся в «Сегодня».
+    id: crypto.randomUUID(),
+    sourceId: ID.taskDone,
+    targetId: ID.taskToday,
+    relationType: 'blocks',
+  },
 ];
 
 /** Блок «Сегодня» Daily Planning — дословно из 02 §3.3. */
@@ -308,8 +345,10 @@ describe('датасет §6.2: состав И порядок под RLS', () =
   });
 
   test('1. «Сегодня» Daily Planning: просроченная и сегодняшняя, priority:desc, без заблокированной и без чужих', () => {
-    // taskBlocked подходит по всем полям, но исключён excludeBlocked;
-    // taskDone — по статусу; taskB — RLS; порядок high → medium.
+    // taskBlocked исключён живым task-блокером; taskBlocked2 — блокером БЕЗ
+    // task-аспекта (COALESCE-семантика §6.1); taskDone — по статусу; taskB — RLS.
+    // taskToday остаётся, хотя на нём blocks-связь от done-блокера («отпущен»).
+    // Порядок: high → medium.
     return run(USER_A, DAILY_TODAY).then((rows) => {
       expect(ids(rows)).toEqual([ID.taskToday, ID.taskOverdue]);
     });
@@ -358,10 +397,10 @@ describe('датасет §6.2: состав И порядок под RLS', () =
   test('4a. archived: по умолчанию скрыта, archived=any включает архивную', async () => {
     const base = ids(await run(USER_A, 'aspect=orbis/task'));
     expect(base).not.toContain(ID.archived);
-    expect(base).toHaveLength(6);
+    expect(base).toHaveLength(7);
     const withArchived = ids(await run(USER_A, 'aspect=orbis/task, archived=any'));
     expect(withArchived).toContain(ID.archived);
-    expect(withArchived).toHaveLength(7);
+    expect(withArchived).toHaveLength(8);
   });
 
   test('4b. search= находит по слову из body', async () => {
@@ -376,11 +415,12 @@ describe('датасет §6.2: состав И порядок под RLS', () =
     const priorities = rows.map(
       (r) => (r.aspects as Record<string, { priority?: string }>)['orbis/task']?.priority ?? null,
     );
-    expect(priorities).toEqual(['high', 'high', 'medium', 'low', null]);
+    expect(priorities).toEqual(['high', 'high', 'medium', 'medium', 'low', null]);
     expect(ids(rows)).toEqual([
       ID.taskToday,
       ID.taskBlocked,
       ID.taskOverdue,
+      ID.taskBlocked2,
       ID.taskBlocker,
       ID.taskInbox,
     ]);

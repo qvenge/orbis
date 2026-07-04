@@ -71,8 +71,8 @@
   },
   {
     "name": "Date-токен на timestamp-поле: start_at=next_7d (AT TIME ZONE)",
-    "query": "start_at=next_7d",
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND ((aspects->'orbis/schedule'->>'start_at')::timestamptz AT TIME ZONE $1)::date BETWEEN $2::date AND $3::date + 7 LIMIT $4",
+    "query": "start_at=next_7d, sortBy=start_at:asc",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND ((aspects->'orbis/schedule'->>'start_at')::timestamptz AT TIME ZONE $1)::date BETWEEN $2::date AND $3::date + 7 ORDER BY (aspects->'orbis/schedule'->>'start_at')::timestamptz ASC NULLS LAST LIMIT $4",
     "params": ["Europe/Moscow", "2026-07-03", "2026-07-03", 500]
   },
   {
@@ -98,5 +98,29 @@
     "query": "aspect=orbis/budget, category_ref=019d48ea-4188-765d-8e96-93a0ad9c262a",
     "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND aspects->'orbis/budget'->>'category_ref' IN ($2) LIMIT $3",
     "params": ["orbis/budget", "019d48ea-4188-765d-8e96-93a0ad9c262a", 500]
+  },
+  {
+    "name": "Upcoming «Ближайшие 7 дней» (02 §3.3): next_7d на date-поле",
+    "query": "aspect=orbis/task, due_date=next_7d, status=!done&!cancelled,\n         sortBy=due_date:asc|priority:desc, display=list, title=Ближайшие 7 дней",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND (aspects->'orbis/task'->>'due_date')::date BETWEEN $2::date AND $3::date + 7 AND (aspects->'orbis/task'->>'status' IS NULL OR aspects->'orbis/task'->>'status' NOT IN ($4, $5)) ORDER BY (aspects->'orbis/task'->>'due_date')::date ASC NULLS LAST, CASE aspects->'orbis/task'->>'priority' WHEN 'low' THEN 0 WHEN 'medium' THEN 1 WHEN 'high' THEN 2 END DESC NULLS LAST LIMIT $6",
+    "params": ["orbis/task", "2026-07-03", "2026-07-03", "done", "cancelled", 500]
+  },
+  {
+    "name": "Upcoming «Позже» (02 §3.3): after_7d + limit=30",
+    "query": "aspect=orbis/task, due_date=after_7d, status=!done&!cancelled,\n         sortBy=due_date:asc, limit=30, display=compact, title=Позже",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND (aspects->'orbis/task'->>'due_date')::date > $2::date + 7 AND (aspects->'orbis/task'->>'status' IS NULL OR aspects->'orbis/task'->>'status' NOT IN ($3, $4)) ORDER BY (aspects->'orbis/task'->>'due_date')::date ASC NULLS LAST LIMIT $5",
+    "params": ["orbis/task", "2026-07-03", "done", "cancelled", 30]
+  },
+  {
+    "name": "Диапазон core-timestamp: updated_at=a..b",
+    "query": "updated_at=2026-07-01T00:00:00Z..2026-07-02T00:00:00Z",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND updated_at BETWEEN $1::timestamptz AND $2::timestamptz LIMIT $3",
+    "params": ["2026-07-01T00:00:00Z", "2026-07-02T00:00:00Z", 500]
+  },
+  {
+    "name": "sortBy прочих типов: numeric-каст, строка в скобках, core-title колонкой",
+    "query": "aspect=orbis/financial, sortBy=amount:desc|counterparty:asc|title:asc",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 ORDER BY (aspects->'orbis/financial'->>'amount')::numeric DESC NULLS LAST, (aspects->'orbis/financial'->>'counterparty') ASC NULLS LAST, title ASC NULLS LAST LIMIT $2",
+    "params": ["orbis/financial", 500]
   }
 ]
