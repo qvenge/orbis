@@ -10,9 +10,11 @@
     "db:migrate": "drizzle-kit migrate"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "4.0.8",
     "@hono/trpc-server": "^0.3.4",
     "@orbis/shared": "workspace:*",
     "@trpc/server": "^11.0.0",
+    "ai": "7.0.15",
     "ajv": "^8",
     "ajv-formats": "^3",
     "drizzle-orm": "^0.45.2",
