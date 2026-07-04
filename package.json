@@ -11,7 +11,8 @@
     "lint": "biome check .",
     "format": "biome format --write .",
     "test": "bun run --filter '*' test",
-    "db:prepare": "echo 'no-op until Task 2'"
+    "test:rls": "bun scripts/test-rls.ts",
+    "db:prepare": "cd apps/server && DATABASE_URL=$DATABASE_URL_ADMIN bun run db:migrate && cd ../.. && bun run test:rls"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.2",
