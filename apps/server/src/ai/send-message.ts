@@ -4,6 +4,11 @@
 //   1) персист user-сообщения (идемпотентно по client-id — путь Task 12 1a) ПЕРВЫМ
 //      отдельным tx: при любом дальнейшем исходе сообщение не теряется (§7.9);
 //      он же даёт якорь треда (entity_id → слой 3 контекста, 02 §2.2);
+//      1a) fix round: если это ПОВТОР (client-id уже в треде) и ответ на него уже
+//      существует — вернуть существующий ответ (replay) БЕЗ провайдера и метеринга:
+//      ретрай после разрыва «запрос ушёл — ответ не дошёл» не должен исполнять
+//      действия и жечь токены второй раз; ответа нет (первый прогон упал
+//      LLM_UNAVAILABLE) — легитимный ретрай §7.9, цикл гонится как обычно;
 //   2) entitlements-гейт ai.requests_per_day / ai.tokens_per_day (§8) ДО первого
 //      вызова провайдера — dev безлимитен, резолвер инжектируем;
 //   3) buildContext (§7.1 слои 1–4; user-сообщение уже в окне — контракт Task 8)
@@ -21,11 +26,11 @@
 //   7) throw из provider.chat → структурная ошибка LLM_UNAVAILABLE (503): явная
 //      ошибка с возможностью повторить, user-сообщение сохранено, очереди нет (§7.9).
 import { MAX_AGENT_STEPS, newId } from '@orbis/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq, gt, or } from 'drizzle-orm';
 import { appendMessage, appendMessageIdempotent, type WireChatMessage } from '../chat/messages';
 import type { Db } from '../db/client';
-import { aiUsage, chatThreads } from '../db/schema';
-import { withIdentity } from '../db/with-identity';
+import { aiUsage, chatMessages, chatThreads } from '../db/schema';
+import { type Tx, withIdentity } from '../db/with-identity';
 import { type EntitlementResolver, resolveEntitlement } from '../entitlements';
 import { ExecError } from '../errors';
 import { DEFAULT_ANTHROPIC_MODEL } from '../llm/anthropic';
@@ -34,6 +39,7 @@ import { EchoProvider, type LLMProviderEnv, makeLLMProvider } from '../llm/provi
 import type { LLMMessage, LLMProvider, LLMResponse, LLMToolDef } from '../llm/types';
 import { dispatchTool } from '../tools/dispatch';
 import { buildToolRegistry, type Card } from '../tools/registry';
+import { toWireChatMessage } from '../wire';
 import { recordUsage, type UsageTotals, utcDay } from './metering';
 
 /** Потолок ответа модели за шаг (LLMRequest.maxTokens); ориентиры бюджета — §7.1. */
@@ -103,6 +109,13 @@ export interface SendMessageResult {
   assistantMessage: WireChatMessage;
   actions: ActionSummary[];
   pending: PendingSummary[];
+  /**
+   * true — ретрай с тем же client-id вернул УЖЕ СУЩЕСТВУЮЩИЙ ответ (fix round):
+   * цикл не гонялся, actions/pending пусты (минимальное решение — резюме прошлого
+   * прогона не реконструируется; карточки доступны в metadata.cards возвращённого
+   * сообщения). UI 1c при replayed обязан рефетчить тред, а не аппендить локально.
+   */
+  replayed: boolean;
 }
 
 /**
@@ -130,7 +143,7 @@ export async function sendMessage(
   // 1. Персист user-сообщения ПЕРВЫМ отдельным tx (§7.9: не теряется ни при гейте,
   //    ни при сбое провайдера) + якорь треда. Чужой/несуществующий тред под RLS
   //    неразличимы — единый NOT_FOUND (как chat.appendUserMessage).
-  const anchorEntityId = await withIdentity(db, input.ownerId, async (tx) => {
+  const pre = await withIdentity(db, input.ownerId, async (tx) => {
     const rows = await tx
       .select({ entityId: chatThreads.entityId })
       .from(chatThreads)
@@ -139,14 +152,27 @@ export async function sendMessage(
     if (!thread) {
       throw new ExecError('NOT_FOUND', 'тред не найден', { threadId: input.threadId });
     }
-    await appendMessageIdempotent(tx, {
+    const appended = await appendMessageIdempotent(tx, {
       id: input.id,
       threadId: input.threadId,
       role: 'user',
       content: input.content,
     });
-    return thread.entityId;
+    // 1a (fix round). Повтор client-id: ответ уже существует → replay без нового цикла.
+    // Ближайшее assistant-сообщение ПОСЛЕ этого user-сообщения (курсор created_at/id,
+    // как пагинация 1a) — в штатном потоке это именно ответ на него (audit/system-строки
+    // между ними отфильтрованы ролью). Не нашлось — первый прогон не дошёл до ответа
+    // (LLM_UNAVAILABLE и т.п.) → легитимный ретрай §7.9, цикл пойдёт как обычно.
+    const existingAnswer = appended.replayed
+      ? await findAnswerAfter(tx, input.threadId, appended.message)
+      : undefined;
+    return { anchorEntityId: thread.entityId, existingAnswer };
   });
+  if (pre.existingAnswer !== undefined) {
+    // БЕЗ вызова провайдера и БЕЗ метеринга: действия прошлого прогона не повторяются
+    return { assistantMessage: pre.existingAnswer, actions: [], pending: [], replayed: true };
+  }
+  const anchorEntityId = pre.anchorEntityId;
 
   // 2. Entitlements-гейт §8 — ДО первого вызова провайдера
   await gateAiEntitlements(db, input.ownerId, resolve, clock);
@@ -256,7 +282,38 @@ export async function sendMessage(
     }),
   );
 
-  return { assistantMessage, actions, pending };
+  return { assistantMessage, actions, pending, replayed: false };
+}
+
+/**
+ * Ближайшее assistant-сообщение треда СТРОГО ПОСЛЕ данного user-сообщения —
+ * существующий ответ для replay ретрая (fix round). Курсор (created_at, id) —
+ * та же пара, что в сортировках 1a; ms-огрубление wire-createdAt безопасно:
+ * фильтр по роли не пускает само user-сообщение, а ответ пишется заведомо позже.
+ */
+async function findAnswerAfter(
+  tx: Tx,
+  threadId: string,
+  userMessage: WireChatMessage,
+): Promise<WireChatMessage | undefined> {
+  const after = new Date(userMessage.createdAt);
+  const rows = await tx
+    .select()
+    .from(chatMessages)
+    .where(
+      and(
+        eq(chatMessages.threadId, threadId),
+        eq(chatMessages.role, 'assistant'),
+        or(
+          gt(chatMessages.createdAt, after),
+          and(eq(chatMessages.createdAt, after), gt(chatMessages.id, userMessage.id)),
+        ),
+      ),
+    )
+    .orderBy(chatMessages.createdAt, chatMessages.id)
+    .limit(1);
+  const row = rows[0];
+  return row === undefined ? undefined : toWireChatMessage(row);
 }
 
 /**

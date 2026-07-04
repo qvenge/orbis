@@ -449,28 +449,95 @@ describe('ai.sendMessage (ж): user_query sum по decimal', () => {
 // Дополнительно: идемпотентный персист, error_card, ownerOnly-гейт
 // ---------------------------------------------------------------------------
 
-describe('ai.sendMessage: идемпотентный персист user-сообщения (путь Task 12 1a)', () => {
-  test('повтор с тем же id не создаёт дубль; содержимое повторного запроса игнорируется', async () => {
+describe('ai.sendMessage: ретрай с тем же client-id (fix round — replay ответа)', () => {
+  test('ответ существует → replay БЕЗ провайдера и метеринга; ни второй сущности, ни второго ответа', async () => {
     const user = freshUserId();
     const threadId = await globalThread(user);
     const msgId = newId();
-    const first = new ScriptedProvider([endTurn('Ответ 1')]);
-    await callerWith(user, first).ai.sendMessage({ id: msgId, threadId, content: 'оригинал' });
-    const second = new ScriptedProvider([endTurn('Ответ 2')]);
+    const first = new ScriptedProvider([
+      toolUse([{ name: 'entity_create', input: { title: 'Ретрай-задача', tags: [] } }], {
+        inputTokens: 100,
+        outputTokens: 20,
+      }),
+      endTurn('Создано', { inputTokens: 200, outputTokens: 30 }),
+    ]);
+    const r1 = await callerWith(user, first).ai.sendMessage({
+      id: msgId,
+      threadId,
+      content: 'оригинал',
+    });
+    expect(r1.replayed).toBe(false);
+
+    // Повтор: пустой скрипт — если бы цикл пошёл, провайдер бы бросил
+    const second = new ScriptedProvider([]);
     const r2 = await callerWith(user, second).ai.sendMessage({
       id: msgId,
       threadId,
       content: 'повтор с другим текстом',
     });
 
-    expect(r2.assistantMessage.content).toBe('Ответ 2');
-    const userMsgs = (await threadMessages(user, threadId)).filter((m) => m.role === 'user');
+    // Replay СУЩЕСТВУЮЩЕГО ответа: тот же assistantMessage, провайдер не тронут
+    expect(r2.replayed).toBe(true);
+    expect(r2.assistantMessage.id).toBe(r1.assistantMessage.id);
+    expect(r2.assistantMessage.content).toBe('Создано');
+    expect(cardsOf(r2.assistantMessage)).toHaveLength(1); // карточки — в metadata ответа
+    expect(r2.actions).toEqual([]); // минимально: UI 1c при replayed рефетчит тред
+    expect(r2.pending).toEqual([]);
+    expect(second.requests).toHaveLength(0);
+
+    // Сущность ОДНА, второго action и второго assistant-сообщения нет
+    const rows = await withIdentity(db, user, (tx) =>
+      tx.select().from(entities).where(eq(entities.title, 'Ретрай-задача')),
+    );
+    expect(rows).toHaveLength(1);
+    const msgs = await threadMessages(user, threadId);
+    expect(msgs.filter((m) => m.role === 'assistant')).toHaveLength(1);
+    const userMsgs = msgs.filter((m) => m.role === 'user');
     expect(userMsgs).toHaveLength(1); // дубля нет
     expect(userMsgs[0]?.content).toBe('оригинал'); // append-only §4.6: правок нет
-    // Окно контекста повторного вызова видит исходное сообщение и первый ответ
-    const w = second.requests[0]?.messages ?? [];
-    expect(w.some((m) => m.role === 'assistant' && m.content === 'Ответ 1')).toBe(true);
-    expect(w.some((m) => m.role === 'user' && m.content === 'оригинал')).toBe(true);
+
+    // Метеринг не вырос: только два шага первого прогона
+    const usage = await usageRows(user);
+    expect(usage[0]).toMatchObject({ inputTokens: 300, outputTokens: 50, requestCount: 2 });
+  });
+
+  test('ответа нет (первый вызов упал LLM_UNAVAILABLE) → легитимный ретрай §7.9: цикл гонится', async () => {
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const msgId = newId();
+    const failing = new ScriptedProvider([]); // первый вызов провайдера бросает
+    const err = await trpcError(
+      callerWith(user, failing).ai.sendMessage({ id: msgId, threadId, content: 'оригинал' }),
+    );
+    expect(err.code).toBe('SERVICE_UNAVAILABLE');
+
+    // Повтор с тем же id: ответа в треде нет → полный цикл (не replay)
+    const retry = new ScriptedProvider([
+      toolUse([{ name: 'entity_create', input: { title: 'Задача после сбоя', tags: [] } }]),
+      endTurn('Готово после ретрая'),
+    ]);
+    const r2 = await callerWith(user, retry).ai.sendMessage({
+      id: msgId,
+      threadId,
+      content: 'оригинал',
+    });
+
+    expect(r2.replayed).toBe(false);
+    expect(r2.assistantMessage.content).toBe('Готово после ретрая');
+    expect(retry.requests).toHaveLength(2);
+    // Окно ретрая кончается user-сообщением, персистированным ПЕРВЫМ вызовом (§7.9)
+    expect(lastOf(retry.requests[0])).toEqual({ role: 'user', content: 'оригинал' });
+
+    // Сущность одна; assistant-сообщение одно; метеринг честный — только успешный прогон
+    const rows = await withIdentity(db, user, (tx) =>
+      tx.select().from(entities).where(eq(entities.title, 'Задача после сбоя')),
+    );
+    expect(rows).toHaveLength(1);
+    const msgs = await threadMessages(user, threadId);
+    expect(msgs.filter((m) => m.role === 'assistant')).toHaveLength(1);
+    expect(msgs.filter((m) => m.role === 'user')).toHaveLength(1);
+    const usage = await usageRows(user);
+    expect(usage[0]?.requestCount).toBe(2);
   });
 });
 

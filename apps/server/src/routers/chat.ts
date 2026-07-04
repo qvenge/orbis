@@ -87,7 +87,8 @@ export const chatRouter = router({
           if (visible.length === 0) {
             throw new ExecError('NOT_FOUND', 'тред не найден', { threadId: input.threadId });
           }
-          return appendMessageIdempotent(tx, { ...input, role: 'user' });
+          // wire-контракт прежний: наружу — сообщение (флаг replayed — для ai.sendMessage)
+          return (await appendMessageIdempotent(tx, { ...input, role: 'user' })).message;
         });
       } catch (e) {
         mapExecError(e);
