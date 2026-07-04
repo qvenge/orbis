@@ -24,8 +24,16 @@ async function verifyViaJwks(token: string): Promise<JWTPayload | null> {
     jwks = createRemoteJWKSet(new URL(url));
     jwksSets.set(url, jwks);
   }
+  // Hardening (Task 14): allowlist асимметричных алгоритмов — HS256 в JWKS-пути
+  // отвергается до резолва ключей (защита от alg-confusion); issuer пинится к
+  // Supabase-проекту, когда SUPABASE_URL задан (чужой iss → null).
+  const issuer = process.env.SUPABASE_URL ? `${process.env.SUPABASE_URL}/auth/v1` : undefined;
   try {
-    const { payload } = await jwtVerify(token, jwks, { audience: AUDIENCE });
+    const { payload } = await jwtVerify(token, jwks, {
+      audience: AUDIENCE,
+      algorithms: ['RS256', 'ES256'],
+      ...(issuer ? { issuer } : {}),
+    });
     return payload;
   } catch {
     return null;

@@ -27,7 +27,7 @@ const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
 function callerFor(user: string) {
-  return createCaller({ actorUserId: user, db });
+  return createCaller({ actorUserId: user, db, clientVersion: null });
 }
 
 /** Счётчики строк владельца через админ-DSN (обходит RLS) — независимая от роутеров сверка. */
@@ -90,8 +90,8 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
     const a = appDb();
     const b = appDb();
     try {
-      const callerA = createCaller({ actorUserId: user, db: a.db });
-      const callerB = createCaller({ actorUserId: user, db: b.db });
+      const callerA = createCaller({ actorUserId: user, db: a.db, clientVersion: null });
+      const callerB = createCaller({ actorUserId: user, db: b.db, clientVersion: null });
       await Promise.all([callerA.user.seedOnboarding(), callerB.user.seedOnboarding()]);
       expect(await counts(user)).toEqual({ entities: 15, settings: 1, threads: 1 });
     } finally {
