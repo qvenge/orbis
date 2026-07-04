@@ -38,4 +38,12 @@ describe('SYSTEM_PROMPT_V1 (§7.1 слой 1)', () => {
     expect(TOOL_RESULT_MARKER).toBe('[tool_result:');
     expect(SYSTEM_PROMPT_V1).toContain(TOOL_RESULT_MARKER);
   });
+
+  test('шпаргалка грамматики §6 — модель видит синтаксис entity_query (fix round)', () => {
+    expect(SYSTEM_PROMPT_V1).toContain('status=!done&!cancelled'); // NOT-синтаксис
+    expect(SYSTEM_PROMPT_V1).toContain('today | overdue | next_7d | after_7d'); // date-токены
+    expect(SYSTEM_PROMPT_V1).toContain('children_of='); // дети сущности
+    expect(SYSTEM_PROMPT_V1).toContain('sortBy='); // сортировка
+    expect(SYSTEM_PROMPT_V1).toContain('status=planned|in_progress'); // OR внутри значения
+  });
 });

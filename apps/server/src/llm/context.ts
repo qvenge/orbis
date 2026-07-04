@@ -49,9 +49,14 @@ export interface BuiltContext {
   messages: LLMMessage[];
 }
 
-/** Обрезка превью: до cap символов, дальше — многоточие. */
+/**
+ * Обрезка превью: до cap символов, дальше — многоточие. Режем по code points,
+ * а не по UTF-16-юнитам (fix round Task 8): String.slice на границе рвал бы
+ * суррогатную пару (emoji и пр.) — в контекст утекал бы одиночный битый юнит.
+ */
 function preview(text: string, cap: number): string {
-  return text.length <= cap ? text : `${text.slice(0, cap)}…`;
+  const points = [...text];
+  return points.length <= cap ? text : `${points.slice(0, cap).join('')}…`;
 }
 
 /**
@@ -200,12 +205,20 @@ async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> 
     .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
     .limit(CONTEXT_HISTORY_LIMIT);
   rows.reverse(); // выборка «последние N» шла с конца — возвращаем хронологию
-  return rows.map((r) => {
+  const msgs = rows.map((r) => {
     if (r.role === 'user' || r.role === 'assistant') {
       return { role: r.role, content: r.content } satisfies LLMMessage;
     }
     return compressSystemRow(r.content, r.metadata as Record<string, unknown>);
   });
+  // Инвариант «messages начинается с user» — требование Anthropic Messages API
+  // (fix round Task 8): граница окна на assistant-сообщении или ведущем сжатом
+  // ai-audit давала бы 400 на КАЖДЫЙ вызов — ни провайдер, ни SDK не санитизируют.
+  // Ведущие assistant отбрасываем; окно может стать короче лимита — приемлемо.
+  // В реальном потоке Task 9 результат пустым не бывает: последним в окне всегда
+  // стоит только что персистированное user-сообщение.
+  const firstUser = msgs.findIndex((m) => m.role === 'user');
+  return firstUser === -1 ? [] : msgs.slice(firstUser);
 }
 
 // ---------------------------------------------------------------------------

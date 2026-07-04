@@ -118,6 +118,16 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
       else expect(def.internalOnly).not.toBe(true);
     }
   });
+
+  test('entity_query: description содержит примеры грамматики §6 (fix round Task 8)', async () => {
+    // Модель не видит спецификацию §6 — без примеров в description холодный резолв
+    // category_ref (инструкция промпта v1) гарантированно бился бы о парсер
+    const def = defOf(await registryFor(userB), 'entity_query');
+    expect(def.description).toContain('aspect=orbis/category, search=Еда');
+    expect(def.description).toContain(
+      'aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20',
+    );
+  });
 });
 
 describe('buildToolRegistry: attach_* из реестра аспектов (§7.6)', () => {

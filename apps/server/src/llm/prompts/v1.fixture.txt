@@ -7,6 +7,12 @@
 - category_ref — только uuid реально существующей категории: найди её через entity_query. Не подставляй выдуманный uuid.
 - НЕ выдумывай id сущностей: любые идентификаторы бери только из результатов тулов.
 
+Шпаргалка грамматики запросов (тулы entity_query и user_query):
+- Фильтры перечисляются через запятую и объединяются по И. Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20».
+- В значении «|» — ИЛИ (status=planned|in_progress), «!v1&!v2» — НЕ эти значения (status=!done&!cancelled); смешивать | и & в одном значении нельзя.
+- Date-токены для любого date-поля: today | overdue | next_7d | after_7d (например, due_date=today|overdue).
+- children_of=<uuid> — дети сущности (по parent-связи); sortBy=<поле>:asc|desc, search=<текст по title+body>, limit=<число>.
+
 Соглашение об именах meta-ключей (PRD §3.9, дословно):
 Правило для AI-инструкций (фиксируется в system prompt и в `ai_instructions` аспектов): **имена ключей в `meta` обязаны совпадать с именами полей аспектов**. AI, извлекая структуру из «потратил 500 на такси» до/помимо аспекта, пишет `meta: {amount: "500.00", direction: "expense"}` — те же имена и типы, что в схеме `orbis/financial`. Это делает ретроактивную миграцию (§3.10) механической операцией, а не угадыванием.
 

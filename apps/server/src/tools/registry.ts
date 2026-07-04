@@ -226,8 +226,11 @@ const threadPostJsonSchema = {
 const CORE_TOOLS: OrbisToolDef[] = [
   {
     name: 'entity_query',
+    // Примеры грамматики в description (fix round Task 8): модель не видит
+    // спецификацию §6 — без образцов синтаксиса холодный резолв category_ref
+    // (инструкция системного промпта v1) гарантированно бился бы о парсер
     description:
-      'Поиск/фильтрация сущностей грамматикой запросов Orbis (§6). Возвращает список сущностей (core-поля + tags + aspects).',
+      'Поиск/фильтрация сущностей грамматикой запросов Orbis (§6). Возвращает список сущностей (core-поля + tags + aspects). Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20».',
     inputJsonSchema: entityQueryJsonSchema,
     kind: 'read',
   },
