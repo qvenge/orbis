@@ -8,7 +8,7 @@ import { entityThreadId, globalThreadId } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
 import { chatThreads, entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
-import { ExecError } from '../executor/errors';
+import { ExecError } from '../errors';
 
 /** Общий примитив: идемпотентная вставка треда с детерминированным id + чтение. */
 async function ensureThread(

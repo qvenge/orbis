@@ -24,6 +24,8 @@ import type { Db } from '../db/client';
 import { entities, relations } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
+// Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
+import { toWireEntity as toWire, toWireRelation } from '../wire';
 import { type AspectRegistry, loadAspectRegistry, validateAspectData } from './aspects-validate';
 import { ExecError } from './errors';
 import {
@@ -60,7 +62,6 @@ import { AuditIdConflictError } from './types';
 
 type EntityRow = typeof entities.$inferSelect;
 type EntityPatch = Partial<typeof entities.$inferInsert>;
-type RelationRow = typeof relations.$inferSelect;
 
 interface ExecCtx {
   tx: Tx;
@@ -410,40 +411,6 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     action,
     card: { tool: p.tool, entity_id: p.entityId, title: p.title },
   });
-}
-
-/**
- * Wire-форма: core-таймстампы наружу — всегда Date.toISOString() (решение 12 плана).
- * БД хранит микросекунды, но драйвер парсит timestamptz в Date (мс), поэтому сравнение
- * expectedUpdatedAt (клиент видел wire-форму) с row.updatedAt.toISOString() симметрично.
- */
-function toWire(row: EntityRow): WireEntity {
-  return {
-    id: row.id,
-    ownerId: row.ownerId,
-    title: row.title,
-    emoji: row.emoji,
-    body: row.body,
-    bodyRefs: row.bodyRefs,
-    tags: row.tags,
-    meta: row.meta as Record<string, unknown>,
-    aspects: row.aspects as Record<string, Record<string, unknown>>,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-    archived: row.archived,
-  };
-}
-
-function toWireRelation(row: RelationRow): WireRelation {
-  return {
-    id: row.id,
-    sourceId: row.sourceId,
-    targetId: row.targetId,
-    relationType: row.relationType,
-    meta: row.meta as Record<string, unknown>,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  };
 }
 
 /**

@@ -4,6 +4,8 @@
 // системное сообщение {type:'undo', undoes} (§7.8) — тоже через appendMessage.
 import { chatMessages } from '../db/schema';
 import type { Tx } from '../db/with-identity';
+// wire.ts импортирует отсюда ТОЛЬКО типы (import type, стирается) — цикла в рантайме нет
+import { toWireChatMessage } from '../wire';
 
 export type ChatRole = 'user' | 'assistant' | 'system';
 
@@ -39,12 +41,5 @@ export async function appendMessage(tx: Tx, msg: AppendMessageInput): Promise<Wi
     .returning();
   const row = rows[0];
   if (!row) throw new Error('appendMessage: INSERT не вернул строку'); // недостижимо
-  return {
-    id: row.id,
-    threadId: row.threadId,
-    role: row.role as ChatRole,
-    content: row.content,
-    metadata: row.metadata as Record<string, unknown>,
-    createdAt: row.createdAt.toISOString(),
-  };
+  return toWireChatMessage(row);
 }
