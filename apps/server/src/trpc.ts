@@ -22,10 +22,22 @@ export type Context = {
 const t = initTRPC.context<Context>().create({
   errorFormatter({ shape, error }) {
     if (shape.data.code !== 'INTERNAL_SERVER_ERROR') return shape;
-    const cause = error.cause as { code?: unknown } | undefined;
-    if (cause && typeof cause === 'object' && typeof cause.code === 'string') return shape;
-    // Сырой Error: оригинал — в серверный лог, клиенту — нейтральный текст без stack
-    console.error('[trpc] внутренняя ошибка:', error.cause ?? error);
+    // Дискриминатор fail-closed (fix round): наш StructuredError — plain object,
+    // НЕ Error. `!(cause instanceof Error)` обязателен: системные ошибки
+    // (ECONNREFUSED/UND_ERR_* из fetch/undici) — это Error со СТРОКОВЫМ code,
+    // и без этой проверки они утекали бы клиенту с сырым message и stack.
+    const cause = error.cause;
+    if (
+      cause &&
+      typeof cause === 'object' &&
+      !(cause instanceof Error) &&
+      typeof (cause as { code?: unknown }).code === 'string'
+    ) {
+      return shape;
+    }
+    // Сырой Error: оригинал — в серверный лог (с path процедуры), клиенту —
+    // нейтральный текст без stack
+    console.error(`[trpc] внутренняя ошибка (path=${shape.data.path ?? '?'}):`, cause ?? error);
     return {
       ...shape,
       message: 'внутренняя ошибка сервера',
@@ -37,9 +49,13 @@ const t = initTRPC.context<Context>().create({
 export const router = t.router;
 export const createCallerFactory = t.createCallerFactory;
 
+// Формат версии N(.N)*: всё прочее (пустая строка, 'v0.1.0', '0.0.x', мусор)
+// эквивалентно отсутствию заголовка — не блокируем (fix round: политика
+// «мусор ≈ отсутствие» держится пред-проверкой, а не NaN-семантикой).
+const VERSION_RE = /^\d+(\.\d+)*$/;
+
 // Покомпонентное semver-сравнение без зависимостей (§9.1): a < b.
-// Нечисловые компоненты дают NaN, любое сравнение с NaN ложно → мусорный
-// заголовок не блокирует запрос (эквивалентен отсутствию заголовка).
+// Вызывается только для строк, прошедших VERSION_RE — компоненты числовые.
 function semverLess(a: string, b: string): boolean {
   const pa = a.split('.');
   const pb = b.split('.');
@@ -54,7 +70,8 @@ function semverLess(a: string, b: string): boolean {
 // §9.1 (Task 14): клиент старше MIN_COMPATIBLE_CLIENT_VERSION получает отказ
 // до любой работы (в т.ч. до auth-проверки); без заголовка — пропускаем.
 const versionGate = t.middleware(({ ctx, next }) => {
-  if (ctx.clientVersion !== null && semverLess(ctx.clientVersion, MIN_COMPATIBLE_CLIENT_VERSION)) {
+  const v = ctx.clientVersion;
+  if (v !== null && VERSION_RE.test(v) && semverLess(v, MIN_COMPATIBLE_CLIENT_VERSION)) {
     throw new TRPCError({
       code: 'PRECONDITION_FAILED',
       message: `клиент устарел: минимальная совместимая версия ${MIN_COMPATIBLE_CLIENT_VERSION}`,

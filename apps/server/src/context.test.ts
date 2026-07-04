@@ -1,8 +1,9 @@
 // Тесты сборки request-контекста (Task 14): Bearer → actorUserId через реальную
 // HS256-верификацию (без моков jose), CLIENT_VERSION_HEADER → clientVersion.
 // Герметичен по образцу auth.test.ts: JWKS-путь выключен, секрет локального стека задан явно.
-import { CLIENT_VERSION_HEADER } from '@orbis/shared';
+
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { CLIENT_VERSION_HEADER } from '@orbis/shared';
 import { SignJWT } from 'jose';
 import { makeCreateContext } from './context';
 import type { Context } from './trpc';
@@ -56,7 +57,9 @@ test('Bearer с валидным токеном → actorUserId = sub; db кла
 test('без Authorization / не-Bearer → actorUserId = null', async () => {
   expect((await createContext(makeReq())).actorUserId).toBeNull();
   expect((await createContext(makeReq({ authorization: 'Basic abc' }))).actorUserId).toBeNull();
-  expect((await createContext(makeReq({ authorization: 'Bearer not-a-jwt' }))).actorUserId).toBeNull();
+  expect(
+    (await createContext(makeReq({ authorization: 'Bearer not-a-jwt' }))).actorUserId,
+  ).toBeNull();
 });
 
 test('заголовок версии клиента пробрасывается; отсутствует → null', async () => {

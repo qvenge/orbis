@@ -1,6 +1,6 @@
+import { expect, test } from 'bun:test';
 import { MIN_COMPATIBLE_CLIENT_VERSION } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
-import { expect, test } from 'bun:test';
 import { appRouter } from './router';
 import type { Context } from './trpc';
 
@@ -50,8 +50,20 @@ test('устаревший клиент получает отказ версии
 });
 
 test('равная/новая версия, отсутствие и мусорный заголовок проходят', async () => {
-  // 'not-a-semver' эквивалентен отсутствию: NaN-компоненты не блокируют запрос
-  for (const v of [MIN_COMPATIBLE_CLIENT_VERSION, '0.1.1', '0.2.0', '1.0.0', null, 'not-a-semver']) {
+  // Не-семver значение (пустое, префикс 'v', нечисловые компоненты, мусор)
+  // эквивалентно отсутствию заголовка: пред-проверка формата не блокирует запрос
+  const passing = [
+    MIN_COMPATIBLE_CLIENT_VERSION,
+    '0.1.1',
+    '0.2.0',
+    '1.0.0',
+    null,
+    '',
+    'v0.1.0',
+    '0.0.x',
+    'not-a-semver',
+  ];
+  for (const v of passing) {
     const caller = appRouter.createCaller({ ...ctx, clientVersion: v });
     expect(await caller.ping()).toEqual({ ok: true });
   }
