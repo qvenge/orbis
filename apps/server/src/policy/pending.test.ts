@@ -5,7 +5,7 @@
 // без обращения к LLM; идемпотентность approve — по PK детерминированного
 // audit-сообщения (batch-механика §7.8, batch_id = pendingId).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { batchAuditMessageId, globalThreadId, newId } from '@orbis/shared';
+import { batchAuditMessageId, globalThreadId, newId, rejectMessageId } from '@orbis/shared';
 import { eq, inArray } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { ensureEntityThread } from '../chat/threads';
@@ -326,6 +326,46 @@ describe('approvePending: исполнение сохранённого payload 
   });
 });
 
+describe('сериализация approve ∥ reject (fix round: write-skew закрыт advisory-lock’ом)', () => {
+  test('гонка approve ∥ reject на свежих pending: ровно один выигрывает, никогда оба ok', async () => {
+    // До фикса (проба ревьюера): оба tx проходили свои проверки до чужого коммита →
+    // сущность заархивирована И «отклонение принято» одновременно (write-skew между
+    // tx проверок approve и tx reject'а; окно длиной в конвейер executor'а).
+    // После фикса оба пути сериализованы pg_advisory_xact_lock(hashtextextended(pendingId)):
+    // reject берёт замок первым statement'ом своего tx; approve — первым statement'ом
+    // audit-tx executor'а (beforeStages) с перепроверкой «не отклонён» под замком.
+    const iterations = 25;
+    let bothOk = 0;
+    for (let i = 0; i < iterations; i++) {
+      const { target, pendingId } = await pendingArchive(undefined);
+      const [a, r] = await Promise.all([
+        approvePending(db, { ownerId: userA, pendingId, clock }),
+        rejectPending(db, { ownerId: userA, pendingId }),
+      ]);
+      if (a.ok && r.ok) {
+        bothOk++; // несогласованный исход — считаем все итерации, отчёт в assert ниже
+        continue;
+      }
+      const archived = await archivedOf(userA, target.id);
+      if (a.ok) {
+        // выиграл approve: эффект есть, reject честно отказал «уже исполнено»
+        expect(archived).toBe(true);
+        if (!r.ok) {
+          expect(r.error.code).toBe('VALIDATION');
+          expect(r.error.message).toContain('исполнено');
+        }
+      } else {
+        // выиграл reject: эффекта нет, approve честно отказал «отклонено»
+        expect(r.ok).toBe(true);
+        expect(archived).toBe(false);
+        expect(a.error.code).toBe('VALIDATION');
+        expect(a.error.message).toContain('отклонено');
+      }
+    }
+    expect(bothOk).toBe(0); // write-skew: ни одной итерации с двумя ok
+  });
+});
+
 describe('rejectPending: отклонение карточки-запроса', () => {
   test('reject пишет системное сообщение {type: confirmation_rejected, rejects}; повторный reject идемпотентен', async () => {
     const host = await seedEntity(userA, { title: 'Хост reject', tags: [] });
@@ -339,6 +379,7 @@ describe('rejectPending: отклонение карточки-запроса', 
     const msgs = await messagesIn(userA, threadId);
     expect(msgs.length).toBe(2); // карточка-запрос + reject-сообщение
     const reject = msgs[1];
+    expect(reject?.id).toBe(rejectMessageId(userA, pendingId)); // детерминированный PK (fix round)
     expect(reject?.role).toBe('system');
     expect(reject?.metadata).toEqual({ type: 'confirmation_rejected', rejects: pendingId });
     expect(await archivedOf(userA, target.id)).toBe(false);

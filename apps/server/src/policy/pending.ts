@@ -24,10 +24,10 @@
 // генерирует сервер (uuidv7), коллизия с клиентским batch_id невероятна. Повторный
 // approve: findByAuditId → replay сохранённого результата; гонка одинаковых approve →
 // AuditIdConflictError → тот же replay (§7.8).
-import { batchAuditMessageId, batchExecuteInput, newId } from '@orbis/shared';
+import { batchAuditMessageId, batchExecuteInput, newId, rejectMessageId } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { appendMessage } from '../chat/messages';
+import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { chatMessages } from '../db/schema';
@@ -175,6 +175,20 @@ async function isRejected(tx: Tx, pendingId: string): Promise<boolean> {
   return rows.length > 0;
 }
 
+/**
+ * Сериализация approve/reject одного pendingId (fix round Task 6): advisory-lock
+ * уровня транзакции — умирает на commit/rollback. Берётся ПЕРВЫМ statement'ом
+ * tx reject'а и audit-tx approve (executor beforeStages): без него approve
+ * (проверки в одном tx, исполнение в другом) и reject образуют write-skew —
+ * оба проходят свои проверки до чужого коммита, и владелец получает «исполнено»
+ * И «отклонено» одновременно. Ключ — hashtextextended(pendingId): pendingId
+ * глобально уникален (uuidv7), межвладельческие коллизии хэша безвредны
+ * (кратковременная лишняя сериализация, не ошибка).
+ */
+async function acquirePendingLock(tx: Tx, pendingId: string): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${pendingId}, 0))`);
+}
+
 /** Операции ExecuteRequest из сохранённого payload (batch — собственная структура). */
 function toOperations(pending: PendingRecord): Array<{ tool: string; input: unknown }> {
   if (pending.tool === 'batch_execute') {
@@ -202,9 +216,13 @@ function toOperations(pending: PendingRecord): Array<{ tool: string; input: unkn
  * состояния» §7.10 — изменившееся/удалённое состояние даёт структурную ошибку
  * (NOT_FOUND/STALE_VERSION/INVARIANT/...), не тихий провал, и ничего не пишет.
  *
- * Известная MVP-гонка: reject, закоммиченный между проверкой (2) и коммитом
- * исполнения, не остановит approve — окно узкое, оба действия доступны только
- * владельцу (ownerOnly); симметрично для reject (см. rejectPending).
+ * Сериализация против reject (fix round): проверка (2) в отдельном tx — лишь
+ * fast-path; авторитетная перепроверка «не отклонён» выполняется ПОД advisory-lock'ом
+ * по pendingId ПЕРВЫМ statement'ом audit-tx executor'а (beforeStages) — В ТОМ ЖЕ tx,
+ * где пишется audit-сообщение. Конкурентный reject держит тот же замок: он либо
+ * закоммитился ДО захвата (перепроверка увидит reject-сообщение свежим snapshot'ом
+ * READ COMMITTED → «отклонено», ни одной записи), либо ждёт наш commit и увидит
+ * audit-сообщение → «уже исполнено». Write-skew исключён; закреплено гонным тестом.
  */
 export async function approvePending(
   db: Db,
@@ -241,7 +259,21 @@ export async function approvePending(
         batchId: args.pendingId,
         clock: args.clock,
       },
-      { sink },
+      {
+        sink,
+        // Первый statement audit-tx (до replay-проверки и стадий 1–7): замок +
+        // авторитетная перепроверка «не отклонён» — см. док approvePending
+        beforeStages: async (tx) => {
+          await acquirePendingLock(tx, args.pendingId);
+          if (await isRejected(tx, args.pendingId)) {
+            throw new ExecError(
+              'VALIDATION',
+              `подтверждение ${args.pendingId} отклонено — исполнение невозможно (§7.10)`,
+              { pendingId: args.pendingId },
+            );
+          }
+        },
+      },
     );
   } catch (e) {
     if (e instanceof ExecError) {
@@ -257,11 +289,17 @@ export type RejectPendingResult =
 
 /**
  * Отклонение §7.10: журнал append-only (§4.6) — карточка-запрос не правится, в её
- * тред пишется НОВОЕ системное сообщение {type:'confirmation_rejected', rejects}.
- * Уже исполненный pending отклонить нельзя (audit-сообщение по детерминированному
- * PK уже существует) → VALIDATION; повторный reject идемпотентен — второго сообщения
- * не пишет (проверка-затем-вставка: гонка двух reject может дать два одинаковых
- * сообщения — семантически безвредно, оба несут один rejects).
+ * тред пишется НОВОЕ системное сообщение {type:'confirmation_rejected', rejects}
+ * с детерминированным PK rejectMessageId(owner, pendingId) — идемпотентность reject
+ * по PK, как у audit-сообщений (§7.8). Уже исполненный pending отклонить нельзя
+ * (audit-сообщение по детерминированному PK уже существует) → VALIDATION.
+ *
+ * Сериализация против approve (fix round): advisory-lock по pendingId ПЕРВЫМ
+ * statement'ом tx — конкурентный approve держит тот же замок в audit-tx; проверка
+ * «уже исполнено» идёт строго после захвата, поэтому видит его закоммиченный audit
+ * (или сама коммитится первой, и approve увидит reject). Повторный reject
+ * идемпотентен: проверка isRejected под замком + ON CONFLICT DO NOTHING по
+ * детерминированному PK (двойная страховка — второго сообщения не бывает).
  */
 export async function rejectPending(
   db: Db,
@@ -269,6 +307,7 @@ export async function rejectPending(
 ): Promise<RejectPendingResult> {
   try {
     return await withIdentity(db, args.ownerId, async (tx) => {
+      await acquirePendingLock(tx, args.pendingId); // первым statement'ом — см. док выше
       const msg = await findPendingMessage(tx, args.pendingId);
       if (!msg) {
         throw new ExecError('NOT_FOUND', `pending-подтверждение ${args.pendingId} не найдено`, {
@@ -290,8 +329,8 @@ export async function rejectPending(
       if (await isRejected(tx, args.pendingId)) {
         return { ok: true as const, pendingId: args.pendingId, alreadyRejected: true };
       }
-      await appendMessage(tx, {
-        id: newId(),
+      await appendMessageIdempotent(tx, {
+        id: rejectMessageId(args.ownerId, args.pendingId),
         threadId: msg.threadId,
         role: 'system',
         content: 'Подтверждение отклонено',

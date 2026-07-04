@@ -6,6 +6,7 @@ import {
   newId,
   ORBIS_NAMESPACE,
   recurringInstanceId,
+  rejectMessageId,
 } from './ids';
 
 describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () => {
@@ -26,6 +27,12 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
     expect(entityThreadId(owner, entity)).toBe(entityThreadId(owner, entity));
     expect(globalThreadId(owner)).not.toBe(entityThreadId(owner, entity));
     expect(batchAuditMessageId(owner, entity)).not.toBe(entityThreadId(owner, entity));
+  });
+  test('rejectMessageId (§7.10) детерминирован, lowercase-нормализован и не пересекается с batch-audit', () => {
+    const owner = '00000000-0000-4000-8000-00000000000a';
+    const pending = '00000000-0000-7000-8000-0000000000b2';
+    expect(rejectMessageId(owner, pending)).toBe(rejectMessageId(owner.toUpperCase(), pending));
+    expect(rejectMessageId(owner, pending)).not.toBe(batchAuditMessageId(owner, pending));
   });
   test('newId — валидный UUIDv7, монотонный по времени в префиксе', () => {
     const a = newId();

@@ -24,6 +24,11 @@ export function batchAuditMessageId(ownerId: string, batchId: string): string {
   return uuidv5(`batch:${ownerId.toLowerCase()}:${batchId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
+/** PK reject-сообщения pending-подтверждения (§7.10): идемпотентность reject по PK. */
+export function rejectMessageId(ownerId: string, pendingId: string): string {
+  return uuidv5(`reject:${ownerId.toLowerCase()}:${pendingId.toLowerCase()}`, ORBIS_NAMESPACE);
+}
+
 export function recurringInstanceId(templateId: string, dateISO: string): string {
   return uuidv5(`${templateId.toLowerCase()}:${dateISO}`, ORBIS_NAMESPACE);
 }
