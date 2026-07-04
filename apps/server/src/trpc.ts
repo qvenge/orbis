@@ -109,10 +109,17 @@ export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
   return next({ ctx: { actorUserId: ctx.actorUserId } });
 });
 
-// §9.3 (Task 3): PAT-агент проходит protectedProcedure (identity есть identity),
-// но операции владельца аккаунта — экспорт, настройки, онбординг-сид, approve/reject
-// pending-подтверждений (§7.10, Task 6) — только под actorKind 'owner'. Read-пути
-// (getSettings, entity.*, chat.*) агенту остаются открыты.
+// §9.3 (Task 3, ужесточено Task 10b): ownerOnly гейтит ЛЮБУЮ мутацию состояния через
+// tRPC — создание/правку сущностей, связи, запись тредов/сообщений чата, Undo, а также
+// управление аккаунтом (экспорт, настройки, онбординг-сид, approve/reject §7.10).
+// Мутационная поверхность tRPC — поверхность ВЛАДЕЛЬЦА (веб-UI); единственный путь
+// мутаций PAT-агента — /mcp → dispatchTool → политика подтверждений §7.10 → executor.
+// Без этого гейта агент мутировал граф напрямую через tRPC в обход подтверждений,
+// и журнал писал ложную атрибуцию owner/ui — проверено вживую до фикса. Read-пути
+// (getSettings, entity.get/query/count, relation.listFor, chat.listMessages) остаются
+// на protectedProcedure: агент читает легитимно, RLS скоупит владельцем. Прежний
+// комментарий здесь перечислял лишь «операции владельца аккаунта» и тем ложно
+// подразумевал, что политику §7.10 агент другим транспортом не обойдёт.
 export const ownerOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.actorKind !== 'owner') {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'операция доступна только владельцу' });

@@ -12,9 +12,32 @@ import type { Context } from 'hono';
 import { PAT_PREFIX, verifyPat } from '../pat';
 import { type McpDeps, makeMcpServer } from './server';
 
+/**
+ * Лимит тела /mcp (Task 10b): 1 МБ — JSON-RPC вызова тула на порядки меньше.
+ * Экспортируется для теста (mcp.test.ts).
+ */
+export const MCP_MAX_BODY_BYTES = 1_000_000;
+
 /** Hono-хендлер /mcp; deps (db, резолвер §8) замыкаются фабрикой — инъекция в тестах. */
 export function makeMcpHandler(deps: McpDeps) {
   return async (c: Context): Promise<Response> => {
+    // Метод-гейт ДО PAT-проверки (Task 10b): в stateless polling-дизайне (§9.3 — без
+    // SSE-стрима и сессий) осмыслен только POST; GET с валидным PAT открывал бы
+    // мёртвый SSE-стрим до idle-timeout. Эндпоинт смонтирован app.all (index.ts),
+    // поэтому не-POST доходит сюда.
+    if (c.req.method !== 'POST') {
+      return c.json(
+        {
+          error: {
+            code: 'METHOD_NOT_ALLOWED',
+            message: '/mcp принимает только POST (stateless polling, §9.3)',
+          },
+        },
+        405,
+        { Allow: 'POST' },
+      );
+    }
+
     // PAT-auth ДО ЛЮБОЙ MCP-логики (§9.3, fail-closed): /mcp — эндпоинт ТОЛЬКО для
     // внешних агентов с PAT. Bearer без префикса orbis_pat_ — в том числе валидный
     // Supabase JWT — здесь не аутентифицирует (401): владельческие поверхности ходят
@@ -32,6 +55,24 @@ export function makeMcpHandler(deps: McpDeps) {
         },
         401,
         { 'WWW-Authenticate': 'Bearer' },
+      );
+    }
+
+    // Size-гейт (Task 10b): неограниченное JSON-RPC-тело от недоверенного внешнего
+    // агента отсекается по content-length ДО создания Server/transport (и до
+    // JSON-парсинга). Остаточный риск: тела, присланные chunked без content-length,
+    // здесь не ограничены — системный лимит (реверс-прокси / Hono body-limit
+    // middleware) на деплое (Слайс 1c) закрывает это платформенно и для tRPC.
+    const contentLength = c.req.header('content-length');
+    if (contentLength !== undefined && Number(contentLength) > MCP_MAX_BODY_BYTES) {
+      return c.json(
+        {
+          error: {
+            code: 'PAYLOAD_TOO_LARGE',
+            message: `тело запроса превышает лимит ${MCP_MAX_BODY_BYTES} байт`,
+          },
+        },
+        413,
       );
     }
 

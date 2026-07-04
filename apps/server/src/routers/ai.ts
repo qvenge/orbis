@@ -14,7 +14,7 @@ import { ExecError, execErrorToTRPC } from '../errors';
 import type { ExecuteOk } from '../executor/types';
 import { undoAction, undoLast } from '../executor/undo';
 import { approvePending, rejectPending } from '../policy/pending';
-import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
+import { ownerOnlyProcedure, router } from '../trpc';
 
 const pendingIdInput = z.object({ pendingId: z.string().uuid() }).strict();
 
@@ -48,7 +48,7 @@ export const aiRouter = router({
     }),
 
   /** Отмена конкретного действия по id из журнала (§7.8). */
-  undo: protectedProcedure
+  undo: ownerOnlyProcedure
     .input(z.object({ actionId: z.string().uuid() }).strict())
     .mutation(async ({ ctx, input }): Promise<ExecuteOk> => {
       const r = await undoAction(ctx.db, {
@@ -60,7 +60,7 @@ export const aiRouter = router({
     }),
 
   /** «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. */
-  undoLast: protectedProcedure.mutation(async ({ ctx }): Promise<ExecuteOk> => {
+  undoLast: ownerOnlyProcedure.mutation(async ({ ctx }): Promise<ExecuteOk> => {
     const r = await undoLast(ctx.db, { actorUserId: ctx.actorUserId });
     if (!r.ok) throw execErrorToTRPC(r.error);
     return r;

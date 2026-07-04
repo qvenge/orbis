@@ -18,7 +18,7 @@ import {
   QueryCompileError,
 } from '../query/compile';
 import { queryContext } from '../query/context';
-import { protectedProcedure, router } from '../trpc';
+import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireEntityFromSql } from '../wire';
 
 // Боевой синк — один инстанс на модуль: makeChatJournalSink состояния не хранит,
@@ -62,7 +62,7 @@ const querySignature = z
 export const entityRouter = router({
   // Источник клиентского create ограничен fast_path/quick_capture (§7.5, 02 §5);
   // 'chat'/'mcp'/'system' недостижимы через этот роутер по построению.
-  create: protectedProcedure
+  create: ownerOnlyProcedure
     .input(z.object({ input: entityCreateInput, source: z.enum(['fast_path', 'quick_capture']) }))
     .mutation(async ({ ctx, input }): Promise<WireEntity> => {
       const r = await execute(
@@ -79,7 +79,7 @@ export const entityRouter = router({
       return r.results[0] as WireEntity;
     }),
 
-  update: protectedProcedure
+  update: ownerOnlyProcedure
     .input(entityUpdateInput)
     .mutation(async ({ ctx, input }): Promise<WireEntity> => {
       const r = await execute(

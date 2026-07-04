@@ -10,14 +10,14 @@ import { execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { WireRelation } from '../executor/types';
-import { protectedProcedure, router } from '../trpc';
+import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireRelation } from '../wire';
 
 // Боевой синк — один инстанс на модуль (без состояния, пишет тем же tx, §7.8)
 const sink = makeChatJournalSink();
 
 export const relationRouter = router({
-  create: protectedProcedure
+  create: ownerOnlyProcedure
     .input(relationCreateInput)
     .mutation(async ({ ctx, input }): Promise<WireRelation> => {
       const r = await execute(
@@ -34,7 +34,7 @@ export const relationRouter = router({
       return r.results[0] as WireRelation;
     }),
 
-  delete: protectedProcedure.input(relationDeleteInput).mutation(async ({ ctx, input }) => {
+  delete: ownerOnlyProcedure.input(relationDeleteInput).mutation(async ({ ctx, input }) => {
     const r = await execute(
       ctx.db,
       {

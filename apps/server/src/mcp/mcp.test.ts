@@ -19,7 +19,7 @@ import type { ActionRecord, WireEntity } from '../executor/types';
 import { appRouter } from '../router';
 import { buildToolRegistry } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
-import { makeMcpHandler } from './transport';
+import { MCP_MAX_BODY_BYTES, makeMcpHandler } from './transport';
 
 requireEnv();
 
@@ -178,6 +178,39 @@ describe('/mcp: PAT-аутентификация ДО MCP-логики (§9.3)',
     await expect(connectAgent(mainUrl(), `orbis_pat_${'ee'.repeat(32)}`)).rejects.toThrow(
       /UNAUTHORIZED/,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Харднинг транспорта (Task 10b): 405 на не-POST, 413 на большое тело
+// ---------------------------------------------------------------------------
+
+describe('/mcp: харднинг транспорта (405/413, Task 10b)', () => {
+  test('GET даже с валидным PAT → 405, Allow: POST (stateless polling §9.3, без SSE)', async () => {
+    const res = await fetch(mainUrl(), {
+      method: 'GET',
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.status).toBe(405);
+    expect(res.headers.get('allow')).toContain('POST');
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('METHOD_NOT_ALLOWED');
+  });
+
+  test('POST с телом > MCP_MAX_BODY_BYTES → 413 до транспорта', async () => {
+    // Size-гейт стоит до JSON-парсинга — телу не обязательно быть валидным JSON
+    const res = await fetch(mainUrl(), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body: 'x'.repeat(MCP_MAX_BODY_BYTES + 1),
+    });
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('PAYLOAD_TOO_LARGE');
   });
 });
 

@@ -8,7 +8,7 @@ import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { chatMessages, chatThreads } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, execErrorToTRPC } from '../errors';
-import { protectedProcedure, router } from '../trpc';
+import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireChatMessage } from '../wire';
 
 /** ExecError доменных примитивов (NOT_FOUND треда/сущности) → TRPCError; прочее — наружу. */
@@ -19,7 +19,7 @@ function mapExecError(e: unknown): never {
 
 export const chatRouter = router({
   // Без entityId — глобальный тред владельца; ensure идемпотентен (§4.5)
-  ensureThread: protectedProcedure
+  ensureThread: ownerOnlyProcedure
     .input(z.object({ entityId: z.string().uuid().optional() }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -65,7 +65,7 @@ export const chatRouter = router({
   // id — client-generated UUIDv7 (§2.1); role всегда 'user' — assistant/system пишет
   // только сервер (audit §7.8, ответы 1b). Повтор с тем же id — идемпотентный replay
   // (штатный ретрай отправки, зеркально §5.3); чужой id → CONFLICT (fix round Task 12)
-  appendUserMessage: protectedProcedure
+  appendUserMessage: ownerOnlyProcedure
     .input(
       z
         .object({

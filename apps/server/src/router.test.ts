@@ -72,6 +72,44 @@ test('ownerOnly под агентом: seedOnboarding/updateSettings/exportData 
   }
 });
 
+// §9.3 (Task 10b): мутационная поверхность tRPC — поверхность владельца; единственный
+// путь мутаций PAT-агента — /mcp → dispatchTool → политика §7.10. Входы структурно
+// валидны (uuid и т.п.), чтобы zod-парсинг не подменил FORBIDDEN на BAD_REQUEST;
+// db-стуб null доказывает, что гейт срабатывает ДО обращения к БД (пропусти он агента —
+// упало бы не-FORBIDDEN ошибкой БД).
+test('мутации графа/журнала под агентом: entity/relation/chat/undo → FORBIDDEN до БД', async () => {
+  const caller = appRouter.createCaller(agentCtx);
+  const uuid = crypto.randomUUID();
+  const calls: Array<() => Promise<unknown>> = [
+    () => caller.entity.create({ input: { title: 'x', tags: [] }, source: 'quick_capture' }),
+    () => caller.entity.update({ id: uuid, title: 'x' }),
+    () =>
+      caller.relation.create({
+        source_id: uuid,
+        target_id: crypto.randomUUID(),
+        relation_type: 'related_to',
+      }),
+    () =>
+      caller.relation.delete({
+        source_id: uuid,
+        target_id: crypto.randomUUID(),
+        relation_type: 'related_to',
+      }),
+    () => caller.chat.ensureThread({}),
+    () => caller.chat.appendUserMessage({ id: crypto.randomUUID(), threadId: uuid, content: 'x' }),
+    () => caller.ai.undo({ actionId: uuid }),
+    () => caller.ai.undoLast(),
+  ];
+  for (const call of calls) {
+    const err = await call().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(TRPCError);
+    expect((err as TRPCError).code).toBe('FORBIDDEN');
+  }
+});
+
 test('агент проходит protectedProcedure (whoami) без заголовка версии', async () => {
   // Identity есть identity: PAT-агент аутентифицирован, version-гейт без заголовка молчит
   const caller = appRouter.createCaller(agentCtx);
