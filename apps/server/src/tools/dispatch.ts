@@ -1,13 +1,15 @@
 // apps/server/src/tools/dispatch.ts
 // Диспатч тулов LLM/MCP (§9.2) поверх executor'а — контракт для Task 9 (ai.sendMessage)
-// и Task 10 (MCP-адаптер). Семантика: (1) резолв тула по реестру (неизвестный →
-// error/VALIDATION); (2) чтения — без политики, под withIdentity; (3) мутации — через
-// execute с боевым JournalSink (audit в ctx.threadId, без него — в глобальный тред);
-// (4) thread_post — отдельная ветка мимо executor (см. runThreadPost).
-//
-// ВАЖНО (фазировка): уровни политики §7.10 подключает следующая задача (Task 5,
-// classifyToolCall) — точка врезки одна, runMutation; до неё все мутации исполняются
-// немедленно (уровень execute), pending/forbidden-ветвление появится там же.
+// и Task 10 (MCP-адаптер). Семантика: (1) резолв тула по реестру (неизвестный —
+// ряд «!known → forbidden» политики §7.10, error/FORBIDDEN_LEVEL); (2) чтения — под
+// withIdentity, без ветвлений политики (ряд «read → execute»); (3) мутации — уровень
+// назначает classifyToolCall (policy/confirmation) ДО execute: forbidden →
+// FORBIDDEN_LEVEL, explicit-confirmation → ВРЕМЕННО VALIDATION с details.wouldBe
+// (pending-механизм подключает Task 6 — см. levelGate), preview → исполнение +
+// confirmation_card mode='preview', execute — немедленно; исполнение — через execute
+// с боевым JournalSink (audit в ctx.threadId, без него — в глобальный тред);
+// (4) thread_post — отдельная ветка мимо executor (см. runThreadPost), но тоже
+// через классификатор §7.10.
 import {
   type BatchExecuteInput,
   batchExecuteInput,
@@ -26,7 +28,13 @@ import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import type { ActorKind, WireEntity } from '../executor/types';
+import type { ActorKind, JournalSink, JournalWrite, WireEntity } from '../executor/types';
+import {
+  type ConfirmationLevel,
+  classifyToolCall,
+  entityUpdatePreviewDiff,
+  factsFromToolCall,
+} from '../policy/confirmation';
 import {
   type CompileContext,
   compileCount,
@@ -99,11 +107,41 @@ export async function dispatchTool(
       };
     });
     if (pre.kind === 'unknown') {
-      return errorResult('VALIDATION', `неизвестный тул «${name}»`, { tool: name });
+      // §7.10, ряд «!known → forbidden» (fail-closed): незнакомый вызов не исполняется,
+      // и переформулировкой имени запрет не обходится. Уровень честно берём у
+      // классификатора — правило живёт в одном месте, dispatch лишь мапит его в код
+      // ошибки. kind без реестра неопределим — консервативно 'mutate'; на исход не
+      // влияет: ряд «!known» — первый в таблице.
+      const level = classifyToolCall({
+        tool: name,
+        kind: 'mutate',
+        known: false,
+        actorKind: ctx.actorKind,
+        explicitCommand: ctx.explicitCommand,
+        archives: false,
+        isBatch: false,
+      });
+      const gated = levelGate(level, name, `неизвестный тул «${name}» — вызов запрещён (§7.10)`);
+      if (gated !== null) return gated;
+      // недостижимо: ряд «!known» всегда даёт forbidden
+      throw new Error(`classifyToolCall: неожиданный уровень «${level}» для неизвестного тула`);
     }
     if (pre.kind === 'done') return pre.out;
     // await обязателен: return без await вывел бы reject за пределы try/catch ниже
-    if (pre.def.name === 'thread_post') return await runThreadPost(ctx, input);
+    if (pre.def.name === 'thread_post') {
+      // §7.10 распространяется и на thread_post (kind='mutate' в реестре — ради
+      // политики): по MVP-таблице одиночная не-архивирующая мутация → execute, но
+      // уровень спрашиваем у классификатора — правило в одном месте. preview для
+      // thread_post таблицей недостижим (не batch) — карточки предпросмотра нет.
+      const level = classifyToolCall({
+        ...factsFromToolCall(pre.def, input),
+        actorKind: ctx.actorKind,
+        explicitCommand: ctx.explicitCommand,
+      });
+      const gated = levelGate(level, pre.def.name);
+      if (gated !== null) return gated;
+      return await runThreadPost(ctx, input);
+    }
     return await runMutation(ctx, pre.def, input, pre.keyFieldsByAspect, pre.execToolByName);
   } catch (e) {
     // Доменные отказы (NOT_FOUND, VALIDATION, ...) — структурированный error-результат;
@@ -130,8 +168,68 @@ function errorResult(code: string, message: string, details?: unknown): ToolDisp
   return { status: 'error', error: { code, message, details } };
 }
 
+/**
+ * §7.10: маппинг уровня в ранний отказ; null — уровень исполняемый (execute/preview),
+ * вызов идёт дальше. forbidden → FORBIDDEN_LEVEL (403 маппингом errors.ts).
+ * ФАЗИРОВКА: explicit-confirmation в 1b — ВРЕМЕННО структурная ошибка с details.wouldBe;
+ * pending-механизм (сохранённый payload + карточка-запрос + approve с ревалидацией)
+ * подключает Task 6, заменяя эту ветку на status 'pending_confirmation'. Это явная
+ * схема двух шагов, не забытый хвост — тесты фиксируют временное поведение.
+ */
+function levelGate(
+  level: ConfirmationLevel,
+  tool: string,
+  forbiddenMessage?: string,
+): ToolDispatchResult | null {
+  if (level === 'forbidden') {
+    return errorResult(
+      'FORBIDDEN_LEVEL',
+      forbiddenMessage ?? `вызов тула «${tool}» запрещён политикой подтверждений (§7.10)`,
+      { tool },
+    );
+  }
+  if (level === 'explicit-confirmation') {
+    return errorResult(
+      'VALIDATION',
+      `«${tool}» требует подтверждения — механизм появится следующей задачей`,
+      { tool, wouldBe: 'explicit-confirmation' },
+    );
+  }
+  return null;
+}
+
+/**
+ * Обёртка боевого синка для уровня preview (§7.10): перехватывает JournalWrite —
+ * diff карточки строится из action.inverse (§7.8) — делегируя запись боевому синку
+ * тем же tx. Push после успешной записи: конфликт/откат не оставляет фантомного entry.
+ */
+function captureSink(inner: JournalSink): { sink: JournalSink; entries: JournalWrite[] } {
+  const entries: JournalWrite[] = [];
+  return {
+    entries,
+    sink: {
+      async write(tx, entry) {
+        await inner.write(tx, entry);
+        entries.push(entry);
+      },
+      findByAuditId: (tx, id) => inner.findByAuditId(tx, id),
+    },
+  };
+}
+
+/** Русский плюрал для summary batch-preview: 1 операция, 2 операции, 5 операций. */
+function operationsNoun(n: number): string {
+  const mod100 = n % 100;
+  if (mod100 >= 11 && mod100 <= 14) return 'операций';
+  const mod10 = n % 10;
+  if (mod10 === 1) return 'операция';
+  if (mod10 >= 2 && mod10 <= 4) return 'операции';
+  return 'операций';
+}
+
 // ---------------------------------------------------------------------------
-// Чтения: entity_query / entity_get / user_query — без политики §7.10, под RLS
+// Чтения: entity_query / entity_get / user_query — под RLS; ветвлений политики нет:
+// ряд «read → execute» таблицы §7.10 (закреплён юнит-тестом классификатора)
 // ---------------------------------------------------------------------------
 
 async function runRead(
@@ -234,16 +332,31 @@ async function runMutation(
   keyFieldsMap: Map<string, string[]>,
   execToolByName: Map<string, string>,
 ): Promise<ToolDispatchResult> {
-  // Точка врезки политики §7.10: уровни подтверждения подключает следующая задача
-  // (Task 5, classifyToolCall врезается ровно здесь — между резолвом тула и execute);
-  // до неё все мутации исполняются немедленно (уровень execute).
-  //
   // Имя тула для executor'а: у attach_* он ждёт форму attach_<aspect_id с заменой
   // только «/»> — восстанавливаем из aspectId (см. OrbisToolDef.aspectId).
-  // Вложенные операции batch приходят тоже в реестровых именах — транслируются
-  // тем же маппингом ДО execute (fix round; неизвестное имя → VALIDATION с индексом).
+  // Трансляция batch-envelope (вложенные операции тоже в реестровых именах, fix round
+  // Task 4) — ДО классификации: §7.10 назначает уровень структурно валидному вызову,
+  // поэтому невалидный envelope и неизвестные имена операций падают VALIDATION здесь,
+  // не маскируясь уровнем политики.
   const tool = execToolName(def);
-  const payload = def.name === 'batch_execute' ? translateBatchInput(input, execToolByName) : input;
+  const batchPayload =
+    def.name === 'batch_execute' ? translateBatchInput(input, execToolByName) : undefined;
+  const payload = batchPayload ?? input;
+
+  // §7.10: уровень определяет политика по типизированным фактам вызова, не модель;
+  // forbidden и explicit-confirmation разворачиваются ДО execute — в БД и журнал (§7.8)
+  // ничего не попадает
+  const level = classifyToolCall({
+    ...factsFromToolCall(def, payload),
+    actorKind: ctx.actorKind,
+    explicitCommand: ctx.explicitCommand,
+  });
+  const gated = levelGate(level, def.name);
+  if (gated !== null) return gated;
+
+  // execute | preview — действие исполняется (§7.10: предпросмотр информационный, не
+  // блокирующий); для preview перехватываем JournalWrite — diff строится из inverse (§7.8)
+  const capture = level === 'preview' ? captureSink(sink) : undefined;
   const r = await execute(
     ctx.db,
     {
@@ -254,16 +367,50 @@ async function runMutation(
       operations: [{ tool, input: payload }],
       clock: ctx.clock,
     },
-    { sink },
+    { sink: capture?.sink ?? sink },
   );
   if (!r.ok) return { status: 'error', error: r.error };
 
-  // batch: результат — массив по операциям; карточки batch (preview §7.10) — Task 5
-  if (def.name === 'batch_execute') return { status: 'ok', result: r.results };
+  // batch: результат — массив по операциям; на уровне preview — confirmation_card с
+  // кратким summary «N операций» (пополевого diff у группы нет — масштаб задаёт размер)
+  if (batchPayload !== undefined) {
+    if (level === 'preview') {
+      const n = batchPayload.operations.length;
+      return {
+        status: 'ok',
+        result: r.results,
+        card: { kind: 'confirmation_card', mode: 'preview', summary: `${n} ${operationsNoun(n)}` },
+      };
+    }
+    return { status: 'ok', result: r.results };
+  }
 
   const result = r.results[0];
+  if (level === 'preview') {
+    // Одиночный preview: MVP-таблицей §7.10 сейчас недостижим (preview даёт только
+    // batch), но семантика уровня общая — при эволюции таблицы ветка готова: diff
+    // entity_update — прежние значения vs новые из inverse журнала (§7.8)
+    const entry = capture?.entries[0];
+    const diff =
+      def.name === 'entity_update' && entry !== undefined
+        ? entityUpdatePreviewDiff(entry.action)
+        : undefined;
+    return {
+      status: 'ok',
+      result,
+      card: {
+        kind: 'confirmation_card',
+        mode: 'preview',
+        summary:
+          def.name === 'entity_update' ? `Обновление «${(result as WireEntity).title}»` : def.name,
+        ...(diff !== undefined && { diff }),
+      },
+    };
+  }
+
+  // уровень execute — немедленное исполнение, карточка и журнал постфактум (§7.10):
   // entity_card (02 §2.3) — для create/update/attach; relation-мутации карточку
-  // этого типа не несут (их карточки появятся вместе с confirmation/error, Task 5–6/9)
+  // этого типа не несут (их карточки появятся вместе с confirmation/error, Task 6/9)
   const isEntityMutation =
     def.name === 'entity_create' || def.name === 'entity_update' || def.aspectId !== undefined;
   const card = isEntityMutation

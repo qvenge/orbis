@@ -1,13 +1,13 @@
 // Интеграционные тесты диспатча тулов (§9.2): живая БД, executor без моков.
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
-// ВАЖНО (фазировка): политику §7.10 подключает Task 5 — здесь мутации исполняются
-// напрямую через execute; тесты «мутация исполняется немедленно» Task 5 ужесточит.
+// Политика §7.10 подключена (Task 5): уровень мутации назначает classifyToolCall
+// (policy/confirmation, юнит-тесты там же); здесь — поведение уровней через dispatch.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, newId } from '@orbis/shared';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
-import { aspectDefinitions, chatMessages } from '../db/schema';
+import { aspectDefinitions, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
@@ -90,9 +90,11 @@ afterAll(async () => {
 });
 
 describe('dispatchTool: резолв по реестру', () => {
-  test('неизвестный тул → error/VALIDATION', async () => {
+  test('неизвестный тул → error/FORBIDDEN_LEVEL (§7.10 ряд «!known»: fail-closed, 403 маппингом errors.ts)', async () => {
+    // Уровень определяет classifyToolCall, dispatch только мапит его в код ошибки —
+    // ни модель, ни агент не обходят запрет переформулировкой имени вызова
     const r = await dispatchTool(ctxFor(), 'entity_delete', { id: newId() });
-    expectError(r, 'VALIDATION');
+    expectError(r, 'FORBIDDEN_LEVEL');
   });
 
   test('невалидный envelope read-тула ({} для entity_query) → error/VALIDATION', async () => {
@@ -251,7 +253,98 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
   });
 });
 
-describe('dispatchTool: чтения без политики (§7.10 не применяется к read)', () => {
+describe('dispatchTool: политика подтверждений §7.10 (закрывает контракт-заглушку shared/contracts/confirmation-policy)', () => {
+  test('archives инициативой AI (entity_update archived:true, explicitCommand=false) → временная VALIDATION с wouldBe; ничего не исполнено', async () => {
+    // ФАЗИРОВКА: Task 6 заменит эту ошибку на status:'pending_confirmation'
+    // (карточка-запрос + сохранённый payload + approve) — тест фиксирует ВРЕМЕННОЕ
+    // поведение 1b и будет переписан там же; это явная схема двух шагов.
+    const host = await seedEntity(userA, { title: 'Хост-тред политики', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const target = await seedEntity(userA, { title: 'Кандидат на архив', tags: [] });
+
+    const r = await dispatchTool(ctxFor({ threadId }), 'entity_update', {
+      id: target.id,
+      archived: true,
+    });
+    expectError(r, 'VALIDATION');
+    if (r.status === 'error') {
+      expect((r.error.details as { wouldBe?: string }).wouldBe).toBe('explicit-confirmation');
+    }
+    // §7.10: до подтверждения ничего не записано — ни в граф, ни в журнал
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, target.id)),
+    );
+    expect(rows[0]?.archived).toBe(false);
+    expect((await messagesIn(userA, threadId)).length).toBe(0);
+  });
+
+  test('batch из 11 архиваций → временная ошибка с wouldBe (ряд archives); все сущности остались неархивированными', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 11; i++) {
+      ids.push((await seedEntity(userA, { title: `Архив-${i}`, tags: ['pol-arch'] })).id);
+    }
+    const r = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: ids.map((id) => ({ tool: 'entity_update', input: { id, archived: true } })),
+    });
+    expectError(r, 'VALIDATION');
+    if (r.status === 'error') {
+      expect((r.error.details as { wouldBe?: string }).wouldBe).toBe('explicit-confirmation');
+    }
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.select({ archived: entities.archived }).from(entities).where(inArray(entities.id, ids)),
+    );
+    expect(rows.length).toBe(11);
+    expect(rows.every((row) => row.archived === false)).toBe(true);
+  });
+
+  test('batch из 11 обычных операций → wouldBe (ряд масштаба > 10); ничего не создано', async () => {
+    const ids = Array.from({ length: 11 }, () => newId());
+    const r = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: ids.map((id, i) => ({
+        tool: 'entity_create',
+        input: { id, title: `Массовая-${i}`, tags: [] },
+      })),
+    });
+    expectError(r, 'VALIDATION');
+    if (r.status === 'error') {
+      expect((r.error.details as { wouldBe?: string }).wouldBe).toBe('explicit-confirmation');
+    }
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.select({ id: entities.id }).from(entities).where(inArray(entities.id, ids)),
+    );
+    expect(rows.length).toBe(0);
+  });
+
+  test('batch из 5 обычных операций → preview: ИСПОЛНЕН (сущности в БД) + card confirmation_card mode=preview, summary «5 операций»', async () => {
+    const ids = Array.from({ length: 5 }, () => newId());
+    const r = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: ids.map((id, i) => ({
+        tool: 'entity_create',
+        input: { id, title: `Превью-${i}`, tags: [] },
+      })),
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect((r.result as unknown[]).length).toBe(5);
+    expect(r.card).toEqual({ kind: 'confirmation_card', mode: 'preview', summary: '5 операций' });
+    // §7.10: предпросмотр информационный, не блокирующий — действие уже исполнено
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.select({ id: entities.id }).from(entities).where(inArray(entities.id, ids)),
+    );
+    expect(rows.length).toBe(5);
+  });
+
+  test('одиночная не-архивирующая мутация → уровень execute: исполняется немедленно, карточка entity_card постфактум', async () => {
+    const r = await dispatchTool(ctxFor(), 'entity_create', { title: 'Уровень execute', tags: [] });
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') expect(r.card?.kind).toBe('entity_card');
+  });
+});
+
+describe('dispatchTool: чтения без политики (§7.10, ряд «read → execute» — юнит классификатора)', () => {
   test('entity_query: список wire-сущностей + card query_result (count, entityIds, title из запроса)', async () => {
     const created = await seedEntity(userA, { title: 'Для поиска', tags: ['qtest'] });
     const r = await dispatchTool(ctxFor(), 'entity_query', {
