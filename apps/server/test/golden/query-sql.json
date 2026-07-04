@@ -1,0 +1,102 @@
+[
+  {
+    "name": "PRD §6.1: «Активные задачи проекта» (запрос-иллюстрация)",
+    "query": "aspect=orbis/task, status=!done&!cancelled, excludeBlocked=true, children_of=this, sortBy=priority:desc|due_date:asc, limit=20, display=compact, title=Активные задачи проекта",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND (aspects->'orbis/task'->>'status' IS NULL OR aspects->'orbis/task'->>'status' NOT IN ($2, $3)) AND NOT EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = entities.id AND r.relation_type = 'blocks' AND COALESCE(b.aspects->'orbis/task'->>'status', '') NOT IN ('done', 'cancelled')) AND id IN (SELECT target_id FROM relations WHERE source_id = $4 AND relation_type = 'parent') ORDER BY CASE aspects->'orbis/task'->>'priority' WHEN 'low' THEN 0 WHEN 'medium' THEN 1 WHEN 'high' THEN 2 END DESC NULLS LAST, (aspects->'orbis/task'->>'due_date')::date ASC NULLS LAST LIMIT $5",
+    "params": ["orbis/task", "done", "cancelled", "00000000-0000-7000-8000-0000000000f1", 20],
+    "countSql": "SELECT count(*) FROM entities WHERE true AND NOT archived AND aspects ? $1 AND (aspects->'orbis/task'->>'status' IS NULL OR aspects->'orbis/task'->>'status' NOT IN ($2, $3)) AND NOT EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = entities.id AND r.relation_type = 'blocks' AND COALESCE(b.aspects->'orbis/task'->>'status', '') NOT IN ('done', 'cancelled')) AND id IN (SELECT target_id FROM relations WHERE source_id = $4 AND relation_type = 'parent')",
+    "countParams": ["orbis/task", "done", "cancelled", "00000000-0000-7000-8000-0000000000f1"]
+  },
+  {
+    "name": "Daily Planning «Inbox» (02 §3.3)",
+    "query": "aspect=orbis/task, status=inbox,\n         sortBy=created_at:desc, display=list, title=Inbox",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND aspects->'orbis/task'->>'status' IN ($2) ORDER BY created_at DESC NULLS LAST LIMIT $3",
+    "params": ["orbis/task", "inbox", 500],
+    "countSql": "SELECT count(*) FROM entities WHERE true AND NOT archived AND aspects ? $1 AND aspects->'orbis/task'->>'status' IN ($2)",
+    "countParams": ["orbis/task", "inbox"]
+  },
+  {
+    "name": "Daily Planning «Сегодня» (02 §3.3)",
+    "query": "aspect=orbis/task, due_date=today|overdue, status=!done&!cancelled&!waiting,\n         excludeBlocked=true, sortBy=priority:desc|due_date:asc,\n         display=list, title=Сегодня",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND ((aspects->'orbis/task'->>'due_date')::date = $2::date OR (aspects->'orbis/task'->>'due_date')::date < $3::date) AND (aspects->'orbis/task'->>'status' IS NULL OR aspects->'orbis/task'->>'status' NOT IN ($4, $5, $6)) AND NOT EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = entities.id AND r.relation_type = 'blocks' AND COALESCE(b.aspects->'orbis/task'->>'status', '') NOT IN ('done', 'cancelled')) ORDER BY CASE aspects->'orbis/task'->>'priority' WHEN 'low' THEN 0 WHEN 'medium' THEN 1 WHEN 'high' THEN 2 END DESC NULLS LAST, (aspects->'orbis/task'->>'due_date')::date ASC NULLS LAST LIMIT $7",
+    "params": ["orbis/task", "2026-07-03", "2026-07-03", "done", "cancelled", "waiting", 500]
+  },
+  {
+    "name": "Daily Planning «Ожидание» (02 §3.3)",
+    "query": "aspect=orbis/task, status=waiting,\n         sortBy=updated_at:asc, display=compact, title=Ожидание",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND aspects->'orbis/task'->>'status' IN ($2) ORDER BY updated_at ASC NULLS LAST LIMIT $3",
+    "params": ["orbis/task", "waiting", 500]
+  },
+  {
+    "name": "Курсор агента: updated_at>…Z (§9.3)",
+    "query": "updated_at>2026-07-02T09:00:00Z",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND updated_at > $1::timestamptz LIMIT $2",
+    "params": ["2026-07-02T09:00:00Z", 500]
+  },
+  {
+    "name": "Числовой диапазон decimal: amount=500..2000",
+    "query": "amount=500..2000",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND (aspects->'orbis/financial'->>'amount')::numeric BETWEEN $1::numeric AND $2::numeric LIMIT $3",
+    "params": ["500", "2000", 500]
+  },
+  {
+    "name": "Числовое сравнение decimal: amount>1000",
+    "query": "amount>1000",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND (aspects->'orbis/financial'->>'amount')::numeric > $1::numeric LIMIT $2",
+    "params": ["1000", 500]
+  },
+  {
+    "name": "archived=any — без фильтра архивности",
+    "query": "aspect=orbis/task, archived=any",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND aspects ? $1 LIMIT $2",
+    "params": ["orbis/task", 500]
+  },
+  {
+    "name": "archived=true — только архивные",
+    "query": "archived=true",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND archived LIMIT $1",
+    "params": [500]
+  },
+  {
+    "name": "Полнотекстовый поиск: search=API",
+    "query": "search=API",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND (to_tsvector('simple', title) @@ plainto_tsquery('simple', $1) OR to_tsvector('simple', body) @@ plainto_tsquery('simple', $2)) LIMIT $3",
+    "params": ["API", "API", 500]
+  },
+  {
+    "name": "Теги: tags OR + excludeTags",
+    "query": "tags=work|personal, excludeTags=someday|maybe",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND tags && ARRAY[$1, $2]::text[] AND NOT (tags && ARRAY[$3, $4]::text[]) LIMIT $5",
+    "params": ["work", "personal", "someday", "maybe", 500]
+  },
+  {
+    "name": "Date-токен на timestamp-поле: start_at=next_7d (AT TIME ZONE)",
+    "query": "start_at=next_7d",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND ((aspects->'orbis/schedule'->>'start_at')::timestamptz AT TIME ZONE $1)::date BETWEEN $2::date AND $3::date + 7 LIMIT $4",
+    "params": ["Europe/Moscow", "2026-07-03", "2026-07-03", 500]
+  },
+  {
+    "name": "children_of=<uuid> и parents_of=this",
+    "query": "children_of=019eb2f4-1a00-7b6e-9c01-5d2f8a3b4c10, parents_of=this",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND id IN (SELECT target_id FROM relations WHERE source_id = $1 AND relation_type = 'parent') AND id IN (SELECT source_id FROM relations WHERE target_id = $2 AND relation_type = 'parent') LIMIT $3",
+    "params": ["019eb2f4-1a00-7b6e-9c01-5d2f8a3b4c10", "00000000-0000-7000-8000-0000000000f1", 500]
+  },
+  {
+    "name": "Date-токен на core-timestamp: created_at=today",
+    "query": "created_at=today",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND (created_at AT TIME ZONE $1)::date = $2::date LIMIT $3",
+    "params": ["Europe/Moscow", "2026-07-03", 500]
+  },
+  {
+    "name": "anyOf: литерал + date-токен через | (OR по скобкам)",
+    "query": "due_date=overdue|2026-08-01",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND (aspects->'orbis/task'->>'due_date' IN ($1) OR (aspects->'orbis/task'->>'due_date')::date < $2::date) LIMIT $3",
+    "params": ["2026-08-01", "2026-07-03", 500]
+  },
+  {
+    "name": "Неоднозначное поле, разрешённое через aspect= (category_ref в financial и budget)",
+    "query": "aspect=orbis/budget, category_ref=019d48ea-4188-765d-8e96-93a0ad9c262a",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND aspects->'orbis/budget'->>'category_ref' IN ($2) LIMIT $3",
+    "params": ["orbis/budget", "019d48ea-4188-765d-8e96-93a0ad9c262a", 500]
+  }
+]
