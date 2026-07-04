@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(29);
+SELECT plan(31);
 
 -- Фикстуры под суперпользователем (обходит RLS)
 INSERT INTO entities (id, owner_id, title) VALUES
@@ -113,6 +113,25 @@ SELECT throws_ok(
             '00000000-0000-4000-8000-00000000000b',
             '00000000-0000-7000-8000-0000000000b1', 'telegram', 'ext-c')$$,
   '42501', NULL, 'entity_origins: INSERT с чужим owner_id отклоняется WITH CHECK');
+-- Дыра из ревью Task 2: owner_id свой, но entity_id — ЧУЖАЯ сущность (B).
+-- Старая политика (только owner_id) это пропускала → загрязнение provenance,
+-- а FK NO ACTION блокировал бы будущий hard-delete чужой строки. Новая WITH CHECK
+-- требует владения entity_id → 42501. external_id новый — уникальность не задета.
+SELECT throws_ok(
+  $$INSERT INTO entity_origins (id, owner_id, entity_id, namespace, external_id)
+    VALUES ('00000000-0000-7000-8000-0000000000c7',
+            '00000000-0000-4000-8000-00000000000a',
+            '00000000-0000-7000-8000-0000000000b1', 'telegram', 'ext-cross')$$,
+  '42501', NULL,
+  'entity_origins: INSERT origins на чужую сущность (свой owner) отклоняется WITH CHECK');
+-- Позитив-пара: origins на СВОЮ сущность (a1) проходит — WITH CHECK не сузил
+-- легитимный путь. Новый external_id, чтобы не пересечься с фикстурной ext-a.
+SELECT lives_ok(
+  $$INSERT INTO entity_origins (id, owner_id, entity_id, namespace, external_id)
+    VALUES ('00000000-0000-7000-8000-0000000000a7',
+            '00000000-0000-4000-8000-00000000000a',
+            '00000000-0000-7000-8000-0000000000a1', 'telegram', 'ext-a-own')$$,
+  'entity_origins: INSERT origins на свою сущность проходит');
 
 -- Группа 5: перенацеливание relation на чужую сущность.
 -- Строка a5 (A-A) видна через USING, но НОВОЕ значение target — сущность B —
@@ -153,7 +172,7 @@ SELECT results_eq(
   $$SELECT count(*)::int FROM user_settings
     WHERE owner_id = '00000000-0000-4000-8000-00000000000a'$$,
   ARRAY[0], 'user_settings: B не видит строку A');
--- Группа 4: связи A-A (обе созданы выше) невидимы под B — USING требует оба конца
+-- Группа 4: связи A-A (сущности A созданы выше) невидимы под B — USING требует оба конца
 SELECT results_eq('SELECT count(*)::int FROM relations', ARRAY[0],
   'relations: связь A-A невидима под B');
 
