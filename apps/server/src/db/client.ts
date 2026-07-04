@@ -7,7 +7,9 @@ import * as schema from './schema';
 // несовместимы с transaction-режимом — см. docs/implementation/01-phase0-findings.md (D12).
 // По умолчанию prepare=true (директ :5432 / session :6543-нет); выключается env PG_PREPARE=false.
 export function makeDb(opts: { max?: number; prepare?: boolean } = {}) {
-  const client = postgres(process.env.DATABASE_URL as string, {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error('makeDb: DATABASE_URL не задан (см. apps/server/.env.example)');
+  const client = postgres(url, {
     max: opts.max ?? 3,
     prepare: opts.prepare ?? process.env.PG_PREPARE !== 'false',
     onnotice: () => {},
