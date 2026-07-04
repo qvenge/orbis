@@ -7,6 +7,7 @@ import type { Context } from './trpc';
 // ping/whoami БД не трогают — стаб вместо пула соединений
 const ctx: Context = {
   actorUserId: null,
+  actorKind: 'owner',
   clientVersion: null,
   db: null as unknown as Context['db'],
 };
@@ -47,6 +48,34 @@ test('устаревший клиент получает отказ версии
     (e: unknown) => e,
   );
   expect((err as TRPCError).code).toBe('PRECONDITION_FAILED');
+});
+
+// §9.3 (Task 3): ownerOnlyProcedure — агент (PAT) не управляет аккаунтом владельца.
+// db — стаб: FORBIDDEN обязан лететь из middleware ДО какого-либо обращения к БД.
+const agentUserId = crypto.randomUUID();
+const agentCtx: Context = { ...ctx, actorUserId: agentUserId, actorKind: 'agent' };
+
+test('ownerOnly под агентом: seedOnboarding/updateSettings/exportData → FORBIDDEN до БД', async () => {
+  const caller = appRouter.createCaller(agentCtx);
+  const calls: Array<() => Promise<unknown>> = [
+    () => caller.user.seedOnboarding(),
+    () => caller.user.updateSettings({}),
+    () => caller.user.exportData(),
+  ];
+  for (const call of calls) {
+    const err = await call().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(TRPCError);
+    expect((err as TRPCError).code).toBe('FORBIDDEN');
+  }
+});
+
+test('агент проходит protectedProcedure (whoami) без заголовка версии', async () => {
+  // Identity есть identity: PAT-агент аутентифицирован, version-гейт без заголовка молчит
+  const caller = appRouter.createCaller(agentCtx);
+  expect(await caller.whoami()).toEqual({ actorUserId: agentUserId });
 });
 
 test('равная/новая версия, отсутствие и мусорный заголовок проходят', async () => {

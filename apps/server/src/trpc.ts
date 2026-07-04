@@ -10,6 +10,12 @@ import type { Db } from './db/client';
 // требование Record<string, unknown> у createContext в @hono/trpc-server.
 export type Context = {
   actorUserId: string | null;
+  /**
+   * Транспортный актор запроса (§9.3): 'owner' — JWT Supabase (и неаутентифицированные
+   * запросы), 'agent' — PAT внешнего агента. Уже, чем ActorKind executor'а ('ai' — не
+   * транспорт: внутренний AI действует внутри запросов владельца).
+   */
+  actorKind: 'owner' | 'agent';
   db: Db;
   /** Значение заголовка CLIENT_VERSION_HEADER; null — заголовок не прислан (curl/смоуки). */
   clientVersion: string | null;
@@ -92,4 +98,15 @@ export const publicProcedure = t.procedure.use(versionGate);
 export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
   if (!ctx.actorUserId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   return next({ ctx: { actorUserId: ctx.actorUserId } });
+});
+
+// §9.3 (Task 3): PAT-агент проходит protectedProcedure (identity есть identity),
+// но операции владельца аккаунта — экспорт, настройки, онбординг-сид (approve/reject
+// подтверждений закроет Task 6, §7.10) — только под actorKind 'owner'. Read-пути
+// (getSettings, entity.*, chat.*) агенту остаются открыты.
+export const ownerOnlyProcedure = protectedProcedure.use(({ ctx, next }) => {
+  if (ctx.actorKind !== 'owner') {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'операция доступна только владельцу' });
+  }
+  return next();
 });

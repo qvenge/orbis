@@ -38,6 +38,7 @@ function call(path: string): Promise<Response> {
     router: testRouter,
     createContext: (): Context => ({
       actorUserId: null,
+      actorKind: 'owner',
       db: null as unknown as Context['db'],
       clientVersion: null,
     }),

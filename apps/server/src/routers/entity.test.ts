@@ -18,7 +18,7 @@ const createCaller = createCallerFactory(appRouter);
 
 /** Caller от лица владельца: ctx как в бою — actorUserId + db (§9.1). */
 function callerFor(user: string) {
-  return createCaller({ actorUserId: user, db, clientVersion: null });
+  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
 }
 
 beforeAll(async () => {

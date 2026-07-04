@@ -16,7 +16,7 @@ const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
 function callerFor(user: string) {
-  return createCaller({ actorUserId: user, db, clientVersion: null });
+  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
 }
 
 beforeAll(async () => {

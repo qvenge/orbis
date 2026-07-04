@@ -13,6 +13,7 @@ import {
   categoryAspectSchema,
   parseQuery,
 } from '@orbis/shared';
+import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { appRouter } from '../router';
@@ -27,7 +28,7 @@ const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
 function callerFor(user: string) {
-  return createCaller({ actorUserId: user, db, clientVersion: null });
+  return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
 }
 
 /** Счётчики строк владельца через админ-DSN (обходит RLS) — независимая от роутеров сверка. */
@@ -90,8 +91,18 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
     const a = appDb();
     const b = appDb();
     try {
-      const callerA = createCaller({ actorUserId: user, db: a.db, clientVersion: null });
-      const callerB = createCaller({ actorUserId: user, db: b.db, clientVersion: null });
+      const callerA = createCaller({
+        actorUserId: user,
+        actorKind: 'owner',
+        db: a.db,
+        clientVersion: null,
+      });
+      const callerB = createCaller({
+        actorUserId: user,
+        actorKind: 'owner',
+        db: b.db,
+        clientVersion: null,
+      });
       await Promise.all([callerA.user.seedOnboarding(), callerB.user.seedOnboarding()]);
       expect(await counts(user)).toEqual({ entities: 15, settings: 1, threads: 1 });
     } finally {
@@ -253,6 +264,42 @@ describe('настройки §7.3 (getSettings / updateSettings)', () => {
     // персистентно
     const again = await caller.user.getSettings();
     expect(again.timezone).toBe('Asia/Almaty');
+  });
+});
+
+// §9.3 (Task 3): ownerOnly-матрица против живой БД — агент (PAT) не управляет
+// аккаунтом (FORBIDDEN), read-пути ему открыты, владельцу гейт не мешает.
+describe('ownerOnly (§9.3): агент против владельца', () => {
+  test('агент: мутации аккаунта → FORBIDDEN; getSettings доступен; владелец — ok', async () => {
+    const user = freshUserId();
+    const owner = createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+    const agent = createCaller({ actorUserId: user, actorKind: 'agent', db, clientVersion: null });
+
+    // owner → ok: сид проходит под ownerOnlyProcedure
+    expect((await owner.user.seedOnboarding()).seeded).toBe(true);
+
+    // agent → FORBIDDEN на всех трёх закрытых процедурах; состояние не меняется
+    const calls: Array<() => Promise<unknown>> = [
+      () => agent.user.seedOnboarding(),
+      () => agent.user.updateSettings({ timezone: 'Europe/Berlin' }),
+      () => agent.user.exportData(),
+    ];
+    for (const call of calls) {
+      const err = await call().then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(TRPCError);
+      expect((err as TRPCError).code).toBe('FORBIDDEN');
+    }
+
+    // read-путь открыт агенту: настройки читаются, правка агента не применилась
+    const viaAgent = await agent.user.getSettings();
+    expect(viaAgent.timezone).toBe('Europe/Moscow');
+
+    // владельцу гейт не мешает: правка проходит
+    const upd = await owner.user.updateSettings({ timezone: 'Asia/Almaty' });
+    expect(upd.timezone).toBe('Asia/Almaty');
   });
 });
 
