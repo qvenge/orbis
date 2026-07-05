@@ -1,5 +1,5 @@
 import type { EntityCreateInput } from '@orbis/shared';
-import { useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore } from 'react';
 import { create } from 'zustand';
 import {
   createRetryBuffer,
@@ -49,6 +49,24 @@ export const useRetryBuffer = create<RetryState>((set) => ({
     set(snapshot());
   },
 }));
+
+/**
+ * §2.6/§5.3: автослив retry-буфера. Смонтирован один раз в App (не в render-фазе main.tsx):
+ *  - на старте: если онлайн и в буфере есть незасланные fast-path операции — дренируем один раз;
+ *  - при переходе offline→online (window 'online') — досылаем накопленное.
+ * flushNow сам гейтит отсутствие send-impl (sendImpl===null → no-op), поэтому вызов до
+ * registerRetrySend безопасен и не дублирует отправку.
+ */
+export function useRetryFlush(): void {
+  useEffect(() => {
+    const flush = () => {
+      void useRetryBuffer.getState().flushNow();
+    };
+    if (navigator.onLine && useRetryBuffer.getState().size > 0) flush();
+    window.addEventListener('online', flush);
+    return () => window.removeEventListener('online', flush);
+  }, []);
+}
 
 export function useOnline(): boolean {
   return useSyncExternalStore(

@@ -2,7 +2,11 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 export type Tab = 'chat' | 'browser' | 'agenda' | 'budget';
-export type ScreenRef = { kind: 'entity'; id: string } | { kind: 'thread'; threadId: string };
+// 'settings' — сквозной экран (не таб): push поверх активного таба, back — обычный pop/switchTab (§9.4).
+export type ScreenRef =
+  | { kind: 'entity'; id: string }
+  | { kind: 'thread'; threadId: string }
+  | { kind: 'settings' };
 
 type NavState = {
   activeTab: Tab;
