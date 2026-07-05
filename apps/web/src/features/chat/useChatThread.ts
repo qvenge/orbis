@@ -33,8 +33,13 @@ export function useChatThread(threadId: string) {
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
       utils.chat.listMessages.fetch({ threadId, before: pageParam, limit: PAGE }),
-    getNextPageParam: (lastPage) =>
-      lastPage.length < PAGE ? undefined : lastPage[lastPage.length - 1]?.createdAt,
+    // Составной курсор `"<createdAt>|<id>"` самого старого загруженного (согласован с
+    // сервером listMessages): устойчив к ms-коллизии двух сообщений в одну createdAt.
+    getNextPageParam: (lastPage) => {
+      if (lastPage.length < PAGE) return undefined;
+      const oldest = lastPage[lastPage.length - 1];
+      return oldest ? `${oldest.createdAt}|${oldest.id}` : undefined;
+    },
   });
   const messages = (q.data?.pages ?? []).flat();
   return {

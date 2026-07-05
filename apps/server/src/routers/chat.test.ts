@@ -6,6 +6,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, globalThreadId, newId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { chatMessages } from '../db/schema';
+import { withIdentity } from '../db/with-identity';
 import type { ActionRecord } from '../executor/types';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
@@ -91,6 +93,48 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
     expect(
       (await caller.chat.listMessages({ threadId, before: m2.createdAt })).map((m) => m.id),
     ).toEqual([m1.id]);
+  });
+
+  // Golden (1c-2 Task 2): составной курсор (createdAt, id) — устойчивость к ms-коллизии.
+  // Два сообщения в ОДНУ И ТУ ЖЕ createdAt (разные id): пагинация по границе ровно между
+  // ними не должна терять/задваивать. Старый ms-курсор (lt createdAt) исключал бы второе
+  // (same ms) целиком — оно бы пропало со страницы 2.
+  test('пагинация по границе двух сообщений с одинаковым createdAt — оба ровно один раз', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const { threadId } = await caller.chat.ensureThread({});
+
+    const same = new Date('2026-07-05T12:00:00.000Z'); // одна ms на двоих
+    const older = new Date(same.getTime() - 1000);
+    // id — tiebreak при равной createdAt: A с большим id первый в DESC, B со меньшим — второй
+    // (строковое сравнение канонических UUID совпадает с порядком типа uuid в Postgres)
+    const id1 = crypto.randomUUID();
+    const id2 = crypto.randomUUID();
+    const idBig = id1 > id2 ? id1 : id2;
+    const idSmall = id1 > id2 ? id2 : id1;
+    const idOlder = crypto.randomUUID();
+    await withIdentity(db, user, (tx) =>
+      tx.insert(chatMessages).values([
+        { id: idBig, threadId, role: 'user', content: 'A', createdAt: same },
+        { id: idSmall, threadId, role: 'user', content: 'B', createdAt: same },
+        { id: idOlder, threadId, role: 'user', content: 'C', createdAt: older },
+      ]),
+    );
+
+    // Клиентская пагинация: limit=1 разводит границу ровно между A и B (одна createdAt).
+    // Курсор — как шлёт клиент: `${createdAt}|${id}` самого старого загруженного.
+    const collected: string[] = [];
+    let before: string | undefined;
+    for (let i = 0; i < 5; i++) {
+      const page = await caller.chat.listMessages({ threadId, before, limit: 1 });
+      if (page.length === 0) break;
+      const m = page[0];
+      if (!m) break;
+      collected.push(m.id);
+      before = `${m.createdAt}|${m.id}`;
+    }
+    // Порядок стабилен (createdAt desc, id desc); каждое ровно один раз, B не потеряно
+    expect(collected).toEqual([idBig, idSmall, idOlder]);
   });
 
   test('чужой тред: append → NOT_FOUND (RLS: чужое и несуществующее неразличимы)', async () => {
