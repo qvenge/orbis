@@ -212,6 +212,42 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe('PAYLOAD_TOO_LARGE');
   });
+
+  test('POST с телом > лимита БЕЗ content-length (chunked/stream) → 413 (закрыт обход Task 10b)', async () => {
+    // Тело шлётся ReadableStream'ом: fetch не знает длины → НЕ ставит content-length,
+    // отправляет chunked (transfer-encoding). Заголовочный гейт (старый код) такое тело
+    // пропускал (счётчик по content-length, здесь его нет) — платформенный лимит должен
+    // резать по ФАКТИЧЕСКИ прочитанным байтам. Ровно (лимит+1) байт кусками по 100 КБ:
+    // последний кусок пересекает порог и он же последний — стрим дочитывается до конца
+    // (без обрыва пайпа), затем 413.
+    const TOTAL = MCP_MAX_BODY_BYTES + 1;
+    let remaining = TOTAL;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (remaining <= 0) {
+          controller.close();
+          return;
+        }
+        const n = Math.min(100_000, remaining);
+        controller.enqueue(new Uint8Array(n).fill(120)); // 'x'
+        remaining -= n;
+      },
+    });
+    const res = await fetch(mainUrl(), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body,
+      // duplex обязателен для стримингового тела запроса в fetch (WHATWG/undici)
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    expect(res.status).toBe(413);
+    const parsed = (await res.json()) as { error?: { code?: string } };
+    expect(parsed.error?.code).toBe('PAYLOAD_TOO_LARGE');
+  });
 });
 
 // ---------------------------------------------------------------------------
