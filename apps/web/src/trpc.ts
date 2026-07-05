@@ -50,10 +50,16 @@ export function authErrorLink(handlers: {
       );
 }
 
+// URL tRPC: по умолчанию относительный `/trpc` (Вариант A — same-origin, сервер сам
+// раздаёт web-dist, CORS не нужен). VITE_API_URL — опц. fallback для режима B (раздельные
+// origins): если задан, префиксует абсолютным base; пусто/не задан → прежнее поведение.
+const apiBase = import.meta.env.VITE_API_URL ?? '';
+export const TRPC_URL = `${apiBase}/trpc`;
+
 export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[] {
   return [
     authErrorLink({ onOutdated: emitClientOutdated, onUnauthorized: emitUnauthorized }),
-    httpBatchLink({ url: '/trpc', headers: () => trpcHeaders(getToken) }),
+    httpBatchLink({ url: TRPC_URL, headers: () => trpcHeaders(getToken) }),
   ];
 }
 
