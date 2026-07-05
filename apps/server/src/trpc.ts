@@ -24,8 +24,8 @@ export type Context = {
   /**
    * Зависимости AI-слоя (Task 9): провайдер/модель — один инстанс на процесс
    * (index.ts), тесты инжектируют ScriptedProvider и entitlements-резолвер.
-   * Опционален: контексты, не трогающие ai.sendMessage, его не несут —
-   * фолбэк роутера (defaultAiDeps) собирает боевые deps по env лениво.
+   * Опционален: контексты, не трогающие ai.sendMessage, его не несут. На пути
+   * ai.sendMessage ctx.ai обязателен — defaultAiDeps() бросает fail-fast, если он не задан.
    */
   ai?: AiDeps;
 };

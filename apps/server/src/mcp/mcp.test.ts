@@ -212,6 +212,93 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe('PAYLOAD_TOO_LARGE');
   });
+
+  test('POST с телом > лимита БЕЗ content-length (chunked/stream) → 413 (закрыт обход Task 10b)', async () => {
+    // Тело шлётся ReadableStream'ом: fetch не знает длины → НЕ ставит content-length,
+    // отправляет chunked (transfer-encoding). Заголовочный гейт (старый код) такое тело
+    // пропускал (счётчик по content-length, здесь его нет) — платформенный лимит должен
+    // резать по ФАКТИЧЕСКИ прочитанным байтам. Ровно (лимит+1) байт кусками по 100 КБ:
+    // последний кусок пересекает порог и он же последний — стрим дочитывается до конца
+    // (без обрыва пайпа), затем 413.
+    const TOTAL = MCP_MAX_BODY_BYTES + 1;
+    let remaining = TOTAL;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (remaining <= 0) {
+          controller.close();
+          return;
+        }
+        const n = Math.min(100_000, remaining);
+        controller.enqueue(new Uint8Array(n).fill(120)); // 'x'
+        remaining -= n;
+      },
+    });
+    const res = await fetch(mainUrl(), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body,
+      // duplex обязателен для стримингового тела запроса в fetch (WHATWG/undici)
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    expect(res.status).toBe(413);
+    const parsed = (await res.json()) as { error?: { code?: string } };
+    expect(parsed.error?.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+
+  test('POST валидного chunked-тела ПОД лимитом (без content-length) → 200 dispatch (лочит ре-буфер bodyLimit)', async () => {
+    // Регресс-гард (ревью Task 4): валидный JSON-RPC, отправленный chunked без
+    // content-length, идёт по СТРИМ-ветке bodyLimit — та дочитывает поток, ре-буферизует
+    // и переприсваивает c.req.raw буфером тела; ниже transport читает уже этот c.req.raw.
+    // Это опора на внутренности Hono 4.12.27. Мутационный смысл теста: сломайся ре-буфер
+    // (напр. апгрейд Hono) — c.req.raw после bodyLimit оказался бы пуст, JSON-parse упал
+    // бы, transport вернул бы parse-error (не 200 + result). Тест стережёт именно это.
+    const initBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'chunked-probe', version: '0.0.0' },
+      },
+    });
+    const bytes = new TextEncoder().encode(initBody);
+    expect(bytes.length).toBeLessThan(MCP_MAX_BODY_BYTES); // маленькое, гарантированно под лимитом
+    // Тело через ReadableStream: fetch не знает длины → НЕ ставит content-length, шлёт
+    // chunked (как в 413-тесте), но валидное и маленькое — путь ре-буфера, не быстрый пред-чек
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    const res = await fetch(mainUrl(), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        authorization: `Bearer ${TOKEN}`,
+      },
+      body,
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
+    // 200 (под лимитом, не 413) с валидным dispatch-ответом (тело дочитано после ре-буфера, не 400)
+    expect(res.status).toBe(200);
+    const parsed = (await res.json()) as {
+      jsonrpc?: string;
+      id?: number;
+      result?: Record<string, unknown>;
+      error?: unknown;
+    };
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.jsonrpc).toBe('2.0');
+    expect(parsed.id).toBe(1);
+    expect(parsed.result).toBeDefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

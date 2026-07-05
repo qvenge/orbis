@@ -25,7 +25,7 @@ import {
   relationDeleteInput,
 } from '@orbis/shared';
 import type { z } from 'zod';
-import { appendMessage } from '../chat/messages';
+import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -387,6 +387,9 @@ async function runMutation(
         tool,
         input: payload,
         level,
+        // batch: дедуп pending по исходному batch_id модели — ретрай того же batch
+        // не плодит вторую карточку (одиночная мутация без batch_id → без дедупа)
+        ...(batchPayload !== undefined && { dedupeKey: batchPayload.batch_id }),
         clock: ctx.clock,
       }),
     );
@@ -621,15 +624,22 @@ async function runThreadPost(
     // Тред создаётся только для видимой актору сущности; чужая и несуществующая
     // под RLS неразличимы — единый NOT_FOUND (бросает ensureEntityThread)
     const threadId = await ensureEntityThread(tx, ctx.actorUserId, parsed.entity_id);
-    return appendMessage(tx, {
-      id: newId(),
+    const fields = {
       threadId,
-      role: 'user',
+      role: 'user' as const,
       content: parsed.content,
       // Пометка автора — только для внешнего агента (§9.3): владелец видит, что
       // заметку в треде оставил не он и не внутренний AI
       metadata: ctx.actorKind === 'agent' ? { author_kind: ctx.actorKind } : {},
-    });
+    };
+    // client-UUID (§2.1, как appendUserMessage владельца): повтор с тем же id —
+    // идемпотентный ретрай (ON CONFLICT → исходный пост, append-only игнорирует новый
+    // content), второй пост не создаётся; без id — серверный uuidv7 (ретрай неотличим).
+    if (parsed.id !== undefined) {
+      const r = await appendMessageIdempotent(tx, { id: parsed.id, ...fields });
+      return r.message;
+    }
+    return appendMessage(tx, { id: newId(), ...fields });
   });
   return { status: 'ok', result: message };
 }

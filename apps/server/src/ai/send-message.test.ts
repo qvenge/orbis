@@ -539,6 +539,55 @@ describe('ai.sendMessage: ретрай с тем же client-id (fix round — r
     const usage = await usageRows(user);
     expect(usage[0]?.requestCount).toBe(2);
   });
+
+  test('out-of-order: ретрай СТАРОГО упавшего A не возвращает ЧУЖОЙ ответ Rb (детерминизм по replyTo)', async () => {
+    // Дыра временно́й логики (findAnswerAfter): «ближайший assistant ПОСЛЕ A» — это Rb,
+    // ответ на ПОЗЖЕ пришедшее B, а не на A. Детерминизм по metadata.replyTo это чинит:
+    // у A ответа нет → честный прогон в провайдер, НИКОГДА чужой Rb.
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const idA = newId();
+
+    // 1) A: первый прогон падает (LLM_UNAVAILABLE) — user A персистирован, ответа НЕТ
+    const failingA = new ScriptedProvider([]);
+    const errA = await trpcError(
+      callerWith(user, failingA).ai.sendMessage({ id: idA, threadId, content: 'сообщение A' }),
+    );
+    expect(errA.code).toBe('SERVICE_UNAVAILABLE');
+
+    // 2) B: приходит ПОЗЖЕ и получает ответ Rb (пишется с metadata.replyTo = idB)
+    const idB = newId();
+    const providerB = new ScriptedProvider([endTurn('ответ на B (Rb)')]);
+    const rB = await callerWith(user, providerB).ai.sendMessage({
+      id: idB,
+      threadId,
+      content: 'сообщение B',
+    });
+    expect(rB.replayed).toBe(false);
+    expect(rB.assistantMessage.content).toBe('ответ на B (Rb)');
+
+    // 3) Ретрай A с тем же client-id. Временна́я логика вернула бы Rb (replayed=true);
+    //    detерминизм по replyTo: ответа A нет → провайдер вызывается, отдаёт свой Ra.
+    const retryA = new ScriptedProvider([endTurn('ответ на A (Ra)')]);
+    const rA = await callerWith(user, retryA).ai.sendMessage({
+      id: idA,
+      threadId,
+      content: 'сообщение A',
+    });
+
+    expect(rA.replayed).toBe(false); // на старой логике было бы true (вернулся бы Rb)
+    expect(rA.assistantMessage.id).not.toBe(rB.assistantMessage.id); // НИКОГДА чужой Rb
+    expect(rA.assistantMessage.content).toBe('ответ на A (Ra)');
+    expect(retryA.requests).toHaveLength(1); // провайдер тронут — честный прогон, не replay
+
+    // Ответы адресны по replyTo: Ra→idA, Rb→idB
+    const msgs = await threadMessages(user, threadId);
+    const assistants = msgs.filter((m) => m.role === 'assistant');
+    expect(assistants).toHaveLength(2);
+    const replyToOf = (m: { metadata: unknown }) => (m.metadata as { replyTo?: string }).replyTo;
+    expect(assistants.find((m) => replyToOf(m) === idA)?.id).toBe(rA.assistantMessage.id);
+    expect(assistants.find((m) => replyToOf(m) === idB)?.id).toBe(rB.assistantMessage.id);
+  });
 });
 
 describe('ai.sendMessage: ошибка тула в цикле', () => {
@@ -562,6 +611,26 @@ describe('ai.sendMessage: ошибка тула в цикле', () => {
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ kind: 'error_card', code: 'NOT_FOUND' });
     expect(r.assistantMessage.content).toBe('Не нашёл сущность.');
+  });
+});
+
+describe('ai.sendMessage: ctx.ai не инжектирован — fail-fast (§DI hardening)', () => {
+  test('ctx.ai=undefined → проброс Error(/ai deps/i), а не тихая сборка фолбэка', async () => {
+    // Боевой путь ВСЕГДА инжектит ai (index.ts). Отсутствие ctx.ai — дефект DI, а не
+    // легитимный сценарий: раньше роутер молча собирал боевые deps по env (в тест-окружении
+    // — EchoProvider) и прогонял цикл на валидном треде. Теперь defaultAiDeps() бросает.
+    const user = freshUserId();
+    const threadId = await globalThread(user); // валидный тред: старый фолбэк дошёл бы до цикла
+    const caller = createCaller({
+      actorUserId: user,
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+      ai: undefined,
+    });
+    await expect(
+      caller.ai.sendMessage({ id: newId(), threadId, content: 'привет' }),
+    ).rejects.toThrow(/ai deps/i);
   });
 });
 

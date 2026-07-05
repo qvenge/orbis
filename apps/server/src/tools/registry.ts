@@ -72,6 +72,9 @@ export const userQueryInput = z
 
 export const threadPostInput = z
   .object({
+    // client-UUID сообщения (§2.1): повтор с тем же id — идемпотентный ретрай (ON CONFLICT),
+    // второй пост не создаётся; без id — серверный uuidv7 (ретрай неотличим → новый пост)
+    id: z.string().uuid().optional(),
     entity_id: z.string().uuid(),
     content: z.string().min(1),
   })
@@ -215,6 +218,11 @@ const userQueryJsonSchema = {
 const threadPostJsonSchema = {
   type: 'object',
   properties: {
+    id: {
+      ...uuid,
+      description:
+        'client-UUID сообщения: повтор с тем же id — идемпотентный ретрай (не плодит второй пост)',
+    },
     entity_id: uuid,
     content: { type: 'string', minLength: 1 },
   },

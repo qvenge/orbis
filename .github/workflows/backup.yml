@@ -1,0 +1,62 @@
+name: backup
+# Ежедневный дамп прод-БД через session-пулер (Render cron платный → GitHub Actions cron бесплатен).
+# Секрет ADMIN_DSN заводится в Фазе B (владельческий гейт); до этого job падает осмысленно.
+on:
+  schedule:
+    - cron: '0 3 * * *' # 03:00 UTC — окно низкого трафика
+  workflow_dispatch: {}
+
+concurrency:
+  group: backup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash # bash -eo pipefail: провал внутри пайпа не маскируется tee
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить наличие секрета ADMIN_DSN
+        env:
+          ADMIN_DSN: ${{ secrets.ADMIN_DSN }}
+        run: |
+          if [ -z "${ADMIN_DSN}" ]; then
+            echo "::error::Секрет ADMIN_DSN не задан. Заведи его в Settings → Secrets and variables → Actions (Фаза B). Формат: postgresql://postgres.<PROD_REF>:<pwd>@aws-1-eu-central-1.pooler.supabase.com:5432/postgres"
+            exit 1
+          fi
+
+      - name: Установить PostgreSQL client 17 (PGDG)
+        run: |
+          sudo install -d /usr/share/keyrings
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          pg_dump --version
+
+      - name: Снять дамп через session-пулер
+        id: dump
+        env:
+          ADMIN_DSN: ${{ secrets.ADMIN_DSN }}
+          BACKUP_DIR: ${{ runner.temp }}/backup
+        run: |
+          bash scripts/backup.sh | tee backup.log
+          dump_path="$(grep '^dump: ' backup.log | tail -n1 | sed 's/^dump: //')"
+          echo "path=${dump_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Загрузить дамп как artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbis-db-backup
+          path: ${{ steps.dump.outputs.path }}
+          retention-days: 30
+          if-no-files-found: error

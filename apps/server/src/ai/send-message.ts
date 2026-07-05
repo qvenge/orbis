@@ -26,7 +26,7 @@
 //   7) throw из provider.chat → структурная ошибка LLM_UNAVAILABLE (503): явная
 //      ошибка с возможностью повторить, user-сообщение сохранено, очереди нет (§7.9).
 import { MAX_AGENT_STEPS, newId } from '@orbis/shared';
-import { and, eq, gt, or } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { appendMessage, appendMessageIdempotent, type WireChatMessage } from '../chat/messages';
 import type { Db } from '../db/client';
 import { aiUsage, chatMessages, chatThreads } from '../db/schema';
@@ -77,12 +77,11 @@ export function makeAiDeps(env: LLMProviderEnv = process.env): AiDeps {
   return { provider, model };
 }
 
-// Ленивый фолбэк для контекстов без явных deps (например, тестовые Context-литералы,
-// не трогающие ai.sendMessage); боевой путь index.ts всегда передаёт deps явно.
-let fallbackDeps: AiDeps | undefined;
+// Fail-fast: боевой путь ВСЕГДА инжектит ai в контекст (index.ts → makeCreateContext).
+// Отсутствие ctx.ai на пути ai.sendMessage — дефект DI, а не легитимный сценарий;
+// прежняя ленивая сборка боевых deps по env лишь маскировала бы его (финал-ревью 1b).
 export function defaultAiDeps(): AiDeps {
-  fallbackDeps ??= makeAiDeps();
-  return fallbackDeps;
+  throw new Error('ai deps must be injected; ctx.ai is required');
 }
 
 export interface SendMessageInput {
@@ -159,12 +158,13 @@ export async function sendMessage(
       content: input.content,
     });
     // 1a (fix round). Повтор client-id: ответ уже существует → replay без нового цикла.
-    // Ближайшее assistant-сообщение ПОСЛЕ этого user-сообщения (курсор created_at/id,
-    // как пагинация 1a) — в штатном потоке это именно ответ на него (audit/system-строки
-    // между ними отфильтрованы ролью). Не нашлось — первый прогон не дошёл до ответа
-    // (LLM_UNAVAILABLE и т.п.) → легитимный ретрай §7.9, цикл пойдёт как обычно.
+    // Матч ДЕТЕРМИНИРОВАННЫЙ — по metadata.replyTo === id этого user-сообщения (не по
+    // временно́му курсору «ближайший assistant после»): при out-of-order ретрае старого
+    // упавшего сообщения ближайший по времени assistant мог бы оказаться ответом на
+    // ДРУГОЕ, более позднее сообщение — replyTo это исключает. Не нашлось — первый прогон
+    // не дошёл до ответа (LLM_UNAVAILABLE и т.п.) → легитимный ретрай §7.9, цикл как обычно.
     const existingAnswer = appended.replayed
-      ? await findAnswerAfter(tx, input.threadId, appended.message)
+      ? await findAnswerByReplyTo(tx, input.threadId, appended.message.id)
       : undefined;
     return { anchorEntityId: thread.entityId, existingAnswer };
   });
@@ -269,7 +269,9 @@ export async function sendMessage(
     }
   }
 
-  // 5. Assistant-сообщение: финальный текст + карточки всех действий цикла.
+  // 5. Assistant-сообщение: финальный текст + карточки всех действий цикла + replyTo —
+  //    адресная привязка к user-сообщению (input.id): детерминированный replay ретрая
+  //    §7.9 (findAnswerByReplyTo) вместо временно́го «ближайший assistant после».
   //    metadata.suggestions НЕ пишем (слайс 3). id — серверный uuidv7: ретрай
   //    sendMessage — новый прогон цикла, а не replay ответа (осознанно, MVP).
   const assistantMessage = await withIdentity(db, input.ownerId, (tx) =>
@@ -278,7 +280,7 @@ export async function sendMessage(
       threadId: input.threadId,
       role: 'assistant',
       content: finalText,
-      metadata: { cards },
+      metadata: { cards, replyTo: input.id },
     }),
   );
 
@@ -286,17 +288,18 @@ export async function sendMessage(
 }
 
 /**
- * Ближайшее assistant-сообщение треда СТРОГО ПОСЛЕ данного user-сообщения —
- * существующий ответ для replay ретрая (fix round). Курсор (created_at, id) —
- * та же пара, что в сортировках 1a; ms-огрубление wire-createdAt безопасно:
- * фильтр по роли не пускает само user-сообщение, а ответ пишется заведомо позже.
+ * Существующий ответ на данное user-сообщение для replay ретрая (fix round §7.9):
+ * assistant-сообщение с metadata.replyTo === userMessageId. Детерминированный адресный
+ * матч (не «ближайший по времени»): при out-of-order ретрае старого упавшего сообщения
+ * временно́й курсор вернул бы ЧУЖОЙ более поздний ответ на другое сообщение того же треда.
+ * replyTo пишется при персисте assistant-сообщения (шаг 5); нескольких ответов на один
+ * запрос быть не может (id — серверный uuidv7, шаг цикла один), limit(1) — страховка.
  */
-async function findAnswerAfter(
+async function findAnswerByReplyTo(
   tx: Tx,
   threadId: string,
-  userMessage: WireChatMessage,
+  userMessageId: string,
 ): Promise<WireChatMessage | undefined> {
-  const after = new Date(userMessage.createdAt);
   const rows = await tx
     .select()
     .from(chatMessages)
@@ -304,10 +307,7 @@ async function findAnswerAfter(
       and(
         eq(chatMessages.threadId, threadId),
         eq(chatMessages.role, 'assistant'),
-        or(
-          gt(chatMessages.createdAt, after),
-          and(eq(chatMessages.createdAt, after), gt(chatMessages.id, userMessage.id)),
-        ),
+        sql`${chatMessages.metadata} ->> 'replyTo' = ${userMessageId}`,
       ),
     )
     .orderBy(chatMessages.createdAt, chatMessages.id)

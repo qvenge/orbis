@@ -22,7 +22,8 @@ export const aiRouter = router({
   /**
    * LLM-диалог (Task 9): обычная мутация, ответ целиком (§7.7 D7 — без стриминга).
    * Тело — ai/send-message.ts; deps (провайдер/модель/резолвер §8) — из request-
-   * контекста (index.ts / инъекция тестов), фолбэк — боевые deps по env.
+   * контекста (index.ts / инъекция тестов); отсутствие ctx.ai — дефект DI, а не
+   * фолбэк: defaultAiDeps() бросает (fail-fast), боевой путь всегда инжектит ai.
    * Доменные отказы (NOT_FOUND треда, LIMIT §8, LLM_UNAVAILABLE §7.9) → TRPCError.
    */
   sendMessage: ownerOnlyProcedure

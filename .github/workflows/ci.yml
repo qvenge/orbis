@@ -1,7 +1,9 @@
 name: CI
 on:
+  # Solo-репо без внешних форков: head-коммит любого PR уже пушится в ветку,
+  # поэтому push уже покрывает PR по тому же SHA. Триггер pull_request убран,
+  # чтобы избежать двойного прогона CI (push↔PR) на same-repo PR.
   push: { branches: ['**'] }
-  pull_request:
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
