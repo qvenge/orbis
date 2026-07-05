@@ -77,12 +77,11 @@ export function makeAiDeps(env: LLMProviderEnv = process.env): AiDeps {
   return { provider, model };
 }
 
-// Ленивый фолбэк для контекстов без явных deps (например, тестовые Context-литералы,
-// не трогающие ai.sendMessage); боевой путь index.ts всегда передаёт deps явно.
-let fallbackDeps: AiDeps | undefined;
+// Fail-fast: боевой путь ВСЕГДА инжектит ai в контекст (index.ts → makeCreateContext).
+// Отсутствие ctx.ai на пути ai.sendMessage — дефект DI, а не легитимный сценарий;
+// прежняя ленивая сборка боевых deps по env лишь маскировала бы его (финал-ревью 1b).
 export function defaultAiDeps(): AiDeps {
-  fallbackDeps ??= makeAiDeps();
-  return fallbackDeps;
+  throw new Error('ai deps must be injected; ctx.ai is required');
 }
 
 export interface SendMessageInput {

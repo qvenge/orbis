@@ -565,6 +565,26 @@ describe('ai.sendMessage: ошибка тула в цикле', () => {
   });
 });
 
+describe('ai.sendMessage: ctx.ai не инжектирован — fail-fast (§DI hardening)', () => {
+  test('ctx.ai=undefined → проброс Error(/ai deps/i), а не тихая сборка фолбэка', async () => {
+    // Боевой путь ВСЕГДА инжектит ai (index.ts). Отсутствие ctx.ai — дефект DI, а не
+    // легитимный сценарий: раньше роутер молча собирал боевые deps по env (в тест-окружении
+    // — EchoProvider) и прогонял цикл на валидном треде. Теперь defaultAiDeps() бросает.
+    const user = freshUserId();
+    const threadId = await globalThread(user); // валидный тред: старый фолбэк дошёл бы до цикла
+    const caller = createCaller({
+      actorUserId: user,
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+      ai: undefined,
+    });
+    await expect(
+      caller.ai.sendMessage({ id: newId(), threadId, content: 'привет' }),
+    ).rejects.toThrow(/ai deps/i);
+  });
+});
+
 describe('ai.sendMessage: ownerOnly (§9.3)', () => {
   test('PAT-агент получает FORBIDDEN из middleware до какой-либо работы', async () => {
     // db — стаб: если middleware пропустит, вызов упадёт не-FORBIDDEN ошибкой БД
