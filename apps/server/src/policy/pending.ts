@@ -24,10 +24,16 @@
 // генерирует сервер (uuidv7), коллизия с клиентским batch_id невероятна. Повторный
 // approve: findByAuditId → replay сохранённого результата; гонка одинаковых approve →
 // AuditIdConflictError → тот же replay (§7.8).
-import { batchAuditMessageId, batchExecuteInput, newId, rejectMessageId } from '@orbis/shared';
+import {
+  batchAuditMessageId,
+  batchExecuteInput,
+  newId,
+  pendingMessageId,
+  rejectMessageId,
+} from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { appendMessage, appendMessageIdempotent } from '../chat/messages';
+import { appendMessageIdempotent } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { chatMessages } from '../db/schema';
@@ -94,6 +100,13 @@ export async function createPending(
     tool: string; // executor-форма; для batch — 'batch_execute'
     input: unknown; // envelope-валидированный payload (для batch — с транслированными именами)
     level: ConfirmationLevel;
+    /**
+     * Исходный batch_id модели: детерминирует pendingId (pendingMessageId) → ретрай
+     * того же batch на explicit-уровне даёт тот же PK, appendMessageIdempotent
+     * возвращает исходную карточку, а не плодит вторую (митигация Minor-4 Task 6).
+     * Нет ключа (одиночная мутация без batch_id) → серверный uuidv7, дедуп не применим.
+     */
+    dedupeKey?: string;
     clock?: () => Date;
   },
 ): Promise<{ pendingId: string; card: Card }> {
@@ -102,12 +115,17 @@ export async function createPending(
     // explicit-уровень (§7.10) — прочие уровни исполняются/отклоняются в dispatch
     throw new Error(`createPending: уровень «${args.level}» pending не порождает (§7.10)`);
   }
-  const pendingId = newId();
+  const pendingId =
+    args.dedupeKey !== undefined ? pendingMessageId(args.actor.userId, args.dedupeKey) : newId();
   const threadId = args.threadId ?? (await ensureGlobalThread(tx, args.actor.userId));
   const summary = pendingSummary(args.tool, args.input);
   const card: Card = { kind: 'confirmation_card', mode: 'explicit', pendingId, summary };
   const createdAt = (args.clock ?? (() => new Date()))();
-  await appendMessage(tx, {
+  // Идемпотентность по pendingId: при dedupeKey (batch_id) повтор того же batch даёт тот
+  // же PK → ON CONFLICT возвращает ИСХОДНУЮ запись (append-only — сохранённый payload
+  // первого запроса, §4.6), вторая карточка не пишется. Карточка детерминирована (тот же
+  // pendingId и summary при идентичном ретрае), поэтому реконструируется, а не читается.
+  await appendMessageIdempotent(tx, {
     id: pendingId,
     threadId,
     role: 'system',

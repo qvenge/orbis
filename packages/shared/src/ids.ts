@@ -29,6 +29,16 @@ export function rejectMessageId(ownerId: string, pendingId: string): string {
   return uuidv5(`reject:${ownerId.toLowerCase()}:${pendingId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
+/**
+ * PK карточки-запроса pending-подтверждения (§7.10), детерминированный по исходному
+ * batch_id модели: ретрай того же batch на explicit-уровне даёт тот же PK → ON CONFLICT
+ * не плодит вторую pending-карточку (митигация Minor-4 Task 6). Server-derived — с сырым
+ * batch_id клиента не совпадает (approve исполняет batch_id = pendingId, §7.10).
+ */
+export function pendingMessageId(ownerId: string, batchId: string): string {
+  return uuidv5(`pending:${ownerId.toLowerCase()}:${batchId.toLowerCase()}`, ORBIS_NAMESPACE);
+}
+
 export function recurringInstanceId(templateId: string, dateISO: string): string {
   return uuidv5(`${templateId.toLowerCase()}:${dateISO}`, ORBIS_NAMESPACE);
 }
