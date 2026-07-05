@@ -25,7 +25,8 @@ test('GeneralForm сабмитит частичный апдейт (только
   fireEvent.submit(screen.getByTestId('general-form'));
   await waitFor(() => {
     const c = calls.find((x) => x.path === 'user.updateSettings');
-    expect(c?.input).toMatchObject({ timezone: 'UTC' });
+    // Строгий toEqual: стережёт «шлём только изменённые поля» — упал бы при регрессе на полный объект.
+    expect(c?.input).toEqual({ timezone: 'UTC' });
   });
 });
 
