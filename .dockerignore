@@ -1,0 +1,35 @@
+# Зависимости — переустанавливаются из bun.lock внутри образа.
+node_modules
+**/node_modules
+
+# Сборочные артефакты — apps/web/dist генерится ВНУТРИ образа (bun run build),
+# поэтому локальный dist не копируем (иначе перетрёт/раздует контекст).
+dist
+**/dist
+.vite
+**/.vite
+
+# VCS и мета.
+.git
+.gitignore
+
+# Секреты — НЕ попадают в образ (задаются env в рантайме / build-args на Render).
+.env
+.env.local
+.env.*.local
+**/.env
+apps/server/.env
+spikes/**/.env
+
+# Не нужно ни для build, ни для runtime сервера.
+supabase/.temp
+supabase/**/.temp
+.github
+.superpowers
+.playwright-mcp
+docs
+spikes
+*.log
+.DS_Store
+Dockerfile
+.dockerignore
