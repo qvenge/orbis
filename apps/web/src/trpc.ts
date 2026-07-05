@@ -1,7 +1,7 @@
 import type { AppRouter } from '@orbis/server/src/router';
 import { CLIENT_VERSION_HEADER } from '@orbis/shared';
 import { QueryClient } from '@tanstack/react-query';
-import { httpBatchLink, TRPCClientError, type TRPCLink } from '@trpc/client';
+import { createTRPCClient, httpBatchLink, TRPCClientError, type TRPCLink } from '@trpc/client';
 import { createTRPCReact } from '@trpc/react-query';
 import type { inferRouterInputs, inferRouterOutputs } from '@trpc/server';
 import { observable } from '@trpc/server/observable';
@@ -61,3 +61,9 @@ export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[]
 export function makeTrpcClient(getToken: () => string | null, links?: TRPCLink<AppRouter>[]) {
   return trpc.createClient({ links: links ?? orbisLinks(getToken) });
 }
+
+// Vanilla-клиент (без React-контекста) — для боевой проводки retry-send (state/retry-send.ts).
+export function makeVanillaClient(getToken: () => string | null) {
+  return createTRPCClient<AppRouter>({ links: orbisLinks(getToken) });
+}
+export type OrbisVanillaClient = ReturnType<typeof makeVanillaClient>;
