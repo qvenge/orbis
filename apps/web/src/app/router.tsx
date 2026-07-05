@@ -1,3 +1,4 @@
+import { ChatScreen } from '../features/chat/ChatScreen';
 import { type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
 
@@ -56,9 +57,13 @@ export function ActiveScreen() {
       data-depth={stack.length}
       className="flex-1 overflow-y-auto"
     >
-      <div className="p-4 text-sm text-text-secondary">
-        {top ? `${top.kind}` : `Экран: ${activeTab}`}
-      </div>
+      {activeTab === 'chat' && !top ? (
+        <ChatScreen />
+      ) : (
+        <div className="p-4 text-sm text-text-secondary">
+          {top ? `${top.kind}` : `Экран: ${activeTab}`}
+        </div>
+      )}
     </main>
   );
 }

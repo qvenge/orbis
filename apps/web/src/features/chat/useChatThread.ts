@@ -1,5 +1,6 @@
 import { newId } from '@orbis/shared';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { TRPCClientError } from '@trpc/client';
 import { type RouterOutputs, trpc } from '../../trpc';
 
 export type ChatMessage = RouterOutputs['chat']['listMessages'][number];
@@ -67,8 +68,25 @@ export function useSendMessage(threadId: string) {
       );
       void utils.entity.query.invalidate();
     },
-    onError: () => {
-      void queryClient.invalidateQueries({ queryKey: key });
+    onError: (err, variables) => {
+      // §3 (флаг ревью Task 9): текст НЕ теряем молча. Оптимистичное user-сообщение остаётся,
+      // а рядом вставляем error_card с retryText — «Повторить» переотправит ту же строку (renderCards).
+      const code =
+        err instanceof TRPCClientError && typeof err.data?.code === 'string'
+          ? err.data.code
+          : 'LLM_UNAVAILABLE';
+      const errorMsg: ChatMessage = {
+        id: newId(),
+        threadId,
+        role: 'assistant',
+        content: '',
+        metadata: {
+          cards: [{ kind: 'error_card', code, message: 'Не удалось отправить сообщение.' }],
+          retryText: variables.content,
+        },
+        createdAt: new Date().toISOString(),
+      } as ChatMessage;
+      queryClient.setQueryData<InfiniteData>(key, (old) => upsertNewest(old, errorMsg));
     },
   });
 

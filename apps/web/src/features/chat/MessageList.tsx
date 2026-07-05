@@ -1,13 +1,15 @@
-import { renderCards } from './cards/renderCards';
+import { type CardHandlers, renderCards } from './cards/renderCards';
 import type { ChatMessage } from './useChatThread';
 
 export function MessageList({
   messages,
   isTyping,
+  onRetry,
+  onReparse,
 }: {
   messages: ChatMessage[];
   isTyping: boolean;
-}) {
+} & CardHandlers) {
   // messages в DESC; для показа сверху-вниз (старые вверху) — reverse на рендере.
   const ordered = [...messages].reverse();
   return (
@@ -19,7 +21,7 @@ export function MessageList({
           className={`max-w-[85%] rounded-card px-3 py-2 text-sm ${m.role === 'user' ? 'self-end bg-accent text-accent-foreground' : 'self-start bg-surface-2 text-text'}`}
         >
           {m.content && <p>{m.content}</p>}
-          {renderCards(m)}
+          {renderCards(m, { onRetry, onReparse })}
         </article>
       ))}
       {isTyping && (

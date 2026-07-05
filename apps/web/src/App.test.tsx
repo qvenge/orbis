@@ -1,10 +1,12 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
 import { expect, test } from 'vitest';
 import { App } from './App';
 import { useRetryBuffer } from './state/retry';
+import { renderWithProviders } from './test/harness';
 
 test('рендерит 4 таба, Agenda/Budget задизейблены', () => {
-  render(<App />);
+  // App живёт под trpc.Provider (main.tsx); дефолтный таб chat рендерит ChatScreen → нужен контекст.
+  renderWithProviders(<App />);
   expect(screen.getByTestId('tab-chat')).toBeEnabled();
   expect(screen.getByTestId('tab-browser')).toBeEnabled();
   expect(screen.getByTestId('tab-agenda')).toBeDisabled();
@@ -14,7 +16,7 @@ test('рендерит 4 таба, Agenda/Budget задизейблены', () =
 // §1.5: бейдж Chat реактивно отражает размер retry-буфера (пусто → нет бейджа).
 test('бейдж Chat показывает размер retry-буфера и исчезает при опустошении', () => {
   const op = useRetryBuffer.getState().enqueueCreate({ title: 'Тест', tags: [] }, 'fast_path');
-  render(<App />);
+  renderWithProviders(<App />);
   expect(screen.getByTestId('chat-badge')).toHaveTextContent('1');
 
   act(() => {
