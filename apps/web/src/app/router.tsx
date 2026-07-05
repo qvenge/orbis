@@ -1,5 +1,6 @@
 import { BrowserScreen } from '../features/browser/BrowserScreen';
 import { ChatScreen } from '../features/chat/ChatScreen';
+import { DetailScreen } from '../features/entity-detail/DetailScreen';
 import { type ScreenRef, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
 
@@ -67,6 +68,8 @@ function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
   if (!top) {
     if (activeTab === 'chat') return <ChatScreen />;
     if (activeTab === 'browser') return <BrowserScreen />;
+  } else if (top.kind === 'entity') {
+    return <DetailScreen entityId={top.id} />;
   }
   return (
     <div className="p-4 text-sm text-text-secondary">
