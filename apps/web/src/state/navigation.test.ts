@@ -1,4 +1,4 @@
-import { beforeEach, expect, test } from 'vitest';
+import { beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from './navigation';
 
 const reset = () =>
@@ -35,4 +35,28 @@ test('persist пишет активный таб и стеки в localStorage',
   // biome-ignore lint/style/noNonNullAssertion: persist только что записал ключ — значение гарантированно присутствует
   const raw = JSON.parse(localStorage.getItem('orbis:nav:v1')!);
   expect(raw.state.stacks.browser).toEqual([{ kind: 'entity', id: 'e9' }]);
+});
+
+// §1.4: обратное направление persist — состояние ЧИТАЕТСЯ из localStorage при ремоунте.
+test('persist восстанавливает активный таб и стеки из localStorage после ремоунта', async () => {
+  localStorage.setItem(
+    'orbis:nav:v1',
+    JSON.stringify({
+      version: 0,
+      state: {
+        activeTab: 'browser',
+        stacks: {
+          chat: [{ kind: 'thread', threadId: 't7' }],
+          browser: [{ kind: 'entity', id: 'e5' }],
+          agenda: [],
+          budget: [],
+        },
+      },
+    }),
+  );
+  vi.resetModules();
+  const { useNav: rehydrated } = await import('./navigation');
+  expect(rehydrated.getState().activeTab).toBe('browser');
+  expect(rehydrated.getState().stacks.browser).toEqual([{ kind: 'entity', id: 'e5' }]);
+  expect(rehydrated.getState().stacks.chat).toEqual([{ kind: 'thread', threadId: 't7' }]);
 });
