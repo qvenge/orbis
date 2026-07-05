@@ -35,6 +35,29 @@ test('financial: сумма с минусом и тоном danger', () => {
   expect(amount.className).toContain('text-danger');
 });
 
+test('financial: income → плюс и позитивный тон', () => {
+  render(
+    <NativeRow
+      entity={
+        {
+          ...base,
+          aspects: {
+            'orbis/financial': {
+              amount: '340.00',
+              direction: 'income',
+              category_ref: 'cat-salary',
+            },
+          },
+        } as never
+      }
+      onToggleTask={() => {}}
+    />,
+  );
+  const amount = screen.getByTestId('native-amount');
+  expect(amount.textContent?.startsWith('+')).toBe(true);
+  expect(amount.className).toContain('text-accent');
+});
+
 test('task: рендерит чекбокс', () => {
   render(
     <NativeRow

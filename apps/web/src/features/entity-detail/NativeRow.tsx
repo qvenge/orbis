@@ -1,10 +1,19 @@
 import { BUILTIN_ASPECT_META } from '@orbis/shared';
-import { formatMoney } from '../../lib/format';
+import { formatMoney, type MoneyTone } from '../../lib/format';
 import type { RouterOutputs } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Checkbox } from '../../ui/Checkbox';
 
 type Entity = RouterOutputs['entity']['query'][number];
+
+// §3.6 rich-money: честно отражаем тон из formatMoney — expense→danger (коралл),
+// income→positive. Отдельного success/positive-токена в tokens.css пока нет, поэтому
+// income отображаем акцентным (латунь); ветки явные (не общий else), чтобы намерение
+// «income ≠ прочее» было закреплено и ввод success-токена стал локальной правкой.
+const AMOUNT_TONE_CLASS: Record<MoneyTone, string> = {
+  danger: 'text-danger',
+  positive: 'text-accent',
+};
 
 function keyFieldsFor(aspectId: string): string[] {
   return BUILTIN_ASPECT_META.find((m) => m.id === aspectId)?.viewConfig.keyFields ?? [];
@@ -43,10 +52,7 @@ export function NativeRow({
     return (
       <div className="flex items-center gap-2" data-testid="native-financial">
         <span className="flex-1">{entity.title}</span>
-        <span
-          data-testid="native-amount"
-          className={money.tone === 'danger' ? 'text-danger' : 'text-accent'}
-        >
+        <span data-testid="native-amount" className={AMOUNT_TONE_CLASS[money.tone]}>
           {money.text}
         </span>
         {typeof financial.category_ref === 'string' && <Badge>{financial.category_ref}</Badge>}
