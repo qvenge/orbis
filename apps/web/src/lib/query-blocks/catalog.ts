@@ -1,0 +1,11 @@
+import { buildFieldCatalog, type FieldCatalog } from '@orbis/shared';
+import type { RouterOutputs } from '../../trpc';
+
+type AspectDef = RouterOutputs['aspect']['list'][number];
+
+/** Каталог полей query-грамматики из ответа aspect.list (schema → поля, §6.1). */
+export function buildCatalogFromAspects(defs: AspectDef[]): FieldCatalog {
+  return buildFieldCatalog(
+    defs.map((d) => ({ id: d.id, schema: d.schema as Record<string, unknown> })),
+  );
+}
