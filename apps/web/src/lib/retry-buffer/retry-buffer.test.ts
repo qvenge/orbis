@@ -1,4 +1,15 @@
 import { createRetryBuffer, type FlushOutcome } from './index';
+import type { QueueStorage } from './storage';
+
+function memStorage(): QueueStorage {
+  let items: ReturnType<QueueStorage['load']> = [];
+  return {
+    load: () => items,
+    save: (v) => {
+      items = v;
+    },
+  };
+}
 
 test('enqueue кладёт запись в очередь; flush(confirmed) удаляет её', async () => {
   const buffer = createRetryBuffer();
@@ -20,4 +31,12 @@ test('transport_failure оставляет запись в очереди; busin
   await buffer.flush(async () => outcomes.shift() ?? 'confirmed'); // noUncheckedIndexedAccess-safe
 
   expect(buffer.size()).toBe(1); // осталась только transport_failure-запись, ретраится следующим flush()
+});
+
+test('enqueue генерирует UUIDv7 clientId (версия-нибл = 7)', () => {
+  const buf = createRetryBuffer(memStorage());
+  const op = buf.enqueue({ tool: 'entity.create', payload: {} });
+  // UUIDv7: 15-й символ (индекс 14) = '7'
+  expect(op.clientId[14]).toBe('7');
+  expect(op.clientId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-/i);
 });

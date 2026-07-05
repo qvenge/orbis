@@ -1,5 +1,10 @@
+import { newId } from '@orbis/shared';
 import type { QueueStorage } from './storage';
 import { localStorageQueue } from './storage';
+
+export type { QueueStorage };
+// Re-export storage seam so consumers (state/retry.ts) can inject/observe the queue.
+export { localStorageQueue };
 
 export interface QueuedCreate {
   clientId: string;
@@ -18,35 +23,32 @@ export interface RetryBuffer {
 }
 
 export function createRetryBuffer(storage: QueueStorage = localStorageQueue): RetryBuffer {
-  let queue: QueuedCreate[] = storage.load();
-
+  // storage — единственный источник истины (совпадает с state/retry.ts: storage.load()
+  // авторитетен). Держать отдельный in-memory кэш нельзя: singleton-буфер разъехался бы
+  // со storage при внешней очистке (напр. logout/тесты) — методы читают storage свежим.
   return {
     enqueue(op) {
-      // UUIDv7 (01 §5.3) — генератор из packages/shared при исполнении слайса;
-      // crypto.randomUUID() здесь placeholder-скелет (v4, не сортируемый по времени).
+      // clientId — UUIDv7 (01 §5.3): время в префиксе, сортируемо, идемпотентность по client-UUID.
       const item: QueuedCreate = {
         ...op,
-        clientId: crypto.randomUUID(),
+        clientId: newId(),
         createdAt: new Date().toISOString(),
       };
-      queue = [...queue, item];
-      storage.save(queue);
+      storage.save([...storage.load(), item]);
       return item;
     },
     async flush(send) {
-      for (const item of [...queue]) {
+      for (const item of storage.load()) {
         const outcome = await send(item);
         if (outcome === 'confirmed' || outcome === 'business_rejection') {
-          queue = queue.filter((q) => q.clientId !== item.clientId);
-          storage.save(queue);
+          storage.save(storage.load().filter((q) => q.clientId !== item.clientId));
         }
         // transport_failure — запись остаётся, ретрай следующим вызовом flush()
       }
     },
     cancel(clientId) {
-      queue = queue.filter((q) => q.clientId !== clientId);
-      storage.save(queue);
+      storage.save(storage.load().filter((q) => q.clientId !== clientId));
     },
-    size: () => queue.length,
+    size: () => storage.load().length,
   };
 }

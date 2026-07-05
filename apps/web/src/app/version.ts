@@ -1,0 +1,2 @@
+// APP_VERSION → CLIENT_VERSION_HEADER (§9.1). ДОЛЖЕН быть ≥ MIN_COMPATIBLE_CLIENT_VERSION ('0.1.0').
+export const APP_VERSION = '0.1.0';
