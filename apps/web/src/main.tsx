@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { AuthProvider, getCurrentToken } from './auth/AuthProvider';
+import { OnboardingGate } from './features/onboarding/OnboardingGate';
 import { makeTrpcClient, queryClient, trpc } from './trpc';
 import './styles/globals.css';
 
@@ -16,7 +17,9 @@ createRoot(rootElement).render(
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <App />
+          <OnboardingGate>
+            <App />
+          </OnboardingGate>
         </AuthProvider>
       </QueryClientProvider>
     </trpc.Provider>
