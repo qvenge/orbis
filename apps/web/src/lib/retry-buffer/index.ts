@@ -1,6 +1,10 @@
 import type { QueueStorage } from './storage';
 import { localStorageQueue } from './storage';
 
+export type { QueueStorage };
+// Re-export storage seam so consumers (state/retry.ts) can inject/observe the queue.
+export { localStorageQueue };
+
 export interface QueuedCreate {
   clientId: string;
   tool: string;
