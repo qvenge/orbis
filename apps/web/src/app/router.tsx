@@ -1,5 +1,6 @@
+import { BrowserScreen } from '../features/browser/BrowserScreen';
 import { ChatScreen } from '../features/chat/ChatScreen';
-import { type Tab, useNav } from '../state/navigation';
+import { type ScreenRef, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
 
 const TABS: { id: Tab; label: string; icon: string; enabled: boolean }[] = [
@@ -57,13 +58,19 @@ export function ActiveScreen() {
       data-depth={stack.length}
       className="flex-1 overflow-y-auto"
     >
-      {activeTab === 'chat' && !top ? (
-        <ChatScreen />
-      ) : (
-        <div className="p-4 text-sm text-text-secondary">
-          {top ? `${top.kind}` : `Экран: ${activeTab}`}
-        </div>
-      )}
+      {renderScreen(activeTab, top)}
     </main>
+  );
+}
+
+function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
+  if (!top) {
+    if (activeTab === 'chat') return <ChatScreen />;
+    if (activeTab === 'browser') return <BrowserScreen />;
+  }
+  return (
+    <div className="p-4 text-sm text-text-secondary">
+      {top ? `${top.kind}` : `Экран: ${activeTab}`}
+    </div>
   );
 }

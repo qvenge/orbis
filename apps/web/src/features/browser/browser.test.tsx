@@ -1,0 +1,79 @@
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { beforeEach, expect, test } from 'vitest';
+import { useNav } from '../../state/navigation';
+import { renderWithProviders } from '../../test/harness';
+import { EntityList } from './EntityList';
+import { QuickCapture } from './QuickCapture';
+import { Sidebar } from './Sidebar';
+
+const ent = (id: string, title: string) => ({
+  id,
+  ownerId: 'u',
+  title,
+  emoji: null,
+  body: '',
+  bodyRefs: [],
+  tags: [],
+  meta: {},
+  aspects: {},
+  createdAt: 'x',
+  updatedAt: 'y',
+  archived: false,
+});
+
+beforeEach(() => {
+  localStorage.clear();
+  useNav.setState({
+    activeTab: 'browser',
+    stacks: { chat: [], browser: [], agenda: [], budget: [] },
+  });
+});
+
+test('EntityList: первая страница 50 через entity.query; «ещё» шлёт limit=100', async () => {
+  const page = Array.from({ length: 50 }, (_, i) => ent(`e${i}`, `T${i}`));
+  const { calls } = renderWithProviders(<EntityList />, (path, input) => {
+    if (path === 'entity.query') {
+      const q = (input as { query: string }).query;
+      return q.includes('limit=100') ? [...page, ent('e50', 'T50')] : page;
+    }
+    throw new Error(`unexpected ${path}`);
+  });
+  await waitFor(() => expect(screen.getAllByTestId('entity-row')).toHaveLength(50));
+  fireEvent.click(screen.getByRole('button', { name: /ещё/i }));
+  await waitFor(() =>
+    expect(calls.some((c) => (c.input as { query: string }).query.includes('limit=100'))).toBe(
+      true,
+    ),
+  );
+});
+
+test('Sidebar: бейдж pinned через entity.count; >99 → «99+»', async () => {
+  const settings = { pinnedEntities: [{ id: 'p1', order: 0 }] };
+  // §3.2: бейдж считается по первому {{query:...}}-блоку body закреплённой сущности.
+  const pinnedEntity = { ...ent('p1', 'Задачи'), body: '{{query:aspect=orbis/task}}' };
+  renderWithProviders(<Sidebar settings={settings as never} />, (path) => {
+    if (path === 'entity.get') return { entity: pinnedEntity, relations: [] };
+    if (path === 'entity.count') return { count: 250 };
+    return {};
+  });
+  await waitFor(() => expect(screen.getByTestId('pin-badge-p1')).toHaveTextContent('99+'));
+});
+
+test('QuickCapture: title-only через entity.create(source:quick_capture) без интерпретации', async () => {
+  const { calls } = renderWithProviders(<QuickCapture context={{ kind: 'root' }} />, (path) =>
+    path === 'entity.create' ? ent('new', 'купить молоко 200') : {},
+  );
+  fireEvent.change(screen.getByLabelText(/быстрая запись/i), {
+    target: { value: 'купить молоко 200' },
+  });
+  fireEvent.submit(screen.getByTestId('quick-capture-form'));
+  await waitFor(() => {
+    const c = calls.find((x) => x.path === 'entity.create');
+    expect(c?.input).toMatchObject({
+      source: 'quick_capture',
+      input: { title: 'купить молоко 200', tags: [] },
+    });
+    // никакой интерпретации: нет aspects orbis/financial
+    expect((c?.input as { input: { aspects?: unknown } }).input.aspects).toBeUndefined();
+  });
+});
