@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
 import { renderWithProviders, trpcError } from '../../test/harness';
 import { OnboardingGate } from './OnboardingGate';
@@ -50,4 +50,32 @@ test('повторный вход: settings есть сразу → seedOnboardi
   );
   await waitFor(() => expect(screen.getByTestId('app')).toBeInTheDocument());
   expect(calls.some((c) => c.path === 'user.seedOnboarding')).toBe(false);
+});
+
+test('ошибка seedOnboarding: ветка восстановления (не splash), «Повторить» повторяет мутацию', async () => {
+  const { calls } = renderWithProviders(
+    <OnboardingGate>
+      <div data-testid="app">app</div>
+    </OnboardingGate>,
+    (path) => {
+      if (path === 'user.getSettings') throw trpcError('NOT_FOUND');
+      if (path === 'user.seedOnboarding') throw trpcError('INTERNAL_SERVER_ERROR');
+      throw new Error(`unexpected ${path}`);
+    },
+  );
+
+  // seed упал → показывается alert-восстановление, а не вечный splash
+  await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+  expect(screen.queryByTestId('onboarding-splash')).not.toBeInTheDocument();
+
+  const seedCallsBefore = calls.filter((c) => c.path === 'user.seedOnboarding').length;
+  expect(seedCallsBefore).toBeGreaterThan(0);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Повторить' }));
+
+  await waitFor(() =>
+    expect(calls.filter((c) => c.path === 'user.seedOnboarding').length).toBeGreaterThan(
+      seedCallsBefore,
+    ),
+  );
 });
