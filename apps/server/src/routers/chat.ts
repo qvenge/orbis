@@ -17,6 +17,13 @@ function mapExecError(e: unknown): never {
   throw e;
 }
 
+// Курсор пагинации listMessages: строгий ISO-UTC (форма Date.toISOString(), опц. дробные
+// секунды) + опциональный `|<uuid>`. Строгая regex (а не Date.parse): отсекает мусор
+// («2026») и невалидный id (`<iso>|not-a-uuid`) чистым 400 — иначе кривой uuid дошёл бы
+// до Postgres и упал 500 (invalid input syntax for type uuid).
+const BEFORE_CURSOR_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z(\|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$/;
+
 export const chatRouter = router({
   // Без entityId — глобальный тред владельца; ensure идемпотентен (§4.5)
   ensureThread: ownerOnlyProcedure
@@ -43,12 +50,10 @@ export const chatRouter = router({
       z
         .object({
           threadId: z.string().uuid(),
-          // `<iso>` ИЛИ `<iso>|<id>`; валидируем разбираемость createdAt-части
+          // `<iso>` ИЛИ `<iso>|<uuid>` — строгая форма курсора (мусор/кривой uuid → 400)
           before: z
             .string()
-            .refine((s) => !Number.isNaN(Date.parse(s.split('|')[0] ?? '')), {
-              message: 'before: ожидается "<iso>" или "<iso>|<id>"',
-            })
+            .regex(BEFORE_CURSOR_RE, 'before: ожидается "<iso>" или "<iso>|<uuid>"')
             .optional(),
           limit: z.number().int().min(1).max(200).optional(),
         })

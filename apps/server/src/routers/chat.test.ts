@@ -137,6 +137,27 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
     expect(collected).toEqual([idBig, idSmall, idOlder]);
   });
 
+  // Ревью Task 2: недоверенный before-курсор валидируется строгой regex ДО резолвера —
+  // мусор и кривой uuid отбиваются чистым 400, а не 500 из Postgres (invalid uuid syntax).
+  test('невалидный before-курсор → BAD_REQUEST (400), не 500', async () => {
+    const caller = callerFor(freshUserId());
+    const threadId = crypto.randomUUID();
+    // id-часть не-uuid: без строгой валидации дошло бы до Postgres → 500
+    const badId = await trpcError(
+      caller.chat.listMessages({ threadId, before: '2026-07-05T12:00:00.000Z|not-a-uuid' }),
+    );
+    expect(badId.code).toBe('BAD_REQUEST');
+    // явный мусор в createdAt-части
+    const garbage = await trpcError(caller.chat.listMessages({ threadId, before: '2026' }));
+    expect(garbage.code).toBe('BAD_REQUEST');
+    // легитимный составной курсор и легаси-ISO по-прежнему валидны (валидация не сработала)
+    await caller.chat.listMessages({
+      threadId,
+      before: `2026-07-05T12:00:00.000Z|${crypto.randomUUID()}`,
+    });
+    await caller.chat.listMessages({ threadId, before: '2026-07-05T12:00:00.000Z' });
+  });
+
   test('чужой тред: append → NOT_FOUND (RLS: чужое и несуществующее неразличимы)', async () => {
     const owner = freshUserId();
     const stranger = freshUserId();
