@@ -5,6 +5,7 @@ import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
 import type { EntityCardData } from './types';
 
+// inline-правка полей аспекта — на detail-экране (Task 14); в чат-карточке read-only + Undo + тап в detail (MVP §2.3)
 export function EntityCard({ card }: { card: EntityCardData }) {
   const [undone, setUndone] = useState(false);
   const push = useNav((s) => s.push);

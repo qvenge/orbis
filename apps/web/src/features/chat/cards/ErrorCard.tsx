@@ -19,8 +19,8 @@ export function ErrorCard({ card, onRetry }: { card: ErrorCardData; onRetry?: ()
           ? 'Временный сбой — попробуйте ещё раз.'
           : 'Проверьте данные и попробуйте иначе.'}
       </p>
-      {retryable && (
-        <Button variant="ghost" onClick={() => onRetry?.()}>
+      {retryable && onRetry && (
+        <Button variant="ghost" onClick={onRetry}>
           Повторить
         </Button>
       )}

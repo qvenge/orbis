@@ -10,14 +10,16 @@ const EXPIRY_MS = 24 * 60 * 60 * 1000; // D-a: 24ч visual-expiry
 export function ConfirmationCard({
   card,
   createdAt,
+  now = Date.now(),
 }: {
   card: ConfirmationData;
   createdAt: string;
+  now?: number; // инъектируемое время (детерминизм тестов); по умолчанию — настенные часы
 }) {
   const [resolved, setResolved] = useState<null | 'approved' | 'rejected'>(null);
   const [postError, setPostError] = useState<string | null>(null);
   // Клиентский expiry — только UI; approve всё равно ревалидирует на сервере (D-a).
-  const expired = Date.now() - new Date(createdAt).getTime() > EXPIRY_MS;
+  const expired = now - new Date(createdAt).getTime() > EXPIRY_MS;
 
   const approve = trpc.ai.approve.useMutation({
     onSuccess: () => setResolved('approved'),

@@ -73,45 +73,53 @@ test('query_result без aggregate → native-список из entityIds (D-d)
   expect(screen.getAllByTestId('qr-item')).toHaveLength(2);
 });
 
-test('confirmation explicit: Подтвердить → ai.approve(pendingId)', async () => {
-  const { calls } = renderWithProviders(
-    <div>
-      {renderCards(
-        msg([
-          {
-            kind: 'confirmation_card',
-            mode: 'explicit',
-            pendingId: 'p1',
-            summary: 'Удалить 3 задачи',
-            diff: {},
-          },
-        ]),
-      )}
-    </div>,
-    (path) =>
-      path === 'ai.approve'
-        ? { ok: true, actionId: 'a', results: [], idempotentReplay: false }
-        : {},
-  );
-  fireEvent.click(screen.getByRole('button', { name: /подтвердить/i }));
-  await waitFor(() =>
-    expect(calls.find((c) => c.path === 'ai.approve')?.input).toEqual({ pendingId: 'p1' }),
-  );
-});
+// Пинним Date.now в пределах 24ч-окна фикстуры createdAt, чтобы expired не зависел от
+// настенных часов. Мокаем только Date.now (не setTimeout) — async waitFor не виснет;
+// ConfirmationCard берёт now по умолчанию из Date.now() → expired детерминирован.
+describe('confirmation explicit actions (детерминированное время)', () => {
+  beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-05T12:00:01.000Z')));
+  afterEach(() => vi.restoreAllMocks());
 
-test('confirmation explicit: Отменить → ai.reject(pendingId)', async () => {
-  const { calls } = renderWithProviders(
-    <div>
-      {renderCards(
-        msg([{ kind: 'confirmation_card', mode: 'explicit', pendingId: 'p2', summary: 's' }]),
-      )}
-    </div>,
-    (path) => (path === 'ai.reject' ? { pendingId: 'p2', alreadyRejected: false } : {}),
-  );
-  fireEvent.click(screen.getByRole('button', { name: /отменить/i }));
-  await waitFor(() =>
-    expect(calls.find((c) => c.path === 'ai.reject')?.input).toEqual({ pendingId: 'p2' }),
-  );
+  test('confirmation explicit: Подтвердить → ai.approve(pendingId)', async () => {
+    const { calls } = renderWithProviders(
+      <div>
+        {renderCards(
+          msg([
+            {
+              kind: 'confirmation_card',
+              mode: 'explicit',
+              pendingId: 'p1',
+              summary: 'Удалить 3 задачи',
+              diff: {},
+            },
+          ]),
+        )}
+      </div>,
+      (path) =>
+        path === 'ai.approve'
+          ? { ok: true, actionId: 'a', results: [], idempotentReplay: false }
+          : {},
+    );
+    fireEvent.click(screen.getByRole('button', { name: /подтвердить/i }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'ai.approve')?.input).toEqual({ pendingId: 'p1' }),
+    );
+  });
+
+  test('confirmation explicit: Отменить → ai.reject(pendingId)', async () => {
+    const { calls } = renderWithProviders(
+      <div>
+        {renderCards(
+          msg([{ kind: 'confirmation_card', mode: 'explicit', pendingId: 'p2', summary: 's' }]),
+        )}
+      </div>,
+      (path) => (path === 'ai.reject' ? { pendingId: 'p2', alreadyRejected: false } : {}),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /отменить/i }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'ai.reject')?.input).toEqual({ pendingId: 'p2' }),
+    );
+  });
 });
 
 describe('visual-expiry (D-a)', () => {
