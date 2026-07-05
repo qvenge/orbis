@@ -23,27 +23,38 @@ export function useFastPath(threadId: string) {
   const online = useOnline();
   const enqueueCreate = useRetryBuffer((s) => s.enqueueCreate);
   const flushNow = useRetryBuffer((s) => s.flushNow);
-  const { sendMessage } = useSendMessage(threadId);
+  const { sendMessage, retryMessage } = useSendMessage(threadId);
 
   const create = trpc.entity.create.useMutation();
   const update = trpc.entity.update.useMutation();
   const key = chatThreadKey(threadId);
 
-  // Свежий контекст парсера: категории (aspect=orbis/category) + валюта по умолчанию.
-  // getData() — тёплый кэш (в т.ч. офлайн после онлайн-загрузки); иначе fetch (staleTime 30s).
-  async function loadCtx(): Promise<FastPathCtx> {
-    const cats =
-      utils.entity.query.getData(CATEGORY_QUERY) ??
-      (await utils.entity.query.fetch(CATEGORY_QUERY));
-    const settings = utils.user.getSettings.getData() ?? (await utils.user.getSettings.fetch());
+  // Категории (aspect=orbis/category) + валюта → контекст парсера. `cats`/`settings` — сырьё кэша/сети.
+  type QueryOut = ReturnType<typeof utils.entity.query.getData>;
+  type SettingsOut = ReturnType<typeof utils.user.getSettings.getData>;
+  function mapCtx(cats: QueryOut, settings: SettingsOut): FastPathCtx {
     const categories: FastPathCategory[] = (cats ?? []).map((e) => {
-      const meta = (e.aspects['orbis/category'] ?? {}) as {
+      const meta = (e.aspects?.['orbis/category'] ?? {}) as {
         aliases?: string[];
         spend_class?: string;
       };
       return { id: e.id, aliases: meta.aliases ?? [], spendClass: meta.spend_class };
     });
     return { categories, defaultCurrency: settings?.defaultCurrency ?? 'RUB' };
+  }
+
+  // Онлайн: свежий ctx (getData() тёплый кэш → иначе fetch, staleTime 30s).
+  async function loadCtx(): Promise<FastPathCtx> {
+    const cats =
+      utils.entity.query.getData(CATEGORY_QUERY) ??
+      (await utils.entity.query.fetch(CATEGORY_QUERY));
+    const settings = utils.user.getSettings.getData() ?? (await utils.user.getSettings.fetch());
+    return mapCtx(cats, settings);
+  }
+
+  // Офлайн: ТОЛЬКО тёплый кэш (без fetch) — иначе onlineManager заморозит запрос и submit зависнет (§2.6).
+  function cachedCtx(): FastPathCtx {
+    return mapCtx(utils.entity.query.getData(CATEGORY_QUERY), utils.user.getSettings.getData());
   }
 
   function insertCard(card: Record<string, unknown>, note: string, fastPath: FastPathMeta) {
@@ -70,24 +81,31 @@ export function useFastPath(threadId: string) {
   }
 
   async function submit(text: string): Promise<void> {
-    const ctx = await loadCtx();
-    const parsed = parseFastPath(text, ctx);
-
+    // Гейт !online — ДО любого сетевого ctx: офлайн строим ctx только из кэша, сеть не трогаем (§2.6).
     if (!online) {
-      // Офлайн: LLM недоступен. Уверенный → retry-буфер + «⏳ ждёт отправки»; иначе — подсказка.
+      const ctx = cachedCtx();
+      const parsed = parseFastPath(text, ctx);
       if (parsed.ok) {
+        // Уверенный (категории прогреты) → retry-буфер + «⏳ ждёт отправки».
         enqueueCreate(parsed.create, 'fast_path');
         const fin = (parsed.create.aspects?.['orbis/financial'] ?? {}) as Record<string, unknown>;
         insertCard({ ...fin, title: parsed.create.title }, '⏳ ждёт отправки', {
           text,
           status: 'pending',
         });
+      } else if (ctx.categories.length === 0) {
+        // Холодный кэш: категории не загружались онлайн — честно сообщаем, НЕ виснем.
+        insertSystemNote(
+          'Нет сети — быстрый ввод недоступен, пока категории не загружены (откройте приложение онлайн).',
+        );
       } else {
         insertSystemNote('Нет сети — доступен только быстрый ввод (сумма + категория).');
       }
       return;
     }
 
+    const ctx = await loadCtx();
+    const parsed = parseFastPath(text, ctx);
     if (!parsed.ok) {
       // Неуверенно → LLM-путь (ошибку и потерю текста закрывает useSendMessage.onError, §3).
       sendMessage(text);
@@ -129,5 +147,5 @@ export function useFastPath(threadId: string) {
     queryClient.setQueryData(key, (old) => upsertNewest(old as never, synthetic));
   }
 
-  return { submit, reparse, resend: sendMessage };
+  return { submit, reparse, retry: retryMessage };
 }

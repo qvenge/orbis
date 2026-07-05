@@ -31,7 +31,7 @@ export function ChatScreen() {
 
 function ThreadView({ threadId }: { threadId: string }) {
   const { messages, isLoading } = useChatThread(threadId);
-  const { submit, reparse, resend } = useFastPath(threadId);
+  const { submit, reparse, retry } = useFastPath(threadId);
   const online = useOnline();
   const pending = useRetryBuffer((s) => s.size);
 
@@ -47,7 +47,7 @@ function ThreadView({ threadId }: { threadId: string }) {
           Загрузка…
         </div>
       ) : (
-        <MessageList messages={messages} isTyping={false} onRetry={resend} onReparse={reparse} />
+        <MessageList messages={messages} isTyping={false} onRetry={retry} onReparse={reparse} />
       )}
       <Composer
         onSubmit={submit}

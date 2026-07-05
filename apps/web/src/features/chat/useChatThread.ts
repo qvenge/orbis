@@ -20,6 +20,12 @@ export function upsertNewest(old: InfiniteData | undefined, msg: ChatMessage): I
   return { ...old, pages: [[msg, ...without], ...rest] };
 }
 
+// Убрать сообщение по id со всех страниц (снятие устаревшего error_card при «Повторить»).
+export function removeMessage(old: InfiniteData | undefined, id: string): InfiniteData | undefined {
+  if (!old) return old;
+  return { ...old, pages: old.pages.map((p) => p.filter((m) => m.id !== id)) };
+}
+
 export function useChatThread(threadId: string) {
   const utils = trpc.useUtils();
   const q = useInfiniteQuery({
@@ -70,7 +76,8 @@ export function useSendMessage(threadId: string) {
     },
     onError: (err, variables) => {
       // §3 (флаг ревью Task 9): текст НЕ теряем молча. Оптимистичное user-сообщение остаётся,
-      // а рядом вставляем error_card с retryText — «Повторить» переотправит ту же строку (renderCards).
+      // а рядом вставляем error_card с retryId (id упавшего сообщения) + retryText — «Повторить»
+      // переотправит ту же строку тем же id (дедуп по id, без второго пузыря; renderCards).
       const code =
         err instanceof TRPCClientError && typeof err.data?.code === 'string'
           ? err.data.code
@@ -82,6 +89,7 @@ export function useSendMessage(threadId: string) {
         content: '',
         metadata: {
           cards: [{ kind: 'error_card', code, message: 'Не удалось отправить сообщение.' }],
+          retryId: variables.id,
           retryText: variables.content,
         },
         createdAt: new Date().toISOString(),
@@ -92,6 +100,20 @@ export function useSendMessage(threadId: string) {
 
   return {
     sendMessage: (content: string) => send.mutate({ id: newId(), threadId, content }),
+    // «Повторить»: снять устаревший error_card и переслать тем же id — upsertNewest дедупнёт
+    // оптимистичный пузырь (без дубля), при успехе сообщение реконсилится ответом сервера.
+    retryMessage: ({
+      errorMessageId,
+      id,
+      content,
+    }: {
+      errorMessageId: string;
+      id: string;
+      content: string;
+    }) => {
+      queryClient.setQueryData<InfiniteData>(key, (old) => removeMessage(old, errorMessageId));
+      send.mutate({ id, threadId, content });
+    },
     isSending: send.isPending,
   };
 }

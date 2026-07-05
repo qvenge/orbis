@@ -12,10 +12,10 @@ import type { Card } from './types';
 type FastPathMeta = { entityId?: string; text: string; status: 'confirmed' | 'pending' };
 
 // Обработчики chat-действий, прокидываемые сверху (ChatScreen → MessageList):
-//  - onRetry: §3 — переотправить строку упавшего ai.sendMessage (кнопка ErrorCard);
+//  - onRetry: §3 — снять устаревший error_card и переслать упавшее ai.sendMessage тем же id;
 //  - onReparse: «разобрать с AI» — архив fast-сущности + LLM (только у подтверждённой карточки).
 export type CardHandlers = {
-  onRetry?: (text: string) => void;
+  onRetry?: (args: { errorMessageId: string; id: string; content: string }) => void;
   onReparse?: (entityId: string, text: string) => void;
 };
 
@@ -25,6 +25,7 @@ export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): Reac
   const meta = (msg.metadata ?? {}) as {
     cards?: Card[];
     author_kind?: string;
+    retryId?: string;
     retryText?: string;
     fastPath?: FastPathMeta;
   };
@@ -41,15 +42,20 @@ export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): Reac
         // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
         return <ConfirmationCard key={i} card={card} createdAt={msg.createdAt} />;
       case 'error_card':
-        // §3: retryText есть → «Повторить» переотправит строку тем же LLM-путём.
+        // §3: retryId+retryText есть → «Повторить» снимет этот error_card и перешлёт тем же id.
         return (
           <ErrorCard
             // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
             key={i}
             card={card}
             onRetry={
-              meta.retryText && handlers.onRetry
-                ? () => handlers.onRetry?.(meta.retryText as string)
+              meta.retryId && meta.retryText && handlers.onRetry
+                ? () =>
+                    handlers.onRetry?.({
+                      errorMessageId: msg.id,
+                      id: meta.retryId as string,
+                      content: meta.retryText as string,
+                    })
                 : undefined
             }
           />
