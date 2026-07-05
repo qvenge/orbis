@@ -4,6 +4,7 @@ import tailwind from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { defineConfig } from 'vitest/config';
+import { pwaManifest } from './src/pwa/manifest';
 
 export default defineConfig({
   plugins: [
@@ -11,7 +12,11 @@ export default defineConfig({
     tailwind(),
     VitePWA({
       registerType: 'autoUpdate',
-      manifest: { name: 'Orbis', short_name: 'Orbis', display: 'standalone' },
+      manifest: pwaManifest,
+      workbox: {
+        navigateFallback: '/index.html', // app-shell для офлайна
+        globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+      },
     }),
   ],
   server: { port: 5173, proxy: { '/trpc': 'http://localhost:3001' } },
