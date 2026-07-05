@@ -69,7 +69,7 @@ export const chatRouter = router({
             conds.push(lt(chatMessages.createdAt, new Date(input.before)));
           } else {
             // Составной `<iso>|<id>`: строгое «раньше» в лексикографике (createdAt, id) —
-            // зеркалит DESC-сортировку и findAnswerAfter (send-message.ts), устойчиво к ms
+            // зеркалит DESC-сортировку (createdAt, id), устойчиво к ms-коллизии
             const createdAt = new Date(input.before.slice(0, sep));
             const id = input.before.slice(sep + 1);
             conds.push(

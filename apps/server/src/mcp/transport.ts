@@ -47,7 +47,7 @@ export function makeMcpHandler(deps: McpDeps) {
   return async (c: Context): Promise<Response> => {
     // Метод-гейт ДО PAT-проверки (Task 10b): в stateless polling-дизайне (§9.3 — без
     // SSE-стрима и сессий) осмыслен только POST; GET с валидным PAT открывал бы
-    // мёртвый SSE-стрим до idle-timeout. Эндпоинт смонтирован app.all (index.ts),
+    // мёртвый SSE-стрим до idle-timeout. Эндпоинт смонтирован app.all (app.ts),
     // поэтому не-POST доходит сюда.
     if (c.req.method !== 'POST') {
       return c.json(
