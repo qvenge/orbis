@@ -1,19 +1,42 @@
-# Render Blueprint — SPIKE-05: hello-world Bun API (фаза 0).
-# Деплой: dashboard.render.com → New → Blueprint → выбрать этот репозиторий/ветку.
+# Render Blueprint — прод Orbis (слайс 1c-2, Фаза B).
+# Деплой: dashboard.render.com → New → Blueprint → выбрать этот репозиторий, ветку main.
+# Один web-сервис (Docker, Bun 1.2.7) раздаёт и API (Hono: /trpc, /mcp, /health), и статику
+# web-клиента (apps/web/dist) с одного origin — CORS не нужен, клиент бьёт в относительный /trpc.
+# Секреты (sync: false) задаются в Render UI, в git не хранятся.
 services:
   - type: web
-    name: orbis-spike05
+    name: orbis
     runtime: docker
     plan: free
     region: frankfurt
-    branch: spike/phase-0
-    rootDir: spikes/spike-05-deploy
+    branch: main
     dockerfilePath: ./Dockerfile
     healthCheckPath: /health
     envVars:
+      # --- Рантайм API ---
+      # Продуктовое подключение: роль orbis_app (RLS enforced) через session-пулер :5432.
+      # Формат: postgresql://orbis_app.<PROD_REF>:<пароль>@aws-1-eu-central-1.pooler.supabase.com:5432/postgres
       - key: DATABASE_URL
-        sync: false # задаётся в UI: DSN роли orbis_app через session-пулер :5432
+        sync: false
+      # session-пулер поддерживает prepared statements → prepare=true (для :6543 было бы false).
       - key: PG_PREPARE
         value: "true"
-      - key: SPIKE_CHECK_TOKEN
-        sync: false # задаётся в UI: случайный токен
+      # Supabase API для верификации JWT (jose): JWKS = {SUPABASE_URL}/auth/v1/.well-known/jwks.json.
+      - key: SUPABASE_URL
+        sync: false # https://<PROD_REF>.supabase.co
+      - key: SUPABASE_JWT_SECRET
+        sync: false # Supabase → Settings → API → JWT Settings (fallback HS256)
+      # LLM (§7): реальный ключ Anthropic — гейт llm-smoke перед доверием AI в проде.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # PAT внешнего агента (§9.3, MCP). Выдача: bun scripts/issue-pat.ts (печатает hash + owner_id).
+      - key: ORBIS_PAT_HASH
+        sync: false
+      - key: ORBIS_PAT_OWNER_ID
+        sync: false # UUID владельца (из Supabase → Authentication → Users после первого входа)
+      # --- Build-time web-клиент (Vite бакает в бандл; Render отдаёт их как --build-arg) ---
+      - key: VITE_SUPABASE_URL
+        sync: false # https://<PROD_REF>.supabase.co
+      - key: VITE_SUPABASE_ANON_KEY
+        sync: false # Supabase → Settings → API → anon public
+      # VITE_API_URL не задаём: пусто → относительный /trpc (режим same-origin, Вариант A).
