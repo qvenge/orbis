@@ -3,6 +3,8 @@ import { type ThemePref, useThemePref } from '../../lib/theme';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
+import { Spinner } from '../../ui/Spinner';
+import { useToast } from '../../ui/toast-store';
 
 type Settings = RouterOutputs['user']['getSettings'];
 
@@ -14,8 +16,13 @@ const THEME_OPTIONS: { value: ThemePref; label: string }[] = [
 
 export function GeneralForm({ settings }: { settings: Settings }) {
   const utils = trpc.useUtils();
+  const { show } = useToast();
   const update = trpc.user.updateSettings.useMutation({
-    onSuccess: () => void utils.user.getSettings.invalidate(),
+    onSuccess: () => {
+      void utils.user.getSettings.invalidate();
+      show('Сохранено');
+    },
+    onError: () => show('Не удалось сохранить настройки', 'danger'),
   });
   const [timezone, setTimezone] = useState(settings.timezone);
   const [defaultCurrency, setDefaultCurrency] = useState(settings.defaultCurrency);
@@ -91,7 +98,8 @@ export function GeneralForm({ settings }: { settings: Settings }) {
           })}
         </div>
       </fieldset>
-      <Button type="submit" variant="primary">
+      <Button type="submit" variant="primary" disabled={update.isPending}>
+        {update.isPending && <Spinner size={14} aria-label="Сохранение" />}
         Сохранить
       </Button>
     </form>

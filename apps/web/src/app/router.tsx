@@ -54,7 +54,7 @@ export function TabBar() {
             {t.id === 'chat' && chatBadge > 0 && (
               <span
                 data-testid="chat-badge"
-                className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-[10px] text-danger-foreground"
+                className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
               >
                 {chatBadge}
               </span>

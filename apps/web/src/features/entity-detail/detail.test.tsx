@@ -167,3 +167,30 @@ test('inline body-правка: CONFLICT (409) → откат кэша к пре
   await waitFor(() => expect(screen.getByTestId('body-probe')).toHaveTextContent('тело'));
   expect(screen.getByTestId('body-probe')).not.toHaveTextContent('конфликтное');
 });
+
+test('conflict-баннер: клик «Обновить» → refetch entity.get + баннер скрыт', async () => {
+  const calls: string[] = [];
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    calls.push(path);
+    if (path === 'entity.get')
+      return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') throw trpcError('CONFLICT');
+    if (path === 'relation.listFor') return [];
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
+
+  fireEvent.change(screen.getByTestId('body-edit'), { target: { value: 'конфликтное' } });
+  fireEvent.blur(screen.getByTestId('body-edit'));
+  await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+
+  const getsBefore = calls.filter((p) => p === 'entity.get').length;
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить' }));
+
+  // Баннер снят немедленно (dismissConflict), refetch ушёл на сервер.
+  await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  await waitFor(() =>
+    expect(calls.filter((p) => p === 'entity.get').length).toBeGreaterThan(getsBefore),
+  );
+});

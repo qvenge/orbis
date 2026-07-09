@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Button } from '../../ui/Button';
 import { Chip } from '../../ui/Chip';
+import { Input } from '../../ui/Input';
 import { buildFilterQuery, type FilterState } from './query';
 
 const EMPTY: FilterState = {
@@ -17,18 +18,23 @@ export function Filters({ onApply }: { onApply: (query: string) => void }) {
   const [tagDraft, setTagDraft] = useState('');
   return (
     <div className="flex flex-col gap-2 p-3">
-      <div className="flex flex-wrap gap-1">
-        {state.tags.map((t) => (
-          <Chip
-            key={t}
-            onRemove={() => setState((s) => ({ ...s, tags: s.tags.filter((x) => x !== t) }))}
-          >
-            {t}
-          </Chip>
-        ))}
-        <input
+      {state.tags.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {state.tags.map((t) => (
+            <Chip
+              key={t}
+              onRemove={() => setState((s) => ({ ...s, tags: s.tags.filter((x) => x !== t) }))}
+            >
+              {t}
+            </Chip>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <Input
           aria-label="Добавить тег"
           value={tagDraft}
+          placeholder="Тег…"
           onChange={(e) => setTagDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && tagDraft.trim()) {
@@ -36,12 +42,12 @@ export function Filters({ onApply }: { onApply: (query: string) => void }) {
               setTagDraft('');
             }
           }}
-          className="rounded-control border border-line bg-surface px-2 py-1 text-xs"
+          className="h-8 flex-1 px-2 py-1 text-xs"
         />
+        <Button variant="outline" size="sm" onClick={() => onApply(buildFilterQuery(state))}>
+          Применить
+        </Button>
       </div>
-      <Button variant="primary" onClick={() => onApply(buildFilterQuery(state))}>
-        Применить
-      </Button>
     </div>
   );
 }

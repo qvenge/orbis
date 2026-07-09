@@ -4,6 +4,7 @@ import { ScreenHeader } from '../../app/ScreenHeader';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
+import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
 import { firstQueryBlock } from '../browser/query';
 import { ChatThread } from '../chat/ChatThread';
@@ -13,7 +14,8 @@ import { Subtasks } from './Subtasks';
 import { useEntityDetail } from './useEntityDetail';
 
 export function DetailScreen({ entityId }: { entityId: string }) {
-  const { get, toggleTask, saveBody, setArchived, conflict } = useEntityDetail(entityId);
+  const { get, toggleTask, saveBody, setArchived, conflict, dismissConflict } =
+    useEntityDetail(entityId);
   const utils = trpc.useUtils();
   const settings = trpc.user.getSettings.useQuery();
   const updateSettings = trpc.user.updateSettings.useMutation({
@@ -24,8 +26,11 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     return (
       <>
         <ScreenHeader title="…" />
-        <div role="status" className="p-4 text-sm text-text-muted">
-          Загрузка…
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-3">
+          <Skeleton className="h-7 w-48" />
+          <Skeleton className="h-24" />
+          <Skeleton className="h-16" />
+          <Skeleton className="h-16" />
         </div>
       </>
     );
@@ -43,9 +48,22 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       )}
       <NativeRow entity={entity} onToggleTask={toggleTask} />
       {conflict && (
-        <p role="alert" className="text-sm text-danger">
-          Изменено в другом месте — обновите.
-        </p>
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 rounded-control border border-danger/40 bg-danger/10 px-3 py-2"
+        >
+          <p className="text-sm text-danger">Изменено в другом месте — обновите.</p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              void get.refetch();
+              dismissConflict();
+            }}
+          >
+            Обновить
+          </Button>
+        </div>
       )}
       {/* key по id, НЕ по updatedAt: refetch после каждого save менял key и ремоунтил
           редактор, стирая текст, набранный за время запроса (а при 409 — ещё и уничтожая
