@@ -55,6 +55,32 @@ test('устаревший клиент получает отказ версии
 const agentUserId = crypto.randomUUID();
 const agentCtx: Context = { ...ctx, actorUserId: agentUserId, actorKind: 'agent' };
 
+// Находка ревью 1c-2: timezone принималась как любая непустая строка, а queryContext
+// строит из неё Intl.DateTimeFormat — невалидная зона роняла RangeError на каждом
+// entity.query/count и на тулах агента. Гейт стоит во входной схеме, до withIdentity
+// (db здесь — стаб: до БД дойти не должно).
+const ownerCtx: Context = { ...ctx, actorUserId: crypto.randomUUID(), actorKind: 'owner' };
+
+test('updateSettings: невалидная таймзона отклоняется валидацией входа', async () => {
+  const caller = appRouter.createCaller(ownerCtx);
+  const err = await caller.user.updateSettings({ timezone: 'Europe/Moskva' }).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(err).toBeInstanceOf(TRPCError);
+  expect((err as TRPCError).code).toBe('BAD_REQUEST');
+});
+
+test('updateSettings: валидная IANA-зона проходит гейт валидации', async () => {
+  const caller = appRouter.createCaller(ownerCtx);
+  // Дальше вызов упрётся в db-стаб — важно лишь, что это не отказ валидации.
+  const err = await caller.user.updateSettings({ timezone: 'Asia/Almaty' }).then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect((err as TRPCError | null)?.code).not.toBe('BAD_REQUEST');
+});
+
 test('ownerOnly под агентом: seedOnboarding/updateSettings/exportData → FORBIDDEN до БД', async () => {
   const caller = appRouter.createCaller(agentCtx);
   const calls: Array<() => Promise<unknown>> = [
