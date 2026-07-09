@@ -296,7 +296,7 @@ CMD ["bun", "apps/server/src/index.ts"]
 5. ✅ (по умолчанию) Стоимость/cold-start: принят free + keep-warm polling'ом агентной петли; замер cold-start (Task 12 Step 4) не логировался — при неудобстве путь апгрейда прежний (Render Starter $7 / Fly ~$2.24).
 6. ✅ Бэкап: GH Actions cron + artifact (retention 30 дней). **Ревью 2026-07-09: репозиторий публичный, дамп теперь шифруется OpenPGP-ключом владельца** — нужны `ADMIN_DSN` (secret) и `BACKUP_PUBLIC_KEY` (variable), см. runbook §4.
 7. ⏳ Реальный `ANTHROPIC_API_KEY` для llm-smoke локально (гейт Task 11; ключ уже стоит на Render).
-8. ⏳ **Убедиться, что `ANTHROPIC_API_KEY` на Render непуст**: `render.yaml` задаёт `ORBIS_LLM_PROVIDER=anthropic`, и пустой ключ уронит старт следующего деплоя — намеренно, раньше сервис молча поднимался с echo-заглушкой.
+8. ✅ **`ANTHROPIC_API_KEY` на Render непуст** — подтверждено фактом: после merge `c3ec34a` прод пересобрался и поднялся, а `makeLLMProvider` теперь роняет старт в production без ключа. Смоук после деплоя: `/health` 200, `/trpc/ping` ok, `/mcp` 405 (GET) / 401 (POST без токена), `/assets/*` отдаёт `immutable`.
 9. ⏳ **Проверить тип ключей прод-Supabase.** Если асимметричные (ES256/JWKS) — удалить `SUPABASE_JWT_SECRET` из Render: HS256-фолбэк там мёртв, а знающий секрет подделает токен владельца. Срабатывание фолбэка в проде теперь пишет предупреждение в лог.
 
 ## После 1c-2
