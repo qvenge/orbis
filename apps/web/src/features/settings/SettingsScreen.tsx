@@ -1,5 +1,6 @@
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { trpc } from '../../trpc';
+import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
 import { AspectsList } from './AspectsList';
 import { ExportButton } from './ExportButton';
@@ -36,8 +37,12 @@ export function SettingsScreen() {
           />
         </div>
       ) : (
-        <div role="status" className="p-4 text-sm text-text-muted">
-          Загрузка…
+        // Скелетон формы настроек: 4 строки «лейбл + поле».
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-3 p-3">
+          <Skeleton className="h-9 w-2/3" />
+          <Skeleton className="h-9 w-1/2" />
+          <Skeleton className="h-9 w-2/3" />
+          <Skeleton className="h-9 w-1/3" />
         </div>
       )}
     </>

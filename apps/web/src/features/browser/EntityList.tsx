@@ -1,5 +1,8 @@
+import { Inbox } from 'lucide-react';
 import { useNav } from '../../state/navigation';
 import { Button } from '../../ui/Button';
+import { EmptyState } from '../../ui/EmptyState';
+import { Skeleton } from '../../ui/Skeleton';
 import { useEntities } from './useEntities';
 
 export function EntityList({ filters = '' }: { filters?: string }) {
@@ -7,9 +10,20 @@ export function EntityList({ filters = '' }: { filters?: string }) {
   const push = useNav((s) => s.push);
   if (isLoading)
     return (
-      <div role="status" className="p-4 text-sm text-text-muted">
-        Загрузка…
+      <div className="flex flex-col gap-2 p-3">
+        {Array.from({ length: 6 }, (_, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: статичные placeholder-ряды
+          <Skeleton key={i} className="h-9" />
+        ))}
       </div>
+    );
+  if (entities.length === 0)
+    return (
+      <EmptyState
+        icon={<Inbox size={32} aria-hidden />}
+        title="Здесь появятся ваши записи"
+        hint="Добавьте первую через быструю запись ниже"
+      />
     );
   return (
     <div className="flex flex-col">
