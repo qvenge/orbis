@@ -69,6 +69,17 @@ describe('static serving + SPA-fallback (Task 7)', () => {
     expect(res.headers.get('content-type')).toContain('manifest+json');
   });
 
+  // Раньше статика уходила вовсе без Cache-Control: каждый визит перекачивал бандл.
+  test('хешированный /assets/* → immutable на год; index.html и sw.js → no-cache', async () => {
+    const asset = await app.request('/assets/app-abc123.js');
+    expect(asset.headers.get('cache-control')).toBe('public, max-age=31536000, immutable');
+
+    for (const path of ['/', '/sw.js', '/browser/123']) {
+      const res = await app.request(path);
+      expect(res.headers.get('cache-control')).toBe('no-cache');
+    }
+  });
+
   test('неизвестный не-API GET (/browser/123) → SPA-fallback index.html', async () => {
     const res = await app.request('/browser/123');
     expect(res.status).toBe(200);

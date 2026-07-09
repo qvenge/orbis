@@ -15,7 +15,8 @@ export default defineConfig({
       manifest: pwaManifest,
       workbox: {
         navigateFallback: '/index.html', // app-shell для офлайна
-        globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+        // png/ico — иконки манифеста: без них установленное PWA стартует офлайн без иконок.
+        globPatterns: ['**/*.{js,css,html,svg,woff2,png,ico}'],
       },
     }),
   ],
