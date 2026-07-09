@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **СТАТУС (актуализировано 2026-07-09): ПОЧТИ ЗАКРЫТ.** HOLD снят владельцем. **Фаза A (Tasks 1–8) — DONE & MERGED** (main `ba42576`, CI green, все ревью fable). **Фаза B: Tasks 9, 10, 12 — DONE** (деплой-конфиг merged `f26fed7`; прод задеплоен 2026-07-08: https://orbis-64q4.onrender.com; Supabase PROD_REF `ceovqtdibalxnqkgedrl`, db:prepare прод — 31/31 RLS pgTAP; секреты на Render; владелец UID `b47ea644-e604-467f-adc7-8a76b5c84c7c`; PAT выпущен; web/MCP-смоук зелёные). **Task 13 — приёмка §8 (минимум) пройдена 2026-07-08**: проект «Orbis» + 4 задачи созданы агентом через `/mcp`, §7.10 проверен (batch ≤10 = preview, >10 = explicit-confirmation). **ОТКРЫТО: Task 11** (llm-smoke реальным ключом; модель по умолчанию теперь `claude-sonnet-5`), **Task 12 Step 4** (замер cold-start) и **хвосты Task 13** (полная миграция доков, демо pending→approve, отметка приёмки в PRD §8 — после LLM-гейта). Детальный лог исполнения — `.superpowers/sdd/progress.md`.
+> **СТАТУС (актуализировано 2026-07-09): ПОЧТИ ЗАКРЫТ.** HOLD снят владельцем. **Фаза A (Tasks 1–8) — DONE & MERGED** (main `ba42576`, CI green, все ревью fable). **Фаза B: Tasks 9, 10, 12 — DONE** (деплой-конфиг merged `f26fed7`; прод задеплоен 2026-07-08: https://orbis-64q4.onrender.com; Supabase PROD_REF `ceovqtdibalxnqkgedrl`, db:prepare прод — 31/31 RLS pgTAP; секреты на Render; владелец UID `b47ea644-e604-467f-adc7-8a76b5c84c7c`; PAT выпущен; web/MCP-смоук зелёные). **Task 13 — приёмка §8 (минимум) пройдена 2026-07-08**: проект «Orbis» + 4 задачи созданы агентом через `/mcp`, §7.10 проверен (batch ≤10 = preview, >10 = explicit-confirmation). **Task 11 (LLM-гейт) — DONE 2026-07-09**: `llm-smoke` на `claude-sonnet-5` вернул `stopReason: tool_use`. **Бэкап-контур замкнут 2026-07-09**: секреты заведены, прогон зелёный, артефакт расшифрован владельцем. **ОТКРЫТО: Task 12 Step 4** (замер cold-start) и **хвосты Task 13** (полная миграция доков, демо pending→approve, отметка приёмки в PRD §8 — решение владельца). Детальный лог исполнения — `.superpowers/sdd/progress.md`.
 >
 > **Две фазы.** **Фаза A (Задачи 1–8)** — чистый код/CI/Docker/бэкап, БЕЗ владельческих гейтов. **Фаза B (Задачи 9–13)** — инфра, деплой, приёмка §8.
 
@@ -257,9 +257,9 @@ CMD ["bun", "apps/server/src/index.ts"]
 
 > **Модель:** с 2026-07-09 дефолт — `claude-sonnet-5` (`DEFAULT_ANTHROPIC_MODEL`, `apps/server/src/llm/anthropic.ts`); гейт прогонять с ней (или с явным `ORBIS_LLM_MODEL`).
 
-- [ ] **Step 1: Прогнать** `ANTHROPIC_API_KEY=sk-... bun scripts/llm-smoke.ts` — единственный прогон живого Anthropic-маппинга (tool defs → toolCalls/stopReason/usage). Модель — `ORBIS_LLM_MODEL` или дефолт `DEFAULT_ANTHROPIC_MODEL` (`send-message.ts:76`).
-- [ ] **Step 2: Verify** — content/toolCalls/stopReason/usage непусты и осмысленны; при провале — НЕ деплоить, разобраться (модель/ключ/маппинг).
-- [ ] **Step 3: Зафиксировать** результат smoke в приёмочный лог (не в git-секреты).
+- [x] **Step 1: Прогнать** `ANTHROPIC_API_KEY=sk-... bun scripts/llm-smoke.ts` — единственный прогон живого Anthropic-маппинга (tool defs → toolCalls/stopReason/usage). Модель — `ORBIS_LLM_MODEL` или дефолт `DEFAULT_ANTHROPIC_MODEL` (`send-message.ts:76`). *(Владелец, 2026-07-09, на `claude-sonnet-5`.)*
+- [x] **Step 2: Verify** — `stopReason: tool_use`: модель вызвала `entity_query`, а не ответила текстом. Значит живы обе стороны маппинга — конвертация JSON Schema тулов в формат SDK и разбор `toolCalls` обратно. Обрыва по `max_tokens` нет (бюджет 2048 достаточен при adaptive thinking).
+- [x] **Step 3: Зафиксировать** результат smoke в приёмочный лог (`.superpowers/sdd/progress.md`, не в git-секреты).
 
 ### Task 12: Деплой + прод-smoke
 
@@ -295,9 +295,10 @@ CMD ["bun", "apps/server/src/index.ts"]
 4. ✅ Топология web: Вариант A same-origin (реализовано в Task 7, работает в проде).
 5. ✅ (по умолчанию) Стоимость/cold-start: принят free + keep-warm polling'ом агентной петли; замер cold-start (Task 12 Step 4) не логировался — при неудобстве путь апгрейда прежний (Render Starter $7 / Fly ~$2.24).
 6. ✅ Бэкап: GH Actions cron + artifact (retention 30 дней). **Ревью 2026-07-09: репозиторий публичный, дамп теперь шифруется OpenPGP-ключом владельца** — нужны `ADMIN_DSN` (secret) и `BACKUP_PUBLIC_KEY` (variable), см. runbook §4.
-7. ⏳ Реальный `ANTHROPIC_API_KEY` для llm-smoke локально (гейт Task 11; ключ уже стоит на Render).
+7. ✅ Реальный `ANTHROPIC_API_KEY` для llm-smoke — прогнан владельцем 2026-07-09 на `claude-sonnet-5`, `stopReason: tool_use` (модель вызвала `entity_query`). Гейт Task 11 закрыт.
 8. ✅ **`ANTHROPIC_API_KEY` на Render непуст** — подтверждено фактом: после merge `c3ec34a` прод пересобрался и поднялся, а `makeLLMProvider` теперь роняет старт в production без ключа. Смоук после деплоя: `/health` 200, `/trpc/ping` ok, `/mcp` 405 (GET) / 401 (POST без токена), `/assets/*` отдаёт `immutable`.
-9. ⏳ **Проверить тип ключей прод-Supabase.** Если асимметричные (ES256/JWKS) — удалить `SUPABASE_JWT_SECRET` из Render: HS256-фолбэк там мёртв, а знающий секрет подделает токен владельца. Срабатывание фолбэка в проде теперь пишет предупреждение в лог.
+9. ✅ **Тип ключей прод-Supabase — асимметричные** (JWKS отдаёт `ES256`), поэтому `SUPABASE_JWT_SECRET` удалён из Render владельцем 2026-07-09. Вход в web после удаления проверен: JWKS-верификация — единственный путь. Срабатывание HS256-фолбэка в проде (если секрет вернут) пишет предупреждение в лог.
+10. ✅ **Бэкап проверен end-to-end** (2026-07-09): `ADMIN_DSN` + `BACKUP_PUBLIC_KEY` заведены, ручной прогон `29044407056` зелёный, артефакт — настоящий OpenPGP-шифротекст (ECDH), расшифрован приватным ключом владельца, внутри валидный дамп PG 17.6. Приватный ключ — вне GitHub.
 
 ## После 1c-2
 
