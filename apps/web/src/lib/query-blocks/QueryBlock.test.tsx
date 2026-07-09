@@ -49,6 +49,15 @@ test('валидный блок → список сущностей + счётч
   expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({ query: 'tags=work' });
 });
 
+test('без title (DetailScreen) → счётчик с подписью «Совпадений: N», а не голое число', async () => {
+  renderWithProviders(<QueryBlock body="{{query:tags=work}}" />, (path) => {
+    if (path === 'aspect.list') return aspectsResp;
+    if (path === 'entity.query') return [ent('a'), ent('b')];
+    return {};
+  });
+  await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('Совпадений: 2'));
+});
+
 test('невалидный блок → красная плашка с позицией, без списка и без вызова entity.query (§6.4)', async () => {
   const { calls } = renderWithProviders(
     <QueryBlock body="{{query:foo}}" title="Битый" />,

@@ -16,8 +16,8 @@ export function Dialog({
   return (
     <RD.Root open={open} onOpenChange={onOpenChange}>
       <RD.Portal>
-        <RD.Overlay className="fixed inset-0 bg-overlay" />
-        <RD.Content className="fixed left-1/2 top-1/2 w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 rounded-card border border-line bg-surface p-4 shadow-pop">
+        <RD.Overlay className="fixed inset-0 z-50 bg-overlay" />
+        <RD.Content className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 rounded-card border border-line bg-surface p-4 shadow-pop">
           <RD.Title className="pr-8 text-lg font-semibold">{title}</RD.Title>
           <RD.Close
             aria-label="Закрыть"

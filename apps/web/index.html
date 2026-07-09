@@ -12,9 +12,11 @@
       (() => {
         try {
           const pref = localStorage.getItem('orbis:theme');
+          // Любое значение кроме 'dark'/'light' (мусор, null, 'system') резолвится как system —
+          // синхронно с theme.ts (isPref/getThemePref), иначе одноразовый FOUC.
           const dark =
             pref === 'dark' ||
-            ((pref === 'system' || pref === null) &&
+            (pref !== 'light' &&
               window.matchMedia &&
               window.matchMedia('(prefers-color-scheme: dark)').matches);
           if (dark) {

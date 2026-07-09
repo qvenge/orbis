@@ -40,7 +40,7 @@ export function QueryBlock({ body, title }: { body: string; title?: string }) {
       <div className="flex items-center justify-between">
         {title && <p className="font-medium">{title}</p>}
         <span data-testid="qb-count" className="text-text-secondary text-xs">
-          {entities.length}
+          {title ? entities.length : `Совпадений: ${entities.length}`}
         </span>
       </div>
       <ul className="flex flex-col divide-y divide-line">

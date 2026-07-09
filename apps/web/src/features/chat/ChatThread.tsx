@@ -18,7 +18,13 @@ export function ChatThread({ threadId }: { threadId: string }) {
         <ThreadSkeleton />
       ) : (
         // §7.9: тред detail тоже отдаёт «Повторить» (onRetry) при сбое ai.sendMessage.
-        <MessageList messages={messages} isTyping={isSending} onRetry={retryMessage} />
+        // Тред сущности — без fast-path-подсказки: даём контекстную подпись обсуждения.
+        <MessageList
+          messages={messages}
+          isTyping={isSending}
+          onRetry={retryMessage}
+          emptyHint="Обсуждение этой записи"
+        />
       )}
       <Composer onSubmit={sendMessage} disabled={isSending} />
     </div>

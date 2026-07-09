@@ -21,9 +21,13 @@ export function MessageList({
   isTyping,
   onRetry,
   onReparse,
+  emptyHint,
 }: {
   messages: ChatMessage[];
   isTyping: boolean;
+  // Подсказка пустого треда. Fast-path («обед 340») уместен только в глобальном чате;
+  // в треде сущности передаётся иная подсказка (или null — без подсказки).
+  emptyHint?: string | null;
 } & CardHandlers) {
   // messages в DESC; для показа сверху-вниз (старые вверху) — reverse на рендере.
   const ordered = [...messages].reverse();
@@ -52,7 +56,7 @@ export function MessageList({
           <EmptyState
             icon={<MessageSquare size={32} aria-hidden />}
             title="Напишите первое сообщение"
-            hint="Например: «обед 340» — Orbis разберёт сам"
+            hint={emptyHint ?? undefined}
           />
         </div>
       )}

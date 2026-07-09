@@ -53,7 +53,13 @@ function ThreadView({ threadId }: { threadId: string }) {
       {isLoading ? (
         <ThreadSkeleton />
       ) : (
-        <MessageList messages={messages} isTyping={isSending} onRetry={retry} onReparse={reparse} />
+        <MessageList
+          messages={messages}
+          isTyping={isSending}
+          onRetry={retry}
+          onReparse={reparse}
+          emptyHint="Например: «обед 340» — Orbis разберёт сам"
+        />
       )}
       <Composer
         onSubmit={submit}
