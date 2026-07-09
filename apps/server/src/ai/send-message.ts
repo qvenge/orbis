@@ -42,8 +42,12 @@ import { buildToolRegistry, type Card } from '../tools/registry';
 import { toWireChatMessage } from '../wire';
 import { recordUsage, type UsageTotals, utcDay } from './metering';
 
-/** Потолок ответа модели за шаг (LLMRequest.maxTokens); ориентиры бюджета — §7.1. */
-export const MAX_OUTPUT_TOKENS = 4096;
+/**
+ * Потолок ответа модели за шаг (LLMRequest.maxTokens); ориентиры бюджета — §7.1.
+ * 8192: на claude-sonnet-5 adaptive thinking включён по умолчанию и считается в output —
+ * прежних 4096 хватало бы впритык (симптом обрыва — stopReason max_tokens).
+ */
+export const MAX_OUTPUT_TOKENS = 8192;
 
 /** Пометка принудительного финала при достижении MAX_AGENT_STEPS (не ошибка). */
 export const STEP_LIMIT_NOTE = '[цикл остановлен: достигнут лимит шагов]';

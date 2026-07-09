@@ -13,8 +13,13 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { generateText, type JSONSchema7, jsonSchema, type ToolSet, tool } from 'ai';
 import type { LLMProvider, LLMRequest, LLMResponse, LLMToolDef } from './types';
 
-/** Модель по умолчанию; переопределяется env ORBIS_LLM_MODEL (§7.7: имя модели — конфиг). */
-export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-5';
+/**
+ * Модель по умолчанию; переопределяется env ORBIS_LLM_MODEL (§7.7: имя модели — конфиг).
+ * claude-sonnet-5 (решение владельца 2026-07-09): adaptive thinking включён по умолчанию
+ * и расходует output-бюджет, не-дефолтные temperature/top_p/top_k отвергаются (400) —
+ * generateText ниже их и не передаёт; токенизатор новее (~+30% токенов к 4-5).
+ */
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-5';
 
 /** Значения finishReason установленного ai@7.0.15 (node_modules/ai/dist/index.d.ts:125). */
 export type SdkFinishReason =
