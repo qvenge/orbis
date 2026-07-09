@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { ScreenHeader } from '../../app/ScreenHeader';
 import { useOnline, useRetryBuffer } from '../../state/retry';
 import { trpc } from '../../trpc';
 import { Composer } from './Composer';
@@ -19,14 +20,21 @@ export function ChatScreen() {
   }, [ensure.mutate]);
 
   const threadId = ensure.data?.threadId;
-  if (!threadId) {
-    return (
-      <div role="status" className="p-4 text-sm text-text-muted">
-        Открываем тред…
-      </div>
-    );
-  }
-  return <ThreadView threadId={threadId} />;
+  return (
+    <div className="flex h-full flex-col">
+      <ScreenHeader title="Чат" />
+      {threadId ? (
+        // Контент центрирован (шапка — на всю ширину main), скролл — внутри MessageList.
+        <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+          <ThreadView threadId={threadId} />
+        </div>
+      ) : (
+        <div role="status" className="p-4 text-sm text-text-muted">
+          Открываем тред…
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ThreadView({ threadId }: { threadId: string }) {

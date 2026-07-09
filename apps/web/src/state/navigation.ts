@@ -42,3 +42,22 @@ export const useNav = create<NavState>()(
     { name: 'orbis:nav:v1', partialize: (s) => ({ activeTab: s.activeTab, stacks: s.stacks }) },
   ),
 );
+
+// --- Хелперы этапа 3 (редизайн) — только поверх стора, логика push/pop не меняется. ---
+
+// §9.4: настройки — сквозной экран поверх активного таба. Без дублей:
+// не стекуем settings поверх settings (используется sidebar'ом и шапкой).
+export function openSettings() {
+  const { activeTab, stacks, push } = useNav.getState();
+  const stack = stacks[activeTab];
+  if (stack[stack.length - 1]?.kind !== 'settings') push(activeTab, { kind: 'settings' });
+}
+
+// Открыть закреплённую сущность из глобального sidebar: активный таб — browser,
+// наверху browser-стека — entity. ВАЖНО: switchTab по УЖЕ активному табу сворачивает
+// стек (§1.1), поэтому переключаем только когда активен другой таб, и лишь затем push.
+export function openPinnedEntity(id: string) {
+  const { activeTab, switchTab, push } = useNav.getState();
+  if (activeTab !== 'browser') switchTab('browser');
+  push('browser', { kind: 'entity', id });
+}

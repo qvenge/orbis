@@ -47,7 +47,8 @@ test('чекбокс task → entity.update status=done + completed_at', async (
     if (path === 'aspect.list') return [];
     return {};
   });
-  await waitFor(() => expect(screen.getByText('Задача')).toBeInTheDocument());
+  // Этап 3: title теперь и в ScreenHeader (h1), и в NativeRow — целимся в шапку.
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача' })).toBeInTheDocument());
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
   await waitFor(() => {
     const c = calls.find((x) => x.path === 'entity.update');

@@ -1,10 +1,10 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, expect, test } from 'vitest';
+import { beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { renderWithProviders } from '../../test/harness';
 import { EntityList } from './EntityList';
+import { PinnedList } from './PinnedList';
 import { QuickCapture } from './QuickCapture';
-import { Sidebar } from './Sidebar';
 
 const ent = (id: string, title: string) => ({
   id,
@@ -47,16 +47,29 @@ test('EntityList: первая страница 50 через entity.query; «е
   );
 });
 
-test('Sidebar: бейдж pinned через entity.count; >99 → «99+»', async () => {
-  const settings = { pinnedEntities: [{ id: 'p1', order: 0 }] };
+test('PinnedList: строки pinned, бейдж через entity.count (>99 → «99+»), onOpen с id', async () => {
+  const onOpen = vi.fn();
   // §3.2: бейдж считается по первому {{query:...}}-блоку body закреплённой сущности.
   const pinnedEntity = { ...ent('p1', 'Задачи'), body: '{{query:aspect=orbis/task}}' };
-  renderWithProviders(<Sidebar settings={settings as never} />, (path) => {
+  renderWithProviders(<PinnedList onOpen={onOpen} />, (path) => {
+    if (path === 'user.getSettings') return { pinnedEntities: [{ id: 'p1', order: 0 }] };
     if (path === 'entity.get') return { entity: pinnedEntity, relations: [] };
     if (path === 'entity.count') return { count: 250 };
     return {};
   });
   await waitFor(() => expect(screen.getByTestId('pin-badge-p1')).toHaveTextContent('99+'));
+  expect(screen.getByTestId('pinned-p1')).toHaveTextContent('Задачи');
+
+  fireEvent.click(screen.getByTestId('pinned-p1'));
+  expect(onOpen).toHaveBeenCalledWith('p1');
+});
+
+test('PinnedList: без закреплённых — muted-строка «Нет закреплённых»', async () => {
+  renderWithProviders(<PinnedList onOpen={() => {}} />, (path) => {
+    if (path === 'user.getSettings') return { pinnedEntities: [] };
+    return {};
+  });
+  await waitFor(() => expect(screen.getByText('Нет закреплённых')).toBeInTheDocument());
 });
 
 test('QuickCapture: title-only через entity.create(source:quick_capture) без интерпретации', async () => {

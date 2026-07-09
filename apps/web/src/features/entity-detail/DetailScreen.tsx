@@ -1,4 +1,6 @@
+import { Archive, ArchiveRestore, Pin } from 'lucide-react';
 import { useState } from 'react';
+import { ScreenHeader } from '../../app/ScreenHeader';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -20,36 +22,25 @@ export function DetailScreen({ entityId }: { entityId: string }) {
 
   if (get.isLoading || !get.data) {
     return (
-      <div role="status" className="p-4 text-sm text-text-muted">
-        Загрузка…
-      </div>
+      <>
+        <ScreenHeader title="…" />
+        <div role="status" className="p-4 text-sm text-text-muted">
+          Загрузка…
+        </div>
+      </>
     );
   }
   const { entity, thread } = get.data;
   const block = firstQueryBlock(entity.body ?? '');
 
-  // Заголовок сущности несёт NativeRow (§3.6 нативный рендер) — отдельного дубля title нет.
+  // В шапке — только title; emoji сущности остаётся в контенте (ниже).
   const entityTab = (
     <div className="flex flex-col gap-4 p-3">
-      <div className="flex items-center justify-between">
-        {entity.emoji ? (
-          <span aria-hidden className="text-xl">
-            {entity.emoji}
-          </span>
-        ) : (
-          <span />
-        )}
-        <DetailMenu
-          onPin={() => {
-            const pinned = settings.data?.pinnedEntities ?? [];
-            updateSettings.mutate({
-              pinnedEntities: [...pinned, { id: entity.id, order: pinned.length }],
-            });
-          }}
-          onArchive={() => setArchived(!entity.archived)}
-          archived={entity.archived}
-        />
-      </div>
+      {entity.emoji && (
+        <span aria-hidden className="text-xl">
+          {entity.emoji}
+        </span>
+      )}
       <NativeRow entity={entity} onToggleTask={toggleTask} />
       {conflict && (
         <p role="alert" className="text-sm text-danger">
@@ -67,21 +58,41 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   );
 
   return (
-    <Tabs
-      defaultValue="entity"
-      tabs={[
-        { value: 'entity', label: 'Сущность', content: entityTab },
-        {
-          value: 'thread',
-          label: 'Тред',
-          content: thread ? (
-            <ChatThread threadId={thread.threadId} />
-          ) : (
-            <p className="p-3 text-sm text-text-muted">Нет треда</p>
-          ),
-        },
-      ]}
-    />
+    <>
+      <ScreenHeader
+        title={entity.title}
+        actions={
+          <DetailMenu
+            onPin={() => {
+              const pinned = settings.data?.pinnedEntities ?? [];
+              updateSettings.mutate({
+                pinnedEntities: [...pinned, { id: entity.id, order: pinned.length }],
+              });
+            }}
+            onArchive={() => setArchived(!entity.archived)}
+            archived={entity.archived}
+          />
+        }
+      />
+      {/* Табы «Сущность/Тред» — под шапкой; контент центрирован, шапка — на всю ширину. */}
+      <div className="mx-auto w-full max-w-3xl">
+        <Tabs
+          defaultValue="entity"
+          tabs={[
+            { value: 'entity', label: 'Сущность', content: entityTab },
+            {
+              value: 'thread',
+              label: 'Тред',
+              content: thread ? (
+                <ChatThread threadId={thread.threadId} />
+              ) : (
+                <p className="p-3 text-sm text-text-muted">Нет треда</p>
+              ),
+            },
+          ]}
+        />
+      </div>
+    </>
   );
 }
 
@@ -117,13 +128,20 @@ function DetailMenu({
   onArchive: () => void;
   archived: boolean;
 }) {
+  const archiveLabel = archived ? 'Разархивировать' : 'Архивировать';
   return (
     <div className="flex gap-1">
-      <Button variant="ghost" onClick={onPin}>
-        Закрепить
+      <Button size="icon" variant="ghost" aria-label="Закрепить" title="Закрепить" onClick={onPin}>
+        <Pin size={16} aria-hidden />
       </Button>
-      <Button variant="ghost" onClick={onArchive}>
-        {archived ? 'Разархивировать' : 'Архивировать'}
+      <Button
+        size="icon"
+        variant="ghost"
+        aria-label={archiveLabel}
+        title={archiveLabel}
+        onClick={onArchive}
+      >
+        {archived ? <ArchiveRestore size={16} aria-hidden /> : <Archive size={16} aria-hidden />}
       </Button>
     </div>
   );

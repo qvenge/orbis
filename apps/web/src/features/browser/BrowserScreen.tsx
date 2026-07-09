@@ -1,17 +1,21 @@
 import { useState } from 'react';
-import { trpc } from '../../trpc';
+import { ScreenHeader } from '../../app/ScreenHeader';
+import { useNav } from '../../state/navigation';
 import { EntityList } from './EntityList';
 import { Filters } from './Filters';
+import { PinnedChips } from './PinnedList';
 import { QuickCapture } from './QuickCapture';
-import { Sidebar } from './Sidebar';
 
+// Одна колонка: pinned на десктопе живут в глобальном SidebarNav,
+// на мобиле — компактная лента чипов над списком (PinnedChips, md:hidden).
 export function BrowserScreen() {
-  const settings = trpc.user.getSettings.useQuery();
   const [filters, setFilters] = useState('');
+  const push = useNav((s) => s.push);
   return (
-    <div className="grid h-full grid-cols-[minmax(0,14rem)_1fr]">
-      {settings.data && <Sidebar settings={settings.data} />}
-      <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col">
+      <ScreenHeader title="Обзор" />
+      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col">
+        <PinnedChips onOpen={(id) => push('browser', { kind: 'entity', id })} />
         <Filters onApply={setFilters} />
         <div className="flex-1 overflow-y-auto">
           <EntityList filters={filters} />
