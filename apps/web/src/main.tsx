@@ -8,6 +8,7 @@ import { initTheme } from './lib/theme';
 import { registerRetrySend } from './state/retry';
 import { makeRetrySend } from './state/retry-send';
 import { makeTrpcClient, makeVanillaClient, queryClient, trpc } from './trpc';
+import { Toaster } from './ui/Toast';
 import './styles/globals.css';
 
 initTheme();
@@ -27,6 +28,8 @@ createRoot(rootElement).render(
           <OnboardingGate>
             <App />
           </OnboardingGate>
+          {/* Тосты доступны и до прохождения онбординга, поэтому вне гейта. */}
+          <Toaster />
         </AuthProvider>
       </QueryClientProvider>
     </trpc.Provider>
