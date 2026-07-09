@@ -8,6 +8,21 @@ import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from '.
 
 const CATEGORY_QUERY = { query: 'aspect=orbis/category' } as const;
 
+/**
+ * «Сегодня» в таймзоне пользователя (§7.5): без этого parseFastPath берёт UTC-дату, и ввод
+ * «такси 500» в 00:40 по Москве записывается вчерашним днём. en-CA форматирует как YYYY-MM-DD.
+ * Зона из настроек валидируется сервером, но кэш может быть старым — падать здесь незачем.
+ */
+function todayIn(timezone: string | undefined): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', timezone ? { timeZone: timezone } : {}).format(
+      new Date(),
+    );
+  } catch {
+    return new Intl.DateTimeFormat('en-CA').format(new Date());
+  }
+}
+
 // Метка синтетической карточки fast-path на сообщении треда: entityId+исходная строка →
 // «разобрать с AI» (архив + LLM); status разграничивает подтверждённую (⚡) и офлайн (⏳).
 type FastPathMeta = { entityId?: string; text: string; status: 'confirmed' | 'pending' };
@@ -42,7 +57,11 @@ export function useFastPath(threadId: string) {
       };
       return { id: e.id, aliases: meta.aliases ?? [], spendClass: meta.spend_class };
     });
-    return { categories, defaultCurrency: settings?.defaultCurrency ?? 'RUB' };
+    return {
+      categories,
+      defaultCurrency: settings?.defaultCurrency ?? 'RUB',
+      today: todayIn(settings?.timezone),
+    };
   }
 
   // Онлайн: свежий ctx (getData() тёплый кэш → иначе fetch, staleTime 30s).
