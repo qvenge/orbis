@@ -137,6 +137,36 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
     expect(collected).toEqual([idBig, idSmall, idOlder]);
   });
 
+  // Тот же инвариант, но БЕЗ явных дат: сообщения одного tx получают одинаковый now(),
+  // и раньше он приходил с микросекундами — их отбрасывал wire (ISO = мс), поэтому
+  // eq(created_at, <мс>) не совпадало и tie-break по id не работал: сообщения одной
+  // миллисекунды пропадали на границе страниц. Колонка теперь timestamptz(3) (0003).
+  test('пагинация не теряет сообщения, записанные одним now() (defaultNow, без явных дат)', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const { threadId } = await caller.chat.ensureThread({});
+
+    const ids = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+    await withIdentity(db, user, (tx) =>
+      // Один tx → один now() на все три строки; createdAt не задаём (defaultNow).
+      tx
+        .insert(chatMessages)
+        .values(ids.map((id, i) => ({ id, threadId, role: 'user' as const, content: `msg-${i}` }))),
+    );
+
+    const collected: string[] = [];
+    let before: string | undefined;
+    for (let i = 0; i < 6; i++) {
+      const page = await caller.chat.listMessages({ threadId, before, limit: 1 });
+      const m = page[0];
+      if (!m) break;
+      collected.push(m.id);
+      before = `${m.createdAt}|${m.id}`;
+    }
+    expect([...collected].sort()).toEqual([...ids].sort()); // ни одно не потеряно
+    expect(new Set(collected).size).toBe(3); // и ни одно не задвоено
+  });
+
   // Ревью Task 2: недоверенный before-курсор валидируется строгой regex ДО резолвера —
   // мусор и кривой uuid отбиваются чистым 400, а не 500 из Postgres (invalid uuid syntax).
   test('невалидный before-курсор → BAD_REQUEST (400), не 500', async () => {

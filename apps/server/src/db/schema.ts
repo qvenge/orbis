@@ -126,7 +126,11 @@ export const chatMessages = pgTable('chat_messages', {
   role: text('role').notNull(), // user | assistant | system
   content: text('content').notNull(),
   metadata: jsonb('metadata').notNull().default({}),
-  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  // precision 3 — обязательна для составного курсора пагинации (routers/chat.ts):
+  // now() пишет микросекунды, а wire отдаёт ISO с миллисекундами (JS Date). Сравнение
+  // eq(created_at, <мс>) не совпадало никогда, и сообщения одной миллисекунды —
+  // ровно тот случай, ради которого курсор вводили, — пропадали на границе страниц.
+  createdAt: timestamp('created_at', { withTimezone: true, precision: 3 }).notNull().defaultNow(),
 });
 
 // §4.7 ai_usage — метеринг LLM per user/day/model; PK (owner_id, date, model)
