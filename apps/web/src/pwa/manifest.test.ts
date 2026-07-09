@@ -4,8 +4,8 @@ import { pwaManifest } from './manifest';
 test('манифест несёт имя, standalone, theme_color токена и scope', () => {
   expect(pwaManifest.name).toBe('Orbis');
   expect(pwaManifest.display).toBe('standalone');
-  expect(pwaManifest.theme_color).toBe('#0c0d12');
-  expect(pwaManifest.background_color).toBe('#0c0d12');
+  expect(pwaManifest.theme_color).toBe('#fbfbfa');
+  expect(pwaManifest.background_color).toBe('#fbfbfa');
   expect(pwaManifest.start_url).toBe('/');
   expect(pwaManifest.scope).toBe('/');
 });

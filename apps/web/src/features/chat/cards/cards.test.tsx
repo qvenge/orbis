@@ -16,6 +16,12 @@ const msg = (cards: unknown[], extra: Partial<ChatMessage> = {}): ChatMessage =>
     ...extra,
   }) as ChatMessage;
 
+// Мок entity.get для строк query_result: EntityRef резолвит id → title (этап 4, без UUID в UI).
+const entityGet = (path: string, input: unknown) =>
+  path === 'entity.get'
+    ? { entity: { id: (input as { id: string }).id, title: `T-${(input as { id: string }).id}` } }
+    : {};
+
 test('entity_card: Undo зовёт ai.undo(undoActionId) и гасит карточку', async () => {
   const { calls } = renderWithProviders(
     <div>
@@ -61,16 +67,21 @@ test('query_result с aggregate → число + «показать список
         ]),
       )}
     </div>,
+    entityGet,
   );
   expect(screen.getByTestId('qr-aggregate')).toHaveTextContent('1200.00');
   expect(screen.getByRole('button', { name: /показать список/i })).toBeInTheDocument();
 });
 
-test('query_result без aggregate → native-список из entityIds (D-d)', () => {
+test('query_result без aggregate → native-список: title через entity.get, не сырой id', async () => {
   renderWithProviders(
     <div>{renderCards(msg([{ kind: 'query_result', count: 2, entityIds: ['a', 'b'] }]))}</div>,
+    entityGet,
   );
   expect(screen.getAllByTestId('qr-item')).toHaveLength(2);
+  // Строка показывает человеко-читаемый title, а не UUID.
+  await waitFor(() => expect(screen.getByText('T-a')).toBeInTheDocument());
+  expect(screen.getByText('T-b')).toBeInTheDocument();
 });
 
 // Пинним Date.now в пределах 24ч-окна фикстуры createdAt, чтобы expired не зависел от

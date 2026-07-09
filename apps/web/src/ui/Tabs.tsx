@@ -17,7 +17,8 @@ export function Tabs({
             key={t.value}
             value={t.value}
             onClick={() => setValue(t.value)}
-            className="px-3 py-2 text-sm text-text-secondary data-[state=active]:border-b-2 data-[state=active]:border-accent data-[state=active]:text-text"
+            // -mb-px кладёт 2px-подчёркивание триггера поверх 1px-границы ряда табов.
+            className="-mb-px cursor-pointer border-b-2 border-transparent px-3 py-2 text-sm text-text-secondary outline-hidden transition hover:bg-surface-2/60 hover:text-text focus-visible:ring-2 focus-visible:ring-accent/60 data-[state=active]:border-accent data-[state=active]:text-text"
           >
             {t.label}
           </RT.Trigger>

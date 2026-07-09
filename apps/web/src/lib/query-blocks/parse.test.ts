@@ -16,6 +16,15 @@ test('buildCatalogFromAspects строит каталог из schema + CORE_FIE
   expect(cat).toBeTruthy();
 });
 
+test('buildCatalogFromAspects не роняет при отсутствии schema у аспекта', () => {
+  // Деградированный/частичный ответ aspect.list: у definition нет schema.
+  // Без guard'а обращение к .properties роняло бы всё приложение (нет error boundary).
+  const partial = [{ id: 'orbis/task', schema: undefined }];
+  expect(() => buildCatalogFromAspects(partial as never)).not.toThrow();
+  const cat = buildCatalogFromAspects(partial as never);
+  expect(cat).toBeTruthy();
+});
+
 test('parseBlock снимает обёртку и валидный блок → ok:true с ast', () => {
   const cat = buildCatalogFromAspects(aspects as never);
   const r = parseBlock('{{query:tags=work}}', cat);

@@ -40,7 +40,7 @@ export function useFastPath(threadId: string) {
   const online = useOnline();
   const enqueueCreate = useRetryBuffer((s) => s.enqueueCreate);
   const flushNow = useRetryBuffer((s) => s.flushNow);
-  const { sendMessage, retryMessage } = useSendMessage(threadId);
+  const { sendMessage, retryMessage, isSending } = useSendMessage(threadId);
 
   const create = trpc.entity.create.useMutation();
   const update = trpc.entity.update.useMutation();
@@ -217,5 +217,6 @@ export function useFastPath(threadId: string) {
     queryClient.setQueryData(key, (old) => upsertNewest(old as never, synthetic));
   }
 
-  return { submit, reparse, retry: retryMessage };
+  // isSending — pending LLM-отправки (typing-индикатор в ChatScreen); проброс строго аддитивен.
+  return { submit, reparse, retry: retryMessage, isSending };
 }

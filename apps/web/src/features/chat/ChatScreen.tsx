@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
+import { ScreenHeader } from '../../app/ScreenHeader';
 import { useOnline, useRetryBuffer } from '../../state/retry';
 import { trpc } from '../../trpc';
 import { Composer } from './Composer';
-import { MessageList } from './MessageList';
+import { MessageList, ThreadSkeleton } from './MessageList';
 import { useChatThread } from './useChatThread';
 import { useFastPath } from './useFastPath';
 
@@ -19,19 +20,26 @@ export function ChatScreen() {
   }, [ensure.mutate]);
 
   const threadId = ensure.data?.threadId;
-  if (!threadId) {
-    return (
-      <div role="status" className="p-4 text-sm text-text-muted">
-        Открываем тред…
-      </div>
-    );
-  }
-  return <ThreadView threadId={threadId} />;
+  return (
+    <div className="flex h-full flex-col">
+      <ScreenHeader title="Чат" />
+      {threadId ? (
+        // Контент центрирован (шапка — на всю ширину main), скролл — внутри MessageList.
+        <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+          <ThreadView threadId={threadId} />
+        </div>
+      ) : (
+        <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+          <ThreadSkeleton />
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ThreadView({ threadId }: { threadId: string }) {
   const { messages, isLoading } = useChatThread(threadId);
-  const { submit, reparse, retry } = useFastPath(threadId);
+  const { submit, reparse, retry, isSending } = useFastPath(threadId);
   const online = useOnline();
   const pending = useRetryBuffer((s) => s.size);
 
@@ -43,11 +51,15 @@ function ThreadView({ threadId }: { threadId: string }) {
         </div>
       )}
       {isLoading ? (
-        <div role="status" className="flex-1 p-3 text-sm text-text-muted">
-          Загрузка…
-        </div>
+        <ThreadSkeleton />
       ) : (
-        <MessageList messages={messages} isTyping={false} onRetry={retry} onReparse={reparse} />
+        <MessageList
+          messages={messages}
+          isTyping={isSending}
+          onRetry={retry}
+          onReparse={reparse}
+          emptyHint="Например: «обед 340» — Orbis разберёт сам"
+        />
       )}
       <Composer
         onSubmit={submit}

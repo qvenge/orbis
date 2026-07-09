@@ -1,6 +1,6 @@
 import { Button } from '../../ui/Button';
 import { Composer } from './Composer';
-import { MessageList } from './MessageList';
+import { MessageList, ThreadSkeleton } from './MessageList';
 import { useChatThread, useSendMessage } from './useChatThread';
 
 // Общий чат-компонент (§2.2): используется глобальным тредом и тредом сущности (разный threadId).
@@ -15,12 +15,16 @@ export function ChatThread({ threadId }: { threadId: string }) {
         </Button>
       )}
       {isLoading ? (
-        <div role="status" className="flex-1 p-3 text-sm text-text-muted">
-          Загрузка…
-        </div>
+        <ThreadSkeleton />
       ) : (
         // §7.9: тред detail тоже отдаёт «Повторить» (onRetry) при сбое ai.sendMessage.
-        <MessageList messages={messages} isTyping={isSending} onRetry={retryMessage} />
+        // Тред сущности — без fast-path-подсказки: даём контекстную подпись обсуждения.
+        <MessageList
+          messages={messages}
+          isTyping={isSending}
+          onRetry={retryMessage}
+          emptyHint="Обсуждение этой записи"
+        />
       )}
       <Composer onSubmit={sendMessage} disabled={isSending} />
     </div>

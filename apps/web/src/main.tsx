@@ -4,10 +4,14 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { AuthProvider, getCurrentToken } from './auth/AuthProvider';
 import { OnboardingGate } from './features/onboarding/OnboardingGate';
+import { initTheme } from './lib/theme';
 import { registerRetrySend } from './state/retry';
 import { makeRetrySend } from './state/retry-send';
 import { makeTrpcClient, makeVanillaClient, queryClient, trpc } from './trpc';
+import { Toaster } from './ui/Toast';
 import './styles/globals.css';
+
+initTheme();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('Root element #root not found');
@@ -24,6 +28,8 @@ createRoot(rootElement).render(
           <OnboardingGate>
             <App />
           </OnboardingGate>
+          {/* Тосты доступны и до прохождения онбординга, поэтому вне гейта. */}
+          <Toaster />
         </AuthProvider>
       </QueryClientProvider>
     </trpc.Provider>

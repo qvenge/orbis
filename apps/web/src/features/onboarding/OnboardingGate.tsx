@@ -1,5 +1,7 @@
 import { type ReactNode, useEffect } from 'react';
 import { trpc } from '../../trpc';
+import { Button } from '../../ui/Button';
+import { Spinner } from '../../ui/Spinner';
 
 export function OnboardingGate({ children }: { children: ReactNode }) {
   const settings = trpc.user.getSettings.useQuery(undefined, { retry: false });
@@ -24,16 +26,15 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
         className="flex h-full flex-col items-center justify-center gap-3 text-sm text-danger"
       >
         <span>Не удалось загрузить настройки. Повторите позже.</span>
-        <button
-          type="button"
+        <Button
+          variant="outline"
           onClick={() => {
             seed.reset();
             void settings.refetch();
           }}
-          className="rounded-md border border-danger px-3 py-1 text-danger"
         >
           Повторить
-        </button>
+        </Button>
       </div>
     );
   }
@@ -44,9 +45,10 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
       <div
         role="status"
         data-testid="onboarding-splash"
-        className="flex h-full items-center justify-center text-sm text-text-secondary"
+        className="flex h-full flex-col items-center justify-center gap-3"
       >
-        Готовим Orbis…
+        <span className="text-lg font-semibold">Orbis</span>
+        <Spinner size={20} aria-label="Готовим Orbis" />
       </div>
     );
   }

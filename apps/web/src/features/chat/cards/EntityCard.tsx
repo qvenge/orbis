@@ -43,7 +43,12 @@ export function EntityCard({ card }: { card: EntityCardData }) {
         ))}
       </dl>
       {undoActionId && !undone && (
-        <Button variant="ghost" onClick={() => undo.mutate({ actionId: undoActionId })}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className="self-start"
+          onClick={() => undo.mutate({ actionId: undoActionId })}
+        >
           Отменить
         </Button>
       )}

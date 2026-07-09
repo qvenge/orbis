@@ -47,7 +47,8 @@ test('чекбокс task → entity.update status=done + completed_at', async (
     if (path === 'aspect.list') return [];
     return {};
   });
-  await waitFor(() => expect(screen.getByText('Задача')).toBeInTheDocument());
+  // Этап 3: title теперь и в ScreenHeader (h1), и в NativeRow — целимся в шапку.
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача' })).toBeInTheDocument());
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
   await waitFor(() => {
     const c = calls.find((x) => x.path === 'entity.update');
@@ -165,4 +166,31 @@ test('inline body-правка: CONFLICT (409) → откат кэша к пре
   // (а) кэш откатился к прежнему body: оптимистичный патч 'конфликтное' снят (snapshot восстановлен)
   await waitFor(() => expect(screen.getByTestId('body-probe')).toHaveTextContent('тело'));
   expect(screen.getByTestId('body-probe')).not.toHaveTextContent('конфликтное');
+});
+
+test('conflict-баннер: клик «Обновить» → refetch entity.get + баннер скрыт', async () => {
+  const calls: string[] = [];
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    calls.push(path);
+    if (path === 'entity.get')
+      return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') throw trpcError('CONFLICT');
+    if (path === 'relation.listFor') return [];
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
+
+  fireEvent.change(screen.getByTestId('body-edit'), { target: { value: 'конфликтное' } });
+  fireEvent.blur(screen.getByTestId('body-edit'));
+  await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+
+  const getsBefore = calls.filter((p) => p === 'entity.get').length;
+  fireEvent.click(screen.getByRole('button', { name: 'Обновить' }));
+
+  // Баннер снят немедленно (dismissConflict), refetch ушёл на сервер.
+  await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  await waitFor(() =>
+    expect(calls.filter((p) => p === 'entity.get').length).toBeGreaterThan(getsBefore),
+  );
 });

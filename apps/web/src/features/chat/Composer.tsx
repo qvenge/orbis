@@ -1,3 +1,4 @@
+import { SendHorizontal } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
@@ -28,8 +29,10 @@ export function Composer({
         placeholder={placeholder ?? 'Напишите сообщение…'}
         className="flex-1"
       />
-      <Button type="submit" variant="primary" disabled={disabled}>
-        Отправить
+      {/* Мобила — icon-only, десктоп — иконка + текст. */}
+      <Button type="submit" variant="primary" disabled={disabled} aria-label="Отправить">
+        <SendHorizontal size={16} aria-hidden />
+        <span className="hidden md:inline">Отправить</span>
       </Button>
     </form>
   );
