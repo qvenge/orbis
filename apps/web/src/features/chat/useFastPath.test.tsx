@@ -136,6 +136,60 @@ test('настоящий офлайн (холодный кэш) → submit НЕ 
   expect(useRetryBuffer.getState().size).toBe(0); // холодный кэш → unknown_category → системная заметка
 });
 
+// §5.3: бизнес-отказ показывается пользователю и НЕ попадает в буфер (иначе flush
+// молча вычистит его как business_rejection — ввод исчезнет без следа).
+test('онлайн-create отклонён по бизнес-правилу → error_card, буфер пуст', async () => {
+  const { Wrap, qc } = wrapper((path) => {
+    if (path === 'entity.create') throw trpcError('BAD_REQUEST');
+    return handlerBase(path);
+  });
+  const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
+  await act(async () => {
+    await result.current.submit('обед 340');
+  });
+  await waitFor(() => expect(threadMsgs(qc).some(hasErrorCard)).toBe(true));
+  expect(useRetryBuffer.getState().size).toBe(0);
+});
+
+// 02 §2.5: до подтверждения сервером карточка — «⏳ ждёт отправки», без entityId,
+// иначе «Разобрать с AI» архивирует несуществующий id, а буфер создаст вторую сущность.
+test('онлайн-create упал транспортно → карточка деградирует в pending, id сохранён в буфере', async () => {
+  const { Wrap, qc } = wrapper((path) => {
+    if (path === 'entity.create') throw new Error('network down');
+    return handlerBase(path);
+  });
+  const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
+  await act(async () => {
+    await result.current.submit('обед 340');
+  });
+  await waitFor(() => {
+    const msgs = threadMsgs(qc);
+    const meta = msgs[0]?.metadata as { fastPath?: { status: string; entityId?: string } };
+    expect(meta.fastPath?.status).toBe('pending');
+    expect(meta.fastPath?.entityId).toBeUndefined();
+    // Ровно одна карточка: pending переписал «⚡ без AI», а не добавился рядом.
+    expect(msgs.length).toBe(1);
+  });
+  const pending = useRetryBuffer.getState().pending;
+  expect(pending.length).toBe(1);
+  // clientId очереди = id, который уже уходил на сервер (иначе ретрай создаст дубль).
+  const input = (pending[0]?.payload as { input: { id: string } }).input;
+  expect(pending[0]?.clientId).toBe(input.id);
+});
+
+test('CONFLICT по своему id → идемпотентный успех: ни error_card, ни записи в буфере', async () => {
+  const { Wrap, qc } = wrapper((path) => {
+    if (path === 'entity.create') throw trpcError('CONFLICT');
+    return handlerBase(path);
+  });
+  const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
+  await act(async () => {
+    await result.current.submit('обед 340');
+  });
+  expect(threadMsgs(qc).some(hasErrorCard)).toBe(false);
+  expect(useRetryBuffer.getState().size).toBe(0);
+});
+
 test('«разобрать с AI» → archived:true + ai.sendMessage исходной строки (одна строка ≠ две сущности)', async () => {
   const { Wrap, calls } = wrapper((path) => {
     if (path === 'entity.update') return { id: 'e1', title: 'обед' };

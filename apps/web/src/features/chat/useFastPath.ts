@@ -1,6 +1,8 @@
 import { type FastPathCategory, type FastPathCtx, newId, parseFastPath } from '@orbis/shared';
 import { useQueryClient } from '@tanstack/react-query';
+import { TRPCClientError } from '@trpc/client';
 import { useOnline, useRetryBuffer } from '../../state/retry';
+import { mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
 import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from './useChatThread';
 
@@ -57,9 +59,16 @@ export function useFastPath(threadId: string) {
     return mapCtx(utils.entity.query.getData(CATEGORY_QUERY), utils.user.getSettings.getData());
   }
 
-  function insertCard(card: Record<string, unknown>, note: string, fastPath: FastPathMeta) {
+  // Возвращает id синтетического сообщения; повторный вызов с тем же messageId ПЕРЕПИСЫВАЕТ
+  // карточку (upsertNewest дедупит по id) — так «⚡ без AI» деградирует в «⏳ ждёт отправки».
+  function insertCard(
+    card: Record<string, unknown>,
+    note: string,
+    fastPath: FastPathMeta,
+    messageId: string = newId(),
+  ): string {
     const synthetic: ChatMessage = {
-      id: newId(),
+      id: messageId,
       threadId,
       role: 'assistant',
       content: note,
@@ -78,6 +87,21 @@ export function useFastPath(threadId: string) {
       createdAt: new Date().toISOString(),
     } as ChatMessage;
     queryClient.setQueryData(key, (old) => upsertNewest(old as never, synthetic));
+    return messageId;
+  }
+
+  // Бизнес-отказ сервера: карточка успеха заменяется error_card (§5.3 — такой отказ
+  // показывается пользователю и в буфер не попадает).
+  function replaceCardWithError(messageId: string, message: string, code: string) {
+    const errorMsg: ChatMessage = {
+      id: messageId,
+      threadId,
+      role: 'assistant',
+      content: '',
+      metadata: { cards: [{ kind: 'error_card', code, message }] },
+      createdAt: new Date().toISOString(),
+    } as ChatMessage;
+    queryClient.setQueryData(key, (old) => upsertNewest(old as never, errorMsg));
   }
 
   async function submit(text: string): Promise<void> {
@@ -87,7 +111,14 @@ export function useFastPath(threadId: string) {
       const parsed = parseFastPath(text, ctx);
       if (parsed.ok) {
         // Уверенный (категории прогреты) → retry-буфер + «⏳ ждёт отправки».
-        enqueueCreate(parsed.create, 'fast_path');
+        try {
+          enqueueCreate(parsed.create, 'fast_path');
+        } catch {
+          // localStorage недоступен (квота, private mode): Composer уже очистил поле —
+          // молча потерять ввод нельзя, возвращаем его пользователю текстом заметки.
+          insertSystemNote(`Не удалось сохранить запись офлайн — скопируйте текст: «${text}»`);
+          return;
+        }
         const fin = (parsed.create.aspects?.['orbis/financial'] ?? {}) as Record<string, unknown>;
         insertCard({ ...fin, title: parsed.create.title }, '⏳ ждёт отправки', {
           text,
@@ -112,17 +143,37 @@ export function useFastPath(threadId: string) {
       return;
     }
 
-    // Онлайн + уверенно → мгновенная карточка «⚡ без AI» + entity.create.
+    // Онлайн + уверенно → мгновенная карточка «⚡ без AI» + entity.create (оптимизм §2.5).
     const fin = (parsed.create.aspects?.['orbis/financial'] ?? {}) as Record<string, unknown>;
-    insertCard({ ...fin, title: parsed.create.title }, '⚡ без AI', {
+    const card = { ...fin, title: parsed.create.title };
+    const cardId = insertCard(card, '⚡ без AI', {
       entityId: parsed.create.id,
       text,
       status: 'confirmed',
     });
     try {
       await create.mutateAsync({ input: parsed.create, source: 'fast_path' });
-    } catch {
-      // Потеря сети во время отправки — переложить в буфер и дренировать позже.
+      // §5.1: созданная сущность обязана появиться в списках Browser и счётчиках.
+      void utils.entity.query.invalidate();
+      void utils.entity.count.invalidate();
+    } catch (err) {
+      const outcome = mapSendError(err);
+      // CONFLICT по своему id — сервер уже принял эту запись (идемпотентность §5.3): успех.
+      if (outcome === 'confirmed') return;
+      if (outcome === 'business_rejection') {
+        // §5.3: бизнес-отказ НЕ буферизуется, а показывается — иначе ввод исчезал молча
+        // (карточка успеха на экране, сущности нет, запись вычищена из очереди при flush).
+        const code =
+          err instanceof TRPCClientError && typeof err.data?.code === 'string'
+            ? err.data.code
+            : 'BAD_REQUEST';
+        replaceCardWithError(cardId, 'Запись отклонена сервером — проверьте ввод.', code);
+        return;
+      }
+      // Транспортный сбой: карточка деградирует в «⏳ ждёт отправки» — без entityId, то есть
+      // без «Разобрать с AI» (02 §2.5: действия недоступны до подтверждения сервером).
+      // Иначе reparse архивировал бы несуществующий id, а буфер позже создал вторую сущность.
+      insertCard(card, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
       enqueueCreate(parsed.create, 'fast_path');
       void flushNow();
     }

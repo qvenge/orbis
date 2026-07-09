@@ -2,9 +2,9 @@ import { newId } from '@orbis/shared';
 import type { QueueStorage } from './storage';
 import { localStorageQueue } from './storage';
 
-export type { QueueStorage };
 // Re-export storage seam so consumers (state/retry.ts) can inject/observe the queue.
-export { localStorageQueue };
+export { localStorageQueue, setQueueScope } from './storage';
+export type { QueueStorage };
 
 export interface QueuedCreate {
   clientId: string;
@@ -16,7 +16,8 @@ export interface QueuedCreate {
 export type FlushOutcome = 'confirmed' | 'transport_failure' | 'business_rejection';
 
 export interface RetryBuffer {
-  enqueue(op: Omit<QueuedCreate, 'clientId' | 'createdAt'>): QueuedCreate;
+  /** clientId задаётся вызывающим, когда id уже ушёл на сервер в первой попытке (§5.3). */
+  enqueue(op: Omit<QueuedCreate, 'clientId' | 'createdAt'> & { clientId?: string }): QueuedCreate;
   flush(send: (op: QueuedCreate) => Promise<FlushOutcome>): Promise<void>;
   cancel(clientId: string): void;
   size(): number;
@@ -29,9 +30,11 @@ export function createRetryBuffer(storage: QueueStorage = localStorageQueue): Re
   return {
     enqueue(op) {
       // clientId — UUIDv7 (01 §5.3): время в префиксе, сортируемо, идемпотентность по client-UUID.
+      // Если операция уже уходила на сервер (упавший онлайн-create), вызывающий передаёт ТОТ ЖЕ id:
+      // сгенерировать новый значило бы создать дубль ровно в сценарии «запрос дошёл, ответ потерян».
       const item: QueuedCreate = {
         ...op,
-        clientId: newId(),
+        clientId: op.clientId ?? newId(),
         createdAt: new Date().toISOString(),
       };
       storage.save([...storage.load(), item]);

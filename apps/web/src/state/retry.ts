@@ -6,10 +6,20 @@ import {
   type FlushOutcome,
   localStorageQueue,
   type QueuedCreate,
+  setQueueScope,
 } from '../lib/retry-buffer';
 
 const storage = localStorageQueue;
 const buffer = createRetryBuffer(storage);
+
+/**
+ * Привязать очередь к владельцу сессии (null — выход). Вызывается AuthProvider'ом ДО рендера
+ * дерева, поэтому store здесь не трогаем (обновление чужого store в фазе рендера) —
+ * его синхронизирует useRetryFlush на монтировании.
+ */
+export function setRetryScope(userId: string | null): void {
+  setQueueScope(userId);
+}
 
 export type RetrySend = (op: QueuedCreate) => Promise<FlushOutcome>;
 let sendImpl: RetrySend | null = null;
@@ -35,7 +45,13 @@ function snapshot(): { size: number; pending: QueuedCreate[] } {
 export const useRetryBuffer = create<RetryState>((set) => ({
   ...snapshot(),
   enqueueCreate: (input, source) => {
-    const op = buffer.enqueue({ tool: 'entity.create', payload: { input, source } });
+    // id из парсера — тот самый UUID, который (возможно) уже принят сервером в упавшей
+    // онлайн-попытке: сохраняем его как clientId, иначе ретрай создаст вторую сущность.
+    const op = buffer.enqueue({
+      tool: 'entity.create',
+      payload: { input, source },
+      clientId: input.id,
+    });
     set(snapshot());
     return op;
   },
@@ -59,10 +75,14 @@ export const useRetryBuffer = create<RetryState>((set) => ({
  */
 export function useRetryFlush(): void {
   useEffect(() => {
+    // Store создан на импорте модуля — до того, как AuthProvider задал скоуп владельца:
+    // пересинхронизируем его с очередью текущего пользователя, иначе индикатор «ждут
+    // отправки: N» и гейт автослива смотрели бы в чужой (общий) ключ.
+    useRetryBuffer.setState(snapshot());
     const flush = () => {
       void useRetryBuffer.getState().flushNow();
     };
-    if (navigator.onLine && useRetryBuffer.getState().size > 0) flush();
+    if (navigator.onLine && buffer.size() > 0) flush();
     window.addEventListener('online', flush);
     return () => window.removeEventListener('online', flush);
   }, []);
