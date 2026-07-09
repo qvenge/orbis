@@ -92,22 +92,40 @@ bun scripts/issue-pat.ts
 
 ## 4. Бэкап БД
 
+> **Репозиторий `qvenge/orbis` — публичный.** Artifact любого Actions-рана в публичном
+> репозитории скачивается посторонними, поэтому дамп выгружается **только зашифрованным**
+> (OpenPGP, публичный ключ владельца). Незашифрованный дамп на раннер не попадает: гейт
+> ключа стоит до `pg_dump`, а plain-файл удаляется сразу после шифрования.
+> Альтернатива, снимающая проблему в корне, — сделать репозиторий приватным (решение владельца).
+
 ### 4.1 Автоматический (GitHub Actions cron)
 
 Workflow `.github/workflows/backup.yml`: `pg_dump` прод-БД через session-пулер `:5432`
-ежедневно в 03:00 UTC + ручной запуск (`workflow_dispatch`). Дамп грузится как artifact
-`orbis-db-backup` (retention 30 дней).
+ежедневно в 03:00 UTC + ручной запуск (`workflow_dispatch`). Зашифрованный дамп грузится
+как artifact `orbis-db-backup` (файл `orbis-backup-<ts>.sql.gpg`, retention 30 дней).
 
-Гейт: секрет репозитория `ADMIN_DSN` (Фаза B). Завести:
-`Settings → Secrets and variables → Actions → New repository secret`, имя `ADMIN_DSN`,
-значение — session-пулерный DSN роли `postgres` (не `orbis_app` — для дампа нужна роль-владелец):
+**Гейт 1 — секрет `ADMIN_DSN`** (Фаза B): `Settings → Secrets and variables → Actions →
+Secrets → New repository secret`, значение — session-пулерный DSN роли `postgres`
+(не `orbis_app` — для дампа нужна роль-владелец):
 
 ```
 postgresql://postgres.<PROD_REF>:<pwd>@<POOLER_HOST>:5432/postgres
 ```
 
-Без секрета первый шаг workflow падает с явной ошибкой (`::error::Секрет ADMIN_DSN не задан…`),
-а не молча. Ручной прогон: `Actions → backup → Run workflow`.
+**Гейт 2 — переменная `BACKUP_PUBLIC_KEY`**: armored OpenPGP **публичный** ключ владельца
+(`Settings → Secrets and variables → Actions → Variables`). Приватный ключ на GitHub не
+хранится — компрометация аккаунта GitHub не раскрывает бэкапы, но и **потеря приватного
+ключа делает все дампы нечитаемыми**: экспортируй его в надёжное место сразу.
+
+```bash
+# одноразово, на машине владельца
+gpg --quick-generate-key "orbis-backup" default default never
+gpg --armor --export orbis-backup > backup-pub.asc     # содержимое → в BACKUP_PUBLIC_KEY
+gpg --armor --export-secret-keys orbis-backup > backup-priv.asc   # хранить офлайн, не в репо
+```
+
+Без любого из гейтов первый шаг workflow падает с явной ошибкой, а не молча.
+Ручной прогон: `Actions → backup → Run workflow`.
 
 ### 4.2 Ручной бэкап
 
@@ -120,9 +138,17 @@ ADMIN_DSN='postgresql://postgres.<PROD_REF>:<pwd>@<POOLER_HOST>:5432/postgres' \
 Скрипт: `pg_dump --no-owner --no-privileges` через session-пулер; требует `pg_dump >= PG17`
 (иначе автоматически дампит через `docker run postgres:17-alpine`); проверяет, что дамп непуст
 и содержит таблицу `entities` (маркер целостности прод-схемы); печатает путь строкой `dump: <path>`.
-Пароль/DSN в вывод не попадают.
+Пароль/DSN в вывод не попадают. Шифрование здесь не выполняется (это делает workflow):
+`./backups` и `orbis-backup-*.sql` внесены в `.gitignore`/`.dockerignore`, но локальный
+дамп — это открытые прод-данные, храни его соответственно.
 
 ### 4.3 Восстановление
+
+Artifact из Actions расшифровывается приватным ключом владельца (§4.1):
+
+```bash
+gpg --decrypt orbis-backup-<ts>.sql.gpg > orbis-backup-<ts>.sql
+```
 
 Плейн-SQL дамп (`.sql`) восстанавливается через `psql`. Восстанавливать в ЧИСТУЮ БД
 (новый Supabase-проект или пересозданная схема), иначе конфликты по существующим объектам.

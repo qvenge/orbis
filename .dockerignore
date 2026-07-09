@@ -21,6 +21,14 @@ dist
 apps/server/.env
 spikes/**/.env
 
+# Дампы БД и транскрипты агентов: локальный `docker build` копирует контекст
+# целиком (COPY . .) — прод-данные и переписка не должны попасть в слои образа.
+backups
+orbis-backup-*.sql
+orbis-backup-*.sql.gpg
+.claude
+.agents
+
 # Не нужно ни для build, ни для runtime сервера.
 supabase/.temp
 supabase/**/.temp

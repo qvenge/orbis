@@ -12,6 +12,10 @@ dist/
 __pycache__/
 skills-lock.json
 .playwright-mcp/
+# Дампы БД (runbook §4.2 предлагает BACKUP_DIR=./backups) — репозиторий публичный.
+backups/
+orbis-backup-*.sql
+orbis-backup-*.sql.gpg
 spikes/**/.env
 spikes/**/node_modules
 spikes/**/bun.lock
