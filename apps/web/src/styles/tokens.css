@@ -1,39 +1,45 @@
 /*
  * Orbis design tokens — Tailwind v4 @theme.
  *
- * Visual language: «ночная обсерватория» — глубокий чернильно-синий фон,
- * тёплый «бумажный» текст и латунный акцент (тёплый свет на холодной темноте).
- * Dark-first: продукт живёт в вечернем использовании и чат-интерфейсе.
+ * Две темы: светлая (дефолт) и тёмная. Ориентир — Notion/Obsidian:
+ * тёплый «бумажный» серый в светлой, нейтральный графит в тёмной, латунный акцент.
+ * Светлые значения — дефолт внутри @theme; тёмные переопределяют ТЕ ЖЕ переменные
+ * блоком `:root[data-theme='dark']` ПОСЛЕ @theme (см. ниже). Утилиты Tailwind v4
+ * для цветов компилируются в `var(--color-*)`, поэтому смена атрибута data-theme
+ * на <html> переключает тему без пересборки CSS.
  *
- * Контраст (WCAG 2.x): text/surface 15.0:1, text-secondary/surface 7.4:1,
- * accent-foreground/accent 9.0:1, danger/surface 7.5:1 — все ключевые пары ≥ AA.
+ * Контраст (WCAG 2.x, светлая тема): text/surface 12.6:1, text-secondary/surface 6.9:1,
+ * accent-foreground/accent 6.2:1, danger/surface 5.2:1 — ключевые пары ≥ AA.
  */
 @theme {
-  /* --- Цвет: фон и уровни поверхностей (холодный чернильный, hue ~250) --- */
-  --color-bg: #0c0d12;
-  --color-surface: #14161d;
-  --color-surface-2: #1c1f28;
-  --color-line: #2a2d38;
+  /* --- Цвет: фон и уровни поверхностей (тёплый «бумажный» серый, Notion-like) --- */
+  --color-bg: #fbfbfa;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1f0ee;
+  --color-line: #e6e4e0;
 
-  /* --- Цвет: текст (тёплый off-white — «бумага на ночном небе») --- */
-  --color-text: #eceae4;
-  --color-text-secondary: #a9a59b;
-  --color-text-muted: #787369;
+  /* --- Цвет: текст (тёплый почти-чёрный на бумаге) --- */
+  --color-text: #37352f;
+  --color-text-secondary: #5f5e59;
+  --color-text-muted: #706f69;
 
-  /* --- Цвет: акцент (латунь/янтарь) и опасность (мягкий коралл) --- */
-  --color-accent: #e3b258;
-  --color-accent-foreground: #221805;
-  --color-danger: #ef8b7c;
-  --color-danger-foreground: #2b0f0a;
+  /* --- Цвет: акцент (латунь; светлый янтарь #e3b258 на белом нечитаем) и опасность --- */
+  --color-accent: #8f6400;
+  --color-accent-foreground: #ffffff;
+  --color-danger: #a83a29;
+  --color-danger-foreground: #ffffff;
+  --color-overlay: rgb(15 15 15 / 0.4);
 
-  /* --- Шрифты: системные, без webfont — геометрично-гуманистический стек --- */
+  /* --- Шрифты: системные, без webfont — гуманистический стек --- */
   --font-sans:
-    "Avenir Next", Avenir, "Segoe UI Variable Text", "Segoe UI", system-ui, Roboto,
-    "Helvetica Neue", sans-serif;
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "Noto Sans", sans-serif;
   --font-mono:
     ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
 
   /* --- Типографическая шкала (~1.2), высота строк дышит под чат --- */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 0.875rem;
   --text-xs: 0.75rem;
   --text-xs--line-height: 1rem;
   --text-sm: 0.875rem;
@@ -57,18 +63,54 @@
   --radius-card: 0.875rem;
   --radius-xl: 1.25rem;
 
-  /* --- Тени: для тёмного UI — тонкий верхний блик + мягкая глубина --- */
-  --shadow-control: inset 0 1px 0 0 rgb(255 255 255 / 0.12), 0 1px 2px 0 rgb(0 0 0 / 0.35);
-  --shadow-card:
-    inset 0 1px 0 0 rgb(255 255 255 / 0.04), 0 1px 2px 0 rgb(0 0 0 / 0.4),
-    0 8px 24px -8px rgb(0 0 0 / 0.5);
-  --shadow-pop:
-    inset 0 1px 0 0 rgb(255 255 255 / 0.06), 0 4px 8px -2px rgb(0 0 0 / 0.4),
-    0 16px 40px -8px rgb(0 0 0 / 0.6);
+  /*
+   * Тени ссылаются на промежуточные переменные (--orbis-shadow-*), потому что
+   * утилиты Tailwind v4 для box-shadow ИНЛАЙНЯТ значение (в отличие от цветов).
+   * Через var() тень остаётся переключаемой по data-theme — значения ниже в :root.
+   */
+  --shadow-control: var(--orbis-shadow-control);
+  --shadow-card: var(--orbis-shadow-card);
+  --shadow-pop: var(--orbis-shadow-pop);
 
   /* --- Движение: быстрое и спокойное --- */
   --ease-swift: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-settle: cubic-bezier(0.22, 1, 0.36, 1);
   --default-transition-duration: 160ms;
   --default-transition-timing-function: var(--ease-swift);
+}
+
+/* Светлая тема (дефолт): почти плоские тени без inset-бликов. */
+:root {
+  --orbis-shadow-control: 0 1px 2px rgb(0 0 0 / 0.05);
+  --orbis-shadow-card: 0 1px 2px rgb(0 0 0 / 0.06), 0 0 0 1px rgb(0 0 0 / 0.02);
+  --orbis-shadow-pop: 0 4px 16px rgb(0 0 0 / 0.12), 0 0 0 1px rgb(0 0 0 / 0.04);
+}
+
+/*
+ * Тёмная тема — переопределение тех же токенов вне @theme, чтобы утилиты
+ * (ссылающиеся на var(--color-*)) переключались по атрибуту на <html>.
+ * Нейтральный графит вместо чернильно-синего.
+ */
+:root[data-theme="dark"] {
+  --color-bg: #161616;
+  --color-surface: #1e1e1e;
+  --color-surface-2: #262626;
+  --color-line: #343432;
+  --color-text: #e8e6e3;
+  --color-text-secondary: #a5a29b;
+  --color-text-muted: #8a8781;
+  --color-accent: #e3b258;
+  --color-accent-foreground: #241a05;
+  --color-danger: #e08573;
+  --color-danger-foreground: #2b0f0a;
+  --color-overlay: rgb(0 0 0 / 0.55);
+
+  /* Тёмные тени — тонкий верхний блик + мягкая глубина (перенесены из dark-first). */
+  --orbis-shadow-control: inset 0 1px 0 0 rgb(255 255 255 / 0.12), 0 1px 2px 0 rgb(0 0 0 / 0.35);
+  --orbis-shadow-card:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.04), 0 1px 2px 0 rgb(0 0 0 / 0.4),
+    0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --orbis-shadow-pop:
+    inset 0 1px 0 0 rgb(255 255 255 / 0.06), 0 4px 8px -2px rgb(0 0 0 / 0.4),
+    0 16px 40px -8px rgb(0 0 0 / 0.6);
 }

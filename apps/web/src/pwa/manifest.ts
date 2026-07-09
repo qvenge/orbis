@@ -1,4 +1,4 @@
-// theme/background — токен bg «ночной обсерватории» (#0c0d12, §4.9).
+// theme/background — токен bg светлой темы (#fbfbfa, дефолт).
 export const pwaManifest = {
   name: 'Orbis',
   short_name: 'Orbis',
@@ -6,7 +6,7 @@ export const pwaManifest = {
   display: 'standalone' as const,
   start_url: '/',
   scope: '/',
-  theme_color: '#0c0d12',
-  background_color: '#0c0d12',
+  theme_color: '#fbfbfa',
+  background_color: '#fbfbfa',
   icons: [{ src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }],
 };

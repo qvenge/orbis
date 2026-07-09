@@ -3,8 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#fbfbfa" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Orbis</title>
+    <script>
+      // Pre-paint: ставим data-theme='dark' до первой отрисовки, чтобы не было FOUC.
+      // Никаких внешних модулей; localStorage в try/catch.
+      (() => {
+        try {
+          const pref = localStorage.getItem('orbis:theme');
+          const dark =
+            pref === 'dark' ||
+            ((pref === 'system' || pref === null) &&
+              window.matchMedia &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) {
+            document.documentElement.setAttribute('data-theme', 'dark');
+            const m = document.querySelector('meta[name="theme-color"]');
+            if (m) m.setAttribute('content', '#161616');
+          }
+        } catch {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

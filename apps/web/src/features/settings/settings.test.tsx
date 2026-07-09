@@ -30,6 +30,24 @@ test('GeneralForm сабмитит частичный апдейт (только
   });
 });
 
+test('сегмент темы: клик «Тёмная» → data-theme + localStorage, в patch тема НЕ попадает', async () => {
+  localStorage.removeItem('orbis:theme');
+  document.documentElement.removeAttribute('data-theme');
+  const { calls } = renderWithProviders(<GeneralForm settings={settings as never} />, (path) =>
+    path === 'user.updateSettings' ? settings : {},
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Тёмная' }));
+  expect(localStorage.getItem('orbis:theme')).toBe('dark');
+  expect(document.documentElement.dataset.theme).toBe('dark');
+
+  // Сабмит без изменений полей формы → мутация с пустым patch, без ключа темы.
+  fireEvent.submit(screen.getByTestId('general-form'));
+  await waitFor(() => {
+    const c = calls.find((x) => x.path === 'user.updateSettings');
+    expect(c?.input).toEqual({});
+  });
+});
+
 beforeEach(() => {
   // jsdom не имеет createObjectURL
   Object.defineProperty(URL, 'createObjectURL', {
