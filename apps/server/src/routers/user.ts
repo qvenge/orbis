@@ -9,6 +9,7 @@ import { userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
 import { exportData, type OrbisExport } from '../export';
+import { isValidTimeZone } from '../query/context';
 import { seedOnboarding } from '../seed/onboarding';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireUserSettings, type WireUserSettings } from '../wire';
@@ -18,7 +19,14 @@ import { toWireUserSettings, type WireUserSettings } from '../wire';
 // это entitlements (§8), меняется серверным конфигом.
 const updateSettingsInput = z
   .object({
-    timezone: z.string().min(1).optional(),
+    // Зона обязана быть IANA-идентификатором: queryContext строит из неё Intl.DateTimeFormat,
+    // и невалидная строка (принятая как z.string()) роняла бы RangeError → 500 на каждом
+    // entity.query/count и на тулах агента — самоотказ чтения одним валидным вызовом API.
+    timezone: z
+      .string()
+      .min(1)
+      .refine(isValidTimeZone, { message: 'неизвестная таймзона (IANA, напр. Europe/Moscow)' })
+      .optional(),
     defaultCurrency: z.string().length(3).optional(),
     weekStartDay: z.enum(['monday', 'sunday']).optional(),
     tagColors: z.record(z.unknown()).optional(),

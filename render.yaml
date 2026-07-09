@@ -15,7 +15,8 @@ services:
     envVars:
       # --- Рантайм API ---
       # Продуктовое подключение: роль orbis_app (RLS enforced) через session-пулер :5432.
-      # Формат: postgresql://orbis_app.<PROD_REF>:<пароль>@aws-1-eu-central-1.pooler.supabase.com:5432/postgres
+      # Формат: postgresql://orbis_app.<PROD_REF>:<пароль>@<POOLER_HOST>:5432/postgres
+      # <POOLER_HOST> — Supabase Dashboard → Connect (per-project; прод ceovqtdibalxnqkgedrl → aws-0-eu-central-1.pooler.supabase.com)
       - key: DATABASE_URL
         sync: false
       # session-пулер поддерживает prepared statements → prepare=true (для :6543 было бы false).
@@ -27,8 +28,13 @@ services:
       - key: SUPABASE_JWT_SECRET
         sync: false # Supabase → Settings → API → JWT Settings (fallback HS256)
       # LLM (§7): реальный ключ Anthropic — гейт llm-smoke перед доверием AI в проде.
+      # ВАЖНО: ключ обязан быть задан ДО деплоя. Без него старт падает намеренно —
+      # иначе сервис поднялся бы с echo-заглушкой и молча отвечал ею и в UI, и MCP-агенту.
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Явный выбор провайдера: снимает «неявный echo при пустом ключе» (см. llm/provider.ts).
+      - key: ORBIS_LLM_PROVIDER
+        value: anthropic
       # PAT внешнего агента (§9.3, MCP). Выдача: bun scripts/issue-pat.ts (печатает hash + owner_id).
       - key: ORBIS_PAT_HASH
         sync: false

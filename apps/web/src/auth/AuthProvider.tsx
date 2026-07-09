@@ -1,4 +1,5 @@
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react';
+import { setRetryScope } from '../state/retry';
 import { onClientOutdated, onUnauthorized } from './events';
 import { LoginScreen } from './LoginScreen';
 import { supabase, useSession } from './supabase';
@@ -22,6 +23,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const session = useSession();
   const [outdated, setOutdated] = useState(false);
   currentToken = session.token;
+  // Скоуп retry-буфера — по владельцу сессии, до рендера дерева (эффекты детей идут
+  // раньше эффектов родителя, а useRetryFlush в App дренирует очередь на монтировании).
+  // Иначе на общем браузере следующий аккаунт дослал бы чужие записи в свой workspace.
+  setRetryScope(session.userId);
 
   useEffect(() => {
     onClientOutdated(() => setOutdated(true));

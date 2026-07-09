@@ -38,6 +38,26 @@ test('makeRetrySend: успешный create → confirmed; шлёт id=clientId
   });
 });
 
+// §5.3: если payload несёт id (create, уже отправлявшийся серверу), шлём именно его —
+// clientId очереди тут вторичен, иначе повтор создаст вторую сущность.
+test('makeRetrySend: id из payload имеет приоритет над clientId', async () => {
+  const mutate = vi.fn().mockResolvedValue({ id: 'x' });
+  // biome-ignore lint/suspicious/noExplicitAny: мок vanilla-клиента tRPC для юнит-теста
+  const client = { entity: { create: { mutate } } } as any;
+  const send = makeRetrySend(client);
+  const op: QueuedCreate = {
+    clientId: 'cid7',
+    tool: 'entity.create',
+    payload: { input: { id: 'original-uuid', title: 'обед', tags: [] }, source: 'fast_path' },
+    createdAt: 'now',
+  };
+  expect(await send(op)).toBe('confirmed');
+  expect(mutate).toHaveBeenCalledWith({
+    input: { id: 'original-uuid', title: 'обед', tags: [] },
+    source: 'fast_path',
+  });
+});
+
 test('makeRetrySend: ошибка мапится через mapSendError', async () => {
   const mutate = vi.fn().mockRejectedValue(trpcError('BAD_REQUEST'));
   // biome-ignore lint/suspicious/noExplicitAny: мок vanilla-клиента tRPC для юнит-теста

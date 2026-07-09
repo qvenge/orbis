@@ -28,8 +28,10 @@ export function makeRetrySend(
   return async (op) => {
     const { input, source } = op.payload as { input: EntityCreateInput; source: 'fast_path' };
     try {
-      // id = clientId (UUIDv7) — идемпотентность по client-UUID (§5.3).
-      await client.entity.create.mutate({ input: { ...input, id: op.clientId }, source });
+      // Идемпотентность по client-UUID (§5.3): id операции — из payload, если он там есть
+      // (упавший онлайн-create уже отправлял его серверу), иначе clientId очереди.
+      const id = input.id ?? op.clientId;
+      await client.entity.create.mutate({ input: { ...input, id }, source });
       return 'confirmed';
     } catch (err) {
       return mapSendError(err);

@@ -56,7 +56,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           Изменено в другом месте — обновите.
         </p>
       )}
-      <BodyEditor key={entity.updatedAt} initial={entity.body ?? ''} onSave={saveBody} />
+      {/* key по id, НЕ по updatedAt: refetch после каждого save менял key и ремоунтил
+          редактор, стирая текст, набранный за время запроса (а при 409 — ещё и уничтожая
+          черновик, который §5.2 предлагает «повторить вручную»). */}
+      <BodyEditor key={entity.id} initial={entity.body ?? ''} onSave={saveBody} />
       {block && <QueryBlock body={entity.body ?? ''} />}
       <AspectCards entity={entity} />
       <Subtasks parentId={entity.id} />
@@ -84,12 +87,22 @@ export function DetailScreen({ entityId }: { entityId: string }) {
 
 function BodyEditor({ initial, onSave }: { initial: string; onSave: (body: string) => void }) {
   const [value, setValue] = useState(initial);
+  const [serverBody, setServerBody] = useState(initial);
+
+  // Серверный body сменился (наш save или чужая правка): подхватываем его, только если
+  // черновик не трогали. Иначе текст пользователя остаётся — о конфликте сообщает баннер
+  // выше, и правку есть что повторить.
+  if (initial !== serverBody) {
+    setServerBody(initial);
+    if (value === serverBody) setValue(initial);
+  }
+
   return (
     <textarea
       data-testid="body-edit"
       value={value}
       onChange={(e) => setValue(e.target.value)}
-      onBlur={() => value !== initial && onSave(value)}
+      onBlur={() => value !== serverBody && onSave(value)}
       className="min-h-24 rounded-control border border-line bg-surface p-2 text-sm"
     />
   );

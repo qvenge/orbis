@@ -4,7 +4,7 @@
 // с определением тула: проверяет и текстовый путь, и конвертацию tool defs.
 //
 // Запуск: ANTHROPIC_API_KEY=sk-... bun scripts/llm-smoke.ts
-// Модель: env ORBIS_LLM_MODEL (default claude-sonnet-4-5).
+// Модель: env ORBIS_LLM_MODEL (default claude-sonnet-5 — DEFAULT_ANTHROPIC_MODEL).
 
 import { AnthropicProvider } from '../apps/server/src/llm/anthropic';
 
@@ -35,7 +35,9 @@ const response = await provider.chat({
       },
     },
   ],
-  maxTokens: 256,
+  // 2048, не 256: на claude-sonnet-5 adaptive thinking включён по умолчанию и
+  // считается в output-бюджет — слишком узкий потолок дал бы ложный обрыв max_tokens.
+  maxTokens: 2048,
 });
 
 console.log('content   :', JSON.stringify(response.content));

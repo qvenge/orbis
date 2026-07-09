@@ -35,3 +35,6 @@ jobs:
       - run: bun run typecheck
       - run: bun run db:prepare   # миграции + роль orbis_app + сид реестра + pgTAP
       - run: bun run test
+      # Сборка web не покрыта тестами: регрессия vite-плагина, импорта ассета или
+      # tsconfig проходила CI зелёной и всплывала только падением деплоя на Render.
+      - run: bun run --filter @orbis/web build

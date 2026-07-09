@@ -13,8 +13,13 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { generateText, type JSONSchema7, jsonSchema, type ToolSet, tool } from 'ai';
 import type { LLMProvider, LLMRequest, LLMResponse, LLMToolDef } from './types';
 
-/** Модель по умолчанию; переопределяется env ORBIS_LLM_MODEL (§7.7: имя модели — конфиг). */
-export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-4-5';
+/**
+ * Модель по умолчанию; переопределяется env ORBIS_LLM_MODEL (§7.7: имя модели — конфиг).
+ * claude-sonnet-5 (решение владельца 2026-07-09): adaptive thinking включён по умолчанию
+ * и расходует output-бюджет, не-дефолтные temperature/top_p/top_k отвергаются (400) —
+ * generateText ниже их и не передаёт; токенизатор новее (~+30% токенов к 4-5).
+ */
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-5';
 
 /** Значения finishReason установленного ai@7.0.15 (node_modules/ai/dist/index.d.ts:125). */
 export type SdkFinishReason =
@@ -99,10 +104,20 @@ export function toSdkTools(tools: readonly LLMToolDef[]): ToolSet {
   );
 }
 
+/**
+ * Потолок одного шага провайдера. Без него зависший коннект вешает мутацию навсегда:
+ * SDK своего таймаута не ставит, а его maxRetries реагирует только на reject —
+ * «висящий» запрос не ретраится и не отменяется. 180 с: adaptive thinking на
+ * claude-sonnet-5 легитимно думает десятки секунд, поэтому порог заведомо выше рабочего.
+ */
+export const PROVIDER_TIMEOUT_MS = 180_000;
+
 export interface AnthropicProviderOptions {
   apiKey: string;
   /** Id модели Anthropic; по умолчанию DEFAULT_ANTHROPIC_MODEL. */
   model?: string;
+  /** Таймаут одного вызова; по умолчанию PROVIDER_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 /**
@@ -121,10 +136,12 @@ export interface AnthropicProviderOptions {
  */
 export class AnthropicProvider implements LLMProvider {
   private readonly model: ReturnType<ReturnType<typeof createAnthropic>>;
+  private readonly timeoutMs: number;
 
   constructor(opts: AnthropicProviderOptions) {
     const provider = createAnthropic({ apiKey: opts.apiKey });
     this.model = provider(opts.model ?? DEFAULT_ANTHROPIC_MODEL);
+    this.timeoutMs = opts.timeoutMs ?? PROVIDER_TIMEOUT_MS;
   }
 
   async chat(req: LLMRequest): Promise<LLMResponse> {
@@ -141,6 +158,9 @@ export class AnthropicProvider implements LLMProvider {
       system: req.system || undefined,
       messages,
       maxOutputTokens: req.maxTokens,
+      // Таймаут шага (§7.9): по срабатыванию generateText отклоняется, вызывающий мапит
+      // это в LLM_UNAVAILABLE с кнопкой «повторить» — вместо бесконечно висящей мутации.
+      abortSignal: AbortSignal.timeout(this.timeoutMs),
       // tools/toolChoice только при непустом наборе: Anthropic API отвергает
       // tool_choice без tools; выбор тула — всегда 'auto' (решение плана 1b)
       ...(req.tools.length > 0

@@ -40,3 +40,11 @@ test('enqueue генерирует UUIDv7 clientId (версия-нибл = 7)',
   expect(op.clientId[14]).toBe('7');
   expect(op.clientId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-/i);
 });
+
+// §5.3: упавший онлайн-create мог дойти до сервера — ретрай обязан идти С ТЕМ ЖЕ UUID,
+// иначе «запрос дошёл, ответ потерялся» порождает дубль сущности.
+test('enqueue переиспользует переданный clientId (id уже ушедшей на сервер операции)', () => {
+  const buf = createRetryBuffer(memStorage());
+  const op = buf.enqueue({ tool: 'entity.create', payload: {}, clientId: 'existing-id' });
+  expect(op.clientId).toBe('existing-id');
+});

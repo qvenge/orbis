@@ -22,6 +22,7 @@ export interface LLMProviderEnv {
   ORBIS_LLM_PROVIDER?: string;
   ORBIS_LLM_MODEL?: string;
   ANTHROPIC_API_KEY?: string;
+  NODE_ENV?: string;
 }
 
 /**
@@ -30,7 +31,8 @@ export interface LLMProviderEnv {
  *   внятная ошибка сразу при создании (не при первом вызове);
  * - `ORBIS_LLM_PROVIDER='echo'` — echo принудительно (даже при наличии ключа);
  * - не задан (или пуст): есть ключ → anthropic, нет ключа → echo (fail-safe
- *   для dev — сервер поднимается без секретов);
+ *   для dev — сервер поднимается без секретов). В production неявный echo запрещён:
+ *   молча отвечать заглушкой и метерить её как 'echo' хуже, чем не подняться;
  * - иное значение — ошибка при создании.
  */
 export function makeLLMProvider(env: LLMProviderEnv = process.env): LLMProvider {
@@ -53,9 +55,14 @@ export function makeLLMProvider(env: LLMProviderEnv = process.env): LLMProvider 
       `makeLLMProvider: неизвестный ORBIS_LLM_PROVIDER='${requested}' (ожидается 'anthropic' | 'echo')`,
     );
   }
-  return apiKey
-    ? new AnthropicProvider({ apiKey, model: env.ORBIS_LLM_MODEL || undefined })
-    : new EchoProvider();
+  if (apiKey) return new AnthropicProvider({ apiKey, model: env.ORBIS_LLM_MODEL || undefined });
+  if (env.NODE_ENV === 'production') {
+    throw new Error(
+      'makeLLMProvider: в production нет ANTHROPIC_API_KEY — сервис поднялся бы с EchoProvider ' +
+        "и отвечал заглушками. Задайте ключ (или ORBIS_LLM_PROVIDER='echo' осознанно).",
+    );
+  }
+  return new EchoProvider();
 }
 
 export type { LLMProvider } from './types';

@@ -1,6 +1,11 @@
 name: backup
 # Ежедневный дамп прод-БД через session-пулер (Render cron платный → GitHub Actions cron бесплатен).
 # Секрет ADMIN_DSN заводится в Фазе B (владельческий гейт); до этого job падает осмысленно.
+#
+# Репозиторий ПУБЛИЧНЫЙ: artifact Actions-рана может скачать любой пользователь GitHub,
+# поэтому дамп выгружается ТОЛЬКО зашифрованным (OpenPGP, публичный ключ владельца в
+# переменной BACKUP_PUBLIC_KEY). Приватный ключ на GitHub не хранится — без него дамп
+# бесполезен для постороннего, но и восстановление невозможно: см. runbook §4.
 on:
   schedule:
     - cron: '0 3 * * *' # 03:00 UTC — окно низкого трафика
@@ -23,12 +28,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Проверить наличие секрета ADMIN_DSN
+      - name: Проверить наличие секрета ADMIN_DSN и ключа шифрования
         env:
           ADMIN_DSN: ${{ secrets.ADMIN_DSN }}
+          BACKUP_PUBLIC_KEY: ${{ vars.BACKUP_PUBLIC_KEY }}
         run: |
           if [ -z "${ADMIN_DSN}" ]; then
-            echo "::error::Секрет ADMIN_DSN не задан. Заведи его в Settings → Secrets and variables → Actions (Фаза B). Формат: postgresql://postgres.<PROD_REF>:<pwd>@aws-1-eu-central-1.pooler.supabase.com:5432/postgres"
+            echo "::error::Секрет ADMIN_DSN не задан. Заведи его в Settings → Secrets and variables → Actions → Secrets. Формат: postgresql://postgres.<PROD_REF>:<pwd>@<POOLER_HOST>:5432/postgres (хост пулера — Supabase Dashboard → Connect; см. docs/implementation/02-ops-runbook.md §4)"
+            exit 1
+          fi
+          # Гейт стоит ДО дампа: без ключа дамп не должен даже сниматься — иначе
+          # незашифрованный файл появится на раннере публичного репозитория.
+          if [ -z "${BACKUP_PUBLIC_KEY}" ]; then
+            echo "::error::Переменная BACKUP_PUBLIC_KEY не задана (Settings → Secrets and variables → Actions → Variables). Это armored OpenPGP ПУБЛИЧНЫЙ ключ владельца — дамп шифруется им перед выгрузкой в artifact, который в публичном репозитории доступен всем. Генерация ключа и восстановление: docs/implementation/02-ops-runbook.md §4"
             exit 1
           fi
 
@@ -53,10 +65,33 @@ jobs:
           dump_path="$(grep '^dump: ' backup.log | tail -n1 | sed 's/^dump: //')"
           echo "path=${dump_path}" >> "$GITHUB_OUTPUT"
 
-      - name: Загрузить дамп как artifact
+      # gpg на раннере уже есть (им же импортируется ключ PGDG выше) — внешних
+      # зависимостей не добавляем. --trust-model always: ключ импортируется в одноразовый
+      # GNUPGHOME без подписей доверия, а получатель здесь ровно один и задан явно.
+      - name: Зашифровать дамп публичным ключом владельца
+        id: encrypt
+        env:
+          BACKUP_PUBLIC_KEY: ${{ vars.BACKUP_PUBLIC_KEY }}
+          DUMP_PATH: ${{ steps.dump.outputs.path }}
+        run: |
+          export GNUPGHOME="${RUNNER_TEMP}/gnupg"
+          mkdir -p "$GNUPGHOME" && chmod 700 "$GNUPGHOME"
+          printf '%s\n' "$BACKUP_PUBLIC_KEY" > "${GNUPGHOME}/backup-pub.asc"
+          gpg --batch --import "${GNUPGHOME}/backup-pub.asc"
+          fpr="$(gpg --batch --with-colons --list-keys | awk -F: '/^fpr:/ {print $10; exit}')"
+          [ -n "$fpr" ] || { echo "::error::BACKUP_PUBLIC_KEY не распознан как OpenPGP-ключ"; exit 1; }
+          gpg --batch --yes --trust-model always --encrypt --recipient "$fpr" \
+            --output "${DUMP_PATH}.gpg" "${DUMP_PATH}"
+          # Незашифрованный дамп не должен пережить этот шаг: следующий шаг грузит каталог.
+          rm -f "${DUMP_PATH}"
+          [ -s "${DUMP_PATH}.gpg" ] || { echo "::error::шифрование дало пустой файл"; exit 1; }
+          echo "path=${DUMP_PATH}.gpg" >> "$GITHUB_OUTPUT"
+          echo "OK: зашифровано для ${fpr}"
+
+      - name: Загрузить зашифрованный дамп как artifact
         uses: actions/upload-artifact@v4
         with:
           name: orbis-db-backup
-          path: ${{ steps.dump.outputs.path }}
+          path: ${{ steps.encrypt.outputs.path }}
           retention-days: 30
           if-no-files-found: error

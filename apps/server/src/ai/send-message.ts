@@ -42,11 +42,22 @@ import { buildToolRegistry, type Card } from '../tools/registry';
 import { toWireChatMessage } from '../wire';
 import { recordUsage, type UsageTotals, utcDay } from './metering';
 
-/** Потолок ответа модели за шаг (LLMRequest.maxTokens); ориентиры бюджета — §7.1. */
-export const MAX_OUTPUT_TOKENS = 4096;
+/**
+ * Потолок ответа модели за шаг (LLMRequest.maxTokens); ориентиры бюджета — §7.1.
+ * 8192: на claude-sonnet-5 adaptive thinking включён по умолчанию и считается в output —
+ * прежних 4096 хватало бы впритык (симптом обрыва — stopReason max_tokens).
+ */
+export const MAX_OUTPUT_TOKENS = 8192;
 
 /** Пометка принудительного финала при достижении MAX_AGENT_STEPS (не ошибка). */
 export const STEP_LIMIT_NOTE = '[цикл остановлен: достигнут лимит шагов]';
+
+/**
+ * Пометка обрыва по потолку токенов. Без неё усечённый (а при adaptive thinking — и вовсе
+ * пустой) ответ персистится как нормальный, да ещё и навсегда: replyTo делает его ответом
+ * на этот client-id, и «повторить» будет возвращать обрезок из replay-ветки.
+ */
+export const MAX_TOKENS_NOTE = '[ответ обрезан: достигнут потолок токенов]';
 
 /** Ключи entitlements §8, которые гейтит sendMessage. */
 const AI_REQUESTS_KEY = 'ai.requests_per_day';
@@ -229,10 +240,15 @@ export async function sendMessage(
       usage.outputTokens += response.usage.outputTokens;
       usage.requestCount += 1;
 
-      // end_turn / max_tokens / tool_use без вызовов (защита от пустого зацикливания):
-      // финал — текст ответа как есть
+      // end_turn / max_tokens / tool_use без вызовов (защита от пустого зацикливания): финал.
       if (response.stopReason !== 'tool_use' || response.toolCalls.length === 0) {
-        finalText = response.content;
+        finalText =
+          response.stopReason === 'max_tokens'
+            ? // Обрыв по потолку — видимая пометка, а не «успешный» обрубок (см. MAX_TOKENS_NOTE).
+              // Ошибку не бросаем: токены уже отметрены, а отсутствие ответа погнало бы
+              // повторный полный цикл с повторным исполнением уже применённых действий.
+              [response.content, MAX_TOKENS_NOTE].filter(Boolean).join('\n\n')
+            : response.content;
         break;
       }
       if (step >= MAX_AGENT_STEPS) {
