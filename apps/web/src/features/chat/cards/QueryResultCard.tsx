@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import { EntityRef } from '../../../lib/entity-ref/EntityRef';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
 import type { QueryResultData } from './types';
 
 // D-d: без aggregate — native-список из entityIds; с aggregate — число + разворачиваемый список.
+// Строки — EntityRef (title вместо сырого UUID, этап 4).
 export function QueryResultCard({ card }: { card: QueryResultData }) {
   const [open, setOpen] = useState(false);
   return (
@@ -23,7 +25,7 @@ export function QueryResultCard({ card }: { card: QueryResultData }) {
         <ul className="flex flex-col gap-1" data-testid="qr-list">
           {card.entityIds.map((id) => (
             <li key={id} data-testid="qr-item" className="text-sm text-text-secondary">
-              {id}
+              <EntityRef id={id} />
             </li>
           ))}
         </ul>
@@ -31,8 +33,8 @@ export function QueryResultCard({ card }: { card: QueryResultData }) {
       {card.aggregate && open && (
         <ul className="flex flex-col gap-1">
           {card.entityIds.map((id) => (
-            <li key={id} data-testid="qr-item">
-              {id}
+            <li key={id} data-testid="qr-item" className="text-sm text-text-secondary">
+              <EntityRef id={id} />
             </li>
           ))}
         </ul>
