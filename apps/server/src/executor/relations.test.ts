@@ -237,6 +237,33 @@ describe('ацикличность blocks (§4.2)', () => {
     expect((r.error.details as { path?: string[] }).path).toEqual([a.id, b.id, a.id]);
   });
 
+  // До фикса: FOR UPDATE брался только на концы нового ребра, а обход графа шёл в
+  // READ COMMITTED — конкурентные вставки с непересекающимися вершинами не видели друг
+  // друга и вместе замыкали цикл A→B→C→D→A. Теперь blocks-записи владельца сериализованы
+  // advisory-lock'ом, и ровно одна из двух транзакций проходит.
+  test('8. гонка A→B ∥ C→D при существующих B→C и D→A: цикл не замыкается', async () => {
+    for (let i = 0; i < 10; i++) {
+      const [a, b, c, d] = await Promise.all([
+        createEntity({ title: `race-A-${i}` }),
+        createEntity({ title: `race-B-${i}` }),
+        createEntity({ title: `race-C-${i}` }),
+        createEntity({ title: `race-D-${i}` }),
+      ]);
+      ok(await createRelation(b.id, c.id, 'blocks'));
+      ok(await createRelation(d.id, a.id, 'blocks'));
+
+      const [r1, r2] = await Promise.all([
+        createRelation(a.id, b.id, 'blocks'),
+        createRelation(c.id, d.id, 'blocks'),
+      ]);
+
+      const applied = [r1, r2].filter((r) => r.ok).length;
+      expect(applied).toBe(1); // второе ребро замкнуло бы цикл — обязано быть отклонено
+      const edges = (await relCount(a.id, b.id, 'blocks')) + (await relCount(c.id, d.id, 'blocks'));
+      expect(edges).toBe(1);
+    }
+  });
+
   test('8. ромб (DAG без цикла) создаётся: сходящиеся пути — не цикл', async () => {
     const a = await createEntity({ title: 'Ромб-A' });
     const b = await createEntity({ title: 'Ромб-B' });

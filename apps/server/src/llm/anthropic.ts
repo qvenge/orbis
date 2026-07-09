@@ -104,10 +104,20 @@ export function toSdkTools(tools: readonly LLMToolDef[]): ToolSet {
   );
 }
 
+/**
+ * Потолок одного шага провайдера. Без него зависший коннект вешает мутацию навсегда:
+ * SDK своего таймаута не ставит, а его maxRetries реагирует только на reject —
+ * «висящий» запрос не ретраится и не отменяется. 180 с: adaptive thinking на
+ * claude-sonnet-5 легитимно думает десятки секунд, поэтому порог заведомо выше рабочего.
+ */
+export const PROVIDER_TIMEOUT_MS = 180_000;
+
 export interface AnthropicProviderOptions {
   apiKey: string;
   /** Id модели Anthropic; по умолчанию DEFAULT_ANTHROPIC_MODEL. */
   model?: string;
+  /** Таймаут одного вызова; по умолчанию PROVIDER_TIMEOUT_MS. */
+  timeoutMs?: number;
 }
 
 /**
@@ -126,10 +136,12 @@ export interface AnthropicProviderOptions {
  */
 export class AnthropicProvider implements LLMProvider {
   private readonly model: ReturnType<ReturnType<typeof createAnthropic>>;
+  private readonly timeoutMs: number;
 
   constructor(opts: AnthropicProviderOptions) {
     const provider = createAnthropic({ apiKey: opts.apiKey });
     this.model = provider(opts.model ?? DEFAULT_ANTHROPIC_MODEL);
+    this.timeoutMs = opts.timeoutMs ?? PROVIDER_TIMEOUT_MS;
   }
 
   async chat(req: LLMRequest): Promise<LLMResponse> {
@@ -146,6 +158,9 @@ export class AnthropicProvider implements LLMProvider {
       system: req.system || undefined,
       messages,
       maxOutputTokens: req.maxTokens,
+      // Таймаут шага (§7.9): по срабатыванию generateText отклоняется, вызывающий мапит
+      // это в LLM_UNAVAILABLE с кнопкой «повторить» — вместо бесконечно висящей мутации.
+      abortSignal: AbortSignal.timeout(this.timeoutMs),
       // tools/toolChoice только при непустом наборе: Anthropic API отвергает
       // tool_choice без tools; выбор тула — всегда 'auto' (решение плана 1b)
       ...(req.tools.length > 0

@@ -128,15 +128,25 @@ async function loadMemory(tx: Tx): Promise<MemoryItem[]> {
 }
 
 /**
+ * Схлопывает пробельные прогоны в один пробел. Данные графа (title, tags, body) попадают
+ * в system-канал, где структуру задают переводы строк: многострочный title дописал бы в
+ * промпт произвольные строки — например, поддельные секции или «инструкции».
+ * Экранирование доверия это не заменяет, но держит заявленный формат блоков.
+ */
+function flatten(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+/**
  * Компактная строка памяти: «— [rule|fact][scope] title: превью body».
  * Инвариант формата — одна memory = одна строка списка: пробельные прогоны
- * (включая переводы строк body) схлопываются в один пробел ДО обрезки превью.
+ * (включая переводы строк body и title) схлопываются в один пробел ДО обрезки превью.
  */
 function memoryLine(m: MemoryItem): string {
   const scope = m.scope ? `[${m.scope}]` : '';
-  const flatBody = m.body.replace(/\s+/g, ' ').trim();
+  const flatBody = flatten(m.body);
   const body = flatBody ? `: ${preview(flatBody, MEMORY_BODY_PREVIEW)}` : '';
-  return `— [${m.kind}]${scope} ${m.title}${body}`;
+  return `— [${m.kind}]${scope} ${flatten(m.title)}${body}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -148,19 +158,22 @@ async function anchorBlock(tx: Tx, ownerId: string, anchorEntityId: string): Pro
   // include: [] — только сама сущность, без relations/backlinks/треда
   // (историю треда несёт слой 4); невидимая/чужая → NOT_FOUND из readEntity
   const { entity } = await readEntity(tx, ownerId, { id: anchorEntityId, include: [] });
+  // title/tags/body — данные владельца (их пишет и внешний агент через MCP): переводы
+  // строк из них не должны подделывать строки этого блока (см. flatten).
   const lines = [
     'Якорная сущность треда — текущий разговор идёт о ней:',
     `id: ${entity.id}`,
-    `title: ${entity.title}`,
+    `title: ${flatten(entity.title)}`,
   ];
-  if (entity.tags.length > 0) lines.push(`tags: ${entity.tags.join(', ')}`);
+  if (entity.tags.length > 0) lines.push(`tags: ${entity.tags.map(flatten).join(', ')}`);
   const aspectIds = Object.keys(entity.aspects);
   if (aspectIds.length > 0) {
     // Данные аспектов компактным JSON: статус задачи/суммы и т.п. — рабочий контекст
     const parts = aspectIds.map((id) => `${id} ${JSON.stringify(entity.aspects[id])}`);
     lines.push(`аспекты: ${parts.join('; ')}`);
   }
-  if (entity.body) lines.push(`body (превью): ${preview(entity.body, ANCHOR_BODY_PREVIEW)}`);
+  if (entity.body)
+    lines.push(`body (превью): ${preview(flatten(entity.body), ANCHOR_BODY_PREVIEW)}`);
   return lines.join('\n');
 }
 

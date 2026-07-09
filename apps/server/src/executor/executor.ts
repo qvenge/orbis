@@ -925,7 +925,13 @@ async function prepareRelationCreate(
   // Стадия 4: доменные инварианты графа (§4.2)
   if (batch) await assertNoDuplicateRelation(ctx.tx, key, batch.graph()); // batch: дубль ловим ДО записи
   if (key.relationType === 'blocks') {
-    await assertAcyclicBlocks(ctx.tx, key.sourceId, key.targetId, batch?.graph());
+    await assertAcyclicBlocks(
+      ctx.tx,
+      ctx.req.actorUserId,
+      key.sourceId,
+      key.targetId,
+      batch?.graph(),
+    );
   }
   const sourceHasBudget = hasAspect(source, 'orbis/budget');
   if (key.relationType === 'parent' && sourceHasBudget && hasAspect(target, 'orbis/financial')) {

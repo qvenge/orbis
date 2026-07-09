@@ -21,6 +21,7 @@ import type { LLMMessage, LLMRequest, LLMResponse } from '../llm/types';
 import { appRouter } from '../router';
 import type { Card } from '../tools/registry';
 import { type Context, createCallerFactory } from '../trpc';
+import { MAX_TOKENS_NOTE } from './send-message';
 
 requireEnv();
 
@@ -297,6 +298,45 @@ describe('ai.sendMessage (в): лимит шагов MAX_AGENT_STEPS', () => {
 // ---------------------------------------------------------------------------
 // (г) Деградация §7.9
 // ---------------------------------------------------------------------------
+
+describe('ai.sendMessage: обрыв по потолку токенов', () => {
+  // Усечённый (а при adaptive thinking — пустой) ответ персистился как нормальный,
+  // и replay-ветка возвращала бы этот обрубок на каждый повтор того же client-id.
+  test('stopReason max_tokens → в ответе видимая пометка обрезки', async () => {
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const truncated: LLMResponse = {
+      content: 'Начал отвечать и не доска',
+      toolCalls: [],
+      usage: { inputTokens: 10, outputTokens: 8192 },
+      stopReason: 'max_tokens',
+    };
+    const res = await callerWith(user, new ScriptedProvider([truncated])).ai.sendMessage({
+      id: newId(),
+      threadId,
+      content: 'расскажи длинно',
+    });
+    expect(res.assistantMessage.content).toContain('Начал отвечать и не доска');
+    expect(res.assistantMessage.content).toContain(MAX_TOKENS_NOTE);
+  });
+
+  test('пустой content при max_tokens → пометка всё равно видна (не пустое сообщение)', async () => {
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const empty: LLMResponse = {
+      content: '',
+      toolCalls: [],
+      usage: { inputTokens: 10, outputTokens: 8192 },
+      stopReason: 'max_tokens',
+    };
+    const res = await callerWith(user, new ScriptedProvider([empty])).ai.sendMessage({
+      id: newId(),
+      threadId,
+      content: 'думай долго',
+    });
+    expect(res.assistantMessage.content).toBe(MAX_TOKENS_NOTE);
+  });
+});
 
 describe('ai.sendMessage (г): сбой провайдера — деградация §7.9', () => {
   test('provider.chat бросает → LLM_UNAVAILABLE (503); user-сообщение сохранено, очереди нет', async () => {

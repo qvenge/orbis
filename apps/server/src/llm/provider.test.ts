@@ -112,6 +112,21 @@ describe('makeLLMProvider', () => {
     expect(makeLLMProvider({})).toBeInstanceOf(EchoProvider);
   });
 
+  // Прод-конфиг не задавал ORBIS_LLM_PROVIDER: забытый или затёртый ключ поднимал сервис
+  // с EchoProvider — /health зелёный, а ответы AI (и данные MCP-агента) — заглушки.
+  test('production без ключа → ошибка при создании, а не тихий echo', () => {
+    expect(() => makeLLMProvider({ NODE_ENV: 'production' })).toThrow('ANTHROPIC_API_KEY');
+  });
+
+  test('production: с ключом → anthropic; явный echo остаётся осознанным выбором', () => {
+    expect(
+      makeLLMProvider({ NODE_ENV: 'production', ANTHROPIC_API_KEY: 'sk-test' }),
+    ).toBeInstanceOf(AnthropicProvider);
+    expect(makeLLMProvider({ NODE_ENV: 'production', ORBIS_LLM_PROVIDER: 'echo' })).toBeInstanceOf(
+      EchoProvider,
+    );
+  });
+
   test('без ORBIS_LLM_PROVIDER, но с ключом → anthropic', () => {
     expect(makeLLMProvider({ ANTHROPIC_API_KEY: 'sk-test' })).toBeInstanceOf(AnthropicProvider);
   });

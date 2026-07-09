@@ -131,4 +131,34 @@ describe('JWKS: allowlist RS256/ES256 + issuer', () => {
     const token = await signHs256(LOCAL_JWT_SECRET, sub);
     expect(await verifyAccessToken(token)).toBe(sub);
   });
+
+  // Завершающий слэш в SUPABASE_URL давал issuer «…//auth/v1» и JWKS-URL с «//»:
+  // верификация валидного токена молча уезжала в HS256-фолбэк (или в null без секрета).
+  test('SUPABASE_URL со слэшем на конце: issuer и JWKS-URL нормализуются', async () => {
+    process.env.SUPABASE_URL = `${SUPABASE_BASE}/`;
+    const savedSecret = process.env.SUPABASE_JWT_SECRET;
+    delete process.env.SUPABASE_JWT_SECRET; // исключаем фолбэк — проверяем именно JWKS-путь
+    try {
+      const token = await signRs256(crypto.randomUUID(), ISSUER);
+      expect(await verifyAccessToken(token)).not.toBeNull();
+    } finally {
+      process.env.SUPABASE_URL = SUPABASE_BASE;
+      process.env.SUPABASE_JWT_SECRET = savedSecret;
+    }
+  });
+});
+
+// Мусор в SUPABASE_JWKS_URL: new URL() бросал наружу — 500 на каждый запрос вместо
+// «этот способ проверки недоступен».
+test('невалидный SUPABASE_JWKS_URL не роняет верификацию (фолбэк работает)', async () => {
+  const saved = process.env.SUPABASE_JWKS_URL;
+  process.env.SUPABASE_JWKS_URL = 'не-url';
+  try {
+    const sub = crypto.randomUUID();
+    const token = await signHs256(LOCAL_JWT_SECRET, sub);
+    expect(await verifyAccessToken(token)).toBe(sub);
+  } finally {
+    if (saved === undefined) delete process.env.SUPABASE_JWKS_URL;
+    else process.env.SUPABASE_JWKS_URL = saved;
+  }
 });

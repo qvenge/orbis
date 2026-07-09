@@ -68,13 +68,21 @@ export async function resolveEntityTitles(
  * достижим ли source из target по существующим blocks-рёбрам; если да — вставка
  * замкнула бы цикл → INVARIANT с details.path = [$source, …найденный путь…]
  * в порядке «A → B → C → A» (титулы — в сообщении).
+ *
+ * ownerId сериализует blocks-записи владельца advisory-lock'ом (как approve/reject в
+ * policy/pending). Без него проверка страдает write-skew: FOR UPDATE берётся лишь на два
+ * конца нового ребра, а обход графа идёт в READ COMMITTED — две транзакции, добавляющие
+ * A→B и C→D при существующих B→C и D→A, друг друга не видят и вместе замыкают цикл.
+ * Лок реентерабелен: batch с несколькими blocks берёт его повторно без вреда.
  */
 export async function assertAcyclicBlocks(
   tx: Tx,
+  ownerId: string,
   sourceId: string,
   targetId: string,
   virtual?: VirtualGraphEffects,
 ): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${ownerId}:blocks`}, 0))`);
   const vCreated = blocksOnly(virtual?.created);
   const vDeleted = blocksOnly(virtual?.deleted);
 
