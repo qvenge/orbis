@@ -28,7 +28,7 @@ jobs:
           ADMIN_DSN: ${{ secrets.ADMIN_DSN }}
         run: |
           if [ -z "${ADMIN_DSN}" ]; then
-            echo "::error::Секрет ADMIN_DSN не задан. Заведи его в Settings → Secrets and variables → Actions (Фаза B). Формат: postgresql://postgres.<PROD_REF>:<pwd>@aws-1-eu-central-1.pooler.supabase.com:5432/postgres"
+            echo "::error::Секрет ADMIN_DSN не задан. Заведи его в Settings → Secrets and variables → Actions. Формат: postgresql://postgres.<PROD_REF>:<pwd>@<POOLER_HOST>:5432/postgres (хост пулера — Supabase Dashboard → Connect; см. docs/implementation/02-ops-runbook.md §4)"
             exit 1
           fi
 

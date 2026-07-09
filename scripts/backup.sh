@@ -3,8 +3,9 @@
 # Прямой db.<ref>.supabase.co — IPv6-only, а egress Render/GitHub-Actions — IPv4,
 # поэтому дамп идёт ТОЛЬКО через session-пулер (роль postgres.<PROD_REF>).
 #
-# Использование:
-#   ADMIN_DSN='postgresql://postgres.<PROD_REF>:<pwd>@aws-1-eu-central-1.pooler.supabase.com:5432/postgres' \
+# Использование (хост пулера — per-project, из Supabase Dashboard → Connect;
+# для прода ceovqtdibalxnqkgedrl это aws-0-eu-central-1.pooler.supabase.com):
+#   ADMIN_DSN='postgresql://postgres.<PROD_REF>:<pwd>@<POOLER_HOST>:5432/postgres' \
 #     scripts/backup.sh
 #
 # Опциональные env:
