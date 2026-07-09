@@ -155,6 +155,12 @@ gpg --decrypt orbis-backup-<ts>.sql.gpg > orbis-backup-<ts>.sql
 Плейн-SQL дамп (`.sql`) восстанавливается через `psql`. Восстанавливать в ЧИСТУЮ БД
 (новый Supabase-проект или пересозданная схема), иначе конфликты по существующим объектам.
 
+> **`psql` обязан понимать `\restrict`.** Начиная с релизов 17.6 / 16.10 / 15.14 / 14.19 / 13.22
+> (август 2025) `pg_dump` обрамляет дамп директивами `\restrict` … `\unrestrict`. Более старый
+> `psql` встретит их как неизвестные мета-команды и с `ON_ERROR_STOP=1` оборвёт восстановление
+> на первой же строке. Проверить: `psql --version`. Если версия ниже — восстанавливать через
+> контейнер: `docker run --rm -i -v "$PWD:/in" postgres:17-alpine psql "<DSN>" -v ON_ERROR_STOP=1 -f /in/orbis-backup-<ts>.sql`.
+
 ```bash
 psql 'postgresql://postgres.<TARGET_REF>:<pwd>@<POOLER_HOST>:5432/postgres' \
   -v ON_ERROR_STOP=1 -f orbis-backup-<ts>.sql
