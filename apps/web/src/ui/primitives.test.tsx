@@ -1,10 +1,15 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
 import { Badge } from './Badge';
+import { Button } from './Button';
 import { Checkbox } from './Checkbox';
 import { Chip } from './Chip';
+import { Dialog } from './Dialog';
+import { EmptyState } from './EmptyState';
 import { Input } from './Input';
+import { Sheet } from './Sheet';
 import { Skeleton } from './Skeleton';
+import { Spinner } from './Spinner';
 import { Tabs } from './Tabs';
 
 test('Input прокидывает value/aria и type=text по умолчанию', () => {
@@ -38,6 +43,67 @@ test('Checkbox переключается и вызывает onCheckedChange', 
 test('Skeleton имеет role=status', () => {
   render(<Skeleton />);
   expect(screen.getByRole('status')).toBeInTheDocument();
+});
+
+test('Checkbox: индикатор — SVG-иконка, не текстовый глиф ✓', () => {
+  const { container } = render(
+    <Checkbox aria-label="сделано" checked={true} onCheckedChange={() => {}} />,
+  );
+  expect(container.querySelector('svg')).toBeInTheDocument();
+  expect(screen.queryByText('✓')).not.toBeInTheDocument();
+});
+
+test('Chip: кнопка удаления — SVG-иконка, не глиф ×', () => {
+  const { container } = render(<Chip onRemove={() => {}}>tag</Chip>);
+  const btn = screen.getByRole('button', { name: /удалить/i });
+  expect(btn.querySelector('svg')).toBeInTheDocument();
+  expect(container.textContent).not.toContain('×');
+});
+
+test('Dialog: есть кнопка «Закрыть» с иконкой, overlay без bg-black', () => {
+  const onOpenChange = vi.fn();
+  render(
+    <Dialog open onOpenChange={onOpenChange} title="Заголовок">
+      <div>тело</div>
+    </Dialog>,
+  );
+  const close = screen.getByRole('button', { name: 'Закрыть' });
+  expect(close.querySelector('svg')).toBeInTheDocument();
+  fireEvent.click(close);
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+  expect(document.querySelector('.bg-black\\/50')).not.toBeInTheDocument();
+});
+
+test('Sheet: есть кнопка «Закрыть», overlay без bg-black', () => {
+  const onOpenChange = vi.fn();
+  render(
+    <Sheet open onOpenChange={onOpenChange} title="Меню">
+      <div>тело</div>
+    </Sheet>,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
+  expect(onOpenChange).toHaveBeenCalledWith(false);
+  expect(document.querySelector('.bg-black\\/50')).not.toBeInTheDocument();
+});
+
+test('EmptyState рендерит title, hint и action', () => {
+  render(
+    <EmptyState
+      title="Пока пусто"
+      hint="Создайте первую запись"
+      action={<Button>Создать</Button>}
+    />,
+  );
+  expect(screen.getByText('Пока пусто')).toBeInTheDocument();
+  expect(screen.getByText('Создайте первую запись')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Создать' })).toBeInTheDocument();
+});
+
+test('Spinner: role=status и aria-label по умолчанию «Загрузка»', () => {
+  render(<Spinner />);
+  const s = screen.getByRole('status', { name: 'Загрузка' });
+  expect(s).toBeInTheDocument();
+  expect(s.querySelector('svg.animate-spin')).toBeInTheDocument();
 });
 
 test('Tabs переключает панель по клику', () => {

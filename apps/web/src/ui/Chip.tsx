@@ -1,3 +1,4 @@
+import { X } from 'lucide-react';
 import type { HTMLAttributes, ReactNode } from 'react';
 
 export function Chip({
@@ -16,9 +17,9 @@ export function Chip({
           type="button"
           aria-label="Удалить"
           onClick={onRemove}
-          className="text-text-muted hover:text-danger"
+          className="cursor-pointer rounded p-0.5 text-text-muted transition hover:bg-line/60 hover:text-danger"
         >
-          ×
+          <X size={12} />
         </button>
       )}
     </span>
