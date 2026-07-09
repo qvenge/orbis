@@ -40,7 +40,7 @@ export function AspectCards({ entity }: { entity: Entity }) {
               Снять аспект
             </Button>
           </div>
-          <dl className="flex flex-col gap-1 text-sm">
+          <dl className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1 text-sm">
             {Object.entries(fields).map(([field, value]) => (
               <AspectField
                 key={field}
@@ -76,10 +76,12 @@ function AspectField({
 }) {
   const initial = String(value ?? '');
   const [draft, setDraft] = useState(initial);
+  // dt/dd — прямые дети grid'а из AspectCards (grid-cols-[auto_1fr]): все инпуты
+  // начинаются с одной вертикали независимо от длины лейбла (лейблы выровнены вправо).
   return (
-    <div className="flex items-center gap-2">
-      <dt className="text-text-secondary">{field}:</dt>
-      <dd className="flex-1">
+    <>
+      <dt className="text-right text-text-secondary">{field}:</dt>
+      <dd>
         <Input
           aria-label={`${aspectId} ${field}`}
           value={draft}
@@ -88,6 +90,6 @@ function AspectField({
           className="w-full"
         />
       </dd>
-    </div>
+    </>
   );
 }

@@ -98,7 +98,7 @@ export function GeneralForm({ settings }: { settings: Settings }) {
           })}
         </div>
       </fieldset>
-      <Button type="submit" variant="primary" disabled={update.isPending}>
+      <Button type="submit" variant="primary" className="self-start" disabled={update.isPending}>
         {update.isPending && <Spinner size={14} aria-label="Сохранение" />}
         Сохранить
       </Button>

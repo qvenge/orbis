@@ -1,4 +1,5 @@
 import { MessageSquare } from 'lucide-react';
+import { useEffect, useRef } from 'react';
 import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
 import { type CardHandlers, renderCards } from './cards/renderCards';
@@ -26,6 +27,24 @@ export function MessageList({
 } & CardHandlers) {
   // messages в DESC; для показа сверху-вниз (старые вверху) — reverse на рендере.
   const ordered = [...messages].reverse();
+
+  // Автоскролл к последнему сообщению: на mount — мгновенно ('auto'), при добавлении
+  // сообщений / появлении typing — плавно ('smooth'), но при prefers-reduced-motion всегда 'auto'.
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    const anchor = anchorRef.current;
+    // jsdom не реализует scrollIntoView — guard бережёт остальные тесты, что рендерят список.
+    if (!anchor || typeof anchor.scrollIntoView !== 'function') return;
+    const prefersReduced =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const behavior: ScrollBehavior = mountedRef.current && !prefersReduced ? 'smooth' : 'auto';
+    anchor.scrollIntoView({ behavior, block: 'end' });
+    mountedRef.current = true;
+  }, [ordered.length, isTyping]);
+
   return (
     <div data-testid="message-list" className="flex flex-1 flex-col gap-2 overflow-y-auto p-3">
       {ordered.length === 0 && !isTyping && (
@@ -65,6 +84,8 @@ export function MessageList({
           />
         </div>
       )}
+      {/* Якорь автоскролла: всегда последний в потоке — scrollIntoView прокручивает к нему. */}
+      <div ref={anchorRef} data-testid="scroll-anchor" aria-hidden />
     </div>
   );
 }

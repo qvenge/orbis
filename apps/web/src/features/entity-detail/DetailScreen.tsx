@@ -38,15 +38,20 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   const { entity, thread } = get.data;
   const block = firstQueryBlock(entity.body ?? '');
 
-  // В шапке — только title; emoji сущности остаётся в контенте (ниже).
+  // В шапке — только title; emoji сущности — крупная page-иконка (Notion-style) в строке
+  // с заголовком/NativeRow. Нет emoji — ничего не рендерим (без плейсхолдера).
   const entityTab = (
     <div className="flex flex-col gap-4 p-3">
-      {entity.emoji && (
-        <span aria-hidden className="text-xl">
-          {entity.emoji}
-        </span>
-      )}
-      <NativeRow entity={entity} onToggleTask={toggleTask} />
+      <div className="flex items-center gap-3">
+        {entity.emoji && (
+          <span aria-hidden className="text-3xl leading-none">
+            {entity.emoji}
+          </span>
+        )}
+        <div className="flex-1">
+          <NativeRow entity={entity} onToggleTask={toggleTask} />
+        </div>
+      </div>
       {conflict && (
         <div
           role="alert"

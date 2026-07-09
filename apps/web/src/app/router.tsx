@@ -39,16 +39,11 @@ export function TabBar() {
             data-testid={`tab-${t.id}`}
             onClick={() => switchTab(t.id)}
             className={`relative flex flex-1 cursor-pointer flex-col items-center gap-0.5 py-2 text-xs transition ${
-              active ? 'text-text' : 'text-text-secondary'
+              active ? 'text-accent' : 'text-text-secondary'
             }`}
           >
-            {/* Спокойный accent-индикатор активного таба */}
-            {active && (
-              <span
-                aria-hidden
-                className="absolute inset-x-8 top-0 h-0.5 rounded-b-full bg-accent"
-              />
-            )}
+            {/* Активный таб помечен accent-цветом иконки/подписи (Notion-style) — без
+                отдельной плавающей полосы, которая под композером читалась артефактом. */}
             <Icon size={18} aria-hidden />
             {t.label}
             {t.id === 'chat' && chatBadge > 0 && (
