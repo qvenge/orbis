@@ -37,6 +37,8 @@ export function MessageList({
   const anchorRef = useRef<HTMLDivElement>(null);
   const mountedRef = useRef(false);
   useEffect(() => {
+    // Пустой тред без typing — скроллить некуда (и это делает deps значимыми для biome).
+    if (ordered.length === 0 && !isTyping) return;
     const anchor = anchorRef.current;
     // jsdom не реализует scrollIntoView — guard бережёт остальные тесты, что рендерят список.
     if (!anchor || typeof anchor.scrollIntoView !== 'function') return;

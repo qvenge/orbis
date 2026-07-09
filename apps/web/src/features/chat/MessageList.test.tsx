@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import type { ChatMessage } from './useChatThread';
 import { MessageList } from './MessageList';
+import type { ChatMessage } from './useChatThread';
 
 // jsdom не реализует scrollIntoView — мокаем на прототипе, иначе вызов бросил бы.
 const scrollSpy = vi.fn();
