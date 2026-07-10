@@ -52,3 +52,12 @@ export function processingMessageId(userMessageId: string): string {
 export function recurringInstanceId(templateId: string, dateISO: string): string {
   return uuidv5(`${templateId.toLowerCase()}:${dateISO}`, ORBIS_NAMESPACE);
 }
+
+/**
+ * batch_id материализации окна одного шаблона (§5.4, Task A3): повтор того же окна
+ * тем же шаблоном — тот же batch → идемпотентный replay по audit-PK (§7.8).
+ * from/to — 'YYYY-MM-DD' эффективного (обрезанного горизонтом) окна.
+ */
+export function materializeBatchId(templateId: string, from: string, to: string): string {
+  return uuidv5(`materialize:${templateId.toLowerCase()}:${from}:${to}`, ORBIS_NAMESPACE);
+}

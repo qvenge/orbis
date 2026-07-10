@@ -3,6 +3,7 @@ import {
   batchAuditMessageId,
   entityThreadId,
   globalThreadId,
+  materializeBatchId,
   newId,
   ORBIS_NAMESPACE,
   processingMessageId,
@@ -21,6 +22,14 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
       'e7d0bfa4-f62a-59c1-b560-1c17cb32e89f',
     );
   });
+  test('materializeBatchId (A3): детерминирован окном, lowercase-нормализован, не пересекается с instance-id', () => {
+    const tpl = '019DED47-D100-717A-8307-A5B7A5BE722F';
+    const a = materializeBatchId(tpl, '2026-07-01', '2026-07-15');
+    expect(a).toBe(materializeBatchId(tpl.toLowerCase(), '2026-07-01', '2026-07-15'));
+    expect(a).not.toBe(materializeBatchId(tpl, '2026-07-01', '2026-07-14')); // другое окно — другой batch
+    expect(a).not.toBe(recurringInstanceId(tpl, '2026-07-01'));
+  });
+
   test('формулы тредов детерминированы и различны', () => {
     const owner = '00000000-0000-4000-8000-00000000000a';
     const entity = '00000000-0000-7000-8000-0000000000a1';
