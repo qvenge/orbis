@@ -560,6 +560,55 @@ describe('dispatchTool: user_query — агрегация SQL-ем (решени
   });
 });
 
+describe('dispatchTool: user_query материализует окно запроса (обязательство ревью A3, §5.4)', () => {
+  // Свой пользователь: до вызова user_query у него НЕТ ни одного инстанса — сумма
+  // видна только если сам вызов материализовал окно (тот же каркас, что entity_query)
+  const userC = freshUserId();
+  const tz = 'Europe/Moscow'; // дефолт queryContext без строки user_settings
+  const localToday = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
+  const tomorrow = (() => {
+    const [y, m, d] = localToday.split('-').map(Number) as [number, number, number];
+    return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+  })();
+
+  test('user_query c occurred_on=next_7d видит суммы свеже-материализованных инстансов', async () => {
+    await seedEntity(userC, {
+      title: 'Абонемент',
+      tags: [],
+      aspects: {
+        'orbis/schedule': {
+          start_at: `${tomorrow}T12:00:00+03:00`,
+          timezone: tz,
+          recurrence: { freq: 'weekly', interval: 1 },
+        },
+        'orbis/financial': {
+          amount: '150.00',
+          direction: 'expense',
+          category_ref: CATEGORY_REF,
+          recurring: true,
+        },
+      },
+    });
+    const r = await dispatchTool(ctxFor({ actorUserId: userC }), 'user_query', {
+      query: 'aspect=orbis/financial, occurred_on=next_7d',
+      aggregate: 'sum',
+      field: 'amount',
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    // еженедельно с завтра: в окне next_7d ровно один инстанс (шаблон без occurred_on
+    // в выборку не попадает) — сумма именно свеже-материализованного инстанса
+    expect(r.result).toBe('150.00');
+
+    const count = await dispatchTool(ctxFor({ actorUserId: userC }), 'user_query', {
+      query: 'aspect=orbis/financial, occurred_on=next_7d',
+      aggregate: 'count',
+    });
+    expect(count.status).toBe('ok');
+    if (count.status === 'ok') expect(count.result).toBe(1);
+  });
+});
+
 describe('dispatchTool: thread_post — сообщение в тред сущности мимо executor', () => {
   test('agent/mcp: сообщение role=user с metadata.author_kind=agent; action НЕ журналится', async () => {
     const target = await seedEntity(userA, { title: 'Задача агента', tags: [] });
