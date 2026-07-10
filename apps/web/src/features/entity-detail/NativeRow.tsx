@@ -6,14 +6,14 @@ import { Checkbox } from '../../ui/Checkbox';
 
 type Entity = RouterOutputs['entity']['query'][number];
 
-// §3.6 rich-money: честно отражаем тон из formatMoney — expense→danger (коралл),
-// income→positive. Отдельного success/positive-токена в tokens.css пока нет, поэтому
-// income отображаем акцентным (латунь); ветки явные (не общий else), чтобы намерение
-// «income ≠ прочее» было закреплено и ввод success-токена стал локальной правкой.
+// §3.6 rich-money: тон из formatMoney — expense→danger, income→success.
 const AMOUNT_TONE_CLASS: Record<MoneyTone, string> = {
   danger: 'text-danger',
-  positive: 'text-accent',
+  positive: 'text-success',
 };
+
+// NativeRow живёт на странице Detail — title здесь является заголовком страницы.
+const TITLE_CLASS = 'text-xl font-semibold tracking-tight';
 
 function keyFieldsFor(aspectId: string): string[] {
   return BUILTIN_ASPECT_META.find((m) => m.id === aspectId)?.viewConfig.keyFields ?? [];
@@ -35,7 +35,7 @@ export function NativeRow({
     return (
       <div className="flex items-center gap-2" data-testid="native-task">
         <Checkbox aria-label="Готово" checked={done} onCheckedChange={onToggleTask} />
-        <span className={done ? 'flex-1 line-through text-text-muted' : 'flex-1'}>
+        <span className={`flex-1 ${TITLE_CLASS} ${done ? 'text-text-muted line-through' : ''}`}>
           {entity.title}
         </span>
         {typeof task.status === 'string' && task.status !== 'done' && <Badge>{task.status}</Badge>}
@@ -51,8 +51,11 @@ export function NativeRow({
     );
     return (
       <div className="flex items-center gap-2" data-testid="native-financial">
-        <span className="flex-1">{entity.title}</span>
-        <span data-testid="native-amount" className={AMOUNT_TONE_CLASS[money.tone]}>
+        <span className={`flex-1 ${TITLE_CLASS}`}>{entity.title}</span>
+        <span
+          data-testid="native-amount"
+          className={`text-lg font-medium tabular-nums ${AMOUNT_TONE_CLASS[money.tone]}`}
+        >
           {money.text}
         </span>
         {typeof financial.category_ref === 'string' && <Badge>{financial.category_ref}</Badge>}
@@ -64,7 +67,7 @@ export function NativeRow({
   if (schedule) {
     return (
       <div className="flex items-center gap-2" data-testid="native-schedule">
-        <span className="flex-1">{entity.title}</span>
+        <span className={`flex-1 ${TITLE_CLASS}`}>{entity.title}</span>
         {schedule.all_day ? (
           <Badge>весь день</Badge>
         ) : (
@@ -80,7 +83,7 @@ export function NativeRow({
   const firstFields = firstAspect ? aspects[firstAspect] : undefined;
   return (
     <div className="flex items-center gap-2" data-testid="native-generic">
-      <span className="flex-1">{entity.title}</span>
+      <span className={`flex-1 ${TITLE_CLASS}`}>{entity.title}</span>
       <dl className="flex gap-2 text-xs text-text-secondary">
         {fields.map((k) => (
           <div key={k} className="flex gap-1">

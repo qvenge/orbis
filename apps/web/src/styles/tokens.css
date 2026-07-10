@@ -1,33 +1,40 @@
 /*
  * Orbis design tokens — Tailwind v4 @theme.
  *
- * Две темы: светлая (дефолт) и тёмная. Ориентир — Notion/Obsidian:
- * тёплый «бумажный» серый в светлой, нейтральный графит в тёмной, латунный акцент.
+ * Две темы: светлая (дефолт) и тёмная. Дизайн-язык: «тихая бумага + чернила» —
+ * почти монохромный хром (Notion), чернильно-индиговый акцент каплями (Obsidian),
+ * цвет несут ДАННЫЕ: суммы (danger/success), статусы, эмодзи. Акцент никогда
+ * не используется как фон крупных областей.
  * Светлые значения — дефолт внутри @theme; тёмные переопределяют ТЕ ЖЕ переменные
  * блоком `:root[data-theme='dark']` ПОСЛЕ @theme (см. ниже). Утилиты Tailwind v4
  * для цветов компилируются в `var(--color-*)`, поэтому смена атрибута data-theme
  * на <html> переключает тему без пересборки CSS.
  *
  * Контраст (WCAG 2.x, светлая тема): text/surface 12.6:1, text-secondary/surface 6.9:1,
- * accent-foreground/accent 6.2:1, danger/surface 5.2:1 — ключевые пары ≥ AA.
+ * accent(#4f46e5)/surface 6.3:1, accent-foreground/accent 6.3:1, success/surface 5.1:1,
+ * danger/surface 5.2:1 — ключевые пары ≥ AA. Тёмная: accent(#a5b4fc)/surface 8.3:1.
  */
 @theme {
-  /* --- Цвет: фон и уровни поверхностей (тёплый «бумажный» серый, Notion-like) --- */
-  --color-bg: #fbfbfa;
+  /* --- Цвет: фон и уровни поверхностей. Sidebar живёт на bg (тёплая бумага),
+     контент — на surface (белый лист): граница зон читается без линий. --- */
+  --color-bg: #f7f6f4;
   --color-surface: #ffffff;
   --color-surface-2: #f1f0ee;
-  --color-line: #e6e4e0;
+  --color-line: #e8e6e2;
 
   /* --- Цвет: текст (тёплый почти-чёрный на бумаге) --- */
   --color-text: #37352f;
   --color-text-secondary: #5f5e59;
   --color-text-muted: #706f69;
 
-  /* --- Цвет: акцент (латунь; светлый янтарь #e3b258 на белом нечитаем) и опасность --- */
-  --color-accent: #8f6400;
+  /* --- Цвет: акцент (чернильный индиго — только интерактив и мелкие маркеры),
+     danger (расход/ошибки), success (доход/подтверждение) --- */
+  --color-accent: #4f46e5;
   --color-accent-foreground: #ffffff;
   --color-danger: #a83a29;
   --color-danger-foreground: #ffffff;
+  --color-success: #1a7f37;
+  --color-success-foreground: #ffffff;
   --color-overlay: rgb(15 15 15 / 0.4);
 
   /* --- Шрифты: системные, без webfont — гуманистический стек --- */
@@ -92,17 +99,19 @@
  * Нейтральный графит вместо чернильно-синего.
  */
 :root[data-theme="dark"] {
-  --color-bg: #161616;
-  --color-surface: #1e1e1e;
-  --color-surface-2: #262626;
-  --color-line: #343432;
+  --color-bg: #141415;
+  --color-surface: #1e1e20;
+  --color-surface-2: #27272a;
+  --color-line: #343437;
   --color-text: #e8e6e3;
   --color-text-secondary: #a5a29b;
   --color-text-muted: #8a8781;
-  --color-accent: #e3b258;
-  --color-accent-foreground: #241a05;
+  --color-accent: #a5b4fc;
+  --color-accent-foreground: #1e1b4b;
   --color-danger: #e08573;
   --color-danger-foreground: #2b0f0a;
+  --color-success: #79cf9d;
+  --color-success-foreground: #0c2916;
   --color-overlay: rgb(0 0 0 / 0.55);
 
   /* Тёмные тени — тонкий верхний блик + мягкая глубина (перенесены из dark-first). */

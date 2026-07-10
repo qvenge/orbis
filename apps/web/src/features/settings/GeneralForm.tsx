@@ -88,7 +88,7 @@ export function GeneralForm({ settings }: { settings: Settings }) {
                 type="button"
                 aria-pressed={active}
                 onClick={() => setThemePref(opt.value)}
-                className={`flex-1 rounded-sm px-3 py-1.5 text-sm transition ${
+                className={`flex-1 cursor-pointer rounded-sm px-3 py-1.5 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 ${
                   active ? 'bg-surface-2 text-text' : 'text-text-secondary hover:text-text'
                 }`}
               >

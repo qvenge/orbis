@@ -52,7 +52,10 @@ export function MessageList({
   }, [ordered.length, isTyping]);
 
   return (
-    <div data-testid="message-list" className="flex flex-1 flex-col gap-2 overflow-y-auto p-3">
+    <div
+      data-testid="message-list"
+      className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 py-6"
+    >
       {ordered.length === 0 && !isTyping && (
         <div className="flex flex-1 items-center justify-center">
           <EmptyState
@@ -62,22 +65,35 @@ export function MessageList({
           />
         </div>
       )}
-      {ordered.map((m) => (
-        <article
-          key={m.id}
-          data-role={m.role}
-          className={`max-w-[85%] rounded-card px-3 py-2 text-sm ${m.role === 'user' ? 'self-end bg-accent text-accent-foreground' : 'self-start bg-surface-2 text-text'}`}
-        >
-          {m.content && <p>{m.content}</p>}
-          {renderCards(m, { onRetry, onReparse })}
-        </article>
-      ))}
+      {/* Пользователь — тихий серый пузырь справа; ассистент — без пузыря, текст и карточки
+          прямо на листе (Notion AI / Claude): акцентный цвет сообщениям не принадлежит. */}
+      {ordered.map((m) =>
+        m.role === 'user' ? (
+          <article
+            key={m.id}
+            data-role={m.role}
+            className="max-w-[75%] self-end rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5 text-sm text-text"
+          >
+            {m.content && <p>{m.content}</p>}
+            {renderCards(m, { onRetry, onReparse })}
+          </article>
+        ) : (
+          <article
+            key={m.id}
+            data-role={m.role}
+            className="flex w-full max-w-[92%] flex-col gap-2 self-start text-sm text-text"
+          >
+            {m.content && <p className="leading-relaxed">{m.content}</p>}
+            {renderCards(m, { onRetry, onReparse })}
+          </article>
+        ),
+      )}
       {isTyping && (
         <div
           data-testid="typing"
           role="status"
           aria-label="Ассистент печатает"
-          className="flex items-center gap-1 self-start rounded-card bg-surface-2 px-3 py-2.5"
+          className="flex items-center gap-1 self-start px-1 py-2"
         >
           <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-text-muted" />
           <span

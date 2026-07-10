@@ -1,8 +1,7 @@
 import { useState } from 'react';
+import { aspectLabel, fieldLabel } from '../../lib/field-labels';
 import type { RouterOutputs } from '../../trpc';
 import { Button } from '../../ui/Button';
-import { Card } from '../../ui/Card';
-import { Input } from '../../ui/Input';
 import { useEntityUpdate } from './useEntityDetail';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
@@ -28,19 +27,25 @@ export function AspectCards({ entity }: { entity: Entity }) {
           Аспект изменён в другом месте — обновите.
         </p>
       )}
+      {/* Notion-style свойства: секция без карточной рамки, значения — тихие инпуты
+          без бордера (hover подсказывает редактируемость). */}
       {Object.entries(aspects).map(([aspectId, fields]) => (
-        <Card key={aspectId} data-testid={`aspect-${aspectId}`} className="flex flex-col gap-2">
+        <section key={aspectId} data-testid={`aspect-${aspectId}`} className="flex flex-col gap-1">
           <div className="flex items-center justify-between">
-            <p className="font-medium">{aspectId}</p>
+            <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">
+              {aspectLabel(aspectId)}
+            </p>
             <Button
               variant="ghost"
+              size="sm"
+              className="text-xs text-text-muted"
               aria-label={`Снять ${aspectId}`}
               onClick={() => mutation.mutate({ id: entity.id, aspects: { [aspectId]: null } })}
             >
               Снять аспект
             </Button>
           </div>
-          <dl className="grid grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1 text-sm">
+          <dl className="grid grid-cols-[minmax(7rem,max-content)_1fr] items-center gap-x-3 gap-y-0.5 text-sm">
             {Object.entries(fields).map(([field, value]) => (
               <AspectField
                 key={field}
@@ -57,7 +62,7 @@ export function AspectCards({ entity }: { entity: Entity }) {
               />
             ))}
           </dl>
-        </Card>
+        </section>
       ))}
     </div>
   );
@@ -80,14 +85,14 @@ function AspectField({
   // начинаются с одной вертикали независимо от длины лейбла (лейблы выровнены вправо).
   return (
     <>
-      <dt className="text-right text-text-secondary">{field}:</dt>
+      <dt className="text-text-muted">{fieldLabel(field)}</dt>
       <dd>
-        <Input
+        <input
           aria-label={`${aspectId} ${field}`}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => draft !== initial && onSave(draft)}
-          className="w-full"
+          className="w-full rounded-md bg-transparent px-2 py-1 text-sm text-text outline-none transition hover:bg-surface-2 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/40"
         />
       </dd>
     </>

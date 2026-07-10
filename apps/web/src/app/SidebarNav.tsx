@@ -59,7 +59,7 @@ export function SidebarNav() {
         <PinnedList onOpen={openPinnedEntity} />
       </div>
 
-      <div className="mt-auto border-t border-line p-2">
+      <div className="mt-auto p-2">
         <button
           type="button"
           data-testid="open-settings"

@@ -16,7 +16,7 @@ export function ScreenHeader({ title, actions }: { title: string; actions?: Reac
   const pop = useNav((s) => s.pop);
 
   return (
-    <header className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-1 border-b border-line bg-bg/90 px-3 backdrop-blur">
+    <header className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-1 border-b border-line/70 bg-surface/90 px-3 backdrop-blur">
       {depth > 0 && (
         <Button
           size="icon"

@@ -55,7 +55,7 @@ test('financial: income → плюс и позитивный тон', () => {
   );
   const amount = screen.getByTestId('native-amount');
   expect(amount.textContent?.startsWith('+')).toBe(true);
-  expect(amount.className).toContain('text-accent');
+  expect(amount.className).toContain('text-success');
 });
 
 test('task: рендерит чекбокс', () => {
