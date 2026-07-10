@@ -48,6 +48,12 @@ async function isUndone(tx: Tx, actionId: string): Promise<boolean> {
  * Скан журнала владельца с конца (§7.8): сообщения по created_at DESC (RLS скоупит
  * владельцем); undo-записи и сообщения без actions отсекаются containment-фильтром,
  * уже отменённые — NOT EXISTS по их undo-сообщению; берётся первое неотменённое.
+ * Системные действия (source='system' — материализация recurring-инстансов §5.4,
+ * скрытая из чата) пропускаются: «отмени последнее» = последнее ВИДИМОЕ пользователю
+ * действие, иначе undo молча архивировал бы инстансы вместо «обед 340» (fix round A3).
+ * IS DISTINCT FROM — NULL-безопасно (урок A1: у строки без source обычное <> дало бы
+ * NULL и потеряло её). Точечный undoAction по id системного действия остаётся возможным
+ * (§2.8 «выполненный transition можно отменить обычным Undo», путь A5).
  */
 async function findLastUndoable(tx: Tx): Promise<FoundAction | undefined> {
   const rows = await tx.execute(
@@ -55,6 +61,7 @@ async function findLastUndoable(tx: Tx): Promise<FoundAction | undefined> {
         FROM chat_messages m
         WHERE m.metadata @> '{"actions": []}'::jsonb
           AND jsonb_array_length(m.metadata->'actions') > 0
+          AND m.metadata->'actions'->0->>'source' IS DISTINCT FROM 'system'
           AND NOT EXISTS (
             SELECT 1 FROM chat_messages u
             WHERE u.metadata @> jsonb_build_object(

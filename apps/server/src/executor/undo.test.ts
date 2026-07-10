@@ -4,9 +4,10 @@
 // (LWW-откат body без optimistic-check, восстановление аспект-ключа целиком),
 // повторная отмена, undoLast со сканом с конца, undo связей и batch.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { newId } from '@orbis/shared';
+import { materializeBatchId, newId, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { materializeInstances } from '../recurring/materialize';
 import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
 import type { ExecuteErr, ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from './types';
@@ -292,5 +293,54 @@ describe('undoLast: скан журнала с конца (§7.8)', () => {
     // всё отменено → структурированный отказ
     const none = err(await undoLast(db, { actorUserId: user }));
     expect(none.error.code).toBe('NOT_FOUND');
+  });
+
+  test('«отмени последнее» пропускает системные действия (source=system): откатывается fast-path, инстансы живы (fix round A3)', async () => {
+    const user = freshUserId();
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
+      new Date(),
+    );
+    // Действие владельца: «обед 340» здесь — создание recurring-шаблона (fast_path)
+    const rTpl = ok(
+      await execute(
+        db,
+        req(user, 'entity_create', {
+          title: 'Шаблон с материализацией',
+          tags: [],
+          aspects: {
+            'orbis/schedule': {
+              start_at: `${today}T09:00:00+03:00`,
+              timezone: 'Europe/Moscow',
+              recurrence: { freq: 'daily', interval: 1 },
+            },
+          },
+        }),
+        { sink },
+      ),
+    );
+    const tpl = rTpl.results[0] as WireEntity;
+
+    // Между действием владельца и его отменой случилась системная материализация
+    // (§5.4) — её batch-audit стал ПОСЛЕДНИМ action'ом журнала
+    const m = await materializeInstances({ db, ownerId: user, from: today, to: today, today });
+    expect(m.created).toBe(1);
+    const instanceId = recurringInstanceId(tpl.id, today);
+
+    // «последнее» = последнее ВИДИМОЕ пользователю действие: системный batch
+    // пропускается, откатывается создание шаблона; инстансы не архивируются молча
+    const u = ok(await undoLast(db, { actorUserId: user }));
+    expect(u.actionId).toBe(rTpl.actionId);
+    expect((await entityRow(tpl.id)).archived).toBe(true); // отменён именно fast_path
+    expect((await entityRow(instanceId)).archived).toBe(false); // инстанс жив
+
+    // Точечный undo по action_id системного batch остаётся возможным (§2.8, путь A5):
+    // id action'а batch = его детерминированный batch_id (materializeBatchId)
+    ok(
+      await undoAction(db, {
+        actorUserId: user,
+        actionId: materializeBatchId(tpl.id, today, today),
+      }),
+    );
+    expect((await entityRow(instanceId)).archived).toBe(true);
   });
 });
