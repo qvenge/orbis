@@ -72,6 +72,8 @@ export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): Reac
       <Button
         key="reparse"
         variant="ghost"
+        size="sm"
+        className="self-start"
         onClick={() => handlers.onReparse?.(fp.entityId as string, fp.text)}
       >
         Разобрать с AI

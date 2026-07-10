@@ -14,7 +14,7 @@ export function BrowserScreen() {
   return (
     <div className="flex h-full flex-col">
       <ScreenHeader title="Обзор" />
-      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col">
+      <div className="mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col md:px-6">
         <PinnedChips onOpen={(id) => push('browser', { kind: 'entity', id })} />
         <Filters onApply={setFilters} />
         <div className="flex-1 overflow-y-auto">

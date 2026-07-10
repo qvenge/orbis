@@ -3,6 +3,7 @@ import { useNav } from '../../state/navigation';
 import { Button } from '../../ui/Button';
 import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
+import { EntityRow } from './EntityRow';
 import { useEntities } from './useEntities';
 
 export function EntityList({ filters = '' }: { filters?: string }) {
@@ -27,17 +28,17 @@ export function EntityList({ filters = '' }: { filters?: string }) {
     );
   return (
     <div className="flex flex-col">
-      <ul className="flex flex-col divide-y divide-line">
+      {/* Без разделительных линий (Notion): строка — скруглённый hover-ряд. */}
+      <ul className="flex flex-col gap-px px-1">
         {entities.map((e) => (
           <li key={e.id}>
             <button
               type="button"
               data-testid="entity-row"
               onClick={() => push('browser', { kind: 'entity', id: e.id })}
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-surface-2"
+              className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
             >
-              {e.emoji && <span aria-hidden>{e.emoji}</span>}
-              <span className="flex-1 truncate">{e.title}</span>
+              <EntityRow entity={e} />
             </button>
           </li>
         ))}

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { fieldLabel } from '../../../lib/field-labels';
 import { useNav } from '../../../state/navigation';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
@@ -28,17 +29,18 @@ export function EntityCard({ card }: { card: EntityCardData }) {
     >
       <button
         type="button"
-        className="text-left font-medium"
+        className="cursor-pointer text-left text-sm font-medium transition hover:text-accent disabled:cursor-default disabled:hover:text-text"
         disabled={undone}
         onClick={() => push(activeTab, { kind: 'entity', id: card.entityId })}
       >
         {card.title}
       </button>
-      <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-text-secondary">
+      {/* Свойства — тихая сетка «подпись: значение», числа таблично. */}
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
         {Object.entries(card.keyFields).map(([k, v]) => (
-          <div key={k} className="flex gap-1">
-            <dt>{k}:</dt>
-            <dd>{String(v)}</dd>
+          <div key={k} className="col-span-2 grid grid-cols-subgrid">
+            <dt className="text-text-muted">{fieldLabel(k)}</dt>
+            <dd className="text-text tabular-nums">{String(v)}</dd>
           </div>
         ))}
       </dl>

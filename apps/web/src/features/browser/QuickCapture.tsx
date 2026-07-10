@@ -1,8 +1,7 @@
 import { newId } from '@orbis/shared';
+import { Plus } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { trpc } from '../../trpc';
-import { Button } from '../../ui/Button';
-import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
 
@@ -48,23 +47,31 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
     }
   }
 
+  const empty = text.trim().length === 0;
   return (
-    <form
-      data-testid="quick-capture-form"
-      onSubmit={submit}
-      className="flex gap-2 border-t border-line p-2"
-    >
-      <Input
-        aria-label="Быстрая запись"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder="Быстрая запись…"
-        className="flex-1"
-      />
-      <Button type="submit" variant="primary" disabled={isPending}>
-        {isPending && <Spinner size={14} aria-label="Сохранение" />}
-        Добавить
-      </Button>
+    // Капсула в стиле композера чата: без border-t, кнопка внутри поля.
+    <form data-testid="quick-capture-form" onSubmit={submit} className="px-4 pb-4 pt-1">
+      <div className="flex items-center gap-2 rounded-2xl border border-line bg-surface py-1 pl-4 pr-1.5 shadow-control transition focus-within:border-accent/60 focus-within:ring-2 focus-within:ring-accent/15">
+        <input
+          aria-label="Быстрая запись"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Быстрая запись — без интерпретации…"
+          className="min-w-0 flex-1 bg-transparent py-1.5 text-sm text-text outline-none placeholder:text-text-muted"
+        />
+        <button
+          type="submit"
+          disabled={isPending || empty}
+          aria-label="Добавить"
+          className="flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-full bg-accent text-accent-foreground transition hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-default disabled:bg-surface-2 disabled:text-text-muted"
+        >
+          {isPending ? (
+            <Spinner size={13} aria-label="Сохранение" />
+          ) : (
+            <Plus size={15} aria-hidden />
+          )}
+        </button>
+      </div>
     </form>
   );
 }

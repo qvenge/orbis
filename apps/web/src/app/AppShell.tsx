@@ -8,7 +8,9 @@ export function AppShell() {
   return (
     <div className="flex h-full">
       <SidebarNav />
-      <div className="flex min-w-0 flex-1 flex-col">
+      {/* Контентная колонка — «белый лист» (bg-surface) на фоне «бумажного» sidebar (bg-bg):
+          зоны читаются без разделительных линий, как в Notion. */}
+      <div className="flex min-w-0 flex-1 flex-col bg-surface">
         <ActiveScreen />
         <TabBar />
       </div>

@@ -1,10 +1,10 @@
 import { newId } from '@orbis/shared';
+import { Circle, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
-import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
 
@@ -45,30 +45,47 @@ export function Subtasks({ parentId }: { parentId: string }) {
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      <p className="text-sm font-medium">Подзадачи ({childIds.length})</p>
-      {childIds.length === 0 ? (
-        <p className="text-xs text-text-muted">Подзадач нет</p>
-      ) : (
-        <ul className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1">
+      <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">
+        Подзадачи ({childIds.length})
+      </p>
+      {childIds.length > 0 && (
+        <ul className="flex flex-col">
           {childIds.map((id) => (
-            <li key={id} data-testid="subtask" className="text-sm">
+            <li
+              key={id}
+              data-testid="subtask"
+              className="flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition hover:bg-surface-2/60"
+            >
+              <Circle size={14} aria-hidden className="shrink-0 text-text-muted/70" />
               {/* Открытие подзадачи — push entity в АКТИВНЫЙ таб поверх текущего Detail. */}
               <EntityRef id={id} onOpen={(eid) => push(activeTab, { kind: 'entity', id: eid })} />
             </li>
           ))}
         </ul>
       )}
-      <div className="flex gap-2">
-        <Input
+      {/* Тихая строка добавления (Notion): плюс + borderless-инпут, Enter добавляет. */}
+      <div className="flex items-center gap-2.5 px-2 py-1.5">
+        {isPending ? (
+          <Spinner size={14} aria-label="Сохранение" />
+        ) : (
+          <Plus size={14} aria-hidden className="shrink-0 text-text-muted/70" />
+        )}
+        <input
           aria-label="Новая подзадача"
           value={draft}
+          placeholder="Добавить подзадачу…"
           onChange={(e) => setDraft(e.target.value)}
-          className="flex-1"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void add();
+          }}
+          className="min-w-0 flex-1 bg-transparent text-sm text-text outline-none placeholder:text-text-muted"
         />
-        <Button variant="ghost" onClick={add} disabled={isPending}>
-          {isPending && <Spinner size={14} aria-label="Сохранение" />}+ подзадача
-        </Button>
+        {draft.trim() && (
+          <Button variant="ghost" size="sm" onClick={add} disabled={isPending}>
+            Добавить
+          </Button>
+        )}
       </div>
     </div>
   );

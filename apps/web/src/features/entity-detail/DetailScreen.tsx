@@ -41,16 +41,15 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // В шапке — только title; emoji сущности — крупная page-иконка (Notion-style) в строке
   // с заголовком/NativeRow. Нет emoji — ничего не рендерим (без плейсхолдера).
   const entityTab = (
-    <div className="flex flex-col gap-4 p-3">
-      <div className="flex items-center gap-3">
+    <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
+      {/* Notion-style шапка страницы: крупная emoji-иконка над заголовком. */}
+      <div className="flex flex-col gap-3">
         {entity.emoji && (
-          <span aria-hidden className="text-3xl leading-none">
+          <span aria-hidden className="text-4xl leading-none">
             {entity.emoji}
           </span>
         )}
-        <div className="flex-1">
-          <NativeRow entity={entity} onToggleTask={toggleTask} />
-        </div>
+        <NativeRow entity={entity} onToggleTask={toggleTask} />
       </div>
       {conflict && (
         <div
@@ -132,12 +131,15 @@ function BodyEditor({ initial, onSave }: { initial: string; onSave: (body: strin
   }
 
   return (
+    // Notion-style: текст лежит прямо на листе — рамка не нужна, hover подсказывает
+    // редактируемость, каретка появляется по клику.
     <textarea
       data-testid="body-edit"
       value={value}
+      placeholder="Заметки…"
       onChange={(e) => setValue(e.target.value)}
       onBlur={() => value !== serverBody && onSave(value)}
-      className="min-h-24 rounded-control border border-line bg-surface p-2 text-sm"
+      className="min-h-24 w-full resize-none rounded-lg bg-transparent px-2 py-1.5 text-sm leading-relaxed transition placeholder:text-text-muted hover:bg-surface-2/60 focus:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
     />
   );
 }

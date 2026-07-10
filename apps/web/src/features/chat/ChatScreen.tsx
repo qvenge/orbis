@@ -1,3 +1,4 @@
+import { Clock } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { useOnline, useRetryBuffer } from '../../state/retry';
@@ -46,8 +47,11 @@ function ThreadView({ threadId }: { threadId: string }) {
   return (
     <div className="flex h-full flex-col">
       {pending > 0 && (
-        <div data-testid="pending-indicator" className="px-3 py-1 text-xs text-text-secondary">
-          Ждут отправки: {pending}
+        <div data-testid="pending-indicator" className="flex justify-center pt-2">
+          <span className="flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-2xs text-text-secondary">
+            <Clock size={11} aria-hidden />
+            Ждут отправки: {pending}
+          </span>
         </div>
       )}
       {isLoading ? (
