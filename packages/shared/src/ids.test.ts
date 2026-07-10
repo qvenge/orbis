@@ -5,6 +5,7 @@ import {
   globalThreadId,
   newId,
   ORBIS_NAMESPACE,
+  processingMessageId,
   recurringInstanceId,
   rejectMessageId,
 } from './ids';
@@ -33,6 +34,14 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
     const pending = '00000000-0000-7000-8000-0000000000b2';
     expect(rejectMessageId(owner, pending)).toBe(rejectMessageId(owner.toUpperCase(), pending));
     expect(rejectMessageId(owner, pending)).not.toBe(batchAuditMessageId(owner, pending));
+  });
+  test('processingMessageId детерминирован, lowercase-нормализован, отличен от исходного id', () => {
+    const userMsg = '00000000-0000-7000-8000-0000000000c3';
+    expect(processingMessageId(userMsg)).toBe(processingMessageId(userMsg.toUpperCase()));
+    expect(processingMessageId(userMsg)).not.toBe(userMsg);
+    expect(processingMessageId(userMsg)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
   test('newId — валидный UUIDv7, монотонный по времени в префиксе', () => {
     const a = newId();

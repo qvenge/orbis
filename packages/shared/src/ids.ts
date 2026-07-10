@@ -39,6 +39,16 @@ export function pendingMessageId(ownerId: string, batchId: string): string {
   return uuidv5(`pending:${ownerId.toLowerCase()}:${batchId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
+/**
+ * PK системного маркера «ответ готовится» (ai.sendMessage): детерминирован по
+ * client-UUID user-сообщения — конкурентный ретрай того же сообщения находит маркер
+ * первого прогона и не запускает второй tool-цикл. Owner в формуле не нужен:
+ * client-UUID уникален сам по себе.
+ */
+export function processingMessageId(userMessageId: string): string {
+  return uuidv5(`processing:${userMessageId.toLowerCase()}`, ORBIS_NAMESPACE);
+}
+
 export function recurringInstanceId(templateId: string, dateISO: string): string {
   return uuidv5(`${templateId.toLowerCase()}:${dateISO}`, ORBIS_NAMESPACE);
 }

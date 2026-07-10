@@ -50,10 +50,23 @@ export function useChatThread(threadId: string) {
   };
 }
 
+// Backoff-рефетч треда при { status: 'processing' }: ответ пишет другой прогон,
+// перечитываем с нарастающей задержкой (лишний invalidate после прихода ответа безвреден).
+export const PROCESSING_REFETCH_DELAYS_MS = [1000, 2000, 4000, 8000, 16000];
+
 export function useSendMessage(threadId: string) {
   const queryClient = useQueryClient();
   const utils = trpc.useUtils();
   const key = chatThreadKey(threadId);
+
+  const refetchWithBackoff = (attempt = 0) => {
+    const delay = PROCESSING_REFETCH_DELAYS_MS[attempt];
+    if (delay === undefined) return;
+    setTimeout(() => {
+      void queryClient.invalidateQueries({ queryKey: key });
+      refetchWithBackoff(attempt + 1);
+    }, delay);
+  };
 
   const send = trpc.ai.sendMessage.useMutation({
     onMutate: async ({ id, content }) => {
@@ -69,6 +82,13 @@ export function useSendMessage(threadId: string) {
       queryClient.setQueryData<InfiniteData>(key, (old) => upsertNewest(old, optimistic));
     },
     onSuccess: (res) => {
+      if ('status' in res) {
+        // Ответ готовится другим прогоном (конкурентный ретрай того же client-UUID):
+        // ничего не аппендим — перечитываем тред с нарастающей задержкой, пока
+        // первый прогон не запишет ответ.
+        refetchWithBackoff();
+        return;
+      }
       if (res.replayed) {
         // D-f: не аппендим локально — рефетчим тред
         void queryClient.invalidateQueries({ queryKey: key });

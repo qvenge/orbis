@@ -6,7 +6,7 @@
 // ScriptedProvider ассертит ЗАПРОСЫ к модели: system НЕ в messages (контракт Task 7),
 // tool-результаты — каноническим сериализатором toolResultMessage (контракт Task 8).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { MAX_AGENT_STEPS, newId } from '@orbis/shared';
+import { MAX_AGENT_STEPS, newId, processingMessageId } from '@orbis/shared';
 import type { TRPCError } from '@trpc/server';
 import { eq } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -17,11 +17,11 @@ import { execute } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { SYSTEM_PROMPT_V1, TOOL_RESULT_MARKER } from '../llm/prompts/v1';
 import { ScriptedProvider } from '../llm/scripted';
-import type { LLMMessage, LLMRequest, LLMResponse } from '../llm/types';
+import type { LLMMessage, LLMProvider, LLMRequest, LLMResponse } from '../llm/types';
 import { appRouter } from '../router';
 import type { Card } from '../tools/registry';
 import { type Context, createCallerFactory } from '../trpc';
-import { MAX_TOKENS_NOTE } from './send-message';
+import { MAX_TOKENS_NOTE, type SendMessageAnswer, type SendMessageResult } from './send-message';
 
 requireEnv();
 
@@ -65,7 +65,7 @@ function toolUse(
 
 function callerWith(
   user: string,
-  provider: ScriptedProvider,
+  provider: LLMProvider,
   over: Partial<NonNullable<Context['ai']>> = {},
 ) {
   return createCaller({
@@ -135,6 +135,12 @@ async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
   throw new Error('ожидался TRPCError, вызов успешен');
 }
 
+/** Полный ответ (не processing) — узкий тип для ассертов существующих сценариев. */
+function answered(r: SendMessageResult): SendMessageAnswer {
+  if ('status' in r) throw new Error('ожидался полный ответ, получен { status: processing }');
+  return r;
+}
+
 async function usageRows(user: string) {
   return withIdentity(db, user, (tx) => tx.select().from(aiUsage).where(eq(aiUsage.date, TODAY)));
 }
@@ -155,11 +161,13 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
       endTurn('Готово: задача создана', { inputTokens: 200, outputTokens: 30 }),
     ]);
     const msgId = newId();
-    const r = await callerWith(user, scripted).ai.sendMessage({
-      id: msgId,
-      threadId,
-      content: 'создай задачу купить хлеб',
-    });
+    const r = answered(
+      await callerWith(user, scripted).ai.sendMessage({
+        id: msgId,
+        threadId,
+        content: 'создай задачу купить хлеб',
+      }),
+    );
 
     // Ответ целиком (D7): финальный текст + карточки всех действий цикла
     expect(r.assistantMessage.role).toBe('assistant');
@@ -238,11 +246,13 @@ describe('ai.sendMessage (б): tool-цикл из 2 вызовов (query → cr
       toolUse([{ name: 'entity_create', input: { title: 'Задача из цикла', tags: [] } }]),
       endTurn('Сделано'),
     ]);
-    const r = await callerWith(user, scripted).ai.sendMessage({
-      id: newId(),
-      threadId,
-      content: 'проверь задачи и создай новую',
-    });
+    const r = answered(
+      await callerWith(user, scripted).ai.sendMessage({
+        id: newId(),
+        threadId,
+        content: 'проверь задачи и создай новую',
+      }),
+    );
 
     expect(scripted.requests).toHaveLength(3);
     const q = toolResultPayload(lastOf(scripted.requests[1]), 'entity_query');
@@ -278,11 +288,13 @@ describe('ai.sendMessage (в): лимит шагов MAX_AGENT_STEPS', () => {
         toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
       ),
     );
-    const r = await callerWith(user, scripted).ai.sendMessage({
-      id: newId(),
-      threadId,
-      content: 'зациклись',
-    });
+    const r = answered(
+      await callerWith(user, scripted).ai.sendMessage({
+        id: newId(),
+        threadId,
+        content: 'зациклись',
+      }),
+    );
 
     expect(scripted.requests).toHaveLength(MAX_AGENT_STEPS);
     expect(r.assistantMessage.content).toContain('[цикл остановлен: достигнут лимит шагов]');
@@ -311,11 +323,13 @@ describe('ai.sendMessage: обрыв по потолку токенов', () => 
       usage: { inputTokens: 10, outputTokens: 8192 },
       stopReason: 'max_tokens',
     };
-    const res = await callerWith(user, new ScriptedProvider([truncated])).ai.sendMessage({
-      id: newId(),
-      threadId,
-      content: 'расскажи длинно',
-    });
+    const res = answered(
+      await callerWith(user, new ScriptedProvider([truncated])).ai.sendMessage({
+        id: newId(),
+        threadId,
+        content: 'расскажи длинно',
+      }),
+    );
     expect(res.assistantMessage.content).toContain('Начал отвечать и не доска');
     expect(res.assistantMessage.content).toContain(MAX_TOKENS_NOTE);
   });
@@ -329,11 +343,13 @@ describe('ai.sendMessage: обрыв по потолку токенов', () => 
       usage: { inputTokens: 10, outputTokens: 8192 },
       stopReason: 'max_tokens',
     };
-    const res = await callerWith(user, new ScriptedProvider([empty])).ai.sendMessage({
-      id: newId(),
-      threadId,
-      content: 'думай долго',
-    });
+    const res = answered(
+      await callerWith(user, new ScriptedProvider([empty])).ai.sendMessage({
+        id: newId(),
+        threadId,
+        content: 'думай долго',
+      }),
+    );
     expect(res.assistantMessage.content).toBe(MAX_TOKENS_NOTE);
   });
 });
@@ -352,11 +368,13 @@ describe('ai.sendMessage: отказ модели (stopReason refusal)', () => {
       stopReason: 'refusal',
     };
     const scripted = new ScriptedProvider([refusal]);
-    const r = await callerWith(user, scripted).ai.sendMessage({
-      id: newId(),
-      threadId,
-      content: 'сделай что-нибудь запретное',
-    });
+    const r = answered(
+      await callerWith(user, scripted).ai.sendMessage({
+        id: newId(),
+        threadId,
+        content: 'сделай что-нибудь запретное',
+      }),
+    );
 
     expect(scripted.requests).toHaveLength(1); // ровно один шаг, цикла нет
     const cards = cardsOf(r.assistantMessage);
@@ -442,11 +460,13 @@ describe('ai.sendMessage (е): explicit-confirmation внутри цикла (ba
       ]),
       endTurn('Действие ждёт подтверждения владельца.'),
     ]);
-    const r = await callerWith(user, scripted).ai.sendMessage({
-      id: newId(),
-      threadId,
-      content: 'наведи порядок в задачах',
-    });
+    const r = answered(
+      await callerWith(user, scripted).ai.sendMessage({
+        id: newId(),
+        threadId,
+        content: 'наведи порядок в задачах',
+      }),
+    );
 
     expect(r.pending).toHaveLength(1);
     const pendingId = r.pending[0]?.pendingId;
@@ -508,11 +528,13 @@ describe('ai.sendMessage (ж): user_query sum по decimal', () => {
       ]),
       endTurn('Итого 30.30'),
     ]);
-    const r = await callerWith(user, scripted).ai.sendMessage({
-      id: newId(),
-      threadId,
-      content: 'сколько я потратил?',
-    });
+    const r = answered(
+      await callerWith(user, scripted).ai.sendMessage({
+        id: newId(),
+        threadId,
+        content: 'сколько я потратил?',
+      }),
+    );
 
     const payload = toolResultPayload(lastOf(scripted.requests[1]), 'user_query');
     expect(payload.status).toBe('ok');
@@ -540,20 +562,24 @@ describe('ai.sendMessage: ретрай с тем же client-id (fix round — r
       }),
       endTurn('Создано', { inputTokens: 200, outputTokens: 30 }),
     ]);
-    const r1 = await callerWith(user, first).ai.sendMessage({
-      id: msgId,
-      threadId,
-      content: 'оригинал',
-    });
+    const r1 = answered(
+      await callerWith(user, first).ai.sendMessage({
+        id: msgId,
+        threadId,
+        content: 'оригинал',
+      }),
+    );
     expect(r1.replayed).toBe(false);
 
     // Повтор: пустой скрипт — если бы цикл пошёл, провайдер бы бросил
     const second = new ScriptedProvider([]);
-    const r2 = await callerWith(user, second).ai.sendMessage({
-      id: msgId,
-      threadId,
-      content: 'повтор с другим текстом',
-    });
+    const r2 = answered(
+      await callerWith(user, second).ai.sendMessage({
+        id: msgId,
+        threadId,
+        content: 'повтор с другим текстом',
+      }),
+    );
 
     // Replay СУЩЕСТВУЮЩЕГО ответа: тот же assistantMessage, провайдер не тронут
     expect(r2.replayed).toBe(true);
@@ -595,11 +621,13 @@ describe('ai.sendMessage: ретрай с тем же client-id (fix round — r
       toolUse([{ name: 'entity_create', input: { title: 'Задача после сбоя', tags: [] } }]),
       endTurn('Готово после ретрая'),
     ]);
-    const r2 = await callerWith(user, retry).ai.sendMessage({
-      id: msgId,
-      threadId,
-      content: 'оригинал',
-    });
+    const r2 = answered(
+      await callerWith(user, retry).ai.sendMessage({
+        id: msgId,
+        threadId,
+        content: 'оригинал',
+      }),
+    );
 
     expect(r2.replayed).toBe(false);
     expect(r2.assistantMessage.content).toBe('Готово после ретрая');
@@ -637,22 +665,26 @@ describe('ai.sendMessage: ретрай с тем же client-id (fix round — r
     // 2) B: приходит ПОЗЖЕ и получает ответ Rb (пишется с metadata.replyTo = idB)
     const idB = newId();
     const providerB = new ScriptedProvider([endTurn('ответ на B (Rb)')]);
-    const rB = await callerWith(user, providerB).ai.sendMessage({
-      id: idB,
-      threadId,
-      content: 'сообщение B',
-    });
+    const rB = answered(
+      await callerWith(user, providerB).ai.sendMessage({
+        id: idB,
+        threadId,
+        content: 'сообщение B',
+      }),
+    );
     expect(rB.replayed).toBe(false);
     expect(rB.assistantMessage.content).toBe('ответ на B (Rb)');
 
     // 3) Ретрай A с тем же client-id. Временна́я логика вернула бы Rb (replayed=true);
     //    detерминизм по replyTo: ответа A нет → провайдер вызывается, отдаёт свой Ra.
     const retryA = new ScriptedProvider([endTurn('ответ на A (Ra)')]);
-    const rA = await callerWith(user, retryA).ai.sendMessage({
-      id: idA,
-      threadId,
-      content: 'сообщение A',
-    });
+    const rA = answered(
+      await callerWith(user, retryA).ai.sendMessage({
+        id: idA,
+        threadId,
+        content: 'сообщение A',
+      }),
+    );
 
     expect(rA.replayed).toBe(false); // на старой логике было бы true (вернулся бы Rb)
     expect(rA.assistantMessage.id).not.toBe(rB.assistantMessage.id); // НИКОГДА чужой Rb
@@ -669,6 +701,147 @@ describe('ai.sendMessage: ретрай с тем же client-id (fix round — r
   });
 });
 
+// ---------------------------------------------------------------------------
+// Конкурентный ретрай (маркер processing)
+// ---------------------------------------------------------------------------
+
+describe('ai.sendMessage: конкурентный ретрай во время первого прогона (маркер processing)', () => {
+  /** Провайдер с воротами: chat() виснет до release() — окно конкуренции управляемо. */
+  class GatedProvider implements LLMProvider {
+    calls = 0;
+    private releaseGate!: () => void;
+    private signalStarted!: () => void;
+    readonly started: Promise<void>;
+    private readonly gate: Promise<void>;
+    constructor() {
+      this.started = new Promise((res) => {
+        this.signalStarted = res;
+      });
+      this.gate = new Promise((res) => {
+        this.releaseGate = res;
+      });
+    }
+    release(): void {
+      this.releaseGate();
+    }
+    async chat(): Promise<LLMResponse> {
+      this.calls += 1;
+      this.signalStarted();
+      await this.gate;
+      return endTurn('готово после гонки');
+    }
+  }
+
+  test('два конкурентных вызова с одним client-UUID → один tool-цикл, второй ответ { status: processing }', async () => {
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const msgId = newId();
+    const gated = new GatedProvider();
+    const caller = callerWith(user, gated);
+
+    const firstCall = caller.ai.sendMessage({ id: msgId, threadId, content: 'долгий запрос' });
+    await gated.started; // первый прогон дошёл до провайдера — маркер закоммичен
+
+    // Ретрай во время прогона: НЕ второй цикл, а сигнал «ответ готовится»
+    const r2 = await caller.ai.sendMessage({ id: msgId, threadId, content: 'долгий запрос' });
+    expect(r2).toEqual({ status: 'processing' });
+    expect(gated.calls).toBe(1);
+
+    gated.release();
+    const r1 = await firstCall;
+    if ('status' in r1) throw new Error('ожидался полный ответ первого прогона');
+    expect(r1.assistantMessage.content).toBe('готово после гонки');
+    expect(gated.calls).toBe(1); // ровно один tool-цикл на оба вызова
+
+    // Маркер снят той же tx, что записала ответ: повтор — replay ответа, не processing
+    const r3 = await callerWith(user, new ScriptedProvider([])).ai.sendMessage({
+      id: msgId,
+      threadId,
+      content: 'долгий запрос',
+    });
+    if ('status' in r3) throw new Error('ожидался replay существующего ответа');
+    expect(r3.replayed).toBe(true);
+    expect(r3.assistantMessage.id).toBe(r1.assistantMessage.id);
+    const markerRows = await withIdentity(db, user, (tx) =>
+      tx
+        .select()
+        .from(chatMessages)
+        .where(eq(chatMessages.id, processingMessageId(msgId))),
+    );
+    expect(markerRows).toHaveLength(0);
+  });
+
+  test('маркер моложе 10 минут без ответа → { status: processing }, провайдер не тронут', async () => {
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const msgId = newId();
+    // Сымитированный живой прогон другого процесса: user-сообщение + маркер без ответа
+    await seedDeadRun(user, threadId, msgId, T0);
+    const provider = new ScriptedProvider([]); // при вызове бросил бы
+    const r = await callerWith(user, provider, {
+      clock: () => new Date(T0.getTime() + 5 * 60_000),
+    }).ai.sendMessage({ id: msgId, threadId, content: 'запрос' });
+    expect(r).toEqual({ status: 'processing' });
+    expect(provider.requests).toHaveLength(0);
+  });
+
+  test('маркер старше 10 минут без ответа → прогон умер: цикл перезапускается', async () => {
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const msgId = newId();
+    await seedDeadRun(user, threadId, msgId, T0);
+    const retry = new ScriptedProvider([endTurn('ответ после перезапуска')]);
+    const r = await callerWith(user, retry, {
+      clock: () => new Date(T0.getTime() + 11 * 60_000),
+    }).ai.sendMessage({ id: msgId, threadId, content: 'запрос' });
+    if ('status' in r) throw new Error('ожидался полный ответ перезапуска');
+    expect(r.replayed).toBe(false);
+    expect(r.assistantMessage.content).toBe('ответ после перезапуска');
+    expect(retry.requests).toHaveLength(1);
+  });
+
+  test('сбой прогона снимает маркер: немедленный ретрай — легитимный полный прогон (§7.9)', async () => {
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const msgId = newId();
+    const failing = new ScriptedProvider([]); // первый вызов провайдера бросает
+    const err = await trpcError(
+      callerWith(user, failing).ai.sendMessage({ id: msgId, threadId, content: 'запрос' }),
+    );
+    expect(err.code).toBe('SERVICE_UNAVAILABLE');
+    // Маркер мёртвого прогона не должен блокировать ретрай ни секунды
+    const markerRows = await withIdentity(db, user, (tx) =>
+      tx
+        .select()
+        .from(chatMessages)
+        .where(eq(chatMessages.id, processingMessageId(msgId))),
+    );
+    expect(markerRows).toHaveLength(0);
+  });
+});
+
+/** Сид мёртвого прогона (краш процесса): user-сообщение + маркер processing без ответа. */
+async function seedDeadRun(user: string, threadId: string, msgId: string, at: Date): Promise<void> {
+  await withIdentity(db, user, async (tx) => {
+    await tx.insert(chatMessages).values({
+      id: msgId,
+      threadId,
+      role: 'user',
+      content: 'запрос',
+      metadata: {},
+      createdAt: at,
+    });
+    await tx.insert(chatMessages).values({
+      id: processingMessageId(msgId),
+      threadId,
+      role: 'system',
+      content: '',
+      metadata: { type: 'processing', replyTo: msgId },
+      createdAt: at,
+    });
+  });
+}
+
 describe('ai.sendMessage: ошибка тула в цикле', () => {
   test('error_card в карточках; модель получает структурную ошибку (путь самокоррекции)', async () => {
     const user = freshUserId();
@@ -677,11 +850,13 @@ describe('ai.sendMessage: ошибка тула в цикле', () => {
       toolUse([{ name: 'entity_update', input: { id: newId(), title: 'Нет такой' } }]),
       endTurn('Не нашёл сущность.'),
     ]);
-    const r = await callerWith(user, scripted).ai.sendMessage({
-      id: newId(),
-      threadId,
-      content: 'переименуй',
-    });
+    const r = answered(
+      await callerWith(user, scripted).ai.sendMessage({
+        id: newId(),
+        threadId,
+        content: 'переименуй',
+      }),
+    );
 
     const payload = toolResultPayload(lastOf(scripted.requests[1]), 'entity_update');
     expect(payload.status).toBe('error');

@@ -78,6 +78,24 @@ test('optimistic: user-сообщение появляется сразу; не-
   await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('2'));
 });
 
+test('{ status: processing } → рефетч треда с backoff, без локального аппенда ответа', async () => {
+  // Конкурентный ретрай: ответ пишет другой прогон — клиент перечитывает тред позже
+  let listCalls = 0;
+  renderWithProviders(<Sender />, (path) => {
+    if (path === 'chat.listMessages') {
+      listCalls += 1;
+      return [];
+    }
+    if (path === 'ai.sendMessage') return { status: 'processing' };
+    throw new Error(`unexpected ${path}`);
+  });
+  await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('0'));
+  const before = listCalls;
+  fireEvent.click(screen.getByText('send'));
+  // первый шаг backoff (1 с) должен привести к повторному listMessages
+  await waitFor(() => expect(listCalls).toBeGreaterThan(before), { timeout: 3000 });
+});
+
 test('replayed:true → рефетч треда, без локального аппенда ответа', async () => {
   let listCalls = 0;
   const replayedList = [
