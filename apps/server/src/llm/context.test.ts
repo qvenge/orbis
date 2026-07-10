@@ -145,7 +145,7 @@ describe('buildContext — слой 2: память с капом и приор�
     await createMemory(user2, {
       title: 'LONG-BODY',
       kind: 'fact',
-      body: 'б'.repeat(MEMORY_BODY_PREVIEW) + 'ХВОСТ-ЗА-КАПОМ',
+      body: `${'б'.repeat(MEMORY_BODY_PREVIEW)}ХВОСТ-ЗА-КАПОМ`,
     });
     const ctx = await withIdentity(db, user2, async (tx) => {
       const threadId = await ensureGlobalThread(tx, user2);
@@ -201,7 +201,7 @@ describe('buildContext — слой 3: якорная сущность (02 §2.2
         title: 'Якорь-проект',
         tags: ['project', 'ai'],
         aspects: { 'orbis/task': { status: 'in_progress' } },
-        body: 'я'.repeat(ANCHOR_BODY_PREVIEW) + 'ОБРЕЗАННЫЙ-ХВОСТ',
+        body: `${'я'.repeat(ANCHOR_BODY_PREVIEW)}ОБРЕЗАННЫЙ-ХВОСТ`,
       }),
     );
     return id;

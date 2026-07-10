@@ -165,7 +165,7 @@ describe('buildFieldCatalog: эвристика propType по фактическ
     expect(catalog.fields.carryover).toEqual([{ aspect: 'orbis/budget', type: 'decimal' }]);
   });
   test('category_ref живёт в двух аспектах — основа теста неоднозначности', () => {
-    expect(catalog.fields['category_ref']?.map((i) => i.aspect).sort()).toEqual([
+    expect(catalog.fields.category_ref?.map((i) => i.aspect).sort()).toEqual([
       'orbis/budget',
       'orbis/financial',
     ]);
