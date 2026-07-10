@@ -218,12 +218,18 @@ async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> 
     .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
     .limit(CONTEXT_HISTORY_LIMIT);
   rows.reverse(); // выборка «последние N» шла с конца — возвращаем хронологию
-  const msgs = rows.map((r) => {
-    if (r.role === 'user' || r.role === 'assistant') {
-      return { role: r.role, content: r.content } satisfies LLMMessage;
-    }
-    return compressSystemRow(r.content, r.metadata as Record<string, unknown>);
-  });
+  const msgs = rows
+    // Processing-маркер ai.sendMessage (§7.9) — инфраструктура, не контент: маркер
+    // СОБСТВЕННОГО прогона всегда в окне и сжимался бы в пустую строку «[система] »
+    .filter(
+      (r) => !(r.role === 'system' && (r.metadata as { type?: unknown }).type === 'processing'),
+    )
+    .map((r) => {
+      if (r.role === 'user' || r.role === 'assistant') {
+        return { role: r.role, content: r.content } satisfies LLMMessage;
+      }
+      return compressSystemRow(r.content, r.metadata as Record<string, unknown>);
+    });
   // Инвариант «messages начинается с user» — требование Anthropic Messages API
   // (fix round Task 8): граница окна на assistant-сообщении или ведущем сжатом
   // ai-audit давала бы 400 на КАЖДЫЙ вызов — ни провайдер, ни SDK не санитизируют.

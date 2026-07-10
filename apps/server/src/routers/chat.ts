@@ -1,7 +1,7 @@
 // apps/server/src/routers/chat.ts
 // Роутер chat (§9.1): треды §4.5 (детерминированные id, ensure-семантика) и сообщения
 // §4.6 (append-only). Только трансляция: примитивы — chat/threads.ts и chat/messages.ts.
-import { and, desc, eq, lt, or, type SQL } from 'drizzle-orm';
+import { and, desc, eq, lt, or, type SQL, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
@@ -61,7 +61,15 @@ export const chatRouter = router({
     )
     .query(({ ctx, input }) =>
       withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-        const conds: (SQL | undefined)[] = [eq(chatMessages.threadId, input.threadId)];
+        const conds: (SQL | undefined)[] = [
+          eq(chatMessages.threadId, input.threadId),
+          // Processing-маркеры ai.sendMessage (§7.9) — инфраструктура, не контент треда:
+          // живой маркер давал бы пустой system-пузырь ровно в окне рефетча клиента,
+          // а маркер краша (не снят, ответа нет) висел бы в треде навсегда.
+          // IS NOT DISTINCT FROM — NULL-безопасно: у audit/undo-строк ключа type нет
+          // (`->> 'type'` = NULL), обычное `=` выкинуло бы их вместе с маркерами.
+          sql`NOT (${chatMessages.role} = 'system' AND ${chatMessages.metadata} ->> 'type' IS NOT DISTINCT FROM 'processing')`,
+        ];
         if (input.before !== undefined) {
           const sep = input.before.indexOf('|');
           if (sep === -1) {

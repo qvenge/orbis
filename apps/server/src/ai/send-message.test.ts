@@ -798,6 +798,11 @@ describe('ai.sendMessage: конкурентный ретрай во время 
     expect(r.replayed).toBe(false);
     expect(r.assistantMessage.content).toBe('ответ после перезапуска');
     expect(retry.requests).toHaveLength(1);
+    // Маркер — инфраструктура, не контент: в LLM-историю не сжимается
+    // (без фильтра historyMessages он давал бы пустую строку «[система] »)
+    const history = retry.requests[0]?.messages ?? [];
+    expect(history.some((m) => m.content.trim() === '[система]')).toBe(false);
+    expect(history.at(-1)).toEqual({ role: 'user', content: 'запрос' });
   });
 
   test('сбой прогона снимает маркер: немедленный ретрай — легитимный полный прогон (§7.9)', async () => {
