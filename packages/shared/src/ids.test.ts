@@ -6,6 +6,7 @@ import {
   materializeBatchId,
   newId,
   ORBIS_NAMESPACE,
+  postFinancialBatchId,
   processingMessageId,
   recurringInstanceId,
   rejectMessageId,
@@ -28,6 +29,15 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
     expect(a).toBe(materializeBatchId(tpl.toLowerCase(), '2026-07-01', '2026-07-15'));
     expect(a).not.toBe(materializeBatchId(tpl, '2026-07-01', '2026-07-14')); // другое окно — другой batch
     expect(a).not.toBe(recurringInstanceId(tpl, '2026-07-01'));
+  });
+
+  test('postFinancialBatchId (A5): формула §3.3 «post-financial:<instance_id>» байт-точно, lowercase, без пересечений', () => {
+    // Инстанс из примера §5.4 → batch перехода planned→fact; литерал фиксирует формулу
+    const inst = 'e7d0bfa4-f62a-59c1-b560-1c17cb32e89f';
+    expect(postFinancialBatchId(inst)).toBe('6f6322c7-60d1-57f1-aa30-9b74f19a1149');
+    expect(postFinancialBatchId(inst.toUpperCase())).toBe(postFinancialBatchId(inst));
+    expect(postFinancialBatchId(inst)).not.toBe(inst);
+    expect(postFinancialBatchId(inst)).not.toBe(recurringInstanceId(inst, '2026-07-01'));
   });
 
   test('формулы тредов детерминированы и различны', () => {

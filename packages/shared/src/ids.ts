@@ -61,3 +61,13 @@ export function recurringInstanceId(templateId: string, dateISO: string): string
 export function materializeBatchId(templateId: string, from: string, to: string): string {
   return uuidv5(`materialize:${templateId.toLowerCase()}:${from}:${to}`, ORBIS_NAMESPACE);
 }
+
+/**
+ * batch_id перехода planned→fact recurring-инстанса (01 §3.3, Task A5) — формула
+ * спеки дословно: uuidv5(NS, "post-financial:<instance_id>"). Детерминирован
+ * инстансом: конкурентные выполнения transition с разных устройств сходятся к
+ * одному action по audit-PK (§7.8), а Undo перехода «липкий» — повтор реплеится.
+ */
+export function postFinancialBatchId(instanceId: string): string {
+  return uuidv5(`post-financial:${instanceId.toLowerCase()}`, ORBIS_NAMESPACE);
+}
