@@ -824,6 +824,12 @@ async function prepareAttach(
   // Стадия 4
   const nextAspects: AspectsMap = { ...currentAspects, [aspectId]: data };
   await assertFinancial(ctx, input.entity_id, nextAspects, batch);
+  // «Один budget-parent» (§4.2/§13.7) и для attach: аспект orbis/budget ретроспективно
+  // делает сущность budget-parent'ом её financial-детей — инвариант проверяется не
+  // только в relation_create, иначе attach обходит его (ревью 2026-07-09)
+  if (aspectId === 'orbis/budget') {
+    await assertBudgetAttachKeepsSingleParent(ctx, input.entity_id, batch);
+  }
   gateEntitlements(ctx, tool);
 
   // Эффект batch
@@ -858,6 +864,43 @@ async function prepareAttach(
       return { result: toWire(row) };
     },
   };
+}
+
+/**
+ * Стадия 4 attach orbis/budget (§4.2/§13.7): у каждого financial-ребёнка сущности
+ * (исходящие parent-связи, включая созданные/минус удалённые тем же batch) не должно
+ * быть ДРУГОГО budget-parent'а — иначе attach ретроспективно создал бы второй конверт.
+ * Строки детей берутся под замок (loadEntityForUpdate), сама проверка — переиспользование
+ * assertSingleBudgetParent: тот же row-lock target'а и тот же INVARIANT-отказ.
+ */
+async function assertBudgetAttachKeepsSingleParent(
+  ctx: ExecCtx,
+  entityId: string,
+  batch?: BatchState,
+): Promise<void> {
+  const rows = await ctx.tx
+    .select({ targetId: relations.targetId })
+    .from(relations)
+    .where(and(eq(relations.sourceId, entityId), eq(relations.relationType, 'parent')));
+  const deleted = batch?.deletedRelations ?? [];
+  const childIds = new Set(
+    rows
+      .map((r) => r.targetId)
+      .filter(
+        (t) =>
+          !deleted.some(
+            (d) => d.sourceId === entityId && d.targetId === t && d.relationType === 'parent',
+          ),
+      ),
+  );
+  for (const c of batch?.createdRelations ?? []) {
+    if (c.relationType === 'parent' && c.sourceId === entityId) childIds.add(c.targetId);
+  }
+  for (const childId of childIds) {
+    const child = await loadEntityForUpdate(ctx, childId, batch);
+    if (!child || !hasAspect(child, 'orbis/financial')) continue;
+    await assertSingleBudgetParent(ctx.tx, entityId, childId, batch?.graph());
+  }
 }
 
 // ---------------------------------------------------------------------------

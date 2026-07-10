@@ -311,6 +311,43 @@ describe('один budget-parent (§4.2, §13.7)', () => {
     expect(await parentCount(txn.id)).toBe(2); // проект + один конверт
   });
 
+  test('11a. attach orbis/budget на parent financial-ребёнка с другим конвертом → INVARIANT single_budget_parent (дыра §4.2)', async () => {
+    // Обход инварианта: сущность X без бюджета становится parent'ом транзакции T
+    // (не-бюджетный parent разрешён), затем attach orbis/budget ретроспективно
+    // делает X вторым budget-parent'ом T — attach обязан быть отклонён.
+    const { env1, txn } = await budgetFixture();
+    ok(await createRelation(env1.id, txn.id, 'parent'));
+    const x = await createEntity({ title: 'Будущий конверт' });
+    ok(await createRelation(x.id, txn.id, 'parent')); // parent без бюджета — легален (тест 10)
+
+    const r = err(
+      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetData() })),
+    );
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('single_budget_parent');
+    // Аспект не приклеился
+    const rows = ok(
+      await execute(db, req('entity_update', { id: x.id, title: 'Будущий конверт' })),
+    );
+    const entity = rows.results[0] as WireEntity;
+    expect('orbis/budget' in entity.aspects).toBe(false);
+  });
+
+  test('11b. attach orbis/budget: financial-дети без другого конверта → attach разрешён', async () => {
+    const txn = await createEntity({
+      title: 'Транзакция без конверта',
+      aspects: { 'orbis/financial': finData() },
+    });
+    const x = await createEntity({ title: 'Единственный конверт' });
+    ok(await createRelation(x.id, txn.id, 'parent'));
+
+    const r = ok(
+      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetData() })),
+    );
+    const entity = r.results[0] as WireEntity;
+    expect('orbis/budget' in entity.aspects).toBe(true);
+  });
+
   test('11. конкурентные привязки к двум конвертам (Promise.all) → ровно одна живая budget-parent (§13.7)', async () => {
     // 5 прогонов: доказываем сериализацию row-lock'ом, а не удачное расписание
     for (let i = 0; i < 5; i++) {
