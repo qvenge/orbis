@@ -264,6 +264,50 @@ describe('ацикличность blocks (§4.2)', () => {
     }
   });
 
+  test('8b. слоёный ромб (~100 рёбер, ~2M простых путей): проверка ацикличности < 1 с — обход по множеству вершин, не по путям', async () => {
+    // Экспоненциальный перебор путей (path-массивы) взрывался на сходящихся путях:
+    // WIDTH^DEPTH простых путей при WIDTH*DEPTH*2 рёбрах. Множество достижимых
+    // вершин (UNION дедупит посещённые) линейно по рёбрам.
+    const WIDTH = 5;
+    const DEPTH = 9;
+    const anchors: WireEntity[] = [];
+    for (let i = 0; i <= DEPTH; i++) {
+      anchors.push(await createEntity({ title: `ромб-якорь-${i}` }));
+    }
+    // Слои строятся в порядке цепочки: у target каждого нового ребра ещё нет
+    // исходящих рёбер, поэтому сама сборка графа дешева и на старом коде.
+    for (let i = 0; i < DEPTH; i++) {
+      const from = anchors[i];
+      const to = anchors[i + 1];
+      if (!from || !to) throw new Error('якоря ромба не собраны');
+      const mids = await Promise.all(
+        Array.from({ length: WIDTH }, (_, j) => createEntity({ title: `ромб-${i}-${j}` })),
+      );
+      for (const mid of mids) ok(await createRelation(from.id, mid.id, 'blocks'));
+      for (const mid of mids) ok(await createRelation(mid.id, to.id, 'blocks'));
+    }
+    const head = first(anchors);
+    const tail = anchors[DEPTH];
+    if (!tail) throw new Error('хвост ромба не собран');
+
+    // Ребро извне в голову ромба: обход стартует с головы и вынужден покрыть весь граф
+    const outsider = await createEntity({ title: 'вне ромба' });
+    const t0 = performance.now();
+    ok(await createRelation(outsider.id, head.id, 'blocks'));
+    const elapsedMs = performance.now() - t0;
+    expect(elapsedMs).toBeLessThan(1000);
+
+    // Замыкание хвост→голова — цикл: INVARIANT с восстановленным путём (кратчайшим)
+    const r = err(await createRelation(tail.id, head.id, 'blocks'));
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('blocks_cycle');
+    const path = (r.error.details as { path?: string[] }).path ?? [];
+    expect(path[0]).toBe(tail.id);
+    expect(path[1]).toBe(head.id);
+    expect(path[path.length - 1]).toBe(tail.id);
+    expect(path.length).toBe(2 * DEPTH + 2); // кратчайший путь через слои + замыкающее ребро
+  }, 240_000);
+
   test('8. ромб (DAG без цикла) создаётся: сходящиеся пути — не цикл', async () => {
     const a = await createEntity({ title: 'Ромб-A' });
     const b = await createEntity({ title: 'Ромб-B' });
