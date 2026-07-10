@@ -474,6 +474,16 @@ async function hasIncomingDerivedFrom(
   );
 }
 
+/**
+ * Монотонный updated_at (§5.2): clock() с ms-точностью не различает два апдейта в один
+ * тик — optimistic-check body пропускал бы stale-правку. Токен конкурентности всегда
+ * строго растёт: max(clock(), prev + 1ms). Доменные таймстампы (completed_at и т.п.)
+ * остаются на чистом clock().
+ */
+function monotonicUpdatedAt(now: Date, prev: Date): Date {
+  return now.getTime() > prev.getTime() ? now : new Date(prev.getTime() + 1);
+}
+
 /** Код/constraint ошибки PG: drizzle может обернуть причину драйвера в цепочку .cause. */
 export function pgErrorInfo(e: unknown): { code?: string; constraint?: string } {
   let cur: unknown = e;
@@ -722,7 +732,8 @@ async function prepareEntityUpdate(
   }
 
   // Стадия 4: нормализации патча + гейт; changed — «как исполнено», prior — для inverse
-  const patch: EntityPatch = { updatedAt: now }; // updated_at проставляется сервером всегда
+  // updated_at проставляется сервером всегда и строго растёт (monotonicUpdatedAt, §5.2)
+  const patch: EntityPatch = { updatedAt: monotonicUpdatedAt(now, current.updatedAt) };
   const changed: Record<string, unknown> = {};
   const prior: Record<string, unknown> = {};
   if (input.title !== undefined) {
@@ -832,8 +843,9 @@ async function prepareAttach(
   }
   gateEntitlements(ctx, tool);
 
-  // Эффект batch
-  batch?.entities.set(input.entity_id, { ...current, aspects: nextAspects, updatedAt: now });
+  // Эффект batch; updated_at строго растёт (monotonicUpdatedAt, §5.2)
+  const updatedAt = monotonicUpdatedAt(now, current.updatedAt);
+  batch?.entities.set(input.entity_id, { ...current, aspects: nextAspects, updatedAt });
 
   const journal: JournalPlan = {
     type: 'entity_updated',
@@ -856,7 +868,7 @@ async function prepareAttach(
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const updated = await applyCtx.tx
         .update(entities)
-        .set({ aspects: nextAspects, updatedAt: now })
+        .set({ aspects: nextAspects, updatedAt })
         .where(eq(entities.id, input.entity_id))
         .returning();
       const row = updated[0];

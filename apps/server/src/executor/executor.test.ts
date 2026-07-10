@@ -455,6 +455,42 @@ describe('executor: optimistic-check body (§5.2, §13.1)', () => {
     expect(e1.bodyRefs).toEqual([refId]); // body_refs пересчитан при update body
   });
 
+  test('6d. монотонный updated_at: два апдейта в один тик clock → updated_at строго растёт (§5.2)', async () => {
+    // updatedAt = clock() не монотонен: два апдейта в одну миллисекунду оставляли
+    // updated_at прежним, и stale-правка body проходила optimistic-check. Теперь
+    // updatedAt = max(clock(), prev + 1ms).
+    const e = await createNote(); // createdAt/updatedAt = T0
+    const u1 = firstEntity(
+      await execute(db, req('entity_update', { id: e.id, title: 'v1' })), // clock = T0
+    ).updatedAt;
+    const u2 = firstEntity(
+      await execute(db, req('entity_update', { id: e.id, title: 'v2' })), // clock = T0
+    ).updatedAt;
+    expect(new Date(u1).getTime()).toBeGreaterThan(T0.getTime());
+    expect(new Date(u2).getTime()).toBeGreaterThan(new Date(u1).getTime());
+
+    // Поведенческое следствие: правка body по версии u1 после апдейта u2 — STALE_VERSION,
+    // а не тихая победа (раньше u1 === u2 и stale-правка проходила)
+    const stale = await execute(
+      db,
+      req('entity_update', { id: e.id, body: 'stale', expectedUpdatedAt: u1 }),
+    );
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) expect(stale.error.code).toBe('STALE_VERSION');
+  });
+
+  test('6e. монотонный updated_at и для attach_<aspect> в один тик clock', async () => {
+    const e = await createNote(); // T0
+    const a1 = firstEntity(
+      await execute(db, req('attach_orbis_task', { entity_id: e.id, data: { status: 'inbox' } })),
+    ).updatedAt;
+    const a2 = firstEntity(
+      await execute(db, req('attach_orbis_task', { entity_id: e.id, data: { status: 'planned' } })),
+    ).updatedAt;
+    expect(new Date(a1).getTime()).toBeGreaterThan(T0.getTime());
+    expect(new Date(a2).getTime()).toBeGreaterThan(new Date(a1).getTime());
+  });
+
   test('6c. патч без body (tags) со stale-версией — проходит (LWW)', async () => {
     const e = await createNote();
     const r = await execute(
