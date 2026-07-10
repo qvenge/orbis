@@ -5,6 +5,7 @@ export * from './fast-path';
 export * from './ids';
 export * from './query/grammar';
 export * from './query/parse';
+export * from './recurrence';
 export * from './schemas/aspects';
 export * from './schemas/entity';
 export * from './schemas/relation';
