@@ -112,9 +112,10 @@ describe('mapSdkResult: полнота stopReason', () => {
     ['stop', 'end_turn'],
     ['length', 'max_tokens'],
     ['tool-calls', 'tool_use'],
-    // наш LLMResponse (Веха 0) уже трёхзначный — не расширяем: аварийные
-    // резоны детерминированно сводятся к end_turn (конец хода, ответ как есть)
-    ['content-filter', 'end_turn'],
+    // отказ модели различим (§7.7, ревью 2026-07-09): SDK сводит refusal к
+    // content-filter — наружу идёт 'refusal', send-message отвечает error_card
+    ['content-filter', 'refusal'],
+    // прочие аварийные резоны детерминированно сводятся к end_turn (ответ как есть)
     ['error', 'end_turn'],
     ['other', 'end_turn'],
   ] as const)("finishReason '%s' → '%s'", (finishReason, stopReason) => {

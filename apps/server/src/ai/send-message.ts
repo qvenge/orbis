@@ -59,6 +59,9 @@ export const STEP_LIMIT_NOTE = '[цикл остановлен: достигну
  */
 export const MAX_TOKENS_NOTE = '[ответ обрезан: достигнут потолок токенов]';
 
+/** Текст error_card при отказе модели (stopReason refusal). */
+export const REFUSAL_NOTE = 'модель отказалась отвечать';
+
 /** Ключи entitlements §8, которые гейтит sendMessage. */
 const AI_REQUESTS_KEY = 'ai.requests_per_day';
 const AI_TOKENS_KEY = 'ai.tokens_per_day';
@@ -239,6 +242,15 @@ export async function sendMessage(
       usage.inputTokens += response.usage.inputTokens;
       usage.outputTokens += response.usage.outputTokens;
       usage.requestCount += 1;
+
+      // Отказ модели (refusal, §7.7): терминальный исход хода — error_card в хронологию,
+      // tool-вызовы шага-отказа НЕ исполняются, цикл не продолжается. Токены шага
+      // уже отметрены (честный расход).
+      if (response.stopReason === 'refusal') {
+        cards.push({ kind: 'error_card', code: 'LLM_REFUSAL', message: REFUSAL_NOTE });
+        finalText = response.content;
+        break;
+      }
 
       // end_turn / max_tokens / tool_use без вызовов (защита от пустого зацикливания): финал.
       if (response.stopReason !== 'tool_use' || response.toolCalls.length === 0) {

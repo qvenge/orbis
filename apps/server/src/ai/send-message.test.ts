@@ -338,6 +338,45 @@ describe('ai.sendMessage: обрыв по потолку токенов', () => 
   });
 });
 
+describe('ai.sendMessage: отказ модели (stopReason refusal)', () => {
+  test('refusal → error_card «модель отказалась отвечать», tool-цикл не продолжается', async () => {
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    // toolCalls при refusal не исполняются: отказ — терминальный исход хода
+    const refusal: LLMResponse = {
+      content: '',
+      toolCalls: [
+        { id: 'call-0', name: 'entity_create', input: { title: 'Не должна появиться', tags: [] } },
+      ],
+      usage: { inputTokens: 10, outputTokens: 5 },
+      stopReason: 'refusal',
+    };
+    const scripted = new ScriptedProvider([refusal]);
+    const r = await callerWith(user, scripted).ai.sendMessage({
+      id: newId(),
+      threadId,
+      content: 'сделай что-нибудь запретное',
+    });
+
+    expect(scripted.requests).toHaveLength(1); // ровно один шаг, цикла нет
+    const cards = cardsOf(r.assistantMessage);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ kind: 'error_card', code: 'LLM_REFUSAL' });
+    expect(String((cards[0] as { message?: string }).message)).toContain('отказалась');
+
+    // Тул шага-отказа не исполнен — сущности нет, действий нет
+    const rows = await withIdentity(db, user, (tx) =>
+      tx.select().from(entities).where(eq(entities.title, 'Не должна появиться')),
+    );
+    expect(rows).toHaveLength(0);
+    expect(r.actions).toEqual([]);
+
+    // Метеринг честный: шаг отказа потреблён
+    const usage = await usageRows(user);
+    expect(usage.some((row) => row.requestCount >= 1)).toBe(true);
+  });
+});
+
 describe('ai.sendMessage (г): сбой провайдера — деградация §7.9', () => {
   test('provider.chat бросает → LLM_UNAVAILABLE (503); user-сообщение сохранено, очереди нет', async () => {
     const user = freshUserId();
