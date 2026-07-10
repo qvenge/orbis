@@ -77,9 +77,10 @@ export function Subtasks({ parentId }: { parentId: string }) {
           placeholder="Добавить подзадачу…"
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') void add();
+            // isComposing: Enter-подтверждение IME-композиции не должно создавать подзадачу.
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing) void add();
           }}
-          className="min-w-0 flex-1 bg-transparent text-sm text-text outline-none placeholder:text-text-muted"
+          className="min-w-0 flex-1 rounded-md bg-transparent px-1 text-sm text-text outline-none transition placeholder:text-text-muted focus-visible:bg-surface-2/70"
         />
         {draft.trim() && (
           <Button variant="ghost" size="sm" onClick={add} disabled={isPending}>

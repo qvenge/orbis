@@ -9,11 +9,18 @@ const AMOUNT_TONE_CLASS: Record<MoneyTone, string> = {
   positive: 'text-success',
 };
 
-// Дата без времени ('2026-07-18') → '18 июл.'; битое значение возвращаем как есть.
-function formatDay(value: string): string {
+// Дата ('2026-07-18' или полный ISO) → '18 июл.'; битое значение возвращаем как есть.
+// Date-only парсится как полночь UTC — форматируем в UTC, иначе в западных таймзонах
+// срок уехал бы на день назад. Полный ISO — в локальной зоне.
+export function formatDay(value: string): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
-  return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' }).format(d);
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+  return new Intl.DateTimeFormat('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+    ...(dateOnly ? { timeZone: 'UTC' } : {}),
+  }).format(d);
 }
 
 /**

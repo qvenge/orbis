@@ -32,12 +32,14 @@ export function Filters({ onApply }: { onApply: (query: string) => void }) {
         placeholder="Фильтр по тегу…"
         onChange={(e) => setTagDraft(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && tagDraft.trim()) {
-            apply({ ...state, tags: [...state.tags, tagDraft.trim()] });
+          // isComposing: Enter-подтверждение IME не добавляет тег; дубликат тега — no-op.
+          if (e.key === 'Enter' && !e.nativeEvent.isComposing && tagDraft.trim()) {
+            const tag = tagDraft.trim();
+            if (!state.tags.includes(tag)) apply({ ...state, tags: [...state.tags, tag] });
             setTagDraft('');
           }
         }}
-        className="min-w-32 flex-1 bg-transparent py-1 text-sm text-text outline-none placeholder:text-text-muted"
+        className="min-w-32 flex-1 rounded-md bg-transparent px-1 py-1 text-sm text-text outline-none transition placeholder:text-text-muted focus-visible:bg-surface-2/70"
       />
       {state.tags.map((t) => (
         <Chip key={t} onRemove={() => apply({ ...state, tags: state.tags.filter((x) => x !== t) })}>
