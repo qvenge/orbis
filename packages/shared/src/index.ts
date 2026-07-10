@@ -1,5 +1,6 @@
 export * from './aspect-registry';
 export * from './constants';
+export * from './contracts/budget';
 export * from './contracts/tools';
 export * from './fast-path';
 export * from './ids';

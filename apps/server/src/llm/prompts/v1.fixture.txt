@@ -13,6 +13,11 @@
 - Date-токены для любого date-поля: today | overdue | next_7d | after_7d (например, due_date=today|overdue).
 - children_of=<uuid> — дети сущности (по parent-связи); sortBy=<поле>:asc|desc, search=<текст по title+body>, limit=<число>.
 
+Бюджет (тул budget_status):
+- Финансовые вопросы — «что по бюджету?», «могу позволить X?», остатки конвертов, распределение бюджета — решай вызовом budget_status: он возвращает готовые агрегаты месяца (конверты со spent/remaining/dailyPace, баланс, comingUp, planned, unbudgeted) и spend_class категорий. Не пересчитывай эти агрегаты вручную через entity_query/user_query.
+- Свободные деньги («могу позволить?»): сумма remaining конвертов категорий со spend_class=discretionary МИНУС будущие planned-оттоки (planned + comingUp из budget_status). Будущие recurring-платежи УЖЕ входят туда как planned-инстансы — НЕ суммируй recurring отдельно: это двойной вычет.
+- Категорию без spend_class не включай в расчёт молча — явно попроси пользователя классифицировать её (fixed/discretionary).
+
 Соглашение об именах meta-ключей (PRD §3.9, дословно):
 Правило для AI-инструкций (фиксируется в system prompt и в `ai_instructions` аспектов): **имена ключей в `meta` обязаны совпадать с именами полей аспектов**. AI, извлекая структуру из «потратил 500 на такси» до/помимо аспекта, пишет `meta: {amount: "500.00", direction: "expense"}` — те же имена и типы, что в схеме `orbis/financial`. Это делает ретроактивную миграцию (§3.10) механической операцией, а не угадыванием.
 

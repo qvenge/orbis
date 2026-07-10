@@ -215,6 +215,18 @@ const userQueryJsonSchema = {
   additionalProperties: false,
 };
 
+const budgetStatusJsonSchema = {
+  type: 'object',
+  properties: {
+    month: {
+      type: 'string',
+      pattern: '^\\d{4}-(0[1-9]|1[0-2])$',
+      description: 'месяц YYYY-MM; по умолчанию — текущий месяц пользователя',
+    },
+  },
+  additionalProperties: false,
+};
+
 const threadPostJsonSchema = {
   type: 'object',
   properties: {
@@ -285,6 +297,16 @@ const CORE_TOOLS: OrbisToolDef[] = [
     inputJsonSchema: userQueryJsonSchema,
     kind: 'read',
     internalOnly: true, // §9.2: в публичный реестр не входит, MCP не отдаётся
+  },
+  {
+    // Task A6 (03-budget §4.3/§4.5/§4.7): готовые агрегаты Budget для финансовых
+    // вопросов — модель НЕ пересчитывает конверты сама через entity_query/user_query.
+    // Доступен и MCP (§9.3 — тот же реестр); политика §7.10: чтение → execute.
+    name: 'budget_status',
+    description:
+      'Готовые агрегаты бюджета месяца (03-budget): конверты (spent/effectiveLimit/remaining/dailyPace), баланс периода, comingUp (recurring-инстансы на 14 дней), planned (ручные запланированные покупки), unbudgeted и spend_class категорий. Используй для финансовых вопросов («что по бюджету?», «могу позволить X?», остатки конвертов). planned и comingUp уже включают будущие recurring-оттоки — НЕ суммируй recurring отдельно (двойной вычет).',
+    inputJsonSchema: budgetStatusJsonSchema,
+    kind: 'read',
   },
   {
     name: 'thread_post',

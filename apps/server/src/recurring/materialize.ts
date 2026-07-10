@@ -41,7 +41,7 @@ type AspectsMap = Record<string, Record<string, unknown>>;
 type TemplateRow = typeof entities.$inferSelect;
 
 /** Сдвиг ISO-даты на days дней — чистая календарная арифметика через Date.UTC. */
-function addDays(dateISO: string, days: number): string {
+export function addDays(dateISO: string, days: number): string {
   if (!DATE_RE.test(dateISO)) {
     throw new RangeError(`Некорректная дата (ожидается YYYY-MM-DD): "${dateISO}"`);
   }

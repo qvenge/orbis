@@ -14,6 +14,7 @@ import {
   attachAspectInput,
   type BatchExecuteInput,
   batchExecuteInput,
+  budgetStatusInput,
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
@@ -25,6 +26,7 @@ import {
   relationDeleteInput,
 } from '@orbis/shared';
 import type { z } from 'zod';
+import { budgetStatus } from '../budget/aggregates';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import type { Db } from '../db/client';
@@ -120,6 +122,9 @@ export async function dispatchTool(
       // запроса) исполняет executor в СОБСТВЕННЫХ tx — из живого tx его не зовём
       // (истощение пула соединений), см. recurring/with-materialization.ts
       if (def.name === 'entity_query') return { kind: 'entity_query' };
+      // budget_status — тоже вне pre-tx: конвейер §2.8 (postDue + материализация)
+      // внутри budgetStatus исполняет executor в собственных tx
+      if (def.name === 'budget_status') return { kind: 'budget_status' };
       if (def.kind === 'read')
         return { kind: 'done', out: await runRead(tx, ctx, def.name, input) };
       return {
@@ -152,6 +157,7 @@ export async function dispatchTool(
     if (pre.kind === 'done') return pre.out;
     // await обязателен: return без await вывел бы reject за пределы try/catch ниже
     if (pre.kind === 'entity_query') return await runEntityQuery(ctx, input);
+    if (pre.kind === 'budget_status') return await runBudgetStatus(ctx, input);
     if (pre.def.name === 'thread_post') {
       // §7.10 распространяется и на thread_post (kind='mutate' в реестре — ради
       // политики): по MVP-таблице одиночная не-архивирующая мутация → execute, но
@@ -192,6 +198,7 @@ type Resolution =
   | { kind: 'unknown' }
   | { kind: 'done'; out: ToolDispatchResult }
   | { kind: 'entity_query' } // исполняется вне pre-tx — хук материализации §5.4
+  | { kind: 'budget_status' } // вне pre-tx — конвейер §2.8 (postDue + материализация)
   | {
       kind: 'mutate';
       def: OrbisToolDef;
@@ -263,7 +270,8 @@ async function runRead(
   name: string,
   input: unknown,
 ): Promise<ToolDispatchResult> {
-  // entity_query сюда не попадает — своя ветка Resolution (хук материализации §5.4)
+  // entity_query/budget_status сюда не попадают — свои ветки Resolution
+  // (хук материализации §5.4 / конвейер §2.8 исполняются вне pre-tx)
   if (name === 'entity_get') {
     const parsed = parseEnvelope(entityGetInput, input, 'entity_get');
     return { status: 'ok', result: await readEntity(tx, ctx.actorUserId, parsed) };
@@ -298,6 +306,18 @@ async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDis
       return { status: 'ok', result: entities, card };
     },
   });
+}
+
+/**
+ * budget_status (Task A6, 03-budget §4.3/§4.5/§4.7): готовые агрегаты Budget для
+ * финансовых вопросов LLM/MCP. Исполняется вне pre-tx: budgetStatus начинается
+ * конвейером §2.8 (postDueInstances + materializeInstances) — executor в собственных tx.
+ * Карточки нет: результат — данные для ответа модели, а не сущность/выборка (02 §2.3).
+ */
+async function runBudgetStatus(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
+  const parsed = parseEnvelope(budgetStatusInput, input, 'budget_status');
+  const result = await budgetStatus(ctx.db, ctx.actorUserId, parsed.month);
+  return { status: 'ok', result };
 }
 
 /**
