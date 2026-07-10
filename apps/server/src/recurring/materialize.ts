@@ -222,8 +222,14 @@ async function materializeTemplate(
     dates = expandRecurrence(schedule.recurrence as RecurrenceRule, wall.date, from, to);
   } catch (e) {
     // Битое правило (RangeError, fail-fast A2): пропускаем ШАБЛОН, а не роняем весь
-    // запрос вызывающего — остальные шаблоны материализуются (закреплено тестом)
-    if (e instanceof RangeError) return 0;
+    // запрос вызывающего — остальные шаблоны материализуются (закреплено тестом).
+    // warn с id — иначе «вечно нематериализуемый» шаблон недиагностируем (fix round A3)
+    if (e instanceof RangeError) {
+      console.warn(
+        `[recurring/materialize] шаблон ${template.id} пропущен: битое recurrence-правило — ${e.message}`,
+      );
+      return 0;
+    }
     throw e;
   }
   if (dates.length === 0) return 0;
@@ -266,7 +272,11 @@ async function materializeTemplate(
     // выше по audit-PK как replay, сюда не доходит.
     if (r.error.code === 'CONFLICT') continue;
     // Прочие структурированные отказы (INVARIANT битых данных, LIMIT): шаблон
-    // пропускается — материализация не имеет права ронять запрос пользователя
+    // пропускается — материализация не имеет права ронять запрос пользователя;
+    // warn с id и кодом — для диагностики «вечно нематериализуемого» шаблона
+    console.warn(
+      `[recurring/materialize] шаблон ${template.id} пропущен: отказ executor ${r.error.code} — ${r.error.message}`,
+    );
     return 0;
   }
   return 0;

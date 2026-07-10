@@ -49,6 +49,7 @@ import {
   QueryCompileError,
 } from '../query/compile';
 import { queryContext } from '../query/context';
+import { queryWithMaterialization } from '../recurring/with-materialization';
 import { toWireEntityFromSql } from '../wire';
 import {
   type AspectToolRow,
@@ -115,6 +116,10 @@ export async function dispatchTool(
           ),
         };
       }
+      // entity_query — вне pre-tx: хук материализации §5.4 (recurring-инстансы окна
+      // запроса) исполняет executor в СОБСТВЕННЫХ tx — из живого tx его не зовём
+      // (истощение пула соединений), см. recurring/with-materialization.ts
+      if (def.name === 'entity_query') return { kind: 'entity_query' };
       if (def.kind === 'read')
         return { kind: 'done', out: await runRead(tx, ctx, def.name, input) };
       return {
@@ -146,6 +151,7 @@ export async function dispatchTool(
     }
     if (pre.kind === 'done') return pre.out;
     // await обязателен: return без await вывел бы reject за пределы try/catch ниже
+    if (pre.kind === 'entity_query') return await runEntityQuery(ctx, input);
     if (pre.def.name === 'thread_post') {
       // §7.10 распространяется и на thread_post (kind='mutate' в реестре — ради
       // политики): по MVP-таблице одиночная не-архивирующая мутация → execute, но
@@ -185,6 +191,7 @@ export async function dispatchTool(
 type Resolution =
   | { kind: 'unknown' }
   | { kind: 'done'; out: ToolDispatchResult }
+  | { kind: 'entity_query' } // исполняется вне pre-tx — хук материализации §5.4
   | {
       kind: 'mutate';
       def: OrbisToolDef;
@@ -256,7 +263,7 @@ async function runRead(
   name: string,
   input: unknown,
 ): Promise<ToolDispatchResult> {
-  if (name === 'entity_query') return runEntityQuery(tx, ctx, input);
+  // entity_query сюда не попадает — своя ветка Resolution (хук материализации §5.4)
   if (name === 'entity_get') {
     const parsed = parseEnvelope(entityGetInput, input, 'entity_get');
     return { status: 'ok', result: await readEntity(tx, ctx.actorUserId, parsed) };
@@ -265,24 +272,32 @@ async function runRead(
   throw new Error(`runRead: нет обработчика read-тула «${name}»`); // недостижимо: kind задаёт реестр
 }
 
-async function runEntityQuery(
-  tx: Tx,
-  ctx: ToolCallCtx,
-  input: unknown,
-): Promise<ToolDispatchResult> {
+/**
+ * entity_query с хуком материализации (§5.4, fix round A3): тот же общий каркас, что у
+ * entity.query/count роутера, — окно по start_at/occurred_on материализует recurring-
+ * инстансы ДО компиляции; ошибки парсинга/компиляции — ExecError/VALIDATION (§6.4),
+ * их развернёт catch dispatchTool.
+ */
+async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
   const parsed = parseEnvelope(entityQueryInput, input, 'entity_query');
-  const cctx = await queryContext(tx, ctx.actorUserId, null); // `this` вне контекста сущности
-  const ast = parseAstOrThrow(parsed.query, cctx);
-  const compiled = compileOrThrow(() => compileQuery(ast, cctx));
-  const rows = await tx.execute(compiled);
-  const entities = [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
-  const card: Card = {
-    kind: 'query_result',
-    ...(ast.title !== undefined && { title: ast.title }),
-    count: entities.length,
-    entityIds: entities.map((e) => e.id),
-  };
-  return { status: 'ok', result: entities, card };
+  return queryWithMaterialization({
+    db: ctx.db,
+    actorUserId: ctx.actorUserId,
+    thisEntityId: null, // `this` вне контекста сущности
+    parse: (cctx) => parseAstOrThrow(parsed.query, cctx),
+    run: async (tx, ast, cctx) => {
+      const compiled = compileOrThrow(() => compileQuery(ast, cctx));
+      const rows = await tx.execute(compiled);
+      const entities = [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
+      const card: Card = {
+        kind: 'query_result',
+        ...(ast.title !== undefined && { title: ast.title }),
+        count: entities.length,
+        entityIds: entities.map((e) => e.id),
+      };
+      return { status: 'ok', result: entities, card };
+    },
+  });
 }
 
 /**

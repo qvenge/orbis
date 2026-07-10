@@ -69,6 +69,13 @@ export const chatRouter = router({
           // IS NOT DISTINCT FROM — NULL-безопасно: у audit/undo-строк ключа type нет
           // (`->> 'type'` = NULL), обычное `=` выкинуло бы их вместе с маркерами.
           sql`NOT (${chatMessages.role} = 'system' AND ${chatMessages.metadata} ->> 'type' IS NOT DISTINCT FROM 'processing')`,
+          // Audit системных действий (материализация recurring-инстансов §5.4,
+          // source='system') — журнал §7.8 остаётся в chat_messages (replay/Undo),
+          // но контент треда «batch: операций — N» на каждый пересчёт агенды не
+          // засоряет. @>-containment по массиву actions; COALESCE — NULL-безопасно
+          // (урок A1): у user/undo/pending-строк ключа actions нет → NULL @> … = NULL,
+          // без COALESCE такие строки терялись бы. Audit chat/fast_path/mcp/ui — видимы.
+          sql`NOT (${chatMessages.role} = 'system' AND COALESCE(${chatMessages.metadata} -> 'actions' @> '[{"source": "system"}]'::jsonb, false))`,
         ];
         if (input.before !== undefined) {
           const sep = input.before.indexOf('|');

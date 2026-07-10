@@ -2,7 +2,7 @@
 // Task A3: ленивая материализация recurring-инстансов (01 §5.4, §3.3; 02 §6).
 // Интеграционные тесты против живой БД: инстансы порождает ТОЛЬКО сервер, через
 // executor (source='system'), с детерминированными uuidv5-id и горизонтом 14 дней.
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { type FieldCatalog, parseQuery, recurringInstanceId } from '@orbis/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -10,6 +10,7 @@ import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { appRouter } from '../router';
+import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
 import { materializationWindow, materializeInstances } from './materialize';
 
@@ -277,11 +278,11 @@ describe('materializeInstances (01 §5.4)', () => {
     expect(rows.length).toBe(0);
   });
 
-  test('битое recurrence-правило пропускается, не роняя материализацию остальных', async () => {
+  test('битое recurrence-правило пропускается с console.warn (диагностируемость), не роняя остальных', async () => {
     const owner = freshUserId();
     // byweekday: массив произвольных строк проходит схему реестра, но expandRecurrence
     // на неизвестном дне недели бросает RangeError — шаблон пропускаем, запрос не роняем
-    await createTemplate(owner, {
+    const brokenId = await createTemplate(owner, {
       title: 'Битый шаблон',
       aspects: {
         'orbis/schedule': {
@@ -291,19 +292,29 @@ describe('materializeInstances (01 §5.4)', () => {
         },
       },
     });
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
     const healthyId = await createTemplate(owner, {
       title: 'Здоровый шаблон',
       aspects: { 'orbis/schedule': dailySchedule('2026-07-01') },
     });
 
-    const r = await materializeInstances({
-      db,
-      ownerId: owner,
-      from: '2026-07-01',
-      to: '2026-07-02',
-      today: '2026-07-01',
-    });
-    expect(r.created).toBe(2); // только здоровый
+    try {
+      const r = await materializeInstances({
+        db,
+        ownerId: owner,
+        from: '2026-07-01',
+        to: '2026-07-02',
+        today: '2026-07-01',
+      });
+      expect(r.created).toBe(2); // только здоровый
+
+      // Молчаливый пропуск диагностируем: одна warn-строка с id «вечно
+      // нематериализуемого» шаблона (fix round A3, Minor-3)
+      const warned = warn.mock.calls.map((c) => c.join(' ')).join('\n');
+      expect(warned).toContain(brokenId);
+    } finally {
+      warn.mockRestore();
+    }
 
     const rows = await ownEntities(
       owner,
@@ -425,5 +436,31 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
 
     const rows = await derivedFrom(owner, templateId);
     expect(rows.length).toBe(0);
+  });
+
+  test('AI-тул entity_query со start_at=next_7d видит материализованные инстансы (dispatch, fix round A3)', async () => {
+    const owner = freshUserId();
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
+      new Date(),
+    );
+    const templateId = await createTemplate(owner, {
+      title: 'Созвон (AI-путь)',
+      aspects: { 'orbis/schedule': dailySchedule(today) },
+    });
+
+    // §5.4 «любой запрос диапазона дат потребителем query-движка»: LLM/MCP-путь тоже
+    const r = await dispatchTool(
+      { db, actorUserId: owner, actorKind: 'ai', source: 'chat', explicitCommand: false },
+      'entity_query',
+      { query: 'start_at=next_7d' },
+    );
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') throw new Error('unreachable');
+    const rows = r.result as Array<{ id: string }>;
+    const ids = new Set(rows.map((e) => e.id));
+    expect(ids.has(recurringInstanceId(templateId, today))).toBe(true);
+    expect(rows.length).toBe(9); // 8 инстансов [today; today+7] + шаблон
+    // Карточка query_result консистентна выдаче
+    if (r.card?.kind === 'query_result') expect(r.card.count).toBe(9);
   });
 });

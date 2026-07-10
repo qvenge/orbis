@@ -24,8 +24,7 @@ import {
   compileQuery,
   QueryCompileError,
 } from '../query/compile';
-import { queryContext } from '../query/context';
-import { materializationWindow, materializeInstances } from '../recurring/materialize';
+import { queryWithMaterialization } from '../recurring/with-materialization';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireEntityFromSql } from '../wire';
 
@@ -69,44 +68,24 @@ function compileAstOrThrow(
 }
 
 /**
- * Общий каркас query/count с хуком материализации (01 §5.4): контекст + парс, затем —
- * если AST содержит условие по date/timestamp-полю orbis/schedule/orbis/financial
- * (start_at/occurred_on) — материализация recurring-инстансов окна запроса ДО
- * компиляции/исполнения. Детект окна — чистая AST-прогулка: запрос без date-условий
- * исполняется ТЕМ ЖЕ tx без единого лишнего обращения к БД. С окном — материализация
- * между транзакциями: executor открывает собственные tx, вложенность в живой tx
- * истощала бы пул соединений.
+ * Хук материализации (01 §5.4) для query/count: общий каркас queryWithMaterialization —
+ * контекст + парс, при окне по start_at/occurred_on — материализация recurring-инстансов
+ * ДО компиляции/исполнения; без окна запрос исполняется тем же tx (детали — в
+ * recurring/with-materialization.ts, тот же каркас у LLM/MCP-диспатча entity_query).
  */
-async function runQueryWithMaterialization<T>(
+function runQueryWithMaterialization<T>(
   db: Db,
   actorUserId: string,
   input: { query: string; thisEntityId?: string },
   run: (tx: Tx, ast: QueryAst, cctx: CompileContext) => Promise<T>,
 ): Promise<T> {
-  type Phase1 =
-    | { kind: 'done'; result: T }
-    | {
-        kind: 'materialize';
-        window: { from: string; to: string };
-        ast: QueryAst;
-        cctx: CompileContext;
-      };
-  const phase1 = await withIdentity(db, actorUserId, async (tx): Promise<Phase1> => {
-    const cctx = await queryContext(tx, actorUserId, input.thisEntityId ?? null);
-    const ast = parseOrThrow(input.query, cctx);
-    const window = materializationWindow(ast, cctx.today);
-    if (window) return { kind: 'materialize', window, ast, cctx };
-    return { kind: 'done', result: await run(tx, ast, cctx) };
-  });
-  if (phase1.kind === 'done') return phase1.result;
-  await materializeInstances({
+  return queryWithMaterialization({
     db,
-    ownerId: actorUserId,
-    from: phase1.window.from,
-    to: phase1.window.to,
-    today: phase1.cctx.today,
+    actorUserId,
+    thisEntityId: input.thisEntityId ?? null,
+    parse: (cctx) => parseOrThrow(input.query, cctx),
+    run,
   });
-  return withIdentity(db, actorUserId, (tx) => run(tx, phase1.ast, phase1.cctx));
 }
 
 const querySignature = z

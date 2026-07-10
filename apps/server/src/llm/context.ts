@@ -205,6 +205,24 @@ function compressSystemRow(content: string, metadata: Record<string, unknown>): 
   return { role: 'user', content: `[система] ${content}` };
 }
 
+/**
+ * Инфраструктурные system-строки, невидимые модели (как и клиенту — зеркало фильтра
+ * chat.listMessages): processing-маркеры §7.9 и audit СИСТЕМНЫХ действий
+ * (source='system' — материализация recurring-инстансов §5.4): «[действие: batch]» на
+ * каждый пересчёт агенды — шум, вытесняющий сигнал из rolling-окна. Журнал §7.8 не
+ * трогаем — только отображение. JS-предикат NULL-безопасен по построению (урок A1):
+ * у строк без ключей type/actions условия ложны; audit chat/fast_path/mcp/ui — остаются.
+ */
+function isInfraSystemRow(role: string, metadata: Record<string, unknown>): boolean {
+  if (role !== 'system') return false;
+  if (metadata.type === 'processing') return true;
+  const actions = metadata.actions;
+  return (
+    Array.isArray(actions) &&
+    actions.some((a) => (a as ActionRecord | null | undefined)?.source === 'system')
+  );
+}
+
 /** Последние CONTEXT_HISTORY_LIMIT сообщений треда — В ХРОНОЛОГИЧЕСКОМ ПОРЯДКЕ. */
 async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> {
   const rows = await tx
@@ -219,11 +237,9 @@ async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> 
     .limit(CONTEXT_HISTORY_LIMIT);
   rows.reverse(); // выборка «последние N» шла с конца — возвращаем хронологию
   const msgs = rows
-    // Processing-маркер ai.sendMessage (§7.9) — инфраструктура, не контент: маркер
-    // СОБСТВЕННОГО прогона всегда в окне и сжимался бы в пустую строку «[система] »
-    .filter(
-      (r) => !(r.role === 'system' && (r.metadata as { type?: unknown }).type === 'processing'),
-    )
+    // Инфраструктура, не контент: processing-маркер СОБСТВЕННОГО прогона всегда в окне
+    // и сжимался бы в пустую строку «[система] »; system-audit — см. isInfraSystemRow
+    .filter((r) => !isInfraSystemRow(r.role, r.metadata as Record<string, unknown>))
     .map((r) => {
       if (r.role === 'user' || r.role === 'assistant') {
         return { role: r.role, content: r.content } satisfies LLMMessage;

@@ -486,6 +486,42 @@ describe('buildContext — слой 4: сжатие audit/системных с�
     // metadata (payload pending) не попадает в контекст
     expect(ctx.messages.map((m) => m.content).join('\n')).not.toContain('batch_execute');
   });
+
+  test('audit системной материализации (source=system) не попадает в историю модели; ui-audit остаётся (fix round A3)', async () => {
+    const user = freshUserId();
+    const entityId = newId();
+    // Отдельные транзакции — детерминированный created_at-порядок
+    const threadId = await withIdentity(db, user, (tx) => ensureGlobalThread(tx, user));
+    await withIdentity(db, user, (tx) =>
+      appendMessage(tx, { id: newId(), threadId, role: 'user', content: 'что на неделе?' }),
+    );
+    // Материализация recurring-инстансов (§5.4): batch-audit source='system' —
+    // инфраструктурный шум на каждый пересчёт агенды, модель его видеть не должна
+    await withIdentity(db, user, (tx) =>
+      appendAudit(tx, threadId, {
+        type: 'batch',
+        entityId: null,
+        actorUserId: user,
+        actorKind: 'owner',
+        source: 'system',
+      }),
+    );
+    // Обычное действие владельца в UI — наблюдаемое событие среды, остаётся
+    await withIdentity(db, user, (tx) =>
+      appendAudit(tx, threadId, {
+        type: 'entity_updated',
+        entityId,
+        actorUserId: user,
+        actorKind: 'owner',
+        source: 'ui',
+      }),
+    );
+    const ctx = await withIdentity(db, user, (tx) => buildContext(tx, { ownerId: user, threadId }));
+    expect(ctx.messages).toEqual([
+      { role: 'user', content: 'что на неделе?' },
+      { role: 'user', content: `[система] [действие: entity_updated ${entityId} (ui)]` },
+    ]);
+  });
 });
 
 describe('toolResultMessage — протокол tool-результатов MVP (для Task 9)', () => {
