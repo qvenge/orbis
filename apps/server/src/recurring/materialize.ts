@@ -308,7 +308,8 @@ function instanceOps(
   const fin = (template.aspects as AspectsMap)['orbis/financial'];
   if (fin) {
     // §5.4/§3.3: occurred_on = дата инстанса, planned=true (до перехода в факт),
-    // recurring=true (инстанс шаблона); привязка к конверту — при переходе в факт (A6+)
+    // recurring=true (инстанс шаблона); к конверту инстанс авто-привязывается бюджет-
+    // хуком executor'а уже при создании (A4, 03-budget §2.3) — planned не входит в spent
     instAspects['orbis/financial'] = { ...fin, occurred_on: date, planned: true, recurring: true };
   }
 
