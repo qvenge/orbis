@@ -390,6 +390,56 @@ describe('авто-привязка: entity_create транзакции (§2.3)'
     ]);
   });
 
+  test('batch «конверт + транзакция» одним batch_execute: транзакция привязана к конверту того же batch', async () => {
+    // Форма CSV-импорта/онбординга: групповая мутация — один batch_execute (01-arch §9.2)
+    const userB = freshUserId();
+    const catB = newId();
+    const envelopeId = newId();
+    const txnId = newId();
+    const batchId = newId();
+    const r = ok(
+      await execute(
+        db,
+        {
+          actorUserId: userB,
+          actorKind: 'owner',
+          source: 'chat',
+          batchId,
+          operations: [
+            {
+              tool: 'entity_create',
+              input: {
+                id: envelopeId,
+                title: 'Конверт из batch',
+                tags: [],
+                aspects: { 'orbis/budget': budgetData(catB, '2026-07-01', '2026-07-31') },
+              },
+            },
+            {
+              tool: 'entity_create',
+              input: {
+                id: txnId,
+                title: 'Транзакция из batch',
+                tags: [],
+                aspects: { 'orbis/financial': finData(catB, '2026-07-10') },
+              },
+            },
+          ],
+        },
+        { sink },
+      ),
+    );
+    expect(await budgetParents(txnId)).toEqual([envelopeId]);
+    // results — только запрошенные операции; журнал несёт и дописанную привязку
+    expect(r.results.length).toBe(2);
+    const action = await actionById(batchId);
+    expect(action.operations.map((o) => o.op)).toEqual([
+      'entity_create',
+      'entity_create',
+      'relation_create',
+    ]);
+  });
+
   test('идемпотентность: повтор batch по batch_id не дублирует привязку', async () => {
     const batchId = newId();
     const txnId = newId();
