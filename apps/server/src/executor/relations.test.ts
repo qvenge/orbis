@@ -377,6 +377,50 @@ describe('один budget-parent (§4.2, §13.7)', () => {
     expect('orbis/budget' in entity.aspects).toBe(false);
   });
 
+  test('11c. entity_update.aspects с orbis/budget — тот же обход, что 11a: INVARIANT single_budget_parent', async () => {
+    // Wire-контракт entity_update принимает aspects-патч: mergeAspects добавляет НОВЫЙ
+    // ключ — второй путь ретроспективного второго budget-parent'а помимо attach (fix round).
+    const { env1, txn } = await budgetFixture();
+    ok(await createRelation(env1.id, txn.id, 'parent'));
+    const x = await createEntity({ title: 'Будущий конверт (update)' });
+    ok(await createRelation(x.id, txn.id, 'parent'));
+
+    const r = err(
+      await execute(
+        db,
+        req('entity_update', { id: x.id, aspects: { 'orbis/budget': budgetData() } }),
+      ),
+    );
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('single_budget_parent');
+    // Аспект не приклеился
+    const rows = ok(await execute(db, req('entity_update', { id: x.id, title: 'X (update)' })));
+    expect('orbis/budget' in (rows.results[0] as WireEntity).aspects).toBe(false);
+  });
+
+  test('11d. entity_update.aspects с orbis/budget: детей с другим конвертом нет → разрешён; detach бюджета не проверяется', async () => {
+    const txn = await createEntity({
+      title: 'Транзакция без конверта (update)',
+      aspects: { 'orbis/financial': finData() },
+    });
+    const x = await createEntity({ title: 'Единственный конверт (update)' });
+    ok(await createRelation(x.id, txn.id, 'parent'));
+
+    const attached = ok(
+      await execute(
+        db,
+        req('entity_update', { id: x.id, aspects: { 'orbis/budget': budgetData() } }),
+      ),
+    );
+    expect('orbis/budget' in (attached.results[0] as WireEntity).aspects).toBe(true);
+
+    // detach (null) не создаёт второго budget-parent'а — инвариант не должен мешать
+    const detached = ok(
+      await execute(db, req('entity_update', { id: x.id, aspects: { 'orbis/budget': null } })),
+    );
+    expect('orbis/budget' in (detached.results[0] as WireEntity).aspects).toBe(false);
+  });
+
   test('11b. attach orbis/budget: financial-дети без другого конверта → attach разрешён', async () => {
     const txn = await createEntity({
       title: 'Транзакция без конверта',

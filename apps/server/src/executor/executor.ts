@@ -729,6 +729,17 @@ async function prepareEntityUpdate(
     }
     // Стадия 4: инвариант §3.3 над финальным состоянием (ловит и detach orbis/schedule)
     await assertFinancial(ctx, input.id, nextAspects, batch);
+    // «Один budget-parent» (§4.2/§13.7) и для aspects-патча: mergeAspects добавляет
+    // НОВЫЙ ключ — второй путь ретроспективного второго конверта помимо attach
+    // (fix round ревью A1.1). Detach (null) второго budget-parent'а не создаёт.
+    // Внутренний undo восстанавливает зафиксированное состояние — не проверяется.
+    if (
+      ctx.internalUndo === undefined &&
+      touched.includes('orbis/budget') &&
+      nextAspects['orbis/budget'] !== undefined
+    ) {
+      await assertBudgetAttachKeepsSingleParent(ctx, input.id, batch);
+    }
   }
 
   // Стадия 4: нормализации патча + гейт; changed — «как исполнено», prior — для inverse
@@ -908,7 +919,9 @@ async function assertBudgetAttachKeepsSingleParent(
   for (const c of batch?.createdRelations ?? []) {
     if (c.relationType === 'parent' && c.sourceId === entityId) childIds.add(c.targetId);
   }
-  for (const childId of childIds) {
+  // FOR UPDATE в детерминированном порядке id — меньше дедлоков при перекрёстных
+  // операциях над теми же детьми (как loadBothEndsForUpdate)
+  for (const childId of [...childIds].sort()) {
     const child = await loadEntityForUpdate(ctx, childId, batch);
     if (!child || !hasAspect(child, 'orbis/financial')) continue;
     await assertSingleBudgetParent(ctx.tx, entityId, childId, batch?.graph());
