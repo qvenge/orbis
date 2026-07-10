@@ -20,6 +20,7 @@ import {
 } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
+import { assertEnvelopeUnique, bindingOps, rebindForEnvelope } from '../budget/binding';
 import type { Db } from '../db/client';
 import { entities, relations } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -89,10 +90,21 @@ interface JournalPlan {
   inverse: ActionOperation[];
 }
 
+/**
+ * Вход бюджет-хука A4 (§2.3): состояние сущности до и после операции. Заполняется
+ * prepare-стадией entity_create/entity_update/attach_<aspect>; после применения
+ * операции executor дописывает в тот же action операции привязки/ребиндинга.
+ */
+interface BudgetHook {
+  before: EntityRow | null;
+  after: EntityRow;
+}
+
 /** Результат стадий 1–4: план записи. apply — стадия 5, единственные записи в БД. */
 interface PreparedOp {
   journal: JournalPlan;
   apply(ctx: ExecCtx): Promise<OpOutcome>;
+  budgetHook?: BudgetHook;
 }
 
 /**
@@ -173,11 +185,24 @@ export async function execute(
       };
       const plan = await prepareOp(ctx, single.tool, single.input); // стадии 1–4
       const out = await plan.apply(ctx); // стадия 5
+      // Бюджет-хук A4 (§2.3): привязка/ребиндинг ТЕМ ЖЕ tx, операции — в тот же action.
+      // Replay по client-UUID ничего не применял — хук не запускается (идемпотентность §5.3)
+      let followUps: PreparedOp[] = [];
+      if (!ctx.internalUndo && out.replay !== true && plan.budgetHook) {
+        followUps = await applyBudgetFollowUps(ctx, [plan.budgetHook]);
+      }
       // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
       // undo-сообщение — undo не порождает нового action (undo неотменяем, §7.8).
       // Иначе — обычный журнал; идемпотентный replay по client-UUID его пропускает (§5.3)
       if (ctx.internalUndo) await ctx.internalUndo.writeUndoMessage(tx);
-      else if (out.replay !== true) await writeJournal(ctx, plan.journal);
+      else if (out.replay !== true) {
+        const allPlans = [plan, ...followUps];
+        await writeJournal(ctx, {
+          ...plan.journal,
+          operations: allPlans.flatMap((p) => p.journal.operations),
+          inverse: aggregateInverse(allPlans),
+        });
+      }
       return {
         ok: true as const,
         actionId,
@@ -288,6 +313,14 @@ async function executeBatch(
         await internalUndo.writeUndoMessage(tx);
         return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
       }
+      // Бюджет-хук A4 (§2.3): после применения ВСЕХ операций batch — привязка/ребиндинг
+      // тем же tx. Дописанные операции входят в тот же action (Undo откатывает целиком);
+      // в results НЕ попадают — ответ batch соответствует запрошенным операциям (§9.2)
+      const followUps = await applyBudgetFollowUps(
+        ctx,
+        plans.flatMap((p) => (p.budgetHook ? [p.budgetHook] : [])),
+      );
+      const allPlans = [...plans, ...followUps];
       // Обычный batch: ОДИН action на весь batch, id = batch_id; inverse — в обратном
       // порядке исполнения (§7.8). PK audit-сообщения — batchAuditMessageId.
       const action: ActionRecord = {
@@ -297,8 +330,8 @@ async function executeBatch(
         actor_user_id: req.actorUserId,
         actor_kind: req.actorKind,
         source: req.source,
-        operations: plans.flatMap((p) => p.journal.operations),
-        inverse: [...plans].reverse().flatMap((p) => [...p.journal.inverse].reverse()),
+        operations: allPlans.flatMap((p) => p.journal.operations),
+        inverse: aggregateInverse(allPlans),
       };
       await sink.write(tx, {
         id: auditId,
@@ -418,6 +451,93 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     action,
     card: { tool: p.tool, entity_id: p.entityId, title: p.title },
   });
+}
+
+/** Inverse планов в порядке отката: обратный порядок исполнения, внутри плана — тоже (§7.8). */
+function aggregateInverse(plans: readonly PreparedOp[]): ActionOperation[] {
+  return [...plans].reverse().flatMap((p) => [...p.journal.inverse].reverse());
+}
+
+/** Данные аспект-ключа изменились операцией (стабильно для одинаковых объектов). */
+function hookAspectChanged(hook: BudgetHook, aspectId: string): boolean {
+  const before = (hook.before?.aspects as AspectsMap | undefined)?.[aspectId];
+  const after = (hook.after.aspects as AspectsMap)[aspectId];
+  return JSON.stringify(before) !== JSON.stringify(after);
+}
+
+/**
+ * Бюджет-хук A4 (03-budget §2.3): операции привязки/ребиндинга для одной применённой
+ * операции. Вызывается ПОСЛЕ apply породившей операции (тем же tx): SQL селектора и
+ * окна ребиндинга видят фактическое состояние, включая эффекты предыдущих операций
+ * batch, — результат зависит только от текущего набора конвертов (§7.3), без
+ * дублирования tie-break в JS. Условия:
+ * (а) итоговая сущность несёт orbis/financial с occurred_on (не шаблон recurring) и
+ *     financial-данные/архивность изменились → bindingOps;
+ * (б) операция затронула orbis/budget (create/update периода-категории/архивация/detach)
+ *     → rebindForEnvelope по окну «старый ИЛИ новый период».
+ */
+async function budgetFollowUpDescs(
+  ctx: ExecCtx,
+  hook: BudgetHook,
+): Promise<Array<{ tool: string; input: unknown }>> {
+  const { before, after } = hook;
+  const ownerId = ctx.req.actorUserId;
+  const beforeAspects = before?.aspects as AspectsMap | undefined;
+  const afterAspects = after.aspects as AspectsMap;
+  const archivedChanged = before !== null && before.archived !== after.archived;
+  const descs: Array<{ tool: string; input: unknown }> = [];
+
+  // (б) конверт: до или после операции сущность несёт orbis/budget
+  if (
+    (beforeAspects?.['orbis/budget'] !== undefined || afterAspects['orbis/budget'] !== undefined) &&
+    (before === null || archivedChanged || hookAspectChanged(hook, 'orbis/budget'))
+  ) {
+    descs.push(
+      ...(await rebindForEnvelope(ctx.tx, {
+        ownerId,
+        envelope: toWire(after),
+        before: before === null ? null : toWire(before),
+      })),
+    );
+  }
+
+  // (а) транзакция: bindingOps сам отсекает шаблоны recurring и архивные сущности
+  if (
+    afterAspects['orbis/financial'] !== undefined &&
+    (before === null || archivedChanged || hookAspectChanged(hook, 'orbis/financial'))
+  ) {
+    descs.push(...(await bindingOps(ctx.tx, { ownerId, entity: toWire(after) })));
+  }
+
+  // Дедуп в рамках хука: сущность с обоими аспектами могла бы породить одинаковые ops
+  const seen = new Set<string>();
+  return descs.filter((d) => {
+    const key = JSON.stringify([d.tool, d.input]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * Применение бюджет-хуков: последовательно prepare → apply каждой дописанной операции
+ * (БД к моменту prepare следующей уже актуальна — инвариант «один budget-parent»
+ * видит удаление старой связи до создания новой). Хуки обрабатываются в порядке
+ * операций: повторный хук видит эффект предыдущего и сходится к пустому diff.
+ * Дописанные планы возвращаются вызывающему для журнала — операции входят в тот же
+ * action, Undo откатывает целиком (§2.3). НЕ вызывается в internalUndo-режиме (§7.8:
+ * undo воспроизводит зафиксированные inverse-операции, ничего не довычисляя).
+ */
+async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<PreparedOp[]> {
+  const applied: PreparedOp[] = [];
+  for (const hook of hooks) {
+    for (const desc of await budgetFollowUpDescs(ctx, hook)) {
+      const plan = await prepareOp(ctx, desc.tool, desc.input);
+      await plan.apply(ctx);
+      applied.push(plan);
+    }
+  }
+  return applied;
 }
 
 /**
@@ -576,6 +696,16 @@ async function prepareEntityCreate(
 
   // Стадия 4: доменные инварианты + entitlements-гейт — всё ДО первой записи
   await assertFinancial(ctx, id, aspects, batch);
+  // Уникальность конверта (03-budget §2.1): дубль точной комбинации отклоняется
+  const budgetAspect = aspects['orbis/budget'];
+  if (budgetAspect !== undefined) {
+    await assertEnvelopeUnique(ctx.tx, {
+      ownerId: ctx.req.actorUserId,
+      entityId: id,
+      budget: budgetAspect,
+      virtualEntities: batch?.entities,
+    });
+  }
   gateEntitlements(ctx, 'entity_create');
 
   const values = {
@@ -621,6 +751,7 @@ async function prepareEntityCreate(
   const inBatch = batch !== undefined;
   return {
     journal,
+    budgetHook: { before: null, after: values as EntityRow },
     // Стадия 5: идемпотентная вставка по client-UUID (§5.3, §9.1)
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const inserted = await applyCtx.tx
@@ -742,6 +873,23 @@ async function prepareEntityUpdate(
     }
   }
 
+  // Уникальность конверта (03-budget §2.1) над ФИНАЛЬНЫМ состоянием: и правка
+  // комбинации, и разархивация (archived=false возвращает конверт в множество
+  // неархивных) не должны создавать дубль. Внутренний undo восстанавливает
+  // зафиксированное состояние — не проверяется (как прочие инварианты выше).
+  const nextBudget = ctx.internalUndo === undefined ? nextAspects['orbis/budget'] : undefined;
+  if (
+    nextBudget !== undefined &&
+    (touched.includes('orbis/budget') || (input.archived === false && current.archived))
+  ) {
+    await assertEnvelopeUnique(ctx.tx, {
+      ownerId: ctx.req.actorUserId,
+      entityId: input.id,
+      budget: nextBudget,
+      virtualEntities: batch?.entities,
+    });
+  }
+
   // Стадия 4: нормализации патча + гейт; changed — «как исполнено», prior — для inverse
   // updated_at проставляется сервером всегда и строго растёт (monotonicUpdatedAt, §5.2)
   const patch: EntityPatch = { updatedAt: monotonicUpdatedAt(now, current.updatedAt) };
@@ -788,7 +936,8 @@ async function prepareEntityUpdate(
   gateEntitlements(ctx, 'entity_update');
 
   // Эффект batch: строка после патча видна следующим операциям
-  batch?.entities.set(input.id, { ...current, ...patch } as EntityRow);
+  const afterRow = { ...current, ...patch } as EntityRow;
+  batch?.entities.set(input.id, afterRow);
 
   const journal: JournalPlan = {
     type: 'entity_updated',
@@ -801,6 +950,7 @@ async function prepareEntityUpdate(
 
   return {
     journal,
+    budgetHook: { before: current, after: afterRow },
     // Стадия 5
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const updated = await applyCtx.tx
@@ -851,12 +1001,20 @@ async function prepareAttach(
   // только в relation_create, иначе attach обходит его (ревью 2026-07-09)
   if (aspectId === 'orbis/budget') {
     await assertBudgetAttachKeepsSingleParent(ctx, input.entity_id, batch);
+    // Уникальность конверта (03-budget §2.1) — attach-путь той же комбинации
+    await assertEnvelopeUnique(ctx.tx, {
+      ownerId: ctx.req.actorUserId,
+      entityId: input.entity_id,
+      budget: data,
+      virtualEntities: batch?.entities,
+    });
   }
   gateEntitlements(ctx, tool);
 
   // Эффект batch; updated_at строго растёт (monotonicUpdatedAt, §5.2)
   const updatedAt = monotonicUpdatedAt(now, current.updatedAt);
-  batch?.entities.set(input.entity_id, { ...current, aspects: nextAspects, updatedAt });
+  const afterRow: EntityRow = { ...current, aspects: nextAspects, updatedAt };
+  batch?.entities.set(input.entity_id, afterRow);
 
   const journal: JournalPlan = {
     type: 'entity_updated',
@@ -875,6 +1033,7 @@ async function prepareAttach(
 
   return {
     journal,
+    budgetHook: { before: current, after: afterRow },
     // Стадия 5
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const updated = await applyCtx.tx

@@ -86,9 +86,15 @@ function finData(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
-function budgetData(): Record<string, unknown> {
+/**
+ * Конверт со СВОЕЙ категорией (default — свежий uuid): тесты этого файла проверяют
+ * инварианты графа на РУЧНЫХ parent-связях, а с A4 (03-budget §2.3) executor
+ * авто-привязывает транзакции к конверту совпадающей категории/периода и энфорсит
+ * уникальность комбинации (§2.1) — фикстуры не должны задевать этот контур.
+ */
+function budgetData(categoryRef: string = newId()): Record<string, unknown> {
   return {
-    category_ref: CATEGORY_REF,
+    category_ref: categoryRef,
     limit: '30000.00',
     period_start: '2026-07-01',
     period_end: '2026-07-31',
