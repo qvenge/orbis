@@ -2,7 +2,7 @@
 // §4.6: chat_messages append-only — только INSERT, updated_at в таблице отсутствует,
 // metadata неизменяема после записи. Отмена действия — не правка журнала, а НОВОЕ
 // системное сообщение {type:'undo', undoes} (§7.8) — тоже через appendMessage.
-import { eq } from 'drizzle-orm';
+import { eq, type SQL, sql } from 'drizzle-orm';
 import { chatMessages } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
@@ -35,6 +35,28 @@ export interface AppendMessageInput {
  * JournalSink (23505 по PK → AuditIdConflictError → replay batch, §7.8).
  * Клиентскому пути нужен appendMessageIdempotent.
  */
+/**
+ * SQL-предикаты «инфраструктурная system-строка невидима»: единый фрагмент для
+ * chat.listMessages (клиент) и historyMessages LLM-контекста (§7.1) — фильтры обязаны
+ * оставаться зеркальными, и оба применяются В SQL до limit rolling-окна (иначе плотный
+ * системный шум вытеснял бы живой диалог из окна модели). Журнал §7.8 не трогаем —
+ * только отображение. Скрывается:
+ * - processing-маркер ai.sendMessage (§7.9): живой давал бы пустой system-пузырь в окне
+ *   рефетча, маркер краша висел бы навсегда; IS NOT DISTINCT FROM — NULL-безопасно
+ *   (у audit/undo-строк ключа type нет, обычное `=` выкинуло бы их вместе с маркерами);
+ * - audit СИСТЕМНЫХ действий (source='system' — материализация recurring-инстансов
+ *   §5.4): «batch: операций — N» на каждый пересчёт агенды — шум. @>-containment по
+ *   массиву actions; COALESCE — NULL-безопасно (урок A1): у user/undo/pending-строк
+ *   ключа actions нет → NULL @> … = NULL, без COALESCE они терялись бы.
+ *   Audit chat/fast_path/mcp/ui — видим.
+ */
+export function excludeInfraSystemRows(): SQL[] {
+  return [
+    sql`NOT (${chatMessages.role} = 'system' AND ${chatMessages.metadata} ->> 'type' IS NOT DISTINCT FROM 'processing')`,
+    sql`NOT (${chatMessages.role} = 'system' AND COALESCE(${chatMessages.metadata} -> 'actions' @> '[{"source": "system"}]'::jsonb, false))`,
+  ];
+}
+
 export async function appendMessage(tx: Tx, msg: AppendMessageInput): Promise<WireChatMessage> {
   const rows = await tx
     .insert(chatMessages)

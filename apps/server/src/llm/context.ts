@@ -17,6 +17,7 @@
 // Токен-бюджеты §7.1 — ориентиры, не жёсткие константы: капы ниже (50 памятей,
 // превью 200/500, окно 30) — их механическое воплощение для MVP.
 import { and, desc, eq, sql } from 'drizzle-orm';
+import { excludeInfraSystemRows } from '../chat/messages';
 import { chatMessages, entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { readEntity } from '../entity-read';
@@ -206,24 +207,13 @@ function compressSystemRow(content: string, metadata: Record<string, unknown>): 
 }
 
 /**
- * Инфраструктурные system-строки, невидимые модели (как и клиенту — зеркало фильтра
- * chat.listMessages): processing-маркеры §7.9 и audit СИСТЕМНЫХ действий
- * (source='system' — материализация recurring-инстансов §5.4): «[действие: batch]» на
- * каждый пересчёт агенды — шум, вытесняющий сигнал из rolling-окна. Журнал §7.8 не
- * трогаем — только отображение. JS-предикат NULL-безопасен по построению (урок A1):
- * у строк без ключей type/actions условия ложны; audit chat/fast_path/mcp/ui — остаются.
+ * Последние CONTEXT_HISTORY_LIMIT сообщений треда — В ХРОНОЛОГИЧЕСКОМ ПОРЯДКЕ.
+ * Инфраструктурные system-строки (processing-маркеры §7.9, audit системных действий
+ * §5.4) невидимы модели, как и клиенту — общий SQL-фрагмент с chat.listMessages
+ * (excludeInfraSystemRows). Фильтр — В SQL, до limit (финальное ревью фазы A):
+ * JS-фильтр после .limit(30) съедал бы окно плотным системным шумом — 30+ audit-строк
+ * материализации новее живого диалога вытесняли бы его из истории целиком.
  */
-function isInfraSystemRow(role: string, metadata: Record<string, unknown>): boolean {
-  if (role !== 'system') return false;
-  if (metadata.type === 'processing') return true;
-  const actions = metadata.actions;
-  return (
-    Array.isArray(actions) &&
-    actions.some((a) => (a as ActionRecord | null | undefined)?.source === 'system')
-  );
-}
-
-/** Последние CONTEXT_HISTORY_LIMIT сообщений треда — В ХРОНОЛОГИЧЕСКОМ ПОРЯДКЕ. */
 async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> {
   const rows = await tx
     .select({
@@ -232,20 +222,16 @@ async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> 
       metadata: chatMessages.metadata,
     })
     .from(chatMessages)
-    .where(eq(chatMessages.threadId, threadId))
+    .where(and(eq(chatMessages.threadId, threadId), ...excludeInfraSystemRows()))
     .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
     .limit(CONTEXT_HISTORY_LIMIT);
   rows.reverse(); // выборка «последние N» шла с конца — возвращаем хронологию
-  const msgs = rows
-    // Инфраструктура, не контент: processing-маркер СОБСТВЕННОГО прогона всегда в окне
-    // и сжимался бы в пустую строку «[система] »; system-audit — см. isInfraSystemRow
-    .filter((r) => !isInfraSystemRow(r.role, r.metadata as Record<string, unknown>))
-    .map((r) => {
-      if (r.role === 'user' || r.role === 'assistant') {
-        return { role: r.role, content: r.content } satisfies LLMMessage;
-      }
-      return compressSystemRow(r.content, r.metadata as Record<string, unknown>);
-    });
+  const msgs = rows.map((r) => {
+    if (r.role === 'user' || r.role === 'assistant') {
+      return { role: r.role, content: r.content } satisfies LLMMessage;
+    }
+    return compressSystemRow(r.content, r.metadata as Record<string, unknown>);
+  });
   // Инвариант «messages начинается с user» — требование Anthropic Messages API
   // (fix round Task 8): граница окна на assistant-сообщении или ведущем сжатом
   // ai-audit давала бы 400 на КАЖДЫЙ вызов — ни провайдер, ни SDK не санитизируют.
