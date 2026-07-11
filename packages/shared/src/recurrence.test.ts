@@ -96,6 +96,18 @@ describe('expandRecurrence: weekly (01 §3.1)', () => {
     ).toEqual(['2026-07-01', '2026-07-08']);
   });
 
+  test('byweekday=[su]: воскресенье — крайний индекс недели (6), инстансы не съезжают', () => {
+    // 2026-07-01 — среда; воскресенья окна: 05.07 и 12.07
+    expect(
+      expandRecurrence(
+        { freq: 'weekly', interval: 1, byweekday: ['su'] },
+        '2026-07-01',
+        '2026-07-01',
+        '2026-07-14',
+      ),
+    ).toEqual(['2026-07-05', '2026-07-12']);
+  });
+
   test('byweekday: порядок и дубликаты нормализуются, результат хронологический', () => {
     expect(
       expandRecurrence(
@@ -188,6 +200,19 @@ describe('expandRecurrence: валидация входа (fail-fast, прави
         '2026-07-10',
       ),
     ).toThrow(RangeError);
+  });
+
+  test('byweekday при freq ≠ weekly → RangeError (молчаливое игнорирование скрывало бы битое правило)', () => {
+    for (const freq of ['daily', 'monthly'] as const) {
+      expect(() =>
+        expandRecurrence(
+          { freq, interval: 1, byweekday: ['mo'] },
+          '2026-07-01',
+          '2026-07-01',
+          '2026-07-10',
+        ),
+      ).toThrow(RangeError);
+    }
   });
 
   test('byweekday: неизвестный токен → RangeError', () => {

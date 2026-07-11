@@ -264,6 +264,40 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     ).rejects.toMatchObject({ code: 'UNPROCESSABLE_CONTENT' });
   });
 
+  test('архивная planned-покупка → INVARIANT (сначала разархивировать); состояние не тронуто', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    await createEnvelope(user, cat, JULY);
+    const planned = await exec(user, 'entity_create', {
+      title: 'Отложенная покупка',
+      tags: [],
+      aspects: {
+        'orbis/financial': {
+          amount: '8000.00',
+          currency: 'RUB',
+          direction: 'expense',
+          category_ref: cat,
+          occurred_on: PLANNED_ON,
+          planned: true,
+        },
+      },
+    });
+    await exec(user, 'entity_update', { id: planned.id, archived: true });
+
+    await expect(
+      ownerCaller(user).budget.confirmPurchase({
+        entityId: planned.id,
+        occurredOn: ACTUAL_ON,
+        batchId: newId(),
+      }),
+    ).rejects.toMatchObject({
+      code: 'UNPROCESSABLE_CONTENT',
+      message: expect.stringContaining('разархивируйте'),
+    });
+    // не тронута: осталась архивным планом
+    expect((await finOf(planned.id)).planned).toBe(true);
+  });
+
   test('recurring-инстанс (derived_from) → INVARIANT (его переводит postDue, §2.8)', async () => {
     const user = freshUserId();
     const cat = newId();
@@ -335,7 +369,11 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
         occurredOn: ACTUAL_ON,
         batchId: newId(),
       }),
-    ).rejects.toMatchObject({ code: 'UNPROCESSABLE_CONTENT' });
+    ).rejects.toMatchObject({
+      code: 'UNPROCESSABLE_CONTENT',
+      // ссылка на §2.8 (recurring-конвейер), а не §2.9 (фазы конверта) — опечатка ревью
+      message: expect.stringContaining('(§2.8)'),
+    });
   });
 
   test('не-financial сущность → INVARIANT', async () => {

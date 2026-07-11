@@ -284,6 +284,27 @@ describe('budget.rolloverPreview (03-budget §2.6, §3.5)', () => {
     expect(p.needsSetup).toBe(false);
   });
 
+  test('валютная граница NOT EXISTS: категория с единственным USD-конвертом и RUB-тратами — spending-only строка превью, а не молчаливое исчезновение', async () => {
+    const user = freshUserId();
+    const catMain = await createCategory(user, 'Еда', '🍔');
+    const catTravel = await createCategory(user, 'Путешествия', '✈️');
+    // История есть: месячный RUB-конверт прошлого месяца у другой категории
+    await createEnvelope(user, catMain, prevStart, prevEnd, '10000.00');
+    // Путешествия: единственный конверт — USD; траты прошлого месяца — RUB (дефолт).
+    // USD-конверт НЕ бюджетирует RUB-траты — категория обязана попасть в превью
+    // как «траты без конверта» (симметрия с валютной границей остальных запросов, §5)
+    await createEnvelope(user, catTravel, prevStart, prevEnd, '1000.00', { currency: 'USD' });
+    await createTxn(user, catTravel, '4321.00', `${prev}-12`);
+
+    const p = await ownerCaller(user).budget.rolloverPreview({ month: target });
+    const row = p.rows.find((r) => r.categoryId === catTravel);
+    expect(row).toMatchObject({
+      prevSpent: '4321.00',
+      carryover: '0.00',
+      suggestedLimit: '4400.00',
+    });
+  });
+
   test('needsSetup=true: траты прошлого месяца без единого конверта — первый месяц без истории (§3.5)', async () => {
     const user = freshUserId();
     const cat = await createCategory(user, 'Еда');

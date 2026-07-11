@@ -777,9 +777,11 @@ export async function rolloverPreview(
     const hasHistory = prevEnvs.length > 0;
 
     // Категории с фактическими defaultCurrency-тратами прошлого месяца (§2.2: факт =
-    // planned=false, ≤ сегодня; шаблоны recurring исключены) БЕЗ конверта, пересекающего
-    // прошлый месяц: категория с произвольным конвертом §2.9 сюда не попадает — её
-    // траты уже бюджетировались, а произвольный период в rollover не участвует.
+    // planned=false, ≤ сегодня; шаблоны recurring исключены) БЕЗ defaultCurrency-конверта,
+    // пересекающего прошлый месяц: категория с произвольным конвертом §2.9 сюда не
+    // попадает — её траты уже бюджетировались, а произвольный период в rollover не
+    // участвует. Валютная граница NOT EXISTS симметрична остальным запросам (§5):
+    // чужевалютный конверт RUB-траты не бюджетирует и категорию из превью не прячет.
     const spendingRows = (await tx.execute(sql`
       SELECT e.aspects->'orbis/financial'->>'category_ref' AS category_id,
              sum((e.aspects->'orbis/financial'->>'amount')::numeric)::text AS total
@@ -798,6 +800,7 @@ export async function rolloverPreview(
           WHERE env.owner_id = ${ownerId} AND NOT env.archived
             AND env.aspects->'orbis/budget'->>'category_ref'
                 = e.aspects->'orbis/financial'->>'category_ref'
+            AND coalesce(env.aspects->'orbis/budget'->>'currency', ${defCur}) = ${defCur}
             AND env.aspects->'orbis/budget'->>'period_start' <= ${prevRange.end}
             AND env.aspects->'orbis/budget'->>'period_end' >= ${prevRange.start}
         )

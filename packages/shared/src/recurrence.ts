@@ -111,6 +111,13 @@ export function expandRecurrence(
   if (!Number.isInteger(rule.interval) || rule.interval < 1) {
     throw new RangeError(`recurrence.interval должен быть целым ≥ 1, получен: ${rule.interval}`);
   }
+  if (rule.byweekday !== undefined && rule.freq !== 'weekly') {
+    // Молчаливое игнорирование скрывало бы битое правило: пользователь ждёт «по понедельникам»,
+    // а получает совсем другие даты (fail-fast — та же политика, что для interval/freq).
+    throw new RangeError(
+      `recurrence.byweekday допустим только при freq='weekly', получен freq=${JSON.stringify(rule.freq)}`,
+    );
+  }
 
   const startDays = epochDays(toParts(seriesStart));
   const lower = Math.max(startDays, epochDays(toParts(from)));

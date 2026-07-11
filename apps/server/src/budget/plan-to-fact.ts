@@ -78,7 +78,7 @@ export async function confirmPurchase(
     }
     if (row.recurrence != null) {
       throw invariant(
-        'шаблон повторения не переводится в факт этим действием (§2.9); правьте инстансы',
+        'шаблон повторения не переводится в факт этим действием (§2.8); правьте инстансы',
       );
     }
     if (row.derived) {
