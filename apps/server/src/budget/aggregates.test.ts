@@ -6,7 +6,7 @@
 // unbudgeted). Все даты — ОТНОСИТЕЛЬНО реального «сегодня» (Europe/Moscow — дефолт
 // сида §7.3), кроме приёмки §7.1 с фиксированными датами мая/июня 2026.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { BudgetOverview, BudgetStatusResult } from '@orbis/shared';
+import { type BudgetOverview, type BudgetStatusResult, newId } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
@@ -515,5 +515,72 @@ describe('тул budget_status (Шаг 4 брифа: §4.3, §4.7)', () => {
     const ov = await budgetOverview(db, userA, curMonth);
     expect(status.balance).toEqual(ov.balance);
     expect(status.categories.length).toBeGreaterThanOrEqual(14); // 12 сида + 2 кастомные
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Шаблоны recurring и spent (финальное ревью фазы A): шаблон — не операция (§3.1),
+// в spent он не входит НИ при какой привязке; считаются только его инстансы, по разу.
+// ---------------------------------------------------------------------------
+describe('spent не считает recurring-шаблон (§2.2, §2.8)', () => {
+  test('конверсия факт-транзакции в шаблон: связь снята, spent — только posted-инстанс, один раз', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    const env = await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
+    const fact = await exec(user, 'entity_create', txn(cat, '500.00', today));
+
+    // «Пометить повторяющейся»: attach orbis/schedule.recurrence на привязанный факт
+    await exec(user, 'attach_orbis_schedule', {
+      entity_id: fact.id,
+      data: {
+        start_at: `${today}T12:00:00+03:00`,
+        timezone: TZ,
+        recurrence: { freq: 'monthly', interval: 1 },
+      },
+    });
+
+    // Конвейер §2.8 дважды: первый прогон материализует окно (postDue идёт ДО
+    // материализации), второй постит сегодняшний инстанс (planned→fact).
+    // spent = 500.00 ровно один раз (posted-инстанс); шаблон не считается —
+    // до фикса выходило 1000.00 (шаблон с висящей привязкой + инстанс, двойной счёт).
+    await budgetOverview(db, user, curMonth);
+    const ov = await budgetOverview(db, user, curMonth);
+    expect(envById(ov, env.id).spent).toBe('500.00');
+  });
+
+  test('висящая parent-связь на шаблон (защита в SQL): spent = 0', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    await exec(user, 'entity_create', envelope(cat, cmStart, cmEnd, '10000.00'));
+    // Шаблон с occurred_on (валиден §3.3: recurrence на той же сущности); until в прошлом —
+    // инстансы не материализуются, изоляция ровно на SQL-фильтр spentByEnvelope
+    const tpl = await exec(user, 'entity_create', {
+      title: 'Шаблон с висящей связью',
+      tags: [],
+      aspects: {
+        'orbis/schedule': {
+          start_at: `${today}T12:00:00+03:00`,
+          timezone: TZ,
+          recurrence: { freq: 'monthly', interval: 1, until: addDaysISO(today, -1) },
+        },
+        'orbis/financial': {
+          amount: '700.00',
+          direction: 'expense',
+          category_ref: cat,
+          occurred_on: today,
+        },
+      },
+    });
+    // Висящая связь (легаси-данные/ручной relation_create): бюджет-хук на relation_create
+    // не срабатывает — связь остаётся, spent обязан отфильтровать шаблон сам
+    const st = await envelopeForCategory(db, user, { categoryId: cat, date: today });
+    if (st === null) throw new Error('конверт не найден');
+    await exec(user, 'relation_create', {
+      source_id: st.envelope.id,
+      target_id: tpl.id,
+      relation_type: 'parent',
+    });
+    const after = await envelopeForCategory(db, user, { categoryId: cat, date: today });
+    expect(after?.spent).toBe('0.00');
   });
 });

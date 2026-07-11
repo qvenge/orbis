@@ -123,7 +123,10 @@ async function diffBindingOps(
  * Операции привязки для транзакции: удалить прежний budget-parent (если сменился),
  * создать новый. Пустой массив — привязка актуальна. Вызывается executor'ом внутри
  * того же batch, что породившая мутация (§2.3: «одним batch_execute»).
- * Шаблоны recurring (orbis/schedule.recurrence) и архивные сущности не привязываются.
+ * Шаблоны recurring (orbis/schedule.recurrence) и архивные сущности не привязываются;
+ * шаблон, ставший таковым конверсией привязанной транзакции («пометить повторяющейся»,
+ * attach orbis/schedule.recurrence), ОТВЯЗЫВАЕТСЯ — иначе spent считал бы шаблон
+ * вместе с его инстансами (двойной счёт, финальное ревью фазы A).
  */
 export async function bindingOps(
   tx: Tx,
@@ -131,7 +134,14 @@ export async function bindingOps(
 ): Promise<BudgetOpDesc[]> {
   const { ownerId, entity } = args;
   const fin = entity.aspects['orbis/financial'];
-  if (fin === undefined || entity.archived || hasScheduleRecurrence(entity.aspects)) return [];
+  if (fin === undefined || entity.archived) return [];
+  if (hasScheduleRecurrence(entity.aspects)) {
+    const current = await budgetParentsOf(tx, entity.id);
+    return current.map((src) => ({
+      tool: 'relation_delete' as const,
+      input: { source_id: src, target_id: entity.id, relation_type: 'parent' as const },
+    }));
+  }
   const defCur = await defaultCurrencyOf(tx, ownerId);
   return diffBindingOps(tx, ownerId, defCur, entity.id, fin);
 }

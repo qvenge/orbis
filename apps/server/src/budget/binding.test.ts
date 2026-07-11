@@ -747,3 +747,61 @@ describe('уникальность конверта: (category_ref, currency, pe
     expect(after[0]?.n).toBe(sinkEntriesBefore[0]?.n);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Конверсия транзакции в recurring-шаблон и обратно (финальное ревью фазы A):
+// шаблон — не операция (§3.1), существующая привязка обязана сняться тем же action,
+// иначе spent конверта считал бы шаблон вместе с его инстансами (двойной счёт).
+// ---------------------------------------------------------------------------
+describe('конверсия транзакции в recurring-шаблон снимает привязку (§2.3, §3.1)', () => {
+  const user = freshUserId();
+  const cat = newId();
+  let envId = '';
+  let txnId = '';
+
+  test('attach orbis/schedule.recurrence на привязанную факт-транзакцию → budget-parent снят тем же action', async () => {
+    const { entity: env } = await createEntity(user, {
+      title: 'Подписки — июль',
+      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+    });
+    envId = env.id;
+    const { entity: txn } = await createEntity(user, {
+      title: 'Оплата сервиса',
+      aspects: { 'orbis/financial': finData(cat, '2026-07-05') },
+    });
+    txnId = txn.id;
+    expect(await budgetParents(txnId)).toEqual([envId]);
+
+    const r = ok(
+      await execute(
+        db,
+        req(user, 'attach_orbis_schedule', {
+          entity_id: txnId,
+          data: {
+            start_at: '2026-07-05T09:00:00.000Z',
+            recurrence: { freq: 'monthly', interval: 1 },
+          },
+        }),
+        { sink },
+      ),
+    );
+    expect(await budgetParents(txnId)).toEqual([]);
+    // снятие привязки — в том же action (Undo откатывает конверсию целиком)
+    const action = await actionById(r.actionId);
+    expect(action.operations.map((o) => o.op)).toEqual([
+      'attach_orbis_schedule',
+      'relation_delete',
+    ]);
+  });
+
+  test('обратная конверсия: detach orbis/schedule возвращает привязку', async () => {
+    ok(
+      await execute(
+        db,
+        req(user, 'entity_update', { id: txnId, aspects: { 'orbis/schedule': null } }),
+        { sink },
+      ),
+    );
+    expect(await budgetParents(txnId)).toEqual([envId]);
+  });
+});

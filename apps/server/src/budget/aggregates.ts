@@ -97,7 +97,9 @@ function daysInclusive(from: string, to: string): number {
  * spent ВСЕХ конвертов набора одним запросом (§2.2, бриф A6 — без N+1): факт-расходы
  * (planned=false) детей по relation parent, occurred_on ≤ сегодня, валюта транзакции
  * (coalesce с defaultCurrency) = валюте СВОЕГО конверта (join env — конверты набора
- * могут быть в разных валютах; чужая валюта в spent не входит, §5).
+ * могут быть в разных валютах; чужая валюта в spent не входит, §5). Шаблоны recurring
+ * (orbis/schedule.recurrence) — не операции (§2.8): висящая parent-связь на шаблон
+ * (легаси-данные, ручной relation_create) не должна давать двойной счёт с инстансами.
  */
 async function spentByEnvelope(
   tx: Tx,
@@ -120,6 +122,7 @@ async function spentByEnvelope(
     WHERE r.relation_type = 'parent'
       AND r.source_id IN (${ids})
       AND e.owner_id = ${ownerId} AND NOT e.archived
+      AND e.aspects->'orbis/schedule'->'recurrence' IS NULL
       AND e.aspects->'orbis/financial'->>'direction' = 'expense'
       AND coalesce((e.aspects->'orbis/financial'->>'planned')::boolean, false) = false
       AND (e.aspects->'orbis/financial'->>'occurred_on') <= ${today}

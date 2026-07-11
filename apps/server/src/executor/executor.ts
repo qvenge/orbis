@@ -471,8 +471,8 @@ function hookAspectChanged(hook: BudgetHook, aspectId: string): boolean {
  * окна ребиндинга видят фактическое состояние, включая эффекты предыдущих операций
  * batch, — результат зависит только от текущего набора конвертов (§7.3), без
  * дублирования tie-break в JS. Условия:
- * (а) итоговая сущность несёт orbis/financial с occurred_on (не шаблон recurring) и
- *     financial-данные/архивность изменились → bindingOps;
+ * (а) итоговая сущность несёт orbis/financial и financial-данные/архивность/шаблонность
+ *     (orbis/schedule) изменились → bindingOps (шаблон recurring отвязывается);
  * (б) операция затронула orbis/budget (create/update периода-категории/архивация/detach)
  *     → rebindForEnvelope по окну «старый ИЛИ новый период».
  */
@@ -501,10 +501,16 @@ async function budgetFollowUpDescs(
     );
   }
 
-  // (а) транзакция: bindingOps сам отсекает шаблоны recurring и архивные сущности
+  // (а) транзакция: bindingOps сам отсекает шаблоны recurring и архивные сущности.
+  // orbis/schedule в условии — сценарий «пометить повторяющейся» (§3.1): attach/detach
+  // recurrence меняет шаблонность при неизменном financial, привязку надо пересчитать
+  // (шаблон отвязывается, экс-шаблон привязывается заново)
   if (
     afterAspects['orbis/financial'] !== undefined &&
-    (before === null || archivedChanged || hookAspectChanged(hook, 'orbis/financial'))
+    (before === null ||
+      archivedChanged ||
+      hookAspectChanged(hook, 'orbis/financial') ||
+      hookAspectChanged(hook, 'orbis/schedule'))
   ) {
     descs.push(...(await bindingOps(ctx.tx, { ownerId, entity: toWire(after) })));
   }
