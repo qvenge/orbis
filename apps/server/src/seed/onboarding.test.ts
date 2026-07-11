@@ -303,6 +303,77 @@ describe('ownerOnly (§9.3): агент против владельца', () => 
   });
 });
 
+// Task A9 (слайс 2, §4.4): view `orbis-budget` в installedViews. Новые пользователи
+// получают его при сидировании; засиденные ДО слайса 2 (пустой installedViews) —
+// идемпотентный бэкфилл при повторном user.seedOnboarding, без дублей и без потери
+// прочих значений/полей.
+describe('installedViews: orbis-budget (§4.4, слайс 2)', () => {
+  test('новый пользователь получает orbis-budget при первом сидировании', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    const s = await caller.user.getSettings();
+    expect(s.installedViews).toEqual(['orbis-budget']);
+  });
+
+  test('пользователь без orbis-budget получает его при повторном seedOnboarding; повтор не дублирует', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    // Симулируем засиденного ДО слайса 2: installedViews пуст
+    await caller.user.updateSettings({ installedViews: [] });
+    expect((await caller.user.getSettings()).installedViews).toEqual([]);
+
+    // Повторный онбординг: guard → { seeded: false }, но бэкфилл дописывает view
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect((await caller.user.getSettings()).installedViews).toEqual(['orbis-budget']);
+
+    // Ещё один повтор — без дубля
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect((await caller.user.getSettings()).installedViews).toEqual(['orbis-budget']);
+  });
+
+  test('кастомные значения installedViews не теряются при бэкфилле', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    await caller.user.updateSettings({ installedViews: ['some-custom-view'] });
+    await caller.user.seedOnboarding();
+
+    const iv = (await caller.user.getSettings()).installedViews;
+    expect(iv).toContain('some-custom-view');
+    expect(iv).toContain('orbis-budget');
+    expect(iv.length).toBe(2);
+  });
+
+  test('бэкфилл не трогает остальные поля user_settings', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    await caller.user.updateSettings({
+      timezone: 'Asia/Almaty',
+      weekStartDay: 'sunday',
+      installedViews: [],
+    });
+    await caller.user.seedOnboarding();
+
+    const s = await caller.user.getSettings();
+    expect(s.installedViews).toEqual(['orbis-budget']);
+    expect(s.timezone).toBe('Asia/Almaty');
+    expect(s.weekStartDay).toBe('sunday');
+    expect(s.defaultCurrency).toBe('RUB');
+    expect(s.pinnedEntities).toEqual([
+      { id: seedSmartListId(user, 'daily-planning'), order: 0 },
+      { id: seedSmartListId(user, 'upcoming'), order: 1 },
+      { id: seedSmartListId(user, 'all-tasks'), order: 2 },
+    ]);
+  });
+});
+
 describe('aspect.list (§9.1): реестр builtin + свои', () => {
   test('возвращает встроенный реестр, отсортирован по id, builtin — ownerId null', async () => {
     const caller = callerFor(freshUserId());

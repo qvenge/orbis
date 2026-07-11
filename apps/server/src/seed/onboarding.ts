@@ -35,6 +35,10 @@ export function seedSmartListId(ownerId: string, slug: string): string {
   return uuidv5(`${ownerId.toLowerCase()}:seed-smartlist:${slug}`, ORBIS_NAMESPACE);
 }
 
+// Первый устанавливаемый view (01-arch §4.4, 03-budget §1): вкладка Budget в web
+// включается по наличию этого id в installedViews. Серверная деталь — не в shared.
+export const BUDGET_VIEW_ID = 'orbis-budget';
+
 export interface SeedResult {
   seeded: boolean; // false — уже было (одноразовость §7)
 }
@@ -49,14 +53,28 @@ export async function seedOnboarding(
   ownerId: string,
   clock: () => Date = () => new Date(),
 ): Promise<SeedResult> {
+  const now = clock();
+
   // Слой 1: guard. FOR UPDATE блокирует существующую строку настроек (защита от гонки с
   // updateSettings); если строки нет — идём сидировать, конкуренцию закрывает слой 2.
   const guard = await tx.execute(
     sql`SELECT 1 FROM user_settings WHERE owner_id = ${ownerId} FOR UPDATE`,
   );
-  if (guard.length > 0) return { seeded: false };
-
-  const now = clock();
+  if (guard.length > 0) {
+    // Бэкфилл A9 (§4.4): пользователь, засиденный ДО слайса 2, мог не иметь orbis-budget.
+    // Идемпотентно дописываем под уже взятой FOR UPDATE-блокировкой — array_append только
+    // при отсутствии (NOT … = ANY): повтор не дублирует, кастомные значения не теряются,
+    // прочие поля настроек не трогаются (updated_at сдвигается лишь при фактической правке,
+    // чтобы web-синк LWW увидел новый view).
+    await tx.execute(
+      sql`UPDATE user_settings
+          SET "installedViews" = array_append("installedViews", ${BUDGET_VIEW_ID}),
+              updated_at = ${now.toISOString()}::timestamptz
+          WHERE owner_id = ${ownerId}
+            AND NOT (${BUDGET_VIEW_ID} = ANY("installedViews"))`,
+    );
+    return { seeded: false };
+  }
 
   // 12 категорий §7.1 — сущности с аспектом orbis/category; spend_class у доходных
   // ОТСУТСТВУЕТ (не null — иначе ajv-валидация упала бы при будущих правках, §3.6).
@@ -105,6 +123,7 @@ export async function seedOnboarding(
       timezone: 'Europe/Moscow',
       defaultCurrency: 'RUB',
       weekStartDay: 'monday',
+      installedViews: [BUDGET_VIEW_ID], // §4.4: Budget — стартовый установленный view
       pinnedEntities: [
         { id: seedSmartListId(ownerId, 'daily-planning'), order: 0 },
         { id: seedSmartListId(ownerId, 'upcoming'), order: 1 },
