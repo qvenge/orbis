@@ -73,6 +73,59 @@ export const envelopeForCategoryInput = z
   .object({ categoryId: z.string().uuid(), date: dateString })
   .strict();
 
+// --- Rollover (§2.6, §3.5, Task A7) ------------------------------------------
+
+const nonNegativeDecimal = z.string().regex(/^\d+(\.\d+)?$/, 'неотрицательная decimal-строка');
+
+/**
+ * Строка превью rollover (§3.5): категория с месячным конвертом прошлого календарного
+ * месяца без конверта-преемника в целевом ЛИБО (когда история есть) категория с
+ * фактическими тратами прошлого месяца без конверта. Произвольные периоды (§2.9)
+ * не участвуют. Всё в defaultCurrency (валютная граница — как categoryTrend, §5).
+ */
+export const rolloverPreviewRowSchema = z.object({
+  categoryId: z.string().uuid(),
+  categoryTitle: z.string(),
+  categoryIcon: z.string().nullable(),
+  prevSpent: decimal, // факт закрытого месячного конверта прошлого периода (§2.2)
+  carryover: decimal, // remaining прошлого периода (§2.6), включая отрицательный
+  suggestedLimit: decimal, // limit прошлого конверта; без истории лимита — spent вверх до 100
+});
+
+export const rolloverPreviewSchema = z.object({
+  month: monthString, // целевой (новый) месяц
+  rows: z.array(rolloverPreviewRowSchema),
+  needsSetup: z.boolean(), // первый месяц без истории (§3.5): rows пуст, есть траты
+});
+
+export const rolloverPreviewInput = z.object({ month: monthString }).strict();
+
+/** Вход мутации rollover: подтверждённые пользователем лимиты/carryover (§3.5). */
+export const rolloverInput = z
+  .object({
+    month: monthString,
+    rows: z
+      .array(
+        z
+          .object({
+            categoryId: z.string().uuid(),
+            limit: nonNegativeDecimal, // как orbis/budget.limit — отрицательный невалиден
+            carryover: decimal, // может быть отрицательным (§2.6) или обнулённым
+          })
+          .strict(),
+      )
+      .min(1),
+    batchId: z.string().uuid(), // идемпотентность batch_execute (§7.8) — id от клиента
+  })
+  .strict();
+
+/** Результат rollover: один action = batchId, Undo откатывает всю группу (§3.5). */
+export const rolloverResultSchema = z.object({
+  actionId: z.string().uuid(),
+  envelopeIds: z.array(z.string().uuid()),
+  idempotentReplay: z.boolean(),
+});
+
 // --- тул budget_status (LLM/MCP, §4.3/§4.5/§4.7) ----------------------------
 
 /** Вход тула budget_status: месяц опционален — дефолт «текущий месяц пользователя». */
@@ -101,3 +154,7 @@ export type CategoryTrendInput = z.infer<typeof categoryTrendInput>;
 export type EnvelopeForCategoryInput = z.infer<typeof envelopeForCategoryInput>;
 export type BudgetStatusInput = z.infer<typeof budgetStatusInput>;
 export type BudgetStatusResult = z.infer<typeof budgetStatusResultSchema>;
+export type RolloverPreview = z.infer<typeof rolloverPreviewSchema>;
+export type RolloverPreviewInput = z.infer<typeof rolloverPreviewInput>;
+export type RolloverInput = z.infer<typeof rolloverInput>;
+export type RolloverResult = z.infer<typeof rolloverResultSchema>;
