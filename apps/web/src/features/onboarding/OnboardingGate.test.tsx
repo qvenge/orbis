@@ -38,18 +38,67 @@ test('первый вход: getSettings NOT_FOUND → seedOnboarding → рен
   expect(calls.some((c) => c.path === 'user.seedOnboarding')).toBe(true);
 });
 
-test('повторный вход: settings есть сразу → seedOnboarding НЕ вызывается', async () => {
+// A9: seedOnboarding вызывается безусловно раз за сессию — сервер идемпотентен
+// ({seeded:false}) и дописывает orbis-budget засиденным до слайса 2 (бэкфилл).
+test('повторный вход БЕЗ orbis-budget: seedOnboarding вызван, рендер не ждёт его; после ответа — refetch настроек', async () => {
+  let seedDone = false;
   const { calls } = renderWithProviders(
     <OnboardingGate>
       <div data-testid="app">app</div>
     </OnboardingGate>,
     (path) => {
-      if (path === 'user.getSettings') return settings;
+      if (path === 'user.getSettings')
+        return seedDone ? { ...settings, installedViews: ['orbis-budget'] } : settings;
+      if (path === 'user.seedOnboarding') {
+        // Медленный бэкфилл: рендер приложения не должен его ждать
+        return new Promise((resolve) =>
+          setTimeout(() => {
+            seedDone = true;
+            resolve({ seeded: false });
+          }, 50),
+        );
+      }
+      throw new Error(`unexpected ${path}`);
+    },
+  );
+  // Приложение рендерится, пока мутация ещё висит
+  await waitFor(() => expect(screen.getByTestId('app')).toBeInTheDocument());
+  expect(calls.some((c) => c.path === 'user.seedOnboarding')).toBe(true);
+  // После {seeded:false} настройки перечитаны — Budget-вкладка появится в этой же сессии
+  await waitFor(() =>
+    expect(calls.filter((c) => c.path === 'user.getSettings').length).toBeGreaterThan(1),
+  );
+});
+
+test('повторный вход С orbis-budget: seedOnboarding всё равно вызван (безусловность), рендер не заблокирован', async () => {
+  const { calls } = renderWithProviders(
+    <OnboardingGate>
+      <div data-testid="app">app</div>
+    </OnboardingGate>,
+    (path) => {
+      if (path === 'user.getSettings') return { ...settings, installedViews: ['orbis-budget'] };
+      if (path === 'user.seedOnboarding') return new Promise(() => {}); // никогда не отвечает
       throw new Error(`unexpected ${path}`);
     },
   );
   await waitFor(() => expect(screen.getByTestId('app')).toBeInTheDocument());
-  expect(calls.some((c) => c.path === 'user.seedOnboarding')).toBe(false);
+  expect(calls.some((c) => c.path === 'user.seedOnboarding')).toBe(true);
+  expect(screen.queryByTestId('onboarding-splash')).not.toBeInTheDocument();
+});
+
+test('фоновый seedOnboarding упал у пользователя С настройками: приложение рендерится, alert не показывается', async () => {
+  renderWithProviders(
+    <OnboardingGate>
+      <div data-testid="app">app</div>
+    </OnboardingGate>,
+    (path) => {
+      if (path === 'user.getSettings') return settings;
+      if (path === 'user.seedOnboarding') throw trpcError('INTERNAL_SERVER_ERROR');
+      throw new Error(`unexpected ${path}`);
+    },
+  );
+  await waitFor(() => expect(screen.getByTestId('app')).toBeInTheDocument());
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });
 
 test('ошибка seedOnboarding: ветка восстановления (не splash), «Повторить» повторяет мутацию', async () => {
