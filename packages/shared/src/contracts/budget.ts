@@ -126,6 +126,27 @@ export const rolloverResultSchema = z.object({
   idempotentReplay: z.boolean(),
 });
 
+// --- Plan → fact (§2.7, §7.6, Task A8): перевод planned-покупки в факт одним batch --
+
+/**
+ * Вход подтверждения покупки (§2.7): перевод РУЧНОЙ planned-покупки в факт одним batch.
+ * occurredOn — фактическая дата (редактируема, default «сегодня» ставит UI; будущая
+ * дата валидна). batchId — идемпотентность и Undo всей группы (§7.8): один action = batchId.
+ */
+export const confirmPurchaseInput = z
+  .object({
+    entityId: z.string().uuid(),
+    occurredOn: dateString,
+    batchId: z.string().uuid(),
+  })
+  .strict();
+
+/** Результат: один action = batchId; Undo восстанавливает план и прежнюю привязку (§2.7). */
+export const confirmPurchaseResultSchema = z.object({
+  actionId: z.string().uuid(),
+  idempotentReplay: z.boolean(),
+});
+
 // --- тул budget_status (LLM/MCP, §4.3/§4.5/§4.7) ----------------------------
 
 /** Вход тула budget_status: месяц опционален — дефолт «текущий месяц пользователя». */
@@ -158,3 +179,5 @@ export type RolloverPreview = z.infer<typeof rolloverPreviewSchema>;
 export type RolloverPreviewInput = z.infer<typeof rolloverPreviewInput>;
 export type RolloverInput = z.infer<typeof rolloverInput>;
 export type RolloverResult = z.infer<typeof rolloverResultSchema>;
+export type ConfirmPurchaseInput = z.infer<typeof confirmPurchaseInput>;
+export type ConfirmPurchaseResult = z.infer<typeof confirmPurchaseResultSchema>;

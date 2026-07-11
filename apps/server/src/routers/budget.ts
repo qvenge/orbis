@@ -7,7 +7,9 @@ import {
   type BudgetOverview,
   budgetOverviewInput,
   type CategoryTrendPoint,
+  type ConfirmPurchaseResult,
   categoryTrendInput,
+  confirmPurchaseInput,
   type EnvelopeStatus,
   envelopeForCategoryInput,
   type RolloverPreview,
@@ -23,6 +25,7 @@ import {
   rolloverCreate,
   rolloverPreview,
 } from '../budget/aggregates';
+import { confirmPurchase } from '../budget/plan-to-fact';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { postDueInstances } from '../recurring/post-due';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
@@ -70,6 +73,21 @@ export const budgetRouter = router({
     .mutation(async ({ ctx, input }): Promise<RolloverResult> => {
       try {
         return await rolloverCreate(ctx.db, ctx.actorUserId, input);
+      } catch (e) {
+        if (e instanceof ExecError) throw execErrorToTRPC(e);
+        throw e;
+      }
+    }),
+
+  /**
+   * Перевод planned-покупки в факт одним batch (§2.7, §7.6) — мутация владельца (§9.3).
+   * Структурированные отказы (INVARIANT пречека и executor'а) → TRPCError.
+   */
+  confirmPurchase: ownerOnlyProcedure
+    .input(confirmPurchaseInput)
+    .mutation(async ({ ctx, input }): Promise<ConfirmPurchaseResult> => {
+      try {
+        return await confirmPurchase(ctx.db, ctx.actorUserId, input);
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;
