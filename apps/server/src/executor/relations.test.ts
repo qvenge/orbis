@@ -86,9 +86,15 @@ function finData(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
-function budgetData(): Record<string, unknown> {
+/**
+ * Конверт со СВОЕЙ категорией (default — свежий uuid): тесты этого файла проверяют
+ * инварианты графа на РУЧНЫХ parent-связях, а с A4 (03-budget §2.3) executor
+ * авто-привязывает транзакции к конверту совпадающей категории/периода и энфорсит
+ * уникальность комбинации (§2.1) — фикстуры не должны задевать этот контур.
+ */
+function budgetData(categoryRef: string = newId()): Record<string, unknown> {
   return {
-    category_ref: CATEGORY_REF,
+    category_ref: categoryRef,
     limit: '30000.00',
     period_start: '2026-07-01',
     period_end: '2026-07-31',
@@ -264,6 +270,50 @@ describe('ацикличность blocks (§4.2)', () => {
     }
   });
 
+  test('8b. слоёный ромб (~100 рёбер, ~2M простых путей): проверка ацикличности < 1 с — обход по множеству вершин, не по путям', async () => {
+    // Экспоненциальный перебор путей (path-массивы) взрывался на сходящихся путях:
+    // WIDTH^DEPTH простых путей при WIDTH*DEPTH*2 рёбрах. Множество достижимых
+    // вершин (UNION дедупит посещённые) линейно по рёбрам.
+    const WIDTH = 5;
+    const DEPTH = 9;
+    const anchors: WireEntity[] = [];
+    for (let i = 0; i <= DEPTH; i++) {
+      anchors.push(await createEntity({ title: `ромб-якорь-${i}` }));
+    }
+    // Слои строятся в порядке цепочки: у target каждого нового ребра ещё нет
+    // исходящих рёбер, поэтому сама сборка графа дешева и на старом коде.
+    for (let i = 0; i < DEPTH; i++) {
+      const from = anchors[i];
+      const to = anchors[i + 1];
+      if (!from || !to) throw new Error('якоря ромба не собраны');
+      const mids = await Promise.all(
+        Array.from({ length: WIDTH }, (_, j) => createEntity({ title: `ромб-${i}-${j}` })),
+      );
+      for (const mid of mids) ok(await createRelation(from.id, mid.id, 'blocks'));
+      for (const mid of mids) ok(await createRelation(mid.id, to.id, 'blocks'));
+    }
+    const head = first(anchors);
+    const tail = anchors[DEPTH];
+    if (!tail) throw new Error('хвост ромба не собран');
+
+    // Ребро извне в голову ромба: обход стартует с головы и вынужден покрыть весь граф
+    const outsider = await createEntity({ title: 'вне ромба' });
+    const t0 = performance.now();
+    ok(await createRelation(outsider.id, head.id, 'blocks'));
+    const elapsedMs = performance.now() - t0;
+    expect(elapsedMs).toBeLessThan(1000);
+
+    // Замыкание хвост→голова — цикл: INVARIANT с восстановленным путём (кратчайшим)
+    const r = err(await createRelation(tail.id, head.id, 'blocks'));
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('blocks_cycle');
+    const path = (r.error.details as { path?: string[] }).path ?? [];
+    expect(path[0]).toBe(tail.id);
+    expect(path[1]).toBe(head.id);
+    expect(path[path.length - 1]).toBe(tail.id);
+    expect(path.length).toBe(2 * DEPTH + 2); // кратчайший путь через слои + замыкающее ребро
+  }, 240_000);
+
   test('8. ромб (DAG без цикла) создаётся: сходящиеся пути — не цикл', async () => {
     const a = await createEntity({ title: 'Ромб-A' });
     const b = await createEntity({ title: 'Ромб-B' });
@@ -309,6 +359,87 @@ describe('один budget-parent (§4.2, §13.7)', () => {
     ok(await createRelation(project.id, txn.id, 'parent'));
     ok(await createRelation(env1.id, txn.id, 'parent')); // parent проекта не мешает конверту
     expect(await parentCount(txn.id)).toBe(2); // проект + один конверт
+  });
+
+  test('11a. attach orbis/budget на parent financial-ребёнка с другим конвертом → INVARIANT single_budget_parent (дыра §4.2)', async () => {
+    // Обход инварианта: сущность X без бюджета становится parent'ом транзакции T
+    // (не-бюджетный parent разрешён), затем attach orbis/budget ретроспективно
+    // делает X вторым budget-parent'ом T — attach обязан быть отклонён.
+    const { env1, txn } = await budgetFixture();
+    ok(await createRelation(env1.id, txn.id, 'parent'));
+    const x = await createEntity({ title: 'Будущий конверт' });
+    ok(await createRelation(x.id, txn.id, 'parent')); // parent без бюджета — легален (тест 10)
+
+    const r = err(
+      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetData() })),
+    );
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('single_budget_parent');
+    // Аспект не приклеился
+    const rows = ok(
+      await execute(db, req('entity_update', { id: x.id, title: 'Будущий конверт' })),
+    );
+    const entity = rows.results[0] as WireEntity;
+    expect('orbis/budget' in entity.aspects).toBe(false);
+  });
+
+  test('11c. entity_update.aspects с orbis/budget — тот же обход, что 11a: INVARIANT single_budget_parent', async () => {
+    // Wire-контракт entity_update принимает aspects-патч: mergeAspects добавляет НОВЫЙ
+    // ключ — второй путь ретроспективного второго budget-parent'а помимо attach (fix round).
+    const { env1, txn } = await budgetFixture();
+    ok(await createRelation(env1.id, txn.id, 'parent'));
+    const x = await createEntity({ title: 'Будущий конверт (update)' });
+    ok(await createRelation(x.id, txn.id, 'parent'));
+
+    const r = err(
+      await execute(
+        db,
+        req('entity_update', { id: x.id, aspects: { 'orbis/budget': budgetData() } }),
+      ),
+    );
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('single_budget_parent');
+    // Аспект не приклеился
+    const rows = ok(await execute(db, req('entity_update', { id: x.id, title: 'X (update)' })));
+    expect('orbis/budget' in (rows.results[0] as WireEntity).aspects).toBe(false);
+  });
+
+  test('11d. entity_update.aspects с orbis/budget: детей с другим конвертом нет → разрешён; detach бюджета не проверяется', async () => {
+    const txn = await createEntity({
+      title: 'Транзакция без конверта (update)',
+      aspects: { 'orbis/financial': finData() },
+    });
+    const x = await createEntity({ title: 'Единственный конверт (update)' });
+    ok(await createRelation(x.id, txn.id, 'parent'));
+
+    const attached = ok(
+      await execute(
+        db,
+        req('entity_update', { id: x.id, aspects: { 'orbis/budget': budgetData() } }),
+      ),
+    );
+    expect('orbis/budget' in (attached.results[0] as WireEntity).aspects).toBe(true);
+
+    // detach (null) не создаёт второго budget-parent'а — инвариант не должен мешать
+    const detached = ok(
+      await execute(db, req('entity_update', { id: x.id, aspects: { 'orbis/budget': null } })),
+    );
+    expect('orbis/budget' in (detached.results[0] as WireEntity).aspects).toBe(false);
+  });
+
+  test('11b. attach orbis/budget: financial-дети без другого конверта → attach разрешён', async () => {
+    const txn = await createEntity({
+      title: 'Транзакция без конверта',
+      aspects: { 'orbis/financial': finData() },
+    });
+    const x = await createEntity({ title: 'Единственный конверт' });
+    ok(await createRelation(x.id, txn.id, 'parent'));
+
+    const r = ok(
+      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetData() })),
+    );
+    const entity = r.results[0] as WireEntity;
+    expect('orbis/budget' in entity.aspects).toBe(true);
   });
 
   test('11. конкурентные привязки к двум конвертам (Promise.all) → ровно одна живая budget-parent (§13.7)', async () => {

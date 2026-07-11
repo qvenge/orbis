@@ -18,11 +18,12 @@ export interface LLMRequest {
   tools: LLMToolDef[];
   maxTokens: number;
 }
+export type LLMStopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'refusal';
 export interface LLMResponse {
   content: string;
   toolCalls: LLMToolCall[];
   usage: { inputTokens: number; outputTokens: number };
-  stopReason: 'end_turn' | 'tool_use' | 'max_tokens';
+  stopReason: LLMStopReason;
 }
 export interface LLMProvider {
   chat(req: LLMRequest): Promise<LLMResponse>;

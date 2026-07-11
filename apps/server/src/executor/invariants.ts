@@ -83,63 +83,41 @@ export async function assertAcyclicBlocks(
   virtual?: VirtualGraphEffects,
 ): Promise<void> {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${ownerId}:blocks`}, 0))`);
-  const vCreated = blocksOnly(virtual?.created);
-  const vDeleted = blocksOnly(virtual?.deleted);
+  const edges = blocksEdgesCte(blocksOnly(virtual?.created), blocksOnly(virtual?.deleted));
 
-  let found: { path: string[] } | undefined;
-  if (vCreated.length === 0 && vDeleted.length === 0) {
-    // SQL дословно из задачи (§4.2)
-    const rows = (await tx.execute(sql`
-      WITH RECURSIVE walk AS (
-        SELECT r.target_id, ARRAY[r.source_id, r.target_id] AS path
-        FROM relations r WHERE r.source_id = ${targetId} AND r.relation_type = 'blocks'
-        UNION ALL
-        SELECT r.target_id, walk.path || r.target_id
-        FROM relations r JOIN walk ON r.source_id = walk.target_id
-        WHERE r.relation_type = 'blocks' AND NOT r.target_id = ANY(walk.path)
-      )
-      SELECT path FROM walk WHERE target_id = ${sourceId} LIMIT 1
-    `)) as unknown as Array<{ path: string[] }>;
-    found = rows[0];
-  } else {
-    // Гибридный граф batch: БД-рёбра (минус удаляемые тем же batch) + виртуальные
-    // рёбра batch — тот же обход, но по CTE edges вместо таблицы relations.
-    const deletedCond =
-      vDeleted.length > 0
-        ? sql`AND (r.source_id, r.target_id) NOT IN (VALUES ${sql.join(
-            vDeleted.map((e) => sql`(${e.sourceId}::uuid, ${e.targetId}::uuid)`),
-            sql`, `,
-          )})`
-        : sql``;
-    const createdUnion =
-      vCreated.length > 0
-        ? sql`UNION ALL SELECT v.source_id, v.target_id FROM (VALUES ${sql.join(
-            vCreated.map((e) => sql`(${e.sourceId}::uuid, ${e.targetId}::uuid)`),
-            sql`, `,
-          )}) AS v(source_id, target_id)`
-        : sql``;
-    const rows = (await tx.execute(sql`
-      WITH RECURSIVE edges (source_id, target_id) AS (
-        SELECT r.source_id, r.target_id FROM relations r
-        WHERE r.relation_type = 'blocks' ${deletedCond}
-        ${createdUnion}
-      ),
-      walk AS (
-        SELECT e.target_id, ARRAY[e.source_id, e.target_id] AS path
-        FROM edges e WHERE e.source_id = ${targetId}
-        UNION ALL
-        SELECT e.target_id, walk.path || e.target_id
-        FROM edges e JOIN walk ON e.source_id = walk.target_id
-        WHERE NOT e.target_id = ANY(walk.path)
-      )
-      SELECT path FROM walk WHERE target_id = ${sourceId} LIMIT 1
-    `)) as unknown as Array<{ path: string[] }>;
-    found = rows[0];
+  // Достижимость по МНОЖЕСТВУ вершин: UNION дедупит уже посещённые, обход линеен по
+  // числу рёбер. Прежний обход по path-массивам перечислял все простые пути и
+  // взрывался экспоненциально на сходящихся путях (ромбовидный граф, ревью 2026-07-09).
+  const hit = (await tx.execute(sql`
+    WITH RECURSIVE edges (source_id, target_id) AS (${edges}),
+    reach (id) AS (
+      SELECT e.target_id FROM edges e WHERE e.source_id = ${targetId}
+      UNION
+      SELECT e.target_id FROM edges e JOIN reach ON e.source_id = reach.id
+    )
+    SELECT 1 AS hit FROM reach WHERE id = ${sourceId} LIMIT 1
+  `)) as unknown as Array<{ hit: number }>;
+  if (hit.length === 0) return;
+
+  // Цикл найден: путь для сообщения восстанавливается ВТОРЫМ запросом только на
+  // ошибочном пути — достижимые рёбра (каждое ровно один раз, UNION) + BFS в JS.
+  const reachableEdges = (await tx.execute(sql`
+    WITH RECURSIVE edges (source_id, target_id) AS (${edges}),
+    walk (source_id, target_id) AS (
+      SELECT e.source_id, e.target_id FROM edges e WHERE e.source_id = ${targetId}
+      UNION
+      SELECT e.source_id, e.target_id FROM edges e JOIN walk ON e.source_id = walk.target_id
+    )
+    SELECT source_id, target_id FROM walk
+  `)) as unknown as Array<{ source_id: string; target_id: string }>;
+  const tail = shortestPath(reachableEdges, targetId, sourceId);
+  if (!tail) {
+    // Недостижимо: та же tx, advisory-lock сериализует blocks-записи владельца
+    throw new Error('assertAcyclicBlocks: цикл обнаружен, но путь не восстановлен');
   }
-  if (!found) return;
 
   // Путь цикла: [$source, target, …, $source] — порядок «A → B → C → A»
-  const path = [sourceId, ...found.path];
+  const path = [sourceId, ...tail];
   const titles = await resolveEntityTitles(tx, path, virtual?.titleOf);
   const rendered = path.map((id) => `«${titles.get(id) ?? id}»`).join(' → ');
   throw new ExecError(
@@ -147,6 +125,72 @@ export async function assertAcyclicBlocks(
     `blocks-связь замкнула бы цикл: ${rendered} (§4.2, граф blocks обязан оставаться ацикличным)`,
     { invariant: 'blocks_cycle', path, titles: path.map((id) => titles.get(id) ?? id) },
   );
+}
+
+/**
+ * CTE-фрагмент blocks-рёбер: БД-строки (минус удаляемые тем же batch) плюс
+ * виртуальные рёбра batch (§7.8). Без виртуальных эффектов — чистый SELECT по relations.
+ */
+function blocksEdgesCte(vCreated: RelationKey[], vDeleted: RelationKey[]) {
+  const deletedCond =
+    vDeleted.length > 0
+      ? sql`AND (r.source_id, r.target_id) NOT IN (VALUES ${sql.join(
+          vDeleted.map((e) => sql`(${e.sourceId}::uuid, ${e.targetId}::uuid)`),
+          sql`, `,
+        )})`
+      : sql``;
+  const createdUnion =
+    vCreated.length > 0
+      ? sql`UNION ALL SELECT v.source_id, v.target_id FROM (VALUES ${sql.join(
+          vCreated.map((e) => sql`(${e.sourceId}::uuid, ${e.targetId}::uuid)`),
+          sql`, `,
+        )}) AS v(source_id, target_id)`
+      : sql``;
+  return sql`
+    SELECT r.source_id, r.target_id FROM relations r
+    WHERE r.relation_type = 'blocks' ${deletedCond}
+    ${createdUnion}
+  `;
+}
+
+/** Кратчайший путь BFS по списку рёбер: [from, …, to]; undefined — недостижимо. */
+function shortestPath(
+  edges: ReadonlyArray<{ source_id: string; target_id: string }>,
+  from: string,
+  to: string,
+): string[] | undefined {
+  const adjacency = new Map<string, string[]>();
+  for (const e of edges) {
+    const out = adjacency.get(e.source_id);
+    if (out) out.push(e.target_id);
+    else adjacency.set(e.source_id, [e.target_id]);
+  }
+  const prev = new Map<string, string>();
+  const visited = new Set([from]);
+  let frontier = [from];
+  while (frontier.length > 0) {
+    const next: string[] = [];
+    for (const node of frontier) {
+      for (const neighbor of adjacency.get(node) ?? []) {
+        if (visited.has(neighbor)) continue;
+        visited.add(neighbor);
+        prev.set(neighbor, node);
+        if (neighbor === to) {
+          const path = [to];
+          for (let cur = to; cur !== from; ) {
+            const p = prev.get(cur);
+            if (p === undefined) return undefined; // недостижимо по построению
+            path.unshift(p);
+            cur = p;
+          }
+          return path;
+        }
+        next.push(neighbor);
+      }
+    }
+    frontier = next;
+  }
+  return undefined;
 }
 
 /**

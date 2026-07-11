@@ -39,6 +39,20 @@ describe('SYSTEM_PROMPT_V1 (§7.1 слой 1)', () => {
     expect(SYSTEM_PROMPT_V1).toContain(TOOL_RESULT_MARKER);
   });
 
+  test('блок Budget (Task A6): budget_status для финансовых вопросов, запрет двойного вычета recurring (03-budget §4.3)', () => {
+    expect(SYSTEM_PROMPT_V1).toContain('budget_status');
+    expect(SYSTEM_PROMPT_V1).toContain('НЕ суммируй recurring отдельно');
+    expect(SYSTEM_PROMPT_V1).toContain('двойной вычет');
+    expect(SYSTEM_PROMPT_V1).toContain('spend_class');
+  });
+
+  test('fix round A6: future_outflows — только direction=expense, доходные инстансы не вычитаются (§4.3)', () => {
+    // comingUp несёт и income-инстансы (зарплата) — без оговорки формула провоцировала
+    // вычитание будущей зарплаты из свободных денег
+    expect(SYSTEM_PROMPT_V1).toContain('только direction=expense');
+    expect(SYSTEM_PROMPT_V1).toMatch(/доходные инстансы[^.\n]*не вычитай/i);
+  });
+
   test('шпаргалка грамматики §6 — модель видит синтаксис entity_query (fix round)', () => {
     expect(SYSTEM_PROMPT_V1).toContain('status=!done&!cancelled'); // NOT-синтаксис
     expect(SYSTEM_PROMPT_V1).toContain('today | overdue | next_7d | after_7d'); // date-токены

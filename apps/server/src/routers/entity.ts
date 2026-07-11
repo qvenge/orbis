@@ -2,10 +2,17 @@
 // Роутер entity (§9.1): ТОЛЬКО трансляция — вход → executor/компилятор, результат → wire,
 // коды executor'а → TRPCError. Бизнес-логики здесь нет: мутации идут единственным путём
 // через execute (§9.2), чтения — под withIdentity (RLS, §4.10).
-import { entityCreateInput, entityGetInput, entityUpdateInput, parseQuery } from '@orbis/shared';
+import {
+  entityCreateInput,
+  entityGetInput,
+  entityUpdateInput,
+  parseQuery,
+  type QueryAst,
+} from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { withIdentity } from '../db/with-identity';
+import type { Db } from '../db/client';
+import { type Tx, withIdentity } from '../db/with-identity';
 import { readEntity } from '../entity-read';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
@@ -17,7 +24,7 @@ import {
   compileQuery,
   QueryCompileError,
 } from '../query/compile';
-import { queryContext } from '../query/context';
+import { queryWithMaterialization } from '../recurring/with-materialization';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireEntityFromSql } from '../wire';
 
@@ -25,12 +32,8 @@ import { toWireEntityFromSql } from '../wire';
 // а тред/сообщение он пишет тем же tx, что executor (§7.8).
 const sink = makeChatJournalSink();
 
-/** Разбор + компиляция: ошибки парсинга/компиляции → BAD_REQUEST, структура в cause (§6.4). */
-function compileOrThrow(
-  query: string,
-  cctx: CompileContext,
-  compile: typeof compileQuery | typeof compileCount,
-) {
+/** Разбор запроса: ошибки парсинга → BAD_REQUEST, структура в cause (§6.4). */
+function parseOrThrow(query: string, cctx: CompileContext): QueryAst {
   const parsed = parseQuery(query, cctx.catalog);
   if (!parsed.ok) {
     // Клиент (1c) рендерит красную плашку по {message, position}
@@ -40,8 +43,17 @@ function compileOrThrow(
       cause: parsed.error,
     });
   }
+  return parsed.ast;
+}
+
+/** Компиляция AST: ошибки компиляции → BAD_REQUEST (§6.4). */
+function compileAstOrThrow(
+  ast: QueryAst,
+  cctx: CompileContext,
+  compile: typeof compileQuery | typeof compileCount,
+) {
   try {
-    return compile(parsed.ast, cctx);
+    return compile(ast, cctx);
   } catch (e) {
     if (e instanceof QueryCompileError) {
       // Структурная ошибка компиляции (`this` вне контекста): позиция неизвестна
@@ -53,6 +65,27 @@ function compileOrThrow(
     }
     throw e;
   }
+}
+
+/**
+ * Хук материализации (01 §5.4) для query/count: общий каркас queryWithMaterialization —
+ * контекст + парс, при окне по start_at/occurred_on — материализация recurring-инстансов
+ * ДО компиляции/исполнения; без окна запрос исполняется тем же tx (детали — в
+ * recurring/with-materialization.ts, тот же каркас у LLM/MCP-диспатча entity_query).
+ */
+function runQueryWithMaterialization<T>(
+  db: Db,
+  actorUserId: string,
+  input: { query: string; thisEntityId?: string },
+  run: (tx: Tx, ast: QueryAst, cctx: CompileContext) => Promise<T>,
+): Promise<T> {
+  return queryWithMaterialization({
+    db,
+    actorUserId,
+    thisEntityId: input.thisEntityId ?? null,
+    parse: (cctx) => parseOrThrow(input.query, cctx),
+    run,
+  });
 }
 
 const querySignature = z
@@ -110,9 +143,8 @@ export const entityRouter = router({
   }),
 
   query: protectedProcedure.input(querySignature).query(({ ctx, input }) =>
-    withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-      const cctx = await queryContext(tx, ctx.actorUserId, input.thisEntityId ?? null);
-      const compiled = compileOrThrow(input.query, cctx, compileQuery);
+    runQueryWithMaterialization(ctx.db, ctx.actorUserId, input, async (tx, ast, cctx) => {
+      const compiled = compileAstOrThrow(ast, cctx, compileQuery);
       const rows = await tx.execute(compiled);
       return [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
     }),
@@ -120,9 +152,8 @@ export const entityRouter = router({
 
   // Бейджи (02 §3.2): count игнорирует limit — compileCount не включает его по построению
   count: protectedProcedure.input(querySignature).query(({ ctx, input }) =>
-    withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-      const cctx = await queryContext(tx, ctx.actorUserId, input.thisEntityId ?? null);
-      const compiled = compileOrThrow(input.query, cctx, compileCount);
+    runQueryWithMaterialization(ctx.db, ctx.actorUserId, input, async (tx, ast, cctx) => {
+      const compiled = compileAstOrThrow(ast, cctx, compileCount);
       const rows = await tx.execute(compiled);
       return { count: Number(rows[0]?.count) };
     }),

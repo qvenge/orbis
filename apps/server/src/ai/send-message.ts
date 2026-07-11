@@ -25,7 +25,7 @@
 //      логируется, но НЕ ломает ответ пользователю (решение Task 9);
 //   7) throw из provider.chat → структурная ошибка LLM_UNAVAILABLE (503): явная
 //      ошибка с возможностью повторить, user-сообщение сохранено, очереди нет (§7.9).
-import { MAX_AGENT_STEPS, newId } from '@orbis/shared';
+import { MAX_AGENT_STEPS, newId, processingMessageId } from '@orbis/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { appendMessage, appendMessageIdempotent, type WireChatMessage } from '../chat/messages';
 import type { Db } from '../db/client';
@@ -58,6 +58,9 @@ export const STEP_LIMIT_NOTE = '[цикл остановлен: достигну
  * на этот client-id, и «повторить» будет возвращать обрезок из replay-ветки.
  */
 export const MAX_TOKENS_NOTE = '[ответ обрезан: достигнут потолок токенов]';
+
+/** Текст error_card при отказе модели (stopReason refusal). */
+export const REFUSAL_NOTE = 'модель отказалась отвечать';
 
 /** Ключи entitlements §8, которые гейтит sendMessage. */
 const AI_REQUESTS_KEY = 'ai.requests_per_day';
@@ -115,7 +118,7 @@ export interface PendingSummary {
   pendingId: string;
 }
 
-export interface SendMessageResult {
+export interface SendMessageAnswer {
   assistantMessage: WireChatMessage;
   actions: ActionSummary[];
   pending: PendingSummary[];
@@ -127,6 +130,24 @@ export interface SendMessageResult {
    */
   replayed: boolean;
 }
+
+/**
+ * Ретрай во время ЖИВОГО первого прогона (маркер processing моложе PROCESSING_TTL_MS):
+ * второй tool-цикл не запускается — клиент перечитывает тред позже (refetch с backoff).
+ */
+export interface SendMessageProcessing {
+  status: 'processing';
+}
+
+export type SendMessageResult = SendMessageAnswer | SendMessageProcessing;
+
+/**
+ * TTL маркера processing: моложе — первый прогон считается живым (ретраю отвечаем
+ * { status: 'processing' }), старше — прогон умер без снятия маркера (краш процесса),
+ * цикл перезапускается. Штатные исходы снимают маркер сами: успех — той же tx, что
+ * пишет ответ; сбой — в catch (немедленный ретрай после ошибки легитимен, §7.9).
+ */
+export const PROCESSING_TTL_MS = 10 * 60_000;
 
 /**
  * Протокол pending для модели (митигация Minor-4 Task 6): dispatch не дедуплицирует
@@ -149,11 +170,17 @@ export async function sendMessage(
 ): Promise<SendMessageResult> {
   const clock = deps.clock ?? (() => new Date());
   const resolve = deps.entitlements ?? resolveEntitlement;
+  const markerId = processingMessageId(input.id);
 
   // 1. Персист user-сообщения ПЕРВЫМ отдельным tx (§7.9: не теряется ни при гейте,
   //    ни при сбое провайдера) + якорь треда. Чужой/несуществующий тред под RLS
   //    неразличимы — единый NOT_FOUND (как chat.appendUserMessage).
-  const pre = await withIdentity(db, input.ownerId, async (tx) => {
+  interface Preflight {
+    anchorEntityId: string | null;
+    existingAnswer?: WireChatMessage;
+    processing?: true;
+  }
+  const pre = await withIdentity(db, input.ownerId, async (tx): Promise<Preflight> => {
     const rows = await tx
       .select({ entityId: chatThreads.entityId })
       .from(chatThreads)
@@ -168,22 +195,93 @@ export async function sendMessage(
       role: 'user',
       content: input.content,
     });
-    // 1a (fix round). Повтор client-id: ответ уже существует → replay без нового цикла.
-    // Матч ДЕТЕРМИНИРОВАННЫЙ — по metadata.replyTo === id этого user-сообщения (не по
-    // временно́му курсору «ближайший assistant после»): при out-of-order ретрае старого
-    // упавшего сообщения ближайший по времени assistant мог бы оказаться ответом на
-    // ДРУГОЕ, более позднее сообщение — replyTo это исключает. Не нашлось — первый прогон
-    // не дошёл до ответа (LLM_UNAVAILABLE и т.п.) → легитимный ретрай §7.9, цикл как обычно.
-    const existingAnswer = appended.replayed
-      ? await findAnswerByReplyTo(tx, input.threadId, appended.message.id)
-      : undefined;
-    return { anchorEntityId: thread.entityId, existingAnswer };
+    if (appended.replayed) {
+      // 1a (fix round). Повтор client-id: ответ уже существует → replay без нового цикла.
+      // Матч ДЕТЕРМИНИРОВАННЫЙ — по metadata.replyTo === id этого user-сообщения (не по
+      // временно́му курсору «ближайший assistant после»): при out-of-order ретрае старого
+      // упавшего сообщения ближайший по времени assistant мог бы оказаться ответом на
+      // ДРУГОЕ, более позднее сообщение — replyTo это исключает.
+      const existingAnswer = await findAnswerByReplyTo(tx, input.threadId, appended.message.id);
+      if (existingAnswer !== undefined) {
+        return { anchorEntityId: thread.entityId, existingAnswer };
+      }
+      // 1b. Ответа нет. Маркер processing моложе TTL — первый прогон ЖИВ: второй
+      // параллельный tool-цикл не запускается (двойное исполнение действий, двойной
+      // метеринг, два ответа с одним replyTo) — клиенту сигнал «ответ готовится».
+      const markerRows = await tx
+        .select({ createdAt: chatMessages.createdAt })
+        .from(chatMessages)
+        .where(eq(chatMessages.id, markerId));
+      const marker = markerRows[0];
+      if (marker && clock().getTime() - marker.createdAt.getTime() < PROCESSING_TTL_MS) {
+        return { anchorEntityId: thread.entityId, processing: true };
+      }
+      // Прогона нет (сбой снял маркер, §7.9) либо он умер, не сняв (краш процесса,
+      // маркер старше TTL) → легитимный перезапуск; протухший маркер пересоздаётся
+      // ниже со свежим createdAt той же tx.
+      if (marker) await tx.delete(chatMessages).where(eq(chatMessages.id, markerId));
+    }
+    // Маркер «прогон идёт» — той же tx, что и user-сообщение: конкурентный ретрай
+    // либо увидит закоммиченную пару (сообщение + маркер), либо подождёт её на
+    // unique-индексе PK. Детерминированный id — processingMessageId(client-UUID).
+    // Конфликт PK достижим только в гонке перезапусков мёртвого прогона (оба увидели
+    // протухший маркер, конкурент пересоздал первым) → цикл ведёт он, нам — processing.
+    const inserted = await tx
+      .insert(chatMessages)
+      .values({
+        id: markerId,
+        threadId: input.threadId,
+        role: 'system',
+        content: '',
+        metadata: { type: 'processing', replyTo: input.id },
+        createdAt: clock(),
+      })
+      .onConflictDoNothing({ target: chatMessages.id })
+      .returning({ id: chatMessages.id });
+    if (inserted.length === 0) {
+      return { anchorEntityId: thread.entityId, processing: true };
+    }
+    return { anchorEntityId: thread.entityId };
   });
+  if (pre.processing === true) {
+    return { status: 'processing' };
+  }
   if (pre.existingAnswer !== undefined) {
     // БЕЗ вызова провайдера и БЕЗ метеринга: действия прошлого прогона не повторяются
     return { assistantMessage: pre.existingAnswer, actions: [], pending: [], replayed: true };
   }
   const anchorEntityId = pre.anchorEntityId;
+
+  try {
+    return await runAgentLoop(db, deps, input, { clock, resolve, anchorEntityId, markerId });
+  } catch (e) {
+    // Прогон умер до ответа (гейт §8, сбой провайдера, ошибка цикла): маркер снимается —
+    // немедленный ретрай легитимен (§7.9), «processing» не блокирует его до TTL.
+    // Сбой уборки не маскирует исходную ошибку.
+    try {
+      await withIdentity(db, input.ownerId, (tx) =>
+        tx.delete(chatMessages).where(eq(chatMessages.id, markerId)),
+      );
+    } catch (cleanupError) {
+      console.error('[ai.sendMessage] маркер processing не снят:', cleanupError);
+    }
+    throw e;
+  }
+}
+
+/** Шаги 2–6: гейт §8 → контекст §7.1 → tool-цикл → персист ответа (+снятие маркера) → метеринг. */
+async function runAgentLoop(
+  db: Db,
+  deps: AiDeps,
+  input: SendMessageInput,
+  run: {
+    clock: () => Date;
+    resolve: EntitlementResolver;
+    anchorEntityId: string | null;
+    markerId: string;
+  },
+): Promise<SendMessageAnswer> {
+  const { clock, resolve, anchorEntityId, markerId } = run;
 
   // 2. Entitlements-гейт §8 — ДО первого вызова провайдера
   await gateAiEntitlements(db, input.ownerId, resolve, clock);
@@ -240,6 +338,15 @@ export async function sendMessage(
       usage.outputTokens += response.usage.outputTokens;
       usage.requestCount += 1;
 
+      // Отказ модели (refusal, §7.7): терминальный исход хода — error_card в хронологию,
+      // tool-вызовы шага-отказа НЕ исполняются, цикл не продолжается. Токены шага
+      // уже отметрены (честный расход).
+      if (response.stopReason === 'refusal') {
+        cards.push({ kind: 'error_card', code: 'LLM_REFUSAL', message: REFUSAL_NOTE });
+        finalText = response.content;
+        break;
+      }
+
       // end_turn / max_tokens / tool_use без вызовов (защита от пустого зацикливания): финал.
       if (response.stopReason !== 'tool_use' || response.toolCalls.length === 0) {
         finalText =
@@ -290,15 +397,18 @@ export async function sendMessage(
   //    §7.9 (findAnswerByReplyTo) вместо временно́го «ближайший assistant после».
   //    metadata.suggestions НЕ пишем (слайс 3). id — серверный uuidv7: ретрай
   //    sendMessage — новый прогон цикла, а не replay ответа (осознанно, MVP).
-  const assistantMessage = await withIdentity(db, input.ownerId, (tx) =>
-    appendMessage(tx, {
+  //    Маркер processing снимается ТОЙ ЖЕ tx: «ответ есть» и «прогон идёт» не сосуществуют.
+  const assistantMessage = await withIdentity(db, input.ownerId, async (tx) => {
+    const message = await appendMessage(tx, {
       id: newId(),
       threadId: input.threadId,
       role: 'assistant',
       content: finalText,
       metadata: { cards, replyTo: input.id },
-    }),
-  );
+    });
+    await tx.delete(chatMessages).where(eq(chatMessages.id, markerId));
+    return message;
+  });
 
   return { assistantMessage, actions, pending, replayed: false };
 }

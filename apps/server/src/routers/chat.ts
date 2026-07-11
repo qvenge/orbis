@@ -3,7 +3,7 @@
 // §4.6 (append-only). Только трансляция: примитивы — chat/threads.ts и chat/messages.ts.
 import { and, desc, eq, lt, or, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
-import { appendMessageIdempotent } from '../chat/messages';
+import { appendMessageIdempotent, excludeInfraSystemRows } from '../chat/messages';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { chatMessages, chatThreads } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -61,7 +61,13 @@ export const chatRouter = router({
     )
     .query(({ ctx, input }) =>
       withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-        const conds: (SQL | undefined)[] = [eq(chatMessages.threadId, input.threadId)];
+        const conds: (SQL | undefined)[] = [
+          eq(chatMessages.threadId, input.threadId),
+          // Инфраструктурные system-строки (processing-маркеры §7.9, audit системных
+          // действий §5.4) — не контент треда; журнал §7.8 остаётся в chat_messages.
+          // Общий SQL-фрагмент с historyMessages LLM-контекста — фильтры зеркальны
+          ...excludeInfraSystemRows(),
+        ];
         if (input.before !== undefined) {
           const sep = input.before.indexOf('|');
           if (sep === -1) {

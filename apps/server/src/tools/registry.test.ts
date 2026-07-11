@@ -5,6 +5,7 @@ import {
   attachAspectInput,
   BUILTIN_ASPECT_IDS,
   batchExecuteInput,
+  budgetStatusInput,
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
@@ -76,6 +77,7 @@ const CORE_NAMES = [
   'relation_delete',
   'batch_execute',
   'user_query',
+  'budget_status', // A6: read-агрегаты Budget (03-budget §4), доступен и MCP
 ] as const;
 
 const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.map(
@@ -83,13 +85,13 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.map(
 );
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 8 core + thread_post + 7 attach_* = 16', async () => {
+  test('builtin-реестр (userB без кастомных): 9 core + thread_post + 7 attach_* = 17', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
     expect(names).toContain('thread_post');
     for (const name of BUILTIN_ATTACH_NAMES) expect(names).toContain(name);
-    expect(defs.length).toBe(16);
+    expect(defs.length).toBe(17);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
   });
@@ -101,10 +103,12 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('kind: entity_query/entity_get/user_query — read, остальные — mutate', async () => {
+  test('kind: entity_query/entity_get/user_query/budget_status — read, остальные — mutate', async () => {
     const defs = await registryFor(userB);
     for (const def of defs) {
-      const expected = ['entity_query', 'entity_get', 'user_query'].includes(def.name)
+      const expected = ['entity_query', 'entity_get', 'user_query', 'budget_status'].includes(
+        def.name,
+      )
         ? 'read'
         : 'mutate';
       expect(def.kind).toBe(expected);
@@ -173,7 +177,7 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(def.kind).toBe('mutate');
     expect(def.description).toBe('Пиши часы сна числом.');
     expect((def.inputJsonSchema.properties as Record<string, unknown>).data).toEqual(CUSTOM_SCHEMA);
-    expect(defsA.length).toBe(17);
+    expect(defsA.length).toBe(18);
 
     const defsB = await registryFor(userB);
     expect(defsB.some((d) => d.name === 'attach_user_sleep_log')).toBe(false);
@@ -191,6 +195,7 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
     relation_delete: relationDeleteInput,
     batch_execute: batchExecuteInput,
     user_query: userQueryInput,
+    budget_status: budgetStatusInput,
     thread_post: threadPostInput,
   };
 

@@ -14,6 +14,7 @@ import {
   attachAspectInput,
   type BatchExecuteInput,
   batchExecuteInput,
+  budgetStatusInput,
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
@@ -25,6 +26,7 @@ import {
   relationDeleteInput,
 } from '@orbis/shared';
 import type { z } from 'zod';
+import { budgetStatus } from '../budget/aggregates';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import type { Db } from '../db/client';
@@ -48,7 +50,7 @@ import {
   compileSum,
   QueryCompileError,
 } from '../query/compile';
-import { queryContext } from '../query/context';
+import { queryWithMaterialization } from '../recurring/with-materialization';
 import { toWireEntityFromSql } from '../wire';
 import {
   type AspectToolRow,
@@ -115,6 +117,16 @@ export async function dispatchTool(
           ),
         };
       }
+      // entity_query — вне pre-tx: хук материализации §5.4 (recurring-инстансы окна
+      // запроса) исполняет executor в СОБСТВЕННЫХ tx — из живого tx его не зовём
+      // (истощение пула соединений), см. recurring/with-materialization.ts
+      if (def.name === 'entity_query') return { kind: 'entity_query' };
+      // budget_status — тоже вне pre-tx: конвейер §2.8 (postDue + материализация)
+      // внутри budgetStatus исполняет executor в собственных tx
+      if (def.name === 'budget_status') return { kind: 'budget_status' };
+      // user_query — тот же хук материализации §5.4, что entity_query (обязательство
+      // ревью A3): агрегат окна дат обязан видеть свеже-материализованные инстансы
+      if (def.name === 'user_query') return { kind: 'user_query' };
       if (def.kind === 'read')
         return { kind: 'done', out: await runRead(tx, ctx, def.name, input) };
       return {
@@ -146,6 +158,9 @@ export async function dispatchTool(
     }
     if (pre.kind === 'done') return pre.out;
     // await обязателен: return без await вывел бы reject за пределы try/catch ниже
+    if (pre.kind === 'entity_query') return await runEntityQuery(ctx, input);
+    if (pre.kind === 'budget_status') return await runBudgetStatus(ctx, input);
+    if (pre.kind === 'user_query') return await runUserQuery(ctx, input);
     if (pre.def.name === 'thread_post') {
       // §7.10 распространяется и на thread_post (kind='mutate' в реестре — ради
       // политики): по MVP-таблице одиночная не-архивирующая мутация → execute, но
@@ -185,6 +200,9 @@ export async function dispatchTool(
 type Resolution =
   | { kind: 'unknown' }
   | { kind: 'done'; out: ToolDispatchResult }
+  | { kind: 'entity_query' } // исполняется вне pre-tx — хук материализации §5.4
+  | { kind: 'user_query' } // вне pre-tx — тот же хук материализации §5.4 (ревью A3)
+  | { kind: 'budget_status' } // вне pre-tx — конвейер §2.8 (postDue + материализация)
   | {
       kind: 'mutate';
       def: OrbisToolDef;
@@ -256,73 +274,100 @@ async function runRead(
   name: string,
   input: unknown,
 ): Promise<ToolDispatchResult> {
-  if (name === 'entity_query') return runEntityQuery(tx, ctx, input);
+  // entity_query/user_query/budget_status сюда не попадают — свои ветки Resolution
+  // (хук материализации §5.4 / конвейер §2.8 исполняются вне pre-tx)
   if (name === 'entity_get') {
     const parsed = parseEnvelope(entityGetInput, input, 'entity_get');
     return { status: 'ok', result: await readEntity(tx, ctx.actorUserId, parsed) };
   }
-  if (name === 'user_query') return runUserQuery(tx, ctx, input);
   throw new Error(`runRead: нет обработчика read-тула «${name}»`); // недостижимо: kind задаёт реестр
 }
 
-async function runEntityQuery(
-  tx: Tx,
-  ctx: ToolCallCtx,
-  input: unknown,
-): Promise<ToolDispatchResult> {
+/**
+ * entity_query с хуком материализации (§5.4, fix round A3): тот же общий каркас, что у
+ * entity.query/count роутера, — окно по start_at/occurred_on материализует recurring-
+ * инстансы ДО компиляции; ошибки парсинга/компиляции — ExecError/VALIDATION (§6.4),
+ * их развернёт catch dispatchTool.
+ */
+async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
   const parsed = parseEnvelope(entityQueryInput, input, 'entity_query');
-  const cctx = await queryContext(tx, ctx.actorUserId, null); // `this` вне контекста сущности
-  const ast = parseAstOrThrow(parsed.query, cctx);
-  const compiled = compileOrThrow(() => compileQuery(ast, cctx));
-  const rows = await tx.execute(compiled);
-  const entities = [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
-  const card: Card = {
-    kind: 'query_result',
-    ...(ast.title !== undefined && { title: ast.title }),
-    count: entities.length,
-    entityIds: entities.map((e) => e.id),
-  };
-  return { status: 'ok', result: entities, card };
+  return queryWithMaterialization({
+    db: ctx.db,
+    actorUserId: ctx.actorUserId,
+    thisEntityId: null, // `this` вне контекста сущности
+    parse: (cctx) => parseAstOrThrow(parsed.query, cctx),
+    run: async (tx, ast, cctx) => {
+      const compiled = compileOrThrow(() => compileQuery(ast, cctx));
+      const rows = await tx.execute(compiled);
+      const entities = [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
+      const card: Card = {
+        kind: 'query_result',
+        ...(ast.title !== undefined && { title: ast.title }),
+        count: entities.length,
+        entityIds: entities.map((e) => e.id),
+      };
+      return { status: 'ok', result: entities, card };
+    },
+  });
+}
+
+/**
+ * budget_status (Task A6, 03-budget §4.3/§4.5/§4.7): готовые агрегаты Budget для
+ * финансовых вопросов LLM/MCP. Исполняется вне pre-tx: budgetStatus начинается
+ * конвейером §2.8 (postDueInstances + materializeInstances) — executor в собственных tx.
+ * Карточки нет: результат — данные для ответа модели, а не сущность/выборка (02 §2.3).
+ */
+async function runBudgetStatus(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
+  const parsed = parseEnvelope(budgetStatusInput, input, 'budget_status');
+  const result = await budgetStatus(ctx.db, ctx.actorUserId, parsed.month);
+  return { status: 'ok', result };
 }
 
 /**
  * user_query (решение 7 плана): агрегация НА SQL — sum через ::numeric::text
  * (точность decimal §3.3, не JS-float), count(*) без limit (агрегат по всей выборке).
+ * Хук материализации §5.4 (обязательство ревью A3): тот же каркас, что entity_query, —
+ * агрегат с окном по start_at/occurred_on считается ПОСЛЕ материализации инстансов окна.
  */
-async function runUserQuery(tx: Tx, ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
+async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
   const parsed = parseEnvelope(userQueryInput, input, 'user_query');
-  const cctx = await queryContext(tx, ctx.actorUserId, null);
-  const ast = parseAstOrThrow(parsed.query, cctx);
-
-  if (parsed.aggregate === 'count') {
-    // compileOrThrow обязателен и здесь: QueryCompileError (например children_of=this
-    // вне контекста) — структурная VALIDATION, не throw мимо catch (fix round)
-    const compiledCount = compileOrThrow(() => compileCount(ast, cctx));
-    const rows = await tx.execute(compiledCount);
-    const count = Number(rows[0]?.count);
-    return {
-      status: 'ok',
-      result: count,
-      card: aggregateCard(ast, count, { op: 'count', value: String(count) }),
-    };
-  }
-
-  // aggregate === 'sum'
-  if (parsed.field === undefined) {
+  // sum без field — структурная VALIDATION ДО парсинга/материализации
+  if (parsed.aggregate === 'sum' && parsed.field === undefined) {
     throw new ExecError('VALIDATION', 'user_query: aggregate=sum требует field', {
       tool: 'user_query',
     });
   }
-  const field = parsed.field;
-  const compiled = compileOrThrow(() => compileSum(ast, cctx, field));
-  const rows = await tx.execute(compiled);
-  const count = Number(rows[0]?.count);
-  const value = (rows[0]?.sum as string | null) ?? '0'; // пустая выборка: sum NULL → '0'
-  return {
-    status: 'ok',
-    result: value,
-    card: aggregateCard(ast, count, { op: 'sum', value }),
-  };
+  return queryWithMaterialization({
+    db: ctx.db,
+    actorUserId: ctx.actorUserId,
+    thisEntityId: null, // `this` вне контекста сущности
+    parse: (cctx) => parseAstOrThrow(parsed.query, cctx),
+    run: async (tx, ast, cctx) => {
+      if (parsed.aggregate === 'count') {
+        // compileOrThrow обязателен и здесь: QueryCompileError (например children_of=this
+        // вне контекста) — структурная VALIDATION, не throw мимо catch (fix round)
+        const compiledCount = compileOrThrow(() => compileCount(ast, cctx));
+        const rows = await tx.execute(compiledCount);
+        const count = Number(rows[0]?.count);
+        return {
+          status: 'ok',
+          result: count,
+          card: aggregateCard(ast, count, { op: 'count', value: String(count) }),
+        };
+      }
+      // aggregate === 'sum'; field проверен выше
+      const field = parsed.field as string;
+      const compiled = compileOrThrow(() => compileSum(ast, cctx, field));
+      const rows = await tx.execute(compiled);
+      const count = Number(rows[0]?.count);
+      const value = (rows[0]?.sum as string | null) ?? '0'; // пустая выборка: sum NULL → '0'
+      return {
+        status: 'ok',
+        result: value,
+        card: aggregateCard(ast, count, { op: 'sum', value }),
+      };
+    },
+  });
 }
 
 function aggregateCard(

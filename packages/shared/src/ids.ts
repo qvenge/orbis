@@ -39,6 +39,35 @@ export function pendingMessageId(ownerId: string, batchId: string): string {
   return uuidv5(`pending:${ownerId.toLowerCase()}:${batchId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
+/**
+ * PK системного маркера «ответ готовится» (ai.sendMessage): детерминирован по
+ * client-UUID user-сообщения — конкурентный ретрай того же сообщения находит маркер
+ * первого прогона и не запускает второй tool-цикл. Owner в формуле не нужен:
+ * client-UUID уникален сам по себе.
+ */
+export function processingMessageId(userMessageId: string): string {
+  return uuidv5(`processing:${userMessageId.toLowerCase()}`, ORBIS_NAMESPACE);
+}
+
 export function recurringInstanceId(templateId: string, dateISO: string): string {
   return uuidv5(`${templateId.toLowerCase()}:${dateISO}`, ORBIS_NAMESPACE);
+}
+
+/**
+ * batch_id материализации окна одного шаблона (§5.4, Task A3): повтор того же окна
+ * тем же шаблоном — тот же batch → идемпотентный replay по audit-PK (§7.8).
+ * from/to — 'YYYY-MM-DD' эффективного (обрезанного горизонтом) окна.
+ */
+export function materializeBatchId(templateId: string, from: string, to: string): string {
+  return uuidv5(`materialize:${templateId.toLowerCase()}:${from}:${to}`, ORBIS_NAMESPACE);
+}
+
+/**
+ * batch_id перехода planned→fact recurring-инстанса (01 §3.3, Task A5) — формула
+ * спеки дословно: uuidv5(NS, "post-financial:<instance_id>"). Детерминирован
+ * инстансом: конкурентные выполнения transition с разных устройств сходятся к
+ * одному action по audit-PK (§7.8), а Undo перехода «липкий» — повтор реплеится.
+ */
+export function postFinancialBatchId(instanceId: string): string {
+  return uuidv5(`post-financial:${instanceId.toLowerCase()}`, ORBIS_NAMESPACE);
 }

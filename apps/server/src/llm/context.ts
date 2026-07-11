@@ -17,6 +17,7 @@
 // Токен-бюджеты §7.1 — ориентиры, не жёсткие константы: капы ниже (50 памятей,
 // превью 200/500, окно 30) — их механическое воплощение для MVP.
 import { and, desc, eq, sql } from 'drizzle-orm';
+import { excludeInfraSystemRows } from '../chat/messages';
 import { chatMessages, entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { readEntity } from '../entity-read';
@@ -205,7 +206,14 @@ function compressSystemRow(content: string, metadata: Record<string, unknown>): 
   return { role: 'user', content: `[система] ${content}` };
 }
 
-/** Последние CONTEXT_HISTORY_LIMIT сообщений треда — В ХРОНОЛОГИЧЕСКОМ ПОРЯДКЕ. */
+/**
+ * Последние CONTEXT_HISTORY_LIMIT сообщений треда — В ХРОНОЛОГИЧЕСКОМ ПОРЯДКЕ.
+ * Инфраструктурные system-строки (processing-маркеры §7.9, audit системных действий
+ * §5.4) невидимы модели, как и клиенту — общий SQL-фрагмент с chat.listMessages
+ * (excludeInfraSystemRows). Фильтр — В SQL, до limit (финальное ревью фазы A):
+ * JS-фильтр после .limit(30) съедал бы окно плотным системным шумом — 30+ audit-строк
+ * материализации новее живого диалога вытесняли бы его из истории целиком.
+ */
 async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> {
   const rows = await tx
     .select({
@@ -214,7 +222,7 @@ async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> 
       metadata: chatMessages.metadata,
     })
     .from(chatMessages)
-    .where(eq(chatMessages.threadId, threadId))
+    .where(and(eq(chatMessages.threadId, threadId), ...excludeInfraSystemRows()))
     .orderBy(desc(chatMessages.createdAt), desc(chatMessages.id))
     .limit(CONTEXT_HISTORY_LIMIT);
   rows.reverse(); // выборка «последние N» шла с конца — возвращаем хронологию

@@ -2,6 +2,7 @@
 // Сборка appRouter (§9.1): entity/relation/chat/ai — Task 12; user/aspect — Task 13.
 import { aiRouter } from './routers/ai';
 import { aspectRouter } from './routers/aspect';
+import { budgetRouter } from './routers/budget';
 import { chatRouter } from './routers/chat';
 import { entityRouter } from './routers/entity';
 import { relationRouter } from './routers/relation';
@@ -17,6 +18,7 @@ export const appRouter = router({
   ai: aiRouter,
   user: userRouter,
   aspect: aspectRouter,
+  budget: budgetRouter,
 });
 
 export type AppRouter = typeof appRouter;

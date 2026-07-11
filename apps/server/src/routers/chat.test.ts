@@ -3,8 +3,9 @@
 // через createCallerFactory против живой БД. Мутации entity идут боевым синком —
 // audit-сообщения видны в тредах (§7.8).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { entityThreadId, globalThreadId, newId } from '@orbis/shared';
+import { entityThreadId, globalThreadId, newId, processingMessageId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
+import { eq } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -198,6 +199,127 @@ describe('chat.appendUserMessage / chat.listMessages (§4.6)', () => {
     expect(err.code).toBe('NOT_FOUND');
     // и список чужого треда пуст — RLS скрывает сообщения
     expect(await callerFor(stranger).chat.listMessages({ threadId })).toEqual([]);
+  });
+});
+
+describe('chat.listMessages: processing-маркеры ai.sendMessage не отдаются (fix round A1.5)', () => {
+  /** Прямая вставка маркера (как пишет sendMessage): system + metadata.type processing. */
+  async function seedMarker(
+    user: string,
+    threadId: string,
+    userMsgId: string,
+    at: Date,
+  ): Promise<string> {
+    const markerId = processingMessageId(userMsgId);
+    await withIdentity(db, user, (tx) =>
+      tx.insert(chatMessages).values({
+        id: markerId,
+        threadId,
+        role: 'system',
+        content: '',
+        metadata: { type: 'processing', replyTo: userMsgId },
+        createdAt: at,
+      }),
+    );
+    return markerId;
+  }
+
+  test('живой маркер (цикл идёт) не виден в списке — пустого system-пузыря в окне рефетча нет', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const { threadId } = await caller.chat.ensureThread({});
+    const msgId = newId();
+    await caller.chat.appendUserMessage({ id: msgId, threadId, content: 'запрос' });
+    const markerId = await seedMarker(user, threadId, msgId, new Date());
+
+    const list = await caller.chat.listMessages({ threadId });
+    expect(list.map((m) => m.id)).toEqual([msgId]); // маркера нет, сообщение есть
+    expect(list.some((m) => m.id === markerId)).toBe(false);
+  });
+
+  test('«вечный» маркер краша (ответа нет, маркер не снят) не висит в треде навсегда', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const { threadId } = await caller.chat.ensureThread({});
+    const msgId = newId();
+    await caller.chat.appendUserMessage({ id: msgId, threadId, content: 'запрос до краша' });
+    await seedMarker(user, threadId, msgId, new Date('2020-01-01T00:00:00.000Z'));
+
+    const list = await caller.chat.listMessages({ threadId });
+    expect(list.map((m) => m.id)).toEqual([msgId]);
+  });
+
+  test('прочие system-сообщения (audit/undo) фильтр не задевает', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const { threadId } = await caller.chat.ensureThread({});
+    const auditId = newId();
+    await withIdentity(db, user, (tx) =>
+      tx.insert(chatMessages).values({
+        id: auditId,
+        threadId,
+        role: 'system',
+        content: 'entity_create: «Задача»',
+        // Реальная форма audit-строки: ключа type НЕТ (->> 'type' = NULL) —
+        // фильтр обязан быть NULL-безопасным и не ронять audit/undo из выдачи
+        metadata: { actions: [] },
+      }),
+    );
+    const list = await caller.chat.listMessages({ threadId });
+    expect(list.map((m) => m.id)).toEqual([auditId]);
+  });
+});
+
+describe('chat.listMessages: audit системной материализации скрыт (§5.4, fix round A3)', () => {
+  test('материализующий batch (source=system) не в выдаче; журнал §7.8 цел; обычный audit виден', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const { threadId } = await caller.chat.ensureThread({});
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
+      new Date(),
+    );
+    // Обычное действие владельца (source='fast_path') — его audit обязан остаться видимым
+    await caller.entity.create({
+      input: {
+        title: 'Ежедневный шаблон',
+        tags: [],
+        aspects: {
+          'orbis/schedule': {
+            start_at: `${today}T09:00:00+03:00`,
+            timezone: 'Europe/Moscow',
+            recurrence: { freq: 'daily', interval: 1 },
+          },
+        },
+      },
+      source: 'fast_path',
+    });
+    // Запрос диапазона дат → материализация пишет batch-audit (source='system') в журнал
+    await caller.entity.query({ query: 'start_at=next_7d' });
+
+    const sourceOf = (m: { metadata: Record<string, unknown> }): unknown =>
+      (m.metadata.actions as Array<{ source?: unknown }> | undefined)?.[0]?.source;
+
+    const list = await caller.chat.listMessages({ threadId });
+    // fast_path-audit создания шаблона виден как раньше
+    expect(list.some((m) => m.role === 'system' && sourceOf(m) === 'fast_path')).toBe(true);
+    // системная материализация в контент треда не попадает
+    expect(list.some((m) => sourceOf(m) === 'system')).toBe(false);
+
+    // …но журнал §7.8 не тронут: batch-audit физически в chat_messages
+    // (replay-идемпотентность и Undo живут на нём)
+    const raw = await withIdentity(db, user, (tx) =>
+      tx.select().from(chatMessages).where(eq(chatMessages.threadId, threadId)),
+    );
+    expect(
+      raw.some(
+        (m) =>
+          (
+            (m.metadata as Record<string, unknown>).actions as
+              | Array<{ source?: unknown }>
+              | undefined
+          )?.[0]?.source === 'system',
+      ),
+    ).toBe(true);
   });
 });
 
