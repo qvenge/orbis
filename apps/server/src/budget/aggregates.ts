@@ -205,11 +205,16 @@ interface RawEnvelope {
   categoryRef: string;
   periodStart: string;
   periodEnd: string;
+  currency: string; // coalesce(budget.currency, defaultCurrency) — валютная граница агрегатов (§5)
   spent: string; // сырой (без агрегации иерархии) — для alertCount §6.1
   effectiveLimit: string;
 }
 
-function rawEnvelopeOf(row: EntityRow, spentMap: Map<string, string>): RawEnvelope | null {
+function rawEnvelopeOf(
+  row: EntityRow,
+  spentMap: Map<string, string>,
+  defaultCurrency: string,
+): RawEnvelope | null {
   const budget = (row.aspects as AspectsMap)['orbis/budget'];
   if (
     budget === undefined ||
@@ -227,6 +232,7 @@ function rawEnvelopeOf(row: EntityRow, spentMap: Map<string, string>): RawEnvelo
     categoryRef: budget.category_ref,
     periodStart: budget.period_start,
     periodEnd: budget.period_end,
+    currency: typeof budget.currency === 'string' ? budget.currency : defaultCurrency,
     spent: decAdd(spentMap.get(row.id) ?? '0', '0'), // нормализация к канону "0.00"
     effectiveLimit: decAdd(budget.limit, carryover),
   };
@@ -310,7 +316,7 @@ async function computeOverview(
     defCur,
   );
   const raws = envRows
-    .map((row) => rawEnvelopeOf(row, spentMap))
+    .map((row) => rawEnvelopeOf(row, spentMap, defCur))
     .filter((r): r is RawEnvelope => r !== null);
 
   // Баланс периода (§2.5): факты в [start;end] и ≤ сегодня, валюта периода = дефолтная;
@@ -401,7 +407,9 @@ async function computeOverview(
 
   // Иерархия §2.10: карточка конверта родительской категории показывает СУММАРНЫЕ
   // spent/effectiveLimit своих конвертов и конвертов всех дочерних категорий набора.
-  // Агрегация — поверх СЫРЫХ значений (потомки рекурсивно все, двойного счёта нет).
+  // Агрегация — поверх СЫРЫХ значений (потомки рекурсивно все, двойного счёта нет)
+  // и ТОЛЬКО в валюте родительского конверта (fix round: чужая валюта не искажает
+  // агрегаты, §5 — суммировать RUB- и USD-строки без конверсии нельзя).
   const edges = await categoryEdges(tx, ownerId);
   const statuses = raws.map((raw) => {
     let spent = raw.spent;
@@ -409,7 +417,11 @@ async function computeOverview(
     const descendants = descendantsOf(edges, raw.categoryRef);
     if (descendants.size > 0) {
       for (const other of raws) {
-        if (other !== raw && descendants.has(other.categoryRef)) {
+        if (
+          other !== raw &&
+          descendants.has(other.categoryRef) &&
+          other.currency === raw.currency
+        ) {
           spent = decAdd(spent, other.spent);
           effectiveLimit = decAdd(effectiveLimit, other.effectiveLimit);
         }
@@ -422,7 +434,7 @@ async function computeOverview(
   const sortKey = new Map(
     raws.map((raw) => [
       raw.row.id,
-      `${categoryOr(catMap, raw.categoryRef).title} ${raw.periodStart} ${raw.row.id}`,
+      `${categoryOr(catMap, raw.categoryRef).title}\u0000${raw.periodStart}\u0000${raw.row.id}`,
     ]),
   );
   statuses.sort((a, b) => {
@@ -441,8 +453,8 @@ async function computeOverview(
   const finOf = (row: EntityRow) =>
     ((row.aspects as AspectsMap)['orbis/financial'] ?? {}) as Record<string, unknown>;
   const dateIdSort = (a: EntityRow, b: EntityRow) => {
-    const ka = `${String(finOf(a).occurred_on ?? '')} ${a.id}`;
-    const kb = `${String(finOf(b).occurred_on ?? '')} ${b.id}`;
+    const ka = `${String(finOf(a).occurred_on ?? '')}\u0000${a.id}`;
+    const kb = `${String(finOf(b).occurred_on ?? '')}\u0000${b.id}`;
     return ka < kb ? -1 : ka > kb ? 1 : 0;
   };
 
@@ -559,7 +571,7 @@ export async function envelopeForCategory(
     const row = rows[0];
     if (row === undefined) return null;
     const spentMap = await spentByEnvelope(tx, ownerId, [envelopeId], today, defCur);
-    const raw = rawEnvelopeOf(row, spentMap);
+    const raw = rawEnvelopeOf(row, spentMap, defCur);
     if (raw === null) return null;
     const catMap = await categoriesById(tx, [raw.categoryRef]);
     return statusOf(raw, categoryOr(catMap, raw.categoryRef), raw.spent, raw.effectiveLimit, today);
@@ -571,6 +583,11 @@ export async function envelopeForCategory(
  * текущий) + суммарный limit месяца; бакет — месяц period_start конверта. Отображение,
  * не хранится; агрегация детей §2.10 тут не применяется — экран категории показывает её
  * собственные конверты («обход конвертов категории», §3.2).
+ *
+ * Валютная граница (fix round, §5): бакеты считаются ТОЛЬКО по конвертам валюты
+ * по умолчанию — как баланс периода §2.5 («валюта периода = defaultCurrency»);
+ * разновалютная пара конвертов одного месяца иначе давала бы бессмысленную сумму
+ * limit/spent без конверсии. Тренд в чужой валюте — Future (multi-currency).
  */
 export async function categoryTrend(
   db: Db,
@@ -595,6 +612,8 @@ export async function categoryTrend(
           sql`${entities.aspects}->'orbis/budget'->>'category_ref' = ${args.categoryId}`,
           sql`${entities.aspects}->'orbis/budget'->>'period_start' >= ${`${first}-01`}`,
           sql`${entities.aspects}->'orbis/budget'->>'period_start' <= ${monthRange(curMonth).end}`,
+          // только валюта по умолчанию — см. валютную границу в docstring
+          sql`coalesce(${entities.aspects}->'orbis/budget'->>'currency', ${defCur}) = ${defCur}`,
         ),
       );
     const spentMap = await spentByEnvelope(
@@ -606,7 +625,7 @@ export async function categoryTrend(
     );
     const buckets = new Map<string, { spent: string; limit: string }>();
     for (const row of rows) {
-      const raw = rawEnvelopeOf(row, spentMap);
+      const raw = rawEnvelopeOf(row, spentMap, defCur);
       if (raw === null) continue;
       const key = raw.periodStart.slice(0, 7);
       const prev = buckets.get(key);

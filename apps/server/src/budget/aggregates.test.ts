@@ -86,6 +86,7 @@ let envHousing = '';
 let envEnt = '';
 let envParent = '';
 let envChild = '';
+let envChildUsd = '';
 let envNext = '';
 let envMay = '';
 let envJune = '';
@@ -199,6 +200,14 @@ beforeAll(async () => {
   envParent = (await exec(userA, 'entity_create', envelope(catParent, cmStart, cmEnd, '10000.00')))
     .id;
   envChild = (await exec(userA, 'entity_create', envelope(catChild, cmStart, cmEnd, '5000.00'))).id;
+  // USD-конверт дочерней категории — fix round: агрегация §2.10 не смешивает валюты
+  envChildUsd = (
+    await exec(
+      userA,
+      'entity_create',
+      envelope(catChild, cmStart, cmEnd, '500.00', { currency: 'USD' }),
+    )
+  ).id;
   // Конверты здоровья прошлого/текущего месяцев — данные categoryTrend (§3.2)
   await exec(
     userA,
@@ -237,6 +246,7 @@ beforeAll(async () => {
   await exec(userA, 'entity_create', txn(catHousing, '900.00', today)); // 90% лимита → alert
   await exec(userA, 'entity_create', txn(catEnt, '150.00', today)); // перерасход remaining<0
   await exec(userA, 'entity_create', txn(catChild, '1000.00', today)); // иерархия §2.10
+  await exec(userA, 'entity_create', txn(catChild, '100.00', today, { currency: 'USD' })); // → envChildUsd
   await exec(userA, 'entity_create', txn(catEdu, '340.00', '2026-05-31')); // приёмка §7.1: created_at=сейчас
   await exec(userA, 'entity_create', txn(catHealth, '150.00', `${prevMonth}-15`)); // тренд: прошлый месяц
   await exec(userA, 'entity_create', txn(catHealth, '200.00', today)); // тренд: текущий месяц
@@ -376,11 +386,23 @@ describe('budget.overview: alertCount (§6.1) и иерархия категор
     const child = envById(ov, envChild);
     expect(child.spent).toBe('1000.00');
     expect(child.effectiveLimit).toBe('5000.00');
-    // родитель: свой конверт (0 из 10000) + дочерний (1000 из 5000)
+    // родитель: свой конверт (0 из 10000) + дочерний RUB (1000 из 5000)
     expect(parent.spent).toBe('1000.00');
     expect(parent.effectiveLimit).toBe('15000.00');
     expect(parent.remaining).toBe('14000.00');
     expect(parent.dailyPace).toBe(paceOf('14000.00', daysInclusive(today, cmEnd)));
+  });
+
+  test('fix round: агрегация §2.10 не смешивает валюты — USD-конверт ребёнка не входит в RUB-карточку родителя (§5)', async () => {
+    const ov = await budgetOverview(db, userA, curMonth);
+    // USD-конверт ребёнка живёт своей карточкой…
+    const childUsd = envById(ov, envChildUsd);
+    expect(childUsd.spent).toBe('100.00');
+    expect(childUsd.effectiveLimit).toBe('500.00');
+    // …но НЕ суммируется в RUB-карточку родителя (100 USD ≠ 100 RUB)
+    const parent = envById(ov, envParent);
+    expect(parent.spent).toBe('1000.00'); // не 1100.00
+    expect(parent.effectiveLimit).toBe('15000.00'); // не 15500.00
   });
 });
 
@@ -418,6 +440,13 @@ describe('budget.categoryTrend (§3.2)', () => {
       { period: prevMonth, spent: '150.00', limit: '2000.00' },
       { period: curMonth, spent: '200.00', limit: '3000.00' },
     ]);
+  });
+
+  test('fix round: тренд не смешивает валюты — USD-конверт категории (envUsd) не входит в бакет месяца (§5)', async () => {
+    // у еды в текущем месяце ДВА конверта: RUB (30000, spent 2680) и USD (1000, spent 500);
+    // бакет считает только валюту по умолчанию — иначе limit 31000 и spent 3180 бессмысленны
+    const points = await categoryTrend(db, userA, { categoryId: catFood, months: 1 });
+    expect(points).toEqual([{ period: curMonth, spent: '2680.00', limit: '30000.00' }]);
   });
 });
 
