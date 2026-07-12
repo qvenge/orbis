@@ -20,7 +20,12 @@ import {
 } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { assertEnvelopeUnique, bindingOps, rebindForEnvelope } from '../budget/binding';
+import {
+  assertEnvelopeUnique,
+  bindingOps,
+  normalizeEnvelopeCurrency,
+  rebindForEnvelope,
+} from '../budget/binding';
 import type { Db } from '../db/client';
 import { entities, relations } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -659,6 +664,12 @@ async function prepareEntityCreate(
   // чтобы валидировалось финальное сохраняемое значение)
   const task = aspects['orbis/task'];
   if (task) applyTaskCompletion(undefined, task, now);
+  // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency ДО валидации,
+  // проверки уникальности §2.1 и записи — комбинация всегда каноничная
+  const budgetDraft = aspects['orbis/budget'];
+  if (budgetDraft !== undefined) {
+    await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, budgetDraft);
+  }
 
   // Стадия 2: ajv по схемам реестра из БД
   for (const [aspectId, data] of Object.entries(aspects)) {
@@ -860,6 +871,18 @@ async function prepareEntityUpdate(
         applyTaskCompletion(currentAspects['orbis/task'], mergedTask, now);
       }
     }
+    // Нормализация валюты конверта (бэклог A7): merge мог удалить currency
+    // (поле со значением null) или добавить orbis/budget без неё — NULL не пишем,
+    // подставляем defaultCurrency ДО валидации и проверки уникальности §2.1.
+    // Внутренний undo восстанавливает зафиксированное состояние verbatim.
+    const mergedBudget = nextAspects['orbis/budget'];
+    if (
+      ctx.internalUndo === undefined &&
+      touched.includes('orbis/budget') &&
+      mergedBudget !== undefined
+    ) {
+      await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, mergedBudget);
+    }
     for (const aspectId of touched) {
       const data = nextAspects[aspectId];
       if (data !== undefined) validateAspectData(ctx.registry, aspectId, data); // detach не валидируется
@@ -995,6 +1018,10 @@ async function prepareAttach(
   const prev = currentAspects[aspectId];
   const data = { ...input.data };
   if (aspectId === 'orbis/task') applyTaskCompletion(prev, data, now); // §3.2 и для attach
+  // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency и для attach-пути
+  if (aspectId === 'orbis/budget') {
+    await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, data);
+  }
 
   // Стадия 2
   validateAspectData(ctx.registry, aspectId, data);
