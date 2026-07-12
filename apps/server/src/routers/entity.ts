@@ -93,10 +93,13 @@ const querySignature = z
   .strict();
 
 export const entityRouter = router({
-  // Источник клиентского create ограничен fast_path/quick_capture (§7.5, 02 §5);
+  // Источник клиентского create ограничен fast_path/quick_capture/ui (§7.5, 02 §5;
+  // 'ui' — прямое действие владельца в форме, например создание конверта 03 §3.1);
   // 'chat'/'mcp'/'system' недостижимы через этот роутер по построению.
   create: ownerOnlyProcedure
-    .input(z.object({ input: entityCreateInput, source: z.enum(['fast_path', 'quick_capture']) }))
+    .input(
+      z.object({ input: entityCreateInput, source: z.enum(['fast_path', 'quick_capture', 'ui']) }),
+    )
     .mutation(async ({ ctx, input }): Promise<WireEntity> => {
       const r = await execute(
         ctx.db,
