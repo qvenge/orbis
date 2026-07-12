@@ -13,7 +13,9 @@ export type EnvelopeLevel = 'norm' | 'warn' | 'alert' | 'over';
 
 /** Decimal-строка → BigInt в масштабе scale знаков после точки (без потерь). */
 function scaledBigInt(dec: string, scale: number): bigint {
-  const neg = dec.startsWith('-');
+  // Знак — ASCII '-' И типографский U+2212 (formatMoney/бейджи печатают U+2212, §3.3):
+  // strip-regex и neg обязаны распознавать один и тот же набор, иначе '−800' → +800.
+  const neg = dec.startsWith('-') || dec.startsWith('−');
   const [int = '0', frac = ''] = dec.replace(/^[-−+]/, '').split('.');
   const digits = `${int}${frac.padEnd(scale, '0').slice(0, scale)}`;
   const v = BigInt(digits === '' ? '0' : digits);
