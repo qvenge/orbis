@@ -1,8 +1,9 @@
-// Budget Overview — каркас §3.1 (Task B1): баланс периода, сетка конвертов
-// (заглушка-карточка; пороги/фазы/carryover — B2), Coming up / Planned / Unbudgeted.
+// Budget Overview — §3.1 (Task B1 каркас + B2): баланс периода, сетка карточек
+// конвертов (пороги/фазы/carryover — EnvelopeCard), создание конверта
+// (EnvelopeCreateSheet: [+ конверт] и вход из Unbudgeted), Coming up / Planned.
 // Все суммы — готовые decimal-строки сервера, клиент только форматирует (format.ts).
 import type { BudgetOverview } from '@orbis/shared';
-import { ChevronLeft, ChevronRight, Repeat } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, Repeat } from 'lucide-react';
 import { useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { formatAmount, formatMoney, type MoneyTone } from '../../lib/format';
@@ -10,6 +11,8 @@ import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
+import { EnvelopeCard } from './EnvelopeCard';
+import { EnvelopeCreateSheet } from './EnvelopeCreateSheet';
 import { monthShift, useBudgetOverview } from './useBudget';
 
 const TONE_CLASS: Record<MoneyTone, string> = { danger: 'text-danger', positive: 'text-success' };
@@ -90,7 +93,7 @@ export function BudgetScreen() {
         {overview.isError ? (
           <p className="text-sm text-text-muted">Не удалось загрузить бюджет</p>
         ) : overview.data ? (
-          <OverviewBody data={overview.data} />
+          <OverviewBody data={overview.data} month={month} />
         ) : (
           <OverviewSkeleton />
         )}
@@ -112,11 +115,14 @@ function OverviewSkeleton() {
   );
 }
 
-function OverviewBody({ data }: { data: BudgetOverview }) {
+function OverviewBody({ data, month }: { data: BudgetOverview; month: string }) {
   const balance = formatMoney(
     data.balance.balance,
     data.balance.balance.startsWith('-') ? 'expense' : 'income',
   );
+  // Sheet создания конверта: null — закрыт; categoryId — предвыбор из Unbudgeted (§3.1).
+  // Условный маунт вместо open-флага: каждый вход — чистое состояние формы.
+  const [createSheet, setCreateSheet] = useState<{ categoryId?: string } | null>(null);
   return (
     <>
       {/* Баланс периода (§2.5): income − expense, цвет по знаку */}
@@ -132,14 +138,23 @@ function OverviewBody({ data }: { data: BudgetOverview }) {
       {data.envelopes.length > 0 && (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
           {data.envelopes.map((e) => (
-            <EnvelopeCardStub key={e.envelope.id} status={e} />
+            <EnvelopeCard key={e.envelope.id} status={e} />
           ))}
         </div>
       )}
-      {/* Заглушка B1: создание конверта (Sheet выбора категории/лимита/периода) — B2 */}
-      <Button variant="outline" size="sm" className="self-start" disabled>
+      <Button variant="outline" size="sm" className="self-start" onClick={() => setCreateSheet({})}>
         + конверт
       </Button>
+      {createSheet !== null && (
+        <EnvelopeCreateSheet
+          open
+          onOpenChange={(v) => {
+            if (!v) setCreateSheet(null);
+          }}
+          month={month}
+          presetCategoryId={createSheet.categoryId}
+        />
+      )}
 
       {data.comingUp.length > 0 && (
         <Section title="Coming up (14 дней)">
@@ -190,27 +205,21 @@ function OverviewBody({ data }: { data: BudgetOverview }) {
               <span className="tabular-nums text-danger">
                 {formatMoney(row.total, 'expense').text}
               </span>
+              {/* §3.1/§5: траты без конверта → предложение создать конверт с предвыбором */}
+              <Button
+                size="icon"
+                variant="ghost"
+                className="h-6 w-6 shrink-0"
+                aria-label={`Конверт для «${row.category.title}»`}
+                onClick={() => setCreateSheet({ categoryId: row.category.id })}
+              >
+                <Plus size={14} aria-hidden />
+              </Button>
             </div>
           ))}
         </Section>
       )}
     </>
-  );
-}
-
-// Заглушка-карточка конверта (B1): имя категории + spent/limit. Прогресс-бар,
-// пороги подсветки, daily_pace и carryover-бейдж — Task B2.
-function EnvelopeCardStub({ status }: { status: BudgetOverview['envelopes'][number] }) {
-  return (
-    <Card data-testid="envelope-card" className="flex flex-col gap-1 p-3">
-      <p className="truncate text-sm font-medium">
-        {status.category.icon ? `${status.category.icon} ` : ''}
-        {status.category.title}
-      </p>
-      <p className="text-xs tabular-nums text-text-secondary">
-        {formatAmount(status.spent)} / {formatAmount(status.effectiveLimit)}
-      </p>
-    </Card>
   );
 }
 

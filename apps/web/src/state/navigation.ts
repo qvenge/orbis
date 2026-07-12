@@ -3,9 +3,12 @@ import { persist } from 'zustand/middleware';
 
 export type Tab = 'chat' | 'browser' | 'agenda' | 'budget';
 // 'settings' — сквозной экран (не таб): push поверх активного таба, back — обычный pop/switchTab (§9.4).
+// 'budget-category' — экран категории Budget (03-budget §3.2): push по тапу на карточку
+// конверта (B2); сам экран — Task B3, до него рендерится заглушка в router.tsx.
 export type ScreenRef =
   | { kind: 'entity'; id: string }
   | { kind: 'thread'; threadId: string }
+  | { kind: 'budget-category'; id: string }
   | { kind: 'settings' };
 
 type NavState = {
