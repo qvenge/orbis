@@ -15,6 +15,16 @@ export function formatMoney(
   return { text: `${sign}${grouped}${frac}`, tone };
 }
 
+// Сумма без знака для нейтральных мест (spent/limit, Доход/Расход §3.1):
+// та же группировка, незначащие нули дробной части опускаются ('7200.00' → '7 200').
+export function formatAmount(amount: string): string {
+  const abs = amount.replace(/^[-−+]/, '');
+  const [intRaw = '0', fracRaw = ''] = abs.split('.');
+  const grouped = intRaw.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  const frac = fracRaw.replace(/0+$/, '');
+  return frac ? `${grouped}.${frac}` : grouped;
+}
+
 export function formatDate(iso: string, tz: string): string {
   // Guard: битый iso (Invalid Date) бросил бы RangeError в рендер-пути — возвращаем вход как есть.
   const d = new Date(iso);

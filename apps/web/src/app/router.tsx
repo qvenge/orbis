@@ -1,5 +1,7 @@
-import { FolderOpen, type LucideIcon, MessageSquare } from 'lucide-react';
+import { FolderOpen, type LucideIcon, MessageSquare, Wallet } from 'lucide-react';
 import { BrowserScreen } from '../features/browser/BrowserScreen';
+import { BudgetScreen } from '../features/budget/BudgetScreen';
+import { useBudgetTabVisible } from '../features/budget/useBudget';
 import { ChatScreen } from '../features/chat/ChatScreen';
 import { ChatThread } from '../features/chat/ChatThread';
 import { DetailScreen } from '../features/entity-detail/DetailScreen';
@@ -8,25 +10,29 @@ import { type ScreenRef, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
 import { ScreenHeader } from './ScreenHeader';
 
-// Только реальные разделы: agenda/budget убраны из навигации (тип Tab в navigation.ts
-// шире — persist 'orbis:nav:v1' может содержать старые стеки, его не сужаем).
-const TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
+// Базовые разделы; budget добавляется по гейту installedViews (03-budget §1.2),
+// agenda в навигации нет (тип Tab в navigation.ts шире — persist 'orbis:nav:v1'
+// может содержать старые стеки, его не сужаем).
+const BASE_TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'chat', label: 'Чат', icon: MessageSquare },
   { id: 'browser', label: 'Обзор', icon: FolderOpen },
 ];
+export const BUDGET_TAB = { id: 'budget', label: 'Бюджет', icon: Wallet } as const;
 
 // Нижний tab-bar — только мобила (md:hidden); на десктопе навигация в SidebarNav.
 export function TabBar() {
   const activeTab = useNav((s) => s.activeTab);
   const switchTab = useNav((s) => s.switchTab);
   const chatBadge = useRetryBuffer((s) => s.size); // §1.5
+  const budgetVisible = useBudgetTabVisible();
+  const tabs = budgetVisible ? [...BASE_TABS, BUDGET_TAB] : BASE_TABS;
 
   // Мобила: safe-area снизу; на десктопе скрыт (md:hidden) — навигация в SidebarNav.
   const cls = 'flex border-t border-line bg-surface pb-[env(safe-area-inset-bottom)] md:hidden';
   return (
     // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: tablist — корректная роль для таб-бара; nav сохраняем как landmark
     <nav role="tablist" aria-label="Разделы" className={cls}>
-      {TABS.map((t) => {
+      {tabs.map((t) => {
         const active = activeTab === t.id;
         const Icon = t.icon;
         return (
@@ -85,6 +91,7 @@ function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
   if (!top) {
     if (activeTab === 'chat') return <ChatScreen />;
     if (activeTab === 'browser') return <BrowserScreen />;
+    if (activeTab === 'budget') return <BudgetScreen />;
   } else if (top.kind === 'entity') {
     return <DetailScreen entityId={top.id} />;
   } else if (top.kind === 'thread') {
@@ -92,7 +99,7 @@ function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
   } else if (top.kind === 'settings') {
     return <SettingsScreen />;
   }
-  // Достижимо только для корня «неизвестного» таба (agenda/budget из старого persist).
+  // Достижимо только для корня «неизвестного» таба (agenda из старого persist).
   return <div className="p-4 text-sm text-text-secondary">Экран: {activeTab}</div>;
 }
 

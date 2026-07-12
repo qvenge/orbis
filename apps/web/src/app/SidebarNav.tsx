@@ -1,7 +1,9 @@
 import { FolderOpen, type LucideIcon, MessageSquare, Settings } from 'lucide-react';
 import { PinnedList } from '../features/browser/PinnedList';
+import { useBudgetTabVisible } from '../features/budget/useBudget';
 import { openPinnedEntity, openSettings, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
+import { BUDGET_TAB } from './router';
 
 const NAV_ITEMS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'chat', label: 'Чат', icon: MessageSquare },
@@ -14,6 +16,9 @@ export function SidebarNav() {
   const activeTab = useNav((s) => s.activeTab);
   const switchTab = useNav((s) => s.switchTab);
   const chatBadge = useRetryBuffer((s) => s.size); // §1.5
+  // Гейт вкладки Budget — как в TabBar (03-budget §1.2): без view вкладки нет.
+  const budgetVisible = useBudgetTabVisible();
+  const items = budgetVisible ? [...NAV_ITEMS, BUDGET_TAB] : NAV_ITEMS;
 
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r border-line bg-bg md:flex">
@@ -22,7 +27,7 @@ export function SidebarNav() {
       </div>
 
       <nav aria-label="Разделы" className="flex flex-col gap-0.5 px-2">
-        {NAV_ITEMS.map((t) => {
+        {items.map((t) => {
           const active = activeTab === t.id;
           const Icon = t.icon;
           return (
