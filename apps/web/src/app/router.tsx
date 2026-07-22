@@ -1,6 +1,7 @@
 import { FolderOpen, type LucideIcon, MessageSquare, Wallet } from 'lucide-react';
 import { BrowserScreen } from '../features/browser/BrowserScreen';
 import { BudgetScreen } from '../features/budget/BudgetScreen';
+import { CategoryScreen } from '../features/budget/CategoryScreen';
 import { useBudgetTabVisible } from '../features/budget/useBudget';
 import { ChatScreen } from '../features/chat/ChatScreen';
 import { ChatThread } from '../features/chat/ChatThread';
@@ -97,23 +98,13 @@ function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
   } else if (top.kind === 'thread') {
     return <ThreadScreen threadId={top.threadId} />;
   } else if (top.kind === 'budget-category') {
-    return <BudgetCategoryStub id={top.id} />;
+    // Экран категории Budget (03-budget §3.2, Task B3); id — id КАТЕГОРИИ (пушит B2).
+    return <CategoryScreen categoryId={top.id} />;
   } else if (top.kind === 'settings') {
     return <SettingsScreen />;
   }
   // Достижимо только для корня «неизвестного» таба (agenda из старого persist).
   return <div className="p-4 text-sm text-text-secondary">Экран: {activeTab}</div>;
-}
-
-// Заглушка экрана категории Budget (03-budget §3.2): навигация навешена в B2
-// (тап по карточке конверта), полноценный экран — Task B3.
-function BudgetCategoryStub({ id }: { id: string }) {
-  return (
-    <div className="flex h-full flex-col" data-category-id={id}>
-      <ScreenHeader title="Категория" />
-      <p className="p-4 text-sm text-text-secondary">Экран категории — Task B3.</p>
-    </div>
-  );
 }
 
 // Экран треда сущности поверх стека: шапка с «Назад» + общий чат-компонент (§2.2).

@@ -32,7 +32,8 @@ const MONTHS_RU = [
   'Декабрь',
 ];
 
-function monthTitle(month: string): string {
+/** «Июль 2026» из 'YYYY-MM' — заголовок периода Overview (§3.1) и экрана категории (§3.2). */
+export function monthTitle(month: string): string {
   const [y = '', m = '01'] = month.split('-');
   return `${MONTHS_RU[Number(m) - 1] ?? m} ${y}`;
 }
@@ -223,7 +224,8 @@ function OverviewBody({ data, month }: { data: BudgetOverview; month: string }) 
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** Секция с заголовком-капсом и Card-контейнером — общая для Overview и CategoryScreen. */
+export function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="flex flex-col gap-1">
       <h2 className="text-xs font-medium uppercase tracking-wide text-text-muted">{title}</h2>
