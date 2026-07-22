@@ -93,7 +93,7 @@ const handler =
   (
     over: { envelope?: EnvelopeStatus | null; body?: string; trend?: CategoryTrendPoint[] } = {},
   ): MockHandler =>
-  (path) => {
+  (path, input) => {
     if (path === 'user.getSettings') return settings;
     if (path === 'entity.get')
       return {
@@ -104,6 +104,14 @@ const handler =
       return over.envelope === undefined ? envelopeStatus : over.envelope;
     if (path === 'budget.categoryTrend') return over.trend ?? trend;
     if (path === 'entity.query') return transactions;
+    if (path === 'entity.create') {
+      // Эхо wire-сущности (как сервер): карточка результата B4 читает ОТВЕТ, не форму
+      const create = (input as { input: { id: string; title: string; aspects: unknown } }).input;
+      return {
+        ...ent(create.id, create.title, create.aspects as Record<string, unknown>),
+        actionId: 'act-1',
+      };
+    }
     return {};
   };
 

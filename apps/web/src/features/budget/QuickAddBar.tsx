@@ -27,8 +27,9 @@ type QueryEntity = RouterOutputs['entity']['query'][number];
 const RECENT_QUERY = 'aspect=orbis/financial, sortBy=occurred_on:desc, limit=20';
 const CATEGORIES_QUERY = 'aspect=orbis/category, sortBy=title:asc, limit=200';
 const MAX_PILLS = 5;
-// Сумма: целые/десятичные, запятая = точка (§3.6); нормализация — строковая, без float.
-const AMOUNT_RE = /^\d+([.,]\d+)?$/;
+// Сумма: целые/десятичные до 2 знаков, запятая = точка (§3.6); строгая граница —
+// «12.345» невалиден, а не молча обрезается до «12.34» (тихая потеря копеек запрещена).
+const AMOUNT_RE = /^\d+([.,]\d{1,2})?$/;
 
 /** "340" → "340.00", "12,5" → "12.50" — decimal-строка с двумя знаками (как fast-path §7.5). */
 function toDecimal2(raw: string): string {
@@ -49,9 +50,9 @@ function toOption(e: QueryEntity): CategoryOption {
 
 /** Успешная запись: данные карточки-результата (остаток конверта + Undo, §3.6). */
 type QuickAddResult = {
-  title: string;
+  title: string; // из ОТВЕТА сервера: при replay это записанная сущность, не стейт формы
   remainingText: string | null; // «8 400 ₽»; null — конверта на категорию нет (Unbudgeted)
-  actionId: string | null; // null — идемпотентный CONFLICT-повтор: Undo недоступен
+  actionId: string | null; // null — идемпотентный replay: журнал не писался, Undo недоступен
   undone: boolean;
 };
 
@@ -114,9 +115,9 @@ export function QuickAddBar({
     const dec = toDecimal2(amount.trim());
     const finalTitle = title.trim() !== '' ? title.trim() : `${categoryTitle} ${formatAmount(dec)}`;
     const date = todayISO(settings.data?.timezone); // occurred_on = сегодня локально (§2.3)
-    let actionId: string | null = null;
+    let created: RouterOutputs['entity']['create'];
     try {
-      const created = await create.mutateAsync({
+      created = await create.mutateAsync({
         input: {
           id: entityId,
           title: finalTitle,
@@ -133,26 +134,43 @@ export function QuickAddBar({
         },
         source: 'quick_capture',
       });
-      actionId = created.actionId ?? null;
     } catch (err) {
-      // CONFLICT по своему id — сервер уже принял запись при прошлой попытке
-      // (идемпотентность §5.3): это успех, но actionId неизвестен — Undo не предлагаем.
-      const conflict = err instanceof TRPCClientError && err.data?.code === 'CONFLICT';
-      if (!conflict) {
+      // Семантика executor'а (§5.3): честный повтор владельцем того же id — replay-УСПЕХ
+      // (не исключение), а CONFLICT кидается только когда id непригоден (занят чужой /
+      // RLS-невидимой строкой) — запись НЕ создана. Успех здесь не фабрикуем: ошибка
+      // пользователю + свежий UUID, иначе следующая попытка упрётся в тот же конфликт.
+      if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') {
+        setEntityId(newId());
+        setError('Не удалось записать — попробуйте ещё раз');
+      } else {
         setError(err instanceof Error ? err.message : 'Не удалось записать');
-        return; // форма и entityId сохранены — повтор шлёт тот же id
+        // Транспортный/прочий сбой: entityId сохранён — повтор шлёт тот же id
       }
+      return;
     }
+
+    // Всё для карточки — из ОТВЕТА: при replay (повтор после сбоя с отредактированной
+    // формой) сервер вернул ранее записанную сущность, стейт формы ей не обязан совпадать.
+    const fin = ((created.aspects ?? {}) as Record<string, Record<string, unknown> | undefined>)[
+      'orbis/financial'
+    ];
+    const createdRef = typeof fin?.category_ref === 'string' ? fin.category_ref : categoryId;
+    const createdOn = typeof fin?.occurred_on === 'string' ? fin.occurred_on : date;
 
     await invalidateBudget(utils);
     void utils.entity.query.invalidate(); // списки транзакций (§5.1)
     // Остаток конверта для карточки-результата (§3.6); ошибки чтения не роняют успех
     const env = await utils.budget.envelopeForCategory
-      .fetch({ categoryId, date })
+      .fetch({ categoryId: createdRef, date: createdOn })
       .catch(() => null);
     // Валютный символ — общий envelopeView (EnvelopeCard), не дублируем маппинг
     const remainingText = env ? `${formatAmount(env.remaining)} ${envelopeView(env).sym}` : null;
-    setResult({ title: finalTitle, remainingText, actionId, undone: false });
+    setResult({
+      title: created.title,
+      remainingText,
+      actionId: created.actionId ?? null,
+      undone: false,
+    });
     // Перезапуск формы: новый client-UUID, суммы/title чистые; категория и направление остаются
     setAmount('');
     setTitle('');
