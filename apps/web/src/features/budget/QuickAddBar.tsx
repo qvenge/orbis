@@ -19,13 +19,11 @@ import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
+import { CATEGORIES_QUERY, type CategoryOption, toOption } from './categories';
 import { envelopeView } from './EnvelopeCard';
 import { invalidateBudget, todayISO } from './useBudget';
 
-type QueryEntity = RouterOutputs['entity']['query'][number];
-
 const RECENT_QUERY = 'aspect=orbis/financial, sortBy=occurred_on:desc, limit=20';
-const CATEGORIES_QUERY = 'aspect=orbis/category, sortBy=title:asc, limit=200';
 const MAX_PILLS = 5;
 // Сумма: целые/десятичные до 2 знаков, запятая = точка (§3.6); строгая граница —
 // «12.345» невалиден, а не молча обрезается до «12.34» (тихая потеря копеек запрещена).
@@ -39,14 +37,6 @@ function toDecimal2(raw: string): string {
 
 const FIELD_CLS =
   'rounded-control border border-line bg-surface px-3 py-2 text-sm text-text transition focus-visible:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40';
-
-type CategoryOption = { id: string; title: string; icon: string | null };
-
-function toOption(e: QueryEntity): CategoryOption {
-  const icon = (e.aspects as Record<string, { icon?: unknown } | undefined>)['orbis/category']
-    ?.icon;
-  return { id: e.id, title: e.title, icon: typeof icon === 'string' && icon !== '' ? icon : null };
-}
 
 /** Успешная запись: данные карточки-результата (остаток конверта + Undo, §3.6). */
 type QuickAddResult = {

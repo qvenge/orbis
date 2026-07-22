@@ -1,0 +1,83 @@
+// Task B5 (03-budget §3.3): buildTxQuery — чистый билдер строки грамматики §6.1
+// для экрана «Транзакции». Тесты на состав клауз И на кавычки/экранирование
+// (урок бэклога об экранировании тегов: значения с ,/|/& — в кавычки).
+import { aspectJsonSchema, BUILTIN_ASPECT_IDS, buildFieldCatalog, parseQuery } from '@orbis/shared';
+import { expect, test } from 'vitest';
+import { buildTxQuery, monthRange } from './txQuery';
+
+const catalog = buildFieldCatalog(
+  BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
+);
+
+test('monthRange: полный календарный месяц, включая февраль и високосный год', () => {
+  expect(monthRange('2026-06')).toEqual({ start: '2026-06-01', end: '2026-06-30' });
+  expect(monthRange('2026-07')).toEqual({ start: '2026-07-01', end: '2026-07-31' });
+  expect(monthRange('2026-02')).toEqual({ start: '2026-02-01', end: '2026-02-28' });
+  expect(monthRange('2028-02')).toEqual({ start: '2028-02-01', end: '2028-02-29' });
+});
+
+test('минимальный запрос: только месяц — aspect + occurred_on-диапазон + сортировка + limit', () => {
+  expect(buildTxQuery({ month: '2026-06' })).toBe(
+    'aspect=orbis/financial, occurred_on=2026-06-01..2026-06-30, sortBy=occurred_on:desc, limit=200',
+  );
+});
+
+test('все фильтры §3.3: категория, направление, planned, диапазон сумм, поиск', () => {
+  const q = buildTxQuery({
+    month: '2026-06',
+    categoryId: '019d48ea-4188-765d-8e96-93a0ad9c262a',
+    direction: 'expense',
+    planned: false,
+    amountFrom: '500',
+    amountTo: '2000',
+    search: 'кофе',
+  });
+  expect(q).toBe(
+    'aspect=orbis/financial, occurred_on=2026-06-01..2026-06-30, ' +
+      'category_ref=019d48ea-4188-765d-8e96-93a0ad9c262a, direction=expense, planned=false, ' +
+      'amount=500..2000, search=кофе, sortBy=occurred_on:desc, limit=200',
+  );
+});
+
+test('одна граница суммы — строгое сравнение >/< (у грамматики §6.1 нет >=)', () => {
+  expect(buildTxQuery({ month: '2026-06', amountFrom: '500' })).toContain('amount>500');
+  expect(buildTxQuery({ month: '2026-06', amountTo: '2000' })).toContain('amount<2000');
+  expect(buildTxQuery({ month: '2026-06', amountFrom: '500' })).not.toContain('amount=');
+});
+
+test('planned=true и направление income', () => {
+  const q = buildTxQuery({ month: '2026-06', direction: 'income', planned: true });
+  expect(q).toContain('direction=income');
+  expect(q).toContain('planned=true');
+});
+
+test('экранирование поиска: запятая/|/&/кавычка/краевые пробелы — значение в кавычках', () => {
+  expect(buildTxQuery({ month: '2026-06', search: 'кофе, круассан' })).toContain(
+    'search="кофе, круассан"',
+  );
+  expect(buildTxQuery({ month: '2026-06', search: 'a|b&c' })).toContain('search="a|b&c"');
+  expect(buildTxQuery({ month: '2026-06', search: 'скидка "верная"' })).toContain(
+    'search="скидка \\"верная\\""',
+  );
+  expect(buildTxQuery({ month: '2026-06', search: ' пробел ' })).toContain('search=" пробел "');
+  // Пустой/пробельный поиск клаузы не даёт
+  expect(buildTxQuery({ month: '2026-06', search: '   ' })).not.toContain('search=');
+});
+
+test('round-trip: строка билдера с «опасным» поиском парсится грамматикой без ошибок', () => {
+  const nasty = ['кофе, круассан', 'a|b&c', 'кав"ычка', 'due=today, archived=any'];
+  for (const search of nasty) {
+    const q = buildTxQuery({
+      month: '2026-06',
+      categoryId: '019d48ea-4188-765d-8e96-93a0ad9c262a',
+      direction: 'expense',
+      planned: true,
+      amountFrom: '0.10',
+      amountTo: '99999.99',
+      search,
+    });
+    const r = parseQuery(q, catalog);
+    expect(r.ok, `не распарсилось: ${q}`).toBe(true);
+    if (r.ok) expect(r.ast.search).toBe(search); // инъекция невозможна: поиск остался значением
+  }
+});

@@ -3,10 +3,11 @@
 // (EnvelopeCreateSheet: [+ конверт] и вход из Unbudgeted), Coming up / Planned.
 // Все суммы — готовые decimal-строки сервера, клиент только форматирует (format.ts).
 import type { BudgetOverview } from '@orbis/shared';
-import { ChevronLeft, ChevronRight, Plus, Repeat } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, ReceiptText, Repeat } from 'lucide-react';
 import { useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { formatAmount, formatMoney, type MoneyTone } from '../../lib/format';
+import { useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -42,7 +43,8 @@ export function monthTitle(month: string): string {
 // Текущий месяц 'YYYY-MM' в таймзоне пользователя (§3.1: дефолт заголовка периода).
 // До загрузки настроек (или при битой tz) — таймзона браузера: расходится с
 // пользовательской только в часы около границы месяца, ключ запроса стабилен.
-function currentMonth(tz?: string): string {
+// Экспорт — дефолт фильтра периода экрана «Транзакции» (§3.3, B5).
+export function currentMonth(tz?: string): string {
   let parts: Intl.DateTimeFormatPart[];
   try {
     parts = new Intl.DateTimeFormat('en-CA', {
@@ -70,6 +72,20 @@ export function BudgetScreen() {
         title={`Бюджет · ${monthTitle(month)}`}
         actions={
           <>
+            {/* Вход в экран «Транзакции» (§3.3): у мокапа §3.1 явной точки нет — решение B5:
+                иконка-кнопка в шапке Overview (по образцу заголовка §3.3 с [🔍/фильтры]). */}
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Транзакции"
+              data-testid="open-transactions"
+              onClick={() => {
+                const { activeTab, push } = useNav.getState();
+                push(activeTab, { kind: 'budget-transactions' });
+              }}
+            >
+              <ReceiptText size={18} aria-hidden />
+            </Button>
             <Button
               size="icon"
               variant="ghost"
