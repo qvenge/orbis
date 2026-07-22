@@ -193,8 +193,13 @@ test('тренд: бар на месяц с шириной от максимум
   const bars = screen.getAllByTestId('trend-bar');
   expect(bars.map((b) => b.style.width)).toEqual(['40%', '50%', '72%']);
 
-  // Штрих-линия лимита: у 2026-05 конверта не было (limit=null) — штриха нет
-  expect(screen.getAllByTestId('trend-limit')).toHaveLength(2);
+  // Штрих-линия лимита: у 2026-05 конверта не было (limit=null) — штриха нет.
+  // Типовой сценарий «limit = максимум шкалы» (обе точки: 30 000 = max) — позиция
+  // клампится внутрь контейнера (calc(100% − 1px)), иначе overflow-hidden срезал бы
+  // штрих на left:100% целиком и «(лимит ─ ─ ─)» из мокапа §3.2 не был бы виден.
+  const ticks = screen.getAllByTestId('trend-limit');
+  expect(ticks).toHaveLength(2);
+  expect(ticks.map((t) => t.style.left)).toEqual(['calc(100% - 1px)', 'calc(100% - 1px)']);
 });
 
 test('пустой тренд: секция скрыта', async () => {
@@ -215,6 +220,9 @@ test('транзакции: entity.query по детям конверта, Nativ
     query: 'children_of=env-1, aspect=orbis/financial, sortBy=occurred_on:desc',
   });
 
+  // Заголовок секции — период текущего конверта (мокап §3.2: «Транзакции июня»)
+  expect(screen.getByText('Транзакции июля')).toBeInTheDocument();
+
   const rows = screen.getAllByTestId('tx-row');
   expect(rows[0]).toHaveTextContent('Перекрёсток');
   expect(rows[0]).toHaveTextContent('−2 340'); // native-рендер §3.6: сумма со знаком
@@ -224,6 +232,26 @@ test('транзакции: entity.query по детям конверта, Nativ
   // 🔁 — только у recurring-инстанса (aspects['orbis/financial'].recurring === true)
   expect(screen.getAllByLabelText('повторяется')).toHaveLength(1);
   expect(rows[1]?.contains(screen.getByLabelText('повторяется'))).toBe(true);
+});
+
+test('произвольный период конверта (§2.9): подзаголовок и заголовок транзакций — диапазон дат', async () => {
+  const arbitrary: EnvelopeStatus = {
+    ...envelopeStatus,
+    envelope: ent('env-1', 'Конверт «Еда» отпуск', {
+      'orbis/budget': {
+        category_ref: 'cat-1',
+        limit: '28800.00',
+        currency: 'RUB',
+        period_start: '2026-08-10',
+        period_end: '2026-08-24',
+      },
+    }),
+  } as EnvelopeStatus;
+  renderWithProviders(<CategoryScreen categoryId="cat-1" />, handler({ envelope: arbitrary }));
+  await waitFor(() => expect(screen.getByTestId('category-envelope')).toBeInTheDocument());
+
+  expect(screen.getByText('10.08 – 24.08')).toBeInTheDocument();
+  expect(screen.getByText('Транзакции 10.08 – 24.08')).toBeInTheDocument();
 });
 
 test('тап по транзакции пушит detail-экран сущности', async () => {

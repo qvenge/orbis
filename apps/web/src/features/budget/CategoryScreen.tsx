@@ -46,6 +46,22 @@ function monthShort(period: string): string {
   return MONTHS_RU_SHORT[Number(period.slice(5, 7)) - 1] ?? period;
 }
 
+// Родительный падеж — заголовок секции транзакций по мокапу §3.2 («Транзакции июня»).
+const MONTHS_RU_GEN = [
+  'января',
+  'февраля',
+  'марта',
+  'апреля',
+  'мая',
+  'июня',
+  'июля',
+  'августа',
+  'сентября',
+  'октября',
+  'ноября',
+  'декабря',
+];
+
 // «Сегодня» 'YYYY-MM-DD' в таймзоне пользователя (§2.3; паттерн — currentMonth
 // в BudgetScreen): до загрузки настроек / при битой tz — таймзона браузера.
 function todayISO(tz?: string): string {
@@ -67,14 +83,29 @@ function lastDayOf(month: string): number {
   return new Date(Date.UTC(y, m, 0)).getUTCDate();
 }
 
-/** Подпись периода конверта: полный календарный месяц → «Июль 2026», иначе DD.MM – DD.MM (§2.9). */
-function periodLabel(start: string, end: string): string {
+/** Период `[start; end]` — полный календарный месяц? (месячный vs произвольный конверт, §2.9) */
+function isFullMonth(start: string, end: string): boolean {
   const month = start.slice(0, 7);
-  const fullMonth =
+  return (
     end.slice(0, 7) === month &&
     start.endsWith('-01') &&
-    end.slice(8) === String(lastDayOf(month)).padStart(2, '0');
-  return fullMonth ? monthTitle(month) : `${ddmm(start)} – ${ddmm(end)}`;
+    end.slice(8) === String(lastDayOf(month)).padStart(2, '0')
+  );
+}
+
+/** Подпись периода конверта: полный календарный месяц → «Июль 2026», иначе DD.MM – DD.MM (§2.9). */
+function periodLabel(start: string, end: string): string {
+  return isFullMonth(start, end) ? monthTitle(start.slice(0, 7)) : `${ddmm(start)} – ${ddmm(end)}`;
+}
+
+/** «Транзакции июля» (мокап §3.2) / «Транзакции 10.08 – 24.08» (произвольный период §2.9). */
+function txTitle(start: string | null, end: string | null): string {
+  if (!start || !end) return 'Транзакции';
+  if (isFullMonth(start, end)) {
+    const gen = MONTHS_RU_GEN[Number(start.slice(5, 7)) - 1];
+    return gen ? `Транзакции ${gen}` : 'Транзакции';
+  }
+  return `Транзакции ${ddmm(start)} – ${ddmm(end)}`;
 }
 
 export function CategoryScreen({ categoryId }: { categoryId: string }) {
@@ -157,7 +188,7 @@ export function CategoryScreen({ categoryId }: { categoryId: string }) {
             {trendQ.data && trendQ.data.length > 0 && <TrendSection points={trendQ.data} />}
 
             {status && (
-              <Section title="Транзакции">
+              <Section title={txTitle(start, end)}>
                 {txQ.isLoading ? (
                   <Skeleton className="h-16" />
                 ) : txQ.data && txQ.data.length > 0 ? (
@@ -260,7 +291,11 @@ function TrendSection({ points }: { points: CategoryTrendPoint[] }) {
                 data-testid="trend-limit"
                 aria-hidden
                 className="absolute inset-y-0 border-l border-dashed border-text-secondary/70"
-                style={{ left: `${envelopePercent(p.limit, max)}%` }}
+                // Кламп внутрь контейнера: типовой случай limit = максимум шкалы даёт
+                // left:100%, и overflow-hidden срезал бы 1px-штрих целиком — «(лимит ─ ─ ─)»
+                // §3.2 обязан быть виден у правого края. Нижняя граница ≥1% удерживает
+                // calc(−1px) от ухода за левый край при вырожденном limit≈0.
+                style={{ left: `calc(${Math.max(1, envelopePercent(p.limit, max))}% - 1px)` }}
               />
             )}
           </div>
