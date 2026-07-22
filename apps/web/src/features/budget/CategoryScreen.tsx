@@ -3,9 +3,11 @@
 // не дублируются), «Правила» = body категории, [Тред] → персистентный тред сущности
 // (threadId из entity.get include=thread), мини-тренд по budget.categoryTrend
 // (простые div-бары + штрих лимита, без чарт-библиотеки), транзакции конверта
-// (children_of, NativeRow §3.6, 🔁 у recurring-инстансов) и заглушка quick-add (B4).
+// (children_of, NativeRow §3.6, 🔁 у recurring-инстансов) и quick-add с предзаданной
+// категорией ([+ запись в эту категорию] → QuickAddBar preset, Task B4, §3.6).
 import type { CategoryTrendPoint, EnvelopeStatus } from '@orbis/shared';
 import { Repeat } from 'lucide-react';
+import { useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { formatAmount } from '../../lib/format';
 import { useNav } from '../../state/navigation';
@@ -22,6 +24,8 @@ import {
   envelopePercent,
   envelopeView,
 } from './EnvelopeCard';
+import { QuickAddBar } from './QuickAddBar';
+import { todayISO } from './useBudget';
 
 type QueryEntity = RouterOutputs['entity']['query'][number];
 
@@ -62,21 +66,6 @@ const MONTHS_RU_GEN = [
   'декабря',
 ];
 
-// «Сегодня» 'YYYY-MM-DD' в таймзоне пользователя (§2.3; паттерн — currentMonth
-// в BudgetScreen): до загрузки настроек / при битой tz — таймзона браузера.
-function todayISO(tz?: string): string {
-  try {
-    return new Intl.DateTimeFormat('en-CA', {
-      ...(tz ? { timeZone: tz } : {}),
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date());
-  } catch {
-    return todayISO(); // невалидная tz из настроек — не роняем рендер
-  }
-}
-
 /** Последний день месяца 'YYYY-MM' (UTC-хак: день 0 следующего месяца). */
 function lastDayOf(month: string): number {
   const [y = 0, m = 1] = month.split('-').map(Number);
@@ -109,6 +98,7 @@ function txTitle(start: string | null, end: string | null): string {
 }
 
 export function CategoryScreen({ categoryId }: { categoryId: string }) {
+  const [quickAdd, setQuickAdd] = useState(false);
   const settings = trpc.user.getSettings.useQuery();
   const date = todayISO(settings.data?.timezone);
   const catQ = trpc.entity.get.useQuery({ id: categoryId, include: ['body', 'thread'] });
@@ -199,16 +189,21 @@ export function CategoryScreen({ categoryId }: { categoryId: string }) {
               </Section>
             )}
 
-            {/* Quick-add-бар — Task B4: кнопка уже на месте (§3.2), wiring подключит B4. */}
-            <Button
-              variant="outline"
-              size="sm"
-              className="self-start"
-              disabled
-              title="Быстрое добавление — скоро (Task B4)"
-            >
-              + запись в эту категорию
-            </Button>
+            {/* Quick-add с предзаданной категорией (Task B4, §3.2/§3.6): условный маунт —
+                каждое открытие формы генерирует свежий client-UUID (идемпотентность §5.3). */}
+            {quickAdd && category ? (
+              <QuickAddBar preset={{ id: categoryId, title: category.title }} />
+            ) : (
+              <Button
+                variant="outline"
+                size="sm"
+                className="self-start"
+                disabled={!category}
+                onClick={() => setQuickAdd(true)}
+              >
+                + запись в эту категорию
+              </Button>
+            )}
           </>
         )}
       </div>

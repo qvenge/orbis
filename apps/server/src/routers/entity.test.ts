@@ -57,9 +57,12 @@ describe('entity.create / entity.get (§9.2)', () => {
     expect(created.ownerId).toBe(user);
     expect(created.tags).toEqual(['task']); // нормализация executor'а, не роутера
     expect(created.createdAt.endsWith('Z')).toBe(true);
+    // actionId — аддитивное поле поверх wire-сущности (Undo из UI-форм, 03-budget §3.6)
+    const { actionId, ...createdEntity } = created;
+    expect(typeof actionId).toBe('string');
 
     const got = await caller.entity.get({ id: created.id });
-    expect(got.entity).toEqual(created);
+    expect(got.entity).toEqual(createdEntity);
     expect(got.entity.aspects['orbis/task']).toEqual({ status: 'inbox' });
     // include default — body+relations; backlinks/thread не запрошены (§9.2)
     expect(got.relations).toEqual([]);
@@ -98,6 +101,31 @@ describe('entity.create / entity.get (§9.2)', () => {
     const cause = e.cause as unknown as { code: string; details?: { reason?: string } };
     expect(cause.code).toBe('CONFLICT');
     expect(cause.details?.reason).toBe('id_conflict');
+  });
+
+  test('actionId из create пригоден для ai.undo; идемпотентный replay actionId не отдаёт (03 §3.6)', async () => {
+    const caller = callerFor(freshUserId());
+    const id = crypto.randomUUID();
+    const created = await caller.entity.create({
+      input: { id, title: 'Обед 340', tags: [] },
+      source: 'quick_capture',
+    });
+    expect(typeof created.actionId).toBe('string');
+
+    // Повтор того же client-UUID владельцем — идемпотентный replay (§5.3): журнал
+    // не писался, actionId под этим запросом не существует → поле отсутствует.
+    const replayed = await caller.entity.create({
+      input: { id, title: 'Обед 340', tags: [] },
+      source: 'quick_capture',
+    });
+    expect(replayed.id).toBe(id);
+    expect(replayed.actionId).toBeUndefined();
+
+    // Undo по actionId откатывает создание (инверсия — архивация, §7.8)
+    const r = await caller.ai.undo({ actionId: created.actionId as string });
+    expect(r.ok).toBe(true);
+    const got = await caller.entity.get({ id });
+    expect(got.entity.archived).toBe(true);
   });
 
   test('get несуществующей (или чужой под RLS) сущности → NOT_FOUND', async () => {

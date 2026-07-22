@@ -14,6 +14,24 @@ export function monthShift(month: string, delta: -1 | 1): string {
 }
 
 /**
+ * «Сегодня» 'YYYY-MM-DD' в таймзоне пользователя (03-budget §2.3): до загрузки
+ * настроек / при битой tz — таймзона браузера (не роняем рендер). Общая для
+ * CategoryScreen (дата запроса конверта) и QuickAddBar (occurred_on §3.6).
+ */
+export function todayISO(tz?: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      ...(tz ? { timeZone: tz } : {}),
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date());
+  } catch {
+    return todayISO(); // невалидная tz из настроек
+  }
+}
+
+/**
  * Гейт вкладки Budget (03-budget §1.2): вкладка видна только когда view
  * 'orbis-budget' установлен (installedViews из user.getSettings).
  */

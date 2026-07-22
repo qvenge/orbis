@@ -13,6 +13,7 @@ import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
 import { EnvelopeCard } from './EnvelopeCard';
 import { EnvelopeCreateSheet } from './EnvelopeCreateSheet';
+import { QuickAddBar } from './QuickAddBar';
 import { monthShift, useBudgetOverview } from './useBudget';
 
 const TONE_CLASS: Record<MoneyTone, string> = { danger: 'text-danger', positive: 'text-success' };
@@ -98,6 +99,8 @@ export function BudgetScreen() {
         ) : (
           <OverviewSkeleton />
         )}
+        {/* Quick-add бар внизу Overview (Task B4, §3.6) */}
+        <QuickAddBar />
       </div>
     </div>
   );

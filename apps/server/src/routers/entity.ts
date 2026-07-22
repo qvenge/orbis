@@ -100,7 +100,7 @@ export const entityRouter = router({
     .input(
       z.object({ input: entityCreateInput, source: z.enum(['fast_path', 'quick_capture', 'ui']) }),
     )
-    .mutation(async ({ ctx, input }): Promise<WireEntity> => {
+    .mutation(async ({ ctx, input }): Promise<WireEntity & { actionId?: string }> => {
       const r = await execute(
         ctx.db,
         {
@@ -112,7 +112,11 @@ export const entityRouter = router({
         { sink },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
-      return r.results[0] as WireEntity;
+      // actionId — для Undo прямо из UI-формы (03-budget §3.6, quick-add): аддитивное
+      // поле поверх wire-сущности, потребители `.id` не задеты. При идемпотентном
+      // replay (§5.3) журнал не писался — actionId под этим id не существует, не отдаём.
+      const entity = r.results[0] as WireEntity;
+      return r.idempotentReplay ? entity : { ...entity, actionId: r.actionId };
     }),
 
   update: ownerOnlyProcedure

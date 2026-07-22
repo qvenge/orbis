@@ -1,7 +1,8 @@
 // Task B3: экран категории (03-budget §3.2) — развёрнутая карточка текущего конверта
 // (формулы §2.4, фазы §2.9), «Правила» = body категории, [Тред] → тред категории,
 // мини-тренд по budget.categoryTrend (простые div-бары + штрих лимита), транзакции
-// конверта (children_of, NativeRow §3.6, 🔁 у recurring-инстансов), заглушка quick-add (B4).
+// конверта (children_of, NativeRow §3.6, 🔁 у recurring-инстансов), quick-add с
+// предзаданной категорией (B4, §3.6).
 import type { CategoryTrendPoint, EnvelopeStatus } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
@@ -264,13 +265,33 @@ test('тап по транзакции пушит detail-экран сущнос
   expect(useNav.getState().stacks.budget).toEqual([{ kind: 'entity', id: 't1' }]);
 });
 
-// --- заглушка quick-add (B4) ---------------------------------------------------------------
+// --- quick-add с предзаданной категорией (B4, перенесённый тест B3-Шаг1) --------------------
 
-test('[+ запись в эту категорию] присутствует, но отключена до QuickAddBar (B4)', async () => {
-  renderWithProviders(<CategoryScreen categoryId="cat-1" />, handler());
+test('[+ запись] показывает quick-add с зафиксированной категорией', async () => {
+  const { calls } = renderWithProviders(<CategoryScreen categoryId="cat-1" />, handler());
   await waitFor(() => expect(screen.getByTestId('category-envelope')).toBeInTheDocument());
-  const btn = screen.getByRole('button', { name: '+ запись в эту категорию' });
-  expect(btn).toBeDisabled();
+
+  fireEvent.click(screen.getByRole('button', { name: '+ запись в эту категорию' }));
+  expect(screen.getByTestId('quickadd-bar')).toBeInTheDocument();
+  // Категория зафиксирована: пилюль и полного выбора нет (§3.2/§3.6)
+  expect(screen.queryAllByTestId('category-pill')).toHaveLength(0);
+  expect(screen.queryByRole('button', { name: 'Все категории' })).toBeNull();
+
+  // Сабмит уходит с category_ref экрана и title-дефолтом «Еда <сумма>»
+  fireEvent.change(screen.getByLabelText('Сумма'), { target: { value: '340' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Записать' }));
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
+  const call = calls.find((c) => c.path === 'entity.create')?.input as {
+    input: { title: string; aspects: Record<string, Record<string, unknown>> };
+    source: string;
+  };
+  expect(call.source).toBe('quick_capture');
+  expect(call.input.title).toBe('Еда 340');
+  expect(call.input.aspects['orbis/financial']).toMatchObject({
+    amount: '340.00',
+    direction: 'expense',
+    category_ref: 'cat-1',
+  });
 });
 
 // --- интеграция с router: budget-category в стеке рендерит CategoryScreen -------------------

@@ -154,6 +154,13 @@ test('Overview: Skeleton, пока budget.overview грузится', async () =
   expect(screen.queryByTestId('balance-card')).toBeNull();
 });
 
+test('quick-add бар присутствует внизу Overview (B4, §3.6)', async () => {
+  renderWithProviders(<BudgetScreen />, budgetHandler(fullOverview));
+  await waitFor(() => expect(screen.getByTestId('balance-card')).toBeInTheDocument());
+  expect(screen.getByTestId('quickadd-bar')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Записать' })).toBeInTheDocument();
+});
+
 test('postDue вызывается один раз на mount', async () => {
   const { calls } = renderWithProviders(<BudgetScreen />, budgetHandler(fullOverview));
   await waitFor(() => expect(screen.getByTestId('balance-card')).toBeInTheDocument());
