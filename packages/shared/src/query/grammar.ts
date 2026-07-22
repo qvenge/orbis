@@ -45,11 +45,17 @@ export type QueryFieldCondition =
  *   формата decimal-string. Хранится строкой: бэкенд сравнивает через ту же точную
  *   base-10 арифметику, что денежные операции (§3.3); IEEE-754 `number` запрещён;
  * - `timestamp` — абсолютное значение ISO 8601 для core-полей типа timestamp
- *   (`created_at`, `updated_at`): `updated_at>2026-07-02T09:00:00Z` (паттерн курсора агента, §9.3).
+ *   (`created_at`, `updated_at`): `updated_at>2026-07-02T09:00:00Z` (паттерн курсора агента, §9.3);
+ * - `date` — абсолютная календарная дата `YYYY-MM-DD` для date-полей АСПЕКТОВ
+ *   (`occurred_on`, `due_date`): `occurred_on=2026-06-01..2026-06-30` — фильтр периода
+ *   экрана «Транзакции» (03-budget §3.3, Task B5). Значения ISO-даты сравниваются
+ *   лексикографически (= хронологически для этого формата; прецедент binding.ts/post-due.ts).
+ *   Timestamp-поля аспектов операторами по-прежнему не сравниваются (YAGNI B5).
  */
 export type QueryComparableValue =
   | { kind: 'decimal'; value: string }
-  | { kind: 'timestamp'; value: string };
+  | { kind: 'timestamp'; value: string }
+  | { kind: 'date'; value: string };
 
 /**
  * Ссылка на сущность в `children_of=` / `parents_of=`: явный UUID

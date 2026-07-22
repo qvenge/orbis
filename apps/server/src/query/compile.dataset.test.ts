@@ -448,6 +448,16 @@ describe('датасет §6.2: состав И порядок под RLS', () =
     ]);
   });
 
+  test('2b. абсолютный диапазон date-поля (B5): occurred_on=2026-06-26..2026-06-30 — границы включительно', async () => {
+    // Лексикографика ISO-дат = хронология; fin010 (06-25) и fin1000 (07-02) вне окна,
+    // finB (07-01, чужой) невидим и без date-фильтра — RLS.
+    expect(
+      ids(await run(USER_A, 'occurred_on=2026-06-26..2026-06-30, sortBy=occurred_on:asc')),
+    ).toEqual([ID.fin020, ID.fin030, ID.fin340]);
+    // Сравнение: строго после 2026-06-30 — только июльская запись
+    expect(ids(await run(USER_A, 'occurred_on>2026-06-30'))).toEqual([ID.fin1000]);
+  });
+
   test('3. курсор агента (§9.3): updated_at> середины вставки — только поздняя половина', async () => {
     const rows = await run(
       USER_A,

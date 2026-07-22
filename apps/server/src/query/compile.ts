@@ -290,7 +290,12 @@ function numericExpr(ref: FieldRef): SQL {
   return sql`(${ref.expr})::numeric`;
 }
 
-/** `f>v` / `f<v`: numeric для полей аспектов, timestamptz для core-колонок (§6.1). */
+/**
+ * `f>v` / `f<v`: numeric для числовых полей аспектов, timestamptz для core-колонок (§6.1);
+ * date-поля аспектов (kind 'date', B5) — лексикографическое сравнение ISO-дат как текста
+ * (= хронологическое для YYYY-MM-DD; прецедент binding.ts/post-due.ts, без каста —
+ * парсер гарантировал календарно-валидную дату).
+ */
 function compileComparison(
   f: QueryComparisonFilter,
   ctx: CompileContext,
@@ -298,17 +303,21 @@ function compileComparison(
 ): SQL {
   const ref = fieldRef(f.field, ctx, aspects);
   const op = sql.raw(f.op); // '>' | '<' — закрытый union из AST, не пользовательская строка
-  return f.value.kind === 'timestamp'
-    ? sql`${ref.expr} ${op} ${f.value.value}::timestamptz`
-    : sql`${numericExpr(ref)} ${op} ${f.value.value}::numeric`;
+  if (f.value.kind === 'timestamp') return sql`${ref.expr} ${op} ${f.value.value}::timestamptz`;
+  if (f.value.kind === 'date') return sql`${ref.expr} ${op} ${f.value.value}`;
+  return sql`${numericExpr(ref)} ${op} ${f.value.value}::numeric`;
 }
 
-/** `f=a..b`: BETWEEN, границы включительно (§6.1). */
+/** `f=a..b`: BETWEEN, границы включительно (§6.1); date-поля — лексикографически ISO (B5). */
 function compileRange(f: QueryRangeFilter, ctx: CompileContext, aspects: Set<string>): SQL {
   const ref = fieldRef(f.field, ctx, aspects);
-  return f.min.kind === 'timestamp'
-    ? sql`${ref.expr} BETWEEN ${f.min.value}::timestamptz AND ${f.max.value}::timestamptz`
-    : sql`${numericExpr(ref)} BETWEEN ${f.min.value}::numeric AND ${f.max.value}::numeric`;
+  if (f.min.kind === 'timestamp') {
+    return sql`${ref.expr} BETWEEN ${f.min.value}::timestamptz AND ${f.max.value}::timestamptz`;
+  }
+  if (f.min.kind === 'date') {
+    return sql`${ref.expr} BETWEEN ${f.min.value} AND ${f.max.value}`;
+  }
+  return sql`${numericExpr(ref)} BETWEEN ${f.min.value}::numeric AND ${f.max.value}::numeric`;
 }
 
 /** UUID из `children_of=`/`parents_of=`; `this` без контекста — структурная ошибка. */

@@ -82,6 +82,31 @@ describe('parseQuery: позитивные случаи §6.1', () => {
       value: { kind: 'timestamp', value: '2026-07-02T09:00:00Z' },
     });
   });
+  test('абсолютный диапазон date-поля аспекта: occurred_on=2026-06-01..2026-06-30 (§6.1, B5)', () => {
+    const r = parse('aspect=orbis/financial, occurred_on=2026-06-01..2026-06-30');
+    expect(r.ok && r.ast.filters[1]).toEqual({
+      kind: 'range',
+      field: 'occurred_on',
+      min: { kind: 'date', value: '2026-06-01' },
+      max: { kind: 'date', value: '2026-06-30' },
+    });
+  });
+  test('абсолютные сравнения date-поля аспекта: occurred_on>… / due_date<…', () => {
+    const r1 = parse('aspect=orbis/financial, occurred_on>2026-06-01');
+    expect(r1.ok && r1.ast.filters[1]).toEqual({
+      kind: 'comparison',
+      field: 'occurred_on',
+      op: '>',
+      value: { kind: 'date', value: '2026-06-01' },
+    });
+    const r2 = parse('due_date<2026-07-01');
+    expect(r2.ok && r2.ast.filters[0]).toEqual({
+      kind: 'comparison',
+      field: 'due_date',
+      op: '<',
+      value: { kind: 'date', value: '2026-07-01' },
+    });
+  });
   test('children_of/parents_of: uuid и this', () => {
     const id = '019ea8b1-4778-7f3d-9a5c-6a521fa1cc24';
     const r = parse(`children_of=${id}, parents_of=this`);
@@ -131,6 +156,26 @@ describe('parseQuery: ошибки §6.4 (message + position)', () => {
   test('title в позиции фильтра занят параметром — отбор по заголовку только search=', () => {
     const r = parse('title=My');
     expect(r.ok && r.ast.title).toBe('My'); // это параметр заголовка, не фильтр
+  });
+  test('date-поле аспекта: не-дата в диапазоне/сравнении — ошибка, календарная валидность обеих границ', () => {
+    // Значение обязано быть YYYY-MM-DD: ISO-timestamp и мусор для date-поля отклоняются
+    expect(fail('aspect=orbis/financial, occurred_on>abc').message).toMatch(/YYYY-MM-DD|дат/i);
+    expect(fail('aspect=orbis/financial, occurred_on>2026-06-01T00:00:00Z').message).toMatch(
+      /YYYY-MM-DD|дат/i,
+    );
+    // Календарно-невалидные даты — ошибка парсинга, не тихий SQL-морок (§6.4)
+    expect(fail('aspect=orbis/financial, occurred_on=2026-02-30..2026-03-01').message).toMatch(
+      /календарно/i,
+    );
+    expect(fail('aspect=orbis/financial, occurred_on=2026-06-01..2026-13-01').message).toMatch(
+      /календарно/i,
+    );
+  });
+  test('строковые и timestamp-поля аспектов операторами/диапазоном не сравниваются (без расширения лишнего)', () => {
+    expect(fail('aspect=orbis/task, status>done').message).toMatch(/тип string/i);
+    // start_at — timestamp-поле аспекта: расширение B5 покрывает только date-поля
+    expect(fail('start_at>2026-06-01').message).toMatch(/тип timestamp/i);
+    expect(fail('start_at=2026-06-01..2026-06-30').message).toMatch(/тип timestamp/i);
   });
   test('незакрытая кавычка, нулевой limit, кривой display', () => {
     expect(fail('title="oops').message).toMatch(/кавычк/i);

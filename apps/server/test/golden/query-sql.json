@@ -122,5 +122,19 @@
     "query": "aspect=orbis/financial, sortBy=amount:desc|counterparty:asc|title:asc",
     "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 ORDER BY (aspects->'orbis/financial'->>'amount')::numeric DESC NULLS LAST, (aspects->'orbis/financial'->>'counterparty') ASC NULLS LAST, title ASC NULLS LAST LIMIT $2",
     "params": ["orbis/financial", 500]
+  },
+  {
+    "name": "Абсолютный диапазон date-поля аспекта: occurred_on=2026-06-01..2026-06-30 (B5, 03 §3.3)",
+    "query": "aspect=orbis/financial, occurred_on=2026-06-01..2026-06-30, sortBy=occurred_on:desc",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND aspects->'orbis/financial'->>'occurred_on' BETWEEN $2 AND $3 ORDER BY (aspects->'orbis/financial'->>'occurred_on')::date DESC NULLS LAST LIMIT $4",
+    "params": ["orbis/financial", "2026-06-01", "2026-06-30", 500],
+    "countSql": "SELECT count(*) FROM entities WHERE true AND NOT archived AND aspects ? $1 AND aspects->'orbis/financial'->>'occurred_on' BETWEEN $2 AND $3",
+    "countParams": ["orbis/financial", "2026-06-01", "2026-06-30"]
+  },
+  {
+    "name": "Абсолютные сравнения date-поля аспекта: occurred_on>… и due_date<… (B5)",
+    "query": "aspect=orbis/financial, occurred_on>2026-06-01, due_date<2026-07-01",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND aspects->'orbis/financial'->>'occurred_on' > $2 AND aspects->'orbis/task'->>'due_date' < $3 LIMIT $4",
+    "params": ["orbis/financial", "2026-06-01", "2026-07-01", 500]
   }
 ]

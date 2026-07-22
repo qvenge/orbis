@@ -99,7 +99,10 @@ function instantOfLocal(dateISO: string, time: WallClock['time'], timeZone: stri
  * не платят ничего. Условие — по полям start_at/occurred_on (аспекты orbis/schedule,
  * orbis/financial): относительные токены дают явный диапазон (overdue и прочий
  * «открытый низ» — только сегодня и будущее: прошлое лениво не порождаем),
- * литеральная 'YYYY-MM-DD' — окно этого дня. Несколько условий объединяются
+ * литеральная 'YYYY-MM-DD' — окно этого дня; абсолютный диапазон `occurred_on=a..b`
+ * (kind 'date', B5 — обязательство бэклога A) — окно [a; b]; абсолютные сравнения:
+ * `>X` — от следующего дня до горизонта +14д, `<X` — открытый низ (как overdue:
+ * только сегодня и будущее) до дня перед X. Несколько условий объединяются
  * в [min from; max to]; горизонт +14д обрезает materializeInstances.
  */
 export function materializationWindow(
@@ -113,7 +116,30 @@ export function materializationWindow(
     to = to === null || t > to ? t : to;
   };
   for (const filter of ast.filters) {
-    if (filter.kind !== 'field' || !MATERIALIZABLE_FIELDS.has(filter.field)) continue;
+    if (
+      (filter.kind !== 'field' && filter.kind !== 'range' && filter.kind !== 'comparison') ||
+      !MATERIALIZABLE_FIELDS.has(filter.field)
+    ) {
+      continue;
+    }
+    if (filter.kind === 'range') {
+      // Абсолютный диапазон date-поля (B5): границы включительно, обе гарантированы парсером
+      if (filter.min.kind === 'date' && filter.max.kind === 'date') {
+        widen(filter.min.value, filter.max.value);
+      }
+      continue;
+    }
+    if (filter.kind === 'comparison') {
+      if (filter.value.kind !== 'date') continue;
+      if (filter.op === '>') {
+        // Строго после X; верх не ограничен → горизонт +14д от сегодня
+        widen(addDays(filter.value.value, 1), addDays(today, HORIZON_DAYS));
+      } else {
+        // Строго до X — открытый низ: материализуем только сегодня и будущее (как overdue)
+        widen(today, addDays(filter.value.value, -1));
+      }
+      continue;
+    }
     // noneOf («не эти даты») диапазона не задаёт
     if (filter.condition.kind !== 'anyOf') continue;
     for (const v of filter.condition.values) {
