@@ -181,7 +181,14 @@ export function useFastPath(threadId: string) {
     } catch (err) {
       const outcome = mapSendError(err);
       // CONFLICT по своему id — сервер уже принял эту запись (идемпотентность §5.3): успех.
-      if (outcome === 'confirmed') return;
+      // Запись НА сервере есть → кэши стухли так же, как при обычном успехе (ревью B7):
+      // без инвалидации остаток §4.1 и бейдж §6.1 висят «до записи» до следующей мутации.
+      if (outcome === 'confirmed') {
+        void utils.entity.query.invalidate();
+        void utils.entity.count.invalidate();
+        void utils.budget.invalidate();
+        return;
+      }
       if (outcome === 'business_rejection') {
         // §5.3: бизнес-отказ НЕ буферизуется, а показывается — иначе ввод исчезал молча
         // (карточка успеха на экране, сущности нет, запись вычищена из очереди при flush).

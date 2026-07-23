@@ -112,6 +112,27 @@ test('успешный fast-path create инвалидирует budget-кэш (
   await waitFor(() => expect(qc.getQueryState(envKey)?.isInvalidated).toBe(true));
 });
 
+// Ревью B7 (Minor 1): CONFLICT по своему id = запись на сервере УЖЕ есть (идемпотентный
+// дубль) — budget-кэш обязан инвалидироваться и в этой ветке, иначе остаток/бейдж
+// висят «до записи» до следующей мутации.
+test('CONFLICT (идемпотентный успех) тоже инвалидирует budget-кэш', async () => {
+  const { Wrap, qc } = wrapper((path) => {
+    if (path === 'entity.create') throw trpcError('CONFLICT');
+    return handlerBase(path);
+  });
+  const envKey = getQueryKey(
+    trpc.budget.envelopeForCategory,
+    { categoryId: 'cat-food', date: '2026-07-13' },
+    'query',
+  );
+  qc.setQueryData(envKey, null); // тёплый кэш «до записи»
+  const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
+  await act(async () => {
+    await result.current.submit('обед 340');
+  });
+  await waitFor(() => expect(qc.getQueryState(envKey)?.isInvalidated).toBe(true));
+});
+
 test('неуверенный паттерн → LLM-путь (ai.sendMessage), без entity.create', async () => {
   const { Wrap, calls } = wrapper((path) => {
     if (path === 'ai.sendMessage') return assistantReply;

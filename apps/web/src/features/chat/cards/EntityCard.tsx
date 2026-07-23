@@ -27,13 +27,19 @@ export function EntityCard({
   // сервером — «→ <категория> · осталось N ₽» по category_ref и occurred_on ЗАПИСИ.
   // Остаток «после записи» гарантирует invalidateBudget в useFastPath/onUndo: сервер
   // считает spent по факту, инвалидация перечитывает после каждой мутации.
+  // Только ФАКТИЧЕСКИЙ РАСХОД (ревью B7): у income остаток — шум, planned в spent
+  // не входит (§2.7) — показывать «осталось» без самой записи было бы враньём.
   const isFinancial = card.aspects.includes('orbis/financial');
   const categoryRef = card.keyFields.category_ref;
   const occurredOn = card.keyFields.occurred_on;
+  const { direction, planned } = card.keyFields;
   const wantRemaining =
     confirmed &&
     !undone &&
     isFinancial &&
+    direction === 'expense' &&
+    planned !== true &&
+    planned !== 'true' &&
     typeof categoryRef === 'string' &&
     typeof occurredOn === 'string';
   const envQ = trpc.budget.envelopeForCategory.useQuery(

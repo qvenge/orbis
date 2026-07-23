@@ -280,6 +280,33 @@ test('нефинансовая карточка без category_ref остато
   expect(calls.some((c) => c.path === 'budget.envelopeForCategory')).toBe(false);
 });
 
+// Ревью B7 (Minor 3): остаток — про фактический расход; income и planned — без строки.
+test('income-карточка остаток НЕ запрашивает (§4.1 — остаток про расход)', async () => {
+  const incomeCard = {
+    ...finCard,
+    keyFields: { ...finCard.keyFields, direction: 'income' },
+  };
+  const { calls } = renderWithProviders(<div>{renderCards(msg([incomeCard]))}</div>, (path) =>
+    path === 'budget.envelopeForCategory' ? envStatus : {},
+  );
+  await waitFor(() => expect(screen.getByTestId('entity-card')).toBeInTheDocument());
+  expect(screen.queryByTestId('envelope-remaining')).toBeNull();
+  expect(calls.some((c) => c.path === 'budget.envelopeForCategory')).toBe(false);
+});
+
+test('planned-карточка остаток НЕ запрашивает — записи в spent ещё нет (§2.7)', async () => {
+  const plannedCard = {
+    ...finCard,
+    keyFields: { ...finCard.keyFields, planned: true },
+  };
+  const { calls } = renderWithProviders(<div>{renderCards(msg([plannedCard]))}</div>, (path) =>
+    path === 'budget.envelopeForCategory' ? envStatus : {},
+  );
+  await waitFor(() => expect(screen.getByTestId('entity-card')).toBeInTheDocument());
+  expect(screen.queryByTestId('envelope-remaining')).toBeNull();
+  expect(calls.some((c) => c.path === 'budget.envelopeForCategory')).toBe(false);
+});
+
 test('после Undo строка остатка снимается вместе с карточкой', async () => {
   renderWithProviders(<div>{renderCards(fastMsg('confirmed'))}</div>, (path) => {
     if (path === 'budget.envelopeForCategory') return envStatus;

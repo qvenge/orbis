@@ -62,9 +62,16 @@ export function useBudgetAlertCount(): number {
  * Overview месяца (§3.1). На mount ровно один budget.postDue: due-инстансы
  * recurring переходят planned→fact до чтения агрегатов (сервер идемпотентен,
  * overview сам гоняет конвейер §2.8 — вызов здесь закрывает гонку кэша).
+ * posted>0 меняет spent → alertCount перечитывается (ревью B7: иначе Overview
+ * покажет тревогу, а вечно смонтированный бейдж вкладки §6.1 — нет).
  */
 export function useBudgetOverview(month: string) {
-  const postDue = trpc.budget.postDue.useMutation();
+  const utils = trpc.useUtils();
+  const postDue = trpc.budget.postDue.useMutation({
+    onSuccess: (r) => {
+      if (r.posted > 0) void utils.budget.alertCount.invalidate();
+    },
+  });
   const posted = useRef(false);
   const { mutate } = postDue;
   useEffect(() => {
