@@ -12,7 +12,7 @@ import { execute } from '../executor/executor';
 import { appRouter } from '../router';
 import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
-import { materializationWindow, materializeInstances } from './materialize';
+import { addDays, materializationWindow, materializeInstances } from './materialize';
 
 requireEnv();
 
@@ -201,6 +201,43 @@ describe('materializeInstances (01 §5.4)', () => {
 
     const beyond = await ownEntities(owner, [recurringInstanceId(templateId, '2026-07-16')]);
     expect(beyond.length).toBe(0);
+  });
+
+  test('нижняя граница окна клампится today−92д (fix round B5): запрос 2020..today не тащит годы истории', async () => {
+    const owner = freshUserId();
+    // Месячный шаблон с 2020-01-01: без клампа окно 2020..today синхронно
+    // материализовало бы ~78 инстансов + post-due переписал бы spent исторических месяцев
+    const templateId = await createTemplate(owner, {
+      title: 'Старая подписка',
+      aspects: {
+        'orbis/schedule': {
+          start_at: '2020-01-01T09:00:00+03:00',
+          timezone: 'Europe/Moscow',
+          recurrence: { freq: 'monthly', interval: 1 },
+        },
+      },
+    });
+
+    const r = await materializeInstances({
+      db,
+      ownerId: owner,
+      from: '2020-01-01',
+      to: '2026-07-01',
+      today: '2026-07-01',
+    });
+    // Ретро-пол: today−92д = 2026-03-31 → материализованы только 04-01, 05-01, 06-01, 07-01
+    expect(r.created).toBe(4);
+    const expected = ['2026-04-01', '2026-05-01', '2026-06-01', '2026-07-01'];
+    const rows = await ownEntities(
+      owner,
+      expected.map((d) => recurringInstanceId(templateId, d)),
+    );
+    expect(rows.length).toBe(4);
+    const older = await ownEntities(
+      owner,
+      ['2020-01-01', '2026-03-01'].map((d) => recurringInstanceId(templateId, d)),
+    );
+    expect(older.length).toBe(0); // глубже ретро-пола — не материализуется
   });
 
   test('financial-шаблон: инстансы с occurred_on=дата, planned=true, recurring=true (§3.3)', async () => {
@@ -393,6 +430,37 @@ describe('materializationWindow — детект окна по AST (чистая
     // status — не date-поле; окна нет и парсер бы отверг токен; берём чистый литерал
     expect(win('status=inbox')).toBeNull();
   });
+
+  test('абсолютный диапазон date-поля (B5, бэклог A): occurred_on=a..b → окно [a; b]', () => {
+    expect(win('occurred_on=2026-06-01..2026-07-20')).toEqual({
+      from: '2026-06-01',
+      to: '2026-07-20',
+    });
+    // Горизонт +14д обрезает materializeInstances — окно тут не клампится (как раньше)
+    expect(win('occurred_on=2026-07-01..2026-12-31')).toEqual({
+      from: '2026-07-01',
+      to: '2026-12-31',
+    });
+  });
+
+  test('абсолютные сравнения date-поля (B5): > — от следующего дня до горизонта; < — открытый низ от сегодня', () => {
+    // occurred_on>X: строго после X; верх не ограничен → горизонт +14д от сегодня
+    expect(win('occurred_on>2026-07-12')).toEqual({ from: '2026-07-13', to: '2026-07-24' });
+    // occurred_on<X: открытый низ — только сегодня и будущее (как overdue), верх — день до X
+    expect(win('occurred_on<2026-07-15')).toEqual({ from: today, to: '2026-07-14' });
+  });
+
+  test('диапазон/сравнение НЕ-date-полей окна не дают (amount, updated_at)', () => {
+    const catalog: FieldCatalog = {
+      fields: { amount: [{ aspect: 'orbis/financial', type: 'decimal' }] },
+    };
+    const p1 = parseQuery('amount=500..2000', catalog);
+    if (!p1.ok) throw new Error(p1.error.message);
+    expect(materializationWindow(p1.ast, today)).toBeNull();
+    const p2 = parseQuery('updated_at>2026-07-01T00:00:00Z', catalog);
+    if (!p2.ok) throw new Error(p2.error.message);
+    expect(materializationWindow(p2.ast, today)).toBeNull();
+  });
 });
 
 describe('хук entity.query/count (§5.4: любой запрос диапазона дат материализует)', () => {
@@ -462,5 +530,41 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     expect(rows.length).toBe(9); // 8 инстансов [today; today+7] + шаблон
     // Карточка query_result консистентна выдаче
     if (r.card?.kind === 'query_result') expect(r.card.count).toBe(9);
+  });
+
+  test('entity.query с абсолютным диапазоном occurred_on (B5) материализует инстансы будущей части окна (≤ today+14)', async () => {
+    const owner = freshUserId();
+    const caller = callerFor(owner);
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(
+      new Date(),
+    );
+    // Financial-шаблон: серия стартует в прошлом, окно запроса прошлое..будущее (за горизонтом)
+    const from = addDays(today, -2);
+    const to = addDays(today, 20);
+    const templateId = await createTemplate(owner, {
+      title: 'Подписка (диапазон месяца)',
+      aspects: {
+        'orbis/schedule': dailySchedule(from),
+        'orbis/financial': {
+          amount: '599.00',
+          currency: 'RUB',
+          direction: 'expense',
+          category_ref: crypto.randomUUID(),
+          recurring: true,
+        },
+      },
+    });
+
+    const results = await caller.entity.query({
+      query: `aspect=orbis/financial, occurred_on=${from}..${to}, sortBy=occurred_on:asc`,
+    });
+    const ids = new Set(results.map((r) => r.id));
+    // Окно [from; to] ∩ горизонт: инстансы от from до today+14 включительно
+    expect(ids.has(recurringInstanceId(templateId, from))).toBe(true);
+    expect(ids.has(recurringInstanceId(templateId, addDays(today, 14)))).toBe(true);
+    // Строго за горизонтом +14д — не материализован (§5.4)
+    expect(ids.has(recurringInstanceId(templateId, addDays(today, 15)))).toBe(false);
+    // Выдача: 17 инстансов [today-2; today+14]; сам шаблон без occurred_on под фильтр не попадает
+    expect(results.length).toBe(17);
   });
 });

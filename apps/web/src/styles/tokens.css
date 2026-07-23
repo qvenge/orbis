@@ -33,6 +33,10 @@
   --color-accent-foreground: #ffffff;
   --color-danger: #a83a29;
   --color-danger-foreground: #ffffff;
+  /* Пороги Budget (03-budget §3.1): warning — жёлтый (60–85%), alert — оранжевый
+     (85–100%); перерасход ≥100% использует danger. Несут ДАННЫЕ (заливка бара). */
+  --color-warning: #b58a00;
+  --color-alert: #c2410c;
   --color-success: #1a7f37;
   --color-success-foreground: #ffffff;
   --color-overlay: rgb(15 15 15 / 0.4);
@@ -110,6 +114,8 @@
   --color-accent-foreground: #1e1b4b;
   --color-danger: #e08573;
   --color-danger-foreground: #2b0f0a;
+  --color-warning: #e3b341;
+  --color-alert: #f0883e;
   --color-success: #79cf9d;
   --color-success-foreground: #0c2916;
   --color-overlay: rgb(0 0 0 / 0.55);

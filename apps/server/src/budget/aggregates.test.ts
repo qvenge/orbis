@@ -7,6 +7,7 @@
 // сида §7.3), кроме приёмки §7.1 с фиксированными датами мая/июня 2026.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type BudgetOverview, type BudgetStatusResult, newId } from '@orbis/shared';
+import { sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
@@ -15,7 +16,13 @@ import { appRouter } from '../router';
 import { seedCategoryId, seedOnboarding } from '../seed/onboarding';
 import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
-import { budgetOverview, budgetStatus, categoryTrend, envelopeForCategory } from './aggregates';
+import {
+  budgetAlertCount,
+  budgetOverview,
+  budgetStatus,
+  categoryTrend,
+  envelopeForCategory,
+} from './aggregates';
 
 requireEnv();
 
@@ -90,6 +97,7 @@ let envChildUsd = '';
 let envNext = '';
 let envMay = '';
 let envJune = '';
+let envBoundary = ''; // ровно 85% лимита — граница включительно (sign-off 2026-07-23)
 // Ручная planned-покупка (§2.7) и её id для дизъюнктности planned/comingUp
 let plannedTxnId = '';
 
@@ -229,6 +237,11 @@ beforeAll(async () => {
   envJune = (
     await exec(userA, 'entity_create', envelope(catEdu, '2026-06-01', '2026-06-30', '1000.00'))
   ).id;
+  // Граница 85% включительно (sign-off 2026-07-23): изолированный фикс-месяц 2026-03,
+  // чтобы не менять alertCount=2 текущего месяца в остальных тестах.
+  envBoundary = (
+    await exec(userA, 'entity_create', envelope(catEdu, '2026-03-01', '2026-03-31', '10000.00'))
+  ).id;
 
   // Транзакции фикстуры (6+ видов брифа)
   await exec(userA, 'entity_create', txn(catFood, '340.00', today)); // факт
@@ -248,6 +261,7 @@ beforeAll(async () => {
   await exec(userA, 'entity_create', txn(catChild, '1000.00', today)); // иерархия §2.10
   await exec(userA, 'entity_create', txn(catChild, '100.00', today, { currency: 'USD' })); // → envChildUsd
   await exec(userA, 'entity_create', txn(catEdu, '340.00', '2026-05-31')); // приёмка §7.1: created_at=сейчас
+  await exec(userA, 'entity_create', txn(catEdu, '8500.00', '2026-03-15')); // ровно 85% envBoundary
   await exec(userA, 'entity_create', txn(catHealth, '150.00', `${prevMonth}-15`)); // тренд: прошлый месяц
   await exec(userA, 'entity_create', txn(catHealth, '200.00', today)); // тренд: текущий месяц
 
@@ -582,5 +596,81 @@ describe('spent не считает recurring-шаблон (§2.2, §2.8)', () =
     });
     const after = await envelopeForCategory(db, user, { categoryId: cat, date: today });
     expect(after?.spent).toBe('0.00');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task B7: лёгкий count-запрос бейджа вкладки Budget (§6.1) — только чтение
+// агрегата, БЕЗ конвейера §2.8 (postDue/материализация не запускаются).
+// ---------------------------------------------------------------------------
+describe('budget.alertCount (§6.1): count-only бейдж вкладки', () => {
+  const createCaller = createCallerFactory(appRouter);
+  const callerFor = (user: string | null) =>
+    createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
+
+  test('дефолтный месяц (текущий): то же число, что overview.alertCount — ⚠ 85–100% и 🔴 ≥100% вместе', async () => {
+    // жильё 900/1000 = 90% (⚠) и развлечения 150/100 = 150% (🔴) — см. фикстуру
+    expect(await budgetAlertCount(db, userA)).toBe(2);
+  });
+
+  test('sign-off 2026-07-23: граница ровно 85% — ВКЛЮЧИТЕЛЬНО, бейдж = ⚠-порог карточки §3.1', async () => {
+    // Конверт 8500/10000 (изолированный месяц 2026-03): при строгом > выпадал из бейджа,
+    // хотя карточка уже ⚠ (>=85, §3.1) — спековая коллизия §3.1 vs §6.1 решена владельцем
+    // в пользу «включительно ≥ везде». Обе точки (overview и count-only) — общий countAlerts.
+    const ov = await budgetOverview(db, userA, '2026-03');
+    expect(envById(ov, envBoundary).spent).toBe('8500.00');
+    expect(ov.alertCount).toBe(1);
+    expect(await budgetAlertCount(db, userA, '2026-03')).toBe(1);
+  });
+
+  test('месяц без тревог → 0; upcoming-конверты порогами не считаются (§2.9а)', async () => {
+    expect(await budgetAlertCount(db, userA, '2026-05')).toBe(0); // envMay: 340/1000 = 34%
+    expect(await budgetAlertCount(db, userA, nextMonth)).toBe(0); // envNext: фаза upcoming
+  });
+
+  test('count-only: НЕ материализует recurring-инстансы (в отличие от overview)', async () => {
+    const user = freshUserId();
+    await exec(user, 'entity_create', {
+      title: 'Подписка',
+      tags: [],
+      aspects: {
+        'orbis/schedule': {
+          start_at: `${addDaysISO(today, 1)}T12:00:00+03:00`,
+          timezone: TZ,
+          recurrence: { freq: 'weekly', interval: 1 },
+        },
+        'orbis/financial': {
+          amount: '599.00',
+          direction: 'expense',
+          category_ref: newId(),
+          recurring: true,
+        },
+      },
+    });
+    const instanceCount = () =>
+      withIdentity(db, user, async (tx) => {
+        const rows = (await tx.execute(sql`
+          SELECT count(*)::int AS n FROM entities e
+          WHERE e.owner_id = ${user}
+            AND EXISTS (SELECT 1 FROM relations r
+                        WHERE r.target_id = e.id AND r.relation_type = 'derived_from')
+        `)) as unknown as Array<{ n: number }>;
+        return rows[0]?.n ?? 0;
+      });
+
+    expect(await budgetAlertCount(db, user)).toBe(0);
+    expect(await instanceCount()).toBe(0); // лёгкое чтение ничего не породило
+
+    await budgetOverview(db, user, curMonth); // контраст: конвейер §2.8 материализует
+    expect(await instanceCount()).toBeGreaterThan(0);
+  });
+
+  test('tRPC budget.alertCount: владелец — число; RLS чужого owner — 0; без auth — UNAUTHORIZED', async () => {
+    expect(await callerFor(userA).budget.alertCount({})).toBe(2);
+    expect(await callerFor(userA).budget.alertCount({ month: '2026-05' })).toBe(0);
+    expect(await callerFor(userB).budget.alertCount({})).toBe(0);
+    await expect(callerFor(null).budget.alertCount({})).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
   });
 });

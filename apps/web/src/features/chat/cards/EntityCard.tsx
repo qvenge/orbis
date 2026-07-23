@@ -1,21 +1,63 @@
 import { useState } from 'react';
 import { fieldLabel } from '../../../lib/field-labels';
+import { formatAmount } from '../../../lib/format';
 import { useNav } from '../../../state/navigation';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
+// Валютный символ — общий envelopeView (B4-прецедент QuickAddBar), маппинг не дублируем
+import { envelopeView } from '../../budget/EnvelopeCard';
 import type { EntityCardData } from './types';
 
 // inline-правка полей аспекта — на detail-экране (Task 14); в чат-карточке read-only + Undo + тап в detail (MVP §2.3)
-export function EntityCard({ card }: { card: EntityCardData }) {
+export function EntityCard({
+  card,
+  confirmed = true,
+}: {
+  card: EntityCardData;
+  /** false — fast-path «⏳ ждёт отправки»: запись ещё не на сервере (02 §2.5). */
+  confirmed?: boolean;
+}) {
   const [undone, setUndone] = useState(false);
   const push = useNav((s) => s.push);
   const activeTab = useNav((s) => s.activeTab);
   const utils = trpc.useUtils();
+
+  // Остаток конверта (03-budget §4.1, B7): для financial-записи ПОСЛЕ подтверждения
+  // сервером — «→ <категория> · осталось N ₽» по category_ref и occurred_on ЗАПИСИ.
+  // Остаток «после записи» гарантирует invalidateBudget в useFastPath/onUndo: сервер
+  // считает spent по факту, инвалидация перечитывает после каждой мутации.
+  // Только ФАКТИЧЕСКИЙ РАСХОД (ревью B7): у income остаток — шум, planned в spent
+  // не входит (§2.7) — показывать «осталось» без самой записи было бы враньём.
+  const isFinancial = card.aspects.includes('orbis/financial');
+  const categoryRef = card.keyFields.category_ref;
+  const occurredOn = card.keyFields.occurred_on;
+  const { direction, planned } = card.keyFields;
+  const wantRemaining =
+    confirmed &&
+    !undone &&
+    isFinancial &&
+    direction === 'expense' &&
+    planned !== true &&
+    planned !== 'true' &&
+    typeof categoryRef === 'string' &&
+    typeof occurredOn === 'string';
+  const envQ = trpc.budget.envelopeForCategory.useQuery(
+    {
+      categoryId: typeof categoryRef === 'string' ? categoryRef : '',
+      date: typeof occurredOn === 'string' ? occurredOn : '',
+    },
+    { enabled: wantRemaining },
+  );
+  // null (Unbudgeted) и ошибка чтения → без строки остатка (§4.1: без конверта — ничего)
+  const env = wantRemaining && envQ.data ? envQ.data : null;
+
   const undo = trpc.ai.undo.useMutation({
     onSuccess: () => {
       setUndone(true);
       void utils.entity.get.invalidate({ id: card.entityId });
+      // Undo транзакции меняет агрегаты Budget (остаток, бейдж §6.1) — B2+-правило
+      if (isFinancial) void utils.budget.invalidate();
     },
   });
 
@@ -44,6 +86,11 @@ export function EntityCard({ card }: { card: EntityCardData }) {
           </div>
         ))}
       </dl>
+      {env !== null && (
+        <p data-testid="envelope-remaining" className="text-xs tabular-nums text-text-secondary">
+          → {env.category.title} · осталось {formatAmount(env.remaining)} {envelopeView(env).sym}
+        </p>
+      )}
       {undoActionId && !undone && (
         <Button
           variant="ghost"

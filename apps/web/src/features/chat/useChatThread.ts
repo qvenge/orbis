@@ -90,14 +90,19 @@ export function useSendMessage(threadId: string) {
         return;
       }
       if (res.replayed) {
-        // D-f: не аппендим локально — рефетчим тред
+        // D-f: не аппендим локально — рефетчим тред. Записи replay-прогона тоже могли
+        // затронуть бюджет (клиент их ответа не видел) — кэш инвалидируем и здесь.
         void queryClient.invalidateQueries({ queryKey: key });
+        void utils.budget.invalidate();
         return;
       }
       queryClient.setQueryData<InfiniteData>(key, (old) =>
         upsertNewest(old, res.assistantMessage as ChatMessage),
       );
       void utils.entity.query.invalidate();
+      // Финал B: транзакция через LLM-путь обязана обновить бейдж §6.1/Overview/остатки
+      // конвертов — симметрично fast-path (useFastPath, фикс B7).
+      void utils.budget.invalidate();
     },
     onError: (err, variables) => {
       // §3 (флаг ревью Task 9): текст НЕ теряем молча. Оптимистичное user-сообщение остаётся,

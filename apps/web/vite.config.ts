@@ -20,6 +20,7 @@ export default defineConfig({
       },
     }),
   ],
-  server: { port: 5173, proxy: { '/trpc': 'http://localhost:3001' } },
+  // ORBIS_DEV_API — переопределение цели dev-прокси (порт 3001 на дев-машине может быть занят посторонним сервисом)
+  server: { port: 5173, proxy: { '/trpc': process.env.ORBIS_DEV_API ?? 'http://localhost:3001' } },
   test: { environment: 'jsdom', globals: true, setupFiles: ['./tests/setup.ts'] },
 });

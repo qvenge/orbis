@@ -1,7 +1,9 @@
 import { FolderOpen, type LucideIcon, MessageSquare, Settings } from 'lucide-react';
 import { PinnedList } from '../features/browser/PinnedList';
+import { useBudgetAlertCount, useBudgetTabVisible } from '../features/budget/useBudget';
 import { openPinnedEntity, openSettings, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
+import { BUDGET_TAB } from './router';
 
 const NAV_ITEMS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'chat', label: 'Чат', icon: MessageSquare },
@@ -14,6 +16,10 @@ export function SidebarNav() {
   const activeTab = useNav((s) => s.activeTab);
   const switchTab = useNav((s) => s.switchTab);
   const chatBadge = useRetryBuffer((s) => s.size); // §1.5
+  // Гейт вкладки Budget — как в TabBar (03-budget §1.2): без view вкладки нет.
+  const budgetVisible = useBudgetTabVisible();
+  const budgetBadge = useBudgetAlertCount(); // §6.1 — бейдж в ОБЕИХ поверхностях (B1-прецедент)
+  const items = budgetVisible ? [...NAV_ITEMS, BUDGET_TAB] : NAV_ITEMS;
 
   return (
     <aside className="hidden w-60 shrink-0 flex-col border-r border-line bg-bg md:flex">
@@ -22,7 +28,7 @@ export function SidebarNav() {
       </div>
 
       <nav aria-label="Разделы" className="flex flex-col gap-0.5 px-2">
-        {NAV_ITEMS.map((t) => {
+        {items.map((t) => {
           const active = activeTab === t.id;
           const Icon = t.icon;
           return (
@@ -47,6 +53,14 @@ export function SidebarNav() {
                   className="rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
                 >
                   {chatBadge}
+                </span>
+              )}
+              {t.id === 'budget' && budgetBadge > 0 && (
+                <span
+                  data-testid="sidebar-budget-badge"
+                  className="rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
+                >
+                  {budgetBadge}
                 </span>
               )}
             </button>

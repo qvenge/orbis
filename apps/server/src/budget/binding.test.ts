@@ -203,9 +203,11 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
   });
 
   test('равная длина и равный старт (разные currency-формы) → меньший UUID', async () => {
-    // Полное равенство комбинаций невозможно (уникальность §2.1), но конверт без
-    // currency (дефолт RUB) и конверт с явной 'RUB' — разные комбинации, а для
-    // RUB-транзакции оба кандидаты: решает третий ключ tie-break — меньший UUID.
+    // Полное равенство комбинаций невозможно (уникальность §2.1), а нормализация
+    // NULL→defaultCurrency (бэклог A7) закрыла и NULL-путь через executor. Пара
+    // «legacy-конверт без currency + конверт с явной RUB» возможна только для строк,
+    // записанных ДО нормализации, — сеем legacy-строку админ-DSN напрямую (мимо
+    // executor'а): для RUB-транзакции оба кандидаты, решает третий ключ — меньший UUID.
     const catC = newId();
     const idSmall = '11111111-1111-4111-8111-111111111111';
     const idBig = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
@@ -216,11 +218,14 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
         'orbis/budget': budgetData(catC, '2026-07-01', '2026-07-31', { currency: 'RUB' }),
       },
     });
-    await createEntity(user, {
-      id: idSmall,
-      title: 'без currency (дефолт RUB)',
-      aspects: { 'orbis/budget': budgetData(catC, '2026-07-01', '2026-07-31') },
+    const legacyAspects = JSON.stringify({
+      'orbis/budget': budgetData(catC, '2026-07-01', '2026-07-31'),
     });
+    await adminRows(
+      sql`INSERT INTO entities (id, owner_id, title, aspects)
+          VALUES (${idSmall}, ${user}, 'legacy без currency (дефолт RUB)', ${legacyAspects}::jsonb)
+          RETURNING id`,
+    );
     const picked = await selector(user, {
       categoryRef: catC,
       currency: 'RUB',

@@ -1,5 +1,12 @@
 import { expect, test } from 'vitest';
-import { formatDate, formatMoney } from './format';
+import { formatAmount, formatDate, formatMoney } from './format';
+
+test('formatAmount: без знака, группировка, незначащие нули дроби опущены', () => {
+  expect(formatAmount('7200.00')).toBe('7 200');
+  expect(formatAmount('-1234567.50')).toBe('1 234 567.5');
+  expect(formatAmount('0.00')).toBe('0');
+  expect(formatAmount('599')).toBe('599');
+});
 
 test('расход: знак минус (U+2212), тон danger, decimal-строка без float', () => {
   const r = formatMoney('340.00', 'expense');

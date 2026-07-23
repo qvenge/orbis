@@ -288,26 +288,35 @@ function statusOf(
   };
 }
 
-/** Порог бейджа §6.1: spent > 85% × effectiveLimit ⇔ 20·spent > 17·effectiveLimit. */
+/**
+ * Порог бейджа §6.1: spent >= 85% × effectiveLimit ⇔ 20·spent >= 17·effectiveLimit.
+ * Граница ВКЛЮЧИТЕЛЬНО (sign-off владельца 2026-07-23): совпадает с ⚠-порогом
+ * карточки конверта (§3.1) — ровно-85% конверт и оранжевый, и в бейдже.
+ */
 function isAlert(spent: string, effectiveLimit: string): boolean {
-  return decCmp(decMulInt(spent, 20), decMulInt(effectiveLimit, 17)) > 0;
+  return decCmp(decMulInt(spent, 20), decMulInt(effectiveLimit, 17)) >= 0;
 }
 
-// ---------------------------------------------------------------------------
-// Overview (§3.1) — агрегаты одного withIdentity-tx
-// ---------------------------------------------------------------------------
+/**
+ * Бейдж §6.1: конверты spent >= 85% × effectiveLimit — по СЫРЫМ значениям конверта
+ * (бейдж считает конверты, а не карточки-агрегаты §2.10); в фазе upcoming пороги
+ * не применяются (§2.9а). Единственное место формулы порога для overview и alertCount.
+ */
+function countAlerts(raws: RawEnvelope[], today: string): number {
+  return raws.filter(
+    (raw) => phaseOf(raw, today) !== 'upcoming' && isAlert(raw.spent, raw.effectiveLimit),
+  ).length;
+}
 
-async function computeOverview(
+/** Сырые конверты, пересекающие месяц (месячные + произвольные §2.9), со spent §2.2. */
+async function rawEnvelopesOfMonth(
   tx: Tx,
   ownerId: string,
   month: string,
   today: string,
-): Promise<BudgetOverview> {
-  const defCur = await defaultCurrencyOf(tx, ownerId);
+  defCur: string,
+): Promise<RawEnvelope[]> {
   const { start, end } = monthRange(month);
-  const horizon = addDays(today, HORIZON_DAYS);
-
-  // Конверты, пересекающие месяц (месячные + произвольные §2.9)
   const envRows = await tx
     .select()
     .from(entities)
@@ -326,9 +335,27 @@ async function computeOverview(
     today,
     defCur,
   );
-  const raws = envRows
+  return envRows
     .map((row) => rawEnvelopeOf(row, spentMap, defCur))
     .filter((r): r is RawEnvelope => r !== null);
+}
+
+// ---------------------------------------------------------------------------
+// Overview (§3.1) — агрегаты одного withIdentity-tx
+// ---------------------------------------------------------------------------
+
+async function computeOverview(
+  tx: Tx,
+  ownerId: string,
+  month: string,
+  today: string,
+): Promise<BudgetOverview> {
+  const defCur = await defaultCurrencyOf(tx, ownerId);
+  const { start, end } = monthRange(month);
+  const horizon = addDays(today, HORIZON_DAYS);
+
+  // Конверты, пересекающие месяц (месячные + произвольные §2.9)
+  const raws = await rawEnvelopesOfMonth(tx, ownerId, month, today, defCur);
 
   // Баланс периода (§2.5): факты в [start;end] и ≤ сегодня, валюта периода = дефолтная;
   // шаблоны recurring (orbis/schedule.recurrence) — не операции, исключены
@@ -454,12 +481,8 @@ async function computeOverview(
     return ka < kb ? -1 : ka > kb ? 1 : 0;
   });
 
-  // Бейдж §6.1: конверты spent > 85% × effectiveLimit — по СЫРЫМ значениям конверта
-  // (бейдж считает конверты, а не карточки-агрегаты); в фазе upcoming пороги
-  // не применяются (§2.9а)
-  const alertCount = raws.filter(
-    (raw) => phaseOf(raw, today) !== 'upcoming' && isAlert(raw.spent, raw.effectiveLimit),
-  ).length;
+  // Бейдж §6.1 — общий countAlerts (единая формула с budget.alertCount)
+  const alertCount = countAlerts(raws, today);
 
   const finOf = (row: EntityRow) =>
     ((row.aspects as AspectsMap)['orbis/financial'] ?? {}) as Record<string, unknown>;
@@ -522,6 +545,21 @@ export async function budgetOverview(
   const today = await preparePeriod(db, ownerId);
   const m = month ?? today.slice(0, 7);
   return withIdentity(db, ownerId, (tx) => computeOverview(tx, ownerId, m, today));
+}
+
+/**
+ * Бейдж вкладки Budget (§6.1, Task B7): число конвертов месяца в тревоге/перерасходе
+ * (spent > 85% × effectiveLimit). ЛЁГКОЕ чтение для count-запроса при инвалидации
+ * кэша — БЕЗ конвейера §2.8 (postDue/материализация не запускаются): значение
+ * производное и пересчитывается часто, тяжёлый конвейер гоняет overview.
+ */
+export async function budgetAlertCount(db: Db, ownerId: string, month?: string): Promise<number> {
+  return withIdentity(db, ownerId, async (tx) => {
+    const today = await localTodayTx(tx, ownerId);
+    const defCur = await defaultCurrencyOf(tx, ownerId);
+    const raws = await rawEnvelopesOfMonth(tx, ownerId, month ?? today.slice(0, 7), today, defCur);
+    return countAlerts(raws, today);
+  });
 }
 
 /**
@@ -859,9 +897,10 @@ export async function rolloverPreview(
  * - уже существующий преемник — пречек с coalesce-валютой: инвариант §2.1 сравнивает
  *   комбинацию ТОЧНО и NULL-currency-преемника не увидел бы. Пречек идёт после
  *   replay-детекта (повтор batchId обязан вернуться replay'ем, а не упасть на
- *   собственноручно созданных преемниках). Гонка «NULL-преемник появился между
- *   пречеком и batch» остаётся теоретической щелью — точную комбинацию закрывает
- *   advisory-lock §2.1.
+ *   собственноручно созданных преемниках). Щель «NULL-преемник появился между
+ *   пречеком и batch» закрыта нормализацией NULL→defaultCurrency (бэклог A7,
+ *   normalizeEnvelopeCurrency): новые записи NULL не несут, точную комбинацию
+ *   закрывает advisory-lock §2.1.
  */
 export async function rolloverCreate(
   db: Db,

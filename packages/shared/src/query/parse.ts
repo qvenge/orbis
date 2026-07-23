@@ -59,6 +59,12 @@ const ISO_TIMESTAMP_RE =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 /** Числовой литерал сравнений/диапазонов: base-10 без экспоненты, знак допустим (§3.3, §6.1). */
 const DECIMAL_LITERAL_RE = /^-?\d+(\.\d+)?$/;
+/**
+ * Абсолютная дата для сравнений/диапазонов date-полей аспектов (B5, 03-budget §3.3):
+ * та же форма YYYY-MM-DD, что паттерн date-полей реестра (§3.1). Группы — для
+ * календарной проверки компонент (isValidCalendarDate).
+ */
+const DATE_LITERAL_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 /** Год високосный по григорианскому правилу. */
 function isLeapYear(year: number): boolean {
@@ -77,6 +83,18 @@ function daysInMonth(year: number, month: number): number {
  * компонент — НЕ через Date.parse: V8 молча перекатывает 2026-02-30 на 2 марта без NaN.
  * `m` — результат `ISO_TIMESTAMP_RE.exec` (форма уже гарантирована регэкспом).
  */
+/**
+ * Календарная валидность компонент ISO-даты (§6.4) — прямая проверка диапазонов,
+ * НЕ Date.parse (V8 молча перекатывает 2026-02-30). `m` — результат DATE_LITERAL_RE.exec.
+ */
+function isValidCalendarDate(m: RegExpExecArray): boolean {
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12) return false;
+  return day >= 1 && day <= daysInMonth(year, month);
+}
+
 function isValidCalendarTimestamp(m: RegExpExecArray): boolean {
   // Группы 1–7 обязательны по регэкспу — undefined невозможен.
   const year = Number(m[1]);
@@ -160,7 +178,10 @@ interface Part {
 
 /**
  * Маска «символ вне кавычек» для строки: внутри двойных кавычек `\"` — экранированная
- * кавычка (§6.1). `unclosedAt` — позиция незакрытой открывающей кавычки, иначе -1.
+ * кавычка (§6.1), `\\` — экранированный бэкслеш (fix round B5: без него значение
+ * с хвостовым `\` невыразимо — `\"` съедал бы закрывающую кавычку; одиночный `\`
+ * перед прочими символами остаётся литералом — обратная совместимость).
+ * `unclosedAt` — позиция незакрытой открывающей кавычки, иначе -1.
  */
 function quoteMask(text: string): { outside: boolean[]; unclosedAt: number } {
   const outside = new Array<boolean>(text.length).fill(false);
@@ -168,8 +189,8 @@ function quoteMask(text: string): { outside: boolean[]; unclosedAt: number } {
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (quoteOpen !== -1) {
-      if (ch === '\\' && text[i + 1] === '"')
-        i++; // экранированная кавычка
+      if (ch === '\\' && (text[i + 1] === '"' || text[i + 1] === '\\'))
+        i++; // экранированная кавычка / бэкслеш
       else if (ch === '"') quoteOpen = -1;
     } else if (ch === '"') {
       quoteOpen = i;
@@ -236,9 +257,10 @@ function trimPart(part: Part): Part {
 }
 
 /**
- * Снимает обрамляющие кавычки и разэкранирует `\"` внутри (§6.1). `raw` уже обрезан
- * по краям. Кавычка в середине неквотированного значения и «хвост» после закрывающей
- * кавычки — ошибки: кавычки допустимы только вокруг всего значения.
+ * Снимает обрамляющие кавычки и разэкранирует `\"` и `\\` внутри (§6.1 + fix round B5:
+ * `\\` → `\`, симметрично quoteMask). `raw` уже обрезан по краям. Кавычка в середине
+ * неквотированного значения и «хвост» после закрывающей кавычки — ошибки: кавычки
+ * допустимы только вокруг всего значения.
  */
 function unquote(raw: string, offset: number): string {
   if (!raw.startsWith('"')) {
@@ -250,8 +272,8 @@ function unquote(raw: string, offset: number): string {
   let i = 1;
   for (; i < raw.length; i++) {
     const ch = raw[i];
-    if (ch === '\\' && raw[i + 1] === '"') {
-      out += '"';
+    if (ch === '\\' && (raw[i + 1] === '"' || raw[i + 1] === '\\')) {
+      out += raw[i + 1];
       i++;
       continue;
     }
@@ -523,9 +545,12 @@ function parseRange(p: ParsedPart, dots: number, field: ResolvedField): QueryFil
 }
 
 /**
- * Значение сравнения/диапазона. Применимо к `number`/`integer`/`decimal` (kind `decimal`)
- * и к core-полям типа timestamp (kind `timestamp`, валидный ISO 8601) — §6.1: лексикографическое
- * сравнение строк запрещено, timestamp-поля аспектов операторами не сравниваются.
+ * Значение сравнения/диапазона. Применимо к `number`/`integer`/`decimal` (kind `decimal`),
+ * к core-полям типа timestamp (kind `timestamp`, валидный ISO 8601) и к date-полям
+ * аспектов (kind `date`, абсолютная YYYY-MM-DD — B5, 03-budget §3.3). §6.1 запрещает
+ * лексикографическое сравнение произвольных строк; ISO-дата — исключение по построению
+ * (формат гарантирует хронологичность порядка). Timestamp-поля аспектов операторами
+ * не сравниваются (YAGNI B5 — расширение только date-полей).
  */
 function parseComparable(el: Part, field: ResolvedField): QueryComparableValue {
   const text = unquote(el.text, el.offset);
@@ -539,6 +564,15 @@ function parseComparable(el: Part, field: ResolvedField): QueryComparableValue {
     }
     return { kind: 'timestamp', value: text };
   }
+  // date-поля живут только в аспектах (core — created_at/updated_at, оба timestamp).
+  if (field.type === 'date') {
+    const m = DATE_LITERAL_RE.exec(text);
+    if (!m) {
+      fail(`ожидается дата YYYY-MM-DD для '${field.name}', получено '${text}'`, el.offset);
+    }
+    if (!isValidCalendarDate(m)) fail(`календарно-невалидная дата '${text}'`, el.offset);
+    return { kind: 'date', value: text };
+  }
   if (field.type === 'number' || field.type === 'integer' || field.type === 'decimal') {
     if (!DECIMAL_LITERAL_RE.test(text)) {
       fail(`ожидается числовое значение для '${field.name}', получено '${text}'`, el.offset);
@@ -546,7 +580,7 @@ function parseComparable(el: Part, field: ResolvedField): QueryComparableValue {
     return { kind: 'decimal', value: text };
   }
   fail(
-    `операторы >/< и диапазон .. применимы к числовым полям и core-timestamp; поле '${field.name}' имеет тип ${field.type}`,
+    `операторы >/< и диапазон .. применимы к числовым полям, date-полям аспектов и core-timestamp; поле '${field.name}' имеет тип ${field.type}`,
     el.offset,
   );
 }

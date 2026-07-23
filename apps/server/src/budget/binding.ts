@@ -56,6 +56,26 @@ export async function selectEnvelope(
   return rows[0]?.id ?? null;
 }
 
+/**
+ * Нормализация валюты конверта (бэклог A7, §2.1): отсутствующая/NULL `currency`
+ * в orbis/budget заменяется явной user_settings.defaultCurrency — на СЕРВЕРЕ,
+ * до проверки уникальности §2.1 и записи. Все пути записи конверта (UI, LLM/MCP,
+ * rollover, будущий импорт) дают каноничную комбинацию с явной валютой, поэтому
+ * «конверт без currency» и «конверт с явной defaultCurrency» — один дубль, а не
+ * две разные комбинации (TOCTOU NULL-currency-преемника закрыт по построению).
+ * Значения иных типов не трогаем — их отклонит валидация схемы (стадия 2).
+ * Мутирует budget.
+ */
+export async function normalizeEnvelopeCurrency(
+  tx: Tx,
+  ownerId: string,
+  budget: Record<string, unknown>,
+): Promise<void> {
+  if (budget.currency === undefined || budget.currency === null) {
+    budget.currency = await defaultCurrencyOf(tx, ownerId);
+  }
+}
+
 /** Операция привязки, дописываемая executor'ом в тот же action (§2.3). */
 export interface BudgetOpDesc {
   tool: 'relation_create' | 'relation_delete';
@@ -249,7 +269,9 @@ function envelopeCombinationMatches(
 /**
  * Уникальность конверта (03-budget §2.1): не более одного НЕАРХИВНОГО конверта на
  * точную комбинацию (category_ref, currency, period_start, period_end); currency
- * сравнивается как хранится (NULL и явная валюта — разные комбинации, §2.1 «точная»).
+ * сравнивается как хранится (NULL и явная валюта — разные комбинации, §2.1 «точная»),
+ * но новые записи NULL не несут: normalizeEnvelopeCurrency (бэклог A7) подставляет
+ * явную defaultCurrency ДО этой проверки; NULL возможен только в legacy-строках.
  * Вызывается стадией 4 (prepare) create/update/attach orbis/budget — до первой записи.
  *
  * Advisory-lock по владельцу сериализует конкурентные записи конвертов: без него две

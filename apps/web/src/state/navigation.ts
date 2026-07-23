@@ -3,9 +3,17 @@ import { persist } from 'zustand/middleware';
 
 export type Tab = 'chat' | 'browser' | 'agenda' | 'budget';
 // 'settings' — сквозной экран (не таб): push поверх активного таба, back — обычный pop/switchTab (§9.4).
+// 'budget-category' — экран категории Budget (03-budget §3.2): push по тапу на карточку
+// конверта (B2); id — id КАТЕГОРИИ, рендер — CategoryScreen (B3) в router.tsx.
+// 'budget-transactions' — экран «Транзакции» (03-budget §3.3, B5): push из шапки Overview.
+// 'budget-rollover' — Rollover-экран (03-budget §3.5, B6): push из баннера «Новый месяц»
+// и кнопки шапки Overview; месяц экран берёт сам (текущий в таймзоне пользователя).
 export type ScreenRef =
   | { kind: 'entity'; id: string }
   | { kind: 'thread'; threadId: string }
+  | { kind: 'budget-category'; id: string }
+  | { kind: 'budget-transactions' }
+  | { kind: 'budget-rollover' }
   | { kind: 'settings' };
 
 type NavState = {

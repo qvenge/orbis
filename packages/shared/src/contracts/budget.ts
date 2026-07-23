@@ -66,6 +66,8 @@ export const categoryTrendPointSchema = z.object({
 // --- входы процедур tRPC-роутера budget ------------------------------------
 
 export const budgetOverviewInput = z.object({ month: monthString }).strict();
+/** Бейдж вкладки Budget (§6.1): month опционален — текущий месяц пользователя. */
+export const budgetAlertCountInput = z.object({ month: monthString.optional() }).strict();
 export const categoryTrendInput = z
   .object({ categoryId: z.string().uuid(), months: z.number().int().min(1).max(24) })
   .strict();
@@ -171,6 +173,7 @@ export type EnvelopeStatus = z.infer<typeof envelopeStatusSchema>;
 export type BudgetOverview = z.infer<typeof budgetOverviewSchema>;
 export type CategoryTrendPoint = z.infer<typeof categoryTrendPointSchema>;
 export type BudgetOverviewInput = z.infer<typeof budgetOverviewInput>;
+export type BudgetAlertCountInput = z.infer<typeof budgetAlertCountInput>;
 export type CategoryTrendInput = z.infer<typeof categoryTrendInput>;
 export type EnvelopeForCategoryInput = z.infer<typeof envelopeForCategoryInput>;
 export type BudgetStatusInput = z.infer<typeof budgetStatusInput>;
