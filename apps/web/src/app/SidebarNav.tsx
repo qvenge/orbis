@@ -1,6 +1,6 @@
 import { FolderOpen, type LucideIcon, MessageSquare, Settings } from 'lucide-react';
 import { PinnedList } from '../features/browser/PinnedList';
-import { useBudgetTabVisible } from '../features/budget/useBudget';
+import { useBudgetAlertCount, useBudgetTabVisible } from '../features/budget/useBudget';
 import { openPinnedEntity, openSettings, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
 import { BUDGET_TAB } from './router';
@@ -18,6 +18,7 @@ export function SidebarNav() {
   const chatBadge = useRetryBuffer((s) => s.size); // §1.5
   // Гейт вкладки Budget — как в TabBar (03-budget §1.2): без view вкладки нет.
   const budgetVisible = useBudgetTabVisible();
+  const budgetBadge = useBudgetAlertCount(); // §6.1 — бейдж в ОБЕИХ поверхностях (B1-прецедент)
   const items = budgetVisible ? [...NAV_ITEMS, BUDGET_TAB] : NAV_ITEMS;
 
   return (
@@ -52,6 +53,14 @@ export function SidebarNav() {
                   className="rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
                 >
                   {chatBadge}
+                </span>
+              )}
+              {t.id === 'budget' && budgetBadge > 0 && (
+                <span
+                  data-testid="sidebar-budget-badge"
+                  className="rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
+                >
+                  {budgetBadge}
                 </span>
               )}
             </button>

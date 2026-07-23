@@ -30,11 +30,14 @@ export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): Reac
     fastPath?: FastPathMeta;
   };
   const cards = meta.cards ?? [];
+  // Fast-path-карточка «⏳» (pending) ещё НЕ на сервере — остаток конверта §4.1 ей
+  // недоступен (как «Разобрать с AI» ниже); карточки без fastPath-меты серверные.
+  const confirmed = meta.fastPath === undefined || meta.fastPath.status === 'confirmed';
   const body = cards.map((card, i) => {
     switch (card.kind) {
       case 'entity_card':
         // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
-        return <EntityCard key={i} card={card} />;
+        return <EntityCard key={i} card={card} confirmed={confirmed} />;
       case 'query_result':
         // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
         return <QueryResultCard key={i} card={card} />;

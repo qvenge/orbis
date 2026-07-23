@@ -3,7 +3,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { App } from '../../App';
 import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders } from '../../test/harness';
+import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
 import { BudgetScreen } from './BudgetScreen';
 import { monthShift } from './useBudget';
 
@@ -268,4 +268,47 @@ test('без orbis-budget в installedViews вкладки budget нет', async
     ).toBeInTheDocument(),
   );
   expect(screen.queryByTestId('tab-budget')).toBeNull();
+});
+
+// --- Бейдж вкладки Budget (§6.1, B7): конверты в тревоге/перерасходе -------------------
+
+const badgeHandler =
+  (alertCount: unknown, views: string[] = ['orbis-budget']): MockHandler =>
+  (path) => {
+    if (path === 'user.getSettings') return settings(views);
+    if (path === 'budget.alertCount') return alertCount;
+    return {};
+  };
+
+test('бейдж Budget: alertCount>0 → число в tab-bar И sidebar (B1-прецедент: обе поверхности)', async () => {
+  renderWithProviders(<App />, badgeHandler(2));
+  await waitFor(() => expect(screen.getByTestId('budget-badge')).toHaveTextContent('2'));
+  expect(screen.getByTestId('sidebar-budget-badge')).toHaveTextContent('2');
+});
+
+test('alertCount=0 → бейджа нет (§6.1: нет конвертов в тревоге — нет бейджа)', async () => {
+  const { calls } = renderWithProviders(<App />, badgeHandler(0));
+  await waitFor(() => expect(screen.getByTestId('tab-budget')).toBeInTheDocument());
+  await waitFor(() => expect(calls.some((c) => c.path === 'budget.alertCount')).toBe(true));
+  expect(screen.queryByTestId('budget-badge')).toBeNull();
+  expect(screen.queryByTestId('sidebar-budget-badge')).toBeNull();
+});
+
+test('ошибка alertCount → бейджа нет, вкладка живёт', async () => {
+  renderWithProviders(<App />, (path) => {
+    if (path === 'user.getSettings') return settings(['orbis-budget']);
+    if (path === 'budget.alertCount') throw trpcError('INTERNAL_SERVER_ERROR');
+    return {};
+  });
+  await waitFor(() => expect(screen.getByTestId('tab-budget')).toBeInTheDocument());
+  expect(screen.queryByTestId('budget-badge')).toBeNull();
+  expect(screen.queryByTestId('sidebar-budget-badge')).toBeNull();
+});
+
+test('без orbis-budget alertCount вообще не запрашивается (гейт как у вкладки)', async () => {
+  const { calls } = renderWithProviders(<App />, badgeHandler(5, []));
+  await waitFor(() => expect(calls.some((c) => c.path === 'user.getSettings')).toBe(true));
+  await waitFor(() => expect(screen.getByTestId('tab-chat')).toBeInTheDocument());
+  expect(calls.filter((c) => c.path === 'budget.alertCount')).toHaveLength(0);
+  expect(screen.queryByTestId('budget-badge')).toBeNull();
 });

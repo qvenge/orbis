@@ -95,6 +95,23 @@ test('уверенный паттерн онлайн → entity.create(source:fa
   });
 });
 
+// 03-budget §4.1 (B7): остаток конверта на карточке — ПОСЛЕ записи; успешный create
+// инвалидирует budget-кэш, и envelopeForCategory перечитывается с учётом транзакции.
+test('успешный fast-path create инвалидирует budget-кэш (остаток после записи, §4.1)', async () => {
+  const { Wrap, qc } = wrapper((path) => {
+    if (path === 'entity.create') return { id: 'e1', title: 'обед' };
+    return handlerBase(path);
+  });
+  const envInput = { categoryId: 'cat-food', date: '2026-07-13' };
+  const envKey = getQueryKey(trpc.budget.envelopeForCategory, envInput, 'query');
+  qc.setQueryData(envKey, null); // тёплый кэш «до записи»
+  const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
+  await act(async () => {
+    await result.current.submit('обед 340');
+  });
+  await waitFor(() => expect(qc.getQueryState(envKey)?.isInvalidated).toBe(true));
+});
+
 test('неуверенный паттерн → LLM-путь (ai.sendMessage), без entity.create', async () => {
   const { Wrap, calls } = wrapper((path) => {
     if (path === 'ai.sendMessage') return assistantReply;

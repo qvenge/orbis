@@ -175,6 +175,9 @@ export function useFastPath(threadId: string) {
       // §5.1: созданная сущность обязана появиться в списках Browser и счётчиках.
       void utils.entity.query.invalidate();
       void utils.entity.count.invalidate();
+      // 03-budget §4.1/§6.1: запись учтена сервером — остаток конверта на карточке
+      // и бейдж alertCount перечитываются ПОСЛЕ записи, не до.
+      void utils.budget.invalidate();
     } catch (err) {
       const outcome = mapSendError(err);
       // CONFLICT по своему id — сервер уже принял эту запись (идемпотентность §5.3): успех.

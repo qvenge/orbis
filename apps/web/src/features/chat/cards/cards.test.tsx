@@ -178,6 +178,123 @@ test('SystemMessage: author_kind=agent → префикс 🤖 агент', () =
   expect(screen.getByText(/агент/i)).toBeInTheDocument();
 });
 
+// --- Остаток конверта в fast-path-карточке (§4.1, B7) --------------------------------
+
+const finCard = {
+  kind: 'entity_card',
+  entityId: 'e1',
+  title: 'Обед 340',
+  aspects: ['orbis/financial'],
+  keyFields: {
+    amount: '340.00',
+    direction: 'expense',
+    category_ref: 'c1',
+    occurred_on: '2026-07-13',
+  },
+  undoActionId: 'act1',
+};
+
+// EnvelopeStatus «после записи»: сервер уже учёл транзакцию (spent включает 340)
+const envStatus = {
+  envelope: {
+    id: 'env1',
+    ownerId: 'u',
+    title: 'Конверт Еда',
+    emoji: null,
+    body: '',
+    bodyRefs: [],
+    tags: [],
+    meta: {},
+    aspects: {
+      'orbis/budget': {
+        category_ref: 'c1',
+        limit: '10000.00',
+        period_start: '2026-07-01',
+        period_end: '2026-07-31',
+      },
+    },
+    createdAt: 'x',
+    updatedAt: 'y',
+    archived: false,
+  },
+  category: { id: 'c1', title: 'Еда', icon: null, color: null },
+  spent: '1940.00',
+  effectiveLimit: '10000.00',
+  remaining: '8060.00',
+  dailyPace: null,
+  phase: 'active',
+};
+
+const fastMsg = (status: 'confirmed' | 'pending') =>
+  msg([finCard], {
+    metadata: {
+      cards: [finCard],
+      fastPath: { entityId: 'e1', text: 'обед 340', status },
+    },
+  });
+
+test('подтверждённая financial-карточка → «→ Еда · осталось 8 060 ₽» из envelopeForCategory (§4.1)', async () => {
+  const { calls } = renderWithProviders(<div>{renderCards(fastMsg('confirmed'))}</div>, (path) =>
+    path === 'budget.envelopeForCategory' ? envStatus : {},
+  );
+  await waitFor(() =>
+    expect(screen.getByTestId('envelope-remaining')).toHaveTextContent('→ Еда · осталось 8 060 ₽'),
+  );
+  // Запрос идёт по category_ref и occurred_on ЗАПИСИ (не «сегодня» клиента)
+  expect(calls.find((c) => c.path === 'budget.envelopeForCategory')?.input).toEqual({
+    categoryId: 'c1',
+    date: '2026-07-13',
+  });
+});
+
+test('конверта нет (null → Unbudgeted) → строки остатка нет', async () => {
+  const { calls } = renderWithProviders(<div>{renderCards(fastMsg('confirmed'))}</div>, (path) =>
+    path === 'budget.envelopeForCategory' ? null : {},
+  );
+  await waitFor(() =>
+    expect(calls.some((c) => c.path === 'budget.envelopeForCategory')).toBe(true),
+  );
+  expect(screen.queryByTestId('envelope-remaining')).toBeNull();
+});
+
+test('карточка «⏳» (pending, до подтверждения сервером) остаток НЕ запрашивает (§4.1)', async () => {
+  const { calls } = renderWithProviders(<div>{renderCards(fastMsg('pending'))}</div>, (path) =>
+    path === 'budget.envelopeForCategory' ? envStatus : {},
+  );
+  await waitFor(() => expect(screen.getByTestId('entity-card')).toBeInTheDocument());
+  expect(screen.queryByTestId('envelope-remaining')).toBeNull();
+  expect(calls.some((c) => c.path === 'budget.envelopeForCategory')).toBe(false);
+});
+
+test('нефинансовая карточка без category_ref остаток не запрашивает', async () => {
+  const { calls } = renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          { kind: 'entity_card', entityId: 'e2', title: 'Заметка', aspects: [], keyFields: {} },
+        ]),
+      )}
+    </div>,
+  );
+  await waitFor(() => expect(screen.getByTestId('entity-card')).toBeInTheDocument());
+  expect(calls.some((c) => c.path === 'budget.envelopeForCategory')).toBe(false);
+});
+
+test('после Undo строка остатка снимается вместе с карточкой', async () => {
+  renderWithProviders(<div>{renderCards(fastMsg('confirmed'))}</div>, (path) => {
+    if (path === 'budget.envelopeForCategory') return envStatus;
+    if (path === 'ai.undo')
+      return { ok: true, actionId: 'act1', results: [], idempotentReplay: false };
+    return {};
+  });
+  await waitFor(() => expect(screen.getByTestId('envelope-remaining')).toBeInTheDocument());
+  fireEvent.click(screen.getByRole('button', { name: /отменить/i }));
+  await waitFor(() =>
+    expect(screen.getByTestId('entity-card')).toHaveAttribute('data-undone', 'true'),
+  );
+  expect(screen.queryByTestId('envelope-remaining')).toBeNull();
+});
+
 test('smoothAuditText сглаживает «batch: операций — 1»', () => {
   expect(smoothAuditText('batch: операций — 1')).toBe('Операция выполнена');
   expect(smoothAuditText('batch: операций — 3')).toBe('batch: операций — 3');

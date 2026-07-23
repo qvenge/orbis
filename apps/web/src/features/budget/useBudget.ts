@@ -46,6 +46,19 @@ export function invalidateBudget(utils: ReturnType<typeof trpc.useUtils>) {
 }
 
 /**
+ * Бейдж вкладки Budget (§6.1, B7): число конвертов текущего месяца в тревоге/
+ * перерасходе (spent > 85% × effectiveLimit, считает сервер). Гейт — как у самой
+ * вкладки (installedViews); 0, ошибка или отсутствие view → бейджа нет (возврат 0).
+ * Пересчёт приходит инвалидацией: invalidateBudget → utils.budget.invalidate()
+ * покрывает и alertCount (§6.1 «count-запрос при инвалидации кэша»).
+ */
+export function useBudgetAlertCount(): number {
+  const visible = useBudgetTabVisible();
+  const q = trpc.budget.alertCount.useQuery({}, { enabled: visible });
+  return visible && typeof q.data === 'number' ? q.data : 0;
+}
+
+/**
  * Overview месяца (§3.1). На mount ровно один budget.postDue: due-инстансы
  * recurring переходят planned→fact до чтения агрегатов (сервер идемпотентен,
  * overview сам гоняет конвейер §2.8 — вызов здесь закрывает гонку кэша).

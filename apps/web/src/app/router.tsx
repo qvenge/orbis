@@ -4,7 +4,7 @@ import { BudgetScreen } from '../features/budget/BudgetScreen';
 import { CategoryScreen } from '../features/budget/CategoryScreen';
 import { RolloverScreen } from '../features/budget/RolloverScreen';
 import { TransactionsScreen } from '../features/budget/TransactionsScreen';
-import { useBudgetTabVisible } from '../features/budget/useBudget';
+import { useBudgetAlertCount, useBudgetTabVisible } from '../features/budget/useBudget';
 import { ChatScreen } from '../features/chat/ChatScreen';
 import { ChatThread } from '../features/chat/ChatThread';
 import { DetailScreen } from '../features/entity-detail/DetailScreen';
@@ -28,6 +28,7 @@ export function TabBar() {
   const switchTab = useNav((s) => s.switchTab);
   const chatBadge = useRetryBuffer((s) => s.size); // §1.5
   const budgetVisible = useBudgetTabVisible();
+  const budgetBadge = useBudgetAlertCount(); // §6.1: конверты в тревоге/перерасходе
   const tabs = budgetVisible ? [...BASE_TABS, BUDGET_TAB] : BASE_TABS;
 
   // Мобила: safe-area снизу; на десктопе скрыт (md:hidden) — навигация в SidebarNav.
@@ -61,6 +62,14 @@ export function TabBar() {
                 className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
               >
                 {chatBadge}
+              </span>
+            )}
+            {t.id === 'budget' && budgetBadge > 0 && (
+              <span
+                data-testid="budget-badge"
+                className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
+              >
+                {budgetBadge}
               </span>
             )}
           </button>

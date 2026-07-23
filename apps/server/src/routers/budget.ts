@@ -5,6 +5,7 @@
 // rolloverCreate).
 import {
   type BudgetOverview,
+  budgetAlertCountInput,
   budgetOverviewInput,
   type CategoryTrendPoint,
   type ConfirmPurchaseResult,
@@ -18,6 +19,7 @@ import {
   rolloverPreviewInput,
 } from '@orbis/shared';
 import {
+  budgetAlertCount,
   budgetOverview,
   categoryTrend,
   envelopeForCategory,
@@ -41,6 +43,17 @@ export const budgetRouter = router({
     .input(budgetOverviewInput)
     .query(({ ctx, input }): Promise<BudgetOverview> => {
       return budgetOverview(ctx.db, ctx.actorUserId, input.month);
+    }),
+
+  /**
+   * Бейдж вкладки Budget (§6.1, Task B7): count-only чтение агрегата БЕЗ конвейера
+   * §2.8 — лёгкий запрос при инвалидации server-state-кэша; month опционален
+   * (дефолт — текущий месяц пользователя).
+   */
+  alertCount: protectedProcedure
+    .input(budgetAlertCountInput)
+    .query(({ ctx, input }): Promise<number> => {
+      return budgetAlertCount(ctx.db, ctx.actorUserId, input.month);
     }),
 
   /** Мини-тренд категории (§3.2): spent/limit по месяцам конвертов категории. */
