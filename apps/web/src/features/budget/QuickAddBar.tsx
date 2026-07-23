@@ -21,19 +21,12 @@ import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
 import { CATEGORIES_QUERY, type CategoryOption, toOption } from './categories';
 import { envelopeView } from './EnvelopeCard';
+// Валидация/нормализация суммы — общий moneyInput.ts (§3.6, делится с Rollover B6)
+import { AMOUNT_RE, toDecimal2 } from './moneyInput';
 import { invalidateBudget, todayISO } from './useBudget';
 
 const RECENT_QUERY = 'aspect=orbis/financial, sortBy=occurred_on:desc, limit=20';
 const MAX_PILLS = 5;
-// Сумма: целые/десятичные до 2 знаков, запятая = точка (§3.6); строгая граница —
-// «12.345» невалиден, а не молча обрезается до «12.34» (тихая потеря копеек запрещена).
-const AMOUNT_RE = /^\d+([.,]\d{1,2})?$/;
-
-/** "340" → "340.00", "12,5" → "12.50" — decimal-строка с двумя знаками (как fast-path §7.5). */
-function toDecimal2(raw: string): string {
-  const [i, f = ''] = raw.replace(',', '.').split('.');
-  return `${i}.${`${f}00`.slice(0, 2)}`;
-}
 
 const FIELD_CLS =
   'rounded-control border border-line bg-surface px-3 py-2 text-sm text-text transition focus-visible:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40';

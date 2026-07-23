@@ -7,6 +7,8 @@ import { Button } from '../../ui/Button';
 import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
 import { firstQueryBlock } from '../browser/query';
+import { PlannedToFactCard } from '../budget/PlannedToFactCard';
+import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { ChatThread } from '../chat/ChatThread';
 import { AspectCards } from './AspectCards';
 import { NativeRow } from './NativeRow';
@@ -21,6 +23,9 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   const updateSettings = trpc.user.updateSettings.useMutation({
     onSuccess: () => void utils.user.getSettings.invalidate(),
   });
+  // §2.7: перевод задачи-покупки в done → карточка «Покупка совершена?» (Task B6).
+  // Единственный мутационный путь чекбокса — toggleTask здесь (см. usePlanToFactPrompt).
+  const planToFact = usePlanToFactPrompt();
 
   if (get.isLoading || !get.data) {
     return (
@@ -49,8 +54,19 @@ export function DetailScreen({ entityId }: { entityId: string }) {
             {entity.emoji}
           </span>
         )}
-        <NativeRow entity={entity} onToggleTask={toggleTask} />
+        <NativeRow
+          entity={entity}
+          onToggleTask={(done) => {
+            toggleTask(done);
+            // Данные сущности ДО перевода: planned ещё true — карточка на переходе в done
+            if (done) planToFact.onTaskDone(entity);
+          }}
+        />
       </div>
+      {/* Карточка plan→fact (§2.7) — инлайн под строкой задачи, как в мокапе */}
+      {planToFact.prompt !== null && (
+        <PlannedToFactCard prompt={planToFact.prompt} onClose={planToFact.dismiss} />
+      )}
       {conflict && (
         <div
           role="alert"

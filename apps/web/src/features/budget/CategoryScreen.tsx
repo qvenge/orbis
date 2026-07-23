@@ -16,7 +16,7 @@ import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
 import { NativeRow } from '../entity-detail/NativeRow';
-import { monthTitle, Section } from './BudgetScreen';
+import { monthGenitive, monthTitle, Section } from './BudgetScreen';
 import {
   ddmm,
   decMax,
@@ -50,22 +50,6 @@ function monthShort(period: string): string {
   return MONTHS_RU_SHORT[Number(period.slice(5, 7)) - 1] ?? period;
 }
 
-// Родительный падеж — заголовок секции транзакций по мокапу §3.2 («Транзакции июня»).
-const MONTHS_RU_GEN = [
-  'января',
-  'февраля',
-  'марта',
-  'апреля',
-  'мая',
-  'июня',
-  'июля',
-  'августа',
-  'сентября',
-  'октября',
-  'ноября',
-  'декабря',
-];
-
 /** Последний день месяца 'YYYY-MM' (UTC-хак: день 0 следующего месяца). */
 function lastDayOf(month: string): number {
   const [y = 0, m = 1] = month.split('-').map(Number);
@@ -91,7 +75,7 @@ function periodLabel(start: string, end: string): string {
 function txTitle(start: string | null, end: string | null): string {
   if (!start || !end) return 'Транзакции';
   if (isFullMonth(start, end)) {
-    const gen = MONTHS_RU_GEN[Number(start.slice(5, 7)) - 1];
+    const gen = monthGenitive(start.slice(0, 7));
     return gen ? `Транзакции ${gen}` : 'Транзакции';
   }
   return `Транзакции ${ddmm(start)} – ${ddmm(end)}`;

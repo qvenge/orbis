@@ -3,7 +3,7 @@
 // (EnvelopeCreateSheet: [+ конверт] и вход из Unbudgeted), Coming up / Planned.
 // Все суммы — готовые decimal-строки сервера, клиент только форматирует (format.ts).
 import type { BudgetOverview } from '@orbis/shared';
-import { ChevronLeft, ChevronRight, Plus, ReceiptText, Repeat } from 'lucide-react';
+import { CalendarSync, ChevronLeft, ChevronRight, Plus, ReceiptText, Repeat } from 'lucide-react';
 import { useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { formatAmount, formatMoney, type MoneyTone } from '../../lib/format';
@@ -40,6 +40,27 @@ export function monthTitle(month: string): string {
   return `${MONTHS_RU[Number(m) - 1] ?? m} ${y}`;
 }
 
+// Родительный падеж — «Транзакции июня» (§3.2), «Факт июня» (§3.5).
+const MONTHS_RU_GEN = [
+  'января',
+  'февраля',
+  'марта',
+  'апреля',
+  'мая',
+  'июня',
+  'июля',
+  'августа',
+  'сентября',
+  'октября',
+  'ноября',
+  'декабря',
+];
+
+/** «июня» из 'YYYY-MM' (или null для битого входа) — общий для CategoryScreen и Rollover. */
+export function monthGenitive(month: string): string | null {
+  return MONTHS_RU_GEN[Number(month.slice(5, 7)) - 1] ?? null;
+}
+
 // Текущий месяц 'YYYY-MM' в таймзоне пользователя (§3.1: дефолт заголовка периода).
 // До загрузки настроек (или при битой tz) — таймзона браузера: расходится с
 // пользовательской только в часы около границы месяца, ключ запроса стабилен.
@@ -65,6 +86,18 @@ export function BudgetScreen() {
   const [override, setOverride] = useState<string | null>(null);
   const month = override ?? currentMonth(settings.data?.timezone);
   const overview = useBudgetOverview(month);
+  // Триггер rollover (§3.5): превью ТЕКУЩЕГО месяца (не переключённого) — есть категории
+  // прошлого месяца без конвертов-преемников ЛИБО первый месяц без истории (needsSetup).
+  const rolloverQ = trpc.budget.rolloverPreview.useQuery({
+    month: currentMonth(settings.data?.timezone),
+  });
+  const pv = rolloverQ.data;
+  const rolloverDue =
+    pv !== undefined && (pv.needsSetup === true || (Array.isArray(pv.rows) && pv.rows.length > 0));
+  const openRollover = () => {
+    const { activeTab, push } = useNav.getState();
+    push(activeTab, { kind: 'budget-rollover' });
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -85,6 +118,17 @@ export function BudgetScreen() {
               }}
             >
               <ReceiptText size={18} aria-hidden />
+            </Button>
+            {/* Ручной вход в Rollover (§3.5 «из ⋮ → Rollover»): меню шапки на Overview нет —
+                минимальная icon-кнопка по образцу входа в «Транзакции» (решение B5/B6). */}
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Rollover"
+              data-testid="open-rollover"
+              onClick={openRollover}
+            >
+              <CalendarSync size={18} aria-hidden />
             </Button>
             <Button
               size="icon"
@@ -108,6 +152,17 @@ export function BudgetScreen() {
         }
       />
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4">
+        {/* Баннер §3.5: новый месяц без конвертов-преемников → предложить rollover */}
+        {rolloverDue && (
+          <button
+            type="button"
+            data-testid="rollover-banner"
+            onClick={openRollover}
+            className="cursor-pointer rounded-card border border-accent/40 bg-accent/10 px-3 py-2 text-left text-sm text-text transition hover:bg-accent/15"
+          >
+            Новый месяц: настроить бюджеты →
+          </button>
+        )}
         {overview.isError ? (
           <p className="text-sm text-text-muted">Не удалось загрузить бюджет</p>
         ) : overview.data ? (

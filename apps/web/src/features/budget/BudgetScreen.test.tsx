@@ -74,12 +74,20 @@ const settings = (views: string[]) => ({
   pinnedEntities: [],
 });
 
+// Превью rollover (B6): по умолчанию пустое — баннер §3.5 не показывается
+const emptyRolloverPreview = { month: '2026-07', rows: [], needsSetup: false };
+
 const budgetHandler =
-  (overview: BudgetOverview, views: string[] = ['orbis-budget']): MockHandler =>
+  (
+    overview: BudgetOverview,
+    views: string[] = ['orbis-budget'],
+    rolloverPreview: unknown = emptyRolloverPreview,
+  ): MockHandler =>
   (path) => {
     if (path === 'user.getSettings') return settings(views);
     if (path === 'budget.overview') return overview;
     if (path === 'budget.postDue') return { posted: 0 };
+    if (path === 'budget.rolloverPreview') return rolloverPreview;
     return {};
   };
 
@@ -185,6 +193,60 @@ test('переключатель месяца меняет аргумент budg
   fireEvent.click(screen.getByRole('button', { name: 'Предыдущий месяц' }));
   fireEvent.click(screen.getByRole('button', { name: 'Предыдущий месяц' }));
   await waitFor(() => expect(overviewCalls()).toContain(monthShift(base, -1)));
+});
+
+// --- Триггер Rollover (§3.5, B6) ------------------------------------------------------
+
+const fullRolloverPreview = {
+  month: '2026-07',
+  rows: [
+    {
+      categoryId: 'cat-1',
+      categoryTitle: 'Еда',
+      categoryIcon: null,
+      prevSpent: '28800.00',
+      carryover: '1200.00',
+      suggestedLimit: '30000.00',
+    },
+  ],
+  needsSetup: false,
+};
+
+test('непустое rollover-превью → баннер «Новый месяц: настроить бюджеты»; клик пушит budget-rollover', async () => {
+  useNav.setState({
+    activeTab: 'budget',
+    stacks: { chat: [], browser: [], agenda: [], budget: [] },
+  });
+  renderWithProviders(
+    <BudgetScreen />,
+    budgetHandler(fullOverview, ['orbis-budget'], fullRolloverPreview),
+  );
+  await waitFor(() => expect(screen.getByTestId('rollover-banner')).toBeInTheDocument());
+  expect(screen.getByTestId('rollover-banner')).toHaveTextContent('Новый месяц: настроить бюджеты');
+
+  fireEvent.click(screen.getByTestId('rollover-banner'));
+  expect(useNav.getState().stacks.budget.at(-1)).toEqual({ kind: 'budget-rollover' });
+});
+
+test('needsSetup=true (первый месяц без истории) тоже показывает баннер', async () => {
+  renderWithProviders(
+    <BudgetScreen />,
+    budgetHandler(fullOverview, ['orbis-budget'], { month: '2026-07', rows: [], needsSetup: true }),
+  );
+  await waitFor(() => expect(screen.getByTestId('rollover-banner')).toBeInTheDocument());
+});
+
+test('пустое превью — баннера нет; ручной вход в Rollover из шапки пушит экран', async () => {
+  useNav.setState({
+    activeTab: 'budget',
+    stacks: { chat: [], browser: [], agenda: [], budget: [] },
+  });
+  renderWithProviders(<BudgetScreen />, budgetHandler(fullOverview));
+  await waitFor(() => expect(screen.getByTestId('balance-card')).toBeInTheDocument());
+  expect(screen.queryByTestId('rollover-banner')).toBeNull();
+
+  fireEvent.click(screen.getByTestId('open-rollover'));
+  expect(useNav.getState().stacks.budget.at(-1)).toEqual({ kind: 'budget-rollover' });
 });
 
 // --- Гейт вкладки по installedViews ---------------------------------------------------

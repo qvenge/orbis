@@ -2,6 +2,7 @@ import { FolderOpen, type LucideIcon, MessageSquare, Wallet } from 'lucide-react
 import { BrowserScreen } from '../features/browser/BrowserScreen';
 import { BudgetScreen } from '../features/budget/BudgetScreen';
 import { CategoryScreen } from '../features/budget/CategoryScreen';
+import { RolloverScreen } from '../features/budget/RolloverScreen';
 import { TransactionsScreen } from '../features/budget/TransactionsScreen';
 import { useBudgetTabVisible } from '../features/budget/useBudget';
 import { ChatScreen } from '../features/chat/ChatScreen';
@@ -104,6 +105,9 @@ function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
   } else if (top.kind === 'budget-transactions') {
     // Экран «Транзакции» (03-budget §3.3, Task B5); вход — шапка Overview.
     return <TransactionsScreen />;
+  } else if (top.kind === 'budget-rollover') {
+    // Rollover-экран (03-budget §3.5, Task B6); вход — баннер «Новый месяц» и шапка Overview.
+    return <RolloverScreen />;
   } else if (top.kind === 'settings') {
     return <SettingsScreen />;
   }
