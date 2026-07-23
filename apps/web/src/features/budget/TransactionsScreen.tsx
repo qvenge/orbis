@@ -11,10 +11,15 @@
 //
 // Действия §3.3: влево-свайп — рекатегоризация (Sheet выбора → entity.update
 // category_ref; parent перепривязывает серверный хук A4, §5), вправо-свайп —
-// «пометить 🔁» (entity.update recurring:true → подсказка + переход на detail,
-// где можно добавить orbis/schedule.recurrence; мастер — не в MVP). Тач-свайпы
-// в тестах не эмулируются надёжно → кнопки-действия в каждой строке ПЕРВИЧНЫ
-// (доступность/десктоп), свайп — прогрессивное улучшение поверх них.
+// «Сделать повторяющейся». ОТКЛОНЕНИЕ ОТ БУКВЫ 03-budget §3.3 («ставит
+// recurring=true»), решение контролёра B5: entity.update {recurring:true} без
+// orbis/schedule.recurrence детерминированно отклоняется инвариантом 01-arch §3.3
+// (financial_recurring_requires_recurrence, executor/normalize.ts) — инвариант
+// главнее буквы. Поэтому действие НЕ мутирует: переход на detail сущности +
+// тост-подсказка добавить аспект Schedule с recurrence (attach recurrence на detail
+// корректно отвязывает от конверта — хук фазы A); полноценный мастер шаблона — future.
+// Тач-свайпы в тестах не эмулируются надёжно → кнопки-действия в каждой строке
+// ПЕРВИЧНЫ (доступность/десктоп), свайп — прогрессивное улучшение поверх них.
 import { ChevronLeft, ChevronRight, Repeat, Tag } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
@@ -100,20 +105,14 @@ export function TransactionsScreen() {
     );
   }
 
-  function markRecurring(entity: QueryEntity) {
-    update.mutate(
-      { id: entity.id, aspects: { 'orbis/financial': { recurring: true } } },
-      {
-        onSuccess: () => {
-          // Подсказка «завести шаблон» (§3.3): переход на detail, где добавляется
-          // orbis/schedule.recurrence; полноценный мастер — вне MVP-объёма (бриф B5).
-          show('Помечено 🔁 — завести шаблон можно на экране записи');
-          const { activeTab, push } = useNav.getState();
-          push(activeTab, { kind: 'entity', id: entity.id });
-        },
-        onError: () => show('Не удалось пометить', 'danger'),
-      },
-    );
+  // «Сделать повторяющейся» — БЕЗ мутации (решение контролёра B5, см. шапку файла):
+  // recurring=true без recurrence отклонил бы инвариант 01-arch §3.3. Ведём на detail,
+  // где добавление orbis/schedule.recurrence делает операцию шаблоном (и корректно
+  // отвязывает от конверта — хук фазы A); подсказка — тостом.
+  function makeRecurring(entity: QueryEntity) {
+    show('Добавьте аспект Schedule с правилом повторения — операция станет шаблоном');
+    const { activeTab, push } = useNav.getState();
+    push(activeTab, { kind: 'entity', id: entity.id });
   }
 
   return (
@@ -218,7 +217,7 @@ export function TransactionsScreen() {
                 entity={e}
                 category={categoryOf(e, byId)}
                 onRecategorize={() => setRecatFor(e)}
-                onMarkRecurring={() => markRecurring(e)}
+                onMakeRecurring={() => makeRecurring(e)}
               />
             ))}
           </Card>
@@ -271,12 +270,12 @@ function TxRow({
   entity,
   category,
   onRecategorize,
-  onMarkRecurring,
+  onMakeRecurring,
 }: {
   entity: QueryEntity;
   category: CategoryOption | undefined;
   onRecategorize: () => void;
-  onMarkRecurring: () => void;
+  onMakeRecurring: () => void;
 }) {
   const fin = (entity.aspects as Record<string, Record<string, unknown> | undefined>)[
     'orbis/financial'
@@ -307,7 +306,7 @@ function TxRow({
         if (Math.abs(dx) < SWIPE_THRESHOLD_PX || Math.abs(dx) <= Math.abs(dy)) return;
         // ◀ влево — рекатегоризация; вправо ▶ — пометить 🔁 (уже помеченную не трогаем)
         if (dx < 0) onRecategorize();
-        else if (!recurring) onMarkRecurring();
+        else if (!recurring) onMakeRecurring();
       }}
     >
       <button
@@ -331,12 +330,15 @@ function TxRow({
           {money.text}
         </span>
       </button>
-      {/* Бейдж категории — крайняя правая колонка строки (§3.3) */}
+      {/* Бейдж категории — крайняя правая колонка строки (§3.3, icon/color): фон —
+          тонирование цветом категории (hex #RRGGBB + альфа ~15% — читаемо поверх
+          surface обеих тем, текст остаётся токенным); без color — нейтральный класс */}
       {category !== undefined && (
         <span
           data-testid="tx-category-badge"
           title={category.title}
           className="inline-flex shrink-0 items-center rounded-full bg-surface-2 px-1.5 py-0.5 text-xs text-text-secondary"
+          style={category.color !== null ? { backgroundColor: `${category.color}26` } : undefined}
         >
           {category.icon ?? category.title}
         </span>
@@ -352,8 +354,8 @@ function TxRow({
       {!recurring && (
         <button
           type="button"
-          aria-label="Пометить повторяющейся"
-          onClick={onMarkRecurring}
+          aria-label="Сделать повторяющейся"
+          onClick={onMakeRecurring}
           className="shrink-0 cursor-pointer rounded p-1 text-text-muted outline-hidden transition hover:bg-surface-2 hover:text-text focus-visible:ring-2 focus-visible:ring-accent/60"
         >
           <Repeat size={14} aria-hidden />
