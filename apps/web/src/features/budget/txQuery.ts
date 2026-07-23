@@ -42,7 +42,12 @@ export function buildTxQuery(f: TxFilters): string {
   const clauses = [`aspect=orbis/financial`, `occurred_on=${start}..${end}`];
   if (f.categoryId) clauses.push(`category_ref=${f.categoryId}`);
   if (f.direction) clauses.push(`direction=${f.direction}`);
-  if (f.planned !== undefined && f.planned !== null) clauses.push(`planned=${f.planned}`);
+  // «Факт» — noneOf `planned=!true` (IS NULL OR NOT IN ('true'), решение 10 компилятора):
+  // quick-add/fast-path/LLM ключ planned не пишут (только post-due/confirmPurchase ставят),
+  // а `planned=false` компилировался бы в IN ('false') и скрывал бы рукописные транзакции.
+  // Семантика согласована с серверными агрегатами: отсутствие ключа = факт (coalesce(...,false)).
+  if (f.planned === true) clauses.push('planned=true');
+  else if (f.planned === false) clauses.push('planned=!true');
   // Обе границы — диапазон (включительно, §6.1); одна — строгое сравнение (>= в грамматике нет)
   if (f.amountFrom && f.amountTo) clauses.push(`amount=${f.amountFrom}..${f.amountTo}`);
   else if (f.amountFrom) clauses.push(`amount>${f.amountFrom}`);

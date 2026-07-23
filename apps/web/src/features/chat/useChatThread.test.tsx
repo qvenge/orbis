@@ -1,7 +1,10 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { act, fireEvent, renderHook, screen, waitFor } from '@testing-library/react';
+import { getQueryKey } from '@trpc/react-query';
+import type { ReactNode } from 'react';
 import { expect, test } from 'vitest';
-import { renderWithProviders } from '../../test/harness';
-import type { RouterOutputs } from '../../trpc';
+import { mockLink, renderWithProviders } from '../../test/harness';
+import { type RouterOutputs, trpc } from '../../trpc';
 import { useChatThread, useSendMessage } from './useChatThread';
 
 type Msg = RouterOutputs['chat']['listMessages'][number];
@@ -76,6 +79,39 @@ test('optimistic: user-сообщение появляется сразу; не-
   );
   // затем прилетает ответ ассистента
   await waitFor(() => expect(screen.getByTestId('count')).toHaveTextContent('2'));
+});
+
+// Финал B (Important 2): транзакция через LLM-путь чата обязана обновлять бейдж §6.1 и
+// Overview — успешный ai.sendMessage инвалидирует budget-кэш (по образцу B7-фикса useFastPath).
+test('успешный ai.sendMessage инвалидирует budget-кэш (бейдж/Overview после LLM-транзакции)', async () => {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  const client = trpc.createClient({
+    links: [
+      mockLink((path) => {
+        if (path === 'chat.listMessages') return [];
+        if (path === 'ai.sendMessage')
+          return {
+            assistantMessage: mkMsg('resp', '2026-07-05T11:00:00.000Z', 'assistant'),
+            actions: [],
+            pending: [],
+            replayed: false,
+          };
+        throw new Error(`unexpected ${path}`);
+      }),
+    ],
+  });
+  const Wrap = ({ children }: { children: ReactNode }) => (
+    <trpc.Provider client={client} queryClient={qc}>
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    </trpc.Provider>
+  );
+  const budgetKey = getQueryKey(trpc.budget.overview, { month: '2026-07' }, 'query');
+  qc.setQueryData(budgetKey, null); // тёплый кэш «до записи»
+  const { result } = renderHook(() => useSendMessage('t1'), { wrapper: Wrap });
+  act(() => result.current.sendMessage('обед 340'));
+  await waitFor(() => expect(qc.getQueryState(budgetKey)?.isInvalidated).toBe(true));
 });
 
 test('{ status: processing } → рефетч треда с backoff, без локального аппенда ответа', async () => {

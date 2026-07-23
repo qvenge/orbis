@@ -46,6 +46,8 @@ const ID = {
   taskWaiting1: '019eb300-d5e1-7000-8000-000000000014',
   taskWaiting2: '019eb300-d5e1-7000-8000-000000000015',
   fin030: '019eb300-d5e1-7000-8000-000000000016',
+  finPlanned: '019eb300-d5e1-7000-8000-000000000017',
+  finFact: '019eb300-d5e1-7000-8000-000000000018',
 } as const;
 
 /**
@@ -270,6 +272,45 @@ const DATASET_A: (typeof entities.$inferInsert)[] = [
     createdAt: new Date('2026-06-30T09:00:00Z'),
     updatedAt: new Date('2026-07-01T15:00:00Z'),
   },
+  // ─── Строки финала фазы B: семантика фильтра «Факт» planned=!true ───
+  // Суммы вне окон amount-тестов (0.10..0.30, >500, =0.30); occurred_on вне окон теста 2b
+  // (06-26..06-30 и >06-30); updated_at — «ранняя половина» (< 2026-07-02) для курсора теста 3.
+  {
+    // Явный planned=true — ручная planned-покупка (§2.7): фильтр «Факт» обязан её скрыть.
+    id: ID.finPlanned,
+    ownerId: USER_A,
+    title: 'Запланированная покупка 45.00',
+    tags: ['expense'],
+    aspects: {
+      'orbis/financial': {
+        amount: '45.00',
+        direction: 'expense',
+        category_ref: CAT,
+        occurred_on: '2026-06-24',
+        planned: true,
+      },
+    },
+    createdAt: new Date('2026-06-24T12:00:00Z'),
+    updatedAt: new Date('2026-07-01T16:00:00Z'),
+  },
+  {
+    // Явный planned=false (путь post-due/confirmPurchase): «Факт» обязан её показать.
+    id: ID.finFact,
+    ownerId: USER_A,
+    title: 'Совершённая покупка 55.00',
+    tags: ['expense'],
+    aspects: {
+      'orbis/financial': {
+        amount: '55.00',
+        direction: 'expense',
+        category_ref: CAT,
+        occurred_on: '2026-06-23',
+        planned: false,
+      },
+    },
+    createdAt: new Date('2026-06-23T12:00:00Z'),
+    updatedAt: new Date('2026-07-01T16:30:00Z'),
+  },
   {
     // §13.6: сущность с amount '0.30' — цель запроса грамматики amount=0.30
     id: ID.fin030,
@@ -458,6 +499,24 @@ describe('датасет §6.2: состав И порядок под RLS', () =
     expect(ids(await run(USER_A, 'occurred_on>2026-06-30'))).toEqual([ID.fin1000]);
   });
 
+  test('2c. фильтр «Факт» (финал B): planned=!true — NULL и явный false проходят, true скрыт', async () => {
+    // Клиентский фильтр «Факт» экрана «Транзакции» (txQuery.ts): quick-add/fast-path/LLM
+    // ключ planned не пишут — noneOf `!true` компилируется в (IS NULL OR NOT IN ('true')),
+    // запись без ключа проходит; семантика = серверные агрегаты coalesce(...,false).
+    // `planned=false` (anyOf) отфильтровал бы NULL — рукописные транзакции исчезли бы.
+    const fact = await run(USER_A, 'aspect=orbis/financial, planned=!true, sortBy=occurred_on:asc');
+    expect(ids(fact)).toEqual([
+      ID.finFact, // явный planned=false — виден
+      ID.fin010, // без ключа planned — виден (NULL проходит)
+      ID.fin020,
+      ID.fin030,
+      ID.fin340,
+      ID.fin1000,
+    ]);
+    // Симметрия: фильтр «План» — только явный true
+    expect(ids(await run(USER_A, 'aspect=orbis/financial, planned=true'))).toEqual([ID.finPlanned]);
+  });
+
   test('3. курсор агента (§9.3): updated_at> середины вставки — только поздняя половина', async () => {
     const rows = await run(
       USER_A,
@@ -599,7 +658,7 @@ describe('§13.6: decimal-точность в БД и persisted JSON', () => {
     // (г) persisted JSON: amount всех financial-сущностей датасета — jsonb-строка,
     // IEEE-754 number в БД отсутствует (под обоими пользователями, RLS скоупит выборку)
     for (const [user, expected] of [
-      [USER_A, 5],
+      [USER_A, 7], // +finPlanned/finFact (тест 2c, финал B)
       [USER_B, 1],
     ] as const) {
       const rows = await withIdentity(db, user, async (tx) => [

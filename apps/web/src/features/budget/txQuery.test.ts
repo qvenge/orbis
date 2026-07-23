@@ -34,9 +34,29 @@ test('все фильтры §3.3: категория, направление, p
   });
   expect(q).toBe(
     'aspect=orbis/financial, occurred_on=2026-06-01..2026-06-30, ' +
-      'category_ref=019d48ea-4188-765d-8e96-93a0ad9c262a, direction=expense, planned=false, ' +
+      'category_ref=019d48ea-4188-765d-8e96-93a0ad9c262a, direction=expense, planned=!true, ' +
       'amount=500..2000, search=кофе, sortBy=occurred_on:desc, limit=200',
   );
+});
+
+// Финал B (Important 1): quick-add/fast-path/LLM ключ planned НЕ пишут (его ставят только
+// post-due и confirmPurchase) — `planned=false` компилировался бы в `IN ('false')` и скрывал
+// бы рукописные транзакции. Фильтр «Факт» обязан быть noneOf `!true`: NULL проходит
+// (решение 10 компилятора), семантика совпадает с серверными агрегатами coalesce(...,false).
+test('фильтр «Факт»: planned=false → noneOf planned=!true, записи без ключа planned не отсеиваются', () => {
+  const q = buildTxQuery({ month: '2026-06', planned: false });
+  expect(q).toContain('planned=!true');
+  expect(q).not.toContain('planned=false');
+  // round-trip: строка парсится, условие — именно noneOf('true'), а не anyOf('false')
+  const r = parseQuery(q, catalog);
+  expect(r.ok).toBe(true);
+  if (r.ok) {
+    const f = r.ast.filters.find((x) => x.kind === 'field' && x.field === 'planned');
+    expect(f && f.kind === 'field' ? f.condition : null).toEqual({
+      kind: 'noneOf',
+      values: [{ kind: 'literal', value: 'true' }],
+    });
+  }
 });
 
 test('одна граница суммы — строгое сравнение >/< (у грамматики §6.1 нет >=)', () => {
