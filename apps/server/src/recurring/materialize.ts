@@ -25,6 +25,16 @@ import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
 /** Горизонт материализации: не дальше 14 дней вперёд от сегодня (§5.4). */
 const HORIZON_DAYS = 14;
 
+/**
+ * Ретро-пол материализации: не глубже 92 дней (квартал) назад от сегодня.
+ * Абсолютные диапазоны дат в грамматике (B5) сделали выразимым окно «2020..today» —
+ * без пола такой запрос синхронно материализовал бы годы инстансов, а post-due
+ * следом переписал бы spent исторических месяцев. Квартал покрывает легитимный
+ * кейс «не открывал приложение месяц». Кап — решение контролёра B5,
+ * sign-off владельца — на финале фазы B.
+ */
+const RETRO_DAYS = 92;
+
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Поля-триггеры хука: date/timestamp-поля аспектов orbis/schedule и orbis/financial. */
@@ -103,7 +113,8 @@ function instantOfLocal(dateISO: string, time: WallClock['time'], timeZone: stri
  * (kind 'date', B5 — обязательство бэклога A) — окно [a; b]; абсолютные сравнения:
  * `>X` — от следующего дня до горизонта +14д, `<X` — открытый низ (как overdue:
  * только сегодня и будущее) до дня перед X. Несколько условий объединяются
- * в [min from; max to]; горизонт +14д обрезает materializeInstances.
+ * в [min from; max to]; горизонт +14д и ретро-пол −92д (RETRO_DAYS, fix round B5)
+ * обрезает materializeInstances — окно здесь не клампится.
  */
 export function materializationWindow(
   ast: QueryAst,
@@ -182,12 +193,16 @@ export interface MaterializeDeps {
  * невалидные данные) пропускается, не роняя запрос вызывающего.
  */
 export async function materializeInstances(deps: MaterializeDeps): Promise<{ created: number }> {
-  const { db, ownerId, from, today } = deps;
-  if (!DATE_RE.test(from) || !DATE_RE.test(deps.to)) {
-    throw new RangeError(`Некорректное окно материализации: [${from}; ${deps.to}]`);
+  const { db, ownerId, today } = deps;
+  if (!DATE_RE.test(deps.from) || !DATE_RE.test(deps.to)) {
+    throw new RangeError(`Некорректное окно материализации: [${deps.from}; ${deps.to}]`);
   }
+  // Окно = [from; to] ∩ [today−92д; today+14д]: верх — горизонт §5.4, низ — ретро-пол
+  // (см. RETRO_DAYS; кламп здесь — единая точка для всех вызывающих, включая budget-роутер)
   const horizon = addDays(today, HORIZON_DAYS);
+  const retroFloor = addDays(today, -RETRO_DAYS);
   const to = deps.to < horizon ? deps.to : horizon;
+  const from = deps.from > retroFloor ? deps.from : retroFloor;
   if (to < from) return { created: 0 };
 
   // Фаза чтения (короткий tx под RLS): шаблоны владельца + его таймзона.

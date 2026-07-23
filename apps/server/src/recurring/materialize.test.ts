@@ -203,6 +203,43 @@ describe('materializeInstances (01 §5.4)', () => {
     expect(beyond.length).toBe(0);
   });
 
+  test('нижняя граница окна клампится today−92д (fix round B5): запрос 2020..today не тащит годы истории', async () => {
+    const owner = freshUserId();
+    // Месячный шаблон с 2020-01-01: без клампа окно 2020..today синхронно
+    // материализовало бы ~78 инстансов + post-due переписал бы spent исторических месяцев
+    const templateId = await createTemplate(owner, {
+      title: 'Старая подписка',
+      aspects: {
+        'orbis/schedule': {
+          start_at: '2020-01-01T09:00:00+03:00',
+          timezone: 'Europe/Moscow',
+          recurrence: { freq: 'monthly', interval: 1 },
+        },
+      },
+    });
+
+    const r = await materializeInstances({
+      db,
+      ownerId: owner,
+      from: '2020-01-01',
+      to: '2026-07-01',
+      today: '2026-07-01',
+    });
+    // Ретро-пол: today−92д = 2026-03-31 → материализованы только 04-01, 05-01, 06-01, 07-01
+    expect(r.created).toBe(4);
+    const expected = ['2026-04-01', '2026-05-01', '2026-06-01', '2026-07-01'];
+    const rows = await ownEntities(
+      owner,
+      expected.map((d) => recurringInstanceId(templateId, d)),
+    );
+    expect(rows.length).toBe(4);
+    const older = await ownEntities(
+      owner,
+      ['2020-01-01', '2026-03-01'].map((d) => recurringInstanceId(templateId, d)),
+    );
+    expect(older.length).toBe(0); // глубже ретро-пола — не материализуется
+  });
+
   test('financial-шаблон: инстансы с occurred_on=дата, planned=true, recurring=true (§3.3)', async () => {
     const owner = freshUserId();
     const categoryRef = crypto.randomUUID();
