@@ -288,13 +288,17 @@ function statusOf(
   };
 }
 
-/** Порог бейджа §6.1: spent > 85% × effectiveLimit ⇔ 20·spent > 17·effectiveLimit. */
+/**
+ * Порог бейджа §6.1: spent >= 85% × effectiveLimit ⇔ 20·spent >= 17·effectiveLimit.
+ * Граница ВКЛЮЧИТЕЛЬНО (sign-off владельца 2026-07-23): совпадает с ⚠-порогом
+ * карточки конверта (§3.1) — ровно-85% конверт и оранжевый, и в бейдже.
+ */
 function isAlert(spent: string, effectiveLimit: string): boolean {
-  return decCmp(decMulInt(spent, 20), decMulInt(effectiveLimit, 17)) > 0;
+  return decCmp(decMulInt(spent, 20), decMulInt(effectiveLimit, 17)) >= 0;
 }
 
 /**
- * Бейдж §6.1: конверты spent > 85% × effectiveLimit — по СЫРЫМ значениям конверта
+ * Бейдж §6.1: конверты spent >= 85% × effectiveLimit — по СЫРЫМ значениям конверта
  * (бейдж считает конверты, а не карточки-агрегаты §2.10); в фазе upcoming пороги
  * не применяются (§2.9а). Единственное место формулы порога для overview и alertCount.
  */
