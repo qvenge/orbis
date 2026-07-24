@@ -22,7 +22,11 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   assertEnvelopeUnique,
+  BindingReads,
+  type BindingTarget,
+  type BudgetOpDesc,
   bindingOps,
+  bindingTargetOf,
   normalizeEnvelopeCurrency,
   rebindForEnvelope,
 } from '../budget/binding';
@@ -471,53 +475,67 @@ function hookAspectChanged(hook: BudgetHook, aspectId: string): boolean {
 }
 
 /**
- * Бюджет-хук A4 (03-budget §2.3): операции привязки/ребиндинга для одной применённой
- * операции. Вызывается ПОСЛЕ apply породившей операции (тем же tx): SQL селектора и
- * окна ребиндинга видят фактическое состояние, включая эффекты предыдущих операций
- * batch, — результат зависит только от текущего набора конвертов (§7.3), без
- * дублирования tie-break в JS. Условия:
+ * Какие ветки бюджет-хука сработают (§2.3). Отдельно от расчёта операций: те же
+ * условия нужны прогреву кэша чтений ДО первого хука (иначе набор целей неизвестен).
  * (а) итоговая сущность несёт orbis/financial и financial-данные/архивность/шаблонность
  *     (orbis/schedule) изменились → bindingOps (шаблон recurring отвязывается);
  * (б) операция затронула orbis/budget (create/update периода-категории/архивация/detach)
  *     → rebindForEnvelope по окну «старый ИЛИ новый период».
  */
-async function budgetFollowUpDescs(
-  ctx: ExecCtx,
-  hook: BudgetHook,
-): Promise<Array<{ tool: string; input: unknown }>> {
+function budgetHookBranches(hook: BudgetHook): { rebind: boolean; bind: boolean } {
   const { before, after } = hook;
-  const ownerId = ctx.req.actorUserId;
   const beforeAspects = before?.aspects as AspectsMap | undefined;
   const afterAspects = after.aspects as AspectsMap;
   const archivedChanged = before !== null && before.archived !== after.archived;
-  const descs: Array<{ tool: string; input: unknown }> = [];
+  return {
+    rebind:
+      (beforeAspects?.['orbis/budget'] !== undefined ||
+        afterAspects['orbis/budget'] !== undefined) &&
+      (before === null || archivedChanged || hookAspectChanged(hook, 'orbis/budget')),
+    // orbis/schedule в условии — сценарий «пометить повторяющейся» (§3.1): attach/detach
+    // recurrence меняет шаблонность при неизменном financial, привязку надо пересчитать
+    // (шаблон отвязывается, экс-шаблон привязывается заново)
+    bind:
+      afterAspects['orbis/financial'] !== undefined &&
+      (before === null ||
+        archivedChanged ||
+        hookAspectChanged(hook, 'orbis/financial') ||
+        hookAspectChanged(hook, 'orbis/schedule')),
+  };
+}
+
+/**
+ * Бюджет-хук A4 (03-budget §2.3): операции привязки/ребиндинга для одной применённой
+ * операции. Вызывается ПОСЛЕ apply породившей операции (тем же tx): SQL селектора и
+ * окна ребиндинга видят фактическое состояние, включая эффекты предыдущих операций
+ * batch, — результат зависит только от текущего набора конвертов (§7.3), без
+ * дублирования tie-break в JS. reads — общий кэш чтений исполнения (см. BindingReads).
+ */
+async function budgetFollowUpDescs(
+  ctx: ExecCtx,
+  hook: BudgetHook,
+  reads: BindingReads,
+): Promise<BudgetOpDesc[]> {
+  const { before, after } = hook;
+  const ownerId = ctx.req.actorUserId;
+  const branches = budgetHookBranches(hook);
+  const descs: BudgetOpDesc[] = [];
 
   // (б) конверт: до или после операции сущность несёт orbis/budget
-  if (
-    (beforeAspects?.['orbis/budget'] !== undefined || afterAspects['orbis/budget'] !== undefined) &&
-    (before === null || archivedChanged || hookAspectChanged(hook, 'orbis/budget'))
-  ) {
+  if (branches.rebind) {
     descs.push(
       ...(await rebindForEnvelope(ctx.tx, {
         ownerId,
         envelope: toWire(after),
         before: before === null ? null : toWire(before),
+        reads,
       })),
     );
   }
 
-  // (а) транзакция: bindingOps сам отсекает шаблоны recurring и архивные сущности.
-  // orbis/schedule в условии — сценарий «пометить повторяющейся» (§3.1): attach/detach
-  // recurrence меняет шаблонность при неизменном financial, привязку надо пересчитать
-  // (шаблон отвязывается, экс-шаблон привязывается заново)
-  if (
-    afterAspects['orbis/financial'] !== undefined &&
-    (before === null ||
-      archivedChanged ||
-      hookAspectChanged(hook, 'orbis/financial') ||
-      hookAspectChanged(hook, 'orbis/schedule'))
-  ) {
-    descs.push(...(await bindingOps(ctx.tx, { ownerId, entity: toWire(after) })));
+  // (а) транзакция: bindingOps сам отсекает шаблоны recurring и архивные сущности
+  if (branches.bind) {
+    descs.push(...(await bindingOps(ctx.tx, { ownerId, entity: toWire(after), reads })));
   }
 
   // Дедуп в рамках хука: сущность с обоими аспектами могла бы породить одинаковые ops
@@ -538,13 +556,31 @@ async function budgetFollowUpDescs(
  * Дописанные планы возвращаются вызывающему для журнала — операции входят в тот же
  * action, Undo откатывает целиком (§2.3). НЕ вызывается в internalUndo-режиме (§7.8:
  * undo воспроизводит зафиксированные inverse-операции, ничего не довычисляя).
+ *
+ * Чтения привязки прогреваются на ВЕСЬ набор хуков одним запросом на конверты и одним
+ * на родителей (Task C2a): batch импорта — это сотни хуков, каждый из которых иначе
+ * стоил бы трёх последовательных SQL. Порядок чтений при этом сохраняется: применённая
+ * связь инвалидирует кэш родителей своей транзакции, и следующий хук перечитывает их.
  */
 async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<PreparedOp[]> {
+  const ownerId = ctx.req.actorUserId;
+  const reads = new BindingReads();
+  const targets: BindingTarget[] = [];
+  for (const hook of hooks) {
+    if (!budgetHookBranches(hook).bind) continue;
+    // Окно ребиндинга (ветка «б») прогревается внутри rebindForEnvelope — его строки
+    // известны только после запроса затронутых транзакций
+    const target = bindingTargetOf(toWire(hook.after));
+    if (target !== null) targets.push(target);
+  }
+  if (targets.length > 0) await reads.prefetch(ctx.tx, { ownerId, targets });
+
   const applied: PreparedOp[] = [];
   for (const hook of hooks) {
-    for (const desc of await budgetFollowUpDescs(ctx, hook)) {
+    for (const desc of await budgetFollowUpDescs(ctx, hook, reads)) {
       const plan = await prepareOp(ctx, desc.tool, desc.input);
       await plan.apply(ctx);
+      reads.invalidateParents(desc.input.target_id);
       applied.push(plan);
     }
   }
