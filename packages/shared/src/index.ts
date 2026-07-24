@@ -4,6 +4,7 @@ export * from './contracts/budget';
 export * from './contracts/tools';
 export * from './fast-path';
 export * from './ids';
+export * from './import/normalize';
 export * from './query/grammar';
 export * from './query/parse';
 export * from './recurrence';
