@@ -1,0 +1,857 @@
+// apps/server/src/import/import.test.ts
+// Task C2: серверный флоу CSV-импорта (03-budget §3.4, §3.4.1) — три процедуры
+// import.analyze / import.review / import.confirm против живой БД через tRPC-caller,
+// плюс внутренние операции исполнителя entity_origin_create / entity_origin_delete.
+//
+// Приёмка PRD, закрываемая здесь:
+//   §7 edge «Повторный импорт»  — повтор того же файла даёт все ⟳ already_imported;
+//   §7.4 «Импорт пересекающихся файлов» — другой файл с той же операцией даёт ⊘;
+//   §3.4.1 последний абзац — Undo импорта ФИЗИЧЕСКИ удаляет строки entity_origins,
+//   поэтому тот же файл импортируется заново без ложных «уже импортирована».
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import {
+  type CanonicalRow,
+  externalRowId,
+  type ImportAnalyzeResult,
+  MAX_ANALYZE_ROW_CHARS,
+  MAX_IMPORT_ROWS,
+  newId,
+} from '@orbis/shared';
+import { TRPCError } from '@trpc/server';
+import { and, eq, sql } from 'drizzle-orm';
+import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { aiUsage, entities, relations } from '../db/schema';
+import { withIdentity } from '../db/with-identity';
+import { ScriptedProvider } from '../llm/scripted';
+import type { LLMProvider, LLMResponse } from '../llm/types';
+import { appRouter } from '../router';
+import { seedCategoryId, seedOnboarding } from '../seed/onboarding';
+import { dispatchTool } from '../tools/dispatch';
+import { createCallerFactory } from '../trpc';
+
+requireEnv();
+
+const { db, client } = appDb();
+const createCaller = createCallerFactory(appRouter);
+const MODEL = 'scripted-test-model';
+
+beforeAll(async () => {
+  await truncateAll();
+});
+
+afterAll(async () => {
+  await client.end();
+});
+
+// ---------------------------------------------------------------------------
+// Хелперы
+// ---------------------------------------------------------------------------
+
+const NS = 'csv:tinkoff-may';
+const NS_OTHER = 'csv:sber-may';
+const FILE_A = 'a'.repeat(64);
+const FILE_B = 'b'.repeat(64);
+
+function ownerCaller(user: string, provider?: LLMProvider) {
+  return createCaller({
+    actorUserId: user,
+    actorKind: 'owner',
+    db,
+    clientVersion: null,
+    ...(provider !== undefined && { ai: { provider, model: MODEL } }),
+  });
+}
+
+/** Свежий владелец с онбординг-категориями (aliases нужны suggestedCategoryRef). */
+async function freshOwner(): Promise<{ user: string; foodId: string; transportId: string }> {
+  const user = freshUserId();
+  await withIdentity(db, user, (tx) => seedOnboarding(tx, user));
+  return {
+    user,
+    foodId: seedCategoryId(user, 'food'),
+    transportId: seedCategoryId(user, 'transport'),
+  };
+}
+
+function makeRow(o: {
+  occurredOn: string;
+  amount: string;
+  counterparty: string;
+  direction?: 'income' | 'expense';
+  rowIndex?: number;
+  bankTxnId?: string;
+}): CanonicalRow {
+  const direction = o.direction ?? 'expense';
+  return {
+    occurredOn: o.occurredOn,
+    amount: o.amount,
+    direction,
+    counterparty: o.counterparty,
+    raw: `${o.occurredOn};${o.amount};${o.counterparty}`,
+    rowIndex: o.rowIndex ?? 0,
+    ...(o.bankTxnId !== undefined && { bankTxnId: o.bankTxnId }),
+  };
+}
+
+async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
+  try {
+    await p;
+  } catch (e) {
+    if (e instanceof TRPCError) return e;
+    throw e;
+  }
+  throw new Error('ожидался TRPCError, вызов успешен');
+}
+
+function causeOf(err: TRPCError): { code?: string; details?: Record<string, unknown> } {
+  return err.cause as unknown as { code?: string; details?: Record<string, unknown> };
+}
+
+/** Строки entity_origins владельца — СЫРЫМ админ-соединением (мимо RLS и мимо кода C2). */
+async function rawOrigins(
+  user: string,
+): Promise<Array<{ namespace: string; external_id: string; entity_id: string }>> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const rows = (await admin.execute(sql`
+      SELECT namespace, external_id, entity_id FROM entity_origins
+      WHERE owner_id = ${user} ORDER BY namespace, external_id
+    `)) as unknown as Array<{ namespace: string; external_id: string; entity_id: string }>;
+    return [...rows];
+  } finally {
+    await adminClient.end();
+  }
+}
+
+/** Финансовые сущности владельца (в т.ч. архивные) — проверка «создано/не создано». */
+async function financialEntities(user: string) {
+  return withIdentity(db, user, (tx) =>
+    tx
+      .select({ id: entities.id, title: entities.title, archived: entities.archived })
+      .from(entities)
+      .where(and(eq(entities.ownerId, user), sql`aspects ? 'orbis/financial'`))
+      .orderBy(entities.title),
+  );
+}
+
+function toolUse(input: Record<string, unknown>): LLMResponse {
+  return {
+    content: '',
+    toolCalls: [{ id: 'call-0', name: 'csv_mapping', input }],
+    usage: { inputTokens: 120, outputTokens: 40 },
+    stopReason: 'tool_use',
+  };
+}
+
+const MAPPING_SIGN = {
+  mapping: {
+    date: 0,
+    counterparty: 2,
+    direction: 'sign',
+    amount: 1,
+    dateFormat: 'DD.MM.YYYY',
+  },
+  confidence: 0.92,
+} as const satisfies ImportAnalyzeResult;
+
+// ---------------------------------------------------------------------------
+// import.review — статусы строк (§3.4.1)
+// ---------------------------------------------------------------------------
+
+describe('import.review: статусы строк (§3.4.1)', () => {
+  test('строка без origin и без содержательного совпадения → new + категория по алиасам', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'Кофе Хауз' });
+
+    const r = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+
+    expect(r.rows).toHaveLength(1);
+    const reviewed = r.rows[0];
+    expect(reviewed?.status).toBe('new');
+    expect(reviewed?.externalId).toBe(await externalRowId(FILE_A, row));
+    expect(reviewed?.suggestedCategoryRef).toBe(foodId);
+    expect(reviewed?.duplicateOf).toBeUndefined();
+  });
+
+  test('counterparty без известного алиаса → suggestedCategoryRef не заполняется ([❓ выбрать])', async () => {
+    const { user } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({ occurredOn: '2026-05-07', amount: '3200.00', counterparty: 'OZON' });
+
+    const r = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+
+    expect(r.rows[0]?.status).toBe('new');
+    expect(r.rows[0]?.suggestedCategoryRef).toBeUndefined();
+  });
+
+  test('повтор ТОГО ЖЕ файла после импорта → все строки already_imported (приёмка §7 edge)', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const rows = [
+      makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'Обед', rowIndex: 0 }),
+      makeRow({ occurredOn: '2026-05-04', amount: '420.00', counterparty: 'Такси', rowIndex: 1 }),
+    ];
+    const rowsToImport = rows.map((row) => ({
+      row,
+      action: 'create' as const,
+      categoryRef: foodId,
+    }));
+
+    const confirmed = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: rowsToImport,
+    });
+    expect(confirmed.created).toBe(2);
+
+    const again = await caller.import.review({ rows, fileHash: FILE_A, namespace: NS });
+    expect(again.rows.map((r) => r.status)).toEqual(['already_imported', 'already_imported']);
+  });
+
+  test('пересекающийся ДРУГОЙ файл → probable_duplicate + duplicateOf (приёмка §7.4)', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const imported = makeRow({
+      occurredOn: '2026-05-03',
+      amount: '1890.00',
+      counterparty: 'ПЯТЕРОЧКА 843',
+    });
+    const confirmed = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row: imported, action: 'create', categoryRef: foodId }],
+    });
+    const createdId = confirmed.entityIds[0];
+
+    // Другой файл того же банка: другой external_id, но та же экономическая операция,
+    // проведённая на день позже и с «шумным» именем мерчанта (§3.4.1 п.3 — containment).
+    const overlapping = makeRow({
+      occurredOn: '2026-05-04',
+      amount: '1890.00',
+      counterparty: 'Пятёрочка',
+    });
+    const r = await caller.import.review({
+      rows: [overlapping],
+      fileHash: FILE_B,
+      namespace: NS_OTHER,
+    });
+
+    expect(r.rows[0]?.status).toBe('probable_duplicate');
+    expect(r.rows[0]?.duplicateOf).toBe(createdId as string);
+  });
+
+  test('«создать всё равно» для ⊘ → вторая сущность; повтор того же файла идемпотентен', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const first = makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'Обед' });
+    await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row: first, action: 'create', categoryRef: foodId }],
+    });
+
+    const duplicateRow = makeRow({
+      occurredOn: '2026-05-03',
+      amount: '340.00',
+      counterparty: 'Обед',
+    });
+    const review = await caller.import.review({
+      rows: [duplicateRow],
+      fileHash: FILE_B,
+      namespace: NS_OTHER,
+    });
+    expect(review.rows[0]?.status).toBe('probable_duplicate');
+
+    // Пользователь переключил строку на «создать всё равно» (§3.4)
+    await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS_OTHER,
+      fileHash: FILE_B,
+      items: [{ row: duplicateRow, action: 'create', categoryRef: foodId }],
+    });
+    expect(await financialEntities(user)).toHaveLength(2);
+
+    // Повтор ВТОРОГО файла после этого — уже импортирован, ничего не создаётся
+    const repeat = await caller.import.review({
+      rows: [duplicateRow],
+      fileHash: FILE_B,
+      namespace: NS_OTHER,
+    });
+    expect(repeat.rows[0]?.status).toBe('already_imported');
+  });
+
+  test('шаблон recurring не участвует в дедупе (§2.8): строка остаётся new', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    // Шаблон повторения: financial + orbis/schedule.recurrence, occurred_on есть
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values({
+        id: newId(),
+        ownerId: user,
+        title: 'NETFLIX',
+        tags: [],
+        aspects: {
+          'orbis/financial': {
+            amount: '599.00',
+            direction: 'expense',
+            category_ref: foodId,
+            occurred_on: '2026-05-06',
+            counterparty: 'NETFLIX',
+          },
+          'orbis/schedule': {
+            start_at: '2026-05-06T00:00:00Z',
+            recurrence: { freq: 'monthly', interval: 1 },
+          },
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    );
+
+    const row = makeRow({ occurredOn: '2026-05-06', amount: '599.00', counterparty: 'NETFLIX' });
+    const r = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(r.rows[0]?.status).toBe('new');
+  });
+
+  test('потолок MAX_IMPORT_ROWS: превышение → VALIDATION (400) с details.limit', async () => {
+    const { user } = await freshOwner();
+    const caller = ownerCaller(user);
+    const rows = Array.from({ length: MAX_IMPORT_ROWS + 1 }, (_, i) =>
+      makeRow({
+        occurredOn: '2026-05-03',
+        amount: '10.00',
+        counterparty: `Строка ${i}`,
+        rowIndex: i,
+      }),
+    );
+
+    const err = await trpcError(caller.import.review({ rows, fileHash: FILE_A, namespace: NS }));
+    expect(err.code).toBe('BAD_REQUEST');
+    expect(causeOf(err).code).toBe('VALIDATION');
+    expect(causeOf(err).details?.limit).toBe(MAX_IMPORT_ROWS);
+  });
+
+  test('несуществующая календарная дата отклоняется схемой, а не падает в дедупе', async () => {
+    const { user } = await freshOwner();
+    const caller = ownerCaller(user);
+    // Регексп YYYY-MM-DD такую дату проходит, а календарная арифметика C1 на ней
+    // бросила бы RangeError посреди review (Minor №3 ревью C1)
+    const row = makeRow({ occurredOn: '2026-02-31', amount: '10.00', counterparty: 'X' });
+
+    const err = await trpcError(
+      caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS }),
+    );
+    expect(err.code).toBe('BAD_REQUEST');
+  });
+
+  test('namespace вне контракта «csv:<источник>» отклоняется схемой', async () => {
+    const { user } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '10.00', counterparty: 'X' });
+    for (const namespace of ['tinkoff', 'csv:', 'csv: пробел', `csv:${'x'.repeat(200)}`]) {
+      const err = await trpcError(
+        caller.import.review({ rows: [row], fileHash: FILE_A, namespace }),
+      );
+      expect(err.code).toBe('BAD_REQUEST');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// import.confirm — один batch_execute (§3.4 шаг 4)
+// ---------------------------------------------------------------------------
+
+describe('import.confirm: атомарная группа и origins (§3.4, §4.8)', () => {
+  test('create → сущность + строка origins с правильным (namespace, external_id)', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'Обед' });
+
+    const r = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row, action: 'create', categoryRef: foodId }],
+    });
+
+    expect(r.created).toBe(1);
+    expect(r.adopted).toBe(0);
+    expect(r.skipped).toBe(0);
+    expect(r.idempotentReplay).toBe(false);
+    expect(r.entityIds).toHaveLength(1);
+
+    const origins = await rawOrigins(user);
+    expect(origins).toEqual([
+      {
+        namespace: NS,
+        external_id: await externalRowId(FILE_A, row),
+        entity_id: r.entityIds[0] as string,
+      },
+    ]);
+
+    const created = await financialEntities(user);
+    expect(created).toHaveLength(1);
+    expect(created[0]?.title).toBe('Обед');
+  });
+
+  test('adopt → только строка origins на существующую сущность, новой сущности нет', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const manual = makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'Обед' });
+    const first = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row: manual, action: 'create', categoryRef: foodId }],
+    });
+    const existingId = first.entityIds[0] as string;
+
+    const fromOtherFile = makeRow({
+      occurredOn: '2026-05-04',
+      amount: '340.00',
+      counterparty: 'Обед',
+    });
+    const r = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS_OTHER,
+      fileHash: FILE_B,
+      items: [{ row: fromOtherFile, action: 'adopt', adoptEntityId: existingId }],
+    });
+
+    expect(r.adopted).toBe(1);
+    expect(r.created).toBe(0);
+    expect(r.entityIds).toEqual([]);
+    expect(await financialEntities(user)).toHaveLength(1);
+
+    const origins = await rawOrigins(user);
+    expect(origins).toHaveLength(2);
+    expect(origins.every((o) => o.entity_id === existingId)).toBe(true);
+  });
+
+  test('skip не порождает операций; смешанный набор считается по действиям', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const created = makeRow({
+      occurredOn: '2026-05-03',
+      amount: '340.00',
+      counterparty: 'Обед',
+      rowIndex: 0,
+    });
+    const skipped = makeRow({
+      occurredOn: '2026-05-04',
+      amount: '420.00',
+      counterparty: 'Такси',
+      rowIndex: 1,
+    });
+
+    const r = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [
+        { row: created, action: 'create', categoryRef: foodId },
+        { row: skipped, action: 'skip' },
+      ],
+    });
+
+    expect(r).toMatchObject({ created: 1, adopted: 0, skipped: 1 });
+    expect(await rawOrigins(user)).toHaveLength(1);
+  });
+
+  test('невалидная строка валит ВЕСЬ batch: ни сущностей, ни origins (§3.4 шаг 4)', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const good = makeRow({
+      occurredOn: '2026-05-03',
+      amount: '340.00',
+      counterparty: 'Обед',
+      rowIndex: 0,
+    });
+    const bad = makeRow({
+      occurredOn: '2026-05-04',
+      amount: '420.00',
+      counterparty: 'Такси',
+      rowIndex: 1,
+    });
+
+    // adopt на несуществующую (для этого владельца) сущность — отказ стадии применения
+    const err = await trpcError(
+      caller.import.confirm({
+        batchId: newId(),
+        namespace: NS,
+        fileHash: FILE_A,
+        items: [
+          { row: good, action: 'create', categoryRef: foodId },
+          { row: bad, action: 'adopt', adoptEntityId: newId() },
+        ],
+      }),
+    );
+    expect(err.code).toBe('NOT_FOUND');
+    expect(await financialEntities(user)).toHaveLength(0);
+    expect(await rawOrigins(user)).toHaveLength(0);
+  });
+
+  test('повторная вставка того же external_id отклонена БД (unique) — CONFLICT, ничего не создано', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'Обед' });
+    await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row, action: 'create', categoryRef: foodId }],
+    });
+
+    // НОВЫЙ batchId (не replay) с той же строкой того же файла: уникальный индекс
+    // (owner_id, namespace, external_id) обязан отклонить группу целиком
+    const err = await trpcError(
+      caller.import.confirm({
+        batchId: newId(),
+        namespace: NS,
+        fileHash: FILE_A,
+        items: [{ row, action: 'create', categoryRef: foodId }],
+      }),
+    );
+    expect(err.code).toBe('CONFLICT');
+    expect(causeOf(err).code).toBe('CONFLICT');
+    expect(await financialEntities(user)).toHaveLength(1);
+    expect(await rawOrigins(user)).toHaveLength(1);
+  });
+
+  test('повтор того же batchId → идемпотентный replay, второй раз ничего не применяется', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'Обед' });
+    const input = {
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row, action: 'create' as const, categoryRef: foodId }],
+    };
+
+    const first = await caller.import.confirm(input);
+    const second = await caller.import.confirm(input);
+
+    expect(first.idempotentReplay).toBe(false);
+    expect(second.idempotentReplay).toBe(true);
+    expect(second.entityIds).toEqual(first.entityIds);
+    expect(await financialEntities(user)).toHaveLength(1);
+    expect(await rawOrigins(user)).toHaveLength(1);
+  });
+
+  test('без конверта → unbudgeted по категориям; с конвертом — привязка хуком A4', async () => {
+    const { user, foodId, transportId } = await freshOwner();
+    const caller = ownerCaller(user);
+    // Конверт «Еда» на май — транзакция еды привяжется автоматически (A4), транспорт нет
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values({
+        id: newId(),
+        ownerId: user,
+        title: 'Конверт Еда',
+        tags: [],
+        aspects: {
+          'orbis/budget': {
+            category_ref: foodId,
+            limit: '10000.00',
+            currency: 'RUB',
+            period_start: '2026-05-01',
+            period_end: '2026-05-31',
+          },
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }),
+    );
+
+    const food = makeRow({
+      occurredOn: '2026-05-03',
+      amount: '340.00',
+      counterparty: 'Обед',
+      rowIndex: 0,
+    });
+    const taxi = makeRow({
+      occurredOn: '2026-05-04',
+      amount: '420.00',
+      counterparty: 'Такси',
+      rowIndex: 1,
+    });
+
+    const r = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [
+        { row: food, action: 'create', categoryRef: foodId },
+        { row: taxi, action: 'create', categoryRef: transportId },
+      ],
+    });
+
+    expect(r.created).toBe(2);
+    expect(r.unbudgeted).toEqual([{ categoryRef: transportId, count: 1 }]);
+
+    // Привязка «Обеда» к конверту — дописана хуком исполнителя, а не импортом
+    const parents = await withIdentity(db, user, (tx) =>
+      tx
+        .select({ targetId: relations.targetId })
+        .from(relations)
+        .where(eq(relations.relationType, 'parent')),
+    );
+    expect(parents).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Undo импорта (§3.4.1, 01-arch §4.8)
+// ---------------------------------------------------------------------------
+
+describe('Undo импорта: origins удаляются физически (§3.4.1)', () => {
+  test('созданные архивированы, усыновлённая жива, origins удалены, файл снова new', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+
+    // Ручная (не импортная) операция — цель усыновления
+    const manual = await withIdentity(db, user, async (tx) => {
+      const id = newId();
+      await tx.insert(entities).values({
+        id,
+        ownerId: user,
+        title: 'Ручной обед',
+        tags: [],
+        aspects: {
+          'orbis/financial': {
+            amount: '999.00',
+            direction: 'expense',
+            category_ref: foodId,
+            occurred_on: '2026-05-09',
+            counterparty: 'Ручной обед',
+          },
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      return id;
+    });
+
+    const created = makeRow({
+      occurredOn: '2026-05-03',
+      amount: '340.00',
+      counterparty: 'Обед',
+      rowIndex: 0,
+    });
+    const adopted = makeRow({
+      occurredOn: '2026-05-09',
+      amount: '999.00',
+      counterparty: 'Ручной обед',
+      rowIndex: 1,
+    });
+
+    const r = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [
+        { row: created, action: 'create', categoryRef: foodId },
+        { row: adopted, action: 'adopt', adoptEntityId: manual },
+      ],
+    });
+    expect(await rawOrigins(user)).toHaveLength(2);
+
+    await caller.ai.undo({ actionId: r.actionId });
+
+    // Созданная импортом — архивирована; усыновлённая — жива (§7.8: удаления нет)
+    const after = await financialEntities(user);
+    const importedRow = after.find((e) => e.id === r.entityIds[0]);
+    const manualRow = after.find((e) => e.id === manual);
+    expect(importedRow?.archived).toBe(true);
+    expect(manualRow?.archived).toBe(false);
+
+    // Строки origins УДАЛЕНЫ физически (не архивированы — их нельзя архивировать)
+    expect(await rawOrigins(user)).toEqual([]);
+
+    // …и тот же файл снова читается без ложных «уже импортирована»: созданная строка
+    // снова new (её сущность архивирована), усыновлённая — ⊘ на живую ручную операцию
+    const review = await caller.import.review({
+      rows: [created, adopted],
+      fileHash: FILE_A,
+      namespace: NS,
+    });
+    expect(review.rows.map((row) => row.status)).toEqual(['new', 'probable_duplicate']);
+  }, 15_000);
+});
+
+// ---------------------------------------------------------------------------
+// Внутренние операции исполнителя недоступны LLM/MCP (§9.2)
+// ---------------------------------------------------------------------------
+
+describe('entity_origin_* : только внутренний путь', () => {
+  test('dispatchTool не резолвит операции origins — структурная ошибка, без записи', async () => {
+    const { user } = await freshOwner();
+    for (const tool of ['entity_origin_create', 'entity_origin_delete']) {
+      const r = await dispatchTool(
+        { db, actorUserId: user, actorKind: 'ai', source: 'chat', explicitCommand: false },
+        tool,
+        { entity_id: newId(), namespace: NS, external_id: 'x'.repeat(64) },
+      );
+      expect(r.status).toBe('error');
+      if (r.status === 'error') expect(r.error.code).toBe('FORBIDDEN_LEVEL');
+    }
+    expect(await rawOrigins(user)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// import.analyze — единственный LLM-вызов (§3.4 шаг 2, §7.9)
+// ---------------------------------------------------------------------------
+
+describe('import.analyze: маппинг колонок через tool-call', () => {
+  test('tool-call модели → маппинг + confidence; в промпт уходят только образцы', async () => {
+    const { user } = await freshOwner();
+    const provider = new ScriptedProvider([toolUse(MAPPING_SIGN)]);
+    const caller = ownerCaller(user, provider);
+
+    const r = await caller.import.analyze({
+      sampleRows: ['Дата;Сумма;Описание', '03.05.2026;-340.00;ОБЕД'],
+    });
+
+    expect(r).toEqual(MAPPING_SIGN);
+    expect(provider.requests).toHaveLength(1);
+    const request = provider.requests[0];
+    expect(request?.tools).toHaveLength(1);
+    expect(request?.tools[0]?.name).toBe('csv_mapping');
+    expect(request?.messages[0]?.content).toContain('03.05.2026;-340.00;ОБЕД');
+  });
+
+  test('маппинг с раздельными колонками дебет/кредит проходит согласованность', async () => {
+    const { user } = await freshOwner();
+    const provider = new ScriptedProvider([
+      toolUse({
+        mapping: {
+          date: 0,
+          counterparty: 1,
+          direction: 'separate_columns',
+          debit: 2,
+          credit: 3,
+          dateFormat: 'YYYY-MM-DD',
+          bankTxnId: 4,
+        },
+        confidence: 0.7,
+      }),
+    ]);
+    const caller = ownerCaller(user, provider);
+
+    const r = await caller.import.analyze({ sampleRows: ['2026-05-03,ОБЕД,340.00,,tx-1'] });
+    expect(r.mapping.direction).toBe('separate_columns');
+    expect(r.mapping.debit).toBe(2);
+    expect(r.confidence).toBe(0.7);
+  });
+
+  test('несогласованный маппинг модели (sign без amount) → структурная ошибка, не выдумка', async () => {
+    const { user } = await freshOwner();
+    const provider = new ScriptedProvider([
+      toolUse({
+        mapping: { date: 0, counterparty: 1, direction: 'sign', dateFormat: 'YYYY-MM-DD' },
+        confidence: 0.9,
+      }),
+    ]);
+    const caller = ownerCaller(user, provider);
+
+    const err = await trpcError(caller.import.analyze({ sampleRows: ['2026-05-03,ОБЕД'] }));
+    expect(err.code).toBe('SERVICE_UNAVAILABLE');
+    expect(causeOf(err).code).toBe('LLM_UNAVAILABLE');
+  });
+
+  test('ответ прозой без tool-call → структурная ошибка (маппинг руками на клиенте)', async () => {
+    const { user } = await freshOwner();
+    const provider = new ScriptedProvider([
+      {
+        content: 'Первая колонка — дата, вторая — сумма',
+        toolCalls: [],
+        usage: { inputTokens: 10, outputTokens: 5 },
+        stopReason: 'end_turn',
+      },
+    ]);
+    const caller = ownerCaller(user, provider);
+
+    const err = await trpcError(caller.import.analyze({ sampleRows: ['2026-05-03,ОБЕД'] }));
+    expect(err.code).toBe('SERVICE_UNAVAILABLE');
+    expect(causeOf(err).code).toBe('LLM_UNAVAILABLE');
+  });
+
+  test('сбой провайдера → LLM_UNAVAILABLE (503, §7.9)', async () => {
+    const { user } = await freshOwner();
+    const provider: LLMProvider = {
+      async chat() {
+        throw new Error('econnreset');
+      },
+    };
+    const caller = ownerCaller(user, provider);
+
+    const err = await trpcError(caller.import.analyze({ sampleRows: ['2026-05-03,ОБЕД'] }));
+    expect(err.code).toBe('SERVICE_UNAVAILABLE');
+    expect(causeOf(err).code).toBe('LLM_UNAVAILABLE');
+  });
+
+  test('успешный вызов метрится в ai_usage (§4.7)', async () => {
+    const { user } = await freshOwner();
+    const provider = new ScriptedProvider([toolUse(MAPPING_SIGN)]);
+    await ownerCaller(user, provider).import.analyze({ sampleRows: ['2026-05-03,ОБЕД'] });
+
+    const rows = await withIdentity(db, user, (tx) =>
+      tx.select().from(aiUsage).where(eq(aiUsage.ownerId, user)),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.model).toBe(MODEL);
+    expect(rows[0]?.requestCount).toBe(1);
+    expect(rows[0]?.inputTokens).toBe(120);
+    expect(rows[0]?.outputTokens).toBe(40);
+  });
+
+  test('образцы обрезаются по длине и числу строк (§3.4 шаг 1: приватность)', async () => {
+    const { user } = await freshOwner();
+    const provider = new ScriptedProvider([toolUse(MAPPING_SIGN)]);
+    const caller = ownerCaller(user, provider);
+
+    await caller.import.analyze({ sampleRows: [`2026-05-03,${'ы'.repeat(3000)}`] });
+    const prompt = provider.requests[0]?.messages[0]?.content ?? '';
+    expect(prompt.length).toBe(MAX_ANALYZE_ROW_CHARS);
+
+    const err = await trpcError(
+      caller.import.analyze({ sampleRows: Array.from({ length: 11 }, () => 'a,b,c') }),
+    );
+    expect(err.code).toBe('BAD_REQUEST');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Гейт §9.3: импорт — путь владельца
+// ---------------------------------------------------------------------------
+
+describe('роутер import: ownerOnly (§9.3)', () => {
+  test('PAT-агент получает FORBIDDEN до какой-либо работы', async () => {
+    const agent = createCaller({
+      actorUserId: freshUserId(),
+      actorKind: 'agent',
+      db: null as unknown as ReturnType<typeof appDb>['db'],
+      clientVersion: null,
+    });
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '10.00', counterparty: 'X' });
+    for (const call of [
+      () => agent.import.analyze({ sampleRows: ['a,b'] }),
+      () => agent.import.review({ rows: [row], fileHash: FILE_A, namespace: NS }),
+      () =>
+        agent.import.confirm({
+          batchId: newId(),
+          namespace: NS,
+          fileHash: FILE_A,
+          items: [{ row, action: 'skip' }],
+        }),
+    ]) {
+      const err = await trpcError(call());
+      expect(err.code).toBe('FORBIDDEN');
+    }
+  });
+});

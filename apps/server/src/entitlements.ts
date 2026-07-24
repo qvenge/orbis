@@ -13,6 +13,13 @@ export interface EntitlementDecision {
 /** Сигнатура резолвера — для инъекции (тесты Task 9, будущий конфиг планов §8). */
 export type EntitlementResolver = (subjectUserId: string, key: string) => EntitlementDecision;
 
+/**
+ * Ключ §8 CSV-импорта (03-budget §3.4): гейт всех трёх процедур роутера import.
+ * На плане 'dev' — разрешено (резолвер ниже безлимитен); ключ объявлен здесь, чтобы
+ * будущий конфиг планов видел его рядом с остальными.
+ */
+export const IMPORT_CSV_KEY = 'import.csv';
+
 export const resolveEntitlement: EntitlementResolver = (_subjectUserId, _key) => {
   return { allowed: true, limit: null };
 };
