@@ -8,7 +8,7 @@
 //   §7.4 «Импорт пересекающихся файлов» — другой файл с той же операцией даёт ⊘;
 //   §3.4.1 последний абзац — Undo импорта ФИЗИЧЕСКИ удаляет строки entity_origins,
 //   поэтому тот же файл импортируется заново без ложных «уже импортирована».
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import {
   type CanonicalRow,
   externalRowId,
@@ -118,6 +118,20 @@ async function rawOrigins(
       WHERE owner_id = ${user} ORDER BY namespace, external_id
     `)) as unknown as Array<{ namespace: string; external_id: string; entity_id: string }>;
     return [...rows];
+  } finally {
+    await adminClient.end();
+  }
+}
+
+/** Число финансовых сущностей владельца — СЫРЫМ админ-соединением (мимо RLS). */
+async function rawFinancialCount(user: string): Promise<number> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const rows = (await admin.execute(sql`
+      SELECT count(*)::int AS count FROM entities
+      WHERE owner_id = ${user} AND aspects ? 'orbis/financial'
+    `)) as unknown as Array<{ count: number }>;
+    return rows[0]?.count ?? 0;
   } finally {
     await adminClient.end();
   }
@@ -495,6 +509,132 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     expect(await rawOrigins(user)).toHaveLength(0);
   });
 
+  test('adopt на нефинансовую сущность (категория) → VALIDATION, ничего не создано', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const good = makeRow({
+      occurredOn: '2026-05-03',
+      amount: '340.00',
+      counterparty: 'Обед',
+      rowIndex: 0,
+    });
+    const bad = makeRow({
+      occurredOn: '2026-05-04',
+      amount: '420.00',
+      counterparty: 'Такси',
+      rowIndex: 1,
+    });
+
+    // foodId — категория онбординга (orbis/category): владение проходит RLS, но
+    // финансовой сущностью она не является — пречек обязан завалить batch целиком
+    const err = await trpcError(
+      caller.import.confirm({
+        batchId: newId(),
+        namespace: NS,
+        fileHash: FILE_A,
+        items: [
+          { row: good, action: 'create', categoryRef: foodId },
+          { row: bad, action: 'adopt', adoptEntityId: foodId },
+        ],
+      }),
+    );
+    expect(err.code).toBe('BAD_REQUEST');
+    expect(causeOf(err).code).toBe('VALIDATION');
+    expect(causeOf(err).details?.adoptEntityId).toBe(foodId);
+    expect(causeOf(err).details?.reason).toBe('not_financial');
+
+    // Сырым админ-соединением (мимо RLS): ни строки origins, ни новой сущности
+    expect(await rawOrigins(user)).toEqual([]);
+    expect(await rawFinancialCount(user)).toBe(0);
+  });
+
+  test('adopt на архивную финансовую сущность → VALIDATION (reason=archived)', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const archivedId = await withIdentity(db, user, async (tx) => {
+      const id = newId();
+      await tx.insert(entities).values({
+        id,
+        ownerId: user,
+        title: 'Архивный обед',
+        tags: [],
+        archived: true,
+        aspects: {
+          'orbis/financial': {
+            amount: '340.00',
+            direction: 'expense',
+            category_ref: foodId,
+            occurred_on: '2026-05-03',
+            counterparty: 'Обед',
+          },
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      return id;
+    });
+
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'Обед' });
+    const err = await trpcError(
+      caller.import.confirm({
+        batchId: newId(),
+        namespace: NS,
+        fileHash: FILE_A,
+        items: [{ row, action: 'adopt', adoptEntityId: archivedId }],
+      }),
+    );
+    expect(err.code).toBe('BAD_REQUEST');
+    expect(causeOf(err).code).toBe('VALIDATION');
+    expect(causeOf(err).details?.reason).toBe('archived');
+    expect(await rawOrigins(user)).toEqual([]);
+  });
+
+  test('повтор batchId с adopt — replay, даже если цель архивирована после первого прогона', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const manualId = await withIdentity(db, user, async (tx) => {
+      const id = newId();
+      await tx.insert(entities).values({
+        id,
+        ownerId: user,
+        title: 'Ручной обед',
+        tags: [],
+        aspects: {
+          'orbis/financial': {
+            amount: '340.00',
+            direction: 'expense',
+            category_ref: foodId,
+            occurred_on: '2026-05-03',
+            counterparty: 'Обед',
+          },
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      return id;
+    });
+
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'Обед' });
+    const input = {
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row, action: 'adopt' as const, adoptEntityId: manualId }],
+    };
+    const first = await caller.import.confirm(input);
+    expect(first.idempotentReplay).toBe(false);
+
+    // Цель архивирована ПОСЛЕ первого прогона: честный повтор batchId (§7.8) обязан
+    // вернуться сохранённым replay'ем, а не упасть пречеком «archived»
+    await withIdentity(db, user, (tx) =>
+      tx.update(entities).set({ archived: true }).where(eq(entities.id, manualId)),
+    );
+    const second = await caller.import.confirm(input);
+    expect(second.idempotentReplay).toBe(true);
+    expect(second.adopted).toBe(1);
+    expect(await rawOrigins(user)).toHaveLength(1);
+  });
+
   test('повторная вставка того же external_id отклонена БД (unique) — CONFLICT, ничего не создано', async () => {
     const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);
@@ -790,9 +930,19 @@ describe('import.analyze: маппинг колонок через tool-call', (
     };
     const caller = ownerCaller(user, provider);
 
-    const err = await trpcError(caller.import.analyze({ sampleRows: ['2026-05-03,ОБЕД'] }));
-    expect(err.code).toBe('SERVICE_UNAVAILABLE');
-    expect(causeOf(err).code).toBe('LLM_UNAVAILABLE');
+    // console.error здесь — заявленное продакшен-поведение (лог оригинала сбоя, как в
+    // ai/send-message); мокаем на время ЭТОГО теста, чтобы зелёный прогон был тихим,
+    // и восстанавливаем в finally — даже если ассерты упали (образец — trpc.test.ts)
+    const spy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const err = await trpcError(caller.import.analyze({ sampleRows: ['2026-05-03,ОБЕД'] }));
+      expect(err.code).toBe('SERVICE_UNAVAILABLE');
+      expect(causeOf(err).code).toBe('LLM_UNAVAILABLE');
+      // Продакшен-лог не удалён: оригинал сбоя ушёл в console.error
+      expect(spy.mock.calls.flat().map(String).join(' ')).toContain('econnreset');
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test('успешный вызов метрится в ai_usage (§4.7)', async () => {
@@ -823,6 +973,21 @@ describe('import.analyze: маппинг колонок через tool-call', (
       caller.import.analyze({ sampleRows: Array.from({ length: 11 }, () => 'a,b,c') }),
     );
     expect(err.code).toBe('BAD_REQUEST');
+  });
+
+  test('обрезание не режет суррогатную пару на границе лимита (кодовые точки, не юниты)', async () => {
+    const { user } = await freshOwner();
+    const provider = new ScriptedProvider([toolUse(MAPPING_SIGN)]);
+    const caller = ownerCaller(user, provider);
+
+    // 999 ASCII + эмодзи (суррогатная пара) РОВНО на границе + хвост: послайсовое
+    // row.slice(0, 1000) отрезало бы пару посередине и оставило одинокий \uD83D
+    const row = `${'a'.repeat(MAX_ANALYZE_ROW_CHARS - 1)}💰${'хвост'.repeat(10)}`;
+    await caller.import.analyze({ sampleRows: [row] });
+
+    const prompt = provider.requests[0]?.messages[0]?.content ?? '';
+    expect([...prompt].length).toBe(MAX_ANALYZE_ROW_CHARS); // лимит — в кодовых точках
+    expect(prompt.endsWith('💰')).toBe(true); // пара цела: одинокого суррогата в промпте нет
   });
 });
 

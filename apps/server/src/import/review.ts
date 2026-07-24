@@ -14,6 +14,7 @@
 //   3. Привязку к конвертам импорт не создаёт руками — её выводит бюджет-хук
 //      исполнителя (A4) в тот же action.
 import {
+  batchAuditMessageId,
   type CanonicalRow,
   csvMappingToolJsonSchema,
   externalRowId,
@@ -92,6 +93,24 @@ const ANALYZE_SYSTEM = [
 ].join(' ');
 
 /**
+ * Обрезание образца по КОДОВЫМ ТОЧКАМ, не по UTF-16-юнитам: `slice(0, max)` мог
+ * разрезать суррогатную пару (эмодзи или редкий CJK в назначении платежа) ровно на
+ * границе и оставить в LLM-промпте одинокий суррогат. Обход — O(max), не O(строки):
+ * итератор строки идёт по кодовым точкам и останавливается на лимите.
+ */
+function truncateRowCodePoints(row: string, maxCodePoints: number): string {
+  if (row.length <= maxCodePoints) return row; // юнитов ≤ лимита ⇒ и кодовых точек ≤
+  let end = 0;
+  let count = 0;
+  for (const ch of row) {
+    if (count === maxCodePoints) break;
+    end += ch.length;
+    count += 1;
+  }
+  return row.slice(0, end);
+}
+
+/**
  * Распознавание маппинга колонок (§7.7): структурированный ответ берётся из TOOL-CALL,
  * а не парсингом прозы. Любой сбой этого пути — структурная ошибка LLM_UNAVAILABLE
  * (503 §7.9): клиент показывает «повторить» и даёт смапить колонки руками. Маппинг
@@ -108,7 +127,7 @@ export async function analyzeCsv(
 ): Promise<ImportAnalyzeResult> {
   gateImportCsv(args.ownerId);
 
-  const samples = args.sampleRows.map((row) => row.slice(0, MAX_ANALYZE_ROW_CHARS));
+  const samples = args.sampleRows.map((row) => truncateRowCodePoints(row, MAX_ANALYZE_ROW_CHARS));
   const request: LLMRequest = {
     system: ANALYZE_SYSTEM,
     messages: [{ role: 'user', content: samples.join('\n') }],
@@ -409,12 +428,79 @@ async function unbudgetedOf(
 }
 
 /**
+ * Пречек целей adopt (находка 1 ревью C2): `adoptEntityId` приходит от клиента, а RLS
+ * проверяет только владение — без пречека origin можно навесить на заметку, категорию
+ * или конверт, и строка выписки навсегда читалась бы `already_imported` против
+ * нефинансовой сущности (состояние, которое не чинит ни один путь UI). Требования к
+ * цели: видима владельцу, не архивна, несёт orbis/financial.
+ *
+ * ОДИН запрос на все цели batch (до MAX_IMPORT_ROWS строк), ДО сборки операций —
+ * отказ роняет подтверждение целиком, не применив ничего. Коды — по конвенции
+ * errors.ts: чужая/несуществующая → NOT_FOUND «сущность не найдена» (неразличимо, как
+ * у операций origins в executor), видимая-но-непригодная → VALIDATION (клиентский вход
+ * нарушает контракт confirm — как соседние проверки confirmImport).
+ *
+ * Реплей-детект ДО доменной проверки (образец — confirmPurchase): честный повтор того
+ * же batchId (§7.8) обязан вернуться сохранённым replay'ем executor'а, а не упасть на
+ * цели, архивированной ПОСЛЕ первого прогона.
+ */
+async function assertAdoptTargets(
+  db: Db,
+  ownerId: string,
+  input: ImportConfirmInput,
+): Promise<void> {
+  const targets = new Map<string, number>(); // id цели → rowIndex первого использования
+  for (const item of input.items) {
+    if (
+      item.action === 'adopt' &&
+      item.adoptEntityId !== undefined &&
+      !targets.has(item.adoptEntityId)
+    ) {
+      targets.set(item.adoptEntityId, item.row.rowIndex);
+    }
+  }
+  if (targets.size === 0) return;
+
+  await withIdentity(db, ownerId, async (tx) => {
+    const replay = await sink.findByAuditId(tx, batchAuditMessageId(ownerId, input.batchId));
+    if (replay !== undefined) return; // повтор batchId: executor вернёт результат первого прогона
+
+    const ids = sql.join(
+      [...targets.keys()].map((id) => sql`${id}`),
+      sql`, `,
+    );
+    const rows = (await tx.execute(sql`
+      SELECT id, archived, (aspects ? 'orbis/financial') AS financial
+      FROM entities
+      WHERE owner_id = ${ownerId} AND id IN (${ids})
+    `)) as unknown as Array<{ id: string; archived: boolean; financial: boolean }>;
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    for (const [id, rowIndex] of targets) {
+      const row = byId.get(id);
+      if (row === undefined) {
+        // Чужая и несуществующая намеренно неразличимы — как у origin-операций executor'а
+        throw new ExecError('NOT_FOUND', 'сущность не найдена', { adoptEntityId: id, rowIndex });
+      }
+      if (row.archived || !row.financial) {
+        throw new ExecError(
+          'VALIDATION',
+          'усыновить источник можно только на неархивную финансовую сущность',
+          { adoptEntityId: id, rowIndex, reason: row.archived ? 'archived' : 'not_financial' },
+        );
+      }
+    }
+  });
+}
+
+/**
  * Подтверждение импорта (§3.4 шаг 4) — ОДИН batch_execute с клиентским batch_id:
  * `create` → entity_create + entity_origin_create, `adopt` → только
  * entity_origin_create на существующую сущность, `skip` → операций нет. Идемпотентно
  * по batch_id (§7.8); ошибка любой строки откатывает всю группу — частичного импорта
- * не бывает. Отдельный replay-пречек не нужен: доменных проверок, которые ломались бы
- * на повторе, здесь нет — идемпотентность целиком держит executor по audit-PK.
+ * не бывает. Единственный доменный пречек — цели adopt (assertAdoptTargets); он идёт
+ * после replay-детекта, поэтому повтор batchId остаётся чистым replay'ем executor'а
+ * по audit-PK.
  *
  * Валюта созданных транзакций в аспект НЕ кладётся: у CanonicalRow поля currency нет
  * (§3.4.1), а отсутствие currency и селектор конвертов (§2.3), и агрегаты (§2.2)
@@ -428,6 +514,7 @@ export async function confirmImport(
 ): Promise<ImportConfirmResult> {
   gateImportCsv(ownerId);
   assertRowLimit(input.items.length);
+  await assertAdoptTargets(db, ownerId, input);
 
   const operations: ExecuteRequest['operations'] = [];
   let created = 0;
