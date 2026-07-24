@@ -31,6 +31,22 @@ describe('схемы аспектов (01 §3.1–§3.7)', () => {
     expect(s.safeParse({ ...base, amount: '0' }).success).toBe(false);
     expect(s.safeParse({ ...base, amount: '3.4e2' }).success).toBe(false);
   });
+  test('orbis/financial: bank_txn_id — опциональная непустая строка (C2b, 03-budget §3.4.1)', () => {
+    const s = ASPECT_SCHEMAS['orbis/financial'];
+    const base = {
+      amount: '3200.00',
+      direction: 'expense',
+      category_ref: crypto.randomUUID(),
+      occurred_on: '2026-05-10',
+    };
+    expect(s.safeParse({ ...base, bank_txn_id: 'txn-42' }).success).toBe(true);
+    expect(s.safeParse(base).success).toBe(true); // поле опционально: старые аспекты валидны
+    expect(s.safeParse({ ...base, bank_txn_id: '' }).success).toBe(false);
+    expect(s.safeParse({ ...base, bank_txn_id: 123 }).success).toBe(false);
+    // Верхняя граница — защита JSONB от мусора, не бизнес-правило
+    expect(s.safeParse({ ...base, bank_txn_id: 'x'.repeat(128) }).success).toBe(true);
+    expect(s.safeParse({ ...base, bank_txn_id: 'x'.repeat(129) }).success).toBe(false);
+  });
   test('orbis/schedule: start_at обязателен; recurrence — структурный объект', () => {
     const s = ASPECT_SCHEMAS['orbis/schedule'];
     expect(s.safeParse({ start_at: '2026-07-05T09:00:00+03:00' }).success).toBe(true);

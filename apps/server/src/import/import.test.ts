@@ -298,6 +298,76 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     expect(repeat.rows[0]?.status).toBe('already_imported');
   });
 
+  test('совпавший bank_txn_id закрывает критерий §3.4.1 при НЕпохожем counterparty (C2b)', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const imported = makeRow({
+      occurredOn: '2026-05-10',
+      amount: '3200.00',
+      counterparty: 'OZON',
+      bankTxnId: 'txn-42',
+    });
+    const confirmed = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row: imported, action: 'create', categoryRef: foodId }],
+    });
+    const createdId = confirmed.entityIds[0];
+
+    // Другой файл и namespace (already_imported невозможен): тот же стабильный bank
+    // transaction ID, та же сумма и направление, дата +1 день, но counterparty
+    // НАМЕРЕННО непохожий — OZON против WILDBERRIES, пиннящая негативная пара C1
+    // (similarity < 0.85). Дубль обязан найтись по ID «независимо от текста» (§3.4.1)
+    const overlapping = makeRow({
+      occurredOn: '2026-05-11',
+      amount: '3200.00',
+      counterparty: 'WILDBERRIES',
+      bankTxnId: 'txn-42',
+    });
+    const r = await caller.import.review({
+      rows: [overlapping],
+      fileHash: FILE_B,
+      namespace: NS_OTHER,
+    });
+
+    expect(r.rows[0]?.status).toBe('probable_duplicate');
+    expect(r.rows[0]?.duplicateOf).toBe(createdId as string);
+  });
+
+  test('РАЗНЫЕ bank_txn_id не перекрывают и не дисквалифицируют: непохожий текст → new (C2b)', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const imported = makeRow({
+      occurredOn: '2026-05-10',
+      amount: '3200.00',
+      counterparty: 'OZON',
+      bankTxnId: 'txn-42',
+    });
+    await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row: imported, action: 'create', categoryRef: foodId }],
+    });
+
+    // Тот же сценарий, но ID другой: падаем обратно на текст, который здесь не совпадает
+    const overlapping = makeRow({
+      occurredOn: '2026-05-11',
+      amount: '3200.00',
+      counterparty: 'WILDBERRIES',
+      bankTxnId: 'txn-43',
+    });
+    const r = await caller.import.review({
+      rows: [overlapping],
+      fileHash: FILE_B,
+      namespace: NS_OTHER,
+    });
+
+    expect(r.rows[0]?.status).toBe('new');
+    expect(r.rows[0]?.duplicateOf).toBeUndefined();
+  });
+
   test('шаблон recurring не участвует в дедупе (§2.8): строка остаётся new', async () => {
     const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);

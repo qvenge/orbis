@@ -201,6 +201,7 @@ interface Candidate {
   occurredOn: string;
   title: string;
   counterparty?: string;
+  bankTxnId?: string;
 }
 
 /** Ключ бакета кандидатов: направление + дата (сверка идёт по дню ±1, §3.4.1 п.2). */
@@ -253,7 +254,13 @@ async function candidateWindow(
 
   const buckets = new Map<string, Candidate[]>();
   for (const row of rows) {
-    const { amount, direction, occurred_on: occurredOn, counterparty } = row.fin;
+    const {
+      amount,
+      direction,
+      occurred_on: occurredOn,
+      counterparty,
+      bank_txn_id: bankTxnId,
+    } = row.fin;
     if (
       typeof amount !== 'string' ||
       typeof direction !== 'string' ||
@@ -268,6 +275,9 @@ async function candidateWindow(
       occurredOn,
       title: row.title,
       ...(typeof counterparty === 'string' && { counterparty }),
+      // bank_txn_id аспекта → bankTxnId кандидата: даёт данные ветке «совпавший
+      // bank txn id» isProbableDuplicate (§3.4.1 п.3 — независимо от текста)
+      ...(typeof bankTxnId === 'string' && { bankTxnId }),
     };
     const key = bucketKey(direction, occurredOn);
     const list = buckets.get(key);
@@ -552,6 +562,7 @@ export async function confirmImport(
     created += 1;
     const entityId = newId(); // серверный id: строка origins ссылается на него в том же batch
     const counterparty = item.row.counterparty.trim();
+    const bankTxnId = item.row.bankTxnId;
     operations.push(
       {
         tool: 'entity_create',
@@ -566,6 +577,9 @@ export async function confirmImport(
               category_ref: item.categoryRef,
               occurred_on: item.row.occurredOn,
               ...(counterparty !== '' && { counterparty }),
+              // Пусто/отсутствует — ключа нет вовсе (не писать undefined/пустую строку):
+              // схема аспекта требует непустую строку, а дедуп пустой ID не сравнивает
+              ...(bankTxnId !== undefined && bankTxnId !== '' && { bank_txn_id: bankTxnId }),
             },
           },
         },

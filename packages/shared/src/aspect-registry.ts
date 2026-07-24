@@ -44,7 +44,7 @@ export const BUILTIN_ASPECT_META: BuiltinAspectMeta[] = [
     icon: '💸',
     description: 'Финансовая операция: расход или доход.',
     aiInstructions:
-      'amount — строка decimal (например "340.00"), всегда положительная; знак задаёт direction. category_ref — uuid категории-сущности: резолви по aliases категорий через entity_query. occurred_on — дата операции в таймзоне пользователя.',
+      'amount — строка decimal (например "340.00"), всегда положительная; знак задаёт direction. category_ref — uuid категории-сущности: резолви по aliases категорий через entity_query. occurred_on — дата операции в таймзоне пользователя. bank_txn_id заполняется ТОЛЬКО импортом банковской выписки — никогда не выставляй его сам.',
     tagMappings: ['expense', 'income', 'payment', 'cost'],
     viewConfig: { keyFields: ['amount', 'direction', 'category_ref'] },
   },
