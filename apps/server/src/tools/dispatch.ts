@@ -31,6 +31,7 @@ import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
+import { IMPORT_CSV_KEY, resolveEntitlement } from '../entitlements';
 import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
@@ -56,6 +57,7 @@ import {
   type AspectToolRow,
   buildToolDefs,
   type Card,
+  importCsvStartInput,
   loadAspectToolRows,
   type OrbisToolDef,
   type ThreadPostInput,
@@ -264,7 +266,7 @@ function captureSink(inner: JournalSink): { sink: JournalSink; entries: JournalW
 }
 
 // ---------------------------------------------------------------------------
-// Чтения: entity_query / entity_get / user_query — под RLS; ветвлений политики нет:
+// Чтения: entity_get / import_csv_start — под RLS; ветвлений политики нет:
 // ряд «read → execute» таблицы §7.10 (закреплён юнит-тестом классификатора)
 // ---------------------------------------------------------------------------
 
@@ -280,7 +282,41 @@ async function runRead(
     const parsed = parseEnvelope(entityGetInput, input, 'entity_get');
     return { status: 'ok', result: await readEntity(tx, ctx.actorUserId, parsed) };
   }
+  if (name === 'import_csv_start') {
+    parseEnvelope(importCsvStartInput, input, 'import_csv_start');
+    return importCsvStart(ctx);
+  }
   throw new Error(`runRead: нет обработчика read-тула «${name}»`); // недостижимо: kind задаёт реестр
+}
+
+/**
+ * import_csv_start (Task C4c, 03-budget §3.4): вход в импорт из чата. Тул-аффорданс —
+ * единственный эффект: карточка import_review, с которой владелец откроет экран
+ * импорта. Ничего не читает и не пишет (файл выписки живёт в браузере и разбирается
+ * локально, §3.4 шаг 1; модуль import/ отсюда намеренно не вызывается — роутер
+ * import.* зовёт только владелец, C2). Форма карточки обязана дословно совпадать
+ * с web-типом ImportReviewData (chat/cards/types.ts) — типы намеренно не общие.
+ */
+function importCsvStart(ctx: ToolCallCtx): ToolDispatchResult {
+  // Гейт §8 — тот же ключ 'import.csv', что у процедур роутера импорта
+  // (по образцу gateImportCsv из import/review.ts): отказ резолвера → LIMIT, не карточка
+  const decision = resolveEntitlement(ctx.actorUserId, IMPORT_CSV_KEY);
+  if (!decision.allowed) {
+    throw new ExecError('LIMIT', `лимит «${IMPORT_CSV_KEY}» исчерпан`, {
+      key: IMPORT_CSV_KEY,
+      limit: decision.limit,
+    });
+  }
+  return {
+    status: 'ok',
+    // result — для модели: что произошло и почему продолжать нечего
+    result: {
+      note:
+        'карточка входа в импорт показана — пользователь откроет экран импорта и выберет ' +
+        'файл локально в браузере; сам импорт через чат не выполняется, не повторяй вызов',
+    },
+    card: { kind: 'import_review' },
+  };
 }
 
 /**

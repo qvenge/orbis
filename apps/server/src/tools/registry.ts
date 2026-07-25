@@ -52,6 +52,11 @@ export type Card =
       summary: string;
       diff?: Record<string, { before: unknown; after: unknown }>;
     }
+  // 03-budget §3.4 (Task C4c): вход в импорт из чата — карточка ведёт на экран импорта
+  // (файл выбирается локально в браузере и через ленту не проходит). Поля обязаны
+  // дословно совпадать с web-типом ImportReviewData (chat/cards/types.ts) — типы
+  // карточек сервера и web намеренно не общие
+  | { kind: 'import_review'; title?: string }
   | { kind: 'error_card'; code: string; message: string };
 
 // ---------------------------------------------------------------------------
@@ -79,6 +84,10 @@ export const threadPostInput = z
     content: z.string().min(1),
   })
   .strict();
+
+// import_csv_start (Task C4c) — вход без полей НАМЕРЕННО: тул ничего не делает,
+// он лишь показывает карточку-вход в флоу импорта; strict — лишние поля отклоняются
+export const importCsvStartInput = z.object({}).strict();
 
 export type UserQueryInput = z.infer<typeof userQueryInput>;
 export type ThreadPostInput = z.infer<typeof threadPostInput>;
@@ -227,6 +236,12 @@ const budgetStatusJsonSchema = {
   additionalProperties: false,
 };
 
+const importCsvStartJsonSchema = {
+  type: 'object',
+  properties: {},
+  additionalProperties: false,
+};
+
 const threadPostJsonSchema = {
   type: 'object',
   properties: {
@@ -307,6 +322,19 @@ const CORE_TOOLS: OrbisToolDef[] = [
       'Готовые агрегаты бюджета месяца (03-budget): конверты (spent/effectiveLimit/remaining/dailyPace), баланс периода, comingUp (recurring-инстансы на 14 дней), planned (ручные запланированные покупки), unbudgeted и spend_class категорий. Используй для финансовых вопросов («что по бюджету?», «могу позволить X?», остатки конвертов). planned и comingUp уже включают будущие recurring-оттоки — НЕ суммируй recurring отдельно (двойной вычет).',
     inputJsonSchema: budgetStatusJsonSchema,
     kind: 'read',
+  },
+  {
+    // Task C4c (03-budget §3.4): импорт инициируется и из чата — тул-аффорданс, чей
+    // единственный результат — карточка import_review, ведущая на экран импорта.
+    // Файл выписки живёт в браузере владельца и разбирается локально (§3.4 шаг 1):
+    // модель его не видит, роутер import.* зовёт только владелец (C2) — поэтому
+    // kind 'read' и никаких побочных эффектов.
+    name: 'import_csv_start',
+    description:
+      'Вход в импорт банковской выписки (CSV): показывает пользователю карточку, с которой он откроет экран импорта. Вызывай, когда пользователь просит импортировать выписку/CSV из банка («импортируй выписку»). Сам тул НИЧЕГО не импортирует и файла не видит — выписка выбирается и разбирается локально в браузере пользователя.',
+    inputJsonSchema: importCsvStartJsonSchema,
+    kind: 'read',
+    internalOnly: true, // у внешнего агента (MCP) нет экрана — «открой импорт» ему бессмысленен
   },
   {
     name: 'thread_post',
