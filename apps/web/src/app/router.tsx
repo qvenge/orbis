@@ -1,4 +1,5 @@
-import { FolderOpen, type LucideIcon, MessageSquare, Wallet } from 'lucide-react';
+import { CalendarDays, FolderOpen, type LucideIcon, MessageSquare, Wallet } from 'lucide-react';
+import { AgendaScreen } from '../features/agenda/AgendaScreen';
 import { BrowserScreen } from '../features/browser/BrowserScreen';
 import { BudgetScreen } from '../features/budget/BudgetScreen';
 import { CategoryScreen } from '../features/budget/CategoryScreen';
@@ -14,12 +15,13 @@ import { type ScreenRef, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
 import { ScreenHeader } from './ScreenHeader';
 
-// Базовые разделы; budget добавляется по гейту installedViews (03-budget §1.2),
-// agenda в навигации нет (тип Tab в navigation.ts шире — persist 'orbis:nav:v1'
-// может содержать старые стеки, его не сужаем).
+// Вкладки ЯДРА (02-core-os §1.1) в порядке спеки: Chat, Browser, Agenda. Agenda —
+// не «устанавливаемый view», гейта installedViews у неё нет (в отличие от budget,
+// который добавляется ниже по гейту, 03-budget §1.2).
 const BASE_TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'chat', label: 'Чат', icon: MessageSquare },
   { id: 'browser', label: 'Обзор', icon: FolderOpen },
+  { id: 'agenda', label: 'Agenda', icon: CalendarDays },
 ];
 export const BUDGET_TAB = { id: 'budget', label: 'Бюджет', icon: Wallet } as const;
 
@@ -104,6 +106,7 @@ function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
   if (!top) {
     if (activeTab === 'chat') return <ChatScreen />;
     if (activeTab === 'browser') return <BrowserScreen />;
+    if (activeTab === 'agenda') return <AgendaScreen />;
     if (activeTab === 'budget') return <BudgetScreen />;
   } else if (top.kind === 'entity') {
     return <DetailScreen entityId={top.id} />;
@@ -124,7 +127,8 @@ function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
   } else if (top.kind === 'settings') {
     return <SettingsScreen />;
   }
-  // Достижимо только для корня «неизвестного» таба (agenda из старого persist).
+  // Достижимо только для корня «неизвестного» таба из старого persist 'orbis:nav:v1'
+  // (тип Tab шире набора вкладок — сужать его нельзя, иначе сохранённый стек упадёт).
   return <div className="p-4 text-sm text-text-secondary">Экран: {activeTab}</div>;
 }
 

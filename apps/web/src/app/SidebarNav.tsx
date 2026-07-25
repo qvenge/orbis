@@ -1,13 +1,16 @@
-import { FolderOpen, type LucideIcon, MessageSquare, Settings } from 'lucide-react';
+import { CalendarDays, FolderOpen, type LucideIcon, MessageSquare, Settings } from 'lucide-react';
 import { PinnedList } from '../features/browser/PinnedList';
 import { useBudgetAlertCount, useBudgetTabVisible } from '../features/budget/useBudget';
 import { openPinnedEntity, openSettings, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
 import { BUDGET_TAB } from './router';
 
+// Вкладки ядра — как в TabBar (02-core-os §1.1); порядок и состав дублируются
+// осознанно: это вторая независимая поверхность навигации (B1-прецедент бейджей).
 const NAV_ITEMS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'chat', label: 'Чат', icon: MessageSquare },
   { id: 'browser', label: 'Обзор', icon: FolderOpen },
+  { id: 'agenda', label: 'Agenda', icon: CalendarDays },
 ];
 
 // Постоянный левый sidebar (десктоп, ≥768px): навигация + закреплённые + настройки.

@@ -15,17 +15,27 @@ afterEach(() => {
 
 // Этап 3: двухрежимный layout. jsdom не применяет media queries — в DOM присутствуют
 // ОБЕ поверхности (SidebarNav и TabBar), поэтому testid у них разные.
-test('навигация: только Чат и Обзор (tab-bar + sidebar); Agenda/Budget нигде нет', () => {
+// Agenda — вкладка ЯДРА (02-core-os §1.1): в отличие от Budget («первый устанавливаемый
+// view», 03-budget §1.2) гейта installedViews у неё нет. Порядок вкладок — Chat, Browser,
+// Agenda, (Budget). Дефолтный handler отдаёт {} → installedViews пуст → Budget скрыт.
+test('навигация: Чат, Обзор, Agenda в обеих поверхностях; Budget под гейтом installedViews', () => {
   // App живёт под trpc.Provider (main.tsx); дефолтный таб chat рендерит ChatScreen → нужен контекст.
   renderWithProviders(<App />);
-  // Мобильный tab-bar
+  // Мобильный tab-bar — вкладки в порядке §1.1
+  expect(screen.getAllByRole('tab').map((b) => b.getAttribute('data-testid'))).toEqual([
+    'tab-chat',
+    'tab-browser',
+    'tab-agenda',
+  ]);
   expect(screen.getByTestId('tab-chat')).toBeEnabled();
   expect(screen.getByTestId('tab-browser')).toBeEnabled();
-  expect(screen.queryByTestId('tab-agenda')).toBeNull();
+  expect(screen.getByTestId('tab-agenda')).toBeEnabled();
   expect(screen.queryByTestId('tab-budget')).toBeNull();
   // Десктопный sidebar: навигация + настройки
   expect(screen.getByTestId('sidebar-chat')).toBeInTheDocument();
   expect(screen.getByTestId('sidebar-browser')).toBeInTheDocument();
+  expect(screen.getByTestId('sidebar-agenda')).toBeInTheDocument();
+  expect(screen.queryByTestId('sidebar-budget')).toBeNull();
   expect(screen.getByTestId('open-settings')).toBeInTheDocument();
 });
 
