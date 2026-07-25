@@ -58,6 +58,23 @@ async function withDb<T>(fn: (sql: postgres.Sql) => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Канонический JSON для сравнения: ключи объектов сортируются, порядок массивов
+ * сохраняется (в JSON Schema он значим — `enum`, `required`).
+ *
+ * Зачем: jsonb в PostgreSQL НЕ хранит порядок ключей (сортирует их по длине и байтам),
+ * поэтому наивный JSON.stringify объявляет расхождением любую схему, прошедшую через БД.
+ */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v !== null && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(
+          Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)),
+        )
+      : v,
+  );
+}
+
 /** Сверяет JSON Schema и ai_instructions встроенных аспектов в проде с кодом. */
 async function check(): Promise<number> {
   return withDb(async (sql) => {
@@ -72,7 +89,7 @@ async function check(): Promise<number> {
         drift += 1;
         continue;
       }
-      const schemaDrift = JSON.stringify(row.schema) !== JSON.stringify(aspectJsonSchema(meta.id));
+      const schemaDrift = canonical(row.schema) !== canonical(aspectJsonSchema(meta.id));
       const instrDrift = row.ai_instructions !== meta.aiInstructions;
       if (schemaDrift || instrDrift) {
         const what = [schemaDrift && 'schema', instrDrift && 'ai_instructions']
