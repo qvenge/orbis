@@ -217,6 +217,36 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     expect(r.rows[0]?.suggestedCategoryRef).toBeUndefined();
   });
 
+  // Обязательство фазы C (Task C2 отложил его сознательно): suggestedCategoryRef строился
+  // ТОЛЬКО по алиасам, потому что детерминированного формата memory-правила не было — его
+  // задал D3a. Теперь правила применяются ПЕРЕД алиасами тем же кодом, что fast-path (§7.5):
+  // на реальной выписке имена мерчантов алиасами не покрыты, и именно правила делают
+  // категоризацию импорта полезной.
+  test('memory-правило категоризирует строку, которую не покрывает ни один alias', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({
+      occurredOn: '2026-05-09',
+      amount: '843.00',
+      counterparty: 'SBOL ПЯТЁРОЧКА 843',
+    });
+
+    const before = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(before.rows[0]?.suggestedCategoryRef).toBeUndefined(); // без правила — [❓ выбрать]
+
+    await caller.entity.create({
+      input: {
+        title: 'пятерочка → Еда',
+        tags: [],
+        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+      },
+      source: 'ui',
+    });
+
+    const after = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(after.rows[0]?.suggestedCategoryRef).toBe(foodId);
+  });
+
   test('повтор ТОГО ЖЕ файла после импорта → все строки already_imported (приёмка §7 edge)', async () => {
     const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);

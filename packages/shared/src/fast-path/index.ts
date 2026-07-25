@@ -1,11 +1,25 @@
 import type { EntityCreateInput } from '../contracts/tools';
 import { newId } from '../ids';
+import { normalizeCounterparty } from '../import/normalize';
+import { parseRuleTitle } from '../memory/rule';
 
-export type FastPathCategory = { id: string; aliases: string[]; spendClass?: string };
+/** `title` нужен для memory-правил: правило ссылается на категорию НАЗВАНИЕМ (§7.8, D3a). */
+export type FastPathCategory = {
+  id: string;
+  title?: string;
+  aliases: string[];
+  spendClass?: string;
+};
 export type FastPathCtx = {
   categories: FastPathCategory[];
   defaultCurrency: string;
   today?: string;
+  /**
+   * Заголовки активных memory-правил владельца (`orbis/memory`, `kind=rule`,
+   * `scope=orbis/financial`) КАК ЕСТЬ: вся машиночитаемая часть правила живёт в title,
+   * и разбирает его только applyMemoryRules — вызывающий парсингом не занимается.
+   */
+  rules?: string[];
 };
 export type FastPathResult =
   | { ok: true; create: EntityCreateInput }
@@ -56,6 +70,58 @@ export function findCategory(words: string[], cats: FastPathCategory[]): FastPat
   return null;
 }
 
+/**
+ * Correction-правила памяти (01-arch §7.5, §7.8): «правило „кофе → Развлечения“ работает
+ * и в детерминированном пути, без LLM». Применяется ПЕРЕД резолвом по алиасам обоими
+ * потребителями — fast-path-парсером и категоризацией строк CSV-ревью (Task D4, K12):
+ * второй реализации правил быть не должно, иначе клиент и импорт разъедутся.
+ *
+ * Контракт:
+ *  - вход и паттерн правила нормализуются ОДНОЙ И ТОЙ ЖЕ normalizeCounterparty (§3.4.1),
+ *    поэтому «SBOL ПЯТЁРОЧКА 843» матчится правилом «пятерочка»; совпадение — вхождение
+ *    паттерна в нормализованный вход;
+ *  - из подошедших побеждает САМОЕ СПЕЦИФИЧНОЕ — с самым длинным паттерном; при равной
+ *    длине порядок детерминирован лексикографическим сравнением заголовков (иначе web
+ *    и сервер, читающие правила в разном порядке, дали бы разный ответ);
+ *  - правило ссылается на категорию названием (id в правиле нет): резолв по title
+ *    категории через ту же нормализацию; правило с ненайденной категорией просто
+ *    ИГНОРИРУЕТСЯ (пробуем следующее, затем алиасы) — переименование категории не
+ *    имеет права ронять резолв;
+ *  - нераспознанный заголовок (нет стрелки, пустой паттерн) — не правило.
+ */
+export function applyMemoryRules(
+  input: string,
+  ruleTitles: string[],
+  cats: FastPathCategory[],
+): FastPathCategory | null {
+  const haystack = normalizeCounterparty(input);
+  if (haystack === '') return null;
+
+  const matched: Array<{ title: string; pattern: string; categoryTitle: string }> = [];
+  for (const title of ruleTitles) {
+    const parsed = parseRuleTitle(title);
+    if (parsed === null) continue;
+    const pattern = normalizeCounterparty(parsed.pattern);
+    if (pattern === '' || !haystack.includes(pattern)) continue;
+    matched.push({ title, pattern, categoryTitle: parsed.categoryTitle });
+  }
+  matched.sort((a, b) => {
+    if (a.pattern.length !== b.pattern.length) return b.pattern.length - a.pattern.length;
+    if (a.title === b.title) return 0;
+    return a.title < b.title ? -1 : 1;
+  });
+
+  for (const rule of matched) {
+    const wanted = normalizeCounterparty(rule.categoryTitle);
+    if (wanted === '') continue;
+    const category = cats.find(
+      (c) => c.title !== undefined && normalizeCounterparty(c.title) === wanted,
+    );
+    if (category !== undefined) return category;
+  }
+  return null;
+}
+
 export function parseFastPath(text: string, ctx: FastPathCtx): FastPathResult {
   const input = text.trim();
   if (!input) return { ok: false, reason: 'no_match' };
@@ -101,7 +167,11 @@ export function parseFastPath(text: string, ctx: FastPathCtx): FastPathResult {
   const title = textWords.join(' ').trim();
   if (!title) return { ok: false, reason: 'no_match' };
 
-  const category = findCategory(textWords, ctx.categories);
+  // Правила памяти — ДО алиасов (§7.5): подтверждённое пользователем исправление
+  // обязано перекрывать словарь категорий, иначе «кофе» продолжит уходить в Еду.
+  const category =
+    applyMemoryRules(title, ctx.rules ?? [], ctx.categories) ??
+    findCategory(textWords, ctx.categories);
   if (!category) return { ok: false, reason: 'unknown_category' };
 
   const today = ctx.today ?? new Date().toISOString().slice(0, 10);

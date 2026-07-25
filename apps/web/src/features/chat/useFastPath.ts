@@ -7,6 +7,13 @@ import { trpc } from '../../trpc';
 import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from './useChatThread';
 
 const CATEGORY_QUERY = { query: 'aspect=orbis/category' } as const;
+/**
+ * Correction-правила памяти (§7.5): активные `orbis/memory` со `scope=orbis/financial`.
+ * Их заголовок целиком и есть правило — разбирает его shared (applyMemoryRules).
+ */
+const RULES_QUERY = { query: 'aspect=orbis/memory, kind=rule, scope=orbis/financial' } as const;
+/** Правила меняются редко (эскалация §7.8) — держим их в кэше 5 минут, а не 30 секунд. */
+const RULES_STALE_TIME = 5 * 60_000;
 
 /**
  * «Сегодня» в таймзоне пользователя (§7.5): без этого parseFastPath берёт UTC-дату, и ввод
@@ -46,21 +53,30 @@ export function useFastPath(threadId: string) {
   const update = trpc.entity.update.useMutation();
   const key = chatThreadKey(threadId);
 
-  // Категории (aspect=orbis/category) + валюта → контекст парсера. `cats`/`settings` — сырьё кэша/сети.
+  // Категории (aspect=orbis/category) + валюта + memory-правила → контекст парсера.
+  // `cats`/`settings`/`rules` — сырьё кэша/сети.
   type QueryOut = ReturnType<typeof utils.entity.query.getData>;
   type SettingsOut = ReturnType<typeof utils.user.getSettings.getData>;
-  function mapCtx(cats: QueryOut, settings: SettingsOut): FastPathCtx {
+  function mapCtx(cats: QueryOut, settings: SettingsOut, rules: QueryOut): FastPathCtx {
     const categories: FastPathCategory[] = (cats ?? []).map((e) => {
       const meta = (e.aspects?.['orbis/category'] ?? {}) as {
         aliases?: string[];
         spend_class?: string;
       };
-      return { id: e.id, aliases: meta.aliases ?? [], spendClass: meta.spend_class };
+      // title — для резолва категории, названной в memory-правиле (§7.8: id в правиле нет).
+      return {
+        id: e.id,
+        title: e.title,
+        aliases: meta.aliases ?? [],
+        spendClass: meta.spend_class,
+      };
     });
     return {
       categories,
       defaultCurrency: settings?.defaultCurrency ?? 'RUB',
       today: todayIn(settings?.timezone),
+      // Заголовок правила уходит в парсер КАК ЕСТЬ: разбирает его shared, не клиент.
+      rules: (rules ?? []).map((e) => e.title),
     };
   }
 
@@ -70,12 +86,27 @@ export function useFastPath(threadId: string) {
       utils.entity.query.getData(CATEGORY_QUERY) ??
       (await utils.entity.query.fetch(CATEGORY_QUERY));
     const settings = utils.user.getSettings.getData() ?? (await utils.user.getSettings.fetch());
-    return mapCtx(cats, settings);
+    // Правила читаются через fetch со своим staleTime (а не getData-first, как категории):
+    // подтверждённое правило инвалидирует entity.query, и следующий ввод обязан его
+    // увидеть — тёплый кэш вернул бы список «до правила» навсегда.
+    // Отказ запроса правил НЕ роняет быстрый ввод: правило — обогащение поверх алиасов,
+    // из-за него нельзя потерять уже стёртый композером текст.
+    let rules: QueryOut;
+    try {
+      rules = await utils.entity.query.fetch(RULES_QUERY, { staleTime: RULES_STALE_TIME });
+    } catch {
+      rules = utils.entity.query.getData(RULES_QUERY);
+    }
+    return mapCtx(cats, settings, rules);
   }
 
   // Офлайн: ТОЛЬКО тёплый кэш (без fetch) — иначе onlineManager заморозит запрос и submit зависнет (§2.6).
   function cachedCtx(): FastPathCtx {
-    return mapCtx(utils.entity.query.getData(CATEGORY_QUERY), utils.user.getSettings.getData());
+    return mapCtx(
+      utils.entity.query.getData(CATEGORY_QUERY),
+      utils.user.getSettings.getData(),
+      utils.entity.query.getData(RULES_QUERY),
+    );
   }
 
   // Возвращает id синтетического сообщения; повторный вызов с тем же messageId ПЕРЕПИСЫВАЕТ

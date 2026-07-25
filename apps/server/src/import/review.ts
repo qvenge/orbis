@@ -15,6 +15,7 @@
 //      исполнителя (A4) в тот же action.
 import {
   addDays,
+  applyMemoryRules,
   batchAuditMessageId,
   type CanonicalRow,
   csvMappingToolJsonSchema,
@@ -306,16 +307,20 @@ async function candidateWindow(
   return buckets;
 }
 
-/** Категории владельца для резолва по алиасам — тот же словарь, что у fast-path (§7.5). */
+/**
+ * Категории владельца для резолва по алиасам — тот же словарь, что у fast-path (§7.5).
+ * title выбирается ради memory-правил: правило называет категорию НАЗВАНИЕМ (D3a).
+ */
 async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCategory[]> {
   const rows = (await tx.execute(sql`
-    SELECT id, aspects->'orbis/category'->'aliases' AS aliases
+    SELECT id, title, aspects->'orbis/category'->'aliases' AS aliases
     FROM entities
     WHERE owner_id = ${ownerId} AND NOT archived AND aspects ? 'orbis/category'
     ORDER BY id
-  `)) as unknown as Array<{ id: string; aliases: unknown }>;
+  `)) as unknown as Array<{ id: string; title: string; aliases: unknown }>;
   return rows.map((r) => ({
     id: r.id,
+    title: r.title,
     aliases: Array.isArray(r.aliases)
       ? r.aliases.filter((a): a is string => typeof a === 'string')
       : [],
@@ -323,21 +328,41 @@ async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCate
 }
 
 /**
- * Категоризация строки — ТОЛЬКО детерминированный резолв по алиасам категорий (тем же
- * findCategory, что fast-path): counterparty нормализуется байт-точно по §3.4.1
- * (регистр, ё, пунктуация, служебные префиксы) и его токены ищутся среди алиасов.
- * Неуверенно — предложения нет, клиент покажет [❓ выбрать]. LLM для категоризации не
- * зовём (плановое ограничение: детерминированно и бесплатно).
+ * Заголовки активных correction-правил владельца (`orbis/memory`, `kind=rule`,
+ * `scope=orbis/financial`) — вся машиночитаемая часть правила живёт в title (K19.4),
+ * разбирает его shared. Порядок стабилен (`ORDER BY id`), но на результат не влияет:
+ * приоритет правил задаёт applyMemoryRules.
+ */
+async function memoryRules(tx: Tx, ownerId: string): Promise<string[]> {
+  const rows = (await tx.execute(sql`
+    SELECT title
+    FROM entities
+    WHERE owner_id = ${ownerId} AND NOT archived
+      AND aspects->'orbis/memory'->>'kind' = 'rule'
+      AND aspects->'orbis/memory'->>'scope' = 'orbis/financial'
+    ORDER BY id
+  `)) as unknown as Array<{ title: string }>;
+  return rows.map((r) => r.title);
+}
+
+/**
+ * Категоризация строки — детерминированно, без LLM (плановое ограничение: бесплатно и
+ * предсказуемо): сначала correction-правила памяти, затем алиасы категорий. Обе ступени —
+ * общий с fast-path код shared (applyMemoryRules/findCategory, K12): counterparty
+ * нормализуется байт-точно по §3.4.1 (регистр, ё, пунктуация, служебные префиксы).
+ * Неуверенно — предложения нет, клиент покажет [❓ выбрать].
  *
- * Memory-правила `scope=orbis/financial` из эскиза брифа ОТЛОЖЕНЫ в фазу D (Task D4):
- * сегодня у memory-правила нет машиночитаемой части — единственный потребитель
- * (llm/context.ts loadMemory) рендерит title/body текстом в промпт. Формат правила
- * определяет D4; изобретать здесь конкурирующий — гарантированный разъезд.
+ * Правила ПЕРЕД алиасами — обязательство фазы C (Task C2 отложил его до появления
+ * формата правила в D3a): на реальной выписке алиасы не покрывают имён мерчантов
+ * («ПЯТЁРОЧКА», «OZON»), и полезной категоризацию импорта делают именно правила.
  */
 function suggestCategoryRef(
   counterparty: string,
   categories: FastPathCategory[],
+  rules: string[],
 ): string | undefined {
+  const byRule = applyMemoryRules(counterparty, rules, categories);
+  if (byRule !== null) return byRule.id;
   const normalized = normalizeCounterparty(counterparty);
   if (normalized === '') return undefined;
   return findCategory(normalized.split(' '), categories)?.id;
@@ -373,6 +398,7 @@ export async function reviewImport(
     const known = await knownExternalIds(tx, input.namespace, externalIds);
     const buckets = await candidateWindow(tx, ownerId, from, to);
     const categories = await categoryDictionary(tx, ownerId);
+    const rules = await memoryRules(tx, ownerId);
 
     const rows: ImportReviewRow[] = input.rows.map((row, i) => {
       const externalId = externalIds[i] as string;
@@ -380,7 +406,7 @@ export async function reviewImport(
         return { ...row, externalId, status: 'already_imported' };
       }
       const duplicate = findDuplicate(row, buckets);
-      const suggested = suggestCategoryRef(row.counterparty, categories);
+      const suggested = suggestCategoryRef(row.counterparty, categories, rules);
       return {
         ...row,
         externalId,

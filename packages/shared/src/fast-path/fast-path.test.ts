@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { parseFastPath } from './index';
 
+// title обязателен для memory-правил: правило ссылается на категорию НАЗВАНИЕМ (D3a).
 const cats = [
-  { id: 'cat-food', aliases: ['обед', 'еда', 'кофе'], spendClass: 'variable' },
-  { id: 'cat-salary', aliases: ['зарплата'], spendClass: 'income' },
+  { id: 'cat-food', title: 'Еда', aliases: ['обед', 'еда', 'кофе'], spendClass: 'variable' },
+  { id: 'cat-salary', title: 'Зарплата', aliases: ['зарплата'], spendClass: 'income' },
+  { id: 'cat-fun', title: 'Развлечения', aliases: ['развлечения'], spendClass: 'variable' },
+  { id: 'cat-transport', title: 'Транспорт', aliases: ['такси'], spendClass: 'variable' },
 ];
 const ctx = { categories: cats, defaultCurrency: 'RUB', today: '2026-07-05' };
 
@@ -71,5 +74,51 @@ describe('fast-path parseFastPath (§7.5)', () => {
 
   test('нет числа → no_match', () => {
     expect(parseFastPath('просто заметка', ctx)).toEqual({ ok: false, reason: 'no_match' });
+  });
+});
+
+/** category_ref разобранной строки или undefined, если парсер уступил. */
+function refOf(text: string, rules?: string[]): string | undefined {
+  const r = parseFastPath(text, rules === undefined ? ctx : { ...ctx, rules });
+  if (!r.ok) return undefined;
+  const ref = r.create.aspects?.['orbis/financial']?.category_ref;
+  return typeof ref === 'string' ? ref : undefined;
+}
+
+// 01-arch §7.5: «Fast-path применяет correction-правила из памяти (orbis/memory, kind=rule,
+// scope=orbis/financial)» — правило работает в детерминированном пути, без LLM, и имеет
+// приоритет над алиасами (иначе исправление, которое пользователь подтвердил, не работает).
+describe('fast-path: memory-правила перед алиасами (§7.5, §7.8)', () => {
+  test('без правил «кофе 300» → Еда по alias', () => {
+    expect(refOf('кофе 300')).toBe('cat-food');
+  });
+
+  test('правило «кофе → Развлечения» перекрывает alias Еды', () => {
+    expect(refOf('кофе 300', ['кофе → Развлечения'])).toBe('cat-fun');
+  });
+
+  test('правило матчится по нормализованному тексту (регистр, ё), где алиасов нет вовсе', () => {
+    expect(parseFastPath('ПЯТЁРОЧКА 843', ctx)).toEqual({ ok: false, reason: 'unknown_category' });
+    expect(refOf('ПЯТЁРОЧКА 843', ['пятерочка → Еда'])).toBe('cat-food');
+  });
+
+  test('побеждает самое специфичное правило (длиннее паттерн), порядок правил не важен', () => {
+    const rules = ['кофе → Развлечения', 'кофе хауз → Транспорт'];
+    expect(refOf('кофе хауз 300', rules)).toBe('cat-transport');
+    expect(refOf('кофе хауз 300', [...rules].reverse())).toBe('cat-transport');
+  });
+
+  test('при равной длине паттернов порядок детерминирован (по заголовку правила)', () => {
+    const rules = ['кофе → Транспорт', 'кофе → Развлечения'];
+    expect(refOf('кофе 300', rules)).toBe('cat-fun'); // «…Развлечения» < «…Транспорт»
+    expect(refOf('кофе 300', [...rules].reverse())).toBe('cat-fun');
+  });
+
+  test('правило с несуществующей категорией игнорируется — резолв падает на алиасы', () => {
+    expect(refOf('кофе 300', ['кофе → Квакозябра'])).toBe('cat-food');
+  });
+
+  test('заголовок без стрелки правилом не считается', () => {
+    expect(refOf('кофе 300', ['кофе Развлечения'])).toBe('cat-food');
   });
 });
