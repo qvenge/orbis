@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../../state/navigation';
-import { renderWithProviders } from '../../../test/harness';
+import { renderWithProviders, trpcError } from '../../../test/harness';
 import { smoothAuditText } from '../format-audit';
 import type { ChatMessage } from '../useChatThread';
 import { renderCards } from './renderCards';
@@ -372,4 +372,133 @@ test('import_review без вкладки Budget: вместо кнопки — 
   await waitFor(() => expect(screen.getByTestId('import-review-card')).toBeInTheDocument());
   expect(screen.queryByRole('button', { name: /открыть импорт/i })).toBeNull();
   expect(screen.getByTestId('import-review-card')).toHaveTextContent(/бюджет/i);
+});
+
+// --- карточка memory_rule_suggestion (01-arch §7.8, D3b) --------------------------------
+// Производитель — ai/escalation.ts (D3a): поля карточки скопированы ДОСЛОВНО из
+// серверного union (tools/registry.ts), дискриминант — kind (K3).
+
+const FROM_CAT = '3f0f8dbe-0f2f-4f6a-9a58-2b1b1f9f4a11';
+const TO_CAT = '9c2b2f5a-1c3d-4a7e-8b2f-6d4e5a7c9b33';
+// pattern намеренно «сырой» (регистр + числовой хвост): клиент обязан отправить его
+// в ai.declineMemoryRule БЕЗ повторной нормализации — на сервере это ключ подавления.
+const suggestion = {
+  kind: 'memory_rule_suggestion',
+  ruleText: 'кофе → Развлечения',
+  pattern: 'Кофе Хауз 12',
+  fromCategoryId: FROM_CAT,
+  toCategoryId: TO_CAT,
+  categoryTitle: 'Развлечения',
+};
+
+const createdEntity = {
+  id: 'mem1',
+  ownerId: 'u',
+  title: 'кофе → Развлечения',
+  emoji: null,
+  body: '',
+  bodyRefs: [],
+  tags: [],
+  meta: {},
+  aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+  createdAt: 'x',
+  updatedAt: 'y',
+  archived: false,
+};
+
+test('memory_rule_suggestion: текст правила и обе кнопки', () => {
+  renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>);
+  expect(screen.getByTestId('memory-rule-card')).toHaveTextContent('кофе → Развлечения');
+  expect(screen.getByRole('button', { name: 'Запомнить' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Не надо' })).toBeInTheDocument();
+});
+
+test('[Запомнить] → entity.create с title=ruleText и аспектом orbis/memory (rule, financial)', async () => {
+  const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
+    path === 'entity.create' ? createdEntity : {},
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
+  const input = calls.find((c) => c.path === 'entity.create')?.input as {
+    input: { id: string; title: string; tags: string[]; body?: string; aspects: unknown };
+    source: string;
+  };
+  expect(input.input.title).toBe('кофе → Развлечения');
+  expect(input.input.aspects).toEqual({
+    'orbis/memory': { kind: 'rule', scope: 'orbis/financial' },
+  });
+  expect(input.input.tags).toEqual([]);
+  expect(input.input.body).toBeTruthy(); // короткое пояснение, откуда правило взялось
+  expect(input.source).toBe('ui');
+  // Итог показан, кнопки больше не предлагают тот же запрос
+  await waitFor(() =>
+    expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/запомнил/i),
+  );
+  expect(screen.queryByRole('button', { name: 'Запомнить' })).toBeNull();
+});
+
+test('повторный клик по [Запомнить] не создаёт вторую сущность', async () => {
+  const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
+    path === 'entity.create' ? createdEntity : {},
+  );
+  const button = screen.getByRole('button', { name: 'Запомнить' });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  await waitFor(() =>
+    expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/запомнил/i),
+  );
+  fireEvent.click(button); // третий клик уже по снятой кнопке — DOM-узел отсоединён
+  expect(calls.filter((c) => c.path === 'entity.create')).toHaveLength(1);
+});
+
+test('повтор после ошибки шлёт ТОТ ЖЕ client-UUID (урок B4: id на показ карточки)', async () => {
+  let fail = true;
+  const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) => {
+    if (path !== 'entity.create') return {};
+    if (fail) {
+      fail = false;
+      throw trpcError('INTERNAL_SERVER_ERROR');
+    }
+    return createdEntity;
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+  await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+  fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+  await waitFor(() => expect(calls.filter((c) => c.path === 'entity.create')).toHaveLength(2));
+  const ids = calls
+    .filter((c) => c.path === 'entity.create')
+    .map((c) => (c.input as { input: { id: string } }).input.id);
+  expect(ids[0]).toBe(ids[1]);
+});
+
+test('[Не надо] → ai.declineMemoryRule с НЕИЗМЕНЁННЫМ pattern', async () => {
+  const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
+    path === 'ai.declineMemoryRule' ? { alreadyDeclined: false } : {},
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Не надо' }));
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'ai.declineMemoryRule')?.input).toEqual({
+      pattern: 'Кофе Хауз 12',
+      fromCategoryId: FROM_CAT,
+      toCategoryId: TO_CAT,
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/не буду предлагать/i),
+  );
+  expect(screen.queryByRole('button', { name: 'Не надо' })).toBeNull();
+});
+
+test('неизвестный kind по-прежнему не роняет ленту', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          { kind: 'card_from_the_future', payload: 42 },
+          { kind: 'error_card', code: 'X', message: 'соседняя карточка жива' },
+        ]),
+      )}
+    </div>,
+  );
+  expect(screen.getByRole('alert')).toHaveTextContent('соседняя карточка жива');
 });
