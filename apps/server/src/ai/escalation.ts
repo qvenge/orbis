@@ -97,19 +97,41 @@ function extractRecategorizations(action: ActionRecord): Recategorization[] {
 }
 
 /**
- * Все рекатегоризации журнала владельца за 30 дней, кроме текущего действия.
- * Containment по GIN (chat_messages_metadata_gin) сужает выборку до сообщений, чей
- * action трогал orbis/financial. Отменённые действия исключаются тем же NOT EXISTS,
- * что и в findLastUndoable (undo.ts): «исправил → отменил → исправил» не должно
- * считаться двумя исправлениями.
+ * Осознанный потолок выборки скана (K18 / урок C6). Скан отвечает на вопрос «есть ли
+ * ЕЩЁ хоть одно такое же исправление», а не считает их все, поэтому усечение сверху
+ * может только НЕ предложить правило и никогда не предложит лишнего; наружу счётчик
+ * не уходит, молчаливо обрезанного числа пользователь не видит. 200 подходящих
+ * audit-сообщений за 30 дней — заведомо выше живого потока ручных рекатегоризаций.
  */
-async function journalRecategorizations(
-  tx: Tx,
-  exceptActionId: string,
-): Promise<Recategorization[]> {
+export const JOURNAL_SCAN_LIMIT = 200;
+
+/**
+ * Audit-сообщения журнала владельца за 30 дней, чей action ОБНОВЛЯЛ orbis/financial.
+ * Containment по GIN (chat_messages_metadata_gin) сужает выборку. Отменённые действия
+ * исключаются тем же NOT EXISTS, что и в findLastUndoable (undo.ts): «исправил →
+ * отменил → исправил» не должно считаться двумя исправлениями.
+ *
+ * `op:'entity_update'` в пробе ОБЯЗАТЕЛЕН. Без него под неё попадает любой batch, в
+ * котором финансовая сущность СОЗДАВАЛАСЬ: журнал entity_create несёт весь аспект в
+ * payload (executor.ts prepareEntityCreate), то есть каждый CSV-импорт (до 300 строк +
+ * metadata.results) читался и разбирался целиком ради нуля полезных строк —
+ * extractRecategorizations отбрасывает все op ≠ entity_update. И это происходило
+ * синхронно внутри entity.update владельца.
+ *
+ * ORDER BY + LIMIT: потолок ограничивает объём разбираемого JSONB и размер результата,
+ * а не сам обход GIN; после сужения пробы каждая найденная строка потенциально полезна,
+ * поэтому обход по ней не расточителен. Порядок задан явно, чтобы усечение брало
+ * СВЕЖИЕ действия, а не произвольные.
+ *
+ * Экспортируется ради теста: проба — самая хрупкая часть эскалации, и «лишние
+ * прочитанные строки» никак иначе не наблюдаемы.
+ */
+export async function scanFinancialUpdates(tx: Tx): Promise<ActionRecord[]> {
   const probe = (type: string): string =>
     JSON.stringify({
-      actions: [{ type, operations: [{ payload: { aspects: { [FINANCIAL]: {} } } }] }],
+      actions: [
+        { type, operations: [{ op: 'entity_update', payload: { aspects: { [FINANCIAL]: {} } } }] },
+      ],
     });
   const rows = await tx.execute(
     sql`SELECT m.metadata FROM chat_messages m
@@ -120,12 +142,26 @@ async function journalRecategorizations(
             SELECT 1 FROM chat_messages u
             WHERE u.metadata @> jsonb_build_object(
               'type', 'undo', 'undoes', m.metadata->'actions'->0->>'id')
-          )`,
+          )
+        ORDER BY m.created_at DESC
+        LIMIT ${JOURNAL_SCAN_LIMIT}`,
   );
-  const out: Recategorization[] = [];
+  const out: ActionRecord[] = [];
   for (const row of rows) {
     const action = (row.metadata as { actions?: ActionRecord[] }).actions?.[0];
-    if (!action || action.id === exceptActionId) continue;
+    if (action) out.push(action);
+  }
+  return out;
+}
+
+/** Все рекатегоризации журнала владельца за 30 дней, кроме текущего действия. */
+async function journalRecategorizations(
+  tx: Tx,
+  exceptActionId: string,
+): Promise<Recategorization[]> {
+  const out: Recategorization[] = [];
+  for (const action of await scanFinancialUpdates(tx)) {
+    if (action.id === exceptActionId) continue;
     out.push(...extractRecategorizations(action));
   }
   return out;
@@ -212,6 +248,13 @@ async function considerOne(
   const categoryTitle = await categoryTitleOf(tx, rc.to);
   if (categoryTitle === undefined) return { suggested: false, reason: 'category_not_found' };
 
+  // Гейт подавления стоит ДО скана журнала намеренно: на уже предложенной или
+  // отклонённой паре ответ известен из точечного LIMIT 1 по GIN, и сканировать журнал
+  // незачем. Порядок влияет только на reason (диагностика), не на исход.
+  if (await alreadyOffered(tx, pattern, rc)) {
+    return { suggested: false, reason: 'already_suggested' };
+  }
+
   // «Одинаковое исправление» — та же пара категорий И похожий counterparty. Считаем по
   // РАЗНЫМ сущностям: правки одной и той же транзакции туда-обратно — сомнения
   // пользователя, а не повторяющийся паттерн.
@@ -226,9 +269,6 @@ async function considerOne(
 
   if (await hasEquivalentRule(tx, pattern, categoryTitle)) {
     return { suggested: false, reason: 'rule_exists' };
-  }
-  if (await alreadyOffered(tx, pattern, rc)) {
-    return { suggested: false, reason: 'already_suggested' };
   }
 
   const ruleText = formatRuleTitle({ pattern, categoryTitle });

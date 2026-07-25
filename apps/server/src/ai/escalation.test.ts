@@ -9,6 +9,7 @@ import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { appendMessage } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
+import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
@@ -22,7 +23,7 @@ import type {
 import { appRouter } from '../router';
 import type { Card } from '../tools/registry';
 import type { Context } from '../trpc';
-import { maybeSuggestRule } from './escalation';
+import { JOURNAL_SCAN_LIMIT, maybeSuggestRule, scanFinancialUpdates } from './escalation';
 
 requireEnv();
 
@@ -134,6 +135,11 @@ async function categoryRefOf(txnId: string): Promise<string | undefined> {
         FROM entities WHERE id = ${txnId}`,
   );
   return rows[0]?.ref as string | undefined;
+}
+
+/** Что прочитает скан журнала под личностью владельца (проба + потолок выборки). */
+async function scanActions(user: string): Promise<ActionRecord[]> {
+  return withIdentity(db, user, (tx) => scanFinancialUpdates(tx));
 }
 
 /** Владелец с двумя категориями: «Еда» (from) и «Развлечения» (to). */
@@ -340,5 +346,110 @@ describe('эскалация повторных исправлений кате�
         (x: unknown) => x,
       );
     expect((e as { code?: string } | null)?.code).toBe('FORBIDDEN');
+  });
+
+  test('13. скан журнала не читает audit импорта: проба ограничена op=entity_update', async () => {
+    const { user, food, fun } = await freshOwner();
+    const txnInput = (title: string) => ({
+      title,
+      tags: [],
+      aspects: {
+        'orbis/financial': {
+          amount: '340.00',
+          direction: 'expense',
+          category_ref: food,
+          occurred_on: '2026-07-20',
+        },
+      },
+    });
+    // Импорт журналируется ОДНИМ action type='batch', в котором только entity_create, а
+    // журнал entity_create несёт весь аспект в payload (executor.ts prepareEntityCreate).
+    // Без op в пробе такой batch попадал под неё целиком — до 300 строк operations +
+    // inverse + results, разбираемых синхронно внутри entity.update, ради нуля
+    // рекатегоризаций
+    ok(
+      await execute(
+        db,
+        {
+          ...req(user, [
+            { tool: 'entity_create', input: txnInput('ПЯТЕРОЧКА 1') },
+            { tool: 'entity_create', input: txnInput('ПЯТЕРОЧКА 2') },
+          ]),
+          batchId: newId(),
+        },
+        { sink },
+      ),
+    );
+    expect(await scanActions(user)).toEqual([]);
+
+    // а настоящее исправление категории скан по-прежнему видит
+    const actionId = await recategorizeRaw(user, await createTxn(user, 'Пятёрочка', food), fun);
+    expect((await scanActions(user)).map((a) => a.id)).toEqual([actionId]);
+  });
+
+  test('14. скан журнала ограничен потолком выборки и берёт свежие действия', async () => {
+    const { user, food, fun } = await freshOwner();
+    const extra = 3;
+    // Форма audit-строки повторена руками: гнать 200+ рекатегоризаций через executor
+    // ради проверки потолка незачем, а под пробу строка обязана попадать
+    const made = Array.from({ length: JOURNAL_SCAN_LIMIT + extra }, (_, i) => {
+      const actionId = newId();
+      return {
+        actionId,
+        row: {
+          id: newId(),
+          threadId: globalThreadId(user),
+          role: 'system',
+          content: `псевдо-audit ${i}`,
+          metadata: {
+            actions: [
+              {
+                id: actionId,
+                type: 'entity_updated',
+                operations: [
+                  {
+                    op: 'entity_update',
+                    payload: { id: fun, aspects: { 'orbis/financial': { category_ref: fun } } },
+                  },
+                ],
+                inverse: [
+                  {
+                    op: 'entity_update',
+                    payload: { id: fun, aspects: { 'orbis/financial': { category_ref: food } } },
+                  },
+                ],
+              },
+            ],
+          },
+          createdAt: new Date(Date.now() - i * 60_000), // i=0 — самое свежее
+        },
+      };
+    });
+    await withIdentity(db, user, async (tx) => {
+      await ensureGlobalThread(tx, user);
+      await tx.insert(chatMessages).values(made.map((m) => m.row));
+    });
+
+    const scanned = (await scanActions(user)).map((a) => a.id).sort();
+    expect(scanned.length).toBe(JOURNAL_SCAN_LIMIT);
+    // и это именно свежие: усечены ровно `extra` самых старых
+    expect(scanned).toEqual(
+      made
+        .slice(0, JOURNAL_SCAN_LIMIT)
+        .map((m) => m.actionId)
+        .sort(),
+    );
+  });
+
+  test('15. на отклонённой паре скан журнала не запускается (гейт подавления — раньше)', async () => {
+    const { user, food, fun } = await freshOwner();
+    const pair = { pattern: 'пятерочка', fromCategoryId: food, toCategoryId: fun };
+    await ownerCaller(user).ai.declineMemoryRule(pair);
+    const actionId = await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    // Исправление ОДНО: если бы подавление проверялось после скана, ответом было бы
+    // not_repeated — то есть журнал читался бы там, где ответ уже известен
+    expect(
+      await maybeSuggestRule({ db, ownerId: user, action: await actionById(actionId) }),
+    ).toEqual({ suggested: false, reason: 'already_suggested' });
   });
 });
