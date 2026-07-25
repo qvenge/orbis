@@ -6,6 +6,7 @@
 // возвращает Response и не зовёт next → serveStatic до него не доходит).
 import { trpcServer } from '@hono/trpc-server';
 import { type Context, Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from 'hono/bun';
 import type { AiDeps } from './ai/send-message';
 import { makeCreateContext } from './context';
@@ -32,6 +33,38 @@ function cacheHeaders(path: string, c: Context): void {
   c.header('Cache-Control', immutable ? 'public, max-age=31536000, immutable' : 'no-cache');
 }
 
+/**
+ * Потолок тела /trpc/* — общий бэкстоп транспорта (не «лимит импорта»). До него у
+ * tRPC не было лимита тела вовсе: любая мутация принимала гигабайтное тело, и его
+ * разбирал JSON.parse ДО первой zod-проверки. Размер выбран по САМОЙ большой законной
+ * мутации — import.confirm на MAX_IMPORT_ROWS строк: замер (фикс-раунд, A6) дал
+ * 103 КБ на 300 строк и 344 КБ на 1000; поле `raw` строки схемой по длине не
+ * ограничено, поэтому берём запас на выписку с длинными назначениями платежа.
+ * 4 МиБ — с десятикратным запасом к замеру и всё ещё настоящий бэкстоп. Доменные
+ * потолки (MAX_IMPORT_ROWS, .max() схем) он не заменяет: они дают внятный отказ,
+ * этот — режет мусор до парсинга.
+ */
+export const TRPC_MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Платформенный body-limit /trpc/* по образцу /mcp (mcp/transport.ts): считает по
+ * ФАКТИЧЕСКИ прочитанным байтам, поэтому закрывает и chunked-тело без content-length.
+ * Форма 413 — та же структурная, что у /mcp.
+ */
+const trpcBodyLimit = bodyLimit({
+  maxSize: TRPC_MAX_BODY_BYTES,
+  onError: (c) =>
+    c.json(
+      {
+        error: {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: `тело запроса превышает лимит ${TRPC_MAX_BODY_BYTES} байт`,
+        },
+      },
+      413,
+    ),
+});
+
 export interface AppDeps {
   db: Db;
   ai: AiDeps;
@@ -43,6 +76,9 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR }: AppDeps): Hono 
   const app = new Hono();
 
   // --- API-роуты: регистрируются ПЕРЕД статикой (порядок = приоритет) ---
+  // Size-гейт ДО tRPC-хендлера: сверхлимитное тело отсекается прежде JSON-парсинга и
+  // любой zod-валидации (порядок регистрации = порядок исполнения middleware).
+  app.use('/trpc/*', trpcBodyLimit);
   app.use('/trpc/*', trpcServer({ router: appRouter, createContext: makeCreateContext(db, ai) }));
   // MCP-эндпоинт внешних агентов (§9.3): Streamable HTTP, PAT-only (transport.ts)
   app.all('/mcp', makeMcpHandler({ db }));

@@ -3,7 +3,7 @@
 // (урок бэклога об экранировании тегов: значения с ,/|/& — в кавычки).
 import { aspectJsonSchema, BUILTIN_ASPECT_IDS, buildFieldCatalog, parseQuery } from '@orbis/shared';
 import { expect, test } from 'vitest';
-import { buildTxQuery, monthRange } from './txQuery';
+import { buildTxQuery, monthRange, TX_PAGE_SIZE } from './txQuery';
 
 const catalog = buildFieldCatalog(
   BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
@@ -57,6 +57,20 @@ test('фильтр «Факт»: planned=false → noneOf planned=!true, зап�
       values: [{ kind: 'literal', value: 'true' }],
     });
   }
+});
+
+// Task C6: пагинация растущим окном — limit = TX_PAGE_SIZE * page уходит клаузой limit=;
+// без явного limit билдер сохраняет прежнее поведение первой страницы (200).
+test('limit (C6): по умолчанию TX_PAGE_SIZE=200, явное окно уходит клаузой limit=', () => {
+  expect(TX_PAGE_SIZE).toBe(200);
+  expect(buildTxQuery({ month: '2026-06' })).toContain('limit=200');
+  const q = buildTxQuery({ month: '2026-06', limit: TX_PAGE_SIZE * 2 });
+  expect(q).toContain('limit=400');
+  expect(q).not.toContain('limit=200');
+  // Строка с нестандартным окном остаётся валидной для грамматики §6.1
+  const r = parseQuery(q, catalog);
+  expect(r.ok).toBe(true);
+  if (r.ok) expect(r.ast.limit).toBe(400);
 });
 
 test('одна граница суммы — строгое сравнение >/< (у грамматики §6.1 нет >=)', () => {

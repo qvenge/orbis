@@ -3,7 +3,15 @@
 // (EnvelopeCreateSheet: [+ конверт] и вход из Unbudgeted), Coming up / Planned.
 // Все суммы — готовые decimal-строки сервера, клиент только форматирует (format.ts).
 import type { BudgetOverview } from '@orbis/shared';
-import { CalendarSync, ChevronLeft, ChevronRight, Plus, ReceiptText, Repeat } from 'lucide-react';
+import {
+  CalendarSync,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  ReceiptText,
+  Repeat,
+  Upload,
+} from 'lucide-react';
 import { useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { formatAmount, formatMoney, type MoneyTone } from '../../lib/format';
@@ -129,6 +137,20 @@ export function BudgetScreen() {
               onClick={openRollover}
             >
               <CalendarSync size={18} aria-hidden />
+            </Button>
+            {/* Вход в импорт CSV (§3.4 «⋮ → Импорт CSV»): меню ⋮ в приложении нет —
+                ещё одна icon-кнопка шапки, по образцу «Транзакции»/Rollover (B5/B6) */}
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Импорт CSV"
+              data-testid="open-import"
+              onClick={() => {
+                const { activeTab, push } = useNav.getState();
+                push(activeTab, { kind: 'budget-import' });
+              }}
+            >
+              <Upload size={18} aria-hidden />
             </Button>
             <Button
               size="icon"

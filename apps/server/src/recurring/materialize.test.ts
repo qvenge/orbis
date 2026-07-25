@@ -3,7 +3,7 @@
 // Интеграционные тесты против живой БД: инстансы порождает ТОЛЬКО сервер, через
 // executor (source='system'), с детерминированными uuidv5-id и горизонтом 14 дней.
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
-import { type FieldCatalog, parseQuery, recurringInstanceId } from '@orbis/shared';
+import { addDays, type FieldCatalog, parseQuery, recurringInstanceId } from '@orbis/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
@@ -12,7 +12,7 @@ import { execute } from '../executor/executor';
 import { appRouter } from '../router';
 import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
-import { addDays, materializationWindow, materializeInstances } from './materialize';
+import { materializationWindow, materializeInstances } from './materialize';
 
 requireEnv();
 

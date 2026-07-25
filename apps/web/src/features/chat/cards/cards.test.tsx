@@ -1,5 +1,6 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { useNav } from '../../../state/navigation';
 import { renderWithProviders } from '../../../test/harness';
 import { smoothAuditText } from '../format-audit';
 import type { ChatMessage } from '../useChatThread';
@@ -15,6 +16,17 @@ const msg = (cards: unknown[], extra: Partial<ChatMessage> = {}): ChatMessage =>
     createdAt: '2026-07-05T12:00:00.000Z',
     ...extra,
   }) as ChatMessage;
+
+// Сброс глобального состояния между тестами (идиома BudgetScreen.test): import_review
+// переключает вкладку и пушит экран — без сброса соседние тесты зависели бы от чужой
+// оставшейся навигации.
+beforeEach(() => {
+  localStorage.clear();
+  useNav.setState({
+    activeTab: 'chat',
+    stacks: { chat: [], browser: [], agenda: [], budget: [] },
+  });
+});
 
 // Мок entity.get для строк query_result: EntityRef резолвит id → title (этап 4, без UUID в UI).
 const entityGet = (path: string, input: unknown) =>
@@ -325,4 +337,39 @@ test('после Undo строка остатка снимается вмест�
 test('smoothAuditText сглаживает «batch: операций — 1»', () => {
   expect(smoothAuditText('batch: операций — 1')).toBe('Операция выполнена');
   expect(smoothAuditText('batch: операций — 3')).toBe('batch: операций — 3');
+});
+
+// --- карточка import_review (§3.4, C4b) ------------------------------------------------
+// Производителя на сервере ещё нет (он приезжает задачей C4c) — карточка проверяется
+// от фикстурного сообщения, чтобы не остаться непроверяемым кодом.
+
+const settingsWithViews = (views: string[]) => ({
+  timezone: 'Europe/Moscow',
+  defaultCurrency: 'RUB',
+  weekStartDay: 1,
+  installedViews: views,
+  pinnedEntities: [],
+});
+
+test('import_review: «Открыть импорт» переключает на Budget и пушит экран импорта', async () => {
+  renderWithProviders(<div>{renderCards(msg([{ kind: 'import_review' }]))}</div>, (path) =>
+    path === 'user.getSettings' ? settingsWithViews(['orbis-budget']) : {},
+  );
+  expect(screen.getByTestId('import-review-card')).toHaveTextContent(/импорт выписки/i);
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: /открыть импорт/i })).toBeInTheDocument(),
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: /открыть импорт/i }));
+  expect(useNav.getState().activeTab).toBe('budget');
+  expect(useNav.getState().stacks.budget.at(-1)).toEqual({ kind: 'budget-import' });
+});
+
+test('import_review без вкладки Budget: вместо кнопки — строка-объяснение', async () => {
+  renderWithProviders(<div>{renderCards(msg([{ kind: 'import_review' }]))}</div>, (path) =>
+    path === 'user.getSettings' ? settingsWithViews([]) : {},
+  );
+  await waitFor(() => expect(screen.getByTestId('import-review-card')).toBeInTheDocument());
+  expect(screen.queryByRole('button', { name: /открыть импорт/i })).toBeNull();
+  expect(screen.getByTestId('import-review-card')).toHaveTextContent(/бюджет/i);
 });

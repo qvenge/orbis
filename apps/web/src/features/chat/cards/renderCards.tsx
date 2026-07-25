@@ -4,6 +4,7 @@ import type { ChatMessage } from '../useChatThread';
 import { ConfirmationCard } from './ConfirmationCard';
 import { EntityCard } from './EntityCard';
 import { ErrorCard } from './ErrorCard';
+import { ImportReviewCard } from './ImportReviewCard';
 import { QueryResultCard } from './QueryResultCard';
 import { SystemMessage } from './SystemMessage';
 import type { Card } from './types';
@@ -44,6 +45,9 @@ export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): Reac
       case 'confirmation_card':
         // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
         return <ConfirmationCard key={i} card={card} createdAt={msg.createdAt} />;
+      case 'import_review':
+        // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
+        return <ImportReviewCard key={i} card={card} />;
       case 'error_card':
         // §3: retryId+retryText есть → «Повторить» снимет этот error_card и перешлёт тем же id.
         return (

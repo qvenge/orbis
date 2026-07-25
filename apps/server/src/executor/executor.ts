@@ -22,12 +22,16 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   assertEnvelopeUnique,
+  BindingReads,
+  type BindingTarget,
+  type BudgetOpDesc,
   bindingOps,
+  bindingTargetOf,
   normalizeEnvelopeCurrency,
   rebindForEnvelope,
 } from '../budget/binding';
 import type { Db } from '../db/client';
-import { entities, relations } from '../db/schema';
+import { entities, entityOrigins, relations } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
@@ -62,6 +66,7 @@ import type {
   JournalSink,
   JournalWrite,
   WireEntity,
+  WireOrigin,
   WireRelation,
 } from './types';
 import { AuditIdConflictError } from './types';
@@ -81,7 +86,7 @@ interface ExecCtx {
 }
 
 interface OpOutcome {
-  result: WireEntity | WireRelation;
+  result: WireEntity | WireRelation | WireOrigin;
   replay?: boolean;
 }
 
@@ -158,6 +163,36 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const relationCreateInternalInput = relationCreateInput
   .extend({ meta: z.record(z.unknown()).optional() })
   .strict();
+
+/**
+ * Внутренние операции provenance импорта (01-arch §4.8, 03-budget §3.4/§3.4.1).
+ * Схемы живут ЗДЕСЬ, а не в публичном контракте §9.2 (shared/contracts/tools.ts), и
+ * операции НЕ регистрируются в CORE_TOOLS: dispatchTool их не резолвит, в tools/list
+ * по MCP они не попадают — строку origins пишет только серверный флоу импорта
+ * (routers/import.ts), а inverse при Undo её физически удаляет.
+ */
+const entityOriginCreateInput = z
+  .object({
+    entity_id: z.string().uuid(),
+    namespace: z.string().min(1),
+    external_id: z.string().min(1),
+  })
+  .strict();
+
+/** Ключ строки origins — уникальная тройка (owner_id из RLS, namespace, external_id). */
+const entityOriginDeleteInput = z
+  .object({ namespace: z.string().min(1), external_id: z.string().min(1) })
+  .strict();
+
+function toWireOrigin(row: typeof entityOrigins.$inferSelect): WireOrigin {
+  return {
+    id: row.id,
+    entityId: row.entityId,
+    namespace: row.namespace,
+    externalId: row.externalId,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
 
 export async function execute(
   db: Db,
@@ -398,6 +433,8 @@ async function prepareOp(
   if (tool === 'entity_update') return prepareEntityUpdate(ctx, input, batch);
   if (tool === 'relation_create') return prepareRelationCreate(ctx, input, batch);
   if (tool === 'relation_delete') return prepareRelationDelete(ctx, input, batch);
+  if (tool === 'entity_origin_create') return prepareOriginCreate(ctx, input);
+  if (tool === 'entity_origin_delete') return prepareOriginDelete(ctx, input);
   if (tool.startsWith('attach_')) {
     const aspectId = resolveAttachAspect(ctx.registry, tool);
     if (aspectId) return prepareAttach(ctx, tool, aspectId, input, batch);
@@ -471,53 +508,67 @@ function hookAspectChanged(hook: BudgetHook, aspectId: string): boolean {
 }
 
 /**
- * Бюджет-хук A4 (03-budget §2.3): операции привязки/ребиндинга для одной применённой
- * операции. Вызывается ПОСЛЕ apply породившей операции (тем же tx): SQL селектора и
- * окна ребиндинга видят фактическое состояние, включая эффекты предыдущих операций
- * batch, — результат зависит только от текущего набора конвертов (§7.3), без
- * дублирования tie-break в JS. Условия:
+ * Какие ветки бюджет-хука сработают (§2.3). Отдельно от расчёта операций: те же
+ * условия нужны прогреву кэша чтений ДО первого хука (иначе набор целей неизвестен).
  * (а) итоговая сущность несёт orbis/financial и financial-данные/архивность/шаблонность
  *     (orbis/schedule) изменились → bindingOps (шаблон recurring отвязывается);
  * (б) операция затронула orbis/budget (create/update периода-категории/архивация/detach)
  *     → rebindForEnvelope по окну «старый ИЛИ новый период».
  */
-async function budgetFollowUpDescs(
-  ctx: ExecCtx,
-  hook: BudgetHook,
-): Promise<Array<{ tool: string; input: unknown }>> {
+function budgetHookBranches(hook: BudgetHook): { rebind: boolean; bind: boolean } {
   const { before, after } = hook;
-  const ownerId = ctx.req.actorUserId;
   const beforeAspects = before?.aspects as AspectsMap | undefined;
   const afterAspects = after.aspects as AspectsMap;
   const archivedChanged = before !== null && before.archived !== after.archived;
-  const descs: Array<{ tool: string; input: unknown }> = [];
+  return {
+    rebind:
+      (beforeAspects?.['orbis/budget'] !== undefined ||
+        afterAspects['orbis/budget'] !== undefined) &&
+      (before === null || archivedChanged || hookAspectChanged(hook, 'orbis/budget')),
+    // orbis/schedule в условии — сценарий «пометить повторяющейся» (§3.1): attach/detach
+    // recurrence меняет шаблонность при неизменном financial, привязку надо пересчитать
+    // (шаблон отвязывается, экс-шаблон привязывается заново)
+    bind:
+      afterAspects['orbis/financial'] !== undefined &&
+      (before === null ||
+        archivedChanged ||
+        hookAspectChanged(hook, 'orbis/financial') ||
+        hookAspectChanged(hook, 'orbis/schedule')),
+  };
+}
+
+/**
+ * Бюджет-хук A4 (03-budget §2.3): операции привязки/ребиндинга для одной применённой
+ * операции. Вызывается ПОСЛЕ apply породившей операции (тем же tx): SQL селектора и
+ * окна ребиндинга видят фактическое состояние, включая эффекты предыдущих операций
+ * batch, — результат зависит только от текущего набора конвертов (§7.3), без
+ * дублирования tie-break в JS. reads — общий кэш чтений исполнения (см. BindingReads).
+ */
+async function budgetFollowUpDescs(
+  ctx: ExecCtx,
+  hook: BudgetHook,
+  reads: BindingReads,
+): Promise<BudgetOpDesc[]> {
+  const { before, after } = hook;
+  const ownerId = ctx.req.actorUserId;
+  const branches = budgetHookBranches(hook);
+  const descs: BudgetOpDesc[] = [];
 
   // (б) конверт: до или после операции сущность несёт orbis/budget
-  if (
-    (beforeAspects?.['orbis/budget'] !== undefined || afterAspects['orbis/budget'] !== undefined) &&
-    (before === null || archivedChanged || hookAspectChanged(hook, 'orbis/budget'))
-  ) {
+  if (branches.rebind) {
     descs.push(
       ...(await rebindForEnvelope(ctx.tx, {
         ownerId,
         envelope: toWire(after),
         before: before === null ? null : toWire(before),
+        reads,
       })),
     );
   }
 
-  // (а) транзакция: bindingOps сам отсекает шаблоны recurring и архивные сущности.
-  // orbis/schedule в условии — сценарий «пометить повторяющейся» (§3.1): attach/detach
-  // recurrence меняет шаблонность при неизменном financial, привязку надо пересчитать
-  // (шаблон отвязывается, экс-шаблон привязывается заново)
-  if (
-    afterAspects['orbis/financial'] !== undefined &&
-    (before === null ||
-      archivedChanged ||
-      hookAspectChanged(hook, 'orbis/financial') ||
-      hookAspectChanged(hook, 'orbis/schedule'))
-  ) {
-    descs.push(...(await bindingOps(ctx.tx, { ownerId, entity: toWire(after) })));
+  // (а) транзакция: bindingOps сам отсекает шаблоны recurring и архивные сущности
+  if (branches.bind) {
+    descs.push(...(await bindingOps(ctx.tx, { ownerId, entity: toWire(after), reads })));
   }
 
   // Дедуп в рамках хука: сущность с обоими аспектами могла бы породить одинаковые ops
@@ -538,13 +589,31 @@ async function budgetFollowUpDescs(
  * Дописанные планы возвращаются вызывающему для журнала — операции входят в тот же
  * action, Undo откатывает целиком (§2.3). НЕ вызывается в internalUndo-режиме (§7.8:
  * undo воспроизводит зафиксированные inverse-операции, ничего не довычисляя).
+ *
+ * Чтения привязки прогреваются на ВЕСЬ набор хуков одним запросом на конверты и одним
+ * на родителей (Task C2a): batch импорта — это сотни хуков, каждый из которых иначе
+ * стоил бы трёх последовательных SQL. Порядок чтений при этом сохраняется: применённая
+ * связь инвалидирует кэш родителей своей транзакции, и следующий хук перечитывает их.
  */
 async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<PreparedOp[]> {
+  const ownerId = ctx.req.actorUserId;
+  const reads = new BindingReads();
+  const targets: BindingTarget[] = [];
+  for (const hook of hooks) {
+    if (!budgetHookBranches(hook).bind) continue;
+    // Окно ребиндинга (ветка «б») прогревается внутри rebindForEnvelope — его строки
+    // известны только после запроса затронутых транзакций
+    const target = bindingTargetOf(toWire(hook.after));
+    if (target !== null) targets.push(target);
+  }
+  if (targets.length > 0) await reads.prefetch(ctx.tx, { ownerId, targets });
+
   const applied: PreparedOp[] = [];
   for (const hook of hooks) {
-    for (const desc of await budgetFollowUpDescs(ctx, hook)) {
+    for (const desc of await budgetFollowUpDescs(ctx, hook, reads)) {
       const plan = await prepareOp(ctx, desc.tool, desc.input);
       await plan.apply(ctx);
+      reads.invalidateParents(desc.input.target_id);
       applied.push(plan);
     }
   }
@@ -1371,6 +1440,175 @@ async function prepareRelationDelete(
       const row = deleted[0];
       if (!row) throw new ExecError('NOT_FOUND', 'связь не найдена', { ...key });
       return { result: toWireRelation(row) };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// entity_origin_create / entity_origin_delete — provenance импорта (01-arch §4.8)
+//
+// Внутренние операции: в реестр тулов не входят (см. схемы выше), но проходят те же
+// стадии конвейера, что и остальные, — и потому доступны Undo (внутренний режим
+// проигрывает inverse тем же execute). Гейт доступа — не стадия 4 этих операций, а
+// entitlement 'import.csv' роутера импорта: единственный внешний путь к ним.
+// ---------------------------------------------------------------------------
+
+async function prepareOriginCreate(ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  // Стадия 1
+  const input = parseEnvelope(entityOriginCreateInput, rawInput, 'entity_origin_create');
+  const id = newId(); // id строки — серверный, в контракт операции не входит
+  const now = ctx.clock();
+
+  // Стадий 3–4 нет намеренно: владение целевой сущностью проверяет RLS-политика
+  // owner_owns_row_and_entity (миграция 0002), а в batch импорта сущность создаётся
+  // ПРЕДЫДУЩЕЙ операцией того же batch — на момент prepare её ещё нет в БД.
+  const journal: JournalPlan = {
+    type: 'origin_created',
+    entityId: input.entity_id,
+    tool: 'entity_origin_create',
+    title: `источник ${input.namespace}`,
+    operations: [
+      {
+        op: 'entity_origin_create',
+        payload: {
+          entity_id: input.entity_id,
+          namespace: input.namespace,
+          external_id: input.external_id,
+        },
+      },
+    ],
+    // §4.8 и 03-budget §3.4.1: откат импорта УДАЛЯЕТ строку origins физически —
+    // иначе тот же файл после Undo не импортировался бы («уже импортирована» навсегда)
+    inverse: [
+      {
+        op: 'entity_origin_delete',
+        payload: { namespace: input.namespace, external_id: input.external_id },
+      },
+    ],
+  };
+
+  return {
+    journal,
+    // Стадия 5
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      try {
+        const inserted = await applyCtx.tx
+          .insert(entityOrigins)
+          .values({
+            id,
+            ownerId: applyCtx.req.actorUserId,
+            entityId: input.entity_id,
+            namespace: input.namespace,
+            externalId: input.external_id,
+            createdAt: now,
+          })
+          .returning();
+        const row = inserted[0];
+        if (!row) {
+          throw new ExecError('NOT_FOUND', 'строка источника не записана', { id }); // недостижимо
+        }
+        return { result: toWireOrigin(row) };
+      } catch (e) {
+        const pg = pgErrorInfo(e);
+        // Повтор строки того же источника — уже импортирована (§3.4.1); 23505 маппится
+        // структурно, как rel_uniq у relation_create
+        if (pg.code === '23505' && pg.constraint === 'entity_origins_uniq') {
+          throw new ExecError(
+            'CONFLICT',
+            'строка этого источника уже импортирована (§3.4.1); повторный импорт не создаёт дублей',
+            {
+              reason: 'origin_conflict',
+              namespace: input.namespace,
+              external_id: input.external_id,
+            },
+          );
+        }
+        // Чужая (RLS: WITH CHECK не пропустил, 42501) или несуществующая (FK, 23503)
+        // сущность — единый NOT_FOUND, как у relation-тулов: «чужая» и «несуществующая»
+        // неразличимы намеренно
+        if (pg.code === '42501' || pg.code === '23503') {
+          throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.entity_id });
+        }
+        throw e;
+      }
+    },
+  };
+}
+
+async function prepareOriginDelete(ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  // Стадия 1
+  const input = parseEnvelope(entityOriginDeleteInput, rawInput, 'entity_origin_delete');
+
+  // Стадия 3: строка под замком — inverse обязан нести entity_id удаляемой строки
+  // (её id пересоздание не сохраняет: строка новая). Владелец — ЯВНЫМ предикатом, а не
+  // только RLS: (namespace, external_id) уникален лишь ВНУТРИ владельца, и это
+  // единственное место исполнителя, которое удаляет строку ФИЗИЧЕСКИ по такому ключу.
+  // Поведение не меняется (оба пути под withIdentity) — это глубина защиты.
+  const rows = await ctx.tx
+    .select()
+    .from(entityOrigins)
+    .where(
+      and(
+        eq(entityOrigins.ownerId, ctx.req.actorUserId),
+        eq(entityOrigins.namespace, input.namespace),
+        eq(entityOrigins.externalId, input.external_id),
+      ),
+    )
+    .for('update');
+  const row = rows[0];
+  if (!row) {
+    throw new ExecError('NOT_FOUND', 'строка источника не найдена', {
+      namespace: input.namespace,
+      external_id: input.external_id,
+    });
+  }
+
+  const journal: JournalPlan = {
+    type: 'origin_deleted',
+    entityId: row.entityId,
+    tool: 'entity_origin_delete',
+    title: `удалён источник ${input.namespace}`,
+    operations: [
+      {
+        op: 'entity_origin_delete',
+        payload: { namespace: input.namespace, external_id: input.external_id },
+      },
+    ],
+    inverse: [
+      {
+        op: 'entity_origin_create',
+        payload: {
+          entity_id: row.entityId,
+          namespace: input.namespace,
+          external_id: input.external_id,
+        },
+      },
+    ],
+  };
+
+  return {
+    journal,
+    // Стадия 5: ФИЗИЧЕСКОЕ удаление (§4.8) — архивации у provenance-строк нет
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const deleted = await applyCtx.tx
+        .delete(entityOrigins)
+        .where(
+          and(
+            // owner_id — тем же явным предикатом, что и SELECT ... FOR UPDATE выше
+            eq(entityOrigins.ownerId, applyCtx.req.actorUserId),
+            eq(entityOrigins.namespace, input.namespace),
+            eq(entityOrigins.externalId, input.external_id),
+          ),
+        )
+        .returning();
+      const gone = deleted[0];
+      if (!gone) {
+        throw new ExecError('NOT_FOUND', 'строка источника не найдена', {
+          namespace: input.namespace,
+          external_id: input.external_id,
+        });
+      }
+      return { result: toWireOrigin(gone) };
     },
   };
 }

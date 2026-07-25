@@ -20,6 +20,7 @@
 // корректно отвязывает от конверта — хук фазы A); полноценный мастер шаблона — future.
 // Тач-свайпы в тестах не эмулируются надёжно → кнопки-действия в каждой строке
 // ПЕРВИЧНЫ (доступность/десктоп), свайп — прогрессивное улучшение поверх них.
+import { keepPreviousData } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Repeat, Tag } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
@@ -35,7 +36,7 @@ import { useToast } from '../../ui/toast-store';
 import { currentMonth, monthTitle } from './BudgetScreen';
 import { CATEGORIES_QUERY, type CategoryOption, toOption } from './categories';
 import { ddmm } from './EnvelopeCard';
-import { buildTxQuery } from './txQuery';
+import { buildTxQuery, TX_PAGE_SIZE } from './txQuery';
 import { invalidateBudget, monthShift } from './useBudget';
 
 type QueryEntity = RouterOutputs['entity']['query'][number];
@@ -58,15 +59,34 @@ function amountBound(raw: string): string | null {
 
 export function TransactionsScreen() {
   const settings = trpc.user.getSettings.useQuery();
-  const [override, setOverride] = useState<string | null>(null);
+  const [override, setOverrideRaw] = useState<string | null>(null);
   const month = override ?? currentMonth(settings.data?.timezone);
 
-  const [categoryId, setCategoryId] = useState('');
-  const [direction, setDirection] = useState<'' | 'expense' | 'income'>('');
-  const [planned, setPlanned] = useState<'' | 'true' | 'false'>('');
-  const [amountFrom, setAmountFrom] = useState('');
-  const [amountTo, setAmountTo] = useState('');
-  const [search, setSearch] = useState('');
+  const [categoryId, setCategoryIdRaw] = useState('');
+  const [direction, setDirectionRaw] = useState<'' | 'expense' | 'income'>('');
+  const [planned, setPlannedRaw] = useState<'' | 'true' | 'false'>('');
+  const [amountFrom, setAmountFromRaw] = useState('');
+  const [amountTo, setAmountToRaw] = useState('');
+  const [search, setSearchRaw] = useState('');
+
+  // Пагинация растущим окном (Task C6): limit = TX_PAGE_SIZE * page, см. txQuery.ts.
+  // Смена ЛЮБОГО фильтра сбрасывает окно на первую страницу — иначе пользователь,
+  // догрузивший N страниц, продолжил бы тянуть N×TX_PAGE_SIZE записей после смены фильтра.
+  const [page, setPage] = useState(1);
+  const limit = TX_PAGE_SIZE * page;
+  function resetPageAnd<T>(set: (v: T) => void): (v: T) => void {
+    return (v) => {
+      setPage(1);
+      set(v);
+    };
+  }
+  const setOverride = resetPageAnd(setOverrideRaw);
+  const setCategoryId = resetPageAnd(setCategoryIdRaw);
+  const setDirection = resetPageAnd(setDirectionRaw);
+  const setPlanned = resetPageAnd(setPlannedRaw);
+  const setAmountFrom = resetPageAnd(setAmountFromRaw);
+  const setAmountTo = resetPageAnd(setAmountToRaw);
+  const setSearch = resetPageAnd(setSearchRaw);
 
   const categoriesQ = trpc.entity.query.useQuery({ query: CATEGORIES_QUERY });
   const categories: CategoryOption[] = (
@@ -76,6 +96,7 @@ export function TransactionsScreen() {
 
   const query = buildTxQuery({
     month,
+    limit,
     categoryId: categoryId || null,
     direction: direction || null,
     planned: planned === '' ? null : planned === 'true',
@@ -83,7 +104,9 @@ export function TransactionsScreen() {
     amountTo: amountBound(amountTo),
     search,
   });
-  const txQ = trpc.entity.query.useQuery({ query });
+  // keepPreviousData: «показать ещё» меняет ключ запроса (limit растёт) — без него
+  // уже показанный список на кадр подменялся бы скелетоном вместо роста (Task C6)
+  const txQ = trpc.entity.query.useQuery({ query }, { placeholderData: keepPreviousData });
 
   // Мутации строк (§3.3): entity.update + инвалидация budget И entity — рекатегоризация
   // двигает spent конвертов (серверный хук A4), пометка 🔁 меняет рендер списков.
@@ -210,17 +233,31 @@ export function TransactionsScreen() {
         ) : txQ.isLoading ? (
           <Skeleton className="h-24" />
         ) : txQ.data && txQ.data.length > 0 ? (
-          <Card className="flex flex-col gap-1 p-2">
-            {txQ.data.map((e) => (
-              <TxRow
-                key={e.id}
-                entity={e}
-                category={categoryOf(e, byId)}
-                onRecategorize={() => setRecatFor(e)}
-                onMakeRecurring={() => makeRecurring(e)}
-              />
-            ))}
-          </Card>
+          <>
+            <Card className="flex flex-col gap-1 p-2">
+              {txQ.data.map((e) => (
+                <TxRow
+                  key={e.id}
+                  entity={e}
+                  category={categoryOf(e, byId)}
+                  onRecategorize={() => setRecatFor(e)}
+                  onMakeRecurring={() => makeRecurring(e)}
+                />
+              ))}
+            </Card>
+            {/* Счётчик — конец молчаливого обрезания (бэклог B). Движок не отдаёт общее
+                число: «пришло РОВНО limit» — единственный признак «возможно, есть ещё»;
+                при числе записей, кратном странице, последний клик покажет ту же выборку
+                и кнопка исчезнет — честнее, чем угадывать. */}
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-text-muted">Показано {txQ.data.length}</span>
+              {txQ.data.length === limit && (
+                <Button variant="outline" size="sm" onClick={() => setPage((p) => p + 1)}>
+                  Показать ещё
+                </Button>
+              )}
+            </div>
+          </>
         ) : (
           <p className="text-sm text-text-muted">Нет транзакций</p>
         )}

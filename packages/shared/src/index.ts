@@ -1,9 +1,14 @@
 export * from './aspect-registry';
 export * from './constants';
 export * from './contracts/budget';
+export * from './contracts/import';
 export * from './contracts/tools';
+// date.ts — внутренний модуль (toParts/epochDays/…); наружу выходит только сдвиг даты:
+// у сервера была своя копия в recurring/materialize.ts, третьей копии быть не должно
+export { addDays } from './date';
 export * from './fast-path';
 export * from './ids';
+export * from './import/normalize';
 export * from './query/grammar';
 export * from './query/parse';
 export * from './recurrence';

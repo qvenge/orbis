@@ -71,6 +71,10 @@ export const financialAspectSchema = z
     recurring: z.boolean().optional(),
     payment_method: z.string().optional(),
     counterparty: z.string().optional(),
+    // Стабильный ID операции из выписки банка (C2b): пишет ТОЛЬКО CSV-импорт, совпавший
+    // ID закрывает пункт 3 дедуп-критерия 03-budget §3.4.1 независимо от текста.
+    // Без регекспа формата (у банков он разный); max 128 — защита JSONB, не бизнес-правило.
+    bank_txn_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 

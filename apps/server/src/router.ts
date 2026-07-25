@@ -5,6 +5,8 @@ import { aspectRouter } from './routers/aspect';
 import { budgetRouter } from './routers/budget';
 import { chatRouter } from './routers/chat';
 import { entityRouter } from './routers/entity';
+// `import` — зарезервированное слово JS: ключ роутера так назвать можно, переменную нет
+import { importRouter } from './routers/import';
 import { relationRouter } from './routers/relation';
 import { userRouter } from './routers/user';
 import { protectedProcedure, publicProcedure, router } from './trpc';
@@ -19,6 +21,7 @@ export const appRouter = router({
   user: userRouter,
   aspect: aspectRouter,
   budget: budgetRouter,
+  import: importRouter,
 });
 
 export type AppRouter = typeof appRouter;

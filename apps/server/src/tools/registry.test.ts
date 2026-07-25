@@ -18,7 +18,13 @@ import type { z } from 'zod';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { aspectDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { buildToolRegistry, type OrbisToolDef, threadPostInput, userQueryInput } from './registry';
+import {
+  buildToolRegistry,
+  importCsvStartInput,
+  type OrbisToolDef,
+  threadPostInput,
+  userQueryInput,
+} from './registry';
 
 requireEnv();
 
@@ -78,6 +84,7 @@ const CORE_NAMES = [
   'batch_execute',
   'user_query',
   'budget_status', // A6: read-агрегаты Budget (03-budget §4), доступен и MCP
+  'import_csv_start', // C4c: вход в импорт из чата (03-budget §3.4), internalOnly
 ] as const;
 
 const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.map(
@@ -85,13 +92,13 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.map(
 );
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 9 core + thread_post + 7 attach_* = 17', async () => {
+  test('builtin-реестр (userB без кастомных): 10 core + thread_post + 7 attach_* = 18', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
     expect(names).toContain('thread_post');
     for (const name of BUILTIN_ATTACH_NAMES) expect(names).toContain(name);
-    expect(defs.length).toBe(17);
+    expect(defs.length).toBe(18);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
   });
@@ -103,23 +110,30 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('kind: entity_query/entity_get/user_query/budget_status — read, остальные — mutate', async () => {
+  test('kind: entity_query/entity_get/user_query/budget_status/import_csv_start — read, остальные — mutate', async () => {
     const defs = await registryFor(userB);
     for (const def of defs) {
-      const expected = ['entity_query', 'entity_get', 'user_query', 'budget_status'].includes(
-        def.name,
-      )
+      const expected = [
+        'entity_query',
+        'entity_get',
+        'user_query',
+        'budget_status',
+        'import_csv_start',
+      ].includes(def.name)
         ? 'read'
         : 'mutate';
       expect(def.kind).toBe(expected);
     }
   });
 
-  test('internalOnly: true только у user_query (§9.2: в публичный реестр не входит)', async () => {
+  test('internalOnly: true только у user_query и import_csv_start (§9.2: MCP не отдаются)', async () => {
     const defs = await registryFor(userB);
     for (const def of defs) {
-      if (def.name === 'user_query') expect(def.internalOnly).toBe(true);
-      else expect(def.internalOnly).not.toBe(true);
+      if (def.name === 'user_query' || def.name === 'import_csv_start') {
+        expect(def.internalOnly).toBe(true);
+      } else {
+        expect(def.internalOnly).not.toBe(true);
+      }
     }
   });
 
@@ -177,7 +191,7 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(def.kind).toBe('mutate');
     expect(def.description).toBe('Пиши часы сна числом.');
     expect((def.inputJsonSchema.properties as Record<string, unknown>).data).toEqual(CUSTOM_SCHEMA);
-    expect(defsA.length).toBe(18);
+    expect(defsA.length).toBe(19);
 
     const defsB = await registryFor(userB);
     expect(defsB.some((d) => d.name === 'attach_user_sleep_log')).toBe(false);
@@ -197,6 +211,7 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
     user_query: userQueryInput,
     budget_status: budgetStatusInput,
     thread_post: threadPostInput,
+    import_csv_start: importCsvStartInput,
   };
 
   test('каждый ключ zod-схемы есть в JSON Schema и наоборот; required = не-optional ключи zod', async () => {

@@ -11,6 +11,7 @@
 // ДО withIdentity-tx агрегатов (вложение истощало бы пул соединений — тот же принцип,
 // что recurring/with-materialization.ts).
 import {
+  addDays,
   type BudgetOverview,
   type BudgetStatusResult,
   batchAuditMessageId,
@@ -29,7 +30,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
-import { addDays, materializeInstances } from '../recurring/materialize';
+import { materializeInstances } from '../recurring/materialize';
 import { postDueInstances } from '../recurring/post-due';
 import { toWireEntity } from '../wire';
 import { defaultCurrencyOf, selectEnvelope } from './binding';

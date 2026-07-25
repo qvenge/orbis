@@ -23,6 +23,72 @@ export async function defaultCurrencyOf(tx: Tx, ownerId: string): Promise<string
   return rows[0]?.currency ?? FALLBACK_CURRENCY;
 }
 
+/** Комбинация селектора §2.3: категория + валюта транзакции + её дата. */
+export interface EnvelopeCombination {
+  categoryRef: string;
+  currency: string;
+  occurredOn: string;
+}
+
+/** Строка батч-селектора: комбинация + ключ, под которым вызывающий ждёт ответ. */
+export interface EnvelopeQuery extends EnvelopeCombination {
+  key: string;
+}
+
+/**
+ * Кандидаты-конверты для НАБОРА комбинаций одним запросом (§2.3) — единственный
+ * источник истины выбора: одиночный selectEnvelope это набор из одного элемента.
+ * По одному победителю на ключ; LATERAL повторяет тот же порядок выбора, что и
+ * одиночный селектор: (1) минимум календарных дней периода, (2) более поздний
+ * period_start, (3) меньший UUID. Ключ без конверта получает null (Unbudgeted).
+ */
+export async function selectEnvelopes(
+  tx: Tx,
+  args: {
+    ownerId: string;
+    /** Уже разрезолвленная дефолтная валюта ($defCur §2.3) — один читатель на набор. */
+    defaultCurrency: string;
+    rows: readonly EnvelopeQuery[];
+  },
+): Promise<Map<string, string | null>> {
+  const picked = new Map<string, string | null>();
+  const unique: EnvelopeQuery[] = [];
+  for (const row of args.rows) {
+    if (picked.has(row.key)) continue;
+    picked.set(row.key, null);
+    unique.push(row);
+  }
+  if (unique.length === 0) return picked;
+
+  // Явные ::text — параметры VALUES без контекста типа PG вывести не может
+  const values = unique.map(
+    (r) =>
+      sql`(${r.key}::text, ${r.categoryRef}::text, ${r.currency}::text, ${r.occurredOn}::text)`,
+  );
+  const rows = (await tx.execute(sql`
+    SELECT q.k AS key, e.id AS id
+    FROM (VALUES ${sql.join(values, sql`, `)}) AS q(k, category_ref, currency, occurred_on)
+    LEFT JOIN LATERAL (
+      SELECT id FROM entities
+      WHERE owner_id = ${args.ownerId} AND NOT archived
+        AND aspects->'orbis/budget'->>'category_ref' = q.category_ref
+        AND coalesce(aspects->'orbis/budget'->>'currency', ${args.defaultCurrency}) = q.currency
+        AND (aspects->'orbis/budget'->>'period_start') <= q.occurred_on
+        AND (aspects->'orbis/budget'->>'period_end')   >= q.occurred_on
+      ORDER BY ((aspects->'orbis/budget'->>'period_end')::date
+              - (aspects->'orbis/budget'->>'period_start')::date) ASC,
+               (aspects->'orbis/budget'->>'period_start') DESC,
+               id ASC
+      LIMIT 1
+    ) e ON true
+  `)) as unknown as Array<{ key: string; id: string | null }>;
+  for (const row of rows) picked.set(row.key, row.id);
+  return picked;
+}
+
+/** Ключ единственной строки, когда селектор зовут на одну комбинацию. */
+const SINGLE_KEY = 'single';
+
 /**
  * Кандидат-конверт для транзакции по §2.3: период включает дату, валюта совпадает.
  * Tie-break byte-точный: (1) минимум календарных дней периода, (2) более поздний
@@ -40,20 +106,19 @@ export async function selectEnvelope(
   },
 ): Promise<string | null> {
   const defCur = args.defaultCurrency ?? (await defaultCurrencyOf(tx, args.ownerId));
-  const rows = (await tx.execute(sql`
-    SELECT id FROM entities
-    WHERE owner_id = ${args.ownerId} AND NOT archived
-      AND aspects->'orbis/budget'->>'category_ref' = ${args.categoryRef}
-      AND coalesce(aspects->'orbis/budget'->>'currency', ${defCur}) = ${args.currency}
-      AND (aspects->'orbis/budget'->>'period_start') <= ${args.occurredOn}
-      AND (aspects->'orbis/budget'->>'period_end')   >= ${args.occurredOn}
-    ORDER BY ((aspects->'orbis/budget'->>'period_end')::date
-            - (aspects->'orbis/budget'->>'period_start')::date) ASC,
-             (aspects->'orbis/budget'->>'period_start') DESC,
-             id ASC
-    LIMIT 1
-  `)) as unknown as Array<{ id: string }>;
-  return rows[0]?.id ?? null;
+  const picked = await selectEnvelopes(tx, {
+    ownerId: args.ownerId,
+    defaultCurrency: defCur,
+    rows: [
+      {
+        key: SINGLE_KEY,
+        categoryRef: args.categoryRef,
+        currency: args.currency,
+        occurredOn: args.occurredOn,
+      },
+    ],
+  });
+  return picked.get(SINGLE_KEY) ?? null;
 }
 
 /**
@@ -87,40 +152,190 @@ function hasScheduleRecurrence(aspects: Record<string, Record<string, unknown>>)
   return aspects['orbis/schedule']?.recurrence !== undefined;
 }
 
-/** Живые budget-parent'ы транзакции (parent-связи от сущностей с orbis/budget, §4.2). */
-async function budgetParentsOf(tx: Tx, txnId: string): Promise<string[]> {
+/**
+ * Живые budget-parent'ы НАБОРА транзакций одним запросом (parent-связи от сущностей
+ * с orbis/budget, §4.2). Порядок source_id внутри транзакции — тот же ORDER BY, что
+ * и у одиночного чтения; транзакция без родителей получает пустой массив.
+ */
+async function budgetParentsOfMany(
+  tx: Tx,
+  txnIds: readonly string[],
+): Promise<Map<string, string[]>> {
+  const parents = new Map<string, string[]>(txnIds.map((id) => [id, []]));
+  const unique = [...parents.keys()];
+  if (unique.length === 0) return parents;
   const rows = (await tx.execute(sql`
-    SELECT r.source_id FROM relations r
+    SELECT r.target_id, r.source_id FROM relations r
     JOIN entities e ON e.id = r.source_id
-    WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
+    WHERE r.target_id IN (${sql.join(
+      unique.map((id) => sql`${id}`),
+      sql`, `,
+    )}) AND r.relation_type = 'parent'
       AND e.aspects ? 'orbis/budget'
-    ORDER BY r.source_id
-  `)) as unknown as Array<{ source_id: string }>;
-  return rows.map((r) => r.source_id);
+    ORDER BY r.target_id, r.source_id
+  `)) as unknown as Array<{ target_id: string; source_id: string }>;
+  for (const row of rows) parents.get(row.target_id)?.push(row.source_id);
+  return parents;
+}
+
+/**
+ * Транзакция под привязкой: fin — её financial-данные для селектора, null —
+ * принудительная отвязка (шаблон recurring, §3.1). Общий вход и для расчёта операций,
+ * и для прогрева кэша чтений: одно место решает, ЧТО именно будет прочитано.
+ */
+export interface BindingTarget {
+  txnId: string;
+  fin: Record<string, unknown> | null;
+}
+
+/** Цель привязки для сущности (§2.3); null — привязка не применяется (не транзакция/архив). */
+export function bindingTargetOf(entity: WireEntity): BindingTarget | null {
+  const fin = entity.aspects['orbis/financial'];
+  if (fin === undefined || entity.archived) return null;
+  if (hasScheduleRecurrence(entity.aspects)) return { txnId: entity.id, fin: null };
+  return { txnId: entity.id, fin };
+}
+
+/** Комбинация селектора из financial-данных; null — данных для выбора конверта нет. */
+function combinationOf(
+  fin: Record<string, unknown>,
+  defaultCurrency: string,
+): EnvelopeCombination | null {
+  if (typeof fin.category_ref !== 'string' || typeof fin.occurred_on !== 'string') return null;
+  return {
+    categoryRef: fin.category_ref,
+    currency: typeof fin.currency === 'string' ? fin.currency : defaultCurrency,
+    occurredOn: fin.occurred_on,
+  };
+}
+
+function envelopeCacheKey(ownerId: string, c: EnvelopeCombination): string {
+  return JSON.stringify([ownerId, c.categoryRef, c.currency, c.occurredOn]);
+}
+
+/**
+ * Кэш чтений привязки в пределах ОДНОГО исполнения executor'а (одной транзакции):
+ * дефолтная валюта владельца, победитель селектора по комбинации и живые
+ * budget-parent'ы транзакции. Прогрев (prefetch) делает три запроса на ВЕСЬ набор
+ * целей вместо трёх на каждую — это и снимает N+1 массового импорта.
+ *
+ * Кэш НЕ глобальный и НЕ процессный: user_settings и связи меняются между запросами,
+ * объект живёт ровно столько, сколько исполнение. Кэш конвертов не инвалидируется —
+ * дописанные операции привязки трогают только relations, набор конвертов в пределах
+ * прохода неизменен. Кэш родителей ОБЯЗАН инвалидироваться той транзакцией, чью
+ * parent-связь только что создали/удалили: следующий хук того же batch видит эффект
+ * предыдущего (порядок чтений §2.3) — иначе он повторно удалял бы удалённую связь.
+ */
+export class BindingReads {
+  private readonly currencies = new Map<string, string>();
+  private readonly envelopes = new Map<string, string | null>();
+  private readonly parents = new Map<string, string[]>();
+
+  /** user_settings.defaultCurrency владельца — один раз за исполнение. */
+  async defaultCurrency(tx: Tx, ownerId: string): Promise<string> {
+    const cached = this.currencies.get(ownerId);
+    if (cached !== undefined) return cached;
+    const value = await defaultCurrencyOf(tx, ownerId);
+    this.currencies.set(ownerId, value);
+    return value;
+  }
+
+  /** Победитель селектора для комбинации (§2.3). */
+  async envelopeOf(
+    tx: Tx,
+    args: { ownerId: string; defaultCurrency: string; combination: EnvelopeCombination },
+  ): Promise<string | null> {
+    await this.loadEnvelopes(tx, args.ownerId, args.defaultCurrency, [args.combination]);
+    return this.envelopes.get(envelopeCacheKey(args.ownerId, args.combination)) ?? null;
+  }
+
+  /** Живые budget-parent'ы транзакции (§4.2). */
+  async parentsOf(tx: Tx, txnId: string): Promise<string[]> {
+    await this.loadParents(tx, [txnId]);
+    return this.parents.get(txnId) ?? [];
+  }
+
+  /** Прогрев на весь набор целей: ≤3 запроса независимо от размера набора. */
+  async prefetch(
+    tx: Tx,
+    args: { ownerId: string; targets: readonly BindingTarget[] },
+  ): Promise<void> {
+    const combinations: EnvelopeCombination[] = [];
+    const txnIds: string[] = [];
+    let defCur: string | null = null;
+    for (const target of args.targets) {
+      if (target.fin === null) {
+        txnIds.push(target.txnId); // отвязка шаблона: нужны только родители
+        continue;
+      }
+      defCur ??= await this.defaultCurrency(tx, args.ownerId);
+      const combination = combinationOf(target.fin, defCur);
+      if (combination === null) continue; // привязка этой строки не считается — читать нечего
+      combinations.push(combination);
+      txnIds.push(target.txnId);
+    }
+    if (defCur !== null) await this.loadEnvelopes(tx, args.ownerId, defCur, combinations);
+    await this.loadParents(tx, txnIds);
+  }
+
+  /** Родители транзакции изменились дописанной операцией — перечитать при следующем спросе. */
+  invalidateParents(txnId: string): void {
+    this.parents.delete(txnId);
+  }
+
+  private async loadEnvelopes(
+    tx: Tx,
+    ownerId: string,
+    defaultCurrency: string,
+    combinations: readonly EnvelopeCombination[],
+  ): Promise<void> {
+    const rows: EnvelopeQuery[] = [];
+    for (const c of combinations) {
+      const key = envelopeCacheKey(ownerId, c);
+      if (!this.envelopes.has(key)) rows.push({ key, ...c });
+    }
+    if (rows.length === 0) return;
+    for (const [key, id] of await selectEnvelopes(tx, { ownerId, defaultCurrency, rows })) {
+      this.envelopes.set(key, id);
+    }
+  }
+
+  private async loadParents(tx: Tx, txnIds: readonly string[]): Promise<void> {
+    const missing = [...new Set(txnIds)].filter((id) => !this.parents.has(id));
+    if (missing.length === 0) return;
+    for (const [id, sources] of await budgetParentsOfMany(tx, missing)) {
+      this.parents.set(id, sources);
+    }
+  }
 }
 
 /**
  * Diff привязки одной транзакции: желаемый конверт селектором против текущих
  * budget-parent'ов. Порядок ops — сначала delete устаревших связей, затем create новой
  * (инвариант «один budget-parent» §4.2 требует именно этой последовательности).
+ * fin=null (шаблон recurring) — безусловная отвязка всех budget-parent'ов.
  */
-async function diffBindingOps(
+async function targetBindingOps(
   tx: Tx,
+  reads: BindingReads,
   ownerId: string,
-  defaultCurrency: string,
-  txnId: string,
-  fin: Record<string, unknown>,
+  target: BindingTarget,
+  /** Уже разрезолвленная дефолтная валюта — чтобы не перечитывать user_settings в циклах. */
+  defaultCurrency?: string,
 ): Promise<BudgetOpDesc[]> {
-  if (typeof fin.category_ref !== 'string' || typeof fin.occurred_on !== 'string') return [];
-  const currency = typeof fin.currency === 'string' ? fin.currency : defaultCurrency;
-  const desired = await selectEnvelope(tx, {
-    ownerId,
-    categoryRef: fin.category_ref,
-    currency,
-    occurredOn: fin.occurred_on,
-    defaultCurrency,
-  });
-  const current = await budgetParentsOf(tx, txnId);
+  const { txnId } = target;
+  if (target.fin === null) {
+    const current = await reads.parentsOf(tx, txnId);
+    return current.map((src) => ({
+      tool: 'relation_delete' as const,
+      input: { source_id: src, target_id: txnId, relation_type: 'parent' as const },
+    }));
+  }
+  const defCur = defaultCurrency ?? (await reads.defaultCurrency(tx, ownerId));
+  const combination = combinationOf(target.fin, defCur);
+  if (combination === null) return [];
+  const desired = await reads.envelopeOf(tx, { ownerId, defaultCurrency: defCur, combination });
+  const current = await reads.parentsOf(tx, txnId);
   const ops: BudgetOpDesc[] = [];
   for (const src of current) {
     if (src !== desired) {
@@ -147,23 +362,15 @@ async function diffBindingOps(
  * шаблон, ставший таковым конверсией привязанной транзакции («пометить повторяющейся»,
  * attach orbis/schedule.recurrence), ОТВЯЗЫВАЕТСЯ — иначе spent считал бы шаблон
  * вместе с его инстансами (двойной счёт, финальное ревью фазы A).
+ * reads — общий кэш чтений исполнения (executor прогревает его на все хуки batch).
  */
 export async function bindingOps(
   tx: Tx,
-  args: { ownerId: string; entity: WireEntity },
+  args: { ownerId: string; entity: WireEntity; reads?: BindingReads },
 ): Promise<BudgetOpDesc[]> {
-  const { ownerId, entity } = args;
-  const fin = entity.aspects['orbis/financial'];
-  if (fin === undefined || entity.archived) return [];
-  if (hasScheduleRecurrence(entity.aspects)) {
-    const current = await budgetParentsOf(tx, entity.id);
-    return current.map((src) => ({
-      tool: 'relation_delete' as const,
-      input: { source_id: src, target_id: entity.id, relation_type: 'parent' as const },
-    }));
-  }
-  const defCur = await defaultCurrencyOf(tx, ownerId);
-  return diffBindingOps(tx, ownerId, defCur, entity.id, fin);
+  const target = bindingTargetOf(args.entity);
+  if (target === null) return [];
+  return targetBindingOps(tx, args.reads ?? new BindingReads(), args.ownerId, target);
 }
 
 /** Сторона окна ребиндинга: категория + период (старое или новое состояние конверта). */
@@ -200,7 +407,13 @@ function sideOf(entity: WireEntity | null): RebindSide | null {
  */
 export async function rebindForEnvelope(
   tx: Tx,
-  args: { ownerId: string; envelope: WireEntity; before: WireEntity | null },
+  args: {
+    ownerId: string;
+    envelope: WireEntity;
+    before: WireEntity | null;
+    /** Общий кэш чтений исполнения; без него — свой, живущий только этот вызов. */
+    reads?: BindingReads;
+  },
 ): Promise<BudgetOpDesc[]> {
   const { ownerId, envelope, before } = args;
   const sides: RebindSide[] = [];
@@ -236,10 +449,15 @@ export async function rebindForEnvelope(
   `)) as unknown as Array<{ id: string; fin: Record<string, unknown> }>;
   if (rows.length === 0) return [];
 
-  const defCur = await defaultCurrencyOf(tx, ownerId);
+  // Прогрев на все затронутые строки: один запрос на конверты и один на родителей
+  // вместо двух на строку (N+1, названный в бэклоге фазы A).
+  const reads = args.reads ?? new BindingReads();
+  const targets: BindingTarget[] = rows.map((row) => ({ txnId: row.id, fin: row.fin }));
+  await reads.prefetch(tx, { ownerId, targets });
+  const defCur = await reads.defaultCurrency(tx, ownerId);
   const ops: BudgetOpDesc[] = [];
-  for (const row of rows) {
-    ops.push(...(await diffBindingOps(tx, ownerId, defCur, row.id, row.fin)));
+  for (const target of targets) {
+    ops.push(...(await targetBindingOps(tx, reads, ownerId, target, defCur)));
   }
   return ops;
 }

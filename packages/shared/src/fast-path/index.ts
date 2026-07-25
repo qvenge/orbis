@@ -41,7 +41,13 @@ function toDecimal2(raw: string): string {
   return `${i}.${frac}`;
 }
 
-function findCategory(words: string[], cats: FastPathCategory[]): FastPathCategory | null {
+/**
+ * Резолв категории по алиасам: первое слово, совпавшее с алиасом (регистр и хвостовая
+ * пунктуация игнорируются); нет совпадения — null. Экспортируется, потому что тем же
+ * словарём категоризирует строки CSV-ревью сервер (Task C2, 03-budget §3.4): второй
+ * реализации сопоставления быть не должно.
+ */
+export function findCategory(words: string[], cats: FastPathCategory[]): FastPathCategory | null {
   const lw = words.map((w) => w.toLowerCase().replace(/[.,!?]/g, ''));
   for (const c of cats) {
     const aliases = c.aliases.map((a) => a.toLowerCase());

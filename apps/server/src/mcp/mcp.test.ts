@@ -306,13 +306,14 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
 // ---------------------------------------------------------------------------
 
 describe('/mcp tools/list (§9.2)', () => {
-  test('состав = публичный реестр: 7 core + thread_post + 7 attach_*, без user_query; имена/описания/схемы дословно', async () => {
+  test('состав = публичный реестр: 7 core + thread_post + 7 attach_*, без internalOnly; имена/описания/схемы дословно', async () => {
     const agent = await connectAgent(mainUrl());
     try {
       const { tools } = await agent.listTools();
       const names = tools.map((t) => t.name);
 
       expect(names).not.toContain('user_query'); // internalOnly не публикуется (§9.2)
+      expect(names).not.toContain('import_csv_start'); // internalOnly (C4c): у агента нет экрана импорта
       for (const name of [
         'entity_query',
         'entity_get',

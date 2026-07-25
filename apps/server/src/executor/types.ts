@@ -48,6 +48,19 @@ export interface WireEntity {
   archived: boolean;
 }
 
+/**
+ * Wire-форма строки provenance (01-arch §4.8, 03-budget §3.4.1): результат внутренних
+ * операций entity_origin_create / entity_origin_delete. Не сущность и не связь —
+ * отдельный тип, а не приведение чужого: в publicном контракте §9.2 origins не значатся.
+ */
+export interface WireOrigin {
+  id: string;
+  entityId: string;
+  namespace: string;
+  externalId: string;
+  createdAt: string;
+}
+
 /** Wire-форма связи (§4.2): таймстампы — toISOString, как у сущностей. */
 export interface WireRelation {
   id: string;
@@ -74,7 +87,24 @@ export interface ActionOperation {
 /** Элемент журнала действий — формат §7.8 + атрибуция актора (D11). */
 export interface ActionRecord {
   id: string;
-  type: 'entity_created' | 'entity_updated' | 'relation_created' | 'relation_deleted' | 'batch';
+  // origin_created/origin_deleted — provenance импорта (§4.8): не сущность и не связь,
+  // поэтому честный собственный вариант. Расширение аддитивно: исчерпывающих switch
+  // по этому полю в коде нет (журнал читает только по id/inverse — undo.ts, journal.ts).
+  //
+  // Сегодня В ЗАПИСЬ они не попадают: единственный вызывающий origin-операций —
+  // confirmImport, а он всегда задаёт batchId, и весь импорт журналируется одним
+  // action типа 'batch'. Варианты оставлены намеренно: их несут JournalPlan'ы этих
+  // операций (executor.ts prepareOriginCreate/prepareOriginDelete), и они станут
+  // наблюдаемыми у первого НЕ-batch вызывающего — убирать их значило бы заводить
+  // отдельный, более узкий тип для плана той же операции.
+  type:
+    | 'entity_created'
+    | 'entity_updated'
+    | 'relation_created'
+    | 'relation_deleted'
+    | 'origin_created'
+    | 'origin_deleted'
+    | 'batch';
   entity_id: string | null;
   actor_user_id: string;
   actor_kind: ActorKind;
