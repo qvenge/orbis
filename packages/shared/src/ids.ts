@@ -49,6 +49,36 @@ export function processingMessageId(userMessageId: string): string {
   return uuidv5(`processing:${userMessageId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
+/**
+ * Пара категорий + паттерн + дата — ключ идемпотентности сообщений эскалации §7.8.
+ * Дата (UTC-сутки записи) — не бизнес-«сегодня», а бакет ключа: без неё детерминированный
+ * PK блокировал бы повторное предложение навсегда, а окно подавления — 30 дней.
+ */
+interface MemoryRuleKey {
+  ownerId: string;
+  pattern: string;
+  fromCategoryId: string;
+  toCategoryId: string;
+  date: string; // YYYY-MM-DD
+}
+
+function memoryRuleKey(prefix: string, k: MemoryRuleKey): string {
+  return uuidv5(
+    `${prefix}:${k.ownerId.toLowerCase()}:${k.fromCategoryId.toLowerCase()}:${k.toCategoryId.toLowerCase()}:${k.pattern}:${k.date}`,
+    ORBIS_NAMESPACE,
+  );
+}
+
+/** PK системного сообщения-предложения правила памяти (эскалация §7.8). */
+export function memoryRuleSuggestionId(k: MemoryRuleKey): string {
+  return memoryRuleKey('memory-rule-suggestion', k);
+}
+
+/** PK системного сообщения-отказа от предложения правила (§7.8; журнал append-only §4.6). */
+export function memoryRuleDeclinedId(k: MemoryRuleKey): string {
+  return memoryRuleKey('memory-rule-declined', k);
+}
+
 export function recurringInstanceId(templateId: string, dateISO: string): string {
   return uuidv5(`${templateId.toLowerCase()}:${dateISO}`, ORBIS_NAMESPACE);
 }

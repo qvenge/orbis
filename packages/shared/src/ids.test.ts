@@ -4,6 +4,8 @@ import {
   entityThreadId,
   globalThreadId,
   materializeBatchId,
+  memoryRuleDeclinedId,
+  memoryRuleSuggestionId,
   newId,
   ORBIS_NAMESPACE,
   postFinancialBatchId,
@@ -60,6 +62,31 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
     expect(processingMessageId(userMsg)).not.toBe(userMsg);
     expect(processingMessageId(userMsg)).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+  test('memoryRule*Id (§7.8): детерминированы ключом, различают предложение и отказ, чувствительны к дате', () => {
+    const k = {
+      ownerId: '00000000-0000-4000-8000-00000000000a',
+      pattern: 'пятерочка',
+      fromCategoryId: '00000000-0000-7000-8000-0000000000d4',
+      toCategoryId: '00000000-0000-7000-8000-0000000000d5',
+      date: '2026-07-25',
+    };
+    expect(memoryRuleSuggestionId(k)).toBe(
+      memoryRuleSuggestionId({ ...k, ownerId: k.ownerId.toUpperCase() }),
+    );
+    expect(memoryRuleSuggestionId(k)).not.toBe(memoryRuleDeclinedId(k));
+    expect(memoryRuleSuggestionId(k)).not.toBe(
+      memoryRuleSuggestionId({ ...k, date: '2026-07-26' }),
+    );
+    expect(memoryRuleSuggestionId(k)).not.toBe(memoryRuleSuggestionId({ ...k, pattern: 'кофе' }));
+    // пара категорий направленная: обратное исправление — другое предложение
+    expect(memoryRuleSuggestionId(k)).not.toBe(
+      memoryRuleSuggestionId({
+        ...k,
+        fromCategoryId: k.toCategoryId,
+        toCategoryId: k.fromCategoryId,
+      }),
     );
   });
   test('newId — валидный UUIDv7, монотонный по времени в префиксе', () => {
