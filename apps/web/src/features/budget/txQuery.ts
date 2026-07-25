@@ -5,9 +5,20 @@
 // строка собирается здесь и покрыта юнит-тестами на кавычки/экранирование
 // (урок бэклога об экранировании тегов).
 
+/**
+ * Размер страницы списков транзакций (Task C6, бэклог B). Пагинация — РАСТУЩЕЕ ОКНО:
+ * экран держит номер страницы и шлёт `limit = TX_PAGE_SIZE * page`, догрузка
+ * перезапрашивает уже показанные записи. Цена принята осознанно: курсорной пагинации
+ * в движке нет, а `offset` был бы расширением грамматики §6.1 (глобальное ограничение
+ * плана — грамматика не расширяется без нужды).
+ */
+export const TX_PAGE_SIZE = 200;
+
 export type TxFilters = {
   /** Месяц периода 'YYYY-MM' — единственный обязательный фильтр (◀▶ как Overview). */
   month: string;
+  /** Окно выдачи: TX_PAGE_SIZE * page (растущее окно C6); по умолчанию первая страница. */
+  limit?: number;
   /** id категории → category_ref=<uuid>; null/undefined — все категории. */
   categoryId?: string | null;
   direction?: 'expense' | 'income' | null;
@@ -53,6 +64,6 @@ export function buildTxQuery(f: TxFilters): string {
   else if (f.amountFrom) clauses.push(`amount>${f.amountFrom}`);
   else if (f.amountTo) clauses.push(`amount<${f.amountTo}`);
   if (f.search && f.search.trim() !== '') clauses.push(`search=${quoteValue(f.search)}`);
-  clauses.push('sortBy=occurred_on:desc', 'limit=200');
+  clauses.push('sortBy=occurred_on:desc', `limit=${f.limit ?? TX_PAGE_SIZE}`);
   return clauses.join(', ');
 }

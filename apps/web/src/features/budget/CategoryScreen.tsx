@@ -25,6 +25,7 @@ import {
   envelopeView,
 } from './EnvelopeCard';
 import { QuickAddBar } from './QuickAddBar';
+import { TX_PAGE_SIZE } from './txQuery';
 import { todayISO } from './useBudget';
 
 type QueryEntity = RouterOutputs['entity']['query'][number];
@@ -89,10 +90,23 @@ export function CategoryScreen({ categoryId }: { categoryId: string }) {
   const envQ = trpc.budget.envelopeForCategory.useQuery({ categoryId, date });
   const trendQ = trpc.budget.categoryTrend.useQuery({ categoryId, months: TREND_MONTHS });
 
-  // Транзакции — дети ТЕКУЩЕГО конверта (§3.2); без конверта запрос не имеет смысла
+  // Транзакции — дети ТЕКУЩЕГО конверта (§3.2); без конверта запрос не имеет смысла.
+  // limit — явной клаузой растущего окна (Task C6, см. TX_PAGE_SIZE в txQuery.ts),
+  // а не молчаливый серверный дефолт 500.
   const envelopeId = envQ.data?.envelope.id;
+  const [page, setPage] = useState(1);
+  // Роутер не ремоунтит экран при смене категории/конверта — сбрасываем окно сами
+  // (тот же принцип C6 «смена источника → первая страница», сброс во время рендера).
+  const [pagedEnvelope, setPagedEnvelope] = useState(envelopeId);
+  if (pagedEnvelope !== envelopeId) {
+    setPagedEnvelope(envelopeId);
+    setPage(1);
+  }
+  const limit = TX_PAGE_SIZE * page;
   const txQ = trpc.entity.query.useQuery(
-    { query: `children_of=${envelopeId ?? ''}, aspect=orbis/financial, sortBy=occurred_on:desc` },
+    {
+      query: `children_of=${envelopeId ?? ''}, aspect=orbis/financial, sortBy=occurred_on:desc, limit=${limit}`,
+    },
     { enabled: envelopeId !== undefined },
   );
 
@@ -166,7 +180,22 @@ export function CategoryScreen({ categoryId }: { categoryId: string }) {
                 {txQ.isLoading ? (
                   <Skeleton className="h-16" />
                 ) : txQ.data && txQ.data.length > 0 ? (
-                  txQ.data.map((e) => <TransactionRow key={e.id} entity={e} />)
+                  <>
+                    {txQ.data.map((e) => (
+                      <TransactionRow key={e.id} entity={e} />
+                    ))}
+                    {/* Счётчик + «Показать ещё» — тот же механизм C6, что на экране
+                        «Транзакции»: «пришло РОВНО limit» — единственный признак
+                        «возможно, есть ещё» (движок не отдаёт общее число). */}
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-text-muted">Показано {txQ.data.length}</span>
+                      {txQ.data.length === limit && (
+                        <Button variant="outline" size="sm" onClick={() => setPage((p) => p + 1)}>
+                          Показать ещё
+                        </Button>
+                      )}
+                    </div>
+                  </>
                 ) : (
                   <p className="text-sm text-text-muted">Нет транзакций</p>
                 )}

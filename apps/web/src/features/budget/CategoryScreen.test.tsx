@@ -224,9 +224,10 @@ test('транзакции: entity.query по детям конверта, Nativ
   const { calls } = renderWithProviders(<CategoryScreen categoryId="cat-1" />, handler());
   await waitFor(() => expect(screen.getAllByTestId('tx-row')).toHaveLength(2));
 
+  // limit — явной клаузой первой страницы (C6), не серверный дефолт 500
   const q = calls.find((c) => c.path === 'entity.query');
   expect(q?.input).toEqual({
-    query: 'children_of=env-1, aspect=orbis/financial, sortBy=occurred_on:desc',
+    query: 'children_of=env-1, aspect=orbis/financial, sortBy=occurred_on:desc, limit=200',
   });
 
   // Заголовок секции — период текущего конверта (мокап §3.2: «Транзакции июня»)
@@ -241,6 +242,60 @@ test('транзакции: entity.query по детям конверта, Nativ
   // 🔁 — только у recurring-инстанса (aspects['orbis/financial'].recurring === true)
   expect(screen.getAllByLabelText('повторяется')).toHaveLength(1);
   expect(rows[1]?.contains(screen.getByLabelText('повторяется'))).toBe(true);
+
+  // Пагинация (C6): записей меньше limit → кнопки нет, счётчик показан
+  expect(screen.queryByRole('button', { name: 'Показать ещё' })).toBeNull();
+  expect(screen.getByText('Показано 2')).toBeInTheDocument();
+});
+
+// --- пагинация (Task C6): тот же механизм растущего окна, что на экране «Транзакции» ------
+// Таймауты щедрее дефолтов: рендер сотен NativeRow в jsdom под параллельными воркерами
+// полного прогона не укладывается в 1с (waitFor) / 5с (тест).
+
+test('пагинация (C6): ровно limit детей конверта → «Показать ещё»; клик расширяет окно', {
+  timeout: 30_000,
+}, async () => {
+  const all = Array.from({ length: 250 }, (_, i) =>
+    ent(`m${i}`, `Операция ${i}`, {
+      'orbis/financial': {
+        amount: '10.00',
+        direction: 'expense',
+        occurred_on: '2026-07-10',
+        category_ref: 'cat-1',
+      },
+    }),
+  );
+  const base = handler();
+  const paged: MockHandler = (path, input) => {
+    if (path === 'entity.query') {
+      const q = (input as { query: string }).query;
+      const limit = Number(/limit=(\d+)/.exec(q)?.[1] ?? all.length);
+      return all.slice(0, limit);
+    }
+    return base(path, input);
+  };
+
+  const { calls } = renderWithProviders(<CategoryScreen categoryId="cat-1" />, paged);
+  await waitFor(() => expect(screen.getAllByTestId('tx-row')).toHaveLength(200), {
+    timeout: 10_000,
+  });
+  expect(screen.getByText('Показано 200')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Показать ещё' }));
+  await waitFor(() => expect(screen.getAllByTestId('tx-row')).toHaveLength(250), {
+    timeout: 10_000,
+  });
+
+  // Второе окно — та же строка children_of, только limit вырос (400)
+  const queries = calls
+    .filter((c) => c.path === 'entity.query')
+    .map((c) => (c.input as { query: string }).query);
+  expect(queries).toContain(
+    'children_of=env-1, aspect=orbis/financial, sortBy=occurred_on:desc, limit=400',
+  );
+  // 250 < 400 → кнопка исчезла, счётчик честный
+  expect(screen.queryByRole('button', { name: 'Показать ещё' })).toBeNull();
+  expect(screen.getByText('Показано 250')).toBeInTheDocument();
 });
 
 test('произвольный период конверта (§2.9): подзаголовок и заголовок транзакций — диапазон дат', async () => {

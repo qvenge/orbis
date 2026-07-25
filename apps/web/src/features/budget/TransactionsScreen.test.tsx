@@ -108,6 +108,30 @@ const handler =
     return {};
   };
 
+/** Много транзакций для пагинации (C6): сервер отдаёт первые `limit=` записей из total. */
+const pagedHandler = (total: number): MockHandler => {
+  const all = Array.from({ length: total }, (_, i) =>
+    ent(`m${i}`, `Операция ${i}`, {
+      'orbis/financial': {
+        amount: '10.00',
+        direction: 'expense',
+        occurred_on: '2026-07-10',
+        category_ref: 'cat-1',
+      },
+    }),
+  );
+  return (path, input) => {
+    if (path === 'user.getSettings') return settings;
+    if (path === 'entity.query') {
+      const q = (input as { query: string }).query;
+      if (q.includes('orbis/category')) return categories;
+      const limit = Number(/limit=(\d+)/.exec(q)?.[1] ?? total);
+      return all.slice(0, limit);
+    }
+    return {};
+  };
+};
+
 beforeEach(() => {
   localStorage.clear();
   useToastStore.setState({ toasts: [] });
@@ -231,6 +255,109 @@ test('◀▶ переключают месяц — occurred_on-диапазон 
   const prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
   await waitFor(() => expect(txQueryCalls(calls)).toContain(buildTxQuery({ month: prev })));
 });
+
+// --- пагинация (Task C6, бэклог B): растущее окно limit = TX_PAGE_SIZE * page ------------
+// Движок не возвращает общее число записей: «пришло РОВНО limit» — единственный признак
+// «возможно, есть ещё». Счётчик «Показано N» — конец молчаливого обрезания.
+// Таймауты щедрее дефолтов: тесты рендерят сотни строк в jsdom, и под параллельными
+// воркерами полного прогона дефолтные 1с (waitFor) / 5с (тест) не выдерживаются.
+
+const PAGED_TIMEOUT = { timeout: 30_000 };
+const waitRows = (n: number) =>
+  waitFor(() => expect(screen.getAllByTestId('tx-row')).toHaveLength(n), { timeout: 10_000 });
+/** Кнопка догрузки с ожиданием: после смены окна/фильтра список перезагружается (скелетон). */
+const findShowMore = () =>
+  screen.findByRole('button', { name: 'Показать ещё' }, { timeout: 10_000 });
+
+test(
+  'ровно limit записей → «Показать ещё» видна, счётчик «Показано 200»',
+  PAGED_TIMEOUT,
+  async () => {
+    renderWithProviders(<TransactionsScreen />, pagedHandler(250));
+    await waitRows(200);
+    expect(screen.getByText('Показано 200')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Показать ещё' })).toBeInTheDocument();
+  },
+);
+
+test('меньше limit записей → кнопки нет, счётчик показан', async () => {
+  renderWithProviders(<TransactionsScreen />, handler());
+  await waitFor(() => expect(screen.getAllByTestId('tx-row')).toHaveLength(3));
+  expect(screen.queryByRole('button', { name: 'Показать ещё' })).toBeNull();
+  expect(screen.getByText('Показано 3')).toBeInTheDocument();
+});
+
+test(
+  '«Показать ещё» догружает следующее окно (limit=400) и не теряет фильтры',
+  PAGED_TIMEOUT,
+  async () => {
+    const { calls } = renderWithProviders(<TransactionsScreen />, pagedHandler(250));
+    await waitRows(200);
+
+    fireEvent.change(screen.getByLabelText('Направление'), { target: { value: 'expense' } });
+    await waitFor(
+      () =>
+        expect(txQueryCalls(calls)).toContain(buildTxQuery({ month: MONTH, direction: 'expense' })),
+      { timeout: 10_000 },
+    );
+
+    fireEvent.click(await findShowMore());
+    await waitRows(250);
+    // Окно выросло, фильтр направления сохранился в той же строке запроса
+    expect(txQueryCalls(calls)).toContain(
+      buildTxQuery({ month: MONTH, direction: 'expense', limit: 400 }),
+    );
+    // 250 < 400 → признака «возможно, есть ещё» нет: кнопка исчезла, счётчик честный
+    expect(screen.queryByRole('button', { name: 'Показать ещё' })).toBeNull();
+    expect(screen.getByText('Показано 250')).toBeInTheDocument();
+  },
+);
+
+test(
+  'смена фильтра сбрасывает окно на первую страницу (главная ловушка C6)',
+  PAGED_TIMEOUT,
+  async () => {
+    const { calls } = renderWithProviders(<TransactionsScreen />, pagedHandler(450));
+    await waitRows(200);
+
+    // Догружаем два окна: 400 (ровно limit — кнопка ещё видна) → 450
+    fireEvent.click(await findShowMore());
+    await waitRows(400);
+    fireEvent.click(await findShowMore());
+    await waitRows(450);
+
+    // Смена фильтра: запрос с новым фильтром уходит ТОЛЬКО с limit первой страницы —
+    // накопленное окно 600 не «прилипает» к новому фильтру
+    fireEvent.change(screen.getByLabelText('Категория'), { target: { value: 'cat-1' } });
+    await waitFor(
+      () =>
+        expect(txQueryCalls(calls)).toContain(buildTxQuery({ month: MONTH, categoryId: 'cat-1' })),
+      { timeout: 10_000 },
+    );
+    const withNewFilter = txQueryCalls(calls).filter((q) => q.includes('category_ref=cat-1'));
+    expect(withNewFilter).toEqual([buildTxQuery({ month: MONTH, categoryId: 'cat-1' })]);
+    await waitRows(200);
+  },
+);
+
+test(
+  '◀ месяц тоже фильтр: после догрузки окно сбрасывается на первую страницу',
+  PAGED_TIMEOUT,
+  async () => {
+    const { calls } = renderWithProviders(<TransactionsScreen />, pagedHandler(250));
+    await waitRows(200);
+    fireEvent.click(await findShowMore());
+    await waitRows(250);
+
+    fireEvent.click(screen.getByTestId('month-prev'));
+    const [y = 0, m = 1] = MONTH.split('-').map(Number);
+    const prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+    await waitFor(() => expect(txQueryCalls(calls)).toContain(buildTxQuery({ month: prev })), {
+      timeout: 10_000,
+    });
+    expect(txQueryCalls(calls)).not.toContain(buildTxQuery({ month: prev, limit: 400 }));
+  },
+);
 
 // --- рекатегоризация (§3.3, §5) ---------------------------------------------------------
 
