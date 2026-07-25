@@ -253,7 +253,9 @@ async function considerOne(
     }),
     threadId,
     role: 'system',
-    content: `Вы уже второй раз переносите это в «${categoryTitle}». Запомнить правило «${ruleText}»?`,
+    // «не первый раз», а не «второй»: после истечения 30-дневного окна подавления
+    // предложение может прийти и на третье исправление — врать в тексте не будем
+    content: `Вы уже не первый раз переносите это в «${categoryTitle}». Запомнить правило «${ruleText}»?`,
     metadata: { cards: [card] },
   });
   return { suggested: true };
