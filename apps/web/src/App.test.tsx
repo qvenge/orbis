@@ -18,7 +18,7 @@ afterEach(() => {
 // Agenda — вкладка ЯДРА (02-core-os §1.1): в отличие от Budget («первый устанавливаемый
 // view», 03-budget §1.2) гейта installedViews у неё нет. Порядок вкладок — Chat, Browser,
 // Agenda, (Budget). Handler отдаёт {} на user.getSettings → installedViews пуст → Budget скрыт.
-test('навигация: Чат, Обзор, Agenda в обеих поверхностях; Budget под гейтом installedViews', () => {
+test('навигация: Чат, Обзор, Повестка в обеих поверхностях; Budget под гейтом installedViews', () => {
   // App живёт под trpc.Provider (main.tsx); дефолтный таб chat рендерит ChatScreen → нужен контекст.
   // entity.query отдаём массивом: бейдж Agenda (§1.5) шлёт его с любого экрана.
   renderWithProviders(<App />, (path) => (path === 'entity.query' ? [] : {}));
@@ -38,6 +38,10 @@ test('навигация: Чат, Обзор, Agenda в обеих поверх�
   expect(screen.getByTestId('sidebar-agenda')).toBeInTheDocument();
   expect(screen.queryByTestId('sidebar-budget')).toBeNull();
   expect(screen.getByTestId('open-settings')).toBeInTheDocument();
+  // Подпись вкладки — «Повестка» (решение владельца 2026-07-25); testid и id таба прежние
+  expect(screen.getByTestId('tab-agenda')).toHaveTextContent('Повестка');
+  expect(screen.getByTestId('tab-agenda')).toHaveAttribute('aria-label', 'Повестка');
+  expect(screen.getByTestId('sidebar-agenda')).toHaveTextContent('Повестка');
 });
 
 // §1.5: бейдж Chat реактивно отражает размер retry-буфера (пусто → нет бейджа) —

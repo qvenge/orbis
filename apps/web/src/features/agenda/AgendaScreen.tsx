@@ -52,8 +52,10 @@ function timeLabel(e: AgendaEntity, tz: string | undefined): string {
 /**
  * Подпись строки «Просроченного» (мокап §4: «срок был 11.06») — РЕЛЕВАНТНАЯ дата
  * элемента (более ранняя из due_date и локального дня start_at, §4.2). Своя подпись
- * здесь обязательна: EntityRow справа печатает due_date, и у задачи с прошедшим
- * start_at и будущим сроком в красной секции стояла бы дата из будущего.
+ * здесь обязательна: у задачи с прошедшим start_at и будущим сроком собственная мета
+ * EntityRow показала бы в красной секции дату из будущего. Поэтому в этих строках она
+ * подавлена (`showMeta={false}`) — иначе у самой частой строки (срок вчера) одна и та
+ * же дата печаталась бы дважды.
  */
 function overdueLabel(date: string): string {
   return `был ${formatDay(date)}`;
@@ -64,7 +66,15 @@ function openEntity(id: string) {
   push(activeTab, { kind: 'entity', id });
 }
 
-function AgendaRow({ entity, time }: { entity: AgendaEntity; time?: string }) {
+function AgendaRow({
+  entity,
+  time,
+  showMeta,
+}: {
+  entity: AgendaEntity;
+  time?: string;
+  showMeta?: boolean;
+}) {
   return (
     <li>
       <button
@@ -77,7 +87,7 @@ function AgendaRow({ entity, time }: { entity: AgendaEntity; time?: string }) {
         {time !== undefined && (
           <span className="w-24 shrink-0 text-xs tabular-nums text-text-muted">{time}</span>
         )}
-        <EntityRow entity={entity} />
+        <EntityRow entity={entity} showMeta={showMeta} />
       </button>
     </li>
   );
@@ -109,7 +119,12 @@ export function AgendaScreen() {
             <Card className="border-danger/40 p-1">
               <ul className="flex flex-col gap-px">
                 {overdue.items.map((it) => (
-                  <AgendaRow key={it.entity.id} entity={it.entity} time={overdueLabel(it.date)} />
+                  <AgendaRow
+                    key={it.entity.id}
+                    entity={it.entity}
+                    time={overdueLabel(it.date)}
+                    showMeta={false}
+                  />
                 ))}
               </ul>
             </Card>

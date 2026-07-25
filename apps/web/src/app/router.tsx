@@ -22,7 +22,7 @@ import { ScreenHeader } from './ScreenHeader';
 const BASE_TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'chat', label: 'Чат', icon: MessageSquare },
   { id: 'browser', label: 'Обзор', icon: FolderOpen },
-  { id: 'agenda', label: 'Agenda', icon: CalendarDays },
+  { id: 'agenda', label: 'Повестка', icon: CalendarDays },
 ];
 export const BUDGET_TAB = { id: 'budget', label: 'Бюджет', icon: Wallet } as const;
 
@@ -71,13 +71,14 @@ export function TabBar() {
                 {chatBadge}
               </span>
             )}
-            {/* countLabel, а не count: при упоре в потолок выборки — «200+» (K18) */}
-            {t.id === 'agenda' && agendaOverdue.count > 0 && (
+            {/* badgeLabel: «200+» при упоре в потолок (K18) и null при отказе выборки —
+                заниженного числа на бейдже не бывает (решение D2b, прецедент Budget) */}
+            {t.id === 'agenda' && agendaOverdue.badgeLabel !== null && (
               <span
                 data-testid="agenda-badge"
                 className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
               >
-                {agendaOverdue.countLabel}
+                {agendaOverdue.badgeLabel}
               </span>
             )}
             {t.id === 'budget' && budgetBadge > 0 && (

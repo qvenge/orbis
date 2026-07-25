@@ -164,6 +164,14 @@ export function useAgendaOverdue(): {
   items: OverdueItem[];
   count: number;
   countLabel: string;
+  /**
+   * Подпись бейджа вкладки (§1.5) или `null`, если бейджа быть не должно. Отдельное
+   * поле, а не `count > 0` у потребителей: при отказе ЛЮБОЙ из двух выборок бейдж
+   * скрывается целиком — «3» вместо семи читается как «всё под контролем», а сигнала
+   * неполноты в бейдже нет (прецедент Budget: ошибка alertCount → бейджа нет,
+   * useBudget.ts). Плашка неполноты остаётся на самой вкладке, где она видна явно.
+   */
+  badgeLabel: string | null;
   truncated: boolean;
   isLoading: boolean;
   isError: boolean;
@@ -201,15 +209,18 @@ export function useAgendaOverdue(): {
   );
   const truncated =
     (byDue.data?.length ?? 0) >= OVERDUE_LIMIT || (byStart.data?.length ?? 0) >= OVERDUE_LIMIT;
+  const isError = byDue.isError || byStart.isError;
+  const countLabel = truncated ? `${items.length}+` : String(items.length);
 
   return {
     items,
     count: items.length,
-    countLabel: truncated ? `${items.length}+` : String(items.length),
+    countLabel,
+    badgeLabel: isError || items.length === 0 ? null : countLabel,
     truncated,
     // Настройки входят в загрузку по той же причине, что в useAgendaDays: релевантная
     // дата scheduled-строки — локальный день start_at, до timezone он неверен.
     isLoading: byDue.isLoading || byStart.isLoading || settings.isLoading,
-    isError: byDue.isError || byStart.isError,
+    isError,
   };
 }

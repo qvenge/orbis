@@ -274,6 +274,35 @@ test('§4.2: строка «Просроченного» подписана ре
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
   expect(within(overdueSection()).getByText(`был ${dayLabel(yesterday)}`)).toBeInTheDocument();
+  // Task D2b: мета EntityRow подавлена — БУДУЩЕГО срока в красной секции быть не может
+  expect(within(overdueSection()).queryByText(dayLabel(addDays(today, 2)))).toBeNull();
+});
+
+test('§4.2 (D2b): в строке «Просроченного» дата печатается ровно один раз', async () => {
+  // Самая частая строка секции — задача со сроком вчера. Своя подпись слева и мета
+  // EntityRow справа печатали ОДНУ И ТУ ЖЕ дату: «был 24 июл. … 24 июл.».
+  const task = ent('t1', 'Закончить API', {
+    'orbis/task': { status: 'in_progress', due_date: yesterday },
+  });
+  renderWithProviders(<AgendaScreen />, agendaHandler({ overdueDue: [task] }));
+
+  await waitFor(() => expect(overdueSection()).toBeInTheDocument());
+  expect(within(overdueSection()).getAllByText(`был ${dayLabel(yesterday)}`)).toHaveLength(1);
+  // Голая дата отдельным узлом — ровно та вторая печать, которой быть не должно
+  expect(within(overdueSection()).queryByText(dayLabel(yesterday))).toBeNull();
+});
+
+test('§4.2 (D2b): мета EntityRow подавлена ТОЛЬКО в «Просроченном» — в дневных секциях она есть', async () => {
+  // Дефолт пропа EntityRow общий с Browser: сменить его молча = сломать вторую поверхность.
+  // due_date (date-only) форматируется в UTC — узел детерминирован, в отличие от start_at.
+  const scheduled = ent('t3', 'Врач', {
+    'orbis/task': { status: 'planned', due_date: tomorrow },
+    'orbis/schedule': { start_at: at(tomorrow, '14:00') },
+  });
+  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [scheduled] }));
+
+  await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Врач']));
+  expect(within(daySection(tomorrow)).getByText(dayLabel(tomorrow))).toBeInTheDocument();
 });
 
 // --- таймзона: раскладка ждёт настроек ------------------------------------------------
@@ -450,6 +479,33 @@ test('ошибка запроса «Просроченного» → бейдж�
   expect(screen.getByTestId('sidebar-agenda')).toBeInTheDocument();
   expect(screen.queryByTestId('agenda-badge')).toBeNull();
   expect(screen.queryByTestId('sidebar-agenda-badge')).toBeNull();
+});
+
+test('D2b: отказ ОДНОЙ из двух выборок → бейджа нет ни в одной поверхности, вкладка жива', async () => {
+  // start_at упал, due_date вернул строку: «1» на бейдже читалось бы как полная картина,
+  // хотя часть просроченного не пришла. Заниженный счётчик хуже отсутствующего
+  // (прецедент Budget: ошибка alertCount → бейджа нет).
+  const task = ent('t1', 'Закончить API', {
+    'orbis/task': { status: 'in_progress', due_date: yesterday },
+  });
+  renderWithProviders(<App />, (path, input) => {
+    if (path === 'user.getSettings') return settings;
+    if (path === 'entity.query') {
+      const q = (input as { query: string }).query;
+      if (q === AGENDA_OVERDUE_START_QUERY) throw trpcError('INTERNAL_SERVER_ERROR');
+      if (q === AGENDA_OVERDUE_DUE_QUERY) return [task];
+      return [];
+    }
+    return {};
+  });
+
+  // Успешная выборка дошла до экрана — значит бейджу было чем занизиться (не тавтология)
+  await waitFor(() => expect(rowTitles(overdueSection())).toEqual(['Закончить API']));
+  expect(screen.queryByTestId('agenda-badge')).toBeNull();
+  expect(screen.queryByTestId('sidebar-agenda-badge')).toBeNull();
+  // Плашка неполноты на самой вкладке остаётся: сигнал не теряется, он переезжает
+  expect(screen.getByText('Не удалось загрузить «Просроченное»')).toBeInTheDocument();
+  expect(screen.getByTestId('tab-agenda')).toBeInTheDocument();
 });
 
 test('бейдж при упоре в потолок показывает «200+», а не усечённое число', async () => {
