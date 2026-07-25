@@ -56,7 +56,8 @@ JSON Schema, лежащей в таблице `aspect_definitions` в БД. Эт
 
 ```bash
 # один раз после деплоя релиза, изменившего схему аспекта
-DATABASE_URL="$DATABASE_URL_ADMIN_PROD" bun scripts/seed-aspects.ts
+# (скрипт читает ИМЕННО DATABASE_URL_ADMIN — без неё падает «DATABASE_URL_ADMIN не задан»)
+DATABASE_URL_ADMIN="$DATABASE_URL_ADMIN_PROD" bun scripts/seed-aspects.ts
 ```
 
 Скрипт идемпотентен — повторный запуск безопасен. Тот же реестр читает сборщик
