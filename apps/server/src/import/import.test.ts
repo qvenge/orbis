@@ -23,12 +23,14 @@ import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test
 import { aiUsage, entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { type EntitlementResolver, IMPORT_CSV_KEY } from '../entitlements';
+import { ExecError } from '../errors';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMResponse } from '../llm/types';
 import { appRouter } from '../router';
 import { seedCategoryId, seedOnboarding } from '../seed/onboarding';
 import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
+import { reviewImport } from './review';
 
 requireEnv();
 
@@ -96,6 +98,17 @@ function makeRow(o: {
     rowIndex: o.rowIndex ?? 0,
     ...(o.bankTxnId !== undefined && { bankTxnId: o.bankTxnId }),
   };
+}
+
+/** Отказ ДОМЕННОЙ функции (мимо роутера): ExecError с кодом и details. */
+async function execError(p: Promise<unknown>): Promise<ExecError> {
+  try {
+    await p;
+  } catch (e) {
+    if (e instanceof ExecError) return e;
+    throw e;
+  }
+  throw new Error('ожидался ExecError, вызов успешен');
 }
 
 async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
@@ -406,7 +419,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     expect(r.rows[0]?.status).toBe('new');
   });
 
-  test('потолок MAX_IMPORT_ROWS: превышение → VALIDATION (400) с details.limit', async () => {
+  test('потолок MAX_IMPORT_ROWS: схема режет массив на границе, домен несёт details.limit', async () => {
     const { user } = await freshOwner();
     const caller = ownerCaller(user);
     const rows = Array.from({ length: MAX_IMPORT_ROWS + 1 }, (_, i) =>
@@ -418,10 +431,17 @@ describe('import.review: статусы строк (§3.4.1)', () => {
       }),
     );
 
+    // (1) Граница СХЕМЫ: массив сверх потолка отклонён zod'ом целиком (400)
     const err = await trpcError(caller.import.review({ rows, fileHash: FILE_A, namespace: NS }));
     expect(err.code).toBe('BAD_REQUEST');
-    expect(causeOf(err).code).toBe('VALIDATION');
-    expect(causeOf(err).details?.limit).toBe(MAX_IMPORT_ROWS);
+    expect((err.cause as { issues?: Array<{ code?: string }> }).issues?.[0]?.code).toBe('too_big');
+
+    // (2) Доменная проверка НЕ убрана — у неё внятный details.limit (§3 брифа)
+    const domainErr = await execError(
+      reviewImport(db, user, { rows, fileHash: FILE_A, namespace: NS }),
+    );
+    expect(domainErr.code).toBe('VALIDATION');
+    expect(domainErr.details).toMatchObject({ limit: MAX_IMPORT_ROWS, rows: rows.length });
   });
 
   test('несуществующая календарная дата отклоняется схемой, а не падает в дедупе', async () => {
@@ -485,6 +505,57 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     const created = await financialEntities(user);
     expect(created).toHaveLength(1);
     expect(created[0]?.title).toBe('Обед');
+  });
+
+  test('bankTxnId: пробельный не доезжает до аспекта, длинный отклонён схемой (B2)', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+
+    // (1) '   ' прошёл бы guard записи и min(1) аспекта — сервер тримит перед записью
+    const blank = makeRow({
+      occurredOn: '2026-05-03',
+      amount: '340.00',
+      counterparty: 'Обед',
+      bankTxnId: '   ',
+    });
+    const r = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row: blank, action: 'create', categoryRef: foodId }],
+    });
+    const aspects = await withIdentity(db, user, (tx) =>
+      tx
+        .select({ aspects: entities.aspects })
+        .from(entities)
+        .where(eq(entities.id, r.entityIds[0] as string)),
+    );
+    const financial = (aspects[0]?.aspects as Record<string, Record<string, unknown>>)[
+      'orbis/financial'
+    ];
+    expect(financial).not.toHaveProperty('bank_txn_id'); // ключа нет вовсе, не пустая строка
+
+    // (2) ID длиннее аспектных 128 символов отклоняется НА ГРАНИЦЕ (review), а не
+    // неспецифичной ошибкой схемы аспекта посреди confirm
+    const long = makeRow({
+      occurredOn: '2026-05-04',
+      amount: '10.00',
+      counterparty: 'X',
+      bankTxnId: 'x'.repeat(129),
+    });
+    const err = await trpcError(
+      caller.import.review({ rows: [long], fileHash: FILE_A, namespace: NS }),
+    );
+    expect(err.code).toBe('BAD_REQUEST');
+    const confirmErr = await trpcError(
+      caller.import.confirm({
+        batchId: newId(),
+        namespace: NS,
+        fileHash: FILE_A,
+        items: [{ row: long, action: 'create', categoryRef: foodId }],
+      }),
+    );
+    expect(confirmErr.code).toBe('BAD_REQUEST');
   });
 
   test('adopt → только строка origins на существующую сущность, новой сущности нет', async () => {
@@ -979,6 +1050,22 @@ describe('import.analyze: маппинг колонок через tool-call', (
     expect(causeOf(err).code).toBe('LLM_UNAVAILABLE');
   });
 
+  test('лишние ключи в ответе модели ОТБРАСЫВАЮТСЯ, а не роняют импорт в 503 (B1)', async () => {
+    // Единственный LLM-вызов фичи: строгая схема на границе ответа модели превращала бы
+    // один лишний ключ в 503 и молча деградировала бы КАЖДЫЙ импорт в ручной маппинг.
+    const { user } = await freshOwner();
+    const provider = new ScriptedProvider([
+      toolUse({
+        mapping: { ...MAPPING_SIGN.mapping, reasoning: 'колонки видны по заголовку' },
+        confidence: 0.9,
+        note: 'лишнее поле верхнего уровня',
+      }),
+    ]);
+    const r = await ownerCaller(user, provider).import.analyze({ sampleRows: ['03.05.2026,-1,X'] });
+    expect(r.mapping).toEqual(MAPPING_SIGN.mapping);
+    expect(r).not.toHaveProperty('note'); // отброшено, а не проброшено на клиент
+  });
+
   test('ответ прозой без tool-call → структурная ошибка (маппинг руками на клиенте)', async () => {
     const { user } = await freshOwner();
     const provider = new ScriptedProvider([
@@ -1121,6 +1208,42 @@ describe('роутер import: гейт §8 import.csv (LIMIT → 429)', () => {
       tx.select().from(aiUsage).where(eq(aiUsage.ownerId, user)),
     );
     expect(usage).toHaveLength(0);
+  });
+
+  test('analyze: отказ по AI-ключу §8 → LIMIT (429): analyze не обходит бюджет ai.*', async () => {
+    // import.analyze зовёт провайдера и списывает в ТОТ ЖЕ дневной счётчик ai_usage,
+    // что ai.sendMessage, — значит гейт ai.requests_per_day/ai.tokens_per_day
+    // обязателен и здесь (иначе импорт был бы неограниченным LLM-путём).
+    const denyAiRequests: EntitlementResolver = (_user, key) =>
+      key === 'ai.requests_per_day' ? { allowed: false, limit: 0 } : { allowed: true, limit: null };
+    const { user } = await freshOwner();
+    const provider = new ScriptedProvider([toolUse(MAPPING_SIGN)]);
+    const err = await trpcError(
+      ownerCaller(user, provider, denyAiRequests).import.analyze({ sampleRows: ['a,b,c'] }),
+    );
+    expect(err.code).toBe('TOO_MANY_REQUESTS');
+    expect(causeOf(err).code).toBe('LIMIT');
+    expect(causeOf(err).details?.key).toBe('ai.requests_per_day');
+    expect(provider.requests).toHaveLength(0); // гейт ДО обращения к провайдеру
+    const usage = await withIdentity(db, user, (tx) =>
+      tx.select().from(aiUsage).where(eq(aiUsage.ownerId, user)),
+    );
+    expect(usage).toHaveLength(0);
+  });
+
+  test('analyze: дневной лимит ai.tokens_per_day исчерпан прошлыми вызовами → LIMIT (429)', async () => {
+    // Лимит-ветка (не отказ резолвера): счётчики ai_usage за день сравниваются с limit.
+    // Первый вызов проходит и метрится (160 токенов), второй упирается в лимит.
+    const capTokens: EntitlementResolver = (_user, key) =>
+      key === 'ai.tokens_per_day' ? { allowed: true, limit: 100 } : { allowed: true, limit: null };
+    const { user } = await freshOwner();
+    const provider = new ScriptedProvider([toolUse(MAPPING_SIGN), toolUse(MAPPING_SIGN)]);
+    const caller = ownerCaller(user, provider, capTokens);
+    await caller.import.analyze({ sampleRows: ['a,b,c'] }); // 120+40 токенов в ai_usage
+    const err = await trpcError(caller.import.analyze({ sampleRows: ['a,b,c'] }));
+    expect(err.code).toBe('TOO_MANY_REQUESTS');
+    expect(causeOf(err).details?.key).toBe('ai.tokens_per_day');
+    expect(provider.requests).toHaveLength(1); // второй раз провайдера не звали
   });
 
   test('review: отказ резолвера → LIMIT (429) до какой-либо работы', async () => {

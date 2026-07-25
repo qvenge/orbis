@@ -1540,12 +1540,16 @@ async function prepareOriginDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pre
   const input = parseEnvelope(entityOriginDeleteInput, rawInput, 'entity_origin_delete');
 
   // Стадия 3: строка под замком — inverse обязан нести entity_id удаляемой строки
-  // (её id пересоздание не сохраняет: строка новая). RLS скоупит владельцем.
+  // (её id пересоздание не сохраняет: строка новая). Владелец — ЯВНЫМ предикатом, а не
+  // только RLS: (namespace, external_id) уникален лишь ВНУТРИ владельца, и это
+  // единственное место исполнителя, которое удаляет строку ФИЗИЧЕСКИ по такому ключу.
+  // Поведение не меняется (оба пути под withIdentity) — это глубина защиты.
   const rows = await ctx.tx
     .select()
     .from(entityOrigins)
     .where(
       and(
+        eq(entityOrigins.ownerId, ctx.req.actorUserId),
         eq(entityOrigins.namespace, input.namespace),
         eq(entityOrigins.externalId, input.external_id),
       ),
@@ -1590,6 +1594,8 @@ async function prepareOriginDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pre
         .delete(entityOrigins)
         .where(
           and(
+            // owner_id — тем же явным предикатом, что и SELECT ... FOR UPDATE выше
+            eq(entityOrigins.ownerId, applyCtx.req.actorUserId),
             eq(entityOrigins.namespace, input.namespace),
             eq(entityOrigins.externalId, input.external_id),
           ),

@@ -64,7 +64,10 @@ export const canonicalRowSchema = z
     amount: positiveDecimal, // знак операции несёт direction (§3.3), не сумма
     direction: z.enum(['income', 'expense']),
     counterparty: z.string(), // может быть пустой — банк не всегда даёт описание
-    bankTxnId: z.string().optional(),
+    // .max(128) — та же граница, что у аспекта orbis/financial.bank_txn_id: без неё
+    // длинный ID проходил бы review и падал бы на confirm неспецифичной ошибкой схемы
+    // аспекта, без указания строки (Minor B2 финального ревью)
+    bankTxnId: z.string().max(128).optional(),
     raw: z.string(), // исходная строка файла — показывается в ревью
     rowIndex: z.number().int().nonnegative(), // zero-based, входит в external_id
   })
@@ -110,7 +113,11 @@ const csvMappingObject = z
   })
   .strict();
 
-export const csvMappingSchema = csvMappingObject.superRefine((mapping, ctx) => {
+/** Согласованность маппинга — общая проверка строгого (wire) и мягкого (LLM) вариантов. */
+function checkMappingConsistency(
+  mapping: z.infer<typeof csvMappingObject>,
+  ctx: z.RefinementCtx,
+): void {
   if (mapping.direction === 'sign' && mapping.amount === undefined) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -128,7 +135,9 @@ export const csvMappingSchema = csvMappingObject.superRefine((mapping, ctx) => {
       message: 'direction=separate_columns требует колонки debit и credit',
     });
   }
-});
+}
+
+export const csvMappingSchema = csvMappingObject.superRefine(checkMappingConsistency);
 
 export const importAnalyzeInput = z
   .object({
@@ -136,10 +145,25 @@ export const importAnalyzeInput = z
   })
   .strict();
 
-/** Ответ analyze; он же — форма tool-call'а модели (структурированный ответ §7.7). */
+/** Ответ analyze — wire-контракт процедуры: строгий, лишних ключей на проводе нет. */
 export const importAnalyzeResultSchema = z
   .object({ mapping: csvMappingSchema, confidence: z.number().min(0).max(1) })
   .strict();
+
+/**
+ * Тот же контракт на границе разбора ОТВЕТА МОДЕЛИ — с отбрасыванием лишних ключей
+ * (`.strip()`), а не отказом. Модель не обязана быть побайтно дисциплинированной:
+ * один лишний ключ (напр. «reasoning») при строгой схеме превращал бы КАЖДЫЙ импорт в
+ * 503 и молча деградировал бы флоу в ручной маппинг. Смысловые требования (индексы,
+ * формат даты, согласованность sign/separate_columns) остаются в силе — отбрасывается
+ * только неизвестное. Wire-контракт процедуры при этом остаётся строгим.
+ */
+export const llmMappingResponseSchema = z
+  .object({
+    mapping: csvMappingObject.strip().superRefine(checkMappingConsistency),
+    confidence: z.number().min(0).max(1),
+  })
+  .strip();
 
 /**
  * JSON Schema того же контракта — определение единственного тула LLM-вызова analyze.
@@ -157,8 +181,10 @@ export function csvMappingToolJsonSchema(): Record<string, unknown> {
 
 export const importReviewInput = z
   .object({
-    // Потолок MAX_IMPORT_ROWS проверяет домен — отказ несёт details.limit (§3 брифа)
-    rows: z.array(canonicalRowSchema).min(1),
+    // .max — граница СХЕМЫ: без неё zod валидировал бы каждый элемент (включая
+    // per-row refine с разбором даты) и лишь потом домен считал бы строки. Доменная
+    // проверка остаётся: её отказ несёт внятный details.limit (§3 брифа).
+    rows: z.array(canonicalRowSchema).min(1).max(MAX_IMPORT_ROWS),
     fileHash: fileHashSchema,
     namespace: importNamespaceSchema,
   })
@@ -218,7 +244,8 @@ export const importConfirmInput = z
     batchId: z.string().uuid(), // клиентский UUIDv7: идемпотентность и Undo группы (§7.8)
     namespace: importNamespaceSchema,
     fileHash: fileHashSchema,
-    items: z.array(importConfirmItemSchema).min(1),
+    // .max — та же граница схемы, что у importReviewInput.rows (см. комментарий там)
+    items: z.array(importConfirmItemSchema).min(1).max(MAX_IMPORT_ROWS),
   })
   .strict();
 

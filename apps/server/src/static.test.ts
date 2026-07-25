@@ -13,7 +13,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AiDeps } from './ai/send-message';
-import { createApp } from './app';
+import { createApp, TRPC_MAX_BODY_BYTES } from './app';
 import type { Db } from './db/client';
 
 const INDEX_MARKER = '<!--orbis-spa-root-->';
@@ -118,5 +118,29 @@ describe('static serving + SPA-fallback (Task 7)', () => {
     const res = await app.request('/trpc/bad', { method: 'POST' });
     expect(res.headers.get('content-type') ?? '').not.toContain('text/html');
     expect(await res.text()).not.toContain(INDEX_MARKER);
+  });
+
+  // Бэкстоп тела /trpc/* (фикс-раунд C, находка A4): у tRPC лимита тела не было вовсе —
+  // сверхбольшое тело доезжало до JSON.parse и zod. Гейт стоит ДО хендлера.
+  test('POST /trpc/* сверх TRPC_MAX_BODY_BYTES → 413 PAYLOAD_TOO_LARGE, до хендлера', async () => {
+    const oversized = 'x'.repeat(TRPC_MAX_BODY_BYTES + 1);
+    const res = await app.request('/trpc/import.confirm', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: oversized,
+    });
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+
+  test('тело ПОД лимитом проходит гейт: ответ — tRPC-формы, а не 413', async () => {
+    const res = await app.request('/trpc/bad', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ padding: 'y'.repeat(1024) }),
+    });
+    expect(res.status).not.toBe(413);
+    expect(res.headers.get('content-type')).toContain('json');
   });
 });

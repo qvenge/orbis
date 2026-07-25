@@ -8,6 +8,7 @@
 // того же окна идемпотентен и по SELECT-предпроверке, и по audit-PK batch (§7.8),
 // а конфликт PK сущности у конкурентов резолвится перечитыванием (retry ниже).
 import {
+  addDays,
   expandRecurrence,
   materializeBatchId,
   type QueryAst,
@@ -35,6 +36,7 @@ const HORIZON_DAYS = 14;
  */
 const RETRO_DAYS = 92;
 
+/** Формат даты окна/фильтра — только структура; арифметика живёт в @orbis/shared addDays. */
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Поля-триггеры хука: date/timestamp-поля аспектов orbis/schedule и orbis/financial. */
@@ -49,15 +51,6 @@ const sink = makeChatJournalSink();
 
 type AspectsMap = Record<string, Record<string, unknown>>;
 type TemplateRow = typeof entities.$inferSelect;
-
-/** Сдвиг ISO-даты на days дней — чистая календарная арифметика через Date.UTC. */
-export function addDays(dateISO: string, days: number): string {
-  if (!DATE_RE.test(dateISO)) {
-    throw new RangeError(`Некорректная дата (ожидается YYYY-MM-DD): "${dateISO}"`);
-  }
-  const [y, m, d] = dateISO.split('-').map(Number) as [number, number, number];
-  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
-}
 
 interface WallClock {
   date: string; // 'YYYY-MM-DD' — локальная дата instant'а в таймзоне

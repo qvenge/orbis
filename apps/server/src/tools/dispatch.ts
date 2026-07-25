@@ -31,7 +31,7 @@ import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
-import { IMPORT_CSV_KEY, resolveEntitlement } from '../entitlements';
+import { type EntitlementResolver, IMPORT_CSV_KEY, resolveEntitlement } from '../entitlements';
 import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
@@ -76,6 +76,12 @@ export interface ToolCallCtx {
   threadId?: string; // тред диалога — туда лягут audit-сообщения
   explicitCommand: boolean; // вход политики §7.10; в 1b всегда false
   clock?: () => Date;
+  /**
+   * Резолвер §8 — инжектируемый шов (как ImportDeps.entitlements у роутера импорта и
+   * McpDeps.entitlements у MCP-сервера): по умолчанию боевой resolveEntitlement.
+   * Без него денайл-путь гейтов внутри диспатча был бы непокрываем тестом.
+   */
+  entitlements?: EntitlementResolver;
 }
 
 export type ToolDispatchResult =
@@ -299,8 +305,9 @@ async function runRead(
  */
 function importCsvStart(ctx: ToolCallCtx): ToolDispatchResult {
   // Гейт §8 — тот же ключ 'import.csv', что у процедур роутера импорта
-  // (по образцу gateImportCsv из import/review.ts): отказ резолвера → LIMIT, не карточка
-  const decision = resolveEntitlement(ctx.actorUserId, IMPORT_CSV_KEY);
+  // (по образцу gateImportCsv из import/review.ts): отказ резолвера → LIMIT, не карточка.
+  // Резолвер — из инъецируемого шва ctx (как у роутера), иначе денайл непокрываем.
+  const decision = (ctx.entitlements ?? resolveEntitlement)(ctx.actorUserId, IMPORT_CSV_KEY);
   if (!decision.allowed) {
     throw new ExecError('LIMIT', `лимит «${IMPORT_CSV_KEY}» исчерпан`, {
       key: IMPORT_CSV_KEY,

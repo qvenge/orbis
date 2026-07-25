@@ -486,6 +486,22 @@ describe('dispatchTool: import_csv_start — вход в импорт из ча�
     expect(r.card).toEqual({ kind: 'import_review' });
   });
 
+  test('гейт §8: отказ резолвера import.csv → LIMIT, карточки нет', async () => {
+    // Денайл-путь через инъецируемый шов ctx.entitlements (тот же приём, что у роутера
+    // импорта после ac44b05): боевой резолвер плана dev всё разрешает, и без шва эта
+    // ветка была бы непокрываемой.
+    const r = await dispatchTool(
+      ctxFor({
+        entitlements: (_user, key) =>
+          key === 'import.csv' ? { allowed: false, limit: 0 } : { allowed: true, limit: null },
+      }),
+      'import_csv_start',
+      {},
+    );
+    expectError(r, 'LIMIT');
+    expect('card' in r).toBe(false);
+  });
+
   test('internalOnly fail-closed: source=mcp → структурная ошибка, карточки нет', async () => {
     const r = await dispatchTool(
       ctxFor({ actorKind: 'agent', source: 'mcp' }),

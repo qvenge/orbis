@@ -1,6 +1,7 @@
 // Чистая календарная арифметика по строкам 'YYYY-MM-DD': никакого new Date(str)-парсинга
-// и таймзон (алгоритм days-from-civil Говарда Хиннанта, чистые целые). Внутренний модуль
-// пакета: используют recurrence.ts и import/normalize.ts; наружу не реэкспортируется.
+// и таймзон (алгоритм days-from-civil Говарда Хиннанта, чистые целые). Дом календарной
+// математики монорепо: внутри пакета им пользуются recurrence.ts и import/normalize.ts,
+// наружу (index.ts) реэкспортируется только addDays — общий сдвиг даты для сервера.
 
 export interface DateParts {
   y: number;
@@ -61,6 +62,22 @@ export function partsFromEpochDays(days: number): DateParts {
   const d = doy - Math.floor((153 * mp + 2) / 5) + 1;
   const m = mp + (mp < 10 ? 3 : -9);
   return { y: yoe + era * 400 + (m <= 2 ? 1 : 0), m, d };
+}
+
+/**
+ * Сдвиг ISO-даты на days дней. Единственная реализация в монорепо: сервер (материализация
+ * recurring, окно дедупа импорта, горизонты бюджета) зовёт ЭТУ, а не свою копию.
+ *
+ * Проверяется только ФОРМАТ, не календарная существуемость: вход приходит и из
+ * пользовательских фильтров грамматики §6.1, где «2026-02-31» исторически нормализуется
+ * (в 2026-03-03), а не роняет запрос. Арифметика — целочисленная (epochDays), поэтому
+ * нормализация совпадает с прежней реализацией на Date.UTC бит в бит.
+ */
+export function addDays(dateISO: string, days: number): string {
+  const match = DATE_RE.exec(dateISO);
+  if (!match) throw new RangeError(`Некорректная дата (ожидается YYYY-MM-DD): "${dateISO}"`);
+  const parts = { y: Number(match[1]), m: Number(match[2]), d: Number(match[3]) };
+  return fromParts(partsFromEpochDays(epochDays(parts) + days));
 }
 
 /** Индекс дня недели (0 = понедельник): 1970-01-01 — четверг (индекс 3). */

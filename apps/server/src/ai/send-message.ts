@@ -371,7 +371,7 @@ async function runAgentLoop(
       // тулов user-сообщениями КАНОНИЧЕСКИМ сериализатором toolResultMessage (Task 8)
       if (response.content) convo.push({ role: 'assistant', content: response.content });
       for (const call of response.toolCalls) {
-        const result = await runToolCall(db, input, clock, call.name, call.input, {
+        const result = await runToolCall(db, input, { clock, resolve }, call.name, call.input, {
           cards,
           actions,
           pending,
@@ -453,7 +453,7 @@ async function findAnswerByReplyTo(
 async function runToolCall(
   db: Db,
   input: SendMessageInput,
-  clock: () => Date,
+  run: { clock: () => Date; resolve: EntitlementResolver },
   name: string,
   callInput: Record<string, unknown>,
   collect: { cards: Card[]; actions: ActionSummary[]; pending: PendingSummary[] },
@@ -466,7 +466,10 @@ async function runToolCall(
       source: 'chat',
       threadId: input.threadId,
       explicitCommand: false, // §7.10: в 1b всегда false
-      clock,
+      clock: run.clock,
+      // тот же резолвер §8, что у гейта цикла: гейты внутри тулов (import_csv_start)
+      // обязаны видеть инжектированный резолвер, а не только боевой
+      entitlements: run.resolve,
     },
     name,
     callInput,
@@ -499,8 +502,13 @@ async function runToolCall(
  * Гейт §8: оба AI-ключа через резолвер (инжектируемый). Отказ резолвера или
  * исчерпанный дневной лимит (счётчики ai_usage за день UTC, суммарно по моделям) →
  * LIMIT (429 маппингом errors.ts). На плане dev лимиты null — счётчики не читаются.
+ *
+ * Экспортируется, потому что ai.sendMessage — не единственный путь к провайдеру:
+ * import.analyze (import/review.ts) тоже зовёт модель и пишет в ТОТ ЖЕ дневной счётчик
+ * ai_usage, значит обязан считаться с теми же лимитами (иначе он — неограниченный
+ * LLM-путь, списывающий чужой бюджет).
  */
-async function gateAiEntitlements(
+export async function gateAiEntitlements(
   db: Db,
   ownerId: string,
   resolve: EntitlementResolver,

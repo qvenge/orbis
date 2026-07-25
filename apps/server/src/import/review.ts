@@ -14,6 +14,7 @@
 //   3. Привязку к конвертам импорт не создаёт руками — её выводит бюджет-хук
 //      исполнителя (A4) в тот же action.
 import {
+  addDays,
   batchAuditMessageId,
   type CanonicalRow,
   csvMappingToolJsonSchema,
@@ -26,8 +27,8 @@ import {
   type ImportReviewInput,
   type ImportReviewResult,
   type ImportReviewRow,
-  importAnalyzeResultSchema,
   isProbableDuplicate,
+  llmMappingResponseSchema,
   MAX_ANALYZE_ROW_CHARS,
   MAX_IMPORT_ROWS,
   newId,
@@ -35,7 +36,7 @@ import {
 } from '@orbis/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { recordUsage } from '../ai/metering';
-import type { AiDeps } from '../ai/send-message';
+import { type AiDeps, gateAiEntitlements } from '../ai/send-message';
 import type { Db } from '../db/client';
 import { entityOrigins } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -45,7 +46,6 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { LLMRequest, LLMResponse } from '../llm/types';
-import { addDays } from '../recurring/materialize';
 
 // Синк один на модуль (как rollover/post-due): состояния не хранит, audit-сообщение
 // batch пишется тем же tx, что и операции исполнителя (§7.8).
@@ -135,7 +135,13 @@ export async function analyzeCsv(
   deps: AiDeps,
   args: { ownerId: string; sampleRows: string[] },
 ): Promise<ImportAnalyzeResult> {
-  gateImportCsv(args.ownerId, deps.entitlements ?? resolveEntitlement);
+  const resolve = deps.entitlements ?? resolveEntitlement;
+  gateImportCsv(args.ownerId, resolve);
+  // Гейт AI-бюджета §8 — ТОТ ЖЕ, что у ai.sendMessage: analyze зовёт провайдера и
+  // списывает в общий дневной счётчик ai_usage (recordUsage ниже), поэтому ключи
+  // ai.requests_per_day / ai.tokens_per_day обязаны его ограничивать. Оба гейта —
+  // ДО обращения к провайдеру; резолвер — из того же инъецируемого шва.
+  await gateAiEntitlements(db, args.ownerId, resolve, deps.clock ?? (() => new Date()));
 
   const samples = args.sampleRows.map((row) => truncateRowCodePoints(row, MAX_ANALYZE_ROW_CHARS));
   const request: LLMRequest = {
@@ -188,7 +194,10 @@ export async function analyzeCsv(
       { reason: 'no_tool_call', stopReason: response.stopReason },
     );
   }
-  const parsed = importAnalyzeResultSchema.safeParse(call.input);
+  // Разбор ответа МОДЕЛИ — мягким вариантом схемы (B1): лишний ключ модели отбрасывается,
+  // а не роняет импорт в 503; смысловые требования те же. Wire-контракт процедуры
+  // (importAnalyzeResultSchema) остаётся строгим — валидируется на границе tRPC.
+  const parsed = llmMappingResponseSchema.safeParse(call.input);
   if (!parsed.success) {
     throw new ExecError(
       'LLM_UNAVAILABLE',
@@ -523,6 +532,14 @@ async function assertAdoptTargets(
  * после replay-детекта, поэтому повтор batchId остаётся чистым replay'ем executor'а
  * по audit-PK.
  *
+ * ГРАНИЦА ДОВЕРИЯ `adopt` (названа явно, требование ревью C5): решение клиента «это та
+ * же операция» сервер НЕ перепроверяет по критерию §3.4.1 — он лишь требует, чтобы цель
+ * была видимой владельцу неархивной финансовой сущностью (assertAdoptTargets). Это
+ * сознательно: §3.4 разрешает пользователю переопределить вердикт дедупа («создать всё
+ * равно» и обратное), путь owner-only (ownerOnlyProcedure, LLM/MCP сюда не ходят), а
+ * вредные формы (заметка, категория, чужая сущность, архив) пречек блокирует. Худшее,
+ * что может сделать владелец, — привязать источник строки к своей же другой операции.
+ *
  * Валюта созданных транзакций в аспект НЕ кладётся: у CanonicalRow поля currency нет
  * (§3.4.1), а отсутствие currency и селектор конвертов (§2.3), и агрегаты (§2.2)
  * трактуют как дефолтную валюту владельца. Записать defaultCurrency явно значило бы
@@ -574,7 +591,10 @@ export async function confirmImport(
     created += 1;
     const entityId = newId(); // серверный id: строка origins ссылается на него в том же batch
     const counterparty = item.row.counterparty.trim();
-    const bankTxnId = item.row.bankTxnId;
+    // Тримим ЗДЕСЬ, а не полагаемся на клиента: пробельный '   ' прошёл бы и guard
+    // записи ниже, и min(1) аспекта, осев в графе мусорным ID (Minor B2 ревью). На
+    // external_id это не влияет — он считается по строке, как её прислал клиент.
+    const bankTxnId = item.row.bankTxnId?.trim();
     operations.push(
       {
         tool: 'entity_create',

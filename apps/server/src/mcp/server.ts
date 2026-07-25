@@ -76,6 +76,7 @@ export function makeMcpServer(deps: McpDeps, ownerId: string): Server {
           actorKind: 'agent', // честная атрибуция внешнего агента (§7.8, D11)
           source: 'mcp',
           explicitCommand: false, // §7.10: в 1b всегда false
+          entitlements: resolve, // тот же резолвер §8, что у rate-гейта выше
           // threadId не передаётся → audit ложится в глобальный тред владельца (§7.8):
           // действия агентов видимы владельцу, inline-правка и Undo работают (02 §2.3)
           ...(deps.clock !== undefined && { clock: deps.clock }),
