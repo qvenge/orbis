@@ -11,6 +11,7 @@ import {
 } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { escalateAfterEntityUpdate } from '../ai/escalation';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { readEntity } from '../entity-read';
@@ -133,6 +134,14 @@ export const entityRouter = router({
         { sink },
       );
       if (!r.ok) throw execErrorToTRPC(r.error);
+      // Эскалация повторных исправлений категории (§7.8, решение K7): пост-коммит
+      // хуков в executor'е нет — вызов идёт ЗДЕСЬ, после успешного execute, отдельной
+      // транзакцией. Своей ошибки наружу не отдаёт: правка категории уже закоммичена.
+      await escalateAfterEntityUpdate(ctx.db, {
+        ownerId: ctx.actorUserId,
+        actionId: r.actionId,
+        input,
+      });
       return r.results[0] as WireEntity;
     }),
 
