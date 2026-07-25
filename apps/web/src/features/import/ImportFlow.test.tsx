@@ -290,6 +290,56 @@ test('файл без заголовка: авто-догадка даёт 0 с�
   expect(rows[0]?.counterparty).toBe('ПЯТЁРОЧКА');
 });
 
+test('headerless + неверный AI-маппинг: правка колонок возвращает съеденную строку', async () => {
+  // Сценарий молчаливой потери (финальное ревью C, находка A3): выписка БЕЗ заголовка,
+  // AI перепутал колонки → строка 0 не разбирается → догадка даёт headerRows=1.
+  // Пользователь чинит колонки; если догадку не пересчитать, первая операция уедет
+  // в «заголовок» — её нет ни в rows, ни в блоке «не распознано».
+  const noHeader = CSV.split('\n').slice(1).join('\n');
+  const { calls } = renderWithProviders(
+    <ImportFlow />,
+    handler({
+      'import.analyze': () => ({
+        mapping: { ...MAPPING, counterparty: 2, amount: 1 },
+        confidence: 0.3,
+      }),
+    }),
+  );
+  pickFile(noHeader);
+  await waitFor(() => expect(screen.getByLabelText('Строк заголовка')).toHaveValue(1));
+
+  fireEvent.change(screen.getByLabelText('Колонка контрагента'), { target: { value: '1' } });
+  fireEvent.change(screen.getByLabelText('Колонка суммы'), { target: { value: '2' } });
+  fireEvent.click(screen.getByTestId('mapping-submit'));
+  await waitFor(() => expect(screen.getByTestId('review-counters')).toBeInTheDocument());
+
+  const rows = (calls.find((c) => c.path === 'import.review')?.input as ImportReviewInput).rows;
+  expect(rows).toHaveLength(4); // ни одна строка не съедена как заголовок
+  expect(rows[0]?.counterparty).toBe('ПЯТЁРОЧКА');
+  // догадка пересчитана: заголовок в шапке считает строки ДАННЫХ (4 из 4 записей файла)
+  expect(screen.getByRole('heading')).toHaveTextContent('· 4 строк');
+});
+
+test('ручной ввод «строк заголовка» догадка не перебивает', async () => {
+  // Обратная сторона A3: если пользователь сам поставил число, пересчёт молчит —
+  // выписка с двухстрочной шапкой не должна «чиниться» обратно на 1.
+  // Шапка тоже с разделителями — иначе detectDelimiter (минимум полей по выборке)
+  // принял бы файл за одноколоночный и разбор упал бы ещё до маппинга
+  const twoLineHeader = ['Выписка по счёту;за май;2026', ...CSV.split('\n')].join('\n');
+  const { calls } = renderWithProviders(<ImportFlow />, handler());
+  pickFile(twoLineHeader);
+  await waitFor(() => expect(screen.getByLabelText('Строк заголовка')).toHaveValue(1));
+  fireEvent.change(screen.getByLabelText('Строк заголовка'), { target: { value: '2' } });
+  fireEvent.click(screen.getByTestId('mapping-submit'));
+  await waitFor(() => expect(screen.getByTestId('review-counters')).toBeInTheDocument());
+
+  const rows = (calls.find((c) => c.path === 'import.review')?.input as ImportReviewInput).rows;
+  expect(rows).toHaveLength(4); // ровно данные: обе строки шапки отрезаны, пересчёта не было
+  expect(rows[0]?.counterparty).toBe('ПЯТЁРОЧКА');
+  // 6 записей файла − 2 строки заголовка: ручное число сохранилось
+  expect(screen.getByRole('heading')).toHaveTextContent('· 4 строк');
+});
+
 test('raw в строках сверки склеен фактическим разделителем файла («,»), а не «;»', async () => {
   const commaCsv = ['Дата,Контрагент,Сумма', '03.05.2026,ПЯТЁРОЧКА,"-1890,00"'].join('\n');
   const { calls } = renderWithProviders(<ImportFlow />, handler());

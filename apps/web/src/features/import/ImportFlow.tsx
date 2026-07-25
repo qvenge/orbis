@@ -71,6 +71,13 @@ type MappingDraft = {
   dateFormat: CsvMapping['dateFormat'];
   bankTxnId: number | null;
   headerRows: number;
+  /**
+   * Пользователь правил поле «строк заголовка» руками. Пока НЕ правил, догадка
+   * пересчитывается по актуальному маппингу (runReview): первая догадка считалась по
+   * возможно неверному AI-маппингу, и без пересчёта headerless-выписка потеряла бы
+   * первую операцию МОЛЧА — она не попала бы даже в блок «не распознано» (§3.4).
+   */
+  headerRowsTouched: boolean;
 };
 
 const DATE_FORMATS: CsvMapping['dateFormat'][] = [
@@ -99,7 +106,7 @@ function columnCount(records: string[][]): number {
   return records.slice(0, MAX_SAMPLE_ROWS).reduce((max, row) => Math.max(max, row.length), 0);
 }
 
-function toMapping(draft: Omit<MappingDraft, 'headerRows'>): CsvMapping {
+function toMapping(draft: Omit<MappingDraft, 'headerRows' | 'headerRowsTouched'>): CsvMapping {
   const base = {
     date: draft.date,
     counterparty: draft.counterparty,
@@ -123,7 +130,10 @@ function guessHeaderRows(records: string[][], mapping: CsvMapping): number {
 }
 
 /** Черновик из ответа AI или, когда его нет, из типовой раскладки выписки. */
-function draftFrom(mapping: CsvMapping | null, columns: number): Omit<MappingDraft, 'headerRows'> {
+function draftFrom(
+  mapping: CsvMapping | null,
+  columns: number,
+): Omit<MappingDraft, 'headerRows' | 'headerRowsTouched'> {
   const last = Math.max(columns - 1, 0);
   const clamp = (index: number): number => Math.min(index, last);
   return {
@@ -230,15 +240,28 @@ export function ImportFlow() {
     }
     const base = draftFrom(mapping, columnCount(parsedFile.records));
     setParsed(parsedFile);
-    setDraft({ ...base, headerRows: guessHeaderRows(parsedFile.records, toMapping(base)) });
+    setDraft({
+      ...base,
+      headerRows: guessHeaderRows(parsedFile.records, toMapping(base)),
+      headerRowsTouched: false,
+    });
     setStep('mapping');
   }
 
   async function runReview(): Promise<void> {
     if (parsed === null || draft === null) return;
+    const mapping = toMapping(draft);
+    // Догадка о заголовке пересчитывается по АКТУАЛЬНОМУ маппингу — иначе правка колонок
+    // не отменяла бы догадку, сделанную по неверному стартовому маппингу, и первая
+    // операция headerless-выписки была бы съедена как заголовок молча (§3.4: ни одна
+    // строка не теряется без следа). Ручной ввод пользователя не трогаем.
+    const headerRows = draft.headerRowsTouched
+      ? draft.headerRows
+      : guessHeaderRows(parsed.records, mapping);
+    if (headerRows !== draft.headerRows) setDraft({ ...draft, headerRows });
     const { rows, errors } = toCanonicalRows(
-      parsed.records.slice(draft.headerRows),
-      toMapping(draft),
+      parsed.records.slice(headerRows),
+      mapping,
       parsed.delimiter,
     );
     setParseErrors(errors);
@@ -503,7 +526,12 @@ function MappingForm({
             min={0}
             value={String(draft.headerRows)}
             onChange={(e) =>
-              onChange({ ...draft, headerRows: Math.max(0, Number(e.target.value) || 0) })
+              onChange({
+                ...draft,
+                headerRows: Math.max(0, Number(e.target.value) || 0),
+                // с этого момента догадка молчит: число заголовочных строк — за пользователем
+                headerRowsTouched: true,
+              })
             }
             className="w-20 px-2 py-1 text-sm tabular-nums"
           />
