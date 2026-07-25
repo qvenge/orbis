@@ -292,6 +292,24 @@ test('§4.2 (D2b): в строке «Просроченного» дата пе�
   expect(within(overdueSection()).queryByText(dayLabel(yesterday))).toBeNull();
 });
 
+test('§4.2 (D2c): у просроченного платежа сумма остаётся — подавлять нечего', async () => {
+  // EntityRow выбирает мету по приоритету: financial → СУММА (не дата). Дублирования
+  // даты в такой строке нет вовсе, поэтому подавление меты D2b здесь только съедало бы
+  // сумму — единственное, ради чего строка платежа и открывается.
+  const payment = ent('t1', 'Оплатить интернет', {
+    'orbis/task': { status: 'planned', due_date: yesterday },
+    'orbis/financial': { amount: '1200.00', direction: 'expense' },
+  });
+  renderWithProviders(<AgendaScreen />, agendaHandler({ overdueDue: [payment] }));
+
+  await waitFor(() => expect(overdueSection()).toBeInTheDocument());
+  // '−' здесь U+2212, разделитель групп — обычный пробел (lib/format.ts formatMoney)
+  expect(within(overdueSection()).getByText('−1 200.00')).toBeInTheDocument();
+  expect(within(overdueSection()).getByText(`был ${dayLabel(yesterday)}`)).toBeInTheDocument();
+  // Дата по-прежнему ровно одна: справа стоит сумма, а не вторая печать срока
+  expect(within(overdueSection()).queryByText(dayLabel(yesterday))).toBeNull();
+});
+
 test('§4.2 (D2b): мета EntityRow подавлена ТОЛЬКО в «Просроченном» — в дневных секциях она есть', async () => {
   // Дефолт пропа EntityRow общий с Browser: сменить его молча = сломать вторую поверхность.
   // due_date (date-only) форматируется в UTC — узел детерминирован, в отличие от start_at.
@@ -303,6 +321,27 @@ test('§4.2 (D2b): мета EntityRow подавлена ТОЛЬКО в «Пр�
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Врач']));
   expect(within(daySection(tomorrow)).getByText(dayLabel(tomorrow))).toBeInTheDocument();
+});
+
+// --- пользовательские строки экрана (D2c) ---------------------------------------------
+
+test('D2c: шапка и плашка ошибки называют экран «Повесткой», а не «Agenda»', async () => {
+  // Пользователь жмёт вкладку «Повестка» (слово владельца 2026-07-25) — экран, на который
+  // он попадает, обязан называться так же. Идентификаторы и testid при этом не меняются.
+  renderWithProviders(<AgendaScreen />, (path, input) => {
+    if (path === 'user.getSettings') return settings;
+    if (path === 'entity.query') {
+      const q = (input as { query: string }).query;
+      if (q === AGENDA_DAYS_QUERY) throw trpcError('INTERNAL_SERVER_ERROR');
+      return [];
+    }
+    return {};
+  });
+
+  expect(screen.getByRole('heading', { level: 1, name: 'Повестка' })).toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.getByText('Не удалось загрузить Повестку')).toBeInTheDocument(),
+  );
 });
 
 // --- таймзона: раскладка ждёт настроек ------------------------------------------------

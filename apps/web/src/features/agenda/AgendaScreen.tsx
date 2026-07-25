@@ -16,6 +16,7 @@ import {
   type AgendaEntity,
   endAt,
   isAllDay,
+  isFinancial,
   localTime,
   startAt,
   useAgendaDays,
@@ -53,9 +54,13 @@ function timeLabel(e: AgendaEntity, tz: string | undefined): string {
  * Подпись строки «Просроченного» (мокап §4: «срок был 11.06») — РЕЛЕВАНТНАЯ дата
  * элемента (более ранняя из due_date и локального дня start_at, §4.2). Своя подпись
  * здесь обязательна: у задачи с прошедшим start_at и будущим сроком собственная мета
- * EntityRow показала бы в красной секции дату из будущего. Поэтому в этих строках она
- * подавлена (`showMeta={false}`) — иначе у самой частой строки (срок вчера) одна и та
- * же дата печаталась бы дважды.
+ * EntityRow показала бы в красной секции дату из будущего.
+ *
+ * Поэтому мету EntityRow гасим — но ТОЛЬКО там, где он нарисовал бы дату, то есть у
+ * строк без `orbis/financial` (`showMeta={isFinancial(entity)}`): иначе у самой частой
+ * строки (срок вчера) одна и та же дата печаталась бы дважды. У financial-сущности его
+ * мета — сумма (приоритет financial → task.due_date), дублирования нет вовсе, а сумма
+ * просроченного платежа — ровно то, ради чего строка и читается.
  */
 function overdueLabel(date: string): string {
   return `был ${formatDay(date)}`;
@@ -100,7 +105,7 @@ export function AgendaScreen() {
 
   return (
     <div className="flex h-full flex-col">
-      <ScreenHeader title="Agenda" />
+      <ScreenHeader title="Повестка" />
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-4">
         {/* Ошибку «Просроченного» показываем явно: пустая секция и упавший запрос
             выглядят одинаково, а молчаливая потеря просроченного — худший исход */}
@@ -123,7 +128,7 @@ export function AgendaScreen() {
                     key={it.entity.id}
                     entity={it.entity}
                     time={overdueLabel(it.date)}
-                    showMeta={false}
+                    showMeta={isFinancial(it.entity)}
                   />
                 ))}
               </ul>
@@ -132,7 +137,7 @@ export function AgendaScreen() {
         )}
 
         {isError ? (
-          <p className="text-sm text-text-muted">Не удалось загрузить Agenda</p>
+          <p className="text-sm text-text-muted">Не удалось загрузить Повестку</p>
         ) : isLoading ? (
           <>
             <Skeleton className="h-24" />

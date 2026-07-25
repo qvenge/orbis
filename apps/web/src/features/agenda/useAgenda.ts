@@ -66,6 +66,13 @@ export const dueDate = (e: AgendaEntity) => stringField(e, 'orbis/task', 'due_da
 export const isAllDay = (e: AgendaEntity) => aspectOf(e, 'orbis/schedule')?.all_day === true;
 
 /**
+ * Есть ли у сущности `orbis/financial`. Нужно «Просроченному»: EntityRow выбирает мету
+ * по приоритету financial → сумма, иначе дата. Дату строка секции печатает сама, сумму —
+ * нет, поэтому подавлять чужую мету можно только у НЕфинансовых строк (§4.2).
+ */
+export const isFinancial = (e: AgendaEntity) => aspectOf(e, 'orbis/financial') !== undefined;
+
+/**
  * §4.1: шаблон recurring — сущность с заданным `orbis/schedule.recurrence`; в Agenda
  * скрыт (инстансы recurrence не несут — materialize.ts). Грамматика «поле IS NULL»
  * не выражает, поэтому фильтр только клиентский. Действует и в «Просроченном»:
@@ -158,11 +165,10 @@ export type OverdueItem = { entity: AgendaEntity; date: string };
  *
  * Слияние двух выборок по id сущности: один элемент на сущность, релевантная дата —
  * более ранняя из `due_date` и локального дня `start_at`. Сортировка — старейшие сверху.
- * `truncated` (упор в OVERDUE_LIMIT) отражается в `countLabel` как «200+».
+ * Упор в OVERDUE_LIMIT наружу уходит только через `countLabel` («200+»).
  */
 export function useAgendaOverdue(): {
   items: OverdueItem[];
-  count: number;
   countLabel: string;
   /**
    * Подпись бейджа вкладки (§1.5) или `null`, если бейджа быть не должно. Отдельное
@@ -172,7 +178,6 @@ export function useAgendaOverdue(): {
    * useBudget.ts). Плашка неполноты остаётся на самой вкладке, где она видна явно.
    */
   badgeLabel: string | null;
-  truncated: boolean;
   isLoading: boolean;
   isError: boolean;
 } {
@@ -214,10 +219,8 @@ export function useAgendaOverdue(): {
 
   return {
     items,
-    count: items.length,
     countLabel,
     badgeLabel: isError || items.length === 0 ? null : countLabel,
-    truncated,
     // Настройки входят в загрузку по той же причине, что в useAgendaDays: релевантная
     // дата scheduled-строки — локальный день start_at, до timezone он неверен.
     isLoading: byDue.isLoading || byStart.isLoading || settings.isLoading,
