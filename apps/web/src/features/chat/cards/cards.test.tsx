@@ -352,11 +352,10 @@ const settingsWithViews = (views: string[]) => ({
 });
 
 test('import_review: «Открыть импорт» переключает на Budget и пушит экран импорта', async () => {
-  renderWithProviders(
-    <div>{renderCards(msg([{ kind: 'import_review', title: 'выписка_май.csv' }]))}</div>,
-    (path) => (path === 'user.getSettings' ? settingsWithViews(['orbis-budget']) : {}),
+  renderWithProviders(<div>{renderCards(msg([{ kind: 'import_review' }]))}</div>, (path) =>
+    path === 'user.getSettings' ? settingsWithViews(['orbis-budget']) : {},
   );
-  expect(screen.getByTestId('import-review-card')).toHaveTextContent('выписка_май.csv');
+  expect(screen.getByTestId('import-review-card')).toHaveTextContent(/импорт выписки/i);
   await waitFor(() =>
     expect(screen.getByRole('button', { name: /открыть импорт/i })).toBeInTheDocument(),
   );

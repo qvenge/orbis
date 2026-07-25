@@ -89,7 +89,14 @@ export interface ActionRecord {
   id: string;
   // origin_created/origin_deleted — provenance импорта (§4.8): не сущность и не связь,
   // поэтому честный собственный вариант. Расширение аддитивно: исчерпывающих switch
-  // по этому полю в коде нет (журнал читает только по id/inverse — undo.ts, journal.ts)
+  // по этому полю в коде нет (журнал читает только по id/inverse — undo.ts, journal.ts).
+  //
+  // Сегодня В ЗАПИСЬ они не попадают: единственный вызывающий origin-операций —
+  // confirmImport, а он всегда задаёт batchId, и весь импорт журналируется одним
+  // action типа 'batch'. Варианты оставлены намеренно: их несут JournalPlan'ы этих
+  // операций (executor.ts prepareOriginCreate/prepareOriginDelete), и они станут
+  // наблюдаемыми у первого НЕ-batch вызывающего — убирать их значило бы заводить
+  // отдельный, более узкий тип для плана той же операции.
   type:
     | 'entity_created'
     | 'entity_updated'

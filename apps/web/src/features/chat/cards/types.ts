@@ -23,7 +23,9 @@ export type ConfirmationData = {
 export type ErrorCardData = { kind: 'error_card'; code: string; message: string };
 // 03-budget §3.4: импорт из чата — карточка ведёт на экран импорта (файл выбирается
 // локально и через ленту не проходит). Производитель на сервере — задача C4c.
-export type ImportReviewData = { kind: 'import_review'; title?: string };
+// Полей нет: производитель (tools/dispatch.ts importCsvStart) шлёт только kind —
+// файл выбирается уже на экране импорта, имени выписки сервер в этот момент не знает
+export type ImportReviewData = { kind: 'import_review' };
 export type Card =
   | EntityCardData
   | QueryResultData

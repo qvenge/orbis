@@ -9,12 +9,14 @@ import { Card } from '../../../ui/Card';
 import { useBudgetTabVisible } from '../../budget/useBudget';
 import type { ImportReviewData } from './types';
 
-export function ImportReviewCard({ card }: { card: ImportReviewData }) {
+// Карточка данных не несёт (см. ImportReviewData) — параметр принимается ради единой
+// сигнатуры рендера карточек (renderCards.tsx), но не читается
+export function ImportReviewCard(_props: { card: ImportReviewData }) {
   const budgetVisible = useBudgetTabVisible();
 
   return (
     <Card data-testid="import-review-card" className="flex flex-col gap-2">
-      <p className="text-sm">Импорт выписки{card.title ? ` · ${card.title}` : ''}</p>
+      <p className="text-sm">Импорт выписки</p>
       {budgetVisible ? (
         <Button
           size="sm"
