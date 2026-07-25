@@ -15,6 +15,7 @@ import {
   type BatchExecuteInput,
   batchExecuteInput,
   budgetStatusInput,
+  type EntityUpdateInput,
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
@@ -26,6 +27,7 @@ import {
   relationDeleteInput,
 } from '@orbis/shared';
 import type { z } from 'zod';
+import { escalateAfterEntityUpdate } from '../ai/escalation';
 import { budgetStatus } from '../budget/aggregates';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
@@ -504,6 +506,22 @@ async function runMutation(
   // id action'а для actions-резюме (Task 9): та же семантика, что у undoActionId
   // карточки — идемпотентный replay ничего не журналил, action этого вызова нет
   const actionId = r.idempotentReplay ? undefined : r.actionId;
+
+  // Эскалация повторных исправлений категории (§7.8) — ЧАТ-путь: план D3 требует
+  // source ∈ ui|chat, а UI-половина уже висит на роутере entity.update. Контракт тот же
+  // (K7): ПОСЛЕ успешного execute, отдельной транзакцией; свою ошибку эскалация
+  // логирует внутри и не пробрасывает — ответ модели она уронить не имеет права.
+  // Идемпотентный replay (actionId === undefined) ничего не журналировал — считать
+  // нечего. source 'mcp' сюда не попадает намеренно: внешний агент — не правка
+  // пользователя, план перечисляет только ui и chat.
+  if (def.name === 'entity_update' && ctx.source === 'chat' && actionId !== undefined) {
+    await escalateAfterEntityUpdate(ctx.db, {
+      ownerId: ctx.actorUserId,
+      actionId,
+      // payload уже прошёл entityUpdateInput в validateMutationEnvelope выше
+      input: payload as EntityUpdateInput,
+    });
+  }
 
   // batch: результат — массив по операциям; на уровне preview — confirmation_card с
   // кратким summary «N операций» (пополевого diff у группы нет — масштаб задаёт размер)

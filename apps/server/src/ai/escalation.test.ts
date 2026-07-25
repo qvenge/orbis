@@ -21,6 +21,7 @@ import type {
   WireEntity,
 } from '../executor/types';
 import { appRouter } from '../router';
+import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import type { Card } from '../tools/registry';
 import type { Context } from '../trpc';
 import { JOURNAL_SCAN_LIMIT, maybeSuggestRule, scanFinancialUpdates } from './escalation';
@@ -89,6 +90,24 @@ async function recategorize(user: string, txnId: string, categoryRef: string): P
     id: txnId,
     aspects: { 'orbis/financial': { category_ref: categoryRef } },
   });
+}
+
+/** Контекст диспетчера тулов внутреннего чата — ровно такой строит ai.sendMessage. */
+function chatCtx(user: string): ToolCallCtx {
+  return { db, actorUserId: user, actorKind: 'ai', source: 'chat', explicitCommand: false };
+}
+
+/** Рекатегоризация путём модели: тот же диспетчер тулов, что зовёт ai.sendMessage. */
+async function recategorizeViaChat(
+  user: string,
+  txnId: string,
+  categoryRef: string,
+): Promise<void> {
+  const r = await dispatchTool(chatCtx(user), 'entity_update', {
+    id: txnId,
+    aspects: { 'orbis/financial': { category_ref: categoryRef } },
+  });
+  if (r.status !== 'ok') throw new Error(`dispatchTool: ${JSON.stringify(r)}`);
 }
 
 /** Рекатегоризация мимо роутера — когда тесту нужен actionId для прямого вызова. */
@@ -451,5 +470,127 @@ describe('эскалация повторных исправлений кате�
     expect(
       await maybeSuggestRule({ db, ownerId: user, action: await actionById(actionId) }),
     ).toEqual({ suggested: false, reason: 'already_suggested' });
+  });
+
+  // --- D3a2 п.1: «одинаковое исправление» — по ПАТТЕРНАМ, а не по сырым заголовкам ---
+  // Боевой формат выписки — один мерчант с разными числовыми хвостами; сырое сравнение
+  // на нём не срабатывает (см. значения в комментариях), и правило не предлагалось бы
+  // никогда именно в самом частом реальном случае.
+
+  test('16. ПЯТЕРОЧКА 843 / ПЯТЕРОЧКА 999 — один паттерн, предложение приходит', async () => {
+    const { user, food, fun } = await freshOwner();
+    // counterpartySimilarity сырых заголовков = 0.769 < 0.85, паттернов — 1.0
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 999', food), fun);
+    const cards = await cardsOf(user, 'memory_rule_suggestion');
+    expect(cards.length).toBe(1);
+    expect((cards[0] as { pattern: string }).pattern).toBe('пятерочка');
+  });
+
+  test('17. ЯНДЕКС.ТАКСИ 450 / ЯНДЕКС.ТАКСИ 1200 — один паттерн, предложение приходит', async () => {
+    const { user, food, fun } = await freshOwner();
+    // сырые = 0.824 < 0.85, паттерны «яндекс такси» = 1.0
+    await recategorize(user, await createTxn(user, 'ЯНДЕКС.ТАКСИ 450', food), fun);
+    await recategorize(user, await createTxn(user, 'ЯНДЕКС.ТАКСИ 1200', food), fun);
+    const cards = await cardsOf(user, 'memory_rule_suggestion');
+    expect(cards.length).toBe(1);
+    expect((cards[0] as { pattern: string }).pattern).toBe('яндекс такси');
+  });
+
+  test('18. ПЯТЕРОЧКА 843 / WILDBERRIES 12 — разные мерчанты, предложения нет', async () => {
+    const { user, food, fun } = await freshOwner();
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    await recategorize(user, await createTxn(user, 'WILDBERRIES 12', food), fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+  });
+
+  // --- D3a2 п.2: подавление повтора не обходится сменой паттерна ---
+
+  test('19. предложение по «пятерочка» подавляет предложение по «пятерочка мск»', async () => {
+    const { user, food, fun } = await freshOwner();
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    await recategorize(user, await createTxn(user, 'Пятёрочка', food), fun);
+    const first = await cardsOf(user, 'memory_rule_suggestion');
+    expect(first.length).toBe(1);
+
+    // Соседний паттерн той же пары категорий: при подавлении по ТОЧНОМУ паттерну
+    // сюда приезжала вторая карточка «пятерочка мск → Развлечения»
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА МСК 5', food), fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual(first);
+  });
+
+  test('20. отказ по «пятерочка» подавляет предложение по «пятерочка мск»', async () => {
+    const { user, food, fun } = await freshOwner();
+    await ownerCaller(user).ai.declineMemoryRule({
+      pattern: 'пятерочка',
+      fromCategoryId: food,
+      toCategoryId: fun,
+    });
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА МСК 1', food), fun);
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА МСК 2', food), fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+  });
+
+  test('21. отказ по «пятерочка» не подавляет несвязанный паттерн той же пары', async () => {
+    const { user, food, fun } = await freshOwner();
+    await ownerCaller(user).ai.declineMemoryRule({
+      pattern: 'пятерочка',
+      fromCategoryId: food,
+      toCategoryId: fun,
+    });
+    await recategorize(user, await createTxn(user, 'АЗБУКА ВКУСА 1', food), fun);
+    await recategorize(user, await createTxn(user, 'АЗБУКА ВКУСА 2', food), fun);
+    const cards = await cardsOf(user, 'memory_rule_suggestion');
+    expect(cards.length).toBe(1);
+    expect((cards[0] as { pattern: string }).pattern).toBe('азбука вкуса');
+  });
+
+  // --- D3a2 п.3: рекатегоризация из чата эскалируется наравне с UI ---
+
+  test('22. рекатегоризация через диспетчер тулов дважды → предложение появилось', async () => {
+    const { user, food, fun } = await freshOwner();
+    await recategorizeViaChat(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]); // одного мало
+
+    await recategorizeViaChat(user, await createTxn(user, 'Пятёрочка', food), fun);
+    const cards = await cardsOf(user, 'memory_rule_suggestion');
+    expect(cards.length).toBe(1);
+    expect((cards[0] as { ruleText: string }).ruleText).toBe('пятерочка → Развлечения');
+  });
+
+  test('23. падение эскалации не ломает ответ тула (чат-путь, K7)', async () => {
+    const { user, food, fun } = await freshOwner();
+    await recategorizeViaChat(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    const b = await createTxn(user, 'Пятёрочка', food);
+
+    // Тот же приём, что в тесте 9: PK будущего сообщения-предложения занят ЧУЖИМ
+    // сообщением (под RLS невидимо) → appendMessageIdempotent бросит CONFLICT уже
+    // после коммита правки категории
+    const alien = freshUserId();
+    const poisoned = memoryRuleSuggestionId({
+      ownerId: user,
+      pattern: 'пятерочка',
+      fromCategoryId: food,
+      toCategoryId: fun,
+      date: new Date().toISOString().slice(0, 10),
+    });
+    await withIdentity(db, alien, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, alien);
+      await appendMessage(tx, { id: poisoned, threadId, role: 'system', content: 'чужое' });
+    });
+
+    const spy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = await dispatchTool(chatCtx(user), 'entity_update', {
+        id: b,
+        aspects: { 'orbis/financial': { category_ref: fun } },
+      });
+      expect(r.status).toBe('ok');
+      expect(await categoryRefOf(b)).toBe(fun);
+      expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+      expect(spy.mock.calls.flat().map(String).join(' ')).toContain('[ai.escalation]');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

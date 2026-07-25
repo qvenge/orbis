@@ -167,6 +167,24 @@ async function journalRecategorizations(
   return out;
 }
 
+/**
+ * «Одинаковое исправление» — сравнение по ПАТТЕРНАМ правила, а не по сырым заголовкам.
+ * На боевых форматах выписки сырое сравнение не срабатывает именно в самом частом
+ * реальном случае (один мерчант, разные числовые хвосты):
+ * ('ПЯТЕРОЧКА 843','ПЯТЕРОЧКА 999') = 0.769, ('ЯНДЕКС.ТАКСИ 450','ЯНДЕКС.ТАКСИ 1200') =
+ * 0.824 — обе ниже порога 0.85, хотя rulePatternFromTitle у обеих сторон даёт ОДИН
+ * паттерн. Сырые заголовки остаются запасным путём — для тех, чей паттерн вырожден.
+ *
+ * Ложных совпадений по пустому паттерну нет: counterpartySimilarity(непустая, '') = 0
+ * (normalize.ts), а пустой паттерн ТЕКУЩЕГО исправления отсечён гейтом empty_pattern
+ * раньше — до сюда доходит только непустой.
+ */
+function sameCorrection(a: string, b: string): boolean {
+  const byPattern = counterpartySimilarity(rulePatternFromTitle(a), rulePatternFromTitle(b));
+  if (byPattern >= DUP_SIMILARITY_THRESHOLD) return true;
+  return counterpartySimilarity(a, b) >= DUP_SIMILARITY_THRESHOLD;
+}
+
 async function titleOf(tx: Tx, id: string): Promise<string | undefined> {
   const rows = await tx.select({ title: entities.title }).from(entities).where(eq(entities.id, id));
   return rows[0]?.title;
@@ -217,20 +235,50 @@ async function hasEquivalentRule(tx: Tx, pattern: string, categoryTitle: string)
   });
 }
 
-/** Предложение по этой паре уже отправлено ИЛИ отклонено за последние 30 дней (K4). */
+/** Карточка предложения/отказа в metadata сообщения — читаем её как чужой JSON. */
+interface OfferCard {
+  kind?: unknown;
+  pattern?: unknown;
+  fromCategoryId?: unknown;
+  toCategoryId?: unknown;
+}
+
+/**
+ * Предложение по этой паре категорий уже отправлено ИЛИ отклонено за 30 дней (K4).
+ *
+ * Паттерн сравнивается ПО СХОДСТВУ, а не точным совпадением: иначе подавление
+ * обходится сменой паттерна — «пятерочка» и «пятерочка мск» дали бы два предложения по
+ * одной паре категорий, а отказ по одному паттерну не подавлял бы предложение по
+ * соседнему. Containment по GIN отбирает карточки нужной пары (паттерн из пробы убран —
+ * по нему точного равенства больше не требуется), похожесть добирается в JS тем же
+ * критерием, что и «одинаковое исправление».
+ *
+ * Потолок выборки — тот же JOURNAL_SCAN_LIMIT. Направление усечения здесь обратное
+ * скану журнала (не увидев старую карточку, эскалация предложит лишнее), поэтому берём
+ * СВЕЖИЕ: за 30 дней по одной паре категорий карточек может быть лишь горстка —
+ * подавление гасит поток после первой.
+ */
 async function alreadyOffered(tx: Tx, pattern: string, rc: Recategorization): Promise<boolean> {
   const probe = (kind: string): string =>
-    JSON.stringify({
-      cards: [{ kind, pattern, fromCategoryId: rc.from, toCategoryId: rc.to }],
-    });
+    JSON.stringify({ cards: [{ kind, fromCategoryId: rc.from, toCategoryId: rc.to }] });
   const rows = await tx.execute(
-    sql`SELECT 1 AS hit FROM chat_messages
+    sql`SELECT metadata FROM chat_messages
         WHERE created_at > now() - make_interval(days => ${WINDOW_DAYS})
           AND (metadata @> ${probe('memory_rule_suggestion')}::jsonb
                OR metadata @> ${probe('memory_rule_declined')}::jsonb)
-        LIMIT 1`,
+        ORDER BY created_at DESC
+        LIMIT ${JOURNAL_SCAN_LIMIT}`,
   );
-  return rows.length > 0;
+  for (const row of rows) {
+    const cards = (row.metadata as { cards?: OfferCard[] }).cards ?? [];
+    for (const card of cards) {
+      if (card.kind !== 'memory_rule_suggestion' && card.kind !== 'memory_rule_declined') continue;
+      if (card.fromCategoryId !== rc.from || card.toCategoryId !== rc.to) continue;
+      if (typeof card.pattern !== 'string') continue;
+      if (counterpartySimilarity(card.pattern, pattern) >= DUP_SIMILARITY_THRESHOLD) return true;
+    }
+  }
+  return false;
 }
 
 async function considerOne(
@@ -249,22 +297,22 @@ async function considerOne(
   if (categoryTitle === undefined) return { suggested: false, reason: 'category_not_found' };
 
   // Гейт подавления стоит ДО скана журнала намеренно: на уже предложенной или
-  // отклонённой паре ответ известен из точечного LIMIT 1 по GIN, и сканировать журнал
-  // незачем. Порядок влияет только на reason (диагностика), не на исход.
+  // отклонённой паре ответ известен из узкой пробы по GIN (карточки одной пары
+  // категорий за 30 дней), и сканировать журнал незачем. Порядок влияет только на
+  // reason (диагностика), не на исход.
   if (await alreadyOffered(tx, pattern, rc)) {
     return { suggested: false, reason: 'already_suggested' };
   }
 
-  // «Одинаковое исправление» — та же пара категорий И похожий counterparty. Считаем по
+  // «Одинаковое исправление» — та же пара категорий И похожий контрагент (sameCorrection:
+  // сначала по паттернам правила, сырые заголовки — запасной путь). Считаем по
   // РАЗНЫМ сущностям: правки одной и той же транзакции туда-обратно — сомнения
   // пользователя, а не повторяющийся паттерн.
   const others = (await journalRecategorizations(tx, actionId)).filter(
     (c) => c.from === rc.from && c.to === rc.to && c.entityId !== rc.entityId,
   );
   const otherTitles = await titlesOf(tx, [...new Set(others.map((c) => c.entityId))]);
-  const same = otherTitles.filter(
-    (t) => counterpartySimilarity(title, t) >= DUP_SIMILARITY_THRESHOLD,
-  ).length;
+  const same = otherTitles.filter((t) => sameCorrection(title, t)).length;
   if (same + 1 < MIN_CORRECTIONS) return { suggested: false, reason: 'not_repeated' };
 
   if (await hasEquivalentRule(tx, pattern, categoryTitle)) {
