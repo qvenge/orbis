@@ -194,9 +194,11 @@ export function csvMappingToolJsonSchema(): Record<string, unknown> {
 
 export const importReviewInput = z
   .object({
-    // .max — граница СХЕМЫ: без неё zod валидировал бы каждый элемент (включая
-    // per-row refine с разбором даты) и лишь потом домен считал бы строки. Доменная
-    // проверка остаётся: её отказ несёт внятный details.limit (§3 брифа).
+    // .max — граница СХЕМЫ: отказ приходит с кодом too_big от самого контракта, а не
+    // из домена. Внимание: zod всё равно валидирует каждый элемент (ZodArray помечает
+    // too_big и продолжает разбор) — от неограниченной работы защищает не эта строка,
+    // а лимит тела запроса на /trpc (apps/server/src/app.ts). Доменная проверка тоже
+    // остаётся: её отказ несёт внятный details.limit (§3 брифа).
     rows: z.array(canonicalRowSchema).min(1).max(MAX_IMPORT_ROWS),
     fileHash: fileHashSchema,
     namespace: importNamespaceSchema,
