@@ -5,6 +5,7 @@ import {
   globalThreadId,
   materializeBatchId,
   memoryRuleDeclinedId,
+  memoryRuleEntityId,
   memoryRuleSuggestionId,
   newId,
   ORBIS_NAMESPACE,
@@ -87,6 +88,31 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
         fromCategoryId: k.toCategoryId,
         toCategoryId: k.fromCategoryId,
       }),
+    );
+  });
+  test('memoryRuleEntityId (D3b): детерминирован сообщением+правилом, различает предложения и правила', () => {
+    const k = {
+      messageId: '00000000-0000-5000-8000-0000000000e6',
+      pattern: 'кофе хауз',
+      toCategoryId: '00000000-0000-7000-8000-0000000000d5',
+    };
+    // Повторный показ той же карточки (перезагрузка страницы, другое устройство) — тот же id
+    expect(memoryRuleEntityId(k)).toBe(memoryRuleEntityId({ ...k }));
+    expect(memoryRuleEntityId(k)).toBe(
+      memoryRuleEntityId({ ...k, messageId: k.messageId.toUpperCase() }),
+    );
+    // Новое предложение (эскалация после архивации правила) — новый id, не replay архивного
+    expect(memoryRuleEntityId(k)).not.toBe(
+      memoryRuleEntityId({ ...k, messageId: '00000000-0000-5000-8000-0000000000e7' }),
+    );
+    // Разные правила в одном сообщении — разные сущности
+    expect(memoryRuleEntityId(k)).not.toBe(memoryRuleEntityId({ ...k, pattern: 'пятерочка' }));
+    expect(memoryRuleEntityId(k)).not.toBe(
+      memoryRuleEntityId({ ...k, toCategoryId: '00000000-0000-7000-8000-0000000000d4' }),
+    );
+    expect(memoryRuleEntityId(k)).not.toBe(k.messageId);
+    expect(memoryRuleEntityId(k)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
   });
   test('newId — валидный UUIDv7, монотонный по времени в префиксе', () => {

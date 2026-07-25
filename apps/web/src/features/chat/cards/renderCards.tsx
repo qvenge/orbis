@@ -52,8 +52,17 @@ export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): Reac
       case 'memory_rule_suggestion':
         // §7.8: предложение правила памяти. memory_rule_declined своей ветки не имеет —
         // его текст несёт content сообщения (см. types.ts).
-        // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
-        return <MemoryRuleCard key={i} card={card} />;
+        // msg.id — ключ детерминированного id создаваемого правила (идемпотентность
+        // «Запомнить» между монтированиями), msg.createdAt — 24ч visual-expiry.
+        return (
+          <MemoryRuleCard
+            // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
+            key={i}
+            card={card}
+            messageId={msg.id}
+            createdAt={msg.createdAt}
+          />
+        );
       case 'error_card':
         // §3: retryId+retryText есть → «Повторить» снимет этот error_card и перешлёт тем же id.
         return (

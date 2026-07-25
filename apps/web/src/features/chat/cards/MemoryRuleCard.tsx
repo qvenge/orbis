@@ -8,22 +8,48 @@
 // «Не надо» — ai.declineMemoryRule: chat_messages append-only (§4.6), поэтому отказ
 // не правит карточку, а пишется НОВЫМ системным сообщением (K4), которое заодно
 // подавляет повторное предложение по этой паре категорий.
-import { newId } from '@orbis/shared';
+import { memoryRuleEntityId } from '@orbis/shared';
 import { useRef, useState } from 'react';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
 import type { MemoryRuleSuggestionData } from './types';
 
-export function MemoryRuleCard({ card }: { card: MemoryRuleSuggestionData }) {
+/** Тот же 24ч visual-expiry, что у ConfirmationCard (D-a). */
+const EXPIRY_MS = 24 * 60 * 60 * 1000;
+
+export function MemoryRuleCard({
+  card,
+  messageId,
+  createdAt,
+  now = Date.now(),
+}: {
+  card: MemoryRuleSuggestionData;
+  messageId: string;
+  createdAt: string;
+  now?: number; // инъектируемое время (детерминизм тестов); по умолчанию — настенные часы
+}) {
   // Локальный итог — как у ConfirmationCard: серверная запись про отказ уедет новым
   // сообщением, а уже показанная карточка правится только своим state.
   const [resolved, setResolved] = useState<null | 'remembered' | 'declined'>(null);
   const [postError, setPostError] = useState<string | null>(null);
-  // Урок B4: client-UUID генерируется ОДИН раз на показ карточки, а не на клик —
-  // повтор после ошибки уходит с тем же id и идемпотентен на сервере (иначе
-  // «нажал ещё раз, когда упало» породило бы второе правило).
-  const idRef = useRef(newId());
+  // Урок B4: client-UUID НЕ генерируется на клик. Больше того — он не случайный:
+  // id правила детерминирован сообщением-предложением и самим правилом
+  // (memoryRuleEntityId), потому что «решённость» карточки живёт только в state,
+  // а сообщение остаётся в append-only ленте с живыми кнопками. Случайный uuidv7
+  // на КАЖДОЕ монтирование означал бы второе одноимённое правило после
+  // перезагрузки вкладки или с другого устройства; детерминированный id попадает
+  // в ON CONFLICT DO NOTHING сервера и возвращается replay'ем той же сущности.
+  const entityId = memoryRuleEntityId({
+    messageId,
+    pattern: card.pattern,
+    toCategoryId: card.toCategoryId,
+  });
+  // Карточка старше суток — уже отвеченный или забытый вопрос: «решённость» в
+  // ленту не пишется (journal append-only, K4), поэтому старое предложение всегда
+  // выглядит неотвеченным. Гасим кнопки, как у ConfirmationCard; правило по-прежнему
+  // можно попросить у AI в чате (§7.4 — память курирует пользователь).
+  const expired = now - new Date(createdAt).getTime() > EXPIRY_MS;
   const utils = trpc.useUtils();
   // Защёлка двойного клика: isPending приезжает следующим рендером, поэтому два
   // клика подряд успели бы отправить два запроса. Ошибка защёлку снимает — повтор
@@ -49,15 +75,15 @@ export function MemoryRuleCard({ card }: { card: MemoryRuleSuggestionData }) {
       setPostError(e.message);
     },
   });
-  const busy = create.isPending || decline.isPending;
+  const busy = create.isPending || decline.isPending || expired;
 
   function remember() {
-    if (inFlight.current || resolved !== null) return;
+    if (inFlight.current || resolved !== null || expired) return;
     inFlight.current = true;
     setPostError(null);
     create.mutate({
       input: {
-        id: idRef.current,
+        id: entityId,
         title: card.ruleText,
         tags: [],
         // Короткое пояснение, откуда правило взялось: пользователь курирует память
@@ -70,7 +96,7 @@ export function MemoryRuleCard({ card }: { card: MemoryRuleSuggestionData }) {
   }
 
   function declineRule() {
-    if (inFlight.current || resolved !== null) return;
+    if (inFlight.current || resolved !== null || expired) return;
     inFlight.current = true;
     setPostError(null);
     // pattern уходит РОВНО как пришёл, без повторной нормализации: на сервере это
@@ -103,6 +129,9 @@ export function MemoryRuleCard({ card }: { card: MemoryRuleSuggestionData }) {
         <p className="text-xs text-accent">Запомнил — правило в «Памяти AI»</p>
       ) : (
         <p className="text-xs text-text-muted">Не буду предлагать это правило</p>
+      )}
+      {expired && resolved === null && (
+        <p className="text-xs text-text-muted">Устарело — переспросите AI</p>
       )}
     </Card>
   );

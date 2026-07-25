@@ -406,87 +406,141 @@ const createdEntity = {
   archived: false,
 };
 
-test('memory_rule_suggestion: текст правила и обе кнопки', () => {
-  renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>);
-  expect(screen.getByTestId('memory-rule-card')).toHaveTextContent('кофе → Развлечения');
-  expect(screen.getByRole('button', { name: 'Запомнить' })).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Не надо' })).toBeInTheDocument();
-});
-
-test('[Запомнить] → entity.create с title=ruleText и аспектом orbis/memory (rule, financial)', async () => {
-  const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
-    path === 'entity.create' ? createdEntity : {},
-  );
-  fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
-  await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
-  const input = calls.find((c) => c.path === 'entity.create')?.input as {
-    input: { id: string; title: string; tags: string[]; body?: string; aspects: unknown };
-    source: string;
-  };
-  expect(input.input.title).toBe('кофе → Развлечения');
-  expect(input.input.aspects).toEqual({
-    'orbis/memory': { kind: 'rule', scope: 'orbis/financial' },
-  });
-  expect(input.input.tags).toEqual([]);
-  expect(input.input.body).toBeTruthy(); // короткое пояснение, откуда правило взялось
-  expect(input.source).toBe('ui');
-  // Итог показан, кнопки больше не предлагают тот же запрос
-  await waitFor(() =>
-    expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/запомнил/i),
-  );
-  expect(screen.queryByRole('button', { name: 'Запомнить' })).toBeNull();
-});
-
-test('повторный клик по [Запомнить] не создаёт вторую сущность', async () => {
-  const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
-    path === 'entity.create' ? createdEntity : {},
-  );
-  const button = screen.getByRole('button', { name: 'Запомнить' });
-  fireEvent.click(button);
-  fireEvent.click(button);
-  await waitFor(() =>
-    expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/запомнил/i),
-  );
-  fireEvent.click(button); // третий клик уже по снятой кнопке — DOM-узел отсоединён
-  expect(calls.filter((c) => c.path === 'entity.create')).toHaveLength(1);
-});
-
-test('повтор после ошибки шлёт ТОТ ЖЕ client-UUID (урок B4: id на показ карточки)', async () => {
-  let fail = true;
-  const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) => {
-    if (path !== 'entity.create') return {};
-    if (fail) {
-      fail = false;
-      throw trpcError('INTERNAL_SERVER_ERROR');
-    }
-    return createdEntity;
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
-  await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
-  fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
-  await waitFor(() => expect(calls.filter((c) => c.path === 'entity.create')).toHaveLength(2));
-  const ids = calls
+// id созданных сущностей из журнала вызовов — клиентский UUID кнопки «Запомнить».
+const createIds = (calls: { path: string; input: unknown }[]): string[] =>
+  calls
     .filter((c) => c.path === 'entity.create')
     .map((c) => (c.input as { input: { id: string } }).input.id);
-  expect(ids[0]).toBe(ids[1]);
+
+// Время пиннится в пределах 24ч-окна фикстуры createdAt (та же идиома, что у
+// confirmation): иначе карточка считалась бы устаревшей по настенным часам.
+describe('memory_rule_suggestion (детерминированное время)', () => {
+  beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-05T12:00:01.000Z')));
+  afterEach(() => vi.restoreAllMocks());
+
+  test('memory_rule_suggestion: текст правила и обе кнопки', () => {
+    renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>);
+    expect(screen.getByTestId('memory-rule-card')).toHaveTextContent('кофе → Развлечения');
+    expect(screen.getByRole('button', { name: 'Запомнить' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Не надо' })).toBeInTheDocument();
+  });
+
+  test('[Запомнить] → entity.create с title=ruleText и аспектом orbis/memory (rule, financial)', async () => {
+    const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
+      path === 'entity.create' ? createdEntity : {},
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
+    const input = calls.find((c) => c.path === 'entity.create')?.input as {
+      input: { id: string; title: string; tags: string[]; body?: string; aspects: unknown };
+      source: string;
+    };
+    expect(input.input.title).toBe('кофе → Развлечения');
+    expect(input.input.aspects).toEqual({
+      'orbis/memory': { kind: 'rule', scope: 'orbis/financial' },
+    });
+    expect(input.input.tags).toEqual([]);
+    expect(input.input.body).toBeTruthy(); // короткое пояснение, откуда правило взялось
+    expect(input.source).toBe('ui');
+    // Итог показан, кнопки больше не предлагают тот же запрос
+    await waitFor(() =>
+      expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/запомнил/i),
+    );
+    expect(screen.queryByRole('button', { name: 'Запомнить' })).toBeNull();
+  });
+
+  test('повторный клик по [Запомнить] не создаёт вторую сущность', async () => {
+    const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
+      path === 'entity.create' ? createdEntity : {},
+    );
+    const button = screen.getByRole('button', { name: 'Запомнить' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/запомнил/i),
+    );
+    fireEvent.click(button); // третий клик уже по снятой кнопке — DOM-узел отсоединён
+    expect(calls.filter((c) => c.path === 'entity.create')).toHaveLength(1);
+  });
+
+  test('повтор после ошибки шлёт ТОТ ЖЕ client-UUID (урок B4: id на показ карточки)', async () => {
+    let fail = true;
+    const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) => {
+      if (path !== 'entity.create') return {};
+      if (fail) {
+        fail = false;
+        throw trpcError('INTERNAL_SERVER_ERROR');
+      }
+      return createdEntity;
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(calls.filter((c) => c.path === 'entity.create')).toHaveLength(2));
+    const ids = createIds(calls);
+    expect(ids[0]).toBe(ids[1]);
+  });
+
+  // Фикс-раунд 1, находка 1: id правила ДЕТЕРМИНИРОВАН сообщением-предложением.
+  // Со случайным uuidv7 новое монтирование карточки (перезагрузка вкладки, второе
+  // устройство) присылало новый id, и «Запомнить» создавало ВТОРОЕ одноимённое
+  // правило: onConflictDoNothing по entities.id конфликта не видел.
+  test('после перезагрузки страницы [Запомнить] шлёт ТОТ ЖЕ id (второго правила не будет)', async () => {
+    const handler = (path: string) => (path === 'entity.create' ? createdEntity : {});
+    const first = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, handler);
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(createIds(first.calls)).toHaveLength(1));
+    first.unmount(); // перезагрузка вкладки: карточка приезжает из ленты заново
+
+    const second = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, handler);
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(createIds(second.calls)).toHaveLength(1));
+    expect(createIds(second.calls)[0]).toBe(createIds(first.calls)[0]);
+    second.unmount();
+
+    // А НОВОЕ предложение (эскалация после архивации правила) — другая сущность,
+    // иначе «Запомнить» реплеило бы архивную строку и правило не ожило бы.
+    const third = renderWithProviders(
+      <div>{renderCards(msg([suggestion], { id: 'm2' }))}</div>,
+      handler,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(createIds(third.calls)).toHaveLength(1));
+    expect(createIds(third.calls)[0]).not.toBe(createIds(first.calls)[0]);
+  });
+
+  test('[Не надо] → ai.declineMemoryRule с НЕИЗМЕНЁННЫМ pattern', async () => {
+    const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
+      path === 'ai.declineMemoryRule' ? { alreadyDeclined: false } : {},
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Не надо' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'ai.declineMemoryRule')?.input).toEqual({
+        pattern: 'Кофе Хауз 12',
+        fromCategoryId: FROM_CAT,
+        toCategoryId: TO_CAT,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/не буду предлагать/i),
+    );
+    expect(screen.queryByRole('button', { name: 'Не надо' })).toBeNull();
+  });
 });
 
-test('[Не надо] → ai.declineMemoryRule с НЕИЗМЕНЁННЫМ pattern', async () => {
-  const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
-    path === 'ai.declineMemoryRule' ? { alreadyDeclined: false } : {},
-  );
-  fireEvent.click(screen.getByRole('button', { name: 'Не надо' }));
-  await waitFor(() =>
-    expect(calls.find((c) => c.path === 'ai.declineMemoryRule')?.input).toEqual({
-      pattern: 'Кофе Хауз 12',
-      fromCategoryId: FROM_CAT,
-      toCategoryId: TO_CAT,
-    }),
-  );
-  await waitFor(() =>
-    expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/не буду предлагать/i),
-  );
-  expect(screen.queryByRole('button', { name: 'Не надо' })).toBeNull();
+// Фикс-раунд 1, находка 2: «решённость» карточки живёт в локальном state, поэтому
+// давно отвеченное предложение после перезагрузки выглядит неотвеченным. Тот же
+// 24ч visual-expiry, что у ConfirmationCard, гасит кнопки старой карточки.
+describe('memory_rule_suggestion: visual-expiry 24ч', () => {
+  beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-07T13:00:00.000Z')));
+  afterEach(() => vi.restoreAllMocks());
+
+  test('старше 24ч → обе кнопки задизейблены, подпись «устарело»', () => {
+    renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>);
+    expect(screen.getByRole('button', { name: 'Запомнить' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Не надо' })).toBeDisabled();
+    expect(screen.getByText(/устарело/i)).toBeInTheDocument();
+  });
 });
 
 test('неизвестный kind по-прежнему не роняет ленту', () => {
