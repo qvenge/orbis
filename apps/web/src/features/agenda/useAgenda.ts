@@ -144,7 +144,9 @@ export function useAgendaDays(): {
     d.entities.sort((a, b) => Number(isAllDay(b)) - Number(isAllDay(a)));
   }
 
-  return { days, timezone: tz, isLoading: q.isLoading, isError: q.isError };
+  // Настройки — часть раскладки, а не украшение: без timezone дни считались бы в зоне
+  // браузера и строки у полуночи перескакивали бы в соседнюю секцию после её прихода.
+  return { days, timezone: tz, isLoading: q.isLoading || settings.isLoading, isError: q.isError };
 }
 
 /** Элемент «Просроченного»: сущность + релевантная дата (более ранняя из двух, §4.2). */
@@ -205,7 +207,9 @@ export function useAgendaOverdue(): {
     count: items.length,
     countLabel: truncated ? `${items.length}+` : String(items.length),
     truncated,
-    isLoading: byDue.isLoading || byStart.isLoading,
+    // Настройки входят в загрузку по той же причине, что в useAgendaDays: релевантная
+    // дата scheduled-строки — локальный день start_at, до timezone он неверен.
+    isLoading: byDue.isLoading || byStart.isLoading || settings.isLoading,
     isError: byDue.isError || byStart.isError,
   };
 }

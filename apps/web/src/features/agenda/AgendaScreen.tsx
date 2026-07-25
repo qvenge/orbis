@@ -11,7 +11,7 @@ import { ScreenHeader } from '../../app/ScreenHeader';
 import { useNav } from '../../state/navigation';
 import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
-import { EntityRow } from '../browser/EntityRow';
+import { EntityRow, formatDay } from '../browser/EntityRow';
 import {
   type AgendaEntity,
   endAt,
@@ -47,6 +47,16 @@ function timeLabel(e: AgendaEntity, tz: string | undefined): string {
   const end = endAt(e);
   const to = end === null ? null : localTime(end, tz);
   return to === null ? from : `${from}–${to}`;
+}
+
+/**
+ * Подпись строки «Просроченного» (мокап §4: «срок был 11.06») — РЕЛЕВАНТНАЯ дата
+ * элемента (более ранняя из due_date и локального дня start_at, §4.2). Своя подпись
+ * здесь обязательна: EntityRow справа печатает due_date, и у задачи с прошедшим
+ * start_at и будущим сроком в красной секции стояла бы дата из будущего.
+ */
+function overdueLabel(date: string): string {
+  return `был ${formatDay(date)}`;
 }
 
 function openEntity(id: string) {
@@ -87,8 +97,9 @@ export function AgendaScreen() {
         {overdue.isError && (
           <p className="text-sm text-text-muted">Не удалось загрузить «Просроченное»</p>
         )}
-        {/* §4.2: секция всегда сверху; пустая — не занимает экран */}
-        {overdue.items.length > 0 && (
+        {/* §4.2: секция всегда сверху; пустая — не занимает экран. Пока грузятся
+            настройки, дата scheduled-строк считалась бы в таймзоне браузера — ждём */}
+        {!overdue.isLoading && overdue.items.length > 0 && (
           <section data-testid="agenda-overdue" className="flex flex-col gap-1">
             <h2 className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-danger">
               <AlertTriangle size={14} aria-hidden />
@@ -98,7 +109,7 @@ export function AgendaScreen() {
             <Card className="border-danger/40 p-1">
               <ul className="flex flex-col gap-px">
                 {overdue.items.map((it) => (
-                  <AgendaRow key={it.entity.id} entity={it.entity} />
+                  <AgendaRow key={it.entity.id} entity={it.entity} time={overdueLabel(it.date)} />
                 ))}
               </ul>
             </Card>

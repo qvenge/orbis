@@ -26,6 +26,12 @@ const yesterday = addDays(today, -1);
 /** Момент 'YYYY-MM-DDTHH:MM:00+03:00' — фиксированное смещение Europe/Moscow. */
 const at = (day: string, time: string) => `${day}T${time}:00+03:00`;
 
+/** Ожидаемая подпись даты «24 июл.» — считается независимо от кода экрана. */
+const dayLabel = (day: string) =>
+  new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(
+    new Date(`${day}T00:00:00Z`),
+  );
+
 const ent = (id: string, title: string, aspects: Record<string, Record<string, unknown>>) => ({
   id,
   ownerId: 'u',
@@ -229,6 +235,72 @@ test('§4.1: all_day — в начале дня с пометкой «весь �
   expect(within(daySection(today)).getByText('весь день')).toBeInTheDocument();
   // Диапазон при end_at (§4.1) — время в таймзоне пользователя
   expect(within(daySection(today)).getByText('14:00–15:30')).toBeInTheDocument();
+});
+
+test('§4.2: recurring-шаблон не висит в «Просроченном» (фильтр действует и там)', async () => {
+  // Якорный start_at шаблона в прошлом и его due_date старше живой задачи: сними фильтр —
+  // шаблон встанет ПЕРВОЙ строкой секции и счётчик покажет 2.
+  const template = ent('tpl', 'Стендап (шаблон)', {
+    'orbis/task': { status: 'planned', due_date: addDays(today, -3) },
+    'orbis/schedule': {
+      start_at: at(addDays(today, -10), '09:00'),
+      recurrence: { freq: 'daily', interval: 1 },
+    },
+  });
+  const task = ent('t1', 'Закончить API', {
+    'orbis/task': { status: 'planned', due_date: yesterday },
+  });
+  renderWithProviders(
+    <AgendaScreen />,
+    agendaHandler({ overdueDue: [template, task], overdueStart: [template] }),
+  );
+
+  await waitFor(() => expect(overdueSection()).toBeInTheDocument());
+  expect(rowTitles(overdueSection())).toEqual(['Закончить API']);
+  expect(screen.getByTestId('agenda-overdue-count')).toHaveTextContent('1');
+});
+
+// --- релевантная дата строки «Просроченного» (мокап §4: «срок был 11.06») --------------
+
+test('§4.2: строка «Просроченного» подписана релевантной датой, а не будущим сроком', async () => {
+  // start_at вчера, due_date послезавтра: сущность просрочена по РАСПИСАНИЮ, и подпись
+  // строки обязана показывать именно эту дату (EntityRow справа печатает due_date).
+  const task = ent('t1', 'Подтвердить созвон', {
+    'orbis/task': { status: 'planned', due_date: addDays(today, 2) },
+    'orbis/schedule': { start_at: at(yesterday, '09:00') },
+  });
+  renderWithProviders(<AgendaScreen />, agendaHandler({ overdueStart: [task] }));
+
+  await waitFor(() => expect(overdueSection()).toBeInTheDocument());
+  expect(within(overdueSection()).getByText(`был ${dayLabel(yesterday)}`)).toBeInTheDocument();
+});
+
+// --- таймзона: раскладка ждёт настроек ------------------------------------------------
+
+test('настройки ещё грузятся → скелетон, а не раскладка в таймзоне браузера', async () => {
+  // Выборки пришли, user.getSettings висит: группировать по дням и считать локальный
+  // день start_at сейчас нечем (§4 «сегодня» — в таймзоне пользователя).
+  const event = ent('e1', 'Стендап', { 'orbis/schedule': { start_at: at(today, '09:00') } });
+  const task = ent('t1', 'Закончить API', {
+    'orbis/task': { status: 'planned', due_date: yesterday },
+  });
+  const { calls } = renderWithProviders(<AgendaScreen />, (path, input) => {
+    if (path === 'user.getSettings') return new Promise(() => {}); // настройки не приходят
+    if (path === 'entity.query') {
+      const q = (input as { query: string }).query;
+      if (q === AGENDA_DAYS_QUERY) return [event];
+      if (q === AGENDA_OVERDUE_DUE_QUERY) return [task];
+      return [];
+    }
+    return {};
+  });
+
+  await waitFor(() =>
+    expect(calls.filter((c) => c.path === 'entity.query').length).toBeGreaterThanOrEqual(3),
+  );
+  await waitFor(() => expect(screen.getAllByLabelText('Загрузка').length).toBeGreaterThan(0));
+  expect(screen.queryAllByTestId(/^agenda-day-/)).toHaveLength(0);
+  expect(screen.queryByTestId('agenda-overdue')).toBeNull();
 });
 
 // --- потолок выборки (K18, урок C6) ---------------------------------------------------
