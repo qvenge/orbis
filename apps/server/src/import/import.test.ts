@@ -22,6 +22,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { aiUsage, entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { type EntitlementResolver, IMPORT_CSV_KEY } from '../entitlements';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMResponse } from '../llm/types';
 import { appRouter } from '../router';
@@ -52,13 +53,17 @@ const NS_OTHER = 'csv:sber-may';
 const FILE_A = 'a'.repeat(64);
 const FILE_B = 'b'.repeat(64);
 
-function ownerCaller(user: string, provider?: LLMProvider) {
+function ownerCaller(user: string, provider?: LLMProvider, entitlements?: EntitlementResolver) {
   return createCaller({
     actorUserId: user,
     actorKind: 'owner',
     db,
     clientVersion: null,
-    ...(provider !== undefined && { ai: { provider, model: MODEL } }),
+    // Резолвер §8 едет в ctx.ai (канал инъекции ai.sendMessage): роутер импорта
+    // передаёт его в домен через importDeps, analyze — целиком как AiDeps
+    ...(provider !== undefined && {
+      ai: { provider, model: MODEL, ...(entitlements !== undefined && { entitlements }) },
+    }),
   });
 }
 
@@ -1088,5 +1093,80 @@ describe('роутер import: ownerOnly (§9.3)', () => {
       const err = await trpcError(call());
       expect(err.code).toBe('FORBIDDEN');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Гейт §8: entitlement 'import.csv' на всех трёх процедурах (комментарий у
+// entity_origin_* в executor.ts опирается на этот гейт как на внешнюю границу)
+// ---------------------------------------------------------------------------
+
+describe('роутер import: гейт §8 import.csv (LIMIT → 429)', () => {
+  /** Резолвер-отказник: запрещает ТОЛЬКО import.csv, остальные ключи не трогает. */
+  const denyImportCsv: EntitlementResolver = (_user, key) =>
+    key === IMPORT_CSV_KEY ? { allowed: false, limit: 0 } : { allowed: true, limit: null };
+
+  test('analyze: отказ резолвера → LIMIT (429), LLM-провайдер не вызывается', async () => {
+    const { user } = await freshOwner();
+    const provider = new ScriptedProvider([toolUse(MAPPING_SIGN)]);
+    const err = await trpcError(
+      ownerCaller(user, provider, denyImportCsv).import.analyze({ sampleRows: ['a,b,c'] }),
+    );
+    expect(err.code).toBe('TOO_MANY_REQUESTS');
+    expect(causeOf(err).code).toBe('LIMIT');
+    expect(causeOf(err).details?.key).toBe(IMPORT_CSV_KEY);
+    expect(provider.requests).toHaveLength(0); // гейт ДО обращения к провайдеру
+    // …и до метеринга: строк ai_usage нет
+    const usage = await withIdentity(db, user, (tx) =>
+      tx.select().from(aiUsage).where(eq(aiUsage.ownerId, user)),
+    );
+    expect(usage).toHaveLength(0);
+  });
+
+  test('review: отказ резолвера → LIMIT (429) до какой-либо работы', async () => {
+    const { user } = await freshOwner();
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '10.00', counterparty: 'ОБЕД' });
+    // ScriptedProvider с пустым скриптом: review провайдера не касается — вызов упал бы
+    const err = await trpcError(
+      ownerCaller(user, new ScriptedProvider([]), denyImportCsv).import.review({
+        rows: [row],
+        fileHash: FILE_A,
+        namespace: NS,
+      }),
+    );
+    expect(err.code).toBe('TOO_MANY_REQUESTS');
+    expect(causeOf(err).code).toBe('LIMIT');
+    expect(causeOf(err).details?.key).toBe(IMPORT_CSV_KEY);
+  });
+
+  test('confirm: отказ резолвера → LIMIT (429); ни сущностей, ни origins не создано', async () => {
+    const { user, foodId } = await freshOwner();
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '340.00', counterparty: 'ОБЕД' });
+    const err = await trpcError(
+      ownerCaller(user, new ScriptedProvider([]), denyImportCsv).import.confirm({
+        batchId: newId(),
+        namespace: NS,
+        fileHash: FILE_A,
+        items: [{ row, action: 'create', categoryRef: foodId }],
+      }),
+    );
+    expect(err.code).toBe('TOO_MANY_REQUESTS');
+    expect(causeOf(err).code).toBe('LIMIT');
+    expect(causeOf(err).details?.key).toBe(IMPORT_CSV_KEY);
+    // Работа не началась — СЫРЫМ админ-соединением (мимо RLS и кода C2):
+    // ни финансовых сущностей, ни строк entity_origins
+    expect(await rawFinancialCount(user)).toBe(0);
+    expect(await rawOrigins(user)).toEqual([]);
+  });
+
+  test('дефолтный резолвер (план dev) пропускает: review без инъекции работает', async () => {
+    const { user } = await freshOwner();
+    const row = makeRow({ occurredOn: '2026-05-03', amount: '10.00', counterparty: 'X' });
+    const r = await ownerCaller(user).import.review({
+      rows: [row],
+      fileHash: FILE_A,
+      namespace: NS,
+    });
+    expect(r.rows[0]?.status).toBe('new');
   });
 });

@@ -39,7 +39,7 @@ import type { AiDeps } from '../ai/send-message';
 import type { Db } from '../db/client';
 import { entityOrigins } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
-import { IMPORT_CSV_KEY, resolveEntitlement } from '../entitlements';
+import { type EntitlementResolver, IMPORT_CSV_KEY, resolveEntitlement } from '../entitlements';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
@@ -52,11 +52,21 @@ import { addDays } from '../recurring/materialize';
 const sink = makeChatJournalSink();
 
 /**
- * Гейт §8 для всех трёх процедур импорта (образец — gateAiEntitlements): на плане
- * 'dev' разрешено, отказ резолвера → LIMIT (429 маппингом errors.ts).
+ * Зависимости review/confirm (у analyze резолвер входит в AiDeps): резолвер §8 —
+ * инжектируемый шов тестов по образцу McpDeps.entitlements (mcp/server.ts).
  */
-export function gateImportCsv(ownerId: string): void {
-  const decision = resolveEntitlement(ownerId, IMPORT_CSV_KEY);
+export interface ImportDeps {
+  /** Резолвер §8; по умолчанию — боевой resolveEntitlement (план dev безлимитен). */
+  entitlements?: EntitlementResolver;
+}
+
+/**
+ * Гейт §8 для всех трёх процедур импорта (образец — gateAiEntitlements): на плане
+ * 'dev' разрешено, отказ резолвера → LIMIT (429 маппингом errors.ts). Резолвер —
+ * параметром (шов mcp/server.ts): вызывающий подставляет deps.entitlements ?? боевой.
+ */
+export function gateImportCsv(ownerId: string, resolve: EntitlementResolver): void {
+  const decision = resolve(ownerId, IMPORT_CSV_KEY);
   if (!decision.allowed) {
     throw new ExecError('LIMIT', `лимит «${IMPORT_CSV_KEY}» исчерпан`, {
       key: IMPORT_CSV_KEY,
@@ -125,7 +135,7 @@ export async function analyzeCsv(
   deps: AiDeps,
   args: { ownerId: string; sampleRows: string[] },
 ): Promise<ImportAnalyzeResult> {
-  gateImportCsv(args.ownerId);
+  gateImportCsv(args.ownerId, deps.entitlements ?? resolveEntitlement);
 
   const samples = args.sampleRows.map((row) => truncateRowCodePoints(row, MAX_ANALYZE_ROW_CHARS));
   const request: LLMRequest = {
@@ -337,8 +347,9 @@ export async function reviewImport(
   db: Db,
   ownerId: string,
   input: ImportReviewInput,
+  deps: ImportDeps = {},
 ): Promise<ImportReviewResult> {
-  gateImportCsv(ownerId);
+  gateImportCsv(ownerId, deps.entitlements ?? resolveEntitlement);
   assertRowLimit(input.rows.length);
 
   const externalIds = await Promise.all(
@@ -521,8 +532,9 @@ export async function confirmImport(
   db: Db,
   ownerId: string,
   input: ImportConfirmInput,
+  deps: ImportDeps = {},
 ): Promise<ImportConfirmResult> {
-  gateImportCsv(ownerId);
+  gateImportCsv(ownerId, deps.entitlements ?? resolveEntitlement);
   assertRowLimit(input.items.length);
   await assertAdoptTargets(db, ownerId, input);
 

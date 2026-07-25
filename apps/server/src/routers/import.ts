@@ -18,10 +18,20 @@ import {
   importConfirmInput,
   importReviewInput,
 } from '@orbis/shared';
-import { defaultAiDeps } from '../ai/send-message';
+import { type AiDeps, defaultAiDeps } from '../ai/send-message';
 import { ExecError, execErrorToTRPC } from '../errors';
-import { analyzeCsv, confirmImport, reviewImport } from '../import/review';
+import { analyzeCsv, confirmImport, type ImportDeps, reviewImport } from '../import/review';
 import { ownerOnlyProcedure, router } from '../trpc';
+
+/**
+ * Резолвер §8 для review/confirm — из ctx.ai (тот же канал инъекции, что у
+ * ai.sendMessage и analyze): боевой контекст (makeAiDeps) entitlements не ставит —
+ * домен подставит resolveEntitlement; тесты инжектируют отказ. Трансляция контекста
+ * в deps домена, не логика (правило 8 impl-00).
+ */
+function importDeps(ctx: { ai?: AiDeps }): ImportDeps {
+  return ctx.ai?.entitlements !== undefined ? { entitlements: ctx.ai.entitlements } : {};
+}
 
 export const importRouter = router({
   /**
@@ -49,7 +59,7 @@ export const importRouter = router({
     .input(importReviewInput)
     .mutation(async ({ ctx, input }): Promise<ImportReviewResult> => {
       try {
-        return await reviewImport(ctx.db, ctx.actorUserId, input);
+        return await reviewImport(ctx.db, ctx.actorUserId, input, importDeps(ctx));
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;
@@ -61,7 +71,7 @@ export const importRouter = router({
     .input(importConfirmInput)
     .mutation(async ({ ctx, input }): Promise<ImportConfirmResult> => {
       try {
-        return await confirmImport(ctx.db, ctx.actorUserId, input);
+        return await confirmImport(ctx.db, ctx.actorUserId, input, importDeps(ctx));
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;
