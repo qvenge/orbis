@@ -11,6 +11,7 @@ import { ChatScreen } from '../features/chat/ChatScreen';
 import { ChatThread } from '../features/chat/ChatThread';
 import { DetailScreen } from '../features/entity-detail/DetailScreen';
 import { ImportFlow } from '../features/import/ImportFlow';
+import { MemoryScreen } from '../features/settings/MemoryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
 import { type ScreenRef, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
@@ -138,6 +139,9 @@ function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
   } else if (top.kind === 'budget-import') {
     // Флоу импорта CSV (03-budget §3.4, Task C4b); вход — шапка Overview и карточка чата.
     return <ImportFlow />;
+  } else if (top.kind === 'memory') {
+    // Экран «Память AI» (02-core-os §2.7, Task D3b); вход — раздел настроек.
+    return <MemoryScreen />;
   } else if (top.kind === 'settings') {
     return <SettingsScreen />;
   }

@@ -10,6 +10,9 @@ export type Tab = 'chat' | 'browser' | 'agenda' | 'budget';
 // и кнопки шапки Overview; месяц экран берёт сам (текущий в таймзоне пользователя).
 // 'budget-import' — флоу импорта CSV (03-budget §3.4, C4b): push из шапки Overview и
 // из карточки import_review в чате; файл выбирается уже на самом экране.
+// 'memory' — экран «Память AI» (02-core-os §2.7, D3b): push из раздела настроек.
+// Свой ScreenRef, а не вкладка внутри настроек (K10): тап по правилу пушит detail
+// в стек ТОГО ЖЕ таба, поверх которого открыты настройки.
 export type ScreenRef =
   | { kind: 'entity'; id: string }
   | { kind: 'thread'; threadId: string }
@@ -17,6 +20,7 @@ export type ScreenRef =
   | { kind: 'budget-transactions' }
   | { kind: 'budget-rollover' }
   | { kind: 'budget-import' }
+  | { kind: 'memory' }
   | { kind: 'settings' };
 
 type NavState = {
