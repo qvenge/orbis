@@ -20,6 +20,7 @@
 // корректно отвязывает от конверта — хук фазы A); полноценный мастер шаблона — future.
 // Тач-свайпы в тестах не эмулируются надёжно → кнопки-действия в каждой строке
 // ПЕРВИЧНЫ (доступность/десктоп), свайп — прогрессивное улучшение поверх них.
+import { keepPreviousData } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Repeat, Tag } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
@@ -103,7 +104,9 @@ export function TransactionsScreen() {
     amountTo: amountBound(amountTo),
     search,
   });
-  const txQ = trpc.entity.query.useQuery({ query });
+  // keepPreviousData: «показать ещё» меняет ключ запроса (limit растёт) — без него
+  // уже показанный список на кадр подменялся бы скелетоном вместо роста (Task C6)
+  const txQ = trpc.entity.query.useQuery({ query }, { placeholderData: keepPreviousData });
 
   // Мутации строк (§3.3): entity.update + инвалидация budget И entity — рекатегоризация
   // двигает spent конвертов (серверный хук A4), пометка 🔁 меняет рендер списков.

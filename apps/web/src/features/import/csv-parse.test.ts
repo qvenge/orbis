@@ -210,6 +210,29 @@ test('toCanonicalRows: матрица форматов суммы — пробе
   });
 });
 
+test('toCanonicalRows: третий знак ОКРУГЛЯЕТСЯ half-away-from-zero, а не усекается', () => {
+  // 01-arch §3.3 предписывает округление half-away-from-zero именно на границе
+  // ввода/импорта — усечение давало бы 1.235 → 1.23 (находка C1 финального ревью).
+  const cases: Array<[cell: string, amount: string, direction: 'income' | 'expense']> = [
+    ['1,235', '1.24', 'income'], // .5 → от нуля вверх
+    ['-1,235', '1.24', 'expense'], // тот же модуль, знак несёт direction
+    ['1,2349', '1.23', 'income'], // < .5 → вниз
+    ['1,2350001', '1.24', 'income'], // хвост за третьим знаком роли не играет
+    ['-9,999', '10.00', 'expense'], // перенос через целую часть
+    ['(0,005)', '0.01', 'expense'], // скобочный минус + перенос из нулевой целой
+    ['99,999', '100.00', 'income'], // двойной перенос
+  ];
+  const { rows, errors } = toCanonicalRows(
+    cases.map(([cell]) => ['01.02.2026', 'X', cell]),
+    signMapping,
+  );
+  expect(errors).toEqual([]);
+  cases.forEach(([cell, amount, direction], i) => {
+    expect(at(rows, i).amount, `сумма «${cell}»`).toBe(amount);
+    expect(at(rows, i).direction, `направление «${cell}»`).toBe(direction);
+  });
+});
+
 test('toCanonicalRows: нулевая и неразбираемая сумма → errors, не rows', () => {
   const { rows, errors } = toCanonicalRows(
     [

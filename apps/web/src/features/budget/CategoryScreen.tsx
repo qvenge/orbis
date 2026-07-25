@@ -6,6 +6,7 @@
 // (children_of, NativeRow §3.6, 🔁 у recurring-инстансов) и quick-add с предзаданной
 // категорией ([+ запись в эту категорию] → QuickAddBar preset, Task B4, §3.6).
 import type { CategoryTrendPoint, EnvelopeStatus } from '@orbis/shared';
+import { keepPreviousData } from '@tanstack/react-query';
 import { Repeat } from 'lucide-react';
 import { useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
@@ -102,12 +103,17 @@ export function CategoryScreen({ categoryId }: { categoryId: string }) {
     setPagedEnvelope(envelopeId);
     setPage(1);
   }
-  const limit = TX_PAGE_SIZE * page;
+  // Окно берётся с оглядкой на сброс: setPage(1) применится только к СЛЕДУЮЩЕМУ рендеру,
+  // поэтому в рендере смены конверта считаем limit по первой странице явно — иначе один
+  // кадр ушёл бы за N×TX_PAGE_SIZE записей нового конверта.
+  const limit = TX_PAGE_SIZE * (pagedEnvelope === envelopeId ? page : 1);
   const txQ = trpc.entity.query.useQuery(
     {
       query: `children_of=${envelopeId ?? ''}, aspect=orbis/financial, sortBy=occurred_on:desc, limit=${limit}`,
     },
-    { enabled: envelopeId !== undefined },
+    // keepPreviousData: догрузка «показать ещё» меняет ключ запроса — без него список
+    // на кадр подменялся бы скелетоном вместо того, чтобы дорасти
+    { enabled: envelopeId !== undefined, placeholderData: keepPreviousData },
   );
 
   const category = catQ.data?.entity;

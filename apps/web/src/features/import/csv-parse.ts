@@ -138,6 +138,40 @@ export function parseCsv(text: string, delimiter: string): string[][] {
   return rows;
 }
 
+/**
+ * Инкремент неотрицательного целого, записанного строкой цифр (ручной перенос):
+ * '999' → '1000'. Никакого Number — 01-arch §3.3 запрещает IEEE-754 на суммах, а
+ * длинная выписка может нести числа за пределами безопасного целого.
+ */
+function incrementDigits(digits: string): string {
+  const out = digits.split('');
+  let i = out.length - 1;
+  while (i >= 0) {
+    const d = (out[i] as string).charCodeAt(0) - 48;
+    if (d < 9) {
+      out[i] = String.fromCharCode(48 + d + 1);
+      return out.join('');
+    }
+    out[i] = '0';
+    i -= 1;
+  }
+  return `1${out.join('')}`;
+}
+
+/**
+ * Округление до 2 знаков half-away-from-zero (01-arch §3.3 — предписано ИМЕННО на
+ * границе ввода/импорта, а она здесь) строковой арифметикой: третий знак ≥ 5 →
+ * инкремент двух первых с переносом в целую часть. `1.235` → `1.24`, `9.999` → `10.00`.
+ * Знак живёт отдельно (direction), поэтому away-from-zero = «вверх» по модулю.
+ */
+function roundTo2(intPart: string, fracPart: string): { int: string; frac: string } {
+  if (fracPart.length <= 2) return { int: intPart, frac: `${fracPart}00`.slice(0, 2) };
+  const head = fracPart.slice(0, 2);
+  if (fracPart.charCodeAt(2) - 48 < 5) return { int: intPart, frac: head };
+  const bumped = incrementDigits(`${intPart}${head}`);
+  return { int: bumped.slice(0, bumped.length - 2), frac: bumped.slice(-2) };
+}
+
 interface ParsedMoney {
   /** Положительная decimal-строка с ровно двумя знаками дробной части. */
   abs: string;
@@ -153,7 +187,8 @@ interface ParsedMoney {
  * - один вид, встречается один раз → десятичный (поведение budget/moneyInput.ts);
  * - один вид, несколько раз → все разрядные;
  * - ни одного → целое.
- * Дробная часть добивается/усекается до ровно 2 знаков. null — ячейка не сумма.
+ * Дробная часть приводится к ровно 2 знакам: короткая добивается нулями, длинная
+ * ОКРУГЛЯЕТСЯ half-away-from-zero (roundTo2, §3.3), а не усекается. null — не сумма.
  */
 function parseMoney(cell: string): ParsedMoney | null {
   let s = cell.replace(/\s+/gu, '');
@@ -201,9 +236,10 @@ function parseMoney(cell: string): ParsedMoney | null {
     intPart = s;
     fracPart = '';
   }
-  const int = (intPart === '' ? '0' : intPart).replace(/^0+(?=\d)/, '');
-  const frac = `${fracPart}00`.slice(0, 2);
-  const abs = `${int}.${frac}`;
+  const normalizedInt = (intPart === '' ? '0' : intPart).replace(/^0+(?=\d)/, '');
+  // третий знак не отбрасывается, а округляется half-away-from-zero (§3.3)
+  const { int, frac } = roundTo2(normalizedInt, fracPart);
+  const abs = `${int.replace(/^0+(?=\d)/, '')}.${frac}`;
   return { abs, negative, isZero: abs === '0.00' };
 }
 
