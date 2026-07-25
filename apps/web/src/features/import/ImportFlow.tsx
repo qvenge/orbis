@@ -52,6 +52,8 @@ type ParsedFile = {
   fileHash: string;
   records: string[][];
   sampleRows: string[];
+  /** Фактический разделитель файла — им же склеивается display-поле raw (не ';'-константой). */
+  delimiter: ',' | ';' | '\t';
 };
 
 /**
@@ -180,18 +182,26 @@ export function ImportFlow() {
     try {
       const bytes = await file.arrayBuffer();
       const { text } = decodeCsvBytes(bytes);
-      const records = parseCsv(text, detectDelimiter(text));
+      const delimiter = detectDelimiter(text);
+      const records = parseCsv(text, delimiter);
       if (records.length === 0) {
         setError('Файл пуст или не похож на CSV');
         setStep('idle');
         return;
       }
-      // Потолок проверяется ДО единственного запроса шага 2 — файл сверх лимита не
-      // порождает вообще никакого трафика. Заголовок здесь ещё не отрезан, поэтому
-      // граница строже серверной ровно на строки заголовка — в пользу пользователя.
-      if (records.length > MAX_IMPORT_ROWS) {
+      // Потолок считает строки ДАННЫХ (граница сервера — число строк import.review):
+      // заголовок исключается той же догадкой guessHeaderRows, что и форма шага 2, —
+      // 1000 операций + заголовок проходят, как прошли бы и на сервере. Проверка идёт
+      // ДО единственного запроса шага 2 — файл сверх лимита не порождает вообще
+      // никакого трафика; точная граница по фактическому headerRows — в runReview.
+      const headerGuess = guessHeaderRows(
+        records,
+        toMapping(draftFrom(null, columnCount(records))),
+      );
+      const dataRowCount = records.length - headerGuess;
+      if (dataRowCount > MAX_IMPORT_ROWS) {
         setError(
-          `В файле ${records.length} строк — за один импорт принимается не более ${MAX_IMPORT_ROWS}. Разбейте выписку на части.`,
+          `В файле ${dataRowCount} строк данных — за один импорт принимается не более ${MAX_IMPORT_ROWS}. Разбейте выписку на части.`,
         );
         setStep('idle');
         return;
@@ -202,6 +212,7 @@ export function ImportFlow() {
         fileHash: await fileHashHex(bytes),
         records,
         sampleRows: sampleLines(text),
+        delimiter,
       };
     } catch {
       setError('Не удалось прочитать файл — выберите CSV-выписку');
@@ -228,11 +239,20 @@ export function ImportFlow() {
     const { rows, errors } = toCanonicalRows(
       parsed.records.slice(draft.headerRows),
       toMapping(draft),
+      parsed.delimiter,
     );
     setParseErrors(errors);
     if (rows.length === 0) {
       setError(
         'Ни одна строка не разобрана — проверьте колонки, формат даты и число строк заголовка',
+      );
+      return;
+    }
+    // Точная граница сервера — число строк в import.review: здесь headerRows уже
+    // фактический (ранняя проверка шла по догадке), сверхлимитный запрос не уходит вовсе.
+    if (rows.length > MAX_IMPORT_ROWS) {
+      setError(
+        `Строк данных ${rows.length} — за один импорт принимается не более ${MAX_IMPORT_ROWS}. Разбейте выписку на части.`,
       );
       return;
     }

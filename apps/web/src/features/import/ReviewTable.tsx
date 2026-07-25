@@ -214,8 +214,11 @@ function Row({
       data-status={row.status}
       className="flex items-center gap-2 text-sm"
     >
+      {/* Статус — словами (макет §3.4 шаг 3): глиф декоративен, скринридеру читается
+          sr-only-текст (идиома Sheet), title остаётся подсказкой указателю */}
       <span title={STATUS_TITLE[row.status]} className="shrink-0">
-        {STATUS_ICON[row.status]}
+        <span aria-hidden="true">{STATUS_ICON[row.status]}</span>
+        <span className="sr-only">{STATUS_TITLE[row.status]}</span>
       </span>
       <span className="w-10 shrink-0 text-xs tabular-nums text-text-muted">
         {ddmm(row.occurredOn)}

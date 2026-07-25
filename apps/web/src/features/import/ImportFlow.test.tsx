@@ -169,15 +169,52 @@ test('в import.analyze уходят только образцы строк (≤
   expect(sample.sampleRows[0]).toBe('Дата;Контрагент;Сумма');
 });
 
-test('файл длиннее MAX_IMPORT_ROWS → ошибка с числом строк, ни одного запроса', async () => {
+/** CSV из заголовка и n строк данных — фикстура граничных тестов потолка. */
+function csvWithDataRows(n: number): string {
   const rows = ['Дата;Контрагент;Сумма'];
-  for (let i = 0; i < MAX_IMPORT_ROWS; i += 1) rows.push(`03.05.2026;ROW${i};-10,00`);
+  for (let i = 0; i < n; i += 1) rows.push(`03.05.2026;ROW${i};-10,00`);
+  return rows.join('\n');
+}
+
+test('потолок считает строки ДАННЫХ: ровно MAX_IMPORT_ROWS операций + заголовок проходят', async () => {
   const { calls } = renderWithProviders(<ImportFlow />, handler());
-  pickFile(rows.join('\n'));
+  pickFile(csvWithDataRows(MAX_IMPORT_ROWS));
+  await waitFor(() => expect(screen.getByTestId('mapping-submit')).toBeInTheDocument());
+  // граница совпадает с серверной: файл принят, ошибки нет, analyze ушёл
+  expect(screen.queryByTestId('import-error')).toBeNull();
+  expect(calls.some((c) => c.path === 'import.analyze')).toBe(true);
+});
+
+test('MAX_IMPORT_ROWS+1 строк данных → ошибка с их числом, ни одного запроса', async () => {
+  const { calls } = renderWithProviders(<ImportFlow />, handler());
+  pickFile(csvWithDataRows(MAX_IMPORT_ROWS + 1));
   await waitFor(() => expect(screen.getByTestId('import-error')).toBeInTheDocument());
-  expect(screen.getByTestId('import-error')).toHaveTextContent(String(rows.length));
+  expect(screen.getByTestId('import-error')).toHaveTextContent(String(MAX_IMPORT_ROWS + 1));
   expect(screen.getByTestId('import-error')).toHaveTextContent(String(MAX_IMPORT_ROWS));
   expect(calls.filter((c) => c.path.startsWith('import.'))).toHaveLength(0);
+});
+
+test('точная граница на шаге сверки: фактический headerRows=0 даёт 1001 строку — запрос не уходит', async () => {
+  // Колонки переставлены: под дефолтным маппингом первая строка не разбирается, ранняя
+  // проверка считает её заголовком (1001−1=1000) и пропускает файл; AI-маппинг разбирает
+  // ВСЕ 1001 строку как данные (headerRows=0) — сверхлимитный import.review не отправляется.
+  const rows: string[] = [];
+  for (let i = 0; i <= MAX_IMPORT_ROWS; i += 1) rows.push(`ROW${i};03.05.2026;-10,00`);
+  const { calls } = renderWithProviders(
+    <ImportFlow />,
+    handler({
+      'import.analyze': () => ({
+        mapping: { ...MAPPING, date: 1, counterparty: 0 },
+        confidence: 0.9,
+      }),
+    }),
+  );
+  pickFile(rows.join('\n'));
+  await waitFor(() => expect(screen.getByLabelText('Строк заголовка')).toHaveValue(0));
+  fireEvent.click(screen.getByTestId('mapping-submit'));
+  await waitFor(() => expect(screen.getByTestId('import-error')).toBeInTheDocument());
+  expect(screen.getByTestId('import-error')).toHaveTextContent(String(MAX_IMPORT_ROWS + 1));
+  expect(calls.some((c) => c.path === 'import.review')).toBe(false);
 });
 
 // --- шаг 2: форма маппинга, в том числе без AI (§7.9) ----------------------------------
@@ -253,6 +290,17 @@ test('файл без заголовка: авто-догадка даёт 0 с�
   expect(rows[0]?.counterparty).toBe('ПЯТЁРОЧКА');
 });
 
+test('raw в строках сверки склеен фактическим разделителем файла («,»), а не «;»', async () => {
+  const commaCsv = ['Дата,Контрагент,Сумма', '03.05.2026,ПЯТЁРОЧКА,"-1890,00"'].join('\n');
+  const { calls } = renderWithProviders(<ImportFlow />, handler());
+  pickFile(commaCsv);
+  await waitFor(() => expect(screen.getByTestId('mapping-submit')).toBeInTheDocument());
+  fireEvent.click(screen.getByTestId('mapping-submit'));
+  await waitFor(() => expect(screen.getByTestId('review-counters')).toBeInTheDocument());
+  const rows = (calls.find((c) => c.path === 'import.review')?.input as ImportReviewInput).rows;
+  expect(rows[0]?.raw).toBe('03.05.2026,ПЯТЁРОЧКА,-1890,00');
+});
+
 // --- шаг 3: таблица ревью ---------------------------------------------------------------
 
 test('фикстура со всеми тремя статусами → счётчики и строки отрисованы', async () => {
@@ -275,6 +323,11 @@ test('фикстура со всеми тремя статусами → счё�
   expect(rows[2]).toHaveAttribute('data-status', 'probable_duplicate');
   expect(rows[3]).toHaveAttribute('data-status', 'already_imported');
   expect(rows[3]).toHaveTextContent(/уже импортирован/i);
+  // Статус объявлен словами (§3.4 шаг 3), а не только глифом с title: sr-only-текст
+  expect(within(rows[0] as HTMLElement).getByText('новая')).toBeInTheDocument();
+  expect(within(rows[2] as HTMLElement).getByText('вероятный дубль')).toBeInTheDocument();
+  // у ⟳ слова встречаются дважды: sr-only статус + видимая подпись вместо выпадашки
+  expect(within(rows[3] as HTMLElement).getAllByText('уже импортирована')).toHaveLength(2);
 });
 
 test('[Подтвердить N] шлёт только create/adopt: ⟳-строка в payload не попадает', async () => {

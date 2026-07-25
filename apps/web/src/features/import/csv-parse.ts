@@ -242,6 +242,7 @@ function parseDateToIso(cell: string, format: CsvMapping['dateFormat']): string 
 export function toCanonicalRows(
   dataRows: string[][],
   mapping: CsvMapping,
+  delimiter = ';',
 ): { rows: CanonicalRow[]; errors: Array<{ rowIndex: number; reason: string }> } {
   const rows: CanonicalRow[] = [];
   const errors: Array<{ rowIndex: number; reason: string }> = [];
@@ -344,9 +345,9 @@ export function toCanonicalRows(
       direction,
       // как есть: normalizeCounterparty — этап дедупа, здесь она сломала бы таблицу ревью
       counterparty: cells[mapping.counterparty] ?? '',
-      // raw — только для отображения, в external_id не входит (проверено C1); разделитель
-      // склейки поэтому — константа ';', а не фактический разделитель файла
-      raw: cells.join(';'),
+      // raw — только для отображения, в external_id не входит (проверено C1); склейка —
+      // фактическим разделителем файла (дефолт ';' сохраняет прежние вызовы без него)
+      raw: cells.join(delimiter),
       rowIndex,
       ...(bankTxnId === undefined ? {} : { bankTxnId }),
     };

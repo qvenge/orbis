@@ -17,6 +17,17 @@ const msg = (cards: unknown[], extra: Partial<ChatMessage> = {}): ChatMessage =>
     ...extra,
   }) as ChatMessage;
 
+// Сброс глобального состояния между тестами (идиома BudgetScreen.test): import_review
+// переключает вкладку и пушит экран — без сброса соседние тесты зависели бы от чужой
+// оставшейся навигации.
+beforeEach(() => {
+  localStorage.clear();
+  useNav.setState({
+    activeTab: 'chat',
+    stacks: { chat: [], browser: [], agenda: [], budget: [] },
+  });
+});
+
 // Мок entity.get для строк query_result: EntityRef резолвит id → title (этап 4, без UUID в UI).
 const entityGet = (path: string, input: unknown) =>
   path === 'entity.get'
@@ -341,11 +352,6 @@ const settingsWithViews = (views: string[]) => ({
 });
 
 test('import_review: «Открыть импорт» переключает на Budget и пушит экран импорта', async () => {
-  localStorage.clear();
-  useNav.setState({
-    activeTab: 'chat',
-    stacks: { chat: [], browser: [], agenda: [], budget: [] },
-  });
   renderWithProviders(
     <div>{renderCards(msg([{ kind: 'import_review', title: 'выписка_май.csv' }]))}</div>,
     (path) => (path === 'user.getSettings' ? settingsWithViews(['orbis-budget']) : {}),

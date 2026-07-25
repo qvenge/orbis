@@ -169,6 +169,19 @@ test('toCanonicalRows: DD.MM.YYYY → ISO, знак → direction, counterparty 
   ]);
 });
 
+test('toCanonicalRows: raw склеен фактическим разделителем файла («,»), а не константой «;»', () => {
+  const { rows, errors } = toCanonicalRows(
+    [['01.02.2026', 'Пятёрочка', '-1890,00']],
+    signMapping,
+    ',',
+  );
+  expect(errors).toEqual([]);
+  expect(at(rows, 0).raw).toBe('01.02.2026,Пятёрочка,-1890,00');
+  // без третьего аргумента сохраняется прежнее поведение — «;» (обратная совместимость)
+  const legacy = toCanonicalRows([['01.02.2026', 'Пятёрочка', '-1890,00']], signMapping);
+  expect(at(legacy.rows, 0).raw).toBe('01.02.2026;Пятёрочка;-1890,00');
+});
+
 test('toCanonicalRows: матрица форматов суммы — пробелы, NBSP, разряды, валюта, скобки', () => {
   const cases: Array<[cell: string, amount: string, direction: 'income' | 'expense']> = [
     ['1 890,00', '1890.00', 'income'], // обычный пробел как разряд

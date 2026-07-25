@@ -216,7 +216,7 @@ interface Candidate {
 
 /** Ключ бакета кандидатов: направление + дата (сверка идёт по дню ±1, §3.4.1 п.2). */
 function bucketKey(direction: string, occurredOn: string): string {
-  return `${direction} ${occurredOn}`;
+  return `${direction}\u0000${occurredOn}`;
 }
 
 /** external_id этого namespace, уже зарегистрированные в entity_origins (§4.8). */
