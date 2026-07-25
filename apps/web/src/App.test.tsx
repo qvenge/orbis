@@ -17,10 +17,11 @@ afterEach(() => {
 // ОБЕ поверхности (SidebarNav и TabBar), поэтому testid у них разные.
 // Agenda — вкладка ЯДРА (02-core-os §1.1): в отличие от Budget («первый устанавливаемый
 // view», 03-budget §1.2) гейта installedViews у неё нет. Порядок вкладок — Chat, Browser,
-// Agenda, (Budget). Дефолтный handler отдаёт {} → installedViews пуст → Budget скрыт.
+// Agenda, (Budget). Handler отдаёт {} на user.getSettings → installedViews пуст → Budget скрыт.
 test('навигация: Чат, Обзор, Agenda в обеих поверхностях; Budget под гейтом installedViews', () => {
   // App живёт под trpc.Provider (main.tsx); дефолтный таб chat рендерит ChatScreen → нужен контекст.
-  renderWithProviders(<App />);
+  // entity.query отдаём массивом: бейдж Agenda (§1.5) шлёт его с любого экрана.
+  renderWithProviders(<App />, (path) => (path === 'entity.query' ? [] : {}));
   // Мобильный tab-bar — вкладки в порядке §1.1
   expect(screen.getAllByRole('tab').map((b) => b.getAttribute('data-testid'))).toEqual([
     'tab-chat',

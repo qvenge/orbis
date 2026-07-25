@@ -1,4 +1,5 @@
 import { CalendarDays, FolderOpen, type LucideIcon, MessageSquare, Settings } from 'lucide-react';
+import { useAgendaOverdue } from '../features/agenda/useAgenda';
 import { PinnedList } from '../features/browser/PinnedList';
 import { useBudgetAlertCount, useBudgetTabVisible } from '../features/budget/useBudget';
 import { openPinnedEntity, openSettings, type Tab, useNav } from '../state/navigation';
@@ -19,6 +20,8 @@ export function SidebarNav() {
   const activeTab = useNav((s) => s.activeTab);
   const switchTab = useNav((s) => s.switchTab);
   const chatBadge = useRetryBuffer((s) => s.size); // §1.5
+  // §1.5 — бейдж «Просроченного» в ОБЕИХ поверхностях (B1-прецедент); хук общий с вкладкой
+  const agendaOverdue = useAgendaOverdue();
   // Гейт вкладки Budget — как в TabBar (03-budget §1.2): без view вкладки нет.
   const budgetVisible = useBudgetTabVisible();
   const budgetBadge = useBudgetAlertCount(); // §6.1 — бейдж в ОБЕИХ поверхностях (B1-прецедент)
@@ -56,6 +59,15 @@ export function SidebarNav() {
                   className="rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
                 >
                   {chatBadge}
+                </span>
+              )}
+              {/* countLabel, а не count: при упоре в потолок выборки — «200+» (K18) */}
+              {t.id === 'agenda' && agendaOverdue.count > 0 && (
+                <span
+                  data-testid="sidebar-agenda-badge"
+                  className="rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
+                >
+                  {agendaOverdue.countLabel}
                 </span>
               )}
               {t.id === 'budget' && budgetBadge > 0 && (

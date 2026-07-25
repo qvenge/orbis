@@ -7,9 +7,10 @@
 import { addDays } from '@orbis/shared';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
+import { App } from '../../App';
 import { ActiveScreen } from '../../app/router';
 import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders } from '../../test/harness';
+import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
 import { todayISO } from '../budget/useBudget';
 import { AgendaScreen } from './AgendaScreen';
 import {
@@ -389,4 +390,89 @@ test('§8.2: архивация на detail-экране убирает зада
 
   fireEvent.click(screen.getByTestId('nav-back'));
   await waitFor(() => expect(screen.queryByTestId('agenda-overdue')).toBeNull());
+});
+
+// --- Бейдж вкладки Agenda (§1.5, Task D2) ---------------------------------------------
+//
+// Бейдж смонтирован на ЛЮБОМ экране (K16), поэтому тесты рендерят App с активным табом
+// chat: счётчик обязан работать без открытия вкладки. Обе поверхности навигации
+// (TabBar и SidebarNav) в jsdom присутствуют одновременно — B1-прецедент бейджа Budget.
+
+/** Активный таб — chat: вкладка Agenda закрыта, бейдж обязан жить сам по себе. */
+function onChatTab() {
+  useNav.setState({
+    activeTab: 'chat',
+    stacks: { chat: [], browser: [], agenda: [], budget: [] },
+  });
+}
+
+const overdueTask = ent('t1', 'Закончить API', {
+  'orbis/task': { status: 'in_progress', due_date: yesterday },
+});
+
+test('бейдж Agenda: просроченное>0 → число в tab-bar И sidebar, вкладка не открыта', async () => {
+  onChatTab();
+  renderWithProviders(<App />, agendaHandler({ overdueDue: [overdueTask] }));
+
+  await waitFor(() => expect(screen.getByTestId('agenda-badge')).toHaveTextContent('1'));
+  expect(screen.getByTestId('sidebar-agenda-badge')).toHaveTextContent('1');
+  // Экран Agenda не смонтирован — источник числа именно бейдж, а не открытая секция
+  expect(screen.queryByTestId('agenda-overdue')).toBeNull();
+});
+
+test('просроченного нет → бейджа Agenda нет ни в одной поверхности', async () => {
+  onChatTab();
+  const { calls } = renderWithProviders(<App />, agendaHandler({}));
+
+  await waitFor(() => expect(screen.getByTestId('tab-agenda')).toBeInTheDocument());
+  await waitFor(() =>
+    expect(
+      calls.some(
+        (c) =>
+          c.path === 'entity.query' &&
+          (c.input as { query: string }).query === AGENDA_OVERDUE_DUE_QUERY,
+      ),
+    ).toBe(true),
+  );
+  expect(screen.queryByTestId('agenda-badge')).toBeNull();
+  expect(screen.queryByTestId('sidebar-agenda-badge')).toBeNull();
+});
+
+test('ошибка запроса «Просроченного» → бейджа нет, вкладка Agenda жива', async () => {
+  onChatTab();
+  renderWithProviders(<App />, (path) => {
+    if (path === 'user.getSettings') return settings;
+    if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
+    return {};
+  });
+
+  await waitFor(() => expect(screen.getByTestId('tab-agenda')).toBeInTheDocument());
+  expect(screen.getByTestId('sidebar-agenda')).toBeInTheDocument();
+  expect(screen.queryByTestId('agenda-badge')).toBeNull();
+  expect(screen.queryByTestId('sidebar-agenda-badge')).toBeNull();
+});
+
+test('бейдж при упоре в потолок показывает «200+», а не усечённое число', async () => {
+  onChatTab();
+  const many = Array.from({ length: 200 }, (_, i) =>
+    ent(`t${i}`, `Задача ${i}`, { 'orbis/task': { status: 'planned', due_date: yesterday } }),
+  );
+  renderWithProviders(<App />, agendaHandler({ overdueDue: many }));
+
+  await waitFor(() => expect(screen.getByTestId('agenda-badge')).toHaveTextContent('200+'));
+  expect(screen.getByTestId('sidebar-agenda-badge')).toHaveTextContent('200+');
+});
+
+test('бейдж и вкладка делят один источник: второго запроса «Просроченного» нет', async () => {
+  // Таб agenda: хук зовут ТРИ компонента (TabBar, SidebarNav, AgendaScreen) — на сервер
+  // при этом уходит ровно один запрос на каждую из двух выборок §4.2.
+  const { calls } = renderWithProviders(<App />, agendaHandler({ overdueDue: [overdueTask] }));
+
+  await waitFor(() => expect(screen.getByTestId('agenda-badge')).toHaveTextContent('1'));
+  expect(rowTitles(overdueSection())).toEqual(['Закончить API']);
+  const overdueCalls = calls
+    .filter((c) => c.path === 'entity.query')
+    .map((c) => (c.input as { query: string }).query)
+    .filter((q) => q === AGENDA_OVERDUE_DUE_QUERY || q === AGENDA_OVERDUE_START_QUERY);
+  expect(overdueCalls).toHaveLength(2);
 });

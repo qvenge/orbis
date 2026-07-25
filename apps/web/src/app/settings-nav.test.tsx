@@ -18,6 +18,9 @@ const handler = (path: string) => {
   if (path === 'user.getSettings') return settings;
   if (path === 'chat.ensureThread') return { threadId: 't1' };
   if (path === 'chat.listMessages') return [];
+  // Бейдж Agenda (§1.5) смонтирован на любом экране в обеих поверхностях навигации,
+  // поэтому App всегда шлёт entity.query — контракт процедуры массив, не {}.
+  if (path === 'entity.query') return [];
   return {};
 };
 

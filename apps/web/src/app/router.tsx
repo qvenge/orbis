@@ -1,5 +1,6 @@
 import { CalendarDays, FolderOpen, type LucideIcon, MessageSquare, Wallet } from 'lucide-react';
 import { AgendaScreen } from '../features/agenda/AgendaScreen';
+import { useAgendaOverdue } from '../features/agenda/useAgenda';
 import { BrowserScreen } from '../features/browser/BrowserScreen';
 import { BudgetScreen } from '../features/budget/BudgetScreen';
 import { CategoryScreen } from '../features/budget/CategoryScreen';
@@ -30,6 +31,9 @@ export function TabBar() {
   const activeTab = useNav((s) => s.activeTab);
   const switchTab = useNav((s) => s.switchTab);
   const chatBadge = useRetryBuffer((s) => s.size); // §1.5
+  // §1.5: счётчик «Просроченного» — ТОТ ЖЕ хук, что у секции экрана (Task D2):
+  // один кэш TanStack на бейдж и вкладку, расходиться нечему.
+  const agendaOverdue = useAgendaOverdue();
   const budgetVisible = useBudgetTabVisible();
   const budgetBadge = useBudgetAlertCount(); // §6.1: конверты в тревоге/перерасходе
   const tabs = budgetVisible ? [...BASE_TABS, BUDGET_TAB] : BASE_TABS;
@@ -65,6 +69,15 @@ export function TabBar() {
                 className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
               >
                 {chatBadge}
+              </span>
+            )}
+            {/* countLabel, а не count: при упоре в потолок выборки — «200+» (K18) */}
+            {t.id === 'agenda' && agendaOverdue.count > 0 && (
+              <span
+                data-testid="agenda-badge"
+                className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
+              >
+                {agendaOverdue.countLabel}
               </span>
             )}
             {t.id === 'budget' && budgetBadge > 0 && (
