@@ -58,7 +58,16 @@ export function useEntityUpdate(entityId: string) {
       if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') setConflict(true);
     },
     onSuccess: () => setConflict(false),
-    onSettled: () => void utils.entity.get.invalidate(input),
+    // Detail — единственный путь закрытия/переноса/архивации сущности из списков (Agenda,
+    // Browser, Budget), а списки читают ДРУГОЙ ключ кэша — entity.query. Он держит
+    // собственный staleTime (60 с у Agenda по K16, 30 с глобально в trpc.ts) и при
+    // refetchOnWindowFocus:false сам не протухнет: без явной инвалидации закрытая задача
+    // висела бы в «Просроченном» до минуты после «Готово» (02-core-os §4.2, приёмка §8.2).
+    // Тот же путь уже у QuickCapture/QuickAddBar/ImportFlow — здесь его недоставало.
+    onSettled: () => {
+      void utils.entity.get.invalidate(input);
+      void utils.entity.query.invalidate();
+    },
   });
 
   return { mutation, conflict, dismissConflict: () => setConflict(false) };

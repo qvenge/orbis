@@ -7,6 +7,7 @@
 import { addDays } from '@orbis/shared';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
+import { ActiveScreen } from '../../app/router';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
 import { todayISO } from '../budget/useBudget';
@@ -251,4 +252,69 @@ test('тап по строке пушит detail в стек вкладки agen
   fireEvent.click(within(daySection(today)).getAllByTestId('agenda-row')[0] as HTMLElement);
 
   expect(useNav.getState().stacks.agenda.at(-1)).toEqual({ kind: 'entity', id: 'e1' });
+});
+
+// --- §8.2: элемент ПОКИДАЕТ секцию после действия (полный путь через detail) -----------
+//
+// Единственный способ закрыть/архивировать задачу из Agenda — push detail (§4.2, §1.1).
+// Выборки Agenda держат staleTime 60 с (K16) и refetchOnWindowFocus выключен, поэтому
+// после «Готово» секция обновится ТОЛЬКО если mutation инвалидирует entity.query.
+// Тест гоняет ActiveScreen (реальный роутер), чтобы поймать разрыв между экранами.
+
+/** Мок «живого сервера»: закрытая задача перестаёт попадать в status=!done&!cancelled. */
+function overdueRoundTripHandler(task: ReturnType<typeof ent>, state: { closed: boolean }) {
+  const handler: MockHandler = (path, input) => {
+    if (path === 'user.getSettings') return settings;
+    if (path === 'entity.query') {
+      const q = (input as { query: string }).query;
+      if (q === AGENDA_OVERDUE_DUE_QUERY) return state.closed ? [] : [task];
+      return [];
+    }
+    if (path === 'entity.get')
+      return { entity: task, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') {
+      state.closed = true;
+      return task;
+    }
+    if (path === 'relation.listFor') return [];
+    if (path === 'aspect.list') return [];
+    return {};
+  };
+  return handler;
+}
+
+test('§8.2: «Готово» на detail-экране убирает задачу из «Просроченного» после «Назад»', async () => {
+  const task = ent('t1', 'Закончить API', {
+    'orbis/task': { status: 'in_progress', due_date: yesterday },
+  });
+  const state = { closed: false };
+  renderWithProviders(<ActiveScreen />, overdueRoundTripHandler(task, state));
+
+  await waitFor(() => expect(rowTitles(overdueSection())).toEqual(['Закончить API']));
+  fireEvent.click(within(overdueSection()).getAllByTestId('agenda-row')[0] as HTMLElement);
+
+  const checkbox = await screen.findByRole('checkbox', { name: /готово/i });
+  fireEvent.click(checkbox);
+  await waitFor(() => expect(state.closed).toBe(true));
+
+  fireEvent.click(screen.getByTestId('nav-back'));
+  // Секция исчезает целиком: последняя просроченная строка ушла, счётчик обнулился
+  await waitFor(() => expect(screen.queryByTestId('agenda-overdue')).toBeNull());
+});
+
+test('§8.2: архивация на detail-экране убирает задачу из «Просроченного» после «Назад»', async () => {
+  const task = ent('t1', 'Закончить API', {
+    'orbis/task': { status: 'in_progress', due_date: yesterday },
+  });
+  const state = { closed: false }; // архив сервер тоже исключает из выборок
+  renderWithProviders(<ActiveScreen />, overdueRoundTripHandler(task, state));
+
+  await waitFor(() => expect(rowTitles(overdueSection())).toEqual(['Закончить API']));
+  fireEvent.click(within(overdueSection()).getAllByTestId('agenda-row')[0] as HTMLElement);
+
+  fireEvent.click(await screen.findByRole('button', { name: /архив/i }));
+  await waitFor(() => expect(state.closed).toBe(true));
+
+  fireEvent.click(screen.getByTestId('nav-back'));
+  await waitFor(() => expect(screen.queryByTestId('agenda-overdue')).toBeNull());
 });
