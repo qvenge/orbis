@@ -8,6 +8,7 @@ import { useBudgetAlertCount, useBudgetTabVisible } from '../features/budget/use
 import { ChatScreen } from '../features/chat/ChatScreen';
 import { ChatThread } from '../features/chat/ChatThread';
 import { DetailScreen } from '../features/entity-detail/DetailScreen';
+import { ImportFlow } from '../features/import/ImportFlow';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
 import { type ScreenRef, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
@@ -117,6 +118,9 @@ function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
   } else if (top.kind === 'budget-rollover') {
     // Rollover-экран (03-budget §3.5, Task B6); вход — баннер «Новый месяц» и шапка Overview.
     return <RolloverScreen />;
+  } else if (top.kind === 'budget-import') {
+    // Флоу импорта CSV (03-budget §3.4, Task C4b); вход — шапка Overview и карточка чата.
+    return <ImportFlow />;
   } else if (top.kind === 'settings') {
     return <SettingsScreen />;
   }

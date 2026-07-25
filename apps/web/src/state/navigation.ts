@@ -8,12 +8,15 @@ export type Tab = 'chat' | 'browser' | 'agenda' | 'budget';
 // 'budget-transactions' — экран «Транзакции» (03-budget §3.3, B5): push из шапки Overview.
 // 'budget-rollover' — Rollover-экран (03-budget §3.5, B6): push из баннера «Новый месяц»
 // и кнопки шапки Overview; месяц экран берёт сам (текущий в таймзоне пользователя).
+// 'budget-import' — флоу импорта CSV (03-budget §3.4, C4b): push из шапки Overview и
+// из карточки import_review в чате; файл выбирается уже на самом экране.
 export type ScreenRef =
   | { kind: 'entity'; id: string }
   | { kind: 'thread'; threadId: string }
   | { kind: 'budget-category'; id: string }
   | { kind: 'budget-transactions' }
   | { kind: 'budget-rollover' }
+  | { kind: 'budget-import' }
   | { kind: 'settings' };
 
 type NavState = {

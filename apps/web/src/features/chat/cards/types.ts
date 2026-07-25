@@ -21,4 +21,12 @@ export type ConfirmationData = {
   diff?: Record<string, { before: unknown; after: unknown }>;
 };
 export type ErrorCardData = { kind: 'error_card'; code: string; message: string };
-export type Card = EntityCardData | QueryResultData | ConfirmationData | ErrorCardData;
+// 03-budget §3.4: импорт из чата — карточка ведёт на экран импорта (файл выбирается
+// локально и через ленту не проходит). Производитель на сервере — задача C4c.
+export type ImportReviewData = { kind: 'import_review'; title?: string };
+export type Card =
+  | EntityCardData
+  | QueryResultData
+  | ConfirmationData
+  | ErrorCardData
+  | ImportReviewData;
