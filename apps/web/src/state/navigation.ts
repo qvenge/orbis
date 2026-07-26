@@ -68,6 +68,16 @@ export function openSettings() {
   if (stack[stack.length - 1]?.kind !== 'settings') push(activeTab, { kind: 'settings' });
 }
 
+// Открыть Budget Overview — КОРЕНЬ вкладки Budget (D6c п.4): «К бюджету» после импорта
+// должна вести именно туда, а не на предыдущий экран стека (pop давал detail транзакции,
+// открытый до импорта). resetTabToRoot до switchTab: switchTab по УЖЕ активному табу
+// сворачивает стек сам (§1.1), по неактивному — только переключает, стек оставляя как был.
+export function openBudgetOverview() {
+  const { activeTab, switchTab, resetTabToRoot } = useNav.getState();
+  resetTabToRoot('budget');
+  if (activeTab !== 'budget') switchTab('budget');
+}
+
 // Открыть закреплённую сущность из глобального sidebar: активный таб — browser,
 // наверху browser-стека — entity. ВАЖНО: switchTab по УЖЕ активному табу сворачивает
 // стек (§1.1), поэтому переключаем только когда активен другой таб, и лишь затем push.
