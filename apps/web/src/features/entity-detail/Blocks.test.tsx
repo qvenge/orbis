@@ -44,6 +44,7 @@ type Fixture = {
   relations?: ReturnType<typeof rel>[];
   backlinks?: { entity: ReturnType<typeof ent>; via: string }[];
   onRelationCreate?: () => unknown;
+  onQuery?: () => unknown;
 };
 
 const OTHERS = [outgoing, liveBlocker, doneBlocker, found];
@@ -62,7 +63,7 @@ function handler(fx: Fixture) {
       const e = OTHERS.find((x) => x.id === id);
       return e ? { entity: e, relations: [] } : { entity: ent(id, id), relations: [] };
     }
-    if (path === 'entity.query') return [found];
+    if (path === 'entity.query') return fx.onQuery ? fx.onQuery() : [found];
     if (path === 'relation.create') {
       if (fx.onRelationCreate) return fx.onRelationCreate();
       return rel('new', 'e1', 'x1', 'blocks');
@@ -134,6 +135,44 @@ test('добавление блокировки: поиск через entity.qu
       relation_type: 'blocks',
     }),
   );
+});
+
+// `search=` — FTS по целым словам (plainto_tsquery): набор по префиксу («Куп» для
+// «Купить кроссовки») не находит ничего. Пикер обязан говорить это словами, а не молчать:
+// немая пустая область читается как сломанная фича.
+test('пикер: подсказка до ввода, спиннер в полёте, «ничего не найдено» на пустом ответе', async () => {
+  let release: (v: unknown) => void = () => {};
+  const gate = new Promise((res) => {
+    release = res;
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, handler({ onQuery: () => gate }));
+  await screen.findByTestId('body-edit');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
+  expect(screen.getByText(/по целому слову/i)).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Куп' } });
+  expect(await screen.findByRole('status', { name: 'Поиск' })).toBeInTheDocument();
+
+  release([]);
+  expect(await screen.findByText(/ничего не найдено/i)).toBeInTheDocument();
+});
+
+test('пикер: отказ поиска показан плашкой, а не пустотой', async () => {
+  renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    handler({
+      onQuery: () => {
+        throw trpcError('INTERNAL_SERVER_ERROR', 'boom');
+      },
+    }),
+  );
+  await screen.findByTestId('body-edit');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
+  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Куп' } });
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(/не удалось выполнить поиск/i);
 });
 
 test('цикл blocks: серверный отказ показан плашкой с путём цикла', async () => {

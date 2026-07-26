@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useNav } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
+import { Spinner } from '../../ui/Spinner';
 import { quoteValue } from '../budget/txQuery';
 import { detailGetInput } from './useEntityDetail';
 
@@ -14,6 +15,9 @@ const CLOSED = new Set(['done', 'cancelled']);
 const SECTION_LABEL = 'text-2xs font-medium uppercase tracking-wide text-text-muted';
 const ROW =
   'flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition hover:bg-surface-2/60';
+const PICKER_NOTE = 'px-2 py-1.5 text-xs text-text-muted';
+/** Минимум символов, с которого пикер идёт в сеть. */
+const SEARCH_MIN = 2;
 
 /**
  * Секция 6 «Блокировки» (02-core-os §3.5.6): «блокирует» — исходящие blocks-связи,
@@ -49,10 +53,14 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
   };
   const blockedBy = incoming.filter(alive);
 
+  // `search=` — это FTS по plainto_tsquery (query/compile.ts): совпадение только по ЦЕЛОМУ
+  // слову, ни префиксов, ни стемминга («Куп» не найдёт «Купить кроссовки»). Поэтому у пикера
+  // явные состояния — подсказка про целое слово, загрузка, ошибка, «ничего не найдено»:
+  // немая пустая область при обычном наборе по префиксу читается как сломанная фича.
   const q = draft.trim();
   const search = trpc.entity.query.useQuery(
     { query: `search=${quoteValue(q)}, limit=10` },
-    { enabled: adding && q.length >= 2 },
+    { enabled: adding && q.length >= SEARCH_MIN },
   );
   const known = new Set([entityId, ...ids]);
   const found = (search.data ?? []).filter((e) => !known.has(e.id));
@@ -113,26 +121,43 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
             onChange={(e) => setDraft(e.target.value)}
             className="min-w-0 rounded-md bg-transparent px-1 text-sm text-text outline-none transition placeholder:text-text-muted focus-visible:bg-surface-2/70"
           />
-          <ul className="flex flex-col">
-            {found.map((e) => (
-              <li key={e.id}>
-                <button
-                  type="button"
-                  disabled={relate.isPending}
-                  onClick={() =>
-                    relate.mutate({
-                      source_id: entityId,
-                      target_id: e.id,
-                      relation_type: 'blocks',
-                    })
-                  }
-                  className="w-full cursor-pointer truncate rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-2/60"
-                >
-                  {e.title}
-                </button>
-              </li>
-            ))}
-          </ul>
+          {/* Порядок веток: сначала «ещё не искали», потом ошибка/загрузка, и только затем
+              пустой результат — иначе «ничего не найдено» мигало бы на каждом нажатии.
+              Прецедент разводки состояний — TransactionsScreen §3.3. */}
+          {q.length < SEARCH_MIN ? (
+            <p className={PICKER_NOTE}>Поиск от 2 символов и по целому слову</p>
+          ) : search.isError ? (
+            <p role="alert" className="px-2 py-1.5 text-sm text-danger">
+              Не удалось выполнить поиск
+            </p>
+          ) : search.isLoading ? (
+            <Spinner size={14} aria-label="Поиск" className="px-2 py-1.5 text-text-muted" />
+          ) : found.length === 0 ? (
+            // Сюда же попадает случай «нашлось, но всё уже связано с текущей» — такие
+            // сущности отсеяны `known` и уже видны списками выше.
+            <p className={PICKER_NOTE}>Ничего не найдено — введите слово целиком</p>
+          ) : (
+            <ul className="flex flex-col">
+              {found.map((e) => (
+                <li key={e.id}>
+                  <button
+                    type="button"
+                    disabled={relate.isPending}
+                    onClick={() =>
+                      relate.mutate({
+                        source_id: entityId,
+                        target_id: e.id,
+                        relation_type: 'blocks',
+                      })
+                    }
+                    className="w-full cursor-pointer truncate rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-2/60"
+                  >
+                    {e.title}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
       {relate.error && (
