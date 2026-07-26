@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId, postFinancialBatchId, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { envelopeForCategory } from '../budget/aggregates';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type {
@@ -259,6 +260,12 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     // из spent его исключает именно planned, а не отсутствие привязки: 500+500, не 1500.
     expect(await budgetParents(tomorrowInstance)).toEqual([envelopeId]);
     expect(await spentOf(envelopeId)).toBe('1000.00');
+    // То же — БОЕВЫМ агрегатом spent (§2.2), а не SQL-репликой формулы в этом файле:
+    // envelopeForCategory читает конверт без конвейера §2.8 (planned-инстансы не постятся
+    // побочно) и исключает 07-03 именно по planned — его occurred_on ≤ реального «сегодня».
+    expect(
+      (await envelopeForCategory(db, user, { categoryId: cat, date: '2026-07-03' }))?.spent,
+    ).toBe('1000.00');
     // ручная покупка не тронута, batch для неё не заводился
     expect((await finOf(manual.id)).planned).toBe(true);
     expect(await actionById(postFinancialBatchId(manual.id))).toBeUndefined();
