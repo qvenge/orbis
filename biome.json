@@ -11,7 +11,9 @@
       "!spikes",
       "!docs",
       "!.superpowers",
-      "!.playwright-mcp"
+      "!.playwright-mcp",
+      "!.remember",
+      "!.claude"
     ]
   },
   "formatter": {
