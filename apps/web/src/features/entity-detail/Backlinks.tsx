@@ -10,8 +10,11 @@ const VIA_LABEL: Record<string, string> = { relation: 'связь', mention: 'у
  * Секция 7 «Связанное (backlinks)» — ОДНА секция из двух источников: сервер отдаёт их
  * готовым списком в entity.get(include:['backlinks']) с пометкой via, поэтому титулы
  * здесь не дочитываются (в отличие от блокировок). Пустая секция скрыта (§3.5).
+ *
+ * truncated — сервер упёрся в потолок выборки (DF п.4): счётчик показывается как «N+»,
+ * иначе «Связанное (100)» читалось бы как точное число связей (урок C6).
  */
-export function Backlinks({ items }: { items: Backlink[] }) {
+export function Backlinks({ items, truncated }: { items: Backlink[]; truncated: boolean }) {
   const push = useNav((s) => s.push);
   const activeTab = useNav((s) => s.activeTab);
   if (items.length === 0) return null;
@@ -19,7 +22,8 @@ export function Backlinks({ items }: { items: Backlink[] }) {
   return (
     <div className="flex flex-col gap-1">
       <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">
-        Связанное ({items.length})
+        Связанное ({items.length}
+        {truncated ? '+' : ''})
       </p>
       <ul className="flex flex-col">
         {items.map(({ entity, via }) => (

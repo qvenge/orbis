@@ -80,6 +80,8 @@ test('backlinks: явные related_to обеих сторон + упомина�
   expect(via.get(mention.id)).toBe('mention');
   expect(via.has(blocker.id)).toBe(false);
   expect(via.size).toBe(3);
+  // Список поместился целиком — признака усечения нет (DF п.4)
+  expect(got.backlinksTruncated).toBeUndefined();
 });
 
 test('backlinks: и связь, и упоминание одной сущностью → одна строка с пометкой «связь»', async () => {
@@ -149,19 +151,25 @@ test('backlinks: чужая сущность недостижима (RLS)', asyn
   expect(got.backlinks).toEqual([]);
 });
 
-test('backlinks: потолок 100 строк', async () => {
+// DF п.4: порядок был ВОЗРАСТАЮЩИМ по created_at, то есть при переполнении отбрасывалась
+// ровно та связь, которую пользователь только что создал, и признака обрезания наружу не
+// было вовсе (урок C6: молчаливого усечения быть не должно).
+test('backlinks: потолок 100 строк — свежие первыми, с признаком усечения', async () => {
   const user = freshUserId();
   const caller = callerFor(user);
   const target = await caller.entity.create({
     input: { title: 'Популярная', tags: [] },
     source: 'fast_path',
   });
-  // 105 упоминаний — сырым админ-соединением: 105 вызовов роутера тест не оправдывают
+  // 105 упоминаний — сырым админ-соединением: 105 вызовов роутера тест не оправдывают.
+  // created_at задаём явно: одним INSERT'ом now() у всех строк одинаков, и порядок
+  // выдачи решал бы случайный uuid — «свежесть» была бы непроверяема.
   const { db: admin, client: adminClient } = adminDb();
   try {
     await admin.execute(sql`
-      INSERT INTO entities (id, owner_id, title, body, body_refs)
-      SELECT gen_random_uuid(), ${user}::uuid, 'Ссылка ' || g, '', ARRAY[${target.id}]::text[]
+      INSERT INTO entities (id, owner_id, title, body, body_refs, created_at)
+      SELECT gen_random_uuid(), ${user}::uuid, 'Ссылка ' || g, '', ARRAY[${target.id}]::text[],
+             now() - make_interval(mins => g)
       FROM generate_series(1, 105) AS g
     `);
   } finally {
@@ -170,4 +178,12 @@ test('backlinks: потолок 100 строк', async () => {
 
   const got = await caller.entity.get({ id: target.id, include: ['backlinks'] });
   expect(got.backlinks?.length).toBe(100);
+  expect(got.backlinksTruncated).toBe(true);
+  // «Ссылка 1» — самая свежая (минута назад), «Ссылка 105» — самая старая
+  const titles = got.backlinks?.map((b) => b.entity.title) ?? [];
+  expect(titles[0]).toBe('Ссылка 1');
+  expect(titles).toContain('Ссылка 100');
+  // усечены именно САМЫЕ СТАРЫЕ — пять последних
+  expect(titles).not.toContain('Ссылка 101');
+  expect(titles).not.toContain('Ссылка 105');
 });

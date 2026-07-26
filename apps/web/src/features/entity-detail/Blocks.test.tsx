@@ -43,6 +43,7 @@ const rel = (id: string, sourceId: string, targetId: string, relationType: strin
 type Fixture = {
   relations?: ReturnType<typeof rel>[];
   backlinks?: { entity: ReturnType<typeof ent>; via: string }[];
+  backlinksTruncated?: boolean;
   onRelationCreate?: () => unknown;
   onRelationDelete?: () => unknown;
   onQuery?: () => unknown;
@@ -59,6 +60,7 @@ function handler(fx: Fixture) {
           entity: self,
           relations: fx.relations ?? [],
           backlinks: fx.backlinks ?? [],
+          ...(fx.backlinksTruncated === true && { backlinksTruncated: true }),
           thread: { threadId: 'th1', messages: [] },
         };
       const e = OTHERS.find((x) => x.id === id);
@@ -365,7 +367,23 @@ test('backlinks: одна секция, пометка источника «св
 
   expect(await screen.findByText('Явная связь')).toBeInTheDocument();
   expect(screen.getByText('Упомянувшая заметка')).toBeInTheDocument();
-  expect(screen.getByText(/связанное/i)).toBeInTheDocument();
+  // Список поместился целиком — счётчик точный, без «+»
+  expect(screen.getByText('Связанное (2)')).toBeInTheDocument();
   expect(screen.getByText('связь')).toBeInTheDocument();
   expect(screen.getByText('упоминание')).toBeInTheDocument();
+});
+
+// DF п.4: сервер отдаёт до 100 связей и признак усечения — «Связанное (100)» читалось
+// как точный счётчик, хотя за списком осталось ещё (урок C6).
+test('backlinks: усечённый список показан как «+», а не точным счётчиком', async () => {
+  renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    handler({
+      backlinks: [{ entity: ent('l1', 'Явная связь'), via: 'relation' }],
+      backlinksTruncated: true,
+    }),
+  );
+
+  expect(await screen.findByText('Явная связь')).toBeInTheDocument();
+  expect(screen.getByText('Связанное (1+)')).toBeInTheDocument();
 });

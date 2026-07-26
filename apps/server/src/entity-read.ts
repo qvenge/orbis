@@ -29,6 +29,12 @@ export interface EntityReadResult {
   entity: WireEntity;
   relations?: WireRelation[];
   backlinks?: Backlink[];
+  /**
+   * Секция «Связанное» упёрлась в потолок — за списком есть ещё связи (DF п.4).
+   * Присутствует, только когда усечение реально произошло: молчаливого обрезания быть
+   * не должно (урок C6), а `false` на каждом чтении — шум и в UI, и в контексте модели.
+   */
+  backlinksTruncated?: boolean;
   thread?: { threadId: string; messages: WireChatMessage[] };
 }
 
@@ -76,14 +82,19 @@ export async function readEntity(
           or(sql`${entities.bodyRefs} @> ARRAY[${row.id}]::text[]`, viaRelation),
         ),
       )
-      .orderBy(entities.createdAt, entities.id)
-      .limit(BACKLINKS_LIMIT);
+      // СВЕЖИЕ первыми (DF п.4): при возрастающем порядке потолок отбрасывал ровно ту
+      // связь, которую пользователь только что создал. Лишняя строка сверх потолка —
+      // проба усечения: точный ответ «за списком есть ещё» ценой одной строки.
+      .orderBy(desc(entities.createdAt), desc(entities.id))
+      .limit(BACKLINKS_LIMIT + 1);
+    const truncated = refs.length > BACKLINKS_LIMIT;
     // Связь сильнее упоминания: сущность, которая и связана, и ссылается в теле,
     // приходит ОДНОЙ строкой с пометкой «связь».
-    out.backlinks = refs.map((r) => ({
+    out.backlinks = refs.slice(0, BACKLINKS_LIMIT).map((r) => ({
       entity: toWireEntity(r.row),
       via: r.viaRelation ? ('relation' as const) : ('mention' as const),
     }));
+    if (truncated) out.backlinksTruncated = true;
   }
   if (include.has('thread')) {
     // Детерминированный id (§4.5); лениво НЕ создаёт: нет треда → пустой список

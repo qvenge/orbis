@@ -42,7 +42,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       </>
     );
   }
-  const { entity, thread, relations, backlinks } = get.data;
+  const { entity, thread, relations, backlinks, backlinksTruncated } = get.data;
   const blocks = queryBlocks(entity.body ?? '');
 
   // В шапке — только title; emoji сущности — крупная page-иконка (Notion-style) в строке
@@ -108,7 +108,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           секции не заводят. */}
       <Subtasks parentId={entity.id} relations={relations ?? []} />
       <Blocks entityId={entity.id} relations={relations ?? []} />
-      <Backlinks items={backlinks ?? []} />
+      <Backlinks items={backlinks ?? []} truncated={backlinksTruncated === true} />
     </div>
   );
 
