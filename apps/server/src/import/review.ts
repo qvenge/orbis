@@ -21,6 +21,7 @@ import {
   csvMappingToolJsonSchema,
   externalRowId,
   type FastPathCategory,
+  type FastPathRule,
   findCategory,
   type ImportAnalyzeResult,
   type ImportConfirmInput,
@@ -328,21 +329,33 @@ async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCate
 }
 
 /**
- * Заголовки активных correction-правил владельца (`orbis/memory`, `kind=rule`,
+ * Активные correction-правила владельца (`orbis/memory`, `kind=rule`,
  * `scope=orbis/financial`) — вся машиночитаемая часть правила живёт в title (K19.4),
  * разбирает его shared. Порядок стабилен (`ORDER BY id`), но на результат не влияет:
- * приоритет правил задаёт applyMemoryRules.
+ * приоритет правил задаёт applyMemoryRules — в том числе по updated_at, поэтому время
+ * правки едет вместе с заголовком (иначе конфликт двух правил на один паттерн импорт
+ * разрешал бы иначе, чем быстрый ввод).
  */
-async function memoryRules(tx: Tx, ownerId: string): Promise<string[]> {
+async function memoryRules(tx: Tx, ownerId: string): Promise<FastPathRule[]> {
   const rows = (await tx.execute(sql`
-    SELECT title
+    SELECT title, updated_at
     FROM entities
     WHERE owner_id = ${ownerId} AND NOT archived
       AND aspects->'orbis/memory'->>'kind' = 'rule'
       AND aspects->'orbis/memory'->>'scope' = 'orbis/financial'
     ORDER BY id
-  `)) as unknown as Array<{ title: string }>;
-  return rows.map((r) => r.title);
+  `)) as unknown as Array<{ title: string; updated_at: unknown }>;
+  return rows.map((r) => ({ title: r.title, updatedAt: toIsoTime(r.updated_at) }));
+}
+
+/**
+ * timestamptz сырой выдачи → ISO (как toWireEntity: наружу время всегда ISO). Драйвер на
+ * raw-SQL отдаёт строку PG, поэтому приводим тем же способом, что wire.ts. Нераспознанное
+ * время — пустая строка: правило от этого становится «самым старым», но не роняет импорт.
+ */
+function toIsoTime(value: unknown): string {
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
 }
 
 /**
@@ -359,7 +372,7 @@ async function memoryRules(tx: Tx, ownerId: string): Promise<string[]> {
 function suggestCategoryRef(
   counterparty: string,
   categories: FastPathCategory[],
-  rules: string[],
+  rules: FastPathRule[],
 ): string | undefined {
   const byRule = applyMemoryRules(counterparty, rules, categories);
   if (byRule !== null) return byRule.id;

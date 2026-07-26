@@ -10,16 +10,22 @@ export type FastPathCategory = {
   aliases: string[];
   spendClass?: string;
 };
+/**
+ * Активное memory-правило владельца (`orbis/memory`, `kind=rule`, `scope=orbis/financial`)
+ * в форме, которую понимает applyMemoryRules:
+ *  - `title` — КАК ЕСТЬ: вся машиночитаемая часть правила живёт в заголовке, и разбирает
+ *    его только applyMemoryRules — вызывающий парсингом не занимается;
+ *  - `updatedAt` — ISO-время правки правила (`WireEntity.updatedAt`); обязательно, потому
+ *    что при конфликте двух правил с одинаковым паттерном побеждает САМОЕ СВЕЖЕЕ, и оба
+ *    потребителя (fast-path и резолв импорта) обязаны отвечать одинаково.
+ */
+export type FastPathRule = { title: string; updatedAt: string };
 export type FastPathCtx = {
   categories: FastPathCategory[];
   defaultCurrency: string;
   today?: string;
-  /**
-   * Заголовки активных memory-правил владельца (`orbis/memory`, `kind=rule`,
-   * `scope=orbis/financial`) КАК ЕСТЬ: вся машиночитаемая часть правила живёт в title,
-   * и разбирает его только applyMemoryRules — вызывающий парсингом не занимается.
-   */
-  rules?: string[];
+  /** Активные correction-правила владельца (§7.5); порядок списка на исход не влияет. */
+  rules?: FastPathRule[];
 };
 export type FastPathResult =
   | { ok: true; create: EntityCreateInput }
@@ -81,8 +87,12 @@ export function findCategory(words: string[], cats: FastPathCategory[]): FastPat
  *    поэтому «SBOL ПЯТЁРОЧКА 843» матчится правилом «пятерочка»; совпадение — вхождение
  *    паттерна в нормализованный вход;
  *  - из подошедших побеждает САМОЕ СПЕЦИФИЧНОЕ — с самым длинным паттерном; при равной
- *    длине порядок детерминирован лексикографическим сравнением заголовков (иначе web
- *    и сервер, читающие правила в разном порядке, дали бы разный ответ);
+ *    длине — САМОЕ СВЕЖЕЕ по updatedAt, и только затем лексикография заголовка (порядок
+ *    обязан быть полным: web и сервер читают правила в разном порядке).
+ *    Свежесть здесь — не украшение: два активных правила с одним паттерном и разными
+ *    категориями штатно рождает эскалация §7.8 (её гейты пропускают новую пару категорий),
+ *    и по алфавиту победило бы то СТАРОЕ правило, которое пользователь только что
+ *    исправил, — «Запомнил» на экране, а быстрый ввод и импорт ставят прежнюю категорию;
  *  - правило ссылается на категорию названием (id в правиле нет): резолв по title
  *    категории через ту же нормализацию; правило с ненайденной категорией просто
  *    ИГНОРИРУЕТСЯ (пробуем следующее, затем алиасы) — переименование категории не
@@ -91,22 +101,35 @@ export function findCategory(words: string[], cats: FastPathCategory[]): FastPat
  */
 export function applyMemoryRules(
   input: string,
-  ruleTitles: string[],
+  rules: FastPathRule[],
   cats: FastPathCategory[],
 ): FastPathCategory | null {
   const haystack = normalizeCounterparty(input);
   if (haystack === '') return null;
 
-  const matched: Array<{ title: string; pattern: string; categoryTitle: string }> = [];
-  for (const title of ruleTitles) {
-    const parsed = parseRuleTitle(title);
+  const matched: Array<{
+    title: string;
+    updatedAt: string;
+    pattern: string;
+    categoryTitle: string;
+  }> = [];
+  for (const rule of rules) {
+    const parsed = parseRuleTitle(rule.title);
     if (parsed === null) continue;
     const pattern = normalizeCounterparty(parsed.pattern);
     if (pattern === '' || !haystack.includes(pattern)) continue;
-    matched.push({ title, pattern, categoryTitle: parsed.categoryTitle });
+    matched.push({
+      title: rule.title,
+      // Отсутствующее время (правило пришло из старого кэша) — «самое старое»: молча
+      // выиграть у свежего правила оно не должно.
+      updatedAt: rule.updatedAt ?? '',
+      pattern,
+      categoryTitle: parsed.categoryTitle,
+    });
   }
   matched.sort((a, b) => {
     if (a.pattern.length !== b.pattern.length) return b.pattern.length - a.pattern.length;
+    if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
     if (a.title === b.title) return 0;
     return a.title < b.title ? -1 : 1;
   });

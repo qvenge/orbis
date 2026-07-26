@@ -247,6 +247,40 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     expect(after.rows[0]?.suggestedCategoryRef).toBe(foodId);
   });
 
+  // Конфликт «один паттерн — разные категории» штатно рождает эскалация §7.8: её гейты
+  // пропускают предложение по НОВОЙ паре категорий, и рядом со старым правилом появляется
+  // второе. Побеждать обязано свежее — иначе исправление, которое пользователь только что
+  // подтвердил кнопкой [Запомнить], молча не работает. Тот же порядок, что у fast-path
+  // (applyMemoryRules), поэтому время правки едет в правиле вместе с заголовком.
+  test('два правила на один паттерн: импорт берёт СВЕЖЕЕ (а не первое по алфавиту)', async () => {
+    const { user, foodId, transportId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({
+      occurredOn: '2026-05-11',
+      amount: '843.00',
+      counterparty: 'SBOL ПЯТЁРОЧКА 843',
+    });
+    const rule = (title: string) =>
+      caller.entity.create({
+        input: {
+          title,
+          tags: [],
+          aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+        },
+        source: 'ui' as const,
+      });
+
+    // Порядок важен: по алфавиту «пятерочка → Еда» < «пятерочка → Транспорт», то есть
+    // лексикографический tie-break вернул бы отменённую пользователем Еду.
+    await rule('пятерочка → Еда');
+    const first = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(first.rows[0]?.suggestedCategoryRef).toBe(foodId);
+
+    await rule('пятерочка → Транспорт');
+    const second = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(second.rows[0]?.suggestedCategoryRef).toBe(transportId);
+  });
+
   test('повтор ТОГО ЖЕ файла после импорта → все строки already_imported (приёмка §7 edge)', async () => {
     const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);

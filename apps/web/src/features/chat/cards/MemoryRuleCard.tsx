@@ -13,6 +13,7 @@ import { useRef, useState } from 'react';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
+import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME } from '../memoryRules';
 import type { MemoryRuleSuggestionData } from './types';
 
 /** Тот же 24ч visual-expiry, что у ConfirmationCard (D-a). */
@@ -62,6 +63,13 @@ export function MemoryRuleCard({
       // Экран «Память AI» и Browser читают entity.query — новое правило должно
       // появиться там без ручного обновления (тот же приём, что у QuickCapture).
       void utils.entity.query.invalidate();
+      // Инвалидации МАЛО: быстрый ввод читает правила из тёплого кэша (сеть перед каждым
+      // вводом стоила бы мгновенности карточки «⚡ без AI», §2.5), а у запроса правил нет
+      // подписчиков — сам он не перечитается. Освежаем точечно здесь: «кофе 300» сразу
+      // после [Запомнить] обязан уйти в новую категорию, а не в прежнюю по алиасу.
+      void utils.entity.query
+        .fetch(MEMORY_RULES_QUERY, { staleTime: MEMORY_RULES_STALE_TIME })
+        .catch(() => {});
     },
     onError: (e) => {
       inFlight.current = false;

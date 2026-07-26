@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../../state/navigation';
 import { renderWithProviders, trpcError } from '../../../test/harness';
 import { smoothAuditText } from '../format-audit';
+import { MEMORY_RULES_QUERY } from '../memoryRules';
 import type { ChatMessage } from '../useChatThread';
 import { renderCards } from './renderCards';
 
@@ -447,6 +448,26 @@ describe('memory_rule_suggestion (детерминированное время)
       expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/запомнил/i),
     );
     expect(screen.queryByRole('button', { name: 'Запомнить' })).toBeNull();
+  });
+
+  // Быстрый ввод читает правила из ТЁПЛОГО кэша (useFastPath, §2.5) — одной инвалидации
+  // мало: у запроса правил нет подписчиков, сам он не перечитается. Без точечного
+  // перечитывания следующий «кофе 300» ушёл бы по прежнему алиасу, хотя карточка уже
+  // сказала «Запомнил — правило в „Памяти AI“».
+  test('[Запомнить] перечитывает запрос memory-правил (правило работает со следующего ввода)', async () => {
+    const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
+      path === 'entity.create' ? createdEntity : [],
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.path === 'entity.query' &&
+            (c.input as { query?: string }).query === MEMORY_RULES_QUERY.query,
+        ),
+      ).toBe(true),
+    );
   });
 
   test('повторный клик по [Запомнить] не создаёт вторую сущность', async () => {

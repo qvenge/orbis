@@ -4,16 +4,10 @@ import { TRPCClientError } from '@trpc/client';
 import { useOnline, useRetryBuffer } from '../../state/retry';
 import { mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
+import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME } from './memoryRules';
 import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from './useChatThread';
 
 const CATEGORY_QUERY = { query: 'aspect=orbis/category' } as const;
-/**
- * Correction-правила памяти (§7.5): активные `orbis/memory` со `scope=orbis/financial`.
- * Их заголовок целиком и есть правило — разбирает его shared (applyMemoryRules).
- */
-const RULES_QUERY = { query: 'aspect=orbis/memory, kind=rule, scope=orbis/financial' } as const;
-/** Правила меняются редко (эскалация §7.8) — держим их в кэше 5 минут, а не 30 секунд. */
-const RULES_STALE_TIME = 5 * 60_000;
 
 /**
  * «Сегодня» в таймзоне пользователя (§7.5): без этого parseFastPath берёт UTC-дату, и ввод
@@ -75,9 +69,21 @@ export function useFastPath(threadId: string) {
       categories,
       defaultCurrency: settings?.defaultCurrency ?? 'RUB',
       today: todayIn(settings?.timezone),
-      // Заголовок правила уходит в парсер КАК ЕСТЬ: разбирает его shared, не клиент.
-      rules: (rules ?? []).map((e) => e.title),
+      // Заголовок правила уходит в парсер КАК ЕСТЬ (разбирает его shared, не клиент);
+      // updatedAt — арбитр конфликта двух правил на один паттерн (applyMemoryRules).
+      rules: (rules ?? []).map((e) => ({ title: e.title, updatedAt: e.updatedAt })),
     };
+  }
+
+  /**
+   * Фоновая догрузка правил: свежесть догоняет К СЛЕДУЮЩЕМУ вводу, текущий не ждёт сеть.
+   * Отказ гасим здесь же — правило это обогащение поверх алиасов, и его сбой не имеет
+   * права всплыть unhandled rejection'ом (retry у клиента выключен).
+   */
+  function refreshRules(): void {
+    void utils.entity.query
+      .fetch(MEMORY_RULES_QUERY, { staleTime: MEMORY_RULES_STALE_TIME })
+      .catch(() => {});
   }
 
   // Онлайн: свежий ctx (getData() тёплый кэш → иначе fetch, staleTime 30s).
@@ -86,16 +92,28 @@ export function useFastPath(threadId: string) {
       utils.entity.query.getData(CATEGORY_QUERY) ??
       (await utils.entity.query.fetch(CATEGORY_QUERY));
     const settings = utils.user.getSettings.getData() ?? (await utils.user.getSettings.fetch());
-    // Правила читаются через fetch со своим staleTime (а не getData-first, как категории):
-    // подтверждённое правило инвалидирует entity.query, и следующий ввод обязан его
-    // увидеть — тёплый кэш вернул бы список «до правила» навсегда.
-    // Отказ запроса правил НЕ роняет быстрый ввод: правило — обогащение поверх алиасов,
-    // из-за него нельзя потерять уже стёртый композером текст.
+    // Правила — getData-first, ровно как категории. Блокирующий fetch здесь означал бы
+    // СЕТЬ ПЕРЕД КАЖДЫМ вводом: успешный create инвалидирует весь префикс entity.query, а
+    // fetchQuery на инвалидированной query перечитывает независимо от staleTime. Карточка
+    // «⚡ без AI» переставала быть мгновенной (§2.5), а зависший запрос съедал бы ввод
+    // целиком — Composer текст уже стёр, ни карточки, ни entity.create.
+    // Свежесть обеспечивают два пути: точечный refetch после [Запомнить]
+    // (MemoryRuleCard — правило работает со следующего же ввода) и фоновая догрузка ниже.
+    const cached = utils.entity.query.getData(MEMORY_RULES_QUERY);
+    if (cached !== undefined) {
+      refreshRules();
+      return mapCtx(cats, settings, cached);
+    }
+    // Холодный кэш (правила в этой сессии не читались): один раз ждём — иначе первый ввод
+    // молча уехал бы на одни алиасы. Цена та же, что уже платят категории. Отказ запроса
+    // быстрый ввод НЕ роняет: терять из-за правил стёртый композером текст нельзя.
     let rules: QueryOut;
     try {
-      rules = await utils.entity.query.fetch(RULES_QUERY, { staleTime: RULES_STALE_TIME });
+      rules = await utils.entity.query.fetch(MEMORY_RULES_QUERY, {
+        staleTime: MEMORY_RULES_STALE_TIME,
+      });
     } catch {
-      rules = utils.entity.query.getData(RULES_QUERY);
+      rules = undefined;
     }
     return mapCtx(cats, settings, rules);
   }
@@ -105,7 +123,7 @@ export function useFastPath(threadId: string) {
     return mapCtx(
       utils.entity.query.getData(CATEGORY_QUERY),
       utils.user.getSettings.getData(),
-      utils.entity.query.getData(RULES_QUERY),
+      utils.entity.query.getData(MEMORY_RULES_QUERY),
     );
   }
 

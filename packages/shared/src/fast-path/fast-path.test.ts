@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseFastPath } from './index';
+import { type FastPathRule, parseFastPath } from './index';
 
 // title обязателен для memory-правил: правило ссылается на категорию НАЗВАНИЕМ (D3a).
 const cats = [
@@ -77,9 +77,14 @@ describe('fast-path parseFastPath (§7.5)', () => {
   });
 });
 
-/** category_ref разобранной строки или undefined, если парсер уступил. */
-function refOf(text: string, rules?: string[]): string | undefined {
-  const r = parseFastPath(text, rules === undefined ? ctx : { ...ctx, rules });
+/**
+ * category_ref разобранной строки или undefined, если парсер уступил. Правило задаётся
+ * либо голым заголовком (время правки не важно), либо парой {title, updatedAt} — там,
+ * где проверяется приоритет свежего правила.
+ */
+function refOf(text: string, rules?: Array<string | FastPathRule>): string | undefined {
+  const asRules = rules?.map((r) => (typeof r === 'string' ? { title: r, updatedAt: '' } : r));
+  const r = parseFastPath(text, asRules === undefined ? ctx : { ...ctx, rules: asRules });
   if (!r.ok) return undefined;
   const ref = r.create.aspects?.['orbis/financial']?.category_ref;
   return typeof ref === 'string' ? ref : undefined;
@@ -108,7 +113,19 @@ describe('fast-path: memory-правила перед алиасами (§7.5, �
     expect(refOf('кофе хауз 300', [...rules].reverse())).toBe('cat-transport');
   });
 
-  test('при равной длине паттернов порядок детерминирован (по заголовку правила)', () => {
+  // Конфликт «один паттерн — разные категории» достижим штатным потоком §7.8: эскалация
+  // подавляет предложение по ПАРЕ категорий и по правилу с тем же паттерном И той же
+  // категорией, поэтому исправление «кофе» из Развлечений обратно в Еду рождает ВТОРОЕ
+  // правило рядом с первым. По алфавиту побеждало бы «кофе → Развлечения» — то самое
+  // правило, которое пользователь только что отменил своей рукой.
+  test('при равной длине паттернов побеждает СВЕЖЕЕ правило, а не алфавит', () => {
+    const older: FastPathRule = { title: 'кофе → Развлечения', updatedAt: '2026-07-01T10:00:00Z' };
+    const newer: FastPathRule = { title: 'кофе → Транспорт', updatedAt: '2026-07-20T10:00:00Z' };
+    expect(refOf('кофе 300', [older, newer])).toBe('cat-transport');
+    expect(refOf('кофе 300', [newer, older])).toBe('cat-transport');
+  });
+
+  test('при равных времени и длине паттернов порядок детерминирован (по заголовку)', () => {
     const rules = ['кофе → Транспорт', 'кофе → Развлечения'];
     expect(refOf('кофе 300', rules)).toBe('cat-fun'); // «…Развлечения» < «…Транспорт»
     expect(refOf('кофе 300', [...rules].reverse())).toBe('cat-fun');

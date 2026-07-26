@@ -56,11 +56,13 @@ const categories = [
     aspects: { 'orbis/category': { aliases: ['развлечения'], spend_class: 'variable' } },
   },
 ];
-// Memory-правила владельца (§7.5): заголовок — вся машиночитаемая часть правила (D3a).
+// Memory-правила владельца (§7.5): заголовок — вся машиночитаемая часть правила (D3a),
+// updatedAt приезжает в wire-форме сущности и разрешает конфликт правил (applyMemoryRules).
 const rules = [
   {
     id: 'rule-1',
     title: 'кофе → Развлечения',
+    updatedAt: '2026-07-20T10:00:00.000Z',
     aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
   },
 ];
@@ -151,6 +153,42 @@ test('memory-правила грузятся в ctx парсера и перек
     };
     expect(created.input.aspects['orbis/financial']?.category_ref).toBe('cat-fun');
   });
+});
+
+// §2.5: карточка «⚡ без AI» — мгновенная, на тёплом кэше submit не имеет права ждать сеть.
+// Кэш правил инвалидируется КАЖДЫМ успешным fast-path create (utils.entity.query.invalidate),
+// а fetchQuery на инвалидированной query перечитывает независимо от staleTime: блокирующая
+// загрузка правил ставила бы полный round-trip перед вторым и каждым следующим вводом, а
+// зависший запрос съедал бы ввод целиком — Composer текст уже стёр, ни карточки, ни create.
+test('тёплый кэш правил: зависший запрос правил не задерживает карточку и create (§2.5)', async () => {
+  const { Wrap, calls, qc } = wrapper((path, input) => {
+    if (path === 'entity.create') return { id: 'e1', title: 'кофе' };
+    if (path === 'entity.query' && (input as { query?: string }).query === RULES_QUERY.query) {
+      return new Promise(() => {}); // запрос правил ВИСИТ (флаки-сеть; retry у клиента выключен)
+    }
+    return handlerBase(path, input);
+  });
+  qc.setQueryData(getQueryKey(trpc.entity.query, CATEGORY_QUERY, 'query'), categories);
+  qc.setQueryData(getQueryKey(trpc.entity.query, RULES_QUERY, 'query'), rules);
+  qc.setQueryData(getQueryKey(trpc.user.getSettings, undefined, 'query'), settings);
+  // Ровно то состояние кэша, в котором его оставляет предыдущий успешный create.
+  await qc.invalidateQueries();
+
+  const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
+  await act(async () => {
+    const submitted = result.current.submit('кофе 300').then(() => 'submitted' as const);
+    const outcome = await Promise.race([
+      submitted,
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 300)),
+    ]);
+    expect(outcome).toBe('submitted');
+  });
+  // Карточка на экране, и правило из тёплого кэша применено (Развлечения, а не Еда по alias).
+  expect(threadMsgs(qc).length).toBe(1);
+  const created = calls.find((c) => c.path === 'entity.create')?.input as {
+    input: { aspects: Record<string, { category_ref?: string }> };
+  };
+  expect(created.input.aspects['orbis/financial']?.category_ref).toBe('cat-fun');
 });
 
 // 03-budget §4.1 (B7): остаток конверта на карточке — ПОСЛЕ записи; успешный create
