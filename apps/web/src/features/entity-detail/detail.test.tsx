@@ -1,9 +1,12 @@
+import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
+import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { onlineManager } from '@tanstack/react-query';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { renderWithProviders, trpcError } from '../../test/harness';
 import { trpc } from '../../trpc';
+import { queryBlocks } from '../browser/query';
 import { AspectCards } from './AspectCards';
 import { DetailScreen } from './DetailScreen';
 import { detailGetInput } from './useEntityDetail';
@@ -413,6 +416,64 @@ test('нефинансовая сущность: поля прежние (инп
   const field = await screen.findByLabelText('orbis/task status');
   expect(field.tagName).toBe('INPUT');
   expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+});
+
+// --- query-блоки body (02-core-os §3.4) ------------------------------------------------
+// Реестр аспектов — настоящий (schema из @orbis/shared), поэтому каталог полей грамматики
+// в тесте тот же, что в проде: битая клауза упала бы плашкой qb-error, а не молча.
+const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) }));
+const found = (title: string) => ({
+  id: title,
+  ownerId: 'u',
+  title,
+  emoji: null,
+  body: '',
+  bodyRefs: [],
+  tags: [],
+  meta: {},
+  aspects: {},
+  createdAt: 'x',
+  updatedAt: 'y',
+  archived: false,
+});
+
+// §3.4 нормирует: «Каждый {{query:...}}-блок в body рендерится виджетом». Это же условие —
+// продуктовая половина приёмки 02-core-os §8.4 («задача видна в Daily Planning»): список
+// «Сегодня» — ВТОРОЙ блок сида, и при рендере только первого он недостижим в UI.
+// Body берётся из самого сида (@orbis/server/src/seed/smart-lists) — дрейф невозможен.
+test('detail рендерит КАЖДЫЙ query-блок body: у Daily Planning — три секции, включая «Сегодня»', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get')
+      return {
+        entity: { ...entity, title: 'Daily Planning', body: DAILY_PLANNING_BODY, aspects: {} },
+        relations: [],
+        thread: null,
+      };
+    if (path === 'aspect.list') return realAspects;
+    if (path === 'entity.query') {
+      // Задача из приёмки §8.4: срок сегодня, статус in_progress — попадает ровно в «Сегодня».
+      const q = (input as { query: string }).query;
+      return q.includes('due_date=today|overdue') ? [found('Разобрать Inbox')] : [];
+    }
+    return {};
+  });
+
+  // Три виджета — по одному на блок, каждый со своим заголовком из title= (§3.4).
+  await waitFor(() => expect(screen.getAllByTestId('qb-count')).toHaveLength(3));
+  expect(screen.queryByTestId('qb-error')).not.toBeInTheDocument();
+  for (const section of ['Inbox', 'Сегодня', 'Ожидание']) {
+    expect(screen.getByText(section)).toBeInTheDocument();
+  }
+
+  // В entity.query ушли ВСЕ три блока дословно (inner каждого блока body).
+  const sent = calls
+    .filter((c) => c.path === 'entity.query')
+    .map((c) => (c.input as { query: string }).query);
+  expect([...sent].sort()).toEqual([...queryBlocks(DAILY_PLANNING_BODY)].sort());
+
+  // …и результат «Сегодня» виден на экране — та самая половина §8.4, которой при рендере
+  // одного лишь первого блока (Inbox) в продукте не существовало.
+  await waitFor(() => expect(screen.getByTestId('qb-item')).toHaveTextContent('Разобрать Inbox'));
 });
 
 test('conflict-баннер: клик «Обновить» → refetch entity.get + баннер скрыт', async () => {

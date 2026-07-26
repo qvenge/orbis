@@ -35,22 +35,19 @@ const ent = (id: string) => ({
 });
 
 test('валидный блок → список сущностей + счётчик; entity.query получил inner', async () => {
-  const { calls } = renderWithProviders(
-    <QueryBlock body="{{query:tags=work}}" title="Работа" />,
-    (path) => {
-      if (path === 'aspect.list') return aspectsResp;
-      if (path === 'entity.query') return [ent('a'), ent('b')];
-      return {};
-    },
-  );
+  const { calls } = renderWithProviders(<QueryBlock query="tags=work" title="Работа" />, (path) => {
+    if (path === 'aspect.list') return aspectsResp;
+    if (path === 'entity.query') return [ent('a'), ent('b')];
+    return {};
+  });
   await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('2'));
   expect(screen.getAllByTestId('qb-item')).toHaveLength(2);
-  // Аргумент запроса — строго inner (обёртка {{query:...}} снята, значение не пустое).
+  // Аргумент запроса — строго inner (обёртка {{query:...}} снята вызывающим, значение не пустое).
   expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({ query: 'tags=work' });
 });
 
 test('без title (DetailScreen) → счётчик с подписью «Совпадений: N», а не голое число', async () => {
-  renderWithProviders(<QueryBlock body="{{query:tags=work}}" />, (path) => {
+  renderWithProviders(<QueryBlock query="tags=work" />, (path) => {
     if (path === 'aspect.list') return aspectsResp;
     if (path === 'entity.query') return [ent('a'), ent('b')];
     return {};
@@ -58,14 +55,28 @@ test('без title (DetailScreen) → счётчик с подписью «Со�
   await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('Совпадений: 2'));
 });
 
+// §3.4: «заголовок (из title=; нет параметра — без заголовка)». Без этого три секции
+// Daily Planning (§3.3) рендерились бы тремя безымянными карточками.
+test('заголовок берётся из title= самого блока, когда пропа нет', async () => {
+  const { calls } = renderWithProviders(<QueryBlock query="tags=work, title=Сегодня" />, (path) => {
+    if (path === 'aspect.list') return aspectsResp;
+    if (path === 'entity.query') return [ent('a')];
+    return {};
+  });
+  // при заголовке счётчик — голое число (подпись «Совпадений:» не нужна)
+  await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('1'));
+  expect(screen.getByText('Сегодня')).toBeInTheDocument();
+  // title= — параметр представления: в entity.query строка уходит целиком, как есть
+  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
+    query: 'tags=work, title=Сегодня',
+  });
+});
+
 test('невалидный блок → красная плашка с позицией, без списка и без вызова entity.query (§6.4)', async () => {
-  const { calls } = renderWithProviders(
-    <QueryBlock body="{{query:foo}}" title="Битый" />,
-    (path) => {
-      if (path === 'aspect.list') return aspectsResp;
-      throw new Error(`unexpected ${path}`); // entity.query не должен вызываться
-    },
-  );
+  const { calls } = renderWithProviders(<QueryBlock query="foo" title="Битый" />, (path) => {
+    if (path === 'aspect.list') return aspectsResp;
+    throw new Error(`unexpected ${path}`); // entity.query не должен вызываться
+  });
   // Ждём плашку ошибки: к этому моменту регрессный вызов entity.query успел бы зарегистрироваться.
   await screen.findByTestId('qb-error');
   expect(screen.getByRole('alert')).toBeInTheDocument();

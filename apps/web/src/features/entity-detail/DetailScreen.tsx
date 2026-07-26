@@ -6,7 +6,7 @@ import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
-import { firstQueryBlock } from '../browser/query';
+import { queryBlocks } from '../browser/query';
 import { PlannedToFactCard } from '../budget/PlannedToFactCard';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { ChatThread } from '../chat/ChatThread';
@@ -43,7 +43,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     );
   }
   const { entity, thread, relations, backlinks } = get.data;
-  const block = firstQueryBlock(entity.body ?? '');
+  const blocks = queryBlocks(entity.body ?? '');
 
   // В шапке — только title; emoji сущности — крупная page-иконка (Notion-style) в строке
   // с заголовком/NativeRow. Нет emoji — ничего не рендерим (без плейсхолдера).
@@ -91,7 +91,17 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           редактор, стирая текст, набранный за время запроса (а при 409 — ещё и уничтожая
           черновик, который §5.2 предлагает «повторить вручную»). */}
       <BodyEditor key={entity.id} initial={entity.body ?? ''} onSave={saveBody} />
-      {block && <QueryBlock body={entity.body ?? ''} />}
+      {/* §3.4: КАЖДЫЙ query-блок body — свой виджет. У сидированного Daily Planning их три
+          (Inbox / «Сегодня» / «Ожидание», §3.3), у Upcoming — два; рендер только первого
+          прятал «Сегодня» целиком (приёмка 02-core-os §8.4). */}
+      {blocks.length > 0 && (
+        <div className="flex flex-col gap-3">
+          {blocks.map((q, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: порядок блоков задан текстом body
+            <QueryBlock key={i} query={q} />
+          ))}
+        </div>
+      )}
       <AspectCards entity={entity} />
       {/* Секции 5–7 §3.5: связи уже приехали этим же entity.get — своих запросов графа
           секции не заводят. */}

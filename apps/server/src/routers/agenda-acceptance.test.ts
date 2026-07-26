@@ -53,7 +53,13 @@ function queryBlock(body: string, index: number): string {
   return block;
 }
 
-/** Daily Planning, список «Сегодня» (02 §3.3) — второй блок. */
+/**
+ * Daily Planning, список «Сегодня» (02 §3.3) — ВТОРОЙ блок body.
+ * Что этот блок вообще доезжает до экрана — отдельное утверждение продуктовой половины
+ * §8.4: detail-экран обязан рендерить КАЖДЫЙ query-блок body (02 §3.4), а не первый.
+ * Пиннится в apps/web/src/features/entity-detail/detail.test.tsx («detail рендерит
+ * КАЖДЫЙ query-блок body: у Daily Planning — три секции, включая «Сегодня»»).
+ */
 const DAILY_TODAY_QUERY = queryBlock(DAILY_PLANNING_BODY, 1);
 /** Upcoming, «Ближайшие 7 дней» (02 §3.3) — первый блок. */
 const UPCOMING_7D_QUERY = queryBlock(UPCOMING_BODY, 0);
