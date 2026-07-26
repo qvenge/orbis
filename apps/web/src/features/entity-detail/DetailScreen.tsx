@@ -18,7 +18,7 @@ import { Subtasks } from './Subtasks';
 import { useEntityDetail } from './useEntityDetail';
 
 export function DetailScreen({ entityId }: { entityId: string }) {
-  const { get, toggleTask, saveBody, setArchived, conflict, dismissConflict } =
+  const { get, toggleTask, saveBody, saveTitle, setArchived, conflict, dismissConflict } =
     useEntityDetail(entityId);
   const utils = trpc.useUtils();
   const settings = trpc.user.getSettings.useQuery();
@@ -63,6 +63,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
             // Данные сущности ДО перевода: planned ещё true — карточка на переходе в done
             if (done) planToFact.onTaskDone(entity);
           }}
+          onSaveTitle={saveTitle}
         />
       </div>
       {/* Карточка plan→fact (§2.7) — инлайн под строкой задачи, как в мокапе */}

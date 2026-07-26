@@ -231,6 +231,86 @@ test('подзадачи: список из entity.get; после создан�
   expect(calls.some((c) => c.path === 'relation.listFor')).toBe(false);
 });
 
+// --- inline-правка заголовка (DF п.3) --------------------------------------------------
+// 02-core-os §2.7: «правка памяти = правка обычной сущности (title, поля аспекта, body)»,
+// а вся машиночитаемая часть memory-правила живёт именно в title (K19.4) — до этого
+// правки title в web не было ни в одной точке, и экран «Память AI» обещал невозможное.
+// Контракт тот же, что у body и полей аспектов: optimistic + expectedUpdatedAt, внешнее
+// значение подхватывается только на нетронутом черновике.
+
+test('inline правка заголовка уходит в entity.update с новым title', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') return { ...entity, title: 'кофе → Транспорт' };
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const field = await screen.findByLabelText('Заголовок');
+  fireEvent.change(field, { target: { value: 'кофе → Транспорт' } });
+  fireEvent.blur(field);
+
+  await waitFor(() => {
+    const c = calls.find(
+      (x) => x.path === 'entity.update' && (x.input as { title?: string }).title !== undefined,
+    );
+    expect(c?.input).toEqual({
+      id: 'e1',
+      title: 'кофе → Транспорт',
+      expectedUpdatedAt: '2026-07-05T10:00:00.000Z',
+    });
+  });
+});
+
+/** Обработчик, у которого entity.get после первого чтения отдаёт ЧУЖОЙ заголовок. */
+function externalTitleChange(): { handler: MockHandler; getCalls: () => number } {
+  let getCalls = 0;
+  const renamed = {
+    ...entity,
+    title: 'Переименована извне',
+    updatedAt: '2026-07-05T11:00:00.000Z',
+  };
+  return {
+    getCalls: () => getCalls,
+    handler: (path) => {
+      if (path === 'entity.get') {
+        getCalls += 1;
+        return {
+          entity: getCalls === 1 ? entity : renamed,
+          relations: [],
+          thread: { threadId: 'th1', messages: [] },
+        };
+      }
+      if (path === 'entity.update') return renamed;
+      if (path === 'aspect.list') return [];
+      return {};
+    },
+  };
+}
+
+test('незакоммиченный ввод в заголовок переживает внешнее изменение', async () => {
+  const { handler, getCalls } = externalTitleChange();
+  renderWithProviders(<DetailScreen entityId="e1" />, handler);
+  const field = await screen.findByLabelText('Заголовок');
+  // Печатаем, но НЕ сохраняем (blur не было)
+  fireEvent.change(field, { target: { value: 'кофе → Тра' } });
+
+  fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
+  await waitFor(() => expect(getCalls()).toBeGreaterThan(1)); // рефетч с чужим title пришёл
+  expect(screen.getByLabelText('Заголовок')).toHaveValue('кофе → Тра');
+});
+
+test('нетронутый заголовок подхватывает переименование с сервера', async () => {
+  const { handler } = externalTitleChange();
+  renderWithProviders(<DetailScreen entityId="e1" />, handler);
+  expect(await screen.findByLabelText('Заголовок')).toHaveValue('Задача');
+
+  fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
+  await waitFor(() =>
+    expect(screen.getByLabelText('Заголовок')).toHaveValue('Переименована извне'),
+  );
+});
+
 // --- поле аспекта и внешние изменения значения (D6c п.3) -------------------------------
 // Смоук D6b: после перевода задачи в «Готово» чекбоксом поле «статус» продолжало
 // показывать inbox — AspectField держал значение в useState(initial) без синхронизации.

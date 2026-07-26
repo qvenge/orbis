@@ -1,4 +1,5 @@
 import { BUILTIN_ASPECT_META } from '@orbis/shared';
+import { useState } from 'react';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import type { RouterOutputs } from '../../trpc';
 import { Badge } from '../../ui/Badge';
@@ -16,10 +17,77 @@ const AMOUNT_TONE_CLASS: Record<MoneyTone, string> = {
 // NativeRow живёт на странице Detail — title здесь является заголовком страницы.
 const TITLE_CLASS = 'text-xl font-semibold tracking-tight';
 
+/**
+ * Заголовок строки: статичный текст без onSaveTitle (списки транзакций CategoryScreen) и
+ * inline-редактор с ним (Detail, DF п.3). Правка title обязана существовать: 02-core-os
+ * §2.7 — «правка памяти = правка обычной сущности (title, поля аспекта, body)», а вся
+ * машиночитаемая часть memory-правила лежит именно в title (K19.4). Отдельного экрана не
+ * заводим — тот же inline-паттерн, что у body и полей аспектов.
+ */
+function Title({
+  value,
+  onSave,
+  className = '',
+}: {
+  value: string;
+  onSave?: (title: string) => void;
+  className?: string;
+}) {
+  if (onSave === undefined) {
+    return <span className={`flex-1 ${TITLE_CLASS} ${className}`}>{value}</span>;
+  }
+  return <TitleEditor value={value} onSave={onSave} className={className} />;
+}
+
+function TitleEditor({
+  value,
+  onSave,
+  className,
+}: {
+  value: string;
+  onSave: (title: string) => void;
+  className: string;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [serverValue, setServerValue] = useState(value);
+
+  // Тот же приём, что у BodyEditor (DetailScreen) и AspectField (D6c п.3): внешнее
+  // значение подхватываем, но ТОЛЬКО если черновик не трогали — иначе текст, который
+  // владелец печатает прямо сейчас, затирался бы рефетчем после чужой мутации.
+  if (value !== serverValue) {
+    setServerValue(value);
+    if (draft === serverValue) setDraft(value);
+  }
+
+  return (
+    <input
+      aria-label="Заголовок"
+      data-testid="title-edit"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      // Пустой заголовок сущности не бывает (entityUpdateInput: title.min(1)) — вместо
+      // заведомо отказного запроса возвращаем серверное значение.
+      onBlur={() => {
+        if (draft.trim() === '') setDraft(value);
+        else if (draft !== value) onSave(draft);
+      }}
+      className={`min-w-0 flex-1 rounded-md bg-transparent px-1 ${TITLE_CLASS} outline-none transition hover:bg-surface-2/60 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/30 ${className}`}
+    />
+  );
+}
+
 // Отдельный компонент, а не ветка внутри NativeRow (D6c п.2): хук названия категории
 // обязан быть безусловным, а запрос категорий не должен уходить с каждой нефинансовой
 // строки (прецедент CategoryField в AspectCards).
-function FinancialRow({ title, financial }: { title: string; financial: Record<string, unknown> }) {
+function FinancialRow({
+  title,
+  financial,
+  onSaveTitle,
+}: {
+  title: string;
+  financial: Record<string, unknown>;
+  onSaveTitle?: (title: string) => void;
+}) {
   const money = formatMoney(
     String(financial.amount ?? '0'),
     (financial.direction as 'expense' | 'income') ?? 'expense',
@@ -34,7 +102,7 @@ function FinancialRow({ title, financial }: { title: string; financial: Record<s
 
   return (
     <div className="flex items-center gap-2" data-testid="native-financial">
-      <span className={`flex-1 ${TITLE_CLASS}`}>{title}</span>
+      <Title value={title} onSave={onSaveTitle} />
       <span
         data-testid="native-amount"
         className={`text-lg font-medium tabular-nums ${AMOUNT_TONE_CLASS[money.tone]}`}
@@ -51,12 +119,16 @@ function keyFieldsFor(aspectId: string): string[] {
 }
 
 // §3.6 нативный рендер строки сущности: ветки task / financial / schedule / generic.
+// onSaveTitle — опционален: с ним заголовок становится inline-редактором (Detail),
+// без него остаётся текстом (строки транзакций CategoryScreen).
 export function NativeRow({
   entity,
   onToggleTask,
+  onSaveTitle,
 }: {
   entity: Entity;
   onToggleTask: (done: boolean) => void;
+  onSaveTitle?: (title: string) => void;
 }) {
   const aspects = entity.aspects as Record<string, Record<string, unknown>>;
 
@@ -66,22 +138,26 @@ export function NativeRow({
     return (
       <div className="flex items-center gap-2" data-testid="native-task">
         <Checkbox aria-label="Готово" checked={done} onCheckedChange={onToggleTask} />
-        <span className={`flex-1 ${TITLE_CLASS} ${done ? 'text-text-muted line-through' : ''}`}>
-          {entity.title}
-        </span>
+        <Title
+          value={entity.title}
+          onSave={onSaveTitle}
+          className={done ? 'text-text-muted line-through' : ''}
+        />
         {typeof task.status === 'string' && task.status !== 'done' && <Badge>{task.status}</Badge>}
       </div>
     );
   }
 
   const financial = aspects['orbis/financial'];
-  if (financial) return <FinancialRow title={entity.title} financial={financial} />;
+  if (financial) {
+    return <FinancialRow title={entity.title} financial={financial} onSaveTitle={onSaveTitle} />;
+  }
 
   const schedule = aspects['orbis/schedule'];
   if (schedule) {
     return (
       <div className="flex items-center gap-2" data-testid="native-schedule">
-        <span className={`flex-1 ${TITLE_CLASS}`}>{entity.title}</span>
+        <Title value={entity.title} onSave={onSaveTitle} />
         {schedule.all_day ? (
           <Badge>весь день</Badge>
         ) : (
@@ -97,7 +173,7 @@ export function NativeRow({
   const firstFields = firstAspect ? aspects[firstAspect] : undefined;
   return (
     <div className="flex items-center gap-2" data-testid="native-generic">
-      <span className={`flex-1 ${TITLE_CLASS}`}>{entity.title}</span>
+      <Title value={entity.title} onSave={onSaveTitle} />
       <dl className="flex gap-2 text-xs text-text-secondary">
         {fields.map((k) => (
           <div key={k} className="flex gap-1">

@@ -99,6 +99,14 @@ export function useEntityDetail(entityId: string) {
     mutation.mutate({ id: entityId, body, expectedUpdatedAt: entity.updatedAt });
   }
 
+  // Правка заголовка (DF п.3) — тот же контракт §5.2, что у body: у memory-правила
+  // title и есть вся его машиночитаемая часть (K19.4), и правка «формулировки»,
+  // обещанная экраном «Память AI», — это именно правка title.
+  function saveTitle(title: string) {
+    if (!entity) return;
+    mutation.mutate({ id: entityId, title, expectedUpdatedAt: entity.updatedAt });
+  }
+
   function setArchived(archived: boolean) {
     mutation.mutate({ id: entityId, archived });
   }
@@ -109,6 +117,7 @@ export function useEntityDetail(entityId: string) {
     update: mutation,
     toggleTask,
     saveBody,
+    saveTitle,
     setArchived,
     conflict,
     dismissConflict,
