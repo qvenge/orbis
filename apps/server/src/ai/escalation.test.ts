@@ -115,6 +115,25 @@ async function recategorizeViaChat(
   if (r.status !== 'ok') throw new Error(`dispatchTool: ${JSON.stringify(r)}`);
 }
 
+/**
+ * Групповая рекатегоризация путём модели: ОДИН batch_execute (глобальное ограничение
+ * плана — групповая мутация идёт одним батчем с batch_id), тот же диспетчер тулов.
+ */
+async function recategorizeBatchViaChat(
+  user: string,
+  txnIds: string[],
+  categoryRef: string,
+): Promise<void> {
+  const r = await dispatchTool(chatCtx(user), 'batch_execute', {
+    batch_id: newId(),
+    operations: txnIds.map((id) => ({
+      tool: 'entity_update',
+      input: { id, aspects: { 'orbis/financial': { category_ref: categoryRef } } },
+    })),
+  });
+  if (r.status !== 'ok') throw new Error(`dispatchTool batch: ${JSON.stringify(r)}`);
+}
+
 /** Рекатегоризация мимо роутера — когда тесту нужен actionId для прямого вызова. */
 async function recategorizeRaw(user: string, txnId: string, categoryRef: string): Promise<string> {
   const input = { id: txnId, aspects: { 'orbis/financial': { category_ref: categoryRef } } };
@@ -653,5 +672,82 @@ describe('эскалация повторных исправлений кате�
     expect(offers.filter((c) => (c as { pattern?: string }).pattern === 'пятерочка').length).toBe(
       1,
     );
+  });
+
+  // --- DF п.1: гейт эскалации — по операциям действия, а не по имени тула ---------------
+  // Читающая половина батч разбирала и раньше (K5, тест 8), но ЗВАЛАСЬ эскалация только на
+  // одиночном entity_update, тогда как глобальное ограничение плана требует слать групповую
+  // рекатегоризацию одним batch_execute: «перенеси эти три покупки из Еды в Развлечения»
+  // дважды не давало предложения никогда.
+
+  test('26. два батча по три рекатегоризации одного мерчанта → предложение появилось', async () => {
+    const { user, food, fun } = await freshOwner();
+    const first = [
+      await createTxn(user, 'ПЯТЕРОЧКА 1', food),
+      await createTxn(user, 'ПЯТЕРОЧКА 2', food),
+      await createTxn(user, 'ПЯТЕРОЧКА 3', food),
+    ];
+    const second = [
+      await createTxn(user, 'ПЯТЕРОЧКА 4', food),
+      await createTxn(user, 'ПЯТЕРОЧКА 5', food),
+      await createTxn(user, 'ПЯТЕРОЧКА 6', food),
+    ];
+
+    // Батч — ОДНО действие журнала: три рекатегоризации внутри него считаются за одно
+    // исправление (журнал текущего действия из скана исключён), поэтому первого мало.
+    await recategorizeBatchViaChat(user, first, fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+
+    await recategorizeBatchViaChat(user, second, fun);
+    const cards = await cardsOf(user, 'memory_rule_suggestion');
+    expect(cards.length).toBe(1); // одно сообщение на действие, а не по одному на операцию
+    expect((cards[0] as { ruleText: string }).ruleText).toBe('пятерочка → Развлечения');
+  });
+
+  test('27. падение эскалации не ломает ответ batch_execute (K7)', async () => {
+    const { user, food, fun } = await freshOwner();
+    await recategorizeBatchViaChat(
+      user,
+      [await createTxn(user, 'ПЯТЕРОЧКА 1', food), await createTxn(user, 'ПЯТЕРОЧКА 2', food)],
+      fun,
+    );
+    const second = [
+      await createTxn(user, 'ПЯТЕРОЧКА 3', food),
+      await createTxn(user, 'ПЯТЕРОЧКА 4', food),
+    ];
+
+    // Тот же приём, что в тестах 9 и 23: PK будущего сообщения-предложения занят ЧУЖИМ
+    // сообщением (под RLS невидимо) → CONFLICT уже после коммита самих правок.
+    const alien = freshUserId();
+    const poisoned = memoryRuleSuggestionId({
+      ownerId: user,
+      pattern: 'пятерочка',
+      fromCategoryId: food,
+      toCategoryId: fun,
+      date: new Date().toISOString().slice(0, 10),
+    });
+    await withIdentity(db, alien, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, alien);
+      await appendMessage(tx, { id: poisoned, threadId, role: 'system', content: 'чужое' });
+    });
+
+    const spy = spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const r = await dispatchTool(chatCtx(user), 'batch_execute', {
+        batch_id: newId(),
+        operations: second.map((id) => ({
+          tool: 'entity_update',
+          input: { id, aspects: { 'orbis/financial': { category_ref: fun } } },
+        })),
+      });
+      expect(r.status).toBe('ok');
+      // сами правки закоммичены, несмотря на сбой эскалации
+      expect(await categoryRefOf(second[0] as string)).toBe(fun);
+      expect(await categoryRefOf(second[1] as string)).toBe(fun);
+      expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+      expect(spy.mock.calls.flat().map(String).join(' ')).toContain('[ai.escalation]');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

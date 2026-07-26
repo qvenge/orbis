@@ -15,7 +15,6 @@ import {
   type BatchExecuteInput,
   batchExecuteInput,
   budgetStatusInput,
-  type EntityUpdateInput,
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
@@ -27,7 +26,7 @@ import {
   relationDeleteInput,
 } from '@orbis/shared';
 import type { z } from 'zod';
-import { escalateAfterEntityUpdate } from '../ai/escalation';
+import { escalateAfterMutation } from '../ai/escalation';
 import { budgetStatus } from '../budget/aggregates';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
@@ -514,12 +513,18 @@ async function runMutation(
   // Идемпотентный replay (actionId === undefined) ничего не журналировал — считать
   // нечего. source 'mcp' сюда не попадает намеренно: внешний агент — не правка
   // пользователя, план перечисляет только ui и chat.
-  if (def.name === 'entity_update' && ctx.source === 'chat' && actionId !== undefined) {
-    await escalateAfterEntityUpdate(ctx.db, {
+  //
+  // Гейт — по ОПЕРАЦИЯМ действия (DF п.1), а не по имени тула: групповую
+  // рекатегоризацию план требует слать одним batch_execute, и условие
+  // `def.name === 'entity_update'` отсекало её целиком. Операции те же, что ушли в
+  // execute (у батча — плоский список, у одиночной мутации — она сама);
+  // отфильтровать «не рекатегоризации» — работа самой эскалации.
+  if (ctx.source === 'chat' && actionId !== undefined) {
+    await escalateAfterMutation(ctx.db, {
       ownerId: ctx.actorUserId,
       actionId,
-      // payload уже прошёл entityUpdateInput в validateMutationEnvelope выше
-      input: payload as EntityUpdateInput,
+      // payload'ы уже прошли схемы тулов в validateMutationEnvelope/validateBatchOperations
+      operations: batchPayload?.operations ?? [{ tool, input: payload }],
     });
   }
 

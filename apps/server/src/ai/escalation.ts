@@ -19,7 +19,6 @@
 import {
   counterpartySimilarity,
   DUP_SIMILARITY_THRESHOLD,
-  type EntityUpdateInput,
   formatRuleTitle,
   memoryRuleDeclinedId,
   memoryRuleSuggestionId,
@@ -413,18 +412,40 @@ async function findAction(tx: Tx, actionId: string): Promise<ActionRecord | unde
   return md?.actions?.find((a) => a.id === actionId);
 }
 
+/** Операция мутации в форме, в которой её видит executor: имя тула + его input. */
+export interface MutationOp {
+  tool: string;
+  input: unknown;
+}
+
 /**
- * Точка вызова для роутера entity.update (K7): читает записанный action и зовёт
- * эскалацию отдельной транзакцией. Ошибка ЛОГИРУЕТСЯ и не пробрасывается — правка
- * категории уже закоммичена, и провал предложения не имеет права её ронять.
- * Дешёвый гейт по input: журнал читаем, только если патч трогал category_ref, —
- * entity.update зовётся на каждую правку заголовка/тега.
+ * Дешёвый гейт вызова (DF п.1): хоть одна операция действия — entity_update, меняющий
+ * orbis/financial.category_ref. Смотрим на ОПЕРАЦИИ, а не на имя тула: групповую
+ * рекатегоризацию план требует слать одним batch_execute, и гейт по имени
+ * «entity_update» отсекал её целиком. Читающая половина к батчу готова и без этого
+ * (extractRecategorizations разбирает плоский operations действия type='batch').
  */
-export async function escalateAfterEntityUpdate(
+function touchesCategoryRef(operations: readonly MutationOp[]): boolean {
+  return operations.some((op) => {
+    if (op.tool !== 'entity_update') return false;
+    const input = op.input;
+    if (typeof input !== 'object' || input === null) return false;
+    return categoryRefOf(input as Record<string, unknown>) !== undefined;
+  });
+}
+
+/**
+ * Точка вызова для роутера entity.update и диспатча тулов (K7): читает записанный
+ * action и зовёт эскалацию отдельной транзакцией. Ошибка ЛОГИРУЕТСЯ и не
+ * пробрасывается — правки уже закоммичены, и провал предложения не имеет права их
+ * ронять. Дешёвый гейт по операциям: журнал читаем, только если действие трогало
+ * category_ref, — entity.update зовётся на каждую правку заголовка/тега.
+ */
+export async function escalateAfterMutation(
   db: Db,
-  args: { ownerId: string; actionId: string; input: EntityUpdateInput },
+  args: { ownerId: string; actionId: string; operations: readonly MutationOp[] },
 ): Promise<void> {
-  if (typeof args.input.aspects?.[FINANCIAL]?.category_ref !== 'string') return;
+  if (!touchesCategoryRef(args.operations)) return;
   try {
     const action = await withIdentity(db, args.ownerId, (tx) => findAction(tx, args.actionId));
     if (action) await maybeSuggestRule({ db, ownerId: args.ownerId, action });
