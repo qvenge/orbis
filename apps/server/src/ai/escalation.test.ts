@@ -637,6 +637,13 @@ describe('эскалация повторных исправлений кате�
       await tx.insert(chatMessages).values(rows);
     });
 
+    // Исправлений ДВА — порог MIN_CORRECTIONS набран, и подавление реально что-то держит.
+    // С одним исправлением карточки не появилось бы и без всякого подавления (выход по
+    // not_repeated), а значит утверждение ниже не пиннило бы ничего: убери точечную пробу
+    // offeredExactly — сканирующий шаг до самой старой карточки «пятерочка» не дойдёт
+    // (её перекрывают JOURNAL_SCAN_LIMIT свежих «wildberries»), и предложение уедет.
+    // Оба исправления идут мимо роутера: maybeSuggestRule зовём здесь руками.
+    await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 999', food), fun);
     const actionId = await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
     expect(
       await maybeSuggestRule({ db, ownerId: user, action: await actionById(actionId) }),

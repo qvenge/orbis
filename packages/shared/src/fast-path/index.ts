@@ -125,9 +125,7 @@ export function applyMemoryRules(
     if (pattern === '' || !haystack.includes(pattern)) continue;
     matched.push({
       title: rule.title,
-      // Отсутствующее время (правило пришло из старого кэша) — «самое старое»: молча
-      // выиграть у свежего правила оно не должно.
-      updatedAt: rule.updatedAt ?? '',
+      updatedAt: rule.updatedAt,
       pattern,
       categoryTitle: parsed.categoryTitle,
     });
