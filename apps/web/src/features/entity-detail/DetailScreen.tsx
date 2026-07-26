@@ -93,9 +93,9 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       <BodyEditor key={entity.id} initial={entity.body ?? ''} onSave={saveBody} />
       {block && <QueryBlock body={entity.body ?? ''} />}
       <AspectCards entity={entity} />
-      <Subtasks parentId={entity.id} />
-      {/* Секции 6–7 §3.5: связи уже приехали этим же entity.get — своих запросов графа
+      {/* Секции 5–7 §3.5: связи уже приехали этим же entity.get — своих запросов графа
           секции не заводят. */}
+      <Subtasks parentId={entity.id} relations={relations ?? []} />
       <Blocks entityId={entity.id} relations={relations ?? []} />
       <Backlinks items={backlinks ?? []} />
     </div>

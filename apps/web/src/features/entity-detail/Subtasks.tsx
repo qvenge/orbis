@@ -3,17 +3,24 @@ import { Circle, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { useNav } from '../../state/navigation';
-import { trpc } from '../../trpc';
+import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
+import { detailGetInput } from './useEntityDetail';
+
+type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
 
 // Подзадачи: дети через relation parent (source=родитель). Создание — quick_capture
 // entity_create + relation_create, оба под §5.2/журнал сервера.
-export function Subtasks({ parentId }: { parentId: string }) {
+//
+// Связи приходят готовыми в entity.get(include:['relations']) экрана (prop relations) —
+// свой relation.listFor секция не заводит: это была ТА ЖЕ выборка вторым сетевым чтением
+// на каждое открытие detail (прецедент — Blocks). Поэтому и инвалидация после создания
+// идёт по ключу entity.get: своего ключа у секции больше нет.
+export function Subtasks({ parentId, relations }: { parentId: string; relations: Relation[] }) {
   const utils = trpc.useUtils();
-  const relations = trpc.relation.listFor.useQuery({ entityId: parentId });
-  const childIds = (relations.data ?? [])
+  const childIds = relations
     .filter((r) => r.relationType === 'parent' && r.sourceId === parentId)
     .map((r) => r.targetId);
   const [draft, setDraft] = useState('');
@@ -22,7 +29,7 @@ export function Subtasks({ parentId }: { parentId: string }) {
   const activeTab = useNav((s) => s.activeTab);
   const create = trpc.entity.create.useMutation();
   const relate = trpc.relation.create.useMutation({
-    onSuccess: () => void utils.relation.listFor.invalidate({ entityId: parentId }),
+    onSuccess: () => void utils.entity.get.invalidate(detailGetInput(parentId)),
   });
   const isPending = create.isPending || relate.isPending;
 

@@ -68,7 +68,7 @@ function handler(fx: Fixture) {
       if (fx.onRelationCreate) return fx.onRelationCreate();
       return rel('new', 'e1', 'x1', 'blocks');
     }
-    if (path === 'relation.listFor') return [];
+    if (path === 'relation.delete') return { ok: true };
     if (path === 'aspect.list') return [];
     return {};
   };
@@ -135,6 +135,67 @@ test('добавление блокировки: поиск через entity.qu
       relation_type: 'blocks',
     }),
   );
+});
+
+// D5d п.1: до добивки форма жёстко ставила source_id = текущая сущность, поэтому список
+// «Заблокирована» было нечем пополнить — приходилось открывать detail самого блокера.
+test('добавление блокировки: направление «заблокирована» шлёт обратную связь', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
+  await screen.findByTestId('body-edit');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
+  fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
+  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
+  fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
+
+  // Стороны переставлены: блокирует НАЙДЕННАЯ сущность, а текущая заблокирована ею.
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'relation.create')?.input).toEqual({
+      source_id: 'x1',
+      target_id: 'e1',
+      relation_type: 'blocks',
+    }),
+  );
+});
+
+// D5d п.2: relation.create не отдаёт actionId (Undo из секции невозможен), а серверная
+// процедура relation.delete существует — снятие ошибочной связи идёт через неё.
+test('снятие блокировки: крестик → подтверждение → relation.delete обеими сторонами', async () => {
+  const { calls } = renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    handler({ relations: [rel('r1', 'e1', 't1', 'blocks')] }),
+  );
+  expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Снять блокировку' }));
+  // Минимум подтверждения: разрушающее действие не выполняется первым же кликом.
+  expect(calls.some((c) => c.path === 'relation.delete')).toBe(false);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Снять' }));
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'relation.delete')?.input).toEqual({
+      source_id: 'e1',
+      target_id: 't1',
+      relation_type: 'blocks',
+    }),
+  );
+});
+
+// D5d п.4: пикер шёл в сеть на КАЖДОЕ нажатие — три буквы давали три полнотекстовых
+// запроса подряд, из которых полезен только последний.
+test('пикер: быстрый ввод трёх символов даёт один запрос, а не три', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
+  await screen.findByTestId('body-edit');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
+  const input = screen.getByLabelText('Поиск сущности');
+  fireEvent.change(input, { target: { value: 'На' } });
+  fireEvent.change(input, { target: { value: 'Най' } });
+  fireEvent.change(input, { target: { value: 'Найд' } });
+
+  const queries = () => calls.filter((c) => c.path === 'entity.query');
+  await waitFor(() => expect(queries()).toHaveLength(1));
+  expect(queries()[0]?.input).toEqual({ query: 'search=Найд, limit=10' });
 });
 
 // `search=` — FTS по целым словам (plainto_tsquery): набор по префиксу («Куп» для

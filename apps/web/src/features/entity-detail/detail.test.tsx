@@ -1,8 +1,10 @@
+import { onlineManager } from '@tanstack/react-query';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { renderWithProviders, trpcError } from '../../test/harness';
 import { trpc } from '../../trpc';
+import { AspectCards } from './AspectCards';
 import { DetailScreen } from './DetailScreen';
 import { detailGetInput } from './useEntityDetail';
 
@@ -43,7 +45,6 @@ test('чекбокс task → entity.update status=done + completed_at', async (
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update')
       return { ...entity, aspects: { 'orbis/task': { status: 'done', completed_at: 'now' } } };
-    if (path === 'relation.listFor') return [];
     if (path === 'aspect.list') return [];
     return {};
   });
@@ -67,7 +68,6 @@ test('inline body-правка шлёт expectedUpdatedAt = точная стр�
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') return { ...entity, body: 'новое' };
-    if (path === 'relation.listFor') return [];
     if (path === 'aspect.list') return [];
     return {};
   });
@@ -96,7 +96,6 @@ test('текст, набранный во время сохранения, пе�
       return { entity: e, relations: [], thread: { threadId: 'th1', messages: [] } };
     }
     if (path === 'entity.update') return saved;
-    if (path === 'relation.listFor') return [];
     if (path === 'aspect.list') return [];
     return {};
   });
@@ -120,7 +119,6 @@ test('нетронутый черновик подхватывает измен�
       return { entity: e, relations: [], thread: { threadId: 'th1', messages: [] } };
     }
     if (path === 'entity.update') return entity;
-    if (path === 'relation.listFor') return [];
     if (path === 'aspect.list') return [];
     return {};
   });
@@ -148,7 +146,6 @@ test('inline body-правка: CONFLICT (409) → откат кэша к пре
         return new Promise(() => {});
       }
       if (path === 'entity.update') throw trpcError('CONFLICT');
-      if (path === 'relation.listFor') return [];
       if (path === 'aspect.list') return [];
       return {};
     },
@@ -166,6 +163,69 @@ test('inline body-правка: CONFLICT (409) → откат кэша к пре
   // (а) кэш откатился к прежнему body: оптимистичный патч 'конфликтное' снят (snapshot восстановлен)
   await waitFor(() => expect(screen.getByTestId('body-probe')).toHaveTextContent('тело'));
   expect(screen.getByTestId('body-probe')).not.toHaveTextContent('конфликтное');
+});
+
+// --- подзадачи читают связи из entity.get (D5d п.3) -------------------------------------
+// Раньше секция дублировала чтение графа своим relation.listFor: та же выборка, второй
+// сетевой запрос на каждое открытие detail. Инвалидация после создания переехала на тот
+// же ключ entity.get — иначе созданная подзадача не появлялась бы в списке.
+
+test('подзадачи: список из entity.get; после создания — рефетч того же ключа, без relation.listFor', async () => {
+  let childId: string | null = null;
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+    if (path === 'entity.get') {
+      const { id } = input as { id: string };
+      // Титул подзадачи дочитывает EntityRef отдельным entity.get без include.
+      if (id !== 'e1') return { entity: { ...entity, id, title: 'Купить молоко' } };
+      return {
+        entity,
+        relations:
+          childId === null
+            ? []
+            : [
+                {
+                  id: 'r1',
+                  sourceId: 'e1',
+                  targetId: childId,
+                  relationType: 'parent',
+                  meta: {},
+                  createdAt: '2026-07-05T00:00:00.000Z',
+                  updatedAt: '2026-07-05T00:00:00.000Z',
+                },
+              ],
+        thread: { threadId: 'th1', messages: [] },
+      };
+    }
+    if (path === 'entity.create') {
+      const { input: created } = input as { input: { id: string; title: string } };
+      return { ...entity, id: created.id, title: created.title };
+    }
+    if (path === 'relation.create') {
+      childId = (input as { target_id: string }).target_id;
+      return {
+        id: 'r1',
+        sourceId: 'e1',
+        targetId: childId,
+        relationType: 'parent',
+        meta: {},
+        createdAt: '2026-07-05T00:00:00.000Z',
+        updatedAt: '2026-07-05T00:00:00.000Z',
+      };
+    }
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
+  expect(screen.queryByTestId('subtask')).toBeNull();
+
+  const field = screen.getByLabelText('Новая подзадача');
+  fireEvent.change(field, { target: { value: 'Купить молоко' } });
+  fireEvent.keyDown(field, { key: 'Enter' });
+
+  expect(await screen.findByTestId('subtask')).toBeInTheDocument();
+  expect(await screen.findByRole('button', { name: 'Купить молоко' })).toBeInTheDocument();
+  // Второе чтение той же выборки ушло: секция живёт на relations из entity.get.
+  expect(calls.some((c) => c.path === 'relation.listFor')).toBe(false);
 });
 
 // --- пикер категории для financial-сущности (sign-off владельца K6, D3b) ---------------
@@ -208,7 +268,6 @@ const finHandler = (path: string) => {
     return { entity: finEntity, relations: [], thread: { threadId: 'th1', messages: [] } };
   if (path === 'entity.query') return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
   if (path === 'entity.update') return finEntity;
-  if (path === 'relation.listFor') return [];
   if (path === 'aspect.list') return [];
   return {};
 };
@@ -249,7 +308,6 @@ test('financial: запрос категорий упал → «Не удало�
     if (path === 'entity.get')
       return { entity: finEntity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
-    if (path === 'relation.listFor') return [];
     if (path === 'aspect.list') return [];
     return {};
   });
@@ -270,7 +328,6 @@ test('financial: список пришёл, а ссылка ведёт мимо 
       return { entity: orphan, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.query')
       return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
-    if (path === 'relation.listFor') return [];
     if (path === 'aspect.list') return [];
     return {};
   });
@@ -279,12 +336,77 @@ test('financial: список пришёл, а ссылка ведёт мимо 
   expect(select).toHaveDisplayValue('Категория не найдена');
 });
 
+// D5d п.5: три дефекта одной цепочки подписи «своей» опции пикера.
+
+// (а) пустой category_ref — не «беда со списком»: подпись «Без категории» обязана
+// пережить упавший запрос, иначе транзакция без категории выглядит как сломанная связь.
+test('financial: без категории при упавшем запросе — «Без категории», а не отказ', async () => {
+  const noCategory = {
+    ...finEntity,
+    aspects: { 'orbis/financial': { ...finEntity.aspects['orbis/financial'], category_ref: '' } },
+  };
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: noCategory, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const select = await screen.findByLabelText('orbis/financial category_ref');
+  await waitFor(() => expect(select).toHaveDisplayValue('Без категории'));
+});
+
+// (б) v5 сохраняет data при ошибке РЕФЕТЧА: список категорий известен целиком, и
+// «Не удалось загрузить категории» врало бы — ссылка действительно ведёт в никуда.
+test('financial: рефетч списка упал, но список уже есть → «Категория не найдена»', async () => {
+  let queries = 0;
+  const orphan = {
+    ...finEntity,
+    aspects: {
+      'orbis/financial': { ...finEntity.aspects['orbis/financial'], category_ref: 'gone' },
+    },
+  };
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: orphan, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.query') {
+      queries += 1;
+      if (queries === 1) return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
+      throw trpcError('INTERNAL_SERVER_ERROR');
+    }
+    if (path === 'entity.update') return orphan;
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const select = await screen.findByLabelText('orbis/financial category_ref');
+  await screen.findByRole('option', { name: 'Развлечения' }); // список доехал целым
+  // Любая правка сущности инвалидирует entity.query (useEntityUpdate.onSettled) — рефетч
+  // падает, но data остаётся: state = error + непустой список.
+  fireEvent.change(screen.getByTestId('body-edit'), { target: { value: 'новое' } });
+  fireEvent.blur(screen.getByTestId('body-edit'));
+
+  await waitFor(() => expect(queries).toBeGreaterThan(1));
+  expect(select).toHaveDisplayValue('Категория не найдена');
+});
+
+// (в) офлайн-пауза: fetchStatus='paused' даёт isLoading===false при status='pending' —
+// по isLoading подпись срывалась в «Категория не найдена» на целой транзакции.
+test('financial: офлайн-пауза списка категорий — «Загрузка…», а не «Категория не найдена»', async () => {
+  onlineManager.setOnline(false);
+  try {
+    renderWithProviders(<AspectCards entity={finEntity} />, finHandler);
+    const select = await screen.findByLabelText('orbis/financial category_ref');
+    expect(select).toHaveDisplayValue('Загрузка…');
+  } finally {
+    onlineManager.setOnline(true);
+  }
+});
+
 test('нефинансовая сущность: поля прежние (инпут), список категорий не запрашивается', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') return entity;
-    if (path === 'relation.listFor') return [];
     if (path === 'aspect.list') return [];
     return {};
   });
@@ -300,7 +422,6 @@ test('conflict-баннер: клик «Обновить» → refetch entity.ge
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') throw trpcError('CONFLICT');
-    if (path === 'relation.listFor') return [];
     if (path === 'aspect.list') return [];
     return {};
   });
