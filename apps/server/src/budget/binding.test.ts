@@ -603,6 +603,29 @@ describe('ребиндинг при создании/правке/архивац
     expect(await budgetParents(txnB.id)).toEqual([narrowB.id]);
     expect(monthlyA.id).not.toBe(narrowA.id);
     expect(monthlyB.id).not.toBe(narrowB.id);
+
+    // Приёмка §7.3, вторая половина: «после его архивации АТОМАРНО возвращается
+    // месячному» — тоже В ОБОИХ вариантах порядка. Атомарность: снятие старой связи и
+    // создание новой лежат в ОДНОМ action архивации, а не в двух последовательных.
+    const archiveA = ok(
+      await execute(db, req(userA, 'entity_update', { id: narrowA.id, archived: true }), { sink }),
+    );
+    expect(await budgetParents(txnA.id)).toEqual([monthlyA.id]);
+    expect((await actionById(archiveA.actionId)).operations.map((o) => o.op)).toEqual([
+      'entity_update',
+      'relation_delete',
+      'relation_create',
+    ]);
+
+    const archiveB = ok(
+      await execute(db, req(userB, 'entity_update', { id: narrowB.id, archived: true }), { sink }),
+    );
+    expect(await budgetParents(txnB.id)).toEqual([monthlyB.id]);
+    expect((await actionById(archiveB.actionId)).operations.map((o) => o.op)).toEqual([
+      'entity_update',
+      'relation_delete',
+      'relation_create',
+    ]);
   });
 });
 
