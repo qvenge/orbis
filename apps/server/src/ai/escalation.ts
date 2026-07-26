@@ -413,7 +413,7 @@ async function findAction(tx: Tx, actionId: string): Promise<ActionRecord | unde
 }
 
 /** Операция мутации в форме, в которой её видит executor: имя тула + его input. */
-export interface MutationOp {
+interface MutationOp {
   tool: string;
   input: unknown;
 }
