@@ -5,11 +5,13 @@ import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
 type Entity = RouterOutputs['entity']['get']['entity'];
 type UpdateInput = RouterInputs['entity']['update'];
 
-// §9.2: detail тянет body+relations+thread. Один и тот же input — ключ кэша для
-// useQuery и точечных optimistic-патчей (cancel/getData/setData/invalidate).
+// §9.2: detail тянет body+relations+backlinks+thread (backlinks — секция «Связанное»
+// §3.5.7, Task D5). Один и тот же input — ключ кэша для useQuery и точечных
+// optimistic-патчей (cancel/getData/setData/invalidate).
 const DETAIL_INCLUDE: NonNullable<RouterInputs['entity']['get']['include']> = [
   'body',
   'relations',
+  'backlinks',
   'thread',
 ];
 

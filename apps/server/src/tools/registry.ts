@@ -144,7 +144,7 @@ const entityGetJsonSchema = {
       type: 'array',
       items: { type: 'string', enum: ['body', 'relations', 'backlinks', 'thread'] },
       description:
-        'по умолчанию body+relations; backlinks — кто ссылается через body_refs; thread — сообщения треда сущности',
+        'по умолчанию body+relations; backlinks — кто ссылается: явные related_to (via "relation") и упоминания через body_refs (via "mention"), без архивных, до 100; thread — сообщения треда сущности',
     },
   },
   required: ['id'],

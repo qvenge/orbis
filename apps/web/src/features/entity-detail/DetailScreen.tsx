@@ -11,6 +11,8 @@ import { PlannedToFactCard } from '../budget/PlannedToFactCard';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { ChatThread } from '../chat/ChatThread';
 import { AspectCards } from './AspectCards';
+import { Backlinks } from './Backlinks';
+import { Blocks } from './Blocks';
 import { NativeRow } from './NativeRow';
 import { Subtasks } from './Subtasks';
 import { useEntityDetail } from './useEntityDetail';
@@ -40,7 +42,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       </>
     );
   }
-  const { entity, thread } = get.data;
+  const { entity, thread, relations, backlinks } = get.data;
   const block = firstQueryBlock(entity.body ?? '');
 
   // В шапке — только title; emoji сущности — крупная page-иконка (Notion-style) в строке
@@ -92,6 +94,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       {block && <QueryBlock body={entity.body ?? ''} />}
       <AspectCards entity={entity} />
       <Subtasks parentId={entity.id} />
+      {/* Секции 6–7 §3.5: связи уже приехали этим же entity.get — своих запросов графа
+          секции не заводят. */}
+      <Blocks entityId={entity.id} relations={relations ?? []} />
+      <Backlinks items={backlinks ?? []} />
     </div>
   );
 

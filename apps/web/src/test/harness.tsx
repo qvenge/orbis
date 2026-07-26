@@ -8,11 +8,13 @@ import { trpc } from '../trpc';
 
 export type MockHandler = (path: string, input: unknown) => unknown | Promise<unknown>;
 
-// TRPCClientError с data.code — клиент ключуется на КОД (не cause).
-export function trpcError(code: string): TRPCClientError<AppRouter> {
-  return new TRPCClientError(code, {
+// TRPCClientError с data.code — клиент ключуется на КОД (не cause). Второй аргумент —
+// текст сообщения: cause по HTTP не сериализуется, поэтому детали инвариантов (путь цикла
+// blocks, K17) доезжают до UI только в message, и тесты должны уметь его подделать.
+export function trpcError(code: string, message = code): TRPCClientError<AppRouter> {
+  return new TRPCClientError(message, {
     // biome-ignore lint/suspicious/noExplicitAny: конструирование сырого tRPC-error shape для тестов
-    result: { error: { message: code, code: -32600, data: { code, httpStatus: 400 } } } as any,
+    result: { error: { message, code: -32600, data: { code, httpStatus: 400 } } } as any,
   });
 }
 
