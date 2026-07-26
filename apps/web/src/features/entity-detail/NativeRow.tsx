@@ -28,7 +28,9 @@ function FinancialRow({ title, financial }: { title: string; financial: Record<s
   // Бейдж — НАЗВАНИЕ категории (D6c п.2): сырой uuid остаётся лишь запасным вариантом,
   // когда категория не найдена. Раньше это был единственный текст, и для транзакции
   // без конверта (строки остатка нет) пользователь видел только uuid.
-  const categoryTitle = useCategoryTitle(categoryRef);
+  // Пока список категорий грузится, значение неизвестно — бейджа нет вовсе (D6d п.1):
+  // иначе на холодном кэше uuid мелькал и подменялся названием, бейдж дёргался по ширине.
+  const { title: categoryTitle, isPending: categoryPending } = useCategoryTitle(categoryRef);
 
   return (
     <div className="flex items-center gap-2" data-testid="native-financial">
@@ -39,7 +41,7 @@ function FinancialRow({ title, financial }: { title: string; financial: Record<s
       >
         {money.text}
       </span>
-      {categoryRef !== '' && <Badge>{categoryTitle}</Badge>}
+      {categoryRef !== '' && !categoryPending && <Badge>{categoryTitle}</Badge>}
     </div>
   );
 }

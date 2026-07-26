@@ -55,7 +55,11 @@ export function EntityCard({
 
   // Категория в сетке полей — НАЗВАНИЕМ, а не uuid (D6c п.2): строка остатка конверта
   // название несёт, но её нет у записи без конверта — и оставался «категория: 7d5e…».
-  const categoryTitle = useCategoryTitle(typeof categoryRef === 'string' ? categoryRef : '');
+  // Пока список категорий грузится, значение неизвестно — строки поля нет вовсе
+  // (D6d п.1): иначе на холодном кэше uuid мелькал и подменялся названием.
+  const { title: categoryTitle, isPending: categoryPending } = useCategoryTitle(
+    typeof categoryRef === 'string' ? categoryRef : '',
+  );
 
   const undo = trpc.ai.undo.useMutation({
     onSuccess: () => {
@@ -84,14 +88,16 @@ export function EntityCard({
       </button>
       {/* Свойства — тихая сетка «подпись: значение», числа таблично. */}
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
-        {Object.entries(card.keyFields).map(([k, v]) => (
-          <div key={k} className="col-span-2 grid grid-cols-subgrid">
-            <dt className="text-text-muted">{fieldLabel(k)}</dt>
-            <dd className="text-text tabular-nums">
-              {k === 'category_ref' && typeof v === 'string' ? categoryTitle : String(v)}
-            </dd>
-          </div>
-        ))}
+        {Object.entries(card.keyFields).map(([k, v]) => {
+          const isCategory = k === 'category_ref' && typeof v === 'string';
+          if (isCategory && categoryPending) return null;
+          return (
+            <div key={k} className="col-span-2 grid grid-cols-subgrid">
+              <dt className="text-text-muted">{fieldLabel(k)}</dt>
+              <dd className="text-text tabular-nums">{isCategory ? categoryTitle : String(v)}</dd>
+            </div>
+          );
+        })}
       </dl>
       {env !== null && (
         <p data-testid="envelope-remaining" className="text-xs tabular-nums text-text-secondary">

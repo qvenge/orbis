@@ -21,11 +21,15 @@ export type CategoryOption = {
  * тот же кэш, что у пикера категории (CATEGORIES_QUERY): второго источника категорий
  * в приложении нет.
  *
- * Пустой ref (или ещё не доехавший список, или ссылка в неизвестную категорию) →
- * возвращается сам ref: uuid — запасной вариант, а не пустое место, иначе значение
- * поля молча исчезало бы.
+ * Ссылка в неизвестную категорию → возвращается сам ref: uuid — запасной вариант,
+ * а не пустое место, иначе значение поля молча исчезало бы.
+ *
+ * `isPending` (D6d п.1) отличает «ещё грузится» от «не найдена»: на холодном кэше
+ * (вход в detail из Chat/Browser) список категорий доезжает за ~200 мс, и без этого
+ * признака запасной uuid успевал мелькнуть и подмениться названием. Потребитель обязан
+ * НЕ рисовать бейдж/строку поля, пока `isPending`.
  */
-export function useCategoryTitle(categoryRef: string): string {
+export function useCategoryTitle(categoryRef: string): { title: string; isPending: boolean } {
   // enabled: непустой ref — с нефинансовых сущностей запрос категорий не уходит вовсе
   // (та же бережливость, что у пикера AspectCards, смонтированного только на financial).
   const q = trpc.entity.query.useQuery(
@@ -34,7 +38,13 @@ export function useCategoryTitle(categoryRef: string): string {
   );
   // Array.isArray — та же защита от неожиданной формы ответа, что в TransactionsScreen.
   const found = (Array.isArray(q.data) ? q.data : []).find((e) => e.id === categoryRef);
-  return found?.title ?? categoryRef;
+  return {
+    title: found?.title ?? categoryRef,
+    // Отключённый запрос (пустой ref) у TanStack Query тоже в статусе pending — но там и
+    // показывать нечего, поэтому загрузкой считается только непустой ref. Ошибка чтения
+    // pending снимает: показать uuid лучше, чем не показать ничего.
+    isPending: categoryRef !== '' && q.isPending,
+  };
 }
 
 export function toOption(e: QueryEntity): CategoryOption {

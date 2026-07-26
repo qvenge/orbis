@@ -354,7 +354,8 @@ const categoryEntity = {
 
 // Конверта у записи нет (null) — ровно случай смоука: строки остатка не будет,
 // и название категории обязано прийти из самой карточки.
-const noEnvelope = (path: string, categories: unknown[]) => {
+// categories: unknown — сюда передают и готовый массив, и ещё не разрешённый промис (D6d).
+const noEnvelope = (path: string, categories: unknown) => {
   if (path === 'budget.envelopeForCategory') return null;
   if (path === 'entity.query') return categories;
   return {};
@@ -373,12 +374,41 @@ test('entity_card: категория показана НАЗВАНИЕМ, а н
   });
 });
 
+// D6d п.2: прежняя версия утверждала uuid в DOM сразу после рендера — а он там и так есть,
+// пока список категорий не доехал. Соседняя карточка с ИЗВЕСТНОЙ категорией — маркер того,
+// что запрос разрешён: только после её названия отсутствие имени значит «категории нет».
 test('entity_card: категории нет в списке → uuid как запасной вариант (D6c п.2)', async () => {
+  const ghostCard = {
+    ...finCard,
+    entityId: 'e2',
+    title: 'Кино 500',
+    keyFields: { ...finCard.keyFields, category_ref: 'c-неизвестная' },
+  };
+  renderWithProviders(<div>{renderCards(msg([finCard, ghostCard]))}</div>, (path) =>
+    noEnvelope(path, [categoryEntity]),
+  );
+  const cards = await screen.findAllByTestId('entity-card');
+  // Обе карточки делят один запрос и один кэш — «Еда» доказывает, что список уже разрешён.
+  await waitFor(() => expect(cards[0]).toHaveTextContent('Еда'));
+  expect(cards[1]).toHaveTextContent('c-неизвестная');
+});
+
+// D6d п.1: холодный кэш категорий — в сетке полей на ~200 мс печатался uuid.
+test('entity_card: пока категории грузятся, строки категории нет (D6d)', async () => {
+  let release: (categories: unknown) => void = () => {};
+  const categories = new Promise((resolve) => {
+    release = resolve;
+  });
   renderWithProviders(<div>{renderCards(msg([finCard]))}</div>, (path) =>
-    noEnvelope(path, [{ ...categoryEntity, id: 'другая' }]),
+    noEnvelope(path, categories),
   );
   const card = await screen.findByTestId('entity-card');
-  await waitFor(() => expect(card).toHaveTextContent('c1'));
+  // Значение ещё неизвестно — строки поля нет вовсе (ни uuid, ни пустого значения).
+  expect(card).not.toHaveTextContent('c1');
+  expect(card).not.toHaveTextContent('категория');
+
+  release([categoryEntity]);
+  await waitFor(() => expect(card).toHaveTextContent('Еда'));
 });
 
 test('карточка без category_ref список категорий не запрашивает (D6c п.2)', async () => {
