@@ -4,7 +4,7 @@ import { onlineManager } from '@tanstack/react-query';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { useNav } from '../../state/navigation';
-import { renderWithProviders, trpcError } from '../../test/harness';
+import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
 import { trpc } from '../../trpc';
 import { queryBlocks } from '../browser/query';
 import { AspectCards } from './AspectCards';
@@ -229,6 +229,60 @@ test('подзадачи: список из entity.get; после создан�
   expect(await screen.findByRole('button', { name: 'Купить молоко' })).toBeInTheDocument();
   // Второе чтение той же выборки ушло: секция живёт на relations из entity.get.
   expect(calls.some((c) => c.path === 'relation.listFor')).toBe(false);
+});
+
+// --- поле аспекта и внешние изменения значения (D6c п.3) -------------------------------
+// Смоук D6b: после перевода задачи в «Готово» чекбоксом поле «статус» продолжало
+// показывать inbox — AspectField держал значение в useState(initial) без синхронизации.
+// Политика — та же, что у BodyEditor: внешнее значение подхватывается, пока черновик
+// не трогали; набранный текст наивным useEffect'ом не затирается.
+
+/** Обработчик, у которого entity.get после первого чтения отдаёт `done`. */
+function externalStatusChange(): { handler: MockHandler; getCalls: () => number } {
+  let getCalls = 0;
+  const done = {
+    ...entity,
+    aspects: { 'orbis/task': { status: 'done', priority: 'high' } },
+    updatedAt: '2026-07-05T11:00:00.000Z',
+  };
+  return {
+    getCalls: () => getCalls,
+    handler: (path) => {
+      if (path === 'entity.get') {
+        getCalls += 1;
+        return {
+          entity: getCalls === 1 ? entity : done,
+          relations: [],
+          thread: { threadId: 'th1', messages: [] },
+        };
+      }
+      if (path === 'entity.update') return done;
+      if (path === 'aspect.list') return [];
+      return {};
+    },
+  };
+}
+
+test('поле аспекта подхватывает внешнее изменение значения (статус после чекбокса)', async () => {
+  const { handler } = externalStatusChange();
+  renderWithProviders(<DetailScreen entityId="e1" />, handler);
+  const field = await screen.findByLabelText('orbis/task status');
+  expect(field).toHaveValue('inbox');
+
+  fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
+  await waitFor(() => expect(screen.getByLabelText('orbis/task status')).toHaveValue('done'));
+});
+
+test('незакоммиченный ввод в поле аспекта переживает внешнее изменение', async () => {
+  const { handler, getCalls } = externalStatusChange();
+  renderWithProviders(<DetailScreen entityId="e1" />, handler);
+  const field = await screen.findByLabelText('orbis/task status');
+  // Печатаем, но НЕ сохраняем (blur не было) — правка пользователя ещё жива
+  fireEvent.change(field, { target: { value: 'in_progress' } });
+
+  fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
+  await waitFor(() => expect(getCalls()).toBeGreaterThan(1)); // рефетч с чужим статусом пришёл
+  expect(screen.getByLabelText('orbis/task status')).toHaveValue('in_progress');
 });
 
 // --- пикер категории для financial-сущности (sign-off владельца K6, D3b) ---------------

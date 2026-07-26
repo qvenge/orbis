@@ -176,6 +176,18 @@ function AspectField({
 }) {
   const initial = String(value ?? '');
   const [draft, setDraft] = useState(initial);
+  const [serverValue, setServerValue] = useState(initial);
+
+  // D6c п.3: значение аспекта сменилось извне (наш же save, чекбокс «Готово» в шапке,
+  // правка с другого устройства) — подхватываем его, но ТОЛЬКО если черновик не трогали.
+  // Иначе текст, который владелец печатает прямо сейчас, был бы затёрт. Приём тот же,
+  // что у BodyEditor (DetailScreen): сравнение с последним известным серверным значением
+  // в рендере, а не useEffect на каждый рендер.
+  if (initial !== serverValue) {
+    setServerValue(initial);
+    if (draft === serverValue) setDraft(initial);
+  }
+
   // dt/dd — прямые дети grid'а из AspectCards (grid-cols-[auto_1fr]): все инпуты
   // начинаются с одной вертикали независимо от длины лейбла (лейблы выровнены вправо).
   return (
