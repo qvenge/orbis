@@ -281,6 +281,37 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     expect(second.rows[0]?.suggestedCategoryRef).toBe(transportId);
   });
 
+  // DF п.2 (формулировка K11): порядок «правила ПЕРЕД алиасами» держался только на коде —
+  // оба теста выше берут counterparty, которой алиасы не покрывают вовсе, и перестановка
+  // двух ступеней местами оставляла серверные тесты зелёными. Здесь ступени КОНФЛИКТУЮТ:
+  // alias «кофе» ведёт в Еду (seed/categories.ts), правило «кофе → Транспорт» его
+  // перекрывает — при обратном порядке findCategory ответит Едой и тест упадёт.
+  test('конфликт правила и alias на одной строке: побеждает правило («кофе» → Транспорт)', async () => {
+    const { user, foodId, transportId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({
+      occurredOn: '2026-05-13',
+      amount: '250.00',
+      counterparty: 'КОФЕ ХАУЗ 12',
+    });
+
+    // без правила — ступень алиасов: «кофе» → Еда
+    const before = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(before.rows[0]?.suggestedCategoryRef).toBe(foodId);
+
+    await caller.entity.create({
+      input: {
+        title: 'кофе → Транспорт',
+        tags: [],
+        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+      },
+      source: 'ui',
+    });
+
+    const after = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(after.rows[0]?.suggestedCategoryRef).toBe(transportId);
+  });
+
   test('повтор ТОГО ЖЕ файла после импорта → все строки already_imported (приёмка §7 edge)', async () => {
     const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);
