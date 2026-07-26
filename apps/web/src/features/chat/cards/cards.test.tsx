@@ -426,6 +426,14 @@ describe('memory_rule_suggestion (детерминированное время)
     expect(screen.getByRole('button', { name: 'Не надо' })).toBeInTheDocument();
   });
 
+  // D5c п.2: вопрос «Запомнить правило „…“?» уже задаёт content самого сообщения
+  // (ai/escalation.ts) — карточка под ним печатала его второй раз. Карточка показывает
+  // текст правила и кнопки; вопрос остаётся за сообщением.
+  test('memory_rule_suggestion: карточка не повторяет вопрос сообщения', () => {
+    renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>);
+    expect(screen.getByTestId('memory-rule-card')).not.toHaveTextContent(/запомнить правило/i);
+  });
+
   test('[Запомнить] → entity.create с title=ruleText и аспектом orbis/memory (rule, financial)', async () => {
     const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
       path === 'entity.create' ? createdEntity : {},

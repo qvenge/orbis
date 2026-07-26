@@ -340,7 +340,7 @@ test('D2c: шапка и плашка ошибки называют экран �
 
   expect(screen.getByRole('heading', { level: 1, name: 'Повестка' })).toBeInTheDocument();
   await waitFor(() =>
-    expect(screen.getByText('Не удалось загрузить Повестку')).toBeInTheDocument(),
+    expect(screen.getByText('Не удалось загрузить повестку')).toBeInTheDocument(),
   );
 });
 
@@ -543,7 +543,7 @@ test('D2b: отказ ОДНОЙ из двух выборок → бейджа �
   expect(screen.queryByTestId('agenda-badge')).toBeNull();
   expect(screen.queryByTestId('sidebar-agenda-badge')).toBeNull();
   // Плашка неполноты на самой вкладке остаётся: сигнал не теряется, он переезжает
-  expect(screen.getByText('Не удалось загрузить «Просроченное»')).toBeInTheDocument();
+  expect(screen.getByText('Не удалось загрузить просроченное')).toBeInTheDocument();
   expect(screen.getByTestId('tab-agenda')).toBeInTheDocument();
 });
 

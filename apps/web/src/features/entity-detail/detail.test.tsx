@@ -241,6 +241,44 @@ test('financial: выбор категории шлёт entity.update с нов�
   });
 });
 
+// D5c п.4: упавший запрос списка и живая ссылка на исчезнувшую категорию — РАЗНЫЕ беды.
+// Общий текст «Категория не найдена» на отказе сети врал бы про целую транзакцию, что
+// связь с категорией потеряна (приём RolloverScreen: ветка isError отдельно от пустоты).
+test('financial: запрос категорий упал → «Не удалось загрузить категории», а не «не найдена»', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: finEntity, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
+    if (path === 'relation.listFor') return [];
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const select = await screen.findByLabelText('orbis/financial category_ref');
+  await waitFor(() => expect(select).toHaveDisplayValue('Не удалось загрузить категории'));
+  expect(select).not.toHaveDisplayValue('Категория не найдена');
+});
+
+test('financial: список пришёл, а ссылка ведёт мимо него → «Категория не найдена»', async () => {
+  const orphan = {
+    ...finEntity,
+    aspects: {
+      'orbis/financial': { ...finEntity.aspects['orbis/financial'], category_ref: 'gone' },
+    },
+  };
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: orphan, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.query')
+      return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
+    if (path === 'relation.listFor') return [];
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const select = await screen.findByLabelText('orbis/financial category_ref');
+  await screen.findByRole('option', { name: 'Развлечения' }); // список доехал целым
+  expect(select).toHaveDisplayValue('Категория не найдена');
+});
+
 test('нефинансовая сущность: поля прежние (инпут), список категорий не запрашивается', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')

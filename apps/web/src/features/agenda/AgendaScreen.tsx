@@ -110,7 +110,7 @@ export function AgendaScreen() {
         {/* Ошибку «Просроченного» показываем явно: пустая секция и упавший запрос
             выглядят одинаково, а молчаливая потеря просроченного — худший исход */}
         {overdue.isError && (
-          <p className="text-sm text-text-muted">Не удалось загрузить «Просроченное»</p>
+          <p className="text-sm text-text-muted">Не удалось загрузить просроченное</p>
         )}
         {/* §4.2: секция всегда сверху; пустая — не занимает экран. Пока грузятся
             настройки, дата scheduled-строк считалась бы в таймзоне браузера — ждём */}
@@ -137,7 +137,7 @@ export function AgendaScreen() {
         )}
 
         {isError ? (
-          <p className="text-sm text-text-muted">Не удалось загрузить Повестку</p>
+          <p className="text-sm text-text-muted">Не удалось загрузить повестку</p>
         ) : isLoading ? (
           <>
             <Skeleton className="h-24" />

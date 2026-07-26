@@ -118,7 +118,9 @@ export function MemoryRuleCard({
 
   return (
     <Card data-testid="memory-rule-card" className="flex flex-col gap-2">
-      <p className="text-sm">Запомнить правило: „{card.ruleText}“?</p>
+      {/* Только текст правила: вопрос «Запомнить правило „…“?» уже задан content'ом
+          самого сообщения (ai/escalation.ts) — карточка под ним его не повторяет. */}
+      <p className="text-sm font-medium">{card.ruleText}</p>
       {postError && (
         <p role="alert" className="text-xs text-danger">
           {postError}

@@ -38,6 +38,9 @@ const ASPECT_LABELS: Record<string, string> = {
   'orbis/schedule': 'Расписание',
   'orbis/category': 'Категория',
   'orbis/note': 'Заметка',
+  // DetailScreen — единственный редактор памяти (D3b), так что подпись нужна: без неё
+  // секция правила подписана сырым 'orbis/memory'.
+  'orbis/memory': 'Память',
 };
 
 export function aspectLabel(id: string): string {

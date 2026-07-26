@@ -112,7 +112,13 @@ export function useFastPath(threadId: string) {
       rules = await utils.entity.query.fetch(MEMORY_RULES_QUERY, {
         staleTime: MEMORY_RULES_STALE_TIME,
       });
-    } catch {
+    } catch (e) {
+      // Деградация остаётся (правила необязательны), но она больше не немая. Сюда падают
+      // и транспортный отказ, и BAD_REQUEST парсера запроса: на непересеянном реестре
+      // аспектов (ловушка релиза фазы C) «aspect=orbis/memory» не разбирается, и правила
+      // молча не применяются — снаружи это неотличимо от «правил нет». console.warn —
+      // единственный доступный в проекте сигнал.
+      console.warn('[fast-path] правила памяти не загрузились, разбираем по алиасам:', e);
       rules = undefined;
     }
     return mapCtx(cats, settings, rules);
