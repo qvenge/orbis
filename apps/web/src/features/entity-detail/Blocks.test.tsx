@@ -96,7 +96,19 @@ beforeEach(() => {
   });
 });
 
-test('блокировки: «блокирует» — исходящие, «заблокирована» — только незакрытые задачи', async () => {
+// Титулы строк дочитываются per-id запросами entity.get (Blocks.tsx), то есть ждать
+// приходится ВТОРОЙ круг сети после entity.get самого экрана. Первый тест файла платит
+// вдобавок за прогрев (импорт модулей, первый рендер DetailScreen), а в полном корневом
+// прогоне 48 web-файлов идут параллельно с 653 серверными тестами против локальной БД:
+// ядра заняты, и дефолтная 1 с у findBy означает уже не «данные не доехали», а голодание
+// по CPU. Таймауты щедрее дефолтов — тот же приём, что у пагинации в
+// TransactionsScreen/CategoryScreen; точечный прогон от этого не медленнее, потому что
+// ожидания завершаются по факту, а не по таймеру.
+const SIDES_LOADED = { timeout: 10_000 };
+
+test('блокировки: «блокирует» — исходящие, «заблокирована» — только незакрытые задачи', {
+  timeout: 30_000,
+}, async () => {
   renderWithProviders(
     <DetailScreen entityId="e1" />,
     handler({
@@ -109,12 +121,17 @@ test('блокировки: «блокирует» — исходящие, «з�
     }),
   );
 
-  expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
-  expect(await screen.findByText('Живой блокер')).toBeInTheDocument();
+  expect(await screen.findByText('Ждёт меня', undefined, SIDES_LOADED)).toBeInTheDocument();
+  expect(await screen.findByText('Живой блокер', undefined, SIDES_LOADED)).toBeInTheDocument();
   expect(screen.getByText(/блокирует/i)).toBeInTheDocument();
   expect(screen.getByText(/заблокирована/i)).toBeInTheDocument();
-  // Закрытая задача (status=done) блокировкой не считается — семантика excludeBlocked §6.1
-  await waitFor(() => expect(screen.queryByText('Закрытый блокер')).not.toBeInTheDocument());
+  // Закрытая задача (status=done) блокировкой не считается — семантика excludeBlocked §6.1.
+  // Ждём ТЕРМИНАЛЬНОЕ состояние — ровно две строки (t1 + b1) — а не «текста пока нет»:
+  // пока per-id entity.get блокера b2 в полёте, его строка отрисована плейсхолдером «b2…»
+  // (блокер без данных считается живым), и негативная проверка прошла бы вхолостую, не
+  // подтвердив ничего. Третья строка исчезает ровно тогда, когда статус b2 доехал.
+  await waitFor(() => expect(screen.getAllByTestId('block-row')).toHaveLength(2), SIDES_LOADED);
+  expect(screen.queryByText('Закрытый блокер')).not.toBeInTheDocument();
 });
 
 test('пустые списки блокировок и пустой backlinks скрыты (кнопка добавления остаётся)', async () => {
