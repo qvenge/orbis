@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { renderWithProviders, trpcError } from '../../test/harness';
+import { trpc } from '../../trpc';
 import { DetailScreen } from './DetailScreen';
 
 // Task D5: секции 6 «Блокировки» (02-core-os §3.5.6) и 7 «Связанное (backlinks)» (§3.5.7)
@@ -76,6 +77,15 @@ function handler(fx: Fixture) {
     if (path === 'aspect.list') return [];
     return {};
   };
+}
+
+// Список-сосед (Browser/Повестка/списки с excludeBlocked) на том же ключе entity.query:
+// его перечитывание — единственный наблюдаемый признак инвалидации.
+const PROBE_QUERY = { query: 'aspect=orbis/task, status=!done, limit=10' };
+
+function ListProbe() {
+  const q = trpc.entity.query.useQuery(PROBE_QUERY);
+  return <span data-testid="list-probe">{(q.data ?? []).length}</span>;
 }
 
 beforeEach(() => {
@@ -371,6 +381,61 @@ test('backlinks: одна секция, пометка источника «св
   expect(screen.getByText('Связанное (2)')).toBeInTheDocument();
   expect(screen.getByText('связь')).toBeInTheDocument();
   expect(screen.getByText('упоминание')).toBeInTheDocument();
+});
+
+// --- DF п.5: новая/снятая связь обязана появляться в списках ---------------------------
+// Секция инвалидировала только entity.get текущей сущности. С Повесткой (staleTime ≥ 60 с,
+// K16) это стало заметным: новая блокировка до минуты не видна ни в Browser, ни в
+// Повестке, ни в списках с excludeBlocked (§6.1), а detail второй стороны держит СВОЙ
+// список связей и врал бы столько же.
+
+test('создание блокировки инвалидирует entity.query (списки перечитываются)', async () => {
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <ListProbe />
+    </>,
+    handler({}),
+  );
+  await screen.findByTestId('body-edit');
+  const probes = () =>
+    calls.filter(
+      (c) =>
+        c.path === 'entity.query' && (c.input as { query: string }).query === PROBE_QUERY.query,
+    );
+  await waitFor(() => expect(probes()).toHaveLength(1));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
+  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
+  fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
+
+  await waitFor(() => expect(probes().length).toBeGreaterThan(1));
+});
+
+test('снятие блокировки инвалидирует вторую сторону связи и entity.query', async () => {
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <ListProbe />
+    </>,
+    handler({ relations: [rel('r1', 'e1', 't1', 'blocks')] }),
+  );
+  expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
+  const probes = () =>
+    calls.filter(
+      (c) =>
+        c.path === 'entity.query' && (c.input as { query: string }).query === PROBE_QUERY.query,
+    );
+  const sideGets = () =>
+    calls.filter((c) => c.path === 'entity.get' && (c.input as { id: string }).id === 't1');
+  await waitFor(() => expect(probes()).toHaveLength(1));
+  const sidesBefore = sideGets().length;
+
+  fireEvent.click(screen.getByRole('button', { name: 'Снять блокировку' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Снять' }));
+
+  await waitFor(() => expect(sideGets().length).toBeGreaterThan(sidesBefore));
+  await waitFor(() => expect(probes().length).toBeGreaterThan(1));
 });
 
 // DF п.4: сервер отдаёт до 100 связей и признак усечения — «Связанное (100)» читалось

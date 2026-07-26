@@ -29,7 +29,14 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
   const activeTab = useNav((s) => s.activeTab);
   const create = trpc.entity.create.useMutation();
   const relate = trpc.relation.create.useMutation({
-    onSuccess: () => void utils.entity.get.invalidate(detailGetInput(parentId)),
+    onSuccess: () => {
+      void utils.entity.get.invalidate(detailGetInput(parentId));
+      // DF п.5: списки читают ДРУГОЙ ключ со своим staleTime (60 с у Повестки, K16) и
+      // сами не протухнут — без этого новая подзадача до минуты не видна ни в Browser,
+      // ни в Повестке. Вторую сторону связи инвалидировать нечего: подзадача только что
+      // создана с новым id (newId()), её ключа entity.get в кэше не существует.
+      void utils.entity.query.invalidate();
+    },
   });
   const isPending = create.isPending || relate.isPending;
 

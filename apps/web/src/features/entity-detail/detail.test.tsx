@@ -231,6 +231,63 @@ test('подзадачи: список из entity.get; после создан�
   expect(calls.some((c) => c.path === 'relation.listFor')).toBe(false);
 });
 
+// DF п.5: секция не инвалидировала entity.query вовсе (долг D5d). С Повесткой
+// (staleTime ≥ 60 с, K16) новая подзадача до минуты не видна ни в Browser, ни в Повестке.
+const SUBTASK_PROBE = { query: 'aspect=orbis/task, status=!done, limit=10' };
+
+function ListProbe() {
+  const q = trpc.entity.query.useQuery(SUBTASK_PROBE);
+  return <span data-testid="list-probe">{(q.data ?? []).length}</span>;
+}
+
+test('создание подзадачи инвалидирует entity.query (списки перечитываются)', async () => {
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <ListProbe />
+    </>,
+    (path, input) => {
+      if (path === 'entity.get') {
+        const { id } = input as { id: string };
+        if (id !== 'e1') return { entity: { ...entity, id, title: 'Купить молоко' } };
+        return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+      }
+      if (path === 'entity.create') {
+        const { input: created } = input as { input: { id: string; title: string } };
+        return { ...entity, id: created.id, title: created.title };
+      }
+      if (path === 'relation.create') {
+        const { target_id } = input as { target_id: string };
+        return {
+          id: 'r1',
+          sourceId: 'e1',
+          targetId: target_id,
+          relationType: 'parent',
+          meta: {},
+          createdAt: '2026-07-05T00:00:00.000Z',
+          updatedAt: '2026-07-05T00:00:00.000Z',
+        };
+      }
+      if (path === 'entity.query') return [];
+      if (path === 'aspect.list') return [];
+      return {};
+    },
+  );
+  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
+  const probes = () =>
+    calls.filter(
+      (c) =>
+        c.path === 'entity.query' && (c.input as { query: string }).query === SUBTASK_PROBE.query,
+    );
+  await waitFor(() => expect(probes()).toHaveLength(1));
+
+  const field = screen.getByLabelText('Новая подзадача');
+  fireEvent.change(field, { target: { value: 'Купить молоко' } });
+  fireEvent.keyDown(field, { key: 'Enter' });
+
+  await waitFor(() => expect(probes().length).toBeGreaterThan(1));
+});
+
 // --- inline-правка заголовка (DF п.3) --------------------------------------------------
 // 02-core-os §2.7: «правка памяти = правка обычной сущности (title, поля аспекта, body)»,
 // а вся машиночитаемая часть memory-правила живёт именно в title (K19.4) — до этого

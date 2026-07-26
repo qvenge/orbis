@@ -96,7 +96,20 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
       (direction === 'out' || !CLOSED.has(String(e.aspects['orbis/task']?.status ?? ''))),
   );
 
-  const refresh = () => void utils.entity.get.invalidate(detailGetInput(entityId));
+  /**
+   * Инвалидация после правки графа (DF п.5). Трёх ключей мало не бывает:
+   *  - entity.get текущей сущности — свой список связей;
+   *  - entity.get ВТОРОЙ стороны — её detail держит собственный список связей и, если
+   *    открывался раньше, лежит в кэше уже неверным;
+   *  - entity.query — Browser, Повестка и списки с excludeBlocked (§6.1) читают другой
+   *    ключ со своим staleTime (60 с у Повестки, K16) и сами не протухнут: без этого
+   *    новая блокировка до минуты не видна нигде, кроме этого экрана.
+   */
+  const refresh = (otherId: string) => {
+    void utils.entity.get.invalidate(detailGetInput(entityId));
+    void utils.entity.get.invalidate({ id: otherId });
+    void utils.entity.query.invalidate();
+  };
   // Ацикличность blocks проверяет сервер (§4.2): путь цикла доезжает ТОЛЬКО в message
   // (cause по HTTP не сериализуется) — его и показываем плашкой (02 §6).
   const relate = trpc.relation.create.useMutation({
@@ -108,13 +121,13 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
     onMutate: () => {
       unrelate.reset();
     },
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       setDraft('');
       setAdding(false);
       // Направление — часть состояния формы: без сброса внешне свежая форма молча
       // создавала бы следующую связь в обратную сторону.
       setDirection('out');
-      refresh();
+      refresh(vars.source_id === entityId ? vars.target_id : vars.source_id);
     },
   });
   // Снятие ошибочной связи: relation.create не отдаёт actionId, Undo журналом из секции
@@ -123,9 +136,9 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
     onMutate: () => {
       relate.reset();
     },
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       setConfirming(null);
-      refresh();
+      refresh(vars.source_id === entityId ? vars.target_id : vars.source_id);
     },
   });
   const failure = relate.error ?? unrelate.error;
