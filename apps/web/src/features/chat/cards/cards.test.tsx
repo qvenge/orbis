@@ -335,6 +335,66 @@ test('после Undo строка остатка снимается вмест�
   expect(screen.queryByTestId('envelope-remaining')).toBeNull();
 });
 
+// D6c п.2 (живой смоук D6b): в сетке полей карточки печаталось «категория: 7d5e3a94-…».
+// Название было только в строке остатка конверта, а её нет у транзакции без конверта.
+const categoryEntity = {
+  id: 'c1',
+  ownerId: 'u',
+  title: 'Еда',
+  emoji: null,
+  body: '',
+  bodyRefs: [],
+  tags: [],
+  meta: {},
+  aspects: { 'orbis/category': { icon: '🍔' } },
+  createdAt: 'x',
+  updatedAt: 'y',
+  archived: false,
+};
+
+// Конверта у записи нет (null) — ровно случай смоука: строки остатка не будет,
+// и название категории обязано прийти из самой карточки.
+const noEnvelope = (path: string, categories: unknown[]) => {
+  if (path === 'budget.envelopeForCategory') return null;
+  if (path === 'entity.query') return categories;
+  return {};
+};
+
+test('entity_card: категория показана НАЗВАНИЕМ, а не uuid (D6c п.2)', async () => {
+  const { calls } = renderWithProviders(<div>{renderCards(msg([finCard]))}</div>, (path) =>
+    noEnvelope(path, [categoryEntity]),
+  );
+  const card = await screen.findByTestId('entity-card');
+  await waitFor(() => expect(card).toHaveTextContent('Еда'));
+  expect(card).not.toHaveTextContent('c1');
+  // Тот же запрос категорий, что у пикера D3b (один кэш, второго источника нет)
+  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
+    query: 'aspect=orbis/category, sortBy=title:asc, limit=200',
+  });
+});
+
+test('entity_card: категории нет в списке → uuid как запасной вариант (D6c п.2)', async () => {
+  renderWithProviders(<div>{renderCards(msg([finCard]))}</div>, (path) =>
+    noEnvelope(path, [{ ...categoryEntity, id: 'другая' }]),
+  );
+  const card = await screen.findByTestId('entity-card');
+  await waitFor(() => expect(card).toHaveTextContent('c1'));
+});
+
+test('карточка без category_ref список категорий не запрашивает (D6c п.2)', async () => {
+  const { calls } = renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          { kind: 'entity_card', entityId: 'e2', title: 'Заметка', aspects: [], keyFields: {} },
+        ]),
+      )}
+    </div>,
+  );
+  await waitFor(() => expect(screen.getByTestId('entity-card')).toBeInTheDocument());
+  expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+});
+
 test('smoothAuditText сглаживает «batch: операций — 1»', () => {
   expect(smoothAuditText('batch: операций — 1')).toBe('Операция выполнена');
   expect(smoothAuditText('batch: операций — 3')).toBe('batch: операций — 3');

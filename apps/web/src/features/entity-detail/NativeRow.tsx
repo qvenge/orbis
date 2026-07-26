@@ -3,6 +3,7 @@ import { formatMoney, type MoneyTone } from '../../lib/format';
 import type { RouterOutputs } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Checkbox } from '../../ui/Checkbox';
+import { useCategoryTitle } from '../budget/categories';
 
 type Entity = RouterOutputs['entity']['query'][number];
 
@@ -14,6 +15,34 @@ const AMOUNT_TONE_CLASS: Record<MoneyTone, string> = {
 
 // NativeRow живёт на странице Detail — title здесь является заголовком страницы.
 const TITLE_CLASS = 'text-xl font-semibold tracking-tight';
+
+// Отдельный компонент, а не ветка внутри NativeRow (D6c п.2): хук названия категории
+// обязан быть безусловным, а запрос категорий не должен уходить с каждой нефинансовой
+// строки (прецедент CategoryField в AspectCards).
+function FinancialRow({ title, financial }: { title: string; financial: Record<string, unknown> }) {
+  const money = formatMoney(
+    String(financial.amount ?? '0'),
+    (financial.direction as 'expense' | 'income') ?? 'expense',
+  );
+  const categoryRef = typeof financial.category_ref === 'string' ? financial.category_ref : '';
+  // Бейдж — НАЗВАНИЕ категории (D6c п.2): сырой uuid остаётся лишь запасным вариантом,
+  // когда категория не найдена. Раньше это был единственный текст, и для транзакции
+  // без конверта (строки остатка нет) пользователь видел только uuid.
+  const categoryTitle = useCategoryTitle(categoryRef);
+
+  return (
+    <div className="flex items-center gap-2" data-testid="native-financial">
+      <span className={`flex-1 ${TITLE_CLASS}`}>{title}</span>
+      <span
+        data-testid="native-amount"
+        className={`text-lg font-medium tabular-nums ${AMOUNT_TONE_CLASS[money.tone]}`}
+      >
+        {money.text}
+      </span>
+      {categoryRef !== '' && <Badge>{categoryTitle}</Badge>}
+    </div>
+  );
+}
 
 function keyFieldsFor(aspectId: string): string[] {
   return BUILTIN_ASPECT_META.find((m) => m.id === aspectId)?.viewConfig.keyFields ?? [];
@@ -44,24 +73,7 @@ export function NativeRow({
   }
 
   const financial = aspects['orbis/financial'];
-  if (financial) {
-    const money = formatMoney(
-      String(financial.amount ?? '0'),
-      (financial.direction as 'expense' | 'income') ?? 'expense',
-    );
-    return (
-      <div className="flex items-center gap-2" data-testid="native-financial">
-        <span className={`flex-1 ${TITLE_CLASS}`}>{entity.title}</span>
-        <span
-          data-testid="native-amount"
-          className={`text-lg font-medium tabular-nums ${AMOUNT_TONE_CLASS[money.tone]}`}
-        >
-          {money.text}
-        </span>
-        {typeof financial.category_ref === 'string' && <Badge>{financial.category_ref}</Badge>}
-      </div>
-    );
-  }
+  if (financial) return <FinancialRow title={entity.title} financial={financial} />;
 
   const schedule = aspects['orbis/schedule'];
   if (schedule) {

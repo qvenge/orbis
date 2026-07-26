@@ -5,6 +5,7 @@ import { useNav } from '../../../state/navigation';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
+import { useCategoryTitle } from '../../budget/categories';
 // Валютный символ — общий envelopeView (B4-прецедент QuickAddBar), маппинг не дублируем
 import { envelopeView } from '../../budget/EnvelopeCard';
 import type { EntityCardData } from './types';
@@ -52,6 +53,10 @@ export function EntityCard({
   // null (Unbudgeted) и ошибка чтения → без строки остатка (§4.1: без конверта — ничего)
   const env = wantRemaining && envQ.data ? envQ.data : null;
 
+  // Категория в сетке полей — НАЗВАНИЕМ, а не uuid (D6c п.2): строка остатка конверта
+  // название несёт, но её нет у записи без конверта — и оставался «категория: 7d5e…».
+  const categoryTitle = useCategoryTitle(typeof categoryRef === 'string' ? categoryRef : '');
+
   const undo = trpc.ai.undo.useMutation({
     onSuccess: () => {
       setUndone(true);
@@ -82,7 +87,9 @@ export function EntityCard({
         {Object.entries(card.keyFields).map(([k, v]) => (
           <div key={k} className="col-span-2 grid grid-cols-subgrid">
             <dt className="text-text-muted">{fieldLabel(k)}</dt>
-            <dd className="text-text tabular-nums">{String(v)}</dd>
+            <dd className="text-text tabular-nums">
+              {k === 'category_ref' && typeof v === 'string' ? categoryTitle : String(v)}
+            </dd>
           </div>
         ))}
       </dl>
