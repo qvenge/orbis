@@ -49,6 +49,61 @@ export function processingMessageId(userMessageId: string): string {
   return uuidv5(`processing:${userMessageId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
+/**
+ * Пара категорий + паттерн + дата — ключ идемпотентности сообщений эскалации §7.8.
+ * Дата (UTC-сутки записи) — не бизнес-«сегодня», а бакет ключа: без неё детерминированный
+ * PK блокировал бы повторное предложение навсегда, а окно подавления — 30 дней.
+ */
+interface MemoryRuleKey {
+  ownerId: string;
+  pattern: string;
+  fromCategoryId: string;
+  toCategoryId: string;
+  date: string; // YYYY-MM-DD
+}
+
+function memoryRuleKey(prefix: string, k: MemoryRuleKey): string {
+  return uuidv5(
+    `${prefix}:${k.ownerId.toLowerCase()}:${k.fromCategoryId.toLowerCase()}:${k.toCategoryId.toLowerCase()}:${k.pattern}:${k.date}`,
+    ORBIS_NAMESPACE,
+  );
+}
+
+/** PK системного сообщения-предложения правила памяти (эскалация §7.8). */
+export function memoryRuleSuggestionId(k: MemoryRuleKey): string {
+  return memoryRuleKey('memory-rule-suggestion', k);
+}
+
+/** PK системного сообщения-отказа от предложения правила (§7.8; журнал append-only §4.6). */
+export function memoryRuleDeclinedId(k: MemoryRuleKey): string {
+  return memoryRuleKey('memory-rule-declined', k);
+}
+
+/**
+ * PK memory-сущности, которую создаёт кнопка «Запомнить» карточки предложения (D3b).
+ * Своей процедуры у кнопки нет — это обычный entity.create, а его идемпотентность
+ * ключуется client-UUID'ом (§5.3): случайный uuidv7 давал бы НОВЫЙ id на каждое
+ * монтирование карточки, поэтому повторное «Запомнить» после перезагрузки страницы
+ * (или с другого устройства) создавало ВТОРОЕ одноимённое правило. Детерминированный
+ * id попадает в существующий ON CONFLICT DO NOTHING и возвращается replay'ем.
+ *
+ * В ключе — id сообщения-предложения, а не только пара «паттерн+категория»: правило
+ * можно архивировать (§7.4), и тогда эскалация предложит его снова (hasEquivalentRule
+ * смотрит только неархивные). Ключ без сообщения дал бы на такое предложение replay
+ * архивной строки — «Запомнил» без правила. Паттерн и категория в ключе оставлены
+ * ради второго случая: две карточки одного сообщения — одно правило на пару.
+ */
+export function memoryRuleEntityId(k: {
+  messageId: string;
+  pattern: string;
+  toCategoryId: string;
+}): string {
+  return uuidv5(
+    `memory-rule:${k.messageId.toLowerCase()}:${k.pattern}:${k.toCategoryId.toLowerCase()}`,
+    ORBIS_NAMESPACE,
+  );
+}
+
 export function recurringInstanceId(templateId: string, dateISO: string): string {
   return uuidv5(`${templateId.toLowerCase()}:${dateISO}`, ORBIS_NAMESPACE);
 }

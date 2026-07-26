@@ -517,6 +517,32 @@ test('итог: «Импортировано N, пропущено M», блок
   });
 });
 
+// D6c п.4 (смоук D6b): кнопка делала pop(activeTab) и возвращала на предыдущий экран
+// стека — в смоуке это был detail транзакции, открытый до импорта.
+test('«К бюджету» открывает вкладку Budget с Overview, а не предыдущий экран стека', async () => {
+  useNav.setState({
+    activeTab: 'chat',
+    stacks: {
+      chat: [{ kind: 'entity', id: 'e-open-before' }, { kind: 'budget-import' }],
+      browser: [],
+      agenda: [],
+      budget: [{ kind: 'budget-transactions' }],
+    },
+  });
+  await openReview();
+  chooseTaxiCategory();
+  fireEvent.click(screen.getByTestId('confirm-import'));
+  await waitFor(() => expect(screen.getByTestId('import-result')).toBeInTheDocument());
+
+  fireEvent.click(screen.getByRole('button', { name: 'К бюджету' }));
+  const nav = useNav.getState();
+  expect(nav.activeTab).toBe('budget');
+  // Overview — корень вкладки: поверх него не должно остаться ни transactions, ни импорта
+  expect(nav.stacks.budget).toEqual([]);
+  // Экран импорта снят и со стека, откуда его открыли
+  expect(nav.stacks.chat).toEqual([{ kind: 'entity', id: 'e-open-before' }]);
+});
+
 // --- точка входа с Overview -------------------------------------------------------------
 
 test('иконка-кнопка в шапке Overview пушит экран импорта', async () => {

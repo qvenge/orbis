@@ -10,6 +10,9 @@ export type Tab = 'chat' | 'browser' | 'agenda' | 'budget';
 // и кнопки шапки Overview; месяц экран берёт сам (текущий в таймзоне пользователя).
 // 'budget-import' — флоу импорта CSV (03-budget §3.4, C4b): push из шапки Overview и
 // из карточки import_review в чате; файл выбирается уже на самом экране.
+// 'memory' — экран «Память AI» (02-core-os §2.7, D3b): push из раздела настроек.
+// Свой ScreenRef, а не вкладка внутри настроек (K10): тап по правилу пушит detail
+// в стек ТОГО ЖЕ таба, поверх которого открыты настройки.
 export type ScreenRef =
   | { kind: 'entity'; id: string }
   | { kind: 'thread'; threadId: string }
@@ -17,6 +20,7 @@ export type ScreenRef =
   | { kind: 'budget-transactions' }
   | { kind: 'budget-rollover' }
   | { kind: 'budget-import' }
+  | { kind: 'memory' }
   | { kind: 'settings' };
 
 type NavState = {
@@ -62,6 +66,16 @@ export function openSettings() {
   const { activeTab, stacks, push } = useNav.getState();
   const stack = stacks[activeTab];
   if (stack[stack.length - 1]?.kind !== 'settings') push(activeTab, { kind: 'settings' });
+}
+
+// Открыть Budget Overview — КОРЕНЬ вкладки Budget (D6c п.4): «К бюджету» после импорта
+// должна вести именно туда, а не на предыдущий экран стека (pop давал detail транзакции,
+// открытый до импорта). resetTabToRoot до switchTab: switchTab по УЖЕ активному табу
+// сворачивает стек сам (§1.1), по неактивному — только переключает, стек оставляя как был.
+export function openBudgetOverview() {
+  const { activeTab, switchTab, resetTabToRoot } = useNav.getState();
+  resetTabToRoot('budget');
+  if (activeTab !== 'budget') switchTab('budget');
 }
 
 // Открыть закреплённую сущность из глобального sidebar: активный таб — browser,

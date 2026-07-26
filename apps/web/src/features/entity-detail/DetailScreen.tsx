@@ -6,17 +6,19 @@ import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
-import { firstQueryBlock } from '../browser/query';
+import { queryBlocks } from '../browser/query';
 import { PlannedToFactCard } from '../budget/PlannedToFactCard';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { ChatThread } from '../chat/ChatThread';
 import { AspectCards } from './AspectCards';
+import { Backlinks } from './Backlinks';
+import { Blocks } from './Blocks';
 import { NativeRow } from './NativeRow';
 import { Subtasks } from './Subtasks';
 import { useEntityDetail } from './useEntityDetail';
 
 export function DetailScreen({ entityId }: { entityId: string }) {
-  const { get, toggleTask, saveBody, setArchived, conflict, dismissConflict } =
+  const { get, toggleTask, saveBody, saveTitle, setArchived, conflict, dismissConflict } =
     useEntityDetail(entityId);
   const utils = trpc.useUtils();
   const settings = trpc.user.getSettings.useQuery();
@@ -40,8 +42,8 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       </>
     );
   }
-  const { entity, thread } = get.data;
-  const block = firstQueryBlock(entity.body ?? '');
+  const { entity, thread, relations, backlinks, backlinksTruncated } = get.data;
+  const blocks = queryBlocks(entity.body ?? '');
 
   // В шапке — только title; emoji сущности — крупная page-иконка (Notion-style) в строке
   // с заголовком/NativeRow. Нет emoji — ничего не рендерим (без плейсхолдера).
@@ -61,6 +63,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
             // Данные сущности ДО перевода: planned ещё true — карточка на переходе в done
             if (done) planToFact.onTaskDone(entity);
           }}
+          onSaveTitle={saveTitle}
         />
       </div>
       {/* Карточка plan→fact (§2.7) — инлайн под строкой задачи, как в мокапе */}
@@ -89,9 +92,23 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           редактор, стирая текст, набранный за время запроса (а при 409 — ещё и уничтожая
           черновик, который §5.2 предлагает «повторить вручную»). */}
       <BodyEditor key={entity.id} initial={entity.body ?? ''} onSave={saveBody} />
-      {block && <QueryBlock body={entity.body ?? ''} />}
+      {/* §3.4: КАЖДЫЙ query-блок body — свой виджет. У сидированного Daily Planning их три
+          (Inbox / «Сегодня» / «Ожидание», §3.3), у Upcoming — два; рендер только первого
+          прятал «Сегодня» целиком (приёмка 02-core-os §8.4). */}
+      {blocks.length > 0 && (
+        <div className="flex flex-col gap-3">
+          {blocks.map((q, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: порядок блоков задан текстом body
+            <QueryBlock key={i} query={q} />
+          ))}
+        </div>
+      )}
       <AspectCards entity={entity} />
-      <Subtasks parentId={entity.id} />
+      {/* Секции 5–7 §3.5: связи уже приехали этим же entity.get — своих запросов графа
+          секции не заводят. */}
+      <Subtasks parentId={entity.id} relations={relations ?? []} />
+      <Blocks entityId={entity.id} relations={relations ?? []} />
+      <Backlinks items={backlinks ?? []} truncated={backlinksTruncated === true} />
     </div>
   );
 

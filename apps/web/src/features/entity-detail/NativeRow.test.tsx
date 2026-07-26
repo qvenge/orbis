@@ -1,5 +1,6 @@
 import { render, screen } from '@testing-library/react';
 import { expect, test } from 'vitest';
+import { renderWithProviders } from '../../test/harness';
 import { NativeRow } from './NativeRow';
 
 const base = {
@@ -16,17 +17,25 @@ const base = {
   archived: false,
 };
 
+// Категория-сущность в форме ответа entity.query (тот же список, что у пикера D3b).
+const category = (id: string, title: string) => ({
+  ...base,
+  id,
+  title,
+  aspects: { 'orbis/category': { icon: '🍔' } },
+});
+
+const financial = (fields: Record<string, unknown>) =>
+  ({ ...base, aspects: { 'orbis/financial': fields } }) as never;
+
+const CAT_FOOD = 'a3d6d4b2-7f3a-4a1f-9c1e-2d5b8f0a1c77';
+// Ссылка в категорию, которой в списке нет — запасной вариант «показать uuid».
+const CAT_GHOST = 'd1f0c8e5-4b2a-4d6e-8f01-9a7c3b5e2d44';
+
 test('financial: сумма с минусом и тоном danger', () => {
-  render(
+  renderWithProviders(
     <NativeRow
-      entity={
-        {
-          ...base,
-          aspects: {
-            'orbis/financial': { amount: '340.00', direction: 'expense', category_ref: 'cat-food' },
-          },
-        } as never
-      }
+      entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_FOOD })}
       onToggleTask={() => {}}
     />,
   );
@@ -36,26 +45,88 @@ test('financial: сумма с минусом и тоном danger', () => {
 });
 
 test('financial: income → плюс и позитивный тон', () => {
-  render(
+  renderWithProviders(
     <NativeRow
-      entity={
-        {
-          ...base,
-          aspects: {
-            'orbis/financial': {
-              amount: '340.00',
-              direction: 'income',
-              category_ref: 'cat-salary',
-            },
-          },
-        } as never
-      }
+      entity={financial({ amount: '340.00', direction: 'income', category_ref: 'cat-salary' })}
       onToggleTask={() => {}}
     />,
   );
   const amount = screen.getByTestId('native-amount');
   expect(amount.textContent?.startsWith('+')).toBe(true);
   expect(amount.className).toContain('text-success');
+});
+
+// D6c п.2 (живой смоук D6b): в шапке detail печатался сырой category_ref — для
+// транзакции без конверта пользователь не видел названия категории вообще.
+test('financial: бейдж — НАЗВАНИЕ категории, а не uuid (D6c п.2)', async () => {
+  const { calls } = renderWithProviders(
+    <NativeRow
+      entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_FOOD })}
+      onToggleTask={() => {}}
+    />,
+    (path) => (path === 'entity.query' ? [category(CAT_FOOD, 'Еда')] : {}),
+  );
+  expect(await screen.findByText('Еда')).toBeInTheDocument();
+  expect(screen.queryByText(CAT_FOOD)).toBeNull();
+  // Источник категорий — тот же запрос (и тот же кэш), что у пикера D3b: второго нет
+  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
+    query: 'aspect=orbis/category, sortBy=title:asc, limit=200',
+  });
+});
+
+// D6d п.2: прежняя версия утверждала uuid в DOM сразу после рендера — а он там и так есть,
+// пока список категорий не доехал. Соседняя строка с ИЗВЕСТНОЙ категорией — маркер того,
+// что запрос разрешён: только после её названия отсутствие имени значит «категории нет».
+test('financial: категории нет в списке → uuid как запасной вариант (D6c п.2)', async () => {
+  renderWithProviders(
+    <>
+      <NativeRow
+        entity={financial({ amount: '10.00', direction: 'expense', category_ref: CAT_FOOD })}
+        onToggleTask={() => {}}
+      />
+      <NativeRow
+        entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_GHOST })}
+        onToggleTask={() => {}}
+      />
+    </>,
+    (path) => (path === 'entity.query' ? [category(CAT_FOOD, 'Еда')] : {}),
+  );
+  // Обе строки делят один запрос и один кэш — «Еда» доказывает, что список уже разрешён.
+  expect(await screen.findByText('Еда')).toBeInTheDocument();
+  expect(screen.getByText(CAT_GHOST)).toBeInTheDocument();
+});
+
+// D6d п.1: холодный кэш категорий (вход в detail из Chat/Browser) — в шапке на ~200 мс
+// печатался uuid и подменялся названием, бейдж дёргался по ширине.
+test('financial: пока категории грузятся, бейджа с uuid нет (D6d)', async () => {
+  let release: (categories: unknown) => void = () => {};
+  const categories = new Promise((resolve) => {
+    release = resolve;
+  });
+  renderWithProviders(
+    <NativeRow
+      entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_FOOD })}
+      onToggleTask={() => {}}
+    />,
+    (path) => (path === 'entity.query' ? categories : {}),
+  );
+  // Значение ещё неизвестно — бейджа нет вовсе (ни uuid, ни пустой пилюли).
+  expect(screen.queryByText(CAT_FOOD)).toBeNull();
+  expect(screen.getByTestId('native-financial').querySelectorAll('span')).toHaveLength(2);
+
+  release([category(CAT_FOOD, 'Еда')]);
+  expect(await screen.findByText('Еда')).toBeInTheDocument();
+});
+
+test('нефинансовая строка список категорий не запрашивает', async () => {
+  const { calls } = renderWithProviders(
+    <NativeRow
+      entity={{ ...base, aspects: { 'orbis/task': { status: 'inbox' } } } as never}
+      onToggleTask={() => {}}
+    />,
+  );
+  await screen.findByRole('checkbox');
+  expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
 });
 
 test('task: рендерит чекбокс', () => {

@@ -24,7 +24,17 @@ export function browserQuery({ limit, filters }: { limit: number; filters: strin
   return `${base}sortBy=updated_at:desc, limit=${limit}`;
 }
 
+// ВСЕ {{query:...}}-блоки body в порядке появления; значение — inner (обёртка снята),
+// то есть готовый аргумент entity.query. 02-core-os §3.4: «Каждый {{query:...}}-блок в body
+// рендерится виджетом» — у Daily Planning их три (Inbox / «Сегодня» / «Ожидание», §3.3),
+// у Upcoming два, поэтому detail-экран обязан ходить сюда, а не за первым блоком.
+export function queryBlocks(body: string): string[] {
+  return [...body.matchAll(/\{\{query:([\s\S]*?)\}\}/g)].map((m) => (m[1] ?? '').trim());
+}
+
+// Первый блок — и только он: §3.2 нормирует бейдж pinned-сущности как «число результатов
+// ПЕРВОГО query-блока её body» (у Daily Planning это размер Inbox). Единственный потребитель
+// — PinnedList; detail-экран рендерит все блоки через queryBlocks.
 export function firstQueryBlock(body: string): string | null {
-  const m = body.match(/\{\{query:([\s\S]*?)\}\}/);
-  return m ? (m[1] ?? '').trim() : null;
+  return queryBlocks(body)[0] ?? null;
 }

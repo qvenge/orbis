@@ -9,6 +9,7 @@
 // атрибутируются актором 'ai' (§7.8), что верно только для чата владельца —
 // PAT-агент работает своим транспортом (MCP, Task 10) с честной атрибуцией 'agent'.
 import { z } from 'zod';
+import { declineRuleSuggestion } from '../ai/escalation';
 import { defaultAiDeps, type SendMessageResult, sendMessage } from '../ai/send-message';
 import { ExecError, execErrorToTRPC } from '../errors';
 import type { ExecuteOk } from '../executor/types';
@@ -92,4 +93,29 @@ export const aiRouter = router({
     if (!r.ok) throw execErrorToTRPC(r.error);
     return { pendingId: r.pendingId, alreadyRejected: r.alreadyRejected };
   }),
+
+  /**
+   * Отказ от предложенного правила памяти (§7.8, кнопка «Не надо» D3b): журнал
+   * append-only — пишется новое системное сообщение с карточкой memory_rule_declined
+   * (K4), оно же подавляет повторное предложение по этой паре. Кнопка «Запомнить»
+   * своей процедуры НЕ имеет: правило создаётся обычным entity.create.
+   */
+  declineMemoryRule: ownerOnlyProcedure
+    .input(
+      z
+        .object({
+          pattern: z.string().min(1),
+          fromCategoryId: z.string().uuid(),
+          toCategoryId: z.string().uuid(),
+        })
+        .strict(),
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await declineRuleSuggestion(ctx.db, { ownerId: ctx.actorUserId, ...input });
+      } catch (e) {
+        if (e instanceof ExecError) throw execErrorToTRPC(e);
+        throw e;
+      }
+    }),
 });

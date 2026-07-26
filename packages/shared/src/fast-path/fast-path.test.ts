@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { parseFastPath } from './index';
+import { type FastPathRule, parseFastPath } from './index';
 
+// title обязателен для memory-правил: правило ссылается на категорию НАЗВАНИЕМ (D3a).
 const cats = [
-  { id: 'cat-food', aliases: ['обед', 'еда', 'кофе'], spendClass: 'variable' },
-  { id: 'cat-salary', aliases: ['зарплата'], spendClass: 'income' },
+  { id: 'cat-food', title: 'Еда', aliases: ['обед', 'еда', 'кофе'], spendClass: 'variable' },
+  { id: 'cat-salary', title: 'Зарплата', aliases: ['зарплата'], spendClass: 'income' },
+  { id: 'cat-fun', title: 'Развлечения', aliases: ['развлечения'], spendClass: 'variable' },
+  { id: 'cat-transport', title: 'Транспорт', aliases: ['такси'], spendClass: 'variable' },
 ];
 const ctx = { categories: cats, defaultCurrency: 'RUB', today: '2026-07-05' };
 
@@ -71,5 +74,76 @@ describe('fast-path parseFastPath (§7.5)', () => {
 
   test('нет числа → no_match', () => {
     expect(parseFastPath('просто заметка', ctx)).toEqual({ ok: false, reason: 'no_match' });
+  });
+});
+
+/**
+ * category_ref разобранной строки или undefined, если парсер уступил. Правило задаётся
+ * либо голым заголовком (время правки не важно), либо парой {title, updatedAt} — там,
+ * где проверяется приоритет свежего правила.
+ */
+function refOf(text: string, rules?: Array<string | FastPathRule>): string | undefined {
+  const asRules = rules?.map((r) => (typeof r === 'string' ? { title: r, updatedAt: '' } : r));
+  const r = parseFastPath(text, asRules === undefined ? ctx : { ...ctx, rules: asRules });
+  if (!r.ok) return undefined;
+  const ref = r.create.aspects?.['orbis/financial']?.category_ref;
+  return typeof ref === 'string' ? ref : undefined;
+}
+
+// 01-arch §7.5: «Fast-path применяет correction-правила из памяти (orbis/memory, kind=rule,
+// scope=orbis/financial)» — правило работает в детерминированном пути, без LLM, и имеет
+// приоритет над алиасами (иначе исправление, которое пользователь подтвердил, не работает).
+describe('fast-path: memory-правила перед алиасами (§7.5, §7.8)', () => {
+  test('без правил «кофе 300» → Еда по alias', () => {
+    expect(refOf('кофе 300')).toBe('cat-food');
+  });
+
+  test('правило «кофе → Развлечения» перекрывает alias Еды', () => {
+    expect(refOf('кофе 300', ['кофе → Развлечения'])).toBe('cat-fun');
+  });
+
+  test('правило матчится по нормализованному тексту (регистр, ё), где алиасов нет вовсе', () => {
+    expect(parseFastPath('ПЯТЁРОЧКА 843', ctx)).toEqual({ ok: false, reason: 'unknown_category' });
+    expect(refOf('ПЯТЁРОЧКА 843', ['пятерочка → Еда'])).toBe('cat-food');
+  });
+
+  test('побеждает самое специфичное правило (длиннее паттерн), порядок правил не важен', () => {
+    const rules = ['кофе → Развлечения', 'кофе хауз → Транспорт'];
+    expect(refOf('кофе хауз 300', rules)).toBe('cat-transport');
+    expect(refOf('кофе хауз 300', [...rules].reverse())).toBe('cat-transport');
+  });
+
+  // Конфликт «один паттерн — разные категории» достижим штатным потоком §7.8: эскалация
+  // подавляет предложение по ПАРЕ категорий и по правилу с тем же паттерном И той же
+  // категорией, поэтому исправление «кофе» из Развлечений обратно в Еду рождает ВТОРОЕ
+  // правило рядом с первым. По алфавиту побеждало бы «кофе → Развлечения» — то самое
+  // правило, которое пользователь только что отменил своей рукой.
+  test('при равной длине паттернов побеждает СВЕЖЕЕ правило, а не алфавит', () => {
+    const older: FastPathRule = { title: 'кофе → Развлечения', updatedAt: '2026-07-01T10:00:00Z' };
+    const newer: FastPathRule = { title: 'кофе → Транспорт', updatedAt: '2026-07-20T10:00:00Z' };
+    expect(refOf('кофе 300', [older, newer])).toBe('cat-transport');
+    expect(refOf('кофе 300', [newer, older])).toBe('cat-transport');
+  });
+
+  test('при равных времени и длине паттернов порядок детерминирован (по заголовку)', () => {
+    const rules = ['кофе → Транспорт', 'кофе → Развлечения'];
+    expect(refOf('кофе 300', rules)).toBe('cat-fun'); // «…Развлечения» < «…Транспорт»
+    expect(refOf('кофе 300', [...rules].reverse())).toBe('cat-fun');
+  });
+
+  test('правило с несуществующей категорией игнорируется — резолв падает на алиасы', () => {
+    expect(refOf('кофе 300', ['кофе → Квакозябра'])).toBe('cat-food');
+  });
+
+  test('заголовок без стрелки правилом не считается', () => {
+    expect(refOf('кофе 300', ['кофе Развлечения'])).toBe('cat-food');
+  });
+
+  // Достижимый вход: правило, созданное руками на экране «Память AI». «card» —
+  // служебный токен §3.4.1, normalizeCounterparty срезает его целиком, и паттерн
+  // становится пустым. Без гейта пустого паттерна такое правило матчило бы ЛЮБУЮ
+  // строку (haystack.includes('') === true) и уводило бы весь ввод в свою категорию.
+  test('правило с пустым после нормализации паттерном («card → …») игнорируется', () => {
+    expect(refOf('кофе 300', ['card → Развлечения'])).toBe('cat-food');
   });
 });

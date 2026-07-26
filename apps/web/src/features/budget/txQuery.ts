@@ -42,7 +42,7 @@ export function monthRange(month: string): { start: string; end: string } {
  * экранирование кавычек) и `"` → `\"` (fix round B5: хвостовой `\` без `\\`-экрана
  * съедал бы закрывающую кавычку). Вне кавычек `\` — литерал, экран не нужен.
  */
-function quoteValue(v: string): string {
+export function quoteValue(v: string): string {
   if (!/[,|&"]/.test(v) && v === v.trim()) return v;
   return `"${v.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
 }

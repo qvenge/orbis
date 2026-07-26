@@ -4,6 +4,9 @@ import {
   entityThreadId,
   globalThreadId,
   materializeBatchId,
+  memoryRuleDeclinedId,
+  memoryRuleEntityId,
+  memoryRuleSuggestionId,
   newId,
   ORBIS_NAMESPACE,
   postFinancialBatchId,
@@ -59,6 +62,56 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
     expect(processingMessageId(userMsg)).toBe(processingMessageId(userMsg.toUpperCase()));
     expect(processingMessageId(userMsg)).not.toBe(userMsg);
     expect(processingMessageId(userMsg)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+  test('memoryRule*Id (§7.8): детерминированы ключом, различают предложение и отказ, чувствительны к дате', () => {
+    const k = {
+      ownerId: '00000000-0000-4000-8000-00000000000a',
+      pattern: 'пятерочка',
+      fromCategoryId: '00000000-0000-7000-8000-0000000000d4',
+      toCategoryId: '00000000-0000-7000-8000-0000000000d5',
+      date: '2026-07-25',
+    };
+    expect(memoryRuleSuggestionId(k)).toBe(
+      memoryRuleSuggestionId({ ...k, ownerId: k.ownerId.toUpperCase() }),
+    );
+    expect(memoryRuleSuggestionId(k)).not.toBe(memoryRuleDeclinedId(k));
+    expect(memoryRuleSuggestionId(k)).not.toBe(
+      memoryRuleSuggestionId({ ...k, date: '2026-07-26' }),
+    );
+    expect(memoryRuleSuggestionId(k)).not.toBe(memoryRuleSuggestionId({ ...k, pattern: 'кофе' }));
+    // пара категорий направленная: обратное исправление — другое предложение
+    expect(memoryRuleSuggestionId(k)).not.toBe(
+      memoryRuleSuggestionId({
+        ...k,
+        fromCategoryId: k.toCategoryId,
+        toCategoryId: k.fromCategoryId,
+      }),
+    );
+  });
+  test('memoryRuleEntityId (D3b): детерминирован сообщением+правилом, различает предложения и правила', () => {
+    const k = {
+      messageId: '00000000-0000-5000-8000-0000000000e6',
+      pattern: 'кофе хауз',
+      toCategoryId: '00000000-0000-7000-8000-0000000000d5',
+    };
+    // Повторный показ той же карточки (перезагрузка страницы, другое устройство) — тот же id
+    expect(memoryRuleEntityId(k)).toBe(memoryRuleEntityId({ ...k }));
+    expect(memoryRuleEntityId(k)).toBe(
+      memoryRuleEntityId({ ...k, messageId: k.messageId.toUpperCase() }),
+    );
+    // Новое предложение (эскалация после архивации правила) — новый id, не replay архивного
+    expect(memoryRuleEntityId(k)).not.toBe(
+      memoryRuleEntityId({ ...k, messageId: '00000000-0000-5000-8000-0000000000e7' }),
+    );
+    // Разные правила в одном сообщении — разные сущности
+    expect(memoryRuleEntityId(k)).not.toBe(memoryRuleEntityId({ ...k, pattern: 'пятерочка' }));
+    expect(memoryRuleEntityId(k)).not.toBe(
+      memoryRuleEntityId({ ...k, toCategoryId: '00000000-0000-7000-8000-0000000000d4' }),
+    );
+    expect(memoryRuleEntityId(k)).not.toBe(k.messageId);
+    expect(memoryRuleEntityId(k)).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
   });

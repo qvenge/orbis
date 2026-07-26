@@ -5,11 +5,13 @@ import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
 type Entity = RouterOutputs['entity']['get']['entity'];
 type UpdateInput = RouterInputs['entity']['update'];
 
-// §9.2: detail тянет body+relations+thread. Один и тот же input — ключ кэша для
-// useQuery и точечных optimistic-патчей (cancel/getData/setData/invalidate).
+// §9.2: detail тянет body+relations+backlinks+thread (backlinks — секция «Связанное»
+// §3.5.7, Task D5). Один и тот же input — ключ кэша для useQuery и точечных
+// optimistic-патчей (cancel/getData/setData/invalidate).
 const DETAIL_INCLUDE: NonNullable<RouterInputs['entity']['get']['include']> = [
   'body',
   'relations',
+  'backlinks',
   'thread',
 ];
 
@@ -58,7 +60,16 @@ export function useEntityUpdate(entityId: string) {
       if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') setConflict(true);
     },
     onSuccess: () => setConflict(false),
-    onSettled: () => void utils.entity.get.invalidate(input),
+    // Detail — единственный путь закрытия/переноса/архивации сущности из списков (Agenda,
+    // Browser, Budget), а списки читают ДРУГОЙ ключ кэша — entity.query. Он держит
+    // собственный staleTime (60 с у Agenda по K16, 30 с глобально в trpc.ts) и при
+    // refetchOnWindowFocus:false сам не протухнет: без явной инвалидации закрытая задача
+    // висела бы в «Просроченном» до минуты после «Готово» (02-core-os §4.2, приёмка §8.2).
+    // Тот же путь уже у QuickCapture/QuickAddBar/ImportFlow — здесь его недоставало.
+    onSettled: () => {
+      void utils.entity.get.invalidate(input);
+      void utils.entity.query.invalidate();
+    },
   });
 
   return { mutation, conflict, dismissConflict: () => setConflict(false) };
@@ -88,6 +99,14 @@ export function useEntityDetail(entityId: string) {
     mutation.mutate({ id: entityId, body, expectedUpdatedAt: entity.updatedAt });
   }
 
+  // Правка заголовка (DF п.3) — тот же контракт §5.2, что у body: у memory-правила
+  // title и есть вся его машиночитаемая часть (K19.4), и правка «формулировки»,
+  // обещанная экраном «Память AI», — это именно правка title.
+  function saveTitle(title: string) {
+    if (!entity) return;
+    mutation.mutate({ id: entityId, title, expectedUpdatedAt: entity.updatedAt });
+  }
+
   function setArchived(archived: boolean) {
     mutation.mutate({ id: entityId, archived });
   }
@@ -98,6 +117,7 @@ export function useEntityDetail(entityId: string) {
     update: mutation,
     toggleTask,
     saveBody,
+    saveTitle,
     setArchived,
     conflict,
     dismissConflict,

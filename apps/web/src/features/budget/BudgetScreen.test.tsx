@@ -88,6 +88,9 @@ const budgetHandler =
     if (path === 'budget.overview') return overview;
     if (path === 'budget.postDue') return { posted: 0 };
     if (path === 'budget.rolloverPreview') return rolloverPreview;
+    // Бейдж Agenda (§1.5) смонтирован в обеих поверхностях навигации на ЛЮБОМ экране,
+    // поэтому App всегда шлёт entity.query — контракт процедуры массив, не {}.
+    if (path === 'entity.query') return [];
     return {};
   };
 
@@ -277,6 +280,7 @@ const badgeHandler =
   (path) => {
     if (path === 'user.getSettings') return settings(views);
     if (path === 'budget.alertCount') return alertCount;
+    if (path === 'entity.query') return []; // бейдж Agenda (см. budgetHandler)
     return {};
   };
 
@@ -298,6 +302,7 @@ test('ошибка alertCount → бейджа нет, вкладка живёт
   renderWithProviders(<App />, (path) => {
     if (path === 'user.getSettings') return settings(['orbis-budget']);
     if (path === 'budget.alertCount') throw trpcError('INTERNAL_SERVER_ERROR');
+    if (path === 'entity.query') return []; // бейдж Agenda (см. budgetHandler)
     return {};
   });
   await waitFor(() => expect(screen.getByTestId('tab-budget')).toBeInTheDocument());
@@ -330,6 +335,7 @@ test('postDue с posted>0 инвалидирует alertCount — бейдж п�
       return new Promise((res) => setTimeout(() => res({ posted: 1 }), 20));
     if (path === 'budget.alertCount') return 1;
     if (path === 'budget.rolloverPreview') return emptyRolloverPreview;
+    if (path === 'entity.query') return []; // бейдж Agenda (см. budgetHandler)
     return {};
   });
   // Первый fetch — mount бейджа; второй — инвалидация после postDue

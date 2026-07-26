@@ -1,13 +1,17 @@
-import { FolderOpen, type LucideIcon, MessageSquare, Settings } from 'lucide-react';
+import { CalendarDays, FolderOpen, type LucideIcon, MessageSquare, Settings } from 'lucide-react';
+import { useAgendaOverdue } from '../features/agenda/useAgenda';
 import { PinnedList } from '../features/browser/PinnedList';
 import { useBudgetAlertCount, useBudgetTabVisible } from '../features/budget/useBudget';
 import { openPinnedEntity, openSettings, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
 import { BUDGET_TAB } from './router';
 
+// Вкладки ядра — как в TabBar (02-core-os §1.1); порядок и состав дублируются
+// осознанно: это вторая независимая поверхность навигации (B1-прецедент бейджей).
 const NAV_ITEMS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'chat', label: 'Чат', icon: MessageSquare },
   { id: 'browser', label: 'Обзор', icon: FolderOpen },
+  { id: 'agenda', label: 'Повестка', icon: CalendarDays },
 ];
 
 // Постоянный левый sidebar (десктоп, ≥768px): навигация + закреплённые + настройки.
@@ -16,6 +20,8 @@ export function SidebarNav() {
   const activeTab = useNav((s) => s.activeTab);
   const switchTab = useNav((s) => s.switchTab);
   const chatBadge = useRetryBuffer((s) => s.size); // §1.5
+  // §1.5 — бейдж «Просроченного» в ОБЕИХ поверхностях (B1-прецедент); хук общий с вкладкой
+  const agendaOverdue = useAgendaOverdue();
   // Гейт вкладки Budget — как в TabBar (03-budget §1.2): без view вкладки нет.
   const budgetVisible = useBudgetTabVisible();
   const budgetBadge = useBudgetAlertCount(); // §6.1 — бейдж в ОБЕИХ поверхностях (B1-прецедент)
@@ -53,6 +59,16 @@ export function SidebarNav() {
                   className="rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
                 >
                   {chatBadge}
+                </span>
+              )}
+              {/* badgeLabel: «200+» при упоре в потолок (K18) и null при отказе выборки —
+                  заниженного числа на бейдже не бывает (решение D2b, прецедент Budget) */}
+              {t.id === 'agenda' && agendaOverdue.badgeLabel !== null && (
+                <span
+                  data-testid="sidebar-agenda-badge"
+                  className="rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
+                >
+                  {agendaOverdue.badgeLabel}
                 </span>
               )}
               {t.id === 'budget' && budgetBadge > 0 && (

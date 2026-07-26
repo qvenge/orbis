@@ -5,6 +5,7 @@ import { useNav } from '../../../state/navigation';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
+import { useCategoryTitle } from '../../budget/categories';
 // Валютный символ — общий envelopeView (B4-прецедент QuickAddBar), маппинг не дублируем
 import { envelopeView } from '../../budget/EnvelopeCard';
 import type { EntityCardData } from './types';
@@ -52,6 +53,14 @@ export function EntityCard({
   // null (Unbudgeted) и ошибка чтения → без строки остатка (§4.1: без конверта — ничего)
   const env = wantRemaining && envQ.data ? envQ.data : null;
 
+  // Категория в сетке полей — НАЗВАНИЕМ, а не uuid (D6c п.2): строка остатка конверта
+  // название несёт, но её нет у записи без конверта — и оставался «категория: 7d5e…».
+  // Пока список категорий грузится, значение неизвестно — строки поля нет вовсе
+  // (D6d п.1): иначе на холодном кэше uuid мелькал и подменялся названием.
+  const { title: categoryTitle, isPending: categoryPending } = useCategoryTitle(
+    typeof categoryRef === 'string' ? categoryRef : '',
+  );
+
   const undo = trpc.ai.undo.useMutation({
     onSuccess: () => {
       setUndone(true);
@@ -79,12 +88,16 @@ export function EntityCard({
       </button>
       {/* Свойства — тихая сетка «подпись: значение», числа таблично. */}
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
-        {Object.entries(card.keyFields).map(([k, v]) => (
-          <div key={k} className="col-span-2 grid grid-cols-subgrid">
-            <dt className="text-text-muted">{fieldLabel(k)}</dt>
-            <dd className="text-text tabular-nums">{String(v)}</dd>
-          </div>
-        ))}
+        {Object.entries(card.keyFields).map(([k, v]) => {
+          const isCategory = k === 'category_ref' && typeof v === 'string';
+          if (isCategory && categoryPending) return null;
+          return (
+            <div key={k} className="col-span-2 grid grid-cols-subgrid">
+              <dt className="text-text-muted">{fieldLabel(k)}</dt>
+              <dd className="text-text tabular-nums">{isCategory ? categoryTitle : String(v)}</dd>
+            </div>
+          );
+        })}
       </dl>
       {env !== null && (
         <p data-testid="envelope-remaining" className="text-xs tabular-nums text-text-secondary">

@@ -1,4 +1,6 @@
-import { FolderOpen, type LucideIcon, MessageSquare, Wallet } from 'lucide-react';
+import { CalendarDays, FolderOpen, type LucideIcon, MessageSquare, Wallet } from 'lucide-react';
+import { AgendaScreen } from '../features/agenda/AgendaScreen';
+import { useAgendaOverdue } from '../features/agenda/useAgenda';
 import { BrowserScreen } from '../features/browser/BrowserScreen';
 import { BudgetScreen } from '../features/budget/BudgetScreen';
 import { CategoryScreen } from '../features/budget/CategoryScreen';
@@ -9,17 +11,19 @@ import { ChatScreen } from '../features/chat/ChatScreen';
 import { ChatThread } from '../features/chat/ChatThread';
 import { DetailScreen } from '../features/entity-detail/DetailScreen';
 import { ImportFlow } from '../features/import/ImportFlow';
+import { MemoryScreen } from '../features/settings/MemoryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
 import { type ScreenRef, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
 import { ScreenHeader } from './ScreenHeader';
 
-// Базовые разделы; budget добавляется по гейту installedViews (03-budget §1.2),
-// agenda в навигации нет (тип Tab в navigation.ts шире — persist 'orbis:nav:v1'
-// может содержать старые стеки, его не сужаем).
+// Вкладки ЯДРА (02-core-os §1.1) в порядке спеки: Chat, Browser, Agenda. Agenda —
+// не «устанавливаемый view», гейта installedViews у неё нет (в отличие от budget,
+// который добавляется ниже по гейту, 03-budget §1.2).
 const BASE_TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'chat', label: 'Чат', icon: MessageSquare },
   { id: 'browser', label: 'Обзор', icon: FolderOpen },
+  { id: 'agenda', label: 'Повестка', icon: CalendarDays },
 ];
 export const BUDGET_TAB = { id: 'budget', label: 'Бюджет', icon: Wallet } as const;
 
@@ -28,6 +32,9 @@ export function TabBar() {
   const activeTab = useNav((s) => s.activeTab);
   const switchTab = useNav((s) => s.switchTab);
   const chatBadge = useRetryBuffer((s) => s.size); // §1.5
+  // §1.5: счётчик «Просроченного» — ТОТ ЖЕ хук, что у секции экрана (Task D2):
+  // один кэш TanStack на бейдж и вкладку, расходиться нечему.
+  const agendaOverdue = useAgendaOverdue();
   const budgetVisible = useBudgetTabVisible();
   const budgetBadge = useBudgetAlertCount(); // §6.1: конверты в тревоге/перерасходе
   const tabs = budgetVisible ? [...BASE_TABS, BUDGET_TAB] : BASE_TABS;
@@ -63,6 +70,16 @@ export function TabBar() {
                 className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
               >
                 {chatBadge}
+              </span>
+            )}
+            {/* badgeLabel: «200+» при упоре в потолок (K18) и null при отказе выборки —
+                заниженного числа на бейдже не бывает (решение D2b, прецедент Budget) */}
+            {t.id === 'agenda' && agendaOverdue.badgeLabel !== null && (
+              <span
+                data-testid="agenda-badge"
+                className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
+              >
+                {agendaOverdue.badgeLabel}
               </span>
             )}
             {t.id === 'budget' && budgetBadge > 0 && (
@@ -104,6 +121,7 @@ function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
   if (!top) {
     if (activeTab === 'chat') return <ChatScreen />;
     if (activeTab === 'browser') return <BrowserScreen />;
+    if (activeTab === 'agenda') return <AgendaScreen />;
     if (activeTab === 'budget') return <BudgetScreen />;
   } else if (top.kind === 'entity') {
     return <DetailScreen entityId={top.id} />;
@@ -121,10 +139,14 @@ function renderScreen(activeTab: Tab, top: ScreenRef | undefined) {
   } else if (top.kind === 'budget-import') {
     // Флоу импорта CSV (03-budget §3.4, Task C4b); вход — шапка Overview и карточка чата.
     return <ImportFlow />;
+  } else if (top.kind === 'memory') {
+    // Экран «Память AI» (02-core-os §2.7, Task D3b); вход — раздел настроек.
+    return <MemoryScreen />;
   } else if (top.kind === 'settings') {
     return <SettingsScreen />;
   }
-  // Достижимо только для корня «неизвестного» таба (agenda из старого persist).
+  // Достижимо только для корня «неизвестного» таба из старого persist 'orbis:nav:v1'
+  // (тип Tab шире набора вкладок — сужать его нельзя, иначе сохранённый стек упадёт).
   return <div className="p-4 text-sm text-text-secondary">Экран: {activeTab}</div>;
 }
 

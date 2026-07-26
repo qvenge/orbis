@@ -1,3 +1,4 @@
+import { aspectJsonSchema, BUILTIN_ASPECT_IDS, buildFieldCatalog, parseQuery } from '@orbis/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { getQueryKey } from '@trpc/react-query';
@@ -10,6 +11,7 @@ import { type ChatMessage, chatThreadKey } from './useChatThread';
 import { useFastPath } from './useFastPath';
 
 const CATEGORY_QUERY = { query: 'aspect=orbis/category' };
+const RULES_QUERY = { query: 'aspect=orbis/memory, kind=rule, scope=orbis/financial' };
 
 function threadMsgs(qc: QueryClient): ChatMessage[] {
   const data = qc.getQueryData(chatThreadKey('t1')) as { pages: ChatMessage[][] } | undefined;
@@ -46,7 +48,22 @@ const categories = [
   {
     id: 'cat-food',
     title: 'Еда',
-    aspects: { 'orbis/category': { aliases: ['обед', 'еда'], spend_class: 'variable' } },
+    aspects: { 'orbis/category': { aliases: ['обед', 'еда', 'кофе'], spend_class: 'variable' } },
+  },
+  {
+    id: 'cat-fun',
+    title: 'Развлечения',
+    aspects: { 'orbis/category': { aliases: ['развлечения'], spend_class: 'variable' } },
+  },
+];
+// Memory-правила владельца (§7.5): заголовок — вся машиночитаемая часть правила (D3a),
+// updatedAt приезжает в wire-форме сущности и разрешает конфликт правил (applyMemoryRules).
+const rules = [
+  {
+    id: 'rule-1',
+    title: 'кофе → Развлечения',
+    updatedAt: '2026-07-20T10:00:00.000Z',
+    aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
   },
 ];
 
@@ -64,9 +81,15 @@ const assistantReply = {
   replayed: false,
 };
 
-function handlerBase(path: string) {
+function handlerBase(path: string, input?: unknown) {
   if (path === 'user.getSettings') return settings;
-  if (path === 'entity.query') return categories; // aspect=orbis/category
+  // entity.query обслуживает ДВА запроса fast-path (категории и memory-правила) —
+  // ветвление по строке запроса, иначе правила приедут списком категорий.
+  if (path === 'entity.query') {
+    return (input as { query?: string } | undefined)?.query === RULES_QUERY.query
+      ? rules
+      : categories;
+  }
   if (path === 'chat.listMessages') return [];
   return {};
 }
@@ -81,9 +104,9 @@ afterEach(() => {
 });
 
 test('уверенный паттерн онлайн → entity.create(source:fast_path)', async () => {
-  const { Wrap, calls } = wrapper((path) => {
+  const { Wrap, calls } = wrapper((path, input) => {
     if (path === 'entity.create') return { id: 'e1', title: 'обед' };
-    return handlerBase(path);
+    return handlerBase(path, input);
   });
   const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
   await act(async () => {
@@ -95,12 +118,85 @@ test('уверенный паттерн онлайн → entity.create(source:fa
   });
 });
 
+// Запрос правил обязан быть валиден в грамматике §6.1 (kind/scope резолвятся из схемы
+// аспекта orbis/memory): опечатка здесь оставила бы быстрый ввод на одних алиасах, а
+// отказ запроса ещё и проглатывается — фича приехала бы мёртвой молча.
+test('запрос memory-правил разбирается грамматикой §6.1', () => {
+  const catalog = buildFieldCatalog(
+    BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
+  );
+  expect(parseQuery(RULES_QUERY.query, catalog).ok).toBe(true);
+});
+
+// 01-arch §7.5: memory-правила применяются и в детерминированном пути. Правило
+// «кофе → Развлечения» обязано перекрыть alias «кофе» категории Еда — иначе исправление,
+// которое пользователь подтвердил в чате, при быстром вводе не работает.
+test('memory-правила грузятся в ctx парсера и перекрывают alias (§7.5)', async () => {
+  const { Wrap, calls } = wrapper((path, input) => {
+    if (path === 'entity.create') return { id: 'e1', title: 'кофе' };
+    return handlerBase(path, input);
+  });
+  const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
+  await act(async () => {
+    await result.current.submit('кофе 300');
+  });
+  // Запрос правил ушёл ровно в форме aspect=orbis/memory, kind=rule, scope=orbis/financial.
+  expect(
+    calls.some(
+      (c) =>
+        c.path === 'entity.query' && (c.input as { query: string }).query === RULES_QUERY.query,
+    ),
+  ).toBe(true);
+  await waitFor(() => {
+    const created = calls.find((x) => x.path === 'entity.create')?.input as {
+      input: { aspects: Record<string, { category_ref?: string }> };
+    };
+    expect(created.input.aspects['orbis/financial']?.category_ref).toBe('cat-fun');
+  });
+});
+
+// §2.5: карточка «⚡ без AI» — мгновенная, на тёплом кэше submit не имеет права ждать сеть.
+// Кэш правил инвалидируется КАЖДЫМ успешным fast-path create (utils.entity.query.invalidate),
+// а fetchQuery на инвалидированной query перечитывает независимо от staleTime: блокирующая
+// загрузка правил ставила бы полный round-trip перед вторым и каждым следующим вводом, а
+// зависший запрос съедал бы ввод целиком — Composer текст уже стёр, ни карточки, ни create.
+test('тёплый кэш правил: зависший запрос правил не задерживает карточку и create (§2.5)', async () => {
+  const { Wrap, calls, qc } = wrapper((path, input) => {
+    if (path === 'entity.create') return { id: 'e1', title: 'кофе' };
+    if (path === 'entity.query' && (input as { query?: string }).query === RULES_QUERY.query) {
+      return new Promise(() => {}); // запрос правил ВИСИТ (флаки-сеть; retry у клиента выключен)
+    }
+    return handlerBase(path, input);
+  });
+  qc.setQueryData(getQueryKey(trpc.entity.query, CATEGORY_QUERY, 'query'), categories);
+  qc.setQueryData(getQueryKey(trpc.entity.query, RULES_QUERY, 'query'), rules);
+  qc.setQueryData(getQueryKey(trpc.user.getSettings, undefined, 'query'), settings);
+  // Ровно то состояние кэша, в котором его оставляет предыдущий успешный create.
+  await qc.invalidateQueries();
+
+  const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
+  await act(async () => {
+    const submitted = result.current.submit('кофе 300').then(() => 'submitted' as const);
+    const outcome = await Promise.race([
+      submitted,
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 300)),
+    ]);
+    expect(outcome).toBe('submitted');
+  });
+  // Карточка на экране, и правило из тёплого кэша применено (Развлечения, а не Еда по alias).
+  expect(threadMsgs(qc).length).toBe(1);
+  const created = calls.find((c) => c.path === 'entity.create')?.input as {
+    input: { aspects: Record<string, { category_ref?: string }> };
+  };
+  expect(created.input.aspects['orbis/financial']?.category_ref).toBe('cat-fun');
+});
+
 // 03-budget §4.1 (B7): остаток конверта на карточке — ПОСЛЕ записи; успешный create
 // инвалидирует budget-кэш, и envelopeForCategory перечитывается с учётом транзакции.
 test('успешный fast-path create инвалидирует budget-кэш (остаток после записи, §4.1)', async () => {
-  const { Wrap, qc } = wrapper((path) => {
+  const { Wrap, qc } = wrapper((path, input) => {
     if (path === 'entity.create') return { id: 'e1', title: 'обед' };
-    return handlerBase(path);
+    return handlerBase(path, input);
   });
   const envInput = { categoryId: 'cat-food', date: '2026-07-13' };
   const envKey = getQueryKey(trpc.budget.envelopeForCategory, envInput, 'query');
@@ -116,9 +212,9 @@ test('успешный fast-path create инвалидирует budget-кэш (
 // дубль) — budget-кэш обязан инвалидироваться и в этой ветке, иначе остаток/бейдж
 // висят «до записи» до следующей мутации.
 test('CONFLICT (идемпотентный успех) тоже инвалидирует budget-кэш', async () => {
-  const { Wrap, qc } = wrapper((path) => {
+  const { Wrap, qc } = wrapper((path, input) => {
     if (path === 'entity.create') throw trpcError('CONFLICT');
-    return handlerBase(path);
+    return handlerBase(path, input);
   });
   const envKey = getQueryKey(
     trpc.budget.envelopeForCategory,
@@ -134,9 +230,9 @@ test('CONFLICT (идемпотентный успех) тоже инвалиди
 });
 
 test('неуверенный паттерн → LLM-путь (ai.sendMessage), без entity.create', async () => {
-  const { Wrap, calls } = wrapper((path) => {
+  const { Wrap, calls } = wrapper((path, input) => {
     if (path === 'ai.sendMessage') return assistantReply;
-    return handlerBase(path);
+    return handlerBase(path, input);
   });
   const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
   await act(async () => {
@@ -177,9 +273,9 @@ test('настоящий офлайн (холодный кэш) → submit НЕ 
 // §5.3: бизнес-отказ показывается пользователю и НЕ попадает в буфер (иначе flush
 // молча вычистит его как business_rejection — ввод исчезнет без следа).
 test('онлайн-create отклонён по бизнес-правилу → error_card, буфер пуст', async () => {
-  const { Wrap, qc } = wrapper((path) => {
+  const { Wrap, qc } = wrapper((path, input) => {
     if (path === 'entity.create') throw trpcError('BAD_REQUEST');
-    return handlerBase(path);
+    return handlerBase(path, input);
   });
   const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
   await act(async () => {
@@ -192,9 +288,9 @@ test('онлайн-create отклонён по бизнес-правилу → 
 // 02 §2.5: до подтверждения сервером карточка — «⏳ ждёт отправки», без entityId,
 // иначе «Разобрать с AI» архивирует несуществующий id, а буфер создаст вторую сущность.
 test('онлайн-create упал транспортно → карточка деградирует в pending, id сохранён в буфере', async () => {
-  const { Wrap, qc } = wrapper((path) => {
+  const { Wrap, qc } = wrapper((path, input) => {
     if (path === 'entity.create') throw new Error('network down');
-    return handlerBase(path);
+    return handlerBase(path, input);
   });
   const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
   await act(async () => {
@@ -216,9 +312,9 @@ test('онлайн-create упал транспортно → карточка �
 });
 
 test('CONFLICT по своему id → идемпотентный успех: ни error_card, ни записи в буфере', async () => {
-  const { Wrap, qc } = wrapper((path) => {
+  const { Wrap, qc } = wrapper((path, input) => {
     if (path === 'entity.create') throw trpcError('CONFLICT');
-    return handlerBase(path);
+    return handlerBase(path, input);
   });
   const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
   await act(async () => {
@@ -229,10 +325,10 @@ test('CONFLICT по своему id → идемпотентный успех: �
 });
 
 test('«разобрать с AI» → archived:true + ai.sendMessage исходной строки (одна строка ≠ две сущности)', async () => {
-  const { Wrap, calls } = wrapper((path) => {
+  const { Wrap, calls } = wrapper((path, input) => {
     if (path === 'entity.update') return { id: 'e1', title: 'обед' };
     if (path === 'ai.sendMessage') return assistantReply;
-    return handlerBase(path);
+    return handlerBase(path, input);
   });
   const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
   await act(async () => {
@@ -248,9 +344,9 @@ test('«разобрать с AI» → archived:true + ai.sendMessage исход
 });
 
 test('§3: ошибка ai.sendMessage → текст не теряется (error_card + retryId/retryText в треде)', async () => {
-  const { Wrap, qc } = wrapper((path) => {
+  const { Wrap, qc } = wrapper((path, input) => {
     if (path === 'ai.sendMessage') throw trpcError('LLM_UNAVAILABLE');
-    return handlerBase(path);
+    return handlerBase(path, input);
   });
   const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
   await act(async () => {
@@ -267,13 +363,13 @@ test('§3: ошибка ai.sendMessage → текст не теряется (err
 
 test('«Повторить» после ошибки → ровно один user-пузырь и нет error_card (dedup по id)', async () => {
   let aiCalls = 0;
-  const { Wrap, qc } = wrapper((path) => {
+  const { Wrap, qc } = wrapper((path, input) => {
     if (path === 'ai.sendMessage') {
       aiCalls += 1;
       if (aiCalls === 1) throw trpcError('LLM_UNAVAILABLE'); // первая попытка падает
       return assistantReply; // повтор проходит
     }
-    return handlerBase(path);
+    return handlerBase(path, input);
   });
   const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
   await act(async () => {

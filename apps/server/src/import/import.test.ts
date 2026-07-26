@@ -217,6 +217,101 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     expect(r.rows[0]?.suggestedCategoryRef).toBeUndefined();
   });
 
+  // Обязательство фазы C (Task C2 отложил его сознательно): suggestedCategoryRef строился
+  // ТОЛЬКО по алиасам, потому что детерминированного формата memory-правила не было — его
+  // задал D3a. Теперь правила применяются ПЕРЕД алиасами тем же кодом, что fast-path (§7.5):
+  // на реальной выписке имена мерчантов алиасами не покрыты, и именно правила делают
+  // категоризацию импорта полезной.
+  test('memory-правило категоризирует строку, которую не покрывает ни один alias', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({
+      occurredOn: '2026-05-09',
+      amount: '843.00',
+      counterparty: 'SBOL ПЯТЁРОЧКА 843',
+    });
+
+    const before = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(before.rows[0]?.suggestedCategoryRef).toBeUndefined(); // без правила — [❓ выбрать]
+
+    await caller.entity.create({
+      input: {
+        title: 'пятерочка → Еда',
+        tags: [],
+        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+      },
+      source: 'ui',
+    });
+
+    const after = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(after.rows[0]?.suggestedCategoryRef).toBe(foodId);
+  });
+
+  // Конфликт «один паттерн — разные категории» штатно рождает эскалация §7.8: её гейты
+  // пропускают предложение по НОВОЙ паре категорий, и рядом со старым правилом появляется
+  // второе. Побеждать обязано свежее — иначе исправление, которое пользователь только что
+  // подтвердил кнопкой [Запомнить], молча не работает. Тот же порядок, что у fast-path
+  // (applyMemoryRules), поэтому время правки едет в правиле вместе с заголовком.
+  test('два правила на один паттерн: импорт берёт СВЕЖЕЕ (а не первое по алфавиту)', async () => {
+    const { user, foodId, transportId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({
+      occurredOn: '2026-05-11',
+      amount: '843.00',
+      counterparty: 'SBOL ПЯТЁРОЧКА 843',
+    });
+    const rule = (title: string) =>
+      caller.entity.create({
+        input: {
+          title,
+          tags: [],
+          aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+        },
+        source: 'ui' as const,
+      });
+
+    // Порядок важен: по алфавиту «пятерочка → Еда» < «пятерочка → Транспорт», то есть
+    // лексикографический tie-break вернул бы отменённую пользователем Еду.
+    await rule('пятерочка → Еда');
+    const first = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(first.rows[0]?.suggestedCategoryRef).toBe(foodId);
+
+    await rule('пятерочка → Транспорт');
+    const second = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(second.rows[0]?.suggestedCategoryRef).toBe(transportId);
+  });
+
+  // DF п.2 (формулировка K11): порядок «правила ПЕРЕД алиасами» держался только на коде —
+  // оба теста выше берут counterparty, которой алиасы не покрывают вовсе, и перестановка
+  // двух ступеней местами оставляла серверные тесты зелёными. Здесь ступени КОНФЛИКТУЮТ:
+  // alias «кофе» ведёт в Еду (seed/categories.ts), правило «кофе → Транспорт» его
+  // перекрывает — при обратном порядке findCategory ответит Едой и тест упадёт.
+  test('конфликт правила и alias на одной строке: побеждает правило («кофе» → Транспорт)', async () => {
+    const { user, foodId, transportId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({
+      occurredOn: '2026-05-13',
+      amount: '250.00',
+      counterparty: 'КОФЕ ХАУЗ 12',
+    });
+
+    // без правила — ступень алиасов: «кофе» → Еда
+    const before = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(before.rows[0]?.suggestedCategoryRef).toBe(foodId);
+
+    await caller.entity.create({
+      input: {
+        title: 'кофе → Транспорт',
+        tags: [],
+        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+      },
+      source: 'ui',
+    });
+
+    const after = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(after.rows[0]?.suggestedCategoryRef).toBe(transportId);
+  });
+
   test('повтор ТОГО ЖЕ файла после импорта → все строки already_imported (приёмка §7 edge)', async () => {
     const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);

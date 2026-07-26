@@ -1,5 +1,7 @@
 import { ScreenHeader } from '../../app/ScreenHeader';
+import { useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
+import { Button } from '../../ui/Button';
 import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
 import { AspectsList } from './AspectsList';
@@ -22,6 +24,7 @@ export function SettingsScreen() {
                 label: 'Общие',
                 content: <GeneralForm settings={settings.data} />,
               },
+              { value: 'memory', label: 'Память AI', content: <MemorySection /> },
               { value: 'aspects', label: 'Аспекты', content: <AspectsList /> },
               { value: 'views', label: 'Views', content: <ViewsList /> },
               {
@@ -46,5 +49,27 @@ export function SettingsScreen() {
         </div>
       )}
     </>
+  );
+}
+
+// Раздел «Память AI» (02-core-os §2.7) — вход на отдельный экран, а не список прямо
+// здесь: экрану нужен свой ScreenRef, чтобы тап по правилу пушил detail в стек
+// активного таба (K10), а инлайн-контент таба настроек этого не даёт.
+function MemorySection() {
+  return (
+    <div className="flex flex-col items-start gap-2 p-3">
+      <p className="text-sm text-text-secondary">
+        Факты и правила, которые AI держит в контексте: их видно, их можно править и архивировать.
+      </p>
+      <Button
+        variant="outline"
+        onClick={() => {
+          const { activeTab, push } = useNav.getState();
+          push(activeTab, { kind: 'memory' });
+        }}
+      >
+        Открыть память AI
+      </Button>
+    </div>
   );
 }

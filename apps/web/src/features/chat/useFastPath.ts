@@ -4,6 +4,7 @@ import { TRPCClientError } from '@trpc/client';
 import { useOnline, useRetryBuffer } from '../../state/retry';
 import { mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
+import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME } from './memoryRules';
 import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from './useChatThread';
 
 const CATEGORY_QUERY = { query: 'aspect=orbis/category' } as const;
@@ -46,22 +47,43 @@ export function useFastPath(threadId: string) {
   const update = trpc.entity.update.useMutation();
   const key = chatThreadKey(threadId);
 
-  // Категории (aspect=orbis/category) + валюта → контекст парсера. `cats`/`settings` — сырьё кэша/сети.
+  // Категории (aspect=orbis/category) + валюта + memory-правила → контекст парсера.
+  // `cats`/`settings`/`rules` — сырьё кэша/сети.
   type QueryOut = ReturnType<typeof utils.entity.query.getData>;
   type SettingsOut = ReturnType<typeof utils.user.getSettings.getData>;
-  function mapCtx(cats: QueryOut, settings: SettingsOut): FastPathCtx {
+  function mapCtx(cats: QueryOut, settings: SettingsOut, rules: QueryOut): FastPathCtx {
     const categories: FastPathCategory[] = (cats ?? []).map((e) => {
       const meta = (e.aspects?.['orbis/category'] ?? {}) as {
         aliases?: string[];
         spend_class?: string;
       };
-      return { id: e.id, aliases: meta.aliases ?? [], spendClass: meta.spend_class };
+      // title — для резолва категории, названной в memory-правиле (§7.8: id в правиле нет).
+      return {
+        id: e.id,
+        title: e.title,
+        aliases: meta.aliases ?? [],
+        spendClass: meta.spend_class,
+      };
     });
     return {
       categories,
       defaultCurrency: settings?.defaultCurrency ?? 'RUB',
       today: todayIn(settings?.timezone),
+      // Заголовок правила уходит в парсер КАК ЕСТЬ (разбирает его shared, не клиент);
+      // updatedAt — арбитр конфликта двух правил на один паттерн (applyMemoryRules).
+      rules: (rules ?? []).map((e) => ({ title: e.title, updatedAt: e.updatedAt })),
     };
+  }
+
+  /**
+   * Фоновая догрузка правил: свежесть догоняет К СЛЕДУЮЩЕМУ вводу, текущий не ждёт сеть.
+   * Отказ гасим здесь же — правило это обогащение поверх алиасов, и его сбой не имеет
+   * права всплыть unhandled rejection'ом (retry у клиента выключен).
+   */
+  function refreshRules(): void {
+    void utils.entity.query
+      .fetch(MEMORY_RULES_QUERY, { staleTime: MEMORY_RULES_STALE_TIME })
+      .catch(() => {});
   }
 
   // Онлайн: свежий ctx (getData() тёплый кэш → иначе fetch, staleTime 30s).
@@ -70,12 +92,45 @@ export function useFastPath(threadId: string) {
       utils.entity.query.getData(CATEGORY_QUERY) ??
       (await utils.entity.query.fetch(CATEGORY_QUERY));
     const settings = utils.user.getSettings.getData() ?? (await utils.user.getSettings.fetch());
-    return mapCtx(cats, settings);
+    // Правила — getData-first, ровно как категории. Блокирующий fetch здесь означал бы
+    // СЕТЬ ПЕРЕД КАЖДЫМ вводом: успешный create инвалидирует весь префикс entity.query, а
+    // fetchQuery на инвалидированной query перечитывает независимо от staleTime. Карточка
+    // «⚡ без AI» переставала быть мгновенной (§2.5), а зависший запрос съедал бы ввод
+    // целиком — Composer текст уже стёр, ни карточки, ни entity.create.
+    // Свежесть обеспечивают два пути: точечный refetch после [Запомнить]
+    // (MemoryRuleCard — правило работает со следующего же ввода) и фоновая догрузка ниже.
+    const cached = utils.entity.query.getData(MEMORY_RULES_QUERY);
+    if (cached !== undefined) {
+      refreshRules();
+      return mapCtx(cats, settings, cached);
+    }
+    // Холодный кэш (правила в этой сессии не читались): один раз ждём — иначе первый ввод
+    // молча уехал бы на одни алиасы. Цена та же, что уже платят категории. Отказ запроса
+    // быстрый ввод НЕ роняет: терять из-за правил стёртый композером текст нельзя.
+    let rules: QueryOut;
+    try {
+      rules = await utils.entity.query.fetch(MEMORY_RULES_QUERY, {
+        staleTime: MEMORY_RULES_STALE_TIME,
+      });
+    } catch (e) {
+      // Деградация остаётся (правила необязательны), но она больше не немая. Сюда падают
+      // и транспортный отказ, и BAD_REQUEST парсера запроса: на непересеянном реестре
+      // аспектов (ловушка релиза фазы C) «aspect=orbis/memory» не разбирается, и правила
+      // молча не применяются — снаружи это неотличимо от «правил нет». console.warn —
+      // единственный доступный в проекте сигнал.
+      console.warn('[fast-path] правила памяти не загрузились, разбираем по алиасам:', e);
+      rules = undefined;
+    }
+    return mapCtx(cats, settings, rules);
   }
 
   // Офлайн: ТОЛЬКО тёплый кэш (без fetch) — иначе onlineManager заморозит запрос и submit зависнет (§2.6).
   function cachedCtx(): FastPathCtx {
-    return mapCtx(utils.entity.query.getData(CATEGORY_QUERY), utils.user.getSettings.getData());
+    return mapCtx(
+      utils.entity.query.getData(CATEGORY_QUERY),
+      utils.user.getSettings.getData(),
+      utils.entity.query.getData(MEMORY_RULES_QUERY),
+    );
   }
 
   // Возвращает id синтетического сообщения; повторный вызов с тем же messageId ПЕРЕПИСЫВАЕТ

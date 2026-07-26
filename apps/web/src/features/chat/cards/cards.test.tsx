@@ -1,8 +1,9 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../../state/navigation';
-import { renderWithProviders } from '../../../test/harness';
+import { renderWithProviders, trpcError } from '../../../test/harness';
 import { smoothAuditText } from '../format-audit';
+import { MEMORY_RULES_QUERY } from '../memoryRules';
 import type { ChatMessage } from '../useChatThread';
 import { renderCards } from './renderCards';
 
@@ -334,6 +335,96 @@ test('после Undo строка остатка снимается вмест�
   expect(screen.queryByTestId('envelope-remaining')).toBeNull();
 });
 
+// D6c п.2 (живой смоук D6b): в сетке полей карточки печаталось «категория: 7d5e3a94-…».
+// Название было только в строке остатка конверта, а её нет у транзакции без конверта.
+const categoryEntity = {
+  id: 'c1',
+  ownerId: 'u',
+  title: 'Еда',
+  emoji: null,
+  body: '',
+  bodyRefs: [],
+  tags: [],
+  meta: {},
+  aspects: { 'orbis/category': { icon: '🍔' } },
+  createdAt: 'x',
+  updatedAt: 'y',
+  archived: false,
+};
+
+// Конверта у записи нет (null) — ровно случай смоука: строки остатка не будет,
+// и название категории обязано прийти из самой карточки.
+// categories: unknown — сюда передают и готовый массив, и ещё не разрешённый промис (D6d).
+const noEnvelope = (path: string, categories: unknown) => {
+  if (path === 'budget.envelopeForCategory') return null;
+  if (path === 'entity.query') return categories;
+  return {};
+};
+
+test('entity_card: категория показана НАЗВАНИЕМ, а не uuid (D6c п.2)', async () => {
+  const { calls } = renderWithProviders(<div>{renderCards(msg([finCard]))}</div>, (path) =>
+    noEnvelope(path, [categoryEntity]),
+  );
+  const card = await screen.findByTestId('entity-card');
+  await waitFor(() => expect(card).toHaveTextContent('Еда'));
+  expect(card).not.toHaveTextContent('c1');
+  // Тот же запрос категорий, что у пикера D3b (один кэш, второго источника нет)
+  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
+    query: 'aspect=orbis/category, sortBy=title:asc, limit=200',
+  });
+});
+
+// D6d п.2: прежняя версия утверждала uuid в DOM сразу после рендера — а он там и так есть,
+// пока список категорий не доехал. Соседняя карточка с ИЗВЕСТНОЙ категорией — маркер того,
+// что запрос разрешён: только после её названия отсутствие имени значит «категории нет».
+test('entity_card: категории нет в списке → uuid как запасной вариант (D6c п.2)', async () => {
+  const ghostCard = {
+    ...finCard,
+    entityId: 'e2',
+    title: 'Кино 500',
+    keyFields: { ...finCard.keyFields, category_ref: 'c-неизвестная' },
+  };
+  renderWithProviders(<div>{renderCards(msg([finCard, ghostCard]))}</div>, (path) =>
+    noEnvelope(path, [categoryEntity]),
+  );
+  const cards = await screen.findAllByTestId('entity-card');
+  // Обе карточки делят один запрос и один кэш — «Еда» доказывает, что список уже разрешён.
+  await waitFor(() => expect(cards[0]).toHaveTextContent('Еда'));
+  expect(cards[1]).toHaveTextContent('c-неизвестная');
+});
+
+// D6d п.1: холодный кэш категорий — в сетке полей на ~200 мс печатался uuid.
+test('entity_card: пока категории грузятся, строки категории нет (D6d)', async () => {
+  let release: (categories: unknown) => void = () => {};
+  const categories = new Promise((resolve) => {
+    release = resolve;
+  });
+  renderWithProviders(<div>{renderCards(msg([finCard]))}</div>, (path) =>
+    noEnvelope(path, categories),
+  );
+  const card = await screen.findByTestId('entity-card');
+  // Значение ещё неизвестно — строки поля нет вовсе (ни uuid, ни пустого значения).
+  expect(card).not.toHaveTextContent('c1');
+  expect(card).not.toHaveTextContent('категория');
+
+  release([categoryEntity]);
+  await waitFor(() => expect(card).toHaveTextContent('Еда'));
+});
+
+test('карточка без category_ref список категорий не запрашивает (D6c п.2)', async () => {
+  const { calls } = renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          { kind: 'entity_card', entityId: 'e2', title: 'Заметка', aspects: [], keyFields: {} },
+        ]),
+      )}
+    </div>,
+  );
+  await waitFor(() => expect(screen.getByTestId('entity-card')).toBeInTheDocument());
+  expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+});
+
 test('smoothAuditText сглаживает «batch: операций — 1»', () => {
   expect(smoothAuditText('batch: операций — 1')).toBe('Операция выполнена');
   expect(smoothAuditText('batch: операций — 3')).toBe('batch: операций — 3');
@@ -372,4 +463,215 @@ test('import_review без вкладки Budget: вместо кнопки — 
   await waitFor(() => expect(screen.getByTestId('import-review-card')).toBeInTheDocument());
   expect(screen.queryByRole('button', { name: /открыть импорт/i })).toBeNull();
   expect(screen.getByTestId('import-review-card')).toHaveTextContent(/бюджет/i);
+});
+
+// --- карточка memory_rule_suggestion (01-arch §7.8, D3b) --------------------------------
+// Производитель — ai/escalation.ts (D3a): поля карточки скопированы ДОСЛОВНО из
+// серверного union (tools/registry.ts), дискриминант — kind (K3).
+
+const FROM_CAT = '3f0f8dbe-0f2f-4f6a-9a58-2b1b1f9f4a11';
+const TO_CAT = '9c2b2f5a-1c3d-4a7e-8b2f-6d4e5a7c9b33';
+// pattern намеренно «сырой» (регистр + числовой хвост): клиент обязан отправить его
+// в ai.declineMemoryRule БЕЗ повторной нормализации — на сервере это ключ подавления.
+const suggestion = {
+  kind: 'memory_rule_suggestion',
+  ruleText: 'кофе → Развлечения',
+  pattern: 'Кофе Хауз 12',
+  fromCategoryId: FROM_CAT,
+  toCategoryId: TO_CAT,
+  categoryTitle: 'Развлечения',
+};
+
+const createdEntity = {
+  id: 'mem1',
+  ownerId: 'u',
+  title: 'кофе → Развлечения',
+  emoji: null,
+  body: '',
+  bodyRefs: [],
+  tags: [],
+  meta: {},
+  aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+  createdAt: 'x',
+  updatedAt: 'y',
+  archived: false,
+};
+
+// id созданных сущностей из журнала вызовов — клиентский UUID кнопки «Запомнить».
+const createIds = (calls: { path: string; input: unknown }[]): string[] =>
+  calls
+    .filter((c) => c.path === 'entity.create')
+    .map((c) => (c.input as { input: { id: string } }).input.id);
+
+// Время пиннится в пределах 24ч-окна фикстуры createdAt (та же идиома, что у
+// confirmation): иначе карточка считалась бы устаревшей по настенным часам.
+describe('memory_rule_suggestion (детерминированное время)', () => {
+  beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-05T12:00:01.000Z')));
+  afterEach(() => vi.restoreAllMocks());
+
+  test('memory_rule_suggestion: текст правила и обе кнопки', () => {
+    renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>);
+    expect(screen.getByTestId('memory-rule-card')).toHaveTextContent('кофе → Развлечения');
+    expect(screen.getByRole('button', { name: 'Запомнить' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Не надо' })).toBeInTheDocument();
+  });
+
+  // D5c п.2: вопрос «Запомнить правило „…“?» уже задаёт content самого сообщения
+  // (ai/escalation.ts) — карточка под ним печатала его второй раз. Карточка показывает
+  // текст правила и кнопки; вопрос остаётся за сообщением.
+  test('memory_rule_suggestion: карточка не повторяет вопрос сообщения', () => {
+    renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>);
+    expect(screen.getByTestId('memory-rule-card')).not.toHaveTextContent(/запомнить правило/i);
+  });
+
+  test('[Запомнить] → entity.create с title=ruleText и аспектом orbis/memory (rule, financial)', async () => {
+    const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
+      path === 'entity.create' ? createdEntity : {},
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
+    const input = calls.find((c) => c.path === 'entity.create')?.input as {
+      input: { id: string; title: string; tags: string[]; body?: string; aspects: unknown };
+      source: string;
+    };
+    expect(input.input.title).toBe('кофе → Развлечения');
+    expect(input.input.aspects).toEqual({
+      'orbis/memory': { kind: 'rule', scope: 'orbis/financial' },
+    });
+    expect(input.input.tags).toEqual([]);
+    expect(input.input.body).toBeTruthy(); // короткое пояснение, откуда правило взялось
+    expect(input.source).toBe('ui');
+    // Итог показан, кнопки больше не предлагают тот же запрос
+    await waitFor(() =>
+      expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/запомнил/i),
+    );
+    expect(screen.queryByRole('button', { name: 'Запомнить' })).toBeNull();
+  });
+
+  // Быстрый ввод читает правила из ТЁПЛОГО кэша (useFastPath, §2.5) — одной инвалидации
+  // мало: у запроса правил нет подписчиков, сам он не перечитается. Без точечного
+  // перечитывания следующий «кофе 300» ушёл бы по прежнему алиасу, хотя карточка уже
+  // сказала «Запомнил — правило в „Памяти AI“».
+  test('[Запомнить] перечитывает запрос memory-правил (правило работает со следующего ввода)', async () => {
+    const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
+      path === 'entity.create' ? createdEntity : [],
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() =>
+      expect(
+        calls.some(
+          (c) =>
+            c.path === 'entity.query' &&
+            (c.input as { query?: string }).query === MEMORY_RULES_QUERY.query,
+        ),
+      ).toBe(true),
+    );
+  });
+
+  test('повторный клик по [Запомнить] не создаёт вторую сущность', async () => {
+    const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
+      path === 'entity.create' ? createdEntity : {},
+    );
+    const button = screen.getByRole('button', { name: 'Запомнить' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/запомнил/i),
+    );
+    fireEvent.click(button); // третий клик уже по снятой кнопке — DOM-узел отсоединён
+    expect(calls.filter((c) => c.path === 'entity.create')).toHaveLength(1);
+  });
+
+  test('повтор после ошибки шлёт ТОТ ЖЕ client-UUID (урок B4: id на показ карточки)', async () => {
+    let fail = true;
+    const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) => {
+      if (path !== 'entity.create') return {};
+      if (fail) {
+        fail = false;
+        throw trpcError('INTERNAL_SERVER_ERROR');
+      }
+      return createdEntity;
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(calls.filter((c) => c.path === 'entity.create')).toHaveLength(2));
+    const ids = createIds(calls);
+    expect(ids[0]).toBe(ids[1]);
+  });
+
+  // Фикс-раунд 1, находка 1: id правила ДЕТЕРМИНИРОВАН сообщением-предложением.
+  // Со случайным uuidv7 новое монтирование карточки (перезагрузка вкладки, второе
+  // устройство) присылало новый id, и «Запомнить» создавало ВТОРОЕ одноимённое
+  // правило: onConflictDoNothing по entities.id конфликта не видел.
+  test('после перезагрузки страницы [Запомнить] шлёт ТОТ ЖЕ id (второго правила не будет)', async () => {
+    const handler = (path: string) => (path === 'entity.create' ? createdEntity : {});
+    const first = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, handler);
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(createIds(first.calls)).toHaveLength(1));
+    first.unmount(); // перезагрузка вкладки: карточка приезжает из ленты заново
+
+    const second = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, handler);
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(createIds(second.calls)).toHaveLength(1));
+    expect(createIds(second.calls)[0]).toBe(createIds(first.calls)[0]);
+    second.unmount();
+
+    // А НОВОЕ предложение (эскалация после архивации правила) — другая сущность,
+    // иначе «Запомнить» реплеило бы архивную строку и правило не ожило бы.
+    const third = renderWithProviders(
+      <div>{renderCards(msg([suggestion], { id: 'm2' }))}</div>,
+      handler,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
+    await waitFor(() => expect(createIds(third.calls)).toHaveLength(1));
+    expect(createIds(third.calls)[0]).not.toBe(createIds(first.calls)[0]);
+  });
+
+  test('[Не надо] → ai.declineMemoryRule с НЕИЗМЕНЁННЫМ pattern', async () => {
+    const { calls } = renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>, (path) =>
+      path === 'ai.declineMemoryRule' ? { alreadyDeclined: false } : {},
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Не надо' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'ai.declineMemoryRule')?.input).toEqual({
+        pattern: 'Кофе Хауз 12',
+        fromCategoryId: FROM_CAT,
+        toCategoryId: TO_CAT,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('memory-rule-card')).toHaveTextContent(/не буду предлагать/i),
+    );
+    expect(screen.queryByRole('button', { name: 'Не надо' })).toBeNull();
+  });
+});
+
+// Фикс-раунд 1, находка 2: «решённость» карточки живёт в локальном state, поэтому
+// давно отвеченное предложение после перезагрузки выглядит неотвеченным. Тот же
+// 24ч visual-expiry, что у ConfirmationCard, гасит кнопки старой карточки.
+describe('memory_rule_suggestion: visual-expiry 24ч', () => {
+  beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-07-07T13:00:00.000Z')));
+  afterEach(() => vi.restoreAllMocks());
+
+  test('старше 24ч → обе кнопки задизейблены, подпись «устарело»', () => {
+    renderWithProviders(<div>{renderCards(msg([suggestion]))}</div>);
+    expect(screen.getByRole('button', { name: 'Запомнить' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Не надо' })).toBeDisabled();
+    expect(screen.getByText(/устарело/i)).toBeInTheDocument();
+  });
+});
+
+test('неизвестный kind по-прежнему не роняет ленту', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          { kind: 'card_from_the_future', payload: 42 },
+          { kind: 'error_card', code: 'X', message: 'соседняя карточка жива' },
+        ]),
+      )}
+    </div>,
+  );
+  expect(screen.getByRole('alert')).toHaveTextContent('соседняя карточка жива');
 });

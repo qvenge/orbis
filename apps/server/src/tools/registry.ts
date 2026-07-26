@@ -58,6 +58,27 @@ export type Card =
   // карточек сервера и web намеренно не общие. Поле title убрано в фикс-раунде C:
   // производитель его не слал, и web-ветка рендера была мёртвой
   | { kind: 'import_review' }
+  // 01-arch §7.8 (Task D3a): эскалация повторных исправлений категории. Обе карточки
+  // пишет ai/escalation.ts; поля обязаны ДОСЛОВНО совпадать с web-типами, которые
+  // объявит D3b (chat/cards/types.ts) — union'ы сервера и web намеренно не общие.
+  // ruleText — готовый заголовок будущей memory-сущности (formatRuleTitle), кнопка
+  // «Запомнить» отправляет его обычным entity.create; categoryTitle показывается в тексте.
+  | {
+      kind: 'memory_rule_suggestion';
+      ruleText: string;
+      pattern: string;
+      fromCategoryId: string;
+      toCategoryId: string;
+      categoryTitle: string;
+    }
+  // Отказ от предложения — новое системное сообщение, а не правка metadata (K4, §4.6);
+  // эта же карточка подавляет повтор предложения в 30-дневном скане
+  | {
+      kind: 'memory_rule_declined';
+      pattern: string;
+      fromCategoryId: string;
+      toCategoryId: string;
+    }
   | { kind: 'error_card'; code: string; message: string };
 
 // ---------------------------------------------------------------------------
@@ -123,7 +144,7 @@ const entityGetJsonSchema = {
       type: 'array',
       items: { type: 'string', enum: ['body', 'relations', 'backlinks', 'thread'] },
       description:
-        'по умолчанию body+relations; backlinks — кто ссылается через body_refs; thread — сообщения треда сущности',
+        'по умолчанию body+relations; backlinks — кто ссылается: явные related_to (via "relation") и упоминания через body_refs (via "mention"), без архивных, до 100; thread — сообщения треда сущности',
     },
   },
   required: ['id'],

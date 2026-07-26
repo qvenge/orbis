@@ -5,6 +5,7 @@ import { ConfirmationCard } from './ConfirmationCard';
 import { EntityCard } from './EntityCard';
 import { ErrorCard } from './ErrorCard';
 import { ImportReviewCard } from './ImportReviewCard';
+import { MemoryRuleCard } from './MemoryRuleCard';
 import { QueryResultCard } from './QueryResultCard';
 import { SystemMessage } from './SystemMessage';
 import type { Card } from './types';
@@ -48,6 +49,20 @@ export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): Reac
       case 'import_review':
         // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
         return <ImportReviewCard key={i} card={card} />;
+      case 'memory_rule_suggestion':
+        // §7.8: предложение правила памяти. memory_rule_declined своей ветки не имеет —
+        // его текст несёт content сообщения (см. types.ts).
+        // msg.id — ключ детерминированного id создаваемого правила (идемпотентность
+        // «Запомнить» между монтированиями), msg.createdAt — 24ч visual-expiry.
+        return (
+          <MemoryRuleCard
+            // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
+            key={i}
+            card={card}
+            messageId={msg.id}
+            createdAt={msg.createdAt}
+          />
+        );
       case 'error_card':
         // §3: retryId+retryText есть → «Повторить» снимет этот error_card и перешлёт тем же id.
         return (
