@@ -86,21 +86,43 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
     { enabled: adding && q.length >= SEARCH_MIN },
   );
   const known = new Set([entityId, ...ids]);
-  const found = (search.data ?? []).filter((e) => !known.has(e.id));
+  // Закрытую задачу нельзя предлагать блокером: список «Заблокирована» показывает только
+  // незакрытые (§3.5.6), поэтому такая связь создалась бы невидимой ни в одном списке и
+  // неповторимой (id уже в `known`). Направления «блокирует» ограничение не касается —
+  // исходящая связь видна всегда.
+  const found = (search.data ?? []).filter(
+    (e) =>
+      !known.has(e.id) &&
+      (direction === 'out' || !CLOSED.has(String(e.aspects['orbis/task']?.status ?? ''))),
+  );
 
   const refresh = () => void utils.entity.get.invalidate(detailGetInput(entityId));
   // Ацикличность blocks проверяет сервер (§4.2): путь цикла доезжает ТОЛЬКО в message
   // (cause по HTTP не сериализуется) — его и показываем плашкой (02 §6).
   const relate = trpc.relation.create.useMutation({
+    // Плашка одна на две мутации, поэтому старт каждой гасит чужую ошибку: иначе отказ
+    // создания («замкнула бы цикл») перекрывал бы любой последующий отказ снятия и висел
+    // бы даже после успешных действий.
+    // Тело-блок, а не `() => unrelate.reset()`: возвращённое значение onMutate — это
+    // context мутации, и вывод его типа замкнулся бы на саму мутацию (TS7022).
+    onMutate: () => {
+      unrelate.reset();
+    },
     onSuccess: () => {
       setDraft('');
       setAdding(false);
+      // Направление — часть состояния формы: без сброса внешне свежая форма молча
+      // создавала бы следующую связь в обратную сторону.
+      setDirection('out');
       refresh();
     },
   });
   // Снятие ошибочной связи: relation.create не отдаёт actionId, Undo журналом из секции
   // недоступен — обратный путь только через relation.delete.
   const unrelate = trpc.relation.delete.useMutation({
+    onMutate: () => {
+      relate.reset();
+    },
     onSuccess: () => {
       setConfirming(null);
       refresh();
@@ -147,7 +169,12 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
                   variant="ghost"
                   size="sm"
                   className="shrink-0"
-                  onClick={() => setConfirming(null)}
+                  // Отказ снятия гаснет вместе с вопросом: иначе красная плашка висела бы
+                  // до ухода с экрана, хотя действие уже отменено.
+                  onClick={() => {
+                    setConfirming(null);
+                    unrelate.reset();
+                  }}
                 >
                   Отмена
                 </Button>

@@ -44,6 +44,7 @@ type Fixture = {
   relations?: ReturnType<typeof rel>[];
   backlinks?: { entity: ReturnType<typeof ent>; via: string }[];
   onRelationCreate?: () => unknown;
+  onRelationDelete?: () => unknown;
   onQuery?: () => unknown;
 };
 
@@ -68,7 +69,8 @@ function handler(fx: Fixture) {
       if (fx.onRelationCreate) return fx.onRelationCreate();
       return rel('new', 'e1', 'x1', 'blocks');
     }
-    if (path === 'relation.delete') return { ok: true };
+    if (path === 'relation.delete')
+      return fx.onRelationDelete ? fx.onRelationDelete() : { ok: true };
     if (path === 'aspect.list') return [];
     return {};
   };
@@ -258,6 +260,96 @@ test('цикл blocks: серверный отказ показан плашко
   const alert = await screen.findByRole('alert');
   expect(alert).toHaveTextContent(/замкнула бы цикл/);
   expect(alert).toHaveTextContent('«Задача» → «Найденная сущность» → «Задача»');
+});
+
+// D5e п.1: направление оставалось выбранным после создания связи — внешне свежая форма
+// молча создавала следующую связь в обратную сторону.
+test('форма: после создания связи направление возвращается к дефолтному', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
+  await screen.findByTestId('body-edit');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
+  fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
+  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
+  fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
+
+  await waitFor(() => expect(screen.queryByLabelText('Направление блокировки')).toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
+  expect(screen.getByLabelText('Направление блокировки')).toHaveValue('out');
+});
+
+// D5e п.2: «Отмена» подтверждения снимала только вопрос, а красная плашка отказа
+// relation.delete висела до ухода с экрана.
+test('плашка: «Отмена» подтверждения убирает ошибку снятия', async () => {
+  renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    handler({
+      relations: [rel('r1', 'e1', 't1', 'blocks')],
+      onRelationDelete: () => {
+        throw trpcError('NOT_FOUND', 'связь уже снята');
+      },
+    }),
+  );
+  expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Снять блокировку' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Снять' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(/связь уже снята/);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+// D5e п.3: `relate.error ?? unrelate.error` отдавал приоритет самой ранней ошибке —
+// после отказа создания отказ снятия был не виден, а старое сообщение висело и после успеха.
+test('плашка: ошибка снятия сменяет ошибку создания, после успеха плашки нет', async () => {
+  let deleteFails = true;
+  renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    handler({
+      relations: [rel('r1', 'e1', 't1', 'blocks')],
+      onRelationCreate: () => {
+        throw trpcError('UNPROCESSABLE_CONTENT', 'blocks-связь замкнула бы цикл');
+      },
+      onRelationDelete: () => {
+        if (!deleteFails) return { ok: true };
+        deleteFails = false;
+        throw trpcError('NOT_FOUND', 'связь уже снята');
+      },
+    }),
+  );
+  expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
+  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
+  fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(/замкнула бы цикл/);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Снять блокировку' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Снять' }));
+  await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/связь уже снята/));
+
+  fireEvent.click(screen.getByRole('button', { name: 'Снять' }));
+  await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+});
+
+// D5e п.4: список «Заблокирована» показывает только незакрытые задачи (§3.5.6) — связь
+// с закрытым блокером была бы создана, но не видна ни в одном списке и неповторима
+// (id уже в known). Для исходящей связи ограничения нет: «Блокирует» показывает всё.
+test('пикер: закрытая задача не предлагается блокером, но предлагается заблокированной', async () => {
+  renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    handler({ onQuery: () => [found, doneBlocker] }),
+  );
+  await screen.findByTestId('body-edit');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
+  fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'блокер' } });
+  expect(await screen.findByRole('button', { name: 'Закрытый блокер' })).toBeInTheDocument();
+
+  fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
+  expect(screen.queryByRole('button', { name: 'Закрытый блокер' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Найденная сущность' })).toBeInTheDocument();
 });
 
 test('backlinks: одна секция, пометка источника «связь» / «упоминание»', async () => {
