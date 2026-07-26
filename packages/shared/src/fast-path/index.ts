@@ -3,10 +3,15 @@ import { newId } from '../ids';
 import { normalizeCounterparty } from '../import/normalize';
 import { parseRuleTitle } from '../memory/rule';
 
-/** `title` нужен для memory-правил: правило ссылается на категорию НАЗВАНИЕМ (§7.8, D3a). */
+/**
+ * `title` ОБЯЗАТЕЛЕН: правило памяти ссылается на категорию НАЗВАНИЕМ (§7.8, D3a), и
+ * категория без title для applyMemoryRules неотличима от несуществующей — правило по ней
+ * молча игнорировалось бы. Все точки сборки контекста title кладут, так что обязательность
+ * ничего не ломает, зато пропуск ловится на typecheck, а не тишиной в резолве.
+ */
 export type FastPathCategory = {
   id: string;
-  title?: string;
+  title: string;
   aliases: string[];
   spendClass?: string;
 };
@@ -137,9 +142,7 @@ export function applyMemoryRules(
   for (const rule of matched) {
     const wanted = normalizeCounterparty(rule.categoryTitle);
     if (wanted === '') continue;
-    const category = cats.find(
-      (c) => c.title !== undefined && normalizeCounterparty(c.title) === wanted,
-    );
+    const category = cats.find((c) => normalizeCounterparty(c.title) === wanted);
     if (category !== undefined) return category;
   }
   return null;

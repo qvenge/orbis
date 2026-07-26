@@ -335,12 +335,18 @@ async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCate
  * приоритет правил задаёт applyMemoryRules — в том числе по updated_at, поэтому время
  * правки едет вместе с заголовком (иначе конфликт двух правил на один паттерн импорт
  * разрешал бы иначе, чем быстрый ввод).
+ *
+ * Первый jsonb-предикат — containment `aspects ? 'orbis/memory'`: под него подходит
+ * entities_aspects_gin, тогда как один `->>`-фильтр индексом не покрывается и каждый
+ * import.review сканировал бы ВСЕ неархивные сущности владельца (после CSV-импортов это
+ * тысячи строк). Тот же приём у ai/escalation.ts (hasEquivalentRule) и llm/context.ts.
  */
 async function memoryRules(tx: Tx, ownerId: string): Promise<FastPathRule[]> {
   const rows = (await tx.execute(sql`
     SELECT title, updated_at
     FROM entities
     WHERE owner_id = ${ownerId} AND NOT archived
+      AND aspects ? 'orbis/memory'
       AND aspects->'orbis/memory'->>'kind' = 'rule'
       AND aspects->'orbis/memory'->>'scope' = 'orbis/financial'
     ORDER BY id

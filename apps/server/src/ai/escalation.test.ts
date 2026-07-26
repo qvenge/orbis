@@ -92,7 +92,12 @@ async function recategorize(user: string, txnId: string, categoryRef: string): P
   });
 }
 
-/** Контекст диспетчера тулов внутреннего чата — ровно такой строит ai.sendMessage. */
+/**
+ * Минимальный контекст чат-транспорта: только те поля ToolCallCtx, без которых диспетчер
+ * не работает. Боевой контекст ai.sendMessage несёт сверх этого threadId, clock и
+ * entitlements (send-message.ts runToolCall) — на путь эскалации они не влияют, поэтому
+ * здесь их нет.
+ */
 function chatCtx(user: string): ToolCallCtx {
   return { db, actorUserId: user, actorKind: 'ai', source: 'chat', explicitCommand: false };
 }
@@ -592,5 +597,54 @@ describe('эскалация повторных исправлений кате�
     } finally {
       spy.mockRestore();
     }
+  });
+
+  // --- D5b п.1: сравнение только по паттернам, запасного пути по сырым заголовкам нет ---
+
+  test('24. «843» и «ПЯТЕРОЧКА 843» — не одно исправление (сырое containment даёт 1.0)', async () => {
+    const { user, food, fun } = await freshOwner();
+    // Порядок намеренный: «843» ПЕРВЫМ — на нём эскалация выходит по empty_pattern, и
+    // вопрос «одинаковы ли исправления» решается на втором, у которого паттерн непустой.
+    // counterpartySimilarity('ПЯТЕРОЧКА 843', '843') = 1.0 (containment по токену «843»),
+    // а паттерны — «пятерочка» и '' — не совпадают ни при каком пороге.
+    await recategorize(user, await createTxn(user, '843', food), fun);
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+  });
+
+  // --- D5b п.2: подавление не ошибается в сторону «предложить лишнее» ---
+
+  test('25. карточка с ТОЧНЫМ паттерном подавляет предложение при любом объёме журнала', async () => {
+    const { user, food, fun } = await freshOwner();
+    const pair = { fromCategoryId: food, toCategoryId: fun };
+    const offer = (pattern: string, minutesAgo: number) => ({
+      id: newId(),
+      threadId: globalThreadId(user),
+      role: 'system',
+      content: `псевдо-предложение ${pattern} ${minutesAgo}`,
+      metadata: { cards: [{ kind: 'memory_rule_suggestion', pattern, ...pair }] },
+      createdAt: new Date(Date.now() - minutesAgo * 60_000),
+    });
+    // Карточка нужного паттерна — САМАЯ СТАРАЯ, а свежих карточек той же пары категорий
+    // ровно потолок выборки: сканирующий путь до неё не доходит и предложил бы повтор
+    // того, от чего пользователя уже спрашивали.
+    const rows = [
+      offer('пятерочка', JOURNAL_SCAN_LIMIT + 1),
+      ...Array.from({ length: JOURNAL_SCAN_LIMIT }, (_, i) => offer('wildberries', i + 1)),
+    ];
+    await withIdentity(db, user, async (tx) => {
+      await ensureGlobalThread(tx, user);
+      await tx.insert(chatMessages).values(rows);
+    });
+
+    const actionId = await recategorizeRaw(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    expect(
+      await maybeSuggestRule({ db, ownerId: user, action: await actionById(actionId) }),
+    ).toEqual({ suggested: false, reason: 'already_suggested' });
+    // новой карточки не появилось: по «пятерочка» осталась ровно одна — засеянная
+    const offers = await cardsOf(user, 'memory_rule_suggestion');
+    expect(offers.filter((c) => (c as { pattern?: string }).pattern === 'пятерочка').length).toBe(
+      1,
+    );
   });
 });
