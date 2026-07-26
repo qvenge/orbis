@@ -53,6 +53,20 @@ describe('SYSTEM_PROMPT_V1 (§7.1 слой 1)', () => {
     expect(SYSTEM_PROMPT_V1).toMatch(/доходные инстансы[^.\n]*не вычитай/i);
   });
 
+  // D6c п.1 (живой смоук D6b): «купить кроссовки 8000 к субботе» модель раскладывала в
+  // ДВЕ сущности (задача + отдельная трата), а сумму клала в meta. 00-product §7 требует
+  // одну сущность сразу с task + financial + schedule — правило обязано быть в промпте.
+  test('одна сущность на намерение: аспекты на ТУ ЖЕ сущность, сумма — в orbis/financial (00-product §7)', () => {
+    expect(SYSTEM_PROMPT_V1).toContain('Одна сущность на намерение');
+    // запрет второй сущности под тот же замысел
+    expect(SYSTEM_PROMPT_V1).toMatch(/не создавай втор|а НЕ втор/i);
+    // аспекты навешиваются сразу одним entity_create либо attach_* к уже созданной
+    expect(SYSTEM_PROMPT_V1).toContain('attach_');
+    expect(SYSTEM_PROMPT_V1).toContain('orbis/schedule');
+    // сумма покупки — в аспекте, а не в meta
+    expect(SYSTEM_PROMPT_V1).toMatch(/сумма[^.\n]*orbis\/financial[^.\n]*не в `meta`/i);
+  });
+
   test('шпаргалка грамматики §6 — модель видит синтаксис entity_query (fix round)', () => {
     expect(SYSTEM_PROMPT_V1).toContain('status=!done&!cancelled'); // NOT-синтаксис
     expect(SYSTEM_PROMPT_V1).toContain('today | overdue | next_7d | after_7d'); // date-токены
