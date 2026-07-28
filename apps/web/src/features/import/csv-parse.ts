@@ -38,26 +38,89 @@ export function decodeCsvBytes(bytes: ArrayBuffer): {
 const DELIMITER_CANDIDATES: ReadonlyArray<',' | ';' | '\t'> = [',', ';', '\t'];
 
 /**
- * Выбор разделителя по до-5 первым непустым строкам. Оценка кандидата — МИНИМУМ числа
+ * Логические записи файла: перевод строки ВНУТРИ закавыченного поля границей записи не
+ * считается (уборочная фаза, E10). Раньше выборка для detectDelimiter резалась по
+ * физическим строкам, и назначение платежа с переносом строки — обычное дело в выгрузках —
+ * могло быть обрезано посередине, оставив в образце незакрытую кавычку. Состояние кавычек
+ * ровно то же, что у parseCsv: удвоенная «""» — экран, кавычка не в начале поля обычная.
+ * Пустые записи пропускаются (как и раньше). limit ограничивает работу на больших файлах.
+ */
+function logicalRecords(text: string, limit: number): string[] {
+  const out: string[] = [];
+  let start = 0;
+  let inQuotes = false;
+  let fieldStart = true; // курсор стоит в начале поля — только здесь кавычка открывает режим
+  const push = (end: number): void => {
+    const rec = text.slice(start, end);
+    if (rec.trim() !== '') out.push(rec);
+  };
+  let i = 0;
+  while (i < text.length && out.length < limit) {
+    const ch = text.charAt(i);
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text.charAt(i + 1) === '"') {
+          i += 2;
+          continue;
+        }
+        inQuotes = false;
+      }
+      i += 1;
+      continue;
+    }
+    if (ch === '"' && fieldStart) {
+      inQuotes = true;
+      fieldStart = false;
+      i += 1;
+      continue;
+    }
+    if (ch === '\n' || ch === '\r') {
+      push(i);
+      i += ch === '\r' && text.charAt(i + 1) === '\n' ? 2 : 1;
+      start = i;
+      fieldStart = true;
+      continue;
+    }
+    fieldStart = DELIMITER_CANDIDATES.includes(ch as ',' | ';' | '\t');
+    i += 1;
+  }
+  if (out.length < limit) push(text.length);
+  return out;
+}
+
+/** Число полей записи при данном кандидате (тем же parseCsv, а не split). */
+function fieldCount(record: string, candidate: string): number {
+  return parseCsv(record, candidate)[0]?.length ?? 1;
+}
+
+/**
+ * Выбор разделителя по до-5 первым записям таблицы. Оценка кандидата — МИНИМУМ числа
  * полей по выборке: у настоящего разделителя число колонок стабильно, а случайные
  * запятые в суммах дают много полей в одной строке и одно — в другой. Поля считаются
  * тем же parseCsv, а не split: разделитель внутри кавычек не должен портить счёт.
  * Побеждает максимальная оценка; при равенстве — более ранний кандидат; если у всех
  * оценка ≤ 1 (разделителя нет вовсе) — «,».
+ *
+ * Записи БЕЗ единого кандидата-разделителя вне кавычек в выборку не входят (E10):
+ * это преамбула выписки («Выписка по счёту 40817…») или итоговая строка, а не таблица.
+ * Раньше такая строка давала МИНИМУМ 1 любому кандидату и обнуляла оценку целиком —
+ * побеждал дефолт «,», и «;»-файл разбирался в одну колонку. Условие «одно поле при
+ * ЛЮБОМ кандидате» намеренно узкое: настоящая шапка «Дата;Контрагент;Сумма» даёт одно
+ * поле только для «,» и обязана продолжать топить этот кандидат.
  */
 export function detectDelimiter(text: string): ',' | ';' | '\t' {
-  const sample = text
-    .split(/\r\n|\r|\n/)
-    .filter((line) => line.trim() !== '')
-    .slice(0, 5)
-    .join('\n');
+  // Записей берём с запасом: часть отсеется как преамбула, а выборка обязана остаться
+  // представительной (5 строк таблицы — исходный контракт).
+  const records = logicalRecords(text, 12).filter((rec) =>
+    DELIMITER_CANDIDATES.some((c) => fieldCount(rec, c) > 1),
+  );
+  const sample = records.slice(0, 5);
   let best: ',' | ';' | '\t' = ',';
   let bestScore = 1;
   for (const candidate of DELIMITER_CANDIDATES) {
-    const parsed = parseCsv(sample, candidate);
-    if (parsed.length === 0) continue;
+    if (sample.length === 0) break;
     let score = Number.POSITIVE_INFINITY;
-    for (const row of parsed) score = Math.min(score, row.length);
+    for (const rec of sample) score = Math.min(score, fieldCount(rec, candidate));
     if (score > bestScore) {
       best = candidate;
       bestScore = score;
