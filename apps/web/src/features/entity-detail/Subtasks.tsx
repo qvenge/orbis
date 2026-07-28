@@ -46,15 +46,28 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
     const id = newId();
     // Ошибку ловим здесь (раньше reject от mutateAsync летел неперехваченным):
     // тост + черновик остаётся в поле — ввод не теряется.
+    let created = false;
     try {
       await create.mutateAsync({
         input: { id, title, tags: [], aspects: { 'orbis/task': { status: 'inbox' } } },
         source: 'quick_capture',
       });
+      created = true;
       await relate.mutateAsync({ source_id: parentId, target_id: id, relation_type: 'parent' });
       setDraft('');
     } catch {
-      show('Не удалось сохранить', 'danger');
+      // Частичный отказ (задача создана, связь — нет) — НЕ «не удалось сохранить»:
+      // сущность в графе есть, и молчать о ней нельзя. Инвалидируем списки (свой ключ
+      // со staleTime 60 с сам не протухнет) и очищаем черновик — иначе повторный Enter
+      // уходит с новым newId() и плодит вторую сироту. entity.get родителя не трогаем:
+      // связей не прибавилось, а второй стороны в кэше нет (см. комментарий выше).
+      if (created) {
+        void utils.entity.query.invalidate();
+        setDraft('');
+        show('Задача создана, но не привязана к родителю', 'danger');
+      } else {
+        show('Не удалось сохранить', 'danger');
+      }
     }
   }
 

@@ -33,7 +33,7 @@ function openEntity(id: string) {
 }
 
 export function MemoryScreen() {
-  const { entities, hasMore, loadMore, isLoading } = useEntities(MEMORY_FILTER);
+  const { entities, hasMore, loadMore, isLoading, isError } = useEntities(MEMORY_FILTER);
 
   return (
     <div className="flex h-full flex-col">
@@ -46,7 +46,15 @@ export function MemoryScreen() {
           — архивная запись перестаёт влиять на ответы.
         </p>
 
-        {isLoading ? (
+        {/* Ошибку показываем явно и ПЕРЕД пустотой: упавший запрос и пустая память
+            выглядят одинаково, а «AI пока ничего не запомнил» на отказе — ложь про
+            содержимое графа, из-за которой владелец заведёт правила заново. Та же
+            норма, что на Повестке (плашка «Не удалось загрузить просроченное»). */}
+        {isError ? (
+          <p data-testid="memory-error" className="text-sm text-text-muted">
+            Не удалось загрузить память
+          </p>
+        ) : isLoading ? (
           <div className="flex flex-col gap-2">
             <Skeleton className="h-9" />
             <Skeleton className="h-9" />
