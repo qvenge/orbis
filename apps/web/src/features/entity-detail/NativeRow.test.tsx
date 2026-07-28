@@ -152,3 +152,59 @@ test('generic: 2-3 keyFields из реестра', () => {
   );
   expect(screen.getByTestId('native-generic')).toBeInTheDocument();
 });
+
+// Уборочная фаза (E4): вся машиночитаемая часть memory-правила лежит в title (K19.4),
+// а inline-правка заголовка позволяет сломать формат одним символом. Признака «правило
+// больше не распознаётся» не было нигде: запись оставалась в «Памяти AI» и выглядела
+// живой, хотя ни fast-path, ни резолв импорта её уже не применяли.
+const memory = (kind: string, title: string) =>
+  ({ ...base, title, aspects: { 'orbis/memory': { kind, scope: 'orbis/financial' } } }) as never;
+
+test('память: правило с распознанным форматом предупреждения не показывает', () => {
+  render(
+    <NativeRow
+      entity={memory('rule', 'кофе → Развлечения')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  expect(screen.queryByTestId('title-warning')).toBeNull();
+});
+
+test('память: правку правила в текст без разделителя видно сразу — предупреждение', () => {
+  render(
+    <NativeRow
+      entity={memory('rule', 'кофе это развлечения')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  expect(screen.getByTestId('title-warning')).toBeInTheDocument();
+});
+
+test('память: клавиатурная стрелка «->» правилом считается — предупреждения нет', () => {
+  render(
+    <NativeRow
+      entity={memory('rule', 'кофе -> Развлечения')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  expect(screen.queryByTestId('title-warning')).toBeNull();
+});
+
+test('память: у ФАКТА формата правила нет — предупреждения быть не должно', () => {
+  render(
+    <NativeRow
+      entity={memory('fact', 'Работаю из дома по пятницам')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  expect(screen.queryByTestId('title-warning')).toBeNull();
+});
+
+test('память: в списке (без inline-правки) предупреждения нет — правит только Detail', () => {
+  render(<NativeRow entity={memory('rule', 'кофе это развлечения')} onToggleTask={() => {}} />);
+  expect(screen.queryByTestId('title-warning')).toBeNull();
+});
