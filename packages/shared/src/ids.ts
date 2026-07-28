@@ -24,6 +24,18 @@ export function batchAuditMessageId(ownerId: string, batchId: string): string {
   return uuidv5(`batch:${ownerId.toLowerCase()}:${batchId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
+/**
+ * PK сводки импорта (00-product §8, метрика покрытия транзакций). Детерминирован по
+ * batchId: идемпотентный повтор confirm возвращает исходное сообщение, а не пишет вторую
+ * сводку, — иначе один и тот же файл считался бы дважды.
+ */
+export function importSummaryMessageId(ownerId: string, batchId: string): string {
+  return uuidv5(
+    `import-summary:${ownerId.toLowerCase()}:${batchId.toLowerCase()}`,
+    ORBIS_NAMESPACE,
+  );
+}
+
 /** PK reject-сообщения pending-подтверждения (§7.10): идемпотентность reject по PK. */
 export function rejectMessageId(ownerId: string, pendingId: string): string {
   return uuidv5(`reject:${ownerId.toLowerCase()}:${pendingId.toLowerCase()}`, ORBIS_NAMESPACE);

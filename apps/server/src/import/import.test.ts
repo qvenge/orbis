@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import {
   type CanonicalRow,
   externalRowId,
+  globalThreadId,
   type ImportAnalyzeResult,
   MAX_ANALYZE_ROW_CHARS,
   MAX_IMPORT_ROWS,
@@ -1496,5 +1497,63 @@ describe('import.confirm: валюта выписки (§5 «Чужая валю
     // Комбинация селектора §2.3 — точная (категория+валюта+период): рублёвый конверт
     // валютной операции не родитель, строка честно остаётся Unbudgeted.
     expect(confirmed.unbudgeted.length).toBe(1);
+  });
+});
+
+// Механизм измерения метрики 00-product §8 (уборочная фаза, E13): «покрытие транзакций»
+// объявлено в PRD, но считать его было НЕЧЕМ — skipped-строки (выписка уже была в Orbis)
+// в графе следа не оставляют, сущностей по ним не создаётся. Сводка кладётся в журнал.
+describe('import.confirm: сводка импорта в журнале (метрика §8)', () => {
+  async function summaries(user: string): Promise<Array<Record<string, unknown>>> {
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const rows = (await admin.execute(sql`
+        SELECT metadata -> 'cards' AS cards FROM chat_messages
+        WHERE metadata @> '{"cards":[{"kind":"import_summary"}]}'::jsonb
+          AND thread_id = ${globalThreadId(user)}
+        ORDER BY created_at
+      `)) as unknown as Array<{ cards: Array<Record<string, unknown>> }>;
+      return [...rows].flatMap((r) => r.cards).filter((c) => c.kind === 'import_summary');
+    } finally {
+      await adminClient.end();
+    }
+  }
+
+  test('сводка несёт все четыре счётчика и не удваивается при повторе confirm', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const rows = [
+      makeRow({ occurredOn: '2026-07-01', amount: '100.00', counterparty: 'Кафе' }),
+      makeRow({ occurredOn: '2026-07-02', amount: '200.00', counterparty: 'Аптека', rowIndex: 1 }),
+      makeRow({ occurredOn: '2026-07-03', amount: '300.00', counterparty: 'Метро', rowIndex: 2 }),
+    ];
+    const batchId = newId();
+    const payload = {
+      batchId,
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [
+        { row: rows[0] as CanonicalRow, action: 'create' as const, categoryRef: foodId },
+        { row: rows[1] as CanonicalRow, action: 'create' as const, categoryRef: foodId },
+        { row: rows[2] as CanonicalRow, action: 'skip' as const },
+      ],
+    };
+    await caller.import.confirm(payload);
+
+    const first = await summaries(user);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({
+      kind: 'import_summary',
+      namespace: NS,
+      total: 3,
+      created: 2,
+      adopted: 0,
+      skipped: 1,
+    });
+
+    // Идемпотентный повтор того же batchId статистику не удваивает — иначе один файл
+    // считался бы дважды и метрика покрытия врала бы в свою пользу.
+    await caller.import.confirm(payload);
+    expect(await summaries(user)).toHaveLength(1);
   });
 });

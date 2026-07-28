@@ -29,6 +29,7 @@ import {
   type ImportReviewInput,
   type ImportReviewResult,
   type ImportReviewRow,
+  importSummaryMessageId,
   isProbableDuplicate,
   llmMappingResponseSchema,
   MAX_ANALYZE_ROW_CHARS,
@@ -39,6 +40,8 @@ import {
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { recordUsage } from '../ai/metering';
 import { type AiDeps, gateAiEntitlements } from '../ai/send-message';
+import { appendMessageIdempotent } from '../chat/messages';
+import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { entityOrigins } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -48,6 +51,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { LLMRequest, LLMResponse } from '../llm/types';
+import type { Card } from '../tools/registry';
 
 // Синк один на модуль (как rollover/post-due): состояния не хранит, audit-сообщение
 // batch пишется тем же tx, что и операции исполнителя (§7.8).
@@ -593,6 +597,55 @@ async function assertAdoptTargets(
  * поведение старого клиента, которое остаётся верным для выписки в родной валюте.
  * Смешанная выписка вне скоупа (multi-currency — Future, 00-product §10).
  */
+/**
+ * Сводка импорта в журнал (00-product §8, метрика «покрытие транзакций ≥ 95%»).
+ *
+ * Зачем отдельная запись: единственные числа, по которым покрытие вообще считается, —
+ * это ЧИСЛА ВЫПИСКИ, а в графе после импорта остаются только созданные сущности.
+ * `skipped` (строка выписки уже была в Orbis) и `adopted` (совпала с ручной записью)
+ * не оставляют следа нигде: по таким строкам сущностей не создаётся. До этой правки
+ * метрика была объявлена в PRD, но измерить её было физически нечем.
+ *
+ * Пишется отдельным системным сообщением, а не в audit действия: журнал append-only
+ * (§4.6), и метаданные существующего audit-сообщения править нельзя. PK детерминирован
+ * по batchId — идемпотентный повтор confirm не удваивает статистику. Своя ошибка
+ * логируется и НЕ пробрасывается: импорт уже закоммичен, и провал статистики не имеет
+ * права его ронять (тот же контракт, что у эскалации правил, K7).
+ */
+async function writeImportSummary(
+  db: Db,
+  ownerId: string,
+  input: ImportConfirmInput,
+  counts: { created: number; adopted: number; skipped: number },
+): Promise<void> {
+  const total = counts.created + counts.adopted + counts.skipped;
+  try {
+    await withIdentity(db, ownerId, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, ownerId);
+      await appendMessageIdempotent(tx, {
+        id: importSummaryMessageId(ownerId, input.batchId),
+        threadId,
+        role: 'system',
+        content: `Импорт выписки: строк ${total}, создано ${counts.created}, привязано к существующим ${counts.adopted}, пропущено ${counts.skipped}`,
+        metadata: {
+          cards: [
+            {
+              kind: 'import_summary',
+              namespace: input.namespace,
+              total,
+              created: counts.created,
+              adopted: counts.adopted,
+              skipped: counts.skipped,
+            } satisfies Card,
+          ],
+        },
+      });
+    });
+  } catch (e) {
+    console.error('[import] сводка импорта не записана:', e);
+  }
+}
+
 export async function confirmImport(
   db: Db,
   ownerId: string,
@@ -692,6 +745,7 @@ export async function confirmImport(
   // Идентификаторы созданных сущностей — из результатов batch (а не из сгенерированных
   // выше id): идемпотентный повтор возвращает СОХРАНЁННЫЕ результаты первого прогона
   const entityIds = r.results.filter(isWireEntity).map((e) => e.id);
+  await writeImportSummary(db, ownerId, input, { created, adopted, skipped });
   return {
     actionId: r.actionId,
     idempotentReplay: r.idempotentReplay,

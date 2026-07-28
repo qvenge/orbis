@@ -13,6 +13,7 @@
 // Использование:
 //   bun scripts/ops.ts check          # только чтение: расхождение реестра аспектов с кодом
 //   bun scripts/ops.ts seed-aspects   # upsert встроенных аспектов (идемпотентно)
+//   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
 import { aspectJsonSchema, BUILTIN_ASPECT_META, diffBuiltinAspects } from '@orbis/shared';
 import postgres from 'postgres';
@@ -110,6 +111,46 @@ async function seedAspects(): Promise<number> {
   return 0;
 }
 
+/** Окно отчёта покрытия: три месяца выписок — достаточный горизонт для метрики §8. */
+const COVERAGE_DAYS = 90;
+
+/**
+ * Покрытие транзакций (00-product §8: «ручной ввод + импорт покрывают ≥ 95% транзакций
+ * банка»). Считается по сводкам импорта в журнале (карточка import_summary): доля строк
+ * выписки, которые Orbis УЖЕ знал к моменту импорта, — привязанные к ручным записям
+ * (adopted) плюс пропущенные как уже импортированные (skipped).
+ *
+ * Что метрика НЕ говорит: сколько операций прошло мимо и выписки тоже (банк — источник
+ * истины, но наличные и переводы вне его). Это честная граница измерения, а не оговорка:
+ * бóльшего из данных Orbis не выводится.
+ */
+async function coverage(): Promise<number> {
+  return withDb(async (sql) => {
+    const rows = await sql<{ cards: unknown }[]>`
+      SELECT metadata -> 'cards' AS cards FROM chat_messages
+      WHERE created_at > now() - make_interval(days => ${COVERAGE_DAYS})
+        AND metadata @> '{"cards":[{"kind":"import_summary"}]}'::jsonb
+      ORDER BY created_at`;
+    type Summary = { kind?: string; total?: number; adopted?: number; skipped?: number };
+    const summaries = rows
+      .flatMap((r) => (r.cards as Summary[] | null) ?? [])
+      .filter((c) => c.kind === 'import_summary');
+    if (summaries.length === 0) {
+      console.log(`За ${COVERAGE_DAYS} дней импортов не было — измерять нечего.`);
+      return 0;
+    }
+    const sum = (pick: (s: Summary) => number): number =>
+      summaries.reduce((acc, s) => acc + pick(s), 0);
+    const total = sum((s) => s.total ?? 0);
+    const known = sum((s) => (s.adopted ?? 0) + (s.skipped ?? 0));
+    const pct = total === 0 ? 0 : (known / total) * 100;
+    console.log(`Импортов за ${COVERAGE_DAYS} дней: ${summaries.length}`);
+    console.log(`Строк выписок: ${total}; из них Orbis уже знал: ${known}`);
+    console.log(`Покрытие: ${pct.toFixed(1)}% (цель 00-product §8 — ≥ 95%)`);
+    return 0;
+  });
+}
+
 async function ping(): Promise<number> {
   await withDb(async (sql) => {
     const [row] = await sql<{ version: string }[]>`SELECT version()`;
@@ -121,6 +162,7 @@ async function ping(): Promise<number> {
 const OPS: Record<string, { run: () => Promise<number>; help: string }> = {
   check: { run: check, help: 'только чтение: расхождение реестра аспектов прода с кодом' },
   'seed-aspects': { run: seedAspects, help: 'upsert встроенных аспектов (идемпотентно)' },
+  coverage: { run: coverage, help: 'только чтение: покрытие транзакций за 90 дней (§8)' },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
 };
 
