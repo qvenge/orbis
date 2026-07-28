@@ -245,6 +245,19 @@ describe('эскалация повторных исправлений кате�
     expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
   });
 
+  // Уборочная фаза: гейт сравнивал normalizeCounterparty(pattern) с уже нормализованным
+  // паттерном, то есть проверял «нормализация ничего не изменила». Для заголовков, где
+  // служебный токен становится первым только ПОСЛЕ снятия числовых («1234 CARD ПЯТЁРОЧКА»
+  // → «card пятерочка» до канонизации), гейт существующего правила не срабатывал: приходило
+  // предложение УЖЕ созданного правила, а повторное «Запомнить» рождало вторую сущность.
+  test('4b. эквивалентное правило подавляет и при служебном токене внутри заголовка', async () => {
+    const { user, food, fun } = await freshOwner();
+    await createRule(user);
+    await recategorize(user, await createTxn(user, '1234 CARD ПЯТЁРОЧКА', food), fun);
+    await recategorize(user, await createTxn(user, '5678 CARD ПЯТЕРОЧКА', food), fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+  });
+
   test('5. архивное правило не подавляет (архивная память из контекста исключена, §7.4)', async () => {
     const { user, food, fun } = await freshOwner();
     const rule = await createRule(user);

@@ -90,7 +90,11 @@ export function findCategory(words: string[], cats: FastPathCategory[]): FastPat
  * Контракт:
  *  - вход и паттерн правила нормализуются ОДНОЙ И ТОЙ ЖЕ normalizeCounterparty (§3.4.1),
  *    поэтому «SBOL ПЯТЁРОЧКА 843» матчится правилом «пятерочка»; совпадение — вхождение
- *    паттерна в нормализованный вход;
+ *    паттерна в нормализованный вход ПО ГРАНИЦЕ ТОКЕНОВ: токены паттерна обязаны идти
+ *    во входе подряд и целиком. Подстрочное сравнение (до уборочной фазы) ловило чужие
+ *    слова — канонический пример спеки «бар → Развлечения» перехватывал «барбершоп», то
+ *    есть правило активно портило категоризацию; соседняя ступень той же категоризации
+ *    (резолв по алиасам, findCategory) всегда сравнивала по целому слову;
  *  - из подошедших побеждает САМОЕ СПЕЦИФИЧНОЕ — с самым длинным паттерном; при равной
  *    длине — САМОЕ СВЕЖЕЕ по updatedAt, и только затем лексикография заголовка (порядок
  *    обязан быть полным: web и сервер читают правила в разном порядке).
@@ -104,6 +108,16 @@ export function findCategory(words: string[], cats: FastPathCategory[]): FastPat
  *    имеет права ронять резолв;
  *  - нераспознанный заголовок (нет стрелки, пустой паттерн) — не правило.
  */
+/**
+ * Токены паттерна идут во входе подряд и целиком. Обе строки уже нормализованы
+ * normalizeCounterparty, то есть разделены ровно одним пробелом, — поэтому достаточно
+ * поиска подстроки по строкам, обёрнутым пробелами: он и есть проверка границы токена
+ * (и держит многословный паттерн «яндекс такси» как непрерывную последовательность).
+ */
+function matchesByToken(haystack: string, pattern: string): boolean {
+  return ` ${haystack} `.includes(` ${pattern} `);
+}
+
 export function applyMemoryRules(
   input: string,
   rules: FastPathRule[],
@@ -122,7 +136,7 @@ export function applyMemoryRules(
     const parsed = parseRuleTitle(rule.title);
     if (parsed === null) continue;
     const pattern = normalizeCounterparty(parsed.pattern);
-    if (pattern === '' || !haystack.includes(pattern)) continue;
+    if (pattern === '' || !matchesByToken(haystack, pattern)) continue;
     matched.push({
       title: rule.title,
       updatedAt: rule.updatedAt,

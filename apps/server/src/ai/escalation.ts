@@ -213,8 +213,14 @@ async function titlesOf(tx: Tx, ids: string[]): Promise<string[]> {
 
 /**
  * Активное (неархивное — §7.4) правило того же смысла уже есть. Эквивалентность:
- * тот же паттерн после normalizeCounterparty (той же нормализации, которой D4 будет
- * сопоставлять правило со входом, K12) и то же название категории без учёта регистра.
+ * тот же паттерн после normalizeCounterparty (той же нормализации, которой D4
+ * сопоставляет правило со входом, K12) и то же название категории без учёта регистра.
+ *
+ * Нормализация применяется к ОБЕИМ сторонам (уборочная фаза): аргумент `pattern` приходит
+ * из `rulePatternFromTitle`, и до канонизации паттерна (решение 2) сравнение сводилось
+ * к `normalizeCounterparty(pattern) === pattern` — для заголовков вида «1234 CARD
+ * ПЯТЁРОЧКА» гейт не видел уже созданного правила. Симметричная форма верна и для старых
+ * правил, чьи заголовки записаны до канонизации.
  */
 async function hasEquivalentRule(tx: Tx, pattern: string, categoryTitle: string): Promise<boolean> {
   const rows = await tx
@@ -232,7 +238,7 @@ async function hasEquivalentRule(tx: Tx, pattern: string, categoryTitle: string)
     const parsed = parseRuleTitle(r.title);
     if (parsed === null) return false;
     return (
-      normalizeCounterparty(parsed.pattern) === pattern &&
+      normalizeCounterparty(parsed.pattern) === normalizeCounterparty(pattern) &&
       parsed.categoryTitle.trim().toLowerCase() === categoryTitle.trim().toLowerCase()
     );
   });

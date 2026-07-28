@@ -15,8 +15,24 @@
 // Модуль чистый TS: ни Drizzle/tRPC/Hono/React, ни платформенных API.
 import { normalizeCounterparty } from '../import/normalize';
 
-/** Разделитель заголовка правила — U+2192 RIGHTWARDS ARROW, с пробелами вокруг. */
+/** Разделитель, которым правило ЗАПИСЫВАЕТСЯ, — U+2192 RIGHTWARDS ARROW, с пробелами вокруг. */
 const RULE_ARROW = '→';
+
+/**
+ * Разделители, которые РАЗБОР принимает (уборочная фаза, решение 1). Асимметрия
+ * осознанная: пишем только канон, читаем и клавиатурные суррогаты — U+2192 с клавиатуры
+ * не набрать, а источников неканоничных заголовков два (рука пользователя в inline-правке
+ * заголовка и модель, которой формат нигде не задан). Правило с «->» было молча мертво
+ * во ВСЕХ детерминированных путях (fast-path, резолв импорта, гейт эквивалентности
+ * эскалации) и одновременно живо в системном промпте: пользователь видел его в «Памяти AI»
+ * и был уверен, что оно работает.
+ *
+ * `-{1,2}>` покрывает «->» и «-->» одной ветвью: иначе «-->» разобралось бы с висячим
+ * дефисом в конце паттерна. Regex без /g ищет самое левое вхождение — инвариант
+ * «разделитель = ПЕРВОЕ вхождение» (стрелка внутри названия категории разбор не ломает)
+ * сохраняется.
+ */
+const RULE_SEPARATOR = /→|-{1,2}>|=>/;
 
 /** Токен из одних (ASCII-)цифр: сумма/номер карты/номер точки — в паттерн не входит. */
 const DIGITS_ONLY = /^\d+$/;
@@ -30,15 +46,15 @@ export function formatRuleTitle(args: { pattern: string; categoryTitle: string }
 }
 
 /**
- * Разбор заголовка правила обратно. null, если формат не распознан (нет стрелки или
- * одна из сторон пуста). Разделитель — ПЕРВОЕ вхождение стрелки: стрелка внутри
- * названия категории («Еда → Кафе») разбор не ломает.
+ * Разбор заголовка правила обратно. null, если формат не распознан (нет разделителя или
+ * одна из сторон пуста). Разделитель — ПЕРВОЕ вхождение любого из RULE_SEPARATOR:
+ * стрелка внутри названия категории («Еда → Кафе») разбор не ломает.
  */
 export function parseRuleTitle(title: string): { pattern: string; categoryTitle: string } | null {
-  const at = title.indexOf(RULE_ARROW);
-  if (at === -1) return null;
-  const pattern = title.slice(0, at).trim();
-  const categoryTitle = title.slice(at + RULE_ARROW.length).trim();
+  const m = RULE_SEPARATOR.exec(title);
+  if (m === null) return null;
+  const pattern = title.slice(0, m.index).trim();
+  const categoryTitle = title.slice(m.index + m[0].length).trim();
   if (pattern === '' || categoryTitle === '') return null;
   return { pattern, categoryTitle };
 }
@@ -49,12 +65,23 @@ export function parseRuleTitle(title: string): { pattern: string; categoryTitle:
  * («450», «SBOL 1234») — такой паттерн правилом быть не может, вызывающий обязан выйти.
  * Своей нормализации не заводим: и дедуп импорта (§3.4.1), и резолв правил (D4) обязаны
  * видеть одни и те же байты.
+ *
+ * Результат — НЕПОДВИЖНАЯ ТОЧКА normalizeCounterparty (уборочная фаза, решение 2):
+ * нормализация прогоняется повторно после снятия числовых токенов, потому что служебный
+ * токен может оказаться первым только после этого снятия — «1234 CARD ПЯТЁРОЧКА» давало
+ * «card пятерочка». Цена неканоничности была не косметической: гейт «эквивалентное правило
+ * уже есть» сравнивал паттерн с нормализованным и не находил совпадения (приходило
+ * предложение УЖЕ созданного правила, а повторное «Запомнить» рождало вторую одноимённую
+ * сущность), а applyMemoryRules паттерн правила ПЕРЕнормализовывал — правило работало,
+ * а гейт его не видел.
  */
 export function rulePatternFromTitle(title: string): string {
   const normalized = normalizeCounterparty(title);
   if (normalized === '') return '';
-  return normalized
-    .split(' ')
-    .filter((token) => !DIGITS_ONLY.test(token))
-    .join(' ');
+  return normalizeCounterparty(
+    normalized
+      .split(' ')
+      .filter((token) => !DIGITS_ONLY.test(token))
+      .join(' '),
+  );
 }
