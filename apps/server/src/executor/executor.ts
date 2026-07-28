@@ -27,8 +27,10 @@ import {
   type BudgetOpDesc,
   bindingOps,
   bindingTargetOf,
+  lockOwnerBudget,
   normalizeEnvelopeCurrency,
   rebindForEnvelope,
+  unbindOps,
 } from '../budget/binding';
 import type { Db } from '../db/client';
 import { entities, entityOrigins, relations } from '../db/schema';
@@ -513,14 +515,27 @@ function hookAspectChanged(hook: BudgetHook, aspectId: string): boolean {
  * (а) итоговая сущность несёт orbis/financial и financial-данные/архивность/шаблонность
  *     (orbis/schedule) изменились → bindingOps (шаблон recurring отвязывается);
  * (б) операция затронула orbis/budget (create/update периода-категории/архивация/detach)
- *     → rebindForEnvelope по окну «старый ИЛИ новый период».
+ *     → rebindForEnvelope по окну «старый ИЛИ новый период»;
+ * (в) сущность ПЕРЕСТАЛА нести orbis/financial (detach) → unbindOps снимает привязку.
  */
-function budgetHookBranches(hook: BudgetHook): { rebind: boolean; bind: boolean } {
+function budgetHookBranches(hook: BudgetHook): {
+  rebind: boolean;
+  bind: boolean;
+  unbind: boolean;
+} {
   const { before, after } = hook;
   const beforeAspects = before?.aspects as AspectsMap | undefined;
   const afterAspects = after.aspects as AspectsMap;
   const archivedChanged = before !== null && before.archived !== after.archived;
   return {
+    // (в) сущность ПЕРЕСТАЛА быть транзакцией: detach orbis/financial. Ветка (а) сюда не
+    // достаёт (она требует financial в ИТОГОВЫХ аспектах), и bindingOps на такой сущности
+    // возвращает [] — снять устаревшую привязку было некому, и конверт оставался
+    // родителем не-financial сущности. Зеркальный кейс «стал шаблоном recurring»
+    // закрывает ветка (а) через bindingTargetOf → fin:null.
+    unbind:
+      beforeAspects?.['orbis/financial'] !== undefined &&
+      afterAspects['orbis/financial'] === undefined,
     rebind:
       (beforeAspects?.['orbis/budget'] !== undefined ||
         afterAspects['orbis/budget'] !== undefined) &&
@@ -571,6 +586,11 @@ async function budgetFollowUpDescs(
     descs.push(...(await bindingOps(ctx.tx, { ownerId, entity: toWire(after), reads })));
   }
 
+  // (в) сущность перестала быть транзакцией: снимаем привязку к конверту
+  if (branches.unbind) {
+    descs.push(...(await unbindOps(ctx.tx, { ownerId, entityId: after.id, reads })));
+  }
+
   // Дедуп в рамках хука: сущность с обоими аспектами могла бы породить одинаковые ops
   const seen = new Set<string>();
   return descs.filter((d) => {
@@ -598,6 +618,14 @@ async function budgetFollowUpDescs(
 async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<PreparedOp[]> {
   const ownerId = ctx.req.actorUserId;
   const reads = new BindingReads();
+  // Замок владельца ДО первого чтения привязки (E9): без него селектор §2.3 не видит
+  // конверт, который прямо сейчас создаёт конкурентная транзакция, и запись остаётся
+  // Unbudgeted при «уже существующем» конверте. Ключ общий с проверкой уникальности
+  // конвертов — оба инварианта про один и тот же набор строк. Берём его только там, где
+  // привязка реально считается: не-бюджетные мутации не платят лишний round-trip.
+  if (hooks.some((h) => budgetHookBranches(h).bind || budgetHookBranches(h).rebind)) {
+    await lockOwnerBudget(ctx.tx, ownerId);
+  }
   const targets: BindingTarget[] = [];
   for (const hook of hooks) {
     if (!budgetHookBranches(hook).bind) continue;
