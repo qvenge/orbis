@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
-import { renderWithProviders } from '../../test/harness';
+import { renderWithProviders, trpcError } from '../../test/harness';
 import { NativeRow } from './NativeRow';
 
 const base = {
@@ -207,4 +207,23 @@ test('память: у ФАКТА формата правила нет — пр�
 test('память: в списке (без inline-правки) предупреждения нет — правит только Detail', () => {
   render(<NativeRow entity={memory('rule', 'кофе это развлечения')} onToggleTask={() => {}} />);
   expect(screen.queryByTestId('title-warning')).toBeNull();
+});
+
+// Уборочная фаза: третье состояние названия категории. При ОТКАЗЕ загрузки списка
+// бейдж печатал сырой uuid — та же ложь, что мелькающий uuid на загрузке (D6d развёл
+// только «грузится» и «не найдена»).
+test('категория: отказ списка категорий — бейджа нет, uuid не печатается', async () => {
+  renderWithProviders(
+    <NativeRow
+      entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_FOOD })}
+      onToggleTask={() => {}}
+    />,
+    (path) => {
+      if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
+      return {};
+    },
+  );
+  await screen.findByTestId('native-financial');
+  await waitFor(() => expect(screen.queryByText(CAT_FOOD)).toBeNull());
+  expect(screen.getByTestId('native-financial').textContent).not.toContain(CAT_FOOD);
 });

@@ -57,9 +57,11 @@ export function EntityCard({
   // название несёт, но её нет у записи без конверта — и оставался «категория: 7d5e…».
   // Пока список категорий грузится, значение неизвестно — строки поля нет вовсе
   // (D6d п.1): иначе на холодном кэше uuid мелькал и подменялся названием.
-  const { title: categoryTitle, isPending: categoryPending } = useCategoryTitle(
-    typeof categoryRef === 'string' ? categoryRef : '',
-  );
+  const {
+    title: categoryTitle,
+    isPending: categoryPending,
+    isError: categoryFailed,
+  } = useCategoryTitle(typeof categoryRef === 'string' ? categoryRef : '');
 
   const undo = trpc.ai.undo.useMutation({
     onSuccess: () => {
@@ -90,7 +92,9 @@ export function EntityCard({
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
         {Object.entries(card.keyFields).map(([k, v]) => {
           const isCategory = k === 'category_ref' && typeof v === 'string';
-          if (isCategory && categoryPending) return null;
+          // Ни на загрузке, ни на отказе списка категорий строку не рисуем: печатать
+          // uuid — та же ложь, что мелькающий uuid (уборочная фаза).
+          if (isCategory && (categoryPending || categoryFailed)) return null;
           return (
             <div key={k} className="col-span-2 grid grid-cols-subgrid">
               <dt className="text-text-muted">{fieldLabel(k)}</dt>
