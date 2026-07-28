@@ -90,6 +90,21 @@ const DATE_FORMATS: CsvMapping['dateFormat'][] = [
 const FIELD_CLS =
   'rounded-control border border-line bg-surface px-2 py-1.5 text-sm text-text transition focus-visible:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40';
 
+/**
+ * Валюты выписки в селекторе шага маппинга. Список короткий и захардкожен намеренно:
+ * справочника валют в системе нет (multi-currency — Future, 00-product §10), а ввод
+ * произвольного кода руками дал бы опечатку в аспекте каждой строки импорта. Валюта
+ * владельца добавляется к списку сама, даже если её здесь нет.
+ */
+const STATEMENT_CURRENCY_CHOICES = ['RUB', 'USD', 'EUR', 'KZT', 'GEL', 'TRY'] as const;
+
+/** Список выбора с гарантированным присутствием текущего значения (валюты владельца). */
+function currencyChoices(current: string): string[] {
+  return STATEMENT_CURRENCY_CHOICES.includes(current as (typeof STATEMENT_CURRENCY_CHOICES)[number])
+    ? [...STATEMENT_CURRENCY_CHOICES]
+    : [current, ...STATEMENT_CURRENCY_CHOICES];
+}
+
 /** Образцов в analyze (план C4). Серверный потолок MAX_ANALYZE_SAMPLE_ROWS выше (10) —
  *  пяти строк хватает на распознавание структуры, а в промпт уходит меньше выписки. */
 const MAX_SAMPLE_ROWS = 5;
@@ -174,6 +189,12 @@ export function ImportFlow() {
   const [result, setResult] = useState<ImportConfirmResult | null>(null);
   // Один UUIDv7 на сессию экрана; новый — только после CONFLICT (§7.8)
   const [batchId, setBatchId] = useState(newId);
+  // Валюта ВЫПИСКИ (уборочная фаза, решение 6) — свойство файла, не строки: у выписки
+  // одна валюта, и владелец подтверждает её на шаге маппинга. null — пользователь ещё
+  // не выбирал: тогда действует валюта владельца из настроек (и она же — дефолт селектора).
+  const [currency, setCurrency] = useState<string | null>(null);
+  const settings = trpc.user.getSettings.useQuery();
+  const ownCurrency = settings.data?.defaultCurrency ?? 'RUB';
 
   const utils = trpc.useUtils();
   const analyze = trpc.import.analyze.useMutation();
@@ -307,6 +328,7 @@ export function ImportFlow() {
         namespace: parsed.namespace,
         fileHash: parsed.fileHash,
         items,
+        currency: currency ?? ownCurrency,
       });
     } catch (err) {
       if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') {
@@ -340,6 +362,8 @@ export function ImportFlow() {
         {(step === 'mapping' || step === 'reviewing') && draft !== null && parsed !== null && (
           <MappingForm
             draft={draft}
+            currency={currency ?? ownCurrency}
+            onCurrencyChange={setCurrency}
             notice={notice}
             columns={columnCount(parsed.records)}
             header={parsed.records[0] ?? []}
@@ -412,6 +436,8 @@ function Waiting({ label }: { label: string }) {
 
 function MappingForm({
   draft,
+  currency,
+  onCurrencyChange,
   notice,
   columns,
   header,
@@ -420,6 +446,8 @@ function MappingForm({
   onSubmit,
 }: {
   draft: MappingDraft;
+  currency: string;
+  onCurrencyChange: (currency: string) => void;
   notice: string | null;
   columns: number;
   header: string[];
@@ -518,6 +546,24 @@ function MappingForm({
           (i) => onChange({ ...draft, bankTxnId: i }),
           true,
         )}
+        {/* Валюта — свойство ВЫПИСКИ, а не колонки: смешанная выписка вне скоупа
+            (multi-currency — Future). Без явного выбора всё ложилось в валюту владельца
+            молча, и починить это можно было только руками по каждой строке. */}
+        <label className="flex items-center gap-2 text-sm">
+          <span className="w-44 shrink-0 text-text-secondary">Валюта выписки</span>
+          <select
+            aria-label="Валюта выписки"
+            value={currency}
+            onChange={(e) => onCurrencyChange(e.target.value)}
+            className={FIELD_CLS}
+          >
+            {currencyChoices(currency).map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
         {/* Подпись — визуальная; доступное имя даёт aria-label самого Input (идиома B6) */}
         <div className="flex items-center gap-2 text-sm">
           <span className="w-44 shrink-0 text-text-secondary">Строк заголовка</span>

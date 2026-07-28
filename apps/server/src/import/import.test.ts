@@ -1417,3 +1417,84 @@ describe('роутер import: гейт §8 import.csv (LIMIT → 429)', () => {
     expect(r.rows[0]?.status).toBe('new');
   });
 });
+
+// Валюта выписки (уборочная фаза, E11 — Important бэклога фазы C). До этого выписка
+// в чужой валюте молча ложилась в валюту владельца: ключа currency в аспекте не было
+// вовсе, а его отсутствие и селектор конвертов (§2.3), и агрегаты (§2.2) трактуют как
+// валюту по умолчанию. Валюта — свойство ФАЙЛА (у CanonicalRow её нет и не заводится).
+describe('import.confirm: валюта выписки (§5 «Чужая валюта»)', () => {
+  test('currency=USD пишется в аспект каждой созданной транзакции', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const rows = [
+      makeRow({ occurredOn: '2026-06-01', amount: '12.00', counterparty: 'STARBUCKS' }),
+      makeRow({ occurredOn: '2026-06-02', amount: '30.00', counterparty: 'UBER', rowIndex: 1 }),
+    ];
+    const confirmed = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: rows.map((row) => ({ row, action: 'create' as const, categoryRef: foodId })),
+      currency: 'USD',
+    });
+    expect(confirmed.created).toBe(2);
+    for (const id of confirmed.entityIds) {
+      const e = await caller.entity.get({ id });
+      expect((e.entity.aspects['orbis/financial'] as Record<string, unknown>).currency).toBe('USD');
+    }
+  });
+
+  test('без currency (старый клиент) ключ не пишется — прежнее поведение', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({ occurredOn: '2026-06-03', amount: '340.00', counterparty: 'Кафе' });
+    const confirmed = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row, action: 'create', categoryRef: foodId }],
+    });
+    const e = await caller.entity.get({ id: confirmed.entityIds[0] as string });
+    expect(
+      (e.entity.aspects['orbis/financial'] as Record<string, unknown>).currency,
+    ).toBeUndefined();
+  });
+
+  test('валюта участвует в выборе конверта: USD-строка не липнет к рублёвому конверту', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    // Рублёвый конверт на период — единственный конверт этой категории.
+    await caller.entity.create({
+      input: {
+        title: 'Еда — июнь',
+        tags: [],
+        aspects: {
+          'orbis/budget': {
+            category_ref: foodId,
+            limit: '30000.00',
+            currency: 'RUB',
+            period_start: '2026-06-01',
+            period_end: '2026-06-30',
+          },
+        },
+      },
+      source: 'ui',
+    });
+    const confirmed = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_B,
+      items: [
+        {
+          row: makeRow({ occurredOn: '2026-06-10', amount: '12.00', counterparty: 'STARBUCKS' }),
+          action: 'create',
+          categoryRef: foodId,
+        },
+      ],
+      currency: 'USD',
+    });
+    // Комбинация селектора §2.3 — точная (категория+валюта+период): рублёвый конверт
+    // валютной операции не родитель, строка честно остаётся Unbudgeted.
+    expect(confirmed.unbudgeted.length).toBe(1);
+  });
+});
