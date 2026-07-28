@@ -93,6 +93,27 @@ describe('static serving + SPA-fallback (Task 7)', () => {
     expect(await res.json()).toEqual({ status: 'ok' });
   });
 
+  // E1: расхождение реестра аспектов наблюдаемо снаружи, но код ответа прежний —
+  // не-200 здесь завалил бы healthCheckPath Render, то есть превратил бы наблюдаемость
+  // ловушки в отказ деплоя. Без дрейфа (и пока проверка не ответила) поле не появляется.
+  test('/health при дрейфе реестра: 200 + список аспектов, статус остаётся ok', async () => {
+    const withDrift = createApp({
+      db: {} as Db,
+      ai: {} as AiDeps,
+      webDistDir: distDir,
+      aspectDrift: () => ({
+        missing: ['orbis/memory'],
+        drifted: [{ id: 'orbis/financial', what: ['schema'] }],
+      }),
+    });
+    const res = await withDrift.request('/health');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      status: 'ok',
+      aspectDrift: ['orbis/memory', 'orbis/financial'],
+    });
+  });
+
   test('/mcp GET НЕ перехвачен: всё ещё 405 (POST-only)', async () => {
     const res = await app.request('/mcp');
     expect(res.status).toBe(405);

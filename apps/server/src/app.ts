@@ -5,6 +5,7 @@
 // SPA-fallback'ом (Hono исполняет matching-хендлеры в порядке регистрации; API-хендлер
 // возвращает Response и не зовёт next → serveStatic до него не доходит).
 import { trpcServer } from '@hono/trpc-server';
+import { type AspectDrift, hasAspectDrift } from '@orbis/shared';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from 'hono/bun';
@@ -70,9 +71,15 @@ export interface AppDeps {
   ai: AiDeps;
   /** Переопределение корня статики (тест/Docker); по умолчанию WEB_DIST_DIR. */
   webDistDir?: string;
+  /**
+   * Результат стартовой проверки реестра аспектов (E1) — геттер, потому что проверка
+   * асинхронная и приложение поднимается, не дожидаясь её. `null` — «проверка ещё идёт
+   * или сама не выполнилась»; в этом случае /health о ней молчит.
+   */
+  aspectDrift?: () => AspectDrift | null;
 }
 
-export function createApp({ db, ai, webDistDir = WEB_DIST_DIR }: AppDeps): Hono {
+export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: AppDeps): Hono {
   const app = new Hono();
 
   // --- API-роуты: регистрируются ПЕРЕД статикой (порядок = приоритет) ---
@@ -82,7 +89,17 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR }: AppDeps): Hono 
   app.use('/trpc/*', trpcServer({ router: appRouter, createContext: makeCreateContext(db, ai) }));
   // MCP-эндпоинт внешних агентов (§9.3): Streamable HTTP, PAT-only (transport.ts)
   app.all('/mcp', makeMcpHandler({ db }));
-  app.get('/health', (c) => c.json({ status: 'ok' }));
+  // Форма ответа без дрейфа НЕ меняется ({status:'ok'}) — на неё смотрит и healthCheckPath
+  // Render, и тесты. Расхождение реестра аспектов добавляет поле, но не меняет код ответа:
+  // не-200 здесь превратил бы наблюдаемость ловушки в отказ деплоя (E1).
+  app.get('/health', (c) => {
+    const drift = aspectDrift?.() ?? null;
+    if (drift === null || !hasAspectDrift(drift)) return c.json({ status: 'ok' });
+    return c.json({
+      status: 'ok',
+      aspectDrift: [...drift.missing, ...drift.drifted.map((d) => d.id)],
+    });
+  });
 
   // --- Same-origin раздача web-статики (Task 7, Вариант A) ---
   // GET-only: не-GET к неизвестному пути падает в 404 Hono (не в index.html), а API-роуты

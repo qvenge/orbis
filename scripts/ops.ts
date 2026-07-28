@@ -14,7 +14,7 @@
 //   bun scripts/ops.ts check          # только чтение: расхождение реестра аспектов с кодом
 //   bun scripts/ops.ts seed-aspects   # upsert встроенных аспектов (идемпотентно)
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
-import { aspectJsonSchema, BUILTIN_ASPECT_META } from '@orbis/shared';
+import { aspectJsonSchema, BUILTIN_ASPECT_META, diffBuiltinAspects } from '@orbis/shared';
 import postgres from 'postgres';
 
 const KEYCHAIN_ACCOUNT = 'orbis';
@@ -59,54 +59,32 @@ async function withDb<T>(fn: (sql: postgres.Sql) => Promise<T>): Promise<T> {
 }
 
 /**
- * Канонический JSON для сравнения: ключи объектов сортируются, порядок массивов
- * сохраняется (в JSON Schema он значим — `enum`, `required`).
+ * Сверяет JSON Schema и ai_instructions встроенных аспектов в проде с кодом.
  *
- * Зачем: jsonb в PostgreSQL НЕ хранит порядок ключей (сортирует их по длине и байтам),
- * поэтому наивный JSON.stringify объявляет расхождением любую схему, прошедшую через БД.
+ * Само сравнение (включая канонизацию JSON — jsonb не хранит порядок ключей) живёт в
+ * `@orbis/shared` (`diffBuiltinAspects`): ту же функцию зовёт стартовая проверка сервера,
+ * и второй реализации «что считать дрейфом» быть не должно — иначе ручная операция и
+ * автоматическая проверка однажды разойдутся в ответах.
  */
-function canonical(value: unknown): string {
-  return JSON.stringify(value, (_key, v: unknown) =>
-    v !== null && typeof v === 'object' && !Array.isArray(v)
-      ? Object.fromEntries(
-          Object.entries(v as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)),
-        )
-      : v,
-  );
-}
-
-/** Сверяет JSON Schema и ai_instructions встроенных аспектов в проде с кодом. */
 async function check(): Promise<number> {
   return withDb(async (sql) => {
     const rows = await sql<{ id: string; schema: unknown; ai_instructions: string }[]>`
       SELECT id, schema, ai_instructions FROM aspect_definitions WHERE owner_id IS NULL`;
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    let drift = 0;
-    for (const meta of BUILTIN_ASPECT_META) {
-      const row = byId.get(meta.id);
-      if (!row) {
-        console.log(`✗ ${meta.id}: в проде НЕТ`);
-        drift += 1;
-        continue;
-      }
-      const schemaDrift = canonical(row.schema) !== canonical(aspectJsonSchema(meta.id));
-      const instrDrift = row.ai_instructions !== meta.aiInstructions;
-      if (schemaDrift || instrDrift) {
-        const what = [schemaDrift && 'schema', instrDrift && 'ai_instructions']
-          .filter(Boolean)
-          .join(' + ');
-        console.log(`✗ ${meta.id}: расходится (${what})`);
-        drift += 1;
-      } else {
-        console.log(`✓ ${meta.id}`);
-      }
-    }
-    console.log(
-      drift === 0
-        ? `\nРеестр в проде совпадает с кодом (${BUILTIN_ASPECT_META.length} аспектов).`
-        : `\nРасхождений: ${drift}. Починить: bun scripts/ops.ts seed-aspects`,
+    const drift = diffBuiltinAspects(
+      rows.map((r) => ({ id: r.id, schema: r.schema, aiInstructions: r.ai_instructions })),
     );
-    return drift === 0 ? 0 : 1;
+    const bad = new Set<string>([...drift.missing, ...drift.drifted.map((d) => d.id)]);
+    for (const meta of BUILTIN_ASPECT_META) {
+      if (!bad.has(meta.id)) console.log(`✓ ${meta.id}`);
+    }
+    for (const id of drift.missing) console.log(`✗ ${id}: в проде НЕТ`);
+    for (const d of drift.drifted) console.log(`✗ ${d.id}: расходится (${d.what.join(' + ')})`);
+    console.log(
+      bad.size === 0
+        ? `\nРеестр в проде совпадает с кодом (${BUILTIN_ASPECT_META.length} аспектов).`
+        : `\nРасхождений: ${bad.size}. Починить: bun scripts/ops.ts seed-aspects`,
+    );
+    return bad.size === 0 ? 0 : 1;
   });
 }
 
