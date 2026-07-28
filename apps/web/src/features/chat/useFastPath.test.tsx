@@ -208,12 +208,18 @@ test('успешный fast-path create инвалидирует budget-кэш (
   await waitFor(() => expect(qc.getQueryState(envKey)?.isInvalidated).toBe(true));
 });
 
-// Ревью B7 (Minor 1): CONFLICT по своему id = запись на сервере УЖЕ есть (идемпотентный
-// дубль) — budget-кэш обязан инвалидироваться и в этой ветке, иначе остаток/бейдж
-// висят «до записи» до следующей мутации.
-test('CONFLICT (идемпотентный успех) тоже инвалидирует budget-кэш', async () => {
+// Ревью B7 (Minor 1) + уборочная фаза (решение 7): CONFLICT — НЕ успех, а «id занят
+// чужой строкой» (своя дала бы replay-успех сервера), поэтому запись уходит повторно
+// со свежим id. Budget-кэш обязан инвалидироваться и в этой ветке — после успешного
+// повтора запись на сервере есть, и остаток §4.1 с бейджем §6.1 стухли.
+test('CONFLICT → повтор со свежим id, и budget-кэш инвалидирован', async () => {
+  let attempt = 0;
   const { Wrap, qc } = wrapper((path, input) => {
-    if (path === 'entity.create') throw trpcError('CONFLICT');
+    if (path === 'entity.create') {
+      attempt += 1;
+      if (attempt === 1) throw trpcError('CONFLICT');
+      return { id: 'e-new', title: 'обед' };
+    }
     return handlerBase(path, input);
   });
   const envKey = getQueryKey(
@@ -311,7 +317,30 @@ test('онлайн-create упал транспортно → карточка �
   expect(pending[0]?.clientId).toBe(input.id);
 });
 
-test('CONFLICT по своему id → идемпотентный успех: ни error_card, ни записи в буфере', async () => {
+test('CONFLICT → повтор со СВЕЖИМ id: ни error_card, ни записи в буфере', async () => {
+  const ids: string[] = [];
+  const { Wrap, qc } = wrapper((path, input) => {
+    if (path === 'entity.create') {
+      const id = (input as { input: { id: string } }).input.id;
+      ids.push(id);
+      if (ids.length === 1) throw trpcError('CONFLICT');
+      return { id, title: 'обед' };
+    }
+    return handlerBase(path, input);
+  });
+  const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
+  await act(async () => {
+    await result.current.submit('обед 340');
+  });
+  expect(ids).toHaveLength(2);
+  expect(ids[1]).not.toBe(ids[0]); // чужой id своим не станет — берём новый
+  expect(threadMsgs(qc).some(hasErrorCard)).toBe(false);
+  expect(useRetryBuffer.getState().size).toBe(0);
+});
+
+// Второй CONFLICT подряд — ввод не теряется: карточка деградирует в «⏳ ждёт отправки»,
+// операция уходит в буфер (тем же путём, что транспортный сбой).
+test('CONFLICT дважды подряд → карточка ждёт отправки, запись в буфере', async () => {
   const { Wrap, qc } = wrapper((path, input) => {
     if (path === 'entity.create') throw trpcError('CONFLICT');
     return handlerBase(path, input);
@@ -321,7 +350,7 @@ test('CONFLICT по своему id → идемпотентный успех: �
     await result.current.submit('обед 340');
   });
   expect(threadMsgs(qc).some(hasErrorCard)).toBe(false);
-  expect(useRetryBuffer.getState().size).toBe(0);
+  expect(useRetryBuffer.getState().size).toBe(1);
 });
 
 test('«разобрать с AI» → archived:true + ai.sendMessage исходной строки (одна строка ≠ две сущности)', async () => {

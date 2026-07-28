@@ -2,7 +2,7 @@ import { type FastPathCategory, type FastPathCtx, newId, parseFastPath } from '@
 import { useQueryClient } from '@tanstack/react-query';
 import { TRPCClientError } from '@trpc/client';
 import { useOnline, useRetryBuffer } from '../../state/retry';
-import { mapSendError } from '../../state/retry-send';
+import { isConflict, mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
 import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME } from './memoryRules';
 import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from './useChatThread';
@@ -234,16 +234,30 @@ export function useFastPath(threadId: string) {
       // и бейдж alertCount перечитываются ПОСЛЕ записи, не до.
       void utils.budget.invalidate();
     } catch (err) {
-      const outcome = mapSendError(err);
-      // CONFLICT по своему id — сервер уже принял эту запись (идемпотентность §5.3): успех.
-      // Запись НА сервере есть → кэши стухли так же, как при обычном успехе (ревью B7):
-      // без инвалидации остаток §4.1 и бейдж §6.1 висят «до записи» до следующей мутации.
-      if (outcome === 'confirmed') {
-        void utils.entity.query.invalidate();
-        void utils.entity.count.invalidate();
-        void utils.budget.invalidate();
+      // CONFLICT — НЕ успех (уборочная фаза, решение 7; прецедент QuickAddBar B4):
+      // честный повтор владельца executor отдаёт replay-успехом, а CONFLICT кидается
+      // ровно тогда, когда id занят невидимой под RLS чужой строкой — записи владельца
+      // на сервере нет. Повторяем один раз со свежим id: карточка уже на экране, и ввод
+      // терять нельзя, а ждать бессмысленно — чужой id своим не станет.
+      if (isConflict(err)) {
+        try {
+          await create.mutateAsync({
+            input: { ...parsed.create, id: newId() },
+            source: 'fast_path',
+          });
+          void utils.entity.query.invalidate();
+          void utils.entity.count.invalidate();
+          void utils.budget.invalidate();
+        } catch {
+          // Второй отказ не разбираем по кодам: карточка деградирует в «⏳ ждёт отправки»
+          // тем же путём, что транспортный сбой ниже, — ввод уходит в буфер.
+          insertCard(card, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
+          enqueueCreate({ ...parsed.create, id: newId() }, 'fast_path');
+          void flushNow();
+        }
         return;
       }
+      const outcome = mapSendError(err);
       if (outcome === 'business_rejection') {
         // §5.3: бизнес-отказ НЕ буферизуется, а показывается — иначе ввод исчезал молча
         // (карточка успеха на экране, сущности нет, запись вычищена из очереди при flush).
