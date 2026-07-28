@@ -247,6 +247,35 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     expect(after.rows[0]?.suggestedCategoryRef).toBe(foodId);
   });
 
+  // §7.4: архивная memory-сущность из контекста исключена — а значит, и из резолва
+  // импорта. Фильтр NOT archived в memoryRules не проверялся ничем: снятое владельцем
+  // правило продолжало бы категоризировать выписку, и ни один тест этого не заметил бы.
+  // На серверной эскалации соседний инвариант закрыт («архивное правило не подавляет»).
+  test('архивное правило выписку не категоризирует (§7.4)', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({
+      occurredOn: '2026-05-13',
+      amount: '843.00',
+      counterparty: 'SBOL ПЯТЁРОЧКА 843', // алиасами не покрыт: без правила предложения нет
+    });
+    const rule = await caller.entity.create({
+      input: {
+        title: 'пятерочка → Еда',
+        tags: [],
+        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+      },
+      source: 'ui',
+    });
+    const active = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(active.rows[0]?.suggestedCategoryRef).toBe(foodId);
+
+    await caller.entity.update({ id: rule.id, archived: true });
+
+    const archived = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(archived.rows[0]?.suggestedCategoryRef).toBeUndefined();
+  });
+
   // Конфликт «один паттерн — разные категории» штатно рождает эскалация §7.8: её гейты
   // пропускают предложение по НОВОЙ паре категорий, и рядом со старым правилом появляется
   // второе. Побеждать обязано свежее — иначе исправление, которое пользователь только что
