@@ -9,7 +9,7 @@
 // атрибутируются актором 'ai' (§7.8), что верно только для чата владельца —
 // PAT-агент работает своим транспортом (MCP, Task 10) с честной атрибуцией 'agent'.
 import { z } from 'zod';
-import { declineRuleSuggestion } from '../ai/escalation';
+import { declineRuleSuggestion, RULE_PATTERN_MAX } from '../ai/escalation';
 import { defaultAiDeps, type SendMessageResult, sendMessage } from '../ai/send-message';
 import { ExecError, execErrorToTRPC } from '../errors';
 import type { ExecuteOk } from '../executor/types';
@@ -104,7 +104,9 @@ export const aiRouter = router({
     .input(
       z
         .object({
-          pattern: z.string().min(1),
+          // max — защита JSONB, не бизнес-правило (конвенция слоя, ср. bank_txn_id):
+          // значение ложится в append-only chat_messages и читается каждым подавлением.
+          pattern: z.string().min(1).max(RULE_PATTERN_MAX),
           fromCategoryId: z.string().uuid(),
           toCategoryId: z.string().uuid(),
         })

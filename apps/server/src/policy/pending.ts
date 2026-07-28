@@ -33,6 +33,7 @@ import {
 } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { escalateAfterMutation } from '../ai/escalation';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
@@ -266,14 +267,15 @@ export async function approvePending(
     // Вне tx проверок: execute открывает собственный withIdentity-tx (вложить нельзя).
     // Чтение pending отдельным tx безопасно: journal append-only, metadata неизменяема
     // (§4.6). audit — в тред карточки-запроса; атрибуция — исходный актор (§7.8)
-    return await execute(
+    const operations = toOperations(found.pending);
+    const r = await execute(
       db,
       {
         actorUserId: args.ownerId,
         actorKind: found.pending.actor_kind,
         source: found.pending.source,
         threadId: found.threadId,
-        operations: toOperations(found.pending),
+        operations,
         batchId: args.pendingId,
         clock: args.clock,
       },
@@ -293,6 +295,24 @@ export async function approvePending(
         },
       },
     );
+
+    // Эскалация повторных исправлений (§7.8) — ВТОРАЯ точка вызова (уборочная фаза,
+    // решение 4). Батч из 11+ операций classifyToolCall уводит в explicit-confirmation,
+    // и диспатч возвращает pending_confirmation ДО execute — то есть мимо своего вызова
+    // эскалации. Исполняет сохранённый payload только этот путь, поэтому «перенеси все 12
+    // покупок в Пятёрочке из Еды в Развлечения» дважды не давало предложения правила
+    // никогда: рекатегоризации в журнал попадали, но триггер не срабатывал.
+    // Задвоения нет — из диспатча этот payload не исполняется вовсе; повторный approve
+    // отсекается idempotentReplay (журналировать нечего). Ошибку эскалация логирует
+    // внутри и не пробрасывает: правки уже закоммичены.
+    if (r.ok && !r.idempotentReplay && found.pending.source === 'chat') {
+      await escalateAfterMutation(db, {
+        ownerId: args.ownerId,
+        actionId: r.actionId,
+        operations,
+      });
+    }
+    return r;
   } catch (e) {
     if (e instanceof ExecError) {
       return { ok: false, error: { code: e.code, message: e.message, details: e.details } };
