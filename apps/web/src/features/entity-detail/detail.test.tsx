@@ -6,6 +6,7 @@ import { beforeEach, expect, test } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
 import { trpc } from '../../trpc';
+import { Toaster } from '../../ui/Toast';
 import { queryBlocks } from '../browser/query';
 import { AspectCards } from './AspectCards';
 import { DetailScreen } from './DetailScreen';
@@ -286,6 +287,53 @@ test('создание подзадачи инвалидирует entity.query 
   fireEvent.keyDown(field, { key: 'Enter' });
 
   await waitFor(() => expect(probes().length).toBeGreaterThan(1));
+});
+
+// Частичный отказ: entity.create прошёл, relation.create упал. Задача СОЗДАНА, и списки
+// обязаны её увидеть — иначе она не видна до истечения staleTime (60 с у Повестки), а
+// тост «Не удалось сохранить» уверяет владельца, что ничего не создалось, и он жмёт ещё
+// раз, плодя сироту (бэклог фазы D, ревью фикс-волны).
+test('подзадача создана, а связь упала: списки инвалидируются, тост говорит правду', async () => {
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <ListProbe />
+      <Toaster />
+    </>,
+    (path, input) => {
+      if (path === 'entity.get') {
+        const { id } = input as { id: string };
+        if (id !== 'e1') return { entity: { ...entity, id, title: 'Купить молоко' } };
+        return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+      }
+      if (path === 'entity.create') {
+        const { input: created } = input as { input: { id: string; title: string } };
+        return { ...entity, id: created.id, title: created.title };
+      }
+      if (path === 'relation.create') throw trpcError('INTERNAL_SERVER_ERROR');
+      if (path === 'entity.query') return [];
+      if (path === 'aspect.list') return [];
+      return {};
+    },
+  );
+  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
+  const probes = () =>
+    calls.filter(
+      (c) =>
+        c.path === 'entity.query' && (c.input as { query: string }).query === SUBTASK_PROBE.query,
+    );
+  await waitFor(() => expect(probes()).toHaveLength(1));
+
+  const field = screen.getByLabelText('Новая подзадача');
+  fireEvent.change(field, { target: { value: 'Купить молоко' } });
+  fireEvent.keyDown(field, { key: 'Enter' });
+
+  // Списки перечитываются: сущность в графе есть, и её обязано быть видно сразу.
+  await waitFor(() => expect(probes().length).toBeGreaterThan(1));
+  // Текст тоста не врёт про потерю записи: создана, но не привязана.
+  expect(
+    await screen.findByText(/создана, но не привязана — найдёте её в списке задач/i),
+  ).toBeInTheDocument();
 });
 
 // --- inline-правка заголовка (DF п.3) --------------------------------------------------

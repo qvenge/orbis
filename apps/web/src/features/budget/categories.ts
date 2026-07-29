@@ -28,8 +28,18 @@ export type CategoryOption = {
  * (вход в detail из Chat/Browser) список категорий доезжает за ~200 мс, и без этого
  * признака запасной uuid успевал мелькнуть и подмениться названием. Потребитель обязан
  * НЕ рисовать бейдж/строку поля, пока `isPending`.
+ *
+ * `isError` (уборочная фаза) — третье состояние: список НЕ доехал вовсе (сеть или
+ * BAD_REQUEST парсера запроса на непересеянном реестре аспектов). Названия у нас нет и
+ * не будет, поэтому печатать uuid — та же ложь, что мелькающий uuid на загрузке; условие
+ * `!found` обязательно: TanStack v5 сохраняет прежние data при отказе РЕФЕТЧА, и на уже
+ * известном списке правда — «название есть», а не «ошибка».
  */
-export function useCategoryTitle(categoryRef: string): { title: string; isPending: boolean } {
+export function useCategoryTitle(categoryRef: string): {
+  title: string;
+  isPending: boolean;
+  isError: boolean;
+} {
   // enabled: непустой ref — с нефинансовых сущностей запрос категорий не уходит вовсе
   // (та же бережливость, что у пикера AspectCards, смонтированного только на financial).
   const q = trpc.entity.query.useQuery(
@@ -42,8 +52,9 @@ export function useCategoryTitle(categoryRef: string): { title: string; isPendin
     title: found?.title ?? categoryRef,
     // Отключённый запрос (пустой ref) у TanStack Query тоже в статусе pending — но там и
     // показывать нечего, поэтому загрузкой считается только непустой ref. Ошибка чтения
-    // pending снимает: показать uuid лучше, чем не показать ничего.
-    isPending: categoryRef !== '' && q.isPending,
+    // pending снимает — она отдельное состояние ниже.
+    isPending: categoryRef !== '' && q.isPending && !q.isError,
+    isError: categoryRef !== '' && q.isError && found === undefined,
   };
 }
 

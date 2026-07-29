@@ -1,6 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
-import { renderWithProviders } from '../../test/harness';
+import { renderWithProviders, trpcError } from '../../test/harness';
 import { NativeRow } from './NativeRow';
 
 const base = {
@@ -151,4 +151,110 @@ test('generic: 2-3 keyFields из реестра', () => {
     />,
   );
   expect(screen.getByTestId('native-generic')).toBeInTheDocument();
+});
+
+// Уборочная фаза (E4): вся машиночитаемая часть memory-правила лежит в title (K19.4),
+// а inline-правка заголовка позволяет сломать формат одним символом. Признака «правило
+// больше не распознаётся» не было нигде: запись оставалась в «Памяти AI» и выглядела
+// живой, хотя ни fast-path, ни резолв импорта её уже не применяли.
+const memory = (kind: string, title: string) =>
+  ({ ...base, title, aspects: { 'orbis/memory': { kind, scope: 'orbis/financial' } } }) as never;
+
+test('память: правило с распознанным форматом предупреждения не показывает', () => {
+  render(
+    <NativeRow
+      entity={memory('rule', 'кофе → Развлечения')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  expect(screen.queryByTestId('title-warning')).toBeNull();
+});
+
+test('память: правку правила в текст без разделителя видно сразу — предупреждение', () => {
+  render(
+    <NativeRow
+      entity={memory('rule', 'кофе это развлечения')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  expect(screen.getByTestId('title-warning')).toBeInTheDocument();
+});
+
+// Заявленное поведение — предупреждение по ЧЕРНОВИКУ, то есть ДО сохранения: владелец
+// ломает рабочее правило прямо в поле и обязан увидеть это сразу. Проверка по
+// сохранённому значению (warn(value)) все прежние тесты проходила.
+test('память: предупреждение появляется на ЧЕРНОВИКЕ, без сохранения', () => {
+  render(
+    <NativeRow
+      entity={memory('rule', 'кофе → Развлечения')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  expect(screen.queryByTestId('title-warning')).toBeNull();
+  fireEvent.change(screen.getByTestId('title-edit'), {
+    target: { value: 'кофе это развлечения' },
+  });
+  expect(screen.getByTestId('title-warning')).toBeInTheDocument();
+});
+
+test('память: предупреждение доступно скринридеру и связано с полем', () => {
+  render(
+    <NativeRow
+      entity={memory('rule', 'кофе это развлечения')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  const warning = screen.getByTestId('title-warning');
+  expect(warning).toHaveAttribute('role', 'status');
+  expect(screen.getByTestId('title-edit')).toHaveAttribute('aria-describedby', warning.id);
+});
+
+test('память: клавиатурная стрелка «->» правилом считается — предупреждения нет', () => {
+  render(
+    <NativeRow
+      entity={memory('rule', 'кофе -> Развлечения')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  expect(screen.queryByTestId('title-warning')).toBeNull();
+});
+
+test('память: у ФАКТА формата правила нет — предупреждения быть не должно', () => {
+  render(
+    <NativeRow
+      entity={memory('fact', 'Работаю из дома по пятницам')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  expect(screen.queryByTestId('title-warning')).toBeNull();
+});
+
+test('память: в списке (без inline-правки) предупреждения нет — правит только Detail', () => {
+  render(<NativeRow entity={memory('rule', 'кофе это развлечения')} onToggleTask={() => {}} />);
+  expect(screen.queryByTestId('title-warning')).toBeNull();
+});
+
+// Уборочная фаза: третье состояние названия категории. При ОТКАЗЕ загрузки списка
+// бейдж печатал сырой uuid — та же ложь, что мелькающий uuid на загрузке (D6d развёл
+// только «грузится» и «не найдена»).
+test('категория: отказ списка категорий — бейджа нет, uuid не печатается', async () => {
+  renderWithProviders(
+    <NativeRow
+      entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_FOOD })}
+      onToggleTask={() => {}}
+    />,
+    (path) => {
+      if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
+      return {};
+    },
+  );
+  await screen.findByTestId('native-financial');
+  await waitFor(() => expect(screen.queryByText(CAT_FOOD)).toBeNull());
+  expect(screen.getByTestId('native-financial').textContent).not.toContain(CAT_FOOD);
 });

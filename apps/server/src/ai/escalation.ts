@@ -43,6 +43,16 @@ const WINDOW_DAYS = 30;
 /** «После двух одинаковых исправлений» (§7.8), считая текущее. */
 const MIN_CORRECTIONS = 2;
 
+/**
+ * Потолок длины паттерна — защита JSONB, не бизнес-правило (та же конвенция, что у
+ * `bank_txn_id: max(128)`). Паттерн приходит из заголовка транзакции, у которого верхней
+ * границы нет, и ложится в append-only `chat_messages`, откуда его не удалить; дальше его
+ * читает КАЖДЫЙ `alreadyOffered` на каждой рекатегоризации и считает по нему левенштейн.
+ * Ограничение стоит с обеих сторон: на входе процедуры отказа и здесь, у генератора, —
+ * иначе кнопка «Не надо» на длинной карточке отдавала бы 400 и карточка висела бы вечно.
+ */
+export const RULE_PATTERN_MAX = 128;
+
 export interface SuggestRuleResult {
   suggested: boolean;
   /** Почему предложения нет — для диагностики и тестов; наружу (в UI) не уходит. */
@@ -213,8 +223,14 @@ async function titlesOf(tx: Tx, ids: string[]): Promise<string[]> {
 
 /**
  * Активное (неархивное — §7.4) правило того же смысла уже есть. Эквивалентность:
- * тот же паттерн после normalizeCounterparty (той же нормализации, которой D4 будет
- * сопоставлять правило со входом, K12) и то же название категории без учёта регистра.
+ * тот же паттерн после normalizeCounterparty (той же нормализации, которой D4
+ * сопоставляет правило со входом, K12) и то же название категории без учёта регистра.
+ *
+ * Нормализация применяется к ОБЕИМ сторонам (уборочная фаза): аргумент `pattern` приходит
+ * из `rulePatternFromTitle`, и до канонизации паттерна (решение 2) сравнение сводилось
+ * к `normalizeCounterparty(pattern) === pattern` — для заголовков вида «1234 CARD
+ * ПЯТЁРОЧКА» гейт не видел уже созданного правила. Симметричная форма верна и для старых
+ * правил, чьи заголовки записаны до канонизации.
  */
 async function hasEquivalentRule(tx: Tx, pattern: string, categoryTitle: string): Promise<boolean> {
   const rows = await tx
@@ -232,7 +248,7 @@ async function hasEquivalentRule(tx: Tx, pattern: string, categoryTitle: string)
     const parsed = parseRuleTitle(r.title);
     if (parsed === null) return false;
     return (
-      normalizeCounterparty(parsed.pattern) === pattern &&
+      normalizeCounterparty(parsed.pattern) === normalizeCounterparty(pattern) &&
       parsed.categoryTitle.trim().toLowerCase() === categoryTitle.trim().toLowerCase()
     );
   });
@@ -314,7 +330,7 @@ async function alreadyOffered(tx: Tx, pattern: string, rc: Recategorization): Pr
 async function considerOne(
   tx: Tx,
   ownerId: string,
-  actionId: string,
+  loadJournal: () => Promise<Recategorization[]>,
   rc: Recategorization,
 ): Promise<SuggestRuleResult> {
   const title = await titleOf(tx, rc.entityId);
@@ -323,6 +339,9 @@ async function considerOne(
   // «SBOL 1234» → пустой паттерн: правилом такое стать не может, и без этого гейта
   // две «пустые» строки дали бы counterpartySimilarity === 1 (normalize.ts §7)
   if (pattern === '') return { suggested: false, reason: 'empty_pattern' };
+  // Длинный паттерн правилом не станет: он ушёл бы в неудаляемую строку журнала и
+  // читался бы каждым последующим подавлением (см. RULE_PATTERN_MAX).
+  if (pattern.length > RULE_PATTERN_MAX) return { suggested: false, reason: 'pattern_too_long' };
   const categoryTitle = await categoryTitleOf(tx, rc.to);
   if (categoryTitle === undefined) return { suggested: false, reason: 'category_not_found' };
 
@@ -338,7 +357,7 @@ async function considerOne(
   // ТОЛЬКО по паттернам правила, запасного пути по сырым заголовкам нет — D5b п.1).
   // Считаем по РАЗНЫМ сущностям: правки одной и той же транзакции туда-обратно —
   // сомнения пользователя, а не повторяющийся паттерн.
-  const others = (await journalRecategorizations(tx, actionId)).filter(
+  const others = (await loadJournal()).filter(
     (c) => c.from === rc.from && c.to === rc.to && c.entityId !== rc.entityId,
   );
   const otherTitles = await titlesOf(tx, [...new Set(others.map((c) => c.entityId))]);
@@ -393,9 +412,20 @@ export async function maybeSuggestRule(deps: {
   const recats = extractRecategorizations(deps.action);
   if (recats.length === 0) return { suggested: false, reason: 'not_recategorization' };
   return withIdentity(deps.db, deps.ownerId, async (tx) => {
+    // Скан журнала — один на ДЕЙСТВИЕ, а не на операцию: аргументы у всех итераций
+    // одинаковы, а сам скан тянет до JOURNAL_SCAN_LIMIT строк JSONB. До этого «перенеси
+    // эти 10 покупок из Еды в Развлечения» давал 10 одинаковых сканов подряд, синхронно,
+    // до ответа модели. Лениво, а не безусловным подъёмом наверх: у одиночной
+    // рекатегоризации с уже отправленным предложением скана не бывает вовсе (гейт
+    // подавления стоит раньше), и подъём заставил бы платить за него на пустом месте.
+    let journal: Recategorization[] | undefined;
+    const loadJournal = async (): Promise<Recategorization[]> => {
+      journal ??= await journalRecategorizations(tx, deps.action.id);
+      return journal;
+    };
     let last: SuggestRuleResult = { suggested: false, reason: 'not_recategorization' };
     for (const rc of recats) {
-      last = await considerOne(tx, deps.ownerId, deps.action.id, rc);
+      last = await considerOne(tx, deps.ownerId, loadJournal, rc);
       if (last.suggested) return last;
     }
     return last;

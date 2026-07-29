@@ -6,7 +6,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { App } from '../../App';
 import { useNav } from '../../state/navigation';
-import { renderWithProviders } from '../../test/harness';
+import { renderWithProviders, trpcError } from '../../test/harness';
 import { MemoryScreen } from './MemoryScreen';
 import { SettingsScreen } from './SettingsScreen';
 
@@ -85,6 +85,30 @@ test('MemoryScreen: пустая память — своё пустое сост
   await waitFor(() => expect(screen.getByTestId('memory-empty')).toBeInTheDocument());
   expect(screen.queryByTestId('memory-row')).toBeNull();
   expect(screen.queryByText(/быструю запись/i)).toBeNull();
+});
+
+// Отказ выборки и пустая память выглядели одинаково: экран рисовал «AI пока ничего не
+// запомнил» и предлагал завести правила заново — то есть врал про состояние памяти.
+// Норму держит соседний экран (плашка «Не удалось загрузить» на Повестке).
+test('MemoryScreen: отказ запроса — плашка ошибки, а не «AI пока ничего не запомнил»', async () => {
+  renderWithProviders(<MemoryScreen />, (path) => {
+    if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
+    return {};
+  });
+  await waitFor(() => expect(screen.getByTestId('memory-error')).toBeInTheDocument());
+  expect(screen.queryByTestId('memory-empty')).toBeNull();
+});
+
+// Уборочная фаза: в список приходят СПЕЦИАЛЬНО ревизовать память, и мёртвое правило
+// (заголовок без разделителя) было там неотличимо от рабочего.
+test('MemoryScreen: правило со сломанным форматом помечено в списке', async () => {
+  const broken = mem('r2', 'кофе это развлечения', 'rule');
+  renderWithProviders(<MemoryScreen />, (path) =>
+    path === 'entity.query' ? [rule, broken, fact] : {},
+  );
+  await waitFor(() => expect(screen.getAllByTestId('memory-row')).toHaveLength(3));
+  const marks = screen.getAllByTestId('memory-broken');
+  expect(marks).toHaveLength(1); // ни у рабочего правила, ни у факта пометки нет
 });
 
 test('раздел «Память AI» в настройках пушит экран памяти в активный таб', async () => {

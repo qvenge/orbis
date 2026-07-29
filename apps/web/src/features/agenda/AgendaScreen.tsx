@@ -14,6 +14,7 @@ import { Skeleton } from '../../ui/Skeleton';
 import { EntityRow, formatDay } from '../browser/EntityRow';
 import {
   type AgendaEntity,
+  dueDate,
   endAt,
   isAllDay,
   isFinancial,
@@ -64,6 +65,25 @@ function timeLabel(e: AgendaEntity, tz: string | undefined): string {
  */
 function overdueLabel(date: string): string {
   return `был ${formatDay(date)}`;
+}
+
+/**
+ * Мета строки ДНЕВНОЙ секции (уборочная фаза): та же болезнь, что D2b вычистил в
+ * «Просроченном». Секция уже подписана датой, слева стоит колонка времени — третья
+ * печать той же даты справа была шумом, и у события она считалась в таймзоне БРАУЗЕРА
+ * (`start_at` — полный ISO, `formatDay` форматирует его локально), тогда как сама секция
+ * считается в `settings.timezone`: при несовпадении зон ночные строки расходились
+ * с заголовком своей секции.
+ *
+ * Гасим ровно дубль, а не мету целиком: сумма financial-строки (приоритет меты
+ * EntityRow) — не дата, её печатать некому; СВОЙ срок, отличающийся от дня секции
+ * («встреча завтра, сдать послезавтра»), — новое знание, а не повтор. Сравнение
+ * date-only строк прямое: `due_date` и дата секции обе 'YYYY-MM-DD'.
+ */
+function showRowMeta(e: AgendaEntity, sectionDate: string): boolean {
+  if (isFinancial(e)) return true;
+  const due = dueDate(e);
+  return due !== null && due !== sectionDate;
 }
 
 function openEntity(id: string) {
@@ -159,7 +179,12 @@ export function AgendaScreen() {
                 ) : (
                   <ul className="flex flex-col gap-px">
                     {d.entities.map((e) => (
-                      <AgendaRow key={e.id} entity={e} time={timeLabel(e, timezone)} />
+                      <AgendaRow
+                        key={e.id}
+                        entity={e}
+                        time={timeLabel(e, timezone)}
+                        showMeta={showRowMeta(e, d.date)}
+                      />
                     ))}
                   </ul>
                 )}

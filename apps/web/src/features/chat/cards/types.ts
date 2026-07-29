@@ -49,6 +49,18 @@ export type MemoryRuleDeclinedData = {
   fromCategoryId: string;
   toCategoryId: string;
 };
+// 00-product §8: сводка завершённого импорта (уборочная фаза, E13). Своего компонента
+// нет намеренно — текст несёт content самого сообщения; тип объявлен ради парности
+// контракта: union web обязан знать все kind сервера (та же причина, что у
+// MemoryRuleDeclinedData). Поля дословно из apps/server/src/tools/registry.ts.
+export type ImportSummaryData = {
+  kind: 'import_summary';
+  namespace: string;
+  total: number;
+  created: number;
+  adopted: number;
+  skipped: number;
+};
 export type Card =
   | EntityCardData
   | QueryResultData
@@ -56,4 +68,5 @@ export type Card =
   | ErrorCardData
   | ImportReviewData
   | MemoryRuleSuggestionData
-  | MemoryRuleDeclinedData;
+  | MemoryRuleDeclinedData
+  | ImportSummaryData;

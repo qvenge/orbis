@@ -29,6 +29,7 @@ import {
   type ImportReviewInput,
   type ImportReviewResult,
   type ImportReviewRow,
+  importSummaryMessageId,
   isProbableDuplicate,
   llmMappingResponseSchema,
   MAX_ANALYZE_ROW_CHARS,
@@ -39,6 +40,8 @@ import {
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { recordUsage } from '../ai/metering';
 import { type AiDeps, gateAiEntitlements } from '../ai/send-message';
+import { appendMessageIdempotent } from '../chat/messages';
+import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { entityOrigins } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -48,6 +51,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { LLMRequest, LLMResponse } from '../llm/types';
+import type { Card } from '../tools/registry';
 
 // Синк один на модуль (как rollover/post-due): состояния не хранит, audit-сообщение
 // batch пишется тем же tx, что и операции исполнителя (§7.8).
@@ -585,11 +589,69 @@ async function assertAdoptTargets(
  * вредные формы (заметка, категория, чужая сущность, архив) пречек блокирует. Худшее,
  * что может сделать владелец, — привязать источник строки к своей же другой операции.
  *
- * Валюта созданных транзакций в аспект НЕ кладётся: у CanonicalRow поля currency нет
- * (§3.4.1), а отсутствие currency и селектор конвертов (§2.3), и агрегаты (§2.2)
- * трактуют как дефолтную валюту владельца. Записать defaultCurrency явно значило бы
- * утверждать про валюту выписки то, чего сервер не знает.
+ * ВАЛЮТА (уборочная фаза, решение 6): свойство ВЫПИСКИ, а не строки — у CanonicalRow
+ * поля currency нет и не заводится. `input.currency` приходит из селектора «Валюта
+ * выписки» на шаге маппинга (дефолт — валюта владельца) и пишется в аспект каждой
+ * созданной транзакции явно. Без него ключ не пишется вовсе: отсутствие currency и
+ * селектор конвертов (§2.3), и агрегаты (§2.2) трактуют как валюту владельца — это
+ * поведение старого клиента, которое остаётся верным для выписки в родной валюте.
+ * Смешанная выписка вне скоупа (multi-currency — Future, 00-product §10).
  */
+/**
+ * Сводка импорта в журнал (00-product §8, метрика «покрытие транзакций ≥ 95%»).
+ *
+ * Зачем отдельная запись: единственные числа, по которым покрытие вообще считается, —
+ * это ЧИСЛА ВЫПИСКИ, а в графе после импорта остаются только созданные сущности.
+ * `skipped` (строка выписки уже была в Orbis) и `adopted` (совпала с ручной записью)
+ * не оставляют следа нигде: по таким строкам сущностей не создаётся. До этой правки
+ * метрика была объявлена в PRD, но измерить её было физически нечем.
+ *
+ * Пишется отдельным системным сообщением, а не в audit действия: журнал append-only
+ * (§4.6), и метаданные существующего audit-сообщения править нельзя. PK детерминирован
+ * по batchId — идемпотентный повтор confirm не удваивает статистику. Своя ошибка
+ * логируется и НЕ пробрасывается: импорт уже закоммичен, и провал статистики не имеет
+ * права его ронять (тот же контракт, что у эскалации правил, K7).
+ */
+async function writeImportSummary(
+  db: Db,
+  ownerId: string,
+  input: ImportConfirmInput,
+  counts: { created: number; adopted: number },
+): Promise<void> {
+  // Строк выписки, а не строк payload'а (фикс-раунд): клиент не присылает строки ⟳
+  // «уже импортирована» вовсе, поэтому считать total по items значило бы объявлять
+  // покрытие по одним только новым строкам. rowsTotal нет (старый бандл) — падаем
+  // обратно на число отправленных строк и не врём больше, чем знаем.
+  const sent = counts.created + counts.adopted;
+  const total = Math.max(input.rowsTotal ?? sent, sent);
+  const skipped = total - sent;
+  try {
+    await withIdentity(db, ownerId, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, ownerId);
+      await appendMessageIdempotent(tx, {
+        id: importSummaryMessageId(ownerId, input.batchId),
+        threadId,
+        role: 'system',
+        content: `Импорт выписки: строк ${total}, создано ${counts.created}, привязано к существующим ${counts.adopted}, уже было ${skipped}`,
+        metadata: {
+          cards: [
+            {
+              kind: 'import_summary',
+              namespace: input.namespace,
+              total,
+              created: counts.created,
+              adopted: counts.adopted,
+              skipped,
+            } satisfies Card,
+          ],
+        },
+      });
+    });
+  } catch (e) {
+    console.error('[import] сводка импорта не записана:', e);
+  }
+}
+
 export async function confirmImport(
   db: Db,
   ownerId: string,
@@ -653,6 +715,9 @@ export async function confirmImport(
               direction: item.row.direction,
               category_ref: item.categoryRef,
               occurred_on: item.row.occurredOn,
+              // Валюта выписки — явно (см. шапку confirmImport); нет значения (старый
+              // клиент) — ключа нет вовсе, и всё трактуется как валюта владельца.
+              ...(input.currency !== undefined && { currency: input.currency.toUpperCase() }),
               ...(counterparty !== '' && { counterparty }),
               // Пусто/отсутствует — ключа нет вовсе (не писать undefined/пустую строку):
               // схема аспекта требует непустую строку, а дедуп пустой ID не сравнивает
@@ -666,6 +731,10 @@ export async function confirmImport(
   }
 
   if (operations.length === 0) {
+    // Выписка, которую Orbis знал ЦЕЛИКОМ, — лучший возможный исход для метрики §8, и
+    // потерять его нельзя: сводка пишется ДО отказа (created=0, adopted=0, всё «уже было»).
+    // Пользовательское поведение прежнее — импортировать по-прежнему нечего.
+    await writeImportSummary(db, ownerId, input, { created: 0, adopted: 0 });
     throw new ExecError('VALIDATION', 'нет строк для импорта: все строки помечены «пропустить»', {
       items: input.items.length,
     });
@@ -686,6 +755,7 @@ export async function confirmImport(
   // Идентификаторы созданных сущностей — из результатов batch (а не из сгенерированных
   // выше id): идемпотентный повтор возвращает СОХРАНЁННЫЕ результаты первого прогона
   const entityIds = r.results.filter(isWireEntity).map((e) => e.id);
+  await writeImportSummary(db, ownerId, input, { created, adopted });
   return {
     actionId: r.actionId,
     idempotentReplay: r.idempotentReplay,

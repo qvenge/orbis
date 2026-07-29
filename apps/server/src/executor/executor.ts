@@ -27,8 +27,10 @@ import {
   type BudgetOpDesc,
   bindingOps,
   bindingTargetOf,
+  lockOwnerBudget,
   normalizeEnvelopeCurrency,
   rebindForEnvelope,
+  unbindOps,
 } from '../budget/binding';
 import type { Db } from '../db/client';
 import { entities, entityOrigins, relations } from '../db/schema';
@@ -213,6 +215,8 @@ export async function execute(
     return await withIdentity(db, req.actorUserId, async (tx) => {
       // Шов сериализации §7.10 — первым statement'ом tx (см. ExecutorDeps.beforeStages)
       if (deps.beforeStages) await deps.beforeStages(tx);
+      // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
+      await lockBudgetContour(tx, req.actorUserId, [single]);
       const registry = await loadAspectRegistry(tx);
       const ctx: ExecCtx = {
         tx,
@@ -313,6 +317,8 @@ async function executeBatch(
       // (см. ExecutorDeps.beforeStages): конкурентный reject либо закоммичен (проверка
       // beforeStages его увидит), либо ждёт этот tx и увидит audit-сообщение
       if (beforeStages) await beforeStages(tx);
+      // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
+      await lockBudgetContour(tx, req.actorUserId, ops);
       const registry = await loadAspectRegistry(tx);
       const ctx: ExecCtx = { tx, registry, req, actionId: batchId, clock, sink, internalUndo };
 
@@ -420,6 +426,52 @@ function collectDeclaredDerivedFrom(ops: Array<{ tool: string; input: unknown }>
   return targets;
 }
 
+/**
+ * Трогает ли операция бюджет-контур — по СЫРОМУ входу, до стадий разбора.
+ *
+ * Нужен ровно для одного: взять замок владельца ПЕРВЫМ statement'ом транзакции, до любых
+ * строковых блокировок (см. lockBudgetContour ниже). Точность здесь не критична в сторону
+ * «лишний раз взяли» (замок владельческий, реентерабельный и дешёвый), критична в сторону
+ * «не взяли»: тогда путь вернётся к прежнему порядку захвата.
+ *
+ * `archived` в entity_update: архивация/разархивация транзакции меняет привязку (ветка
+ * archivedChanged бюджет-хука), а какие у сущности аспекты, по входу не видно.
+ */
+function touchesBudgetContour(op: { tool: string; input: unknown }): boolean {
+  if (op.tool === 'attach_orbis_financial' || op.tool === 'attach_orbis_budget') return true;
+  if (op.tool === 'batch_execute') {
+    const env = op.input as { operations?: Array<{ tool: string; input: unknown }> } | null;
+    return (env?.operations ?? []).some(touchesBudgetContour);
+  }
+  const input = op.input as { aspects?: Record<string, unknown>; archived?: unknown } | null;
+  if (input === null || typeof input !== 'object') return false;
+  if (op.tool === 'entity_update' && input.archived !== undefined) return true;
+  const aspects = input.aspects;
+  if (aspects === undefined || aspects === null || typeof aspects !== 'object') return false;
+  return 'orbis/financial' in aspects || 'orbis/budget' in aspects;
+}
+
+/**
+ * Замок бюджет-контура владельца ПЕРВЫМ statement'ом транзакции исполнителя (E9 + фикс-раунд).
+ *
+ * Порядок захвата обязан быть глобальным «advisory → строки». Раньше замок брался внутри
+ * applyBudgetFollowUps, то есть уже ПОСЛЕ `SELECT … FOR UPDATE` строки правимой сущности,
+ * а встречный путь (создание/правка конверта) берёт тот же замок в `assertEnvelopeUnique`
+ * на стадии prepare — ДО своих строковых блокировок. Два порядка на один замок — цикл
+ * ожидания: PostgreSQL разорвал бы его отказом одной транзакции по дедлоку. Здесь замок
+ * берётся до стадий, поэтому обе стороны выстраиваются в одну очередь.
+ *
+ * Реентерабельность делает повторный захват в `assertEnvelopeUnique` бесплатным — снимать
+ * его там не нужно (и нельзя: конверты пишутся и путями, которые сюда не заходят).
+ */
+async function lockBudgetContour(
+  tx: Tx,
+  ownerId: string,
+  ops: ReadonlyArray<{ tool: string; input: unknown }>,
+): Promise<void> {
+  if (ops.some(touchesBudgetContour)) await lockOwnerBudget(tx, ownerId);
+}
+
 // ---------------------------------------------------------------------------
 // Диспетчер стадий 1–4
 // ---------------------------------------------------------------------------
@@ -513,14 +565,27 @@ function hookAspectChanged(hook: BudgetHook, aspectId: string): boolean {
  * (а) итоговая сущность несёт orbis/financial и financial-данные/архивность/шаблонность
  *     (orbis/schedule) изменились → bindingOps (шаблон recurring отвязывается);
  * (б) операция затронула orbis/budget (create/update периода-категории/архивация/detach)
- *     → rebindForEnvelope по окну «старый ИЛИ новый период».
+ *     → rebindForEnvelope по окну «старый ИЛИ новый период»;
+ * (в) сущность ПЕРЕСТАЛА нести orbis/financial (detach) → unbindOps снимает привязку.
  */
-function budgetHookBranches(hook: BudgetHook): { rebind: boolean; bind: boolean } {
+function budgetHookBranches(hook: BudgetHook): {
+  rebind: boolean;
+  bind: boolean;
+  unbind: boolean;
+} {
   const { before, after } = hook;
   const beforeAspects = before?.aspects as AspectsMap | undefined;
   const afterAspects = after.aspects as AspectsMap;
   const archivedChanged = before !== null && before.archived !== after.archived;
   return {
+    // (в) сущность ПЕРЕСТАЛА быть транзакцией: detach orbis/financial. Ветка (а) сюда не
+    // достаёт (она требует financial в ИТОГОВЫХ аспектах), и bindingOps на такой сущности
+    // возвращает [] — снять устаревшую привязку было некому, и конверт оставался
+    // родителем не-financial сущности. Зеркальный кейс «стал шаблоном recurring»
+    // закрывает ветка (а) через bindingTargetOf → fin:null.
+    unbind:
+      beforeAspects?.['orbis/financial'] !== undefined &&
+      afterAspects['orbis/financial'] === undefined,
     rebind:
       (beforeAspects?.['orbis/budget'] !== undefined ||
         afterAspects['orbis/budget'] !== undefined) &&
@@ -548,10 +613,12 @@ async function budgetFollowUpDescs(
   ctx: ExecCtx,
   hook: BudgetHook,
   reads: BindingReads,
+  /** Уже посчитанные ветки хука (applyBudgetFollowUps считает их один раз на хук). */
+  precomputed?: ReturnType<typeof budgetHookBranches>,
 ): Promise<BudgetOpDesc[]> {
   const { before, after } = hook;
   const ownerId = ctx.req.actorUserId;
-  const branches = budgetHookBranches(hook);
+  const branches = precomputed ?? budgetHookBranches(hook);
   const descs: BudgetOpDesc[] = [];
 
   // (б) конверт: до или после операции сущность несёт orbis/budget
@@ -569,6 +636,11 @@ async function budgetFollowUpDescs(
   // (а) транзакция: bindingOps сам отсекает шаблоны recurring и архивные сущности
   if (branches.bind) {
     descs.push(...(await bindingOps(ctx.tx, { ownerId, entity: toWire(after), reads })));
+  }
+
+  // (в) сущность перестала быть транзакцией: снимаем привязку к конверту
+  if (branches.unbind) {
+    descs.push(...(await unbindOps(ctx.tx, { ownerId, entityId: after.id, reads })));
   }
 
   // Дедуп в рамках хука: сущность с обоими аспектами могла бы породить одинаковые ops
@@ -598,9 +670,16 @@ async function budgetFollowUpDescs(
 async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<PreparedOp[]> {
   const ownerId = ctx.req.actorUserId;
   const reads = new BindingReads();
+  // Замок владельца (E9) здесь НЕ берётся: он уже взят первым statement'ом транзакции
+  // (lockBudgetContour) — иначе получился бы второй, обратный порядок захвата
+  // относительно строковых блокировок и цикл ожидания с путём конверта.
+  //
+  // Ветки считаются ОДИН раз на хук: внутри budgetHookBranches живёт JSON.stringify по
+  // значениям аспектов, а на импорте в 300 строк хуков ровно столько же.
+  const branches = hooks.map(budgetHookBranches);
   const targets: BindingTarget[] = [];
-  for (const hook of hooks) {
-    if (!budgetHookBranches(hook).bind) continue;
+  for (const [i, hook] of hooks.entries()) {
+    if (!branches[i]?.bind) continue;
     // Окно ребиндинга (ветка «б») прогревается внутри rebindForEnvelope — его строки
     // известны только после запроса затронутых транзакций
     const target = bindingTargetOf(toWire(hook.after));
@@ -609,8 +688,8 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
   if (targets.length > 0) await reads.prefetch(ctx.tx, { ownerId, targets });
 
   const applied: PreparedOp[] = [];
-  for (const hook of hooks) {
-    for (const desc of await budgetFollowUpDescs(ctx, hook, reads)) {
+  for (const [i, hook] of hooks.entries()) {
+    for (const desc of await budgetFollowUpDescs(ctx, hook, reads, branches[i])) {
       const plan = await prepareOp(ctx, desc.tool, desc.input);
       await plan.apply(ctx);
       reads.invalidateParents(desc.input.target_id);

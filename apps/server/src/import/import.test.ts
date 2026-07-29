@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import {
   type CanonicalRow,
   externalRowId,
+  globalThreadId,
   type ImportAnalyzeResult,
   MAX_ANALYZE_ROW_CHARS,
   MAX_IMPORT_ROWS,
@@ -245,6 +246,35 @@ describe('import.review: статусы строк (§3.4.1)', () => {
 
     const after = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
     expect(after.rows[0]?.suggestedCategoryRef).toBe(foodId);
+  });
+
+  // §7.4: архивная memory-сущность из контекста исключена — а значит, и из резолва
+  // импорта. Фильтр NOT archived в memoryRules не проверялся ничем: снятое владельцем
+  // правило продолжало бы категоризировать выписку, и ни один тест этого не заметил бы.
+  // На серверной эскалации соседний инвариант закрыт («архивное правило не подавляет»).
+  test('архивное правило выписку не категоризирует (§7.4)', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({
+      occurredOn: '2026-05-13',
+      amount: '843.00',
+      counterparty: 'SBOL ПЯТЁРОЧКА 843', // алиасами не покрыт: без правила предложения нет
+    });
+    const rule = await caller.entity.create({
+      input: {
+        title: 'пятерочка → Еда',
+        tags: [],
+        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+      },
+      source: 'ui',
+    });
+    const active = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(active.rows[0]?.suggestedCategoryRef).toBe(foodId);
+
+    await caller.entity.update({ id: rule.id, archived: true });
+
+    const archived = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(archived.rows[0]?.suggestedCategoryRef).toBeUndefined();
   });
 
   // Конфликт «один паттерн — разные категории» штатно рождает эскалация §7.8: её гейты
@@ -1386,5 +1416,170 @@ describe('роутер import: гейт §8 import.csv (LIMIT → 429)', () => {
       namespace: NS,
     });
     expect(r.rows[0]?.status).toBe('new');
+  });
+});
+
+// Валюта выписки (уборочная фаза, E11 — Important бэклога фазы C). До этого выписка
+// в чужой валюте молча ложилась в валюту владельца: ключа currency в аспекте не было
+// вовсе, а его отсутствие и селектор конвертов (§2.3), и агрегаты (§2.2) трактуют как
+// валюту по умолчанию. Валюта — свойство ФАЙЛА (у CanonicalRow её нет и не заводится).
+describe('import.confirm: валюта выписки (§5 «Чужая валюта»)', () => {
+  test('currency=USD пишется в аспект каждой созданной транзакции', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const rows = [
+      makeRow({ occurredOn: '2026-06-01', amount: '12.00', counterparty: 'STARBUCKS' }),
+      makeRow({ occurredOn: '2026-06-02', amount: '30.00', counterparty: 'UBER', rowIndex: 1 }),
+    ];
+    const confirmed = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: rows.map((row) => ({ row, action: 'create' as const, categoryRef: foodId })),
+      currency: 'USD',
+    });
+    expect(confirmed.created).toBe(2);
+    for (const id of confirmed.entityIds) {
+      const e = await caller.entity.get({ id });
+      expect((e.entity.aspects['orbis/financial'] as Record<string, unknown>).currency).toBe('USD');
+    }
+  });
+
+  test('без currency (старый клиент) ключ не пишется — прежнее поведение', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({ occurredOn: '2026-06-03', amount: '340.00', counterparty: 'Кафе' });
+    const confirmed = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row, action: 'create', categoryRef: foodId }],
+    });
+    const e = await caller.entity.get({ id: confirmed.entityIds[0] as string });
+    expect(
+      (e.entity.aspects['orbis/financial'] as Record<string, unknown>).currency,
+    ).toBeUndefined();
+  });
+
+  test('валюта участвует в выборе конверта: USD-строка не липнет к рублёвому конверту', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    // Рублёвый конверт на период — единственный конверт этой категории.
+    await caller.entity.create({
+      input: {
+        title: 'Еда — июнь',
+        tags: [],
+        aspects: {
+          'orbis/budget': {
+            category_ref: foodId,
+            limit: '30000.00',
+            currency: 'RUB',
+            period_start: '2026-06-01',
+            period_end: '2026-06-30',
+          },
+        },
+      },
+      source: 'ui',
+    });
+    const confirmed = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_B,
+      items: [
+        {
+          row: makeRow({ occurredOn: '2026-06-10', amount: '12.00', counterparty: 'STARBUCKS' }),
+          action: 'create',
+          categoryRef: foodId,
+        },
+      ],
+      currency: 'USD',
+    });
+    // Комбинация селектора §2.3 — точная (категория+валюта+период): рублёвый конверт
+    // валютной операции не родитель, строка честно остаётся Unbudgeted.
+    expect(confirmed.unbudgeted.length).toBe(1);
+  });
+});
+
+// Механизм измерения метрики 00-product §8 (уборочная фаза, E13): «покрытие транзакций»
+// объявлено в PRD, но считать его было НЕЧЕМ — skipped-строки (выписка уже была в Orbis)
+// в графе следа не оставляют, сущностей по ним не создаётся. Сводка кладётся в журнал.
+describe('import.confirm: сводка импорта в журнале (метрика §8)', () => {
+  async function summaries(user: string): Promise<Array<Record<string, unknown>>> {
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const rows = (await admin.execute(sql`
+        SELECT metadata -> 'cards' AS cards FROM chat_messages
+        WHERE metadata @> '{"cards":[{"kind":"import_summary"}]}'::jsonb
+          AND thread_id = ${globalThreadId(user)}
+        ORDER BY created_at
+      `)) as unknown as Array<{ cards: Array<Record<string, unknown>> }>;
+      return [...rows].flatMap((r) => r.cards).filter((c) => c.kind === 'import_summary');
+    } finally {
+      await adminClient.end();
+    }
+  }
+
+  test('сводка несёт все четыре счётчика и не удваивается при повторе confirm', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const rows = [
+      makeRow({ occurredOn: '2026-07-01', amount: '100.00', counterparty: 'Кафе' }),
+      makeRow({ occurredOn: '2026-07-02', amount: '200.00', counterparty: 'Аптека', rowIndex: 1 }),
+      makeRow({ occurredOn: '2026-07-03', amount: '300.00', counterparty: 'Метро', rowIndex: 2 }),
+    ];
+    const batchId = newId();
+    // rowsTotal — строки ВЫПИСКИ (5), items — только отправленные (2 создания):
+    // ⟳ «уже импортирована» клиент не присылает вовсе, и без rowsTotal сводка
+    // объявляла бы «уже было 0» на каждой выписке.
+    const payload = {
+      batchId,
+      namespace: NS,
+      fileHash: FILE_A,
+      rowsTotal: 5,
+      items: [
+        { row: rows[0] as CanonicalRow, action: 'create' as const, categoryRef: foodId },
+        { row: rows[1] as CanonicalRow, action: 'create' as const, categoryRef: foodId },
+      ],
+    };
+    await caller.import.confirm(payload);
+
+    const first = await summaries(user);
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({
+      kind: 'import_summary',
+      namespace: NS,
+      total: 5,
+      created: 2,
+      adopted: 0,
+      skipped: 3,
+    });
+
+    // Идемпотентный повтор того же batchId статистику не удваивает — иначе один файл
+    // считался бы дважды и метрика покрытия врала бы в свою пользу.
+    await caller.import.confirm(payload);
+    expect(await summaries(user)).toHaveLength(1);
+  });
+
+  // Выписка, которую Orbis знал ЦЕЛИКОМ, — лучший исход для метрики §8, и потерять его
+  // нельзя: confirm в этом случае отказывает («нет строк для импорта»), но сводку пишет.
+  test('выписка известна целиком: confirm отказывает, но сводка со 100% записана', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({ occurredOn: '2026-07-09', amount: '111.00', counterparty: 'Кафе' });
+    // Все строки выписки уже импортированы ранее → клиент шлёт пустой список создаваемых
+    await expect(
+      caller.import.confirm({
+        batchId: newId(),
+        namespace: NS,
+        fileHash: FILE_B,
+        rowsTotal: 7,
+        items: [{ row, action: 'skip' as const }],
+      }),
+    ).rejects.toThrow();
+    void foodId;
+
+    const s = await summaries(user);
+    expect(s).toHaveLength(1);
+    expect(s[0]).toMatchObject({ total: 7, created: 0, adopted: 0, skipped: 7 });
   });
 });

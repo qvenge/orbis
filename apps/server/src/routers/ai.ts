@@ -9,7 +9,7 @@
 // атрибутируются актором 'ai' (§7.8), что верно только для чата владельца —
 // PAT-агент работает своим транспортом (MCP, Task 10) с честной атрибуцией 'agent'.
 import { z } from 'zod';
-import { declineRuleSuggestion } from '../ai/escalation';
+import { declineRuleSuggestion, RULE_PATTERN_MAX } from '../ai/escalation';
 import { defaultAiDeps, type SendMessageResult, sendMessage } from '../ai/send-message';
 import { ExecError, execErrorToTRPC } from '../errors';
 import type { ExecuteOk } from '../executor/types';
@@ -104,7 +104,16 @@ export const aiRouter = router({
     .input(
       z
         .object({
-          pattern: z.string().min(1),
+          // Потолок — защита JSONB, не бизнес-правило (конвенция слоя, ср. bank_txn_id):
+          // значение ложится в append-only chat_messages и читается каждым подавлением.
+          // ОТВЕРГАТЬ длинный паттерн здесь нельзя: карточки-предложения писались до
+          // появления границы (журнал append-only), и «Не надо» на такой карточке
+          // отвечало бы 400 навсегда. Усекаем — ключ подавления считается по СХОДСТВУ,
+          // усечение его не ломает.
+          pattern: z
+            .string()
+            .min(1)
+            .transform((p) => p.slice(0, RULE_PATTERN_MAX)),
           fromCategoryId: z.string().uuid(),
           toCategoryId: z.string().uuid(),
         })

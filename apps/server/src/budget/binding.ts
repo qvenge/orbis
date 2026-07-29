@@ -373,6 +373,26 @@ export async function bindingOps(
   return targetBindingOps(tx, args.reads ?? new BindingReads(), args.ownerId, target);
 }
 
+/**
+ * Снятие привязки: сущность перестала быть транзакцией (detach `orbis/financial`).
+ * Переиспользует ветку принудительной отвязки `targetBindingOps` (`fin: null`) — той же,
+ * которой отвязывается ставший шаблоном recurring; нового SQL здесь нет.
+ *
+ * Зачем отдельная точка входа: `bindingOps` строит цель из АСПЕКТОВ сущности, а у
+ * detach'нутой их уже нет — `bindingTargetOf` возвращает null, и снять устаревшую связь
+ * было некому. Висящая parent-связь показывала не-financial ребёнка в `children_of`
+ * конверта (на spent не влияет — SQL-агрегаты фильтруют по financial).
+ */
+export async function unbindOps(
+  tx: Tx,
+  args: { ownerId: string; entityId: string; reads?: BindingReads },
+): Promise<BudgetOpDesc[]> {
+  return targetBindingOps(tx, args.reads ?? new BindingReads(), args.ownerId, {
+    txnId: args.entityId,
+    fin: null,
+  });
+}
+
 /** Сторона окна ребиндинга: категория + период (старое или новое состояние конверта). */
 interface RebindSide {
   categoryRef: string;
@@ -485,6 +505,24 @@ function envelopeCombinationMatches(
 }
 
 /**
+ * Транзакционный замок бюджета владельца — ОДИН ключ на два инварианта (уборочная фаза,
+ * E9). Держали его только записи конвертов (`assertEnvelopeUnique`), а привязка транзакции
+ * к конверту шла без замка: конкурентные «create транзакции ∥ create конверта» дают
+ * write-skew — селектор §2.3 одной транзакции не видит незакоммиченный конверт другой,
+ * и запись остаётся Unbudgeted, хотя конверт «уже есть».
+ *
+ * Тот же ключ, что у уникальности, — намеренно: оба инварианта про набор конвертов
+ * владельца, и разные ключи развели бы их по разным очередям, оставив ту же щель.
+ * Лок реентерабелен (повторный захват в той же транзакции бесплатен), поэтому batch,
+ * который и привязывает, и создаёт конверты, берёт его один раз.
+ */
+export async function lockOwnerBudget(tx: Tx, ownerId: string): Promise<void> {
+  await tx.execute(
+    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${ownerId}:envelope_unique`}, 0))`,
+  );
+}
+
+/**
  * Уникальность конверта (03-budget §2.1): не более одного НЕАРХИВНОГО конверта на
  * точную комбинацию (category_ref, currency, period_start, period_end); currency
  * сравнивается как хранится (NULL и явная валюта — разные комбинации, §2.1 «точная»),
@@ -524,9 +562,7 @@ export async function assertEnvelopeUnique(
     periodEnd: budget.period_end,
   };
 
-  await tx.execute(
-    sql`SELECT pg_advisory_xact_lock(hashtextextended(${`${ownerId}:envelope_unique`}, 0))`,
-  );
+  await lockOwnerBudget(tx, ownerId);
 
   const rows = (await tx.execute(sql`
     SELECT id FROM entities

@@ -24,7 +24,12 @@ import { appRouter } from '../router';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import type { Card } from '../tools/registry';
 import type { Context } from '../trpc';
-import { JOURNAL_SCAN_LIMIT, maybeSuggestRule, scanFinancialUpdates } from './escalation';
+import {
+  JOURNAL_SCAN_LIMIT,
+  maybeSuggestRule,
+  RULE_PATTERN_MAX,
+  scanFinancialUpdates,
+} from './escalation';
 
 requireEnv();
 
@@ -242,6 +247,19 @@ describe('эскалация повторных исправлений кате�
     await createRule(user);
     await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
     await recategorize(user, await createTxn(user, 'Пятёрочка', food), fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+  });
+
+  // Уборочная фаза: гейт сравнивал normalizeCounterparty(pattern) с уже нормализованным
+  // паттерном, то есть проверял «нормализация ничего не изменила». Для заголовков, где
+  // служебный токен становится первым только ПОСЛЕ снятия числовых («1234 CARD ПЯТЁРОЧКА»
+  // → «card пятерочка» до канонизации), гейт существующего правила не срабатывал: приходило
+  // предложение УЖЕ созданного правила, а повторное «Запомнить» рождало вторую сущность.
+  test('4b. эквивалентное правило подавляет и при служебном токене внутри заголовка', async () => {
+    const { user, food, fun } = await freshOwner();
+    await createRule(user);
+    await recategorize(user, await createTxn(user, '1234 CARD ПЯТЁРОЧКА', food), fun);
+    await recategorize(user, await createTxn(user, '5678 CARD ПЯТЕРОЧКА', food), fun);
     expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
   });
 
@@ -749,5 +767,123 @@ describe('эскалация повторных исправлений кате�
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+// --- уборочная фаза: точки вызова, стоимость скана, незакреплённые контракты ----------
+
+describe('эскалация: уборочная фаза', () => {
+  test('28. батч из N рекатегоризаций читает журнал ОДИН раз, а не N', async () => {
+    const { user, food, fun } = await freshOwner();
+    // Первая пара — чтобы журнал был непустым и скан имел что читать.
+    await recategorizeBatchViaChat(
+      user,
+      [await createTxn(user, 'OZON 1', food), await createTxn(user, 'OZON 2', food)],
+      fun,
+    );
+    const ids = [
+      await createTxn(user, 'ПЯТЕРОЧКА 1', food),
+      await createTxn(user, 'ПЯТЕРОЧКА 2', food),
+      await createTxn(user, 'ПЯТЕРОЧКА 3', food),
+    ];
+    const input = {
+      batch_id: newId(),
+      operations: ids.map((id) => ({
+        tool: 'entity_update',
+        input: { id, aspects: { 'orbis/financial': { category_ref: fun } } },
+      })),
+    };
+    const r = ok(
+      await execute(
+        db,
+        {
+          actorUserId: user,
+          actorKind: 'owner',
+          source: 'chat',
+          batchId: input.batch_id,
+          operations: input.operations,
+        },
+        { sink },
+      ),
+    );
+
+    // Скан журнала наблюдаем ровно там, где он живёт: проба GIN в scanFinancialUpdates.
+    // До правки он выполнялся на КАЖДУЮ рекатегоризацию действия с одинаковыми аргументами.
+    const mod = await import('./escalation');
+    const spy = spyOn(mod, 'scanFinancialUpdates');
+    try {
+      await maybeSuggestRule({ db, ownerId: user, action: await actionById(r.actionId) });
+      expect(spy.mock.calls.length).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('29. батч 11+ операций (explicit-confirmation) эскалирует ПОСЛЕ approve', async () => {
+    const { user, food, fun } = await freshOwner();
+    // Первое исправление обычным чат-путём: одно, само по себе предложения не даёт.
+    await recategorizeViaChat(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+
+    // Второе — батчем из 11 операций: classifyToolCall уводит его в explicit-confirmation,
+    // диспатч возвращает pending ДО execute, и исполняет payload только approvePending.
+    const ids: string[] = [];
+    for (let i = 0; i < 11; i += 1) ids.push(await createTxn(user, `ПЯТЕРОЧКА ${i}`, food));
+    const pending = await dispatchTool(chatCtx(user), 'batch_execute', {
+      batch_id: newId(),
+      operations: ids.map((id) => ({
+        tool: 'entity_update',
+        input: { id, aspects: { 'orbis/financial': { category_ref: fun } } },
+      })),
+    });
+    expect(pending.status).toBe('pending_confirmation');
+    const pendingId = (pending as { pendingId: string }).pendingId;
+
+    await ownerCaller(user).ai.approve({ pendingId });
+
+    const cards = await cardsOf(user, 'memory_rule_suggestion');
+    expect(cards.length).toBe(1);
+    expect((cards[0] as { ruleText: string }).ruleText).toBe('пятерочка → Развлечения');
+  });
+
+  test('30. отменённое исправление не считается: исправил → отменил → исправил', async () => {
+    const { user, food, fun } = await freshOwner();
+    const a = await createTxn(user, 'ПЯТЕРОЧКА 843', food);
+    const b = await createTxn(user, 'Пятёрочка', food);
+
+    const actionId = await recategorizeRaw(user, a, fun);
+    await ownerCaller(user).ai.undo({ actionId });
+
+    // Второе фактическое исправление — но первое отменено, значит одинаковых всего одно.
+    await recategorize(user, b, fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+
+    // Третье (неотменённое) — вот теперь их два, и предложение приходит.
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 999', food), fun);
+    expect((await cardsOf(user, 'memory_rule_suggestion')).length).toBe(1);
+  });
+
+  // Отказ НЕ отвергает длинный паттерн, а усекает: карточки-предложения писались до
+  // появления границы (журнал append-only), и «Не надо» на такой карточке отвечало бы
+  // 400 навсегда — кнопка мертва, карточка не отвечена. Ключ подавления считается по
+  // СХОДСТВУ, поэтому усечение его не ломает.
+  test('31. длинный паттерн отказа усекается до границы, а не отвергается', async () => {
+    const { user, food, fun } = await freshOwner();
+    await ownerCaller(user).ai.declineMemoryRule({
+      pattern: 'п'.repeat(RULE_PATTERN_MAX + 50),
+      fromCategoryId: food,
+      toCategoryId: fun,
+    });
+    const cards = await cardsOf(user, 'memory_rule_declined');
+    expect(cards).toHaveLength(1);
+    expect((cards[0] as { pattern: string }).pattern.length).toBe(RULE_PATTERN_MAX);
+  });
+
+  test('32. эскалация сама не порождает паттерн длиннее границы', async () => {
+    const { user, food, fun } = await freshOwner();
+    const long = `${'мерчант '.repeat(30)}843`; // нормализованный паттерн заведомо > 128
+    await recategorize(user, await createTxn(user, long, food), fun);
+    await recategorize(user, await createTxn(user, long, food), fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
   });
 });

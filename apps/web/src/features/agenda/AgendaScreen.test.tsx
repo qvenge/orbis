@@ -310,17 +310,65 @@ test('§4.2 (D2c): у просроченного платежа сумма ос�
   expect(within(overdueSection()).queryByText(dayLabel(yesterday))).toBeNull();
 });
 
-test('§4.2 (D2b): мета EntityRow подавлена ТОЛЬКО в «Просроченном» — в дневных секциях она есть', async () => {
-  // Дефолт пропа EntityRow общий с Browser: сменить его молча = сломать вторую поверхность.
-  // due_date (date-only) форматируется в UTC — узел детерминирован, в отличие от start_at.
-  const scheduled = ent('t3', 'Врач', {
+// --- мета дневных секций (уборочная фаза: тот же дефект, что D2b вычистил в «Просроченном»)
+// Секция уже подписана датой, а слева у строки стоит время: третья печать той же даты
+// справа — шум, и у события она считалась в таймзоне БРАУЗЕРА (start_at — полный ISO),
+// то есть у владельца с несовпадающей зоной ночные строки расходились с заголовком секции.
+
+test('дневная секция: у события дата справа не печатается — её печатает сама секция', async () => {
+  const event = ent('e1', 'Созвон', { 'orbis/schedule': { start_at: at(tomorrow, '14:00') } });
+  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [event] }));
+
+  await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Созвон']));
+  // Время слева осталось; голой даты справа — ни одной
+  expect(within(daySection(tomorrow)).getByText('14:00')).toBeInTheDocument();
+  expect(within(daySection(tomorrow)).queryByText(dayLabel(tomorrow))).toBeNull();
+});
+
+test('дневная секция: срок, СОВПАВШИЙ с днём секции, не печатается второй раз', async () => {
+  // Самая частая строка дня: запланированная задача со сроком на этот же день. Секция
+  // уже подписана датой, слева стоит время — третья печать той же даты была шумом.
+  const scheduled = ent('t5', 'Врач', {
     'orbis/task': { status: 'planned', due_date: tomorrow },
     'orbis/schedule': { start_at: at(tomorrow, '14:00') },
   });
   renderWithProviders(<AgendaScreen />, agendaHandler({ days: [scheduled] }));
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Врач']));
-  expect(within(daySection(tomorrow)).getByText(dayLabel(tomorrow))).toBeInTheDocument();
+  expect(within(daySection(tomorrow)).getByText('14:00')).toBeInTheDocument();
+  expect(within(daySection(tomorrow)).queryByText(dayLabel(tomorrow))).toBeNull();
+});
+
+test('дневная секция: срок, отличающийся от дня секции, остаётся — это не дубль, а факт', async () => {
+  // Встреча завтра, а сдать работу нужно послезавтра: правая мета несёт НОВОЕ знание.
+  const dayAfter = addDays(today, 2);
+  const scheduled = ent('t3', 'Врач', {
+    'orbis/task': { status: 'planned', due_date: dayAfter },
+    'orbis/schedule': { start_at: at(tomorrow, '14:00') },
+  });
+  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [scheduled] }));
+
+  await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Врач']));
+  expect(within(daySection(tomorrow)).getByText(dayLabel(dayAfter))).toBeInTheDocument();
+});
+
+test('дневная секция: у платежа сумма остаётся — подавлять нечего (как в «Просроченном»)', async () => {
+  const payment = ent('t4', 'Аренда', {
+    'orbis/schedule': { start_at: at(tomorrow, '09:00') },
+    'orbis/financial': { amount: '1200.00', direction: 'expense' },
+  });
+  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [payment] }));
+
+  await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Аренда']));
+  expect(within(daySection(tomorrow)).getByText('−1 200.00')).toBeInTheDocument();
+});
+
+test('дефолт меты EntityRow не менялся: в Browser строка по-прежнему печатает дату', async () => {
+  // Дефолт пропа общий с Browser — правка Повестки не имеет права его сдвинуть.
+  const { EntityRow } = await import('../browser/EntityRow');
+  const task = ent('b1', 'Отчёт', { 'orbis/task': { status: 'planned', due_date: tomorrow } });
+  renderWithProviders(<EntityRow entity={task} />);
+  expect(screen.getByText(dayLabel(tomorrow))).toBeInTheDocument();
 });
 
 // --- пользовательские строки экрана (D2c) ---------------------------------------------

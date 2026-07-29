@@ -1,4 +1,4 @@
-import { BUILTIN_ASPECT_META } from '@orbis/shared';
+import { BUILTIN_ASPECT_META, parseRuleTitle } from '@orbis/shared';
 import { useState } from 'react';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import type { RouterOutputs } from '../../trpc';
@@ -28,25 +28,30 @@ function Title({
   value,
   onSave,
   className = '',
+  warn,
 }: {
   value: string;
   onSave?: (title: string) => void;
   className?: string;
+  /** Предупреждение под строкой ввода по ТЕКУЩЕМУ черновику; null — всё в порядке. */
+  warn?: (draft: string) => string | null;
 }) {
   if (onSave === undefined) {
     return <span className={`flex-1 ${TITLE_CLASS} ${className}`}>{value}</span>;
   }
-  return <TitleEditor value={value} onSave={onSave} className={className} />;
+  return <TitleEditor value={value} onSave={onSave} className={className} warn={warn} />;
 }
 
 function TitleEditor({
   value,
   onSave,
   className,
+  warn,
 }: {
   value: string;
   onSave: (title: string) => void;
   className: string;
+  warn?: (draft: string) => string | null;
 }) {
   const [draft, setDraft] = useState(value);
   const [serverValue, setServerValue] = useState(value);
@@ -59,10 +64,11 @@ function TitleEditor({
     if (draft === serverValue) setDraft(value);
   }
 
-  return (
+  const input = (
     <input
       aria-label="Заголовок"
       data-testid="title-edit"
+      {...(warn !== undefined ? { 'aria-describedby': 'title-format-warning' } : {})}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       // Пустой заголовок сущности не бывает (entityUpdateInput: title.min(1)) — вместо
@@ -73,6 +79,30 @@ function TitleEditor({
       }}
       className={`min-w-0 flex-1 rounded-md bg-transparent px-1 ${TITLE_CLASS} outline-none transition hover:bg-surface-2/60 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/30 ${className}`}
     />
+  );
+  // Без warn вёрстка прежняя — строка остаётся одной flex-ячейкой (её делят сумма, бейдж
+  // и чекбокс соседних веток). Колонку заводим только там, где предупреждение возможно.
+  if (warn === undefined) return input;
+  const warning = warn(draft);
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+      {input}
+      {warning !== null && (
+        // text-alert — документированная AA-пара (5.18:1); --color-warning объявлен как
+        // цвет ЗАЛИВКИ бара Budget и на белом листе даёт 3.18:1 — самый нечитаемый текст
+        // на экране у сообщения, ради видимости которого правка и делалась.
+        // role=status + aria-describedby: при правке с клавиатуры/скринридером
+        // предупреждение иначе не объявляется вовсе.
+        <p
+          id="title-format-warning"
+          role="status"
+          data-testid="title-warning"
+          className="px-1 text-xs text-alert"
+        >
+          {warning}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -98,7 +128,11 @@ function FinancialRow({
   // без конверта (строки остатка нет) пользователь видел только uuid.
   // Пока список категорий грузится, значение неизвестно — бейджа нет вовсе (D6d п.1):
   // иначе на холодном кэше uuid мелькал и подменялся названием, бейдж дёргался по ширине.
-  const { title: categoryTitle, isPending: categoryPending } = useCategoryTitle(categoryRef);
+  const {
+    title: categoryTitle,
+    isPending: categoryPending,
+    isError: categoryFailed,
+  } = useCategoryTitle(categoryRef);
 
   return (
     <div className="flex items-center gap-2" data-testid="native-financial">
@@ -109,9 +143,24 @@ function FinancialRow({
       >
         {money.text}
       </span>
-      {categoryRef !== '' && !categoryPending && <Badge>{categoryTitle}</Badge>}
+      {categoryRef !== '' && !categoryPending && !categoryFailed && <Badge>{categoryTitle}</Badge>}
     </div>
   );
+}
+
+/**
+ * Формат правила «паттерн → категория» (shared/memory/rule.ts) — тот же разбор, что в резолве.
+ *
+ * Текст говорит ровно правду: мёртвым нераспознанное правило становится в
+ * ДЕТЕРМИНИРОВАННЫХ путях (быстрый ввод, резолв импорта, гейт эскалации), а в системный
+ * промпт оно уезжает как есть — в разговоре модель его всё равно учтёт. Подсказка формата
+ * даёт НАБИРАЕМЫЙ вариант разделителя: U+2192 с клавиатуры не набрать, ради чего разбор
+ * и научили понимать «->».
+ */
+function ruleFormatWarning(draft: string): string | null {
+  return parseRuleTitle(draft) === null
+    ? 'Формат правила не распознан — нужно «паттерн -> категория». Быстрый ввод и импорт такое правило не применят (AI учтёт его только в разговоре)'
+    : null;
 }
 
 function keyFieldsFor(aspectId: string): string[] {
@@ -151,6 +200,26 @@ export function NativeRow({
   const financial = aspects['orbis/financial'];
   if (financial) {
     return <FinancialRow title={entity.title} financial={financial} onSaveTitle={onSaveTitle} />;
+  }
+
+  // Память AI: у ПРАВИЛА весь машиночитаемый смысл лежит в заголовке (K19.4), а inline-правка
+  // ломает его одним символом — стрелку U+2192 с клавиатуры не набрать. Признака «формат не
+  // распознан» не было нигде: запись оставалась в списке «Память AI» и выглядела живой, хотя
+  // ни fast-path, ни резолв импорта её уже не применяли. Предупреждение считается по ЧЕРНОВИКУ,
+  // то есть видно до сохранения; у факта формата нет — предупреждать не о чем.
+  const memory = aspects['orbis/memory'];
+  if (memory) {
+    const isRule = memory.kind === 'rule';
+    return (
+      <div className="flex items-start gap-2" data-testid="native-memory">
+        <Title
+          value={entity.title}
+          onSave={onSaveTitle}
+          warn={isRule ? ruleFormatWarning : undefined}
+        />
+        {typeof memory.kind === 'string' && <Badge>{memory.kind}</Badge>}
+      </div>
+    );
   }
 
   const schedule = aspects['orbis/schedule'];

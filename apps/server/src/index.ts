@@ -1,5 +1,6 @@
 import { makeAiDeps } from './ai/send-message';
 import { createApp } from './app';
+import { type AspectDriftStatus, reportAspectDriftOnStartup } from './db/aspect-drift';
 import { makeDb } from './db/client';
 
 // Один пул соединений на процесс; в request-контекст db попадает ссылкой (Task 12)
@@ -10,7 +11,16 @@ const { db, client } = makeDb();
 // ORBIS_LLM_PROVIDER='anthropic' или в production — роняют старт, а не запрос
 const ai = makeAiDeps();
 
-const app = createApp({ db, ai });
+// Реестр аспектов в БД против кода (E1). НЕ fail-fast и НЕ блокирует приём запросов:
+// пересев — шаг релиза с ноутбука владельца, и приложение обязано подняться, даже когда
+// его забыли. Результат доезжает в /health: расхождение — списком, невыполненная
+// проверка — «unknown» (молчать о ней нельзя, иначе ловушка тихо снята).
+let aspectDrift: AspectDriftStatus = { status: 'unknown' };
+void reportAspectDriftOnStartup(db).then((d) => {
+  aspectDrift = d;
+});
+
+const app = createApp({ db, ai, aspectDrift: () => aspectDrift });
 
 const server = Bun.serve({
   port: Number(process.env.PORT) || 3001,

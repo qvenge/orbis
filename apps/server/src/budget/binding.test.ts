@@ -833,3 +833,148 @@ describe('конверсия транзакции в recurring-шаблон сн
     expect(await budgetParents(txnId)).toEqual([envId]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Detach orbis/financial (уборочная фаза, E8): сущность перестала быть транзакцией —
+// привязка к конверту обязана сняться тем же action. Зеркало конверсии в шаблон выше:
+// там (а)-ветка хука отвязывает через bindingTargetOf → fin:null, а при detach аспекта
+// её условие «в итоговых аспектах есть financial» не выполняется вовсе.
+// ---------------------------------------------------------------------------
+describe('detach orbis/financial снимает привязку к конверту (§2.3)', () => {
+  const user = freshUserId();
+  const cat = newId();
+
+  test('detach → budget-parent снят тем же action', async () => {
+    const { entity: env } = await createEntity(user, {
+      title: 'Еда — июль',
+      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+    });
+    const { entity: txn } = await createEntity(user, {
+      title: 'Ошибочная запись',
+      aspects: { 'orbis/financial': finData(cat, '2026-07-06') },
+    });
+    expect(await budgetParents(txn.id)).toEqual([env.id]);
+
+    const r = ok(
+      await execute(
+        db,
+        req(user, 'entity_update', { id: txn.id, aspects: { 'orbis/financial': null } }),
+        { sink },
+      ),
+    );
+    expect(await budgetParents(txn.id)).toEqual([]);
+    // Снятие — в том же action: Undo возвращает и аспект, и связь одной отменой
+    const action = await actionById(r.actionId);
+    expect(action.operations.map((o) => o.op)).toEqual(['entity_update', 'relation_delete']);
+  });
+
+  test('detach у НЕпривязанной сущности лишних операций не порождает', async () => {
+    const { entity: note } = await createEntity(user, {
+      title: 'Заметка',
+      aspects: { 'orbis/note': { content_type: 'plain' } },
+    });
+    const r = ok(
+      await execute(
+        db,
+        req(user, 'entity_update', { id: note.id, aspects: { 'orbis/note': null } }),
+        { sink },
+      ),
+    );
+    const action = await actionById(r.actionId);
+    expect(action.operations.map((o) => o.op)).toEqual(['entity_update']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Write-skew привязки (уборочная фаза, E9; Important бэклога фазы A): конкурентные
+// «create транзакции ∥ create конверта» шли без общего замка — селектор §2.3 одной
+// транзакции не видел незакоммиченный конверт другой, и запись оставалась Unbudgeted,
+// хотя конверт «уже есть». Замок владельца общий с проверкой уникальности конвертов:
+// оба инварианта про один и тот же набор строк.
+// ---------------------------------------------------------------------------
+describe('гонка «create транзакции ∥ create конверта» (§2.3)', () => {
+  test('после обеих операций транзакция привязана к конверту, а не Unbudgeted', async () => {
+    const user = freshUserId();
+    const iterations = 15;
+    let unbudgeted = 0;
+    for (let i = 0; i < iterations; i += 1) {
+      // Своя категория и свой период на итерацию: конверты не конфликтуют между собой,
+      // а «сегодня» тестом не подменяется — даты задаём явно.
+      const cat = newId();
+      const day = `2026-08-${String((i % 27) + 1).padStart(2, '0')}`;
+      const txnId = newId();
+      const [, envRes] = await Promise.all([
+        execute(
+          db,
+          req(user, 'entity_create', {
+            id: txnId,
+            title: `Покупка ${i}`,
+            tags: [],
+            aspects: { 'orbis/financial': finData(cat, day) },
+          }),
+          { sink },
+        ),
+        execute(
+          db,
+          req(user, 'entity_create', {
+            title: `Конверт ${i}`,
+            tags: [],
+            aspects: { 'orbis/budget': budgetData(cat, '2026-08-01', '2026-08-31') },
+          }),
+          { sink },
+        ),
+      ]);
+      const envId = (ok(envRes).results[0] as WireEntity).id;
+      if (!(await budgetParents(txnId)).includes(envId)) unbudgeted += 1;
+    }
+    expect(unbudgeted).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Порядок захвата замков (фикс-раунд уборочной фазы): «advisory → строки» на ОБОИХ
+// путях. Пока замок бюджет-контура брался внутри applyBudgetFollowUps, правка транзакции
+// держала FOR UPDATE своей строки и ЖДАЛА advisory, а создание конверта держало advisory
+// (assertEnvelopeUnique на prepare) и ждало строки — цикл ожидания, который PostgreSQL
+// разрывает отказом одной из транзакций по дедлоку.
+// ---------------------------------------------------------------------------
+describe('дедлок «правка транзакции ∥ запись конверта» (§2.3)', () => {
+  test('20 конкурентных пар операций проходят без отказов по дедлоку', async () => {
+    const user = freshUserId();
+    const failures: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      // Своя категория на итерацию: конверты не конфликтуют между собой по §2.1
+      const cat = newId();
+      const day = `2026-09-${String((i % 27) + 1).padStart(2, '0')}`;
+      const { entity: txn } = await createEntity(user, {
+        title: `Покупка ${i}`,
+        aspects: { 'orbis/financial': finData(cat, day) },
+      });
+      const [upd, env] = await Promise.all([
+        // правка транзакции: FOR UPDATE строки → бюджет-хук
+        execute(
+          db,
+          req(user, 'entity_update', {
+            id: txn.id,
+            aspects: { 'orbis/financial': finData(cat, day, { amount: '999.00' }) },
+          }),
+          { sink },
+        ),
+        // запись конверта: advisory на prepare → строки на ребиндинге
+        execute(
+          db,
+          req(user, 'entity_create', {
+            title: `Конверт ${i}`,
+            tags: [],
+            aspects: { 'orbis/budget': budgetData(cat, '2026-09-01', '2026-09-30') },
+          }),
+          { sink },
+        ),
+      ]);
+      for (const r of [upd, env]) {
+        if (!r.ok) failures.push(`${r.error.code}: ${r.error.message}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+});

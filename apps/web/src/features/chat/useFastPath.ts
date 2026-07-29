@@ -1,8 +1,14 @@
-import { type FastPathCategory, type FastPathCtx, newId, parseFastPath } from '@orbis/shared';
+import {
+  type FastPathCategory,
+  type FastPathCtx,
+  newId,
+  parseFastPath,
+  retryCreateId,
+} from '@orbis/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { TRPCClientError } from '@trpc/client';
 import { useOnline, useRetryBuffer } from '../../state/retry';
-import { mapSendError } from '../../state/retry-send';
+import { isConflict, mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
 import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME } from './memoryRules';
 import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from './useChatThread';
@@ -234,16 +240,39 @@ export function useFastPath(threadId: string) {
       // и бейдж alertCount перечитываются ПОСЛЕ записи, не до.
       void utils.budget.invalidate();
     } catch (err) {
-      const outcome = mapSendError(err);
-      // CONFLICT по своему id — сервер уже принял эту запись (идемпотентность §5.3): успех.
-      // Запись НА сервере есть → кэши стухли так же, как при обычном успехе (ревью B7):
-      // без инвалидации остаток §4.1 и бейдж §6.1 висят «до записи» до следующей мутации.
-      if (outcome === 'confirmed') {
-        void utils.entity.query.invalidate();
-        void utils.entity.count.invalidate();
-        void utils.budget.invalidate();
+      // CONFLICT — НЕ успех (уборочная фаза, решение 7; прецедент QuickAddBar B4):
+      // честный повтор владельца executor отдаёт replay-успехом, а CONFLICT кидается
+      // ровно тогда, когда id занят невидимой под RLS чужой строкой — записи владельца
+      // на сервере нет. Повторяем один раз со свежим id: карточка уже на экране, и ввод
+      // терять нельзя, а ждать бессмысленно — чужой id своим не станет.
+      if (isConflict(err)) {
+        // Замещающий id ОДИН на всю ветку и детерминирован по исходному (retryCreateId):
+        // тот же id уйдёт и в повтор, и в буфер, поэтому потерянный ответ не порождает
+        // вторую сущность — сервер отвечает replay-успехом на свою же строку.
+        const retryId = retryCreateId(parsed.create.id ?? '');
+        try {
+          await create.mutateAsync({
+            input: { ...parsed.create, id: retryId },
+            source: 'fast_path',
+          });
+          // Карточка была вставлена ДО запроса с отвергнутым id: без переписи её «Разобрать
+          // с AI» архивировал бы ЧУЖУЮ строку (NOT_FOUND), а тап открывал бы пустоту.
+          // upsertNewest дедупит по messageId — карточка обновляется на месте, не мигая.
+          insertCard(card, '⚡ без AI', { entityId: retryId, text, status: 'confirmed' }, cardId);
+          void utils.entity.query.invalidate();
+          void utils.entity.count.invalidate();
+          void utils.budget.invalidate();
+        } catch {
+          // Второй отказ не разбираем по кодам: карточка деградирует в «⏳ ждёт отправки»
+          // тем же путём, что транспортный сбой ниже, — ввод уходит в буфер С ТЕМ ЖЕ
+          // замещающим id (буфер идемпотентен по client-UUID).
+          insertCard(card, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
+          enqueueCreate({ ...parsed.create, id: retryId }, 'fast_path');
+          void flushNow();
+        }
         return;
       }
+      const outcome = mapSendError(err);
       if (outcome === 'business_rejection') {
         // §5.3: бизнес-отказ НЕ буферизуется, а показывается — иначе ввод исчезал молча
         // (карточка успеха на экране, сущности нет, запись вычищена из очереди при flush).

@@ -24,6 +24,31 @@ export function batchAuditMessageId(ownerId: string, batchId: string): string {
   return uuidv5(`batch:${ownerId.toLowerCase()}:${batchId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
 
+/**
+ * Замещающий id записи, чей client-UUID сервер отверг как занятый ЧУЖОЙ строкой
+ * (CONFLICT/id_conflict, §5.3). Детерминирован по исходному id НАМЕРЕННО: буфер повторов
+ * построен на инварианте «повтор идёт тем же id, иначе ретрай создаст вторую сущность»,
+ * и случайный `newId()` его ломал бы — потерянный ответ на повтор оставлял бы в очереди
+ * СТАРЫЙ payload, следующий flush снова получал бы CONFLICT и генерировал ЕЩЁ один id.
+ * С детерминированной производной повтор сходится: сервер отвечает replay-успехом на
+ * СВОЮ же строку (executor, стадия 5), а не плодит дубли.
+ */
+export function retryCreateId(originalId: string): string {
+  return uuidv5(`retry:${originalId.toLowerCase()}`, ORBIS_NAMESPACE);
+}
+
+/**
+ * PK сводки импорта (00-product §8, метрика покрытия транзакций). Детерминирован по
+ * batchId: идемпотентный повтор confirm возвращает исходное сообщение, а не пишет вторую
+ * сводку, — иначе один и тот же файл считался бы дважды.
+ */
+export function importSummaryMessageId(ownerId: string, batchId: string): string {
+  return uuidv5(
+    `import-summary:${ownerId.toLowerCase()}:${batchId.toLowerCase()}`,
+    ORBIS_NAMESPACE,
+  );
+}
+
 /** PK reject-сообщения pending-подтверждения (§7.10): идемпотентность reject по PK. */
 export function rejectMessageId(ownerId: string, pendingId: string): string {
   return uuidv5(`reject:${ownerId.toLowerCase()}:${pendingId.toLowerCase()}`, ORBIS_NAMESPACE);

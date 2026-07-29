@@ -570,3 +570,34 @@ test('иконка-кнопка в шапке Overview пушит экран и�
   fireEvent.click(screen.getByTestId('open-import'));
   expect(useNav.getState().stacks.budget.at(-1)).toEqual({ kind: 'budget-import' });
 });
+
+// Валюта выписки (уборочная фаза, E11): свойство ФАЙЛА, а не строки — селектор стоит
+// на шаге маппинга, дефолт берётся из настроек владельца, значение уходит в confirm.
+// До этого выписка в чужой валюте молча ложилась в валюту владельца.
+test('валюта выписки: дефолт — валюта владельца, значение уходит в import.confirm', async () => {
+  const { calls } = await openReview();
+  chooseTaxiCategory();
+  fireEvent.click(screen.getByTestId('confirm-import'));
+  await waitFor(() => expect(confirmInputs(calls)).toHaveLength(1));
+  const input = confirmInputs(calls)[0] as Record<string, unknown>;
+  expect(input.currency).toBe('RUB');
+  // rowsTotal — строки ВЫПИСКИ, а не отправленные: ⟳ клиент не присылает вовсе,
+  // и без этого поля сводка импорта объявляла бы «уже было 0» на каждой выписке.
+  expect(input.rowsTotal).toBe(4);
+});
+
+test('валюта выписки: выбранное значение уходит в import.confirm', async () => {
+  const { calls } = renderWithProviders(<ImportFlow />, handler());
+  pickFile();
+  await waitFor(() => expect(screen.getByTestId('mapping-submit')).toBeInTheDocument());
+  expect(screen.getByLabelText('Валюта выписки')).toHaveValue('RUB');
+  fireEvent.change(screen.getByLabelText('Валюта выписки'), { target: { value: 'USD' } });
+
+  fireEvent.click(screen.getByTestId('mapping-submit'));
+  await waitFor(() => expect(screen.getByTestId('review-counters')).toBeInTheDocument());
+  await waitFor(() => expect(screen.getByLabelText('Категория «ПЯТЁРОЧКА»')).toHaveValue(C_FOOD));
+  chooseTaxiCategory();
+  fireEvent.click(screen.getByTestId('confirm-import'));
+  await waitFor(() => expect(confirmInputs(calls)).toHaveLength(1));
+  expect((confirmInputs(calls)[0] as Record<string, unknown>).currency).toBe('USD');
+});

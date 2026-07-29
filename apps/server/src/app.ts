@@ -10,6 +10,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from 'hono/bun';
 import type { AiDeps } from './ai/send-message';
 import { makeCreateContext } from './context';
+import type { AspectDriftStatus } from './db/aspect-drift';
 import type { Db } from './db/client';
 import { makeMcpHandler } from './mcp/transport';
 import { appRouter } from './router';
@@ -70,9 +71,15 @@ export interface AppDeps {
   ai: AiDeps;
   /** Переопределение корня статики (тест/Docker); по умолчанию WEB_DIST_DIR. */
   webDistDir?: string;
+  /**
+   * Состояние стартовой проверки реестра аспектов (E1) — геттер, потому что проверка
+   * асинхронная и приложение поднимается, не дожидаясь её. Геттера нет вовсе (тесты
+   * композиции, встроенные стенды) — /health про реестр молчит.
+   */
+  aspectDrift?: () => AspectDriftStatus;
 }
 
-export function createApp({ db, ai, webDistDir = WEB_DIST_DIR }: AppDeps): Hono {
+export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: AppDeps): Hono {
   const app = new Hono();
 
   // --- API-роуты: регистрируются ПЕРЕД статикой (порядок = приоритет) ---
@@ -82,7 +89,20 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR }: AppDeps): Hono 
   app.use('/trpc/*', trpcServer({ router: appRouter, createContext: makeCreateContext(db, ai) }));
   // MCP-эндпоинт внешних агентов (§9.3): Streamable HTTP, PAT-only (transport.ts)
   app.all('/mcp', makeMcpHandler({ db }));
-  app.get('/health', (c) => c.json({ status: 'ok' }));
+  // Форма ответа на здоровом реестре НЕ меняется ({status:'ok'}) — на неё смотрит и
+  // healthCheckPath Render, и тесты. Расхождение добавляет поле, но не меняет код ответа:
+  // не-200 здесь превратил бы наблюдаемость ловушки в отказ деплоя (E1). Третье значение
+  // — 'unknown': проверка не выполнилась (БД была недоступна на старте), и выдавать это
+  // за «расхождений нет» нельзя — именно так ловушка снималась молча.
+  app.get('/health', (c) => {
+    const state = aspectDrift?.();
+    if (state === undefined || state.status === 'ok') return c.json({ status: 'ok' });
+    if (state.status === 'unknown') return c.json({ status: 'ok', aspectDrift: 'unknown' });
+    return c.json({
+      status: 'ok',
+      aspectDrift: [...state.drift.missing, ...state.drift.drifted.map((d) => d.id)],
+    });
+  });
 
   // --- Same-origin раздача web-статики (Task 7, Вариант A) ---
   // GET-only: не-GET к неизвестному пути падает в 404 Hono (не в index.html), а API-роуты

@@ -6,13 +6,13 @@
 // Вызывается ТОЛЬКО под withIdentity (RLS, §4.10); ошибки — ExecError (роутер
 // мапит в TRPCError, диспатч — в структурированный error-результат).
 import { type EntityGetInput, entityThreadId } from '@orbis/shared';
-import { and, desc, eq, not, or, sql } from 'drizzle-orm';
+import { desc, eq, or, sql } from 'drizzle-orm';
 import type { WireChatMessage } from './chat/messages';
 import { chatMessages, entities, relations } from './db/schema';
 import type { Tx } from './db/with-identity';
 import { ExecError } from './errors';
 import type { WireEntity, WireRelation } from './executor/types';
-import { toWireChatMessage, toWireEntity, toWireRelation } from './wire';
+import { toWireChatMessage, toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
 
 /** Источник обратной ссылки (02-core-os §3.5.7): явная related_to-связь или body_refs. */
 export type BacklinkVia = 'relation' | 'mention';
@@ -65,34 +65,53 @@ export async function readEntity(
     // §3.5.7: ОДНА секция из двух источников — явные related_to обеих сторон («связь») и
     // упоминания через body_refs («упоминание», GIN-индекс §4.9). row.id — каноничный
     // lowercase из БД (body_refs нормализованы экстрактором, сравнение text[]
-    // регистрозависимо). Подзапрос по relations тоже под RLS — чужие связи невидимы.
-    // Некоррелированные подзапросы (стиль children_of/parents_of компилятора §6.1): в
-    // списке SELECT drizzle рендерит колонку без квалификатора таблицы, и коррелированный
-    // EXISTS сравнивал бы relations.id вместо entities.id.
-    const viaRelation = sql<boolean>`(${entities.id} IN (
-      SELECT target_id FROM relations WHERE source_id = ${row.id} AND relation_type = 'related_to')
-      OR ${entities.id} IN (
-      SELECT source_id FROM relations WHERE target_id = ${row.id} AND relation_type = 'related_to'))`;
-    const refs = await tx
-      .select({ row: entities, viaRelation })
-      .from(entities)
-      .where(
-        and(
-          not(entities.archived),
-          or(sql`${entities.bodyRefs} @> ARRAY[${row.id}]::text[]`, viaRelation),
-        ),
+    // регистрозависимо). Подзапросы по relations тоже под RLS — чужие связи невидимы.
+    //
+    // ПОЧЕМУ UNION, А НЕ ОДИН WHERE С OR (уборочная фаза, E7). Условие вида
+    // `body_refs @> ARRAY[id] OR id IN (SELECT … FROM relations) OR …` планировщик не
+    // покрывает `entities_body_refs_gin` целиком: ветки с IN(подзапрос) дают hashed
+    // SubPlan, BitmapOr не строится — остаётся seq scan по entities. А запрос горячий:
+    // 'backlinks' входит в DETAIL_INCLUDE, то есть уходит на КАЖДОМ открытии detail,
+    // и после CSV-импортов фазы C сканировать приходится тысячи строк. Развод на два
+    // индексируемых источника (GIN по body_refs + два индексных доступа по relations)
+    // с объединением в UNION даёт планировщику работать по индексам; пометка via
+    // сохраняется LEFT JOIN'ом на тот же CTE связей.
+    //
+    // Форма ответа НЕ меняется — контракт readEntity общий с LLM/MCP-диспатчем и
+    // запиннен entity-backlinks.test.ts, который правкой не тронут.
+    const rows = await tx.execute(sql`
+      WITH rel AS MATERIALIZED (
+        SELECT target_id AS id FROM relations
+          WHERE source_id = ${row.id} AND relation_type = 'related_to'
+        UNION
+        SELECT source_id AS id FROM relations
+          WHERE target_id = ${row.id} AND relation_type = 'related_to'
+      ), ids AS (
+        SELECT id FROM entities WHERE body_refs @> ARRAY[${row.id}]::text[]
+        UNION
+        SELECT id FROM rel
       )
-      // СВЕЖИЕ первыми (DF п.4): при возрастающем порядке потолок отбрасывал ровно ту
-      // связь, которую пользователь только что создал. Лишняя строка сверх потолка —
-      // проба усечения: точный ответ «за списком есть ещё» ценой одной строки.
-      .orderBy(desc(entities.createdAt), desc(entities.id))
-      .limit(BACKLINKS_LIMIT + 1);
+      SELECT e.id, e.owner_id, e.title, e.emoji, e.body, e.body_refs, e.tags, e.meta,
+             e.aspects, e.created_at, e.updated_at, e.archived,
+             rel.id IS NOT NULL AS via_relation
+        FROM ids
+        JOIN entities e ON e.id = ids.id
+        LEFT JOIN rel ON rel.id = e.id
+       WHERE NOT e.archived
+       -- СВЕЖИЕ первыми (DF п.4): при возрастающем порядке потолок отбрасывал ровно ту
+       -- связь, которую пользователь только что создал. Лишняя строка сверх потолка —
+       -- проба усечения: точный ответ «за списком есть ещё» ценой одной строки.
+       ORDER BY e.created_at DESC, e.id DESC
+       LIMIT ${BACKLINKS_LIMIT + 1}`);
+    const refs = [...rows] as Array<Record<string, unknown>>;
     const truncated = refs.length > BACKLINKS_LIMIT;
     // Связь сильнее упоминания: сущность, которая и связана, и ссылается в теле,
     // приходит ОДНОЙ строкой с пометкой «связь».
     out.backlinks = refs.slice(0, BACKLINKS_LIMIT).map((r) => ({
-      entity: toWireEntity(r.row),
-      via: r.viaRelation ? ('relation' as const) : ('mention' as const),
+      // toWireEntityFromSql, а не toWireEntity: в сырой выдаче drizzle гасит date-парсеры
+      // postgres.js, и created_at/updated_at приезжают строкой PG (прецедент — агрегаты).
+      entity: toWireEntityFromSql(r),
+      via: r.via_relation === true ? ('relation' as const) : ('mention' as const),
     }));
     if (truncated) out.backlinksTruncated = true;
   }
