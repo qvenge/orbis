@@ -4,7 +4,7 @@
 // без SET LOCAL ROLE authenticated запрос падает «permission denied» на каждом старте
 // (роль приложения NOINHERIT, гранты висят на authenticated).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { aspectJsonSchema, BUILTIN_ASPECT_META, hasAspectDrift } from '@orbis/shared';
+import { hasAspectDrift } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, requireEnv, truncateAll } from '../../test/helpers';
 import { checkAspectDrift, driftReport, reportAspectDriftOnStartup } from './aspect-drift';
@@ -15,35 +15,41 @@ const { db, client } = appDb();
 const admin = adminDb();
 
 /**
- * Тот же идемпотентный upsert, что у `scripts/seed-aspects.ts`. Сеть безопасности файла:
- * тесты ниже намеренно ПОРТЯТ общий реестр, а по нему валидирует исполнитель во ВСЕХ
- * остальных серверных сьютах прогона — упавший на середине тест не имеет права оставить
- * локальную БД в состоянии «фича мертва», иначе следом посыплется весь прогон.
+ * Сеть безопасности файла: тесты ниже намеренно ПОРТЯТ общий реестр, а по нему валидирует
+ * исполнитель во ВСЕХ остальных серверных сьютах прогона — упавший на середине тест не
+ * имеет права оставить локальную БД в состоянии «фича мертва», иначе следом посыплется
+ * весь прогон.
+ *
+ * Снимок ТАБЛИЦЫ ЦЕЛИКОМ (`to_jsonb` → `jsonb_populate_recordset`), а не повтор upsert'а
+ * из сидера: список колонок не дублируется, и следующая миграция аспектов не забудет
+ * про этот файл.
  */
-async function reseedBuiltinAspects(): Promise<void> {
-  for (const meta of BUILTIN_ASPECT_META) {
-    await admin.db.execute(sql`
-      INSERT INTO aspect_definitions
-        (id, owner_id, name, namespace, description, icon, schema, ai_instructions,
-         tag_mappings, view_config)
-      VALUES (${meta.id}, NULL, ${meta.name}, ${meta.namespace}, ${meta.description},
-        ${meta.icon}, ${JSON.stringify(aspectJsonSchema(meta.id))}::jsonb,
-        ${meta.aiInstructions}, ${sql.raw(`ARRAY[${meta.tagMappings.map((t) => `'${t}'`).join(',')}]::text[]`)},
-        ${JSON.stringify(meta.viewConfig)}::jsonb)
-      ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE SET
-        name = EXCLUDED.name, description = EXCLUDED.description, icon = EXCLUDED.icon,
-        schema = EXCLUDED.schema, ai_instructions = EXCLUDED.ai_instructions,
-        tag_mappings = EXCLUDED.tag_mappings, view_config = EXCLUDED.view_config`);
-  }
+let registrySnapshot = '[]';
+
+async function saveRegistry(): Promise<void> {
+  const rows = (await admin.db.execute(
+    sql`SELECT coalesce(jsonb_agg(to_jsonb(a)), '[]'::jsonb) AS rows
+        FROM aspect_definitions a WHERE owner_id IS NULL`,
+  )) as unknown as Array<{ rows: unknown }>;
+  registrySnapshot = JSON.stringify(rows[0]?.rows ?? []);
+}
+
+async function restoreRegistry(): Promise<void> {
+  await admin.db.execute(sql`DELETE FROM aspect_definitions WHERE owner_id IS NULL`);
+  await admin.db.execute(
+    sql`INSERT INTO aspect_definitions
+        SELECT * FROM jsonb_populate_recordset(NULL::aspect_definitions,
+          ${registrySnapshot}::jsonb)`,
+  );
 }
 
 beforeAll(async () => {
   await truncateAll();
-  await reseedBuiltinAspects();
+  await saveRegistry();
 });
 
 afterAll(async () => {
-  await reseedBuiltinAspects();
+  await restoreRegistry();
   await admin.client.end();
   await client.end();
 });
