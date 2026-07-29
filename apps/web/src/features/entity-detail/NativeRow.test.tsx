@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
 import { renderWithProviders, trpcError } from '../../test/harness';
 import { NativeRow } from './NativeRow';
@@ -180,6 +180,37 @@ test('память: правку правила в текст без разде�
     />,
   );
   expect(screen.getByTestId('title-warning')).toBeInTheDocument();
+});
+
+// Заявленное поведение — предупреждение по ЧЕРНОВИКУ, то есть ДО сохранения: владелец
+// ломает рабочее правило прямо в поле и обязан увидеть это сразу. Проверка по
+// сохранённому значению (warn(value)) все прежние тесты проходила.
+test('память: предупреждение появляется на ЧЕРНОВИКЕ, без сохранения', () => {
+  render(
+    <NativeRow
+      entity={memory('rule', 'кофе → Развлечения')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  expect(screen.queryByTestId('title-warning')).toBeNull();
+  fireEvent.change(screen.getByTestId('title-edit'), {
+    target: { value: 'кофе это развлечения' },
+  });
+  expect(screen.getByTestId('title-warning')).toBeInTheDocument();
+});
+
+test('память: предупреждение доступно скринридеру и связано с полем', () => {
+  render(
+    <NativeRow
+      entity={memory('rule', 'кофе это развлечения')}
+      onToggleTask={() => {}}
+      onSaveTitle={() => {}}
+    />,
+  );
+  const warning = screen.getByTestId('title-warning');
+  expect(warning).toHaveAttribute('role', 'status');
+  expect(screen.getByTestId('title-edit')).toHaveAttribute('aria-describedby', warning.id);
 });
 
 test('память: клавиатурная стрелка «->» правилом считается — предупреждения нет', () => {

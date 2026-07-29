@@ -104,9 +104,16 @@ export const aiRouter = router({
     .input(
       z
         .object({
-          // max — защита JSONB, не бизнес-правило (конвенция слоя, ср. bank_txn_id):
+          // Потолок — защита JSONB, не бизнес-правило (конвенция слоя, ср. bank_txn_id):
           // значение ложится в append-only chat_messages и читается каждым подавлением.
-          pattern: z.string().min(1).max(RULE_PATTERN_MAX),
+          // ОТВЕРГАТЬ длинный паттерн здесь нельзя: карточки-предложения писались до
+          // появления границы (журнал append-only), и «Не надо» на такой карточке
+          // отвечало бы 400 навсегда. Усекаем — ключ подавления считается по СХОДСТВУ,
+          // усечение его не ломает.
+          pattern: z
+            .string()
+            .min(1)
+            .transform((p) => p.slice(0, RULE_PATTERN_MAX)),
           fromCategoryId: z.string().uuid(),
           toCategoryId: z.string().uuid(),
         })

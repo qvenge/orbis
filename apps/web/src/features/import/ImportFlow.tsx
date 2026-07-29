@@ -98,13 +98,6 @@ const FIELD_CLS =
  */
 const STATEMENT_CURRENCY_CHOICES = ['RUB', 'USD', 'EUR', 'KZT', 'GEL', 'TRY'] as const;
 
-/** Список выбора с гарантированным присутствием текущего значения (валюты владельца). */
-function currencyChoices(current: string): string[] {
-  return STATEMENT_CURRENCY_CHOICES.includes(current as (typeof STATEMENT_CURRENCY_CHOICES)[number])
-    ? [...STATEMENT_CURRENCY_CHOICES]
-    : [current, ...STATEMENT_CURRENCY_CHOICES];
-}
-
 /** Образцов в analyze (план C4). Серверный потолок MAX_ANALYZE_SAMPLE_ROWS выше (10) —
  *  пяти строк хватает на распознавание структуры, а в промпт уходит меньше выписки. */
 const MAX_SAMPLE_ROWS = 5;
@@ -380,6 +373,11 @@ export function ImportFlow() {
         )}
         {(step === 'review_ready' || step === 'confirming') && (
           <>
+            {/* Валюта выбрана на прошлом шаге, а решение необратимо принимается ЗДЕСЬ —
+                показываем её рядом со строками, иначе владелец подтверждает вслепую. */}
+            <p data-testid="review-currency" className="text-xs text-text-secondary">
+              Валюта выписки: <b>{currency ?? ownCurrency}</b>
+            </p>
             <ParseErrors errors={parseErrors} headerRows={draft?.headerRows ?? 0} />
             <ReviewTable
               rows={reviewRows}
@@ -555,21 +553,26 @@ function MappingForm({
         {/* Валюта — свойство ВЫПИСКИ, а не колонки: смешанная выписка вне скоупа
             (multi-currency — Future). Без явного выбора всё ложилось в валюту владельца
             молча, и починить это можно было только руками по каждой строке. */}
-        <label className="flex items-center gap-2 text-sm">
+        {/* Свободный ввод кода, а не список: форма конверта (EnvelopeCreateSheet) принимает
+            любой трёхбуквенный код, и импорт не имеет права быть уже — иначе владелец
+            с выпиской в фунтах вынужден положить её в рубли, то есть ровно в то поведение,
+            которое эта задача чинила. Частые коды подсказывает datalist. */}
+        <div className="flex items-center gap-2 text-sm">
           <span className="w-44 shrink-0 text-text-secondary">Валюта выписки</span>
-          <select
+          <Input
             aria-label="Валюта выписки"
+            list="statement-currencies"
+            maxLength={3}
             value={currency}
-            onChange={(e) => onCurrencyChange(e.target.value)}
-            className={FIELD_CLS}
-          >
-            {currencyChoices(currency).map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
+            onChange={(e) => onCurrencyChange(e.target.value.toUpperCase().slice(0, 3))}
+            className="w-24 px-2 py-1 text-sm uppercase"
+          />
+          <datalist id="statement-currencies">
+            {STATEMENT_CURRENCY_CHOICES.map((c) => (
+              <option key={c} value={c} />
             ))}
-          </select>
-        </label>
+          </datalist>
+        </div>
         {/* Подпись — визуальная; доступное имя даёт aria-label самого Input (идиома B6) */}
         <div className="flex items-center gap-2 text-sm">
           <span className="w-44 shrink-0 text-text-secondary">Строк заголовка</span>

@@ -325,6 +325,20 @@ test('дневная секция: у события дата справа не 
   expect(within(daySection(tomorrow)).queryByText(dayLabel(tomorrow))).toBeNull();
 });
 
+test('дневная секция: срок, СОВПАВШИЙ с днём секции, не печатается второй раз', async () => {
+  // Самая частая строка дня: запланированная задача со сроком на этот же день. Секция
+  // уже подписана датой, слева стоит время — третья печать той же даты была шумом.
+  const scheduled = ent('t5', 'Врач', {
+    'orbis/task': { status: 'planned', due_date: tomorrow },
+    'orbis/schedule': { start_at: at(tomorrow, '14:00') },
+  });
+  renderWithProviders(<AgendaScreen />, agendaHandler({ days: [scheduled] }));
+
+  await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Врач']));
+  expect(within(daySection(tomorrow)).getByText('14:00')).toBeInTheDocument();
+  expect(within(daySection(tomorrow)).queryByText(dayLabel(tomorrow))).toBeNull();
+});
+
 test('дневная секция: срок, отличающийся от дня секции, остаётся — это не дубль, а факт', async () => {
   // Встреча завтра, а сдать работу нужно послезавтра: правая мета несёт НОВОЕ знание.
   const dayAfter = addDays(today, 2);

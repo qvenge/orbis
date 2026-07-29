@@ -10,7 +10,8 @@
 // неверно: правила рождаются из эскалации, а не из быстрой записи. Общий с Browser'ом
 // хук useEntities оставлен: строку запроса собирает browserQuery, и своего sortBy
 // добавлять нельзя — повтор параметра ломает парсер грамматики.
-import { Brain } from 'lucide-react';
+import { parseRuleTitle } from '@orbis/shared';
+import { AlertTriangle, Brain } from 'lucide-react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { useNav } from '../../state/navigation';
 import { Button } from '../../ui/Button';
@@ -25,6 +26,17 @@ const MEMORY_FILTER = 'aspect=orbis/memory';
 
 const ROW_CLASS =
   'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50';
+
+/**
+ * Правило со сломанным форматом заголовка (уборочная фаза). Диагноз ставится и на
+ * detail-экране при правке, но приходят сюда СПЕЦИАЛЬНО ревизовать память — и в списке
+ * мёртвое правило было неотличимо от рабочего. Источник неканоничных заголовков не только
+ * рука владельца: модель тоже создаёт memory-сущности, а формат ей нигде не задан.
+ */
+function isBrokenRule(e: { title: string; aspects: unknown }): boolean {
+  const memory = (e.aspects as Record<string, { kind?: unknown } | undefined>)['orbis/memory'];
+  return memory?.kind === 'rule' && parseRuleTitle(e.title) === null;
+}
 
 /** Detail открывается в ТЕКУЩЕМ табе (экран памяти живёт в его же стеке). */
 function openEntity(id: string) {
@@ -80,6 +92,16 @@ export function MemoryScreen() {
                     className={ROW_CLASS}
                   >
                     <EntityRow entity={e} />
+                    {isBrokenRule(e) && (
+                      <span
+                        data-testid="memory-broken"
+                        title="Формат правила не распознан — быстрый ввод и импорт его не применят"
+                        className="flex shrink-0 items-center gap-1 text-2xs text-alert"
+                      >
+                        <AlertTriangle size={12} aria-hidden />
+                        формат
+                      </span>
+                    )}
                   </button>
                 </li>
               ))}

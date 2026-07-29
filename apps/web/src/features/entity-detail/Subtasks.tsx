@@ -64,7 +64,9 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
       if (created) {
         void utils.entity.query.invalidate();
         setDraft('');
-        show('Задача создана, но не привязана к родителю', 'danger');
+        // Куда делась запись — обязательная часть сообщения: связи в списке подзадач нет,
+        // тост живёт 4 секунды, и без адреса владелец её просто не найдёт.
+        show('Задача создана, но не привязана — найдёте её в списке задач', 'danger');
       } else {
         show('Не удалось сохранить', 'danger');
       }

@@ -863,15 +863,20 @@ describe('эскалация: уборочная фаза', () => {
     expect((await cardsOf(user, 'memory_rule_suggestion')).length).toBe(1);
   });
 
-  test('31. паттерн длиннее 128 символов отвергается валидацией (защита JSONB)', async () => {
+  // Отказ НЕ отвергает длинный паттерн, а усекает: карточки-предложения писались до
+  // появления границы (журнал append-only), и «Не надо» на такой карточке отвечало бы
+  // 400 навсегда — кнопка мертва, карточка не отвечена. Ключ подавления считается по
+  // СХОДСТВУ, поэтому усечение его не ломает.
+  test('31. длинный паттерн отказа усекается до границы, а не отвергается', async () => {
     const { user, food, fun } = await freshOwner();
-    await expect(
-      ownerCaller(user).ai.declineMemoryRule({
-        pattern: 'п'.repeat(RULE_PATTERN_MAX + 1),
-        fromCategoryId: food,
-        toCategoryId: fun,
-      }),
-    ).rejects.toThrow();
+    await ownerCaller(user).ai.declineMemoryRule({
+      pattern: 'п'.repeat(RULE_PATTERN_MAX + 50),
+      fromCategoryId: food,
+      toCategoryId: fun,
+    });
+    const cards = await cardsOf(user, 'memory_rule_declined');
+    expect(cards).toHaveLength(1);
+    expect((cards[0] as { pattern: string }).pattern.length).toBe(RULE_PATTERN_MAX);
   });
 
   test('32. эскалация сама не порождает паттерн длиннее границы', async () => {

@@ -68,6 +68,7 @@ function TitleEditor({
     <input
       aria-label="Заголовок"
       data-testid="title-edit"
+      {...(warn !== undefined ? { 'aria-describedby': 'title-format-warning' } : {})}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       // Пустой заголовок сущности не бывает (entityUpdateInput: title.min(1)) — вместо
@@ -87,7 +88,17 @@ function TitleEditor({
     <div className="flex min-w-0 flex-1 flex-col gap-0.5">
       {input}
       {warning !== null && (
-        <p data-testid="title-warning" className="px-1 text-xs text-[var(--color-warning)]">
+        // text-alert — документированная AA-пара (5.18:1); --color-warning объявлен как
+        // цвет ЗАЛИВКИ бара Budget и на белом листе даёт 3.18:1 — самый нечитаемый текст
+        // на экране у сообщения, ради видимости которого правка и делалась.
+        // role=status + aria-describedby: при правке с клавиатуры/скринридером
+        // предупреждение иначе не объявляется вовсе.
+        <p
+          id="title-format-warning"
+          role="status"
+          data-testid="title-warning"
+          className="px-1 text-xs text-alert"
+        >
           {warning}
         </p>
       )}
@@ -137,10 +148,18 @@ function FinancialRow({
   );
 }
 
-/** Формат правила «паттерн → категория» (shared/memory/rule.ts) — тот же разбор, что в резолве. */
+/**
+ * Формат правила «паттерн → категория» (shared/memory/rule.ts) — тот же разбор, что в резолве.
+ *
+ * Текст говорит ровно правду: мёртвым нераспознанное правило становится в
+ * ДЕТЕРМИНИРОВАННЫХ путях (быстрый ввод, резолв импорта, гейт эскалации), а в системный
+ * промпт оно уезжает как есть — в разговоре модель его всё равно учтёт. Подсказка формата
+ * даёт НАБИРАЕМЫЙ вариант разделителя: U+2192 с клавиатуры не набрать, ради чего разбор
+ * и научили понимать «->».
+ */
 function ruleFormatWarning(draft: string): string | null {
   return parseRuleTitle(draft) === null
-    ? 'Формат правила не распознан — нужно «паттерн → категория». Такое правило не применяется'
+    ? 'Формат правила не распознан — нужно «паттерн -> категория». Быстрый ввод и импорт такое правило не применят (AI учтёт его только в разговоре)'
     : null;
 }
 
