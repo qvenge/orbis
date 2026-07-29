@@ -328,7 +328,13 @@ export function ImportFlow() {
         namespace: parsed.namespace,
         fileHash: parsed.fileHash,
         items,
-        currency: currency ?? ownCurrency,
+        // Валюту шлём, только когда она достоверна (настройки доехали или владелец выбрал
+        // сам): иначе сервер трактует отсутствие ключа как валюту владельца — верно и
+        // без нашего участия. Штамповать дефолт в аспект каждой строки нельзя.
+        ...(currency !== null || settings.isSuccess ? { currency: currency ?? ownCurrency } : {}),
+        // Строк выписки, дошедших до ревью: в items попадают только создаваемые и
+        // привязываемые, поэтому иначе сводка импорта считала бы «уже было 0» всегда.
+        rowsTotal: reviewRows.length,
       });
     } catch (err) {
       if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') {

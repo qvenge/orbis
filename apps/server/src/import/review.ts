@@ -616,9 +616,15 @@ async function writeImportSummary(
   db: Db,
   ownerId: string,
   input: ImportConfirmInput,
-  counts: { created: number; adopted: number; skipped: number },
+  counts: { created: number; adopted: number },
 ): Promise<void> {
-  const total = counts.created + counts.adopted + counts.skipped;
+  // Строк выписки, а не строк payload'а (фикс-раунд): клиент не присылает строки ⟳
+  // «уже импортирована» вовсе, поэтому считать total по items значило бы объявлять
+  // покрытие по одним только новым строкам. rowsTotal нет (старый бандл) — падаем
+  // обратно на число отправленных строк и не врём больше, чем знаем.
+  const sent = counts.created + counts.adopted;
+  const total = Math.max(input.rowsTotal ?? sent, sent);
+  const skipped = total - sent;
   try {
     await withIdentity(db, ownerId, async (tx) => {
       const threadId = await ensureGlobalThread(tx, ownerId);
@@ -626,7 +632,7 @@ async function writeImportSummary(
         id: importSummaryMessageId(ownerId, input.batchId),
         threadId,
         role: 'system',
-        content: `Импорт выписки: строк ${total}, создано ${counts.created}, привязано к существующим ${counts.adopted}, пропущено ${counts.skipped}`,
+        content: `Импорт выписки: строк ${total}, создано ${counts.created}, привязано к существующим ${counts.adopted}, уже было ${skipped}`,
         metadata: {
           cards: [
             {
@@ -635,7 +641,7 @@ async function writeImportSummary(
               total,
               created: counts.created,
               adopted: counts.adopted,
-              skipped: counts.skipped,
+              skipped,
             } satisfies Card,
           ],
         },
@@ -725,6 +731,10 @@ export async function confirmImport(
   }
 
   if (operations.length === 0) {
+    // Выписка, которую Orbis знал ЦЕЛИКОМ, — лучший возможный исход для метрики §8, и
+    // потерять его нельзя: сводка пишется ДО отказа (created=0, adopted=0, всё «уже было»).
+    // Пользовательское поведение прежнее — импортировать по-прежнему нечего.
+    await writeImportSummary(db, ownerId, input, { created: 0, adopted: 0 });
     throw new ExecError('VALIDATION', 'нет строк для импорта: все строки помечены «пропустить»', {
       items: input.items.length,
     });
@@ -745,7 +755,7 @@ export async function confirmImport(
   // Идентификаторы созданных сущностей — из результатов batch (а не из сгенерированных
   // выше id): идемпотентный повтор возвращает СОХРАНЁННЫЕ результаты первого прогона
   const entityIds = r.results.filter(isWireEntity).map((e) => e.id);
-  await writeImportSummary(db, ownerId, input, { created, adopted, skipped });
+  await writeImportSummary(db, ownerId, input, { created, adopted });
   return {
     actionId: r.actionId,
     idempotentReplay: r.idempotentReplay,

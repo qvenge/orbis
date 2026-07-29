@@ -579,7 +579,11 @@ test('валюта выписки: дефолт — валюта владель�
   chooseTaxiCategory();
   fireEvent.click(screen.getByTestId('confirm-import'));
   await waitFor(() => expect(confirmInputs(calls)).toHaveLength(1));
-  expect((confirmInputs(calls)[0] as Record<string, unknown>).currency).toBe('RUB');
+  const input = confirmInputs(calls)[0] as Record<string, unknown>;
+  expect(input.currency).toBe('RUB');
+  // rowsTotal — строки ВЫПИСКИ, а не отправленные: ⟳ клиент не присылает вовсе,
+  // и без этого поля сводка импорта объявляла бы «уже было 0» на каждой выписке.
+  expect(input.rowsTotal).toBe(4);
 });
 
 test('валюта выписки: выбранное значение уходит в import.confirm', async () => {

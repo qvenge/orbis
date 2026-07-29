@@ -1528,14 +1528,17 @@ describe('import.confirm: сводка импорта в журнале (мет�
       makeRow({ occurredOn: '2026-07-03', amount: '300.00', counterparty: 'Метро', rowIndex: 2 }),
     ];
     const batchId = newId();
+    // rowsTotal — строки ВЫПИСКИ (5), items — только отправленные (2 создания):
+    // ⟳ «уже импортирована» клиент не присылает вовсе, и без rowsTotal сводка
+    // объявляла бы «уже было 0» на каждой выписке.
     const payload = {
       batchId,
       namespace: NS,
       fileHash: FILE_A,
+      rowsTotal: 5,
       items: [
         { row: rows[0] as CanonicalRow, action: 'create' as const, categoryRef: foodId },
         { row: rows[1] as CanonicalRow, action: 'create' as const, categoryRef: foodId },
-        { row: rows[2] as CanonicalRow, action: 'skip' as const },
       ],
     };
     await caller.import.confirm(payload);
@@ -1545,15 +1548,38 @@ describe('import.confirm: сводка импорта в журнале (мет�
     expect(first[0]).toMatchObject({
       kind: 'import_summary',
       namespace: NS,
-      total: 3,
+      total: 5,
       created: 2,
       adopted: 0,
-      skipped: 1,
+      skipped: 3,
     });
 
     // Идемпотентный повтор того же batchId статистику не удваивает — иначе один файл
     // считался бы дважды и метрика покрытия врала бы в свою пользу.
     await caller.import.confirm(payload);
     expect(await summaries(user)).toHaveLength(1);
+  });
+
+  // Выписка, которую Orbis знал ЦЕЛИКОМ, — лучший исход для метрики §8, и потерять его
+  // нельзя: confirm в этом случае отказывает («нет строк для импорта»), но сводку пишет.
+  test('выписка известна целиком: confirm отказывает, но сводка со 100% записана', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({ occurredOn: '2026-07-09', amount: '111.00', counterparty: 'Кафе' });
+    // Все строки выписки уже импортированы ранее → клиент шлёт пустой список создаваемых
+    await expect(
+      caller.import.confirm({
+        batchId: newId(),
+        namespace: NS,
+        fileHash: FILE_B,
+        rowsTotal: 7,
+        items: [{ row, action: 'skip' as const }],
+      }),
+    ).rejects.toThrow();
+    void foodId;
+
+    const s = await summaries(user);
+    expect(s).toHaveLength(1);
+    expect(s[0]).toMatchObject({ total: 7, created: 0, adopted: 0, skipped: 7 });
   });
 });

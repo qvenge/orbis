@@ -131,7 +131,13 @@ async function coverage(): Promise<number> {
       WHERE created_at > now() - make_interval(days => ${COVERAGE_DAYS})
         AND metadata @> '{"cards":[{"kind":"import_summary"}]}'::jsonb
       ORDER BY created_at`;
-    type Summary = { kind?: string; total?: number; adopted?: number; skipped?: number };
+    type Summary = {
+      kind?: string;
+      total?: number;
+      created?: number;
+      adopted?: number;
+      skipped?: number;
+    };
     const summaries = rows
       .flatMap((r) => (r.cards as Summary[] | null) ?? [])
       .filter((c) => c.kind === 'import_summary');
@@ -144,8 +150,11 @@ async function coverage(): Promise<number> {
     const total = sum((s) => s.total ?? 0);
     const known = sum((s) => (s.adopted ?? 0) + (s.skipped ?? 0));
     const pct = total === 0 ? 0 : (known / total) * 100;
+    const created = sum((s) => s.created ?? 0);
     console.log(`Импортов за ${COVERAGE_DAYS} дней: ${summaries.length}`);
-    console.log(`Строк выписок: ${total}; из них Orbis уже знал: ${known}`);
+    console.log(
+      `Строк выписок: ${total}; из них Orbis уже знал: ${known}; создано новых: ${created}`,
+    );
     console.log(`Покрытие: ${pct.toFixed(1)}% (цель 00-product §8 — ≥ 95%)`);
     return 0;
   });
