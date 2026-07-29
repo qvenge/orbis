@@ -3,11 +3,11 @@
 // ролью приложения. Именно она ловит то, чего не видят unit'ы shared, — права роли:
 // без SET LOCAL ROLE authenticated запрос падает «permission denied» на каждом старте
 // (роль приложения NOINHERIT, гранты висят на authenticated).
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { aspectJsonSchema, BUILTIN_ASPECT_META, hasAspectDrift } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, requireEnv, truncateAll } from '../../test/helpers';
-import { checkAspectDrift, driftReport } from './aspect-drift';
+import { checkAspectDrift, driftReport, reportAspectDriftOnStartup } from './aspect-drift';
 
 requireEnv();
 
@@ -99,4 +99,48 @@ test('аспект отсутствует в реестре: missing (релиз
     );
   }
   expect(hasAspectDrift(await checkAspectDrift(db))).toBe(false);
+});
+
+// Три состояния вместо двух (фикс-раунд по находке ревью): «проверка не выполнилась»
+// обязано отличаться от «расхождений нет». Раньше одна неудачная попытка навсегда
+// снимала ловушку, а /health отвечал ровно как на здоровом реестре — то есть штатная
+// операторская проверка (runbook §1) давала ложноотрицательный ответ.
+describe('reportAspectDriftOnStartup: провал ≠ «дрейфа нет»', () => {
+  /** Заглушка Db, чья транзакция падает n раз, а дальше зовёт настоящую. */
+  function flakyDb(failures: number) {
+    let left = failures;
+    return {
+      transaction: (fn: unknown) => {
+        if (left > 0) {
+          left -= 1;
+          return Promise.reject(new Error('connection refused'));
+        }
+        return (db as unknown as { transaction: (f: unknown) => Promise<unknown> }).transaction(fn);
+      },
+    } as unknown as typeof db;
+  }
+
+  test('здоровый реестр → status ok', async () => {
+    expect(await reportAspectDriftOnStartup(db, { delays: [] })).toEqual({ status: 'ok' });
+  });
+
+  test('БД недоступна на первой попытке → повтор, и проверка всё же выполняется', async () => {
+    const waits: number[] = [];
+    const r = await reportAspectDriftOnStartup(flakyDb(2), {
+      delays: [1, 2, 3],
+      wait: async (ms) => {
+        waits.push(ms);
+      },
+    });
+    expect(r).toEqual({ status: 'ok' });
+    expect(waits).toEqual([1, 2]); // ровно две паузы на два отказа
+  });
+
+  test('попытки исчерпаны → status unknown, а НЕ «расхождений нет»', async () => {
+    const r = await reportAspectDriftOnStartup(flakyDb(99), {
+      delays: [1, 1],
+      wait: async () => {},
+    });
+    expect(r).toEqual({ status: 'unknown' });
+  });
 });

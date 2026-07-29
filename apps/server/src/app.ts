@@ -5,12 +5,12 @@
 // SPA-fallback'ом (Hono исполняет matching-хендлеры в порядке регистрации; API-хендлер
 // возвращает Response и не зовёт next → serveStatic до него не доходит).
 import { trpcServer } from '@hono/trpc-server';
-import { type AspectDrift, hasAspectDrift } from '@orbis/shared';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from 'hono/bun';
 import type { AiDeps } from './ai/send-message';
 import { makeCreateContext } from './context';
+import type { AspectDriftStatus } from './db/aspect-drift';
 import type { Db } from './db/client';
 import { makeMcpHandler } from './mcp/transport';
 import { appRouter } from './router';
@@ -72,11 +72,11 @@ export interface AppDeps {
   /** Переопределение корня статики (тест/Docker); по умолчанию WEB_DIST_DIR. */
   webDistDir?: string;
   /**
-   * Результат стартовой проверки реестра аспектов (E1) — геттер, потому что проверка
-   * асинхронная и приложение поднимается, не дожидаясь её. `null` — «проверка ещё идёт
-   * или сама не выполнилась»; в этом случае /health о ней молчит.
+   * Состояние стартовой проверки реестра аспектов (E1) — геттер, потому что проверка
+   * асинхронная и приложение поднимается, не дожидаясь её. Геттера нет вовсе (тесты
+   * композиции, встроенные стенды) — /health про реестр молчит.
    */
-  aspectDrift?: () => AspectDrift | null;
+  aspectDrift?: () => AspectDriftStatus;
 }
 
 export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: AppDeps): Hono {
@@ -89,15 +89,18 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: Ap
   app.use('/trpc/*', trpcServer({ router: appRouter, createContext: makeCreateContext(db, ai) }));
   // MCP-эндпоинт внешних агентов (§9.3): Streamable HTTP, PAT-only (transport.ts)
   app.all('/mcp', makeMcpHandler({ db }));
-  // Форма ответа без дрейфа НЕ меняется ({status:'ok'}) — на неё смотрит и healthCheckPath
-  // Render, и тесты. Расхождение реестра аспектов добавляет поле, но не меняет код ответа:
-  // не-200 здесь превратил бы наблюдаемость ловушки в отказ деплоя (E1).
+  // Форма ответа на здоровом реестре НЕ меняется ({status:'ok'}) — на неё смотрит и
+  // healthCheckPath Render, и тесты. Расхождение добавляет поле, но не меняет код ответа:
+  // не-200 здесь превратил бы наблюдаемость ловушки в отказ деплоя (E1). Третье значение
+  // — 'unknown': проверка не выполнилась (БД была недоступна на старте), и выдавать это
+  // за «расхождений нет» нельзя — именно так ловушка снималась молча.
   app.get('/health', (c) => {
-    const drift = aspectDrift?.() ?? null;
-    if (drift === null || !hasAspectDrift(drift)) return c.json({ status: 'ok' });
+    const state = aspectDrift?.();
+    if (state === undefined || state.status === 'ok') return c.json({ status: 'ok' });
+    if (state.status === 'unknown') return c.json({ status: 'ok', aspectDrift: 'unknown' });
     return c.json({
       status: 'ok',
-      aspectDrift: [...drift.missing, ...drift.drifted.map((d) => d.id)],
+      aspectDrift: [...state.drift.missing, ...state.drift.drifted.map((d) => d.id)],
     });
   });
 

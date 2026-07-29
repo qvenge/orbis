@@ -1,7 +1,6 @@
-import type { AspectDrift } from '@orbis/shared';
 import { makeAiDeps } from './ai/send-message';
 import { createApp } from './app';
-import { reportAspectDriftOnStartup } from './db/aspect-drift';
+import { type AspectDriftStatus, reportAspectDriftOnStartup } from './db/aspect-drift';
 import { makeDb } from './db/client';
 
 // Один пул соединений на процесс; в request-контекст db попадает ссылкой (Task 12)
@@ -14,8 +13,9 @@ const ai = makeAiDeps();
 
 // Реестр аспектов в БД против кода (E1). НЕ fail-fast и НЕ блокирует приём запросов:
 // пересев — шаг релиза с ноутбука владельца, и приложение обязано подняться, даже когда
-// его забыли. Результат доезжает в /health отдельным полем — но только при расхождении.
-let aspectDrift: AspectDrift | null = null;
+// его забыли. Результат доезжает в /health: расхождение — списком, невыполненная
+// проверка — «unknown» (молчать о ней нельзя, иначе ловушка тихо снята).
+let aspectDrift: AspectDriftStatus = { status: 'unknown' };
 void reportAspectDriftOnStartup(db).then((d) => {
   aspectDrift = d;
 });

@@ -8,6 +8,12 @@
 // Проверка НЕ роняет старт. Дрейф одного аспекта — не повод не поднимать приложение:
 // всё остальное работает, а healthCheckPath Render превратил бы наблюдаемость в отказ
 // деплоя. Сигнал — громкий лог с точной командой починки плюс поле в /health.
+//
+// ТРИ СОСТОЯНИЯ, а не два (фикс-раунд по находке ревью). «Проверка не выполнилась»
+// обязано отличаться от «расхождений нет»: холодный старт Render+Supabase легко даёт
+// недоступную БД в первые секунды, и раньше единственная неудачная попытка навсегда
+// выключала ловушку — /health при этом отвечал ровно как на здоровом реестре, то есть
+// штатная операторская проверка (runbook §1) давала ложноотрицательный ответ.
 import { type AspectDrift, diffBuiltinAspects, hasAspectDrift } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Db } from './client';
@@ -45,26 +51,59 @@ export function driftReport(drift: AspectDrift): string[] {
 }
 
 /**
- * Стартовый вызов: логирует расхождение и отдаёт его наружу (index.ts кладёт результат
- * в /health). Своя ошибка чтения тоже логируется и не роняет старт — недоступность БД
- * на старте не должна отличаться от недоступности БД на первом запросе.
+ * Состояние стартовой проверки для /health и логов.
+ * `unknown` — проверка не выполнилась (БД недоступна на старте, снятые гранты, таймаут):
+ * про реестр в этот момент НИЧЕГО не известно, и молчать об этом нельзя.
  */
-export async function reportAspectDriftOnStartup(db: Db): Promise<AspectDrift | null> {
-  try {
-    const drift = await checkAspectDrift(db);
-    if (!hasAspectDrift(drift)) return drift;
-    console.error(
-      [
-        '[aspects] РЕЕСТР АСПЕКТОВ В БД РАСХОДИТСЯ С КОДОМ — часть записей будет отклоняться',
-        'валидацией исполнителя (fail-closed), то есть фича приедет мёртвой:',
-        ...driftReport(drift),
-        'Починить (идемпотентно): DATABASE_URL_ADMIN=… bun scripts/seed-aspects.ts',
-        'или с секретом из Ключницы: bun scripts/ops.ts seed-aspects',
-      ].join('\n'),
-    );
-    return drift;
-  } catch (e) {
-    console.error('[aspects] проверка реестра не выполнена:', e);
-    return null;
+export type AspectDriftStatus =
+  | { status: 'ok' }
+  | { status: 'drift'; drift: AspectDrift }
+  | { status: 'unknown' };
+
+/** Паузы между попытками: холодный старт БД занимает секунды, а не минуты. */
+const RETRY_DELAYS_MS = [1_000, 5_000, 15_000];
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Стартовый вызов: логирует расхождение и отдаёт состояние наружу (index.ts кладёт его
+ * в /health). Неудачное чтение повторяется с паузами — недоступность БД в первые секунды
+ * boot'а типична и не должна навсегда снимать ловушку; исчерпав попытки, проверка честно
+ * возвращает `unknown` вместо тихого «всё хорошо».
+ */
+export async function reportAspectDriftOnStartup(
+  db: Db,
+  deps: { delays?: number[]; wait?: (ms: number) => Promise<void> } = {},
+): Promise<AspectDriftStatus> {
+  const delays = deps.delays ?? RETRY_DELAYS_MS;
+  const wait = deps.wait ?? sleep;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const drift = await checkAspectDrift(db);
+      if (!hasAspectDrift(drift)) return { status: 'ok' };
+      console.error(
+        [
+          '[aspects] РЕЕСТР АСПЕКТОВ В БД РАСХОДИТСЯ С КОДОМ — часть записей будет отклоняться',
+          'валидацией исполнителя (fail-closed), то есть фича приедет мёртвой:',
+          ...driftReport(drift),
+          'Починить (идемпотентно): DATABASE_URL_ADMIN=… bun scripts/seed-aspects.ts',
+          'или с секретом из Ключницы: bun scripts/ops.ts seed-aspects',
+        ].join('\n'),
+      );
+      return { status: 'drift', drift };
+    } catch (e) {
+      const delay = delays[attempt];
+      if (delay === undefined) {
+        console.error(
+          '[aspects] проверка реестра НЕ ВЫПОЛНЕНА — состояние реестра неизвестно, ' +
+            'ловушка пересева сейчас не работает; проверьте вручную: bun scripts/ops.ts check\n' +
+            'Последняя ошибка:',
+          e,
+        );
+        return { status: 'unknown' };
+      }
+      console.warn(`[aspects] проверка реестра не удалась, повтор через ${delay} мс:`, e);
+      await wait(delay);
+    }
   }
 }
