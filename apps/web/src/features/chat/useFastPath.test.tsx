@@ -1,4 +1,10 @@
-import { aspectJsonSchema, BUILTIN_ASPECT_IDS, buildFieldCatalog, parseQuery } from '@orbis/shared';
+import {
+  aspectJsonSchema,
+  BUILTIN_ASPECT_IDS,
+  buildFieldCatalog,
+  parseQuery,
+  retryCreateId,
+} from '@orbis/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { getQueryKey } from '@trpc/react-query';
@@ -317,7 +323,7 @@ test('онлайн-create упал транспортно → карточка �
   expect(pending[0]?.clientId).toBe(input.id);
 });
 
-test('CONFLICT → повтор со СВЕЖИМ id: ни error_card, ни записи в буфере', async () => {
+test('CONFLICT → повтор с замещающим id, и КАРТОЧКА указывает на него, а не на чужой', async () => {
   const ids: string[] = [];
   const { Wrap, qc } = wrapper((path, input) => {
     if (path === 'entity.create') {
@@ -333,16 +339,28 @@ test('CONFLICT → повтор со СВЕЖИМ id: ни error_card, ни за
     await result.current.submit('обед 340');
   });
   expect(ids).toHaveLength(2);
-  expect(ids[1]).not.toBe(ids[0]); // чужой id своим не станет — берём новый
+  // Замещающий id детерминирован по исходному: повтор сходится, а не плодит третий id
+  expect(ids[1]).toBe(retryCreateId(ids[0] as string));
   expect(threadMsgs(qc).some(hasErrorCard)).toBe(false);
   expect(useRetryBuffer.getState().size).toBe(0);
+  // Наблюдаемый итог: карточка ведёт на СОЗДАННУЮ сущность. Иначе «Разобрать с AI»
+  // архивировал бы чужую строку (NOT_FOUND), а модель создала бы вторую сущность.
+  const msgs = threadMsgs(qc);
+  const meta = msgs[0]?.metadata as { fastPath?: { status: string; entityId?: string } };
+  expect(meta.fastPath?.entityId).toBe(ids[1]);
+  expect(meta.fastPath?.status).toBe('confirmed');
+  expect(msgs.length).toBe(1); // карточка переписана на месте, а не добавлена рядом
 });
 
 // Второй CONFLICT подряд — ввод не теряется: карточка деградирует в «⏳ ждёт отправки»,
 // операция уходит в буфер (тем же путём, что транспортный сбой).
-test('CONFLICT дважды подряд → карточка ждёт отправки, запись в буфере', async () => {
+test('CONFLICT дважды подряд → карточка ждёт отправки, в буфере ТОТ ЖЕ замещающий id', async () => {
+  const ids: string[] = [];
   const { Wrap, qc } = wrapper((path, input) => {
-    if (path === 'entity.create') throw trpcError('CONFLICT');
+    if (path === 'entity.create') {
+      ids.push((input as { input: { id: string } }).input.id);
+      throw trpcError('CONFLICT');
+    }
     return handlerBase(path, input);
   });
   const { result } = renderHook(() => useFastPath('t1'), { wrapper: Wrap });
@@ -351,6 +369,11 @@ test('CONFLICT дважды подряд → карточка ждёт отпр�
   });
   expect(threadMsgs(qc).some(hasErrorCard)).toBe(false);
   expect(useRetryBuffer.getState().size).toBe(1);
+  // В буфер ушёл id повтора, а не третий свежий: иначе flush создал бы вторую сущность
+  const pending = useRetryBuffer.getState().pending;
+  const queuedId = (pending[0]?.payload as { input: { id: string } }).input.id;
+  expect(queuedId).toBe(ids[1]);
+  expect(queuedId).toBe(retryCreateId(ids[0] as string));
 });
 
 test('«разобрать с AI» → archived:true + ai.sendMessage исходной строки (одна строка ≠ две сущности)', async () => {

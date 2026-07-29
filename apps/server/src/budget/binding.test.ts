@@ -930,3 +930,51 @@ describe('гонка «create транзакции ∥ create конверта»
     expect(unbudgeted).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Порядок захвата замков (фикс-раунд уборочной фазы): «advisory → строки» на ОБОИХ
+// путях. Пока замок бюджет-контура брался внутри applyBudgetFollowUps, правка транзакции
+// держала FOR UPDATE своей строки и ЖДАЛА advisory, а создание конверта держало advisory
+// (assertEnvelopeUnique на prepare) и ждало строки — цикл ожидания, который PostgreSQL
+// разрывает отказом одной из транзакций по дедлоку.
+// ---------------------------------------------------------------------------
+describe('дедлок «правка транзакции ∥ запись конверта» (§2.3)', () => {
+  test('20 конкурентных пар операций проходят без отказов по дедлоку', async () => {
+    const user = freshUserId();
+    const failures: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      // Своя категория на итерацию: конверты не конфликтуют между собой по §2.1
+      const cat = newId();
+      const day = `2026-09-${String((i % 27) + 1).padStart(2, '0')}`;
+      const { entity: txn } = await createEntity(user, {
+        title: `Покупка ${i}`,
+        aspects: { 'orbis/financial': finData(cat, day) },
+      });
+      const [upd, env] = await Promise.all([
+        // правка транзакции: FOR UPDATE строки → бюджет-хук
+        execute(
+          db,
+          req(user, 'entity_update', {
+            id: txn.id,
+            aspects: { 'orbis/financial': finData(cat, day, { amount: '999.00' }) },
+          }),
+          { sink },
+        ),
+        // запись конверта: advisory на prepare → строки на ребиндинге
+        execute(
+          db,
+          req(user, 'entity_create', {
+            title: `Конверт ${i}`,
+            tags: [],
+            aspects: { 'orbis/budget': budgetData(cat, '2026-09-01', '2026-09-30') },
+          }),
+          { sink },
+        ),
+      ]);
+      for (const r of [upd, env]) {
+        if (!r.ok) failures.push(`${r.error.code}: ${r.error.message}`);
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+});

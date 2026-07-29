@@ -1,4 +1,4 @@
-import { type EntityCreateInput, newId } from '@orbis/shared';
+import { type EntityCreateInput, retryCreateId } from '@orbis/shared';
 import { TRPCClientError } from '@trpc/client';
 import type { FlushOutcome, QueuedCreate } from '../lib/retry-buffer';
 import type { OrbisVanillaClient } from '../trpc';
@@ -51,11 +51,14 @@ export function makeRetrySend(
     } catch (err) {
       if (!isConflict(err)) return mapSendError(err);
       // id занят ЧУЖОЙ строкой — своя дала бы replay-успех. Запись владельца не создана,
-      // и ждать бессмысленно: повторяем РОВНО один раз со свежим UUID. Ввод при этом не
-      // теряется (ради чего буфер и существует), а бесконечного цикла не возникает —
-      // второй CONFLICT уходит в business_rejection и вычищает операцию из очереди.
+      // и ждать бессмысленно: повторяем РОВНО один раз с замещающим id. Он ДЕТЕРМИНИРОВАН
+      // по исходному (retryCreateId): потерянный ответ на повтор оставляет в очереди тот же
+      // payload, следующий flush снова получает CONFLICT и берёт ТОТ ЖЕ замещающий id —
+      // сервер отвечает replay-успехом на свою строку, второй сущности не появляется.
+      // Бесконечного цикла нет: второй CONFLICT (замещающий id тоже занят чужим) уходит
+      // в business_rejection и вычищает операцию из очереди.
       try {
-        await client.entity.create.mutate({ input: { ...input, id: newId() }, source });
+        await client.entity.create.mutate({ input: { ...input, id: retryCreateId(id) }, source });
         return 'confirmed';
       } catch (retryErr) {
         return mapSendError(retryErr);

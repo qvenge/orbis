@@ -1,4 +1,10 @@
-import { type FastPathCategory, type FastPathCtx, newId, parseFastPath } from '@orbis/shared';
+import {
+  type FastPathCategory,
+  type FastPathCtx,
+  newId,
+  parseFastPath,
+  retryCreateId,
+} from '@orbis/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { TRPCClientError } from '@trpc/client';
 import { useOnline, useRetryBuffer } from '../../state/retry';
@@ -240,19 +246,28 @@ export function useFastPath(threadId: string) {
       // на сервере нет. Повторяем один раз со свежим id: карточка уже на экране, и ввод
       // терять нельзя, а ждать бессмысленно — чужой id своим не станет.
       if (isConflict(err)) {
+        // Замещающий id ОДИН на всю ветку и детерминирован по исходному (retryCreateId):
+        // тот же id уйдёт и в повтор, и в буфер, поэтому потерянный ответ не порождает
+        // вторую сущность — сервер отвечает replay-успехом на свою же строку.
+        const retryId = retryCreateId(parsed.create.id ?? '');
         try {
           await create.mutateAsync({
-            input: { ...parsed.create, id: newId() },
+            input: { ...parsed.create, id: retryId },
             source: 'fast_path',
           });
+          // Карточка была вставлена ДО запроса с отвергнутым id: без переписи её «Разобрать
+          // с AI» архивировал бы ЧУЖУЮ строку (NOT_FOUND), а тап открывал бы пустоту.
+          // upsertNewest дедупит по messageId — карточка обновляется на месте, не мигая.
+          insertCard(card, '⚡ без AI', { entityId: retryId, text, status: 'confirmed' }, cardId);
           void utils.entity.query.invalidate();
           void utils.entity.count.invalidate();
           void utils.budget.invalidate();
         } catch {
           // Второй отказ не разбираем по кодам: карточка деградирует в «⏳ ждёт отправки»
-          // тем же путём, что транспортный сбой ниже, — ввод уходит в буфер.
+          // тем же путём, что транспортный сбой ниже, — ввод уходит в буфер С ТЕМ ЖЕ
+          // замещающим id (буфер идемпотентен по client-UUID).
           insertCard(card, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
-          enqueueCreate({ ...parsed.create, id: newId() }, 'fast_path');
+          enqueueCreate({ ...parsed.create, id: retryId }, 'fast_path');
           void flushNow();
         }
         return;
