@@ -5,6 +5,10 @@
 // (простые div-бары + штрих лимита, без чарт-библиотеки), транзакции конверта
 // (children_of, NativeRow §3.6, 🔁 у recurring-инстансов) и quick-add с предзаданной
 // категорией ([+ запись в эту категорию] → QuickAddBar preset, Task B4, §3.6).
+//
+// Шаблоны повторяющихся операций (orbis/schedule.recurrence) в списке СКРЫТЫ — решение
+// D20: шаблон не факт траты, в spent конверта он не входит даже при висящей parent-связи.
+// Инстансы шаблона остаются (см. фильтр visible ниже).
 import type { CategoryTrendPoint, EnvelopeStatus } from '@orbis/shared';
 import { keepPreviousData } from '@tanstack/react-query';
 import { Repeat } from 'lucide-react';
@@ -16,6 +20,7 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Skeleton } from '../../ui/Skeleton';
+import { isRecurringTemplate } from '../agenda/useAgenda';
 import { NativeRow } from '../entity-detail/NativeRow';
 import { monthGenitive, monthTitle, Section } from './BudgetScreen';
 import {
@@ -116,6 +121,14 @@ export function CategoryScreen({ categoryId }: { categoryId: string }) {
     { enabled: envelopeId !== undefined, placeholderData: keepPreviousData },
   );
 
+  // Решение D20 (как на экране «Транзакции»): сущность-ШАБЛОН повторяющейся операции
+  // (задан orbis/schedule.recurrence) — не факт траты. Сервер не считает её в spent даже
+  // при висящей parent-связи на конверт (отдельный фильтр в spentByEnvelope), поэтому
+  // строка шаблона под конвертом противоречила бы его же spent. Фильтр клиентский —
+  // грамматика §6.3 «поле IS NULL» не выражает; хелпер общий с Agenda.
+  // ИНСТАНСЫ шаблона (orbis/financial.recurring БЕЗ recurrence) остаются со своей 🔁.
+  const visible = (txQ.data ?? []).filter((e) => !isRecurringTemplate(e));
+
   const category = catQ.data?.entity;
   const catAspect = category
     ? (category.aspects as Record<string, Record<string, unknown> | undefined>)['orbis/category']
@@ -185,25 +198,30 @@ export function CategoryScreen({ categoryId }: { categoryId: string }) {
               <Section title={txTitle(start, end)}>
                 {txQ.isLoading ? (
                   <Skeleton className="h-16" />
-                ) : txQ.data && txQ.data.length > 0 ? (
+                ) : (
                   <>
-                    {txQ.data.map((e) => (
-                      <TransactionRow key={e.id} entity={e} />
-                    ))}
+                    {visible.length > 0 ? (
+                      visible.map((e) => <TransactionRow key={e.id} entity={e} />)
+                    ) : (
+                      <p className="text-sm text-text-muted">Нет транзакций</p>
+                    )}
                     {/* Счётчик + «Показать ещё» — тот же механизм C6, что на экране
                         «Транзакции»: «пришло РОВНО limit» — единственный признак
-                        «возможно, есть ещё» (движок не отдаёт общее число). */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-text-muted">Показано {txQ.data.length}</span>
-                      {txQ.data.length === limit && (
-                        <Button variant="outline" size="sm" onClick={() => setPage((p) => p + 1)}>
-                          Показать ещё
-                        </Button>
-                      )}
-                    </div>
+                        «возможно, есть ещё» (движок не отдаёт общее число). Блок живёт
+                        СНАРУЖИ ветки «есть строки»: страница, целиком состоящая из скрытых
+                        шаблонов D20, иначе стала бы тупиком без догрузки. «Показано» —
+                        про видимые строки, «есть ещё» — про серверную страницу. */}
+                    {(txQ.data?.length ?? 0) > 0 && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-text-muted">Показано {visible.length}</span>
+                        {txQ.data?.length === limit && (
+                          <Button variant="outline" size="sm" onClick={() => setPage((p) => p + 1)}>
+                            Показать ещё
+                          </Button>
+                        )}
+                      </div>
+                    )}
                   </>
-                ) : (
-                  <p className="text-sm text-text-muted">Нет транзакций</p>
                 )}
               </Section>
             )}

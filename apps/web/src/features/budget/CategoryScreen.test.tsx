@@ -91,7 +91,12 @@ const settings = {
 
 const handler =
   (
-    over: { envelope?: EnvelopeStatus | null; body?: string; trend?: CategoryTrendPoint[] } = {},
+    over: {
+      envelope?: EnvelopeStatus | null;
+      body?: string;
+      trend?: CategoryTrendPoint[];
+      transactions?: ReturnType<typeof ent>[];
+    } = {},
   ): MockHandler =>
   (path, input) => {
     if (path === 'user.getSettings') return settings;
@@ -103,7 +108,7 @@ const handler =
     if (path === 'budget.envelopeForCategory')
       return over.envelope === undefined ? envelopeStatus : over.envelope;
     if (path === 'budget.categoryTrend') return over.trend ?? trend;
-    if (path === 'entity.query') return transactions;
+    if (path === 'entity.query') return over.transactions ?? transactions;
     if (path === 'entity.create') {
       // Эхо wire-сущности (как сервер): карточка результата B4 читает ОТВЕТ, не форму
       const create = (input as { input: { id: string; title: string; aspects: unknown } }).input;
@@ -245,6 +250,41 @@ test('транзакции: entity.query по детям конверта, Nativ
 
   // Пагинация (C6): записей меньше limit → кнопки нет, счётчик показан
   expect(screen.queryByRole('button', { name: 'Показать ещё' })).toBeNull();
+  expect(screen.getByText('Показано 2')).toBeInTheDocument();
+});
+
+// --- шаблон повторяющейся операции среди детей конверта (D20, Task A2) --------------------
+// Шаблон (задан orbis/schedule.recurrence) не факт траты: сервер не считает его в spent
+// даже при висящей parent-связи на конверт (защита в SQL, aggregates.test.ts). Значит и под
+// конвертом ему не место — иначе список показывал бы строку, которой нет в spent того же
+// конверта. ИНСТАНС шаблона (financial.recurring без recurrence) — операция, остаётся.
+
+const recurringTemplate = ent('tpl', 'Аренда', {
+  'orbis/financial': {
+    amount: '50000.00',
+    direction: 'expense',
+    occurred_on: '2026-07-05',
+    category_ref: 'cat-1',
+    recurring: true,
+  },
+  'orbis/schedule': {
+    start_at: '2026-07-05T09:00:00Z',
+    recurrence: { freq: 'monthly', interval: 1 },
+  },
+});
+
+test('шаблон recurring среди детей конверта скрыт, его инстанс — виден (D20)', async () => {
+  renderWithProviders(
+    <CategoryScreen categoryId="cat-1" />,
+    handler({ transactions: [recurringTemplate, ...transactions] }),
+  );
+
+  await waitFor(() => expect(screen.getAllByTestId('tx-row')).toHaveLength(2));
+  expect(screen.queryByText('Аренда')).toBeNull();
+  expect(screen.getByText('Пятёрочка')).toBeInTheDocument();
+  // 🔁 остаётся ровно у инстанса: у шаблона recurring=true тоже стоит, но строки его нет
+  expect(screen.getAllByLabelText('повторяется')).toHaveLength(1);
+  // Счётчик считает то, что видно
   expect(screen.getByText('Показано 2')).toBeInTheDocument();
 });
 

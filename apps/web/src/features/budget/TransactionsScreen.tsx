@@ -246,37 +246,41 @@ export function TransactionsScreen() {
           <p className="text-sm text-text-muted">Не удалось загрузить транзакции</p>
         ) : txQ.isLoading ? (
           <Skeleton className="h-24" />
-        ) : visible.length > 0 ? (
+        ) : (
           <>
-            <Card className="flex flex-col gap-1 p-2">
-              {visible.map((e) => (
-                <TxRow
-                  key={e.id}
-                  entity={e}
-                  category={categoryOf(e, byId)}
-                  onRecategorize={() => setRecatFor(e)}
-                  onMakeRecurring={() => makeRecurring(e)}
-                />
-              ))}
-            </Card>
+            {visible.length > 0 ? (
+              <Card className="flex flex-col gap-1 p-2">
+                {visible.map((e) => (
+                  <TxRow
+                    key={e.id}
+                    entity={e}
+                    category={categoryOf(e, byId)}
+                    onRecategorize={() => setRecatFor(e)}
+                    onMakeRecurring={() => makeRecurring(e)}
+                  />
+                ))}
+              </Card>
+            ) : (
+              <p className="text-sm text-text-muted">Нет транзакций</p>
+            )}
             {/* Счётчик — конец молчаливого обрезания (бэклог B). Движок не отдаёт общее
                 число: «пришло РОВНО limit» — единственный признак «возможно, есть ещё»;
                 при числе записей, кратном странице, последний клик покажет ту же выборку
                 и кнопка исчезнет — честнее, чем угадывать.
-                «Показано» считает ВИДИМЫЕ строки (скрытые шаблоны D20 в счёт не идут),
-                а признак «есть ещё» — СЕРВЕРНУЮ страницу: иначе шаблон внутри полной
-                страницы обрывал бы пагинацию. */}
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-text-muted">Показано {visible.length}</span>
-              {txQ.data?.length === limit && (
-                <Button variant="outline" size="sm" onClick={() => setPage((p) => p + 1)}>
-                  Показать ещё
-                </Button>
-              )}
-            </div>
+                Блок живёт СНАРУЖИ ветки «есть строки»: страница, целиком состоящая из
+                скрытых шаблонов D20, иначе стала бы тупиком без догрузки. «Показано»
+                считает ВИДИМЫЕ строки, признак «есть ещё» — СЕРВЕРНУЮ страницу. */}
+            {(txQ.data?.length ?? 0) > 0 && (
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-text-muted">Показано {visible.length}</span>
+                {txQ.data?.length === limit && (
+                  <Button variant="outline" size="sm" onClick={() => setPage((p) => p + 1)}>
+                    Показать ещё
+                  </Button>
+                )}
+              </div>
+            )}
           </>
-        ) : (
-          <p className="text-sm text-text-muted">Нет транзакций</p>
         )}
       </div>
 

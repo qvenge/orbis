@@ -13,7 +13,7 @@ import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
 import { useToastStore } from '../../ui/toast-store';
 import { TransactionsScreen } from './TransactionsScreen';
-import { buildTxQuery } from './txQuery';
+import { buildTxQuery, TX_PAGE_SIZE } from './txQuery';
 
 // --- фикстуры -------------------------------------------------------------------------
 
@@ -456,6 +456,33 @@ test('шаблон recurring в списке скрыт, его инстанс �
   expect(screen.getByText('Перекрёсток')).toBeInTheDocument();
   // Счётчик считает то, что видно: скрытый шаблон в «Показано» не входит
   expect(screen.getByText('Показано 3')).toBeInTheDocument();
+});
+
+test('страница целиком из шаблонов: строк нет, но догрузка доступна (не тупик)', async () => {
+  // Вырожденный край скрытия D20: сервер отдал ПОЛНУЮ страницу, все строки которой —
+  // шаблоны. Список пуст, однако признак «возможно, есть ещё» считается по серверной
+  // странице, поэтому кнопка догрузки обязана остаться: иначе следующая страница
+  // (с настоящими операциями) стала бы недостижима.
+  const templates = Array.from({ length: TX_PAGE_SIZE }, (_, i) =>
+    ent(`tpl${i}`, `Шаблон ${i}`, {
+      'orbis/financial': {
+        amount: '50000.00',
+        direction: 'expense',
+        occurred_on: '2026-07-05',
+        category_ref: 'cat-1',
+      },
+      'orbis/schedule': {
+        start_at: '2026-07-05T09:00:00Z',
+        recurrence: { freq: 'monthly', interval: 1 },
+      },
+    }),
+  );
+  renderWithProviders(<TransactionsScreen />, handler({ transactions: templates }));
+
+  expect(await screen.findByRole('button', { name: 'Показать ещё' })).toBeInTheDocument();
+  expect(screen.queryAllByTestId('tx-row')).toHaveLength(0);
+  expect(screen.getByText('Нет транзакций')).toBeInTheDocument();
+  expect(screen.getByText('Показано 0')).toBeInTheDocument();
 });
 
 // --- вход и роутер -----------------------------------------------------------------------
