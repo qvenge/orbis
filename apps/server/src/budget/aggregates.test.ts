@@ -22,6 +22,7 @@ import {
   budgetStatus,
   categoryTrend,
   envelopeForCategory,
+  rolloverPreview,
 } from './aggregates';
 
 requireEnv();
@@ -672,5 +673,78 @@ describe('budget.alertCount (§6.1): count-only бейдж вкладки', () =
     await expect(callerFor(null).budget.alertCount({})).rejects.toMatchObject({
       code: 'UNAUTHORIZED',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task A1 (слайс 3): шов подмены «сегодня» — clock последним параметром агрегатов.
+// Даты ФИКСИРОВАННЫЕ (сентябрь 2026), поэтому у сценариев собственный владелец:
+// общая фикстура файла привязана к реальному «сегодня» и смешению не подлежит.
+// Таймзона — DEFAULT_TIMEZONE (Europe/Moscow §2.3): строки user_settings у свежего
+// владельца нет, «сегодня» деградирует к дефолту — как в проде до онбординга.
+// ---------------------------------------------------------------------------
+describe('clock-шов: границы дат (Task A1)', () => {
+  test('граница суток: recurring-инстанс становится фактом в день наступления даты (§2.8)', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    const env = await exec(
+      user,
+      'entity_create',
+      envelope(cat, '2026-09-01', '2026-09-30', '10000.00'),
+    );
+    await exec(user, 'entity_create', {
+      title: 'Подписка 5-го числа',
+      tags: [],
+      aspects: {
+        'orbis/schedule': {
+          start_at: '2026-09-05T12:00:00+03:00',
+          timezone: TZ,
+          recurrence: { freq: 'monthly', interval: 1 },
+        },
+        'orbis/financial': {
+          amount: '1000.00',
+          direction: 'expense',
+          category_ref: cat,
+          recurring: true,
+        },
+      },
+    });
+
+    // 23:00 04.09 по Москве: инстанс материализован, но ещё planned — только Coming up
+    const before = await budgetOverview(
+      db,
+      user,
+      '2026-09',
+      () => new Date('2026-09-04T20:00:00Z'),
+    );
+    expect(before.comingUp.map((c) => c.occurredOn)).toEqual(['2026-09-05']);
+    expect(envById(before, env.id).spent).toBe('0.00');
+
+    // 00:30 05.09 по Москве — ТОТ ЖЕ календарный день по UTC: сменилась именно
+    // локальная дата владельца (§2.3), и postDue перевёл инстанс в факт
+    const after = await budgetOverview(db, user, '2026-09', () => new Date('2026-09-04T21:30:00Z'));
+    expect(after.comingUp).toEqual([]);
+    expect(envById(after, env.id).spent).toBe('1000.00');
+    expect(after.balance.expense).toBe('1000.00');
+  });
+
+  test('граница месяца: rollover-превью считает остаток закрывшегося августа (§2.6, §3.5)', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    await exec(user, 'entity_create', envelope(cat, '2026-08-01', '2026-08-31', '10000.00'));
+    await exec(user, 'entity_create', txn(cat, '7000.00', '2026-08-15'));
+
+    // 03:30 01.09 по Москве: август уже закрыт — его траты попали в spent (occurred_on
+    // ≤ сегодня, §2.2), значит переносить есть что
+    const preview = await rolloverPreview(
+      db,
+      user,
+      '2026-09',
+      () => new Date('2026-09-01T00:30:00Z'),
+    );
+    expect(preview.needsSetup).toBe(false);
+    expect(preview.rows).toHaveLength(1);
+    expect(preview.rows[0]?.prevSpent).toBe('7000.00');
+    expect(preview.rows[0]?.carryover).toBe('3000.00'); // 10000 − 7000 (§2.6)
   });
 });

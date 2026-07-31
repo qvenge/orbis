@@ -47,7 +47,18 @@ const HORIZON_DAYS = 14;
 // глобальное ограничение: финансовые формулы НЕ считают «сегодня» по UTC).
 // ---------------------------------------------------------------------------
 
-export async function localTodayTx(tx: Tx, ownerId: string): Promise<string> {
+/**
+ * Источник «сейчас» (Task A1) — подменяется в тестах границ дат; в проде системные
+ * часы. Идёт последним НЕОБЯЗАТЕЛЬНЫМ параметром: форма прод-вызовов не меняется.
+ */
+export type Clock = () => Date;
+const SYSTEM_CLOCK: Clock = () => new Date();
+
+export async function localTodayTx(
+  tx: Tx,
+  ownerId: string,
+  clock: Clock = SYSTEM_CLOCK,
+): Promise<string> {
   const rows = await tx
     .select({ timezone: userSettings.timezone })
     .from(userSettings)
@@ -55,11 +66,15 @@ export async function localTodayTx(tx: Tx, ownerId: string): Promise<string> {
   const stored = rows[0]?.timezone ?? DEFAULT_TIMEZONE;
   // мусорная зона из БД деградирует до дефолта, не роняя запрос (как queryContext)
   const timezone = isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE;
-  return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+  return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(clock());
 }
 
-export async function localToday(db: Db, ownerId: string): Promise<string> {
-  return withIdentity(db, ownerId, (tx) => localTodayTx(tx, ownerId));
+export async function localToday(
+  db: Db,
+  ownerId: string,
+  clock: Clock = SYSTEM_CLOCK,
+): Promise<string> {
+  return withIdentity(db, ownerId, (tx) => localTodayTx(tx, ownerId, clock));
 }
 
 // ---------------------------------------------------------------------------
@@ -524,8 +539,8 @@ async function computeOverview(
 // ---------------------------------------------------------------------------
 
 /** Конвейер §2.8 перед агрегатами: due-переходы + материализация окна [today; +14]. */
-async function preparePeriod(db: Db, ownerId: string): Promise<string> {
-  const today = await localToday(db, ownerId);
+async function preparePeriod(db: Db, ownerId: string, clock: Clock): Promise<string> {
+  const today = await localToday(db, ownerId, clock);
   await postDueInstances({ db, ownerId, today });
   await materializeInstances({
     db,
@@ -542,8 +557,9 @@ export async function budgetOverview(
   db: Db,
   ownerId: string,
   month?: string,
+  clock: Clock = SYSTEM_CLOCK,
 ): Promise<BudgetOverview> {
-  const today = await preparePeriod(db, ownerId);
+  const today = await preparePeriod(db, ownerId, clock);
   const m = month ?? today.slice(0, 7);
   return withIdentity(db, ownerId, (tx) => computeOverview(tx, ownerId, m, today));
 }
@@ -554,9 +570,14 @@ export async function budgetOverview(
  * кэша — БЕЗ конвейера §2.8 (postDue/материализация не запускаются): значение
  * производное и пересчитывается часто, тяжёлый конвейер гоняет overview.
  */
-export async function budgetAlertCount(db: Db, ownerId: string, month?: string): Promise<number> {
+export async function budgetAlertCount(
+  db: Db,
+  ownerId: string,
+  month?: string,
+  clock: Clock = SYSTEM_CLOCK,
+): Promise<number> {
   return withIdentity(db, ownerId, async (tx) => {
-    const today = await localTodayTx(tx, ownerId);
+    const today = await localTodayTx(tx, ownerId, clock);
     const defCur = await defaultCurrencyOf(tx, ownerId);
     const raws = await rawEnvelopesOfMonth(tx, ownerId, month ?? today.slice(0, 7), today, defCur);
     return countAlerts(raws, today);
@@ -572,8 +593,9 @@ export async function budgetStatus(
   db: Db,
   ownerId: string,
   month?: string,
+  clock: Clock = SYSTEM_CLOCK,
 ): Promise<BudgetStatusResult> {
-  const today = await preparePeriod(db, ownerId);
+  const today = await preparePeriod(db, ownerId, clock);
   const m = month ?? today.slice(0, 7);
   return withIdentity(db, ownerId, async (tx) => {
     const overview = await computeOverview(tx, ownerId, m, today);
@@ -605,9 +627,10 @@ export async function envelopeForCategory(
   db: Db,
   ownerId: string,
   args: { categoryId: string; date: string },
+  clock: Clock = SYSTEM_CLOCK,
 ): Promise<EnvelopeStatus | null> {
   return withIdentity(db, ownerId, async (tx) => {
-    const today = await localTodayTx(tx, ownerId);
+    const today = await localTodayTx(tx, ownerId, clock);
     const defCur = await defaultCurrencyOf(tx, ownerId);
     const envelopeId = await selectEnvelope(tx, {
       ownerId,
@@ -643,9 +666,10 @@ export async function categoryTrend(
   db: Db,
   ownerId: string,
   args: { categoryId: string; months: number },
+  clock: Clock = SYSTEM_CLOCK,
 ): Promise<CategoryTrendPoint[]> {
   return withIdentity(db, ownerId, async (tx) => {
-    const today = await localTodayTx(tx, ownerId);
+    const today = await localTodayTx(tx, ownerId, clock);
     const defCur = await defaultCurrencyOf(tx, ownerId);
     const curMonth = today.slice(0, 7);
     const monthsList = Array.from({ length: args.months }, (_, i) =>
@@ -749,9 +773,10 @@ export async function rolloverPreview(
   db: Db,
   ownerId: string,
   month: string,
+  clock: Clock = SYSTEM_CLOCK,
 ): Promise<RolloverPreview> {
   return withIdentity(db, ownerId, async (tx) => {
-    const today = await localTodayTx(tx, ownerId);
+    const today = await localTodayTx(tx, ownerId, clock);
     const defCur = await defaultCurrencyOf(tx, ownerId);
     const prevRange = monthRange(shiftMonth(month, -1));
     const targetRange = monthRange(month);
