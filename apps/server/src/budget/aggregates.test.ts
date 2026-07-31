@@ -728,23 +728,37 @@ describe('clock-шов: границы дат (Task A1)', () => {
     expect(after.balance.expense).toBe('1000.00');
   });
 
-  test('граница месяца: rollover-превью считает остаток закрывшегося августа (§2.6, §3.5)', async () => {
+  test('последний день закрывающегося месяца: остаток к переносу меняется на локальной полуночи (§2.6, §3.5)', async () => {
     const user = freshUserId();
     const cat = newId();
     await exec(user, 'entity_create', envelope(cat, '2026-08-01', '2026-08-31', '10000.00'));
-    await exec(user, 'entity_create', txn(cat, '7000.00', '2026-08-15'));
+    // Трата ПОСЛЕДНЕГО дня августа: только она отличает две стороны границы
+    await exec(user, 'entity_create', txn(cat, '7000.00', '2026-08-31'));
 
-    // 03:30 01.09 по Москве: август уже закрыт — его траты попали в spent (occurred_on
-    // ≤ сегодня, §2.2), значит переносить есть что
-    const preview = await rolloverPreview(
+    // Оба клока — одни сутки по UTC (30.08), но по разные стороны московской полуночи,
+    // как в тесте выше: сравниваются не «прошлое и будущее», а две локальные даты
+    // владельца. 23:00 30.08 МСК — 31-е ещё не наступило, траты этого дня в spent не
+    // входят (occurred_on ≤ сегодня, §2.2), переносится весь лимит
+    const before = await rolloverPreview(
       db,
       user,
       '2026-09',
-      () => new Date('2026-09-01T00:30:00Z'),
+      () => new Date('2026-08-30T20:00:00Z'),
     );
-    expect(preview.needsSetup).toBe(false);
-    expect(preview.rows).toHaveLength(1);
-    expect(preview.rows[0]?.prevSpent).toBe('7000.00');
-    expect(preview.rows[0]?.carryover).toBe('3000.00'); // 10000 − 7000 (§2.6)
+    expect(before.rows).toHaveLength(1);
+    expect(before.rows[0]?.prevSpent).toBe('0.00');
+    expect(before.rows[0]?.carryover).toBe('10000.00');
+
+    // 00:30 31.08 МСК — та же дата по UTC, сменилась именно локальная дата владельца
+    const after = await rolloverPreview(
+      db,
+      user,
+      '2026-09',
+      () => new Date('2026-08-30T21:30:00Z'),
+    );
+    expect(after.needsSetup).toBe(false);
+    expect(after.rows).toHaveLength(1);
+    expect(after.rows[0]?.prevSpent).toBe('7000.00');
+    expect(after.rows[0]?.carryover).toBe('3000.00'); // 10000 − 7000 (§2.6)
   });
 });

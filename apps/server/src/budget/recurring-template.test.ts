@@ -6,9 +6,10 @@
 // (03-budget §3.1): ни один агрегат его не считает.
 //
 // Тест-сторож на углы D20, НЕ покрытые describe «spent не считает recurring-шаблон»
-// (aggregates.test.ts): unbudgeted и баланс периода (§2.3 шаг 5, §2.5, §3.1) и список
-// planned-покупок (§2.7). Каждый случай с положительным контролем — настоящей операцией
-// рядом: иначе «агрегат пуст» доказывал бы не фильтр шаблонов, а пустого пользователя.
+// (aggregates.test.ts): unbudgeted и баланс периода (§2.3 шаг 5, §2.5, §3.1), список
+// planned-покупок (§2.7) и rollover-превью (§3.5). Каждый случай с положительным
+// контролем — настоящей операцией рядом: иначе «агрегат пуст» доказывал бы не фильтр
+// шаблонов, а пустого пользователя.
 //
 // «Сегодня» фиксировано подменяемым Clock (Task A1) — прогон не зависит от даты запуска.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
@@ -17,7 +18,7 @@ import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers'
 import { execute } from '../executor/executor';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { Clock } from './aggregates';
-import { budgetOverview, budgetStatus } from './aggregates';
+import { budgetOverview, budgetStatus, rolloverPreview } from './aggregates';
 
 requireEnv();
 
@@ -134,4 +135,56 @@ test('шаблон не попадает в список planned-покупок 
   const status = await budgetStatus(db, user, MONTH, clock);
 
   expect(status.planned.map((p) => p.entity.id)).toEqual([purchase.id]);
+});
+
+test('шаблон не завышает suggestedLimit rollover-превью §3.5 (D20)', async () => {
+  const user = freshUserId();
+  const catRent = newId();
+  const catFood = newId();
+
+  // История прошлого месяца: без единого августовского конверта превью вообще не строит
+  // строк по категориям БЕЗ конверта (§3.5). Конверт заведён по ЧУЖОЙ категории, поэтому
+  // строка catRent приходит ровно из spendingRows — того запроса, где живёт фильтр шаблонов
+  await exec(user, 'entity_create', {
+    title: 'Конверт «Еда», август',
+    tags: [],
+    aspects: {
+      'orbis/budget': {
+        category_ref: catFood,
+        limit: '10000.00',
+        period_start: '2026-08-01',
+        period_end: '2026-08-31',
+      },
+    },
+  });
+  // Шаблон «Аренда» с августовским occurred_on — и настоящая трата ТОЙ ЖЕ категории
+  // рядом: положительный контроль, который в превью попасть обязан
+  await exec(user, 'entity_create', {
+    title: 'Аренда',
+    tags: [],
+    aspects: {
+      'orbis/schedule': {
+        start_at: SERIES_START,
+        timezone: 'Europe/Moscow',
+        recurrence: RECURRENCE,
+      },
+      'orbis/financial': {
+        amount: '50000.00',
+        direction: 'expense',
+        category_ref: catRent,
+        occurred_on: '2026-08-05',
+      },
+    },
+  });
+  await exec(user, 'entity_create', expense(catRent, '340.00', '2026-08-05'));
+
+  const preview = await rolloverPreview(db, user, MONTH, clock);
+
+  // Без фильтра шаблонов было бы prevSpent 50340.00 и suggestedLimit 50400.00 —
+  // предложение забюджетировать аренду, которой в этом месяце никто не тратил
+  expect(preview.rows.find((r) => r.categoryId === catRent)).toMatchObject({
+    prevSpent: '340.00',
+    carryover: '0.00', // прошлого конверта у категории не было — переносить нечего
+    suggestedLimit: '400.00', // 340 вверх до сотни
+  });
 });
