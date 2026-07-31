@@ -4,6 +4,10 @@
 // период — абсолютный диапазон occurred_on=<от>..<до> (расширение грамматики B5),
 // окно материализации сервер расширяет сам (§5.4 + materializationWindow).
 //
+// Шаблоны повторяющихся операций (orbis/schedule.recurrence) в списке СКРЫТЫ — решение
+// D20: шаблон не факт траты, агрегаты его не считают. Инстансы шаблона остаются (см.
+// фильтр visible ниже).
+//
 // Строка — компактный native-рендер (решение B5 по Minor B3: NativeRow с text-xl —
 // типографика страницы Detail, для плотного списка велика; денежный рендер НЕ
 // дублируется — общий formatMoney): дата · title · 🔁 (МЕЖДУ title и суммой,
@@ -33,6 +37,7 @@ import { Input } from '../../ui/Input';
 import { Sheet } from '../../ui/Sheet';
 import { Skeleton } from '../../ui/Skeleton';
 import { useToast } from '../../ui/toast-store';
+import { isRecurringTemplate } from '../agenda/useAgenda';
 import { currentMonth, monthTitle } from './BudgetScreen';
 import { CATEGORIES_QUERY, type CategoryOption, toOption } from './categories';
 import { ddmm } from './EnvelopeCard';
@@ -107,6 +112,15 @@ export function TransactionsScreen() {
   // keepPreviousData: «показать ещё» меняет ключ запроса (limit растёт) — без него
   // уже показанный список на кадр подменялся бы скелетоном вместо роста (Task C6)
   const txQ = trpc.entity.query.useQuery({ query }, { placeholderData: keepPreviousData });
+
+  // Решение D20: сущность-ШАБЛОН повторяющейся операции (задан orbis/schedule.recurrence)
+  // с occurred_on — валидное состояние (так заканчивается флоу «Сделать повторяющейся»),
+  // но это не факт траты: серверные агрегаты его не считают, и в списке транзакций ему
+  // не место. Фильтр клиентский — грамматика §6.3 «поле IS NULL» не выражает (та же
+  // причина, что в Agenda), поэтому переиспользуем её isRecurringTemplate.
+  // ИНСТАНСЫ шаблона (orbis/financial.recurring БЕЗ recurrence) — настоящие операции:
+  // остаются в списке со своей 🔁.
+  const visible = (txQ.data ?? []).filter((e) => !isRecurringTemplate(e));
 
   // Мутации строк (§3.3): entity.update + инвалидация budget И entity — рекатегоризация
   // двигает spent конвертов (серверный хук A4), пометка 🔁 меняет рендер списков.
@@ -232,10 +246,10 @@ export function TransactionsScreen() {
           <p className="text-sm text-text-muted">Не удалось загрузить транзакции</p>
         ) : txQ.isLoading ? (
           <Skeleton className="h-24" />
-        ) : txQ.data && txQ.data.length > 0 ? (
+        ) : visible.length > 0 ? (
           <>
             <Card className="flex flex-col gap-1 p-2">
-              {txQ.data.map((e) => (
+              {visible.map((e) => (
                 <TxRow
                   key={e.id}
                   entity={e}
@@ -248,10 +262,13 @@ export function TransactionsScreen() {
             {/* Счётчик — конец молчаливого обрезания (бэклог B). Движок не отдаёт общее
                 число: «пришло РОВНО limit» — единственный признак «возможно, есть ещё»;
                 при числе записей, кратном странице, последний клик покажет ту же выборку
-                и кнопка исчезнет — честнее, чем угадывать. */}
+                и кнопка исчезнет — честнее, чем угадывать.
+                «Показано» считает ВИДИМЫЕ строки (скрытые шаблоны D20 в счёт не идут),
+                а признак «есть ещё» — СЕРВЕРНУЮ страницу: иначе шаблон внутри полной
+                страницы обрывал бы пагинацию. */}
             <div className="flex items-center justify-between">
-              <span className="text-xs text-text-muted">Показано {txQ.data.length}</span>
-              {txQ.data.length === limit && (
+              <span className="text-xs text-text-muted">Показано {visible.length}</span>
+              {txQ.data?.length === limit && (
                 <Button variant="outline" size="sm" onClick={() => setPage((p) => p + 1)}>
                   Показать ещё
                 </Button>

@@ -421,6 +421,43 @@ test('у recurring-строки кнопки «Сделать повторяющ
   expect(within(netflix).getByRole('button', { name: 'Сменить категорию' })).toBeInTheDocument();
 });
 
+// --- шаблон повторяющейся операции (решение D20, Task A2) --------------------------------
+// Шаблон — сущность с заданным orbis/schedule.recurrence. С occurred_on он остаётся
+// валидным (так выглядит результат флоу «Сделать повторяющейся»), но фактом траты не
+// является: серверные агрегаты его не считают, список транзакций не показывает.
+// ИНСТАНС шаблона (financial.recurring без recurrence) — настоящая операция: остаётся
+// в списке со своей 🔁; путать их нельзя.
+
+const recurringTemplate = ent('tpl', 'Аренда', {
+  'orbis/financial': {
+    amount: '50000.00',
+    direction: 'expense',
+    occurred_on: '2026-07-05',
+    category_ref: 'cat-2',
+    recurring: true,
+  },
+  'orbis/schedule': {
+    start_at: '2026-07-05T09:00:00Z',
+    recurrence: { freq: 'monthly', interval: 1 },
+  },
+});
+
+test('шаблон recurring в списке скрыт, его инстанс — виден (D20)', async () => {
+  renderWithProviders(
+    <TransactionsScreen />,
+    handler({ transactions: [recurringTemplate, ...transactions] }),
+  );
+
+  await waitFor(() => expect(screen.getAllByTestId('tx-row')).toHaveLength(3));
+  expect(screen.queryByText('Аренда')).toBeNull();
+  // Netflix — recurring-ИНСТАНС (recurring:true, recurrence нет): операция, не шаблон
+  expect(screen.getByText('Netflix')).toBeInTheDocument();
+  expect(screen.getByLabelText('повторяется')).toBeInTheDocument();
+  expect(screen.getByText('Перекрёсток')).toBeInTheDocument();
+  // Счётчик считает то, что видно: скрытый шаблон в «Показано» не входит
+  expect(screen.getByText('Показано 3')).toBeInTheDocument();
+});
+
 // --- вход и роутер -----------------------------------------------------------------------
 
 test('вход §3.3: кнопка «Транзакции» в шапке Overview пушит budget-transactions; роутер рендерит экран', async () => {
