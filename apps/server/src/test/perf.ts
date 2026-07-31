@@ -47,7 +47,12 @@ const MENTIONS = 200;
 /** Транзакций: текущий месяц (горячий для budget.overview) + прошлый. */
 const TXN_CURRENT = 800;
 const TXN_PREVIOUS = 200;
-/** Явных related_to на хаб — вторая ветка UNION'а backlinks (§3.5.7). */
+/**
+ * Явных related_to на хаб — вторая ветка UNION'а backlinks (§3.5.7). В верхнюю сотню
+ * выдачи они, скорее всего, не попадают: секция сортируется `created_at DESC`, а связи
+ * создаются РАНЬШЕ заметок-упоминаний. На стоимость запроса это не влияет (обе ветки
+ * UNION'а всё равно исполняются), и как «нагрузить вторую ветку» их и хватает.
+ */
 const HUB_RELATIONS = 40;
 /** Операций в одном batch: компромисс «мало round-trip'ов» ↔ «journal не разбухает». */
 const BATCH_SIZE = 200;
@@ -63,6 +68,19 @@ const INCOME_SLUGS = SEED_CATEGORIES.filter((c) => c.spendClass === null).map((c
  */
 export function perfHubId(ownerId: string): string {
   return uuidv5(`${ownerId.toLowerCase()}:perf-hub`, ORBIS_NAMESPACE);
+}
+
+/**
+ * Категория, у которой в фикстуре ГАРАНТИРОВАННО есть конверт текущего месяца, — вход для
+ * замера `fastpath:create`. Слаг берётся из того же списка, из которого сид строит конверты,
+ * а не литералом на стороне теста: с литералом переименование слага не роняло бы ничего —
+ * `entity.create` прошёл бы, просто не нашёл конверт, и замер молча съехал бы на более
+ * дешёвый путь (без привязки) при зелёном гейте.
+ */
+export function perfEnvelopeCategoryId(ownerId: string): string {
+  const slug = EXPENSE_SLUGS[0];
+  if (!slug) throw new Error('perf-фикстура: в сиде не осталось расходных категорий');
+  return seedCategoryId(ownerId, slug);
 }
 
 /** Таймзона сида (02-core-os §7.3) — та же, в которой сервер считает `today`. */

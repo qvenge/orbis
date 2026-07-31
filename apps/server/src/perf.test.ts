@@ -10,8 +10,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../test/helpers';
 import { appRouter } from './router';
-import { seedCategoryId } from './seed/onboarding';
-import { measureMedian, perfHubId, seedPerfFixture } from './test/perf';
+import { measureMedian, perfEnvelopeCategoryId, perfHubId, seedPerfFixture } from './test/perf';
 import { createCallerFactory } from './trpc';
 
 requireEnv();
@@ -26,9 +25,10 @@ const caller = createCallerFactory(appRouter)({
 });
 
 /**
- * Пороги, мс. Рядом с каждым — верхняя граница медиан, измеренных локально при калибровке
- * 2026-07-31 (Apple Silicon, локальный Supabase; семь прогонов, из них один — в составе
- * полного `bun run test`, где серверный сьют идёт параллельно web и конкурирует за CPU).
+ * Пороги, мс. Рядом с каждым — САМАЯ БОЛЬШАЯ из медиан, наблюдённых локально при калибровке
+ * 2026-07-31 (Apple Silicon, локальный Supabase; одиннадцать прогонов, из них три — в
+ * составе полного `bun run test`, где серверный сьют идёт параллельно web и конкурирует за
+ * CPU). Типичное значение ниже, то есть реальный запас больше указанного.
  *
  * Запас минимум ×3, а не ×2: раннер `ubuntu-latest` общий и заметно медленнее машины
  * разработчика, а гейт, мигающий красным на ровном месте, перестают читать. Где абсолютное
@@ -41,28 +41,68 @@ const caller = createCallerFactory(appRouter)({
  * чтобы гейт снова ловил разы, а не десятки раз.
  */
 const BUDGETS_MS: Record<string, number> = {
-  'entity.query:list50': 60, // локально ≤ 14 мс (×4.3)
-  'entity.count:badge': 60, // локально ≤ 11 мс (×5.5)
+  'entity.query:list50': 60, // локально ≤ 15 мс (×4.0)
+  'entity.count:badge': 60, // локально ≤ 13 мс (×4.6)
   'budget.overview': 300, // локально ≤ 76 мс (×3.9)
   'agenda:horizon': 120, // локально ≤ 27 мс (×4.4)
   'entity.backlinks': 120, // локально ≤ 26 мс (×4.6)
   'fastpath:create': 150, // локально ≤ 34 мс (×4.4)
 };
 
-// Состав detail-чтения — ровно тот, что уходит с экрана сущности
-// (apps/web/src/features/entity-detail/useEntityDetail.ts, DETAIL_INCLUDE).
-const DETAIL_INCLUDE = ['body', 'relations', 'backlinks', 'thread'] as const;
+// Входы шести операций — ОДИН экземпляр на сторожа и на гейт. Дублировать литералы нельзя:
+// гарантия сторожа держится ровно на том, что он проверяет непустоту ТОГО ЖЕ запроса,
+// который меряет гейт, а текстовое совпадение двух копий ничем не подпирается — правка в
+// одном месте без правки в другом возвращает дефект, ради которого сторож и написан.
+
+// Список Browser'а: страница на 50 незакрытых задач.
+const LIST50_QUERY = 'aspect=orbis/task, status=!done, sortBy=updated_at:desc, limit=50';
+
+// Бейдж smart list «Inbox» (02-core-os §3.3): count без limit.
+const BADGE_QUERY = 'aspect=orbis/task, status=inbox';
 
 // Горизонт Agenda — дословно AGENDA_DAYS_QUERY клиента
 // (apps/web/src/features/agenda/useAgenda.ts): мерить надо то, что реально уходит.
 const AGENDA_DAYS_QUERY =
   'aspect=orbis/schedule, start_at=today|next_7d, sortBy=start_at:asc, limit=200';
 
+// Состав detail-чтения — ровно тот, что уходит с экрана сущности
+// (apps/web/src/features/entity-detail/useEntityDetail.ts, DETAIL_INCLUDE).
+const DETAIL_INCLUDE = ['body', 'relations', 'backlinks', 'thread'] as const;
+
 // «Сегодня» в таймзоне сида — той же, по которой сервер резолвит today/next_7d и месяц
 // бюджета. Считать по локальной таймзоне машины нельзя: под UTC-раннером CI дата на
 // границе суток разойдётся с датой фикстуры и запросы попадут мимо засеянного окна.
 const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow' }).format(new Date());
 const month = today.slice(0, 7);
+
+/**
+ * Вход fast-path — форма, которую отдаёт parseFastPath на «кофе 340» (packages/shared/src/
+ * fast-path): те же поля аспекта, тот же source. Каждый вызов даёт новый id — операция
+ * мутирующая, повтор с тем же id ушёл бы в идемпотентный replay и мерил бы не создание.
+ *
+ * Категория берётся из фикстуры (perfEnvelopeCategoryId), а не литералом: стоимость этой
+ * операции — не вставка строки, а бюджет-хук (селектор конверта плюс привязка тем же tx),
+ * и без конверта замер съезжает на заметно более дешёвый путь.
+ */
+function fastPathCreateInput() {
+  return {
+    input: {
+      id: newId(),
+      title: 'кофе 340',
+      tags: [],
+      aspects: {
+        'orbis/financial': {
+          amount: '340.00',
+          direction: 'expense',
+          currency: 'RUB',
+          category_ref: perfEnvelopeCategoryId(user),
+          occurred_on: today,
+        },
+      },
+    },
+    source: 'fast_path' as const,
+  };
+}
 
 beforeAll(async () => {
   await truncateAll();
@@ -80,12 +120,10 @@ afterAll(async () => {
 // привязка к конвертам), пороги продолжат выполняться, и гейт будет зелёным, ничего не
 // меряя. Границы намеренно грубые — это проверка «не пусто», а не второй пин фикстуры.
 test('фикстура наполнена: гейт меряет данные, а не пустой граф', async () => {
-  const list = await caller.entity.query({
-    query: 'aspect=orbis/task, status=!done, sortBy=updated_at:desc, limit=50',
-  });
+  const list = await caller.entity.query({ query: LIST50_QUERY });
   expect(list).toHaveLength(50);
 
-  const badge = await caller.entity.count({ query: 'aspect=orbis/task, status=inbox' });
+  const badge = await caller.entity.count({ query: BADGE_QUERY });
   expect(badge.count).toBeGreaterThan(100);
 
   const overview = await caller.budget.overview({ month });
@@ -101,6 +139,19 @@ test('фикстура наполнена: гейт меряет данные, �
   // значит меряется полная выдача с усечением, как на живом detail-экране.
   expect(detail.backlinks).toHaveLength(100);
   expect(detail.backlinksTruncated).toBe(true);
+
+  // fast-path: мерить надо ПОЛНЫЙ путь — вставку плюс бюджет-хук. Проверяем не то, что
+  // create прошёл (он пройдёт и без конверта), а то, что транзакция реально привязана:
+  // связь `parent` от конверта (03-budget §2.3). Без неё замер молча съезжает на более
+  // дешёвый путь, и гейт остаётся зелёным при вдвое меньшей работе.
+  const txn = await caller.entity.create(fastPathCreateInput());
+  const bound = await caller.entity.get({ id: txn.id, include: ['relations'] });
+  const parent = (bound.relations ?? []).find(
+    (r) => r.relationType === 'parent' && r.targetId === txn.id,
+  );
+  expect(parent).toBeDefined();
+  const envelope = await caller.entity.get({ id: parent?.sourceId ?? '', include: [] });
+  expect(Object.keys(envelope.entity.aspects)).toContain('orbis/budget');
 }, 60_000);
 
 test('перф-бюджеты серверных операций', async () => {
@@ -108,15 +159,13 @@ test('перф-бюджеты серверных операций', async () => 
     [
       'entity.query:list50',
       await measureMedian('entity.query:list50', 7, () =>
-        caller.entity.query({
-          query: 'aspect=orbis/task, status=!done, sortBy=updated_at:desc, limit=50',
-        }),
+        caller.entity.query({ query: LIST50_QUERY }),
       ),
     ],
     [
       'entity.count:badge',
       await measureMedian('entity.count:badge', 7, () =>
-        caller.entity.count({ query: 'aspect=orbis/task, status=inbox' }),
+        caller.entity.count({ query: BADGE_QUERY }),
       ),
     ],
     [
@@ -136,29 +185,8 @@ test('перф-бюджеты серверных операций', async () => 
       ),
     ],
     [
-      // Вход — форма, которую отдаёт parseFastPath на «кофе 340» (packages/shared/src/
-      // fast-path): те же поля аспекта, тот же source. Стоимость здесь — не вставка строки,
-      // а бюджет-хук: селектор конверта плюс привязка тем же tx.
       'fastpath:create',
-      await measureMedian('fastpath:create', 5, () =>
-        caller.entity.create({
-          input: {
-            id: newId(),
-            title: 'кофе 340',
-            tags: [],
-            aspects: {
-              'orbis/financial': {
-                amount: '340.00',
-                direction: 'expense',
-                currency: 'RUB',
-                category_ref: seedCategoryId(user, 'food'),
-                occurred_on: today,
-              },
-            },
-          },
-          source: 'fast_path',
-        }),
-      ),
+      await measureMedian('fastpath:create', 5, () => caller.entity.create(fastPathCreateInput())),
     ],
   ];
 
