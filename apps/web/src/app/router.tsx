@@ -15,6 +15,7 @@ import { MemoryScreen } from '../features/settings/MemoryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
 import { type ScreenRef, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
+import { NavBadge } from '../ui/NavBadge';
 import { ScreenHeader } from './ScreenHeader';
 
 // Вкладки ЯДРА (02-core-os §1.1) в порядке спеки: Chat, Browser, Agenda. Agenda —
@@ -26,6 +27,9 @@ const BASE_TABS: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'agenda', label: 'Повестка', icon: CalendarDays },
 ];
 export const BUDGET_TAB = { id: 'budget', label: 'Бюджет', icon: Wallet } as const;
+
+// Бейдж висит в правом верхнем углу кнопки вкладки (кнопка — relative).
+const BADGE_POS = 'absolute right-4 top-1';
 
 // Нижний tab-bar — только мобила (md:hidden); на десктопе навигация в SidebarNav.
 export function TabBar() {
@@ -53,7 +57,9 @@ export function TabBar() {
             type="button"
             role="tab"
             aria-selected={active}
-            aria-label={t.label}
+            // aria-label нет намеренно: доступное имя считается ИЗ СОДЕРЖИМОГО, и
+            // тогда бейдж (sr-only-описание внутри NavBadge) попадает в него сам —
+            // с aria-label скринридер про число не узнавал бы вовсе.
             data-testid={`tab-${t.id}`}
             onClick={() => switchTab(t.id)}
             className={`relative flex flex-1 cursor-pointer flex-col items-center gap-0.5 py-2 text-xs transition ${
@@ -64,31 +70,34 @@ export function TabBar() {
                 отдельной плавающей полосы, которая под композером читалась артефактом. */}
             <Icon size={18} aria-hidden />
             {t.label}
-            {t.id === 'chat' && chatBadge > 0 && (
-              <span
+            {/* Пустой бейдж NavBadge прячет сам (0/null/''), поэтому здесь только выбор
+                вкладки. Позиционирование поверх кнопки — у вызывающего: это раскладка
+                таб-бара, в sidebar тот же бейдж стоит в потоке. */}
+            {t.id === 'chat' && (
+              <NavBadge
+                count={chatBadge}
+                label="ждут отправки"
                 data-testid="chat-badge"
-                className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
-              >
-                {chatBadge}
-              </span>
+                className={BADGE_POS}
+              />
             )}
             {/* badgeLabel: «200+» при упоре в потолок (K18) и null при отказе выборки —
                 заниженного числа на бейдже не бывает (решение D2b, прецедент Budget) */}
-            {t.id === 'agenda' && agendaOverdue.badgeLabel !== null && (
-              <span
+            {t.id === 'agenda' && (
+              <NavBadge
+                count={agendaOverdue.badgeLabel}
+                label="просроченных"
                 data-testid="agenda-badge"
-                className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
-              >
-                {agendaOverdue.badgeLabel}
-              </span>
+                className={BADGE_POS}
+              />
             )}
-            {t.id === 'budget' && budgetBadge > 0 && (
-              <span
+            {t.id === 'budget' && (
+              <NavBadge
+                count={budgetBadge}
+                label="конвертов в тревоге"
                 data-testid="budget-badge"
-                className="absolute right-4 top-1 rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
-              >
-                {budgetBadge}
-              </span>
+                className={BADGE_POS}
+              />
             )}
           </button>
         );

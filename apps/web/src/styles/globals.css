@@ -9,6 +9,27 @@
   color-scheme: dark;
 }
 
+/*
+ * Мягкое проявление бейджа вкладки (ui/NavBadge): утилита animate-badge-in.
+ * Своя keyframes-утилита вместо пакета animate-* — лишней зависимости ради одной
+ * анимации не заводим. Компонент применяет её вариантом motion-safe:, поэтому при
+ * prefers-reduced-motion правило вообще не действует (перебивать нечего).
+ */
+@theme {
+  --animate-badge-in: badge-in 160ms var(--ease-settle);
+}
+
+@keyframes badge-in {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 html,
 body,
 #root {

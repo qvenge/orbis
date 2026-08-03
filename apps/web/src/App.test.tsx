@@ -38,9 +38,11 @@ test('навигация: Чат, Обзор, Повестка в обеих п�
   expect(screen.getByTestId('sidebar-agenda')).toBeInTheDocument();
   expect(screen.queryByTestId('sidebar-budget')).toBeNull();
   expect(screen.getByTestId('open-settings')).toBeInTheDocument();
-  // Подпись вкладки — «Повестка» (решение владельца 2026-07-25); testid и id таба прежние
+  // Подпись вкладки — «Повестка» (решение владельца 2026-07-25); testid и id таба прежние.
+  // Доступное имя проверяем не атрибутом, а вычисленным именем: aria-label с кнопки снят
+  // намеренно (иначе бейдж в имя не попадает, B5), и важно именно то, что услышит скринридер.
   expect(screen.getByTestId('tab-agenda')).toHaveTextContent('Повестка');
-  expect(screen.getByTestId('tab-agenda')).toHaveAttribute('aria-label', 'Повестка');
+  expect(screen.getByRole('tab', { name: 'Повестка' })).toBe(screen.getByTestId('tab-agenda'));
   expect(screen.getByTestId('sidebar-agenda')).toHaveTextContent('Повестка');
 });
 
@@ -51,12 +53,19 @@ test('бейдж Chat показывает размер retry-буфера в ta
   renderWithProviders(<App />);
   expect(screen.getByTestId('chat-badge')).toHaveTextContent('1');
   expect(screen.getByTestId('sidebar-chat-badge')).toHaveTextContent('1');
+  // Бейдж входит в ДОСТУПНОЕ ИМЯ пункта — иначе про очередь знает только зрячий.
+  // Обе поверхности: tab-bar (role=tab) и sidebar (обычная кнопка, aria-current).
+  expect(screen.getByRole('tab', { name: 'Чат, 1 ждут отправки' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Чат, 1 ждут отправки' })).toBe(
+    screen.getByTestId('sidebar-chat'),
+  );
 
   act(() => {
     useRetryBuffer.getState().cancel(op.clientId);
   });
   expect(screen.queryByTestId('chat-badge')).toBeNull();
   expect(screen.queryByTestId('sidebar-chat-badge')).toBeNull();
+  expect(screen.getByRole('tab', { name: 'Чат' })).toBeInTheDocument();
 });
 
 // Клик по закреплённой в sidebar: активный таб становится browser, entity — наверху

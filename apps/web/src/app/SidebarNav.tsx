@@ -4,6 +4,7 @@ import { PinnedList } from '../features/browser/PinnedList';
 import { useBudgetAlertCount, useBudgetTabVisible } from '../features/budget/useBudget';
 import { openPinnedEntity, openSettings, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
+import { NavBadge } from '../ui/NavBadge';
 import { BUDGET_TAB } from './router';
 
 // Вкладки ядра — как в TabBar (02-core-os §1.1); порядок и состав дублируются
@@ -53,31 +54,31 @@ export function SidebarNav() {
             >
               <Icon size={16} aria-hidden />
               <span className="min-w-0 flex-1 truncate text-left">{t.label}</span>
-              {t.id === 'chat' && chatBadge > 0 && (
-                <span
+              {/* Тот же NavBadge, что в таб-баре, но БЕЗ позиционирования: в строке
+                  sidebar бейдж стоит в потоке, справа от подписи (раскладка — дело
+                  вызывающего). Пустой бейдж компонент прячет сам. */}
+              {t.id === 'chat' && (
+                <NavBadge
+                  count={chatBadge}
+                  label="ждут отправки"
                   data-testid="sidebar-chat-badge"
-                  className="rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
-                >
-                  {chatBadge}
-                </span>
+                />
               )}
               {/* badgeLabel: «200+» при упоре в потолок (K18) и null при отказе выборки —
                   заниженного числа на бейдже не бывает (решение D2b, прецедент Budget) */}
-              {t.id === 'agenda' && agendaOverdue.badgeLabel !== null && (
-                <span
+              {t.id === 'agenda' && (
+                <NavBadge
+                  count={agendaOverdue.badgeLabel}
+                  label="просроченных"
                   data-testid="sidebar-agenda-badge"
-                  className="rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
-                >
-                  {agendaOverdue.badgeLabel}
-                </span>
+                />
               )}
-              {t.id === 'budget' && budgetBadge > 0 && (
-                <span
+              {t.id === 'budget' && (
+                <NavBadge
+                  count={budgetBadge}
+                  label="конвертов в тревоге"
                   data-testid="sidebar-budget-badge"
-                  className="rounded-full bg-danger px-1.5 text-2xs text-danger-foreground"
-                >
-                  {budgetBadge}
-                </span>
+                />
               )}
             </button>
           );
