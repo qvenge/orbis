@@ -24,6 +24,16 @@ const today = todayISO(TZ);
 const tomorrow = addDays(today, 1);
 const yesterday = addDays(today, -1);
 
+// Меню ⋮ detail (§8.2 ниже проходит через него) Radix позиционирует через floating-ui, а
+// тот следит за размерами якоря ResizeObserver'ом — в jsdom его нет вовсе. Заглушка молчит:
+// раскладку тут не проверяют, важно лишь, что содержимое меню монтируется, а не падает.
+class ResizeObserverStub {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+globalThis.ResizeObserver ??= ResizeObserverStub as unknown as typeof ResizeObserver;
+
 /** Момент 'YYYY-MM-DDTHH:MM:00+03:00' — фиксированное смещение Europe/Moscow. */
 const at = (day: string, time: string) => `${day}T${time}:00+03:00`;
 
@@ -501,7 +511,10 @@ test('§8.2: архивация на detail-экране убирает зада
   await waitFor(() => expect(rowTitles(overdueSection())).toEqual(['Закончить API']));
   fireEvent.click(within(overdueSection()).getAllByTestId('agenda-row')[0] as HTMLElement);
 
-  fireEvent.click(await screen.findByRole('button', { name: /архив/i }));
+  // Архивация переехала в меню ⋮ шапки detail (§3.5, Task B4): сперва открыть меню.
+  // Клавиатурой, а не кликом: Radix открывает меню по pointerdown, которого jsdom не умеет.
+  fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+  fireEvent.click(await screen.findByRole('menuitem', { name: /архив/i }));
   await waitFor(() => expect(state.closed).toBe(true));
 
   fireEvent.click(screen.getByTestId('nav-back'));

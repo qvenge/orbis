@@ -1,12 +1,16 @@
-import { Archive, ArchiveRestore, Pin } from 'lucide-react';
+import { buildAppPath } from '@orbis/shared';
+import { Archive, ArchiveRestore, EllipsisVertical, Link2, Pin } from 'lucide-react';
 import { useState } from 'react';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
+import { DropdownMenu } from '../../ui/DropdownMenu';
+import { Input } from '../../ui/Input';
 import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
+import { useToast } from '../../ui/toast-store';
 import { queryBlocks } from '../browser/query';
 import { PlannedToFactCard } from '../budget/PlannedToFactCard';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
@@ -29,6 +33,28 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // §2.7: перевод задачи-покупки в done → карточка «Покупка совершена?» (Task B6).
   // Единственный мутационный путь чекбокса — toggleTask здесь (см. usePlanToFactPrompt).
   const planToFact = usePlanToFactPrompt();
+  // §3.5 «Скопировать ссылку». Буфер обмена — не данность: его нет в http-контексте,
+  // а разрешение пользователь может и не дать. На отказе показываем саму ссылку
+  // (manualLink), чтобы копирование осталось возможным руками, а не превратилось в
+  // кнопку, которая молча ничего не делает.
+  const [manualLink, setManualLink] = useState<string | null>(null);
+  const { show } = useToast();
+
+  async function copyLink() {
+    // Форму пути знает ТОЛЬКО buildAppPath (B1): собранная здесь руками строка разъехалась
+    // бы с роутером при первой же правке таблицы маршрутов, и ссылки из чужих писем вели
+    // бы в никуда. origin делает её абсолютной — ссылку отправляют наружу, а не внутрь SPA.
+    const url = `${window.location.origin}${buildAppPath({ kind: 'entity', id: entityId })}`;
+    try {
+      // Обращение к navigator.clipboard намеренно внутри try: когда API нет вовсе,
+      // это TypeError — та же беда для пользователя, что и отклонённое разрешение.
+      await navigator.clipboard.writeText(url);
+      setManualLink(null);
+      show('Ссылка скопирована');
+    } catch {
+      setManualLink(url);
+    }
+  }
 
   // §1.3: ссылка на удалённую или чужую сущность. Без этой ветки NOT_FOUND давал вечный
   // скелетон: isLoading уже false, а data не приедет никогда. Проверка — ровно по коду:
@@ -132,10 +158,37 @@ export function DetailScreen({ entityId }: { entityId: string }) {
               });
             }}
             onArchive={() => setArchived(!entity.archived)}
+            onCopyLink={() => void copyLink()}
             archived={entity.archived}
           />
         }
       />
+      {/* Запасной путь копирования — ВНЕ табов: ссылку просят из меню, а меню одно на оба
+          таба, и прятать ответ на вкладке «Сущность» значило бы иногда не отвечать вовсе. */}
+      {manualLink !== null && (
+        <div
+          role="alert"
+          className="mx-auto mt-3 flex w-full max-w-3xl flex-col gap-2 rounded-control border border-line bg-surface-2 px-3 py-2"
+        >
+          <p className="text-sm text-text-secondary">
+            Буфер обмена недоступен — скопируйте ссылку вручную:
+          </p>
+          <div className="flex items-center gap-2">
+            <Input
+              aria-label="Ссылка на сущность"
+              readOnly
+              value={manualLink}
+              // Клик по полю выделяет адрес целиком: копировать руками половину UUID —
+              // ровно та беда, ради которой этот запасной путь и заведён.
+              onFocus={(e) => e.currentTarget.select()}
+              className="min-w-0 flex-1"
+            />
+            <Button variant="outline" size="sm" onClick={() => setManualLink(null)}>
+              Скрыть
+            </Button>
+          </div>
+        </div>
+      )}
       {/* Табы «Сущность/Тред» — под шапкой; контент центрирован, шапка — на всю ширину. */}
       <div className="mx-auto w-full max-w-3xl">
         <Tabs
@@ -184,30 +237,53 @@ function BodyEditor({ initial, onSave }: { initial: string; onSave: (body: strin
   );
 }
 
+/**
+ * Меню ⋮ шапки detail (§3.5). Раньше «меню» было двумя icon-кнопками в ряд: пункт
+ * «Скопировать ссылку» третьей кнопкой сделал бы шапку панелью инструментов, а на узком
+ * экране — очередью иконок поверх заголовка. Теперь это настоящее меню, действия внутри.
+ */
 function DetailMenu({
   onPin,
   onArchive,
+  onCopyLink,
   archived,
 }: {
   onPin: () => void;
   onArchive: () => void;
+  onCopyLink: () => void;
   archived: boolean;
 }) {
   const archiveLabel = archived ? 'Разархивировать' : 'Архивировать';
   return (
-    <div className="flex gap-1">
-      <Button size="icon" variant="ghost" aria-label="Закрепить" title="Закрепить" onClick={onPin}>
-        <Pin size={16} aria-hidden />
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
-        aria-label={archiveLabel}
-        title={archiveLabel}
-        onClick={onArchive}
-      >
-        {archived ? <ArchiveRestore size={16} aria-hidden /> : <Archive size={16} aria-hidden />}
-      </Button>
-    </div>
+    <DropdownMenu
+      trigger={
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label="Меню"
+          title="Меню"
+          data-testid="detail-menu"
+        >
+          <EllipsisVertical size={16} aria-hidden />
+        </Button>
+      }
+      items={[
+        { label: 'Закрепить', icon: <Pin size={16} aria-hidden />, onSelect: onPin },
+        {
+          label: archiveLabel,
+          icon: archived ? (
+            <ArchiveRestore size={16} aria-hidden />
+          ) : (
+            <Archive size={16} aria-hidden />
+          ),
+          onSelect: onArchive,
+        },
+        {
+          label: 'Скопировать ссылку',
+          icon: <Link2 size={16} aria-hidden />,
+          onSelect: onCopyLink,
+        },
+      ]}
+    />
   );
 }

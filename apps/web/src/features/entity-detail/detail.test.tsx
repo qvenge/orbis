@@ -2,7 +2,7 @@ import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { onlineManager } from '@tanstack/react-query';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
 import { trpc } from '../../trpc';
@@ -713,6 +713,139 @@ test('detail рендерит КАЖДЫЙ query-блок body: у Daily Plannin
   // …и результат «Сегодня» виден на экране — та самая половина §8.4, которой при рендере
   // одного лишь первого блока (Inbox) в продукте не существовало.
   await waitFor(() => expect(screen.getByTestId('qb-item')).toHaveTextContent('Разобрать Inbox'));
+});
+
+// --- меню ⋮ на detail: закрепить / архивировать / скопировать ссылку (§3.5) ------------
+// До слайса 3 «меню ⋮» из §3.5 было двумя icon-кнопками в шапке, а обещанного пункта
+// «Скопировать ссылку» не существовало вовсе. Теперь это настоящее меню, и оба прежних
+// действия живут внутри него. Форму пути даёт buildAppPath (B1) — руками её не собирают
+// ни здесь, ни в экране, иначе ссылка разъедется с роутером при первом же изменении.
+
+// Radix позиционирует меню через floating-ui, а тот следит за размерами якоря
+// ResizeObserver'ом — в jsdom его нет вовсе, и без заглушки открытие меню падает на
+// конструкторе. Заглушка молчит намеренно: раскладку в jsdom всё равно не проверить,
+// проверяется только то, что содержимое меню смонтировалось.
+class ResizeObserverStub {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+}
+globalThis.ResizeObserver ??= ResizeObserverStub as unknown as typeof ResizeObserver;
+
+const LINK_E1 = `${window.location.origin}/entity/e1`;
+
+/** jsdom не реализует Clipboard API: свойства navigator.clipboard нет вовсе. */
+function stubClipboard(writeText: (text: string) => Promise<void>): void {
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+}
+
+afterEach(() => {
+  // Возвращаем окружение к исходному «Clipboard API нет» — иначе подмена течёт в тесты,
+  // которые как раз проверяют отсутствие буфера.
+  delete (navigator as unknown as { clipboard?: unknown }).clipboard;
+});
+
+/**
+ * Открывает меню ⋮ с клавиатуры, а не кликом: Radix открывает меню по pointerdown, а
+ * jsdom не реализует PointerEvent, поэтому fireEvent.click по триггеру не открыл бы
+ * ничего. Заодно это проверка того, что меню достижимо без мыши.
+ */
+async function openDetailMenu(): Promise<void> {
+  fireEvent.keyDown(await screen.findByTestId('detail-menu'), { key: 'Enter' });
+  await screen.findByRole('menu');
+}
+
+const menuHandler: MockHandler = (path) => {
+  if (path === 'entity.get')
+    return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+  if (path === 'entity.update') return entity;
+  if (path === 'aspect.list') return [];
+  return {};
+};
+
+test('меню ⋮: «Скопировать ссылку» кладёт абсолютный адрес сущности в буфер', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  stubClipboard(writeText);
+  renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <Toaster />
+    </>,
+    menuHandler,
+  );
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
+
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith(LINK_E1));
+  // Успех не молчит: без подтверждения непонятно, легло ли что-нибудь в буфер.
+  expect(await screen.findByText('Ссылка скопирована')).toBeInTheDocument();
+});
+
+test('меню ⋮: отказ буфера показывает ссылку текстом, а не молчит', async () => {
+  stubClipboard(() => Promise.reject(new Error('NotAllowedError')));
+  renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <Toaster />
+    </>,
+    menuHandler,
+  );
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
+
+  // Ссылка доступна целиком и её можно выделить — иначе отказ равносилен молчанию.
+  const field = await screen.findByLabelText('Ссылка на сущность');
+  expect(field).toHaveValue(LINK_E1);
+});
+
+test('меню ⋮: Clipboard API нет вовсе (небезопасный контекст) — та же ссылка текстом', async () => {
+  // navigator.clipboard в jsdom отсутствует; НИЧЕГО не подменяем — это и есть проверка.
+  expect(navigator.clipboard).toBeUndefined();
+  renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
+
+  expect(await screen.findByLabelText('Ссылка на сущность')).toHaveValue(LINK_E1);
+});
+
+test('меню ⋮: «Закрепить» шлёт user.updateSettings с этой сущностью', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Закрепить' }));
+
+  await waitFor(() => {
+    const c = calls.find((x) => x.path === 'user.updateSettings');
+    expect(c?.input).toEqual({ pinnedEntities: [{ id: 'e1', order: 0 }] });
+  });
+});
+
+test('меню ⋮: «Архивировать» шлёт entity.update archived=true', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Архивировать' }));
+
+  await waitFor(() => {
+    const c = calls.find((x) => x.path === 'entity.update');
+    expect(c?.input).toEqual({ id: 'e1', archived: true });
+  });
+});
+
+test('меню ⋮: у архивной сущности пункт зовётся «Разархивировать» и снимает архив', async () => {
+  const archived = { ...entity, archived: true };
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get') return { entity: archived, relations: [], thread: null };
+    if (path === 'entity.update') return archived;
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  await openDetailMenu();
+  expect(screen.queryByRole('menuitem', { name: 'Архивировать' })).toBeNull();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Разархивировать' }));
+
+  await waitFor(() => {
+    const c = calls.find((x) => x.path === 'entity.update');
+    expect(c?.input).toEqual({ id: 'e1', archived: false });
+  });
 });
 
 test('conflict-баннер: клик «Обновить» → refetch entity.get + баннер скрыт', async () => {
