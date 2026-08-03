@@ -1,6 +1,6 @@
 // apps/server/src/llm/context.ts
 // Сборка контекста LLM-вызова — пятислойная модель §7.1:
-//   слой 1 (промпт v1 + ai_instructions активных аспектов реестра),
+//   слой 1 (промпт v2 + ai_instructions активных аспектов реестра),
 //   слой 2 (память §7.4: активные orbis/memory, кап MEMORY_CAP, приоритет rule/scope),
 //   слой 3 (якорная сущность треда — 02 §2.2, только если тред сущности),
 //   слой 4 (rolling-история треда) — слои 1–3 склеиваются в ПОЛЕ system,
@@ -23,7 +23,7 @@ import type { Tx } from '../db/with-identity';
 import { readEntity } from '../entity-read';
 import type { ActionRecord } from '../executor/types';
 import { loadAspectToolRows } from '../tools/registry';
-import { SYSTEM_PROMPT_V1, TOOL_RESULT_MARKER } from './prompts/v1';
+import { SYSTEM_PROMPT_V2, TOOL_RESULT_MARKER } from './prompts/v2';
 import type { LLMMessage } from './types';
 
 /** Кап памяти §7.4: до ~50 активных memory-сущностей в слое 2. */
@@ -62,7 +62,7 @@ function preview(text: string, cap: number): string {
 
 /**
  * Сериализация tool-результата в user-сообщение — протокол MVP, описанный в
- * SYSTEM_PROMPT_V1 (см. TOOL_RESULT_MARKER). Единственная точка формата:
+ * действующем системном промпте (см. TOOL_RESULT_MARKER). Единственная точка формата:
  * tool-цикл Task 9 обязан доставлять результаты тулов ИМЕННО этим хелпером.
  */
 export function toolResultMessage(toolName: string, result: unknown): LLMMessage {
@@ -252,7 +252,7 @@ async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> 
  * сущности (02 §2.2) — глобальный тред слоя 3 не имеет.
  */
 export async function buildContext(tx: Tx, input: BuildContextInput): Promise<BuiltContext> {
-  const sections: string[] = [SYSTEM_PROMPT_V1];
+  const sections: string[] = [SYSTEM_PROMPT_V2];
 
   // Слой 1 (динамическая часть): ai_instructions активных аспектов реестра
   // (builtin + свои кастомные; собственное определение перекрывает builtin — §7.6)

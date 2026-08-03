@@ -15,13 +15,18 @@ import { aiUsage, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
-import { SYSTEM_PROMPT_V1, TOOL_RESULT_MARKER } from '../llm/prompts/v1';
+import { SYSTEM_PROMPT_V2, TOOL_RESULT_MARKER } from '../llm/prompts/v2';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMMessage, LLMProvider, LLMRequest, LLMResponse } from '../llm/types';
 import { appRouter } from '../router';
 import type { Card } from '../tools/registry';
 import { type Context, createCallerFactory } from '../trpc';
-import { MAX_TOKENS_NOTE, type SendMessageAnswer, type SendMessageResult } from './send-message';
+import {
+  MAX_TOKENS_NOTE,
+  type SendMessageAnswer,
+  type SendMessageResult,
+  STEP_LIMIT_NOTE,
+} from './send-message';
 
 requireEnv();
 
@@ -106,6 +111,11 @@ async function seedEntity(owner: string, input: Record<string, unknown>): Promis
 
 function cardsOf(msg: { metadata: Record<string, unknown> }): Card[] {
   return (msg.metadata as { cards?: Card[] }).cards ?? [];
+}
+
+/** Продолжения разговора (D19); undefined — ключа в metadata нет вовсе. */
+function suggestionsOf(msg: { metadata: Record<string, unknown> }): string[] | undefined {
+  return (msg.metadata as { suggestions?: string[] }).suggestions;
 }
 
 function lastOf(req: LLMRequest | undefined): LLMMessage {
@@ -216,7 +226,7 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
     // тулы слоя 5 из реестра, окно заканчивается только что персистированным user-сообщением
     expect(scripted.requests).toHaveLength(2);
     for (const req of scripted.requests) {
-      expect(req.system.startsWith(SYSTEM_PROMPT_V1)).toBe(true);
+      expect(req.system.startsWith(SYSTEM_PROMPT_V2)).toBe(true);
       expect(req.messages.every((m) => m.role === 'user' || m.role === 'assistant')).toBe(true);
       const toolNames = req.tools.map((t) => t.name);
       expect(toolNames).toContain('entity_create');
@@ -351,6 +361,95 @@ describe('ai.sendMessage: обрыв по потолку токенов', () => 
       }),
     );
     expect(res.assistantMessage.content).toBe(MAX_TOKENS_NOTE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Продолжения разговора (D19): маркер в конце ответа, второго вызова LLM нет
+// ---------------------------------------------------------------------------
+
+describe('ai.sendMessage: продолжения разговора маркером (D19)', () => {
+  test('продолжения из ответа модели попадают в metadata.suggestions, а не в текст', async () => {
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const scripted = new ScriptedProvider([
+      endTurn('Записал 340 ₽ в Еду.\n\n[[suggest: что по бюджету? | отменить]]'),
+    ]);
+    const r = answered(
+      await callerWith(user, scripted).ai.sendMessage({
+        id: newId(),
+        threadId,
+        content: 'потратил 340 на еду',
+      }),
+    );
+
+    expect(r.assistantMessage.content).toBe('Записал 340 ₽ в Еду.');
+    expect(suggestionsOf(r.assistantMessage)).toEqual(['что по бюджету?', 'отменить']);
+
+    // Персист, а не только ответ вызова: лента рендерится из треда (и из replay-ветки)
+    const msgs = await threadMessages(user, threadId);
+    const assistant = msgs.find((m) => m.role === 'assistant');
+    expect(assistant?.content).toBe('Записал 340 ₽ в Еду.');
+    expect(suggestionsOf(assistant as { metadata: Record<string, unknown> })).toEqual([
+      'что по бюджету?',
+      'отменить',
+    ]);
+  });
+
+  test('маркера нет — ключа suggestions в metadata нет вовсе (у ответа просто нет чипов)', async () => {
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const r = answered(
+      await callerWith(user, new ScriptedProvider([endTurn('Готово.')])).ai.sendMessage({
+        id: newId(),
+        threadId,
+        content: 'сделай',
+      }),
+    );
+    expect(r.assistantMessage.content).toBe('Готово.');
+    expect(suggestionsOf(r.assistantMessage)).toBeUndefined();
+  });
+
+  test('обрыв по потолку токенов: маркер разобран ДО дописки пометки, служебной строки в тексте нет', async () => {
+    // Разбор ПОСЛЕ склейки с MAX_TOKENS_NOTE не сработал бы: маркер перестаёт быть
+    // последней строкой — служебная строка утекла бы в ленту как проза.
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const truncated: LLMResponse = {
+      content: 'Начал отвечать и не доска\n\n[[suggest: продолжи | покажи задачи]]',
+      toolCalls: [],
+      usage: { inputTokens: 10, outputTokens: 8192 },
+      stopReason: 'max_tokens',
+    };
+    const r = answered(
+      await callerWith(user, new ScriptedProvider([truncated])).ai.sendMessage({
+        id: newId(),
+        threadId,
+        content: 'расскажи длинно',
+      }),
+    );
+
+    expect(r.assistantMessage.content).toBe(`Начал отвечать и не доска\n\n${MAX_TOKENS_NOTE}`);
+    expect(r.assistantMessage.content).not.toContain('[[suggest');
+    expect(suggestionsOf(r.assistantMessage)).toEqual(['продолжи', 'покажи задачи']);
+  });
+
+  test('принудительный финал по лимиту шагов: маркер тоже вырезан, пометка на месте', async () => {
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const withMarker: LLMResponse = {
+      ...toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
+      content: 'Пока смотрю задачи.\n[[suggest: покажи всё | стоп]]',
+    };
+    const r = answered(
+      await callerWith(
+        user,
+        new ScriptedProvider(Array.from({ length: MAX_AGENT_STEPS }, () => withMarker)),
+      ).ai.sendMessage({ id: newId(), threadId, content: 'зациклись' }),
+    );
+
+    expect(r.assistantMessage.content).toBe(`Пока смотрю задачи.\n\n${STEP_LIMIT_NOTE}`);
+    expect(suggestionsOf(r.assistantMessage)).toEqual(['покажи всё', 'стоп']);
   });
 });
 

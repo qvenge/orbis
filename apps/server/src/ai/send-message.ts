@@ -41,6 +41,7 @@ import { dispatchTool } from '../tools/dispatch';
 import { buildToolRegistry, type Card } from '../tools/registry';
 import { toWireChatMessage } from '../wire';
 import { recordUsage, type UsageTotals, utcDay } from './metering';
+import { extractSuggestions } from './suggestions';
 
 /**
  * Потолок ответа модели за шаг (LLMRequest.maxTokens); ориентиры бюджета — §7.1.
@@ -313,6 +314,10 @@ async function runAgentLoop(
   const usage: UsageTotals = { inputTokens: 0, outputTokens: 0, requestCount: 0 };
   const convo: LLMMessage[] = [...history];
   let finalText = '';
+  // Продолжения разговора (D19): чипы приходят маркером в конце прозы модели.
+  // Разбираем в КАЖДОЙ терминальной ветке и ДО дописок MAX_TOKENS_NOTE/STEP_LIMIT_NOTE —
+  // после склейки маркер перестаёт быть последней строкой и утёк бы в ленту текстом.
+  let suggestions: string[] = [];
 
   try {
     for (let step = 1; ; step++) {
@@ -343,27 +348,31 @@ async function runAgentLoop(
       // уже отметрены (честный расход).
       if (response.stopReason === 'refusal') {
         cards.push({ kind: 'error_card', code: 'LLM_REFUSAL', message: REFUSAL_NOTE });
-        finalText = response.content;
+        const parsed = extractSuggestions(response.content);
+        suggestions = parsed.suggestions;
+        finalText = parsed.text;
         break;
       }
 
       // end_turn / max_tokens / tool_use без вызовов (защита от пустого зацикливания): финал.
       if (response.stopReason !== 'tool_use' || response.toolCalls.length === 0) {
+        const parsed = extractSuggestions(response.content);
+        suggestions = parsed.suggestions;
         finalText =
           response.stopReason === 'max_tokens'
             ? // Обрыв по потолку — видимая пометка, а не «успешный» обрубок (см. MAX_TOKENS_NOTE).
               // Ошибку не бросаем: токены уже отметрены, а отсутствие ответа погнало бы
               // повторный полный цикл с повторным исполнением уже применённых действий.
-              [response.content, MAX_TOKENS_NOTE].filter(Boolean).join('\n\n')
-            : response.content;
+              [parsed.text, MAX_TOKENS_NOTE].filter(Boolean).join('\n\n')
+            : parsed.text;
         break;
       }
       if (step >= MAX_AGENT_STEPS) {
         // Принудительный финал (НЕ ошибка): tool-вызовы шага-нарушителя не исполняются —
         // модель уже не увидит их результатов и не сможет скорректироваться
-        finalText = response.content
-          ? `${response.content}\n\n${STEP_LIMIT_NOTE}`
-          : STEP_LIMIT_NOTE;
+        const parsed = extractSuggestions(response.content);
+        suggestions = parsed.suggestions;
+        finalText = parsed.text ? `${parsed.text}\n\n${STEP_LIMIT_NOTE}` : STEP_LIMIT_NOTE;
         break;
       }
 
@@ -395,7 +404,8 @@ async function runAgentLoop(
   // 5. Assistant-сообщение: финальный текст + карточки всех действий цикла + replyTo —
   //    адресная привязка к user-сообщению (input.id): детерминированный replay ретрая
   //    §7.9 (findAnswerByReplyTo) вместо временно́го «ближайший assistant после».
-  //    metadata.suggestions НЕ пишем (слайс 3). id — серверный uuidv7: ретрай
+  //    metadata.suggestions (D19) — только если модель их дала: пустой список ключа не
+  //    заводит, чтобы «чипов нет» не отличалось от «поле не писали». id — серверный uuidv7: ретрай
   //    sendMessage — новый прогон цикла, а не replay ответа (осознанно, MVP).
   //    Маркер processing снимается ТОЙ ЖЕ tx: «ответ есть» и «прогон идёт» не сосуществуют.
   const assistantMessage = await withIdentity(db, input.ownerId, async (tx) => {
@@ -404,7 +414,7 @@ async function runAgentLoop(
       threadId: input.threadId,
       role: 'assistant',
       content: finalText,
-      metadata: { cards, replyTo: input.id },
+      metadata: { cards, replyTo: input.id, ...(suggestions.length > 0 && { suggestions }) },
     });
     await tx.delete(chatMessages).where(eq(chatMessages.id, markerId));
     return message;
