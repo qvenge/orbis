@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { useNav } from '../../state/navigation';
 import { renderWithProviders } from '../../test/harness';
 import { MessageList } from './MessageList';
 import type { ChatMessage } from './useChatThread';
@@ -245,6 +246,38 @@ test('текст сообщения ≠ заголовку карточки: п�
   );
   expect(screen.getByText('Записал без AI')).toBeInTheDocument();
   expect(screen.getByTestId('entity-card')).toHaveTextContent('Кофе');
+});
+
+// --- C4a: markdown в ленте -----------------------------------------------------------
+
+const E1 = '019e4466-1111-7000-8000-0123456789ab';
+
+const emptyStacks = () => ({ chat: [], browser: [], agenda: [], budget: [] });
+
+test('ответ ассистента рендерится markdown-разметкой внутри своего <article>', () => {
+  render(<MessageList messages={[msg('a', '## Итоги\n\n- раз\n- два')]} isTyping={false} />);
+  const heading = screen.getByRole('heading', { level: 2, name: 'Итоги' });
+  expect(screen.getAllByRole('listitem')).toHaveLength(2);
+  // Разметка обязана остаться ВНУТРИ <article data-role>: на этой обёртке держатся
+  // и стиль пузыря, и ChatThread.test (getAllByRole('article') + data-role).
+  const article = screen.getByRole('article');
+  expect(article).toHaveAttribute('data-role', 'assistant');
+  expect(article).toContainElement(heading);
+});
+
+test('сообщение пользователя тоже markdown (человек пишет им же)', () => {
+  render(<MessageList messages={[userMsg('u', 'сделать **срочно**')]} isTyping={false} />);
+  expect(screen.getByText('срочно').tagName).toBe('STRONG');
+  expect(screen.getByRole('article')).toHaveAttribute('data-role', 'user');
+});
+
+test('клик по [[entity:…]] открывает запись поверх стека АКТИВНОЙ вкладки', () => {
+  // Ровно как тап по карточке в той же ленте (cards/EntityCard): push, без смены вкладки.
+  useNav.setState({ activeTab: 'chat', stacks: emptyStacks() });
+  render(<MessageList messages={[msg('a', `готово: [[entity:${E1}]]`)]} isTyping={false} />);
+  fireEvent.click(screen.getByRole('link'));
+  expect(useNav.getState().activeTab).toBe('chat');
+  expect(useNav.getState().stacks.chat).toEqual([{ kind: 'entity', id: E1 }]);
 });
 
 test('мусор в metadata.suggestions игнорируется, пустые строки отброшены', () => {

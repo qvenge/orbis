@@ -89,6 +89,15 @@ export function closeToBudgetOverview() {
   }));
 }
 
+// Открыть запись по ВНУТРЕННЕЙ ссылке ([[entity:…]] в markdown, фаза C): push поверх стека
+// ТЕКУЩЕЙ вкладки — ровно как тап по карточке в ленте (chat/cards/EntityCard).
+// Не openDeepLink (app/history.ts): тот вход СНАРУЖИ — он переключает вкладку и сбрасывает
+// её стек, и клик по ссылке в чате затирал бы всё открытое в Browser.
+export function openEntity(id: string) {
+  const { activeTab, push } = useNav.getState();
+  push(activeTab, { kind: 'entity', id });
+}
+
 // Открыть закреплённую сущность из глобального sidebar: активный таб — browser,
 // наверху browser-стека — entity. ВАЖНО: switchTab по УЖЕ активному табу сворачивает
 // стек (§1.1), поэтому переключаем только когда активен другой таб, и лишь затем push.

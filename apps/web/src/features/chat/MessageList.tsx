@@ -1,5 +1,7 @@
 import { MessageSquare } from 'lucide-react';
 import { useEffect, useRef } from 'react';
+import { Markdown } from '../../lib/markdown/Markdown';
+import { openEntity } from '../../state/navigation';
 import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
 import { type CardHandlers, contentDuplicatesCard, renderCards } from './cards/renderCards';
@@ -87,7 +89,7 @@ export function MessageList({
             data-role={m.role}
             className="max-w-[75%] self-end rounded-2xl rounded-br-md bg-surface-2 px-4 py-2.5 text-sm text-text"
           >
-            {m.content && <p>{m.content}</p>}
+            {m.content && <Markdown source={m.content} onEntityLink={openEntity} />}
             {renderCards(m, { onRetry, onReparse })}
           </article>
         ) : (
@@ -102,8 +104,10 @@ export function MessageList({
                 отрисовалась → текст остаётся (см. contentDuplicatesCard).
                 Пузырь пользователя правилу не подчиняется намеренно: там текст — то,
                 что человек написал сам, и прятать его нельзя ни при каком совпадении. */}
+            {/* Правило выше сравнивает СЫРОЙ m.content с заголовком карточки — markdown
+                ничего в нём не меняет, отрисовка идёт уже после решения. */}
             {m.content && !contentDuplicatesCard(m, { onRetry, onReparse }) && (
-              <p className="leading-relaxed">{m.content}</p>
+              <Markdown source={m.content} onEntityLink={openEntity} className="leading-relaxed" />
             )}
             {renderCards(m, { onRetry, onReparse })}
           </article>
