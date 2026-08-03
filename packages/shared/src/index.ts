@@ -10,6 +10,7 @@ export * from './fast-path';
 export * from './ids';
 export * from './import/normalize';
 export * from './memory/rule';
+export * from './nav/links';
 export * from './query/grammar';
 export * from './query/parse';
 export * from './recurrence';
