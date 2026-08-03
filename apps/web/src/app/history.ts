@@ -6,29 +6,62 @@
 // пока мы применяем `popstate` к стору, подписчик стора в историю не пишет — иначе
 // каждый «назад» тут же порождал бы новую запись, и петля push↔popstate съела бы жест.
 //
-// Запись истории хранит не путь, а ВИДИМУЮ ПОЗИЦИЮ — вкладку и глубину её стека.
-// Пути мало: `budget-transactions` и `budget-rollover` дают тот же `/budget`, что и
-// корень вкладки (внешней ссылки у них нет), и по одному пути шаг стека не отличить.
+// Запись истории хранит не путь, а позицию целиком: вкладку, глубину её стека и САМ
+// верхний экран. Пути мало по двум причинам сразу. Во-первых, пять экранов
+// (`budget-transactions`, `budget-rollover`, `budget-import`, `memory`, `settings`)
+// собственного маршрута не имеют и дают тот же `/budget`|`/chat`, что и корень вкладки, —
+// по пути их не отличить ни от корня, ни друг от друга. Во-вторых, экран, снятый со
+// стека, из пути тогда не восстановить: «назад» на такую запись не менял бы ничего,
+// и пользователь получал бы мёртвые нажатия. Экран в записи снимает оба случая.
+// Класть его туда законно: `history.state` структурно клонируется, а все восемь вариантов
+// `ScreenRef` — простые JSON-совместимые объекты без функций.
 import { type AppScreen, buildAppPath, parseAppPath, tabOfScreen } from '@orbis/shared';
 import { type ScreenRef, type Tab, useNav } from '../state/navigation';
 
-/** Что лежит в `history.state`: вкладка и глубина её стека — видимая позиция целиком. */
-export type NavHistoryState = { tab: Tab; depth: number };
+/** Что лежит в `history.state`: вкладка, глубина её стека и верхний экран (корень — null). */
+export type NavHistoryState = { tab: Tab; depth: number; screen: ScreenRef | null };
 
 const TABS: readonly Tab[] = ['chat', 'browser', 'agenda', 'budget'];
 
-/** В `history.state` может лежать что угодно (чужая запись, старый формат) — проверяем. */
+/**
+ * Форма `ScreenRef` из чужой записи — на веру не берётся. В `history.state` может лежать
+ * что угодно (запись другого приложения на том же origin, ручной `pushState`, прежний
+ * формат), а неизвестный `kind` доехал бы до `renderScreen` в router.tsx.
+ */
+function isScreenRef(value: unknown): value is ScreenRef {
+  if (typeof value !== 'object' || value === null) return false;
+  const { kind, id, threadId } = value as { kind?: unknown; id?: unknown; threadId?: unknown };
+  switch (kind) {
+    case 'entity':
+    case 'budget-category':
+      return typeof id === 'string' && id.length > 0;
+    case 'thread':
+      return typeof threadId === 'string' && threadId.length > 0;
+    case 'budget-transactions':
+    case 'budget-rollover':
+    case 'budget-import':
+    case 'memory':
+    case 'settings':
+      return true;
+    default:
+      return false;
+  }
+}
+
+/** Запись целиком: либо она наша и полная, либо не наша — половинчатой не бывает. */
 function isNavHistoryState(value: unknown): value is NavHistoryState {
   if (typeof value !== 'object' || value === null) return false;
-  const { tab, depth } = value as { tab?: unknown; depth?: unknown };
-  return TABS.includes(tab as Tab) && Number.isInteger(depth) && (depth as number) >= 0;
+  const { tab, depth, screen } = value as { tab?: unknown; depth?: unknown; screen?: unknown };
+  if (!TABS.includes(tab as Tab)) return false;
+  if (!Number.isInteger(depth) || (depth as number) < 0) return false;
+  return screen === null || isScreenRef(screen);
 }
 
 /**
- * Экран стора → экран контракта B1. Пятёрка экранов без собственного маршрута
- * (`budget-transactions`, `budget-rollover`, `budget-import`, `memory`, `settings`)
- * отображается в корень своей вкладки: внешней ссылки у них нет, адресная строка
- * показывает вкладку, а их место в стеке держит глубина в `history.state`.
+ * Экран стора → экран контракта B1: это про ПУТЬ, а не про восстановление. Пятёрка
+ * экранов без собственного маршрута отображается в корень своей вкладки — внешней ссылки
+ * у них нет, и адресная строка честно показывает вкладку. Восстанавливаются они не отсюда,
+ * а из поля `screen` записи.
  */
 function screenRefToAppScreen(ref: ScreenRef, tab: Tab): AppScreen {
   switch (ref.kind) {
@@ -47,7 +80,7 @@ function screenRefToAppScreen(ref: ScreenRef, tab: Tab): AppScreen {
   }
 }
 
-/** Обратное преобразование существует только для маршрутизируемых экранов. */
+/** Обратное преобразование — только для маршрутизируемых экранов (нужно фолбэку по пути). */
 function appScreenToScreenRef(screen: AppScreen): ScreenRef | null {
   switch (screen.kind) {
     case 'entity':
@@ -71,39 +104,42 @@ function position(): Position {
   const screen: AppScreen = top
     ? screenRefToAppScreen(top, activeTab)
     : { kind: 'tab-root', tab: activeTab };
-  return { state: { tab: activeTab, depth: stack.length }, path: buildAppPath(screen) };
+  return {
+    state: { tab: activeTab, depth: stack.length, screen: top ?? null },
+    path: buildAppPath(screen),
+  };
 }
 
-// Разделитель — управляющий символ U+0000, записанный ИМЕННО escape-последовательностью
-// (`\u0000`): литеральный байт 0x00 в исходнике делает файл бинарным для git — дифф
-// и grep по нему пропадают. Символ выбран потому, что ни в имени вкладки, ни в числе,
-// ни в пути его не бывает: склейки соседних полей в один ключ не случится.
-const keyOf = (p: Position) => `${p.state.tab}\u0000${p.state.depth}\u0000${p.path}`;
+// Разделитель — ПРОБЕЛ: его не бывает ни в имени вкладки, ни в числе, ни в пути, ни в
+// `kind` экрана, так что соседние поля не склеятся. Печатный символ выбран сознательно —
+// управляющий байт 0x00 в исходнике однажды уже сделал этот файл бинарным для git.
+const keyOf = (p: Position) =>
+  `${p.state.tab} ${p.state.depth} ${p.path} ${p.state.screen?.kind ?? ''}`;
 
 /**
  * История → стор. Пишем через `setState`, а НЕ через действия стора: у действий свои
  * правила (§1.1 — `switchTab` по уже активной вкладке сворачивает её стек), и применять
  * ими чужое состояние — верный способ разъехаться с историей.
  *
- * Глубина из записи — главный ориентир, путь уточняет верх стека (на одной глубине могут
- * стоять разные сущности). Если в записи глубина больше, чем есть в стеке, недостающий
- * верх добирается ИЗ ПУТИ; для безмаршрутных экранов пути не хватает, и стек остаётся
- * укороченным — это осознанная потеря, догадка была бы хуже.
+ * Верх стека берётся ИЗ ЗАПИСИ, глубина решает, сколько стека остаётся под ним. Путь тут
+ * не участвует вовсе — он остаётся тем, что видит пользователь в адресной строке.
+ * Исключение одно: записи без нашего состояния (чужие, битые, вход по прямой ссылке)
+ * читаются по пути через `parseAppPath` — это же место понадобится B3.
  */
 function applyState(state: NavHistoryState | null, path: string): void {
-  const parsed = parseAppPath(path);
-  const target = parsed ? appScreenToScreenRef(parsed) : null;
-  // Запись без нашего состояния (чужая запись, вход по прямой ссылке) читается по пути;
-  // если и путь не разбирается — трогать стор не за что.
-  const resolved: NavHistoryState | null =
-    state ?? (parsed ? { tab: tabOfScreen(parsed), depth: target ? 1 : 0 } : null);
-  if (!resolved) return;
+  let resolved = state;
+  if (!resolved) {
+    const parsed = parseAppPath(path);
+    if (!parsed) return; // ни записи, ни разбираемого пути — трогать стор не за что
+    const ref = appScreenToScreenRef(parsed);
+    resolved = { tab: tabOfScreen(parsed), depth: ref ? 1 : 0, screen: ref };
+  }
 
-  const { tab, depth } = resolved;
+  const { tab, depth, screen } = resolved;
   useNav.setState((s) => {
     const stack = s.stacks[tab];
     const next =
-      target && depth > 0 ? [...stack.slice(0, depth - 1), target] : stack.slice(0, depth);
+      depth > 0 && screen ? [...stack.slice(0, depth - 1), screen] : stack.slice(0, depth);
     return { activeTab: tab, stacks: { ...s.stacks, [tab]: next } };
   });
 }
@@ -143,10 +179,17 @@ export function installHistorySync(): () => void {
     applyingHistory = true;
     try {
       applyState(isNavHistoryState(event.state) ? event.state : null, window.location.pathname);
+      // Самоизлечение записи. Прыжок по истории больше чем на шаг (выпадающий список
+      // браузера, долгий тап по «назад») просит глубину, которой в стеке уже нет:
+      // экраны под верхним остались в пропущенных записях, и взять их неоткуда. Стек
+      // тогда честно короче запрошенного — но запись обязана описывать то, что РЕАЛЬНО
+      // в сторе, иначе следующий «назад» соберёт стек не из тех экранов. `replaceState`
+      // новых записей не создаёт, петли это не даёт.
+      last = position();
+      window.history.replaceState(last.state, '', last.path);
     } finally {
       applyingHistory = false;
     }
-    last = position();
   };
   window.addEventListener('popstate', onPop);
 
