@@ -113,6 +113,49 @@ test('тап по чипу отправляет его текст обычным
   expect(onPick).toHaveBeenCalledWith('поставить срок');
 });
 
+test('двойной тап по чипу отправляет сообщение один раз', () => {
+  // На ChatScreen fast-path до первого await не меняет состояния (useFastPath: loadCtx
+  // при холодном кэше идёт в сеть), поэтому «ряд успеет исчезнуть сам» — не защита:
+  // второй тап уехал бы вторым сообщением и вторым вызовом модели.
+  const onPick = vi.fn();
+  render(
+    <MessageList
+      messages={[assistantWith('a', 'создал задачу', ['поставить срок'])]}
+      isTyping={false}
+      onPick={onPick}
+    />,
+  );
+  const chip = screen.getByRole('button', { name: 'поставить срок' });
+  fireEvent.click(chip);
+  fireEvent.click(chip);
+  expect(onPick).toHaveBeenCalledTimes(1);
+});
+
+test('погашен ряд только своего сообщения: у следующего ответа чипы снова живые', () => {
+  const onPick = vi.fn();
+  const { rerender } = render(
+    <MessageList
+      messages={[assistantWith('a', 'записал', ['что по бюджету?'])]}
+      isTyping={false}
+      onPick={onPick}
+    />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'что по бюджету?' }));
+  expect(screen.queryByRole('button', { name: 'что по бюджету?' })).not.toBeInTheDocument();
+  // Новый ответ модели с ТЕМ ЖЕ текстом продолжения: ряд принадлежит сообщению, не тексту.
+  rerender(
+    <MessageList
+      messages={[
+        assistantWith('b', 'и это записал', ['что по бюджету?']),
+        assistantWith('a', 'записал', ['что по бюджету?']),
+      ]}
+      isTyping={false}
+      onPick={onPick}
+    />,
+  );
+  expect(screen.getByRole('button', { name: 'что по бюджету?' })).toBeInTheDocument();
+});
+
 test('во время ответа модели чипы скрыты', () => {
   render(
     <MessageList

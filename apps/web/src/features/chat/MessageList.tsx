@@ -101,7 +101,9 @@ export function MessageList({
           </article>
         ),
       )}
-      {onPick && <Suggestions items={suggestions} onPick={onPick} />}
+      {/* key={id сообщения}: ряд принадлежит конкретному ответу — на смене ответа он
+          монтируется заново и снова доступен, даже если формулировки повторились. */}
+      {onPick && <Suggestions key={last?.id} items={suggestions} onPick={onPick} />}
       {isTyping && (
         <div
           data-testid="typing"
