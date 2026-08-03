@@ -220,20 +220,6 @@ export function externalEntryPath(): string | null {
   return window.location.pathname;
 }
 
-/** Ключ экрана для сравнения «мы уже здесь» — дешевле и честнее глубокого равенства. */
-function refKey(ref: ScreenRef | null | undefined): string {
-  if (!ref) return '';
-  switch (ref.kind) {
-    case 'entity':
-    case 'budget-category':
-      return `${ref.kind} ${ref.id}`;
-    case 'thread':
-      return `thread ${ref.threadId}`;
-    default:
-      return ref.kind;
-  }
-}
-
 /**
  * Вход снаружи: путь из адресной строки → позиция навигации (§1.3).
  *
@@ -253,9 +239,15 @@ function refKey(ref: ScreenRef | null | undefined): string {
  * показать первый «назад». Без установленной синхронизации оба шага просто складываются
  * в одну позицию стора.
  *
- * Идемпотентна: повторный вызов с тем же путём (StrictMode ставит эффект дважды) видит
- * стор уже в целевой позиции и не делает ничего — ни лишних записей истории, ни дубля
- * экрана в стеке.
+ * Проверки «мы уже в целевой позиции — делать нечего» здесь СОЗНАТЕЛЬНО НЕТ, и вернуть её
+ * нельзя. Позиция стора совпадает с целью ссылки в самом обычном случае: ту же ссылку
+ * открыли второй раз с того же устройства, и persist ещё держит эту сущность наверху
+ * стека. Ранний выход не сделал бы тогда ни одного `setState`, а значит и ни одной записи
+ * истории, — под целевым экраном осталась бы чужая страница, и первый же «назад» увёл бы
+ * с сайта. От повторного вызова защищает не эта функция, а `externalEntryPath` в App:
+ * на втором прогоне эффекта (StrictMode) запись истории уже наша, и вызова просто нет.
+ * Повторный вызов напрямую дубля экрана в стеке всё равно не даёт — шаг 1 сворачивает
+ * вкладку, — он лишь пишет ещё одну пару записей истории.
  */
 export function openDeepLink(path: string): boolean {
   const screen = parseAppPath(path);
@@ -263,12 +255,6 @@ export function openDeepLink(path: string): boolean {
 
   const tab = tabOfScreen(screen);
   const ref = appScreenToScreenRef(screen);
-  const { activeTab, stacks } = useNav.getState();
-  const stack = stacks[tab];
-  const depth = ref ? 1 : 0;
-  if (activeTab === tab && stack.length === depth && refKey(stack.at(-1)) === refKey(ref)) {
-    return true;
-  }
 
   useNav.setState((s) => ({ activeTab: tab, stacks: { ...s.stacks, [tab]: [] } }));
   if (ref) useNav.setState((s) => ({ stacks: { ...s.stacks, [tab]: [ref] } }));

@@ -128,15 +128,43 @@ test('первый «назад» после входа по ссылке вед
   expect(window.location.pathname).toBe('/browser');
 });
 
-test('повторный openDeepLink с тем же путём не плодит записи истории и дубль экрана', () => {
-  const uninstall = installHistorySync();
+test('корень вкладки кладётся под экран, даже если persist уже держит эту сущность', async () => {
+  // Бытовой случай: ту же ссылку открывают второй раз с того же устройства — persist
+  // ещё помнит эту сущность наверху стека. Позиция стора и цель ссылки СОВПАДАЮТ, и
+  // соблазн «мы уже здесь, делать нечего» здесь прямо вреден: записи истории под экраном
+  // нет, и первый «назад» уводит с сайта.
+  seedPersist({
+    activeTab: 'browser',
+    stacks: { chat: [], browser: [{ kind: 'entity', id: E1 }], agenda: [], budget: [] },
+  });
+  await useNav.persist.rehydrate();
+  // Запись чужая (state === null) — вход настоящий, не перезагрузка.
+  window.history.replaceState(null, '', `/entity/${E1}`);
   const pushes = vi.spyOn(window.history, 'pushState');
 
+  renderWithProviders(<App />, handler);
+
+  await waitFor(() => expect(pushes).toHaveBeenCalled());
+  // Под записью целевого экрана — запись корня вкладки, именно в этом порядке.
+  expect(pushes.mock.calls.map((c) => c[2])).toEqual(['/browser', `/entity/${E1}`]);
+  expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E1 }]);
+
+  window.history.back();
+  await waitFor(() => expect(window.location.pathname).toBe('/browser'));
+  expect(useNav.getState().activeTab).toBe('browser');
+  expect(useNav.getState().stacks.browser).toEqual([]);
+});
+
+test('повторный openDeepLink с тем же путём не дублирует экран в стеке', () => {
+  const uninstall = installHistorySync();
+
   expect(openDeepLink(`/entity/${E1}`)).toBe(true);
   expect(openDeepLink(`/entity/${E1}`)).toBe(true);
 
-  // Две записи с ПЕРВОГО вызова (корень вкладки + экран), со второго — ни одной.
-  expect(pushes).toHaveBeenCalledTimes(2);
+  // Каждый вызов сворачивает вкладку и кладёт цель заново, поэтому экран в стеке один.
+  // Записи истории повтор дублирует — и это осознанно: единственный производственный
+  // вызов идёт из App, где второй прогон эффекта отсекает `externalEntryPath`, а ранний
+  // выход «мы уже здесь» стоил бы корня вкладки под экраном (см. тест выше).
   expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E1 }]);
   uninstall();
 });
@@ -156,7 +184,8 @@ test('двойной старт (StrictMode) не плодит записи ис
     expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E1 }]),
   );
   // Ровно две записи — корень целевой вкладки и сам экран — сколько бы раз StrictMode
-  // ни прогнал эффект: повторный вход по тому же пути видит стор уже в целевой позиции.
+  // ни прогнал эффект: на втором прогоне запись истории уже наша, и `externalEntryPath`
+  // отдаёт null, то есть повторного входа по ссылке просто не происходит.
   expect(pushes).toHaveBeenCalledTimes(2);
 });
 
