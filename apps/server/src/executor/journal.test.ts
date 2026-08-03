@@ -156,9 +156,20 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     expect(action.inverse).toEqual([
       { op: 'entity_update', payload: { id: e.id, archived: true } },
     ]);
-    // карточка действия
+    // Карточка действия. fast_path — единственный источник, чья карточка живёт только
+    // в кэше клиента (useFastPath) и пропадает при первом же перечитывании треда,
+    // поэтому в ленту пишется форма клиентского union'а (02-core-os §2.3): с kind,
+    // иначе renderCards уходит в default и от карточки остаётся голая строка.
+    // aspects/keyFields пусты: реестра аспектов у синка нет (см. journal.ts).
     expect((msg.metadata as { cards?: unknown[] }).cards).toEqual([
-      { tool: 'entity_create', entity_id: e.id, title: 'Кофе' },
+      {
+        kind: 'entity_card',
+        entityId: e.id,
+        title: 'Кофе',
+        aspects: [],
+        keyFields: {},
+        undoActionId: r.actionId, // тот же id, что уходит в ai.undo({actionId})
+      },
     ]);
   });
 
@@ -306,5 +317,88 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     expect((caught as ExecError).code).toBe('VALIDATION');
     // ничего не записано: guard срабатывает до ensureGlobalThread/appendMessage
     expect((await messagesInThread(globalThreadId(user))).length).toBe(0);
+  });
+
+  test('7. source=chat: карточка БЕЗ kind — сторож против дубля в ленте (карточку чат-пути уже пишет ответ ассистента)', async () => {
+    const user = freshUserId();
+    const fromChat = req(
+      user,
+      'entity_create',
+      { title: 'Из чата', tags: [] },
+      {
+        source: 'chat',
+      },
+    );
+    const r = ok(await execute(db, fromChat, { sink }));
+    const e = r.results[0] as WireEntity;
+
+    const msg = first(await messagesInThread(globalThreadId(user)));
+    // ai/send-message.ts кладёт СВОЮ, более богатую карточку (aspects/keyFields из
+    // реестра) с ТЕМ ЖЕ undoActionId в assistant-сообщение того же треда. Дай audit
+    // форму клиентского union'а — в ленте окажутся две одинаковые карточки и две
+    // кнопки «Отменить», причём вторая беднее первой.
+    expect((msg.metadata as { cards?: unknown[] }).cards).toEqual([
+      { tool: 'entity_create', entity_id: e.id, title: 'Из чата' },
+    ]);
+  });
+
+  test('8. batch (entity_id = null): карточка прежней формы и НЕ пустая — на cards[0] стоит findByAuditId (идемпотентный replay §7.8)', async () => {
+    const user = freshUserId();
+    const batchId = newId();
+    const r = ok(
+      await execute(
+        db,
+        batchReq(
+          user,
+          [
+            { tool: 'entity_create', input: { title: 'Пакет-1', tags: [] } },
+            { tool: 'entity_create', input: { title: 'Пакет-2', tags: [] } },
+          ],
+          batchId,
+        ),
+        { sink },
+      ),
+    );
+    expect(r.idempotentReplay).toBe(false);
+
+    const msg = first(await messagesInThread(globalThreadId(user)));
+    expect((msg.metadata as { cards?: unknown[] }).cards).toEqual([
+      { tool: 'batch_execute', entity_id: null, title: 'batch: операций — 2' },
+    ]);
+    // Пустой cards обрушил бы replay: findByAuditId возвращает undefined без cards[0]
+    const saved = await withIdentity(db, user, (tx) =>
+      sink.findByAuditId(tx, batchAuditMessageId(user, batchId)),
+    );
+    expect(saved?.results).toEqual(r.results as unknown[]);
+  });
+
+  test('9. entity_id = null у источника из белого списка: карточка всё равно прежней формы (entityId клиента — строка, не null)', async () => {
+    const user = freshUserId();
+    const auditId = newId();
+    const action: ActionRecord = {
+      id: newId(),
+      type: 'relation_created',
+      entity_id: null, // не только batch: одиночные relation-мутации тоже без сущности
+      actor_user_id: user,
+      actor_kind: 'owner',
+      source: 'fast_path',
+      operations: [],
+      inverse: [],
+    };
+    await withIdentity(db, user, (tx) =>
+      sink.write(tx, {
+        id: auditId,
+        ownerId: user,
+        action,
+        card: { tool: 'relation_create', entity_id: null, title: 'связь' },
+      }),
+    );
+
+    const msg = first(await messagesInThread(globalThreadId(user)));
+    expect((msg.metadata as { cards?: unknown[] }).cards).toEqual([
+      { tool: 'relation_create', entity_id: null, title: 'связь' },
+    ]);
+    const saved = await withIdentity(db, user, (tx) => sink.findByAuditId(tx, auditId));
+    expect(saved?.card).toEqual({ tool: 'relation_create', entity_id: null, title: 'связь' });
   });
 });

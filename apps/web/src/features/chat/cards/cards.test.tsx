@@ -65,6 +65,34 @@ test('entity_card: Undo зовёт ai.undo(undoActionId) и гасит карт�
   );
 });
 
+// C3: audit-сообщение fast-path приезжает из БД как role:'system' (executor/journal.ts) —
+// синтетическая карточка клиента к этому моменту уже вытеснена из кэша. Лента роль system
+// не спец-обрабатывает (MessageList), и карточка обязана рендериться как любая другая:
+// с заголовком и «Отменить» по undoActionId. Сторож против возврата default: return null.
+test('карточка действия из истории (role:system) рендерится после перезагрузки', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg(
+          [
+            {
+              kind: 'entity_card',
+              entityId: 'e1',
+              title: 'Купить кроссовки',
+              aspects: [],
+              keyFields: {},
+              undoActionId: 'a1',
+            },
+          ],
+          { role: 'system', content: 'Купить кроссовки' },
+        ),
+      )}
+    </div>,
+  );
+  expect(screen.getByTestId('entity-card')).toHaveTextContent('Купить кроссовки');
+  expect(screen.getByRole('button', { name: /отменить/i })).toBeInTheDocument();
+});
+
 test('query_result с aggregate → число + «показать список»', () => {
   renderWithProviders(
     <div>

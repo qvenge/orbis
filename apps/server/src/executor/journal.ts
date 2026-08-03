@@ -1,7 +1,8 @@
 // apps/server/src/executor/journal.ts
 // Боевой JournalSink (§7.8): audit-сообщение в chat_messages ТЕМ ЖЕ tx, что и стадия 5.
 // metadata = { actions: [action], cards: [card] } (§4.6) + results — источник ответа
-// идемпотентного повтора batch (§7.8). Целевой тред — entry.threadId, иначе глобальный
+// идемпотентного повтора batch (§7.8). Форма карточки зависит от source — см.
+// FEED_CARD_SOURCES/feedCard. Целевой тред — entry.threadId, иначе глобальный
 // тред владельца (создаётся в том же tx). Retention журнала (RET-02) здесь НЕ
 // реализуется — отложен. Подключение по умолчанию не меняется (NOOP_SINK): боевой
 // синк передают явно тесты и роутеры Task 12.
@@ -13,8 +14,61 @@ import { chatMessages, chatThreads } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { pgErrorInfo } from './executor';
-import type { ActionCard, ActionRecord, JournalSink, JournalWrite } from './types';
+import type { ActionCard, ActionRecord, JournalSink, JournalWrite, MutationSource } from './types';
 import { AuditIdConflictError } from './types';
+
+/**
+ * Источники, чьё audit-сообщение — ЕДИНСТВЕННЫЙ носитель карточки в ленте: только для
+ * них в metadata.cards пишется форма клиентского union'а (02-core-os §2.3, с kind).
+ * Без kind renderCards уходит в default (apps/web/.../cards/renderCards.tsx) и после
+ * перезагрузки от карточки остаётся голая строка content.
+ *
+ * Почему белый список, а не «все, кроме chat»:
+ * - 'chat' — у него СВОЙ, более богатый носитель: ответ ассистента персистит карточку
+ *   с aspects/keyFields из реестра и ТЕМ ЖЕ undoActionId (ai/send-message.ts). Вторая
+ *   карточка дала бы в ленте дубль с двумя кнопками «Отменить», причём беднее первой;
+ * - 'fast_path' — единственная реальная деградация: клиентская карточка живёт лишь в
+ *   кэше react-query (features/chat/useFastPath.ts), а из БД приезжает голая строка;
+ * - 'mcp' | 'ui' | 'quick_capture' — карточки в ленте не было НИКОГДА, ни живьём, ни
+ *   после перезагрузки: карточка тут была бы новой функцией, а не починкой;
+ * - 'system' — audit скрыт фильтром ленты (chat/messages.ts), рисовать нечего.
+ */
+const FEED_CARD_SOURCES: ReadonlySet<MutationSource> = new Set<MutationSource>(['fast_path']);
+
+/** Карточка ленты (зеркало EntityCardData из apps/web/src/features/chat/cards/types.ts). */
+interface FeedEntityCard {
+  kind: 'entity_card';
+  entityId: string;
+  title: string;
+  aspects: string[];
+  keyFields: Record<string, unknown>;
+  undoActionId: string;
+}
+
+/**
+ * Что ляжет в metadata.cards[0]. Вне белого списка — сегодняшняя ActionCard дословно.
+ *
+ * Карточка НИКОГДА не пустая и cards[0] всегда есть: на нём стоит findByAuditId, а на
+ * нём — идемпотентный replay batch (§7.8). Отсюда же второе условие: при entity_id ===
+ * null (batch, одиночные relation-мутации) форма остаётся прежней — entityId клиентской
+ * карточки обязан быть строкой, null там был бы враньём.
+ *
+ * aspects/keyFields пустые СОЗНАТЕЛЬНО, а не по недосмотру: у синка нет ни WireEntity,
+ * ни viewConfig.keyFields (они собираются в tools/dispatch.ts из реестра аспектов) —
+ * обогащать нечем. Карточка беднее живой, зато переживает перезагрузку и несёт «Отменить».
+ */
+function feedCard(action: ActionRecord, card: ActionCard): ActionCard | FeedEntityCard {
+  if (!FEED_CARD_SOURCES.has(action.source) || card.entity_id === null) return card;
+  return {
+    kind: 'entity_card',
+    entityId: card.entity_id,
+    title: card.title,
+    aspects: [],
+    keyFields: {},
+    // тот же id, что уходит в ai.undo({actionId}) у живых карточек (§7.8)
+    undoActionId: action.id,
+  };
+}
 
 /** Фабрика боевого синка; состояние не хранит — один инстанс переиспользуем. */
 export function makeChatJournalSink(): JournalSink {
@@ -27,7 +81,8 @@ export function makeChatJournalSink(): JournalSink {
       // вызывающего; отказ — VALIDATION, как прочие ошибки конвейера §9.2).
       const asList = entry.action as ActionRecord | readonly ActionRecord[];
       const actions: readonly ActionRecord[] = Array.isArray(asList) ? asList : [asList];
-      if (actions.length !== 1) {
+      const action = actions.length === 1 ? actions[0] : undefined;
+      if (action === undefined) {
         throw new ExecError('VALIDATION', 'audit-сообщение должно нести ровно один action (§7.8)', {
           count: actions.length,
         });
@@ -36,7 +91,7 @@ export function makeChatJournalSink(): JournalSink {
       const id = entry.id ?? newId();
       const metadata: Record<string, unknown> = {
         actions,
-        cards: [entry.card],
+        cards: [feedCard(action, entry.card)],
       };
       // Результаты операций batch — сохранённый ответ идемпотентного повтора (§7.8)
       if (entry.results !== undefined) metadata.results = entry.results;
@@ -86,6 +141,9 @@ export function makeChatJournalSink(): JournalSink {
       const card = md.cards?.[0];
       // id занят не-audit сообщением — источником replay быть не может
       if (!action || !card) return undefined;
+      // Тип cards честен для всех читаемых здесь строк: искомый id — всегда
+      // детерминированный batchAuditMessageId, а у batch card.entity_id === null,
+      // то есть feedCard оставляет прежнюю ActionCard.
       return {
         id: row.id,
         ownerId: row.ownerId,
