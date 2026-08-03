@@ -1,5 +1,6 @@
 import { Archive, ArchiveRestore, Pin } from 'lucide-react';
 import { useState } from 'react';
+import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
 import { trpc } from '../../trpc';
@@ -28,6 +29,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // §2.7: перевод задачи-покупки в done → карточка «Покупка совершена?» (Task B6).
   // Единственный мутационный путь чекбокса — toggleTask здесь (см. usePlanToFactPrompt).
   const planToFact = usePlanToFactPrompt();
+
+  // §1.3: ссылка на удалённую или чужую сущность. Без этой ветки NOT_FOUND давал вечный
+  // скелетон: isLoading уже false, а data не приедет никогда. Проверка — ровно по коду:
+  // сеть и 500 «не найдено» не означают, и подменять их этим экраном значило бы врать
+  // (такие ошибки остаются на прежнем поведении — это отдельный разговор, не §1.3).
+  if (get.isError && get.error.data?.code === 'NOT_FOUND') return <NotFoundScreen />;
 
   if (get.isLoading || !get.data) {
     return (
