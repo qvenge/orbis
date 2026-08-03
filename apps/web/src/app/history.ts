@@ -24,28 +24,36 @@ export type NavHistoryState = { tab: Tab; depth: number; screen: ScreenRef | nul
 const TABS: readonly Tab[] = ['chat', 'browser', 'agenda', 'budget'];
 
 /**
+ * Проверка полей на каждый вид экрана. КАРТА, а не `switch` с `default`, и это не стиль:
+ * `Record<ScreenRef['kind'], …>` заставляет компилятор потребовать строку для КАЖДОГО
+ * нового вида. У `switch (kind: unknown)` такого сторожа нет — девятый вид `ScreenRef`
+ * добавился бы молча, его записи истории отбрасывались бы валидацией, и вернулись бы
+ * ровно те мёртвые нажатия «назад», которые чинил круг правок B2.
+ */
+const SCREEN_REF_GUARDS: Record<ScreenRef['kind'], (v: Record<string, unknown>) => boolean> = {
+  entity: (v) => typeof v.id === 'string' && v.id.length > 0,
+  'budget-category': (v) => typeof v.id === 'string' && v.id.length > 0,
+  thread: (v) => typeof v.threadId === 'string' && v.threadId.length > 0,
+  'budget-transactions': () => true,
+  'budget-rollover': () => true,
+  'budget-import': () => true,
+  memory: () => true,
+  settings: () => true,
+};
+
+/**
  * Форма `ScreenRef` из чужой записи — на веру не берётся. В `history.state` может лежать
  * что угодно (запись другого приложения на том же origin, ручной `pushState`, прежний
  * формат), а неизвестный `kind` доехал бы до `renderScreen` в router.tsx.
  */
 function isScreenRef(value: unknown): value is ScreenRef {
   if (typeof value !== 'object' || value === null) return false;
-  const { kind, id, threadId } = value as { kind?: unknown; id?: unknown; threadId?: unknown };
-  switch (kind) {
-    case 'entity':
-    case 'budget-category':
-      return typeof id === 'string' && id.length > 0;
-    case 'thread':
-      return typeof threadId === 'string' && threadId.length > 0;
-    case 'budget-transactions':
-    case 'budget-rollover':
-    case 'budget-import':
-    case 'memory':
-    case 'settings':
-      return true;
-    default:
-      return false;
-  }
+  const record = value as Record<string, unknown>;
+  const kind = record.kind;
+  // `hasOwn` обязателен: без него `{kind:'toString'}` достал бы метод прототипа, и чужая
+  // запись прикинулась бы нашей.
+  if (typeof kind !== 'string' || !Object.hasOwn(SCREEN_REF_GUARDS, kind)) return false;
+  return SCREEN_REF_GUARDS[kind as ScreenRef['kind']](record);
 }
 
 /** Запись целиком: либо она наша и полная, либо не наша — половинчатой не бывает. */
@@ -239,15 +247,19 @@ export function externalEntryPath(): string | null {
  * показать первый «назад». Без установленной синхронизации оба шага просто складываются
  * в одну позицию стора.
  *
- * Проверки «мы уже в целевой позиции — делать нечего» здесь СОЗНАТЕЛЬНО НЕТ, и вернуть её
- * нельзя. Позиция стора совпадает с целью ссылки в самом обычном случае: ту же ссылку
- * открыли второй раз с того же устройства, и persist ещё держит эту сущность наверху
- * стека. Ранний выход не сделал бы тогда ни одного `setState`, а значит и ни одной записи
- * истории, — под целевым экраном осталась бы чужая страница, и первый же «назад» увёл бы
- * с сайта. От повторного вызова защищает не эта функция, а `externalEntryPath` в App:
- * на втором прогоне эффекта (StrictMode) запись истории уже наша, и вызова просто нет.
- * Повторный вызов напрямую дубля экрана в стеке всё равно не даёт — шаг 1 сворачивает
- * вкладку, — он лишь пишет ещё одну пару записей истории.
+ * ЭТО ВХОД СНАРУЖИ И ТОЛЬКО ОН. Функция сбрасывает стек целевой вкладки и переключает
+ * вкладку — семантика §1.3 для чужой ссылки. Внутренней навигации по ссылке (клик по
+ * `[[entity:<id>]]` в теле сущности, фаза C) нужна ДРУГАЯ семантика: push поверх текущего
+ * стека ТЕКУЩЕЙ вкладки, без сброса и без переключения. Такого пути пока нет — собирать
+ * его надо отдельно (`parseAppPath` + `appScreenToScreenRef` + `push` активной вкладки),
+ * а не звать эту функцию: клик по ссылке в теле затирал бы стек Browser.
+ *
+ * Вызывается ОДИН раз при старте, ДО `installHistorySync`: записи истории стартовой
+ * позиции расставляет `seedHistory`, а не подписка стора. Проверки «мы уже в целевой
+ * позиции — делать нечего» здесь сознательно нет: позиция стора совпадает с целью ссылки
+ * в самом обычном случае (ту же ссылку открыли второй раз, persist держит эту сущность
+ * наверху), и ранний выход тогда экономил бы ровно ничего, а разбираться, почему при этом
+ * не появился корень вкладки под экраном, пришлось бы долго.
  */
 export function openDeepLink(path: string): boolean {
   const screen = parseAppPath(path);
@@ -255,10 +267,42 @@ export function openDeepLink(path: string): boolean {
 
   const tab = tabOfScreen(screen);
   const ref = appScreenToScreenRef(screen);
-
-  useNav.setState((s) => ({ activeTab: tab, stacks: { ...s.stacks, [tab]: [] } }));
-  if (ref) useNav.setState((s) => ({ stacks: { ...s.stacks, [tab]: [ref] } }));
+  useNav.setState((s) => ({ activeTab: tab, stacks: { ...s.stacks, [tab]: ref ? [ref] : [] } }));
   return true;
+}
+
+/**
+ * Расстановка записей истории под текущий стек активной вкладки — ровно один раз, при
+ * входе в приложение (§1.4 + D18). Вызывать ДО `installHistorySync`: стор тут не меняется,
+ * подписки ещё нет, и никакой встречной записи не возникает.
+ *
+ * Зачем вообще. `installHistorySync` пишет ОДНУ запись — текущую позицию, какой бы глубины
+ * ни был восстановленный стек. Пользователь ушёл из приложения на detail-экране, вернулся
+ * новой сессией (перезапуск PWA с иконки, новая вкладка) — стек из persist поднялся, а
+ * записей под ним нет: «Назад» в шапке ведёт через `history.back()` и в standalone-PWA
+ * не делает НИЧЕГО, а во вкладке браузера уводит с сайта. Стек восстановлен, а
+ * разворачивать его нечем.
+ *
+ * Что пишем: корень активной вкладки `replaceState`'ом (текущая запись описывает позицию,
+ * которой пользователь не видел, — адрес ссылки или канонизированный верх стека, и
+ * оставлять её призраком под корнем незачем), затем по одной записи на каждый экран
+ * стека. Последняя запись выходит той же позицией, что вернёт `position()`, поэтому
+ * `installHistorySync` следом канонизирует её сам в себя, и внутреннее `last` подписки
+ * оказывается верным без всякой договорённости между функциями.
+ *
+ * Стеки НЕактивных вкладок в историю не попадают — и не должны: запись истории описывает
+ * ВИДИМУЮ позицию, а стеки других вкладок живут в persist и приезжают при переключении.
+ */
+export function seedHistory(): void {
+  const { activeTab, stacks } = useNav.getState();
+  const root: NavHistoryState = { tab: activeTab, depth: 0, screen: null };
+  window.history.replaceState(root, '', buildAppPath({ kind: 'tab-root', tab: activeTab }));
+
+  const stack = stacks[activeTab];
+  for (const [i, screen] of stack.entries()) {
+    const state: NavHistoryState = { tab: activeTab, depth: i + 1, screen };
+    window.history.pushState(state, '', buildAppPath(screenRefToAppScreen(screen, activeTab)));
+  }
 }
 
 /**

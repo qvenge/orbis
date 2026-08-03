@@ -17,6 +17,8 @@ import { installHistorySync, openDeepLink } from './history';
 
 const E1 = '11111111-1111-4111-8111-111111111111';
 const E2 = '22222222-2222-4222-8222-222222222222';
+const T1 = '33333333-3333-4333-8333-333333333333';
+const C1 = '44444444-4444-4444-8444-444444444444';
 
 const ent = (id: string, title: string) => ({
   id,
@@ -93,6 +95,31 @@ test('маршрут вкладки открывает её корень и св
   expect(useNav.getState().stacks.budget).toEqual([]);
 });
 
+test('ссылка на тред открывает его во вкладке «Обзор», чужой стек чата не трогая', () => {
+  useNav.setState({
+    activeTab: 'chat',
+    stacks: { chat: [{ kind: 'thread', threadId: T1 }], browser: [], agenda: [], budget: [] },
+  });
+
+  // §1.3 + ограничение B1: `tabOfScreen` для треда ВСЕГДА даёт browser — по одному id
+  // тред сущности от глобального не отличить, и ссылка ведёт во вкладку по умолчанию.
+  expect(openDeepLink(`/thread/${T1}`)).toBe(true);
+  expect(useNav.getState().activeTab).toBe('browser');
+  expect(useNav.getState().stacks.browser).toEqual([{ kind: 'thread', threadId: T1 }]);
+  expect(useNav.getState().stacks.chat).toEqual([{ kind: 'thread', threadId: T1 }]);
+});
+
+test('ссылка на категорию бюджета открывает её во вкладке «Бюджет»', () => {
+  useNav.setState({
+    activeTab: 'chat',
+    stacks: { chat: [], browser: [], agenda: [], budget: [{ kind: 'budget-transactions' }] },
+  });
+
+  expect(openDeepLink(`/budget/category/${C1}`)).toBe(true);
+  expect(useNav.getState().activeTab).toBe('budget');
+  expect(useNav.getState().stacks.budget).toEqual([{ kind: 'budget-category', id: C1 }]);
+});
+
 test('неразобранный путь ничего не меняет и возвращает false', () => {
   useNav.setState({
     activeTab: 'agenda',
@@ -140,13 +167,16 @@ test('корень вкладки кладётся под экран, даже �
   await useNav.persist.rehydrate();
   // Запись чужая (state === null) — вход настоящий, не перезагрузка.
   window.history.replaceState(null, '', `/entity/${E1}`);
+  const replaces = vi.spyOn(window.history, 'replaceState');
   const pushes = vi.spyOn(window.history, 'pushState');
 
   renderWithProviders(<App />, handler);
 
   await waitFor(() => expect(pushes).toHaveBeenCalled());
-  // Под записью целевого экрана — запись корня вкладки, именно в этом порядке.
-  expect(pushes.mock.calls.map((c) => c[2])).toEqual(['/browser', `/entity/${E1}`]);
+  // Стартовая запись — корень вкладки (чужая запись переписывается, а не остаётся
+  // призраком под ним), целевой экран — единственная запись поверх неё.
+  expect(replaces.mock.calls[0]?.[2]).toBe('/browser');
+  expect(pushes.mock.calls.map((c) => c[2])).toEqual([`/entity/${E1}`]);
   expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E1 }]);
 
   window.history.back();
@@ -183,10 +213,11 @@ test('двойной старт (StrictMode) не плодит записи ис
   await waitFor(() =>
     expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E1 }]),
   );
-  // Ровно две записи — корень целевой вкладки и сам экран — сколько бы раз StrictMode
-  // ни прогнал эффект: на втором прогоне запись истории уже наша, и `externalEntryPath`
-  // отдаёт null, то есть повторного входа по ссылке просто не происходит.
-  expect(pushes).toHaveBeenCalledTimes(2);
+  // Ровно одна новая запись — целевой экран поверх корня вкладки (корень пишется
+  // `replaceState`'ом в стартовую запись), сколько бы раз StrictMode ни прогнал эффект:
+  // на втором прогоне запись истории уже наша, `externalEntryPath` отдаёт null, и
+  // ни входа по ссылке, ни повторного досева не происходит.
+  expect(pushes).toHaveBeenCalledTimes(1);
 });
 
 test('чужой id даёт экран «не найдено» с возвратом на корень вкладки', async () => {
@@ -281,6 +312,60 @@ test('перезагрузка на адресе экрана не срезае�
     { kind: 'entity', id: E1 },
   ]);
   expect(window.location.pathname).toBe(`/entity/${E1}`);
+});
+
+test('после холодного старта «Назад» снимает экран восстановленного стека', async () => {
+  // Холодный старт: новая сессия (перезапуск PWA с иконки, новая вкладка) — записей
+  // истории под текущей нет, а стек из persist есть. Без досева история знает одну
+  // позицию, и «Назад» в шапке либо не делает ничего, либо уводит с сайта.
+  seedPersist({
+    activeTab: 'browser',
+    stacks: {
+      chat: [],
+      browser: [
+        { kind: 'entity', id: E2 },
+        { kind: 'entity', id: E1 },
+      ],
+      agenda: [],
+      budget: [],
+    },
+  });
+  await useNav.persist.rehydrate();
+  window.history.replaceState(null, '', '/');
+
+  renderWithProviders(<App />, handler);
+
+  await waitFor(() => expect(window.location.pathname).toBe(`/entity/${E1}`));
+  await waitFor(() => expect(screen.getByTestId('nav-back')).toBeInTheDocument());
+  fireEvent.click(screen.getByTestId('nav-back'));
+
+  await waitFor(() =>
+    expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E2 }]),
+  );
+  expect(window.location.pathname).toBe(`/entity/${E2}`);
+  expect(useNav.getState().activeTab).toBe('browser');
+});
+
+test('тап по активной вкладке сворачивает стек, «назад» после него возвращает верхний экран', async () => {
+  const uninstall = installHistorySync();
+  useNav.getState().switchTab('browser');
+  useNav.getState().push('browser', { kind: 'entity', id: E2 });
+  useNav.getState().push('browser', { kind: 'entity', id: E1 });
+
+  // §1.1: повторный тап по АКТИВНОЙ вкладке сворачивает её стек до корня — одним
+  // движением через несколько уровней, поэтому запись истории тут одна, а не три.
+  useNav.getState().switchTab('browser');
+  expect(useNav.getState().stacks.browser).toEqual([]);
+  expect(window.location.pathname).toBe('/browser');
+
+  // «Назад» после сворачивания возвращает верхний экран: запись несёт его сама, и
+  // самоизлечение приводит глубину стека в соответствие с записью.
+  window.history.back();
+  await waitFor(() =>
+    expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E1 }]),
+  );
+  expect(window.location.pathname).toBe(`/entity/${E1}`);
+  uninstall();
 });
 
 test('вход по ссылке сбрасывает ТОЛЬКО целевую вкладку, чужие стеки из persist целы', async () => {
