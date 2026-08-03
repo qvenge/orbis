@@ -8,6 +8,8 @@ import type { ChatMessage } from './useChatThread';
 // jsdom не реализует scrollIntoView — мокаем на прототипе, иначе вызов бросил бы.
 const scrollSpy = vi.fn();
 
+const emptyStacks = () => ({ chat: [], browser: [], agenda: [], budget: [] });
+
 beforeEach(() => {
   Element.prototype.scrollIntoView = scrollSpy;
   scrollSpy.mockClear();
@@ -15,6 +17,9 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // Стор навигации глобальный и переживает файл теста: кто его трогает, тот и прибирает,
+  // иначе следующему тесту ленты достанется чужой activeTab (образец — RolloverScreen.test).
+  useNav.setState({ activeTab: 'chat', stacks: emptyStacks() });
 });
 
 function msg(id: string, content: string): ChatMessage {
@@ -251,8 +256,6 @@ test('текст сообщения ≠ заголовку карточки: п�
 // --- C4a: markdown в ленте -----------------------------------------------------------
 
 const E1 = '019e4466-1111-7000-8000-0123456789ab';
-
-const emptyStacks = () => ({ chat: [], browser: [], agenda: [], budget: [] });
 
 test('ответ ассистента рендерится markdown-разметкой внутри своего <article>', () => {
   render(<MessageList messages={[msg('a', '## Итоги\n\n- раз\n- два')]} isTyping={false} />);

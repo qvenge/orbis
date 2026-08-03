@@ -107,6 +107,51 @@ test('внешняя ссылка открывается в новой вкла�
   expect(click.defaultPrevented).toBe(false);
 });
 
+test('протокол-относительная //host — тоже наружу, новой вкладкой и без opener', () => {
+  // Своей ссылку делает не ведущий «/»: «//evil.com» уводит SPA целиком, а parseAppPath
+  // на ней возвращает null и санитайзер её пропускает (двоеточия до первого «/» нет).
+  const onEntityLink = vi.fn();
+  render(<Markdown source={'[уйти](//example.com/a)'} onEntityLink={onEntityLink} />);
+  const link = screen.getByRole('link', { name: 'уйти' });
+  expect(link).toHaveAttribute('href', '//example.com/a');
+  expect(link).toHaveAttribute('target', '_blank');
+  expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+  expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'));
+  const click = createEvent.click(link);
+  fireEvent(link, click);
+  expect(onEntityLink).not.toHaveBeenCalled();
+  expect(click.defaultPrevented).toBe(false);
+});
+
+test('Ctrl/Cmd-клик по entity-ссылке остаётся браузерным (новая вкладка)', () => {
+  const onEntityLink = vi.fn();
+  render(<Markdown source={`[[entity:${E1}]]`} onEntityLink={onEntityLink} />);
+  const link = screen.getByRole('link');
+  // Сторож на document: читает defaultPrevented СРАЗУ после обработчика компонента
+  // (React слушает на корне рендера, ниже по дереву) и гасит штатный переход —
+  // иначе jsdom печатает «Not implemented: navigation» на каждый неперехваченный клик.
+  const prevented: boolean[] = [];
+  const guard = (e: Event) => {
+    prevented.push(e.defaultPrevented);
+    e.preventDefault();
+  };
+  document.addEventListener('click', guard);
+  try {
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }]) {
+      fireEvent.click(link, modifier);
+    }
+    // href настоящий — браузер откроет запись сам; перехват тут только мешал бы.
+    expect(prevented).toEqual([false, false, false]);
+    expect(onEntityLink).not.toHaveBeenCalled();
+    // Обычный клик перехват не потерял.
+    fireEvent.click(link);
+    expect(prevented).toEqual([false, false, false, true]);
+    expect(onEntityLink).toHaveBeenCalledWith(E1);
+  } finally {
+    document.removeEventListener('click', guard);
+  }
+});
+
 test('{{query:…}} в ленте остаётся текстом (виджеты — объём detail-экрана)', () => {
   render(<Markdown source={'{{query: aspect=orbis/task}}'} />);
   expect(screen.getByText(/\{\{query: aspect=orbis\/task\}\}/)).toBeInTheDocument();
