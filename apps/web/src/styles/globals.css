@@ -42,3 +42,155 @@ body {
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
+
+/*
+ * Markdown-текст (lib/markdown/Markdown.tsx) — ответы модели и то, что пишет человек.
+ * Обычным CSS, а не утилитами: правила нужны узлам, которых компонент не создаёт
+ * (li, th/td, pre > code), и @tailwindcss/typography ради этого не заводим — та же
+ * экономия, что у animate-badge-in выше. Все размеры в em: контейнер наследует кегль
+ * от места вставки (в ленте чата это text-sm).
+ * Правила НЕ в @layer — тем самым они перебивают preflight (тот гасит маркеры списков
+ * и кегль заголовков), а утилиты остаются доступны на самом контейнере.
+ */
+.orbis-markdown {
+  /* Длинный URL или слово переносится, а не растягивает пузырь сообщения. */
+  overflow-wrap: anywhere;
+}
+
+.orbis-markdown > :first-child {
+  margin-top: 0;
+}
+
+.orbis-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.orbis-markdown p,
+.orbis-markdown ul,
+.orbis-markdown ol,
+.orbis-markdown pre,
+.orbis-markdown blockquote {
+  margin: 0.5em 0;
+}
+
+/*
+ * Заголовки не крупнее заголовка экрана (app/ScreenHeader — text-sm): иерархию несут
+ * насыщенность и воздух, а не кегль. Ответ модели не должен кричать громче хрома.
+ */
+.orbis-markdown :is(h1, h2, h3, h4, h5, h6) {
+  font-size: 1em;
+  font-weight: 600;
+  margin: 1em 0 0.25em;
+}
+
+.orbis-markdown :is(h3, h4, h5, h6) {
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.orbis-markdown ul {
+  list-style: disc;
+  padding-left: 1.25em;
+}
+
+.orbis-markdown ol {
+  list-style: decimal;
+  padding-left: 1.5em;
+}
+
+.orbis-markdown li {
+  margin: 0.125em 0;
+}
+
+.orbis-markdown li > :is(ul, ol) {
+  margin: 0.125em 0;
+}
+
+/* Список задач gfm: маркер съеден чекбоксом, ему же нужен воздух до текста. */
+.orbis-markdown li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+
+.orbis-markdown li > input[type="checkbox"] {
+  margin-right: 0.4em;
+}
+
+.orbis-markdown a {
+  color: var(--color-accent);
+}
+
+.orbis-markdown a:hover {
+  text-decoration: underline;
+}
+
+/*
+ * Код: рамка, а не только фон, — в пузыре пользователя фон уже surface-2, и заливка
+ * там была бы невидима.
+ */
+.orbis-markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  padding: 0.05em 0.3em;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+.orbis-markdown pre {
+  /* Широкий блок кода скроллится внутри себя, а не ломает раскладку ленты. */
+  overflow-x: auto;
+  padding: 0.625em 0.75em;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+
+.orbis-markdown pre code {
+  border: 0;
+  padding: 0;
+  background: none;
+}
+
+.orbis-markdown blockquote {
+  border-left: 2px solid var(--color-line);
+  padding-left: 0.75em;
+  color: var(--color-text-secondary);
+}
+
+.orbis-markdown blockquote > :first-child {
+  margin-top: 0;
+}
+
+.orbis-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.orbis-markdown table {
+  font-size: 0.9375em;
+}
+
+.orbis-markdown :is(th, td) {
+  border: 1px solid var(--color-line);
+  padding: 0.25em 0.5em;
+  text-align: left;
+  /*
+   * В ячейке слова не рвём: у таблицы есть собственный скролл-контейнер, и «товар»,
+   * разорванный на «това/р» ради влезания в узкую колонку, — хуже горизонтального
+   * скролла. Общее правило контейнера (overflow-wrap: anywhere) тут снимается.
+   */
+  overflow-wrap: normal;
+}
+
+.orbis-markdown th {
+  font-weight: 600;
+}
+
+.orbis-markdown hr {
+  border-top: 1px solid var(--color-line);
+  margin: 1em 0;
+}
+
+.orbis-markdown img {
+  max-width: 100%;
+  height: auto;
+}
