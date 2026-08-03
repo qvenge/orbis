@@ -37,7 +37,15 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // а разрешение пользователь может и не дать. На отказе показываем саму ссылку
   // (manualLink), чтобы копирование осталось возможным руками, а не превратилось в
   // кнопку, которая молча ничего не делает.
-  const [manualLink, setManualLink] = useState<string | null>(null);
+  //
+  // Ссылка хранится ВМЕСТЕ с id сущности, которой принадлежит. Роутер монтирует этот
+  // экран без key (router.tsx), поэтому переход entity→entity внутри таба — бэклинк,
+  // подзадача, блокировка — меняет только проп: инстанс тот же, состояние переживает
+  // переход. Голая строка осталась бы висеть под заголовком СОСЕДНЕЙ сущности и
+  // предлагала бы скопировать чужой адрес. Сверка id при рендере делает это невозможным
+  // по построению, а не «пока не забыли прибраться»: где буфер отказывает (небезопасный
+  // контекст), он отказывает каждый раз, и плашка там — не редкий гость.
+  const [manualLink, setManualLink] = useState<{ id: string; url: string } | null>(null);
   const { show } = useToast();
 
   async function copyLink() {
@@ -52,7 +60,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       setManualLink(null);
       show('Ссылка скопирована');
     } catch {
-      setManualLink(url);
+      setManualLink({ id: entityId, url });
     }
   }
 
@@ -165,29 +173,8 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       />
       {/* Запасной путь копирования — ВНЕ табов: ссылку просят из меню, а меню одно на оба
           таба, и прятать ответ на вкладке «Сущность» значило бы иногда не отвечать вовсе. */}
-      {manualLink !== null && (
-        <div
-          role="alert"
-          className="mx-auto mt-3 flex w-full max-w-3xl flex-col gap-2 rounded-control border border-line bg-surface-2 px-3 py-2"
-        >
-          <p className="text-sm text-text-secondary">
-            Буфер обмена недоступен — скопируйте ссылку вручную:
-          </p>
-          <div className="flex items-center gap-2">
-            <Input
-              aria-label="Ссылка на сущность"
-              readOnly
-              value={manualLink}
-              // Клик по полю выделяет адрес целиком: копировать руками половину UUID —
-              // ровно та беда, ради которой этот запасной путь и заведён.
-              onFocus={(e) => e.currentTarget.select()}
-              className="min-w-0 flex-1"
-            />
-            <Button variant="outline" size="sm" onClick={() => setManualLink(null)}>
-              Скрыть
-            </Button>
-          </div>
-        </div>
+      {manualLink !== null && manualLink.id === entityId && (
+        <ManualLinkNotice url={manualLink.url} onHide={() => setManualLink(null)} />
       )}
       {/* Табы «Сущность/Тред» — под шапкой; контент центрирован, шапка — на всю ширину. */}
       <div className="mx-auto w-full max-w-3xl">
@@ -234,6 +221,38 @@ function BodyEditor({ initial, onSave }: { initial: string; onSave: (body: strin
       onBlur={() => value !== serverBody && onSave(value)}
       className="min-h-24 w-full resize-none rounded-lg bg-transparent px-2 py-1.5 text-sm leading-relaxed transition placeholder:text-text-muted hover:bg-surface-2/60 focus:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
     />
+  );
+}
+
+/**
+ * Запасной путь копирования: буфер отказал — показываем сам адрес, чтобы его можно было
+ * взять руками. Живёт ВНЕ табов (ссылку просят из меню, а меню одно на оба таба, и
+ * прятать ответ на вкладке «Сущность» значило бы иногда не отвечать вовсе).
+ */
+function ManualLinkNotice({ url, onHide }: { url: string; onHide: () => void }) {
+  return (
+    <div
+      role="alert"
+      className="mx-auto mt-3 flex w-full max-w-3xl flex-col gap-2 rounded-control border border-line bg-surface-2 px-3 py-2"
+    >
+      <p className="text-sm text-text-secondary">
+        Буфер обмена недоступен — скопируйте ссылку вручную:
+      </p>
+      <div className="flex items-center gap-2">
+        <Input
+          aria-label="Ссылка на сущность"
+          readOnly
+          value={url}
+          // Клик по полю выделяет адрес целиком: копировать руками половину UUID —
+          // ровно та беда, ради которой этот запасной путь и заведён.
+          onFocus={(e) => e.currentTarget.select()}
+          className="min-w-0 flex-1"
+        />
+        <Button variant="outline" size="sm" onClick={onHide}>
+          Скрыть
+        </Button>
+      </div>
+    </div>
   );
 }
 

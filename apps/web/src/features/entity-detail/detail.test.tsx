@@ -2,6 +2,7 @@ import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { onlineManager } from '@tanstack/react-query';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
@@ -806,6 +807,90 @@ test('меню ⋮: Clipboard API нет вовсе (небезопасный к
   fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
 
   expect(await screen.findByLabelText('Ссылка на сущность')).toHaveValue(LINK_E1);
+});
+
+/**
+ * Как роутер: `<DetailScreen entityId={top.id} />` монтируется БЕЗ key (router.tsx),
+ * поэтому переход entity→entity внутри таба (бэклинк, подзадача, блокировка) меняет
+ * только проп — инстанс тот же, состояние экрана переживает переход.
+ */
+function DetailHost() {
+  const [id, setId] = useState('e1');
+  return (
+    <>
+      <button type="button" data-testid="go-e2" onClick={() => setId('e2')}>
+        на e2
+      </button>
+      <DetailScreen entityId={id} />
+    </>
+  );
+}
+
+const twoEntitiesHandler: MockHandler = (path, input) => {
+  if (path === 'entity.get') {
+    const { id } = input as { id: string };
+    return {
+      entity: { ...entity, id, title: id === 'e1' ? 'Задача' : 'Другая' },
+      relations: [],
+      thread: null,
+    };
+  }
+  if (path === 'entity.update') return entity;
+  if (path === 'aspect.list') return [];
+  return {};
+};
+
+test('меню ⋮: плашка с ручной ссылкой не переезжает на другую сущность', async () => {
+  stubClipboard(() => Promise.reject(new Error('NotAllowedError')));
+  renderWithProviders(<DetailHost />, twoEntitiesHandler);
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
+  expect(await screen.findByLabelText('Ссылка на сущность')).toHaveValue(LINK_E1);
+
+  // Переход по бэклинку/подзадаче внутри таба: перемонтирования нет, меняется проп.
+  fireEvent.click(screen.getByTestId('go-e2'));
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Другая' })).toBeInTheDocument());
+
+  // Ссылка на СОСЕДНЮЮ сущность под заголовком этой — молча неверные данные ровно там,
+  // где заведён честный запасной путь. Плашки быть не должно вовсе.
+  expect(screen.queryByLabelText('Ссылка на сущность')).toBeNull();
+});
+
+test('меню ⋮: плашка с ручной ссылкой уходит по «Скрыть»', async () => {
+  stubClipboard(() => Promise.reject(new Error('NotAllowedError')));
+  renderWithProviders(<DetailScreen entityId="e1" />, menuHandler);
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
+  await screen.findByLabelText('Ссылка на сущность');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Скрыть' }));
+  expect(screen.queryByLabelText('Ссылка на сущность')).toBeNull();
+});
+
+test('меню ⋮: удавшееся копирование убирает плашку прошлого отказа', async () => {
+  // Разрешение сперва не дали, потом дали: плашка не должна остаться висеть рядом
+  // с тостом «Ссылка скопирована» — она утверждала бы, что буфер по-прежнему не работает.
+  const writeText = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('NotAllowedError'))
+    .mockResolvedValue(undefined);
+  stubClipboard(writeText);
+  renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <Toaster />
+    </>,
+    menuHandler,
+  );
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
+  await screen.findByLabelText('Ссылка на сущность');
+
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Скопировать ссылку' }));
+
+  expect(await screen.findByText('Ссылка скопирована')).toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByLabelText('Ссылка на сущность')).toBeNull());
 });
 
 test('меню ⋮: «Закрепить» шлёт user.updateSettings с этой сущностью', async () => {
