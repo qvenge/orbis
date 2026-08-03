@@ -62,6 +62,8 @@ function ThreadView({ threadId }: { threadId: string }) {
           isTyping={isSending}
           onRetry={retry}
           onReparse={reparse}
+          // §2.4: чип уходит тем же путём, что и Composer этого экрана (fast-path → LLM).
+          onPick={submit}
           emptyHint="Например: «обед 340» — Orbis разберёт сам"
         />
       )}

@@ -3,6 +3,7 @@ import { useEffect, useRef } from 'react';
 import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
 import { type CardHandlers, renderCards } from './cards/renderCards';
+import { readSuggestions, Suggestions } from './Suggestions';
 import type { ChatMessage } from './useChatThread';
 
 // Скелетон треда: три «пузыря» разной ширины (ChatScreen и ChatThread, этап 4).
@@ -21,6 +22,7 @@ export function MessageList({
   isTyping,
   onRetry,
   onReparse,
+  onPick,
   emptyHint,
 }: {
   messages: ChatMessage[];
@@ -28,9 +30,20 @@ export function MessageList({
   // Подсказка пустого треда. Fast-path («обед 340») уместен только в глобальном чате;
   // в треде сущности передаётся иная подсказка (или null — без подсказки).
   emptyHint?: string | null;
+  // §2.4: тап по чипу-продолжению. Экран передаёт СВОЙ обычный путь отправки
+  // (ChatScreen — fast-path submit, ChatThread — sendMessage). Не передан —
+  // чипов нет вовсе: кнопка, которая ничего не делает, хуже её отсутствия.
+  onPick?: (text: string) => void;
 } & CardHandlers) {
   // messages в DESC; для показа сверху-вниз (старые вверху) — reverse на рендере.
   const ordered = [...messages].reverse();
+
+  // Продолжения разговора живут только у ПОСЛЕДНЕГО показанного сообщения и только
+  // если это ответ ассистента (else-ветка рендера ловит и 'system' — проверка явная).
+  // Пока модель отвечает, чипы прошлого ответа скрыты: они уже неактуальны.
+  const last = ordered.at(-1);
+  const suggestions =
+    !isTyping && onPick && last?.role === 'assistant' ? readSuggestions(last.metadata) : [];
 
   // Автоскролл к последнему сообщению: на mount — мгновенно ('auto'), при добавлении
   // сообщений / появлении typing — плавно ('smooth'), но при prefers-reduced-motion всегда 'auto'.
@@ -88,6 +101,7 @@ export function MessageList({
           </article>
         ),
       )}
+      {onPick && <Suggestions items={suggestions} onPick={onPick} />}
       {isTyping && (
         <div
           data-testid="typing"

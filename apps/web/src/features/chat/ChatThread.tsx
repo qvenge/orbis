@@ -23,6 +23,8 @@ export function ChatThread({ threadId }: { threadId: string }) {
           messages={messages}
           isTyping={isSending}
           onRetry={retryMessage}
+          // §2.4: чип уходит тем же путём, что и Composer этого экрана (ai.sendMessage).
+          onPick={sendMessage}
           emptyHint="Обсуждение этой записи"
         />
       )}
