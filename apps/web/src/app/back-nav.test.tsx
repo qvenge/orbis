@@ -1,10 +1,17 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, test } from 'vitest';
 import { App } from '../App';
+import { installHistorySync } from '../app/history';
 import { useNav } from '../state/navigation';
 import { renderWithProviders } from '../test/harness';
 
-// Этап 3: кнопка «Назад» в ScreenHeader — pop на ОДИН уровень (не сброс до корня).
+// Этап 3: кнопка «Назад» в ScreenHeader — на ОДИН уровень (не сброс до корня).
+// Слайс 3 (D18): кнопка ведёт через историю браузера, поэтому стек в тесте набирается
+// настоящими push'ами при живой синхронизации — иначе записей истории под экраны нет,
+// и «назад» откатывать нечего. Результат жеста асинхронный (popstate следующим тиком).
+const E1 = '11111111-1111-4111-8111-111111111111';
+const E2 = '22222222-2222-4222-8222-222222222222';
+
 const ent = (id: string, title: string) => ({
   id,
   ownerId: 'u',
@@ -47,32 +54,27 @@ afterEach(() => {
   });
 });
 
-test('«Назад» снимает верхний экран стека (pop на уровень, не сброс до корня)', async () => {
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: {
-      chat: [],
-      browser: [
-        { kind: 'entity', id: 'e1' },
-        { kind: 'entity', id: 'e2' },
-      ],
-      agenda: [],
-      budget: [],
-    },
-  });
+test('«Назад» снимает верхний экран стека (на уровень, не сброс до корня)', async () => {
+  const uninstall = installHistorySync();
+  useNav.getState().switchTab('browser');
+  useNav.getState().push('browser', { kind: 'entity', id: E1 });
+  useNav.getState().push('browser', { kind: 'entity', id: E2 });
   renderWithProviders(<App />, handler);
 
   await waitFor(() => expect(screen.getByTestId('nav-back')).toBeInTheDocument());
   fireEvent.click(screen.getByTestId('nav-back'));
 
-  // Снят только верхний уровень — e1 остался (pop, не resetTabToRoot).
-  expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: 'e1' }]);
+  // Снят только верхний уровень — E1 остался (не resetTabToRoot).
+  await waitFor(() =>
+    expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: E1 }]),
+  );
 
   // Ещё раз назад — корень Browser, кнопки «Назад» больше нет.
   await waitFor(() => expect(screen.getByTestId('nav-back')).toBeInTheDocument());
   fireEvent.click(screen.getByTestId('nav-back'));
-  expect(useNav.getState().stacks.browser).toEqual([]);
+  await waitFor(() => expect(useNav.getState().stacks.browser).toEqual([]));
   await waitFor(() => expect(screen.queryByTestId('nav-back')).toBeNull());
+  uninstall();
 });
 
 test('на корневом экране кнопка «Назад» не рендерится', async () => {

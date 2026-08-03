@@ -9,6 +9,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { App } from '../../App';
+import { installHistorySync } from '../../app/history';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
 import { useToastStore } from '../../ui/toast-store';
@@ -488,6 +489,10 @@ test('страница целиком из шаблонов: строк нет, 
 // --- вход и роутер -----------------------------------------------------------------------
 
 test('вход §3.3: кнопка «Транзакции» в шапке Overview пушит budget-transactions; роутер рендерит экран', async () => {
+  // D18: «Назад» ведёт через историю браузера — синхронизацию ставим до входа на экран,
+  // чтобы под ним появилась запись истории (у «Транзакций» своего маршрута нет, шаг стека
+  // держит глубина в history.state).
+  const uninstall = installHistorySync();
   renderWithProviders(<App />, handler());
   await waitFor(() => expect(screen.getByTestId('balance-card')).toBeInTheDocument());
 
@@ -496,5 +501,6 @@ test('вход §3.3: кнопка «Транзакции» в шапке Overvi
 
   await waitFor(() => expect(screen.getAllByTestId('tx-row')).toHaveLength(3));
   fireEvent.click(screen.getByTestId('nav-back'));
-  expect(useNav.getState().stacks.budget).toEqual([]);
+  await waitFor(() => expect(useNav.getState().stacks.budget).toEqual([]));
+  uninstall();
 });

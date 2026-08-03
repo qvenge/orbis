@@ -68,14 +68,20 @@ export function openSettings() {
   if (stack[stack.length - 1]?.kind !== 'settings') push(activeTab, { kind: 'settings' });
 }
 
-// Открыть Budget Overview — КОРЕНЬ вкладки Budget (D6c п.4): «К бюджету» после импорта
-// должна вести именно туда, а не на предыдущий экран стека (pop давал detail транзакции,
-// открытый до импорта). resetTabToRoot до switchTab: switchTab по УЖЕ активному табу
-// сворачивает стек сам (§1.1), по неактивному — только переключает, стек оставляя как был.
-export function openBudgetOverview() {
-  const { activeTab, switchTab, resetTabToRoot } = useNav.getState();
-  resetTabToRoot('budget');
-  if (activeTab !== 'budget') switchTab('budget');
+// Закрыть текущий экран и встать на КОРЕНЬ вкладки Budget (D6c п.4): «К бюджету» после
+// импорта должна вести именно туда, а не на предыдущий экран стека (pop давал detail
+// транзакции, открытый до импорта), и экран импорта надо снять со стека, где его открыли
+// (импорт входится и из чата).
+// ОДИН setState, а не пара действий: каждое изменение видимой позиции — отдельная запись
+// в истории браузера (D18, app/history.ts), и пара «pop, потом switchTab» оставила бы
+// промежуточную позицию, которой пользователь не видел, — первый «назад» залип бы на ней.
+// Порядок ключей значим: при activeTab === 'budget' поздний `budget: []` перекрывает
+// вычисляемый ключ, то есть вкладка честно сворачивается до Overview.
+export function closeToBudgetOverview() {
+  useNav.setState((s) => ({
+    activeTab: 'budget',
+    stacks: { ...s.stacks, [s.activeTab]: s.stacks[s.activeTab].slice(0, -1), budget: [] },
+  }));
 }
 
 // Открыть закреплённую сущность из глобального sidebar: активный таб — browser,

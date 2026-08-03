@@ -12,9 +12,9 @@ import { newId, type RolloverPreview } from '@orbis/shared';
 import { TRPCClientError } from '@trpc/client';
 import { CheckCheck } from 'lucide-react';
 import { useState } from 'react';
+import { goBack } from '../../app/history';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { formatAmount } from '../../lib/format';
-import { useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -67,9 +67,10 @@ function useRolloverSubmit(month: string) {
       return;
     }
     await invalidateBudget(utils);
-    // Успех: экран закрывается (§3.5 — один batch, одна запись журнала, Undo из чата)
-    const { activeTab, pop } = useNav.getState();
-    pop(activeTab);
+    // Успех: экран закрывается (§3.5 — один batch, одна запись журнала, Undo из чата).
+    // Через историю (D18), а не прямым pop: pop при живой синхронизации добавил бы запись
+    // истории, и следующий системный «назад» вернул бы на закрытый экран.
+    goBack();
   }
 
   return { submit, error, pending: rollover.isPending };

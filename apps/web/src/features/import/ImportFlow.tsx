@@ -25,7 +25,7 @@ import {
 import { TRPCClientError } from '@trpc/client';
 import { useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
-import { openBudgetOverview, useNav } from '../../state/navigation';
+import { closeToBudgetOverview, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -685,14 +685,12 @@ function ResultCard({
         size="sm"
         variant="outline"
         className="self-end"
-        onClick={() => {
-          // D6c п.4: экран импорта снимаем со стека, где его открыли (импорт входится и
-          // из чата), и открываем именно Overview вкладки Budget — прежний pop возвращал
-          // на предыдущий экран того же стека, чем бы он ни был.
-          const { activeTab, pop } = useNav.getState();
-          pop(activeTab);
-          openBudgetOverview();
-        }}
+        // D6c п.4: экран импорта снимаем со стека, где его открыли (импорт входится и
+        // из чата), и открываем именно Overview вкладки Budget — прежний pop возвращал
+        // на предыдущий экран того же стека, чем бы он ни был. Это переход ВПЕРЁД
+        // к заданному экрану, а не «назад», поэтому не goBack, — но одним шагом стора,
+        // чтобы в истории браузера осталась одна запись (см. closeToBudgetOverview).
+        onClick={closeToBudgetOverview}
       >
         К бюджету
       </Button>

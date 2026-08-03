@@ -5,7 +5,8 @@
 // честная ошибка + новый id, уроки B4), needsSetup-форма первого месяца (§5 edge case:
 // доход + оценки по категориям → те же rows).
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test } from 'vitest';
+import { installHistorySync } from '../../app/history';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
 import { RolloverScreen } from './RolloverScreen';
@@ -92,12 +93,23 @@ const handler =
     return {};
   };
 
+// D18: экран закрывается через историю браузера, значит запись истории под него должна
+// существовать — синхронизацию ставим, а сам экран открываем настоящим push'ем.
+let uninstallHistory: () => void = () => {};
+
 beforeEach(() => {
   localStorage.clear();
   useNav.setState({
     activeTab: 'budget',
-    stacks: { chat: [], browser: [], agenda: [], budget: [{ kind: 'budget-rollover' }] },
+    stacks: { chat: [], browser: [], agenda: [], budget: [] },
   });
+  window.history.replaceState(null, '', '/budget');
+  uninstallHistory = installHistorySync();
+  useNav.getState().push('budget', { kind: 'budget-rollover' });
+});
+
+afterEach(() => {
+  uninstallHistory();
 });
 
 const rolloverCalls = (calls: { path: string; input: unknown }[]) =>

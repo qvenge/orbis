@@ -7,6 +7,7 @@ import type { CategoryTrendPoint, EnvelopeStatus } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { App } from '../../App';
+import { installHistorySync } from '../../app/history';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
 import { CategoryScreen } from './CategoryScreen';
@@ -100,6 +101,17 @@ const handler =
   ): MockHandler =>
   (path, input) => {
     if (path === 'user.getSettings') return settings;
+    // Корень вкладки Budget — куда возвращает «Назад» в router-тесте ниже.
+    if (path === 'budget.overview')
+      return {
+        period: { start: '2026-07-01', end: '2026-07-31' },
+        balance: { income: '0.00', expense: '0.00', balance: '0.00' },
+        envelopes: [],
+        comingUp: [],
+        planned: [],
+        unbudgeted: [],
+        alertCount: 0,
+      };
     if (path === 'entity.get')
       return {
         entity: over.body === undefined ? category : { ...category, body: over.body },
@@ -400,20 +412,16 @@ test('[+ запись] показывает quick-add с зафиксирова�
 // --- интеграция с router: budget-category в стеке рендерит CategoryScreen -------------------
 
 test('ScreenRef budget-category рендерит CategoryScreen вместо заглушки; «Назад» возвращает', async () => {
-  useNav.setState({
-    activeTab: 'budget',
-    stacks: {
-      chat: [],
-      browser: [],
-      agenda: [],
-      budget: [{ kind: 'budget-category', id: 'cat-1' }],
-    },
-  });
+  // D18: «Назад» ведёт через историю браузера — экран открываем настоящим push'ем при
+  // живой синхронизации, иначе записи истории под него нет и откатывать нечего.
+  const uninstall = installHistorySync();
+  useNav.getState().push('budget', { kind: 'budget-category', id: 'cat-1' });
   renderWithProviders(<App />, handler());
 
   await waitFor(() => expect(screen.getByRole('heading', { name: /🍔 Еда/ })).toBeInTheDocument());
   expect(screen.queryByText(/Task B3/)).toBeNull(); // заглушки больше нет
 
   fireEvent.click(screen.getByTestId('nav-back'));
-  expect(useNav.getState().stacks.budget).toEqual([]);
+  await waitFor(() => expect(useNav.getState().stacks.budget).toEqual([]));
+  uninstall();
 });
