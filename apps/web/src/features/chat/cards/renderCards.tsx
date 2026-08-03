@@ -21,71 +21,106 @@ export type CardHandlers = {
   onReparse?: (entityId: string, text: string) => void;
 };
 
+type CardsMeta = {
+  cards?: Card[];
+  author_kind?: string;
+  retryId?: string;
+  retryText?: string;
+  fastPath?: FastPathMeta;
+};
+
+function readMeta(msg: ChatMessage): { meta: CardsMeta; cards: Card[]; confirmed: boolean } {
+  const meta = (msg.metadata ?? {}) as CardsMeta;
+  return {
+    meta,
+    cards: meta.cards ?? [],
+    // Fast-path-карточка «⏳» (pending) ещё НЕ на сервере — остаток конверта §4.1 ей
+    // недоступен (как «Разобрать с AI» ниже); карточки без fastPath-меты серверные.
+    confirmed: meta.fastPath === undefined || meta.fastPath.status === 'confirmed',
+  };
+}
+
+/**
+ * Текст сообщения дублирует заголовок карточки, которую лента ФАКТИЧЕСКИ отрисовала?
+ * Тогда абзац печатать не нужно (MessageList): audit-сообщение действия несёт
+ * content = заголовку записи (apps/server/src/executor/journal.ts), и в ленте выходило
+ * «Кофе» абзацем и «Кофе» карточкой подряд.
+ *
+ * Признак — ФАКТ рендера (renderCard вернул не null), а не список известных kind:
+ * список разъехался бы со switch'ем в renderCard, и рассинхрон стоил бы потери текста.
+ * Историческая карточка без kind и любой неизвестный kind уходят в default: return null —
+ * там абзац остаётся ЕДИНСТВЕННЫМ носителем смысла и обязан быть виден.
+ */
+export function contentDuplicatesCard(msg: ChatMessage, handlers: CardHandlers = {}): boolean {
+  const text = msg.content.trim();
+  if (text === '') return false;
+  const { meta, cards, confirmed } = readMeta(msg);
+  return cards.some(
+    (card, i) =>
+      'title' in card &&
+      typeof card.title === 'string' &&
+      card.title.trim() === text &&
+      renderCard(card, i, { msg, meta, handlers, confirmed }) !== null,
+  );
+}
+
+type CardCtx = {
+  msg: ChatMessage;
+  meta: CardsMeta;
+  handlers: CardHandlers;
+  confirmed: boolean;
+};
+
+/**
+ * Одна карточка: null — kind неизвестен (историческая форма, карточка из будущего).
+ * key — индекс карточки: карточки статичны в пределах сообщения. Подавлений правила
+ * noArrayIndexKey тут больше нет: рендер вынесен из .map, и правило сюда не достаёт.
+ */
+function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
+  const { msg, meta, handlers, confirmed } = ctx;
+  switch (card.kind) {
+    case 'entity_card':
+      return <EntityCard key={i} card={card} confirmed={confirmed} />;
+    case 'query_result':
+      return <QueryResultCard key={i} card={card} />;
+    case 'confirmation_card':
+      return <ConfirmationCard key={i} card={card} createdAt={msg.createdAt} />;
+    case 'import_review':
+      return <ImportReviewCard key={i} card={card} />;
+    case 'memory_rule_suggestion':
+      // §7.8: предложение правила памяти. memory_rule_declined своей ветки не имеет —
+      // его текст несёт content сообщения (см. types.ts).
+      // msg.id — ключ детерминированного id создаваемого правила (идемпотентность
+      // «Запомнить» между монтированиями), msg.createdAt — 24ч visual-expiry.
+      return <MemoryRuleCard key={i} card={card} messageId={msg.id} createdAt={msg.createdAt} />;
+    case 'error_card':
+      // §3: retryId+retryText есть → «Повторить» снимет этот error_card и перешлёт тем же id.
+      return (
+        <ErrorCard
+          key={i}
+          card={card}
+          onRetry={
+            meta.retryId && meta.retryText && handlers.onRetry
+              ? () =>
+                  handlers.onRetry?.({
+                    errorMessageId: msg.id,
+                    id: meta.retryId as string,
+                    content: meta.retryText as string,
+                  })
+              : undefined
+          }
+        />
+      );
+    default:
+      return null;
+  }
+}
+
 // Диспетчер по metadata.cards[]: серверный Card-union рендерится клиентом (Task 10).
 // author_kind==='agent' → всё сообщение оборачивается в SystemMessage (🤖 агент, 02 §2.3).
 export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): ReactNode {
-  const meta = (msg.metadata ?? {}) as {
-    cards?: Card[];
-    author_kind?: string;
-    retryId?: string;
-    retryText?: string;
-    fastPath?: FastPathMeta;
-  };
-  const cards = meta.cards ?? [];
-  // Fast-path-карточка «⏳» (pending) ещё НЕ на сервере — остаток конверта §4.1 ей
-  // недоступен (как «Разобрать с AI» ниже); карточки без fastPath-меты серверные.
-  const confirmed = meta.fastPath === undefined || meta.fastPath.status === 'confirmed';
-  const body = cards.map((card, i) => {
-    switch (card.kind) {
-      case 'entity_card':
-        // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
-        return <EntityCard key={i} card={card} confirmed={confirmed} />;
-      case 'query_result':
-        // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
-        return <QueryResultCard key={i} card={card} />;
-      case 'confirmation_card':
-        // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
-        return <ConfirmationCard key={i} card={card} createdAt={msg.createdAt} />;
-      case 'import_review':
-        // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
-        return <ImportReviewCard key={i} card={card} />;
-      case 'memory_rule_suggestion':
-        // §7.8: предложение правила памяти. memory_rule_declined своей ветки не имеет —
-        // его текст несёт content сообщения (см. types.ts).
-        // msg.id — ключ детерминированного id создаваемого правила (идемпотентность
-        // «Запомнить» между монтированиями), msg.createdAt — 24ч visual-expiry.
-        return (
-          <MemoryRuleCard
-            // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
-            key={i}
-            card={card}
-            messageId={msg.id}
-            createdAt={msg.createdAt}
-          />
-        );
-      case 'error_card':
-        // §3: retryId+retryText есть → «Повторить» снимет этот error_card и перешлёт тем же id.
-        return (
-          <ErrorCard
-            // biome-ignore lint/suspicious/noArrayIndexKey: карточки статичны в пределах сообщения
-            key={i}
-            card={card}
-            onRetry={
-              meta.retryId && meta.retryText && handlers.onRetry
-                ? () =>
-                    handlers.onRetry?.({
-                      errorMessageId: msg.id,
-                      id: meta.retryId as string,
-                      content: meta.retryText as string,
-                    })
-                : undefined
-            }
-          />
-        );
-      default:
-        return null;
-    }
-  });
+  const { meta, cards, confirmed } = readMeta(msg);
+  const body = cards.map((card, i) => renderCard(card, i, { msg, meta, handlers, confirmed }));
 
   // «Разобрать с AI» — только у подтверждённой fast-карточки (офлайн «⏳» недоступна до confirm).
   const fp = meta.fastPath;

@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { renderWithProviders } from '../../test/harness';
 import { MessageList } from './MessageList';
 import type { ChatMessage } from './useChatThread';
 
@@ -184,6 +185,66 @@ test('без обработчика onPick чипы не рендерятся (�
     />,
   );
   expect(screen.queryByRole('button', { name: 'что по бюджету?' })).not.toBeInTheDocument();
+});
+
+// --- C3: audit-сообщение действия в ленте --------------------------------------------
+// Сервер пишет audit-строку с content = заголовку записи и той же строкой в заголовке
+// карточки (apps/server/src/executor/journal.ts) — до правила ниже лента печатала
+// «Кофе» абзацем и «Кофе» карточкой подряд. Тесты идут через настоящий путь ленты
+// (MessageList → renderCards → EntityCard), а не через renderCards напрямую.
+
+const auditMsg = (content: string, cards: unknown[]): ChatMessage =>
+  ({ ...msg('s1', content), role: 'system', metadata: { cards } }) as ChatMessage;
+
+const entityCard = (title: string) => ({
+  kind: 'entity_card',
+  entityId: 'e1',
+  title,
+  aspects: [],
+  keyFields: {},
+  undoActionId: 'a1',
+});
+
+test('audit fast-path из истории: карточка отрисована, а заголовок напечатан ОДИН раз', () => {
+  renderWithProviders(
+    <MessageList messages={[auditMsg('Кофе', [entityCard('Кофе')])]} isTyping={false} />,
+  );
+  expect(screen.getByTestId('entity-card')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /отменить/i })).toBeInTheDocument();
+  const hits = screen.getAllByText('Кофе');
+  expect(hits).toHaveLength(1);
+  // Уцелевший заголовок — тот, что внутри карточки (а не абзац вместо карточки).
+  expect(screen.getByTestId('entity-card')).toContainElement(hits[0] ?? null);
+});
+
+test('историческая карточка без kind не отрисовалась → текст ОСТАЁТСЯ (иначе потеря содержимого)', () => {
+  // Форма до C3 (executor/types.ts ActionCard): renderCards уходит в default → null.
+  renderWithProviders(
+    <MessageList
+      messages={[auditMsg('Кофе', [{ tool: 'entity_create', entity_id: 'e1', title: 'Кофе' }])]}
+      isTyping={false}
+    />,
+  );
+  expect(screen.queryByTestId('entity-card')).toBeNull();
+  expect(screen.getByText('Кофе')).toBeInTheDocument();
+});
+
+test('неизвестный kind с тем же заголовком: текст ОСТАЁТСЯ (правило смотрит на факт рендера)', () => {
+  renderWithProviders(
+    <MessageList
+      messages={[auditMsg('Кофе', [{ kind: 'card_from_the_future', title: 'Кофе' }])]}
+      isTyping={false}
+    />,
+  );
+  expect(screen.getByText('Кофе')).toBeInTheDocument();
+});
+
+test('текст сообщения ≠ заголовку карточки: печатаются оба', () => {
+  renderWithProviders(
+    <MessageList messages={[auditMsg('Записал без AI', [entityCard('Кофе')])]} isTyping={false} />,
+  );
+  expect(screen.getByText('Записал без AI')).toBeInTheDocument();
+  expect(screen.getByTestId('entity-card')).toHaveTextContent('Кофе');
 });
 
 test('мусор в metadata.suggestions игнорируется, пустые строки отброшены', () => {

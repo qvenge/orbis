@@ -2,7 +2,7 @@ import { MessageSquare } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
-import { type CardHandlers, renderCards } from './cards/renderCards';
+import { type CardHandlers, contentDuplicatesCard, renderCards } from './cards/renderCards';
 import { readSuggestions, Suggestions } from './Suggestions';
 import type { ChatMessage } from './useChatThread';
 
@@ -96,7 +96,15 @@ export function MessageList({
             data-role={m.role}
             className="flex w-full max-w-[92%] flex-col gap-2 self-start text-sm text-text"
           >
-            {m.content && <p className="leading-relaxed">{m.content}</p>}
+            {/* Абзац снимается, только если его текст ДОСЛОВНО повторяет заголовок
+                отрисованной карточки (audit-строка действия, executor/journal.ts):
+                печатать «Кофе» абзацем и «Кофе» карточкой подряд — шум. Карточка не
+                отрисовалась → текст остаётся (см. contentDuplicatesCard).
+                Пузырь пользователя правилу не подчиняется намеренно: там текст — то,
+                что человек написал сам, и прятать его нельзя ни при каком совпадении. */}
+            {m.content && !contentDuplicatesCard(m, { onRetry, onReparse }) && (
+              <p className="leading-relaxed">{m.content}</p>
+            )}
             {renderCards(m, { onRetry, onReparse })}
           </article>
         ),

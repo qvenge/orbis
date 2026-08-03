@@ -13,6 +13,7 @@ import { ensureGlobalThread } from '../chat/threads';
 import { chatMessages, chatThreads } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
+import type { Card } from '../tools/registry';
 import { pgErrorInfo } from './executor';
 import type { ActionCard, ActionRecord, JournalSink, JournalWrite, MutationSource } from './types';
 import { AuditIdConflictError } from './types';
@@ -35,15 +36,14 @@ import { AuditIdConflictError } from './types';
  */
 const FEED_CARD_SOURCES: ReadonlySet<MutationSource> = new Set<MutationSource>(['fast_path']);
 
-/** Карточка ленты (зеркало EntityCardData из apps/web/src/features/chat/cards/types.ts). */
-interface FeedEntityCard {
-  kind: 'entity_card';
-  entityId: string;
-  title: string;
-  aspects: string[];
-  keyFields: Record<string, unknown>;
-  undoActionId: string;
-}
+/**
+ * Карточка ленты — ВЕТКА серверного union'а Card (tools/registry.ts), а не копия его
+ * полей: копий формы и так две (registry + web types.ts), третья молча отстала бы при
+ * добавлении поля. Импорт type-only, цикла нет (registry тянет только shared/drizzle/zod/db).
+ * Локальное ужесточение: у журнальной карточки undoActionId есть ВСЕГДА (в union он
+ * опционален — у карточек LLM-ответа Undo может не быть).
+ */
+type FeedEntityCard = Extract<Card, { kind: 'entity_card' }> & { undoActionId: string };
 
 /**
  * Что ляжет в metadata.cards[0]. Вне белого списка — сегодняшняя ActionCard дословно.
