@@ -1,6 +1,25 @@
 import { X } from 'lucide-react';
 import { Dialog as RD } from 'radix-ui';
-import type { ReactNode } from 'react';
+import { type ReactNode, useRef } from 'react';
+
+/**
+ * Опора последней открывавшейся модалки. Нужна на ЭСТАФЕТЕ: «Редактировать как текст»
+ * закрывает форму и открывает строковый редактор, и к первому рендеру второй модалки фокус
+ * стоит внутри первой — через миг её не будет в документе. Опорой такой элемент быть не
+ * может, а настоящий открыватель (кнопка «Настроить») у обеих модалок один и тот же.
+ *
+ * Модуль, а не состояние компонента: модалки в эстафете — не родитель и ребёнок, а соседи
+ * во времени, общего места для памяти у них нет. Устареть значение не может: при закрытии
+ * опора проверяется на присутствие в документе.
+ */
+let handoffOpener: HTMLElement | null = null;
+
+/** Кому вернуть фокус: то, что было в фокусе, а на эстафете модалок — опора предыдущей. */
+function captureOpener(): HTMLElement | null {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || active === document.body) return handoffOpener;
+  return active.closest('[role="dialog"]') === null ? active : handoffOpener;
+}
 
 export function Dialog({
   open,
@@ -20,12 +39,41 @@ export function Dialog({
   onOpenAutoFocus?: (e: Event) => void;
   children: ReactNode;
 }) {
+  /**
+   * Куда вернуть фокус при закрытии. Radix в модальном режиме гасит собственное
+   * восстановление FocusScope (его onCloseAutoFocus безусловно делает preventDefault) и
+   * фокусирует ТРИГГЕР — а триггера у этого примитива нет: модалку монтируют условно, и
+   * RD.Trigger здесь не рендерится. Фокус уходил на <body>: после «Сохранить», «Отмена»,
+   * Esc, крестика и клика по подложке до соседней кнопки надо было таббать с начала
+   * страницы (на detail сидированного Daily Planning виджетов три).
+   *
+   * Опора снимается на первом рендере ОТКРЫТОЙ модалки — до того, как Radix увёл фокус
+   * внутрь (его фокус-ловушка работает эффектом, то есть уже после этой строки). Открытие
+   * этим не задето: onOpenAutoFocus остаётся целиком за вызывающим.
+   */
+  const opener = useRef<HTMLElement | null>(null);
+  const wasOpen = useRef(false);
+  if (open && !wasOpen.current) {
+    opener.current = captureOpener();
+    handoffOpener = opener.current;
+  }
+  wasOpen.current = open;
+
   return (
     <RD.Root open={open} onOpenChange={onOpenChange}>
       <RD.Portal>
         <RD.Overlay className="fixed inset-0 z-50 bg-overlay" />
         <RD.Content
           onOpenAutoFocus={onOpenAutoFocus}
+          onCloseAutoFocus={(e) => {
+            // Опоры нет или её уже нет в документе (модалку открыли из того, что успело
+            // перерисоваться) — не мешаем Radix: хуже, чем его <body>, не будет, а фокус
+            // на оторванном узле просто пропал бы вместе с ним.
+            const el = opener.current;
+            if (el === null || !el.isConnected) return;
+            e.preventDefault();
+            el.focus();
+          }}
           // Radix проставляет content'у aria-describedby на свой Description, а его здесь
           // нет — ссылка вела бы в никуда, и скринридер объявлял бы описание, которого не
           // существует. Явный undefined снимает и ссылку, и предупреждение Radix.

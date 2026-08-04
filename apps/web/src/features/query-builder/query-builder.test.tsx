@@ -269,6 +269,47 @@ test('body сменился под открытой модалкой — пра�
   expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
 });
 
+// Radix в модальном режиме гасит восстановление фокуса FocusScope и фокусирует ТРИГГЕР, а
+// ui/Dialog его не рендерит (модалку монтируют условно) — фокус уходил на <body>, и до
+// следующей кнопки «Настроить» надо было таббать с начала страницы. На сидированном Daily
+// Planning блоков три, и цена этого — три прохода табом за одну правку.
+test('после закрытия модалки фокус возвращается на кнопку, которой её открыли', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
+  await waitFor(() => expect(screen.getAllByTestId('qb-configure')).toHaveLength(2));
+  const button = screen.getAllByTestId('qb-configure')[1] as HTMLElement;
+  button.focus();
+
+  fireEvent.click(button);
+  const dialog = await screen.findByRole('dialog');
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Отмена' }));
+  await waitFor(() => expect(button).toHaveFocus());
+
+  // Esc и крестик — тот же выход, и фокусу положено вернуться так же.
+  fireEvent.click(button);
+  const again = await screen.findByRole('dialog');
+  fireEvent.keyDown(again, { key: 'Escape' });
+  await waitFor(() => expect(button).toHaveFocus());
+});
+
+// «Редактировать как текст» — эстафета между модалками: форма уходит, строковый редактор
+// приходит, и к его первому рендеру фокус стоит внутри УМИРАЮЩЕЙ модалки. Опорой такой
+// элемент быть не может (через миг его не будет в документе), и опора наследуется от
+// предыдущей модалки — кнопкой «Настроить» открыли обе.
+test('после перехода «в текст» фокус возвращается на ту же «Настроить»', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
+  await waitFor(() => expect(screen.getAllByTestId('qb-configure')).toHaveLength(2));
+  const button = screen.getAllByTestId('qb-configure')[0] as HTMLElement;
+  button.focus();
+
+  fireEvent.click(button);
+  const form = await screen.findByRole('dialog');
+  fireEvent.click(await within(form).findByRole('button', { name: 'Редактировать как текст' }));
+  const text = await screen.findByRole('dialog');
+  fireEvent.click(within(text).getByRole('button', { name: 'Отмена' }));
+
+  await waitFor(() => expect(button).toHaveFocus());
+});
+
 test('кнопка «Настроить» — настоящая кнопка с доступным именем', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
   const buttons = await screen.findAllByRole('button', { name: 'Настроить' });
