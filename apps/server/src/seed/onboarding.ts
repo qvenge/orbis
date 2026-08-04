@@ -1,7 +1,7 @@
 // apps/server/src/seed/onboarding.ts
-// Онбординг-сидирование (02 §7): 12 категорий §7.1 + 8 smart lists §7.2 (три исходных +
-// пять горизонтов планирования, E4) + настройки §7.3 + глобальный тред §7.3. Один раз на
-// пользователя; повтор дублей не создаёт (§7).
+// Онбординг-сидирование (02 §7): 12 категорий §7.1 + 5 smart lists §7.2 (три исходных +
+// два верхних горизонта планирования, E4) + настройки §7.3 + глобальный тред §7.3. Один раз
+// на пользователя; повтор дублей не создаёт (§7).
 //
 // РЕШЕНИЕ 6 ПЛАНА: сид пишет НАПРЯМУЮ в tx под withIdentity, МИМО executor и журнала
 // действий (§7.8). Обоснование: 15 audit-сообщений при регистрации — это шум в ленте
@@ -40,10 +40,11 @@ export function seedSmartListId(ownerId: string, slug: string): string {
 // включается по наличию этого id в installedViews. Серверная деталь — не в shared.
 export const BUDGET_VIEW_ID = 'orbis-budget';
 
-// Единственный горизонт, попадающий в сайдбар (E4): остальные четыре ищутся в Browser
-// по тегу smart-list. Закрепление не бесплатно — у каждой pinned-сущности web держит
-// entity.get + entity.count, и count пересчитывается на КАЖДОЙ инвалидации графа.
-const PINNED_HORIZON_SLUG = 'horizon-day';
+// Единственный горизонт, попадающий в сайдбар (E4): «Жизнь» ищется в Browser по тегу
+// smart-list. Закрепление не бесплатно — у каждой pinned-сущности web держит entity.get +
+// entity.count, и count пересчитывается на КАЖДОЙ инвалидации графа; «Год» этого стоит
+// (цели — то, ради чего фаза существует), периодическая ревизия «Жизни» — нет.
+const PINNED_HORIZON_SLUG = 'horizon-year';
 
 export interface SeedResult {
   seeded: boolean; // false — уже было (одноразовость §7)
@@ -102,21 +103,21 @@ export async function seedOnboarding(
     updatedAt: now,
   }));
 
-  // 8 smart lists §7.2 — сущности с тегом smart-list и body-query-блоками (§3.3):
-  // три исходных плюс пять горизонтов планирования (E4).
+  // 5 smart lists §7.2 — сущности с тегом smart-list и body-query-блоками (§3.3):
+  // три исходных плюс два верхних горизонта планирования, «Год» и «Жизнь» (E4).
   const smartListRows = SEED_SMART_LISTS.map((s) => smartListRow(ownerId, s, now));
 
-  // Одна вставка на все 20 сущностей: детерминированный порядок id снимает риск взаимной
+  // Одна вставка на все 17 сущностей: детерминированный порядок id снимает риск взаимной
   // блокировки конкурентных сидов (обе транзакции блокируются на первой общей строке).
   await tx
     .insert(entities)
     .values([...categoryRows, ...smartListRows])
     .onConflictDoNothing();
 
-  // Настройки §7.3 — дефолты; pinnedEntities в порядке daily/upcoming/allTasks/«День»
-  // (§7.2, §4.4). Из пяти горизонтов закреплён ТОЛЬКО «День»: закреплённая сущность
-  // стоит entity.count на каждую инвалидацию графа (web, lib/invalidate.ts), а неделя/
-  // месяц/год/жизнь открываются периодически — их находит Browser по тегу smart-list.
+  // Настройки §7.3 — дефолты; pinnedEntities в порядке daily/upcoming/allTasks/«Год»
+  // (§7.2, §4.4). Из двух горизонтов закреплён ТОЛЬКО «Год»: закреплённая сущность стоит
+  // entity.count на каждую инвалидацию графа (web, lib/invalidate.ts), а «Жизнь»
+  // открывают раз в год — её находит Browser по тегу smart-list.
   await tx
     .insert(userSettings)
     .values({
@@ -157,20 +158,31 @@ function smartListRow(ownerId: string, list: SeedSmartList, now: Date) {
 }
 
 /**
- * Бэкфилл E4 (§7.2): пользователь, засиденный ДО слайса 3, не имеет горизонтов
- * планирования. Guard-ветка выходит из сида ДО всех вставок, поэтому «просто повторить
+ * Бэкфилл E4 (§7.2): пользователь, засиденный ДО слайса 3, не имеет горизонтов «Год» и
+ * «Жизнь». Guard-ветка выходит из сида ДО всех вставок, поэтому «просто повторить
  * сидирование» их не досеет — нужен явный бэкфилл, как у orbis-budget (A9).
  *
- * Идемпотентность: id горизонтов детерминированы (uuidv5 от слага), ON CONFLICT DO NOTHING
- * гасит повтор; закрепление «Дня» дописывается только при отсутствии его id в pinnedEntities
- * (jsonb-containment по одному ключу `id`, порядковый номер значения не важен), поэтому
- * повторные запуски не плодят ни сущностей, ни строк сайдбара, а кастомные закрепления
- * и прочие поля настроек остаются нетронутыми (updated_at сдвигается лишь при фактической
- * правке — иначе web-синк LWW дёргался бы на каждом старте сессии).
+ * ПОЧЕМУ СВОЙ НАБОР, А НЕ ОБЩИЙ SEED_SMART_LISTS. Бэкфилл досевает ровно то, что добавила
+ * ЭТА миграция, а не «всё, чего не хватает»: общий проход воскрешал бы Daily Planning или
+ * All Tasks, удалённые пользователем осознанно, — сид не отличает «никогда не было» от
+ * «удалено». Цена — следующему сидированному списку понадобится такой же адресный бэкфилл
+ * (третья копия механизма); это осознанный размен на неприкосновенность чужих удалений.
  *
- * Цена решения: удалённый пользователем горизонт следующий вызов сидирования воскресит —
- * ровно то же поведение, что у бэкфилла orbis-budget. Сидирование зовётся раз за сессию
- * (OnboardingGate), «удалить навсегда» здесь не выражается.
+ * Идемпотентность: id горизонтов детерминированы (uuidv5 от слага), ON CONFLICT DO NOTHING
+ * гасит повтор и НЕ перетирает тело, если пользователь правил список; закрепление «Года»
+ * дописывается только при отсутствии его id в pinnedEntities (jsonb-containment по одному
+ * ключу `id`, порядковый номер значения не важен), поэтому повторные запуски не плодят ни
+ * сущностей, ни строк сайдбара, а кастомные закрепления и прочие поля настроек остаются
+ * нетронутыми (updated_at сдвигается лишь при фактической правке — иначе web-синк LWW
+ * дёргался бы на каждом старте сессии). `order` нового пина — max(order)+1, а НЕ длина
+ * массива: после открепления в порядковых номерах остаются дыры ([0, 7] — длина 2), и по
+ * длине новый пин встал бы в середину сайдбара.
+ *
+ * Цена решения — ДВЕ формы отката, которые сид не переживает: удалённый пользователем
+ * горизонт следующий вызов сидирования воскресит, а откреплённый «Год» вернёт в сайдбар
+ * (containment не отличает «никогда не закрепляли» от «открепили»). Ровно то же поведение,
+ * что у бэкфилла orbis-budget. Сидирование зовётся раз за сессию (OnboardingGate);
+ * «удалить/открепить навсегда» здесь не выражается, а UI открепления сегодня и нет (02 §3.2).
  */
 async function backfillHorizons(tx: Tx, ownerId: string, now: Date): Promise<void> {
   await tx
@@ -178,14 +190,18 @@ async function backfillHorizons(tx: Tx, ownerId: string, now: Date): Promise<voi
     .values(SEED_HORIZON_LISTS.map((list) => smartListRow(ownerId, list, now)))
     .onConflictDoNothing();
 
-  const dayId = seedSmartListId(ownerId, PINNED_HORIZON_SLUG);
+  const pinId = seedSmartListId(ownerId, PINNED_HORIZON_SLUG);
   await tx.execute(
     sql`UPDATE user_settings
         SET "pinnedEntities" = "pinnedEntities" || jsonb_build_array(
-              jsonb_build_object('id', ${dayId}::text, 'order', jsonb_array_length("pinnedEntities"))
+              jsonb_build_object('id', ${pinId}::text, 'order',
+                COALESCE(
+                  (SELECT max((p->>'order')::int) FROM jsonb_array_elements("pinnedEntities") p),
+                  -1
+                ) + 1)
             ),
             updated_at = ${now.toISOString()}::timestamptz
         WHERE owner_id = ${ownerId}
-          AND NOT ("pinnedEntities" @> jsonb_build_array(jsonb_build_object('id', ${dayId}::text)))`,
+          AND NOT ("pinnedEntities" @> jsonb_build_array(jsonb_build_object('id', ${pinId}::text)))`,
   );
 }

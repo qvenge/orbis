@@ -26,7 +26,7 @@ afterAll(async () => {
 });
 
 describe('user.exportData (§9.4)', () => {
-  test('после сидирования: 20 сущностей, настройки, глобальный тред, 0 aspectDefinitions', async () => {
+  test('после сидирования: 17 сущностей, настройки, глобальный тред, 0 aspectDefinitions', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
@@ -37,7 +37,7 @@ describe('user.exportData (§9.4)', () => {
     expect(typeof exp.exportedAt).toBe('string');
     expect(exp.exportedAt.endsWith('Z')).toBe(true);
 
-    expect(exp.entities.length).toBe(20);
+    expect(exp.entities.length).toBe(17);
     for (const e of exp.entities) expect(() => entitySchema.parse(e)).not.toThrow();
 
     expect(exp.userSettings).not.toBeNull();
