@@ -1066,7 +1066,12 @@ test('в правку можно войти с клавиатуры: кнопк�
   expect(button.tagName).toBe('BUTTON');
 
   fireEvent.click(button);
-  expect(await screen.findByTestId('body-edit')).toHaveValue('тело');
+  const ta = await screen.findByTestId('body-edit');
+  expect(ta).toHaveValue('тело');
+  // Фокус уже в поле, каретка — в конце текста: без этого клавиатурный путь обрывался бы
+  // на полдороге (поле открыли, а печатать некуда), а мышиный требовал бы второго клика.
+  expect(ta).toHaveFocus();
+  expect((ta as HTMLTextAreaElement).selectionStart).toBe('тело'.length);
 });
 
 test('клик по выделенному тексту тела не съедает выделение', async () => {
