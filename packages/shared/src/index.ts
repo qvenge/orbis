@@ -13,6 +13,7 @@ export * from './memory/rule';
 export * from './nav/links';
 export * from './query/grammar';
 export * from './query/parse';
+export * from './query/serialize';
 export * from './recurrence';
 export * from './schemas/aspects';
 export * from './schemas/entity';
