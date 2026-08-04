@@ -44,6 +44,16 @@ beforeEach(() => {
   });
 });
 
+/**
+ * Тело записи по умолчанию ПОКАЗАНО (markdown, C4b) — textarea появляется по явному
+ * действию. Один хелпер на все проверки правки: девятнадцать копий «сперва кликнуть»
+ * разъехались бы при первой же смене жеста.
+ */
+async function openBodyEditor(): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByTestId('body-view'));
+  return await screen.findByTestId('body-edit');
+}
+
 test('чекбокс task → entity.update status=done + completed_at', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
@@ -76,9 +86,9 @@ test('inline body-правка шлёт expectedUpdatedAt = точная стр�
     if (path === 'aspect.list') return [];
     return {};
   });
-  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
-  fireEvent.change(screen.getByTestId('body-edit'), { target: { value: 'новое' } });
-  fireEvent.blur(screen.getByTestId('body-edit'));
+  const ta = await openBodyEditor();
+  fireEvent.change(ta, { target: { value: 'новое' } });
+  fireEvent.blur(ta);
   await waitFor(() => {
     const c = calls.find(
       (x) => x.path === 'entity.update' && (x.input as { body?: string }).body === 'новое',
@@ -104,12 +114,13 @@ test('текст, набранный во время сохранения, пе�
     if (path === 'aspect.list') return [];
     return {};
   });
-  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
-
-  const ta = screen.getByTestId('body-edit');
+  const ta = await openBodyEditor();
   fireEvent.change(ta, { target: { value: 'новое' } });
-  fireEvent.blur(ta); // save уходит на сервер
-  fireEvent.change(ta, { target: { value: 'новое, и ещё абзац' } }); // печатаем, пока он летит
+  fireEvent.blur(ta); // save уходит на сервер, редактор закрывается
+
+  // Возвращаемся в правку, пока запрос летит, и печатаем дальше.
+  const reopened = await openBodyEditor();
+  fireEvent.change(reopened, { target: { value: 'новое, и ещё абзац' } });
 
   await waitFor(() => expect(getCalls).toBeGreaterThan(1)); // refetch с новым updatedAt пришёл
   expect(screen.getByTestId('body-edit')).toHaveValue('новое, и ещё абзац');
@@ -127,7 +138,8 @@ test('нетронутый черновик подхватывает измен�
     if (path === 'aspect.list') return [];
     return {};
   });
-  await waitFor(() => expect(screen.getByTestId('body-edit')).toHaveValue('тело'));
+  // Редактор ОТКРЫТ и остаётся открытым: чужая правка приезжает прямо под курсором.
+  expect(await openBodyEditor()).toHaveValue('тело');
   // Чекбокс задачи → mutation → invalidate → refetch с чужим body; поле не редактировали.
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
   await waitFor(() => expect(screen.getByTestId('body-edit')).toHaveValue('извне'));
@@ -155,11 +167,11 @@ test('inline body-правка: CONFLICT (409) → откат кэша к пре
       return {};
     },
   );
-  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
+  const ta = await openBodyEditor();
   expect(screen.getByTestId('body-probe')).toHaveTextContent('тело');
 
-  fireEvent.change(screen.getByTestId('body-edit'), { target: { value: 'конфликтное' } });
-  fireEvent.blur(screen.getByTestId('body-edit'));
+  fireEvent.change(ta, { target: { value: 'конфликтное' } });
+  fireEvent.blur(ta);
 
   // (б) сообщение конфликта показано
   await waitFor(() =>
@@ -220,7 +232,7 @@ test('подзадачи: список из entity.get; после создан�
     if (path === 'aspect.list') return [];
     return {};
   });
-  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
+  await screen.findByTestId('body-view'); // экран отрисован; правка здесь ни при чём
   expect(screen.queryByTestId('subtask')).toBeNull();
 
   const field = screen.getByLabelText('Новая подзадача');
@@ -275,7 +287,7 @@ test('создание подзадачи инвалидирует entity.query 
       return {};
     },
   );
-  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
+  await screen.findByTestId('body-view'); // экран отрисован; правка здесь ни при чём
   const probes = () =>
     calls.filter(
       (c) =>
@@ -317,7 +329,7 @@ test('подзадача создана, а связь упала: списки 
       return {};
     },
   );
-  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
+  await screen.findByTestId('body-view'); // экран отрисован; правка здесь ни при чём
   const probes = () =>
     calls.filter(
       (c) =>
@@ -625,8 +637,9 @@ test('financial: рефетч списка упал, но список уже е
   await screen.findByRole('option', { name: 'Развлечения' }); // список доехал целым
   // Любая правка сущности инвалидирует entity.query (useEntityUpdate.onSettled) — рефетч
   // падает, но data остаётся: state = error + непустой список.
-  fireEvent.change(screen.getByTestId('body-edit'), { target: { value: 'новое' } });
-  fireEvent.blur(screen.getByTestId('body-edit'));
+  const ta = await openBodyEditor();
+  fireEvent.change(ta, { target: { value: 'новое' } });
+  fireEvent.blur(ta);
 
   await waitFor(() => expect(queries).toBeGreaterThan(1));
   expect(select).toHaveDisplayValue('Категория не найдена');
@@ -943,10 +956,10 @@ test('conflict-баннер: клик «Обновить» → refetch entity.ge
     if (path === 'aspect.list') return [];
     return {};
   });
-  await waitFor(() => expect(screen.getByTestId('body-edit')).toBeInTheDocument());
+  const ta = await openBodyEditor();
 
-  fireEvent.change(screen.getByTestId('body-edit'), { target: { value: 'конфликтное' } });
-  fireEvent.blur(screen.getByTestId('body-edit'));
+  fireEvent.change(ta, { target: { value: 'конфликтное' } });
+  fireEvent.blur(ta);
   await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
 
   const getsBefore = calls.filter((p) => p === 'entity.get').length;
@@ -957,4 +970,135 @@ test('conflict-баннер: клик «Обновить» → refetch entity.ge
   await waitFor(() =>
     expect(calls.filter((p) => p === 'entity.get').length).toBeGreaterThan(getsBefore),
   );
+});
+
+// --- body: просмотр markdown, правка по явному действию (C4b) --------------------------
+// 02-core-os §3.5 п.3 и мокап §3.5 описывают тело записи как markdown; до слайса 3 экран
+// всегда монтировал сырую textarea, из-за чего приёмочный пункт фазы C «[[entity:…]] в body
+// открывает сущность» был невыполним в принципе.
+
+const BODY_LINK_ID = '019e4466-1111-7000-8000-0123456789ab';
+
+/** Обработчик detail с заданным телом; entity.update возвращает то, что прислали. */
+const bodyHandler =
+  (body: string): MockHandler =>
+  (path, input) => {
+    if (path === 'entity.get') return { entity: { ...entity, body }, relations: [], thread: null };
+    if (path === 'entity.update')
+      return { ...entity, body: (input as { body?: string }).body ?? body };
+    if (path === 'aspect.list') return realAspects;
+    if (path === 'entity.query') return [found('Разобрать Inbox')];
+    return {};
+  };
+
+test('body показан разметкой, а не сырым текстом: правка не навязана', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('## Итоги\n\n- раз\n- два'));
+  await screen.findByTestId('body-view');
+  expect(screen.getByRole('heading', { level: 2, name: 'Итоги' })).toBeInTheDocument();
+  expect(screen.getAllByRole('listitem')).toHaveLength(2);
+  // Сырого markdown на экране нет, и textarea не смонтирована, пока её не позвали.
+  expect(screen.queryByText('## Итоги')).toBeNull();
+  expect(screen.queryByTestId('body-edit')).toBeNull();
+});
+
+test('клик по телу открывает редактор; blur сохраняет и возвращает просмотр', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+  const ta = await openBodyEditor();
+  expect(ta).toHaveValue('тело');
+
+  fireEvent.change(ta, { target: { value: 'новое' } });
+  fireEvent.blur(ta);
+
+  await waitFor(() => {
+    const c = calls.find((x) => x.path === 'entity.update');
+    expect((c?.input as { body: string }).body).toBe('новое');
+  });
+  // Уход из редактора — возврат в просмотр, и там уже новый текст.
+  await waitFor(() => expect(screen.queryByTestId('body-edit')).toBeNull());
+  expect(screen.getByTestId('body-view')).toHaveTextContent('новое');
+});
+
+test('[[entity:…]] в body — живая ссылка: клик открывает запись в АКТИВНОЙ вкладке', async () => {
+  renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    bodyHandler(`см. [[entity:${BODY_LINK_ID}]]`),
+  );
+  const link = await screen.findByRole('link');
+  expect(link).toHaveAttribute('href', `/entity/${BODY_LINK_ID}`);
+
+  fireEvent.click(link);
+
+  // push поверх стека текущей вкладки (openEntity), а не openDeepLink: стек Browser цел.
+  const nav = useNav.getState();
+  expect(nav.activeTab).toBe('browser');
+  expect(nav.stacks.browser).toEqual([
+    { kind: 'entity', id: 'e1' },
+    { kind: 'entity', id: BODY_LINK_ID },
+  ]);
+});
+
+test('клик по ссылке в теле НЕ открывает редактор', async () => {
+  renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    bodyHandler(`см. [[entity:${BODY_LINK_ID}]]`),
+  );
+  fireEvent.click(await screen.findByRole('link'));
+  // Два жеста на одном месте: ссылка обязана срабатывать ссылкой, а не подменять экран
+  // редактором поверх открытой записи.
+  expect(screen.queryByTestId('body-edit')).toBeNull();
+  expect(screen.getByTestId('body-view')).toBeInTheDocument();
+});
+
+test('пустой body — приглашение «Заметки…», по клику открывается редактор', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(''));
+  const view = await screen.findByTestId('body-view');
+  expect(view).toHaveTextContent('Заметки…');
+
+  fireEvent.click(view);
+  expect(await screen.findByTestId('body-edit')).toHaveValue('');
+});
+
+test('в правку можно войти с клавиатуры: кнопка «Редактировать»', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+  // Настоящая кнопка, а не div с onClick: клавиатурная активация у неё встроенная,
+  // и без неё правка была бы доступна только мышью.
+  const button = await screen.findByRole('button', { name: 'Редактировать' });
+  expect(button.tagName).toBe('BUTTON');
+
+  fireEvent.click(button);
+  expect(await screen.findByTestId('body-edit')).toHaveValue('тело');
+});
+
+test('клик по выделенному тексту тела не съедает выделение', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело записи'));
+  const view = await screen.findByTestId('body-view');
+  const selection = vi
+    .spyOn(window, 'getSelection')
+    .mockReturnValue({ isCollapsed: false } as Selection);
+  try {
+    fireEvent.click(view);
+    // Текст выделяют, чтобы скопировать; подмена просмотра редактором выделение теряет.
+    expect(screen.queryByTestId('body-edit')).toBeNull();
+  } finally {
+    selection.mockRestore();
+  }
+});
+
+const BODY_WITH_BLOCK = 'Утренний обзор\n\n{{query: aspect=orbis/task, status=inbox, title=Inbox}}';
+
+test('{{query:…}} в просмотр текстом не течёт: текст — разметкой, блок — виджетом', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(BODY_WITH_BLOCK));
+  await screen.findByTestId('qb-count');
+  expect(screen.getByText('Утренний обзор')).toBeInTheDocument();
+  expect(screen.getByText('Inbox')).toBeInTheDocument();
+  expect(screen.queryByText(/\{\{query:/)).toBeNull();
+  expect(screen.queryByTestId('qb-error')).toBeNull();
+});
+
+test('клик по виджету query-блока редактор не открывает', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(BODY_WITH_BLOCK));
+  fireEvent.click(await screen.findByTestId('qb-item'));
+  // Виджет — живой список, а не текст записи: подменять его textarea по клику значит
+  // ронять экран смарт-листа (у All Tasks весь body — один блок).
+  expect(screen.queryByTestId('body-edit')).toBeNull();
 });

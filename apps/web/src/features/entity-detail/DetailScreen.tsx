@@ -1,9 +1,11 @@
 import { buildAppPath } from '@orbis/shared';
 import { Archive, ArchiveRestore, EllipsisVertical, Link2, Pin } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
+import { Markdown } from '../../lib/markdown/Markdown';
 import { QueryBlock } from '../../lib/query-blocks/QueryBlock';
+import { openEntity } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { DropdownMenu } from '../../ui/DropdownMenu';
@@ -11,7 +13,7 @@ import { Input } from '../../ui/Input';
 import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
 import { useToast } from '../../ui/toast-store';
-import { queryBlocks } from '../browser/query';
+import { type BodySegment, bodySegments } from '../browser/query';
 import { PlannedToFactCard } from '../budget/PlannedToFactCard';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { ChatThread } from '../chat/ChatThread';
@@ -84,7 +86,6 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     );
   }
   const { entity, thread, relations, backlinks, backlinksTruncated } = get.data;
-  const blocks = queryBlocks(entity.body ?? '');
 
   // В шапке — только title; emoji сущности — крупная page-иконка (Notion-style) в строке
   // с заголовком/NativeRow. Нет emoji — ничего не рендерим (без плейсхолдера).
@@ -132,18 +133,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       {/* key по id, НЕ по updatedAt: refetch после каждого save менял key и ремоунтил
           редактор, стирая текст, набранный за время запроса (а при 409 — ещё и уничтожая
           черновик, который §5.2 предлагает «повторить вручную»). */}
-      <BodyEditor key={entity.id} initial={entity.body ?? ''} onSave={saveBody} />
-      {/* §3.4: КАЖДЫЙ query-блок body — свой виджет. У сидированного Daily Planning их три
-          (Inbox / «Сегодня» / «Ожидание», §3.3), у Upcoming — два; рендер только первого
-          прятал «Сегодня» целиком (приёмка 02-core-os §8.4). */}
-      {blocks.length > 0 && (
-        <div className="flex flex-col gap-3">
-          {blocks.map((q, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: порядок блоков задан текстом body
-            <QueryBlock key={i} query={q} />
-          ))}
-        </div>
-      )}
+      <BodySection key={entity.id} initial={entity.body ?? ''} onSave={saveBody} />
       <AspectCards entity={entity} />
       {/* Секции 5–7 §3.5: связи уже приехали этим же entity.get — своих запросов графа
           секции не заводят. */}
@@ -198,9 +188,43 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   );
 }
 
-function BodyEditor({ initial, onSave }: { initial: string; onSave: (body: string) => void }) {
+/** Пустое приглашение к вводу — одно и то же в просмотре и в плейсхолдере редактора. */
+const BODY_PLACEHOLDER = 'Заметки…';
+
+/** Отступы просмотра повторяют отступы textarea: текст не прыгает при смене режима. */
+const BODY_BOX_CLASS = 'w-full rounded-lg px-2 py-1.5 text-sm leading-relaxed';
+
+/**
+ * §3.4: КАЖДЫЙ {{query:...}}-блок body — свой виджет. У сидированного Daily Planning их три
+ * (Inbox / «Сегодня» / «Ожидание», §3.3), у Upcoming — два; рендер только первого прятал
+ * «Сегодня» целиком (приёмка 02-core-os §8.4).
+ */
+function QueryWidgets({ segments }: { segments: BodySegment[] }) {
+  const blocks = segments.flatMap((s) => (s.kind === 'query' ? [s.query] : []));
+  if (blocks.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-3">
+      {blocks.map((q, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: порядок блоков задан текстом body
+        <QueryBlock key={i} query={q} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Тело записи: markdown в просмотре, textarea — по явному действию (02-core-os §3.5 п.3 и
+ * мокап §3.5). До слайса 3 экран монтировал сырую textarea всегда, из-за чего `[[entity:…]]`
+ * в body был мёртвым текстом, а разметка — служебными значками.
+ *
+ * Оба режима держит ОДИН компонент: черновик (`value`) обязан пережить смену режима, иначе
+ * blur→просмотр терял бы текст, который §5.2 предлагает «повторить вручную» после 409.
+ */
+function BodySection({ initial, onSave }: { initial: string; onSave: (body: string) => void }) {
   const [value, setValue] = useState(initial);
   const [serverBody, setServerBody] = useState(initial);
+  const [editing, setEditing] = useState(false);
+  const editor = useRef<HTMLTextAreaElement>(null);
 
   // Серверный body сменился (наш save или чужая правка): подхватываем его, только если
   // черновик не трогали. Иначе текст пользователя остаётся — о конфликте сообщает баннер
@@ -210,17 +234,102 @@ function BodyEditor({ initial, onSave }: { initial: string; onSave: (body: strin
     if (value === serverBody) setValue(initial);
   }
 
+  // Фокус — здесь, а не autoFocus: иначе после клика по телу пришлось бы кликать второй раз,
+  // уже в textarea. Каретка в конец текста: браузер ставит её в начало, и «дописать абзац»
+  // начиналось бы с прыжка каретки руками.
+  useEffect(() => {
+    const el = editor.current;
+    if (!editing || el === null) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }, [editing]);
+
+  // Что разбираем: в просмотре — то, что видит пользователь (после отказа сохранения это ЕГО
+  // текст, а не серверный), в правке — серверное значение. Сегментируй мы черновик прямо во
+  // время набора, каждый символ внутри {{query:…}} уходил бы новым запросом entity.query.
+  const segments = useMemo(
+    () => bodySegments(editing ? serverBody : value),
+    [editing, serverBody, value],
+  );
+
+  if (editing) {
+    // Раскладка правки прежняя: весь текст (включая блоки) — в textarea, виджеты списком
+    // под ней. Перемежать виджеты с кусками текста тут нечем — текст один.
+    return (
+      <div className="flex flex-col gap-4">
+        {/* Notion-style: текст лежит прямо на листе — рамка не нужна, каретка появляется
+            по клику. */}
+        <textarea
+          ref={editor}
+          data-testid="body-edit"
+          value={value}
+          placeholder={BODY_PLACEHOLDER}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => {
+            setEditing(false);
+            if (value !== serverBody) onSave(value);
+          }}
+          className={`${BODY_BOX_CLASS} min-h-24 resize-none bg-transparent transition placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30`}
+        />
+        <QueryWidgets segments={segments} />
+      </div>
+    );
+  }
+
+  // Клик по телу открывает правку — но ровно по ТЕЛУ: ссылка внутри разметки обязана вести
+  // по ссылке, а живой виджет — оставаться виджетом (у All Tasks весь body — один блок,
+  // и подмена его textarea роняла бы экран смарт-листа от случайного клика).
+  function startEditing(e: React.MouseEvent<HTMLDivElement>) {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('a, button, input, select, textarea, [role="button"], [data-query-widget]'))
+      return;
+    // Текст выделяют, чтобы скопировать: подмена просмотра редактором выделение теряет.
+    if (window.getSelection()?.isCollapsed === false) return;
+    setEditing(true);
+  }
+
+  // Пустое тело — приглашение к вводу, а не пустое место. Плейсхолдер нужен и там, где текста
+  // нет вовсе, но есть виджеты (ALL_TASKS_BODY — один {{query:…}}): иначе кликать не по чему.
+  const hasText = segments.some((s) => s.kind === 'text');
   return (
-    // Notion-style: текст лежит прямо на листе — рамка не нужна, hover подсказывает
-    // редактируемость, каретка появляется по клику.
-    <textarea
-      data-testid="body-edit"
-      value={value}
-      placeholder="Заметки…"
-      onChange={(e) => setValue(e.target.value)}
-      onBlur={() => value !== serverBody && onSave(value)}
-      className="min-h-24 w-full resize-none rounded-lg bg-transparent px-2 py-1.5 text-sm leading-relaxed transition placeholder:text-text-muted hover:bg-surface-2/60 focus:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
-    />
+    <div className="group relative flex flex-col gap-4">
+      {/* biome-ignore lint/a11y: жест мыши поверх текста (useKeyWithClickEvents +
+          noStaticElementInteractions). Клавиатурный путь — кнопка «Редактировать» ниже:
+          role=button здесь невозможен (внутри разметки живут ссылки, а интерактивное внутри
+          кнопки — уже не кнопка), а keydown на самом теле был бы мёртвым кодом — фокуса у
+          него нет. Группой, а не двумя правилами: Biome применяет только ОДНУ соседнюю
+          строку подавления, и второе правило осталось бы незаглушённым. */}
+      <div
+        data-testid="body-view"
+        onClick={startEditing}
+        className={`${BODY_BOX_CLASS} flex cursor-text flex-col gap-4`}
+      >
+        {!hasText && <p className="text-text-muted">{BODY_PLACEHOLDER}</p>}
+        {segments.map((s, i) =>
+          s.kind === 'query' ? (
+            // biome-ignore lint/suspicious/noArrayIndexKey: порядок сегментов задан текстом body
+            <div key={i} data-query-widget="">
+              <QueryBlock query={s.query} />
+            </div>
+          ) : (
+            // biome-ignore lint/suspicious/noArrayIndexKey: порядок сегментов задан текстом body
+            <Markdown key={i} source={s.text} onEntityLink={openEntity} />
+          ),
+        )}
+      </div>
+      {/* Правка обязана быть достижима без мыши. Кнопка всегда в разметке (фокус её
+          проявляет), а глазу показывается по наведению — тихая бумага не носит панель
+          инструментов над каждой заметкой. pointer-events-none, пока она невидима: иначе
+          прозрачная кнопка перехватывала бы клики по тексту и ссылкам под собой. */}
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => setEditing(true)}
+        className="pointer-events-none absolute right-0 top-0 opacity-0 transition focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+      >
+        Редактировать
+      </Button>
+    </div>
   );
 }
 

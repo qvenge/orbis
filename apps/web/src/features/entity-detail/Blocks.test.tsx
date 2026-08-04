@@ -136,7 +136,7 @@ test('блокировки: «блокирует» — исходящие, «з�
 
 test('пустые списки блокировок и пустой backlinks скрыты (кнопка добавления остаётся)', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-edit');
+  await screen.findByTestId('body-view'); // экран отрисован
 
   expect(screen.queryByText(/^блокирует$/i)).not.toBeInTheDocument();
   expect(screen.queryByText(/^заблокирована$/i)).not.toBeInTheDocument();
@@ -148,7 +148,7 @@ test('пустые списки блокировок и пустой backlinks �
 
 test('добавление блокировки: поиск через entity.query search= → relation.create blocks', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-edit');
+  await screen.findByTestId('body-view'); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
@@ -172,7 +172,7 @@ test('добавление блокировки: поиск через entity.qu
 // «Заблокирована» было нечем пополнить — приходилось открывать detail самого блокера.
 test('добавление блокировки: направление «заблокирована» шлёт обратную связь', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-edit');
+  await screen.findByTestId('body-view'); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
@@ -216,7 +216,7 @@ test('снятие блокировки: крестик → подтвержде
 // запроса подряд, из которых полезен только последний.
 test('пикер: быстрый ввод трёх символов даёт один запрос, а не три', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-edit');
+  await screen.findByTestId('body-view'); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   const input = screen.getByLabelText('Поиск сущности');
@@ -238,7 +238,7 @@ test('пикер: подсказка до ввода, спиннер в полё
     release = res;
   });
   renderWithProviders(<DetailScreen entityId="e1" />, handler({ onQuery: () => gate }));
-  await screen.findByTestId('body-edit');
+  await screen.findByTestId('body-view'); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   expect(screen.getByText(/по целому слову/i)).toBeInTheDocument();
@@ -259,7 +259,7 @@ test('пикер: отказ поиска показан плашкой, а не
       },
     }),
   );
-  await screen.findByTestId('body-edit');
+  await screen.findByTestId('body-view'); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Куп' } });
@@ -279,7 +279,7 @@ test('цикл blocks: серверный отказ показан плашко
       },
     }),
   );
-  await screen.findByTestId('body-edit');
+  await screen.findByTestId('body-view'); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
@@ -295,7 +295,7 @@ test('цикл blocks: серверный отказ показан плашко
 // молча создавала следующую связь в обратную сторону.
 test('форма: после создания связи направление возвращается к дефолтному', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-edit');
+  await screen.findByTestId('body-view'); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
@@ -370,7 +370,7 @@ test('пикер: закрытая задача не предлагается б
     <DetailScreen entityId="e1" />,
     handler({ onQuery: () => [found, doneBlocker] }),
   );
-  await screen.findByTestId('body-edit');
+  await screen.findByTestId('body-view'); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'блокер' } });
@@ -414,7 +414,7 @@ test('создание блокировки инвалидирует entity.quer
     </>,
     handler({}),
   );
-  await screen.findByTestId('body-edit');
+  await screen.findByTestId('body-view'); // экран отрисован
   const probes = () =>
     calls.filter(
       (c) =>
