@@ -1070,6 +1070,19 @@ test('пустой body — приглашение «Заметки…», по �
   expect(await screen.findByTestId('body-edit')).toHaveValue('');
 });
 
+test('тело из одного {{query:…}} — «Заметки…» над живым списком не печатается', async () => {
+  // Так устроен сидированный All Tasks: текста в body нет, но смотреть есть на что. Пустым
+  // тело при этом не является, и приглашение к вводу над списком задач — просто мусор,
+  // который видно каждый день. Клик-зона не страдает: у бокса min-h-24, а рядом — кнопка.
+  renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    bodyHandler('{{query: aspect=orbis/task, status=inbox, title=Inbox}}'),
+  );
+  await screen.findByTestId('qb-count');
+  expect(screen.getByTestId('body-view')).not.toHaveTextContent('Заметки…');
+  expect(screen.getByText('Inbox')).toBeInTheDocument();
+});
+
 test('в правку можно войти с клавиатуры: кнопка «Редактировать»', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
   // Настоящая кнопка, а не div с onClick: клавиатурная активация у неё встроенная,

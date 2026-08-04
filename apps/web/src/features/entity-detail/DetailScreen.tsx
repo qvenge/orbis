@@ -290,9 +290,10 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
     setEditing(true);
   }
 
-  // Пустое тело — приглашение к вводу, а не пустое место. Плейсхолдер нужен и там, где текста
-  // нет вовсе, но есть виджеты (ALL_TASKS_BODY — один {{query:…}}): иначе кликать не по чему.
-  const hasText = segments.some((s) => s.kind === 'text');
+  // Пустое тело — приглашение к вводу, а не пустое место. Именно ПУСТОЕ: у тела из одного
+  // {{query:…}} (сидированный All Tasks) текста нет, но смотреть есть на что, и «Заметки…»
+  // печатались бы над живым списком задач. Кликать при этом есть по чему и без плейсхолдера:
+  // у бокса min-h-24, а клавиатурный путь — кнопка «Редактировать» ниже.
   return (
     <div className="group flex flex-col">
       {/* biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: жест
@@ -304,7 +305,7 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
         onClick={startEditing}
         className={`${BODY_BOX_CLASS} flex cursor-text flex-col gap-4`}
       >
-        {!hasText && <p className="text-text-muted">{BODY_PLACEHOLDER}</p>}
+        {segments.length === 0 && <p className="text-text-muted">{BODY_PLACEHOLDER}</p>}
         {segments.map((s, i) =>
           s.kind === 'query' ? (
             // biome-ignore lint/suspicious/noArrayIndexKey: порядок сегментов задан текстом body
