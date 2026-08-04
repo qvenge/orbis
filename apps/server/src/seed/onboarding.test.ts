@@ -1,12 +1,14 @@
 // apps/server/src/seed/onboarding.test.ts
 // Интеграционные тесты Task 13: онбординг-сидирование (02 §7) через createCallerFactory
 // против живой БД. Сид пишет НАПРЯМУЮ в tx под withIdentity, МИМО executor/журнала
-// (решение 6 плана): 12 категорий §7.1 + 3 smart lists §7.2 + настройки §7.3 + глобальный тред.
+// (решение 6 плана): 12 категорий §7.1 + 8 smart lists §7.2 (три исходных + пять горизонтов
+// планирования, E4) + настройки §7.3 + глобальный тред.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  addDays,
   aspectJsonSchema,
   BUILTIN_ASPECT_IDS,
   buildFieldCatalog,
@@ -14,15 +16,37 @@ import {
   parseQuery,
 } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
-import { sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { entities } from '../db/schema';
 import { appRouter } from '../router';
 import { SEED_CATEGORIES } from '../seed/categories';
 import { seedSmartListId } from '../seed/onboarding';
-import { ALL_TASKS_BODY, DAILY_PLANNING_BODY, UPCOMING_BODY } from '../seed/smart-lists';
+import {
+  ALL_TASKS_BODY,
+  DAILY_PLANNING_BODY,
+  HORIZON_DAY_BODY,
+  HORIZON_LIFE_BODY,
+  HORIZON_MONTH_BODY,
+  HORIZON_WEEK_BODY,
+  HORIZON_YEAR_BODY,
+  SEED_HORIZON_LISTS,
+  SEED_SMART_LISTS,
+  type SeedSmartList,
+  UPCOMING_BODY,
+} from '../seed/smart-lists';
 import { createCallerFactory } from '../trpc';
 
 requireEnv();
+
+/** Содержимое {{query:…}}-блоков body — тот же разбор, что у рендерера (web query.ts). */
+function queryBlocksOf(body: string): string[] {
+  return [...body.matchAll(/\{\{query:\s*([\s\S]*?)\}\}/g)].map((m) => {
+    const block = m[1];
+    if (block === undefined) throw new Error('query-блок без группы захвата');
+    return block;
+  });
+}
 
 const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
@@ -61,13 +85,13 @@ afterAll(async () => {
 });
 
 describe('user.seedOnboarding (02 §7): состав и одноразовость', () => {
-  test('создаёт ровно 12+3 сущности, настройки и глобальный тред; повтор → {seeded:false}, count не растёт', async () => {
+  test('создаёт ровно 12+8 сущностей, настройки и глобальный тред; повтор → {seeded:false}, count не растёт', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
 
     const first = await caller.user.seedOnboarding();
     expect(first).toEqual({ seeded: true });
-    expect(await counts(user)).toEqual({ entities: 15, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
 
     // Глобальный тред — с NULL entity_id (§4.5)
     const { db: admin, client: adminClient } = adminDb();
@@ -83,7 +107,7 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
     // Одноразовость §7: повторный вызов ничего не добавляет
     const second = await caller.user.seedOnboarding();
     expect(second).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 15, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
   });
 
   test('конкурентные два seedOnboarding под разными коннекшнами → без дублей (детерминированные id + ON CONFLICT)', async () => {
@@ -104,7 +128,7 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
         clientVersion: null,
       });
       await Promise.all([callerA.user.seedOnboarding(), callerB.user.seedOnboarding()]);
-      expect(await counts(user)).toEqual({ entities: 15, settings: 1, threads: 1 });
+      expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
     } finally {
       await a.client.end();
       await b.client.end();
@@ -172,7 +196,7 @@ describe('категории §7.1', () => {
 });
 
 describe('smart lists §7.2 / §3.3', () => {
-  test('body всех трёх списков — байт-в-байт равен блокам 02 §3.3', () => {
+  test('body всех восьми списков — байт-в-байт равен блокам 02 §3.3, в порядке документа', () => {
     // Извлекаем ```markdown-блоки §3.3 из PRD и сверяем с константами сида
     const prdPath = join(import.meta.dir, '../../../../docs/prd/02-core-os.md');
     const prd = readFileSync(prdPath, 'utf8');
@@ -181,39 +205,83 @@ describe('smart lists §7.2 / §3.3', () => {
       if (block === undefined) throw new Error('markdown-блок без группы захвата');
       return block;
     });
-    // Первые три markdown-блока документа — Daily Planning, Upcoming, All Tasks (§3.3)
+    // Первые восемь markdown-блоков документа — §3.3, ровно в порядке SEED_SMART_LISTS:
+    // три исходных списка, затем пять горизонтов планирования (E4).
+    expect(blocks.slice(0, SEED_SMART_LISTS.length)).toEqual(SEED_SMART_LISTS.map((s) => s.body));
+    // Поимённо — чтобы падение называло виновника, а не «массивы не равны»
     expect(blocks[0]).toBe(DAILY_PLANNING_BODY);
     expect(blocks[1]).toBe(UPCOMING_BODY);
     expect(blocks[2]).toBe(ALL_TASKS_BODY);
+    expect(blocks[3]).toBe(HORIZON_DAY_BODY);
+    expect(blocks[4]).toBe(HORIZON_WEEK_BODY);
+    expect(blocks[5]).toBe(HORIZON_MONTH_BODY);
+    expect(blocks[6]).toBe(HORIZON_YEAR_BODY);
+    expect(blocks[7]).toBe(HORIZON_LIFE_BODY);
   });
 
-  test('все {{query:}}-блоки трёх списков парсятся собственным парсером (страховка от опечатки)', () => {
+  test('все {{query:}}-блоки восьми списков парсятся собственным парсером (страховка от опечатки)', () => {
     const catalog = buildFieldCatalog(
       BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
     );
-    const cases: Array<[string, number]> = [
-      [DAILY_PLANNING_BODY, 3],
-      [UPCOMING_BODY, 2],
-      [ALL_TASKS_BODY, 1],
-    ];
-    for (const [body, expected] of cases) {
-      const matches = [...body.matchAll(/\{\{query:\s*([\s\S]*?)\}\}/g)];
-      expect(matches.length).toBe(expected);
-      for (const m of matches) {
-        const block = m[1];
-        if (block === undefined) throw new Error('query-блок без группы захвата');
-        expect(parseQuery(block, catalog).ok).toBe(true);
+    // Ожидаемое число блоков в каждом теле — потеря блока при правке body не пройдёт молча
+    const expectedBlocks: Record<SeedSmartList['slug'], number> = {
+      'daily-planning': 3,
+      upcoming: 2,
+      'all-tasks': 1,
+      'horizon-day': 2,
+      'horizon-week': 1,
+      'horizon-month': 1,
+      'horizon-year': 1,
+      'horizon-life': 1,
+    };
+    expect(Object.keys(expectedBlocks).length).toBe(SEED_SMART_LISTS.length);
+    for (const list of SEED_SMART_LISTS) {
+      const blocks = queryBlocksOf(list.body);
+      expect(blocks.length).toBe(expectedBlocks[list.slug]);
+      for (const block of blocks) expect(parseQuery(block, catalog).ok).toBe(true);
+    }
+  });
+
+  // E4, условие «никакие два списка не показывают одно и то же»: побайтовое совпадение
+  // блоков означало бы два списка с одинаковой выдачей под разными заголовками.
+  test('никакие два сидированных query-блока не совпадают побайтово', () => {
+    const all = SEED_SMART_LISTS.flatMap((s) => queryBlocksOf(s.body));
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  // Парсер — не компилятор: он проверяет форму, а SQL строит compile.ts со своим
+  // исчерпывающим разбором токенов и типов полей. Блок, который парсится, но не
+  // компилируется, приехал бы пользователю красной плашкой в готовом списке.
+  test('каждый query-блок восьми списков выполняется entity.query против живой БД', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    for (const list of SEED_SMART_LISTS) {
+      for (const block of queryBlocksOf(list.body)) {
+        const rows = await caller.entity.query({ query: block });
+        expect(Array.isArray(rows)).toBe(true);
       }
     }
   });
 
-  test('три сущности smart-list: tags, emoji, детерминированный id, порядок pinned', async () => {
+  // E4, R21: горизонты выражены ТОЛЬКО относительными токенами грамматики. Абсолютная
+  // дата в сиде протухла бы через неделю после деплоя, и список молча опустел бы.
+  test('в телах горизонтов нет абсолютных дат — только относительные date-токены', () => {
+    for (const list of SEED_HORIZON_LISTS) {
+      for (const block of queryBlocksOf(list.body)) {
+        expect(block).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+      }
+    }
+  });
+
+  test('восемь сущностей smart-list: tags, emoji, детерминированный id, порядок pinned', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
     const rows = await caller.entity.query({ query: 'tags=smart-list, sortBy=created_at:asc' });
-    expect(rows.length).toBe(3);
+    expect(rows.length).toBe(8);
     for (const r of rows) expect(r.tags).toEqual(['smart-list']);
 
     const byId = new Map(rows.map((r) => [r.id, r]));
@@ -228,10 +296,33 @@ describe('smart lists §7.2 / §3.3', () => {
     expect(allTasks?.title).toBe('All Tasks');
     expect(allTasks?.emoji).toBe('📋');
   });
+
+  // E4: пять горизонтов планирования — отдельные сущности со своими слагами.
+  test('пять горизонтов: заголовки День/Неделя/Месяц/Год/Жизнь на детерминированных id', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    const rows = await caller.entity.query({ query: 'tags=smart-list, sortBy=created_at:asc' });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const expected: Array<[string, string, string]> = [
+      ['horizon-day', 'День', '🌅'],
+      ['horizon-week', 'Неделя', '📆'],
+      ['horizon-month', 'Месяц', '🌙'],
+      ['horizon-year', 'Год', '🎯'],
+      ['horizon-life', 'Жизнь', '🧭'],
+    ];
+    for (const [slug, title, emoji] of expected) {
+      const row = byId.get(seedSmartListId(user, slug));
+      expect(row?.title).toBe(title);
+      expect(row?.emoji).toBe(emoji);
+      expect(row?.tags).toEqual(['smart-list']);
+    }
+  });
 });
 
 describe('настройки §7.3 (getSettings / updateSettings)', () => {
-  test('getSettings: дефолты §7.3; pinnedEntities в порядке daily/upcoming/allTasks', async () => {
+  test('getSettings: дефолты §7.3; pinnedEntities в порядке daily/upcoming/allTasks/День', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
@@ -241,10 +332,13 @@ describe('настройки §7.3 (getSettings / updateSettings)', () => {
     expect(s.defaultCurrency).toBe('RUB');
     expect(s.weekStartDay).toBe('monday');
     expect(s.plan).toBe('dev');
+    // E4: из пяти горизонтов закрепляется только «День» — остальные четыре живут в
+    // Browser по тегу smart-list (цена закрепления — entity.count на каждую правку графа).
     expect(s.pinnedEntities).toEqual([
       { id: seedSmartListId(user, 'daily-planning'), order: 0 },
       { id: seedSmartListId(user, 'upcoming'), order: 1 },
       { id: seedSmartListId(user, 'all-tasks'), order: 2 },
+      { id: seedSmartListId(user, 'horizon-day'), order: 3 },
     ]);
   });
 
@@ -370,6 +464,193 @@ describe('installedViews: orbis-budget (§4.4, слайс 2)', () => {
       { id: seedSmartListId(user, 'daily-planning'), order: 0 },
       { id: seedSmartListId(user, 'upcoming'), order: 1 },
       { id: seedSmartListId(user, 'all-tasks'), order: 2 },
+      { id: seedSmartListId(user, 'horizon-day'), order: 3 },
+    ]);
+  });
+});
+
+// E4, условие «заголовок не врёт»: горизонт обязан показывать то, что обещает его имя и
+// первая строка тела. Проверяется смыслом — фикстурами относительно реального «сегодня»
+// в дефолтной таймзоне Europe/Moscow (прецедент agenda-acceptance.test.ts, у «сегодня»
+// шва нет), — а не сверкой строк запроса.
+describe('горизонты показывают обещанное (§3.3, E4)', () => {
+  const TZ = 'Europe/Moscow';
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(new Date());
+
+  /** id результатов N-го блока тела списка. */
+  async function idsOfBlock(user: string, body: string, index: number): Promise<Set<string>> {
+    const block = queryBlocksOf(body)[index];
+    if (block === undefined) throw new Error(`в body нет query-блока №${index}`);
+    const rows = await callerFor(user).entity.query({ query: block });
+    return new Set(rows.map((r) => r.id));
+  }
+
+  test('день/неделя/месяц/год/жизнь отбирают ровно свои сущности', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    const task = async (title: string, dueDate: string, status = 'planned') =>
+      (
+        await caller.entity.create({
+          input: { title, tags: [], aspects: { 'orbis/task': { status, due_date: dueDate } } },
+          source: 'ui',
+        })
+      ).id;
+
+    const overdue = await task('Просроченная', addDays(today, -1));
+    const dueToday = await task('Сегодняшняя', today);
+    const waitingToday = await task('Ожидающая на сегодня', today, 'waiting');
+    const dueIn3d = await task('Через три дня', addDays(today, 3));
+    const dueIn20d = await task('Через двадцать дней', addDays(today, 20));
+    const goal = (
+      await caller.entity.create({
+        input: {
+          title: 'Пробежать 100 км',
+          tags: [],
+          aspects: {
+            'orbis/goal': {
+              progress_source: { query: 'aspect=orbis/task, status=done', aggregate: 'count' },
+              target_value: '100',
+            },
+          },
+        },
+        source: 'ui',
+      })
+    ).id;
+    const value = (
+      await caller.entity.create({ input: { title: 'Здоровье', tags: ['life'] }, source: 'ui' })
+    ).id;
+
+    // «День», блок 1 «Срок сегодня»: только сегодняшняя, без ожидающей и без просрочки
+    const dayToday = await idsOfBlock(user, HORIZON_DAY_BODY, 0);
+    expect([...dayToday]).toEqual([dueToday]);
+    expect(dayToday.has(waitingToday)).toBe(false);
+    // «День», блок 2 «Просрочено»: только просроченная
+    expect([...(await idsOfBlock(user, HORIZON_DAY_BODY, 1))]).toEqual([overdue]);
+
+    // «Неделя»: окно next_7d включает сегодня (01-architecture §6.1) — пересечение с
+    // «Днём» намеренное: горизонты — линзы, а не непересекающиеся корзины.
+    const week = await idsOfBlock(user, HORIZON_WEEK_BODY, 0);
+    expect(week.has(dueIn3d)).toBe(true);
+    expect(week.has(dueToday)).toBe(true);
+    expect(week.has(waitingToday)).toBe(true); // горизонт не фокус-список, waiting не прячет
+    expect(week.has(overdue)).toBe(false);
+    expect(week.has(dueIn20d)).toBe(false);
+
+    // «Месяц»: всё, что дальше 7 дней, — и ничего из ближайшей недели
+    const month = await idsOfBlock(user, HORIZON_MONTH_BODY, 0);
+    expect([...month]).toEqual([dueIn20d]);
+
+    // «Год»: цели, и только они
+    expect([...(await idsOfBlock(user, HORIZON_YEAR_BODY, 0))]).toEqual([goal]);
+
+    // «Жизнь»: сущности с тегом life; сам список-горизонт (тег smart-list) в выдачу не лезет
+    expect([...(await idsOfBlock(user, HORIZON_LIFE_BODY, 0))]).toEqual([value]);
+  });
+});
+
+// Task E4 (слайс 3, §7.2): пять горизонтов планирования. Новые пользователи получают их
+// первым же сидированием; засиденные ДО E4 — идемпотентным бэкфиллом в guard-ветке
+// (по образцу orbis-budget): досеваются ровно недостающие списки, «День» дописывается
+// в конец pinnedEntities, повтор не создаёт дублей.
+describe('горизонты планирования: бэкфилл (§7.2, E4)', () => {
+  const HORIZONS = ['horizon-day', 'horizon-week', 'horizon-month', 'horizon-year', 'horizon-life'];
+
+  /** Симуляция пользователя, засиденного ДО E4: часть горизонтов удалена админ-DSN (мимо RLS). */
+  async function deleteHorizons(user: string, slugs: readonly string[]): Promise<void> {
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.delete(entities).where(
+        and(
+          eq(entities.ownerId, user),
+          inArray(
+            entities.id,
+            slugs.map((s) => seedSmartListId(user, s)),
+          ),
+        ),
+      );
+    } finally {
+      await adminClient.end();
+    }
+  }
+
+  const basePins = (user: string) => [
+    { id: seedSmartListId(user, 'daily-planning'), order: 0 },
+    { id: seedSmartListId(user, 'upcoming'), order: 1 },
+    { id: seedSmartListId(user, 'all-tasks'), order: 2 },
+  ];
+
+  test('новый пользователь получает все пять горизонтов и закрепление «Дня» за один проход', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: true });
+
+    const lists = await caller.entity.query({ query: 'tags=smart-list' });
+    expect(lists.length).toBe(8);
+    const ids = new Set(lists.map((r) => r.id));
+    for (const slug of HORIZONS) expect(ids.has(seedSmartListId(user, slug))).toBe(true);
+    expect((await caller.user.getSettings()).pinnedEntities).toEqual([
+      ...basePins(user),
+      { id: seedSmartListId(user, 'horizon-day'), order: 3 },
+    ]);
+  });
+
+  test('засиденный ДО E4: повторный seedOnboarding досевает пять горизонтов и пин; повтор не дублирует', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    // Откат к состоянию «до E4»: горизонтов нет, закреплены только три старых списка
+    await deleteHorizons(user, HORIZONS);
+    await caller.user.updateSettings({ pinnedEntities: basePins(user) });
+    expect(await counts(user)).toEqual({ entities: 15, settings: 1, threads: 1 });
+
+    // Guard возвращает { seeded: false }, но бэкфилл дописывает недостающее
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
+    expect((await caller.entity.query({ query: 'tags=smart-list' })).length).toBe(8);
+    expect((await caller.user.getSettings()).pinnedEntities).toEqual([
+      ...basePins(user),
+      { id: seedSmartListId(user, 'horizon-day'), order: 3 },
+    ]);
+
+    // Ещё два повтора — ни новых сущностей, ни второго закрепления «Дня»
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
+    expect((await caller.user.getSettings()).pinnedEntities.length).toBe(4);
+  });
+
+  test('досевается РОВНО недостающее: удалены два горизонта — вставлены два, пин не тронут', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    await deleteHorizons(user, ['horizon-month', 'horizon-life']);
+    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    const settingsBefore = await caller.user.getSettings();
+
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await counts(user)).toEqual({ entities: 20, settings: 1, threads: 1 });
+    const settingsAfter = await caller.user.getSettings();
+    expect(settingsAfter.pinnedEntities).toEqual(settingsBefore.pinnedEntities);
+    // «День» уже закреплён — updated_at настроек бэкфилл не сдвигает
+    expect(settingsAfter.updatedAt).toBe(settingsBefore.updatedAt);
+  });
+
+  test('кастомные закрепления не теряются: «День» дописывается в конец', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    const custom = crypto.randomUUID();
+    await caller.user.updateSettings({ pinnedEntities: [{ id: custom, order: 0 }] });
+    await caller.user.seedOnboarding();
+
+    expect((await caller.user.getSettings()).pinnedEntities).toEqual([
+      { id: custom, order: 0 },
+      { id: seedSmartListId(user, 'horizon-day'), order: 1 },
     ]);
   });
 });

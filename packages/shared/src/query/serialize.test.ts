@@ -47,10 +47,13 @@ const CASES = [
   'aspect=orbis/financial, amount>-100, occurred_on=next_7d',
 ];
 
-// Body-блоки шести сидированных smart lists — литералами (кросс-пакетный импорт из
-// apps/server запрещён), источник apps/server/src/seed/smart-lists.ts. Обёртка `{{query: }}`
-// снята так же, как это делает рендерер body (bodySegments: inner + trim); переносы строк
-// и 9-пробельные отступы continuation-строк сохранены — их нормализует сам парсер.
+// Шесть body-блоков трёх исходных сидированных smart lists — литералами (кросс-пакетный
+// импорт из apps/server запрещён), источник apps/server/src/seed/smart-lists.ts. Обёртка
+// `{{query: }}` снята так же, как это делает рендерер body (bodySegments: inner + trim);
+// переносы строк и 9-пробельные отступы continuation-строк сохранены — их нормализует сам
+// парсер. Блоки пяти горизонтов планирования (E4) сюда НЕ скопированы намеренно: узлов
+// грамматики сверх покрытых CASES они не приносят (те же aspect/tags/field/sortBy), а
+// второй литеральный список без импорта из сида дрейфовал бы молча.
 const SEEDED_BLOCKS = [
   'aspect=orbis/task, status=inbox,\n' +
     '         sortBy=created_at:desc, display=list, title=Inbox',

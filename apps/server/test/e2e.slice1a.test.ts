@@ -66,18 +66,18 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   });
 
   // ── Шаг 1: онбординг-сид A ────────────────────────────────────────────────
-  test('шаг 1: seedOnboarding(A) — 15 сущностей, настройки, глобальный тред', async () => {
+  test('шаг 1: seedOnboarding(A) — 20 сущностей, настройки, глобальный тред', async () => {
     const seeded = await a.user.seedOnboarding();
     expect(seeded).toEqual({ seeded: true });
 
     // Идемпотентность §7: повтор ничего не создаёт
     expect(await a.user.seedOnboarding()).toEqual({ seeded: false });
 
-    // 12 категорий + 3 smart lists = 15 сущностей
+    // 12 категорий + 8 smart lists (три исходных + пять горизонтов E4) = 20 сущностей
     const cats = await a.entity.query({ query: 'tags=category' });
     expect(cats.length).toBe(12);
     const lists = await a.entity.query({ query: 'tags=smart-list' });
-    expect(lists.length).toBe(3);
+    expect(lists.length).toBe(8);
 
     // Настройки §7.3 — дефолты стартового набора
     const settings = await a.user.getSettings();
@@ -276,13 +276,13 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   });
 
   // ── Шаг 7: экспорт содержит ВЕСЬ граф A (сущности, связи, сообщения, настройки) ─
-  test('шаг 7: exportData(A) — 18 сущностей, 1 связь, 1 тред, 7 сообщений (вкл. audit и undo)', async () => {
+  test('шаг 7: exportData(A) — 23 сущности, 1 связь, 1 тред, 7 сообщений (вкл. audit и undo)', async () => {
     const exp = await a.user.exportData();
     expect(exp.format).toBe('orbis-export');
     expect(exp.version).toBe(1);
 
-    // 15 сидов + «Обед» + «купить кроссовки» + «Дождаться зарплаты» = 18
-    expect(exp.entities.length).toBe(18);
+    // 20 сидов + «Обед» + «купить кроссовки» + «Дождаться зарплаты» = 23
+    expect(exp.entities.length).toBe(23);
     for (const e of exp.entities) expect(() => entitySchema.parse(e)).not.toThrow();
     const expIds = new Set(exp.entities.map((e) => e.id));
     expect(expIds.has(obedId)).toBe(true);
@@ -342,9 +342,9 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     const foreign = await trpcError(b.ai.undo({ actionId: updateActionId }));
     expect(foreign.code).toBe('NOT_FOUND');
 
-    // Срез изоляции №3: экспорт B — только его 15 сидов, без данных A
+    // Срез изоляции №3: экспорт B — только его 20 сидов, без данных A
     const bExp = await b.user.exportData();
-    expect(bExp.entities.length).toBe(15);
+    expect(bExp.entities.length).toBe(20);
     expect(bExp.relations.length).toBe(0);
     expect(bExp.chatThreads.length).toBe(1);
     expect(bExp.chatMessages.length).toBe(0);
@@ -352,7 +352,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
 
     // Граф A не тронут вмешательствами B (перекрёстная проверка изоляции)
     const aExp = await a.user.exportData();
-    expect(aExp.entities.length).toBe(18);
+    expect(aExp.entities.length).toBe(23);
     expect(aExp.relations.length).toBe(1);
     // «купить кроссовки» так и осталась inbox (B её не отменял/менял)
     const aSneakers = aExp.entities.find((e) => e.id === sneakersId);
