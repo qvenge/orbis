@@ -81,15 +81,70 @@ test('смена лимита меняет сериализованную стр
   expect(saved(onSave)).toBe('aspect=orbis/task, limit=50');
 });
 
-// limit=0 и дробный парсер отвергает, а serializeQuery на таком AST бросает: форма обязана
-// не дать его собрать, а не ловить исключение постфактум.
+// limit=0 и дробный грамматика не выражает: сохранение гасится, а в сообщении стоит то, что
+// набрал человек, — не служебное значение, которым форма объясняется сама с собой.
 test('нецелый лимит блокирует сохранение, а не печатает битую строку', async () => {
   const { onSave } = await openForm('aspect=orbis/task, limit=30');
-  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '0' } });
+  const limit = screen.getByLabelText('Лимит');
+
+  fireEvent.change(limit, { target: { value: '0' } });
   expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
-  expect(screen.getByTestId('qb-form-error')).toHaveTextContent(/limit/i);
+  expect(screen.getByTestId('qb-form-error')).toHaveTextContent("'0'");
+
+  // Дробное значение поле type=number пропускает, а грамматика — нет. В сообщении обязано
+  // стоять набранное, а не служебное значение, которым форма объясняется сама с собой.
+  fireEvent.change(limit, { target: { value: '1.5' } });
+  expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+  const error = screen.getByTestId('qb-form-error');
+  expect(error).toHaveTextContent("'1.5'");
+  expect(error).not.toHaveTextContent(/NaN/);
+
   save();
   expect(onSave).not.toHaveBeenCalled();
+});
+
+// Пустое поле лимита — это «лимита нет», а не «лимит непечатаем»: конструкция уходит из AST,
+// и сохранение остаётся доступным.
+test('очистка лимита убирает конструкцию, а не гасит сохранение', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, limit=30');
+  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '' } });
+  expect(screen.getByRole('button', { name: 'Сохранить' })).toBeEnabled();
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task');
+});
+
+// Главное свойство архитектуры «строка на УЗЕЛ, а не на поле»: два сравнения по одному полю
+// и две AND-группы тегов — законные конструкции (парсер их не запрещает), и правка чего-то
+// третьего обязана оставить их на месте. Заодно — что доступные имена их различают: два
+// одинаковых имени на экране означают, что до второго узла не добраться ни клавиатурой, ни
+// скринридером.
+test('два узла по одному полю и две группы тегов переживают правку лимита', async () => {
+  const initial = 'tags=a|b, tags=c, amount>100, amount<500';
+  const { onSave } = await openForm(initial);
+
+  expect(screen.getByLabelText('amount #1: значение')).toHaveValue('100');
+  expect(screen.getByLabelText('amount #2: значение')).toHaveValue('500');
+  expect(screen.getByLabelText('Тег 1')).toHaveValue('a');
+  expect(screen.getByLabelText('Тег 2')).toHaveValue('b');
+  expect(screen.getByLabelText('Тег 3')).toHaveValue('c');
+
+  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '7' } });
+  save();
+  expect(saved(onSave)).toBe(`${initial}, limit=7`);
+});
+
+// Тот же случай для узлов со списками значений: два enum-узла по одному полю дают ДВА набора
+// галочек, и без номера строки они звались бы одинаково.
+test('два списочных узла по одному полю различимы по имени и правятся раздельно', async () => {
+  const initial = 'aspect=orbis/task, status=inbox, status=!done';
+  const { onSave } = await openForm(initial);
+  expect(screen.getByLabelText('status #1: inbox')).toBeChecked();
+  expect(screen.getByLabelText('status #2: done')).toBeChecked();
+  expect(screen.getByLabelText('status #1: done')).not.toBeChecked();
+
+  fireEvent.click(screen.getByLabelText('status #2: cancelled'));
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, status=inbox, status=!done&!cancelled');
 });
 
 test('поля аспекта появляются после выбора аспекта', async () => {
@@ -176,14 +231,24 @@ test('числовое поле правится диапазоном', async ()
 
 test('сортировка переставляется кнопками', async () => {
   const { onSave } = await openForm('aspect=orbis/task, sortBy=priority:desc|due_date:asc');
-  fireEvent.click(screen.getByRole('button', { name: 'Ниже: priority' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Переместить ниже: строка 1' }));
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task, sortBy=due_date:asc|priority:desc');
 });
 
+// Одно поле дважды в sortBy парсер разрешает; имя кнопки по полю сделало бы обе строки
+// неразличимыми, поэтому имена строит номер строки — он в этом списке и есть смысл.
+test('повтор поля в сортировке не делает кнопки одноимёнными', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, sortBy=priority:desc|priority:asc');
+  expect(screen.getByRole('button', { name: 'Переместить выше: строка 2' })).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Убрать из сортировки: строка 1' }));
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, sortBy=priority:asc');
+});
+
 test('удаление последнего поля сортировки убирает параметр', async () => {
   const { onSave } = await openForm('aspect=orbis/task, sortBy=priority:desc');
-  fireEvent.click(screen.getByRole('button', { name: 'Убрать из сортировки: priority' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Убрать из сортировки: строка 1' }));
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task');
 });
@@ -204,6 +269,52 @@ test('теги и исключения тегов правятся списка�
   fireEvent.change(screen.getByLabelText('Исключённый тег 1'), { target: { value: 'архив' } });
   save();
   expect(saved(onSave)).toBe('tags=дом, excludeTags=архив');
+});
+
+// Симметрия с enum-путём (снял последнюю галочку — узла нет): стёртое до пустоты
+// единственное значение убирает конструкцию, а не печатает разбирающийся, сохраняемый и
+// бессмысленный `tags=""`. Поле при этом остаётся под курсором — строка-заготовка занимает
+// то же место, и <input> не пересоздаётся.
+test('стёртый единственный тег убирает конструкцию и не отнимает фокус', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, tags=work');
+  const input = screen.getByLabelText('Тег 1');
+  input.focus();
+  fireEvent.change(input, { target: { value: '' } });
+  expect(screen.getByLabelText('Тег 1')).toHaveFocus();
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task');
+});
+
+test('стёртое единственное строковое значение убирает конструкцию и не отнимает фокус', async () => {
+  const { onSave } = await openForm('aspect=orbis/financial, counterparty=Магнит');
+  const input = screen.getByLabelText('counterparty: значение 1');
+  input.focus();
+  fireEvent.change(input, { target: { value: '' } });
+  expect(screen.getByLabelText('counterparty: значение 1')).toHaveFocus();
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/financial');
+});
+
+// Значение строкового поля набирается прямо в строке-заготовке: фильтра ещё нет, узел
+// заводит первый же символ.
+test('строка-заготовка заводит фильтр с первого символа', async () => {
+  const { onSave } = await openForm('aspect=orbis/financial');
+  fireEvent.change(screen.getByLabelText('counterparty: значение 1'), {
+    target: { value: 'Магнит' },
+  });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/financial, counterparty=Магнит');
+});
+
+// Minor 7: переход «заготовка → узел» не должен пересоздавать строку — иначе выбор оператора
+// с клавиатуры выбрасывал бы фокус в body, то есть терял место в форме.
+test('выбор оператора не отнимает фокус у строки поля', async () => {
+  await openForm('aspect=orbis/task');
+  const select = screen.getByLabelText('effort_min');
+  select.focus();
+  fireEvent.change(select, { target: { value: '>' } });
+  expect(screen.getByLabelText('effort_min')).toHaveFocus();
+  expect(screen.getByLabelText('effort_min: значение')).toBeInTheDocument();
 });
 
 test('excludeBlocked и archived правятся своими контролами', async () => {

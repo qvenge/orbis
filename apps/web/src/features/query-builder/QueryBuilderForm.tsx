@@ -65,17 +65,27 @@ export function QueryBuilderForm({
   }
 
   // `limit` живёт отдельной строкой, а не числом в AST: набирая «50» поверх «30», человек
-  // проходит через пустую строку, а `limit: 0` и дробный — то, на чём сериализатор бросает.
-  // Здесь же он превращается в NaN, и вместо тихой потери параметра выходит внятный отказ.
+  // проходит через пустую строку. Пустая — это «лимита нет», конструкция просто уходит из
+  // AST. Непустое непечатаемое (`0`, дробное) в AST не попадает вовсе: отказ формулируется
+  // здесь и по НАБРАННОМУ значению — подсунуть сериализатору NaN ради его исключения
+  // значило бы объяснять человеку его же ввод служебным словом.
+  const limit = useMemo<{ value?: number; error: string | null }>(() => {
+    const raw = limitText.trim();
+    if (raw === '') return { error: null };
+    const value = Number.parseInt(raw, 10);
+    if (!/^\d+$/.test(raw) || value <= 0) {
+      // Формулировка — дословно парсерская (parse.ts, parseLimit): одна ошибка обязана
+      // звучать одинаково, откуда бы человек к ней ни пришёл.
+      return { error: `limit должен быть целым числом больше 0, получено '${raw}'` };
+    }
+    return { value, error: null };
+  }, [limitText]);
+
   const effective = useMemo<QueryAst | null>(() => {
     if (ast === null) return null;
-    const raw = limitText.trim();
-    if (raw === '') {
-      const { limit: _dropped, ...rest } = ast;
-      return rest;
-    }
-    return { ...ast, limit: /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : Number.NaN };
-  }, [ast, limitText]);
+    const { limit: _dropped, ...rest } = ast;
+    return limit.value === undefined ? rest : { ...rest, limit: limit.value };
+  }, [ast, limit.value]);
 
   const printed = useMemo(
     () => (effective && catalog ? printQuery(effective, catalog) : null),
@@ -116,8 +126,13 @@ export function QueryBuilderForm({
     );
   }
 
+  // Что мешает записи: отказ по лимиту считаем мы (см. выше), всё остальное — печать с
+  // обратным разбором (непечатаемый AST, неоднозначное имя поля, пустая граница сравнения).
+  const formError = limit.error ?? printed?.error ?? null;
+  const blocked = printed === null || printed.text === null || formError !== null;
+
   function handleSave(): void {
-    if (printed === null || printed.text === null || printed.error !== null) return;
+    if (blocked || printed?.text == null) return;
     // Р3: печать не изменилась — отдаём исходную строку дословно, со всеми её переносами.
     onSave(printed.text === initialPrinted?.text ? initial : printed.text);
   }
@@ -133,11 +148,11 @@ export function QueryBuilderForm({
     >
       <div className="mt-3 flex flex-col gap-4">
         {body}
-        {printed?.error != null && (
+        {formError !== null && (
           // role="status", а не alert: сообщение пересчитывается на каждое движение в форме,
           // и ассертивная озвучка перебивала бы собственные действия пользователя.
           <p role="status" data-testid="qb-form-error" className="text-danger text-sm">
-            {printed.error}
+            {formError}
           </p>
         )}
         <div className="sticky bottom-0 flex flex-wrap justify-end gap-2 bg-surface pt-2">
@@ -152,11 +167,7 @@ export function QueryBuilderForm({
           <Button variant="outline" size="sm" onClick={onCancel}>
             Отмена
           </Button>
-          <Button
-            size="sm"
-            disabled={printed === null || printed.text === null || printed.error !== null}
-            onClick={handleSave}
-          >
+          <Button size="sm" disabled={blocked} onClick={handleSave}>
             Сохранить
           </Button>
         </div>
@@ -243,7 +254,8 @@ function FormBody({
             nodes.length > 0 ? nodes : [{ node: null, index: null }];
           return rows.map((row, k) => (
             <FieldRow
-              key={`${name}#${row.index ?? 'new'}`}
+              // biome-ignore lint/suspicious/noArrayIndexKey: ключ — МЕСТО строки среди строк поля, а не индекс узла в AST: заведение фильтра меняет index с null на число, и ключ по нему пересоздавал бы строку, выбрасывая фокус из селекта ровно в момент выбора
+              key={`${name}#${k}`}
               field={field}
               // Несколько узлов по одному полю — законны (`amount>100, amount<500`), а
               // одинаковые доступные имена — нет: подпись получает номер.
@@ -456,6 +468,14 @@ function TagList({
   const editValue = (row: (typeof display)[number], next: string): void =>
     onFilters((list) => {
       if (row.node === null) return next === '' ? list : [...list, { kind, values: [next] }];
+      // Пустое значение — это «значения нет». Стёртое единственное убирает конструкцию
+      // целиком, симметрично снятию последней галочки у enum-поля: иначе сохранился бы
+      // разбирающийся, но бессмысленный `tags=""`. Пустое среди нескольких остаётся видимым
+      // (и снимается крестиком) — сдвигать соседей под курсором было бы хуже.
+      const group = groups.find((g) => g.index === row.node);
+      if (next === '' && group?.values.length === 1) {
+        return list.filter((_, k) => k !== row.node);
+      }
       return list.map((f, k) =>
         k === row.node && (f.kind === 'tags' || f.kind === 'excludeTags')
           ? { ...f, values: f.values.map((v, j) => (j === row.valueIndex ? next : v)) }
@@ -554,7 +574,10 @@ function RelationRows({
         const rowLabel = rows.length > 1 ? `${label} ${k + 1}` : label;
         const rowIdLabel = rows.length > 1 ? `${idLabel} ${k + 1}` : idLabel;
         return (
-          <div key={row.index ?? 'new'} className="flex flex-col gap-1">
+          // Ключ — место строки, не индекс узла: заведение связи не должно пересоздавать
+          // строку и выбрасывать фокус из селекта (та же причина, что у строк полей).
+          // biome-ignore lint/suspicious/noArrayIndexKey: место строки и есть её личность
+          <div key={k} className="flex flex-col gap-1">
             <LabeledControl label={rowLabel}>
               {(id) => (
                 <select
@@ -665,7 +688,7 @@ function SortRows({
           </select>
           <button
             type="button"
-            aria-label={`Выше: ${s.field}`}
+            aria-label={`Переместить выше: строка ${i + 1}`}
             disabled={i === 0}
             className={`${ROW_BUTTON_CLS} disabled:cursor-not-allowed disabled:opacity-40`}
             onClick={() => write(swap(sort, i, i - 1))}
@@ -674,7 +697,7 @@ function SortRows({
           </button>
           <button
             type="button"
-            aria-label={`Ниже: ${s.field}`}
+            aria-label={`Переместить ниже: строка ${i + 1}`}
             disabled={i === sort.length - 1}
             className={`${ROW_BUTTON_CLS} disabled:cursor-not-allowed disabled:opacity-40`}
             onClick={() => write(swap(sort, i, i + 1))}
@@ -683,7 +706,7 @@ function SortRows({
           </button>
           <button
             type="button"
-            aria-label={`Убрать из сортировки: ${s.field}`}
+            aria-label={`Убрать из сортировки: строка ${i + 1}`}
             className={ROW_BUTTON_CLS}
             onClick={() => write(sort.filter((_, k) => k !== i))}
           >

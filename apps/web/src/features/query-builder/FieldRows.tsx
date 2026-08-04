@@ -79,7 +79,6 @@ export function FieldRow({
 }) {
   const id = useId();
   const gloss = fieldLabel(field.name);
-  const listed = listedValues(field);
 
   /**
    * Запись списка значений — одним путём и для существующего узла, и для строки-заготовки:
@@ -151,9 +150,13 @@ export function FieldRow({
           )}
         </select>
       </div>
-      {(node?.kind === 'field' || (listed !== null && node === null)) && (
+      {/* Значения видны и БЕЗ узла: у enum это набор галочек, у строк и чисел — пустая
+          строка-заготовка, которую заводит первый символ. Дате заготовка не полагается:
+          пустой литерал там означает «переключился на точное значение», а не «значения нет». */}
+      {(node?.kind === 'field' || (node === null && !isDateLike(field))) && (
         <ConditionValues
           field={field}
+          label={label}
           values={node?.kind === 'field' ? node.condition.values : []}
           onValues={writeValues}
         />
@@ -161,7 +164,7 @@ export function FieldRow({
       {node?.kind === 'comparison' && (
         <ComparableInput
           field={field}
-          label={`${field.name}: значение`}
+          label={`${label}: значение`}
           value={node.value.value}
           onValue={(value) => replaceNode({ ...node, value: { ...node.value, value } })}
         />
@@ -170,13 +173,13 @@ export function FieldRow({
         <div className="flex gap-2">
           <ComparableInput
             field={field}
-            label={`${field.name}: от`}
+            label={`${label}: от`}
             value={node.min.value}
             onValue={(value) => replaceNode({ ...node, min: { ...node.min, value } })}
           />
           <ComparableInput
             field={field}
-            label={`${field.name}: до`}
+            label={`${label}: до`}
             value={node.max.value}
             onValue={(value) => replaceNode({ ...node, max: { ...node.max, value } })}
           />
@@ -215,10 +218,13 @@ function ComparableInput({
 /** Значения «любое из» / «ни одно из»: галочки у enum, токены у дат, список строк иначе. */
 function ConditionValues({
   field,
+  label,
   values,
   onValues,
 }: {
   field: FieldRef;
+  /** Подпись строки (с номером, если узлов по полю несколько) — основа имён всех значений. */
+  label: string;
   values: QueryFieldValue[];
   onValues: (values: QueryFieldValue[]) => void;
 }) {
@@ -234,7 +240,7 @@ function ConditionValues({
                 type="checkbox"
                 // Значения enum повторяются между полями (`true`/`false` у четырёх boolean),
                 // поэтому доступное имя несёт поле — иначе в форме четыре кнопки «true».
-                aria-label={`${field.name}: ${v}`}
+                aria-label={`${label}: ${v}`}
                 checked={checked}
                 className="size-4 accent-accent"
                 onChange={() =>
@@ -253,9 +259,31 @@ function ConditionValues({
     );
   }
 
+  // Узла ещё нет — рисуем пустую строку-заготовку: значение набирается прямо в ней, и она
+  // же остаётся под курсором, когда единственное значение стёрли (позиционные ключи не дают
+  // <input> пересоздаться, иначе фокус улетал бы в body посреди правки).
+  const empty = values.length === 0;
+  const rows: QueryFieldValue[] = empty ? [{ kind: 'literal', value: '' }] : values;
+
+  /** Пустой текст = «значения нет»: единственное стёртое убирает конструкцию целиком. */
+  function editValue(i: number, next: QueryFieldValue): void {
+    // У дат пустой литерал — это «переключился с токена на точное значение», а не «стёр»:
+    // трактуй его как отсутствие значения, и выбор «точное значение» удалял бы фильтр.
+    const cleared = !isDateLike(field) && next.kind === 'literal' && next.value === '';
+    if (empty) {
+      onValues(cleared ? [] : [next]);
+      return;
+    }
+    if (cleared && values.length === 1) {
+      onValues([]);
+      return;
+    }
+    onValues(values.map((v, k) => (k === i ? next : v)));
+  }
+
   return (
     <div className="flex flex-col gap-1 pl-1">
-      {values.map((value, i) => (
+      {rows.map((value, i) => (
         <div
           // biome-ignore lint/suspicious/noArrayIndexKey: позиция и есть личность значения в списке
           key={i}
@@ -263,27 +291,34 @@ function ConditionValues({
         >
           <ValueInput
             field={field}
+            label={label}
             index={i}
             value={value}
-            onValue={(next) => onValues(values.map((v, k) => (k === i ? next : v)))}
+            onValue={(next) => editValue(i, next)}
           />
-          <button
-            type="button"
-            aria-label={`Удалить значение ${i + 1}: ${field.name}`}
-            className={ROW_BUTTON_CLS}
-            onClick={() => onValues(values.filter((_, k) => k !== i))}
-          >
-            ×
-          </button>
+          {!empty && (
+            <button
+              type="button"
+              aria-label={`Удалить значение ${i + 1}: ${label}`}
+              className={ROW_BUTTON_CLS}
+              onClick={() => onValues(values.filter((_, k) => k !== i))}
+            >
+              ×
+            </button>
+          )}
         </div>
       ))}
-      <button
-        type="button"
-        className={`${ROW_BUTTON_CLS} self-start`}
-        onClick={() => onValues([...values, ...defaultValues(field)])}
-      >
-        Добавить значение: {field.name}
-      </button>
+      {/* У заготовки кнопки «добавить» нет: второе пустое значение рядом с первым пустым
+          ничего не добавляет, а `field=""` в строке блока — уже добавляет. */}
+      {!empty && (
+        <button
+          type="button"
+          className={`${ROW_BUTTON_CLS} self-start`}
+          onClick={() => onValues([...values, ...defaultValues(field)])}
+        >
+          Добавить значение: {label}
+        </button>
+      )}
     </div>
   );
 }
@@ -291,11 +326,14 @@ function ConditionValues({
 /** Одно значение списка: у date/timestamp — относительный токен или точное значение (§6.1). */
 function ValueInput({
   field,
+  label,
   index,
   value,
   onValue,
 }: {
   field: FieldRef;
+  /** Подпись строки поля — с номером, если узлов по этому полю несколько. */
+  label: string;
   index: number;
   value: QueryFieldValue;
   onValue: (v: QueryFieldValue) => void;
@@ -303,7 +341,7 @@ function ValueInput({
   if (!isDateLike(field)) {
     return (
       <input
-        aria-label={`${field.name}: значение ${index + 1}`}
+        aria-label={`${label}: значение ${index + 1}`}
         value={value.kind === 'literal' ? value.value : value.token}
         onChange={(e) => onValue({ kind: 'literal', value: e.target.value })}
         className={`${FIELD_CLS} w-full`}
@@ -313,7 +351,7 @@ function ValueInput({
   return (
     <>
       <select
-        aria-label={`${field.name}: значение ${index + 1}`}
+        aria-label={`${label}: значение ${index + 1}`}
         value={value.kind === 'date_token' ? value.token : 'exact'}
         className={`${FIELD_CLS} min-w-0 flex-1`}
         onChange={(e) => {
@@ -334,7 +372,7 @@ function ValueInput({
       </select>
       {value.kind === 'literal' && (
         <input
-          aria-label={`${field.name}: дата ${index + 1}`}
+          aria-label={`${label}: дата ${index + 1}`}
           type={field.type === 'date' ? 'date' : 'text'}
           value={value.value}
           onChange={(e) => onValue({ kind: 'literal', value: e.target.value })}
