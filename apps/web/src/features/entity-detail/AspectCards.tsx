@@ -4,28 +4,71 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { CATEGORIES_QUERY, toOption } from '../budget/categories';
 import { invalidateBudget } from '../budget/useBudget';
+import { GoalProgress } from './GoalProgress';
 import { useEntityUpdate } from './useEntityDetail';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
+type GoalProgressData = NonNullable<RouterOutputs['entity']['get']['goalProgress']>;
 
 const FINANCIAL = 'orbis/financial';
 const CATEGORY_REF = 'category_ref';
+const GOAL = 'orbis/goal';
 
 // Тихий инпут-в-строке-свойства: тот же вид у текстового поля и у пикера категории.
 const FIELD_CLASS =
   'w-full rounded-md bg-transparent px-2 py-1 text-sm text-text outline-none transition hover:bg-surface-2 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/40';
 
 // Восстановление типа поля из исходного значения (правка идёт как строка из Input).
+// Нескалярное сюда не доходит вовсе — такие поля не редактируются (см. isScalar).
 function coerce(original: unknown, raw: string): unknown {
   if (typeof original === 'number') return Number(raw);
   if (typeof original === 'boolean') return raw === 'true';
   return raw;
 }
 
+/**
+ * Правится ли значение строкой в инпуте. Инпут отдаёт СТРОКУ, и обратно в объект или
+ * массив она не превращается ничем: до этой проверки объектный `progress_source` цели
+ * рисовался как `[object Object]` (String(value)), а blur слал эту строку и получал
+ * жёсткий VALIDATION от ajv — поле выглядело сломанным на КАЖДОЙ цели (обязательное
+ * поле аспекта). То же касалось `orbis/schedule.recurrence` и `orbis/category.aliases`,
+ * поэтому чинится общий случай, а не цель: редактируемо ровно то, что скаляр.
+ */
+function isScalar(v: unknown): boolean {
+  return (
+    v === null ||
+    v === undefined ||
+    typeof v === 'string' ||
+    typeof v === 'number' ||
+    typeof v === 'boolean'
+  );
+}
+
+/**
+ * Показ нескалярного значения. Прятать поле нельзя: «поправьте в источнике query»
+ * (GoalProgress) — пустой совет, если самого query на экране нет. Список скаляров
+ * читается через запятую, всё прочее — компактным JSON: это и есть та форма, в которой
+ * значение уедет обратно на сервер, и по ней видно опечатку в запросе.
+ */
+function readOnlyText(value: unknown): string {
+  if (Array.isArray(value) && value.every(isScalar))
+    return value.map((v) => String(v ?? '')).join(', ');
+  return JSON.stringify(value) ?? String(value);
+}
+
 // Карточки установленных аспектов: типизированная inline-правка полей (§5.2 — та же
 // optimistic + expectedUpdatedAt, что и body; правка подлежит Undo журнала сервера) и
 // снятие аспекта целиком (aspects:{id:null}).
-export function AspectCards({ entity }: { entity: Entity }) {
+//
+// goalProgress — сосед сущности в ответе entity.get (E2), а не поле аспекта: считает его
+// сервер на каждом чтении, и в `entity.aspects` его нет. Отсюда отдельный проп.
+export function AspectCards({
+  entity,
+  goalProgress,
+}: {
+  entity: Entity;
+  goalProgress?: GoalProgressData;
+}) {
   const { mutation, conflict } = useEntityUpdate(entity.id);
   const utils = trpc.useUtils();
   const aspects = entity.aspects as Record<string, Record<string, unknown>>;
@@ -70,6 +113,14 @@ export function AspectCards({ entity }: { entity: Entity }) {
               Снять аспект
             </Button>
           </div>
+          {/* Прогресс цели — НАД свойствами: он и есть ответ на вопрос «как оно идёт»,
+              а target_value/unit ниже — его настройки (§11.3). */}
+          {aspectId === GOAL && goalProgress !== undefined && (
+            <GoalProgress
+              progress={goalProgress}
+              unit={typeof fields.unit === 'string' ? fields.unit : undefined}
+            />
+          )}
           <dl className="grid grid-cols-[minmax(7rem,max-content)_1fr] items-center gap-x-3 gap-y-0.5 text-sm">
             {Object.entries(fields).map(([field, value]) =>
               // Единственное поле с собственным контролом: категория финансовой записи
@@ -81,6 +132,8 @@ export function AspectCards({ entity }: { entity: Entity }) {
                   value={typeof value === 'string' ? value : ''}
                   onSelect={setCategory}
                 />
+              ) : !isScalar(value) ? (
+                <ReadOnlyField key={field} aspectId={aspectId} field={field} value={value} />
               ) : (
                 <AspectField
                   key={field}
@@ -158,6 +211,33 @@ function CategoryField({ value, onSelect }: { value: string; onSelect: (id: stri
             </option>
           ))}
         </select>
+      </dd>
+    </>
+  );
+}
+
+/**
+ * Нескалярное значение — read-only строка вместо инпута (см. isScalar). Отступы те же,
+ * что у FIELD_CLASS, чтобы значения свойств стояли на одной вертикали; hover/фокус —
+ * нет, и это ровно то, что нужно сказать глазу: здесь не правят.
+ */
+function ReadOnlyField({
+  aspectId,
+  field,
+  value,
+}: {
+  aspectId: string;
+  field: string;
+  value: unknown;
+}) {
+  return (
+    <>
+      <dt className="text-text-muted">{fieldLabel(field)}</dt>
+      <dd
+        data-testid={`aspect-value-${aspectId}-${field}`}
+        className="break-words px-2 py-1 text-sm text-text-secondary"
+      >
+        {readOnlyText(value)}
       </dd>
     </>
   );

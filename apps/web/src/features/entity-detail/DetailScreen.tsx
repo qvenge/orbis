@@ -86,7 +86,9 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       </>
     );
   }
-  const { entity, thread, relations, backlinks, backlinksTruncated } = get.data;
+  // goalProgress есть ТОЛЬКО у сущностей с аспектом orbis/goal (E2): у остальных поля нет
+  // вовсе, и расчёт им не стоит ни одного запроса.
+  const { entity, thread, relations, backlinks, backlinksTruncated, goalProgress } = get.data;
 
   // В шапке — только title; emoji сущности — крупная page-иконка (Notion-style) в строке
   // с заголовком/NativeRow. Нет emoji — ничего не рендерим (без плейсхолдера).
@@ -135,7 +137,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           редактор, стирая текст, набранный за время запроса (а при 409 — ещё и уничтожая
           черновик, который §5.2 предлагает «повторить вручную»). */}
       <BodySection key={entity.id} initial={entity.body ?? ''} onSave={saveBody} />
-      <AspectCards entity={entity} />
+      <AspectCards entity={entity} goalProgress={goalProgress} />
       {/* Секции 5–7 §3.5: связи уже приехали этим же entity.get — своих запросов графа
           секции не заводят. */}
       <Subtasks parentId={entity.id} relations={relations ?? []} />
