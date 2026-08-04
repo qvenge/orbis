@@ -5,6 +5,9 @@
 // считает SQL (::numeric) — здесь только формулы поверх готовых строк:
 // effectiveLimit/remaining (add/sub), пороги (cmp/mulInt), dailyPace (divBy:
 // ровно 2 знака, half-away-from-zero — бриф A6).
+// Родом из Budget, но это ЕДИНСТВЕННАЯ точная decimal-арифметика сервера: прогресс
+// цели (goals/progress.ts, §11.3) считает свою долю здесь же (decRatio), а не заводит
+// второй разбор decimal-строк.
 
 const DEC_RE = /^(-?)(\d+)(?:\.(\d+))?$/;
 
@@ -67,6 +70,35 @@ export function decMulInt(a: string, n: number): string {
   const d = parseDec(a);
   const s = Math.max(d.s, 2);
   return format(rescale(d, s) * BigInt(n), s);
+}
+
+/** Знаков после точки, на которых считается доля decRatio: 1e-6 хватит любой полосе. */
+const RATIO_SCALE = 6n;
+
+/**
+ * Доля `a / b` числом — для прогресс-бара цели (01 §11.3, E2). Оба аргумента остаются
+ * decimal-строками: деление точное, на BigInt при масштабе RATIO_SCALE, и IEEE-754
+ * появляется РОВНО один раз, последним шагом, из уже посчитанного частного (глобальное
+ * ограничение §3.3 — `parseFloat` по деньгам запрещён). Не decDivBy: тот делит на
+ * НАТУРАЛЬНОЕ ЧИСЛО и отдаёт строку, а здесь делитель — decimal-строка ('300000.00').
+ *
+ * Делитель обязан быть ненулевым (у цели это гарантирует positiveDecimal схемы);
+ * ноль — RangeError, а не Infinity. Округление — half-away-from-zero, как у decDivBy.
+ * Значения свыше ~9·10^9 теряют точность на последнем шаге (Number из BigInt) —
+ * для доли, которую рисует полоса, это несущественно.
+ */
+export function decRatio(a: string, b: string): number {
+  const { av, bv } = align(parseDec(a), parseDec(b));
+  if (bv === 0n) throw new RangeError(`деление на ноль: "${a}" / "${b}"`);
+  const scale = 10n ** RATIO_SCALE;
+  // Считаем по модулю, знак применяем один раз в конце: так правило округления
+  // одно на оба знака, без развилок «в какую сторону от нуля».
+  const negative = av < 0n !== bv < 0n;
+  const num = (av < 0n ? -av : av) * scale;
+  const den = bv < 0n ? -bv : bv;
+  let q = num / den;
+  if ((num % den) * 2n >= den) q += 1n;
+  return (negative ? -Number(q) : Number(q)) / Number(scale);
 }
 
 /**

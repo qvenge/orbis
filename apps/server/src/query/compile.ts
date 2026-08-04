@@ -37,7 +37,19 @@ export interface CompileContext {
 
 /** Структурная ошибка компиляции (§6.4): например, `this` вне контекста сущности. */
 export class QueryCompileError extends Error {
-  override readonly name = 'QueryCompileError';
+  override readonly name: string = 'QueryCompileError';
+}
+
+/**
+ * Ошибка резолва ПОЛЯ агрегата (compileSum/compileLatest), а не самого запроса: нет
+ * такого поля в каталоге, неоднозначно без `aspect=` или тип не числовой. Подкласс, а не
+ * самостоятельный тип: все существующие `instanceof QueryCompileError` (роутер entity,
+ * диспатч тулов) ловят её ровно как раньше, но вызывающему, которому нужно отличить
+ * «сломано поле» от «сломан запрос» (прогресс цели §11.3 — разные честные отказы),
+ * различие теперь доступно.
+ */
+export class QueryFieldError extends QueryCompileError {
+  override readonly name = 'QueryFieldError';
 }
 
 /** Дефолтный cap выдачи, когда limit= не задан (решение 11 плана); только compileQuery. */
@@ -61,35 +73,68 @@ export function compileCount(ast: QueryAst, ctx: CompileContext): SQL {
   return sql`SELECT count(*) FROM entities WHERE ${compileWhere(ast, ctx, aspectsInQuery(ast))}`;
 }
 
-/** Числовые типы каталога, допустимые в sum (decimal-строки §3.3 и явные числа). */
+/** Числовые типы каталога, допустимые в sum и latest (decimal-строки §3.3 и явные числа). */
 const SUMMABLE_TYPES: ReadonlySet<FieldType> = new Set(['decimal', 'number', 'integer']);
 
 /**
- * Агрегация `user_query` (§9.2, решение 7 плана 1b): count(*) + sum(поле) одним SELECT
- * по той же WHERE-выборке, что compileQuery, но БЕЗ limit — агрегат по всей выборке.
+ * Агрегация `user_query` (§9.2, решение 7 плана 1b) и `aggregate: "sum"` целей (§11.3):
+ * count(*) + sum(поле) одним SELECT по той же WHERE-выборке, что compileQuery,
+ * но БЕЗ limit — агрегат по всей выборке.
  * Поле резолвится каталогом тем же путём, что фильтры (fieldRef, с учётом `aspect=`
  * из запроса); допустимы только числовые типы. Сумма считается через ::numeric и
  * отдаётся текстом — точность decimal-строк не теряется во float (§3.3).
  */
 export function compileSum(ast: QueryAst, ctx: CompileContext, field: string): SQL {
   const aspects = aspectsInQuery(ast);
+  const ref = numericFieldRef(field, ctx, aspects, 'sum');
+  return sql`SELECT count(*) AS count, sum(${numericExpr(ref)})::text AS sum FROM entities WHERE ${compileWhere(ast, ctx, aspects)}`;
+}
+
+/**
+ * `latest` целей (01 §11.3, задача E2): значение числового поля у ПОСЛЕДНЕЙ сущности
+ * той же выборки, что дал бы список.
+ *
+ * «Последняя» однозначно = максимум `updated_at` (единственный индексированный
+ * core-порядок, миграция 0001); ничья снимается `id DESC` — детерминизм ответа важнее
+ * «настоящего» порядка одинаковых меток. Строки, где поле не заполнено, в кандидаты не
+ * попадают: правка соседней сущности без этого поля не должна обнулять «последнее
+ * измерение» цели. Значение отдаётся `::numeric::text` — канонической decimal-строкой
+ * (§3.3), во float оно не превращается ни здесь, ни у вызывающего.
+ */
+export function compileLatest(ast: QueryAst, ctx: CompileContext, field: string): SQL {
+  const aspects = aspectsInQuery(ast);
+  const ref = numericFieldRef(field, ctx, aspects, 'latest');
+  return sql`SELECT ${numericExpr(ref)}::text AS value FROM entities WHERE ${compileWhere(ast, ctx, aspects)} AND ${ref.expr} IS NOT NULL ORDER BY updated_at DESC, id DESC LIMIT 1`;
+}
+
+/**
+ * Резолв поля агрегата: тот же путь каталога, что у фильтров (fieldRef с учётом
+ * `aspect=`), но допустимы только числовые типы. В отличие от фильтров, поле сюда
+ * приходит из input тула или из аспекта цели, а не из разобранного запроса — нерезолв
+ * каталогом штатен, поэтому текст «рассинхрон с парсером» был бы ложью, а класс ошибки
+ * отделяет «сломано поле» от «сломан запрос».
+ */
+function numericFieldRef(
+  field: string,
+  ctx: CompileContext,
+  aspects: Set<string>,
+  op: 'sum' | 'latest',
+): FieldRef {
   let ref: FieldRef;
   try {
     ref = fieldRef(field, ctx, aspects);
   } catch (e) {
-    // В отличие от фильтров, поле здесь приходит из input тула, а не из разобранного
-    // запроса — нерезолв каталогом штатен, текст «рассинхрон с парсером» был бы ложью.
     if (e instanceof QueryCompileError) {
-      throw new QueryCompileError(
+      throw new QueryFieldError(
         `поле '${field}' не разрешилось каталогом: нет такого поля или неоднозначно без aspect=`,
       );
     }
     throw e;
   }
   if (ref.core || !SUMMABLE_TYPES.has(ref.type)) {
-    throw new QueryCompileError(`sum по полю '${field}' невозможен: тип '${ref.type}' не числовой`);
+    throw new QueryFieldError(`${op} по полю '${field}' невозможен: тип '${ref.type}' не числовой`);
   }
-  return sql`SELECT count(*) AS count, sum(${numericExpr(ref)})::text AS sum FROM entities WHERE ${compileWhere(ast, ctx, aspects)}`;
+  return ref;
 }
 
 /**

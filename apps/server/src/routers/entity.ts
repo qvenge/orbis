@@ -14,11 +14,12 @@ import { z } from 'zod';
 import { escalateAfterMutation } from '../ai/escalation';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
-import { readEntity } from '../entity-read';
+import { type EntityReadResult, readEntity } from '../entity-read';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { WireEntity } from '../executor/types';
+import { type GoalProgress, goalProgressFor } from '../goals/progress';
 import {
   type CompileContext,
   compileCount,
@@ -147,16 +148,27 @@ export const entityRouter = router({
 
   // §9.2 entity_get: include-логика вынесена в общий хелпер entity-read.ts —
   // его же переиспользует диспатч тулов LLM/MCP (tools/dispatch.ts, 1b Task 4).
-  get: protectedProcedure.input(entityGetInput).query(async ({ ctx, input }) => {
-    try {
-      return await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
-        readEntity(tx, ctx.actorUserId, input),
-      );
-    } catch (e) {
-      if (e instanceof ExecError) throw execErrorToTRPC(e);
-      throw e;
-    }
-  }),
+  get: protectedProcedure
+    .input(entityGetInput)
+    .query(async ({ ctx, input }): Promise<EntityReadResult & { goalProgress?: GoalProgress }> => {
+      try {
+        return await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+          const result = await readEntity(tx, ctx.actorUserId, input);
+          // Прогресс цели (§11.3) — АДДИТИВНОЕ поле поверх формы readEntity, и добавляется
+          // оно здесь, а не в самом readEntity: та форма — общий контракт с LLM/MCP-диспатчем
+          // (tools/dispatch.ts), и всё, что в неё положено, уезжает в контекст модели.
+          // Прогресс — материал прогресс-бара, модели он не нужен. Прецедент аддитивного
+          // поля с явной аннотацией — actionId у create выше.
+          // Той же tx: расчёт читает граф под уже установленной identity (RLS), своей
+          // транзакции не открывает. Обычная сущность в него не заходит вовсе.
+          const goalProgress = await goalProgressFor(tx, ctx.actorUserId, result.entity);
+          return goalProgress === undefined ? result : { ...result, goalProgress };
+        });
+      } catch (e) {
+        if (e instanceof ExecError) throw execErrorToTRPC(e);
+        throw e;
+      }
+    }),
 
   query: protectedProcedure.input(querySignature).query(({ ctx, input }) =>
     runQueryWithMaterialization(ctx.db, ctx.actorUserId, input, async (tx, ast, cctx) => {
