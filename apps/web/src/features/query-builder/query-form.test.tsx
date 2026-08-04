@@ -186,6 +186,41 @@ test('снятие последнего значения убирает конс
   expect(saved(onSave)).toBe('aspect=orbis/task');
 });
 
+// «Заменить, что именно исключаем» — бытовой путь: снял старое значение, поставил новое.
+// Снятие последнего убирает узел (иначе печаталось бы `status=`), и без памяти строки
+// повторный ввод заводил его заново жёстким «любое из»: `status=!done` превращался в
+// `status=cancelled` — отбор смарт-листа значил бы ровно обратное тому, что просили.
+test('перезаведение значения сохраняет «ни одно из» (enum)', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, status=!done');
+  fireEvent.click(screen.getByLabelText('status: done'));
+  fireEvent.click(screen.getByLabelText('status: cancelled'));
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, status=!cancelled');
+});
+
+// Тот же механизм у строкового поля: там узел исчезает от стирания текста, а возвращается
+// первым же символом — селект операторов при этом даже не трогают.
+test('перезаведение значения сохраняет «ни одно из» (строковое поле)', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, waiting_for=!Иван');
+  const value = screen.getByLabelText('waiting_for: значение 1');
+  fireEvent.change(value, { target: { value: '' } });
+  fireEvent.change(screen.getByLabelText('waiting_for: значение 1'), {
+    target: { value: 'Пётр' },
+  });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, waiting_for=!Пётр');
+});
+
+// Граница памяти: «нет фильтра» в селекте — ЯВНЫЙ отказ от конструкции, а не побочный
+// эффект стирания значения. После него строка начинается с чистого листа — «любое из».
+test('явное «нет фильтра» сбрасывает запомненный оператор строки', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, status=!done');
+  fireEvent.change(screen.getByLabelText('status'), { target: { value: '' } });
+  fireEvent.click(screen.getByLabelText('status: cancelled'));
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, status=cancelled');
+});
+
 test('отрицание сохраняется &-формой', async () => {
   const { onSave } = await openForm('aspect=orbis/task, status=!done&!cancelled');
   fireEvent.click(screen.getByLabelText('status: cancelled'));

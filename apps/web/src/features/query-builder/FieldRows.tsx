@@ -8,7 +8,7 @@
  */
 
 import type { QueryDateToken, QueryFieldValue, QueryFilter } from '@orbis/shared';
-import { useId } from 'react';
+import { useId, useRef } from 'react';
 import { fieldLabel } from '../../lib/field-labels';
 import {
   defaultComparable,
@@ -79,6 +79,21 @@ export function FieldRow({
 }) {
   const id = useId();
   const gloss = fieldLabel(field.name);
+  const operator = operatorOf(node);
+
+  /**
+   * Оператор списка, с которым строка жила последний раз. Узел исчезает от стирания
+   * ПОСЛЕДНЕГО значения (пустой список грамматика не выражает), и повторный ввод заводит
+   * его заново уже без узла — литеральный `'anyOf'` здесь переворачивал бы смысл: «заменить,
+   * что именно исключаем» (снял `!done`, поставил `cancelled`) превращало `status=!done` в
+   * `status=cancelled`, то есть отбор смарт-листа значил бы обратное. Память живёт в строке,
+   * а не в AST: в AST этого узла в тот момент нет вовсе.
+   *
+   * Ref, а не state: значение только сопровождает узел и само по себе ничего не рисует —
+   * перерисовка от него была бы кадром без единого изменения на экране.
+   */
+  const listKind = useRef<'anyOf' | 'noneOf'>('anyOf');
+  if (operator === 'anyOf' || operator === 'noneOf') listKind.current = operator;
 
   /**
    * Запись списка значений — одним путём и для существующего узла, и для строки-заготовки:
@@ -90,7 +105,7 @@ export function FieldRow({
       // Пустой список грамматика не выражает (`status=` — ошибка), и serializeQuery на нём
       // бросает: «значений не осталось» здесь означает «фильтра нет».
       if (values.length === 0) return index === null ? list : list.filter((_, i) => i !== index);
-      const kind = node?.kind === 'field' ? node.condition.kind : 'anyOf';
+      const kind = node?.kind === 'field' ? node.condition.kind : listKind.current;
       const built: FieldNode = { kind: 'field', field: field.name, condition: { kind, values } };
       if (index === null) return [...list, built];
       return list.map((f, i) => (i === index ? built : f));
@@ -99,7 +114,13 @@ export function FieldRow({
 
   function changeOperator(next: Operator): void {
     onFilters((list) => {
-      if (next === '') return index === null ? list : list.filter((_, i) => i !== index);
+      if (next === '') {
+        // «Нет фильтра» — ЯВНЫЙ отказ от конструкции, а не побочный эффект стирания
+        // значения: следующий фильтр по этому полю строка заводит с чистого листа, иначе
+        // галочка после сброса тихо возвращала бы отрицание, которого уже не просили.
+        listKind.current = 'anyOf';
+        return index === null ? list : list.filter((_, i) => i !== index);
+      }
       const built = buildNode(next, field, node);
       if (index === null) return [...list, built];
       return list.map((f, i) => (i === index ? built : f));
@@ -132,7 +153,7 @@ export function FieldRow({
         </span>
         <select
           id={id}
-          value={operatorOf(node)}
+          value={operator}
           className={`${FIELD_CLS} w-32 shrink-0`}
           onChange={(e) => changeOperator(e.target.value as Operator)}
         >
