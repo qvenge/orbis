@@ -12,12 +12,30 @@
  *   parseQuery(serializeQuery(ast)).ast   глубоко равен ast;
  *   serializeQuery(parseQuery(serializeQuery(ast)).ast) === serializeQuery(ast).
  *
- * Вход — AST, произведённый `parseQuery` (или структурно ему эквивалентный). Формы,
- * которые парсер породить не может, за контрактом: пустые списки значений в `tags`/
- * `excludeTags`/`anyOf`/`noneOf` (грамматика требует непустой элемент), литерал, равный
- * date-токену, на строковом поле, имя поля, совпадающее с зарезервированным ключом
- * грамматики (`limit` аспекта orbis/budget), и перенос строки внутри значения
- * (парсер заменяет его пробелом до разбора, независимо от кавычек).
+ * ─── AST, который нельзя честно напечатать ───
+ *
+ * Вход — AST, произведённый `parseQuery`, либо структурно ему эквивалентный, собранный
+ * формой редактора. Форму парсер породить не может ⇒ она может оказаться непечатаемой:
+ * строка либо не разберётся вовсе, либо ТИХО даст другой смысл. Такие AST — ошибка
+ * вызывающего, и сериализатор бросает `Error`, а не отбрасывает конструкцию молча:
+ * тихая запись испорченного блока в body сущности хуже громкого падения при разработке.
+ *
+ * Бросает на:
+ *   • имя поля, совпадающее с ключом грамматики (`limit` есть у orbis/budget):
+ *     `limit=100` парсер разберёт как параметр запроса, и фильтр исчезнет без ошибки;
+ *   • пустой список значений (`tags`, `excludeTags`, `anyOf`, `noneOf`, `sortBy`):
+ *     `tags=` грамматика отвергает — пустой элемент запрещён;
+ *   • `limit`, не являющийся целым больше нуля (`parseLimit` такое отвергает);
+ *   • `}}` в любом месте результата: обёртка `{{query: … }}`, которую поставит
+ *     вызывающий, закроется раньше времени, а рендерер блоков грамматики не знает,
+ *     и кавычки тут не спасают.
+ *
+ * НЕ проверяется (проверить нечем):
+ *   • литерал, равный date-токену, на строковом поле (`status=today`) — тип поля
+ *     известен только каталогу, а каталога у сериализатора нет; кавычки не помогают:
+ *     парсер снимает их до проверки на токен;
+ *   • перенос строки внутри значения — `parse.ts` меняет его на пробел до разбора,
+ *     независимо от кавычек; строка остаётся разбираемой, теряется только сам перенос.
  */
 
 import type {
@@ -27,6 +45,39 @@ import type {
   QueryFieldValue,
   QueryFilter,
 } from './grammar';
+
+/**
+ * Ключи, занятые грамматикой в позиции имени конструкции (§6.1).
+ *
+ * Осознанный дубль `RESERVED_KEYS` из `parse.ts`: там константа не экспортирована,
+ * а тянуть внутренности парсера в сериализатор хуже, чем повторить список. От дрейфа
+ * защищает тест «набор совпадает с набором парсера», который сверяет набор с ПОВЕДЕНИЕМ
+ * парсера, а не с его исходником.
+ *
+ * Ограничение касается только позиции имени конструкции: внутри `sortBy` те же имена
+ * резолвятся как обычные поля (`sortBy=limit:asc` разбирается корректно), там запрета нет.
+ */
+const RESERVED_KEYS: ReadonlySet<string> = new Set([
+  'tags',
+  'excludeTags',
+  'aspect',
+  'children_of',
+  'parents_of',
+  'excludeBlocked',
+  'archived',
+  'sortBy',
+  'search',
+  'limit',
+  'display',
+  'title',
+]);
+
+/** Маркер конца обёртки `{{query: … }}` — внутри напечатанного запроса недопустим. */
+const BLOCK_END = '}}';
+
+function fail(reason: string): never {
+  throw new Error(`serializeQuery: ${reason}`);
+}
 
 /**
  * Символы, при которых значение обязано быть в кавычках: разделители конструкций,
@@ -57,14 +108,31 @@ function quoteValue(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
+/** Имя поля в позиции ключа конструкции: ключи грамматики сюда не пролезают. */
+function fieldName(name: string): string {
+  if (RESERVED_KEYS.has(name)) {
+    fail(
+      `имя поля '${name}' занято ключом грамматики §6.1 — такую конструкцию парсер ` +
+        `разберёт как параметр запроса, а фильтр молча исчезнет`,
+    );
+  }
+  return name;
+}
+
+/** Грамматика §6.1 требует хотя бы одно значение: пустой список напечатать нечем. */
+function nonEmpty<T>(values: readonly T[], where: string): readonly T[] {
+  if (values.length === 0) fail(`пустой список значений в '${where}' — печатать нечего`);
+  return values;
+}
+
 /** Элемент значения: date-токен печатается голым словом, литерал — по правилам квотирования. */
 function serializeFieldValue(value: QueryFieldValue): string {
   return value.kind === 'date_token' ? value.token : quoteValue(value.value);
 }
 
 /** `v1|v2` для anyOf и `!v1&!v2` для noneOf (§6.1). */
-function serializeCondition(condition: QueryFieldCondition): string {
-  const values = condition.values.map(serializeFieldValue);
+function serializeCondition(condition: QueryFieldCondition, field: string): string {
+  const values = nonEmpty(condition.values, `${field}=`).map(serializeFieldValue);
   return condition.kind === 'noneOf' ? values.map((v) => `!${v}`).join('&') : values.join('|');
 }
 
@@ -85,17 +153,17 @@ function serializeEntityRef(ref: QueryEntityRef): string {
 function serializeFilter(filter: QueryFilter): string {
   switch (filter.kind) {
     case 'tags':
-      return `tags=${filter.values.map(quoteValue).join('|')}`;
+      return `tags=${nonEmpty(filter.values, 'tags=').map(quoteValue).join('|')}`;
     case 'excludeTags':
-      return `excludeTags=${filter.values.map(quoteValue).join('|')}`;
+      return `excludeTags=${nonEmpty(filter.values, 'excludeTags=').map(quoteValue).join('|')}`;
     case 'aspect':
       return `aspect=${quoteValue(filter.aspect)}`;
     case 'field':
-      return `${filter.field}=${serializeCondition(filter.condition)}`;
+      return `${fieldName(filter.field)}=${serializeCondition(filter.condition, filter.field)}`;
     case 'comparison':
-      return `${filter.field}${filter.op}${filter.value.value}`;
+      return `${fieldName(filter.field)}${filter.op}${filter.value.value}`;
     case 'range':
-      return `${filter.field}=${filter.min.value}..${filter.max.value}`;
+      return `${fieldName(filter.field)}=${filter.min.value}..${filter.max.value}`;
     case 'children_of':
       return `children_of=${serializeEntityRef(filter.of)}`;
     case 'parents_of':
@@ -107,7 +175,7 @@ function serializeFilter(filter: QueryFilter): string {
       return `archived=${filter.value}`;
     default: {
       const exhaustive: never = filter;
-      throw new Error(`serializeQuery: неизвестный узел фильтра ${JSON.stringify(exhaustive)}`);
+      fail(`неизвестный узел фильтра ${JSON.stringify(exhaustive)}`);
     }
   }
 }
@@ -119,17 +187,34 @@ function serializeFilter(filter: QueryFilter): string {
  * Порядок фильтров сохраняется дословно и ни один не выбрасывается: неоднозначные имена
  * (`currency`, `category_ref` живут в двух аспектах) парсер резолвит по `aspect=` в том же
  * запросе — потеря или перестановка конструкции сделала бы строку неразбираемой.
+ *
+ * Непечатаемый AST — `Error` (см. шапку модуля), а не тихо испорченная строка.
  */
 export function serializeQuery(ast: QueryAst): string {
   const parts = ast.filters.map(serializeFilter);
-  // Пустой список сортировки печатать нечем: `sortBy=` — ошибка парсинга. Для AST
-  // отсутствие сортировки и пустой список означают одно и то же (поле опционально).
-  if (ast.sortBy && ast.sortBy.length > 0) {
-    parts.push(`sortBy=${ast.sortBy.map((s) => `${s.field}:${s.direction}`).join('|')}`);
+  if (ast.sortBy !== undefined) {
+    const fields = nonEmpty(ast.sortBy, 'sortBy=');
+    parts.push(`sortBy=${fields.map((s) => `${s.field}:${s.direction}`).join('|')}`);
   }
   if (ast.search !== undefined) parts.push(`search=${quoteValue(ast.search)}`);
-  if (ast.limit !== undefined) parts.push(`limit=${ast.limit}`);
+  if (ast.limit !== undefined) {
+    // Дословно условие parseLimit (parse.ts): дробный, нулевой и отрицательный не разберутся.
+    if (!Number.isInteger(ast.limit) || ast.limit <= 0) {
+      fail(`limit должен быть целым числом больше 0, получено '${ast.limit}'`);
+    }
+    parts.push(`limit=${ast.limit}`);
+  }
   if (ast.display !== undefined) parts.push(`display=${ast.display}`);
   if (ast.title !== undefined) parts.push(`title=${quoteValue(ast.title)}`);
-  return parts.join(', ');
+
+  const query = parts.join(', ');
+  // Одна проверка на весь результат вместо проверки каждого значения: `}}` может прийти
+  // только из строки внутри AST (квотирование фигурных скобок не порождает), а разделители
+  // конструкций не дают двум `}` из соседних значений слипнуться.
+  if (query.includes(BLOCK_END)) {
+    fail(
+      `результат содержит '${BLOCK_END}' и закроет обёртку {{query: … }} раньше времени: ${query}`,
+    );
+  }
+  return query;
 }

@@ -202,3 +202,145 @@ describe('serializeQuery: неоднозначные поля', () => {
     expect(parseQuery(`category_ref=${UUID}`, catalog).ok).toBe(false);
   });
 });
+
+// AST, собранный формой (а не парсером), может оказаться непечатаемым: строка либо
+// не разберётся, либо ТИХО даст другой смысл. Контракт — Error, а не молчаливая порча.
+describe('serializeQuery: непечатаемый AST — исключение, а не тихая порча', () => {
+  const anyOf = (field: string, value: string): QueryFilter => ({
+    kind: 'field',
+    field,
+    condition: { kind: 'anyOf', values: [{ kind: 'literal', value }] },
+  });
+
+  // Список ключей грамматики §6.1. Третья копия набора (парсер / сериализатор / тест)
+  // — сознательная: тест пришпиливает обе рабочие копии к одному явному списку.
+  const RESERVED = [
+    'tags',
+    'excludeTags',
+    'aspect',
+    'children_of',
+    'parents_of',
+    'excludeBlocked',
+    'archived',
+    'sortBy',
+    'search',
+    'limit',
+    'display',
+    'title',
+  ];
+
+  test('набор зарезервированных ключей сериализатора совпадает с набором парсера', () => {
+    for (const key of RESERVED) {
+      // (а) парсер действительно считает ключ зарезервированным…
+      const r = parseQuery(`${key}>1`, catalog);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.message).toMatch(/неприменим к ключу/);
+      // (б) …и сериализатор отказывается печатать поле с этим именем.
+      expect(() => serializeQuery({ filters: [anyOf(key, 'x')] })).toThrow(
+        /занято ключом грамматики/,
+      );
+    }
+    // Контроль: обычное поле каталога ни там, ни там не зарезервировано.
+    expect(parseQuery('aspect=orbis/financial, amount>1', catalog).ok).toBe(true);
+    expect(() => serializeQuery({ filters: [anyOf('status', 'x')] })).not.toThrow();
+  });
+
+  test('имя поля, занятое ключом грамматики: фильтр иначе исчез бы молча', () => {
+    // limit — реальное свойство orbis/budget, форма редактора возьмёт его из каталога.
+    expect(catalog.fields.limit?.map((i) => i.aspect)).toEqual(['orbis/budget']);
+    expect(() => serializeQuery({ filters: [anyOf('limit', '100')] })).toThrow(/limit/);
+    // Именно то, что случилось бы без guard: фильтр исчезает, ошибки нет.
+    expect(parseQuery('limit=100', catalog)).toEqual({
+      ok: true,
+      ast: { filters: [], limit: 100 },
+    });
+    // Тот же ключ в comparison и range.
+    expect(() =>
+      serializeQuery({
+        filters: [
+          { kind: 'comparison', field: 'limit', op: '>', value: { kind: 'decimal', value: '1' } },
+        ],
+      }),
+    ).toThrow(/занято ключом грамматики/);
+    expect(() =>
+      serializeQuery({
+        filters: [
+          {
+            kind: 'range',
+            field: 'limit',
+            min: { kind: 'decimal', value: '1' },
+            max: { kind: 'decimal', value: '2' },
+          },
+        ],
+      }),
+    ).toThrow(/занято ключом грамматики/);
+  });
+
+  test('guard не перебарщивает: тот же ключ внутри sortBy легален', () => {
+    // resolveField внутри sortBy резолвит limit как обычное поле orbis/budget.
+    expect(serializeQuery({ filters: [], sortBy: [{ field: 'limit', direction: 'asc' }] })).toBe(
+      'sortBy=limit:asc',
+    );
+    expectRoundTrip('sortBy=limit:asc');
+  });
+
+  test('пустой список значений: строка не разобралась бы', () => {
+    expect(() => serializeQuery({ filters: [{ kind: 'tags', values: [] }] })).toThrow(
+      /пустой список значений/,
+    );
+    expect(() => serializeQuery({ filters: [{ kind: 'excludeTags', values: [] }] })).toThrow(
+      /пустой список значений/,
+    );
+    expect(() =>
+      serializeQuery({
+        filters: [{ kind: 'field', field: 'status', condition: { kind: 'anyOf', values: [] } }],
+      }),
+    ).toThrow(/пустой список значений/);
+    expect(() =>
+      serializeQuery({
+        filters: [{ kind: 'field', field: 'status', condition: { kind: 'noneOf', values: [] } }],
+      }),
+    ).toThrow(/пустой список значений/);
+    // Ровно то, что напечаталось бы без guard, парсер отвергает.
+    expect(parseQuery('tags=', catalog).ok).toBe(false);
+  });
+
+  test('пустой sortBy — тоже исключение, а не молчаливое отбрасывание', () => {
+    expect(() => serializeQuery({ filters: [], sortBy: [] })).toThrow(/пустой список значений/);
+    expect(parseQuery('sortBy=', catalog).ok).toBe(false);
+  });
+
+  test('limit вне контракта parseLimit: целое больше нуля', () => {
+    for (const limit of [0, -3, 1.5, Number.NaN]) {
+      expect(() => serializeQuery({ filters: [], limit })).toThrow(/limit должен быть целым/);
+      expect(parseQuery(`limit=${limit}`, catalog).ok).toBe(false);
+    }
+    expect(serializeQuery({ filters: [], limit: 30 })).toBe('limit=30');
+  });
+
+  test("'}}' в значении закрыл бы обёртку {{query: … }} раньше времени", () => {
+    expect(() => serializeQuery({ filters: [], title: 'a}}b' })).toThrow(/закроет обёртку/);
+    expect(() => serializeQuery({ filters: [], search: 'a}}b' })).toThrow(/закроет обёртку/);
+    expect(() => serializeQuery({ filters: [{ kind: 'tags', values: ['a}}b'] }] })).toThrow(
+      /закроет обёртку/,
+    );
+    // Одиночная скобка безобидна и должна печататься как обычно.
+    expect(serializeQuery({ filters: [], title: 'a}b' })).toBe('title=a}b');
+    expectRoundTrip('title=a}b');
+    // Две скобки в РАЗНЫХ конструкциях не слипаются — разделитель между ними.
+    expectRoundTrip('search=a}, title=}b');
+  });
+
+  test('свойства, которые guard ломать не должен', () => {
+    // Поэлементное квотирование в списках и в !-форме.
+    expect(serializeQuery(astOf('tags="a,b"|c, excludeTags="x&y"'))).toBe(
+      'tags="a,b"|c, excludeTags="x&y"',
+    );
+    expect(serializeQuery(astOf('aspect=orbis/task, status=!"a,b"&!done'))).toBe(
+      'aspect=orbis/task, status=!"a,b"&!done',
+    );
+    // Печать параметров по !== undefined: пустая строка выживает как "" и не пропадает.
+    expect(serializeQuery({ filters: [], search: '', title: '' })).toBe('search="", title=""');
+    expectRoundTrip('search="", title=""');
+  });
+});
