@@ -70,6 +70,13 @@ describe('валидация аспектов по реестру (ajv strict, �
     expect(
       accepts('orbis/goal', { progress_source: src, target_value: '24', current_value: '3' }),
     ).toBe(true);
+    // minLength у unit тоже обязан доехать до реестра, а не остаться в zod
+    expect(accepts('orbis/goal', { progress_source: src, target_value: '24', unit: '' })).toBe(
+      false,
+    );
+    expect(accepts('orbis/goal', { progress_source: src, target_value: '24', unit: '₽' })).toBe(
+      true,
+    );
   });
 
   test('схемы ВСЕХ builtin-аспектов компилируются ajv в strict-режиме', () => {
@@ -77,14 +84,19 @@ describe('валидация аспектов по реестру (ajv strict, �
     // не выдал в реестр конструкцию, которую прод-валидатор не примет. Список берётся из
     // BUILTIN_ASPECT_IDS, а не хардкодом: новый аспект попадает под проверку сам.
     for (const id of BUILTIN_ASPECT_IDS) {
-      // `{}` для большинства аспектов невалидно — это нормально: важно ОТЛИЧИЕ отказа
-      // «не проходит схему» (схема скомпилировалась) от «не компилируется».
+      // Ключа нет НИ В ОДНОЙ builtin-схеме, а все они strict (additionalProperties:false),
+      // поэтому такие данные обязан отвергнуть КАЖДЫЙ аспект. Отсюда ровно один живой
+      // ассерт на каждой итерации — в том числе для orbis/note и orbis/category, у которых
+      // пустой объект валиден и проверять на `{}` было бы нечего.
+      let message: string | undefined;
       try {
-        validateAspectData(registryOf(id), id, {});
+        validateAspectData(registryOf(id), id, { __нет_такого_поля: 1 });
       } catch (e) {
-        expect((e as ExecError).message).not.toContain('не компилируется');
-        expect((e as ExecError).message).not.toContain('неизвестный аспект');
+        message = (e as ExecError).message;
       }
+      // Отказ ПО СХЕМЕ = схема скомпилировалась. Провал компиляции дал бы
+      // «не компилируется», а принятые данные — undefined; оба валят ассерт.
+      expect(message).toContain('не проходят схему реестра');
     }
   });
 });

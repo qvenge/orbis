@@ -142,7 +142,7 @@ export const goalAspectSchema = z
     // Строго > 0: E2 делит на него (доля прогресса), ноль и минус смысла не имеют
     target_value: positiveDecimal,
     current_value: nonNegativeDecimal.optional(), // КЭШ: пишет сервер, не пользователь
-    unit: z.string().optional(),
+    unit: z.string().min(1).optional(), // пустая строка приехала бы хвостом за числом
   })
   .strict();
 

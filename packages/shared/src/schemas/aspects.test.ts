@@ -115,6 +115,10 @@ describe('схемы аспектов (01 §3.1–§3.7)', () => {
         target_value: '24',
       }).success,
     ).toBe(false);
+    // unit опционален, но пустым не бывает: иначе приедет хвостом за числом
+    const src = { query: 'q', aggregate: 'count' as const };
+    expect(s.safeParse({ progress_source: src, target_value: '24' }).success).toBe(true);
+    expect(s.safeParse({ progress_source: src, target_value: '24', unit: '' }).success).toBe(false);
   });
   test('orbis/goal: суммы — decimal-строки, target_value строго положителен', () => {
     const s = ASPECT_SCHEMAS['orbis/goal'];
