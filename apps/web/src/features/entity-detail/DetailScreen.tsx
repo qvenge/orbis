@@ -13,10 +13,11 @@ import { Input } from '../../ui/Input';
 import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
 import { useToast } from '../../ui/toast-store';
-import { type BodySegment, bodySegments } from '../browser/query';
+import { bodySegments, replaceQueryBlock } from '../browser/query';
 import { PlannedToFactCard } from '../budget/PlannedToFactCard';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { ChatThread } from '../chat/ChatThread';
+import { QueryTextEditor } from '../query-builder/QueryTextEditor';
 import { AspectCards } from './AspectCards';
 import { Backlinks } from './Backlinks';
 import { Blocks } from './Blocks';
@@ -201,8 +202,7 @@ const BODY_BOX_CLASS = 'min-h-24 w-full rounded-lg px-2 py-1.5 text-sm leading-r
  * (Inbox / «Сегодня» / «Ожидание», §3.3), у Upcoming — два; рендер только первого прятал
  * «Сегодня» целиком (приёмка 02-core-os §8.4).
  */
-function QueryWidgets({ segments }: { segments: BodySegment[] }) {
-  const blocks = segments.flatMap((s) => (s.kind === 'query' ? [s.query] : []));
+function QueryWidgets({ blocks }: { blocks: string[] }) {
   if (blocks.length === 0) return null;
   return (
     <div className="flex flex-col gap-3">
@@ -226,6 +226,8 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
   const [value, setValue] = useState(initial);
   const [serverBody, setServerBody] = useState(initial);
   const [editing, setEditing] = useState(false);
+  // Индекс query-блока, открытого в редакторе (не индекс сегмента: массив смешанный).
+  const [configuring, setConfiguring] = useState<number | null>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
 
   // Серверный body сменился (наш save или чужая правка): подхватываем его, только если
@@ -254,6 +256,29 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
     [editing, serverBody, value],
   );
 
+  // Номер каждого сегмента-блока СРЕДИ БЛОКОВ: адрес правки в body — порядковый номер
+  // {{query:…}}, а не место в смешанном массиве сегментов.
+  const blocks = useMemo(
+    () => segments.flatMap((s) => (s.kind === 'query' ? [s.query] : [])),
+    [segments],
+  );
+  const blockIndexOfSegment = useMemo(() => {
+    let n = 0;
+    return segments.map((s) => (s.kind === 'query' ? n++ : -1));
+  }, [segments]);
+
+  // Правка одного блока из виджета: меняется РОВНО подстрока этого блока, дальше — обычный
+  // путь сохранения тела (§5.2 с expectedUpdatedAt), а не своя мутация мимо BodySection.
+  // Текст не изменился — body не трогаем вовсе: пересборка схлопнула бы многострочные блоки
+  // сидированных smart lists, а лишняя запись подняла бы updated_at ни за что.
+  function saveBlock(index: number, query: string) {
+    setConfiguring(null);
+    const next = replaceQueryBlock(value, index, query);
+    if (next === value) return;
+    setValue(next);
+    onSave(next);
+  }
+
   if (editing) {
     // Раскладка правки прежняя: весь текст (включая блоки) — в textarea, виджеты списком
     // под ней. Перемежать виджеты с кусками текста тут нечем — текст один.
@@ -273,7 +298,11 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
           }}
           className={`${BODY_BOX_CLASS} resize-none bg-transparent transition placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30`}
         />
-        <QueryWidgets segments={segments} />
+        {/* В правке кнопки «Настроить» на виджетах нет (onConfigure не передан): текст
+            блока уже открыт в textarea выше, а blur этой textarea сохраняет тело — второй
+            путь записи на том же экране дал бы две мутации подряд, из которых вторая
+            уехала бы с устаревшим expectedUpdatedAt и ложным 409. */}
+        <QueryWidgets blocks={blocks} />
       </div>
     );
   }
@@ -310,7 +339,10 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
           s.kind === 'query' ? (
             // biome-ignore lint/suspicious/noArrayIndexKey: порядок сегментов задан текстом body
             <div key={i} data-query-widget="">
-              <QueryBlock query={s.query} />
+              <QueryBlock
+                query={s.query}
+                onConfigure={() => setConfiguring(blockIndexOfSegment[i] ?? null)}
+              />
             </div>
           ) : (
             // biome-ignore lint/suspicious/noArrayIndexKey: порядок сегментов задан текстом body
@@ -336,6 +368,20 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
           Редактировать
         </Button>
       </div>
+      {/* Редактор блока — СОСЕДОМ просмотра, а не внутри него. Radix рисует модалку в
+          портале, но React-события из портала всплывают по дереву REACT, а не по DOM:
+          смонтированная внутри body-view модалка отдавала бы свои клики его onClick, и
+          клик по её заголовку открывал textarea прямо под ней (белый список селекторов
+          startEditing прикрывает поля и кнопки, но не заголовок модалки). Проверено
+          тестом «клик внутри модалки не открывает редактор тела под ней»: на прежнем
+          месте он падал. */}
+      {configuring !== null && (
+        <QueryTextEditor
+          initial={blocks[configuring] ?? ''}
+          onSave={(q) => saveBlock(configuring, q)}
+          onCancel={() => setConfiguring(null)}
+        />
+      )}
     </div>
   );
 }

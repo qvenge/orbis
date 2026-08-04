@@ -6,6 +6,7 @@ import {
   buildFilterQuery,
   firstQueryBlock,
   queryBlocks,
+  replaceQueryBlock,
 } from './query';
 
 test('browserQuery включает limit и сортировку по updated_at desc', () => {
@@ -93,6 +94,67 @@ test('bodySegments сохраняет разметку текста, убира�
     kind: 'text',
     text: '# Итоги\n\n- раз\n- два',
   });
+});
+
+// --- замена текста одного блока (D2) ---------------------------------------------------
+// Правка блока из виджета шлёт обычный entity.update с ЦЕЛЫМ body, поэтому всё, чего экран
+// не собирался менять, обязано доехать до сервера байт-в-байт: соседние блоки, текст между
+// ними и обёртка правимого блока.
+
+test('replaceQueryBlock меняет ровно N-й блок, остальной body — байт-в-байт', () => {
+  const body = 'до\n\n{{query: tags=work}}\n\nмежду\n\n{{query: tags=home}}\n\nпосле';
+  expect(replaceQueryBlock(body, 1, 'tags=home, limit=5')).toBe(
+    'до\n\n{{query: tags=work}}\n\nмежду\n\n{{query: tags=home, limit=5}}\n\nпосле',
+  );
+  expect(replaceQueryBlock(body, 0, 'tags=work, limit=5')).toBe(
+    'до\n\n{{query: tags=work, limit=5}}\n\nмежду\n\n{{query: tags=home}}\n\nпосле',
+  );
+});
+
+// Два блока с ОДИНАКОВЫМ текстом: адресация по индексу, а не по содержимому — replace(str)
+// правил бы всегда первый, и правка второй секции молча переписывала бы первую.
+test('replaceQueryBlock различает одинаковые по тексту блоки', () => {
+  const body = '{{query:tags=x}}\n{{query:tags=x}}';
+  expect(replaceQueryBlock(body, 1, 'tags=y')).toBe('{{query:tags=x}}\n{{query:tags=y}}');
+});
+
+// Обёртка сидированных списков — с пробелом после двоеточия и переносами внутри; редактор
+// показывает тримленное содержимое, и вернуть его вплотную к {{query: значило бы переписать
+// блок целиком там, где просили поменять одну клаузу.
+test('replaceQueryBlock сохраняет обрамляющие пробелы блока', () => {
+  const body = '{{query:\n  tags=work\n}}';
+  expect(replaceQueryBlock(body, 0, 'tags=home')).toBe('{{query:\n  tags=home\n}}');
+});
+
+// Р3 «без изменений — без записи»: экран решает не слать мутацию по равенству body, поэтому
+// у неизменного текста хелпер обязан вернуть ИСХОДНУЮ строку, а не пересобранную.
+test('replaceQueryBlock: тот же текст — тот же body (пересборки нет)', () => {
+  const blocks = queryBlocks(DAILY_PLANNING_BODY);
+  for (const [i, block] of blocks.entries()) {
+    expect(replaceQueryBlock(DAILY_PLANNING_BODY, i, block)).toBe(DAILY_PLANNING_BODY);
+    // Лишние края в поле ввода — не правка запроса: они и в блок бы не попали.
+    expect(replaceQueryBlock(DAILY_PLANNING_BODY, i, `\n${block}  `)).toBe(DAILY_PLANNING_BODY);
+  }
+});
+
+test('replaceQueryBlock: индекса нет — body не меняется', () => {
+  const body = 'текст {{query:tags=x}}';
+  expect(replaceQueryBlock(body, 1, 'tags=y')).toBe(body);
+  expect(replaceQueryBlock(body, -1, 'tags=y')).toBe(body);
+  expect(replaceQueryBlock('без блоков', 0, 'tags=y')).toBe('без блоков');
+});
+
+// Индекс приходит из сегментации просмотра, поэтому «N-й блок» обязан значить у обеих
+// функций одно и то же — включая блоки внутри огороженного кода, которые сегментация
+// виджетом рендерит наравне с остальными.
+test('replaceQueryBlock индексирует блоки так же, как bodySegments', () => {
+  const body = 'вступление\n\n```\n{{query:tags=code}}\n```\n\n{{query: tags=work}}\nхвост';
+  const blocks = queryBlocks(body);
+  expect(blocks).toHaveLength(2);
+  for (const [i] of blocks.entries()) {
+    const next = replaceQueryBlock(body, i, 'tags=НОВОЕ');
+    expect(queryBlocks(next)).toEqual(blocks.map((b, j) => (j === i ? 'tags=НОВОЕ' : b)));
+  }
 });
 
 // Разбор блоков не раздваивается: у §3.4 один контракт на два потребителя.

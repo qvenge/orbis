@@ -62,6 +62,38 @@ export function queryBlocks(body: string): string[] {
   return bodySegments(body).flatMap((s) => (s.kind === 'query' ? [s.query] : []));
 }
 
+// Замена текста ОДНОГО блока (правка блока из виджета, D2). Индекс — порядковый номер
+// query-блока в body, тот же, что у bodySegments/queryBlocks (общий регэксп → общий порядок):
+// индекс СЕГМЕНТА для этого не годится, массив сегментов смешанный.
+//
+// Почему свой проход, а не сборка body из сегментов: сегменты не несут ни смещений, ни
+// исходной подстроки — края текста и содержимое блока в них тримлены, и пересборка
+// схлопнула бы многострочные блоки сидированных smart lists (§3.3) и пустые строки вокруг
+// них. Здесь меняется РОВНО подстрока внутри обёртки N-го блока, остальной body уезжает в
+// entity.update байт-в-байт таким, каким пришёл.
+//
+// Обрамляющие пробелы содержимого сохраняются: редактор показывает тримленный текст (то же,
+// что видит парсер), а `{{query:\n  …\n}}` без них превратился бы в `{{query:…}}` — правка
+// одной клаузы читалась бы как переписанный блок. Текст не изменился (с точностью до тех же
+// краёв) — возвращается ИСХОДНАЯ строка: экран по её равенству решает не слать мутацию
+// вовсе (правило «без изменений — без записи»).
+export function replaceQueryBlock(body: string, index: number, query: string): string {
+  let n = 0;
+  for (const m of body.matchAll(QUERY_BLOCK_RE)) {
+    if (n++ !== index) continue;
+    const inner = m[1] ?? '';
+    const next = query.trim();
+    if (next === inner.trim()) return body;
+    // m[0] = открывающая обёртка + inner + '}}' — её форму знает только QUERY_BLOCK_RE,
+    // поэтому берём куски по длинам, а не вторым описанием синтаксиса.
+    const open = m[0].slice(0, m[0].length - inner.length - 2);
+    const lead = inner.slice(0, inner.length - inner.trimStart().length);
+    const trail = inner.slice(inner.trimEnd().length);
+    return `${body.slice(0, m.index)}${open}${lead}${next}${trail}}}${body.slice(m.index + m[0].length)}`;
+  }
+  return body;
+}
+
 // Первый блок — и только он: §3.2 нормирует бейдж pinned-сущности как «число результатов
 // ПЕРВОГО query-блока её body» (у Daily Planning это размер Inbox). Единственный потребитель
 // — PinnedList; detail-экран рендерит все блоки через queryBlocks.
