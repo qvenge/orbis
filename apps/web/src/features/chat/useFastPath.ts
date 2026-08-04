@@ -8,7 +8,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import { TRPCClientError } from '@trpc/client';
 import { invalidateGraph } from '../../lib/invalidate';
-import { useOnline, useRetryBuffer } from '../../state/retry';
+import { useFlushBuffer, useOnline, useRetryBuffer } from '../../state/retry';
 import { isConflict, mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
 import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME } from './memoryRules';
@@ -47,7 +47,9 @@ export function useFastPath(threadId: string) {
   const utils = trpc.useUtils();
   const online = useOnline();
   const enqueueCreate = useRetryBuffer((s) => s.enqueueCreate);
-  const flushNow = useRetryBuffer((s) => s.flushNow);
+  // Слив с инвалидацией: подтверждённая буфером запись — такая же новая сущность графа,
+  // как созданная онлайн (Р17, круг правок 2).
+  const flushBuffer = useFlushBuffer();
   const { sendMessage, retryMessage, isSending } = useSendMessage(threadId);
 
   const create = trpc.entity.create.useMutation();
@@ -241,7 +243,6 @@ export function useFastPath(threadId: string) {
       // invalidateGraph, а не query-only: открытая цель считает прогресс на чтении
       // entity.get, и без него полоса осталась бы вчерашней (Р17).
       invalidateGraph(utils);
-      void utils.entity.count.invalidate();
       // 03-budget §4.1/§6.1: запись учтена сервером — остаток конверта на карточке
       // и бейдж alertCount перечитываются ПОСЛЕ записи, не до.
       void utils.budget.invalidate();
@@ -266,7 +267,6 @@ export function useFastPath(threadId: string) {
           // upsertNewest дедупит по messageId — карточка обновляется на месте, не мигая.
           insertCard(card, '⚡ без AI', { entityId: retryId, text, status: 'confirmed' }, cardId);
           invalidateGraph(utils);
-          void utils.entity.count.invalidate();
           void utils.budget.invalidate();
         } catch {
           // Второй отказ не разбираем по кодам: карточка деградирует в «⏳ ждёт отправки»
@@ -274,7 +274,7 @@ export function useFastPath(threadId: string) {
           // замещающим id (буфер идемпотентен по client-UUID).
           insertCard(card, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
           enqueueCreate({ ...parsed.create, id: retryId }, 'fast_path');
-          void flushNow();
+          void flushBuffer();
         }
         return;
       }
@@ -294,7 +294,7 @@ export function useFastPath(threadId: string) {
       // Иначе reparse архивировал бы несуществующий id, а буфер позже создал вторую сущность.
       insertCard(card, '⏳ ждёт отправки', { text, status: 'pending' }, cardId);
       enqueueCreate(parsed.create, 'fast_path');
-      void flushNow();
+      void flushBuffer();
     }
   }
 

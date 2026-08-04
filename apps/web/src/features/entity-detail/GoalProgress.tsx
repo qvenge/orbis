@@ -60,14 +60,19 @@ const UNSUPPORTED_TONE: Record<Unsupported, string> = {
 };
 
 /**
- * Сумма со ЗНАКОМ: formatAmount по построению срезает знак (он там задаётся направлением
+ * Сумма, СОХРАНЯЮЩАЯ минус (и только его: плюс перед достижением цели ничего не значит).
+ * Имя нарочно не `signedAmount` — так зовётся соседняя функция в EnvelopeCard, и она
+ * ставит знак ВСЕГДА (`+`/`−`, бейдж carryover §2.6). Две одноимённые функции с разной
+ * семантикой в соседних фичах — заготовка для будущей ошибки.
+ *
+ * formatAmount по построению срезает знак (он там задаётся направлением
  * записи, а не строкой). Агрегат цели знака не выбирает — sum и latest берут поле как
  * есть, а знаковые поля существуют (`orbis/budget.carryover`, числовое поле любого
  * пользовательского аспекта). Без этой обёртки при `current = '-5000.00'` полоса
  * показывала бы честный 0 %, а подпись рядом — «5 000 / 300 000», то есть врала бы про
  * знак. Минус типографский (U+2212) — тот же, что у сумм Budget.
  */
-function signedAmount(dec: string): string {
+function amountKeepingMinus(dec: string): string {
   const negative = dec.startsWith('-') || dec.startsWith('−');
   return negative ? `−${formatAmount(dec)}` : formatAmount(dec);
 }
@@ -91,7 +96,7 @@ export function GoalProgress({ progress, unit }: { progress: GoalProgressData; u
   const percent = envelopePercent(current, target);
   const width = Math.min(100, percent);
   const reached = percent >= 100;
-  const amounts = `${signedAmount(current)} / ${signedAmount(target)}`;
+  const amounts = `${amountKeepingMinus(current)} / ${amountKeepingMinus(target)}`;
   const valueText = `${percent}% — ${amounts}${unit ? ` ${unit}` : ''}`;
 
   return (

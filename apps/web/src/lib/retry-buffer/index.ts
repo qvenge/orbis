@@ -18,7 +18,13 @@ export type FlushOutcome = 'confirmed' | 'transport_failure' | 'business_rejecti
 export interface RetryBuffer {
   /** clientId задаётся вызывающим, когда id уже ушёл на сервер в первой попытке (§5.3). */
   enqueue(op: Omit<QueuedCreate, 'clientId' | 'createdAt'> & { clientId?: string }): QueuedCreate;
-  flush(send: (op: QueuedCreate) => Promise<FlushOutcome>): Promise<void>;
+  /**
+   * Прогон очереди. Возвращает число ПОДТВЕРЖДЁННЫХ операций — то есть записей, которые
+   * сервер принял и которых в графе раньше не было. Вызывающий вешает на это число
+   * инвалидацию кэша: отказ (business_rejection) очередь тоже чистит, но граф не меняет,
+   * и перечитывать по нему нечего.
+   */
+  flush(send: (op: QueuedCreate) => Promise<FlushOutcome>): Promise<number>;
   cancel(clientId: string): void;
   size(): number;
 }
@@ -41,13 +47,16 @@ export function createRetryBuffer(storage: QueueStorage = localStorageQueue): Re
       return item;
     },
     async flush(send) {
+      let confirmed = 0;
       for (const item of storage.load()) {
         const outcome = await send(item);
+        if (outcome === 'confirmed') confirmed += 1;
         if (outcome === 'confirmed' || outcome === 'business_rejection') {
           storage.save(storage.load().filter((q) => q.clientId !== item.clientId));
         }
         // transport_failure — запись остаётся, ретрай следующим вызовом flush()
       }
+      return confirmed;
     },
     cancel(clientId) {
       storage.save(storage.load().filter((q) => q.clientId !== clientId));
