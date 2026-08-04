@@ -4,8 +4,14 @@
 // единственная точка разбора этого протокола; формат объявлен в системном промпте
 // (блок «Продолжения разговора», prompts/v2.ts) — менять формат = менять И промпт.
 //
-// Деградация: маркера нет или он не совпал со строгой формой — продолжений у ответа
-// просто нет, текст остаётся как есть. Ни угадывания «почти маркера», ни мусора в ленте.
+// Деградация двухступенчатая, и ступени НАРОЧНО разной строгости:
+//  - что становится ЧИПАМИ, решает только строгая форма (SUGGEST_MARKER_RE) — «почти маркер»
+//    продолжений не даёт никогда, выдумывать варианты реплик за модель нельзя;
+//  - что попадает в ЛЕНТУ, чистится терпимее (SUGGEST_CLEANUP_RE): служебная подстрока
+//    вырезается из текста, даже если форма не совпала.
+// Иначе любой промах формы (обрыв по max_tokens посреди маркера, точка после `]]`, `]` внутри
+// продолжения, лишняя фраза следом) печатал бы `[[suggest: …]]` на главном экране как прозу —
+// а инструкция про маркер лежит в промпте для КАЖДОГО ответа.
 
 /** Сколько продолжений максимум доезжает до клиента (промпт просит 2–4). */
 export const SUGGESTIONS_MAX = 4;
@@ -27,6 +33,37 @@ export const SUGGESTION_MAX_LEN = 60;
  */
 export const SUGGEST_MARKER_RE = /(?:^|\s+)\[\[suggest:([^\]\n]+)\]\]\s*$/;
 
+/**
+ * Форма ВЫРЕЗАНИЯ: служебная подстрока от `[[suggest:` до закрывающих `]]` — или до конца
+ * строки/ответа, если модель не закрыла маркер (обрыв по max_tokens). Осознанно шире строгой
+ * формы: без якоря `$` (значит ловит и маркер посреди ответа), без запрета `]` внутри.
+ * Осознанно НЕ шире: одна строка (`[^\n]*`) и одно вхождение за проход — правило обязано быть
+ * предсказуемым, поэтому оно режет ровно служебную подстроку, а не «строку целиком на всякий
+ * случай». Цена ложного срабатывания на прозе — потерянные 20 символов, а не абзац.
+ */
+export const SUGGEST_CLEANUP_RE = /\[\[suggest:[^\n]*?(?:\]\]|$)/m;
+
+/** Есть ли в куске хоть одна буква или цифра, то есть настоящий текст, а не хвост. */
+const MEANINGFUL_RE = /[\p{L}\p{N}]/u;
+
+/**
+ * Убирает служебные подстроки маркера из текста ответа. Продолжений не выдумывает — только
+ * чистит. Хвост после маркера, в котором нет ни буквы, ни цифры (точка после `]]`, лишние
+ * переводы строк), считается частью служебной строки и срезается вместе с ней; всё, где текст
+ * есть, сохраняется посимвольно — «до» и «после» просто склеиваются.
+ */
+function stripSuggestMarkers(raw: string): string {
+  let text = raw;
+  for (;;) {
+    const match = SUGGEST_CLEANUP_RE.exec(text);
+    if (match === null) return text;
+    const before = text.slice(0, match.index);
+    const after = text.slice(match.index + match[0].length);
+    // Каждый проход снимает как минимум `[[suggest:` — цикл конечен.
+    text = MEANINGFUL_RE.test(after) ? before + after : before.trimEnd();
+  }
+}
+
 export interface ExtractedSuggestions {
   /** Текст ответа без служебной строки (может стать пустым — так и оставляем). */
   text: string;
@@ -42,7 +79,9 @@ export interface ExtractedSuggestions {
 export function extractSuggestions(raw: string): ExtractedSuggestions {
   const match = SUGGEST_MARKER_RE.exec(raw);
   const body = match?.[1];
-  if (match === null || body === undefined) return { text: raw, suggestions: [] };
+  if (match === null || body === undefined) {
+    return { text: stripSuggestMarkers(raw), suggestions: [] };
+  }
 
   const suggestions = body
     .split('|')
@@ -50,5 +89,7 @@ export function extractSuggestions(raw: string): ExtractedSuggestions {
     .filter((part) => part.length > 0 && [...part].length <= SUGGESTION_MAX_LEN)
     .slice(0, SUGGESTIONS_MAX);
 
-  return { text: raw.slice(0, match.index), suggestions };
+  // Чистка и на строгом пути: строгая форма забирает ПОСЛЕДНИЙ маркер, а если модель
+  // напечатала их два, первый остался бы в тексте.
+  return { text: stripSuggestMarkers(raw.slice(0, match.index)), suggestions };
 }

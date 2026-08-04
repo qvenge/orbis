@@ -23,15 +23,20 @@ describe('extractSuggestions (D19)', () => {
     expect(extractSuggestions('')).toEqual({ text: '', suggestions: [] });
   });
 
-  test('битый маркер (пустое содержимое) остаётся частью текста, но продолжений не даёт', () => {
-    const r = extractSuggestions('Готово.\n[[suggest:]]');
-    expect(r.suggestions).toEqual([]);
-    expect(r.text).toContain('Готово.');
+  test('битый маркер (пустое содержимое) продолжений не даёт и в текст не течёт', () => {
+    expect(extractSuggestions('Готово.\n[[suggest:]]')).toEqual({
+      text: 'Готово.',
+      suggestions: [],
+    });
   });
 
   test('маркер не в конце ответа не разбирается (строгая форма — последняя строка)', () => {
     const raw = 'Ок.\n[[suggest: раз | два]]\nЕщё пара слов.';
-    expect(extractSuggestions(raw)).toEqual({ text: raw, suggestions: [] });
+    const r = extractSuggestions(raw);
+    expect(r.suggestions).toEqual([]);
+    // Разбор строгий, вырезание — нет: продолжений нет, но и служебной строки в ленте нет.
+    expect(r.text).not.toContain('[[suggest');
+    expect(r.text).toBe('Ок.\n\nЕщё пара слов.');
   });
 
   test('завершающие переводы строк после маркера не мешают разбору', () => {
@@ -73,5 +78,45 @@ describe('extractSuggestions (D19)', () => {
     const long = 'я'.repeat(SUGGESTION_MAX_LEN + 1);
     const r = extractSuggestions(`Готово.\n\n[[suggest: ${long}]]`);
     expect(r).toEqual({ text: 'Готово.', suggestions: [] });
+  });
+});
+
+// Промах формы — не редкость: инструкция про маркер лежит в промпте для КАЖДОГО ответа,
+// то есть цена промаха платится на главном экране. Спека слайса 3 обещает смягчением ровно
+// это: «при неполном совпадении чипы не показываются, а текст остаётся чистым». Разбор при
+// этом остаётся строгим — терпимее только вырезание.
+describe('extractSuggestions: промахи формы маркера не текут в ленту', () => {
+  test('обрыв по max_tokens посреди маркера: хвост вырезан, продолжений нет', () => {
+    const r = extractSuggestions('Записал 340 ₽ в Еду.\n\n[[suggest: что по бюдже');
+    expect(r).toEqual({ text: 'Записал 340 ₽ в Еду.', suggestions: [] });
+  });
+
+  test('точка после маркера: вырезан и маркер, и пунктуационный хвост', () => {
+    const r = extractSuggestions('Записал 340 ₽ в Еду.\n\n[[suggest: что по бюджету?]].');
+    expect(r).toEqual({ text: 'Записал 340 ₽ в Еду.', suggestions: [] });
+  });
+
+  test('] внутри продолжения: строгая форма не совпала, но текст чист', () => {
+    const r = extractSuggestions('Ок.\n[[suggest: показать [все] задачи]]');
+    expect(r).toEqual({ text: 'Ок.', suggestions: [] });
+  });
+
+  test('маркер внутри код-фенса в текст не течёт', () => {
+    const r = extractSuggestions('Пример:\n\n```\n[[suggest: раз | два]]\n```');
+    expect(r.suggestions).toEqual([]);
+    expect(r.text).not.toContain('[[suggest');
+  });
+
+  test('второй маркер выше по тексту тоже вырезается (разобран — только последний)', () => {
+    const r = extractSuggestions('Ок.\n[[suggest: лишний]]\n[[suggest: раз | два]]');
+    expect(r.suggestions).toEqual(['раз', 'два']);
+    expect(r.text).not.toContain('[[suggest');
+  });
+
+  test('настоящий текст вокруг маркера не теряется ни одним символом', () => {
+    // Предсказуемость правила: вырезается ровно служебная подстрока, а не «строка целиком
+    // на всякий случай». Цена — двойной пробел на шве, а не съеденное предложение.
+    const r = extractSuggestions('Я дописываю [[suggest: раз | два]] в конец ответа.');
+    expect(r).toEqual({ text: 'Я дописываю  в конец ответа.', suggestions: [] });
   });
 });
