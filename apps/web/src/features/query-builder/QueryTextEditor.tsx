@@ -9,6 +9,9 @@ import { Dialog } from '../../ui/Dialog';
 const FIELD_CLS =
   'w-full resize-y rounded-control border border-line bg-surface px-2 py-1.5 font-mono text-sm text-text transition focus-visible:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40';
 
+/** Конец обёртки `{{query: … }}`: внутри блока — пролом разметки тела, см. ниже. */
+const BLOCK_END = '}}';
+
 /**
  * Строковый редактор query-блока (§6.1 — грамматика, §6.4 — что делать с невалидным).
  * Монтируется по «Настроить» на виджете; смонтирован — значит открыт, закрытие идёт через
@@ -21,6 +24,14 @@ const FIELD_CLS =
  * Ошибку считает сам редактор по ТЕКУЩЕМУ тексту, а не принимает готовую снаружи: замри
  * сообщение на исходном разборе, починенный запрос продолжал бы носить красную плашку, а
  * вызывающему пришлось бы завести второй разбор с каталогом аспектов ровно ради статики.
+ *
+ * Единственное исключение из «сохранить можно всегда» — `}}` в тексте, и оно про РАЗМЕТКУ
+ * тела, а не про грамматику: невалидная строка живёт ВНУТРИ блока и починится следующей
+ * правкой, а `}}` — это конец обёртки. Парсер его принимает молча (`tags=a}}b` разбирается
+ * без ошибки, красной плашки нет), рендерер же закроет блок на первом вхождении: хвост
+ * запроса уедет текстом заметки, а `{{query:` в этом хвосте заведёт ЛИШНИЙ блок и сдвинет
+ * нумерацию — на первом блоке стоит бейдж pinned-сущности (§3.2). Кавычки тут не спасают
+ * (грамматики рендерер не знает), поэтому единственный выход — не пустить такую строку.
  */
 export function QueryTextEditor({
   initial,
@@ -35,6 +46,7 @@ export function QueryTextEditor({
   const field = useRef<HTMLTextAreaElement>(null);
   const fieldId = useId();
   const errorId = useId();
+  const brokenId = useId();
 
   const { catalog } = useFieldCatalog();
   // Разбор ровно того, что уедет в блок: в поле лежит ВНУТРЕННОСТЬ {{query:…}} (обёртку
@@ -47,6 +59,9 @@ export function QueryTextEditor({
     [catalog, text],
   );
   const error = parsed?.ok === false ? parsed.error : null;
+  // Проверяем ВЕСЬ текст поля, а не тримленный: края в блок не попадут, но `}}` на краю —
+  // тот же маркер, и сохранять его всё равно нечем.
+  const breaksBlock = text.includes(BLOCK_END);
 
   return (
     <Dialog
@@ -79,8 +94,12 @@ export function QueryTextEditor({
           value={text}
           rows={5}
           spellCheck={false}
-          aria-invalid={error !== null}
-          aria-describedby={error === null ? undefined : errorId}
+          aria-invalid={error !== null || breaksBlock}
+          aria-describedby={
+            [error === null ? null : errorId, breaksBlock ? brokenId : null]
+              .filter((id) => id !== null)
+              .join(' ') || undefined
+          }
           onChange={(e) => setText(e.target.value)}
           className={FIELD_CLS}
         />
@@ -92,11 +111,26 @@ export function QueryTextEditor({
             <span className="text-text-muted">— позиция {error.position}</span>
           </p>
         )}
+        {breaksBlock && (
+          // Отдельное сообщение, а не текст ошибки парсера: у `}}` разбора может и не быть
+          // (`tags=a}}b` разбирается), и причина у него другая — не «запрос непонятен», а
+          // «этим текстом закроется сам блок». Тот же role="status", что у плашки разбора:
+          // сообщение пересчитывается на каждый символ, и alert перебивал бы набор.
+          <p id={brokenId} role="status" data-testid="query-text-wrapper" className="text-sm">
+            <span className="text-danger">
+              Сочетание «{BLOCK_END}» закрывает блок: всё, что после него, стало бы обычным текстом
+              заметки.
+            </span>{' '}
+            <span className="text-text-muted">Уберите его из запроса.</span>
+          </p>
+        )}
         <div className="flex justify-end gap-2">
           <Button variant="outline" size="sm" onClick={onCancel}>
             Отмена
           </Button>
-          <Button size="sm" onClick={() => onSave(text)}>
+          {/* Единственный случай, когда «Сохранить» гаснет (§6.4 — про невалидную строку
+              ВНУТРИ блока, и она сохраняется как была). */}
+          <Button size="sm" disabled={breaksBlock} onClick={() => onSave(text)}>
             Сохранить
           </Button>
         </div>

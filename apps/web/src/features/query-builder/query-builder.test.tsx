@@ -330,6 +330,43 @@ test('вставленный целиком {{query:…}} — ошибка, а �
   expect(await screen.findByTestId('query-text-error')).toBeInTheDocument();
 });
 
+// Единственный запрет на сохранение — и ровно про РАЗМЕТКУ тела, а не про грамматику.
+// `}}` парсер принимает молча (`tags=a}}b` разбирается без ошибки, красной плашки нет), но
+// рендерер блоков закроет обёртку на первом же вхождении: хвост запроса станет текстом
+// заметки, а `{{query:` в нём заведёт лишний блок и сдвинет нумерацию, на которой стоит
+// бейдж pinned-сущности (§3.2). §6.4 оставляет «Сохранить» доступным у НЕразбираемой
+// строки — испортить обёртку она права не даёт.
+test('`}}` в тексте гасит сохранение с объяснением причины', async () => {
+  const onSave = vi.fn();
+  renderWithProviders(
+    <QueryTextEditor initial="tags=work" onSave={onSave} onCancel={() => {}} />,
+    editorHandler,
+  );
+  const field = await screen.findByLabelText('Текст запроса');
+
+  fireEvent.change(field, { target: { value: 'tags=a}}b' } });
+  // Разбор молчит — сообщение обязано быть своё, отдельное от плашки парсера.
+  expect(screen.queryByTestId('query-text-error')).toBeNull();
+  const blocked = screen.getByTestId('query-text-wrapper');
+  expect(blocked).toHaveTextContent('}}');
+  expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }));
+  expect(onSave).not.toHaveBeenCalled();
+
+  // Вставленный целиком блок — тот же пролом (плюс своя ошибка разбора).
+  fireEvent.change(field, { target: { value: '{{query: tags=work}}' } });
+  expect(screen.getByTestId('query-text-wrapper')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+
+  // Убрал маркер — запрет снят: запрет ровно на порчу обёртки, а не на «непонятную строку».
+  fireEvent.change(field, { target: { value: 'tags=ab' } });
+  expect(screen.queryByTestId('query-text-wrapper')).toBeNull();
+  const save = screen.getByRole('button', { name: 'Сохранить' });
+  expect(save).toBeEnabled();
+  fireEvent.click(save);
+  expect(onSave).toHaveBeenCalledWith('tags=ab');
+});
+
 test('onSave получает текст поля, onCancel — по Esc', async () => {
   const onSave = vi.fn();
   const onCancel = vi.fn();
