@@ -40,9 +40,12 @@ type Unsupported = NonNullable<GoalProgressData['unsupported']>;
  */
 const UNSUPPORTED_TEXT: Record<Unsupported, string> = {
   array_field: 'Прогресс по полю внутри списка механизм целей пока не поддерживает.',
-  invalid_query: 'Запрос источника прогресса не разобран — поправьте в нём query через чат.',
+  // Ключ назван латиницей и вместе с местом: ровно `query` и `field` владелец видит
+  // рядом, в read-only значении `progress_source`, — «поправьте запрос» было бы советом
+  // без адреса. Форма у обеих фраз одна: «поправьте <ключ> в источнике прогресса».
+  invalid_query: 'Запрос не разобран — поправьте query в источнике прогресса через чат.',
   invalid_field:
-    'Поле агрегата не найдено или не числовое — поправьте в источнике прогресса field через чат.',
+    'Поле агрегата не найдено или не числовое — поправьте field в источнике прогресса через чат.',
   compute_failed: 'Прогресс не удалось посчитать сейчас — попробуйте обновить экран.',
 };
 
@@ -55,6 +58,19 @@ const UNSUPPORTED_TONE: Record<Unsupported, string> = {
   invalid_field: 'text-alert',
   compute_failed: 'text-alert',
 };
+
+/**
+ * Сумма со ЗНАКОМ: formatAmount по построению срезает знак (он там задаётся направлением
+ * записи, а не строкой). Агрегат цели знака не выбирает — sum и latest берут поле как
+ * есть, а знаковые поля существуют (`orbis/budget.carryover`, числовое поле любого
+ * пользовательского аспекта). Без этой обёртки при `current = '-5000.00'` полоса
+ * показывала бы честный 0 %, а подпись рядом — «5 000 / 300 000», то есть врала бы про
+ * знак. Минус типографский (U+2212) — тот же, что у сумм Budget.
+ */
+function signedAmount(dec: string): string {
+  const negative = dec.startsWith('-') || dec.startsWith('−');
+  return negative ? `−${formatAmount(dec)}` : formatAmount(dec);
+}
 
 export function GoalProgress({ progress, unit }: { progress: GoalProgressData; unit?: string }) {
   const { current, target, unsupported } = progress;
@@ -75,7 +91,7 @@ export function GoalProgress({ progress, unit }: { progress: GoalProgressData; u
   const percent = envelopePercent(current, target);
   const width = Math.min(100, percent);
   const reached = percent >= 100;
-  const amounts = `${formatAmount(current)} / ${formatAmount(target)}`;
+  const amounts = `${signedAmount(current)} / ${signedAmount(target)}`;
   const valueText = `${percent}% — ${amounts}${unit ? ` ${unit}` : ''}`;
 
   return (

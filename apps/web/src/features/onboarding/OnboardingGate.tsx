@@ -1,12 +1,19 @@
 import { type ReactNode, useEffect } from 'react';
+import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 
 export function OnboardingGate({ children }: { children: ReactNode }) {
   const settings = trpc.user.getSettings.useQuery(undefined, { retry: false });
+  const utils = trpc.useUtils();
   const seed = trpc.user.seedOnboarding.useMutation({
-    onSuccess: () => {
+    onSuccess: (r) => {
+      // Сид создаёт сущности (smart lists, стартовые записи). Списки, успевшие
+      // прочитаться пустыми до его конца, сами не протухнут — на первом запуске это
+      // ровно тот случай. Только при фактическом сиде: повтор идемпотентен ({seeded:false}),
+      // и гонять инвалидацию на каждом старте сессии не за что.
+      if (r?.seeded) invalidateGraph(utils);
       // Перечитать настройки и после бэкфилла ({seeded:false}): installedViews мог
       // пополниться orbis-budget — вкладка Budget появляется в этой же сессии.
       void settings.refetch();

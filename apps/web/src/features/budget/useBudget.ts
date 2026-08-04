@@ -2,6 +2,7 @@
 // один postDue на mount (переход due planned→fact, §2.8). Формулы считает
 // ТОЛЬКО сервер — клиент отображает готовые decimal-строки.
 import { useEffect, useRef } from 'react';
+import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 
 /** Сдвиг месяца 'YYYY-MM' на ±1 — чистая арифметика строк, без Date-объектов. */
@@ -69,7 +70,12 @@ export function useBudgetOverview(month: string) {
   const utils = trpc.useUtils();
   const postDue = trpc.budget.postDue.useMutation({
     onSuccess: (r) => {
-      if (r.posted > 0) void utils.budget.alertCount.invalidate();
+      // posted>0 — это записи графа, переведённые planned→fact: помимо агрегатов
+      // протухли списки и открытая сущность (прогресс цели считается на чтении).
+      if (r.posted > 0) {
+        void utils.budget.alertCount.invalidate();
+        invalidateGraph(utils);
+      }
     },
   });
   const posted = useRef(false);

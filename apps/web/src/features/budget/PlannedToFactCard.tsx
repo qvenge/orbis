@@ -9,6 +9,7 @@ import { newId } from '@orbis/shared';
 import { TRPCClientError } from '@trpc/client';
 import { useState } from 'react';
 import { formatMoney, type MoneyTone } from '../../lib/format';
+import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -64,8 +65,7 @@ export function PlannedToFactCard({
       return;
     }
     await invalidateBudget(utils);
-    void utils.entity.get.invalidate();
-    void utils.entity.query.invalidate();
+    invalidateGraph(utils);
     onClose();
   }
 

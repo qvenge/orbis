@@ -51,6 +51,9 @@ function isScalar(v: unknown): boolean {
  * значение уедет обратно на сервер, и по ней видно опечатку в запросе.
  */
 function readOnlyText(value: unknown): string {
+  // Пустой список — прочерк, а не пустое место: `aliases: ` без значения читается как
+  // сломанная строка, а не как «алиасов нет».
+  if (Array.isArray(value) && value.length === 0) return '—';
   if (Array.isArray(value) && value.every(isScalar))
     return value.map((v) => String(v ?? '')).join(', ');
   return JSON.stringify(value) ?? String(value);

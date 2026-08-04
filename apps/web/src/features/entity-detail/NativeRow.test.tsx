@@ -153,6 +153,34 @@ test('generic: 2-3 keyFields из реестра', () => {
   expect(screen.getByTestId('native-generic')).toBeInTheDocument();
 });
 
+// Круг правок 1 задачи E3 (I1): незаполненные keyFields не печатаются вовсе — то же
+// правило, по которому сервер собирает keyFields чат-карточек (tools/dispatch.ts).
+// У цели `current_value` не пишет НИКТО (прогресс считается на каждом чтении), и шапка
+// печатала вечный `current_value: —` прямо над полосой с настоящим числом.
+test('generic: незаполненное keyField не печатается прочерком', () => {
+  render(
+    <NativeRow
+      entity={
+        {
+          ...base,
+          aspects: {
+            'orbis/goal': {
+              progress_source: { query: 'q', aggregate: 'count' },
+              target_value: '300000.00',
+              unit: '₽',
+            },
+          },
+        } as never
+      }
+      onToggleTask={() => {}}
+    />,
+  );
+  expect(screen.getByText('target_value:')).toBeInTheDocument();
+  expect(screen.getByText('unit:')).toBeInTheDocument();
+  expect(screen.queryByText('current_value:')).toBeNull();
+  expect(screen.queryByText('—')).toBeNull();
+});
+
 // Уборочная фаза (E4): вся машиночитаемая часть memory-правила лежит в title (K19.4),
 // а inline-правка заголовка позволяет сломать формат одним символом. Признака «правило
 // больше не распознаётся» не было нигде: запись оставалась в «Памяти AI» и выглядела

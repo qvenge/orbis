@@ -236,10 +236,21 @@ export function NativeRow({
     );
   }
 
-  // generic: первые 2–3 keyFields установленного аспекта из реестра.
+  // generic: первые 2–3 keyFields установленного аспекта из реестра — ЗАПОЛНЕННЫЕ.
+  // Отбор по наличию значения повторяет правило сервера, который собирает keyFields
+  // чат-карточек из того же реестра и незаполненные поля пропускает
+  // (tools/dispatch.ts: `if (value !== undefined) keyFields[field] = value`).
+  // Без него у цели (E3) шапка печатала `current_value: —` — поле-кэш, которое сервер
+  // не пишет никогда (goals/progress.ts считает прогресс на каждом чтении), — прямо над
+  // полосой прогресса, где стоит настоящее число. Прочерк «поле есть, но пусто» остаётся
+  // честным только для полей, которые кто-то заполняет.
   const firstAspect = Object.keys(aspects)[0];
-  const fields = firstAspect ? keyFieldsFor(firstAspect).slice(0, 3) : [];
   const firstFields = firstAspect ? aspects[firstAspect] : undefined;
+  const fields = firstAspect
+    ? keyFieldsFor(firstAspect)
+        .filter((k) => firstFields?.[k] !== undefined)
+        .slice(0, 3)
+    : [];
   return (
     <div className="flex items-center gap-2" data-testid="native-generic">
       <Title value={entity.title} onSave={onSaveTitle} />

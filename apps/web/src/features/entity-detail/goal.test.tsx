@@ -77,6 +77,52 @@ test('процент считается по decimal-строкам, а не п�
   expect(await screen.findByText('29%')).toBeInTheDocument();
 });
 
+// Граница «ровно цель» — включительно: 100 % это уже достигнуто, а не «почти».
+test('ровно 100 % — полоса полна и цель объявлена достигнутой', async () => {
+  renderWithProviders(
+    <DetailScreen entityId="g1" />,
+    goalHandler({ current: '300000.00', target: '300000.00', ratio: 1 }),
+  );
+  expect(await screen.findByText('100%')).toBeInTheDocument();
+  expect(screen.getByTestId('goal-bar')).toHaveStyle({ width: '100%' });
+  expect(screen.getByText(/достигнута/i)).toBeInTheDocument();
+});
+
+// Вторая сторона той же границы: недобор в копейку — ещё НЕ цель, и округлять вверх
+// нельзя (тот же зарок, что у порогов Budget: «не округляем вверх до порога»).
+test('99,99 % — это 99 %, а не достигнутая цель', async () => {
+  renderWithProviders(
+    <DetailScreen entityId="g1" />,
+    goalHandler({ current: '299999.00', target: '300000.00', ratio: 0.999996 }),
+  );
+  expect(await screen.findByText('99%')).toBeInTheDocument();
+  expect(screen.queryByText(/достигнута/i)).toBeNull();
+});
+
+// Отрицательный агрегат (знаковое поле — carryover, поле пользовательского аспекта):
+// полоса пуста, но знак в подписи обязан остаться — иначе минус читался бы плюсом.
+test('отрицательное текущее значение не теряет знак в подписи', async () => {
+  renderWithProviders(
+    <DetailScreen entityId="g1" />,
+    goalHandler({ current: '-5000.00', target: '300000.00', ratio: -0.016 }),
+  );
+  expect(await screen.findByText('−5 000 / 300 000')).toBeInTheDocument();
+  expect(screen.getByTestId('goal-bar')).toHaveStyle({ width: '0%' });
+});
+
+// Полоса принадлежит ЦЕЛИ: обычная сущность её не показывает даже случайно (сервер
+// поля goalProgress ей не кладёт вовсе).
+test('у не-цели полосы прогресса нет вовсе', async () => {
+  const task = {
+    ...goal,
+    aspects: { 'orbis/task': { status: 'inbox', priority: 'high' } },
+  };
+  renderWithProviders(<DetailScreen entityId="g1" />, goalHandler(undefined, task));
+  expect(await screen.findByLabelText('orbis/task status')).toBeInTheDocument();
+  expect(screen.queryByRole('progressbar')).toBeNull();
+  expect(screen.queryByTestId('goal-progress')).toBeNull();
+});
+
 test('перевыполнение не переполняет полосу, но читается и глазами, и скринридером', async () => {
   renderWithProviders(
     <DetailScreen entityId="g1" />,
@@ -157,6 +203,13 @@ test('массив строк показан списком через запя�
   expect(screen.getByTestId('aspect-value-orbis/category-aliases')).toHaveTextContent(
     'кофе, кофейня',
   );
+});
+
+// Пустой список — «алиасов нет», а не сломанная строка без значения.
+test('пустой массив показан прочерком, а не пустотой', async () => {
+  const category = { ...goal, aspects: { 'orbis/category': { aliases: [], icon: '☕' } } };
+  renderWithProviders(<DetailScreen entityId="g1" />, goalHandler(undefined, category));
+  expect(await screen.findByTestId('aspect-value-orbis/category-aliases')).toHaveTextContent('—');
 });
 
 // --- Р17: прогресс обновляется после добавления подходящей сущности -----------------------

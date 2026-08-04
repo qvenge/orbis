@@ -19,7 +19,10 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
   const create = trpc.entity.create.useMutation({
     onSuccess: () => invalidateGraph(utils),
   });
-  const relation = trpc.relation.create.useMutation();
+  // Связь с родителем (context.kind === 'entity') создаётся ПОСЛЕ сущности, то есть
+  // после инвалидации выше: без второго вызова секция подзадач родителя перечиталась бы
+  // ровно до появления связи и не показала бы её.
+  const relation = trpc.relation.create.useMutation({ onSuccess: () => invalidateGraph(utils) });
   const isPending = create.isPending || relation.isPending;
 
   async function submit(e: FormEvent) {

@@ -51,7 +51,10 @@ export function useFastPath(threadId: string) {
   const { sendMessage, retryMessage, isSending } = useSendMessage(threadId);
 
   const create = trpc.entity.create.useMutation();
-  const update = trpc.entity.update.useMutation();
+  // Архивация fast-сущности при «Разобрать с AI» (reparse): для списков и открытой
+  // сущности это такая же правка графа, как создание, — снятая запись обязана из них
+  // уйти, иначе одна строка выглядит двумя сущностями.
+  const update = trpc.entity.update.useMutation({ onSuccess: () => invalidateGraph(utils) });
   const key = chatThreadKey(threadId);
 
   // Категории (aspect=orbis/category) + валюта + memory-правила → контекст парсера.

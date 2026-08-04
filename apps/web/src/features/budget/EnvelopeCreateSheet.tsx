@@ -5,6 +5,7 @@
 // currency уходит ЯВНОЙ (defaultCurrency, если пользователь не сменил) — корректность
 // комбинации §2.1 держит серверная нормализация NULL→defaultCurrency (бэклог A7).
 import { type FormEvent, useState } from 'react';
+import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
@@ -90,6 +91,7 @@ export function EnvelopeCreateSheet({
         source: 'ui',
       });
       await invalidateBudget(utils);
+      invalidateGraph(utils); // конверт — сущность графа, а не только строка агрегата
       show('Конверт создан');
       onOpenChange(false);
     } catch (err) {

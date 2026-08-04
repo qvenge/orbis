@@ -15,6 +15,7 @@ import { useState } from 'react';
 import { goBack } from '../../app/history';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { formatAmount } from '../../lib/format';
+import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -67,6 +68,7 @@ function useRolloverSubmit(month: string) {
       return;
     }
     await invalidateBudget(utils);
+    invalidateGraph(utils); // конверты нового месяца — сущности графа
     // Успех: экран закрывается (§3.5 — один batch, одна запись журнала, Undo из чата).
     // Через историю (D18), а не прямым pop: pop при живой синхронизации добавил бы запись
     // истории, и следующий системный «назад» вернул бы на закрытый экран.

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { invalidateGraph } from '../../../lib/invalidate';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
@@ -21,8 +22,16 @@ export function ConfirmationCard({
   // Клиентский expiry — только UI; approve всё равно ревалидирует на сервере (D-a).
   const expired = now - new Date(createdAt).getTime() > EXPIRY_MS;
 
+  const utils = trpc.useUtils();
   const approve = trpc.ai.approve.useMutation({
-    onSuccess: () => setResolved('approved'),
+    onSuccess: () => {
+      setResolved('approved');
+      // Подтверждают именно РИСКОВАННОЕ (удаление, массовая правка) — путь, после
+      // которого протухает больше всего. Без этой строки не перечитывались ни списки,
+      // ни открытая сущность, ни бюджет: пачка исполнена, а экран показывал прежнее.
+      invalidateGraph(utils);
+      void utils.budget.invalidate();
+    },
     onError: (e) => setPostError(e.message), // approve может вернуть структурную ошибку постфактум
   });
   const reject = trpc.ai.reject.useMutation({ onSuccess: () => setResolved('rejected') });

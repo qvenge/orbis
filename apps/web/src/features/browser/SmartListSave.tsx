@@ -1,4 +1,5 @@
 import { newId } from '@orbis/shared';
+import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 
@@ -17,6 +18,9 @@ export function SmartListSave({ query, title }: { query: string; title: string }
       input: { id, title, tags: ['smart-list'], body: `{{query:${query}}}` },
       source: 'quick_capture',
     });
+    // Сущность smart-list'а — обычная запись графа: в списках Browser она обязана
+    // появиться сама, без ожидания staleTime (закреп ниже обновляет только настройки).
+    invalidateGraph(utils);
     const pinned = settings.data?.pinnedEntities ?? [];
     await update.mutateAsync({ pinnedEntities: [...pinned, { id, order: pinned.length }] });
   }
