@@ -104,25 +104,37 @@ test('inline body-правка шлёт expectedUpdatedAt = точная стр�
 test('текст, набранный во время сохранения, переживает refetch', async () => {
   let getCalls = 0;
   const saved = { ...entity, body: 'новое', updatedAt: '2026-07-05T11:00:00.000Z' };
-  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+  // Ворота на entity.update: пока save висит, рефетч (invalidate в onSettled) НЕ может
+  // приехать — иначе «печатаем, пока запрос летит» осталось бы словами в комментарии, а
+  // порядок событий решала бы случайность планировщика.
+  let release: (v: unknown) => void = () => {};
+  const gate = new Promise((res) => {
+    release = res;
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, async (path) => {
     if (path === 'entity.get') {
       getCalls += 1;
       const e = getCalls === 1 ? entity : saved;
       return { entity: e, relations: [], thread: { threadId: 'th1', messages: [] } };
     }
-    if (path === 'entity.update') return saved;
+    if (path === 'entity.update') {
+      await gate;
+      return saved;
+    }
     if (path === 'aspect.list') return [];
     return {};
   });
   const ta = await openBodyEditor();
   fireEvent.change(ta, { target: { value: 'новое' } });
-  fireEvent.blur(ta); // save уходит на сервер, редактор закрывается
+  fireEvent.blur(ta); // save ушёл на сервер и висит в воротах, редактор закрылся
 
-  // Возвращаемся в правку, пока запрос летит, и печатаем дальше.
+  // Возвращаемся в правку и печатаем дальше — save ещё в полёте, рефетча не было.
   const reopened = await openBodyEditor();
   fireEvent.change(reopened, { target: { value: 'новое, и ещё абзац' } });
+  expect(getCalls).toBe(1);
 
-  await waitFor(() => expect(getCalls).toBeGreaterThan(1)); // refetch с новым updatedAt пришёл
+  release(saved); // save завершился → invalidate → refetch с новым updatedAt
+  await waitFor(() => expect(getCalls).toBeGreaterThan(1));
   expect(screen.getByTestId('body-edit')).toHaveValue('новое, и ещё абзац');
 });
 
@@ -1090,6 +1102,26 @@ test('клик по выделенному тексту тела не съеда
 });
 
 const BODY_WITH_BLOCK = 'Утренний обзор\n\n{{query: aspect=orbis/task, status=inbox, title=Inbox}}';
+const BODY_TEXT_BLOCK_TEXT = `${BODY_WITH_BLOCK}\n\nи хвост после блока`;
+
+/** b стоит в документе ПОСЛЕ a. */
+function follows(a: Element, b: Element): boolean {
+  return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+}
+
+// Главное видимое свойство просмотра: виджет стоит МЕЖДУ своими абзацами, как он стоит в
+// body. Раскладка «весь текст, потом все виджеты» — это режим правки; в просмотре она была
+// бы возвратом к тому, от чего задача и уходила, и юнит-тест сегментации этого не поймал бы.
+test('порядок сегментов сохраняется: текст → виджет → текст', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(BODY_TEXT_BLOCK_TEXT));
+  await screen.findByTestId('qb-count');
+  const intro = screen.getByText('Утренний обзор');
+  const widget = screen.getByText('Inbox'); // заголовок виджета из title=
+  const tail = screen.getByText('и хвост после блока');
+
+  expect(follows(intro, widget)).toBe(true);
+  expect(follows(widget, tail)).toBe(true);
+});
 
 test('{{query:…}} в просмотр текстом не течёт: текст — разметкой, блок — виджетом', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(BODY_WITH_BLOCK));

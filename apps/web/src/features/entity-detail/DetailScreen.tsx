@@ -191,8 +191,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
 /** Пустое приглашение к вводу — одно и то же в просмотре и в плейсхолдере редактора. */
 const BODY_PLACEHOLDER = 'Заметки…';
 
-/** Отступы просмотра повторяют отступы textarea: текст не прыгает при смене режима. */
-const BODY_BOX_CLASS = 'w-full rounded-lg px-2 py-1.5 text-sm leading-relaxed';
+// Отступы просмотра повторяют отступы textarea: текст не прыгает при смене режима.
+// min-h-24 — общая для обоих режимов: у пустой записи это ВСЯ зона клика, и без неё
+// приглашение «Заметки…» осталось бы строчкой в 20 px, мимо которой легко промахнуться.
+const BODY_BOX_CLASS = 'min-h-24 w-full rounded-lg px-2 py-1.5 text-sm leading-relaxed';
 
 /**
  * §3.4: КАЖДЫЙ {{query:...}}-блок body — свой виджет. У сидированного Daily Planning их три
@@ -269,7 +271,7 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
             setEditing(false);
             if (value !== serverBody) onSave(value);
           }}
-          className={`${BODY_BOX_CLASS} min-h-24 resize-none bg-transparent transition placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30`}
+          className={`${BODY_BOX_CLASS} resize-none bg-transparent transition placeholder:text-text-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30`}
         />
         <QueryWidgets segments={segments} />
       </div>
@@ -292,13 +294,11 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
   // нет вовсе, но есть виджеты (ALL_TASKS_BODY — один {{query:…}}): иначе кликать не по чему.
   const hasText = segments.some((s) => s.kind === 'text');
   return (
-    <div className="group relative flex flex-col gap-4">
-      {/* biome-ignore lint/a11y: жест мыши поверх текста (useKeyWithClickEvents +
-          noStaticElementInteractions). Клавиатурный путь — кнопка «Редактировать» ниже:
-          role=button здесь невозможен (внутри разметки живут ссылки, а интерактивное внутри
-          кнопки — уже не кнопка), а keydown на самом теле был бы мёртвым кодом — фокуса у
-          него нет. Группой, а не двумя правилами: Biome применяет только ОДНУ соседнюю
-          строку подавления, и второе правило осталось бы незаглушённым. */}
+    <div className="group flex flex-col">
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: жест
+          мыши поверх текста. Клавиатурный путь — кнопка «Редактировать» ниже: role=button здесь
+          невозможен (внутри разметки живут ссылки, а интерактивное внутри кнопки — уже не
+          кнопка), а keydown на самом теле был бы мёртвым кодом — фокуса у него нет. */}
       <div
         data-testid="body-view"
         onClick={startEditing}
@@ -319,16 +319,22 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
       </div>
       {/* Правка обязана быть достижима без мыши. Кнопка всегда в разметке (фокус её
           проявляет), а глазу показывается по наведению — тихая бумага не носит панель
-          инструментов над каждой заметкой. pointer-events-none, пока она невидима: иначе
-          прозрачная кнопка перехватывала бы клики по тексту и ссылкам под собой. */}
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => setEditing(true)}
-        className="pointer-events-none absolute right-0 top-0 opacity-0 transition focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
-      >
-        Редактировать
-      </Button>
+          инструментов над каждой заметкой.
+          Своя строка ПОД телом, а не absolute поверх правого верхнего угла: невидимая
+          кнопка накрывала бы правый край первой строки просмотра, и клик по попавшей туда
+          ссылке (или шапке виджета) открывал бы редактор — ровно то, что отсекает
+          startEditing. Место под неё зарезервировано всегда, поэтому наведение ничего не
+          сдвигает, а клик по пустой полосе попадает в саму кнопку и открывает правку. */}
+      <div className="flex justify-end">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setEditing(true)}
+          className="opacity-0 transition focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          Редактировать
+        </Button>
+      </div>
     </div>
   );
 }
