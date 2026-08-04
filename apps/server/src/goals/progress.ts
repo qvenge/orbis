@@ -44,8 +44,10 @@ import { queryContext } from '../query/context';
  *   скомпилировался структурно (например `children_of=this` вне контекста);
  * - `invalid_field` — поле агрегата не нашлось в каталоге, неоднозначно без `aspect=`
  *   или не числовое (для sum и latest набор типов один);
- * - `compute_failed` — запрос дошёл до БД и упал там (рассинхрон типа в реестре,
- *   таймаут). Редкий случай, но молчать о нём нельзя.
+ * - `compute_failed` — расчёт сорвался уже ПОСЛЕ компиляции: либо запрос дошёл до БД и
+ *   упал там (рассинхрон типа в реестре, таймаут), либо не разобралось значение на
+ *   выходе агрегата (numeric NaN, непредставимая доля). Причину различают не ярлыком,
+ *   а логом — оба места пишут `console.error` с разным текстом. Молчать нельзя.
  */
 export type GoalProgressUnsupported =
   | 'array_field'
@@ -133,13 +135,14 @@ export async function computeGoalProgress(
     throw e;
   }
 
+  let current: string;
   try {
     // SAVEPOINT, а не голый try/catch: упавший statement в PostgreSQL переводит ВСЮ
     // транзакцию в aborted, и пойманная в JS ошибка всё равно убила бы entity.get на
     // COMMIT. tx.transaction на postgres-js — именно savepoint (то же соединение,
     // не вторая транзакция из пула): один лишний statement на цель, зато откат
     // касается только агрегата.
-    const current = await tx.transaction(async (sp) => {
+    current = await tx.transaction(async (sp) => {
       const rows = await sp.execute(compiled);
       const row = rows[0] as Record<string, unknown> | undefined;
       if (src.aggregate === 'count') return String(row?.count ?? '0');
@@ -148,8 +151,25 @@ export async function computeGoalProgress(
       const value = (src.aggregate === 'sum' ? row?.sum : row?.value) as string | null | undefined;
       return value ?? '0';
     });
+  } catch (e) {
+    // Молча гасить нельзя (конвенция fail-soft-catch сервера): без этой строки
+    // `compute_failed` в проде недиагностируем, а программная ошибка в компиляте
+    // выглядела бы как «просто не посчиталось» разом у ВСЕХ целей и без сигнала.
+    console.error(`[goals/progress] агрегат ${src.aggregate} не выполнился:`, e);
+    return failed('compute_failed');
+  }
+
+  // Доля — ОТДЕЛЬНЫМ try: она считается уже после БД, и её падение (numeric NaN на
+  // выходе агрегата, неразбираемый target у вызывающего мимо схемы, непредставимая
+  // доля) не имеет отношения к SQL. Общий catch приписал бы её базе — ярлык остался
+  // бы тем же, но лог врал бы о причине, а лог здесь и есть весь диагноз.
+  try {
     return { current, target, ratio: decRatio(current, target) };
-  } catch {
+  } catch (e) {
+    console.error(
+      `[goals/progress] доля не посчиталась (current='${current}', target='${target}'):`,
+      e,
+    );
     return failed('compute_failed');
   }
 }

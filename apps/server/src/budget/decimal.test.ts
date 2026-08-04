@@ -93,4 +93,14 @@ describe('decRatio: доля для прогресс-бара цели (§11.3)'
   test('не decimal-строка — RangeError, а не тихий NaN', () => {
     expect(() => decRatio('не число', '10')).toThrow(RangeError);
   });
+
+  test('доля, не влезающая во float, — RangeError, а не Infinity', () => {
+    // Длину decimal-строки ничто не ограничивает; Infinity уехал бы на клиент как
+    // JSON `null` в поле типа number — контракт соврал бы вместо честного отказа.
+    const huge = `1${'0'.repeat(400)}`;
+    expect(() => decRatio(huge, '1')).toThrow(RangeError);
+    expect(() => decRatio(`-${huge}`, '1')).toThrow(RangeError);
+    // Граница нормальности: 1e9 / 1 — обычное число, отказа быть не должно
+    expect(decRatio('1000000000', '1')).toBe(1e9);
+  });
 });

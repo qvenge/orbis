@@ -198,6 +198,65 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
   });
 });
 
+describe('computeGoalProgress: изоляция владельца', () => {
+  test('цель не считает чужие сущности — ни в sum, ни в count, ни через entity.get', async () => {
+    const me = freshUserId();
+    const other = freshUserId();
+    // Чужие сущности подобраны так, чтобы ЛЮБАЯ утечка была видна в ответе: суммы и
+    // счётчики отличаются на порядки. Скомпилированный SQL owner-фильтра не содержит
+    // вовсе (compile.ts §инварианты) — изоляцию целиком даёт identity транзакции
+    // (set_config + SET LOCAL ROLE authenticated) и RLS поверх неё, и на новом пути
+    // расчёта это не запиннено больше ничем.
+    //
+    // Пробой прилагаю честно: если подменить переданную транзакцию на свежую из пула
+    // (вероятный будущий рефактор «убрать вложенность»), на нашем стенде расчёт упадёт
+    // с permission denied — базовая роль DSN `orbis_app` не имеет прав на entities и
+    // aspect_definitions без SET LOCAL ROLE, то есть отказывает закрыто, а не течёт.
+    // Утечка становится настоящей, если процесс поднимут под ролью с правами на
+    // таблицы (админ-DSN — он в репозитории есть) или роли выдадут гранты. Тест
+    // сторожит сам инвариант, а не одну его реализацию.
+    await createIncome(callerFor(other), 'Чужой доход', '999999.00', ['savings']);
+    await createIncome(callerFor(other), 'Ещё чужой', '888888.00', ['savings']);
+    await createIncome(callerFor(me), 'Мой доход', '100.00', ['savings']);
+
+    const source = { query: 'aspect=orbis/financial, tags=savings' } as const;
+    const sum = await progressOf(me, {
+      progress_source: { ...source, aggregate: 'sum', field: 'amount' },
+      target_value: '1000.00',
+    });
+    expect(sum.current).toBe('100.00');
+
+    const count = await progressOf(me, {
+      progress_source: { ...source, aggregate: 'count' },
+      target_value: '10',
+    });
+    expect(count.current).toBe('1');
+
+    const latest = await progressOf(me, {
+      progress_source: { ...source, aggregate: 'latest', field: 'amount' },
+      target_value: '1000.00',
+    });
+    expect(latest.current).toBe('100.00');
+
+    // Тот же путь, но через боевой роутер целиком
+    const goal = await callerFor(me).entity.create({
+      input: {
+        title: 'Накопить',
+        tags: [],
+        aspects: {
+          'orbis/goal': {
+            progress_source: { ...source, aggregate: 'sum', field: 'amount' },
+            target_value: '1000.00',
+          },
+        },
+      },
+      source: 'ui',
+    });
+    const got = await callerFor(me).entity.get({ id: goal.id });
+    expect(got.goalProgress?.current).toBe('100.00');
+  });
+});
+
 describe('computeGoalProgress: честные отказы вместо падения (§12 п.6, fail-soft)', () => {
   test('поле внутри JSONB-массива не поддерживается — честный флаг, а не тихий ноль', async () => {
     const user = freshUserId();
@@ -309,6 +368,36 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
       return (rows[0] as { n: string }).n;
     });
     expect(stillReadable).toBe('1');
+  });
+
+  test('NaN на выходе агрегата — тоже compute_failed, и ловит его ДРУГОЙ catch', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const row = await createIncome(caller, 'Взнос', '10.00', ['nan']);
+    // 'NaN' — ЗАКОННОЕ значение numeric в PostgreSQL: каст не падает, падает уже разбор
+    // decimal-строки в decRatio. То есть путь идёт мимо SQL-catch и упирается во второй,
+    // «долевой». Без него отказ выглядел бы в логе как отказ базы — ярлык один, но
+    // диагноз врал бы; тест держит именно разделение.
+    const admin = adminDb();
+    try {
+      await admin.db.execute(
+        sql`UPDATE entities SET aspects = jsonb_set(aspects, '{orbis/financial,amount}', '"NaN"') WHERE id = ${row.id}`,
+      );
+    } finally {
+      await admin.client.end();
+    }
+
+    const p = await progressOf(user, {
+      progress_source: {
+        query: 'aspect=orbis/financial, tags=nan',
+        aggregate: 'sum',
+        field: 'amount',
+      },
+      target_value: '100',
+    });
+    expect(p.unsupported).toBe('compute_failed');
+    expect(p.current).toBe('0');
+    expect(p.ratio).toBe(0); // не NaN и не Infinity: в JSON их нет
   });
 });
 

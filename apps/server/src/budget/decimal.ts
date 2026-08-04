@@ -84,8 +84,9 @@ const RATIO_SCALE = 6n;
  *
  * Делитель обязан быть ненулевым (у цели это гарантирует positiveDecimal схемы);
  * ноль — RangeError, а не Infinity. Округление — half-away-from-zero, как у decDivBy.
- * Значения свыше ~9·10^9 теряют точность на последнем шаге (Number из BigInt) —
- * для доли, которую рисует полоса, это несущественно.
+ * Значения свыше ~9·10^9 теряют точность на последнем шаге (Number из BigInt) — для
+ * доли, которую рисует полоса, это несущественно; а вот доля, не влезающая во float,
+ * это уже RangeError, а не Infinity (см. клапан ниже).
  */
 export function decRatio(a: string, b: string): number {
   const { av, bv } = align(parseDec(a), parseDec(b));
@@ -98,7 +99,13 @@ export function decRatio(a: string, b: string): number {
   const den = bv < 0n ? -bv : bv;
   let q = num / den;
   if ((num % den) * 2n >= den) q += 1n;
-  return (negative ? -Number(q) : Number(q)) / Number(scale);
+  const ratio = (negative ? -Number(q) : Number(q)) / Number(scale);
+  // Длина decimal-строки ничем не ограничена, поэтому BigInt может не влезть во float:
+  // Infinity отдавать НЕЛЬЗЯ — в JSON его нет, и на клиент по tRPC (трансформера у нас
+  // нет) уехало бы `null` в поле, объявленном как number. Пусть лучше вызывающий
+  // поймает RangeError и честно скажет «не посчиталось», чем контракт соврёт.
+  if (!Number.isFinite(ratio)) throw new RangeError(`доля не представима числом: "${a}" / "${b}"`);
+  return ratio;
 }
 
 /**
