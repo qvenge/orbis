@@ -17,7 +17,7 @@ import { bodySegments, replaceQueryBlock } from '../browser/query';
 import { PlannedToFactCard } from '../budget/PlannedToFactCard';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { ChatThread } from '../chat/ChatThread';
-import { QueryTextEditor } from '../query-builder/QueryTextEditor';
+import { QueryBlockEditor } from '../query-builder/QueryBlockEditor';
 import { AspectCards } from './AspectCards';
 import { Backlinks } from './Backlinks';
 import { Blocks } from './Blocks';
@@ -395,7 +395,7 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
       {/* initial — снимок, сделанный при открытии, а не blocks[index]: смена body под
           модалкой не должна ни подменять текст под руками, ни стирать набранное. */}
       {configuring !== null && (
-        <QueryTextEditor
+        <QueryBlockEditor
           initial={configuring.text}
           onSave={(q) => saveBlock(configuring, q)}
           onCancel={() => setConfiguring(null)}

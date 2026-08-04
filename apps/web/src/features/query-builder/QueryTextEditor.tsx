@@ -1,7 +1,6 @@
 import { parseQuery } from '@orbis/shared';
 import { useId, useMemo, useRef, useState } from 'react';
-import { buildCatalogFromAspects } from '../../lib/query-blocks/parse';
-import { trpc } from '../../trpc';
+import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 
@@ -37,11 +36,7 @@ export function QueryTextEditor({
   const fieldId = useId();
   const errorId = useId();
 
-  const aspects = trpc.aspect.list.useQuery();
-  const catalog = useMemo(
-    () => (aspects.data ? buildCatalogFromAspects(aspects.data) : null),
-    [aspects.data],
-  );
+  const { catalog } = useFieldCatalog();
   // Разбор ровно того, что уедет в блок: в поле лежит ВНУТРЕННОСТЬ {{query:…}} (обёртку
   // приставит замена подстроки), и края текста в блок всё равно не попадут — .trim() здесь
   // тот же, что в replaceQueryBlock, иначе позиция ошибки считалась бы по одной строке, а

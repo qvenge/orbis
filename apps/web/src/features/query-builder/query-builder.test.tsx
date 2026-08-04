@@ -7,7 +7,6 @@ import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
 import { trpc } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
-import { queryBlocks } from '../browser/query';
 import { QueryTextEditor } from './QueryTextEditor';
 
 // Реестр аспектов — настоящий: каталог полей грамматики в тесте тот же, что в проде,
@@ -52,6 +51,11 @@ beforeEach(() => {
 const TWO_BLOCKS =
   'Утренний обзор\n\n{{query: tags=work, title=Работа}}\n\nмежду\n\n{{query: tags=home, title=Дом}}\n\nхвост';
 
+// Те же два блока, но НЕразбираемые (`status=` — пустое значение). Строковый редактор — это
+// редактор именно битого блока (§3.4): у валидного «Настроить» открывает форму, поэтому
+// тесты текстового пути обязаны идти по битому, иначе они проверяли бы не тот редактор.
+const TWO_BLOCKS_BROKEN = TWO_BLOCKS.replaceAll('tags=', 'status=, tags=');
+
 /** Открывает редактор N-го блока кнопкой «Настроить» на его виджете. */
 async function openBlockEditor(index = 0): Promise<HTMLElement> {
   await waitFor(() => expect(screen.getAllByTestId('qb-configure').length).toBeGreaterThan(index));
@@ -80,7 +84,10 @@ test('«Настроить» у невалидного блока открыва
 });
 
 test('сохранение изменённого текста заменяет только этот блок в body', async () => {
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
+  const { calls } = renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    bodyHandler(TWO_BLOCKS_BROKEN),
+  );
   const dialog = await openBlockEditor(1);
   fireEvent.change(editorField(dialog), { target: { value: 'tags=home, limit=5, title=Дом' } });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
@@ -88,31 +95,62 @@ test('сохранение изменённого текста заменяет 
   await waitFor(() => {
     const c = calls.find((x) => x.path === 'entity.update');
     expect((c?.input as { body: string }).body).toBe(
-      'Утренний обзор\n\n{{query: tags=work, title=Работа}}\n\nмежду\n\n{{query: tags=home, limit=5, title=Дом}}\n\nхвост',
+      'Утренний обзор\n\n{{query: status=, tags=work, title=Работа}}\n\nмежду\n\n{{query: tags=home, limit=5, title=Дом}}\n\nхвост',
     );
     // §5.2: тот же контракт, что у правки тела руками — версия сущности едет с записью.
     expect((c?.input as { expectedUpdatedAt: string }).expectedUpdatedAt).toBe(entity.updatedAt);
   });
 });
 
-// Р3. Сидированные списки многострочные, с 9-пробельными отступами continuation-строк:
-// пересборка блока из показанного в поле текста схлопнула бы их в одну строку — «ничего не
-// менял, а запись переписалась».
-test('сохранение без изменений не шлёт мутацию', async () => {
+// Р3, сквозная проверка. Сидированные списки многострочные, с 9-пробельными отступами
+// continuation-строк, а сериализатор по построению даёт ОДНУ строку: пересборка блока из
+// формы схлопнула бы их — «ничего не менял, а запись переписалась».
+test('сохранение формы без изменений не шлёт мутацию', async () => {
   const { calls } = renderWithProviders(
     <DetailScreen entityId="e1" />,
     bodyHandler(DAILY_PLANNING_BODY),
   );
   const dialog = await openBlockEditor(1);
-  expect(editorField(dialog)).toHaveValue(queryBlocks(DAILY_PLANNING_BODY)[1]);
+  // Открылась именно форма: у валидного блока строкового редактора быть не должно.
+  expect(await within(dialog).findByLabelText('Заголовок')).toHaveValue('Сегодня');
+  expect(within(dialog).queryByTestId('query-text-edit')).toBeNull();
   fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
 
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
 });
 
-test('«Отмена» закрывает редактор и ничего не пишет', async () => {
+test('правка формы заменяет только этот блок в body', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
+  const dialog = await openBlockEditor(1);
+  fireEvent.change(await within(dialog).findByLabelText('Лимит'), { target: { value: '5' } });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+
+  await waitFor(() => {
+    const c = calls.find((x) => x.path === 'entity.update');
+    expect((c?.input as { body: string }).body).toBe(
+      'Утренний обзор\n\n{{query: tags=work, title=Работа}}\n\nмежду\n\n{{query: tags=home, limit=5, title=Дом}}\n\nхвост',
+    );
+  });
+});
+
+// §3.4: «редактировать как текст» — тот же строковый редактор с ТЕКУЩЕЙ сериализацией,
+// иначе набранное в форме терялось бы на переходе.
+test('из формы «Редактировать как текст» открывает строковый редактор с правками формы', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
+  const form = await openBlockEditor(0);
+  fireEvent.change(await within(form).findByLabelText('Заголовок'), { target: { value: 'Дела' } });
+  fireEvent.click(within(form).getByRole('button', { name: 'Редактировать как текст' }));
+
+  const text = await screen.findByRole('dialog');
+  expect(editorField(text)).toHaveValue('tags=work, title=Дела');
+});
+
+test('«Отмена» закрывает редактор и ничего не пишет', async () => {
+  const { calls } = renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    bodyHandler(TWO_BLOCKS_BROKEN),
+  );
   const dialog = await openBlockEditor(0);
   fireEvent.change(editorField(dialog), { target: { value: 'tags=work, limit=1' } });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Отмена' }));
@@ -124,7 +162,10 @@ test('«Отмена» закрывает редактор и ничего не 
 // Канон §6.4: невалидный блок — это состояние продукта (красная плашка), а не запрет на
 // запись. Кнопка «Сохранить» без парсера: иначе из битого блока не выйти правкой по шагам.
 test('невалидную строку сохранить можно', async () => {
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
+  const { calls } = renderWithProviders(
+    <DetailScreen entityId="e1" />,
+    bodyHandler(TWO_BLOCKS_BROKEN),
+  );
   const dialog = await openBlockEditor(0);
   fireEvent.change(editorField(dialog), { target: { value: 'tags=' } });
   const save = within(dialog).getByRole('button', { name: 'Сохранить' });
@@ -184,8 +225,11 @@ function Refetcher() {
 // уже чужим. Записать в него текст, набранный для ДРУГОГО запроса, — молча испортить
 // чужую правку, причём expectedUpdatedAt здесь не спасает: клиент уже принял новую версию.
 test('body сменился под открытой модалкой — правка в чужой блок не уезжает', async () => {
-  const before = '{{query: tags=work, title=Работа}}\n\n{{query: tags=home, title=Дом}}';
-  const after = '{{query: tags=other, title=ЧУЖОЙ}}\n\n{{query: tags=home, title=Дом}}';
+  // Первый блок битый: сверка «тот ли это ещё блок» живёт в BodySection и общая для обоих
+  // редакторов, а строковый показывает набранный черновик прямо в поле. Второй — валидный:
+  // его заголовок и есть видимый признак того, что фоновый рефетч доехал.
+  const before = '{{query: status=, tags=work, title=Работа}}\n\n{{query: tags=home, title=Дом}}';
+  const after = '{{query: status=, tags=other, title=ЧУЖОЙ}}\n\n{{query: tags=home, title=ДРУГОЙ}}';
   let gets = 0;
   const { calls } = renderWithProviders(
     <>
@@ -213,7 +257,7 @@ test('body сменился под открытой модалкой — пра�
   fireEvent.change(editorField(dialog), { target: { value: 'tags=work, limit=5' } });
 
   fireEvent.click(screen.getByTestId('refetch'));
-  await screen.findByText('ЧУЖОЙ');
+  await screen.findByText('ДРУГОЙ');
 
   fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
   // Отказ громкий и без потерь: сказано почему, модалка на месте, набранный текст цел.

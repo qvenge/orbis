@@ -38,6 +38,9 @@ const ASPECT_LABELS: Record<string, string> = {
   'orbis/schedule': 'Расписание',
   'orbis/category': 'Категория',
   'orbis/note': 'Заметка',
+  // Форма-редактор query-блока показывает ВЕСЬ реестр списком выбора: без подписи
+  // единственный неназванный аспект стоял бы в нём сырым 'orbis/budget'.
+  'orbis/budget': 'Бюджет',
   // DetailScreen — единственный редактор памяти (D3b), так что подпись нужна: без неё
   // секция правила подписана сырым 'orbis/memory'.
   'orbis/memory': 'Память',

@@ -3,7 +3,8 @@ import { useMemo } from 'react';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
-import { buildCatalogFromAspects, parseBlock } from './parse';
+import { parseBlock } from './parse';
+import { useFieldCatalog } from './useFieldCatalog';
 
 /**
  * Кнопка «Настроить» — вход в редактор ЭТОГО блока. Рисуется только когда вызывающий дал
@@ -41,12 +42,7 @@ export function QueryBlock({
   title?: string;
   onConfigure?: () => void;
 }) {
-  const aspects = trpc.aspect.list.useQuery();
-  const catalog = useMemo(
-    () => (aspects.data ? buildCatalogFromAspects(aspects.data) : null),
-    [aspects.data],
-  );
-
+  const { catalog } = useFieldCatalog();
   const parsed = useMemo(() => (catalog ? parseBlock(query, catalog) : null), [catalog, query]);
   const ok = parsed?.ok === true;
 

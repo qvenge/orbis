@@ -30,7 +30,7 @@ export function Dialog({
           // нет — ссылка вела бы в никуда, и скринридер объявлял бы описание, которого не
           // существует. Явный undefined снимает и ссылку, и предупреждение Radix.
           aria-describedby={undefined}
-          className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 rounded-card border border-line bg-surface p-4 shadow-pop"
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[85dvh] w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 flex-col rounded-card border border-line bg-surface p-4 shadow-pop"
         >
           <RD.Title className="pr-8 text-lg font-semibold">{title}</RD.Title>
           <RD.Close
@@ -39,7 +39,11 @@ export function Dialog({
           >
             <X size={16} />
           </RD.Close>
-          {children}
+          {/* Скроллится СОДЕРЖИМОЕ, а не вся модалка: форма-редактор блока длиннее экрана,
+              и уедь заголовок с крестиком вместе с ней — закрывать её было бы нечем, кроме
+              Esc. min-h-0 обязателен: без него flex-ребёнок не сжимается ниже контента и
+              overflow-y никогда не срабатывает. */}
+          <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
         </RD.Content>
       </RD.Portal>
     </RD.Root>
