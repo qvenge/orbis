@@ -1,6 +1,7 @@
 import { newId } from '@orbis/shared';
 import { Plus } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
+import { invalidateGraph } from '../../lib/invalidate';
 import { trpc } from '../../trpc';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
@@ -16,7 +17,7 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
   const { show } = useToast();
   const utils = trpc.useUtils();
   const create = trpc.entity.create.useMutation({
-    onSuccess: () => void utils.entity.query.invalidate(),
+    onSuccess: () => invalidateGraph(utils),
   });
   const relation = trpc.relation.create.useMutation();
   const isPending = create.isPending || relation.isPending;

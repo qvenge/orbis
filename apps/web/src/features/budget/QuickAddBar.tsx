@@ -14,6 +14,7 @@ import { newId } from '@orbis/shared';
 import { TRPCClientError } from '@trpc/client';
 import { type FormEvent, useState } from 'react';
 import { formatAmount } from '../../lib/format';
+import { invalidateGraph } from '../../lib/invalidate';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -141,7 +142,7 @@ export function QuickAddBar({
     const createdOn = typeof fin?.occurred_on === 'string' ? fin.occurred_on : date;
 
     await invalidateBudget(utils);
-    void utils.entity.query.invalidate(); // списки транзакций (§5.1)
+    invalidateGraph(utils); // списки транзакций (§5.1) + открытый detail (Р17)
     // Остаток конверта для карточки-результата (§3.6); ошибки чтения не роняют успех
     const env = await utils.budget.envelopeForCategory
       .fetch({ categoryId: createdRef, date: createdOn })
@@ -167,7 +168,7 @@ export function QuickAddBar({
         onSuccess: () => {
           setResult((r) => (r ? { ...r, undone: true } : r));
           void invalidateBudget(utils);
-          void utils.entity.query.invalidate();
+          invalidateGraph(utils);
         },
         onError: () => setError('Не удалось отменить'),
       },

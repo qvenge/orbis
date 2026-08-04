@@ -7,6 +7,7 @@ import {
 } from '@orbis/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { TRPCClientError } from '@trpc/client';
+import { invalidateGraph } from '../../lib/invalidate';
 import { useOnline, useRetryBuffer } from '../../state/retry';
 import { isConflict, mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
@@ -234,7 +235,9 @@ export function useFastPath(threadId: string) {
     try {
       await create.mutateAsync({ input: parsed.create, source: 'fast_path' });
       // §5.1: созданная сущность обязана появиться в списках Browser и счётчиках.
-      void utils.entity.query.invalidate();
+      // invalidateGraph, а не query-only: открытая цель считает прогресс на чтении
+      // entity.get, и без него полоса осталась бы вчерашней (Р17).
+      invalidateGraph(utils);
       void utils.entity.count.invalidate();
       // 03-budget §4.1/§6.1: запись учтена сервером — остаток конверта на карточке
       // и бейдж alertCount перечитываются ПОСЛЕ записи, не до.
@@ -259,7 +262,7 @@ export function useFastPath(threadId: string) {
           // с AI» архивировал бы ЧУЖУЮ строку (NOT_FOUND), а тап открывал бы пустоту.
           // upsertNewest дедупит по messageId — карточка обновляется на месте, не мигая.
           insertCard(card, '⚡ без AI', { entityId: retryId, text, status: 'confirmed' }, cardId);
-          void utils.entity.query.invalidate();
+          invalidateGraph(utils);
           void utils.entity.count.invalidate();
           void utils.budget.invalidate();
         } catch {

@@ -2,12 +2,12 @@ import { newId } from '@orbis/shared';
 import { Circle, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
+import { invalidateGraph } from '../../lib/invalidate';
 import { useNav } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
-import { detailGetInput } from './useEntityDetail';
 
 type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
 
@@ -29,14 +29,12 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
   const activeTab = useNav((s) => s.activeTab);
   const create = trpc.entity.create.useMutation();
   const relate = trpc.relation.create.useMutation({
-    onSuccess: () => {
-      void utils.entity.get.invalidate(detailGetInput(parentId));
-      // DF п.5: списки читают ДРУГОЙ ключ со своим staleTime (60 с у Повестки, K16) и
-      // сами не протухнут — без этого новая подзадача до минуты не видна ни в Browser,
-      // ни в Повестке. Вторую сторону связи инвалидировать нечего: подзадача только что
-      // создана с новым id (newId()), её ключа entity.get в кэше не существует.
-      void utils.entity.query.invalidate();
-    },
+    // DF п.5: списки читают ДРУГОЙ ключ со своим staleTime (60 с у Повестки, K16) и сами
+    // не протухнут — без этого новая подзадача до минуты не видна ни в Browser, ни в
+    // Повестке. Detail родителя (сама секция подзадач) перечитывается тем же вызовом:
+    // invalidateGraph инвалидирует entity.get целиком (Р17), и точечный ключ родителя в
+    // него входит.
+    onSuccess: () => invalidateGraph(utils),
   });
   const isPending = create.isPending || relate.isPending;
 
@@ -57,12 +55,13 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
       setDraft('');
     } catch {
       // Частичный отказ (задача создана, связь — нет) — НЕ «не удалось сохранить»:
-      // сущность в графе есть, и молчать о ней нельзя. Инвалидируем списки (свой ключ
+      // сущность в графе есть, и молчать о ней нельзя. Инвалидируем граф (свой ключ
       // со staleTime 60 с сам не протухнет) и очищаем черновик — иначе повторный Enter
-      // уходит с новым newId() и плодит вторую сироту. entity.get родителя не трогаем:
-      // связей не прибавилось, а второй стороны в кэше нет (см. комментарий выше).
+      // уходит с новым newId() и плодит вторую сироту. Сирота — такая же запись графа,
+      // как всякая другая: чужая открытая цель могла её посчитать (Р17), поэтому
+      // инвалидация здесь та же полная, а не «только списки».
       if (created) {
-        void utils.entity.query.invalidate();
+        invalidateGraph(utils);
         setDraft('');
         // Куда делась запись — обязательная часть сообщения: связи в списке подзадач нет,
         // тост живёт 4 секунды, и без адреса владелец её просто не найдёт.

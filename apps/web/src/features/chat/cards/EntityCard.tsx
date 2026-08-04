@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { fieldLabel } from '../../../lib/field-labels';
 import { formatAmount } from '../../../lib/format';
+import { invalidateGraph } from '../../../lib/invalidate';
 import { useNav } from '../../../state/navigation';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
@@ -66,7 +67,10 @@ export function EntityCard({
   const undo = trpc.ai.undo.useMutation({
     onSuccess: () => {
       setUndone(true);
-      void utils.entity.get.invalidate({ id: card.entityId });
+      // Р17: Undo — такая же правка графа, как create, и списки о ней узнать обязаны
+      // (раньше инвалидировался ТОЛЬКО ключ самой карточки, и отменённая запись висела
+      // в Browser/Повестке до истечения staleTime, а прогресс цели считал её своей).
+      invalidateGraph(utils);
       // Undo транзакции меняет агрегаты Budget (остаток, бейдж §6.1) — B2+-правило
       if (isFinancial) void utils.budget.invalidate();
     },

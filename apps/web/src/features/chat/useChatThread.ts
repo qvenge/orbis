@@ -1,6 +1,7 @@
 import { newId } from '@orbis/shared';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { TRPCClientError } from '@trpc/client';
+import { invalidateGraph } from '../../lib/invalidate';
 import { type RouterOutputs, trpc } from '../../trpc';
 
 export type ChatMessage = RouterOutputs['chat']['listMessages'][number];
@@ -99,7 +100,9 @@ export function useSendMessage(threadId: string) {
       queryClient.setQueryData<InfiniteData>(key, (old) =>
         upsertNewest(old, res.assistantMessage as ChatMessage),
       );
-      void utils.entity.query.invalidate();
+      // Р17: ответ AI мог создать/поправить сущности — открытый detail (прогресс цели,
+      // backlinks, подзадачи) обязан перечитаться вместе со списками.
+      invalidateGraph(utils);
       // Финал B: транзакция через LLM-путь обязана обновить бейдж §6.1/Overview/остатки
       // конвертов — симметрично fast-path (useFastPath, фикс B7).
       void utils.budget.invalidate();

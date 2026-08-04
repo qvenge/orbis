@@ -1,10 +1,11 @@
 // Прогресс цели на detail-экране (01-architecture §11.3, Task E3). Число считает сервер
 // (E2, goals/progress.ts) и кладёт его СОСЕДОМ сущности в ответ entity.get — клиент только
 // рисует полосу и объясняет, когда посчитать не вышло.
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
+import { QuickCapture } from '../browser/QuickCapture';
 import { DetailScreen } from './DetailScreen';
 
 const goal = {
@@ -156,4 +157,39 @@ test('массив строк показан списком через запя�
   expect(screen.getByTestId('aspect-value-orbis/category-aliases')).toHaveTextContent(
     'кофе, кофейня',
   );
+});
+
+// --- Р17: прогресс обновляется после добавления подходящей сущности -----------------------
+// entity.get инвалидировался ТОЛЬКО точечно по id, поэтому открытая цель прогресс не
+// обновляла ни после fast-path, ни после quick-add, ни после импорта.
+
+test('прогресс обновляется после создания сущности из другого места экрана', async () => {
+  let current = '150000.00';
+  const handler: MockHandler = (path) => {
+    if (path === 'entity.get')
+      return {
+        entity: goal,
+        relations: [],
+        backlinks: [],
+        thread: null,
+        goalProgress: { current, target: '300000.00', ratio: 0.5 },
+      };
+    if (path === 'entity.create') {
+      current = '200000.00'; // сервер посчитает прогресс заново на следующем чтении
+      return { ...goal, id: 'new' };
+    }
+    if (path === 'aspect.list') return [];
+    return {};
+  };
+  renderWithProviders(
+    <>
+      <DetailScreen entityId="g1" />
+      <QuickCapture context={{ kind: 'root' }} />
+    </>,
+    handler,
+  );
+  expect(await screen.findByText('150 000 / 300 000')).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Быстрая запись'), { target: { value: 'зарплата' } });
+  fireEvent.click(screen.getByLabelText('Добавить'));
+  await waitFor(() => expect(screen.getByText('200 000 / 300 000')).toBeInTheDocument());
 });

@@ -29,6 +29,7 @@ import { ChevronLeft, ChevronRight, Repeat, Tag } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { formatMoney, type MoneyTone } from '../../lib/format';
+import { invalidateGraph } from '../../lib/invalidate';
 import { useNav } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -128,7 +129,7 @@ export function TransactionsScreen() {
   const update = trpc.entity.update.useMutation({
     onSuccess: async () => {
       await invalidateBudget(utils);
-      void utils.entity.query.invalidate();
+      invalidateGraph(utils);
     },
   });
   const { show } = useToast();

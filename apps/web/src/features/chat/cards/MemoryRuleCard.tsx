@@ -10,6 +10,7 @@
 // подавляет повторное предложение по этой паре категорий.
 import { memoryRuleEntityId } from '@orbis/shared';
 import { useRef, useState } from 'react';
+import { invalidateGraph } from '../../../lib/invalidate';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
@@ -62,7 +63,7 @@ export function MemoryRuleCard({
       setResolved('remembered');
       // Экран «Память AI» и Browser читают entity.query — новое правило должно
       // появиться там без ручного обновления (тот же приём, что у QuickCapture).
-      void utils.entity.query.invalidate();
+      invalidateGraph(utils);
       // Инвалидации МАЛО: быстрый ввод читает правила из тёплого кэша (сеть перед каждым
       // вводом стоила бы мгновенности карточки «⚡ без AI», §2.5), а у запроса правил нет
       // подписчиков — сам он не перечитается. Освежаем точечно здесь: «кофе 300» сразу

@@ -1,5 +1,6 @@
 import { TRPCClientError } from '@trpc/client';
 import { useState } from 'react';
+import { invalidateGraph } from '../../lib/invalidate';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
@@ -66,10 +67,10 @@ export function useEntityUpdate(entityId: string) {
     // refetchOnWindowFocus:false сам не протухнет: без явной инвалидации закрытая задача
     // висела бы в «Просроченном» до минуты после «Готово» (02-core-os §4.2, приёмка §8.2).
     // Тот же путь уже у QuickCapture/QuickAddBar/ImportFlow — здесь его недоставало.
-    onSettled: () => {
-      void utils.entity.get.invalidate(input);
-      void utils.entity.query.invalidate();
-    },
+    // Р17: инвалидация detail — БЕЗ аргумента. Правка аспекта двигает прогресс чужой
+    // открытой цели, а переименование — текст `[[entity:…]]` в чужих телах (EntityRef
+    // читает ключ {id} без include, и точечный ключ detail его не задевал).
+    onSettled: () => invalidateGraph(utils),
   });
 
   return { mutation, conflict, dismissConflict: () => setConflict(false) };

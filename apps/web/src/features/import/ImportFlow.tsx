@@ -25,6 +25,7 @@ import {
 import { TRPCClientError } from '@trpc/client';
 import { useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
+import { invalidateGraph } from '../../lib/invalidate';
 import { closeToBudgetOverview, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -342,7 +343,7 @@ export function ImportFlow() {
       return;
     }
     await invalidateBudget(utils);
-    void utils.entity.query.invalidate();
+    invalidateGraph(utils);
     setResult(confirmed);
     setStep('done');
   }
