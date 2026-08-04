@@ -8,6 +8,7 @@ import {
   diffBuiltinAspects,
   hasAspectDrift,
 } from './aspect-registry';
+import { BUILTIN_ASPECT_IDS } from './constants';
 import { aspectJsonSchema } from './schemas/aspects';
 
 /** Реестр «как после свежего пересева» — эталон, от которого отходим в каждом тесте. */
@@ -17,6 +18,18 @@ const seeded = () =>
     schema: aspectJsonSchema(m.id),
     aiInstructions: m.aiInstructions,
   }));
+
+/**
+ * BUILTIN_ASPECT_META — МАССИВ, а не Record<AspectId, …>, поэтому забытая запись не ловится
+ * ни typecheck'ом (в отличие от ASPECT_SCHEMAS с его `satisfies Record<AspectId, …>`), ни
+ * остальными тестами: аспект без meta не сеется скриптом, не попадает в attach_*-тулы и в
+ * реестр UI — то есть приезжает полумёртвым молча. Этот тест — единственный сторож биекции.
+ */
+test('каждому BUILTIN_ASPECT_IDS соответствует ровно одна запись BUILTIN_ASPECT_META', () => {
+  const metaIds = BUILTIN_ASPECT_META.map((m) => m.id);
+  expect([...metaIds].sort()).toEqual([...BUILTIN_ASPECT_IDS].sort());
+  expect(new Set(metaIds).size).toBe(metaIds.length); // дублей нет
+});
 
 test('canonicalJson: порядок КЛЮЧЕЙ не значим (jsonb его не хранит)', () => {
   expect(canonicalJson({ b: 1, a: { d: 2, c: 3 } })).toBe(

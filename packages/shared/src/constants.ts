@@ -19,5 +19,6 @@ export const BUILTIN_ASPECT_IDS = [
   'orbis/budget',
   'orbis/category',
   'orbis/memory',
+  'orbis/goal',
 ] as const;
 export type AspectId = (typeof BUILTIN_ASPECT_IDS)[number];

@@ -92,13 +92,13 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.map(
 );
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 10 core + thread_post + 7 attach_* = 18', async () => {
+  test('builtin-реестр (userB без кастомных): 10 core + thread_post + 8 attach_* = 19', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
     expect(names).toContain('thread_post');
     for (const name of BUILTIN_ATTACH_NAMES) expect(names).toContain(name);
-    expect(defs.length).toBe(18);
+    expect(defs.length).toBe(19);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
   });
@@ -191,7 +191,7 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(def.kind).toBe('mutate');
     expect(def.description).toBe('Пиши часы сна числом.');
     expect((def.inputJsonSchema.properties as Record<string, unknown>).data).toEqual(CUSTOM_SCHEMA);
-    expect(defsA.length).toBe(19);
+    expect(defsA.length).toBe(20);
 
     const defsB = await registryFor(userB);
     expect(defsB.some((d) => d.name === 'attach_user_sleep_log')).toBe(false);

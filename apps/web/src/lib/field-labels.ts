@@ -12,6 +12,10 @@ const FIELD_LABELS: Record<string, string> = {
   start_at: 'начало',
   end_at: 'конец',
   all_day: 'весь день',
+  target_value: 'цель',
+  current_value: 'сейчас',
+  unit: 'единица',
+  progress_source: 'источник прогресса',
 };
 
 export function fieldLabel(key: string): string {
@@ -44,6 +48,9 @@ const ASPECT_LABELS: Record<string, string> = {
   // DetailScreen — единственный редактор памяти (D3b), так что подпись нужна: без неё
   // секция правила подписана сырым 'orbis/memory'.
   'orbis/memory': 'Память',
+  // Форма query-блока и карточки аспектов показывают весь реестр: без подписи цель
+  // стояла бы в списке сырым 'orbis/goal'.
+  'orbis/goal': 'Цель',
 };
 
 export function aspectLabel(id: string): string {

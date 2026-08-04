@@ -81,6 +81,58 @@ describe('схемы аспектов (01 §3.1–§3.7)', () => {
     ).toBe(true);
     expect(ASPECT_SCHEMAS['orbis/memory'].safeParse({}).success).toBe(false);
   });
+  test('orbis/goal: count не требует field, sum и latest — требуют', () => {
+    const s = ASPECT_SCHEMAS['orbis/goal'];
+    expect(
+      s.safeParse({
+        progress_source: { query: 'aspect=orbis/note', aggregate: 'count' },
+        target_value: '24',
+      }).success,
+    ).toBe(true);
+    expect(
+      s.safeParse({
+        progress_source: { query: 'aspect=orbis/financial', aggregate: 'sum' },
+        target_value: '300000.00',
+      }).success,
+    ).toBe(false);
+    expect(
+      s.safeParse({
+        progress_source: { query: 'aspect=orbis/financial', aggregate: 'latest' },
+        target_value: '80',
+      }).success,
+    ).toBe(false);
+    expect(
+      s.safeParse({
+        progress_source: { query: 'aspect=orbis/financial', aggregate: 'sum', field: 'amount' },
+        target_value: '300000.00',
+        unit: '₽',
+      }).success,
+    ).toBe(true);
+    // count с field — лишний ключ в своей ветке объединения (strict), а не «просто игнор»
+    expect(
+      s.safeParse({
+        progress_source: { query: 'aspect=orbis/note', aggregate: 'count', field: 'amount' },
+        target_value: '24',
+      }).success,
+    ).toBe(false);
+  });
+  test('orbis/goal: суммы — decimal-строки, target_value строго положителен', () => {
+    const s = ASPECT_SCHEMAS['orbis/goal'];
+    const src = { query: 'q', aggregate: 'count' as const };
+    expect(
+      s.safeParse({ progress_source: src, target_value: 24 as unknown as string }).success,
+    ).toBe(false);
+    // E2 делит на target_value (ratio прогресса) — ноль и минус недопустимы
+    expect(s.safeParse({ progress_source: src, target_value: '0' }).success).toBe(false);
+    expect(s.safeParse({ progress_source: src, target_value: '-5' }).success).toBe(false);
+    // current_value — КЭШ, считает сервер; неотрицательный
+    expect(
+      s.safeParse({ progress_source: src, target_value: '24', current_value: '0' }).success,
+    ).toBe(true);
+    expect(
+      s.safeParse({ progress_source: src, target_value: '24', current_value: '-1' }).success,
+    ).toBe(false);
+  });
   test('orbis/note и orbis/category: пустой объект валиден (все поля опциональны)', () => {
     expect(ASPECT_SCHEMAS['orbis/note'].safeParse({}).success).toBe(true);
     expect(ASPECT_SCHEMAS['orbis/category'].safeParse({}).success).toBe(true);

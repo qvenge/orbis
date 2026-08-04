@@ -306,7 +306,7 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
 // ---------------------------------------------------------------------------
 
 describe('/mcp tools/list (§9.2)', () => {
-  test('состав = публичный реестр: 7 core + thread_post + 7 attach_*, без internalOnly; имена/описания/схемы дословно', async () => {
+  test('состав = публичный реестр: 7 core + thread_post + 8 attach_*, без internalOnly; имена/описания/схемы дословно', async () => {
     const agent = await connectAgent(mainUrl());
     try {
       const { tools } = await agent.listTools();
@@ -334,6 +334,7 @@ describe('/mcp tools/list (§9.2)', () => {
         'budget',
         'category',
         'memory',
+        'goal',
       ]) {
         expect(names).toContain(`attach_orbis_${aspect}`);
       }
@@ -342,7 +343,7 @@ describe('/mcp tools/list (§9.2)', () => {
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
       const publicDefs = defs.filter((d) => d.internalOnly !== true);
-      expect(tools).toHaveLength(publicDefs.length); // builtin-набор: 15
+      expect(tools).toHaveLength(publicDefs.length); // builtin-набор: 16
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);
         expect(tool).toBeDefined();

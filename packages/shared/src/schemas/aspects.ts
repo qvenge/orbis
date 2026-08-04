@@ -115,6 +115,37 @@ export const memoryAspectSchema = z
   })
   .strict();
 
+/**
+ * Цель с измеримым прогрессом (01 §11.3). Прогресс считает СЕРВЕР (E2), обходя граф по
+ * `progress_source`; `current_value` — кэш результата (правило 3 §10), не пользовательский ввод.
+ *
+ * `progress_source` — дискриминированное объединение по `aggregate`, а НЕ объект с `.refine`:
+ * правило «field обязателен для sum и latest» обязано дожить до ajv, который валидирует ПО
+ * РЕЕСТРУ (решение 7). Проверено пробоем: refine из JSON Schema исчезает бесследно и
+ * {aggregate:'sum'} без field прод принял бы; объединение переживает генерацию как `anyOf`
+ * с разными `required` и в strict-режиме компилируется. Та же причина, что у знаковости денег.
+ */
+export const goalAspectSchema = z
+  .object({
+    progress_source: z.discriminatedUnion('aggregate', [
+      // count считает СУЩНОСТИ, поле ему не нужно: в своей ветке оно запрещено (strict)
+      z.object({ query: z.string().min(1), aggregate: z.literal('count') }).strict(),
+      // sum складывает, latest берёт последнее — обоим нужно, ЧТО именно
+      z
+        .object({
+          query: z.string().min(1),
+          aggregate: z.enum(['sum', 'latest']),
+          field: z.string().min(1),
+        })
+        .strict(),
+    ]),
+    // Строго > 0: E2 делит на него (доля прогресса), ноль и минус смысла не имеют
+    target_value: positiveDecimal,
+    current_value: nonNegativeDecimal.optional(), // КЭШ: пишет сервер, не пользователь
+    unit: z.string().optional(),
+  })
+  .strict();
+
 export const ASPECT_SCHEMAS = {
   'orbis/schedule': scheduleAspectSchema,
   'orbis/task': taskAspectSchema,
@@ -123,6 +154,7 @@ export const ASPECT_SCHEMAS = {
   'orbis/budget': budgetAspectSchema,
   'orbis/category': categoryAspectSchema,
   'orbis/memory': memoryAspectSchema,
+  'orbis/goal': goalAspectSchema,
 } as const satisfies Record<AspectId, z.ZodTypeAny>;
 
 export function aspectJsonSchema(id: AspectId): Record<string, unknown> {
@@ -136,3 +168,4 @@ export type NoteAspect = z.infer<typeof noteAspectSchema>;
 export type BudgetAspect = z.infer<typeof budgetAspectSchema>;
 export type CategoryAspect = z.infer<typeof categoryAspectSchema>;
 export type MemoryAspect = z.infer<typeof memoryAspectSchema>;
+export type GoalAspect = z.infer<typeof goalAspectSchema>;

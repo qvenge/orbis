@@ -7,7 +7,7 @@ import { adminDb, requireEnv } from './helpers';
 requireEnv();
 
 describe('сид реестра аспектов', () => {
-  test('7 builtin-строк; schema в БД байт-в-байт равна сгенерированной из shared', async () => {
+  test('8 builtin-строк; schema в БД байт-в-байт равна сгенерированной из shared', async () => {
     const { db, client } = adminDb();
     try {
       const rows = await db.execute(
