@@ -275,6 +275,24 @@ test('«Редактировать как текст» отдаёт ТЕКУЩУ
   expect(onEditAsText).toHaveBeenCalledWith('aspect=orbis/task, limit=7');
 });
 
+// Форму монтируют только для разбираемого блока (это делает QueryBlockEditor), но врать
+// «Загрузка…» на неразбираемом нельзя: состояние выглядело бы вечной загрузкой реестра.
+test('неразбираемый блок форма называет своим именем, а не «Загрузка…»', async () => {
+  const onSave = vi.fn();
+  renderWithProviders(
+    <QueryBuilderForm
+      initial="status="
+      onSave={onSave}
+      onCancel={vi.fn()}
+      onEditAsText={vi.fn()}
+    />,
+    aspectsHandler,
+  );
+  expect(await screen.findByRole('alert')).toHaveTextContent(/как текст/);
+  expect(screen.queryByText('Загрузка…')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+});
+
 test('«Отмена» и Esc отдают отказ вызывающему', async () => {
   const { onCancel } = await openForm('aspect=orbis/task');
   fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));

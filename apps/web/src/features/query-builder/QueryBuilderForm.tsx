@@ -86,13 +86,25 @@ export function QueryBuilderForm({
     [initialAst, catalog],
   );
 
-  const body =
-    catalog === null || ast === null || effective === null || printed === null ? (
-      // Каталог едет tRPC (реестр живёт в БД). До него ни разобрать блок, ни показать поля.
+  let body: React.ReactNode;
+  if (catalog === null) {
+    // Каталог едет tRPC (реестр живёт в БД). До него ни разобрать блок, ни показать поля.
+    body = (
       <p role="status" className="py-6 text-center text-sm text-text-secondary">
         Загрузка…
       </p>
-    ) : (
+    );
+  } else if (ast === null || effective === null || printed === null) {
+    // Каталог есть, а AST нет — блок не разобрался или не печатается обратно. Штатно сюда
+    // не попадают (редактор выбирает форму только для таких, что и то и другое), но врать
+    // «Загрузка…» в этом состоянии нельзя: выход — тот же строковый редактор в футере.
+    body = (
+      <p role="alert" className="py-6 text-center text-danger text-sm">
+        Этот блок формой не выражается — откройте его как текст.
+      </p>
+    );
+  } else {
+    body = (
       <FormBody
         ast={ast}
         setAst={setAst}
@@ -102,6 +114,7 @@ export function QueryBuilderForm({
         catalog={catalog}
       />
     );
+  }
 
   function handleSave(): void {
     if (printed === null || printed.text === null || printed.error !== null) return;
@@ -286,7 +299,9 @@ function FormBody({
                 const v = e.target.value;
                 patchFilters((list) => {
                   const rest = list.filter((f) => f.kind !== 'archived');
-                  return v === '' ? rest : [...rest, { kind: 'archived', value: v as 'true' }];
+                  // Узел допускает ровно true|any (§6.1); пустое значение — это его отсутствие.
+                  if (v !== 'true' && v !== 'any') return rest;
+                  return [...rest, { kind: 'archived', value: v }];
                 });
               }}
             >
