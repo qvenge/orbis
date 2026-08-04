@@ -1,5 +1,5 @@
 import { parseQuery } from '@orbis/shared';
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { buildCatalogFromAspects } from '../../lib/query-blocks/parse';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -53,23 +53,20 @@ export function QueryTextEditor({
   );
   const error = parsed?.ok === false ? parsed.error : null;
 
-  // Фокус — в поле, каретка в конец: редактор открыт по явному действию, и лишний Tab до
-  // единственного поля модалки был бы платой ни за что. Radix при монтировании content
-  // забирает фокус на первую кнопку (крестик «Закрыть»), поэтому фокусируем в кадре
-  // ПОСЛЕ его эффекта, а не наперегонки с ним.
-  useEffect(() => {
-    const id = requestAnimationFrame(() => {
-      const el = field.current;
-      if (el === null) return;
-      el.focus();
-      el.setSelectionRange(el.value.length, el.value.length);
-    });
-    return () => cancelAnimationFrame(id);
-  }, []);
-
   return (
     <Dialog
       open
+      // Фокус — в поле, каретка в конец: редактор открыт по явному действию, и лишний Tab
+      // до единственного поля модалки был бы платой ни за что. Штатным хуком Radix, а не
+      // отложенным кадром наперегонки с его фокус-ловушкой: своё «потом» выигрывало бы у
+      // неё по расписанию, оставляя в настоящем браузере кадр с фокусом на крестике.
+      onOpenAutoFocus={(e) => {
+        e.preventDefault();
+        const el = field.current;
+        if (el === null) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+      }}
       onOpenChange={(v) => {
         // Esc, крестик и клик по подложке — тот же отказ от правки, что «Отмена».
         if (!v) onCancel();

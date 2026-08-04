@@ -137,6 +137,16 @@ test('replaceQueryBlock: тот же текст — тот же body (перес
   }
 });
 
+// У пустой (пробельной) внутренности trimStart и trimEnd съедают её ЦЕЛИКОМ, и наивные
+// lead/trail взяли бы одни и те же пробелы дважды. Путь бытовой: очистить поле и сохранить
+// ({{query: }}), открыть снова и вписать запрос — края росли бы на каждом проходе.
+test('replaceQueryBlock: пустая внутренность не удваивает края', () => {
+  expect(replaceQueryBlock('{{query:   }}', 0, 'tags=x')).toBe('{{query:tags=x}}');
+  const cleared = replaceQueryBlock('{{query: tags=x}}', 0, '');
+  expect(cleared).toBe('{{query: }}');
+  expect(replaceQueryBlock(cleared, 0, 'tags=y')).toBe('{{query:tags=y}}');
+});
+
 test('replaceQueryBlock: индекса нет — body не меняется', () => {
   const body = 'текст {{query:tags=x}}';
   expect(replaceQueryBlock(body, 1, 'tags=y')).toBe(body);

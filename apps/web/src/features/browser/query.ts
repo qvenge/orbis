@@ -28,6 +28,10 @@ export function browserQuery({ limit, filters }: { limit: number; filters: strin
 export type BodySegment = { kind: 'text'; text: string } | { kind: 'query'; query: string };
 
 const QUERY_BLOCK_RE = /\{\{query:([\s\S]*?)\}\}/g;
+// Закрывающая половина обёртки из QUERY_BLOCK_RE — отдельной строкой, чтобы замена блока
+// могла отмерить её длину, а не знать форму обёртки вторым описанием. Меняется вместе с
+// регэкспом (тест на сохранение обёртки поймает расхождение).
+const QUERY_BLOCK_CLOSE = '}}';
 
 // Body в порядке текста: что между блоками — текст, сами блоки — отдельными сегментами.
 // Просмотр detail рисует текст markdown'ом, а блоки — виджетами ВПЕРЕМЕЖКУ (C4b), поэтому
@@ -84,12 +88,16 @@ export function replaceQueryBlock(body: string, index: number, query: string): s
     const inner = m[1] ?? '';
     const next = query.trim();
     if (next === inner.trim()) return body;
-    // m[0] = открывающая обёртка + inner + '}}' — её форму знает только QUERY_BLOCK_RE,
-    // поэтому берём куски по длинам, а не вторым описанием синтаксиса.
-    const open = m[0].slice(0, m[0].length - inner.length - 2);
-    const lead = inner.slice(0, inner.length - inner.trimStart().length);
-    const trail = inner.slice(inner.trimEnd().length);
-    return `${body.slice(0, m.index)}${open}${lead}${next}${trail}}}${body.slice(m.index + m[0].length)}`;
+    // m[0] = открывающая обёртка + inner + закрывающая: обе половины берём срезами из
+    // самого совпадения по длинам, чтобы форму обёртки описывал только QUERY_BLOCK_RE.
+    const open = m[0].slice(0, m[0].length - inner.length - QUERY_BLOCK_CLOSE.length);
+    const close = m[0].slice(m[0].length - QUERY_BLOCK_CLOSE.length);
+    // У пробельной внутренности trimStart и trimEnd съедают её целиком, и края взялись бы
+    // ДВАЖДЫ: `{{query: }}` после каждой правки прирастал бы пробелом с обеих сторон.
+    const blank = inner.trim() === '';
+    const lead = blank ? '' : inner.slice(0, inner.length - inner.trimStart().length);
+    const trail = blank ? '' : inner.slice(inner.trimEnd().length);
+    return `${body.slice(0, m.index)}${open}${lead}${next}${trail}${close}${body.slice(m.index + m[0].length)}`;
   }
   return body;
 }

@@ -5,6 +5,8 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import { DetailScreen } from '../../features/entity-detail/DetailScreen';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
+import { trpc } from '../../trpc';
+import { Toaster } from '../../ui/Toast';
 import { queryBlocks } from '../browser/query';
 import { QueryTextEditor } from './QueryTextEditor';
 
@@ -167,6 +169,62 @@ test('в режиме правки тела кнопки «Настроить» 
   expect(screen.queryAllByTestId('qb-configure')).toHaveLength(0);
 });
 
+/** Кнопка, роняющая кэш entity.get: имитирует ФОНОВЫЙ рефетч (чужая правка приехала). */
+function Refetcher() {
+  const utils = trpc.useUtils();
+  return (
+    <button type="button" data-testid="refetch" onClick={() => void utils.entity.get.invalidate()}>
+      обновить
+    </button>
+  );
+}
+
+// Модалка живёт долго (а форма-редактор будет жить ещё дольше), и body под ней может
+// смениться фоновым рефетчем: индекс блока остался бы прежним числом, а блок по нему —
+// уже чужим. Записать в него текст, набранный для ДРУГОГО запроса, — молча испортить
+// чужую правку, причём expectedUpdatedAt здесь не спасает: клиент уже принял новую версию.
+test('body сменился под открытой модалкой — правка в чужой блок не уезжает', async () => {
+  const before = '{{query: tags=work, title=Работа}}\n\n{{query: tags=home, title=Дом}}';
+  const after = '{{query: tags=other, title=ЧУЖОЙ}}\n\n{{query: tags=home, title=Дом}}';
+  let gets = 0;
+  const { calls } = renderWithProviders(
+    <>
+      <DetailScreen entityId="e1" />
+      <Refetcher />
+      <Toaster />
+    </>,
+    (path, input) => {
+      if (path === 'entity.get') {
+        gets += 1;
+        return {
+          entity: { ...entity, body: gets === 1 ? before : after },
+          relations: [],
+          thread: null,
+        };
+      }
+      if (path === 'entity.update')
+        return { ...entity, body: (input as { body?: string }).body ?? after };
+      if (path === 'aspect.list') return realAspects;
+      if (path === 'entity.query') return [];
+      return {};
+    },
+  );
+  const dialog = await openBlockEditor(0);
+  fireEvent.change(editorField(dialog), { target: { value: 'tags=work, limit=5' } });
+
+  fireEvent.click(screen.getByTestId('refetch'));
+  await screen.findByText('ЧУЖОЙ');
+
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+  // Отказ громкий и без потерь: сказано почему, модалка на месте, набранный текст цел.
+  // Ожидание сообщения заодно прокручивает микрозадачи — ушедшая мутация к этому моменту
+  // уже добралась бы до линка, и проверка ниже увидела бы её.
+  expect(await screen.findByText(/откройте.*заново/i)).toBeInTheDocument();
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  expect(editorField(dialog)).toHaveValue('tags=work, limit=5');
+  expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
+});
+
 test('кнопка «Настроить» — настоящая кнопка с доступным именем', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
   const buttons = await screen.findAllByRole('button', { name: 'Настроить' });
@@ -177,6 +235,20 @@ test('кнопка «Настроить» — настоящая кнопка с
 // --- сам редактор ----------------------------------------------------------------------
 
 const editorHandler: MockHandler = (path) => (path === 'aspect.list' ? realAspects : {});
+
+// Radix сам проставляет content'у aria-describedby на свой Description; примитив ui/Dialog
+// его не рендерит, поэтому ссылка вела в никуда — скринридер объявлял бы модалку с
+// описанием, которого нет. Первым потребителем примитива стал этот редактор.
+test('у модалки нет ссылки на несуществующее описание', async () => {
+  renderWithProviders(
+    <QueryTextEditor initial="tags=work" onSave={() => {}} onCancel={() => {}} />,
+    editorHandler,
+  );
+  const dialog = await screen.findByRole('dialog');
+  const described = dialog.getAttribute('aria-describedby');
+  if (described !== null) expect(document.getElementById(described)).not.toBeNull();
+  expect(described).toBeNull();
+});
 
 test('поле редактора имеет доступное имя и фокус при открытии', async () => {
   renderWithProviders(

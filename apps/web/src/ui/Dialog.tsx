@@ -6,18 +6,32 @@ export function Dialog({
   open,
   onOpenChange,
   title,
+  onOpenAutoFocus,
   children,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   title: string;
+  /**
+   * Куда встаёт фокус при открытии. Без него Radix берёт первый таб-стоп содержимого — а
+   * это крестик «Закрыть», и модалка с одним полем открывалась бы «на выход». Вызывающий
+   * гасит событие (preventDefault) и фокусирует своё; сигнатура — как у RD.Content.
+   */
+  onOpenAutoFocus?: (e: Event) => void;
   children: ReactNode;
 }) {
   return (
     <RD.Root open={open} onOpenChange={onOpenChange}>
       <RD.Portal>
         <RD.Overlay className="fixed inset-0 z-50 bg-overlay" />
-        <RD.Content className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 rounded-card border border-line bg-surface p-4 shadow-pop">
+        <RD.Content
+          onOpenAutoFocus={onOpenAutoFocus}
+          // Radix проставляет content'у aria-describedby на свой Description, а его здесь
+          // нет — ссылка вела бы в никуда, и скринридер объявлял бы описание, которого не
+          // существует. Явный undefined снимает и ссылку, и предупреждение Radix.
+          aria-describedby={undefined}
+          className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,28rem)] -translate-x-1/2 -translate-y-1/2 rounded-card border border-line bg-surface p-4 shadow-pop"
+        >
           <RD.Title className="pr-8 text-lg font-semibold">{title}</RD.Title>
           <RD.Close
             aria-label="Закрыть"

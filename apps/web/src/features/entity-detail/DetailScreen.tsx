@@ -226,9 +226,12 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
   const [value, setValue] = useState(initial);
   const [serverBody, setServerBody] = useState(initial);
   const [editing, setEditing] = useState(false);
-  // Индекс query-блока, открытого в редакторе (не индекс сегмента: массив смешанный).
-  const [configuring, setConfiguring] = useState<number | null>(null);
+  // Блок, открытый в редакторе: номер СРЕДИ БЛОКОВ (не индекс сегмента — массив смешанный)
+  // и его текст на момент открытия. Текст здесь — не кэш ради удобства, а «версия», по
+  // которой сохранение узнаёт, тот ли это ещё блок (см. saveBlock).
+  const [configuring, setConfiguring] = useState<{ index: number; text: string } | null>(null);
   const editor = useRef<HTMLTextAreaElement>(null);
+  const { show } = useToast();
 
   // Серверный body сменился (наш save или чужая правка): подхватываем его, только если
   // черновик не трогали. Иначе текст пользователя остаётся — о конфликте сообщает баннер
@@ -271,9 +274,20 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
   // путь сохранения тела (§5.2 с expectedUpdatedAt), а не своя мутация мимо BodySection.
   // Текст не изменился — body не трогаем вовсе: пересборка схлопнула бы многострочные блоки
   // сидированных smart lists, а лишняя запись подняла бы updated_at ни за что.
-  function saveBlock(index: number, query: string) {
+  //
+  // Сверка текста блока — оптимистичная блокировка на уровне БЛОКА, ровно в том же духе,
+  // что expectedUpdatedAt на уровне записи. Модалка живёт долго, и body под ней может
+  // смениться фоновым рефетчем: номер блока остался бы прежним, а блок по нему — уже
+  // чужим, и текст уехал бы не туда. expectedUpdatedAt здесь не спасает — клиент к тому
+  // моменту уже принял новую версию и пошлёт её же. Отказ громкий и без потерь: модалка
+  // остаётся открытой вместе с набранным текстом, чтобы правку было откуда забрать.
+  function saveBlock(target: { index: number; text: string }, query: string) {
+    if (blocks[target.index] !== target.text) {
+      show('Блок изменился в другом месте — откройте его заново', 'danger');
+      return;
+    }
     setConfiguring(null);
-    const next = replaceQueryBlock(value, index, query);
+    const next = replaceQueryBlock(value, target.index, query);
     if (next === value) return;
     setValue(next);
     onSave(next);
@@ -341,7 +355,10 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
             <div key={i} data-query-widget="">
               <QueryBlock
                 query={s.query}
-                onConfigure={() => setConfiguring(blockIndexOfSegment[i] ?? null)}
+                onConfigure={() => {
+                  const index = blockIndexOfSegment[i];
+                  if (index !== undefined) setConfiguring({ index, text: s.query });
+                }}
               />
             </div>
           ) : (
@@ -375,9 +392,11 @@ function BodySection({ initial, onSave }: { initial: string; onSave: (body: stri
           startEditing прикрывает поля и кнопки, но не заголовок модалки). Проверено
           тестом «клик внутри модалки не открывает редактор тела под ней»: на прежнем
           месте он падал. */}
+      {/* initial — снимок, сделанный при открытии, а не blocks[index]: смена body под
+          модалкой не должна ни подменять текст под руками, ни стирать набранное. */}
       {configuring !== null && (
         <QueryTextEditor
-          initial={blocks[configuring] ?? ''}
+          initial={configuring.text}
           onSave={(q) => saveBlock(configuring, q)}
           onCancel={() => setConfiguring(null)}
         />
