@@ -175,10 +175,41 @@ test('generic: незаполненное keyField не печатается п�
       onToggleTask={() => {}}
     />,
   );
-  expect(screen.getByText('target_value:')).toBeInTheDocument();
-  expect(screen.getByText('unit:')).toBeInTheDocument();
-  expect(screen.queryByText('current_value:')).toBeNull();
+  expect(screen.getByText('цель:')).toBeInTheDocument();
+  expect(screen.getByText('единица:')).toBeInTheDocument();
+  expect(screen.queryByText('сейчас:')).toBeNull();
   expect(screen.queryByText('—')).toBeNull();
+});
+
+// Волна правок финального ревью (M1): шапка подписывает поля тем же словарём, что карточка
+// аспекта прямо под ней. До этого у цели «target_value: 300000.00» стояло над «цель:
+// 300000.00» — одно поле с двумя именами на одном экране.
+test('generic: ключи подписаны по-русски, а не сырой латиницей', () => {
+  render(
+    <NativeRow
+      entity={
+        {
+          ...base,
+          aspects: { 'orbis/goal': { target_value: '300000.00', unit: '₽' } },
+        } as never
+      }
+      onToggleTask={() => {}}
+    />,
+  );
+  expect(screen.queryByText('target_value:')).toBeNull();
+  expect(screen.queryByText('unit:')).toBeNull();
+});
+
+// Кастомный аспект в словаре не значится — подпись деградирует до самого ключа, а не
+// до пустого места.
+test('generic: незнакомый ключ печатается как есть', () => {
+  render(
+    <NativeRow
+      entity={{ ...base, aspects: { 'orbis/note': { content_type: 'text' } } } as never}
+      onToggleTask={() => {}}
+    />,
+  );
+  expect(screen.getByText('content_type:')).toBeInTheDocument();
 });
 
 // Уборочная фаза (E4): вся машиночитаемая часть memory-правила лежит в title (K19.4),

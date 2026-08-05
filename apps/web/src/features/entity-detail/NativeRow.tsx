@@ -1,5 +1,6 @@
 import { BUILTIN_ASPECT_META, parseRuleTitle } from '@orbis/shared';
 import { useState } from 'react';
+import { fieldLabel } from '../../lib/field-labels';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import type { RouterOutputs } from '../../trpc';
 import { Badge } from '../../ui/Badge';
@@ -236,7 +237,12 @@ export function NativeRow({
     );
   }
 
-  // generic: первые 2–3 keyFields установленного аспекта из реестра — ЗАПОЛНЕННЫЕ.
+  // generic: первые 2–3 keyFields установленного аспекта из реестра — ЗАПОЛНЕННЫЕ,
+  // подписанные ПО-РУССКИ тем же словарём, что карточки аспектов и карточки чата
+  // (lib/field-labels). Без него шапка печатала сырой ключ ровно над карточкой, где то же
+  // поле подписано словом: у цели «target_value: 300000.00» стояло над «цель: 300000.00»
+  // — одно значение, два имени, на одном экране. Ключа нет в словаре (кастомный аспект) —
+  // печатается как есть: честная деградация, а не пустая подпись.
   // Отбор по наличию значения повторяет правило сервера, который собирает keyFields
   // чат-карточек из того же реестра и незаполненные поля пропускает
   // (tools/dispatch.ts: `if (value !== undefined) keyFields[field] = value`).
@@ -257,7 +263,7 @@ export function NativeRow({
       <dl className="flex gap-2 text-xs text-text-secondary">
         {fields.map((k) => (
           <div key={k} className="flex gap-1">
-            <dt>{k}:</dt>
+            <dt>{fieldLabel(k)}:</dt>
             <dd>{String(firstFields?.[k] ?? '—')}</dd>
           </div>
         ))}
