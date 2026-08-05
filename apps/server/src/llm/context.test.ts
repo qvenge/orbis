@@ -19,7 +19,7 @@ import {
   MEMORY_CAP,
   toolResultMessage,
 } from './context';
-import { SYSTEM_PROMPT_V2 } from './prompts/v2';
+import { SYSTEM_PROMPT_V3 } from './prompts/v3';
 
 requireEnv();
 
@@ -70,12 +70,12 @@ function memoryLines(system: string): string[] {
 describe('buildContext — слой 1: промпт + ai_instructions аспектов', () => {
   const user = freshUserId();
 
-  test('system начинается с SYSTEM_PROMPT_V2 и содержит ai_instructions активных аспектов из БД', async () => {
+  test('system начинается с SYSTEM_PROMPT_V3 и содержит ai_instructions активных аспектов из БД', async () => {
     const ctx = await withIdentity(db, user, async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       return buildContext(tx, { ownerId: user, threadId });
     });
-    expect(ctx.system.startsWith(SYSTEM_PROMPT_V2)).toBe(true);
+    expect(ctx.system.startsWith(SYSTEM_PROMPT_V3)).toBe(true);
     // Инструкция builtin-аспекта — из реестра БД (сид), а не из констант кода
     const rows = await withIdentity(db, user, (tx) =>
       tx

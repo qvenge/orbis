@@ -1,6 +1,6 @@
 // apps/server/src/llm/context.ts
 // Сборка контекста LLM-вызова — пятислойная модель §7.1:
-//   слой 1 (промпт v2 + ai_instructions активных аспектов реестра),
+//   слой 1 (промпт v3 + ai_instructions активных аспектов реестра),
 //   слой 2 (память §7.4: активные orbis/memory, кап MEMORY_CAP, приоритет rule/scope),
 //   слой 3 (якорная сущность треда — 02 §2.2, только если тред сущности),
 //   слой 4 (rolling-история треда) — слои 1–3 склеиваются в ПОЛЕ system,
@@ -23,7 +23,7 @@ import type { Tx } from '../db/with-identity';
 import { readEntity } from '../entity-read';
 import type { ActionRecord } from '../executor/types';
 import { loadAspectToolRows } from '../tools/registry';
-import { SYSTEM_PROMPT_V2, TOOL_RESULT_MARKER } from './prompts/v2';
+import { SYSTEM_PROMPT_V3, TOOL_RESULT_MARKER } from './prompts/v3';
 import type { LLMMessage } from './types';
 
 /** Кап памяти §7.4: до ~50 активных memory-сущностей в слое 2. */
@@ -252,7 +252,7 @@ async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> 
  * сущности (02 §2.2) — глобальный тред слоя 3 не имеет.
  */
 export async function buildContext(tx: Tx, input: BuildContextInput): Promise<BuiltContext> {
-  const sections: string[] = [SYSTEM_PROMPT_V2];
+  const sections: string[] = [SYSTEM_PROMPT_V3];
 
   // Слой 1 (динамическая часть): ai_instructions активных аспектов реестра
   // (builtin + свои кастомные; собственное определение перекрывает builtin — §7.6)
