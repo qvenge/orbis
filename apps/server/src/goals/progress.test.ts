@@ -98,7 +98,6 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
 
     expect(p.current).toBe('150000.00');
     expect(p.target).toBe('300000.00');
-    expect(p.ratio).toBeCloseTo(0.5, 6);
     expect(p.unsupported).toBeUndefined();
   });
 
@@ -123,7 +122,6 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
 
     expect(p.current).toBe('3');
     expect(p.target).toBe('24');
-    expect(p.ratio).toBeCloseTo(0.125, 6);
     expect(p.unsupported).toBeUndefined();
   });
 
@@ -150,7 +148,6 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
     const p = await progressOf(user, goal);
 
     expect(p.current).toBe('82.5');
-    expect(p.ratio).toBeCloseTo(0.825, 6);
     expect(p.unsupported).toBeUndefined();
 
     // Пустая выборка у latest — тоже ноль, а не отказ
@@ -175,11 +172,10 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
 
     expect(p.current).toBe('0');
     expect(p.target).toBe('300000.00');
-    expect(p.ratio).toBe(0);
     expect(p.unsupported).toBeUndefined();
   });
 
-  test('перевыполненная цель даёт ratio > 1, значение не подрезается', async () => {
+  test('перевыполненная цель отдаёт значение как есть, не подрезая его целью', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     await createIncome(caller, 'Премия', '150000.00', ['savings']);
@@ -193,8 +189,11 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
       target_value: '100000.00',
     });
 
+    // Перевыполнение — не отказ и не потолок: клиент сам решает, что рисовать полосой,
+    // а сервер отдаёт достигнутое как есть (150 000 при цели 100 000).
     expect(p.current).toBe('150000.00');
-    expect(p.ratio).toBeCloseTo(1.5, 6);
+    expect(p.target).toBe('100000.00');
+    expect(p.unsupported).toBeUndefined();
   });
 });
 
@@ -273,7 +272,6 @@ describe('computeGoalProgress: честные отказы вместо паде
     expect(p.unsupported).toBe('array_field');
     expect(p.current).toBe('0');
     expect(p.target).toBe('100');
-    expect(p.ratio).toBe(0);
   });
 
   test('опечатка в поле отличима от массива: invalid_field, а не array_field', async () => {
@@ -319,7 +317,6 @@ describe('computeGoalProgress: честные отказы вместо паде
     });
     expect(broken.unsupported).toBe('invalid_query');
     expect(broken.current).toBe('0');
-    expect(broken.ratio).toBe(0);
 
     // `this` вне контекста сущности — структурная ошибка компиляции, тоже мягкая
     const noThis = await progressOf(user, {
@@ -377,7 +374,10 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
     // 'NaN' — ЗАКОННОЕ значение numeric в PostgreSQL: каст не падает, падает уже разбор
     // decimal-строки в decRatio. То есть путь идёт мимо SQL-catch и упирается во второй,
     // «долевой». Без него отказ выглядел бы в логе как отказ базы — ярлык один, но
-    // диагноз врал бы; тест держит именно разделение.
+    // диагноз врал бы; тест держит именно разделение — и держит его ТЕКСТОМ ЛОГА, а не
+    // ярлыком: ярлык `compute_failed` отдают оба catch'а, и проверка одного лишь ярлыка
+    // не заметила бы, если бы второй catch (или сам вызов decRatio, чьё значение никуда
+    // не уезжает) однажды исчез как «мёртвый код».
     const admin = adminDb();
     try {
       await admin.db.execute(
@@ -387,17 +387,29 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
       await admin.client.end();
     }
 
-    const p = await progressOf(user, {
-      progress_source: {
-        query: 'aspect=orbis/financial, tags=nan',
-        aggregate: 'sum',
-        field: 'amount',
-      },
-      target_value: '100',
-    });
+    const logged: string[] = [];
+    const realError = console.error;
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map((a) => String(a)).join(' '));
+    };
+    let p: Awaited<ReturnType<typeof progressOf>>;
+    try {
+      p = await progressOf(user, {
+        progress_source: {
+          query: 'aspect=orbis/financial, tags=nan',
+          aggregate: 'sum',
+          field: 'amount',
+        },
+        target_value: '100',
+      });
+    } finally {
+      console.error = realError;
+    }
     expect(p.unsupported).toBe('compute_failed');
     expect(p.current).toBe('0');
-    expect(p.ratio).toBe(0); // не NaN и не Infinity: в JSON их нет
+    // Лог — «долевой», а не «агрегат не выполнился»: диагноз называет настоящую причину
+    expect(logged.some((l) => l.includes('доля не посчиталась'))).toBe(true);
+    expect(logged.some((l) => l.includes('агрегат sum не выполнился'))).toBe(false);
   });
 });
 
@@ -426,10 +438,12 @@ describe('entity.get: прогресс приезжает с целью и то�
     });
 
     const got = await caller.entity.get({ id: goal.id });
+    // toEqual, а не пополевые проверки: контракт целиком — две decimal-строки и ничего
+    // больше. Готовой доли на проводе нет намеренно (процент клиент считает точно, из
+    // этих же строк), и лишнее поле обязано уронить именно этот тест.
     expect(got.goalProgress).toEqual({
       current: '75000.00',
       target: '300000.00',
-      ratio: 0.25,
     });
 
     const plain = await caller.entity.create({

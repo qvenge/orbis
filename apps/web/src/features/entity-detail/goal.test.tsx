@@ -54,7 +54,7 @@ beforeEach(() => {
 test('карточка цели показывает прогресс, единицу и процент', async () => {
   renderWithProviders(
     <DetailScreen entityId="g1" />,
-    goalHandler({ current: '150000.00', target: '300000.00', ratio: 0.5 }),
+    goalHandler({ current: '150000.00', target: '300000.00' }),
   );
   expect(await screen.findByText('150 000 / 300 000')).toBeInTheDocument();
   // Единица — в самой подписи прогресса: шапка страницы (NativeRow, generic-строка §3.6)
@@ -67,12 +67,13 @@ test('карточка цели показывает прогресс, един�
   expect(screen.getByTestId('goal-bar')).toHaveStyle({ width: '50%' });
 });
 
-// Процент — точный по decimal-строкам, а не floor(ratio*100): 0.29*100 в IEEE-754 даёт
-// 28.999999999999996, и полоса врала бы на процент на ровных значениях.
+// Процент — точный по decimal-строкам, а не floor от float-доли: 0.29*100 в IEEE-754 даёт
+// 28.999999999999996, и полоса врала бы на процент на ровных значениях. Готовой доли в
+// ответе сервера поэтому и нет — в контракте только две строки (goals/progress.ts).
 test('процент считается по decimal-строкам, а не по float-доле', async () => {
   renderWithProviders(
     <DetailScreen entityId="g1" />,
-    goalHandler({ current: '87000.00', target: '300000.00', ratio: 0.29 }),
+    goalHandler({ current: '87000.00', target: '300000.00' }),
   );
   expect(await screen.findByText('29%')).toBeInTheDocument();
 });
@@ -81,7 +82,7 @@ test('процент считается по decimal-строкам, а не п�
 test('ровно 100 % — полоса полна и цель объявлена достигнутой', async () => {
   renderWithProviders(
     <DetailScreen entityId="g1" />,
-    goalHandler({ current: '300000.00', target: '300000.00', ratio: 1 }),
+    goalHandler({ current: '300000.00', target: '300000.00' }),
   );
   expect(await screen.findByText('100%')).toBeInTheDocument();
   expect(screen.getByTestId('goal-bar')).toHaveStyle({ width: '100%' });
@@ -93,7 +94,7 @@ test('ровно 100 % — полоса полна и цель объявлен�
 test('99,99 % — это 99 %, а не достигнутая цель', async () => {
   renderWithProviders(
     <DetailScreen entityId="g1" />,
-    goalHandler({ current: '299999.00', target: '300000.00', ratio: 0.999996 }),
+    goalHandler({ current: '299999.00', target: '300000.00' }),
   );
   expect(await screen.findByText('99%')).toBeInTheDocument();
   expect(screen.queryByText(/достигнута/i)).toBeNull();
@@ -104,7 +105,7 @@ test('99,99 % — это 99 %, а не достигнутая цель', async (
 test('отрицательное текущее значение не теряет знак в подписи', async () => {
   renderWithProviders(
     <DetailScreen entityId="g1" />,
-    goalHandler({ current: '-5000.00', target: '300000.00', ratio: -0.016 }),
+    goalHandler({ current: '-5000.00', target: '300000.00' }),
   );
   expect(await screen.findByText('−5 000 / 300 000')).toBeInTheDocument();
   expect(screen.getByTestId('goal-bar')).toHaveStyle({ width: '0%' });
@@ -126,7 +127,7 @@ test('у не-цели полосы прогресса нет вовсе', async
 test('перевыполнение не переполняет полосу, но читается и глазами, и скринридером', async () => {
   renderWithProviders(
     <DetailScreen entityId="g1" />,
-    goalHandler({ current: '360000.00', target: '300000.00', ratio: 1.2 }),
+    goalHandler({ current: '360000.00', target: '300000.00' }),
   );
   expect(await screen.findByText('120%')).toBeInTheDocument();
   expect(screen.getByTestId('goal-bar')).toHaveStyle({ width: '100%' });
@@ -149,7 +150,7 @@ for (const [reason, re] of UNSUPPORTED_CASES) {
   test(`неподдерживаемый источник (${reason}) объясняется своим текстом, а не пустотой`, async () => {
     renderWithProviders(
       <DetailScreen entityId="g1" />,
-      goalHandler({ current: '0', target: '300000.00', ratio: 0, unsupported: reason }),
+      goalHandler({ current: '0', target: '300000.00', unsupported: reason }),
     );
     const note = await screen.findByTestId('goal-unsupported');
     expect(note.textContent ?? '').toMatch(re);
@@ -163,7 +164,7 @@ test('четыре причины не сваливаются в одну фра
   for (const [reason] of UNSUPPORTED_CASES) {
     const { unmount } = renderWithProviders(
       <DetailScreen entityId="g1" />,
-      goalHandler({ current: '0', target: '300000.00', ratio: 0, unsupported: reason }),
+      goalHandler({ current: '0', target: '300000.00', unsupported: reason }),
     );
     texts.push((await screen.findByTestId('goal-unsupported')).textContent ?? '');
     unmount();
@@ -179,7 +180,7 @@ test('четыре причины не сваливаются в одну фра
 test('объектное поле аспекта показано read-only, а не редактируемым [object Object]', async () => {
   renderWithProviders(
     <DetailScreen entityId="g1" />,
-    goalHandler({ current: '0', target: '300000.00', ratio: 0 }),
+    goalHandler({ current: '0', target: '300000.00' }),
   );
   // Скалярные поля остаются редактируемыми
   expect(await screen.findByLabelText('orbis/goal target_value')).toBeInTheDocument();
@@ -225,7 +226,7 @@ test('прогресс обновляется после создания сущ
         relations: [],
         backlinks: [],
         thread: null,
-        goalProgress: { current, target: '300000.00', ratio: 0.5 },
+        goalProgress: { current, target: '300000.00' },
       };
     if (path === 'entity.create') {
       current = '200000.00'; // сервер посчитает прогресс заново на следующем чтении
