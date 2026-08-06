@@ -807,6 +807,7 @@ describe('ai.sendMessage: ретрай с тем же client-id (fix round — r
 describe('ai.sendMessage: конкурентный ретрай во время первого прогона (маркер processing)', () => {
   /** Провайдер с воротами: chat() виснет до release() — окно конкуренции управляемо. */
   class GatedProvider implements LLMProvider {
+    readonly modelId = 'gated';
     calls = 0;
     private releaseGate!: () => void;
     private signalStarted!: () => void;

@@ -6,6 +6,9 @@ import { AnthropicProvider } from './anthropic';
 import type { LLMProvider, LLMRequest, LLMResponse } from './types';
 
 export class EchoProvider implements LLMProvider {
+  /** Метеринг метит заглушку честно: нулевые токены, но модель называется 'echo'. */
+  readonly modelId = 'echo';
+
   async chat(req: LLMRequest): Promise<LLMResponse> {
     const last = req.messages.at(-1)?.content ?? '';
     return {

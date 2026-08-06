@@ -26,5 +26,11 @@ export interface LLMResponse {
   stopReason: LLMStopReason;
 }
 export interface LLMProvider {
+  /**
+   * Имя модели для метеринга §4.7. Отдаёт САМ провайдер: пока имя вычислялось
+   * снаружи как `env.ORBIS_LLM_MODEL || DEFAULT_ANTHROPIC_MODEL`, второй провайдер
+   * без явной env писал бы в ai_usage чужую модель.
+   */
+  readonly modelId: string;
   chat(req: LLMRequest): Promise<LLMResponse>;
 }

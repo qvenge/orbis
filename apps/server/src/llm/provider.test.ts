@@ -3,7 +3,7 @@
 // AnthropicProvider (фабрикой) не ходит в сеть — сеть только в chat().
 
 import { describe, expect, test } from 'bun:test';
-import { AnthropicProvider } from './anthropic';
+import { AnthropicProvider, DEFAULT_ANTHROPIC_MODEL } from './anthropic';
 import { EchoProvider, makeLLMProvider } from './provider';
 import { ScriptedProvider } from './scripted';
 import type { LLMRequest, LLMResponse } from './types';
@@ -153,5 +153,17 @@ describe('makeLLMProvider', () => {
 
   test('пустая строка ORBIS_LLM_PROVIDER трактуется как «не задан»', () => {
     expect(makeLLMProvider({ ORBIS_LLM_PROVIDER: '' })).toBeInstanceOf(EchoProvider);
+  });
+
+  // Имя модели для метеринга §4.7 теперь отдаёт сам провайдер (makeAiDeps его больше
+  // не вычисляет). Пин равенства: то, что раньше считалось снаружи как
+  // `ORBIS_LLM_MODEL || DEFAULT_ANTHROPIC_MODEL`, должно получаться ровно тем же —
+  // иначе ai_usage начнёт врать про модель, и это никак не проявится в UI.
+  test('modelId провайдера — ровно то имя, что раньше считал makeAiDeps', () => {
+    expect(makeLLMProvider({ ANTHROPIC_API_KEY: 'sk-test' }).modelId).toBe(DEFAULT_ANTHROPIC_MODEL);
+    expect(
+      makeLLMProvider({ ANTHROPIC_API_KEY: 'sk-test', ORBIS_LLM_MODEL: 'модель-из-env' }).modelId,
+    ).toBe('модель-из-env');
+    expect(makeLLMProvider({ ORBIS_LLM_PROVIDER: 'echo' }).modelId).toBe('echo');
   });
 });

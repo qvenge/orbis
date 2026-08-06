@@ -33,9 +33,8 @@ import { aiUsage, chatMessages, chatThreads } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { type EntitlementResolver, resolveEntitlement } from '../entitlements';
 import { ExecError } from '../errors';
-import { DEFAULT_ANTHROPIC_MODEL } from '../llm/anthropic';
 import { buildContext, toolResultMessage } from '../llm/context';
-import { EchoProvider, type LLMProviderEnv, makeLLMProvider } from '../llm/provider';
+import { type LLMProviderEnv, makeLLMProvider } from '../llm/provider';
 import type { LLMMessage, LLMProvider, LLMResponse, LLMToolDef } from '../llm/types';
 import { dispatchTool } from '../tools/dispatch';
 import { buildToolRegistry, type Card } from '../tools/registry';
@@ -82,14 +81,14 @@ export interface AiDeps {
 
 /**
  * Сборка боевых AiDeps по env: провайдер — фабрикой Task 7 (fail-fast на невалидном
- * env при старте процесса), имя модели для метеринга — ORBIS_LLM_MODEL либо дефолт
- * Anthropic; EchoProvider метрится как 'echo' (нулевые токены, но request_count честный).
+ * env при старте процесса), имя модели для метеринга берётся У САМОГО ПРОВАЙДЕРА.
+ * Раньше оно вычислялось как `ORBIS_LLM_MODEL || DEFAULT_ANTHROPIC_MODEL`, и второй
+ * провайдер без явной env писал бы в ai_usage «claude-sonnet-5» — то есть счётчик
+ * расхода врал бы про модель.
  */
 export function makeAiDeps(env: LLMProviderEnv = process.env): AiDeps {
   const provider = makeLLMProvider(env);
-  const model =
-    provider instanceof EchoProvider ? 'echo' : env.ORBIS_LLM_MODEL || DEFAULT_ANTHROPIC_MODEL;
-  return { provider, model };
+  return { provider, model: provider.modelId };
 }
 
 // Fail-fast: боевой путь ВСЕГДА инжектит ai в контекст (index.ts → makeCreateContext).

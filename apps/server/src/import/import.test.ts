@@ -1211,6 +1211,7 @@ describe('import.analyze: маппинг колонок через tool-call', (
   test('сбой провайдера → LLM_UNAVAILABLE (503, §7.9)', async () => {
     const { user } = await freshOwner();
     const provider: LLMProvider = {
+      modelId: 'failing',
       async chat() {
         throw new Error('econnreset');
       },

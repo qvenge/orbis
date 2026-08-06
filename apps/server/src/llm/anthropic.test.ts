@@ -6,7 +6,7 @@
 // usage{inputTokens,outputTokens}: number|undefined — node_modules/ai/dist/index.d.ts).
 
 import { describe, expect, test } from 'bun:test';
-import { mapSdkResult, toSdkTools } from './anthropic';
+import { mapSdkResult, toSdkTools } from './ai-sdk';
 
 // ---------------------------------------------------------------------------
 // mapSdkResult: текстовый ответ

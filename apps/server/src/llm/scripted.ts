@@ -7,6 +7,7 @@
 import type { LLMProvider, LLMRequest, LLMResponse } from './types';
 
 export class ScriptedProvider implements LLMProvider {
+  readonly modelId = 'scripted';
   /** Полученные запросы — снимки на момент вызова (structuredClone), для ассертов. */
   readonly requests: LLMRequest[] = [];
   private next = 0;
