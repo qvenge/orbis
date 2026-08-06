@@ -24,10 +24,15 @@ function sdkModelOf(p: AiSdkProvider): { provider: string; modelId: string } {
 }
 
 describe('OpenAIProvider', () => {
-  test('дефолтная модель — полноразмерная, не mini/nano', () => {
+  test('в имени дефолтной модели нет mini/nano/lite — дефолт не съехал на урезанную', () => {
     // Проба 2026-08-06: gpt-5.4-mini собирал orbis/financial без обязательного
-    // category_ref и терял чипы продолжений. Дефолт обязан быть полноразмерным.
-    expect(DEFAULT_OPENAI_MODEL).not.toMatch(/mini|nano/);
+    // category_ref и терял чипы продолжений, поэтому дефолт обязан быть полноразмерным.
+    // Но проверяется здесь ИМЯ, а не способности: «полноразмерность» офлайн недоказуема
+    // (для неё нужен живой вызов), доказуемо лишь то, что дефолт не подменили урезанным
+    // вариантом той же линейки. Список суффиксов чёрный, и в этом его граница — новый
+    // суффикс придётся дописать руками; 'lite' добавлен именно поэтому: пара mini|nano
+    // пропустила бы «gpt-5.5-lite».
+    expect(DEFAULT_OPENAI_MODEL).not.toMatch(/mini|nano|lite/);
   });
 
   test('modelId по умолчанию — DEFAULT_OPENAI_MODEL', () => {

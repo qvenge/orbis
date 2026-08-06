@@ -33,8 +33,12 @@ export class AnthropicProvider extends AiSdkProvider {
   }
 }
 
-// Реэкспорт общего слоя: у существующих потребителей (anthropic.test.ts и др.)
-// пути импорта не меняются, а код живёт там, где ему место.
+// Реэкспорт общего слоя. Внутри репозитория его не импортирует НИКТО: тесты маппинга
+// ходят прямо в './ai-sdk' (ai-sdk.test.ts), боевой код — тоже. Живые потребители —
+// скрипты пробы в `.superpowers/probe/` (csv-analyze.ts, sdk-matrix.ts, sdk-path.ts;
+// фактически им нужны mapSdkResult и toSdkTools). Они вне git и вне tsconfig, поэтому
+// ни typecheck, ни поиск по репозиторию их не покажут, а снятие реэкспорта сломает их
+// молча. Владельцу они ещё нужны — строки ниже оставлены намеренно, это не забытый хвост.
 export {
   mapSdkResult,
   PROVIDER_TIMEOUT_MS,
