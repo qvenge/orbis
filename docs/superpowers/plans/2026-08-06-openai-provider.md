@@ -869,6 +869,7 @@ git commit -m "feat(prompt): v4 — tags= в шпаргалке граммати
 ## Task 4: Окружение, деплой и документы
 
 **Files:**
+- Modify: `scripts/llm-smoke.ts`
 - Modify: `apps/server/.env.example`
 - Modify: `render.yaml` (строки 33–37)
 - Modify: `docs/implementation/02-ops-runbook.md` (таблица переменных, строки 251–253)
@@ -880,6 +881,20 @@ git commit -m "feat(prompt): v4 — tags= в шпаргалке граммати
 - Produces: ничего в коде.
 
 ---
+
+- [ ] **Step 0: Смоук-скрипт перестаёт знать только Anthropic**
+
+`scripts/llm-smoke.ts` — ручной гейт «в прод только после живого смоука» (не тест, в CI не входит). Сегодня он жёстко строит `new AnthropicProvider({apiKey: ANTHROPIC_API_KEY})` и для нового провайдера бесполезен: гейт для OpenAI не закрывается ничем.
+
+Заменить в нём:
+- импорт `AnthropicProvider` из `../apps/server/src/llm/anthropic` — на `makeLLMProvider` из `../apps/server/src/llm/provider`;
+- блок проверки `ANTHROPIC_API_KEY` и создания провайдера — на `const provider = makeLLMProvider(process.env);`. Своей проверки ключа не писать: фабрика уже даёт внятные сообщения на все случаи (нет ключа, оба ключа без явного выбора, неизвестное значение), и вторая копия этих правил разошлась бы с первой.
+- дописать в вывод первой строкой `console.log('model     :', provider.modelId);` — смоук обязан говорить, ЧТО именно он только что проверил;
+- шапку файла привести к факту: запуск теперь `ORBIS_LLM_PROVIDER=openai OPENAI_API_KEY=sk-... bun scripts/llm-smoke.ts` (или `anthropic` со своим ключом), модель — `ORBIS_LLM_MODEL` либо дефолт выбранного провайдера.
+
+Комментарий про `maxTokens: 2048` («adaptive thinking считается в output-бюджет») **оставить и дополнить**: у моделей gpt-5.x токены рассуждения точно так же считаются в потолок, то есть довод стал шире, а не устарел.
+
+Проверка шага — запуск руками с настоящим ключом; он же входит в живой смоук контроллера.
 
 - [ ] **Step 1: Секция LLM в `.env.example`**
 
@@ -955,7 +970,7 @@ Run: `bun run lint; echo "lint exit=$?"`
 Expected: `lint exit=0`.
 
 ```bash
-git add apps/server/.env.example render.yaml docs/implementation/02-ops-runbook.md docs/prd/01-architecture.md docs/prd/04-decision-log.md
+git add scripts/llm-smoke.ts apps/server/.env.example render.yaml docs/implementation/02-ops-runbook.md docs/prd/01-architecture.md docs/prd/04-decision-log.md
 git commit -m "docs(llm): окружение, деплой и PRD второго провайдера к факту"
 ```
 
