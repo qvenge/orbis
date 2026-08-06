@@ -7,8 +7,10 @@ import { makeDb } from './db/client';
 const { db, client } = makeDb();
 
 // AI-deps — один инстанс на процесс (§7.7: провайдер один, имя модели — конфиг);
-// fail-fast: невалидный ORBIS_LLM_PROVIDER, а также отсутствие ANTHROPIC_API_KEY при
-// ORBIS_LLM_PROVIDER='anthropic' или в production — роняют старт, а не запрос
+// fail-fast роняет старт, а не запрос: невалидный ORBIS_LLM_PROVIDER; отсутствие
+// ключа выбранного провайдера (ANTHROPIC_API_KEY / OPENAI_API_KEY) при явном
+// ORBIS_LLM_PROVIDER или в production; ОБА ключа сразу без явного
+// ORBIS_LLM_PROVIDER — выбор неоднозначен, и молчаливый метерился бы чужой моделью
 const ai = makeAiDeps();
 
 // Реестр аспектов в БД против кода (E1). НЕ fail-fast и НЕ блокирует приём запросов:

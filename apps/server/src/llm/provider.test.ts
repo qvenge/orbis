@@ -1,9 +1,12 @@
-// Тесты echo/scripted-провайдеров и фабрики makeLLMProvider.
+// Тесты echo/scripted-провайдеров, фабрики makeLLMProvider и имени модели,
+// которое makeAiDeps отдаёт метерингу.
 // Ни одного сетевого вызова: echo/scripted детерминированы, а создание
-// AnthropicProvider (фабрикой) не ходит в сеть — сеть только в chat().
+// Anthropic/OpenAI-провайдера (фабрикой) не ходит в сеть — сеть только в chat().
 
 import { describe, expect, test } from 'bun:test';
+import { makeAiDeps } from '../ai/send-message';
 import { AnthropicProvider, DEFAULT_ANTHROPIC_MODEL } from './anthropic';
+import { DEFAULT_OPENAI_MODEL, OpenAIProvider } from './openai';
 import { EchoProvider, makeLLMProvider } from './provider';
 import { ScriptedProvider } from './scripted';
 import type { LLMRequest, LLMResponse } from './types';
@@ -145,9 +148,13 @@ describe('makeLLMProvider', () => {
     expect(p).toBeInstanceOf(EchoProvider);
   });
 
+  // Фикстура сменилась с 'openai' на 'gemini' не ради зелени: 'openai' стал
+  // ПОДДЕРЖИВАЕМЫМ значением, и прежний пример перестал быть неизвестным. Ассерт
+  // тот же и той же строгости — сообщение обязано цитировать полученное значение,
+  // иначе опечатку в env не найти глазами.
   test('неизвестное значение ORBIS_LLM_PROVIDER → ошибка при создании', () => {
-    expect(() => makeLLMProvider({ ORBIS_LLM_PROVIDER: 'openai' })).toThrow(
-      "неизвестный ORBIS_LLM_PROVIDER='openai'",
+    expect(() => makeLLMProvider({ ORBIS_LLM_PROVIDER: 'gemini' })).toThrow(
+      "неизвестный ORBIS_LLM_PROVIDER='gemini'",
     );
   });
 
@@ -165,5 +172,58 @@ describe('makeLLMProvider', () => {
       makeLLMProvider({ ANTHROPIC_API_KEY: 'sk-test', ORBIS_LLM_MODEL: 'модель-из-env' }).modelId,
     ).toBe('модель-из-env');
     expect(makeLLMProvider({ ORBIS_LLM_PROVIDER: 'echo' }).modelId).toBe('echo');
+  });
+
+  test("явный 'openai' с ключом → openai", () => {
+    const p = makeLLMProvider({ ORBIS_LLM_PROVIDER: 'openai', OPENAI_API_KEY: 'к' });
+    expect(p).toBeInstanceOf(OpenAIProvider);
+  });
+
+  test("явный 'openai' БЕЗ ключа → внятная ошибка при создании (не при вызове)", () => {
+    expect(() => makeLLMProvider({ ORBIS_LLM_PROVIDER: 'openai' })).toThrow(/OPENAI_API_KEY/);
+  });
+
+  test('без ORBIS_LLM_PROVIDER, но с одним лишь OPENAI_API_KEY → openai', () => {
+    const p = makeLLMProvider({ OPENAI_API_KEY: 'к' });
+    expect(p).toBeInstanceOf(OpenAIProvider);
+  });
+
+  // Неоднозначность — отказ, а не молчаливый выбор: доктрина этого файла уже
+  // запрещает молча поднимать echo в production. Молча выбрать один из двух живых
+  // провайдеров — та же ошибка, и дороже: счётчик расхода уйдёт не туда.
+  test('оба ключа без явного ORBIS_LLM_PROVIDER → ошибка, называющая оба', () => {
+    expect(() => makeLLMProvider({ ANTHROPIC_API_KEY: 'a', OPENAI_API_KEY: 'o' })).toThrow(
+      /ORBIS_LLM_PROVIDER/,
+    );
+  });
+
+  test('сообщение о неизвестном провайдере перечисляет и openai', () => {
+    expect(() => makeLLMProvider({ ORBIS_LLM_PROVIDER: 'нечто' })).toThrow(/openai/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// makeAiDeps — единственное место, где имя модели уходит в метеринг §4.7
+// (ai_usage.model). Тест живёт ЗДЕСЬ, а не в send-message.test.ts: тот файл
+// на первых строках делает requireEnv() и открывает соединение (appDb()), то есть
+// без Postgres не запускается вовсе — а пин метеринга обязан гоняться всегда,
+// в том числе в прогоне без БД. Проверяемое — чистая функция от env.
+// ---------------------------------------------------------------------------
+
+describe('makeAiDeps: имя модели для ai_usage', () => {
+  // Прежний makeAiDeps считал имя как `ORBIS_LLM_MODEL || DEFAULT_ANTHROPIC_MODEL`.
+  // При таком расчёте OpenAI без явной ORBIS_LLM_MODEL писался бы в ai_usage как
+  // 'claude-sonnet-5': расход второго провайдера молча приписывался бы первому,
+  // и в UI это никак не проявилось бы. Пин закрывает именно этот разрыв.
+  test('только OPENAI_API_KEY → model = DEFAULT_OPENAI_MODEL, а не модель Anthropic', () => {
+    const deps = makeAiDeps({ OPENAI_API_KEY: 'к' });
+    expect(deps.model).toBe(DEFAULT_OPENAI_MODEL);
+    expect(deps.model).not.toBe(DEFAULT_ANTHROPIC_MODEL);
+    expect(deps.provider.modelId).toBe(deps.model);
+  });
+
+  test('явная ORBIS_LLM_MODEL побеждает дефолт провайдера', () => {
+    const deps = makeAiDeps({ OPENAI_API_KEY: 'к', ORBIS_LLM_MODEL: 'gpt-модель-из-env' });
+    expect(deps.model).toBe('gpt-модель-из-env');
   });
 });
