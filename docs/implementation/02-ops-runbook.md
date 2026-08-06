@@ -42,6 +42,12 @@ curl -fsS https://<prod-host>/ | head -c 200   # index.html веб-клиент�
 
 Роллбэк: в Render UI сервиса → `Deploys` → выбрать предыдущий зелёный деплой → `Redeploy`.
 
+**Ключ LLM — ДО деплоя.** `render.yaml` объявляет `ORBIS_LLM_PROVIDER` (сейчас `openai`),
+и ключ именно этого провайдера обязан лежать в Render UI до выкатки: без него старт
+падает намеренно (§2, `llm/provider.ts`), healthcheck не проходит и новый деплой живым
+не становится. Смена провайдера — это правка значения в `render.yaml` плюс ключ в UI;
+схем аспектов она не касается, пересев реестра (ниже) для неё НЕ нужен.
+
 #### Пересев реестра аспектов — обязателен при изменении схемы аспекта
 
 Исполнитель валидирует аспекты сущностей (стадия 2) не по zod-схеме из кода, а по
@@ -248,9 +254,10 @@ bun scripts/ops.ts ping           # связность и версия PostgreSQ
 | `PG_PREPARE` | prepared statements для session-пулера | `true` (не секрет; для transaction-режима `:6543` было бы `false`) |
 | `ORBIS_PAT_HASH` | sha256 PAT приёмочного агента | вывод `scripts/issue-pat.ts` (см. §3) |
 | `ORBIS_PAT_OWNER_ID` | владелец, от чьего имени действует агент | UUID из `auth.users` |
-| `ANTHROPIC_API_KEY` | ключ LLM-провайдера | `sk-ant-...` |
-| `ORBIS_LLM_PROVIDER` | явный выбор провайдера (в `render.yaml` = `anthropic`) | без него пустой ключ поднял бы сервис с echo-заглушкой |
-| `ORBIS_LLM_MODEL` | (опц.) модель по умолчанию | иначе дефолт `claude-sonnet-5` (`DEFAULT_ANTHROPIC_MODEL`, `apps/server/src/llm/anthropic.ts`) |
+| `ANTHROPIC_API_KEY` | ключ Anthropic | нужен при `ORBIS_LLM_PROVIDER=anthropic` |
+| `OPENAI_API_KEY` | ключ OpenAI | нужен при `ORBIS_LLM_PROVIDER=openai` |
+| `ORBIS_LLM_PROVIDER` | явный выбор провайдера (в `render.yaml` = `openai`) | без него: один ключ → он и выбран, ОБА ключа → отказ при старте, ключей нет → echo (в production отказ) |
+| `ORBIS_LLM_MODEL` | (опц.) модель по умолчанию | иначе дефолт провайдера: `claude-sonnet-5` (`DEFAULT_ANTHROPIC_MODEL`) либо `gpt-5.5` (`DEFAULT_OPENAI_MODEL`, `apps/server/src/llm/openai.ts`) |
 | `SUPABASE_URL` | база JWT-верификации: issuer-пиннинг + из него выводится JWKS-адрес (`auth.ts`) | `https://<PROD_REF>.supabase.co` (без завершающего слэша) |
 | `SUPABASE_JWT_SECRET` | верификация JWT (HS256, fallback к JWKS) | из Supabase `Project Settings → API`. Если проект на асимметричных ключах (ES256/JWKS) — **не задавать**: путь мёртв, а знающий секрет подделает токен владельца. Срабатывание фолбэка в проде пишет предупреждение в лог |
 | `SUPABASE_JWKS_URL` | (опц.) явный override JWKS; в `render.yaml` НЕ задаётся — дефолт `{SUPABASE_URL}/auth/v1/.well-known/jwks.json` | обычно не нужен |
