@@ -15,7 +15,7 @@ import { aiUsage, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
-import { SYSTEM_PROMPT_V3, TOOL_RESULT_MARKER } from '../llm/prompts/v3';
+import { SYSTEM_PROMPT_V4, TOOL_RESULT_MARKER } from '../llm/prompts/v4';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMMessage, LLMProvider, LLMRequest, LLMResponse } from '../llm/types';
 import { appRouter } from '../router';
@@ -226,7 +226,7 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
     // тулы слоя 5 из реестра, окно заканчивается только что персистированным user-сообщением
     expect(scripted.requests).toHaveLength(2);
     for (const req of scripted.requests) {
-      expect(req.system.startsWith(SYSTEM_PROMPT_V3)).toBe(true);
+      expect(req.system.startsWith(SYSTEM_PROMPT_V4)).toBe(true);
       expect(req.messages.every((m) => m.role === 'user' || m.role === 'assistant')).toBe(true);
       const toolNames = req.tools.map((t) => t.name);
       expect(toolNames).toContain('entity_create');
