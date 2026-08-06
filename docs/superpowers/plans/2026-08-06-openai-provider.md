@@ -17,7 +17,7 @@
 - **Поведение Anthropic не меняется ни на йоту.** Расслоение — чистый рефакторинг. Ослабление существующих ассертов запрещено; переезд ассерта в файл рядом с переехавшим кодом разрешён.
 - **Изменение текста промпта = НОВЫЙ файл `vN` + НОВАЯ фикстура `vN.fixture.txt`.** Carried-решение проекта. Файлы `v1.ts`, `v2.ts`, `v3.ts` и их фикстуры и тесты **не трогаются вовсе**.
 - **Схемы аспектов (`packages/shared/src/schemas/aspects.ts`) НЕ меняются.** Любая их правка потребовала бы пересева реестра на проде (`bun scripts/seed-aspects.ts`) и выводит задачу из объёма.
-- **Транспорт OpenAI — только Chat Completions** (`provider.chat(model)`, НЕ `provider(model)`). Доказано пробой: Responses API отвергает три тула реестра при любой строгости — `regex lookaround is not supported` на `positiveDecimal`.
+- **Транспорт OpenAI — только Chat Completions** (`provider.chat(model)`, НЕ `provider(model)`). Доказано пробой: Responses API отвергает **два** тула реестра (`attach_orbis_financial`, `attach_orbis_goal`) при любой строгости — `regex lookaround is not supported` на `positiveDecimal`.
 - **strict-режим OpenAI не включается.** Вход тула валидирует ajv по реестру (стадия 2 исполнителя).
 - Комментарии, докблоки и сообщения об ошибках — **по-русски**, в стиле окружающего кода: объяснять ПОЧЕМУ, а не пересказывать код.
 - Прогон тестов — **`bun run test` из корня**; голый `bun test` из корня зависает. Код возврата lint снимать отдельным вызовом (`bun run lint; echo $?`).
@@ -573,9 +573,9 @@ export class OpenAIProvider extends AiSdkProvider {
       //   «Invalid JSON schema: regex lookaround is not supported.
       //    Found at $.properties.data.properties.amount.pattern.»
       // Виноват не anyOf у attach_orbis_goal (он проходит), а негативный lookahead
-      // в positiveDecimal (packages/shared/src/schemas/aspects.ts): он стоит у
-      // orbis/financial.amount, orbis/budget.limit и orbis/goal.target_value, то есть
-      // роняет три attach-тула из восьми. Отказ БЕЗУСЛОВЕН: strictJsonSchema:false
+      // в positiveDecimal (packages/shared/src/schemas/aspects.ts): он стоит ровно
+      // у двух полей — orbis/financial.amount и orbis/goal.target_value, — то есть
+      // роняет два тула из девятнадцати. Отказ БЕЗУСЛОВЕН: strictJsonSchema:false
       // его не снимает — это свойство эндпоинта, а не настройки строгости.
       // Chat Completions те же схемы принимает. Проверено пробой 2026-08-06,
       // матрица «транспорт × строгость» — docs/superpowers/reviews/2026-08-06-openai-probe.md §1.2.
@@ -935,7 +935,7 @@ OPENAI_API_KEY=
 В `docs/prd/04-decision-log.md` дописать после D24 четыре записи в формате соседей (**Решение / Статус / Обоснование / Заменяет / Детали**). Статус у всех четырёх: `принято 2026-08-06 контроллером в отсутствие владельца — ждёт валидации владельцем`.
 
 - **D25. Второй LLM-провайдер: OpenAI поверх общего слоя AI SDK.** Обоснование: на счёте Anthropic нет средств, весь путь модели мёртв; `anthropic.ts` уже был на Vercel AI SDK, поэтому провайдеро-независимая часть выделена в `llm/ai-sdk.ts`, а оба провайдера стали тонкими. Заменяет: §7.7 в части «оставленный шов».
-- **D26. Транспорт OpenAI — только Chat Completions; strict-режим не включается.** Обоснование: Responses API (транспорт `@ai-sdk/openai` ПО УМОЛЧАНИЮ) отвергает схемы трёх тулов при любой строгости — `regex lookaround is not supported` на `positiveDecimal`; strict потребовал бы менять схемы аспектов, то есть пересев реестра на проде, и ничего не дал бы — вход валидирует ajv. Обе части доказаны пробой, матрица в §1.2 отчёта. Цена: возможности Responses API недоступны.
+- **D26. Транспорт OpenAI — только Chat Completions; strict-режим не включается.** Обоснование: Responses API (транспорт `@ai-sdk/openai` ПО УМОЛЧАНИЮ) отвергает схемы двух тулов (`attach_orbis_financial`, `attach_orbis_goal`) при любой строгости — `regex lookaround is not supported` на `positiveDecimal`; strict потребовал бы менять схемы аспектов, то есть пересев реестра на проде, и ничего не дал бы — вход валидирует ajv. Обе части доказаны пробой, матрица в §1.2 отчёта. Цена: возможности Responses API недоступны.
 - **D27. Имя модели для метеринга отдаёт провайдер.** Обоснование: `makeAiDeps` считал его как `ORBIS_LLM_MODEL || DEFAULT_ANTHROPIC_MODEL` — при OpenAI без явной env `ai_usage` записал бы `claude-sonnet-5`. Цена: правка интерфейса `LLMProvider` с четырьмя реализациями.
 - **D28. Неоднозначный выбор провайдера — отказ при старте.** Обоснование: доктрина `llm/provider.ts` уже запрещает молчаливый echo в production по той же причине; молча выбрать один из двух живых провайдеров дороже — счётчик расхода уйдёт не туда. Цена: стенд с двумя ключами не поднимется без явной `ORBIS_LLM_PROVIDER`.
 

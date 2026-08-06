@@ -78,8 +78,15 @@ Found at $.properties.data.properties.amount.pattern.
 
 **Виноват `positiveDecimal`.** Паттерн `^(?!0+(\.0+)?$)\d+(\.\d+)?$`
 (`packages/shared/src/schemas/aspects.ts`) содержит негативный lookahead — он и есть
-«lookaround». Паттерн стоит у трёх полей: `orbis/financial.amount`, `orbis/budget.limit`,
-`orbis/goal.target_value`, то есть задевает три тула из восьми `attach_*`.
+«lookaround». Паттерн стоит у **двух** полей: `orbis/financial.amount` и
+`orbis/goal.target_value`, то есть задевает **два тула из девятнадцати**.
+
+> **Поправка 2026-08-06 (разведка опровергла контроллера).** Первая редакция этого отчёта
+> писала «три поля, включая `orbis/budget.limit`». Неверно: `limit` объявлен через
+> `nonNegativeDecimal` (`^\d+(\.\d+)?$`, `aspects.ts`) — lookahead там нет. Проверено
+> прогоном по всем 19 тулам реестра (`.superpowers/probe/lookaround.ts`): попаданий ровно
+> два, и Responses API в своём отказе называет только `$…properties.amount.pattern`.
+> Вывод отчёта от поправки не меняется, но его величина меньше, чем звучала.
 
 **Отказ Responses API безусловен.** `strictJsonSchema: false` его не снимает — валидация
 регекспов на этом эндпоинте не зависит от строгости структурированного вывода. Это свойство
