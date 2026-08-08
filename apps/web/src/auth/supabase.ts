@@ -20,12 +20,18 @@ const anon = import.meta.env.VITE_SUPABASE_ANON_KEY ?? 'anon';
 export const auth = new AuthClient({
   url: authUrl(url),
   storageKey: storageKeyFor(url),
+  // Плоский мерж опций в GoTrueClient (`{...DEFAULT_OPTIONS, ...options}`) заменяет
+  // дефолтные заголовки целиком, поэтому вендорский 'X-Client-Info' отсюда пропадает.
+  // Так и задумано (решение Р13): его никто не читает — ни наш сервер, ни RLS, ни шлюз;
+  // это телеметрия Supabase, и слать её нам незачем.
   headers: { apikey: anon, Authorization: `Bearer ${anon}` },
   persistSession: true,
   autoRefreshToken: true,
-  // На нём держится вход по magic link в приёмочном смоуке — ссылка приносит сессию
-  // hash-фрагментом. Дефолт auth-js такой же, но опция, от которой зависит приёмка,
-  // должна быть видна в коде, а не унаследована.
+  // Обе опции ниже держат вход по magic link в приёмочном смоуке: implicit-поток приносит
+  // сессию hash-фрагментом (pkce принёс бы `?code`), а detectSessionInUrl её оттуда
+  // забирает. Дефолты auth-js такие же, но опция, от которой зависит приёмка, должна быть
+  // видна в коде, а не унаследована.
+  flowType: 'implicit',
   detectSessionInUrl: true,
 });
 

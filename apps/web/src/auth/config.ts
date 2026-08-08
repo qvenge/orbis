@@ -7,12 +7,22 @@ function ensureTrailingSlash(url: string): string {
   return url.endsWith('/') ? url : `${url}/`;
 }
 
+// supabase-js тримил вход ОДИН раз, до обеих формул (helpers.ts:108 `supabaseUrl?.trim()`),
+// поэтому пробел по краям VITE_SUPABASE_URL ему прощался. Без trim ломается ровно authUrl
+// и ровно на ХВОСТОВОМ пробеле: ensureTrailingSlash дописывает слэш и уводит пробел в
+// СЕРЕДИНУ строки, а URL-парсер срезает пробелы только по краям (переводы строки он
+// выкусывает откуда угодно — поэтому '\n' безобиден, а ' ' нет). Бросок пришёлся бы на
+// импорт auth/supabase.ts, то есть на белый экран всего приложения, а не на экран входа.
+function normalize(base: string): string {
+  return base.trim();
+}
+
 /** `https://ref.supabase.co` → `https://ref.supabase.co/auth/v1`, без двойного слэша. */
 export function authUrl(base: string): string {
-  return new URL('auth/v1', ensureTrailingSlash(base)).href;
+  return new URL('auth/v1', ensureTrailingSlash(normalize(base))).href;
 }
 
 /** Ключ localStorage живой сессии: `https://ref.supabase.co` → `sb-ref-auth-token`. */
 export function storageKeyFor(base: string): string {
-  return `sb-${new URL(base).hostname.split('.')[0]}-auth-token`;
+  return `sb-${new URL(normalize(base)).hostname.split('.')[0]}-auth-token`;
 }
