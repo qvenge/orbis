@@ -102,6 +102,37 @@ test('query_result с aggregate → число и «Записей: N», раз�
   expect(screen.queryByTestId('qr-empty')).not.toBeInTheDocument();
 });
 
+// Тест выше намеренно стоит на НЕвозможной фикстуре, поэтому настоящую серверную форму
+// агрегата не проверял никто: aggregateCard шлёт op='sum' ВМЕСТЕ с entityIds:[] (dispatch.ts:
+// 411,426), а пустой список до этого встречался только с op='count', где счётчик не рисуется
+// вовсе. Здесь пустой список сходится с подписью «Записей: N» — и это единственное место, где
+// видно, что карточка не путает «агрегат без ids» с «ничего не найдено».
+test('серверная форма агрегата (sum + entityIds:[]) → число и «Записей: N», не пустое состояние', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          {
+            kind: 'query_result',
+            title: 'Еда в июне',
+            count: 12,
+            entityIds: [],
+            aggregate: { op: 'sum', value: '12430.00' },
+          },
+        ]),
+      )}
+    </div>,
+    entityGet,
+  );
+  expect(screen.getByTestId('qr-aggregate')).toHaveTextContent('12430.00');
+  expect(screen.getByTestId('qr-count')).toHaveTextContent('Записей: 12');
+  // Пустой entityIds у агрегата — это «id не выбирались», а не «ничего не найдено»:
+  // провалиться в пустое состояние карточка не должна, число ведь есть.
+  expect(screen.queryByTestId('qr-empty')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('qr-list')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /показать список/i })).not.toBeInTheDocument();
+});
+
 test('query_result без aggregate → native-список: title через entity.get, не сырой id', async () => {
   renderWithProviders(
     <div>{renderCards(msg([{ kind: 'query_result', count: 2, entityIds: ['a', 'b'] }]))}</div>,
