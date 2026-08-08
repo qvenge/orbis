@@ -101,6 +101,67 @@ test('query_result без aggregate → native-список: title через en
   expect(screen.getByText('T-b')).toBeInTheDocument();
 });
 
+test('query_result без результатов → «Ничего не найдено», пустого списка нет', () => {
+  renderWithProviders(
+    <div>{renderCards(msg([{ kind: 'query_result', count: 0, entityIds: [] }]))}</div>,
+    entityGet,
+  );
+  expect(screen.getByTestId('qr-empty')).toHaveTextContent('Ничего не найдено');
+  expect(screen.queryByTestId('qr-list')).not.toBeInTheDocument();
+  expect(screen.queryByTestId('qr-count')).not.toBeInTheDocument();
+});
+
+test('query_result со списком → счётчик «Совпадений: N»', () => {
+  renderWithProviders(
+    <div>{renderCards(msg([{ kind: 'query_result', count: 2, entityIds: ['a', 'b'] }]))}</div>,
+    entityGet,
+  );
+  expect(screen.getByTestId('qr-count')).toHaveTextContent('Совпадений: 2');
+});
+
+test('агрегат sum → «Записей: N»; пустой entityIds → без кнопки «Показать список»', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          {
+            kind: 'query_result',
+            count: 37,
+            entityIds: [],
+            aggregate: { op: 'sum', value: '12400.00' },
+          },
+        ]),
+      )}
+    </div>,
+    entityGet,
+  );
+  expect(screen.getByTestId('qr-aggregate')).toHaveTextContent('12400.00');
+  expect(screen.getByTestId('qr-count')).toHaveTextContent('Записей: 37');
+  expect(screen.queryByRole('button', { name: /показать список/i })).not.toBeInTheDocument();
+  // Агрегат — не «пусто»: число есть, значит пустого состояния быть не должно.
+  expect(screen.queryByTestId('qr-empty')).not.toBeInTheDocument();
+});
+
+test('агрегат count → счётчик не дублирует само число', () => {
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([
+          {
+            kind: 'query_result',
+            count: 5,
+            entityIds: [],
+            aggregate: { op: 'count', value: '5' },
+          },
+        ]),
+      )}
+    </div>,
+    entityGet,
+  );
+  expect(screen.getByTestId('qr-aggregate')).toHaveTextContent('5');
+  expect(screen.queryByTestId('qr-count')).not.toBeInTheDocument();
+});
+
 // Пинним Date.now в пределах 24ч-окна фикстуры createdAt, чтобы expired не зависел от
 // настенных часов. Мокаем только Date.now (не setTimeout) — async waitFor не виснет;
 // ConfirmationCard берёт now по умолчанию из Date.now() → expired детерминирован.

@@ -9,6 +9,10 @@ import type { QueryResultData } from './types';
 // Строки — EntityRef (title вместо сырого UUID, этап 4).
 export function QueryResultCard({ card }: { card: QueryResultData }) {
   const [open, setOpen] = useState(false);
+  // Сервер шлёт entityIds:[] в двух РАЗНЫХ случаях: поиск ничего не нашёл (тогда карточка
+  // обязана сказать это словами) и агрегат (id он не выбирает по замыслу — dispatch.ts:426,
+  // и разворачивать там нечего, поэтому кнопки быть не должно).
+  const hasList = card.entityIds.length > 0;
   return (
     <Card data-testid="query-result-card" className="flex flex-col gap-2">
       {card.title && <p className="text-sm font-medium">{card.title}</p>}
@@ -23,23 +27,46 @@ export function QueryResultCard({ card }: { card: QueryResultData }) {
           >
             {card.aggregate.value}
           </span>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="self-start"
-            onClick={() => setOpen((v) => !v)}
-          >
-            Показать список
-          </Button>
+          {/* count у агрегата — это count(*) по ВСЕЙ выборке (compile.ts:71-91), то есть
+              число, которого на экране больше нет нигде. У op='count' оно совпадает со
+              значением агрегата — дубль не печатаем. */}
+          {card.aggregate.op !== 'count' && (
+            <span data-testid="qr-count" className="text-xs text-text-secondary">
+              Записей: {card.count}
+            </span>
+          )}
+          {hasList && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="self-start"
+              onClick={() => setOpen((v) => !v)}
+            >
+              Показать список
+            </Button>
+          )}
         </div>
+      ) : hasList ? (
+        <>
+          {/* Формулировка и регистр — как у счётчика виджета запроса (QueryBlock.tsx:88-90),
+              чтобы список в чате и список на экране читались одинаково. */}
+          <span data-testid="qr-count" className="text-xs text-text-secondary">
+            Совпадений: {card.count}
+          </span>
+          <ul className="flex flex-col gap-1" data-testid="qr-list">
+            {card.entityIds.map((id) => (
+              <li key={id} data-testid="qr-item" className="text-sm text-text-secondary">
+                <EntityRef id={id} />
+              </li>
+            ))}
+          </ul>
+        </>
       ) : (
-        <ul className="flex flex-col gap-1" data-testid="qr-list">
-          {card.entityIds.map((id) => (
-            <li key={id} data-testid="qr-item" className="text-sm text-text-secondary">
-              <EntityRef id={id} />
-            </li>
-          ))}
-        </ul>
+        // Тихий регистр пустоты репозитория («Нет транзакций», «день свободен»), а не
+        // EmptyState: py-10 с иконкой 32px внутри карточки ленты выше самой карточки.
+        <p data-testid="qr-empty" className="text-sm text-text-muted">
+          Ничего не найдено
+        </p>
       )}
       {card.aggregate && open && (
         <ul className="flex flex-col gap-1">
