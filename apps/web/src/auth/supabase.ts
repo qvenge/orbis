@@ -27,8 +27,9 @@ export const auth = new AuthClient({
   storageKey: storageKeyFor(url),
   // Плоский мерж опций в GoTrueClient (`{...DEFAULT_OPTIONS, ...options}`) заменяет
   // дефолтные заголовки целиком, поэтому вендорский 'X-Client-Info' отсюда пропадает.
-  // Так и задумано (решение Р13): его никто не читает — ни наш сервер, ни RLS, ни шлюз;
-  // это телеметрия Supabase, и слать её нам незачем.
+  // Так и задумано — решение Р13 спеки
+  // docs/superpowers/specs/2026-08-08-empty-cards-and-auth-diet-design.md: заголовок не читает
+  // никто — ни наш сервер, ни RLS, ни шлюз; это телеметрия Supabase, и слать её нам незачем.
   headers: { apikey: anon, Authorization: `Bearer ${anon}` },
   persistSession: true,
   autoRefreshToken: true,
