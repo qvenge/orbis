@@ -3,7 +3,7 @@ import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { Input } from '../ui/Input';
 import { Spinner } from '../ui/Spinner';
-import { supabase } from './supabase';
+import { auth } from './supabase';
 
 export function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -17,7 +17,7 @@ export function LoginScreen() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await auth.signInWithPassword({ email, password });
     setBusy(false);
     if (error) setError(error.message);
   }

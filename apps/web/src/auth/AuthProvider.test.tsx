@@ -2,7 +2,7 @@ import { act, render, screen } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 
 vi.mock('./supabase', () => ({
-  supabase: { auth: { signOut: vi.fn(), signInWithPassword: vi.fn() } },
+  auth: { signOut: vi.fn(), signInWithPassword: vi.fn() },
   useSession: vi.fn(),
 }));
 

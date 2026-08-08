@@ -2,7 +2,7 @@ import { createContext, type ReactNode, useContext, useEffect, useState } from '
 import { setRetryScope } from '../state/retry';
 import { onClientOutdated, onUnauthorized } from './events';
 import { LoginScreen } from './LoginScreen';
-import { supabase, useSession } from './supabase';
+import { auth, useSession } from './supabase';
 
 type AuthContextValue = { token: string | null; userId: string | null };
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -31,7 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     onClientOutdated(() => setOutdated(true));
     onUnauthorized(() => {
-      void supabase.auth.signOut();
+      void auth.signOut();
     });
   }, []);
 
