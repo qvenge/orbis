@@ -1,7 +1,8 @@
 // scripts/llm-smoke.ts
 // Ручной смоук LLM-провайдера — НЕ тест и НЕ входит в CI (Global Constraints
 // плана 1b: LLM-вызовы вне детерминированного CI). Один реальный вызов chat()
-// с определением тула: проверяет и текстовый путь, и конвертацию tool defs.
+// с НАСТОЯЩИМ набором тулов реестра: проверяет и текстовый путь, и конвертацию
+// tool defs, и — главное — что провайдер вообще ПРИНЯЛ наши схемы.
 //
 // Провайдер выбирается той же фабрикой, что и в проде (llm/provider.ts), — иначе
 // гейт «в прод только после живого смоука» закрывался бы не тем кодом, что поедет.
@@ -11,7 +12,10 @@
 // Модель: env ORBIS_LLM_MODEL, иначе дефолт выбранного провайдера
 // (claude-sonnet-5 — DEFAULT_ANTHROPIC_MODEL, gpt-5.5 — DEFAULT_OPENAI_MODEL).
 
+import { aspectJsonSchema, BUILTIN_ASPECT_META } from '@orbis/shared';
 import { makeLLMProvider } from '../apps/server/src/llm/provider';
+import type { LLMToolDef } from '../apps/server/src/llm/types';
+import { type AspectToolRow, buildToolDefs } from '../apps/server/src/tools/registry';
 
 // Правила ВЫБОРА провайдера скрипт не дублирует: неизвестное значение
 // ORBIS_LLM_PROVIDER, отсутствие ключа выбранного провайдера, оба ключа сразу без
@@ -35,22 +39,41 @@ if (provider.modelId === 'echo') {
   process.exit(1);
 }
 
+/**
+ * НАСТОЯЩИЙ набор тулов реестра, а не рукописный образец.
+ *
+ * Рукописный тул с плоской схемой проходит у кого угодно, и гейт на нём молчал бы
+ * ровно о том, ради чего он существует: примет ли провайдер СХЕМЫ АСПЕКТОВ. Именно
+ * они содержат конструкции, на которых эндпоинт отказывал, — негативный lookahead
+ * в positiveDecimal (orbis/financial.amount, orbis/goal.target_value) и союз anyOf
+ * у orbis/goal.progress_source. На Responses-транспорте OpenAI именно они и есть то,
+ * из-за чего запрос может не уехать (см. разбор strict в openai.ts).
+ *
+ * Сборка статическая, без БД: реестр в базе сидируется из этих же источников
+ * (scripts/seed-aspects.ts зовёт aspectJsonSchema(meta.id) и meta.aiInstructions),
+ * поэтому набор совпадает с тем, что читает прод, а гейт остаётся запускаемым
+ * где угодно и без DATABASE_URL.
+ */
+const rows: AspectToolRow[] = BUILTIN_ASPECT_META.map((m) => ({
+  id: m.id,
+  description: m.description,
+  aiInstructions: m.aiInstructions,
+  schema: aspectJsonSchema(m.id),
+  viewConfig: m.viewConfig as unknown as Record<string, unknown>,
+}));
+// Та же конвертация OrbisToolDef → LLMToolDef, что в бою (ai/send-message.ts):
+// расхождение здесь означало бы, что гейт проверяет не ту форму запроса.
+const tools: LLMToolDef[] = buildToolDefs(rows).map((d) => ({
+  name: d.name,
+  description: d.description,
+  inputSchema: d.inputJsonSchema,
+}));
+
 const response = await provider.chat({
   system:
     'Ты — ассистент Orbis. Если вопрос касается сущностей пользователя, вызывай тул entity_query.',
   messages: [{ role: 'user', content: 'Сколько у меня незакрытых задач?' }],
-  tools: [
-    {
-      name: 'entity_query',
-      description: 'Поиск сущностей по грамматике запросов Orbis (§6).',
-      inputSchema: {
-        type: 'object',
-        properties: { query: { type: 'string', minLength: 1 } },
-        required: ['query'],
-        additionalProperties: false,
-      },
-    },
-  ],
+  tools,
   // 2048, не 256: на claude-sonnet-5 adaptive thinking включён по умолчанию и
   // считается в output-бюджет — слишком узкий потолок дал бы ложный обрыв max_tokens.
   // У gpt-5.x ровно та же арифметика: reasoning-токены тоже списываются из потолка
@@ -58,9 +81,10 @@ const response = await provider.chat({
   maxTokens: 2048,
 });
 
-// Первой строкой — что именно проверено: без неё зелёный смоук не отличить
-// от зелёного смоука другого провайдера или другой модели.
+// Первыми строками — что именно проверено: без них зелёный смоук не отличить
+// от зелёного смоука другого провайдера, другой модели или урезанного набора тулов.
 console.log('model     :', provider.modelId);
+console.log('tools     :', tools.length, `(из них attach_*: ${rows.length})`);
 console.log('content   :', JSON.stringify(response.content));
 console.log('toolCalls :', JSON.stringify(response.toolCalls, null, 2));
 console.log('stopReason:', response.stopReason);

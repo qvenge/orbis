@@ -186,9 +186,13 @@ describe('AiSdkProvider: toolExtras и providerOptions', () => {
   });
 
   test('без toolExtras тулы не обрастают лишними полями', async () => {
-    // Это защита Anthropic, а не косметика: @ai-sdk/anthropic на ЛЮБОЕ непустое
-    // strict печатает предупреждение и поле игнорирует (dist/index.js:1599). Общий
-    // слой не имеет права навязывать провайдерам значения, которых у них не спросили.
+    // Это защита Anthropic, и ставка выше, чем кажется. @ai-sdk/anthropic выбрасывает
+    // чужой strict с предупреждением только у моделей БЕЗ structured output
+    // (dist/index.js:1599); у моделей С ним — а это наш claude-sonnet-5 — работает
+    // ветка :1612, и поле МОЛЧА уходит в запрос к Anthropic (условие обеих веток —
+    // supportsStrictTools, :3652; проверено перехватом fetch на @ai-sdk/anthropic@4.0.8).
+    // Значит навязанное общим слоем значение меняло бы запрос к живому провайдеру,
+    // а не просто сорило в логи. Общий слой не задаёт того, о чём его не просили.
     const { model, calls } = capturingModel();
     const p = new AiSdkProvider({ model, modelId: 'м' });
     await p.chat(requestWithTools());

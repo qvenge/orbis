@@ -105,10 +105,22 @@ export function mapSdkResult(result: SdkResultSubset): LLMResponse {
  */
 export interface SdkToolExtras {
   /**
-   * Строгость схемы тула. Задавать его вправе только провайдер, который его понимает:
-   * пакет @ai-sdk/anthropic на любое непустое strict печатает в консоль предупреждение
-   * и поле игнорирует (dist/index.js:1599), поэтому общий слой своего значения не
-   * навязывает и без extras форму тула не меняет вообще.
+   * Строгость схемы тула. Задавать его вправе ТОЛЬКО тот провайдер, который сам этого
+   * попросил, и цена нарушения — не косметическая.
+   *
+   * Пакет @ai-sdk/anthropic поступает с чужим strict по-разному, и решает это не он,
+   * а способности модели: `supportsStrictTools = (config.supportsStrictTools ?? true)
+   * && modelSupportsStructuredOutput` (dist/index.js:3652). У модели БЕЗ structured
+   * output поле выбрасывается с предупреждением в консоль (:1599) — это безобидно.
+   * У модели С structured output — а это ровно наш claude-sonnet-5 — работает другая
+   * ветка (:1612), и strict МОЛЧА УХОДИТ в запрос к Anthropic, без единого warning.
+   * Проверено перехватом fetch на @ai-sdk/anthropic@4.0.8: у claude-sonnet-5 в теле
+   * запроса «"strict": false», warnings пуст; у claude-3-haiku-20240307 поля нет,
+   * warning есть.
+   *
+   * То есть навязанное общим слоем значение не «поругалось бы в логи», а изменило бы
+   * запрос к живому провайдеру за спиной у Anthropic-обёртки. Поэтому общий слой
+   * своего strict не имеет и без extras форму тула не меняет вообще.
    *
    * Поле объявлено самим SDK (@ai-sdk/provider-utils, BaseFunctionTool.strict) и
    * реэкспортировано из 'ai' вместе с tool()/ToolSet — каст здесь не нужен.
@@ -167,7 +179,8 @@ export interface AiSdkProviderOptions {
   /**
    * Поля, домешиваемые в КАЖДЫЙ тул запроса. Живут здесь, а не в общем коде, потому
    * что нужное значение знает только провайдер: OpenAI на Responses требует
-   * strict: false, а Anthropic на то же поле ругается (см. SdkToolExtras).
+   * strict: false, а claude-sonnet-5 то же самое поле молча увёз бы в запрос к
+   * Anthropic — см. разбор в SdkToolExtras.
    */
   toolExtras?: SdkToolExtras;
   /**
