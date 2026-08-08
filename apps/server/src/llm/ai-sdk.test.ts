@@ -57,8 +57,63 @@ function hangingModel(): SdkModel {
   };
 }
 
+/**
+ * Модель-заглушка, которая никуда не ходит, а ЗАПИСЫВАЕТ то, что ей передал SDK.
+ * Провайдеро-специфичные добавки (toolExtras, providerOptions) проверяются по
+ * содержимому вызова, а не чтением приватных полей провайдера: поле само по себе
+ * доказывает лишь то, что мы его куда-то положили, — а нужно, чтобы оно доехало
+ * до запроса. Пустой успешный ответ: предмет проверки — вход, не выход.
+ */
+function capturingModel(): {
+  model: SdkModel;
+  calls: { tools: unknown; providerOptions: unknown }[];
+} {
+  const calls: { tools: unknown; providerOptions: unknown }[] = [];
+  const model: SdkModel = {
+    specificationVersion: 'v4',
+    provider: 'test',
+    modelId: 'capture',
+    supportedUrls: {},
+    doGenerate: ({ tools, providerOptions }) => {
+      calls.push({ tools, providerOptions });
+      return Promise.resolve({
+        content: [],
+        finishReason: { unified: 'stop' as const, raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
+          outputTokens: { total: 1, text: 1, reasoning: 0 },
+        },
+        warnings: [],
+      });
+    },
+    doStream: () => Promise.reject(new Error('стриминг в этих тестах не используется')),
+  };
+  return { model, calls };
+}
+
 function userRequest(): LLMRequest {
   return { system: '', messages: [{ role: 'user', content: 'привет' }], tools: [], maxTokens: 16 };
+}
+
+/** Схема тула для проверок формы: важно не её содержимое, а то, что она доезжает дословно. */
+const TOOL_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: { id: { type: 'string' } },
+  required: ['id'],
+  additionalProperties: false,
+};
+
+/** Запрос с ДВУМЯ тулами: добавки обязаны попасть в каждый, а не только в первый. */
+function requestWithTools(): LLMRequest {
+  return {
+    system: '',
+    messages: [{ role: 'user', content: 'привет' }],
+    tools: [
+      { name: 'entity_get', description: 'взять сущность', inputSchema: TOOL_SCHEMA },
+      { name: 'entity_create', description: 'создать сущность', inputSchema: TOOL_SCHEMA },
+    ],
+    maxTokens: 16,
+  };
 }
 
 describe('AiSdkProvider', () => {
@@ -98,6 +153,76 @@ describe('AiSdkProvider', () => {
         maxTokens: 16,
       }),
     ).rejects.toThrow(/system-сообщения в messages не поддерживаются/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Провайдеро-специфичные добавки: общий слой их ПЕРЕНОСИТ, но не придумывает сам
+// ---------------------------------------------------------------------------
+
+describe('AiSdkProvider: toolExtras и providerOptions', () => {
+  test('toolExtras домешивается в КАЖДЫЙ тул запроса, а не только в первый', async () => {
+    const { model, calls } = capturingModel();
+    const p = new AiSdkProvider({ model, modelId: 'м', toolExtras: { strict: true } });
+    await p.chat(requestWithTools());
+    // Сравнение целыми объектами, а не по одному полю: заодно пинит, что описание
+    // и схема доезжают до провайдера дословно, а имя тула становится именем в запросе.
+    expect(calls[0]?.tools).toEqual([
+      {
+        type: 'function',
+        name: 'entity_get',
+        description: 'взять сущность',
+        inputSchema: TOOL_SCHEMA,
+        strict: true,
+      },
+      {
+        type: 'function',
+        name: 'entity_create',
+        description: 'создать сущность',
+        inputSchema: TOOL_SCHEMA,
+        strict: true,
+      },
+    ]);
+  });
+
+  test('без toolExtras тулы не обрастают лишними полями', async () => {
+    // Это защита Anthropic, а не косметика: @ai-sdk/anthropic на ЛЮБОЕ непустое
+    // strict печатает предупреждение и поле игнорирует (dist/index.js:1599). Общий
+    // слой не имеет права навязывать провайдерам значения, которых у них не спросили.
+    const { model, calls } = capturingModel();
+    const p = new AiSdkProvider({ model, modelId: 'м' });
+    await p.chat(requestWithTools());
+    expect(calls[0]?.tools).toEqual([
+      {
+        type: 'function',
+        name: 'entity_get',
+        description: 'взять сущность',
+        inputSchema: TOOL_SCHEMA,
+      },
+      {
+        type: 'function',
+        name: 'entity_create',
+        description: 'создать сущность',
+        inputSchema: TOOL_SCHEMA,
+      },
+    ]);
+  });
+
+  test('providerOptions конструктора доезжают до вызова', async () => {
+    const { model, calls } = capturingModel();
+    const p = new AiSdkProvider({
+      model,
+      modelId: 'м',
+      providerOptions: { openai: { store: false } },
+    });
+    await p.chat(userRequest());
+    expect(calls[0]?.providerOptions).toEqual({ openai: { store: false } });
+  });
+
+  test('без providerOptions вызову ничего не навязывается', async () => {
+    const { model, calls } = capturingModel();
+    await new AiSdkProvider({ model, modelId: 'м' }).chat(userRequest());
+    expect(calls[0]?.providerOptions).toBeUndefined();
   });
 });
 

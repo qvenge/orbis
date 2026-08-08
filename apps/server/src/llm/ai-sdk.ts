@@ -96,15 +96,51 @@ export function mapSdkResult(result: SdkResultSubset): LLMResponse {
 }
 
 /**
+ * Провайдеро-специфичные поля, которые домешиваются в КАЖДЫЙ тул запроса.
+ *
+ * Набор узкий не по осторожности: ядро ai@7 собирает описание тула для провайдера из
+ * закрытого списка полей — description / inputExamples / providerOptions / strict
+ * (node_modules/ai/dist/index.js:2028–2045), — и любое другое поле молча теряется по
+ * дороге. Тип Record<string, unknown> обещал бы то, чего SDK не делает.
+ */
+export interface SdkToolExtras {
+  /**
+   * Строгость схемы тула. Задавать его вправе только провайдер, который его понимает:
+   * пакет @ai-sdk/anthropic на любое непустое strict печатает в консоль предупреждение
+   * и поле игнорирует (dist/index.js:1599), поэтому общий слой своего значения не
+   * навязывает и без extras форму тула не меняет вообще.
+   *
+   * Поле объявлено самим SDK (@ai-sdk/provider-utils, BaseFunctionTool.strict) и
+   * реэкспортировано из 'ai' вместе с tool()/ToolSet — каст здесь не нужен.
+   */
+  strict?: boolean;
+}
+
+/**
+ * providerOptions вызова generateText. Форма выведена из сигнатуры SDK по тем же
+ * соображениям, что и SdkModel: имена типов SDK меняются между минорами, форма — нет.
+ * Своими руками её не написать: ProviderOptions требует JSONObject в значениях, и
+ * «похожий» Record<string, Record<string, unknown>> потребовал бы каста.
+ */
+export type SdkProviderOptions = NonNullable<Parameters<typeof generateText>[0]['providerOptions']>;
+
+/**
  * Наши LLMToolDef (JSON Schema из реестра Task 4) → ToolSet SDK через
  * jsonSchema()-хелпер. execute не задаётся: SDK не исполняет тулы —
  * tool-цикл ведёт chat-роутер (Task 9).
+ *
+ * extras домешиваются в каждый тул; при их отсутствии спред не добавляет ничего,
+ * и тул остаётся ровно той же формы, что был, — от этого зависит Anthropic.
  */
-export function toSdkTools(tools: readonly LLMToolDef[]): ToolSet {
+export function toSdkTools(tools: readonly LLMToolDef[], extras?: SdkToolExtras): ToolSet {
   return Object.fromEntries(
     tools.map((t) => [
       t.name,
-      tool({ description: t.description, inputSchema: jsonSchema(t.inputSchema as JSONSchema7) }),
+      tool({
+        description: t.description,
+        inputSchema: jsonSchema(t.inputSchema as JSONSchema7),
+        ...extras,
+      }),
     ]),
   );
 }
@@ -128,6 +164,17 @@ export interface AiSdkProviderOptions {
   modelId: string;
   /** Таймаут одного вызова; по умолчанию PROVIDER_TIMEOUT_MS. */
   timeoutMs?: number;
+  /**
+   * Поля, домешиваемые в КАЖДЫЙ тул запроса. Живут здесь, а не в общем коде, потому
+   * что нужное значение знает только провайдер: OpenAI на Responses требует
+   * strict: false, а Anthropic на то же поле ругается (см. SdkToolExtras).
+   */
+  toolExtras?: SdkToolExtras;
+  /**
+   * providerOptions для generateText — провайдеро-специфичные настройки запроса
+   * (OpenAI: store). Общий слой их только переносит и своих не добавляет.
+   */
+  providerOptions?: SdkProviderOptions;
 }
 
 /**
@@ -148,11 +195,15 @@ export class AiSdkProvider implements LLMProvider {
   readonly modelId: string;
   private readonly model: SdkModel;
   private readonly timeoutMs: number;
+  private readonly toolExtras: SdkToolExtras | undefined;
+  private readonly providerOptions: SdkProviderOptions | undefined;
 
   constructor(opts: AiSdkProviderOptions) {
     this.model = opts.model;
     this.modelId = opts.modelId;
     this.timeoutMs = opts.timeoutMs ?? PROVIDER_TIMEOUT_MS;
+    this.toolExtras = opts.toolExtras;
+    this.providerOptions = opts.providerOptions;
   }
 
   async chat(req: LLMRequest): Promise<LLMResponse> {
@@ -172,10 +223,13 @@ export class AiSdkProvider implements LLMProvider {
       // Таймаут шага (§7.9): по срабатыванию generateText отклоняется, вызывающий мапит
       // это в LLM_UNAVAILABLE с кнопкой «повторить» — вместо бесконечно висящей мутации.
       abortSignal: AbortSignal.timeout(this.timeoutMs),
+      // undefined тут равнозначно отсутствию поля: провайдер, который ничего не
+      // просил, получает запрос ровно той же формы, что и до появления опции
+      providerOptions: this.providerOptions,
       // tools/toolChoice только при непустом наборе: Anthropic API отвергает
       // tool_choice без tools; выбор тула — всегда 'auto' (решение плана 1b)
       ...(req.tools.length > 0
-        ? { tools: toSdkTools(req.tools), toolChoice: 'auto' as const }
+        ? { tools: toSdkTools(req.tools, this.toolExtras), toolChoice: 'auto' as const }
         : {}),
     });
     return mapSdkResult(result);
