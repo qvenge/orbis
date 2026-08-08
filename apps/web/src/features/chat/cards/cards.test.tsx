@@ -69,7 +69,14 @@ test('entity_card: Undo зовёт ai.undo(undoActionId) и гасит карт�
 // MessageList.test.tsx («audit fast-path из истории…»): renderCards роль сообщения не
 // читает вовсе, поэтому здесь такой тест отличался бы от соседнего лишь фикстурой.
 
-test('query_result с aggregate → число + «показать список»', () => {
+// Р11: разворачиваемого списка у агрегата нет вовсе. Единственный производитель
+// агрегатной карточки — aggregateCard (server tools/dispatch.ts:417-430) — кладёт
+// entityIds:[] всегда, поэтому кнопка «Показать список» и её <ul> были кодом, до
+// которого не доехать. Фикстура намеренно НЕсерверная (агрегат + непустой список):
+// на серверной (entityIds:[]) тест не отличил бы снятую кнопку от спрятанной за
+// пустотой списка. Ассерция — отрицательная, поэтому недостижимый рендер она не
+// оживляет, а наоборот держит снятым (политика types.ts:24-28,42-44).
+test('query_result с aggregate → число и «Записей: N», разворота списка нет вовсе', () => {
   renderWithProviders(
     <div>
       {renderCards(
@@ -86,8 +93,13 @@ test('query_result с aggregate → число + «показать список
     </div>,
     entityGet,
   );
+  expect(screen.getByTestId('query-result-card')).toHaveTextContent('Расходы');
   expect(screen.getByTestId('qr-aggregate')).toHaveTextContent('1200.00');
-  expect(screen.getByRole('button', { name: /показать список/i })).toBeInTheDocument();
+  expect(screen.getByTestId('qr-count')).toHaveTextContent('Записей: 3');
+  expect(screen.queryByRole('button', { name: /показать список/i })).not.toBeInTheDocument();
+  expect(screen.queryByTestId('qr-item')).not.toBeInTheDocument();
+  // Агрегат — не «пусто»: число есть, значит пустого состояния быть не должно.
+  expect(screen.queryByTestId('qr-empty')).not.toBeInTheDocument();
 });
 
 test('query_result без aggregate → native-список: title через entity.get, не сырой id', async () => {
@@ -117,29 +129,6 @@ test('query_result со списком → счётчик «Совпадений
     entityGet,
   );
   expect(screen.getByTestId('qr-count')).toHaveTextContent('Совпадений: 2');
-});
-
-test('агрегат sum → «Записей: N»; пустой entityIds → без кнопки «Показать список»', () => {
-  renderWithProviders(
-    <div>
-      {renderCards(
-        msg([
-          {
-            kind: 'query_result',
-            count: 37,
-            entityIds: [],
-            aggregate: { op: 'sum', value: '12400.00' },
-          },
-        ]),
-      )}
-    </div>,
-    entityGet,
-  );
-  expect(screen.getByTestId('qr-aggregate')).toHaveTextContent('12400.00');
-  expect(screen.getByTestId('qr-count')).toHaveTextContent('Записей: 37');
-  expect(screen.queryByRole('button', { name: /показать список/i })).not.toBeInTheDocument();
-  // Агрегат — не «пусто»: число есть, значит пустого состояния быть не должно.
-  expect(screen.queryByTestId('qr-empty')).not.toBeInTheDocument();
 });
 
 test('агрегат count → счётчик не дублирует само число', () => {

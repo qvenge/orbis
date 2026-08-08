@@ -1,17 +1,13 @@
-import { useState } from 'react';
 import { EntityRef } from '../../../lib/entity-ref/EntityRef';
 import { aggregateLabel } from '../../../lib/field-labels';
-import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
 import type { QueryResultData } from './types';
 
-// D-d: без aggregate — native-список из entityIds; с aggregate — число + разворачиваемый список.
+// D-d: без aggregate — native-список из entityIds; с aggregate — одно число.
 // Строки — EntityRef (title вместо сырого UUID, этап 4).
 export function QueryResultCard({ card }: { card: QueryResultData }) {
-  const [open, setOpen] = useState(false);
   // Сервер шлёт entityIds:[] в двух РАЗНЫХ случаях: поиск ничего не нашёл (тогда карточка
-  // обязана сказать это словами) и агрегат (id он не выбирает по замыслу — dispatch.ts:426,
-  // и разворачивать там нечего, поэтому кнопки быть не должно).
+  // обязана сказать это словами) и агрегат (id он не выбирает по замыслу — dispatch.ts:426).
   const hasList = card.entityIds.length > 0;
   return (
     <Card data-testid="query-result-card" className="flex flex-col gap-2">
@@ -35,16 +31,12 @@ export function QueryResultCard({ card }: { card: QueryResultData }) {
               Записей: {card.count}
             </span>
           )}
-          {hasList && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="self-start"
-              onClick={() => setOpen((v) => !v)}
-            >
-              Показать список
-            </Button>
-          )}
+          {/* Разворота списка здесь нет — не спрятан, а снят (Р11). Единственный
+              производитель агрегатной карточки, aggregateCard (dispatch.ts:417-430),
+              кладёт entityIds:[] всегда: разворачивать нечего, и кнопка «Показать
+              список» с её <ul> была кодом, до которого не доехать ни одной выдачей.
+              Если сервер когда-нибудь начнёт слать ids вместе с агрегатом — разворот
+              возвращать осознанно, вместе с тестом на непустой список. */}
         </div>
       ) : hasList ? (
         <>
@@ -67,15 +59,6 @@ export function QueryResultCard({ card }: { card: QueryResultData }) {
         <p data-testid="qr-empty" className="text-sm text-text-muted">
           Ничего не найдено
         </p>
-      )}
-      {card.aggregate && open && (
-        <ul className="flex flex-col gap-1">
-          {card.entityIds.map((id) => (
-            <li key={id} data-testid="qr-item" className="text-sm text-text-secondary">
-              <EntityRef id={id} />
-            </li>
-          ))}
-        </ul>
       )}
     </Card>
   );
