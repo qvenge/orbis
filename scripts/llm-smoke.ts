@@ -43,11 +43,12 @@ if (provider.modelId === 'echo') {
  * НАСТОЯЩИЙ набор тулов реестра, а не рукописный образец.
  *
  * Рукописный тул с плоской схемой проходит у кого угодно, и гейт на нём молчал бы
- * ровно о том, ради чего он существует: примет ли провайдер СХЕМЫ АСПЕКТОВ. Именно
- * они содержат конструкции, на которых эндпоинт отказывал, — негативный lookahead
- * в positiveDecimal (orbis/financial.amount, orbis/goal.target_value) и союз anyOf
- * у orbis/goal.progress_source. На Responses-транспорте OpenAI именно они и есть то,
- * из-за чего запрос может не уехать (см. разбор strict в openai.ts).
+ * ровно о том, ради чего он существует: примет ли провайдер СХЕМЫ АСПЕКТОВ. Отказ
+ * задокументирован ровно на одной конструкции — негативный lookahead в positiveDecimal
+ * (orbis/financial.amount, orbis/goal.target_value): его не берёт строгий режим, а строгий
+ * дефолт стоит как раз на Responses-транспорте OpenAI (см. разбор strict в openai.ts).
+ * Про союз anyOf у orbis/goal.progress_source доказано лишь то, что он ПРИНЯТ, — причиной
+ * отказа он не был ни разу; в наборе он важен как единственный в реестре, а не как риск.
  *
  * Сборка статическая, без БД: реестр в базе сидируется из этих же источников
  * (scripts/seed-aspects.ts зовёт aspectJsonSchema(meta.id) и meta.aiInstructions),
@@ -59,7 +60,7 @@ const rows: AspectToolRow[] = BUILTIN_ASPECT_META.map((m) => ({
   description: m.description,
   aiInstructions: m.aiInstructions,
   schema: aspectJsonSchema(m.id),
-  viewConfig: m.viewConfig as unknown as Record<string, unknown>,
+  viewConfig: m.viewConfig,
 }));
 // Та же конвертация OrbisToolDef → LLMToolDef, что в бою (ai/send-message.ts):
 // расхождение здесь означало бы, что гейт проверяет не ту форму запроса.

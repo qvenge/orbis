@@ -1,5 +1,20 @@
 # Второй LLM-провайдер (OpenAI) — план реализации
 
+> **Поправка 2026-08-08 (владелец оспорил вывод, проба его опровергла).** Транспортное
+> ограничение, на котором стоял план, **неверно**. Responses API схемы реестра **принимает** —
+> нужен явный `strict: false` **на самом туле**; это поле тула, а не опция `strictJsonSchema`
+> (та кормит только `response_format` и к тулам не относится ни на одном транспорте).
+> Провайдер переведён на Responses API с `strict: false` на тулах и `store: false`.
+> Устарели конкретно: **Global Constraint «Транспорт OpenAI — только Chat Completions»**
+> (см. ниже) и **код-образец Task 2 Step 3** — там `createOpenAI(...).chat(modelId)`
+> с комментарием «отказ БЕЗУСЛОВЕН»; в коде сегодня голый `createOpenAI(...)(modelId)`.
+> Заодно устарела формулировка D26 в Step 5 Task 4 и «Chat Completions» в тексте коммита
+> Task 2. Действующее решение — **D29** в `docs/prd/04-decision-log.md`, оно же отменяет D26;
+> матрица круга 6 — во врезке §1.2 отчёта
+> `docs/superpowers/reviews/2026-08-06-openai-probe.md`. Тело ниже намеренно **не переписано**:
+> это замороженный артефакт планирования, и править его задним числом хуже, чем оставить
+> расхождение под явной ссылкой (конвенция проекта, ср. D24).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** вернуть к жизни путь модели, добавив OpenAI вторым LLM-провайдером рядом с Anthropic, не изменив поведение Anthropic.
