@@ -2,7 +2,7 @@ import { retryCreateId } from '@orbis/shared';
 import { expect, test, vi } from 'vitest';
 import type { QueuedCreate } from '../lib/retry-buffer';
 import { trpcError } from '../test/harness';
-import { makeRetrySend, mapSendError } from './retry-send';
+import { makeRetrySend, mapSendError, SEND_TIMEOUT_MS } from './retry-send';
 
 // Уборочная фаза (решение 7): прежняя конвенция «CONFLICT = подтверждённый успех»
 // противоречила серверу — честный повтор владельца с тем же id executor отдаёт
@@ -37,10 +37,12 @@ test('makeRetrySend: успешный create → confirmed; шлёт id=clientId
     createdAt: 'now',
   };
   expect(await send(op)).toBe('confirmed');
-  expect(mutate).toHaveBeenCalledWith({
-    input: { title: 'обед', tags: [], id: 'cid7' },
-    source: 'fast_path',
-  });
+  // Второй аргумент — сигнал предела ожидания (см. SEND_TIMEOUT_MS): без него зависший
+  // запрос заклинивал бы весь сериализованный слив.
+  expect(mutate).toHaveBeenCalledWith(
+    { input: { title: 'обед', tags: [], id: 'cid7' }, source: 'fast_path' },
+    { signal: expect.any(AbortSignal) },
+  );
 });
 
 // §5.3: если payload несёт id (create, уже отправлявшийся серверу), шлём именно его —
@@ -57,10 +59,10 @@ test('makeRetrySend: id из payload имеет приоритет над client
     createdAt: 'now',
   };
   expect(await send(op)).toBe('confirmed');
-  expect(mutate).toHaveBeenCalledWith({
-    input: { id: 'original-uuid', title: 'обед', tags: [] },
-    source: 'fast_path',
-  });
+  expect(mutate).toHaveBeenCalledWith(
+    { input: { id: 'original-uuid', title: 'обед', tags: [] }, source: 'fast_path' },
+    { signal: expect.any(AbortSignal) },
+  );
 });
 
 test('makeRetrySend: ошибка мапится через mapSendError', async () => {
@@ -157,4 +159,36 @@ test('makeRetrySend: транспортный сбой повтора со св�
   };
   expect(await send(op)).toBe('transport_failure');
   expect(mutate).toHaveBeenCalledTimes(1); // тот же id уходит следующим flush'ем
+});
+
+// Полуоткрытый сокет и captive portal дают промис, который не оседает НИКОГДА. Слив
+// сериализован (state/retry.ts), поэтому такой промис глушил бы весь буфер до перезагрузки
+// вместе с кнопкой досыла — единственным средством спасения.
+test('makeRetrySend: зависшая отправка оседает по таймауту → transport_failure', async () => {
+  vi.useFakeTimers();
+  try {
+    // Ответа не будет никогда — полуоткрытый сокет.
+    const mutate = vi.fn(
+      (_input: unknown, _options?: { signal: AbortSignal }) => new Promise(() => {}),
+    );
+    // biome-ignore lint/suspicious/noExplicitAny: мок vanilla-клиента tRPC для юнит-теста
+    const client = { entity: { create: { mutate } } } as any;
+    const send = makeRetrySend(client);
+    const op: QueuedCreate = {
+      clientId: 'c1',
+      tool: 'entity.create',
+      payload: { input: { title: 'обед', tags: [] }, source: 'fast_path' },
+      createdAt: 'now',
+    };
+    const outcome = send(op);
+    await vi.advanceTimersByTimeAsync(SEND_TIMEOUT_MS);
+
+    // transport_failure, а не потеря: запись остаётся в очереди и уйдёт следующим сливом.
+    expect(await outcome).toBe('transport_failure');
+    // И сокет разорван, а не оставлен висеть до конца сессии.
+    const options = mutate.mock.calls[0]?.[1] as { signal: AbortSignal } | undefined;
+    expect(options?.signal.aborted).toBe(true);
+  } finally {
+    vi.useRealTimers();
+  }
 });

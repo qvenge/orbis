@@ -33,9 +33,21 @@ export function registerRetrySend(fn: RetrySend) {
 /** Идущий слив (см. flushNow): на весь модуль один, буфер и store тоже синглтоны. */
 let inFlight: Promise<number> | null = null;
 
+/**
+ * Потолок проходов одного слива. Проходы нужны для записей, легших в очередь ВО ВРЕМЯ
+ * слива (см. flushNow), но слив обязан заканчиваться при любом поведении отправки:
+ * недобранное заберёт следующий триггер, а бесконечный цикл забрать некому.
+ */
+const MAX_FLUSH_PASSES = 8;
+
 type RetryState = {
   size: number;
   pending: QueuedCreate[];
+  /**
+   * Идёт слив. Живёт в store, а не в компоненте: слив один на приложение (сериализован
+   * ниже), а кнопок досыла и автосливов — сколько угодно, и каждая обязана видеть чужой.
+   */
+  flushing: boolean;
   enqueueCreate: (input: EntityCreateInput, source: 'fast_path') => QueuedCreate;
   /** Возвращает число подтверждённых операций — на нём висит инвалидация графа. */
   flushNow: () => Promise<number>;
@@ -50,6 +62,7 @@ function snapshot(): { size: number; pending: QueuedCreate[] } {
 
 export const useRetryBuffer = create<RetryState>((set) => ({
   ...snapshot(),
+  flushing: false,
   enqueueCreate: (input, source) => {
     // id из парсера — тот самый UUID, который (возможно) уже принят сервером в упавшей
     // онлайн-попытке: сохраняем его как clientId, иначе ретрай создаст вторую сущность.
@@ -62,6 +75,9 @@ export const useRetryBuffer = create<RetryState>((set) => ({
     return op;
   },
   flushNow: async () => {
+    // Транспорт фиксируется на весь слив: registerRetrySend может подменить sendImpl
+    // посреди прохода (перевыпуск токена, тесты), и тогда одна очередь ушла бы двумя
+    // разными клиентами — исходы в пределах одного слива стали бы несопоставимы.
     const send = sendImpl;
     if (!send) return 0;
     // Слив сериализован: два параллельных вызова видели ОДИН снимок очереди
@@ -70,28 +86,33 @@ export const useRetryBuffer = create<RetryState>((set) => ({
     // возникало, но лишние запросы приходились ровно на момент, когда сети нет.
     // Опоздавший вызов разделяет промис ведущего, а не ждёт очереди: слив ниже сам
     // дочитывает очередь до конца, поэтому «дождаться этого» и «дождаться своего» —
-    // одно и то же.
+    // одно и то же. Разделённый промис ОБЯЗАН оседать, иначе к нему присоединятся все
+    // следующие вызовы и буфер замолчит до перезагрузки, — предел ожидания отправки
+    // держит state/retry-send.ts.
     if (inFlight) return inFlight;
+    set({ flushing: true });
     inFlight = (async () => {
       let total = 0;
       try {
         // Проходов может быть несколько: очередь пополняется ВО ВРЕМЯ слива — fast-path
         // кладёт запись и тут же зовёт flush, попадая в этот самый разделённый промис.
         // Без доп. прохода такая запись ждала бы следующего триггера, а их наперечёт.
-        for (;;) {
+        for (let pass = 0; pass < MAX_FLUSH_PASSES; pass += 1) {
           const before = storage.load();
           if (before.length === 0) break;
+          const known = new Set(before.map((q) => q.clientId));
           total += await buffer.flush(send);
-          const left = new Set(storage.load().map((q) => q.clientId));
-          // Прогресс = ушла хоть одна запись ЭТОГО снимка. Сравнивать размеры очереди
-          // нельзя: пополнение во время слива читалось бы как «сеть по-прежнему лежит»
-          // (и наоборот — вечный цикл, если бы условие смотрело только на пустоту).
-          if (before.every((q) => left.has(q.clientId))) break;
+          // Ещё проход — ТОЛЬКО если появилась НОВАЯ запись. Условие «ушла хоть одна»
+          // здесь не годится: при смешанном исходе (одна упала, другая прошла) следующий
+          // проход обошёл бы ВСЮ очередь и переслал только что упавшую — тот же лишний
+          // трафик, ради которого правка и делалась, только по другой оси: N записей,
+          // падающих по разу, давали бы порядка N²/2 запросов, и без всякого бэкоффа.
+          if (storage.load().every((q) => known.has(q.clientId))) break;
         }
         return total;
       } finally {
-        set(snapshot());
         inFlight = null;
+        set({ ...snapshot(), flushing: false });
       }
     })();
     return inFlight;

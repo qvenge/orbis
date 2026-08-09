@@ -96,3 +96,60 @@ test('flushNow не крутится вхолостую, когда сеть л�
   expect(attempts).toBe(2);
   expect(useRetryBuffer.getState().size).toBe(2);
 });
+
+// Смешанный исход — главная ловушка доп. прохода: очередь укоротилась, но упавшая запись
+// в ней осталась, и следующий проход обошёл бы ВСЮ очередь, переслав её. Так лишний
+// трафик вернулся бы по другой оси: N записей, падающих по разу, дали бы порядка N²/2
+// запросов вместо N. Проход добавляется только под НОВУЮ запись.
+test('смешанный исход: упавшая запись не пересылается в том же сливе', async () => {
+  const sent: string[] = [];
+  const a = useRetryBuffer.getState().enqueueCreate({ title: 'упадёт', tags: [] }, 'fast_path');
+  const b = useRetryBuffer.getState().enqueueCreate({ title: 'пройдёт', tags: [] }, 'fast_path');
+  registerRetrySend(async (op) => {
+    sent.push(op.clientId);
+    return op.clientId === a.clientId ? 'transport_failure' : 'confirmed';
+  });
+
+  expect(await useRetryBuffer.getState().flushNow()).toBe(1);
+  expect(sent).toEqual([a.clientId, b.clientId]);
+  expect(useRetryBuffer.getState().size).toBe(1);
+  expect(useRetryBuffer.getState().pending[0]?.clientId).toBe(a.clientId);
+});
+
+// То же на длине, где разница между N и N²/2 уже видна.
+test('шесть записей, каждая падает по разу — ровно шесть отправок', async () => {
+  const sent: string[] = [];
+  for (let i = 0; i < 6; i += 1) {
+    useRetryBuffer.getState().enqueueCreate({ title: `op${i}`, tags: [] }, 'fast_path');
+  }
+  registerRetrySend(async (op) => {
+    sent.push(op.clientId);
+    return 'transport_failure';
+  });
+
+  await useRetryBuffer.getState().flushNow();
+
+  expect(sent).toHaveLength(6);
+  expect(useRetryBuffer.getState().size).toBe(6);
+});
+
+// Признак слива виден всему приложению, а не одному компоненту: кнопка досыла и автослив
+// обязаны знать друг о друге. И он ОБЯЗАН сниматься — иначе кнопка гаснет навсегда.
+test('flushing поднят на время слива и снят после', async () => {
+  let release!: (outcome: 'confirmed') => void;
+  registerRetrySend(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  useRetryBuffer.getState().enqueueCreate({ title: 'долгая', tags: [] }, 'fast_path');
+  expect(useRetryBuffer.getState().flushing).toBe(false);
+
+  const flush = useRetryBuffer.getState().flushNow();
+  expect(useRetryBuffer.getState().flushing).toBe(true);
+
+  release('confirmed');
+  await flush;
+  expect(useRetryBuffer.getState().flushing).toBe(false);
+});
