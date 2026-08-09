@@ -135,12 +135,19 @@ export const useRetryBuffer = create<RetryState>((set) => ({
  * business_rejection тоже чистит очередь, но графа не меняет, и перечитывать по нему
  * нечего. Буфер — исторически хрупкое место, и лишний перечит здесь хуже, чем кажется:
  * он маскирует отказ видимостью работы.
+ *
+ * Число подтверждённых уходит и вызывающему: по нему кнопка досыла (ChatScreen) решает,
+ * жаловаться ли на неудачу. Считать это по размеру очереди «до и после» нельзя — размер
+ * врёт в обе стороны: запись, легшая в очередь ВО ВРЕМЯ слива, выглядит как отказ, а
+ * слив, где одна запись прошла, а другая упала, выглядит как удача.
  */
-export function useFlushBuffer(): () => Promise<void> {
+export function useFlushBuffer(): () => Promise<number> {
   const utils = trpc.useUtils();
   const flushNow = useRetryBuffer((s) => s.flushNow);
   return useCallback(async () => {
-    if ((await flushNow()) > 0) invalidateGraph(utils);
+    const confirmed = await flushNow();
+    if (confirmed > 0) invalidateGraph(utils);
+    return confirmed;
   }, [flushNow, utils]);
 }
 

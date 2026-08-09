@@ -184,6 +184,74 @@ test('удачный досыл строки о неудаче не показы
   expect(screen.queryByTestId('pending-flush-failed')).not.toBeInTheDocument();
 });
 
+// Признак неудачи считается по числу ПОДТВЕРЖДЁННЫХ, а не по размеру очереди «до и после».
+// Размер врал: fast-path кладёт запись в буфер и тут же зовёт слив, и такая запись, легшая
+// уже ВО ВРЕМЯ досыла, оставляла очередь той же длины — досыл при этом сработал.
+test('запись, легшая во время слива, не выдаётся за неудачу досыла', async () => {
+  const first = useRetryBuffer.getState().enqueueCreate({ title: 'уйдёт', tags: [] }, 'fast_path');
+  let late: string | null = null;
+  registerRetrySend(async (op) => {
+    if (op.clientId === first.clientId) {
+      // Ровно то, что делает useFastPath на транспортном сбое: кладёт запись и сливает.
+      late = useRetryBuffer
+        .getState()
+        .enqueueCreate({ title: 'поздняя', tags: [] }, 'fast_path').clientId;
+      return 'confirmed';
+    }
+    return 'transport_failure';
+  });
+
+  renderWithProviders(<ChatScreen />, chatMocks);
+
+  fireEvent.click(await screen.findByTestId('pending-indicator'));
+
+  // Очередь той же длины (одна ушла, одна легла), но досыл сработал — жаловаться не на что.
+  await waitFor(() => expect(late).not.toBeNull());
+  await waitFor(() => expect(screen.getByTestId('pending-indicator')).toBeEnabled());
+  expect(useRetryBuffer.getState().size).toBe(1);
+  expect(screen.queryByTestId('pending-flush-failed')).not.toBeInTheDocument();
+});
+
+// Красная строка обязана умирать вместе с индикатором. Иначе: неудачный досыл → строка →
+// сеть вернулась → автослив опустошил очередь → индикатор исчез, признак остался → следующая
+// офлайн-запись поднимает индикатор СРАЗУ с красной строкой, хотя никто ничего не нажимал.
+test('опустевшая очередь уносит строку о неудаче с собой', async () => {
+  registerRetrySend(async () => 'transport_failure');
+  useRetryBuffer.getState().enqueueCreate({ title: 'не уйдёт', tags: [] }, 'fast_path');
+
+  renderWithProviders(<ChatScreen />, chatMocks);
+  fireEvent.click(await screen.findByTestId('pending-indicator'));
+  await screen.findByTestId('pending-flush-failed');
+
+  // Сеть вернулась: слив идёт НЕ этой кнопкой (так работает автослив по событию 'online').
+  registerRetrySend(async () => 'confirmed');
+  await act(async () => {
+    await useRetryBuffer.getState().flushNow();
+  });
+  await waitFor(() => expect(screen.queryByTestId('pending-indicator')).not.toBeInTheDocument());
+
+  // Следующая офлайн-запись поднимает индикатор — чистым.
+  act(() => {
+    useRetryBuffer.getState().enqueueCreate({ title: 'новая', tags: [] }, 'fast_path');
+  });
+  await screen.findByTestId('pending-indicator');
+  expect(screen.queryByTestId('pending-flush-failed')).not.toBeInTheDocument();
+});
+
+// Отклонённый слив — тоже неудача, а не тишина с unhandled rejection в консоли.
+test('слив отклонился — строка о неудаче поднята', async () => {
+  registerRetrySend(async () => {
+    throw new Error('транспорт отвалился насмерть');
+  });
+  useRetryBuffer.getState().enqueueCreate({ title: 'не уйдёт', tags: [] }, 'fast_path');
+
+  renderWithProviders(<ChatScreen />, chatMocks);
+  fireEvent.click(await screen.findByTestId('pending-indicator'));
+
+  expect(await screen.findByTestId('pending-flush-failed')).toBeInTheDocument();
+  expect(useRetryBuffer.getState().size).toBe(1);
+});
+
 test('пустая очередь — индикатора нет', async () => {
   renderWithProviders(<ChatScreen />, chatMocks);
 
