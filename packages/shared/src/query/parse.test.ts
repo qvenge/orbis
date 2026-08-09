@@ -344,6 +344,23 @@ describe('propType: формы за пределами встроенного р
     expect(typeOf({ type: 'array' })).toBe('unfilterable'); // массив без items — что внутри, неизвестно
     expect(typeOf({})).toBe('unfilterable');
   });
+  test('enumValues всегда строки — иначе сортировка по enum падала бы TypeError', () => {
+    // Порядок enum сравнивается с ТЕКСТОВОЙ проекцией `aspects->'A'->>'f'` (§6.1,
+    // compile.ts sortItem), поэтому числа и булевы обязаны приехать сюда строками;
+    // раньше сюда шёл голый `prop.enum as string[]`, и `.replaceAll` падал на числе.
+    const enumsOf = (prop: Record<string, unknown>) =>
+      buildFieldCatalog([{ id: 'x/custom', schema: { properties: { f: prop } } }]).fields.f?.[0]
+        ?.enumValues;
+    expect(enumsOf({ type: 'integer', enum: [3, 1, 2] })).toEqual(['3', '1', '2']);
+    expect(enumsOf({ type: 'boolean', enum: [true, false] })).toEqual(['true', 'false']);
+    expect(enumsOf({ type: 'string', enum: ['b', 'a'] })).toEqual(['b', 'a']);
+    // Не-скаляр текстовой проекции не имеет — порядка объявления для такого поля нет;
+    // пустой enum давал бы `CASE expr END` (синтаксическая ошибка SQL).
+    expect(enumsOf({ enum: [{ a: 1 }] })).toBeUndefined();
+    expect(enumsOf({ type: 'string', enum: ['a', null] })).toBeUndefined();
+    expect(enumsOf({ type: 'string', enum: [] })).toBeUndefined();
+    expect(enumsOf({ type: 'string' })).toBeUndefined();
+  });
   test('фильтр по nullable-строке пользовательского аспекта разбирается, а не отклоняется', () => {
     const custom = buildFieldCatalog([
       { id: 'x/custom', schema: { properties: { vendor: { type: ['string', 'null'] } } } },

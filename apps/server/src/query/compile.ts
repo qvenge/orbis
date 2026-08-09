@@ -13,6 +13,7 @@ import {
   CORE_FIELDS,
   type FieldCatalog,
   type FieldType,
+  fieldTypeLabel,
   type QueryAst,
   type QueryComparisonFilter,
   type QueryDateToken,
@@ -132,7 +133,12 @@ function numericFieldRef(
     throw e;
   }
   if (ref.core || !SUMMABLE_TYPES.has(ref.type)) {
-    throw new QueryFieldError(`${op} по полю '${field}' невозможен: тип '${ref.type}' не числовой`);
+    // Имя типа — человеческое (fieldTypeLabel): сюда доходят и 'array', и 'unfilterable'
+    // (поле агрегата приходит из input тула или из аспекта цели, парсер его не смотрел),
+    // а «тип 'unfilterable'» — внутренний токен ветвления, пользователю он ничего не значит.
+    throw new QueryFieldError(
+      `${op} по полю '${field}' невозможен: тип '${fieldTypeLabel(ref.type)}' не числовой`,
+    );
   }
   return ref;
 }
@@ -228,6 +234,9 @@ interface FieldRef {
   type: FieldType;
   core: boolean;
   enumValues?: string[];
+  /** Для полей аспектов: id аспекта и имя поля — containment строит путь заново, а не поверх expr. */
+  aspect?: string;
+  fieldName?: string;
 }
 
 /**
@@ -261,11 +270,84 @@ function fieldRef(name: string, ctx: CompileContext, aspects: Set<string>): Fiel
     type: info.type,
     core: false,
     enumValues: info.enumValues,
+    aspect: info.aspect,
+    fieldName: name,
   };
 }
 
-/** anyOf: литералы одним IN, date-токены — сравнениями; несколько условий — OR по скобкам (§6.1). */
+/**
+ * Числовой литерал в форме, которую JSON точно отдаст обратно тем же числом: base-10 без
+ * экспоненты и без ведущего `+` (та же форма, что DECIMAL_LITERAL_RE парсера). Экспоненту
+ * не берём намеренно — `::numeric` от `1e100000` падает переполнением уже в рантайме.
+ */
+const NUMERIC_LITERAL_RE = /^-?\d+(\.\d+)?$/;
+
+/**
+ * Одна кодировка искомого элемента: `aspects @> {аспект: {поле: [элемент]}}`.
+ *
+ * Путь строится ЗАНОВО от корня `aspects`, а не поверх `ref.expr`: индексируется только
+ * containment по самой колонке. Подпутевые формы (`aspects->'A'->'f' ? $1` и
+ * `aspects->'A'->'f' @> '[…]'`) GIN-индексом entities_aspects_gin не покрываются —
+ * проверено EXPLAIN на живой базе: Seq Scan обеих даже при enable_seqscan=off, тогда как
+ * `aspects @> jsonb_build_object(…)` даёт Bitmap Index Scan (и с параметрами тоже).
+ *
+ * Все три части — параметрами, включая id аспекта и имя поля: инвариант файла разрешает
+ * им быть литералами (они из реестра), но параметр строже, а jsonb_build_object ключи
+ * параметрами принимает. Касты `::text` обязательны: аргументы объявлены `VARIADIC "any"`,
+ * и без каста Postgres отвечает «could not determine data type of parameter $1».
+ */
+function containsEncoded(aspect: string, field: string, element: SQL): SQL {
+  return sql`aspects @> jsonb_build_object(${aspect}::text, jsonb_build_object(${field}::text, jsonb_build_array(${element})))`;
+}
+
+/**
+ * «Массив внутри аспекта содержит значение» — предикат фильтра по полю-массиву.
+ *
+ * Containment в jsonb строго типизирован: `@> '["5"]'` НЕ найдёт `[5]`. Тип элемента
+ * каталог не несёт (там лишь «массив скаляров»), а литерал грамматики всегда строка —
+ * поэтому числовой на вид литерал ищется в ОБЕИХ кодировках через OR. Ложных срабатываний
+ * это не даёт: лишняя ветка не совпадает никогда (проверено на живой базе — `["5"]` не
+ * находит `[5]`, `[5]` не находит `["5"]`), а обе ветки остаются индексными (BitmapOr из
+ * двух Bitmap Index Scan). Цена — один лишний дизъюнкт и только когда литерал похож на
+ * число; `aliases=такси` компилируется ровно как раньше.
+ */
+function arrayContains(ref: FieldRef, value: string): SQL {
+  const { aspect, fieldName } = ref;
+  if (aspect === undefined || fieldName === undefined) {
+    // Тип 'array' носят только поля аспектов — у core-полей массивов нет.
+    throw new QueryCompileError('поле-массив без пути аспекта — рассинхрон резолва');
+  }
+  const asText = containsEncoded(aspect, fieldName, sql`${value}::text`);
+  if (!NUMERIC_LITERAL_RE.test(value)) return asText;
+  return sql`(${asText} OR ${containsEncoded(aspect, fieldName, sql`${value}::numeric`)})`;
+}
+
+/**
+ * Литералы фильтра по полю-массиву. Date-токены парсер к массиву не пускает
+ * (`aliases=today` — отказ с позицией), поэтому пустой список означает рассинхрон, а не
+ * «условия нет»: молча вернуть здесь `true` значило бы отдать всю таблицу.
+ */
+function arrayLiterals(values: QueryFieldValue[]): string[] {
+  const literals = values.filter((v) => v.kind === 'literal').map((v) => v.value);
+  if (literals.length === 0) {
+    throw new QueryCompileError(
+      'фильтр по полю-массиву без литеральных значений — рассинхрон с парсером',
+    );
+  }
+  return literals;
+}
+
+/**
+ * anyOf: литералы одним IN, date-токены — сравнениями; несколько условий — OR по скобкам
+ * (§6.1). Поле-массив — отдельная ветка: сравнивать со значением там нечего, «равенство»
+ * для него означает «массив содержит» (arrayContains).
+ */
 function compileAnyOf(ref: FieldRef, values: QueryFieldValue[], ctx: CompileContext): SQL {
+  if (ref.type === 'array') {
+    const found = arrayLiterals(values).map((v) => arrayContains(ref, v));
+    const only = found[0] as SQL;
+    return found.length === 1 ? only : sql`(${sql.join(found, sql` OR `)})`;
+  }
   const conds: SQL[] = [];
   const literals = values.filter((v) => v.kind === 'literal').map((v) => v.value);
   if (literals.length > 0) {
@@ -288,6 +370,15 @@ function compileAnyOf(ref: FieldRef, values: QueryFieldValue[], ctx: CompileCont
  * date-токены в noneOf — отрицание их сравнений внутри той же скобки.
  */
 function compileNoneOf(ref: FieldRef, values: QueryFieldValue[], ctx: CompileContext): SQL {
+  if (ref.type === 'array') {
+    // Правило «NULL проходит» (решение 10) выполняется само: NOT (@>) истинно и для
+    // сущностей, у которых этого аспекта нет вовсе, — отдельная ветка IS NULL не нужна.
+    // Цена — NOT снимает индекс, отрицание по массиву остаётся seq-scan'ом; это сознательно:
+    // отрицание редко и обычно стоит рядом с сужающим условием.
+    const missing = arrayLiterals(values).map((v) => sql`NOT (${arrayContains(ref, v)})`);
+    const only = missing[0] as SQL;
+    return missing.length === 1 ? only : sql`(${sql.join(missing, sql` AND `)})`;
+  }
   const parts: SQL[] = [];
   const literals = values.filter((v) => v.kind === 'literal').map((v) => v.value);
   if (literals.length > 0) {
@@ -409,6 +500,14 @@ function sortCast(ref: FieldRef): SQL {
       return sql`(${ref.expr})::numeric`;
     case 'timestamp':
       return sql`(${ref.expr})::timestamptz`;
+    case 'array':
+    case 'unfilterable':
+      // Парсер такую сортировку отсекает (parse.ts, parseSortBy) — сюда попасть можно
+      // только рассинхроном, и тогда молчать нельзя: раньше default сортировал бы по
+      // тексту JSON, то есть по случайному порядку сериализации.
+      throw new QueryCompileError(
+        `сортировка по полю типа '${fieldTypeLabel(ref.type)}' — рассинхрон с парсером`,
+      );
     default:
       return sql`(${ref.expr})`;
   }

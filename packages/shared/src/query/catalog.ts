@@ -32,6 +32,20 @@ export interface FieldInfo {
   enumValues?: string[];
 }
 
+/**
+ * Как назвать тип поля в тексте ошибки. `array`/`unfilterable` — внутренние имена
+ * ветвления, человеку они ничего не говорят; остальные типы — слова грамматики §6.1
+ * и печатаются как есть. Живёт рядом с самим типом, потому что читателей двое:
+ * парсер (отказ в фильтре и в sortBy) и компилятор (отказ агрегата, §11.3).
+ */
+const TYPE_LABELS: Partial<Record<FieldType, string>> = {
+  array: 'массив',
+  unfilterable: 'не скаляр',
+};
+export function fieldTypeLabel(type: FieldType): string {
+  return TYPE_LABELS[type] ?? type;
+}
+
 export interface FieldCatalog {
   fields: Record<string, FieldInfo[]>;
 }
@@ -67,7 +81,8 @@ export function buildFieldCatalog(
       (def.schema as { properties?: Record<string, Record<string, unknown>> }).properties ?? {};
     for (const [name, prop] of Object.entries(props)) {
       const info: FieldInfo = { aspect: def.id, type: propType(prop) };
-      if (Array.isArray(prop.enum)) info.enumValues = prop.enum as string[];
+      const enumValues = enumTexts(prop.enum);
+      if (enumValues) info.enumValues = enumValues;
       let list = fields[name];
       if (!list) {
         list = [];
@@ -77,6 +92,27 @@ export function buildFieldCatalog(
     }
   }
   return { fields };
+}
+
+/**
+ * Значения enum в ТЕКСТОВОМ виде — ровно в том, в каком их вернёт `aspects->'A'->>'f'`:
+ * сортировка enum сравнивает CASE именно с этой текстовой проекцией (§6.1, compile.ts),
+ * поэтому `enum: [1, 2]` обязан приехать сюда как `['1','2']`, а не числами. Раньше сюда
+ * шёл голый `prep.enum as string[]`: тип поля был ложью, и сортировка по числовому enum
+ * пользовательского аспекта падала TypeError на `.replaceAll` (а пустой `enum: []` давал
+ * `CASE expr END` — синтаксическую ошибку SQL). Не-скаляр в enum (объект, массив, null)
+ * текстовой проекции не имеет: порядка объявления для такого поля просто нет, и
+ * сортировка честно откатывается к обычному касту.
+ */
+function enumTexts(value: unknown): string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const out: string[] = [];
+  for (const v of value) {
+    if (typeof v === 'string') out.push(v);
+    else if (typeof v === 'number' || typeof v === 'boolean') out.push(String(v));
+    else return undefined;
+  }
+  return out;
 }
 
 /**

@@ -136,5 +136,36 @@
     "query": "aspect=orbis/financial, occurred_on>2026-06-01, due_date<2026-07-01",
     "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND aspects->'orbis/financial'->>'occurred_on' > $2 AND aspects->'orbis/task'->>'due_date' < $3 LIMIT $4",
     "params": ["orbis/financial", "2026-06-01", "2026-07-01", 500]
+  },
+  {
+    "name": "Поле-массив, одно значение: aliases=такси — containment, а не текст всего массива",
+    "query": "aspect=orbis/category, aliases=такси",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND aspects @> jsonb_build_object($2::text, jsonb_build_object($3::text, jsonb_build_array($4::text))) LIMIT $5",
+    "params": ["orbis/category", "orbis/category", "aliases", "такси", 500],
+    "countSql": "SELECT count(*) FROM entities WHERE true AND NOT archived AND aspects ? $1 AND aspects @> jsonb_build_object($2::text, jsonb_build_object($3::text, jsonb_build_array($4::text)))",
+    "countParams": ["orbis/category", "orbis/category", "aliases", "такси"]
+  },
+  {
+    "name": "Поле-массив, OR значений: aliases=такси|метро",
+    "query": "aspect=orbis/category, aliases=такси|метро",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND (aspects @> jsonb_build_object($2::text, jsonb_build_object($3::text, jsonb_build_array($4::text))) OR aspects @> jsonb_build_object($5::text, jsonb_build_object($6::text, jsonb_build_array($7::text)))) LIMIT $8",
+    "params": [
+      "orbis/category",
+      "orbis/category",
+      "aliases",
+      "такси",
+      "orbis/category",
+      "aliases",
+      "метро",
+      500
+    ]
+  },
+  {
+    "name": "Поле-массив, отрицание: aliases=!такси — NOT containment, без ветки IS NULL",
+    "query": "aspect=orbis/category, aliases=!такси",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 AND NOT (aspects @> jsonb_build_object($2::text, jsonb_build_object($3::text, jsonb_build_array($4::text)))) LIMIT $5",
+    "params": ["orbis/category", "orbis/category", "aliases", "такси", 500],
+    "countSql": "SELECT count(*) FROM entities WHERE true AND NOT archived AND aspects ? $1 AND NOT (aspects @> jsonb_build_object($2::text, jsonb_build_object($3::text, jsonb_build_array($4::text))))",
+    "countParams": ["orbis/category", "orbis/category", "aliases", "такси"]
   }
 ]

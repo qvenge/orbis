@@ -106,6 +106,103 @@ describe('golden: compileLatest — последнее значение поля
   });
 });
 
+// Поле-массив внутри аспекта (orbis/category.aliases). До этой задачи каталог выдавал
+// его за строку, и `aspects->'A'->>'aliases' IN ($1)` сравнивал ТЕКСТ всего массива:
+// `aliases=такси` давал тихий ноль, `aliases=!такси` возвращал все 12 категорий подряд.
+describe('поле-массив: containment вместо текстового равенства', () => {
+  const compileFor = (query: string) => {
+    const parsed = parseQuery(query, catalog);
+    if (!parsed.ok) throw new Error(`невалидный запрос в тесте: ${parsed.error.message}`);
+    return dialect.sqlToQuery(compileQuery(parsed.ast, CTX));
+  };
+
+  test('фильтр по полю-массиву компилируется в containment, а не в текстовое равенство', () => {
+    const c = compileFor('aspect=orbis/category, aliases=такси');
+    expect(c.sql).toContain('aspects @> jsonb_build_object');
+    expect(c.sql).not.toContain(`->>'aliases'`);
+    expect(c.params).toContain('такси');
+    // Путь строится параметрами от корня aspects — то, что делает предикат индексным.
+    expect(c.params).toContain('orbis/category');
+    expect(c.params).toContain('aliases');
+  });
+
+  test('несколько значений массива — OR по containment', () => {
+    const c = compileFor('aspect=orbis/category, aliases=такси|метро');
+    expect(c.sql.match(/jsonb_build_object/g)?.length).toBeGreaterThanOrEqual(4);
+    expect(c.sql).toContain(' OR ');
+    expect(c.params).toContain('такси');
+    expect(c.params).toContain('метро');
+  });
+
+  test('отрицание по массиву — NOT containment (сущности без аспекта проходят)', () => {
+    const c = compileFor('aspect=orbis/category, aliases=!такси');
+    expect(c.sql).toContain('NOT (aspects @> jsonb_build_object');
+    // Ветки `IS NULL` тут нет намеренно: NOT (@>) истинно и без аспекта вовсе.
+    expect(c.sql).not.toContain('IS NULL');
+  });
+
+  test('несколько отрицаний — AND по NOT containment', () => {
+    const c = compileFor('aspect=orbis/category, aliases=!такси&!метро');
+    expect(c.sql.match(/NOT \(aspects @> jsonb_build_object/g)?.length).toBe(2);
+  });
+
+  test('числовой на вид литерал ищется в обеих кодировках jsonb: "5" и 5', () => {
+    // Containment строго типизирован — `@> '["5"]'` не находит `[5]`. Тип элемента
+    // каталог не несёт, поэтому компилятор перебирает обе кодировки; ложных
+    // срабатываний нет — «чужая» ветка не совпадает никогда (проверено на живой базе).
+    const numeric = buildFieldCatalog([
+      {
+        id: 'x/probe',
+        schema: { properties: { nums: { type: 'array', items: { type: 'integer' } } } },
+      },
+    ]);
+    const parsed = parseQuery('aspect=x/probe, nums=5', numeric);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const c = dialect.sqlToQuery(compileQuery(parsed.ast, { ...CTX, catalog: numeric }));
+    expect(c.sql).toContain('jsonb_build_array($4::text)');
+    expect(c.sql).toContain('jsonb_build_array($7::numeric)');
+    // Нечисловой литерал лишней ветки не получает — обычный путь не дорожает.
+    const plain = compileFor('aspect=orbis/category, aliases=такси');
+    expect(plain.sql).not.toContain('::numeric');
+  });
+
+  test('сортировка по массиву недостижима парсером, но компилятор не молчит', () => {
+    // Раньше default sortCast сортировал бы по тексту JSON — по порядку сериализации.
+    const parsed = parseQuery('aspect=orbis/category, sortBy=title:asc', catalog);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const broken = { ...parsed.ast, sortBy: [{ field: 'aliases', direction: 'asc' as const }] };
+    expect(() => compileQuery(broken, CTX)).toThrow(QueryCompileError);
+    // Внутреннее имя типа наружу не выпускается — как и в отказах парсера.
+    expect(() => compileQuery(broken, CTX)).toThrow(/типа 'массив'/);
+  });
+
+  test('агрегат по полю-массиву отказывает человеческим именем типа', () => {
+    const parsed = parseQuery('aspect=orbis/category', catalog);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(() => compileSum(parsed.ast, CTX, 'aliases')).toThrow(/тип 'массив' не числовой/);
+    const sched = parseQuery('aspect=orbis/schedule', catalog);
+    expect(sched.ok).toBe(true);
+    if (!sched.ok) return;
+    expect(() => compileSum(sched.ast, CTX, 'recurrence')).toThrow(/тип 'не скаляр' не числовой/);
+  });
+
+  test('enum с числовыми значениями сортируется, а не падает TypeError', () => {
+    // Каталог клал в enumValues ЧИСЛА при объявленном типе string[], и CASE-ветка
+    // sortItem звала .replaceAll на числе — 500 на ровном месте.
+    const numeric = buildFieldCatalog([
+      { id: 'x/probe', schema: { properties: { level: { type: 'integer', enum: [3, 1, 2] } } } },
+    ]);
+    const parsed = parseQuery('aspect=x/probe, sortBy=level:asc', numeric);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const c = dialect.sqlToQuery(compileQuery(parsed.ast, { ...CTX, catalog: numeric }));
+    expect(c.sql).toContain(`WHEN '3' THEN 0 WHEN '1' THEN 1 WHEN '2' THEN 2`);
+  });
+});
+
 describe('this вне контекста сущности — структурная ошибка компиляции', () => {
   const noThis = { ...CTX, thisEntityId: null };
   test('children_of=this при thisEntityId=null', () => {

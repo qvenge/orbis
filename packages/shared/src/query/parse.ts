@@ -12,7 +12,7 @@
  */
 
 import type { FieldCatalog, FieldType } from './catalog';
-import { CORE_FIELDS } from './catalog';
+import { CORE_FIELDS, fieldTypeLabel } from './catalog';
 import type {
   QueryAst,
   QueryComparableValue,
@@ -26,7 +26,7 @@ import type {
 } from './grammar';
 
 export type { FieldCatalog, FieldInfo, FieldType } from './catalog';
-export { buildFieldCatalog, CORE_FIELDS } from './catalog';
+export { buildFieldCatalog, CORE_FIELDS, fieldTypeLabel } from './catalog';
 
 export type ParseResult =
   | { ok: true; ast: QueryAst }
@@ -362,19 +362,6 @@ function resolveField(key: string, keyOffset: number, ctx: Ctx, allowTitle = fal
 }
 
 /**
- * Как назвать тип поля в тексте ошибки. `array`/`unfilterable` — внутренние имена
- * ветвления компилятора, человеку они ничего не говорят; остальные типы — слова
- * грамматики §6.1 и печатаются как есть.
- */
-const TYPE_LABELS: Partial<Record<FieldType, string>> = {
-  array: 'массив',
-  unfilterable: 'не скаляр',
-};
-function typeLabel(type: FieldType): string {
-  return TYPE_LABELS[type] ?? type;
-}
-
-/**
  * Поля, для которых грамматика фильтра не определена: объект, разнотипный union,
  * массив не-скаляров. Раньше каталог выдавал их за строки, и `->>'поле'` сравнивал
  * текст сериализации — тихий ноль на равенстве и ВСЕ строки на отрицании. Отказ
@@ -548,7 +535,7 @@ function parseSortBy(p: ParsedPart, ctx: Ctx): QuerySortField[] {
     const field = resolveField(rawField.text, rawField.offset, ctx, true);
     if (field.type === 'array' || field.type === 'unfilterable') {
       fail(
-        `sortBy: по полю '${field.name}' сортировать нельзя — это ${typeLabel(field.type)}`,
+        `sortBy: по полю '${field.name}' сортировать нельзя — это ${fieldTypeLabel(field.type)}`,
         rawField.offset,
       );
     }
@@ -620,7 +607,7 @@ function parseComparable(el: Part, field: ResolvedField): QueryComparableValue {
     return { kind: 'decimal', value: text };
   }
   fail(
-    `операторы >/< и диапазон .. применимы к числовым полям, date-полям аспектов и core-timestamp; поле '${field.name}' имеет тип ${typeLabel(field.type)}`,
+    `операторы >/< и диапазон .. применимы к числовым полям, date-полям аспектов и core-timestamp; поле '${field.name}' имеет тип ${fieldTypeLabel(field.type)}`,
     el.offset,
   );
 }
@@ -676,7 +663,7 @@ function parseValueElement(el: Part, field: ResolvedField): QueryFieldValue {
   if (DATE_TOKENS.has(text as QueryDateToken)) {
     if (field.type !== 'date' && field.type !== 'timestamp') {
       fail(
-        `date-токен '${text}' применим только к полям типа date/timestamp; поле '${field.name}' имеет тип ${typeLabel(field.type)}`,
+        `date-токен '${text}' применим только к полям типа date/timestamp; поле '${field.name}' имеет тип ${fieldTypeLabel(field.type)}`,
         el.offset,
       );
     }

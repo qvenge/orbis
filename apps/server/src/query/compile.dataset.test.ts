@@ -46,6 +46,9 @@ const ID = {
   taskWaiting1: '019eb300-d5e1-7000-8000-000000000014',
   taskWaiting2: '019eb300-d5e1-7000-8000-000000000015',
   fin030: '019eb300-d5e1-7000-8000-000000000016',
+  catTransport: '019eb300-d5e1-7000-8000-000000000019',
+  catFood: '019eb300-d5e1-7000-8000-00000000001a',
+  catSalary: '019eb300-d5e1-7000-8000-00000000001b',
   finPlanned: '019eb300-d5e1-7000-8000-000000000017',
   finFact: '019eb300-d5e1-7000-8000-000000000018',
 } as const;
@@ -328,6 +331,64 @@ const DATASET_A: (typeof entities.$inferInsert)[] = [
     createdAt: new Date('2026-06-27T13:00:00Z'),
     updatedAt: new Date('2026-07-01T13:30:00Z'),
   },
+  // Три стартовые категории 02 §7.1 — ДОСЛОВНЫЕ aliases сидера (seed/categories.ts).
+  // Поле-массив внутри аспекта: `->>'aliases'` отдавал текст ВСЕГО массива, поэтому
+  // `aliases=такси` давал тихий ноль, а `aliases=!такси` — все категории подряд.
+  {
+    id: ID.catTransport,
+    ownerId: USER_A,
+    title: 'Транспорт',
+    tags: ['category'],
+    aspects: {
+      'orbis/category': {
+        icon: '🚕',
+        color: '#5a9ee0',
+        aliases: ['транспорт', 'transport', 'такси', 'метро'],
+        spend_class: 'fixed',
+      },
+    },
+    createdAt: new Date('2026-06-20T10:00:00Z'),
+    updatedAt: new Date('2026-07-01T10:00:00Z'),
+  },
+  {
+    id: ID.catFood,
+    ownerId: USER_A,
+    title: 'Еда',
+    tags: ['category'],
+    aspects: {
+      'orbis/category': {
+        icon: '🍔',
+        color: '#e0885a',
+        aliases: [
+          'еда',
+          'food',
+          'продукты',
+          'groceries',
+          'обед',
+          'lunch',
+          'ужин',
+          'завтрак',
+          'кофе',
+        ],
+        spend_class: 'discretionary',
+      },
+    },
+    createdAt: new Date('2026-06-20T10:01:00Z'),
+    updatedAt: new Date('2026-07-01T10:01:00Z'),
+  },
+  {
+    // Доходная категория: spend_class отсутствует (§3.6) — заодно сущность с аспектом,
+    // но БЕЗ искомого алиаса: отрицание обязано её вернуть.
+    id: ID.catSalary,
+    ownerId: USER_A,
+    title: 'Зарплата',
+    tags: ['category'],
+    aspects: {
+      'orbis/category': { icon: '💰', color: '#6fe05a', aliases: ['зарплата', 'salary'] },
+    },
+    createdAt: new Date('2026-06-20T10:02:00Z'),
+    updatedAt: new Date('2026-07-01T10:02:00Z'),
+  },
 ];
 
 /**
@@ -515,6 +576,31 @@ describe('датасет §6.2: состав И порядок под RLS', () =
     ]);
     // Симметрия: фильтр «План» — только явный true
     expect(ids(await run(USER_A, 'aspect=orbis/financial, planned=true'))).toEqual([ID.finPlanned]);
+  });
+
+  test('2d. поле-массив (aliases): containment находит ОДНУ категорию, отрицание — остальные', async () => {
+    // Главное доказательство задачи, и на живой базе, а не по строке SQL: `->>'aliases'`
+    // сравнивал текст всего массива, поэтому `=такси` давал 0 строк, а `!такси` — ВСЕ.
+    expect(ids(await run(USER_A, 'aspect=orbis/category, aliases=такси'))).toEqual([
+      ID.catTransport,
+    ]);
+    // Отрицание: «Транспорт» ушёл, прочие категории на месте (ветки IS NULL в SQL нет —
+    // NOT (@>) сам пропускает и сущности без этого аспекта, решение 10).
+    expect(
+      ids(await run(USER_A, 'aspect=orbis/category, aliases=!такси, sortBy=title:asc')),
+    ).toEqual([ID.catFood, ID.catSalary]);
+    // OR значений — объединение, а не пересечение (§6.1)
+    expect(
+      ids(await run(USER_A, 'aspect=orbis/category, aliases=такси|кофе, sortBy=title:asc')),
+    ).toEqual([ID.catFood, ID.catTransport]);
+    // Два фильтра по одному полю — AND: обоих алиасов требует «Транспорт» и находит
+    expect(ids(await run(USER_A, 'aspect=orbis/category, aliases=метро, aliases=такси'))).toEqual([
+      ID.catTransport,
+    ]);
+    // Элемент ищется ЦЕЛИКОМ и точно: ни подстрока алиаса, ни другой регистр не проходят
+    for (const q of ['aliases=такс', 'aliases=Такси']) {
+      expect(await run(USER_A, `aspect=orbis/category, ${q}`)).toHaveLength(0);
+    }
   });
 
   test('3. курсор агента (§9.3): updated_at> середины вставки — только поздняя половина', async () => {
