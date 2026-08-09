@@ -30,6 +30,9 @@ export function registerRetrySend(fn: RetrySend) {
   sendImpl = fn;
 }
 
+/** Идущий слив (см. flushNow): на весь модуль один, буфер и store тоже синглтоны. */
+let inFlight: Promise<number> | null = null;
+
 type RetryState = {
   size: number;
   pending: QueuedCreate[];
@@ -59,10 +62,39 @@ export const useRetryBuffer = create<RetryState>((set) => ({
     return op;
   },
   flushNow: async () => {
-    if (!sendImpl) return 0;
-    const confirmed = await buffer.flush(sendImpl);
-    set(snapshot());
-    return confirmed;
+    const send = sendImpl;
+    if (!send) return 0;
+    // Слив сериализован: два параллельных вызова видели ОДИН снимок очереди
+    // (lib/retry-buffer/index.ts удаляет запись только ПОСЛЕ await send) и слали каждую
+    // операцию дважды. Сервер идемпотентен по client-UUID, поэтому дублей сущностей не
+    // возникало, но лишние запросы приходились ровно на момент, когда сети нет.
+    // Опоздавший вызов разделяет промис ведущего, а не ждёт очереди: слив ниже сам
+    // дочитывает очередь до конца, поэтому «дождаться этого» и «дождаться своего» —
+    // одно и то же.
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      let total = 0;
+      try {
+        // Проходов может быть несколько: очередь пополняется ВО ВРЕМЯ слива — fast-path
+        // кладёт запись и тут же зовёт flush, попадая в этот самый разделённый промис.
+        // Без доп. прохода такая запись ждала бы следующего триггера, а их наперечёт.
+        for (;;) {
+          const before = storage.load();
+          if (before.length === 0) break;
+          total += await buffer.flush(send);
+          const left = new Set(storage.load().map((q) => q.clientId));
+          // Прогресс = ушла хоть одна запись ЭТОГО снимка. Сравнивать размеры очереди
+          // нельзя: пополнение во время слива читалось бы как «сеть по-прежнему лежит»
+          // (и наоборот — вечный цикл, если бы условие смотрело только на пустоту).
+          if (before.every((q) => left.has(q.clientId))) break;
+        }
+        return total;
+      } finally {
+        set(snapshot());
+        inFlight = null;
+      }
+    })();
+    return inFlight;
   },
   cancel: (clientId) => {
     buffer.cancel(clientId);

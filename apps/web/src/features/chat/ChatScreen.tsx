@@ -1,7 +1,7 @@
 import { Clock } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
-import { useOnline, useRetryBuffer } from '../../state/retry';
+import { useFlushBuffer, useOnline, useRetryBuffer } from '../../state/retry';
 import { trpc } from '../../trpc';
 import { Composer } from './Composer';
 import { MessageList, ThreadSkeleton } from './MessageList';
@@ -43,15 +43,41 @@ function ThreadView({ threadId }: { threadId: string }) {
   const { submit, reparse, retry, isSending } = useFastPath(threadId);
   const online = useOnline();
   const pending = useRetryBuffer((s) => s.size);
+  const flushBuffer = useFlushBuffer();
+  const [flushing, setFlushing] = useState(false);
+
+  // Досыл руками. До этого «Ждут отправки: N» был мёртвой надписью: автослив бывает только
+  // на старте приложения и по событию 'online', и вернувшаяся сеть без этих событий
+  // (спящий Wi-Fi, прокси) оставляла человека с единственным средством — перезагрузкой.
+  // Лишним триггером гонки это не делает: flushNow сериализован (state/retry.ts).
+  async function flushPending() {
+    setFlushing(true);
+    try {
+      await flushBuffer();
+    } finally {
+      setFlushing(false);
+    }
+  }
 
   return (
     <div className="flex h-full flex-col">
       {pending > 0 && (
-        <div data-testid="pending-indicator" className="flex justify-center pt-2">
-          <span className="flex items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-2xs text-text-secondary">
+        <div className="flex justify-center pt-2">
+          <button
+            type="button"
+            data-testid="pending-indicator"
+            onClick={() => void flushPending()}
+            // Офлайн и во время слива досылать нечем — кнопка гаснет, оставаясь тем же
+            // статусом на экране.
+            disabled={!online || flushing}
+            // Имя включает видимый текст (WCAG 2.5.3 «Label in Name») и договаривает
+            // действие: сама таблетка читается как статус, а нажатие — досыл.
+            aria-label={`Ждут отправки: ${pending}. Отправить сейчас`}
+            className="flex cursor-pointer items-center gap-1.5 rounded-full bg-surface-2 px-2.5 py-1 text-2xs text-text-secondary transition outline-hidden hover:opacity-90 focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-default disabled:opacity-60 disabled:hover:opacity-60"
+          >
             <Clock size={11} aria-hidden />
             Ждут отправки: {pending}
-          </span>
+          </button>
         </div>
       )}
       {isLoading ? (
