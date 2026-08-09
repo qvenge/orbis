@@ -316,12 +316,21 @@ test('удаление последнего поля сортировки уби
 });
 
 // Сортировка уже фильтров по типу: линейного порядка нет ни у массива, ни у объекта/union,
-// и парсер отказывает по обоим (`sortBy=aliases:asc` — «это массив»). Селект берёт имена из
-// ВСЕГО каталога, не только из выбранных аспектов, поэтому проверяем все три сразу.
+// и парсер отказывает по обоим (`sortBy=aliases:asc` — «это 'массив'»).
+//
+// Все три аспекта названы в запросе НАМЕРЕННО, хотя сегодня селект и так берёт имена из
+// всего каталога независимо от `aspect=`. На одном `aspect=orbis/category` отсутствие
+// `recurrence` и `progress_source` доказывало бы ровно это свойство селекта, а не отказ по
+// типу: почини кто-нибудь сужение сортировки до выбранных аспектов — и две трети теста
+// выродились бы в тавтологию, продолжая зеленеть. Соседние поля тех же аспектов стоят
+// положительным контролем: раз `spend_class`, `location` и `target_value` в селекте есть,
+// значит каталог доехал и отсеян именно тип.
 test('в сортировку не предлагаются ни массив, ни объект, ни union', async () => {
-  await openForm('aspect=orbis/category');
+  await openForm('aspect=orbis/category, aspect=orbis/schedule, aspect=orbis/goal');
   const add = screen.getByLabelText('Добавить поле сортировки');
-  expect(within(add).getByRole('option', { name: 'spend_class' })).toBeInTheDocument();
+  for (const name of ['spend_class', 'location', 'target_value']) {
+    expect(within(add).getByRole('option', { name })).toBeInTheDocument();
+  }
   for (const name of ['aliases', 'recurrence', 'progress_source']) {
     expect(within(add).queryByRole('option', { name })).toBeNull();
   }
