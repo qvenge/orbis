@@ -50,6 +50,11 @@ import { queryContext } from '../query/context';
  *   упал там (рассинхрон типа в реестре, таймаут), либо не разобралось значение на
  *   выходе агрегата (numeric NaN, непредставимая доля). Причину различают не ярлыком,
  *   а логом — оба места пишут `console.error` с разным текстом. Молчать нельзя.
+ *
+ * Логируются ВСЕ четыре, а не один compute_failed. Ярлык уезжает клиенту, но клиент —
+ * не тот, кто чинит: опечатку в поле цели разбирает владелец сервера по жалобе «полоса
+ * пустая», и первое, что он делает, — смотрит лог. Три конфигурационных ярлыка молчали,
+ * и разбор начинался с чтения аспекта в базе руками (см. logFailure ниже).
  */
 export type GoalProgressUnsupported =
   | 'array_field'
@@ -79,10 +84,63 @@ export interface GoalProgress {
 const GOAL_ASPECT = 'orbis/goal';
 
 /**
+ * Счётчик уже показанных отказов — СТРОГО in-memory, и это ограничение, а не вкус.
+ * progress.test.ts пинит счётчиком запросов драйвера ровно 6 запросов на обычную
+ * сущность и 10 на цель; любое состояние в БД (таблица дедупа, advisory lock) добавило
+ * бы к каждому чтению сломанной цели по запросу и уронило бы этот пин. Времени в ключе
+ * тоже нет — окно «раз в N минут» сделало бы лог зависимым от системных часов, на
+ * которые тесты проекта намеренно не полагаются.
+ *
+ * Плата за in-memory честная: счётчик живёт в процессе, при рестарте и в каждом воркере
+ * отсчёт начинается заново. Для «не залить лог» этого достаточно, для точной статистики
+ * отказов — нет; она и не задача лога.
+ */
+const seenFailures = new Map<string, number>();
+
+/**
+ * Потолок различных пар «место + цель». Ключей ровно столько, сколько СЛОМАННЫХ целей
+ * в процессе, то есть в норме единицы; потолок стоит от вырожденного случая (скрипт
+ * плодит битые цели пачкой) — иначе Map рос бы, пока живёт процесс. Переполнение
+ * сбрасывает счётчики целиком: следующая порция отказов снова напечатается по разу —
+ * это ровно то поведение, которого от лога и ждут, а не тихое молчание навсегда.
+ */
+const MAX_TRACKED_FAILURES = 1000;
+
+/**
+ * Печатает отказ ОДИН раз на пару «место в коде + цель», дальше — только каждый сотый,
+ * счётчиком: шторм обязан быть виден, но поток лога не должен расти линейно с числом
+ * чтений (сломанную цель открывают снова и снова — её же чинят).
+ *
+ * Ключ — МЕСТО лога плюс цель, а НЕ ярлык отказа. `compute_failed` отдают два разных
+ * catch'а с разным диагнозом («агрегат не выполнился» vs «доля не посчиталась»), и ключ
+ * по ярлыку схлопнул бы их в одну строку: второй отказ той же цели навсегда остался бы
+ * без своего текста — при том что весь смысл двух catch'ей именно в различии текста.
+ *
+ * `goalId` — id самой цели (`ctx.thisEntityId`); NULL бывает только у прямых вызовов
+ * computeGoalProgress мимо entity.get (тесты, будущие вызывающие) — такие отказы делят
+ * один ключ на место, и это честно: без id цели различать их всё равно нечем.
+ */
+function logFailure(site: string, goalId: string | null, message: string, cause?: unknown): void {
+  const key = `${site} ${goalId ?? ''}`;
+  const seen = (seenFailures.get(key) ?? 0) + 1;
+  if (seen === 1 && seenFailures.size >= MAX_TRACKED_FAILURES) seenFailures.clear();
+  seenFailures.set(key, seen);
+  const text = `[goals/progress] ${message}${goalId === null ? '' : ` (цель ${goalId})`}`;
+  if (seen === 1) {
+    if (cause === undefined) console.error(text);
+    else console.error(text, cause);
+  } else if (seen % 100 === 0) {
+    console.error(`${text} — повторов: ${seen}`);
+  }
+}
+
+/**
  * Ветка по наличию аспекта: сущность без `orbis/goal` не платит за расчёт НИ ОДНИМ
  * запросом — ни каталога, ни таймзоны, ни агрегата (доказано счётчиком запросов
  * драйвера в progress.test.ts). Аспект, не проходящий свою же схему (drift реестра,
- * правка мимо executor'а), прогресса не даёт, но и открыть сущность не мешает.
+ * правка мимо executor'а), прогресса не даёт, но и открыть сущность не мешает — и
+ * оставляет строку в логе: наружу этот выход неотличим от «аспекта цели вовсе нет»
+ * (обоим соответствует отсутствие прогресса), поэтому лог здесь — единственная улика.
  * Вызывается ТОЛЬКО под withIdentity — изоляция целиком на RLS.
  */
 export async function goalProgressFor(
@@ -93,7 +151,15 @@ export async function goalProgressFor(
   const raw = entity.aspects[GOAL_ASPECT];
   if (raw === undefined) return undefined;
   const goal = goalAspectSchema.safeParse(raw);
-  if (!goal.success) return undefined;
+  if (!goal.success) {
+    logFailure(
+      'aspect_schema',
+      entity.id,
+      `аспект ${GOAL_ASPECT} не проходит свою же схему — прогресса не будет`,
+      goal.error,
+    );
+    return undefined;
+  }
   // `this` источника прогресса — сама цель: query-блок принадлежит ей (§6.1)
   const cctx = await queryContext(tx, ownerId, entity.id);
   return computeGoalProgress(tx, cctx, goal.data);
@@ -119,14 +185,30 @@ export async function computeGoalProgress(
     unsupported,
   });
 
-  // Массив — СИНТАКСИЧЕСКИ, до компиляции (§12 п.6). Каталог типизирует любой массив
-  // как строку, поэтому компилятор отверг бы `sets[].weight` как «поле не найдено» —
+  // Массив — СИНТАКСИЧЕСКИ, до компиляции (§12 п.6). Каталог строит поля из top-level
+  // `properties` схемы аспекта, поэтому пути внутрь элемента (`sets[].weight`) в нём нет
+  // вовсе, а само поле-массив скаляров (тип `array`) числовым не считается — компилятор
+  // отверг бы такое поле как «не разрешилось каталогом» или «тип не числовой», то есть
   // сообщением, неотличимым от опечатки. Осознанное ограничение обязано выглядеть
   // осознанным ограничением, а не опечаткой пользователя.
-  if (src.aggregate !== 'count' && src.field.includes('[]')) return failed('array_field');
+  if (src.aggregate !== 'count' && src.field.includes('[]')) {
+    logFailure(
+      'array_field',
+      ctx.thisEntityId,
+      `отказ array_field: поле '${src.field}' указывает внутрь JSONB-массива, механизм целей такие поля не считает (§12 п.6)`,
+    );
+    return failed('array_field');
+  }
 
   const parsed = parseQuery(src.query, ctx.catalog);
-  if (!parsed.ok) return failed('invalid_query');
+  if (!parsed.ok) {
+    logFailure(
+      'parse',
+      ctx.thisEntityId,
+      `отказ invalid_query: запрос '${src.query}' не разобрался грамматикой §6.1 — ${parsed.error.message} (позиция ${parsed.error.position})`,
+    );
+    return failed('invalid_query');
+  }
 
   let compiled: SQL;
   try {
@@ -137,9 +219,21 @@ export async function computeGoalProgress(
           ? compileSum(parsed.ast, ctx, src.field)
           : compileLatest(parsed.ast, ctx, src.field);
   } catch (e) {
-    // QueryFieldError — подкласс QueryCompileError, порядок проверок значим
-    if (e instanceof QueryFieldError) return failed('invalid_field');
-    if (e instanceof QueryCompileError) return failed('invalid_query');
+    // QueryFieldError — подкласс QueryCompileError, порядок проверок значим.
+    // Сообщения компилятора уже человеческие и называют поле/тип — своего текста поверх
+    // им не нужно, нужен только ярлык, по которому строку ищут в логе.
+    if (e instanceof QueryFieldError) {
+      logFailure('compile_field', ctx.thisEntityId, `отказ invalid_field: ${e.message}`);
+      return failed('invalid_field');
+    }
+    if (e instanceof QueryCompileError) {
+      logFailure(
+        'compile_query',
+        ctx.thisEntityId,
+        `отказ invalid_query: запрос '${src.query}' не скомпилировался — ${e.message}`,
+      );
+      return failed('invalid_query');
+    }
     throw e;
   }
 
@@ -163,7 +257,12 @@ export async function computeGoalProgress(
     // Молча гасить нельзя (конвенция fail-soft-catch сервера): без этой строки
     // `compute_failed` в проде недиагностируем, а программная ошибка в компиляте
     // выглядела бы как «просто не посчиталось» разом у ВСЕХ целей и без сигнала.
-    console.error(`[goals/progress] агрегат ${src.aggregate} не выполнился:`, e);
+    logFailure(
+      'aggregate',
+      ctx.thisEntityId,
+      `отказ compute_failed: агрегат ${src.aggregate} не выполнился`,
+      e,
+    );
     return failed('compute_failed');
   }
 
@@ -181,8 +280,10 @@ export async function computeGoalProgress(
     decRatio(current, target);
     return { current, target };
   } catch (e) {
-    console.error(
-      `[goals/progress] доля не посчиталась (current='${current}', target='${target}'):`,
+    logFailure(
+      'ratio',
+      ctx.thisEntityId,
+      `отказ compute_failed: доля не посчиталась (current='${current}', target='${target}')`,
       e,
     );
     return failed('compute_failed');

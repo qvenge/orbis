@@ -13,7 +13,7 @@ import { withIdentity } from '../db/with-identity';
 import { queryContext } from '../query/context';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
-import { computeGoalProgress } from './progress';
+import { computeGoalProgress, type GoalProgressUnsupported } from './progress';
 
 requireEnv();
 
@@ -53,6 +53,24 @@ function progressOf(user: string, goal: GoalAspect, thisEntityId: string | null 
     const cctx = await queryContext(tx, user, thisEntityId);
     return computeGoalProgress(tx, cctx, goal);
   });
+}
+
+/**
+ * Строки console.error за время вызова. Лог отказа — ЧАСТЬ контракта расчёта (§11.3):
+ * наружу отказ уезжает одним ярлыком на четыре разных беды, и всё, чем их различает
+ * владелец сервера, — это текст в логе. Поэтому его проверяют тестом, а не глазами.
+ */
+async function captureErrors<T>(fn: () => Promise<T>): Promise<[T, string[]]> {
+  const logged: string[] = [];
+  const realError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map((a) => String(a)).join(' '));
+  };
+  try {
+    return [await fn(), logged];
+  } finally {
+    console.error = realError;
+  }
 }
 
 beforeAll(async () => {
@@ -311,19 +329,34 @@ describe('computeGoalProgress: честные отказы вместо паде
 
   test('неразбираемый и нескомпилируемый query — invalid_query, расчёт не падает', async () => {
     const user = freshUserId();
-    const broken = await progressOf(user, {
-      progress_source: { query: 'aspect=orbis/financial, %%%', aggregate: 'count' },
-      target_value: '10',
-    });
+    // Лог проверяется ЗДЕСЬ, а не отдельным тестом, потому что оба места, дающие
+    // `invalid_query`, дают его с разным диагнозом (грамматика vs компиляция), и второе
+    // достижимо только вне контекста сущности — то есть мимо entity.get. Дроссель гасит
+    // повтор по паре «место + цель», поэтому обе строки видны только на ПЕРВОМ отказе
+    // каждого места с `this = null`: этот тест — он и есть.
+    const [broken, brokenLog] = await captureErrors(() =>
+      progressOf(user, {
+        progress_source: { query: 'aspect=orbis/financial, %%%', aggregate: 'count' },
+        target_value: '10',
+      }),
+    );
     expect(broken.unsupported).toBe('invalid_query');
     expect(broken.current).toBe('0');
+    expect(brokenLog.some((l) => l.includes('invalid_query') && l.includes('грамматикой'))).toBe(
+      true,
+    );
 
     // `this` вне контекста сущности — структурная ошибка компиляции, тоже мягкая
-    const noThis = await progressOf(user, {
-      progress_source: { query: 'children_of=this', aggregate: 'count' },
-      target_value: '10',
-    });
+    const [noThis, noThisLog] = await captureErrors(() =>
+      progressOf(user, {
+        progress_source: { query: 'children_of=this', aggregate: 'count' },
+        target_value: '10',
+      }),
+    );
     expect(noThis.unsupported).toBe('invalid_query');
+    expect(
+      noThisLog.some((l) => l.includes('invalid_query') && l.includes('не скомпилировался')),
+    ).toBe(true);
   });
 });
 
@@ -387,24 +420,16 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
       await admin.client.end();
     }
 
-    const logged: string[] = [];
-    const realError = console.error;
-    console.error = (...args: unknown[]) => {
-      logged.push(args.map((a) => String(a)).join(' '));
-    };
-    let p: Awaited<ReturnType<typeof progressOf>>;
-    try {
-      p = await progressOf(user, {
+    const [p, logged] = await captureErrors(() =>
+      progressOf(user, {
         progress_source: {
           query: 'aspect=orbis/financial, tags=nan',
           aggregate: 'sum',
           field: 'amount',
         },
         target_value: '100',
-      });
-    } finally {
-      console.error = realError;
-    }
+      }),
+    );
     expect(p.unsupported).toBe('compute_failed');
     expect(p.current).toBe('0');
     // Лог — «долевой», а не «агрегат не выполнился»: диагноз называет настоящую причину
@@ -573,5 +598,95 @@ describe('entity.get: прогресс приезжает с целью и то�
     } finally {
       await counted.end();
     }
+  });
+});
+
+describe('логи отказа: конфигурационный отказ не молчит и не льётся потоком', () => {
+  /** Цель с заданным источником: важен id — именно он попадает в лог и в ключ дросселя. */
+  function goalWith(caller: Caller, title: string, source: GoalAspect['progress_source']) {
+    return caller.entity.create({
+      input: {
+        title,
+        tags: [],
+        aspects: { 'orbis/goal': { progress_source: source, target_value: '100' } },
+      },
+      source: 'ui',
+    });
+  }
+
+  test('повторный отказ той же цели по той же причине логируется один раз', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const goal = await goalWith(caller, 'Цель с опечаткой в поле', {
+      query: 'aspect=orbis/financial, direction=income',
+      aggregate: 'sum',
+      field: 'amountt',
+    });
+
+    // Сломанная цель читается СНОВА И СНОВА: она открыта в UI, её чинят, её листают.
+    // Без дросселя каждый entity.get писал бы строку, и лог сервера становился бы
+    // шумом ровно там, где нужен сигнал.
+    const [, logged] = await captureErrors(async () => {
+      await caller.entity.get({ id: goal.id });
+      await caller.entity.get({ id: goal.id });
+      await caller.entity.get({ id: goal.id });
+    });
+
+    expect(logged.filter((l) => l.includes(goal.id)).length).toBe(1);
+  });
+
+  test('конфигурационный отказ цели не молчит: ярлык и id цели есть в логе', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+
+    // Самая вероятная жалоба владельца — «прогресс не считается, а почему, не понять».
+    // До этого теста три ярлыка из четырёх не оставляли на сервере ни строки, и разбор
+    // жалобы начинался с чтения аспекта в базе руками.
+    const cases: Array<[GoalProgressUnsupported, GoalAspect['progress_source']]> = [
+      [
+        'array_field',
+        { query: 'aspect=orbis/category', aggregate: 'sum', field: 'aliases[].weight' },
+      ],
+      ['invalid_query', { query: '%%% не запрос', aggregate: 'count' }],
+      [
+        'invalid_field',
+        { query: 'aspect=orbis/financial, direction=income', aggregate: 'sum', field: 'amountt' },
+      ],
+    ];
+
+    for (const [label, source] of cases) {
+      const goal = await goalWith(caller, `Цель: ${label}`, source);
+      const [got, logged] = await captureErrors(() => caller.entity.get({ id: goal.id }));
+      expect(got.goalProgress?.unsupported).toBe(label);
+      const mine = logged.filter((l) => l.includes(goal.id));
+      expect(mine.length).toBe(1);
+      expect(mine[0]).toContain(label);
+    }
+  });
+
+  test('аспект, не прошедший свою схему, тоже не молчит — хотя ярлыка у него нет', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const goal = await goalWith(caller, 'Цель с дрейфом схемы', {
+      query: 'aspect=orbis/financial',
+      aggregate: 'count',
+    });
+    // Дрейф реестра/правка мимо executor'а: target_value '0' схему не проходит (строго > 0).
+    // Наружу это уезжает не ярлыком, а ОТСУТСТВИЕМ прогресса — в UI цель просто «без
+    // полосы». Молчащим этот выход был громче всех прочих: отличить его от «аспекта нет»
+    // на сервере было нечем.
+    const admin = adminDb();
+    try {
+      await admin.db.execute(
+        sql`UPDATE entities SET aspects = jsonb_set(aspects, '{orbis/goal,target_value}', '"0"') WHERE id = ${goal.id}`,
+      );
+    } finally {
+      await admin.client.end();
+    }
+
+    const [got, logged] = await captureErrors(() => caller.entity.get({ id: goal.id }));
+    expect(got.goalProgress).toBeUndefined();
+    expect(got.entity.title).toBe('Цель с дрейфом схемы');
+    expect(logged.filter((l) => l.includes(goal.id)).length).toBe(1);
   });
 });
