@@ -172,10 +172,10 @@ describe('parseQuery: ошибки §6.4 (message + position)', () => {
     );
   });
   test('строковые и timestamp-поля аспектов операторами/диапазоном не сравниваются (без расширения лишнего)', () => {
-    expect(fail('aspect=orbis/task, status>done').message).toMatch(/тип string/i);
+    expect(fail('aspect=orbis/task, status>done').message).toMatch(/тип 'string'/i);
     // start_at — timestamp-поле аспекта: расширение B5 покрывает только date-поля
-    expect(fail('start_at>2026-06-01').message).toMatch(/тип timestamp/i);
-    expect(fail('start_at=2026-06-01..2026-06-30').message).toMatch(/тип timestamp/i);
+    expect(fail('start_at>2026-06-01').message).toMatch(/тип 'timestamp'/i);
+    expect(fail('start_at=2026-06-01..2026-06-30').message).toMatch(/тип 'timestamp'/i);
   });
   test('незакрытая кавычка, нулевой limit, кривой display', () => {
     expect(fail('title="oops').message).toMatch(/кавычк/i);
@@ -273,8 +273,9 @@ describe('parseQuery: массивы фильтруются, объекты и u
       fail('aspect=orbis/schedule, sortBy=recurrence:asc').message,
     ];
     for (const m of messages) expect(m).not.toMatch(/array|unfilterable/);
-    // …при этом человеческие имена типов из §6.1 печатаются как были
-    expect(fail('aspect=orbis/task, status>done').message).toMatch(/тип string/);
+    // …при этом слова типов из §6.1 печатаются как есть — подменяются только два
+    // внутренних имени, а форма (кавычки) одна на все типы и оба слоя, см. fieldTypeLabel.
+    expect(fail('aspect=orbis/task, status>done').message).toMatch(/тип 'string'/);
   });
   test('фильтр по полю-массиву разбирается как обычный anyOf', () => {
     const r = parse('aspect=orbis/category, aliases=такси');
@@ -299,7 +300,7 @@ describe('parseQuery: массивы фильтруются, объекты и u
     }
   });
   test('операторы >/< по массиву неприменимы (тип не числовой)', () => {
-    expect(fail('aspect=orbis/category, aliases>1').message).toMatch(/тип массив/);
+    expect(fail('aspect=orbis/category, aliases>1').message).toMatch(/тип 'массив'/);
   });
 });
 

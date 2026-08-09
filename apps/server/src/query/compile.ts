@@ -137,7 +137,7 @@ function numericFieldRef(
     // (поле агрегата приходит из input тула или из аспекта цели, парсер его не смотрел),
     // а «тип 'unfilterable'» — внутренний токен ветвления, пользователю он ничего не значит.
     throw new QueryFieldError(
-      `${op} по полю '${field}' невозможен: тип '${fieldTypeLabel(ref.type)}' не числовой`,
+      `${op} по полю '${field}' невозможен: тип ${fieldTypeLabel(ref.type)} не числовой`,
     );
   }
   return ref;
@@ -374,7 +374,7 @@ function filterShape(type: FieldType): 'scalar' | 'array' {
       // Парсер такое поле не пропускает (parse.ts, ensureFilterable) — сюда можно попасть
       // только рассинхроном, и молчать нельзя: ветка скаляра сравнила бы текст сериализации.
       throw new QueryCompileError(
-        `фильтр по полю типа '${fieldTypeLabel(type)}' — рассинхрон с парсером`,
+        `фильтр по полю типа ${fieldTypeLabel(type)} — рассинхрон с парсером`,
       );
     default: {
       const unhandled: never = type;
@@ -568,7 +568,7 @@ function sortCast(ref: FieldRef): SQL {
       // только рассинхроном, и тогда молчать нельзя: порядок по тексту JSON правдоподобен
       // и бессмыслен, то есть неотличим от рабочего.
       throw new QueryCompileError(
-        `сортировка по полю типа '${fieldTypeLabel(ref.type)}' — рассинхрон с парсером`,
+        `сортировка по полю типа ${fieldTypeLabel(ref.type)} — рассинхрон с парсером`,
       );
     default: {
       const unhandled: never = ref.type;
