@@ -252,6 +252,30 @@ describe('parseQuery: массивы фильтруются, объекты и u
     expect(fail('aspect=orbis/goal, progress_source=!manual').message).toMatch(/не поддерживается/);
     expect(fail('aspect=orbis/schedule, recurrence=a..b').message).toMatch(/не поддерживается/);
   });
+  test('равенство, диапазон и >/< по unfilterable объясняются ОДИНАКОВО и с той же позицией', () => {
+    // Путь >/< резолвит поле отдельно от равенства: без общей проверки он объяснял бы
+    // отказ типом значения («имеет тип unfilterable»), то есть другой причиной.
+    const prefix = 'aspect=orbis/schedule, ';
+    const errs = [`${prefix}recurrence=weekly`, `${prefix}recurrence=a..b`, `${prefix}recurrence>1`]
+      .map(fail)
+      .map((e) => `${e.message}@${e.position}`);
+    expect(new Set(errs).size).toBe(1);
+    expect(errs[0]).toBe(
+      `фильтрация по полю 'recurrence' не поддерживается: это не скаляр и не массив скаляров@${prefix.length}`,
+    );
+  });
+  test('внутренние имена типов array/unfilterable наружу не выпускаются', () => {
+    const messages = [
+      fail('aspect=orbis/category, aliases>1').message,
+      fail('aspect=orbis/category, aliases=today').message,
+      fail('aspect=orbis/category, sortBy=aliases:asc').message,
+      fail('aspect=orbis/schedule, recurrence=weekly').message,
+      fail('aspect=orbis/schedule, sortBy=recurrence:asc').message,
+    ];
+    for (const m of messages) expect(m).not.toMatch(/array|unfilterable/);
+    // …при этом человеческие имена типов из §6.1 печатаются как были
+    expect(fail('aspect=orbis/task, status>done').message).toMatch(/тип string/);
+  });
   test('фильтр по полю-массиву разбирается как обычный anyOf', () => {
     const r = parse('aspect=orbis/category, aliases=такси');
     expect(r.ok).toBe(true);
@@ -275,7 +299,57 @@ describe('parseQuery: массивы фильтруются, объекты и u
     }
   });
   test('операторы >/< по массиву неприменимы (тип не числовой)', () => {
-    expect(fail('aspect=orbis/category, aliases>1').message).toMatch(/тип array/);
+    expect(fail('aspect=orbis/category, aliases>1').message).toMatch(/тип массив/);
+  });
+});
+
+// Каталог строится и из ПОЛЬЗОВАТЕЛЬСКИХ определений аспектов (loadCatalog читает
+// aspect_definitions), где встречаются формы, которых во встроенном реестре нет.
+// Правило «нет скалярного type → unfilterable» отбирало бы фильтр у nullable-полей и
+// enum'ов без type — а они фильтровались правильно и раньше. Схемы тут синтетические
+// намеренно: реестр ради проверки классификации трогать незачем.
+describe('propType: формы за пределами встроенного реестра', () => {
+  const typeOf = (prop: Record<string, unknown>) =>
+    buildFieldCatalog([{ id: 'x/custom', schema: { properties: { f: prop } } }]).fields.f?.[0]
+      ?.type;
+  // Обычные строки, а не String.raw: транспилер bun портит не-ASCII в raw-шаблонах,
+  // и в этом файле уже принято писать паттерны так.
+  const DATE_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
+
+  test('nullable-формы разворачиваются в свой скалярный тип', () => {
+    expect(typeOf({ type: ['string', 'null'] })).toBe('string');
+    expect(typeOf({ anyOf: [{ type: 'string' }, { type: 'null' }] })).toBe('string');
+    expect(typeOf({ oneOf: [{ type: 'number' }, { type: 'null' }] })).toBe('number');
+    // pattern переживает разворачивание: nullable-дата остаётся date, а не строкой
+    expect(typeOf({ type: ['string', 'null'], pattern: DATE_PATTERN })).toBe('date');
+    expect(typeOf({ anyOf: [{ type: 'string', pattern: DATE_PATTERN }, { type: 'null' }] })).toBe(
+      'date',
+    );
+  });
+  test('enum без type — тип по значениям', () => {
+    expect(typeOf({ enum: ['a', 'b'] })).toBe('string');
+    expect(typeOf({ enum: [1, 2] })).toBe('integer');
+    expect(typeOf({ enum: [1.5] })).toBe('number');
+    expect(typeOf({ enum: [true, false] })).toBe('boolean');
+  });
+  test('массив nullable-скаляров и массив enum-строк — всё ещё массив скаляров', () => {
+    expect(typeOf({ type: 'array', items: { type: ['string', 'null'] } })).toBe('array');
+    expect(typeOf({ type: 'array', items: { enum: ['a', 'b'] } })).toBe('array');
+  });
+  test('настоящие не-скаляры остаются unfilterable', () => {
+    expect(typeOf({ type: 'object', properties: {} })).toBe('unfilterable');
+    expect(typeOf({ anyOf: [{ type: 'string' }, { type: 'number' }] })).toBe('unfilterable');
+    expect(typeOf({ type: ['string', 'number'] })).toBe('unfilterable');
+    expect(typeOf({ type: 'array', items: { type: 'object' } })).toBe('unfilterable');
+    expect(typeOf({ type: 'array' })).toBe('unfilterable'); // массив без items — что внутри, неизвестно
+    expect(typeOf({})).toBe('unfilterable');
+  });
+  test('фильтр по nullable-строке пользовательского аспекта разбирается, а не отклоняется', () => {
+    const custom = buildFieldCatalog([
+      { id: 'x/custom', schema: { properties: { vendor: { type: ['string', 'null'] } } } },
+    ]);
+    expect(parseQuery('aspect=x/custom, vendor=ACME', custom).ok).toBe(true);
+    expect(parseQuery('aspect=x/custom, sortBy=vendor:asc', custom).ok).toBe(true);
   });
 });
 

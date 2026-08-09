@@ -361,6 +361,34 @@ function resolveField(key: string, keyOffset: number, ctx: Ctx, allowTitle = fal
   return { name, type: info.type, core: false };
 }
 
+/**
+ * Как назвать тип поля в тексте ошибки. `array`/`unfilterable` — внутренние имена
+ * ветвления компилятора, человеку они ничего не говорят; остальные типы — слова
+ * грамматики §6.1 и печатаются как есть.
+ */
+const TYPE_LABELS: Partial<Record<FieldType, string>> = {
+  array: 'массив',
+  unfilterable: 'не скаляр',
+};
+function typeLabel(type: FieldType): string {
+  return TYPE_LABELS[type] ?? type;
+}
+
+/**
+ * Поля, для которых грамматика фильтра не определена: объект, разнотипный union,
+ * массив не-скаляров. Раньше каталог выдавал их за строки, и `->>'поле'` сравнивал
+ * текст сериализации — тихий ноль на равенстве и ВСЕ строки на отрицании. Отказ
+ * одинаков для `=`, диапазона и `>`/`<`: причина у них одна, объяснение тоже.
+ */
+function ensureFilterable(field: ResolvedField, keyOffset: number): void {
+  if (field.type === 'unfilterable') {
+    fail(
+      `фильтрация по полю '${field.name}' не поддерживается: это не скаляр и не массив скаляров`,
+      keyOffset,
+    );
+  }
+}
+
 // ─────────────────────────── Диспетчер конструкций ───────────────────────────
 
 function dispatchPart(p: ParsedPart, ctx: Ctx): void {
@@ -420,12 +448,7 @@ function dispatchPart(p: ParsedPart, ctx: Ctx): void {
       return;
     default: {
       const field = resolveField(p.key, p.keyOffset, ctx);
-      if (field.type === 'unfilterable') {
-        fail(
-          `фильтрация по полю '${field.name}' не поддерживается: это объект или union, а не скаляр или массив`,
-          p.keyOffset,
-        );
-      }
+      ensureFilterable(field, p.keyOffset);
       const dots = findRangeDots(p.value);
       if (dots !== -1) {
         ctx.filters.push(parseRange(p, dots, field));
@@ -525,7 +548,7 @@ function parseSortBy(p: ParsedPart, ctx: Ctx): QuerySortField[] {
     const field = resolveField(rawField.text, rawField.offset, ctx, true);
     if (field.type === 'array' || field.type === 'unfilterable') {
       fail(
-        `sortBy: по полю '${field.name}' сортировать нельзя — ${field.type === 'array' ? 'это массив' : 'это объект или union'}`,
+        `sortBy: по полю '${field.name}' сортировать нельзя — это ${typeLabel(field.type)}`,
         rawField.offset,
       );
     }
@@ -542,6 +565,7 @@ function dispatchComparison(p: ParsedPart, ctx: Ctx): void {
     fail(`оператор '${p.op}' неприменим к ключу '${p.key}'`, p.opOffset);
   }
   const field = resolveField(p.key, p.keyOffset, ctx);
+  ensureFilterable(field, p.keyOffset);
   const value = parseComparable({ text: p.value, offset: p.valueOffset }, field);
   ctx.filters.push({ kind: 'comparison', field: field.name, op: p.op as '>' | '<', value });
 }
@@ -596,7 +620,7 @@ function parseComparable(el: Part, field: ResolvedField): QueryComparableValue {
     return { kind: 'decimal', value: text };
   }
   fail(
-    `операторы >/< и диапазон .. применимы к числовым полям, date-полям аспектов и core-timestamp; поле '${field.name}' имеет тип ${field.type}`,
+    `операторы >/< и диапазон .. применимы к числовым полям, date-полям аспектов и core-timestamp; поле '${field.name}' имеет тип ${typeLabel(field.type)}`,
     el.offset,
   );
 }
@@ -652,7 +676,7 @@ function parseValueElement(el: Part, field: ResolvedField): QueryFieldValue {
   if (DATE_TOKENS.has(text as QueryDateToken)) {
     if (field.type !== 'date' && field.type !== 'timestamp') {
       fail(
-        `date-токен '${text}' применим только к полям типа date/timestamp; поле '${field.name}' имеет тип ${field.type}`,
+        `date-токен '${text}' применим только к полям типа date/timestamp; поле '${field.name}' имеет тип ${typeLabel(field.type)}`,
         el.offset,
       );
     }

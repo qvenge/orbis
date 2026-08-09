@@ -20,8 +20,9 @@ export type FieldType =
   // и `->>'aliases'` сравнивал текст всего массива: положительный фильтр давал тихий
   // ноль, отрицательный — все строки подряд.
   | 'array'
-  // Объект или union (orbis/schedule.recurrence, orbis/goal.progress_source): фильтра,
-  // выразимого грамматикой, для них нет — парсер отказывает с позицией.
+  // Всё остальное: объект (orbis/schedule.recurrence), разнотипный union
+  // (orbis/goal.progress_source), массив не-скаляров. Фильтра, выразимого грамматикой,
+  // для них нет — парсер отказывает с позицией.
   | 'unfilterable';
 
 export interface FieldInfo {
@@ -78,29 +79,74 @@ export function buildFieldCatalog(
   return { fields };
 }
 
+/**
+ * Снимает обёртку «то же самое, но допускается null»: `type: ['string','null']` и
+ * `anyOf: [{…}, {type:'null'}]` — обе формы даёт zod `.nullable()` в разных версиях
+ * генератора. Без разворачивания nullable-строка уехала бы в `unfilterable`, хотя
+ * фильтруется ровно как строка. Единственного не-null варианта нет — узел не наш,
+ * возвращаем как есть (настоящий разнотипный union).
+ */
+function unwrapNullable(prop: Record<string, unknown>): Record<string, unknown> {
+  if (Array.isArray(prop.type)) {
+    const kinds = prop.type.filter((t) => t !== 'null');
+    // Спред, а не голый `{type}`: pattern/format/items решают тип и обязаны доехать.
+    return kinds.length === 1 ? { ...prop, type: kinds[0] } : prop;
+  }
+  const variants = prop.anyOf ?? prop.oneOf;
+  if (Array.isArray(variants)) {
+    const kept = variants.filter(
+      (v): v is Record<string, unknown> =>
+        typeof v === 'object' && v !== null && (v as Record<string, unknown>).type !== 'null',
+    );
+    if (kept.length === 1) return kept[0] as Record<string, unknown>;
+  }
+  return prop;
+}
+
+/**
+ * JSON Schema-«род» узла: `type`, а при его отсутствии — вывод по значениям `enum`
+ * (ручные пользовательские схемы часто пишут `enum` без `type`; такое поле —
+ * обычный скаляр, а не повод отказывать в фильтре). Пустая строка — род неизвестен.
+ */
+function schemaKind(node: Record<string, unknown>): string {
+  if (typeof node.type === 'string') return node.type;
+  if (Array.isArray(node.enum) && node.enum.length > 0) {
+    const v = node.enum[0];
+    if (typeof v === 'string') return 'string';
+    if (typeof v === 'number') return Number.isInteger(v) ? 'integer' : 'number';
+    if (typeof v === 'boolean') return 'boolean';
+  }
+  return '';
+}
+
 /** Тип поля по его JSON Schema-описанию (эвристика по фактическому выводу zod-to-json-schema). */
 function propType(prop: Record<string, unknown>): FieldType {
-  if (prop.type === 'number') return 'number';
-  if (prop.type === 'integer') return 'integer';
-  if (prop.type === 'boolean') return 'boolean';
-  if (prop.type === 'string') {
+  const node = unwrapNullable(prop);
+  const kind = schemaKind(node);
+  if (kind === 'number') return 'number';
+  if (kind === 'integer') return 'integer';
+  if (kind === 'boolean') return 'boolean';
+  if (kind === 'string') {
     // Явный формат — на случай будущих реестров, где decimal объявлен через format.
-    if (prop.format === 'decimal') return 'decimal';
-    const pattern = typeof prop.pattern === 'string' ? prop.pattern : '';
+    if (node.format === 'decimal') return 'decimal';
+    const pattern = typeof node.pattern === 'string' ? node.pattern : '';
     if (pattern === DATE_PATTERN) return 'date';
     if (pattern.includes(TIMESTAMP_MARK)) return 'timestamp';
     if (pattern.endsWith(DECIMAL_TAIL)) return 'decimal';
     return 'string';
   }
-  if (prop.type === 'array') {
+  if (kind === 'array') {
     // Containment ищет элемент массива целиком, поэтому осмыслен только для скаляров:
     // массив объектов таким предикатом грамматика выразить не может.
-    const items = prop.items as Record<string, unknown> | undefined;
-    const itemType = typeof items?.type === 'string' ? items.type : '';
-    return itemType === 'string' || itemType === 'number' || itemType === 'integer'
+    const items = node.items;
+    const itemKind =
+      typeof items === 'object' && items !== null
+        ? schemaKind(unwrapNullable(items as Record<string, unknown>))
+        : '';
+    return itemKind === 'string' || itemKind === 'number' || itemKind === 'integer'
       ? 'array'
       : 'unfilterable';
   }
-  // object и union (anyOf/oneOf) — фильтровать нечем.
+  // Объект, разнотипный union, род без скалярного соответствия — фильтровать нечем.
   return 'unfilterable';
 }
