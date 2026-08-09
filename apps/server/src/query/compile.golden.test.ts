@@ -167,6 +167,33 @@ describe('поле-массив: containment вместо текстового �
     expect(plain.sql).not.toContain('::numeric');
   });
 
+  test('литерал вне области определения numeric числовой ветки не получает', () => {
+    // Без ограничения длины `::numeric` отвечал бы «value overflows numeric format» —
+    // ошибка исполнения там, где до задачи была честная пустая выдача. Граница —
+    // ровно область определения numeric (16383 знака после точки, 131072 до),
+    // поэтому ни одна находка не теряется: числа jsonb хранятся как numeric.
+    const numeric = buildFieldCatalog([
+      {
+        id: 'x/probe',
+        schema: { properties: { nums: { type: 'array', items: { type: 'integer' } } } },
+      },
+    ]);
+    const sqlFor = (literal: string) => {
+      const parsed = parseQuery(`aspect=x/probe, nums=${literal}`, numeric);
+      expect(parsed.ok).toBe(true);
+      if (!parsed.ok) throw new Error(parsed.error.message);
+      return dialect.sqlToQuery(compileQuery(parsed.ast, { ...CTX, catalog: numeric }));
+    };
+    // На границе — ветка есть (такое значение numeric принимает, проверено на живой базе)
+    expect(sqlFor(`0.${'1'.repeat(16383)}`).sql).toContain('::numeric');
+    expect(sqlFor('1'.repeat(131072)).sql).toContain('::numeric');
+    // На знак дальше — ветки нет, литерал уезжает только текстом и находит ноль строк
+    const tooLongFrac = sqlFor(`0.${'1'.repeat(16384)}`);
+    expect(tooLongFrac.sql).not.toContain('::numeric');
+    expect(tooLongFrac.params).toContain(`0.${'1'.repeat(16384)}`);
+    expect(sqlFor('1'.repeat(131073)).sql).not.toContain('::numeric');
+  });
+
   test('сортировка по массиву недостижима парсером, но компилятор не молчит', () => {
     // Раньше default sortCast сортировал бы по тексту JSON — по порядку сериализации.
     const parsed = parseQuery('aspect=orbis/category, sortBy=title:asc', catalog);

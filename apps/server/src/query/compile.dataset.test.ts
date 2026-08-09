@@ -603,6 +603,22 @@ describe('датасет §6.2: состав И порядок под RLS', () =
     }
   });
 
+  test('2e. отрицание по массиву БЕЗ aspect=: сущности без этого аспекта проходят (решение 10)', async () => {
+    // Все запросы 2d идут с `aspect=orbis/category`, который сущности без аспекта отсекает
+    // сам, — там правило «NULL проходит» держится только докблоком. Здесь оно проверено
+    // на данных: `aliases=!такси` без aspect= обязан вернуть ВСЮ неархивную выборку минус
+    // «Транспорт», включая задачи и транзакции, у которых orbis/category нет вовсе.
+    const all = ids(await run(USER_A, 'sortBy=created_at:asc|title:asc'));
+    const negated = ids(await run(USER_A, 'aliases=!такси, sortBy=created_at:asc|title:asc'));
+    expect(negated).toEqual(all.filter((id) => id !== ID.catTransport));
+    // Явно: в выдаче есть сущность вовсе без аспекта orbis/category, а «Транспорта» нет
+    expect(negated).toContain(ID.project); // aspects: {} — ни одного аспекта
+    expect(negated).toContain(ID.taskInbox); // только orbis/task
+    expect(negated).not.toContain(ID.catTransport);
+    // Не выродилось в «вернуть всё»: одна сущность из выборки действительно ушла
+    expect(negated).toHaveLength(all.length - 1);
+  });
+
   test('3. курсор агента (§9.3): updated_at> середины вставки — только поздняя половина', async () => {
     const rows = await run(
       USER_A,
