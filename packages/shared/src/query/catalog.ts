@@ -14,7 +14,15 @@ export type FieldType =
   | 'decimal'
   | 'date'
   | 'timestamp'
-  | 'boolean';
+  | 'boolean'
+  // Массив скаляров внутри аспекта (orbis/category.aliases): фильтруется containment'ом
+  // «массив содержит значение» — см. compile.ts. Раньше приезжал сюда как 'string',
+  // и `->>'aliases'` сравнивал текст всего массива: положительный фильтр давал тихий
+  // ноль, отрицательный — все строки подряд.
+  | 'array'
+  // Объект или union (orbis/schedule.recurrence, orbis/goal.progress_source): фильтра,
+  // выразимого грамматикой, для них нет — парсер отказывает с позицией.
+  | 'unfilterable';
 
 export interface FieldInfo {
   aspect: string;
@@ -84,6 +92,15 @@ function propType(prop: Record<string, unknown>): FieldType {
     if (pattern.endsWith(DECIMAL_TAIL)) return 'decimal';
     return 'string';
   }
-  // object/array (recurrence, aliases, byweekday): фильтрация по ним грамматикой не определена.
-  return 'string';
+  if (prop.type === 'array') {
+    // Containment ищет элемент массива целиком, поэтому осмыслен только для скаляров:
+    // массив объектов таким предикатом грамматика выразить не может.
+    const items = prop.items as Record<string, unknown> | undefined;
+    const itemType = typeof items?.type === 'string' ? items.type : '';
+    return itemType === 'string' || itemType === 'number' || itemType === 'integer'
+      ? 'array'
+      : 'unfilterable';
+  }
+  // object и union (anyOf/oneOf) — фильтровать нечем.
+  return 'unfilterable';
 }

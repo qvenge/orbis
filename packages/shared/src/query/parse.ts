@@ -420,6 +420,12 @@ function dispatchPart(p: ParsedPart, ctx: Ctx): void {
       return;
     default: {
       const field = resolveField(p.key, p.keyOffset, ctx);
+      if (field.type === 'unfilterable') {
+        fail(
+          `фильтрация по полю '${field.name}' не поддерживается: это объект или union, а не скаляр или массив`,
+          p.keyOffset,
+        );
+      }
       const dots = findRangeDots(p.value);
       if (dots !== -1) {
         ctx.filters.push(parseRange(p, dots, field));
@@ -496,7 +502,11 @@ function parseDisplay(p: ParsedPart): QueryDisplayMode {
   return v;
 }
 
-/** `sortBy=поле:asc|поле:desc` — упорядоченный список; имена резолвятся (core-`title` доступен). */
+/**
+ * `sortBy=поле:asc|поле:desc` — упорядоченный список; имена резолвятся (core-`title` доступен).
+ * Массивы и объекты/union отсекаются: линейного порядка у них нет, а `->>` сортировал бы
+ * по тексту сериализации — правдоподобный, но бессмысленный порядок.
+ */
 function parseSortBy(p: ParsedPart, ctx: Ctx): QuerySortField[] {
   return splitPartBy({ text: p.value, offset: p.valueOffset }, '|').map((el) => {
     const t = trimPart(el);
@@ -513,6 +523,12 @@ function parseSortBy(p: ParsedPart, ctx: Ctx): QuerySortField[] {
     }
     if (rawField.text === '') fail('sortBy: пустое имя поля', t.offset);
     const field = resolveField(rawField.text, rawField.offset, ctx, true);
+    if (field.type === 'array' || field.type === 'unfilterable') {
+      fail(
+        `sortBy: по полю '${field.name}' сортировать нельзя — ${field.type === 'array' ? 'это массив' : 'это объект или union'}`,
+        rawField.offset,
+      );
+    }
     return { field: field.name, direction };
   });
 }

@@ -215,6 +215,68 @@ describe('buildFieldCatalog: эвристика propType по фактическ
       'orbis/financial',
     ]);
   });
+  test('поле-массив получает тип array, а не string', () => {
+    expect(catalog.fields.aliases?.[0]?.type).toBe('array');
+  });
+  test('поле-объект и union — unfilterable', () => {
+    // recurrence — JSON Schema `type: object`, progress_source — `anyOf` (дискриминированный union)
+    expect(catalog.fields.recurrence?.[0]?.type).toBe('unfilterable');
+    expect(catalog.fields.progress_source?.[0]?.type).toBe('unfilterable');
+  });
+  test('не-скаляры реестра исчерпываются этими тремя полями', () => {
+    const odd = Object.entries(catalog.fields)
+      .filter(([, infos]) => infos.some((i) => i.type === 'array' || i.type === 'unfilterable'))
+      .map(([name]) => name)
+      .sort();
+    expect(odd).toEqual(['aliases', 'progress_source', 'recurrence']);
+  });
+});
+
+// Каталог выдавал массивы и объекты за строки, и грамматика молча их принимала:
+// `aliases=такси` давал тихий ноль (`->>'aliases'` — текст всего массива), `aliases=!такси`
+// возвращал ВСЕ категории. Массив стал фильтруемым типом, объект/union — честным отказом.
+describe('parseQuery: массивы фильтруются, объекты и union отклоняются', () => {
+  const fail = (q: string) => {
+    const r = parse(q);
+    expect(r.ok).toBe(false);
+    return r.ok ? { message: '', position: -1 } : r.error;
+  };
+  test('фильтр по unfilterable-полю — честный отказ с позицией, а не тихий ноль', () => {
+    const r = parse('aspect=orbis/schedule, recurrence=weekly');
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.message).toMatch(/не поддерживается/);
+      expect(r.error.position).toBe('aspect=orbis/schedule, '.length);
+    }
+    // Отрицание и диапазон по объекту отклоняются той же проверкой
+    expect(fail('aspect=orbis/goal, progress_source=!manual').message).toMatch(/не поддерживается/);
+    expect(fail('aspect=orbis/schedule, recurrence=a..b').message).toMatch(/не поддерживается/);
+  });
+  test('фильтр по полю-массиву разбирается как обычный anyOf', () => {
+    const r = parse('aspect=orbis/category, aliases=такси');
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.ast.filters[1]).toEqual({
+      kind: 'field',
+      field: 'aliases',
+      condition: { kind: 'anyOf', values: [{ kind: 'literal', value: 'такси' }] },
+    });
+    // Отрицание и OR-список — те же формы §6.1, семантику даёт компилятор
+    expect(parse('aspect=orbis/category, aliases=!такси').ok).toBe(true);
+    expect(parse('aspect=orbis/category, aliases=такси|метро').ok).toBe(true);
+  });
+  test('sortBy по массиву и по unfilterable — отказ', () => {
+    for (const q of [
+      'aspect=orbis/category, sortBy=aliases:asc',
+      'aspect=orbis/schedule, sortBy=recurrence:asc',
+    ]) {
+      const r = parse(q);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error.message).toMatch(/sortBy/);
+    }
+  });
+  test('операторы >/< по массиву неприменимы (тип не числовой)', () => {
+    expect(fail('aspect=orbis/category, aliases>1').message).toMatch(/тип array/);
+  });
 });
 
 // Разрешение неоднозначности per §6.1: запрос с aspect=X, где поле есть в X, резолвится в X —
