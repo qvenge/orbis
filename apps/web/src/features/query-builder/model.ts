@@ -85,6 +85,15 @@ export function fieldRef(
  * Имена полей, которым форма рисует строки: core-поля, поля выбранных аспектов и поля, на
  * которые уже есть узлы (снятый аспект не должен прятать живой фильтр — иначе он уехал бы
  * в body невидимым). Порядок каталога — по аспектам в порядке реестра, внутри — по схеме.
+ *
+ * Поля типа `unfilterable` (объект `orbis/schedule.recurrence`, разнотипный union
+ * `orbis/goal.progress_source`) отсеиваются: грамматика фильтра для них не определена, и
+ * контрол печатал бы строку, которую парсер отказывается разбирать, — форма предлагала бы
+ * выбор, который гарантированно не сохранится. Поля типа `array` (`orbis/category.aliases`)
+ * ОСТАЮТСЯ: у них честный containment-предикат, обычное равенство их и фильтрует.
+ * На узел, уже стоящий в AST, отказ не может распространиться иначе: непарсящееся поле не
+ * доходит до формы вовсе (`parseForForm` вернёт null, и откроется строковый редактор),
+ * поэтому `used` не содержит нефильтруемых имён и фильтр по типу не прячет живой узел.
  */
 export function visibleFieldNames(ast: QueryAst, catalog: FieldCatalog): string[] {
   const selected = new Set(aspectsOf(ast));
@@ -92,24 +101,31 @@ export function visibleFieldNames(ast: QueryAst, catalog: FieldCatalog): string[
   const names: string[] = [...CORE_NAMES];
   for (const [name, infos] of Object.entries(catalog.fields)) {
     if (names.includes(name) || isReservedKey(name)) continue;
-    if (used.has(name) || infos.some((i) => selected.has(i.aspect))) names.push(name);
+    if (!(used.has(name) || infos.some((i) => selected.has(i.aspect)))) continue;
+    // Тип спрашиваем ровно так же, как его выберет контрол (fieldRef), — иначе список имён
+    // и нарисованная по нему строка расходились бы на неоднозначном имени.
+    if (fieldRef(name, catalog, selected).type === 'unfilterable') continue;
+    names.push(name);
   }
   return names;
 }
 
 /**
  * Имена, доступные сортировке (§6.1): каталог `sortBy` шире фильтров ровно на core-`title`,
- * ограничения по типу нет. Неоднозначные имена отсеиваются — `sortBy=currency:asc` без
- * `aspect=` не разберётся так же, как фильтр.
+ * но уже по типу — линейного порядка нет ни у массива, ни у объекта/union, и парсер по
+ * обоим отказывает (`sortBy: по полю 'aliases' сортировать нельзя — это массив`). Отсюда
+ * асимметрия с фильтрами: `array` там разрешён, здесь — нет. Неоднозначные имена
+ * отсеиваются — `sortBy=currency:asc` без `aspect=` не разберётся так же, как фильтр.
  */
 export function sortableFieldNames(ast: QueryAst, catalog: FieldCatalog): string[] {
   const selected = new Set(aspectsOf(ast));
   const names: string[] = [...CORE_NAMES, 'title'];
   for (const [name, infos] of Object.entries(catalog.fields)) {
     if (names.includes(name) || isReservedKey(name)) continue;
-    if (infos.length === 1 || infos.filter((i) => selected.has(i.aspect)).length === 1) {
-      names.push(name);
-    }
+    if (infos.length !== 1 && infos.filter((i) => selected.has(i.aspect)).length !== 1) continue;
+    const { type } = fieldRef(name, catalog, selected);
+    if (type === 'array' || type === 'unfilterable') continue;
+    names.push(name);
   }
   return names;
 }

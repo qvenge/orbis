@@ -2,14 +2,17 @@
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
+  aspectJsonSchema,
   attachAspectInput,
   BUILTIN_ASPECT_IDS,
   batchExecuteInput,
   budgetStatusInput,
+  buildFieldCatalog,
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
   entityUpdateInput,
+  parseQuery,
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
@@ -145,6 +148,29 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     expect(def.description).toContain(
       'aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20',
     );
+    // Синтаксис фильтра по полю-массиву неотличим от равенства: без образца модель не
+    // догадается искать «такси» среди синонимов категории, а не в её названии.
+    expect(def.description).toContain('aspect=orbis/category, aliases=такси');
+  });
+
+  // Пример — это то, ЧТО МОДЕЛЬ СКОПИРУЕТ. Непарсящийся образец хуже отсутствия примера:
+  // модель уверенно повторит его и упрётся в отказ парсера, не поняв причины. Проверяем
+  // все три разом, вынимая их из description по кавычкам-ёлочкам, — новый пример не
+  // разъедется с грамматикой молча.
+  test('entity_query: каждый пример из description разбирается парсером §6', async () => {
+    const def = defOf(await registryFor(userB), 'entity_query');
+    const examples = [...def.description.matchAll(/«([^»]+)»/g)].map((m) => m[1] as string);
+    // Страховка от «регулярка перестала находить»: пустой список прошёл бы цикл молча.
+    // Не равенство: четвёртый пример — законная правка, и она обязана попасть под ту же
+    // проверку, а не уронить тест на счётчике.
+    expect(examples.length).toBeGreaterThanOrEqual(3);
+    const catalog = buildFieldCatalog(
+      BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
+    );
+    for (const example of examples) {
+      const r = parseQuery(example, catalog);
+      expect(r.ok ? null : `${example}: ${r.error.message}`).toBeNull();
+    }
   });
 });
 

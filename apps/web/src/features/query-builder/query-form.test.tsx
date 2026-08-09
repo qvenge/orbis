@@ -1,6 +1,6 @@
 import { DAILY_PLANNING_BODY, UPCOMING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
 import { queryBlocks } from '../browser/query';
@@ -169,6 +169,33 @@ test('затенённое ключом грамматики поле limit не
   expect(screen.queryByLabelText('limit')).toBeNull();
 });
 
+// orbis/schedule.recurrence — объект: грамматика фильтра для него не определена, парсер
+// отказывает с позицией. Предложи его форма — человек набрал бы значение, а сохранение
+// упёрлось бы в отказ разбора: выбор, который гарантированно не собирается.
+test('нефильтруемое поле-объект не предлагается', async () => {
+  await openForm('aspect=orbis/schedule');
+  expect(screen.getByLabelText('location')).toBeInTheDocument();
+  expect(screen.queryByLabelText('recurrence')).toBeNull();
+});
+
+// Тот же отказ у разнотипного union orbis/goal.progress_source — причина другая, ветка одна.
+test('нефильтруемое поле-union не предлагается', async () => {
+  await openForm('aspect=orbis/goal');
+  expect(screen.getByLabelText('target_value')).toBeInTheDocument();
+  expect(screen.queryByLabelText('progress_source')).toBeNull();
+});
+
+// Граница отказа: массив скаляров (orbis/category.aliases) фильтруется containment'ом
+// «массив содержит значение» — обычным равенством, тем же контролом, что строка. Отсеки
+// форма и его заодно с объектами, и резолв категории по синониму («такси» → «Транспорт»)
+// остался бы недоступен из UI, хотя грамматика его выражает.
+test('поле-массив предлагается и печатает обычное равенство', async () => {
+  const { onSave } = await openForm('aspect=orbis/category');
+  fireEvent.change(screen.getByLabelText('aliases: значение 1'), { target: { value: 'такси' } });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/category, aliases=такси');
+});
+
 test('enum-поле правится галочками значений', async () => {
   const { onSave } = await openForm('aspect=orbis/task, status=inbox');
   fireEvent.click(screen.getByLabelText('status: inbox'));
@@ -286,6 +313,18 @@ test('удаление последнего поля сортировки уби
   fireEvent.click(screen.getByRole('button', { name: 'Убрать из сортировки: строка 1' }));
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task');
+});
+
+// Сортировка уже фильтров по типу: линейного порядка нет ни у массива, ни у объекта/union,
+// и парсер отказывает по обоим (`sortBy=aliases:asc` — «это массив»). Селект берёт имена из
+// ВСЕГО каталога, не только из выбранных аспектов, поэтому проверяем все три сразу.
+test('в сортировку не предлагаются ни массив, ни объект, ни union', async () => {
+  await openForm('aspect=orbis/category');
+  const add = screen.getByLabelText('Добавить поле сортировки');
+  expect(within(add).getByRole('option', { name: 'spend_class' })).toBeInTheDocument();
+  for (const name of ['aliases', 'recurrence', 'progress_source']) {
+    expect(within(add).queryByRole('option', { name })).toBeNull();
+  }
 });
 
 test('в сортировку добавляется core-поле title, недоступное фильтру', async () => {

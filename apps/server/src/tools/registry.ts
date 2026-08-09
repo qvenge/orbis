@@ -297,9 +297,14 @@ const CORE_TOOLS: OrbisToolDef[] = [
     name: 'entity_query',
     // Примеры грамматики в description (fix round Task 8): модель не видит
     // спецификацию §6 — без образцов синтаксиса холодный резолв category_ref
-    // (инструкция системного промпта v1) гарантированно бился бы о парсер
+    // (инструкция системного промпта v1) гарантированно бился бы о парсер.
+    // Третий пример — про aliases: синтаксис фильтра по полю-массиву ничем не
+    // отличается от обычного равенства, и без образца модель не догадается, что
+    // «такси» ищется среди синонимов категории, а не в её названии. Описание
+    // тула живёт ЗДЕСЬ, в коде, а не в `aspect_definitions.ai_instructions`,
+    // поэтому правка примера не требует пересева реестра на проде.
     description:
-      'Поиск/фильтрация сущностей грамматикой запросов Orbis (§6). Возвращает список сущностей (core-поля + tags + aspects). Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20».',
+      'Поиск/фильтрация сущностей грамматикой запросов Orbis (§6). Возвращает список сущностей (core-поля + tags + aspects). Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20»; «aspect=orbis/category, aliases=такси» (резолв категории по синониму: aliases — массив, фильтр ищет вхождение).',
     inputJsonSchema: entityQueryJsonSchema,
     kind: 'read',
   },
