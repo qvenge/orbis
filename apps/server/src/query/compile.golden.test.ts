@@ -205,6 +205,31 @@ describe('поле-массив: containment вместо текстового �
     expect(() => compileQuery(broken, CTX)).toThrow(/типа 'массив'/);
   });
 
+  test('фильтр по нефильтруемому полю недостижим парсером, но компилятор не молчит', () => {
+    // Симметрично сортировке и по той же причине: ветка скаляра сравнила бы `->>` —
+    // текст сериализации всего объекта, то есть тихий ноль на равенстве и вся таблица
+    // на отрицании. Ровно тот дефект, который чинила эта ветка, только этажом ниже.
+    const parsed = parseQuery('aspect=orbis/schedule', catalog);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const broken = {
+      ...parsed.ast,
+      filters: [
+        ...parsed.ast.filters,
+        {
+          kind: 'field' as const,
+          field: 'recurrence',
+          condition: {
+            kind: 'anyOf' as const,
+            values: [{ kind: 'literal' as const, value: 'weekly' }],
+          },
+        },
+      ],
+    };
+    expect(() => compileQuery(broken, CTX)).toThrow(QueryCompileError);
+    expect(() => compileQuery(broken, CTX)).toThrow(/типа 'не скаляр'/);
+  });
+
   test('агрегат по полю-массиву отказывает человеческим именем типа', () => {
     const parsed = parseQuery('aspect=orbis/category', catalog);
     expect(parsed.ok).toBe(true);

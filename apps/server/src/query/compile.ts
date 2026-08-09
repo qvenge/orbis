@@ -349,12 +349,49 @@ function arrayLiterals(values: QueryFieldValue[]): string[] {
 }
 
 /**
+ * Как фильтр обходится с полем этого типа — ЕДИНСТВЕННЫЙ разбор `FieldType` в фильтрах,
+ * общий для anyOf и noneOf, и исчерпывающий.
+ *
+ * Скаляры перечислены поимённо, а не собраны в `default`, именно потому, что `default`
+ * и породил дефект этой ветки: массив приезжал сюда под видом строки, попадал в ветку
+ * `->>` IN и давал тихий ноль на равенстве и всю таблицу на отрицании — ни типизация,
+ * ни тест об этом не сказали. Теперь следующий член `FieldType` обязан назвать свою
+ * форму здесь, иначе не соберётся.
+ */
+function filterShape(type: FieldType): 'scalar' | 'array' {
+  switch (type) {
+    case 'string':
+    case 'number':
+    case 'integer':
+    case 'decimal':
+    case 'date':
+    case 'timestamp':
+    case 'boolean':
+      return 'scalar';
+    case 'array':
+      return 'array';
+    case 'unfilterable':
+      // Парсер такое поле не пропускает (parse.ts, ensureFilterable) — сюда можно попасть
+      // только рассинхроном, и молчать нельзя: ветка скаляра сравнила бы текст сериализации.
+      throw new QueryCompileError(
+        `фильтр по полю типа '${fieldTypeLabel(type)}' — рассинхрон с парсером`,
+      );
+    default: {
+      const unhandled: never = type;
+      throw new QueryCompileError(
+        `фильтр по полю типа '${String(unhandled)}' — тип добавлен без ветки в компиляторе`,
+      );
+    }
+  }
+}
+
+/**
  * anyOf: литералы одним IN, date-токены — сравнениями; несколько условий — OR по скобкам
  * (§6.1). Поле-массив — отдельная ветка: сравнивать со значением там нечего, «равенство»
  * для него означает «массив содержит» (arrayContains).
  */
 function compileAnyOf(ref: FieldRef, values: QueryFieldValue[], ctx: CompileContext): SQL {
-  if (ref.type === 'array') {
+  if (filterShape(ref.type) === 'array') {
     const found = arrayLiterals(values).map((v) => arrayContains(ref, v));
     const only = found[0] as SQL;
     return found.length === 1 ? only : sql`(${sql.join(found, sql` OR `)})`;
@@ -381,7 +418,7 @@ function compileAnyOf(ref: FieldRef, values: QueryFieldValue[], ctx: CompileCont
  * date-токены в noneOf — отрицание их сравнений внутри той же скобки.
  */
 function compileNoneOf(ref: FieldRef, values: QueryFieldValue[], ctx: CompileContext): SQL {
-  if (ref.type === 'array') {
+  if (filterShape(ref.type) === 'array') {
     // Правило «NULL проходит» (решение 10) выполняется само: NOT (@>) истинно и для
     // сущностей, у которых этого аспекта нет вовсе, — отдельная ветка IS NULL не нужна.
     // Цена — NOT снимает индекс, отрицание по массиву остаётся seq-scan'ом; это сознательно:
@@ -500,7 +537,16 @@ function sortItem(s: QuerySortField, ctx: CompileContext, aspects: Set<string>):
   return sql`${sortCast(ref)} ${dir} NULLS LAST`;
 }
 
-/** Сортировочный каст поля аспекта: date/numeric — по §6.1; timestamp — момент, не строка. */
+/**
+ * Сортировочный каст поля аспекта: date/numeric — по §6.1; timestamp — момент, не строка.
+ *
+ * `switch` исчерпывающий: `string`/`boolean` названы поимённо, а `default` держит
+ * `never`-гард. Прежний `default: return sql`(${expr})`` был тем самым молчанием, из-за
+ * которого дефект ветки прожил незаметно, — он же утащил бы в сортировку по тексту JSON
+ * и любой СЛЕДУЮЩИЙ член `FieldType`, не уронив ни типизацию, ни тест. Текстовый порядок
+ * — осознанный выбор ровно для двух типов, поэтому он записан для них, а не для «всего
+ * остального».
+ */
 function sortCast(ref: FieldRef): SQL {
   switch (ref.type) {
     case 'date':
@@ -511,15 +557,24 @@ function sortCast(ref: FieldRef): SQL {
       return sql`(${ref.expr})::numeric`;
     case 'timestamp':
       return sql`(${ref.expr})::timestamptz`;
+    case 'string':
+    case 'boolean':
+      // Текстовая проекция `->>` и есть порядок: у строк лексикографический, у булевых
+      // 'false' < 'true'. Enum сортируется не здесь — sortItem подставляет CASE раньше.
+      return sql`(${ref.expr})`;
     case 'array':
     case 'unfilterable':
       // Парсер такую сортировку отсекает (parse.ts, parseSortBy) — сюда попасть можно
-      // только рассинхроном, и тогда молчать нельзя: раньше default сортировал бы по
-      // тексту JSON, то есть по случайному порядку сериализации.
+      // только рассинхроном, и тогда молчать нельзя: порядок по тексту JSON правдоподобен
+      // и бессмыслен, то есть неотличим от рабочего.
       throw new QueryCompileError(
         `сортировка по полю типа '${fieldTypeLabel(ref.type)}' — рассинхрон с парсером`,
       );
-    default:
-      return sql`(${ref.expr})`;
+    default: {
+      const unhandled: never = ref.type;
+      throw new QueryCompileError(
+        `сортировка по полю типа '${String(unhandled)}' — тип добавлен без ветки в sortCast`,
+      );
+    }
   }
 }
