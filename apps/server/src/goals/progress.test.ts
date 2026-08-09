@@ -331,14 +331,21 @@ describe('computeGoalProgress: честные отказы вместо паде
     const user = freshUserId();
     // Лог проверяется ЗДЕСЬ, а не отдельным тестом, потому что оба места, дающие
     // `invalid_query`, дают его с разным диагнозом (грамматика vs компиляция), и второе
-    // достижимо только вне контекста сущности — то есть мимо entity.get. Дроссель гасит
-    // повтор по паре «место + цель», поэтому обе строки видны только на ПЕРВОМ отказе
-    // каждого места с `this = null`: этот тест — он и есть.
+    // достижимо только вне контекста сущности — то есть мимо entity.get.
+    //
+    // Уникальный `this` — чтобы ассерты не зависели от ПОРЯДКА тестов: дроссель гасит
+    // повтор по ключу «место + диагноз + цель», и с общим `null` любой отказ того же
+    // места, добавленный выше по файлу, задавил бы эти строки. Для грамматической ветки
+    // контекст безразличен (queryContext его в БД не ищет, компиляция сюда не доходит).
     const [broken, brokenLog] = await captureErrors(() =>
-      progressOf(user, {
-        progress_source: { query: 'aspect=orbis/financial, %%%', aggregate: 'count' },
-        target_value: '10',
-      }),
+      progressOf(
+        user,
+        {
+          progress_source: { query: 'aspect=orbis/financial, %%%', aggregate: 'count' },
+          target_value: '10',
+        },
+        crypto.randomUUID(),
+      ),
     );
     expect(broken.unsupported).toBe('invalid_query');
     expect(broken.current).toBe('0');
@@ -346,7 +353,9 @@ describe('computeGoalProgress: честные отказы вместо паде
       true,
     );
 
-    // `this` вне контекста сущности — структурная ошибка компиляции, тоже мягкая
+    // `this` вне контекста сущности — структурная ошибка компиляции, тоже мягкая.
+    // Здесь `this` ОБЯЗАН остаться NULL: он и есть предмет проверки. Порядок тестов этой
+    // строке не страшен — ключ разводит диагноз, а такой запрос в файле один.
     const [noThis, noThisLog] = await captureErrors(() =>
       progressOf(user, {
         progress_source: { query: 'children_of=this', aggregate: 'count' },
@@ -420,15 +429,23 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
       await admin.client.end();
     }
 
+    // Уникальный `this` обязателен для НЕГАТИВНОГО ассерта ниже: ключ «aggregate + sum»
+    // с общим `null` уже израсходован предыдущим тестом, и строка «агрегат sum не
+    // выполнился» была бы задавлена дросселем, даже если бы тот catch сработал — то есть
+    // ассерт проверял бы дроссель вместо разделения catch'ей. Свой id делает его честным.
     const [p, logged] = await captureErrors(() =>
-      progressOf(user, {
-        progress_source: {
-          query: 'aspect=orbis/financial, tags=nan',
-          aggregate: 'sum',
-          field: 'amount',
+      progressOf(
+        user,
+        {
+          progress_source: {
+            query: 'aspect=orbis/financial, tags=nan',
+            aggregate: 'sum',
+            field: 'amount',
+          },
+          target_value: '100',
         },
-        target_value: '100',
-      }),
+        crypto.randomUUID(),
+      ),
     );
     expect(p.unsupported).toBe('compute_failed');
     expect(p.current).toBe('0');
@@ -633,6 +650,47 @@ describe('логи отказа: конфигурационный отказ н�
     });
 
     expect(logged.filter((l) => l.includes(goal.id)).length).toBe(1);
+  });
+
+  test('новая беда той же цели в том же месте печатается, а не гасится устаревшей', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const goal = await goalWith(caller, 'Цель, которую чинят', {
+      query: 'aspect=orbis/financial, direction=income',
+      aggregate: 'sum',
+      field: 'amountt',
+    });
+
+    const [, first] = await captureErrors(() => caller.entity.get({ id: goal.id }));
+    expect(first.filter((l) => l.includes(goal.id)).map((l) => l.includes('amountt'))).toEqual([
+      true,
+    ]);
+
+    // Цикл починки: владелец правит опечатку и промахивается СНОВА — тем же местом
+    // отказа (`invalid_field`), но по другой причине (поле нечисловое). Если бы ключ
+    // дедупа знал только место и цель, эта строка не напечаталась бы вовсе, а на сотом
+    // чтении перепечаталась бы старая — про уже исправленное `amountt`. Лог с устаревшим
+    // диагнозом хуже пустого: по нему чинят не то.
+    await caller.entity.update({
+      id: goal.id,
+      aspects: {
+        'orbis/goal': {
+          progress_source: {
+            query: 'aspect=orbis/financial, direction=income',
+            aggregate: 'sum',
+            field: 'counterparty',
+          },
+          target_value: '100',
+        },
+      },
+    });
+
+    const [got, second] = await captureErrors(() => caller.entity.get({ id: goal.id }));
+    expect(got.goalProgress?.unsupported).toBe('invalid_field');
+    const mine = second.filter((l) => l.includes(goal.id));
+    expect(mine.length).toBe(1);
+    expect(mine[0]).toContain('counterparty');
+    expect(mine[0]).not.toContain('amountt');
   });
 
   test('конфигурационный отказ цели не молчит: ярлык и id цели есть в логе', async () => {
