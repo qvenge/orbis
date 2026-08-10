@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type RenderResult, render } from '@testing-library/react';
 import { TRPCClientError, type TRPCLink } from '@trpc/client';
 import { observable } from '@trpc/server/observable';
-import type { ReactNode } from 'react';
+import { type ReactNode, Suspense } from 'react';
 import { trpc } from '../trpc';
 
 export type MockHandler = (path: string, input: unknown) => unknown | Promise<unknown>;
@@ -52,7 +52,11 @@ export function renderWithProviders(
   });
   const result = render(
     <trpc.Provider client={client} queryClient={qc}>
-      <QueryClientProvider client={qc}>{ui}</QueryClientProvider>
+      <QueryClientProvider client={qc}>
+        {/* Suspense — страховка для тестов, которые рендерят ленивое поддерево напрямую.
+            Для синхронного дерева обёртка не меняет ничего. */}
+        <Suspense fallback={null}>{ui}</Suspense>
+      </QueryClientProvider>
     </trpc.Provider>,
   );
   return Object.assign(result, { calls });

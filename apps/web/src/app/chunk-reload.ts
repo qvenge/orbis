@@ -1,0 +1,31 @@
+/**
+ * Провал загрузки ленивого чанка почти всегда означает одно: вкладка открыта на старом
+ * index.html, а деплой уже сменил имена чанков (каждый деплой — новый контейнер с чистым
+ * dist, старые файлы исчезают). Лечится перезагрузкой: свежий index.html знает новые имена.
+ *
+ * Vite шлёт на window событие 'vite:preloadError', когда динамический import() не удался.
+ *
+ * Перезаход РОВНО ОДИН на сессию вкладки. Второй провал уже не про устаревший index.html —
+ * это сеть или сервер, и повторная перезагрузка превратилась бы в цикл. Флаг живёт в
+ * sessionStorage (переживает reload, умирает с вкладкой) и намеренно НЕ снимается: второй
+ * деплой за одну сессию вкладки — редкость, и там честнее показать экран с кнопкой
+ * (ChunkErrorBoundary), чем перезагружать пользователя молча ещё раз.
+ */
+const RELOADED_FLAG = 'orbis:chunk-reloaded';
+
+export function installChunkReload(reload: () => void = () => location.reload()): () => void {
+  const onPreloadError = (e: Event) => {
+    if (sessionStorage.getItem(RELOADED_FLAG) !== null) return;
+    sessionStorage.setItem(RELOADED_FLAG, '1');
+    // preventDefault гасит переброс ошибки внутри самого vite (vite/dist/node/chunks/node.js:
+    // `if (!e.defaultPrevented) throw err`) — один лишний uncaught в консоли перед уходом
+    // страницы. От ChunkErrorBoundary это НЕ спасает и спасать не должно: погашенный
+    // preload отдаёт модуль как undefined, распаковка именованного экспорта в router.tsx
+    // падает на нём, и граница успевает показать свой кадр — но лишь до фактической
+    // перезагрузки, которую мы запускаем следующей строкой.
+    e.preventDefault();
+    reload();
+  };
+  window.addEventListener('vite:preloadError', onPreloadError);
+  return () => window.removeEventListener('vite:preloadError', onPreloadError);
+}

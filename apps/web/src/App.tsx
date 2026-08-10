@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { AppShell } from './app/AppShell';
+import { installChunkReload } from './app/chunk-reload';
 import { externalEntryPath, installHistorySync, openDeepLink, seedHistory } from './app/history';
 import { useRetryFlush } from './state/retry';
 
@@ -41,6 +42,11 @@ export function App() {
     // истории на месте, стор восстановит persist, трогать нечего.
     return installHistorySync();
   }, []);
+
+  // Провал загрузки ленивого чанка → один автоматический перезаход (см. chunk-reload.ts).
+  // Здесь же, ниже OnboardingGate: ленивые чанки грузятся только внутри приложения,
+  // до гейта грузить нечему.
+  useEffect(() => installChunkReload(), []);
 
   return <AppShell />;
 }

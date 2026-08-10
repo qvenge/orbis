@@ -1,22 +1,45 @@
 import { CalendarDays, FolderOpen, type LucideIcon, MessageSquare, Wallet } from 'lucide-react';
+import { lazy, Suspense } from 'react';
 import { AgendaScreen } from '../features/agenda/AgendaScreen';
 import { useAgendaOverdue } from '../features/agenda/useAgenda';
 import { BrowserScreen } from '../features/browser/BrowserScreen';
-import { BudgetScreen } from '../features/budget/BudgetScreen';
-import { CategoryScreen } from '../features/budget/CategoryScreen';
-import { RolloverScreen } from '../features/budget/RolloverScreen';
-import { TransactionsScreen } from '../features/budget/TransactionsScreen';
 import { useBudgetAlertCount, useBudgetTabVisible } from '../features/budget/useBudget';
 import { ChatScreen } from '../features/chat/ChatScreen';
 import { ChatThread } from '../features/chat/ChatThread';
 import { DetailScreen } from '../features/entity-detail/DetailScreen';
-import { ImportFlow } from '../features/import/ImportFlow';
 import { MemoryScreen } from '../features/settings/MemoryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
 import { type ScreenRef, type Tab, useNav } from '../state/navigation';
 import { useRetryBuffer } from '../state/retry';
 import { NavBadge } from '../ui/NavBadge';
+import { ChunkErrorBoundary } from './ChunkErrorBoundary';
+import { ScreenFallback } from './ScreenFallback';
 import { ScreenHeader } from './ScreenHeader';
+
+// Ленивые экраны: вкладка Budget и разовый мастер импорта не нужны первому кадру.
+// Граница лени стоит ЗДЕСЬ, а не в самих модулях: десятки тестов рендерят эти компоненты
+// напрямую через renderWithProviders, и ленивость модуля уронила бы их все.
+// ВАЖНО: у этих модулей не должно остаться ни одного статического импортёра — статический
+// импорт рядом с динамическим молча схлопывает чанк обратно во входной. (Тесты не в счёт:
+// в сборку они не входят. ImportFlow.test.tsx:18 берёт BudgetScreen статически — и это
+// нормально. А вот CategoryScreen/TransactionsScreen/RolloverScreen импортируют
+// `monthTitle`/`currentMonth`/`Section` из BudgetScreen — все они ленивые сами, так что
+// эти рёбра остаются целиком внутри ленивой части графа.)
+const BudgetScreen = lazy(() =>
+  import('../features/budget/BudgetScreen').then((m) => ({ default: m.BudgetScreen })),
+);
+const CategoryScreen = lazy(() =>
+  import('../features/budget/CategoryScreen').then((m) => ({ default: m.CategoryScreen })),
+);
+const RolloverScreen = lazy(() =>
+  import('../features/budget/RolloverScreen').then((m) => ({ default: m.RolloverScreen })),
+);
+const TransactionsScreen = lazy(() =>
+  import('../features/budget/TransactionsScreen').then((m) => ({ default: m.TransactionsScreen })),
+);
+const ImportFlow = lazy(() =>
+  import('../features/import/ImportFlow').then((m) => ({ default: m.ImportFlow })),
+);
 
 // Вкладки ЯДРА (02-core-os §1.1) в порядке спеки: Chat, Browser, Agenda. Agenda —
 // не «устанавливаемый view», гейта installedViews у неё нет (в отличие от budget,
@@ -121,7 +144,14 @@ export function ActiveScreen() {
       data-depth={stack.length}
       className="flex-1 overflow-y-auto"
     >
-      {renderScreen(activeTab, top)}
+      {/* Одна граница на всё содержимое <main>. Больше не нужно: экраны сменяют друг
+          друга целиком, одновременно виден ровно один, а чанк каждого модуля грузится
+          один раз за жизнь вкладки (React.lazy кэширует результат) — фолбэк мелькает
+          только на первом заходе. resetKey снимает пойманную ошибку при уходе с экрана:
+          провал чанка Budget не должен запирать вкладки, которые грузятся статически. */}
+      <ChunkErrorBoundary resetKey={`${activeTab}/${top?.kind ?? 'root'}`}>
+        <Suspense fallback={<ScreenFallback />}>{renderScreen(activeTab, top)}</Suspense>
+      </ChunkErrorBoundary>
     </main>
   );
 }

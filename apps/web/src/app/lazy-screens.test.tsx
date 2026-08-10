@@ -1,0 +1,130 @@
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { expect, test, vi } from 'vitest';
+import { useNav } from '../state/navigation';
+import { type MockHandler, renderWithProviders } from '../test/harness';
+import { ChunkErrorBoundary } from './ChunkErrorBoundary';
+import { installChunkReload } from './chunk-reload';
+import { ActiveScreen } from './router';
+import { ScreenFallback } from './ScreenFallback';
+
+test('заглушка экрана показывает скелетон, а не текст «Загрузка…»', () => {
+  render(<ScreenFallback />);
+  expect(screen.getAllByRole('status', { name: 'Загрузка' }).length).toBeGreaterThanOrEqual(1);
+  expect(screen.queryByText(/Загрузка…/)).not.toBeInTheDocument();
+});
+
+function Boom(): never {
+  throw new Error('Failed to fetch dynamically imported module');
+}
+
+test('граница ошибок ловит провал рендера и даёт кнопку обновления', () => {
+  // React печатает пойманную ошибку в консоль — это ожидаемо, глушим шум.
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  render(
+    <ChunkErrorBoundary>
+      <Boom />
+    </ChunkErrorBoundary>,
+  );
+  expect(screen.getByRole('alert')).toBeInTheDocument();
+  expect(screen.getByTestId('chunk-reload')).toBeInTheDocument();
+  err.mockRestore();
+});
+
+// Без этого сброса один провал чанка Budget запирал бы ВЕСЬ <main>: state класса переживает
+// смену children, и вкладка «Чат» (грузится статически, ни в чём не виновата) показывала бы
+// тот же кадр «Не удалось загрузить экран» до ручной перезагрузки.
+test('смена экрана снимает пойманную ошибку, тот же экран — держит', () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const { rerender } = render(
+    <ChunkErrorBoundary resetKey="budget/root">
+      <Boom />
+    </ChunkErrorBoundary>,
+  );
+  expect(screen.getByRole('alert')).toBeInTheDocument();
+
+  // Тот же экран: перерендер здоровыми children кадр ошибки НЕ снимает.
+  rerender(
+    <ChunkErrorBoundary resetKey="budget/root">
+      <div data-testid="ok" />
+    </ChunkErrorBoundary>,
+  );
+  expect(screen.getByRole('alert')).toBeInTheDocument();
+  expect(screen.queryByTestId('ok')).toBeNull();
+
+  // Ушли на другой экран — граница пробует снова.
+  rerender(
+    <ChunkErrorBoundary resetKey="chat/root">
+      <div data-testid="ok" />
+    </ChunkErrorBoundary>,
+  );
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByTestId('ok')).toBeInTheDocument();
+  err.mockRestore();
+});
+
+// Собственно смысл всей затеи: экран Budget приезжает отдельным чанком, до его приезда
+// в <main> стоит ScreenFallback, а второй заход на ту же вкладку заглушку уже НЕ показывает
+// (React.lazy держит разрешённый модуль) — иначе разбиение стоило бы мигания на каждом
+// переключении вкладок.
+const budgetHandler: MockHandler = (path) => {
+  if (path === 'budget.overview')
+    return {
+      period: { start: '2026-07-01', end: '2026-07-31' },
+      balance: { income: '0.00', expense: '0.00', balance: '0.00' },
+      envelopes: [],
+      comingUp: [],
+      planned: [],
+      unbudgeted: [],
+      alertCount: 0,
+    };
+  if (path === 'budget.postDue') return { posted: 0 };
+  if (path === 'budget.rolloverPreview') return { month: '2026-07', rows: [], needsSetup: false };
+  return {};
+};
+
+test('вкладка Budget: сперва ScreenFallback, потом сам экран; повторный заход — без заглушки', async () => {
+  useNav.setState({
+    activeTab: 'budget',
+    stacks: { chat: [], browser: [], agenda: [], budget: [] },
+  });
+  renderWithProviders(<ActiveScreen />, budgetHandler);
+
+  // Первый синхронный кадр — заглушка: чанк экрана ещё в пути.
+  expect(screen.getByRole('heading', { name: '…' })).toBeInTheDocument();
+  expect(screen.getAllByRole('status', { name: 'Загрузка' }).length).toBeGreaterThanOrEqual(3);
+
+  await waitFor(() => expect(screen.getByText(/^Бюджет · /)).toBeInTheDocument());
+  expect(screen.queryByRole('heading', { name: '…' })).toBeNull();
+
+  // Ушли и вернулись: модуль уже разрешён, заголовок настоящего экрана есть СИНХРОННО.
+  act(() => useNav.getState().switchTab('chat'));
+  await waitFor(() => expect(screen.queryByText(/^Бюджет · /)).toBeNull());
+  act(() => useNav.getState().switchTab('budget'));
+  expect(screen.queryByRole('heading', { name: '…' })).toBeNull();
+  expect(screen.getByText(/^Бюджет · /)).toBeInTheDocument();
+});
+
+test('vite:preloadError перезагружает страницу ровно один раз за сессию вкладки', () => {
+  sessionStorage.clear();
+  const reload = vi.fn();
+  const uninstall = installChunkReload(reload);
+
+  const first = new Event('vite:preloadError', { cancelable: true });
+  window.dispatchEvent(first);
+  expect(reload).toHaveBeenCalledTimes(1);
+  // vite перебрасывает ошибку дальше, только если событие не отменили
+  // (`if (!e.defaultPrevented) throw err`) — проверяем сам факт отмены.
+  expect(first.defaultPrevented).toBe(true);
+
+  // Второй провал в той же сессии вкладки перезагрузку уже не запускает — и событие
+  // остаётся неотменённым, чтобы ошибка дошла до React и до ChunkErrorBoundary.
+  const second = new Event('vite:preloadError', { cancelable: true });
+  window.dispatchEvent(second);
+  expect(reload).toHaveBeenCalledTimes(1);
+  expect(second.defaultPrevented).toBe(false);
+
+  uninstall();
+  window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
+  expect(reload).toHaveBeenCalledTimes(1);
+  sessionStorage.clear();
+});
