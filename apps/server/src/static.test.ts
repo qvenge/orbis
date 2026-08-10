@@ -87,6 +87,32 @@ describe('static serving + SPA-fallback (Task 7)', () => {
     expect(await res.text()).toContain(INDEX_MARKER);
   });
 
+  // Промах в /assets/* — НЕ клиентский роут: файл с хешем в имени либо есть, либо исчез
+  // вместе со старым деплоем (каждый деплой — новый контейнер с чистым dist). SPA-fallback
+  // отдавал на него index.html с 200 и text/html, и провал динамического import() приходил
+  // в консоль ошибкой MIME («Failed to fetch dynamically imported module») вместо честного
+  // «файла нет». С ленивыми чанками этот путь стал штатным.
+  test('промах в /assets/* → 404, а не SPA-fallback', async () => {
+    for (const path of ['/assets/index-DEADBEEF.js', '/assets/nested/chunk-DEADBEEF.js']) {
+      const res = await app.request(path);
+      expect(res.status).toBe(404);
+      expect(res.headers.get('content-type') ?? '').not.toContain('text/html');
+      expect(await res.text()).not.toContain(INDEX_MARKER);
+    }
+  });
+
+  // HEAD ходит по GET-роутам Hono, поэтому до правки промах по HEAD тоже отвечал 200 и
+  // text/html (телом пустым — оттого и незаметно). Прочие методы до статики не доходят
+  // вовсе и падают в 404 Hono; пин держит обе половины метода-поверхности разом, чтобы
+  // «ассета нет» нигде не выглядело как «вот вам страница».
+  test('/assets/* не отдаёт HTML ни на одном методе', async () => {
+    for (const method of ['HEAD', 'POST', 'PUT', 'DELETE']) {
+      const res = await app.request('/assets/index-DEADBEEF.js', { method });
+      expect(res.status).toBe(404);
+      expect(res.headers.get('content-type') ?? '').not.toContain('text/html');
+    }
+  });
+
   test('/health НЕ перехвачен: всё ещё {status:"ok"}', async () => {
     const res = await app.request('/health');
     expect(res.status).toBe(200);

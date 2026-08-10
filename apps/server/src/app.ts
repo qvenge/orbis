@@ -109,6 +109,16 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: Ap
   // выше уже забрали свои методы. serveStatic при отсутствии файла зовёт next() →
   // цепочка доходит до SPA-fallback (index.html) — только для GET.
   app.get('*', serveStatic({ root: webDistDir, onFound: cacheHeaders }));
+  // Отсечка ДО SPA-fallback: хешированный ассет либо существует (его отдал serveStatic
+  // выше и сюда не дошёл), либо исчез вместе со старым деплоем — клиентским роутом
+  // /assets/* не бывает никогда. Без этой строки fallback отдаёт на промах index.html
+  // с 200 и text/html, и провал динамического import() приходит в консоль ошибкой MIME
+  // («Failed to fetch dynamically imported module») вместо «файла нет»; на честный 404
+  // опирается клиентский обработчик vite:preloadError. c.notFound(), а не свой c.text:
+  // тот же путь при не-GET уже отвечает штатным 404 Hono, и расходиться телом ответа
+  // по методу незачем (структурная JSON-форма /mcp тут ни при чём — её читает внешний
+  // агент, а здесь читатель — загрузчик модулей браузера, ему важны код и не-HTML тип).
+  app.get('/assets/*', (c) => c.notFound());
   // SPA-fallback: любой не пойманный выше GET (клиентский роут вроде /browser/123) →
   // index.html. path игнорирует путь запроса, поэтому всегда отдаёт единый bootstrap.
   app.get('*', serveStatic({ path: 'index.html', root: webDistDir, onFound: cacheHeaders }));
