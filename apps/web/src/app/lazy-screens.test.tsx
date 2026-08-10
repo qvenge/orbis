@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { lazy, Suspense } from 'react';
 import { expect, test, vi } from 'vitest';
+import { App } from '../App';
 import { useNav } from '../state/navigation';
 import { type MockHandler, renderWithProviders } from '../test/harness';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
@@ -186,27 +187,96 @@ test('экран сущности: первый кадр — заглушка б
   expect(calls.some((c) => c.path === 'entity.get')).toBe(true);
 });
 
-test('vite:preloadError перезагружает страницу ровно один раз за сессию вкладки', () => {
+/** Провал чанка + ответ на вопрос «жив ли сервер». Ждём осевшего решения обработчика. */
+async function preloadErrorWith(serverUp: boolean, reload: () => void) {
+  const uninstall = installChunkReload(reload, () => Promise.resolve(serverUp));
+  window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
+  await vi.waitFor(() => {}); // дать досчитать асинхронному решению
+  return uninstall;
+}
+
+test('vite:preloadError перезагружает страницу ровно один раз за сессию вкладки', async () => {
   sessionStorage.clear();
   const reload = vi.fn();
-  const uninstall = installChunkReload(reload);
+  const uninstall = installChunkReload(reload, () => Promise.resolve(true));
 
   const first = new Event('vite:preloadError', { cancelable: true });
   window.dispatchEvent(first);
-  expect(reload).toHaveBeenCalledTimes(1);
-  // vite перебрасывает ошибку дальше, только если событие не отменили
-  // (`if (!e.defaultPrevented) throw err`) — проверяем сам факт отмены.
-  expect(first.defaultPrevented).toBe(true);
+  await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  // Событие НЕ отменяем намеренно: решение асинхронно, а vite читает defaultPrevented
+  // синхронно. Отменив, мы получили бы `import()` → undefined и мусорную ошибку от React
+  // вместо настоящей «Failed to fetch dynamically imported module».
+  expect(first.defaultPrevented).toBe(false);
 
-  // Второй провал в той же сессии вкладки перезагрузку уже не запускает — и событие
-  // остаётся неотменённым, чтобы ошибка дошла до React и до ChunkErrorBoundary.
-  const second = new Event('vite:preloadError', { cancelable: true });
-  window.dispatchEvent(second);
+  // Второй провал в той же сессии вкладки перезагрузку уже не запускает.
+  window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
+  await vi.waitFor(() => {});
   expect(reload).toHaveBeenCalledTimes(1);
-  expect(second.defaultPrevented).toBe(false);
 
   uninstall();
   window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
+  await vi.waitFor(() => {});
   expect(reload).toHaveBeenCalledTimes(1);
   sessionStorage.clear();
+});
+
+// Дефект, найденный живым смоуком: при остановленном сервере перезагрузка забирала
+// приложение целиком (вкладка уходила на страницу ошибки браузера), а единственная попытка
+// сгорала впустую. Событие приходит на ЛЮБОЙ отказ import(), не только на «чанк исчез».
+test('сервер не отвечает → перезагрузки нет и попытка НЕ потрачена', async () => {
+  sessionStorage.clear();
+  const reload = vi.fn();
+  const uninstall = await preloadErrorWith(false, reload);
+  expect(reload).not.toHaveBeenCalled();
+  expect(sessionStorage.getItem('orbis:chunk-reloaded')).toBeNull();
+  uninstall();
+
+  // Попытка цела: следующий провал — уже при живом сервере — лечится перезагрузкой.
+  const reload2 = vi.fn();
+  const uninstall2 = await preloadErrorWith(true, reload2);
+  expect(reload2).toHaveBeenCalledTimes(1);
+  uninstall2();
+  sessionStorage.clear();
+});
+
+// Заблокированное хранилище (сторонний контекст, «блокировать все cookies»): getItem бросает
+// SecurityError прямо из слушателя. Без гарантии «ровно один раз» перезагружаться нельзя —
+// это цикл, — поэтому правильное поведение здесь именно бездействие, а не перезаход.
+test('sessionStorage недоступен → слушатель не падает и не перезагружает', async () => {
+  const get = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+    throw new DOMException('blocked', 'SecurityError');
+  });
+  // Одного «reload не вызван» мало: при броске из слушателя он тоже не вызывается, и тест
+  // проходил бы на сломанном коде. Ловим сам факт броска — jsdom репортит исключение
+  // слушателя как событие 'error' на window.
+  const thrown: unknown[] = [];
+  const onError = (e: ErrorEvent) => {
+    thrown.push(e.error);
+    e.preventDefault();
+  };
+  window.addEventListener('error', onError);
+
+  const reload = vi.fn();
+  const uninstall = await preloadErrorWith(true, reload);
+  expect(thrown).toEqual([]);
+  expect(reload).not.toHaveBeenCalled();
+
+  window.removeEventListener('error', onError);
+  uninstall();
+  get.mockRestore();
+});
+
+// App.tsx:49 — единственная боевая точка установки. Без этого теста строку можно удалить,
+// сьют останется зелёным, а прод потеряет автоперезаход целиком. Проверяем не мок модуля,
+// а наблюдаемый факт: слушатель на window появился и снялся при размонтировании.
+test('App ставит слушатель vite:preloadError и снимает его при размонтировании', () => {
+  const add = vi.spyOn(window, 'addEventListener');
+  const remove = vi.spyOn(window, 'removeEventListener');
+  const { unmount } = renderWithProviders(<App />, () => ({}));
+  expect(add.mock.calls.some(([type]) => type === 'vite:preloadError')).toBe(true);
+
+  unmount();
+  expect(remove.mock.calls.some(([type]) => type === 'vite:preloadError')).toBe(true);
+  add.mockRestore();
+  remove.mockRestore();
 });
