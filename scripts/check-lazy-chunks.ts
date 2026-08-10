@@ -22,11 +22,12 @@
  *
  * Запуск: `bun scripts/check-lazy-chunks.ts` — после сборки web. В CI стоит следом за ней.
  */
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 
 const ASSETS_DIR = 'apps/web/dist/assets';
+const ROUTER = 'apps/web/src/app/router.tsx';
 
-/** Экраны, у которых обязан быть собственный чанк. Порядок — как в router.tsx. */
+/** Экраны, у которых обязан быть собственный чанк. Сверяется с router.tsx ниже. */
 const LAZY_SCREENS = [
   'BudgetScreen',
   'CategoryScreen',
@@ -35,6 +36,45 @@ const LAZY_SCREENS = [
   'ImportFlow',
   'DetailScreen',
 ];
+
+/**
+ * Общие чанки ленивой части: сами по себе не экраны, но статический импортёр у любого из них
+ * уводит во входной чанк те же байты, а шесть файлов экранов при этом остаются на месте —
+ * то есть проверка одних экранов такую регрессию пропускает.
+ *
+ * Здесь только те, чьё имя даёт НАШ модуль: `features/entity-detail/NativeRow.tsx` и
+ * `features/budget/txQuery.ts`. Проверено тремя сборками — имена держатся и при невинной
+ * правке, и при смене состава чанков.
+ *
+ * Третий общий чанк, `dist-*` (~7 159 Б, код Radix), сюда сознательно НЕ включён: его имя
+ * даёт путь внутри node_modules, а не наш файл. Замер: при добавлении Radix-компонента в
+ * ленивый экран он разъезжается на ДВА чанка (`dist-0.55кБ` + `dist-19.58кБ`) — то есть
+ * префикс не опознаёт одну сущность, а провал такой проверки было бы не отличить от
+ * обычной перетасовки зависимостей, и сообщение вышло бы неисполнимым. Цена решения —
+ * 7 159 Б, которые могут вернуться во вход молча; это записано как принятый долг.
+ */
+const SHARED_CHUNKS = ['NativeRow', 'txQuery'];
+
+// --- Сверка списка с роутером -------------------------------------------------------------
+// Седьмая точка lazy(), добавленная без правки LAZY_SCREENS, осталась бы без охраны — молча,
+// то есть ровно тем способом, против которого этот страж и написан. Сверяем не число, а
+// ИМЕНА: чанк называется по базовому имени модуля из import(), поэтому список обязан совпасть
+// с набором ленивых импортов роутера точь-в-точь.
+const routerSrc = readFileSync(ROUTER, 'utf8');
+const inRouter = [...routerSrc.matchAll(/lazy\([\s\S]{0,200}?import\('([^']+)'\)/g)].map(
+  (m) => m[1].split('/').pop() as string,
+);
+const onlyInRouter = inRouter.filter((n) => !LAZY_SCREENS.includes(n));
+const onlyInList = LAZY_SCREENS.filter((n) => !inRouter.includes(n));
+if (onlyInRouter.length > 0 || onlyInList.length > 0) {
+  console.error(
+    `check-lazy-chunks: список LAZY_SCREENS разошёлся с ${ROUTER}.\n` +
+      (onlyInRouter.length > 0 ? `  ленивые в роутере, но не в списке: ${onlyInRouter}\n` : '') +
+      (onlyInList.length > 0 ? `  в списке, но уже не ленивые в роутере: ${onlyInList}\n` : '') +
+      'Приведите список в соответствие — охрана должна покрывать все точки lazy().',
+  );
+  process.exit(1);
+}
 
 let files: string[];
 try {
@@ -47,21 +87,25 @@ try {
   process.exit(1);
 }
 
-const missing = LAZY_SCREENS.filter(
+const guarded = [...LAZY_SCREENS, ...SHARED_CHUNKS];
+const missing = guarded.filter(
   (name) => !files.some((f) => new RegExp(`^${name}-[\\w-]+\\.js$`).test(f)),
 );
 
 if (missing.length > 0) {
   console.error(
-    'check-lazy-chunks: отдельного чанка нет у экранов: ' +
+    'check-lazy-chunks: отдельного чанка нет у модулей: ' +
       `${missing.join(', ')}.\n` +
-      'Это значит, что где-то появился СТАТИЧЕСКИЙ импорт такого экрана — рядом с ленивым он\n' +
-      'схлопывает чанк во входной, и экран снова едет в первом кадре. Найдите импортёра\n' +
-      "(`grep -rn \"<Экран>'\" apps/web/src --include='*.ts*'`, тесты не считаются — они не\n" +
-      'входят в сборку) и уберите его. Если модулю нужен общий помощник из соседнего экрана,\n' +
-      'вынесите помощник в отдельный листовой модуль.',
+      'Это значит, что где-то появился СТАТИЧЕСКИЙ импорт такого модуля — рядом с ленивым он\n' +
+      'схлопывает чанк во входной, и байты снова едут в первом кадре. Найдите импортёра\n' +
+      "(`grep -rn \"<Модуль>'\" apps/web/src --include='*.ts*'`, тесты не считаются — они не\n" +
+      'входят в сборку) и уберите его. Если импортёру нужен общий помощник из ленивого\n' +
+      'модуля, вынесите помощник в отдельный листовой файл.',
   );
   process.exit(1);
 }
 
-console.log(`check-lazy-chunks: ok — отдельные чанки на месте у всех ${LAZY_SCREENS.length}.`);
+console.log(
+  `check-lazy-chunks: ok — отдельные чанки на месте у всех ${guarded.length} ` +
+    `(${LAZY_SCREENS.length} экранов + ${SHARED_CHUNKS.length} общих), список сверен с роутером.`,
+);

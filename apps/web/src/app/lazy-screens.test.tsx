@@ -187,11 +187,19 @@ test('экран сущности: первый кадр — заглушка б
   expect(calls.some((c) => c.path === 'entity.get')).toBe(true);
 });
 
+/**
+ * Дать асинхронному решению обработчика досчитать ДО КОНЦА. Одна макрозадача сливает все
+ * накопленные микрозадачи, а вся цепочка решения (проба → флаг → reload → finally) из них и
+ * состоит. Синхронизироваться на «проба вызвана» нельзя: это НАЧАЛО решения, а не конец, и
+ * событие, посланное в этот момент, попадает на ещё взведённый `deciding` и будет проглочено.
+ */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
 /** Провал чанка + ответ на вопрос «жив ли сервер». Ждём осевшего решения обработчика. */
 async function preloadErrorWith(serverUp: boolean, reload: () => void) {
   const uninstall = installChunkReload(reload, () => Promise.resolve(serverUp));
   window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
-  await vi.waitFor(() => {}); // дать досчитать асинхронному решению
+  await settle();
   return uninstall;
 }
 
@@ -202,7 +210,8 @@ test('vite:preloadError перезагружает страницу ровно �
 
   const first = new Event('vite:preloadError', { cancelable: true });
   window.dispatchEvent(first);
-  await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  await settle();
+  expect(reload).toHaveBeenCalledTimes(1);
   // Событие НЕ отменяем намеренно: решение асинхронно, а vite читает defaultPrevented
   // синхронно. Отменив, мы получили бы `import()` → undefined и мусорную ошибку от React
   // вместо настоящей «Failed to fetch dynamically imported module».
@@ -210,12 +219,12 @@ test('vite:preloadError перезагружает страницу ровно �
 
   // Второй провал в той же сессии вкладки перезагрузку уже не запускает.
   window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
-  await vi.waitFor(() => {});
+  await settle();
   expect(reload).toHaveBeenCalledTimes(1);
 
   uninstall();
   window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
-  await vi.waitFor(() => {});
+  await settle();
   expect(reload).toHaveBeenCalledTimes(1);
   sessionStorage.clear();
 });
@@ -236,6 +245,82 @@ test('сервер не отвечает → перезагрузки нет и 
   const uninstall2 = await preloadErrorWith(true, reload2);
   expect(reload2).toHaveBeenCalledTimes(1);
   uninstall2();
+  sessionStorage.clear();
+});
+
+// Настоящая проба (без инъекции) на чужом 200. Captive portal отеля/аэропорта перехватывает
+// запрос и отдаёт страницу входа с кодом 200 — при navigator.onLine === true. Приняв её за
+// «сервер жив», мы бы увезли вкладку на страницу портала, то есть воспроизвели ровно тот
+// отказ, против которого писан весь механизм.
+test('captive portal: 200 с HTML — это не наш сервер, перезагрузки нет', async () => {
+  sessionStorage.clear();
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response('<html><body>Войдите в сеть отеля</body></html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+    }),
+  );
+  const reload = vi.fn();
+  const uninstall = installChunkReload(reload); // проба НАСТОЯЩАЯ
+
+  // Событие повторяем внутри waitFor, пока его не примут: пока решение по первому не осело,
+  // `deciding` взведён и повторы — no-op. Второе обращение к /health и ЕСТЬ признак того, что
+  // первое решение досчитано. Ждать тут фиксированное число тиков нельзя: настоящая проба
+  // читает тело (`res.json()`), а это не только микрозадачи.
+  window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
+  await vi.waitFor(() => {
+    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Портальную страницу за наш сервер не приняли: ни перезагрузки, ни потраченной попытки.
+  expect(reload).not.toHaveBeenCalled();
+  expect(sessionStorage.getItem('orbis:chunk-reloaded')).toBeNull();
+  uninstall();
+  fetchMock.mockRestore();
+  sessionStorage.clear();
+});
+
+test('настоящая проба принимает наш /health ({status:"ok"}) и перезагружает', async () => {
+  sessionStorage.clear();
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ status: 'ok' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+  );
+  const reload = vi.fn();
+  const uninstall = installChunkReload(reload);
+
+  window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
+  await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  expect(fetchMock.mock.calls[0]?.[0]).toBe('/health');
+  uninstall();
+  fetchMock.mockRestore();
+  sessionStorage.clear();
+});
+
+// Отказ САМОЙ пробы не должен запирать механизм: без try/finally флаг `deciding` оставался бы
+// взведённым, и автоперезаход выключался бы до конца жизни вкладки молча.
+test('проба отклонилась → механизм не заперт, следующий провал обрабатывается', async () => {
+  sessionStorage.clear();
+  const reload = vi.fn();
+  let attempt = 0;
+  const uninstall = installChunkReload(reload, () => {
+    attempt += 1;
+    return attempt === 1 ? Promise.reject(new Error('проба сломалась')) : Promise.resolve(true);
+  });
+
+  window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
+  await settle();
+  expect(attempt).toBe(1);
+  expect(reload).not.toHaveBeenCalled();
+
+  await vi.waitFor(() => {
+    window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+  uninstall();
   sessionStorage.clear();
 });
 
