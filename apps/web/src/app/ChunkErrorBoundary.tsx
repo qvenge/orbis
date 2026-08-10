@@ -41,7 +41,9 @@ type State = { failed: boolean; shownFor: string | undefined };
  *
  * Кнопка, а не автоматический reload: цикл перезагрузок при настоящей потере сети хуже
  * одного честного экрана. Форма кадра — как у соседа с той же ролью
- * (OnboardingGate.tsx:38-56): role="alert", центр, text-danger, кнопка variant="outline".
+ * (OnboardingGate.tsx:38-56): role="alert", text-danger, кнопка variant="outline".
+ * Вертикальной центровки, в отличие от соседа, нет: шапка забирает свою высоту, и кадр
+ * висит под ней — так же, как содержимое любого другого экрана.
  */
 export class ChunkErrorBoundary extends Component<Props, State> {
   state: State = { failed: false, shownFor: undefined };
@@ -69,7 +71,7 @@ export class ChunkErrorBoundary extends Component<Props, State> {
         <ScreenHeader title="…" />
         <div
           role="alert"
-          className="flex flex-col items-center justify-center gap-3 p-6 text-sm text-danger"
+          className="flex flex-col items-center gap-3 p-6 text-sm text-danger"
         >
           <span>Не удалось открыть экран</span>
           <Button variant="outline" data-testid="chunk-reload" onClick={() => location.reload()}>
