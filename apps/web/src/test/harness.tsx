@@ -34,6 +34,13 @@ export function mockLink(handler: MockHandler): TRPCLink<AppRouter> {
       });
 }
 
+// Заглушка Suspense в обёртке — НЕ null и намеренно отличима. Сегодня через эту границу
+// не подвисает ни одно дерево сьюта; пустой fallback превратил бы будущее подвисание в тихую
+// пустоту, и падение пришло бы как «Unable to find an element» — без слова о том, что дерево
+// подвисло, и без подсказки, где искать. Ровно та болезнь, против которой написан
+// tests/setup.ts:11-18: улика в выводе важнее краткости разметки.
+const SUSPENDED = <div data-testid="harness-suspended">дерево подвисло под Suspense обёртки</div>;
+
 export function renderWithProviders(
   ui: ReactNode,
   handler: MockHandler = () => ({}),
@@ -55,7 +62,7 @@ export function renderWithProviders(
       <QueryClientProvider client={qc}>
         {/* Suspense — страховка для тестов, которые рендерят ленивое поддерево напрямую.
             Для синхронного дерева обёртка не меняет ничего. */}
-        <Suspense fallback={null}>{ui}</Suspense>
+        <Suspense fallback={SUSPENDED}>{ui}</Suspense>
       </QueryClientProvider>
     </trpc.Provider>,
   );

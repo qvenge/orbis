@@ -1,4 +1,5 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
+import { lazy, Suspense } from 'react';
 import { expect, test, vi } from 'vitest';
 import { useNav } from '../state/navigation';
 import { type MockHandler, renderWithProviders } from '../test/harness';
@@ -21,12 +22,15 @@ test('граница ошибок ловит провал рендера и да
   // React печатает пойманную ошибку в консоль — это ожидаемо, глушим шум.
   const err = vi.spyOn(console, 'error').mockImplementation(() => {});
   render(
-    <ChunkErrorBoundary>
+    <ChunkErrorBoundary resetKey="budget/root">
       <Boom />
     </ChunkErrorBoundary>,
   );
   expect(screen.getByRole('alert')).toBeInTheDocument();
   expect(screen.getByTestId('chunk-reload')).toBeInTheDocument();
+  // Шапка на кадре ошибки — по той же причине, что и у заглушки: в standalone-PWA
+  // системной кнопки «назад» нет, и без неё пользователь заперт на этом кадре.
+  expect(screen.getByRole('heading', { name: '…' })).toBeInTheDocument();
   err.mockRestore();
 });
 
@@ -59,6 +63,46 @@ test('смена экрана снимает пойманную ошибку, т
   );
   expect(screen.queryByRole('alert')).toBeNull();
   expect(screen.getByTestId('ok')).toBeInTheDocument();
+  err.mockRestore();
+});
+
+// Честная запись того, чего resetKey НЕ умеет, — чтобы следующий читатель не решил, будто
+// хождение по вкладкам чинит незагрузившийся экран. React.lazy кэширует ОТКАЗ загрузчика:
+// `lazyInitializer` заходит в блок загрузки только при `_status === -1`
+// (react/cjs/react.development.js:461), при отказе ставит `_status = 2` (:478-486) и дальше
+// синхронно перебрасывает сохранённую ошибку (:513). Практический смысл: «сеть отвалилась →
+// сеть вернулась» само не рассасывается, лечит только перезагрузка страницы.
+test('после провала чанка возврат на экран НЕ перезагружает его: отказ закэширован', async () => {
+  let loads = 0;
+  const Broken = lazy(() => {
+    loads++;
+    return Promise.reject(new Error('Failed to fetch dynamically imported module'));
+  });
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+  function Host({ at }: { at: 'broken' | 'other' }) {
+    return (
+      <ChunkErrorBoundary resetKey={at}>
+        <Suspense fallback={<span data-testid="fb" />}>
+          {at === 'broken' ? <Broken /> : <div data-testid="other-screen" />}
+        </Suspense>
+      </ChunkErrorBoundary>
+    );
+  }
+
+  const { rerender } = render(<Host at="broken" />);
+  await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+  expect(loads).toBe(1);
+
+  // Ушли на другой экран — граница разблокировалась, ради этого resetKey и заведён.
+  rerender(<Host at="other" />);
+  expect(screen.getByTestId('other-screen')).toBeInTheDocument();
+
+  // Вернулись: ни новой попытки загрузки, ни даже заглушки — кадр ошибки СРАЗУ.
+  rerender(<Host at="broken" />);
+  expect(loads).toBe(1);
+  expect(screen.queryByTestId('fb')).toBeNull();
+  expect(screen.getByRole('alert')).toBeInTheDocument();
   err.mockRestore();
 });
 
