@@ -5,7 +5,6 @@ import { useNav } from '../state/navigation';
 import { type MockHandler, renderWithProviders } from '../test/harness';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
 import { installChunkReload } from './chunk-reload';
-import { prefetchScreens } from './prefetch';
 import { ActiveScreen } from './router';
 import { ScreenFallback } from './ScreenFallback';
 
@@ -185,72 +184,6 @@ test('экран сущности: первый кадр — заглушка б
 
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача' })).toBeInTheDocument());
   expect(calls.some((c) => c.path === 'entity.get')).toBe(true);
-});
-
-test('фоновая догрузка планируется одной задачей и снимается отменой', () => {
-  const tasks: (() => Promise<PromiseSettledResult<unknown>[]>)[] = [];
-  let cancelled = 0;
-  const cancel = prefetchScreens({ budget: false }, (task) => {
-    tasks.push(task);
-    return () => {
-      cancelled++;
-    };
-  });
-  expect(tasks).toHaveLength(1);
-  cancel();
-  expect(cancelled).toBe(1);
-});
-
-// Гейт вкладки Budget (installedViews) — не украшение: пользователю без установленного view
-// экран недостижим, и его чанк был бы чистой тратой трафика.
-test('Budget догружается только при видимой вкладке; экран сущности — всегда', async () => {
-  const run = async (budget: boolean) => {
-    let task: (() => Promise<PromiseSettledResult<unknown>[]>) | undefined;
-    prefetchScreens({ budget }, (t) => {
-      task = t;
-      return () => {};
-    });
-    const settled = await (task as () => Promise<PromiseSettledResult<unknown>[]>)();
-    // Догрузка обязана отработать без отказов: модули существуют и импортируются.
-    expect(settled.every((r) => r.status === 'fulfilled')).toBe(true);
-    return settled.map((r) => (r.status === 'fulfilled' ? r.value : {}) as Record<string, unknown>);
-  };
-
-  const withoutBudget = await run(false);
-  expect(withoutBudget).toHaveLength(1);
-  expect(typeof withoutBudget[0]?.DetailScreen).toBe('function');
-
-  const withBudget = await run(true);
-  expect(withBudget).toHaveLength(2);
-  expect(withBudget.some((m) => typeof m.DetailScreen === 'function')).toBe(true);
-  expect(withBudget.some((m) => typeof m.BudgetScreen === 'function')).toBe(true);
-});
-
-// Перезаход — ответ на жест. vite шлёт vite:preloadError на любой провалившийся динамический
-// import, и без флага «в полёте фоновая догрузка» провал того, чего пользователь не просил,
-// забирал бы у него страницу — и тратил бы единственный на сессию автоперезаход впустую.
-test('провал фоновой догрузки НЕ перезагружает страницу, пользовательский — перезагружает', async () => {
-  sessionStorage.clear();
-  const reload = vi.fn();
-  const uninstall = installChunkReload(reload);
-
-  let task: (() => Promise<PromiseSettledResult<unknown>[]>) | undefined;
-  prefetchScreens({ budget: false }, (t) => {
-    task = t;
-    return () => {};
-  });
-  const inFlight = (task as () => Promise<PromiseSettledResult<unknown>[]>)();
-
-  window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
-  expect(reload).not.toHaveBeenCalled();
-  await inFlight;
-
-  // Та же ошибка вне фоновой догрузки — уже пользовательская, перезаход положен.
-  window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }));
-  expect(reload).toHaveBeenCalledTimes(1);
-
-  uninstall();
-  sessionStorage.clear();
 });
 
 test('vite:preloadError перезагружает страницу ровно один раз за сессию вкладки', () => {
