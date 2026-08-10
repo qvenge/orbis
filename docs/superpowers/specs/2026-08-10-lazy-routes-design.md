@@ -37,6 +37,20 @@ zustand, общий `ui/*`), и **входной чанк импортирует
   каждом рендере, а `categories`, `txQuery`, `EnvelopeCard`, `PlannedToFactCard`,
   `usePlanToFactPrompt` импортируются из `chat`, `entity-detail`, `agenda` и `import`.
   **568 строк Budget остаются в main при любом разрезе**; ленивы только четыре экрана.
+
+  > **ФАКТ 2026-08-10: число верное, слово «любом» — нет. Сегодня держатся 356 строк из трёх
+  > модулей.** Арифметика спеки воспроизводится точно: 89 (`useBudget`) + 71 (`categories`) +
+  > 69 (`txQuery`) + 196 (`EnvelopeCard`) + 105 (`PlannedToFactCard`) + 38
+  > (`usePlanToFactPrompt`) = **568**. Но **три из шести уехали ровно тем разрезом, который
+  > делала эта ветка**: `txQuery` стал отдельным общим чанком (489 Б), `PlannedToFactCard` и
+  > `usePlanToFactPrompt` уехали внутрь `DetailScreen` — у всех троих последний статический
+  > импортёр (`entity-detail`) сам стал ленивым. В начальной загрузке остались `useBudget` 89
+  > (`app/router.tsx:6`, `app/SidebarNav.tsx:4`, `chat/cards/ImportReviewCard.tsx:9`,
+  > `agenda/useAgenda.ts:10`), `EnvelopeCard` 196 (`chat/cards/EntityCard.tsx:11`) и
+  > `categories` 71 (`chat/cards/EntityCard.tsx:9`, цепочка `router → ChatScreen → MessageList
+  > → renderCards → EntityCard`) — **356 строк**. Вывод спеки «вкладку целиком вынести нельзя»
+  > в силе: три модуля держатся из чата и сайдбара, и разрезом их не сдвинуть — только правкой
+  > формы модулей. Разбор — п. 7 `docs/superpowers/reviews/2026-08-10-lazy-split-backlog.md`.
 - «CSV-импорт открывается из чата» — открывается nav-состоянием: карточка чата пушит
   `{kind:'budget-import'}` в стор, на `features/import/*` не ссылается. Разрез чистый:
   единственный статический импортёр — `app/router.tsx:13`.
