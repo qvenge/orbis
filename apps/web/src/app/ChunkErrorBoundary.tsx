@@ -69,10 +69,7 @@ export class ChunkErrorBoundary extends Component<Props, State> {
             экран снова даёт его же. Титул «…» вместо угаданного: какой экран не открылся,
             граница не знает. */}
         <ScreenHeader title="…" />
-        <div
-          role="alert"
-          className="flex flex-col items-center gap-3 p-6 text-sm text-danger"
-        >
+        <div role="alert" className="flex flex-col items-center gap-3 p-6 text-sm text-danger">
           <span>Не удалось открыть экран</span>
           <Button variant="outline" data-testid="chunk-reload" onClick={() => location.reload()}>
             Обновить
