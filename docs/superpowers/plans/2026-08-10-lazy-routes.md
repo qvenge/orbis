@@ -220,10 +220,14 @@ import { ScreenHeader } from './ScreenHeader';
  * aria-label="Загрузка" сам, а browser.test.tsx:97-100 прямо запрещает текстовую подпись
  * вместо скелетона.
  */
-export function ScreenFallback({ title }: { title: string }) {
+export function ScreenFallback() {
   return (
     <>
-      <ScreenHeader title={title} />
+      {/* Титул — «…», как у DetailScreen на время загрузки данных (DetailScreen.tsx:79).
+          Подставлять сюда угаданное название нельзя: заголовки экранов динамические
+          («Бюджет · сентябрь», «Транзакции · сентябрь», имя категории), и любой статический
+          текст сменился бы на глазах, как только приедет настоящий экран. */}
+      <ScreenHeader title="…" />
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 p-3">
         <Skeleton className="h-9 w-2/3" />
         <Skeleton className="h-9" />
@@ -357,29 +361,19 @@ export function ActiveScreen() {
       className="flex-1 overflow-y-auto"
     >
       <ChunkErrorBoundary>
-        <Suspense fallback={<ScreenFallback title={screenTitle(activeTab, top)} />}>
-          {renderScreen(activeTab, top)}
-        </Suspense>
+        <Suspense fallback={<ScreenFallback />}>{renderScreen(activeTab, top)}</Suspense>
       </ChunkErrorBoundary>
     </main>
   );
 }
-
-// Заголовок для заглушки: шапка обязана показать то же слово, что покажет пришедший экран,
-// иначе титул на кадр меняется на глазах. Значения сверены с самими экранами.
-function screenTitle(activeTab: Tab, top: ScreenRef | undefined): string {
-  if (!top) return activeTab === 'budget' ? 'Бюджет' : '';
-  if (top.kind === 'budget-category') return 'Категория';
-  if (top.kind === 'budget-transactions') return 'Транзакции';
-  if (top.kind === 'budget-rollover') return 'Новый месяц';
-  if (top.kind === 'budget-import') return 'Импорт';
-  return '';
-}
 ```
 
-**Обязательно:** открой `BudgetScreen.tsx`, `CategoryScreen.tsx`, `TransactionsScreen.tsx`,
-`RolloverScreen.tsx`, `ImportFlow.tsx` и возьми заголовки из их собственных `ScreenHeader`.
-Значения выше — ожидание, а не факт; расходится — правь код, а не экраны.
+Заглушка титул не выбирает: заголовки всех этих экранов **динамические** — проверено,
+`BudgetScreen.tsx:113` даёт `Бюджет · <месяц>`, `TransactionsScreen.tsx:159` —
+`Транзакции · <месяц>`, `RolloverScreen.tsx:89` — `Новый месяц: <месяц>`,
+`CategoryScreen.tsx:149` — имя категории (и `'…'`, пока данные не пришли),
+`ImportFlow.tsx:358` — вычисляемый `title`. Любой угаданный статический текст сменился бы
+на глазах через долю секунды.
 
 Импорты в шапке файла дополнить: `import { lazy, Suspense } from 'react';`,
 `ChunkErrorBoundary`, `ScreenFallback`.
@@ -423,10 +417,9 @@ import { installChunkReload } from './chunk-reload';
 import { ScreenFallback } from './ScreenFallback';
 
 test('заглушка экрана показывает скелетон, а не текст «Загрузка…»', () => {
-  render(<ScreenFallback title="Бюджет" />);
+  render(<ScreenFallback />);
   expect(screen.getAllByRole('status', { name: 'Загрузка' }).length).toBeGreaterThanOrEqual(1);
   expect(screen.queryByText(/Загрузка…/)).not.toBeInTheDocument();
-  expect(screen.getByText('Бюджет')).toBeInTheDocument();
 });
 
 test('граница ошибок ловит провал рендера и даёт кнопку обновления', () => {
@@ -539,9 +532,8 @@ const DetailScreen = lazy(() =>
 );
 ```
 
-В `screenTitle` добавить ветку `entity`. Заголовок взять из самого `DetailScreen` —
-он зависит от загруженной сущности, поэтому у заглушки должен стоять тот же нейтральный
-титул, что `DetailScreen` показывает, пока данные не пришли (`DetailScreen.tsx:76-84`).
+Ничего больше в роутере не меняется: `Suspense`-граница и заглушка из Task 3 уже стоят
+вокруг `renderScreen`, а титул заглушки одинаков для всех экранов (`…`).
 
 - [ ] **Шаг 2: Тест — вход через `<App/>` на экран сущности всё ещё работает**
 
