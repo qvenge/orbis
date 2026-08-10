@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { AppShell } from './app/AppShell';
 import { installChunkReload } from './app/chunk-reload';
 import { externalEntryPath, installHistorySync, openDeepLink, seedHistory } from './app/history';
+import { prefetchScreens } from './app/prefetch';
+import { useBudgetTabVisible } from './features/budget/useBudget';
 import { useRetryFlush } from './state/retry';
 
 export function App() {
@@ -47,6 +49,17 @@ export function App() {
   // Здесь же, ниже OnboardingGate: ленивые чанки грузятся только внутри приложения,
   // до гейта грузить нечему.
   useEffect(() => installChunkReload(), []);
+
+  // Фоновая догрузка частых экранов (см. app/prefetch.ts). Вкладка Budget — под гейтом
+  // installedViews, поэтому её чанк тянем только тем, у кого она есть; сам гейт уже
+  // спрашивают TabBar и SidebarNav, третий подписчик того же запроса сети не добавляет.
+  //
+  // ОТДЕЛЬНЫЙ эффект, а не общий с installChunkReload: у догрузки есть зависимость
+  // (`budgetVisible` доезжает вторым рендером, когда придут настройки), а у слушателя
+  // перезахода её нет — общий эффект переустанавливал бы слушатель на ровном месте и
+  // ронял бы события в момент переустановки.
+  const budgetVisible = useBudgetTabVisible();
+  useEffect(() => prefetchScreens({ budget: budgetVisible }), [budgetVisible]);
 
   return <AppShell />;
 }

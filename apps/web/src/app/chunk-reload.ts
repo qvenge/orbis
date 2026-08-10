@@ -11,10 +11,18 @@
  * деплой за одну сессию вкладки — редкость, и там честнее показать экран с кнопкой
  * (ChunkErrorBoundary), чем перезагружать пользователя молча ещё раз.
  */
+import { prefetchInFlight } from './prefetch';
+
 const RELOADED_FLAG = 'orbis:chunk-reloaded';
 
 export function installChunkReload(reload: () => void = () => location.reload()): () => void {
   const onPreloadError = (e: Event) => {
+    // Перезаход — это ответ на жест: «ты нажал, экран не приехал, чиню». Событие же vite
+    // шлёт на любой провалившийся динамический import, включая фоновую догрузку из
+    // prefetch.ts, которую пользователь не просил. Забирать у человека страницу за то,
+    // чего он не делал, нельзя — подробный разбор и почему починка при этом не теряется
+    // см. в докблоке `prefetchInFlight`.
+    if (prefetchInFlight()) return;
     if (sessionStorage.getItem(RELOADED_FLAG) !== null) return;
     sessionStorage.setItem(RELOADED_FLAG, '1');
     // preventDefault гасит переброс ошибки внутри самого vite (vite/dist/node/chunks/node.js:

@@ -6,7 +6,6 @@ import { BrowserScreen } from '../features/browser/BrowserScreen';
 import { useBudgetAlertCount, useBudgetTabVisible } from '../features/budget/useBudget';
 import { ChatScreen } from '../features/chat/ChatScreen';
 import { ChatThread } from '../features/chat/ChatThread';
-import { DetailScreen } from '../features/entity-detail/DetailScreen';
 import { MemoryScreen } from '../features/settings/MemoryScreen';
 import { SettingsScreen } from '../features/settings/SettingsScreen';
 import { type ScreenRef, type Tab, useNav } from '../state/navigation';
@@ -16,7 +15,9 @@ import { ChunkErrorBoundary } from './ChunkErrorBoundary';
 import { ScreenFallback } from './ScreenFallback';
 import { ScreenHeader } from './ScreenHeader';
 
-// Ленивые экраны: вкладка Budget и разовый мастер импорта не нужны первому кадру.
+// Ленивые экраны: вкладка Budget, разовый мастер импорта и экран сущности не нужны первому
+// кадру — первым кадром всегда открыт корень вкладки (Чат/Обзор/Повестка), а сущность,
+// категорию и импорт открывают уже жестом.
 // Граница лени стоит ЗДЕСЬ, а не в самих модулях: десятки тестов рендерят эти компоненты
 // напрямую через renderWithProviders, и ленивость модуля уронила бы их все.
 // ВАЖНО: у этих модулей не должно остаться ни одного статического импортёра — статический
@@ -39,6 +40,18 @@ const TransactionsScreen = lazy(() =>
 );
 const ImportFlow = lazy(() =>
   import('../features/import/ImportFlow').then((m) => ({ default: m.ImportFlow })),
+);
+// Самый крупный отдельный чанк. Экран сущности уносит с собой весь features/query-builder
+// (QueryBlockEditor — его единственный потребитель) и дерево ui/DropdownMenu, то есть
+// radix-menu + popper + arrow + floating-ui, — у DropdownMenu тоже ровно один потребитель,
+// DetailScreen.tsx:11. Отдельной границы ВНУТРИ DetailScreen не заводим: она сломала бы
+// синхронный editorField(dialog) в query-builder.test.tsx и ничего не добавила бы — всё это
+// поддерево и так уезжает бесплатно.
+// Соседний по каталогу NativeRow — исключение: его берёт ещё и CategoryScreen. Ребро остаётся
+// целиком внутри ленивой части графа (оба импортёра ленивые), поэтому во входной чанк он не
+// возвращается; rolldown кладёт его в общий чанк на двоих.
+const DetailScreen = lazy(() =>
+  import('../features/entity-detail/DetailScreen').then((m) => ({ default: m.DetailScreen })),
 );
 
 // Вкладки ЯДРА (02-core-os §1.1) в порядке спеки: Chat, Browser, Agenda. Agenda —
