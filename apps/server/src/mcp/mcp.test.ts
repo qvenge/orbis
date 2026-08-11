@@ -5,6 +5,7 @@
 // токен агента с переездом на таблицу грантов (D34) выдаётся в БАЗУ через issuePatGrant,
 // в окружении его больше нет.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { entityThreadId, globalThreadId, newId } from '@orbis/shared';
@@ -12,11 +13,17 @@ import { eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import type { WireChatMessage } from '../chat/messages';
-import { chatMessages, entities } from '../db/schema';
+import { chatMessages, entities, oauthClients } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
-import { issuePatGrant, revokeGrant, verifyBearer } from '../oauth/grants';
+import {
+  createAuthorizationCode,
+  exchangeAuthorizationCode,
+  issuePatGrant,
+  revokeGrant,
+  verifyBearer,
+} from '../oauth/grants';
 import { appRouter } from '../router';
 import { buildToolRegistry } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
@@ -29,6 +36,13 @@ const owner = freshUserId();
 
 /** Живой headless-грант владельца; выдаётся в базу в beforeAll (сырой токен — оттуда). */
 let TOKEN: string;
+
+// ORBIS_PUBLIC_URL берётся под контроль ЯВНО (по образцу metadata.test.ts): от неё
+// зависит адрес в WWW-Authenticate, который ниже пинится дословно. Файл переменную не
+// задаёт, но и не вправе полагаться на то, что её нет в окружении прогона — она вот-вот
+// появится в apps/server/.env.example (задача про прод), и первый же разработчик,
+// скопировавший пример, получил бы непонятный диф в тесте про MCP.
+const savedPublicUrl = process.env.ORBIS_PUBLIC_URL;
 
 // Два независимых сервера на свободных портах: боевые deps и deps с инжектированным
 // резолвером §8 (agents.requests_per_day = 0) — rate-гейт проверяется изолированно
@@ -47,6 +61,7 @@ const ownerCaller = createCaller({
 });
 
 beforeAll(async () => {
+  delete process.env.ORBIS_PUBLIC_URL; // база метаданных = адрес запроса (локальный стенд)
   await truncateAll();
   TOKEN = await issuePatGrant(db, { ownerId: owner, label: 'тестовый агент' });
 
@@ -62,6 +77,8 @@ beforeAll(async () => {
 afterAll(async () => {
   main?.stop(true);
   gated?.stop(true);
+  if (savedPublicUrl === undefined) delete process.env.ORBIS_PUBLIC_URL;
+  else process.env.ORBIS_PUBLIC_URL = savedPublicUrl;
   await dbClient.end();
 });
 
@@ -198,6 +215,69 @@ describe('/mcp: аутентификация по гранту ДО MCP-логи
     expect(res.headers.get('www-authenticate')).toBe(
       `Bearer resource_metadata="http://127.0.0.1:${main.port}/.well-known/oauth-protected-resource/mcp"`,
     );
+  });
+
+  // ПОЛОЖИТЕЛЬНЫЙ тест на второй вид Bearer. Отказ несуществующему orbis_at_ (выше) не
+  // доказывает ничего: он остался бы зелёным и после выпадения ACCESS_PREFIX из
+  // BEARER_PREFIXES — то есть /mcp молча перестал бы пускать ВСЕХ OAuth-агентов, а
+  // покраснел бы только тест чужой поверхности (context.test.ts). Токен добывается
+  // настоящим путём OAuth — код + PKCE + обмен, — а не вставкой строки в таблицу.
+  test('access-токен, выданный обменом кода, пускает на /mcp от имени владельца', async () => {
+    const clientId = 'test-client-mcp';
+    const redirectUri = 'http://localhost:8080/callback';
+    await db
+      .insert(oauthClients)
+      .values({ clientId, clientName: 'Claude Code', redirectUris: [redirectUri] })
+      .onConflictDoNothing();
+    const verifier = randomBytes(32).toString('base64url');
+    const code = await createAuthorizationCode(db, {
+      ownerId: owner,
+      clientId,
+      label: 'Claude Code',
+      redirectUri,
+      codeChallenge: createHash('sha256').update(verifier).digest('base64url'),
+    });
+    const { accessToken } = await exchangeAuthorizationCode(db, {
+      code,
+      codeVerifier: verifier,
+      redirectUri,
+      clientId,
+    });
+    expect(accessToken.startsWith('orbis_at_')).toBe(true);
+
+    // Не просто 200: сущность обязана лечь владельцу гранта — токен несёт identity,
+    // а не только право входа
+    const agent = await connectAgent(mainUrl(), accessToken);
+    let created: WireEntity;
+    try {
+      const r = await callTool(agent, 'entity_create', {
+        title: 'Создано OAuth-агентом',
+        tags: [],
+      });
+      expect(r.isError).toBe(false);
+      created = r.payload.result as WireEntity;
+    } finally {
+      await agent.close();
+    }
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.select().from(entities).where(eq(entities.id, created.id)),
+    );
+    expect(rows).toHaveLength(1);
+  });
+
+  // Порядок 401 → 413 не проверял никто: 401-кейсы шлют крошечные тела, 413-кейсы шлют
+  // валидный токен, и перенос bodyLimit выше аутентификации оставил бы сьют зелёным.
+  // Инвариант же содержательный: неаутентифицированный клиент не должен заставлять
+  // сервер читать мегабайт — иначе гейт размера становится усилителем, а не защитой.
+  test('тело больше лимита БЕЗ токена → 401, а не 413 (аутентификация ДО чтения тела)', async () => {
+    const res = await fetch(mainUrl(), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: 'x'.repeat(MCP_MAX_BODY_BYTES + 1),
+    });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('UNAUTHORIZED');
   });
 });
 

@@ -4,9 +4,15 @@
 // авторизовываться. Базе тут делать нечего — модуль это чистые функции от
 // ORBIS_PUBLIC_URL и запроса, поэтому файл гоняется без --env-file.
 import { afterEach, expect, test } from 'bun:test';
+import { join } from 'node:path';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
-import { mountOAuthMetadata, protectedResourceMetadataUrl, publicOrigin } from './metadata';
+import {
+  assertPublicOriginConfigured,
+  mountOAuthMetadata,
+  protectedResourceMetadataUrl,
+  publicOrigin,
+} from './metadata';
 
 const saved = process.env.ORBIS_PUBLIC_URL;
 const savedNodeEnv = process.env.NODE_ENV;
@@ -152,4 +158,87 @@ test('по адресу из WWW-Authenticate действительно леж�
   const res = await app().request(url);
   expect(res.status).toBe(200);
   expect((await res.json()).resource).toBe('https://orbis.example.com/mcp');
+});
+
+// ---------------------------------------------------------------------------
+// Стартовый гейт конфигурации (D28-манера: неоднозначное/кривое значение роняет старт)
+// ---------------------------------------------------------------------------
+//
+// Зачем он появился (ревью Task 3): с тех пор как 401 на /mcp несёт resource_metadata,
+// бросок publicOrigin случается НА ПУТИ ОТКАЗА — и /mcp начинал отдавать 500 вместо 401.
+// Причём не только в production: parsePublicOrigin бракует путь/query/не-http при любом
+// NODE_ENV, поэтому опечатка вида `…onrender.com/mcp` роняла дверь и на локальном стенде.
+// До Task 3 /mcp отдавал 401 при любой конфигурации, так что это был регресс режима
+// отказа. Лечим не мягким откатом (он вернул бы бесполезный 401 без указателя), а
+// отказом при старте: процесс с кривым значением просто не поднимается.
+
+// env инжектится литералом (как у makeLLMProvider) — тест не зависит от окружения прогона
+test('стартовый гейт: корректное значение — молча проходит', () => {
+  expect(() =>
+    assertPublicOriginConfigured({ ORBIS_PUBLIC_URL: 'https://orbis.example.com' }),
+  ).not.toThrow();
+  expect(() =>
+    assertPublicOriginConfigured({
+      ORBIS_PUBLIC_URL: 'https://orbis.example.com/',
+      NODE_ENV: 'production',
+    }),
+  ).not.toThrow();
+});
+
+test('стартовый гейт: вне production переменную разрешено не задавать (фолбэк на адрес запроса)', () => {
+  expect(() => assertPublicOriginConfigured({})).not.toThrow();
+  expect(() => assertPublicOriginConfigured({ NODE_ENV: 'development' })).not.toThrow();
+});
+
+test('стартовый гейт: в production без переменной — отказ', () => {
+  expect(() => assertPublicOriginConfigured({ NODE_ENV: 'production' })).toThrow(
+    /ORBIS_PUBLIC_URL/,
+  );
+});
+
+// Главная новая ветка: кривое значение бракуется НЕЗАВИСИМО от NODE_ENV — именно этот
+// случай (опечатка на локальном стенде) отдавал 500 на /mcp и в отчёт Task 3 не попал.
+for (const [value, why] of brokenValues) {
+  test(`стартовый гейт вне production: ORBIS_PUBLIC_URL=${JSON.stringify(value)} (${why}) — отказ`, () => {
+    expect(() => assertPublicOriginConfigured({ ORBIS_PUBLIC_URL: value })).toThrow(
+      /ORBIS_PUBLIC_URL/,
+    );
+  });
+}
+
+// Проверка функции ничего не говорит о том, что её КТО-ТО ЗОВЁТ. Гейт имеет смысл только
+// если процесс от кривого значения умирает, поэтому здесь поднимается настоящий index.ts
+// отдельным процессом. Гейт стоит первым — до пула БД и до провайдера LLM, — поэтому
+// проба не требует ни базы, ни ключей и умирает мгновенно.
+const serverDir = join(import.meta.dir, '../..');
+
+/**
+ * Запуск настоящего index.ts. timeout обязателен: без гейта процесс дошёл бы до
+ * Bun.serve и висел бы вечно, а прогон — вместе с ним. Убитый по таймауту процесс
+ * отличается от умершего самостоятельно по signalCode, и тест этого не прощает:
+ * «его прибили» — не то же самое, что «он отказался стартовать».
+ */
+function startServer(env: Record<string, string>) {
+  const p = Bun.spawnSync(['bun', 'src/index.ts'], {
+    cwd: serverDir,
+    env: { PATH: process.env.PATH ?? '', ...env },
+    timeout: 15_000,
+  });
+  // Нормализуем: у самостоятельно завершившегося процесса Bun отдаёт undefined,
+  // у прибитого — имя сигнала; сравнивать удобнее с одним значением
+  return { exitCode: p.exitCode, signalCode: p.signalCode ?? null, stderr: p.stderr.toString() };
+}
+
+test('index.ts не поднимается с кривым ORBIS_PUBLIC_URL (гейт реально подключён)', () => {
+  const r = startServer({ ORBIS_PUBLIC_URL: 'https://orbis.example.com/mcp' });
+  expect(r.signalCode).toBeNull(); // отказался сам, а не был прибит по таймауту
+  expect(r.exitCode).not.toBe(0);
+  expect(r.stderr).toContain('ORBIS_PUBLIC_URL');
+});
+
+test('index.ts не поднимается в production без ORBIS_PUBLIC_URL', () => {
+  const r = startServer({ NODE_ENV: 'production' });
+  expect(r.signalCode).toBeNull();
+  expect(r.exitCode).not.toBe(0);
+  expect(r.stderr).toContain('ORBIS_PUBLIC_URL');
 });

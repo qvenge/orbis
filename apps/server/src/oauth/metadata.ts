@@ -4,19 +4,55 @@
 // публичные и неаутентифицированные по построению: это точка входа ДО всякого токена.
 import type { Context, Hono } from 'hono';
 
+/** Подмножество env, которое читает резолвер базы; в тестах инжектится литералом. */
+export interface PublicOriginEnv {
+  ORBIS_PUBLIC_URL?: string;
+  NODE_ENV?: string;
+}
+
+/**
+ * Настроенная публичная база или null, если переменной нет и это разрешено (вне
+ * production). Единственное место, где живут оба условия отказа: и стартовый гейт,
+ * и запросный путь спрашивают именно его — иначе о конфигурации завелись бы две правды,
+ * расходящиеся ровно тогда, когда одну из них поправят.
+ */
+function configuredOrigin(env: PublicOriginEnv): string | null {
+  const configured = env.ORBIS_PUBLIC_URL?.trim();
+  if (configured) return parsePublicOrigin(configured);
+  if (env.NODE_ENV === 'production') {
+    throw new Error('ORBIS_PUBLIC_URL обязателен в production (метаданные OAuth)');
+  }
+  return null;
+}
+
+/**
+ * Стартовый гейт конфигурации (index.ts), в манере D28: неоднозначная или заведомо
+ * кривая конфигурация роняет ПРОЦЕСС, а не отдельный запрос.
+ *
+ * Появился по ревью Task 3. С тех пор как 401 на /mcp несёт resource_metadata, бросок
+ * `publicOrigin` случается НА ПУТИ ОТКАЗА — и /mcp начинал отвечать 500 вместо 401.
+ * Причём не только в production: кривое значение (путь, query, не-http) бракуется при
+ * любом NODE_ENV, поэтому опечатка вроде `https://host/mcp` ломала дверь и на локальном
+ * стенде. Мягкий откат тут не годится — он вернул бы ровно тот бесполезный 401 без
+ * указателя, ради устранения которого затевался слайс. Поэтому: сервер с кривым
+ * значением не поднимается, и 500 из-за конфигурации становится недостижим.
+ */
+export function assertPublicOriginConfigured(env: PublicOriginEnv = process.env): void {
+  configuredOrigin(env);
+}
+
 /**
  * База всех абсолютных URL. В production берётся ТОЛЬКО из ORBIS_PUBLIC_URL:
  * подменённый заголовок Host увёл бы клиента на чужой authorization server прямо
  * через наши же метаданные. На локальном стенде переменной нет — там база берётся
  * из запроса, и это безопасно: ни владельца, ни данных там нет.
+ *
+ * Бросить здесь боевой процесс уже не может: стартовый гейт выше не дал бы ему
+ * подняться с такой конфигурацией. Проверка остаётся на месте, потому что функция
+ * вызывается и в тестах, и из встроенных стендов, минующих index.ts.
  */
 export function publicOrigin(c: Context): string {
-  const configured = process.env.ORBIS_PUBLIC_URL?.trim();
-  if (configured) return parsePublicOrigin(configured);
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('ORBIS_PUBLIC_URL обязателен в production (метаданные OAuth)');
-  }
-  return new URL(c.req.url).origin;
+  return configuredOrigin(process.env) ?? new URL(c.req.url).origin;
 }
 
 /**

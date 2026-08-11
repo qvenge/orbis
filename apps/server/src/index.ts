@@ -2,6 +2,14 @@ import { makeAiDeps } from './ai/send-message';
 import { createApp } from './app';
 import { type AspectDriftStatus, reportAspectDriftOnStartup } from './db/aspect-drift';
 import { makeDb } from './db/client';
+import { assertPublicOriginConfigured } from './oauth/metadata';
+
+// Публичная база метаданных OAuth (§9.3) — ПЕРВОЙ: это чистая проверка конфигурации,
+// ей не нужны ни соединения, ни ключи, а цена ошибки высока. Кривое значение роняет
+// старт (манера D28), потому что иначе оно роняло бы 401 на /mcp в 500: указатель на
+// метаданные собирается на пути отказа, и вход агента ломался бы молча при зелёном
+// /health. Вне production незаданная переменная законна — база берётся из запроса.
+assertPublicOriginConfigured();
 
 // Один пул соединений на процесс; в request-контекст db попадает ссылкой (Task 12)
 const { db, client } = makeDb();
