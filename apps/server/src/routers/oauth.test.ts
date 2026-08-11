@@ -209,6 +209,28 @@ test('набивка пробелами не съедает подпись пр�
   expect(out.clientName).toBe('Claude Code');
 });
 
+// Обрезка по код-юнитам UTF-16 рубит суррогатную пару пополам, и это не теория: проба на
+// живой базе показала, что оставшаяся половина пары ВМЕСТЕ со следующим за ней «…» уезжает
+// в Postgres одним U+FFFD (хвост `1f642 d83d 2026` возвращается как `1f642 fffd`). Итог —
+// метка гранта перестаёт совпадать с подписью, которую владелец видел на кнопке, а маркер
+// обрезки исчезает. Прежний тест этого не ловил: «ы» — символ основной плоскости.
+test('эмодзи в имени не рубится пополам при обрезке', async () => {
+  const clientId = await seedClient({ name: '🙂'.repeat(200) });
+  const shown = await ownerCaller.oauth.describeRequest({ clientId, redirectUri: REDIRECT });
+  expect([...shown.clientName].length).toBeLessThanOrEqual(64);
+  expect(shown.clientName.endsWith('…')).toBe(true);
+  // Битой половины пары в строке быть не должно — иначе U+FFFD появится при первой же
+  // записи в БД, а не на экране, и найдётся он много позже
+  expect(shown.clientName).not.toContain('�');
+
+  // Половина проверки — за поездку через Postgres: в JS оборванная пара ещё выглядит
+  // целой строкой, и без этой части инвариант остался бы недоказанным.
+  await ownerCaller.oauth.consent(consentInput(clientId));
+  const [grant] = await ownerCaller.oauth.listGrants();
+  expect(grant?.label).toBe(shown.clientName);
+  expect(grant?.label.endsWith('…')).toBe(true);
+});
+
 // ---------------------------------------------------------------------------
 // Согласие: выдача кода
 // ---------------------------------------------------------------------------
@@ -259,6 +281,31 @@ test('метка гранта — та же обрезанная подпись'
   expect(grant?.label).toBe(shown.clientName);
   expect(grant?.label.length).toBeLessThanOrEqual(64);
 });
+
+// Границы 43..128 (RFC 7636 §4.1) — написанное правило, которое до этих тестов ничего не
+// держало: замена схемы на голый z.string() сьют не роняла. Дыры в безопасности нет (PKCE
+// не сойдётся при обмене), но правило либо проверяется, либо его не должно быть в коде.
+const challengeBounds: Array<[number, boolean]> = [
+  [42, false],
+  [43, true],
+  [128, true],
+  [129, false],
+];
+for (const [len, accepted] of challengeBounds) {
+  test(`code_challenge длиной ${len} ${accepted ? 'принимается' : 'отвергается'}`, async () => {
+    const clientId = await seedClient();
+    const call = ownerCaller.oauth.consent(
+      consentInput(clientId, { codeChallenge: 'x'.repeat(len) }),
+    );
+    if (accepted) {
+      const { redirectTo } = await call;
+      expect(new URL(redirectTo).searchParams.get('code')?.startsWith('orbis_ac_')).toBe(true);
+    } else {
+      expect(await rejectCode(call)).toBe('BAD_REQUEST');
+      expect(await db.select().from(agentGrants)).toHaveLength(0);
+    }
+  });
+}
 
 test('метод plain отвергается', async () => {
   const clientId = await seedClient();
@@ -347,10 +394,11 @@ test('агент не управляет доступами через tRPC', as
   expect(await db.select().from(agentGrants)).toHaveLength(0);
 });
 
-// Таймстампы наружу — строками ISO, как у всех wire-форм (wire.ts). Не косметика:
-// transformer'а у клиента нет (проверено HTTP-пробой — приезжает "…Z"-строка), и отдача
-// доменного GrantSummary обещала бы экрану «Агенты» тип Date при строке в рантайме —
-// первый же `createdAt.toLocaleString()` падал бы TypeError.
+// Таймстампы наружу — ISO-строками, как у всех wire-форм (wire.ts): по HTTP Date всё равно
+// уезжает строкой (проверено пробой), и форма обязана говорить это прямо. Тест пинит
+// РАНТАЙМ-форму, а не защиту от падения: типом клиент не обманулся бы и на доменной форме —
+// tRPC 11 сам сводит Date к string через Serialize<> (ревью Task 7 проверило компилятором,
+// прежнее обоснование про TypeError на экране было неверным).
 test('таймстампы доступов уезжают ISO-строками, а не Date', async () => {
   await issuePatGrant(db, { ownerId: owner, label: 'CI' });
   const [grant] = await ownerCaller.oauth.listGrants();
