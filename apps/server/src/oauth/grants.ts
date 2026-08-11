@@ -1,0 +1,238 @@
+// apps/server/src/oauth/grants.ts
+// Жизненный цикл доступа внешнего агента (§9.3, D34): выдача кода, обмен на пару
+// токенов, ротация refresh, лукап по хешу, отзыв. Всё под ролью orbis_app (политика
+// server_manages_grants): аутентификация происходит ДО того, как владелец известен,
+// поэтому withIdentity здесь неприменим — RLS скоупит эти запросы не по auth.uid(),
+// а самим условием на хеш.
+import { createHash } from 'node:crypto';
+import { newId } from '@orbis/shared';
+import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import type { Db } from '../db/client';
+import { agentGrants } from '../db/schema';
+import { OAuthError } from './errors';
+import {
+  ACCESS_PREFIX,
+  ACCESS_TTL_SECONDS,
+  CODE_PREFIX,
+  CODE_TTL_SECONDS,
+  hashToken,
+  mintToken,
+  PAT_PREFIX,
+  REFRESH_PREFIX,
+  REFRESH_TTL_SECONDS,
+} from './tokens';
+
+export interface GrantIdentity {
+  grantId: string;
+  ownerId: string;
+}
+
+export interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+  expiresIn: number;
+}
+
+export interface GrantSummary {
+  id: string;
+  kind: string;
+  label: string;
+  createdAt: Date;
+  lastUsedAt: Date | null;
+  revokedAt: Date | null;
+}
+
+const secondsFromNow = (s: number) => new Date(Date.now() + s * 1000);
+
+/**
+ * Bearer → владелец. Живым считается неотозванный грант, у которого срок либо не
+ * наступил, либо не задан вовсе (PAT бессрочен — отзывается строкой, не временем).
+ * Отметка last_used_at питает экран настроек; она же делает видимым доступ, о котором
+ * владелец забыл.
+ */
+export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity | null> {
+  if (!token.startsWith(ACCESS_PREFIX) && !token.startsWith(PAT_PREFIX)) return null;
+  const rows = await db
+    .update(agentGrants)
+    .set({ lastUsedAt: new Date() })
+    .where(
+      and(
+        eq(agentGrants.accessHash, hashToken(token)),
+        isNull(agentGrants.revokedAt),
+        or(isNull(agentGrants.accessExpiresAt), gt(agentGrants.accessExpiresAt, new Date())),
+      ),
+    )
+    .returning({ id: agentGrants.id, ownerId: agentGrants.ownerId });
+  const row = rows[0];
+  return row ? { grantId: row.id, ownerId: row.ownerId } : null;
+}
+
+/** Согласие владельца: строка гранта с одноразовым кодом, токенов ещё нет. */
+export async function createAuthorizationCode(
+  db: Db,
+  input: {
+    ownerId: string;
+    clientId: string;
+    label: string;
+    redirectUri: string;
+    codeChallenge: string;
+  },
+): Promise<string> {
+  const code = mintToken(CODE_PREFIX);
+  await db.insert(agentGrants).values({
+    id: newId(),
+    ownerId: input.ownerId,
+    clientId: input.clientId,
+    kind: 'oauth',
+    label: input.label,
+    codeHash: hashToken(code),
+    codeChallenge: input.codeChallenge,
+    codeExpiresAt: secondsFromNow(CODE_TTL_SECONDS),
+    redirectUri: input.redirectUri,
+  });
+  return code;
+}
+
+/**
+ * Обмен кода на пару токенов. Одноразовость — не проверкой в коде, а самим UPDATE
+ * с условием `code_used_at IS NULL`: двум одновременным обменам строку отдаст ровно
+ * один. Предъявленный повторно код — признак перехвата (OAuth 2.1 §7.5), поэтому
+ * второй обмен не просто отказывает, а отзывает уже выданный по этому коду доступ.
+ */
+export async function exchangeAuthorizationCode(
+  db: Db,
+  input: { code: string; codeVerifier: string; redirectUri: string; clientId: string },
+): Promise<TokenPair> {
+  const codeHash = hashToken(input.code);
+  const existing = await db
+    .select()
+    .from(agentGrants)
+    .where(eq(agentGrants.codeHash, codeHash))
+    .limit(1);
+  const grant = existing[0];
+  if (!grant) throw new OAuthError('invalid_grant', 'код неизвестен');
+
+  if (grant.codeUsedAt !== null) {
+    await db.update(agentGrants).set({ revokedAt: new Date() }).where(eq(agentGrants.id, grant.id));
+    throw new OAuthError('invalid_grant', 'код уже использован — выданный по нему доступ отозван');
+  }
+  if (grant.clientId !== input.clientId)
+    throw new OAuthError('invalid_grant', 'код выдан другому клиенту');
+  if (grant.redirectUri !== input.redirectUri)
+    throw new OAuthError('invalid_grant', 'redirect_uri не совпадает');
+  if (grant.codeExpiresAt !== null && grant.codeExpiresAt.getTime() <= Date.now()) {
+    throw new OAuthError('invalid_grant', 'код просрочен');
+  }
+  const challenge = createHash('sha256').update(input.codeVerifier).digest('base64url');
+  if (challenge !== grant.codeChallenge) throw new OAuthError('invalid_grant', 'PKCE не сошёлся');
+
+  const pair = mintPair();
+  const claimed = await db
+    .update(agentGrants)
+    .set({ codeUsedAt: new Date(), ...pairColumns(pair) })
+    .where(and(eq(agentGrants.id, grant.id), isNull(agentGrants.codeUsedAt)))
+    .returning({ id: agentGrants.id });
+  if (claimed.length === 0) throw new OAuthError('invalid_grant', 'код уже использован');
+  return pair;
+}
+
+/**
+ * Ротация refresh (OAuth 2.1 требует её для публичных клиентов). Предъявленный
+ * повторно старый refresh — тот же признак перехвата, что и повторный код: грант
+ * отзывается целиком.
+ */
+export async function rotateRefresh(
+  db: Db,
+  input: { refreshToken: string; clientId: string },
+): Promise<TokenPair> {
+  const pair = mintPair();
+  const rows = await db
+    .update(agentGrants)
+    .set(pairColumns(pair))
+    .where(
+      and(
+        eq(agentGrants.refreshHash, hashToken(input.refreshToken)),
+        eq(agentGrants.clientId, input.clientId),
+        isNull(agentGrants.revokedAt),
+        gt(agentGrants.refreshExpiresAt, new Date()),
+      ),
+    )
+    .returning({ id: agentGrants.id });
+  if (rows.length === 0) {
+    // Живой строки под этот хеш нет. Если след всё же остался (грант отозван либо
+    // refresh просрочен) — гасим грант целиком: предъявление мёртвого refresh это
+    // признак перехвата (OAuth 2.1 §7.5).
+    // ОГРАНИЧЕНИЕ, проверенное пробником: реплей УЖЕ РОТИРОВАННОГО refresh сюда не
+    // доходит — ротация перезаписывает refresh_hash в той же строке, связи старого
+    // токена с грантом не остаётся, и такой реплей только отвергается. Полное
+    // покрытие §7.5 требует хранить предыдущий хеш — это отдельное решение по схеме.
+    await db
+      .update(agentGrants)
+      .set({ revokedAt: new Date() })
+      .where(eq(agentGrants.refreshHash, hashToken(input.refreshToken)));
+    throw new OAuthError('invalid_grant', 'refresh-токен недействителен');
+  }
+  return pair;
+}
+
+/** Headless-доступ (Р4): та же таблица, без клиента и без срока. */
+export async function issuePatGrant(
+  db: Db,
+  input: { ownerId: string; label: string },
+): Promise<string> {
+  const token = mintToken(PAT_PREFIX);
+  await db.insert(agentGrants).values({
+    id: newId(),
+    ownerId: input.ownerId,
+    kind: 'pat',
+    label: input.label,
+    accessHash: hashToken(token),
+  });
+  return token;
+}
+
+/** Для экрана настроек: ни одного хеша наружу. */
+export async function listGrants(db: Db, ownerId: string): Promise<GrantSummary[]> {
+  return db
+    .select({
+      id: agentGrants.id,
+      kind: agentGrants.kind,
+      label: agentGrants.label,
+      createdAt: agentGrants.createdAt,
+      lastUsedAt: agentGrants.lastUsedAt,
+      revokedAt: agentGrants.revokedAt,
+    })
+    .from(agentGrants)
+    .where(eq(agentGrants.ownerId, ownerId))
+    .orderBy(sql`${agentGrants.createdAt} DESC`);
+}
+
+/** Отзыв: условие на owner_id — вторая линия к RLS, а не замена ей. */
+export async function revokeGrant(
+  db: Db,
+  input: { ownerId: string; grantId: string },
+): Promise<boolean> {
+  const rows = await db
+    .update(agentGrants)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(agentGrants.id, input.grantId), eq(agentGrants.ownerId, input.ownerId)))
+    .returning({ id: agentGrants.id });
+  return rows.length > 0;
+}
+
+function mintPair(): TokenPair {
+  return {
+    accessToken: mintToken(ACCESS_PREFIX),
+    refreshToken: mintToken(REFRESH_PREFIX),
+    expiresIn: ACCESS_TTL_SECONDS,
+  };
+}
+
+function pairColumns(pair: TokenPair) {
+  return {
+    accessHash: hashToken(pair.accessToken),
+    accessExpiresAt: secondsFromNow(ACCESS_TTL_SECONDS),
+    refreshHash: hashToken(pair.refreshToken),
+    refreshExpiresAt: secondsFromNow(REFRESH_TTL_SECONDS),
+  };
+}
