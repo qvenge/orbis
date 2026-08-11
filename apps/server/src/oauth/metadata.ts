@@ -12,11 +12,50 @@ import type { Context, Hono } from 'hono';
  */
 export function publicOrigin(c: Context): string {
   const configured = process.env.ORBIS_PUBLIC_URL?.trim();
-  if (configured) return configured.replace(/\/+$/, '');
+  if (configured) return parsePublicOrigin(configured);
   if (process.env.NODE_ENV === 'production') {
     throw new Error('ORBIS_PUBLIC_URL обязателен в production (метаданные OAuth)');
   }
   return new URL(c.req.url).origin;
+}
+
+/**
+ * Разбор ORBIS_PUBLIC_URL: наружу выходит только чистый http(s)-origin, всё прочее —
+ * отказ. Раньше значение подставлялось как есть, и кривое проезжало молча — это хуже
+ * отказа. Худший случай — значение с путём (`https://host/base`): адрес метаданных
+ * получался `https://host/base/.well-known/oauth-protected-resource`, такого роута нет
+ * ни одного, и запрос уезжал в SPA-fallback — клиент получал index.html с кодом 200 НА
+ * ДОКУМЕНТЕ ОБНАРУЖЕНИЯ. Ровно та беззвучная поломка, ради которой пинится порядок
+ * роутов, только заходящая через переменную окружения.
+ *
+ * Фолбэка на адрес запроса тут нет намеренно: кривая переменная обязана падать всюду
+ * одинаково, иначе локально «всё работает», а в проде рвётся.
+ */
+function parsePublicOrigin(raw: string): string {
+  // Хвостовой слэш прощаем: `https://host/` и `https://host` — одно и то же.
+  const trimmed = raw.replace(/\/+$/, '');
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    throw new Error(
+      `ORBIS_PUBLIC_URL не разбирается как URL: ${JSON.stringify(raw)} — нужен абсолютный ` +
+        'адрес со схемой, например https://orbis.example.com',
+    );
+  }
+  // Не-http(s) сюда доходить не должен: у нестандартных схем origin — строка "null",
+  // и она молча уехала бы в метаданные.
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error(
+      `ORBIS_PUBLIC_URL должен быть http(s): ${JSON.stringify(raw)} (схема ${url.protocol})`,
+    );
+  }
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+    throw new Error(
+      `ORBIS_PUBLIC_URL должен быть чистым origin, без пути, query и фрагмента: ${JSON.stringify(raw)}`,
+    );
+  }
+  return url.origin;
 }
 
 /** Канонический URI ресурса (RFC 8707 §2): без хвостового слэша и без фрагмента. */
