@@ -13,6 +13,9 @@ import { appDb, requireEnv, truncateAll } from '../../test/helpers';
 import type { AiDeps } from '../ai/send-message';
 import { createApp } from '../app';
 import { oauthClients } from '../db/schema';
+// Потолок тела импортируется (манера static.test.ts с TRPC_MAX_BODY_BYTES): строить
+// сверхлимитное тело нужно ОТ него, а само значение отдельно пинится числом ниже.
+import { REGISTER_MAX_BODY_BYTES } from './register';
 
 requireEnv();
 const { db, client: dbClient } = appDb();
@@ -124,6 +127,29 @@ const badRedirects: Array<[string, string]> = [
   ['ftp://localhost/cb', 'не http(s) схема'],
   ['не url вовсе', 'вообще не URL'],
   ['/callback', 'относительный адрес — new URL его не разбирает'],
+  ['http://[::2]/cb', 'IPv6, но не петля'],
+  // Учётные данные в URL аллоулист хоста НЕ обходят (hostname тут evil.com), но обманывают
+  // человека на экране согласия — а вся защита слайса держится на нём: client_name
+  // подконтролен тому, кто регистрируется, и назваться «Claude Code» может кто угодно.
+  ['https://claude.ai@evil.com/cb', 'чужой хост под видом claude.ai через учётные данные'],
+  ['https://user:pw@localhost:8080/cb', 'учётные данные даже на петле'],
+  ['http://claude.ai@127.0.0.1/cb', 'учётные данные перед петлёй'],
+  // Фрагмент запрещён RFC 6749 §3.1.2, и запрет не декоративный: адрес возврата строится
+  // как `${uri}?code=…`, и `…/cb#frag?code=…` уводит код во фрагмент — локальный сервер
+  // клиента его не увидит, вход молча не состоится.
+  ['http://localhost:8080/cb#frag', 'фрагмент'],
+  // У пустого фрагмента `parsed.hash` пуст, а '#' в строке остаётся: проверка по hash
+  // пропустила бы ровно ту же поломку.
+  ['http://localhost:8080/cb#', 'пустой фрагмент — ломается так же'],
+  // new URL вырезает TAB/CR/LF и обрезает края, поэтому такие строки проходят проверку
+  // хоста, а в таблицу ложатся как есть. Последствие проверено ревью: Location с таким
+  // значением бросает «Header 'Location' has invalid value», то есть 500 вместо возврата.
+  ['http://loc\nalhost/cb', 'перевод строки внутри хоста — URL его вырежет'],
+  ['http://localhost:8080/cb\r\n', 'CRLF в хвосте'],
+  ['http://local\thost:8080/cb', 'табуляция внутри хоста'],
+  [' http://localhost:8080/cb', 'пробел в начале — URL обрежет'],
+  ['http://localhost:8080/cb ', 'пробел в конце — URL обрежет'],
+  ['http://localhost:8080/cb\u00a0', 'неразрывный пробел — в исходнике его не видно'],
 ];
 for (const [uri, why] of badRedirects) {
   test(`redirect_uri ${JSON.stringify(uri)} (${why}) отвергается`, async () => {
@@ -140,6 +166,10 @@ const goodRedirects: Array<[string, string]> = [
   ['http://127.0.0.1:33418/callback', 'петля по адресу'],
   ['https://claude.ai/api/mcp/auth_callback', 'размещённый клиент по https'],
   ['http://LOCALHOST:8080/cb', 'регистр хоста URL нормализует сам'],
+  // RFC 8252 §7.3 приводит ОБЕ формы петли и советует клиенту пробовать оба стека и брать
+  // доступный: без этой строки клиент, поступающий ровно по спеке, у нас не зарегистрируется.
+  ['http://[::1]:33418/callback', 'IPv6-петля'],
+  ['http://[0:0:0:0:0:0:0:1]:33418/cb', 'развёрнутая IPv6-петля — URL нормализует в [::1]'],
 ];
 for (const [uri, why] of goodRedirects) {
   test(`redirect_uri ${JSON.stringify(uri)} (${why}) принимается`, async () => {
@@ -163,19 +193,104 @@ test('несколько redirect_uris: годится только список
   expect((await json(mixed)).error).toBe('invalid_redirect_uri');
 });
 
-const emptyMetadata: Array<[unknown, string]> = [
+const badMetadata: Array<[unknown, string]> = [
   [{ client_name: 'X', redirect_uris: [] }, 'пустой список'],
   [{ client_name: 'X' }, 'поля нет вовсе'],
   [{ client_name: 'X', redirect_uris: 'http://localhost:8080/cb' }, 'строка вместо списка'],
   [{ client_name: 'X', redirect_uris: [42] }, 'список без строк'],
+  // Не-строка в списке — такой же негодный элемент, как негодный адрес: молчаливое
+  // усечение списка оставило бы клиента зарегистрированным не тем, что он просил.
+  [{ client_name: 'X', redirect_uris: [REDIRECT, 42] }, 'строка и не-строка вперемешку'],
+  [{ client_name: 'X', redirect_uris: [REDIRECT, null] }, 'строка и null вперемешку'],
 ];
-for (const [body, why] of emptyMetadata) {
+for (const [body, why] of badMetadata) {
   test(`redirect_uris (${why}) отвергается как invalid_client_metadata`, async () => {
     const res = await post(body);
     expect(res.status).toBe(400);
     expect((await json(res)).error).toBe('invalid_client_metadata');
+    expect(await db.select().from(oauthClients)).toHaveLength(0);
   });
 }
+
+// Смысл запрета пробелов и управляющих символов — не в самой строке, а в её последствии:
+// адрес возврата уедет в заголовок Location, и значение с переводом строки бросает
+// «Header 'Location' has invalid value», то есть 500 вместо возврата кода владельцу.
+// Тест идёт от последствия: что легло в таблицу — тем можно ответить.
+test('всё, что записано в таблицу, годится в заголовок Location', async () => {
+  for (const [uri] of goodRedirects) {
+    await post({ client_name: 'X', redirect_uris: [uri] });
+  }
+  const stored = await db.select().from(oauthClients);
+  expect(stored).toHaveLength(goodRedirects.length);
+  for (const row of stored) {
+    for (const uri of row.redirectUris) {
+      expect(() => new Headers({ Location: `${uri}?code=abc` })).not.toThrow();
+      // И сам код обязан остаться в query, а не уехать во фрагмент
+      expect(new URL(`${uri}?code=abc`).searchParams.get('code')).toBe('abc');
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Потолок тела: единственный публичный POST, у которого его не было
+// ---------------------------------------------------------------------------
+//
+// У /trpc/* лимит 4 МиБ, у /mcp — 1 МБ, а сюда ходит НЕАУТЕНТИФИЦИРОВАННЫЙ отправитель.
+// Без потолка объявленная защита («потолок в 50 строк от засорения таблицы») не считается:
+// 50 строк по десятку мегабайт — это гигабайты, и JSON.parse на них зовёт кто угодно.
+test('потолок тела — размер пинится числом, а не импортом', () => {
+  // Законная заявка DCR — сотни байт (живая проба: 108). Значение держится числом:
+  // молчаливое разрастание потолка вернуло бы ровно ту дыру, ради которой он появился.
+  expect(REGISTER_MAX_BODY_BYTES).toBe(16 * 1024);
+});
+
+test('тело сверх потолка — 413 формой OAuth, до разбора JSON', async () => {
+  const oversized = JSON.stringify({
+    client_name: 'x'.repeat(REGISTER_MAX_BODY_BYTES),
+    redirect_uris: [REDIRECT],
+  });
+  const res = await postRaw(oversized);
+  expect(res.status).toBe(413);
+  const body = await json(res);
+  // Форма — та же спецификационная, а не структурная { error: { code } } из /mcp
+  expect(body.error).toBe('invalid_client_metadata');
+  expect(typeof body.error_description).toBe('string');
+  expect(await db.select().from(oauthClients)).toHaveLength(0);
+});
+
+test('тело под потолком проходит гейт: ответ не 413', async () => {
+  const padded = JSON.stringify({
+    client_name: 'x'.repeat(REGISTER_MAX_BODY_BYTES - 200),
+    redirect_uris: [REDIRECT],
+  });
+  expect(padded.length).toBeLessThan(REGISTER_MAX_BODY_BYTES);
+  const res = await postRaw(padded);
+  expect(res.status).toBe(201);
+});
+
+// Chunked-тело без content-length: заголовочный пред-чек тут не срабатывает вовсе, и
+// потолок обязан считаться по фактически прочитанным байтам (та же дыра, что закрывалась
+// на /mcp в Task 4 слайса 1c-2).
+test('сверхбольшое тело без content-length тоже режется', async () => {
+  const chunk = 'x'.repeat(4096);
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const enc = new TextEncoder();
+      controller.enqueue(enc.encode(`{"client_name":"`));
+      for (let i = 0; i < 10; i++) controller.enqueue(enc.encode(chunk));
+      controller.enqueue(enc.encode(`","redirect_uris":["${REDIRECT}"]}`));
+      controller.close();
+    },
+  });
+  const res = await app.request('/oauth/register', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: stream,
+    // @ts-expect-error duplex — обязателен для стримового тела в fetch-совместимом Request
+    duplex: 'half',
+  });
+  expect(res.status).toBe(413);
+});
 
 // Тело формирует неаутентифицированный клиент, то есть кто угодно: битый JSON обязан
 // давать отказ по спеке, а не 500 с трейсом Hono.
@@ -203,6 +318,14 @@ test('ошибки отдаются формой OAuth: error + error_descriptio
   // из /mcp и tRPC: клиент разбирает именно спецификационные поля.
   expect(typeof body.error).toBe('string');
   expect(typeof body.error_description).toBe('string');
+
+  // За одним кодом invalid_redirect_uri стоят четыре правила, и описание — единственный
+  // канал отладки для разработчика чужого агента: отказ по фрагменту обязан называть
+  // фрагмент, а не отправлять проверять схему и хост, где всё в порядке.
+  const fragment = await json(
+    await post({ client_name: 'X', redirect_uris: ['http://localhost:8080/cb#frag'] }),
+  );
+  expect(fragment.error_description).toContain('фрагмент');
 });
 
 test('регистрации ограничены потолком в сутки', async () => {
