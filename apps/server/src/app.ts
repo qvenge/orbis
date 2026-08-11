@@ -15,6 +15,7 @@ import type { Db } from './db/client';
 import { makeMcpHandler } from './mcp/transport';
 import { mountOAuthMetadata } from './oauth/metadata';
 import { makeRegisterHandler } from './oauth/register';
+import { makeTokenHandler } from './oauth/token-endpoint';
 import { appRouter } from './router';
 
 /**
@@ -127,6 +128,9 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: Ap
   // поэтому POST они не перехватили бы и снизу (проверено переносом строки под статику —
   // сьют остаётся зелёным). Место выбрано ради одной точки со всеми API-роутами.
   app.post('/oauth/register', makeRegisterHandler({ db }));
+  // Обмен кода и refresh на пару токенов (§9.3) — адрес из `token_endpoint` метаданных.
+  // Публичный по построению: клиенты у нас без секрета, обмен защищён PKCE.
+  app.post('/oauth/token', makeTokenHandler({ db }));
   // Форма ответа на здоровом реестре НЕ меняется ({status:'ok'}) — на неё смотрит и
   // healthCheckPath Render, и тесты. Расхождение добавляет поле, но не меняет код ответа:
   // не-200 здесь превратил бы наблюдаемость ловушки в отказ деплоя (E1). Третье значение
