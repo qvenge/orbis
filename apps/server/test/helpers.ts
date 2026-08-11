@@ -35,7 +35,7 @@ export function freshUserId(): string {
 export async function truncateAll(): Promise<void> {
   const { db, client } = adminDb();
   await db.execute(sql`TRUNCATE entities, relations, user_settings, chat_threads,
-    chat_messages, ai_usage, entity_origins RESTART IDENTITY CASCADE`);
+    chat_messages, ai_usage, entity_origins, agent_grants, oauth_clients RESTART IDENTITY CASCADE`);
   await db.execute(sql`DELETE FROM aspect_definitions WHERE owner_id IS NOT NULL`);
   await client.end();
 }

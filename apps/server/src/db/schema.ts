@@ -4,6 +4,7 @@ import {
   boolean,
   check,
   date,
+  index,
   integer,
   jsonb,
   pgTable,
@@ -161,4 +162,48 @@ export const entityOrigins = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [unique('entity_origins_uniq').on(t.ownerId, t.namespace, t.externalId)],
+);
+
+// §9.3 (D34): регистрации внешних агентов (DCR) и выданные им доступы.
+// Девятая и десятая таблицы — PRD §4 расширен решением D34.
+export const oauthClients = pgTable('oauth_clients', {
+  clientId: text('client_id').primaryKey(),
+  clientName: text('client_name').notNull(),
+  redirectUris: text('redirect_uris').array().notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Одна строка — весь жизненный цикл доступа: выданный код, текущий access и refresh.
+// Код и токены хранятся ТОЛЬКО хешем (sha256 hex) — контракт hash-only §9.3.
+export const agentGrants = pgTable(
+  'agent_grants',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id').notNull(),
+    // NULL у PAT: у headless-доступа нет зарегистрированного клиента
+    clientId: text('client_id').references(() => oauthClients.clientId, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(), // oauth | pat
+    label: text('label').notNull(),
+    scope: text('scope').notNull().default('full'), // Р6: значение пока одно
+    codeHash: text('code_hash'),
+    codeChallenge: text('code_challenge'),
+    codeExpiresAt: timestamp('code_expires_at', { withTimezone: true }),
+    codeUsedAt: timestamp('code_used_at', { withTimezone: true }),
+    redirectUri: text('redirect_uri'),
+    accessHash: text('access_hash'),
+    // NULL у PAT: заголовочный доступ не истекает, отзывается строкой
+    accessExpiresAt: timestamp('access_expires_at', { withTimezone: true }),
+    refreshHash: text('refresh_hash'),
+    refreshExpiresAt: timestamp('refresh_expires_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex('agent_grants_access_hash').on(t.accessHash),
+    uniqueIndex('agent_grants_refresh_hash').on(t.refreshHash),
+    uniqueIndex('agent_grants_code_hash').on(t.codeHash),
+    index('agent_grants_owner').on(t.ownerId),
+    check('agent_grants_kind', sql`${t.kind} IN ('oauth','pat')`),
+  ],
 );

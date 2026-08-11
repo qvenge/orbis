@@ -29,6 +29,20 @@
       "when": 1783583276549,
       "tag": "0003_chat_messages_ms_precision",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786438585239,
+      "tag": "0004_oauth_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786438800000,
+      "tag": "0005_oauth_rls",
+      "breakpoints": true
     }
   ]
 }

@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(31);
+SELECT plan(34);
 
 -- Фикстуры под суперпользователем (обходит RLS)
 INSERT INTO entities (id, owner_id, title) VALUES
@@ -28,15 +28,23 @@ INSERT INTO entity_origins (id, owner_id, entity_id, namespace, external_id) VAL
    '00000000-0000-7000-8000-0000000000a1', 'telegram', 'ext-a'),
   ('00000000-0000-7000-8000-0000000000b6', '00000000-0000-4000-8000-00000000000b',
    '00000000-0000-7000-8000-0000000000b1', 'telegram', 'ext-b');
+INSERT INTO oauth_clients (client_id, client_name, redirect_uris) VALUES
+  ('pgtap-client', 'Claude Code', ARRAY['http://localhost:8080/callback']);
+INSERT INTO agent_grants (id, owner_id, client_id, kind, label, access_hash) VALUES
+  ('00000000-0000-7000-8000-0000000000a7', '00000000-0000-4000-8000-00000000000a',
+   'pgtap-client', 'oauth', 'Claude Code', 'hash-a'),
+  ('00000000-0000-7000-8000-0000000000b7', '00000000-0000-4000-8000-00000000000b',
+   'pgtap-client', 'oauth', 'Claude Code', 'hash-b');
 
--- 1) RLS включён и FORCE на всех 8 таблицах
+-- 1) RLS включён и FORCE на всех 10 таблицах
 SELECT is(
   (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind = 'r'
      AND c.relname IN ('entities','relations','aspect_definitions','user_settings',
-                       'chat_threads','chat_messages','ai_usage','entity_origins')
+                       'chat_threads','chat_messages','ai_usage','entity_origins',
+                       'agent_grants','oauth_clients')
      AND c.relrowsecurity AND c.relforcerowsecurity),
-  8, 'RLS ENABLE+FORCE на всех восьми таблицах');
+  10, 'RLS ENABLE+FORCE на всех десяти таблицах');
 
 -- Как пользователь A
 SELECT set_config('request.jwt.claims',
@@ -157,6 +165,20 @@ DELETE FROM aspect_definitions WHERE id = 'orbis/pgtap-probe';
 SELECT results_eq(
   $$SELECT count(*)::int FROM aspect_definitions WHERE id = 'orbis/pgtap-probe'$$,
   ARRAY[1], 'aspect_definitions: builtin не удаляется под authenticated (DELETE 0)');
+
+-- Группа 8: agent_grants — владелец видит только свои гранты (§9.3, D34).
+-- Вторая политика (для orbis_app) здесь не срабатывает: роль authenticated
+-- к orbis_app отношения не имеет, так что владельца проверяем изолированно.
+SELECT results_eq('SELECT count(*)::int FROM agent_grants', ARRAY[1],
+  'A видит ровно свой грант');
+SELECT results_eq(
+  $$SELECT count(*)::int FROM agent_grants WHERE owner_id = '00000000-0000-4000-8000-00000000000b'$$,
+  ARRAY[0], 'чужой грант невидим');
+SELECT throws_ok(
+  $$INSERT INTO agent_grants (id, owner_id, kind, label)
+    VALUES ('00000000-0000-7000-8000-0000000000c7',
+            '00000000-0000-4000-8000-00000000000b', 'pat', 'подлог')$$,
+  '42501', NULL, 'грант с чужим owner_id отклоняется WITH CHECK');
 
 -- Как пользователь B: чужой тред закрыт на чтение и вставку
 SELECT set_config('request.jwt.claims',
