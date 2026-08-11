@@ -4,13 +4,14 @@
 // Response), работает в Bun/Hono БЕЗ моста node:http. Stateless-режим: транспорт
 // одноразовый по контракту SDK («Stateless transport cannot be reused across requests»),
 // поэтому Server+transport создаются на КАЖДЫЙ запрос — каждый запрос самодостаточен
-// (PAT → владелец → реестр per-request), сессий и push-канала нет (§9.3: polling).
+// (токен → владелец → реестр per-request), сессий и push-канала нет (§9.3: polling).
 // enableJsonResponse: простой запрос-ответ без SSE-стрима — ответ хендлера собирается
 // целиком до Response, пост-обработка/close не нужны (объекты одноразовые, дальше GC).
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { Context } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { PAT_PREFIX, verifyPat } from '../pat';
+import { verifyBearer } from '../oauth/grants';
+import { protectedResourceMetadataUrl } from '../oauth/metadata';
 import { type McpDeps, makeMcpServer } from './server';
 
 /**
@@ -45,10 +46,10 @@ const mcpBodyLimit = bodyLimit({
 /** Hono-хендлер /mcp; deps (db, резолвер §8) замыкаются фабрикой — инъекция в тестах. */
 export function makeMcpHandler(deps: McpDeps) {
   return async (c: Context): Promise<Response> => {
-    // Метод-гейт ДО PAT-проверки (Task 10b): в stateless polling-дизайне (§9.3 — без
-    // SSE-стрима и сессий) осмыслен только POST; GET с валидным PAT открывал бы
+    // Метод-гейт ДО аутентификации (Task 10b): в stateless polling-дизайне (§9.3 — без
+    // SSE-стрима и сессий) осмыслен только POST; GET с валидным токеном открывал бы
     // мёртвый SSE-стрим до idle-timeout. Эндпоинт смонтирован app.all (app.ts),
-    // поэтому не-POST доходит сюда.
+    // поэтому не-POST доходит сюда. Гейт ещё и дешевле: не-POST не ходит в базу.
     if (c.req.method !== 'POST') {
       return c.json(
         {
@@ -62,23 +63,24 @@ export function makeMcpHandler(deps: McpDeps) {
       );
     }
 
-    // PAT-auth ДО ЛЮБОЙ MCP-логики (§9.3, fail-closed): /mcp — эндпоинт ТОЛЬКО для
-    // внешних агентов с PAT. Bearer без префикса orbis_pat_ — в том числе валидный
-    // Supabase JWT — здесь не аутентифицирует (401): владельческие поверхности ходят
-    // в tRPC с JWT (context.ts), смешение транспортов не даёт обойти атрибуцию 'agent'.
+    // Аутентификация ДО ЛЮБОЙ MCP-логики (§9.3, fail-closed): /mcp — эндпоинт ТОЛЬКО
+    // для внешних агентов. Принимаются два вида Bearer — access-токен OAuth (orbis_at_)
+    // и headless-PAT (orbis_pat_); оба ищутся по sha256 в agent_grants, поэтому отзыв
+    // действует сразу и без передеплоя. Supabase JWT здесь не аутентифицирует:
+    // владельческие поверхности ходят в tRPC, смешение транспортов не даёт обойти
+    // атрибуцию 'agent'.
     const header = c.req.header('authorization');
     const token = header?.startsWith('Bearer ') ? header.slice('Bearer '.length) : null;
-    const pat = token?.startsWith(PAT_PREFIX) ? verifyPat(token) : null;
-    if (pat === null) {
+    const identity = token === null ? null : await verifyBearer(deps.db, token);
+    if (identity === null) {
       return c.json(
-        {
-          error: {
-            code: 'UNAUTHORIZED',
-            message: 'требуется действительный PAT (Bearer orbis_pat_…)',
-          },
-        },
+        { error: { code: 'UNAUTHORIZED', message: 'требуется действительный токен агента' } },
         401,
-        { 'WWW-Authenticate': 'Bearer' },
+        {
+          // RFC 9728 §5.1: клиент отсюда узнаёт, где лежат метаданные ресурса,
+          // и дальше сам находит authorization server — это и есть вход через браузер
+          'WWW-Authenticate': `Bearer resource_metadata="${protectedResourceMetadataUrl(c)}"`,
+        },
       );
     }
 
@@ -86,13 +88,13 @@ export function makeMcpHandler(deps: McpDeps) {
     // отсекается ДО создания Server/transport (и до JSON-парсинга). Платформенный
     // bodyLimit считает по фактически прочитанным байтам — закрывает и chunked-тело без
     // content-length (остаточный обход Task 10b). Вызываем middleware вручную с no-op
-    // next, сохраняя порядок 405 → 401 → 413 (fail-closed: PAT ДО чтения тела): при
-    // превышении onError возвращает 413-Response, иначе bodyLimit при стриминге
-    // перевешивает буфер тела в c.req.raw — transport читает его ниже.
+    // next, сохраняя порядок 405 → 401 → 413 (fail-closed: аутентификация ДО чтения
+    // тела): при превышении onError возвращает 413-Response, иначе bodyLimit при
+    // стриминге перевешивает буфер тела в c.req.raw — transport читает его ниже.
     const limitResponse = await mcpBodyLimit(c, async () => {});
     if (limitResponse instanceof Response) return limitResponse;
 
-    const server = makeMcpServer(deps, pat.ownerId);
+    const server = makeMcpServer(deps, identity.ownerId);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless: без сессий и их валидации
       enableJsonResponse: true,

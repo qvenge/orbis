@@ -134,11 +134,22 @@ test('хвостовой слэш в ORBIS_PUBLIC_URL не даёт двойно
   expect(body.resource).toBe('https://orbis.example.com/mcp');
 });
 
-// Этот адрес транспорт /mcp положит в WWW-Authenticate (следующая задача) — он обязан
-// быть абсолютным и не зависеть от того, по какому адресу пришёл запрос.
-test('адрес метаданных ресурса абсолютен и берётся из ORBIS_PUBLIC_URL', () => {
+// Этот адрес транспорт /mcp кладёт в WWW-Authenticate (Task 3) — он обязан быть
+// абсолютным, не зависеть от того, по какому адресу пришёл запрос, и быть той самой
+// path-aware формой (RFC 9728 §3.1), которую клиент вывел бы сам из <origin>/mcp.
+test('адрес метаданных ресурса абсолютен, path-aware и берётся из ORBIS_PUBLIC_URL', () => {
   process.env.ORBIS_PUBLIC_URL = 'https://orbis.example.com/';
   expect(protectedResourceMetadataUrl(ctx('http://127.0.0.1:3020/mcp'))).toBe(
-    'https://orbis.example.com/.well-known/oauth-protected-resource',
+    'https://orbis.example.com/.well-known/oauth-protected-resource/mcp',
   );
+});
+
+// Указатель бесполезен, если по нему ничего нет: адрес из заголовка обязан быть
+// смонтированным роутом, а не просто правильно составленной строкой.
+test('по адресу из WWW-Authenticate действительно лежат метаданные ресурса', async () => {
+  process.env.ORBIS_PUBLIC_URL = 'https://orbis.example.com';
+  const url = protectedResourceMetadataUrl(ctx('https://orbis.example.com/mcp'));
+  const res = await app().request(url);
+  expect(res.status).toBe(200);
+  expect((await res.json()).resource).toBe('https://orbis.example.com/mcp');
 });

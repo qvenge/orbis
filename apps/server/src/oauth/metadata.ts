@@ -63,8 +63,17 @@ export function canonicalResource(c: Context): string {
   return `${publicOrigin(c)}/mcp`;
 }
 
+/**
+ * Адрес, который /mcp кладёт в `WWW-Authenticate: Bearer resource_metadata=…` (RFC 9728
+ * §5.1). Форма — path-aware: по §3.1 адрес метаданных ресурса с путём получается вставкой
+ * `/.well-known/oauth-protected-resource` МЕЖДУ хостом и путём, то есть из нашего
+ * `<origin>/mcp` клиент сам вывел бы `<origin>/.well-known/oauth-protected-resource/mcp`.
+ * Указывать иную форму, чем клиент вычислил бы сам, значит без нужды разводить две
+ * правды об одном документе; корневой адрес остаётся смонтированным как совместимость
+ * с клиентами, которые пробуют только его.
+ */
 export function protectedResourceMetadataUrl(c: Context): string {
-  return `${publicOrigin(c)}/.well-known/oauth-protected-resource`;
+  return `${publicOrigin(c)}/.well-known/oauth-protected-resource/mcp`;
 }
 
 export function mountOAuthMetadata(app: Hono): void {

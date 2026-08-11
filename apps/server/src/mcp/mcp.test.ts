@@ -1,10 +1,10 @@
 // Интеграционные тесты MCP-сервера (§9.3): НАСТОЯЩИЙ MCP-клиент из SDK
 // (Client + StreamableHTTPClientTransport) против реально поднятого Hono-приложения
 // на свободном порту (Bun.serve port: 0) и живой БД — интеграционная правда, без моков
-// транспорта. Env: DATABASE_URL / DATABASE_URL_ADMIN (как остальные интеграционные) +
-// ORBIS_PAT_* выставляются здесь же (sha256 токена считаем сами, issue-pat не зовём).
+// транспорта. Env: DATABASE_URL / DATABASE_URL_ADMIN (как остальные интеграционные);
+// токен агента с переездом на таблицу грантов (D34) выдаётся в БАЗУ через issuePatGrant,
+// в окружении его больше нет.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { entityThreadId, globalThreadId, newId } from '@orbis/shared';
@@ -16,6 +16,7 @@ import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
+import { issuePatGrant, revokeGrant, verifyBearer } from '../oauth/grants';
 import { appRouter } from '../router';
 import { buildToolRegistry } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
@@ -26,14 +27,8 @@ requireEnv();
 const { db, client: dbClient } = appDb();
 const owner = freshUserId();
 
-// Фиксированный «выданный» PAT формата issue-pat (префикс + 64 hex); hash — env-контракт Task 3
-const TOKEN = `orbis_pat_${'cd'.repeat(32)}`;
-const sha256hex = (s: string) => createHash('sha256').update(s).digest('hex');
-
-const savedEnv = {
-  ORBIS_PAT_HASH: process.env.ORBIS_PAT_HASH,
-  ORBIS_PAT_OWNER_ID: process.env.ORBIS_PAT_OWNER_ID,
-};
+/** Живой headless-грант владельца; выдаётся в базу в beforeAll (сырой токен — оттуда). */
+let TOKEN: string;
 
 // Два независимых сервера на свободных портах: боевые deps и deps с инжектированным
 // резолвером §8 (agents.requests_per_day = 0) — rate-гейт проверяется изолированно
@@ -53,8 +48,7 @@ const ownerCaller = createCaller({
 
 beforeAll(async () => {
   await truncateAll();
-  process.env.ORBIS_PAT_HASH = sha256hex(TOKEN);
-  process.env.ORBIS_PAT_OWNER_ID = owner;
+  TOKEN = await issuePatGrant(db, { ownerId: owner, label: 'тестовый агент' });
 
   const app = new Hono();
   app.all('/mcp', makeMcpHandler({ db }));
@@ -68,10 +62,6 @@ beforeAll(async () => {
 afterAll(async () => {
   main?.stop(true);
   gated?.stop(true);
-  for (const [key, value] of Object.entries(savedEnv)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
   await dbClient.end();
 });
 
@@ -129,10 +119,10 @@ async function globalAuditActions(): Promise<ActionRecord[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Аутентификация: PAT ДО любой MCP-логики (§9.3, fail-closed)
+// Аутентификация: грант из таблицы ДО любой MCP-логики (§9.3, fail-closed)
 // ---------------------------------------------------------------------------
 
-describe('/mcp: PAT-аутентификация ДО MCP-логики (§9.3)', () => {
+describe('/mcp: аутентификация по гранту ДО MCP-логики (§9.3)', () => {
   const initBody = {
     jsonrpc: '2.0',
     id: 1,
@@ -156,11 +146,13 @@ describe('/mcp: PAT-аутентификация ДО MCP-логики (§9.3)',
     });
   }
 
-  test('без Authorization / битый PAT / JWT вместо PAT → 401 нашей формы (не JSON-RPC)', async () => {
+  test('без Authorization / токена нет в таблице / JWT вместо гранта → 401 нашей формы (не JSON-RPC)', async () => {
     const cases: Record<string, string>[] = [
       {}, // вовсе без заголовка
-      { authorization: `Bearer orbis_pat_${'00'.repeat(32)}` }, // формат верный, токен чужой
-      // Supabase JWT в /mcp не пускается: эндпоинт ТОЛЬКО для PAT внешних агентов (§9.3);
+      { authorization: `Bearer orbis_pat_${'00'.repeat(32)}` }, // формат верный, строки в таблице нет
+      // Access-токен OAuth того же формата, но не выданный нами, — тот же отказ
+      { authorization: `Bearer orbis_at_${'00'.repeat(32)}` },
+      // Supabase JWT в /mcp не пускается: эндпоинт ТОЛЬКО для внешних агентов (§9.3);
       // владельческие поверхности ходят в tRPC с JWT (context.ts)
       { authorization: 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl' },
     ];
@@ -173,10 +165,38 @@ describe('/mcp: PAT-аутентификация ДО MCP-логики (§9.3)',
     }
   });
 
-  test('SDK-клиент с битым PAT не подключается (401 UNAUTHORIZED)', async () => {
+  test('SDK-клиент с чужим токеном не подключается (401 UNAUTHORIZED)', async () => {
     // Сообщение ошибки SDK-клиента несёт тело ответа — матчим нашу структурную форму
     await expect(connectAgent(mainUrl(), `orbis_pat_${'ee'.repeat(32)}`)).rejects.toThrow(
       /UNAUTHORIZED/,
+    );
+  });
+
+  // Ради этого теста доступ и переезжал из env в таблицу (Р4): отзыв — строка в базе,
+  // а не смена переменной с передеплоем. Токен тут настоящий и до отзыва рабочий.
+  test('отозванный токен больше не пускает', async () => {
+    const token = await issuePatGrant(db, { ownerId: owner, label: 'на отзыв' });
+    const identity = await verifyBearer(db, token);
+    if (identity === null) throw new Error('выданный токен не прошёл verifyBearer');
+    // До отзыва тот же токен пускает — иначе тест был бы зелёным и на сломанной выдаче
+    expect((await post({ authorization: `Bearer ${token}` })).status).toBe(200);
+
+    expect(await revokeGrant(db, { ownerId: owner, grantId: identity.grantId })).toBe(true);
+
+    const res = await post({ authorization: `Bearer ${token}` });
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe('UNAUTHORIZED');
+  });
+
+  // RFC 9728 §5.1: без этого указателя MCP-клиент видит «нужна авторизация», но не знает
+  // куда идти — браузерный вход не начинается вовсе. Форма адреса — path-aware (§3.1):
+  // ровно та, которую клиент вывел бы сам из идентификатора ресурса <origin>/mcp.
+  test('401 указывает, где искать метаданные ресурса (RFC 9728)', async () => {
+    const res = await post({});
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toBe(
+      `Bearer resource_metadata="http://127.0.0.1:${main.port}/.well-known/oauth-protected-resource/mcp"`,
     );
   });
 });

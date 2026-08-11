@@ -88,7 +88,8 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: Ap
   // любой zod-валидации (порядок регистрации = порядок исполнения middleware).
   app.use('/trpc/*', trpcBodyLimit);
   app.use('/trpc/*', trpcServer({ router: appRouter, createContext: makeCreateContext(db, ai) }));
-  // MCP-эндпоинт внешних агентов (§9.3): Streamable HTTP, PAT-only (transport.ts)
+  // MCP-эндпоинт внешних агентов (§9.3): Streamable HTTP, только по гранту из
+  // agent_grants — access-токен OAuth или headless-PAT (transport.ts)
   app.all('/mcp', makeMcpHandler({ db }));
   // Метаданные OAuth (§9.3): публичные, до статики — иначе их съест SPA-fallback
   mountOAuthMetadata(app);

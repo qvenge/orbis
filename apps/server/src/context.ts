@@ -6,7 +6,8 @@ import { CLIENT_VERSION_HEADER } from '@orbis/shared';
 import type { AiDeps } from './ai/send-message';
 import { verifyAccessToken } from './auth';
 import type { Db } from './db/client';
-import { PAT_PREFIX, verifyPat } from './pat';
+import { verifyBearer } from './oauth/grants';
+import { BEARER_PREFIXES } from './oauth/tokens';
 import type { Context } from './trpc';
 
 /**
@@ -20,12 +21,20 @@ export function makeCreateContext(db: Db, ai?: AiDeps) {
     const clientVersion = req.headers.get(CLIENT_VERSION_HEADER);
     const aiDeps = ai !== undefined ? { ai } : {};
 
-    // §9.3 (Task 3): Bearer с префиксом PAT — ТОЛЬКО verifyPat, JWT-путь не пробуется:
-    // невалидный PAT остаётся неаутентифицированным (fail-closed), а не «вдруг JWT».
-    if (token?.startsWith(PAT_PREFIX)) {
-      const pat = verifyPat(token);
+    // §9.3: Bearer с агентским префиксом (orbis_at_ / orbis_pat_) — ТОЛЬКО сверка с
+    // таблицей грантов, JWT-путь не пробуется: недействительный токен агента остаётся
+    // неаутентифицированным (fail-closed), а не «вдруг JWT». Ветка развилки — префикс,
+    // а не исход проверки: иначе отозванный токен уезжал бы на владельческий путь и
+    // получал actorKind 'owner' (пусть и без actorUserId) — атрибуцию агента нельзя
+    // терять из-за того, что доступ отозвали.
+    //
+    // С переездом доступа из env в таблицу (D34) источник правды здесь тот же, что у
+    // /mcp: verifyBearer. Двух механизмов с разными источниками правды у одного токена
+    // быть не должно — именно поэтому apps/server/src/pat.ts снят целиком.
+    if (token !== null && BEARER_PREFIXES.some((p) => token.startsWith(p))) {
+      const identity = await verifyBearer(db, token);
       return {
-        actorUserId: pat?.ownerId ?? null,
+        actorUserId: identity?.ownerId ?? null,
         actorKind: 'agent',
         db,
         clientVersion,

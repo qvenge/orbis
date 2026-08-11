@@ -14,7 +14,8 @@ export type Context = {
   actorUserId: string | null;
   /**
    * Транспортный актор запроса (§9.3): 'owner' — JWT Supabase (и неаутентифицированные
-   * запросы), 'agent' — PAT внешнего агента. Уже, чем ActorKind executor'а ('ai' — не
+   * запросы), 'agent' — токен внешнего агента из agent_grants (access-токен OAuth либо
+   * headless-PAT; развилку делает context.ts). Уже, чем ActorKind executor'а ('ai' — не
    * транспорт: внутренний AI действует внутри запросов владельца).
    */
   actorKind: 'owner' | 'agent';

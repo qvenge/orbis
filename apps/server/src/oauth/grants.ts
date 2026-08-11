@@ -13,6 +13,7 @@ import { OAuthError } from './errors';
 import {
   ACCESS_PREFIX,
   ACCESS_TTL_SECONDS,
+  BEARER_PREFIXES,
   CODE_PREFIX,
   CODE_TTL_SECONDS,
   hashToken,
@@ -51,7 +52,10 @@ const secondsFromNow = (s: number) => new Date(Date.now() + s * 1000);
  * владелец забыл.
  */
 export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity | null> {
-  if (!token.startsWith(ACCESS_PREFIX) && !token.startsWith(PAT_PREFIX)) return null;
+  // Набор принимаемых префиксов — один на всех (tokens.ts): его же спрашивает context.ts,
+  // решая, агентский это Bearer или владельческий JWT. Перечисление вручную давало бы
+  // две правды, расходящиеся при добавлении третьего вида токена.
+  if (!BEARER_PREFIXES.some((prefix) => token.startsWith(prefix))) return null;
   const rows = await db
     .update(agentGrants)
     .set({ lastUsedAt: new Date() })

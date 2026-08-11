@@ -17,7 +17,6 @@
 // (entity.update → in_progress) — правка двигает updated_at, курсор ловит. Ниже это
 // доказано явно: до правки статуса query по курсору задачу НЕ находит, после — находит.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { entityThreadId, globalThreadId, newId } from '@orbis/shared';
@@ -30,6 +29,7 @@ import { execute } from '../src/executor/executor';
 import type { ActionRecord, WireEntity } from '../src/executor/types';
 import { ScriptedProvider } from '../src/llm/scripted';
 import { makeMcpHandler } from '../src/mcp/transport';
+import { issuePatGrant } from '../src/oauth/grants';
 import { appRouter } from '../src/router';
 import type { Card } from '../src/tools/registry';
 import { createCallerFactory } from '../src/trpc';
@@ -41,19 +41,13 @@ const { db, client } = appDb();
 const owner = freshUserId();
 const createCaller = createCallerFactory(appRouter);
 
-// Фиксированный «выданный» PAT формата issue-pat (префикс + 64 hex); hash — env-контракт Task 3
-const TOKEN = `orbis_pat_${'a7'.repeat(32)}`;
-const sha256hex = (s: string) => createHash('sha256').update(s).digest('hex');
+/** Живой headless-грант владельца: с переездом на таблицу (D34) токен выдаётся в базу. */
+let TOKEN: string;
 
 // Фиксированное «сейчас» для метеринга ai_usage (§4.7): день UTC = 2026-07-05.
 const T0 = new Date('2026-07-05T10:00:00.000Z');
 const TODAY = '2026-07-05';
 const MODEL = 'scripted-model';
-
-const savedEnv = {
-  ORBIS_PAT_HASH: process.env.ORBIS_PAT_HASH,
-  ORBIS_PAT_OWNER_ID: process.env.ORBIS_PAT_OWNER_ID,
-};
 
 let mcp: ReturnType<typeof Bun.serve>;
 const mcpUrl = () => `http://127.0.0.1:${mcp.port}/mcp`;
@@ -68,8 +62,7 @@ const ownerCaller = createCaller({
 
 beforeAll(async () => {
   await truncateAll();
-  process.env.ORBIS_PAT_HASH = sha256hex(TOKEN);
-  process.env.ORBIS_PAT_OWNER_ID = owner;
+  TOKEN = await issuePatGrant(db, { ownerId: owner, label: 'внешний агент e2e' });
 
   const app = new Hono();
   app.all('/mcp', makeMcpHandler({ db }));
@@ -78,10 +71,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   mcp?.stop(true);
-  for (const [key, value] of Object.entries(savedEnv)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
   await client.end();
 });
 

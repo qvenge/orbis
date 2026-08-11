@@ -37,7 +37,7 @@ export interface McpDeps {
 
 /**
  * Свежий SDK-Server на ЗАПРОС (stateless-контракт транспорта, transport.ts) от имени
- * владельца PAT. Каждый tools/call — свежий tx-цикл dispatchTool; реестр tools/list
+ * владельца гранта. Каждый tools/call — свежий tx-цикл dispatchTool; реестр tools/list
  * строится per-request под withIdentity — агент видит и custom-аспекты владельца (§7.6).
  */
 export function makeMcpServer(deps: McpDeps, ownerId: string): Server {

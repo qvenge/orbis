@@ -1,47 +1,51 @@
 // Тесты сборки request-контекста (Task 14): Bearer → actorUserId через реальную
 // HS256-верификацию (без моков jose), CLIENT_VERSION_HEADER → clientVersion.
-// Task 3 (1b): PAT-путь §9.3 — Bearer с префиксом orbis_pat_ → verifyPat, actorKind 'agent'.
-// Герметичен по образцу auth.test.ts: JWKS-путь выключен, секрет локального стека
-// и PAT-env заданы явно.
+// §9.3: агентский путь — Bearer с префиксом orbis_pat_/orbis_at_ идёт в таблицу грантов
+// (verifyBearer), actorKind 'agent'. Env-путь PAT снят вместе с apps/server/src/pat.ts:
+// у токена агента один источник правды, и он в базе — поэтому файл стал интеграционным
+// (DATABASE_URL) вместо герметичного. JWT-часть по-прежнему герметична: JWKS-путь
+// выключен, секрет локального стека задан явно.
 
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
 import { CLIENT_VERSION_HEADER } from '@orbis/shared';
 import { SignJWT } from 'jose';
+import { appDb, freshUserId, requireEnv } from '../test/helpers';
 import { makeCreateContext } from './context';
+import { issuePatGrant, revokeGrant, verifyBearer } from './oauth/grants';
 import { appRouter } from './router';
-import type { Context } from './trpc';
+
+requireEnv();
 
 const LOCAL_JWT_SECRET = 'super-secret-jwt-token-with-at-least-32-characters-long';
 
-const PAT_OWNER = crypto.randomUUID();
-const PAT_TOKEN = `orbis_pat_${'cd'.repeat(32)}`;
+const { db, client: dbClient } = appDb();
+const PAT_OWNER = freshUserId();
+/** Живой headless-грант владельца PAT_OWNER; выдаётся в базу в beforeAll. */
+let PAT_TOKEN: string;
 
 const savedEnv = {
   SUPABASE_URL: process.env.SUPABASE_URL,
   SUPABASE_JWKS_URL: process.env.SUPABASE_JWKS_URL,
   SUPABASE_JWT_SECRET: process.env.SUPABASE_JWT_SECRET,
-  ORBIS_PAT_HASH: process.env.ORBIS_PAT_HASH,
-  ORBIS_PAT_OWNER_ID: process.env.ORBIS_PAT_OWNER_ID,
 };
 
-beforeAll(() => {
+beforeAll(async () => {
   delete process.env.SUPABASE_URL;
   delete process.env.SUPABASE_JWKS_URL;
   process.env.SUPABASE_JWT_SECRET = LOCAL_JWT_SECRET;
-  process.env.ORBIS_PAT_HASH = createHash('sha256').update(PAT_TOKEN).digest('hex');
-  process.env.ORBIS_PAT_OWNER_ID = PAT_OWNER;
+  // truncateAll здесь не нужен: владелец случайный (freshUserId), чужие строки этому
+  // сьюту не мешают, а лишняя зачистка связывала бы файл с остальными сьютами.
+  PAT_TOKEN = await issuePatGrant(db, { ownerId: PAT_OWNER, label: 'тестовый агент' });
 });
 
-afterAll(() => {
+afterAll(async () => {
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
   }
+  await dbClient.end();
 });
 
-// createContext БД не трогает — стаб-ссылка вместо пула
-const db = null as unknown as Context['db'];
 const createContext = makeCreateContext(db);
 
 function makeReq(headers: Record<string, string> = {}): { req: Request } {
@@ -75,11 +79,18 @@ test('без Authorization / не-Bearer → actorUserId = null, actorKind owner
   ).toBeNull();
 });
 
-// §9.3: PAT-путь — префикс orbis_pat_ уводит в verifyPat, JWT-путь не пробуется
-test('Bearer с валидным PAT → { actorUserId: owner из env, actorKind: agent }', async () => {
+// §9.3: агентский путь — префикс orbis_pat_ уводит в таблицу грантов, JWT не пробуется
+test('Bearer с валидным PAT → { actorUserId: владелец гранта, actorKind: agent }', async () => {
   const ctx = await createContext(makeReq({ authorization: `Bearer ${PAT_TOKEN}` }));
   expect(ctx.actorUserId).toBe(PAT_OWNER);
   expect(ctx.actorKind).toBe('agent');
+});
+
+// Access-токен OAuth — второй вид агентского Bearer; для tRPC он ровно то же, что PAT
+test('Bearer с access-токеном OAuth → тот же агентский путь', async () => {
+  const ctx = await createContext(makeReq({ authorization: `Bearer orbis_at_${'11'.repeat(32)}` }));
+  expect(ctx.actorUserId).toBeNull(); // такого гранта в таблице нет
+  expect(ctx.actorKind).toBe('agent'); // но путь агентский — на JWT не откатываемся
 });
 
 test('Bearer с битым PAT → actorUserId null (fail-closed, без JWT-fallback)', async () => {
@@ -89,15 +100,21 @@ test('Bearer с битым PAT → actorUserId null (fail-closed, без JWT-fal
   expect(ctx.actorKind).toBe('agent'); // префикс детектирован — путь агентский, не owner
 });
 
-test('PAT без env (hash удалён) → actorUserId null даже для «валидного» токена', async () => {
-  const saved = process.env.ORBIS_PAT_HASH;
-  delete process.env.ORBIS_PAT_HASH;
-  try {
-    const ctx = await createContext(makeReq({ authorization: `Bearer ${PAT_TOKEN}` }));
-    expect(ctx.actorUserId).toBeNull();
-  } finally {
-    process.env.ORBIS_PAT_HASH = saved;
-  }
+// Отзыв обязан гасить доступ на ОБЕИХ поверхностях, не только на /mcp: иначе отозванный
+// агент продолжал бы читать граф владельца через tRPC.
+test('отозванный грант → actorUserId null, actorKind остаётся agent', async () => {
+  const token = await issuePatGrant(db, { ownerId: PAT_OWNER, label: 'на отзыв' });
+  const identity = await verifyBearer(db, token);
+  if (identity === null) throw new Error('выданный токен не прошёл verifyBearer');
+  expect((await createContext(makeReq({ authorization: `Bearer ${token}` }))).actorUserId).toBe(
+    PAT_OWNER,
+  );
+
+  await revokeGrant(db, { ownerId: PAT_OWNER, grantId: identity.grantId });
+
+  const ctx = await createContext(makeReq({ authorization: `Bearer ${token}` }));
+  expect(ctx.actorUserId).toBeNull();
+  expect(ctx.actorKind).toBe('agent');
 });
 
 // Агент не шлёт CLIENT_VERSION_HEADER → clientVersion null → version-гейт пропускает:
