@@ -130,9 +130,22 @@ export async function exchangeAuthorizationCode(
   const claimed = await db
     .update(agentGrants)
     .set({ codeUsedAt: new Date(), ...pairColumns(pair) })
-    .where(and(eq(agentGrants.id, grant.id), isNull(agentGrants.codeUsedAt)))
+    .where(
+      and(
+        eq(agentGrants.id, grant.id),
+        isNull(agentGrants.codeUsedAt),
+        // Строка гранта видна владельцу с момента выдачи кода, поэтому «Отозвать»
+        // можно нажать в те же 60 секунд, пока код не обменян. Без этого условия
+        // клиент получал бы пару токенов, не работающую ни на /mcp, ни на ротации,
+        // и считал бы себя подключённым. Условие здесь, а не отдельной проверкой
+        // выше, — тогда гонка «обмен против отзыва» разрешается атомарно.
+        isNull(agentGrants.revokedAt),
+      ),
+    )
     .returning({ id: agentGrants.id });
-  if (claimed.length === 0) throw new OAuthError('invalid_grant', 'код уже использован');
+  if (claimed.length === 0) {
+    throw new OAuthError('invalid_grant', 'код уже использован либо доступ отозван');
+  }
   return pair;
 }
 

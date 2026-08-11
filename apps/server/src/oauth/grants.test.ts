@@ -118,6 +118,101 @@ test('неверный verifier не проходит', async () => {
   ).rejects.toMatchObject({ code: 'invalid_grant' });
 });
 
+test('код, выданный другому клиенту, не меняется', async () => {
+  const clientId = await seedClient();
+  const other = await seedClient('other-client');
+  const { verifier, challenge } = pkce();
+  const code = await createAuthorizationCode(db, {
+    ownerId: owner,
+    clientId,
+    label: 'Claude Code',
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+  });
+  await expect(
+    exchangeAuthorizationCode(db, {
+      code,
+      codeVerifier: verifier,
+      redirectUri: REDIRECT,
+      clientId: other,
+    }),
+  ).rejects.toMatchObject({ code: 'invalid_grant' });
+});
+
+test('несовпадающий redirect_uri не меняет код', async () => {
+  const clientId = await seedClient();
+  const { verifier, challenge } = pkce();
+  const code = await createAuthorizationCode(db, {
+    ownerId: owner,
+    clientId,
+    label: 'Claude Code',
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+  });
+  await expect(
+    exchangeAuthorizationCode(db, {
+      code,
+      codeVerifier: verifier,
+      redirectUri: 'http://localhost:8080/подмена',
+      clientId,
+    }),
+  ).rejects.toMatchObject({ code: 'invalid_grant' });
+});
+
+test('просроченный код не меняется', async () => {
+  const clientId = await seedClient();
+  const { verifier, challenge } = pkce();
+  const code = await createAuthorizationCode(db, {
+    ownerId: owner,
+    clientId,
+    label: 'Claude Code',
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+  });
+  // Состариваем срок прямым UPDATE — системное время не подменяем.
+  await db
+    .update(agentGrants)
+    .set({ codeExpiresAt: new Date(Date.now() - 1000) })
+    .where(eq(agentGrants.codeHash, sha256hex(code)));
+  await expect(
+    exchangeAuthorizationCode(db, {
+      code,
+      codeVerifier: verifier,
+      redirectUri: REDIRECT,
+      clientId,
+    }),
+  ).rejects.toMatchObject({ code: 'invalid_grant' });
+});
+
+test('грант, отозванный между выдачей кода и обменом, кода не меняет', async () => {
+  const clientId = await seedClient();
+  const { verifier, challenge } = pkce();
+  const code = await createAuthorizationCode(db, {
+    ownerId: owner,
+    clientId,
+    label: 'Claude Code',
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+  });
+  // Строка гранта видна владельцу сразу — значит кнопка «Отозвать» доступна в те
+  // самые 60 секунд, пока код ещё не обменян.
+  const pending = await listGrants(db, owner);
+  expect(pending).toHaveLength(1);
+  const pendingGrant = pending[0];
+  if (!pendingGrant) throw new Error('грант по выданному коду в listGrants не виден');
+  expect(await revokeGrant(db, { ownerId: owner, grantId: pendingGrant.id })).toBe(true);
+  // Иначе клиент получил бы 200 с парой токенов, которая не работает нигде,
+  // и считал бы себя подключённым.
+  await expect(
+    exchangeAuthorizationCode(db, {
+      code,
+      codeVerifier: verifier,
+      redirectUri: REDIRECT,
+      clientId,
+    }),
+  ).rejects.toMatchObject({ code: 'invalid_grant' });
+});
+
 test('refresh ротируется, старый больше не работает', async () => {
   const clientId = await seedClient();
   const { verifier, challenge } = pkce();
@@ -248,12 +343,15 @@ test('чужой владелец не отзывает грант', async () =>
 });
 
 test('listGrants отдаёт свои гранты и не отдаёт хеши', async () => {
-  await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  const pat = await issuePatGrant(db, { ownerId: owner, label: 'CI' });
   await issuePatGrant(db, { ownerId: freshUserId(), label: 'чужой' });
   const grants = await listGrants(db, owner);
   expect(grants).toHaveLength(1);
   expect(grants[0]).toMatchObject({ kind: 'pat', label: 'CI' });
-  expect(JSON.stringify(grants)).not.toContain('hash');
+  // Ищем САМО значение хеша, а не подстроку 'hash': ключи drizzle приходят в camelCase
+  // (`accessHash`), а hex-значение букв за a–f не содержит — поиск слова 'hash' пропустил
+  // бы утечку целиком и сторожил бы пустое место.
+  expect(JSON.stringify(grants)).not.toContain(sha256hex(pat));
 });
 
 test('мусорный токен и токен без префикса отвергаются', async () => {
