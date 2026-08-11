@@ -16,7 +16,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Db } from '../db/client';
 import { OAuthError } from './errors';
 import { exchangeAuthorizationCode, rotateRefresh } from './grants';
-import { canonicalResource } from './metadata';
+import { canonicalResource, isOurResource } from './metadata';
 
 /**
  * Потолок тела. Эндпоинт публичный и неаутентифицированный — ровно как /oauth/register
@@ -112,7 +112,7 @@ export function makeTokenHandler(deps: { db: Db }) {
       // canonicalResource — тем же, что стоит в метаданных; своё чтение
       // ORBIS_PUBLIC_URL завело бы вторую правду об одном и том же ресурсе.
       const resource = field('resource');
-      if (resource && resource.replace(/\/+$/, '') !== canonicalResource(c)) {
+      if (resource && !isOurResource(resource, canonicalResource(c))) {
         throw new OAuthError('invalid_target', 'токен запрошен для другого ресурса');
       }
 

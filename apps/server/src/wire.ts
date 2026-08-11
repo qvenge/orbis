@@ -14,6 +14,7 @@ import type {
   userSettings,
 } from './db/schema';
 import type { WireEntity, WireRelation } from './executor/types';
+import type { GrantSummary } from './oauth/grants';
 
 type EntityRow = typeof entities.$inferSelect;
 type RelationRow = typeof relations.$inferSelect;
@@ -147,6 +148,33 @@ export function toWireUserSettings(row: UserSettingsRow): WireUserSettings {
     pinnedEntities: row.pinnedEntities as PinnedEntity[], // jsonb [{id, order}] — как есть
     viewPreferences: row.viewPreferences as Record<string, unknown>,
     updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+/**
+ * Wire-форма выданного доступа (§9.3) для экрана «Агенты». Таймстампы — строками, как у
+ * всех остальных wire-форм, и это не косметика: transformer'а у клиента нет (проверено
+ * HTTP-пробой — `createdAt` доезжает как "2026-08-11T13:56:47.228Z"), поэтому отдача
+ * доменного `GrantSummary` с Date давала бы клиенту ТИП Date при строке в рантайме, и
+ * первый же `createdAt.toLocaleString()` на экране падал бы TypeError.
+ */
+export interface WireAgentGrant {
+  id: string;
+  kind: string;
+  label: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+}
+
+export function toWireAgentGrant(row: GrantSummary): WireAgentGrant {
+  return {
+    id: row.id,
+    kind: row.kind,
+    label: row.label,
+    createdAt: row.createdAt.toISOString(),
+    lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
+    revokedAt: row.revokedAt?.toISOString() ?? null,
   };
 }
 

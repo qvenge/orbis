@@ -101,7 +101,41 @@ function parsePublicOrigin(raw: string): string {
 
 /** Канонический URI ресурса (RFC 8707 §2): без хвостового слэша и без фрагмента. */
 export function canonicalResource(c: Context): string {
-  return `${publicOrigin(c)}/mcp`;
+  return resourceOf(publicOrigin(c));
+}
+
+/** Путь ресурса живёт в одной строке: и метаданные, и обе проверки берут его отсюда. */
+function resourceOf(origin: string): string {
+  return `${origin}/mcp`;
+}
+
+/**
+ * Канонический ресурс ВНЕ Hono-контекста — для tRPC-роутера согласия (routers/oauth.ts),
+ * у процедуры которого нет `c`. Своё чтение ORBIS_PUBLIC_URL там завело бы вторую правду
+ * об одном и том же ресурсе, поэтому правда остаётся здесь, а наружу выходит функция без
+ * контекста.
+ *
+ * null означает ровно одно: публичная база не настроена. Фолбэка на адрес запроса тут
+ * нет — брать его неоткуда, и подставлять сюда хост из запроса нельзя по тем же причинам,
+ * по которым он не годится для метаданных. Следствие названо честно: на локальном стенде
+ * без ORBIS_PUBLIC_URL сверять присланный `resource` не с чем, и проверка пропускается.
+ * В production такой ветки не бывает — без переменной процесс не поднимается
+ * (assertPublicOriginConfigured), поэтому пропуск ограничен стендом, где нет ни владельца,
+ * ни данных.
+ */
+export function configuredCanonicalResource(env: PublicOriginEnv = process.env): string | null {
+  const origin = configuredOrigin(env);
+  return origin === null ? null : resourceOf(origin);
+}
+
+/**
+ * Сверка присланного клиентом `resource` с нашим каноническим (RFC 8707 §2): хвостовой
+ * слэш — тот же ресурс. Правило одно на оба места, где resource проверяется (/oauth/token
+ * и экран согласия): разъехавшись, они дали бы клиенту зелёный свет на одном шаге входа
+ * и отказ на другом.
+ */
+export function isOurResource(resource: string, canonical: string): boolean {
+  return resource.replace(/\/+$/, '') === canonical;
 }
 
 /**

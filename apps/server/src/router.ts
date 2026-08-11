@@ -7,6 +7,7 @@ import { chatRouter } from './routers/chat';
 import { entityRouter } from './routers/entity';
 // `import` — зарезервированное слово JS: ключ роутера так назвать можно, переменную нет
 import { importRouter } from './routers/import';
+import { oauthRouter } from './routers/oauth';
 import { relationRouter } from './routers/relation';
 import { userRouter } from './routers/user';
 import { protectedProcedure, publicProcedure, router } from './trpc';
@@ -22,6 +23,8 @@ export const appRouter = router({
   aspect: aspectRouter,
   budget: budgetRouter,
   import: importRouter,
+  // Владельческая половина OAuth (§9.3): экран согласия и управление доступами
+  oauth: oauthRouter,
 });
 
 export type AppRouter = typeof appRouter;
