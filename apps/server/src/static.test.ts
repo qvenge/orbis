@@ -3,9 +3,10 @@
 // Проверяет ДВЕ вещи одновременно:
 //   1) статика отдаётся: GET / → index.html, GET /assets/* → ассет, PWA sw.js/manifest —
 //      с корректным content-type, неизвестный не-API GET → SPA-fallback index.html;
-//   2) порядок роутов: API-роуты (/trpc/*, /mcp, /health) НЕ перехвачены статик-роутом —
-//      их прежние ответы сохранены (health {status:'ok'}, /mcp GET 405, POST без PAT 401,
-//      /trpc — tRPC-ответ, а не index.html).
+//   2) порядок роутов: API-роуты (/trpc/*, /mcp, /health, /.well-known/* — метаданные
+//      OAuth слайса 4b) НЕ перехвачены статик-роутом — их прежние ответы сохранены
+//      (health {status:'ok'}, /mcp GET 405, POST без PAT 401, /trpc — tRPC-ответ,
+//      метаданные — JSON, а не index.html).
 // Статика берётся из фикстурной dist во временной папке (без сборки web): быстро,
 // герметично, независимо от cwd — createApp принимает webDistDir абсолютным путём.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
@@ -197,6 +198,24 @@ describe('static serving + SPA-fallback (Task 7)', () => {
     expect(res.status).toBe(413);
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe('PAYLOAD_TOO_LARGE');
+  });
+
+  // Метаданные OAuth (слайс 4b) — обычные GET по пути, который SPA-fallback перехватил бы
+  // целиком: до монтирования в createApp оба адреса отдавали index.html с 200, то есть
+  // MCP-клиент получал бы HTML вместо документа обнаружения и не находил вход вовсе.
+  // Пин держит именно порядок регистрации, а не содержимое документов (оно — в
+  // oauth/metadata.test.ts).
+  test('метаданные OAuth НЕ перехвачены статикой (JSON, а не index.html)', async () => {
+    for (const path of [
+      '/.well-known/oauth-protected-resource',
+      '/.well-known/oauth-protected-resource/mcp',
+      '/.well-known/oauth-authorization-server',
+    ]) {
+      const res = await app.request(path);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toContain('json');
+      expect(await res.text()).not.toContain(INDEX_MARKER);
+    }
   });
 
   test('тело ПОД лимитом проходит гейт: ответ — tRPC-формы, а не 413', async () => {

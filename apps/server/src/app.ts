@@ -1,7 +1,7 @@
 // Сборка Hono-приложения (вынесено из index.ts ради тестируемости композиции роутов):
 // index.ts инжектит боевые db/ai, тест — стабы + фикстурный webDistDir.
-// Порядок роутов КРИТИЧЕН (слайс 1c-2, Task 7): API-роуты (/trpc/*, /mcp, /health)
-// регистрируются ПЕРЕД статикой, поэтому их ответы никогда не перехватываются
+// Порядок роутов КРИТИЧЕН (слайс 1c-2, Task 7): API-роуты (/trpc/*, /mcp, /health,
+// /.well-known/*) регистрируются ПЕРЕД статикой, поэтому их ответы не перехватываются
 // SPA-fallback'ом (Hono исполняет matching-хендлеры в порядке регистрации; API-хендлер
 // возвращает Response и не зовёт next → serveStatic до него не доходит).
 import { trpcServer } from '@hono/trpc-server';
@@ -13,6 +13,7 @@ import { makeCreateContext } from './context';
 import type { AspectDriftStatus } from './db/aspect-drift';
 import type { Db } from './db/client';
 import { makeMcpHandler } from './mcp/transport';
+import { mountOAuthMetadata } from './oauth/metadata';
 import { appRouter } from './router';
 
 /**
@@ -89,6 +90,8 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: Ap
   app.use('/trpc/*', trpcServer({ router: appRouter, createContext: makeCreateContext(db, ai) }));
   // MCP-эндпоинт внешних агентов (§9.3): Streamable HTTP, PAT-only (transport.ts)
   app.all('/mcp', makeMcpHandler({ db }));
+  // Метаданные OAuth (§9.3): публичные, до статики — иначе их съест SPA-fallback
+  mountOAuthMetadata(app);
   // Форма ответа на здоровом реестре НЕ меняется ({status:'ok'}) — на неё смотрит и
   // healthCheckPath Render, и тесты. Расхождение добавляет поле, но не меняет код ответа:
   // не-200 здесь превратил бы наблюдаемость ловушки в отказ деплоя (E1). Третье значение
