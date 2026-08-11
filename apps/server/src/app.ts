@@ -14,6 +14,7 @@ import type { AspectDriftStatus } from './db/aspect-drift';
 import type { Db } from './db/client';
 import { makeMcpHandler } from './mcp/transport';
 import { mountOAuthMetadata } from './oauth/metadata';
+import { makeRegisterHandler } from './oauth/register';
 import { appRouter } from './router';
 
 /**
@@ -119,6 +120,13 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: Ap
   app.all('/mcp', makeMcpHandler({ db }));
   // Метаданные OAuth (§9.3): публичные, до статики — иначе их съест SPA-fallback
   mountOAuthMetadata(app);
+  // Динамическая регистрация клиентов (RFC 7591) — адрес, объявленный в
+  // registration_endpoint метаданных выше. Публичный по построению: агент регистрируется
+  // ДО всякой аутентификации, иначе ему нечем начать вход.
+  // Про порядок здесь — честно: статика и SPA-fallback зарегистрированы ТОЛЬКО на GET,
+  // поэтому POST они не перехватили бы и снизу (проверено переносом строки под статику —
+  // сьют остаётся зелёным). Место выбрано ради одной точки со всеми API-роутами.
+  app.post('/oauth/register', makeRegisterHandler({ db }));
   // Форма ответа на здоровом реестре НЕ меняется ({status:'ok'}) — на неё смотрит и
   // healthCheckPath Render, и тесты. Расхождение добавляет поле, но не меняет код ответа:
   // не-200 здесь превратил бы наблюдаемость ловушки в отказ деплоя (E1). Третье значение
