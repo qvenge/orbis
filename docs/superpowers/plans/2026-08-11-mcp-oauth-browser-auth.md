@@ -198,7 +198,7 @@ git add apps/server/src/db/schema.ts apps/server/src/db/migrations apps/server/t
 git commit -m "feat(oauth): таблицы грантов и клиентов под RLS
 
 Лукап по хешу идёт до identity — отсюда вторая политика для orbis_app.
-pgTAP: 35 проверок." -- apps/server
+pgTAP: 34 проверки." -- apps/server
 ```
 
 ---
