@@ -30,16 +30,16 @@ function pkce() {
 
 const sha256hex = (s: string) => createHash('sha256').update(s).digest('hex');
 
-async function seedClient(): Promise<string> {
+async function seedClient(clientId = 'test-client'): Promise<string> {
   await db
     .insert(oauthClients)
     .values({
-      clientId: 'test-client',
+      clientId,
       clientName: 'Claude Code',
       redirectUris: [REDIRECT],
     })
     .onConflictDoNothing();
-  return 'test-client';
+  return clientId;
 }
 
 beforeEach(async () => {
@@ -141,6 +141,63 @@ test('refresh ротируется, старый больше не работа�
   await expect(
     rotateRefresh(db, { refreshToken: first.refreshToken, clientId }),
   ).rejects.toMatchObject({ code: 'invalid_grant' });
+});
+
+test('реплей ротированного refresh гасит цепочку целиком (OAuth 2.1 §7.5)', async () => {
+  const clientId = await seedClient();
+  const { verifier, challenge } = pkce();
+  const code = await createAuthorizationCode(db, {
+    ownerId: owner,
+    clientId,
+    label: 'Claude Code',
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+  });
+  const first = await exchangeAuthorizationCode(db, {
+    code,
+    codeVerifier: verifier,
+    redirectUri: REDIRECT,
+    clientId,
+  });
+  const second = await rotateRefresh(db, { refreshToken: first.refreshToken, clientId });
+  expect(await verifyBearer(db, second.accessToken)).toMatchObject({ ownerId: owner });
+  // Перехватчик предъявляет ПЕРВЫЙ refresh уже после легитимной ротации: сам по себе
+  // отказ ничего не решает, потому что у перехватчика на руках может быть и второй.
+  await expect(
+    rotateRefresh(db, { refreshToken: first.refreshToken, clientId }),
+  ).rejects.toMatchObject({ code: 'invalid_grant' });
+  // Поэтому §7.5 требует убить всю цепочку: и текущий access, и текущий refresh.
+  expect(await verifyBearer(db, second.accessToken)).toBeNull();
+  await expect(
+    rotateRefresh(db, { refreshToken: second.refreshToken, clientId }),
+  ).rejects.toMatchObject({ code: 'invalid_grant' });
+});
+
+test('чужой client_id не ротирует и НЕ гасит грант', async () => {
+  const clientId = await seedClient();
+  const other = await seedClient('other-client');
+  const { verifier, challenge } = pkce();
+  const code = await createAuthorizationCode(db, {
+    ownerId: owner,
+    clientId,
+    label: 'Claude Code',
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+  });
+  const pair = await exchangeAuthorizationCode(db, {
+    code,
+    codeVerifier: verifier,
+    redirectUri: REDIRECT,
+    clientId,
+  });
+  await expect(
+    rotateRefresh(db, { refreshToken: pair.refreshToken, clientId: other }),
+  ).rejects.toMatchObject({ code: 'invalid_grant' });
+  // Сбитый конфиг чужого клиента не должен стоить владельцу доступа: грант жив,
+  // и законный клиент по-прежнему ротируется.
+  expect(await verifyBearer(db, pair.accessToken)).toMatchObject({ ownerId: owner });
+  const rotated = await rotateRefresh(db, { refreshToken: pair.refreshToken, clientId });
+  expect(await verifyBearer(db, rotated.accessToken)).toMatchObject({ ownerId: owner });
 });
 
 test('мёртвый refresh при предъявлении гасит грант целиком, access перестаёт пускать', async () => {

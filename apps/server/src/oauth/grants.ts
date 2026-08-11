@@ -139,19 +139,27 @@ export async function exchangeAuthorizationCode(
 /**
  * Ротация refresh (OAuth 2.1 требует её для публичных клиентов). Предъявленный
  * повторно старый refresh — тот же признак перехвата, что и повторный код: грант
- * отзывается целиком.
+ * отзывается целиком. Чтобы такой реплей вообще был различим, ротация оставляет
+ * след — прежний хеш уезжает в prev_refresh_hash; иначе затёртый токен не с чем
+ * связать и погасить цепочку нечем.
  */
 export async function rotateRefresh(
   db: Db,
   input: { refreshToken: string; clientId: string },
 ): Promise<TokenPair> {
+  const presented = hashToken(input.refreshToken);
   const pair = mintPair();
   const rows = await db
     .update(agentGrants)
-    .set(pairColumns(pair))
+    .set({
+      ...pairColumns(pair),
+      // Правая часть SET читает значение ДО присваивания (семантика UPDATE в Postgres),
+      // поэтому след переносится тем же запросом — без отдельного SELECT и без гонки.
+      prevRefreshHash: sql`${agentGrants.refreshHash}`,
+    })
     .where(
       and(
-        eq(agentGrants.refreshHash, hashToken(input.refreshToken)),
+        eq(agentGrants.refreshHash, presented),
         eq(agentGrants.clientId, input.clientId),
         isNull(agentGrants.revokedAt),
         gt(agentGrants.refreshExpiresAt, new Date()),
@@ -159,17 +167,21 @@ export async function rotateRefresh(
     )
     .returning({ id: agentGrants.id });
   if (rows.length === 0) {
-    // Живой строки под этот хеш нет. Если след всё же остался (грант отозван либо
-    // refresh просрочен) — гасим грант целиком: предъявление мёртвого refresh это
-    // признак перехвата (OAuth 2.1 §7.5).
-    // ОГРАНИЧЕНИЕ, проверенное пробником: реплей УЖЕ РОТИРОВАННОГО refresh сюда не
-    // доходит — ротация перезаписывает refresh_hash в той же строке, связи старого
-    // токена с грантом не остаётся, и такой реплей только отвергается. Полное
-    // покрытие §7.5 требует хранить предыдущий хеш — это отдельное решение по схеме.
+    // Среди живых не нашли. Гасим цепочку только если предъявленный токен этому гранту
+    // всё-таки принадлежит: совпал либо с текущим хешем (грант отозван или refresh
+    // просрочен), либо с предыдущим — это и есть реплей уже ротированного токена,
+    // ради которого заведён prev_refresh_hash (OAuth 2.1 §7.5). Условие на client_id
+    // обязательно: без него клиент со сбитым конфигом отзывал бы владельцу доступ —
+    // чужая ошибка ценой чужого доступа. Не совпало ни с чем — просто отказ, без гашения.
     await db
       .update(agentGrants)
       .set({ revokedAt: new Date() })
-      .where(eq(agentGrants.refreshHash, hashToken(input.refreshToken)));
+      .where(
+        and(
+          or(eq(agentGrants.refreshHash, presented), eq(agentGrants.prevRefreshHash, presented)),
+          eq(agentGrants.clientId, input.clientId),
+        ),
+      );
     throw new OAuthError('invalid_grant', 'refresh-токен недействителен');
   }
   return pair;

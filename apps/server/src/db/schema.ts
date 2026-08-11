@@ -194,6 +194,11 @@ export const agentGrants = pgTable(
     // NULL у PAT: заголовочный доступ не истекает, отзывается строкой
     accessExpiresAt: timestamp('access_expires_at', { withTimezone: true }),
     refreshHash: text('refresh_hash'),
+    // След предыдущего refresh: ротация затирает refresh_hash, и без этой колонки
+    // предъявленный повторно старый токен не с чем связать — детект реплея (§7.5)
+    // становится невозможен. Уникальности НЕ вешаем: после отзыва значения повторяются,
+    // а защищать здесь уникальностью нечего.
+    prevRefreshHash: text('prev_refresh_hash'),
     refreshExpiresAt: timestamp('refresh_expires_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
