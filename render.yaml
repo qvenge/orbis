@@ -40,6 +40,14 @@ services:
       # Явный выбор провайдера: снимает «неявный echo при пустом ключе» (см. llm/provider.ts).
       - key: ORBIS_LLM_PROVIDER
         value: openai
+      # Публичный адрес сервиса — база всех абсолютных URL в метаданных OAuth (§9.3,
+      # RFC 9728/8414). Не секрет, поэтому значение прямо здесь. В production ОБЯЗАТЕЛЬНА:
+      # без неё контейнер намеренно не стартует (oauth/metadata.ts), потому что иначе базу
+      # пришлось бы брать из заголовка Host — подменённый Host увёл бы MCP-клиента на чужой
+      # authorization server через наши же метаданные. Только чистый origin: путь, query
+      # или фрагмент в значении — тоже отказ при старте.
+      - key: ORBIS_PUBLIC_URL
+        value: https://orbis-64q4.onrender.com
       # PAT внешнего агента (§9.3, MCP). Выдача: bun scripts/issue-pat.ts (печатает hash + owner_id).
       - key: ORBIS_PAT_HASH
         sync: false

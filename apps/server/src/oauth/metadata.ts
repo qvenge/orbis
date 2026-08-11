@@ -20,7 +20,12 @@ function configuredOrigin(env: PublicOriginEnv): string | null {
   const configured = env.ORBIS_PUBLIC_URL?.trim();
   if (configured) return parsePublicOrigin(configured);
   if (env.NODE_ENV === 'production') {
-    throw new Error('ORBIS_PUBLIC_URL обязателен в production (метаданные OAuth)');
+    // Сообщение читают на упавшем деплое, а не в отладчике: одного имени переменной мало,
+    // нужен и пример значения, и куда смотреть (манера makeLLMProvider и makeDb).
+    throw new Error(
+      'ORBIS_PUBLIC_URL обязателен в production (метаданные OAuth): задайте публичный ' +
+        'адрес сервиса, например https://orbis-64q4.onrender.com (см. apps/server/.env.example)',
+    );
   }
   return null;
 }
