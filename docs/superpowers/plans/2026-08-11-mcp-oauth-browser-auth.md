@@ -39,7 +39,9 @@
 
 - [ ] **Step 1: Добавить проверки RLS в pgTAP (падающий тест)**
 
-В `apps/server/test/rls/rls.pgtap.sql` поднять план на 4: `SELECT plan(35);`.
+В `apps/server/test/rls/rls.pgtap.sql` поднять план на 3 — `SELECT plan(34);` — ровно по числу
+добавляемых ниже проверок (правка проверки №1 новой строкой не считается; при рассинхроне
+плана с числом проверок pgTAP печатает «Looks like you planned», и раннер это ловит).
 
 К фикстурам под суперпользователем (после блока `INSERT INTO entity_origins …`) добавить:
 
@@ -173,7 +175,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON agent_grants TO authenticated;
 - [ ] **Step 6: Накатить миграции и прогнать RLS**
 
 Run: `cd apps/server && DATABASE_URL=$DATABASE_URL_ADMIN bun run db:migrate`, затем из корня `bun run test:rls`
-Expected: PASS, 35 из 35.
+Expected: PASS, 34 из 34.
 
 - [ ] **Step 7: Добавить новые таблицы в зачистку между сьютами**
 
@@ -657,6 +659,10 @@ git commit -m "feat(oauth): гранты — выдача кода, обмен, 
 
 ### Task 3: `/mcp` принимает токены из таблицы; PAT уезжает из env
 
+> **Порядок:** эта задача исполняется ПОСЛЕ Task 4 — ей нужен готовый
+> `protectedResourceMetadataUrl` из `oauth/metadata.ts`. Заглушки под него не пишем:
+> временный код, который следующая задача сразу сносит, — это мёртвый код в истории.
+
 **Files:**
 - Modify: `apps/server/src/mcp/transport.ts:65-83`
 - Delete: `apps/server/src/pat.ts`, `apps/server/src/pat.test.ts`
@@ -664,7 +670,7 @@ git commit -m "feat(oauth): гранты — выдача кода, обмен, 
 - Modify: `apps/server/src/mcp/mcp.test.ts:26-76` (обвязка: токен выдаётся в базу, а не в env)
 
 **Interfaces:**
-- Consumes: `verifyBearer`, `issuePatGrant` (Task 2).
+- Consumes: `verifyBearer`, `issuePatGrant` (Task 2); `protectedResourceMetadataUrl` (Task 4).
 
 - [ ] **Step 1: Переписать обвязку теста MCP под таблицу (падающий тест)**
 
@@ -740,7 +746,7 @@ Expected: FAIL — токен из базы не аутентифицирует 
     }
 ```
 
-и ниже `makeMcpServer(deps, identity.ownerId)`. Импорт `verifyPat`/`PAT_PREFIX` из `../pat` снять, добавить `verifyBearer` из `../oauth/grants` и `protectedResourceMetadataUrl` из `../oauth/metadata` (создаётся в Task 4 — до неё оставить локальную функцию, возвращающую `new URL('/.well-known/oauth-protected-resource', c.req.url).href`, и заменить её на импорт в Task 4).
+и ниже `makeMcpServer(deps, identity.ownerId)`. Импорт `verifyPat`/`PAT_PREFIX` из `../pat` снять, добавить `verifyBearer` из `../oauth/grants` и `protectedResourceMetadataUrl` из `../oauth/metadata` — последний уже существует, Task 4 исполнена раньше.
 
 - [ ] **Step 4: Удалить env-путь PAT**
 
@@ -801,10 +807,12 @@ authorization server. Отзыв стал строкой в базе вмест�
 
 ### Task 4: Метаданные ресурса и authorization server
 
+> **Порядок:** исполняется СРАЗУ ПОСЛЕ Task 2, до Task 3 — транспорт в Task 3 берёт отсюда
+> `protectedResourceMetadataUrl` уже готовым.
+
 **Files:**
 - Create: `apps/server/src/oauth/metadata.ts`
 - Modify: `apps/server/src/app.ts:82-92` (роуты до статики)
-- Modify: `apps/server/src/mcp/transport.ts` (заменить временную функцию на импорт)
 - Test: `apps/server/src/oauth/metadata.test.ts`
 
 **Interfaces:**
@@ -946,7 +954,7 @@ export function mountOAuthMetadata(app: Hono): void {
 }
 ```
 
-- [ ] **Step 4: Смонтировать роуты и убрать временную функцию из транспорта**
+- [ ] **Step 4: Смонтировать роуты**
 
 В `apps/server/src/app.ts` сразу после строки с `app.all('/mcp', …)`:
 
@@ -955,13 +963,13 @@ export function mountOAuthMetadata(app: Hono): void {
   mountOAuthMetadata(app);
 ```
 
-В `apps/server/src/mcp/transport.ts` заменить локальную функцию на импорт
-`protectedResourceMetadataUrl` из `../oauth/metadata`.
+Транспорт `/mcp` эти функции ещё не использует — он подключит их в Task 3, которая
+исполняется следом.
 
 - [ ] **Step 5: Прогнать тесты**
 
-Run: `bun test apps/server/src/oauth/metadata.test.ts` и `bun test --env-file apps/server/.env apps/server/src/mcp/mcp.test.ts`
-Expected: PASS в обоих.
+Run: `bun test apps/server/src/oauth/metadata.test.ts`
+Expected: PASS, 5 из 5. Сьют MCP на этом шаге не трогаем — транспорт меняет Task 3.
 
 - [ ] **Step 6: Коммит**
 
