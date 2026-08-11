@@ -1,6 +1,9 @@
 // apps/server/src/static.test.ts
-// Task 7 (слайс 1c-2): same-origin раздача собранной web-статики из Hono + SPA-fallback.
-// Проверяет ДВЕ вещи одновременно:
+// Тесты apps/server/src/app.ts. Task 7 (слайс 1c-2): same-origin раздача собранной
+// web-статики из Hono + SPA-fallback. Ниже них — resolvePort (порт из env, слайс 4b):
+// он живёт в том же модуле, потому что это такая же выведенная из окружения настройка
+// раздачи, как WEB_DIST_DIR.
+// Основная часть файла проверяет ДВЕ вещи одновременно:
 //   1) статика отдаётся: GET / → index.html, GET /assets/* → ассет, PWA sw.js/manifest —
 //      с корректным content-type, неизвестный не-API GET → SPA-fallback index.html;
 //   2) порядок роутов: API-роуты (/trpc/*, /mcp, /health, /.well-known/* — метаданные
@@ -14,7 +17,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AiDeps } from './ai/send-message';
-import { createApp, TRPC_MAX_BODY_BYTES } from './app';
+import { createApp, DEFAULT_PORT, resolvePort, TRPC_MAX_BODY_BYTES } from './app';
 import type { Db } from './db/client';
 
 const INDEX_MARKER = '<!--orbis-spa-root-->';
@@ -226,5 +229,38 @@ describe('static serving + SPA-fallback (Task 7)', () => {
     });
     expect(res.status).not.toBe(413);
     expect(res.headers.get('content-type')).toContain('json');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolvePort (ревью Task 3, раунд 3): PORT='0' обязан означать «свободный порт»
+// ---------------------------------------------------------------------------
+//
+// Прежнее `Number(process.env.PORT) || 3001` съедало ровно ноль, и `PORT='0'` садилось на
+// боевой 3001 — а ноль и есть единственный законный способ попросить свободный порт.
+// Проба стартового гейта (oauth/metadata.test.ts) обещала им защиту от захода на 3001 и
+// не давала её; тесты ниже стерегут механизм, а не обещание.
+
+describe('resolvePort (порт HTTP-сервера из env)', () => {
+  test("PORT='0' → 0 (свободный порт ядра), а НЕ 3001 — ровно тот случай, что съедало `|| 3001`", () => {
+    expect(resolvePort('0')).toBe(0);
+    expect(resolvePort('0')).not.toBe(DEFAULT_PORT);
+  });
+
+  test('не задано / пусто / пробелы → 3001 (Number("") — это 0, наивное ?? дало бы свободный порт)', () => {
+    expect(resolvePort(undefined)).toBe(DEFAULT_PORT);
+    expect(resolvePort('')).toBe(DEFAULT_PORT);
+    expect(resolvePort('   ')).toBe(DEFAULT_PORT);
+  });
+
+  test('годное число — оно само (Render всегда передаёт PORT)', () => {
+    expect(resolvePort('8080')).toBe(8080);
+    expect(resolvePort(' 10000 ')).toBe(10000);
+  });
+
+  test('мусор и значения вне диапазона → 3001: кривой PORT не роняет старт', () => {
+    for (const bad of ['abc', '80.5', '-1', '70000', 'NaN', '1e4x']) {
+      expect(resolvePort(bad)).toBe(DEFAULT_PORT);
+    }
   });
 });

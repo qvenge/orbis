@@ -23,6 +23,32 @@ import { appRouter } from './router';
  */
 export const WEB_DIST_DIR = process.env.WEB_DIST_DIR ?? 'apps/web/dist';
 
+/** Порт по умолчанию: переменной нет (локальный `bun run dev`) или в ней мусор. */
+export const DEFAULT_PORT = 3001;
+
+/**
+ * Порт HTTP-сервера из env (index.ts). Отдельная функция не ради красоты: прежнее
+ * `Number(process.env.PORT) || 3001` съедало ровно ноль — `0 || 3001` даёт 3001, — а ноль
+ * и есть единственное значение, которым просят «дай любой свободный порт» (соглашение
+ * ядра, на котором держится `Bun.serve({ port: 0 })` во всех интеграционных тестах).
+ * Из-за этого `PORT='0'` в пробе стартового гейта (oauth/metadata.test.ts) обещала защиту
+ * от захода на боевой 3001 и не давала её: ребёнок садился ровно на 3001.
+ *
+ * Три случая различаются явно, потому что `Number('')` — это 0, и наивное `??` выдало бы
+ * пустой строке случайный порт:
+ *   • не задано, пусто, пробелы, мусор, вне диапазона → DEFAULT_PORT (прежнее терпимое
+ *     поведение: кривой PORT не роняет старт);
+ *   • явный `0` → свободный порт, выбранный ядром;
+ *   • годное число → оно само.
+ * Боевому деплою это ничего не меняет: Render всегда передаёт PORT.
+ */
+export function resolvePort(raw: string | undefined = process.env.PORT): number {
+  const trimmed = raw?.trim();
+  if (!trimmed) return DEFAULT_PORT;
+  const n = Number(trimmed);
+  return Number.isInteger(n) && n >= 0 && n <= 65535 ? n : DEFAULT_PORT;
+}
+
 /**
  * Заголовки кэша статики: serveStatic из hono не ставит ни Cache-Control, ни ETag —
  * каждый визит до установки service worker перекачивал весь бандл (трафик free-плана,

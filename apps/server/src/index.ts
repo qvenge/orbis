@@ -1,5 +1,5 @@
 import { makeAiDeps } from './ai/send-message';
-import { createApp } from './app';
+import { createApp, resolvePort } from './app';
 import { type AspectDriftStatus, reportAspectDriftOnStartup } from './db/aspect-drift';
 import { makeDb } from './db/client';
 import { assertPublicOriginConfigured } from './oauth/metadata';
@@ -34,7 +34,7 @@ void reportAspectDriftOnStartup(db).then((d) => {
 const app = createApp({ db, ai, aspectDrift: () => aspectDrift });
 
 const server = Bun.serve({
-  port: Number(process.env.PORT) || 3001,
+  port: resolvePort(),
   fetch: app.fetch,
 });
 
