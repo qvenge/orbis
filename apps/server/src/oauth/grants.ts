@@ -53,6 +53,28 @@ export interface GrantSummary {
 const secondsFromNow = (s: number) => new Date(Date.now() + s * 1000);
 
 /**
+ * Штамп отзыва — ОДИН на все три пути (ручной отзыв, повторный код, реплей refresh).
+ *
+ * COALESCE, а не голое присваивание: отзыв обязан быть идемпотентным по ДАТЕ. Уже
+ * проставленный `revoked_at` — единственная улика владельца о том, когда доступ на самом
+ * деле погас, и она показывается ему на экране «Агенты». Голое `new Date()` двигало бы её
+ * на «сейчас» при каждом повторе, а повторы здесь бывают не только от владельца: пути
+ * гашения по признаку перехвата (OAuth 2.1 §7.5) запускает ПРЕДЪЯВИТЕЛЬ спетого кода или
+ * ротированного refresh — то есть ровно тот, от кого улику и прячут. Повторяя запрос, он
+ * стирал бы время настоящего отзыва.
+ *
+ * Условие `IS NULL` в WHERE дало бы тот же неподвижный штамп, но false в ответе
+ * revokeGrant — и «уже отозван» стало бы неотличимо от «грант не ваш», то есть экран не
+ * смог бы честно сказать об отказе.
+ *
+ * `now()` — часы базы, потому что COALESCE считается ею же, прямо в UPDATE. Раз выражение
+ * одно на все пути, шкала у revoked_at теперь тоже одна: разъехаться часам сервера и базы
+ * больше негде. Решений по этому полю всё равно не принимается — живость гранта везде
+ * проверяется `IS NULL`, а не сравнением времён.
+ */
+const revokedAtStamp = sql`COALESCE(${agentGrants.revokedAt}, now())`;
+
+/**
  * Bearer → владелец. Живым считается неотозванный грант, у которого срок либо не
  * наступил, либо не задан вовсе (PAT бессрочен — отзывается строкой, не временем).
  * Отметка last_used_at питает экран настроек; она же делает видимым доступ, о котором
@@ -124,7 +146,10 @@ export async function exchangeAuthorizationCode(
   if (!grant) throw new OAuthError('invalid_grant', 'код неизвестен');
 
   if (grant.codeUsedAt !== null) {
-    await db.update(agentGrants).set({ revokedAt: new Date() }).where(eq(agentGrants.id, grant.id));
+    await db
+      .update(agentGrants)
+      .set({ revokedAt: revokedAtStamp })
+      .where(eq(agentGrants.id, grant.id));
     throw new OAuthError('invalid_grant', 'код уже использован — выданный по нему доступ отозван');
   }
   if (grant.clientId !== input.clientId)
@@ -199,7 +224,7 @@ export async function rotateRefresh(
     // чужая ошибка ценой чужого доступа. Не совпало ни с чем — просто отказ, без гашения.
     await db
       .update(agentGrants)
-      .set({ revokedAt: new Date() })
+      .set({ revokedAt: revokedAtStamp })
       .where(
         and(
           or(eq(agentGrants.refreshHash, presented), eq(agentGrants.prevRefreshHash, presented)),
@@ -250,21 +275,19 @@ export async function listGrants(db: Db, ownerId: string): Promise<GrantSummary[
 }
 
 /**
- * Отзыв: условие на owner_id — вторая линия к RLS, а не замена ей.
+ * Отзыв: условие на owner_id — ЕДИНСТВЕННОЕ, что не даёт владельцу отозвать чужой грант.
  *
- * COALESCE, а не голое присваивание: отзыв идемпотентен. Повторное нажатие «Отозвать»
- * (или гонка двух вкладок) иначе двигало бы revoked_at на «сейчас» — на экране настроек
- * дата отзыва прыгала бы, и владелец терял бы единственную улику о том, когда доступ
- * на самом деле погас. Условие `IS NULL` в WHERE вместо этого дало бы тот же неподвижный
- * штамп, но false в ответе — и «уже отозван» стало бы неотличимо от «грант не ваш»,
- * то есть экран не смог бы честно сказать об отказе.
+ * Формулировка «вторая линия к RLS» стояла здесь и была неверной. Процедура зовётся на
+ * `ctx.db`, то есть под ролью `orbis_app`, а её политика — `USING (true) WITH CHECK (true)`
+ * (0005_oauth_rls.sql): под этой ролью RLS не скоупит ничего и подстраховать предикат
+ * не может. Политика владельца (`owner_id = auth.uid()`) действует для роли
+ * `authenticated`, под которой этот путь не исполняется вовсе — по построению, а не по
+ * недосмотру: те же процедуры ищут грант по хешу ДО того, как владелец известен, и
+ * withIdentity к ним неприменим. Убрать предикат «как дубль RLS» — значит открыть отзыв
+ * любого гранта по одному чужому id; docblock не должен приглашать к этому.
  *
- * `now()` — часы базы, потому что COALESCE считается ею же, прямо в UPDATE. Единой шкалы
- * у revoked_at это не даёт: ту же колонку в других путях пишет `new Date()` сервера
- * (exchangeAuthorizationCode при повторном коде, rotateRefresh при реплее). Расхождение
- * часов там безвредно — по revoked_at не принимается ни одного решения, живость гранта
- * везде проверяется `IS NULL`, а не сравнением времён; значение только показывается
- * владельцу.
+ * Штамп даты — общий revokedAtStamp (см. его докблок): отзыв идемпотентен по дате, и
+ * повторное нажатие «Отозвать» или гонка двух вкладок её не двигают.
  */
 export async function revokeGrant(
   db: Db,
@@ -272,7 +295,7 @@ export async function revokeGrant(
 ): Promise<boolean> {
   const rows = await db
     .update(agentGrants)
-    .set({ revokedAt: sql`COALESCE(${agentGrants.revokedAt}, now())` })
+    .set({ revokedAt: revokedAtStamp })
     .where(and(eq(agentGrants.id, input.grantId), eq(agentGrants.ownerId, input.ownerId)))
     .returning({ id: agentGrants.id });
   return rows.length > 0;

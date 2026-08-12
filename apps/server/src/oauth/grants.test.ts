@@ -410,6 +410,77 @@ test('повторный отзыв не двигает дату отзыва', 
   expect(second?.getTime()).toBe(first.getTime());
 });
 
+// Два теста ниже держат ту же неподвижность штампа на ОСТАЛЬНЫХ путях отзыва (финальное
+// ревью слайса, M1). Раньше COALESCE стоял только в revokeGrant, а гашение по признаку
+// перехвата писало голое `new Date()` — и тот, у кого на руках спетый код или ротированный
+// refresh, мог двигать дату отзыва вперёд сколько угодно, повторяя запрос. Улику о том,
+// когда доступ на самом деле погас, владелец видит на экране «Агенты» ровно в этом поле,
+// и стирать её предъявителем краденого нельзя.
+test('повторный код не двигает дату уже проставленного отзыва', async () => {
+  const clientId = await seedClient();
+  const { verifier, challenge } = pkce();
+  const code = await createAuthorizationCode(db, {
+    ownerId: owner,
+    clientId,
+    label: 'Claude Code',
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+  });
+  await exchangeAuthorizationCode(db, {
+    code,
+    codeVerifier: verifier,
+    redirectUri: REDIRECT,
+    clientId,
+  });
+  const grant = (await listGrants(db, owner))[0];
+  if (!grant) throw new Error('грант не создан');
+  expect(await revokeGrant(db, { ownerId: owner, grantId: grant.id })).toBe(true);
+  const first = (await listGrants(db, owner))[0]?.revokedAt;
+  if (!first) throw new Error('отзыв не проставил дату');
+  // Пауза — как в тесте идемпотентности выше: без неё «сейчас» второго отзыва совпало бы
+  // с первым по разрешению часов, и тест был бы зелёным при любой реализации.
+  await Bun.sleep(20);
+  await expect(
+    exchangeAuthorizationCode(db, {
+      code,
+      codeVerifier: verifier,
+      redirectUri: REDIRECT,
+      clientId,
+    }),
+  ).rejects.toMatchObject({ code: 'invalid_grant' });
+  expect((await listGrants(db, owner))[0]?.revokedAt?.getTime()).toBe(first.getTime());
+});
+
+test('реплей ротированного refresh не двигает дату уже проставленного отзыва', async () => {
+  const clientId = await seedClient();
+  const { verifier, challenge } = pkce();
+  const code = await createAuthorizationCode(db, {
+    ownerId: owner,
+    clientId,
+    label: 'Claude Code',
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+  });
+  const first = await exchangeAuthorizationCode(db, {
+    code,
+    codeVerifier: verifier,
+    redirectUri: REDIRECT,
+    clientId,
+  });
+  // Ротация уводит прежний хеш в prev_refresh_hash — именно по нему опознаётся реплей.
+  await rotateRefresh(db, { refreshToken: first.refreshToken, clientId });
+  const grant = (await listGrants(db, owner))[0];
+  if (!grant) throw new Error('грант не создан');
+  expect(await revokeGrant(db, { ownerId: owner, grantId: grant.id })).toBe(true);
+  const revokedAt = (await listGrants(db, owner))[0]?.revokedAt;
+  if (!revokedAt) throw new Error('отзыв не проставил дату');
+  await Bun.sleep(20);
+  await expect(
+    rotateRefresh(db, { refreshToken: first.refreshToken, clientId }),
+  ).rejects.toMatchObject({ code: 'invalid_grant' });
+  expect((await listGrants(db, owner))[0]?.revokedAt?.getTime()).toBe(revokedAt.getTime());
+});
+
 test('мусорный токен и токен без префикса отвергаются', async () => {
   expect(await verifyBearer(db, `orbis_at_${'ff'.repeat(32)}`)).toBeNull();
   expect(await verifyBearer(db, 'eyJhbGciOiJIUzI1NiJ9.подделка')).toBeNull();
