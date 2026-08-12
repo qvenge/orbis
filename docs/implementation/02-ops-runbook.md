@@ -688,16 +688,53 @@ psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 \
 Переменных Render этот шаг больше не касается: `ORBIS_PAT_HASH`/`ORBIS_PAT_OWNER_ID`
 не существует с D34 (§2).
 
-**Про права.** Дамп снят без owner/privileges (`--no-owner --no-privileges`), но
-`db:migrate` их не переприменит: журнал `drizzle.__drizzle_migrations` попадает в дамп,
-и миграции считаются применёнными. Права на таблицы даёт не миграция, а `alter default
-privileges` самого Supabase — они выдаются автоматически объектам, созданным ролью
-`postgres` (именно ею идёт restore). Роль `orbis_app` и членство в `authenticated`
-создаёт `scripts/setup-db.ts`, поэтому после restore всё равно прогоняем
-`bun run db:prepare` против целевой БД: он же завершается RLS-тестом (40 pgTAP-проверок),
-который упадёт, если прав не окажется. На **чистую** базу (не restore, а пустой проект)
-это тем более верно: без `setup-db.ts` миграции дойдут до `0005_oauth_rls.sql` и упадут
-на несуществующей роли `orbis_app` — разбор в §1.
+**Про права. Автоматически они НЕ появляются — после restore их придётся выдать руками.**
+
+Дамп снят без owner/privileges (`--no-owner --no-privileges`), и переприменить гранты
+некому: журнал `drizzle.__drizzle_migrations` попадает в дамп, миграции считаются
+применёнными, поэтому `db:migrate` (и `db:prepare` вместе с ним) проходит вхолостую.
+
+Прежде здесь было написано, что права на таблицы даёт `alter default privileges` самого
+Supabase, автоматически объектам роли `postgres`. **Это неверно**, проверено каталогом:
+у default ACL роли `postgres` в схеме `public` для `anon`/`authenticated`/`service_role`
+стоит `Dxtm` — TRUNCATE, REFERENCES, TRIGGER, MAINTAIN, и ни одного DML-права. Полный
+набор `arwdDxtm` раздаёт только default ACL роли `supabase_admin`, а restore и миграции
+идут под `postgres`. Видно на живой таблице:
+
+```
+entities | {postgres=arwdDxtm/postgres,anon=Dxtm/postgres,
+            authenticated=arwdDxtm/postgres,service_role=Dxtm/postgres}
+```
+
+`authenticated=arwdDxtm` здесь — не от default ACL, а от явных `GRANT` в миграциях:
+`0001_rls_and_indexes.sql:95,97` (схема + DML на все таблицы) и `0005_oauth_rls.sql:47,49`
+(две таблицы §9.3). Их и не станет после restore.
+
+Цена — не «частично не работает», а **не работает вообще**: приложение ходит в данные
+через `SET LOCAL ROLE authenticated` (`db/with-identity.ts:23`, роль `orbis_app`
+объявлена `NOINHERIT`), то есть опирается ровно на те гранты, которых после restore нет.
+`orbis_app` собственных прав на восемь старых таблиц не имеет вовсе — в их ACL его нет.
+
+Поэтому после restore, **до** `db:prepare`, выдать гранты заново — это те же строки, что
+в миграциях, дословно:
+
+```bash
+psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 <<'SQL'
+GRANT USAGE ON SCHEMA public TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT SELECT, INSERT, UPDATE, DELETE ON agent_grants, oauth_clients TO orbis_app;
+SQL
+```
+
+Затем `bun run db:prepare` против целевой БД — он создаёт роль `orbis_app` и членство
+в `authenticated` (`scripts/setup-db.ts`) и завершается RLS-тестом (40 pgTAP-проверок).
+Тест остаётся страховкой: если гранты забыть, он упадёт — но искать причину надо здесь,
+а не в RLS.
+
+На **чистую** базу (не restore, а пустой проект) это не распространяется: там журнала нет,
+миграции применяются целиком вместе со своими `GRANT`, и ручной шаг не нужен. Нужен
+только `setup-db.ts` первым — без него миграции дойдут до `0005_oauth_rls.sql` и упадут
+на несуществующей роли `orbis_app` (разбор в §1).
 
 > **Ловушка: `bun run test:rls` из корня не видит `DATABASE_URL_ADMIN`** (обнаружено
 > на приёмке фазы D слайса 2). Переменная лежит в `apps/server/.env`, а корневой скрипт
