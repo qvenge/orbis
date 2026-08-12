@@ -94,7 +94,13 @@ test('Bearer с access-токеном OAuth → тот же агентский �
 });
 
 test('Bearer с битым PAT → actorUserId null (fail-closed, без JWT-fallback)', async () => {
-  const broken = `Bearer ${PAT_TOKEN.slice(0, -1)}e`;
+  // Последний символ подменяется НА ЗАВЕДОМО ДРУГОЙ, а не на константу 'e': токен —
+  // это hex (tokens.ts, randomBytes.toString('hex')), поэтому его последний символ сам
+  // оказывается 'e' примерно в одном прогоне из шестнадцати, и «битый» токен совпадал с
+  // настоящим — тест падал на ровном месте с 6% вероятностью. Поймано на полном прогоне
+  // при закрытии находок финального ревью слайса 4b.
+  const last = PAT_TOKEN.slice(-1);
+  const broken = `Bearer ${PAT_TOKEN.slice(0, -1)}${last === 'e' ? 'f' : 'e'}`;
   const ctx = await createContext(makeReq({ authorization: broken }));
   expect(ctx.actorUserId).toBeNull();
   expect(ctx.actorKind).toBe('agent'); // префикс детектирован — путь агентский, не owner

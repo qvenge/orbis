@@ -1,8 +1,10 @@
 # check=skip=SecretsUsedInArgOrEnv
 # ^ Осознанный пропуск: единственные ARG/ENV ниже — VITE_SUPABASE_URL/ANON_KEY, публичные
 #   по дизайну (Supabase publishable-ключ и так уезжает в браузерный бандл; граница доступа —
-#   RLS, не секретность ключа). Настоящие секреты (DATABASE_URL, ANTHROPIC_API_KEY, ORBIS_PAT_*)
-#   в образ НЕ попадают — это рантайм-env на Render.
+#   RLS, не секретность ключа). Настоящие секреты (DATABASE_URL, ANTHROPIC_API_KEY,
+#   OPENAI_API_KEY) в образ НЕ попадают — это рантайм-env на Render.
+#   (ORBIS_PAT_* здесь больше не поминается: с переездом PAT в таблицу грантов (D34)
+#   таких переменных не существует.)
 #
 # Прод-образ монорепо Orbis (Bun workspaces): собирает web-статику и запускает API,
 # который раздаёт её same-origin (Task 7). Один stage — сервер исполняет TS напрямую
