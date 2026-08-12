@@ -2,6 +2,7 @@
 // Метаданные, по которым MCP-клиент находит вход (спека MCP 2025-06-18):
 // RFC 9728 для ресурса и RFC 8414 для authorization server. Оба документа —
 // публичные и неаутентифицированные по построению: это точка входа ДО всякого токена.
+import { OAUTH_AUTHORIZE_PATH } from '@orbis/shared';
 import type { Context, Hono } from 'hono';
 
 /** Подмножество env, которое читает резолвер базы; в тестах инжектится литералом. */
@@ -169,7 +170,12 @@ export function mountOAuthMetadata(app: Hono): void {
     const origin = publicOrigin(c);
     return c.json({
       issuer: origin,
-      authorization_endpoint: `${origin}/oauth/authorize`,
+      // Путь — из shared, а не литералом: серверного роута под ним нет по построению
+      // (GET доходит до SPA-fallback), и распознаёт его СПА — apps/web/src/main.tsx.
+      // Пока строка была записана в двух местах, согласованное переименование здесь
+      // вместе с этим тестом оставляло SPA со старой копией, и владелец по ссылке из
+      // метаданных видел обычное приложение вместо экрана согласия.
+      authorization_endpoint: `${origin}${OAUTH_AUTHORIZE_PATH}`,
       token_endpoint: `${origin}/oauth/token`,
       registration_endpoint: `${origin}/oauth/register`,
       response_types_supported: ['code'],

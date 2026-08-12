@@ -27,7 +27,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { globalThreadId } from '@orbis/shared';
+import { globalThreadId, OAUTH_AUTHORIZE_PATH } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import type { AiDeps } from '../ai/send-message';
@@ -62,7 +62,13 @@ const savedPublicUrl = process.env.ORBIS_PUBLIC_URL;
 /** Сущность, созданную агентом по OAuth-токену, второй тест ищет в журнале по id. */
 let createdByAgentId: string;
 
-// --- документы обнаружения (описаны ровно теми полями, которые тест читает) ---
+// --- документы обнаружения ---
+//
+// Поля перечислены ровно те, которые тест ЧИТАЕТ, и каждое объявленное — сверяется.
+// Правило не косметическое: в первой редакции здесь стоял `authorization_endpoint`,
+// который никто не проверял, и объявление без проверки маскировало настоящий зазор
+// (путь экрана согласия был записан двумя независимыми копиями). Объявил поле — покажи,
+// что оно доехало; не показываешь — не объявляй.
 
 interface ProtectedResourceMetadata {
   resource: string;
@@ -78,6 +84,7 @@ interface AuthorizationServerMetadata {
   registration_endpoint: string;
   grant_types_supported: string[];
   code_challenge_methods_supported: string[];
+  scopes_supported: string[];
 }
 
 interface RegistrationResponse {
@@ -188,12 +195,22 @@ test('путь агента целиком: 401 → метаданные → DCR
   const prm = await getJson<ProtectedResourceMetadata>(metaUrl, 'метаданные ресурса');
   // Владелец увидит это имя на экране согласия
   expect(prm.resource_name).toBe('Orbis');
+  // Документ обещает, что токен предъявляется заголовком, — ниже тест ровно так и делает
+  expect(prm.bearer_methods_supported).toContain('header');
   const issuer = first(prm.authorization_servers, 'authorization_servers');
   const asMeta = await getJson<AuthorizationServerMetadata>(
     asMetadataUrl(issuer),
     'метаданные authorization server',
   );
   expect(asMeta.issuer).toBe(issuer);
+  // Адрес браузерного шага — единственный, по которому этот тест НЕ ходит (человека мы
+  // подменяем tRPC-caller'ом ниже), и потому единственное место, где стык нужно сверить
+  // явно: путь обязан совпасть с контрактом маршрутов, по которому SPA выбирает экран
+  // согласия (apps/web/src/main.tsx). Разъедься они — метаданные увели бы владельца на
+  // страницу с обычным приложением, и вход молча не состоялся бы.
+  const authorize = new URL(asMeta.authorization_endpoint);
+  expect(authorize.origin).toBe(origin);
+  expect(authorize.pathname).toBe(OAUTH_AUTHORIZE_PATH);
   // Единственная сверка с литералом во всём пути обнаружения — и она осмысленная: агент
   // пришёл на `<origin>/mcp` и обязан получить документ, называющий ТОТ ЖЕ адрес. Назови
   // метаданные другой ресурс — токен выписался бы «для другого сервера», и агент ходил бы
@@ -210,6 +227,10 @@ test('путь агента целиком: 401 → метаданные → DCR
   expect(regRes.status, `регистрация (${asMeta.registration_endpoint})`).toBe(201);
   const reg = (await regRes.json()) as RegistrationResponse;
   expect(reg.client_id).toMatch(/^[0-9a-f]{32}$/);
+  // RFC 7591 §3.2.1: ответ возвращает зарегистрированные метаданные. Клиент, сверяющий
+  // их перед тем, как считать себя зарегистрированным, не должен получить чужое.
+  expect(reg.client_name).toBe(CLIENT_NAME);
+  expect(reg.redirect_uris).toEqual([REDIRECT]);
 
   // --- 4. Браузерный шаг: владелец соглашается (единственная подмена в файле) ---
   // Метод PKCE берётся ИЗ МЕТАДАННЫХ, а не пишется литералом: обещание документа обмена
@@ -258,6 +279,12 @@ test('путь агента целиком: 401 → метаданные → DCR
   expect(tokens.token_type).toBe('Bearer');
   expect(tokens.access_token.startsWith('orbis_at_')).toBe(true);
   expect(tokens.refresh_token.startsWith('orbis_rt_')).toBe(true);
+  // Область выдана та, что объявлена метаданными: `scopes_supported` и литерал в
+  // token-endpoint.ts — две записи об одном, и разъехаться им нельзя.
+  expect(asMeta.scopes_supported).toContain(tokens.scope);
+  // По expires_in клиент планирует ротацию: ноль или пропажа поля заставили бы его
+  // ходить за новым токеном на каждый вызов
+  expect(tokens.expires_in).toBeGreaterThan(0);
   // Токены не должны осесть в кэше по пути (OAuth 2.1 §4.1.4)
   expect(tokenRes.headers.get('cache-control')).toBe('no-store');
 

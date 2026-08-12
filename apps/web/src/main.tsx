@@ -1,3 +1,4 @@
+import { isOAuthAuthorizePath } from '@orbis/shared';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -28,12 +29,13 @@ createRoot(rootElement).render(
         <AuthProvider>
           {/* Экран согласия OAuth — внутри AuthProvider (незалогиненного он сам уводит на
               вход), но ВНЕ OnboardingGate: выдача доступа агенту не требует пройденного
-              онбординга. Серверного роута под /oauth/authorize нет — GET доходит до
-              SPA-fallback (server/app.ts), поэтому ветка решается здесь по pathname.
-              Хвостовой слэш принимается: канонический адрес мы публикуем без него
-              (metadata.ts), но ссылка к владельцу приходит через руки и копипасту, а цена
-              терпимости — одна замена против экрана чата вместо согласия. */}
-          {window.location.pathname.replace(/\/+$/, '') === '/oauth/authorize' ? (
+              онбординга. Серверного роута под этим путём нет — GET доходит до SPA-fallback
+              (server/app.ts), поэтому ветка решается здесь по pathname.
+              Путь и терпимость к хвостовому слэшу — из контракта маршрутов (@orbis/shared):
+              ту же строку сервер кладёт в `authorization_endpoint` метаданных, и пока копий
+              было две, переименование на сервере молча оставляло владельца на этом экране
+              без согласия. */}
+          {isOAuthAuthorizePath(window.location.pathname) ? (
             <ConsentScreen />
           ) : (
             <OnboardingGate>

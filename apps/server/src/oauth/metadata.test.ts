@@ -5,6 +5,7 @@
 // ORBIS_PUBLIC_URL и запроса, поэтому файл гоняется без --env-file.
 import { afterEach, expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { OAUTH_AUTHORIZE_PATH } from '@orbis/shared';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import {
@@ -57,7 +58,12 @@ test('метаданные AS перечисляют эндпоинты, S256 и
   process.env.ORBIS_PUBLIC_URL = 'https://orbis.example.com';
   const body = await (await app().request('/.well-known/oauth-authorization-server')).json();
   expect(body.issuer).toBe('https://orbis.example.com');
-  expect(body.authorization_endpoint).toBe('https://orbis.example.com/oauth/authorize');
+  // Путь экрана согласия сверяется с контрактом маршрутов (@orbis/shared), а не с третьей
+  // копией строки: его же читает SPA, выбирая экран. Origin при этом пинится отдельно —
+  // адрес обязан быть НАШ и абсолютный, иначе клиент уйдёт авторизовываться на чужой хост.
+  const authorize = new URL(body.authorization_endpoint);
+  expect(authorize.origin).toBe('https://orbis.example.com');
+  expect(authorize.pathname).toBe(OAUTH_AUTHORIZE_PATH);
   expect(body.token_endpoint).toBe('https://orbis.example.com/oauth/token');
   expect(body.registration_endpoint).toBe('https://orbis.example.com/oauth/register');
   expect(body.code_challenge_methods_supported).toEqual(['S256']);
