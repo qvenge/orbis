@@ -68,9 +68,15 @@ test('вкладка «Агенты» открывает список выдан
       ];
     return {};
   });
-  // До клика список не запрашивается вовсе (radix не монтирует неактивную вкладку).
+  // Дожидаемся САМИХ вкладок: до загрузки настроек экран рисует скелетон, и проверка
+  // «списка ещё нет» на пустом дереве проходила бы при любой реализации.
+  const tab = await screen.findByRole('tab', { name: 'Агенты' });
+  // Содержимое активной вкладки на месте — то есть дерево вкладок отрисовано целиком,
+  // и пустота ниже означает именно «неактивная вкладка не смонтирована», а не «экран ещё
+  // не готов». Без этой строки проверка ничего бы не устанавливала.
+  expect(screen.getByTestId('general-form')).toBeInTheDocument();
   expect(screen.queryByText('Claude Code')).toBeNull();
-  fireEvent.click(await screen.findByRole('tab', { name: 'Агенты' }));
+  fireEvent.click(tab);
   expect(await screen.findByText('Claude Code')).toBeInTheDocument();
 });
 

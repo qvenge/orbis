@@ -43,13 +43,8 @@ export function ConnectedAgents() {
 
   if (grants.data.length === 0) {
     return (
-      <div className="flex flex-col items-start gap-2 p-3 text-sm text-text-secondary">
-        <p>Ни одного доступа не выдано. Чтобы подключить агента, выполните:</p>
-        {/* break-all: в адресе стенда нет пробелов, по словам он не переносится. */}
-        <code className="break-all rounded-control bg-surface-2 p-2 font-mono text-xs">
-          claude mcp add --transport http orbis {MCP_URL}
-        </code>
-        <p>Дальше выполните в агенте команду /mcp — вход откроется в браузере.</p>
+      <div className="p-3">
+        <ConnectHowTo lead="Ни одного доступа не выдано. Чтобы подключить агента, выполните:" />
       </div>
     );
   }
@@ -65,7 +60,7 @@ export function ConnectedAgents() {
       : null;
 
   return (
-    <div className="flex flex-col gap-2 p-3">
+    <div className="flex flex-col gap-3 p-3">
       <ul className="flex flex-col gap-2">
         {grants.data.map((g) => (
           <li
@@ -89,6 +84,10 @@ export function ConnectedAgents() {
               // его чтит (exchangeAuthorizationCode отказывает отозванному гранту).
               <Button
                 variant="ghost"
+                // Видимая надпись у всех строк одна, поэтому доступное имя называет ещё и
+                // сам доступ: иначе с клавиатуры и скринридером список звучит как
+                // «Отозвать, Отозвать» — какой из агентов гасится, не слышно.
+                aria-label={`Отозвать доступ ${g.label}`}
                 disabled={revoke.isPending}
                 onClick={() => revoke.mutate({ grantId: g.id })}
               >
@@ -103,6 +102,27 @@ export function ConnectedAgents() {
         ))}
       </ul>
       {failure !== null && <Notice>{failure}</Notice>}
+      {/* Команда подключения нужна и здесь, а не только в ветке пустого списка: отозванные
+          строки из списка не уходят, значит после первого же отзыва список не станет пустым
+          НИКОГДА — и владелец, отозвавший всё, остался бы на экране без единого способа
+          подключиться заново. */}
+      <div className="border-line border-t pt-3">
+        <ConnectHowTo lead="Чтобы подключить ещё одного агента, выполните:" />
+      </div>
+    </div>
+  );
+}
+
+/** Как подключить агента: команда с адресом ЭТОГО стенда и второй шаг — /mcp в агенте. */
+function ConnectHowTo({ lead }: { lead: string }) {
+  return (
+    <div className="flex flex-col items-start gap-2 text-sm text-text-secondary">
+      <p>{lead}</p>
+      {/* break-all: в адресе стенда нет пробелов, по словам он не переносится. */}
+      <code className="break-all rounded-control bg-surface-2 p-2 font-mono text-xs">
+        claude mcp add --transport http orbis {MCP_URL}
+      </code>
+      <p>Дальше выполните в агенте команду /mcp — вход откроется в браузере.</p>
     </div>
   );
 }

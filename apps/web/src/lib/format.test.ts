@@ -45,6 +45,12 @@ test('formatDate: битый iso не бросает, возвращает вх�
   expect(formatDate('garbage', 'UTC')).toBe('garbage');
 });
 
+// Год — не украшение: доступ агента живёт годами (PAT бессрочен), и без года прошлогодний
+// «последний вызов 10 авг., 12:00» читается как «в этом месяце».
+test('formatDate печатает год', () => {
+  expect(formatDate('2025-08-10T09:00:00.000Z', 'Europe/Moscow')).toBe('10 авг. 2025 г., 12:00');
+});
+
 test('formatDate учитывает таймзону (Moscow = UTC+3)', () => {
   const iso = '2026-07-05T12:00:00.000Z';
   const msk = formatDate(iso, 'Europe/Moscow');

@@ -7,15 +7,20 @@ import { ConnectedAgents } from './ConnectedAgents';
 // ниже покраснеет, если экран начнёт форматировать даты в зоне машины прогона.
 const SETTINGS = { timezone: 'Europe/Moscow', defaultCurrency: 'RUB', pinnedEntities: [] };
 
+// Последний вызов — ПРОШЛОГОДНИЙ: доступ агента живёт годами, и это ровно тот случай,
+// ради которого в дате есть год. Без него строка читалась бы как «10 августа этого года».
 const GRANT = {
   id: '5f0a4a6c-1b2c-4d3e-8f90-0123456789ab',
   kind: 'oauth',
   label: 'Claude Code',
   connected: true,
   createdAt: '2026-08-01T10:00:00.000Z',
-  lastUsedAt: '2026-08-10T09:00:00.000Z',
+  lastUsedAt: '2025-08-10T09:00:00.000Z',
   revokedAt: null,
 };
+
+/** Доступное имя кнопки отзыва: у каждой строки своё, иначе с клавиатуры они неразличимы. */
+const revokeButton = (label: string) => ({ name: `Отозвать доступ ${label}` }) as const;
 
 /** Ответы сервера по умолчанию: список доступов подменяется поштучно. */
 function handler(grants: unknown[], revoke: unknown = { revoked: true }) {
@@ -30,10 +35,14 @@ function handler(grants: unknown[], revoke: unknown = { revoked: true }) {
 test('подключённый агент показан меткой, видом доступа и датами в зоне владельца', async () => {
   renderWithProviders(<ConnectedAgents />, handler([GRANT]));
   expect(await screen.findByText('Claude Code')).toBeInTheDocument();
-  // Одной строкой и дословно: вид доступа человеческими словами, а не 'oauth', и обе даты
-  // в зоне владельца. Проверка по подстроке пропустила бы и сырой kind, и сдвиг зоны.
+  // Одной строкой и дословно: вид доступа человеческими словами, а не 'oauth', обе даты
+  // в зоне владельца и с годом. Проверка по подстроке пропустила бы и сырой kind, и сдвиг
+  // зоны, и потерю года — а год здесь единственное, что отличает вчерашний вызов от
+  // прошлогоднего, то есть главный повод отзывать доступ.
   expect(
-    screen.getByText('браузерный вход · подключён 01 авг., 13:00 · последний вызов 10 авг., 12:00'),
+    screen.getByText(
+      'браузерный вход · подключён 01 авг. 2026 г., 13:00 · последний вызов 10 авг. 2025 г., 12:00',
+    ),
   ).toBeInTheDocument();
 });
 
@@ -42,12 +51,14 @@ test('headless-токен назван человеческими словами
     <ConnectedAgents />,
     handler([{ ...GRANT, kind: 'pat', label: 'CI', lastUsedAt: null }]),
   );
-  expect(await screen.findByText('токен для CI · подключён 01 авг., 13:00')).toBeInTheDocument();
+  expect(
+    await screen.findByText('токен для CI · подключён 01 авг. 2026 г., 13:00'),
+  ).toBeInTheDocument();
 });
 
 test('отзыв дёргает мутацию с тем же id и перезапрашивает список', async () => {
   const { calls } = renderWithProviders(<ConnectedAgents />, handler([GRANT]));
-  fireEvent.click(await screen.findByRole('button', { name: 'Отозвать' }));
+  fireEvent.click(await screen.findByRole('button', revokeButton('Claude Code')));
   await waitFor(() => {
     const call = calls.find((c) => c.path === 'oauth.revokeGrant');
     // Именно id этой строки: мутация с чужим или пустым id тоже «дёрнулась бы».
@@ -59,13 +70,27 @@ test('отзыв дёргает мутацию с тем же id и переза
   );
 });
 
+// Кнопки в списке подписаны одним словом «Отозвать», и с клавиатуры (или скринридером)
+// две строки звучали бы одинаково: «Отозвать, Отозвать» — какой именно доступ гасишь,
+// неизвестно. Имя обязано называть доступ.
+test('кнопки отзыва различимы по метке доступа', async () => {
+  renderWithProviders(
+    <ConnectedAgents />,
+    handler([GRANT, { ...GRANT, id: 'second', kind: 'pat', label: 'CI' }]),
+  );
+  expect(await screen.findByRole('button', revokeButton('Claude Code'))).toBeInTheDocument();
+  expect(screen.getByRole('button', revokeButton('CI'))).toBeInTheDocument();
+});
+
 test('отозванный доступ помечен датой отзыва и кнопки не имеет', async () => {
   renderWithProviders(
     <ConnectedAgents />,
     handler([{ ...GRANT, kind: 'pat', label: 'CI', revokedAt: '2026-08-05T10:00:00.000Z' }]),
   );
-  expect(await screen.findByText('отозван 05 авг., 13:00')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Отозвать' })).toBeNull();
+  expect(await screen.findByText('отозван 05 авг. 2026 г., 13:00')).toBeInTheDocument();
+  // Ни одной кнопки в строке — запрос по конкретному имени прошёл бы и при кнопке,
+  // подписанной как-нибудь иначе.
+  expect(screen.queryByRole('button')).toBeNull();
 });
 
 // Строка гранта создаётся в момент согласия владельца, ДО обмена кода на токены. Агент,
@@ -74,7 +99,7 @@ test('отозванный доступ помечен датой отзыва �
 test('брошенная попытка авторизации не выдаётся за подключённого агента', async () => {
   renderWithProviders(<ConnectedAgents />, handler([{ ...GRANT, connected: false }]));
   expect(
-    await screen.findByText('браузерный вход · согласие дано 01 авг., 13:00'),
+    await screen.findByText('браузерный вход · согласие дано 01 авг. 2026 г., 13:00'),
   ).toBeInTheDocument();
   expect(
     screen.getByText('Агент не забрал доступ — повторите подключение в агенте.'),
@@ -82,7 +107,7 @@ test('брошенная попытка авторизации не выдаёт
   expect(screen.queryByText(/подключён/)).toBeNull();
   // Отзыв в эти секунды — единственный способ погасить ещё не обменянный код,
   // и сервер такой отзыв чтит (grants.ts: exchangeAuthorizationCode).
-  expect(screen.getByRole('button', { name: 'Отозвать' })).toBeInTheDocument();
+  expect(screen.getByRole('button', revokeButton('Claude Code'))).toBeInTheDocument();
 });
 
 test('пустой список объясняет, как подключить агента, адресом этого стенда', async () => {
@@ -101,13 +126,30 @@ test('пустой список объясняет, как подключить 
   ).toBeInTheDocument();
 });
 
+// Отозванные строки из списка не уходят, поэтому после первого же отзыва список пуст уже
+// никогда не будет. Живи команда подключения только в ветке пустого списка — владелец,
+// отозвавший всё, остался бы на экране без единого способа подключиться заново.
+test('команда подключения доступна и когда список не пуст', async () => {
+  renderWithProviders(
+    <ConnectedAgents />,
+    handler([{ ...GRANT, revokedAt: '2026-08-05T10:00:00.000Z' }]),
+  );
+  expect(
+    await screen.findByText(`claude mcp add --transport http orbis ${window.location.origin}/mcp`),
+  ).toBeInTheDocument();
+  expect(screen.getByText('Чтобы подключить ещё одного агента, выполните:')).toBeInTheDocument();
+  expect(
+    screen.getByText('Дальше выполните в агенте команду /mcp — вход откроется в браузере.'),
+  ).toBeInTheDocument();
+});
+
 test('пока отзыв идёт, кнопка не принимает второе нажатие', async () => {
   renderWithProviders(<ConnectedAgents />, (path) => {
     // Мутация, которая не завершится: единственный способ увидеть промежуточное состояние.
     if (path === 'oauth.revokeGrant') return new Promise(() => {});
     return handler([GRANT])(path);
   });
-  const button = await screen.findByRole('button', { name: 'Отозвать' });
+  const button = await screen.findByRole('button', revokeButton('Claude Code'));
   fireEvent.click(button);
   await waitFor(() => expect(button).toBeDisabled());
 });
@@ -116,7 +158,7 @@ test('несостоявшийся отзыв не молчит', async () => {
   // revoked:false — грант не найден (например, уже удалён): без сообщения владелец видел бы
   // нажатую кнопку и живую строку, не понимая, отозван доступ или нет.
   renderWithProviders(<ConnectedAgents />, handler([GRANT], { revoked: false }));
-  fireEvent.click(await screen.findByRole('button', { name: 'Отозвать' }));
+  fireEvent.click(await screen.findByRole('button', revokeButton('Claude Code')));
   expect(await screen.findByRole('alert')).toHaveTextContent(
     'Доступ не найден — возможно, он уже отозван.',
   );
@@ -127,7 +169,7 @@ test('отказ сервера на отзыве показан текстом 
     if (path === 'oauth.revokeGrant') throw trpcError('INTERNAL_SERVER_ERROR', 'база недоступна');
     return handler([GRANT])(path);
   });
-  fireEvent.click(await screen.findByRole('button', { name: 'Отозвать' }));
+  fireEvent.click(await screen.findByRole('button', revokeButton('Claude Code')));
   expect(await screen.findByRole('alert')).toHaveTextContent('база недоступна');
 });
 
