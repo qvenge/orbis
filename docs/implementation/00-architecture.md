@@ -246,7 +246,7 @@ sequenceDiagram
     participant DB as PostgreSQL
 
     loop polling "что нового"
-        Agent->>MCP: entity_query(updated_at > cursor) [аутентификация PAT]
+        Agent->>MCP: entity_query(updated_at > cursor) [Bearer гранта: OAuth или PAT]
         MCP->>Executor: entity_query
         Executor->>DB: SQL-запрос по updated_at (§6.1)
         DB-->>Executor: изменённые сущности
@@ -272,7 +272,7 @@ sequenceDiagram
     end
 ```
 
-Обязательные элементы присутствуют: `entity_query(updated_at > cursor)` с PAT-аутентификацией, изменённые задачи, `entity_get(include:["thread"])`, инструкции владельца из треда, `entity_update(status)` + заметка в тред, прохождение через executor и запись в журнал с актором-агентом; курсор хранится у самого агента, не на сервере Orbis (§9.3).
+Обязательные элементы присутствуют: `entity_query(updated_at > cursor)` с аутентификацией по Bearer-токену гранта (браузерный вход или PAT — §9.3, D34), изменённые задачи, `entity_get(include:["thread"])`, инструкции владельца из треда, `entity_update(status)` + заметка в тред, прохождение через executor и запись в журнал с актором-агентом; курсор хранится у самого агента, не на сервере Orbis (§9.3).
 
 ### §4.4 Optimistic-check body
 
@@ -322,7 +322,7 @@ sequenceDiagram
 
 ## §5. ER-схема
 
-Восемь таблиц — состав и колонки скопированы из PRD 01 §4 (Task 1) без добавлений и без пропусков; версионных или репликационных служебных полей на сущностях нет, владение — `owner_id` (PRD 01 §4.10).
+Десять таблиц — состав и колонки скопированы из PRD 01 §4 без добавлений и без пропусков; версионных или репликационных служебных полей на сущностях нет, владение — `owner_id` (PRD 01 §4.10). Восемь исходных пришли с Task 1, две последние — `oauth_clients` и `agent_grants` (PRD 01 §4.13–§4.14) — со слайсом 4b: состояние доступа внешних агентов, без которого не бывает ни одноразового кода, ни отзыва (04-decision-log D34).
 
 ```mermaid
 erDiagram
@@ -416,11 +416,41 @@ erDiagram
         timestamptz created_at
     }
 
+    oauth_clients {
+        text client_id PK
+        text client_name
+        text_array redirect_uris
+        timestamptz created_at
+    }
+
+    agent_grants {
+        uuid id PK
+        uuid owner_id
+        text client_id FK
+        text kind
+        text label
+        text scope
+        text code_hash
+        text code_challenge
+        timestamptz code_expires_at
+        timestamptz code_used_at
+        text redirect_uri
+        text access_hash
+        timestamptz access_expires_at
+        text refresh_hash
+        text prev_refresh_hash
+        timestamptz refresh_expires_at
+        timestamptz created_at
+        timestamptz last_used_at
+        timestamptz revoked_at
+    }
+
     entities ||--o{ relations : "source_id"
     entities ||--o{ relations : "target_id"
     entities ||--o{ entity_origins : "entity_id"
     entities |o--o| chat_threads : "entity_id (nullable, глобальный тред = NULL)"
     chat_threads ||--o{ chat_messages : "thread_id"
+    oauth_clients |o--o{ agent_grants : "client_id (nullable, у PAT — NULL)"
 ```
 
 Примечания к схеме:
@@ -429,7 +459,8 @@ erDiagram
 - `ai_usage` — составной первичный ключ `(owner_id, date, model)`, без собственного суррогатного `id` (PRD 01 §4.7).
 - `chat_threads.entity_id` — nullable: `NULL` означает глобальный тред пользователя (мессенджер-модель), не связанный ни с одной сущностью; связь `entities |o--o| chat_threads` на диаграмме относится только к тредам сущностей — не более одного треда на сущность (PRD 01 §4.5).
 - Типы `text_array` на диаграмме соответствуют Postgres `text[]` (ограничение синтаксиса Mermaid ER на символы в имени типа); `date`, `jsonb`, `bigint`, `boolean`, `timestamptz` — типы колонок как в PRD 01 §4.
-- Владение — `owner_id` на каждой таблице, где оно применимо (кроме `relations` и `chat_messages`, чьё владение резолвится транзитивно через связанные `entities`/`chat_threads` — RLS-политика PRD 01 §4.10).
+- Владение — `owner_id` на каждой таблице, где оно применимо (кроме `relations` и `chat_messages`, чьё владение резолвится транзитивно через связанные `entities`/`chat_threads`, и `oauth_clients`, у которой владельца нет вовсе: регистрация клиента происходит до согласия владельца — RLS-политика PRD 01 §4.10).
+- `agent_grants` и `oauth_clients` в графе сущностей не участвуют: они не связаны с `entities` ни одной ссылкой и не подлежат Undo — это состояние доступа, а не пользовательские данные. Хеши токенов (`code_hash`, `access_hash`, `refresh_hash`, `prev_refresh_hash`) — единственная форма, в которой токен попадает в базу; сырых значений схема не хранит нигде (PRD 01 §4.14).
 
 ---
 

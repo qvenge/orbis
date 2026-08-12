@@ -15,8 +15,12 @@
 //   bun scripts/ops.ts seed-aspects   # upsert встроенных аспектов (идемпотентно)
 //   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
+//   bun scripts/ops.ts issue-pat <owner-uuid> [метка]   # headless-токен агента (§9.3)
 import { aspectJsonSchema, BUILTIN_ASPECT_META, diffBuiltinAspects } from '@orbis/shared';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import * as schema from '../apps/server/src/db/schema';
+import { issuePatGrant } from '../apps/server/src/oauth/grants';
 
 const KEYCHAIN_ACCOUNT = 'orbis';
 const KEYCHAIN_SERVICE = 'orbis-prod-admin';
@@ -168,11 +172,69 @@ async function ping(): Promise<number> {
   return 0;
 }
 
-const OPS: Record<string, { run: () => Promise<number>; help: string }> = {
+/**
+ * Выпуск headless-токена внешнего агента на ПРОДЕ (§9.3, D34).
+ *
+ * Зачем операция здесь, а не только в scripts/issue-pat.ts: до переезда PAT в таблицу
+ * грантов скрипт выдачи базы не касался вовсе — печатал хеш, который человек руками клал
+ * в Render. Теперь выдача это ЗАПИСЬ в базу, то есть требует прод-DSN, а голый прод-DSN
+ * оператору не выдаётся по той же причине, по которой заведена вся эта обёртка. Без
+ * операции здесь выпуск PAT на проде остался бы без санкционированного пути.
+ *
+ * Сама механика выдачи не дублируется: зовётся тот же issuePatGrant, что и на локальном
+ * стенде, — второй реализации «как выглядит и как хешируется токен» быть не должно.
+ *
+ * Единственная операция белого списка, которая ПЕЧАТАЕТ СЕКРЕТ: сырой токен показывается
+ * один раз и не восстановим (в базе только sha256).
+ */
+async function issuePat(args: string[]): Promise<number> {
+  const ownerId = args[0];
+  const label = args[1] ?? 'headless-агент';
+  if (ownerId === undefined || ownerId === '') {
+    console.error(
+      'issue-pat: нужен owner-uuid.\n' +
+        '  bun scripts/ops.ts issue-pat <owner-uuid> [метка]\n' +
+        'owner-uuid — из Supabase → Authentication → Users',
+    );
+    return 2;
+  }
+  return withDb(async (sql) => {
+    // Проверка владельца ДО выдачи. Опечатка в UUID иначе дала бы живой токен
+    // несуществующего владельца: аутентификация им прошла бы, а агент молча видел бы
+    // пустой граф — отказ, неотличимый от потери данных. Из скрипта локального стенда
+    // проверки нет намеренно: там auth.users пуст ровно до первого входа, и гейт мешал бы
+    // готовить стенд. Здесь же цена ошибки — мёртвый доступ в проде.
+    const [owner] = await sql<{ ok: number }[]>`
+      SELECT 1 AS ok FROM auth.users WHERE id = ${ownerId}::uuid`;
+    if (!owner) {
+      console.error(
+        `issue-pat: пользователя ${ownerId} нет в auth.users — токен не выдан.\n` +
+          'UUID берётся в Supabase → Authentication → Users.',
+      );
+      return 2;
+    }
+    const token = await issuePatGrant(drizzle(sql, { schema }), { ownerId, label });
+    console.log(`Токен выдан («${label}»). Показывается ОДИН раз — сохрани его сейчас:`);
+    console.log(`  ${token}`);
+    console.log('');
+    console.log('Подключение агента (заголовочный путь, для claude -p / Agent SDK / CI):');
+    console.log(
+      `  claude mcp add --transport http orbis <url>/mcp --header "Authorization: Bearer ${token}"`,
+    );
+    console.log('Отзыв — «Настройки → Агенты» в приложении.');
+    return 0;
+  });
+}
+
+const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: string }> = {
   check: { run: check, help: 'только чтение: расхождение реестра аспектов прода с кодом' },
   'seed-aspects': { run: seedAspects, help: 'upsert встроенных аспектов (идемпотентно)' },
   coverage: { run: coverage, help: 'только чтение: покрытие транзакций за 90 дней (§8)' },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
+  'issue-pat': {
+    run: issuePat,
+    help: 'headless-токен агента: <owner-uuid> [метка] (печатает секрет ОДИН раз)',
+  },
 };
 
 const name = process.argv[2];
@@ -189,7 +251,7 @@ if (!op) {
 }
 
 try {
-  process.exit(await op.run());
+  process.exit(await op.run(process.argv.slice(3)));
 } catch (e) {
   console.error(`ops ${name}: ${redact(e)}`);
   process.exit(1);

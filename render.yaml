@@ -48,11 +48,12 @@ services:
       # или фрагмент в значении — тоже отказ при старте.
       - key: ORBIS_PUBLIC_URL
         value: https://orbis-64q4.onrender.com
-      # PAT внешнего агента (§9.3, MCP). Выдача: bun scripts/issue-pat.ts (печатает hash + owner_id).
-      - key: ORBIS_PAT_HASH
-        sync: false
-      - key: ORBIS_PAT_OWNER_ID
-        sync: false # UUID владельца (из Supabase → Authentication → Users после первого входа)
+      # ORBIS_PAT_HASH и ORBIS_PAT_OWNER_ID сняты решением D34: доступ внешнего агента
+      # (и браузерный, и headless-PAT) живёт строкой в таблице agent_grants, а не в
+      # окружении. Отзыв — «Настройки → Агенты», а не смена переменной с передеплоем;
+      # выпуск headless-токена — bun scripts/ops.ts issue-pat (runbook §3.2).
+      # Если переменные ещё лежат на сервисе в Render UI — удалить: их не читает ни одна
+      # строка кода, и мёртвая переменная выглядит живой конфигурацией.
       # --- Build-time web-клиент (Vite бакает в бандл; Render отдаёт их как --build-arg) ---
       - key: VITE_SUPABASE_URL
         sync: false # https://<PROD_REF>.supabase.co
