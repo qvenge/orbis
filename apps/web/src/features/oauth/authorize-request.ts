@@ -16,6 +16,34 @@ export interface AuthorizeRequest {
   resource: string | undefined;
 }
 
+/**
+ * Разбирается ли адрес возврата и есть ли у него хост. Это НЕ вторая правда о границах
+ * (какие схемы и хосты допустимы, решают регистрация и `describeRequest`), а ровно то
+ * предусловие, на которое опираются оба потребителя разобранного адреса: `denialUrl`
+ * строит ответ разбором, а экран показывает хост отдельной строкой. Без проверки
+ * относительный `redirect_uri=/cb` прошёл бы клиентский разбор, а серверная схема
+ * (`z.string().url()`) свалила бы его — и весь экран стал бы сырым JSON'ом zod-ошибки.
+ *
+ * Пустой хост проверяется отдельно и не для красоты: `new URL('localhost:1/cb')` НЕ
+ * бросает — `localhost:` разбирается как схема, путь становится `1/cb`, а `host` выходит
+ * пустым (проверено пробой, тест на этот случай есть). Такой адрес доехал бы до экрана
+ * пустой строкой хоста — то есть без единственного признака, по которому владелец и
+ * отличает настоящего агента от самозванца.
+ *
+ * Проверка заодно ЗАМЕНЯЕТ отдельное `!redirectUri` в гварде ниже, а не дополняет его:
+ * ни отсутствующий параметр, ни пустая строка `new URL` не переживают, и вторым условием
+ * то же самое требование стало бы нерушимой мутацией — строкой, снятие которой ничего не
+ * меняет. Отсюда и предикат типа: без него `redirectUri` остался бы `string | null`.
+ */
+function isUsableRedirect(uri: string | null): uri is string {
+  if (uri === null) return false;
+  try {
+    return new URL(uri).host !== '';
+  } catch {
+    return false;
+  }
+}
+
 export function parseAuthorizeRequest(search: string): AuthorizeRequest | null {
   const p = new URLSearchParams(search);
   const clientId = p.get('client_id');
@@ -25,7 +53,8 @@ export function parseAuthorizeRequest(search: string): AuthorizeRequest | null {
   // Пропущенный метод — тоже отказ, а не «на усмотрение»: по RFC 7636 §4.3 умолчание
   // равно plain, то есть клиент без этого параметра просит ровно неподдержанный режим.
   const method = p.get('code_challenge_method');
-  if (!clientId || !redirectUri || !codeChallenge || method !== 'S256') return null;
+  if (!clientId || !codeChallenge || method !== 'S256') return null;
+  if (!isUsableRedirect(redirectUri)) return null;
   if (p.get('response_type') !== null && p.get('response_type') !== 'code') return null;
   return {
     clientId,
@@ -39,6 +68,18 @@ export function parseAuthorizeRequest(search: string): AuthorizeRequest | null {
     state: p.get('state') ?? undefined,
     resource: p.get('resource') ?? undefined,
   };
+}
+
+/**
+ * Хост адреса возврата — то, по чему владелец отличает настоящего агента от самозванца:
+ * имя клиента выбирает тот, кто регистрируется, а адрес подделать нельзя, код уйдёт ровно
+ * туда. Берётся из РАЗОБРАННОГО адреса намеренно: `new URL` приводит хост к punycode, и
+ * домен-омограф на экране виден как `xn--…`, а не как знакомое слово.
+ *
+ * Разбор здесь не бросает по построению: `parseAuthorizeRequest` уже отверг неразбираемое.
+ */
+export function redirectHost(request: AuthorizeRequest): string {
+  return new URL(request.redirectUri).host;
 }
 
 /**

@@ -52,10 +52,32 @@ test('негодный запрос показывает отказ и не да
     <ConsentScreen search="?client_id=abc" navigate={vi.fn()} />,
     HANDLER,
   );
-  expect(await screen.findByText(/запрос неполон/i)).toBeInTheDocument();
+  expect(await screen.findByRole('alert')).toHaveTextContent(/запрос неполон/i);
   expect(screen.queryByRole('button', { name: 'Разрешить' })).toBeNull();
   // Негодный запрос не должен даже спрашивать сервер
   expect(calls).toHaveLength(0);
+});
+
+// Имя клиента подделывается в одну строку: /oauth/register публичен, `client_name` сервер
+// только режет до 64 символов. Единственный признак, который подделать нельзя, — адрес
+// возврата: код уйдёт ровно туда, и зарегистрирован он тем, кто прислал ссылку.
+test('адрес возврата показан целиком и отдельно хостом', async () => {
+  renderWithProviders(<ConsentScreen search={SEARCH} navigate={vi.fn()} />, HANDLER);
+  await screen.findByText(/Claude Code/);
+  expect(screen.getByText('http://localhost:8080/callback')).toBeInTheDocument();
+  expect(screen.getByText('localhost:8080')).toBeInTheDocument();
+  expect(screen.getByText(/[Кк]од доступа уйдёт/)).toBeInTheDocument();
+});
+
+// Владелец решает по тому, что ему сказано: чей это агент и что именно он сможет делать.
+test('экран называет агента заголовком и объясняет, что разрешается', async () => {
+  renderWithProviders(<ConsentScreen search={SEARCH} navigate={vi.fn()} />, HANDLER);
+  expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(
+    'Claude Code просит доступ к Orbis',
+  );
+  expect(screen.getByText(/читать и изменять ваши сущности/)).toBeInTheDocument();
+  expect(screen.getByText(/потребуют подтверждения в чате/)).toBeInTheDocument();
+  expect(screen.getByText(/отзывается/)).toBeInTheDocument();
 });
 
 test('метод plain не принимается клиентом', () => {
@@ -69,17 +91,30 @@ test('метод plain не принимается клиентом', () => {
 // §4.3 пропущенный code_challenge_method означает ровно plain, и клиент, положившийся на
 // умолчание, отвалился бы на обмене кода. Сервер такой запрос до кнопки не отсекает:
 // describeRequest параметров PKCE не получает вовсе.
-test('запрос без метода, без челленджа и с чужим response_type негоден', () => {
-  const base = `?client_id=a&redirect_uri=http%3A%2F%2Flocalhost%3A1%2Fcb`;
-  const challenge = `&code_challenge=${'x'.repeat(43)}`;
-  expect(parseAuthorizeRequest(`${base}${challenge}`)).toBeNull();
-  expect(parseAuthorizeRequest(`${base}&code_challenge_method=S256`)).toBeNull();
-  expect(
-    parseAuthorizeRequest(`${base}${challenge}&code_challenge_method=S256&response_type=token`),
-  ).toBeNull();
+test('каждый обязательный параметр запроса проверяется поодиночке', () => {
+  const client = 'client_id=a';
+  const redirect = 'redirect_uri=http%3A%2F%2Flocalhost%3A1%2Fcb';
+  const challenge = `code_challenge=${'x'.repeat(43)}`;
+  const method = 'code_challenge_method=S256';
+  const req = (...parts: string[]) => parseAuthorizeRequest(`?${parts.join('&')}`);
+
+  expect(req(redirect, challenge, method)).toBeNull(); // без client_id
+  expect(req(client, challenge, method)).toBeNull(); // без redirect_uri
+  expect(req(client, redirect, method)).toBeNull(); // без code_challenge
+  expect(req(client, redirect, challenge)).toBeNull(); // без code_challenge_method
+  expect(req(client, redirect, challenge, method, 'response_type=token')).toBeNull();
+  // Неразбираемый адрес возврата: относительный `/cb` клиентскую проверку прошёл бы,
+  // а серверная схема (z.string().url()) валит его — и владелец видел бы сырой JSON zod
+  // вместо экрана. Заодно это предусловие denialUrl, который строит ответ разбором.
+  expect(req(client, 'redirect_uri=%2Fcb', challenge, method)).toBeNull();
+  // `localhost:1/cb` НЕ бросает в new URL: `localhost:` — схема, `1/cb` — путь, хост пуст.
+  // Такой адрес показал бы владельцу пустую строку вместо хоста (проверено пробой).
+  expect(req(client, 'redirect_uri=localhost%3A1%2Fcb', challenge, method)).toBeNull();
+  expect(req(client, 'redirect_uri=mailto%3Aa%40b.c', challenge, method)).toBeNull();
+
   // Разбор годного запроса — контрольная точка: иначе все проверки выше прошёл бы
   // и разбор, возвращающий null всегда.
-  expect(parseAuthorizeRequest(`${base}${challenge}&code_challenge_method=S256`)).toEqual({
+  expect(req(client, redirect, challenge, method)).toEqual({
     clientId: 'a',
     redirectUri: 'http://localhost:1/cb',
     codeChallenge: 'x'.repeat(43),
@@ -144,22 +179,43 @@ test('resource и state доезжают до сервера обоими выз
   });
 });
 
-// Пока код выдаётся, кнопка обязана быть заблокирована: второй клик выписал бы второй
-// одноразовый код на тот же запрос — лишняя строка в таблице и лишний живой код.
-// `isPending` поднимается НЕ синхронно с кликом (react-query дотягивается до состояния
-// через микрозадачу), поэтому ждём: от двойного клика в один тик кнопка не защищает,
+// Пока код выдаётся, обе кнопки обязаны быть заблокированы: повтор «Разрешить» выписал бы
+// второй одноразовый код, а «Отклонить» уведёт владельца с access_denied уже ПОСЛЕ выдачи —
+// строка гранта с живым кодом останется, и в «Агентах» он увидит агента, которого считает
+// отклонённым. `isPending` поднимается НЕ синхронно с кликом (react-query дотягивается до
+// состояния через микрозадачу), поэтому ждём: от двойного клика в один тик это не защищает,
 // от человеческого повтора — защищает.
-test('«Разрешить» блокируется на время выдачи — второго кода не заказать', async () => {
+test('на время выдачи гаснут обе кнопки — ни второго кода, ни отказа поверх выдачи', async () => {
+  const navigate = vi.fn();
   const { calls } = renderWithProviders(
-    <ConsentScreen search={SEARCH} navigate={vi.fn()} />,
+    <ConsentScreen search={SEARCH} navigate={navigate} />,
     (path) => (path === 'oauth.consent' ? new Promise(() => {}) : HANDLER(path)),
   );
   await screen.findByText(/Claude Code/);
   const allow = screen.getByRole('button', { name: 'Разрешить' });
+  const deny = screen.getByRole('button', { name: 'Отклонить' });
   fireEvent.click(allow);
   await waitFor(() => expect(allow).toBeDisabled());
+  expect(deny).toBeDisabled();
   fireEvent.click(allow);
+  fireEvent.click(deny);
   expect(calls.filter((c) => c.path === 'oauth.consent')).toHaveLength(1);
+  expect(navigate).not.toHaveBeenCalled();
+});
+
+// Успех мутации кнопки НЕ отпускает: браузер в этот момент только начинает уходить,
+// и клик по «Отклонить» в это окно отправил бы access_denied по уже выданному коду.
+test('после выдачи кода «Отклонить» уже ничего не отменяет', async () => {
+  const navigate = vi.fn();
+  renderWithProviders(<ConsentScreen search={SEARCH} navigate={navigate} />, HANDLER);
+  await screen.findByText(/Claude Code/);
+  fireEvent.click(screen.getByRole('button', { name: 'Разрешить' }));
+  await waitFor(() => expect(navigate).toHaveBeenCalledTimes(1));
+  const deny = screen.getByRole('button', { name: 'Отклонить' });
+  expect(deny).toBeDisabled();
+  fireEvent.click(deny);
+  expect(navigate).toHaveBeenCalledTimes(1);
+  expect(navigate.mock.calls[0]?.[0]).not.toContain('access_denied');
 });
 
 // Проглоченный отказ выдачи кода — молча мёртвая кнопка: владелец жмёт «Разрешить»,
@@ -172,7 +228,9 @@ test('отказ сервера на «Разрешить» виден, а не 
   });
   await screen.findByText(/Claude Code/);
   fireEvent.click(screen.getByRole('button', { name: 'Разрешить' }));
-  expect(await screen.findByText(/клиент не зарегистрирован/)).toBeInTheDocument();
+  // role="alert" — конвенция проекта для отказов: экран согласия появляется ПОДМЕНОЙ
+  // содержимого, и без роли скринридер о нём просто молчит.
+  expect(await screen.findByRole('alert')).toHaveTextContent(/клиент не зарегистрирован/);
   expect(navigate).not.toHaveBeenCalled();
 });
 
@@ -183,6 +241,6 @@ test('отказ сервера до кнопки показывает прич�
     }
     return HANDLER(path);
   });
-  expect(await screen.findByText(/redirect_uri не зарегистрирован/)).toBeInTheDocument();
+  expect(await screen.findByRole('alert')).toHaveTextContent(/redirect_uri не зарегистрирован/);
   expect(screen.queryByRole('button', { name: 'Разрешить' })).toBeNull();
 });

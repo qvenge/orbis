@@ -29,8 +29,11 @@ createRoot(rootElement).render(
           {/* Экран согласия OAuth — внутри AuthProvider (незалогиненного он сам уводит на
               вход), но ВНЕ OnboardingGate: выдача доступа агенту не требует пройденного
               онбординга. Серверного роута под /oauth/authorize нет — GET доходит до
-              SPA-fallback (server/app.ts), поэтому ветка решается здесь по pathname. */}
-          {window.location.pathname === '/oauth/authorize' ? (
+              SPA-fallback (server/app.ts), поэтому ветка решается здесь по pathname.
+              Хвостовой слэш принимается: канонический адрес мы публикуем без него
+              (metadata.ts), но ссылка к владельцу приходит через руки и копипасту, а цена
+              терпимости — одна замена против экрана чата вместо согласия. */}
+          {window.location.pathname.replace(/\/+$/, '') === '/oauth/authorize' ? (
             <ConsentScreen />
           ) : (
             <OnboardingGate>

@@ -3,12 +3,16 @@
 // веб-клиента (auth/config.ts): серверному HTML она не видна. Монтируется внутри
 // AuthProvider — незалогиненного он сам уводит на вход, и второго способа логина
 // заводить не приходится.
-import { useMemo } from 'react';
+import { type ReactNode, useMemo } from 'react';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
-import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
-import { type AuthorizeRequest, denialUrl, parseAuthorizeRequest } from './authorize-request';
+import {
+  type AuthorizeRequest,
+  denialUrl,
+  parseAuthorizeRequest,
+  redirectHost,
+} from './authorize-request';
 
 /** Переход браузера — проп: тест подменяет его, не ломая window.location в jsdom. */
 export function ConsentScreen({
@@ -22,7 +26,7 @@ export function ConsentScreen({
   // Компонент разделён надвое намеренно: негодный запрос не должен порождать ни одного
   // обращения к серверу, а useQuery внутри ConsentPrompt попросту не монтируется.
   if (request === null) {
-    return <EmptyState title="Запрос неполон — вернитесь в агента и повторите подключение." />;
+    return <ErrorNotice>Запрос неполон — вернитесь в агента и повторите подключение.</ErrorNotice>;
   }
   return <ConsentPrompt request={request} navigate={navigate} />;
 }
@@ -42,11 +46,16 @@ function ConsentPrompt({
   const consent = trpc.oauth.consent.useMutation({
     onSuccess: (r) => navigate(r.redirectTo),
   });
+  // Занятость общая на обе кнопки, и `isSuccess` в ней не лишний: браузер после успеха
+  // только начинает уходить, а «Отклонить» в это окно отправило бы access_denied по уже
+  // ВЫДАННОМУ коду — владелец увидел бы в «Агентах» агента, которого считает отклонённым.
+  // Тот же приём, что на карточке подтверждения (ConfirmationCard.tsx:41).
+  const busy = consent.isPending || consent.isSuccess;
 
   // Причина отказа — от сервера («клиент не зарегистрирован», «redirect_uri не
   // зарегистрирован этим клиентом»): без неё владелец видел бы пустой экран и не знал,
   // что чинить в агенте.
-  if (describe.isError) return <EmptyState title={describe.error.message} />;
+  if (describe.isError) return <ErrorNotice>{describe.error.message}</ErrorNotice>;
   if (!describe.data) return <Skeleton className="mx-auto mt-10 h-24 w-full max-w-md" />;
 
   return (
@@ -62,9 +71,23 @@ function ConsentPrompt({
         Агент сможет читать и изменять ваши сущности от вашего имени. Действия попадут в журнал,
         опасные — потребуют подтверждения в чате. Доступ отзывается в разделе «Настройки → Агенты».
       </p>
+
+      {/* Адрес возврата — единственный признак, который подделать нельзя. Именем клиента
+          не проверяется ничего: /oauth/register публичен, `client_name` сервер только режет
+          до 64 символов, и назваться «Claude Code» может кто угодно — вместе со своим
+          redirect_uri. Код уйдёт ровно по этому адресу, поэтому владельцу показываются оба:
+          хост отдельной строкой (из разобранного адреса — значит в punycode, омограф виден
+          как xn--…) и адрес целиком той строкой, что зарегистрировал клиент.
+          break-all, а не break-words: в длинном URL нет пробелов, и по словам он не переносится. */}
+      <div className="flex flex-col gap-1 rounded-control border border-line bg-surface-2 p-3">
+        <span className="text-text-secondary text-xs">Код доступа уйдёт на этот адрес:</span>
+        <span className="break-all font-medium font-mono text-sm">{redirectHost(request)}</span>
+        <span className="break-all font-mono text-text-muted text-xs">{request.redirectUri}</span>
+      </div>
+
       <div className="flex gap-2">
         <Button
-          disabled={consent.isPending}
+          disabled={busy}
           onClick={() =>
             consent.mutate({
               clientId: request.clientId,
@@ -78,7 +101,7 @@ function ConsentPrompt({
         >
           Разрешить
         </Button>
-        <Button variant="ghost" onClick={() => navigate(denialUrl(request))}>
+        <Button variant="ghost" disabled={busy} onClick={() => navigate(denialUrl(request))}>
           Отклонить
         </Button>
       </div>
@@ -90,5 +113,19 @@ function ConsentPrompt({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Отказ во весь экран. `role="alert"` и `text-danger` — конвенция проекта для отказов
+ * (LoginScreen.tsx:58, OnboardingGate.tsx:41, ChunkErrorBoundary.tsx:72). EmptyState здесь
+ * был неверен дважды: приглушённый «пусто»-стиль выдаёт отказ за пустоту, а появляется он
+ * ПОДМЕНОЙ Skeleton (role="status") — без роли скринридер про отказ просто замолкает.
+ */
+function ErrorNotice({ children }: { children: ReactNode }) {
+  return (
+    <p role="alert" className="mx-auto max-w-md p-6 text-sm text-danger">
+      {children}
+    </p>
   );
 }
