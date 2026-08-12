@@ -12,12 +12,15 @@
 //
 // Использование:
 //   bun scripts/ops.ts check          # только чтение: расхождение реестра аспектов с кодом
+//   bun scripts/ops.ts migrate        # накатить неприменённые миграции схемы
 //   bun scripts/ops.ts seed-aspects   # upsert встроенных аспектов (идемпотентно)
 //   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
 //   bun scripts/ops.ts issue-pat <owner-uuid> [метка]   # headless-токен агента (§9.3)
+import { join } from 'node:path';
 import { aspectJsonSchema, BUILTIN_ASPECT_META, diffBuiltinAspects } from '@orbis/shared';
 import { drizzle } from 'drizzle-orm/postgres-js';
+import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import * as schema from '../apps/server/src/db/schema';
 import { issuePatGrant } from '../apps/server/src/oauth/grants';
@@ -90,6 +93,55 @@ async function check(): Promise<number> {
         : `\nРасхождений: ${bad.size}. Починить: bun scripts/ops.ts seed-aspects`,
     );
     return bad.size === 0 ? 0 : 1;
+  });
+}
+
+/** Комплект миграций — тот же каталог, что у drizzle-kit (apps/server/drizzle.config.ts). */
+const MIGRATIONS_FOLDER = join(import.meta.dir, '../apps/server/src/db/migrations');
+
+/** Сколько миграций уже в журнале. До первого прогона таблицы журнала нет вовсе. */
+async function appliedCount(sql: postgres.Sql): Promise<number> {
+  const [row] = await sql<{ n: number | null }[]>`
+    SELECT CASE
+             WHEN to_regclass('drizzle.__drizzle_migrations') IS NULL THEN NULL
+             ELSE (SELECT count(*)::int FROM drizzle.__drizzle_migrations)
+           END AS n`;
+  return row?.n ?? 0;
+}
+
+/**
+ * Накат неприменённых миграций схемы на ПРОД.
+ *
+ * Зачем операция здесь. Штатный путь подготовки базы — `bun run db:prepare`, но он написан
+ * про НОВУЮ или восстановленную базу и для живого прода не годится: он зовёт `setup-db.ts`
+ * (тот делает `ALTER ROLE orbis_app PASSWORD` из ORBIS_APP_PASSWORD — на проде это ротация
+ * пароля боевой роли, то есть обрыв DATABASE_URL, если значение не совпало) и завершается
+ * `test:rls` (а тот ставит расширение pgtap и льёт фикстуры — на проде им не место, пусть
+ * и в откатываемой транзакции). Оставался голый `db:migrate`, но он требует админского DSN
+ * в окружении, а голый прод-DSN оператору не выдаётся — по той же причине, по которой
+ * заведена вся эта обёртка. Без операции здесь накат миграций на прод не имел
+ * санкционированного пути вовсе, а контейнер их не катит: Dockerfile сразу запускает
+ * сервер (CMD), шага миграции в образе нет.
+ *
+ * Идемпотентна: журнал `drizzle.__drizzle_migrations` тот же, что у drizzle-kit, поэтому
+ * повторный вызов на актуальной базе не делает ничего. Роль — админская (postgres из
+ * Ключницы): миграции создают политики и раздают гранты, под orbis_app это невозможно.
+ *
+ * Роль `orbis_app` операция НЕ создаёт: на проде она давно есть, а `0005_oauth_rls.sql`
+ * называет её поимённо и упал бы на её отсутствии. Отказ `role "orbis_app" does not exist`
+ * означает, что база не подготовлена вовсе, — это случай `db:prepare`, а не этой команды.
+ */
+async function migrateOp(): Promise<number> {
+  return withDb(async (sql) => {
+    const before = await appliedCount(sql);
+    await migrate(drizzle(sql), { migrationsFolder: MIGRATIONS_FOLDER });
+    const after = await appliedCount(sql);
+    console.log(
+      after === before
+        ? `migrate: новых миграций нет (в журнале ${after})`
+        : `migrate: применено ${after - before} (в журнале ${after})`,
+    );
+    return 0;
   });
 }
 
@@ -228,6 +280,7 @@ async function issuePat(args: string[]): Promise<number> {
 
 const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: string }> = {
   check: { run: check, help: 'только чтение: расхождение реестра аспектов прода с кодом' },
+  migrate: { run: migrateOp, help: 'накатить неприменённые миграции схемы (идемпотентно)' },
   'seed-aspects': { run: seedAspects, help: 'upsert встроенных аспектов (идемпотентно)' },
   coverage: { run: coverage, help: 'только чтение: покрытие транзакций за 90 дней (§8)' },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
