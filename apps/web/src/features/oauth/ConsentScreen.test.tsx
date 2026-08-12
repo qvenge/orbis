@@ -52,7 +52,9 @@ test('негодный запрос показывает отказ и не да
     <ConsentScreen search="?client_id=abc" navigate={vi.fn()} />,
     HANDLER,
   );
-  expect(await screen.findByRole('alert')).toHaveTextContent(/запрос неполон/i);
+  // Пинится и действенный хвост: без «вернитесь в агента» сообщение говорит владельцу,
+  // что всё плохо, но не говорит, что делать, — а сделать он может только это.
+  expect(await screen.findByRole('alert')).toHaveTextContent(/запрос неполон.*вернитесь в агента/i);
   expect(screen.queryByRole('button', { name: 'Разрешить' })).toBeNull();
   // Негодный запрос не должен даже спрашивать сервер
   expect(calls).toHaveLength(0);
@@ -67,6 +69,25 @@ test('адрес возврата показан целиком и отдель�
   expect(screen.getByText('http://localhost:8080/callback')).toBeInTheDocument();
   expect(screen.getByText('localhost:8080')).toBeInTheDocument();
   expect(screen.getByText(/[Кк]од доступа уйдёт/)).toBeInTheDocument();
+});
+
+// Ради этого хост и берётся из РАЗОБРАННОГО адреса, а не подстрокой: `аррӏе.com` набран
+// кириллицей и в сыром виде читается как `apple.com`, а `new URL().host` показывает его
+// punycode-формой — подделка становится видна. Наивная подстрока (`split('/')[2]`) на
+// фикстуре с `localhost:8080` неотличима от разбора, поэтому проверять надо здесь.
+// Заодно пин второй половины: адрес целиком показывается ТОЙ строкой, что зарегистрировал
+// клиент, а не нормализованным `href` (в нём домен тоже стал бы punycode, и владелец не
+// увидел бы, что именно записано у клиента).
+test('омографный хост показан в punycode, а адрес — сырой строкой клиента', async () => {
+  const raw = 'http://аррӏе.com/cb';
+  const search =
+    `?client_id=abc&redirect_uri=${encodeURIComponent(raw)}` +
+    `&code_challenge=${'x'.repeat(43)}&code_challenge_method=S256`;
+  renderWithProviders(<ConsentScreen search={search} navigate={vi.fn()} />, HANDLER);
+  await screen.findByText(/Claude Code/);
+  expect(screen.getByText('xn--80ak6aa92e.com')).toBeInTheDocument();
+  expect(screen.getByText(raw)).toBeInTheDocument();
+  expect(screen.queryByText('http://xn--80ak6aa92e.com/cb')).toBeNull();
 });
 
 // Владелец решает по тому, что ему сказано: чей это агент и что именно он сможет делать.
