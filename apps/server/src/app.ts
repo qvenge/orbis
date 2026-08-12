@@ -95,6 +95,25 @@ const trpcBodyLimit = bodyLimit({
     ),
 });
 
+/**
+ * Отказ «не тот метод» на POST-эндпоинтах OAuth (/oauth/token, /oauth/register). Нужен
+ * потому, что на GET они доходили до SPA-fallback и отвечали index.html с кодом 200 —
+ * страница вместо эндпоинта, объявленного в метаданных обнаружения.
+ *
+ * 405, а не 404: путь существует, не годится метод, и `Allow` называет это прямо.
+ * Форма тела — спецификационная { error, error_description }, как у самих эндпоинтов
+ * (register.ts, token-endpoint.ts), а не структурная { error: { code } } из /mcp и tRPC:
+ * это OAuth-поверхность, и разработчик чужого агента разбирает её по RFC 6749 §5.2.
+ * Код `invalid_request` — единственный общий в §5.2; своего кода под «не тот метод»
+ * ни RFC 6749, ни RFC 7591 не дают, а выдумывать свой хуже, чем взять общий.
+ */
+function oauthMethodNotAllowed(path: string) {
+  return (c: Context) =>
+    c.json({ error: 'invalid_request', error_description: `${path} принимает только POST` }, 405, {
+      Allow: 'POST',
+    });
+}
+
 export interface AppDeps {
   db: Db;
   ai: AiDeps;
@@ -110,6 +129,36 @@ export interface AppDeps {
 
 export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: AppDeps): Hono {
   const app = new Hono();
+
+  // --- Защита от кликджекинга: ПЕРВЫМ middleware, на весь сервис ---
+  // Экран согласия OAuth — обычная страница SPA, и без этих заголовков её можно поместить
+  // в iframe: регистрация клиентов публична, а `client_name` никак не проверяется, поэтому
+  // чужой регистрируется «Claude Code» со своим адресом возврата, фреймит наш /oauth/authorize
+  // под прозрачным оверлеем — и один клик владельца по «Разрешить» отправляет ему живой код
+  // авторизации. RFC 9700 §4.14 требует защищать authorization endpoint от кликджекинга явно.
+  //
+  // Заголовок на ВЕСЬ сервис, а не только на /oauth/authorize: Orbis нигде не встраивается
+  // (ни виджета, ни встроенного просмотра нет), а защита, повешенная на один путь, теряется
+  // на следующем добавленном роуте. Оба заголовка вместе — не дубль: `frame-ancestors` из
+  // CSP это современная норма, `X-Frame-Options` остаётся для старых движков.
+  //
+  // Почему заголовком, а не <meta> в apps/web/index.html: `frame-ancestors` в meta-теге
+  // браузеры игнорируют по спеке CSP (наравне с `sandbox` и `report-uri`), то есть защита
+  // из HTML тут невозможна в принципе.
+  //
+  // Оговорка о полноте: современные браузеры партиционируют сторадж третьих сторон, поэтому
+  // во фрейме владелец, скорее всего, увидел бы экран входа, а не согласия, — готового
+  // эксплойта на свежем браузере нет. Но защита не должна быть заимствованной у чужой
+  // браузерной фичи, которую мы не контролируем и не проверяем.
+  //
+  // Заголовки ставятся ПОСЛЕ next(), прямо на готовом ответе: на пути статики ответ рождает
+  // serveStatic собственным Response, и подготовленные до next() заголовки на него не
+  // переносятся.
+  app.use('*', async (c, next) => {
+    await next();
+    c.res.headers.set('X-Frame-Options', 'DENY');
+    c.res.headers.set('Content-Security-Policy', "frame-ancestors 'none'");
+  });
 
   // --- API-роуты: регистрируются ПЕРЕД статикой (порядок = приоритет) ---
   // Size-гейт ДО tRPC-хендлера: сверхлимитное тело отсекается прежде JSON-парсинга и
@@ -131,6 +180,13 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: Ap
   // Обмен кода и refresh на пару токенов (§9.3) — адрес из `token_endpoint` метаданных.
   // Публичный по построению: клиенты у нас без секрета, обмен защищён PKCE.
   app.post('/oauth/token', makeTokenHandler({ db }));
+  // Хвост к обоим POST-эндпоинтам выше: не-POST до правки доходил до SPA-fallback и получал
+  // index.html с кодом 200. Регистрируются СРАЗУ ЗА своими POST-роутами — те на POST
+  // возвращают Response и next() не зовут, поэтому сюда доходят только прочие методы.
+  // Отсечка поимённая, а не по /oauth/*: /oauth/authorize — клиентский роут SPA, ему
+  // страницей быть положено.
+  app.all('/oauth/register', oauthMethodNotAllowed('/oauth/register'));
+  app.all('/oauth/token', oauthMethodNotAllowed('/oauth/token'));
   // Форма ответа на здоровом реестре НЕ меняется ({status:'ok'}) — на неё смотрит и
   // healthCheckPath Render, и тесты. Расхождение добавляет поле, но не меняет код ответа:
   // не-200 здесь превратил бы наблюдаемость ловушки в отказ деплоя (E1). Третье значение
@@ -165,6 +221,15 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: Ap
   // нет». Улик, что это случалось, нет, а «всё с хешем в имени» — правило, которое
   // некому проверять; расширять отсечку без улики не стали.
   app.get('/assets/*', (c) => c.notFound());
+  // Та же отсечка для /.well-known/*: известные документы обнаружения смонтированы выше
+  // (mountOAuthMetadata) и сюда не доходят, а всё прочее под этим префиксом клиентским
+  // роутом не бывает — SPA о нём не знает. Без строки SPA-fallback отдавал index.html с
+  // кодом 200 на `/.well-known/oauth-protected-resource/mcp/` (тот же адрес со слэшем) и
+  // `/.well-known/oauth-authorization-server/mcp`. Цена ровно та: MCP-клиент обходит
+  // документы обнаружения СПИСКОМ кандидатов и на 404 спокойно берёт следующий, а 200 с
+  // HTML даёт ему не мягкий откат, а исключение при разборе JSON — вход агента ломается
+  // на первом же кандидате, которого мы не смонтировали.
+  app.get('/.well-known/*', (c) => c.notFound());
   // SPA-fallback: любой не пойманный выше GET (клиентский роут вроде /browser/123) →
   // index.html. path игнорирует путь запроса, поэтому всегда отдаёт единый bootstrap.
   app.get('*', serveStatic({ path: 'index.html', root: webDistDir, onFound: cacheHeaders }));

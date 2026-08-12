@@ -230,6 +230,99 @@ describe('static serving + SPA-fallback (Task 7)', () => {
     expect(res.status).not.toBe(413);
     expect(res.headers.get('content-type')).toContain('json');
   });
+
+  // Неизвестный путь под /.well-known/* обязан быть 404, а не страницей приложения.
+  // До правки SPA-fallback отдавал на них index.html с кодом 200: MCP-клиент обходит
+  // документы обнаружения СПИСКОМ кандидатов и на 404 переходит к следующему, а 200 с
+  // HTML даёт ему не мягкий откат, а исключение при разборе JSON. Первый адрес в списке —
+  // ровно тот, что клиент вывел бы сам из нашего же resource_metadata, приписав слэш.
+  test('неизвестный /.well-known/* → 404, а не SPA-fallback', async () => {
+    for (const path of [
+      '/.well-known/oauth-protected-resource/mcp/',
+      '/.well-known/oauth-authorization-server/mcp',
+      '/.well-known/openid-configuration',
+      '/.well-known/',
+    ]) {
+      const res = await app.request(path);
+      expect(res.status).toBe(404);
+      expect(res.headers.get('content-type') ?? '').not.toContain('text/html');
+      expect(await res.text()).not.toContain(INDEX_MARKER);
+    }
+  });
+
+  // Отсечка выше не должна была съесть сами документы обнаружения — их пин рядом
+  // («метаданные OAuth НЕ перехвачены статикой»), здесь держим границу с другой стороны.
+  test('известные /.well-known/* по-прежнему отвечают JSON', async () => {
+    const res = await app.request('/.well-known/oauth-protected-resource/mcp');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('json');
+  });
+
+  // /oauth/token и /oauth/register объявлены в метаданных как POST-эндпоинты, но на GET
+  // до правки отдавали index.html с 200 — «страница вместо эндпоинта» того же рода, что и
+  // выше. 405 (а не 404): путь существует, не годится метод, и Allow это называет прямо.
+  // /oauth/authorize сюда НЕ попадает — это клиентский роут SPA, и он обязан остаться
+  // страницей; поэтому отсечка поимённая, а не по /oauth/*.
+  test('не-POST на /oauth/token и /oauth/register → 405 с Allow, а не index.html', async () => {
+    for (const path of ['/oauth/token', '/oauth/register']) {
+      for (const method of ['GET', 'HEAD', 'PUT', 'DELETE']) {
+        const res = await app.request(path, { method });
+        expect(res.status).toBe(405);
+        expect(res.headers.get('allow')).toBe('POST');
+        expect(res.headers.get('content-type') ?? '').not.toContain('text/html');
+      }
+    }
+  });
+
+  test('/oauth/authorize остаётся страницей SPA (отсечка выше его не задела)', async () => {
+    const res = await app.request('/oauth/authorize?client_id=x&redirect_uri=y');
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain(INDEX_MARKER);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Защита от кликджекинга (финальное ревью слайса 4b, I1)
+// ---------------------------------------------------------------------------
+//
+// Экран согласия — обычная страница SPA, и до правки сервис не ставил ни одного
+// защитного заголовка: `GET /oauth/authorize` отвечал 200 text/html с пустыми
+// X-Frame-Options и Content-Security-Policy. Сценарий, который это открывает:
+// регистрация клиентов публична, а `client_name` не проверяется, поэтому чужой
+// регистрируется «Claude Code» со своим адресом возврата, фреймит наш экран согласия
+// под прозрачным оверлеем — и один клик владельца отправляет ему живой код авторизации.
+// RFC 9700 §4.14 требует защищать authorization endpoint от кликджекинга явно.
+//
+// Пин держит ВЕСЬ сервис, а не только /oauth/authorize: Orbis нигде не встраивается, а
+// защита, действующая на одном пути, теряется на следующем добавленном роуте.
+describe('анти-фрейминг (I1): заголовки на всём сервисе', () => {
+  test('каждый ответ несёт X-Frame-Options: DENY и frame-ancestors none', async () => {
+    for (const path of [
+      '/oauth/authorize?client_id=x', // экран согласия — ради него всё и затевалось
+      '/', // корень SPA
+      '/browser/123', // клиентский роут через SPA-fallback
+      '/assets/app-abc123.js', // статика
+      '/assets/index-DEADBEEF.js', // 404 отсечки ассетов
+      '/health',
+      '/mcp', // 405
+      '/.well-known/oauth-protected-resource/mcp', // JSON-документ обнаружения
+      '/.well-known/openid-configuration', // 404 отсечки well-known
+      '/trpc/nonexistent',
+    ]) {
+      const res = await app.request(path);
+      expect(res.headers.get('x-frame-options')).toBe('DENY');
+      expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    }
+  });
+
+  // Не-GET ходит по другой ветке композиции (статики на них нет вовсе), поэтому
+  // заголовки на ней проверяются отдельно: middleware обязан быть общим, а не «на GET».
+  test('заголовки стоят и на не-GET (POST /mcp без токена — 401)', async () => {
+    const res = await app.request('/mcp', { method: 'POST' });
+    expect(res.status).toBe(401);
+    expect(res.headers.get('x-frame-options')).toBe('DENY');
+    expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+  });
 });
 
 // ---------------------------------------------------------------------------
