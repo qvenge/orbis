@@ -25,7 +25,9 @@ export function formatAmount(amount: string): string {
   return frac ? `${grouped}.${frac}` : grouped;
 }
 
-export function formatDate(iso: string, tz: string): string {
+// tz необязателен: зона приезжает из user.getSettings, и до её загрузки звать было бы
+// нечем. undefined Intl понимает как «зона рантайма» — ветки на это заводить не нужно.
+export function formatDate(iso: string, tz?: string): string {
   // Guard: битый iso (Invalid Date) бросил бы RangeError в рендер-пути — возвращаем вход как есть.
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;

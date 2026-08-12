@@ -38,6 +38,13 @@ export interface GrantSummary {
   id: string;
   kind: string;
   label: string;
+  /**
+   * Агент забрал токены. false — согласие владельца есть, а обмена кода не было:
+   * строка появляется в момент «Разрешить», и агент, который до обмена не дошёл
+   * (упал, окно закрыли), оставляет её навсегда. Без этого признака такая строка
+   * в списке «Агенты» неотличима от подключённого агента.
+   */
+  connected: boolean;
   createdAt: Date;
   lastUsedAt: Date | null;
   revokedAt: Date | null;
@@ -220,13 +227,19 @@ export async function issuePatGrant(
   return token;
 }
 
-/** Для экрана настроек: ни одного хеша наружу. */
+/**
+ * Для экрана настроек: ни одного хеша наружу. `connected` считается ИЗ хешей прямо в
+ * запросе — сами значения не покидают базу, наружу едет один булев признак. Условие
+ * «нет ни access, ни refresh»: у PAT refresh_hash пуст всегда, и проверка на один
+ * refresh выдала бы каждый headless-токен за брошенную попытку авторизации.
+ */
 export async function listGrants(db: Db, ownerId: string): Promise<GrantSummary[]> {
   return db
     .select({
       id: agentGrants.id,
       kind: agentGrants.kind,
       label: agentGrants.label,
+      connected: sql<boolean>`(${agentGrants.accessHash} IS NOT NULL OR ${agentGrants.refreshHash} IS NOT NULL)`,
       createdAt: agentGrants.createdAt,
       lastUsedAt: agentGrants.lastUsedAt,
       revokedAt: agentGrants.revokedAt,
@@ -236,14 +249,24 @@ export async function listGrants(db: Db, ownerId: string): Promise<GrantSummary[
     .orderBy(sql`${agentGrants.createdAt} DESC`);
 }
 
-/** Отзыв: условие на owner_id — вторая линия к RLS, а не замена ей. */
+/**
+ * Отзыв: условие на owner_id — вторая линия к RLS, а не замена ей.
+ *
+ * COALESCE, а не голое присваивание: отзыв идемпотентен. Повторное нажатие «Отозвать»
+ * (или гонка двух вкладок) иначе двигало бы revoked_at на «сейчас» — на экране настроек
+ * дата отзыва прыгала бы, и владелец терял бы единственную улику о том, когда доступ
+ * на самом деле погас. Условие `IS NULL` в WHERE вместо этого дало бы тот же неподвижный
+ * штамп, но false в ответе — и «уже отозван» стало бы неотличимо от «грант не ваш»,
+ * то есть экран не смог бы честно сказать об отказе. `now()` берём у базы: created_at
+ * там же (defaultNow), и вторые часы к одной шкале не заводим.
+ */
 export async function revokeGrant(
   db: Db,
   input: { ownerId: string; grantId: string },
 ): Promise<boolean> {
   const rows = await db
     .update(agentGrants)
-    .set({ revokedAt: new Date() })
+    .set({ revokedAt: sql`COALESCE(${agentGrants.revokedAt}, now())` })
     .where(and(eq(agentGrants.id, input.grantId), eq(agentGrants.ownerId, input.ownerId)))
     .returning({ id: agentGrants.id });
   return rows.length > 0;

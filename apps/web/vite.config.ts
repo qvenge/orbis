@@ -21,7 +21,17 @@ export default defineConfig({
     }),
   ],
   // ORBIS_DEV_API — переопределение цели dev-прокси (порт 3001 на дев-машине может быть занят посторонним сервисом)
-  server: { port: 5173, proxy: { '/trpc': process.env.ORBIS_DEV_API ?? 'http://localhost:3001' } },
+  // `/mcp` в прокси не ради самого клиента (агент ходит на сервер напрямую), а ради
+  // правды на экране: раздел «Агенты» печатает владельцу команду подключения с адресом
+  // ЭТОГО стенда (trpc.ts: MCP_URL), и на dev-сервере vite без прокси такой адрес вёл бы
+  // в app-shell SPA вместо MCP-эндпоинта — команда из настроек не работала бы локально.
+  server: {
+    port: 5173,
+    proxy: {
+      '/trpc': process.env.ORBIS_DEV_API ?? 'http://localhost:3001',
+      '/mcp': process.env.ORBIS_DEV_API ?? 'http://localhost:3001',
+    },
+  },
   test: {
     environment: 'jsdom',
     globals: true,

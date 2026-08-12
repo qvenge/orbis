@@ -410,6 +410,18 @@ test('таймстампы доступов уезжают ISO-строками,
   expect(grant?.revokedAt).toBeNull();
 });
 
+// Признак «агент забрал токены» обязан доехать до экрана: строка гранта создаётся в
+// момент согласия, и без него экран настроек выдаёт брошенную попытку авторизации за
+// подключённого агента.
+test('брошенная попытка авторизации доезжает до экрана неподключённой', async () => {
+  const clientId = await seedClient();
+  await ownerCaller.oauth.consent(consentInput(clientId));
+  expect((await ownerCaller.oauth.listGrants())[0]).toMatchObject({ connected: false });
+  await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  const pat = (await ownerCaller.oauth.listGrants()).find((g) => g.kind === 'pat');
+  expect(pat).toMatchObject({ connected: true });
+});
+
 test('список доступов скоупится владельцем', async () => {
   await issuePatGrant(db, { ownerId: owner, label: 'мой CI' });
   await issuePatGrant(db, { ownerId: stranger, label: 'чужой CI' });

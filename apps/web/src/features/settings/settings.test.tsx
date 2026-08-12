@@ -3,6 +3,7 @@ import { beforeEach, expect, test, vi } from 'vitest';
 import { renderWithProviders } from '../../test/harness';
 import { ExportButton } from './ExportButton';
 import { GeneralForm } from './GeneralForm';
+import { SettingsScreen } from './SettingsScreen';
 
 const settings = {
   ownerId: 'u',
@@ -46,6 +47,31 @@ test('сегмент темы: клик «Тёмная» → data-theme + localS
     const c = calls.find((x) => x.path === 'user.updateSettings');
     expect(c?.input).toEqual({});
   });
+});
+
+// Вкладка «Агенты» (§9.3) — единственный вход к отзыву выданных доступов: без неё
+// компонент есть, а владельцу недоступен.
+test('вкладка «Агенты» открывает список выданных доступов', async () => {
+  renderWithProviders(<SettingsScreen />, (path) => {
+    if (path === 'user.getSettings') return settings;
+    if (path === 'oauth.listGrants')
+      return [
+        {
+          id: 'g1',
+          kind: 'oauth',
+          label: 'Claude Code',
+          connected: true,
+          createdAt: '2026-08-01T10:00:00.000Z',
+          lastUsedAt: null,
+          revokedAt: null,
+        },
+      ];
+    return {};
+  });
+  // До клика список не запрашивается вовсе (radix не монтирует неактивную вкладку).
+  expect(screen.queryByText('Claude Code')).toBeNull();
+  fireEvent.click(await screen.findByRole('tab', { name: 'Агенты' }));
+  expect(await screen.findByText('Claude Code')).toBeInTheDocument();
 });
 
 beforeEach(() => {

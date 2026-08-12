@@ -53,8 +53,13 @@ export function authErrorLink(handlers: {
 // URL tRPC: по умолчанию относительный `/trpc` (Вариант A — same-origin, сервер сам
 // раздаёт web-dist, CORS не нужен). VITE_API_URL — опц. fallback для режима B (раздельные
 // origins): если задан, префиксует абсолютным base; пусто/не задан → прежнее поведение.
-const apiBase = import.meta.env.VITE_API_URL ?? '';
-export const TRPC_URL = `${apiBase}/trpc`;
+export const API_BASE = import.meta.env.VITE_API_URL ?? '';
+export const TRPC_URL = `${API_BASE}/trpc`;
+// Тот же адрес, но абсолютным и целиком — его владелец копирует в команду подключения
+// агента (раздел «Агенты»). Пусто → same-origin: на проде это публичный адрес сервиса,
+// локально — стенд vite (прокси `/mcp` в vite.config.ts). Правда об адресе API одна
+// на оба URL: своё чтение VITE_API_URL в экране развело бы их при переходе в режим B.
+export const MCP_URL = `${API_BASE || window.location.origin}/mcp`;
 
 export function orbisLinks(getToken: () => string | null): TRPCLink<AppRouter>[] {
   return [

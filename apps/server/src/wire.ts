@@ -172,6 +172,8 @@ export interface WireAgentGrant {
   id: string;
   kind: string;
   label: string;
+  /** Агент забрал токены; false — согласие есть, обмена кода не было (см. GrantSummary). */
+  connected: boolean;
   createdAt: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
@@ -182,6 +184,7 @@ export function toWireAgentGrant(row: GrantSummary): WireAgentGrant {
     id: row.id,
     kind: row.kind,
     label: row.label,
+    connected: row.connected,
     createdAt: row.createdAt.toISOString(),
     lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
     revokedAt: row.revokedAt?.toISOString() ?? null,

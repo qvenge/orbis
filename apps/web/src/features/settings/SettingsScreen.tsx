@@ -5,6 +5,7 @@ import { Button } from '../../ui/Button';
 import { Skeleton } from '../../ui/Skeleton';
 import { Tabs } from '../../ui/Tabs';
 import { AspectsList } from './AspectsList';
+import { ConnectedAgents } from './ConnectedAgents';
 import { ExportButton } from './ExportButton';
 import { GeneralForm } from './GeneralForm';
 import { ViewsList } from './ViewsList';
@@ -27,6 +28,7 @@ export function SettingsScreen() {
               { value: 'memory', label: 'Память AI', content: <MemorySection /> },
               { value: 'aspects', label: 'Аспекты', content: <AspectsList /> },
               { value: 'views', label: 'Views', content: <ViewsList /> },
+              { value: 'agents', label: 'Агенты', content: <ConnectedAgents /> },
               {
                 value: 'export',
                 label: 'Экспорт',

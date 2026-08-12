@@ -354,6 +354,62 @@ test('listGrants отдаёт свои гранты и не отдаёт хеш�
   expect(JSON.stringify(grants)).not.toContain(sha256hex(pat));
 });
 
+// Строка гранта появляется в момент согласия владельца — ДО того, как агент обменял код
+// на токены. Агент, который так и не обменял его (упал, окно закрыли), оставляет строку
+// навсегда, и без отдельного признака она в списке «Агенты» неотличима от подключённого
+// агента: те же метка, вид и дата. Признак считается по хешам токенов, наружу они не идут.
+test('listGrants отличает необменянный код от подключённого агента', async () => {
+  const clientId = await seedClient();
+  const { verifier, challenge } = pkce();
+  const code = await createAuthorizationCode(db, {
+    ownerId: owner,
+    clientId,
+    label: 'Claude Code',
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+  });
+  expect((await listGrants(db, owner))[0]).toMatchObject({
+    label: 'Claude Code',
+    connected: false,
+  });
+  await exchangeAuthorizationCode(db, {
+    code,
+    codeVerifier: verifier,
+    redirectUri: REDIRECT,
+    clientId,
+  });
+  expect((await listGrants(db, owner))[0]).toMatchObject({ connected: true });
+});
+
+// PAT кода не обменивает вовсе: у него есть access_hash и нет refresh_hash. Условие
+// «нет ни того, ни другого» держит именно этот случай — проверка на один refresh
+// выдала бы каждый headless-токен за незавершённое подключение.
+test('PAT в списке — подключённый доступ, а не брошенная попытка', async () => {
+  await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  expect((await listGrants(db, owner))[0]).toMatchObject({ kind: 'pat', connected: true });
+});
+
+// Отзыв идемпотентен: второй вызов не двигает дату. Иначе на экране настроек дата отзыва
+// прыгала бы на «сейчас» от повторного нажатия (или гонки двух вкладок), и владелец терял
+// бы единственную улику о том, когда доступ на самом деле погас.
+test('повторный отзыв не двигает дату отзыва', async () => {
+  await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  const grant = (await listGrants(db, owner))[0];
+  if (!grant) throw new Error('грант не создан');
+  expect(await revokeGrant(db, { ownerId: owner, grantId: grant.id })).toBe(true);
+  const first = (await listGrants(db, owner))[0]?.revokedAt;
+  if (!first) throw new Error('первый отзыв не проставил дату');
+  // Пауза обязательна: без неё «сейчас» второго отзыва совпало бы с первым с точностью
+  // до разрешения часов, и тест прошёл бы при любой реализации.
+  await Bun.sleep(20);
+  // true, а не false: доступ владельца отозван — это и есть результат, о котором просили.
+  // Отличать «уже было отозвано» от «грант не ваш» одним и тем же false значило бы
+  // сделать невозможным честное сообщение об отказе на экране.
+  expect(await revokeGrant(db, { ownerId: owner, grantId: grant.id })).toBe(true);
+  const second = (await listGrants(db, owner))[0]?.revokedAt;
+  expect(second?.getTime()).toBe(first.getTime());
+});
+
 test('мусорный токен и токен без префикса отвергаются', async () => {
   expect(await verifyBearer(db, `orbis_at_${'ff'.repeat(32)}`)).toBeNull();
   expect(await verifyBearer(db, 'eyJhbGciOiJIUzI1NiJ9.подделка')).toBeNull();
