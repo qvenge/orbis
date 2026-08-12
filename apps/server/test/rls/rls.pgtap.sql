@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(34);
+SELECT plan(40);
 
 -- Фикстуры под суперпользователем (обходит RLS)
 INSERT INTO entities (id, owner_id, title) VALUES
@@ -210,7 +210,51 @@ SELECT results_eq('SELECT count(*)::int FROM chat_threads', ARRAY[0],
   'без identity: chat_threads — 0 строк');
 SELECT results_eq('SELECT count(*)::int FROM relations', ARRAY[0],
   'без identity: relations — 0 строк');
+-- Новая таблица §9.3 в том же перечне: authenticated права на неё имеет явным GRANT'ом
+-- (0005), поэтому «ничего не видно» здесь обеспечивает именно RLS, а не отсутствие права.
+SELECT results_eq('SELECT count(*)::int FROM agent_grants', ARRAY[0],
+  'без identity: agent_grants — 0 строк');
 RESET ROLE;
+
+-- Группа 9: oauth_clients закрыта для чужих — оба барьера поимённо (§9.3, D34).
+--
+-- Спека слайса обещала проверку «anon не видит ничего», и обоснованием называла default
+-- privileges Supabase: якобы они автоматически выдают anon/authenticated права на новые
+-- таблицы public, и RLS без политики остаётся единственным барьером. На этой базе это
+-- НЕ ТАК, проверено каталогом: у default ACL роли postgres в схеме public для anon,
+-- authenticated и service_role стоит `Dxtm` (TRUNCATE, REFERENCES, TRIGGER, MAINTAIN) —
+-- SELECT/INSERT/UPDATE/DELETE там нет. Полный набор раздаёт только default ACL роли
+-- supabase_admin, а наши миграции идут под postgres. Поэтому у agent_grants права
+-- authenticated взялись из явного GRANT'а миграции 0005, а у oauth_clients их нет вовсе.
+--
+-- Отсюда — форма проверок: сначала пиним ПЕРВЫЙ барьер (права нет), затем ВТОРОЙ (RLS),
+-- выдав GRANT прямо здесь. Транзакция всё равно откатывается, зато проверка перестаёт
+-- зависеть от того, чем именно настроены default privileges на конкретной базе: пусть
+-- на hosted они однажды окажутся шире — вторая половина группы держит тот же итог.
+SELECT ok(NOT has_table_privilege('anon', 'oauth_clients', 'SELECT'),
+  'oauth_clients: у anon нет даже права SELECT');
+SELECT ok(NOT has_table_privilege('authenticated', 'oauth_clients', 'SELECT'),
+  'oauth_clients: у authenticated нет даже права SELECT');
+
+GRANT SELECT ON oauth_clients, agent_grants TO anon;
+GRANT SELECT ON oauth_clients TO authenticated;
+
+SET LOCAL ROLE anon;
+SELECT results_eq('SELECT count(*)::int FROM oauth_clients', ARRAY[0],
+  'oauth_clients: даже с GRANT''ом anon видит 0 строк (RLS без политики для этой роли)');
+SELECT results_eq('SELECT count(*)::int FROM agent_grants', ARRAY[0],
+  'agent_grants: даже с GRANT''ом anon видит 0 строк');
+RESET ROLE;
+
+-- И под живым владельцем тоже: клиенты DCR ничьи, владелец видит их только через свой
+-- грант — политики для authenticated на этой таблице нет по замыслу (0005).
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq('SELECT count(*)::int FROM oauth_clients', ARRAY[0],
+  'oauth_clients: даже с GRANT''ом владелец видит 0 строк');
+RESET ROLE;
+
 -- Контроль анти-false-positive: админ видит данные обоих
 SELECT cmp_ok((SELECT count(*)::int FROM entities), '>=', 3, 'админ видит строки A и B');
 
