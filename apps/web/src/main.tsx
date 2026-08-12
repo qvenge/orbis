@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { AuthProvider, getCurrentToken } from './auth/AuthProvider';
+import { ConsentScreen } from './features/oauth/ConsentScreen';
 import { OnboardingGate } from './features/onboarding/OnboardingGate';
 import { initTheme } from './lib/theme';
 import { registerRetrySend } from './state/retry';
@@ -25,9 +26,17 @@ createRoot(rootElement).render(
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
         <AuthProvider>
-          <OnboardingGate>
-            <App />
-          </OnboardingGate>
+          {/* Экран согласия OAuth — внутри AuthProvider (незалогиненного он сам уводит на
+              вход), но ВНЕ OnboardingGate: выдача доступа агенту не требует пройденного
+              онбординга. Серверного роута под /oauth/authorize нет — GET доходит до
+              SPA-fallback (server/app.ts), поэтому ветка решается здесь по pathname. */}
+          {window.location.pathname === '/oauth/authorize' ? (
+            <ConsentScreen />
+          ) : (
+            <OnboardingGate>
+              <App />
+            </OnboardingGate>
+          )}
           {/* Тосты доступны и до прохождения онбординга, поэтому вне гейта. */}
           <Toaster />
         </AuthProvider>
