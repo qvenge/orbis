@@ -386,6 +386,18 @@ setup-db.ts  →  db:migrate  →  seed-aspects.ts  →  test:rls
 > **сначала переменная, потом код** — тот же порядок и та же причина, что у ключа
 > LLM-провайдера (§1, D28).
 >
+> **Как она туда попадает — руками, и строка в `render.yaml` этого не заменяет.** Здесь
+> легко ошибиться ровно потому, что переменная объявлена `value:`: увидев её в блюпринте,
+> естественно решить, что делать нечего. Но синк блюпринта приезжает **вместе с кодом** —
+> то есть в тот самый деплой, который без переменной и не поднимется. Поэтому до мержа
+> её выставляют **вручную**: Render UI → `Service → Environment` → `Add Environment
+> Variable` → `ORBIS_PUBLIC_URL` = `https://orbis-64q4.onrender.com`. Добавление само
+> запускает редеплой на старом коде — тот про переменную не знает и молча её игнорирует
+> (весь `oauth/` приезжает этой же веткой), так что порядок безопасен. Когда синк
+> блюпринта потом привезёт то же значение, он совпадёт с выставленным вручную, и
+> расхождения «UI против `render.yaml`», которым опасен `ORBIS_LLM_PROVIDER` (§1), здесь
+> не возникнет — при условии, что руками выставлено ровно значение из `render.yaml`.
+>
 > Значение — **только чистый origin**, без пути, query и фрагмента. Кривое значение
 > (`https://host/mcp`, `http://host/?x=1`, не-http-схема) роняет старт **в любом
 > окружении**, не только в production: локально «всё работает, а в проде рвётся» — худший
@@ -580,9 +592,12 @@ psql "$ADMIN_DSN" -c "\dt public.*"
 **Владелец получит НОВЫЙ UUID.** `owner_id` логически ссылается на `auth.users` (FK нет —
 схемой auth владеет Supabase), а дамп её не содержит: после регистрации в новом проекте
 RLS спрячет все восстановленные строки — база выглядит пустой при полных таблицах.
-Перепривязать (7 таблиц с `owner_id`; `user_settings.owner_id` — PK, строки нового
-пользователя не должны существовать). **`agent_grants` в этот список намеренно не входит** —
-почему, сказано сразу после запроса:
+Перепривязать нужно **шесть** таблиц. Колонка `owner_id` есть у семи (`entities`,
+`aspect_definitions`, `user_settings`, `chat_threads`, `ai_usage`, `entity_origins`,
+`agent_grants`), но `agent_grants` в скрипт намеренно не входит — почему, сказано сразу
+после запроса. `user_settings.owner_id` — PK, поэтому строки нового пользователя не должны
+существовать; у `aspect_definitions` встроенные записи несут `owner_id IS NULL` и условием
+`WHERE owner_id = :'old'` не задеваются.
 
 ```bash
 psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 <<'SQL'
@@ -590,15 +605,26 @@ psql "$ADMIN_DSN" -v ON_ERROR_STOP=1 <<'SQL'
 \set new '<новый-uuid-из Authentication → Users>'
 BEGIN;
 UPDATE entities           SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE relations          SET owner_id = :'new' WHERE owner_id = :'old';
 UPDATE aspect_definitions SET owner_id = :'new' WHERE owner_id = :'old';
 UPDATE user_settings      SET owner_id = :'new' WHERE owner_id = :'old';
 UPDATE chat_threads       SET owner_id = :'new' WHERE owner_id = :'old';
-UPDATE chat_messages      SET owner_id = :'new' WHERE owner_id = :'old';
 UPDATE ai_usage           SET owner_id = :'new' WHERE owner_id = :'old';
+UPDATE entity_origins     SET owner_id = :'new' WHERE owner_id = :'old';
 COMMIT;
 SQL
 ```
+
+> **Чего в этом списке нет и почему — проверено пробой, а не выведено из PRD.** Прежняя
+> версия блока звала `UPDATE relations SET owner_id` и `UPDATE chat_messages SET owner_id`,
+> а такой колонки у обеих таблиц **нет**: владение там резолвится транзитивно — у `relations`
+> через обе связанные `entities`, у `chat_messages` через `chat_threads.owner_id` (PRD 01
+> §4.10). PostgreSQL отвечает на них `column "owner_id" does not exist`, а с
+> `ON_ERROR_STOP=1` psql обрывается на втором `UPDATE` **до `COMMIT`** — то есть скрипт
+> не перепривязывал НИЧЕГО, молча и посреди восстановления после аварии. Зеркальная
+> половина той же ошибки: `entity_origins` с настоящей колонкой `owner_id` в списке
+> отсутствовал, и provenance импорта остался бы на старом владельце, уйдя под RLS, —
+> дедуп повторного импорта (§4.8) перестал бы срабатывать. Перепривязывать `relations`
+> и `chat_messages` не нужно и не надо: они поедут за родителями сами.
 
 **Доступы агентов после восстановления — выдать заново, а не перепривязывать.** Таблица
 `agent_grants` (§3) тоже несёт `owner_id` и тоже попадает в дамп, но перепривязка ей
