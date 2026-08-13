@@ -21,3 +21,4 @@ spikes/**/.env
 spikes/**/node_modules
 spikes/**/bun.lock
 spikes/spike-01-rls/supabase/.temp
+.superpowers/
