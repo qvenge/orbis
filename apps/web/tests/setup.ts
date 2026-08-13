@@ -16,3 +16,7 @@ import '@testing-library/jest-dom/vitest';
 // 5000 недостижимы: реальный потолок ожидания равен 5000 минус уже потраченное.
 // Если порог когда-нибудь понадобится — поднимать его только вместе с `testTimeout`,
 // с заметным зазором между ними.
+
+import { installProseMirrorJsdomPolyfills } from './prosemirror-polyfill';
+
+installProseMirrorJsdomPolyfills();
