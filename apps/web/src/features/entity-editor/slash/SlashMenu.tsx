@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 
 export type MenuRow = { id: string; label: string; hint?: string };
 
@@ -34,6 +34,18 @@ export const SlashMenu = forwardRef<
   const key = rows.map((r) => r.id).join(',');
   // biome-ignore lint/correctness/useExhaustiveDependencies: сброс завязан на СОСТАВ строк (key), а не на тождество массива
   useEffect(() => setActive(0), [key]);
+
+  const listRef = useRef<HTMLDivElement | null>(null);
+  // Выбранная строка обязана быть ВИДНА. Панель ограничена по высоте и скроллится, а пунктов
+  // двенадцать: без этого строки ниже восьмой выбирались бы стрелкой за краем экрана — то
+  // есть обещание «набрал → стрелка → Enter» держалось бы только для верхней трети меню.
+  // Вызов опциональный: в jsdom `scrollIntoView` не реализован вовсе.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: прокручивать надо и на смену состава строк (key)
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({
+      block: 'nearest',
+    });
+  }, [active, key]);
 
   useImperativeHandle(
     ref,
@@ -73,11 +85,15 @@ export const SlashMenu = forwardRef<
     // элементе разметки биом отвергает справедливо — семантика ul/li тут ничего не добавляет,
     // потому что строки и так объявлены как option.
     <div
+      ref={listRef}
       // Роль есть у самого списка, а фокус остаётся в редакторе: меню вызвано набором, и
       // забрать у текста каретку значило бы сломать сам набор.
       role="listbox"
       aria-label="Вставить"
       data-testid="slash-menu"
+      // Признак для стража «клик снаружи» (SuggestMenu), а не украшение: по нему клик ПО
+      // МЕНЮ отличается от ухода из него. Тот же приём, что у `data-query-widget`.
+      data-suggest-menu=""
       // fixed, а не absolute: координаты каретки приезжают из `clientRect()` в системе ОКНА,
       // и absolute внутри непозиционированного предка уложил бы меню мимо на всю прокрутку.
       style={{ position: 'fixed', left: coords.left, top: coords.top }}

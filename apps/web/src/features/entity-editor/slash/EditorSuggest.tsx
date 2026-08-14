@@ -1,6 +1,14 @@
 import type { AnyExtension } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
-import { type RefObject, useCallback, useMemo, useRef, useState } from 'react';
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 import { trpc } from '../../../trpc';
 import { useToast } from '../../../ui/toast-store';
 import { filterSlashItems, SLASH_ITEMS } from './items';
@@ -66,7 +74,11 @@ export function useEditorSuggest(): EditorSuggest {
 
   const close = useCallback(() => {
     const cur = activeRef.current;
-    if (cur !== null) closeSuggest(cur.view, cur.kind);
+    // `isDestroyed` — не перестраховка: закрытие зовут и обработчики жизненного цикла
+    // (уход фокуса), а blur прилетает в том числе при сносе редактора — диспатч в
+    // уничтоженный view упал бы необработанной ошибкой прогона при зелёных ассертах
+    // (та же ловушка, что у эффекта в BodyEditor).
+    if (cur !== null && !cur.view.isDestroyed) closeSuggest(cur.view, cur.kind);
   }, []);
 
   return { extensions, active, live: activeRef, handleRef, close };
@@ -85,6 +97,58 @@ export function SuggestMenu({
 }) {
   const { active, live, handleRef, close } = suggest;
   const { show } = useToast();
+  const open = active !== null;
+  // Счётчик перерисовки, а не хранимые координаты: единственный источник правды о позиции —
+  // живая `active.rect()`, и держать рядом её копию значило бы завести второй источник,
+  // который разъедется при первой же прокрутке между тиком и рендером.
+  const [, repaint] = useReducer((n: number) => n + 1, 0);
+
+  /**
+   * Жизненный цикл меню. Плагин `@tiptap/suggestion` пересчитывает своё состояние ТОЛЬКО на
+   * транзакциях редактора — ни `blur`, ни `handleDOMEvents` у него нет (проверено по
+   * dist/index.js). Значит, всё, что происходит МИМО документа, обязаны закрыть мы сами:
+   * клик по сайдбару транзакции не даёт, и панель `fixed z-50` осталась бы висеть поверх
+   * всего приложения на координатах момента открытия.
+   *
+   * Прокрутка и смена размера окна документ тоже не трогают — на них меню не закрывается, а
+   * ПЕРЕСЧИТЫВАЕТСЯ: каретка на месте, уехала только её проекция на экран.
+   */
+  useEffect(() => {
+    if (!open) return;
+    const onOutside = (e: Event) => {
+      const el = e.target as HTMLElement | null;
+      // Клик по самому меню — это выбор строки, а не уход: закрыть его здесь значило бы
+      // снять меню раньше, чем сработает `onMouseDown` строки (слушатель в capture-фазе
+      // приходит первым).
+      if (el?.closest('[data-suggest-menu]')) return;
+      // Клик по телу редактора закрывает меню САМ — сменой каретки, то есть транзакцией.
+      // Перебивать это здесь незачем, а вредно: клик по уже набранному `/` не должен
+      // гасить только что открытое меню.
+      if (editor !== null && el !== null && editor.view.dom.contains(el)) return;
+      close();
+    };
+    const onMove = () => repaint();
+    // Прокрутка не всплывает — слушаем в capture-фазе, иначе прокрутка ЛЮБОГО контейнера
+    // (а тело записи живёт внутри скроллящегося экрана) до окна не доедет.
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    document.addEventListener('pointerdown', onOutside, true);
+    return () => {
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+      document.removeEventListener('pointerdown', onOutside, true);
+    };
+  }, [open, editor, close]);
+
+  // Уход фокуса — отдельный сигнал, а не дубль клика снаружи: фокус уводят и табом, и
+  // программно, и ни одно из этих событий указателем не сопровождается.
+  useEffect(() => {
+    if (!open || editor === null) return;
+    editor.on('blur', close);
+    return () => {
+      editor.off('blur', close);
+    };
+  }, [open, editor, close]);
   const term = active?.kind === 'mention' ? active.query : '';
   // Поле входа — `term` (контракт entitySuggestInput): не `prefix` (сопоставление идёт по
   // ВХОЖДЕНИЮ) и не `query` — это слово в кодовой базе занято смарт-листами.
@@ -178,13 +242,15 @@ export function SuggestMenu({
   }
 
   if (active === null) return null;
+  // Координаты берутся ЗАНОВО на каждый рендер — в том числе на тот, что вызвала прокрутка.
+  const rect = active.rect();
   return (
     <SlashMenu
       ref={handleRef}
       rows={rows}
       onPick={(id) => void pick(id)}
       onClose={close}
-      coords={{ left: active.rect?.left ?? 0, top: active.rect?.bottom ?? 0 }}
+      coords={{ left: rect?.left ?? 0, top: rect?.bottom ?? 0 }}
     />
   );
 }

@@ -123,6 +123,12 @@ function inline(editor: Editor | null): { type?: string; attrs?: Record<string, 
   return first?.content ?? [];
 }
 
+/** Текст блока верхнего уровня по номеру — та же причина отдельного помощника, что у `inline`. */
+function blockText(editor: Editor | null, index: number): string | undefined {
+  const block = editor?.getJSON().content?.[index] as { content?: { text?: string }[] } | undefined;
+  return block?.content?.[0]?.text;
+}
+
 const rows = () => screen.getAllByRole('option').map((o) => o.textContent ?? '');
 const activeRow = () =>
   screen.getAllByRole('option').find((o) => o.getAttribute('aria-selected') === 'true')
@@ -253,6 +259,34 @@ test('«Смарт-лист» вставляет БЛОК в позицию ка
   // лишь на запрос нового блока.
   expect(await screen.findByTestId('qb-item')).toHaveTextContent('Разобрать почту');
   expect(screen.queryByTestId('qb-error')).toBeNull();
+});
+
+test('«Смарт-лист» встаёт ПОСЛЕ абзаца с кареткой, а не в конце документа', async () => {
+  // Раунд правок 1 (М-1). На теле из ОДНОГО абзаца ассерт `['paragraph','queryBlock']` не
+  // различает вставку в позицию каретки и дописывание в конец документа — оба дают одно и
+  // то же. Различает только тело, у которого после каретки ЕЩЁ ЧТО-ТО есть.
+  const { h } = await mountEditor('первый\n\nвторой', api({ byQuery: { [NEW_QUERY_BLOCK]: [] } }));
+  // Каретка — в конец ПЕРВОГО абзаца: он занимает позиции 1..7 («первый» — шесть символов).
+  h.editor?.commands.focus(7);
+  await userEvent.keyboard(' /смарт');
+  await screen.findByTestId('slash-menu');
+  await userEvent.keyboard('{Enter}');
+
+  await waitFor(() =>
+    expect(h.editor?.getJSON().content?.map((n) => n.type)).toEqual([
+      'paragraph',
+      'queryBlock',
+      'paragraph',
+    ]),
+  );
+  // Стражи вакуумности: блок — ТОТ САМЫЙ (а не пустая нода), первый абзац лишился `/смарт`,
+  // а второй цел и стоит ПОСЛЕ блока. Иначе равенство типов выше можно было бы получить и
+  // разрушив документ. Сверка по дереву, а не по `getText()`: queryBlock — атом, и в
+  // текстовой проекции он оборачивается разделителями блоков.
+  const content = h.editor?.getJSON().content ?? [];
+  expect(content[1]?.attrs?.query).toBe(NEW_QUERY_BLOCK);
+  expect(blockText(h.editor, 0)).toBe('первый ');
+  expect(blockText(h.editor, 2)).toBe('второй');
 });
 
 test('«Ссылка на сущность» передаёт набор в `@`-поиск, а не заводит свой пикер', async () => {
@@ -478,6 +512,150 @@ test('клавиши меню идут через suggestion, а не через
     window.removeEventListener('keydown', watcher);
     outside.remove();
   }
+});
+
+test('стрелки ходят ПО КРУГУ: вверх с первой строки — на последнюю', async () => {
+  // Раунд правок 1 (М-2). Ветка ArrowUp — единственная арифметика с оборачиванием во всём
+  // меню, и до этого теста её не проверяло ничто. Список из трёх строк (`/заг`) выбран
+  // затем, что круг на нём виден целиком.
+  await mountEditor('привет', api({}));
+  await userEvent.keyboard(' /заг');
+  await screen.findByTestId('slash-menu');
+  expect(rows()).toEqual(['Заголовок 1', 'Заголовок 2', 'Заголовок 3']);
+  expect(activeRow()).toBe('Заголовок 1');
+
+  await userEvent.keyboard('{ArrowUp}');
+  await waitFor(() => expect(activeRow()).toBe('Заголовок 3')); // через край назад
+  await userEvent.keyboard('{ArrowUp}');
+  await waitFor(() => expect(activeRow()).toBe('Заголовок 2')); // и дальше просто вверх
+
+  // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: вниз через край — обратно на первую.
+  await userEvent.keyboard('{ArrowDown}{ArrowDown}');
+  await waitFor(() => expect(activeRow()).toBe('Заголовок 1'));
+});
+
+test('выбранная строка прокручивается в видимую область', async () => {
+  // Раунд правок 1 (М-3). Панель ограничена по высоте и скроллится, а пунктов двенадцать:
+  // без прокрутки строки ниже восьмой выбирались бы стрелкой ЗА КРАЕМ панели, и обещание
+  // «набрал → стрелка → Enter» держалось бы только для верхней трети меню.
+  // `scrollIntoView` в jsdom не реализован вовсе — подставляем его сами и следим за вызовом.
+  const scrolled: (string | null)[] = [];
+  const proto = HTMLElement.prototype as unknown as { scrollIntoView?: () => void };
+  const had = 'scrollIntoView' in proto;
+  proto.scrollIntoView = function scrollIntoView(this: HTMLElement) {
+    scrolled.push(this.textContent);
+  };
+  try {
+    await mountEditor('привет', api({}));
+    await userEvent.keyboard(' /');
+    await screen.findByTestId('slash-menu');
+    scrolled.length = 0;
+
+    await userEvent.keyboard('{ArrowDown}');
+    await waitFor(() => expect(activeRow()).toBe('Заголовок 2'));
+    // Прокручена ИМЕННО ставшая активной строка, а не первая попавшаяся.
+    expect(scrolled.at(-1)).toBe('Заголовок 2');
+
+    // Положительный контроль: край списка тоже доезжает — стрелка вверх с первой строки
+    // уводит выбор на ПОСЛЕДНИЙ пункт, тот самый, что и не влезает в панель.
+    await userEvent.keyboard('{ArrowUp}{ArrowUp}');
+    await waitFor(() => expect(activeRow()).toBe('Ссылка на сущностьили @'));
+    expect(scrolled.at(-1)).toBe('Ссылка на сущностьили @');
+  } finally {
+    if (!had) proto.scrollIntoView = undefined;
+  }
+});
+
+// --- жизненный цикл меню: всё, что происходит МИМО документа ----------------------------------
+
+test('клик мимо редактора закрывает меню, а клик по самому меню — нет', async () => {
+  // Раунд правок 1 (И-1). Плагин пересчитывает состояние ТОЛЬКО на транзакциях редактора
+  // (ни blur, ни handleDOMEvents у него нет), а клик по сайдбару транзакции не даёт: панель
+  // `fixed z-50` осталась бы висеть поверх всего приложения до возвращения в редактор.
+  const outside = document.createElement('button');
+  outside.textContent = 'снаружи';
+  document.body.appendChild(outside);
+  try {
+    const { h } = await mountEditor('привет', api({}));
+    await userEvent.keyboard(' /');
+    await screen.findByTestId('slash-menu');
+
+    // Клик ПО МЕНЮ меню не закрывает — иначе выбор строки мышью был бы невозможен: страж
+    // висит в capture-фазе и приходит РАНЬШЕ обработчика строки.
+    fireEvent.pointerDown(screen.getAllByRole('option')[0] as HTMLElement);
+    await new Promise((res) => setTimeout(res, 30));
+    expect(screen.getByTestId('slash-menu')).toBeInTheDocument();
+
+    fireEvent.pointerDown(outside);
+    await waitFor(() => expect(screen.queryByTestId('slash-menu')).toBeNull());
+    // Закрытие — не правка: набранное осталось текстом (тот же путь, что у Esc).
+    expect(h.editor?.getJSON().content?.map((n) => n.type)).toEqual(['paragraph']);
+    expect(h.editor?.getText()).toBe('привет /');
+  } finally {
+    outside.remove();
+  }
+});
+
+test('уход фокуса из редактора закрывает меню', async () => {
+  // Фокус уводят и табом, и программно — указателя при этом нет вовсе, и страж «клик
+  // снаружи» такого ухода не увидел бы.
+  const { h, area } = await mountEditor('привет', api({}));
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+
+  h.editor?.commands.blur();
+  await waitFor(() => expect(screen.queryByTestId('slash-menu')).toBeNull());
+  expect(h.editor?.getText()).toBe('привет /');
+
+  // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: механизм жив — вернулись в редактор, и меню
+  // снова открывается. Без него «меню закрылось» было бы правдой и у мёртвого меню.
+  //
+  // Возвращаемся КЛИКОМ, а не одним `commands.focus`: после снятия фокуса user-event
+  // перестаёт доставлять набор в contenteditable, пока указатель не побывал в нём снова
+  // (замерено — без клика второй `/` не доезжает вовсе, абзац остаётся прежним). Это ровно
+  // тот же порядок, что и при монтировании.
+  await userEvent.click(area);
+  h.editor?.commands.focus('end');
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+});
+
+test('прокрутка не закрывает меню, а пересчитывает его координаты', async () => {
+  // Каретка на месте — уехала только её проекция на экран. В jsdom вся геометрия нулевая
+  // (tests/prosemirror-polyfill.ts), поэтому прямоугольник узла декорации подменяем сами:
+  // без подмены сверять было бы нечего, и тест был бы зелен при любой реализации.
+  let top = 100;
+  const real = Element.prototype.getBoundingClientRect;
+  vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    return this.matches('[data-decoration-id]')
+      ? ({
+          left: 40,
+          bottom: top,
+          top,
+          right: 40,
+          width: 0,
+          height: 0,
+          x: 40,
+          y: top,
+          toJSON: () => ({}),
+        } as DOMRect)
+      : real.call(this);
+  });
+
+  await mountEditor('привет', api({}));
+  await userEvent.keyboard(' /');
+  const menu = await screen.findByTestId('slash-menu');
+  // Страж вакуумности: узел декорации в дереве ЕСТЬ, значит подмена вообще работает, и
+  // координаты приехали именно из неё.
+  expect(document.querySelector('[data-decoration-id]')).not.toBeNull();
+  expect(menu.style.top).toBe('100px');
+  expect(menu.style.left).toBe('40px');
+
+  top = 20; // страница прокрутилась — каретка уехала вверх
+  fireEvent.scroll(window);
+  await waitFor(() => expect(screen.getByTestId('slash-menu').style.top).toBe('20px'));
+  // И меню при этом ОСТАЛОСЬ открытым: прокрутка — не уход, закрывать её нечем.
+  expect(screen.getByTestId('slash-menu')).toBeInTheDocument();
 });
 
 // --- плейсхолдер ------------------------------------------------------------------------------
