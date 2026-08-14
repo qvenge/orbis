@@ -1,4 +1,4 @@
-import type { JSONContent } from '@tiptap/core';
+import { getSchema, type JSONContent } from '@tiptap/core';
 import { OrbisMarkdownManager } from './manager';
 import { BODY_REF_RE } from './nodes/entity-ref';
 import { DOC_EXTENSIONS } from './schema';
@@ -10,6 +10,14 @@ let manager: OrbisMarkdownManager | null = null;
 function md(): OrbisMarkdownManager {
   manager ??= new OrbisMarkdownManager({ extensions: DOC_EXTENSIONS });
   return manager;
+}
+
+// Схема ProseMirror строится из тех же DOC_EXTENSIONS и тоже ОДИН РАЗ: построение стоит ~2.5 мс,
+// сама проверка — единицы микросекунд (замерено), так что на горячем пути ощутима только сборка.
+let schema: ReturnType<typeof getSchema> | null = null;
+function pmSchema(): ReturnType<typeof getSchema> {
+  schema ??= getSchema(DOC_EXTENSIONS);
+  return schema;
 }
 
 function docOf(input: BodyDoc | JSONContent): JSONContent {
@@ -174,6 +182,35 @@ export function bodyRefsFromDoc(input: BodyDoc | JSONContent): string[] {
   };
   walk(docOf(input));
   return [...refs];
+}
+
+/**
+ * Документ ли это по схеме Orbis? Возвращает ПРИЧИНУ непригодности или undefined.
+ *
+ * Единственная честная проверка структуры: спрашивает прямо у схемы, а не по косвенным следам.
+ * Косвенный признак «проекция пуста» на этой роли не годится — в пустую строку законно
+ * сериализуются пустой абзац, пустой ЗАГОЛОВОК, абзац с одним hardBreak и абзац из пробелов
+ * (замерено), и перечислять «какие ноды бывают пустыми» бессмысленно: список неизвестен по
+ * построению и будет отставать от схемы.
+ *
+ * Ловит: неизвестную ноду и марку, text-узел без `text` (и с пустым `text`), нарушенную
+ * вложенность на ЛЮБОЙ глубине (`check()` рекурсивен) и пустой `content` у `doc` (топ-узел
+ * объявлен `block+` — см. emptyDoc выше).
+ *
+ * ВАЖНО для вызывающего: это проверка, а НЕ нормализация. Обратно писать `node.toJSON()`
+ * нельзя — он теряет незнакомые схеме атрибуты, а именно так живут блочные id (UniqueID
+ * работает только в редакторе и в DOC_EXTENSIONS его нет). Проверено: `attrs.id` проходит
+ * валидацию, но исчезает из `toJSON()`. Хранить нужно ВХОД.
+ */
+export function bodyDocError(input: BodyDoc | JSONContent): string | undefined {
+  try {
+    pmSchema()
+      .nodeFromJSON(docOf(input) as never)
+      .check();
+    return undefined;
+  } catch (e) {
+    return e instanceof Error ? e.message : String(e);
+  }
 }
 
 /**

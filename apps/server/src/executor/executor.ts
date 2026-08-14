@@ -21,6 +21,7 @@ import {
 // Конверсия тела живёт в @orbis/shared/doc — ОДИН экземпляр правил разбора и сериализации
 // на сервер и клиент; своей копии у executor'а нет и быть не должно.
 import {
+  bodyDocError,
   bodyRefsFromDoc,
   canonicalizeBody,
   DOC_SCHEMA_VERSION,
@@ -969,22 +970,6 @@ async function prepareEntityCreate(
 // entity_update
 // ---------------------------------------------------------------------------
 
-/**
- * «Документ пуст» = ни одного узла, кроме пустых абзацев. Только такой документ вправе давать
- * пустую проекцию: именно его шлёт редактор, когда пользователь стёр тело. Всё остальное,
- * сериализовавшееся в '', — сломанная форма, а не пустое тело.
- *
- * Проверка структурная НАМЕРЕННО: моделировать здесь ноды нельзя (их знает схема
- * @orbis/shared/doc, и вторая модель разъехалась бы с ней при первой же новой ноде).
- */
-function docIsBlank(content: Array<Record<string, unknown>>): boolean {
-  return content.every(
-    (node) =>
-      node.type === 'paragraph' &&
-      (node.content === undefined || (Array.isArray(node.content) && node.content.length === 0)),
-  );
-}
-
 async function prepareEntityUpdate(
   ctx: ExecCtx,
   rawInput: unknown,
@@ -1137,17 +1122,25 @@ async function prepareEntityUpdate(
         { id: input.id, expected: DOC_SCHEMA_VERSION, got: input.bodyDoc.v },
       );
     }
-    const body = serializeBody(input.bodyDoc);
-    // Пустая проекция при НЕПУСТОМ документе — сломанная форма: serializeBody исключения не
-    // бросает, он молча отдаёт ''. Без этой проверки запись обнулила бы и body, и body_refs,
-    // а в body_doc остался бы тот же мусор — readBodyDoc пропускает его по версии, так что
-    // обе формы терялись бы с 200 OK. Пустые абзацы исключены НАМЕРЕННО: очистка тела
-    // редактором приходит именно так и тоже даёт '' (проверено пробой).
-    if (body === '' && !docIsBlank(input.bodyDoc.doc.content)) {
-      throw new ExecError('VALIDATION', 'документ не сериализуется в тело — правка отклонена', {
+    // Структурная целость — вопросом К СХЕМЕ, а не по косвенному следу «проекция пуста».
+    // serializeBody исключения не бросает: на сломанном документе он молча отдаёт '', и запись
+    // обнулила бы body вместе с body_refs, оставив в body_doc тот же мусор (readBodyDoc
+    // пропускает его по версии) — обе формы терялись бы с 200 OK. Но пустая проекция — лишь
+    // СЛЕД поломки, а не она сама: в '' законно сериализуются и пустой заголовок, и абзац с
+    // одним hardBreak, и пробельный абзац, так что гейт по этому признаку отвергал бы штатные
+    // состояния редактора (заметка из одного заголовка, у которого стёрли текст, не
+    // сохранялась бы ВООБЩЕ). Спрашиваем прямо то, что хотим знать.
+    const docError = bodyDocError(input.bodyDoc);
+    if (docError !== undefined) {
+      throw new ExecError('VALIDATION', 'документ не соответствует схеме — правка отклонена', {
         id: input.id,
+        reason: docError,
       });
     }
+    const body = serializeBody(input.bodyDoc);
+    // В БД едет ВХОД, а не результат валидации: nodeFromJSON().toJSON() теряет незнакомые схеме
+    // атрибуты, а блочные id живут именно так (UniqueID — расширение редактора, в
+    // DOC_EXTENSIONS его нет). Проверено пробой.
     patch.bodyDoc = input.bodyDoc;
     patch.body = body;
     patch.bodyRefs = bodyRefsFromDoc(input.bodyDoc);

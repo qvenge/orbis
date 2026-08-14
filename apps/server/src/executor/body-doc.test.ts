@@ -227,8 +227,10 @@ describe('канон: body в БД — производная документа
   });
 });
 
-describe('сломанный документ не стирает тело молча (раунд правок 1)', () => {
-  /** Правка bodyDoc поверх непустого тела: у неудачи должно быть что терять. */
+describe('структурная целость документа — вопросом К СХЕМЕ (раунд правок 2)', () => {
+  const BROKEN_MESSAGE = 'документ не соответствует схеме — правка отклонена';
+
+  /** Правка bodyDoc поверх непустого тела со ссылкой: у неудачи должно быть что терять. */
   async function tryDoc(doc: unknown) {
     const { entity, owner } = await createOne(`исходное тело [[entity:${UUID}]]`);
     const r = await execute(
@@ -242,59 +244,78 @@ describe('сломанный документ не стирает тело мо�
     return { r, row: await rowOf(entity.id) };
   }
 
+  /** Отказ ИМЕННО от схемы: код + дословный текст. Голого кода мало — см. докблок err(). */
+  async function expectRejected(doc: unknown) {
+    const { r, row } = await tryDoc(doc);
+    expect(err(r)).toEqual({ code: 'VALIDATION', message: BROKEN_MESSAGE });
+    // Ни одна из форм не тронута — отказ случился до записи.
+    expect(row.body).toBe(`исходное тело [[entity:${UUID}]]`);
+    expect(row.body_refs).toEqual([UUID]);
+    return r;
+  }
+
   test('документ из одной неизвестной ноды — VALIDATION, тело и ссылки целы', async () => {
     // serializeBody исключения не бросает: он молча отдаёт ''. Без гейта запись обнулила бы
     // и body, и body_refs, а в body_doc остался бы тот же мусор — readBodyDoc пропускает его
     // по версии, так что обе формы терялись бы с 200 OK.
-    const { r, row } = await tryDoc({ type: 'doc', content: [{ type: 'НЕТ_ТАКОЙ_НОДЫ' }] });
-    expect(err(r).code).toBe('VALIDATION');
-    expect(row.body).toBe(`исходное тело [[entity:${UUID}]]`);
-    expect(row.body_refs).toEqual([UUID]);
+    await expectRejected({ type: 'doc', content: [{ type: 'НЕТ_ТАКОЙ_НОДЫ' }] });
   });
 
   test('text-нода без text — VALIDATION, тело цело', async () => {
-    const { r, row } = await tryDoc({
+    await expectRejected({
       type: 'doc',
       content: [{ type: 'paragraph', content: [{ type: 'text' }] }],
     });
-    expect(err(r).code).toBe('VALIDATION');
-    expect(row.body).toBe(`исходное тело [[entity:${UUID}]]`);
   });
 
-  test('ОЧИСТКА тела пустым абзацем разрешена — это не поломка', async () => {
-    // Граница гейта. Пустой абзац — ровно то, что шлёт редактор, когда пользователь стёр
-    // тело, и он тоже сериализуется в ''. Гейт «пустая проекция = отказ» запретил бы самую
-    // обычную операцию редактора (проверено пробой: [] и пустые абзацы дают '' законно).
-    const { entity, owner } = await createOne('было тело');
-    const r = await execute(
-      db,
-      req(
-        'entity_update',
-        {
-          id: entity.id,
-          bodyDoc: { v: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
-          expectedUpdatedAt: entity.updatedAt,
-        },
-        owner,
-      ),
-    );
-    okFirst(r);
-    const row = await rowOf(entity.id);
-    expect(row.body).toBe('');
-    expect(row.body_refs).toEqual([]);
-    expect(firstNodeType(row)).toBe('paragraph');
+  test('нарушенная вложенность ловится на ЛЮБОЙ глубине', async () => {
+    // check() рекурсивен — перечислением верхнего уровня это не поймать.
+    await expectRejected({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'paragraph' }] }],
+    });
   });
 
-  test('частичная потеря терпима: правда остаётся в body_doc дословно', async () => {
-    // Осознанная граница: незнакомая нода выпадает из ПРОЕКЦИИ, но документ ложится в БД
-    // как прислан, поэтому правда цела и восстановима. Отказывать здесь значило бы ронять
-    // сохранение из-за любой мелочи схемы.
-    const { entity, owner } = await createOne('было');
-    const doc = {
+  test('неизвестная МАРКА тоже отвергается', async () => {
+    await expectRejected({
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'x', marks: [{ type: 'НЕТ' }] }] },
+      ],
+    });
+  });
+
+  test('документ БЕЗ узлов (content: []) отвергается — топ-узел объявлен block+', async () => {
+    // Согласовано с Задачей 2: emptyDoc() именно поэтому делает один абзац, а не пустой список
+    // (convert.ts). Редактор такой документ и не производит — ProseMirror его не удержит.
+    // Zod-сетка его пропускает (она про форму, не про схему), отвергает валидация.
+    await expectRejected({ type: 'doc', content: [] });
+  });
+
+  test('незнакомая схеме нода отвергается ДАЖЕ при частично годном теле', async () => {
+    // Смена границы раунда 2. Раньше этот класс проходил: проекция была непустой
+    // ("важный текст\n\n"), гейт по пустоте молчал, и документ ложился с нодой, которой сервер
+    // не знает. Схема отвергает его целиком — и это строже намеренно: тихо сохранить половину
+    // документа хуже, чем отказать. Версионный перекос сюда не попадает — его ловит гейт версии.
+    await expectRejected({
       type: 'doc',
       content: [
         { type: 'paragraph', content: [{ type: 'text', text: 'важный текст' }] },
         { type: 'НЕТ_ТАКОЙ_НОДЫ' },
+      ],
+    });
+  });
+
+  test('незнакомые схеме АТРИБУТЫ проходят и доезжают до БД дословно', async () => {
+    // Решающее для редактора: блочные id даёт UniqueID, а он живёт только в редакторе и в
+    // DOC_EXTENSIONS его НЕТ. Схема такие атрибуты пропускает, но nodeFromJSON().toJSON() их
+    // теряет — поэтому в БД обязан ехать ВХОД. Отвергни схема attrs.id — не сохранялось бы
+    // вообще ничего; запиши мы toJSON() — молча пропадали бы id блоков.
+    const { entity, owner } = await createOne('было');
+    const doc = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', attrs: { id: 'blk-1' }, content: [{ type: 'text', text: 'текст' }] },
       ],
     };
     okFirst(
@@ -308,8 +329,77 @@ describe('сломанный документ не стирает тело мо�
       ),
     );
     const row = await rowOf(entity.id);
-    expect(row.body).toBe('важный текст\n\n');
-    expect(row.body_doc).toEqual({ v: 1, doc });
+    expect(row.body_doc).toEqual({ v: 1, doc }); // attrs.id на месте
+    expect(row.body).toBe('текст');
+  });
+});
+
+describe('все законные формы пустоты сохраняются (раунд правок 2)', () => {
+  // Сквозная граница гейта. Каждая из этих форм сериализуется в '' (замерено), и гейт по
+  // признаку «пустая проекция» отверг бы четыре из пяти. Худший случай был не транзиентным, а
+  // ЗАЛИПАЮЩИМ: у заметки из одного заголовка стёрли текст — нода heading остаётся, документ
+  // даёт '', и каждое автосохранение возвращало бы отказ, пока человек не снесёт блок.
+  const BLANK_FORMS: Array<[string, unknown]> = [
+    ['один пустой абзац', [{ type: 'paragraph' }]],
+    ['пустой абзац с content: []', [{ type: 'paragraph', content: [] }]],
+    ['несколько пустых абзацев', [{ type: 'paragraph' }, { type: 'paragraph' }]],
+    ['ПУСТОЙ ЗАГОЛОВОК (стёрли текст заголовка)', [{ type: 'heading', attrs: { level: 1 } }]],
+    [
+      'абзац с одним hardBreak (Shift+Enter)',
+      [{ type: 'paragraph', content: [{ type: 'hardBreak' }] }],
+    ],
+    [
+      'абзац из пробельного текста',
+      [{ type: 'paragraph', content: [{ type: 'text', text: '   ' }] }],
+    ],
+  ];
+
+  for (const [name, content] of BLANK_FORMS) {
+    test(`${name} — сохраняется, тело пустеет`, async () => {
+      const { entity, owner } = await createOne(`было тело [[entity:${UUID}]]`);
+      const r = await execute(
+        db,
+        req(
+          'entity_update',
+          {
+            id: entity.id,
+            bodyDoc: { v: 1, doc: { type: 'doc', content } },
+            expectedUpdatedAt: entity.updatedAt,
+          },
+          owner,
+        ),
+      );
+      okFirst(r);
+      const row = await rowOf(entity.id);
+      expect(row.body.trim()).toBe('');
+      expect(row.body_refs).toEqual([]);
+      // Документ лёг дословно — пустота сохранена как форма, а не «починена» сервером.
+      expect(row.body_doc).toEqual({ v: 1, doc: { type: 'doc', content } });
+    });
+  }
+
+  test('повторное сохранение той же пустоты не залипает (автосейв не долбит отказом)', async () => {
+    // Регрессия на залипающий сценарий: второе автосохранение того же состояния обязано пройти.
+    const { entity, owner } = await createOne('# Заголовок');
+    const doc = { type: 'doc', content: [{ type: 'heading', attrs: { level: 1 } }] };
+    const first = await execute(
+      db,
+      req(
+        'entity_update',
+        { id: entity.id, bodyDoc: { v: 1, doc }, expectedUpdatedAt: entity.updatedAt },
+        owner,
+      ),
+    );
+    const afterFirst = okFirst(first);
+    const second = await execute(
+      db,
+      req(
+        'entity_update',
+        { id: entity.id, bodyDoc: { v: 1, doc }, expectedUpdatedAt: afterFirst.updatedAt },
+        owner,
+      ),
+    );
+    expect(okFirst(second).body).toBe('');
   });
 });
 
@@ -342,7 +432,13 @@ describe('версия документа сверяется НА ЗАПИСИ (
         owner,
       ),
     );
-    expect(err(r).code).toBe('VALIDATION');
+    // Причина сверяется дословно: отказ обязан быть ПО ВЕРСИИ, а не потому что схема не
+    // узнала ноду callout. Иначе тест выродился бы в дубль структурной проверки и перестал
+    // охранять гейт версии.
+    expect(err(r)).toEqual({
+      code: 'VALIDATION',
+      message: 'документ другой версии схемы: перезагрузите приложение и повторите правку',
+    });
     const row = await rowOf(entity.id);
     expect(row.body).toBe('исходное тело');
     expect(row.body_doc).toEqual({
