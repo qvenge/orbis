@@ -30,6 +30,13 @@ export const entities = pgTable('entities', {
   emoji: text('emoji'),
   body: text('body').notNull().default(''),
   bodyRefs: text('body_refs').array().notNull().default(sql`'{}'`),
+  /**
+   * Структурная правда тела: `{ v, doc }` (см. @orbis/shared/doc). NULL означает «ещё не
+   * сконвертировано» — тела, созданные до этой работы: сервер конвертирует их лениво при первом
+   * чтении. `body` остаётся NOT NULL и служит проекцией И аварийным дублем (ProseMirror молча
+   * выбрасывает незнакомые схеме узлы).
+   */
+  bodyDoc: jsonb('body_doc'),
   tags: text('tags').array().notNull().default(sql`'{}'`),
   meta: jsonb('meta').notNull().default({}),
   aspects: jsonb('aspects').notNull().default({}),

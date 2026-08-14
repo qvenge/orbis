@@ -16,6 +16,7 @@
 //   bun scripts/ops.ts seed-aspects   # upsert встроенных аспектов (идемпотентно)
 //   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
 //   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
+//   bun scripts/ops.ts backfill-body-doc  # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
 //   bun scripts/ops.ts issue-pat <owner-uuid> [метка]   # headless-токен агента (§9.3)
 import { join } from 'node:path';
@@ -25,6 +26,7 @@ import type { JSONContent } from '@tiptap/core';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
+import { backfillBodyDoc, drizzleBackfillIo } from '../apps/server/src/db/backfill-body-doc';
 import * as schema from '../apps/server/src/db/schema';
 import { issuePatGrant } from '../apps/server/src/oauth/grants';
 
@@ -300,6 +302,32 @@ async function auditBodies(): Promise<number> {
   });
 }
 
+/**
+ * Разовая конверсия тел в структурную форму (`entities.body_doc`) — ЕДИНСТВЕННАЯ пишущая
+ * операция белого списка, которая трогает пользовательские данные.
+ *
+ * Порядок на проде жёсткий: сперва `migrate` (колонки без неё нет), потом READ-ONLY
+ * `audit-bodies` — и только если его числа приемлемы, эта команда. Аудит для того и заведён:
+ * заметная доля raw-блоков или ненулевые «ссылки внутри raw» означают, что до конверсии надо
+ * расширять белые списки токенов, а не запускать бэкфилл. Откатывать нечем.
+ *
+ * Идемпотентна: берёт только строки с `body_doc IS NULL`, поэтому повторный запуск не делает
+ * ничего. Пишет ОБЕ колонки — `body` тоже выравнивается до канона, иначе инвариант
+ * «body === serializeBody(body_doc)» ломался бы на самом первом шаге.
+ *
+ * Ни цикл, ни SQL здесь не дублируются: сырой пул `withDb` оборачивается в drizzle (так же, как
+ * в migrateOp и issuePat выше) и отдаётся тому же `drizzleBackfillIo`, который прогоняет тест.
+ * Дословная вторая копия цикла осталась бы непокрытой и разошлась бы с проверенной на первой же
+ * правке (ревью И16).
+ */
+async function backfillBodyDocOp(): Promise<number> {
+  return withDb(async (sql) => {
+    const done = await backfillBodyDoc(drizzleBackfillIo(drizzle(sql, { schema })));
+    console.log(`сконвертировано тел: ${done}`);
+    return 0;
+  });
+}
+
 async function ping(): Promise<number> {
   await withDb(async (sql) => {
     const [row] = await sql<{ version: string }[]>`SELECT version()`;
@@ -371,6 +399,10 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
     run: auditBodies,
     help: 'только чтение: агрегаты по корпусу тел перед конверсией (тела не печатаются)',
   },
+  'backfill-body-doc': {
+    run: backfillBodyDocOp,
+    help: 'конверсия тел в body_doc + выравнивание body до канона; ТОЛЬКО после audit-bodies',
+  },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   'issue-pat': {
     run: issuePat,
@@ -382,7 +414,7 @@ const name = process.argv[2];
 const op = name === undefined ? undefined : OPS[name];
 if (!op) {
   const list = Object.entries(OPS)
-    .map(([k, v]) => `  ${k.padEnd(13)} — ${v.help}`)
+    .map(([k, v]) => `  ${k.padEnd(17)} — ${v.help}`)
     .join('\n');
   console.error(
     (name === undefined ? 'ops: операция не указана.' : `ops: неизвестная операция «${name}».`) +
