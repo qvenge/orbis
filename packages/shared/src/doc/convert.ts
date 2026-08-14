@@ -1,8 +1,6 @@
 import type { JSONContent } from '@tiptap/core';
-import { marked } from 'marked';
 import { OrbisMarkdownManager } from './manager';
 import { BODY_REF_RE } from './nodes/entity-ref';
-import { QUERY_BLOCK_CLOSE } from './nodes/query-block';
 import { DOC_EXTENSIONS } from './schema';
 import { type BodyDoc, DOC_SCHEMA_VERSION } from './types';
 
@@ -32,9 +30,17 @@ const KNOWN_BLOCK = new Set([
   'paragraph',
   'heading',
   'list',
+  // Свои токены: лексер менеджера отдаёт их наравне со штатными, и не будь их здесь, каждый
+  // смарт-лист и каждая запись со ссылкой уезжали бы в raw.
+  'queryBlock',
   // list_item — обязателен: элементы списка лежат в items и несут собственные tokens, и без
-  // него КАЖДЫЙ список, включая чеклисты, уходил в raw целиком (проверено пробой).
+  // него КАЖДЫЙ список уходил в raw целиком (проверено пробой).
   'list_item',
+  // Чеклист у лексера менеджера — СВОИ типы (их даёт markdown-спека @tiptap/extension-list),
+  // а не list/list_item с токеном checkbox, как у голого marked. Без них чеклист уезжал в raw,
+  // и приёмка «канон равен входу» это не ловила: raw отдаёт вход дословно.
+  'taskList',
+  'taskItem',
   'blockquote',
   'code',
   'table',
@@ -51,9 +57,7 @@ const KNOWN_INLINE = new Set([
   'link',
   'br',
   'escape',
-  // checkbox — маркер `[ ]`/`[x]` внутри list_item; его разбирает TaskItem. Без него чеклист
-  // уезжал в raw, а приёмка «канон равен входу» это не ловила: raw отдаёт вход дословно.
-  'checkbox',
+  'entityRef', // свой инлайн-токен, см. queryBlock выше
 ]);
 
 type Cell = { tokens?: Tok[] };
@@ -77,7 +81,12 @@ function blockIsKnown(token: Tok): boolean {
   // Ячейки таблицы GFM лежат не в tokens/items, а в header/rows. Без их обхода таблица всегда
   // считалась «понятой», и картинка в ячейке молча пропадала при сериализации (проверено).
   const cells = [...(token.header ?? []), ...(token.rows ?? []).flat()];
-  if (!cells.every((cell) => walk(cell.tokens))) return false;
+  const cellIsKnown = (cell: Cell): boolean =>
+    // Черта внутри ячейки — граница столбца, и обратно её сериализатор таблицы не экранирует:
+    // `x \| y` при повторном разборе разваливается на две ячейки. Это единственное найденное
+    // нарушение инварианта канона, и лечится оно так же, как картинка, — уходом в raw.
+    !(cell.tokens ?? []).some((t) => t.raw.includes('|')) && walk(cell.tokens);
+  if (!cells.every(cellIsKnown)) return false;
   return walk(token.tokens ?? token.items);
 }
 
@@ -89,58 +98,52 @@ function rawDoc(markdown: string): BodyDoc {
   return { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [rawNode(markdown)] } };
 }
 
-/** Полная обёртка смарт-листа. Сегменты вырезаются ДО прогона marked: лексер не знает нашу
- *  грамматику и порезал бы многострочный блок по своим правилам. Тот же принцип «start только
- *  по полному совпадению», что спас спайк от разрезанных абзацев. */
-const QUERY_SEGMENT_RE = /\{\{query:[\s\S]*?\}\}/g;
-const QUERY_OPEN = '{{query:';
+/**
+ * Пустое тело — это НЕ пустой документ: топ-узел схемы объявлен `block+`, и `content: []`
+ * ProseMirror отвергает («Invalid content for node doc»). У каждой только что созданной
+ * сущности body пуст, так что это самый частый случай, а не краевой. Пустой абзац сериализуется
+ * в пустую строку, поэтому инвариант `body === serializeBody(body_doc)` цел (проверено).
+ */
+function emptyDoc(): BodyDoc {
+  return { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'paragraph' }] } };
+}
+
+/**
+ * Лексер берётся У МЕНЕДЖЕРА, а не собирается из голого `marked`: только в его экземпляре
+ * зарегистрированы наши токенайзеры (`queryBlock`, `entityRef`). Из этого следует главное —
+ * заборы кода и инлайн-код лексер разбирает РАНЬШЕ нашей грамматики, поэтому показанный в коде
+ * пример `{{query:…}}` остаётся текстом. Прежний путь (вырезание сегментов регэкспом по сырому
+ * тексту до лексера) про заборы не знал и рвал их пополам — найдено ревью.
+ */
+function lex(markdown: string): { tokens: Tok[]; hasRefDefs: boolean } {
+  const instance = md().instance;
+  const lexer = new instance.Lexer(instance.defaults);
+  const tokens = lexer.lex(markdown) as unknown as Tok[];
+  return { tokens, hasRefDefs: Object.keys(lexer.tokens.links ?? {}).length > 0 };
+}
 
 export function parseBody(markdown: string): BodyDoc {
-  if (markdown.trim() === '') {
-    return { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } };
-  }
+  if (markdown.trim() === '') return emptyDoc();
   try {
+    const { tokens, hasRefDefs } = lex(markdown);
+    if (hasRefDefs) {
+      // Reference-определения marked складывает в lexer.tokens.links, и восстановить их форму
+      // нечем — консервативно ВЕСЬ исходник дословно (ловит и сноски GFM из спайка).
+      return rawDoc(markdown);
+    }
     const content: JSONContent[] = [];
-    // 1. Разрезаем на чередование [markdown-кусок | {{query:…}}-сегмент].
-    const segments: Array<{ kind: 'md' | 'query'; text: string }> = [];
-    let last = 0;
-    for (const m of markdown.matchAll(QUERY_SEGMENT_RE)) {
-      if (m.index > last) segments.push({ kind: 'md', text: markdown.slice(last, m.index) });
-      segments.push({ kind: 'query', text: m[0] });
-      last = m.index + m[0].length;
-    }
-    if (last < markdown.length) segments.push({ kind: 'md', text: markdown.slice(last) });
-
-    for (const seg of segments) {
-      if (seg.kind === 'query') {
-        // Дословный атрибут (Р4): содержимое между обёрткой, байт-в-байт.
-        content.push({
-          type: 'queryBlock',
-          attrs: { query: seg.text.slice(QUERY_OPEN.length, -QUERY_BLOCK_CLOSE.length) },
-        });
-        continue;
-      }
-      const trimmed = seg.text.replace(/^\n+|\n+$/g, '');
-      if (trimmed === '') continue;
-      // 2. Внутри markdown-куска — поблочно по токенам собственного лексера.
-      const lexer = new marked.Lexer({ gfm: true });
-      const tokens = lexer.lex(trimmed) as unknown as Tok[];
-      if (Object.keys(lexer.tokens.links ?? {}).length > 0) {
-        // Reference-определения marked складывает в lexer.tokens.links, и восстановить их
-        // форму нечем — консервативно ВЕСЬ исходник дословно (ловит и сноски GFM из спайка).
-        return rawDoc(markdown);
-      }
-      for (const token of tokens) {
-        if (token.type === 'space') continue;
-        if (blockIsKnown(token)) {
-          const parsed = md().parse(token.raw.replace(/\n+$/, ''));
-          content.push(...(parsed.content ?? []));
-        } else {
-          content.push(rawNode(token.raw.replace(/\n+$/, '')));
-        }
+    for (const token of tokens) {
+      if (token.type === 'space') continue;
+      const raw = token.raw.replace(/\n+$/, '');
+      if (blockIsKnown(token)) {
+        content.push(...(md().parse(raw).content ?? []));
+      } else {
+        content.push(rawNode(raw));
       }
     }
-    return { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content } };
+    return content.length > 0
+      ? { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content } }
+      : emptyDoc();
   } catch {
     // Парсер не справился вовсе — сохраняем дословно, не теряя ни байта.
     return rawDoc(markdown);

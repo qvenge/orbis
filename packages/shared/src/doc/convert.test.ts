@@ -2,6 +2,7 @@
 // корневой прогон (ревью Б6.1). Сиды здесь НЕ импортируются — shared не зависит от server
 // (И17); round-trip сидов проверяет apps/server/src/seed/seed-canon.test.ts.
 import { describe, expect, test } from 'bun:test';
+import { getSchema } from '@tiptap/core';
 import {
   bodyRefsFromDoc,
   canonicalizeBody,
@@ -9,10 +10,12 @@ import {
   readBodyDoc,
   serializeBody,
 } from './convert';
+import { DOC_EXTENSIONS } from './schema';
 
 const UUID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 const raws = (md: string) => (parseBody(md).doc.content ?? []).filter((n) => n.type === 'rawBlock');
 const shape = (md: string) => JSON.stringify(parseBody(md).doc);
+const types = (md: string) => (parseBody(md).doc.content ?? []).map((n) => n.type);
 
 describe('канонизация вместо строгой сверки (решение по Б1)', () => {
   test('бытовой текст с _ и & НЕ уезжает в raw и не обрастает экранированием', () => {
@@ -42,6 +45,8 @@ describe('канонизация вместо строгой сверки (ре�
 
   test('канонизация идемпотентна', () => {
     for (const md of ['поле due_date', '* раз', '1) первый', '2 * 3 = 6', 'а < б > в']) {
+      // Без этой строки проверка тождественна для raw: он отдаёт вход дословно (ревью, п. 3).
+      expect(raws(md)).toEqual([]);
       const once = canonicalizeBody(md).body;
       expect(canonicalizeBody(once).body).toBe(once);
     }
@@ -55,19 +60,29 @@ describe('канонизация вместо строгой сверки (ре�
       'это \\_курсив\\_ такой',
       'поле due_date и c & d',
       'а < б > в',
-      'текст <div>x</div>',
       '2 * 3 = 6',
       '- [ ] не сделано\n- [x] сделано',
     ]) {
+      // Страж вакуумности: для тела, уехавшего в raw, инвариант выполняется тождественно, и
+      // такой вход не утверждает НИЧЕГО (найдено ревью, п. 2 — на нём и попался `<div>`).
+      expect(raws(md)).toEqual([]);
       expect(shape(canonicalizeBody(md).body)).toBe(shape(md));
     }
+  });
+
+  test('инлайн-HTML — честный raw с явным ожиданием, а не «зелёный инвариант»', () => {
+    const md = 'текст <div>x</div>';
+    expect(raws(md).length).toBe(1);
+    expect(canonicalizeBody(md).body).toBe(md);
   });
 
   test('канон `_курсив_`, набранного буквально, сохраняет экранирование', () => {
     // Снятие экранирования ТОЧЕЧНОЕ: intraword `_` безопасен (CommonMark), а `_слово_`
     // целиком — нет: без экранирования повторный парс сделал бы из текста курсив.
-    const canon = canonicalizeBody('это \\_курсив\\_ такой').body;
-    expect(canon).toBe('это \\_курсив\\_ такой');
+    const md = 'это \\_курсив\\_ такой';
+    expect(raws(md)).toEqual([]); // иначе «нет курсива» выполняется просто потому, что это raw
+    const canon = canonicalizeBody(md).body;
+    expect(canon).toBe(md);
     expect(shape(canon)).not.toContain('italic');
   });
 
@@ -75,21 +90,41 @@ describe('канонизация вместо строгой сверки (ре�
     // Штатный сериализатор прятал `>` за `&gt;`; сняв кодирование, обязаны защитить иначе —
     // иначе абзац «> не цитата» после первой же перезаписи станет blockquote.
     for (const md of ['\\> не цитата', '&gt; не цитата', '> цитата', '\\# не заголовок']) {
+      // Все три ассерта ниже проходят и для raw — без этой строки страж решения контроллера
+      // не отличил бы починку от регресса в raw (ревью, п. 3).
+      expect(raws(md)).toEqual([]);
       expect(shape(canonicalizeBody(md).body)).toBe(shape(md));
     }
     expect(shape(canonicalizeBody('\\> не цитата').body)).not.toContain('blockquote');
     expect(shape(canonicalizeBody('\\# не заголовок').body)).not.toContain('heading');
+  });
+
+  test('пустое тело — валидный по схеме документ, канон остаётся пустой строкой', () => {
+    // Топ-узел объявлен `block+`, а пустой `content: []` схему нарушает: документ КАЖДОЙ
+    // только что созданной сущности поехал бы в редактор и уронил его (ревью, п. 5).
+    const schema = getSchema(DOC_EXTENSIONS as never);
+    expect(() => schema.nodeFromJSON(parseBody('').doc).check()).not.toThrow();
+    // Инвариант пары не сломан: пустому документу обязана соответствовать пустая строка.
+    expect(canonicalizeBody('').body).toBe('');
+    expect(canonicalizeBody('   \n\n  ').body).toBe('');
   });
 });
 
 describe('поблочный raw по токенам (решение по Б1, мера 3)', () => {
   test('HTML-блок уезжает в raw ОДИН, соседний смарт-лист остаётся виджетом', () => {
     const md = '<div>x</div>\n\n{{query: aspect=orbis/task, status=inbox}}';
-    const doc = parseBody(md);
-    const types = (doc.doc.content ?? []).map((n) => n.type);
-    expect(types).toContain('rawBlock');
-    expect(types).toContain('queryBlock');
-    expect(serializeBody(doc)).toBe(md); // raw отдаёт дословно, канон остального совпал
+    expect(types(md)).toEqual(['rawBlock', 'queryBlock']);
+    expect(serializeBody(parseBody(md))).toBe(md); // raw отдаёт дословно, канон остального совпал
+  });
+
+  test('экранированная черта в ячейке уводит таблицу в raw (инвариант канона)', () => {
+    // Тот же механизм, что у картинки в ячейке, но с другой стороны: токен `escape` числится
+    // знакомым, а сериализатор таблицы черту обратно не экранирует — при повторном разборе
+    // ячейка `x \| y` разваливалась надвое (найдено ревью, п. 4).
+    const md = 'абзац\n\n| a |\n| --- |\n| x \\| y |';
+    expect(raws(md).length).toBe(1);
+    expect(shape(canonicalizeBody(md).body)).toBe(shape(md));
+    expect(serializeBody(parseBody(md))).toContain('x \\| y');
   });
 
   test('картинка (нет в схеме) уводит СВОЙ блок в raw, а не всё тело', () => {
@@ -140,12 +175,34 @@ describe('свои конструкции', () => {
   test('ссылка с подписью и без; регистр id приводится к lower (И7)', () => {
     const doc = parseBody(`См. [[entity:${UUID.toUpperCase()}|Кроссовки]].`);
     const json = JSON.stringify(doc.doc);
+    expect(raws(`См. [[entity:${UUID}|Кроссовки]].`)).toEqual([]);
     expect(json).toContain('entityRef');
     expect(json).toContain(UUID); // lowercase в атрибуте
     expect(serializeBody(doc)).toBe(`См. [[entity:${UUID}|Кроссовки]].`);
     expect(serializeBody(parseBody(`Связано с [[entity:${UUID}]].`))).toBe(
       `Связано с [[entity:${UUID}]].`,
     );
+  });
+
+  test('смарт-лист внутри забора кода остаётся ТЕКСТОМ кода', () => {
+    // Вырезание сегментов регэкспом до лексера рвало показанный в коде пример синтаксиса на
+    // два пустых забора и живой виджет; приёмочный инвариант этого не ловил — порча случалась
+    // на parseBody, поэтому shape(канон) === shape(вход) (найдено ревью, п. 1).
+    const md = '```\n{{query: aspect=orbis/task}}\n```';
+    expect(types(md)).toEqual(['codeBlock']);
+    expect(canonicalizeBody(md).body).toBe(md);
+  });
+
+  test('`{{query:}}` в инлайн-коде не режет абзац', () => {
+    const md = 'смотри `{{query: a=b}}` тут';
+    expect(types(md)).toEqual(['paragraph']);
+    expect(canonicalizeBody(md).body).toBe(md);
+  });
+
+  test('настоящий смарт-лист рядом с забором кода остаётся виджетом', () => {
+    const md = '```ts\nconst x = 1;\n```\n\n{{query: aspect=orbis/task}}';
+    expect(types(md)).toEqual(['codeBlock', 'queryBlock']);
+    expect(canonicalizeBody(md).body).toBe(md);
   });
 
   test('многострочный query дословен; }} внутри запроса блоком не считается', () => {
