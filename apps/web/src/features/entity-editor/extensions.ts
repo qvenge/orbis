@@ -2,6 +2,7 @@ import { DOC_EXTENSIONS } from '@orbis/shared/doc';
 import type { AnyExtension } from '@tiptap/core';
 import UniqueID from '@tiptap/extension-unique-id';
 import { EntityRefWithView } from './nodes/EntityChip';
+import { QueryBlockWithView } from './nodes/QueryWidget';
 
 /**
  * Блочные id сегодня не читает никто. Ставятся с первого дня потому, что на них ляжет будущий
@@ -34,18 +35,20 @@ export const UNIQUE_ID_TYPES: readonly string[] = [
  * список протоколов: `DOC_EXTENSIONS.map(e => e.name === 'link' ? …)` не находил никого, потому
  * что Link живёт ВНУТРИ StarterKit, и map по имени молча возвращал массив без изменений.
  *
- * Задача 8 заменила здесь EntityRef → EntityRefWithView; Задача 9 так же заменит QueryBlock →
- * QueryBlockWithView (фильтром+concat над DOC_EXTENSIONS ВНУТРИ этого массива, а не
+ * Задача 8 заменила здесь EntityRef → EntityRefWithView, Задача 9 — QueryBlock →
+ * QueryBlockWithView (обе фильтром+concat над DOC_EXTENSIONS ВНУТРИ этого массива, а не
  * пересборкой файла), Задача 11 добавит MoveBlock в конец, Задача 10 — плейсхолдер.
  * Больше этот файл не меняется.
  */
 export const EDITOR_EXTENSIONS: AnyExtension[] = [
-  // Задача 8: entityRef ЗАМЕНЯЕТСЯ своей же версией с NodeView — фильтр и concat, а не вторая
-  // нода рядом. В отличие от Link (он живёт ВНУТРИ StarterKit, и фильтр по имени не нашёл бы
-  // никого) entityRef — самостоятельный элемент DOC_EXTENSIONS, так что фильтр тут работает;
-  // что он не промахнулся, стережёт тест «entityRef в составе редактора ровно один».
-  ...DOC_EXTENSIONS.filter((e) => e.name !== 'entityRef'),
+  // Задачи 8 и 9: entityRef и queryBlock ЗАМЕНЯЮТСЯ своими же версиями с NodeView — фильтр и
+  // concat, а не вторые ноды рядом. В отличие от Link (он живёт ВНУТРИ StarterKit, и фильтр
+  // по имени не нашёл бы никого) обе — самостоятельные элементы DOC_EXTENSIONS, так что
+  // фильтр тут работает; что он не промахнулся, стерегут тесты «… в составе редактора ровно
+  // один» (по одному на имя: общий фильтр промахнулся бы мимо любого из двух молча).
+  ...DOC_EXTENSIONS.filter((e) => e.name !== 'entityRef' && e.name !== 'queryBlock'),
   EntityRefWithView,
+  QueryBlockWithView,
   // Копия — потому что список отдан наружу readonly, а расширение принимает изменяемый массив.
   UniqueID.configure({ types: [...UNIQUE_ID_TYPES] }),
 ];
