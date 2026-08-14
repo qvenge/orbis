@@ -207,7 +207,12 @@ test('replaceQueryBlock: пустая внутренность не удваив
 });
 
 test('replaceQueryBlock: индекса нет — body не меняется', () => {
-  const body = 'текст {{query:tags=x}}';
+  // Тело с ОДНИМ блоком, а не с обёрткой посреди строки: после правила колонки такая обёртка
+  // блоком не считается, тело стало «без блоков», и первые две строки выродились в дубликат
+  // третьей — ветка «цикл прошёл по блокам, но ни один не совпал с индексом» не проверялась
+  // бы ничем (найдено ревью раунда 1).
+  const body = '{{query:tags=x}}';
+  expect(queryBlocks(body)).toHaveLength(1); // страж вакуумности: блок для перебора ЕСТЬ
   expect(replaceQueryBlock(body, 1, 'tags=y')).toBe(body);
   expect(replaceQueryBlock(body, -1, 'tags=y')).toBe(body);
   expect(replaceQueryBlock('без блоков', 0, 'tags=y')).toBe('без блоков');

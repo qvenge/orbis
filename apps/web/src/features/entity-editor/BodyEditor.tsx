@@ -106,7 +106,12 @@ export function BodyEditor({
   // Сравнение тоже по смыслу, а не по строке: иначе приезд собственного же сохранённого
   // документа (он вернётся без блочных id) переставлял бы содержимое редактора.
   useEffect(() => {
-    if (!editor || editor.isFocused) return;
+    // isDestroyed — не перестраховка: React 19 переигрывает пассивные эффекты при раскрытии
+    // Suspense (reconnectPassiveEffects), и эффект успевает выстрелить на редакторе, у
+    // которого useEditor уже снёс view. Без стража это ронял `Cannot read properties of null
+    // (reading 'commands')` — НЕ падением теста, а необработанной ошибкой прогона: ассерты
+    // оставались зелёными, а код возврата становился 1 (поймано тестами раунда правок 1).
+    if (!editor || editor.isDestroyed || editor.isFocused) return;
     if (!sameDoc(editor.getJSON(), doc.doc)) {
       lastAccepted.current = doc.doc;
       editor.commands.setContent(doc.doc, { emitUpdate: false });
