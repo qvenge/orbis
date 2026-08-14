@@ -34,4 +34,14 @@ export function installProseMirrorJsdomPolyfills(): void {
   if (!Element.prototype.getClientRects) Element.prototype.getClientRects = rectList;
   // Никто «не под курсором»: клик мимо текста ProseMirror переживает штатно.
   if (!document.elementFromPoint) document.elementFromPoint = () => null;
+
+  // Отдельные пути ProseMirror создают Range через document.createRange() и тут же меряют его;
+  // защищаемся и на этом экземпляре, а не только на прототипе (страховка из спайка).
+  const nativeCreateRange = document.createRange.bind(document);
+  document.createRange = () => {
+    const range = nativeCreateRange();
+    if (!range.getClientRects) range.getClientRects = rectList;
+    if (!range.getBoundingClientRect) range.getBoundingClientRect = () => ZERO_RECT;
+    return range;
+  };
 }
