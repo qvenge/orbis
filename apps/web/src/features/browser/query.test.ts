@@ -1,4 +1,5 @@
-import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
+import { DAILY_PLANNING_BODY, SEED_SMART_LISTS } from '@orbis/server/src/seed/smart-lists';
+import { parseBody } from '@orbis/shared/doc';
 import { expect, test } from 'vitest';
 import {
   bodySegments,
@@ -94,6 +95,64 @@ test('bodySegments сохраняет разметку текста, убира�
     kind: 'text',
     text: '# Итоги\n\n- раз\n- два',
   });
+});
+
+// --- Р-v2-6: разбор первого кадра и схема документа согласны про начало блока -----------
+// Первый кадр рисует bodySegments, редактор строится по parseBody. Разойдись правила —
+// человек увидит виджет, который через мгновение станет фигурными скобками (или наоборот).
+
+test('bodySegments: обёртка с отступом 1–3 пробела блоком НЕ считается', () => {
+  for (const pad of [' ', '  ', '   ']) {
+    const body = `${pad}{{query:a=1}}`;
+    expect(bodySegments(body)).toEqual([{ kind: 'text', text: '{{query:a=1}}' }]);
+    expect(queryBlocks(body)).toEqual([]);
+  }
+  // …и то же посреди текста, а не только в начале записи.
+  const inside = `до\n\n  {{query:a=1}}\n\nпосле`;
+  expect(queryBlocks(inside)).toEqual([]);
+});
+
+test('bodySegments: обёртка посреди строки блоком НЕ считается', () => {
+  const body = 'смотри {{query:a=1}} тут';
+  expect(bodySegments(body)).toEqual([{ kind: 'text', text: 'смотри {{query:a=1}} тут' }]);
+  expect(queryBlocks(body)).toEqual([]);
+  // Обёртка с колонки 1 в том же теле блоком остаётся: правило про КОЛОНКУ, а не про
+  // «где-то есть текст».
+  expect(queryBlocks('смотри {{query:a=1}} тут\n{{query:b=2}}')).toEqual(['b=2']);
+});
+
+test('bodySegments видит ровно те же блоки, что и схема документа', () => {
+  // Сверка с parseBody — единственная честная: она сравнивает не с копией регэкспа, а с тем,
+  // что построит редактор. Тела — пять сидов и краевые случаи правила про колонку.
+  const bodies = [
+    ...SEED_SMART_LISTS.map((s) => s.body),
+    '{{query:a=1}}',
+    ' {{query:a=1}}',
+    '   {{query:a=1}}',
+    'смотри {{query:a=1}} тут',
+    'до\n{{query:a=1}}\nпосле',
+    'до\n\n{{query:a=1}}\n\nпосле',
+    '{{query: tags=a}}b}}',
+    'текст {{query: aspect=orbis/task и всё',
+  ];
+  for (const body of bodies) {
+    const fromDoc = (parseBody(body).doc.content ?? [])
+      .filter((n) => n.type === 'queryBlock')
+      .map((n) => String(n.attrs?.query ?? '').trim());
+    expect([body, queryBlocks(body)]).toEqual([body, fromDoc]);
+  }
+});
+
+test('firstQueryBlock (бейдж pinned) считает по тому же правилу колонки', () => {
+  // §3.2: бейдж — «число результатов ПЕРВОГО query-блока body». Обёртка посреди строки
+  // блоком не является ни для detail-экрана, ни для схемы — значит и бейджу не считать.
+  expect(firstQueryBlock('смотри {{query:a=1}} тут')).toBeNull();
+  expect(firstQueryBlock('смотри {{query:a=1}} тут\n{{query:b=2}}')).toBe('b=2');
+  // У всех пяти сидов бейдж прежний: их блоки стоят с колонки 1.
+  for (const s of SEED_SMART_LISTS) {
+    expect([s.slug, firstQueryBlock(s.body)]).toEqual([s.slug, queryBlocks(s.body)[0] ?? null]);
+    expect(firstQueryBlock(s.body)).not.toBeNull();
+  }
 });
 
 // --- замена текста одного блока (D2) ---------------------------------------------------

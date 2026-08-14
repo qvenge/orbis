@@ -214,6 +214,28 @@ describe('свои конструкции', () => {
     expect((tail.doc.content ?? []).map((n) => n.type)).toEqual(['queryBlock', 'paragraph']);
   });
 
+  test('обёртка не с колонки 1 блоком не считается (ни с отступом, ни после буквы)', () => {
+    // Правило «блок начинается с колонки 1» держится и на ОДНОМ символе перед обёрткой:
+    // marked ищет место разреза абзаца в src.slice(1), и прежний якорь `^` в start значил
+    // «второй символ блока» — `x{{query:a=1}}` разваливалось на абзац «x» и блок, а
+    // ` {{query:a=1}}` становилось блоком вопреки отступу (проба Задачи 7).
+    for (const md of [
+      'x{{query:a=1}}',
+      ' {{query:a=1}}',
+      '  {{query:a=1}}',
+      'до\n {{query:a=1}}',
+    ]) {
+      // Страж вакуумности: у raw «нет блока» выполнялось бы тождественно.
+      expect(raws(md)).toEqual([]);
+      expect(shape(md)).not.toContain('queryBlock');
+      expect(canonicalizeBody(md).body).toBe(md);
+    }
+    // …и настоящий блок с колонки 1 при этом цел — в том числе сразу после строки текста.
+    expect(types('до\n{{query:a=1}}')).toEqual(['paragraph', 'queryBlock']);
+    expect(types('{{query:a=1}}')).toEqual(['queryBlock']);
+    expect(types('> цитата\n\n{{query:a=1}}')).toEqual(['blockquote', 'queryBlock']);
+  });
+
   test('незакрытая обёртка остаётся текстом и не режет абзац', () => {
     const md = 'текст {{query: aspect=orbis/task и всё';
     expect(canonicalizeBody(md).body).toBe(md);
