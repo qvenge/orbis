@@ -118,10 +118,40 @@ export async function backfillBodyDoc(io: BackfillIo): Promise<BackfillResult> {
 }
 
 /**
+ * Всё, что нужно адаптеру от drizzle, — выполнить запрос. Шире, чем `Db`, намеренно: под этот
+ * тип подходит и объект ТРАНЗАКЦИИ (`db.transaction(async (tx) => …)`), а значит тест умеет
+ * прогнать настоящий SQL по временно изменённой схеме и откатить всё до байта.
+ */
+export type BackfillExecutor = Pick<Db, 'execute'>;
+
+/** Под кем команда пришла в базу и видит ли она строки вообще. */
+export type RoleAccess = { role: string; bypassRls: boolean };
+
+/**
+ * Кто мы в базе. Единственное, что отличает «корпус уже сконвертирован» от «роль не видит
+ * корпуса»: в обоих случаях счётчики прогона — нули (ревью M-2).
+ *
+ * Зачем это вообще нужно: на `entities` включён FORCE ROW LEVEL SECURITY с политикой
+ * `owner_id = auth.uid()`, а прямое подключение никакого `auth.uid()` не выставляет. Роль,
+ * у которой ЕСТЬ гранты на таблицу, но НЕТ `BYPASSRLS`, видит ровно ноль строк — молча,
+ * без единой ошибки (воспроизведено пробой под ролью `authenticated`: `count(*)` вернул 0
+ * при непустой таблице, а бэкфилл отчитался `{done:0, skipped:0, pending:0}`).
+ */
+export async function describeRoleAccess(db: BackfillExecutor): Promise<RoleAccess> {
+  const rows = await db.execute(
+    sql`SELECT current_user::text AS role,
+        coalesce((SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user), false)
+          AS bypass_rls`,
+  );
+  const row = rows[0] as { role: string; bypass_rls: boolean };
+  return { role: row.role, bypassRls: row.bypass_rls };
+}
+
+/**
  * Адаптер поверх drizzle. Его же использует прод-операция (`scripts/ops.ts backfill-body-doc`),
  * обернув сырой пул из `withDb` — так на проде исполняется ровно тот SQL, который прогнал тест.
  */
-export function drizzleBackfillIo(db: Db): BackfillIo {
+export function drizzleBackfillIo(db: BackfillExecutor): BackfillIo {
   return {
     selectBatch: async (limit, afterId) =>
       (await db.execute(

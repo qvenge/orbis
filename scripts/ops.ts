@@ -26,7 +26,11 @@ import type { JSONContent } from '@tiptap/core';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { backfillBodyDoc, drizzleBackfillIo } from '../apps/server/src/db/backfill-body-doc';
+import {
+  backfillBodyDoc,
+  describeRoleAccess,
+  drizzleBackfillIo,
+} from '../apps/server/src/db/backfill-body-doc';
 import * as schema from '../apps/server/src/db/schema';
 import { issuePatGrant } from '../apps/server/src/oauth/grants';
 
@@ -320,10 +324,11 @@ async function auditBodies(): Promise<number> {
  * каноном прочитанного старого). Такие строки попадают в «пропущено» и остаются на ленивую
  * конверсию при первом чтении.
  *
- * Печатает ТРИ числа, а не одно. При роли без BYPASSRLS выборка пуста, и одинокое
- * «сконвертировано: 0» выглядело бы ровно как успешный прогон по уже сконвертированному
- * корпусу — тихий ложный успех. Строка «осталось неконвертированных: 115» кричит сама и не
- * требует, чтобы оператор помнил числа `audit-bodies` (ревью M-2).
+ * Печатает ТРИ числа и ФАКТ РОЛИ. Одних чисел мало: роль с грантами, но без `BYPASSRLS`, под
+ * FORCE RLS видит ноль строк — и «0 / 0 / 0» у неё неотличимо от «корпус уже сконвертирован»
+ * (воспроизведено пробой под `authenticated`: `count(*)` вернул 0 при непустой таблице). Три
+ * числа этот случай различить НЕ МОГУТ в принципе — различает только `rolbypassrls`, поэтому
+ * он и печатается (ревью M-2, второй круг).
  *
  * Ни цикл, ни SQL здесь не дублируются: сырой пул `withDb` оборачивается в drizzle (так же, как
  * в migrateOp и issuePat выше) и отдаётся тому же `drizzleBackfillIo`, который прогоняет тест.
@@ -332,18 +337,26 @@ async function auditBodies(): Promise<number> {
  */
 async function backfillBodyDocOp(): Promise<number> {
   return withDb(async (sql) => {
-    const { done, skipped, pending } = await backfillBodyDoc(
-      drizzleBackfillIo(drizzle(sql, { schema })),
-    );
+    const db = drizzle(sql, { schema });
+    const who = await describeRoleAccess(db);
+    console.log(`роль: ${who.role} (BYPASSRLS: ${who.bypassRls ? 'да' : 'НЕТ'})`);
+    const { done, skipped, pending } = await backfillBodyDoc(drizzleBackfillIo(db));
     console.log(`сконвертировано тел: ${done}`);
     console.log(`осталось неконвертированных: ${pending}`);
     console.log(`пропущено (тело изменилось во время прогона): ${skipped}`);
-    if (pending > 0) {
+    // `done === 0` в гейте обязателен наравне с остатком: без BYPASSRLS обнуляется И pending
+    // (он считается тем же SELECT под той же политикой), поэтому гейт только по остатку
+    // молчал бы ровно в том случае, ради которого заведён.
+    if (pending > 0 || done === 0) {
       console.log(
-        '\nОстаток — норма, если тела правили во время прогона: их догонит повторный запуск' +
-          '\n(или ленивая конверсия при первом чтении). Но если сконвертировано 0, а остаток' +
-          '\nвелик — проверь, что роль DSN несёт BYPASSRLS: на entities включён FORCE RLS,' +
-          '\nи без него выборка пуста, а прогон выглядит успешным.',
+        who.bypassRls
+          ? '\nОстаток — норма, если тела правили во время прогона: их догонит повторный запуск' +
+              '\n(или ленивая конверсия при первом чтении). Если же и остаток, и сконвертировано' +
+              '\nнулевые — корпус либо уже сконвертирован, либо пуст; сверь с `audit-bodies`.'
+          : `\nВНИМАНИЕ: роль ${who.role} НЕ несёт BYPASSRLS, а на entities включён FORCE RLS` +
+              '\nс политикой owner_id = auth.uid(). Прямое подключение auth.uid() не выставляет,' +
+              '\nпоэтому такая роль видит НОЛЬ строк — и нули выше означают «корпус НЕ ВИДЕН»,' +
+              '\nа НЕ «корпус сконвертирован». Нужен DSN роли с BYPASSRLS (на Supabase — postgres).',
       );
     }
     return 0;

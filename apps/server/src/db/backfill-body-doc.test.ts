@@ -13,7 +13,12 @@ import {
   HORIZON_YEAR_BODY,
   UPCOMING_BODY,
 } from '../seed/smart-lists';
-import { type BackfillIo, backfillBodyDoc, drizzleBackfillIo } from './backfill-body-doc';
+import {
+  type BackfillIo,
+  backfillBodyDoc,
+  describeRoleAccess,
+  drizzleBackfillIo,
+} from './backfill-body-doc';
 
 requireEnv();
 
@@ -315,17 +320,69 @@ test('CAS в SQL умеет сравнивать NULL-тело (IS NOT DISTINCT 
   await admin.execute(
     sql`INSERT INTO entities (id, owner_id, title, body) VALUES (${id}, ${freshUserId()}, 'нулевое', '')`,
   );
-  // Обходим NOT NULL нашей схемы, чтобы получить ровно прод-случай.
-  await admin.execute(sql`ALTER TABLE entities ALTER COLUMN body DROP NOT NULL`);
-  try {
-    await admin.execute(sql`UPDATE entities SET body = NULL WHERE id = ${id}`);
-    expect(await backfillBodyDoc(io)).toEqual({ done: 1, skipped: 0, pending: 0 });
-    const row = await readRow(id);
-    expect(row.body).toBe('');
-    expect(serializeBody(row.bodyDoc as never)).toBe('');
-  } finally {
-    // Вернуть ограничение обязательно: база общая для всех серверных сьютов прогона.
-    await admin.execute(sql`UPDATE entities SET body = '' WHERE body IS NULL`);
-    await admin.execute(sql`ALTER TABLE entities ALTER COLUMN body SET NOT NULL`);
-  }
+
+  // Снятие NOT NULL живёт ВНУТРИ транзакции с гарантированным откатом. DDL в Postgres
+  // транзакционен, поэтому схема общей базы не меняется ни на мгновение дольше этого теста —
+  // даже если процесс умрёт посреди прогона (а это в этой работе уже случалось: исполнитель
+  // оборвался на лимите сессии). Прежний вариант с `finally` восстанавливал колонку только
+  // при штатном исходе, а жёсткое падение между двумя ALTER'ами оставило бы общую базу
+  // с nullable-колонкой молча и навсегда — детектора такого дрейфа нет.
+  //
+  // Покрытие при этом НЕ страдает: `drizzleBackfillIo` нужен только `.execute`, поэтому
+  // транзакционный объект ему подходит, и настоящий UPDATE по NULL-строке исполняется.
+  const ROLLBACK = new Error('намеренный откат: тест схему не оставляет');
+  let inside: unknown = null;
+  let insideRow: { body: string | null; body_doc: unknown } | null = null;
+  await expect(
+    admin.transaction(async (tx) => {
+      await tx.execute(sql`ALTER TABLE entities ALTER COLUMN body DROP NOT NULL`);
+      await tx.execute(sql`UPDATE entities SET body = NULL WHERE id = ${id}`);
+      inside = await backfillBodyDoc(drizzleBackfillIo(tx));
+      const rows = await tx.execute(sql`SELECT body, body_doc FROM entities WHERE id = ${id}`);
+      insideRow = rows[0] as { body: string | null; body_doc: unknown };
+      throw ROLLBACK;
+    }),
+  ).rejects.toThrow('намеренный откат');
+
+  // NULL-строка сконвертирована, а не пропущена: CAS сошёлся на NULL.
+  expect(inside).toEqual({ done: 1, skipped: 0, pending: 0 });
+  expect((insideRow as unknown as { body: string }).body).toBe('');
+  expect(serializeBody((insideRow as unknown as { body_doc: never }).body_doc)).toBe('');
+
+  // А общая база вернулась к исходному состоянию целиком — и схемой, и данными.
+  const nullable = await admin.execute(
+    sql`SELECT is_nullable FROM information_schema.columns
+        WHERE table_name = 'entities' AND column_name = 'body'`,
+  );
+  expect((nullable[0] as { is_nullable: string }).is_nullable).toBe('NO');
+  const after = await readRow(id);
+  expect(after.body).toBe('');
+  expect(after.bodyDoc).toBeNull();
+});
+
+test('роль без BYPASSRLS: нули НЕ означают «сконвертировано», и это видно по факту роли', async () => {
+  await truncateAll();
+  await insertBody('# тело');
+  // Сценарий M-2 целиком, на живой базе. `authenticated` — роль С ГРАНТАМИ на entities, но
+  // БЕЗ rolbypassrls. Под FORCE RLS и политикой owner_id = auth.uid() (а auth.uid() у прямого
+  // подключения пуст) она не видит НИ ОДНОЙ строки — молча, без ошибки.
+  await admin.transaction(async (tx) => {
+    await tx.execute(sql`SET LOCAL ROLE authenticated`);
+    // Вот он, тихий ложный успех: счётчики прогона неотличимы от «корпус уже сконвертирован».
+    expect(await backfillBodyDoc(drizzleBackfillIo(tx))).toEqual({
+      done: 0,
+      skipped: 0,
+      pending: 0,
+    });
+    // Единственное, что отличает этот случай от настоящего успеха.
+    expect(await describeRoleAccess(tx)).toEqual({ role: 'authenticated', bypassRls: false });
+  });
+  // Корпус на самом деле цел и НЕ сконвертирован — то есть нули выше были ложью.
+  const real = await admin.execute(
+    sql`SELECT count(*)::int AS n FROM entities WHERE body_doc IS NULL`,
+  );
+  expect((real[0] as { n: number }).n).toBe(1);
+  // Под админской ролью тот же корпус виден и конвертируется.
+  expect(await describeRoleAccess(admin)).toEqual({ role: 'postgres', bypassRls: true });
+  expect(await backfillBodyDoc(io)).toEqual({ done: 1, skipped: 0, pending: 0 });
 });
