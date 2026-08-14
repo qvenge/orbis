@@ -2,6 +2,7 @@ import { type BodyDoc, bodyRefsFromDoc, DOC_SCHEMA_VERSION } from '@orbis/shared
 import type { JSONContent } from '@tiptap/core';
 import { type Editor, EditorContent, useEditor } from '@tiptap/react';
 import { useEffect, useMemo, useRef } from 'react';
+import { BubbleToolbar } from './BubbleToolbar';
 import { BODY_BOX_CLASS } from './body-box';
 import { EDITOR_EXTENSIONS, UNIQUE_ID_TYPES } from './extensions';
 import { RefTitlesProvider } from './nodes/RefTitlesContext';
@@ -151,6 +152,9 @@ export function BodyEditor({
       {/* Меню рисуется в дереве РЕДАКТОРА, а не в отдельном React-корне через ReactRenderer:
           строки `@` приезжают из tRPC, а свой корень остался бы без провайдеров запросов. */}
       <SuggestMenu editor={editor} suggest={suggest} />
+      {/* Панель выделения. В дереве React она рядом, а в DOM её элемент приставляет к себе сам
+          плагин — и удаляет его, когда показывать нечего. */}
+      <BubbleToolbar editor={editor} />
     </RefTitlesProvider>
   );
 }

@@ -3,6 +3,7 @@ import type { AnyExtension } from '@tiptap/core';
 import UniqueID from '@tiptap/extension-unique-id';
 import { Placeholder } from '@tiptap/extensions';
 import { BODY_PLACEHOLDER } from './body-box';
+import { MoveBlock } from './move-block';
 import { EntityRefWithView } from './nodes/EntityChip';
 import { QueryBlockWithView } from './nodes/QueryWidget';
 
@@ -76,4 +77,9 @@ export const EDITOR_EXTENSIONS: AnyExtension[] = [
   // (проверено распаковкой тарбола 3.30.1). Все прочие пакеты Tiptap в зависимостях
   // репозитория — из живого `packages/`.
   Placeholder.configure({ placeholder: ({ editor }) => (editor.isEmpty ? BODY_PLACEHOLDER : '') }),
+  // Задача 11: Alt+↑/↓ — порядок блоков. Расширение состоит из одних горячих клавиш: ни ноды,
+  // ни марки, и потому схема редактора остаётся равной схеме документа (сверяет тест на живом
+  // экземпляре, а не рассуждение). Замена перетаскиванию мышью — почему именно так, см.
+  // move-block.ts.
+  MoveBlock,
 ];
