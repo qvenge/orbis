@@ -4,7 +4,6 @@ import { useNav } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Spinner } from '../../ui/Spinner';
-import { quoteValue } from '../budget/txQuery';
 import { detailGetInput } from './useEntityDetail';
 
 type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
@@ -65,24 +64,27 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
   const other = (r: Relation) => (r.sourceId === entityId ? r.targetId : r.sourceId);
   const ids = [...outgoing, ...incoming].map(other);
 
-  const sides = trpc.useQueries((t) => ids.map((id) => t.entity.get({ id })));
-  const byId = new Map(ids.map((id, i) => [id, sides[i]?.data?.entity]));
+  // Титулы и статусы сторон — ОДНИМ запросом (entity.resolveRefs), а не entity.get на
+  // строку: сущность целиком секции не нужна, ей нужны титул и статус, а per-id шторм
+  // тем заметнее, чем длиннее список.
+  const sides = trpc.entity.resolveRefs.useQuery({ ids }, { enabled: ids.length > 0 });
+  const byId = new Map((sides.data ?? []).map((e) => [e.id, e]));
   const title = (id: string) => byId.get(id)?.title ?? `${id.slice(0, 8)}…`;
   // Пока сущность не доехала — блокер считается живым: спрятать реальную блокировку
   // хуже, чем показать лишнюю строку на время загрузки.
   const alive = (id: string) => {
     const e = byId.get(id);
-    return !e || !CLOSED.has(String(e.aspects['orbis/task']?.status ?? ''));
+    return !e || !CLOSED.has(String(e.status ?? ''));
   };
   const blockedBy = incoming.filter((r) => alive(r.sourceId));
 
-  // `search=` — это FTS по plainto_tsquery (query/compile.ts): совпадение только по ЦЕЛОМУ
-  // слову, ни префиксов, ни стемминга («Куп» не найдёт «Купить кроссовки»). Поэтому у пикера
-  // явные состояния — подсказка про целое слово, загрузка, ошибка, «ничего не найдено»:
-  // немая пустая область при обычном наборе по префиксу читается как сломанная фича.
+  // Был entity.query с `search=`, то есть FTS по plainto_tsquery — совпадение только по
+  // ЦЕЛОМУ слову: «Куп» не находило «Купить кроссовки», и пикер честно извинялся подсказкой.
+  // entity.suggest ищет по ПРЕФИКСУ, извиняться больше не за что. Остальные состояния
+  // (ошибка, загрузка, пусто) остались: немая пустая область читается как сломанная фича.
   const q = useDebounced(draft.trim(), SEARCH_DEBOUNCE_MS);
-  const search = trpc.entity.query.useQuery(
-    { query: `search=${quoteValue(q)}, limit=10` },
+  const search = trpc.entity.suggest.useQuery(
+    { prefix: q, limit: 10 },
     { enabled: adding && q.length >= SEARCH_MIN },
   );
   const known = new Set([entityId, ...ids]);
@@ -91,9 +93,7 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
   // неповторимой (id уже в `known`). Направления «блокирует» ограничение не касается —
   // исходящая связь видна всегда.
   const found = (search.data ?? []).filter(
-    (e) =>
-      !known.has(e.id) &&
-      (direction === 'out' || !CLOSED.has(String(e.aspects['orbis/task']?.status ?? ''))),
+    (e) => !known.has(e.id) && (direction === 'out' || !CLOSED.has(String(e.status ?? ''))),
   );
 
   /**
@@ -251,7 +251,7 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
               пустой результат — иначе «ничего не найдено» мигало бы на каждом нажатии.
               Прецедент разводки состояний — TransactionsScreen §3.3. */}
           {q.length < SEARCH_MIN ? (
-            <p className={PICKER_NOTE}>Поиск от 2 символов и по целому слову</p>
+            <p className={PICKER_NOTE}>Поиск от 2 символов</p>
           ) : search.isError ? (
             <p role="alert" className="px-2 py-1.5 text-sm text-danger">
               Не удалось выполнить поиск
@@ -261,7 +261,7 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
           ) : found.length === 0 ? (
             // Сюда же попадает случай «нашлось, но всё уже связано с текущей» — такие
             // сущности отсеяны `known` и уже видны списками выше.
-            <p className={PICKER_NOTE}>Ничего не найдено — введите слово целиком</p>
+            <p className={PICKER_NOTE}>Ничего не найдено</p>
           ) : (
             <ul className="flex flex-col">
               {found.map((e) => (

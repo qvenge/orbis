@@ -108,6 +108,31 @@ export const entityGetUiInput = entityGetInput.extend({
 });
 export type EntityGetUiInput = z.infer<typeof entityGetUiInput>;
 
+/**
+ * Префиксный поиск для `/`-меню, @-упоминаний и пикеров. Отдельно от грамматики `search=`
+ * (§6.1) намеренно: та — FTS по plainto_tsquery, то есть совпадение по ЦЕЛОМУ слову, и на
+ * этой семантике стоят сидированные смарт-листы. Меню же без префиксов бесполезно: «куп»
+ * обязано находить «Купить кроссовки» (проверено пробой — `search=куп` не находит).
+ *
+ * Вход ТОЛЬКО tRPC: в реестре тулов (tools/registry.ts) не появляется, модели не раздаётся.
+ */
+export const entitySuggestInput = z
+  .object({ prefix: z.string().min(1), limit: z.number().int().min(1).max(20).optional() })
+  .strict();
+
+/**
+ * Заголовки для чипов ссылок — ПАЧКОЙ, а не entity.get на каждую ссылку в теле.
+ * Потолок 200, а не 100: тело с сотней с лишним упоминаний — не выдумка, а отказ на входе
+ * положил бы весь резолв и все чипы разом, вместо того чтобы просто стоить один запрос.
+ * Вход ТОЛЬКО tRPC.
+ */
+export const entityResolveRefsInput = z
+  .object({ ids: z.array(z.string().uuid()).min(1).max(200) })
+  .strict();
+
+export type EntitySuggestInput = z.infer<typeof entitySuggestInput>;
+export type EntityResolveRefsInput = z.infer<typeof entityResolveRefsInput>;
+
 export type EntityCreateInput = z.infer<typeof entityCreateInput>;
 export type EntityUpdateInput = z.infer<typeof entityUpdateInput>;
 export type AttachAspectInput = z.infer<typeof attachAspectInput>;

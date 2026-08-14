@@ -5,14 +5,18 @@
 import {
   entityCreateInput,
   entityGetUiInput,
+  entityResolveRefsInput,
+  entitySuggestInput,
   entityUpdateUiInput,
   parseQuery,
   type QueryAst,
 } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
+import { inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { escalateAfterMutation } from '../ai/escalation';
 import type { Db } from '../db/client';
+import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { type EntityReadResult, readEntity } from '../entity-read';
 import { ExecError, execErrorToTRPC } from '../errors';
@@ -93,6 +97,51 @@ function runQueryWithMaterialization<T>(
 const querySignature = z
   .object({ query: z.string().min(1), thisEntityId: z.string().uuid().optional() })
   .strict();
+
+/** Строка чипа/пункта меню: РОВНО то, что рисуется, — не сущность целиком. */
+export interface EntitySuggestion {
+  id: string;
+  title: string;
+  emoji: string | null;
+  /** Статус task-аспекта плоским полем: чипу и пикеру нужен только он (зачеркнуть done). */
+  status: string | null;
+  archived: boolean;
+}
+
+/** Ровно те пять колонок, из которых строится подсказка; у сырой строки имена те же. */
+interface SuggestionRow {
+  id: unknown;
+  title: unknown;
+  emoji: unknown;
+  aspects: unknown;
+  archived: unknown;
+}
+
+/**
+ * Маппинг строки (jsonb уже разобран драйвером — как у toWireEntityFromSql) в форму
+ * подсказки. Годится и сырой выдаче, и select'у drizzle: все пять имён односложные,
+ * snake_case и camelCase у них совпадают.
+ */
+function toSuggestion(row: SuggestionRow): EntitySuggestion {
+  const aspects = (row.aspects ?? {}) as Record<string, Record<string, unknown> | undefined>;
+  const status = aspects['orbis/task']?.status;
+  return {
+    id: String(row.id),
+    title: String(row.title),
+    emoji: row.emoji == null ? null : String(row.emoji),
+    status: typeof status === 'string' ? status : null,
+    archived: row.archived === true,
+  };
+}
+
+/**
+ * Шаблон LIKE из пользовательского ввода: спецсимволы шаблона экранируем, иначе `%`
+ * искал бы что угодно, `_` — любой первый символ, а `\` съедал бы следующий символ.
+ * Экранирующий символ — backslash (умолчание LIKE в PG), поэтому в замене он и стоит.
+ */
+function likePrefixPattern(prefix: string): string {
+  return `${prefix.toLowerCase().replace(/[\\%_]/g, '\\$&')}%`;
+}
 
 export const entityRouter = router({
   // Источник клиентского create ограничен fast_path/quick_capture/ui (§7.5, 02 §5;
@@ -178,6 +227,73 @@ export const entityRouter = router({
       const rows = await tx.execute(compiled);
       return [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
     }),
+  ),
+
+  /**
+   * Префиксный поиск по заголовку для `/`-меню, @-упоминаний и пикеров. Грамматику
+   * `search=` (§6.1) не трогаем: там семантика ЦЕЛОГО слова осмысленна и на неё завязаны
+   * сидированные смарт-листы, а меню без префиксов бесполезно. RLS скоупит выдачу
+   * владельцем (§4.10) — своего owner_id в WHERE нет намеренно, источник правды о
+   * видимости один.
+   *
+   * Про индекс entities_title_prefix (миграция 0007) — честно, по EXPLAIN: под ролью
+   * `authenticated` он НЕ берётся, и дело не в объёме. `lower(text)` и `~~` не leakproof
+   * (pg_proc.proleakproof = false), а при включённом RLS не-leakproof квал нельзя вычислить
+   * раньше security-квала политики — значит, и в index cond он не превращается. Проверено:
+   * от роли postgres тот же запрос идёт Bitmap Index Scan по entities_title_prefix, от
+   * `authenticated` — Seq Scan даже при enable_seqscan=off. Ровно та же участь у GIN
+   * entities_title_fts под существующим `search=` (to_tsvector/ts_match_vq тоже не
+   * leakproof), так что это свойство схемы, а не регресс этой процедуры: на 20 000 строк
+   * suggest считается 15 мс против 42 мс у `search=`. Фактически план опирается на
+   * entities_owner_updated (owner_id, updated_at DESC) WHERE NOT archived — то есть
+   * стоимость линейна по числу сущностей ВЛАДЕЛЬЦА, а не всей таблицы.
+   */
+  suggest: protectedProcedure
+    .input(entitySuggestInput)
+    .query(({ ctx, input }): Promise<EntitySuggestion[]> => {
+      const limit = input.limit ?? 10;
+      const pattern = likePrefixPattern(input.prefix);
+      return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+        // Закрытые задачи НЕ фильтруются намеренно: упомянуть сделанное — валидный сценарий
+        // ссылки, а чип сам зачёркивает done/cancelled. Архивные — отфильтрованы: их прячет
+        // весь UI. Решение зафиксировано при v2 (ревью И14 требовало явности).
+        const rows = await tx.execute(
+          sql`SELECT id, title, emoji, aspects, archived FROM entities
+              WHERE archived = false AND lower(title) LIKE ${pattern}
+              ORDER BY updated_at DESC LIMIT ${limit}`,
+        );
+        return [...rows].map((r) => toSuggestion(r as unknown as SuggestionRow));
+      });
+    }),
+
+  /**
+   * Заголовки для чипов ссылок ОДНИМ запросом. Per-id entity.get годится для коротких
+   * списков связей, но в теле записи ссылок может быть много, и там это шторм запросов.
+   * Отдаём ровно то, что рисует чип, а не сущность целиком.
+   *
+   * Архивные НЕ отфильтрованы, в отличие от suggest: ссылка на архивную сущность в теле
+   * остаётся ссылкой, и спрятать заголовок значило бы показать вместо названия обрубок id.
+   * Признак `archived` отдаём — рисовать решает чип. Ненайденные (в т.ч. чужие под RLS)
+   * просто отсутствуют в ответе.
+   */
+  resolveRefs: protectedProcedure.input(entityResolveRefsInput).query(
+    ({ ctx, input }): Promise<EntitySuggestion[]> =>
+      withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+        // Не сырое `= ANY($1::uuid[])`: массив из шаблона `sql` уезжает в драйвер как есть и
+        // падает «malformed array literal» (проверено пробой). inArray — идиома репозитория
+        // (ai/escalation.ts:217, recurring/materialize.ts:285) и разворачивается в IN-список.
+        const rows = await tx
+          .select({
+            id: entities.id,
+            title: entities.title,
+            emoji: entities.emoji,
+            aspects: entities.aspects,
+            archived: entities.archived,
+          })
+          .from(entities)
+          .where(inArray(entities.id, input.ids));
+        return rows.map(toSuggestion);
+      }),
   ),
 
   // Бейджи (02 §3.2): count игнорирует limit — compileCount не включает его по построению
