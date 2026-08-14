@@ -182,7 +182,7 @@ test('пустые списки блокировок и пустой backlinks �
   expect(screen.getByRole('button', { name: 'Добавить блокировку' })).toBeInTheDocument();
 });
 
-test('добавление блокировки: поиск через entity.suggest по префиксу → relation.create blocks', async () => {
+test('добавление блокировки: поиск через entity.suggest по неполному слову → relation.create blocks', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
   await screen.findByTestId('body-view'); // экран отрисован
 
@@ -191,7 +191,7 @@ test('добавление блокировки: поиск через entity.su
 
   await waitFor(() =>
     expect(calls.find((c) => c.path === 'entity.suggest')?.input).toEqual({
-      prefix: 'Найд',
+      term: 'Найд',
       limit: 10,
     }),
   );
@@ -266,12 +266,12 @@ test('пикер: быстрый ввод трёх символов даёт о�
 
   const queries = () => calls.filter((c) => c.path === 'entity.suggest');
   await waitFor(() => expect(queries()).toHaveLength(1));
-  expect(queries()[0]?.input).toEqual({ prefix: 'Найд', limit: 10 });
+  expect(queries()[0]?.input).toEqual({ term: 'Найд', limit: 10 });
 });
 
 // Состояния пикера остались все пять и в том же порядке, изменился только текст первой
-// подсказки: извиняться за поиск по ЦЕЛОМУ слову больше не за что — suggest ищет по
-// префиксу. Немая пустая область по-прежнему недопустима.
+// подсказки: извиняться за поиск по ЦЕЛОМУ слову больше не за что — suggest ищет вхождение
+// набранного фрагмента. Немая пустая область по-прежнему недопустима.
 test('пикер: подсказка до ввода, спиннер в полёте, «ничего не найдено» на пустом ответе', async () => {
   let release: (v: unknown) => void = () => {};
   const gate = new Promise((res) => {
@@ -283,7 +283,7 @@ test('пикер: подсказка до ввода, спиннер в полё
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   expect(screen.getByText(/поиск от 2 символов/i)).toBeInTheDocument();
   // Обещания искать по целому слову в интерфейсе больше нет — ни в подсказке, ни в пустом
-  // результате: оно врало бы про префиксный поиск.
+  // результате: оно врало бы про поиск, который берёт и неполные слова.
   expect(screen.queryByText(/целому слову|слово целиком/i)).toBeNull();
 
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Куп' } });

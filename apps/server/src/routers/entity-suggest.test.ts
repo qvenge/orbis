@@ -1,5 +1,5 @@
 // apps/server/src/routers/entity-suggest.test.ts
-// Задача 6: entity.suggest (префиксный поиск для `/`-меню и @-упоминаний) и
+// Задача 6: entity.suggest (поиск по НЕПОЛНОМУ слову для `/`-меню и @-упоминаний) и
 // entity.resolveRefs (заголовки чипов ПАЧКОЙ). Обе процедуры — чтение под withIdentity
 // (RLS, §4.10), входы ТОЛЬКО tRPC: в реестре тулов (§9.2) их нет и не должно быть.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
@@ -68,8 +68,8 @@ async function seedEntity(
 
 const titles = (rows: { title: string }[]) => rows.map((r) => r.title).sort();
 
-describe('entity.suggest (§6.1 не трогаем: своя процедура для префиксов)', () => {
-  test('находит по ПРЕФИКСУ то, чего `search=` не находит принципиально', async () => {
+describe('entity.suggest (§6.1 не трогаем: своя процедура для неполных слов)', () => {
+  test('находит по НЕПОЛНОМУ слову то, чего `search=` не находит принципиально', async () => {
     // Ради этой разницы процедура и заведена: `search=` — plainto_tsquery('simple'),
     // то есть совпадение по ЦЕЛОМУ слову. «куп» не находило «Купить кроссовки», и пикер
     // связей честно извинялся подсказкой «введите слово целиком».
@@ -83,13 +83,13 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     ]);
     expect(await caller.entity.query({ query: 'search=куп, limit=10' })).toEqual([]);
 
-    expect(titles(await caller.entity.suggest({ prefix: 'куп' }))).toEqual(['Купить кроссовки']);
+    expect(titles(await caller.entity.suggest({ term: 'куп' }))).toEqual(['Купить кроссовки']);
   });
 
   test('регистр не важен', async () => {
     const caller = callerFor(freshUserId());
     await seedEntity(caller, { title: 'Купить кроссовки' });
-    expect(titles(await caller.entity.suggest({ prefix: 'КУП' }))).toEqual(['Купить кроссовки']);
+    expect(titles(await caller.entity.suggest({ term: 'КУП' }))).toEqual(['Купить кроссовки']);
   });
 
   test('находит по ВХОЖДЕНИЮ, а не только с начала заголовка', async () => {
@@ -105,11 +105,9 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     expect(titles(await caller.entity.query({ query: 'search=квартал, limit=10' }))).toEqual([
       'Отчёт за квартал',
     ]);
-    expect(titles(await caller.entity.suggest({ prefix: 'квартал' }))).toEqual([
-      'Отчёт за квартал',
-    ]);
+    expect(titles(await caller.entity.suggest({ term: 'квартал' }))).toEqual(['Отчёт за квартал']);
     // И по префиксу второго слова — того, чего `search=` как раз не умеет
-    expect(titles(await caller.entity.suggest({ prefix: 'кварт' }))).toEqual(['Отчёт за квартал']);
+    expect(titles(await caller.entity.suggest({ term: 'кварт' }))).toEqual(['Отчёт за квартал']);
   });
 
   test('совпадения С НАЧАЛА заголовка идут выше вхождений в середине — даже если те свежее', async () => {
@@ -119,7 +117,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     const caller = callerFor(freshUserId());
     const fromStart = await seedEntity(caller, { title: 'Купить кроссовки' });
     const inMiddle = await seedEntity(caller, { title: 'Не забыть купить' });
-    expect((await caller.entity.suggest({ prefix: 'куп' })).map((e) => e.id)).toEqual([
+    expect((await caller.entity.suggest({ term: 'куп' })).map((e) => e.id)).toEqual([
       fromStart.id,
       inMiddle.id,
     ]);
@@ -129,7 +127,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     const caller = callerFor(freshUserId());
     const live = await seedEntity(caller, { title: 'Купить живое' });
     await seedEntity(caller, { title: 'Купить старое', archived: true });
-    const got = await caller.entity.suggest({ prefix: 'куп' });
+    const got = await caller.entity.suggest({ term: 'куп' });
     // Не просто «не пусто»: архивная ушла, живая осталась — иначе фильтр по archived
     // мог бы вырезать вообще всё, и тест был бы зелёным по ложной причине.
     expect(got.map((e) => e.id)).toEqual([live.id]);
@@ -141,7 +139,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
       title: 'Купить хлеб',
       aspects: { 'orbis/task': { status: 'done' } },
     });
-    const got = await caller.entity.suggest({ prefix: 'куп' });
+    const got = await caller.entity.suggest({ term: 'куп' });
     expect(titles(got)).toEqual(['Купить хлеб']);
     expect(got[0]?.status).toBe('done');
   });
@@ -153,7 +151,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
       emoji: '🥛',
       aspects: { 'orbis/task': { status: 'inbox' } },
     });
-    expect(await caller.entity.suggest({ prefix: 'куп' })).toEqual([
+    expect(await caller.entity.suggest({ term: 'куп' })).toEqual([
       { id: e.id, title: 'Купить молоко', emoji: '🥛', status: 'inbox', archived: false },
     ]);
   });
@@ -161,7 +159,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   test('сущность без task-аспекта отдаёт status = null, emoji = null', async () => {
     const caller = callerFor(freshUserId());
     const e = await seedEntity(caller, { title: 'Купить без аспекта' });
-    expect(await caller.entity.suggest({ prefix: 'куп' })).toEqual([
+    expect(await caller.entity.suggest({ term: 'куп' })).toEqual([
       { id: e.id, title: 'Купить без аспекта', emoji: null, status: null, archived: false },
     ]);
   });
@@ -175,18 +173,18 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
 
     // Без экранирования «%» дал бы ВСЕ строки, «_» — все (любой первый символ),
     // а «\» съел бы следующий символ шаблона и не нашёл бы ничего.
-    expect((await caller.entity.suggest({ prefix: '%' })).map((e) => e.id)).toEqual([pct.id]);
-    expect((await caller.entity.suggest({ prefix: '_' })).map((e) => e.id)).toEqual([under.id]);
-    expect((await caller.entity.suggest({ prefix: '\\' })).map((e) => e.id)).toEqual([back.id]);
+    expect((await caller.entity.suggest({ term: '%' })).map((e) => e.id)).toEqual([pct.id]);
+    expect((await caller.entity.suggest({ term: '_' })).map((e) => e.id)).toEqual([under.id]);
+    expect((await caller.entity.suggest({ term: '\\' })).map((e) => e.id)).toEqual([back.id]);
   });
 
   test('чужие сущности не предлагаются (RLS §4.10)', async () => {
     const owner = callerFor(freshUserId());
     const e = await seedEntity(owner, { title: 'Купить чужое' });
-    expect(await callerFor(freshUserId()).entity.suggest({ prefix: 'куп' })).toEqual([]);
+    expect(await callerFor(freshUserId()).entity.suggest({ term: 'куп' })).toEqual([]);
     // Контроль: пусто именно у ЧУЖОГО. Без этой строки тест был бы зелёным и от вовсе
     // сломанного suggest — классика ложного зелёного.
-    expect((await owner.entity.suggest({ prefix: 'куп' })).map((r) => r.id)).toEqual([e.id]);
+    expect((await owner.entity.suggest({ term: 'куп' })).map((r) => r.id)).toEqual([e.id]);
   });
 
   test('порядок — по updated_at DESC: свежее наверху', async () => {
@@ -194,14 +192,14 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     const caller = callerFor(freshUserId());
     const first = await seedEntity(caller, { title: 'Купить первое' });
     const second = await seedEntity(caller, { title: 'Купить второе' });
-    expect((await caller.entity.suggest({ prefix: 'куп' })).map((r) => r.id)).toEqual([
+    expect((await caller.entity.suggest({ term: 'куп' })).map((r) => r.id)).toEqual([
       second.id,
       first.id,
     ]);
 
     // Тронули старую — она поднялась наверх (а не просто «порядок создания случайно совпал»)
     await caller.entity.update({ id: first.id, title: 'Купить первое ещё раз' });
-    expect((await caller.entity.suggest({ prefix: 'куп' })).map((r) => r.id)).toEqual([
+    expect((await caller.entity.suggest({ term: 'куп' })).map((r) => r.id)).toEqual([
       first.id,
       second.id,
     ]);
@@ -229,7 +227,7 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     // id — UUIDv7 (schema.ts:27), то есть DESC читается как «свежее выше»; прецедент того же
     // тай-брейка — llm/context.ts:126. Порядок создания здесь ВОЗРАСТАЮЩИЙ, ожидаемый —
     // строго обратный, так что физический порядок строк тест не спасёт.
-    expect((await caller.entity.suggest({ prefix: 'куп', limit: 8 })).map((r) => r.id)).toEqual(
+    expect((await caller.entity.suggest({ term: 'куп', limit: 8 })).map((r) => r.id)).toEqual(
       [...made].sort().reverse(),
     );
   });
@@ -237,14 +235,14 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
   test('limit: по умолчанию 10, переданный уважается, свыше 20 — BAD_REQUEST', async () => {
     const caller = callerFor(freshUserId());
     for (let i = 0; i < 12; i++) await seedEntity(caller, { title: `Купить ${i}` });
-    expect((await caller.entity.suggest({ prefix: 'куп' })).length).toBe(10);
-    expect((await caller.entity.suggest({ prefix: 'куп', limit: 3 })).length).toBe(3);
-    const e = await trpcError(caller.entity.suggest({ prefix: 'куп', limit: 21 }));
+    expect((await caller.entity.suggest({ term: 'куп' })).length).toBe(10);
+    expect((await caller.entity.suggest({ term: 'куп', limit: 3 })).length).toBe(3);
+    const e = await trpcError(caller.entity.suggest({ term: 'куп', limit: 21 }));
     expect(e.code).toBe('BAD_REQUEST');
   });
 
-  test('пустой prefix отклоняется на входе → BAD_REQUEST', async () => {
-    const e = await trpcError(callerFor(freshUserId()).entity.suggest({ prefix: '' }));
+  test('пустой term отклоняется на входе → BAD_REQUEST', async () => {
+    const e = await trpcError(callerFor(freshUserId()).entity.suggest({ term: '' }));
     expect(e.code).toBe('BAD_REQUEST');
   });
 });

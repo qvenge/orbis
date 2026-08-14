@@ -80,11 +80,12 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
 
   // Был entity.query с `search=`, то есть FTS по plainto_tsquery — совпадение только по
   // ЦЕЛОМУ слову: «Куп» не находило «Купить кроссовки», и пикер честно извинялся подсказкой.
-  // entity.suggest ищет по ПРЕФИКСУ, извиняться больше не за что. Остальные состояния
-  // (ошибка, загрузка, пусто) остались: немая пустая область читается как сломанная фича.
+  // entity.suggest ищет ВХОЖДЕНИЕ набранного фрагмента, извиняться больше не за что.
+  // Остальные состояния (ошибка, загрузка, пусто) остались: немая пустая область читается
+  // как сломанная фича.
   const q = useDebounced(draft.trim(), SEARCH_DEBOUNCE_MS);
   const search = trpc.entity.suggest.useQuery(
-    { prefix: q, limit: 10 },
+    { term: q, limit: 10 },
     { enabled: adding && q.length >= SEARCH_MIN },
   );
   const known = new Set([entityId, ...ids]);

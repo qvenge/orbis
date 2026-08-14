@@ -262,7 +262,7 @@ export const entityRouter = router({
     .input(entitySuggestInput)
     .query(({ ctx, input }): Promise<EntitySuggestion[]> => {
       const limit = input.limit ?? 10;
-      const needle = escapeLike(input.prefix);
+      const needle = escapeLike(input.term);
       const anywhere = `%${needle}%`;
       const fromStart = `${needle}%`;
       return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
