@@ -1,6 +1,8 @@
 import { DOC_EXTENSIONS } from '@orbis/shared/doc';
 import type { AnyExtension } from '@tiptap/core';
 import UniqueID from '@tiptap/extension-unique-id';
+import { Placeholder } from '@tiptap/extensions';
+import { BODY_PLACEHOLDER } from './body-box';
 import { EntityRefWithView } from './nodes/EntityChip';
 import { QueryBlockWithView } from './nodes/QueryWidget';
 
@@ -37,8 +39,13 @@ export const UNIQUE_ID_TYPES: readonly string[] = [
  *
  * Задача 8 заменила здесь EntityRef → EntityRefWithView, Задача 9 — QueryBlock →
  * QueryBlockWithView (обе фильтром+concat над DOC_EXTENSIONS ВНУТРИ этого массива, а не
- * пересборкой файла), Задача 11 добавит MoveBlock в конец, Задача 10 — плейсхолдер.
+ * пересборкой файла), Задача 10 — плейсхолдер, Задача 11 добавит MoveBlock в конец.
  * Больше этот файл не меняется.
+ *
+ * Расширений `/`-меню и `@` здесь НЕТ намеренно: они держат колбэки конкретного редактора
+ * (состояние меню живёт в React), а модульная константа раздала бы пяти BodyEditor'ам на
+ * одном экране одно состояние на всех. Их собирает сам BodyEditor через useEditorSuggest;
+ * что схему они не трогают — стережёт тест в slash/slash.test.tsx.
  */
 export const EDITOR_EXTENSIONS: AnyExtension[] = [
   // Задачи 8 и 9: entityRef и queryBlock ЗАМЕНЯЮТСЯ своими же версиями с NodeView — фильтр и
@@ -51,4 +58,22 @@ export const EDITOR_EXTENSIONS: AnyExtension[] = [
   QueryBlockWithView,
   // Копия — потому что список отдан наружу readonly, а расширение принимает изменяемый массив.
   UniqueID.configure({ types: [...UNIQUE_ID_TYPES] }),
+  // Задача 10: приглашение к вводу в пустом теле. Расширение ПЛАГИННОЕ (декорация поверх
+  // пустого текстового блока) — ни ноды, ни марки не заводит, и потому схема редактора
+  // остаётся равной схеме документа; равенство стережёт тест, а не рассуждение.
+  //
+  // Текст — ТА ЖЕ константа, что рисует первый кадр (EditorShell), а не своя копия строки:
+  // редактор подменяет собой первый кадр, и разойдись эти две строки — подсказка дёргалась бы
+  // на другую ровно в момент монтирования.
+  //
+  // Функция, а не голая строка, — по той же причине: `BODY_PLACEHOLDER` приглашает заполнить
+  // ПУСТОЕ ТЕЛО (первый кадр и рисует его только при `segments.length === 0`), а умолчание
+  // расширения показывает подсказку на ЛЮБОМ пустом текстовом блоке под кареткой. С голой
+  // строкой «Заметки…» всплывали бы под каждым нажатием Enter посреди уже написанной записи.
+  //
+  // Взято из `@tiptap/extensions`, а не из `@tiptap/extension-placeholder`: второй пакет
+  // лежит в `packages-deprecated/` монорепы Tiptap и целиком состоит из реэкспорта первого
+  // (проверено распаковкой тарбола 3.30.1). Все прочие пакеты Tiptap в зависимостях
+  // репозитория — из живого `packages/`.
+  Placeholder.configure({ placeholder: ({ editor }) => (editor.isEmpty ? BODY_PLACEHOLDER : '') }),
 ];

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import { BODY_BOX_CLASS } from './body-box';
 import { EDITOR_EXTENSIONS, UNIQUE_ID_TYPES } from './extensions';
 import { RefTitlesProvider } from './nodes/RefTitlesContext';
+import { SuggestMenu, useEditorSuggest } from './slash/EditorSuggest';
 
 /**
  * Сравнение документов «по смыслу»: UniqueID кладёт `attrs.id` во все перечисленные ему блоки
@@ -91,8 +92,18 @@ export function BodyEditor({
   // правкой не считаются — иначе каждое открытие сущности писало бы в БД (Б4).
   const lastAccepted = useRef<JSONContent>(doc.doc);
 
+  // `/` и `@`. Расширения приходят отсюда, а не из EDITOR_EXTENSIONS: они держат колбэки
+  // ЭТОГО редактора, и общая константа раздала бы пяти редакторам на экране одно состояние
+  // меню на всех. Массив стабилен (useMemo без зависимостей внутри хука) — схему редактора
+  // пересобирать нечему.
+  const suggest = useEditorSuggest();
+  const extensions = useMemo(
+    () => [...EDITOR_EXTENSIONS, ...suggest.extensions],
+    [suggest.extensions],
+  );
+
   const editor = useEditor({
-    extensions: EDITOR_EXTENSIONS,
+    extensions,
     content: doc.doc,
     onCreate: ({ editor: e }) => onReady?.(e),
     onUpdate: ({ editor: e }) => {
@@ -137,6 +148,9 @@ export function BodyEditor({
   return (
     <RefTitlesProvider ids={ids}>
       <EditorContent editor={editor} data-testid="body-editor" className="orbis-markdown" />
+      {/* Меню рисуется в дереве РЕДАКТОРА, а не в отдельном React-корне через ReactRenderer:
+          строки `@` приезжают из tRPC, а свой корень остался бы без провайдеров запросов. */}
+      <SuggestMenu editor={editor} suggest={suggest} />
     </RefTitlesProvider>
   );
 }
