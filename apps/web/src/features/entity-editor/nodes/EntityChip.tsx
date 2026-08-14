@@ -10,8 +10,10 @@ const CLOSED = new Set(['done', 'cancelled']);
 
 function Chip({ node }: NodeViewProps) {
   // Атрибуты ноды типизированы как Record<string, any> — сужаем на входе, а не по месту.
-  // id уже в нижнем регистре: его приводит сама нода при разборе markdown (Задача 2),
-  // и второе приведение тут только разошлось бы с ключами карты заголовков.
+  // id зовётся КАК ЕСТЬ: приведение к нижнему регистру уже сделала сама нода при разборе
+  // markdown (Задача 2), а ключи карты заголовков lowercase по построению (id уезжает в
+  // запрос через bodyRefsFromDoc, который их приводит, — convert.ts). Второй `toLowerCase()`
+  // тут ничему не помешал бы, но и не спас бы ничего, кроме ноды, собранной в обход разбора.
   const entityId = typeof node.attrs.entityId === 'string' ? node.attrs.entityId : '';
   const label = typeof node.attrs.label === 'string' ? node.attrs.label : null;
   const found = useRefTitle(entityId);
@@ -37,7 +39,12 @@ function Chip({ node }: NodeViewProps) {
         // Внутренность чипа — не текст документа: без этого каретка заходила бы внутрь
         // подписи, которой в документе нет (в документе только id и label атрибутами).
         contentEditable={false}
-        className={`rounded px-1 ${tone}`}
+        // Свой ховер — заливкой, как у всякой «пилюли» в интерфейсе (ui/Chip.tsx, Sheet.tsx):
+        // общее подчёркивание ссылок разметки чипу чужое, и вдобавок `text-decoration` —
+        // ШОРТКАТ, то есть у закрытой задачи оно не добавлялось бы к зачёркиванию, а СНИМАЛО
+        // бы его ровно под курсором (найдено ревью). Само правило разметки от чипа отвязано
+        // в globals.css.
+        className={`rounded px-1 transition hover:bg-surface-2 ${tone}`}
         onClick={(e) => {
           // Штатные жесты браузера не перехватываем — то же правило, что в Markdown.tsx:62:
           // Ctrl/Cmd (новая вкладка), Shift (новое окно), Alt (скачать) и не-основная кнопка

@@ -1,10 +1,11 @@
+import { ENTITY_RESOLVE_REFS_MAX } from '@orbis/shared';
 import { parseBody, serializeBody } from '@orbis/shared/doc';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Editor } from '@tiptap/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../../state/navigation';
-import { renderWithProviders } from '../../../test/harness';
+import { renderWithProviders, trpcError } from '../../../test/harness';
 import { BodyEditor } from '../BodyEditor';
 import { RefTitlesProvider } from './RefTitlesContext';
 
@@ -34,11 +35,19 @@ const row = (id: string, over: Partial<Row> = {}): Row => ({
 // получал бы чужую первую строку и рисовал бы правильный заголовок по ложной причине
 // (поймано пробой — мутация «хук внутри чипа» падала не на счётчике вызовов, а на подсчёте
 // одинаковых подписей).
+// Потолок контракта мок соблюдает НАСТОЯЩИМ отказом: без него запрос на 201 id «удавался» бы,
+// и тест про нарезку падал бы только на счётчике вызовов, а не на том, ради чего он написан, —
+// на посеревших чипах. Мок, который принимает то, что сервер отвергает, — это тест, зелёный по
+// ложной причине, только с другой стороны провода.
 const refs =
   (rows: Row[]) =>
   (path: string, input: unknown): unknown => {
     if (path !== 'entity.resolveRefs') return {};
-    const asked = new Set((input as { ids?: string[] }).ids ?? []);
+    const ids = (input as { ids?: string[] }).ids ?? [];
+    if (ids.length > ENTITY_RESOLVE_REFS_MAX || ids.length === 0) {
+      throw trpcError('BAD_REQUEST', `ids: ожидалось от 1 до ${ENTITY_RESOLVE_REFS_MAX}`);
+    }
+    const asked = new Set(ids);
     return rows.filter((r) => asked.has(r.id));
   };
 
@@ -104,6 +113,43 @@ test('провайдер нормализует список: порядок и 
   await new Promise((res) => setTimeout(res, 50));
   expect(resolves()).toHaveLength(1);
   expect((resolves()[0]?.input as { ids: string[] }).ids).toEqual([A, B]);
+});
+
+test('документ длиннее потолка контракта режется на пачки, а не теряет заголовки', async () => {
+  // Потолок `entity.resolveRefs` — 200 id (entityResolveRefsInput). На 201 упоминании
+  // ОДИН запрос вернулся бы ошибкой валидации, `data` осталась бы undefined, и ВСЕ чипы
+  // документа навсегда остались бы серыми — без единого следа для пользователя. Обрезание
+  // списка ничем не лучше: это молчаливая потеря заголовков у хвоста тела.
+  // Пачки нарезаются ровно по контрактному потолку, поэтому число берётся из контракта, а не
+  // переписывается сюда: разъехавшись, они дали бы либо вечную ошибку валидации, либо лишний
+  // запрос — и то и другое молча.
+  const ids = Array.from(
+    { length: ENTITY_RESOLVE_REFS_MAX + 1 },
+    (_, i) => `0f8fad5b-d9cb-469f-a165-708677${String(i).padStart(6, '0')}`,
+  );
+  const rows = ids.map((id, i) => row(id, { title: `Т${i}` }));
+  const r = renderWithProviders(
+    <BodyEditor
+      doc={parseBody(ids.map((id) => `[[entity:${id}]]`).join(' '))}
+      onChange={vi.fn()}
+    />,
+    refs(rows),
+  );
+  await waitFor(() => expect(screen.getAllByTestId('entity-chip')).toHaveLength(ids.length));
+  // Хвост ВТОРОЙ пачки: id отсортированы, поэтому последний — тот, чей суффикс наибольший.
+  await waitFor(() => expect(screen.getByText(`Т${ids.length - 1}`)).toBeInTheDocument());
+
+  const resolves = r.calls.filter((c) => c.path === 'entity.resolveRefs');
+  expect(resolves).toHaveLength(2);
+  expect(
+    resolves.map((c) => (c.input as { ids: string[] }).ids.length).sort((a, b) => a - b),
+  ).toEqual([1, ENTITY_RESOLVE_REFS_MAX]);
+  // Заголовок приехал КАЖДОМУ чипу, а не только первой пачке: без этого ассерта тест был бы
+  // зелен и у реализации, которая вторую пачку запрашивает, но в карту не кладёт.
+  const resolved = screen
+    .getAllByTestId('entity-chip')
+    .filter((el) => /^Т\d+$/.test(el.textContent ?? ''));
+  expect(resolved).toHaveLength(ids.length);
 });
 
 test('пока резолв едет — на экране вмороженная подпись, а не пустое место', async () => {
@@ -196,12 +242,15 @@ test('клик по чипу открывает сущность, Ctrl-клик 
   document.body.addEventListener('click', swallow);
   try {
     // Штатные жесты браузера не перехватываем (то же правило, что в Markdown.tsx:62).
+    // ОБА модификатора «новой вкладки»: на маке живёт metaKey, и страж, покрывающий один
+    // ctrlKey, был бы сломан ровно там, где этим жестом пользуются (найдено ревью).
     chip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, ctrlKey: true }));
-    expect(seen).toEqual([false]);
+    chip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, metaKey: true }));
+    expect(seen).toEqual([false, false]);
     expect(useNav.getState().stacks.browser).toEqual([]);
 
     chip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    expect(seen).toEqual([false, true]); // обычный клик перехвачен нами
+    expect(seen).toEqual([false, false, true]); // обычный клик перехвачен нами
     expect(useNav.getState().stacks.browser).toEqual([{ kind: 'entity', id: A }]);
   } finally {
     document.body.removeEventListener('click', swallow);

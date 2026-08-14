@@ -14,7 +14,10 @@ import { EntityRefWithView } from './nodes/EntityChip';
  * лишняя НОДА или МАРКА редактора сделала бы нерабочим каждое сохранение, а незнакомый
  * `attrs.id` разбор молча отбрасывает до проверки схемы (проверено Задачей 4).
  */
-export const UNIQUE_ID_TYPES = [
+// readonly, а не голый string[]: список читает уже второй модуль (stripIds в BodyEditor), и
+// общий изменяемый массив кто угодно мог бы дополнить у себя — с тихим расхождением между
+// тем, чему id ставят, и тем, у чего его снимают при сравнении документов.
+export const UNIQUE_ID_TYPES: readonly string[] = [
   'paragraph',
   'heading',
   'queryBlock',
@@ -43,5 +46,6 @@ export const EDITOR_EXTENSIONS: AnyExtension[] = [
   // что он не промахнулся, стережёт тест «entityRef в составе редактора ровно один».
   ...DOC_EXTENSIONS.filter((e) => e.name !== 'entityRef'),
   EntityRefWithView,
-  UniqueID.configure({ types: UNIQUE_ID_TYPES }),
+  // Копия — потому что список отдан наружу readonly, а расширение принимает изменяемый массив.
+  UniqueID.configure({ types: [...UNIQUE_ID_TYPES] }),
 ];

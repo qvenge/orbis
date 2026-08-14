@@ -132,8 +132,16 @@ export const entitySuggestInput = z
  * положил бы весь резолв и все чипы разом, вместо того чтобы просто стоить один запрос.
  * Вход ТОЛЬКО tRPC.
  */
+/**
+ * Потолок вынесен константой, потому что его читает и КЛИЕНТ: чипы длинного тела режутся на
+ * пачки ровно по нему (web/features/entity-editor/nodes/RefTitlesContext.tsx). Второе число,
+ * переписанное туда руками, разъехалось бы молча — в одну сторону вечной ошибкой валидации,
+ * в другую лишним запросом.
+ */
+export const ENTITY_RESOLVE_REFS_MAX = 200;
+
 export const entityResolveRefsInput = z
-  .object({ ids: z.array(z.string().uuid()).min(1).max(200) })
+  .object({ ids: z.array(z.string().uuid()).min(1).max(ENTITY_RESOLVE_REFS_MAX) })
   .strict();
 
 export type EntitySuggestInput = z.infer<typeof entitySuggestInput>;

@@ -148,7 +148,19 @@ test('смарт-лист переживает набор рядом с ним �
   const area = (await screen.findByTestId('body-editor')).querySelector('[contenteditable]');
   await waitFor(() => expect(h.editor).not.toBeNull());
   h.editor?.commands.focus('start');
-  await userEvent.type(area as HTMLElement, '!');
+  // Набор адресован САМОМУ АБЗАЦУ, а не коробке редактора, и это не косметика.
+  // `type()` перед вводом КЛИКАЕТ, и текст уходит в выделение, которое поставил этот клик, —
+  // `commands.focus('start')` тут только фокусирует. Клик по коробке jsdom разрешает по
+  // геометрии, которой нет (все прямоугольники нулевые, elementFromPoint отдаёт null —
+  // tests/prosemirror-polyfill.ts), и под нагрузкой он один раз уложил каретку gap-курсором
+  // ПОСЛЕ блока смарт-листа (Gapcursor входит в StarterKit): набор создал третий абзац, и тест
+  // упал «лишним paragraph» — рассказывая про схлопывание блока, которого не было.
+  // Воспроизведено пробой (focus('end') даёт ту же подпись) и ею же проверено лечение: с
+  // адресацией в абзац тест проходит даже при focus('end'), то есть от позиции каретки,
+  // оставленной focus(), он больше не зависит. `skipClick` не годится — без клика user-event
+  // не вставляет в contenteditable вовсе (проверено: onChange не зовётся).
+  const firstParagraph = (area as HTMLElement).querySelector('p');
+  await userEvent.type(firstParagraph as HTMLElement, '!');
   await waitFor(() => expect(onChange).toHaveBeenCalled());
 
   // Проверка по ФОРМЕ ДОКУМЕНТА, а не по markdown-проекции: абзац с буквальным текстом
