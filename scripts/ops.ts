@@ -15,10 +15,13 @@
 //   bun scripts/ops.ts migrate        # накатить неприменённые миграции схемы
 //   bun scripts/ops.ts seed-aspects   # upsert встроенных аспектов (идемпотентно)
 //   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
+//   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
 //   bun scripts/ops.ts issue-pat <owner-uuid> [метка]   # headless-токен агента (§9.3)
 import { join } from 'node:path';
 import { aspectJsonSchema, BUILTIN_ASPECT_META, diffBuiltinAspects } from '@orbis/shared';
+import { bodyRefsFromDoc, canonicalizeBody } from '@orbis/shared/doc';
+import type { JSONContent } from '@tiptap/core';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
@@ -216,6 +219,87 @@ async function coverage(): Promise<number> {
   });
 }
 
+/**
+ * Все rawBlock-узлы дерева НА ЛЮБОЙ ГЛУБИНЕ.
+ *
+ * Плоский фильтр по верхнему уровню (как в плане) сегодня дал бы тот же ответ: parseBody
+ * кладёт raw только детьми `doc` — проверено пробой на семнадцати формах разметки (html-блок,
+ * картинка в абзаце, reference-определение, черта в ячейке таблицы, цитата и список с
+ * непонятым содержимым — все дали глубину 1). Но rawBlock объявлен обычным block-узлом, то
+ * есть законен внутри цитаты или элемента списка, и документ, прошедший через редактор, может
+ * его туда положить. Обход всего дерева стоит копейки, а метрика перестаёт зависеть от места
+ * узла — на замере перед необратимой конверсией это дешёвая страховка.
+ *
+ * Второе назначение — сам факт «есть raw»: сравнение `JSON.stringify(doc).includes('"rawBlock"')`
+ * отвечает на этот вопрос лишь приблизительно (оно ищет строку в сериализации, а не узел
+ * в дереве), а здесь точный ответ получается тем же обходом бесплатно.
+ */
+function collectRawBlocks(node: JSONContent, out: JSONContent[] = []): JSONContent[] {
+  if (node.type === 'rawBlock') out.push(node);
+  for (const child of node.content ?? []) collectRawBlocks(child, out);
+  return out;
+}
+
+/** «Нетривиальное» тело: несёт ссылку на сущность или смарт-лист. Флага `g` нет намеренно —
+ *  у глобального регэкспа `test` тащит lastIndex между вызовами и через строку врал бы. */
+const NONTRIVIAL_RE = /\[\[entity:|\{\{query:/i;
+
+/**
+ * Read-only аудит корпуса тел ПЕРЕД миграцией и бэкфиллом (ревью И10, вердикт): сколько тел
+ * изменит канонизация, сколько получат raw-блоки, сколько тел держит ссылки внутри raw.
+ * Числа — стоп-кран: заметная доля raw или ненулевые ссылки в raw означают, что до конверсии
+ * надо расширять белые списки токенов (KNOWN_BLOCK/KNOWN_INLINE), а не запускать бэкфилл.
+ *
+ * Тела НЕ печатаются и НЕ покидают процесс ни в каком виде — только агрегаты: тела это личные
+ * записи, а вывод команды попадает в транскрипты и отчёты. По той же причине не выбирается и
+ * `id`: ни одному счётчику он не нужен.
+ *
+ * Единственный SQL здесь — SELECT: команда не пишет ничего.
+ */
+async function auditBodies(): Promise<number> {
+  return withDb(async (sql) => {
+    const rows = await sql<{ body: string | null }[]>`SELECT body FROM entities`;
+    let changed = 0;
+    let withRaw = 0;
+    let refsInRaw = 0;
+    let nontrivial = 0;
+    let failed = 0;
+    for (const row of rows) {
+      try {
+        // `?? ''` — не про текущую схему (там body NOT NULL DEFAULT ''), а про то, что команда
+        // ходит в ПРОД: его схема — та, что развёрнута, а не та, что в этом файле. NULL здесь
+        // должен дать пустое тело, а не остановить замер на середине корпуса.
+        const body = String(row.body ?? '');
+        if (NONTRIVIAL_RE.test(body)) nontrivial += 1;
+        const { doc, body: canon } = canonicalizeBody(body);
+        if (canon !== body) changed += 1;
+        const raws = collectRawBlocks(doc.doc);
+        if (raws.length > 0) {
+          withRaw += 1;
+          // Ссылки ищем В САМИХ raw-узлах, а не разницей «всего минус дерево», как в плане:
+          // bodyRefsFromDoc отдаёт МНОЖЕСТВО, поэтому ссылка, упомянутая и в прозе, и внутри
+          // raw, разницу не увеличивает — тело со ссылкой в raw считалось бы чистым
+          // (воспроизведено пробой). Прямой вопрос «есть ли ссылка в raw» ответа не теряет.
+          if (bodyRefsFromDoc({ type: 'doc', content: raws }).length > 0) refsInRaw += 1;
+        }
+      } catch {
+        // Одно неразобранное тело не должно рушить замер: аудит и заведён затем, чтобы такие
+        // тела ПОСЧИТАТЬ. Само тело в вывод не идёт даже в этой ветке.
+        failed += 1;
+      }
+    }
+    console.log(`тел всего: ${rows.length}`);
+    console.log(`канон изменит body: ${changed}`);
+    console.log(`получат raw-блоки: ${withRaw}`);
+    console.log(`ссылки внутри raw: ${refsInRaw}`);
+    // Без этой строки числа про raw нечем взвесить: доля raw сама по себе не говорит, много ли
+    // в корпусе тел, которым вообще есть что терять при конверсии.
+    console.log(`со ссылкой или смарт-листом ([[entity: или {{query:): ${nontrivial}`);
+    console.log(`упали на парсе: ${failed}`);
+    return 0;
+  });
+}
+
 async function ping(): Promise<number> {
   await withDb(async (sql) => {
     const [row] = await sql<{ version: string }[]>`SELECT version()`;
@@ -283,6 +367,10 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
   migrate: { run: migrateOp, help: 'накатить неприменённые миграции схемы (идемпотентно)' },
   'seed-aspects': { run: seedAspects, help: 'upsert встроенных аспектов (идемпотентно)' },
   coverage: { run: coverage, help: 'только чтение: покрытие транзакций за 90 дней (§8)' },
+  'audit-bodies': {
+    run: auditBodies,
+    help: 'только чтение: агрегаты по корпусу тел перед конверсией (тела не печатаются)',
+  },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   'issue-pat': {
     run: issuePat,
