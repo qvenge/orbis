@@ -45,6 +45,13 @@ test('EDITOR_EXTENSIONS не приносит ни одной ноды и мар
   expect(Object.keys(editor.nodes)).toContain('entityRef');
 });
 
+test('entityRef в составе редактора ровно один — замена, а не вторая нода', () => {
+  // Задача 8 меняет ноду её же версией с NodeView через filter+concat. Промахнись фильтр
+  // мимо имени (ровно так в плане v1 умер белый список протоколов) — в массиве оказались бы
+  // ДВЕ ноды entityRef, а схемы выше остались бы равными: имена-то те же.
+  expect(EDITOR_EXTENSIONS.filter((e) => e.name === 'entityRef')).toHaveLength(1);
+});
+
 test('UniqueID в составе редактора и его НЕТ в схеме документа', () => {
   // Атрибут id ставится только в редакторе (см. «Известные границы» дизайна): попав в
   // DOC_EXTENSIONS, он появился бы и на серверном разборе, где его никто не чистит.
@@ -390,6 +397,32 @@ test('простой монтирует редактор без всякого �
   );
   await screen.findByTestId('body-editor');
   expect(idle).toHaveBeenCalled();
+});
+
+test('после раскрытия Suspense в редактор МОЖНО НАБИРАТЬ, а не только смотреть', async () => {
+  // Долг Задачи 7. В BodyEditor стоит страж `editor.isDestroyed`: он гасит крах эффекта,
+  // который React 19 переигрывает при раскрытии Suspense (reconnectPassiveEffects). Цена
+  // стража — тихо мёртвый редактор, если экземпляр однажды перестанет пересоздаваться:
+  // `findByTestId('body-editor')` останется зелёным, а набор не доедет никуда. Все прочие
+  // тесты файла ходят либо мимо Suspense (BodyEditor напрямую), либо только смотрят.
+  const onChange = vi.fn();
+  vi.stubGlobal('requestIdleCallback', () => 1);
+  renderWithProviders(
+    <EditorShell doc={parseBody('начало')} markdown="начало" onChange={onChange} />,
+    handler,
+  );
+  fireEvent.click(await screen.findByTestId('editor-preview'));
+  // Ждём именно ПОЛЕ ВВОДА, и запрашиваем коробку каждый раз заново: EditorContent
+  // перемонтируется, когда useEditor отдаёт экземпляр (у него key, завязанный на editor),
+  // поэтому первая найденная коробка к этому моменту уже оторвана от документа.
+  await screen.findByTestId('body-editor');
+  const field = () => screen.getByTestId('body-editor').querySelector('[contenteditable]');
+  await waitFor(() => expect(field()).not.toBeNull());
+  const area = field() as HTMLElement;
+  await userEvent.click(area);
+  await userEvent.type(area, ' и хвост');
+  await waitFor(() => expect(onChange).toHaveBeenCalled());
+  expect(serializeBody(onChange.mock.calls.at(-1)?.[0])).toContain('и хвост');
 });
 
 test('без requestIdleCallback редактор встаёт по запасному таймеру', async () => {

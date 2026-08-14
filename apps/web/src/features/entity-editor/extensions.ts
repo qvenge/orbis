@@ -1,6 +1,7 @@
 import { DOC_EXTENSIONS } from '@orbis/shared/doc';
 import type { AnyExtension } from '@tiptap/core';
 import UniqueID from '@tiptap/extension-unique-id';
+import { EntityRefWithView } from './nodes/EntityChip';
 
 /**
  * Блочные id сегодня не читает никто. Ставятся с первого дня потому, что на них ляжет будущий
@@ -13,7 +14,14 @@ import UniqueID from '@tiptap/extension-unique-id';
  * лишняя НОДА или МАРКА редактора сделала бы нерабочим каждое сохранение, а незнакомый
  * `attrs.id` разбор молча отбрасывает до проверки схемы (проверено Задачей 4).
  */
-const UNIQUE_ID_TYPES = ['paragraph', 'heading', 'queryBlock', 'rawBlock', 'listItem', 'taskItem'];
+export const UNIQUE_ID_TYPES = [
+  'paragraph',
+  'heading',
+  'queryBlock',
+  'rawBlock',
+  'listItem',
+  'taskItem',
+];
 
 /**
  * Состав редактора: схема документа + блочные id.
@@ -23,12 +31,17 @@ const UNIQUE_ID_TYPES = ['paragraph', 'heading', 'queryBlock', 'rawBlock', 'list
  * список протоколов: `DOC_EXTENSIONS.map(e => e.name === 'link' ? …)` не находил никого, потому
  * что Link живёт ВНУТРИ StarterKit, и map по имени молча возвращал массив без изменений.
  *
- * Задача 8 заменяет здесь EntityRef → EntityRefWithView, Задача 9 — QueryBlock →
+ * Задача 8 заменила здесь EntityRef → EntityRefWithView; Задача 9 так же заменит QueryBlock →
  * QueryBlockWithView (фильтром+concat над DOC_EXTENSIONS ВНУТРИ этого массива, а не
- * пересборкой файла), Задача 11 добавляет MoveBlock в конец, Задача 10 — плейсхолдер.
+ * пересборкой файла), Задача 11 добавит MoveBlock в конец, Задача 10 — плейсхолдер.
  * Больше этот файл не меняется.
  */
 export const EDITOR_EXTENSIONS: AnyExtension[] = [
-  ...DOC_EXTENSIONS,
+  // Задача 8: entityRef ЗАМЕНЯЕТСЯ своей же версией с NodeView — фильтр и concat, а не вторая
+  // нода рядом. В отличие от Link (он живёт ВНУТРИ StarterKit, и фильтр по имени не нашёл бы
+  // никого) entityRef — самостоятельный элемент DOC_EXTENSIONS, так что фильтр тут работает;
+  // что он не промахнулся, стережёт тест «entityRef в составе редактора ровно один».
+  ...DOC_EXTENSIONS.filter((e) => e.name !== 'entityRef'),
+  EntityRefWithView,
   UniqueID.configure({ types: UNIQUE_ID_TYPES }),
 ];

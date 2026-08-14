@@ -1,9 +1,10 @@
-import { type BodyDoc, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
+import { type BodyDoc, bodyRefsFromDoc, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import type { JSONContent } from '@tiptap/core';
 import { type Editor, EditorContent, useEditor } from '@tiptap/react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { BODY_BOX_CLASS } from './body-box';
-import { EDITOR_EXTENSIONS } from './extensions';
+import { EDITOR_EXTENSIONS, UNIQUE_ID_TYPES } from './extensions';
+import { RefTitlesProvider } from './nodes/RefTitlesContext';
 
 /**
  * Сравнение документов «по смыслу»: UniqueID кладёт `attrs.id` во все перечисленные ему блоки
@@ -11,12 +12,20 @@ import { EDITOR_EXTENSIONS } from './extensions';
  * «менялся» при каждом открытии записи — и через две секунды уходило автосохранение без
  * единого нажатия клавиши: рос updated_at, в журнал ложился фантомный entity_updated, и
  * «отмени последнее» отменяло бы открытие записи (ревью Б4).
+ *
+ * Снимается атрибут ТОЛЬКО у тех типов, которым его ставит UniqueID, и список тут ТОТ ЖЕ, что
+ * в конфиге расширения. Прежний фильтр по одному имени `id` на любой глубине был правилен
+ * ровно потому, что сегодня ни одна другая нода схемы атрибута с таким именем не имеет:
+ * появись он у ноды-новичка (или переедь туда цель чипа) — правка, меняющая только его, молча
+ * перестала бы считаться правкой и не сохранялась бы. Долг Задачи 7.
  */
 function stripIds(node: JSONContent): JSONContent {
   const { attrs, content, ...rest } = node;
-  const cleaned = attrs
-    ? Object.fromEntries(Object.entries(attrs).filter(([k]) => k !== 'id'))
-    : undefined;
+  const managed = typeof node.type === 'string' && UNIQUE_ID_TYPES.includes(node.type);
+  const cleaned =
+    attrs && managed
+      ? Object.fromEntries(Object.entries(attrs).filter(([k]) => k !== 'id'))
+      : attrs;
   return {
     ...rest,
     ...(cleaned && Object.keys(cleaned).length ? { attrs: cleaned } : {}),
@@ -118,5 +127,16 @@ export function BodyEditor({
     }
   }, [editor, doc]);
 
-  return <EditorContent editor={editor} data-testid="body-editor" className="orbis-markdown" />;
+  // Ссылки берутся из ДОКУМЕНТА, а не из живого дерева редактора: bodyRefsFromDoc ходит и по
+  // raw-блокам, а пересчёт на каждую транзакцию стоил бы обхода всего тела на нажатие клавиши.
+  // Только что набранный чип доедет до резолва следующим кругом doc — вместе с автосохранением.
+  const ids = useMemo(() => bodyRefsFromDoc(doc), [doc]);
+
+  // Провайдер ОБЯЗАН стоять снаружи EditorContent: NodeView'ы живут в React-порталах, которые
+  // рисует сам EditorContent, — контекст доезжает до них по дереву React, а не по DOM.
+  return (
+    <RefTitlesProvider ids={ids}>
+      <EditorContent editor={editor} data-testid="body-editor" className="orbis-markdown" />
+    </RefTitlesProvider>
+  );
 }
