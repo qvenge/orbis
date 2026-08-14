@@ -13,11 +13,14 @@ import {
   batchAuditMessageId,
   batchExecuteInput,
   entityCreateInput,
-  entityUpdateInput,
+  entityUpdateUiInput,
   newId,
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
+// Конверсия тела живёт в @orbis/shared/doc — ОДИН экземпляр правил разбора и сериализации
+// на сервер и клиент; своей копии у executor'а нет и быть не должно.
+import { bodyRefsFromDoc, canonicalizeBody, serializeBody } from '@orbis/shared/doc';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
@@ -53,7 +56,6 @@ import {
   type AspectsMap,
   applyTaskCompletion,
   assertFinancialInvariant,
-  extractBodyRefs,
   financialRecurringNeedsDerivedFrom,
   mergeAspects,
   normalizeTags,
@@ -800,10 +802,14 @@ async function prepareEntityCreate(
   const now = ctx.clock();
   const id = input.id ?? newId();
 
-  // Нормализации (§2.1, §4.1): tags lowercase+dedupe, body_refs из body, серверные таймстампы
+  // Нормализации (§2.1, §4.1): tags lowercase+dedupe, обе формы тела, серверные таймстампы.
+  // body — КАНОН (сериализация собранного документа), а не строка входа: правда о теле одна,
+  // и это документ; «как написала модель» эталоном быть не может (вердикт Б1).
   const tags = normalizeTags(input.tags);
-  const body = input.body ?? '';
-  const bodyRefs = extractBodyRefs(body);
+  const { doc: bodyDoc, body } = canonicalizeBody(input.body ?? '');
+  // Ссылки — из дерева ∪ raw-блоков (Б2): `[[entity:…]]` в блоке кода связью не считается (Р7),
+  // но тело, не разобранное целиком и уехавшее в rawBlock, backlinks не теряет.
+  const bodyRefs = bodyRefsFromDoc(bodyDoc);
   const aspects: AspectsMap = {};
   for (const [aspectId, data] of Object.entries(input.aspects ?? {})) {
     aspects[aspectId] = { ...data };
@@ -879,6 +885,7 @@ async function prepareEntityCreate(
     title: input.title,
     emoji: input.emoji ?? null,
     body,
+    bodyDoc,
     bodyRefs,
     tags,
     meta: input.meta ?? {},
@@ -962,7 +969,10 @@ async function prepareEntityUpdate(
   batch?: BatchState,
 ): Promise<PreparedOp> {
   // Стадия 1
-  const input = parseEnvelope(entityUpdateInput, rawInput, 'entity_update');
+  // Надмножество тул-контракта: тулы шлют узкую форму (bodyDoc в ней просто отсутствует и
+  // отвергается ещё диспатчем), UI — широкую. Расширять сам entityUpdateInput нельзя: он —
+  // контракт ТУЛА, и bodyDoc в нём показался бы модели.
+  const input = parseEnvelope(entityUpdateUiInput, rawInput, 'entity_update');
 
   // Стадия 3: load state ПОД ЗАМКОМ — merge аспектов это read-modify-write, без
   // FOR UPDATE конкурентные патчи разных полей одного аспекта теряли бы правки
@@ -975,7 +985,11 @@ async function prepareEntityUpdate(
   // Внутренний режим undo (§7.8) требование ПРОПУСКАЕТ: Undo восстанавливает
   // зафиксированное в журнале прежнее состояние поверх текущего — это осознанный
   // LWW-откат, а не пользовательская правка (inverse не несёт expectedUpdatedAt).
-  if (input.body !== undefined && ctx.internalUndo === undefined) {
+  //
+  // ОБА поля тела под одним гейтом: сохранения редактора едут ТОЛЬКО bodyDoc, и пока условие
+  // смотрело на один input.body, они проходили мимо — 409 не наступал никогда, а конкурентная
+  // правка затиралась молча (ревью Б3).
+  if ((input.body !== undefined || input.bodyDoc !== undefined) && ctx.internalUndo === undefined) {
     if (input.expectedUpdatedAt === undefined) {
       throw new ExecError('VALIDATION', 'правка body требует expectedUpdatedAt (§5.2)', {
         id: input.id,
@@ -1082,10 +1096,26 @@ async function prepareEntityUpdate(
     changed.emoji = input.emoji;
     prior.emoji = current.emoji;
   }
-  if (input.body !== undefined) {
-    patch.body = input.body;
-    patch.bodyRefs = extractBodyRefs(input.body); // §2.1: при каждом update, затрагивающем body
-    changed.body = input.body;
+  // Тело приходит в ОДНОЙ из двух форм (схема запрещает обе сразу), а в БД всегда ложатся ОБЕ:
+  // body_doc — правда, body — её проекция и аварийный дубль. Это единственное место, где формы
+  // переводятся друг в друга. body_refs — из ДЕРЕВА в обеих ветках (§2.1 при каждом update,
+  // затрагивающем тело): иначе правка модели и правка из UI считали бы backlinks по разным
+  // правилам, и `[[entity:…]]` в блоке кода то появлялся бы в графе, то исчезал.
+  if (input.bodyDoc !== undefined) {
+    const body = serializeBody(input.bodyDoc);
+    patch.bodyDoc = input.bodyDoc;
+    patch.body = body;
+    patch.bodyRefs = bodyRefsFromDoc(input.bodyDoc);
+    changed.body = body;
+    prior.body = current.body;
+  } else if (input.body !== undefined) {
+    // КАНОН, а не input.body: body — производная документа, и сравнивать «как написала
+    // модель» бессмысленно (вердикт Б1). FTS не страдает (проверено спайком), сиды каноничны.
+    const { doc, body } = canonicalizeBody(input.body);
+    patch.body = body;
+    patch.bodyDoc = doc;
+    patch.bodyRefs = bodyRefsFromDoc(doc); // дерево ∪ raw — backlinks не теряются (Б2)
+    changed.body = body;
     prior.body = current.body;
   }
   if (input.tags !== undefined) {

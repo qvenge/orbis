@@ -23,13 +23,18 @@ type ChatThreadRow = typeof chatThreads.$inferSelect;
 type UserSettingsRow = typeof userSettings.$inferSelect;
 type AspectDefinitionRow = typeof aspectDefinitions.$inferSelect;
 
-export function toWireEntity(row: EntityRow): WireEntity {
+/**
+ * `includeBodyDoc` — явный opt-in (Р6): без него ключа `bodyDoc` в ответе НЕТ вовсе, а не
+ * `null`. Документ весит столько же, сколько тело, и в списках сущностей он не нужен.
+ */
+export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity {
   return {
     id: row.id,
     ownerId: row.ownerId,
     title: row.title,
     emoji: row.emoji,
     body: row.body,
+    ...(includeBodyDoc ? { bodyDoc: (row.bodyDoc ?? null) as WireEntity['bodyDoc'] } : {}),
     bodyRefs: row.bodyRefs,
     tags: row.tags,
     meta: row.meta as Record<string, unknown>, // jsonb — как есть, не трогаем
@@ -52,6 +57,10 @@ function toDate(value: unknown): Date {
 /**
  * Строка raw-SQL выдачи query-компилятора (§6): имена колонок snake_case. Маппинг
  * делегирует в toWireEntity — Date→ISO остаётся в одном месте.
+ *
+ * Документ здесь НЕ отдаётся намеренно: это путь списков (entity.query, backlinks), где
+ * body_doc не нужен ни одному потребителю, а вес ответа удвоился бы. Компилятор запроса его
+ * и не выбирает (SELECT перечисляет колонки явно).
  */
 export function toWireEntityFromSql(row: Record<string, unknown>): WireEntity {
   return toWireEntity({

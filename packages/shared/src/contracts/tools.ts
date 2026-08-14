@@ -32,6 +32,28 @@ export const entityUpdateInput = z
   })
   .strict();
 
+// Форму документа контракт не разбирает: её знает схема нод (@orbis/shared/doc), а дублирующая
+// zod-модель дерева ProseMirror разъехалась бы с ней при первой же новой ноде. Импортировать
+// сюда сам `@orbis/shared/doc` тоже нельзя: этот модуль лежит в эагерном барреле, а тот тянет
+// всю схему Tiptap (~156 kB gzip) — она уехала бы в первый кадр web.
+const bodyDocSchema = z.object({ v: z.number().int().positive(), doc: z.record(z.unknown()) });
+
+/**
+ * Вход tRPC-роутера entity.update: то же, что у тула, плюс структурная форма тела.
+ *
+ * Почему отдельной схемой, а не расширением `entityUpdateInput`: та — контракт ТУЛА, её парность
+ * с рукописной JSON Schema реестра (tools/registry.ts) проверяет тест, и рост схемы показал бы
+ * `bodyDoc` модели — а дизайн держит тул-контракт строковым. Один путь записи (executor), два
+ * входа с разными полномочиями.
+ */
+export const entityUpdateUiInput = entityUpdateInput
+  .extend({ bodyDoc: bodyDocSchema.optional() })
+  .refine((v) => !(v.body !== undefined && v.bodyDoc !== undefined), {
+    message: 'body и bodyDoc одновременно недопустимы',
+    path: ['bodyDoc'],
+  });
+export type EntityUpdateUiInput = z.infer<typeof entityUpdateUiInput>;
+
 export const attachAspectInput = z
   .object({
     entity_id: z.string().uuid(),
@@ -66,6 +88,16 @@ export const entityGetInput = z
     include: z.array(z.enum(['body', 'relations', 'backlinks', 'thread'])).optional(),
   })
   .strict();
+
+/**
+ * Симметрично для чтения: UI просит документ, тул-контракт не растёт. Объявлена ПОСЛЕ
+ * `entityGetInput` намеренно — `const` в TDZ до своей инициализации, и ссылка выше по файлу
+ * упала бы ReferenceError при загрузке модуля (проверено пробой).
+ */
+export const entityGetUiInput = entityGetInput.extend({
+  include: z.array(z.enum(['body', 'bodyDoc', 'relations', 'backlinks', 'thread'])).optional(),
+});
+export type EntityGetUiInput = z.infer<typeof entityGetUiInput>;
 
 export type EntityCreateInput = z.infer<typeof entityCreateInput>;
 export type EntityUpdateInput = z.infer<typeof entityUpdateInput>;

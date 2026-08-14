@@ -4,8 +4,8 @@
 // через execute (§9.2), чтения — под withIdentity (RLS, §4.10).
 import {
   entityCreateInput,
-  entityGetInput,
-  entityUpdateInput,
+  entityGetUiInput,
+  entityUpdateUiInput,
   parseQuery,
   type QueryAst,
 } from '@orbis/shared';
@@ -121,8 +121,10 @@ export const entityRouter = router({
       return r.idempotentReplay ? entity : { ...entity, actionId: r.actionId };
     }),
 
+  // UI-вариант схемы: у владельца из редактора есть структурная форма тела, у тула модели —
+  // нет. Тело процедуры от этого не меняется: путь записи один — executor.
   update: ownerOnlyProcedure
-    .input(entityUpdateInput)
+    .input(entityUpdateUiInput)
     .mutation(async ({ ctx, input }): Promise<WireEntity> => {
       const r = await execute(
         ctx.db,
@@ -149,7 +151,7 @@ export const entityRouter = router({
   // §9.2 entity_get: include-логика вынесена в общий хелпер entity-read.ts —
   // его же переиспользует диспатч тулов LLM/MCP (tools/dispatch.ts, 1b Task 4).
   get: protectedProcedure
-    .input(entityGetInput)
+    .input(entityGetUiInput)
     .query(async ({ ctx, input }): Promise<EntityReadResult & { goalProgress?: GoalProgress }> => {
       try {
         return await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
