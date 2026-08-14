@@ -1,0 +1,12 @@
+{
+  "name": "spike-06-acp",
+  "private": true,
+  "type": "module",
+  "description": "ВЫБРАСЫВАЕМЫЙ спайк: может ли Orbis прогнать задачу через локального агента по ACP под подпиской",
+  "dependencies": {
+    "@agentclientprotocol/claude-agent-acp": "0.66.0",
+    "@agentclientprotocol/codex-acp": "1.2.0",
+    "@agentclientprotocol/sdk": "1.3.0",
+    "claude-code-cli-acp": "0.1.1"
+  }
+}
