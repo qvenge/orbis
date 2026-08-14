@@ -135,12 +135,13 @@ function toSuggestion(row: SuggestionRow): EntitySuggestion {
 }
 
 /**
- * Шаблон LIKE из пользовательского ввода: спецсимволы шаблона экранируем, иначе `%`
- * искал бы что угодно, `_` — любой первый символ, а `\` съедал бы следующий символ.
- * Экранирующий символ — backslash (умолчание LIKE в PG), поэтому в замене он и стоит.
+ * Пользовательский ввод внутрь шаблона LIKE: снимаем регистр (сравнение идёт с
+ * `lower(title)`) и экранируем спецсимволы шаблона, иначе `%` искал бы что угодно,
+ * `_` — любой символ, а `\` съедал бы следующий. Экранирующий символ — backslash
+ * (умолчание LIKE в PG), поэтому в замене он и стоит.
  */
-function likePrefixPattern(prefix: string): string {
-  return `${prefix.toLowerCase().replace(/[\\%_]/g, '\\$&')}%`;
+function escapeLike(value: string): string {
+  return value.toLowerCase().replace(/[\\%_]/g, '\\$&');
 }
 
 export const entityRouter = router({
@@ -230,37 +231,54 @@ export const entityRouter = router({
   ),
 
   /**
-   * Префиксный поиск по заголовку для `/`-меню, @-упоминаний и пикеров. Грамматику
-   * `search=` (§6.1) не трогаем: там семантика ЦЕЛОГО слова осмысленна и на неё завязаны
-   * сидированные смарт-листы, а меню без префиксов бесполезно. RLS скоупит выдачу
-   * владельцем (§4.10) — своего owner_id в WHERE нет намеренно, источник правды о
+   * Поиск сущности по заголовку для `/`-меню, @-упоминаний и пикеров. Грамматику `search=`
+   * (§6.1) не трогаем: там семантика ЦЕЛОГО слова осмысленна и на неё завязаны сидированные
+   * смарт-листы, а меню, не находящее по началу набранного слова, бесполезно. RLS скоупит
+   * выдачу владельцем (§4.10) — своего owner_id в WHERE нет намеренно, источник правды о
    * видимости один.
    *
-   * Про индекс entities_title_prefix (миграция 0007) — честно, по EXPLAIN: под ролью
-   * `authenticated` он НЕ берётся, и дело не в объёме. `lower(text)` и `~~` не leakproof
-   * (pg_proc.proleakproof = false), а при включённом RLS не-leakproof квал нельзя вычислить
-   * раньше security-квала политики — значит, и в index cond он не превращается. Проверено:
-   * от роли postgres тот же запрос идёт Bitmap Index Scan по entities_title_prefix, от
-   * `authenticated` — Seq Scan даже при enable_seqscan=off. Ровно та же участь у GIN
-   * entities_title_fts под существующим `search=` (to_tsvector/ts_match_vq тоже не
-   * leakproof), так что это свойство схемы, а не регресс этой процедуры: на 20 000 строк
-   * suggest считается 15 мс против 42 мс у `search=`. Фактически план опирается на
-   * entities_owner_updated (owner_id, updated_at DESC) WHERE NOT archived — то есть
-   * стоимость линейна по числу сущностей ВЛАДЕЛЬЦА, а не всей таблицы.
+   * Сопоставление — по ВХОЖДЕНИЮ (`%фрагмент%`), а не по началу заголовка: якорь отнимал бы
+   * находимость, которую давал прежний путь («Отчёт за квартал» обязан находиться набором
+   * «квартал»), и превращал бы промах в немую «Ничего не найдено». Плата за снятие якоря
+   * нулевая — индекса под этот запрос всё равно нет (см. ниже), а при Seq Scan оба шаблона
+   * стоят одинаково. Релевантность держит ПЕРВЫЙ ключ сортировки: совпавшие с начала
+   * заголовка идут выше вхождений в середине, и только потом свежесть.
+   *
+   * Индекса по заголовку здесь нет и заводить его бессмысленно — измерено EXPLAIN'ом:
+   * `lower(text)` и `~~` не leakproof (pg_proc.proleakproof = false), а при включённом RLS
+   * не-leakproof квал нельзя вычислить раньше security-квала политики, значит и в index cond
+   * он не превращается. От роли postgres тот же запрос шёл Bitmap Index Scan, от
+   * `authenticated` — Seq Scan даже при enable_seqscan=off; поэтому btree по lower(title) из
+   * миграции 0007 убран, он только дорожал бы на каждой правке заголовка. Ровно та же участь
+   * у GIN entities_title_fts под живущим в проде `search=` (to_tsvector/ts_match_vq тоже не
+   * leakproof) — это свойство схемы, а не беда этой процедуры. Фактически план опирается на
+   * entities_owner_updated (owner_id, updated_at DESC) WHERE NOT archived, то есть стоимость
+   * линейна по числу сущностей ВЛАДЕЛЬЦА, а не всей таблицы. Путь на будущее, если счёт
+   * сущностей вырастет, — хранимая колонка lower(title) с btree text_pattern_ops и запрос
+   * явным диапазоном: операторы диапазона по КОЛОНКЕ leakproof, и квал снова станет
+   * индексируемым (гипотеза, не мерена).
    */
   suggest: protectedProcedure
     .input(entitySuggestInput)
     .query(({ ctx, input }): Promise<EntitySuggestion[]> => {
       const limit = input.limit ?? 10;
-      const pattern = likePrefixPattern(input.prefix);
+      const needle = escapeLike(input.prefix);
+      const anywhere = `%${needle}%`;
+      const fromStart = `${needle}%`;
       return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
         // Закрытые задачи НЕ фильтруются намеренно: упомянуть сделанное — валидный сценарий
         // ссылки, а чип сам зачёркивает done/cancelled. Архивные — отфильтрованы: их прячет
         // весь UI. Решение зафиксировано при v2 (ревью И14 требовало явности).
+        //
+        // Тай-брейк по id обязателен (M4): updated_at по умолчанию now() — время НАЧАЛА
+        // транзакции, поэтому всё, созданное одним batch_execute, несёт ОДИН штамп, и без
+        // последнего ключа порядок таких строк определял бы план. id — UUIDv7, так что DESC
+        // читается как «свежее выше» (тот же тай-брейк — llm/context.ts:126).
         const rows = await tx.execute(
           sql`SELECT id, title, emoji, aspects, archived FROM entities
-              WHERE archived = false AND lower(title) LIKE ${pattern}
-              ORDER BY updated_at DESC LIMIT ${limit}`,
+              WHERE archived = false AND lower(title) LIKE ${anywhere}
+              ORDER BY (lower(title) LIKE ${fromStart}) DESC, updated_at DESC, id DESC
+              LIMIT ${limit}`,
         );
         return [...rows].map((r) => toSuggestion(r as unknown as SuggestionRow));
       });

@@ -4,7 +4,8 @@
 // (RLS, §4.10), входы ТОЛЬКО tRPC: в реестре тулов (§9.2) их нет и не должно быть.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { TRPCError } from '@trpc/server';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { sql } from 'drizzle-orm';
+import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -91,13 +92,37 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     expect(titles(await caller.entity.suggest({ prefix: 'КУП' }))).toEqual(['Купить кроссовки']);
   });
 
-  test('ищет только по НАЧАЛУ заголовка, а не по вхождению', async () => {
-    // Иначе «куп» отдавало бы и «Не забыть купить» — а меню `/`-вставки и @-упоминаний
-    // строится на префиксе набранного слова.
+  test('находит по ВХОЖДЕНИЮ, а не только с начала заголовка', async () => {
+    // Якорь на начало заголовка отнимал бы находимость, которую `search=` давал: «Отчёт за
+    // квартал» набором «квартал» находиться обязан. Платы за снятие якоря нет — индекса под
+    // этот запрос всё равно не существует (см. комментарий у процедуры), а при Seq Scan
+    // '%куп%' стоит ровно столько же, сколько 'куп%'.
     const caller = callerFor(freshUserId());
-    await seedEntity(caller, { title: 'Купить кроссовки' });
-    await seedEntity(caller, { title: 'Не забыть купить' });
-    expect(titles(await caller.entity.suggest({ prefix: 'куп' }))).toEqual(['Купить кроссовки']);
+    await seedEntity(caller, { title: 'Отчёт за квартал' });
+
+    // Контроль: прежний путь это находил — значит речь о СОХРАНЕНИИ находимости, а не о
+    // новой возможности. Если бы `search=` тут промахнулся, тест не доказывал бы регресса.
+    expect(titles(await caller.entity.query({ query: 'search=квартал, limit=10' }))).toEqual([
+      'Отчёт за квартал',
+    ]);
+    expect(titles(await caller.entity.suggest({ prefix: 'квартал' }))).toEqual([
+      'Отчёт за квартал',
+    ]);
+    // И по префиксу второго слова — того, чего `search=` как раз не умеет
+    expect(titles(await caller.entity.suggest({ prefix: 'кварт' }))).toEqual(['Отчёт за квартал']);
+  });
+
+  test('совпадения С НАЧАЛА заголовка идут выше вхождений в середине — даже если те свежее', async () => {
+    // Релевантность важнее свежести: набирая «куп», человек ищет «Купить…», а не заметку,
+    // где это слово встретилось в середине. Порядок создания здесь ПРОТИВ ожидаемого
+    // порядка выдачи — иначе тест прошёл бы и на одном updated_at DESC.
+    const caller = callerFor(freshUserId());
+    const fromStart = await seedEntity(caller, { title: 'Купить кроссовки' });
+    const inMiddle = await seedEntity(caller, { title: 'Не забыть купить' });
+    expect((await caller.entity.suggest({ prefix: 'куп' })).map((e) => e.id)).toEqual([
+      fromStart.id,
+      inMiddle.id,
+    ]);
   });
 
   test('архивные не предлагаются', async () => {
@@ -180,6 +205,33 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
       first.id,
       second.id,
     ]);
+  });
+
+  test('одинаковый updated_at не делает порядок случайным: тай-брейк по id (M4)', async () => {
+    // `updated_at` по умолчанию now() — время НАЧАЛА транзакции, поэтому всё, созданное
+    // одним batch_execute, получает ОДИН штамп. Без последнего ключа порядок таких строк
+    // определял бы план, и выдача «десяти из многих» плавала бы между запросами.
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const made: string[] = [];
+    for (let i = 0; i < 8; i++) made.push((await seedEntity(caller, { title: `Купить ${i}` })).id);
+
+    // Ровно та ситуация, которую создаёт batch_execute, — но детерминированно.
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.execute(
+        sql`UPDATE entities SET updated_at = '2026-08-14T00:00:00Z' WHERE owner_id = ${user}::uuid`,
+      );
+    } finally {
+      await adminClient.end();
+    }
+
+    // id — UUIDv7 (schema.ts:27), то есть DESC читается как «свежее выше»; прецедент того же
+    // тай-брейка — llm/context.ts:126. Порядок создания здесь ВОЗРАСТАЮЩИЙ, ожидаемый —
+    // строго обратный, так что физический порядок строк тест не спасёт.
+    expect((await caller.entity.suggest({ prefix: 'куп', limit: 8 })).map((r) => r.id)).toEqual(
+      [...made].sort().reverse(),
+    );
   });
 
   test('limit: по умолчанию 10, переданный уважается, свыше 20 — BAD_REQUEST', async () => {
