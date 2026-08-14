@@ -20,7 +20,12 @@ import {
 } from '@orbis/shared';
 // Конверсия тела живёт в @orbis/shared/doc — ОДИН экземпляр правил разбора и сериализации
 // на сервер и клиент; своей копии у executor'а нет и быть не должно.
-import { bodyRefsFromDoc, canonicalizeBody, serializeBody } from '@orbis/shared/doc';
+import {
+  bodyRefsFromDoc,
+  canonicalizeBody,
+  DOC_SCHEMA_VERSION,
+  serializeBody,
+} from '@orbis/shared/doc';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
@@ -963,6 +968,23 @@ async function prepareEntityCreate(
 // ---------------------------------------------------------------------------
 // entity_update
 // ---------------------------------------------------------------------------
+
+/**
+ * «Документ пуст» = ни одного узла, кроме пустых абзацев. Только такой документ вправе давать
+ * пустую проекцию: именно его шлёт редактор, когда пользователь стёр тело. Всё остальное,
+ * сериализовавшееся в '', — сломанная форма, а не пустое тело.
+ *
+ * Проверка структурная НАМЕРЕННО: моделировать здесь ноды нельзя (их знает схема
+ * @orbis/shared/doc, и вторая модель разъехалась бы с ней при первой же новой ноде).
+ */
+function docIsBlank(content: Array<Record<string, unknown>>): boolean {
+  return content.every(
+    (node) =>
+      node.type === 'paragraph' &&
+      (node.content === undefined || (Array.isArray(node.content) && node.content.length === 0)),
+  );
+}
+
 async function prepareEntityUpdate(
   ctx: ExecCtx,
   rawInput: unknown,
@@ -1102,7 +1124,30 @@ async function prepareEntityUpdate(
   // затрагивающем тело): иначе правка модели и правка из UI считали бы backlinks по разным
   // правилам, и `[[entity:…]]` в блоке кода то появлялся бы в графе, то исчезал.
   if (input.bodyDoc !== undefined) {
+    // Версия сверяется НА ЗАПИСИ, потому что на чтении она уже решена: readBodyDoc
+    // гарантированно выбрасывает любой v !== DOC_SCHEMA_VERSION и пересобирает документ из
+    // `body`. Принять здесь версию из будущего значило бы сохранить заведомо обречённое — и
+    // это потеря СОДЕРЖИМОГО, а не оформления: незнакомые ноды выпадают уже из проекции
+    // (проверено пробой — v=2 с новой нодой даёт body без её текста), а чтение потом
+    // пересоберёт документ из этого урезанного body. Ровно то, ради чего версия и заведена.
+    if (input.bodyDoc.v !== DOC_SCHEMA_VERSION) {
+      throw new ExecError(
+        'VALIDATION',
+        'документ другой версии схемы: перезагрузите приложение и повторите правку',
+        { id: input.id, expected: DOC_SCHEMA_VERSION, got: input.bodyDoc.v },
+      );
+    }
     const body = serializeBody(input.bodyDoc);
+    // Пустая проекция при НЕПУСТОМ документе — сломанная форма: serializeBody исключения не
+    // бросает, он молча отдаёт ''. Без этой проверки запись обнулила бы и body, и body_refs,
+    // а в body_doc остался бы тот же мусор — readBodyDoc пропускает его по версии, так что
+    // обе формы терялись бы с 200 OK. Пустые абзацы исключены НАМЕРЕННО: очистка тела
+    // редактором приходит именно так и тоже даёт '' (проверено пробой).
+    if (body === '' && !docIsBlank(input.bodyDoc.doc.content)) {
+      throw new ExecError('VALIDATION', 'документ не сериализуется в тело — правка отклонена', {
+        id: input.id,
+      });
+    }
     patch.bodyDoc = input.bodyDoc;
     patch.body = body;
     patch.bodyRefs = bodyRefsFromDoc(input.bodyDoc);

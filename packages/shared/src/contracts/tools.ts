@@ -36,7 +36,16 @@ export const entityUpdateInput = z
 // zod-модель дерева ProseMirror разъехалась бы с ней при первой же новой ноде. Импортировать
 // сюда сам `@orbis/shared/doc` тоже нельзя: этот модуль лежит в эагерном барреле, а тот тянет
 // всю схему Tiptap (~156 kB gzip) — она уехала бы в первый кадр web.
-const bodyDocSchema = z.object({ v: z.number().int().positive(), doc: z.record(z.unknown()) });
+//
+// Но «не моделировать ноды» — не то же самое, что «не проверять ничего»: структура верхнего
+// уровня стоит одну строку и ловит формы, которые serializeBody МОЛЧА превращает в пустую
+// строку (`{}`, `content` не массивом), стирая тело вместе с body_refs. `.passthrough()`
+// обязателен: без него zod срезал бы всё, чего нет в форме, и правда о теле приехала бы в БД
+// урезанной. Версию сверяет executor — здесь про DOC_SCHEMA_VERSION знать нечем.
+const bodyDocSchema = z.object({
+  v: z.number().int().positive(),
+  doc: z.object({ type: z.literal('doc'), content: z.array(z.record(z.unknown())) }).passthrough(),
+});
 
 /**
  * Вход tRPC-роутера entity.update: то же, что у тула, плюс структурная форма тела.

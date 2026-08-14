@@ -13,6 +13,7 @@ import {
   entityUpdateInput,
   entityUpdateUiInput,
 } from '@orbis/shared';
+import { DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import { eq, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
@@ -99,7 +100,7 @@ describe('контракт UI: bodyDoc живёт в *UiInput, а не в тул
     expect(r.success).toBe(true);
   });
 
-  test('body и bodyDoc одновременно — отказ', () => {
+  test('body и bodyDoc одновременно — отказ ИМЕННО из-за конфликта форм', () => {
     // Два источника правды в одном запросе: тихий выбор одного из них потерял бы вторую правку.
     const r = entityUpdateUiInput.safeParse({
       id: UUID,
@@ -108,11 +109,52 @@ describe('контракт UI: bodyDoc живёт в *UiInput, а не в тул
       expectedUpdatedAt: '2026-08-13T10:00:00.000Z',
     });
     expect(r.success).toBe(false);
+    // Сверяем причину, а не только факт: голого `success === false` мало — после любого
+    // ужесточения bodyDocSchema сторож стал бы зелёным по ДРУГОЙ причине (структурная
+    // придирка к документу вместо конфликта форм) и перестал бы охранять то, что заявляет.
+    expect(r.error?.issues.map((i) => ({ path: i.path, message: i.message }))).toEqual([
+      { path: ['bodyDoc'], message: 'body и bodyDoc одновременно недопустимы' },
+    ]);
   });
 
   test('UI-схема остаётся strict: посторонний ключ отвергается', () => {
     const r = entityUpdateUiInput.safeParse({ id: UUID, somethingElse: 1 });
     expect(r.success).toBe(false);
+  });
+
+  test('схема отвергает документ, который не является документом', () => {
+    // Дешёвая структурная сетка: ловит {doc:{}} и content-не-массив, не моделируя НИ ОДНОЙ
+    // ноды. Именно эти формы serializeBody молча превращает в пустую строку.
+    const parse = (doc: unknown) =>
+      entityUpdateUiInput.safeParse({ id: UUID, bodyDoc: { v: 1, doc } }).success;
+    expect(parse({})).toBe(false);
+    expect(parse({ type: 'doc', content: 'oops' })).toBe(false);
+    expect(parse({ type: 'НЕ_ДОКУМЕНТ', content: [] })).toBe(false);
+    expect(parse({ type: 'doc', content: [] })).toBe(true);
+    expect(parse({ type: 'doc', content: [{ type: 'paragraph' }] })).toBe(true);
+  });
+
+  test('схема НЕ обрезает документ: посторонние ключи доезжают до executor’а', () => {
+    // .passthrough(): zod по умолчанию срезал бы всё, чего нет в форме, — и правда о теле
+    // приехала бы в БД урезанной. Схема здесь сетка, а не модель дерева.
+    const r = entityUpdateUiInput.safeParse({
+      id: UUID,
+      bodyDoc: {
+        v: 1,
+        doc: {
+          type: 'doc',
+          content: [{ type: 'paragraph', attrs: { blockId: 'b1' }, content: [] }],
+          какой_то_ключ: 1,
+        },
+      },
+    });
+    expect(r.success).toBe(true);
+    const doc = r.data && 'bodyDoc' in r.data ? r.data.bodyDoc?.doc : undefined;
+    expect(doc).toEqual({
+      type: 'doc',
+      content: [{ type: 'paragraph', attrs: { blockId: 'b1' }, content: [] }],
+      какой_то_ключ: 1,
+    });
   });
 });
 
@@ -182,6 +224,160 @@ describe('канон: body в БД — производная документа
     const row = await rowOf(entity.id);
     expect(row.body_doc).toEqual(doc);
     expect(row.body).toBe('текст\n\n{{query: aspect=orbis/task, status=inbox}}');
+  });
+});
+
+describe('сломанный документ не стирает тело молча (раунд правок 1)', () => {
+  /** Правка bodyDoc поверх непустого тела: у неудачи должно быть что терять. */
+  async function tryDoc(doc: unknown) {
+    const { entity, owner } = await createOne(`исходное тело [[entity:${UUID}]]`);
+    const r = await execute(
+      db,
+      req(
+        'entity_update',
+        { id: entity.id, bodyDoc: { v: 1, doc }, expectedUpdatedAt: entity.updatedAt },
+        owner,
+      ),
+    );
+    return { r, row: await rowOf(entity.id) };
+  }
+
+  test('документ из одной неизвестной ноды — VALIDATION, тело и ссылки целы', async () => {
+    // serializeBody исключения не бросает: он молча отдаёт ''. Без гейта запись обнулила бы
+    // и body, и body_refs, а в body_doc остался бы тот же мусор — readBodyDoc пропускает его
+    // по версии, так что обе формы терялись бы с 200 OK.
+    const { r, row } = await tryDoc({ type: 'doc', content: [{ type: 'НЕТ_ТАКОЙ_НОДЫ' }] });
+    expect(err(r).code).toBe('VALIDATION');
+    expect(row.body).toBe(`исходное тело [[entity:${UUID}]]`);
+    expect(row.body_refs).toEqual([UUID]);
+  });
+
+  test('text-нода без text — VALIDATION, тело цело', async () => {
+    const { r, row } = await tryDoc({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text' }] }],
+    });
+    expect(err(r).code).toBe('VALIDATION');
+    expect(row.body).toBe(`исходное тело [[entity:${UUID}]]`);
+  });
+
+  test('ОЧИСТКА тела пустым абзацем разрешена — это не поломка', async () => {
+    // Граница гейта. Пустой абзац — ровно то, что шлёт редактор, когда пользователь стёр
+    // тело, и он тоже сериализуется в ''. Гейт «пустая проекция = отказ» запретил бы самую
+    // обычную операцию редактора (проверено пробой: [] и пустые абзацы дают '' законно).
+    const { entity, owner } = await createOne('было тело');
+    const r = await execute(
+      db,
+      req(
+        'entity_update',
+        {
+          id: entity.id,
+          bodyDoc: { v: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+          expectedUpdatedAt: entity.updatedAt,
+        },
+        owner,
+      ),
+    );
+    okFirst(r);
+    const row = await rowOf(entity.id);
+    expect(row.body).toBe('');
+    expect(row.body_refs).toEqual([]);
+    expect(firstNodeType(row)).toBe('paragraph');
+  });
+
+  test('частичная потеря терпима: правда остаётся в body_doc дословно', async () => {
+    // Осознанная граница: незнакомая нода выпадает из ПРОЕКЦИИ, но документ ложится в БД
+    // как прислан, поэтому правда цела и восстановима. Отказывать здесь значило бы ронять
+    // сохранение из-за любой мелочи схемы.
+    const { entity, owner } = await createOne('было');
+    const doc = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'важный текст' }] },
+        { type: 'НЕТ_ТАКОЙ_НОДЫ' },
+      ],
+    };
+    okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          { id: entity.id, bodyDoc: { v: 1, doc }, expectedUpdatedAt: entity.updatedAt },
+          owner,
+        ),
+      ),
+    );
+    const row = await rowOf(entity.id);
+    expect(row.body).toBe('важный текст\n\n');
+    expect(row.body_doc).toEqual({ v: 1, doc });
+  });
+});
+
+describe('версия документа сверяется НА ЗАПИСИ (раунд правок 1)', () => {
+  test('документ версии из будущего — VALIDATION, содержимое не урезается', async () => {
+    // Цепочка без гейта (воспроизведена пробой): клиент новее сервера шлёт ноду, которой
+    // сервер не знает → serializeBody ТИХО выбрасывает её из body ("начало\n\n" вместо текста
+    // callout'а) → body_doc с v=2 сохраняется → на первом же чтении readBodyDoc отвергает его
+    // по версии и пересобирает из УЖЕ УРЕЗАННОГО body. Содержимое исчезает из обеих форм.
+    // Ровно то, ради чего версия и заведена (doc/types.ts: «откат релиза съел бы содержимое»).
+    const { entity, owner } = await createOne('исходное тело');
+    const r = await execute(
+      db,
+      req(
+        'entity_update',
+        {
+          id: entity.id,
+          bodyDoc: {
+            v: 2,
+            doc: {
+              type: 'doc',
+              content: [
+                { type: 'paragraph', content: [{ type: 'text', text: 'начало' }] },
+                { type: 'callout', content: [{ type: 'text', text: 'ВАЖНОЕ' }] },
+              ],
+            },
+          },
+          expectedUpdatedAt: entity.updatedAt,
+        },
+        owner,
+      ),
+    );
+    expect(err(r).code).toBe('VALIDATION');
+    const row = await rowOf(entity.id);
+    expect(row.body).toBe('исходное тело');
+    expect(row.body_doc).toEqual({
+      v: 1,
+      doc: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'исходное тело' }] }],
+      },
+    });
+  });
+
+  test('запись принимает ровно ту версию, которую примет чтение', async () => {
+    // Симметрия — суть правки: readBodyDoc гарантированно выбрасывает любой v !== 1, значит
+    // принимать такое на запись значило бы сохранять заведомо обречённое.
+    expect(DOC_SCHEMA_VERSION).toBe(1);
+    const { entity, owner } = await createOne();
+    const ok = await execute(
+      db,
+      req(
+        'entity_update',
+        {
+          id: entity.id,
+          bodyDoc: {
+            v: DOC_SCHEMA_VERSION,
+            doc: {
+              type: 'doc',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'ок' }] }],
+            },
+          },
+          expectedUpdatedAt: entity.updatedAt,
+        },
+        owner,
+      ),
+    );
+    expect(okFirst(ok).body).toBe('ок');
   });
 });
 
