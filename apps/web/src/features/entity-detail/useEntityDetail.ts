@@ -14,7 +14,7 @@ type Entity = RouterOutputs['entity']['get']['entity'];
 type UpdateInput = RouterInputs['entity']['update'];
 
 // §9.2: detail тянет body+relations+backlinks+thread (backlinks — секция «Связанное»
-// §3.5.7, Task D5). Один и тот же input — ключ кэша для useQuery и точечных
+// §3.5.8, Task D5). Один и тот же input — ключ кэша для useQuery и точечных
 // optimistic-патчей (cancel/getData/setData/invalidate).
 //
 // bodyDoc — источник документа для редактора (Р6: явный opt-in, без него ключа в ответе нет

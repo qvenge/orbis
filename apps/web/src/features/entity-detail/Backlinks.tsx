@@ -3,11 +3,11 @@ import type { RouterOutputs } from '../../trpc';
 
 type Backlink = NonNullable<RouterOutputs['entity']['get']['backlinks']>[number];
 
-// Пометка источника (02-core-os §3.5.7): явная related_to-связь или упоминание в теле.
+// Пометка источника (02-core-os §3.5.8): явная related_to-связь или упоминание в теле.
 const VIA_LABEL: Record<string, string> = { relation: 'связь', mention: 'упоминание' };
 
 /**
- * Секция 7 «Связанное (backlinks)» — ОДНА секция из двух источников: сервер отдаёт их
+ * Секция 8 «Связанное (backlinks)» — ОДНА секция из двух источников: сервер отдаёт их
  * готовым списком в entity.get(include:['backlinks']) с пометкой via, поэтому титулы
  * здесь не дочитываются (в отличие от блокировок). Пустая секция скрыта (§3.5).
  *

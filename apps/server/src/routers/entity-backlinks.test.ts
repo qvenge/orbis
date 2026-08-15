@@ -1,5 +1,5 @@
 // apps/server/src/routers/entity-backlinks.test.ts
-// Task D5 (02-core-os §3.5.7, sign-off владельца K1): отдельной процедуры entity.backlinks
+// Task D5 (02-core-os §3.5.8, sign-off владельца K1): отдельной процедуры entity.backlinks
 // НЕТ — расширен существующий include:['backlinks'] в entity-read.ts. Секция объединённая:
 // явные related_to обеих сторон (via 'relation') + упоминания по body_refs (via 'mention'),
 // без архивных, потолок 100. Контракт readEntity общий с LLM/MCP-диспатчем (tools/dispatch),
@@ -62,7 +62,7 @@ test('backlinks: явные related_to обеих сторон + упомина�
     target_id: asTarget.id,
     relation_type: 'related_to',
   });
-  // blocks-связь backlinks'ом НЕ является: она живёт в секции «Блокировки» (§3.5.6)
+  // blocks-связь backlinks'ом НЕ является: она живёт в секции «Блокировки» (§3.5.7)
   const blocker = await caller.entity.create({
     input: { title: 'Блокер', tags: [] },
     source: 'fast_path',

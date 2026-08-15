@@ -184,7 +184,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   const detailsTab = (
     <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
       <AspectCards entity={entity} />
-      {/* Секции 5–7 §3.5: связи уже приехали этим же entity.get — своих запросов графа
+      {/* Секции 6–8 §3.5: связи уже приехали этим же entity.get — своих запросов графа
           секции не заводят. */}
       <Subtasks parentId={entity.id} relations={relations ?? []} />
       <Blocks entityId={entity.id} relations={relations ?? []} />

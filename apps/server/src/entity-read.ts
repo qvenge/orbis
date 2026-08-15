@@ -15,7 +15,7 @@ import { ExecError } from './errors';
 import type { WireEntity, WireRelation } from './executor/types';
 import { toWireChatMessage, toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
 
-/** Источник обратной ссылки (02-core-os §3.5.7): явная related_to-связь или body_refs. */
+/** Источник обратной ссылки (02-core-os §3.5.8): явная related_to-связь или body_refs. */
 export type BacklinkVia = 'relation' | 'mention';
 
 export interface Backlink {
@@ -77,7 +77,7 @@ export async function readEntity(
     out.relations = rels.map(toWireRelation);
   }
   if (include.has('backlinks')) {
-    // §3.5.7: ОДНА секция из двух источников — явные related_to обеих сторон («связь») и
+    // §3.5.8: ОДНА секция из двух источников — явные related_to обеих сторон («связь») и
     // упоминания через body_refs («упоминание», GIN-индекс §4.9). row.id — каноничный
     // lowercase из БД (body_refs нормализованы экстрактором, сравнение text[]
     // регистрозависимо). Подзапросы по relations тоже под RLS — чужие связи невидимы.
