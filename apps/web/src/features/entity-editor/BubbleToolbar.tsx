@@ -1,5 +1,5 @@
 import type { ResolvedPos } from '@tiptap/pm/model';
-import { NodeSelection, type Selection } from '@tiptap/pm/state';
+import { NodeSelection, Selection } from '@tiptap/pm/state';
 import type { Editor } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import { Bold, Code, Italic, Strikethrough, Trash2 } from 'lucide-react';
@@ -26,15 +26,56 @@ type Range = { from: number; to: number };
  *
  * Родитель на глубине 0 — всегда сам документ, поэтому корень проверяется глубиной, а не
  * именем ноды: имя `doc` в схеме не гвоздём прибито.
+ *
+ * ТАБЛИЦА — названное исключение, а не побочность (решение раунда правок 2). `tableRow` и
+ * `tableCell` групп не объявляют вовсе (замерено), подъём проходит их насквозь, и каретка в
+ * ячейке убирает ВСЮ таблицу. Так и оставлено: удалять ячейку бессмысленно — таблица обязана
+ * оставаться прямоугольной, — а удаление строки это уже другая семантика, которой в задаче
+ * нет. Случай закреплён тестом, чтобы следующий читатель видел решение.
  */
 function ownBlock($pos: ResolvedPos): Range | null {
-  for (let depth = $pos.depth; depth >= 1; depth--) {
-    if (depth === 1 || $pos.node(depth - 1).type.isInGroup('list')) {
-      return { from: $pos.before(depth), to: $pos.after(depth) };
+  let depth = 0;
+  for (let d = $pos.depth; d >= 1; d--) {
+    if (d === 1 || $pos.node(d - 1).type.isInGroup('list')) {
+      depth = d;
+      break;
     }
   }
   // Глубина 0 — AllSelection (Cmd+A): своего блока у такой позиции нет вовсе.
-  return null;
+  if (depth === 0) return null;
+  // Единственный ребёнок — целью становится РОДИТЕЛЬ. Содержимое списка объявлено как
+  // `listItem+`, поэтому удалить последний пункт «в одиночку» нельзя: ProseMirror чинит
+  // документ, воссоздавая ПУСТОЙ пункт, — на экране это ровно тот баг v1, против которого
+  // написано всё правило, только приехавший другим путём. Замерено пробой на вложенном списке:
+  // от него оставался пустой каркас `bulletList > listItem > paragraph`.
+  //
+  // Цикл, а не одна проверка: пустым может оказаться и родитель родителя (вложенный список —
+  // единственное содержимое пункта, тот — единственный пункт своего списка).
+  while (depth > 1 && $pos.node(depth - 1).childCount === 1) depth -= 1;
+  return { from: $pos.before(depth), to: $pos.after(depth) };
+}
+
+/**
+ * Правый край выделения — как ТЕКСТОВАЯ позиция, а не как граница.
+ *
+ * Протянуть выделение из середины абзаца вниз-влево до левого края следующего — обычный жест
+ * мыши (и то же даёт Shift+клик в начало абзаца). `$to` встаёт на смещение 0 следующего блока:
+ * подсвечено в нём НИЧЕГО, а по правилу «оба конца» он уходил бы целиком — против самого
+ * критерия, которым решено брать оба конца («радиус ограничен ровно тем, что видно выделенным»).
+ *
+ * Отступаем к ближайшей текстовой позиции ЛЕВЕЕ, а не «на один символ»: `resolve(to - 1)` не
+ * годится, и это замерено пробой на обеих формах. В списке позиция перед параграфом второго
+ * пункта разрешается всё в тот же ВТОРОЙ пункт (ничего не изменилось бы), а между двумя
+ * абзацами она лежит на глубине 0 — `ownBlock` вернул бы `null`, и кнопка вместо блока удаляла
+ * бы одно выделение. `Selection.near(…, -1)` уходит на конец предыдущего текстового блока в
+ * обоих случаях.
+ *
+ * Выделения ячеек (`CellSelection`) сюда не попадают: у них `$to.parentOffset` — смещение
+ * внутри ячейки и нулём не бывает (замерено на таблице 3×3 по трём разным парам ячеек).
+ */
+function lastTouched(selection: Selection): ResolvedPos {
+  if (selection.empty || selection.$to.parentOffset > 0) return selection.$to;
+  return Selection.near(selection.$to.doc.resolve(selection.to - 1), -1).$from;
 }
 
 /**
@@ -58,8 +99,13 @@ function rangeToDelete(selection: Selection): Range | null {
     return { from: selection.from, to: selection.from + selection.node.nodeSize };
   }
   const first = ownBlock(selection.$from);
-  const last = ownBlock(selection.$to);
+  const last = ownBlock(lastTouched(selection));
   if (first === null || last === null) return null;
+  // Страховки «а вдруг правый край уехал левее левого» здесь НЕТ намеренно, и это замерено, а
+  // не понадеялось: отступ ищет ближайшую текстовую позицию ЛЕВЕЕ `to`, а `from` — сам такая
+  // позиция и лежит не правее `to - 1`, поэтому отступ не может уйти за начало выделения
+  // (проверено перебором всех выделений с нулевым смещением на трёх абзацах). Мёртвая ветка
+  // защиты была бы хуже её отсутствия: она выглядит как разобранный случай, не будучи им.
   return { from: first.from, to: last.to };
 }
 

@@ -38,11 +38,21 @@ export function installCrashTrap(): void {
     const error = event.error as Error | undefined;
     crashes.push(error?.stack ?? error?.message ?? event.message);
   };
-  beforeAll(() => window.addEventListener('error', onError));
-  afterAll(() => window.removeEventListener('error', onError));
-  afterEach(() => {
+  const check = (where: string) => {
     const seen = crashes.splice(0);
-    expect(seen, 'необработанная ошибка в обработчике события').toEqual([]);
+    expect(seen, `необработанная ошибка в обработчике события (${where})`).toEqual([]);
+  };
+  beforeAll(() => window.addEventListener('error', onError));
+  afterEach(() => check('после теста'));
+  afterAll(() => {
+    // Сверка ПЕРЕД снятием слушателя, а не только в afterEach: без неё поздняя ошибка
+    // ПОСЛЕДНЕГО теста файла (отложенный колбэк, доехавший уже после его afterEach) не
+    // сверялась бы ни разу — следующего теста, который бы её унёс, в файле просто нет.
+    try {
+      check('после последнего теста файла');
+    } finally {
+      window.removeEventListener('error', onError);
+    }
   });
 }
 

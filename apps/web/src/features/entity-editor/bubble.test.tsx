@@ -89,6 +89,27 @@ function posOfText(editor: Editor, text: string): number {
   return pos;
 }
 
+/** Позиция первого узла с таким именем на ЛЮБОЙ глубине. */
+function posOfType(editor: Editor, name: string): number {
+  let pos = -1;
+  editor.state.doc.descendants((node, at) => {
+    if (node.type.name === name && pos === -1) pos = at;
+    return true;
+  });
+  expect(pos, `в документе нет ноды «${name}»`).toBeGreaterThan(-1);
+  return pos;
+}
+
+/** Сколько в документе узлов с таким именем — на любой глубине. */
+function countNodes(editor: Editor, name: string): number {
+  let n = 0;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === name) n += 1;
+    return true;
+  });
+  return n;
+}
+
 /** Тексты пунктов списка, стоящего блоком верхнего уровня под номером `index`. */
 function listTexts(editor: Editor, index: number): (string | undefined)[] {
   const list = editor.getJSON().content?.[index] as
@@ -245,6 +266,11 @@ test('«Удалить блок» во ВЛОЖЕННОМ списке убир�
   expect(json).not.toContain('вложенный');
   // Внешний список цел ЦЕЛИКОМ: оба его пункта на месте.
   expect(listTexts(editor, 0)).toEqual(['один', 'два']);
+  // И вложенного списка не осталось ВОВСЕ (Minor 1 раунда правок 2). Без этой пары ассертов
+  // тест был слабее своего комментария: `listTexts` читает только ПЕРВЫЙ параграф пункта, и
+  // пустой вложенный каркас проходил незамеченным — а он там и оставался, замерено пробой.
+  expect(countNodes(editor, 'bulletList')).toBe(1);
+  expect(countNodes(editor, 'listItem')).toBe(2);
 });
 
 test('«Удалить блок» в чеклисте убирает пункт: список опознаётся по схеме, а не по имени', async () => {
@@ -299,6 +325,40 @@ test('«Удалить блок» на выделении ПОПЕРЁК дву�
   expect(texts(editor)).toEqual(['третий']);
 });
 
+test('выделение до НАЧАЛА следующего абзаца убирает только ПЕРВЫЙ', async () => {
+  // И4 раунда правок 2. Протянуть выделение из середины абзаца вниз-влево до левого края
+  // следующего — обычный жест мыши, и `$to` встаёт на смещение 0 второго абзаца: подсвечено
+  // в нём НИЧЕГО, а по правилу «оба конца» он уходил целиком. Это противоречило самому
+  // критерию, которым решён И3 («радиус ограничен ровно тем, что видно выделенным»), и было
+  // регрессией против кода до раунда правок 1.
+  const { editor } = await mountEditor('первый\n\nвторой\n\nтретий');
+  editor.commands.focus();
+  const second = posOfText(editor, 'второй');
+  editor.commands.setTextSelection({ from: 4, to: second });
+  expect(editor.state.selection.$to.parentOffset).toBe(0); // страж: край тот самый
+  expect(editor.state.selection.$to.parent.textContent).toBe('второй');
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(texts(editor)).toEqual(['второй', 'третий']);
+});
+
+test('выделение до начала следующего ПУНКТА убирает только первый пункт', async () => {
+  // Тот же край внутри списка, и он же опровергает однострочное лечение из задания: взять
+  // блок от `doc.resolve(selection.to - 1)` здесь НЕ работает — позиция перед параграфом
+  // второго пункта разрешается всё в тот же второй пункт (замерено пробой). Отступать надо
+  // до ближайшей ТЕКСТОВОЙ позиции, а не на один символ.
+  const { editor } = await mountEditor('- один\n- два\n- три');
+  editor.commands.focus();
+  const second = posOfText(editor, 'два');
+  editor.commands.setTextSelection({ from: 4, to: second });
+  expect(editor.state.selection.$to.parentOffset).toBe(0); // страж: край тот самый
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(listTexts(editor, 0)).toEqual(['два', 'три']);
+});
+
 test('«Удалить блок» поперёк двух ПУНКТОВ убирает оба пункта, список цел', async () => {
   // То же правило внутри списка: концы диапазона считаются по обоим краям выделения, и
   // каждый — по правилу И1, то есть до пункта, а не до всего списка.
@@ -312,6 +372,47 @@ test('«Удалить блок» поперёк двух ПУНКТОВ уби�
   await userEvent.click(screen.getByLabelText('Удалить блок'));
   expect(types(editor)).toEqual(['bulletList']);
   expect(listTexts(editor, 0)).toEqual(['три']);
+});
+
+test('«Удалить блок» на ЕДИНСТВЕННОМ пункте убирает список, не оставляя каркаса', async () => {
+  // Найдено пробой раунда правок 2 при усилении теста вложенного списка. Пункт, оставшийся у
+  // списка последним, удалить «в одиночку» нельзя: содержимое списка — `listItem+`, и
+  // ProseMirror чинит документ, воссоздавая ПУСТОЙ пункт. На экране это ровно тот баг v1,
+  // против которого написано всё правило, — пустой буллет, только приехавший другим путём.
+  const { editor } = await mountEditor('- одинокий\n\nхвост');
+  editor.commands.focus();
+  editor.commands.setTextSelection({ from: 4, to: 8 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'listItem')).toBe(0);
+  expect(texts(editor)).toEqual(['хвост']);
+});
+
+test('«Удалить блок» из ЯЧЕЙКИ ТАБЛИЦЫ убирает всю таблицу — решение, а не побочность', async () => {
+  // Решение раунда правок 2 (пункт 5): поведение оставлено, но обязано быть НАЗВАННЫМ.
+  // `table` объявляет группу `block`, а `tableRow`/`tableCell` — не объявляют ничего
+  // (замерено), поэтому подъём проходит их насквозь и останавливается на глубине 1.
+  // Удалять ячейку бессмысленно — таблица обязана оставаться прямоугольной, а удаление
+  // строки — другая семантика, которой в задаче нет.
+  const { editor } = await mountEditor('до\n\nпосле');
+  editor.commands.focus('end');
+  expect(editor.commands.insertTable({ rows: 3, cols: 2, withHeaderRow: true })).toBe(true);
+  expect(types(editor)).toContain('table'); // страж вакуумности
+  // Панель показывается только на непустом выделении, а ячейки пусты — пишем текст в первую.
+  const cell = posOfType(editor, 'tableCell');
+  editor.commands.insertContentAt(cell + 2, 'ячейка');
+  const at = posOfText(editor, 'ячейка');
+  editor.commands.setTextSelection({ from: at, to: at + 6 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'table')).toBe(0);
+  expect(countNodes(editor, 'tableCell')).toBe(0);
+  // Соседи целы: ушла таблица, а не документ.
+  expect(texts(editor)).toContain('до');
+  expect(texts(editor)).toContain('после');
 });
 
 test('«Удалить блок» при выделенном ВСЁМ документе не бросает и чистит тело', async () => {
@@ -357,6 +458,11 @@ test('два Alt+↓ подряд двигают ТОТ ЖЕ абзац, а не
   // `swapWith >= parent.childCount`» давала RangeError, которого никто не провоцировал, и
   // четырнадцать тестов из четырнадцати оставались зелёными (ловушка крахов тоже молчала —
   // краха не случалось).
+  //
+  // ЗАВИСИМОСТЬ, которую надо видеть: страж держится на ЛОВУШКЕ КРАХОВ (installCrashTrap выше).
+  // Ассерт «порядок не изменился» истинен и при RangeError — документ после краха тот же
+  // самый. Уберут ловушку из файла — покрытие верхней границы испарится молча, а тест
+  // останется зелёным.
   await userEvent.keyboard(ALT_DOWN);
   expect(texts(editor)).toEqual(['два', 'три', 'один']);
 });
