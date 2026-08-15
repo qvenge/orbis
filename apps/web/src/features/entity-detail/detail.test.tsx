@@ -1462,6 +1462,23 @@ test('меню ⋮: «Править как markdown» показывает те
   expect(area).toHaveValue('# Заголовок\n\nтекст');
 });
 
+test('без документа пункта «Править как markdown» в меню нет вовсе', async () => {
+  // Пункт, который молча ничего не делает, хуже отсутствующего: нажав его, человек поднял бы
+  // флаг режима — и приехавший следующим рефетчем документ открыл бы тумблер сам, без жеста.
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: { ...entity, bodyDoc: null }, relations: [], thread: null };
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  await openDetailMenu();
+  expect(screen.queryByRole('menuitem', { name: 'Править как markdown' })).toBeNull();
+  // Страж вакуумности: меню открыто и живо — остальные пункты на месте.
+  expect(screen.getByRole('menuitem', { name: 'Скопировать ссылку' })).toBeInTheDocument();
+  // И тело записи при этом не пропало: первый кадр рисуется из markdown.
+  expect(screen.getByTestId('editor-preview')).toHaveTextContent('тело');
+});
+
 test('правка из тумблера садится в редактор, а не остаётся в тумблере', async () => {
   // Иначе экран и база разъезжаются до первого нажатия клавиши: правка уехала бы
   // автосохранением, а редактор показывал бы прежний текст и вернул бы его поверх.

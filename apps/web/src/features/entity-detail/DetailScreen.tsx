@@ -206,7 +206,11 @@ export function DetailScreen({ entityId }: { entityId: string }) {
             }}
             onArchive={() => setArchived(!entity.archived)}
             onCopyLink={() => void copyLink()}
-            onToggleMarkdown={() => setAsMarkdown((v) => !v)}
+            // Без документа пункта НЕТ вовсе. Показать его — значит предложить действие,
+            // которое молча ничего не делает, а флаг после нажатия остался бы поднятым: приедь
+            // документ следующим рефетчем — и тумблер открылся бы сам, без жеста человека.
+            // Ветку «документа нет» разбирает EditorShell; здесь у неё видимое следствие.
+            onToggleMarkdown={entity.bodyDoc == null ? undefined : () => setAsMarkdown((v) => !v)}
             archived={entity.archived}
           />
         }
@@ -359,6 +363,9 @@ function EntityBody({
           onDiscard={save.discardPendingDraft}
         />
       )}
+      {/* `doc !== null` — страж, а не развилка: без документа пункта меню нет вовсе (см.
+          DetailMenu), поднять флаг неоткуда. Стоит он потому, что `doc` здесь МЕСТНЫЙ
+          (`localDoc ?? serverDoc`), а тумблер без документа не собрать. */}
       {asMarkdown && doc !== null ? (
         // fallback={null}: чанк тумблера приезжает по явному жесту из меню, и мигать скелетоном
         // на месте тела ради этого не за что — тело уже на экране.
@@ -465,7 +472,8 @@ function DetailMenu({
   onPin: () => void;
   onArchive: () => void;
   onCopyLink: () => void;
-  onToggleMarkdown: () => void;
+  /** Не задан — править как markdown нечего (у записи нет документа), и пункта нет вовсе. */
+  onToggleMarkdown?: () => void;
   archived: boolean;
 }) {
   const archiveLabel = archived ? 'Разархивировать' : 'Архивировать';
@@ -498,11 +506,17 @@ function DetailMenu({
           icon: <Link2 size={16} aria-hidden />,
           onSelect: onCopyLink,
         },
-        {
-          label: 'Править как markdown',
-          icon: <Code size={16} aria-hidden />,
-          onSelect: onToggleMarkdown,
-        },
+        // Пункт появляется, только когда есть что править (см. проп): предлагать действие,
+        // которое молча ничего не делает, хуже, чем не предлагать его вовсе.
+        ...(onToggleMarkdown === undefined
+          ? []
+          : [
+              {
+                label: 'Править как markdown',
+                icon: <Code size={16} aria-hidden />,
+                onSelect: onToggleMarkdown,
+              },
+            ]),
       ]}
     />
   );

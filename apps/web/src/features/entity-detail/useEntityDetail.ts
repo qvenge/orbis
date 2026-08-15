@@ -2,6 +2,13 @@ import { TRPCClientError } from '@trpc/client';
 import { useRef, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
+// Листовой модуль хранилища: своих рантайм-зависимостей у него нет вовсе, и схему редактора он
+// не тянет (стережёт save.test.tsx). Зачем он здесь — см. `settleBodyDraft` ниже.
+import {
+  clearDraft,
+  DRAFT_REJECTING_CODE,
+  markDraftRejected,
+} from '../entity-editor/draft-storage';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 type UpdateInput = RouterInputs['entity']['update'];
@@ -50,6 +57,35 @@ function applyPatch(entity: Entity, input: UpdateInput): Entity {
     next.aspects = aspects;
   }
   return next;
+}
+
+/**
+ * Судьба черновика тела на диске после оседания сохранения.
+ *
+ * Живёт на УРОВНЕ МУТАЦИИ, а не в поштучных колбэках `useBodySave`, и это не вкусовщина.
+ * Поштучные колбэки (второй аргумент `mutate`) библиотека зовёт только при ЖИВЫХ слушателях:
+ * `@tanstack/query-core` — `if (this.#mutateOptions && this.hasListeners())`
+ * (mutationObserver.js). А самое важное сохранение тела как раз уходит без них: досыл из уборки
+ * эффекта при уходе с записи (useBodySave) отправляется наблюдателем, которого React уже
+ * отцепил. Замерено: запрос уезжает, а черновик остаётся на диске навсегда — при успехе
+ * следующее открытие предложит «вернуть» текст, который и так в базе, а при терминальном отказе
+ * пометки не будет вовсе, и то же открытие молча дошлёт обречённый документ, выключив записи
+ * сохранение до перезагрузки (ревью раунда 1, I-1).
+ *
+ * Колбэки уровня мутации исполняются ВСЕГДА — на них же держится оптимистичный патч и его
+ * откат. Условие `vars.bodyDoc !== undefined` точное: черновик заводит только правка тела
+ * документом, и правки заголовка, чекбокса и аспектов сюда не попадают.
+ *
+ * `vars.id`, а не `entityId` хука: колбэк исполняется по СВОЕЙ записи, чья бы очередь ни шла.
+ */
+function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
+  if (vars.bodyDoc === undefined) return;
+  if (err === undefined) {
+    clearDraft(vars.id);
+    return;
+  }
+  if (err instanceof TRPCClientError && err.data?.code === DRAFT_REJECTING_CODE)
+    markDraftRejected(vars.id);
 }
 
 // Общая optimistic-concurrency обвязка entity.update (§5.2): optimistic-патч + откат при
@@ -146,6 +182,9 @@ export function useEntityUpdate(entityId: string) {
       return { prev, input, seq: seqRef.current, expectedUpdatedAt: vars.expectedUpdatedAt };
     },
     onError: (err, vars, ctx) => {
+      // Диск — первым делом и БЕЗ единой отсечки: он про запись, а не про то, чья очередь
+      // сейчас на экране (см. settleBodyDraft).
+      settleBodyDraft(vars, err);
       const old = superseded(vars.id, ctx);
       // Брошенная мутация не откатывает ничего: поверх её снимка уже лёг патч преемника.
       // Откат — иначе ВСЕГДА и по ключу из контекста: он про свою запись, чья бы очередь ни шла.
@@ -162,6 +201,9 @@ export function useEntityUpdate(entityId: string) {
       if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') setConflict(true);
     },
     onSuccess: (_data, vars, ctx) => {
+      // Тоже первым делом: сохранённый черновик обязан уйти с диска, даже если экран этой
+      // записи давно закрыт (см. settleBodyDraft).
+      settleBodyDraft(vars);
       // Поздний успех устаревшей мутации не говорит ничего о расхождении, которое держит
       // плашку сейчас. Сверки меток здесь нет, и это не забытая симметрия с onError, а разные
       // вопросы: там решается, ПОКАЗЫВАТЬ ли конфликт (промолчать можно лишь о том, который

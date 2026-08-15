@@ -1058,22 +1058,34 @@ function runtimeImports(file: string): string[] {
   );
 }
 
-/** Что уводит схему документа (~156 кБ) в первый кадр, если притащить это рантайм-импортом. */
-const EDITOR_WEIGHT = /^@tiptap\/|^@orbis\/shared\/doc$|^\.\/extensions$|^\.\/BodyEditor$/;
+/**
+ * Что уводит схему документа (154.5 кБ gzip) в первый кадр, если притащить это рантайм-импортом.
+ *
+ * Пути записаны с `(^|\/)`, а не с `^\.\/`: один и тот же тяжёлый модуль соседи пишут по-разному
+ * (`./BodyEditor` из EditorShell, `../entity-editor/MarkdownToggle` из DetailScreen), и якорь на
+ * «точка-слэш» пропустил бы ровно тот файл, ради которого страж и расширен.
+ */
+const EDITOR_WEIGHT =
+  /^@tiptap\/|^@orbis\/shared\/doc$|(^|\/)extensions$|(^|\/)(BodyEditor|MarkdownToggle)$/;
 
-test('сохранение и сравнение документов не тянут схему редактора в чанк detail', () => {
-  // Хук монтирует экран detail (Задача 15), а тот открывается задолго до того, как понадобится
-  // редактор. Рантайм-импорт схемы отсюда схлопнул бы двухфазное монтирование молча: ни один
-  // тест поведения этого не заметит, а check-lazy-chunks сверяет наличие чанков, не их состав.
+test('модули первого кадра не тянут схему редактора в чанк detail', () => {
+  // Все перечисленные модули достижимы ЭАГЕРНО из чанка detail, а тот открывается задолго до
+  // того, как понадобится редактор. Рантайм-импорт схемы из любого из них схлопнул бы
+  // двухфазное монтирование молча: ни один тест поведения этого не заметит, а
+  // check-lazy-chunks сверяет НАЛИЧИЕ чанков, а не их состав — при статическом импорте
+  // конверсии в DetailScreen чанк тумблера останется на месте, а схема тихо переедет в чанк
+  // detail (ревью раунда 1, Minor 1).
   //
-  // Проверка НЕтранзитивная — ровно три файла, за которые эта задача отвечает. Появись у
+  // Проверка НЕтранзитивная — ровно шесть файлов, за которые эта задача отвечает. Появись у
   // них новый общий сосед со схемой внутри, страж промолчит; охватить весь граф импортов
   // тут нечем, и обещать это было бы неправдой.
   for (const file of [
     './useBodySave.ts',
     './strip-ids.ts',
     './draft-storage.ts',
+    './EditorShell.tsx',
     '../entity-detail/useEntityDetail.ts',
+    '../entity-detail/DetailScreen.tsx',
   ]) {
     expect(
       runtimeImports(file).filter((s) => EDITOR_WEIGHT.test(s)),
@@ -1086,4 +1098,15 @@ test('сохранение и сравнение документов не тя�
   const heavy = runtimeImports('./BodyEditor.tsx').filter((s) => EDITOR_WEIGHT.test(s));
   expect(heavy).toContain('@orbis/shared/doc');
   expect(heavy).toContain('./extensions');
+
+  // Второй положительный контроль — на САМИ спеллинги, ради которых предикат и переписан:
+  // «через каталог» и «через точку». Ошибись якорь — списки эагерных файлов выше остались бы
+  // пустыми при живом статическом импорте тумблера, то есть страж молчал бы ровно там, где
+  // его расширяли.
+  expect(EDITOR_WEIGHT.test('../entity-editor/MarkdownToggle')).toBe(true);
+  expect(EDITOR_WEIGHT.test('../entity-editor/BodyEditor')).toBe(true);
+  expect(EDITOR_WEIGHT.test('./MarkdownToggle')).toBe(true);
+  // …и на невинного соседа предикат НЕ срабатывает: иначе он краснел бы на чём угодно.
+  expect(EDITOR_WEIGHT.test('./body-box')).toBe(false);
+  expect(EDITOR_WEIGHT.test('../entity-editor/SaveIndicator')).toBe(false);
 });
