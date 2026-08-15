@@ -1,5 +1,6 @@
+import { parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { renderWithProviders, trpcError } from '../../test/harness';
 import { trpc } from '../../trpc';
@@ -16,6 +17,11 @@ const ent = (id: string, title: string, aspects: Aspects = {}) => ({
   title,
   emoji: null,
   body: '',
+  // `bodyDoc` — часть контракта detail (include всегда просит его, а сервер собирает документ
+  // даже для записей без колонки). Без него экран показывал бы тело первым кадром и НИКОГДА не
+  // поднимал редактор — то есть тесты этого файла были бы зелены по причине, которой в проде
+  // не существует.
+  bodyDoc: parseBody(''),
   bodyRefs: [],
   tags: [],
   meta: {},
@@ -126,10 +132,19 @@ function SideProbe({ id }: { id: string }) {
 
 beforeEach(() => {
   localStorage.clear();
+  // requestIdleCallback, которого никто не дёрнет: этот файл про секции «Деталей», и редактор,
+  // встающий сам по запасному таймеру простоя (1500 мс) посреди десятисекундных ожиданий ниже,
+  // менял бы дерево в непредсказуемый момент. jsdom своей реализации не имеет, поэтому подмена
+  // именно ДОБАВЛЯЕТ ветку простоя — и она никогда не срабатывает (приём editor.test.tsx).
+  vi.stubGlobal('requestIdleCallback', () => 1);
   useNav.setState({
     activeTab: 'browser',
     stacks: { chat: [], browser: [{ kind: 'entity', id: 'e1' }], agenda: [], budget: [] },
   });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 // Титулы строк дочитываются одним entity.resolveRefs (Blocks.tsx), то есть ждать
@@ -172,7 +187,7 @@ test('блокировки: «блокирует» — исходящие, «з�
 
 test('пустые списки блокировок и пустой backlinks скрыты (кнопка добавления остаётся)', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   expect(screen.queryByText(/^блокирует$/i)).not.toBeInTheDocument();
   expect(screen.queryByText(/^заблокирована$/i)).not.toBeInTheDocument();
@@ -184,7 +199,7 @@ test('пустые списки блокировок и пустой backlinks �
 
 test('добавление блокировки: поиск через entity.suggest по неполному слову → relation.create blocks', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
@@ -212,7 +227,7 @@ test('добавление блокировки: поиск через entity.su
 // «Заблокирована» было нечем пополнить — приходилось открывать detail самого блокера.
 test('добавление блокировки: направление «заблокирована» шлёт обратную связь', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
@@ -256,7 +271,7 @@ test('снятие блокировки: крестик → подтвержде
 // запроса подряд, из которых полезен только последний.
 test('пикер: быстрый ввод трёх символов даёт один запрос, а не три', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   const input = screen.getByLabelText('Поиск сущности');
@@ -278,7 +293,7 @@ test('пикер: подсказка до ввода, спиннер в полё
     release = res;
   });
   renderWithProviders(<DetailScreen entityId="e1" />, handler({ onSuggest: () => gate }));
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   expect(screen.getByText(/поиск от 2 символов/i)).toBeInTheDocument();
@@ -303,7 +318,7 @@ test('пикер: отказ поиска показан плашкой, а не
       },
     }),
   );
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Куп' } });
@@ -323,7 +338,7 @@ test('цикл blocks: серверный отказ показан плашко
       },
     }),
   );
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
@@ -339,7 +354,7 @@ test('цикл blocks: серверный отказ показан плашко
 // молча создавала следующую связь в обратную сторону.
 test('форма: после создания связи направление возвращается к дефолтному', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
@@ -414,7 +429,7 @@ test('пикер: закрытая задача не предлагается б
     <DetailScreen entityId="e1" />,
     handler({ onSuggest: () => [sugg(found), sugg(doneBlocker)] }),
   );
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'блокер' } });
@@ -458,7 +473,7 @@ test('создание блокировки инвалидирует entity.quer
     </>,
     handler({}),
   );
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
   const probes = () =>
     calls.filter(
       (c) =>

@@ -1,52 +1,46 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
+import { parseBody, serializeBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, expect, test, vi } from 'vitest';
-import { DetailScreen } from '../../features/entity-detail/DetailScreen';
-import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders } from '../../test/harness';
-import { trpc } from '../../trpc';
-import { Toaster } from '../../ui/Toast';
+import { expect, test, vi } from 'vitest';
+import { installCrashTrap, type MockHandler, renderWithProviders } from '../../test/harness';
+import { BodyEditor } from '../entity-editor/BodyEditor';
 import { QueryTextEditor } from './QueryTextEditor';
+
+// Модалка блока живёт в портале, а открывает её колбэк NodeView: брошенное оттуда jsdom гасит,
+// ассерты остаются зелёными, а прогон падает кодом 1. Ставится файлом, не глобально: см. harness.
+installCrashTrap();
 
 // Реестр аспектов — настоящий: каталог полей грамматики в тесте тот же, что в проде,
 // иначе «невалидный блок» в тесте оказался бы валидным в продукте (и наоборот).
 const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) }));
 
-const entity = {
-  id: 'e1',
-  ownerId: 'u',
-  title: 'Список',
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspects: {},
-  createdAt: '2026-07-05T00:00:00.000Z',
-  updatedAt: '2026-07-05T10:00:00.000Z',
-  archived: false,
+/**
+ * Хозяин виджетов — РЕДАКТОР, а не detail-экран.
+ *
+ * До Задачи 15 эти тесты ходили через `DetailScreen`, потому что кнопку «Настроить» рисовал его
+ * собственный просмотр тела, а правка блока была заменой ПОДСТРОКИ в `body` и уезжала мутацией
+ * `entity.update` со строковым телом. Ни того, ни другого больше нет: «Настроить» есть только у
+ * NodeView внутри редактора, а правка блока стала правкой АТРИБУТА ноды. Экран между
+ * пользователем и блоком теперь не стоит вовсе — и держать его в тесте значило бы проверять
+ * лишнее (табы, шапку, автосохранение по паузе) ради того же самого утверждения.
+ *
+ * Что делает сам экран с редактором — проверяет detail.test.tsx; что делает виджет с атрибутом —
+ * nodes/query-widget.test.tsx. Здесь остался КОНСТРУКТОР ЗАПРОСА: какой редактор открывается,
+ * что он показывает, что отдаёт наружу и куда возвращается фокус.
+ */
+const handler: MockHandler = (path) => {
+  if (path === 'aspect.list') return realAspects;
+  if (path === 'entity.query') return [];
+  return {};
 };
 
-/** Detail с заданным телом; entity.update возвращает присланный body. */
-const bodyHandler =
-  (body: string): MockHandler =>
-  (path, input) => {
-    if (path === 'entity.get') return { entity: { ...entity, body }, relations: [], thread: null };
-    if (path === 'entity.update')
-      return { ...entity, body: (input as { body?: string }).body ?? body };
-    if (path === 'aspect.list') return realAspects;
-    if (path === 'entity.query') return [];
-    return {};
-  };
-
-beforeEach(() => {
-  localStorage.clear();
-  useNav.setState({
-    activeTab: 'browser',
-    stacks: { chat: [], browser: [{ kind: 'entity', id: 'e1' }], agenda: [], budget: [] },
-  });
-});
+/** Тело в редакторе + спай на изменения документа: правка блока наблюдается по документу. */
+function mountBody(md: string) {
+  const onChange = vi.fn();
+  const r = renderWithProviders(<BodyEditor doc={parseBody(md)} onChange={onChange} />, handler);
+  return { ...r, onChange, saved: () => serializeBody(onChange.mock.calls.at(-1)?.[0]) };
+}
 
 const TWO_BLOCKS =
   'Утренний обзор\n\n{{query: tags=work, title=Работа}}\n\nмежду\n\n{{query: tags=home, title=Дом}}\n\nхвост';
@@ -70,46 +64,35 @@ function editorField(dialog: HTMLElement): HTMLTextAreaElement {
 }
 
 test('«Настроить» у невалидного блока открывает редактор с текстом блока и позицией ошибки', async () => {
-  renderWithProviders(
-    <DetailScreen entityId="e1" />,
-    bodyHandler('{{query: aspect=orbis/task, status=}}'),
-  );
+  mountBody('{{query: aspect=orbis/task, status=}}');
   // §6.4: битый блок — плашка, а не пустой список; настроить его надо уметь именно оттуда,
-  // иначе единственный путь починки — редактировать весь body руками.
+  // иначе единственный путь починки — редактировать весь текст руками.
   await screen.findByTestId('qb-error');
 
   const dialog = await openBlockEditor();
-  expect(editorField(dialog)).toHaveValue('aspect=orbis/task, status=');
+  expect(editorField(dialog)).toHaveValue(' aspect=orbis/task, status=');
   expect(within(dialog).getByTestId('query-text-error')).toHaveTextContent(/позиция \d+/);
 });
 
-test('сохранение изменённого текста заменяет только этот блок в body', async () => {
-  const { calls } = renderWithProviders(
-    <DetailScreen entityId="e1" />,
-    bodyHandler(TWO_BLOCKS_BROKEN),
-  );
+test('сохранение изменённого текста заменяет только этот блок', async () => {
+  const s = mountBody(TWO_BLOCKS_BROKEN);
   const dialog = await openBlockEditor(1);
   fireEvent.change(editorField(dialog), { target: { value: 'tags=home, limit=5, title=Дом' } });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
 
-  await waitFor(() => {
-    const c = calls.find((x) => x.path === 'entity.update');
-    expect((c?.input as { body: string }).body).toBe(
-      'Утренний обзор\n\n{{query: status=, tags=work, title=Работа}}\n\nмежду\n\n{{query: tags=home, limit=5, title=Дом}}\n\nхвост',
-    );
-    // §5.2: тот же контракт, что у правки тела руками — версия сущности едет с записью.
-    expect((c?.input as { expectedUpdatedAt: string }).expectedUpdatedAt).toBe(entity.updatedAt);
-  });
+  await waitFor(() => expect(s.onChange).toHaveBeenCalled());
+  // Соседний блок цел ДОСЛОВНО, вместе с текстом вокруг: «правка блока» обязана остаться
+  // правкой одного блока, а не пересборкой тела.
+  expect(s.saved()).toBe(
+    'Утренний обзор\n\n{{query: status=, tags=work, title=Работа}}\n\nмежду\n\n{{query:tags=home, limit=5, title=Дом}}\n\nхвост',
+  );
 });
 
 // Р3, сквозная проверка. Сидированные списки многострочные, с 9-пробельными отступами
 // continuation-строк, а сериализатор по построению даёт ОДНУ строку: пересборка блока из
 // формы схлопнула бы их — «ничего не менял, а запись переписалась».
-test('сохранение формы без изменений не шлёт мутацию', async () => {
-  const { calls } = renderWithProviders(
-    <DetailScreen entityId="e1" />,
-    bodyHandler(DAILY_PLANNING_BODY),
-  );
+test('сохранение формы без изменений документ не трогает', async () => {
+  const s = mountBody(DAILY_PLANNING_BODY);
   const dialog = await openBlockEditor(1);
   // Открылась именно форма: у валидного блока строкового редактора быть не должно.
   expect(await within(dialog).findByLabelText('Заголовок')).toHaveValue('Сегодня');
@@ -117,27 +100,27 @@ test('сохранение формы без изменений не шлёт м
   fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
 
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
+  // Правка, не меняющая смысла, до сохранения не доезжает вовсе (сравнение по смыслу в
+  // BodyEditor): схлопнись многострочный блок в одну строку — тут была бы правка.
+  expect(s.onChange).not.toHaveBeenCalled();
 });
 
-test('правка формы заменяет только этот блок в body', async () => {
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
+test('правка формы заменяет только этот блок', async () => {
+  const s = mountBody(TWO_BLOCKS);
   const dialog = await openBlockEditor(1);
   fireEvent.change(await within(dialog).findByLabelText('Лимит'), { target: { value: '5' } });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
 
-  await waitFor(() => {
-    const c = calls.find((x) => x.path === 'entity.update');
-    expect((c?.input as { body: string }).body).toBe(
-      'Утренний обзор\n\n{{query: tags=work, title=Работа}}\n\nмежду\n\n{{query: tags=home, limit=5, title=Дом}}\n\nхвост',
-    );
-  });
+  await waitFor(() => expect(s.onChange).toHaveBeenCalled());
+  expect(s.saved()).toBe(
+    'Утренний обзор\n\n{{query: tags=work, title=Работа}}\n\nмежду\n\n{{query:tags=home, limit=5, title=Дом}}\n\nхвост',
+  );
 });
 
 // §3.4: «редактировать как текст» — тот же строковый редактор с ТЕКУЩЕЙ сериализацией,
 // иначе набранное в форме терялось бы на переходе.
 test('из формы «Редактировать как текст» открывает строковый редактор с правками формы', async () => {
-  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
+  mountBody(TWO_BLOCKS);
   const form = await openBlockEditor(0);
   fireEvent.change(await within(form).findByLabelText('Заголовок'), { target: { value: 'Дела' } });
   fireEvent.click(within(form).getByRole('button', { name: 'Редактировать как текст' }));
@@ -147,134 +130,53 @@ test('из формы «Редактировать как текст» откр�
 });
 
 test('«Отмена» закрывает редактор и ничего не пишет', async () => {
-  const { calls } = renderWithProviders(
-    <DetailScreen entityId="e1" />,
-    bodyHandler(TWO_BLOCKS_BROKEN),
-  );
+  const s = mountBody(TWO_BLOCKS_BROKEN);
   const dialog = await openBlockEditor(0);
   fireEvent.change(editorField(dialog), { target: { value: 'tags=work, limit=1' } });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Отмена' }));
 
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-  expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
+  expect(s.onChange).not.toHaveBeenCalled();
 });
 
 // Канон §6.4: невалидный блок — это состояние продукта (красная плашка), а не запрет на
 // запись. Кнопка «Сохранить» без парсера: иначе из битого блока не выйти правкой по шагам.
 test('невалидную строку сохранить можно', async () => {
-  const { calls } = renderWithProviders(
-    <DetailScreen entityId="e1" />,
-    bodyHandler(TWO_BLOCKS_BROKEN),
-  );
+  const s = mountBody(TWO_BLOCKS_BROKEN);
   const dialog = await openBlockEditor(0);
   fireEvent.change(editorField(dialog), { target: { value: 'tags=' } });
   const save = within(dialog).getByRole('button', { name: 'Сохранить' });
   expect(save).toBeEnabled();
   fireEvent.click(save);
 
-  await waitFor(() => {
-    const c = calls.find((x) => x.path === 'entity.update');
-    expect((c?.input as { body: string }).body).toContain('{{query: tags=}}');
-  });
+  await waitFor(() => expect(s.onChange).toHaveBeenCalled());
+  expect(s.saved()).toContain('{{query:tags=}}');
 });
 
-// Виджет — не текст записи: жест «настроить» обязан остаться жестом виджета.
-test('клик по «Настроить» не открывает редактор тела', async () => {
-  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
-  await openBlockEditor(0);
-  expect(screen.queryByTestId('body-edit')).toBeNull();
-});
-
-// Модалка Radix живёт в портале, но React-события из портала всплывают по ДЕРЕВУ React:
-// смонтируй её внутри кликабельного просмотра тела — и клик по её заголовку открыл бы
-// textarea прямо под открытой модалкой (обработчик просмотра ловит не всё: заголовок
-// модалки не подходит ни под один селектор его белого списка).
-test('клик внутри модалки не открывает редактор тела под ней', async () => {
-  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
-  const dialog = await openBlockEditor(0);
-  fireEvent.click(within(dialog).getByRole('heading'));
-  expect(screen.queryByTestId('body-edit')).toBeNull();
-  expect(screen.getByRole('dialog')).toBeInTheDocument();
-});
-
-// Р5. В правке тела blur сохраняет body и уходит в просмотр — клик по «Настроить» породил
-// бы вторую запись подряд с устаревшим expectedUpdatedAt (updatedAt приезжает только
-// рефетчем) и ложный 409. Путь один: сперва выйти из правки.
-test('в режиме правки тела кнопки «Настроить» нет', async () => {
-  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
-  await waitFor(() => expect(screen.getAllByTestId('qb-configure')).toHaveLength(2));
-  fireEvent.click(screen.getByTestId('body-view'));
-  await screen.findByTestId('body-edit');
-  // Виджеты в правке остаются (список под textarea), а кнопки на них — нет.
-  await waitFor(() => expect(screen.getAllByTestId('qb-count')).toHaveLength(2));
-  expect(screen.queryAllByTestId('qb-configure')).toHaveLength(0);
-});
-
-/** Кнопка, роняющая кэш entity.get: имитирует ФОНОВЫЙ рефетч (чужая правка приехала). */
-function Refetcher() {
-  const utils = trpc.useUtils();
-  return (
-    <button type="button" data-testid="refetch" onClick={() => void utils.entity.get.invalidate()}>
-      обновить
-    </button>
-  );
-}
-
-// Модалка живёт долго (а форма-редактор будет жить ещё дольше), и body под ней может
-// смениться фоновым рефетчем: индекс блока остался бы прежним числом, а блок по нему —
-// уже чужим. Записать в него текст, набранный для ДРУГОГО запроса, — молча испортить
-// чужую правку, причём expectedUpdatedAt здесь не спасает: клиент уже принял новую версию.
-test('body сменился под открытой модалкой — правка в чужой блок не уезжает', async () => {
-  // Первый блок битый: сверка «тот ли это ещё блок» живёт в BodySection и общая для обоих
-  // редакторов, а строковый показывает набранный черновик прямо в поле. Второй — валидный:
-  // его заголовок и есть видимый признак того, что фоновый рефетч доехал.
-  const before = '{{query: status=, tags=work, title=Работа}}\n\n{{query: tags=home, title=Дом}}';
-  const after = '{{query: status=, tags=other, title=ЧУЖОЙ}}\n\n{{query: tags=home, title=ДРУГОЙ}}';
-  let gets = 0;
-  const { calls } = renderWithProviders(
-    <>
-      <DetailScreen entityId="e1" />
-      <Refetcher />
-      <Toaster />
-    </>,
-    (path, input) => {
-      if (path === 'entity.get') {
-        gets += 1;
-        return {
-          entity: { ...entity, body: gets === 1 ? before : after },
-          relations: [],
-          thread: null,
-        };
-      }
-      if (path === 'entity.update')
-        return { ...entity, body: (input as { body?: string }).body ?? after };
-      if (path === 'aspect.list') return realAspects;
-      if (path === 'entity.query') return [];
-      return {};
-    },
-  );
-  const dialog = await openBlockEditor(0);
-  fireEvent.change(editorField(dialog), { target: { value: 'tags=work, limit=5' } });
-
-  fireEvent.click(screen.getByTestId('refetch'));
-  await screen.findByText('ДРУГОЙ');
-
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
-  // Отказ громкий и без потерь: сказано почему, модалка на месте, набранный текст цел.
-  // Ожидание сообщения заодно прокручивает микрозадачи — ушедшая мутация к этому моменту
-  // уже добралась бы до линка, и проверка ниже увидела бы её.
-  expect(await screen.findByText(/откройте.*заново/i)).toBeInTheDocument();
-  expect(screen.getByRole('dialog')).toBeInTheDocument();
-  expect(editorField(dialog)).toHaveValue('tags=work, limit=5');
-  expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
-});
+/*
+ * Три теста прежнего пути отсюда УШЛИ вместе с самим путём, и не «за ненадобностью»:
+ *
+ *  - «клик по „Настроить“ не открывает редактор тела» и «клик внутри модалки не открывает
+ *    редактор тела под ней» — отдельного «редактора тела», который можно открыть кликом, на
+ *    экране больше нет: тело И ЕСТЬ редактор. Ту же беду (React-события из портала всплывают
+ *    по дереву React) сторожат nodes/query-widget.test.tsx — «клик внутри модалки блока не
+ *    уходит в редактор» и «модалка блока не подменяет собой первый кадр EditorShell».
+ *  - «в режиме правки тела кнопки „Настроить“ нет» — режима правки тела не существует, а
+ *    вместе с ним и повода прятать кнопку: вторая запись подряд с протухшим expectedUpdatedAt
+ *    теперь невозможна по устройству (сохранение одно, по паузе, с учётом полёта).
+ *  - «body сменился под открытой модалкой — правка в чужой блок не уезжает» — оптимистичная
+ *    блокировка блока («Блок изменился в другом месте») удалена ВМЕСТЕ с адресацией по
+ *    порядковому номеру: адрес правки — сама нода, промахнуться мимо неё нечем
+ *    (QueryWidget.tsx). Что происходит с открытой модалкой при приезде чужой версии
+ *    документа — замерено и записано там же.
+ */
 
 // Radix в модальном режиме гасит восстановление фокуса FocusScope и фокусирует ТРИГГЕР, а
 // ui/Dialog его не рендерит (модалку монтируют условно) — фокус уходил на <body>, и до
 // следующей кнопки «Настроить» надо было таббать с начала страницы. На сидированном Daily
 // Planning блоков три, и цена этого — три прохода табом за одну правку.
 test('после закрытия модалки фокус возвращается на кнопку, которой её открыли', async () => {
-  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
+  mountBody(TWO_BLOCKS);
   await waitFor(() => expect(screen.getAllByTestId('qb-configure')).toHaveLength(2));
   const button = screen.getAllByTestId('qb-configure')[1] as HTMLElement;
   button.focus();
@@ -296,7 +198,7 @@ test('после закрытия модалки фокус возвращает
 // элемент быть не может (через миг его не будет в документе), и опора наследуется от
 // предыдущей модалки — кнопкой «Настроить» открыли обе.
 test('после перехода «в текст» фокус возвращается на ту же «Настроить»', async () => {
-  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
+  mountBody(TWO_BLOCKS);
   await waitFor(() => expect(screen.getAllByTestId('qb-configure')).toHaveLength(2));
   const button = screen.getAllByTestId('qb-configure')[0] as HTMLElement;
   button.focus();
@@ -311,7 +213,7 @@ test('после перехода «в текст» фокус возвраща�
 });
 
 test('кнопка «Настроить» — настоящая кнопка с доступным именем', async () => {
-  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(TWO_BLOCKS));
+  mountBody(TWO_BLOCKS);
   const buttons = await screen.findAllByRole('button', { name: 'Настроить' });
   expect(buttons).toHaveLength(2);
   expect(buttons[0]?.tagName).toBe('BUTTON');

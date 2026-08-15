@@ -85,7 +85,7 @@ function setup(opts: { entity?: BodySaveEntity; respond?: Respond } = {}) {
   // `() => ({})` приняла бы и лишнее чтение, и чужую мутацию — и «ровно одна мутация» ниже
   // прошло бы при второй, но другой.
   let sends = 0;
-  const { calls, container } = renderWithProviders(<Probe />, (path, input) => {
+  const { calls, container, unmount } = renderWithProviders(<Probe />, (path, input) => {
     if (path !== 'entity.update') throw new Error(`сохранение тела не ходит на ${path}`);
     sends += 1;
     if (sends > MAX_SENDS) return new Promise(() => {});
@@ -95,6 +95,8 @@ function setup(opts: { entity?: BodySaveEntity; respond?: Respond } = {}) {
   return {
     container,
     calls,
+    /** Уход с записи (или с экрана): размонтирование обязано дослать отложенное. */
+    unmount: () => act(() => unmount()),
     /** Отправленные мутации сохранения. */
     updates: () => calls.filter((c) => c.path === 'entity.update'),
     /** Всё, что ушло МИМО сохранения: «мутаций нет» обязано значить «в сеть не ходили вовсе». */
@@ -214,6 +216,41 @@ test('flush() шлёт немедленно — и снимает за собо�
   // Уцелей таймер — набранное уехало бы вторым разом само, без единой новой правки.
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1);
+});
+
+test('размонтирование досылает отложенное — уход с записи не теряет набранного', async () => {
+  // Экран монтирует тело с `key={entity.id}` (Задача 15), поэтому переход entity→entity — это
+  // размонтирование. Без досыла терялось бы всё, что человек набрал в последние две секунды
+  // перед переходом: таймер паузы снимается уборкой, а второго шанса ни у кого нет.
+  const s = setup();
+  s.api().onDocChange(ONE);
+  // Страж: до размонтирования пауза ещё идёт и в сеть никто не ходил — иначе проверка ниже
+  // была бы зелена и у хука, который шлёт на каждое нажатие.
+  expect(s.updates()).toHaveLength(0);
+
+  await s.unmount();
+
+  expect(s.updates()).toHaveLength(1);
+  expect(s.updates()[0]?.input).toEqual({
+    id: 'e1',
+    bodyDoc: ONE,
+    expectedUpdatedAt: ENTITY.updatedAt,
+  });
+  // И ровно один: снятый таймер паузы не будит вторую отправку уже после ухода.
+  await tick(SAVE_PAUSE * 3);
+  expect(s.updates()).toHaveLength(1);
+});
+
+test('размонтирование без набранного в сеть не ходит вовсе', async () => {
+  // Открыл запись, посмотрел, ушёл — и ни одной мутации. Отдельный тест, потому что «досылать
+  // на размонтировании» легко написать так, что уход с ЛЮБОЙ записи пишет в базу: редактор при
+  // монтировании присылает тело базы с блочными id, и сравнение по смыслу — единственное, что
+  // отличает это эхо от правки.
+  const s = setup();
+  s.api().onDocChange(withBlockIds(BASE)); // ровно то эхо, что приходит на монтировании
+  await s.unmount();
+  expect(s.updates()).toEqual([]);
+  expect(s.stray()).toEqual([]);
 });
 
 test('пока идёт запрос, второй не уходит — ни по паузе, ни по flush(); досылается по оседанию', async () => {

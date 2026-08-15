@@ -80,6 +80,33 @@ test('вкладка «Агенты» открывает список выдан
   expect(await screen.findByText('Claude Code')).toBeInTheDocument();
 });
 
+// Задача 15 сделала `keepMounted` опцией вкладки — и настройки её не берут. Проверка на
+// ЗАПРОСАХ, а не на разметке: содержимое неактивной вкладки можно и спрятать (тогда пустота
+// на экране ничего не доказывает), а вот сеть врать не умеет — экран настроек с шестью
+// вкладками разослал бы их запросы разом при каждом входе (ревью Б8).
+test('настройки не монтируют неактивные вкладки: их запросы в сеть не уходят', async () => {
+  const { calls } = renderWithProviders(<SettingsScreen />, (path) => {
+    if (path === 'user.getSettings') return settings;
+    if (path === 'oauth.listGrants') return [];
+    if (path === 'aspect.list') return [];
+    if (path === 'view.list') return [];
+    return {};
+  });
+  // Ждём САМИ вкладки: до загрузки настроек экран рисует скелетон, и пустой список запросов
+  // на нём проходил бы при любой реализации.
+  await screen.findByRole('tab', { name: 'Агенты' });
+  expect(screen.getByTestId('general-form')).toBeInTheDocument();
+
+  const paths = () => calls.map((c) => c.path);
+  expect(paths()).toEqual(['user.getSettings']);
+
+  // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: открытая вкладка свой запрос ШЛЁТ — иначе молчание
+  // выше означало бы лишь, что эти вкладки не спрашивают ничего и никогда.
+  fireEvent.click(screen.getByRole('tab', { name: 'Аспекты' }));
+  await waitFor(() => expect(paths()).toContain('aspect.list'));
+  expect(paths()).not.toContain('oauth.listGrants');
+});
+
 beforeEach(() => {
   // jsdom не имеет createObjectURL
   Object.defineProperty(URL, 'createObjectURL', {

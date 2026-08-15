@@ -460,3 +460,34 @@ test('без requestIdleCallback редактор встаёт по запасн
     timeout: 3000,
   });
 });
+
+test('без документа редактор не встаёт ВООБЩЕ — ни по касанию, ни по простою', async () => {
+  // `doc === null` — «документа нет» (в wire-схеме `bodyDoc` и опционален, и nullable).
+  // Подставить вместо него пустышку нельзя: редактор выглядел бы стёртым телом, а первое же
+  // нажатие клавиши отправило бы эту пустоту в базу поверх настоящего текста. Тело при этом
+  // остаётся читаемым — первый кадр рисуется из markdown.
+  const md = ALL_TASKS?.body ?? '';
+  const empty = renderWithProviders(
+    <EditorShell doc={null} markdown={md} onChange={vi.fn()} />,
+    handler,
+  );
+  await screen.findByTestId('qb-count'); // первый кадр жив, и виджеты в нём настоящие
+  fireEvent.click(screen.getByTestId('editor-preview'));
+  // Ждём ДОЛЬШЕ запасного таймера простоя (1500 мс): «не встал» обязано значить «не встанет»,
+  // а не «мы не дождались».
+  await new Promise((r) => setTimeout(r, 1800));
+  expect(screen.queryByTestId('body-editor')).toBeNull();
+  expect(screen.getByTestId('editor-preview')).toBeInTheDocument();
+  empty.unmount(); // иначе два первых кадра на странице разом, и запросы ниже неоднозначны
+
+  // Положительный контроль: с документом тот же жест редактор поднимает — иначе отрицательный
+  // ассерт был бы зелен и у наглухо сломанного EditorShell.
+  renderWithProviders(
+    <EditorShell doc={parseBody(md)} markdown={md} onChange={vi.fn()} />,
+    handler,
+  );
+  fireEvent.click(await screen.findByTestId('editor-preview'));
+  await waitFor(() => expect(screen.getByTestId('body-editor')).toBeInTheDocument(), {
+    timeout: 3000,
+  });
+});

@@ -4,15 +4,12 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { CATEGORIES_QUERY, toOption } from '../budget/categories';
 import { invalidateBudget } from '../budget/useBudget';
-import { GoalProgress } from './GoalProgress';
 import { useEntityUpdate } from './useEntityDetail';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
-type GoalProgressData = NonNullable<RouterOutputs['entity']['get']['goalProgress']>;
 
 const FINANCIAL = 'orbis/financial';
 const CATEGORY_REF = 'category_ref';
-const GOAL = 'orbis/goal';
 
 // Тихий инпут-в-строке-свойства: тот же вид у текстового поля и у пикера категории.
 const FIELD_CLASS =
@@ -63,15 +60,12 @@ function readOnlyText(value: unknown): string {
 // optimistic + expectedUpdatedAt, что и body; правка подлежит Undo журнала сервера) и
 // снятие аспекта целиком (aspects:{id:null}).
 //
-// goalProgress — сосед сущности в ответе entity.get (E2), а не поле аспекта: считает его
-// сервер на каждом чтении, и в `entity.aspects` его нет. Отсюда отдельный проп.
-export function AspectCards({
-  entity,
-  goalProgress,
-}: {
-  entity: Entity;
-  goalProgress?: GoalProgressData;
-}) {
+// Полосы прогресса цели здесь БОЛЬШЕ НЕТ: карточки уехали на вкладку «Детали», а прогресс
+// остался на «Сущности» — у цели он и есть то, ради чего её открывают, и прятать «50%,
+// 150 000 из 300 000» во вторую вкладку значило бы ухудшить главный экран целей ради
+// чистоты раскладки (Задача 15). Рисует его теперь DetailScreen, доставая `unit` из
+// `entity.aspects['orbis/goal']` напрямую.
+export function AspectCards({ entity }: { entity: Entity }) {
   const { mutation, conflict } = useEntityUpdate(entity.id);
   const utils = trpc.useUtils();
   const aspects = entity.aspects as Record<string, Record<string, unknown>>;
@@ -116,14 +110,6 @@ export function AspectCards({
               Снять аспект
             </Button>
           </div>
-          {/* Прогресс цели — НАД свойствами: он и есть ответ на вопрос «как оно идёт»,
-              а target_value/unit ниже — его настройки (§11.3). */}
-          {aspectId === GOAL && goalProgress !== undefined && (
-            <GoalProgress
-              progress={goalProgress}
-              unit={typeof fields.unit === 'string' ? fields.unit : undefined}
-            />
-          )}
           <dl className="grid grid-cols-[minmax(7rem,max-content)_1fr] items-center gap-x-3 gap-y-0.5 text-sm">
             {Object.entries(fields).map(([field, value]) =>
               // Единственное поле с собственным контролом: категория финансовой записи
@@ -264,8 +250,8 @@ function AspectField({
   // D6c п.3: значение аспекта сменилось извне (наш же save, чекбокс «Готово» в шапке,
   // правка с другого устройства) — подхватываем его, но ТОЛЬКО если черновик не трогали.
   // Иначе текст, который владелец печатает прямо сейчас, был бы затёрт. Приём тот же,
-  // что у BodySection (DetailScreen): сравнение с последним известным серверным значением
-  // в рендере, а не useEffect на каждый рендер.
+  // что у редактора тела (BodyEditor подменяет содержимое только вне фокуса): сравнение с
+  // последним известным серверным значением в рендере, а не useEffect на каждый рендер.
   if (initial !== serverValue) {
     setServerValue(initial);
     if (draft === serverValue) setDraft(initial);

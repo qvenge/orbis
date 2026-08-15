@@ -152,9 +152,9 @@ test('«Отмена» закрывает, ничего не записав — 
   await userEvent.click(screen.getByRole('button', { name: 'Отмена' }));
   expect(onChange).not.toHaveBeenCalled();
   expect(onClose).toHaveBeenCalledTimes(2);
-  // Отказ гасит и подтверждение. Переживи флаг отказ — при следующем открытии (Задача 15
-  // вправе держать тумблер смонтированным) первое же «Применить» сохранило бы raw БЕЗ
-  // предупреждения, то есть двухшаговость обходилась бы целиком.
+  // Отказ гасит и подтверждение. Переживи флаг отказ — при следующем открытии тумблера, если
+  // его когда-нибудь начнут прятать вместо размонтирования, первое же «Применить» сохранило бы
+  // raw БЕЗ предупреждения, то есть двухшаговость обходилась бы целиком.
   expect(screen.queryByRole('alert')).toBeNull();
 });
 
@@ -188,8 +188,8 @@ test('неразбираемое не сохраняется молча: пре�
   expect(serializeBody(saved)).toBe(WITH_RAW);
   expect(onClose).toHaveBeenCalledTimes(1);
   // Плашка гаснет вместе с сохранением. Сегодня родитель тумблер размонтирует и разницы нет,
-  // но Задача 15 вправе спрятать его через `hidden` — и тогда при следующем открытии всплыло
-  // бы предупреждение о разметке, которой в новом теле может уже не быть.
+  // но начни он его прятать — при следующем открытии всплыло бы предупреждение о разметке,
+  // которой в новом теле может уже не быть.
   expect(screen.queryByRole('alert')).toBeNull();
 });
 
@@ -211,6 +211,40 @@ test('правка текста снимает подтверждение — о
   await userEvent.click(apply);
   expect(onChange).toHaveBeenCalledTimes(1);
   expect(serializeBody(savedDoc(onChange))).toBe(other);
+});
+
+test('картинка, лежавшая в теле И ДО правки, подтверждения не требует', async () => {
+  // Предупреждение — о НОВОЙ неразобранной разметке, а не о её наличии. Тело с картинкой
+  // разбирается в raw при КАЖДОМ открытии, и сверка «есть ли raw в результате» требовала бы
+  // второго «Применить» на любую правку такого тела — хоть на исправленную опечатку в соседнем
+  // абзаце. Двухшаговость, срабатывающая всегда, перестаёт что-либо значить через день.
+  const { area, apply, onChange, onClose } = mount(parseBody(WITH_RAW));
+  // Премиса: во входящем документе raw ДЕЙСТВИТЕЛЬНО есть — иначе тест проверял бы тело без
+  // картинки, то есть ничего.
+  expect(blockTypes(parseBody(WITH_RAW))).toContain('rawBlock');
+
+  fireEvent.change(area, { target: { value: `${WITH_RAW}\n\nи ещё абзац` } });
+  await userEvent.click(apply);
+
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(onChange).toHaveBeenCalledTimes(1);
+  // Картинка на месте и уехала дословно: «не спрашиваем» не значит «выбрасываем».
+  expect(serializeBody(savedDoc(onChange))).toBe(`${WITH_RAW}\n\nи ещё абзац`);
+  expect(blockTypes(savedDoc(onChange))).toEqual(['paragraph', 'rawBlock', 'paragraph']);
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+test('ВТОРАЯ картинка в том же теле — уже новое, и о ней спрашивают', async () => {
+  // Другая сторона той же границы: молчание выше — про ту же самую неразобранную разметку, а
+  // не про «в теле уже был raw, значит можно всё».
+  const { area, apply, onChange } = mount(parseBody(WITH_RAW));
+  fireEvent.change(area, {
+    target: { value: `${WITH_RAW}\n\n![другая](https://example.com/b.png)` },
+  });
+  await userEvent.click(apply);
+
+  expect(screen.getByRole('alert')).toHaveTextContent('не разобрана');
+  expect(onChange).not.toHaveBeenCalled();
 });
 
 test('разобранная разметка сохраняется с первого «Применить» — подтверждения не требует', async () => {

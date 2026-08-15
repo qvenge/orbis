@@ -55,6 +55,19 @@ const LAZY_SCREENS = [
  */
 const SHARED_CHUNKS = ['NativeRow', 'txQuery'];
 
+/**
+ * Ленивые модули ВНУТРИ экрана сущности (не экраны, поэтому и не сверяются с роутером).
+ *
+ * Оба тянут за собой `@orbis/shared/doc` — всю схему документа, 154.5 кБ gzip отдельным чанком.
+ * Статический импорт любого из них схлопнул бы этот вес в чанк `DetailScreen`, то есть в первый
+ * кадр КАЖДОГО открытия записи, мимо двухфазного монтирования, ради которого написаны три
+ * задачи подряд. Ломается это ровно так же молча, как и у экранов: `tsc`, `biome` и все тесты
+ * остаются зелёными, а файл чанка просто исчезает из dist.
+ *
+ * Точки лени: `EditorShell.tsx` (BodyEditor) и `DetailScreen.tsx` (MarkdownToggle).
+ */
+const LAZY_EDITOR_MODULES = ['BodyEditor', 'MarkdownToggle'];
+
 // --- Сверка списка с роутером -------------------------------------------------------------
 // Седьмая точка lazy(), добавленная без правки LAZY_SCREENS, осталась бы без охраны — молча,
 // то есть ровно тем способом, против которого этот страж и написан. Сверяем не число, а
@@ -87,7 +100,7 @@ try {
   process.exit(1);
 }
 
-const guarded = [...LAZY_SCREENS, ...SHARED_CHUNKS];
+const guarded = [...LAZY_SCREENS, ...SHARED_CHUNKS, ...LAZY_EDITOR_MODULES];
 const missing = guarded.filter(
   (name) => !files.some((f) => new RegExp(`^${name}-[\\w-]+\\.js$`).test(f)),
 );
@@ -107,5 +120,6 @@ if (missing.length > 0) {
 
 console.log(
   `check-lazy-chunks: ok — отдельные чанки на месте у всех ${guarded.length} ` +
-    `(${LAZY_SCREENS.length} экранов + ${SHARED_CHUNKS.length} общих), список сверен с роутером.`,
+    `(${LAZY_SCREENS.length} экранов + ${SHARED_CHUNKS.length} общих + ` +
+    `${LAZY_EDITOR_MODULES.length} ленивых модулей редактора), список экранов сверен с роутером.`,
 );

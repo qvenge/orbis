@@ -1,11 +1,18 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
+import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
 import { onlineManager } from '@tanstack/react-query';
-import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
+import {
+  installCrashTrap,
+  type MockHandler,
+  renderWithProviders,
+  trpcError,
+} from '../../test/harness';
 import { trpc } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { queryBlocks } from '../browser/query';
@@ -13,12 +20,30 @@ import { AspectCards } from './AspectCards';
 import { DetailScreen } from './DetailScreen';
 import { detailGetInput, useEntityDetail } from './useEntityDetail';
 
-// Пробник читает ТУ ЖЕ entity.get-запись из кэша (общий ключ detailGetInput) и рендерит
-// body как plain-текст без локального стейта — в отличие от keyed-textarea он честно
-// отражает финальное состояние кэша (React коалесцирует optimistic+rollback в один коммит).
+// Экран монтирует редактор, NodeView'ы виджетов и меню в портале — обработчики событий, из
+// которых брошенное jsdom гасит: ассерты остаются зелёными, а прогон падает кодом 1.
+installCrashTrap();
+
+/**
+ * Пробник читает ТУ ЖЕ entity.get-запись из кэша (общий ключ detailGetInput) и рисует её без
+ * локального стейта — то есть честно отражает финальное состояние кэша (React коалесцирует
+ * optimistic+rollback в один коммит).
+ *
+ * Рисует ДОКУМЕНТ, а не markdown: оптимистичный патч кладёт в кэш `bodyDoc` и намеренно НЕ
+ * трогает `body` — проекцию делает сервер, и только он (useEntityDetail.applyPatch). Пробник по
+ * `body` остался бы зелёным при любом откате, потому что `body` не менялся никогда.
+ */
 function BodyProbe() {
   const q = trpc.entity.get.useQuery(detailGetInput('e1'));
-  return <span data-testid="body-probe">{q.data?.entity.body ?? ''}</span>;
+  return <span data-testid="body-probe">{JSON.stringify(q.data?.entity.bodyDoc ?? null)}</span>;
+}
+
+/** Неотправленный черновик прошлой сессии на диске: ключ — договор, поэтому выписан строкой. */
+function seedDraft(doc: BodyDoc, baseUpdatedAt: string, rejected = false): void {
+  localStorage.setItem(
+    'orbis:body-draft:e1',
+    JSON.stringify({ doc, baseUpdatedAt, savedAt: '2026-07-05T09:00:00.000Z', rejected }),
+  );
 }
 
 const entity = {
@@ -27,6 +52,10 @@ const entity = {
   title: 'Задача',
   emoji: null,
   body: 'тело',
+  // `bodyDoc` — часть контракта detail: include просит его всегда, а сервер собирает документ
+  // даже для записей без колонки (readBodyDoc). Без него экран не поднял бы редактор НИКОГДА —
+  // и половина файла была бы зелена по причине, которой в проде не существует.
+  bodyDoc: parseBody('тело'),
   bodyRefs: [],
   tags: ['work'],
   meta: {},
@@ -38,6 +67,11 @@ const entity = {
 
 beforeEach(() => {
   localStorage.clear();
+  // requestIdleCallback, которого никто не дёрнет: редактор обязан вставать по ЖЕСТУ теста, а
+  // не сам собой по запасному таймеру простоя (1500 мс) посреди чужого ожидания. jsdom своей
+  // реализации не имеет, поэтому подмена именно ДОБАВЛЯЕТ ветку простоя — и она молчит
+  // (приём editor.test.tsx). Тесты, которым редактор нужен, зовут openEditor().
+  vi.stubGlobal('requestIdleCallback', () => 1);
   useNav.setState({
     activeTab: 'browser',
     stacks: { chat: [], browser: [{ kind: 'entity', id: 'e1' }], agenda: [], budget: [] },
@@ -45,14 +79,48 @@ beforeEach(() => {
 });
 
 /**
- * Тело записи по умолчанию ПОКАЗАНО (markdown, C4b) — textarea появляется по явному
- * действию. Один хелпер на все проверки правки: девятнадцать копий «сперва кликнуть»
- * разъехались бы при первой же смене жеста.
+ * Ожидания вокруг редактора — щедрее дефолтной секунды, и не «на всякий случай».
+ *
+ * Монтирование стоит ленивого чанка (~28 кБ gzip) и ПЕРВОЙ сборки схемы ProseMirror, а в полном
+ * корневом прогоне web-файлы идут четырьмя воркерами параллельно с серверным сьютом против
+ * локальной БД: ядра заняты, и дефолтная секунда означает уже не «дерево не готово», а
+ * голодание по CPU. Замерено: под нагрузкой эти ожидания срывались. Точечный прогон от щедрого
+ * порога не медленнее — ожидание завершается по факту, а не по таймеру (тот же приём, что
+ * SIDES_LOADED в Blocks.test.tsx).
  */
-async function openBodyEditor(): Promise<HTMLElement> {
-  fireEvent.click(await screen.findByTestId('body-view'));
-  return await screen.findByTestId('body-edit');
+const EDITOR_READY = { timeout: 10_000 };
+
+/** Поднимает редактор касанием тела: ленивый чанк + первая сборка схемы ProseMirror. */
+async function openEditor(): Promise<void> {
+  fireEvent.click(await screen.findByTestId('editor-preview'));
+  await screen.findByTestId('body-editor', undefined, EDITOR_READY);
 }
+
+/**
+ * Ждёт текст В РЕДАКТОРЕ — и спрашивает коробку ЗАНОВО на каждой попытке.
+ *
+ * Держать найденный узел нельзя: `EditorContent` перемонтируется, когда `useEditor` отдаёт
+ * экземпляр (у него key, завязанный на editor), и узел, найденный до этого, к моменту проверки
+ * уже оторван от документа — ожидание на нём висит до самого таймаута и падает «текста нет».
+ * Ловилось это не рассуждением: тест плавал ровно на этом (тот же урок в editor.test.tsx).
+ */
+async function expectEditorText(text: string): Promise<void> {
+  await waitFor(
+    () => expect(screen.getByTestId('body-editor')).toHaveTextContent(text),
+    EDITOR_READY,
+  );
+}
+
+/** Поле ввода редактора — тоже заново: см. expectEditorText. */
+async function editorField(): Promise<HTMLElement> {
+  await openEditor();
+  const field = () => screen.getByTestId('body-editor').querySelector('[contenteditable]');
+  await waitFor(() => expect(field()).not.toBeNull(), EDITOR_READY);
+  return field() as HTMLElement;
+}
+
+/** Панель вкладки по её названию (Radix связывает панель с триггером через aria-labelledby). */
+const tabPanel = (name: string): HTMLElement => screen.getByRole('tabpanel', { name });
 
 test('чекбокс task → entity.update status=done + completed_at', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
@@ -78,86 +146,86 @@ test('чекбокс task → entity.update status=done + completed_at', async (
   });
 });
 
-test('inline body-правка шлёт expectedUpdatedAt = точная строка updatedAt', async () => {
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
-    if (path === 'entity.get')
-      return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-    if (path === 'entity.update') return { ...entity, body: 'новое' };
-    if (path === 'aspect.list') return [];
-    return {};
-  });
-  const ta = await openBodyEditor();
-  fireEvent.change(ta, { target: { value: 'новое' } });
-  fireEvent.blur(ta);
-  await waitFor(() => {
-    const c = calls.find(
-      (x) => x.path === 'entity.update' && (x.input as { body?: string }).body === 'новое',
-    );
-    expect((c?.input as { expectedUpdatedAt: string }).expectedUpdatedAt).toBe(
-      '2026-07-05T10:00:00.000Z',
-    );
-  });
-});
+/*
+ * Прежняя проверка «inline body-правка шлёт expectedUpdatedAt = точная строка updatedAt» ушла
+ * вместе с самим путём: тело больше не сохраняется по blur из textarea, а уезжает
+ * автосохранением по паузе — и `expectedUpdatedAt` там сложнее, чем «строка из кэша» (из двух
+ * известных берётся поздняя). Проверяет это save.test.tsx («мутация уходит с bodyDoc и точным
+ * expectedUpdatedAt из кэша» и «второе сохранение подряд берёт updatedAt из ответа сервера»).
+ */
 
-// Редактор больше не ремоунтится по updatedAt: refetch после save приносил новый key и
-// стирал текст, допечатанный за время запроса.
-test('текст, набранный во время сохранения, переживает refetch', async () => {
+// Чужая правка, приехавшая под НЕтронутый редактор, обязана попасть на экран: иначе человек
+// правил бы текст, которого в базе давно нет. Единственная проверка этого пути во всём сьюте —
+// сам BodyEditor подменяет содержимое по приезду нового doc, и до Задачи 15 его никто не
+// монтировал экраном.
+test('нетронутый редактор подхватывает правку тела, приехавшую с сервера', async () => {
   let getCalls = 0;
-  const saved = { ...entity, body: 'новое', updatedAt: '2026-07-05T11:00:00.000Z' };
-  // Ворота на entity.update: пока save висит, рефетч (invalidate в onSettled) НЕ может
-  // приехать — иначе «печатаем, пока запрос летит» осталось бы словами в комментарии, а
-  // порядок событий решала бы случайность планировщика.
-  let release: (v: unknown) => void = () => {};
-  const gate = new Promise((res) => {
-    release = res;
-  });
-  renderWithProviders(<DetailScreen entityId="e1" />, async (path) => {
-    if (path === 'entity.get') {
-      getCalls += 1;
-      const e = getCalls === 1 ? entity : saved;
-      return { entity: e, relations: [], thread: { threadId: 'th1', messages: [] } };
-    }
-    if (path === 'entity.update') {
-      await gate;
-      return saved;
-    }
-    if (path === 'aspect.list') return [];
-    return {};
-  });
-  const ta = await openBodyEditor();
-  fireEvent.change(ta, { target: { value: 'новое' } });
-  fireEvent.blur(ta); // save ушёл на сервер и висит в воротах, редактор закрылся
-
-  // Возвращаемся в правку и печатаем дальше — save ещё в полёте, рефетча не было.
-  const reopened = await openBodyEditor();
-  fireEvent.change(reopened, { target: { value: 'новое, и ещё абзац' } });
-  expect(getCalls).toBe(1);
-
-  release(saved); // save завершился → invalidate → refetch с новым updatedAt
-  await waitFor(() => expect(getCalls).toBeGreaterThan(1));
-  expect(screen.getByTestId('body-edit')).toHaveValue('новое, и ещё абзац');
-});
-
-test('нетронутый черновик подхватывает изменение тела с сервера', async () => {
-  let getCalls = 0;
+  const outside = { ...entity, body: 'извне', bodyDoc: parseBody('извне'), updatedAt: 'B' };
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get') {
       getCalls += 1;
-      const e = getCalls === 1 ? entity : { ...entity, body: 'извне', updatedAt: 'B' };
-      return { entity: e, relations: [], thread: { threadId: 'th1', messages: [] } };
+      return {
+        entity: getCalls === 1 ? entity : outside,
+        relations: [],
+        thread: { threadId: 'th1', messages: [] },
+      };
     }
     if (path === 'entity.update') return entity;
     if (path === 'aspect.list') return [];
     return {};
   });
-  // Редактор ОТКРЫТ и остаётся открытым: чужая правка приезжает прямо под курсором.
-  expect(await openBodyEditor()).toHaveValue('тело');
-  // Чекбокс задачи → mutation → invalidate → refetch с чужим body; поле не редактировали.
+  await openEditor();
+  await expectEditorText('тело');
+
+  // Чекбокс задачи → мутация → invalidate → рефетч с чужим телом; в редакторе не печатали.
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
-  await waitFor(() => expect(screen.getByTestId('body-edit')).toHaveValue('извне'));
+  await waitFor(() => expect(getCalls).toBeGreaterThan(1));
+  await waitFor(
+    () => expect(screen.getByTestId('body-editor')).toHaveTextContent('извне'),
+    EDITOR_READY,
+  );
 });
 
-test('inline body-правка: CONFLICT (409) → откат кэша к прежнему body + alert «обновите»', async () => {
+test('набранное в редакторе переживает чужую правку, приехавшую под курсором', async () => {
+  // Другая сторона той же границы: подмена содержимого идёт ТОЛЬКО когда редактор не в фокусе,
+  // иначе чужая правка вырывала бы каретку и текст из-под рук (полноценное лечение — слияние,
+  // Р13 дизайна). Без этого теста «подхватывает чужое» было бы зелено и у редактора, который
+  // затирает набранное.
+  let getCalls = 0;
+  const outside = { ...entity, body: 'извне', bodyDoc: parseBody('извне'), updatedAt: 'B' };
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get') {
+      getCalls += 1;
+      return {
+        entity: getCalls === 1 ? entity : outside,
+        relations: [],
+        thread: { threadId: 'th1', messages: [] },
+      };
+    }
+    if (path === 'entity.update') return entity;
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await waitFor(
+    () => expect(screen.getByTestId('body-editor')).toHaveTextContent('и хвост'),
+    EDITOR_READY,
+  );
+
+  fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
+  await waitFor(() => expect(getCalls).toBeGreaterThan(1));
+  // Даём подмене шанс случиться: «не затёрло» обязано значить «не затрёт», а не «не дождались».
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.getByTestId('body-editor')).toHaveTextContent('и хвост');
+});
+
+test('409 правки тела: откат кэша к прежнему body + alert «обновите»', async () => {
+  // Правку тела в базу теперь отправляет «оставить моё» у баннера черновика — это единственный
+  // путь, который шлёт мутацию НЕМЕДЛЕННО, без паузы набора, и потому годится для проверки
+  // общей обвязки (откат оптимистичного патча + плашка конфликта) без подмены таймеров.
+  seedDraft(parseBody('конфликтное'), 'СТАРАЯ-МЕТКА');
   let getCalls = 0;
   renderWithProviders(
     <>
@@ -169,9 +237,9 @@ test('inline body-правка: CONFLICT (409) → откат кэша к пре
         getCalls += 1;
         if (getCalls === 1)
           return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
-        // 2-й get (refetch после invalidate в onSettled) намеренно «зависает»: он НЕ даёт
+        // 2-й get (рефетч после invalidate в onSettled) намеренно «зависает»: он НЕ даёт
         // независимого источника прежнего body, поэтому 'тело' в кэше — заслуга onError-отката
-        // setData(ctx.prev), а не refetch. Уберёшь откат — здесь останется 'конфликтное' (не-тавтология).
+        // setData(ctx.prev), а не рефетча. Уберёшь откат — здесь останется 'конфликтное'.
         return new Promise(() => {});
       }
       if (path === 'entity.update') throw trpcError('CONFLICT');
@@ -179,19 +247,18 @@ test('inline body-правка: CONFLICT (409) → откат кэша к пре
       return {};
     },
   );
-  const ta = await openBodyEditor();
-  expect(screen.getByTestId('body-probe')).toHaveTextContent('тело');
+  await screen.findByTestId('draft-banner');
+  const probe = () => screen.getByTestId('body-probe').textContent ?? '';
+  expect(probe()).toContain('тело');
 
-  fireEvent.change(ta, { target: { value: 'конфликтное' } });
-  fireEvent.blur(ta);
+  fireEvent.click(screen.getByRole('button', { name: 'Оставить моё' }));
 
-  // (б) сообщение конфликта показано
-  await waitFor(() =>
-    expect(screen.getByRole('alert')).toHaveTextContent(/Изменено в другом месте.*обновите/),
-  );
-  // (а) кэш откатился к прежнему body: оптимистичный патч 'конфликтное' снят (snapshot восстановлен)
-  await waitFor(() => expect(screen.getByTestId('body-probe')).toHaveTextContent('тело'));
-  expect(screen.getByTestId('body-probe')).not.toHaveTextContent('конфликтное');
+  // (б) сообщение конфликта показано — и приходит оно из useBodySave, у которого своя обвязка
+  // useEntityUpdate: до Задачи 15 баннер экрана слушал только правки заголовка и молчал бы.
+  expect(await screen.findByText(/Изменено в другом месте — обновите/)).toBeInTheDocument();
+  // (а) кэш откатился к прежнему документу: оптимистичный патч снят (снимок восстановлен).
+  await waitFor(() => expect(probe()).not.toContain('конфликтное'));
+  expect(probe()).toContain('тело');
 });
 
 // --- подзадачи читают связи из entity.get (D5d п.3) -------------------------------------
@@ -244,7 +311,7 @@ test('подзадачи: список из entity.get; после создан�
     if (path === 'aspect.list') return [];
     return {};
   });
-  await screen.findByTestId('body-view'); // экран отрисован; правка здесь ни при чём
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован; тело здесь ни при чём
   expect(screen.queryByTestId('subtask')).toBeNull();
 
   const field = screen.getByLabelText('Новая подзадача');
@@ -299,7 +366,7 @@ test('создание подзадачи инвалидирует entity.query 
       return {};
     },
   );
-  await screen.findByTestId('body-view'); // экран отрисован; правка здесь ни при чём
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован; тело здесь ни при чём
   const probes = () =>
     calls.filter(
       (c) =>
@@ -341,7 +408,7 @@ test('подзадача создана, а связь упала: списки 
       return {};
     },
   );
-  await screen.findByTestId('body-view'); // экран отрисован; правка здесь ни при чём
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован; тело здесь ни при чём
   const probes = () =>
     calls.filter(
       (c) =>
@@ -648,10 +715,12 @@ test('financial: рефетч списка упал, но список уже е
   const select = await screen.findByLabelText('orbis/financial category_ref');
   await screen.findByRole('option', { name: 'Развлечения' }); // список доехал целым
   // Любая правка сущности инвалидирует entity.query (useEntityUpdate.onSettled) — рефетч
-  // падает, но data остаётся: state = error + непустой список.
-  const ta = await openBodyEditor();
-  fireEvent.change(ta, { target: { value: 'новое' } });
-  fireEvent.blur(ta);
+  // падает, но data остаётся: state = error + непустой список. Правка берётся самая дешёвая из
+  // доступных у финансовой записи (чекбокса задачи у неё нет): переименование идёт той же
+  // обвязкой useEntityUpdate и точно так же инвалидирует списки.
+  const title = screen.getByLabelText('Заголовок');
+  fireEvent.change(title, { target: { value: 'Кофе Хауз 2' } });
+  fireEvent.blur(title);
 
   await waitFor(() => expect(queries).toBeGreaterThan(1));
   expect(select).toHaveDisplayValue('Категория не найдена');
@@ -959,6 +1028,11 @@ test('меню ⋮: у архивной сущности пункт зовётс
 });
 
 test('conflict-баннер: клик «Обновить» → refetch entity.get + баннер скрыт', async () => {
+  // Конфликт поднимает правка ТЕЛА — единственная, чью версию сервер вообще сверяет (гейт §5.2
+  // стоит под `body !== undefined || bodyDoc !== undefined`, executor.ts). У тела своя обвязка
+  // внутри useBodySave, и баннер экрана обязан слушать оба источника: иначе он не зажигался бы
+  // никогда, а «Обновить» гасило бы чужую тревогу.
+  seedDraft(parseBody('конфликтное'), 'СТАРАЯ-МЕТКА');
   const calls: string[] = [];
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     calls.push(path);
@@ -968,36 +1042,35 @@ test('conflict-баннер: клик «Обновить» → refetch entity.ge
     if (path === 'aspect.list') return [];
     return {};
   });
-  const ta = await openBodyEditor();
-
-  fireEvent.change(ta, { target: { value: 'конфликтное' } });
-  fireEvent.blur(ta);
-  await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+  fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
+  await screen.findByText(/Изменено в другом месте — обновите/);
 
   const getsBefore = calls.filter((p) => p === 'entity.get').length;
   fireEvent.click(screen.getByRole('button', { name: 'Обновить' }));
 
-  // Баннер снят немедленно (dismissConflict), refetch ушёл на сервер.
-  await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+  // Баннер снят немедленно (обе dismissConflict), рефетч ушёл на сервер.
+  await waitFor(() =>
+    expect(screen.queryByText(/Изменено в другом месте — обновите/)).not.toBeInTheDocument(),
+  );
   await waitFor(() =>
     expect(calls.filter((p) => p === 'entity.get').length).toBeGreaterThan(getsBefore),
   );
 });
 
-// --- body: просмотр markdown, правка по явному действию (C4b) --------------------------
-// 02-core-os §3.5 п.3 и мокап §3.5 описывают тело записи как markdown; до слайса 3 экран
-// всегда монтировал сырую textarea, из-за чего приёмочный пункт фазы C «[[entity:…]] в body
-// открывает сущность» был невыполним в принципе.
+// --- body: первый кадр и редактор по касанию (C4b + двухфазность Задачи 11) -------------
+// 02-core-os §3.5 п.3 и мокап §3.5 описывают тело записи как markdown. С Задачи 15 первый кадр
+// рисует EditorShell, а редактор встаёт по касанию тела или по простою; сырой textarea на
+// экране нет вовсе.
 
 const BODY_LINK_ID = '019e4466-1111-7000-8000-0123456789ab';
 
-/** Обработчик detail с заданным телом; entity.update возвращает то, что прислали. */
+/** Обработчик detail с заданным телом; документ собирается из того же markdown. */
 const bodyHandler =
   (body: string): MockHandler =>
-  (path, input) => {
-    if (path === 'entity.get') return { entity: { ...entity, body }, relations: [], thread: null };
-    if (path === 'entity.update')
-      return { ...entity, body: (input as { body?: string }).body ?? body };
+  (path) => {
+    if (path === 'entity.get')
+      return { entity: { ...entity, body, bodyDoc: parseBody(body) }, relations: [], thread: null };
+    if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
     if (path === 'aspect.list') return realAspects;
     if (path === 'entity.query') return [found('Разобрать Inbox')];
     return {};
@@ -1005,29 +1078,21 @@ const bodyHandler =
 
 test('body показан разметкой, а не сырым текстом: правка не навязана', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('## Итоги\n\n- раз\n- два'));
-  await screen.findByTestId('body-view');
+  await screen.findByTestId('editor-preview');
   expect(screen.getByRole('heading', { level: 2, name: 'Итоги' })).toBeInTheDocument();
   expect(screen.getAllByRole('listitem')).toHaveLength(2);
-  // Сырого markdown на экране нет, и textarea не смонтирована, пока её не позвали.
+  // Сырого markdown на экране нет, и редактор не смонтирован, пока его не позвали.
   expect(screen.queryByText('## Итоги')).toBeNull();
-  expect(screen.queryByTestId('body-edit')).toBeNull();
+  expect(screen.queryByTestId('body-editor')).toBeNull();
 });
 
-test('клик по телу открывает редактор; blur сохраняет и возвращает просмотр', async () => {
-  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
-  const ta = await openBodyEditor();
-  expect(ta).toHaveValue('тело');
-
-  fireEvent.change(ta, { target: { value: 'новое' } });
-  fireEvent.blur(ta);
-
-  await waitFor(() => {
-    const c = calls.find((x) => x.path === 'entity.update');
-    expect((c?.input as { body: string }).body).toBe('новое');
-  });
-  // Уход из редактора — возврат в просмотр, и там уже новый текст.
-  await waitFor(() => expect(screen.queryByTestId('body-edit')).toBeNull());
-  expect(screen.getByTestId('body-view')).toHaveTextContent('новое');
+test('клик по телу поднимает редактор поверх первого кадра — с тем же текстом', async () => {
+  // Первое монтирование редактора ЭКРАНОМ: до Задачи 15 ни один экран его не монтировал вовсе,
+  // и вся двухфазность проверялась только на самом EditorShell.
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело записи'));
+  await openEditor();
+  await expectEditorText('тело записи');
+  expect(screen.queryByTestId('editor-preview')).toBeNull();
 });
 
 test('[[entity:…]] в body — живая ссылка: клик открывает запись в АКТИВНОЙ вкладке', async () => {
@@ -1049,66 +1114,63 @@ test('[[entity:…]] в body — живая ссылка: клик открыв�
   ]);
 });
 
-test('клик по ссылке в теле НЕ открывает редактор', async () => {
+test('клик по ссылке в теле редактор НЕ поднимает', async () => {
   renderWithProviders(
     <DetailScreen entityId="e1" />,
     bodyHandler(`см. [[entity:${BODY_LINK_ID}]]`),
   );
   fireEvent.click(await screen.findByRole('link'));
-  // Два жеста на одном месте: ссылка обязана срабатывать ссылкой, а не подменять экран
-  // редактором поверх открытой записи.
-  expect(screen.queryByTestId('body-edit')).toBeNull();
-  expect(screen.getByTestId('body-view')).toBeInTheDocument();
+  // Два жеста на одном месте: ссылка обязана срабатывать ссылкой, а не подменять поддерево
+  // редактором — тогда click до самой ссылки не доехал бы.
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByTestId('body-editor')).toBeNull();
+  expect(screen.getByTestId('editor-preview')).toBeInTheDocument();
 });
 
-test('пустой body — приглашение «Заметки…», по клику открывается редактор', async () => {
+test('пустой body — приглашение «Заметки…», по клику встаёт редактор', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(''));
-  const view = await screen.findByTestId('body-view');
+  const view = await screen.findByTestId('editor-preview');
   expect(view).toHaveTextContent('Заметки…');
 
   fireEvent.click(view);
-  expect(await screen.findByTestId('body-edit')).toHaveValue('');
+  await screen.findByTestId('body-editor');
 });
 
 test('тело из одного {{query:…}} — «Заметки…» над живым списком не печатается', async () => {
   // Так устроен сидированный All Tasks: текста в body нет, но смотреть есть на что. Пустым
   // тело при этом не является, и приглашение к вводу над списком задач — просто мусор,
-  // который видно каждый день. Клик-зона не страдает: у бокса min-h-24, а рядом — кнопка.
+  // который видно каждый день.
   renderWithProviders(
     <DetailScreen entityId="e1" />,
     bodyHandler('{{query: aspect=orbis/task, status=inbox, title=Inbox}}'),
   );
   await screen.findByTestId('qb-count');
-  expect(screen.getByTestId('body-view')).not.toHaveTextContent('Заметки…');
+  expect(screen.getByTestId('editor-preview')).not.toHaveTextContent('Заметки…');
   expect(screen.getByText('Inbox')).toBeInTheDocument();
 });
 
-test('в правку можно войти с клавиатуры: кнопка «Редактировать»', async () => {
-  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
-  // Настоящая кнопка, а не div с onClick: клавиатурная активация у неё встроенная,
-  // и без неё правка была бы доступна только мышью.
-  const button = await screen.findByRole('button', { name: 'Редактировать' });
-  expect(button.tagName).toBe('BUTTON');
+/*
+ * «В правку можно войти с клавиатуры: кнопка „Редактировать“» — теста больше нет вместе с самой
+ * кнопкой. Клавиатурный путь у нового тела ДРУГОЙ и шире: редактор встаёт сам по простою
+ * (requestIdleCallback, EditorShell), то есть до него доходят табом как до обычного поля ввода,
+ * не нажимая ничего. Кнопка над каждой заметкой была ценой прежнего режима «просмотр/правка»,
+ * которого не осталось. Сам механизм простоя проверяет editor.test.tsx («простой монтирует
+ * редактор без всякого касания» и «без requestIdleCallback редактор встаёт по запасному
+ * таймеру»); здесь он намеренно выключен заглушкой, чтобы дерево не менялось само.
+ */
 
-  fireEvent.click(button);
-  const ta = await screen.findByTestId('body-edit');
-  expect(ta).toHaveValue('тело');
-  // Фокус уже в поле, каретка — в конце текста: без этого клавиатурный путь обрывался бы
-  // на полдороге (поле открыли, а печатать некуда), а мышиный требовал бы второго клика.
-  expect(ta).toHaveFocus();
-  expect((ta as HTMLTextAreaElement).selectionStart).toBe('тело'.length);
-});
-
-test('клик по выделенному тексту тела не съедает выделение', async () => {
+test('клик по выделенному тексту тела редактор не поднимает', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело записи'));
-  const view = await screen.findByTestId('body-view');
+  const view = await screen.findByTestId('editor-preview');
   const selection = vi
     .spyOn(window, 'getSelection')
     .mockReturnValue({ isCollapsed: false } as Selection);
   try {
     fireEvent.click(view);
-    // Текст выделяют, чтобы скопировать; подмена просмотра редактором выделение теряет.
-    expect(screen.queryByTestId('body-edit')).toBeNull();
+    // Текст выделяют, чтобы скопировать; подмена первого кадра редактором меняет корень
+    // поддерева, и выделение теряется вместе с ним.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId('body-editor')).toBeNull();
   } finally {
     selection.mockRestore();
   }
@@ -1145,12 +1207,13 @@ test('{{query:…}} в просмотр текстом не течёт: текс
   expect(screen.queryByTestId('qb-error')).toBeNull();
 });
 
-test('клик по виджету query-блока редактор не открывает', async () => {
+test('клик по виджету query-блока редактор не поднимает', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(BODY_WITH_BLOCK));
   fireEvent.click(await screen.findByTestId('qb-item'));
-  // Виджет — живой список, а не текст записи: подменять его textarea по клику значит
+  // Виджет — живой список, а не текст записи: подменять его редактором по клику значит
   // ронять экран смарт-листа (у All Tasks весь body — один блок).
-  expect(screen.queryByTestId('body-edit')).toBeNull();
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByTestId('body-editor')).toBeNull();
 });
 
 // --- две живые мутации по одной записи (ревью Задачи 14, Н-2 и Н-3) -------------------------
@@ -1242,4 +1305,343 @@ test('409 правки тела не глохнет из-за переимено
     s.gates[0]?.fail(trpcError('CONFLICT'));
   });
   expect(s.api().conflict).toBe(true);
+});
+
+// --- три таба: Сущность · Детали · Тред (Задача 15) ----------------------------------------
+
+const GOAL_ENTITY = {
+  ...entity,
+  id: 'e1',
+  title: 'Накопить на отпуск',
+  emoji: '🎯',
+  aspects: {
+    'orbis/goal': {
+      progress_source: { query: 'aspect=orbis/financial', aggregate: 'sum', field: 'amount' },
+      target_value: '300000.00',
+      unit: '₽',
+    },
+  },
+};
+
+/** Полный экран: аспекты, подзадача, блокировка и backlink — чтобы было чему разъезжаться. */
+const richHandler: MockHandler = (path, input) => {
+  if (path === 'entity.get') {
+    const { id } = input as { id: string };
+    if (id !== 'e1') return { entity: { ...entity, id, title: `сосед ${id}` } };
+    return {
+      entity,
+      relations: [
+        {
+          id: 'r1',
+          sourceId: 'e1',
+          targetId: 'kid',
+          relationType: 'parent',
+          meta: {},
+          createdAt: 'x',
+          updatedAt: 'y',
+        },
+      ],
+      backlinks: [{ entity: { ...entity, id: 'src', title: 'Кто ссылается' }, via: 'mention' }],
+      thread: { threadId: 'th1', messages: [] },
+    };
+  }
+  if (path === 'entity.resolveRefs') return [];
+  if (path === 'entity.update') return entity;
+  if (path === 'aspect.list') return [];
+  return {};
+};
+
+test('на «Сущности» — emoji, заголовок и тело; карточек аспектов там НЕТ', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: { ...entity, emoji: '🎯' }, relations: [], thread: null };
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
+  expect(within(panel).getByText('🎯')).toBeInTheDocument();
+  expect(within(panel).getByLabelText('Заголовок')).toHaveValue('Задача');
+  expect(within(panel).getByTestId('editor-preview')).toHaveTextContent('тело');
+
+  // Свойства уехали в «Детали» — на «Сущности» их нет…
+  expect(within(panel).queryByTestId('aspect-orbis/task')).toBeNull();
+  // …и это НЕ «карточки пропали совсем»: на соседней вкладке они есть. Без этой строки
+  // проверка выше была бы зелена и у экрана, потерявшего аспекты вовсе.
+  expect(within(tabPanel('Детали')).getByTestId('aspect-orbis/task')).toBeInTheDocument();
+});
+
+test('«Детали» показывает аспекты, подзадачи, блокировки и связанное', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, richHandler);
+  const details = await screen.findByRole('tabpanel', { name: 'Детали' });
+  expect(within(details).getByTestId('aspect-orbis/task')).toBeInTheDocument();
+  expect(within(details).getByLabelText('Новая подзадача')).toBeInTheDocument();
+  expect(within(details).getByRole('button', { name: 'Добавить блокировку' })).toBeInTheDocument();
+  expect(within(details).getByText(/Связанное/)).toBeInTheDocument();
+
+  // И ничего из этого не осталось на «Сущности»: вкладка — чистый документ.
+  const panel = tabPanel('Сущность');
+  expect(within(panel).queryByLabelText('Новая подзадача')).toBeNull();
+  expect(within(panel).queryByRole('button', { name: 'Добавить блокировку' })).toBeNull();
+  expect(within(panel).queryByText(/Связанное/)).toBeNull();
+});
+
+test('полоса прогресса цели осталась на «Сущности», с единицей из аспекта', async () => {
+  // У цели прогресс — то, ради чего её открывают: спрятать «50%, 150 000 из 300 000» во вторую
+  // вкладку значило бы ухудшить главный экран целей ради чистоты раскладки.
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return {
+        entity: GOAL_ENTITY,
+        relations: [],
+        thread: null,
+        goalProgress: { current: '150000.00', target: '300000.00' },
+      };
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
+  const bar = within(panel).getByTestId('goal-progress');
+  expect(within(bar).getByText('150 000 / 300 000')).toBeInTheDocument();
+  // Единица достаётся из entity.aspects заново: в AspectCards она бралась из тела цикла по
+  // аспектам, а цикла на «Сущности» нет — потеряться ей проще простого.
+  expect(within(bar).getByText('₽')).toBeInTheDocument();
+  // Второй полосы в «Деталях» нет: два ответа на вопрос «как оно идёт» — это уже вопрос,
+  // которому верить.
+  expect(within(tabPanel('Детали')).queryByTestId('goal-progress')).toBeNull();
+});
+
+test('переключение табов не роняет несохранённый черновик тела', async () => {
+  // Radix по умолчанию РАЗМОНТИРУЕТ неактивную вкладку: уход на «Детали» уничтожил бы редактор
+  // вместе с набранным текстом и всей историей Ctrl+Z, а на возврате гонял бы двухфазное
+  // монтирование заново.
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await expectEditorText('и хвост');
+  // Узел берётся ПОСЛЕ того, как набранное доехало: до этого EditorContent ещё мог
+  // перемонтироваться (см. expectEditorText), и сравнивать было бы не с чем.
+  const before = screen.getByTestId('body-editor');
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Детали' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'Сущность' }));
+
+  // Тот же САМЫЙ узел, а не просто такой же текст: пережившее переключение дерево — это и есть
+  // пережившая его история отмены. Пересоздайся редактор — узел был бы другим.
+  expect(screen.getByTestId('body-editor')).toBe(before);
+  expect(before).toHaveTextContent('и хвост');
+});
+
+test('вкладка «Тред» живой не держится: её запрос не уходит, пока её не открыли', async () => {
+  // Обратная сторона того же флага. ChatThread на монтировании заводит chat.listMessages, и
+  // безусловный keepMounted платил бы этим запросом за КАЖДОЕ открытие записи.
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'chat.listMessages') return [];
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  await screen.findByRole('tab', { name: 'Тред' });
+  const threadCalls = () => calls.filter((c) => c.path === 'chat.listMessages');
+  expect(threadCalls()).toEqual([]);
+
+  // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: открытая вкладка свой запрос ШЛЁТ — иначе молчание
+  // выше означало бы лишь, что тред не спрашивает ничего и никогда.
+  fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
+  await waitFor(() => expect(threadCalls().length).toBeGreaterThan(0));
+});
+
+test('меню ⋮: «Править как markdown» показывает тело исходным текстом', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('# Заголовок\n\nтекст'));
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+
+  // Тумблер приезжает ленивым чанком — отсюда findBy, а не getBy.
+  const area = await screen.findByTestId('markdown-source');
+  expect(area).toHaveValue('# Заголовок\n\nтекст');
+});
+
+test('правка из тумблера садится в редактор, а не остаётся в тумблере', async () => {
+  // Иначе экран и база разъезжаются до первого нажатия клавиши: правка уехала бы
+  // автосохранением, а редактор показывал бы прежний текст и вернул бы его поверх.
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  const area = await screen.findByTestId('markdown-source');
+  fireEvent.change(area, { target: { value: 'совсем другое тело' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+
+  // Тумблер закрылся, тело снова рисует редактор — и уже с новым текстом.
+  await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
+  await openEditor();
+  await expectEditorText('совсем другое тело');
+});
+
+// --- баннер черновика ----------------------------------------------------------------------
+
+test('баннер черновика говорит, что «оставить моё» ЗАМЕНИТ текущий текст', async () => {
+  // Кнопка, которая молча заменяет текст записи, обязана сказать об этом до нажатия: человек,
+  // не знающий этого, жмёт её как безобидную («ну посмотрю, что там было»).
+  seedDraft(parseBody('черновик прошлой сессии'), 'СТАРАЯ-МЕТКА');
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+
+  const banner = await screen.findByTestId('draft-banner');
+  expect(banner).toHaveTextContent(/заменит текущий текст/i);
+  expect(within(banner).getByRole('button', { name: 'Оставить моё' })).toBeInTheDocument();
+  expect(within(banner).getByRole('button', { name: 'Отбросить' })).toBeInTheDocument();
+});
+
+test('«оставить моё» сажает предложенный документ в редактор И отправляет его', async () => {
+  // Диск держит ОДИН черновик на запись, и после отправки предложенный текст живёт только в
+  // памяти хука — последней копией. Не покажи его редактор, первое же нажатие клавиши вернуло
+  // бы в базу то, что на экране, то есть прежний текст.
+  seedDraft(parseBody('черновик прошлой сессии'), 'СТАРАЯ-МЕТКА');
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+  await openEditor();
+  await expectEditorText('тело');
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
+
+  // (б) документ в редакторе — предложенный.
+  await waitFor(
+    () => expect(screen.getByTestId('body-editor')).toHaveTextContent('черновик прошлой сессии'),
+    EDITOR_READY,
+  );
+  // (а) и он же уехал в базу.
+  await waitFor(() => {
+    const c = calls.find((x) => x.path === 'entity.update');
+    expect(serializeBody((c?.input as { bodyDoc: BodyDoc }).bodyDoc)).toBe(
+      'черновик прошлой сессии',
+    );
+  });
+  // Баннер отработал и ушёл: висящее предложение над уже применённым текстом — ложь.
+  expect(screen.queryByTestId('draft-banner')).toBeNull();
+});
+
+test('«отбросить» стирает черновик и НЕ трогает текст записи', async () => {
+  seedDraft(parseBody('черновик прошлой сессии'), 'СТАРАЯ-МЕТКА');
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+  fireEvent.click(await screen.findByRole('button', { name: 'Отбросить' }));
+
+  expect(screen.queryByTestId('draft-banner')).toBeNull();
+  expect(localStorage.getItem('orbis:body-draft:e1')).toBeNull();
+  await openEditor();
+  await expectEditorText('тело');
+  expect(screen.getByTestId('body-editor')).not.toHaveTextContent('черновик');
+  expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
+});
+
+// --- смена записи: размонтирование по key + досыл (И2) --------------------------------------
+
+/** Роутер монтирует DetailScreen БЕЗ key: переход entity→entity меняет только проп. */
+function TwoEntities() {
+  const [id, setId] = useState('e1');
+  return (
+    <>
+      <button type="button" data-testid="go-e2" onClick={() => setId('e2')}>
+        на e2
+      </button>
+      <DetailScreen entityId={id} />
+    </>
+  );
+}
+
+test('режим «править как markdown» не переезжает на соседнюю запись', async () => {
+  // Экран монтируется БЕЗ key, и режим, переживший переход, открывал бы соседнюю запись сырым
+  // текстом без единого жеста человека — тот же класс беды, что и плашка с чужой ссылкой.
+  renderWithProviders(<TwoEntities />, (path, input) => {
+    if (path === 'entity.get') {
+      const { id } = input as { id: string };
+      return {
+        entity: { ...entity, id, title: id === 'e1' ? 'Задача' : 'Другая' },
+        relations: [],
+        thread: null,
+      };
+    }
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  await screen.findByTestId('markdown-source');
+
+  fireEvent.click(screen.getByTestId('go-e2'));
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Другая' })).toBeInTheDocument());
+  expect(screen.queryByTestId('markdown-source')).toBeNull();
+  expect(screen.getByTestId('editor-preview')).toBeInTheDocument();
+});
+
+/**
+ * Держит запись `e2` в кэше — тем же ключом, что и detail.
+ *
+ * Без этого переход e1→e2 всегда проходит через СКЕЛЕТОН (`get.data` пуст, пока летит запрос),
+ * а скелетон и сам размонтирует тело — то есть досыл случался бы и БЕЗ `key`, и тест ничего бы
+ * не сторожил. Замерено: мутант, снимающий `key`, при холодном кэше выживает через раз.
+ * Сюжет с тёплым кэшем — самый обычный: возврат на запись, которую только что открывали.
+ */
+function CachedE2() {
+  trpc.entity.get.useQuery(detailGetInput('e2'));
+  return null;
+}
+
+test('смена записи размонтирует тело и досылает отложенное — под ПРЕЖНИМ id', async () => {
+  // Без key экран менял бы только проп: `useBodySave` при смене `entityId` теряет отложенное
+  // МОЛЧА, а доживший таймер паузы дописал бы старый документ в новую запись.
+  const bodies: Record<string, string> = { e1: 'тело первой', e2: 'тело второй' };
+  const { calls } = renderWithProviders(
+    <>
+      <CachedE2 />
+      <TwoEntities />
+    </>,
+    (path, input) => {
+      if (path === 'entity.get') {
+        const { id } = input as { id: string };
+        const body = bodies[id] ?? '';
+        return {
+          entity: {
+            ...entity,
+            id,
+            title: id === 'e1' ? 'Задача' : 'Другая',
+            body,
+            bodyDoc: parseBody(body),
+          },
+          relations: [],
+          thread: null,
+        };
+      }
+      if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
+      if (path === 'aspect.list') return [];
+      return {};
+    },
+  );
+  // Премиса: соседняя запись УЖЕ в кэше, то есть переход пройдёт без скелетона (см. CachedE2).
+  await waitFor(() =>
+    expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(1),
+  );
+  // Правку кладём тумблером: он отдаёт документ синхронно, без подмены таймеров и без
+  // клавиатурного ввода в ProseMirror.
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  const area = await screen.findByTestId('markdown-source');
+  fireEvent.change(area, { target: { value: 'правка первой' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+  // Страж: пауза набора ещё идёт, в сеть не ходили — иначе проверка ниже была бы зелена и без
+  // всякого досыла.
+  expect(calls.filter((c) => c.path === 'entity.update')).toEqual([]);
+
+  fireEvent.click(screen.getByTestId('go-e2'));
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Другая' })).toBeInTheDocument());
+  // Скелетона не было — тело второй записи на экране сразу, без промежуточного «…».
+  expect(screen.getByTestId('editor-preview')).toHaveTextContent('тело второй');
+
+  const updates = calls.filter((c) => c.path === 'entity.update');
+  expect(updates).toHaveLength(1);
+  const sent = updates[0]?.input as { id: string; bodyDoc: BodyDoc };
+  expect(sent.id).toBe('e1'); // ПРЕЖНЯЯ запись, а не та, что открыта сейчас
+  expect(serializeBody(sent.bodyDoc)).toBe('правка первой');
+
+  // И новая запись показывает СВОЁ тело в редакторе, а не унаследованное.
+  await openEditor();
+  await expectEditorText('тело второй');
 });
