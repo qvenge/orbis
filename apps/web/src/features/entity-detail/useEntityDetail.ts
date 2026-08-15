@@ -9,8 +9,14 @@ type UpdateInput = RouterInputs['entity']['update'];
 // §9.2: detail тянет body+relations+backlinks+thread (backlinks — секция «Связанное»
 // §3.5.7, Task D5). Один и тот же input — ключ кэша для useQuery и точечных
 // optimistic-патчей (cancel/getData/setData/invalidate).
+//
+// bodyDoc — источник документа для редактора (Р6: явный opt-in, без него ключа в ответе нет
+// вовсе). Без него редактор пришлось бы собирать из markdown на клиенте, и блочные id (Р5) до
+// него бы не доезжали вовсе. Цена — вес ответа detail примерно вдвое; она и есть причина, по
+// которой документ не едет в списках.
 const DETAIL_INCLUDE: NonNullable<RouterInputs['entity']['get']['include']> = [
   'body',
+  'bodyDoc',
   'relations',
   'backlinks',
   'thread',
@@ -27,6 +33,13 @@ function applyPatch(entity: Entity, input: UpdateInput): Entity {
   if (input.title !== undefined) next.title = input.title;
   if (input.emoji !== undefined) next.emoji = input.emoji;
   if (input.body !== undefined) next.body = input.body;
+  if (input.bodyDoc !== undefined) {
+    next.bodyDoc = input.bodyDoc;
+    // `body` НЕ трогаем: markdown-проекцию делает сервер, и только он. Клиентский сериализатор
+    // затащил бы всю схему документа (~156 кБ gzip) в чанк detail — то есть в первый кадр,
+    // ровно мимо двухфазного монтирования; а две реализации проекции ещё и разошлись бы.
+    // До ответа сервера просмотр показывает прежний текст — это заметно только при отказе сети.
+  }
   if (input.archived !== undefined) next.archived = input.archived;
   if (input.aspects) {
     const aspects: Record<string, Record<string, unknown>> = { ...entity.aspects };

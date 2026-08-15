@@ -4,54 +4,10 @@ import { type Editor, EditorContent, useEditor } from '@tiptap/react';
 import { useEffect, useMemo, useRef } from 'react';
 import { BubbleToolbar } from './BubbleToolbar';
 import { BODY_BOX_CLASS } from './body-box';
-import { EDITOR_EXTENSIONS, UNIQUE_ID_TYPES } from './extensions';
+import { EDITOR_EXTENSIONS } from './extensions';
 import { RefTitlesProvider } from './nodes/RefTitlesContext';
 import { SuggestMenu, useEditorSuggest } from './slash/EditorSuggest';
-
-/**
- * Сравнение документов «по смыслу»: UniqueID кладёт `attrs.id` во все перечисленные ему блоки
- * ОТДЕЛЬНОЙ транзакцией уже после монтирования, поэтому по строковому равенству документ
- * «менялся» при каждом открытии записи — и через две секунды уходило автосохранение без
- * единого нажатия клавиши: рос updated_at, в журнал ложился фантомный entity_updated, и
- * «отмени последнее» отменяло бы открытие записи (ревью Б4).
- *
- * Снимается атрибут ТОЛЬКО у тех типов, которым его ставит UniqueID, и список тут ТОТ ЖЕ, что
- * в конфиге расширения. Прежний фильтр по одному имени `id` на любой глубине был правилен
- * ровно потому, что сегодня ни одна другая нода схемы атрибута с таким именем не имеет:
- * появись он у ноды-новичка (или переедь туда цель чипа) — правка, меняющая только его, молча
- * перестала бы считаться правкой и не сохранялась бы. Долг Задачи 7.
- */
-function stripIds(node: JSONContent): JSONContent {
-  const { attrs, content, ...rest } = node;
-  const managed = typeof node.type === 'string' && UNIQUE_ID_TYPES.includes(node.type);
-  const cleaned =
-    attrs && managed
-      ? Object.fromEntries(Object.entries(attrs).filter(([k]) => k !== 'id'))
-      : attrs;
-  return {
-    ...rest,
-    ...(cleaned && Object.keys(cleaned).length ? { attrs: cleaned } : {}),
-    ...(content ? { content: content.map(stripIds) } : {}),
-  };
-}
-
-/**
- * Ключи сортируются, и это НЕ перестраховка. Сравниваются документы из двух источников —
- * разбора markdown и `editor.getJSON()`, — и порядок полей у них разный: parseBody отдаёт
- * текстовый узел как `{type,text,marks}`, а ProseMirror после прохода через схему —
- * `{type,marks,text}` (замерено на сиде «Жизнь»). Голое `JSON.stringify`-сравнение из брифа
- * считало бы правкой открытие ЛЮБОЙ записи с жирным, курсивом или ссылкой в тексте —
- * то есть возвращало бы фантомную запись на самом бытовом теле.
- */
-function stable(doc: JSONContent): string {
-  return JSON.stringify(doc, (_key, value) =>
-    value && typeof value === 'object' && !Array.isArray(value)
-      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : 1)))
-      : value,
-  );
-}
-
-const sameDoc = (a: JSONContent, b: JSONContent) => stable(stripIds(a)) === stable(stripIds(b));
+import { sameDoc } from './strip-ids';
 
 /**
  * Вставка HTML: сохраняем ГРАНИЦЫ блоков, снимая разметку. Вставка из письма или с сайта
