@@ -1,5 +1,5 @@
 import { TRPCClientError } from '@trpc/client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
 
@@ -59,6 +59,14 @@ export function useEntityUpdate(entityId: string) {
   const input = detailGetInput(entityId);
   const [conflict, setConflict] = useState(false);
 
+  // Флаг — про ЭТУ запись, поэтому смена сущности под тем же хуком его гасит: иначе «Изменено
+  // в другом месте» переезжало бы с записи, где конфликт был, на соседнюю, где его не было.
+  const prevIdRef = useRef(entityId);
+  if (prevIdRef.current !== entityId) {
+    prevIdRef.current = entityId;
+    setConflict(false);
+  }
+
   const mutation = trpc.entity.update.useMutation({
     onMutate: async (vars) => {
       setConflict(false);
@@ -72,11 +80,21 @@ export function useEntityUpdate(entityId: string) {
       // полёте, и откат положил бы данные прежней записи под ключ новой (ревью Задачи 13, I1).
       return { prev, input };
     },
-    onError: (err, _vars, ctx) => {
+    onError: (err, vars, ctx) => {
+      // Откат — ВСЕГДА и по ключу из контекста: он про свою запись, чья бы очередь ни шла.
       if (ctx) utils.entity.get.setData(ctx.input, ctx.prev);
+      // А флаг — только если ответ пришёл по ТЕКУЩЕЙ записи. Эти колбэки — уровня МУТАЦИИ:
+      // они исполняются всегда, даже когда наблюдателя уже отцепили, и о поколении записи в
+      // useBodySave ничего не знают. Без сверки 409 по прежней записи, доехавший после смены,
+      // зажигал бы «Изменено в другом месте» на соседней, которой никто не касался
+      // (ревью Задачи 13, И-4). `entityId` здесь — из ПОСЛЕДНЕГО рендера (react-query
+      // проталкивает свежие опции в незавершённую мутацию), `vars.id` — из отправки.
+      if (vars.id !== entityId) return;
       if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') setConflict(true);
     },
-    onSuccess: () => setConflict(false),
+    onSuccess: (_data, vars) => {
+      if (vars.id === entityId) setConflict(false);
+    },
     // Detail — единственный путь закрытия/переноса/архивации сущности из списков (Agenda,
     // Browser, Budget), а списки читают ДРУГОЙ ключ кэша — entity.query. Он держит
     // собственный staleTime (60 с у Agenda по K16, 30 с глобально в trpc.ts) и при

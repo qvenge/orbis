@@ -60,6 +60,15 @@ function gatedServer() {
   return { respond, answer, count: () => gates.length };
 }
 
+/**
+ * Потолок отправок на один стенд. Дефект, замыкающий сохранение в самоподдерживающийся круг
+ * (например «досылать всегда, а не по просьбе»), не краснеет — он ВЕШАЕТ прогон: замерено 147 с
+ * до `Worker exited unexpectedly`, и результат уже упавших тестов теряется вместе с воркером.
+ * За потолком стенд перестаёт отвечать вовсе: круг размыкается, тест падает своим ассертом или
+ * штатным таймаутом, а не уносит с собой весь файл.
+ */
+const MAX_SENDS = 12;
+
 function setup(opts: { entity?: BodySaveEntity; respond?: Respond } = {}) {
   const box = { respond: opts.respond ?? ok };
   const hold: { api: BodySave | null } = { api: null };
@@ -75,8 +84,11 @@ function setup(opts: { entity?: BodySaveEntity; respond?: Respond } = {}) {
   // Мок СТРОГИЙ и функцией: у сохранения тела ровно один путь наружу. Молчаливая заглушка
   // `() => ({})` приняла бы и лишнее чтение, и чужую мутацию — и «ровно одна мутация» ниже
   // прошло бы при второй, но другой.
+  let sends = 0;
   const { calls, container } = renderWithProviders(<Probe />, (path, input) => {
     if (path !== 'entity.update') throw new Error(`сохранение тела не ходит на ${path}`);
+    sends += 1;
+    if (sends > MAX_SENDS) return new Promise(() => {});
     return box.respond(input);
   });
 
@@ -389,14 +401,22 @@ function mountWithProps(initial: { id: string; entity: BodySaveEntity }, respond
   function Parent() {
     const [props, setProps] = useState(initial);
     hold.set = setProps;
-    hold.api = useBodySave(props.id, props.entity);
-    return null;
+    const api = useBodySave(props.id, props.entity);
+    hold.api = api;
+    // Индикатор ОБЯЗАН быть в дереве, и это не украшение стенда: пока `Parent` возвращал null,
+    // `queryByText('Не сохранено')` не мог упасть никогда — искать было негде, и половина
+    // проверки «отказ прежней записи не гасит соседнюю» не проверяла ничего (ревью, И-5).
+    return <SaveIndicator state={api.state} />;
   }
-  const { calls } = renderWithProviders(<Parent />, (path, input) => {
+  let sends = 0;
+  const { calls, container } = renderWithProviders(<Parent />, (path, input) => {
     if (path !== 'entity.update') throw new Error(`сохранение тела не ходит на ${path}`);
+    sends += 1;
+    if (sends > MAX_SENDS) return new Promise(() => {}); // потолок отправок, см. MAX_SENDS
     return box.respond(input);
   });
   return {
+    container,
     api: () => hold.api as BodySave,
     updates: () => calls.filter((c) => c.path === 'entity.update'),
     serve: (r: Respond) => {
@@ -474,6 +494,36 @@ test('смена сущности не уносит в чужую запись �
 /** Вторая запись: её updatedAt РАНЬШЕ всего, что вернёт сервер по первой (см. тесты ниже). */
 const SECOND: BodySaveEntity = { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE };
 
+test('таймер прежней записи не уносит в неё тело новой', async () => {
+  // Самая дорогая ошибка этого хука, и она НЕ про отложенный документ, а про таймер. Доживи
+  // таймер первой записи до срабатывания, он разбудил бы ПРЕЖНИЙ `save` — тот замкнул на себе
+  // старый `entityId`, а документ и базу читает из рефов, принадлежащих уже ВТОРОЙ записи.
+  // Получилось бы `{ id: <первая>, bodyDoc: <тело второй> }`; вдобавок он первой же строкой
+  // снимает таймер второй записи, и та не сохранилась бы вовсе.
+  //
+  // Условие опыта: печатать во ВТОРУЮ запись надо внутри ОСТАТКА паузы первой — иначе старому
+  // таймеру нечего уносить, и дефект не проявляется (ровно поэтому мутант выживал два круга).
+  const s = mountWithProps({ id: 'e1', entity: ENTITY });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE - 1000); // таймер первой записи сработает через секунду
+
+  await s.set({ id: 'e2', entity: SECOND });
+  s.api().onDocChange(TWO); // правка ВТОРОЙ записи; её пауза — своя
+
+  // Момент, в который сработал бы таймер первой записи.
+  await tick(1000);
+  expect(s.updates()).toEqual([]);
+
+  // Пауза второй записи истекает своим чередом — и уезжает ровно её правка.
+  await tick(SAVE_PAUSE - 1000);
+  expect(s.updates()).toHaveLength(1);
+  expect(s.updates()[0]?.input).toEqual({
+    id: 'e2',
+    bodyDoc: TWO,
+    expectedUpdatedAt: SECOND.updatedAt,
+  });
+});
+
 test('ответ на запрос прежней записи не ложится в счёт соседней', async () => {
   // Запрос, ушедший ДО смены записи, обязан доехать — он про прежнюю запись. Но его ответ
   // здесь больше не касается ничего: ляг подтверждённый updatedAt ПЕРВОЙ записи в счёт
@@ -538,6 +588,67 @@ test('отказ по прежней записи не гасит и не ост
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(2);
   expect((s.updates()[1]?.input as { id: string }).id).toBe('e2');
+});
+
+test('409 по прежней записи не поднимает conflict на соседней', async () => {
+  // Тот самый третий исход, ради которого заводилось поколение, — и единственный, до которого
+  // поколение не дотягивается: `conflict` живёт в общей обвязке, а её колбэки — уровня МУТАЦИИ.
+  // Они исполняются всегда, даже когда наблюдателя отцепили, и о поколении ничего не знают.
+  const server = gatedServer();
+  const s = mountWithProps({ id: 'e1', entity: ENTITY }, server.respond);
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+
+  await s.set({ id: 'e2', entity: SECOND });
+  await server.answer(0, trpcError('CONFLICT'), 'fail');
+  expect(s.api().conflict).toBe(false);
+  expect(s.container).toBeEmptyDOMElement(); // и «Не сохранено» не зажглось (И-5)
+
+  // Положительный контроль: 409 по СВОЕЙ записи флаг поднимает — сверка по id не выключила
+  // проверку вовсе.
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(2);
+  await server.answer(1, trpcError('CONFLICT'), 'fail');
+  expect(s.api().conflict).toBe(true);
+});
+
+test('успех по прежней записи не гасит conflict соседней', async () => {
+  // Обратная сторона той же сверки. Запрос ПЕРВОЙ записи держим неотвеченным до самого конца:
+  // ответить на него раньше нельзя — промис оседает один раз, и второй ответ был бы пустым
+  // действием, от которого тест зеленел бы при любой реализации (проверено мутацией).
+  const server = gatedServer();
+  const s = mountWithProps({ id: 'e1', entity: ENTITY }, server.respond);
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1); // запрос первой записи в полёте
+
+  await s.set({ id: 'e2', entity: SECOND });
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(2);
+
+  // Своя, ВТОРАЯ запись поймала 409 — плашка «Изменено в другом месте» заслужена.
+  await server.answer(1, trpcError('CONFLICT'), 'fail');
+  expect(s.api().conflict).toBe(true);
+
+  // А теперь доезжает успех по ПЕРВОЙ записи. Он не про этот конфликт и гасить его не вправе:
+  // иначе плашка исчезла бы с экрана сама, а расхождение осталось бы.
+  await server.answer(0, SAVED);
+  expect(s.api().conflict).toBe(true);
+});
+
+test('conflict гаснет при смене записи, а не переезжает на соседнюю', async () => {
+  const s = mountWithProps({ id: 'e1', entity: ENTITY }, () => {
+    throw trpcError('CONFLICT');
+  });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.api().conflict).toBe(true); // премиса: на первой записи конфликт есть
+
+  await s.set({ id: 'e2', entity: SECOND });
+  expect(s.api().conflict).toBe(false);
 });
 
 test('откат отказавшей мутации ложится в кэш ПРЕЖНЕЙ записи, а не соседней', async () => {
