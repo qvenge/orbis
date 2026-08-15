@@ -124,6 +124,11 @@ const SAVE_PAUSE = 2000;
 const SLOW_THRESHOLD = 1000;
 
 beforeEach(() => {
+  // Черновик Задачи 14 переживает не только вкладку, но и ТЕСТ: все стенды файла работают с
+  // записью 'e1', и неотправленная правка одного теста досылалась бы на монтировании
+  // следующего — лишней мутацией, которой тот не ждёт. Судьба самого черновика проверяется
+  // в draft.test.tsx; здесь он обязан быть пуст.
+  localStorage.clear();
   // Системное время далеко от `updatedAt` сущности — см. ENTITY выше.
   vi.useFakeTimers().setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
   return () => {
@@ -1023,6 +1028,7 @@ test('сохранение и сравнение документов не тя�
   for (const file of [
     './useBodySave.ts',
     './strip-ids.ts',
+    './draft-storage.ts',
     '../entity-detail/useEntityDetail.ts',
   ]) {
     expect(

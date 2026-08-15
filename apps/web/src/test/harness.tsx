@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type RenderResult, render } from '@testing-library/react';
 import { TRPCClientError, type TRPCLink } from '@trpc/client';
 import { observable } from '@trpc/server/observable';
-import { type ReactNode, Suspense } from 'react';
+import { type ReactNode, StrictMode, Suspense } from 'react';
 import { afterAll, afterEach, beforeAll, expect } from 'vitest';
 import { trpc } from '../trpc';
 
@@ -91,9 +91,23 @@ export function mockLink(handler: MockHandler): TRPCLink<AppRouter> {
 // tests/setup.ts:11-18: улика в выводе важнее краткости разметки.
 const SUSPENDED = <div data-testid="harness-suspended">дерево подвисло под Suspense обёртки</div>;
 
+/**
+ * `strict: true` — прогнать дерево под StrictMode, то есть с ДВОЙНЫМ прогоном эффектов
+ * монтирования (так приложение и живёт в разработке, см. main.tsx).
+ *
+ * Флаг существует потому, что «просто передать `<StrictMode>` внутри `ui`» НЕ РАБОТАЕТ, и это
+ * замерено: двойной прогон эффектов включается, только когда StrictMode — САМЫЙ ВЕРХНИЙ
+ * элемент, переданный в `render`. Достаточно любого элемента над ним, чтобы прогон стал
+ * одинарным: `<StrictMode><X/></StrictMode>` → 2 прогона, `<div><StrictMode><X/></StrictMode>
+ * </div>` → 1, `<QueryClientProvider><StrictMode><X/></StrictMode></QueryClientProvider>` → 1
+ * (три пробы, React 19.2). А `renderWithProviders` ставит над `ui` три обёртки — то есть тест,
+ * написавший StrictMode внутри, проверяет ровно то же, что и без него, и зелен при любой
+ * реализации. Поэтому StrictMode здесь оборачивает ВСЁ дерево, включая провайдеры.
+ */
 export function renderWithProviders(
   ui: ReactNode,
   handler: MockHandler = () => ({}),
+  opts: { strict?: boolean } = {},
 ): RenderResult & { calls: { path: string; input: unknown }[] } {
   const calls: { path: string; input: unknown }[] = [];
   const qc = new QueryClient({
@@ -107,14 +121,15 @@ export function renderWithProviders(
       }),
     ],
   });
-  const result = render(
+  const tree = (
     <trpc.Provider client={client} queryClient={qc}>
       <QueryClientProvider client={qc}>
         {/* Suspense — страховка для тестов, которые рендерят ленивое поддерево напрямую.
             Для синхронного дерева обёртка не меняет ничего. */}
         <Suspense fallback={SUSPENDED}>{ui}</Suspense>
       </QueryClientProvider>
-    </trpc.Provider>,
+    </trpc.Provider>
   );
+  const result = render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
   return Object.assign(result, { calls });
 }
