@@ -120,6 +120,17 @@ test('bodySegments: обёртка посреди строки блоком НЕ
   expect(queryBlocks('смотри {{query:a=1}} тут\n{{query:b=2}}')).toEqual(['b=2']);
 });
 
+/**
+ * Блоки тела ГЛАЗАМИ СХЕМЫ документа — то, что построит редактор. Второй стороной сверки во
+ * всех тестах ниже стоит именно она, а не копия регэкспа: копия разъехалась бы с редактором
+ * молча, и «правила совпадают» осталось бы зелёным.
+ */
+function blocksFromSchema(body: string): string[] {
+  return (parseBody(body).doc.content ?? [])
+    .filter((n) => n.type === 'queryBlock')
+    .map((n) => String(n.attrs?.query ?? '').trim());
+}
+
 test('bodySegments видит ровно те же блоки, что и схема документа', () => {
   // Сверка с parseBody — единственная честная: она сравнивает не с копией регэкспа, а с тем,
   // что построит редактор. Тела — пять сидов и краевые случаи правила про колонку.
@@ -135,10 +146,7 @@ test('bodySegments видит ровно те же блоки, что и схе�
     'текст {{query: aspect=orbis/task и всё',
   ];
   for (const body of bodies) {
-    const fromDoc = (parseBody(body).doc.content ?? [])
-      .filter((n) => n.type === 'queryBlock')
-      .map((n) => String(n.attrs?.query ?? '').trim());
-    expect([body, queryBlocks(body)]).toEqual([body, fromDoc]);
+    expect([body, queryBlocks(body)]).toEqual([body, blocksFromSchema(body)]);
   }
 });
 
@@ -165,10 +173,7 @@ test('bodySegments: обёртка внутри забора кода остаё
   const body = 'вступление\n\n```\n{{query:tags=code}}\n```\n\n{{query: tags=work}}\nхвост';
   expect(queryBlocks(body)).toEqual(['tags=code', 'tags=work']);
   // …и схема на том же теле видит ОДИН блок: расхождение именно здесь, а не выдумано.
-  const fromDoc = (parseBody(body).doc.content ?? [])
-    .filter((n) => n.type === 'queryBlock')
-    .map((n) => String(n.attrs?.query ?? '').trim());
-  expect(fromDoc).toEqual(['tags=work']);
+  expect(blocksFromSchema(body)).toEqual(['tags=work']);
 });
 
 // Разбор блоков не раздваивается: у §3.4 один контракт на два потребителя.
