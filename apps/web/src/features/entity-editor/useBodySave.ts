@@ -88,6 +88,8 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   const timerRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
   const stoppedRef = useRef(false);
+  /** «Как только текущий запрос осядет — отправить отложенное». Ставится вместо второй попытки. */
+  const chainedRef = useRef(false);
   /**
    * updatedAt, который сервер подтвердил ПОСЛЕДНИМ сохранением. Кэш узнаёт новое значение
    * только с перечитывания (его заводит invalidateGraph в onSettled), а оно может и опоздать:
@@ -95,6 +97,15 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * второе сохранение подряд ловило бы 409 без всякой чужой правки.
    */
   const confirmedRef = useRef<string | null>(null);
+  /**
+   * Поколение записи. Растёт при смене `entityId` и отсекает колбэки запросов, ушедших ДО
+   * смены: сам запрос при этом не отменяется (он про прежнюю запись и обязан доехать), но его
+   * ответ больше не касается ничего здесь. Без отсечки подтверждённый updatedAt ПЕРВОЙ записи
+   * лёг бы в счёт второй (и её первое же сохранение получило бы 409 на ровном месте), её
+   * BAD_REQUEST молча выключил бы сохранение второй до перезагрузки, а её отказ зажёг бы
+   * «Не сохранено» на записи, которой никто не касался (ревью Задачи 13, I1).
+   */
+  const genRef = useRef(0);
 
   // useCallback без зависимостей, а не голая функция: иначе она пересоздаётся каждым рендером
   // и попадает в списки зависимостей ниже — вместе со всем, что от них зависит.
@@ -120,6 +131,8 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   const prevIdRef = useRef(entityId);
   if (prevIdRef.current !== entityId) {
     prevIdRef.current = entityId;
+    // Поколение — первым делом: с этой строки колбэки уже ушедшего запроса сюда не достучатся.
+    genRef.current += 1;
     // Снятие таймера тестом НЕ покрыто и покрыто быть не может: строкой ниже отложенный
     // документ обнуляется, и доживший таймер всё равно ничего не найдёт (проверено мутацией —
     // без этой строки все тесты зелёные). Оставлена как страховка на случай, если Задача 14
@@ -128,93 +141,130 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     pendingRef.current = null;
     confirmedRef.current = null;
     stoppedRef.current = false;
+    chainedRef.current = false;
+    // «В полёте» — про ПРЕЖНЮЮ запись, и её ответ сюда уже не придёт (см. поколение). Не сними
+    // мы флаг, новая запись ждала бы освобождения вечно и не сохранилась бы ни разу.
+    inFlightRef.current = false;
     setFailed(false);
+    setSaving(false);
   }
 
-  // Тип объявлен явно: без него `save`, зовущий себя из отложенного колбэка, попадает в
+  // Тип объявлен явно: без него `save`, зовущий себя из собственного колбэка, попадает в
   // циклический вывод типа (TS7022).
-  const save = useCallback<(deferIfBusy: boolean) => void>(
-    (deferIfBusy) => {
-      clearTimer();
-      const doc = pendingRef.current;
-      if (doc === null) return;
-      if (stoppedRef.current) return;
-      // Пока прошлое сохранение в полёте, второе слать нечего: оно ушло бы с тем же
-      // expectedUpdatedAt и получило бы 409 от собственного же предшественника. Ждём — но
-      // ждёт только автосохранение; flush() зовут ради «не потерять набранное».
-      if (deferIfBusy && inFlightRef.current) {
-        timerRef.current = window.setTimeout(() => save(true), SAVE_DEBOUNCE_MS);
-        return;
-      }
+  const save = useCallback<() => void>(() => {
+    clearTimer();
+    const doc = pendingRef.current;
+    if (doc === null) return;
+    if (stoppedRef.current) return;
+    /**
+     * Пока прошлое сохранение в полёте, второй запрос НЕ уходит — ни по паузе, ни по flush().
+     * Дело не только в том, что он ушёл бы с тем же expectedUpdatedAt и получил бы 409 от
+     * собственного же предшественника. Хуже: @tanstack/query-core в `MutationObserver.mutate`
+     * снимает наблюдателя с прежней мутации (`#currentMutation?.removeObserver(this)`), а
+     * поштучные колбэки живут в `#mutateOptions` и зовутся только через уведомление
+     * ПОДПИСАННОГО наблюдателя. То есть у первого запроса пропадают ВСЕ колбэки разом:
+     * `confirmedRef` не обновится даже при успехе, `pendingRef` не очистится, `inFlightRef`
+     * соврёт «свободно» раньше времени (осядь второй первым — третий уедет параллельно), а
+     * терминальный BAD_REQUEST именно этого запроса никого не остановит. Теряется не попытка,
+     * а вся бухгалтерия полёта (ревью Задачи 13, I2).
+     *
+     * Поэтому отложенное ДОСЫЛАЕТСЯ по оседанию первого — из onSettled ниже. Для flush() это
+     * значит «уйдёт первым же освободившимся кругом», а не «уйдёт прямо сейчас»; цена честная,
+     * потому что «прямо сейчас» и раньше оборачивалось гарантированным 409, то есть отказом.
+     */
+    if (inFlightRef.current) {
+      chainedRef.current = true;
+      return;
+    }
 
-      const base = entityRef.current;
-      // Правка ли это вообще. Сравнение по СМЫСЛУ: UniqueID кладёт attrs.id во все блоки, и по
-      // строковому равенству документ «менялся» бы всегда (см. strip-ids.ts).
-      if (
-        base.bodyDoc != null &&
-        base.bodyDoc.v === doc.v &&
-        sameDoc(doc.doc, base.bodyDoc.doc as JSONContent)
-      ) {
-        pendingRef.current = null;
-        return;
-      }
+    const base = entityRef.current;
+    // Правка ли это вообще. Сравнение по СМЫСЛУ: UniqueID кладёт attrs.id во все блоки, и по
+    // строковому равенству документ «менялся» бы всегда (см. strip-ids.ts).
+    if (
+      base.bodyDoc != null &&
+      base.bodyDoc.v === doc.v &&
+      sameDoc(doc.doc, base.bodyDoc.doc as JSONContent)
+    ) {
+      pendingRef.current = null;
+      // И отказ гаснет: на экране ровно то, что в базе. Иначе «Не сохранено» висело бы вечно
+      // у человека, который после отказа просто вернул текст к прежнему, — сохранять нечего,
+      // а успешной мутации, которая одна и гасила плашку, уже неоткуда взяться.
+      setFailed(false);
+      return;
+    }
 
-      // §5.2: expectedUpdatedAt — ТОЧНАЯ строка, которую клиент видел, а не «сейчас». Из двух
-      // известных берём позднюю: обе приходят от сервера в одном формате ISO-UTC (toISOString),
-      // где лексикографический порядок совпадает с хронологическим, а сам updated_at строго
-      // растёт (monotonicUpdatedAt).
-      const confirmed = confirmedRef.current;
-      const expectedUpdatedAt =
-        confirmed !== null && confirmed > base.updatedAt ? confirmed : base.updatedAt;
+    // §5.2: expectedUpdatedAt — ТОЧНАЯ строка, которую клиент видел, а не «сейчас». Из двух
+    // известных берём позднюю: обе приходят от сервера в одном формате ISO-UTC (toISOString),
+    // где лексикографический порядок совпадает с хронологическим, а сам updated_at строго
+    // растёт (monotonicUpdatedAt).
+    const confirmed = confirmedRef.current;
+    const expectedUpdatedAt =
+      confirmed !== null && confirmed > base.updatedAt ? confirmed : base.updatedAt;
 
-      inFlightRef.current = true;
-      setSaving(true);
-      mutate(
-        // Приведение, а не проверка формы: `JSONContent` описывает ЛЮБОЙ узел ProseMirror, а
-        // вход мутации сужен до узла `doc` с массивом блоков — на уровне типов эти две правды
-        // не сводятся. Проверять форму здесь незачем: ровно это и спрашивает серверный гейт
-        // (Задача 5), а его отказ терминален и виден.
-        { id: entityId, bodyDoc: doc as UpdateBodyDoc, expectedUpdatedAt },
-        {
-          onSuccess: (saved) => {
-            confirmedRef.current = saved.updatedAt;
-            // Только ЭТОТ документ: приехавшую за время запроса правку ждёт свой таймер.
-            if (pendingRef.current === doc) pendingRef.current = null;
-            setFailed(false);
-          },
-          onError: (err) => {
-            setFailed(true);
-            // Здесь НЕ делается двух вещей, и обе — намеренно.
-            // Документ не выбрасывается: `pendingRef` остаётся, потому что при 409 человек
-            // продолжает набирать ровно этот текст, и подмена его серверным вырвала бы правку
-            // из-под рук. И отправка не повторяется: следующая попытка — со следующей правкой
-            // (или по flush()), а к тому времени перечитывание, которое завела invalidateGraph
-            // в onSettled, уже принесёт свежий updatedAt. Повтор сразу же ушёл бы с тем же
-            // протухшим и получил бы тот же 409 — и так по кругу.
-            if (err instanceof TRPCClientError && err.data?.code === TERMINAL_CODE) {
-              stoppedRef.current = true;
-            }
-          },
-          onSettled: () => {
-            inFlightRef.current = false;
-            setSaving(false);
-          },
+    // Поколение снимается ДО отправки: колбэки ниже сверяются с ним и молчат, если запись
+    // под хуком успела смениться.
+    const gen = genRef.current;
+    const stale = () => gen !== genRef.current;
+
+    inFlightRef.current = true;
+    chainedRef.current = false;
+    setSaving(true);
+    mutate(
+      // Приведение, а не проверка формы: `JSONContent` описывает ЛЮБОЙ узел ProseMirror, а
+      // вход мутации сужен до узла `doc` с массивом блоков — на уровне типов эти две правды
+      // не сводятся. Проверять форму здесь незачем: ровно это и спрашивает серверный гейт
+      // (Задача 5), а его отказ терминален и виден.
+      { id: entityId, bodyDoc: doc as UpdateBodyDoc, expectedUpdatedAt },
+      {
+        onSuccess: (saved) => {
+          if (stale()) return;
+          confirmedRef.current = saved.updatedAt;
+          // Только ЭТОТ документ: приехавшую за время запроса правку досылает onSettled.
+          if (pendingRef.current === doc) pendingRef.current = null;
+          setFailed(false);
         },
-      );
-    },
-    [entityId, mutate, clearTimer],
-  );
+        onError: (err) => {
+          if (stale()) return;
+          setFailed(true);
+          // Документ не выбрасывается: `pendingRef` остаётся, потому что при 409 человек
+          // продолжает набирать ровно этот текст, и подмена его серверным вырвала бы правку
+          // из-под рук.
+          if (err instanceof TRPCClientError && err.data?.code === TERMINAL_CODE) {
+            stoppedRef.current = true;
+          }
+        },
+        onSettled: () => {
+          // Отсечка ЗДЕСЬ тестом не покрыта и покрыта быть не может (проверено мутацией — без
+          // неё все тесты зелёные): к моменту, когда оседает запрос прежней записи, сброс уже
+          // выставил признак полёта в false, а флаг досыла — тоже; снимать нечего. Оставлена
+          // ради симметрии с двумя колбэками выше, где отсечка нагружена по-настоящему: стоит
+          // хоть одному из сбрасываемых значений перестать сбрасываться — она станет нужна.
+          if (stale()) return;
+          inFlightRef.current = false;
+          setSaving(false);
+          // Досыл отложенного — ОДИН, и только если его просили, пока шёл запрос. Сам по себе
+          // отказ повтора не заводит: тот ушёл бы с тем же протухшим expectedUpdatedAt и
+          // получил бы тот же 409 — и так по кругу. Флаг снимается перед вызовом, поэтому
+          // круг «отказ → досыл → отказ → досыл» невозможен: второй досыл никто не просил.
+          if (chainedRef.current) {
+            chainedRef.current = false;
+            save();
+          }
+        },
+      },
+    );
+  }, [entityId, mutate, clearTimer]);
 
   const onDocChange = useCallback(
     (doc: BodyDoc) => {
       pendingRef.current = doc;
       clearTimer();
-      timerRef.current = window.setTimeout(() => save(true), SAVE_DEBOUNCE_MS);
+      timerRef.current = window.setTimeout(save, SAVE_DEBOUNCE_MS);
     },
     [save, clearTimer],
   );
 
-  const flush = useCallback(() => save(false), [save]);
+  const flush = save;
 
   // Таймер снимается при размонтировании, но сохранение отсюда НЕ досылается: чей это жест —
   // уход с экрана, потеря фокуса, закрытие вкладки — знает экран, он и зовёт flush().

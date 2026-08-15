@@ -36,6 +36,30 @@ const SAVED = { id: 'e1', updatedAt: '2026-08-14T11:00:00.000Z' };
 type Respond = (input: unknown) => unknown;
 const ok: Respond = () => SAVED;
 
+/**
+ * Сервер, который отвечает не сам, а КОГДА СКАЖУТ. Без него «второй запрос не уходит, пока
+ * идёт первый» пришлось бы проверять зависшим навсегда промисом — то есть не проверять досыл
+ * вовсе, а он и есть суть правки I2.
+ */
+function gatedServer() {
+  const gates: { settle: (v: unknown) => void; fail: (e: unknown) => void }[] = [];
+  const respond: Respond = () =>
+    new Promise((resolve, reject) => {
+      gates.push({ settle: resolve, fail: reject });
+    });
+  /** Ответить на i-й ушедший запрос и дать колбэкам отработать. */
+  const answer = async (i: number, value: unknown, mode: 'ok' | 'fail' = 'ok') => {
+    const gate = gates[i];
+    if (gate === undefined) throw new Error(`запроса №${i} не было — отвечать нечему`);
+    await act(async () => {
+      if (mode === 'ok') gate.settle(value);
+      else gate.fail(value);
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  };
+  return { respond, answer, count: () => gates.length };
+}
+
 function setup(opts: { entity?: BodySaveEntity; respond?: Respond } = {}) {
   const box = { respond: opts.respond ?? ok };
   const hold: { api: BodySave | null } = { api: null };
@@ -175,30 +199,52 @@ test('flush() шлёт немедленно — и снимает за собо�
   expect(s.updates()).toHaveLength(1);
 });
 
-test('flush() во время идущего запроса всё равно шлёт, а автосохранение — ждёт', async () => {
-  // Первый запрос не оседает никогда (полуоткрытый сокет). Развилка здесь настоящая:
-  //  • flush() зовут ровно тогда, когда терять набранное нельзя (уход с экрана, потеря
-  //    фокуса) — отложить значит выбросить, потому что таймер снимут при размонтировании;
-  //  • автосохранению спешить некуда, а второй запрос ушёл бы с тем же expectedUpdatedAt и
-  //    получил бы 409 от собственного же предшественника.
-  const s = setup({ respond: () => new Promise(() => {}) });
+test('пока идёт запрос, второй не уходит — ни по паузе, ни по flush(); досылается по оседанию', async () => {
+  // Параллельный второй запрос не просто ловил бы 409 от собственного предшественника: у
+  // ПЕРВОГО пропали бы все поштучные колбэки разом (query-core снимает наблюдателя с прежней
+  // мутации), и вместе с ними — подтверждённый updatedAt, очистка отложенного, признак полёта
+  // и терминальная остановка. Поэтому отложенное ждёт оседания и уходит одним досылом.
+  const server = gatedServer();
+  const s = setup({ respond: server.respond });
   s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+
+  // Ни пауза, ни flush() второго запроса не заводят.
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE * 3);
+  expect(s.updates()).toHaveLength(1);
   await act(async () => {
     s.api().flush();
   });
   expect(s.updates()).toHaveLength(1);
 
-  s.api().onDocChange(TWO);
-  await act(async () => {
-    s.api().flush();
-  });
+  // Первый осел — досыл уходит сам, с последним документом и с подтверждённым updatedAt.
+  await server.answer(0, SAVED);
   expect(s.updates()).toHaveLength(2);
-  expect((s.updates()[1]?.input as { bodyDoc: BodyDoc }).bodyDoc).toEqual(TWO);
+  expect(s.updates()[1]?.input).toEqual({
+    id: 'e1',
+    bodyDoc: TWO,
+    expectedUpdatedAt: SAVED.updatedAt,
+  });
 
-  // А по паузе — не шлёт, пока запрос в полёте.
-  s.api().onDocChange(THREE);
+  // И ровно ОДИН досыл: оседание второго само по себе третьего не заводит.
+  await server.answer(1, SAVED);
   await tick(SAVE_PAUSE * 3);
   expect(s.updates()).toHaveLength(2);
+});
+
+test('отказ не заводит досыл сам по себе — круг «отказ → повтор» невозможен', async () => {
+  const server = gatedServer();
+  const s = setup({ respond: server.respond });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+
+  await server.answer(0, trpcError('INTERNAL_SERVER_ERROR'), 'fail');
+  expect(screen.getByText('Не сохранено')).toBeInTheDocument();
+  await tick(SAVE_PAUSE * 5);
+  expect(s.updates()).toHaveLength(1);
 });
 
 // --- документ не менялся ----------------------------------------------------------------------
@@ -425,6 +471,137 @@ test('смена сущности не уносит в чужую запись �
   });
 });
 
+/** Вторая запись: её updatedAt РАНЬШЕ всего, что вернёт сервер по первой (см. тесты ниже). */
+const SECOND: BodySaveEntity = { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE };
+
+test('ответ на запрос прежней записи не ложится в счёт соседней', async () => {
+  // Запрос, ушедший ДО смены записи, обязан доехать — он про прежнюю запись. Но его ответ
+  // здесь больше не касается ничего: ляг подтверждённый updatedAt ПЕРВОЙ записи в счёт
+  // второй, её первое же сохранение получило бы 409 с плашкой «изменено в другом месте» —
+  // на записи, которой никто не касался.
+  const server = gatedServer();
+  const s = mountWithProps({ id: 'e1', entity: ENTITY }, server.respond);
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+
+  await s.set({ id: 'e2', entity: SECOND });
+  // Ответ ПЕРВОЙ записи — с меткой заведомо более поздней, чем у второй: возьми её «поздняя
+  // из двух», подмена была бы видна в expectedUpdatedAt ниже.
+  await server.answer(0, { id: 'e1', updatedAt: '2026-08-14T23:00:00.000Z' });
+
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(2);
+  expect(s.updates()[1]?.input).toEqual({
+    id: 'e2',
+    bodyDoc: TWO,
+    expectedUpdatedAt: SECOND.updatedAt,
+  });
+});
+
+test('соседняя запись сохраняется, пока запрос прежней ещё в полёте', async () => {
+  const server = gatedServer();
+  const s = mountWithProps({ id: 'e1', entity: ENTITY }, server.respond);
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+
+  await s.set({ id: 'e2', entity: SECOND });
+  // «Занято» — это про ПРЕЖНЮЮ запись, и её ответ сюда уже не придёт. Переживи признак полёта
+  // смену записи, вторая ждала бы освобождения вечно и не сохранилась бы ни разу.
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(2);
+  expect((s.updates()[1]?.input as { id: string }).id).toBe('e2');
+});
+
+test('отказ по прежней записи не гасит и не останавливает соседнюю', async () => {
+  // Второго сохранения здесь НЕТ намеренно, и это условие опыта: начни оно, query-core снял бы
+  // наблюдателя с первой мутации, и её колбэки не выполнились бы вовсе — отсечка по поколению
+  // осталась бы непроверенной, а тест зелёным (проверено мутацией). Колбэки прежней записи
+  // доживают до исполнения ровно тогда, когда после смены записи никто ещё не сохранял.
+  const server = gatedServer();
+  const s = mountWithProps({ id: 'e1', entity: ENTITY }, server.respond);
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+
+  await s.set({ id: 'e2', entity: SECOND });
+  // Терминальный отказ ПЕРВОЙ записи: он не зажигает «Не сохранено» на второй...
+  await server.answer(0, trpcError('BAD_REQUEST'), 'fail');
+  expect(screen.queryByText('Не сохранено')).toBeNull();
+
+  // ...и не выключает ей сохранение до перезагрузки. Документ — ЛЮБОЙ, кроме тела второй
+  // записи (им её база и является): иначе отправки не было бы по совсем другой причине.
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(2);
+  expect((s.updates()[1]?.input as { id: string }).id).toBe('e2');
+});
+
+test('откат отказавшей мутации ложится в кэш ПРЕЖНЕЙ записи, а не соседней', async () => {
+  // Откат живёт в общей обвязке (useEntityUpdate) и берёт ключ из замыкания последнего
+  // рендера. Смени экран сущность, пока запрос в полёте, — и данные первой записи легли бы
+  // под ключ второй: на экране оказалась бы ЧУЖАЯ заметка.
+  //
+  // В кэше нужны ОБЕ записи, и это не декорация: снимок берётся у первой, и будь её кэш пуст,
+  // откат под любым ключом оказался бы записью `undefined`, которую setQueryData пропускает, —
+  // подмена ключа была бы неотличима от верного поведения (проверено мутацией).
+  const server = gatedServer();
+  type CachedEntity = { entity: { title: string; bodyDoc: unknown } } | undefined;
+  const read: { get: (id: string) => CachedEntity } = { get: () => undefined };
+  const title = (id: string) => read.get(id)?.entity.title;
+  const hold: {
+    api: BodySave | null;
+    set: ((p: { id: string; entity: BodySaveEntity }) => void) | null;
+  } = { api: null, set: null };
+  function Tree() {
+    const utils = trpc.useUtils();
+    trpc.entity.get.useQuery(detailGetInput('e1'));
+    trpc.entity.get.useQuery(detailGetInput('e2'));
+    read.get = (id: string) => utils.entity.get.getData(detailGetInput(id)) as CachedEntity;
+    const [props, setProps] = useState({ id: 'e1', entity: ENTITY });
+    hold.set = setProps;
+    hold.api = useBodySave(props.id, props.entity);
+    return null;
+  }
+  const entities: Record<string, unknown> = {
+    e1: { id: 'e1', title: 'ПЕРВАЯ запись', body: 'тело', bodyDoc: BASE },
+    e2: { id: 'e2', title: 'ВТОРАЯ запись', body: 'её тело', bodyDoc: THREE },
+  };
+  // Первые два чтения (начальная загрузка обеих записей) отвечают, дальнейшие ЗАВИСАЮТ.
+  // Иначе увидеть промах ключа нечем: onSettled зовёт invalidateGraph, перечитывание
+  // приносит из мока верные данные и залечивает подмену ДО ассерта — мутация выживала ровно
+  // поэтому. В проде лечение то же самое, но оно стоит круга сети, и на экране успевает
+  // мелькнуть чужая заметка; не доедь перечитывание (офлайн) — она бы и осталась.
+  let reads = 0;
+  renderWithProviders(<Tree />, (path, input) => {
+    if (path === 'entity.get') {
+      reads += 1;
+      if (reads > 2) return new Promise(() => {});
+      return { entity: entities[(input as { id: string }).id] };
+    }
+    if (path === 'entity.update') return server.respond(null);
+    throw new Error(`сохранение тела не ходит на ${path}`);
+  });
+  await tick();
+  expect(title('e1')).toBe('ПЕРВАЯ запись'); // премиса: снимку есть что откатывать
+  expect(title('e2')).toBe('ВТОРАЯ запись');
+
+  hold.api?.onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  await act(async () => {
+    hold.set?.({ id: 'e2', entity: SECOND });
+  });
+  await server.answer(0, trpcError('INTERNAL_SERVER_ERROR'), 'fail');
+
+  // Кэш второй записи цел: откат ушёл туда, откуда снимок и был взят.
+  expect(title('e2')).toBe('ВТОРАЯ запись');
+  // И первая откачена по-настоящему: оптимистичный документ снят, а не остался висеть.
+  expect(read.get('e1')?.entity.bodyDoc).toEqual(BASE);
+});
+
 test('терминальная остановка не переносится на соседнюю запись', async () => {
   // Битый документ — свойство ЭТОЙ записи. Переживи остановка смену сущности, соседняя запись
   // молча перестала бы сохраняться вовсе, и починить это можно было бы только перезагрузкой.
@@ -515,13 +692,11 @@ test('оптимистичный патч кладёт документ в кэ�
 // --- отказы -----------------------------------------------------------------------------------
 
 test('отказ показывает «Не сохранено» и держит до успеха', async () => {
-  const s = setup({
-    respond: () => {
-      throw trpcError('INTERNAL_SERVER_ERROR');
-    },
-  });
+  const server = gatedServer();
+  const s = setup({ respond: server.respond });
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
+  await server.answer(0, trpcError('INTERNAL_SERVER_ERROR'), 'fail');
 
   expect(s.updates()).toHaveLength(1);
   expect(screen.getByText('Не сохранено')).toBeInTheDocument();
@@ -532,10 +707,9 @@ test('отказ показывает «Не сохранено» и держи�
   expect(screen.getByText('Не сохранено')).toBeInTheDocument();
 
   // Новая правка — новая попытка (отказ сети НЕ терминален, в отличие от VALIDATION ниже).
-  // Запрос при этом ЗАВИСАЕТ: «держит до успеха» значит именно до успеха, а не до следующей
+  // Ответа на неё ПОКА НЕТ: «держит до успеха» значит именно до успеха, а не до следующей
   // попытки — иначе плашка гасла бы на время каждого повтора и зажигалась снова, то есть
   // мигала бы вместо ответа на вопрос «сохранено ли».
-  s.serve(() => new Promise(() => {}));
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(2);
@@ -543,14 +717,33 @@ test('отказ показывает «Не сохранено» и держи�
   await tick(SLOW_SAVE_MS * 2); // и «Сохраняем…» её не перебивает даже за порогом выдержки
   expect(screen.getByText('Не сохранено')).toBeInTheDocument();
 
-  // Успех — и только он — гасит плашку. Через flush(), а не по паузе: прошлый запрос так и
-  // висит в полёте, и автосохранение его дожидалось бы (см. тест про flush во время запроса).
-  s.serve(ok);
+  // Второй отказ подряд плашку тоже не гасит.
+  await server.answer(1, trpcError('INTERNAL_SERVER_ERROR'), 'fail');
+  expect(screen.getByText('Не сохранено')).toBeInTheDocument();
+
+  // Успех — и только он — гасит плашку.
   s.api().onDocChange(THREE);
-  await act(async () => {
-    s.api().flush();
-  });
+  await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(3);
+  await server.answer(2, SAVED);
+  expect(s.container).toBeEmptyDOMElement();
+});
+
+test('«Не сохранено» гаснет, когда правку вернули к сохранённому', async () => {
+  // После отказа человек может просто отменить набранное. Сохранять тогда нечего — сравнение
+  // выходит по равенству документов, — и успешной мутации, которая одна и гасила плашку,
+  // уже неоткуда взяться: без этой ветки «Не сохранено» висело бы вечно над текстом, который
+  // ровно совпадает с базой.
+  const server = gatedServer();
+  const s = setup({ respond: server.respond });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  await server.answer(0, trpcError('INTERNAL_SERVER_ERROR'), 'fail');
+  expect(screen.getByText('Не сохранено')).toBeInTheDocument();
+
+  s.api().onDocChange(parseBody('тело')); // тот же текст, что в базе
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1); // в сеть не ходили: сохранять нечего
   expect(s.container).toBeEmptyDOMElement();
 });
 

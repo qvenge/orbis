@@ -67,10 +67,13 @@ export function useEntityUpdate(entityId: string) {
       utils.entity.get.setData(input, (old) =>
         old ? { ...old, entity: applyPatch(old.entity, vars) } : old,
       );
-      return { prev };
+      // Ключ едет в контекст ВМЕСТЕ со снимком. Откат обязан лечь туда же, откуда снимок
+      // взят, а `input` — замыкание ПОСЛЕДНЕГО рендера: смени экран сущность, пока запрос в
+      // полёте, и откат положил бы данные прежней записи под ключ новой (ревью Задачи 13, I1).
+      return { prev, input };
     },
     onError: (err, _vars, ctx) => {
-      utils.entity.get.setData(input, ctx?.prev);
+      if (ctx) utils.entity.get.setData(ctx.input, ctx.prev);
       if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') setConflict(true);
     },
     onSuccess: () => setConflict(false),
