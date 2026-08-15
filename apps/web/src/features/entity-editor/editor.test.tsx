@@ -6,7 +6,7 @@ import userEvent from '@testing-library/user-event';
 import { getSchema } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
 import { afterEach, expect, test, vi } from 'vitest';
-import { renderWithProviders } from '../../test/harness';
+import { installCrashTrap, renderWithProviders } from '../../test/harness';
 import { BodyEditor, htmlToPlainParagraphs } from './BodyEditor';
 import { BODY_PLACEHOLDER } from './body-box';
 import { EditorShell } from './EditorShell';
@@ -29,6 +29,11 @@ const held = (): Held => ({ editor: null });
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+// Крах в обработчике события (эффект, NodeView, горячая клавиша) не роняет тест — только код
+// возврата прогона. Ровно этим ловилась ошибка `editor.isDestroyed` из Задачи 7: ассерты были
+// зелёными, а прогон красным. Ставится файлом, не глобально: см. harness.
+installCrashTrap();
 
 // --- состав расширений (И19, инвариант «ноды редактора ⊆ схемы») -------------------------
 

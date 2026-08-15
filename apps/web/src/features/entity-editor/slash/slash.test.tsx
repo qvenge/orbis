@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { getSchema } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
 import { afterEach, expect, test, vi } from 'vitest';
-import { renderWithProviders, trpcError } from '../../../test/harness';
+import { installCrashTrap, renderWithProviders, trpcError } from '../../../test/harness';
 import { Toaster } from '../../../ui/Toast';
 import { BodyEditor } from '../BodyEditor';
 import { BODY_PLACEHOLDER } from '../body-box';
@@ -138,6 +138,10 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+// Клавиатура меню и вставка идут через обработчики событий: крах там не роняет тест, а только
+// код возврата прогона. Ставится файлом, не глобально: см. harness.
+installCrashTrap();
 
 // --- инвариант: ноды и марки редактора ⊆ DOC_EXTENSIONS -----------------------------------
 

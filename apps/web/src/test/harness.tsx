@@ -4,7 +4,47 @@ import { type RenderResult, render } from '@testing-library/react';
 import { TRPCClientError, type TRPCLink } from '@trpc/client';
 import { observable } from '@trpc/server/observable';
 import { type ReactNode, Suspense } from 'react';
+import { afterAll, afterEach, beforeAll, expect } from 'vitest';
 import { trpc } from '../trpc';
+
+/**
+ * Ловушка для КРАХОВ В ОБРАБОТЧИКАХ. Зовётся на верхнем уровне файла тестов.
+ *
+ * Ошибка, брошенная в обработчике DOM-события (горячая клавиша ProseMirror, onClick кнопки,
+ * колбэк NodeView), до ассертов НЕ доезжает: jsdom её гасит и докладывает отдельно. Прогон
+ * краснеет КОДОМ ВОЗВРАТА, а сам тест остаётся зелёным — документ после краха, разумеется, не
+ * изменился, и ассерт «ничего не сломалось» истинен. Разница видна на мутации: снятая проверка
+ * края в move-block.ts держала четырнадцать тестов из четырнадцати зелёными при коде 1, то есть
+ * падало «что-то», без единого слова о том, что именно.
+ *
+ * Глобально (tests/setup.ts) ставить НЕЛЬЗЯ: в apps/web есть тесты, которые бросают намеренно
+ * (граница ошибок чанков, плашки отказов конструктора запросов), и общая ловушка покрасила бы
+ * их все.
+ *
+ * Два свойства, ради которых слушатель живёт ФАЙЛОМ, а не тестом:
+ * - он ставится один раз на файл и снимается в самом конце, поэтому ошибка, прилетевшая уже
+ *   после `afterEach` (отложенный колбэк только что закончившегося теста), не теряется —
+ *   она доедет до следующей сверки, пусть и под чужим именем;
+ * - список НЕ чистится перед тестом, а СНИМАЕТСЯ при сверке: чистка «на входе» выбрасывала бы
+ *   ровно те ошибки, что прилетели между хуками, а снятие гарантирует и то, что одна ошибка не
+ *   покрасит все последующие тесты подряд.
+ *
+ * В сообщение уходит СТЕК, а не `String(error)`: без него в выводе остаётся «TypeError: …»
+ * без единой строки о том, где это случилось.
+ */
+export function installCrashTrap(): void {
+  const crashes: string[] = [];
+  const onError = (event: ErrorEvent) => {
+    const error = event.error as Error | undefined;
+    crashes.push(error?.stack ?? error?.message ?? event.message);
+  };
+  beforeAll(() => window.addEventListener('error', onError));
+  afterAll(() => window.removeEventListener('error', onError));
+  afterEach(() => {
+    const seen = crashes.splice(0);
+    expect(seen, 'необработанная ошибка в обработчике события').toEqual([]);
+  });
+}
 
 export type MockHandler = (path: string, input: unknown) => unknown | Promise<unknown>;
 

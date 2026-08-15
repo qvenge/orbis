@@ -5,7 +5,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Editor } from '@tiptap/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { renderWithProviders } from '../../../test/harness';
+import { installCrashTrap, renderWithProviders } from '../../../test/harness';
 import { Toaster } from '../../../ui/Toast';
 import { BodyEditor } from '../BodyEditor';
 import { EditorShell, isBodyGesture } from '../EditorShell';
@@ -82,6 +82,10 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+// Виджет живёт NodeView'ом, а его модалка — в портале: крах в обработчике не роняет тест, а
+// только код возврата прогона. Ставится файлом, не глобально: см. harness.
+installCrashTrap();
 
 // --- виджет вместо текста ----------------------------------------------------------------
 

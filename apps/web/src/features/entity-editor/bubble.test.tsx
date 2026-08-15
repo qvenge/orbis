@@ -4,8 +4,8 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getSchema } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
-import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import { renderWithProviders } from '../../test/harness';
+import { expect, test, vi } from 'vitest';
+import { installCrashTrap, renderWithProviders } from '../../test/harness';
 import { BodyEditor } from './BodyEditor';
 import { EDITOR_EXTENSIONS } from './extensions';
 
@@ -78,6 +78,25 @@ function topPosOf(editor: Editor, name: string): number {
   return pos;
 }
 
+/** Позиция текстового узла с таким текстом — адресация в глубину без счёта на пальцах. */
+function posOfText(editor: Editor, text: string): number {
+  let pos = -1;
+  editor.state.doc.descendants((node, at) => {
+    if (node.isText && node.text === text && pos === -1) pos = at;
+    return true;
+  });
+  expect(pos, `в документе нет текста «${text}»`).toBeGreaterThan(-1);
+  return pos;
+}
+
+/** Тексты пунктов списка, стоящего блоком верхнего уровня под номером `index`. */
+function listTexts(editor: Editor, index: number): (string | undefined)[] {
+  const list = editor.getJSON().content?.[index] as
+    | { content?: { content?: { content?: { text?: string }[] }[] }[] }
+    | undefined;
+  return (list?.content ?? []).map((item) => item.content?.[0]?.content?.[0]?.text);
+}
+
 /**
  * Панель показывается с задержкой: `updateDelay` у `extension-bubble-menu` — 250 мс (гасит
  * мигание во время протягивания выделения). Прячется она, наоборот, сразу.
@@ -88,27 +107,10 @@ const toolbar = (): Promise<HTMLElement> =>
 const ALT_DOWN = '{Alt>}{ArrowDown}{/Alt}';
 const ALT_UP = '{Alt>}{ArrowUp}{/Alt}';
 
-/**
- * Ловушка для КРАХОВ В ОБРАБОТЧИКАХ. Половина этой задачи — про «не бросает»: горячая клавиша
- * и кнопка панели работают внутри обработчиков событий, а ошибка оттуда до ассертов НЕ
- * доезжает — jsdom её гасит и докладывает отдельно. Прогон при этом краснеет кодом возврата,
- * но САМ ТЕСТ остаётся зелёным, потому что документ после краха, разумеется, не изменился.
- * Проверено мутацией (М6 таблицы отчёта): со снятой проверкой края все четырнадцать тестов
- * файла оставались зелёными, а прогон возвращал 1 — то есть падало «что-то», без единого слова
- * о том, что именно. С этой ловушкой та же мутация роняет ДВА названных теста.
- */
-const crashes: string[] = [];
-const catchCrash = (e: ErrorEvent) => crashes.push(String(e.error ?? e.message));
-
-beforeEach(() => {
-  crashes.length = 0;
-  window.addEventListener('error', catchCrash);
-});
-
-afterEach(() => {
-  window.removeEventListener('error', catchCrash);
-  expect(crashes).toEqual([]);
-});
+// Половина этой задачи — про «не бросает»: и горячая клавиша, и кнопка панели работают внутри
+// обработчиков событий, где крах не роняет тест, а только код возврата прогона (см. описание
+// ловушки в harness). Мутация М6б без неё выживала.
+installCrashTrap();
 
 // --- инвариант: ноды и марки редактора ⊆ DOC_EXTENSIONS -------------------------------------
 
@@ -205,11 +207,13 @@ test('«Удалить блок» на выделенном смарт-лист�
   expect(texts(editor)).toEqual(['до', 'после']);
 });
 
-test('«Удалить блок» в списке сносит ВЕСЬ список, не оставляя пустого пункта', async () => {
-  // Код плана v1 удалял `$from.parent` — параграф ВНУТРИ пункта, и на экране оставался пустой
-  // пункт списка. Здесь удаляется блок ВЕРХНЕГО уровня (тот же уровень, что двигает Alt+↑/↓):
-  // весь список целиком, а не его половина и не пустой каркас.
-  const { editor } = await mountEditor('- один\n- два\n\nхвост');
+test('«Удалить блок» в списке убирает ПУНКТ, а не весь список', async () => {
+  // Решение И1 раунда правок 1. Код плана v1 удалял `$from.parent` — параграф ВНУТРИ пункта,
+  // и на экране оставался пустой буллет; первая редакция этой задачи лечила это подъёмом до
+  // блока ВЕРХНЕГО уровня, то есть сносила чеклист из двадцати пунктов за каретку в седьмом.
+  // Радиус поражения решает: «пропал буллет» — мелочь, «пропал список» — потеря данных за
+  // иконкой в четырнадцать пикселей и без подтверждения.
+  const { editor } = await mountEditor('- один\n- два\n- три\n\nхвост');
   expect(types(editor)).toEqual(['bulletList', 'paragraph']); // страж вакуумности
   editor.commands.focus();
   // Выделение ВНУТРИ первого пункта: панель показывается только на непустом выделении.
@@ -218,11 +222,96 @@ test('«Удалить блок» в списке сносит ВЕСЬ спис
   await toolbar();
 
   await userEvent.click(screen.getByLabelText('Удалить блок'));
+  // Список ЖИВ и лишился ровно одного пункта — ни пустого каркаса, ни братской могилы.
+  expect(types(editor)).toEqual(['bulletList', 'paragraph']);
+  expect(listTexts(editor, 0)).toEqual(['два', 'три']);
+  expect(texts(editor)[1]).toBe('хвост');
+});
+
+test('«Удалить блок» во ВЛОЖЕННОМ списке убирает вложенный пункт, а не внешний', async () => {
+  // Правило «ближайший предок, чей родитель — документ ЛИБО список» проверяется именно здесь:
+  // подъём до верхнего уровня снёс бы весь внешний список, подъём «на один» — оставил бы
+  // пустой каркас. Между этими двумя ошибками и живёт правильный ответ.
+  const { editor } = await mountEditor('- один\n  - вложенный\n- два');
+  editor.commands.focus();
+  // Каретка внутри «вложенный»: путь paragraph<listItem<bulletList<listItem<bulletList<doc.
+  const pos = posOfText(editor, 'вложенный');
+  editor.commands.setTextSelection({ from: pos + 1, to: pos + 4 });
+  expect(editor.state.selection.$from.depth).toBe(5); // страж адреса: каретка правда глубоко
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
   const json = JSON.stringify(editor.getJSON());
-  expect(json).not.toContain('listItem'); // ни одного пункта — ни полного, ни пустого
-  expect(json).not.toContain('bulletList');
-  // Положительный контроль: удалён ИМЕННО блок, а не документ — соседний абзац цел.
+  expect(json).not.toContain('вложенный');
+  // Внешний список цел ЦЕЛИКОМ: оба его пункта на месте.
+  expect(listTexts(editor, 0)).toEqual(['один', 'два']);
+});
+
+test('«Удалить блок» в чеклисте убирает пункт: список опознаётся по схеме, а не по имени', async () => {
+  // taskList — из другого пакета (@tiptap/extension-list), и его в схеме нет у StarterKit.
+  // Правило опирается на группу `list` в самой схеме, а не на перечень имён нод, — иначе
+  // чеклист вёл бы себя иначе, чем маркированный список, при одинаковом виде на экране.
+  const { editor } = await mountEditor('- [ ] первая\n- [ ] вторая');
+  expect(types(editor)).toEqual(['taskList']); // страж вакуумности
+  editor.commands.focus();
+  const pos = posOfText(editor, 'первая');
+  editor.commands.setTextSelection({ from: pos + 1, to: pos + 4 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(types(editor)).toEqual(['taskList']);
+  expect(listTexts(editor, 0)).toEqual(['вторая']);
+});
+
+test('«Удалить блок» в цитате убирает ВСЮ цитату: её родитель — документ', async () => {
+  // Положительный контроль к правилу: подъём останавливается на списке — и только на нём.
+  // У цитаты родитель — сам документ, поэтому внутренний параграф целью не становится
+  // (иначе вернулся бы баг v1: пустой каркас цитаты на экране).
+  const { editor } = await mountEditor('> цитата\n\nхвост');
+  expect(types(editor)).toEqual(['blockquote', 'paragraph']); // страж вакуумности
+  editor.commands.focus();
+  editor.commands.setTextSelection({ from: 3, to: 6 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(types(editor)).toEqual(['paragraph']);
   expect(texts(editor)).toEqual(['хвост']);
+});
+
+test('«Удалить блок» на выделении ПОПЕРЁК двух абзацев убирает ОБА', async () => {
+  // Решение И3 раунда правок 1. Путь достижим мышью тривиально — протянуть выделение через
+  // границу абзацев, панель показывается. Прежний код смотрел только на `$from`: исчезал
+  // первый абзац, а подсвеченный хвост второго оставался на экране — результат, которого
+  // никто не просил и который ниоткуда не выводится.
+  //
+  // Выбрано «удалить все блоки, которых выделение КОСНУЛОСЬ»: радиус жеста ограничен ровно
+  // тем, что человек видел выделенным, и кнопка «Удалить блок» означает одно и то же при
+  // любом выделении — «убрать то, что подсвечено, целыми блоками».
+  const { editor } = await mountEditor('первый\n\nвторой\n\nтретий');
+  editor.commands.focus();
+  editor.commands.setTextSelection({ from: 4, to: 12 }); // из середины первого в середину второго
+  expect(editor.state.selection.$from.parent.textContent).toBe('первый'); // стражи адреса
+  expect(editor.state.selection.$to.parent.textContent).toBe('второй');
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  // Оба тронутых абзаца исчезли целиком, третий цел: обрывков не осталось.
+  expect(texts(editor)).toEqual(['третий']);
+});
+
+test('«Удалить блок» поперёк двух ПУНКТОВ убирает оба пункта, список цел', async () => {
+  // То же правило внутри списка: концы диапазона считаются по обоим краям выделения, и
+  // каждый — по правилу И1, то есть до пункта, а не до всего списка.
+  const { editor } = await mountEditor('- один\n- два\n- три');
+  editor.commands.focus();
+  const a = posOfText(editor, 'один');
+  const b = posOfText(editor, 'два');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(types(editor)).toEqual(['bulletList']);
+  expect(listTexts(editor, 0)).toEqual(['три']);
 });
 
 test('«Удалить блок» при выделенном ВСЁМ документе не бросает и чистит тело', async () => {
@@ -260,6 +349,14 @@ test('два Alt+↓ подряд двигают ТОТ ЖЕ абзац, а не
   const { editor } = await mountEditor('один\n\nдва\n\nтри');
   editor.commands.focus('start');
   await userEvent.keyboard(ALT_DOWN);
+  await userEvent.keyboard(ALT_DOWN);
+  expect(texts(editor)).toEqual(['два', 'три', 'один']);
+
+  // ВЕРХНЯЯ граница (И2 раунда правок 1). Блок стоит последним — третье нажатие обязано не
+  // сделать ничего. До этой строки верхний край не жал НИ ОДИН тест: мутация «убрать только
+  // `swapWith >= parent.childCount`» давала RangeError, которого никто не провоцировал, и
+  // четырнадцать тестов из четырнадцати оставались зелёными (ловушка крахов тоже молчала —
+  // краха не случалось).
   await userEvent.keyboard(ALT_DOWN);
   expect(texts(editor)).toEqual(['два', 'три', 'один']);
 });
@@ -370,4 +467,36 @@ test('панель не перехватывает `/`-меню: набор по
   await waitFor(() => expect(screen.queryByTestId('bubble-toolbar')).toBeNull());
   await userEvent.keyboard('{Enter}');
   await waitFor(() => expect(types(editor)).toEqual(['heading']));
+});
+
+test('при ОТКРЫТОМ /-меню Alt+↓ ходит по меню и НЕ двигает блок', async () => {
+  // Пункт 4 раунда правок 1: взаимодействие двух наших же фич. `SlashMenu.onKeyDown` берёт
+  // стрелки не глядя на модификаторы, а keymap MoveBlock — отдельный плагин; вопрос был в
+  // том, кто из них видит клавишу первым.
+  //
+  // Замерено: первым видит МЕНЮ. Suggestion-расширения приходят в `useEditor` общим массивом
+  // (BodyEditor: `[...EDITOR_EXTENSIONS, ...suggest.extensions]`) и в `state.plugins` стоят
+  // РАНЬШЕ keymap'а MoveBlock — `orbisSlashSuggestion$` под индексом 12. Через
+  // `registerPlugin` (то есть последним) приезжает только bubble-панель.
+  //
+  // Это и есть нужный порядок, а не случайная удача: пока меню открыто, каретка стоит внутри
+  // набранного `/`, и уехавший из-под неё блок утащил бы за собой и запрос, и координаты меню.
+  // Тест сторожит именно порядок — он держится на составе расширений, а не на нашем коде.
+  const { editor } = await mountEditor('первый\n\nвторой');
+  editor.commands.focus('start');
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  const before = texts(editor);
+  const first = screen
+    .getAllByRole('option')
+    .find((o) => o.getAttribute('aria-selected') === 'true')?.textContent;
+
+  await userEvent.keyboard(ALT_DOWN);
+  expect(texts(editor)).toEqual(before); // порядок блоков не тронут
+  expect(screen.getByTestId('slash-menu')).toBeInTheDocument(); // меню на месте
+  // Положительный контроль: клавишу забрало именно МЕНЮ — выбор в нём сдвинулся.
+  const now = screen
+    .getAllByRole('option')
+    .find((o) => o.getAttribute('aria-selected') === 'true')?.textContent;
+  expect(now).not.toBe(first);
 });

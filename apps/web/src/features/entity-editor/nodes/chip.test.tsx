@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import type { Editor } from '@tiptap/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../../state/navigation';
-import { renderWithProviders, trpcError } from '../../../test/harness';
+import { installCrashTrap, renderWithProviders, trpcError } from '../../../test/harness';
 import { BodyEditor } from '../BodyEditor';
 import { RefTitlesProvider } from './RefTitlesContext';
 
@@ -28,6 +28,10 @@ const row = (id: string, over: Partial<Row> = {}): Row => ({
   archived: false,
   ...over,
 });
+
+// Чип живёт NodeView'ом, и его клики с резолвом идут через обработчики событий: крах там не
+// роняет тест, а только код возврата прогона. Ставится файлом, не глобально: см. harness.
+installCrashTrap();
 
 // Мок — ФУНКЦИЯ (path, input): карты `{'entity.resolveRefs': fn}` у харнесса нет.
 // Отвечает ровно про СПРОШЕННОЕ, как сервер. Мок, отдающий весь список кому попало, делал бы
