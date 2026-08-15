@@ -1184,9 +1184,10 @@ function follows(a: Element, b: Element): boolean {
   return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 }
 
-// Главное видимое свойство просмотра: виджет стоит МЕЖДУ своими абзацами, как он стоит в
-// body. Раскладка «весь текст, потом все виджеты» — это режим правки; в просмотре она была
-// бы возвратом к тому, от чего задача и уходила, и юнит-тест сегментации этого не поймал бы.
+// Главное видимое свойство ПЕРВОГО КАДРА: виджет стоит МЕЖДУ своими абзацами, как он стоит в
+// body. Раскладка «весь текст, потом все виджеты» была бы возвратом к тому, от чего работа и
+// уходила, — и юнит-тест сегментации этого не поймал бы: порядок сегментов он видит, а порядок
+// узлов НА ЭКРАНЕ — нет.
 test('порядок сегментов сохраняется: текст → виджет → текст', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(BODY_TEXT_BLOCK_TEXT));
   await screen.findByTestId('qb-count');
@@ -1198,7 +1199,7 @@ test('порядок сегментов сохраняется: текст → �
   expect(follows(widget, tail)).toBe(true);
 });
 
-test('{{query:…}} в просмотр текстом не течёт: текст — разметкой, блок — виджетом', async () => {
+test('{{query:…}} в первый кадр текстом не течёт: текст — разметкой, блок — виджетом', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler(BODY_WITH_BLOCK));
   await screen.findByTestId('qb-count');
   expect(screen.getByText('Утренний обзор')).toBeInTheDocument();

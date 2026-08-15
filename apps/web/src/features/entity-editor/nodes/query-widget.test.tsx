@@ -14,9 +14,10 @@ import { EditorShell, isBodyGesture } from '../EditorShell';
  * Подмена редактора блока для ОДНОГО теста — рубежа `}}`. Сегодня этот рубеж недостижим
  * через интерфейс: строковый редактор гасит «Сохранить» на `}}`, а форма вовсе не печатает
  * такой AST (serializeQuery бросает, printQuery отдаёт text=null и блокирует запись). Он и
- * есть ВТОРОЙ барьер — тот же, что стоял в replaceQueryBlock, и по той же причине: тихая
- * запись испорченного блока хуже отказа. Проверить второй барьер, не убрав первый, нельзя,
- * поэтому здесь на время подменяется собеседник виджета, а не ослабляется ассерт.
+ * есть ВТОРОЙ барьер — тот же, что стоял в снятой замене блока по номеру, и по той же
+ * причине: тихая запись испорченного блока хуже отказа. Проверить второй барьер, не убрав
+ * первый, нельзя, поэтому здесь на время подменяется собеседник виджета, а не ослабляется
+ * ассерт.
  */
 const hijack = vi.hoisted(() => ({ query: null as string | null }));
 vi.mock('../../query-builder/QueryBlockEditor', async (orig) => {
@@ -170,6 +171,33 @@ test('сохранение блока — правка АТРИБУТА ноды
       .map((c) => (c.input as { query: string }).query),
   ).toEqual(['tags=home']);
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+});
+
+test('правится ТОТ виджет, по которому нажали, — даже когда блоки одинаковы', async () => {
+  // Преемник снятого теста замены по номеру («различает одинаковые по тексту блоки»): у той
+  // адресация шла порядковым номером, и замена по содержимому переписала бы первый блок
+  // вместо второго. Адрес сменился на саму ноду, но свойство осталось нормативным — два
+  // одинаковых блока в одном теле законны (§3.4), и проверять его надо тем же путём человека.
+  // Блок намеренно НЕразбираемый: у валидного «Настроить» открывает форму, а не текст.
+  const inner = ' status=, tags=work';
+  const onChange = vi.fn();
+  renderWithProviders(
+    <BodyEditor doc={parseBody(`${block(inner)}\n\n${block(inner)}`)} onChange={onChange} />,
+    lists({}),
+  );
+  const dialog = await openBlockEditor(1);
+  fireEvent.change(within(dialog).getByTestId('query-text-edit'), {
+    target: { value: 'tags=home' },
+  });
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
+
+  await waitFor(() => expect(onChange).toHaveBeenCalled());
+  const next = onChange.mock.calls.at(-1)?.[0] as {
+    doc: { content?: { attrs?: { query?: string } }[] };
+  };
+  // Первый блок — дословно прежний, второй — новый. Порядок ассерта важен: сравнение целым
+  // списком ловит и «переписались оба», и «переписался не тот».
+  expect(next.doc.content?.map((n) => n.attrs?.query)).toEqual([inner, 'tags=home']);
 });
 
 test('многострочный блок остаётся многострочным после правки соседнего абзаца', async () => {
