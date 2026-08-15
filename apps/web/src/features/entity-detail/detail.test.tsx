@@ -1,7 +1,7 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { onlineManager } from '@tanstack/react-query';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
@@ -11,7 +11,7 @@ import { Toaster } from '../../ui/Toast';
 import { queryBlocks } from '../browser/query';
 import { AspectCards } from './AspectCards';
 import { DetailScreen } from './DetailScreen';
-import { detailGetInput } from './useEntityDetail';
+import { detailGetInput, useEntityDetail } from './useEntityDetail';
 
 // Пробник читает ТУ ЖЕ entity.get-запись из кэша (общий ключ detailGetInput) и рендерит
 // body как plain-текст без локального стейта — в отличие от keyed-textarea он честно
@@ -1151,4 +1151,78 @@ test('клик по виджету query-блока редактор не отк
   // Виджет — живой список, а не текст записи: подменять его textarea по клику значит
   // ронять экран смарт-листа (у All Tasks весь body — один блок).
   expect(screen.queryByTestId('body-edit')).toBeNull();
+});
+
+// --- две живые мутации по одной записи (ревью Задачи 14, Н-2) ------------------------------
+
+test('409 переименования не гасится следом ушедшей архивацией', async () => {
+  // Обвязка `useEntityUpdate` — ОБЩАЯ: через тот же наблюдатель идут и правки с меткой
+  // (title/body), и правки без метки (чекбокс, архивация). Сверка «последняя ли это мутация»
+  // заведена ради брошенного по выдержке запроса автосохранения — а он уходит с ТОЙ ЖЕ
+  // меткой, что и его преемник, и потому его 409 действительно лишний. Здесь всё иначе:
+  // архивация 409 принести не может в принципе, и молчание о конфликте переименования
+  // означало бы, что человек о расхождении не узнал вовсе.
+  const gates: { fail: (e: unknown) => void; settle: (v: unknown) => void }[] = [];
+  const hold: { api: ReturnType<typeof useEntityDetail> | null } = { api: null };
+  function Probe() {
+    hold.api = useEntityDetail('e1');
+    return null;
+  }
+  renderWithProviders(<Probe />, (path) => {
+    if (path === 'entity.get') return { entity, relations: [], backlinks: [] };
+    if (path === 'entity.update')
+      return new Promise((settle, fail) => {
+        gates.push({ settle, fail });
+      });
+    return {};
+  });
+  await waitFor(() => expect(hold.api?.entity).toBeDefined());
+
+  await act(async () => {
+    hold.api?.saveTitle('новое имя'); // уходит с expectedUpdatedAt
+  });
+  await act(async () => {
+    hold.api?.setArchived(true); // уходит БЕЗ метки — 409 получить не может
+  });
+  expect(gates, 'премиса: обе мутации живы').toHaveLength(2);
+
+  // 409 переименования приезжает вторым.
+  await act(async () => {
+    gates[0]?.fail(trpcError('CONFLICT'));
+  });
+  expect(hold.api?.conflict).toBe(true);
+});
+
+test('409 не глохнет и когда обе правки ушли БЕЗ метки версии', async () => {
+  // Край того же правила: «преемник ушёл с той же меткой» — это про СОВПАВШУЮ метку, а не про
+  // одинаково отсутствующую. Две правки без метки не приносят один и тот же конфликт, они не
+  // приносят его вовсе; промолчи мы здесь — 409 не показал бы никто.
+  const gates: { fail: (e: unknown) => void; settle: (v: unknown) => void }[] = [];
+  const hold: { api: ReturnType<typeof useEntityDetail> | null } = { api: null };
+  function Probe() {
+    hold.api = useEntityDetail('e1');
+    return null;
+  }
+  renderWithProviders(<Probe />, (path) => {
+    if (path === 'entity.get') return { entity, relations: [], backlinks: [] };
+    if (path === 'entity.update')
+      return new Promise((settle, fail) => {
+        gates.push({ settle, fail });
+      });
+    return {};
+  });
+  await waitFor(() => expect(hold.api?.entity).toBeDefined());
+
+  await act(async () => {
+    hold.api?.toggleTask(true);
+  });
+  await act(async () => {
+    hold.api?.setArchived(true);
+  });
+  expect(gates, 'премиса: обе мутации живы и обе без метки').toHaveLength(2);
+
+  await act(async () => {
+    gates[0]?.fail(trpcError('CONFLICT'));
+  });
+  expect(hold.api?.conflict).toBe(true);
 });

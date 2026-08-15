@@ -3,6 +3,8 @@ import { act, screen } from '@testing-library/react';
 import { useEffect, useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { installCrashTrap, renderWithProviders, trpcError } from '../../test/harness';
+import { trpc } from '../../trpc';
+import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { SaveIndicator } from './SaveIndicator';
 import { type BodySave, type BodySaveEntity, useBodySave } from './useBodySave';
 
@@ -788,6 +790,50 @@ test('эхо редактора на монтировании не отменя�
   expect(raw(), 'успех досыла снял черновик — но снял его успех, а не эхо').toBeNull();
 });
 
+test('эхо редактора ПОСЛЕ отказавшего досыла не стирает чужой черновик (Н-1)', async () => {
+  // Порядок «эхо ПОСЛЕ досыла» — не экзотика, а НОРМА этого дизайна: досыл заведён нулевым
+  // таймером прямо в эффекте, а редактор приезжает отдельным чанком (ради этого весь
+  // `import type` и двухфазное монтирование), поэтому его первый onDocChange почти всегда
+  // позже. Сюжет целиком: человек офлайн, набрал, отправка не прошла, закрыл вкладку; открыл
+  // снова, всё ещё офлайн — досыл отказал, а через паузу эхо стирает набранное.
+  await leaveDraft();
+
+  const s = mount({ entity: ENTITY, respond: fail500 });
+  await tick();
+  expect(s.updates(), 'премиса: досыл ушёл').toHaveLength(1);
+  expect(stored().doc, 'премиса: отказ черновик не тронул').toEqual(ONE);
+  expect(screen.getByText('Не сохранено')).toBeInTheDocument();
+
+  s.api().onDocChange(withBlockIds(BASE));
+  await tick(SAVE_PAUSE);
+
+  expect(s.updates(), 'эхо — не правка, второй раз в сеть не ходим').toHaveLength(1);
+  expect(stored().doc, 'черновик прошлой сессии на месте').toEqual(ONE);
+  // И индикатор не говорит, что всё хорошо: неотправленное никуда не делось.
+  expect(screen.getByText('Не сохранено')).toBeInTheDocument();
+});
+
+test('эхо редактора не стирает ПРИМЕНЁННЫЙ черновик (Н-1)', async () => {
+  // «Оставить моё» — тоже не набор: документ пришёл с диска, человек его выбрал, а не написал.
+  // Считай мы его набранным, эхо редактора (а оно показывает ещё СТАРОЕ тело — сажать
+  // применённый текст в редактор будет Задача 15) стёрло бы с диска только что применённый
+  // абзац, не сумев его отправить.
+  await leaveDraft();
+
+  const s = mount({ entity: MOVED, respond: fail500 });
+  await tick();
+  expect(s.api().pendingDraft?.doc).toEqual(ONE);
+
+  await s.apply();
+  await tick();
+  expect(s.updates(), 'премиса: попытка была').toHaveLength(1);
+  expect(stored().doc, 'премиса: отказ черновик не тронул').toEqual(ONE);
+
+  s.api().onDocChange(withBlockIds(MOVED.bodyDoc as BodyDoc));
+  await tick(SAVE_PAUSE);
+  expect(stored().doc).toEqual(ONE);
+});
+
 test('эхо редактора не стирает ПРЕДЛОЖЕННЫЙ черновик (И-6)', async () => {
   // Тот же сюжет при разошедшихся метках: досыла нет, черновик ждёт ответа человека — и эхо
   // редактора не вправе снять его с диска, иначе «оставить моё» станет нечего оставлять.
@@ -952,6 +998,49 @@ test('брошенный по выдержке запрос, осевший по
   expect(s.updates()).toHaveLength(3);
   await server.answer(2, trpcError('CONFLICT'), 'fail');
   expect(s.api().conflict).toBe(true);
+});
+
+test('брошенный по выдержке запрос, отказав, не откатывает патч своего преемника (И-1)', async () => {
+  // Вторая половина той же беды: откат живёт в общей обвязке и берёт снимок, сделанный ДО
+  // брошенного запроса. Верни он его — из кэша исчез бы оптимистичный документ досыла, и
+  // повторно смонтированный редактор поднялся бы со СТАРЫМ телом, а следующая правка уехала
+  // бы поверх более нового.
+  const server = gatedServer();
+  type Cached = { entity: { bodyDoc?: unknown } } | undefined;
+  const read: { get: () => Cached } = { get: () => undefined };
+  const hold: { api: BodySave | null } = { api: null };
+  function Tree() {
+    trpc.entity.get.useQuery(detailGetInput('e1'));
+    const utils = trpc.useUtils();
+    read.get = () => utils.entity.get.getData(detailGetInput('e1')) as Cached;
+    hold.api = useBodySave('e1', ENTITY);
+    return null;
+  }
+  // Первое чтение отвечает, дальнейшие ЗАВИСАЮТ: иначе перечитывание после инвалидации
+  // принесло бы верные данные из мока и залечило бы промах ДО ассерта (в проде лечение то же
+  // самое, но оно стоит круга сети, а в офлайне не случится вовсе).
+  let reads = 0;
+  renderWithProviders(<Tree />, (path) => {
+    if (path === 'entity.get') {
+      reads += 1;
+      if (reads > 1) return new Promise(() => {});
+      return { entity: { id: 'e1', body: 'тело', bodyDoc: BASE, updatedAt: ENTITY.updatedAt } };
+    }
+    if (path === 'entity.update') return server.respond(null);
+    throw new Error(`сохранение тела не ходит на ${path}`);
+  });
+  await tick();
+  expect(read.get()?.entity.bodyDoc, 'премиса: в кэше документ сервера').toEqual(BASE);
+
+  (hold.api as BodySave).onDocChange(ONE);
+  await tick(SAVE_PAUSE); // запрос №0 завис
+  (hold.api as BodySave).onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  await tick(GIVE_UP); // выдержка истекла, досыл ушёл запросом №1
+  expect(read.get()?.entity.bodyDoc, 'премиса: в кэше документ досыла').toEqual(TWO);
+
+  await server.answer(0, trpcError('INTERNAL_SERVER_ERROR'), 'fail');
+  expect(read.get()?.entity.bodyDoc).toEqual(TWO);
 });
 
 test('поздний УСПЕХ брошенного запроса не гасит конфликт его преемника (И-1)', async () => {

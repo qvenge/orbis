@@ -169,9 +169,22 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    */
   const draftTimerRef = useRef<number | null>(null);
   /**
-   * Лежит ли на диске ЧЕРНОВИК ЭТОЙ СЕССИИ. Отличает «человек набрал и не отправил» от
-   * «черновик прошлой сессии, которого человек ещё не видел»: стирать по эху редактора можно
-   * только первый.
+   * Откуда взялся отложенный документ: из редактора (человек печатал) или с диска (досыл
+   * черновика, «оставить моё»). Признак живёт РЯДОМ с `pendingRef` и ставится везде, где тот
+   * заполняется, — иначе происхождение пришлось бы угадывать по месту вызова `save`, а к нему
+   * ведут пять путей.
+   */
+  const pendingFromEditorRef = useRef(false);
+  /**
+   * Написан ли лежащий на диске черновик из НАБРАННОГО ЗДЕСЬ. Отличает «человек набрал и не
+   * отправил» от «черновик прошлой сессии, которого человек ещё не видел»: стирать по эху
+   * редактора можно только первый.
+   *
+   * Ставится по происхождению отправляемого документа, а не безусловно. Безусловно — значит
+   * что и досыл черновика поднимал бы признак: эхо редактора видело бы его поднятым и стирало
+   * бы текст прошлой сессии, который никто не отправил и никому не показал. А порядок «эхо
+   * после досыла» здесь НОРМАЛЕН: досыл заведён нулевым таймером в эффекте, редактор приезжает
+   * отдельным чанком (ревью раунда 2, Н-1).
    */
   const ownDraftRef = useRef(false);
 
@@ -231,10 +244,13 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // Выдержка — про запрос ПРЕЖНЕЙ записи, и её срабатывание зажгло бы «Не сохранено» на
     // соседней, которой никто не касался.
     clearGiveUp();
-    // Досыл черновика прежней записи — тем более: он уехал бы её телом под новым id.
+    // Досыл черновика прежней записи — тем более: он замкнул на себе СТАРЫЙ `entityId`, а
+    // метку читает из рефов, то есть уехал бы под id ПЕРВОЙ записи с меткой ВТОРОЙ — с
+    // гарантированным 409, и заодно переписал бы черновик первой чужой меткой.
     clearDraftTimer();
     ownDraftRef.current = false;
     pendingRef.current = null;
+    pendingFromEditorRef.current = false;
     confirmedRef.current = null;
     stoppedRef.current = false;
     chainedRef.current = false;
@@ -266,11 +282,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       sameDoc(doc.doc, base.bodyDoc.doc as JSONContent)
     ) {
       pendingRef.current = null;
-      // И отказ гаснет: на экране ровно то, что в базе. Иначе «Не сохранено» висело бы вечно
-      // у человека, который после отказа просто вернул текст к прежнему, — сохранять нечего,
-      // а успешной мутации, которая одна и гасила плашку, уже неоткуда взяться.
-      setFailed(false);
-      // Черновик снимается — но ТОЛЬКО СВОЙ, написанный в этой сессии. Условие не
+      // Черновик снимается — но ТОЛЬКО СВОЙ, написанный из набранного здесь. Условие не
       // перестраховка: редактор при монтировании гарантированно присылает тело базы с
       // проставленными блочными id, то есть попадает ровно сюда, — и без условия это эхо
       // стирало бы с диска чужой неотправленный черновик, ещё не показанный человеку
@@ -280,6 +292,13 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
         clearDraft(entityId);
         ownDraftRef.current = false;
       }
+      // Отказ гаснет, только если неотправленного не осталось ВООБЩЕ. На экране-то ровно то,
+      // что в базе, — но переживи диск чужой черновик (досыл отказал, следом пришло эхо),
+      // молчание индикатора означало бы «всё сохранено» над текстом, который не сохранён и
+      // не отправлен (ревью раунда 2, Н-1). Гасить его при пустом диске обязательно: иначе
+      // «Не сохранено» висело бы вечно у человека, который после отказа просто вернул текст
+      // к прежнему, — сохранять нечего, а успешной мутации уже неоткуда взяться.
+      if (readDraft(entityId) === null) setFailed(false);
       return;
     }
 
@@ -303,7 +322,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // и уезжало бы фантомной правкой в базу. Цена честная: набранное в последние две секунды
     // перед внезапным закрытием вкладки черновиком не прикрыто — его прикрывает flush() экрана.
     saveDraft(entityId, doc, expectedUpdatedAt, new Date().toISOString());
-    ownDraftRef.current = true;
+    // По ПРОИСХОЖДЕНИЮ документа, а не безусловно: досыл кладёт на диск ровно то, что оттуда и
+    // прочитал, и своим этот черновик не делает (см. `ownDraftRef`).
+    ownDraftRef.current = pendingFromEditorRef.current;
 
     if (stoppedRef.current) return;
     /**
@@ -422,6 +443,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   const onDocChange = useCallback(
     (doc: BodyDoc) => {
       pendingRef.current = doc;
+      pendingFromEditorRef.current = true;
       clearTimer();
       timerRef.current = window.setTimeout(save, SAVE_DEBOUNCE_MS);
     },
@@ -481,6 +503,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     draftTimerRef.current = window.setTimeout(() => {
       draftTimerRef.current = null;
       pendingRef.current = draft.doc;
+      pendingFromEditorRef.current = false; // документ с диска, а не из-под рук
       save();
     }, 0);
     // Уборка обязательна: эффект снимает за собой то, что завёл сам. Под StrictMode она же и
@@ -494,6 +517,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     if (draft === null) return;
     setPendingDraft(null);
     pendingRef.current = draft.doc;
+    pendingFromEditorRef.current = false; // документ с диска: человек выбрал его, а не набрал
     // Терминальная остановка снимается: она про НАБОР (иначе каждое нажатие уходило бы в сеть
     // обречённым запросом), а здесь человек явным жестом распоряжается своим текстом — и
     // чужая версия схемы, из-за которой отказ и случился, лечится обновлением приложения.
