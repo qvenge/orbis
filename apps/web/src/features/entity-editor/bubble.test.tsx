@@ -100,6 +100,27 @@ function posOfType(editor: Editor, name: string): number {
   return pos;
 }
 
+/** Позиция N-го (с нуля) узла с таким именем. */
+function nthPosOfType(editor: Editor, name: string, n: number): number {
+  const found: number[] = [];
+  editor.state.doc.descendants((node, at) => {
+    if (node.type.name === name) found.push(at);
+    return true;
+  });
+  expect(found.length, `узлов «${name}» меньше ${n + 1}`).toBeGreaterThan(n);
+  return found[n] as number;
+}
+
+/** Сколько детей у ПЕРВОГО узла с таким именем. */
+function childCountAt(editor: Editor, name: string): number {
+  let n = -1;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === name && n === -1) n = node.childCount;
+    return true;
+  });
+  return n;
+}
+
 /** Сколько в документе узлов с таким именем — на любой глубине. */
 function countNodes(editor: Editor, name: string): number {
   let n = 0;
@@ -410,7 +431,10 @@ test('выделение через ВСЕ пункты списка не ост
 
 test('выделение через все пункты ВЛОЖЕННОГО списка тоже не оставляет каркаса', async () => {
   // Тот же класс на уровень глубже: опустеть должен и вложенный список, и ничего сверх него.
-  const { editor } = await mountEditor('- один\n  - раз\n  - два\n- два');
+  // Тексты в фикстуре РАЗНЫЕ намеренно: с двумя «два» тест держался бы на том, что поиск
+  // позиции вернёт вложенное вхождение по порядку обхода, и перестановка фикстуры молча
+  // переадресовала бы его на внешний пункт (Minor 2 раунда правок 4).
+  const { editor } = await mountEditor('- один\n  - раз\n  - два\n- четыре');
   editor.commands.focus();
   const a = posOfText(editor, 'раз');
   const b = posOfText(editor, 'два');
@@ -419,7 +443,109 @@ test('выделение через все пункты ВЛОЖЕННОГО с�
 
   await userEvent.click(screen.getByLabelText('Удалить блок'));
   expect(countNodes(editor, 'bulletList')).toBe(1); // остался только внешний
-  expect(listTexts(editor, 0)).toEqual(['один', 'два']);
+  expect(listTexts(editor, 0)).toEqual(['один', 'четыре']);
+});
+
+test('единственный пункт + выделение ЗА список не оставляет пустого буллета', async () => {
+  // И7 раунда правок 4 — регрессия против 3ac277e. `tr.deleteRange` прибирает родителя только
+  // когда диапазон покрыт ЦЕЛИКОМ внутри одного контейнера: `coveredDepths` рвётся на глубине
+  // 0, потому что после правого конца в документе есть ещё блок, и примитив проваливается в
+  // обычный `tr.delete`. Раунд 2 эту форму проходил (ручной подъём считал левый конец сам), а
+  // раунд 3 — сломал: класс «пустой каркас» закрылся наполовину ВТОРОЙ раз, только теперь не
+  // видели не пару концов, а выход за контейнер.
+  const { editor } = await mountEditor('- один\n\nхвост\n\nещё');
+  expect(types(editor)).toEqual(['bulletList', 'paragraph', 'paragraph']); // страж вакуумности
+  editor.commands.focus();
+  const a = posOfText(editor, 'один');
+  const b = posOfText(editor, 'хвост');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'listItem')).toBe(0);
+  expect(texts(editor)).toEqual(['ещё']);
+});
+
+test('список из двух + выделение ЗА список тоже уходит целиком', async () => {
+  // Та же дыра при нескольких пунктах. Регрессией она не была (раунд 2 ломался так же), но
+  // класс закрывается целиком или никак.
+  const { editor } = await mountEditor('- один\n- два\n\nхвост\n\nещё');
+  editor.commands.focus();
+  const a = posOfText(editor, 'один');
+  const b = posOfText(editor, 'хвост');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'listItem')).toBe(0);
+  expect(texts(editor)).toEqual(['ещё']);
+});
+
+test('единственный пункт в ЦИТАТЕ: уходит и список, и опустевшая цитата', async () => {
+  // Тест на то, ради чего в `deleteBlock` стоит именно `tr.deleteRange`, а не `tr.delete`.
+  // Наше расширение концов ходит ТОЛЬКО по спискам и до цитаты не дотягивается — прибрать её
+  // обязан примитив. Замерено на одном и том же диапазоне:
+  //   tr.delete      → blockquote paragraph, paragraph«хвост»   ← пустая цитата на экране
+  //   tr.deleteRange → paragraph«хвост»
+  // Без этого теста подмена примитива на команду Tiptap не роняла НИЧЕГО: расширение концов
+  // закрывало все списочные формы само, и `tr.deleteRange` выглядел мёртвым кодом.
+  const { editor } = await mountEditor('хвост');
+  editor.commands.focus('start');
+  editor.commands.insertContentAt(0, '<blockquote><ul><li><p>пункт</p></li></ul></blockquote>');
+  expect(types(editor)).toEqual(['blockquote', 'paragraph']); // страж вакуумности
+  const at = posOfText(editor, 'пункт');
+  editor.commands.setTextSelection({ from: at + 1, to: at + 4 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'blockquote')).toBe(0);
+  expect(texts(editor)).toEqual(['хвост']);
+});
+
+test('выделение из списка в ячейке в СОСЕДНЮЮ ячейку не сносит таблицу', async () => {
+  // Тест на страж группы `list` в расширении концов (вариант B). Без стража расширение идёт
+  // дальше списка — через ячейку и строку к самой таблице, — и таблица исчезает целиком:
+  //   со стражем  → таблиц=1
+  //   без стража  → таблиц=0
+  // Форма выбрана не наугад: это единственная из проверенных, где страж вообще что-то меняет.
+  // На таблице 2×1 (где ячейка — единственный ребёнок строки) он не срабатывает, потому что
+  // правый конец диапазона до конца ячейки не дотягивается.
+  const { editor } = await mountEditor('до');
+  editor.commands.focus('end');
+  expect(editor.commands.insertTable({ rows: 2, cols: 2, withHeaderRow: false })).toBe(true);
+  const first = posOfType(editor, 'tableCell');
+  editor.commands.insertContentAt(first + 2, '<ul><li><p>пункт</p></li></ul>');
+  const second = nthPosOfType(editor, 'tableCell', 1);
+  editor.commands.insertContentAt(second + 2, 'сосед');
+  const a = posOfText(editor, 'пункт');
+  const b = posOfText(editor, 'сосед');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  // Таблица ПЕРЕЖИЛА жест — это и есть проверяемое свойство. Что она при этом ужалась
+  // (fixTables пересобирает прямоугольник после диапазона поперёк ячеек) — известное
+  // поведение из леджера, и этот тест его не благословляет, а лишь не спорит с ним.
+  expect(countNodes(editor, 'table')).toBe(1);
+});
+
+test('выделение из абзаца ЗА список: список цел, если покрыт не весь', async () => {
+  // Положительный контроль к расширению концов: оно обязано срабатывать ТОЛЬКО когда
+  // контейнер покрыт целиком. Здесь выделение входит в список со второго пункта — первый
+  // остаётся, и никакого расширения быть не должно.
+  const { editor } = await mountEditor('- один\n- два\n- три\n\nхвост');
+  editor.commands.focus();
+  const a = posOfText(editor, 'два');
+  const b = posOfText(editor, 'хвост');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(1);
+  expect(listTexts(editor, 0)).toEqual(['один']);
 });
 
 test('список в ЯЧЕЙКЕ: уходит список, а ячейка и строка целы', async () => {
@@ -435,6 +561,12 @@ test('список в ЯЧЕЙКЕ: уходит список, а ячейка �
   const cell = posOfType(editor, 'tableCell');
   editor.commands.insertContentAt(cell + 2, '<ul><li><p>пункт</p></li></ul>');
   expect(countNodes(editor, 'listItem')).toBe(1); // страж вакуумности
+  // ПРЕДПОСЫЛКА, а не украшение (Minor 3 раунда правок 4): весь смысл теста в том, что список
+  // — ЕДИНСТВЕННЫЙ ребёнок ячейки, и только тогда подъём имел шанс дойти до самой ячейки.
+  // Держится она на чужом коде: `insertContentAt` из @tiptap/core расширяет диапазон вставки,
+  // когда блочное содержимое кладут в пустой текстблок. Перестанет — оба табличных теста
+  // останутся зелёными по ложной причине, а мутация возврата подъёма не уронит ничего.
+  expect(childCountAt(editor, 'tableCell')).toBe(1);
   const at = posOfText(editor, 'пункт');
   editor.commands.setTextSelection({ from: at + 1, to: at + 4 });
   await toolbar();
@@ -455,6 +587,7 @@ test('список в ячейке таблицы В ОДИН СТОЛБЕЦ: с
   expect(editor.commands.insertTable({ rows: 2, cols: 1, withHeaderRow: false })).toBe(true);
   const cell = posOfType(editor, 'tableCell');
   editor.commands.insertContentAt(cell + 2, '<ul><li><p>пункт</p></li></ul>');
+  expect(childCountAt(editor, 'tableCell')).toBe(1); // та же предпосылка, что и выше
   const at = posOfText(editor, 'пункт');
   editor.commands.setTextSelection({ from: at + 1, to: at + 4 });
   await toolbar();
@@ -468,7 +601,9 @@ test('список в ячейке таблицы В ОДИН СТОЛБЕЦ: с
 test('«Удалить блок» из ЯЧЕЙКИ ТАБЛИЦЫ убирает всю таблицу — решение, а не побочность', async () => {
   // Решение раунда правок 2 (пункт 5): поведение оставлено, но обязано быть НАЗВАННЫМ.
   // `table` объявляет группу `block`, а `tableRow`/`tableCell` — не объявляют ничего
-  // (замерено), поэтому подъём проходит их насквозь и останавливается на глубине 1.
+  // (замерено), поэтому ПОИСК блока проходит их насквозь и останавливается на глубине 1.
+  // Слово важное: ручного подъёма в правиле больше нет вовсе (раунд правок 3), и назвать так
+  // поиск значит послать читателя искать несуществующий код.
   // Удалять ячейку бессмысленно — таблица обязана оставаться прямоугольной, а удаление
   // строки — другая семантика, которой в задаче нет.
   const { editor } = await mountEditor('до\n\nпосле');
