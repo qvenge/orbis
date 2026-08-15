@@ -81,7 +81,19 @@ export function useEntityUpdate(entityId: string) {
    * устаревшей мутацию первой, и та лишилась бы отката — ровно того, ради чего он и написан.
    */
   const seqRef = useRef(0);
-  const latestRef = useRef<Record<string, { seq: number; expectedUpdatedAt?: string }>>({});
+  const latestRef = useRef<
+    Record<string, { seq: number; expectedUpdatedAt?: string; checksVersion: boolean }>
+  >({});
+
+  /**
+   * Сверяет ли СЕРВЕР версию у этой правки. Не «послан ли `expectedUpdatedAt`»: гейт §5.2 стоит
+   * под условием `body !== undefined || bodyDoc !== undefined` (executor.ts), и правка без тела
+   * проходит по LWW — метку сервер у неё просто игнорирует. Значит `saveTitle` шлёт
+   * `expectedUpdatedAt`, но 409 не получит НИКОГДА, а `toggleTask`/`setArchived` не шлют его
+   * вовсе (ревью Задачи 14, Н-3).
+   */
+  const checksVersion = (vars: UpdateInput) =>
+    vars.body !== undefined || vars.bodyDoc !== undefined;
 
   /**
    * Приехал ли ответ мутации, которую УЖЕ сменила следующая по той же записи.
@@ -99,17 +111,18 @@ export function useEntityUpdate(entityId: string) {
     latestRef.current[id]?.seq !== ctx.seq;
 
   /**
-   * А молчать о 409 можно только тогда, когда преемник ушёл с ТОЙ ЖЕ меткой версии: тогда он
-   * заведомо принесёт тот же самый конфликт, и второй плашки не нужно. Сюжет, на котором это
-   * важно: человек переименовал запись и тут же отметил задачу готовой. Архивация и чекбокс
-   * уходят БЕЗ метки и 409 получить не могут в принципе — промолчи мы здесь, человек не узнал
-   * бы о расхождении вовсе (ревью Задачи 14, Н-2).
+   * Принесёт ли преемник ТОТ ЖЕ конфликт — единственное основание промолчать о 409.
+   *
+   * Условий два, и оба необходимы. Преемник должен сам проверяться сервером по версии (иначе
+   * он 409 не получит ни при каких обстоятельствах) И уйти с той же меткой (иначе конфликт у
+   * него будет свой). Одной совпавшей метки НЕ ДОСТАТОЧНО, и это не теория: правка тела и
+   * следом переименование уходят с одной и той же меткой — кэшный `updatedAt` за время полёта
+   * не двигается, `applyPatch` его не трогает, а перечитывание идёт только в `onSettled`.
+   * Промолчи мы по одной метке — 409 правки тела не показал бы никто (ревью Задачи 14, Н-3).
    */
-  const sameExpectation = (id: string, ctx?: { expectedUpdatedAt?: string }) => {
+  const bringsSameConflict = (id: string, ctx?: { expectedUpdatedAt?: string }) => {
     const latest = latestRef.current[id];
-    return (
-      latest?.expectedUpdatedAt !== undefined && latest.expectedUpdatedAt === ctx?.expectedUpdatedAt
-    );
+    return latest?.checksVersion === true && latest.expectedUpdatedAt === ctx?.expectedUpdatedAt;
   };
 
   const mutation = trpc.entity.update.useMutation({
@@ -124,6 +137,7 @@ export function useEntityUpdate(entityId: string) {
       latestRef.current[vars.id] = {
         seq: seqRef.current,
         expectedUpdatedAt: vars.expectedUpdatedAt,
+        checksVersion: checksVersion(vars),
       };
       // Ключ едет в контекст ВМЕСТЕ со снимком. Откат обязан лечь туда же, откуда снимок
       // взят, а `input` — замыкание ПОСЛЕДНЕГО рендера: смени экран сущность, пока запрос в
@@ -142,19 +156,21 @@ export function useEntityUpdate(entityId: string) {
       // (ревью Задачи 13, И-4). `entityId` здесь — из ПОСЛЕДНЕГО рендера (react-query
       // проталкивает свежие опции в незавершённую мутацию), `vars.id` — из отправки.
       if (vars.id !== entityId) return;
-      // Молчим только о конфликте, который преемник принесёт и сам (см. sameExpectation).
-      if (old && sameExpectation(vars.id, ctx)) return;
+      // Молчим только о конфликте, который преемник принесёт и сам (см. bringsSameConflict).
+      if (old && bringsSameConflict(vars.id, ctx)) return;
       if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') setConflict(true);
     },
     onSuccess: (_data, vars, ctx) => {
-      // Здесь сверка ТОЛЬКО на «сменила ли эту мутацию следующая», без сравнения меток — и
-      // это не забытая симметрия с onError, а разные вопросы. Там решается, показывать ли
-      // конфликт, и промолчать можно лишь о том, который принесёт и преемник, то есть при
-      // совпавших метках. Здесь решается, ГАСИТЬ ли уже показанный, а поздний успех устаревшей
-      // мутации не говорит ничего о расхождении, которое держит плашку сейчас, — с какой бы
-      // меткой ни ушёл преемник. Проверено мутацией (M55): добавь сюда сверку меток — и успех
-      // брошенной правки гасил бы чужой живой конфликт.
+      // Поздний успех устаревшей мутации не говорит ничего о расхождении, которое держит
+      // плашку сейчас. Сверки меток здесь нет, и это не забытая симметрия с onError, а разные
+      // вопросы: там решается, ПОКАЗЫВАТЬ ли конфликт (промолчать можно лишь о том, который
+      // принесёт и преемник), здесь — ГАСИТЬ ли уже показанный. Проверено мутацией M55.
       if (superseded(vars.id, ctx)) return;
+      // И тот же корень, что у Н-3: гасит плашку только правка, версию которой сервер сверял.
+      // Успех чекбокса или архивации о конфликте тела не знает ничего — а обвязка общая, и
+      // без этого условия чекбокс, нажатый следом за отказавшей правкой тела, снимал бы с
+      // экрана единственное сообщение о расхождении.
+      if (!checksVersion(vars)) return;
       if (vars.id === entityId) setConflict(false);
     },
     // Detail — единственный путь закрытия/переноса/архивации сущности из списков (Agenda,

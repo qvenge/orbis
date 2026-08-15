@@ -1153,76 +1153,93 @@ test('клик по виджету query-блока редактор не отк
   expect(screen.queryByTestId('body-edit')).toBeNull();
 });
 
-// --- две живые мутации по одной записи (ревью Задачи 14, Н-2) ------------------------------
+// --- две живые мутации по одной записи (ревью Задачи 14, Н-2 и Н-3) -------------------------
 
-test('409 переименования не гасится следом ушедшей архивацией', async () => {
-  // Обвязка `useEntityUpdate` — ОБЩАЯ: через тот же наблюдатель идут и правки с меткой
-  // (title/body), и правки без метки (чекбокс, архивация). Сверка «последняя ли это мутация»
-  // заведена ради брошенного по выдержке запроса автосохранения — а он уходит с ТОЙ ЖЕ
-  // меткой, что и его преемник, и потому его 409 действительно лишний. Здесь всё иначе:
-  // архивация 409 принести не может в принципе, и молчание о конфликте переименования
-  // означало бы, что человек о расхождении не узнал вовсе.
+/**
+ * Стенд из одной сущности и управляемых ответов. Обе проверки ниже — про ОБЩУЮ обвязку
+ * `useEntityUpdate`: через один её экземпляр идут и правка тела, и заголовок, и чекбокс, и
+ * архивация, а человек волен нажать одно следом за другим.
+ *
+ * Пары подобраны ДОСТИЖИМЫЕ. Сервер сверяет версию только у правок тела (executor.ts, гейт под
+ * `body !== undefined || bodyDoc !== undefined`), поэтому 409 может принести ТОЛЬКО правка
+ * тела: предшественник здесь всегда `saveBody`, а преемники — те, что версию не проверяют.
+ * Пара «переименование → архивация» была бы недостижимой: 409 у неё не взяться неоткуда.
+ */
+function twoLiveMutations() {
   const gates: { fail: (e: unknown) => void; settle: (v: unknown) => void }[] = [];
+  const sent: unknown[] = [];
   const hold: { api: ReturnType<typeof useEntityDetail> | null } = { api: null };
   function Probe() {
     hold.api = useEntityDetail('e1');
     return null;
   }
-  renderWithProviders(<Probe />, (path) => {
+  renderWithProviders(<Probe />, (path, input) => {
     if (path === 'entity.get') return { entity, relations: [], backlinks: [] };
-    if (path === 'entity.update')
+    if (path === 'entity.update') {
+      sent.push(input);
       return new Promise((settle, fail) => {
         gates.push({ settle, fail });
       });
+    }
     return {};
   });
-  await waitFor(() => expect(hold.api?.entity).toBeDefined());
+  return {
+    gates,
+    sent: (i: number) => sent[i] as { expectedUpdatedAt?: string },
+    api: () => hold.api as ReturnType<typeof useEntityDetail>,
+  };
+}
+
+test('409 правки тела не глохнет из-за чекбокса, ушедшего следом', async () => {
+  // «Преемник принесёт тот же конфликт» верно ровно для правок тела — только их сервер и
+  // сверяет по версии. Чекбокс 409 не получит никогда, и молчание о конфликте означало бы,
+  // что человек не узнал о расхождении вовсе.
+  const s = twoLiveMutations();
+  await waitFor(() => expect(s.api().entity).toBeDefined());
 
   await act(async () => {
-    hold.api?.saveTitle('новое имя'); // уходит с expectedUpdatedAt
+    s.api().saveBody('правка тела'); // версию проверяет
   });
   await act(async () => {
-    hold.api?.setArchived(true); // уходит БЕЗ метки — 409 получить не может
+    s.api().toggleTask(true); // версию не проверяет
   });
-  expect(gates, 'премиса: обе мутации живы').toHaveLength(2);
+  expect(s.gates, 'премиса: обе мутации живы').toHaveLength(2);
 
-  // 409 переименования приезжает вторым.
   await act(async () => {
-    gates[0]?.fail(trpcError('CONFLICT'));
+    s.gates[0]?.fail(trpcError('CONFLICT'));
   });
-  expect(hold.api?.conflict).toBe(true);
+  expect(s.api().conflict).toBe(true);
+
+  // И успех чекбокса плашку не гасит: он ничего не знает о расхождении, которое её держит.
+  await act(async () => {
+    s.gates[1]?.settle({ entity });
+  });
+  expect(s.api().conflict).toBe(true);
 });
 
-test('409 не глохнет и когда обе правки ушли БЕЗ метки версии', async () => {
-  // Край того же правила: «преемник ушёл с той же меткой» — это про СОВПАВШУЮ метку, а не про
-  // одинаково отсутствующую. Две правки без метки не приносят один и тот же конфликт, они не
-  // приносят его вовсе; промолчи мы здесь — 409 не показал бы никто.
-  const gates: { fail: (e: unknown) => void; settle: (v: unknown) => void }[] = [];
-  const hold: { api: ReturnType<typeof useEntityDetail> | null } = { api: null };
-  function Probe() {
-    hold.api = useEntityDetail('e1');
-    return null;
-  }
-  renderWithProviders(<Probe />, (path) => {
-    if (path === 'entity.get') return { entity, relations: [], backlinks: [] };
-    if (path === 'entity.update')
-      return new Promise((settle, fail) => {
-        gates.push({ settle, fail });
-      });
-    return {};
-  });
-  await waitFor(() => expect(hold.api?.entity).toBeDefined());
+test('409 правки тела не глохнет из-за переименования с ТОЙ ЖЕ меткой (Н-3)', async () => {
+  // Самый коварный случай: `saveTitle` метку ШЛЁТ, и она совпадает с меткой правки тела —
+  // кэшный updatedAt за время полёта не двигается (applyPatch его не трогает, перечитывание
+  // идёт только в onSettled). Совпадение меток при этом не значит ничего: у правки без тела
+  // сервер версию не сверяет, и 409 она не принесёт.
+  const s = twoLiveMutations();
+  await waitFor(() => expect(s.api().entity).toBeDefined());
 
   await act(async () => {
-    hold.api?.toggleTask(true);
+    s.api().saveBody('правка тела');
   });
   await act(async () => {
-    hold.api?.setArchived(true);
+    s.api().saveTitle('новое имя');
   });
-  expect(gates, 'премиса: обе мутации живы и обе без метки').toHaveLength(2);
+  expect(s.gates).toHaveLength(2);
+
+  // Страж вакуумности: метки у обеих правок ДЕЙСТВИТЕЛЬНО одинаковы — иначе тест проверял бы
+  // расхождение меток, а не признак «сверяет ли сервер версию у этой правки».
+  expect(s.sent(0)?.expectedUpdatedAt).toBe(entity.updatedAt);
+  expect(s.sent(1)?.expectedUpdatedAt).toBe(entity.updatedAt);
 
   await act(async () => {
-    gates[0]?.fail(trpcError('CONFLICT'));
+    s.gates[0]?.fail(trpcError('CONFLICT'));
   });
-  expect(hold.api?.conflict).toBe(true);
+  expect(s.api().conflict).toBe(true);
 });
