@@ -44,11 +44,18 @@ const TERMINAL_CODE = 'BAD_REQUEST';
  * бодрости индикатора нечестно. Тридцать секунд заведомо больше любого круга сохранения и
  * заведомо меньше «никогда».
  *
- * Цена выхода: если зависший запрос всё-таки доедет, поверх него уже мог уйти новый — и
- * @tanstack/query снимет с первого наблюдателя, а вместе с ним и поштучные колбэки. Терять там
- * нечего ровно потому, что запрос и так признан не оседающим: колбэки, которых мы не дождались,
- * ничего не стоят. Худшее последствие — 409 на следующем сохранении (сервер принял зависший
- * запрос, а подтверждённый updatedAt до нас не доехал), и это видимый, объяснимый исход.
+ * Цена выхода честная, и она БОЛЬШЕ, чем «пропадут поштучные колбэки». Пропадут действительно
+ * они: досыл зовёт `mutate` на том же наблюдателе, а @tanstack/query снимает наблюдателя с
+ * прежней мутации. Но колбэки уровня МУТАЦИИ (useEntityDetail: откат, флаг конфликта,
+ * инвалидация) исполняются ВСЕГДА — даже когда наблюдателя уже отцепили. То есть впервые по
+ * одной записи живут две мутации разом, и брошенная, осев позже, откатила бы кэш к снимку,
+ * взятому ДО себя (выбросив оптимистичный патч досыла), а её опоздавший 409 зажёг бы «Изменено
+ * в другом месте» на записи, которая сохранилась. Лечится это не здесь, а в общей обвязке:
+ * `useEntityUpdate` сверяет, последняя ли эта мутация по своей записи (ревью раунда 1, И-1).
+ *
+ * Остаётся одно последствие, которое не лечится: сервер мог ПРИНЯТЬ брошенный запрос, а
+ * подтверждённый updatedAt до нас не доехал — тогда следующее сохранение получит 409. Исход
+ * видимый и объяснимый, с готовым сообщением для человека.
  */
 const SAVE_GIVE_UP_MS = 30_000;
 
@@ -115,10 +122,12 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * каждым ответом на предложение.
    */
   const [pendingDraft, setPendingDraftState] = useState<BodySave['pendingDraft']>(null);
-  const pendingDraftRef = useRef<BodySave['pendingDraft']>(null);
-  const setPendingDraft = useCallback((draft: BodySave['pendingDraft']) => {
+  // В рефе — ПОЛНАЯ запись черновика, а наружу уходит суженная: `discardPendingDraft` обязан
+  // отличить показанный человеку черновик от того, что лежит на диске сейчас (см. там же).
+  const pendingDraftRef = useRef<Draft | null>(null);
+  const setPendingDraft = useCallback((draft: Draft | null) => {
     pendingDraftRef.current = draft;
-    setPendingDraftState(draft);
+    setPendingDraftState(draft === null ? null : offered(draft));
   }, []);
 
   // Сущность читается ЧЕРЕЗ ref: сохранение случается в отложенном колбэке, и замыкание того
@@ -152,6 +161,19 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   const genRef = useRef(0);
   /** Таймер выдержки текущего запроса (см. SAVE_GIVE_UP_MS). */
   const giveUpRef = useRef<number | null>(null);
+  /**
+   * Собственный таймер досыла черновика — ОТДЕЛЬНЫЙ от таймера паузы намеренно. Общий слот и
+   * общий таймер значили бы, что первое же эхо редактора (тело базы с блочными id, которое
+   * приходит на монтировании всегда) снимает досыл и затирает отложенный документ, а кто
+   * успеет первым — решает планировщик (ревью раунда 1, И-6).
+   */
+  const draftTimerRef = useRef<number | null>(null);
+  /**
+   * Лежит ли на диске ЧЕРНОВИК ЭТОЙ СЕССИИ. Отличает «человек набрал и не отправил» от
+   * «черновик прошлой сессии, которого человек ещё не видел»: стирать по эху редактора можно
+   * только первый.
+   */
+  const ownDraftRef = useRef(false);
 
   // useCallback без зависимостей, а не голая функция: иначе она пересоздаётся каждым рендером
   // и попадает в списки зависимостей ниже — вместе со всем, что от них зависит.
@@ -166,6 +188,13 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     if (giveUpRef.current !== null) {
       clearTimeout(giveUpRef.current);
       giveUpRef.current = null;
+    }
+  }, []);
+
+  const clearDraftTimer = useCallback(() => {
+    if (draftTimerRef.current !== null) {
+      clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = null;
     }
   }, []);
 
@@ -202,6 +231,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // Выдержка — про запрос ПРЕЖНЕЙ записи, и её срабатывание зажгло бы «Не сохранено» на
     // соседней, которой никто не касался.
     clearGiveUp();
+    // Досыл черновика прежней записи — тем более: он уехал бы её телом под новым id.
+    clearDraftTimer();
+    ownDraftRef.current = false;
     pendingRef.current = null;
     confirmedRef.current = null;
     stoppedRef.current = false;
@@ -222,6 +254,57 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     clearTimer();
     const doc = pendingRef.current;
     if (doc === null) return;
+
+    const base = entityRef.current;
+    // Правка ли это вообще. Сравнение по СМЫСЛУ: UniqueID кладёт attrs.id во все блоки, и по
+    // строковому равенству документ «менялся» бы всегда (см. strip-ids.ts). Проверка стоит
+    // ПЕРВОЙ — раньше терминальной остановки и раньше учёта полёта: и то и другое решает,
+    // отправлять ли, а здесь выясняется, есть ли что отправлять вообще.
+    if (
+      base.bodyDoc != null &&
+      base.bodyDoc.v === doc.v &&
+      sameDoc(doc.doc, base.bodyDoc.doc as JSONContent)
+    ) {
+      pendingRef.current = null;
+      // И отказ гаснет: на экране ровно то, что в базе. Иначе «Не сохранено» висело бы вечно
+      // у человека, который после отказа просто вернул текст к прежнему, — сохранять нечего,
+      // а успешной мутации, которая одна и гасила плашку, уже неоткуда взяться.
+      setFailed(false);
+      // Черновик снимается — но ТОЛЬКО СВОЙ, написанный в этой сессии. Условие не
+      // перестраховка: редактор при монтировании гарантированно присылает тело базы с
+      // проставленными блочными id, то есть попадает ровно сюда, — и без условия это эхо
+      // стирало бы с диска чужой неотправленный черновик, ещё не показанный человеку
+      // (ревью раунда 1, И-6). Свой же снимать обязательно: иначе правку, которую человек
+      // набрал и сам же отменил, следующее открытие записи воскресило бы досылом.
+      if (ownDraftRef.current) {
+        clearDraft(entityId);
+        ownDraftRef.current = false;
+      }
+      return;
+    }
+
+    // §5.2: expectedUpdatedAt — ТОЧНАЯ строка, которую клиент видел, а не «сейчас». Из двух
+    // известных берём позднюю: обе приходят от сервера в одном формате ISO-UTC (toISOString),
+    // где лексикографический порядок совпадает с хронологическим, а сам updated_at строго
+    // растёт (monotonicUpdatedAt).
+    const confirmed = confirmedRef.current;
+    const expectedUpdatedAt =
+      confirmed !== null && confirmed > base.updatedAt ? confirmed : base.updatedAt;
+
+    // Черновик кладётся на диск ПЕРЕД всеми причинами не отправлять, и это главное свойство
+    // страховки: она обязана работать именно тогда, когда отправка не работает. Раньше запись
+    // стояла после выходов по терминальной остановке и по занятому полёту — то есть в
+    // состоянии «не сохранено и не сохранится» страховка была выключена, и всё, что человек
+    // писал после отказа, терялось при закрытии вкладки (ревью раунда 1, И-5).
+    //
+    // На каждое нажатие клавиши черновик всё равно НЕ пишется, и это выбор, а не экономия:
+    // в `onDocChange` пришлось бы прогонять сравнение по смыслу на каждый штрих — иначе эхо
+    // редактора с блочными id ложилось бы в хранилище «черновиком» простого ОТКРЫТИЯ записи
+    // и уезжало бы фантомной правкой в базу. Цена честная: набранное в последние две секунды
+    // перед внезапным закрытием вкладки черновиком не прикрыто — его прикрывает flush() экрана.
+    saveDraft(entityId, doc, expectedUpdatedAt, new Date().toISOString());
+    ownDraftRef.current = true;
+
     if (stoppedRef.current) return;
     /**
      * Пока прошлое сохранение в полёте, второй запрос НЕ уходит — ни по паузе, ни по flush().
@@ -244,47 +327,10 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       return;
     }
 
-    const base = entityRef.current;
-    // Правка ли это вообще. Сравнение по СМЫСЛУ: UniqueID кладёт attrs.id во все блоки, и по
-    // строковому равенству документ «менялся» бы всегда (см. strip-ids.ts).
-    if (
-      base.bodyDoc != null &&
-      base.bodyDoc.v === doc.v &&
-      sameDoc(doc.doc, base.bodyDoc.doc as JSONContent)
-    ) {
-      pendingRef.current = null;
-      // И отказ гаснет: на экране ровно то, что в базе. Иначе «Не сохранено» висело бы вечно
-      // у человека, который после отказа просто вернул текст к прежнему, — сохранять нечего,
-      // а успешной мутации, которая одна и гасила плашку, уже неоткуда взяться.
-      setFailed(false);
-      // Черновик снимается по той же причине: неотправленного больше нет. Останься он на
-      // диске, следующее открытие записи либо гоняло бы мутацию, ничего не меняющую, либо
-      // (разойдись метки) спрашивало бы человека о тексте, который и так лежит в базе.
-      clearDraft(entityId);
-      return;
-    }
-
-    // §5.2: expectedUpdatedAt — ТОЧНАЯ строка, которую клиент видел, а не «сейчас». Из двух
-    // известных берём позднюю: обе приходят от сервера в одном формате ISO-UTC (toISOString),
-    // где лексикографический порядок совпадает с хронологическим, а сам updated_at строго
-    // растёт (monotonicUpdatedAt).
-    const confirmed = confirmedRef.current;
-    const expectedUpdatedAt =
-      confirmed !== null && confirmed > base.updatedAt ? confirmed : base.updatedAt;
-
     // Поколение снимается ДО отправки: колбэки ниже сверяются с ним и молчат, если запись
     // под хуком успела смениться.
     const gen = genRef.current;
     const stale = () => gen !== genRef.current;
-
-    // Черновик кладётся на диск ПЕРЕД отправкой, а не на каждое нажатие клавиши, и это выбор,
-    // а не экономия. В `onDocChange` пришлось бы прогонять то же сравнение по смыслу на каждый
-    // штрих — иначе UniqueID, проставляющий блочные id отдельной транзакцией после
-    // монтирования, клал бы в хранилище «черновик» простого ОТКРЫТИЯ записи, и тот при
-    // возврате уехал бы фантомной правкой в базу (ровно дефект Б4, только с диска). Здесь
-    // документ уже признан правкой, и цена решения честная: набранное в последние две секунды
-    // перед внезапным закрытием вкладки черновиком не прикрыто — его прикрывает flush() экрана.
-    saveDraft(entityId, doc, expectedUpdatedAt, new Date().toISOString());
 
     inFlightRef.current = true;
     chainedRef.current = false;
@@ -322,6 +368,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           // так в базе.
           clearDraft(entityId);
           if (stale()) return;
+          ownDraftRef.current = false;
           confirmedRef.current = saved.updatedAt;
           // Снимается с очереди только ЭТОТ документ. Приехавшую за время запроса правку
           // отправит её СОБСТВЕННЫЙ таймер паузы, а если тот успел сработать, пока шёл
@@ -397,12 +444,24 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   useEffect(() => {
     const draft = readDraft(entityId);
     if (draft === null) return;
-    if (draft.rejected || draft.baseUpdatedAt !== entityRef.current.updatedAt) {
-      setPendingDraft(offered(draft));
+    const base = entityRef.current;
+    // Первым делом — сверка с телом записи, и она общая для ОБЕИХ веток. Самый частый сюжет
+    // восстановления: успех дошёл до сервера, ответ потерялся, вкладку закрыли. Метка на
+    // сервере при этом ДВИНУЛАСЬ, то есть срабатывает ветка предложения — и без сверки человека
+    // спросили бы про текст, который уже лежит в базе (ревью раунда 1, И-3).
+    if (
+      base.bodyDoc != null &&
+      base.bodyDoc.v === draft.doc.v &&
+      sameDoc(draft.doc.doc, base.bodyDoc.doc as JSONContent)
+    ) {
+      clearDraft(entityId);
+      return;
+    }
+    if (draft.rejected || draft.baseUpdatedAt !== base.updatedAt) {
+      setPendingDraft(draft);
       return;
     }
     // Сервер с тех пор не менялся — спрашивать не о чем.
-    pendingRef.current = draft.doc;
     // Досыл ОТЛОЖЕН на ближайший тик и снимается уборкой эффекта, а не сделан здесь же. Причина
     // измерена, а не предположена: в разработке приложение живёт под StrictMode (main.tsx), а он
     // монтирует — размонтирует — монтирует заново. Мутация, отправленная из ПЕРВОГО прохода,
@@ -411,19 +470,22 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // снимается с диска, а следующее открытие записи предлагает вернуть текст, который давно
     // в базе. Отложенный же досыл первый проход заводит, уборка снимает, а второй заводит
     // заново — и он уходит через живого наблюдателя.
-    timerRef.current = window.setTimeout(save, 0);
-    // Уборка СЕГОДНЯ ничего не меняет, и это измерено, а не предположено: снять её — все тесты
-    // зелёные (мутация M31). Два независимых средства перекрывают её. Первое: под StrictMode
-    // React прогоняет уборки ВСЕХ эффектов между двумя проходами, и соседняя — та, что чистит
-    // таймеры при размонтировании, — успевает снять таймер первого прохода. Второе: даже
-    // доживи лишний таймер до срабатывания, двойной отправки не будет — `save` первой же
-    // строкой снимает таймер, а `timerRef` держит ровно один заведённый (замер под снятой
-    // уборкой: после ухода с экрана уходит НОЛЬ запросов). Оставлена потому, что эффект обязан
-    // снимать за собой то, что завёл сам: перестань соседняя уборка чистить `timerRef` — и
-    // досыл уезжал бы с закрытого экрана, а его ответа не услышал бы никто (`mutate` из
-    // размонтированного хука до линка ДОХОДИТ — проверено пробой).
-    return clearTimer;
-  }, [entityId, save, setPendingDraft, clearTimer]);
+    //
+    // Таймер СВОЙ, и отложенный документ занимает слот не сейчас, а в момент срабатывания.
+    // Дели досыл слот и таймер с паузой набора — первое же эхо редактора (тело базы с блочными
+    // id, которое приходит на монтировании всегда) сняло бы таймер досыла и затёрло бы слот, а
+    // через паузу ветка «правку вернули к сохранённому» стёрла бы черновик с диска: текст
+    // исчезал бы молча, и решал бы это планировщик (ревью раунда 1, И-6).
+    draftTimerRef.current = window.setTimeout(() => {
+      draftTimerRef.current = null;
+      pendingRef.current = draft.doc;
+      save();
+    }, 0);
+    // Уборка обязательна: эффект снимает за собой то, что завёл сам. Под StrictMode она же и
+    // гасит досыл первого, сносимого прохода — уборки всех эффектов React прогоняет между
+    // двумя проходами.
+    return clearDraftTimer;
+  }, [entityId, save, setPendingDraft, clearDraftTimer]);
 
   const applyPendingDraft = useCallback(() => {
     const draft = pendingDraftRef.current;
@@ -442,8 +504,22 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   }, [save, setPendingDraft]);
 
   const discardPendingDraft = useCallback(() => {
-    clearDraft(entityId);
+    const offer = pendingDraftRef.current;
     setPendingDraft(null);
+    if (offer === null) return;
+    // Стирается ровно ПОКАЗАННЫЙ черновик, а не «тот, что лежит на диске сейчас». Пока баннер
+    // висел, человек мог продолжить печатать — и его свежий неотправленный текст уже занял
+    // диск. Стереть его кнопкой, обещавшей выбросить СТАРУЮ правку, значит потерять текст
+    // молча и по кнопке, которая обещала другое (ревью раунда 1, И-2).
+    const onDisk = readDraft(entityId);
+    if (
+      onDisk !== null &&
+      onDisk.savedAt === offer.savedAt &&
+      onDisk.baseUpdatedAt === offer.baseUpdatedAt
+    ) {
+      clearDraft(entityId);
+      ownDraftRef.current = false;
+    }
   }, [entityId, setPendingDraft]);
 
   // Таймеры снимаются при размонтировании, но сохранение отсюда НЕ досылается: чей это жест —
@@ -452,8 +528,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     () => () => {
       clearTimer();
       clearGiveUp();
+      clearDraftTimer();
     },
-    [clearTimer, clearGiveUp],
+    [clearTimer, clearGiveUp, clearDraftTimer],
   );
 
   return {

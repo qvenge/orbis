@@ -139,6 +139,23 @@ async function tick(ms = 0): Promise<void> {
   });
 }
 
+/**
+ * Тот же документ, но с блочными id, как их проставляет UniqueID отдельной транзакцией уже
+ * после монтирования редактора. Ровно это редактор и присылает первым `onDocChange`.
+ */
+function withBlockIds(doc: BodyDoc): BodyDoc {
+  return {
+    v: doc.v,
+    doc: {
+      ...doc.doc,
+      content: (doc.doc.content ?? []).map((node, i) => ({
+        ...node,
+        attrs: { ...(node.attrs ?? {}), id: `block-${i}` },
+      })),
+    },
+  };
+}
+
 /** Что лежит в хранилище — СЫРЬЁМ, мимо readDraft: тест не должен верить читателю на слово. */
 const raw = (key = KEY) => localStorage.getItem(key);
 const stored = (key = KEY) => JSON.parse(raw(key) as string) as Record<string, unknown>;
@@ -532,7 +549,26 @@ test('после терминального отказа applyPendingDraft вс�
 // --- хранилище подводит -----------------------------------------------------------------------
 
 test('битая запись в хранилище игнорируется, а не роняет экран', async () => {
-  for (const broken of ['{не json', '"строка"', 'null', '{"doc":5,"baseUpdatedAt":"a"}', '{}']) {
+  // Первые пять отсекаются на внешней форме записи, ПОСЛЕДНИЕ ТРИ — только на форме самого
+  // документа (И-4): без них строки про `v` и внутренний узел не исполняются ни разу, и мутант,
+  // снимающий именно их, выжил бы. А отсекать их обязательно: `doc` отсюда уезжает прямо в
+  // мутацию, и структурно битый документ серверный гейт отвергает ТЕРМИНАЛЬНО — то есть одна
+  // испорченная запись выключила бы записи сохранение до перезагрузки.
+  for (const broken of [
+    '{не json',
+    '"строка"',
+    'null',
+    '{"doc":5,"baseUpdatedAt":"a"}',
+    '{}',
+    '{"doc":{"v":"1","doc":{"type":"doc"}},"baseUpdatedAt":"a","savedAt":"b"}',
+    '{"doc":{"v":1,"doc":null},"baseUpdatedAt":"a","savedAt":"b"}',
+    '{"doc":{"v":1},"baseUpdatedAt":"a","savedAt":"b"}',
+    // А эти две — с ЦЕЛЫМ документом и битой оболочкой: без них проверка меток не исполняется
+    // ни разу. Черновик без `baseUpdatedAt` сравнивать не с чем, и он ушёл бы в предложение —
+    // то есть человека спросили бы про текст неизвестно какой давности.
+    '{"doc":{"v":1,"doc":{"type":"doc"}},"savedAt":"b"}',
+    '{"doc":{"v":1,"doc":{"type":"doc"}},"baseUpdatedAt":123,"savedAt":"b"}',
+  ]) {
     localStorage.setItem(KEY, broken);
     const s = mount({ entity: ENTITY });
     await tick(SAVE_PAUSE * 2);
@@ -732,6 +768,135 @@ test('размонтирование снимает выдержку: с зак�
   expect(s.updates()).toHaveLength(1);
 });
 
+// --- раунд правок 1 -----------------------------------------------------------------------------
+
+test('эхо редактора на монтировании не отменяет досыл и не стирает черновик (И-6)', async () => {
+  // Редактор при монтировании ГАРАНТИРОВАННО присылает тело базы с проставленными блочными id
+  // (UniqueID, отдельная транзакция). Дели досыл с ним отложенный слот и таймер паузы — эхо
+  // сняло бы таймер досыла, затёрло бы слот, а через паузу ветка «правку вернули к сохранённому»
+  // стёрла бы черновик с диска: неотправленный текст исчезает молча и навсегда, а кто успеет
+  // первым — решает планировщик.
+  await leaveDraft();
+
+  const s = mount({ entity: ENTITY });
+  // ДО первого же тика: досыл заведён, но ещё не сработал — самый острый порядок.
+  s.api().onDocChange(withBlockIds(BASE));
+  await tick(SAVE_PAUSE * 2);
+
+  expect(s.updates()).toHaveLength(1);
+  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedUpdatedAt: ENTITY.updatedAt });
+  expect(raw(), 'успех досыла снял черновик — но снял его успех, а не эхо').toBeNull();
+});
+
+test('эхо редактора не стирает ПРЕДЛОЖЕННЫЙ черновик (И-6)', async () => {
+  // Тот же сюжет при разошедшихся метках: досыла нет, черновик ждёт ответа человека — и эхо
+  // редактора не вправе снять его с диска, иначе «оставить моё» станет нечего оставлять.
+  await leaveDraft();
+
+  const s = mount({ entity: MOVED });
+  await tick();
+  expect(s.api().pendingDraft?.doc).toEqual(ONE); // премиса: предложение стоит
+
+  s.api().onDocChange(withBlockIds(MOVED.bodyDoc as BodyDoc));
+  await tick(SAVE_PAUSE * 2);
+  expect(s.updates()).toEqual([]); // эхо — не правка, в сеть не ходим
+  expect(JSON.parse(raw() as string).doc).toEqual(ONE);
+  expect(s.api().pendingDraft?.doc).toEqual(ONE);
+});
+
+test('досыл черновика не переезжает на соседнюю запись', async () => {
+  // Ушли с записи внутри того же тика, в котором открыли её: досыл заведён, но ещё не
+  // сработал. Доживи он — ушёл бы под id ПЕРВОЙ записи, но с меткой ВТОРОЙ (рефы к этому
+  // моменту уже её), то есть с гарантированным 409, и заодно переписал бы черновик первой
+  // чужой меткой — а на следующем открытии тот предложился бы как «разошедшийся».
+  await leaveDraft();
+
+  const s = mount({ entity: ENTITY });
+  await s.set({ id: 'e2', entity: SECOND });
+  await tick(SAVE_PAUSE * 2);
+  expect(s.updates()).toEqual([]);
+  expect(JSON.parse(raw() as string).baseUpdatedAt).toBe(ENTITY.updatedAt);
+
+  // Положительный контроль: черновик никуда не делся и своей записью подхватывается.
+  await s.set({ id: 'e1', entity: ENTITY });
+  await tick();
+  expect(s.updates()).toHaveLength(1);
+  expect(s.input(0)).toEqual({ id: 'e1', bodyDoc: ONE, expectedUpdatedAt: ENTITY.updatedAt });
+});
+
+test('черновик, уже лежащий в теле записи, не предлагается и при разошедшихся метках (И-3)', async () => {
+  // Самый частый сюжет восстановления: успех ДОШЁЛ до сервера, ответ потерялся, вкладку
+  // закрыли. Метка на сервере двинулась, тело — ровно черновик. Ветка предложения обязана
+  // сверять текст так же, как это делает ветка досыла, иначе человека спросят про текст,
+  // который уже в базе.
+  await leaveDraft();
+
+  const s = mount({ entity: { updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
+  await tick(SAVE_PAUSE * 2);
+  expect(s.api().pendingDraft).toBeNull();
+  expect(s.updates()).toEqual([]);
+  expect(raw(), 'и с диска снят: держать его больше незачем').toBeNull();
+
+  // Страж вакуумности: метки ДЕЙСТВИТЕЛЬНО разошлись — это ветка предложения, а не досыла.
+  expect(MOVED.updatedAt).not.toBe(ENTITY.updatedAt);
+
+  // Положительный контроль: черновик, ОТЛИЧНЫЙ от тела, при тех же метках предлагается.
+  s.unmount();
+  await leaveDraft(TWO);
+  const other = mount({ entity: { updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
+  await tick();
+  expect(other.api().pendingDraft?.doc).toEqual(TWO);
+});
+
+test('после терминального отказа набранное продолжает попадать в хранилище (И-5)', async () => {
+  // Состояние «не сохранено и не сохранится» — ровно то, ради чего черновик и заведён.
+  // Выключать в нём страховку значит терять всё, что человек напишет после отказа.
+  const s = mount({
+    respond: () => {
+      throw trpcError('BAD_REQUEST', 'документ не соответствует схеме — правка отклонена');
+    },
+  });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+  expect(stored()).toMatchObject({ doc: ONE, rejected: true }); // премиса: остановка сработала
+
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates(), 'в сеть по-прежнему не ходим: отказ терминален').toHaveLength(1);
+  expect(stored().doc, 'но набранное — на диске').toEqual(TWO);
+
+  // И эта запись уже не помечена: её никто не отвергал, её вообще не отправляли.
+  expect(stored().rejected).toBe(false);
+});
+
+test('«отбросить» стирает ПОКАЗАННЫЙ черновик, а не свежий неотправленный (И-2)', async () => {
+  // Человек не ответил на баннер, а продолжил печатать — и его текст лёг на диск поверх
+  // предложенного. «Отбросить» относится к тому, что показано; стереть им свежий
+  // неотправленный абзац значит потерять текст молча и по кнопке, которая обещала другое.
+  await leaveDraft();
+
+  const s = mount({ entity: MOVED, respond: fail500 });
+  await tick();
+  expect(s.api().pendingDraft?.doc).toEqual(ONE); // премиса: предложение стоит
+
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(stored().doc, 'премиса: на диске уже СВЕЖИЙ текст').toEqual(TWO);
+
+  await s.discard();
+  expect(s.api().pendingDraft).toBeNull();
+  expect(stored().doc).toEqual(TWO);
+
+  // Положительный контроль: «отбросить» ПОКАЗАННЫЙ черновик с диска стирает.
+  s.unmount();
+  await leaveDraft();
+  const plain = mount({ entity: MOVED });
+  await tick();
+  await plain.discard();
+  expect(raw()).toBeNull();
+});
+
 test('правка, набранная поверх зависшего запроса, уходит по истечении выдержки', async () => {
   const server = gatedServer();
   const s = mount({ respond: server.respond });
@@ -756,4 +921,57 @@ test('правка, набранная поверх зависшего запр�
   // И ровно один досыл: круг «выдержка → досыл → выдержка → досыл» невозможен.
   await tick(GIVE_UP * 2);
   expect(s.updates()).toHaveLength(2);
+});
+
+test('брошенный по выдержке запрос, осевший позже, не зажигает конфликт на сохранённой записи (И-1)', async () => {
+  // Выдержка впервые допускает ДВЕ живые мутации по одной записи. Поштучные колбэки первой к
+  // этому моменту отцеплены, но колбэки уровня МУТАЦИИ исполняются всегда — и опоздавший 409
+  // брошенного запроса зажёг бы «Изменено в другом месте» на записи, которая только что
+  // успешно сохранилась.
+  const server = gatedServer();
+  const s = mount({ respond: server.respond });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE); // запрос №0 завис
+
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE); // досыл попрошен
+  await tick(GIVE_UP);
+  expect(s.updates(), 'премиса: досыл ушёл вторым запросом').toHaveLength(2);
+
+  await server.answer(1, SAVED); // досыл сохранился по-настоящему
+  expect(s.api().conflict).toBe(false);
+
+  // А теперь оседает БРОШЕННЫЙ запрос — с 409 от собственного же преемника.
+  await server.answer(0, trpcError('CONFLICT'), 'fail');
+  expect(s.api().conflict).toBe(false);
+
+  // Положительный контроль: 409 по ЖИВОМУ запросу флаг поднимает — сверка не выключила
+  // проверку вовсе.
+  s.api().onDocChange(THREE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(3);
+  await server.answer(2, trpcError('CONFLICT'), 'fail');
+  expect(s.api().conflict).toBe(true);
+});
+
+test('поздний УСПЕХ брошенного запроса не гасит конфликт его преемника (И-1)', async () => {
+  // Обратная сторона той же сверки: брошенный запрос мог и доехать успехом. Погаси он флаг,
+  // плашка «Изменено в другом месте» исчезла бы с экрана сама, а расхождение осталось бы.
+  const server = gatedServer();
+  const s = mount({ respond: server.respond });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE); // запрос №0 завис
+
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  await tick(GIVE_UP);
+  expect(s.updates()).toHaveLength(2);
+
+  // Досыл поймал 409 — плашка заслужена.
+  await server.answer(1, trpcError('CONFLICT'), 'fail');
+  expect(s.api().conflict).toBe(true);
+
+  // А брошенный запрос доехал успехом. Он про прошлое и гасить этот конфликт не вправе.
+  await server.answer(0, SAVED);
+  expect(s.api().conflict).toBe(true);
 });

@@ -67,6 +67,20 @@ export function useEntityUpdate(entityId: string) {
     setConflict(false);
   }
 
+  /**
+   * Номер последней мутации ПО КАЖДОЙ записи. Нужен потому, что по одной записи могут жить две
+   * мутации разом: автосохранение тела бросает зависший запрос по выдержке и досылает поверх
+   * него (useBodySave, SAVE_GIVE_UP_MS). Колбэки здесь — уровня МУТАЦИИ и исполняются всегда,
+   * поэтому без сверки брошенный запрос, осев позже, откатил бы кэш к снимку, взятому ДО себя,
+   * то есть выбросил бы оптимистичный патч своего же преемника, а его опоздавший 409 зажёг бы
+   * «Изменено в другом месте» на записи, которая только что сохранилась (ревью Задачи 14, И-1).
+   *
+   * Счётчик ведётся ПО ЗАПИСИ, а не один на хук: иначе мутация соседней сущности объявляла бы
+   * устаревшей мутацию первой, и та лишилась бы отката — ровно того, ради чего он и написан.
+   */
+  const seqRef = useRef(0);
+  const latestRef = useRef<Record<string, number>>({});
+
   const mutation = trpc.entity.update.useMutation({
     onMutate: async (vars) => {
       setConflict(false);
@@ -75,12 +89,16 @@ export function useEntityUpdate(entityId: string) {
       utils.entity.get.setData(input, (old) =>
         old ? { ...old, entity: applyPatch(old.entity, vars) } : old,
       );
+      seqRef.current += 1;
+      latestRef.current[vars.id] = seqRef.current;
       // Ключ едет в контекст ВМЕСТЕ со снимком. Откат обязан лечь туда же, откуда снимок
       // взят, а `input` — замыкание ПОСЛЕДНЕГО рендера: смени экран сущность, пока запрос в
       // полёте, и откат положил бы данные прежней записи под ключ новой (ревью Задачи 13, I1).
-      return { prev, input };
+      return { prev, input, seq: seqRef.current };
     },
     onError: (err, vars, ctx) => {
+      // Брошенная мутация не откатывает ничего: поверх её снимка уже лёг патч преемника.
+      if (ctx && latestRef.current[vars.id] !== ctx.seq) return;
       // Откат — ВСЕГДА и по ключу из контекста: он про свою запись, чья бы очередь ни шла.
       if (ctx) utils.entity.get.setData(ctx.input, ctx.prev);
       // А флаг — только если ответ пришёл по ТЕКУЩЕЙ записи. Эти колбэки — уровня МУТАЦИИ:
@@ -92,7 +110,10 @@ export function useEntityUpdate(entityId: string) {
       if (vars.id !== entityId) return;
       if (err instanceof TRPCClientError && err.data?.code === 'CONFLICT') setConflict(true);
     },
-    onSuccess: (_data, vars) => {
+    onSuccess: (_data, vars, ctx) => {
+      // Та же сверка, что и в onError: поздний успех брошенного запроса не вправе гасить
+      // конфликт, который поднял его преемник.
+      if (ctx && latestRef.current[vars.id] !== ctx.seq) return;
       if (vars.id === entityId) setConflict(false);
     },
     // Detail — единственный путь закрытия/переноса/архивации сущности из списков (Agenda,
