@@ -390,6 +390,81 @@ test('«Удалить блок» на ЕДИНСТВЕННОМ пункте у�
   expect(texts(editor)).toEqual(['хвост']);
 });
 
+test('выделение через ВСЕ пункты списка не оставляет пустого буллета', async () => {
+  // И6 раунда правок 3. Класс «пустой каркас» был закрыт наполовину: подъём работает на ОДНОМ
+  // конце, а покрытие всех детей — свойство ПАРЫ концов, и увидеть его подъём не может по
+  // определению. Два движения мышью на списке из ДВУХ пунктов возвращали баг v1 целиком.
+  // Прежний тест проходил мимо только потому, что брал список из ТРЁХ пунктов.
+  const { editor } = await mountEditor('- один\n- два\n\nхвост');
+  editor.commands.focus();
+  const a = posOfText(editor, 'один');
+  const b = posOfText(editor, 'два');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'listItem')).toBe(0);
+  expect(texts(editor)).toEqual(['хвост']);
+});
+
+test('выделение через все пункты ВЛОЖЕННОГО списка тоже не оставляет каркаса', async () => {
+  // Тот же класс на уровень глубже: опустеть должен и вложенный список, и ничего сверх него.
+  const { editor } = await mountEditor('- один\n  - раз\n  - два\n- два');
+  editor.commands.focus();
+  const a = posOfText(editor, 'раз');
+  const b = posOfText(editor, 'два');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(1); // остался только внешний
+  expect(listTexts(editor, 0)).toEqual(['один', 'два']);
+});
+
+test('список в ЯЧЕЙКЕ: уходит список, а ячейка и строка целы', async () => {
+  // И5/И6 раунда правок 3, форма «список внутри ячейки». Этот тест сторожит УБОРКУ (список
+  // обязан уйти без пустого каркаса) и целость таблицы вообще; строку он не различает — на
+  // таблице 2×2 прежний подъём останавливался на ячейке, а ProseMirror её тут же
+  // восстанавливал, и счётчики совпадали. Различает СЛЕДУЮЩИЙ тест, на таблице в один столбец.
+  // Разделены намеренно: тест, который не может упасть от той поломки, ради которой написан, —
+  // это тест, зелёный по ложной причине.
+  const { editor } = await mountEditor('до');
+  editor.commands.focus('end');
+  expect(editor.commands.insertTable({ rows: 2, cols: 2, withHeaderRow: false })).toBe(true);
+  const cell = posOfType(editor, 'tableCell');
+  editor.commands.insertContentAt(cell + 2, '<ul><li><p>пункт</p></li></ul>');
+  expect(countNodes(editor, 'listItem')).toBe(1); // страж вакуумности
+  const at = posOfText(editor, 'пункт');
+  editor.commands.setTextSelection({ from: at + 1, to: at + 4 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  // Таблица цела ЦЕЛИКОМ: четыре ячейки в двух строках.
+  expect(countNodes(editor, 'tableCell')).toBe(4);
+  expect(countNodes(editor, 'tableRow')).toBe(2);
+});
+
+test('список в ячейке таблицы В ОДИН СТОЛБЕЦ: строка обязана уцелеть', async () => {
+  // Отдельный тест, потому что случай ХУЖЕ предыдущего и различается только формой таблицы:
+  // у строки из одного столбца ячейка — единственный ребёнок, и прежний подъём уносил строку,
+  // делая таблицу 2×1 таблицей 1×1. На таблице 2×2 этот шаг останавливался раньше.
+  const { editor } = await mountEditor('до');
+  editor.commands.focus('end');
+  expect(editor.commands.insertTable({ rows: 2, cols: 1, withHeaderRow: false })).toBe(true);
+  const cell = posOfType(editor, 'tableCell');
+  editor.commands.insertContentAt(cell + 2, '<ul><li><p>пункт</p></li></ul>');
+  const at = posOfText(editor, 'пункт');
+  editor.commands.setTextSelection({ from: at + 1, to: at + 4 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'tableRow')).toBe(2);
+  expect(countNodes(editor, 'tableCell')).toBe(2);
+});
+
 test('«Удалить блок» из ЯЧЕЙКИ ТАБЛИЦЫ убирает всю таблицу — решение, а не побочность', async () => {
   // Решение раунда правок 2 (пункт 5): поведение оставлено, но обязано быть НАЗВАННЫМ.
   // `table` объявляет группу `block`, а `tableRow`/`tableCell` — не объявляют ничего
