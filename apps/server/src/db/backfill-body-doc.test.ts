@@ -16,6 +16,7 @@ import {
 import {
   type BackfillIo,
   backfillBodyDoc,
+  backfillExitCode,
   describeRoleAccess,
   drizzleBackfillIo,
 } from './backfill-body-doc';
@@ -358,6 +359,23 @@ test('CAS в SQL умеет сравнивать NULL-тело (IS NOT DISTINCT 
   const after = await readRow(id);
   expect(after.body).toBe('');
   expect(after.bodyDoc).toBeNull();
+});
+
+test('код возврата отличает успех от «корпус не виден» (итоговое ревью, находка 6)', async () => {
+  // База не нужна: решение — чистая функция от факта роли и счётчиков. Прежде команда всегда
+  // возвращала 0, и запуск из скрипта не мог отличить «сделано» от «роль видит ноль строк».
+  const admin = { role: 'postgres', bypassRls: true };
+  const blind = { role: 'authenticated', bypassRls: false };
+  const nothing = { done: 0, skipped: 0, pending: 0 };
+  // Ровно тот случай, ради которого код и заводится: нули под ролью без BYPASSRLS.
+  expect(backfillExitCode(blind, nothing)).toBe(1);
+  // Положительные контроли: под годной ролью нули — законный исход (корпус уже сконвертирован),
+  // и провалом их считать нельзя, иначе повторный прогон «падал» бы всегда.
+  expect(backfillExitCode(admin, nothing)).toBe(0);
+  expect(backfillExitCode(admin, { done: 5, skipped: 1, pending: 2 })).toBe(0);
+  // Дверь наружу: если роль без BYPASSRLS всё-таки что-то переписала, строки ей видны и работа
+  // сделана — врать отказом сюда так же плохо, как врать успехом в другую сторону.
+  expect(backfillExitCode(blind, { done: 3, skipped: 0, pending: 0 })).toBe(0);
 });
 
 test('роль без BYPASSRLS: нули НЕ означают «сконвертировано», и это видно по факту роли', async () => {

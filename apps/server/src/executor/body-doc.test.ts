@@ -13,7 +13,7 @@ import {
   entityUpdateInput,
   entityUpdateUiInput,
 } from '@orbis/shared';
-import { DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
+import { canonicalizeBody, DOC_SCHEMA_VERSION, serializeBody } from '@orbis/shared/doc';
 import { eq, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
@@ -23,6 +23,7 @@ import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { toWireEntity, toWireEntityFromSql } from '../wire';
 import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
+import { extractBodyRefs } from './normalize';
 import type { ExecuteOk, ExecuteRequest, WireEntity } from './types';
 import { undoAction } from './undo';
 
@@ -331,6 +332,132 @@ describe('структурная целость документа — вопр�
     const row = await rowOf(entity.id);
     expect(row.body_doc).toEqual({ v: 1, doc }); // attrs.id на месте
     expect(row.body).toBe('текст');
+  });
+});
+
+describe('body из bodyDoc — КАНОНИЧЕН (итоговое ревью, находка 3)', () => {
+  /** Записывает документ через путь редактора и отдаёт строку БД. */
+  async function writeDoc(doc: unknown): Promise<StoredRow> {
+    const { entity, owner } = await createOne();
+    okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          { id: entity.id, bodyDoc: { v: 1, doc }, expectedUpdatedAt: entity.updatedAt },
+          owner,
+        ),
+      ),
+    );
+    return rowOf(entity.id);
+  }
+
+  test('несущий инвариант хранения на документах ИЗ НАХОДОК 1 и 2', async () => {
+    // Проверялись версия и структура, но НЕ то, ради чего вся конструкция затеяна: что body —
+    // неподвижная точка канона. Через этот шов проходили обе порчи, и ни один тест их не ловил.
+    const docs: Array<[string, unknown]> = [
+      [
+        'вложенные ограды кода',
+        {
+          type: 'doc',
+          content: [
+            {
+              type: 'codeBlock',
+              attrs: { language: null },
+              content: [{ type: 'text', text: '```\nвнутри\n```' }],
+            },
+          ],
+        },
+      ],
+      [
+        'подпись ссылки со скобкой',
+        {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: 'См. ' },
+                { type: 'entityRef', attrs: { entityId: UUID, label: 'Задача ] хвост' } },
+              ],
+            },
+          ],
+        },
+      ],
+      [
+        'setext под мягким переносом',
+        {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: 'foo' },
+                { type: 'hardBreak' },
+                { type: 'text', text: '===' },
+              ],
+            },
+          ],
+        },
+      ],
+    ];
+    for (const [name, doc] of docs) {
+      const row = await writeDoc(doc);
+      // Страж вакуумности: пустое тело инвариант выполняет тождественно и не утверждает ничего.
+      expect(`${name}: ${row.body}`).not.toBe(`${name}: `);
+      expect(`${name}: ${canonicalizeBody(row.body).body}`).toBe(`${name}: ${row.body}`);
+      // И пара согласована — документ печатается ровно в то, что лежит в body.
+      expect(serializeBody(row.body_doc as never)).toBe(row.body);
+    }
+  });
+
+  test('ссылка с подписью-скобкой ОСТАЁТСЯ в body_refs, а не выпадает из графа', async () => {
+    // Последствие находки 2, которое тяжелее косметики: при первой пересборке документа из
+    // текста чип становился обычным текстом, и связь исчезала.
+    const row = await writeDoc({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'entityRef', attrs: { entityId: UUID, label: 'Отчёт [черновик]' } }],
+        },
+      ],
+    });
+    expect(row.body_refs).toEqual([UUID]);
+    expect(extractBodyRefs(row.body)).toEqual([UUID]); // и по ТЕКСТУ она тоже находится
+  });
+
+  test('неканоничная проекция уходит в raw, а не отказом — и текст цел до байта', async () => {
+    // Модель следующей ноды с несимметричным сериализатором (сегодня подделана rawBlock'ом
+    // с неканоничным текстом). Отказ здесь был бы хуже болезни: VALIDATION терминален,
+    // автосохранение встало бы и человек потерял бы возможность писать.
+    const row = await writeDoc({
+      type: 'doc',
+      content: [
+        { type: 'rawBlock', attrs: { markdown: `* раз [[entity:${UUID}]]` } },
+        { type: 'paragraph', content: [{ type: 'text', text: 'хвост' }] },
+      ],
+    });
+    expect(row.body).toBe(`* раз [[entity:${UUID}]]\n\nхвост`); // звёздочку канон НЕ переписал
+    expect(firstNodeType(row)).toBe('rawBlock');
+    expect(row.body_doc?.doc.content).toHaveLength(1); // весь документ подменён дословным текстом
+    expect(serializeBody(row.body_doc as never)).toBe(row.body);
+    expect(row.body_refs).toEqual([UUID]); // связь из raw достаётся регэкспом (Б2)
+  });
+
+  test('обычный документ страховка НЕ трогает (страж от жадности)', async () => {
+    // Без этого теста «страховка срабатывает всегда» была бы неотличима от починки: каждое
+    // сохранение превращало бы документ в один raw-блок и убивало редактор.
+    const doc = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', attrs: { id: 'blk-1' }, content: [{ type: 'text', text: 'текст' }] },
+        { type: 'bulletList', content: [{ type: 'listItem', content: [{ type: 'paragraph' }] }] },
+      ],
+    };
+    const row = await writeDoc(doc);
+    expect(row.body_doc).toEqual({ v: 1, doc }); // тот же документ, блочный id на месте
+    expect(firstNodeType(row)).toBe('paragraph');
   });
 });
 
