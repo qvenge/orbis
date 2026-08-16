@@ -1558,6 +1558,36 @@ test('тумблер markdown открывается с тем, что НАБР�
   expect(area).toHaveValue('тело и хвост');
 });
 
+test('«Применить» без единой правки в поле ничего не шлёт и ничего не теряет', async () => {
+  // Отсечка «без изменений» сравнивает поле с сериализацией ПОКАЗАННОГО документа. Пока экран
+  // отдавал тумблеру устаревший документ, эти двое могли разойтись сами собой — и «Применить»,
+  // нажатое без единой правки, отправляло бы в базу текст БЕЗ последних набранных символов.
+  // Теперь тумблер открывается тем же, что в редакторе, и расходиться нечему.
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: { ...entity, body: 'тело', bodyDoc: parseBody('тело') }, relations: [] };
+    if (path === 'entity.update') throw trpcError('INTERNAL_SERVER_ERROR');
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await expectEditorText('и хвост');
+
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  const area = await screen.findByTestId('markdown-source');
+  // Премиса: поле открылось НАБРАННЫМ текстом — иначе «без изменений» ниже значило бы другое.
+  expect(area).toHaveValue('тело и хвост');
+  fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
+
+  await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
+  // Набранное на месте: тумблер закрылся, ничего не переписав.
+  await openEditor();
+  await expectEditorText('тело и хвост');
+});
+
 test('правка из тумблера садится в редактор, а не остаётся в тумблере', async () => {
   // Иначе экран и база разъезжаются до первого нажатия клавиши: правка уехала бы
   // автосохранением, а редактор показывал бы прежний текст и вернул бы его поверх.
