@@ -1774,10 +1774,15 @@ test('«Обновить» из режима разметки не заслон�
 }, 30_000);
 
 test('ничего не трогали: приехавшее тело не заслоняется выходом из разметки', async () => {
-  // Запомненное обязано оставаться ПУСТЫМ у человека, который ничего не менял: редактор
-  // показывал документ, но не менял его. Извещай он о подмене на каждом монтировании (сверка
-  // там истинна всегда), документ момента монтирования заслонил бы приехавшее — и «Отмена»
-  // вернула бы на экран текст, который сервер уже сменил (ре-ревью раунда 4, дыра в покрытии).
+  // Человек ничего не менял — и приехавшее чужое тело обязано остаться на экране после выхода
+  // из разметки. Держит это НЕ пустота запомненного (редактор извещает о показанном и на
+  // монтировании — иначе протухшее переживало бы отказанную посадку, ре-ревью раунда 5, Б-1), а
+  // страж выхода: серверное тело сдвинулось с момента открытия — показанное не сажаем.
+  //
+  // Тест был ЛОЖНО-ЗЕЛЁНЫМ, пока извещение уходило только из ветки подмены: запомненное в этом
+  // сюжете оставалось пустым, ветка посадки была недостижима, и он не различал ни мутанта, ни
+  // снятие стража (ре-ревью раунда 5). Теперь различает — мутант «сажать без снимка на момент
+  // открытия» его красит.
   const outside = {
     ...entity,
     title: 'Изменено извне',
@@ -1841,6 +1846,92 @@ test('выход из разметки ТЕМ ЖЕ пунктом меню не 
 
   await openEditor();
   await expectEditorText('тело и хвост');
+}, 30_000);
+
+test('ВТОРОЙ заход в разметку после отказанной посадки не воскрешает протухшее', async () => {
+  // Продолжение теста «„Обновить“ из режима разметки»: выход отказался сажать показанное (кэш
+  // сдвинулся), но САМО показанное осталось протухшим — и следующий заход в разметку сажает его
+  // поверх приехавшего. Шаг 5 — возврат блокера раунда 3, шаг 6 — блокера раунда 4, через один
+  // лишний клик (ре-ревью раунда 5, Б-1).
+  const outside = {
+    ...entity,
+    title: 'Изменено извне',
+    body: 'извне',
+    bodyDoc: parseBody('извне'),
+    updatedAt: 'B',
+  };
+  const serve = { outside: false };
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: serve.outside ? outside : entity, relations: [], thread: null };
+    if (path === 'entity.update') throw trpcError('CONFLICT');
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await expectEditorText('и хвост');
+  const refresh = await screen.findByRole('button', { name: 'Обновить' }, EDITOR_READY);
+
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  await screen.findByTestId('markdown-source');
+  serve.outside = true;
+  fireEvent.click(refresh);
+  await waitFor(() =>
+    expect(screen.getByRole('heading', { name: 'Изменено извне' })).toBeInTheDocument(),
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+  await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
+  await openEditor();
+  await expectEditorText('извне'); // премиса: до сюда всё как в тесте раунда 4
+
+  // ВТОРОЙ заход. Редактор к этому моменту снова живой и показывает чужое тело — значит
+  // запомненное обязано быть чужим телом, а не тем, что человек печатал до «Обновить».
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  expect(await screen.findByTestId('markdown-source')).toHaveValue('извне');
+
+  fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+  await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
+  await openEditor();
+  await expectEditorText('извне');
+}, 30_000);
+
+test('выход из разметки сажает набранное ПОСЛЕ завершившегося круга сохранения', async () => {
+  // Снимок серверного тела берётся на ВХОДЕ в разметку, а не замирает на монтировании. Разница
+  // видна без всяких часов — по причинному факту «круг сохранения завершился»: после него
+  // тело в кэше уже другое, чем было при монтировании (ре-ревью раунда 5).
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' раз');
+  // Круг: отправка ушла И запись перечитана. Дальше кэш заведомо не тот, что на монтировании.
+  await waitFor(
+    () => expect(calls.some((c) => c.path === 'entity.update')).toBe(true),
+    EDITOR_READY,
+  );
+  await waitFor(
+    () => expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(1),
+    EDITOR_READY,
+  );
+
+  // Этого сервер ещё не видел — и оно обязано пережить заход в разметку и обратно.
+  await userEvent.type(
+    screen.getByTestId('body-editor').querySelector('[contenteditable]') as HTMLElement,
+    ' два',
+  );
+  await expectEditorText('тело раз два');
+
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  await screen.findByTestId('markdown-source');
+  fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+  await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
+
+  await openEditor();
+  await expectEditorText('тело раз два');
 }, 30_000);
 
 test('правка из тумблера садится в редактор, а не остаётся в тумблере', async () => {
