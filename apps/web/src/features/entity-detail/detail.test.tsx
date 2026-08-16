@@ -2,7 +2,7 @@ import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
 import { onlineManager } from '@tanstack/react-query';
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -121,6 +121,32 @@ async function expectEditorText(text: string): Promise<void> {
   );
 }
 
+/**
+ * Ожидание ОТРИЦАТЕЛЬНОГО ответа «редактор не встал».
+ *
+ * Раньше здесь стояли голые 50 мс, и это несоразмерно: положительному монтированию тот же файл
+ * даёт десять секунд с оговоркой про голодание по CPU в полном прогоне (EDITOR_READY). Регрессия,
+ * не успевшая за 50 мс под нагрузкой, оставляла тесты зелёными (ревью раунда 3).
+ *
+ * Что здесь на самом деле проверяется и почему этого достаточно. Решение «поднимать ли редактор»
+ * СИНХРОННО: `EditorShell.wantEditor` ставит `mount` прямо в обработчике клика. Всё, что остаётся
+ * после решения, — доехать ленивому чанку, а он к этим тестам давно загружен (его поднимали
+ * тесты выше в этом же файле), то есть измеряется не время, а несколько тиков очереди. Отсюда и
+ * порядок: сперва вычерпываем очередь задач, и только потом — запас по часам.
+ *
+ * Слабость остаётся и записана честно: «не встал» отличается от «ещё не встал» только временем,
+ * причинного барьера у отрицательного ответа нет. Поэтому каждый такой тест обязан кончаться
+ * ПОЛОЖИТЕЛЬНЫМ контролем — жестом, от которого редактор встать ДОЛЖЕН: без него молчание выше
+ * означало бы лишь, что редактор в этом тесте не встаёт ни от чего.
+ */
+const NO_EDITOR_GRACE_MS = 500;
+
+async function expectNoEditorYet(): Promise<void> {
+  for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  await new Promise((r) => setTimeout(r, NO_EDITOR_GRACE_MS));
+  expect(screen.queryByTestId('body-editor')).toBeNull();
+}
+
 /** Поле ввода редактора — тоже заново: см. expectEditorText. */
 async function editorField(): Promise<HTMLElement> {
   await openEditor();
@@ -202,7 +228,14 @@ test('набранное в редакторе переживает чужую �
   // Р13 дизайна). Без этого теста «подхватывает чужое» было бы зелено и у редактора, который
   // затирает набранное.
   let getCalls = 0;
-  const outside = { ...entity, body: 'извне', bodyDoc: parseBody('извне'), updatedAt: 'B' };
+  // Заголовок меняется ВМЕСТЕ с телом, и это не декорация: он — причинный барьер (см. ниже).
+  const outside = {
+    ...entity,
+    title: 'Изменено извне',
+    body: 'извне',
+    bodyDoc: parseBody('извне'),
+    updatedAt: 'B',
+  };
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get') {
       getCalls += 1;
@@ -226,8 +259,11 @@ test('набранное в редакторе переживает чужую �
 
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
   await waitFor(() => expect(getCalls).toBeGreaterThan(1));
-  // Даём подмене шанс случиться: «не затёрло» обязано значить «не затрёт», а не «не дождались».
-  await new Promise((r) => setTimeout(r, 50));
+  // «Не затёрло» обязано значить «не затрёт», а не «не дождались», — и ждём мы здесь не по
+  // часам, а ПРИЧИННО. Заголовок и документ приезжают одним и тем же ответом и рисуются одним
+  // и тем же коммитом: увидев чужой заголовок, мы знаем, что чужой `doc` уже доехал до
+  // `BodyEditor` и его эффект подмены отработал (эффекты вычерпаны до разрешения findBy).
+  await screen.findByRole('heading', { name: 'Изменено извне' });
   expect(screen.getByTestId('body-editor')).toHaveTextContent('и хвост');
 });
 
@@ -1133,9 +1169,13 @@ test('клик по ссылке в теле редактор НЕ подним�
   fireEvent.click(await screen.findByRole('link'));
   // Два жеста на одном месте: ссылка обязана срабатывать ссылкой, а не подменять поддерево
   // редактором — тогда click до самой ссылки не доехал бы.
-  await new Promise((r) => setTimeout(r, 50));
-  expect(screen.queryByTestId('body-editor')).toBeNull();
+  await expectNoEditorYet();
   expect(screen.getByTestId('editor-preview')).toBeInTheDocument();
+
+  // Положительный контроль (см. expectNoEditorYet): по телу — МИМО ссылки — редактор встаёт.
+  // Без него молчание выше значило бы лишь, что в этом тесте он не встаёт ни от чего.
+  fireEvent.click(screen.getByTestId('editor-preview'));
+  await screen.findByTestId('body-editor', undefined, EDITOR_READY);
 });
 
 test('пустой body — приглашение «Заметки…», по клику встаёт редактор', async () => {
@@ -1180,11 +1220,15 @@ test('клик по выделенному тексту тела редакто�
     fireEvent.click(view);
     // Текст выделяют, чтобы скопировать; подмена первого кадра редактором меняет корень
     // поддерева, и выделение теряется вместе с ним.
-    await new Promise((r) => setTimeout(r, 50));
-    expect(screen.queryByTestId('body-editor')).toBeNull();
+    await expectNoEditorYet();
   } finally {
     selection.mockRestore();
   }
+
+  // Положительный контроль (см. expectNoEditorYet): снятое выделение — и тот же клик по тому же
+  // месту редактор поднимает.
+  fireEvent.click(view);
+  await screen.findByTestId('body-editor', undefined, EDITOR_READY);
 });
 
 const BODY_WITH_BLOCK = 'Утренний обзор\n\n{{query: aspect=orbis/task, status=inbox, title=Inbox}}';
@@ -1224,8 +1268,12 @@ test('клик по виджету query-блока редактор не под
   fireEvent.click(await screen.findByTestId('qb-item'));
   // Виджет — живой список, а не текст записи: подменять его редактором по клику значит
   // ронять экран смарт-листа (у All Tasks весь body — один блок).
-  await new Promise((r) => setTimeout(r, 50));
-  expect(screen.queryByTestId('body-editor')).toBeNull();
+  await expectNoEditorYet();
+
+  // Положительный контроль (см. expectNoEditorYet): клик по ТЕКСТУ рядом с виджетом редактор
+  // поднимает — значит молчание выше про виджет, а не про мёртвый путь монтирования.
+  fireEvent.click(screen.getByText('Утренний обзор'));
+  await screen.findByTestId('body-editor', undefined, EDITOR_READY);
 });
 
 // --- две живые правки одной записи (ревью Задачи 14, Н-2 и Н-3) -----------------------------

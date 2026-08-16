@@ -128,6 +128,12 @@ function mount(
     api: () => hold.api as BodySave,
     updates: () => r.calls.filter((c) => c.path === 'entity.update'),
     input: (i: number) => r.calls.filter((c) => c.path === 'entity.update')[i]?.input,
+    /**
+     * Размонтирование ВСЕГДА через `await`. `act()` возвращает thenable, и брошенный без
+     * ожидания вызов оставляет работу React недоделанной к моменту следующего ассерта: сегодня
+     * это никого не красит, но заготовка для ложной зелени готовая — и ловится она только
+     * глазами (ревью раунда 3).
+     */
     unmount: () => act(() => r.unmount()),
     serve: (respond: Respond) => {
       box.respond = respond;
@@ -187,7 +193,7 @@ async function leaveDraft(doc: BodyDoc = ONE): Promise<void> {
   await tick(SAVE_PAUSE);
   expect(s.updates(), 'премиса: отправка была').toHaveLength(1);
   expect(raw(), 'премиса: черновик лёг в хранилище').not.toBeNull();
-  s.unmount();
+  await s.unmount();
 }
 
 beforeEach(() => {
@@ -278,7 +284,10 @@ test('успех по прежней записи стирает ЕЁ черно
     `orbis:body-draft:${OWNER}:e2`,
     JSON.stringify({ doc: ONE, baseUpdatedAt: '2026-08-14T09:00:00.000Z', savedAt: 'x' }),
   );
-  await s.set({ id: 'e2', entity: { ownerId: OWNER, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE } });
+  await s.set({
+    id: 'e2',
+    entity: { ownerId: OWNER, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
+  });
   await server.answer(0, SAVED);
 
   expect(raw()).toBeNull();
@@ -437,7 +446,7 @@ test('ушли с экрана раньше, чем досыл успел уех
   await leaveDraft();
 
   const s = mount({ entity: ENTITY, strict: true });
-  s.unmount(); // до первого же тика: таймер досыла заведён, но ещё не сработал
+  await s.unmount(); // до первого же тика: таймер досыла заведён, но ещё не сработал
   await tick(SAVE_PAUSE * 2);
   expect(s.updates()).toEqual([]);
   expect(raw(), 'черновик цел — его никто не отправлял').not.toBeNull();
@@ -468,11 +477,14 @@ test('черновик чужой сущности не подставляетс
 
   // У соседней записи метка ТА ЖЕ, что у первой: спутай хранилище записи, черновик уехал бы
   // автодосылом — молча и в чужое тело.
-  const other = mount({ id: 'e2', entity: { ownerId: OWNER, updatedAt: ENTITY.updatedAt, bodyDoc: THREE } });
+  const other = mount({
+    id: 'e2',
+    entity: { ownerId: OWNER, updatedAt: ENTITY.updatedAt, bodyDoc: THREE },
+  });
   await tick(SAVE_PAUSE * 2);
   expect(other.updates()).toEqual([]);
   expect(other.api().pendingDraft).toBeNull();
-  other.unmount();
+  await other.unmount();
 
   // Положительный контроль: черновик НИКУДА не делся и своей записью подхватывается.
   const own = mount({ entity: ENTITY });
@@ -487,7 +499,10 @@ test('смена записи гасит предложенный чернови
   await tick();
   expect(s.api().pendingDraft?.doc).toEqual(ONE); // премиса: на первой записи выбор предложен
 
-  await s.set({ id: 'e2', entity: { ownerId: OWNER, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE } });
+  await s.set({
+    id: 'e2',
+    entity: { ownerId: OWNER, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
+  });
   await tick();
   expect(s.api().pendingDraft).toBeNull();
   expect(s.updates()).toEqual([]);
@@ -564,7 +579,7 @@ test('discardPendingDraft стирает черновик и в сеть не х
   expect(s.updates()).toEqual([]);
 
   // Положительный контроль: перемонтирование больше ничего не предлагает — стёрли по-настоящему.
-  s.unmount();
+  await s.unmount();
   const again = mount({ entity: MOVED });
   await tick();
   expect(again.api().pendingDraft).toBeNull();
@@ -585,7 +600,7 @@ test('терминальный отказ метит черновик: он не
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1);
   expect(stored()).toMatchObject({ doc: ONE, rejected: true });
-  s.unmount();
+  await s.unmount();
 
   // Метка сервера НЕ менялась — то есть это ровно та ветка, где черновик ушёл бы автодосылом.
   const back = mount({ entity: ENTITY });
@@ -596,7 +611,7 @@ test('терминальный отказ метит черновик: он не
     savedAt: '2030-01-01T00:00:02.000Z',
     rejected: true,
   });
-  back.unmount();
+  await back.unmount();
 
   // Положительный контроль: снимаем ровно пометку — и та же запись при той же метке уезжает
   // автодосылом. Значит молчание выше от пометки, а не от чего-то ещё.
@@ -749,7 +764,7 @@ test('битая запись в хранилище игнорируется, а
     // выключилось бы до перезагрузки), ни предложения вернуть непонятно что.
     expect(s.updates(), broken).toEqual([]);
     expect(s.api().pendingDraft, broken).toBeNull();
-    s.unmount();
+    await s.unmount();
   }
 
   // Положительный контроль: правильно сложенная запись тем же читателем подхватывается —
@@ -894,7 +909,7 @@ test('отключённое хранилище не роняет набор т�
   // Успех тоже не спотыкается о стирание.
   await tick();
   expect(s.container).toBeEmptyDOMElement();
-  s.unmount();
+  await s.unmount();
 
   // Положительный контроль: с исправным хранилищем тот же путь черновик ПИШЕТ — то есть
   // молчание выше от заглушки, а не от того, что запись убрали вовсе.
@@ -1026,7 +1041,7 @@ test('терминальный отказ прежней записи метит
   await s.set({ id: 'e2', entity: SECOND });
   await server.answer(0, trpcError('BAD_REQUEST', 'документ не соответствует схеме'), 'fail');
   expect(stored().rejected).toBe(true);
-  s.unmount();
+  await s.unmount();
 
   const back = mount({ entity: ENTITY });
   await tick(SAVE_PAUSE * 2);
@@ -1043,7 +1058,7 @@ test('размонтирование снимает выдержку: с зак�
   await tick(SAVE_PAUSE); // досыл попрошен и ждёт освобождения
   expect(s.updates()).toHaveLength(1);
 
-  s.unmount();
+  await s.unmount();
   // Экрана больше нет: доживи выдержка до срабатывания, она отправила бы отложенное тело от
   // имени хука, которого уже никто не держит, — и человек увидел бы правку записи, с которой
   // ушёл минуту назад.
@@ -1170,7 +1185,7 @@ test('черновик, уже лежащий в теле записи, не п�
   expect(MOVED.updatedAt).not.toBe(ENTITY.updatedAt);
 
   // Положительный контроль: черновик, ОТЛИЧНЫЙ от тела, при тех же метках предлагается.
-  s.unmount();
+  await s.unmount();
   await leaveDraft(TWO);
   const other = mount({ entity: { ownerId: OWNER, updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
   await tick();
@@ -1232,7 +1247,7 @@ test('«отбросить» стирает ПОКАЗАННЫЙ чернови�
   expect(stored().doc).toEqual(TWO);
 
   // Положительный контроль: «отбросить» ПОКАЗАННЫЙ черновик с диска стирает.
-  s.unmount();
+  await s.unmount();
   await leaveDraft();
   const plain = mount({ entity: MOVED });
   await tick();
@@ -1394,7 +1409,7 @@ test('терминальный отказ брошенного запроса н
   await server.answer(0, trpcError('BAD_REQUEST', 'документ не соответствует схеме'), 'fail');
 
   expect(stored()).toMatchObject({ doc: TWO, rejected: false });
-  s.unmount();
+  await s.unmount();
 
   // И на следующем открытии он уезжает автодосылом, как всякий непомеченный.
   const back = mount({ entity: { ownerId: OWNER, updatedAt: ENTITY.updatedAt, bodyDoc: BASE } });
