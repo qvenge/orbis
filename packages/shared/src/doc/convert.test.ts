@@ -847,6 +847,82 @@ describe('рваная строка таблицы (ре-ревью раунда
   });
 });
 
+describe('ВСЕ правила × нумерованный пункт и чеклист (ре-ревью раунда 5 — блокер)', () => {
+  // `walk(token.tokens ?? token.items)` не осматривал поддерево ВОВСЕ: у маркированного списка
+  // `tokens` отсутствует, а у нумерованного и чеклиста он ЕСТЬ И ПУСТ, и `[] ?? items` даёт
+  // `[]`. Мои тесты раунда 4 везде брали маркированный список — то есть форму, которая
+  // работала СЛУЧАЙНО, — и заявление «класс закрыт» было ложным.
+  //
+  // Второй контейнер, найденный тем же прогоном: `nestedTokens` у пункта ЧЕКЛИСТА.
+  // Без него `- [ ] пункт` + `[](url)` терял адрес, а html-блок экранировался вместо raw.
+  const rules: Array<[string, (item: string, indent: string) => string, string]> = [
+    [
+      'рваная строка таблицы',
+      (i, s) => `${i}пункт\n\n${s}| a |\n${s}| --- |\n${s}| один | СМЕТА |`,
+      'СМЕТА',
+    ],
+    [
+      'картинка в ячейке',
+      (i, s) => `${i}пункт\n\n${s}| a |\n${s}| --- |\n${s}| ![схема](i.png) |`,
+      'i.png',
+    ],
+    [
+      'экранированная черта',
+      (i, s) => `${i}пункт\n\n${s}| a |\n${s}| --- |\n${s}| x \\| y |`,
+      '\\|',
+    ],
+    ['картинка в абзаце', (i, s) => `${i}пункт\n\n${s}![схема](i.png)`, 'i.png'],
+    ['ссылка с пустым текстом', (i, s) => `${i}пункт\n\n${s}[](https://ex.com/зело)`, 'зело'],
+    ['html-блок', (i, s) => `${i}пункт\n\n${s}<div>html</div>`, '<div>'],
+  ];
+  const forms: Array<[string, string, string]> = [
+    ['нумерованный', '1. ', '   '],
+    ['чеклист', '- [ ] ', '  '],
+    ['маркированный', '- ', '  '],
+  ];
+
+  test('непонятое внутри пункта уводит блок в raw — текст цел до байта', () => {
+    for (const [formName, marker, indent] of forms) {
+      for (const [ruleName, build, needle] of rules) {
+        const md = build(marker, indent);
+        const label = `${formName}/${ruleName}`;
+        expect(`${label}: ${types(md).join()}`).toBe(`${label}: rawBlock`);
+        expect(`${label}: ${canonicalizeBody(md).body}`).toBe(`${label}: ${md}`);
+        expect(`${label}: ${canonicalizeBody(md).body.includes(needle)}`).toBe(`${label}: true`);
+      }
+    }
+  });
+
+  test('ссылка с пустым текстом ПРЯМО в пункте (без вложенного абзаца)', () => {
+    for (const md of [
+      '1. [](https://ex.com/зело)',
+      '- [ ] [](https://ex.com/зело)',
+      '- [](https://ex.com/зело)',
+    ]) {
+      expect(`${md}: ${types(md).join()}`).toBe(`${md}: rawBlock`);
+      expect(`${md}: ${canonicalizeBody(md).body}`).toBe(`${md}: ${md}`);
+    }
+  });
+
+  test('ЗДОРОВЫЕ нумерованный и чеклист остаются виджетами (страж от жадности)', () => {
+    // Без этого «всё уходит в raw» прошло бы как починка и убило бы списки целиком.
+    const healthy: Array<[string, string]> = [
+      ['1. первый\n2. второй', 'orderedList'],
+      ['1. первый\n2. второй\n   1. вложенный', 'orderedList'],
+      ['- [ ] дело\n- [x] сделано', 'taskList'],
+      ['1. пункт с **жирным** и `кодом`', 'orderedList'],
+      ['- [ ] пункт со [ссылкой](https://example.com)', 'taskList'],
+      ['1. пункт\n\n   абзац внутри пункта', 'orderedList'],
+      ['1. пункт\n\n   ```js\n   код\n   ```', 'orderedList'],
+      ['1. пункт\n\n   | a | b |\n   | --- | --- |\n   | 1 | 2 |', 'orderedList'],
+      ['- пункт\n\n  | a | b |\n  | --- | --- |\n  | 1 | 2 |', 'bulletList'],
+    ];
+    for (const [md, expected] of healthy) {
+      expect(`${md}: ${types(md).join()}`).toBe(`${md}: ${expected}`);
+    }
+  });
+});
+
 describe('ссылка с пустым текстом (ре-ревью раунда 4)', () => {
   test('`[](адрес)` не уничтожает адрес — блок уходит в raw', () => {
     // Адрес живёт АТРИБУТОМ, поэтому посимвольная сверка страховки его не видит, а узел

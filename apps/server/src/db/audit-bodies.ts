@@ -45,6 +45,27 @@ const ID_START = '00000000-0000-0000-0000-000000000000';
  *  у глобального регэкспа `test` тащит lastIndex между вызовами и через строку врал бы. */
 const NONTRIVIAL_RE = /\[\[entity:|\{\{query:/i;
 
+/**
+ * Одинокий абзац из `&nbsp;`/U+00A0 и лишние пустые строки — доброкачественный шум, который
+ * вычитается ПЕРЕД сверкой двух проходов канона.
+ *
+ * Без вычета кран «канон неустойчив» стал бы постоянно ненулевым сразу после выхода редактора
+ * пользователям: markdown не умеет выражать пустой абзац, поэтому сериализатор печатает
+ * `&nbsp;` за каждый ВТОРОЙ подряд пустой абзац — то есть за три нажатия Enter. Кран, всегда
+ * красный на живой системе, читать перестают, и он перестаёт быть краном (ре-ревью раунда 5).
+ *
+ * Вычет узкий и проверен пробой: он гасит все пять бытовых расстановок пустых абзацев (внутри,
+ * в начале, в конце, два/три/четыре подряд) и НЕ гасит ни одной настоящей неустойчивости —
+ * вставка из одних пробелов во всех четырёх формах по-прежнему поднимает кран. На корпусе из
+ * 37 тел вердикт изменился ровно у двух — обоих из этого семейства.
+ */
+const NBSP_PARA = /(^|\n)[ \t]*(?:&nbsp;| )[ \t]*(?=\n|$)/g;
+const settle = (s: string): string =>
+  s
+    .replace(NBSP_PARA, '$1')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/^\n+|\n+$/g, '');
+
 /** Слово — две и более буквы или цифры подряд. Одиночные символы отброшены намеренно: разметка
  *  ими сорит (маркеры, черта таблицы, скобки), и на них счётчик шумел бы. */
 const WORD_RE = /[\p{L}\p{N}]{2,}/gu;
@@ -155,7 +176,22 @@ export type AuditResult = {
    * хранения, а его до сих пор не читал никто: аудит `body_doc` не открывал вовсе.
    */
   pairBroken: number;
+  /**
+   * `id` строк, поднявших ЛЮБОЙ стоп-кран, — не больше FLAGGED_LIMIT штук.
+   *
+   * Без них регламентный шаг «стоп и разбор конкретного тела» НЕИСПОЛНИМ: по счётчику «1»
+   * человек не найдёт строку в корпусе на тысячи записей, а тот, кому нечем разбираться, кран
+   * обойдёт — это свойство конструкции, а не догадка про людей (ре-ревью раунда 5).
+   *
+   * Приватность не страдает: uuid — не персональные данные, а тела и всё, что к ним ведёт,
+   * из процесса по-прежнему не выходят. Список ограничен, чтобы больной корпус не вывалил
+   * сотню тысяч строк в транскрипт.
+   */
+  flagged: string[];
 };
+
+/** Сколько id печатать: для разбора нужен вход в корпус, а не весь его список. */
+export const FLAGGED_LIMIT = 50;
 
 /**
  * Код возврата замера: 0 — можно смотреть на числа, 1 — смотреть НЕ НА ЧТО или найдена беда.
@@ -201,6 +237,7 @@ export async function auditBodies(
     lostWords: 0,
     withoutDoc: 0,
     pairBroken: 0,
+    flagged: [],
   };
   let afterId = ID_START;
   for (;;) {
@@ -210,6 +247,11 @@ export async function auditBodies(
       result.total += 1;
       // Курсор двигается ВСЕГДА, в том числе на упавшей строке: иначе она вращала бы цикл.
       afterId = row.id; // выборка отсортирована по id, поэтому последний id порции — наибольший
+      let raised = false;
+      const flag = (hit: boolean): boolean => {
+        if (hit) raised = true;
+        return hit;
+      };
       try {
         // `?? ''` — не про текущую схему (там body NOT NULL DEFAULT ''), а про то, что команда
         // ходит в ПРОД: его схема — та, что развёрнута, а не та, что в этом файле. NULL здесь
@@ -222,19 +264,20 @@ export async function auditBodies(
           result.withoutDoc += 1;
         } else {
           try {
-            if (serializeBody(row.bodyDoc as BodyDoc) !== body) result.pairBroken += 1;
+            if (flag(serializeBody(row.bodyDoc as BodyDoc) !== body)) result.pairBroken += 1;
           } catch {
             result.pairBroken += 1;
+            raised = true;
           }
         }
         const { doc, body: canonical } = canon(body);
         if (canonical !== body) result.changed += 1;
         // Два стоп-крана. Второй прогон канона — единственная лишняя работа замера, и она того
         // стоит: именно эти числа решают, можно ли пускать необратимую конверсию.
-        if (canon(canonical).body !== canonical) result.unstable += 1;
-        if (!projectionKeepsEverything(doc, canonical)) result.lossy += 1;
+        if (flag(settle(canon(canonical).body) !== settle(canonical))) result.unstable += 1;
+        if (flag(!projectionKeepsEverything(doc, canonical))) result.lossy += 1;
         // Единственная проверка ПЕРВОГО разбора — того шага, который бэкфилл делает необратимо.
-        if (lostWord(body, canonical)) result.lostWords += 1;
+        if (flag(lostWord(body, canonical))) result.lostWords += 1;
         const raws = collectRawBlocks(doc.doc);
         if (raws.length > 0) {
           result.withRaw += 1;
@@ -248,7 +291,9 @@ export async function auditBodies(
         // Одно неразобранное тело не должно рушить замер: аудит и заведён затем, чтобы такие
         // тела ПОСЧИТАТЬ. Само тело в вывод не идёт даже в этой ветке.
         result.failed += 1;
+        raised = true;
       }
+      if (raised && result.flagged.length < FLAGGED_LIMIT) result.flagged.push(row.id);
     }
     if (rows.length < AUDIT_BATCH) break; // неполная порция — корпус исчерпан, лишний SELECT не нужен
   }

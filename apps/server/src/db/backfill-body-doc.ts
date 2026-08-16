@@ -196,8 +196,17 @@ export function drizzleBackfillIo(db: BackfillExecutor): BackfillIo {
       // IS NOT DISTINCT FROM, а не `=`: тело может быть NULL (схема прода — та, что развёрнута),
       // а `NULL = NULL` даёт NULL, то есть строка не совпала бы НИКОГДА и тихо копилась бы
       // в пропущенных.
+      // `body_before_doc` — страховка ОБРАТИМОСТИ: исходное тело кладётся ТЕМ ЖЕ UPDATE, иначе
+      // между записью канона и записью оригинала было бы окно, в котором оригинала уже нет
+      // нигде. `COALESCE` делает шаг идемпотентным: повторный прогон (или ленивая конверсия,
+      // добравшаяся до строки раньше) не затрёт однажды сохранённый оригинал уже канонизированным
+      // телом. Класс тихой потери на первом разборе ДОКАЗАН, а гарантии «канон не теряет ничего
+      // на любом входе» быть не может — это самая дешёвая страховка в пакете (см. schema.ts).
       const rows = await db.execute(
-        sql`UPDATE entities SET body_doc = ${JSON.stringify(doc)}::jsonb, body = ${body}
+        sql`UPDATE entities
+            SET body_doc = ${JSON.stringify(doc)}::jsonb,
+                body = ${body},
+                body_before_doc = COALESCE(body_before_doc, ${expectedBody}::text)
             WHERE id = ${id} AND body IS NOT DISTINCT FROM ${expectedBody}::text
             RETURNING id`,
       );

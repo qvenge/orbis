@@ -81,6 +81,9 @@ type Tok = {
   raw: string;
   tokens?: Tok[];
   items?: Tok[];
+  /** Вложенные блоки ПУНКТА ЧЕКЛИСТА — четвёртый контейнер, свой у `@tiptap/extension-list`.
+   *  Не поле marked: у обычного `list_item` вложенное лежит в `tokens`. */
+  nestedTokens?: Tok[];
   header?: Cell[];
   rows?: Cell[][];
 };
@@ -138,6 +141,11 @@ function blockIsKnown(token: Tok): boolean {
       // выбрасывается целиком (`[](url)` → канон ""), и ни один счётчик этого не видел.
       // Пустой текст — это именно `tokens: []`; `[ ](url)` сохраняет узел с пробелом и цел.
       if (t.type === 'link' && (t.tokens ?? []).length === 0) return false;
+      // `nestedTokens` — вложенные блоки пункта ЧЕКЛИСТА, четвёртый контейнер сверх
+      // tokens/items/ячеек. Без него абзац внутри `- [ ]` не осматривался: замерено, что
+      // `- [ ] пункт\n\n  [](url)` терял адрес, а html-блок экранировался вместо ухода в raw,
+      // — при том что тот же пункт нумерованного списка обходился правильно.
+      if (t.nestedTokens && !walk(t.nestedTokens)) return false;
       if (t.items) return walk(t.items); // list → items → вложенные блоки
       if (t.tokens) return (KNOWN_BLOCK.has(t.type) || KNOWN_INLINE.has(t.type)) && walk(t.tokens);
       return KNOWN_INLINE.has(t.type) || KNOWN_BLOCK.has(t.type);
@@ -151,7 +159,17 @@ function blockIsKnown(token: Tok): boolean {
     // нарушение инварианта канона, и лечится оно так же, как картинка, — уходом в raw.
     !(cell.tokens ?? []).some((t) => t.raw.includes('|')) && walk(cell.tokens);
   if (!cells.every(cellIsKnown)) return false;
-  return walk(token.tokens ?? token.items);
+  // ОБА поля, а не `tokens ?? items` (ре-ревью раунда 5 — блокер). Замер токенов лексера:
+  // у маркированного списка `tokens` ОТСУТСТВУЕТ, а у нумерованного и у чеклиста он ЕСТЬ И
+  // ПУСТ. `[] ?? items` даёт `[]`, `every` по пустому массиву истинен — и всё поддерево
+  // пункта не осматривалось ВОВСЕ. Мимо проходили разом все четыре правила: рваная строка
+  // таблицы, картинка в ячейке, экранированная черта, ссылка с пустым текстом.
+  //
+  // Дыра была только у ВЕРХНЕУРОВНЕВОГО нумерованного списка и чеклиста — внутри цитаты или
+  // маркированного пункта тот же список идёт другой веткой и обходился правильно. Именно
+  // поэтому мои тесты раунда 4 её не увидели: они везде брали маркированный список, то есть
+  // форму, которая работала СЛУЧАЙНО. `walk(undefined)` истинен, так что обе ветки безопасны.
+  return walk(token.tokens) && walk(token.items);
 }
 
 function rawNode(markdown: string): JSONContent {

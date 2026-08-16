@@ -24,7 +24,12 @@ import { aspectJsonSchema, BUILTIN_ASPECT_META, diffBuiltinAspects } from '@orbi
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { type AuditRow, auditBodies, auditExitCode } from '../apps/server/src/db/audit-bodies';
+import {
+  type AuditRow,
+  auditBodies,
+  auditExitCode,
+  FLAGGED_LIMIT,
+} from '../apps/server/src/db/audit-bodies';
 import {
   backfillBodyDoc,
   backfillExitCode,
@@ -279,6 +284,15 @@ async function auditBodiesOp(): Promise<number> {
     // Пост-проверка: ДО конверсии первое число равно всему корпусу, ПОСЛЕ — оба обязаны быть 0.
     console.log(`без документа (body_doc IS NULL): ${r.withoutDoc}`);
     console.log(`СТОП-КРАН пара разошлась (body ≠ serialize(body_doc)): ${r.pairBroken}`);
+    // Без id регламентный «стоп и разбор конкретного тела» неисполним: по счётчику «1» строку
+    // в корпусе на тысячи записей не найти. Сами тела наружу по-прежнему не выходят.
+    if (r.flagged.length > 0) {
+      console.log(`\nid строк, поднявших стоп-кран (не больше ${FLAGGED_LIMIT}):`);
+      for (const id of r.flagged) console.log(`  ${id}`);
+      console.log(
+        "Разбор: SELECT body FROM entities WHERE id = '<id>'; — ЛОКАЛЬНО, не в транскрипт.",
+      );
+    }
     if (!who.bypassRls) {
       console.error(
         `\nВНИМАНИЕ: роль ${who.role} НЕ несёт BYPASSRLS, а на entities включён FORCE RLS` +

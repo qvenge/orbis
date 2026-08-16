@@ -13,6 +13,7 @@ import {
   HORIZON_YEAR_BODY,
   UPCOMING_BODY,
 } from '../seed/smart-lists';
+import { toWireEntity } from '../wire';
 import {
   type BackfillIo,
   backfillBodyDoc,
@@ -48,6 +49,51 @@ async function readRow(id: string): Promise<{ body: string; bodyDoc: unknown }> 
   const row = rows[0] as { body: string; body_doc: unknown };
   return { body: row.body, bodyDoc: row.body_doc };
 }
+
+test('исходное тело сохраняется ТЕМ ЖЕ UPDATE — конверсия обратима', async () => {
+  await truncateAll();
+  // Класс тихой потери на первом разборе доказан, а гарантии «канон не теряет ничего» быть не
+  // может. Колонка превращает необратимую процедуру в обратимую: восстановление одной записи
+  // становится одним UPDATE вместо подъёма дампа всей схемы в отдельную базу.
+  const id = await insertBody('* раз\n* два');
+  expect(await backfillBodyDoc(io)).toEqual({ done: 1, skipped: 0, pending: 0 });
+  const rows = await admin.execute(
+    sql`SELECT body, body_before_doc FROM entities WHERE id = ${id}`,
+  );
+  const row = rows[0] as { body: string; body_before_doc: string | null };
+  expect(row.body).toBe('- раз\n- два'); // канон записан
+  expect(row.body_before_doc).toBe('* раз\n* два'); // оригинал цел до байта
+});
+
+test('исходное тело НАРУЖУ не выходит: в wire-форме его нет', async () => {
+  await truncateAll();
+  // Колонка служебная и живёт до снятия отдельной миграцией. `select()` тянет её из БД, но
+  // wire-форма собирается перечислением полей — это и надо закрепить, иначе следующий
+  // «удобный» спред в toWireEntity начнёт отдавать клиенту дубль каждого тела.
+  const id = await insertBody('* раз');
+  await backfillBodyDoc(io);
+  const rows = await admin.execute(sql`SELECT * FROM entities WHERE id = ${id}`);
+  const row = rows[0] as Record<string, unknown>;
+  expect(row.body_before_doc).toBe('* раз'); // премиса: в БД оно есть
+  const wire = toWireEntity(
+    { ...row, createdAt: new Date(), updatedAt: new Date() } as never,
+    true,
+  ) as unknown as Record<string, unknown>;
+  expect(Object.keys(wire)).not.toContain('bodyBeforeDoc');
+  expect(Object.keys(wire)).not.toContain('body_before_doc');
+});
+
+test('повторный прогон НЕ затирает сохранённый оригинал каноном', async () => {
+  await truncateAll();
+  // Без COALESCE второй проход (или ленивая конверсия, добравшаяся раньше) положил бы в колонку
+  // уже канонизированное тело — и обратимость потерялась бы молча.
+  const id = await insertBody('* раз');
+  await backfillBodyDoc(io);
+  await admin.execute(sql`UPDATE entities SET body_doc = NULL WHERE id = ${id}`);
+  expect(await backfillBodyDoc(io)).toEqual({ done: 1, skipped: 0, pending: 0 });
+  const rows = await admin.execute(sql`SELECT body_before_doc FROM entities WHERE id = ${id}`);
+  expect((rows[0] as { body_before_doc: string }).body_before_doc).toBe('* раз');
+});
 
 test('конвертирует тела без документа и повторно ничего не делает', async () => {
   await truncateAll();

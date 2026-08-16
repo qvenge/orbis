@@ -8,6 +8,7 @@ import {
   type AuditRow,
   auditBodies,
   auditExitCode,
+  FLAGGED_LIMIT,
 } from './audit-bodies';
 
 const UUID = '019e4466-aaaa-7e07-b5d4-64be9721da51';
@@ -84,6 +85,7 @@ test('счётчики считают то, что обещают, и порци
     lostWords: 0,
     withoutDoc: 7, // корпус ДО конверсии: документа нет ни у кого
     pairBroken: 0,
+    flagged: [],
   });
 });
 
@@ -155,6 +157,55 @@ test('счётчик слов краснеет, когда слово дейст
   expect(r.lostWords).toBe(1);
 });
 
+test('кран неустойчивости НЕ краснеет на пустых абзацах редактора (ре-ревью раунда 5)', async () => {
+  // markdown не умеет выражать пустой абзац, поэтому сериализатор печатает `&nbsp;` за каждый
+  // ВТОРОЙ подряд пустой — то есть за три нажатия Enter. Без вычета кран стал бы постоянно
+  // ненулевым сразу после выхода редактора пользователям, а всегда красный кран читать
+  // перестают. Тела здесь — настоящие проекции таких документов.
+  const corpus = fakeCorpus([
+    'раз\n\n\n\n&nbsp;\n\nдва',
+    'раз\n\n\n\n&nbsp;\n\n&nbsp;\n\nдва',
+    'раз\n\n\n\n&nbsp;',
+    '\n\n&nbsp;\n\nраз',
+    'раз\n\n \n\nдва',
+  ]);
+  const r = await auditBodies(corpus.io);
+  expect(r.total).toBe(5);
+  expect(r.unstable).toBe(0);
+  expect(r.flagged).toEqual([]);
+});
+
+test('вычет НЕ глушит настоящую неустойчивость (страж от переглушения)', async () => {
+  // Кодовая вставка из одних пробелов уничтожается, и кран обязан это видеть — иначе вычет
+  // превратил бы стоп-кран в украшение.
+  const corpus = fakeCorpus(['` `', '`  `', 'до ` ` после', '`\t`']);
+  const r = await auditBodies(corpus.io);
+  expect(r.unstable).toBe(4);
+  expect(r.flagged).toHaveLength(4);
+});
+
+test('аудит называет id строк, поднявших кран (ре-ревью раунда 5)', async () => {
+  // Регламентный шаг «стоп и разбор конкретного тела» без этого НЕИСПОЛНИМ: по счётчику «1»
+  // человек не найдёт строку в корпусе на тысячи записей.
+  const corpus = fakeCorpus(['здоровое тело', 'дрожит', 'тоже здоровое']);
+  const r = await auditBodies(corpus.io, (body) => ({
+    doc: { v: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+    body: body.startsWith('дрожит') ? `${body}!` : body,
+  }));
+  expect(r.unstable).toBe(1);
+  expect(r.flagged).toEqual(['id-00001']); // ровно виновная строка, а не весь корпус
+});
+
+test('список id ограничен сверху — больной корпус не вываливает всё', async () => {
+  const corpus = fakeCorpus(Array.from({ length: FLAGGED_LIMIT + 20 }, () => 'дрожит'));
+  const r = await auditBodies(corpus.io, (body) => ({
+    doc: { v: 1, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+    body: `${body}!`,
+  }));
+  expect(r.unstable).toBe(FLAGGED_LIMIT + 20); // считаны ВСЕ
+  expect(r.flagged).toHaveLength(FLAGGED_LIMIT); // а напечатан вход в корпус
+});
+
 test('код возврата аудита: невидимый корпус и стоп-краны (ре-ревью раунда 3, п.1)', () => {
   // Повтор находки M-2, но опаснее: у бэкфилла нули означали ложный успех, здесь ЧИСЛО И ЕСТЬ
   // РЕШЕНИЕ — человек получал зелёный свет на необратимую конверсию оттого, что аудит ничего
@@ -173,6 +224,7 @@ test('код возврата аудита: невидимый корпус и �
     lostWords: 0,
     withoutDoc: 100,
     pairBroken: 0,
+    flagged: [],
   };
   // Ровно тот случай, ради которого код заведён: все счётчики нулевые, потому что НИЧЕГО НЕ ВИДНО.
   expect(
