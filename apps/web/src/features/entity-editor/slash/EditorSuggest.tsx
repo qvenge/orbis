@@ -213,8 +213,16 @@ export function SuggestMenu({
     if (active.kind === 'slash') {
       const item = SLASH_ITEMS.find((i) => i.id === id);
       if (item === undefined) return;
-      // Диапазон запроса снимает вызывающая сторона — пункт работает по чистому месту.
-      editor.chain().focus().deleteRange(active.range).run();
+      // Диапазон запроса снимает вызывающая сторона — пункт работает по чистому месту. Берётся
+      // он ЖИВЫМ, ровно по тому же доводу, что и в `insertRef` ниже: снимок кадра рендера
+      // отстаёт от набора, и буква, успевшая лечь между последним рендером и Enter, оставалась
+      // бы хвостом после применённого пункта. Сети здесь нет, но и кадра React довольно —
+      // замерено (тест «буква, влезшая между кадром рендера и Enter»).
+      editor
+        .chain()
+        .focus()
+        .deleteRange(live.current?.range ?? active.range)
+        .run();
       item.run(editor);
       return;
     }
@@ -251,6 +259,8 @@ export function SuggestMenu({
       onPick={(id) => void pick(id)}
       onClose={close}
       coords={{ left: rect?.left ?? 0, top: rect?.bottom ?? 0 }}
+      // Коробка редактора — там остаётся фокус, значит там и объявляется открытый список.
+      owner={editor?.view.dom ?? null}
     />
   );
 }

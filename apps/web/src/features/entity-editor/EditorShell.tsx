@@ -41,6 +41,17 @@ type IdleApi = {
 const NOT_BODY_GESTURE =
   'a, button, input, select, textarea, [role="button"], [data-query-widget], [role="dialog"]';
 
+/**
+ * ЗАЧЕМ подняли редактор — и потому же, куда девать фокус.
+ *
+ * По жесту фокус забирать ОБЯЗАНЫ: клик приходит по первому кадру, редактора в этот момент нет
+ * вовсе, и браузерное «клик поставил каретку» ставить её некуда — первый клик уходил впустую,
+ * набранное не появлялось нигде, а на планшете не поднималась экранная клавиатура. По простою
+ * — НЕЛЬЗЯ: он наступает сам собой, в том числе пока человек пишет в другом поле экрана.
+ */
+type Mount = { focusAt: { left: number; top: number } | null };
+const BY_IDLE: Mount = { focusAt: null };
+
 /** Клик по телу (а значит — зовущий редактор) или по чему-то внутри тела со своим смыслом. */
 export function isBodyGesture(target: HTMLElement | null): boolean {
   // `== null` (а не `=== null`): у отсутствующей цели `?.` даёт undefined, и такой клик —
@@ -75,18 +86,22 @@ export function EditorShell({
   markdown: string;
   onChange: (doc: BodyDoc) => void;
 }) {
-  const [wanted, setWanted] = useState(false);
+  const [mount, setMount] = useState<Mount | null>(null);
   useEffect(() => {
+    // `m ?? BY_IDLE`, а не голое присваивание: простой наступает и ПОСЛЕ того, как редактор
+    // подняли касанием, и перезапись стёрла бы намерение «человек сюда ткнул» вместе с
+    // координатами каретки — фокус пропал бы ровно у того, кто его и звал.
+    const wantByIdle = () => setMount((m) => m ?? BY_IDLE);
     // Две ветки целиком, а не один id на оба механизма: отменять надо ТЕМ ЖЕ, чем заводили —
     // clearTimeout по id простоя ничего не отменит, и колбэк уже размонтированного экрана
     // дёрнул бы setState. Вызов через `idle.` (не через оторванную ссылку) сохраняет
     // получателя: у отвязанного requestIdleCallback браузер бросает Illegal invocation.
     const idle = window as unknown as IdleApi;
     if (idle.requestIdleCallback) {
-      const id = idle.requestIdleCallback(() => setWanted(true));
+      const id = idle.requestIdleCallback(wantByIdle);
       return () => idle.cancelIdleCallback?.(id);
     }
-    const id = window.setTimeout(() => setWanted(true), IDLE_FALLBACK_MS);
+    const id = window.setTimeout(wantByIdle, IDLE_FALLBACK_MS);
     return () => clearTimeout(id);
   }, []);
 
@@ -106,7 +121,8 @@ export function EditorShell({
   function wantEditor(e: MouseEvent<HTMLDivElement>) {
     if (!isBodyGesture(e.target as HTMLElement | null)) return;
     if (window.getSelection()?.isCollapsed === false) return;
-    setWanted(true);
+    // Координаты жеста едут в редактор: он сам разрешит их в позицию каретки, когда встанет.
+    setMount({ focusAt: { left: e.clientX, top: e.clientY } });
   }
 
   const segments = bodySegments(markdown);
@@ -140,12 +156,12 @@ export function EditorShell({
       )}
     </div>
   );
-  // `doc === null` перекрывает даже поднятый `wanted`: жест «хочу редактор» законен, а вот
+  // `doc === null` перекрывает даже поднятое намерение: жест «хочу редактор» законен, а вот
   // подставить вместо документа пустышку — нет (см. заголовок файла).
-  if (!wanted || doc === null) return preview;
+  if (mount === null || doc === null) return preview;
   return (
     <Suspense fallback={preview}>
-      <BodyEditor doc={doc} onChange={onChange} />
+      <BodyEditor doc={doc} onChange={onChange} focusAt={mount.focusAt} />
     </Suspense>
   );
 }

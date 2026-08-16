@@ -201,6 +201,85 @@ test('при схлопнутом выделении панели НЕТ В DOM,
   await waitFor(() => expect(screen.queryByTestId('bubble-toolbar')).toBeNull());
 });
 
+test('в блоке кода панель не показывает мёртвых кнопок — марки там запрещает схема', async () => {
+  // Панель показывалась на выделении внутри блока кода, где четыре кнопки из пяти не делают
+  // НИЧЕГО и молчат об этом: `codeBlock` объявляет `marks: ''`, и любая команда марки просто
+  // возвращает false (итоговое ревью, мелкая находка). Убрана именно четвёрка, а не панель
+  // целиком: «Удалить блок» в коде осмысленно и работает — иначе убрать блок кода одним жестом
+  // стало бы нечем.
+  const { editor } = await mountEditor('привет\n\n```\nкод тут\n```');
+  editor.commands.focus();
+  const at = posOfText(editor, 'код тут');
+  editor.commands.setTextSelection({ from: at, to: at + 3 });
+  // Стражи вакуумности: каретка ДЕЙСТВИТЕЛЬНО в коде, и марки там ДЕЙСТВИТЕЛЬНО мертвы —
+  // иначе тест прятал бы работающие кнопки.
+  expect(editor.state.selection.$from.parent.type.name).toBe('codeBlock');
+  expect(editor.can().toggleBold()).toBe(false);
+  expect(editor.can().toggleCode()).toBe(false);
+
+  const panel = await toolbar();
+  expect(panel.querySelectorAll('button')).toHaveLength(1);
+  expect(screen.getByLabelText('Удалить блок')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Жирный')).toBeNull();
+  // И оставшаяся кнопка не декорация: она убирает блок кода целиком.
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(types(editor)).toEqual(['paragraph']);
+  expect(texts(editor)).toEqual(['привет']);
+
+  // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: в обычном абзаце все пять кнопок на месте. Без него
+  // «кнопок одна» было бы правдой и у панели, которая растеряла их везде.
+  const p = posOfText(editor, 'привет');
+  editor.commands.setTextSelection({ from: p, to: p + 6 });
+  await waitFor(() =>
+    expect(screen.getByTestId('bubble-toolbar').querySelectorAll('button')).toHaveLength(5),
+  );
+});
+
+// --- CellSelection: чем на самом деле держится оговорка в `lastTouched` -------------------------
+
+test('CellSelection свежей таблицы: правый конец — КОНЕЦ ячейки, а не её начало', async () => {
+  // Оговорка у `lastTouched` держится на том, что у `CellSelection` `$to.parentOffset` нулём не
+  // бывает. Ревью возразило: у свежей таблицы из `/Таблица` все ячейки пусты, значит ноль, и
+  // ветка отступа отрабатывает именно на CellSelection. Замер говорит обратное — и вот он,
+  // поимённо, чтобы следующему читателю не пришлось мерить снова.
+  //
+  // Причина СТРУКТУРНАЯ, а не «повезло с примером»: конструктор CellSelection
+  // (prosemirror-tables) берёт концы первого диапазона как `from = начало содержимого ячейки`
+  // и `to = from + cell.content.size`, а содержимое ячейки — `block+`, то есть даже пустая
+  // ячейка держит абзац размером 2. Ноль там невозможен в принципе. Нолём оказывается ЛЕВЫЙ
+  // конец — `$from.parentOffset`, — и путать его с правым нельзя: правило смотрит на `$to`.
+  const { editor } = await mountEditor('до');
+  editor.commands.focus('end');
+  expect(editor.commands.insertTable({ rows: 3, cols: 3, withHeaderRow: false })).toBe(true);
+  const cells: number[] = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'tableCell') cells.push(pos);
+    return true;
+  });
+  expect(cells).toHaveLength(9); // страж вакуумности: таблица та самая, 3×3
+  // Ячейки ПУСТЫ — ровно тот случай, о котором спорит ревью.
+  expect(childCountAt(editor, 'tableCell')).toBe(1);
+  expect(editor.state.doc.nodeAt(cells[0] as number)?.content.size).toBe(2);
+
+  expect(
+    editor.commands.setCellSelection({
+      anchorCell: cells[0] as number,
+      headCell: cells[4] as number,
+    }),
+  ).toBe(true);
+  const sel = editor.state.selection;
+  expect(sel.constructor.name).toBe('CellSelection'); // страж: селекция та самая
+  expect(sel.$to.parent.type.name).toBe('tableCell');
+  expect(sel.$to.parentOffset).toBeGreaterThan(0); // а вот и оговорка — держится
+  expect(sel.$from.parentOffset).toBe(0); // и вот источник путаницы: ноль у ЛЕВОГО конца
+
+  // Итог жеста тот же, что у каретки в ячейке: уходит вся таблица (решение раунда правок 2).
+  await toolbar();
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'table')).toBe(0);
+  expect(texts(editor)).toContain('до');
+});
+
 // --- кнопки марок -----------------------------------------------------------------------------
 
 test('каждая кнопка ставит СВОЮ марку, а не соседнюю', async () => {

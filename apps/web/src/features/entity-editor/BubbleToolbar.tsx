@@ -1,6 +1,6 @@
 import type { Node as PmNode, ResolvedPos } from '@tiptap/pm/model';
 import { NodeSelection, Selection } from '@tiptap/pm/state';
-import type { Editor } from '@tiptap/react';
+import { type Editor, useEditorState } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import { Bold, Code, Italic, Strikethrough, Trash2 } from 'lucide-react';
 import { Button } from '../../ui/Button';
@@ -64,8 +64,14 @@ function ownBlock($pos: ResolvedPos): Range | null {
  * бы одно выделение. `Selection.near(…, -1)` уходит на конец предыдущего текстового блока в
  * обоих случаях.
  *
- * Выделения ячеек (`CellSelection`) сюда не попадают: у них `$to.parentOffset` — смещение
- * внутри ячейки и нулём не бывает (замерено на таблице 3×3 по трём разным парам ячеек).
+ * Выделения ячеек (`CellSelection`) сюда не попадают, и держится это на УСТРОЙСТВЕ самой
+ * `CellSelection`, а не на удачном примере. Её конструктор (prosemirror-tables) берёт концы
+ * первого диапазона как `from = начало содержимого ячейки` и `to = from + cell.content.size`, а
+ * содержимое ячейки объявлено `block+` — даже пустая ячейка держит абзац размером 2. Значит
+ * `$to.parentOffset` равен размеру содержимого ячейки и нулём быть НЕ МОЖЕТ, в том числе у
+ * свежей таблицы из `/Таблица`, где пусты все ячейки. Нолём оказывается ЛЕВЫЙ конец
+ * (`$from.parentOffset`), и путать его с правым нельзя: правило смотрит на `$to`. Всё это
+ * закреплено тестом «CellSelection свежей таблицы…», а не замером в комментарии.
  */
 function lastTouched(selection: Selection): ResolvedPos {
   if (selection.empty || selection.$to.parentOffset > 0) return selection.$to;
@@ -164,6 +170,27 @@ function rangeToDelete(selection: Selection): Range | null {
  * AllSelection (Cmd+A); оба случая разобраны в `rangeToDelete` выше.
  */
 export function BubbleToolbar({ editor }: { editor: Editor | null }) {
+  /**
+   * Кнопки марок в блоке кода не показываются вовсе: `codeBlock` объявляет `marks: ''`, и любая
+   * команда марки там просто возвращает false — четыре кнопки из пяти были мертвы и молчали об
+   * этом (итоговое ревью). Скрыта четвёрка, а не панель целиком: «Удалить блок» в коде
+   * осмысленно и работает, и снять его значило бы отнять единственный жест, убирающий блок кода
+   * одним движением.
+   *
+   * Подписка через `useEditorState`, а НЕ вычисление по месту: React не перерисовывает панель на
+   * транзакциях редактора сам по себе (её показом и позицией распоряжается ProseMirror-плагин,
+   * а дети — обычное поддерево React), и состав кнопок замер бы на том, каким был при первом
+   * рендере. Селектор отдаёт булево, поэтому перерисовка случается только на ПЕРЕХОДЕ в код и
+   * обратно, а не на каждое движение каретки.
+   *
+   * Хук стоит ДО раннего выхода: хуков после условного возврата не бывает. `useEditorState`
+   * принимает null и отдаёт null — редактора ещё нет, значит и кода под кареткой нет.
+   */
+  const inCode = useEditorState({
+    editor,
+    selector: ({ editor: e }) => e?.state.selection.$from.parent.type.spec.code === true,
+  });
+
   if (!editor) return null;
 
   /**
@@ -225,41 +252,46 @@ export function BubbleToolbar({ editor }: { editor: Editor | null }) {
       data-testid="bubble-toolbar"
       className="z-50 flex items-center gap-0.5 rounded-card border border-line bg-surface p-1 shadow-pop"
     >
-      <Button
-        size="icon"
-        variant="ghost"
-        aria-label="Жирный"
-        onClick={() => editor.chain().focus().toggleBold().run()}
-      >
-        <Bold size={14} aria-hidden />
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
-        aria-label="Курсив"
-        onClick={() => editor.chain().focus().toggleItalic().run()}
-      >
-        <Italic size={14} aria-hidden />
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
-        aria-label="Зачёркнутый"
-        onClick={() => editor.chain().focus().toggleStrike().run()}
-      >
-        <Strikethrough size={14} aria-hidden />
-      </Button>
-      <Button
-        size="icon"
-        variant="ghost"
-        aria-label="Код"
-        onClick={() => editor.chain().focus().toggleCode().run()}
-      >
-        <Code size={14} aria-hidden />
-      </Button>
-      {/* Разрушающее действие отделено чертой и покрашено в danger. Варианта `danger` у Button
-          нет — конвенция репозитория для такого случая — `ghost` + `text-danger`. */}
-      <span aria-hidden className="mx-0.5 h-4 w-px bg-line" />
+      {!inCode && (
+        <>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Жирный"
+            onClick={() => editor.chain().focus().toggleBold().run()}
+          >
+            <Bold size={14} aria-hidden />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Курсив"
+            onClick={() => editor.chain().focus().toggleItalic().run()}
+          >
+            <Italic size={14} aria-hidden />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Зачёркнутый"
+            onClick={() => editor.chain().focus().toggleStrike().run()}
+          >
+            <Strikethrough size={14} aria-hidden />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="Код"
+            onClick={() => editor.chain().focus().toggleCode().run()}
+          >
+            <Code size={14} aria-hidden />
+          </Button>
+          {/* Разрушающее действие отделено чертой и покрашено в danger. Варианта `danger` у
+              Button нет — конвенция репозитория для такого случая — `ghost` + `text-danger`.
+              Черта уходит вместе с марками: отделять «Удалить блок» в коде не от чего. */}
+          <span aria-hidden className="mx-0.5 h-4 w-px bg-line" />
+        </>
+      )}
       <Button
         size="icon"
         variant="ghost"

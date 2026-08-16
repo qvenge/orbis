@@ -1,6 +1,6 @@
 import { buildAppPath } from '@orbis/shared';
 import { EntityRef } from '@orbis/shared/doc';
-import type { NodeViewProps } from '@tiptap/core';
+import type { Attributes, NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import { openEntity } from '../../../state/navigation';
 import { useRefTitle } from './RefTitlesContext';
@@ -62,11 +62,37 @@ function Chip({ node }: NodeViewProps) {
 }
 
 /**
- * Нода из общей схемы + ВНЕШНИЙ ВИД. Расширяется именно `EntityRef`, а не создаётся вторая
- * нода: имя и схема обязаны остаться теми же, иначе схема редактора разойдётся со схемой
- * документа, которую серверный путь записи спрашивает напрямую, — и нерабочим станет КАЖДОЕ
- * сохранение. Меняется только рисование, сериализация остаётся общей с сервером.
+ * Нода из общей схемы + ВНЕШНИЙ ВИД и ЧТЕНИЕ СВОЕЙ РАЗМЕТКИ. Расширяется именно `EntityRef`, а
+ * не создаётся вторая нода: имя и схема обязаны остаться теми же, иначе схема редактора
+ * разойдётся со схемой документа, которую серверный путь записи спрашивает напрямую, — и
+ * нерабочим станет КАЖДОЕ сохранение. Обе добавки безопасны: рисование схемы не касается
+ * вовсе, а разбор HTML — АТРИБУТНЫЙ (`addAttributes`), то есть ни ноды, ни марки не заводит.
+ *
+ * Почему разбор атрибутов живёт здесь, а не в общей схеме. HTML читает ровно один путь во всём
+ * проекте — БУФЕР ОБМЕНА редактора: сервер и модель говорят markdown'ом, и `parseHTML` там не
+ * зовёт никто. Общая нода печатает `data-entity-id`/`data-label`, а вот прочитать их обратно
+ * не умела: умолчание Tiptap ищет атрибут ПО ИМЕНИ ПОЛЯ (`entityId`, `label`), поэтому
+ * скопированный чип возвращался нодой с пустыми атрибутами — на экране пустой обрубок, в
+ * `body_refs` пусто, ссылка потеряна так же начисто, как если бы чип сняли совсем (замерено;
+ * итоговое ревью, находка 1). Ключи разбора — те же строки, что печатает `renderHTML` общей
+ * ноды; разъедься они, круг копирования снова стал бы молча терять ссылку — стережёт тест.
  */
 export const EntityRefWithView = EntityRef.extend({
+  addAttributes(): Attributes {
+    // Тип нужен явно: `this.parent?.()` в сочетании с `??` TS сводит к `{}`, и обращение к
+    // полям родителя перестаёт проходить проверку.
+    const parent: Attributes = this.parent?.() ?? {};
+    return {
+      ...parent,
+      entityId: {
+        ...parent.entityId,
+        parseHTML: (element: HTMLElement) => element.getAttribute('data-entity-id'),
+      },
+      label: {
+        ...parent.label,
+        parseHTML: (element: HTMLElement) => element.getAttribute('data-label'),
+      },
+    };
+  },
   addNodeView: () => ReactNodeViewRenderer(Chip),
 });

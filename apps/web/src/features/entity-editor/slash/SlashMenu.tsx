@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useEffect, useId, useImperativeHandle, useRef, useState } from 'react';
 
 export type MenuRow = { id: string; label: string; hint?: string };
 
@@ -24,9 +24,16 @@ export const SlashMenu = forwardRef<
     onClose: () => void;
     /** Координаты каретки в системе ОКНА — отсюда и `position: fixed` ниже. */
     coords: { left: number; top: number };
+    /**
+     * Поле ввода, из которого меню вызвано (коробка редактора). Фокус остаётся ТАМ, поэтому
+     * объявлять открытие списка программе чтения с экрана нужно на нём же — см. эффект ниже.
+     */
+    owner: HTMLElement | null;
   }
->(function SlashMenu({ rows, onPick, onClose, coords }, ref) {
+>(function SlashMenu({ rows, onPick, onClose, coords, owner }, ref) {
   const [active, setActive] = useState(0);
+  const menuId = useId();
+  const rowId = (id: string) => `${menuId}-${id}`;
   // Ключ строковый, а не сам массив: `rows` пересобирается на каждый рендер, и по его
   // тождеству эффект стрелял бы вхолостую после каждой буквы, включая ту, что список не
   // меняла. Сброс нужен ровно тогда, когда СОСТАВ другой: выбор обязан вернуться на первую
@@ -46,6 +53,36 @@ export const SlashMenu = forwardRef<
       block: 'nearest',
     });
   }, [active, key]);
+
+  /**
+   * Объявление меню ПРОГРАММЕ ЧТЕНИЯ С ЭКРАНА — на поле ввода, а не на самом списке.
+   *
+   * Фокус намеренно остаётся в редакторе (меню вызвано набором, забрать каретку значило бы
+   * сломать сам набор), поэтому `role="listbox"` и `aria-selected` на строках объявляют список
+   * НЕКОМУ: программа чтения следует за фокусом. Узнать об открытии и о перемещении выбора она
+   * может только из атрибутов на том элементе, где фокус и находится, — это ровно шаблон
+   * «editable combobox» из ARIA APG. Клавиатурный путь работал и без этого; не работало
+   * ОПОВЕЩЕНИЕ — незрячий не знал ни что список открылся, ни что стрелка что-то подвинула.
+   *
+   * Атрибуты ставятся и снимаются вручную, потому что элемент рисует ProseMirror, а не React.
+   * Затирания не будет: `editorProps.attributes` умеет снимать только те атрибуты, что сам же
+   * ставил (prosemirror-view, `updateAttrs` идёт по СВОЕМУ прежнему набору), а наших там нет.
+   *
+   * Снимается ВСЁ, включая `role`: атрибуты, пережившие закрытие, заставляли бы программу
+   * чтения вечно рапортовать об открытом списке, которого на экране нет.
+   */
+  const activeId = rows[active] === undefined ? null : rowId(rows[active].id);
+  useEffect(() => {
+    if (owner === null || activeId === null) return;
+    owner.setAttribute('role', 'combobox');
+    owner.setAttribute('aria-expanded', 'true');
+    owner.setAttribute('aria-controls', menuId);
+    owner.setAttribute('aria-activedescendant', activeId);
+    return () => {
+      for (const attr of ['role', 'aria-expanded', 'aria-controls', 'aria-activedescendant'])
+        owner.removeAttribute(attr);
+    };
+  }, [owner, menuId, activeId]);
 
   useImperativeHandle(
     ref,
@@ -86,6 +123,9 @@ export const SlashMenu = forwardRef<
     // потому что строки и так объявлены как option.
     <div
       ref={listRef}
+      // id — адрес для `aria-controls` и корень адресов строк: фокус остаётся в редакторе, и
+      // связать поле со списком можно только ссылками по id (см. эффект объявления выше).
+      id={menuId}
       // Роль есть у самого списка, а фокус остаётся в редакторе: меню вызвано набором, и
       // забрать у текста каретку значило бы сломать сам набор.
       role="listbox"
@@ -105,6 +145,8 @@ export const SlashMenu = forwardRef<
       {rows.map((r, i) => (
         <button
           key={r.id}
+          // Адрес строки для `aria-activedescendant`: без него «выбор поехал» не объявляется.
+          id={rowId(r.id)}
           type="button"
           role="option"
           aria-selected={i === active}

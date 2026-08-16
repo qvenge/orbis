@@ -1,5 +1,5 @@
 import { QUERY_BLOCK_CLOSE, QueryBlock } from '@orbis/shared/doc';
-import type { NodeViewProps } from '@tiptap/core';
+import type { Attributes, NodeViewProps } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer } from '@tiptap/react';
 import { useState } from 'react';
 import { QueryBlock as QueryBlockWidget } from '../../../lib/query-blocks/QueryBlock';
@@ -61,11 +61,28 @@ function Widget({ node, updateAttributes }: NodeViewProps) {
 }
 
 /**
- * Нода из общей схемы + ВНЕШНИЙ ВИД. Расширяется именно `QueryBlock`, а не создаётся вторая
- * нода: имя и схема обязаны остаться теми же, иначе схема редактора разойдётся со схемой
- * документа, которую серверный путь записи спрашивает напрямую, — и нерабочим станет КАЖДОЕ
- * сохранение. Меняется только рисование, сериализация остаётся общей с сервером.
+ * Нода из общей схемы + ВНЕШНИЙ ВИД и ЧТЕНИЕ СВОЕЙ РАЗМЕТКИ. Расширяется именно `QueryBlock`, а
+ * не создаётся вторая нода: имя и схема обязаны остаться теми же, иначе схема редактора
+ * разойдётся со схемой документа, которую серверный путь записи спрашивает напрямую, — и
+ * нерабочим станет КАЖДОЕ сохранение. Обе добавки безопасны: рисование схемы не касается, а
+ * разбор HTML — АТРИБУТНЫЙ, то есть ни ноды, ни марки не заводит.
+ *
+ * Довод тот же, что у чипа (nodes/EntityChip.tsx): HTML читает единственный путь — буфер
+ * обмена редактора. Общая нода печатает `data-query`, а умолчание Tiptap ищет обратно атрибут
+ * `query`, поэтому скопированный смарт-лист возвращался блоком с ПУСТЫМ запросом — виджет с
+ * тем же видом, но показывающий не то (замерено; итоговое ревью, находка 1).
  */
 export const QueryBlockWithView = QueryBlock.extend({
+  addAttributes(): Attributes {
+    // Тип нужен явно — см. тот же довод в nodes/EntityChip.tsx.
+    const parent: Attributes = this.parent?.() ?? {};
+    return {
+      ...parent,
+      query: {
+        ...parent.query,
+        parseHTML: (element: HTMLElement) => element.getAttribute('data-query'),
+      },
+    };
+  },
   addNodeView: () => ReactNodeViewRenderer(Widget),
 });

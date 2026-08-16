@@ -4,13 +4,19 @@ import { DOC_EXTENSIONS, parseBody, serializeBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { getSchema } from '@tiptap/core';
+import { EditorView } from '@tiptap/pm/view';
 import type { Editor } from '@tiptap/react';
+import { useState } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { installCrashTrap, renderWithProviders } from '../../test/harness';
 import { BodyEditor, htmlToPlainParagraphs } from './BodyEditor';
 import { BODY_PLACEHOLDER } from './body-box';
 import { EditorShell } from './EditorShell';
 import { EDITOR_EXTENSIONS } from './extensions';
+import { stripIds } from './strip-ids';
+
+/** Сущность, на которую ссылается чип в телах ниже. */
+const KUPIT = '0f8fad5b-d9cb-469f-a165-70867728950e';
 
 // Реестр аспектов — настоящий (как в detail.test.tsx): с пустым каталогом любой блок падал бы
 // плашкой qb-error, и «первый кадр рисует виджет» проходило бы по ложной причине.
@@ -18,8 +24,17 @@ const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSche
 const handler = (path: string) => {
   if (path === 'aspect.list') return realAspects;
   if (path === 'entity.query') return [];
+  // Резолв подписей чипа и поиск `@` — пустыми списками, а не `{}`: форма ответа у обоих
+  // массив, и объект уронил бы рисование чипа и строк меню на `.map` (замерено пробой).
+  if (path === 'entity.resolveRefs') return [];
+  if (path === 'entity.suggest') return [];
   return {};
 };
+
+/** Буфера обмена в jsdom нет вовсе; `view.pasteHTML` конструирует ClipboardEvent сам. */
+class FakeClipboardEvent extends Event {
+  clipboardData: unknown = null;
+}
 
 // Держатель, а не `let editor: Editor | null`: после присваивания в колбэке TS сужает
 // переменную до null и каждое обращение приходится глушить `!`.
@@ -28,6 +43,9 @@ const held = (): Held => ({ editor: null });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Подмена ставится и на ПРОТОТИП EditorView (разрешение координат клика), а её `vi.stubGlobal`
+  // не снимает: без этой строки мок уехал бы в следующие тесты файла.
+  vi.restoreAllMocks();
 });
 
 // Крах в обработчике события (эффект, NodeView, горячая клавиша) не роняет тест — только код
@@ -242,9 +260,6 @@ test('вставка через ProseMirror идёт тем же путём: р�
   // style/script/head/noscript и само делает из двух <p> два абзаца — на таком входе тест был
   // бы зелен и с выдернутой проводкой. Заголовок и <strong> умолчание, наоборот, СОХРАНИТ:
   // их снимает только наше преобразование.
-  class FakeClipboardEvent extends Event {
-    clipboardData: unknown = null;
-  }
   vi.stubGlobal('ClipboardEvent', FakeClipboardEvent);
   const h = held();
   renderWithProviders(
@@ -266,6 +281,230 @@ test('вставка через ProseMirror идёт тем же путём: р�
   // Границу блоков проверяем по ДОКУМЕНТУ, а не по тексту: склейка в одну строку дала бы
   // один абзац, и `toContain` обеих подстрок оставался бы зелёным.
   expect((h.editor?.getJSON().content ?? []).length).toBeGreaterThan(1);
+});
+
+// --- копия ИЗНУТРИ редактора (итоговое ревью, находка 1) ---------------------------------
+
+/** Тело со всем, что круг «скопировал → вставил» обязан донести целым. */
+const RICH_BODY = [
+  '# Заголовок',
+  '',
+  `текст с **жирным** и [[entity:${KUPIT}|Купить]] внутри`,
+  '',
+  '- один',
+  '- два',
+  '',
+  '{{query: aspect=orbis/task, status=inbox}}',
+].join('\n');
+
+/** Редактор с телом `md` и проставленными блочными id. */
+async function mountBody(md: string, onChange = vi.fn()) {
+  const h = held();
+  renderWithProviders(
+    <BodyEditor doc={parseBody(md)} onChange={onChange} onReady={(e) => (h.editor = e)} />,
+    handler,
+  );
+  await screen.findByTestId('body-editor');
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  await new Promise((r) => setTimeout(r, 50)); // UniqueID диспатчит свою транзакцию
+  return { h, onChange, editor: h.editor as Editor };
+}
+
+test('копия ИЗНУТРИ редактора вставляется целой: чип, смарт-лист и разметка живы', async () => {
+  // Бытовой жест: выделить кусок тела, Cmd+C, Cmd+V. Санитайзер вставки стоял на ВСЯКОМ HTML,
+  // включая свой собственный (`parseFromClipboard` зовёт `transformPastedHTML` ДО того, как
+  // ищет `data-pm-slice`), а собирал он результат из `textContent` — у чипа и смарт-листа
+  // текста в разметке схемы нет вовсе. Потеря молчаливая: человек видит вставленный текст,
+  // решает, что всё на месте, удаляет оригинал и теряет ссылку насовсем.
+  vi.stubGlobal('ClipboardEvent', FakeClipboardEvent);
+  const { editor } = await mountBody(RICH_BODY);
+  const before = editor.getJSON();
+
+  // Cmd+C кладёт в буфер разметку СХЕМЫ (`DOMSerializer.fromSchema`), а не то, что рисует
+  // NodeView, — поэтому у чипа и блока в ней нет ни буквы текста.
+  editor.commands.selectAll();
+  const html = editor.view.serializeForClipboard(editor.state.selection.content()).dom.innerHTML;
+  // Стражи вакуумности: копировать действительно есть что, разметка своя и помеченная, а у
+  // чипа она и правда пустая — вот и причина, по которой сборка «из textContent» его теряла.
+  expect(html).toContain('data-pm-slice');
+  expect(html).toContain(`data-entity-id="${KUPIT}"`);
+  expect(html).toContain('data-label="Купить"></span>');
+  expect(html).toContain('data-query=" aspect=orbis/task, status=inbox"></div>');
+
+  // Cmd+V поверх того же выделения: документ обязан остаться ТЕМ ЖЕ.
+  editor.view.pasteHTML(html);
+  const after = editor.getJSON();
+  // Поимённо — чтобы падение называло потерю, а не показывало два дерева. Чип обязан приехать
+  // С АТРИБУТАМИ: нода без entityId — это ссылка, потерянная так же начисто, как и снятая.
+  const para = after.content?.[1] as {
+    content?: { type?: string; attrs?: Record<string, unknown> }[];
+  };
+  expect(para?.content?.map((n) => n.type)).toEqual(['text', 'text', 'text', 'entityRef', 'text']);
+  expect(para?.content?.[3]?.attrs?.entityId).toBe(KUPIT);
+  expect(after.content?.map((n) => n.type)).toEqual([
+    'heading',
+    'paragraph',
+    'bulletList',
+    'queryBlock',
+  ]);
+  expect(after.content?.[3]?.attrs?.query).toBe(' aspect=orbis/task, status=inbox');
+  // И целиком, с точностью до блочных id: круг копирования документ не меняет.
+  expect(stripIds(after)).toEqual(stripIds(before));
+
+  // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: чужой HTML по-прежнему приходит ПЛОСКИМ — пропуск
+  // сделан ровно для своей разметки, а не для любой.
+  editor.commands.selectAll();
+  editor.view.pasteHTML('<h1>чужой</h1><p><strong>жирный</strong></p>');
+  const foreign = JSON.stringify(editor.getJSON());
+  expect(foreign).not.toContain('"heading"');
+  expect(foreign).not.toContain('"bold"');
+  expect(foreign).toContain('чужой');
+});
+
+test('копия ОДНОГО блока смарт-листа вставляется блоком, а не пустотой', async () => {
+  // Худший случай находки: у копии блока `textContent` пуст, преобразование возвращало `''`,
+  // и вставка не приносила ВООБЩЕ НИЧЕГО — молча.
+  vi.stubGlobal('ClipboardEvent', FakeClipboardEvent);
+  const { editor } = await mountBody('привет\n\n{{query: aspect=orbis/task}}');
+  // Адресуемся к блоку по ТИПУ, а не по арифметике: NodeSelection обязана стоять на нём.
+  let pos = -1;
+  editor.state.doc.forEach((node, offset) => {
+    if (node.type.name === 'queryBlock') pos = offset;
+  });
+  expect(pos).toBeGreaterThan(-1); // страж вакуумности
+  editor.commands.setNodeSelection(pos);
+  const html = editor.view.serializeForClipboard(editor.state.selection.content()).dom.innerHTML;
+  expect(new DOMParser().parseFromString(html, 'text/html').body.textContent).toBe(''); // текста нет
+
+  editor.commands.focus('start');
+  editor.view.pasteHTML(html);
+  expect(editor.getJSON().content?.filter((n) => n.type === 'queryBlock')).toHaveLength(2);
+});
+
+test('пропуск по data-pm-slice не проносит в документ ни стилей, ни скриптов', async () => {
+  // Цена пропуска названа прямо: подделать признак в чужом HTML можно, и тогда разметка идёт в
+  // разбор ProseMirror. Рубеж там свой и он не наш собственный код, а СХЕМА: `<style>`,
+  // `<script>` и `<head>` prosemirror-model выбрасывает сам, ноды и марки вне схемы не
+  // создаются, а протоколы ссылок стережёт белый список (тест Б5 выше).
+  vi.stubGlobal('ClipboardEvent', FakeClipboardEvent);
+  const { editor } = await mountBody('привет');
+  editor.commands.selectAll();
+  editor.view.pasteHTML(
+    '<p data-pm-slice="0 0 []">чужой</p><style>.a{color:red}</style><script>alert(1)</script>',
+  );
+  const json = JSON.stringify(editor.getJSON());
+  expect(json).toContain('чужой'); // страж вакуумности: вставка вообще случилась
+  expect(json).not.toContain('color:red');
+  expect(json).not.toContain('alert(1)');
+});
+
+// --- приезд чужой версии документа ПОД ФОКУСОМ ---------------------------------------------
+
+/** Экран, у которого документ подменяется кнопкой — так выглядит рефетч с чужим телом. */
+function DocSwapper({
+  first,
+  second,
+  focusAt,
+  onChange,
+}: {
+  first: string;
+  second: string;
+  focusAt?: { left: number; top: number };
+  onChange: (doc: ReturnType<typeof parseBody>) => void;
+}) {
+  const [doc, setDoc] = useState(() => parseBody(first));
+  return (
+    <>
+      <button type="button" data-testid="push-doc" onClick={() => setDoc(parseBody(second))}>
+        приехало извне
+      </button>
+      <BodyEditor doc={doc} onChange={onChange} focusAt={focusAt} />
+    </>
+  );
+}
+
+test('чужая правка доезжает в НЕТРОНУТЫЙ редактор, даже если он в фокусе', async () => {
+  // Страж подмены смотрит на «человек уже набирал», а не на один фокус, и различать их
+  // пришлось из-за находки 2: пока клик по телу редактор не фокусировал, признаки совпадали по
+  // совпадению. Оставь тут голое `isFocused` — и чужая правка переставала бы доезжать до
+  // редактора, в котором не набрали ни буквы (ровно это ловят два теста detail.test.tsx).
+  const onChange = vi.fn();
+  renderWithProviders(
+    <DocSwapper first="тело" second="извне" focusAt={{ left: 10, top: 10 }} onChange={onChange} />,
+    handler,
+  );
+  await screen.findByTestId('body-editor');
+  await waitFor(() => expect(document.activeElement).toBe(field())); // страж: фокус ВЗЯТ
+  fireEvent.click(screen.getByTestId('push-doc'));
+  await waitFor(() => expect(screen.getByTestId('body-editor')).toHaveTextContent('извне'));
+  // Подмена — не правка: наружу она не уезжает, иначе чужое тело вернулось бы в базу.
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+test('а вот НАБРАННОЕ чужая правка не затирает — даже придя следом', async () => {
+  // Положительный контроль к тесту выше и вторая сторона той же границы: подмена под руками —
+  // потеря написанного, и её страж обязан ловить.
+  const onChange = vi.fn();
+  renderWithProviders(
+    <DocSwapper first="тело" second="извне" focusAt={{ left: 10, top: 10 }} onChange={onChange} />,
+    handler,
+  );
+  await screen.findByTestId('body-editor');
+  await waitFor(() => expect(document.activeElement).toBe(field()));
+  await userEvent.keyboard(' и хвост');
+  await waitFor(() => expect(onChange).toHaveBeenCalled()); // страж: набор ДОЕХАЛ
+
+  fireEvent.click(screen.getByTestId('push-doc'));
+  // Даём подмене шанс случиться: «не затёрло» обязано значить «не затрёт», а не «не дождались».
+  await new Promise((r) => setTimeout(r, 60));
+  expect(screen.getByTestId('body-editor')).toHaveTextContent('и хвост');
+  expect(screen.getByTestId('body-editor')).not.toHaveTextContent('извне');
+});
+
+// --- StrictMode (итоговое ревью, мелкая находка) -------------------------------------------
+
+test('под StrictMode редактор поднимается целым: NodeViewʼы, оба меню и панель', async () => {
+  // Приложение в разработке живёт под StrictMode (main.tsx), и именно двойной прогон эффектов
+  // потребовал стража `editor.isDestroyed` в BodyEditor. До сих пор под ним не гонялся ни один
+  // тест редактора — то есть монтирование NodeViewʼов, двух suggestion-плагинов и всплывающей
+  // панели под двойным прогоном не проверяло ничто.
+  const onChange = vi.fn();
+  const h = held();
+  const md = `текст [[entity:${KUPIT}|Купить]]\n\n{{query: aspect=orbis/task}}`;
+  renderWithProviders(
+    <BodyEditor doc={parseBody(md)} onChange={onChange} onReady={(e) => (h.editor = e)} />,
+    handler,
+    { strict: true },
+  );
+  await screen.findByTestId('body-editor');
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const editor = h.editor as Editor;
+  // Экземпляр ЖИВОЙ. Двойной прогон РЕНДЕРА создаёт два редактора, и один из них тут же
+  // сносится; `onReady` обязан отдать уцелевший, иначе всякий тест под StrictMode получал бы
+  // редактор с `view === null` и падал на первой же команде (замерено).
+  expect(editor.isDestroyed).toBe(false);
+  await new Promise((r) => setTimeout(r, 50));
+
+  // NodeViewʼы смонтированы по ОДНОМУ разу, а не по два.
+  expect(screen.getAllByTestId('entity-chip')).toHaveLength(1);
+  expect(screen.getAllByTestId('qb-count')).toHaveLength(1);
+  expect(screen.getAllByTestId('body-editor')).toHaveLength(1);
+
+  // Оба suggestion-плагина живы: меню открывается набором и закрывается по Esc.
+  const area = screen.getByTestId('body-editor').querySelector('[contenteditable]') as HTMLElement;
+  await userEvent.click(area);
+  editor.commands.focus(1);
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  await userEvent.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByTestId('slash-menu')).toBeNull());
+
+  // Панель выделения тоже: она — ProseMirror-плагин поверх готового вида.
+  editor.commands.setTextSelection({ from: 1, to: 5 });
+  await screen.findByTestId('bubble-toolbar', {}, { timeout: 2000 });
+
+  // И правка доезжает наружу — редактор не «тихо мёртв».
+  expect(onChange).toHaveBeenCalled();
 });
 
 // --- И4/И5/И6: двухфазность --------------------------------------------------------------
@@ -444,6 +683,93 @@ test('после раскрытия Suspense в редактор МОЖНО НА
   await userEvent.type(area, ' и хвост');
   await waitFor(() => expect(onChange).toHaveBeenCalled());
   expect(serializeBody(onChange.mock.calls.at(-1)?.[0])).toContain('и хвост');
+});
+
+// --- фокус при монтировании (итоговое ревью, находка 2) -----------------------------------
+
+/** Поле ввода редактора — запрашивается заново: EditorContent перемонтируется вместе с ним. */
+const field = () => screen.getByTestId('body-editor').querySelector('[contenteditable]');
+
+test('первый клик по телу ставит каретку: набор доезжает БЕЗ второго клика', async () => {
+  // Клик поднимал редактор, но каретку не ставил — фокус оставался на <body>. Пока едет
+  // ленивый чанк, на экране висит предпросмотр, то есть целевого поля ввода в момент клика нет
+  // вовсе, и браузерное «клик поставил каретку» тут не помощник: первый клик уходил впустую,
+  // набранное не появлялось нигде, а на планшете не поднималась экранная клавиатура.
+  vi.stubGlobal('requestIdleCallback', () => 1);
+  const onChange = vi.fn();
+  renderWithProviders(
+    <EditorShell doc={parseBody('начало')} markdown="начало" onChange={onChange} />,
+    handler,
+  );
+  fireEvent.click(await screen.findByTestId('editor-preview'), { clientX: 120, clientY: 240 });
+  await screen.findByTestId('body-editor');
+  await waitFor(() => expect(field()).not.toBeNull());
+  // Фокус берётся ОТЛОЖЕННО: команда `focus` у Tiptap уходит в requestAnimationFrame.
+  await waitFor(() => expect(document.activeElement).toBe(field()));
+  // И это не только activeElement: набор доезжает в документ без единого лишнего жеста.
+  await userEvent.keyboard(' и хвост');
+  await waitFor(() => expect(onChange).toHaveBeenCalled());
+  expect(serializeBody(onChange.mock.calls.at(-1)?.[0])).toContain('и хвост');
+});
+
+test('каретка встаёт ТУДА, КУДА ткнули, а не в начало тела', async () => {
+  // Голый фокус уложил бы каретку в начало документа: ткнув в конец длинной записи, человек
+  // получил бы курсор на первой строке. Координаты клика едут в редактор и разрешаются
+  // `view.posAtCoords`. В jsdom геометрии нет вовсе (elementFromPoint отдаёт null,
+  // tests/prosemirror-polyfill.ts), поэтому разрешение подменено на прототипе: проверяется
+  // ПРОВОДКА координат, а не измерение — измерять в jsdom нечего.
+  vi.stubGlobal('requestIdleCallback', () => 1);
+  const posAtCoords = vi
+    .spyOn(EditorView.prototype, 'posAtCoords')
+    .mockReturnValue({ pos: 4, inside: -1 });
+  const onChange = vi.fn();
+  renderWithProviders(
+    <EditorShell doc={parseBody('начало')} markdown="начало" onChange={onChange} />,
+    handler,
+  );
+  fireEvent.click(await screen.findByTestId('editor-preview'), { clientX: 120, clientY: 240 });
+  await screen.findByTestId('body-editor');
+  await waitFor(() => expect(field()).not.toBeNull());
+  await waitFor(() => expect(document.activeElement).toBe(field()));
+  // Спрошено ИМЕННО про точку клика, а не про какую-нибудь свою.
+  expect(posAtCoords).toHaveBeenCalledWith({ left: 120, top: 240 });
+
+  await userEvent.keyboard('X');
+  await waitFor(() => expect(onChange).toHaveBeenCalled());
+  // Позиция 4 — середина слова «начало»: буква легла ТУДА, а не в начало и не в конец.
+  expect(serializeBody(onChange.mock.calls.at(-1)?.[0])).toContain('начXало');
+});
+
+test('монтирование ПО ПРОСТОЮ фокус не забирает — он мог быть в чужом поле', async () => {
+  // Простой наступает сам собой, в том числе пока человек пишет в другом поле экрана
+  // (заголовок, поиск). Забрать фокус там значило бы вырвать набор из-под рук.
+  const outside = document.createElement('input');
+  outside.setAttribute('data-testid', 'outside');
+  document.body.appendChild(outside);
+  try {
+    const idle = vi.fn((cb: () => void) => {
+      setTimeout(cb, 0);
+      return 1;
+    });
+    vi.stubGlobal('requestIdleCallback', idle);
+    renderWithProviders(
+      <EditorShell doc={parseBody('начало')} markdown="начало" onChange={vi.fn()} />,
+      handler,
+    );
+    outside.focus();
+    expect(document.activeElement).toBe(outside); // страж вакуумности: фокус реально снаружи
+    await screen.findByTestId('body-editor');
+    await waitFor(() => expect(field()).not.toBeNull());
+    await new Promise((r) => setTimeout(r, 80)); // дольше, чем кадр отложенного фокуса
+    expect(document.activeElement).toBe(outside);
+
+    // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: фокус этот редактор ПРИНИМАЕТ — он его просто не
+    // забирает. Без контроля «фокус не увели» было бы правдой и у мёртвой коробки.
+    await userEvent.click(field() as HTMLElement);
+    expect(document.activeElement).toBe(field());
+  } finally {
+    outside.remove();
+  }
 });
 
 test('без requestIdleCallback редактор встаёт по запасному таймеру', async () => {

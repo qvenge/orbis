@@ -158,6 +158,34 @@ test('«Отмена» закрывает, ничего не записав — 
   expect(screen.queryByRole('alert')).toBeNull();
 });
 
+test('Escape закрывает тумблер, ничего не записав — и гасит предупреждение', async () => {
+  // Escape — общий жест «уйти отсюда» во всём приложении (модалки, поле поиска), а тумблер на
+  // него не отзывался вовсе: закрыть его можно было только мышью по «Отмене» (итоговое ревью,
+  // мелкая находка). Дверь наружу при этом та же самая, `close()`, — иначе предупреждение
+  // пережило бы уход, и следующее «Применить» сохранило бы raw без единого вопроса.
+  const { area, apply, onChange, onClose } = mount(parseBody('тело'));
+  fireEvent.change(area, { target: { value: 'другое тело' } });
+  area.focus(); // где фокус и живёт, когда набирают текст
+  expect(document.activeElement).toBe(area); // страж: Escape уйдёт ИЗ ПОЛЯ, а не из воздуха
+  await userEvent.keyboard('{Escape}');
+  expect(onChange).not.toHaveBeenCalled();
+  expect(onClose).toHaveBeenCalledTimes(1);
+
+  // Escape ПОСЛЕ предупреждения гасит и его: тумблер тут не размонтирован (спай onClose ничего
+  // не закрывает), и переживи флаг уход — первое же «Применить» при следующем открытии
+  // сохранило бы raw молча, обойдя двухшаговость целиком. Заодно жест идёт с ДРУГОГО элемента:
+  // после клика фокус на «Применить», и обработчик обязан ловить Escape со всей формы, а не с
+  // одного поля.
+  fireEvent.change(area, { target: { value: WITH_RAW } });
+  await userEvent.click(apply);
+  expect(screen.getByRole('alert')).toBeInTheDocument(); // страж вакуумности: гасить есть что
+  expect(document.activeElement).toBe(apply);
+  await userEvent.keyboard('{Escape}');
+  expect(onChange).not.toHaveBeenCalled();
+  expect(onClose).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
 // --- неразобранная разметка ---------------------------------------------------------------
 
 test('неразбираемое не сохраняется молча: предупреждение и второе «Применить»', async () => {

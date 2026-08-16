@@ -334,6 +334,42 @@ test('каждый пункт меню действительно меняет �
   expect(SLASH_ITEMS.length).toBeGreaterThan(8);
 });
 
+// --- блок кода: оба входа молчат (итоговое ревью, находка 3) ---------------------------------
+
+test('внутри блока кода ни «/», ни «@» меню не открывают', async () => {
+  // Умолчание `@tiptap/suggestion` — «разрешено всегда», а префиксом служит пробел, поэтому
+  // меню открывали самые обычные строки кода: ` /usr/bin`, `a / b`, ` @media`, ` @import`.
+  // Цена промаха несоразмерна опечатке: Enter после ` @media` (поиск ничего не нашёл, в меню
+  // одна строка «Создать «media»») ЗАВОДИЛ БЫ В ГРАФЕ настоящую сущность и вставлял в блок
+  // кода inline-ноду, которой там не место; Enter после одиночного ` /` превращал блок кода в
+  // заголовок и съедал набранный хвост.
+  const { h } = await mountEditor('привет\n\n```\nкод\n```', api({}));
+  const editor = h.editor as Editor;
+  editor.commands.focus('end');
+  // Страж вакуумности: каретка ДЕЙСТВИТЕЛЬНО в блоке кода, иначе тест ничего не утверждает.
+  expect(editor.state.selection.$from.parent.type.name).toBe('codeBlock');
+
+  await userEvent.keyboard(' @media');
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByTestId('slash-menu')).toBeNull();
+  await userEvent.keyboard(' /');
+  await new Promise((r) => setTimeout(r, 50));
+  expect(screen.queryByTestId('slash-menu')).toBeNull();
+  // Набранное осталось КОДОМ: молчание меню не значит съеденных букв.
+  expect(blockText(editor, 1)).toBe('код @media /');
+  expect(editor.getJSON().content?.map((n) => n.type)).toEqual(['paragraph', 'codeBlock']);
+
+  // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: в обычном абзаце оба входа по-прежнему открывают
+  // меню. Без него «меню не открылось» было бы правдой и у наглухо выключенных плагинов.
+  editor.commands.focus(7); // конец первого абзаца («привет» — шесть букв)
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  await userEvent.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByTestId('slash-menu')).toBeNull());
+  await userEvent.keyboard(' @куп');
+  await screen.findByTestId('slash-menu');
+});
+
 // --- `@`: поиск и вставка --------------------------------------------------------------------
 
 test('«@куп» ищет через entity.suggest и вставляет entityRef', async () => {
@@ -466,6 +502,70 @@ test('отказ создания — громкий, и набранное ос
   await screen.findByText(/не удалось/i);
   expect(JSON.stringify(h.editor?.getJSON())).not.toContain('entityRef');
   expect(h.editor?.getText()).toBe('см @Стирка');
+});
+
+// --- живой диапазон и объявление меню (итоговое ревью, мелкие находки) -----------------------
+
+test('буква, влезшая между кадром рендера и Enter, не остаётся хвостом после пункта', async () => {
+  // Пункт `/`-меню снимал диапазон из КАДРА РЕНДЕРА, тогда как рядом, в `insertRef`, он берётся
+  // из живой ссылки — ровно по этой причине. Ломается при наборе быстрее, чем React
+  // отрисовывает: буква, успевшая лечь между последним рендером и Enter, остаётся хвостом
+  // после применённого пункта.
+  //
+  // Форма пробы: букву дописываем ТРАНЗАКЦИЕЙ и тут же, синхронно, шлём Enter тем же путём,
+  // каким его приносит клавиатура (`handleKeyDown` в props плагинов — это и есть путь
+  // ProseMirror). React между двумя шагами перерисоваться не успевает — это и есть «набор
+  // быстрее рендера».
+  const { h } = await mountEditor('привет', api({}));
+  const editor = h.editor as Editor;
+  await userEvent.keyboard(' /заг');
+  await screen.findByTestId('slash-menu');
+  expect(activeRow()).toBe('Заголовок 1'); // страж: применится ИМЕННО этот пункт
+
+  const view = editor.view;
+  view.dispatch(view.state.tr.insertText('о')); // «/заго» — диапазон плагина стал длиннее
+  const taken = view.someProp('handleKeyDown', (f) =>
+    f(view, new KeyboardEvent('keydown', { key: 'Enter' })),
+  );
+  expect(taken).toBe(true); // страж: Enter забрало МЕНЮ, а не разрыв абзаца
+
+  await waitFor(() => expect(editor.getJSON().content?.map((n) => n.type)).toEqual(['heading']));
+  // Хвоста нет: съеден весь запрос целиком, включая букву, набранную «после кадра».
+  expect(editor.getText()).toBe('привет ');
+});
+
+test('открытое меню объявлено полю ввода, а закрытое — нет', async () => {
+  // Фокус намеренно остаётся в редакторе (меню зовут набором), поэтому программа чтения с
+  // экрана узнаёт об открытии списка и о перемещении выбора ТОЛЬКО из атрибутов на самом поле.
+  // Без них клавиатурный путь рабочий, а незрячий не знает ни что меню открылось, ни что
+  // стрелка что-то подвинула.
+  const { area } = await mountEditor('привет', api({}));
+  // Закрытое меню не объявлено ничем: иначе программа чтения вечно рапортовала бы об открытом
+  // списке, которого на экране нет.
+  expect(area.getAttribute('aria-expanded')).toBeNull();
+  expect(area.getAttribute('aria-activedescendant')).toBeNull();
+
+  await userEvent.keyboard(' /заг');
+  const menu = await screen.findByTestId('slash-menu');
+  const selected = () =>
+    screen.getAllByRole('option').find((o) => o.getAttribute('aria-selected') === 'true');
+  expect(menu.id).not.toBe(''); // страж вакуумности: сравнивать есть с чем
+  expect(selected()?.id ?? '').not.toBe('');
+  expect(area).toHaveAttribute('aria-expanded', 'true');
+  expect(area).toHaveAttribute('aria-controls', menu.id);
+  expect(area).toHaveAttribute('aria-activedescendant', selected()?.id as string);
+
+  // Выбор поехал — объявление поехало вместе с ним.
+  await userEvent.keyboard('{ArrowDown}');
+  await waitFor(() => expect(selected()?.textContent).toBe('Заголовок 2'));
+  expect(area).toHaveAttribute('aria-activedescendant', selected()?.id as string);
+
+  // Закрылось — снято ВСЁ, а не только видимость.
+  await userEvent.keyboard('{Escape}');
+  await waitFor(() => expect(screen.queryByTestId('slash-menu')).toBeNull());
+  expect(area.getAttribute('aria-expanded')).toBeNull();
+  expect(area.getAttribute('aria-controls')).toBeNull();
+  expect(area.getAttribute('aria-activedescendant')).toBeNull();
 });
 
 // --- клавиатура: через suggestion, а не через window ------------------------------------------
