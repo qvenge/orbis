@@ -1,0 +1,1 @@
+ALTER TABLE "entities" ADD COLUMN "body_before_doc" text;

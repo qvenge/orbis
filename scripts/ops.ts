@@ -15,6 +15,7 @@
 //   bun scripts/ops.ts migrate        # накатить неприменённые миграции схемы
 //   bun scripts/ops.ts seed-aspects   # upsert встроенных аспектов (идемпотентно)
 //   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
+//   bun scripts/ops.ts census         # только чтение: сколько тел перенос изменит сильнее прочих
 //   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
 //   bun scripts/ops.ts backfill-body-doc  # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
@@ -259,10 +260,14 @@ async function auditBodiesOp(): Promise<number> {
     const who = await describeRoleAccess(drizzle(sql, { schema }));
     console.log(`роль: ${who.role} (BYPASSRLS: ${who.bypassRls ? 'да' : 'НЕТ'})`);
     const r = await auditBodies({
-      // `id` выбирается ТОЛЬКО ради курсора и никуда не печатается: тела и всё, что к ним
-      // ведёт, из процесса не выходят — вывод команды попадает в транскрипты и отчёты.
+      // `id` выбирается ради курсора порций И ради списка виновных строк ниже. Наружу не
+      // выходят ТЕЛА — вывод команды попадает в транскрипты и отчёты; идентификаторы выходят
+      // намеренно, иначе разбор по кранам неисполним (раньше здесь стояло «никуда не
+      // печатается» — после раунда 5 это перестало быть правдой).
       selectBatch: (limit, afterId) =>
-        sql<AuditRow[]>`SELECT id, body, body_doc AS "bodyDoc" FROM entities
+        sql<AuditRow[]>`SELECT id, body, body_doc AS "bodyDoc",
+                               body_before_doc AS "bodyBeforeDoc"
+                        FROM entities
                         WHERE id > ${afterId}::uuid ORDER BY id LIMIT ${limit}`,
     });
     console.log(`тел всего: ${r.total}`);
@@ -284,6 +289,9 @@ async function auditBodiesOp(): Promise<number> {
     // Пост-проверка: ДО конверсии первое число равно всему корпусу, ПОСЛЕ — оба обязаны быть 0.
     console.log(`без документа (body_doc IS NULL): ${r.withoutDoc}`);
     console.log(`СТОП-КРАН пара разошлась (body ≠ serialize(body_doc)): ${r.pairBroken}`);
+    // Четвёртый кран: всё заявление «конверсия обратима» держится на этой колонке, и до
+    // раунда 6 её не проверял никто.
+    console.log(`СТОП-КРАН сконвертировано без страховки обратимости: ${r.convertedWithoutBackup}`);
     // Без id регламентный «стоп и разбор конкретного тела» неисполним: по счётчику «1» строку
     // в корпусе на тысячи записей не найти. Сами тела наружу по-прежнему не выходят.
     if (r.flagged.length > 0) {
@@ -365,6 +373,47 @@ async function backfillBodyDocOp(): Promise<number> {
   });
 }
 
+/**
+ * Перепись форм, которые перенос изменит СИЛЬНЕЕ ПРОЧИХ, — только чтение, только числа.
+ *
+ * Заведена потому, что регламентный «шаг переписи» был НЕИСПОЛНИМ: прод-операции идут только
+ * через белый список этого файла, а такой команды в нём не было (ре-ревью раунда 6, п.4).
+ * Обещанный шаг, которого нельзя выполнить, — хуже отсутствующего: он создаёт видимость
+ * проверки.
+ *
+ * Это НЕ гейт: все перечисленные формы после починок текста не теряют, они лишь станут
+ * дословными блоками или сменят вид. Число нужно, чтобы владелец знал масштаб ПЕРЕД переносом
+ * и не удивился, открыв заметку.
+ *
+ * Тела не печатаются — только счётчики; `id` тоже не выводится (для разбора есть audit-bodies).
+ */
+async function censusBodies(): Promise<number> {
+  return withDb(async (sql) => {
+    const who = await describeRoleAccess(drizzle(sql, { schema }));
+    console.log(`роль: ${who.role} (BYPASSRLS: ${who.bypassRls ? 'да' : 'НЕТ'})`);
+    const [row] = await sql<Array<Record<string, number>>>`SELECT
+        count(*)::int AS total,
+        count(*) FILTER (WHERE body ~ '(^|\n)[0-9]+[.)] ' AND body LIKE '%|%')::int AS ol_table,
+        count(*) FILTER (WHERE body ~ '(^|\n)[0-9]+[.)] ' AND body LIKE '%[](%')::int AS ol_emptylink,
+        count(*) FILTER (WHERE body ~ '(^|\n)[0-9]+[.)] ' AND body LIKE '%![%')::int AS ol_image,
+        count(*) FILTER (WHERE body LIKE '%- [ ] %' AND body LIKE '%|%')::int AS task_table,
+        count(*) FILTER (WHERE body LIKE '%- [ ] %' AND body LIKE '%[](%')::int AS task_emptylink,
+        count(*) FILTER (WHERE body LIKE '%&nbsp;%' OR body LIKE '%' || chr(160) || '%')::int AS nbsp,
+        count(*) FILTER (WHERE body ~ '(^|\n)0[.)] ')::int AS zero_start
+      FROM entities`;
+    console.log(`тел всего: ${row?.total ?? 0}`);
+    console.log(`нумерованный список рядом с таблицей: ${row?.ol_table ?? 0}`);
+    console.log(`нумерованный список со ссылкой [](: ${row?.ol_emptylink ?? 0}`);
+    console.log(`нумерованный список с картинкой ![: ${row?.ol_image ?? 0}`);
+    console.log(`чеклист рядом с таблицей: ${row?.task_table ?? 0}`);
+    console.log(`чеклист со ссылкой [](: ${row?.task_emptylink ?? 0}`);
+    console.log(`неразрывный пробел (&nbsp; или U+00A0): ${row?.nbsp ?? 0}`);
+    console.log(`список, начинающийся с 0.: ${row?.zero_start ?? 0}`);
+    console.log('\nЭто НЕ гейт: текст в этих формах цел, меняется только вид.');
+    return who.bypassRls ? 0 : 1;
+  });
+}
+
 async function ping(): Promise<number> {
   await withDb(async (sql) => {
     const [row] = await sql<{ version: string }[]>`SELECT version()`;
@@ -432,6 +481,10 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
   migrate: { run: migrateOp, help: 'накатить неприменённые миграции схемы (идемпотентно)' },
   'seed-aspects': { run: seedAspects, help: 'upsert встроенных аспектов (идемпотентно)' },
   coverage: { run: coverage, help: 'только чтение: покрытие транзакций за 90 дней (§8)' },
+  census: {
+    run: censusBodies,
+    help: 'только чтение: сколько тел перенос изменит сильнее прочих (не гейт, тела не печатаются)',
+  },
   'audit-bodies': {
     run: auditBodiesOp,
     help: 'только чтение: агрегаты по корпусу тел перед конверсией (тела не печатаются)',

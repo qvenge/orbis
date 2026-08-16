@@ -8,6 +8,7 @@ import {
   type BodyDoc,
   bodyRefsFromDoc,
   canonicalizeBody,
+  losesWord,
   projectionKeepsEverything,
   serializeBody,
 } from '@orbis/shared/doc';
@@ -19,7 +20,14 @@ import type { RoleAccess } from './backfill-body-doc';
  * ПОСТ-проверки: до конверсии он всюду NULL, после неё обязан быть заполнен и согласован
  * с `body` (ре-ревью раунда 3, п.5).
  */
-export type AuditRow = { id: string; body: string | null; bodyDoc: unknown };
+export type AuditRow = {
+  id: string;
+  body: string | null;
+  bodyDoc: unknown;
+  /** Исходное тело до конверсии. Читается ради проверки, что страховка обратимости РЕАЛЬНО
+   *  заполнена: всё заявление «процедура обратима» держится на ней, а проверки не было. */
+  bodyBeforeDoc: string | null;
+};
 
 /**
  * Минимальный доступ к БД: взять порцию тел по курсору. Единственный SQL команды — SELECT,
@@ -65,40 +73,6 @@ const settle = (s: string): string =>
     .replace(NBSP_PARA, '$1')
     .replace(/\n{3,}/g, '\n\n')
     .replace(/^\n+|\n+$/g, '');
-
-/** Слово — две и более буквы или цифры подряд. Одиночные символы отброшены намеренно: разметка
- *  ими сорит (маркеры, черта таблицы, скобки), и на них счётчик шумел бы. */
-const WORD_RE = /[\p{L}\p{N}]{2,}/gu;
-
-/** Имена HTML-сущностей — РАЗМЕТКА, а не проза. Без этой вырезки счётчик ловил здоровое
- *  семейство `&lt;`/`&gt;`/`&amp;`: канон раскрывает их в сам знак, и «lt»/«gt»/«amp»
- *  честно исчезают, ничего не теряя (замерено на трёх телах). */
-const ENTITY_RE = /&(?:[a-zA-Z][a-zA-Z0-9]*|#\d+|#x[0-9a-fA-F]+);/g;
-
-/**
- * Пропало ли из тела СЛОВО по дороге в канон.
- *
- * Единственный счётчик, который смотрит на ПЕРВЫЙ разбор — тот самый шаг, который бэкфилл
- * делает необратимо. Все прочие краны начинают отсчёт после него и потому слепы к целому
- * классу: рваная строка таблицы, картинка в ячейке внутри цитаты, ссылка с пустым текстом —
- * каждая уничтожала текст молча, и все четыре числа читались нулями (ре-ревью раунда 4).
- *
- * Сравнивать ЕСТЬ С ЧЕМ — с самим исходным `body`; в раунде 3 я утверждал обратное («общего
- * детектора нет и он невозможен дёшево»), и это было неверно вдвойне: детектор возможен и
- * стоит один проход регэкспом.
- *
- * Множество, а не мультимножество: слово, потерявшее один из двух своих экземпляров, счётчик
- * не поднимет. Это осознанный размен в сторону молчания — стоп-кран, который шумит, перестают
- * читать, а настоящая порча этого класса уносит слово целиком.
- */
-function lostWord(before: string, after: string): boolean {
-  const kept = new Set<string>();
-  for (const m of after.toLowerCase().matchAll(WORD_RE)) kept.add(m[0]);
-  for (const m of before.replace(ENTITY_RE, ' ').toLowerCase().matchAll(WORD_RE)) {
-    if (!kept.has(m[0])) return true;
-  }
-  return false;
-}
 
 /**
  * Все rawBlock-узлы дерева НА ЛЮБОЙ ГЛУБИНЕ.
@@ -159,7 +133,11 @@ export type AuditResult = {
   /**
    * СТОП-КРАН №3, единственный про ПЕРВЫЙ разбор: тел, из которых по дороге в канон пропало
    * слово. Прочие краны считают ПОСЛЕ первого разбора и к этому классу слепы по построению,
-   * а необратимый шаг бэкфилла — именно первый разбор. См. `lostWord`.
+   * а необратимый шаг бэкфилла — именно первый разбор.
+   *
+   * Предикат — ТОТ ЖЕ `losesWord` из `@orbis/shared/doc`, которым разбор решает, уводить ли
+   * блок в raw. Единственная реализация намеренно: две копии разошлись бы, и аудит обещал бы
+   * одно, а конверсия делала другое.
    */
   lostWords: number;
   /**
@@ -177,6 +155,17 @@ export type AuditResult = {
    */
   pairBroken: number;
   /**
+   * СТОП-КРАН №4: строк, у которых документ есть, а СТРАХОВКИ ОБРАТИМОСТИ нет
+   * (`body_doc IS NOT NULL AND body_before_doc IS NULL`).
+   *
+   * Без этого числа всё заявление «процедура больше не необратима» ничем не проверено: если
+   * миграция не накатилась, если ops запущен из старой сборки, если строку успел сконвертировать
+   * путь ЗАПИСИ (редактор или модель) между миграцией и переносом — владелец досчитает до конца
+   * по зелёным числам, останется без страховки и уже получит разрешение не хранить бэкап
+   * (ре-ревью раунда 6, п.3).
+   */
+  convertedWithoutBackup: number;
+  /**
    * `id` строк, поднявших ЛЮБОЙ стоп-кран, — не больше FLAGGED_LIMIT штук.
    *
    * Без них регламентный шаг «стоп и разбор конкретного тела» НЕИСПОЛНИМ: по счётчику «1»
@@ -187,7 +176,7 @@ export type AuditResult = {
    * из процесса по-прежнему не выходят. Список ограничен, чтобы больной корпус не вывалил
    * сотню тысяч строк в транскрипт.
    */
-  flagged: string[];
+  flagged: Array<{ id: string; gates: string[] }>;
 };
 
 /** Сколько id печатать: для разбора нужен вход в корпус, а не весь его список. */
@@ -207,7 +196,12 @@ export const FLAGGED_LIMIT = 50;
  */
 export function auditExitCode(who: RoleAccess, r: AuditResult): number {
   if (!who.bypassRls) return 1;
-  return r.unstable > 0 || r.lossy > 0 || r.lostWords > 0 || r.failed > 0 || r.pairBroken > 0
+  return r.unstable > 0 ||
+    r.lossy > 0 ||
+    r.lostWords > 0 ||
+    r.failed > 0 ||
+    r.pairBroken > 0 ||
+    r.convertedWithoutBackup > 0
     ? 1
     : 0;
 }
@@ -215,7 +209,11 @@ export function auditExitCode(who: RoleAccess, r: AuditResult): number {
 /**
  * Считает агрегаты по корпусу. Тела НЕ печатаются и НЕ покидают процесс ни в каком виде:
  * это личные записи, а вывод команды попадает в транскрипты и отчёты. `id` выбирается ТОЛЬКО
- * ради курсора порций и никуда не идёт — ни одному счётчику он не нужен.
+ * ради курсора порций и ради списка `flagged` — ни одному СЧЁТЧИКУ он не нужен.
+ *
+ * (До раунда 5 здесь стояло «и никуда не идёт». После того как аудит начал печатать id
+ * виновных строк, это перестало быть правдой, и утверждение исправлено: наружу не выходят
+ * ТЕЛА, а идентификаторы выходят — намеренно, иначе разбор по кранам неисполним.)
  *
  * `canon` параметром, а не жёстко: единственный способ проверить ветку `failed` — подсунуть
  * конверсию, которая бросает. Настоящая (`canonicalizeBody`) не бросила ни разу на 23
@@ -237,6 +235,7 @@ export async function auditBodies(
     lostWords: 0,
     withoutDoc: 0,
     pairBroken: 0,
+    convertedWithoutBackup: 0,
     flagged: [],
   };
   let afterId = ID_START;
@@ -247,9 +246,11 @@ export async function auditBodies(
       result.total += 1;
       // Курсор двигается ВСЕГДА, в том числе на упавшей строке: иначе она вращала бы цикл.
       afterId = row.id; // выборка отсортирована по id, поэтому последний id порции — наибольший
-      let raised = false;
-      const flag = (hit: boolean): boolean => {
-        if (hit) raised = true;
+      // Имя крана, а не голый факт: при нескольких ненулевых числах человек иначе получает
+      // смесь строк и не знает, с чем идти к каждой (ре-ревью раунда 6).
+      const gates: string[] = [];
+      const flag = (hit: boolean, gate: string): boolean => {
+        if (hit) gates.push(gate);
         return hit;
       };
       try {
@@ -263,21 +264,34 @@ export async function auditBodies(
         if (row.bodyDoc === null || row.bodyDoc === undefined) {
           result.withoutDoc += 1;
         } else {
+          // Документ есть — значит строка уже сконвертирована. Тогда обязана быть и страховка
+          // обратимости: её кладёт бэкфилл тем же UPDATE. Пусто — строку перевёл путь ЗАПИСИ
+          // (редактор или модель) либо старая сборка ops, и восстановить её нечем.
+          if (row.bodyBeforeDoc === null || row.bodyBeforeDoc === undefined) {
+            result.convertedWithoutBackup += 1;
+            gates.push('нет страховки обратимости');
+          }
           try {
-            if (flag(serializeBody(row.bodyDoc as BodyDoc) !== body)) result.pairBroken += 1;
+            if (flag(serializeBody(row.bodyDoc as BodyDoc) !== body, 'пара разошлась')) {
+              result.pairBroken += 1;
+            }
           } catch {
             result.pairBroken += 1;
-            raised = true;
+            gates.push('пара разошлась');
           }
         }
         const { doc, body: canonical } = canon(body);
         if (canonical !== body) result.changed += 1;
         // Два стоп-крана. Второй прогон канона — единственная лишняя работа замера, и она того
         // стоит: именно эти числа решают, можно ли пускать необратимую конверсию.
-        if (flag(settle(canon(canonical).body) !== settle(canonical))) result.unstable += 1;
-        if (flag(!projectionKeepsEverything(doc, canonical))) result.lossy += 1;
+        if (flag(settle(canon(canonical).body) !== settle(canonical), 'канон неустойчив')) {
+          result.unstable += 1;
+        }
+        if (flag(!projectionKeepsEverything(doc, canonical), 'теряет текст или ссылку')) {
+          result.lossy += 1;
+        }
         // Единственная проверка ПЕРВОГО разбора — того шага, который бэкфилл делает необратимо.
-        if (flag(lostWord(body, canonical))) result.lostWords += 1;
+        if (flag(losesWord(body, canonical), 'пропало слово')) result.lostWords += 1;
         const raws = collectRawBlocks(doc.doc);
         if (raws.length > 0) {
           result.withRaw += 1;
@@ -291,9 +305,11 @@ export async function auditBodies(
         // Одно неразобранное тело не должно рушить замер: аудит и заведён затем, чтобы такие
         // тела ПОСЧИТАТЬ. Само тело в вывод не идёт даже в этой ветке.
         result.failed += 1;
-        raised = true;
+        gates.push('упало на парсе');
       }
-      if (raised && result.flagged.length < FLAGGED_LIMIT) result.flagged.push(row.id);
+      if (gates.length > 0 && result.flagged.length < FLAGGED_LIMIT) {
+        result.flagged.push({ id: row.id, gates });
+      }
     }
     if (rows.length < AUDIT_BATCH) break; // неполная порция — корпус исчерпан, лишний SELECT не нужен
   }

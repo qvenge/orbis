@@ -26,6 +26,9 @@ function fakeCorpus(
     id: `id-${String(i).padStart(5, '0')}`,
     body,
     bodyDoc: docs?.[i] ?? null,
+    // Страховка обратимости считается заполненной там, где есть документ: иначе КАЖДОЕ тело
+    // с документом поднимало бы кран «нет страховки» и глушило бы остальные проверки.
+    bodyBeforeDoc: docs?.[i] === undefined || docs[i] === null ? null : 'исходное',
   }));
   const selects: Array<{ limit: number; afterId: string }> = [];
   return {
@@ -85,6 +88,7 @@ test('счётчики считают то, что обещают, и порци
     lostWords: 0,
     withoutDoc: 7, // корпус ДО конверсии: документа нет ни у кого
     pairBroken: 0,
+    convertedWithoutBackup: 0,
     flagged: [],
   });
 });
@@ -193,7 +197,9 @@ test('аудит называет id строк, поднявших кран (р
     body: body.startsWith('дрожит') ? `${body}!` : body,
   }));
   expect(r.unstable).toBe(1);
-  expect(r.flagged).toEqual(['id-00001']); // ровно виновная строка, а не весь корпус
+  // Ровно виновная строка И название крана: при нескольких ненулевых числах без имени человек
+  // получает смесь и не знает, с чем идти к каждой строке.
+  expect(r.flagged).toEqual([{ id: 'id-00001', gates: ['канон неустойчив'] }]);
 });
 
 test('список id ограничен сверху — больной корпус не вываливает всё', async () => {
@@ -204,6 +210,24 @@ test('список id ограничен сверху — больной кор�
   }));
   expect(r.unstable).toBe(FLAGGED_LIMIT + 20); // считаны ВСЕ
   expect(r.flagged).toHaveLength(FLAGGED_LIMIT); // а напечатан вход в корпус
+});
+
+test('кран ловит строку, сконвертированную БЕЗ страховки обратимости (ре-ревью раунда 6)', async () => {
+  // Всё заявление «процедура больше не необратима» держится на колонке, а проверки не было.
+  // Строку мог перевести путь ЗАПИСИ между миграцией и переносом, или ops мог быть старой
+  // сборки — и владелец досчитал бы до конца по зелёным числам, оставшись без страховки.
+  const good = 'текст';
+  const rows: AuditRow[] = [
+    { id: 'id-1', body: good, bodyDoc: parseBody(good), bodyBeforeDoc: 'исходное' },
+    { id: 'id-2', body: good, bodyDoc: parseBody(good), bodyBeforeDoc: null }, // ← беда
+    { id: 'id-3', body: good, bodyDoc: null, bodyBeforeDoc: null }, // ещё не тронута — норма
+  ];
+  const r = await auditBodies({
+    selectBatch: async (_l, after) => rows.filter((x) => x.id > after),
+  });
+  expect(r.convertedWithoutBackup).toBe(1);
+  expect(r.withoutDoc).toBe(1); // третья строка — законно без документа, краном не считается
+  expect(r.flagged).toEqual([{ id: 'id-2', gates: ['нет страховки обратимости'] }]);
 });
 
 test('код возврата аудита: невидимый корпус и стоп-краны (ре-ревью раунда 3, п.1)', () => {
@@ -224,6 +248,7 @@ test('код возврата аудита: невидимый корпус и �
     lostWords: 0,
     withoutDoc: 100,
     pairBroken: 0,
+    convertedWithoutBackup: 0,
     flagged: [],
   };
   // Ровно тот случай, ради которого код заведён: все счётчики нулевые, потому что НИЧЕГО НЕ ВИДНО.
@@ -245,6 +270,7 @@ test('код возврата аудита: невидимый корпус и �
   expect(auditExitCode(admin, { ...clean, lostWords: 1 })).toBe(1);
   expect(auditExitCode(admin, { ...clean, failed: 1 })).toBe(1);
   expect(auditExitCode(admin, { ...clean, pairBroken: 1 })).toBe(1);
+  expect(auditExitCode(admin, { ...clean, convertedWithoutBackup: 1 })).toBe(1);
   // А `withoutDoc` в гейт НЕ входит: до конверсии он законно равен всему корпусу.
   expect(auditExitCode(admin, { ...clean, withoutDoc: 100 })).toBe(0);
 });
@@ -325,8 +351,8 @@ test('одно упавшее тело не рушит замер, а попад
       calls += 1;
       return calls === 1
         ? [
-            { id: 'a', body: 'взорвётся', bodyDoc: null },
-            { id: 'b', body: 'обычное', bodyDoc: null },
+            { id: 'a', body: 'взорвётся', bodyDoc: null, bodyBeforeDoc: null },
+            { id: 'b', body: 'обычное', bodyDoc: null, bodyBeforeDoc: null },
           ]
         : [];
     },
