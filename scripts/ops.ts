@@ -30,6 +30,7 @@ import {
   auditBodies,
   auditExitCode,
   FLAGGED_LIMIT,
+  formatFlagged,
 } from '../apps/server/src/db/audit-bodies';
 import {
   backfillBodyDoc,
@@ -296,9 +297,16 @@ async function auditBodiesOp(): Promise<number> {
     // в корпусе на тысячи записей не найти. Сами тела наружу по-прежнему не выходят.
     if (r.flagged.length > 0) {
       console.log(`\nid строк, поднявших стоп-кран (не больше ${FLAGGED_LIMIT}):`);
-      for (const id of r.flagged) console.log(`  ${id}`);
+      // `row.id` и имена кранов ПОИМЁННО. Прежняя строка печатала `${id}` по массиву объектов
+      // и давала `[object Object]` — шаг регламента «взять напечатанные id» был неисполним
+      // (ре-ревью раунда 7, Д3). Тесты этого не ловили: они проверяли СТРУКТУРУ результата,
+      // а не печать, — поэтому ниже к ним добавлена проверка самой строки вывода.
+      for (const line of formatFlagged(r.flagged)) console.log(line);
       console.log(
-        "Разбор: SELECT body FROM entities WHERE id = '<id>'; — ЛОКАЛЬНО, не в транскрипт.",
+        '\nРазбор — ЛОКАЛЬНО, вывод не в транскрипт:' +
+          "\n  ДО переноса:    SELECT body FROM entities WHERE id = '<id>';" +
+          "\n  ПОСЛЕ переноса: SELECT body_before_doc FROM entities WHERE id = '<id>';" +
+          '\n  (после переноса `body` уже канон — сравнивать надо с исходным телом)',
       );
     }
     if (!who.bypassRls) {

@@ -494,6 +494,104 @@ describe('body из bodyDoc — КАНОНИЧЕН (итоговое ревью,
   });
 });
 
+describe('страховка обратимости заполняется ВСЕМИ путями (ре-ревью раунда 7, Д2)', () => {
+  // Кран «сконвертировано без страховки обратимости» стал бы вечно красным на живой системе:
+  // путь записи кладёт документ при каждой правке и при каждом создании, а колонку не трогал,
+  // и бэкфилл такие строки уже не выберет. Шаг регламента «дождаться нуля» не наступил бы
+  // никогда — ровно тот провал, что разобран в отчёте §11.6.
+  async function columnOf(id: string): Promise<string | null> {
+    const rows = await admin.execute(sql`SELECT body_before_doc FROM entities WHERE id = ${id}`);
+    return (rows[0] as { body_before_doc: string | null }).body_before_doc;
+  }
+
+  test('создание: запись рождается с документом И с заполненной колонкой', async () => {
+    const { entity } = await createOne('* раз\n* два');
+    const row = await rowOf(entity.id);
+    expect(row.body_doc).not.toBeNull();
+    expect(await columnOf(entity.id)).toBe(row.body); // тела до конверсии не было — кладём канон
+  });
+
+  test('ПРАВКА строки без документа заполняет колонку ИСХОДНЫМ телом', async () => {
+    // Самый опасный случай: строка старого корпуса, до которой бэкфилл не дошёл, а владелец
+    // её открыл и сохранил. Раньше документ появлялся, а страховка — нет.
+    const { entity, owner } = await createOne('исходное тело');
+    await admin.execute(
+      sql`UPDATE entities SET body_doc = NULL, body_before_doc = NULL WHERE id = ${entity.id}`,
+    );
+    const fresh = await rowOf(entity.id);
+    expect(fresh.body_doc).toBeNull(); // премиса: строка «дококументной» эпохи
+    okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          { id: entity.id, body: 'новый текст', expectedUpdatedAt: entity.updatedAt },
+          owner,
+        ),
+      ),
+    );
+    expect(await columnOf(entity.id)).toBe('исходное тело'); // не «новый текст»
+  });
+
+  test('повторная правка НЕ затирает однажды сохранённое исходное тело', async () => {
+    const { entity, owner } = await createOne('самое первое');
+    await admin.execute(
+      sql`UPDATE entities SET body_doc = NULL, body_before_doc = NULL WHERE id = ${entity.id}`,
+    );
+    const first = await rowOf(entity.id);
+    expect(first.body_doc).toBeNull();
+    const after1 = okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          { id: entity.id, body: 'правка раз', expectedUpdatedAt: entity.updatedAt },
+          owner,
+        ),
+      ),
+    );
+    okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          { id: entity.id, body: 'правка два', expectedUpdatedAt: after1.updatedAt },
+          owner,
+        ),
+      ),
+    );
+    expect(await columnOf(entity.id)).toBe('самое первое');
+  });
+
+  test('путь bodyDoc (редактор) страховку тоже кладёт', async () => {
+    const { entity, owner } = await createOne('было в редакторе');
+    await admin.execute(
+      sql`UPDATE entities SET body_doc = NULL, body_before_doc = NULL WHERE id = ${entity.id}`,
+    );
+    okFirst(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          {
+            id: entity.id,
+            bodyDoc: {
+              v: 1,
+              doc: {
+                type: 'doc',
+                content: [{ type: 'paragraph', content: [{ type: 'text', text: 'стало' }] }],
+              },
+            },
+            expectedUpdatedAt: entity.updatedAt,
+          },
+          owner,
+        ),
+      ),
+    );
+    expect(await columnOf(entity.id)).toBe('было в редакторе');
+  });
+});
+
 describe('все законные формы пустоты сохраняются (раунд правок 2)', () => {
   // Сквозная граница гейта. Каждая из этих форм сериализуется в '' (замерено), и гейт по
   // признаку «пустая проекция» отверг бы четыре из пяти. Худший случай был не транзиентным, а

@@ -712,6 +712,27 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
  * операций) имеет приоритет над БД; отсутствие в обоих источниках — NOT_FOUND у вызывающего.
  * RLS скрывает чужие строки — «чужая» и «несуществующая» неразличимы намеренно.
  */
+/**
+ * Сохранить исходное тело, если строка ПРЯМО СЕЙЧАС впервые получает документ.
+ *
+ * Страховку обратимости кладёт не только разовый бэкфилл: путь записи переводит строку в
+ * структурную форму при первой же правке (ленивая конверсия при чтении в базу не пишет, а
+ * сохранение — пишет). Без этого кран «сконвертировано без страховки обратимости» на ЖИВОЙ
+ * системе стал бы вечно красным: бэкфилл такие строки уже не выберет (`body_doc IS NOT NULL`),
+ * а кран их видит — то есть шаг регламента «дождаться нуля» не наступил бы никогда
+ * (ре-ревью раунда 7, Д2). Кран, всегда красный на живой системе, читать перестают — ровно тот
+ * провал, который разобран в отчёте §11.6.
+ *
+ * Условие узкое: пишем ТОЛЬКО при переходе «документа не было → документ появился». У строки,
+ * которая документ уже имеет, сохранять нечего — исходное тело либо уже лежит в колонке, либо
+ * его никогда и не было (запись родилась с документом).
+ */
+function preserveBodyBeforeDoc(patch: EntityPatch, current: EntityRow): void {
+  if (current.bodyDoc === null && current.bodyBeforeDoc === null) {
+    patch.bodyBeforeDoc = current.body;
+  }
+}
+
 async function loadEntityForUpdate(
   ctx: ExecCtx,
   id: string,
@@ -892,6 +913,12 @@ async function prepareEntityCreate(
     emoji: input.emoji ?? null,
     body,
     bodyDoc,
+    // Запись рождается СРАЗУ с документом, поэтому «тела до конверсии» у неё нет — но колонка
+    // обязана быть заполнена, иначе кран «сконвертировано без страховки обратимости» краснел бы
+    // на КАЖДОЙ новой заметке и перестал бы читаться (ре-ревью раунда 7, Д2). Кладём то же
+    // тело: инвариант «есть документ ⇒ есть страховка» становится проверяемым БЕЗ отсечки по
+    // времени наката миграции, а колонка всё равно снимается после переноса.
+    bodyBeforeDoc: body,
     bodyRefs,
     tags,
     meta: input.meta ?? {},
@@ -1164,6 +1191,7 @@ async function prepareEntityUpdate(
     const { doc: storedDoc, body } = bodyPairFromDoc(input.bodyDoc);
     patch.bodyDoc = storedDoc;
     patch.body = body;
+    preserveBodyBeforeDoc(patch, current);
     // Ссылки — из ТОГО, ЧТО ЛЁГЛО. В штатной ветке это тот же вход; в ветке страховки — raw,
     // и связи из него достаёт регэксп (Б2: backlinks не зависят от разбираемости тела).
     patch.bodyRefs = bodyRefsFromDoc(storedDoc);
@@ -1175,6 +1203,7 @@ async function prepareEntityUpdate(
     const { doc, body } = canonicalizeBody(input.body);
     patch.body = body;
     patch.bodyDoc = doc;
+    preserveBodyBeforeDoc(patch, current);
     patch.bodyRefs = bodyRefsFromDoc(doc); // дерево ∪ raw — backlinks не теряются (Б2)
     changed.body = body;
     prior.body = current.body;
