@@ -1699,6 +1699,150 @@ test('«Отмена» в тумблере не возвращает текст,
   // здесь таймеры значило бы поднимать ProseMirror под поддельными часами.
 }, 30_000);
 
+// --- в режиме разметки редактора НЕТ, а плашки над вкладками нажимаются (ре-ревью раунда 4) ---
+//
+// Три сюжета ниже об одном: `onAccept` — канал ОТ РЕДАКТОРА, а плашки черновика и конфликта
+// живут над вкладками и доступны, когда редактор размонтирован. Значит на время открытой
+// разметки канал молчит, и всё, что меняет тело оттуда, обязано учитываться иначе.
+
+test('«Оставить моё» из режима разметки не откатывается «Отменой»', async () => {
+  // Пока о показанном сообщал только редактор, посадка черновика из разметки не двигала
+  // запомненное — и «Отмена» сажала обратно набранное ДО черновика: на сервере черновик, на
+  // экране текст до него, местная копия заслоняет базу, а первое нажатие уезжает поверх
+  // черновика. Кнопка обещала заменить текст записи, «Отмена» обещала не менять ничего —
+  // и вместе они сделали третье (ре-ревью раунда 4, Д1).
+  seedDraft(parseBody('черновик прошлой сессии'), 'СТАРАЯ-МЕТКА');
+  renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, 'X');
+  await expectEditorText('X');
+
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  await screen.findByTestId('markdown-source');
+  // Баннер черновика живёт ВНЕ вкладок (находка 4) — то есть нажимается и отсюда.
+  fireEvent.click(screen.getByRole('button', { name: 'Оставить моё' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+  await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
+
+  await openEditor();
+  await expectEditorText('черновик прошлой сессии');
+}, 30_000);
+
+test('«Обновить» из режима разметки не заслоняется «Отменой»', async () => {
+  // Тот же разрыв с другой стороны: конфликт → разметка → «Обновить» приносит чужое тело, а
+  // извещать о подмене некому (редактора нет). Снятая проверка свежести открывала ровно ту
+  // находку, ради которой писалась (ре-ревью раунда 4, Д2).
+  const outside = {
+    ...entity,
+    title: 'Изменено извне',
+    body: 'извне',
+    bodyDoc: parseBody('извне'),
+    updatedAt: 'B',
+  };
+  const serve = { outside: false };
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: serve.outside ? outside : entity, relations: [], thread: null };
+    if (path === 'entity.update') throw trpcError('CONFLICT');
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await expectEditorText('и хвост');
+  const refresh = await screen.findByRole('button', { name: 'Обновить' }, EDITOR_READY);
+
+  // Разметка открывается ДО «Обновить» — в этом вся разница с тестом раунда 3: там чужое тело
+  // приезжало при живом редакторе, здесь редактора нет вовсе.
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  await screen.findByTestId('markdown-source');
+
+  serve.outside = true;
+  fireEvent.click(refresh);
+  await waitFor(() =>
+    expect(screen.getByRole('heading', { name: 'Изменено извне' })).toBeInTheDocument(),
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+  await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
+  await openEditor();
+  await expectEditorText('извне');
+}, 30_000);
+
+test('ничего не трогали: приехавшее тело не заслоняется выходом из разметки', async () => {
+  // Запомненное обязано оставаться ПУСТЫМ у человека, который ничего не менял: редактор
+  // показывал документ, но не менял его. Извещай он о подмене на каждом монтировании (сверка
+  // там истинна всегда), документ момента монтирования заслонил бы приехавшее — и «Отмена»
+  // вернула бы на экран текст, который сервер уже сменил (ре-ревью раунда 4, дыра в покрытии).
+  const outside = {
+    ...entity,
+    title: 'Изменено извне',
+    body: 'извне',
+    bodyDoc: parseBody('извне'),
+    updatedAt: 'B',
+  };
+  const serve = { outside: false };
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: serve.outside ? outside : entity, relations: [], thread: null };
+    if (path === 'entity.update') return entity;
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  await openEditor(); // редактор поднят, но НИ ОДНОГО нажатия в нём не было
+  await expectEditorText('тело');
+
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  await screen.findByTestId('markdown-source');
+
+  // Чужое тело приезжает, пока разметка открыта: чекбокс двигает запись, инвалидация
+  // перечитывает её.
+  serve.outside = true;
+  fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
+  await waitFor(() =>
+    expect(screen.getByRole('heading', { name: 'Изменено извне' })).toBeInTheDocument(),
+  );
+
+  fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+  await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
+  await openEditor();
+  await expectEditorText('извне');
+}, 30_000);
+
+test('выход из разметки ТЕМ ЖЕ пунктом меню не теряет набранное', async () => {
+  // Дверей наружу четыре: «Отмена», Escape, «Применить» и тот же пункт меню ⋮. Последняя идёт
+  // МИМО `onClose` тумблера, и заплата, повешенная на него, прикрывала бы три двери из четырёх
+  // (ре-ревью раунда 4). Поэтому посадка показанного висит на СМЕНЕ ФЛАГА, а флаг меняется ровно
+  // один раз на дверь, каким бы путём его ни повернули.
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: { ...entity, body: 'тело', bodyDoc: parseBody('тело') }, relations: [] };
+    if (path === 'entity.update') throw trpcError('INTERNAL_SERVER_ERROR');
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await expectEditorText('и хвост');
+
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  await screen.findByTestId('markdown-source');
+  // Выход ТЕМ ЖЕ пунктом — он просто переключает флаг.
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
+
+  await openEditor();
+  await expectEditorText('тело и хвост');
+}, 30_000);
+
 test('правка из тумблера садится в редактор, а не остаётся в тумблере', async () => {
   // Иначе экран и база разъезжаются до первого нажатия клавиши: правка уехала бы
   // автосохранением, а редактор показывал бы прежний текст и вернул бы его поверх.
