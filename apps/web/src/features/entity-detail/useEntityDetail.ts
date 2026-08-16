@@ -1,14 +1,17 @@
+import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { useRef, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
-// Листовой модуль хранилища: своих рантайм-зависимостей у него нет вовсе, и схему редактора он
-// не тянет (стережёт save.test.tsx). Зачем он здесь — см. `settleBodyDraft` ниже.
+// Листовые модули: своих рантайм-зависимостей у них нет вовсе, и схему редактора они не тянут
+// (стережёт save.test.tsx). Зачем они здесь — см. `settleBodyDraft` ниже.
 import {
   clearDraft,
   DRAFT_REJECTING_CODE,
   markDraftRejected,
+  readDraft,
 } from '../entity-editor/draft-storage';
+import { sameDoc } from '../entity-editor/strip-ids';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 type UpdateInput = RouterInputs['entity']['update'];
@@ -77,9 +80,26 @@ function applyPatch(entity: Entity, input: UpdateInput): Entity {
  * документом, и правки заголовка, чекбокса и аспектов сюда не попадают.
  *
  * `vars.id`, а не `entityId` хука: колбэк исполняется по СВОЕЙ записи, чья бы очередь ни шла.
+ *
+ * СВЕРКА С ДОКУМЕНТОМ обязательна, и это не перестраховка. По одной записи живут две мутации
+ * разом (useBodySave бросает зависший запрос по выдержке и досылает поверх), а на диске к
+ * моменту оседания лежит ПОСЛЕДНЕЕ набранное — не то, что сервер принял. Сюжет: печатает A,
+ * запрос №0 зависает и брошен, дописывает B (на диске B), запрос №1 отказывает, сеть чинится —
+ * и брошенный №0 оседает успехом. Безусловная чистка стёрла бы B, которого на сервере нет:
+ * закрыл вкладку — и B нет нигде. Зеркало у пометки: «отвергнут» досталось бы черновику,
+ * которого сервер не видел, — человеку сказали бы неправду и лишили бы его текст автодосыла
+ * (ревью раунда 3, находка 7). Внутри хука та же сверка есть (`rejectedDocRef`), здесь её не
+ * было.
+ *
+ * Сравнение ПО СМЫСЛУ (`sameDoc`), а не по строке: на диск документ уезжает через JSON, и
+ * блочные id тут ни при чём — совпасть должен текст.
  */
 function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
-  if (vars.bodyDoc === undefined) return;
+  const sent = vars.bodyDoc;
+  if (sent === undefined) return;
+  const draft = readDraft(vars.id);
+  if (draft === null) return;
+  if (draft.doc.v !== sent.v || !sameDoc(draft.doc.doc, sent.doc as JSONContent)) return;
   if (err === undefined) {
     clearDraft(vars.id);
     return;

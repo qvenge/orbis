@@ -125,6 +125,13 @@ async function tick(ms = 0): Promise<void> {
 const SAVE_PAUSE = 2000;
 const SLOW_THRESHOLD = 1000;
 
+/**
+ * Что индикатор говорит о ТЕРМИНАЛЬНОМ отказе. Выписано строкой, а не взято из модуля, по той
+ * же причине, что и пороги: это обещание человеку, а не деталь. Совпади оно с сетевым
+ * «Не сохранено» — экран сказал бы «повторим», не собираясь повторять никогда.
+ */
+const TERMINAL_TEXT = 'Правка отклонена — обновите страницу';
+
 beforeEach(() => {
   // Черновик Задачи 14 переживает не только вкладку, но и ТЕСТ: все стенды файла работают с
   // записью 'e1', и неотправленная правка одного теста досылалась бы на монтировании
@@ -451,7 +458,7 @@ function mountWithProps(initial: { id: string; entity: BodySaveEntity }, respond
     return <SaveIndicator state={api.state} />;
   }
   let sends = 0;
-  const { calls, container } = renderWithProviders(<Parent />, (path, input) => {
+  const { calls, container, unmount } = renderWithProviders(<Parent />, (path, input) => {
     if (path !== 'entity.update') throw new Error(`сохранение тела не ходит на ${path}`);
     sends += 1;
     if (sends > MAX_SENDS) return new Promise(() => {}); // потолок отправок, см. MAX_SENDS
@@ -461,6 +468,8 @@ function mountWithProps(initial: { id: string; entity: BodySaveEntity }, respond
     container,
     api: () => hold.api as BodySave,
     updates: () => calls.filter((c) => c.path === 'entity.update'),
+    /** Уход с записи (или с экрана): размонтирование обязано дослать отложенное. */
+    unmount: () => act(() => unmount()),
     serve: (r: Respond) => {
       box.respond = r;
     },
@@ -496,6 +505,88 @@ test('приехавшая из кэша сущность становится �
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(2);
+});
+
+/**
+ * Чужая правка, приехавшая с сервера: и документ другой, и метка ПОЗЖЕ всех известных клиенту
+ * (позже и `ENTITY.updatedAt`, и `SAVED.updatedAt` — иначе «поздняя из двух» выбрала бы верную
+ * строку по совпадению, и подмену было бы не отличить от порядка).
+ */
+const FOREIGN: BodySaveEntity = { updatedAt: '2026-08-14T20:00:00.000Z', bodyDoc: THREE };
+
+test('досыл при уходе несёт метку, на которой правка НАБИРАЛАСЬ, а не свежую из кэша', async () => {
+  // Сюжет целиком, все действия штатные: правка с телефона двинула запись; здесь человек
+  // печатает, ловит 409, жмёт «Обновить» — перечитывание приносит ЧУЖОЙ документ, и редактор
+  // (фокус ушёл на кнопку) сажает его вместо набранного. Хук об этой подмене не узнаёт никогда.
+  // Возьми досыл метку из свежего кэша — он ушёл бы как «я видел чужую правку и кладу поверх»,
+  // и сервер молча затёр бы её текстом, который человек уже видел исчезнувшим с экрана.
+  //
+  // §5.2 требует ТУ строку, которую клиент видел, КОГДА ДЕЛАЛ ЭТУ ПРАВКУ. Метка поэтому
+  // замирает вместе с отложенным документом, а не берётся в момент отправки.
+  const s = mountWithProps({ id: 'e1', entity: ENTITY }, () => {
+    throw trpcError('CONFLICT');
+  });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+  expect(s.api().conflict, 'премиса: 409 получен').toBe(true);
+
+  await s.set({ id: 'e1', entity: FOREIGN });
+  s.serve(ok);
+  await s.unmount();
+
+  expect(s.updates()).toHaveLength(2);
+  expect(s.updates()[1]?.input).toEqual({
+    id: 'e1',
+    bodyDoc: ONE,
+    expectedUpdatedAt: ENTITY.updatedAt,
+  });
+  // Страж вакуумности: метки ДОЛЖНЫ различаться, иначе проверка выше ни о чём.
+  expect(FOREIGN.updatedAt).not.toBe(ENTITY.updatedAt);
+});
+
+test('правка, набранная ПОСЛЕ прихода чужого документа, уезжает с ЕГО меткой', async () => {
+  // Обратная сторона: метка замирает вместе с ОТЛОЖЕННЫМ документом, а не навсегда. Человек,
+  // напечатавший поверх приехавшего текста, видел именно его метку — и уходить правка обязана
+  // с ней, иначе каждое сохранение после чужой правки ловило бы 409 до самой перезагрузки.
+  const s = mountWithProps({ id: 'e1', entity: ENTITY });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+
+  await s.set({ id: 'e1', entity: FOREIGN });
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+
+  expect(s.updates()).toHaveLength(2);
+  expect((s.updates()[1]?.input as { expectedUpdatedAt: string }).expectedUpdatedAt).toBe(
+    FOREIGN.updatedAt,
+  );
+});
+
+test('собственный успех двигает метку отложенного: досыл не ловит 409 от предшественника', async () => {
+  // Замри метка НАВСЕГДА в момент набора — досыл, ушедший после успеха первого запроса, нёс бы
+  // строку, которую этот же успех и сдвинул: гарантированный 409 на ровном месте, без единой
+  // чужой правки. Правка №2 — потомок только что сохранённой правки №1, и её база — ответ
+  // сервера.
+  const server = gatedServer();
+  const s = mountWithProps({ id: 'e1', entity: ENTITY }, server.respond);
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+
+  // Вторая правка набрана, ПОКА первая в полёте: её метка на этот момент — ещё ENTITY.updatedAt.
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates(), 'премиса: второй запрос ждёт оседания первого').toHaveLength(1);
+
+  await server.answer(0, SAVED);
+  expect(s.updates()).toHaveLength(2);
+  expect(s.updates()[1]?.input).toEqual({
+    id: 'e1',
+    bodyDoc: TWO,
+    expectedUpdatedAt: SAVED.updatedAt,
+  });
 });
 
 test('смена сущности не уносит в чужую запись ни отложенное тело, ни чужой updatedAt', async () => {
@@ -620,9 +711,11 @@ test('отказ по прежней записи не гасит и не ост
   expect(s.updates()).toHaveLength(1);
 
   await s.set({ id: 'e2', entity: SECOND });
-  // Терминальный отказ ПЕРВОЙ записи: он не зажигает «Не сохранено» на второй...
+  // Терминальный отказ ПЕРВОЙ записи: он не зажигает на второй ни строчки. Проверка по пустоте
+  // контейнера, а не по конкретному тексту: у отказов их теперь два (сетевой и терминальный), и
+  // сверка с одним оставила бы второй непроверенным.
   await server.answer(0, trpcError('BAD_REQUEST'), 'fail');
-  expect(screen.queryByText('Не сохранено')).toBeNull();
+  expect(s.container).toBeEmptyDOMElement();
 
   // ...и не выключает ей сохранение до перезагрузки. Документ — ЛЮБОЙ, кроме тела второй
   // записи (им её база и является): иначе отправки не было бы по совсем другой причине.
@@ -954,7 +1047,10 @@ test('VALIDATION терминален: после него ни одна пра�
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1);
-  expect(screen.getByText('Не сохранено')).toBeInTheDocument();
+  // И говорит индикатор именно про ЭТОТ отказ: «Не сохранено» здесь было бы полуправдой —
+  // у сетевого отказа следующее нажатие клавиши заводит новую попытку, у терминального
+  // повтора не будет НИКОГДА (см. отдельный тест ниже).
+  expect(screen.getByText(TERMINAL_TEXT)).toBeInTheDocument();
 
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
@@ -964,7 +1060,7 @@ test('VALIDATION терминален: после него ни одна пра�
     s.api().flush();
   });
   expect(s.updates()).toHaveLength(1);
-  expect(screen.getByText('Не сохранено')).toBeInTheDocument();
+  expect(screen.getByText(TERMINAL_TEXT)).toBeInTheDocument();
 
   // Положительный контроль: молчание выше — от терминальности, а не от развалившегося
   // стенда. СВЕЖИЙ хук на том же (по-прежнему отказывающем) сервере отправку делает.
@@ -978,7 +1074,61 @@ test('VALIDATION терминален: после него ни одна пра�
   expect(other.updates()).toHaveLength(1);
 });
 
+test('возврат к сохранённому после терминального отказа СНОВА включает сохранение', async () => {
+  // Естественная реакция на «правка отклонена» — Ctrl+Z до исходного текста. Ветка «правку
+  // вернули к сохранённому» гасит индикатор, и если она не снимает саму остановку, человеку
+  // сказана неправда дважды: экран молчит (значит «сохранено»), а запись при этом молча не
+  // сохраняется до перезагрузки — ни одного запроса за всю сессию.
+  const s = setup({
+    respond: () => {
+      throw trpcError('BAD_REQUEST', 'документ не соответствует схеме — правка отклонена');
+    },
+  });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+  expect(screen.getByText(TERMINAL_TEXT), 'премиса: остановка сработала').toBeInTheDocument();
+
+  s.api().onDocChange(parseBody('тело')); // тот же текст, что в базе
+  await tick(SAVE_PAUSE);
+  expect(s.updates(), 'возврат к базе в сеть не ходит').toHaveLength(1);
+  expect(s.container).toBeEmptyDOMElement();
+
+  // ГЛАВНОЕ: следующая правка снова уезжает. Сервер к этому моменту исправен — чужая версия
+  // схемы лечится обновлением приложения, а сама остановка была про ОТВЕРГНУТЫЙ документ.
+  s.serve(ok);
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(2);
+  expect((s.updates()[1]?.input as { bodyDoc: BodyDoc }).bodyDoc).toEqual(TWO);
+});
+
 // --- индикатор --------------------------------------------------------------------------------
+
+test('индикатор отличает терминальный отказ от сетевого', async () => {
+  // Для сетевого «Не сохранено» — правда: следующее нажатие клавиши заводит новую попытку.
+  // Для терминального это обещание, которого никто не собирается выполнять: повтора не будет
+  // никогда, и человеку надо сказать, ЧТО делать (обновить страницу), а не ждать у моря погоды.
+  const s = setup({
+    respond: () => {
+      throw trpcError('INTERNAL_SERVER_ERROR');
+    },
+  });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(screen.getByText('Не сохранено')).toBeInTheDocument();
+  expect(screen.queryByText(TERMINAL_TEXT)).toBeNull();
+
+  // Тот же хук, следующая правка — но отказ уже терминальный: строка обязана смениться.
+  s.serve(() => {
+    throw trpcError('BAD_REQUEST', 'документ не соответствует схеме — правка отклонена');
+  });
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(2);
+  expect(screen.getByText(TERMINAL_TEXT)).toBeInTheDocument();
+  expect(screen.queryByText('Не сохранено')).toBeNull();
+});
 
 test('успех не празднуем: в покое индикатора нет вовсе', () => {
   const { container } = renderWithProviders(<SaveIndicator state="idle" />, (path) => {
@@ -1158,13 +1308,20 @@ test('модули первого кадра не тянут схему реда
   // конверсии в DetailScreen чанк тумблера останется на месте, а схема тихо переедет в чанк
   // detail (ревью раунда 1, Minor 1).
   //
-  // Проверка НЕтранзитивная — ровно шесть файлов, за которые эта задача отвечает. Появись у
+  // Проверка НЕтранзитивная — ровно восемь файлов, за которые эта задача отвечает. Появись у
   // них новый общий сосед со схемой внутри, страж промолчит; охватить весь граф импортов
   // тут нечем, и обещать это было бы неправдой.
+  //
+  // `SaveIndicator.tsx` и `body-box.ts` в списке НЕ для полноты: оба достижимы эагерно
+  // (индикатор рисует DetailScreen, коробку — EditorShell), и значимый импорт схемы в любом из
+  // них утащил бы её в первый кадр МОЛЧА — check-lazy-chunks сверяет наличие чанков, а не их
+  // состав, то есть промолчали бы оба стража разом (ревью раунда 3).
   for (const file of [
     './useBodySave.ts',
     './strip-ids.ts',
     './draft-storage.ts',
+    './SaveIndicator.tsx',
+    './body-box.ts',
     './EditorShell.tsx',
     '../entity-detail/useEntityDetail.ts',
     '../entity-detail/DetailScreen.tsx',
