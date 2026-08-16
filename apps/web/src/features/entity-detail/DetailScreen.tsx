@@ -1,6 +1,7 @@
 import { buildAppPath } from '@orbis/shared';
 import { Archive, ArchiveRestore, Code, EllipsisVertical, Link2, Pin } from 'lucide-react';
 import { lazy, Suspense, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { type RouterOutputs, trpc } from '../../trpc';
@@ -75,6 +76,13 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // экран монтируется без key, и режим правки, переехавший на соседнюю запись, открывал бы её
   // сырым текстом без единого жеста человека.
   const [asMarkdown, setAsMarkdown] = useState(false);
+  /**
+   * Куда тело рисует свои плашки — узел НАД вкладками (см. `noticeHost` в разметке ниже).
+   *
+   * Состоянием, а не рефом: портал обязан перерисоваться, когда узел появился, а реф рендера не
+   * будит. Один лишний проход на монтировании, до первой отрисовки, — вся цена.
+   */
+  const [noticeHost, setNoticeHost] = useState<HTMLElement | null>(null);
   const prevIdRef = useRef(entityId);
   if (prevIdRef.current !== entityId) {
     prevIdRef.current = entityId;
@@ -173,6 +181,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
         asMarkdown={asMarkdown}
         onCloseMarkdown={() => setAsMarkdown(false)}
         screenConflict={conflict}
+        noticeHost={noticeHost}
         onRefresh={() => {
           void get.refetch();
           dismissConflict();
@@ -220,6 +229,18 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       {manualLink !== null && manualLink.id === entityId && (
         <ManualLinkNotice url={manualLink.url} onHide={() => setManualLink(null)} />
       )}
+      {/* Плашки тела (расхождение версий, неотправленный черновик, состояние сохранения) —
+          тоже ВНЕ табов, и по той же причине, что запасная ссылка выше. «Сущность» держится
+          живой через display:none (keepMounted), то есть с «Деталей» и «Треда» всё, что лежит
+          внутри неё, не видно вовсе, — а это единственный канал, которым экран сообщает, что
+          правка НЕ сохранена. Человек, ушедший на «Детали» посмотреть подзадачи, узнавал бы об
+          отказе только вернувшись, а чаще не узнавал вовсе (ревью раунда 3, находка 4).
+
+          Рисует их само тело — через портал в этот узел: плашки суть его состояние, и вести их
+          сюда лишним слоем состояния значило бы завести второй ответ на вопрос «что с
+          сохранением». Портал переносит DOM, оставляя дерево React на месте, — поэтому
+          `key={entity.id}` у тела и вся его память о правке работают ровно как прежде. */}
+      <div ref={setNoticeHost} className="mx-auto w-full max-w-3xl px-4 md:px-6" />
       {/* Три таба — под шапкой; контент центрирован, шапка — на всю ширину.
           keepMounted у «Сущности» — ради редактора: Radix по умолчанию размонтирует неактивную
           вкладку, и уход на «Детали» уничтожил бы вместе с ней несохранённый текст и всю
@@ -268,6 +289,7 @@ function EntityBody({
   asMarkdown,
   onCloseMarkdown,
   screenConflict,
+  noticeHost,
   onRefresh,
 }: {
   entity: Entity;
@@ -275,6 +297,8 @@ function EntityBody({
   onCloseMarkdown: () => void;
   /** Конфликт правки ЗАГОЛОВКА/чекбокса/архивации — у них своя обвязка (useEntityDetail). */
   screenConflict: boolean;
+  /** Узел НАД вкладками, куда уезжают плашки. Null — узла ещё нет (см. ниже). */
+  noticeHost: HTMLElement | null;
   onRefresh: () => void;
 }) {
   const save = useBodySave(entity.id, entity);
@@ -300,16 +324,23 @@ function EntityBody({
   const doc = localDoc ?? serverDoc;
 
   /**
-   * Правка ИЗ РЕДАКТОРА снимает местную копию, а не подменяет её.
+   * Правка ИЗ РЕДАКТОРА кладётся в местную копию, а не снимает её.
    *
-   * Редактор и так показывает то, что прислал, — держать рядом второй ответ на вопрос «что
-   * показано» незачем. Хуже того, местная копия, живущая дольше своего жеста, однажды вернулась
-   * бы в редактор поверх набранного: `BodyEditor` подменяет содержимое, когда пришедший `doc`
-   * разошёлся с документом на экране (и редактор не в фокусе), — а разошёлся бы он ровно с тем,
-   * что человек только что напечатал.
+   * Прежде здесь стоял `setLocalDoc(null)` с доводом «редактор и так показывает то, что
+   * прислал». Довод верен ровно для редактора и не рассматривал ВТОРОГО потребителя `doc` —
+   * тумблер markdown. `serverDoc` свежеет только с отправкой мутации, то есть не раньше паузы
+   * набора (2 с, на плохой связи дольше), и всё это время `doc` был документом БЕЗ последних
+   * набранных символов. Открыть ⋮ → «Править как markdown» внутри этого окна — и в поле нет
+   * последних слов; дальше довольно «Применить», чтобы они исчезли и с экрана, и из базы
+   * (ревью раунда 3, находка 2).
+   *
+   * Опасности, которой боялся прежний довод, здесь нет, и это проверено прогоном: местная копия
+   * не может вернуться в редактор поверх набранного, потому что кладётся сюда РОВНО ТО, что
+   * редактор сам и показывает, — подменять ему нечем (`BodyEditor` сверяет по смыслу и молчит
+   * на совпадении).
    */
   function onEditorChange(next: BodyDoc) {
-    setLocalDoc(null);
+    setLocalDoc(next);
     save.onDocChange(next);
   }
 
@@ -323,8 +354,13 @@ function EntityBody({
   // сужает — поле объекта могло бы смениться между рендером и нажатием.
   const draft = save.pendingDraft;
 
-  return (
-    <div className="flex flex-col gap-2">
+  /**
+   * Всё, что экран ГОВОРИТ о судьбе тела: расхождение версий, неотправленный черновик, состояние
+   * сохранения. Рисуется НЕ здесь, а в узле над вкладками (см. `noticeHost` в DetailScreen) —
+   * внутри вкладки «Сущность» эти три плашки с «Деталей» и «Треда» не видны вовсе.
+   */
+  const notices = (
+    <div className="flex flex-col gap-2 pt-3 empty:hidden">
       {/* Расхождение версий — ОДИН баннер на оба источника. Правка тела и правка заголовка идут
           через РАЗНЫЕ экземпляры useEntityUpdate (у тела — свой, внутри useBodySave), и после
           переезда тела на автосохранение прежний баннер не зажигался бы от 409 тела вовсе —
@@ -363,6 +399,21 @@ function EntityBody({
           onDiscard={save.discardPendingDraft}
         />
       )}
+      {/* Состояние сохранения — в углу и молча: показать есть что ровно в трёх случаях
+          (запрос идёт дольше секунды, правка не сохранена, правку отвергли). */}
+      <div className="flex justify-end empty:hidden">
+        <SaveIndicator state={save.state} />
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-2">
+      {/* Пока узла нет (первый проход рендера — реф ещё не привязан), плашки рисуются НА МЕСТЕ.
+          Это запасной путь, а не режим: он отрабатывает один проход до первой отрисовки. Но
+          выбран он именно такой — исчезни узел когда-нибудь вовсе, экран скажет о несохранённой
+          правке хотя бы на своей вкладке, а не промолчит. */}
+      {noticeHost === null ? notices : createPortal(notices, noticeHost)}
       {/* `doc !== null` — страж, а не развилка: без документа пункта меню нет вовсе (см.
           DetailMenu), поднять флаг неоткуда. Стоит он потому, что `doc` здесь МЕСТНЫЙ
           (`localDoc ?? serverDoc`), а тумблер без документа не собрать. */}
@@ -375,11 +426,6 @@ function EntityBody({
       ) : (
         <EditorShell doc={doc} markdown={entity.body} onChange={onEditorChange} />
       )}
-      {/* Состояние сохранения — в углу и молча: показать есть что ровно в двух случаях
-          (запрос идёт дольше секунды, правка не сохранена). */}
-      <div className="flex justify-end">
-        <SaveIndicator state={save.state} />
-      </div>
     </div>
   );
 }

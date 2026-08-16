@@ -1481,6 +1481,35 @@ test('без документа пункта «Править как markdown» 
   expect(screen.getByTestId('editor-preview')).toHaveTextContent('тело');
 });
 
+test('тумблер markdown открывается с тем, что НАБРАНО, а не с тем, что успело доехать', async () => {
+  // Второй потребитель показанного документа — тумблер, и он берёт текст ОДИН раз, при
+  // открытии. Пока экран на правку из редактора отвечал «местной копии больше нет», между
+  // набором и приездом документа в кэш зияла дыра длиной в паузу набора (2 с, а на плохой связи
+  // дольше): всё это время `doc` — документ БЕЗ последних символов, и тумблер открывался именно
+  // им. Дальше достаточно нажать «Применить» — и набранное исчезает и с экрана, и из базы.
+  //
+  // Сервер отказывает НАМЕРЕННО: откат снимает оптимистичный патч, и кэш остаётся с прежним
+  // телом до конца теста. Иначе проверка зависела бы от того, успела ли пауза истечь, —
+  // то есть краснела бы через раз и по часам, а не по дефекту.
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: { ...entity, body: 'тело', bodyDoc: parseBody('тело') }, relations: [] };
+    if (path === 'entity.update') throw trpcError('INTERNAL_SERVER_ERROR');
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await expectEditorText('и хвост');
+
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+
+  const area = await screen.findByTestId('markdown-source');
+  expect(area).toHaveValue('тело и хвост');
+});
+
 test('правка из тумблера садится в редактор, а не остаётся в тумблере', async () => {
   // Иначе экран и база разъезжаются до первого нажатия клавиши: правка уехала бы
   // автосохранением, а редактор показывал бы прежний текст и вернул бы его поверх.
@@ -1495,6 +1524,48 @@ test('правка из тумблера садится в редактор, а 
   await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
   await openEditor();
   await expectEditorText('совсем другое тело');
+});
+
+test('плашки и индикатор тела живут ВНЕ вкладок — иначе с «Деталей» их не видно', async () => {
+  // «Сущность» держится живой через `display:none` (keepMounted, Tabs.tsx), и всё, что лежит
+  // внутри неё, с соседней вкладки не видно вовсе. А единственный канал обратной связи о
+  // сохранении — эти три плашки: человек печатает, уходит на «Детали» посмотреть подзадачи,
+  // автосохранение падает 409 или сетью — и на экране ни слова. Он уходит с записи в
+  // уверенности, что сохранено (ревью раунда 3, находка 4).
+  //
+  // Проверяем ПОЛОЖЕНИЕ В ДЕРЕВЕ, а не видимость: класс `data-[state=inactive]:hidden` в jsdom
+  // ничего не прячет (стилей нет), и `toBeVisible()` был бы зелен при любой раскладке. Ровно
+  // тот же приём, что у `ManualLinkNotice`, вынесенной из вкладок раньше и по той же причине.
+  seedDraft(parseBody('черновик прошлой сессии'), 'СТАРАЯ-МЕТКА');
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'entity.update') throw trpcError('CONFLICT');
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+
+  // Баннер черновика — первым: он появляется сам, без единого жеста человека.
+  const draftBanner = await screen.findByTestId('draft-banner');
+  expect(draftBanner.closest('[role="tabpanel"]')).toBeNull();
+
+  // «Оставить моё» шлёт правку тела немедленно — единственный путь, дающий и плашку конфликта,
+  // и «Не сохранено» без подмены таймеров.
+  fireEvent.click(within(draftBanner).getByRole('button', { name: 'Оставить моё' }));
+  const conflict = await screen.findByText(/Изменено в другом месте — обновите/);
+  expect(conflict.closest('[role="tabpanel"]')).toBeNull();
+  const indicator = await screen.findByTestId('save-indicator');
+  expect(indicator).toHaveTextContent('Не сохранено');
+  expect(indicator.closest('[role="tabpanel"]')).toBeNull();
+
+  // И с соседней вкладки они никуда не делись.
+  fireEvent.click(screen.getByRole('tab', { name: 'Детали' }));
+  // Страж вакуумности: вкладка ДЕЙСТВИТЕЛЬНО переключилась — иначе проверки ниже ни о чём.
+  expect(screen.getByRole('tab', { name: 'Детали' })).toHaveAttribute('data-state', 'active');
+  expect(screen.getByText(/Изменено в другом месте — обновите/)).toBeInTheDocument();
+  expect(screen.getByTestId('save-indicator')).toHaveTextContent('Не сохранено');
+  // …а тело при этом осталось на своей вкладке: вынесены ПЛАШКИ, а не редактор.
+  expect(within(tabPanel('Сущность')).getByTestId('editor-preview')).toBeInTheDocument();
 });
 
 // --- баннер черновика ----------------------------------------------------------------------
