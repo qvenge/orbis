@@ -18,7 +18,7 @@ import { Toaster } from '../../ui/Toast';
 import { queryBlocks } from '../browser/query';
 import { AspectCards } from './AspectCards';
 import { DetailScreen } from './DetailScreen';
-import { detailGetInput, useEntityDetail } from './useEntityDetail';
+import { detailGetInput } from './useEntityDetail';
 
 // Экран монтирует редактор, NodeView'ы виджетов и меню в портале — обработчики событий, из
 // которых брошенное jsdom гасит: ассерты остаются зелёными, а прогон падает кодом 1.
@@ -38,11 +38,21 @@ function BodyProbe() {
   return <span data-testid="body-probe">{JSON.stringify(q.data?.entity.bodyDoc ?? null)}</span>;
 }
 
-/** Неотправленный черновик прошлой сессии на диске: ключ — договор, поэтому выписан строкой. */
+/**
+ * Неотправленный черновик прошлой сессии на диске: ключ — договор, поэтому выписан строкой.
+ * Владелец в ключе — тот же, что у записи ниже: черновики скоупятся по нему (draft-storage).
+ */
+const DRAFT_KEY = 'orbis:body-draft:u:e1';
+
+/**
+ * `savedAt` — СЕГОДНЯШНИЙ, и это не украшение: у черновика есть срок жизни (30 дней), а прогон
+ * идёт на настоящих часах. Фиксированная дата из прошлого делала бы эти тесты зелёными ровно до
+ * того дня, когда она уйдёт за срок, — и дальше красными без единой правки кода.
+ */
 function seedDraft(doc: BodyDoc, baseUpdatedAt: string, rejected = false): void {
   localStorage.setItem(
-    'orbis:body-draft:e1',
-    JSON.stringify({ doc, baseUpdatedAt, savedAt: '2026-07-05T09:00:00.000Z', rejected }),
+    DRAFT_KEY,
+    JSON.stringify({ doc, baseUpdatedAt, savedAt: new Date().toISOString(), rejected }),
   );
 }
 
@@ -1218,95 +1228,85 @@ test('клик по виджету query-блока редактор не под
   expect(screen.queryByTestId('body-editor')).toBeNull();
 });
 
-// --- две живые мутации по одной записи (ревью Задачи 14, Н-2 и Н-3) -------------------------
+// --- две живые правки одной записи (ревью Задачи 14, Н-2 и Н-3) -----------------------------
+//
+// Прежде обе проверки жили на `useEntityDetail.saveBody` — методе, которого не звал НИКТО,
+// кроме них самих (ревью раунда 3): тело уехало на автосохранение ещё в Задаче 13, а `saveBody`
+// остался и держал два теста зелёными на пути, которого в проде нет. Метод удалён, а сами
+// сюжеты переписаны на достижимые: правку тела шлёт «Оставить моё» у баннера черновика —
+// единственный путь, отправляющий её НЕМЕДЛЕННО, без паузы набора.
+//
+// Сюжеты от этого стали ТОЧНЕЕ, а не слабее. 409 приносит только правка тела (сервер сверяет
+// версию под гейтом `body !== undefined || bodyDoc !== undefined`, executor.ts), и у неё своя
+// обвязка `useEntityUpdate` — внутри `useBodySave`, отдельная от той, через которую идут
+// заголовок, чекбокс и архивация. Проверяется теперь ровно то, что видит человек: зажжённая
+// плашка не гаснет от чужого успеха, чем бы тот ни был.
 
-/**
- * Стенд из одной сущности и управляемых ответов. Обе проверки ниже — про ОБЩУЮ обвязку
- * `useEntityUpdate`: через один её экземпляр идут и правка тела, и заголовок, и чекбокс, и
- * архивация, а человек волен нажать одно следом за другим.
- *
- * Пары подобраны ДОСТИЖИМЫЕ. Сервер сверяет версию только у правок тела (executor.ts, гейт под
- * `body !== undefined || bodyDoc !== undefined`), поэтому 409 может принести ТОЛЬКО правка
- * тела: предшественник здесь всегда `saveBody`, а преемники — те, что версию не проверяют.
- * Пара «переименование → архивация» была бы недостижимой: 409 у неё не взяться неоткуда.
- */
-function twoLiveMutations() {
-  const gates: { fail: (e: unknown) => void; settle: (v: unknown) => void }[] = [];
-  const sent: unknown[] = [];
-  const hold: { api: ReturnType<typeof useEntityDetail> | null } = { api: null };
-  function Probe() {
-    hold.api = useEntityDetail('e1');
-    return null;
-  }
-  renderWithProviders(<Probe />, (path, input) => {
-    if (path === 'entity.get') return { entity, relations: [], backlinks: [] };
+/** Обработчик: правку ТЕЛА отвергает по версии, всё остальное принимает. */
+function bodyConflictHandler(seen: unknown[]): MockHandler {
+  return (path, input) => {
+    if (path === 'entity.get')
+      return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') {
-      sent.push(input);
-      return new Promise((settle, fail) => {
-        gates.push({ settle, fail });
-      });
+      seen.push(input);
+      if ((input as { bodyDoc?: unknown }).bodyDoc !== undefined) throw trpcError('CONFLICT');
+      return entity;
     }
+    if (path === 'aspect.list') return [];
     return {};
-  });
-  return {
-    gates,
-    sent: (i: number) => sent[i] as { expectedUpdatedAt?: string },
-    api: () => hold.api as ReturnType<typeof useEntityDetail>,
   };
 }
 
-test('409 правки тела не глохнет из-за чекбокса, ушедшего следом', async () => {
-  // «Преемник принесёт тот же конфликт» верно ровно для правок тела — только их сервер и
-  // сверяет по версии. Чекбокс 409 не получит никогда, и молчание о конфликте означало бы,
-  // что человек не узнал о расхождении вовсе.
-  const s = twoLiveMutations();
-  await waitFor(() => expect(s.api().entity).toBeDefined());
+test('409 правки тела не гаснет от успеха чекбокса, ушедшего следом', async () => {
+  // Чекбокс 409 не получит никогда — сервер его версию не сверяет. Погаси его успех плашку,
+  // человек не узнал бы о расхождении вовсе: единственное сообщение о нём ушло бы с экрана
+  // само, а расхождение осталось бы.
+  seedDraft(parseBody('правка тела'), 'СТАРАЯ-МЕТКА');
+  const seen: unknown[] = [];
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyConflictHandler(seen));
 
-  await act(async () => {
-    s.api().saveBody('правка тела'); // версию проверяет
-  });
-  await act(async () => {
-    s.api().toggleTask(true); // версию не проверяет
-  });
-  expect(s.gates, 'премиса: обе мутации живы').toHaveLength(2);
+  fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
+  await screen.findByText(/Изменено в другом месте — обновите/);
 
-  await act(async () => {
-    s.gates[0]?.fail(trpcError('CONFLICT'));
-  });
-  expect(s.api().conflict).toBe(true);
+  const getsBefore = calls.filter((c) => c.path === 'entity.get').length;
+  fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
+  // Ждём не саму отправку, а ПЕРЕЧИТЫВАНИЕ после неё: инвалидация идёт в onSettled, то есть
+  // строго после onSuccess. Раньше него проверять «не погасло» значило бы не дождаться.
+  await waitFor(() =>
+    expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(getsBefore),
+  );
+  expect(seen).toHaveLength(2);
 
-  // И успех чекбокса плашку не гасит: он ничего не знает о расхождении, которое её держит.
-  await act(async () => {
-    s.gates[1]?.settle({ entity });
-  });
-  expect(s.api().conflict).toBe(true);
+  expect(screen.getByText(/Изменено в другом месте — обновите/)).toBeInTheDocument();
 });
 
-test('409 правки тела не глохнет из-за переименования с ТОЙ ЖЕ меткой (Н-3)', async () => {
+test('409 правки тела не гаснет от переименования с ТОЙ ЖЕ меткой (Н-3)', async () => {
   // Самый коварный случай: `saveTitle` метку ШЛЁТ, и она совпадает с меткой правки тела —
   // кэшный updatedAt за время полёта не двигается (applyPatch его не трогает, перечитывание
-  // идёт только в onSettled). Совпадение меток при этом не значит ничего: у правки без тела
-  // сервер версию не сверяет, и 409 она не принесёт.
-  const s = twoLiveMutations();
-  await waitFor(() => expect(s.api().entity).toBeDefined());
+  // идёт только в onSettled). Совпадение меток не значит ничего: у правки без тела сервер
+  // версию не сверяет, и 409 она не принесёт — а значит и промолчать за неё нельзя.
+  seedDraft(parseBody('правка тела'), 'СТАРАЯ-МЕТКА');
+  const seen: unknown[] = [];
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyConflictHandler(seen));
 
-  await act(async () => {
-    s.api().saveBody('правка тела');
-  });
-  await act(async () => {
-    s.api().saveTitle('новое имя');
-  });
-  expect(s.gates).toHaveLength(2);
+  fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
+  await screen.findByText(/Изменено в другом месте — обновите/);
+
+  const getsBefore = calls.filter((c) => c.path === 'entity.get').length;
+  const field = screen.getByLabelText('Заголовок');
+  fireEvent.change(field, { target: { value: 'новое имя' } });
+  fireEvent.blur(field);
+  await waitFor(() =>
+    expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(getsBefore),
+  );
 
   // Страж вакуумности: метки у обеих правок ДЕЙСТВИТЕЛЬНО одинаковы — иначе тест проверял бы
   // расхождение меток, а не признак «сверяет ли сервер версию у этой правки».
-  expect(s.sent(0)?.expectedUpdatedAt).toBe(entity.updatedAt);
-  expect(s.sent(1)?.expectedUpdatedAt).toBe(entity.updatedAt);
+  const metka = (i: number) => (seen[i] as { expectedUpdatedAt?: string }).expectedUpdatedAt;
+  expect(metka(0)).toBe(entity.updatedAt);
+  expect(metka(1)).toBe(entity.updatedAt);
 
-  await act(async () => {
-    s.gates[0]?.fail(trpcError('CONFLICT'));
-  });
-  expect(s.api().conflict).toBe(true);
+  expect(screen.getByText(/Изменено в другом месте — обновите/)).toBeInTheDocument();
 });
 
 // --- три таба: Сущность · Детали · Тред (Задача 15) ----------------------------------------
@@ -1615,7 +1615,7 @@ test('«отбросить» стирает черновик и НЕ трога�
   fireEvent.click(await screen.findByRole('button', { name: 'Отбросить' }));
 
   expect(screen.queryByTestId('draft-banner')).toBeNull();
-  expect(localStorage.getItem('orbis:body-draft:e1')).toBeNull();
+  expect(localStorage.getItem(DRAFT_KEY)).toBeNull();
   await openEditor();
   await expectEditorText('тело');
   expect(screen.getByTestId('body-editor')).not.toHaveTextContent('черновик');

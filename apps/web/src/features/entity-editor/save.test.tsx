@@ -18,6 +18,9 @@ installCrashTrap();
 // --- стенд ----------------------------------------------------------------------------------
 
 /** Тело в кэше detail на момент открытия — с ним хук и сравнивает приходящие документы. */
+/** Владелец записи: по нему скоупятся черновики на диске (см. draft-storage). */
+const OWNER = 'u1';
+
 const BASE = parseBody('тело');
 const ONE = parseBody('тело и правка');
 const TWO = parseBody('тело, правка и ещё одна');
@@ -28,7 +31,11 @@ const THREE = parseBody('совсем другое тело');
  * подстановка «сейчас» вместо строки из кэша — самый вероятный способ сломать §5.2, и
  * тест обязан отличать одно от другого, а не сверять «какую-то строку».
  */
-const ENTITY: BodySaveEntity = { updatedAt: '2026-08-14T10:00:00.000Z', bodyDoc: BASE };
+const ENTITY: BodySaveEntity = {
+  ownerId: OWNER,
+  updatedAt: '2026-08-14T10:00:00.000Z',
+  bodyDoc: BASE,
+};
 
 /** Ответ сервера на entity.update: сущность с НОВЫМ updatedAt (сервер его всегда двигает). */
 const SAVED = { id: 'e1', updatedAt: '2026-08-14T11:00:00.000Z' };
@@ -389,7 +396,7 @@ test('документ, отличающийся лишь порядком кл�
   // Страж вакуумности: строки РАЗНЫЕ (иначе тест сверяет документ сам с собой).
   expect(JSON.stringify(fromEditor)).not.toBe(JSON.stringify(fromParse));
 
-  const s = setup({ entity: { updatedAt: ENTITY.updatedAt, bodyDoc: fromParse } });
+  const s = setup({ entity: { ownerId: OWNER, updatedAt: ENTITY.updatedAt, bodyDoc: fromParse } });
   s.api().onDocChange(fromEditor);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(0);
@@ -496,7 +503,7 @@ test('приехавшая из кэша сущность становится �
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1);
 
-  await s.set({ id: 'e1', entity: { updatedAt: SAVED.updatedAt, bodyDoc: ONE } });
+  await s.set({ id: 'e1', entity: { ownerId: OWNER, updatedAt: SAVED.updatedAt, bodyDoc: ONE } });
   s.api().onDocChange(ONE);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1); // это уже сохранено — второй раз не шлём
@@ -512,7 +519,11 @@ test('приехавшая из кэша сущность становится �
  * (позже и `ENTITY.updatedAt`, и `SAVED.updatedAt` — иначе «поздняя из двух» выбрала бы верную
  * строку по совпадению, и подмену было бы не отличить от порядка).
  */
-const FOREIGN: BodySaveEntity = { updatedAt: '2026-08-14T20:00:00.000Z', bodyDoc: THREE };
+const FOREIGN: BodySaveEntity = {
+  ownerId: OWNER,
+  updatedAt: '2026-08-14T20:00:00.000Z',
+  bodyDoc: THREE,
+};
 
 test('досыл при уходе несёт метку, на которой правка НАБИРАЛАСЬ, а не свежую из кэша', async () => {
   // Сюжет целиком, все действия штатные: правка с телефона двинула запись; здесь человек
@@ -604,7 +615,11 @@ test('смена сущности не уносит в чужую запись �
 
   // У второй записи updatedAt РАНЬШЕ подтверждённого первой — иначе «взять позднюю из двух»
   // выбрало бы верную строку по совпадению, и утечку было бы не отличить от порядка.
-  const second: BodySaveEntity = { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE };
+  const second: BodySaveEntity = {
+    ownerId: OWNER,
+    updatedAt: '2026-08-14T10:30:00.000Z',
+    bodyDoc: THREE,
+  };
   await s.set({ id: 'e2', entity: second });
 
   // flush() — самый острый случай: таймер при смене id снимается сам, а вот отложенный
@@ -625,7 +640,11 @@ test('смена сущности не уносит в чужую запись �
 });
 
 /** Вторая запись: её updatedAt РАНЬШЕ всего, что вернёт сервер по первой (см. тесты ниже). */
-const SECOND: BodySaveEntity = { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE };
+const SECOND: BodySaveEntity = {
+  ownerId: OWNER,
+  updatedAt: '2026-08-14T10:30:00.000Z',
+  bodyDoc: THREE,
+};
 
 test('таймер прежней записи не уносит в неё тело новой', async () => {
   // Самая дорогая ошибка этого хука, и она НЕ про отложенный документ, а про таймер. Доживи
@@ -869,7 +888,10 @@ test('терминальная остановка не переносится н
   expect(s.updates()).toHaveLength(1); // премиса: на первой записи сохранение остановлено
 
   s.serve(ok);
-  await s.set({ id: 'e2', entity: { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE } });
+  await s.set({
+    id: 'e2',
+    entity: { ownerId: OWNER, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE },
+  });
   s.api().onDocChange(TWO);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(2);

@@ -13,6 +13,8 @@ import {
   markDraftRejected,
   readDraft,
   saveDraft,
+  setDraftScope,
+  sweepDrafts,
 } from './draft-storage';
 import { sameDoc } from './strip-ids';
 
@@ -84,6 +86,8 @@ type Failure = 'network' | 'terminal';
  * принимает сущность из useEntityDetail как есть, без приведения на стороне экрана.
  */
 export type BodySaveEntity = {
+  /** Владелец записи: по нему скоупятся черновики на диске (см. draft-storage). */
+  ownerId: string;
   updatedAt: string;
   bodyDoc?: { v: number; doc: Record<string, unknown> } | null;
 };
@@ -121,7 +125,7 @@ const offered = (draft: Draft) => ({
 /**
  * Автосохранение тела: правка доезжает до базы сама, по паузе в наборе.
  *
- * Три вещи, ради которых хук вообще существует отдельно от useEntityDetail.saveBody:
+ * Три вещи, ради которых правка тела живёт отдельным хуком, а не голой мутацией экрана:
  *  1. пауза (иначе мутация на каждое нажатие клавиши, см. SAVE_DEBOUNCE_MS);
  *  2. отсев правок, которые правками не являются (сравнение по смыслу, см. strip-ids.ts);
  *  3. разделение отказов: 409 — «перечитайте и повторите», VALIDATION — конец.
@@ -130,6 +134,11 @@ const offered = (draft: Draft) => ({
  * её сервер, и только он.
  */
 export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave {
+  // Скоуп хранилища — ПРЯМО В РЕНДЕРЕ, раньше любого чтения черновика (эффект ниже) и раньше
+  // любой записи. Владелец записи и есть владелец сессии, и ставить его отсюда дешевле, чем
+  // тянуть в листовой модуль хранилища знание об аутентификации. Тот же приём и по той же
+  // причине, что `setRetryScope` в AuthProvider.
+  setDraftScope(entity.ownerId);
   const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
   const mutate = mutation.mutate;
 
@@ -588,6 +597,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * раньше — поэтому сверка стоит и здесь, до развилки.
    */
   useEffect(() => {
+    // Уборка — при каждом открытии записи. Срок жизни, применяемый только к читаемому ключу,
+    // не истёк бы никогда у черновика записи, которую больше не откроют (см. sweepDrafts).
+    sweepDrafts();
     const draft = readDraft(entityId);
     if (draft === null) return;
     const base = entityRef.current;

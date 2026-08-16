@@ -14,13 +14,16 @@ installCrashTrap();
 
 // --- стенд ----------------------------------------------------------------------------------
 
+/** Владелец записи: черновики скоупятся по нему (см. KEY). */
+const OWNER = 'u1';
+
 /**
  * Ключ выписан СТРОКОЙ, а не взят из draft-storage, и это намеренно: ключ — договор с диском
  * браузера, переживающий перезагрузку и обновление приложения. Импортируй тест ту же константу,
  * он остался бы зелёным при переименовании ключа — то есть при молчаливой потере всех черновиков,
  * набранных прошлой версией.
  */
-const KEY = 'orbis:body-draft:e1';
+const KEY = `orbis:body-draft:${OWNER}:e1`;
 
 const BASE = parseBody('тело');
 const ONE = parseBody('тело и правка');
@@ -28,11 +31,23 @@ const TWO = parseBody('тело, правка и ещё одна');
 const THREE = parseBody('совсем другое тело');
 
 /** Сущность на момент открытия: `updatedAt` намеренно далёк от системного времени прогона. */
-const ENTITY: BodySaveEntity = { updatedAt: '2026-08-14T10:00:00.000Z', bodyDoc: BASE };
+const ENTITY: BodySaveEntity = {
+  ownerId: OWNER,
+  updatedAt: '2026-08-14T10:00:00.000Z',
+  bodyDoc: BASE,
+};
 /** Соседняя запись: её `updatedAt` РАНЬШЕ всего, что вернёт сервер по первой. */
-const SECOND: BodySaveEntity = { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: BASE };
+const SECOND: BodySaveEntity = {
+  ownerId: OWNER,
+  updatedAt: '2026-08-14T10:30:00.000Z',
+  bodyDoc: BASE,
+};
 /** Та же запись, но сервер её с тех пор двигали: метка ПОЗЖЕ той, на которой набран черновик. */
-const MOVED: BodySaveEntity = { updatedAt: '2026-08-14T12:00:00.000Z', bodyDoc: THREE };
+const MOVED: BodySaveEntity = {
+  ownerId: OWNER,
+  updatedAt: '2026-08-14T12:00:00.000Z',
+  bodyDoc: THREE,
+};
 /** Ответ сервера на entity.update. */
 const SAVED = { id: 'e1', updatedAt: '2026-08-14T11:00:00.000Z' };
 
@@ -260,14 +275,14 @@ test('успех по прежней записи стирает ЕЁ черно
   // У соседней записи свой черновик — он обязан уцелеть. Метка у него РАЗОШЛАСЬ с записью:
   // так он остаётся предложением и не тратится на автодосыл, то есть чист для проверки ниже.
   localStorage.setItem(
-    'orbis:body-draft:e2',
+    `orbis:body-draft:${OWNER}:e2`,
     JSON.stringify({ doc: ONE, baseUpdatedAt: '2026-08-14T09:00:00.000Z', savedAt: 'x' }),
   );
-  await s.set({ id: 'e2', entity: { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE } });
+  await s.set({ id: 'e2', entity: { ownerId: OWNER, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE } });
   await server.answer(0, SAVED);
 
   expect(raw()).toBeNull();
-  expect(raw('orbis:body-draft:e2')).not.toBeNull();
+  expect(raw(`orbis:body-draft:${OWNER}:e2`)).not.toBeNull();
 });
 
 test('закрытие вкладки кладёт набранное на диск: pagehide зовёт досыл', async () => {
@@ -344,7 +359,7 @@ test('черновик, уже совпавший с телом записи, н
   // ловит это раньше сети.
   await leaveDraft();
 
-  const s = mount({ entity: { updatedAt: ENTITY.updatedAt, bodyDoc: ONE } });
+  const s = mount({ entity: { ownerId: OWNER, updatedAt: ENTITY.updatedAt, bodyDoc: ONE } });
   await tick(SAVE_PAUSE * 2);
   expect(s.updates()).toEqual([]);
   expect(raw()).toBeNull(); // и с диска снят: держать его больше незачем
@@ -453,7 +468,7 @@ test('черновик чужой сущности не подставляетс
 
   // У соседней записи метка ТА ЖЕ, что у первой: спутай хранилище записи, черновик уехал бы
   // автодосылом — молча и в чужое тело.
-  const other = mount({ id: 'e2', entity: { updatedAt: ENTITY.updatedAt, bodyDoc: THREE } });
+  const other = mount({ id: 'e2', entity: { ownerId: OWNER, updatedAt: ENTITY.updatedAt, bodyDoc: THREE } });
   await tick(SAVE_PAUSE * 2);
   expect(other.updates()).toEqual([]);
   expect(other.api().pendingDraft).toBeNull();
@@ -472,7 +487,7 @@ test('смена записи гасит предложенный чернови
   await tick();
   expect(s.api().pendingDraft?.doc).toEqual(ONE); // премиса: на первой записи выбор предложен
 
-  await s.set({ id: 'e2', entity: { updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE } });
+  await s.set({ id: 'e2', entity: { ownerId: OWNER, updatedAt: '2026-08-14T10:30:00.000Z', bodyDoc: THREE } });
   await tick();
   expect(s.api().pendingDraft).toBeNull();
   expect(s.updates()).toEqual([]);
@@ -746,6 +761,116 @@ test('битая запись в хранилище игнорируется, а
   const good = mount({ entity: ENTITY });
   await tick();
   expect(good.updates()).toHaveLength(1);
+});
+
+/**
+ * Срок жизни черновика выписан ЧИСЛОМ по той же причине, что и пороги времени: это договор с
+ * диском браузера. Возьми тест константу из модуля — он остался бы зелёным и при сроке в час,
+ * то есть при молчаливой пропаже черновиков, набранных вчера.
+ */
+const TTL_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** Черновик такой давности на диске, как будто его писали `days` дней назад. */
+function agedDraft(days: number, doc: BodyDoc = ONE): string {
+  return JSON.stringify({
+    doc,
+    baseUpdatedAt: ENTITY.updatedAt,
+    savedAt: new Date(Date.now() - days * DAY_MS).toISOString(),
+    rejected: false,
+  });
+}
+
+test('черновик соседнего аккаунта не подставляется и не досылается', async () => {
+  // Браузер бывает общим. Не скоупь мы ключ по владельцу — следующий залогинившийся аккаунт
+  // увидел бы чужую неотправленную заметку в баннере, а при совпавших метках дослал бы её на
+  // сервер от своего имени. Тот же приём и по той же причине, что у retry-буфера.
+  await leaveDraft();
+
+  const other = mount({ entity: { ...ENTITY, ownerId: 'u2' } });
+  await tick(SAVE_PAUSE * 2);
+  expect(other.updates()).toEqual([]);
+  expect(other.api().pendingDraft).toBeNull();
+  expect(raw(), 'черновик первого владельца цел — он просто не виден второму').not.toBeNull();
+  await other.unmount();
+
+  // Положительный контроль: своему владельцу тот же черновик виден и уезжает автодосылом.
+  const own = mount({ entity: ENTITY });
+  await tick();
+  expect(own.updates()).toHaveLength(1);
+});
+
+test('черновик старше срока жизни не предлагается и уходит с диска', async () => {
+  // Неотправленная правка — страховка на дни, а не архив навсегда. Без срока жизни текст
+  // заметки лежит в общем браузере вечно, переживая и выход из аккаунта.
+  localStorage.setItem(KEY, agedDraft(TTL_DAYS + 1));
+
+  const s = mount({ entity: MOVED });
+  await tick(SAVE_PAUSE * 2);
+  expect(s.updates()).toEqual([]);
+  expect(s.api().pendingDraft).toBeNull();
+  expect(raw(), 'и с диска снят: держать его больше незачем').toBeNull();
+  await s.unmount();
+
+  // Положительный контроль: черновик МОЛОЖЕ срока — предлагается как ни в чём не бывало.
+  localStorage.setItem(KEY, agedDraft(TTL_DAYS - 1));
+  const fresh = mount({ entity: MOVED });
+  await tick();
+  expect(fresh.api().pendingDraft?.doc).toEqual(ONE);
+});
+
+test('уборка сносит просроченных соседей и ключи прежнего вида, чужих не трогает', async () => {
+  // Срок жизни, применяемый только к читаемому ключу, не истёк бы НИКОГДА у черновика записи,
+  // которую больше не откроют. Ключи прежнего вида (без владельца) читать теперь некому —
+  // без уборки они пролежали бы вечно.
+  const stale = `orbis:body-draft:${OWNER}:e9`;
+  const legacy = 'orbis:body-draft:e9';
+  const alien = 'orbis:retry-buffer:v1';
+  localStorage.setItem(stale, agedDraft(TTL_DAYS + 5));
+  localStorage.setItem(legacy, agedDraft(0));
+  localStorage.setItem(alien, '[]');
+  // Свежий сосед того же владельца — страж вакуумности: уборка сносит просроченное, а не всё.
+  const alive = `orbis:body-draft:${OWNER}:e8`;
+  localStorage.setItem(alive, agedDraft(1));
+
+  const s = mount({ entity: ENTITY });
+  await tick();
+
+  expect(localStorage.getItem(stale), 'просроченный сосед').toBeNull();
+  expect(localStorage.getItem(legacy), 'ключ прежнего вида').toBeNull();
+  expect(localStorage.getItem(alive), 'живой сосед').not.toBeNull();
+  expect(localStorage.getItem(alien), 'чужое хранилище').toBe('[]');
+  expect(s.updates(), 'уборка сама по себе в сеть не ходит').toEqual([]);
+});
+
+test('переполненное хранилище: уборка и вторая попытка вместо молчаливой потери', async () => {
+  // Место чаще всего занято просроченными черновиками соседних записей — и тогда сдаваться на
+  // первой же неудаче значит терять страховку ровно там, где она нужна.
+  const stale = `orbis:body-draft:${OWNER}:e9`;
+  localStorage.setItem(stale, agedDraft(TTL_DAYS + 5));
+
+  const real = Storage.prototype.setItem;
+  let refuseOnce = true;
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (
+    this: Storage,
+    k: string,
+    v: string,
+  ) {
+    if (refuseOnce && k === KEY) {
+      refuseOnce = false;
+      throw new Error('QuotaExceededError');
+    }
+    real.call(this, k, v);
+  });
+
+  const s = mount({ respond: fail500 });
+  s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+
+  expect(stored().doc, 'вторая попытка удалась').toEqual(ONE);
+  expect(localStorage.getItem(stale), 'место освободила уборка').toBeNull();
+  expect(s.updates(), 'сама правка при этом уехала').toHaveLength(1);
+  // Страж вакуумности: отказ ДЕЙСТВИТЕЛЬНО случился, а не был проглочен подделкой.
+  expect(refuseOnce).toBe(false);
 });
 
 test('отключённое хранилище не роняет набор текста', async () => {
@@ -1035,7 +1160,7 @@ test('черновик, уже лежащий в теле записи, не п�
   // который уже в базе.
   await leaveDraft();
 
-  const s = mount({ entity: { updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
+  const s = mount({ entity: { ownerId: OWNER, updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
   await tick(SAVE_PAUSE * 2);
   expect(s.api().pendingDraft).toBeNull();
   expect(s.updates()).toEqual([]);
@@ -1047,7 +1172,7 @@ test('черновик, уже лежащий в теле записи, не п�
   // Положительный контроль: черновик, ОТЛИЧНЫЙ от тела, при тех же метках предлагается.
   s.unmount();
   await leaveDraft(TWO);
-  const other = mount({ entity: { updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
+  const other = mount({ entity: { ownerId: OWNER, updatedAt: MOVED.updatedAt, bodyDoc: ONE } });
   await tick();
   expect(other.api().pendingDraft?.doc).toEqual(TWO);
 });
@@ -1272,7 +1397,7 @@ test('терминальный отказ брошенного запроса н
   s.unmount();
 
   // И на следующем открытии он уезжает автодосылом, как всякий непомеченный.
-  const back = mount({ entity: { updatedAt: ENTITY.updatedAt, bodyDoc: BASE } });
+  const back = mount({ entity: { ownerId: OWNER, updatedAt: ENTITY.updatedAt, bodyDoc: BASE } });
   await tick();
   expect(back.updates()).toHaveLength(1);
   expect((back.input(0) as { bodyDoc: BodyDoc }).bodyDoc).toEqual(TWO);

@@ -271,11 +271,11 @@ export function useEntityDetail(entityId: string) {
     });
   }
 
-  // §5.2: expectedUpdatedAt = ТОЧНАЯ строка updatedAt, которую клиент видел в кэше.
-  function saveBody(body: string) {
-    if (!entity) return;
-    mutation.mutate({ id: entityId, body, expectedUpdatedAt: entity.updatedAt });
-  }
+  // Правки ТЕЛА здесь нет и быть не должно: тело уехало на автосохранение по паузе
+  // (`useBodySave`) ещё в Задаче 13, и оно шлёт `bodyDoc`, а не markdown-строку. Прежний
+  // `saveBody(body: string)` пережил тот переезд мёртвым: его не звал ни один экран, зато на
+  // нём держались два теста — то есть зелёными они были на пути, которого в проде нет
+  // (ревью раунда 3). Сюжеты переписаны на достижимый путь, метод удалён.
 
   // Правка заголовка (DF п.3) — тот же контракт §5.2, что у body: у memory-правила
   // title и есть вся его машиночитаемая часть (K19.4), и правка «формулировки»,
@@ -294,7 +294,6 @@ export function useEntityDetail(entityId: string) {
     entity,
     update: mutation,
     toggleTask,
-    saveBody,
     saveTitle,
     setArchived,
     conflict,
