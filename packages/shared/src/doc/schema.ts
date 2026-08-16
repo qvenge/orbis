@@ -2,6 +2,7 @@ import type { AnyExtension } from '@tiptap/core';
 import { TaskItem, TaskList } from '@tiptap/extension-list';
 import { TableKit } from '@tiptap/extension-table';
 import StarterKit from '@tiptap/starter-kit';
+import { OrbisCode } from './nodes/code';
 import { OrbisCodeBlock } from './nodes/code-block';
 import { EntityRef } from './nodes/entity-ref';
 import { OrbisListItem } from './nodes/list-item';
@@ -25,10 +26,11 @@ const SAFE_URI = (url: string) => /^(https?|mailto):/i.test(url) || url.startsWi
  * - trailingNode: false — иначе StarterKit 3.30.1 дописывает пустой абзац в конец любого
  *   документа, не кончающегося абзацем: все пять сидов «менялись» при простом открытии,
  *   и автосейв слал фантомный entity_update (ревью Б4);
- * - codeBlock: false и listItem: false — ноды ТЕ ЖЕ, но со своими сериализаторами
- *   (nodes/code-block.ts — длина ограды по содержимому; nodes/list-item.ts — маркер пустого
- *   пункта без хвостового пробела). Отключить штатные обязательно: менеджер разметки держит
- *   обработчики списком на имя ноды и берёт ПЕРВЫЙ (@tiptap/markdown, getHandlerForToken),
+ * - codeBlock: false, code: false и listItem: false — ноды и марка ТЕ ЖЕ, но со своими
+ *   сериализаторами (nodes/code-block.ts — длина ограды по содержимому; nodes/code.ts — длина
+ *   разделителя кодовой вставки и подкладка краёв; nodes/list-item.ts — маркер пустого пункта
+ *   без хвостового пробела). Отключить штатные обязательно: менеджер разметки держит
+ *   обработчики списком на имя и берёт ПЕРВЫЙ (@tiptap/markdown, getHandlerForToken),
  *   поэтому вторая регистрация поверх StarterKit была бы мертворождённой.
  */
 export const DOC_EXTENSIONS: AnyExtension[] = [
@@ -36,8 +38,10 @@ export const DOC_EXTENSIONS: AnyExtension[] = [
     trailingNode: false,
     link: { isAllowedUri: SAFE_URI },
     codeBlock: false,
+    code: false,
     listItem: false,
   }),
+  OrbisCode,
   OrbisCodeBlock,
   OrbisListItem,
   TaskList,

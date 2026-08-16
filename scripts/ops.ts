@@ -250,6 +250,11 @@ async function auditBodiesOp(): Promise<number> {
     });
     console.log(`тел всего: ${r.total}`);
     console.log(`канон изменит body: ${r.changed}`);
+    // ДВА СТОП-КРАНА прода. Оба обязаны быть нулевыми до запуска backfill-body-doc: «канон
+    // изменит body» на эту роль не годится — он велик и на здоровом корпусе (нормализация
+    // разметки), а эти два растут только от настоящей беды.
+    console.log(`СТОП-КРАН канон неустойчив (canon(canon) ≠ canon): ${r.unstable}`);
+    console.log(`СТОП-КРАН канон теряет текст или ссылку: ${r.lossy}`);
     console.log(`получат raw-блоки: ${r.withRaw}`);
     console.log(`ссылки внутри raw: ${r.refsInRaw}`);
     // Без этой строки числа про raw нечем взвесить: доля raw сама по себе не говорит, много ли

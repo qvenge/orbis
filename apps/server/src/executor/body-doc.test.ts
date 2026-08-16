@@ -445,6 +445,39 @@ describe('body из bodyDoc — КАНОНИЧЕН (итоговое ревью,
     expect(row.body_refs).toEqual([UUID]); // связь из raw достаётся регэкспом (Б2)
   });
 
+  test('документ с ПУСТЫМИ АБЗАЦАМИ доезжает целым (ре-ревью, Б1)', async () => {
+    // Регресс раунда 1: страховка требовала неподвижности канона, а markdown пустой абзац
+    // выразить не умеет — заметка человека схлопывалась в один неправимый rawBlock на каждом
+    // круге автосохранения. Проверяем сквозь executor и БД, а не только на чистых функциях.
+    const doc = {
+      type: 'doc',
+      content: [
+        { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'План' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'первый пункт' }] },
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'раз' }] }],
+            },
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'два' }] }],
+            },
+          ],
+        },
+        { type: 'paragraph' }, // человек нажал Enter в конце
+      ],
+    };
+    const row = await writeDoc(doc);
+    expect(row.body_doc).toEqual({ v: 1, doc }); // структура цела, ничего не схлопнулось
+    expect(firstNodeType(row)).toBe('heading');
+    expect(row.body).toBe('# План\n\nпервый пункт\n\n- раз\n- два\n\n');
+    // Пара по-прежнему согласована — инвариант не принесён в жертву.
+    expect(serializeBody(row.body_doc as never)).toBe(row.body);
+  });
+
   test('обычный документ страховка НЕ трогает (страж от жадности)', async () => {
     // Без этого теста «страховка срабатывает всегда» была бы неотличима от починки: каждое
     // сохранение превращало бы документ в один raw-блок и убивало редактор.

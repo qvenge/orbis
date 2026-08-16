@@ -4,7 +4,12 @@
 // (`scripts/ops.ts audit-bodies`) ходит в базу сырым пулом, и дословная копия арифметики в
 // скрипте осталась бы НЕ ПОКРЫТОЙ тестом. Здесь и порционность, и все шесть счётчиков
 // проверяются без базы вовсе.
-import { type BodyDoc, bodyRefsFromDoc, canonicalizeBody } from '@orbis/shared/doc';
+import {
+  type BodyDoc,
+  bodyRefsFromDoc,
+  canonicalizeBody,
+  projectionKeepsEverything,
+} from '@orbis/shared/doc';
 import type { JSONContent } from '@tiptap/core';
 
 /** Строка корпуса. `body` может прийти NULL — см. `?? ''` ниже. */
@@ -65,6 +70,23 @@ export type AuditResult = {
   total: number;
   /** Тел, у которых канонизация изменит `body`. */
   changed: number;
+  /**
+   * СТОП-КРАН №1: тел, на которых канон НЕУСТОЙЧИВ — `canon(canon(body)) !== canon(body)`.
+   *
+   * `changed` на эту роль не годится и никогда не годился: канон законно нормализует разметку
+   * (`*`→`-`, `__`→`**`, выравнивание таблиц, обрезка хвостовых переводов строки), и на живом
+   * корпусе это число велико и неинформативно — в выборке ре-ревью из 45 бытовых тел канон
+   * менял 11. Неустойчивость же означает, что второй проход даёт не то, что первый: тело
+   * «дрожит», и необратимая конверсия зафиксирует ПРОИЗВОЛЬНЫЙ кадр этой дрожи.
+   */
+  unstable: number;
+  /**
+   * СТОП-КРАН №2: тел, у которых канонизация ТЕРЯЕТ написанное — непробельный символ или
+   * ссылку. Тот же вопрос, что задаёт страховка записи, только с другого конца: там документ
+   * приходит из редактора, здесь собирается из `body`. Ловит класс, который «неустойчивость»
+   * пропускает: порчу, которая случается один раз и дальше стабильна.
+   */
+  lossy: number;
   /** Тел, которые получат хотя бы один rawBlock. */
   withRaw: number;
   /** Тел, у которых ссылка на сущность лежит ВНУТРИ raw-блока. */
@@ -91,6 +113,8 @@ export async function auditBodies(
   const result: AuditResult = {
     total: 0,
     changed: 0,
+    unstable: 0,
+    lossy: 0,
     withRaw: 0,
     refsInRaw: 0,
     nontrivial: 0,
@@ -112,6 +136,10 @@ export async function auditBodies(
         if (NONTRIVIAL_RE.test(body)) result.nontrivial += 1;
         const { doc, body: canonical } = canon(body);
         if (canonical !== body) result.changed += 1;
+        // Два стоп-крана. Второй прогон канона — единственная лишняя работа замера, и она того
+        // стоит: именно эти числа решают, можно ли пускать необратимую конверсию.
+        if (canon(canonical).body !== canonical) result.unstable += 1;
+        if (!projectionKeepsEverything(doc, canonical)) result.lossy += 1;
         const raws = collectRawBlocks(doc.doc);
         if (raws.length > 0) {
           result.withRaw += 1;

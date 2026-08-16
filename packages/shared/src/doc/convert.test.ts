@@ -19,6 +19,23 @@ const UUID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 const raws = (md: string) => (parseBody(md).doc.content ?? []).filter((n) => n.type === 'rawBlock');
 const shape = (md: string) => JSON.stringify(parseBody(md).doc);
 const types = (md: string) => (parseBody(md).doc.content ?? []).map((n) => n.type);
+/** Содержимое всех кодовых вставок документа — сверять их СТРОКОЙ бессмысленно, разделитель
+ *  как раз и есть предмет спора. */
+const codeSpans = (md: string): string[] => {
+  const out: string[] = [];
+  const walk = (n: {
+    type?: string;
+    text?: string;
+    marks?: Array<{ type: string }>;
+    content?: unknown[];
+  }) => {
+    if (typeof n.text === 'string' && (n.marks ?? []).some((m) => m.type === 'code'))
+      out.push(n.text);
+    for (const c of (n.content ?? []) as (typeof n)[]) walk(c);
+  };
+  walk(parseBody(md).doc as never);
+  return out;
+};
 
 describe('канонизация вместо строгой сверки (решение по Б1)', () => {
   test('бытовой текст с _ и & НЕ уезжает в raw и не обрастает экранированием', () => {
@@ -494,6 +511,238 @@ describe('пустой блок редактора — тоже неподвиж
     expect(canonicalizeBody('- раз\n- два').body).toBe('- раз\n- два');
     expect(canonicalizeBody('1. раз\n2. два').body).toBe('1. раз\n2. два');
     expect(canonicalizeBody('- [ ] дело').body).toBe('- [ ] дело');
+  });
+});
+
+describe('разделитель кодовой вставки — по содержимому (ре-ревью, Б2)', () => {
+  test('обратные кавычки внутри вставки НЕ пропадают', () => {
+    // Разделитель был всегда одной кавычкой, и это была безвозвратная потеря СИМВОЛОВ:
+    //   "`` ` ``"    → канон1 "```"  → канон2 "```\n\n```"  (кавычка исчезла, вставка → блок)
+    //   "``` `` ```" → канон1 "````" → канон2 "```\n\n```"
+    for (const md of ['`` ` ``', '``` `` ```', 'вот `` a`b `` конец', '`` `x `` тут', '`` x` ``']) {
+      expect(raws(md)).toEqual([]); // страж: не raw, иначе всё ниже тождественно
+      const once = canonicalizeBody(md).body;
+      expect(canonicalizeBody(once).body).toBe(once); // канон устойчив
+      // И, главное, содержимое вставки цело: сверяем ПО ДОКУМЕНТУ, а не по строке.
+      expect(codeSpans(once)).toEqual(codeSpans(md));
+      expect(codeSpans(md).length).toBeGreaterThan(0); // страж вакуумности
+    }
+  });
+
+  test('содержимое с кавычками переживает round-trip через марку БАЙТ В БАЙТ', () => {
+    for (const content of [
+      'код',
+      '`',
+      '``',
+      '```',
+      '````',
+      'a`b',
+      'a``b',
+      '`x',
+      'x`',
+      '`x`',
+      '`a`b`',
+      'a b',
+      '*звёзды*',
+      'due_date',
+      '{{query: a=b}}',
+      '\\',
+    ]) {
+      const doc = {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: content, marks: [{ type: 'code' }] }],
+          },
+        ],
+      };
+      const md = serializeBody(doc as never);
+      expect(`${content}: ${codeSpans(md).join('|')}`).toBe(`${content}: ${content}`);
+      expect(`${content}: ${canonicalizeBody(md).body}`).toBe(`${content}: ${md}`);
+    }
+  });
+
+  test('ИЗВЕСТНАЯ ГРАНИЦА: пробелы по краям вставки уезжают наружу, но не пропадают', () => {
+    // Менеджер выносит ведущие и хвостовые пробелы ЗА пределы марки ещё до того, как спросит
+    // обёртку (@tiptap/markdown, renderNodesWithMarkBoundaries) — на это отсюда не повлиять.
+    // Фиксируем ФАКТ, а не желаемое: вставка сжимается, но ни один непробельный символ не
+    // теряется, канон устойчив, и страховка записи такой документ не трогает.
+    for (const content of [' x ', ' x', 'x ']) {
+      const doc = {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'text', text: content, marks: [{ type: 'code' }] }],
+          },
+        ],
+      };
+      const md = serializeBody(doc as never);
+      expect(codeSpans(md)).toEqual([content.trim()]); // пробел ушёл из вставки…
+      expect(md).toContain(content.trim()); // …но остался в тексте
+      expect(canonicalizeBody(md).body).toBe(md);
+      expect(bodyPairFromDoc({ v: DOC_SCHEMA_VERSION, doc } as never).doc.doc).toBe(doc as never);
+    }
+  });
+
+  test('обычная вставка по-прежнему в ОДНУ кавычку (страж от жадности)', () => {
+    // Без этого «содержимое цело» прошло бы и на разделителе из пяти кавычек всегда.
+    expect(canonicalizeBody('это `код` тут').body).toBe('это `код` тут');
+    expect(serializeBody(parseBody('`due_date`'))).toBe('`due_date`');
+  });
+});
+
+describe('страховка НЕ трогает пустые абзацы (ре-ревью, Б1 — регресс раунда 1)', () => {
+  // markdown не умеет выражать пустой абзац, поэтому у документа с пустой строкой проекция
+  // неподвижной точкой канона не является В ПРИНЦИПЕ. Первая редакция страховки требовала
+  // именно неподвижности и уводила такую заметку в один неправимый rawBlock на КАЖДОМ круге
+  // автосохранения — человек видел, как его текст схлопывается.
+  const P = (text?: string) =>
+    text === undefined
+      ? { type: 'paragraph' }
+      : { type: 'paragraph', content: [{ type: 'text', text }] };
+  const doc = (content: unknown[]) => ({ v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content } });
+
+  const cases: Array<[string, unknown]> = [
+    [
+      'хвостовой пустой абзац (человек нажал Enter в конце)',
+      doc([
+        { type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: 'План' }] },
+        P('первый пункт'),
+        {
+          type: 'bulletList',
+          content: [
+            { type: 'listItem', content: [P('раз')] },
+            { type: 'listItem', content: [P('два')] },
+          ],
+        },
+        P(),
+      ]),
+    ],
+    ['текст + пустой абзац', doc([P('текст'), P()])],
+    ['пустой абзац + текст', doc([P(), P('текст')])],
+    ['абзац, пустой абзац, абзац', doc([P('раз'), P(), P('два')])],
+    [
+      'пустой абзац перед заголовком',
+      doc([
+        P('раз'),
+        P(),
+        { type: 'heading', attrs: { level: 2 }, content: [{ type: 'text', text: 'H' }] },
+      ]),
+    ],
+    [
+      'пустой абзац перед списком',
+      doc([
+        P('раз'),
+        P(),
+        { type: 'bulletList', content: [{ type: 'listItem', content: [P('a')] }] },
+      ]),
+    ],
+    ['ДВА пустых абзаца подряд', doc([P('раз'), P(), P(), P('два')])],
+  ];
+
+  test('документ остаётся ТЕМ ЖЕ объектом, структура цела', () => {
+    for (const [name, d] of cases) {
+      const pair = bodyPairFromDoc(d as never);
+      // Страж вакуумности: у документа обязано быть непустое содержимое, иначе проекция —
+      // пустая строка, а она неподвижна тождественно и не утверждает ничего. Ровно на этой
+      // ловушке первая редакция и проскочила сьют.
+      expect(`${name}: ${pair.body}`).not.toBe(`${name}: `);
+      expect(`${name}: ${(pair.doc.doc.content ?? []).length}`).not.toBe(`${name}: 1`);
+      expect(`${name}: ${pair.doc === (d as never)}`).toBe(`${name}: true`);
+      expect(`${name}: ${(pair.doc.doc.content ?? [])[0]?.type}`).not.toBe(`${name}: rawBlock`);
+    }
+  });
+
+  test('канон таких тел действительно НЕ неподвижен — то есть страж не вакуумен', () => {
+    // Премиса предыдущего теста: если бы проекции были неподвижны, он проходил бы и со старым
+    // (строгим) критерием, то есть не защищал бы ни от чего.
+    let movable = 0;
+    for (const [, d] of cases) {
+      const body = serializeBody(d as never);
+      if (canonicalizeBody(body).body !== body) movable += 1;
+    }
+    expect(movable).toBe(cases.length);
+  });
+
+  test('ЭМОДЗИ не считается пропажей текста', () => {
+    // Найдено сплошной пробой, а не типами: сверка «ничего не пропало» перебирала стог по
+    // кодовым ТОЧКАМ, а иглу — по кодовым ЕДИНИЦАМ, поэтому суррогатная пара не совпадала сама
+    // с собой. Любая заметка с эмодзи считалась потерявшей текст и уезжала в raw ЦЕЛИКОМ.
+    for (const text of [
+      'эмодзи 🎉 тут',
+      '👨‍👩‍👧‍👦 семья',
+      'математика 𝕏 и 𝔸',
+      'одинокий \ud83d суррогат',
+    ]) {
+      const doc = { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [P(text)] } };
+      const pair = bodyPairFromDoc(doc as never);
+      expect(`${text}: ${pair.doc === (doc as never)}`).toBe(`${text}: true`);
+      expect(`${text}: ${pair.doc.doc.content?.[0]?.type}`).toBe(`${text}: paragraph`);
+    }
+  });
+
+  test('подпись ссылки с `]` — не пропажа: её опускает СОБСТВЕННАЯ починка находки 2', () => {
+    // Тоже поймано пробой. Подпись — вмороженный кеш заголовка, а не авторский текст, и
+    // сериализатор опускает её осознанно. Считай сверка подпись «написанным» — каждый чип
+    // с такой подписью уводил бы весь документ в raw.
+    const doc = {
+      v: DOC_SCHEMA_VERSION,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'entityRef', attrs: { entityId: UUID, label: 'Задача ] хвост' } }],
+          },
+        ],
+      },
+    };
+    const pair = bodyPairFromDoc(doc as never);
+    expect(pair.doc).toBe(doc as never);
+    expect(pair.body).toBe(`[[entity:${UUID}]]`);
+    expect(bodyRefsFromDoc(parseBody(pair.body))).toEqual([UUID]); // связь на месте
+  });
+
+  test('пропажа ССЫЛКИ ловится, даже когда текст цел', () => {
+    // Вторая половина страховки, отдельно от первой. Ссылка с id не-uuid-формы печатается
+    // дословно, но обратный разбор её ссылкой не признаёт (класс символов `[0-9a-f-]{36}`),
+    // и связь исчезает из body_refs — при том что ВЕСЬ текст на месте. Без сверки ссылок такой
+    // документ проходил бы молча (мутационная проверка показала: без неё не краснеет ничто).
+    const doc = {
+      v: DOC_SCHEMA_VERSION,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'entityRef', attrs: { entityId: 'нет-такого-id', label: null } }],
+          },
+        ],
+      },
+    };
+    const proj = serializeBody(doc as never);
+    // Премиса: текст ЦЕЛ — значит сработает именно сверка ссылок, а не сверка текста.
+    expect(proj).toContain('нет-такого-id');
+    expect(bodyRefsFromDoc(doc as never)).toEqual(['нет-такого-id']);
+    expect(bodyRefsFromDoc(parseBody(proj))).toEqual([]);
+    const pair = bodyPairFromDoc(doc as never);
+    expect(pair.doc).not.toBe(doc as never);
+    expect(pair.doc.doc.content?.[0]?.type).toBe('rawBlock');
+    expect(pair.body).toBe(proj); // текст всё равно уехал байт в байт
+  });
+
+  test('и при этом настоящая пропажа текста ловится (положительный контроль)', () => {
+    // Тот же набор проверок, но на документе, чья проекция ТЕРЯЕТ написанное.
+    const lossy = doc([
+      { type: 'codeBlock', attrs: { language: null }, content: [{ type: 'text', text: 'x' }] },
+      { type: 'rawBlock', attrs: { markdown: '{{query: a=b}}\nхвост {{query: c=d}}' } },
+    ]);
+    const pair = bodyPairFromDoc(lossy as never);
+    expect(pair.doc).not.toBe(lossy as never);
+    expect(pair.doc.doc.content?.[0]?.type).toBe('rawBlock');
+    expect(serializeBody(pair.doc)).toBe(pair.body);
   });
 });
 
