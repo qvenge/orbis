@@ -13,9 +13,14 @@
 --
 -- Порядок снятия:
 --   1. убедиться, что `audit-bodies` даёт нули по всем кранам и корпус в порядке;
---   2. дописать в meta/_journal.json запись { idx, version: "7", when, tag:
---      "0010_drop_body_before_doc", breakpoints: true } и снять колонку из schema.ts;
---   3. `bun scripts/ops.ts migrate`.
+--   2. снять колонку из schema.ts и ВЫКАТИТЬ КОД — раньше наката, а не после. После починки
+--      раунда 7 колонку пишет ГОРЯЧИЙ путь (создание и первая правка), и drizzle перечисляет
+--      колонки поимённо: снять её в базе раньше, чем уйдёт код без неё, — значит уронить
+--      создание записи у каждого пользователя. Это ровно тот отказ, ради которого накат
+--      миграции 0009 стоит ДО выкатки; здесь порядок обратный по той же причине;
+--   3. дописать в meta/_journal.json запись { idx, version: "7", when, tag:
+--      "0010_drop_body_before_doc", breakpoints: true };
+--   4. `bun scripts/ops.ts migrate`.
 --
 -- Снимок схемы после снятия сгенерируется штатным `drizzle-kit generate`.
 ALTER TABLE "entities" DROP COLUMN IF EXISTS "body_before_doc";

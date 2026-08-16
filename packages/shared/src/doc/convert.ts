@@ -218,6 +218,35 @@ export function losesWord(before: string, after: string): boolean {
 const TEXTISH_TOKENS = new Set(['text', 'escape']);
 
 /**
+ * Контейнеры, которые ПУСТЫМИ не несут ничего. Списки обеих сторон обязаны совпадать: разбор
+ * даёт пустому пункту пустой абзац, а он не лист, — значит и токен пустого пункта листом
+ * считаться не должен.
+ *
+ * Найдено ре-ревью раунда 8: нормализация «пустой абзац не лист» закрыла узловую сторону и не
+ * закрыла токенную, и ЛЮБОЙ список с пустым пунктом (`- [ ] ` без текста, `- раз` плюс пустой
+ * `-`) уезжал в дословный блок. Текст цел, но «чеклист, где последний пункт ещё не набран» —
+ * бытовейшая форма, и такие заметки переставали быть чеклистами. Мой замер её не поймал:
+ * в корпусе из 65 тел её просто не было, то есть «ложных срабатываний ноль» было НЕПОЛНЫМ.
+ */
+const EMPTY_CONTAINER_TOKENS = new Set([
+  'list_item',
+  'taskItem',
+  'paragraph',
+  'list',
+  'taskList',
+  'blockquote',
+]);
+const EMPTY_CONTAINER_NODES = new Set([
+  'paragraph',
+  'listItem',
+  'taskItem',
+  'bulletList',
+  'orderedList',
+  'taskList',
+  'blockquote',
+]);
+
+/**
  * Сколько СОДЕРЖАТЕЛЬНЫХ листьев увидел лексер. Каждый контейнер обходится отдельно: ячейки
  * таблицы — свои списки, и схлопывать текст через их границу нельзя, иначе таблица из четырёх
  * ячеек считалась бы одним листом. `space` не считается — это чистая разметка.
@@ -234,6 +263,10 @@ function leafTokenCount(toks: Tok[] | undefined, out: { n: number } = { n: 0 }):
       if (cell.tokens?.length) containers.push(cell.tokens);
     }
     if (containers.length === 0) {
+      if (EMPTY_CONTAINER_TOKENS.has(t.type)) {
+        prevTextish = false;
+        continue;
+      }
       const textish = TEXTISH_TOKENS.has(t.type);
       if (!(textish && prevTextish)) out.n += 1;
       prevTextish = textish;
@@ -245,13 +278,13 @@ function leafTokenCount(toks: Tok[] | undefined, out: { n: number } = { n: 0 }):
   return out.n;
 }
 
-/** Сколько содержательных листьев донёс разбор. Пустой абзац не в счёт: он законно появляется
- *  в пустой ячейке и в пустом пункте, а токена ему не соответствует ни одного. */
+/** Сколько содержательных листьев донёс разбор. Пустые контейнеры не в счёт — ровно те же, что
+ *  и на стороне токенов (см. EMPTY_CONTAINER_TOKENS): списки обязаны быть симметричны. */
 function leafNodeCount(nodes: JSONContent[] | undefined, out: { n: number } = { n: 0 }): number {
   for (const node of nodes ?? []) {
     const kids = node.content ?? [];
     if (kids.length === 0) {
-      if (node.type !== 'paragraph') out.n += 1;
+      if (!EMPTY_CONTAINER_NODES.has(node.type ?? '')) out.n += 1;
     } else leafNodeCount(kids, out);
   }
   return out.n;
