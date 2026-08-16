@@ -128,6 +128,16 @@ function blockIsKnown(token: Tok): boolean {
   if (token.type === 'table' && hasOverwideRow(token)) return false;
   const walk = (toks: Tok[] | undefined): boolean =>
     (toks ?? []).every((t) => {
+      // ВЛОЖЕННАЯ таблица проверяется теми же правилами, что и таблица верхнего уровня
+      // (ре-ревью раунда 4). Без этой строки внутрь цитаты и пункта списка проходили ВСЕ ТРИ
+      // правила сразу: рваная строка молча съедала слово, картинка в ячейке — адрес (а это
+      // регресс уже сделанной починки, см. ниже), и лишь экранированная черта ловилась —
+      // по совпадению, а не по устройству. Замерено на четырёх телах.
+      if (t.type === 'table') return blockIsKnown(t);
+      // Ссылка с ПУСТЫМ текстом уничтожает адрес: он живёт атрибутом, узел без текста
+      // выбрасывается целиком (`[](url)` → канон ""), и ни один счётчик этого не видел.
+      // Пустой текст — это именно `tokens: []`; `[ ](url)` сохраняет узел с пробелом и цел.
+      if (t.type === 'link' && (t.tokens ?? []).length === 0) return false;
       if (t.items) return walk(t.items); // list → items → вложенные блоки
       if (t.tokens) return (KNOWN_BLOCK.has(t.type) || KNOWN_INLINE.has(t.type)) && walk(t.tokens);
       return KNOWN_INLINE.has(t.type) || KNOWN_BLOCK.has(t.type);
