@@ -102,6 +102,11 @@ function rawNode(markdown: string): JSONContent {
   return { type: 'rawBlock', attrs: { markdown } };
 }
 
+/** Годятся ли разобранные узлы блока схеме. Вопрос задаётся ей самой — см. bodyDocError. */
+function fitsSchema(nodes: JSONContent[]): boolean {
+  return bodyDocError({ type: 'doc', content: nodes }) === undefined;
+}
+
 function rawDoc(markdown: string): BodyDoc {
   return { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [rawNode(markdown)] } };
 }
@@ -143,8 +148,17 @@ export function parseBody(markdown: string): BodyDoc {
     for (const token of tokens) {
       if (token.type === 'space') continue;
       const raw = token.raw.replace(/\n+$/, '');
-      if (blockIsKnown(token)) {
-        content.push(...(md().parse(raw).content ?? []));
+      // Второе условие — НЕПРИГОДНОСТЬ ПО СХЕМЕ, найдено пробой (в брифе ревью его нет).
+      // «Знакомый токен» не значит «годный узел»: пустой пункт нумерованного списка (`1.`)
+      // marked отдаёт без абзаца внутри, и парсер строил listItem с `content: []` — документ,
+      // который отвергает СОБСТВЕННАЯ схема. serializeBody на нём БРОСАЛ TypeError из недр
+      // @tiptap/markdown, а с ним бросала и canonicalizeBody: путь модели отвечал отказом,
+      // а бэкфилл — который ошибку конверсии не глотает намеренно — обрывался на такой строке
+      // вместе со всем оставшимся хвостом корпуса. Уводим блок в raw: текст цел до байта,
+      // документ пригоден, канон становится неподвижной точкой.
+      const parsed = blockIsKnown(token) ? (md().parse(raw).content ?? []) : null;
+      if (parsed !== null && (parsed.length === 0 || fitsSchema(parsed))) {
+        content.push(...parsed);
       } else {
         content.push(rawNode(raw));
       }
@@ -162,6 +176,35 @@ export function parseBody(markdown: string): BodyDoc {
 export function canonicalizeBody(markdown: string): { doc: BodyDoc; body: string } {
   const doc = parseBody(markdown);
   return { doc, body: serializeBody(doc) };
+}
+
+/**
+ * Пара «документ + текст» для ЗАПИСИ ГОТОВОГО ДОКУМЕНТА (путь редактора).
+ *
+ * Зачем отдельная функция, а не голый `serializeBody`. Путь `bodyDoc` — единственный, который
+ * кладёт в `body` результат сериализации МИНУЯ канонизацию: версия и структура проверяются,
+ * а то, ради чего вся конструкция затеяна, — что текст является неподвижной точкой канона, —
+ * не проверялось вовсе (итоговое ревью, находка 3). Ровно через этот шов проходили находки 1
+ * и 2: несимметричный сериализатор клал в БД текст, который при первой же пересборке давал
+ * ДРУГОЙ документ, а исходных байтов не оставалось нигде.
+ *
+ * Что делает страховка при непрохождении:
+ *  - НЕ отказывает. Отказ на этом пути терминален: автосохранение встало бы, и человек потерял
+ *    бы возможность писать в живой документ — цена несоизмерима с поводом.
+ *  - НЕ канонизирует текст. `canonicalizeBody(body)` здесь и есть подозреваемый: именно он
+ *    переписывает то, чего не понял. Текст уходит в БД БАЙТ В БАЙТ, как его напечатал документ.
+ *  - Подменяет ДОКУМЕНТ на `rawBlock` с этим текстом — тот же приём, которым модуль спасает
+ *    непонятое при разборе. `rawBlock` печатается дословно, поэтому пара
+ *    `body === serializeBody(body_doc)` согласована при ЛЮБОМ сериализаторе, а порча становится
+ *    видимой (блок в редакторе рисуется как дословный текст) вместо тихой.
+ *
+ * После починки находок 1, 2 и 4 известных входов, на которых ветка срабатывает, НЕТ —
+ * она страхует СЛЕДУЮЩУЮ ноду с несимметричным сериализатором, чтобы та не повторила историю
+ * молча. Проверено на десяти типовых телах: проекция каждого — неподвижная точка.
+ */
+export function bodyPairFromDoc(input: BodyDoc): { doc: BodyDoc; body: string } {
+  const body = serializeBody(input);
+  return canonicalizeBody(body).body === body ? { doc: input, body } : { doc: rawDoc(body), body };
 }
 
 /** Дерево ∪ регэксп по raw-блокам: backlinks не зависят от разбираемости тела (Б2).
@@ -218,6 +261,16 @@ export function bodyDocError(input: BodyDoc | JSONContent): string | undefined {
  *  1. форма верна и версия знакома → он;
  *  2. иначе (версия из будущего после отката релиза, битая форма, NULL) → пересборка из `body`.
  * Худший исход — потеря блочных id и части оформления, но НЕ текста.
+ *
+ * «Форма верна» спрашивается У СХЕМЫ (`bodyDocError`), а не по наличию полей. До итогового
+ * ревью (находка 5) докблок обещал пересборку «при битой форме», а код смотрел лишь на тип,
+ * наличие `v`/`doc` и версию: `{v: 1, doc: 'мусор'}` уезжал наружу как есть — и ронял редактор
+ * на `nodeFromJSON`. Тесты подобранных форм разницы не показывали, потому что все битые формы
+ * в них отсеивались ВЕРСИЕЙ.
+ *
+ * Цена — один `check()` на чтение с `include=bodyDoc`; схема строится один раз и кешируется,
+ * сама проверка стоит единицы микросекунд (замерено). Чужие схеме атрибуты (блочные id
+ * UniqueID) проверку проходят, и наружу отдаётся ВХОД, а не `toJSON()`, — см. bodyDocError.
  */
 export function readBodyDoc(stored: unknown, fallbackMarkdown: string): BodyDoc {
   if (
@@ -225,7 +278,8 @@ export function readBodyDoc(stored: unknown, fallbackMarkdown: string): BodyDoc 
     stored !== null &&
     'v' in stored &&
     'doc' in stored &&
-    (stored as BodyDoc).v === DOC_SCHEMA_VERSION
+    (stored as BodyDoc).v === DOC_SCHEMA_VERSION &&
+    bodyDocError(stored as BodyDoc) === undefined
   ) {
     return stored as BodyDoc;
   }

@@ -4,6 +4,8 @@
 import { describe, expect, test } from 'bun:test';
 import { getSchema } from '@tiptap/core';
 import {
+  bodyDocError,
+  bodyPairFromDoc,
   bodyRefsFromDoc,
   canonicalizeBody,
   parseBody,
@@ -11,6 +13,7 @@ import {
   serializeBody,
 } from './convert';
 import { DOC_EXTENSIONS } from './schema';
+import { DOC_SCHEMA_VERSION } from './types';
 
 const UUID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 const raws = (md: string) => (parseBody(md).doc.content ?? []).filter((n) => n.type === 'rawBlock');
@@ -257,6 +260,305 @@ describe('свои конструкции', () => {
   });
 });
 
+describe('ограда блока кода — по длине содержимого (итоговое ревью, находка 1)', () => {
+  // Правило CommonMark §4.5: длина ограды = max(3, самая длинная серия обратных кавычек
+  // в содержимом + 1). Проверено РАЗБОРОМ, а не по документации: для каждой из десяти проб
+  // подобрана минимальная длина, при которой round-trip возвращает то же содержимое, — и она
+  // совпала с формулой везде, кроме `x```y` (серия не образует закрывающую ограду, хватает и 3;
+  // формула даёт 4 — безопасный избыток, содержимое цело).
+
+  test('вложенные ограды переживают канон и канон идемпотентен', () => {
+    // Приём CommonMark «ограда в ограде» — так показывают markdown внутри markdown. Модель
+    // пишет так штатно, README попадает в блок кода вставкой из редактора.
+    const md = '````\n```\nвнутри\n```\n````';
+    expect(types(md)).toEqual(['codeBlock']); // страж: не raw, иначе всё ниже тождественно
+    const once = canonicalizeBody(md).body;
+    expect(once).toBe(md);
+    expect(canonicalizeBody(once).body).toBe(once);
+    // Содержимое ЦЕЛО: до починки внутренние ограды закрывали внешнюю, и «внутри» вылезало
+    // абзацем между двумя пустыми блоками кода.
+    expect(shape(once)).toBe(shape(md));
+  });
+
+  test('серия кавычек ЛЮБОЙ длины в содержимом не разваливает блок', () => {
+    for (const content of ['a', '`', '``', '```', '````', '`````', '```\nвнутри\n```', '   ````']) {
+      const doc = {
+        type: 'doc',
+        content: [
+          {
+            type: 'codeBlock',
+            attrs: { language: null },
+            content: [{ type: 'text', text: content }],
+          },
+        ],
+      };
+      const md = serializeBody(doc as never);
+      const back = parseBody(md).doc.content ?? [];
+      expect(back.length).toBe(1);
+      expect(back[0]?.type).toBe('codeBlock');
+      expect(back[0]?.content?.[0]?.text ?? '').toBe(content); // байт в байт
+      expect(canonicalizeBody(md).body).toBe(md); // и это неподвижная точка
+    }
+  });
+
+  test('обратная кавычка в info-строке не рушит блок (найдено пробой, не в брифе)', () => {
+    // `~~~a`b` — законная ограда CommonMark, но у backtick-ограды info-строка обратных кавычек
+    // содержать НЕ ВПРАВЕ. До починки канон печатал ```a`b и блок кода превращался в абзац
+    // с инлайн-кодом: `~~~a\`b\nx\n~~~` → канон1 "```a`b\nx\n```" → канон2 "`a`b x` ".
+    const md = '~~~a`b\nx\n~~~';
+    expect(types(md)).toEqual(['codeBlock']);
+    const once = canonicalizeBody(md).body;
+    expect(canonicalizeBody(once).body).toBe(once);
+    // Текст кода цел; потерян только негодный ярлык языка — он не текст, а подсказка подсветке.
+    expect(parseBody(once).doc.content?.[0]?.content?.[0]?.text).toBe('x');
+    expect(types(once)).toEqual(['codeBlock']);
+    // Положительный контроль: годный язык (в том числе с пробелом) НЕ теряется.
+    expect(canonicalizeBody('```js extra\nx\n```').body).toBe('```js extra\nx\n```');
+  });
+});
+
+describe('подпись ссылки с `]` (итоговое ревью, находка 2)', () => {
+  // EditorSuggest вставляет ЗАГОЛОВОК сущности в подпись дословно, а разбор держит подпись
+  // в классе «всё кроме `]`». Заголовок со скобкой — не синтетика.
+  test('заголовок с `]` не превращает ссылку в текст и канон устойчив', () => {
+    for (const title of ['Задача ] хвост', 'Отчёт [черновик]', 'Список [1]']) {
+      const doc = {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'См. ' },
+              { type: 'entityRef', attrs: { entityId: UUID, label: title } },
+            ],
+          },
+        ],
+      };
+      const md = serializeBody(doc as never);
+      expect(raws(md)).toEqual([]); // страж: не raw
+      // Ссылка ОСТАЛАСЬ ссылкой — иначе она исчезает из body_refs при первой пересборке.
+      expect(bodyRefsFromDoc(parseBody(md))).toEqual([UUID]);
+      expect(JSON.stringify(parseBody(md).doc)).toContain('entityRef');
+      expect(canonicalizeBody(md).body).toBe(md); // неподвижная точка
+    }
+  });
+
+  test('безопасная подпись сохраняется — потеря её не общее правило', () => {
+    // Положительный контроль к тесту выше: `[`, `|`, `\`, `` ` `` и пробелы в подписи проверены
+    // пробой и round-trip проходят, поэтому опускается ТОЛЬКО подпись с `]`.
+    for (const label of ['Кроссовки', 'Отчёт [черновик', 'a|b', 'a\\b', 'a`b']) {
+      const md = serializeBody({
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'entityRef', attrs: { entityId: UUID, label } }] },
+        ],
+      } as never);
+      expect(md).toBe(`[[entity:${UUID}|${label}]]`);
+      expect(canonicalizeBody(md).body).toBe(md);
+    }
+  });
+});
+
+describe('setext-подчёркивание (итоговое ревью, находка 4)', () => {
+  test('`===` под мягким переносом не делает из абзаца заголовок', () => {
+    const doc = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'foo' },
+            { type: 'hardBreak' },
+            { type: 'text', text: '===' },
+          ],
+        },
+      ],
+    };
+    const md = serializeBody(doc as never);
+    // До починки: "foo  \n===" → разбор давал heading, и строка `===` ИСЧЕЗАЛА вместе с абзацем.
+    expect(types(md)).toEqual(['paragraph']);
+    expect(shape(md)).not.toContain('heading');
+    expect(canonicalizeBody(md).body).toBe(md);
+    // Соседняя конструкция `---` уже была закрыта — сверяем, что не сломали её.
+    const dashes = serializeBody({
+      ...doc,
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: 'foo' },
+            { type: 'hardBreak' },
+            { type: 'text', text: '---' },
+          ],
+        },
+      ],
+    } as never);
+    expect(types(dashes)).toEqual(['paragraph']);
+  });
+
+  test('`=` внутри строки и в конце строки НЕ экранируется без нужды', () => {
+    // Страж от жадного правила: экранируется только строка ИЗ ОДНИХ `=` в начале текстового узла.
+    for (const md of ['2 + 2 = 4', 'x == y', 'итог = 5']) {
+      expect(raws(md)).toEqual([]);
+      expect(canonicalizeBody(md).body).toBe(md);
+    }
+  });
+});
+
+describe('разбор не рождает документ, которого нет в схеме (найдено пробой)', () => {
+  test('`1.` не роняет канонизацию — а роняла ВЕСЬ прогон бэкфилла', () => {
+    // Пустой пункт НУМЕРОВАННОГО списка marked отдаёт без абзаца внутри, и `md().parse` строил
+    // listItem с `content: []` — документ, который сама же схема отвергает («Invalid content for
+    // node listItem»). serializeBody на нём БРОСАЛ TypeError из недр @tiptap/markdown, а значит
+    // бросал и canonicalizeBody — то есть путь модели (entity_update{body}) отвечал 500, и,
+    // главное, бэкфилл, который ошибку конверсии НЕ глотает намеренно, обрывался на такой строке
+    // вместе со всем оставшимся хвостом корпуса. Проверено на исходном наборе расширений:
+    // бросали `1.`, `1. `, `1)`, `2.`, `1.\n2.`, `текст\n\n1.`.
+    for (const md of ['1.', '1. ', '1)', '2.', '1.\n2.', 'текст\n\n1.', '- раз\n\n1.']) {
+      expect(() => canonicalizeBody(md)).not.toThrow();
+      // Текст не потерян ни на байт: непрошедший схему блок уезжает в raw дословно, поэтому
+      // канон этих тел — они сами. Заодно это и неподвижная точка.
+      expect(canonicalizeBody(md).body).toBe(md);
+    }
+  });
+
+  test('parseBody НИКОГДА не отдаёт документ, непригодный по схеме', () => {
+    // Общее правило, а не заплатка под `1.`: непрошедший схему блок уводится в rawBlock тем же
+    // приёмом, которым модуль спасает непонятое. Иначе следующий такой блок снова уронил бы
+    // сериализацию — молча и на всём корпусе сразу.
+    for (const md of [
+      '1.',
+      '2)',
+      '- раз\n- два',
+      '1. первый',
+      '# Заголовок',
+      '> цитата',
+      '| a |\n| --- |\n| x |',
+      '- [ ] дело',
+      '```\nкод\n```',
+      'обычный текст',
+      '',
+    ]) {
+      expect(bodyDocError(parseBody(md))).toBeUndefined();
+    }
+  });
+
+  test('годный нумерованный список в raw НЕ уезжает (страж от жадности)', () => {
+    // Без этого «схема довольна» выполнялось бы и для корпуса, целиком уехавшего в raw.
+    expect(raws('1. первый\n2. второй')).toEqual([]);
+    expect(types('1. первый\n2. второй')).toEqual(['orderedList']);
+    expect(canonicalizeBody('1. первый\n2. второй').body).toBe('1. первый\n2. второй');
+  });
+});
+
+describe('пустой блок редактора — тоже неподвижная точка (найдено пробой)', () => {
+  test('пустой пункт списка и пустая задача переживают проекцию', () => {
+    // Живое состояние: нажали кнопку списка и ещё ничего не набрали. Автосохранение шлёт такой
+    // документ на КАЖДОМ круге, поэтому неподвижной точкой он обязан быть в первую очередь.
+    // Маркер печатался с ХВОСТОВЫМ ПРОБЕЛОМ ("- "), а `- ` marked списком не считает вовсе —
+    // видит абзац с текстом «- », и канон экранировал его в «\- ».
+    const item = (list: string, extra: Record<string, unknown> = {}) => ({
+      v: DOC_SCHEMA_VERSION,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: list,
+            content: [
+              {
+                type: list === 'taskList' ? 'taskItem' : 'listItem',
+                ...extra,
+                content: [{ type: 'paragraph' }],
+              },
+            ],
+          },
+        ],
+      },
+    });
+    for (const doc of [
+      item('bulletList'),
+      item('orderedList'),
+      item('taskList', { attrs: { checked: false } }),
+    ]) {
+      const body = serializeBody(doc as never);
+      expect(body).not.toBe(''); // страж: пустая строка неподвижна тождественно
+      expect(canonicalizeBody(body).body).toBe(body);
+      // Страховка записи такой документ НЕ трогает — иначе каждое нажатие кнопки списка
+      // превращало бы весь документ в один raw-блок.
+      expect(bodyPairFromDoc(doc as never).doc).toBe(doc as never);
+    }
+  });
+
+  test('непустой пункт по-прежнему печатается с пробелом после маркера', () => {
+    // Положительный контроль: снятие хвостового пробела касается ТОЛЬКО пустого пункта.
+    expect(canonicalizeBody('- раз\n- два').body).toBe('- раз\n- два');
+    expect(canonicalizeBody('1. раз\n2. два').body).toBe('1. раз\n2. два');
+    expect(canonicalizeBody('- [ ] дело').body).toBe('- [ ] дело');
+  });
+});
+
+describe('bodyPairFromDoc: страховка каноничности проекции (находка 3)', () => {
+  test('обычный документ проходит НЕТРОНУТЫМ, вместе с чужими атрибутами', () => {
+    // Положительный контроль и одновременно защита от «страховка срабатывает всегда»:
+    // блочные id (UniqueID, в схеме их нет) обязаны доехать до БД.
+    const doc = {
+      v: DOC_SCHEMA_VERSION,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            attrs: { id: 'блок-1' },
+            content: [{ type: 'text', text: 'текст' }],
+          },
+        ],
+      },
+    };
+    const pair = bodyPairFromDoc(doc as never);
+    expect(pair.doc).toBe(doc as never); // тот же объект, а не пересборка
+    expect(pair.body).toBe('текст');
+    expect(canonicalizeBody(pair.body).body).toBe(pair.body);
+  });
+
+  test('проекция-не-неподвижная-точка уходит в rawBlock, а текст цел до байта', () => {
+    // Модель следующей ноды с несимметричным сериализатором. Здесь она подделана прямым
+    // rawBlock'ом с неканоничным текстом: parseBody вернёт из него ДРУГОЙ документ, то есть
+    // ровно тот шов, ради которого страховка и ставится.
+    const doc = {
+      v: DOC_SCHEMA_VERSION,
+      doc: {
+        type: 'doc',
+        content: [
+          { type: 'rawBlock', attrs: { markdown: '* раз' } },
+          { type: 'paragraph', content: [{ type: 'text', text: 'хвост' }] },
+        ],
+      },
+    };
+    const pair = bodyPairFromDoc(doc as never);
+    expect(pair.body).toBe('* раз\n\nхвост'); // ни байта не потеряно, канон его НЕ переписал
+    // Документ подменён: печатается дословно, поэтому пара согласована при любом сериализаторе.
+    expect(pair.doc.doc.content).toEqual([
+      { type: 'rawBlock', attrs: { markdown: '* раз\n\nхвост' } },
+    ]);
+    // Несущее свойство пары: документ печатается ровно в этот текст.
+    expect(serializeBody(pair.doc)).toBe(pair.body);
+  });
+
+  test('страховка не отказывает и на сломанном документе — пара остаётся согласованной', () => {
+    // Проверяем именно инвариант, а не конкретную форму починки: что бы страховка ни выбрала,
+    // serialize(doc) обязан совпасть с body.
+    for (const inner of [
+      { type: 'doc', content: [{ type: 'codeBlock', content: [{ type: 'text', text: '```' }] }] },
+      { type: 'doc', content: [{ type: 'rawBlock', attrs: { markdown: '1) первый' } }] },
+      { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'ок' }] }] },
+    ]) {
+      const pair = bodyPairFromDoc({ v: DOC_SCHEMA_VERSION, doc: inner } as never);
+      expect(serializeBody(pair.doc)).toBe(pair.body);
+      expect(bodyDocError(pair.doc)).toBeUndefined();
+    }
+  });
+});
+
 describe('bodyRefsFromDoc: дерево ∪ raw (Б2)', () => {
   test('lowercase и без дублей', () => {
     expect(
@@ -286,5 +588,38 @@ describe('readBodyDoc (приёмка 11 — теперь с тестом, ре�
       const rebuilt = readBodyDoc(bad, '# Заголовок');
       expect(JSON.stringify(rebuilt.doc)).toContain('heading');
     }
+  });
+
+  test('БИТАЯ ФОРМА при знакомой версии — тоже пересборка (итоговое ревью, находка 5)', () => {
+    // Докблок обещал пересборку «при битой форме», а код смотрел только на тип, наличие полей
+    // и версию: `{v: 1, doc: 'мусор'}` уезжал в редактор как есть и ронял его на nodeFromJSON.
+    // Проверяем именно то, что обещано, — на формах, которые версией НЕ отсеиваются.
+    for (const broken of [
+      { v: DOC_SCHEMA_VERSION, doc: 'мусор' },
+      { v: DOC_SCHEMA_VERSION, doc: null },
+      { v: DOC_SCHEMA_VERSION, doc: { type: 'doc' } }, // content пуст — топ-узел объявлен block+
+      { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'НЕТ_ТАКОЙ_НОДЫ' }] } },
+      { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'text' }] } }, // text без text
+    ]) {
+      const rebuilt = readBodyDoc(broken, '# Заголовок');
+      expect(JSON.stringify(rebuilt.doc)).toContain('heading');
+      // И пересобранное само по себе пригодно — иначе чинили бы одно, отдавая другое битое.
+      expect(bodyDocError(rebuilt)).toBeUndefined();
+    }
+  });
+
+  test('годный документ с ЧУЖИМИ атрибутами проверку переживает (страж от жадности)', () => {
+    // Блочные id (UniqueID) схеме неизвестны, но обязаны доехать до редактора: без этого
+    // ужесточение проверки стирало бы id у КАЖДОГО документа при каждом чтении.
+    const withIds = {
+      v: DOC_SCHEMA_VERSION,
+      doc: {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', attrs: { id: 'блок-1' }, content: [{ type: 'text', text: 'а' }] },
+        ],
+      },
+    };
+    expect(readBodyDoc(withIds, 'другое')).toBe(withIds as never);
   });
 });
