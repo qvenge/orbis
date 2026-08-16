@@ -733,6 +733,27 @@ describe('страховка НЕ трогает пустые абзацы (ре
     expect(pair.body).toBe(proj); // текст всё равно уехал байт в байт
   });
 
+  test('ВЕРХНИЙ РЕГИСТР id ссылки не считается пропажей', () => {
+    // Разбор приводит id к нижнему регистру (И7), а посимвольная сверка регистра не прощает —
+    // документ с `[[entity:0F8F…]]` уезжал в raw целиком. Сверка ССЫЛОК ту же связь проверяет
+    // и к регистру нечувствительна, поэтому id из посимвольной сверки убран как избыточный.
+    const doc = {
+      v: DOC_SCHEMA_VERSION,
+      doc: {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [{ type: 'entityRef', attrs: { entityId: UUID.toUpperCase(), label: null } }],
+          },
+        ],
+      },
+    };
+    const pair = bodyPairFromDoc(doc as never);
+    expect(pair.doc).toBe(doc as never);
+    expect(bodyRefsFromDoc(parseBody(pair.body))).toEqual([UUID]); // связь на месте, в нижнем
+  });
+
   test('и при этом настоящая пропажа текста ловится (положительный контроль)', () => {
     // Тот же набор проверок, но на документе, чья проекция ТЕРЯЕТ написанное.
     const lossy = doc([
@@ -743,6 +764,97 @@ describe('страховка НЕ трогает пустые абзацы (ре
     expect(pair.doc).not.toBe(lossy as never);
     expect(pair.doc.doc.content?.[0]?.type).toBe('rawBlock');
     expect(serializeBody(pair.doc)).toBe(pair.body);
+  });
+});
+
+describe('рваная строка таблицы (ре-ревью раунда 3, п.2)', () => {
+  test('строка ШИРЕ шапки уводит таблицу в raw — слово не исчезает', () => {
+    // GFM обрезает лишние ячейки по ширине шапки, и слово пропадает НАВСЕГДА уже на ПЕРВОМ
+    // разборе. Оба стоп-крана аудита на этом молчали по построению: они считают ПОСЛЕ первого
+    // разбора. Замер до починки: канон "| a |\n| --- |\n| один |" — «ПОТЕРЯННЫЙ» нигде.
+    for (const [md, missing] of [
+      ['| a |\n| --- |\n| один | ПОТЕРЯННЫЙ |', 'ПОТЕРЯННЫЙ'],
+      ['| a | b |\n| --- | --- |\n| 1 | 2 | 3 |', '3'],
+      ['| a |\n| --- |\n| x |\n| y | ТОЖЕ |', 'ТОЖЕ'],
+    ] as Array<[string, string]>) {
+      expect(`${missing}: ${types(md).join()}`).toBe(`${missing}: rawBlock`);
+      // Дословно: raw отдаёт вход байт в байт, поэтому текст цел и канон неподвижен.
+      expect(`${missing}: ${canonicalizeBody(md).body}`).toBe(`${missing}: ${md}`);
+      expect(canonicalizeBody(md).body).toContain(missing);
+    }
+  });
+
+  test('строка УЖЕ шапки в raw НЕ уходит — там ничего не теряется', () => {
+    // Страж от жадности, и он не умозрительный: недостающие ячейки GFM дополняет пустыми
+    // (замерено: `| 1 |` под шапкой в две колонки → `| 1 |  |`), ни один символ не пропадает.
+    // Уводить такие таблицы в raw значило бы ловить лишнее.
+    const md = '| a | b |\n| --- | --- |\n| 1 |';
+    expect(types(md)).toEqual(['table']);
+    expect(canonicalizeBody(md).body).toContain('1');
+    // И ровная таблица, конечно, тоже виджет.
+    expect(types('| a | b |\n| --- | --- |\n| 1 | 2 |')).toEqual(['table']);
+    expect(raws('| a | b |\n| --- | --- |\n| 1 | 2 |')).toEqual([]);
+  });
+
+  test('таблица с `\\|` в ячейке уходит в raw при любом положении черты', () => {
+    // Счётчик ячеек экранирование НЕ разбирает намеренно: любая таблица с `\|` уже уходит в raw
+    // давним правилом (сериализатор черту обратно не экранирует). Мутационная проверка
+    // показала, что разбор экранирования не меняет исхода ни на одном входе, — значит это был
+    // бы непроверяемый код. Тест закрепляет СЛЕДСТВИЕ, на котором держится упрощение: где бы
+    // черта ни стояла — в пределах шапки или за её краем, — тело сохраняется дословно.
+    for (const md of [
+      '| a |\n| --- |\n| x \\| y |', // в пределах ширины
+      '| a |\n| --- |\n| один | два \\| три |', // за краем шапки, в отброшенной части
+      '| a | b |\n| --- | --- |\n| a | b \\| c |', // ровно по ширине
+    ]) {
+      expect(`${md}: ${types(md).join()}`).toBe(`${md}: rawBlock`);
+      expect(`${md}: ${canonicalizeBody(md).body}`).toBe(`${md}: ${md}`);
+    }
+  });
+});
+
+describe('ярлык языка блока кода не теряется (ре-ревью раунда 3, Б5)', () => {
+  test('обратная кавычка в ярлыке — печатается ТИЛЬДА-ограда, ярлык цел', () => {
+    // В раунде 1 негодный ярлык просто опускался, и это была тихая потеря авторского текста
+    // мимо обоих стоп-кранов (замер: `~~~js`…` → канон "```\nx\n```", changed=да, оба крана — нет).
+    for (const md of ['~~~js`\nx\n~~~', '~~~a`b\nx\n~~~', '~~~```\nx\n~~~']) {
+      expect(types(md)).toEqual(['codeBlock']); // страж: не raw
+      const once = canonicalizeBody(md).body;
+      const doc = parseBody(once).doc.content ?? [];
+      expect(`${md}: ${doc[0]?.attrs?.language}`).toBe(
+        `${md}: ${parseBody(md).doc.content?.[0]?.attrs?.language}`,
+      );
+      expect(`${md}: ${doc[0]?.content?.[0]?.text}`).toBe(`${md}: x`);
+      expect(`${md}: ${canonicalizeBody(once).body}`).toBe(`${md}: ${once}`); // устойчив
+    }
+  });
+
+  test('тильда-ограда растёт по содержимому', () => {
+    for (const [content, expected] of [
+      ['x', '~~~'],
+      ['~~~', '~~~~'],
+      ['~~~~', '~~~~~'],
+    ] as Array<[string, string]>) {
+      const md = serializeBody({
+        type: 'doc',
+        content: [
+          {
+            type: 'codeBlock',
+            attrs: { language: 'js`' },
+            content: [{ type: 'text', text: content }],
+          },
+        ],
+      } as never);
+      expect(`${content}: ${md.split('\n')[0]}`).toBe(`${content}: ${expected}js\``);
+      expect(`${content}: ${canonicalizeBody(md).body}`).toBe(`${content}: ${md}`);
+    }
+  });
+
+  test('обычный язык по-прежнему в КАВЫЧКАХ (страж от жадности)', () => {
+    // Без этого «ярлык цел» прошло бы и на переводе всех блоков кода на тильды.
+    expect(canonicalizeBody('```ts\nconst x = 1;\n```').body).toBe('```ts\nconst x = 1;\n```');
+    expect(canonicalizeBody('```js extra\nx\n```').body).toBe('```js extra\nx\n```');
+    expect(canonicalizeBody('```\nx\n```').body).toBe('```\nx\n```');
   });
 });
 

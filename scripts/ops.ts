@@ -24,7 +24,7 @@ import { aspectJsonSchema, BUILTIN_ASPECT_META, diffBuiltinAspects } from '@orbi
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
-import { type AuditRow, auditBodies } from '../apps/server/src/db/audit-bodies';
+import { type AuditRow, auditBodies, auditExitCode } from '../apps/server/src/db/audit-bodies';
 import {
   backfillBodyDoc,
   backfillExitCode,
@@ -238,14 +238,26 @@ async function coverage(): Promise<number> {
  * Корпус читается ПОРЦИЯМИ по курсору (итоговое ревью, находка 7): прежний одиночный
  * `SELECT body FROM entities` тянул в память всё разом — на замере, который делается прямо
  * перед необратимой операцией, это лишний риск.
+ *
+ * ПЕЧАТАЕТ ФАКТ РОЛИ и возвращает ненулевой код, когда корпус не виден (ре-ревью раунда 3).
+ * Без этого команда была зелена ровно в том случае, ради которого заведена: роль без BYPASSRLS
+ * под FORCE RLS видит ноль строк молча, все счётчики читаются нулями, и человек получал
+ * зелёный свет на необратимую конверсию оттого, что аудит НИЧЕГО НЕ УВИДЕЛ. Это дословный
+ * повтор находки M-2, закрытой для бэкфилла; здесь довод сильнее — тут число и есть решение.
+ *
+ * Годится и как ПОСТ-проверка: `body_doc` читается, и последние два числа отвечают на вопрос
+ * «конверсия доехала и пара согласована?». Повторный прогон одних стоп-кранов на эту роль не
+ * годится — после бэкфилла он вакуумен по построению (см. AuditResult.pairBroken).
  */
 async function auditBodiesOp(): Promise<number> {
   return withDb(async (sql) => {
+    const who = await describeRoleAccess(drizzle(sql, { schema }));
+    console.log(`роль: ${who.role} (BYPASSRLS: ${who.bypassRls ? 'да' : 'НЕТ'})`);
     const r = await auditBodies({
       // `id` выбирается ТОЛЬКО ради курсора и никуда не печатается: тела и всё, что к ним
       // ведёт, из процесса не выходят — вывод команды попадает в транскрипты и отчёты.
       selectBatch: (limit, afterId) =>
-        sql<AuditRow[]>`SELECT id, body FROM entities
+        sql<AuditRow[]>`SELECT id, body, body_doc AS "bodyDoc" FROM entities
                         WHERE id > ${afterId}::uuid ORDER BY id LIMIT ${limit}`,
     });
     console.log(`тел всего: ${r.total}`);
@@ -261,7 +273,18 @@ async function auditBodiesOp(): Promise<number> {
     // в корпусе тел, которым вообще есть что терять при конверсии.
     console.log(`со ссылкой или смарт-листом ([[entity: или {{query:): ${r.nontrivial}`);
     console.log(`упали на парсе: ${r.failed}`);
-    return 0;
+    // Пост-проверка: ДО конверсии первое число равно всему корпусу, ПОСЛЕ — оба обязаны быть 0.
+    console.log(`без документа (body_doc IS NULL): ${r.withoutDoc}`);
+    console.log(`СТОП-КРАН пара разошлась (body ≠ serialize(body_doc)): ${r.pairBroken}`);
+    if (!who.bypassRls) {
+      console.error(
+        `\nВНИМАНИЕ: роль ${who.role} НЕ несёт BYPASSRLS, а на entities включён FORCE RLS` +
+          '\nс политикой owner_id = auth.uid(). Прямое подключение auth.uid() не выставляет,' +
+          '\nпоэтому такая роль видит НОЛЬ строк — и нули выше означают «корпус НЕ ВИДЕН»,' +
+          '\nа НЕ «корпус здоров». Нужен DSN роли с BYPASSRLS (на Supabase — postgres).',
+      );
+    }
+    return auditExitCode(who, r);
   });
 }
 

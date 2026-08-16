@@ -2,18 +2,24 @@
 //
 // Живёт рядом с бэкфиллом и по той же причине, по какой у бэкфилла вынесен цикл: прод-операция
 // (`scripts/ops.ts audit-bodies`) ходит в базу сырым пулом, и дословная копия арифметики в
-// скрипте осталась бы НЕ ПОКРЫТОЙ тестом. Здесь и порционность, и все шесть счётчиков
+// скрипте осталась бы НЕ ПОКРЫТОЙ тестом. Здесь и порционность, и все восемь счётчиков
 // проверяются без базы вовсе.
 import {
   type BodyDoc,
   bodyRefsFromDoc,
   canonicalizeBody,
   projectionKeepsEverything,
+  serializeBody,
 } from '@orbis/shared/doc';
 import type { JSONContent } from '@tiptap/core';
+import type { RoleAccess } from './backfill-body-doc';
 
-/** Строка корпуса. `body` может прийти NULL — см. `?? ''` ниже. */
-export type AuditRow = { id: string; body: string | null };
+/**
+ * Строка корпуса. `body` может прийти NULL — см. `?? ''` ниже. `bodyDoc` читается ради
+ * ПОСТ-проверки: до конверсии он всюду NULL, после неё обязан быть заполнен и согласован
+ * с `body` (ре-ревью раунда 3, п.5).
+ */
+export type AuditRow = { id: string; body: string | null; bodyDoc: unknown };
 
 /**
  * Минимальный доступ к БД: взять порцию тел по курсору. Единственный SQL команды — SELECT,
@@ -95,7 +101,38 @@ export type AuditResult = {
   nontrivial: number;
   /** Тел, на которых конверсия бросила исключение. */
   failed: number;
+  /**
+   * ПОСТ-ПРОВЕРКА, часть 1: тел без документа (`body_doc IS NULL`). До конверсии это весь
+   * корпус, ПОСЛЕ неё обязан быть ноль — иначе конверсия не доехала.
+   */
+  withoutDoc: number;
+  /**
+   * ПОСТ-ПРОВЕРКА, часть 2: тел, у которых пара разошлась — `body !== serializeBody(body_doc)`.
+   *
+   * Заведена потому, что повторный прогон стоп-кранов после бэкфилла ВАКУУМЕН по построению
+   * (ре-ревью раунда 3, п.5): после конверсии `body` уже канон, а `unstable` был нулём и на
+   * шаге «до», значит будет нулём при любом исходе. Настоящая пост-проверка — несущий инвариант
+   * хранения, а его до сих пор не читал никто: аудит `body_doc` не открывал вовсе.
+   */
+  pairBroken: number;
 };
+
+/**
+ * Код возврата замера: 0 — можно смотреть на числа, 1 — смотреть НЕ НА ЧТО или найдена беда.
+ *
+ * Проверка роли здесь ОБЯЗАТЕЛЬНА и ровно по той же причине, по какой она есть у бэкфилла
+ * (находка M-2): под FORCE RLS роль без `BYPASSRLS` видит ноль строк молча, и оба стоп-крана
+ * читаются нулями. Для бэкфилла это давало ложный «успех», а здесь — хуже: здесь ЧИСЛО И ЕСТЬ
+ * РЕШЕНИЕ, то есть человек получал бы зелёный свет ровно тогда, когда аудит ничего не увидел
+ * (ре-ревью раунда 3, п.1).
+ *
+ * `withoutDoc` в гейт НЕ входит: до конверсии он законно равен всему корпусу. Его сверяет
+ * человек — нулём он обязан стать только на прогоне ПОСЛЕ бэкфилла.
+ */
+export function auditExitCode(who: RoleAccess, r: AuditResult): number {
+  if (!who.bypassRls) return 1;
+  return r.unstable > 0 || r.lossy > 0 || r.failed > 0 || r.pairBroken > 0 ? 1 : 0;
+}
 
 /**
  * Считает агрегаты по корпусу. Тела НЕ печатаются и НЕ покидают процесс ни в каком виде:
@@ -119,6 +156,8 @@ export async function auditBodies(
     refsInRaw: 0,
     nontrivial: 0,
     failed: 0,
+    withoutDoc: 0,
+    pairBroken: 0,
   };
   let afterId = ID_START;
   for (;;) {
@@ -134,6 +173,17 @@ export async function auditBodies(
         // должен дать пустое тело, а не остановить замер на середине корпуса.
         const body = String(row.body ?? '');
         if (NONTRIVIAL_RE.test(body)) result.nontrivial += 1;
+        // ПОСТ-проверка пары. Своим try — потому что на документе, непригодном по схеме,
+        // serializeBody падает, и это тоже «пара сломана», а не «тело не разобралось».
+        if (row.bodyDoc === null || row.bodyDoc === undefined) {
+          result.withoutDoc += 1;
+        } else {
+          try {
+            if (serializeBody(row.bodyDoc as BodyDoc) !== body) result.pairBroken += 1;
+          } catch {
+            result.pairBroken += 1;
+          }
+        }
         const { doc, body: canonical } = canon(body);
         if (canonical !== body) result.changed += 1;
         // Два стоп-крана. Второй прогон канона — единственная лишняя работа замера, и она того

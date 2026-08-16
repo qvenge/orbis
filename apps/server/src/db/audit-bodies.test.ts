@@ -1,12 +1,22 @@
 // Read-only замер корпуса тел ПЕРЕД необратимой конверсией. Базы тесту не нужно: и порционность,
-// и все шесть счётчиков — свойства цикла, а не SQL (тот же приём, что у fakeQueue бэкфилла).
+// и все восемь счётчиков — свойства цикла, а не SQL (тот же приём, что у fakeQueue бэкфилла).
 import { expect, test } from 'bun:test';
-import { AUDIT_BATCH, type AuditIo, type AuditRow, auditBodies } from './audit-bodies';
+import { parseBody } from '@orbis/shared/doc';
+import {
+  AUDIT_BATCH,
+  type AuditIo,
+  type AuditRow,
+  auditBodies,
+  auditExitCode,
+} from './audit-bodies';
 
 const UUID = '019e4466-aaaa-7e07-b5d4-64be9721da51';
 
 /** Очередь тел с курсором по id — как ведёт себя `WHERE id > … ORDER BY id LIMIT n` в БД. */
-function fakeCorpus(bodies: Array<string | null>): {
+function fakeCorpus(
+  bodies: Array<string | null>,
+  docs?: Array<unknown>,
+): {
   io: AuditIo;
   selects: Array<{ limit: number; afterId: string }>;
 } {
@@ -14,6 +24,7 @@ function fakeCorpus(bodies: Array<string | null>): {
   const rows: AuditRow[] = bodies.map((body, i) => ({
     id: `id-${String(i).padStart(5, '0')}`,
     body,
+    bodyDoc: docs?.[i] ?? null,
   }));
   const selects: Array<{ limit: number; afterId: string }> = [];
   return {
@@ -70,7 +81,69 @@ test('счётчики считают то, что обещают, и порци
     refsInRaw: 1,
     nontrivial: 3,
     failed: 0,
+    withoutDoc: 7, // корпус ДО конверсии: документа нет ни у кого
+    pairBroken: 0,
   });
+});
+
+test('пост-проверка: пара сверяется, а не додумывается (ре-ревью раунда 3, п.5)', async () => {
+  // Повторный прогон стоп-кранов после бэкфилла вакуумен по построению, поэтому настоящая
+  // пост-проверка — несущий инвариант хранения. До этого раунда аудит `body_doc` не читал вовсе.
+  const good = 'текст';
+  const corpus = fakeCorpus(
+    [good, good, good, good],
+    [
+      parseBody(good), // пара сходится
+      parseBody('совсем другое'), // проекция не равна body → пара разошлась
+      null, // документа нет
+      { v: 1, doc: { type: 'doc', content: [{ type: 'НЕТ_ТАКОЙ' }] } }, // не сериализуется
+    ],
+  );
+  const r = await auditBodies(corpus.io);
+  expect(r.total).toBe(4);
+  expect(r.withoutDoc).toBe(1);
+  // Две беды разной природы: разошедшаяся проекция и документ, который вообще не печатается.
+  expect(r.pairBroken).toBe(2);
+});
+
+test('код возврата аудита: невидимый корпус и стоп-краны (ре-ревью раунда 3, п.1)', () => {
+  // Повтор находки M-2, но опаснее: у бэкфилла нули означали ложный успех, здесь ЧИСЛО И ЕСТЬ
+  // РЕШЕНИЕ — человек получал зелёный свет на необратимую конверсию оттого, что аудит ничего
+  // не увидел. База не нужна: решение — чистая функция от факта роли и счётчиков.
+  const admin = { role: 'postgres', bypassRls: true };
+  const blind = { role: 'authenticated', bypassRls: false };
+  const clean = {
+    total: 100,
+    changed: 11,
+    unstable: 0,
+    lossy: 0,
+    withRaw: 3,
+    refsInRaw: 0,
+    nontrivial: 20,
+    failed: 0,
+    withoutDoc: 100,
+    pairBroken: 0,
+  };
+  // Ровно тот случай, ради которого код заведён: все счётчики нулевые, потому что НИЧЕГО НЕ ВИДНО.
+  expect(
+    auditExitCode(blind, {
+      ...clean,
+      total: 0,
+      changed: 0,
+      withRaw: 0,
+      nontrivial: 0,
+      withoutDoc: 0,
+    }),
+  ).toBe(1);
+  // Положительный контроль: здоровый корпус под годной ролью — ноль, даже когда changed велик.
+  expect(auditExitCode(admin, clean)).toBe(0);
+  // Каждый стоп-кран в отдельности поднимает код — иначе один из них был бы декоративным.
+  expect(auditExitCode(admin, { ...clean, unstable: 1 })).toBe(1);
+  expect(auditExitCode(admin, { ...clean, lossy: 1 })).toBe(1);
+  expect(auditExitCode(admin, { ...clean, failed: 1 })).toBe(1);
+  expect(auditExitCode(admin, { ...clean, pairBroken: 1 })).toBe(1);
+  // А `withoutDoc` в гейт НЕ входит: до конверсии он законно равен всему корпусу.
+  expect(auditExitCode(admin, { ...clean, withoutDoc: 100 })).toBe(0);
 });
 
 test('стоп-краны считают беду, а «канон изменит body» — нет (ре-ревью, Б3)', async () => {
@@ -149,8 +222,8 @@ test('одно упавшее тело не рушит замер, а попад
       calls += 1;
       return calls === 1
         ? [
-            { id: 'a', body: 'взорвётся' },
-            { id: 'b', body: 'обычное' },
+            { id: 'a', body: 'взорвётся', bodyDoc: null },
+            { id: 'b', body: 'обычное', bodyDoc: null },
           ]
         : [];
     },

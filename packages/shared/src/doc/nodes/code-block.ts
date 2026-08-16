@@ -13,10 +13,11 @@ import CodeBlock from '@tiptap/extension-code-block';
  * Спред в Math.max не используется намеренно: тело блока кода бывает длиной в десятки тысяч
  * символов, и `Math.max(...массив)` на таком входе кладёт стек.
  */
-function fenceFor(content: string): string {
+function runFence(content: string, char: '`' | '~'): string {
   let longest = 0;
-  for (const run of content.matchAll(/`+/g)) longest = Math.max(longest, run[0].length);
-  return '`'.repeat(Math.max(3, longest + 1));
+  const runs = char === '`' ? /`+/g : /~+/g;
+  for (const run of content.matchAll(runs)) longest = Math.max(longest, run[0].length);
+  return char.repeat(Math.max(3, longest + 1));
 }
 
 /**
@@ -31,8 +32,15 @@ function fenceFor(content: string): string {
  *
  * Второй, найденный пробой случай той же болезни — info-строка. Ограда `~~~` разрешает в ней
  * обратные кавычки, ограда из кавычек — НЕТ, поэтому `~~~a``​b` печаталось как ```` ```a`b ```` и блок кода
- * превращался в абзац с инлайн-кодом (`~~~a``​b\nx\n~~~` → ... → "`a`b x` "). Негодный ярлык
- * языка опускается: это подсказка подсветке, а не текст пользователя, и терять её — не потеря.
+ * превращался в абзац с инлайн-кодом (`~~~a``​b\nx\n~~~` → ... → "`a`b x` ").
+ *
+ * ЯРЛЫК ЯЗЫКА ТЕПЕРЬ НЕ ТЕРЯЕТСЯ (ре-ревью раунда 3, Б5). В раунде 1 негодный ярлык просто
+ * опускался — «подсказка подсветке, не текст пользователя», — и это было неверно вдвойне:
+ * ярлык человек написал сам, а оба стоп-крана аудита на его пропаже молчат (замерено:
+ * `~~~js``​\nx\n~~~` → канон ```` ```\nx\n``` ````, changed=да, unstable=нет, lossy=нет).
+ * Приём тот же, что у длины ограды, только применён к ВЫБОРУ РАЗДЕЛИТЕЛЯ: когда содержимое
+ * info-строки кавычкой не выражается, печатается ограда из ТИЛЬД, которая её выражает.
+ * Проверено разбором на семи парах «язык × содержимое»: ярлык и текст доезжают целыми.
  *
  * Расширяется ИМЕННО отдельный `CodeBlock`, а StarterKit конфигурируется `codeBlock: false`
  * (см. schema.ts). Дописать вторую регистрацию поверх StarterKit нельзя: менеджер разметки
@@ -42,11 +50,12 @@ function fenceFor(content: string): string {
 export const OrbisCodeBlock = CodeBlock.extend({
   renderMarkdown: (node: JSONContent, h: MarkdownRendererHelpers) => {
     const language = typeof node.attrs?.language === 'string' ? node.attrs.language : '';
-    const info = language.includes('`') ? '' : language;
     // Пустой блок кода — законное состояние редактора (нажали «Код» и ничего не набрали);
     // штатная реализация держала для него отдельную ветку, дающую ровно эту же строку.
     const body = node.content ? h.renderChildren(node.content) : '';
-    const fence = fenceFor(body);
-    return `${fence}${info}\n${body}\n${fence}`;
+    // Тильда-ограда — ТОЛЬКО когда кавычка ярлык не выражает: она реже встречается в живом
+    // markdown, и без нужды менять привычный вид блока незачем.
+    const fence = language.includes('`') ? runFence(body, '~') : runFence(body, '`');
+    return `${fence}${language}\n${body}\n${fence}`;
   },
 });
