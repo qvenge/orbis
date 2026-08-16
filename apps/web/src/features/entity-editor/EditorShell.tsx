@@ -81,10 +81,17 @@ export function EditorShell({
   doc,
   markdown,
   onChange,
+  onAccept,
 }: {
   doc: BodyDoc | null;
   markdown: string;
   onChange: (doc: BodyDoc) => void;
+  /**
+   * Редактор принял пришедший документ (см. `BodyEditor.onAccept`). Оболочка его только
+   * ПРОНОСИТ: решение о подмене принимает редактор, а знать о нём нужно экрану — он держит
+   * рядом второго потребителя показанного документа, режим разметки.
+   */
+  onAccept?: (doc: BodyDoc) => void;
 }) {
   const [mount, setMount] = useState<Mount | null>(null);
   useEffect(() => {
@@ -161,7 +168,7 @@ export function EditorShell({
   if (mount === null || doc === null) return preview;
   return (
     <Suspense fallback={preview}>
-      <BodyEditor doc={doc} onChange={onChange} focusAt={mount.focusAt} />
+      <BodyEditor doc={doc} onChange={onChange} onAccept={onAccept} focusAt={mount.focusAt} />
     </Suspense>
   );
 }

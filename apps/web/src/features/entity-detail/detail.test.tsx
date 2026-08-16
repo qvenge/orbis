@@ -2,7 +2,7 @@ import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
 import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
 import { onlineManager } from '@tanstack/react-query';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
@@ -1590,6 +1590,54 @@ test('ВНУТРИ ПАУЗЫ «Применить» без единой пра�
   await expectEditorText('тело и хвост');
 });
 
+test('набранное, которое редактор НЕ отдал откату, остаётся и в режиме разметки', async () => {
+  // Сюжет БЕЗ второго устройства, все действия штатные (ре-ревью раунда 3, блокер):
+  //  1. печатаю — через паузу отправка ушла, оптимистичный патч положил набранное в кэш;
+  //  2. пока запрос в полёте (медленная сеть), дописываю ещё;
+  //  3. запрос отказывает → кэш откатывается к исходному телу. Редактор в фокусе и печатали —
+  //     подмену он ОТКЛОНЯЕТ, на экране по-прежнему всё набранное;
+  //  4. открываю режим разметки, не нажав ни одной клавиши.
+  //
+  // Пока экран УГАДЫВАЛ по кэшу, показан ли приехавший документ, он видел здесь «кэш ушёл
+  // вперёд» (снимок успел перебазироваться на оптимистичный) и отдавал тумблеру откатанное
+  // тело — то есть текст без обеих правок. Дальше довольно «Отмены», чтобы набранное исчезло с
+  // экрана по кнопке, обещающей не менять ничего. Теперь о подмене сообщает тот, кто её делает.
+  const gates: { fail: (e: unknown) => void }[] = [];
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: { ...entity, body: 'тело', bodyDoc: parseBody('тело') }, relations: [] };
+    if (path === 'entity.update')
+      return new Promise((_settle, fail) => {
+        gates.push({ fail });
+      });
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await expectEditorText('и хвост');
+  // Премиса: пауза истекла, отправка ушла — значит оптимистичный патч уже в кэше.
+  await waitFor(() => expect(gates).toHaveLength(1), EDITOR_READY);
+
+  // Дописываем, ПОКА запрос в полёте: показанное перебазируется на оптимистичное тело.
+  await userEvent.type(
+    screen.getByTestId('body-editor').querySelector('[contenteditable]') as HTMLElement,
+    ' ещё',
+  );
+  await expectEditorText('ещё');
+
+  // Отказ → откат кэша к «тело». Фокус с редактора НЕ уводим: человек продолжает печатать.
+  await act(async () => {
+    gates[0]?.fail(trpcError('INTERNAL_SERVER_ERROR'));
+  });
+  await expectEditorText('тело и хвост ещё'); // премиса: подмену редактор отклонил
+
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  expect(await screen.findByTestId('markdown-source')).toHaveValue('тело и хвост ещё');
+}, 30_000);
+
 test('«Отмена» в тумблере не возвращает текст, который на экране уже заменён приехавшим', async () => {
   // Заплата «уход из тумблера сажает показанное обратно» нужна (без неё уход возвращал текст
   // СТАРШЕ набранного), но сажать показанное можно только пока серверный документ не ушёл
@@ -1603,10 +1651,12 @@ test('«Отмена» в тумблере не возвращает текст,
     bodyDoc: parseBody('извне'),
     updatedAt: 'B',
   };
-  // Чужое тело приезжает ТОЛЬКО по нажатию «Обновить», а не с первым же перечитыванием после
-  // 409. Причина измерена: react-query держит структурное разделение данных, и повторный ответ
-  // с тем же содержимым отдаёт ТОТ ЖЕ объект — проп `doc` не меняется, эффект подмены в
-  // `BodyEditor` не прогоняется вовсе, и второго шанса подменить содержимое не бывает.
+  // Флаг поднимается ПОСЛЕ того, как конфликт завёл своё перечитывание, — то есть чужое тело
+  // приезжает именно с ответом на «Обновить», а не раньше. Так и задумано, и вот почему это
+  // важно: react-query держит структурное разделение данных, и повторный ответ с тем же
+  // содержимым отдаёт ТОТ ЖЕ объект — проп `doc` не меняется, эффект подмены в `BodyEditor` не
+  // прогоняется вовсе. Приедь чужое тело первым, доехавшим само собой перечитыванием, второго
+  // шанса подменить содержимое уже не было бы.
   const serve = { outside: false };
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
