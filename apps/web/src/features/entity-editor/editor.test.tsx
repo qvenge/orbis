@@ -351,6 +351,13 @@ test('копия ИЗНУТРИ редактора вставляется цел
   // И целиком, с точностью до блочных id: круг копирования документ не меняет.
   expect(stripIds(after)).toEqual(stripIds(before));
 
+  // Тот же круг, но с прибавкой, которую делает настоящий браузер: он дописывает к содержимому
+  // буфера `<meta charset=…>` и разметку границ фрагмента. Признак читается у первого ЭЛЕМЕНТА,
+  // и оба этих довеска обязаны пройти мимо него.
+  editor.commands.selectAll();
+  editor.view.pasteHTML(`<meta charset="utf-8"><!--StartFragment-->${html}<!--EndFragment-->`);
+  expect(JSON.stringify(editor.getJSON())).toContain(KUPIT);
+
   // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: чужой HTML по-прежнему приходит ПЛОСКИМ — пропуск
   // сделан ровно для своей разметки, а не для любой.
   editor.commands.selectAll();
@@ -379,6 +386,44 @@ test('копия ОДНОГО блока смарт-листа вставляе�
   editor.commands.focus('start');
   editor.view.pasteHTML(html);
   expect(editor.getJSON().content?.filter((n) => n.type === 'queryBlock')).toHaveLength(2);
+});
+
+test('подстрока признака в ТЕКСТЕ чужой статьи мимо санитайзера не пропускает', async () => {
+  // Признак читается у ПЕРВОГО элемента разобранного документа, а не ищется подстрокой во всей
+  // строке. Иначе обычная статья про ProseMirror — где `data-pm-slice` набран внутри `<code>` —
+  // проходила бы мимо санитайзера ЦЕЛИКОМ: заголовок оставался заголовком, `<strong>` маркой.
+  // Подделка требует умысла, а сюда довольно скопировать техническую статью (ре-ревью пакета B).
+  vi.stubGlobal('ClipboardEvent', FakeClipboardEvent);
+  const { editor } = await mountBody('привет');
+  editor.commands.selectAll();
+  editor.view.pasteHTML(
+    '<h1>Как устроен буфер ProseMirror</h1>' +
+      '<p>Срез помечается атрибутом <code>data-pm-slice</code> на первом элементе, ' +
+      'и <strong>это важно</strong>.</p>',
+  );
+  const json = JSON.stringify(editor.getJSON());
+  // Страж вакуумности: подстрока в тексте статьи ЕСТЬ — иначе тест ничего не утверждает.
+  expect(json).toContain('data-pm-slice');
+  expect(json).not.toContain('"heading"');
+  expect(json).not.toContain('"bold"');
+  expect(json).not.toContain('"code"');
+  // Границы блоков санитайзер, как и прежде, бережёт: статья приехала абзацами, а не строкой.
+  expect((editor.getJSON().content ?? []).length).toBeGreaterThan(1);
+});
+
+test('признак НЕ на первом элементе своим не считается', async () => {
+  // `parseFromClipboard` ищет признак `querySelector`ом, то есть на ЛЮБОЙ глубине, — значит
+  // проверка «есть ли подстрока» и проверка «свой ли это буфер» расходились ещё и здесь.
+  // Заодно это самый дешёвый способ подделки, и он же ронял вставку: контекст среза,
+  // называющий обёрткой атомарную ноду, бросает TypeError прямо в обработчике (замерено).
+  vi.stubGlobal('ClipboardEvent', FakeClipboardEvent);
+  const { editor } = await mountBody('привет');
+  editor.commands.selectAll();
+  // Не бросает — потому что до разбора ProseMirror эта разметка уже не доходит.
+  editor.view.pasteHTML('<div><h1 data-pm-slice=\'2 2 ["queryBlock",{}]\'>чужое</h1></div>');
+  const json = JSON.stringify(editor.getJSON());
+  expect(json).toContain('чужое'); // страж вакуумности: вставка вообще случилась
+  expect(json).not.toContain('"heading"');
 });
 
 test('пропуск по data-pm-slice не проносит в документ ни стилей, ни скриптов', async () => {
