@@ -23,6 +23,11 @@ export const SLOW_SAVE_MS = 1000;
  *
  * Выдержка живёт ЗДЕСЬ, а не в хуке: `state` обязан отвечать, что происходит на самом деле,
  * иначе Задача 14 (черновик) читала бы «idle» у сохранения в полёте.
+ *
+ * `self-end` — на самих строках, а не на обёртке снаружи. Обёртка была бы ребёнком полосы
+ * плашек ВСЕГДА, в том числе когда индикатор молчит, и `empty:hidden` на полосе не срабатывал бы
+ * никогда: над вкладками висел бы постоянный отступ там, где сказать нечего. Вне flex-контейнера
+ * класс не значит ничего и не мешает.
  */
 export function SaveIndicator({ state }: { state: BodySaveState }) {
   const [slow, setSlow] = useState(false);
@@ -40,21 +45,21 @@ export function SaveIndicator({ state }: { state: BodySaveState }) {
   // ею чтение нечем, а «Не сохранено» никуда не денется, пока правка не доедет.
   if (state === 'rejected') {
     return (
-      <span role="status" data-testid="save-indicator" className="text-xs text-danger">
+      <span role="status" data-testid="save-indicator" className="self-end text-xs text-danger">
         Правка отклонена — обновите страницу
       </span>
     );
   }
   if (state === 'error') {
     return (
-      <span role="status" data-testid="save-indicator" className="text-xs text-danger">
+      <span role="status" data-testid="save-indicator" className="self-end text-xs text-danger">
         Не сохранено
       </span>
     );
   }
   if (state === 'saving' && slow) {
     return (
-      <span role="status" data-testid="save-indicator" className="text-xs text-text-muted">
+      <span role="status" data-testid="save-indicator" className="self-end text-xs text-text-muted">
         Сохраняем…
       </span>
     );
