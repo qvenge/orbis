@@ -115,17 +115,20 @@ export interface BodySave {
   discardPendingDraft: () => void;
 }
 
+/** Тело записи в вайровой форме — как оно приходит в `BodySaveEntity`. */
+type WireBody = BodySaveEntity['bodyDoc'];
+
 /**
- * Одно ли тело у двух снимков записи — по СМЫСЛУ (свой же сохранённый документ вернётся с
- * сервера без блочных id, см. strip-ids.ts). Спрашивают об этом ровно в одном месте: когда
- * приехавшая метка выросла и надо решить, двигал ли запись кто-то другой (см. entityRef ниже).
+ * Одно ли тело у двух снимков — по СМЫСЛУ (свой же сохранённый документ вернётся с сервера без
+ * блочных id, см. strip-ids.ts). Спрашивают об этом в одном месте: когда приехавшая метка
+ * выросла и надо решить, двигал ли запись кто-то другой (см. entityRef ниже).
  *
  * Функция модульная, а не внутри хука: TDZ у эффекта без зависимостей ни при чём (он исполняется
  * после рендера), но пересоздавать её на каждый рендер незачем.
  */
-const sameBody = (a: BodySaveEntity, b: BodySaveEntity): boolean => {
-  const x = a.bodyDoc ?? null;
-  const y = b.bodyDoc ?? null;
+const sameBody = (a: WireBody, b: WireBody): boolean => {
+  const x = a ?? null;
+  const y = b ?? null;
   if (x === null || y === null) return x === y;
   return x.v === y.v && sameDoc(x.doc as JSONContent, y.doc as JSONContent);
 };
@@ -192,9 +195,12 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // отложенный документ живёт до успеха, и такой 409 ловил бы уже досыл при уходе — то есть
     // правка не доезжала бы вовсе.
     //
-    // Признак «двигал не я» — САМО ТЕЛО. Выросла метка, а тело не менялось — защищать нечего, и
-    // база догоняет запись. Изменилось тело — метка остаётся замороженной, ровно как в сюжете
-    // находки 1 (там приезжает ЧУЖОЙ документ).
+    // Признак «двигал не я» — САМО ТЕЛО, и сверять его надо с телом НА МОМЕНТ ЗАМОРОЗКИ
+    // (`pendingBaseBodyRef`), а не с предыдущим снимком кэша. Сравнение соседних снимков задачи
+    // не решает, и это воспроизведено: чужая правка, один раз впитавшись в снимок, для проверки
+    // перестаёт существовать — и следующая же СВОЯ правка метки (заголовок, чекбокс, архивация,
+    // поле аспекта; гейт версии их не сверяет) размораживала базу, а уход с записи дописывал
+    // отложенный документ поверх чужого текста молча (ре-ревью раунда 2, блокер 1).
     //
     // Порядок проверок — от дешёвой к дорогой, и это не микрооптимизация: эффект прогоняется
     // после КАЖДОГО рендера, то есть на каждое нажатие клавиши, а сравнение по смыслу стоит двух
@@ -208,7 +214,11 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // сериализации всего тела) у всех перечитываний, случившихся вне правки, — а их
     // большинство.
     if (pendingRef.current === null) return;
-    if (!sameBody(prev, entity)) return;
+    if (!sameBody(pendingBaseBodyRef.current, entity.bodyDoc)) return;
+    // Снимок здесь НЕ обновляется, и это проверено мутацией (обновить его: все прогоны зелёные).
+    // Ветка достижима ровно тогда, когда приехавшее тело совпало со снимком ПО СМЫСЛУ, — значит
+    // подмена одного на другое не меняет ни одного будущего ответа `sameBody`. Обновляют снимок
+    // там, где меняется СМЫСЛ: набор, применение черновика, досыл, успех отправки.
     pendingBaseRef.current = currentExpected();
   });
 
@@ -240,6 +250,16 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
    * дизайн (слияние — Р13), и здесь закрыт другой класс: потеря БЕЗ единого действия человека.
    */
   const pendingBaseRef = useRef(entity.updatedAt);
+  /**
+   * Тело записи НА МОМЕНТ ЗАМОРОЗКИ — снимок, с которым и сверяется приехавшее (см. эффект
+   * обновления `entityRef`). Пишется ВЕЗДЕ, где пишется `pendingBaseRef`, и это не стиль:
+   * разъедься они — и «двигал ли запись кто-то другой» отвечалось бы про чужую пару.
+   *
+   * Сравнение с ПРЕДЫДУЩИМ снимком кэша вместо этого было бы негодно по устройству: чужая
+   * правка, один раз впитавшись в снимок, для проверки перестаёт существовать (ре-ревью раунда
+   * 2, блокер 1).
+   */
+  const pendingBaseBodyRef = useRef<WireBody>(entity.bodyDoc);
   const timerRef = useRef<number | null>(null);
   const inFlightRef = useRef(false);
   const stoppedRef = useRef(false);
@@ -375,7 +395,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     pendingFromEditorRef.current = false;
     // Метка отложенного — про ПРЕЖНЮЮ запись, и уехать под id соседней она не должна ни при
     // каких обстоятельствах (гарантированный 409 в лучшем случае, чужая правка — в худшем).
+    // Снимок тела — рядом с ней и всегда вместе (см. `pendingBaseBodyRef`).
     pendingBaseRef.current = entity.updatedAt;
+    pendingBaseBodyRef.current = entity.bodyDoc;
     // Отвергнутый документ — про ПРЕЖНЮЮ запись: под новой этот объект не встретится никогда,
     // но держать ссылку на чужое тело здесь незачем ровно так же, как и отложенное.
     rejectedDocRef.current = null;
@@ -557,7 +579,12 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
           // набранная ПОВЕРХ только что сохранённой, — её потомок, и база у неё теперь ответ
           // сервера. Не двинь мы её, досыл из onSettled ушёл бы со строкой, которую этот же
           // успех и сдвинул, — то есть с гарантированным 409 от собственного предшественника.
+          //
+          // Снимок тела при этом — ОТПРАВЛЕННЫЙ документ, а не то, что лежит в кэше: на сервере
+          // теперь ровно он, и перечитывание принесёт его же. Приедь вместо него чужое тело —
+          // сверка увидит расхождение и оставит базу замороженной, как и должна.
           pendingBaseRef.current = saved.updatedAt;
+          pendingBaseBodyRef.current = doc;
           // Снимается с очереди только ЭТОТ документ. Приехавшую за время запроса правку
           // отправит её СОБСТВЕННЫЙ таймер паузы, а если тот успел сработать, пока шёл
           // запрос, — досыл из onSettled. Второй путь заметнее, первый — чаще.
@@ -615,8 +642,10 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
   const onDocChange = useCallback(
     (doc: BodyDoc) => {
       pendingRef.current = doc;
-      // Метка — ЭТОГО момента: человек печатает поверх того, что показано ему сейчас.
+      // Метка И СНИМОК ТЕЛА — ЭТОГО момента: человек печатает поверх того, что показано ему
+      // сейчас, и заморозка отсчитывается отсюда.
       pendingBaseRef.current = currentExpected();
+      pendingBaseBodyRef.current = entityRef.current.bodyDoc;
       pendingFromEditorRef.current = true;
       clearTimer();
       timerRef.current = window.setTimeout(save, SAVE_DEBOUNCE_MS);
@@ -681,8 +710,9 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
       draftTimerRef.current = null;
       pendingRef.current = draft.doc;
       // Ветка сюда доходит только при СОВПАВШИХ метках (иначе выше — предложение), так что
-      // текущая метка и есть та, поверх которой черновик набирали.
+      // текущая метка и есть та, поверх которой черновик набирали. Снимок тела — рядом.
       pendingBaseRef.current = currentExpected();
+      pendingBaseBodyRef.current = entityRef.current.bodyDoc;
       pendingFromEditorRef.current = false; // документ с диска, а не из-под рук
       save();
     }, 0);
@@ -701,6 +731,7 @@ export function useBodySave(entityId: string, entity: BodySaveEntity): BodySave 
     // чужой — этого и просит единственная кнопка, которую человек нажал. Уйди она со старой
     // меткой, сервер ответил бы 409, то есть «оставить моё» не делало бы ничего.
     pendingBaseRef.current = currentExpected();
+    pendingBaseBodyRef.current = entityRef.current.bodyDoc;
     pendingFromEditorRef.current = false; // документ с диска: человек выбрал его, а не набрал
     // Терминальная остановка снимается: она про НАБОР (иначе каждое нажатие уходило бы в сеть
     // обречённым запросом), а здесь человек явным жестом распоряжается своим текстом — и

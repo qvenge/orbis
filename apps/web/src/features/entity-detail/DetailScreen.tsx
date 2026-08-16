@@ -353,17 +353,49 @@ function EntityBody({
    * Заполняется ВЕЗДЕ, где тело меняется: набор в редакторе, «Применить» тумблера, «оставить
    * моё» у баннера. Пропусти любое — и тумблер открылся бы текстом, которого на экране нет.
    *
-   * ИЗВЕСТНАЯ ГРАНИЦА, оставленная сознательно: подмену содержимого редактора приехавшим чужим
-   * документом реф не видит (`BodyEditor` сажает его через `setContent(…, emitUpdate: false)`, и
-   * наружу это не выходит — тот же разрыв, что у находки 1). Значит после такой подмены тумблер
-   * откроется прошлым НАБРАННЫМ текстом, а не приехавшим. Снимать реф по приезду нового
-   * `serverDoc` нельзя: перечитывание после каждого автосохранения приносило бы новый объект и
-   * сносило бы ровно те символы, ради которых находка 2 и чинилась.
+   * Реф ГОДЕН, только пока серверное тело не ушло вперёд него (см. `shownIsFresh`). Подмену
+   * содержимого редактора приехавшим чужим документом реф не видит — `BodyEditor` сажает его
+   * через `setContent(…, emitUpdate: false)`, и наружу это не выходит (тот же разрыв, что у
+   * находки 1), — поэтому «ушло ли вперёд» спрашивается у КЭША, а не у редактора.
    */
   const shownDocRef = useRef<BodyDoc | null>(null);
+  /**
+   * Серверное тело на момент, когда реф последний раз заполняли. По нему и видно, ушёл ли кэш
+   * вперёд показанного. Сравнение по ССЫЛКЕ здесь недостаточно и по смыслу — не дорого: пара
+   * сериализаций случается на ЖЕСТ (открытие или закрытие тумблера), а не на нажатие клавиши.
+   */
+  const shownBaseRef = useRef<Entity['bodyDoc']>(entity.bodyDoc);
+
+  /**
+   * Годен ли показанный документ прямо сейчас.
+   *
+   * «Не годен» значит ровно одно: с тех пор как реф заполняли, серверное тело стало ДРУГИМ по
+   * смыслу — своя правка доехала или приехала чужая. В обоих случаях на экране уже не то, что в
+   * рефе, и сажать его обратно нельзя: «Отмена» в тумблере, обещающая не менять ничего, молча
+   * вернула бы набранное поверх чужого текста, который человек только что запросил кнопкой
+   * «Обновить» (ре-ревью раунда 2, пункт 2).
+   *
+   * Сверка по ССЫЛКЕ стоит первой не ради скорости, а ради верности: перечитывание после
+   * каждого автосохранения приносит НОВЫЙ объект с тем же содержимым, и по одной ссылке реф
+   * объявлялся бы негодным каждые две секунды — вместе с символами, ради которых находка 2 и
+   * чинилась.
+   */
+  function shownIsFresh(): boolean {
+    if (shownDocRef.current === null) return false;
+    if (shownBaseRef.current === entity.bodyDoc) return true;
+    const base = asBodyDoc(shownBaseRef.current);
+    if (base === null || serverDoc === null) return base === serverDoc;
+    return sameDoc(base.doc, serverDoc.doc);
+  }
+
+  /** Запомнить показанное — вместе с серверным телом, относительно которого оно показано. */
+  function remember(next: BodyDoc): void {
+    shownDocRef.current = next;
+    shownBaseRef.current = entity.bodyDoc;
+  }
 
   function onEditorChange(next: BodyDoc) {
-    shownDocRef.current = next;
+    remember(next);
     // Местная копия НЕ трогается: редактор и так показывает то, что прислал, а лишний рендер
     // на каждый штрих стоит замеренных выше трёх миллисекунд.
     save.onDocChange(next);
@@ -371,7 +403,7 @@ function EntityBody({
 
   /** Правка из тумблера — наоборот, ДОЛЖНА сесть в редактор: он её ещё не видел. */
   function onMarkdownChange(next: BodyDoc) {
-    shownDocRef.current = next;
+    remember(next);
     setLocalDoc(next);
     save.onDocChange(next);
   }
@@ -386,7 +418,11 @@ function EntityBody({
    */
   function closeMarkdown() {
     const shown = shownDocRef.current;
-    if (shown !== null && (serverDoc === null || !sameDoc(shown.doc, serverDoc.doc))) {
+    if (
+      shownIsFresh() &&
+      shown !== null &&
+      (serverDoc === null || !sameDoc(shown.doc, serverDoc.doc))
+    ) {
       setLocalDoc(shown);
     }
     onCloseMarkdown();
@@ -435,7 +471,7 @@ function EntityBody({
             // `applyPendingDraft` его не меняет), а вот пропусти любое — и экран разойдётся с
             // базой: без первого человек увидит прежний текст над уже отправленной правкой,
             // без второго правка осталась бы только на диске.
-            shownDocRef.current = draft.doc;
+            remember(draft.doc);
             setLocalDoc(draft.doc);
             save.applyPendingDraft();
           }}
@@ -470,7 +506,7 @@ function EntityBody({
           {/* Тумблеру — то, что тело ПОКАЗЫВАЕТ (см. shownDocRef), а не то, что успело доехать
               до кэша. Реф пуст, пока в теле не меняли ничего, — тогда это ровно `doc`. */}
           <MarkdownToggle
-            doc={shownDocRef.current ?? doc}
+            doc={shownIsFresh() ? (shownDocRef.current ?? doc) : doc}
             onChange={onMarkdownChange}
             onClose={closeMarkdown}
           />

@@ -1590,6 +1590,65 @@ test('ВНУТРИ ПАУЗЫ «Применить» без единой пра�
   await expectEditorText('тело и хвост');
 });
 
+test('«Отмена» в тумблере не возвращает текст, который на экране уже заменён приехавшим', async () => {
+  // Заплата «уход из тумблера сажает показанное обратно» нужна (без неё уход возвращал текст
+  // СТАРШЕ набранного), но сажать показанное можно только пока серверный документ не ушёл
+  // вперёд. Иначе получается экранный путь той же природы, что находка 1: человек нажал
+  // «Обновить», увидел чужое тело — и «Отмена», которая обещает не менять НИЧЕГО, молча
+  // возвращает его набранное поверх чужого (ре-ревью раунда 2, пункт 2).
+  const outside = {
+    ...entity,
+    title: 'Изменено извне',
+    body: 'извне',
+    bodyDoc: parseBody('извне'),
+    updatedAt: 'B',
+  };
+  // Чужое тело приезжает ТОЛЬКО по нажатию «Обновить», а не с первым же перечитыванием после
+  // 409. Причина измерена: react-query держит структурное разделение данных, и повторный ответ
+  // с тем же содержимым отдаёт ТОТ ЖЕ объект — проп `doc` не меняется, эффект подмены в
+  // `BodyEditor` не прогоняется вовсе, и второго шанса подменить содержимое не бывает.
+  const serve = { outside: false };
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return { entity: serve.outside ? outside : entity, relations: [], thread: null };
+    if (path === 'entity.update') throw trpcError('CONFLICT');
+    if (path === 'aspect.list') return [];
+    return {};
+  });
+  const field = await editorField();
+  await userEvent.click(field);
+  await userEvent.type(field, ' и хвост');
+  await expectEditorText('и хвост');
+
+  // Автосохранение по паузе ловит 409 — и на экране плашка с «Обновить».
+  const refresh = await screen.findByRole('button', { name: 'Обновить' }, EDITOR_READY);
+  serve.outside = true;
+  // Фокус уводится ЯВНО, СОБЫТИЕМ. В браузере это делает само нажатие кнопки; в jsdom клик
+  // фокус не переносит, а `editor.isFocused` в Tiptap 3 — не живой геттер, а поле, которое
+  // ставят обработчики focus/blur (замерено по исходнику пакета). Без этой строки редактор
+  // остаётся «в фокусе», подмена содержимого запрещена (`isFocused && typed`), и премиса ниже
+  // недостижима по причине, к находке отношения не имеющей.
+  const blurEditor = () =>
+    fireEvent.blur(screen.getByTestId('body-editor').querySelector('[contenteditable]') as Element);
+  blurEditor();
+  fireEvent.click(refresh);
+  await expectEditorText('извне'); // премиса: чужое тело ДОЕХАЛО до редактора
+
+  await openDetailMenu();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
+  // И само поле открывается тем, что НА ЭКРАНЕ, а не прошлым набранным: показанный документ
+  // годен, только пока серверное тело не ушло вперёд него.
+  expect(await screen.findByTestId('markdown-source')).toHaveValue('извне');
+  fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+  await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
+
+  await openEditor();
+  await expectEditorText('извне');
+  expect(screen.getByTestId('body-editor')).not.toHaveTextContent('и хвост');
+  // Свой предел: тест ЖДЁТ настоящую паузу набора (2 с) — 409 иначе неоткуда взять, а подменять
+  // здесь таймеры значило бы поднимать ProseMirror под поддельными часами.
+}, 30_000);
+
 test('правка из тумблера садится в редактор, а не остаётся в тумблере', async () => {
   // Иначе экран и база разъезжаются до первого нажатия клавиши: правка уехала бы
   // автосохранением, а редактор показывал бы прежний текст и вернул бы его поверх.
