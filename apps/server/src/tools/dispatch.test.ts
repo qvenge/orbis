@@ -896,6 +896,153 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
   });
 });
 
+// ---------------------------------------------------------------------------
+// Глаголы исполнителя: уровень execute на самом dispatch (инвариант 4, §9.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Инвариант 4 проверяется здесь ПОВЕДЕНИЕМ диспатча, а не только классификатором
+ * (юниты — policy/confirmation.test.ts): между таблицей §7.10 и ответом агенту лежат
+ * гейт скоупа, envelope-валидация, `levelGate` и явная ветка «level !== execute» — и
+ * pending мог бы родиться на любом из этих шагов. Поэтому круг гоняется целиком: у
+ * фонового прогона нет человека, который нажал бы «подтвердить».
+ */
+describe('dispatchTool: глаголы исполнителя никогда не дают pending (инвариант 4, §9.3)', () => {
+  const owner = freshUserId();
+  let grantId: string;
+  let projectId: string;
+
+  /** Контекст фонового исполнителя: MCP + грант worker, без явной команды человека. */
+  const workerCtx = () =>
+    ctxFor({
+      actorUserId: owner,
+      actorKind: 'agent',
+      source: 'mcp',
+      explicitCommand: false, // за вызовом агента прямой команды владельца нет
+      grant: { id: grantId, scope: 'worker', label: 'w' },
+    });
+
+  /** Тикет, назначенный этому гранту, — вход круга. */
+  async function seedTicket(title: string): Promise<string> {
+    const ticket = await seedEntity(owner, {
+      title,
+      tags: [],
+      aspects: {
+        'orbis/task': { status: 'planned' },
+        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      },
+    });
+    const r = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'relation_create',
+          input: { source_id: projectId, target_id: ticket.id, relation_type: 'parent' },
+        },
+      ],
+    });
+    if (!r.ok) throw new Error(`сид связи проект→тикет: ${r.error.code} ${r.error.message}`);
+    return ticket.id;
+  }
+
+  /** Вызов глагола + сверка «ok и НЕ pending» одним местом; отдаёт result глагола. */
+  async function verb(
+    name: string,
+    input: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const r = await dispatchTool(workerCtx(), name, input);
+    // Сначала — сам инвариант: pending недопустим ни при каком исходе глагола
+    expect(r.status).not.toBe('pending_confirmation');
+    if (r.status !== 'ok') throw new Error(`«${name}»: ожидался ok, получено ${JSON.stringify(r)}`);
+    return r.result as Record<string, unknown>;
+  }
+
+  beforeAll(async () => {
+    const token = await issuePatGrant(db, { ownerId: owner, label: 'круг', scope: 'worker' });
+    const identity = await verifyBearer(db, token);
+    if (identity === null) throw new Error('выданный worker-PAT не прошёл verifyBearer');
+    grantId = identity.grantId;
+    projectId = (
+      await seedEntity(owner, {
+        title: 'Проект круга',
+        tags: [],
+        body: '## Процесс\n\nВетка, тесты, отчёт.\n',
+        aspects: { 'orbis/project': { stage: 'active' } },
+      })
+    ).id;
+  });
+
+  test('круг my_queue → claim → step → checkpoint: каждый глагол исполнен, ни одного pending', async () => {
+    const ticketId = await seedTicket('Тикет до чекпойнта');
+
+    const queue = await verb('orbis_my_queue', {});
+    expect((queue.tickets as Array<{ id: string }>).some((t) => t.id === ticketId)).toBe(true);
+
+    const claimed = await verb('orbis_claim_task', { ticket_id: ticketId });
+    const runId = claimed.run_id as string;
+    expect(claimed.replayed).toBe(false);
+
+    const stepped = await verb('orbis_run_step', { run_id: runId, summary: 'Прочитал задание' });
+    expect(stepped.step_count).toBe(1);
+
+    const checked = await verb('orbis_checkpoint', {
+      run_id: runId,
+      question: 'Какой подход выбрать?',
+    });
+    expect(checked.ticket_status).toBe('waiting');
+  });
+
+  test('круг claim → step → finish на новом тикете: те же execute, ни одного pending', async () => {
+    const ticketId = await seedTicket('Тикет до итога');
+
+    const claimed = await verb('orbis_claim_task', { ticket_id: ticketId });
+    const runId = claimed.run_id as string;
+    await verb('orbis_run_step', { run_id: runId, summary: 'Починил парсер' });
+
+    const finished = await verb('orbis_finish', { run_id: runId, report: 'Готово, проверь' });
+    expect(finished.ticket_id).toBe(ticketId);
+    // Тикет закрывает не агент (С8): без may_close итог уводит тикет на проверку
+    expect(finished.ticket_status).toBe('waiting');
+  });
+
+  test('карточки подтверждения глагол не порождает: во всех тредах владельца ни одной pending-записи', async () => {
+    // Сверка по состоянию, а не по возвращённому статусу: pending — это ЗАПИСЬ в тред
+    // (policy/pending), и «status не pending» ещё не значит «карточка не легла».
+    // RLS скоупит chat_messages владельцем — счёт точен по всему его журналу.
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.execute(
+        sql`SELECT
+              count(*) FILTER (WHERE metadata @> '{"pending": {}}'::jsonb)::int AS pendings,
+              count(*) FILTER (WHERE metadata @> '{"actions": []}'::jsonb)::int AS audits
+            FROM chat_messages`,
+      ),
+    );
+    const { pendings, audits } = rows[0] as { pendings: number; audits: number };
+    expect(pendings).toBe(0);
+    // Не вырожденно: круги выше действительно писали в журнал этого владельца —
+    // «ноль карточек» здесь означает «глаголы исполнились», а не «ничего не было»
+    expect(audits).toBeGreaterThan(0);
+  });
+
+  test('глагол без гранта (чат/UI-контекст) → VALIDATION: прогон адресуется конкретному доступу (agentOnly)', async () => {
+    // Вторая линия гейта agentOnly: реестр чата такие дефы отсекает сам
+    // (ai/send-message.ts), но диспатч обязан отказать любому вызывающему без гранта —
+    // иначе прогон было бы не к кому отнести
+    for (const [name, input] of [
+      ['orbis_my_queue', {}],
+      ['orbis_claim_task', { ticket_id: newId() }],
+      ['orbis_run_step', { run_id: newId(), summary: 'шаг мимо гранта' }],
+      ['orbis_checkpoint', { run_id: newId(), question: 'вопрос мимо гранта?' }],
+      ['orbis_finish', { run_id: newId(), report: 'итог мимо гранта' }],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const r = await dispatchTool(ctxFor({ actorUserId: owner }), name, input);
+      expectError(r, 'VALIDATION');
+    }
+  });
+});
+
 describe('CAS-предусловие не протекает в путь модели (dispatch/MCP)', () => {
   // Тул-контракт модели не растёт ради сервера: precondition живёт в exec-схеме
   // executor'а, а вход модели и MCP идёт через strict-схему тула (entityUpdateInput) —

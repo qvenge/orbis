@@ -26,7 +26,7 @@ import {
 } from '../oauth/grants';
 import { approvePending } from '../policy/pending';
 import { appRouter } from '../router';
-import { buildToolRegistry } from '../tools/registry';
+import { AGENT_VERB_NAMES, buildToolRegistry, WORKER_SCOPE_TOOLS } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
 import { MCP_MAX_BODY_BYTES, makeMcpHandler } from './transport';
 
@@ -762,6 +762,127 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
       tx.select({ title: entities.title }).from(entities).where(eq(entities.id, target.id)),
     );
     expect(rows[0]?.title).toBe('Цель worker-отказа');
+  });
+
+  test('инвариант списка: КАЖДОЕ имя — либо чтение, либо WORKER_SCOPE_TOOLS; все пять глаголов на месте', async () => {
+    // Тест выше перечисляет имена поимённо — он ловит регресс в известных тулах, но
+    // молчит про НОВЫЙ мутирующий тул, который однажды появится в реестре. Инвариант
+    // закрывает именно это: список worker'а не может вырасти ничем, кроме чтений и
+    // явно разрешённого набора (§4.14, fail-closed).
+    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
+    const allowed = new Set(
+      defs.filter((d) => d.kind === 'read' && d.internalOnly !== true).map((d) => d.name),
+    );
+    for (const name of WORKER_SCOPE_TOOLS) allowed.add(name);
+
+    const agent = await connectAgent(mainUrl(), WORKER_TOKEN);
+    try {
+      const names = (await agent.listTools()).tools.map((t) => t.name);
+      // Через массив лишних, а не проверкой в цикле: падение назовёт САМИ имена
+      expect(names.filter((n) => !allowed.has(n))).toEqual([]);
+      // Не вырожденно: список содержит и чтения, и весь круг исполнителя
+      expect(names).toContain('entity_query');
+      for (const verb of AGENT_VERB_NAMES) expect(names).toContain(verb);
+    } finally {
+      await agent.close();
+    }
+  });
+
+  test('полный круг по проводу: orbis_my_queue → orbis_claim_task → orbis_run_step → orbis_finish (приёмка 4, 9, 10)', async () => {
+    // Круг гоняется настоящим SDK-клиентом против поднятого сервера: между агентом и
+    // глаголами лежат аутентификация по гранту, гейт скоупа, tools/call-сериализация и
+    // политика §7.10 — е2е-правда о том, что исполнитель ДЕЙСТВИТЕЛЬНО может работать.
+    const grant = await verifyBearer(db, WORKER_TOKEN);
+    if (grant === null) throw new Error('worker-PAT не прошёл verifyBearer');
+    const project = await seedEntity({
+      title: 'Проект круга по проводу',
+      tags: [],
+      body: '## Процесс\n\nВетка, тесты, отчёт.\n',
+      aspects: { 'orbis/project': { stage: 'active' } },
+    });
+    const ticket = await seedEntity({
+      title: 'Тикет круга по проводу',
+      tags: [],
+      aspects: {
+        'orbis/task': { status: 'planned' },
+        'orbis/assignment': { executor: 'agent', grant_id: grant.grantId },
+      },
+    });
+    const linked = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'relation_create',
+          input: { source_id: project.id, target_id: ticket.id, relation_type: 'parent' },
+        },
+      ],
+    });
+    if (!linked.ok) throw new Error(`сид связи: ${linked.error.code} ${linked.error.message}`);
+
+    const agent = await connectAgent(mainUrl(), WORKER_TOKEN);
+    let runId = '';
+    try {
+      const queue = await callTool(agent, 'orbis_my_queue', {});
+      expect(queue.isError).toBe(false);
+      const tickets = (
+        queue.payload.result as { tickets: Array<{ id: string; claimable: boolean }> }
+      ).tickets;
+      const mine = tickets.find((t) => t.id === ticket.id);
+      expect(mine?.claimable).toBe(true);
+
+      const claimed = await callTool(agent, 'orbis_claim_task', { ticket_id: ticket.id });
+      expect(claimed.isError).toBe(false);
+      // Инвариант 4 по проводу: у глагола не бывает ответа «ждёт подтверждения»
+      expect(claimed.payload.status).toBeUndefined();
+      const claim = claimed.payload.result as { run_id: string; process: string | null };
+      runId = claim.run_id;
+      expect(claim.process).toContain('Процесс'); // тело проекта доехало до агента (С10)
+
+      const stepped = await callTool(agent, 'orbis_run_step', {
+        run_id: runId,
+        summary: 'Собрал ветку и прогнал тесты',
+        external: true,
+      });
+      expect(stepped.isError).toBe(false);
+      expect((stepped.payload.result as { step_count: number }).step_count).toBe(1);
+
+      const finished = await callTool(agent, 'orbis_finish', {
+        run_id: runId,
+        report: 'Готово: парсер починен, тесты зелёные.',
+      });
+      expect(finished.isError).toBe(false);
+      // Тикет закрывает не агент (С8, приёмка 9): итог уводит его на проверку владельцу
+      expect((finished.payload.result as { ticket_status: string }).ticket_status).toBe('waiting');
+    } finally {
+      await agent.close();
+    }
+
+    // Состояние графа после круга: тикет ждёт владельца, прогон завершён с отчётом
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx
+        .select({ id: entities.id, aspects: entities.aspects })
+        .from(entities)
+        .where(inArray(entities.id, [ticket.id, runId])),
+    );
+    const byId = new Map(
+      rows.map((r) => [r.id, r.aspects as Record<string, Record<string, unknown>>]),
+    );
+    expect(byId.get(ticket.id)?.['orbis/task']?.status).toBe('waiting');
+    const run = byId.get(runId)?.['orbis/agent-run'];
+    expect(run?.outcome).toBe('finished');
+    expect(run?.step_count).toBe(1);
+    expect(run?.report).toBe('Готово: парсер починен, тесты зелёные.');
+
+    // Журнал §7.8: действия круга атрибутированы гранту исполнителя и его прогону (С2)
+    const runActions = (await globalAuditActions()).filter((a) => a.run_id === runId);
+    expect(runActions.length).toBeGreaterThan(0);
+    for (const a of runActions) {
+      expect(a.actor_kind).toBe('agent');
+      expect(a.source).toBe('mcp');
+      expect(a.actor_grant_id).toBe(grant.grantId);
+    }
   });
 });
 

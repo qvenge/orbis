@@ -7,6 +7,7 @@
 // (describe.skip удалён этой задачей).
 import { describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
+import { AGENT_VERB_NAMES, buildToolDefs } from '../tools/registry';
 import {
   classifyToolCall,
   entityUpdatePreviewDiff,
@@ -113,6 +114,60 @@ describe('classifyToolCall: таблица MVP §7.10 — ряд за рядом
     expect(classifyToolCall(facts({ tool: 'relation_create' }))).toBe('execute');
     expect(classifyToolCall(facts({ tool: 'thread_post' }))).toBe('execute');
   });
+});
+
+// ---------------------------------------------------------------------------
+// Инвариант 4 (§9.3): глагол исполнителя НИКОГДА не попадает в pending
+// ---------------------------------------------------------------------------
+
+/**
+ * Пять глаголов круга и `thread_post` — весь набор, доступный фоновому исполнителю
+ * (WORKER_SCOPE_TOOLS минус чтения). Инвариант 4 требует, чтобы каждый из них таблицей
+ * §7.10 попадал ровно в `execute`: у фонового прогона нет человека, который нажал бы
+ * «подтвердить», и карточка `explicit-confirmation` висела бы вечно, а прогон встал.
+ *
+ * Дефы берутся из НАСТОЯЩЕГО реестра (`buildToolDefs([])` — core + глаголы; attach_*
+ * требуют строк аспектов, а их здесь и не проверяем), а факты — из `factsFromToolCall`.
+ * Выдуманный `{kind:'mutate'}` в тесте закрепил бы намерение автора теста, а не то, что
+ * реестр реально объявляет: смена `kind` глагола на что-то иное обязана падать здесь.
+ */
+describe('глаголы исполнителя и thread_post → execute (инвариант 4, ряд 6 таблицы §7.10)', () => {
+  const defs = buildToolDefs([]);
+  /** Валидные envelope-входы: форма вызова — вход фактов, а не декорация. */
+  const inputs: Record<string, Record<string, unknown>> = {
+    orbis_my_queue: {},
+    orbis_claim_task: { ticket_id: newId() },
+    orbis_run_step: { run_id: newId(), summary: 'Прочитал тикет' },
+    orbis_checkpoint: { run_id: newId(), question: 'Какой подход выбрать?' },
+    orbis_finish: { run_id: newId(), report: 'Готово, проверь' },
+    thread_post: { entity_id: newId(), content: 'Взял тикет в работу.' },
+  };
+
+  for (const name of [...AGENT_VERB_NAMES, 'thread_post']) {
+    test(`«${name}»: mutate, archives:false, isBatch:false → execute при любой явности намерения`, () => {
+      const def = defs.find((d) => d.name === name);
+      if (def === undefined) throw new Error(`тула «${name}» нет в реестре`);
+      const input = inputs[name];
+      if (input === undefined) throw new Error(`для «${name}» не задан валидный вход`);
+
+      // Факты формы вызова — ровно те, что требует инвариант: не архивация, не batch
+      const f = factsFromToolCall(def, input);
+      expect(f).toEqual({
+        tool: name,
+        kind: 'mutate',
+        known: true,
+        archives: false,
+        isBatch: false,
+      });
+
+      // explicitCommand — единственный акторный вход, способный сдвинуть уровень
+      // (ряд 3). У фонового прогона он всегда false: прямой команды человека за
+      // вызовом нет. Проверяем оба значения — уровень от них не зависит.
+      for (const explicitCommand of [false, true]) {
+        expect(classifyToolCall({ ...f, actorKind: 'agent', explicitCommand })).toBe('execute');
+      }
+    });
+  }
 });
 
 describe('factsFromToolCall: извлечение фактов формы вызова (до стадии 1 executor)', () => {

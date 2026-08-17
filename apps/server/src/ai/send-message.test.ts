@@ -19,7 +19,7 @@ import { SYSTEM_PROMPT_V4, TOOL_RESULT_MARKER } from '../llm/prompts/v4';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMMessage, LLMProvider, LLMRequest, LLMResponse } from '../llm/types';
 import { appRouter } from '../router';
-import type { Card } from '../tools/registry';
+import { AGENT_VERB_NAMES, type Card } from '../tools/registry';
 import { type Context, createCallerFactory } from '../trpc';
 import {
   MAX_TOKENS_NOTE,
@@ -1009,5 +1009,40 @@ describe('ai.sendMessage: ownerOnly (§9.3)', () => {
     );
     expect(err.code).toBe('FORBIDDEN');
     expect(scripted.requests).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Набор тулов чата: глаголы исполнителя модели не отдаются (agentOnly, §9.3/С7)
+// ---------------------------------------------------------------------------
+
+describe('ai.sendMessage: реестр тулов чата не содержит глаголов исполнителя (agentOnly)', () => {
+  test('в tools запроса к модели нет ни одного orbis_*; чтения и internalOnly user_query на месте', async () => {
+    // Почему это отдельное правило, а не следствие скоупа: у чата вообще нет гранта, а
+    // прогон адресуется КОНКРЕТНОМУ доступу (С2). Дай мы модели orbis_claim_task —
+    // лучшим исходом был бы честный VALIDATION диспатча, худшим (при эволюции кода)
+    // прогон без адресата. Дешевле не показывать: сверяем ИМЕННО набор, уехавший в LLM.
+    const user = freshUserId();
+    const threadId = await globalThread(user);
+    const scripted = new ScriptedProvider([endTurn('Готово')]);
+    await callerWith(user, scripted).ai.sendMessage({
+      id: newId(),
+      threadId,
+      content: 'что у меня по задачам?',
+    });
+
+    expect(scripted.requests).toHaveLength(1);
+    const toolNames = scripted.requests[0]?.tools.map((t) => t.name) ?? [];
+    expect(toolNames.length).toBeGreaterThan(0);
+    for (const verb of AGENT_VERB_NAMES) expect(toolNames).not.toContain(verb);
+    // Инвариант шире списка имён: НИ ОДИН тул чата не начинается с orbis_ — новый
+    // глагол, добавленный в реестр завтра, упадёт здесь, а не утечёт модели молча.
+    // (attach_orbis_* не подходит под префикс — он начинается с attach_.)
+    expect(toolNames.filter((n) => n.startsWith('orbis_'))).toEqual([]);
+    // Отсечение — точечное: остальной реестр чату доступен, включая internalOnly
+    expect(toolNames).toContain('entity_query');
+    expect(toolNames).toContain('entity_create');
+    expect(toolNames).toContain('thread_post');
+    expect(toolNames).toContain('user_query');
   });
 });
