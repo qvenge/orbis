@@ -32,6 +32,37 @@ export const entityUpdateInput = z
   })
   .strict();
 
+// Форму документа контракт не разбирает: её знает схема нод (@orbis/shared/doc), а дублирующая
+// zod-модель дерева ProseMirror разъехалась бы с ней при первой же новой ноде. Импортировать
+// сюда сам `@orbis/shared/doc` тоже нельзя: этот модуль лежит в эагерном барреле, а тот тянет
+// всю схему Tiptap (~156 kB gzip) — она уехала бы в первый кадр web.
+//
+// Но «не моделировать ноды» — не то же самое, что «не проверять ничего»: структура верхнего
+// уровня стоит одну строку и ловит формы, которые serializeBody МОЛЧА превращает в пустую
+// строку (`{}`, `content` не массивом), стирая тело вместе с body_refs. `.passthrough()`
+// обязателен: без него zod срезал бы всё, чего нет в форме, и правда о теле приехала бы в БД
+// урезанной. Версию сверяет executor — здесь про DOC_SCHEMA_VERSION знать нечем.
+const bodyDocSchema = z.object({
+  v: z.number().int().positive(),
+  doc: z.object({ type: z.literal('doc'), content: z.array(z.record(z.unknown())) }).passthrough(),
+});
+
+/**
+ * Вход tRPC-роутера entity.update: то же, что у тула, плюс структурная форма тела.
+ *
+ * Почему отдельной схемой, а не расширением `entityUpdateInput`: та — контракт ТУЛА, её парность
+ * с рукописной JSON Schema реестра (tools/registry.ts) проверяет тест, и рост схемы показал бы
+ * `bodyDoc` модели — а дизайн держит тул-контракт строковым. Один путь записи (executor), два
+ * входа с разными полномочиями.
+ */
+export const entityUpdateUiInput = entityUpdateInput
+  .extend({ bodyDoc: bodyDocSchema.optional() })
+  .refine((v) => !(v.body !== undefined && v.bodyDoc !== undefined), {
+    message: 'body и bodyDoc одновременно недопустимы',
+    path: ['bodyDoc'],
+  });
+export type EntityUpdateUiInput = z.infer<typeof entityUpdateUiInput>;
+
 export const attachAspectInput = z
   .object({
     entity_id: z.string().uuid(),
@@ -66,6 +97,55 @@ export const entityGetInput = z
     include: z.array(z.enum(['body', 'relations', 'backlinks', 'thread'])).optional(),
   })
   .strict();
+
+/**
+ * Симметрично для чтения: UI просит документ, тул-контракт не растёт. Объявлена ПОСЛЕ
+ * `entityGetInput` намеренно — `const` в TDZ до своей инициализации, и ссылка выше по файлу
+ * упала бы ReferenceError при загрузке модуля (проверено пробой).
+ */
+export const entityGetUiInput = entityGetInput.extend({
+  include: z.array(z.enum(['body', 'bodyDoc', 'relations', 'backlinks', 'thread'])).optional(),
+});
+export type EntityGetUiInput = z.infer<typeof entityGetUiInput>;
+
+/**
+ * Поиск сущности для `/`-меню, @-упоминаний и пикеров. Отдельно от грамматики `search=`
+ * (§6.1) намеренно: та — FTS по plainto_tsquery, то есть совпадение по ЦЕЛОМУ слову, и на
+ * этой семантике стоят сидированные смарт-листы. Меню же обязано находить по началу
+ * НАБРАННОГО слова: «куп» → «Купить кроссовки» (проверено пробой — `search=куп` не находит).
+ *
+ * `term` — набранный фрагмент. Имя намеренно НЕ `prefix`: сопоставляется он как ВХОЖДЕНИЕ
+ * в заголовок (иначе «Отчёт за квартал» перестал бы находиться набором «квартал»), и имя
+ * `prefix` обещало бы читателю не то, что делает код. Не `query` — это слово в кодовой базе
+ * занято смарт-листами (`{{query:…}}`, `entity.query`, `QueryBlock`). Совпадения с начала
+ * заголовка ранжируются выше вхождений в середине — детали у процедуры.
+ *
+ * Вход ТОЛЬКО tRPC: в реестре тулов (tools/registry.ts) не появляется, модели не раздаётся.
+ */
+export const entitySuggestInput = z
+  .object({ term: z.string().min(1), limit: z.number().int().min(1).max(20).optional() })
+  .strict();
+
+/**
+ * Заголовки для чипов ссылок — ПАЧКОЙ, а не entity.get на каждую ссылку в теле.
+ * Потолок 200, а не 100: тело с сотней с лишним упоминаний — не выдумка, а отказ на входе
+ * положил бы весь резолв и все чипы разом, вместо того чтобы просто стоить один запрос.
+ * Вход ТОЛЬКО tRPC.
+ */
+/**
+ * Потолок вынесен константой, потому что его читает и КЛИЕНТ: чипы длинного тела режутся на
+ * пачки ровно по нему (web/features/entity-editor/nodes/RefTitlesContext.tsx). Второе число,
+ * переписанное туда руками, разъехалось бы молча — в одну сторону вечной ошибкой валидации,
+ * в другую лишним запросом.
+ */
+export const ENTITY_RESOLVE_REFS_MAX = 200;
+
+export const entityResolveRefsInput = z
+  .object({ ids: z.array(z.string().uuid()).min(1).max(ENTITY_RESOLVE_REFS_MAX) })
+  .strict();
+
+export type EntitySuggestInput = z.infer<typeof entitySuggestInput>;
+export type EntityResolveRefsInput = z.infer<typeof entityResolveRefsInput>;
 
 export type EntityCreateInput = z.infer<typeof entityCreateInput>;
 export type EntityUpdateInput = z.infer<typeof entityUpdateInput>;

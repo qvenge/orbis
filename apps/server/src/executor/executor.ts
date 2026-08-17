@@ -13,11 +13,20 @@ import {
   batchAuditMessageId,
   batchExecuteInput,
   entityCreateInput,
-  entityUpdateInput,
+  entityUpdateUiInput,
   newId,
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
+// Конверсия тела живёт в @orbis/shared/doc — ОДИН экземпляр правил разбора и сериализации
+// на сервер и клиент; своей копии у executor'а нет и быть не должно.
+import {
+  bodyDocError,
+  bodyPairFromDoc,
+  bodyRefsFromDoc,
+  canonicalizeBody,
+  DOC_SCHEMA_VERSION,
+} from '@orbis/shared/doc';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
@@ -53,7 +62,6 @@ import {
   type AspectsMap,
   applyTaskCompletion,
   assertFinancialInvariant,
-  extractBodyRefs,
   financialRecurringNeedsDerivedFrom,
   mergeAspects,
   normalizeTags,
@@ -700,6 +708,27 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
 }
 
 /**
+ * Сохранить исходное тело, если строка ПРЯМО СЕЙЧАС впервые получает документ.
+ *
+ * Страховку обратимости кладёт не только разовый бэкфилл: путь записи переводит строку в
+ * структурную форму при первой же правке (ленивая конверсия при чтении в базу не пишет, а
+ * сохранение — пишет). Без этого кран «сконвертировано без страховки обратимости» на ЖИВОЙ
+ * системе стал бы вечно красным: бэкфилл такие строки уже не выберет (`body_doc IS NOT NULL`),
+ * а кран их видит — то есть шаг регламента «дождаться нуля» не наступил бы никогда
+ * (ре-ревью раунда 7, Д2). Кран, всегда красный на живой системе, читать перестают — ровно тот
+ * провал, который разобран в отчёте §11.6.
+ *
+ * Условие узкое: пишем ТОЛЬКО при переходе «документа не было → документ появился». У строки,
+ * которая документ уже имеет, сохранять нечего — исходное тело либо уже лежит в колонке, либо
+ * его никогда и не было (запись родилась с документом).
+ */
+function preserveBodyBeforeDoc(patch: EntityPatch, current: EntityRow): void {
+  if (current.bodyDoc === null && current.bodyBeforeDoc === null) {
+    patch.bodyBeforeDoc = current.body;
+  }
+}
+
+/**
  * Стадия 3: строка сущности под замком. В batch виртуальная строка (эффект предыдущих
  * операций) имеет приоритет над БД; отсутствие в обоих источниках — NOT_FOUND у вызывающего.
  * RLS скрывает чужие строки — «чужая» и «несуществующая» неразличимы намеренно.
@@ -800,10 +829,14 @@ async function prepareEntityCreate(
   const now = ctx.clock();
   const id = input.id ?? newId();
 
-  // Нормализации (§2.1, §4.1): tags lowercase+dedupe, body_refs из body, серверные таймстампы
+  // Нормализации (§2.1, §4.1): tags lowercase+dedupe, обе формы тела, серверные таймстампы.
+  // body — КАНОН (сериализация собранного документа), а не строка входа: правда о теле одна,
+  // и это документ; «как написала модель» эталоном быть не может (вердикт Б1).
   const tags = normalizeTags(input.tags);
-  const body = input.body ?? '';
-  const bodyRefs = extractBodyRefs(body);
+  const { doc: bodyDoc, body } = canonicalizeBody(input.body ?? '');
+  // Ссылки — из дерева ∪ raw-блоков (Б2): `[[entity:…]]` в блоке кода связью не считается (Р7),
+  // но тело, не разобранное целиком и уехавшее в rawBlock, backlinks не теряет.
+  const bodyRefs = bodyRefsFromDoc(bodyDoc);
   const aspects: AspectsMap = {};
   for (const [aspectId, data] of Object.entries(input.aspects ?? {})) {
     aspects[aspectId] = { ...data };
@@ -879,6 +912,18 @@ async function prepareEntityCreate(
     title: input.title,
     emoji: input.emoji ?? null,
     body,
+    bodyDoc,
+    // Запись рождается СРАЗУ с документом, поэтому «тела до конверсии» у неё нет — но колонка
+    // обязана быть заполнена, иначе кран «сконвертировано без страховки обратимости» краснел бы
+    // на КАЖДОЙ новой заметке и перестал бы читаться (ре-ревью раунда 7, Д2). Кладём то же
+    // тело: инвариант «есть документ ⇒ есть страховка» становится проверяемым БЕЗ отсечки по
+    // времени наката миграции, а колонка всё равно снимается после переноса.
+    //
+    // ЧЕСТНО ПРО ГРАНИЦУ: здесь ложится КАНОН (`canonicalizeBody` выше), а не то, что написал
+    // автор. Для записей, созданных после выкатки, колонка ничего не восстанавливает — она
+    // страхует ПЕРЕНОС корпуса, а не путь записи. В отчёте это сказано тем же словами
+    // (ре-ревью раунда 8, п.4).
+    bodyBeforeDoc: body,
     bodyRefs,
     tags,
     meta: input.meta ?? {},
@@ -956,13 +1001,17 @@ async function prepareEntityCreate(
 // ---------------------------------------------------------------------------
 // entity_update
 // ---------------------------------------------------------------------------
+
 async function prepareEntityUpdate(
   ctx: ExecCtx,
   rawInput: unknown,
   batch?: BatchState,
 ): Promise<PreparedOp> {
   // Стадия 1
-  const input = parseEnvelope(entityUpdateInput, rawInput, 'entity_update');
+  // Надмножество тул-контракта: тулы шлют узкую форму (bodyDoc в ней просто отсутствует и
+  // отвергается ещё диспатчем), UI — широкую. Расширять сам entityUpdateInput нельзя: он —
+  // контракт ТУЛА, и bodyDoc в нём показался бы модели.
+  const input = parseEnvelope(entityUpdateUiInput, rawInput, 'entity_update');
 
   // Стадия 3: load state ПОД ЗАМКОМ — merge аспектов это read-modify-write, без
   // FOR UPDATE конкурентные патчи разных полей одного аспекта теряли бы правки
@@ -975,7 +1024,11 @@ async function prepareEntityUpdate(
   // Внутренний режим undo (§7.8) требование ПРОПУСКАЕТ: Undo восстанавливает
   // зафиксированное в журнале прежнее состояние поверх текущего — это осознанный
   // LWW-откат, а не пользовательская правка (inverse не несёт expectedUpdatedAt).
-  if (input.body !== undefined && ctx.internalUndo === undefined) {
+  //
+  // ОБА поля тела под одним гейтом: сохранения редактора едут ТОЛЬКО bodyDoc, и пока условие
+  // смотрело на один input.body, они проходили мимо — 409 не наступал никогда, а конкурентная
+  // правка затиралась молча (ревью Б3).
+  if ((input.body !== undefined || input.bodyDoc !== undefined) && ctx.internalUndo === undefined) {
     if (input.expectedUpdatedAt === undefined) {
       throw new ExecError('VALIDATION', 'правка body требует expectedUpdatedAt (§5.2)', {
         id: input.id,
@@ -1082,10 +1135,82 @@ async function prepareEntityUpdate(
     changed.emoji = input.emoji;
     prior.emoji = current.emoji;
   }
-  if (input.body !== undefined) {
-    patch.body = input.body;
-    patch.bodyRefs = extractBodyRefs(input.body); // §2.1: при каждом update, затрагивающем body
-    changed.body = input.body;
+  // Тело приходит в ОДНОЙ из двух форм (схема запрещает обе сразу), а в БД всегда ложатся ОБЕ:
+  // body_doc — правда, body — её проекция и аварийный дубль. Это единственное место, где формы
+  // переводятся друг в друга. body_refs — из ДЕРЕВА в обеих ветках (§2.1 при каждом update,
+  // затрагивающем тело): иначе правка модели и правка из UI считали бы backlinks по разным
+  // правилам, и `[[entity:…]]` в блоке кода то появлялся бы в графе, то исчезал.
+  if (input.bodyDoc !== undefined) {
+    // Версия сверяется НА ЗАПИСИ, потому что на чтении она уже решена: readBodyDoc
+    // гарантированно выбрасывает любой v !== DOC_SCHEMA_VERSION и пересобирает документ из
+    // `body`. Принять здесь версию из будущего значило бы сохранить заведомо обречённое — и
+    // это потеря СОДЕРЖИМОГО, а не оформления: незнакомые ноды выпадают уже из проекции
+    // (проверено пробой — v=2 с новой нодой даёт body без её текста), а чтение потом
+    // пересоберёт документ из этого урезанного body. Ровно то, ради чего версия и заведена.
+    if (input.bodyDoc.v !== DOC_SCHEMA_VERSION) {
+      throw new ExecError(
+        'VALIDATION',
+        'документ другой версии схемы: перезагрузите приложение и повторите правку',
+        { id: input.id, expected: DOC_SCHEMA_VERSION, got: input.bodyDoc.v },
+      );
+    }
+    // Структурная целость — вопросом К СХЕМЕ, а не по косвенному следу «проекция пуста».
+    // На незнакомой НОДЕ serializeBody исключения не бросает: он молча отдаёт '', и запись
+    // обнулила бы body вместе с body_refs, оставив в body_doc тот же мусор (readBodyDoc
+    // пропускает его по версии) — обе формы терялись бы с 200 OK. (Оговорка честности: «не
+    // бросает» верно НЕ для любого входа — на документе, непригодном по схеме, он падает
+    // TypeError'ом из недр @tiptap/markdown, замерено на listItem с пустым content. Здесь это
+    // безопасно ровно потому, что такой вход отсекает гейт ниже, до сериализации.) Но пустая
+    // проекция — лишь
+    // СЛЕД поломки, а не она сама: в '' законно сериализуются и пустой заголовок, и абзац с
+    // одним hardBreak, и пробельный абзац, так что гейт по этому признаку отвергал бы штатные
+    // состояния редактора (заметка из одного заголовка, у которого стёрли текст, не
+    // сохранялась бы ВООБЩЕ). Спрашиваем прямо то, что хотим знать.
+    const docError = bodyDocError(input.bodyDoc);
+    if (docError !== undefined) {
+      throw new ExecError('VALIDATION', 'документ не соответствует схеме — правка отклонена', {
+        id: input.id,
+        reason: docError,
+      });
+    }
+    // Третья проверка, которой здесь не было (итоговое ревью, находка 3): что проекция НИЧЕГО
+    // НЕ ТЕРЯЕТ — ни одного непробельного символа, ни одной ссылки. Версия и структура
+    // сверялись, а то, ради чего вся конструкция затеяна, — нет, и ровно через этот шов
+    // проходила порча вложенных оград и подписей со скобкой.
+    //
+    // Спрашивается ИМЕННО «ничего не пропало», а НЕ «проекция — неподвижная точка канона»:
+    // второе было первой редакцией страховки и оказалось регрессом (ре-ревью, Б1). markdown не
+    // умеет выражать пустой абзац, поэтому у любого документа с пустой строкой неподвижность
+    // недостижима В ПРИНЦИПЕ, и страховка уводила живую заметку в один неправимый rawBlock на
+    // каждом круге автосохранения. Замер трёх критериев — в докблоке bodyPairFromDoc, там же
+    // и причина, по которой «канон устойчив» годится аудиту корпуса, но не этому месту.
+    //
+    // Логика живёт в @orbis/shared/doc рядом с самим сериализатором (там же её и проверяют без
+    // базы): отказа не будет — терминальный VALIDATION остановил бы автосохранение, — текст
+    // уезжает в БД байт в байт, а непрошедший документ подменяется rawBlock'ом, который
+    // печатается дословно.
+    //
+    // В БД едет ВХОД, а не результат валидации: nodeFromJSON().toJSON() теряет незнакомые схеме
+    // атрибуты, а блочные id живут именно так (UniqueID — расширение редактора, в
+    // DOC_EXTENSIONS его нет). Проверено пробой.
+    const { doc: storedDoc, body } = bodyPairFromDoc(input.bodyDoc);
+    patch.bodyDoc = storedDoc;
+    patch.body = body;
+    preserveBodyBeforeDoc(patch, current);
+    // Ссылки — из ТОГО, ЧТО ЛЁГЛО. В штатной ветке это тот же вход; в ветке страховки — raw,
+    // и связи из него достаёт регэксп (Б2: backlinks не зависят от разбираемости тела).
+    patch.bodyRefs = bodyRefsFromDoc(storedDoc);
+    changed.body = body;
+    prior.body = current.body;
+  } else if (input.body !== undefined) {
+    // КАНОН, а не input.body: body — производная документа, и сравнивать «как написала
+    // модель» бессмысленно (вердикт Б1). FTS не страдает (проверено спайком), сиды каноничны.
+    const { doc, body } = canonicalizeBody(input.body);
+    patch.body = body;
+    patch.bodyDoc = doc;
+    preserveBodyBeforeDoc(patch, current);
+    patch.bodyRefs = bodyRefsFromDoc(doc); // дерево ∪ raw — backlinks не теряются (Б2)
+    changed.body = body;
     prior.body = current.body;
   }
   if (input.tags !== undefined) {

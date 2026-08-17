@@ -41,12 +41,13 @@ const TransactionsScreen = lazy(() =>
 const ImportFlow = lazy(() =>
   import('../features/import/ImportFlow').then((m) => ({ default: m.ImportFlow })),
 );
-// Самый крупный отдельный чанк. Экран сущности уносит с собой весь features/query-builder
-// (QueryBlockEditor — его единственный потребитель) и дерево ui/DropdownMenu, то есть
-// radix-menu + popper + arrow + floating-ui, — у DropdownMenu тоже ровно один потребитель,
-// DetailScreen.tsx:11. Отдельной границы ВНУТРИ DetailScreen не заводим: она сломала бы
-// синхронный editorField(dialog) в query-builder.test.tsx и ничего не добавила бы — всё это
-// поддерево и так уезжает бесплатно.
+// Экран сущности уносит с собой дерево ui/DropdownMenu (radix-menu + popper + arrow +
+// floating-ui) — у него ровно один потребитель, меню ⋮ этого экрана.
+// А вот сам РЕДАКТОР тела внутри него ленив ещё раз, и это не украшение: `BodyEditor` и
+// `MarkdownToggle` тянут схему документа (`doc-*.js`, ~154 кБ gzip), то есть больше, чем весь
+// остальной экран вместе взятый. Границы стоят в EditorShell.tsx и DetailScreen.tsx, а их
+// целость сторожит scripts/check-lazy-chunks.ts — статический импорт рядом с ленивым
+// схлопывает чанк молча.
 // Соседний по каталогу NativeRow — исключение: его берёт ещё и CategoryScreen. Ребро остаётся
 // целиком внутри ленивой части графа (оба импортёра ленивые), поэтому во входной чанк он не
 // возвращается; rolldown кладёт его в общий чанк на двоих.

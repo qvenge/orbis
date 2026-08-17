@@ -1,8 +1,9 @@
 // Прогресс цели на detail-экране (01-architecture §11.3, Task E3). Число считает сервер
 // (E2, goals/progress.ts) и кладёт его СОСЕДОМ сущности в ответ entity.get — клиент только
 // рисует полосу и объясняет, когда посчитать не вышло.
+import { parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
 import { QuickCapture } from '../browser/QuickCapture';
@@ -14,6 +15,9 @@ const goal = {
   title: 'Накопить на отпуск',
   emoji: null,
   body: '',
+  // Часть контракта detail (include просит документ всегда): без него редактор не встал бы
+  // никогда, и зелень файла держалась бы на состоянии, которого в проде не бывает.
+  bodyDoc: parseBody(''),
   bodyRefs: [],
   tags: [],
   meta: {},
@@ -45,10 +49,17 @@ function goalHandler(goalProgress: unknown, entity: unknown = goal): MockHandler
 
 beforeEach(() => {
   localStorage.clear();
+  // Простоя не даём: файл про полосу прогресса и поля аспектов, а редактор, встающий сам по
+  // запасному таймеру, менял бы дерево посреди ожиданий (приём editor.test.tsx).
+  vi.stubGlobal('requestIdleCallback', () => 1);
   useNav.setState({
     activeTab: 'browser',
     stacks: { chat: [], browser: [{ kind: 'entity', id: 'g1' }], agenda: [], budget: [] },
   });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 test('карточка цели показывает прогресс, единицу и процент', async () => {

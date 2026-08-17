@@ -77,7 +77,9 @@ export async function exportData(
     format: 'orbis-export',
     version: 1,
     exportedAt: clock().toISOString(),
-    entities: entityRows.map(toWireEntity),
+    // Стрелкой, а не `.map(toWireEntity)`: вторым позиционным параметром туда поехал бы
+    // ИНДЕКС массива, и выгрузка начала бы отдавать документ со второй сущности.
+    entities: entityRows.map((row) => toWireEntity(row)),
     relations: relationRows.map(toWireRelation),
     chatThreads: threadRows.map(toWireThread),
     chatMessages: messageRows.map(toWireChatMessage),

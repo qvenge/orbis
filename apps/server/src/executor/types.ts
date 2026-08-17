@@ -39,6 +39,12 @@ export interface WireEntity {
   title: string;
   emoji: string | null;
   body: string;
+  /**
+   * Структурная форма тела. Едет ТОЛЬКО по include('bodyDoc') — см. Р6 дизайна: wire-форма
+   * несёт body всегда, и второй экземпляр тела в каждом ответе удвоил бы вес любого списка.
+   * Отсюда и опциональность ключа: `undefined` = «не запрашивали», а не «документа нет».
+   */
+  bodyDoc?: { v: number; doc: Record<string, unknown> } | null;
   bodyRefs: string[];
   tags: string[];
   meta: Record<string, unknown>;

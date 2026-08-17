@@ -134,7 +134,7 @@ describe('entity.create / entity.get (§9.2)', () => {
     expect(e.code).toBe('NOT_FOUND');
   });
 
-  // Форма секции — { entity, via } с Task D5 (§3.5.7): объединяет related_to и body_refs.
+  // Форма секции — { entity, via } с Task D5 (§3.5.8): объединяет related_to и body_refs.
   // Полное покрытие — routers/entity-backlinks.test.ts.
   test('get include=backlinks: упоминание через body_refs → via mention', async () => {
     const user = freshUserId();

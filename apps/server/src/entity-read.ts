@@ -5,7 +5,8 @@
 // entitySchema всегда несёт body), include управляет доп. секциями.
 // Вызывается ТОЛЬКО под withIdentity (RLS, §4.10); ошибки — ExecError (роутер
 // мапит в TRPCError, диспатч — в структурированный error-результат).
-import { type EntityGetInput, entityThreadId } from '@orbis/shared';
+import { type EntityGetUiInput, entityThreadId } from '@orbis/shared';
+import { readBodyDoc } from '@orbis/shared/doc';
 import { desc, eq, or, sql } from 'drizzle-orm';
 import type { WireChatMessage } from './chat/messages';
 import { chatMessages, entities, relations } from './db/schema';
@@ -14,7 +15,7 @@ import { ExecError } from './errors';
 import type { WireEntity, WireRelation } from './executor/types';
 import { toWireChatMessage, toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
 
-/** Источник обратной ссылки (02-core-os §3.5.7): явная related_to-связь или body_refs. */
+/** Источник обратной ссылки (02-core-os §3.5.8): явная related_to-связь или body_refs. */
 export type BacklinkVia = 'relation' | 'mention';
 
 export interface Backlink {
@@ -38,10 +39,16 @@ export interface EntityReadResult {
   thread?: { threadId: string; messages: WireChatMessage[] };
 }
 
+/**
+ * Вход — UI-вариант схемы: он отличается от тул-контракта одним лишним значением include
+ * ('bodyDoc'), а массивы в TS ковариантны, поэтому узкий EntityGetInput диспатча тулов сюда
+ * подходит без union'а и без приведений. Более узкий тип не годится: `include.has('bodyDoc')`
+ * на Set<'body'|'relations'|'backlinks'|'thread'> не компилируется.
+ */
 export async function readEntity(
   tx: Tx,
   ownerId: string,
-  input: EntityGetInput,
+  input: EntityGetUiInput,
 ): Promise<EntityReadResult> {
   const include = new Set(input.include ?? ['body', 'relations']);
   const rows = await tx.select().from(entities).where(eq(entities.id, input.id));
@@ -51,7 +58,15 @@ export async function readEntity(
     throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.id });
   }
 
-  const out: EntityReadResult = { entity: toWireEntity(row) };
+  // Тело, созданное до этой работы, документа ещё не имеет — собираем на лету. Правило
+  // разрешения общее с клиентом (readBodyDoc): битую форму или версию из будущего пересобираем
+  // из `body`, теряя оформление, но не текст. Обратно в БД здесь НЕ пишем: чтение обязано
+  // оставаться чтением, а колонку заполнит бэкфилл или первое же сохранение. Порядок важен —
+  // после создания `out` документ уехал бы в wire сырым.
+  const wantsDoc = include.has('bodyDoc');
+  if (wantsDoc) row.bodyDoc = readBodyDoc(row.bodyDoc, row.body);
+
+  const out: EntityReadResult = { entity: toWireEntity(row, wantsDoc) };
 
   if (include.has('relations')) {
     const rels = await tx
@@ -62,7 +77,7 @@ export async function readEntity(
     out.relations = rels.map(toWireRelation);
   }
   if (include.has('backlinks')) {
-    // §3.5.7: ОДНА секция из двух источников — явные related_to обеих сторон («связь») и
+    // §3.5.8: ОДНА секция из двух источников — явные related_to обеих сторон («связь») и
     // упоминания через body_refs («упоминание», GIN-индекс §4.9). row.id — каноничный
     // lowercase из БД (body_refs нормализованы экстрактором, сравнение text[]
     // регистрозависимо). Подзапросы по relations тоже под RLS — чужие связи невидимы.

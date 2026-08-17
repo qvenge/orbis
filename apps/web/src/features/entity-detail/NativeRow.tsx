@@ -57,7 +57,7 @@ function TitleEditor({
   const [draft, setDraft] = useState(value);
   const [serverValue, setServerValue] = useState(value);
 
-  // Тот же приём, что у BodySection (DetailScreen) и AspectField (D6c п.3): внешнее
+  // Тот же приём, что у редактора тела (BodyEditor) и AspectField (D6c п.3): внешнее
   // значение подхватываем, но ТОЛЬКО если черновик не трогали — иначе текст, который
   // владелец печатает прямо сейчас, затирался бы рефетчем после чужой мутации.
   if (value !== serverValue) {

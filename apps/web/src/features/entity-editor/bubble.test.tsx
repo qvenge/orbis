@@ -1,0 +1,908 @@
+import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
+import { DOC_EXTENSIONS, parseBody, serializeBody } from '@orbis/shared/doc';
+import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { getSchema } from '@tiptap/core';
+import type { Editor } from '@tiptap/react';
+import { expect, test, vi } from 'vitest';
+import { installCrashTrap, renderWithProviders } from '../../test/harness';
+import { BodyEditor } from './BodyEditor';
+import { EDITOR_EXTENSIONS } from './extensions';
+
+// Реестр аспектов — настоящий (как в editor.test.tsx и slash.test.tsx): с пустым каталогом
+// любой смарт-лист падал бы плашкой qb-error, и тесты про NodeSelection на живом блоке
+// проходили бы по ложной причине.
+const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) }));
+const handler = (path: string): unknown => {
+  if (path === 'aspect.list') return realAspects;
+  if (path === 'entity.query') return [];
+  return {};
+};
+
+type Held = { editor: Editor | null };
+
+/**
+ * Редактор с телом `md` и фокусом внутри.
+ *
+ * Клик по коробке — ОДИН раз и здесь: без него user-event не доставляет набор в
+ * contenteditable вовсе (замерено в Задаче 10), а горячие клавиши перемещения блока идут
+ * именно набором. Позицию каретки задаёт уже вызывающая сторона командами редактора: клик в
+ * jsdom разрешается по геометрии, которой нет (tests/prosemirror-polyfill.ts).
+ */
+async function mountEditor(md: string) {
+  const onChange = vi.fn();
+  const h: Held = { editor: null };
+  const r = renderWithProviders(
+    <BodyEditor
+      doc={parseBody(md)}
+      onChange={onChange}
+      onReady={(e) => {
+        h.editor = e;
+      }}
+    />,
+    handler,
+  );
+  await waitFor(() => expect(h.editor).not.toBeNull());
+  const area = (await screen.findByTestId('body-editor')).querySelector(
+    '[contenteditable]',
+  ) as HTMLElement;
+  await userEvent.click(area);
+  return { r, h, onChange, area, editor: h.editor as Editor };
+}
+
+/** Типы блоков верхнего уровня. */
+const types = (e: Editor): string[] => e.getJSON().content?.map((n) => n.type ?? '?') ?? [];
+
+/** Текст каждого блока верхнего уровня — «?» для тех, у кого его нет (атомы). */
+const texts = (e: Editor): string[] =>
+  (e.getJSON().content ?? []).map(
+    (n) => (n as { content?: { text?: string }[] }).content?.[0]?.text ?? `<${n.type}>`,
+  );
+
+/** Имена ВСЕХ марок документа. Множеством: важно, что марка ровно та, а не «хоть какая-то». */
+function markNames(editor: Editor): string[] {
+  const names = new Set<string>();
+  editor.state.doc.descendants((node) => {
+    for (const mark of node.marks) names.add(mark.type.name);
+    return true;
+  });
+  return [...names].sort();
+}
+
+/** Позиция первого блока верхнего уровня с таким именем. */
+function topPosOf(editor: Editor, name: string): number {
+  let pos = -1;
+  editor.state.doc.forEach((node, offset) => {
+    if (node.type.name === name && pos === -1) pos = offset;
+  });
+  return pos;
+}
+
+/** Позиция текстового узла с таким текстом — адресация в глубину без счёта на пальцах. */
+function posOfText(editor: Editor, text: string): number {
+  let pos = -1;
+  editor.state.doc.descendants((node, at) => {
+    if (node.isText && node.text === text && pos === -1) pos = at;
+    return true;
+  });
+  expect(pos, `в документе нет текста «${text}»`).toBeGreaterThan(-1);
+  return pos;
+}
+
+/** Позиция первого узла с таким именем на ЛЮБОЙ глубине. */
+function posOfType(editor: Editor, name: string): number {
+  let pos = -1;
+  editor.state.doc.descendants((node, at) => {
+    if (node.type.name === name && pos === -1) pos = at;
+    return true;
+  });
+  expect(pos, `в документе нет ноды «${name}»`).toBeGreaterThan(-1);
+  return pos;
+}
+
+/** Позиция N-го (с нуля) узла с таким именем. */
+function nthPosOfType(editor: Editor, name: string, n: number): number {
+  const found: number[] = [];
+  editor.state.doc.descendants((node, at) => {
+    if (node.type.name === name) found.push(at);
+    return true;
+  });
+  expect(found.length, `узлов «${name}» меньше ${n + 1}`).toBeGreaterThan(n);
+  return found[n] as number;
+}
+
+/** Сколько детей у ПЕРВОГО узла с таким именем. */
+function childCountAt(editor: Editor, name: string): number {
+  let n = -1;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === name && n === -1) n = node.childCount;
+    return true;
+  });
+  return n;
+}
+
+/** Сколько в документе узлов с таким именем — на любой глубине. */
+function countNodes(editor: Editor, name: string): number {
+  let n = 0;
+  editor.state.doc.descendants((node) => {
+    if (node.type.name === name) n += 1;
+    return true;
+  });
+  return n;
+}
+
+/** Тексты пунктов списка, стоящего блоком верхнего уровня под номером `index`. */
+function listTexts(editor: Editor, index: number): (string | undefined)[] {
+  const list = editor.getJSON().content?.[index] as
+    | { content?: { content?: { content?: { text?: string }[] }[] }[] }
+    | undefined;
+  return (list?.content ?? []).map((item) => item.content?.[0]?.content?.[0]?.text);
+}
+
+/**
+ * Панель показывается с задержкой: `updateDelay` у `extension-bubble-menu` — 250 мс (гасит
+ * мигание во время протягивания выделения). Прячется она, наоборот, сразу.
+ */
+const toolbar = (): Promise<HTMLElement> =>
+  screen.findByTestId('bubble-toolbar', {}, { timeout: 2000 });
+
+const ALT_DOWN = '{Alt>}{ArrowDown}{/Alt}';
+const ALT_UP = '{Alt>}{ArrowUp}{/Alt}';
+
+// Половина этой задачи — про «не бросает»: и горячая клавиша, и кнопка панели работают внутри
+// обработчиков событий, где крах не роняет тест, а только код возврата прогона (см. описание
+// ловушки в harness). Мутация М6б без неё выживала.
+installCrashTrap();
+
+// --- инвариант: ноды и марки редактора ⊆ DOC_EXTENSIONS -------------------------------------
+
+test('MoveBlock и bubble-панель не приносят редактору ни одной ноды и марки', async () => {
+  // Серверный путь записи спрашивает схему документа напрямую: НОДОВОЕ или МАРОЧНОЕ
+  // расширение, добавленное только в редактор, сделает нерабочим КАЖДОЕ сохранение. MoveBlock
+  // по замыслу — только горячие клавиши, панель — ProseMirror-плагин поверх готового вида, но
+  // «по замыслу» тут не довод: проверяем на ЖИВОМ экземпляре, в котором панель уже смонтирована.
+  const { editor } = await mountEditor('привет');
+  const doc = getSchema(DOC_EXTENSIONS as never);
+  expect(Object.keys(editor.schema.nodes).sort()).toEqual(Object.keys(doc.nodes).sort());
+  expect(Object.keys(editor.schema.marks).sort()).toEqual(Object.keys(doc.marks).sort());
+
+  // Стражи вакуумности: сверять действительно есть что — оба механизма в этом редакторе живы.
+  expect(EDITOR_EXTENSIONS.map((e) => (e as { name: string }).name)).toContain('moveBlock');
+  expect(editor.extensionManager.extensions.map((e) => e.name)).toContain('moveBlock');
+  // Плагин панели — в ЖИВОМ наборе плагинов этого редактора. `p.key` (строка вида
+  // `bubbleMenu$`), а не `p.spec.key`: второе — объект PluginKey, и сравнение со строкой было
+  // бы ложным всегда.
+  const keys = editor.view.state.plugins.map((p) => (p as unknown as { key: string }).key);
+  expect(keys.some((k) => k.startsWith('bubbleMenu'))).toBe(true);
+});
+
+// --- видимость панели ------------------------------------------------------------------------
+
+test('при схлопнутом выделении панели НЕТ В DOM, при непустом — есть', async () => {
+  // `extension-bubble-menu` элемент именно УДАЛЯЕТ (`element.remove()`), а не прячет стилем:
+  // проверка `style.visibility` из плана v1 была бы зелена всегда — элемента в дереве в этот
+  // момент нет вовсе, и `findByTestId` до стиля просто не доехал бы.
+  const { editor } = await mountEditor('привет мир');
+  expect(screen.queryByTestId('bubble-toolbar')).toBeNull();
+
+  editor.commands.focus();
+  editor.commands.setTextSelection({ from: 1, to: 7 });
+  const panel = await toolbar();
+  // Панель — та самая: с кнопками, а не пустая коробка, и кнопки лежат ВНУТРИ неё (портал
+  // React рисует детей именно в элемент плагина, а не куда-то рядом).
+  expect(panel.querySelectorAll('button')).toHaveLength(5);
+  expect(screen.getByLabelText('Жирный')).toBeInTheDocument();
+  expect(screen.getByLabelText('Удалить блок')).toBeInTheDocument();
+
+  // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: выделение схлопнули — панель ушла ИЗ ДЕРЕВА.
+  // Без него «панели нет» в начале теста было бы правдой и у панели, которая не появляется
+  // никогда.
+  editor.commands.setTextSelection(1);
+  await waitFor(() => expect(screen.queryByTestId('bubble-toolbar')).toBeNull());
+});
+
+test('в блоке кода панель не показывает мёртвых кнопок — марки там запрещает схема', async () => {
+  // Панель показывалась на выделении внутри блока кода, где четыре кнопки из пяти не делают
+  // НИЧЕГО и молчат об этом: `codeBlock` объявляет `marks: ''`, и любая команда марки просто
+  // возвращает false (итоговое ревью, мелкая находка). Убрана именно четвёрка, а не панель
+  // целиком: «Удалить блок» в коде осмысленно и работает — иначе убрать блок кода одним жестом
+  // стало бы нечем.
+  const { editor } = await mountEditor('привет\n\n```\nкод тут\n```');
+  editor.commands.focus();
+  const at = posOfText(editor, 'код тут');
+  editor.commands.setTextSelection({ from: at, to: at + 3 });
+  // Стражи вакуумности: каретка ДЕЙСТВИТЕЛЬНО в коде, и марки там ДЕЙСТВИТЕЛЬНО мертвы —
+  // иначе тест прятал бы работающие кнопки.
+  expect(editor.state.selection.$from.parent.type.name).toBe('codeBlock');
+  expect(editor.can().toggleBold()).toBe(false);
+  expect(editor.can().toggleCode()).toBe(false);
+
+  const panel = await toolbar();
+  expect(panel.querySelectorAll('button')).toHaveLength(1);
+  expect(screen.getByLabelText('Удалить блок')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Жирный')).toBeNull();
+  // И оставшаяся кнопка не декорация: она убирает блок кода целиком.
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(types(editor)).toEqual(['paragraph']);
+  expect(texts(editor)).toEqual(['привет']);
+
+  // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: в обычном абзаце все пять кнопок на месте. Без него
+  // «кнопок одна» было бы правдой и у панели, которая растеряла их везде.
+  const p = posOfText(editor, 'привет');
+  editor.commands.setTextSelection({ from: p, to: p + 6 });
+  await waitFor(() =>
+    expect(screen.getByTestId('bubble-toolbar').querySelectorAll('button')).toHaveLength(5),
+  );
+});
+
+// --- CellSelection: чем на самом деле держится оговорка в `lastTouched` -------------------------
+
+test('CellSelection свежей таблицы: правый конец — КОНЕЦ ячейки, а не её начало', async () => {
+  // Оговорка у `lastTouched` держится на том, что у `CellSelection` `$to.parentOffset` нулём не
+  // бывает. Ревью возразило: у свежей таблицы из `/Таблица` все ячейки пусты, значит ноль, и
+  // ветка отступа отрабатывает именно на CellSelection. Замер говорит обратное — и вот он,
+  // поимённо, чтобы следующему читателю не пришлось мерить снова.
+  //
+  // Причина СТРУКТУРНАЯ, а не «повезло с примером»: конструктор CellSelection
+  // (prosemirror-tables) берёт концы первого диапазона как `from = начало содержимого ячейки`
+  // и `to = from + cell.content.size`, а содержимое ячейки — `block+`, то есть даже пустая
+  // ячейка держит абзац размером 2. Ноль там невозможен в принципе. Нолём оказывается ЛЕВЫЙ
+  // конец — `$from.parentOffset`, — и путать его с правым нельзя: правило смотрит на `$to`.
+  const { editor } = await mountEditor('до');
+  editor.commands.focus('end');
+  expect(editor.commands.insertTable({ rows: 3, cols: 3, withHeaderRow: false })).toBe(true);
+  const cells: number[] = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'tableCell') cells.push(pos);
+    return true;
+  });
+  expect(cells).toHaveLength(9); // страж вакуумности: таблица та самая, 3×3
+  // Ячейки ПУСТЫ — ровно тот случай, о котором спорит ревью.
+  expect(childCountAt(editor, 'tableCell')).toBe(1);
+  expect(editor.state.doc.nodeAt(cells[0] as number)?.content.size).toBe(2);
+
+  expect(
+    editor.commands.setCellSelection({
+      anchorCell: cells[0] as number,
+      headCell: cells[4] as number,
+    }),
+  ).toBe(true);
+  const sel = editor.state.selection;
+  expect(sel.constructor.name).toBe('CellSelection'); // страж: селекция та самая
+  expect(sel.$to.parent.type.name).toBe('tableCell');
+  expect(sel.$to.parentOffset).toBeGreaterThan(0); // а вот и оговорка — держится
+  expect(sel.$from.parentOffset).toBe(0); // и вот источник путаницы: ноль у ЛЕВОГО конца
+
+  // Итог жеста тот же, что у каретки в ячейке: уходит вся таблица (решение раунда правок 2).
+  await toolbar();
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'table')).toBe(0);
+  expect(texts(editor)).toContain('до');
+});
+
+// --- кнопки марок -----------------------------------------------------------------------------
+
+test('каждая кнопка ставит СВОЮ марку, а не соседнюю', async () => {
+  // Пять кнопок различаются одной строкой в вызове команды: опечатка «две кнопки зовут
+  // toggleBold» проходит любой проверкой вида «после клика появилась хоть какая-то марка».
+  const { editor } = await mountEditor('привет мир');
+  const cases: [string, string][] = [
+    ['Жирный', 'bold'],
+    ['Курсив', 'italic'],
+    ['Зачёркнутый', 'strike'],
+    ['Код', 'code'],
+  ];
+  for (const [label, mark] of cases) {
+    editor.commands.setContent(parseBody('привет мир').doc, { emitUpdate: false });
+    editor.commands.focus();
+    editor.commands.setTextSelection({ from: 1, to: 7 });
+    await toolbar();
+    expect(markNames(editor)).toEqual([]); // страж: до клика марок нет вовсе
+    await userEvent.click(screen.getByLabelText(label));
+    expect(markNames(editor), `кнопка «${label}»`).toEqual([mark]);
+  }
+  // Проекция в markdown — тоже настоящая: марка не только в дереве, но и в том, что уедет в БД.
+  editor.commands.setContent(parseBody('привет мир').doc, { emitUpdate: false });
+  editor.commands.focus();
+  editor.commands.setTextSelection({ from: 1, to: 7 });
+  await toolbar();
+  await userEvent.click(screen.getByLabelText('Жирный'));
+  expect(serializeBody(editor.getJSON())).toContain('**привет**');
+});
+
+// --- «Удалить блок» ---------------------------------------------------------------------------
+
+test('«Удалить блок» на выделенном смарт-листе удаляет ЕГО, а не молчит', async () => {
+  // Код плана v1 (`deleteNode($from.parent.type.name)`) на NodeSelection брал `$from.parent` —
+  // а это сам документ, и `deleteNode('doc')` не делает НИЧЕГО. То есть ровно там, где кнопка
+  // нужнее всего (у атомарного блока нет иного способа его убрать), она молчала.
+  const { editor } = await mountEditor('до\n\n{{query: aspect=orbis/task}}\n\nпосле');
+  expect(types(editor)).toEqual(['paragraph', 'queryBlock', 'paragraph']); // страж вакуумности
+  editor.commands.focus();
+  editor.commands.setNodeSelection(topPosOf(editor, 'queryBlock'));
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(types(editor)).toEqual(['paragraph', 'paragraph']);
+  // Соседи целы: удалён БЛОК, а не выделение вместе с окрестностями.
+  expect(texts(editor)).toEqual(['до', 'после']);
+});
+
+test('«Удалить блок» в списке убирает ПУНКТ, а не весь список', async () => {
+  // Решение И1 раунда правок 1. Код плана v1 удалял `$from.parent` — параграф ВНУТРИ пункта,
+  // и на экране оставался пустой буллет; первая редакция этой задачи лечила это подъёмом до
+  // блока ВЕРХНЕГО уровня, то есть сносила чеклист из двадцати пунктов за каретку в седьмом.
+  // Радиус поражения решает: «пропал буллет» — мелочь, «пропал список» — потеря данных за
+  // иконкой в четырнадцать пикселей и без подтверждения.
+  const { editor } = await mountEditor('- один\n- два\n- три\n\nхвост');
+  expect(types(editor)).toEqual(['bulletList', 'paragraph']); // страж вакуумности
+  editor.commands.focus();
+  // Выделение ВНУТРИ первого пункта: панель показывается только на непустом выделении.
+  editor.commands.setTextSelection({ from: 4, to: 7 });
+  expect(editor.state.selection.$from.node(1).type.name).toBe('bulletList'); // страж адреса
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  // Список ЖИВ и лишился ровно одного пункта — ни пустого каркаса, ни братской могилы.
+  expect(types(editor)).toEqual(['bulletList', 'paragraph']);
+  expect(listTexts(editor, 0)).toEqual(['два', 'три']);
+  expect(texts(editor)[1]).toBe('хвост');
+});
+
+test('«Удалить блок» во ВЛОЖЕННОМ списке убирает вложенный пункт, а не внешний', async () => {
+  // Правило «ближайший предок, чей родитель — документ ЛИБО список» проверяется именно здесь:
+  // подъём до верхнего уровня снёс бы весь внешний список, подъём «на один» — оставил бы
+  // пустой каркас. Между этими двумя ошибками и живёт правильный ответ.
+  const { editor } = await mountEditor('- один\n  - вложенный\n- два');
+  editor.commands.focus();
+  // Каретка внутри «вложенный»: путь paragraph<listItem<bulletList<listItem<bulletList<doc.
+  const pos = posOfText(editor, 'вложенный');
+  editor.commands.setTextSelection({ from: pos + 1, to: pos + 4 });
+  expect(editor.state.selection.$from.depth).toBe(5); // страж адреса: каретка правда глубоко
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  const json = JSON.stringify(editor.getJSON());
+  expect(json).not.toContain('вложенный');
+  // Внешний список цел ЦЕЛИКОМ: оба его пункта на месте.
+  expect(listTexts(editor, 0)).toEqual(['один', 'два']);
+  // И вложенного списка не осталось ВОВСЕ (Minor 1 раунда правок 2). Без этой пары ассертов
+  // тест был слабее своего комментария: `listTexts` читает только ПЕРВЫЙ параграф пункта, и
+  // пустой вложенный каркас проходил незамеченным — а он там и оставался, замерено пробой.
+  expect(countNodes(editor, 'bulletList')).toBe(1);
+  expect(countNodes(editor, 'listItem')).toBe(2);
+});
+
+test('«Удалить блок» в чеклисте убирает пункт: список опознаётся по схеме, а не по имени', async () => {
+  // taskList — из другого пакета (@tiptap/extension-list), и его в схеме нет у StarterKit.
+  // Правило опирается на группу `list` в самой схеме, а не на перечень имён нод, — иначе
+  // чеклист вёл бы себя иначе, чем маркированный список, при одинаковом виде на экране.
+  const { editor } = await mountEditor('- [ ] первая\n- [ ] вторая');
+  expect(types(editor)).toEqual(['taskList']); // страж вакуумности
+  editor.commands.focus();
+  const pos = posOfText(editor, 'первая');
+  editor.commands.setTextSelection({ from: pos + 1, to: pos + 4 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(types(editor)).toEqual(['taskList']);
+  expect(listTexts(editor, 0)).toEqual(['вторая']);
+});
+
+test('«Удалить блок» в цитате убирает ВСЮ цитату: её родитель — документ', async () => {
+  // Положительный контроль к правилу: подъём останавливается на списке — и только на нём.
+  // У цитаты родитель — сам документ, поэтому внутренний параграф целью не становится
+  // (иначе вернулся бы баг v1: пустой каркас цитаты на экране).
+  const { editor } = await mountEditor('> цитата\n\nхвост');
+  expect(types(editor)).toEqual(['blockquote', 'paragraph']); // страж вакуумности
+  editor.commands.focus();
+  editor.commands.setTextSelection({ from: 3, to: 6 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(types(editor)).toEqual(['paragraph']);
+  expect(texts(editor)).toEqual(['хвост']);
+});
+
+test('«Удалить блок» на выделении ПОПЕРЁК двух абзацев убирает ОБА', async () => {
+  // Решение И3 раунда правок 1. Путь достижим мышью тривиально — протянуть выделение через
+  // границу абзацев, панель показывается. Прежний код смотрел только на `$from`: исчезал
+  // первый абзац, а подсвеченный хвост второго оставался на экране — результат, которого
+  // никто не просил и который ниоткуда не выводится.
+  //
+  // Выбрано «удалить все блоки, которых выделение КОСНУЛОСЬ»: радиус жеста ограничен ровно
+  // тем, что человек видел выделенным, и кнопка «Удалить блок» означает одно и то же при
+  // любом выделении — «убрать то, что подсвечено, целыми блоками».
+  const { editor } = await mountEditor('первый\n\nвторой\n\nтретий');
+  editor.commands.focus();
+  editor.commands.setTextSelection({ from: 4, to: 12 }); // из середины первого в середину второго
+  expect(editor.state.selection.$from.parent.textContent).toBe('первый'); // стражи адреса
+  expect(editor.state.selection.$to.parent.textContent).toBe('второй');
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  // Оба тронутых абзаца исчезли целиком, третий цел: обрывков не осталось.
+  expect(texts(editor)).toEqual(['третий']);
+});
+
+test('выделение до НАЧАЛА следующего абзаца убирает только ПЕРВЫЙ', async () => {
+  // И4 раунда правок 2. Протянуть выделение из середины абзаца вниз-влево до левого края
+  // следующего — обычный жест мыши, и `$to` встаёт на смещение 0 второго абзаца: подсвечено
+  // в нём НИЧЕГО, а по правилу «оба конца» он уходил целиком. Это противоречило самому
+  // критерию, которым решён И3 («радиус ограничен ровно тем, что видно выделенным»), и было
+  // регрессией против кода до раунда правок 1.
+  const { editor } = await mountEditor('первый\n\nвторой\n\nтретий');
+  editor.commands.focus();
+  const second = posOfText(editor, 'второй');
+  editor.commands.setTextSelection({ from: 4, to: second });
+  expect(editor.state.selection.$to.parentOffset).toBe(0); // страж: край тот самый
+  expect(editor.state.selection.$to.parent.textContent).toBe('второй');
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(texts(editor)).toEqual(['второй', 'третий']);
+});
+
+test('выделение до начала следующего ПУНКТА убирает только первый пункт', async () => {
+  // Тот же край внутри списка, и он же опровергает однострочное лечение из задания: взять
+  // блок от `doc.resolve(selection.to - 1)` здесь НЕ работает — позиция перед параграфом
+  // второго пункта разрешается всё в тот же второй пункт (замерено пробой). Отступать надо
+  // до ближайшей ТЕКСТОВОЙ позиции, а не на один символ.
+  const { editor } = await mountEditor('- один\n- два\n- три');
+  editor.commands.focus();
+  const second = posOfText(editor, 'два');
+  editor.commands.setTextSelection({ from: 4, to: second });
+  expect(editor.state.selection.$to.parentOffset).toBe(0); // страж: край тот самый
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(listTexts(editor, 0)).toEqual(['два', 'три']);
+});
+
+test('«Удалить блок» поперёк двух ПУНКТОВ убирает оба пункта, список цел', async () => {
+  // То же правило внутри списка: концы диапазона считаются по обоим краям выделения, и
+  // каждый — по правилу И1, то есть до пункта, а не до всего списка.
+  const { editor } = await mountEditor('- один\n- два\n- три');
+  editor.commands.focus();
+  const a = posOfText(editor, 'один');
+  const b = posOfText(editor, 'два');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(types(editor)).toEqual(['bulletList']);
+  expect(listTexts(editor, 0)).toEqual(['три']);
+});
+
+test('«Удалить блок» на ЕДИНСТВЕННОМ пункте убирает список, не оставляя каркаса', async () => {
+  // Найдено пробой раунда правок 2 при усилении теста вложенного списка. Пункт, оставшийся у
+  // списка последним, удалить «в одиночку» нельзя: содержимое списка — `listItem+`, и
+  // ProseMirror чинит документ, воссоздавая ПУСТОЙ пункт. На экране это ровно тот баг v1,
+  // против которого написано всё правило, — пустой буллет, только приехавший другим путём.
+  const { editor } = await mountEditor('- одинокий\n\nхвост');
+  editor.commands.focus();
+  editor.commands.setTextSelection({ from: 4, to: 8 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'listItem')).toBe(0);
+  expect(texts(editor)).toEqual(['хвост']);
+});
+
+test('выделение через ВСЕ пункты списка не оставляет пустого буллета', async () => {
+  // И6 раунда правок 3. Класс «пустой каркас» был закрыт наполовину: подъём работает на ОДНОМ
+  // конце, а покрытие всех детей — свойство ПАРЫ концов, и увидеть его подъём не может по
+  // определению. Два движения мышью на списке из ДВУХ пунктов возвращали баг v1 целиком.
+  // Прежний тест проходил мимо только потому, что брал список из ТРЁХ пунктов.
+  const { editor } = await mountEditor('- один\n- два\n\nхвост');
+  editor.commands.focus();
+  const a = posOfText(editor, 'один');
+  const b = posOfText(editor, 'два');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'listItem')).toBe(0);
+  expect(texts(editor)).toEqual(['хвост']);
+});
+
+test('выделение через все пункты ВЛОЖЕННОГО списка тоже не оставляет каркаса', async () => {
+  // Тот же класс на уровень глубже: опустеть должен и вложенный список, и ничего сверх него.
+  // Тексты в фикстуре РАЗНЫЕ намеренно: с двумя «два» тест держался бы на том, что поиск
+  // позиции вернёт вложенное вхождение по порядку обхода, и перестановка фикстуры молча
+  // переадресовала бы его на внешний пункт (Minor 2 раунда правок 4).
+  const { editor } = await mountEditor('- один\n  - раз\n  - два\n- четыре');
+  editor.commands.focus();
+  const a = posOfText(editor, 'раз');
+  const b = posOfText(editor, 'два');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(1); // остался только внешний
+  expect(listTexts(editor, 0)).toEqual(['один', 'четыре']);
+});
+
+test('единственный пункт + выделение ЗА список не оставляет пустого буллета', async () => {
+  // И7 раунда правок 4 — регрессия против 3ac277e. `tr.deleteRange` прибирает родителя только
+  // когда диапазон покрыт ЦЕЛИКОМ внутри одного контейнера: `coveredDepths` рвётся на глубине
+  // 0, потому что после правого конца в документе есть ещё блок, и примитив проваливается в
+  // обычный `tr.delete`. Раунд 2 эту форму проходил (ручной подъём считал левый конец сам), а
+  // раунд 3 — сломал: класс «пустой каркас» закрылся наполовину ВТОРОЙ раз, только теперь не
+  // видели не пару концов, а выход за контейнер.
+  const { editor } = await mountEditor('- один\n\nхвост\n\nещё');
+  expect(types(editor)).toEqual(['bulletList', 'paragraph', 'paragraph']); // страж вакуумности
+  editor.commands.focus();
+  const a = posOfText(editor, 'один');
+  const b = posOfText(editor, 'хвост');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'listItem')).toBe(0);
+  expect(texts(editor)).toEqual(['ещё']);
+});
+
+test('список из двух + выделение ЗА список тоже уходит целиком', async () => {
+  // Та же дыра при нескольких пунктах. Регрессией она не была (раунд 2 ломался так же), но
+  // класс закрывается целиком или никак.
+  const { editor } = await mountEditor('- один\n- два\n\nхвост\n\nещё');
+  editor.commands.focus();
+  const a = posOfText(editor, 'один');
+  const b = posOfText(editor, 'хвост');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'listItem')).toBe(0);
+  expect(texts(editor)).toEqual(['ещё']);
+});
+
+test('единственный пункт в ЦИТАТЕ: уходит и список, и опустевшая цитата', async () => {
+  // Тест на то, ради чего в `deleteBlock` стоит именно `tr.deleteRange`, а не `tr.delete`.
+  // Наше расширение концов ходит ТОЛЬКО по спискам и до цитаты не дотягивается — прибрать её
+  // обязан примитив. Замерено на одном и том же диапазоне:
+  //   tr.delete      → blockquote paragraph, paragraph«хвост»   ← пустая цитата на экране
+  //   tr.deleteRange → paragraph«хвост»
+  // Без этого теста подмена примитива на команду Tiptap не роняла НИЧЕГО: расширение концов
+  // закрывало все списочные формы само, и `tr.deleteRange` выглядел мёртвым кодом.
+  const { editor } = await mountEditor('хвост');
+  editor.commands.focus('start');
+  editor.commands.insertContentAt(0, '<blockquote><ul><li><p>пункт</p></li></ul></blockquote>');
+  expect(types(editor)).toEqual(['blockquote', 'paragraph']); // страж вакуумности
+  const at = posOfText(editor, 'пункт');
+  editor.commands.setTextSelection({ from: at + 1, to: at + 4 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'blockquote')).toBe(0);
+  expect(texts(editor)).toEqual(['хвост']);
+});
+
+test('выделение из списка в ячейке в СОСЕДНЮЮ ячейку не сносит таблицу', async () => {
+  // Тест на страж группы `list` в расширении концов (вариант B). Без стража расширение идёт
+  // дальше списка — через ячейку и строку к самой таблице, — и таблица исчезает целиком:
+  //   со стражем  → таблиц=1
+  //   без стража  → таблиц=0
+  // Форма выбрана не наугад: это единственная из проверенных, где страж вообще что-то меняет.
+  // На таблице 2×1 (где ячейка — единственный ребёнок строки) он не срабатывает, потому что
+  // правый конец диапазона до конца ячейки не дотягивается.
+  //
+  // ЧЕСТНАЯ ОГОВОРКА: форма СИНТЕТИЧЕСКАЯ, мышью её не поставить. `prosemirror-tables`
+  // схлопывает межъячеечное текстовое выделение в `CellSelection`, а та идёт другим путём
+  // (у неё `$to.parentOffset` не ноль, и `ownBlock` отдаёт всю таблицу). Тест проскакивает
+  // мимо схлопывания только из-за смещения конца. Страж от этого не перестаёт быть нужным —
+  // он защищает АРИФМЕТИКУ расширения, а не конкретный жест, — но выдавать эту форму за
+  // пользовательскую нельзя.
+  const { editor } = await mountEditor('до');
+  editor.commands.focus('end');
+  expect(editor.commands.insertTable({ rows: 2, cols: 2, withHeaderRow: false })).toBe(true);
+  const first = posOfType(editor, 'tableCell');
+  editor.commands.insertContentAt(first + 2, '<ul><li><p>пункт</p></li></ul>');
+  // Предпосылка, и здесь она ВАЖНЕЕ, чем в двух других табличных тестах: перестань
+  // `insertContentAt` поглощать пустой параграф — и расширение остановится на ячейке даже БЕЗ
+  // стража, таблица уцелеет, тест останется зелёным, а мутация про страж не будет покрыта ничем.
+  expect(childCountAt(editor, 'tableCell')).toBe(1);
+  const second = nthPosOfType(editor, 'tableCell', 1);
+  editor.commands.insertContentAt(second + 2, 'сосед');
+  const a = posOfText(editor, 'пункт');
+  const b = posOfText(editor, 'сосед');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  // Таблица ПЕРЕЖИЛА жест — это и есть проверяемое свойство. Что она при этом ужалась
+  // (fixTables пересобирает прямоугольник после диапазона поперёк ячеек) — известное
+  // поведение из леджера, и этот тест его не благословляет, а лишь не спорит с ним.
+  expect(countNodes(editor, 'table')).toBe(1);
+});
+
+test('выделение из абзаца ЗА список: список цел, если покрыт не весь', async () => {
+  // Положительный контроль к расширению концов: оно обязано срабатывать ТОЛЬКО когда
+  // контейнер покрыт целиком. Здесь выделение входит в список со второго пункта — первый
+  // остаётся, и никакого расширения быть не должно.
+  const { editor } = await mountEditor('- один\n- два\n- три\n\nхвост');
+  editor.commands.focus();
+  const a = posOfText(editor, 'два');
+  const b = posOfText(editor, 'хвост');
+  editor.commands.setTextSelection({ from: a + 1, to: b + 2 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(1);
+  expect(listTexts(editor, 0)).toEqual(['один']);
+});
+
+test('список в ЯЧЕЙКЕ: уходит список, а ячейка и строка целы', async () => {
+  // И5/И6 раунда правок 3, форма «список внутри ячейки». Этот тест сторожит УБОРКУ (список
+  // обязан уйти без пустого каркаса) и целость таблицы вообще; строку он не различает — на
+  // таблице 2×2 прежний подъём останавливался на ячейке, а ProseMirror её тут же
+  // восстанавливал, и счётчики совпадали. Различает СЛЕДУЮЩИЙ тест, на таблице в один столбец.
+  // Разделены намеренно: тест, который не может упасть от той поломки, ради которой написан, —
+  // это тест, зелёный по ложной причине.
+  const { editor } = await mountEditor('до');
+  editor.commands.focus('end');
+  expect(editor.commands.insertTable({ rows: 2, cols: 2, withHeaderRow: false })).toBe(true);
+  const cell = posOfType(editor, 'tableCell');
+  editor.commands.insertContentAt(cell + 2, '<ul><li><p>пункт</p></li></ul>');
+  expect(countNodes(editor, 'listItem')).toBe(1); // страж вакуумности
+  // ПРЕДПОСЫЛКА, а не украшение (Minor 3 раунда правок 4): весь смысл теста в том, что список
+  // — ЕДИНСТВЕННЫЙ ребёнок ячейки, и только тогда подъём имел шанс дойти до самой ячейки.
+  // Держится она на чужом коде: `insertContentAt` из @tiptap/core расширяет диапазон вставки,
+  // когда блочное содержимое кладут в пустой текстблок. Перестанет — оба табличных теста
+  // останутся зелёными по ложной причине, а мутация возврата подъёма не уронит ничего.
+  expect(childCountAt(editor, 'tableCell')).toBe(1);
+  const at = posOfText(editor, 'пункт');
+  editor.commands.setTextSelection({ from: at + 1, to: at + 4 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  // Таблица цела ЦЕЛИКОМ: четыре ячейки в двух строках.
+  expect(countNodes(editor, 'tableCell')).toBe(4);
+  expect(countNodes(editor, 'tableRow')).toBe(2);
+});
+
+test('список в ячейке таблицы В ОДИН СТОЛБЕЦ: строка обязана уцелеть', async () => {
+  // Отдельный тест, потому что случай ХУЖЕ предыдущего и различается только формой таблицы:
+  // у строки из одного столбца ячейка — единственный ребёнок, и прежний подъём уносил строку,
+  // делая таблицу 2×1 таблицей 1×1. На таблице 2×2 этот шаг останавливался раньше.
+  const { editor } = await mountEditor('до');
+  editor.commands.focus('end');
+  expect(editor.commands.insertTable({ rows: 2, cols: 1, withHeaderRow: false })).toBe(true);
+  const cell = posOfType(editor, 'tableCell');
+  editor.commands.insertContentAt(cell + 2, '<ul><li><p>пункт</p></li></ul>');
+  expect(childCountAt(editor, 'tableCell')).toBe(1); // та же предпосылка, что и выше
+  const at = posOfText(editor, 'пункт');
+  editor.commands.setTextSelection({ from: at + 1, to: at + 4 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'bulletList')).toBe(0);
+  expect(countNodes(editor, 'tableRow')).toBe(2);
+  expect(countNodes(editor, 'tableCell')).toBe(2);
+});
+
+test('«Удалить блок» из ЯЧЕЙКИ ТАБЛИЦЫ убирает всю таблицу — решение, а не побочность', async () => {
+  // Решение раунда правок 2 (пункт 5): поведение оставлено, но обязано быть НАЗВАННЫМ.
+  // `table` объявляет группу `block`, а `tableRow`/`tableCell` — не объявляют ничего
+  // (замерено), поэтому ПОИСК блока проходит их насквозь и останавливается на глубине 1.
+  // Слово важное: ручного подъёма в правиле больше нет вовсе (раунд правок 3), и назвать так
+  // поиск значит послать читателя искать несуществующий код.
+  // Удалять ячейку бессмысленно — таблица обязана оставаться прямоугольной, а удаление
+  // строки — другая семантика, которой в задаче нет.
+  const { editor } = await mountEditor('до\n\nпосле');
+  editor.commands.focus('end');
+  expect(editor.commands.insertTable({ rows: 3, cols: 2, withHeaderRow: true })).toBe(true);
+  expect(types(editor)).toContain('table'); // страж вакуумности
+  // Панель показывается только на непустом выделении, а ячейки пусты — пишем текст в первую.
+  const cell = posOfType(editor, 'tableCell');
+  editor.commands.insertContentAt(cell + 2, 'ячейка');
+  const at = posOfText(editor, 'ячейка');
+  editor.commands.setTextSelection({ from: at, to: at + 6 });
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(countNodes(editor, 'table')).toBe(0);
+  expect(countNodes(editor, 'tableCell')).toBe(0);
+  // Соседи целы: ушла таблица, а не документ.
+  expect(texts(editor)).toContain('до');
+  expect(texts(editor)).toContain('после');
+});
+
+test('«Удалить блок» при выделенном ВСЁМ документе не бросает и чистит тело', async () => {
+  // Cmd+A даёт AllSelection: `$from.depth === 0`, и `$from.node(1)` — undefined. Панель при
+  // таком выделении показывается (оно непустое), то есть путь достижим мышью, а код плана v2
+  // падал бы на нём TypeError прямо в обработчике клика.
+  const { editor } = await mountEditor('один\n\nдва');
+  editor.commands.focus();
+  editor.commands.selectAll();
+  expect(editor.state.selection.$from.depth).toBe(0); // страж: селекция та самая
+  await toolbar();
+
+  await userEvent.click(screen.getByLabelText('Удалить блок'));
+  expect(editor.getText()).toBe('');
+  // Документ остаётся ДОКУМЕНТОМ: пустой абзац, а не ноль блоков.
+  expect(types(editor)).toEqual(['paragraph']);
+});
+
+// --- Alt+↑/↓: порядок блоков --------------------------------------------------------------------
+
+test('Alt+↓ меняет местами текущий абзац со следующим, Alt+↑ возвращает', async () => {
+  const { editor } = await mountEditor('один\n\nдва\n\nтри');
+  editor.commands.focus('start');
+  await userEvent.keyboard(ALT_DOWN);
+  expect(texts(editor)).toEqual(['два', 'один', 'три']);
+
+  await userEvent.keyboard(ALT_UP);
+  expect(texts(editor)).toEqual(['один', 'два', 'три']);
+});
+
+test('два Alt+↓ подряд двигают ТОТ ЖЕ абзац, а не гоняют его туда-обратно', async () => {
+  // Каретка обязана ехать ВМЕСТЕ с блоком. Без этого она остаётся на прежней позиции — то
+  // есть внутри соседа, который встал на место блока, — и второе нажатие двигает уже СОСЕДА:
+  // замерено на арифметике плана v2, «один два три» ходило туда-сюда между двумя состояниями.
+  const { editor } = await mountEditor('один\n\nдва\n\nтри');
+  editor.commands.focus('start');
+  await userEvent.keyboard(ALT_DOWN);
+  await userEvent.keyboard(ALT_DOWN);
+  expect(texts(editor)).toEqual(['два', 'три', 'один']);
+
+  // ВЕРХНЯЯ граница (И2 раунда правок 1). Блок стоит последним — третье нажатие обязано не
+  // сделать ничего. До этой строки верхний край не жал НИ ОДИН тест: мутация «убрать только
+  // `swapWith >= parent.childCount`» давала RangeError, которого никто не провоцировал, и
+  // четырнадцать тестов из четырнадцати оставались зелёными (ловушка крахов тоже молчала —
+  // краха не случалось).
+  //
+  // ЗАВИСИМОСТЬ, которую надо видеть: страж держится на ЛОВУШКЕ КРАХОВ (installCrashTrap выше).
+  // Ассерт «порядок не изменился» истинен и при RangeError — документ после краха тот же
+  // самый. Уберут ловушку из файла — покрытие верхней границы испарится молча, а тест
+  // останется зелёным.
+  await userEvent.keyboard(ALT_DOWN);
+  expect(texts(editor)).toEqual(['два', 'три', 'один']);
+});
+
+test('Alt+↑ на ПЕРВОМ блоке ничего не ломает', async () => {
+  // Край документа — не ошибка и не повод прыгать в конец: просто ничего не происходит.
+  const { editor, onChange } = await mountEditor('один\n\nдва');
+  editor.commands.focus('start');
+  const before = JSON.stringify(editor.getJSON());
+  await userEvent.keyboard(ALT_UP);
+  expect(JSON.stringify(editor.getJSON())).toBe(before);
+  expect(onChange).not.toHaveBeenCalled(); // и правкой это не считается
+
+  // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: с той же кареткой Alt+↓ работает — значит
+  // «ничего не изменилось» выше про край, а не про мёртвый жест.
+  await userEvent.keyboard(ALT_DOWN);
+  expect(texts(editor)).toEqual(['два', 'один']);
+});
+
+test('Alt+↓ на выделенном смарт-листе не бросает, двигает его и не теряет выделения', async () => {
+  // Проба ревью И9: у NodeSelection на атоме `$from.depth === 0`, и `node(1)` — undefined;
+  // код плана v1 бросал TypeError прямо в горячей клавише. Второе нажатие проверяет, что
+  // выделение уехало вместе с блоком: иначе жест «поднять список повыше» работал бы один раз.
+  const { editor } = await mountEditor('{{query: aspect=orbis/task}}\n\nдва\n\nтри');
+  editor.commands.focus();
+  editor.commands.setNodeSelection(topPosOf(editor, 'queryBlock'));
+
+  await userEvent.keyboard(ALT_DOWN);
+  expect(types(editor)).toEqual(['paragraph', 'queryBlock', 'paragraph']);
+  await userEvent.keyboard(ALT_DOWN);
+  expect(types(editor)).toEqual(['paragraph', 'paragraph', 'queryBlock']);
+  // Блок остался ВЫДЕЛЕННЫМ — панель действий над ним никуда не делась.
+  expect(editor.state.selection.constructor.name).toBe('NodeSelection');
+});
+
+test('каретка во вложенном списке двигает ВЕСЬ список верхнего уровня', async () => {
+  // Зафиксированное поведение v2, а не дефект: жест двигает блок ДОКУМЕНТА. Порядок пунктов
+  // внутри списка меняют Tab/Shift+Tab и правка текста, а Alt+↑/↓ работает на том же уровне,
+  // на котором работает «Удалить блок», — иначе два соседних жеста означали бы разное.
+  const { editor } = await mountEditor('- один\n- два\n\nхвост');
+  editor.commands.focus('start');
+  expect(editor.state.selection.$from.depth).toBe(3); // страж: каретка правда внутри пункта
+
+  await userEvent.keyboard(ALT_DOWN);
+  expect(types(editor)).toEqual(['paragraph', 'bulletList']);
+  // Список уехал ЦЕЛИКОМ: оба пункта на месте, а не один.
+  const list = editor.getJSON().content?.[1] as { content?: unknown[] };
+  expect(list.content).toHaveLength(2);
+});
+
+test('Alt+↓ при выделенном ВСЁМ документе ничего не делает и не бросает', async () => {
+  // Тот же AllSelection, что и у кнопки удаления: `node(1)` — undefined. Жест наш, поэтому
+  // клавишу мы забираем (системная навигация по абзацам в редактор не лезет), но документ
+  // при этом не трогаем.
+  const { editor } = await mountEditor('один\n\nдва');
+  editor.commands.focus();
+  editor.commands.selectAll();
+  const before = JSON.stringify(editor.getJSON());
+  await userEvent.keyboard(ALT_DOWN);
+  expect(JSON.stringify(editor.getJSON())).toBe(before);
+
+  // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: без него тест зелен и когда перемещения нет
+  // вовсе — проверено запуском ДО реализации, он единственный из четырнадцати прошёл.
+  editor.commands.focus('start');
+  await userEvent.keyboard(ALT_DOWN);
+  expect(texts(editor)).toEqual(['два', 'один']);
+});
+
+test('Alt+↓ на выделенном ПУНКТЕ списка двигает пункт внутри списка', async () => {
+  // Арифметика перемещения считает соседей у РОДИТЕЛЯ целевого блока, а не у документа
+  // всегда. Сегодня NodeSelection на пункте мышью не поставить (пункт — не атом), но
+  // зависеть от этого перемещение не должно: `index(0)` по документу дал бы и ложный отказ
+  // на границе (у документа детей меньше, чем у списка), и вставку по чужому адресу.
+  const { editor } = await mountEditor('- один\n- два\n- три\n\nхвост');
+  const items: number[] = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === 'listItem') items.push(pos);
+    return true;
+  });
+  expect(items).toHaveLength(3); // страж вакуумности
+  editor.commands.focus();
+  editor.commands.setNodeSelection(items[2] as number);
+
+  await userEvent.keyboard(ALT_UP);
+  const list = editor.getJSON().content?.[0] as {
+    content?: { content?: { content?: { text?: string }[] }[] }[];
+  };
+  expect((list.content ?? []).map((li) => li.content?.[0]?.content?.[0]?.text)).toEqual([
+    'один',
+    'три',
+    'два',
+  ]);
+});
+
+// --- панель не мешает тому, что уже работает ------------------------------------------------
+
+test('панель не перехватывает `/`-меню: набор поверх выделения открывает его как обычно', async () => {
+  // Панель живёт в дереве редактора и слушает mousedown в capture-фазе — соседство с
+  // suggestion-меню обязано быть мирным. Сценарий бытовой: выделили слово, набрали поверх.
+  const { editor } = await mountEditor('привет мир');
+  editor.commands.focus();
+  editor.commands.setTextSelection({ from: 1, to: 7 });
+  await toolbar();
+
+  await userEvent.keyboard(' /заг');
+  await screen.findByTestId('slash-menu');
+  // Панель ушла сама: выделение схлопнулось набором.
+  await waitFor(() => expect(screen.queryByTestId('bubble-toolbar')).toBeNull());
+  await userEvent.keyboard('{Enter}');
+  await waitFor(() => expect(types(editor)).toEqual(['heading']));
+});
+
+test('при ОТКРЫТОМ /-меню Alt+↓ ходит по меню и НЕ двигает блок', async () => {
+  // Пункт 4 раунда правок 1: взаимодействие двух наших же фич. `SlashMenu.onKeyDown` берёт
+  // стрелки не глядя на модификаторы, а keymap MoveBlock — отдельный плагин; вопрос был в
+  // том, кто из них видит клавишу первым.
+  //
+  // Замерено: первым видит МЕНЮ. Suggestion-расширения приходят в `useEditor` общим массивом
+  // (BodyEditor: `[...EDITOR_EXTENSIONS, ...suggest.extensions]`) и в `state.plugins` стоят
+  // РАНЬШЕ keymap'а MoveBlock — `orbisSlashSuggestion$` под индексом 12. Через
+  // `registerPlugin` (то есть последним) приезжает только bubble-панель.
+  //
+  // Это и есть нужный порядок, а не случайная удача: пока меню открыто, каретка стоит внутри
+  // набранного `/`, и уехавший из-под неё блок утащил бы за собой и запрос, и координаты меню.
+  // Тест сторожит именно порядок — он держится на составе расширений, а не на нашем коде.
+  const { editor } = await mountEditor('первый\n\nвторой');
+  editor.commands.focus('start');
+  await userEvent.keyboard(' /');
+  await screen.findByTestId('slash-menu');
+  const before = texts(editor);
+  const first = screen
+    .getAllByRole('option')
+    .find((o) => o.getAttribute('aria-selected') === 'true')?.textContent;
+
+  await userEvent.keyboard(ALT_DOWN);
+  expect(texts(editor)).toEqual(before); // порядок блоков не тронут
+  expect(screen.getByTestId('slash-menu')).toBeInTheDocument(); // меню на месте
+  // Положительный контроль: клавишу забрало именно МЕНЮ — выбор в нём сдвинулся.
+  const now = screen
+    .getAllByRole('option')
+    .find((o) => o.getAttribute('aria-selected') === 'true')?.textContent;
+  expect(now).not.toBe(first);
+});

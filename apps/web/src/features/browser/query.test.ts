@@ -1,4 +1,5 @@
-import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
+import { DAILY_PLANNING_BODY, SEED_SMART_LISTS } from '@orbis/server/src/seed/smart-lists';
+import { parseBody } from '@orbis/shared/doc';
 import { expect, test } from 'vitest';
 import {
   bodySegments,
@@ -6,7 +7,6 @@ import {
   buildFilterQuery,
   firstQueryBlock,
   queryBlocks,
-  replaceQueryBlock,
 } from './query';
 
 test('browserQuery включает limit и сортировку по updated_at desc', () => {
@@ -53,8 +53,8 @@ test('queryBlocks возвращает ВСЕ блоки body в порядке 
   expect(firstQueryBlock(body)).toBe(queryBlocks(body)[0]);
 });
 
-// --- сегментация body для просмотра (C4b) ----------------------------------------------
-// Просмотр detail рендерит текст markdown'ом, а {{query:...}}-блоки — виджетами, ВПЕРЕМЕЖКУ
+// --- сегментация body для первого кадра (C4b) -------------------------------------------
+// Первый кадр записи рендерит текст markdown'ом, а {{query:...}}-блоки — виджетами, ВПЕРЕМЕЖКУ
 // и в порядке текста. queryBlocks для этого мало: она отдаёт только содержимое блоков, а
 // текста «между блоками» как значения не существовало вовсе.
 
@@ -96,93 +96,84 @@ test('bodySegments сохраняет разметку текста, убира�
   });
 });
 
-// --- замена текста одного блока (D2) ---------------------------------------------------
-// Правка блока из виджета шлёт обычный entity.update с ЦЕЛЫМ body, поэтому всё, чего экран
-// не собирался менять, обязано доехать до сервера байт-в-байт: соседние блоки, текст между
-// ними и обёртка правимого блока.
+// --- Р-v2-6: разбор первого кадра и схема документа согласны про начало блока -----------
+// Первый кадр рисует bodySegments, редактор строится по parseBody. Разойдись правила —
+// человек увидит виджет, который через мгновение станет фигурными скобками (или наоборот).
 
-test('replaceQueryBlock меняет ровно N-й блок, остальной body — байт-в-байт', () => {
-  const body = 'до\n\n{{query: tags=work}}\n\nмежду\n\n{{query: tags=home}}\n\nпосле';
-  expect(replaceQueryBlock(body, 1, 'tags=home, limit=5')).toBe(
-    'до\n\n{{query: tags=work}}\n\nмежду\n\n{{query: tags=home, limit=5}}\n\nпосле',
-  );
-  expect(replaceQueryBlock(body, 0, 'tags=work, limit=5')).toBe(
-    'до\n\n{{query: tags=work, limit=5}}\n\nмежду\n\n{{query: tags=home}}\n\nпосле',
-  );
+test('bodySegments: обёртка с отступом 1–3 пробела блоком НЕ считается', () => {
+  for (const pad of [' ', '  ', '   ']) {
+    const body = `${pad}{{query:a=1}}`;
+    expect(bodySegments(body)).toEqual([{ kind: 'text', text: '{{query:a=1}}' }]);
+    expect(queryBlocks(body)).toEqual([]);
+  }
+  // …и то же посреди текста, а не только в начале записи.
+  const inside = `до\n\n  {{query:a=1}}\n\nпосле`;
+  expect(queryBlocks(inside)).toEqual([]);
 });
 
-// Два блока с ОДИНАКОВЫМ текстом: адресация по индексу, а не по содержимому — replace(str)
-// правил бы всегда первый, и правка второй секции молча переписывала бы первую.
-test('replaceQueryBlock различает одинаковые по тексту блоки', () => {
-  const body = '{{query:tags=x}}\n{{query:tags=x}}';
-  expect(replaceQueryBlock(body, 1, 'tags=y')).toBe('{{query:tags=x}}\n{{query:tags=y}}');
+test('bodySegments: обёртка посреди строки блоком НЕ считается', () => {
+  const body = 'смотри {{query:a=1}} тут';
+  expect(bodySegments(body)).toEqual([{ kind: 'text', text: 'смотри {{query:a=1}} тут' }]);
+  expect(queryBlocks(body)).toEqual([]);
+  // Обёртка с колонки 1 в том же теле блоком остаётся: правило про КОЛОНКУ, а не про
+  // «где-то есть текст».
+  expect(queryBlocks('смотри {{query:a=1}} тут\n{{query:b=2}}')).toEqual(['b=2']);
 });
 
-// Обёртка сидированных списков — с пробелом после двоеточия и переносами внутри; редактор
-// показывает тримленное содержимое, и вернуть его вплотную к {{query: значило бы переписать
-// блок целиком там, где просили поменять одну клаузу.
-test('replaceQueryBlock сохраняет обрамляющие пробелы блока', () => {
-  const body = '{{query:\n  tags=work\n}}';
-  expect(replaceQueryBlock(body, 0, 'tags=home')).toBe('{{query:\n  tags=home\n}}');
-});
+/**
+ * Блоки тела ГЛАЗАМИ СХЕМЫ документа — то, что построит редактор. Второй стороной сверки во
+ * всех тестах ниже стоит именно она, а не копия регэкспа: копия разъехалась бы с редактором
+ * молча, и «правила совпадают» осталось бы зелёным.
+ */
+function blocksFromSchema(body: string): string[] {
+  return (parseBody(body).doc.content ?? [])
+    .filter((n) => n.type === 'queryBlock')
+    .map((n) => String(n.attrs?.query ?? '').trim());
+}
 
-// Р3 «без изменений — без записи»: экран решает не слать мутацию по равенству body, поэтому
-// у неизменного текста хелпер обязан вернуть ИСХОДНУЮ строку, а не пересобранную.
-test('replaceQueryBlock: тот же текст — тот же body (пересборки нет)', () => {
-  const blocks = queryBlocks(DAILY_PLANNING_BODY);
-  for (const [i, block] of blocks.entries()) {
-    expect(replaceQueryBlock(DAILY_PLANNING_BODY, i, block)).toBe(DAILY_PLANNING_BODY);
-    // Лишние края в поле ввода — не правка запроса: они и в блок бы не попали.
-    expect(replaceQueryBlock(DAILY_PLANNING_BODY, i, `\n${block}  `)).toBe(DAILY_PLANNING_BODY);
+test('bodySegments видит ровно те же блоки, что и схема документа', () => {
+  // Сверка с parseBody — единственная честная: она сравнивает не с копией регэкспа, а с тем,
+  // что построит редактор. Тела — пять сидов и краевые случаи правила про колонку.
+  const bodies = [
+    ...SEED_SMART_LISTS.map((s) => s.body),
+    '{{query:a=1}}',
+    ' {{query:a=1}}',
+    '   {{query:a=1}}',
+    'смотри {{query:a=1}} тут',
+    'до\n{{query:a=1}}\nпосле',
+    'до\n\n{{query:a=1}}\n\nпосле',
+    '{{query: tags=a}}b}}',
+    'текст {{query: aspect=orbis/task и всё',
+  ];
+  for (const body of bodies) {
+    expect([body, queryBlocks(body)]).toEqual([body, blocksFromSchema(body)]);
   }
 });
 
-// У пустой (пробельной) внутренности trimStart и trimEnd съедают её ЦЕЛИКОМ, и наивные
-// lead/trail взяли бы одни и те же пробелы дважды. Путь бытовой: очистить поле и сохранить
-// ({{query: }}), открыть снова и вписать запрос — края росли бы на каждом проходе.
-test('replaceQueryBlock: пустая внутренность не удваивает края', () => {
-  expect(replaceQueryBlock('{{query:   }}', 0, 'tags=x')).toBe('{{query:tags=x}}');
-  const cleared = replaceQueryBlock('{{query: tags=x}}', 0, '');
-  expect(cleared).toBe('{{query: }}');
-  expect(replaceQueryBlock(cleared, 0, 'tags=y')).toBe('{{query:tags=y}}');
+test('firstQueryBlock (бейдж pinned) считает по тому же правилу колонки', () => {
+  // §3.2: бейдж — «число результатов ПЕРВОГО query-блока body». Обёртка посреди строки
+  // блоком не является ни для detail-экрана, ни для схемы — значит и бейджу не считать.
+  expect(firstQueryBlock('смотри {{query:a=1}} тут')).toBeNull();
+  expect(firstQueryBlock('смотри {{query:a=1}} тут\n{{query:b=2}}')).toBe('b=2');
+  // У всех пяти сидов бейдж прежний: их блоки стоят с колонки 1.
+  for (const s of SEED_SMART_LISTS) {
+    expect([s.slug, firstQueryBlock(s.body)]).toEqual([s.slug, queryBlocks(s.body)[0] ?? null]);
+    expect(firstQueryBlock(s.body)).not.toBeNull();
+  }
 });
 
-test('replaceQueryBlock: индекса нет — body не меняется', () => {
-  const body = 'текст {{query:tags=x}}';
-  expect(replaceQueryBlock(body, 1, 'tags=y')).toBe(body);
-  expect(replaceQueryBlock(body, -1, 'tags=y')).toBe(body);
-  expect(replaceQueryBlock('без блоков', 0, 'tags=y')).toBe('без блоков');
-});
-
-// Последний рубеж разметки тела. `}}` — не ошибка грамматики (парсер `tags=a}}b` принимает
-// молча), а конец ОБЁРТКИ: рендерер закроет блок на первом же вхождении, хвост запроса
-// станет текстом заметки, а `{{query:` в этом хвосте заведёт лишний блок и сдвинет
-// нумерацию — на первом блоке стоит бейдж pinned-сущности (§3.2). Такую строку хелпер не
-// пишет вовсе: body возвращается как есть (для экрана это «без изменений — без записи»), а
-// объяснить причину человеку — забота редактора, который её и не пропускает.
-test('replaceQueryBlock не пишет `}}`: обёртку блока не рвём', () => {
-  const body = 'до\n\n{{query: tags=work}}\n\nмежду\n\n{{query: tags=home}}\n\nпосле';
-  expect(replaceQueryBlock(body, 0, 'tags=a}}b')).toBe(body);
-  // Вставленный целиком блок — тот же пролом: `{{query: {{query: … }}}}` порвался бы на
-  // первом `}}`, а хвостовые скобки уехали бы текстом.
-  expect(replaceQueryBlock(body, 1, '{{query: tags=x}}')).toBe(body);
-  // Самый дорогой случай: лишний блок сдвигает нумерацию (было два — стало бы три).
-  const shifted = replaceQueryBlock(body, 0, 'tags=a}} хвост {{query:');
-  expect(queryBlocks(shifted)).toHaveLength(2);
-  expect(shifted).toBe(body);
-});
-
-// Индекс приходит из сегментации просмотра, поэтому «N-й блок» обязан значить у обеих
-// функций одно и то же — включая блоки внутри огороженного кода, которые сегментация
-// виджетом рендерит наравне с остальными.
-test('replaceQueryBlock индексирует блоки так же, как bodySegments', () => {
+// Известное расхождение с схемой документа, записанное в комментарии QUERY_BLOCK_RE: обёртку
+// внутри забора кода схема считает кодом, а этот разбор — блоком. Правило колонки его не
+// лечит (забор шире одной строки), и лечить его здесь нечем — но и подразумевать нельзя:
+// первый кадр живёт этим разбором до самой подмены редактором, и молча съехавшее поведение
+// значило бы, что человек видит один набор виджетов, а после подмены — другой.
+// Тест на это стоял в снятой замене блока по номеру (Задача 16) — свойство разбора он
+// проверял заодно, поэтому переехал сюда явно.
+test('bodySegments: обёртка внутри забора кода остаётся блоком (расхождение со схемой)', () => {
   const body = 'вступление\n\n```\n{{query:tags=code}}\n```\n\n{{query: tags=work}}\nхвост';
-  const blocks = queryBlocks(body);
-  expect(blocks).toHaveLength(2);
-  for (const [i] of blocks.entries()) {
-    const next = replaceQueryBlock(body, i, 'tags=НОВОЕ');
-    expect(queryBlocks(next)).toEqual(blocks.map((b, j) => (j === i ? 'tags=НОВОЕ' : b)));
-  }
+  expect(queryBlocks(body)).toEqual(['tags=code', 'tags=work']);
+  // …и схема на том же теле видит ОДИН блок: расхождение именно здесь, а не выдумано.
+  expect(blocksFromSchema(body)).toEqual(['tags=work']);
 });
 
 // Разбор блоков не раздваивается: у §3.4 один контракт на два потребителя.

@@ -15,6 +15,9 @@
 //   bun scripts/ops.ts migrate        # накатить неприменённые миграции схемы
 //   bun scripts/ops.ts seed-aspects   # upsert встроенных аспектов (идемпотентно)
 //   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
+//   bun scripts/ops.ts census         # только чтение: сколько тел перенос изменит сильнее прочих
+//   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
+//   bun scripts/ops.ts backfill-body-doc  # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
 //   bun scripts/ops.ts issue-pat <owner-uuid> [метка]   # headless-токен агента (§9.3)
 import { join } from 'node:path';
@@ -22,6 +25,19 @@ import { aspectJsonSchema, BUILTIN_ASPECT_META, diffBuiltinAspects } from '@orbi
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
+import {
+  type AuditRow,
+  auditBodies,
+  auditExitCode,
+  FLAGGED_LIMIT,
+  formatFlagged,
+} from '../apps/server/src/db/audit-bodies';
+import {
+  backfillBodyDoc,
+  backfillExitCode,
+  describeRoleAccess,
+  drizzleBackfillIo,
+} from '../apps/server/src/db/backfill-body-doc';
 import * as schema from '../apps/server/src/db/schema';
 import { issuePatGrant } from '../apps/server/src/oauth/grants';
 
@@ -216,6 +232,196 @@ async function coverage(): Promise<number> {
   });
 }
 
+/**
+ * Read-only аудит корпуса тел ПЕРЕД миграцией и бэкфиллом (ревью И10, вердикт): сколько тел
+ * изменит канонизация, сколько получат raw-блоки, сколько тел держит ссылки внутри raw.
+ * Числа — стоп-кран: заметная доля raw или ненулевые ссылки в raw означают, что до конверсии
+ * надо расширять белые списки токенов (KNOWN_BLOCK/KNOWN_INLINE), а не запускать бэкфилл.
+ *
+ * Сам цикл и арифметика счётчиков живут в `apps/server/src/db/audit-bodies.ts` — по той же
+ * причине, по какой там же живёт цикл бэкфилла: дословная копия здесь осталась бы НЕ ПОКРЫТОЙ
+ * тестом. Здесь только адаптер к сырому пулу и печать.
+ *
+ * Корпус читается ПОРЦИЯМИ по курсору (итоговое ревью, находка 7): прежний одиночный
+ * `SELECT body FROM entities` тянул в память всё разом — на замере, который делается прямо
+ * перед необратимой операцией, это лишний риск.
+ *
+ * ПЕЧАТАЕТ ФАКТ РОЛИ и возвращает ненулевой код, когда корпус не виден (ре-ревью раунда 3).
+ * Без этого команда была зелена ровно в том случае, ради которого заведена: роль без BYPASSRLS
+ * под FORCE RLS видит ноль строк молча, все счётчики читаются нулями, и человек получал
+ * зелёный свет на необратимую конверсию оттого, что аудит НИЧЕГО НЕ УВИДЕЛ. Это дословный
+ * повтор находки M-2, закрытой для бэкфилла; здесь довод сильнее — тут число и есть решение.
+ *
+ * Годится и как ПОСТ-проверка: `body_doc` читается, и последние два числа отвечают на вопрос
+ * «конверсия доехала и пара согласована?». Повторный прогон одних стоп-кранов на эту роль не
+ * годится — после бэкфилла он вакуумен по построению (см. AuditResult.pairBroken).
+ */
+async function auditBodiesOp(): Promise<number> {
+  return withDb(async (sql) => {
+    const who = await describeRoleAccess(drizzle(sql, { schema }));
+    console.log(`роль: ${who.role} (BYPASSRLS: ${who.bypassRls ? 'да' : 'НЕТ'})`);
+    const r = await auditBodies({
+      // `id` выбирается ради курсора порций И ради списка виновных строк ниже. Наружу не
+      // выходят ТЕЛА — вывод команды попадает в транскрипты и отчёты; идентификаторы выходят
+      // намеренно, иначе разбор по кранам неисполним (раньше здесь стояло «никуда не
+      // печатается» — после раунда 5 это перестало быть правдой).
+      selectBatch: (limit, afterId) =>
+        sql<AuditRow[]>`SELECT id, body, body_doc AS "bodyDoc",
+                               body_before_doc AS "bodyBeforeDoc"
+                        FROM entities
+                        WHERE id > ${afterId}::uuid ORDER BY id LIMIT ${limit}`,
+    });
+    console.log(`тел всего: ${r.total}`);
+    console.log(`канон изменит body: ${r.changed}`);
+    // ДВА СТОП-КРАНА прода. Оба обязаны быть нулевыми до запуска backfill-body-doc: «канон
+    // изменит body» на эту роль не годится — он велик и на здоровом корпусе (нормализация
+    // разметки), а эти два растут только от настоящей беды.
+    console.log(`СТОП-КРАН канон неустойчив (canon(canon) ≠ canon): ${r.unstable}`);
+    console.log(`СТОП-КРАН канон теряет текст или ссылку: ${r.lossy}`);
+    // Третий кран — ЕДИНСТВЕННЫЙ про первый разбор, то есть про сам необратимый шаг. Два крана
+    // выше считают уже ПОСЛЕ него и к этому классу слепы по построению.
+    console.log(`СТОП-КРАН из тела пропало слово: ${r.lostWords}`);
+    console.log(`получат raw-блоки: ${r.withRaw}`);
+    console.log(`ссылки внутри raw: ${r.refsInRaw}`);
+    // Без этой строки числа про raw нечем взвесить: доля raw сама по себе не говорит, много ли
+    // в корпусе тел, которым вообще есть что терять при конверсии.
+    console.log(`со ссылкой или смарт-листом ([[entity: или {{query:): ${r.nontrivial}`);
+    console.log(`упали на парсе: ${r.failed}`);
+    // Пост-проверка: ДО конверсии первое число равно всему корпусу, ПОСЛЕ — оба обязаны быть 0.
+    console.log(`без документа (body_doc IS NULL): ${r.withoutDoc}`);
+    console.log(`СТОП-КРАН пара разошлась (body ≠ serialize(body_doc)): ${r.pairBroken}`);
+    // Четвёртый кран: всё заявление «конверсия обратима» держится на этой колонке, и до
+    // раунда 6 её не проверял никто.
+    console.log(`СТОП-КРАН сконвертировано без страховки обратимости: ${r.convertedWithoutBackup}`);
+    // Без id регламентный «стоп и разбор конкретного тела» неисполним: по счётчику «1» строку
+    // в корпусе на тысячи записей не найти. Сами тела наружу по-прежнему не выходят.
+    if (r.flagged.length > 0) {
+      console.log(`\nid строк, поднявших стоп-кран (не больше ${FLAGGED_LIMIT}):`);
+      // `row.id` и имена кранов ПОИМЁННО. Прежняя строка печатала `${id}` по массиву объектов
+      // и давала `[object Object]` — шаг регламента «взять напечатанные id» был неисполним
+      // (ре-ревью раунда 7, Д3). Тесты этого не ловили: они проверяли СТРУКТУРУ результата,
+      // а не печать, — поэтому ниже к ним добавлена проверка самой строки вывода.
+      for (const line of formatFlagged(r.flagged)) console.log(line);
+      console.log(
+        '\nРазбор — ЛОКАЛЬНО, вывод не в транскрипт:' +
+          "\n  ДО переноса:    SELECT body FROM entities WHERE id = '<id>';" +
+          "\n  ПОСЛЕ переноса: SELECT body_before_doc FROM entities WHERE id = '<id>';" +
+          '\n  (после переноса `body` уже канон — сравнивать надо с исходным телом)',
+      );
+    }
+    if (!who.bypassRls) {
+      console.error(
+        `\nВНИМАНИЕ: роль ${who.role} НЕ несёт BYPASSRLS, а на entities включён FORCE RLS` +
+          '\nс политикой owner_id = auth.uid(). Прямое подключение auth.uid() не выставляет,' +
+          '\nпоэтому такая роль видит НОЛЬ строк — и нули выше означают «корпус НЕ ВИДЕН»,' +
+          '\nа НЕ «корпус здоров». Нужен DSN роли с BYPASSRLS (на Supabase — postgres).',
+      );
+    }
+    return auditExitCode(who, r);
+  });
+}
+
+/**
+ * Разовая конверсия тел в структурную форму (`entities.body_doc`) — ЕДИНСТВЕННАЯ пишущая
+ * операция белого списка, которая трогает пользовательские данные.
+ *
+ * Порядок на проде жёсткий: сперва `migrate` (колонки без неё нет), потом READ-ONLY
+ * `audit-bodies` — и только если его числа приемлемы, эта команда. Аудит для того и заведён:
+ * заметная доля raw-блоков или ненулевые «ссылки внутри raw» означают, что до конверсии надо
+ * расширять белые списки токенов, а не запускать бэкфилл. Откатывать нечем.
+ *
+ * Идемпотентна: берёт только строки с `body_doc IS NULL`, поэтому повторный запуск не делает
+ * ничего. Пишет ОБЕ колонки — `body` тоже выравнивается до канона, иначе инвариант
+ * «body === serializeBody(body_doc)» ломался бы на самом первом шаге.
+ *
+ * Работает по ЖИВОЙ базе, поэтому запись идёт под CAS: строку, которую владелец или агент
+ * тронул между выборкой и записью, бэкфилл НЕ переписывает (иначе затёр бы свежий текст
+ * каноном прочитанного старого). Такие строки попадают в «пропущено» и остаются на ленивую
+ * конверсию при первом чтении.
+ *
+ * Печатает ТРИ числа и ФАКТ РОЛИ. Одних чисел мало: роль с грантами, но без `BYPASSRLS`, под
+ * FORCE RLS видит ноль строк — и «0 / 0 / 0» у неё неотличимо от «корпус уже сконвертирован»
+ * (воспроизведено пробой под `authenticated`: `count(*)` вернул 0 при непустой таблице). Три
+ * числа этот случай различить НЕ МОГУТ в принципе — различает только `rolbypassrls`, поэтому
+ * он и печатается (ревью M-2, второй круг).
+ *
+ * Ни цикл, ни SQL здесь не дублируются: сырой пул `withDb` оборачивается в drizzle (так же, как
+ * в migrateOp и issuePat выше) и отдаётся тому же `drizzleBackfillIo`, который прогоняет тест.
+ * Дословная вторая копия цикла осталась бы непокрытой и разошлась бы с проверенной на первой же
+ * правке (ревью И16).
+ */
+async function backfillBodyDocOp(): Promise<number> {
+  return withDb(async (sql) => {
+    const db = drizzle(sql, { schema });
+    const who = await describeRoleAccess(db);
+    console.log(`роль: ${who.role} (BYPASSRLS: ${who.bypassRls ? 'да' : 'НЕТ'})`);
+    const result = await backfillBodyDoc(drizzleBackfillIo(db));
+    const { done, skipped, pending } = result;
+    console.log(`сконвертировано тел: ${done}`);
+    console.log(`осталось неконвертированных: ${pending}`);
+    console.log(`пропущено (тело изменилось во время прогона): ${skipped}`);
+    // `done === 0` в гейте обязателен наравне с остатком: без BYPASSRLS обнуляется И pending
+    // (он считается тем же SELECT под той же политикой), поэтому гейт только по остатку
+    // молчал бы ровно в том случае, ради которого заведён.
+    if (pending > 0 || done === 0) {
+      console.log(
+        who.bypassRls
+          ? '\nОстаток — норма, если тела правили во время прогона: их догонит повторный запуск' +
+              '\n(или ленивая конверсия при первом чтении). Если же и остаток, и сконвертировано' +
+              '\nнулевые — корпус либо уже сконвертирован, либо пуст; сверь с `audit-bodies`.'
+          : `\nВНИМАНИЕ: роль ${who.role} НЕ несёт BYPASSRLS, а на entities включён FORCE RLS` +
+              '\nс политикой owner_id = auth.uid(). Прямое подключение auth.uid() не выставляет,' +
+              '\nпоэтому такая роль видит НОЛЬ строк — и нули выше означают «корпус НЕ ВИДЕН»,' +
+              '\nа НЕ «корпус сконвертирован». Нужен DSN роли с BYPASSRLS (на Supabase — postgres).',
+      );
+    }
+    // Код возврата, а не только предупреждение (итоговое ревью, находка 6): печать читает
+    // человек, а запуск из скрипта читает КОД, и он врал успехом на «корпус не виден».
+    return backfillExitCode(who, result);
+  });
+}
+
+/**
+ * Перепись форм, которые перенос изменит СИЛЬНЕЕ ПРОЧИХ, — только чтение, только числа.
+ *
+ * Заведена потому, что регламентный «шаг переписи» был НЕИСПОЛНИМ: прод-операции идут только
+ * через белый список этого файла, а такой команды в нём не было (ре-ревью раунда 6, п.4).
+ * Обещанный шаг, которого нельзя выполнить, — хуже отсутствующего: он создаёт видимость
+ * проверки.
+ *
+ * Это НЕ гейт: все перечисленные формы после починок текста не теряют, они лишь станут
+ * дословными блоками или сменят вид. Число нужно, чтобы владелец знал масштаб ПЕРЕД переносом
+ * и не удивился, открыв заметку.
+ *
+ * Тела не печатаются — только счётчики; `id` тоже не выводится (для разбора есть audit-bodies).
+ */
+async function censusBodies(): Promise<number> {
+  return withDb(async (sql) => {
+    const who = await describeRoleAccess(drizzle(sql, { schema }));
+    console.log(`роль: ${who.role} (BYPASSRLS: ${who.bypassRls ? 'да' : 'НЕТ'})`);
+    const [row] = await sql<Array<Record<string, number>>>`SELECT
+        count(*)::int AS total,
+        count(*) FILTER (WHERE body ~ '(^|\n)[0-9]+[.)] ' AND body LIKE '%|%')::int AS ol_table,
+        count(*) FILTER (WHERE body ~ '(^|\n)[0-9]+[.)] ' AND body LIKE '%[](%')::int AS ol_emptylink,
+        count(*) FILTER (WHERE body ~ '(^|\n)[0-9]+[.)] ' AND body LIKE '%![%')::int AS ol_image,
+        count(*) FILTER (WHERE body LIKE '%- [ ] %' AND body LIKE '%|%')::int AS task_table,
+        count(*) FILTER (WHERE body LIKE '%- [ ] %' AND body LIKE '%[](%')::int AS task_emptylink,
+        count(*) FILTER (WHERE body LIKE '%&nbsp;%' OR body LIKE '%' || chr(160) || '%')::int AS nbsp,
+        count(*) FILTER (WHERE body ~ '(^|\n)0[.)] ')::int AS zero_start
+      FROM entities`;
+    console.log(`тел всего: ${row?.total ?? 0}`);
+    console.log(`нумерованный список рядом с таблицей: ${row?.ol_table ?? 0}`);
+    console.log(`нумерованный список со ссылкой [](: ${row?.ol_emptylink ?? 0}`);
+    console.log(`нумерованный список с картинкой ![: ${row?.ol_image ?? 0}`);
+    console.log(`чеклист рядом с таблицей: ${row?.task_table ?? 0}`);
+    console.log(`чеклист со ссылкой [](: ${row?.task_emptylink ?? 0}`);
+    console.log(`неразрывный пробел (&nbsp; или U+00A0): ${row?.nbsp ?? 0}`);
+    console.log(`список, начинающийся с 0.: ${row?.zero_start ?? 0}`);
+    console.log('\nЭто НЕ гейт: текст в этих формах цел, меняется только вид.');
+    return who.bypassRls ? 0 : 1;
+  });
+}
+
 async function ping(): Promise<number> {
   await withDb(async (sql) => {
     const [row] = await sql<{ version: string }[]>`SELECT version()`;
@@ -283,6 +489,18 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
   migrate: { run: migrateOp, help: 'накатить неприменённые миграции схемы (идемпотентно)' },
   'seed-aspects': { run: seedAspects, help: 'upsert встроенных аспектов (идемпотентно)' },
   coverage: { run: coverage, help: 'только чтение: покрытие транзакций за 90 дней (§8)' },
+  census: {
+    run: censusBodies,
+    help: 'только чтение: сколько тел перенос изменит сильнее прочих (не гейт, тела не печатаются)',
+  },
+  'audit-bodies': {
+    run: auditBodiesOp,
+    help: 'только чтение: агрегаты по корпусу тел перед конверсией (тела не печатаются)',
+  },
+  'backfill-body-doc': {
+    run: backfillBodyDocOp,
+    help: 'конверсия тел в body_doc + выравнивание body до канона; ТОЛЬКО после audit-bodies',
+  },
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   'issue-pat': {
     run: issuePat,
@@ -294,7 +512,7 @@ const name = process.argv[2];
 const op = name === undefined ? undefined : OPS[name];
 if (!op) {
   const list = Object.entries(OPS)
-    .map(([k, v]) => `  ${k.padEnd(13)} — ${v.help}`)
+    .map(([k, v]) => `  ${k.padEnd(17)} — ${v.help}`)
     .join('\n');
   console.error(
     (name === undefined ? 'ops: операция не указана.' : `ops: неизвестная операция «${name}».`) +

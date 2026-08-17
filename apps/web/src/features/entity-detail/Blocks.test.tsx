@@ -1,11 +1,12 @@
+import { parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
-import { beforeEach, expect, test } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { renderWithProviders, trpcError } from '../../test/harness';
 import { trpc } from '../../trpc';
 import { DetailScreen } from './DetailScreen';
 
-// Task D5: секции 6 «Блокировки» (02-core-os §3.5.6) и 7 «Связанное (backlinks)» (§3.5.7)
+// Task D5: секции 7 «Блокировки» (02-core-os §3.5.7) и 8 «Связанное (backlinks)» (§3.5.8)
 // на detail-экране. Файл покрывает обе секции — так назван Test-пункт брифа D5.
 
 type Aspects = Record<string, Record<string, unknown>>;
@@ -16,6 +17,11 @@ const ent = (id: string, title: string, aspects: Aspects = {}) => ({
   title,
   emoji: null,
   body: '',
+  // `bodyDoc` — часть контракта detail (include всегда просит его, а сервер собирает документ
+  // даже для записей без колонки). Без него экран показывал бы тело первым кадром и НИКОГДА не
+  // поднимал редактор — то есть тесты этого файла были бы зелены по причине, которой в проде
+  // не существует.
+  bodyDoc: parseBody(''),
   bodyRefs: [],
   tags: [],
   meta: {},
@@ -41,13 +47,25 @@ const rel = (id: string, sourceId: string, targetId: string, relationType: strin
   updatedAt: '2026-07-05T00:00:00.000Z',
 });
 
+/**
+ * Форма строки entity.suggest / entity.resolveRefs: только то, что рисуется, и статус
+ * task-аспекта ПЛОСКИМ полем — сущности целиком секция больше не получает.
+ */
+const sugg = (e: ReturnType<typeof ent>) => ({
+  id: e.id,
+  title: e.title,
+  emoji: e.emoji,
+  status: (e.aspects['orbis/task']?.status as string | undefined) ?? null,
+  archived: e.archived,
+});
+
 type Fixture = {
   relations?: ReturnType<typeof rel>[];
   backlinks?: { entity: ReturnType<typeof ent>; via: string }[];
   backlinksTruncated?: boolean;
   onRelationCreate?: () => unknown;
   onRelationDelete?: () => unknown;
-  onQuery?: () => unknown;
+  onSuggest?: () => unknown;
 };
 
 const OTHERS = [outgoing, liveBlocker, doneBlocker, found];
@@ -67,7 +85,18 @@ function handler(fx: Fixture) {
       const e = OTHERS.find((x) => x.id === id);
       return e ? { entity: e, relations: [] } : { entity: ent(id, id), relations: [] };
     }
-    if (path === 'entity.query') return fx.onQuery ? fx.onQuery() : [found];
+    // Заголовки сторон — ОДНИМ запросом. Ненайденные просто отсутствуют в ответе (контракт
+    // процедуры), заглушки на каждый id тут не выдумываем: секция сама рисует обрубок.
+    if (path === 'entity.resolveRefs') {
+      const ids = (input as { ids: string[] }).ids;
+      return ids.flatMap((id) => {
+        const e = OTHERS.find((x) => x.id === id);
+        return e ? [sugg(e)] : [];
+      });
+    }
+    if (path === 'entity.suggest') return fx.onSuggest ? fx.onSuggest() : [sugg(found)];
+    // Остался только соседям-спискам (ListProbe): пикер на entity.query больше не ходит.
+    if (path === 'entity.query') return [];
     if (path === 'relation.create') {
       if (fx.onRelationCreate) return fx.onRelationCreate();
       return rel('new', 'e1', 'x1', 'blocks');
@@ -88,15 +117,37 @@ function ListProbe() {
   return <span data-testid="list-probe">{(q.data ?? []).length}</span>;
 }
 
+/**
+ * Detail второй стороны связи держит СВОЙ список связей и после правки графа врёт — его
+ * инвалидацию секция делает по ключу entity.get({id}). Наблюдать её стало нечем: титулы
+ * сторон секция теперь берёт из entity.resolveRefs, а не из построчных entity.get. Зонд —
+ * тот же приём, что ListProbe для entity.query: держит ключ в кэше, чтобы рефетч был виден.
+ */
+function SideProbe({ id }: { id: string }) {
+  const q = trpc.entity.get.useQuery({ id });
+  // Рисуем id, а НЕ титул: титул той же сущности уже стоит строкой блокировки, и
+  // findByText('Ждёт меня') нашёл бы два узла и упал бы на неоднозначности.
+  return <span data-testid="side-probe">{q.data ? id : ''}</span>;
+}
+
 beforeEach(() => {
   localStorage.clear();
+  // requestIdleCallback, которого никто не дёрнет: этот файл про секции «Деталей», и редактор,
+  // встающий сам по запасному таймеру простоя (1500 мс) посреди десятисекундных ожиданий ниже,
+  // менял бы дерево в непредсказуемый момент. jsdom своей реализации не имеет, поэтому подмена
+  // именно ДОБАВЛЯЕТ ветку простоя — и она никогда не срабатывает (приём editor.test.tsx).
+  vi.stubGlobal('requestIdleCallback', () => 1);
   useNav.setState({
     activeTab: 'browser',
     stacks: { chat: [], browser: [{ kind: 'entity', id: 'e1' }], agenda: [], budget: [] },
   });
 });
 
-// Титулы строк дочитываются per-id запросами entity.get (Blocks.tsx), то есть ждать
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+// Титулы строк дочитываются одним entity.resolveRefs (Blocks.tsx), то есть ждать
 // приходится ВТОРОЙ круг сети после entity.get самого экрана. Первый тест файла платит
 // вдобавок за прогрев (импорт модулей, первый рендер DetailScreen), а в полном корневом
 // прогоне 48 web-файлов идут параллельно с 653 серверными тестами против локальной БД:
@@ -136,7 +187,7 @@ test('блокировки: «блокирует» — исходящие, «з�
 
 test('пустые списки блокировок и пустой backlinks скрыты (кнопка добавления остаётся)', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   expect(screen.queryByText(/^блокирует$/i)).not.toBeInTheDocument();
   expect(screen.queryByText(/^заблокирована$/i)).not.toBeInTheDocument();
@@ -146,18 +197,22 @@ test('пустые списки блокировок и пустой backlinks �
   expect(screen.getByRole('button', { name: 'Добавить блокировку' })).toBeInTheDocument();
 });
 
-test('добавление блокировки: поиск через entity.query search= → relation.create blocks', async () => {
+test('добавление блокировки: поиск через entity.suggest по неполному слову → relation.create blocks', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
 
   await waitFor(() =>
-    expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-      query: 'search=Найд, limit=10',
+    expect(calls.find((c) => c.path === 'entity.suggest')?.input).toEqual({
+      term: 'Найд',
+      limit: 10,
     }),
   );
+  // Грамматика `search=` из пикера ушла совсем: остаточный запрос по ней означал бы, что
+  // поиск по целому слову жив вторым путём.
+  expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
   fireEvent.click(await screen.findByRole('button', { name: 'Найденная сущность' }));
   await waitFor(() =>
     expect(calls.find((c) => c.path === 'relation.create')?.input).toEqual({
@@ -172,7 +227,7 @@ test('добавление блокировки: поиск через entity.qu
 // «Заблокирована» было нечем пополнить — приходилось открывать detail самого блокера.
 test('добавление блокировки: направление «заблокирована» шлёт обратную связь', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
@@ -216,7 +271,7 @@ test('снятие блокировки: крестик → подтвержде
 // запроса подряд, из которых полезен только последний.
 test('пикер: быстрый ввод трёх символов даёт один запрос, а не три', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   const input = screen.getByLabelText('Поиск сущности');
@@ -224,42 +279,46 @@ test('пикер: быстрый ввод трёх символов даёт о�
   fireEvent.change(input, { target: { value: 'Най' } });
   fireEvent.change(input, { target: { value: 'Найд' } });
 
-  const queries = () => calls.filter((c) => c.path === 'entity.query');
+  const queries = () => calls.filter((c) => c.path === 'entity.suggest');
   await waitFor(() => expect(queries()).toHaveLength(1));
-  expect(queries()[0]?.input).toEqual({ query: 'search=Найд, limit=10' });
+  expect(queries()[0]?.input).toEqual({ term: 'Найд', limit: 10 });
 });
 
-// `search=` — FTS по целым словам (plainto_tsquery): набор по префиксу («Куп» для
-// «Купить кроссовки») не находит ничего. Пикер обязан говорить это словами, а не молчать:
-// немая пустая область читается как сломанная фича.
+// Состояния пикера остались все пять и в том же порядке, изменился только текст первой
+// подсказки: извиняться за поиск по ЦЕЛОМУ слову больше не за что — suggest ищет вхождение
+// набранного фрагмента. Немая пустая область по-прежнему недопустима.
 test('пикер: подсказка до ввода, спиннер в полёте, «ничего не найдено» на пустом ответе', async () => {
   let release: (v: unknown) => void = () => {};
   const gate = new Promise((res) => {
     release = res;
   });
-  renderWithProviders(<DetailScreen entityId="e1" />, handler({ onQuery: () => gate }));
-  await screen.findByTestId('body-view'); // экран отрисован
+  renderWithProviders(<DetailScreen entityId="e1" />, handler({ onSuggest: () => gate }));
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
-  expect(screen.getByText(/по целому слову/i)).toBeInTheDocument();
+  expect(screen.getByText(/поиск от 2 символов/i)).toBeInTheDocument();
+  // Обещания искать по целому слову в интерфейсе больше нет — ни в подсказке, ни в пустом
+  // результате: оно врало бы про поиск, который берёт и неполные слова.
+  expect(screen.queryByText(/целому слову|слово целиком/i)).toBeNull();
 
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Куп' } });
   expect(await screen.findByRole('status', { name: 'Поиск' })).toBeInTheDocument();
 
   release([]);
   expect(await screen.findByText(/ничего не найдено/i)).toBeInTheDocument();
+  expect(screen.queryByText(/слово целиком/i)).toBeNull();
 });
 
 test('пикер: отказ поиска показан плашкой, а не пустотой', async () => {
   renderWithProviders(
     <DetailScreen entityId="e1" />,
     handler({
-      onQuery: () => {
+      onSuggest: () => {
         throw trpcError('INTERNAL_SERVER_ERROR', 'boom');
       },
     }),
   );
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Куп' } });
@@ -279,7 +338,7 @@ test('цикл blocks: серверный отказ показан плашко
       },
     }),
   );
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'Найд' } });
@@ -295,7 +354,7 @@ test('цикл blocks: серверный отказ показан плашко
 // молча создавала следующую связь в обратную сторону.
 test('форма: после создания связи направление возвращается к дефолтному', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, handler({}));
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Направление блокировки'), { target: { value: 'in' } });
@@ -362,15 +421,15 @@ test('плашка: ошибка снятия сменяет ошибку соз
   await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
 });
 
-// D5e п.4: список «Заблокирована» показывает только незакрытые задачи (§3.5.6) — связь
+// D5e п.4: список «Заблокирована» показывает только незакрытые задачи (§3.5.7) — связь
 // с закрытым блокером была бы создана, но не видна ни в одном списке и неповторима
 // (id уже в known). Для исходящей связи ограничения нет: «Блокирует» показывает всё.
 test('пикер: закрытая задача не предлагается блокером, но предлагается заблокированной', async () => {
   renderWithProviders(
     <DetailScreen entityId="e1" />,
-    handler({ onQuery: () => [found, doneBlocker] }),
+    handler({ onSuggest: () => [sugg(found), sugg(doneBlocker)] }),
   );
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
 
   fireEvent.click(screen.getByRole('button', { name: 'Добавить блокировку' }));
   fireEvent.change(screen.getByLabelText('Поиск сущности'), { target: { value: 'блокер' } });
@@ -414,7 +473,7 @@ test('создание блокировки инвалидирует entity.quer
     </>,
     handler({}),
   );
-  await screen.findByTestId('body-view'); // экран отрисован
+  await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован
   const probes = () =>
     calls.filter(
       (c) =>
@@ -434,6 +493,7 @@ test('снятие блокировки инвалидирует вторую с
     <>
       <DetailScreen entityId="e1" />
       <ListProbe />
+      <SideProbe id="t1" />
     </>,
     handler({ relations: [rel('r1', 'e1', 't1', 'blocks')] }),
   );
