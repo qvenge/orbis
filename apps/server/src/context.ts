@@ -36,6 +36,13 @@ export function makeCreateContext(db: Db, ai?: AiDeps) {
       return {
         actorUserId: identity?.ownerId ?? null,
         actorKind: 'agent',
+        // Идентичность гранта (С2) — симметрично /mcp (mcp/server.ts): один и тот же
+        // токен пускают обе поверхности, и то, что известно о доступе, не должно
+        // зависеть от выбранного агентом транспорта. Ключа нет вовсе, если гранта нет
+        // (токен неизвестен или отозван) — «нет гранта» и «грант без области» различимы.
+        ...(identity !== null && {
+          grant: { id: identity.grantId, scope: identity.scope, label: identity.label },
+        }),
         db,
         clientVersion,
         ...aiDeps,

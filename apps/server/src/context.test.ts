@@ -86,6 +86,25 @@ test('Bearer с валидным PAT → { actorUserId: владелец гра�
   expect(ctx.actorKind).toBe('agent');
 });
 
+// С2: агентский Bearer в tRPC несёт ту же идентичность гранта, что и на /mcp. Симметрия
+// не косметическая: обе поверхности пускают ОДИН и тот же токен, и знание об области
+// гранта не должно зависеть от того, каким транспортом агент пришёл.
+test('Bearer с валидным PAT → ctx.grant несёт id, область и подпись гранта', async () => {
+  const identity = await verifyBearer(db, PAT_TOKEN);
+  if (identity === null) throw new Error('тестовый PAT не прошёл verifyBearer');
+  const ctx = await createContext(makeReq({ authorization: `Bearer ${PAT_TOKEN}` }));
+  expect(ctx.grant).toEqual({ id: identity.grantId, scope: 'full', label: 'тестовый агент' });
+});
+
+// Владельческие поверхности гранта не имеют по построению: ключа нет вовсе, а не null —
+// проверки Задачи 7 читают его как «есть грант / нет гранта».
+test('владельческий JWT → ctx.grant отсутствует', async () => {
+  const ctx = await createContext(
+    makeReq({ authorization: `Bearer ${await signHs256(crypto.randomUUID())}` }),
+  );
+  expect(ctx).not.toHaveProperty('grant');
+});
+
 // Access-токен OAuth — второй вид агентского Bearer; для tRPC он ровно то же, что PAT
 test('Bearer с access-токеном OAuth → тот же агентский путь', async () => {
   const ctx = await createContext(makeReq({ authorization: `Bearer orbis_at_${'11'.repeat(32)}` }));

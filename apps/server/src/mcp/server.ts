@@ -18,6 +18,7 @@ import {
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { type EntitlementResolver, resolveEntitlement } from '../entitlements';
+import type { GrantIdentity } from '../oauth/grants';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
 import { buildToolRegistry } from '../tools/registry';
 
@@ -39,9 +40,15 @@ export interface McpDeps {
  * Свежий SDK-Server на ЗАПРОС (stateless-контракт транспорта, transport.ts) от имени
  * владельца гранта. Каждый tools/call — свежий tx-цикл dispatchTool; реестр tools/list
  * строится per-request под withIdentity — агент видит и custom-аспекты владельца (§7.6).
+ *
+ * Второй аргумент — ЦЕЛИКОМ идентичность гранта (С2), а не один ownerId: за токеном
+ * стоит конкретный доступ конкретного агента, и адаптеру дальше нужен и он (область
+ * гранта — вход гейта, id — атрибуция в журнале §7.8). Разбирать identity на транспорте
+ * значило бы решать здесь, что из неё «важно», — и терять остальное молча.
  */
-export function makeMcpServer(deps: McpDeps, ownerId: string): Server {
+export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
   const resolve = deps.entitlements ?? resolveEntitlement;
+  const ownerId = identity.ownerId;
   const server = new Server({ name: 'orbis', version: '0.0.0' }, { capabilities: { tools: {} } });
 
   // tools/list: публичный реестр §9.2 — имена/описания/inputSchema как в реестре,
@@ -74,6 +81,9 @@ export function makeMcpServer(deps: McpDeps, ownerId: string): Server {
           db: deps.db,
           actorUserId: ownerId,
           actorKind: 'agent', // честная атрибуция внешнего агента (§7.8, D11)
+          // Грант — вторая половина той же атрибуции (С2): по записи журнала владелец
+          // видит не «какой-то агент», а КАКОЙ доступ это сделал, и отзывает именно его.
+          grant: { id: identity.grantId, scope: identity.scope, label: identity.label },
           source: 'mcp',
           explicitCommand: false, // §7.10: в 1b всегда false
           entitlements: resolve, // тот же резолвер §8, что у rate-гейта выше

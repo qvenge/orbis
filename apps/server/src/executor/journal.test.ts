@@ -401,4 +401,84 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     const saved = await withIdentity(db, user, (tx) => sink.findByAuditId(tx, auditId));
     expect(saved?.card).toEqual({ tool: 'relation_create', entity_id: null, title: 'связь' });
   });
+
+  // С2: в записи журнала актор перестаёт быть анонимным «агентом вообще» — видно, каким
+  // грантом и в каком прогоне сделано действие.
+  //
+  // Поля опциональны ПО ОТСУТСТВИЮ КЛЮЧА, а не по null: искать действия прогона придётся
+  // контейнмент-пробой `metadata @> {"actions":[{"run_id": …}]}` (единственный предикат,
+  // который берёт jsonb-индекс). Запись `"run_id": null` у владельческих действий сделала
+  // бы такую пробу ложно-положительной для проб вида `{"run_id": null}` и раздула бы
+  // каждую строку журнала двумя пустыми ключами.
+  test('10. actorGrantId/runId одиночного вызова: поля в action, контейнмент-проба находит; без них ключей НЕТ', async () => {
+    const agentUser = freshUserId();
+    const grantId = newId();
+    const runId = newId();
+    ok(
+      await execute(
+        db,
+        req(
+          agentUser,
+          'entity_create',
+          { title: 'Создано агентом', tags: [] },
+          { actorKind: 'agent', source: 'mcp', actorGrantId: grantId, runId },
+        ),
+        { sink },
+      ),
+    );
+
+    const agentThread = globalThreadId(agentUser);
+    const action = first(actionsOf(first(await messagesInThread(agentThread))));
+    expect(action.actor_grant_id).toBe(grantId);
+    expect(action.run_id).toBe(runId);
+
+    // ровно та проба, которой действия прогона ищутся по журналу
+    const byRun = await adminCount(
+      sql`SELECT count(*)::int AS n FROM chat_messages
+          WHERE thread_id = ${agentThread}
+            AND metadata @> ${JSON.stringify({ actions: [{ run_id: runId }] })}::jsonb`,
+    );
+    expect(byRun).toBe(1);
+
+    // владельческий путь: ключей нет вовсе — иначе пробы по грантам/прогонам ловили бы
+    // и действия, сделанные руками владельца
+    const ownerUser = freshUserId();
+    ok(
+      await execute(db, req(ownerUser, 'entity_create', { title: 'Своими руками', tags: [] }), {
+        sink,
+      }),
+    );
+    const ownAction = first(actionsOf(first(await messagesInThread(globalThreadId(ownerUser)))));
+    expect(ownAction).not.toHaveProperty('actor_grant_id');
+    expect(ownAction).not.toHaveProperty('run_id');
+  });
+
+  test('11. batch: грант и прогон попадают в ОБЩИЙ action пакета (§7.8 — один action на batch)', async () => {
+    const user = freshUserId();
+    const batchId = newId();
+    const grantId = newId();
+    const runId = newId();
+    ok(
+      await execute(
+        db,
+        {
+          actorUserId: user,
+          actorKind: 'agent',
+          source: 'mcp',
+          operations: [
+            { tool: 'entity_create', input: { title: 'Пакет агента 1', tags: [] } },
+            { tool: 'entity_create', input: { title: 'Пакет агента 2', tags: [] } },
+          ],
+          batchId,
+          actorGrantId: grantId,
+          runId,
+        },
+        { sink },
+      ),
+    );
+    const action = first(actionsOf(first(await messagesInThread(globalThreadId(user)))));
+    expect(action.type).toBe('batch');
+    expect(action.actor_grant_id).toBe(grantId);
+    expect(action.run_id).toBe(runId);
+  });
 });

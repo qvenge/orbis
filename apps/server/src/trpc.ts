@@ -3,6 +3,7 @@ import { initTRPC, TRPCError } from '@trpc/server';
 // import type — стирается: type-граф trpc остаётся чист от runtime-модулей AI-слоя
 import type { AiDeps } from './ai/send-message';
 import type { Db } from './db/client';
+import type { GrantRef } from './oauth/grants';
 
 // Identity течёт только через request-контекст; имя — actorUserId, не userId (D11).
 // db — один инстанс на процесс (index.ts), в контекст кладётся ссылкой (Task 12).
@@ -19,6 +20,14 @@ export type Context = {
    * транспорт: внутренний AI действует внутри запросов владельца).
    */
   actorKind: 'owner' | 'agent';
+  /**
+   * Грант, которым аутентифицирован запрос (С2) — есть ТОЛЬКО у actorKind 'agent' и
+   * только когда токен живой. Отсутствие ключа значит «за запросом стоит сам владелец»
+   * (или доступ уже отозван), а не «грант неизвестен». Тип общий с MCP-путём (GrantRef,
+   * oauth/grants.ts) — import type стирается, runtime-модуль auth в type-граф router
+   * по-прежнему не попадает.
+   */
+  grant?: GrantRef;
   db: Db;
   /** Значение заголовка CLIENT_VERSION_HEADER; null — заголовок не прислан (curl/смоуки). */
   clientVersion: string | null;

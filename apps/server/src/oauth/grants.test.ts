@@ -334,6 +334,15 @@ test('PAT пускает бессрочно и отзывается', async () =
   expect(await verifyBearer(db, pat)).toBeNull();
 });
 
+// С2: bearer несёт не только владельца — из той же строки едут область гранта (вход
+// гейта Задачи 7) и подпись (атрибуция в журнале и на экране «Агенты»). Скоуп читается
+// впервые: до этого колонка agent_grants.scope существовала, но никем не читалась.
+test('verifyBearer отдаёт область и подпись гранта, а не только владельца', async () => {
+  const pat = await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  const identity = await verifyBearer(db, pat);
+  expect(identity).toMatchObject({ ownerId: owner, scope: 'full', label: 'CI' });
+});
+
 test('чужой владелец не отзывает грант', async () => {
   const pat = await issuePatGrant(db, { ownerId: owner, label: 'CI' });
   const identity = await verifyBearer(db, pat);

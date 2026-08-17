@@ -509,6 +509,12 @@ describe('/mcp tools/call → dispatchTool (§9.3)', () => {
     expect(action?.actor_kind).toBe('agent');
     expect(action?.source).toBe('mcp');
     expect(action?.actor_user_id).toBe(owner);
+    // С2: «агент вообще» → конкретный грант. Владелец по записи журнала видит, КАКОЙ
+    // из подключённых агентов это сделал, и может отозвать именно его. id гранта тест
+    // берёт тем же путём, что и транспорт (/mcp → verifyBearer), а не отдельным знанием.
+    const grant = await verifyBearer(db, TOKEN);
+    if (grant === null) throw new Error('тестовый PAT не прошёл verifyBearer');
+    expect(action?.actor_grant_id).toBe(grant.grantId);
   });
 
   test('batch_execute из 11 архиваций → pending_confirmation (§7.10), isError: false, граф чист', async () => {

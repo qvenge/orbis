@@ -16,6 +16,14 @@ export interface ExecuteRequest {
   operations: Array<{ tool: string; input: unknown }>; // 1 элемент = одиночный вызов
   batchId?: string; // обязателен при operations.length > 1
   clock?: () => Date; // инъекция времени (тесты); default () => new Date()
+  /**
+   * Грант внешнего агента, от имени которого идёт мутация (С2) — доезжает до записи
+   * журнала как actor_grant_id. Нет у владельческих и чатовых путей: за ними стоит сам
+   * владелец, а не выданный кому-то доступ.
+   */
+  actorGrantId?: string;
+  /** Прогон агента, в рамках которого сделана мутация (С2) — в журнале как run_id. */
+  runId?: string;
 }
 
 export interface ExecuteOk {
@@ -142,6 +150,18 @@ export interface ActionRecord {
   actor_user_id: string;
   actor_kind: ActorKind;
   source: MutationSource;
+  /**
+   * Грант и прогон агента (С2) — вторая половина атрибуции: actor_kind говорит «агент»,
+   * эта пара — КАКОЙ агент и в каком прогоне.
+   *
+   * Опциональны ПО ОТСУТСТВИЮ КЛЮЧА, а не по null, и это не стилистика: действия прогона
+   * ищутся контейнмент-пробой `metadata @> {"actions":[{"run_id": …}]}` — единственным
+   * предикатом, который берёт jsonb-индекс. Запись `"run_id": null` у каждого действия
+   * владельца сделала бы такую пробу ложно-положительной для проб с null и удвоила бы
+   * пустыми ключами вес всего журнала. Отсюда и условная сборка в executor.ts.
+   */
+  actor_grant_id?: string;
+  run_id?: string;
   operations: ActionOperation[];
   inverse: ActionOperation[]; // в обратном порядке исполнения (§7.8)
 }

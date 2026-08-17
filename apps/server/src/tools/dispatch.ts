@@ -38,6 +38,7 @@ import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, JournalSink, JournalWrite, WireEntity } from '../executor/types';
+import type { GrantRef } from '../oauth/grants';
 import {
   type ConfirmationLevel,
   classifyToolCall,
@@ -83,6 +84,13 @@ export interface ToolCallCtx {
    * Без него денайл-путь гейтов внутри диспатча был бы непокрываем тестом.
    */
   entitlements?: EntitlementResolver;
+  /**
+   * Грант, от имени которого идёт вызов (С2). Есть ТОЛЬКО у MCP: чат и UI — поверхности
+   * самого владельца, гранта за ними нет, и отсутствие ключа здесь означает именно это,
+   * а не «грант неизвестен». Отсюда идентичность едет в ExecuteRequest.actorGrantId и
+   * дальше в запись журнала (§7.8).
+   */
+  grant?: GrantRef;
 }
 
 export type ToolDispatchResult =
@@ -495,6 +503,8 @@ async function runMutation(
       actorKind: ctx.actorKind,
       source: ctx.source,
       threadId: ctx.threadId,
+      // undefined у чатовых и UI-путей — executor такой ключ в action не пишет
+      actorGrantId: ctx.grant?.id,
       operations: [{ tool, input: payload }],
       clock: ctx.clock,
     },

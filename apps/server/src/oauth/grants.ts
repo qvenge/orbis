@@ -5,7 +5,7 @@
 // поэтому withIdentity здесь неприменим — RLS скоупит эти запросы не по auth.uid(),
 // а самим условием на хеш.
 import { createHash } from 'node:crypto';
-import { newId } from '@orbis/shared';
+import { type GrantScope, newId } from '@orbis/shared';
 import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { agentGrants } from '../db/schema';
@@ -26,6 +26,22 @@ import {
 export interface GrantIdentity {
   grantId: string;
   ownerId: string;
+  /** Область гранта (С2): 'full' — весь граф владельца, 'worker' — сужение до тикета. */
+  scope: GrantScope;
+  /** Подпись доступа, которую владелец видит на экране «Агенты». */
+  label: string;
+}
+
+/**
+ * Грант в контексте вызова — то же самое, что GrantIdentity, минус владелец: на всех
+ * путях ниже транспорта владелец уже лежит отдельным полем (actorUserId контекста тула,
+ * actorUserId контекста tRPC), и второй его экземпляр рядом стал бы вторым источником
+ * правды — расходящимся ровно в тот момент, когда кто-нибудь соберёт GrantRef руками.
+ */
+export interface GrantRef {
+  id: string;
+  scope: GrantScope;
+  label: string;
 }
 
 export interface TokenPair {
@@ -95,9 +111,26 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
         or(isNull(agentGrants.accessExpiresAt), gt(agentGrants.accessExpiresAt, new Date())),
       ),
     )
-    .returning({ id: agentGrants.id, ownerId: agentGrants.ownerId });
+    .returning({
+      id: agentGrants.id,
+      ownerId: agentGrants.ownerId,
+      scope: agentGrants.scope,
+      label: agentGrants.label,
+    });
   const row = rows[0];
-  return row ? { grantId: row.id, ownerId: row.ownerId } : null;
+  if (!row) return null;
+  // Каст, а не разбор: колонка `scope` — text с DEFAULT 'full', перечисление живёт одним
+  // списком в @orbis/shared (GRANT_SCOPES), и сегодня в колонку не пишет никто — все
+  // строки приходят со значением по умолчанию. Откат на 'full' при незнакомом значении
+  // был бы здесь РАСШИРЕНИЕМ доступа (самый широкий скоуп по умолчанию), поэтому лукап
+  // отдаёт значение как есть, а решение о нём принимает гейт скоупа — и обязан быть
+  // fail-closed «не 'full' → не полный доступ», а не сравнением с одним лишь 'worker'.
+  return {
+    grantId: row.id,
+    ownerId: row.ownerId,
+    scope: row.scope as GrantScope,
+    label: row.label,
+  };
 }
 
 /** Согласие владельца: строка гранта с одноразовым кодом, токенов ещё нет. */

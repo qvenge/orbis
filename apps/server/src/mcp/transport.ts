@@ -94,7 +94,7 @@ export function makeMcpHandler(deps: McpDeps) {
     const limitResponse = await mcpBodyLimit(c, async () => {});
     if (limitResponse instanceof Response) return limitResponse;
 
-    const server = makeMcpServer(deps, identity.ownerId);
+    const server = makeMcpServer(deps, identity);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined, // stateless: без сессий и их валидации
       enableJsonResponse: true,
