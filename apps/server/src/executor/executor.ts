@@ -43,7 +43,7 @@ import {
   unbindOps,
 } from '../budget/binding';
 import type { Db } from '../db/client';
-import { entities, entityOrigins, relations } from '../db/schema';
+import { entities, entityOrigins, entityVersions, relations } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 import { projectBodyTemplate } from '../seed/project-body';
@@ -74,6 +74,7 @@ import {
 import type {
   ActionOperation,
   ActionRecord,
+  ActorKind,
   ExecuteRequest,
   ExecuteResult,
   ExecutorDeps,
@@ -81,6 +82,7 @@ import type {
   JournalSink,
   JournalWrite,
   WireEntity,
+  WireEntityVersion,
   WireOrigin,
   WireRelation,
 } from './types';
@@ -101,7 +103,7 @@ interface ExecCtx {
 }
 
 interface OpOutcome {
-  result: WireEntity | WireRelation | WireOrigin;
+  result: WireEntity | WireRelation | WireOrigin | WireEntityVersion;
   replay?: boolean;
 }
 
@@ -198,6 +200,45 @@ const entityOriginCreateInput = z
 const entityOriginDeleteInput = z
   .object({ namespace: z.string().min(1), external_id: z.string().min(1) })
   .strict();
+
+/**
+ * Внутренние операции закрепления версии тела (С11, ADE-срез 1). Как и origin-операции
+ * выше, они живут ЗДЕСЬ и в CORE_TOOLS не регистрируются: dispatchTool их не резолвит, в
+ * tools/list по MCP они не попадают. Единственный внешний путь — роутер version (tRPC), то
+ * есть рука владельца; модель закрепляет версию не сама, а прося владельца.
+ *
+ * id строки опционален: обычно его выбирает сервер (newId), но вызывающий вправе задать
+ * свой — тогда идентификатор снимка известен до записи. Повтор занятого id — не replay, а
+ * отказ CONFLICT (PK): у закрепления нет входа, по которому «повторить» было бы тем же
+ * снимком (тело сущности к этому моменту уже другое).
+ */
+const entityVersionPinInput = z
+  .object({
+    id: z.string().uuid().optional(),
+    entity_id: z.string().uuid(),
+    // 200 — подпись, а не заметка: она рисуется одной строкой в списке версий
+    label: z.string().min(1).max(200),
+  })
+  .strict();
+
+/** Ключ строки версии — её собственный id (в отличие от origins, тройки здесь нет). */
+const entityVersionDeleteInput = z.object({ id: z.string().uuid() }).strict();
+
+/**
+ * Wire-форма снимка: тела в ней нет (см. докблок WireEntityVersion) — вместо документа
+ * едет признак его наличия. actorKind в БД — text (колонка общая с будущими агентами),
+ * сужение до ActorKind законно: пишет её только executor из ExecuteRequest.
+ */
+function toWireEntityVersion(row: typeof entityVersions.$inferSelect): WireEntityVersion {
+  return {
+    id: row.id,
+    entityId: row.entityId,
+    label: row.label,
+    hasDoc: row.bodyDoc !== null,
+    actorKind: row.actorKind as ActorKind,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
 
 function toWireOrigin(row: typeof entityOrigins.$inferSelect): WireOrigin {
   return {
@@ -500,6 +541,8 @@ async function prepareOp(
   if (tool === 'relation_delete') return prepareRelationDelete(ctx, input, batch);
   if (tool === 'entity_origin_create') return prepareOriginCreate(ctx, input);
   if (tool === 'entity_origin_delete') return prepareOriginDelete(ctx, input);
+  if (tool === 'entity_version_pin') return prepareVersionPin(ctx, input, batch);
+  if (tool === 'entity_version_delete') return prepareVersionDelete(ctx, input);
   if (tool.startsWith('attach_')) {
     const aspectId = resolveAttachAspect(ctx.registry, tool);
     if (aspectId) return prepareAttach(ctx, tool, aspectId, input, batch);
@@ -1901,6 +1944,152 @@ async function prepareOriginDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pre
         });
       }
       return { result: toWireOrigin(gone) };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// entity_version_pin / entity_version_delete — закреплённые версии тела (С11)
+//
+// Внутренние операции (схемы выше): в реестр тулов не входят, но проходят те же стадии
+// конвейера, что и остальные, — и потому доступны Undo (внутренний режим проигрывает
+// inverse тем же execute). Снимок — ТЕЛО и только тело: аспекты, связи и заголовок в
+// версию не входят, поэтому и откат их не трогает (инвариант 8 среза).
+// ---------------------------------------------------------------------------
+
+async function prepareVersionPin(
+  ctx: ExecCtx,
+  rawInput: unknown,
+  batch?: BatchState,
+): Promise<PreparedOp> {
+  // Стадия 1
+  const input = parseEnvelope(entityVersionPinInput, rawInput, 'entity_version_pin');
+  const id = input.id ?? newId();
+  const now = ctx.clock();
+
+  // Стадия 3: сущность ПОД ЗАМКОМ. Замок здесь не ради merge (записи в entities нет), а
+  // ради честности снимка: без него конкурентная правка тела могла бы закоммититься между
+  // чтением и вставкой, и версия «до правки» содержала бы уже правленое тело.
+  // RLS: чужая и несуществующая неразличимы — единый NOT_FOUND (как у entity_update).
+  // Виртуальное состояние batch учитывается тем же хелпером: сущность, созданную
+  // ПРЕДЫДУЩЕЙ операцией того же batch, на стадии prepare в БД ещё не найти (§7.8).
+  const current = await loadEntityForUpdate(ctx, input.entity_id, batch);
+  if (!current) {
+    throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.entity_id });
+  }
+
+  const journal: JournalPlan = {
+    type: 'version_pinned',
+    entityId: input.entity_id,
+    tool: 'entity_version_pin',
+    title: `Закреплена версия «${input.label}»`,
+    operations: [
+      {
+        op: 'entity_version_pin',
+        // id — в операции журнала, а не только в inverse: по нему читается, что именно
+        // закрепило это действие, когда версия уже удалена откатом
+        payload: { id, entity_id: input.entity_id, label: input.label },
+      },
+    ],
+    // Откат закрепления УДАЛЯЕТ снимок физически: «версия, которую я не закреплял»,
+    // осталась бы висеть в списке навсегда — архивации у служебных строк нет (ср. §4.8)
+    inverse: [{ op: 'entity_version_delete', payload: { id } }],
+  };
+
+  return {
+    journal,
+    // Стадия 5
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      try {
+        const inserted = await applyCtx.tx
+          .insert(entityVersions)
+          .values({
+            id,
+            ownerId: applyCtx.req.actorUserId,
+            entityId: input.entity_id,
+            label: input.label,
+            body: current.body,
+            // Документ — КАК ЛЕЖИТ: у тела «до бэкфилла» его нет, и собирать его здесь
+            // значило бы записать в снимок разбор, которого в сущности не было. body
+            // (NOT NULL) переживает любую смену схемы документа — этого и достаточно.
+            bodyDoc: current.bodyDoc,
+            actorUserId: applyCtx.req.actorUserId,
+            actorKind: applyCtx.req.actorKind,
+            createdAt: now,
+          })
+          .returning();
+        const row = inserted[0];
+        if (!row) {
+          throw new ExecError('NOT_FOUND', 'версия не записана', { id }); // недостижимо
+        }
+        return { result: toWireEntityVersion(row) };
+      } catch (e) {
+        const pg = pgErrorInfo(e);
+        // Явный id занят: закрепление не идемпотентно по id (тело к повтору уже другое),
+        // поэтому 409, а не replay — тот же wire-контракт id_conflict, что у entity_create
+        if (pg.code === '23505') {
+          throw new ExecError('CONFLICT', 'id непригоден для закрепления — сгенерируйте новый', {
+            id,
+            reason: 'id_conflict',
+          });
+        }
+        throw e;
+      }
+    },
+  };
+}
+
+async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  // Стадия 1
+  const input = parseEnvelope(entityVersionDeleteInput, rawInput, 'entity_version_delete');
+
+  // Стадия 3: строка под замком — журнал должен нести entity_id удаляемой версии.
+  // Владелец — ЯВНЫМ предикатом поверх RLS, той же глубиной защиты, что у origin-удаления:
+  // это второе место исполнителя, удаляющее строку ФИЗИЧЕСКИ.
+  const rows = await ctx.tx
+    .select()
+    .from(entityVersions)
+    .where(and(eq(entityVersions.ownerId, ctx.req.actorUserId), eq(entityVersions.id, input.id)))
+    .for('update');
+  const row = rows[0];
+  if (!row) {
+    throw new ExecError('NOT_FOUND', 'версия не найдена', { id: input.id });
+  }
+
+  const journal: JournalPlan = {
+    type: 'version_deleted',
+    entityId: row.entityId,
+    tool: 'entity_version_delete',
+    title: `Удалена версия «${row.label}»`,
+    operations: [{ op: 'entity_version_delete', payload: { id: input.id } }],
+    // Пусто намеренно: операция достижима только как inverse закрепления, а undo самого
+    // undo в Orbis не существует (undo.ts:4-5 — undo не порождает нового action).
+    inverse: [],
+  };
+
+  return {
+    journal,
+    // Стадия 5: ФИЗИЧЕСКОЕ удаление — снимок тела, которого владелец не закреплял,
+    // хранить незачем (та же логика, что у provenance-строк §4.8)
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const deleted = await applyCtx.tx
+        .delete(entityVersions)
+        .where(
+          and(
+            // owner_id — тем же явным предикатом, что и SELECT ... FOR UPDATE выше
+            eq(entityVersions.ownerId, applyCtx.req.actorUserId),
+            eq(entityVersions.id, input.id),
+          ),
+        )
+        .returning();
+      const gone = deleted[0];
+      if (!gone) {
+        throw new ExecError('NOT_FOUND', 'версия не найдена', { id: input.id });
+      }
+      // Результат — wire-форма УДАЛЁННОЙ строки (как у entity_origin_delete): контракт
+      // операции требует минимум { id }, а полная форма его содержит и не заводит в
+      // закрытом union OpOutcome вырожденного типа ради одного поля.
+      return { result: toWireEntityVersion(gone) };
     },
   };
 }

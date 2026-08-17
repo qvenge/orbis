@@ -67,6 +67,26 @@ export interface WireOrigin {
   createdAt: string;
 }
 
+/**
+ * Wire-форма закреплённой версии тела (С11): результат внутренних операций
+ * entity_version_pin / entity_version_delete. Соседствует с WireOrigin по той же причине —
+ * это не сущность и не связь, а строка служебной таблицы, которой в публичном контракте
+ * §9.2 нет.
+ *
+ * Тела здесь нет НАМЕРЕННО: список версий рисует подписи и даты, а тащить в него по два
+ * тела на строку (markdown + документ) значит грузить экран текстом, который никто не
+ * читает. Вместо документа едет признак `hasDoc` — снимок сущности, чьё тело ещё не
+ * сконвертировано, хранит только markdown (body_doc IS NULL).
+ */
+export interface WireEntityVersion {
+  id: string;
+  entityId: string;
+  label: string;
+  hasDoc: boolean;
+  actorKind: ActorKind;
+  createdAt: string;
+}
+
 /** Wire-форма связи (§4.2): таймстампы — toISOString, как у сущностей. */
 export interface WireRelation {
   id: string;
@@ -103,6 +123,11 @@ export interface ActionRecord {
   // операций (executor.ts prepareOriginCreate/prepareOriginDelete), и они станут
   // наблюдаемыми у первого НЕ-batch вызывающего — убирать их значило бы заводить
   // отдельный, более узкий тип для плана той же операции.
+  //
+  // version_pinned/version_deleted — закрепление версии тела (С11): та же аддитивность.
+  // В отличие от origin-вариантов, version_pinned в записи НАБЛЮДАЕМ: version.pin —
+  // одиночный (не batch) вызывающий, его action ложится в журнал этим типом, и по нему
+  // «отмени последнее» находит закрепление. version_deleted достижим только как inverse.
   type:
     | 'entity_created'
     | 'entity_updated'
@@ -110,6 +135,8 @@ export interface ActionRecord {
     | 'relation_deleted'
     | 'origin_created'
     | 'origin_deleted'
+    | 'version_pinned'
+    | 'version_deleted'
     | 'batch';
   entity_id: string | null;
   actor_user_id: string;

@@ -12,7 +12,13 @@ import { issuePatGrant, revokeGrant, verifyBearer } from '../oauth/grants';
 import { projectBodyTemplate } from '../seed/project-body';
 import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
-import type { ExecuteOk, ExecuteRequest, WireEntity } from './types';
+import type {
+  ActionRecord,
+  ExecuteOk,
+  ExecuteRequest,
+  WireEntity,
+  WireEntityVersion,
+} from './types';
 import { InMemoryJournalSink } from './types';
 import { undoAction } from './undo';
 
@@ -921,5 +927,108 @@ describe('ADE-срез 1: инварианты назначения и засе�
     );
     expect(r2.ok).toBe(true);
     expect(await bodyOf(e2.id)).toBe('Своё.');
+  });
+});
+
+describe('ADE-срез 1: закреплённые версии тела (С11)', () => {
+  /** id снимков сущности, свежие сверху — под identity владельца (RLS §4.10). */
+  async function versionIdsOf(entityId: string): Promise<string[]> {
+    return withIdentity(db, userA, async (tx) => {
+      const rows = await tx.execute(
+        sql`SELECT id FROM entity_versions WHERE entity_id = ${entityId}
+            ORDER BY created_at DESC, id DESC`,
+      );
+      return [...rows].map((r) => r.id as string);
+    });
+  }
+
+  /** Action по id из журнала (§4.6): containment по GIN-индексу, как в undo.ts. */
+  async function actionOf(actionId: string): Promise<ActionRecord> {
+    const probe = JSON.stringify({ actions: [{ id: actionId }] });
+    return withIdentity(db, userA, async (tx) => {
+      const rows = await tx.execute(
+        sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
+      );
+      const meta = rows[0]?.metadata as { actions?: ActionRecord[] } | undefined;
+      const action = meta?.actions?.find((a) => a.id === actionId);
+      if (!action) throw new Error(`action ${actionId} не найден в журнале`);
+      return action;
+    });
+  }
+
+  test('28. entity_version_pin: снимок тела в журнале, undo удаляет строку физически', async () => {
+    const sink = makeChatJournalSink(); // undo ищет action в журнале — NOOP_SINK ему не годится
+    const e = firstEntity(
+      await execute(
+        db,
+        req('entity_create', { title: 'Под закрепление', tags: [], body: 'тело' }),
+        {
+          sink,
+        },
+      ),
+    );
+    const pinned = await execute(
+      db,
+      req('entity_version_pin', { entity_id: e.id, label: 'до правки' }),
+      { sink },
+    );
+    expect(pinned.ok).toBe(true);
+    const v = (pinned as ExecuteOk).results[0] as WireEntityVersion;
+    expect(v.entityId).toBe(e.id);
+    expect(v.label).toBe('до правки');
+    expect(v.hasDoc).toBe(true); // тело писал executor — документ у сущности есть
+    expect(v.actorKind).toBe('owner');
+    expect(await versionIdsOf(e.id)).toEqual([v.id]);
+
+    // Журнал §7.8: свой тип действия и inverse, физически снимающий закрепление
+    const actionId = (pinned as ExecuteOk).actionId;
+    const action = await actionOf(actionId);
+    expect(action.type).toBe('version_pinned');
+    expect(action.entity_id).toBe(e.id);
+    expect(action.inverse).toEqual([{ op: 'entity_version_delete', payload: { id: v.id } }]);
+
+    const undone = await undoAction(db, { actorUserId: userA, actionId });
+    expect(undone.ok).toBe(true);
+    expect(await versionIdsOf(e.id)).toEqual([]);
+  });
+
+  test('30. закрепление в batch: снимок берётся из виртуального состояния того же batch', async () => {
+    // Сущности на стадии prepare в БД ещё нет — её создаёт ПРЕДЫДУЩАЯ операция batch (§7.8),
+    // и тело снимка обязано быть её телом, а не отказом «сущность не найдена».
+    const id = newId();
+    const r = await execute(db, {
+      actorUserId: userA,
+      actorKind: 'owner',
+      source: 'fast_path',
+      clock: () => T0,
+      batchId: newId(),
+      operations: [
+        {
+          tool: 'entity_create',
+          input: { id, title: 'Создана и закреплена', tags: [], body: 'тело' },
+        },
+        { tool: 'entity_version_pin', input: { entity_id: id, label: 'сразу' } },
+      ],
+    });
+    expect(r.ok).toBe(true);
+    const v = (r as ExecuteOk).results[1] as WireEntityVersion;
+    expect(v.entityId).toBe(id);
+    expect(await versionIdsOf(id)).toEqual([v.id]);
+    const body = await withIdentity(db, userA, async (tx) => {
+      const rows = await tx.execute(sql`SELECT body FROM entity_versions WHERE id = ${v.id}`);
+      return rows[0]?.body as string;
+    });
+    expect(body).toBe('тело');
+  });
+
+  test('29. закрепление чужой сущности → NOT_FOUND (RLS §4.10), строка не появляется', async () => {
+    const e = firstEntity(await execute(db, req('entity_create', { title: 'Моё', tags: [] })));
+    const r = await execute(
+      db,
+      req('entity_version_pin', { entity_id: e.id, label: 'чужая' }, { actorUserId: userB }),
+    );
+    expect(r.ok).toBe(false);
+    expect((r as { error: { code: string } }).error.code).toBe('NOT_FOUND');
+    expect(await versionIdsOf(e.id)).toEqual([]);
   });
 });
