@@ -1,4 +1,4 @@
-// apps/server/src/agent-loop/test-helpers.ts
+// apps/server/src/test/agent-loop-helpers.ts
 // Обвязка интеграционных тестов круга исполнителя (verbs.test.ts, sweep.test.ts).
 // Не тест сам по себе — библиотека (bun test берёт только *.test.ts), прецедент —
 // src/test/perf.ts.

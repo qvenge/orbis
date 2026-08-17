@@ -10,6 +10,7 @@
 // `execute`. Журнал §7.8 с актором-агентом, inverse, Undo и карточки достаются даром,
 // а правило «один путь мутаций» (§9.1) не двоится. Собственных INSERT/UPDATE здесь нет.
 import {
+  type AgentRunAspect,
   type CheckpointInput,
   type CheckpointResult,
   type ClaimTaskInput,
@@ -147,47 +148,120 @@ function preconditionField(details: unknown): string | undefined {
   return typeof field === 'string' ? field : undefined;
 }
 
+/** Форма CAS-предусловия `entity_update` (exec-схема; тул-контракта модели не касается). */
+interface Precondition {
+  aspect: string;
+  field: string;
+  in: unknown[];
+}
+
 /** Найденный прогон либо готовый структурный отказ — «или/или» без исключений. */
 type RunLookup =
   | { run: RunRow; error?: undefined }
   | { run?: undefined; error: ToolDispatchResult };
 
 /**
- * Прогон под RLS владельца + предпроверки, общие трём глаголам.
+ * Прогон под RLS владельца + проверки принадлежности, общие трём глаголам.
  *
- * Три разных отказа намеренно: чужой владелец — `NOT_FOUND` (прогон за пределами графа
+ * Два разных отказа намеренно: чужой владелец — `NOT_FOUND` (прогон за пределами графа
  * агента для него не существует), чужой грант того же владельца — `CONFLICT` (прогон
- * есть, но он не твой: у владельца может работать второй исполнитель), терминальный
- * исход — `CONFLICT` со ссылкой на исход (инвариант 5), чтобы агент из ответа понял,
- * ЧТО случилось с его работой, и не повторял вызов.
+ * есть, но он не твой: у владельца может работать второй исполнитель). Проверка гранта
+ * остаётся ПРЕДпроверкой и при повторе с тем же `id`: replay executor'а отдаёт
+ * сохранённый ответ, не спрашивая, кто пришёл, — и чужой исполнитель получил бы чужой
+ * прогон.
  *
- * Предпроверка не отменяет предусловий самого update'а: между чтением и записью прогон
- * может подмести (С6). Она нужна ради внятного ответа — голый CONFLICT предусловия не
- * назвал бы исход и причину.
+ * Терминальности здесь НЕТ: она зависит от того, послан ли ключ идемпотентности, и
+ * решается в самих глаголах (см. `terminalError`).
  */
-async function readRun(ctx: VerbCtx, runId: string, tail: string): Promise<RunLookup> {
+async function readRun(ctx: VerbCtx, runId: string): Promise<RunLookup> {
   const row = await withIdentity(ctx.db, ctx.ownerId, (tx) => runById(tx, runId));
   if (row === null) return { error: err('NOT_FOUND', 'прогон не найден', { run_id: runId }) };
-  const run = row.run;
-  if (run.grant_id !== ctx.grant.id) {
+  if (row.run.grant_id !== ctx.grant.id) {
     return {
       error: err('CONFLICT', 'прогон принадлежит другому исполнителю', { run_id: runId }),
-    };
-  }
-  if (run.outcome !== 'running') {
-    return {
-      error: err('CONFLICT', `прогон завершён (${run.outcome}) — ${tail}`, {
-        run_id: runId,
-        outcome: run.outcome,
-        ...(run.abandon_note !== undefined && { note: run.abandon_note }),
-      }),
     };
   }
   return { run: row };
 }
 
+/**
+ * Отказ по терминальному прогону (инвариант 5): агент из ответа понимает, ЧТО случилось
+ * с его работой, и не повторяет вызов.
+ *
+ * Строится в двух местах — предпроверкой (вызов БЕЗ `id`) и по провалившемуся
+ * предусловию `outcome` (вызов со СВЕЖИМ `id`), — поэтому текст и details живут одной
+ * функцией: ответ обязан быть одинаковым независимо от того, послал агент ключ
+ * идемпотентности или нет.
+ */
+function terminalError(
+  runId: string,
+  outcome: string,
+  note: string | undefined,
+  tail: string,
+): ToolDispatchResult {
+  return err('CONFLICT', `прогон завершён (${outcome}) — ${tail}`, {
+    run_id: runId,
+    outcome,
+    ...(note !== undefined && { note }),
+  });
+}
+
+/**
+ * Терминальность ДО записи — только для вызова без ключа идемпотентности.
+ *
+ * С `id` отказывать по прочитанному состоянию нельзя: повтор того же вызова обязан
+ * вернуть сохранённый ответ (§7.8, С7), а replay executor проверяет ДО предусловий
+ * (executor.ts:380-385) — то есть уже внутри `execute`. Отказали бы здесь — повтор
+ * checkpoint/finish (и шага по закрытому прогону) навсегда получал бы CONFLICT вместо
+ * своего же результата, и агент считал бы работу несделанной.
+ */
+function terminalBeforeWrite(
+  run: AgentRunAspect,
+  runId: string,
+  callId: string | undefined,
+  tail: string,
+): ToolDispatchResult | null {
+  if (run.outcome === 'running' || callId !== undefined) return null;
+  return terminalError(runId, run.outcome, run.abandon_note, tail);
+}
+
+/**
+ * Тот же терминальный отказ, но по ответу executor'а: предусловие `outcome` провалилось,
+ * значит вызов пришёл со свежим `id` на уже закрытый прогон. Исход берём из `actual`
+ * (состояние ПОД замком), заметку об обрыве — из прочитанного прогона.
+ */
+function terminalFromPrecondition(
+  details: unknown,
+  run: AgentRunAspect,
+  runId: string,
+  tail: string,
+): ToolDispatchResult {
+  const actual = (details as { actual?: unknown } | null)?.actual;
+  return terminalError(
+    runId,
+    typeof actual === 'string' ? actual : run.outcome,
+    run.abandon_note,
+    tail,
+  );
+}
+
+/** Прогон из сохранённого ответа — тот же самый, наш и в ожидаемом исходе? */
+function savedRunMatches(
+  wire: WireEntity | null,
+  runId: string,
+  grantId: string,
+  outcome: string,
+): boolean {
+  if (wire === null || wire.id !== runId) return false;
+  const saved = wire.aspects['orbis/agent-run'];
+  // Грант — как в захвате: replay отдаёт сохранённый ответ, не спрашивая, кто пришёл.
+  // Исход — против переиспользования id между глаголами: под id чекпойнта лежит прогон
+  // в `checkpoint`, и отдать его как результат шага значило бы соврать про состояние.
+  return saved?.grant_id === grantId && saved?.outcome === outcome;
+}
+
 /** Предусловия «прогон всё ещё мой и всё ещё идёт» — общие шагу, чекпойнту и итогу. */
-function runStillMine(grantId: string): Array<{ aspect: string; field: string; in: unknown[] }> {
+function runStillMine(grantId: string): Precondition[] {
   return [
     { aspect: 'orbis/agent-run', field: 'outcome', in: ['running'] },
     { aspect: 'orbis/agent-run', field: 'grant_id', in: [grantId] },
@@ -440,16 +514,21 @@ const STEP_CAS_ATTEMPTS = 3;
  * в перечитывание: снаружи оба вызова успешны, порядок seq строгий.
  */
 async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchResult> {
+  // `id` вызова = batch_id action'а §7.8. Считается ОДИН раз, до цикла: между попытками
+  // он обязан оставаться тем же (проигравшая попытка ничего не записала, а ключ
+  // идемпотентности, меняющийся сам собой, раздвоил бы шаг при повторе от агента).
+  const batchId = input.id ?? newId();
+  const tail = 'новые шаги не принимаются';
   let lastConflict: ToolDispatchResult | null = null;
+
   for (let attempt = 0; attempt < STEP_CAS_ATTEMPTS; attempt++) {
-    const found = await readRun(ctx, input.run_id, 'новые шаги не принимаются');
+    const found = await readRun(ctx, input.run_id);
     if (found.error !== undefined) return found.error;
     const run = found.run.run;
+    const terminal = terminalBeforeWrite(run, input.run_id, input.id, tail);
+    if (terminal !== null) return terminal;
+
     const now = ctx.clock();
-    // `id` вызова = batch_id action'а §7.8; между попытками он НЕ меняется: проигравшая
-    // попытка ничего не записала (batch откатился целиком), а ключ идемпотентности
-    // обязан оставаться тем же — иначе повтор от агента раздвоил бы шаг.
-    const batchId = input.id ?? newId();
     const n = run.step_count;
     const step = {
       seq: n + 1,
@@ -495,11 +574,13 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
 
     if (r.ok) {
       const runWire = wireEntityAt(r.results, 0);
-      if (runWire === null || runWire.id !== found.run.id) {
+      // На повторе с тем же id (§7.8) операции не исполнялись, и в results лежит
+      // сохранённый ответ — снимок прогона на момент ТОГО шага (исход тогда был
+      // `running`, даже если прогон закрыли позже).
+      if (runWire === null || !savedRunMatches(runWire, found.run.id, ctx.grant.id, 'running')) {
         return replayMismatch('orbis_run_step', batchId);
       }
-      // Счётчик — из сохранённого ответа, а не локальное n+1: на повторе с тем же id
-      // (§7.8) операции не исполнялись, и правда о прогоне лежит только там.
+      // Счётчик — из сохранённого ответа, а не локальное n+1: правда о прогоне лежит там
       const saved = runWire.aspects['orbis/agent-run']?.step_count;
       const result: RunStepResult = {
         run_id: runWire.id,
@@ -508,11 +589,19 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
       };
       return ok(result);
     }
-    if (r.error.code === 'CONFLICT' && preconditionField(r.error.details) === 'step_count') {
-      lastConflict = { status: 'error', error: r.error };
-      continue;
+    if (r.error.code === 'CONFLICT') {
+      const field = preconditionField(r.error.details);
+      if (field === 'step_count') {
+        lastConflict = { status: 'error', error: r.error };
+        continue;
+      }
+      // Свежий id на уже закрытом прогоне: предпроверка его пропустила ради replay,
+      // отказ пришёл предусловием — но ответ агенту обязан быть тем же (инвариант 5)
+      if (field === 'outcome') {
+        return terminalFromPrecondition(r.error.details, run, input.run_id, tail);
+      }
     }
-    // Разошлось не по счётчику (прогон завершили или он уже не наш) — повторять нечего
+    // Разошлось не по счётчику и не по исходу — повторять нечего
     return { status: 'error', error: r.error };
   }
   // Три подряд проигранных CAS — отдаём последний отказ как есть (со всеми details):
@@ -530,6 +619,13 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
 // orbis_checkpoint / orbis_finish — прогон терминален, тикет возвращается человеку
 // ---------------------------------------------------------------------------
 
+/** Патч тикета вместе с его собственными предусловиями (у итога — право на `done`). */
+interface TicketUpdate {
+  aspects: Record<string, unknown>;
+  /** Сверх общего «тикет ещё в работе». */
+  precondition?: Precondition[];
+}
+
 /** Общая часть двух завершающих глаголов: что писать в прогон и что — в тикет. */
 interface CloseRunArgs {
   verb: 'orbis_checkpoint' | 'orbis_finish';
@@ -537,8 +633,10 @@ interface CloseRunArgs {
   id?: string;
   usage?: RunUsageInput;
   session_url?: string;
-  /** Отказ предпроверки терминальности: хвост сообщения «прогон завершён (…) — …». */
+  /** Отказ по терминальному прогону: хвост сообщения «прогон завершён (…) — …». */
   terminalTail: string;
+  /** Исход, в который глагол переводит прогон (он же — ожидаемый на replay). */
+  outcome: 'checkpoint' | 'finished';
   /**
    * Патч прогона поверх общего хвоста (finished_at, last_step_at, usage, session_url).
    * Функция от `now`, а не готовый объект: `asked_at` чекпойнта обязан совпасть с
@@ -546,8 +644,8 @@ interface CloseRunArgs {
    * одного события.
    */
   runPatch: (now: Date) => Record<string, unknown>;
-  /** Патч тикета; у итога зависит от may_close самого тикета (С8). */
-  taskPatch: (ticket: TicketRow) => Record<string, unknown>;
+  /** Обновление тикета; у итога зависит от may_close самого тикета (С8). */
+  ticketUpdate: (ticket: TicketRow) => TicketUpdate;
   /** Статусы тикета, допустимые в ответе: иное = сохранённый ответ чужого вызова. */
   expected: readonly TaskStatus[];
 }
@@ -561,9 +659,13 @@ interface CloseRunArgs {
  * даёт executor: обе операции в одной транзакции, один action §7.8, откат — общий.
  */
 async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchResult> {
-  const found = await readRun(ctx, args.run_id, args.terminalTail);
+  const found = await readRun(ctx, args.run_id);
   if (found.error !== undefined) return found.error;
   const run = found.run;
+  // Терминальность отдаётся сразу только без ключа идемпотентности: с ним вызов идёт в
+  // executor, потому что повтор ТОГО ЖЕ вызова обязан вернуть свой сохранённый ответ.
+  const terminal = terminalBeforeWrite(run.run, args.run_id, args.id, args.terminalTail);
+  if (terminal !== null) return terminal;
 
   const ticket = await withIdentity(ctx.db, ctx.ownerId, (tx) => ticketOfRun(tx, run.id));
   // Прогон-сирота: закрывать нечего и некуда отчитываться. Случай не гипотетический —
@@ -574,6 +676,7 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
 
   const now = ctx.clock();
   const batchId = args.id ?? newId();
+  const ticketUpdate = args.ticketUpdate(ticket);
   const operations = [
     {
       tool: 'entity_update',
@@ -597,8 +700,11 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
         id: ticket.id,
         // Тикет обязан быть ещё в работе: владелец мог вернуть его руками, и тогда
         // отчёт агента поверх его решения был бы перезаписью чужого действия.
-        precondition: [{ aspect: 'orbis/task', field: 'status', in: ['in_progress'] }],
-        aspects: { 'orbis/task': args.taskPatch(ticket) },
+        precondition: [
+          { aspect: 'orbis/task', field: 'status', in: ['in_progress'] },
+          ...(ticketUpdate.precondition ?? []),
+        ],
+        aspects: { 'orbis/task': ticketUpdate.aspects },
       },
     },
   ];
@@ -619,8 +725,13 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   );
   if (!r.ok) {
     if (r.error.code === 'CONFLICT') {
-      // Одно сообщение на оба предусловия — как в захвате: агент всё равно не исправит
-      // ни то, ни другое, а разбор остаётся в details (`precondition`, `actual`).
+      const field = preconditionField(r.error.details);
+      // Свежий id на уже закрытом прогоне — тот же ответ, что дала бы предпроверка
+      if (field === 'outcome') {
+        return terminalFromPrecondition(r.error.details, run.run, args.run_id, args.terminalTail);
+      }
+      // Одно сообщение на остальные предусловия — как в захвате: агент не исправит ни
+      // статус тикета, ни снятое право закрытия, а разбор остаётся в details.
       return err(
         'CONFLICT',
         'прогон уже завершён либо его тикет больше не в работе — начни с orbis_my_queue',
@@ -636,7 +747,7 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   if (
     runWire === null ||
     ticketWire === null ||
-    runWire.id !== run.id ||
+    !savedRunMatches(runWire, run.id, ctx.grant.id, args.outcome) ||
     ticketWire.id !== ticket.id ||
     typeof status !== 'string' ||
     !(args.expected as readonly string[]).includes(status)
@@ -668,11 +779,12 @@ async function checkpoint(ctx: VerbCtx, input: CheckpointInput): Promise<ToolDis
     ...(input.usage !== undefined && { usage: input.usage }),
     ...(input.session_url !== undefined && { session_url: input.session_url }),
     terminalTail: 'чекпойнт не принимается',
+    outcome: 'checkpoint',
     runPatch: (now) => ({
       outcome: 'checkpoint',
       checkpoint: { question: input.question, asked_at: iso(now) },
     }),
-    taskPatch: () => ({ status: 'waiting', waiting_for: input.question }),
+    ticketUpdate: () => ({ aspects: { status: 'waiting', waiting_for: input.question } }),
     expected: ['waiting'],
   });
   // Ответ — CheckpointResult, сужение FinishResult: `ticket_status` у чекпойнта всегда
@@ -698,13 +810,21 @@ async function finish(ctx: VerbCtx, input: FinishInput): Promise<ToolDispatchRes
     ...(input.usage !== undefined && { usage: input.usage }),
     ...(input.session_url !== undefined && { session_url: input.session_url }),
     terminalTail: 'итог не принимается',
+    outcome: 'finished',
     runPatch: () => ({ outcome: 'finished', report: input.report }),
-    taskPatch: (ticket) =>
+    ticketUpdate: (ticket) =>
       // Отсутствие may_close = запрет (С8): ajv default'ов не применяет, и «не сказано» —
       // это «нельзя», а не «можно».
       ticket.aspects['orbis/assignment']?.may_close === true
-        ? { status: 'done' }
-        : { status: 'waiting', waiting_for: input.report },
+        ? {
+            // Право сверяется ещё раз под замком: владелец мог снять may_close между
+            // нашим чтением и записью, и тогда `done` стал бы решением агента, а не его.
+            precondition: [{ aspect: 'orbis/assignment', field: 'may_close', in: [true] }],
+            // Уходя из waiting — снимаем waiting_for (конвенция среза, как в подметании):
+            // вопрос прошлого чекпойнта рядом с `done` читался бы как незакрытый.
+            aspects: { status: 'done', waiting_for: null },
+          }
+        : { aspects: { status: 'waiting', waiting_for: input.report } },
     expected: ['waiting', 'done'],
   });
 }

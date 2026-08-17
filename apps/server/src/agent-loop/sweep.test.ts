@@ -3,10 +3,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { MyQueueResult } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { type AnyRecord, agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool } from '../tools/dispatch';
 import { RUN_STALE_AFTER_MS } from './constants';
 import { sweepStaleRuns } from './sweep';
-import { type AnyRecord, agentLoopHelpers, iso, T0 } from './test-helpers';
 
 requireEnv();
 

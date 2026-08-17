@@ -14,9 +14,9 @@ import { newId } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { type AnyRecord, agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool } from '../tools/dispatch';
 import { sweepStaleRuns } from './sweep';
-import { type AnyRecord, agentLoopHelpers, iso, T0 } from './test-helpers';
 
 requireEnv();
 
@@ -442,8 +442,11 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
   const T1 = new Date(T0.getTime() + 5 * MINUTE);
   const T2 = new Date(T0.getTime() + 9 * MINUTE);
 
-  /** Тикет, назначенный основному гранту; may_close выдаёт владелец заранее (С8). */
-  async function makeTicket(title: string, mayClose = false): Promise<string> {
+  /**
+   * Тикет, назначенный основному гранту. `mayClose`: undefined — поля нет вовсе (обычный
+   * случай, «не сказано» = «нельзя», С8), true/false — владелец высказался явно.
+   */
+  async function makeTicket(title: string, mayClose?: boolean): Promise<string> {
     const e = await seedEntity(owner, {
       title,
       tags: [],
@@ -452,7 +455,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
         'orbis/assignment': {
           executor: 'agent',
           grant_id: grantId,
-          ...(mayClose && { may_close: true }),
+          ...(mayClose !== undefined && { may_close: mayClose }),
         },
       },
     });
@@ -462,7 +465,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
   /** Тикет, взятый в работу штатным глаголом: дальше проверяются шаги этого прогона. */
   async function claimed(
     title: string,
-    mayClose = false,
+    mayClose?: boolean,
   ): Promise<{ ticketId: string; runId: string }> {
     const ticketId = await makeTicket(title, mayClose);
     const c = okResult<ClaimTaskResult>(
@@ -471,17 +474,17 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     return { ticketId, runId: c.run_id };
   }
 
-  /** Владелец правит статус тикета руками — своим путём, не глаголом исполнителя. */
-  async function setTaskStatus(ticketId: string, status: string): Promise<void> {
+  /** Владелец правит тикет руками — своим путём, не глаголом исполнителя. */
+  async function patchTask(ticketId: string, patch: Record<string, unknown>): Promise<void> {
     const r = await execute(db, {
       actorUserId: owner,
       actorKind: 'owner',
       source: 'ui',
       operations: [
-        { tool: 'entity_update', input: { id: ticketId, aspects: { 'orbis/task': { status } } } },
+        { tool: 'entity_update', input: { id: ticketId, aspects: { 'orbis/task': patch } } },
       ],
     });
-    if (!r.ok) throw new Error(`setTaskStatus: ${r.error.code} ${r.error.message}`);
+    if (!r.ok) throw new Error(`patchTask: ${r.error.code} ${r.error.message}`);
   }
 
   beforeAll(async () => {
@@ -625,6 +628,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
 
   test('orbis_finish без may_close: тикет waiting «готово, проверь», НЕ done; report на прогоне (С8, приёмка 9)', async () => {
     const { ticketId, runId } = await claimed('Работа без права закрытия');
+    // Явный may_close=false — тот же исход, что и «поля нет»: см. хвост теста
     const report = 'Починил парсер, добавил тест. Проверь на ветке fix/parser.';
     const f = okResult<FinishResult>(
       await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
@@ -646,10 +650,26 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     expect(run.report).toBe(report);
     expect(run.finished_at).toBe(iso(T2));
     expect(run.last_step_at).toBe(iso(T2));
+
+    // may_close=false, выставленный явно, ничем не отличается от отсутствия поля
+    const denied = await claimed('Право закрытия отозвано явно', false);
+    const d = okResult<FinishResult>(
+      await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
+        run_id: denied.runId,
+        report: 'Сделал, закрывать не мне.',
+      }),
+    );
+    expect(d.ticket_status).toBe('waiting');
+    expect((await aspectsOf(owner, denied.ticketId))['orbis/task']).toMatchObject({
+      status: 'waiting',
+    });
   });
 
-  test('orbis_finish с may_close=true: тикет done, completed_at проставлен сервером', async () => {
+  test('orbis_finish с may_close=true: тикет done, completed_at проставлен сервером, waiting_for снят', async () => {
     const { ticketId, runId } = await claimed('Работа с правом закрытия', true);
+    // Хвост от прошлого ожидания владельца: уходя из waiting, глагол обязан его снять —
+    // иначе рядом с `done` висел бы незакрытый вопрос
+    await patchTask(ticketId, { waiting_for: 'старый вопрос с чекпойнта' });
     const f = okResult<FinishResult>(
       await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
         run_id: runId,
@@ -662,10 +682,84 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     expect(task.status).toBe('done');
     // completed_at ставит сам executor (§3.2) — глагол его не подставляет
     expect(task.completed_at).toBe(iso(T2));
+    expect(task.waiting_for).toBeUndefined();
 
     const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
     expect(run.outcome).toBe('finished');
     expect(run.report).toBe('Готово, тикет можно закрывать.');
+  });
+
+  test('повтор orbis_finish с тем же id — replay: тот же ответ, вторая работа не делалась (§7.8, С7)', async () => {
+    const { ticketId, runId } = await claimed('Идемпотентный итог');
+    const callId = newId();
+    const ctx = worker(owner, grantId, { clock: () => T2 });
+    const report = 'Готово, проверь ветку.';
+    const a = okResult<FinishResult>(
+      await dispatchTool(ctx, 'orbis_finish', { run_id: runId, report, id: callId }),
+    );
+    // Повтор идёт по УЖЕ терминальному прогону: отказать по прочитанному состоянию
+    // нельзя — сохранённый ответ обязан вернуться (иначе агент сочтёт работу несделанной)
+    const b = okResult<FinishResult>(
+      await dispatchTool(ctx, 'orbis_finish', { run_id: runId, report, id: callId }),
+    );
+    expect(b).toEqual(a);
+    expect(b.action_id).toBe(callId);
+    // Ровно один action на оба вызова — второй раз ничего не применялось
+    expect((await actionsOf(owner)).filter((x) => x.id === callId)).toHaveLength(1);
+
+    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
+    expect(run.outcome).toBe('finished');
+    expect(run.finished_at).toBe(iso(T2));
+    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'waiting' });
+  });
+
+  test('повтор orbis_checkpoint с тем же id — replay: тот же ответ, второй вопрос не задан', async () => {
+    const { ticketId, runId } = await claimed('Идемпотентный чекпойнт');
+    const callId = newId();
+    const ctx = worker(owner, grantId, { clock: () => T2 });
+    const question = 'Брать zod или ajv?';
+    const a = okResult<CheckpointResult>(
+      await dispatchTool(ctx, 'orbis_checkpoint', { run_id: runId, question, id: callId }),
+    );
+    const b = okResult<CheckpointResult>(
+      await dispatchTool(ctx, 'orbis_checkpoint', { run_id: runId, question, id: callId }),
+    );
+    expect(b).toEqual(a);
+    expect(b.ticket_status).toBe('waiting');
+    expect((await actionsOf(owner)).filter((x) => x.id === callId)).toHaveLength(1);
+    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({
+      status: 'waiting',
+      waiting_for: question,
+    });
+  });
+
+  test('повтор orbis_run_step с тем же id ПОСЛЕ закрытия прогона — replay, а не CONFLICT', async () => {
+    const { runId } = await claimed('Шаг, переживший закрытие');
+    const callId = newId();
+    const a = okResult<RunStepResult>(
+      await dispatchTool(worker(owner, grantId, { clock: () => T1 }), 'orbis_run_step', {
+        run_id: runId,
+        summary: 'Единственный шаг',
+        id: callId,
+      }),
+    );
+    await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
+      run_id: runId,
+      report: 'Готово',
+    });
+    // Ретрай сети приходит уже к закрытому прогону: у вызова есть ключ идемпотентности,
+    // и правильный ответ — сохранённый результат ТОГО шага, а не отказ по исходу
+    const b = okResult<RunStepResult>(
+      await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_run_step', {
+        run_id: runId,
+        summary: 'Единственный шаг',
+        id: callId,
+      }),
+    );
+    expect(b).toEqual(a);
+    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
+    expect(run.step_count).toBe(1);
+    expect(run.outcome).toBe('finished');
   });
 
   test('терминальность (инвариант 5): после checkpoint, finish и подметания orbis_run_step и orbis_finish → CONFLICT со ссылкой на исход', async () => {
@@ -708,6 +802,34 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     );
     expect(stepAfterFinish.code).toBe('CONFLICT');
     expect((stepAfterFinish.details as AnyRecord).outcome).toBe('finished');
+    const finishAfterFinish = errorOf(
+      await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
+        run_id: fin.runId,
+        report: 'ещё один итог',
+      }),
+    );
+    expect(finishAfterFinish.code).toBe('CONFLICT');
+    expect((finishAfterFinish.details as AnyRecord).outcome).toBe('finished');
+    // СВЕЖИЙ id предпроверку проходит (она пропускает вызовы с ключом ради replay) —
+    // отказ приходит предусловием, но ответ обязан быть тем же самым
+    const finishFreshId = errorOf(
+      await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
+        run_id: fin.runId,
+        report: 'итог со свежим id',
+        id: newId(),
+      }),
+    );
+    expect(finishFreshId.code).toBe('CONFLICT');
+    expect((finishFreshId.details as AnyRecord).outcome).toBe('finished');
+    const stepFreshId = errorOf(
+      await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_run_step', {
+        run_id: fin.runId,
+        summary: 'шаг со свежим id',
+        id: newId(),
+      }),
+    );
+    expect(stepFreshId.code).toBe('CONFLICT');
+    expect((stepFreshId.details as AnyRecord).outcome).toBe('finished');
 
     // Подметённый прогон терминален так же: агент вернулся через час — работа уже не его
     const ab = await claimed('Терминальность брошенного');
@@ -726,11 +848,22 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     expect(stepAfterSweep.code).toBe('CONFLICT');
     expect((stepAfterSweep.details as AnyRecord).outcome).toBe('abandoned');
     expect(String((stepAfterSweep.details as AnyRecord).note)).toContain('оборван');
+    const finishAfterSweep = errorOf(
+      await dispatchTool(
+        worker(owner, grantId, { clock: () => new Date(T0.getTime() + 32 * MINUTE) }),
+        'orbis_finish',
+        { run_id: ab.runId, report: 'итог после обрыва', id: newId() },
+      ),
+    );
+    expect(finishAfterSweep.code).toBe('CONFLICT');
+    expect((finishAfterSweep.details as AnyRecord).outcome).toBe('abandoned');
+    // Заметка об обрыве едет и по пути предусловия: её глагол берёт из прочитанного прогона
+    expect(String((finishAfterSweep.details as AnyRecord).note)).toContain('оборван');
   });
 
   test('orbis_finish по тикету не в in_progress (владелец вернул руками) → CONFLICT, прогон остался running', async () => {
     const { ticketId, runId } = await claimed('Владелец вернул тикет');
-    await setTaskStatus(ticketId, 'planned');
+    await patchTask(ticketId, { status: 'planned' });
 
     const e = errorOf(
       await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
