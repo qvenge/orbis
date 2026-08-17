@@ -79,6 +79,23 @@ describe('валидация аспектов по реестру (ajv strict, �
     );
   });
 
+  test('orbis/assignment: uuid-формат grant_id доезжает до ajv, may_close без default', () => {
+    // Инвариант «executor=agent ⇒ grant_id живого гранта владельца» держит assertAssignment,
+    // но САМ формат обязан жить в реестре: иначе прод примет строку-мусор в grant_id.
+    expect(
+      accepts('orbis/assignment', {
+        executor: 'agent',
+        grant_id: '019a0000-0000-7000-8000-000000000001',
+      }),
+    ).toBe(true);
+    expect(accepts('orbis/assignment', { executor: 'agent', grant_id: 'не-uuid' })).toBe(false);
+    expect(accepts('orbis/assignment', { executor: 'кто-то' })).toBe(false);
+    // may_close опционален и БЕЗ default'а: ajv их не применяет (С8), отсутствие = false
+    expect(accepts('orbis/assignment', { executor: 'human', assignee: 'Биржан' })).toBe(true);
+    expect(accepts('orbis/assignment', { executor: 'human', assignee: '' })).toBe(false);
+    expect(accepts('orbis/assignment', { executor: 'human', may_close: 'да' })).toBe(false);
+  });
+
   test('схемы ВСЕХ builtin-аспектов компилируются ajv в strict-режиме', () => {
     // strict:true бросает на незнакомых ключевых словах — сторож того, что генератор
     // не выдал в реестр конструкцию, которую прод-валидатор не примет. Список берётся из

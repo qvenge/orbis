@@ -105,6 +105,61 @@ export const BUILTIN_ASPECT_META: BuiltinAspectMeta[] = [
     tagMappings: ['goal'],
     viewConfig: { keyFields: ['target_value', 'current_value', 'unit'] },
   },
+  {
+    id: 'orbis/project',
+    name: 'Project',
+    namespace: 'orbis',
+    icon: '📁',
+    description: 'Затея с жизненным циклом; тикеты — дочерние задачи',
+    aiInstructions:
+      'orbis/project — проект: затея с жизненным циклом (stage: active|paused|done). Тикеты проекта — ' +
+      'дочерние сущности с orbis/task (relation parent от проекта к тикету). «Сделай A, B, C» в треде ' +
+      'проекта = создать по тикету на пункт (status inbox), детьми проекта. Тело проекта с живыми ' +
+      'блоками сервер засевает сам при пустом теле — не пиши его вручную. Кодовое (репозиторий, ' +
+      'ветка) — в orbis/repo на той же сущности, не здесь.',
+    tagMappings: ['project', 'проект'],
+    viewConfig: { keyFields: ['stage'] },
+  },
+  {
+    id: 'orbis/repo',
+    name: 'Repo',
+    namespace: 'orbis',
+    icon: '🗂️',
+    description: 'Адрес репозитория и ветка по умолчанию',
+    aiInstructions:
+      'orbis/repo — репозиторий код-проекта: url и default_branch. Ставится на ту же сущность, что ' +
+      'orbis/project, только если проект — про код.',
+    tagMappings: ['repo', 'репозиторий'],
+    viewConfig: { keyFields: ['url', 'default_branch'] },
+  },
+  {
+    id: 'orbis/assignment',
+    name: 'Assignment',
+    namespace: 'orbis',
+    icon: '🎯',
+    description: 'Исполнитель тикета: человек или агент по гранту; may_close',
+    aiInstructions:
+      'orbis/assignment — исполнитель тикета. executor=agent требует grant_id — uuid доступа из ' +
+      '«Настройки → Агенты»; его выставляет владелец (обычно кнопкой на экране тикета) — НИКОГДА не ' +
+      'выдумывай uuid и не подставляй чужой. executor=human — assignee текстом. may_close (по ' +
+      'умолчанию false) разрешает исполнителю закрывать тикет самому — включай только по прямой просьбе.',
+    tagMappings: ['assignee', 'исполнитель'],
+    viewConfig: { keyFields: ['executor', 'may_close'] },
+  },
+  {
+    id: 'orbis/agent-run',
+    name: 'Agent run',
+    namespace: 'orbis',
+    icon: '🤖',
+    description: 'Служебная сущность прогона агента: шаги, исход, расход',
+    aiInstructions:
+      'orbis/agent-run — прогон исполнителя по тикету (дочерняя сущность тикета). Создаётся и ' +
+      'обновляется ТОЛЬКО глаголами orbis_claim_task / orbis_run_step / orbis_checkpoint / ' +
+      'orbis_finish; вручную не создавай и не правь. Служебный: в основных выдачах не показывается, ' +
+      'запрашивай явно через aspect=orbis/agent-run.',
+    tagMappings: [],
+    viewConfig: { keyFields: ['outcome', 'step_count'] },
+  },
 ];
 
 /**

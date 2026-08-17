@@ -15,6 +15,7 @@ import {
   parseQuery,
   relationCreateInput,
   relationDeleteInput,
+  SERVICE_ASPECT_IDS,
 } from '@orbis/shared';
 import { eq, isNull, sql } from 'drizzle-orm';
 import type { z } from 'zod';
@@ -100,20 +101,30 @@ const CORE_NAMES = [
   'import_csv_start', // C4c: вход в импорт из чата (03-budget §3.4), internalOnly
 ] as const;
 
-const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.map(
-  (id) => `attach_${id.replaceAll('/', '_').replaceAll('-', '_')}`,
-);
+/** Служебные аспекты (orbis/agent-run) attach_*-тула не получают — их правит только сервер. */
+const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.filter(
+  (id) => !(SERVICE_ASPECT_IDS as readonly string[]).includes(id),
+).map((id) => `attach_${id.replaceAll('/', '_').replaceAll('-', '_')}`);
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 10 core + thread_post + 8 attach_* = 19', async () => {
+  test('builtin-реестр (userB без кастомных): 11 core (с thread_post) + 11 attach_* = 22', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
     expect(names).toContain('thread_post');
     for (const name of BUILTIN_ATTACH_NAMES) expect(names).toContain(name);
-    expect(defs.length).toBe(19);
+    expect(defs.length).toBe(22);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  test('служебный orbis/agent-run — БЕЗ attach_*-тула, остальные аспекты среза — с ним', async () => {
+    // Прогон правит только сервер (С5/С7): без тула модель не создаст прогон мимо глаголов.
+    const names = (await registryFor(userB)).map((d) => d.name);
+    expect(names).not.toContain('attach_orbis_agent_run');
+    expect(names).toContain('attach_orbis_project');
+    expect(names).toContain('attach_orbis_repo');
+    expect(names).toContain('attach_orbis_assignment');
   });
 
   test('имена тулов без «/» (и вообще только [a-z0-9_])', async () => {
@@ -246,7 +257,7 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(def.kind).toBe('mutate');
     expect(def.description).toBe('Пиши часы сна числом.');
     expect((def.inputJsonSchema.properties as Record<string, unknown>).data).toEqual(CUSTOM_SCHEMA);
-    expect(defsA.length).toBe(20);
+    expect(defsA.length).toBe(23);
 
     const defsB = await registryFor(userB);
     expect(defsB.some((d) => d.name === 'attach_user_sleep_log')).toBe(false);

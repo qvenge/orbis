@@ -146,6 +146,74 @@ export const goalAspectSchema = z
   })
   .strict();
 
+// ─── ADE-срез 1 (спека 2026-08-14, С4) ────────────────────────────────────────
+// Поле жизненного цикла названо `stage`, а не `status`: второе поле `status` в реестре сделало бы
+// каждый запрос `status=…` без `aspect=` неоднозначным (query/parse.ts resolveField), включая
+// сохранённые владельцем блоки. То же — `outcome` у прогона.
+export const projectAspectSchema = z
+  .object({ stage: z.enum(['active', 'paused', 'done']) })
+  .strict();
+
+// Кодовая специфика отдельно от общего понятия проекта (решение владельца 2026-08-17, D35).
+export const repoAspectSchema = z
+  .object({ url: z.string().min(1).max(512), default_branch: z.string().min(1).max(128) })
+  .strict();
+
+// Плоский объект вместо discriminatedUnion: каталог грамматики читает `properties` верхнего
+// уровня, у oneOf их нет — поля стали бы невидимы для query-блоков. Условие
+// «executor=agent ⇒ grant_id живого гранта владельца» держит инвариант executor'а
+// (assertAssignment), потому что .refine исчезает при генерации JSON Schema, а валидирует ajv.
+export const assignmentAspectSchema = z
+  .object({
+    executor: z.enum(['human', 'agent']),
+    grant_id: z.string().uuid().optional(), // agent_grants.id; выставляет владелец, модель не выдумывает
+    assignee: z.string().min(1).max(200).optional(), // executor=human: кто
+    may_close: z.boolean().optional(), // отсутствует = false (С8): ajv default'ы не применяет
+  })
+  .strict();
+
+export const RUN_OUTCOMES = ['running', 'checkpoint', 'finished', 'abandoned'] as const;
+const runStepSchema = z
+  .object({
+    seq: z.number().int().positive(),
+    at: timestampString,
+    summary: z.string().min(1).max(500),
+    external: z.boolean(), // «тронул внешнее»: ветка, файлы, сеть — вне Orbis (С5, С6)
+    action_id: z.string().uuid().optional(), // action §7.8 этого шага (= batchId вызова)
+  })
+  .strict();
+const runUsageSchema = z
+  .object({
+    input_tokens: z.number().int().nonnegative().optional(),
+    output_tokens: z.number().int().nonnegative().optional(),
+    cost_usd: z.number().nonnegative().optional(),
+  })
+  .strict();
+export const agentRunAspectSchema = z
+  .object({
+    grant_id: z.string().uuid(),
+    project_id: z.string().uuid().optional(), // денормализация: `this` грамматики не достаёт внуков
+    outcome: z.enum(RUN_OUTCOMES),
+    started_at: timestampString,
+    finished_at: timestampString.optional(),
+    last_step_at: timestampString, // отметка живости = время последнего шага (С6)
+    step_count: z.number().int().nonnegative(), // CAS-счётчик для конкурентных шагов + фильтруемая длина
+    steps: z.array(runStepSchema).max(500),
+    session_url: z.string().url().optional(),
+    report: z.string().max(20000).optional(), // «готово, проверь» (С8)
+    checkpoint: z
+      .object({ question: z.string().min(1).max(4000), asked_at: timestampString })
+      .strict()
+      .optional(),
+    reply: z
+      .object({ text: z.string().min(1).max(4000), at: timestampString })
+      .strict()
+      .optional(), // ответ владельца
+    usage: runUsageSchema.optional(),
+    abandon_note: z.string().max(2000).optional(), // подметание С6
+  })
+  .strict();
+
 export const ASPECT_SCHEMAS = {
   'orbis/schedule': scheduleAspectSchema,
   'orbis/task': taskAspectSchema,
@@ -155,6 +223,10 @@ export const ASPECT_SCHEMAS = {
   'orbis/category': categoryAspectSchema,
   'orbis/memory': memoryAspectSchema,
   'orbis/goal': goalAspectSchema,
+  'orbis/project': projectAspectSchema,
+  'orbis/repo': repoAspectSchema,
+  'orbis/assignment': assignmentAspectSchema,
+  'orbis/agent-run': agentRunAspectSchema,
 } as const satisfies Record<AspectId, z.ZodTypeAny>;
 
 export function aspectJsonSchema(id: AspectId): Record<string, unknown> {
@@ -169,3 +241,8 @@ export type BudgetAspect = z.infer<typeof budgetAspectSchema>;
 export type CategoryAspect = z.infer<typeof categoryAspectSchema>;
 export type MemoryAspect = z.infer<typeof memoryAspectSchema>;
 export type GoalAspect = z.infer<typeof goalAspectSchema>;
+export type ProjectAspect = z.infer<typeof projectAspectSchema>;
+export type RepoAspect = z.infer<typeof repoAspectSchema>;
+export type AssignmentAspect = z.infer<typeof assignmentAspectSchema>;
+export type AgentRunAspect = z.infer<typeof agentRunAspectSchema>;
+export type AgentRunStep = z.infer<typeof runStepSchema>;

@@ -223,12 +223,23 @@ describe('buildFieldCatalog: эвристика propType по фактическ
     expect(catalog.fields.recurrence?.[0]?.type).toBe('unfilterable');
     expect(catalog.fields.progress_source?.[0]?.type).toBe('unfilterable');
   });
-  test('не-скаляры реестра исчерпываются этими тремя полями', () => {
+  test('не-скаляры реестра исчерпываются этими семью полями', () => {
     const odd = Object.entries(catalog.fields)
       .filter(([, infos]) => infos.some((i) => i.type === 'array' || i.type === 'unfilterable'))
       .map(([name]) => name)
       .sort();
-    expect(odd).toEqual(['aliases', 'progress_source', 'recurrence']);
+    // checkpoint/reply/steps/usage приехали с orbis/agent-run (ADE-срез 1): объекты и массив
+    // объектов. Фильтра грамматики для них нет — прогон отбирают по outcome и step_count,
+    // а не по вложенным структурам; список пересчитан осознанно, а не подогнан под падение.
+    expect(odd).toEqual([
+      'aliases',
+      'checkpoint',
+      'progress_source',
+      'recurrence',
+      'reply',
+      'steps',
+      'usage',
+    ]);
   });
 });
 

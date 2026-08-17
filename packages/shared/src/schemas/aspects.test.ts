@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { ASPECT_SCHEMAS, aspectJsonSchema } from './aspects';
+import {
+  ASPECT_SCHEMAS,
+  agentRunAspectSchema,
+  aspectJsonSchema,
+  assignmentAspectSchema,
+  projectAspectSchema,
+  repoAspectSchema,
+} from './aspects';
 
 describe('схемы аспектов (01 §3.1–§3.7)', () => {
   test('orbis/task: полный и минимальный валидны; статус вне enum — нет', () => {
@@ -172,5 +179,67 @@ describe('схемы аспектов (01 §3.1–§3.7)', () => {
     ]);
     expect(js.properties.priority.enum).toEqual(['low', 'medium', 'high']);
     expect(js.required).toContain('status');
+  });
+});
+
+describe('аспекты ADE-среза 1 (С4)', () => {
+  test('orbis/project: stage обязателен, лишние ключи отвергаются', () => {
+    expect(projectAspectSchema.safeParse({ stage: 'active' }).success).toBe(true);
+    expect(projectAspectSchema.safeParse({}).success).toBe(false);
+    expect(projectAspectSchema.safeParse({ stage: 'active', status: 'x' }).success).toBe(false);
+  });
+  test('orbis/repo: url и default_branch', () => {
+    expect(
+      repoAspectSchema.safeParse({ url: 'https://github.com/qvenge/orbis', default_branch: 'main' })
+        .success,
+    ).toBe(true);
+    expect(repoAspectSchema.safeParse({ url: '' }).success).toBe(false);
+  });
+  test('orbis/assignment: executor agent|human, grant_id — uuid, may_close необязателен', () => {
+    expect(
+      assignmentAspectSchema.safeParse({
+        executor: 'agent',
+        grant_id: '019a0000-0000-7000-8000-000000000001',
+      }).success,
+    ).toBe(true);
+    expect(
+      assignmentAspectSchema.safeParse({ executor: 'human', assignee: 'Биржан', may_close: true })
+        .success,
+    ).toBe(true);
+    expect(
+      assignmentAspectSchema.safeParse({ executor: 'agent', grant_id: 'не-uuid' }).success,
+    ).toBe(false);
+  });
+  test('orbis/agent-run: полный прогон с шагом валиден; steps > 500 отвергается', () => {
+    const run = {
+      grant_id: '019a0000-0000-7000-8000-000000000001',
+      outcome: 'running',
+      started_at: '2026-08-17T10:00:00.000Z',
+      last_step_at: '2026-08-17T10:05:00.000Z',
+      step_count: 1,
+      steps: [{ seq: 1, at: '2026-08-17T10:05:00.000Z', summary: 'создал ветку', external: true }],
+    };
+    expect(agentRunAspectSchema.safeParse(run).success).toBe(true);
+    const many = {
+      ...run,
+      steps: Array.from({ length: 501 }, (_, i) => ({
+        seq: i + 1,
+        at: run.last_step_at,
+        summary: 's',
+        external: false,
+      })),
+    };
+    expect(agentRunAspectSchema.safeParse(many).success).toBe(false);
+  });
+  test('JSON Schema новых аспектов генерируется и не содержит refine-логики', () => {
+    for (const id of [
+      'orbis/project',
+      'orbis/repo',
+      'orbis/assignment',
+      'orbis/agent-run',
+    ] as const) {
+      const js = aspectJsonSchema(id) as { additionalProperties?: boolean };
+      expect(js.additionalProperties).toBe(false);
+    }
   });
 });

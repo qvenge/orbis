@@ -406,7 +406,7 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
 // ---------------------------------------------------------------------------
 
 describe('/mcp tools/list (§9.2)', () => {
-  test('состав = публичный реестр: 7 core + thread_post + 8 attach_*, без internalOnly; имена/описания/схемы дословно', async () => {
+  test('состав = публичный реестр: 9 публичных core (с thread_post) + 11 attach_*, без internalOnly; имена/описания/схемы дословно', async () => {
     const agent = await connectAgent(mainUrl());
     try {
       const { tools } = await agent.listTools();
@@ -422,10 +422,13 @@ describe('/mcp tools/list (§9.2)', () => {
         'relation_create',
         'relation_delete',
         'batch_execute',
+        'budget_status',
         'thread_post',
       ]) {
         expect(names).toContain(name);
       }
+      // orbis/agent-run в списке нет намеренно: служебный аспект attach_*-тула не получает
+      // (SERVICE_ASPECT_IDS) — прогон правит только сервер своими глаголами.
       for (const aspect of [
         'schedule',
         'task',
@@ -435,15 +438,19 @@ describe('/mcp tools/list (§9.2)', () => {
         'category',
         'memory',
         'goal',
+        'project',
+        'repo',
+        'assignment',
       ]) {
         expect(names).toContain(`attach_orbis_${aspect}`);
       }
+      expect(names).not.toContain('attach_orbis_agent_run');
 
       // Дословная сверка с реестром (имя, описание, inputSchema) — адаптер ничего не
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
       const publicDefs = defs.filter((d) => d.internalOnly !== true);
-      expect(tools).toHaveLength(publicDefs.length); // builtin-набор: 16
+      expect(tools).toHaveLength(publicDefs.length); // builtin-набор: 20
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);
         expect(tool).toBeDefined();

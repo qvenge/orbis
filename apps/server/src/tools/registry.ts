@@ -8,7 +8,7 @@
 // JSON Schema уходит в определения тулов LLM/MCP. Парность двух представлений
 // (ключи и required) закреплена тестом registry.test.ts — рассинхрон падает в CI.
 
-import { RELATION_TYPES } from '@orbis/shared';
+import { RELATION_TYPES, SERVICE_ASPECT_IDS } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { aspectDefinitions } from '../db/schema';
@@ -458,9 +458,20 @@ function attachToolDef(row: AspectToolRow): OrbisToolDef {
   };
 }
 
-/** Сборка реестра из загруженных строк аспектов (синхронная часть — для dispatch). */
+/**
+ * Сборка реестра из загруженных строк аспектов (синхронная часть — для dispatch).
+ *
+ * Служебные аспекты (`SERVICE_ASPECT_IDS`, сегодня — orbis/agent-run) attach_*-тула НЕ
+ * получают: прогон правит только сервер (С5/С7) глаголами orbis_claim_task / orbis_run_step
+ * / orbis_checkpoint / orbis_finish. Без тула модель не сможет создать или переписать прогон
+ * мимо глаголов. Фильтр стоит здесь, а не в `loadAspectToolRows`: этим же путём идут
+ * `buildToolRegistry` и `scripts/llm-smoke.ts` — отсечение одно на всех потребителей.
+ */
 export function buildToolDefs(aspectRows: AspectToolRow[]): OrbisToolDef[] {
-  return [...CORE_TOOLS, ...aspectRows.map(attachToolDef)];
+  const attachable = aspectRows.filter(
+    (r) => !(SERVICE_ASPECT_IDS as readonly string[]).includes(r.id),
+  );
+  return [...CORE_TOOLS, ...attachable.map(attachToolDef)];
 }
 
 /** Собирает реестр: core-тулы §9.2 + attach_<aspect> для каждого активного аспекта (§7.6). */

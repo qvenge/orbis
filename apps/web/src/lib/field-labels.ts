@@ -16,6 +16,24 @@ const FIELD_LABELS: Record<string, string> = {
   current_value: 'сейчас',
   unit: 'единица',
   progress_source: 'источник прогресса',
+  // Поля аспектов ADE-среза 1 (project/repo/assignment/agent-run): их показывают карточки
+  // чата и свойства в Detail ровно тем же путём, что и остальные — без подписи приехал бы
+  // сырой ключ схемы.
+  stage: 'стадия',
+  url: 'адрес',
+  default_branch: 'ветка по умолчанию',
+  executor: 'исполнитель',
+  grant_id: 'доступ агента',
+  assignee: 'кто',
+  may_close: 'может закрывать',
+  outcome: 'исход',
+  started_at: 'начало',
+  finished_at: 'конец',
+  last_step_at: 'последний шаг',
+  step_count: 'шагов',
+  session_url: 'сессия',
+  report: 'отчёт',
+  project_id: 'проект',
 };
 
 export function fieldLabel(key: string): string {
@@ -51,6 +69,12 @@ const ASPECT_LABELS: Record<string, string> = {
   // Форма query-блока и карточки аспектов показывают весь реестр: без подписи цель
   // стояла бы в списке сырым 'orbis/goal'.
   'orbis/goal': 'Цель',
+  // Аспекты ADE-среза 1: тот же список выбора в форме query-блока и те же карточки —
+  // без подписи стояли бы сырыми id.
+  'orbis/project': 'Проект',
+  'orbis/repo': 'Репозиторий',
+  'orbis/assignment': 'Назначение',
+  'orbis/agent-run': 'Прогон исполнителя',
 };
 
 export function aspectLabel(id: string): string {
