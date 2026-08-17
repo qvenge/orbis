@@ -203,5 +203,19 @@
     "params": ["orbis/agent-run", "orbis/category", "orbis/category", "aliases", "такси", 500],
     "countSql": "SELECT count(*) FROM entities WHERE true AND NOT archived AND NOT (aspects ?| ARRAY[$1]::text[]) AND aspects ? $2 AND NOT (aspects @> jsonb_build_object($3::text, jsonb_build_object($4::text, jsonb_build_array($5::text))))",
     "countParams": ["orbis/agent-run", "orbis/category", "orbis/category", "aliases", "такси"]
+  },
+  {
+    "name": "Спасительный люк §3.9: aspect=orbis/agent-run — служебного исключения в WHERE нет",
+    "query": "aspect=orbis/agent-run",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects ? $1 LIMIT $2",
+    "params": ["orbis/agent-run", 500],
+    "countSql": "SELECT count(*) FROM entities WHERE true AND NOT archived AND aspects ? $1",
+    "countParams": ["orbis/agent-run"]
+  },
+  {
+    "name": "Поле служебного аспекта без aspect= (§3.9): outcome=running — исключения тоже нет",
+    "query": "outcome=running",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived FROM entities WHERE true AND NOT archived AND aspects->'orbis/agent-run'->>'outcome' IN ($1) LIMIT $2",
+    "params": ["running", 500]
   }
 ]

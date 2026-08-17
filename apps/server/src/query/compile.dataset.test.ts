@@ -833,4 +833,14 @@ describe('служебные аспекты (02-core-os §3.9): прогоны �
     // search= идёт тем же WHERE — прогон не всплывает и в поиске.
     expect(await run(USER_C, 'search=Прогон')).toHaveLength(0);
   });
+
+  test('поле служебного аспекта в фильтре — то же упоминание, что aspect=', async () => {
+    // Поля orbis/agent-run уникальны в каталоге, так что `outcome=running` резолвится в
+    // служебный аспект и БЕЗ aspect=. Без этого запрос компилировался бы в противоречие
+    // (исключение аспекта AND условие по его полю) и молча отдавал ноль строк.
+    expect(ids(await run(USER_C, 'outcome=running'))).toEqual([ID_C.run]);
+    expect(ids(await run(USER_C, 'step_count<5'))).toEqual([ID_C.run]);
+    // Граница правила: sortBy целью выборки не является — общий список прогонов не втягивает.
+    expect(ids(await run(USER_C, 'sortBy=step_count:desc'))).toEqual([ID_C.ticket]);
+  });
 });

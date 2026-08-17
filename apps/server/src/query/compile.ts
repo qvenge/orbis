@@ -166,15 +166,52 @@ function aspectsInQuery(ast: QueryAst): Set<string> {
   return set;
 }
 
+/** Поле, по которому фильтрует узел; null — узел без поля (теги, связи, архивность). */
+function filterFieldName(f: QueryFilter): string | null {
+  switch (f.kind) {
+    case 'field':
+    case 'comparison':
+    case 'range':
+      return f.field;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Служебный аспект «назван» запросом, если он стоит в `aspect=` ИЛИ в него резолвится поле
+ * хотя бы одного фильтра: спросить `outcome=running` — то же намерение, что
+ * `aspect=orbis/agent-run`. Без второго правила такой запрос компилировался бы в
+ * противоречие (исключение аспекта AND условие по его полю) и молча отдавал бы ноль строк —
+ * худший из отказов, потому что выглядит как «ничего нет» (§6.4: отказ обязан быть честным).
+ *
+ * sortBy НЕ считается намеренно: сортировка описывает порядок выдачи, а не её цель, и
+ * `sortBy=step_count:desc` поверх обычного списка не должен внезапно втягивать в него прогоны.
+ *
+ * Резолв — тем же `fieldRef`, что и у самих условий (второй копии логики каталога нет), и
+ * ровно с тем же множеством `aspects`: неоднозначные поля (`grant_id` — и в assignment, и в
+ * agent-run) сигналом не становятся — их и парсер без `aspect=` не пропускает.
+ */
+function namesServiceAspect(ast: QueryAst, ctx: CompileContext, aspects: Set<string>): boolean {
+  const service: readonly string[] = SERVICE_ASPECT_IDS;
+  if (service.some((id) => aspects.has(id))) return true;
+  return ast.filters.some((f) => {
+    const name = filterFieldName(f);
+    if (name === null) return false;
+    const { aspect } = fieldRef(name, ctx, aspects);
+    return aspect !== undefined && service.includes(aspect);
+  });
+}
+
 function compileWhere(ast: QueryAst, ctx: CompileContext, aspects: Set<string>): SQL {
   const conds: SQL[] = [sql`true`];
   // Нет узла archived → только неархивные (§6.1); позиция — как в псевдо-SQL §6.1.
   if (!ast.filters.some((f) => f.kind === 'archived')) conds.push(sql`NOT archived`);
   // Служебные аспекты (02-core-os §3.9): прогоны исполнителя поднимались бы в топ «свежего» на
-  // каждый orbis_run_step (С5). Прячем неявно — пока запрос сам не назвал такой аспект через
-  // aspect=. Условие индексом не ускоряется (GIN отрицание не покрывает): это построчный фильтр
+  // каждый orbis_run_step (С5). Прячем неявно — пока запрос сам не назвал такой аспект.
+  // Условие индексом не ускоряется (GIN отрицание не покрывает): это построчный фильтр
   // поверх остальной выборки — дёшево, одна проверка наличия ключа в jsonb.
-  if (!SERVICE_ASPECT_IDS.some((id) => aspects.has(id))) {
+  if (!namesServiceAspect(ast, ctx, aspects)) {
     conds.push(sql`NOT (aspects ?| ${textArray([...SERVICE_ASPECT_IDS])})`);
   }
   for (const f of ast.filters) {
