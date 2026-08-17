@@ -2,6 +2,7 @@
 // Запросы круга исполнителя (§4.14, С7): читающие проверки и выборки, которыми
 // пользуются гейты и глаголы. Все — под уже открытым `withIdentity`-tx вызывающего
 // (RLS владельца), собственных мутаций здесь нет.
+import type { AgentRunAspect, RunSummary } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 
@@ -46,4 +47,202 @@ export async function isWorkerThreadTarget(
         LIMIT 1`,
   );
   return rows.length > 0;
+}
+
+// ---------------------------------------------------------------------------
+// Выборки глаголов (§9.3): очередь, проект тикета, прогоны, брошенные прогоны.
+// Все — сырой SQL под tx вызывающего: тащить их через компилятор грамматики §6
+// нельзя, он служебный аспект orbis/agent-run из выдачи вырезает (compile.ts).
+// ---------------------------------------------------------------------------
+
+/** Строка тикета в объёме очереди и подметания (тело сюда не тянем — оно не нужно). */
+export interface TicketRow {
+  id: string;
+  title: string;
+  aspects: Record<string, Record<string, unknown>>;
+  updatedAt: Date;
+}
+
+/** Тикет в объёме задания исполнителю: с телом — это и есть текст работы. */
+export interface TicketDetail {
+  id: string;
+  title: string;
+  body: string;
+  aspects: Record<string, Record<string, unknown>>;
+}
+
+/** Строка прогона: сам аспект + идентичность сущности (заголовок для карточек). */
+export interface RunRow {
+  id: string;
+  title: string;
+  createdAt: Date;
+  run: AgentRunAspect;
+}
+
+/** Проект в объёме ответа на захват: тело несёт раздел «Процесс» (С10). */
+export interface ProjectRow {
+  id: string;
+  title: string;
+  body: string;
+}
+
+/** Сырые строки sql-шаблона drizzle — приводим к своим формам одной точкой. */
+type RawRow = Record<string, unknown>;
+
+function toTicketRow(row: RawRow): TicketRow {
+  return {
+    id: row.id as string,
+    title: row.title as string,
+    aspects: row.aspects as Record<string, Record<string, unknown>>,
+    updatedAt: row.updated_at as Date,
+  };
+}
+
+/**
+ * Аспект прогона валидирован ajv на записи (стадия 2 executor'а по реестру), поэтому
+ * приведение честно: другой формы в колонке быть не может. Прецедент — `actorKind as
+ * ActorKind` в executor'е при чтении собственной же записи.
+ */
+function toRunRow(row: RawRow): RunRow {
+  return {
+    id: row.id as string,
+    title: row.title as string,
+    createdAt: row.created_at as Date,
+    run: row.run as AgentRunAspect,
+  };
+}
+
+/**
+ * Тикеты, назначенные гранту (очередь исполнителя). Containment по КОЛОНКЕ `aspects`
+ * (`@>`) — покрыт GIN-индексом entities_aspects_gin; разбор json-полей (`->>`) сделал бы
+ * условие неиндексируемым. `executor: 'agent'` в пробе обязателен: назначение человеку
+ * не даёт прав никакому гранту (та же логика, что в isWorkerThreadTarget).
+ *
+ * Архивные исключены: архив — это «убрано с глаз», а не «сделай». Статус тикета в отбор
+ * НЕ входит намеренно — очередь показывает и `waiting`/`done` с пометкой claimable=false:
+ * агенту важно видеть, что тикет у него есть и почему его нельзя взять.
+ */
+export async function assignedTickets(tx: Tx, grantId: string): Promise<TicketRow[]> {
+  const assigned = JSON.stringify({
+    'orbis/assignment': { executor: 'agent', grant_id: grantId },
+  });
+  const rows = await tx.execute(
+    sql`SELECT id, title, aspects, updated_at
+        FROM entities
+        WHERE NOT archived
+          AND aspects @> ${assigned}::jsonb
+          AND aspects ? 'orbis/task'
+        ORDER BY updated_at DESC`,
+  );
+  return (rows as unknown as RawRow[]).map(toTicketRow);
+}
+
+/** Тикет с телом по id; чужой и несуществующий под RLS неразличимы — оба null. */
+export async function ticketById(tx: Tx, ticketId: string): Promise<TicketDetail | null> {
+  const rows = await tx.execute(
+    sql`SELECT id, title, body, aspects FROM entities
+        WHERE id = ${ticketId}::uuid AND aspects ? 'orbis/task'`,
+  );
+  const row = (rows as unknown as RawRow[])[0];
+  if (row === undefined) return null;
+  return {
+    id: row.id as string,
+    title: row.title as string,
+    body: row.body as string,
+    aspects: row.aspects as Record<string, Record<string, unknown>>,
+  };
+}
+
+/**
+ * Проект-родитель тикета (`parents_of` грамматики §6: родитель — `source_id`). Тикет без
+ * проекта — законный случай (личная задача владельца), поэтому null, а не ошибка.
+ */
+export async function parentProject(tx: Tx, ticketId: string): Promise<ProjectRow | null> {
+  const rows = await tx.execute(
+    sql`SELECT e.id, e.title, e.body
+        FROM entities e
+        JOIN relations r ON r.source_id = e.id
+        WHERE r.target_id = ${ticketId}::uuid
+          AND r.relation_type = 'parent'
+          AND e.aspects ? 'orbis/project'
+        ORDER BY e.created_at ASC
+        LIMIT 1`,
+  );
+  const row = (rows as unknown as RawRow[])[0];
+  if (row === undefined) return null;
+  return { id: row.id as string, title: row.title as string, body: row.body as string };
+}
+
+/** Прогоны тикета (`children_of`), в порядке появления: история читается сверху вниз. */
+export async function runsOfTicket(tx: Tx, ticketId: string): Promise<RunRow[]> {
+  const rows = await tx.execute(
+    sql`SELECT e.id, e.title, e.created_at, e.aspects -> 'orbis/agent-run' AS run
+        FROM entities e
+        JOIN relations r ON r.target_id = e.id
+        WHERE r.source_id = ${ticketId}::uuid
+          AND r.relation_type = 'parent'
+          AND e.aspects ? 'orbis/agent-run'
+        ORDER BY e.created_at ASC`,
+  );
+  return (rows as unknown as RawRow[]).map(toRunRow);
+}
+
+/**
+ * Прогоны, брошенные к моменту `before` (С6): всё ещё `running`, а последний шаг старше
+ * порога. Сравнение — подпутевое (`->>` с приведением к timestamptz), то есть seq scan:
+ * containment по колонке отбирает running-прогоны индексом, а их у владельца единицы —
+ * агент работает над одним тикетом за раз. Приведение к timestamptz, а не сравнение
+ * строк: формат отметки схема допускает не единственный (смещение вместо `Z`, доли
+ * секунды), и лексикографическое сравнение врало бы на первом же таком значении.
+ */
+export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
+  const running = JSON.stringify({ 'orbis/agent-run': { outcome: 'running' } });
+  const rows = await tx.execute(
+    sql`SELECT id, title, created_at, aspects -> 'orbis/agent-run' AS run
+        FROM entities
+        WHERE NOT archived
+          AND aspects @> ${running}::jsonb
+          AND (aspects -> 'orbis/agent-run' ->> 'last_step_at')::timestamptz < ${before.toISOString()}::timestamptz
+        ORDER BY created_at ASC`,
+  );
+  return (rows as unknown as RawRow[]).map(toRunRow);
+}
+
+/** Тикет прогона — его родитель по связи parent. Прогон-сирота даёт null. */
+export async function ticketOfRun(tx: Tx, runId: string): Promise<TicketRow | null> {
+  const rows = await tx.execute(
+    sql`SELECT e.id, e.title, e.aspects, e.updated_at
+        FROM entities e
+        JOIN relations r ON r.source_id = e.id
+        WHERE r.target_id = ${runId}::uuid
+          AND r.relation_type = 'parent'
+          AND e.aspects ? 'orbis/task'
+        LIMIT 1`,
+  );
+  const row = (rows as unknown as RawRow[])[0];
+  return row === undefined ? null : toTicketRow(row);
+}
+
+/** Сколько последних шагов прогона едет в сводке: полный массив (до 500) раздул бы ответ. */
+const SUMMARY_STEPS = 10;
+
+/**
+ * Сводка прогона для агента и экранов. Опциональные ключи не заводятся пустыми: `?` в
+ * wire-форме значит «этого не было», а не «есть, но undefined».
+ */
+export function runSummary(row: RunRow): RunSummary {
+  const r = row.run;
+  return {
+    id: row.id,
+    outcome: r.outcome,
+    started_at: r.started_at,
+    step_count: r.step_count,
+    last_steps: r.steps.slice(-SUMMARY_STEPS),
+    ...(r.finished_at !== undefined && { finished_at: r.finished_at }),
+    ...(r.report !== undefined && { report: r.report }),
+    ...(r.checkpoint !== undefined && { checkpoint: r.checkpoint }),
+    ...(r.reply !== undefined && { reply: r.reply }),
+    ...(r.abandon_note !== undefined && { abandon_note: r.abandon_note }),
+    ...(r.session_url !== undefined && { session_url: r.session_url }),
+  };
 }

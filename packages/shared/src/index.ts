@@ -1,5 +1,6 @@
 export * from './aspect-registry';
 export * from './constants';
+export * from './contracts/agent-loop';
 export * from './contracts/budget';
 export * from './contracts/import';
 export * from './contracts/tools';

@@ -318,6 +318,184 @@ const threadPostJsonSchema = {
   additionalProperties: false,
 };
 
+// ---------------------------------------------------------------------------
+// JSON Schema глаголов исполнителя (§9.3, С7) — парны zod-схемам
+// @orbis/shared/contracts/agent-loop (тест парности в registry.test.ts).
+// ---------------------------------------------------------------------------
+
+/** Ключ идемпотентности вызова = batch_id action'а §7.8: повтор не делает вторую работу. */
+const verbCallId = {
+  ...uuid,
+  description: 'id вызова: повтор с тем же значением безопасен — работа не делается заново',
+} as const;
+
+const sessionUrl = {
+  type: 'string',
+  format: 'uri',
+  description: 'ссылка на сессию исполнителя — владелец сможет посмотреть, как шла работа',
+} as const;
+
+/** usage: агент сообщает расход сам, сервер его не проверяет (С2) — все поля опциональны. */
+const runUsageJsonSchema = {
+  type: 'object',
+  properties: {
+    input_tokens: { type: 'integer', minimum: 0 },
+    output_tokens: { type: 'integer', minimum: 0 },
+    cost_usd: { type: 'number', minimum: 0 },
+  },
+  additionalProperties: false,
+};
+
+const myQueueJsonSchema = {
+  type: 'object',
+  properties: {},
+  additionalProperties: false,
+};
+
+const claimTaskJsonSchema = {
+  type: 'object',
+  properties: {
+    ticket_id: uuid,
+    id: verbCallId,
+    session_url: sessionUrl,
+  },
+  required: ['ticket_id'],
+  additionalProperties: false,
+};
+
+const runStepJsonSchema = {
+  type: 'object',
+  properties: {
+    run_id: uuid,
+    summary: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 500,
+      description: 'что сделано на этом шаге — одной фразой, для человека',
+    },
+    external: {
+      type: 'boolean',
+      description:
+        'true, если шаг тронул внешнее: ветка, файлы, сеть — всё вне Orbis. По этому признаку сервер решает, можно ли безопасно перезапустить оборванный прогон',
+    },
+    id: verbCallId,
+  },
+  required: ['run_id', 'summary'],
+  additionalProperties: false,
+};
+
+const checkpointJsonSchema = {
+  type: 'object',
+  properties: {
+    run_id: uuid,
+    question: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 4000,
+      description: 'вопрос владельцу: чего не хватает для продолжения',
+    },
+    usage: runUsageJsonSchema,
+    session_url: sessionUrl,
+    id: verbCallId,
+  },
+  required: ['run_id', 'question'],
+  additionalProperties: false,
+};
+
+const finishJsonSchema = {
+  type: 'object',
+  properties: {
+    run_id: uuid,
+    report: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 20000,
+      description: 'что сделано и что проверить — это читает владелец, а не другой агент',
+    },
+    usage: runUsageJsonSchema,
+    session_url: sessionUrl,
+    id: verbCallId,
+  },
+  required: ['run_id', 'report'],
+  additionalProperties: false,
+};
+
+/**
+ * Глаголы исполнителя (§9.3, С7). `kind: 'mutate'` у всех пяти — включая orbis_my_queue,
+ * который по смыслу читающий: он подметает брошенные прогоны по дороге (С6), то есть
+ * пишет. Классификация §7.10 даёт им всем уровень execute (одиночная не-архивирующая
+ * мутация), и это инвариант 4 спеки: фоновому прогону некому подтверждать pending.
+ *
+ * Описания — ИНСТРУКЦИИ агенту, а не пересказ сигнатуры: у внешнего исполнителя нет ни
+ * спецификации, ни системного промпта Orbis, и единственное место, где он узнаёт правила
+ * круга (не закрывать тикет самому, не повторять отказ CONFLICT, слать id для
+ * идемпотентности), — вот эти строки.
+ */
+const AGENT_VERB_TOOLS: OrbisToolDef[] = [
+  {
+    name: 'orbis_my_queue',
+    description:
+      'Что мне назначено: список тикетов этого доступа с их статусом, проектом и сводкой ' +
+      'последнего прогона. Брать в работу можно только тикеты с claimable=true (статус inbox ' +
+      'или planned) — остальные ждут владельца. По дороге сервер помечает брошенные прогоны ' +
+      '(поле swept: сколько подмёл) и возвращает их тикеты в очередь. Начинай круг с этого ' +
+      'вызова и бери ОДИН тикет за раз.',
+    inputJsonSchema: myQueueJsonSchema,
+    kind: 'mutate',
+    agentOnly: true,
+  },
+  {
+    name: 'orbis_claim_task',
+    description:
+      'Атомарно взять назначенный мне тикет в работу: тикет → in_progress, создаётся прогон ' +
+      '(сущность). Возвращает задание (title, body, аспекты), body проекта с описанием ' +
+      'процесса и историю прошлых прогонов (их отчёты, вопросы и ответы владельца). Отказ ' +
+      'CONFLICT — тикет уже в работе или не мой: не повторяй, возьми другой из orbis_my_queue. ' +
+      'Передавай id (uuid) — повтор с тем же id безопасен. Работай над одним тикетом за раз; ' +
+      'шаги фиксируй orbis_run_step, вопросы — orbis_checkpoint, итог — orbis_finish (тикет не ' +
+      'закрывай сам).',
+    inputJsonSchema: claimTaskJsonSchema,
+    kind: 'mutate',
+    agentOnly: true,
+  },
+  {
+    name: 'orbis_run_step',
+    description:
+      'Зафиксировать шаг прогона: короткая сводка того, что сделано. Ставь external=true, если ' +
+      'шаг тронул внешнее (создал ветку, изменил файлы, сходил в сеть) — по этому признаку ' +
+      'сервер решает, можно ли безопасно перезапустить прогон, если он оборвётся. Зови ' +
+      'регулярно: прогон без шагов дольше получаса считается брошенным. Возвращает step_count. ' +
+      'Отказ CONFLICT — прогон уже завершён или чужой: не повторяй, начни с orbis_my_queue. ' +
+      'Передавай id (uuid) для безопасного повтора.',
+    inputJsonSchema: runStepJsonSchema,
+    kind: 'mutate',
+    agentOnly: true,
+  },
+  {
+    name: 'orbis_checkpoint',
+    description:
+      'Остановиться и спросить владельца: тикет уходит в waiting с твоим вопросом, прогон ' +
+      'закрывается. Зови, когда без решения человека дальше идти нельзя (выбор подхода, ' +
+      'доступ, противоречие в задании) — и заканчивай работу, ответ придёт в историю ' +
+      'следующего orbis_claim_task. После чекпойнта прогон терминален: шаги в него больше не ' +
+      'принимаются. Передавай id (uuid) для безопасного повтора.',
+    inputJsonSchema: checkpointJsonSchema,
+    kind: 'mutate',
+    agentOnly: true,
+  },
+  {
+    name: 'orbis_finish',
+    description:
+      'Итог прогона: «готово, проверь». В report опиши, что сделано и что проверить — это ' +
+      'читает владелец. Тикет НЕ закрывается: он уходит в waiting на проверку (в done — только ' +
+      'если владелец заранее разрешил это назначением). Сам статус тикета не меняй. После ' +
+      'orbis_finish прогон терминален. Передавай id (uuid) для безопасного повтора.',
+    inputJsonSchema: finishJsonSchema,
+    kind: 'mutate',
+    agentOnly: true,
+  },
+];
+
 /** Core-тулы §9.2 (+ user_query как internal-only, + thread_post — расширение Task 11). */
 const CORE_TOOLS: OrbisToolDef[] = [
   {
@@ -500,7 +678,7 @@ export function buildToolDefs(aspectRows: AspectToolRow[]): OrbisToolDef[] {
   const attachable = aspectRows.filter(
     (r) => !(SERVICE_ASPECT_IDS as readonly string[]).includes(r.id),
   );
-  return [...CORE_TOOLS, ...attachable.map(attachToolDef)];
+  return [...CORE_TOOLS, ...AGENT_VERB_TOOLS, ...attachable.map(attachToolDef)];
 }
 
 /** Собирает реестр: core-тулы §9.2 + attach_<aspect> для каждого активного аспекта (§7.6). */

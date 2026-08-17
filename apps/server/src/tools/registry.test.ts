@@ -8,13 +8,18 @@ import {
   batchExecuteInput,
   budgetStatusInput,
   buildFieldCatalog,
+  checkpointInput,
+  claimTaskInput,
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
   entityUpdateInput,
+  finishInput,
+  myQueueInput,
   parseQuery,
   relationCreateInput,
   relationDeleteInput,
+  runStepInput,
   SERVICE_ASPECT_IDS,
 } from '@orbis/shared';
 import { eq, isNull, sql } from 'drizzle-orm';
@@ -23,6 +28,7 @@ import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test
 import { aspectDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import {
+  AGENT_VERB_NAMES,
   buildToolRegistry,
   importCsvStartInput,
   type OrbisToolDef,
@@ -107,13 +113,14 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.filter(
 ).map((id) => `attach_${id.replaceAll('/', '_').replaceAll('-', '_')}`);
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 11 core (с thread_post) + 11 attach_* = 22', async () => {
+  test('builtin-реестр (userB без кастомных): 11 core (с thread_post) + 5 глаголов + 11 attach_* = 27', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
     expect(names).toContain('thread_post');
+    for (const name of AGENT_VERB_NAMES) expect(names).toContain(name);
     for (const name of BUILTIN_ATTACH_NAMES) expect(names).toContain(name);
-    expect(defs.length).toBe(22);
+    expect(defs.length).toBe(27);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
   });
@@ -157,6 +164,27 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
         expect(def.internalOnly).toBe(true);
       } else {
         expect(def.internalOnly).not.toBe(true);
+      }
+    }
+  });
+
+  test('agentOnly: true только у пяти глаголов исполнителя (§9.3); все они kind=mutate', async () => {
+    // Глагол виден ТОЛЬКО вызову с грантом: чат такие дефы отсекает (send-message.ts),
+    // dispatch держит вторую линию. Пометка на «обычном» туле закрыла бы его от чата молча.
+    const defs = await registryFor(userB);
+    const verbs = new Set<string>(AGENT_VERB_NAMES);
+    for (const def of defs) {
+      if (verbs.has(def.name)) {
+        expect({ name: def.name, agentOnly: def.agentOnly, kind: def.kind }).toEqual({
+          name: def.name,
+          agentOnly: true,
+          kind: 'mutate',
+        });
+      } else {
+        expect({ name: def.name, agentOnly: def.agentOnly }).toEqual({
+          name: def.name,
+          agentOnly: undefined,
+        });
       }
     }
   });
@@ -257,7 +285,7 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(def.kind).toBe('mutate');
     expect(def.description).toBe('Пиши часы сна числом.');
     expect((def.inputJsonSchema.properties as Record<string, unknown>).data).toEqual(CUSTOM_SCHEMA);
-    expect(defsA.length).toBe(23);
+    expect(defsA.length).toBe(28);
 
     const defsB = await registryFor(userB);
     expect(defsB.some((d) => d.name === 'attach_user_sleep_log')).toBe(false);
@@ -278,6 +306,13 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
     budget_status: budgetStatusInput,
     thread_post: threadPostInput,
     import_csv_start: importCsvStartInput,
+    // Глаголы исполнителя (§9.3): рукописная JSON Schema реестра ↔ envelope
+    // @orbis/shared/contracts/agent-loop — рассинхрон падает здесь, а не у агента
+    orbis_my_queue: myQueueInput,
+    orbis_claim_task: claimTaskInput,
+    orbis_run_step: runStepInput,
+    orbis_checkpoint: checkpointInput,
+    orbis_finish: finishInput,
   };
 
   test('каждый ключ zod-схемы есть в JSON Schema и наоборот; required = не-optional ключи zod', async () => {

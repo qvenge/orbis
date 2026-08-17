@@ -830,12 +830,17 @@ async function loadEntityForUpdate(
  *
  * Сравнение по JSON-форме: поля аспектов скалярные, а `===` на объектах сравнивал бы ссылки.
  * Отсутствующее поле (и отсутствующий аспект) не совпадает ни с чем — захват несуществующего
- * тикета невозможен.
+ * тикета невозможен. Это обещание БЕЗУСЛОВНО: `actual === undefined` отсекается отдельно, до
+ * сравнения, потому что JSON.stringify отображает undefined в undefined — и `in: [undefined]`
+ * (одна опечатка в предусловии) иначе совпадал бы с отсутствием поля, то есть разрешал
+ * правку ровно там, где предусловие и поставлено её запретить.
  */
 function assertPrecondition(precondition: EntityUpdatePrecondition, aspects: AspectsMap): void {
   for (const p of precondition) {
     const actual = aspects[p.aspect]?.[p.field];
-    if (p.in.some((v) => JSON.stringify(v) === JSON.stringify(actual))) continue;
+    if (actual !== undefined && p.in.some((v) => JSON.stringify(v) === JSON.stringify(actual))) {
+      continue;
+    }
     throw new ExecError('CONFLICT', `предусловие не выполнено: ${p.aspect}.${p.field}`, {
       // Второй смысл CONFLICT помимо занятого client-UUID — различает их именно reason
       // (см. докблок errors.ts): потребители кодов не должны гадать по тексту сообщения.

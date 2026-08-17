@@ -1171,4 +1171,30 @@ describe('ADE-срез 1: CAS-предусловие entity_update (С7, инв�
       'orbis/task',
     );
   });
+
+  test('undefined в списке `in` не делает отсутствующее поле совпадением → CONFLICT', async () => {
+    // «Отсутствующее поле не совпадает ни с чем» — обещание докблока assertPrecondition,
+    // и до этой страховки оно было условным: сравнение шло через JSON.stringify, а он
+    // отображает undefined в undefined, поэтому `in: [undefined]` совпадал с ОТСУТСТВИЕМ
+    // поля. Захват «тикета», у которого нужного аспекта нет вовсе, проходил бы по одной
+    // опечатке в предусловии — молча и ровно там, где вся конструкция и нужна.
+    const id = newId();
+    await create(id, { 'orbis/note': {} });
+    const r = await execute(
+      db,
+      req('entity_update', {
+        id,
+        precondition: [{ aspect: 'orbis/task', field: 'status', in: [undefined] }],
+        aspects: { 'orbis/task': { status: 'in_progress' } },
+      }),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('CONFLICT');
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.execute(sql`SELECT aspects FROM entities WHERE id = ${id}`),
+    );
+    expect(Object.keys((rows[0]?.aspects as Record<string, unknown>) ?? {})).not.toContain(
+      'orbis/task',
+    );
+  });
 });

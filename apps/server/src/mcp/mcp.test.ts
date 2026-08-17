@@ -417,7 +417,7 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
 // ---------------------------------------------------------------------------
 
 describe('/mcp tools/list (§9.2)', () => {
-  test('состав = публичный реестр: 9 публичных core (с thread_post) + 11 attach_*, без internalOnly; имена/описания/схемы дословно', async () => {
+  test('состав = публичный реестр: 9 публичных core (с thread_post) + 5 глаголов + 11 attach_*, без internalOnly; имена/описания/схемы дословно', async () => {
     const agent = await connectAgent(mainUrl());
     try {
       const { tools } = await agent.listTools();
@@ -435,6 +435,13 @@ describe('/mcp tools/list (§9.2)', () => {
         'batch_execute',
         'budget_status',
         'thread_post',
+        // Глаголы исполнителя (§9.3): грант есть у любого MCP-вызова, поэтому agentOnly
+        // список не сужает — сужает его только скоуп (тест worker ниже)
+        'orbis_my_queue',
+        'orbis_claim_task',
+        'orbis_run_step',
+        'orbis_checkpoint',
+        'orbis_finish',
       ]) {
         expect(names).toContain(name);
       }
@@ -461,7 +468,7 @@ describe('/mcp tools/list (§9.2)', () => {
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
       const publicDefs = defs.filter((d) => d.internalOnly !== true);
-      expect(tools).toHaveLength(publicDefs.length); // builtin-набор: 20
+      expect(tools).toHaveLength(publicDefs.length); // builtin-набор: 27 − 2 internalOnly = 25
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);
         expect(tool).toBeDefined();
@@ -706,7 +713,7 @@ describe('/mcp: паттерн «что нового» (§9.3, сценарий 
 // ---------------------------------------------------------------------------
 
 describe('/mcp: скоуп worker (С7, §4.14)', () => {
-  test('tools/list сужен: без entity_update / attach_* / batch_execute; entity_get и thread_post на месте', async () => {
+  test('tools/list сужен: без entity_update / attach_* / batch_execute; чтения, thread_post и пять глаголов на месте', async () => {
     const agent = await connectAgent(mainUrl(), WORKER_TOKEN);
     try {
       const { tools } = await agent.listTools();
@@ -721,7 +728,18 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
       ]) {
         expect(names).not.toContain(name);
       }
-      for (const name of ['entity_get', 'entity_query', 'budget_status', 'thread_post']) {
+      for (const name of [
+        'entity_get',
+        'entity_query',
+        'budget_status',
+        'thread_post',
+        // Круг исполнителя целиком: скоуп worker и заведён ради этих пяти (С7)
+        'orbis_my_queue',
+        'orbis_claim_task',
+        'orbis_run_step',
+        'orbis_checkpoint',
+        'orbis_finish',
+      ]) {
         expect(names).toContain(name);
       }
     } finally {

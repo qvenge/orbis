@@ -1,0 +1,152 @@
+// apps/server/src/agent-loop/sweep.ts
+// Подметание брошенных прогонов (С6, инвариант 6): прогон, у которого дольше порога нет
+// ни одного шага, помечается `abandoned`, а его тикет перестаёт висеть `in_progress`.
+//
+// Зовётся ДВУМЯ путями и только ими: `orbis_my_queue` (агент пришёл за работой) и
+// экраны проекта/тикета (Задача 13). Отдельного фонового процесса нет намеренно —
+// инвариант «тикет не висит in_progress навсегда» не должен зависеть ни от расписания,
+// ни от того, что какой-то агент однажды позовёт очередь.
+import { newId } from '@orbis/shared';
+import type { Db } from '../db/client';
+import { withIdentity } from '../db/with-identity';
+import { ExecError, type ExecErrorCode } from '../errors';
+import { execute } from '../executor/executor';
+import { makeChatJournalSink } from '../executor/journal';
+import type { ActorKind } from '../executor/types';
+import { RUN_STALE_AFTER_MS } from './constants';
+import { type RunRow, staleRuns, ticketOfRun } from './queries';
+
+// Боевой синк — один инстанс на модуль (состояния не хранит), как в tools/dispatch.ts.
+const sink = makeChatJournalSink();
+
+export interface SweepArgs {
+  ownerId: string;
+  /** Кто дёрнул подметание: агент (пришёл за очередью) или владелец (открыл экран). */
+  actorKind: ActorKind;
+  actorGrantId?: string;
+  clock?: () => Date;
+  staleAfterMs?: number;
+}
+
+/**
+ * Текст, который читает человек в `waiting_for` тикета и в `abandon_note` прогона.
+ * Один на оба поля намеренно: тикет отвечает «что делать дальше», прогон — «что было»,
+ * но причина у них общая, и расхождение двух формулировок читалось бы как два события.
+ */
+function abandonNote(run: RunRow, idleMs: number): string {
+  const minutes = Math.round(idleMs / 60_000);
+  const last = run.run.steps.at(-1);
+  const external = run.run.steps.filter((s) => s.external).length;
+  return (
+    `Прогон оборван (нет шагов ${minutes} мин). Последний шаг: «${last?.summary ?? '—'}»; ` +
+    `шагов с внешним эффектом: ${external}. ` +
+    'Проверьте остатки работы (ветки, файлы) и верните тикет в работу.'
+  );
+}
+
+/**
+ * Помечает брошенные прогоны и чинит статус их тикетов. Возвращает, сколько прогонов
+ * реально подмели, — число едет в ответ `orbis_my_queue`, чтобы агент понимал, почему
+ * тикет вдруг снова свободен.
+ *
+ * Каждый прогон — СВОЙ `execute`-batch, а не один общий: подметание одного прогона не
+ * должно откатываться из-за гонки на соседнем (поздний шаг успел лечь между чтением и
+ * записью). Предусловия делают операцию идемпотентной по состоянию: CONFLICT здесь —
+ * штатный исход «уже не наше дело», а не отказ.
+ */
+export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: number }> {
+  const clock = args.clock ?? (() => new Date());
+  const staleAfterMs = args.staleAfterMs ?? RUN_STALE_AFTER_MS;
+  const now = clock();
+  const before = new Date(now.getTime() - staleAfterMs);
+
+  const stale = await withIdentity(db, args.ownerId, (tx) => staleRuns(tx, before));
+  let swept = 0;
+  for (const run of stale) {
+    const ticket = await withIdentity(db, args.ownerId, (tx) => ticketOfRun(tx, run.id));
+    const idleMs = now.getTime() - new Date(run.run.last_step_at).getTime();
+    const note = abandonNote(run, idleMs);
+    // «Тронул ли внешнее» решает не последний шаг, а весь прогон: агент мог создать
+    // ветку первым шагом и упасть на пятом — остатки от этого никуда не делись (С6).
+    const hasEffect = run.run.steps.some((s) => s.external);
+
+    const operations: Array<{ tool: string; input: unknown }> = [
+      {
+        tool: 'entity_update',
+        input: {
+          id: run.id,
+          // CAS: прогон всё ещё running И отметка живости та же, что мы прочитали.
+          // Вторая половина — не перестраховка: между выборкой и записью мог лечь
+          // шаг, и тогда прогон живой, а не брошенный.
+          precondition: [
+            { aspect: 'orbis/agent-run', field: 'outcome', in: ['running'] },
+            { aspect: 'orbis/agent-run', field: 'last_step_at', in: [run.run.last_step_at] },
+          ],
+          aspects: {
+            'orbis/agent-run': {
+              outcome: 'abandoned',
+              finished_at: now.toISOString(),
+              abandon_note: note,
+            },
+          },
+        },
+      },
+    ];
+
+    // Тикет чинится, только если он ДЕЙСТВИТЕЛЬНО висит в работе: владелец мог вернуть
+    // его руками, и переписывать его статус задним числом сервер права не имеет.
+    if (ticket !== null && ticket.aspects['orbis/task']?.status === 'in_progress') {
+      operations.push({
+        tool: 'entity_update',
+        input: {
+          id: ticket.id,
+          precondition: [{ aspect: 'orbis/task', field: 'status', in: ['in_progress'] }],
+          aspects: {
+            'orbis/task': hasEffect
+              ? // Эффект был — возврат в planned запрещён (С6): он стёр бы факт, что
+                // работа велась, и следующий агент наткнулся бы на чужую ветку
+                { status: 'waiting', waiting_for: note }
+              : // Эффекта не было — безопасно перезапустить; чужой хвост waiting_for
+                // снимаем (null удаляет поле при merge аспекта)
+                { status: 'planned', waiting_for: null },
+          },
+        },
+      });
+    }
+
+    const r = await execute(
+      db,
+      {
+        actorUserId: args.ownerId,
+        actorKind: args.actorKind,
+        // Обслуживание инварианта 6, а не решение актора: «отмени последнее» такие
+        // записи пропускает (undo.ts findLastUndoable), иначе первое же «отмени»
+        // после чтения очереди отменяло бы подметание вместо действия человека.
+        // Точечный откат по-прежнему возможен — по run_id (Задача 13).
+        source: 'system',
+        ...(args.actorGrantId !== undefined && { actorGrantId: args.actorGrantId }),
+        runId: run.id,
+        batchId: newId(),
+        operations,
+        clock,
+      },
+      { sink },
+    );
+    if (r.ok) {
+      swept++;
+      continue;
+    }
+    // Предусловие не выполнено — прогон уже не наш: поздний шаг успел лечь либо
+    // конкурентное подметание закрыло его первым. Штатный исход, идём дальше.
+    if (r.error.code === 'CONFLICT') continue;
+    // Любой другой отказ — дефект, а не состояние графа: проглотить его значило бы
+    // превратить «инвариант 6 не держится» в «swept почему-то ноль». Поднимаем
+    // доменной ошибкой — вызывающий глагол вернёт её структурным отказом, не 500.
+    throw new ExecError(
+      r.error.code as ExecErrorCode,
+      `подметание прогона не удалось: ${r.error.message}`,
+      { run_id: run.id, details: r.error.details },
+    );
+  }
+  return { swept };
+}

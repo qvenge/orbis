@@ -27,6 +27,7 @@ import {
 } from '@orbis/shared';
 import type { z } from 'zod';
 import { isWorkerThreadTarget } from '../agent-loop/queries';
+import { AGENT_VERB_ENVELOPES, type AgentVerbName, runAgentVerb } from '../agent-loop/verbs';
 import { escalateAfterMutation } from '../ai/escalation';
 import { budgetStatus } from '../budget/aggregates';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
@@ -57,6 +58,7 @@ import {
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { toWireEntityFromSql } from '../wire';
 import {
+  AGENT_VERB_NAMES,
   type AspectToolRow,
   buildToolDefs,
   type Card,
@@ -68,6 +70,11 @@ import {
   userQueryInput,
   WORKER_SCOPE_TOOLS,
 } from './registry';
+
+/** Резолв имени в глагол исполнителя (§9.3) — набор имён живёт в реестре, не здесь. */
+function isAgentVerb(name: string): name is AgentVerbName {
+  return (AGENT_VERB_NAMES as readonly string[]).includes(name);
+}
 
 // Боевой синк — один инстанс на модуль (состояния не хранит), как в роутерах 1a.
 const sink = makeChatJournalSink();
@@ -238,6 +245,49 @@ export async function dispatchTool(
         });
       }
       return await runThreadPost(ctx, parsed);
+    }
+    if (isAgentVerb(pre.def.name)) {
+      // Ветка глаголов стоит СТРОГО ДО runMutation: у них нет envelope в
+      // MUTATION_ENVELOPES, а validateMutationEnvelope без схемы бросает голый Error —
+      // тот пролетел бы мимо catch ниже (там ловится только ExecError) и стал бы 500.
+      // Схема — из карты глаголов, валидация ДО классификации (§7.10 дословно).
+      const parsed = parseEnvelope(AGENT_VERB_ENVELOPES[pre.def.name], input, pre.def.name);
+      const level = classifyToolCall({
+        ...factsFromToolCall(pre.def, parsed),
+        actorKind: ctx.actorKind,
+        explicitCommand: ctx.explicitCommand,
+      });
+      const gated = levelGate(level, pre.def.name);
+      if (gated !== null) return gated;
+      if (level !== 'execute') {
+        // Инвариант 4 спеки: глагол исполнителя НИКОГДА не возвращает pending — фоновому
+        // прогону некому нажать «подтвердить», и карточка висела бы вечно. Таблицей
+        // §7.10 сюда не попасть (одиночная не-архивирующая мутация → execute), но
+        // молчаливого падения в pending при её эволюции быть не должно.
+        return errorResult(
+          'VALIDATION',
+          `глагол «${pre.def.name}» не исполняется на уровне «${level}» (§7.10, инвариант 4)`,
+          { tool: pre.def.name, level },
+        );
+      }
+      // ctx.grant здесь заведомо есть: гейт agentOnly выше уже отбил вызов без гранта
+      // (глагол адресуется конкретному доступу). Проверка — вторая линия, не логика.
+      if (ctx.grant === undefined) {
+        return errorResult('VALIDATION', `глагол «${pre.def.name}» требует гранта (§9.3)`, {
+          tool: pre.def.name,
+        });
+      }
+      return await runAgentVerb(
+        {
+          db: ctx.db,
+          ownerId: ctx.actorUserId,
+          grant: ctx.grant,
+          clock: ctx.clock ?? (() => new Date()),
+          sink,
+        },
+        pre.def.name,
+        parsed,
+      );
     }
     return await runMutation(ctx, pre.def, input, pre.keyFieldsByAspect, pre.execToolByName);
   } catch (e) {
