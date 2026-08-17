@@ -2,7 +2,7 @@
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
-import { canonicalizeBody } from '@orbis/shared/doc';
+import { canonicalizeBody, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
@@ -11,8 +11,10 @@ import { readEntity } from '../entity-read';
 import { issuePatGrant, revokeGrant, verifyBearer } from '../oauth/grants';
 import { projectBodyTemplate } from '../seed/project-body';
 import { execute } from './executor';
+import { makeChatJournalSink } from './journal';
 import type { ExecuteOk, ExecuteRequest, WireEntity } from './types';
 import { InMemoryJournalSink } from './types';
+import { undoAction } from './undo';
 
 requireEnv();
 
@@ -573,6 +575,14 @@ describe('ADE-срез 1: инварианты назначения и засе�
     return r.entity.body;
   }
 
+  /** Обе формы тела: строка и документ — засев обязан заполнить ОБЕ. */
+  async function bothFormsOf(id: string): Promise<{ body: string; bodyDoc: unknown }> {
+    const r = await withIdentity(db, userA, (tx) =>
+      readEntity(tx, userA, { id, include: ['body', 'bodyDoc'] }),
+    );
+    return { body: r.entity.body, bodyDoc: r.entity.bodyDoc ?? null };
+  }
+
   test('20. executor=agent без grant_id → VALIDATION; с чужим/отозванным грантом → NOT_FOUND', async () => {
     const id = newId();
     const bad = await execute(
@@ -710,7 +720,13 @@ describe('ADE-срез 1: инварианты назначения и засе�
     expect(body).toBe(projectBodyTemplate(id));
     // канон: повторная канонизация не меняет тело
     expect(canonicalizeBody(body).body).toBe(body);
-    // тело разобрано в документ, а не легло сырой строкой мимо конверсии
+    // тело разобрано в документ, а не легло сырой строкой мимо конверсии: спрашиваем сам
+    // документ (пустые bodyRefs доказательством не были — у заготовки ссылок нет в принципе)
+    const forms = await bothFormsOf(id);
+    expect(forms.bodyDoc).not.toBeNull();
+    expect((forms.bodyDoc as { doc: { content: unknown[] } }).doc.content.length).toBeGreaterThan(
+      0,
+    );
     expect(firstEntity(r).bodyRefs).toEqual([]);
 
     // Своё тело автора заготовкой не затирается
@@ -764,6 +780,119 @@ describe('ADE-срез 1: инварианты назначения и засе�
     );
     expect(b.ok).toBe(true);
     expect(await bodyOf(filled.id)).toBe('Заметки.');
+  });
+
+  test('25. пустая строка во входе телом не считается: body="" и пробельное тело засеваются, своё — нет', async () => {
+    // Приёмка 1: проект заводится чатом через entity_create, и модель штатно шлёт body: ''.
+    // Пустая строка — «ничего не написали», а не «автор оставил тело пустым» (С10).
+    const blank = newId();
+    expect(
+      (
+        await execute(
+          db,
+          req('entity_create', {
+            id: blank,
+            title: 'Проект пустой строкой',
+            tags: [],
+            body: '',
+            aspects: { 'orbis/project': { stage: 'active' } },
+          }),
+        )
+      ).ok,
+    ).toBe(true);
+    expect(await bodyOf(blank)).toBe(projectBodyTemplate(blank));
+
+    const spaces = newId();
+    expect(
+      (
+        await execute(
+          db,
+          req('entity_create', {
+            id: spaces,
+            title: 'Проект пробелами',
+            tags: [],
+            body: '   \n',
+            aspects: { 'orbis/project': { stage: 'active' } },
+          }),
+        )
+      ).ok,
+    ).toBe(true);
+    expect(await bodyOf(spaces)).toBe(projectBodyTemplate(spaces));
+
+    // Регресс: непустое тело по-прежнему побеждает заготовку
+    const own = newId();
+    expect(
+      (
+        await execute(
+          db,
+          req('entity_create', {
+            id: own,
+            title: 'Своё',
+            tags: [],
+            body: '# Своё',
+            aspects: { 'orbis/project': { stage: 'active' } },
+          }),
+        )
+      ).ok,
+    ).toBe(true);
+    expect(await bodyOf(own)).toBe('# Своё');
+
+    // …и на update-пути: body: '' с добавлением проекта тоже засевает
+    const e = firstEntity(await execute(db, req('entity_create', { title: 'Станет', tags: [] })));
+    const upd = await execute(
+      db,
+      req('entity_update', {
+        id: e.id,
+        body: '',
+        expectedUpdatedAt: e.updatedAt,
+        aspects: { 'orbis/project': { stage: 'active' } },
+      }),
+    );
+    expect(upd.ok).toBe(true);
+    expect(await bodyOf(e.id)).toBe(projectBodyTemplate(e.id));
+  });
+
+  test('26. ПУСТОЙ ДОКУМЕНТ во входе — это тело: bodyDoc побеждает заготовку (порядок веток)', async () => {
+    // Документ шлёт редактор, и пустой документ там — результат осознанной правки («стёр всё»),
+    // а не отсутствие ввода. Подменять её заготовкой значило бы затирать действие автора.
+    const e = firstEntity(
+      await execute(db, req('entity_create', { title: 'Из редактора', tags: [] })),
+    );
+    const r = await execute(
+      db,
+      req('entity_update', {
+        id: e.id,
+        bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [{ type: 'paragraph' }] } },
+        expectedUpdatedAt: e.updatedAt,
+        aspects: { 'orbis/project': { stage: 'active' } },
+      }),
+    );
+    expect(r.ok).toBe(true);
+    expect(await bodyOf(e.id)).not.toBe(projectBodyTemplate(e.id));
+    expect((await bodyOf(e.id)).trim()).toBe('');
+  });
+
+  test("27. undo attach'а, который засеял тело: аспект снят И тело снова пустое", async () => {
+    // Засев — часть эффекта attach, поэтому и откатывается вместе с ним: иначе на заметке,
+    // которая проектом быть перестала, осталась бы заготовка с живыми query-блоками.
+    const sink = makeChatJournalSink(); // undo ищет action в журнале — NOOP_SINK ему не годится
+    const e = firstEntity(
+      await execute(db, req('entity_create', { title: 'Заметка под откат', tags: [] }), { sink }),
+    );
+    const attached = await execute(
+      db,
+      req('attach_orbis_project', { entity_id: e.id, data: { stage: 'active' } }),
+      { sink },
+    );
+    expect(attached.ok).toBe(true);
+    expect(await bodyOf(e.id)).toBe(projectBodyTemplate(e.id));
+
+    const actionId = (attached as ExecuteOk).actionId;
+    const undone = await undoAction(db, { actorUserId: userA, actionId });
+    expect(undone.ok).toBe(true);
+    const after = firstEntity(undone);
+    expect(after.aspects['orbis/project']).toBeUndefined(); // аспект снят
+    expect(await bodyOf(e.id)).toBe(''); // и заготовка вместе с ним
   });
 
   test('24. entity_update, добавляющий orbis/project пустой заметке, засевает заготовку без expectedUpdatedAt', async () => {

@@ -66,6 +66,7 @@ import {
   applyTaskCompletion,
   assertFinancialInvariant,
   financialRecurringNeedsDerivedFrom,
+  hasBodyInInput,
   mergeAspects,
   needsProjectSeed,
   normalizeTags,
@@ -925,8 +926,9 @@ async function prepareEntityCreate(
   await assertAssignment(ctx.tx, ctx.req.actorUserId, aspects);
   // Заготовка тела проекта (С10). Засев живёт в executor'е, а не в роутере/адаптере: тогда
   // проект, заведённый чатом, MCP и UI, получает одно и то же тело. У create «тело до
-  // операции» — это канон входа (пусто, если body не прислали).
-  if (needsProjectSeed(undefined, aspects, body, input.body !== undefined)) {
+  // операции» — это канон входа (пусто, если body не прислали ИЛИ прислали пустую строку:
+  // что считать телом входа, решает hasBodyInInput — одно правило на все три пути).
+  if (needsProjectSeed(undefined, aspects, body, hasBodyInInput(input))) {
     ({ body, bodyDoc, bodyRefs } = bodyFieldsFromMarkdown(projectBodyTemplate(id)));
   }
   // Уникальность конверта (03-budget §2.1): дубль точной комбинации отклоняется
@@ -1244,6 +1246,24 @@ async function prepareEntityUpdate(
     patch.bodyRefs = bodyRefsFromDoc(storedDoc);
     changed.body = body;
     prior.body = current.body;
+  } else if (
+    ctx.internalUndo === undefined &&
+    needsProjectSeed(currentAspects, nextAspects, current.body, hasBodyInInput(input))
+  ) {
+    // Заготовка тела проекта (С10). Ветка стоит ПЕРЕД строковой намеренно: `body: ''` — это
+    // «тела не прислали» (hasBodyInInput), и строковая ветка записала бы пустоту, отменив
+    // засев. Документ во входе разобран веткой выше — он телом считается всегда, даже пустой.
+    // Гейт expectedUpdatedAt (§5.2) не срабатывает и срабатывать не должен: он смотрит на
+    // ВХОД, а не на патч, и терять тут нечего — тело пусто.
+    const seeded = bodyFieldsFromMarkdown(projectBodyTemplate(input.id));
+    patch.body = seeded.body;
+    patch.bodyDoc = seeded.bodyDoc;
+    preserveBodyBeforeDoc(patch, current);
+    patch.bodyRefs = seeded.bodyRefs;
+    // Засев — часть эффекта операции, поэтому едет и в журнал: undo вернёт пустое тело
+    // вместе с аспектом, а не оставит заготовку на сущности, которая проектом быть перестала.
+    changed.body = seeded.body;
+    prior.body = current.body;
   } else if (input.body !== undefined) {
     // КАНОН, а не input.body: body — производная документа, и сравнивать «как написала
     // модель» бессмысленно (вердикт Б1). FTS не страдает (проверено спайком), сиды каноничны.
@@ -1253,23 +1273,6 @@ async function prepareEntityUpdate(
     preserveBodyBeforeDoc(patch, current);
     patch.bodyRefs = bodyRefs; // дерево ∪ raw — backlinks не теряются (Б2)
     changed.body = body;
-    prior.body = current.body;
-  } else if (
-    ctx.internalUndo === undefined &&
-    needsProjectSeed(currentAspects, nextAspects, current.body, false)
-  ) {
-    // Заготовка тела проекта (С10) — ветка ТРЕТЬЯ и последняя: сюда попадаем, только если
-    // вход тела не нёс (иначе отработала бы одна из двух веток выше), поэтому bodyInInput
-    // здесь заведомо false. Гейт expectedUpdatedAt (§5.2) не срабатывает и срабатывать не
-    // должен: он смотрит на ВХОД, а не на патч, и терять тут нечего — тело пусто.
-    const seeded = bodyFieldsFromMarkdown(projectBodyTemplate(input.id));
-    patch.body = seeded.body;
-    patch.bodyDoc = seeded.bodyDoc;
-    preserveBodyBeforeDoc(patch, current);
-    patch.bodyRefs = seeded.bodyRefs;
-    // Засев — часть эффекта операции, поэтому едет и в журнал: undo вернёт пустое тело
-    // вместе с аспектом, а не оставит заготовку на сущности, которая проектом быть перестала.
-    changed.body = seeded.body;
     prior.body = current.body;
   }
   if (input.tags !== undefined) {
@@ -1382,7 +1385,8 @@ async function prepareAttach(
   gateEntitlements(ctx, tool);
 
   // Заготовка тела проекта (С10): attach — третий путь появления orbis/project наравне с
-  // create и update, и тело у всех трёх обязано получаться одинаковым.
+  // create и update, и тело у всех трёх обязано получаться одинаковым. Вход attach тела не
+  // несёт ВООБЩЕ (в схеме его нет) — отсюда false, а не hasBodyInInput.
   const seed = needsProjectSeed(currentAspects, nextAspects, current.body, false)
     ? bodyFieldsFromMarkdown(projectBodyTemplate(input.entity_id))
     : undefined;
