@@ -20,7 +20,7 @@ import { withIdentity } from '../db/with-identity';
 import { type EntitlementResolver, resolveEntitlement } from '../entitlements';
 import type { GrantIdentity } from '../oauth/grants';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
-import { buildToolRegistry } from '../tools/registry';
+import { buildToolRegistry, WORKER_SCOPE_TOOLS } from '../tools/registry';
 
 /** Ключ entitlements §8, который гейтит каждый tools/call (по аналогии с гейтом Task 9). */
 const AGENT_REQUESTS_KEY = 'agents.requests_per_day';
@@ -59,7 +59,16 @@ export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
       const defs = await withIdentity(deps.db, ownerId, (tx) => buildToolRegistry(tx));
       return {
         tools: defs
-          .filter((d) => d.internalOnly !== true)
+          .filter(
+            (d) =>
+              d.internalOnly !== true &&
+              // Скоуп гранта (С7, §4.14): фоновому исполнителю публикуются только
+              // чтения, глаголы и thread_post — он не должен даже видеть тулов, которые
+              // ему всё равно откажет dispatch. Условие «не full», а не «= worker»:
+              // незнакомое значение колонки scope обязано сужать список, а не открывать
+              // полный (grants.ts). Отказ на вызове — вторая линия, не единственная.
+              (identity.scope === 'full' || d.kind === 'read' || WORKER_SCOPE_TOOLS.has(d.name)),
+          )
           .map((d) => ({
             name: d.name,
             description: d.description,

@@ -71,6 +71,14 @@ const pendingRecord = z.object({
   input: z.record(z.unknown()), // immutable payload — envelope-валидирован при создании
   actor_kind: z.enum(['owner', 'ai', 'agent']),
   source: z.enum(['chat', 'mcp']),
+  /**
+   * Грант исходного вызова (С2) — вторая половина той же атрибуции: approve владельца
+   * исполняет план от имени запросившего, и владелец обязан видеть, КАКОЙ доступ его
+   * попросил. Ключа нет у владельческих и чатовых путей (за ними стоит сам владелец) и
+   * не было у записей до этой работы — потому optional, а не обязательное поле;
+   * миграции не нужно: metadata — jsonb, схема читается без .strict().
+   */
+  actor_grant_id: z.string().optional(),
   created_at: z.string(),
 });
 
@@ -80,6 +88,8 @@ export interface PendingActor {
   userId: string; // владелец графа (D11)
   kind: ActorKind;
   source: 'chat' | 'mcp';
+  /** Грант, от имени которого пришёл запрос (С2); нет у чата и UI — там актор сам владелец. */
+  grantId?: string;
 }
 
 /**
@@ -138,6 +148,9 @@ export async function createPending(
         input: args.input,
         actor_kind: args.actor.kind,
         source: args.actor.source,
+        // Условная запись, а не `actor_grant_id: undefined`: ключ отсутствует у путей
+        // без гранта — как в action'е журнала (executor.ts) и как проверяет тест
+        ...(args.actor.grantId !== undefined && { actor_grant_id: args.actor.grantId }),
         created_at: createdAt.toISOString(),
       },
       cards: [card],
@@ -274,6 +287,9 @@ export async function approvePending(
         actorUserId: args.ownerId,
         actorKind: found.pending.actor_kind,
         source: found.pending.source,
+        // Грант исходного вызова доживает до исполнения (С2): подтвердил владелец, но в
+        // журнале §7.8 видно, КАКОЙ доступ этот план попросил
+        actorGrantId: found.pending.actor_grant_id,
         threadId: found.threadId,
         operations,
         batchId: args.pendingId,

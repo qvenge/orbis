@@ -26,6 +26,7 @@ import {
   relationDeleteInput,
 } from '@orbis/shared';
 import type { z } from 'zod';
+import { isWorkerThreadTarget } from '../agent-loop/queries';
 import { escalateAfterMutation } from '../ai/escalation';
 import { budgetStatus } from '../budget/aggregates';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
@@ -65,6 +66,7 @@ import {
   type ThreadPostInput,
   threadPostInput,
   userQueryInput,
+  WORKER_SCOPE_TOOLS,
 } from './registry';
 
 // Боевой синк — один инстанс на модуль (состояния не хранит), как в роутерах 1a.
@@ -130,6 +132,40 @@ export async function dispatchTool(
           out: errorResult(
             'VALIDATION',
             `тул «${name}» внутренний — внешним агентам (MCP) недоступен (§9.2)`,
+            { tool: name },
+          ),
+        };
+      }
+      // Скоуп гранта (С7, §4.14): фоновому исполнителю открыты только чтения, глаголы
+      // и thread_post. Условие фактическое — «грант есть И скоуп не full», а не
+      // «скоуп === worker»: verifyBearer кастует text-колонку scope как есть
+      // (grants.ts), и незнакомое значение обязано СУЖАТЬ доступ, а не открывать
+      // полный (fail-closed). Гейт стоит здесь, рядом с internalOnly, а не в
+      // классификаторе §7.10: тот по актору сознательно не ветвится, а скоуп — ось
+      // доступа. Отказ структурированный (§7.10 «forbidden»), ДО любой записи.
+      if (
+        ctx.grant !== undefined &&
+        ctx.grant.scope !== 'full' &&
+        def.kind !== 'read' &&
+        !WORKER_SCOPE_TOOLS.has(def.name)
+      ) {
+        return {
+          kind: 'done',
+          out: errorResult('FORBIDDEN_LEVEL', `тул «${name}» недоступен скоупу worker (§4.14)`, {
+            tool: name,
+            scope: ctx.grant.scope,
+          }),
+        };
+      }
+      // Глагол исполнителя без гранта (§9.3): чат сюда не доходит — реестр чата такие
+      // дефы отсекает (send-message.ts); эта ветка — вторая линия для любого другого
+      // вызывающего без гранта (прогон адресуется конкретному доступу, см. agentOnly)
+      if (def.agentOnly === true && ctx.grant === undefined) {
+        return {
+          kind: 'done',
+          out: errorResult(
+            'VALIDATION',
+            `тул «${name}» — глагол исполнителя, доступен только внешнему агенту с грантом (§9.3)`,
             { tool: name },
           ),
         };
@@ -480,7 +516,14 @@ async function runMutation(
     const pending = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
       createPending(tx, {
         threadId: ctx.threadId,
-        actor: { userId: ctx.actorUserId, kind: ctx.actorKind, source: ctx.source },
+        // Грант едет в pending-запись: подтверждать будет владелец кнопкой, но
+        // атрибуция исполнения остаётся за ТЕМ, кто попросил (§7.8, D11 + С2)
+        actor: {
+          userId: ctx.actorUserId,
+          kind: ctx.actorKind,
+          source: ctx.source,
+          grantId: ctx.grant?.id,
+        },
         tool,
         input: payload,
         level,
@@ -742,6 +785,27 @@ async function runThreadPost(
   parsed: ThreadPostInput,
 ): Promise<ToolDispatchResult> {
   const message = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+    // Периметр записи фонового исполнителя (С7/С9, инвариант 2 спеки) — ДО создания
+    // треда и записи. Условие «не full», а не «= worker», по той же причине, что и в
+    // гейте скоупа выше: незнакомое значение колонки scope обязано сужать доступ.
+    // Несуществующая/чужая сущность здесь даёт FORBIDDEN_LEVEL, а не NOT_FOUND, — и это
+    // правильно: исполнителю не с чего узнавать, что за пределами его назначений вообще
+    // что-то есть.
+    if (ctx.grant !== undefined && ctx.grant.scope !== 'full') {
+      const allowed = await isWorkerThreadTarget(
+        tx,
+        ctx.actorUserId,
+        ctx.grant.id,
+        parsed.entity_id,
+      );
+      if (!allowed) {
+        throw new ExecError(
+          'FORBIDDEN_LEVEL',
+          'worker пишет только в треды назначенных тикетов и их проектов (С7/С9)',
+          { tool: 'thread_post', entity_id: parsed.entity_id },
+        );
+      }
+    }
     // Тред создаётся только для видимой актору сущности; чужая и несуществующая
     // под RLS неразличимы — единый NOT_FOUND (бросает ensureEntityThread)
     const threadId = await ensureEntityThread(tx, ctx.actorUserId, parsed.entity_id);

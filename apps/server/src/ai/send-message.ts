@@ -298,11 +298,15 @@ async function runAgentLoop(
     const defs = await buildToolRegistry(tx);
     // OrbisToolDef → LLMToolDef; internalOnly (user_query) остаётся: внутренний чат —
     // его законный потребитель, отсечение касается только MCP (Task 10)
-    const llmTools: LLMToolDef[] = defs.map((d) => ({
-      name: d.name,
-      description: d.description,
-      inputSchema: d.inputJsonSchema,
-    }));
+    const llmTools: LLMToolDef[] = defs
+      // agentOnly отсекается: у чата нет гранта — глаголы исполнителя ему не адресованы
+      // (прогон ведётся от имени конкретного доступа, §9.3/С7)
+      .filter((d) => d.agentOnly !== true)
+      .map((d) => ({
+        name: d.name,
+        description: d.description,
+        inputSchema: d.inputJsonSchema,
+      }));
     return { system: ctx.system, history: ctx.messages, tools: llmTools };
   });
 

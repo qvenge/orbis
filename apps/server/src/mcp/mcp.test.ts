@@ -8,10 +8,10 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { entityThreadId, globalThreadId, newId } from '@orbis/shared';
-import { eq, inArray } from 'drizzle-orm';
+import { batchAuditMessageId, entityThreadId, globalThreadId, newId } from '@orbis/shared';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import type { WireChatMessage } from '../chat/messages';
 import { chatMessages, entities, oauthClients } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -24,6 +24,7 @@ import {
   revokeGrant,
   verifyBearer,
 } from '../oauth/grants';
+import { approvePending } from '../policy/pending';
 import { appRouter } from '../router';
 import { buildToolRegistry } from '../tools/registry';
 import { createCallerFactory } from '../trpc';
@@ -36,6 +37,8 @@ const owner = freshUserId();
 
 /** Живой headless-грант владельца; выдаётся в базу в beforeAll (сырой токен — оттуда). */
 let TOKEN: string;
+/** Тот же владелец, но грант со скоупом worker (С7) — фоновый исполнитель. */
+let WORKER_TOKEN: string;
 
 // ORBIS_PUBLIC_URL берётся под контроль ЯВНО (по образцу metadata.test.ts): от неё
 // зависит адрес в WWW-Authenticate, который ниже пинится дословно. Файл переменную не
@@ -64,6 +67,19 @@ beforeAll(async () => {
   delete process.env.ORBIS_PUBLIC_URL; // база метаданных = адрес запроса (локальный стенд)
   await truncateAll();
   TOKEN = await issuePatGrant(db, { ownerId: owner, label: 'тестовый агент' });
+  // Скоуп worker: issuePatGrant его пока не принимает (Задача 8) — строка правится
+  // под admin-DSN, мимо RLS; это тестовая обвязка, а не путь кода
+  WORKER_TOKEN = await issuePatGrant(db, { ownerId: owner, label: 'фоновый исполнитель' });
+  const workerGrant = await verifyBearer(db, WORKER_TOKEN);
+  if (workerGrant === null) throw new Error('worker-PAT не прошёл verifyBearer');
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    await admin.execute(
+      sql`UPDATE agent_grants SET scope = 'worker' WHERE id = ${workerGrant.grantId}::uuid`,
+    );
+  } finally {
+    await adminClient.end();
+  }
 
   const app = new Hono();
   app.all('/mcp', makeMcpHandler({ db }));
@@ -687,5 +703,95 @@ describe('/mcp: паттерн «что нового» (§9.3, сценарий 
       (m) => (m.metadata as { author_kind?: string }).author_kind === 'agent',
     );
     expect(agentNote?.content).toContain('Готово');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Скоуп worker (С7, §4.14): сужение tools/list и fail-closed отказ на tools/call
+// ---------------------------------------------------------------------------
+
+describe('/mcp: скоуп worker (С7, §4.14)', () => {
+  test('tools/list сужен: без entity_update / attach_* / batch_execute; entity_get и thread_post на месте', async () => {
+    const agent = await connectAgent(mainUrl(), WORKER_TOKEN);
+    try {
+      const { tools } = await agent.listTools();
+      const names = tools.map((t) => t.name);
+      for (const name of [
+        'entity_create',
+        'entity_update',
+        'relation_create',
+        'relation_delete',
+        'batch_execute',
+        'attach_orbis_task',
+      ]) {
+        expect(names).not.toContain(name);
+      }
+      for (const name of ['entity_get', 'entity_query', 'budget_status', 'thread_post']) {
+        expect(names).toContain(name);
+      }
+    } finally {
+      await agent.close();
+    }
+  });
+
+  test('tools/call entity_update worker-грантом → isError, FORBIDDEN_LEVEL (список — не единственная линия)', async () => {
+    const target = await seedEntity({ title: 'Цель worker-отказа', tags: [] });
+    const agent = await connectAgent(mainUrl(), WORKER_TOKEN);
+    try {
+      const r = await callTool(agent, 'entity_update', { id: target.id, title: 'Переименовано' });
+      expect(r.isError).toBe(true);
+      expect((r.payload.error as { code?: string }).code).toBe('FORBIDDEN_LEVEL');
+    } finally {
+      await agent.close();
+    }
+    // Отказ до записи: заголовок не изменился
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.select({ title: entities.title }).from(entities).where(eq(entities.id, target.id)),
+    );
+    expect(rows[0]?.title).toBe('Цель worker-отказа');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Грант доживает до approve: pending хранит исходный грант (С2, §7.8)
+// ---------------------------------------------------------------------------
+
+describe('/mcp: pending-подтверждение несёт грант исходного вызова (С2)', () => {
+  test('approve batch-а от MCP-гранта: action журнала несёт actor_grant_id', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < 11; i++) {
+      ids.push((await seedEntity({ title: `Грант в pending ${i}`, tags: [] })).id);
+    }
+    let pendingId = '';
+    const agent = await connectAgent(mainUrl());
+    try {
+      const r = await callTool(agent, 'batch_execute', {
+        batch_id: newId(),
+        operations: ids.map((id) => ({ tool: 'entity_update', input: { id, archived: true } })),
+      });
+      expect(r.payload.status).toBe('pending_confirmation');
+      pendingId = String(r.payload.pendingId);
+    } finally {
+      await agent.close();
+    }
+
+    const approved = await approvePending(db, { ownerId: owner, pendingId });
+    expect(approved.ok).toBe(true);
+
+    // Атрибуция ИСХОДНОГО актора (§7.8, D11) — вместе с грантом: владелец видит, какой
+    // доступ попросил подтверждение, даже если исполнил план он сам кнопкой
+    const grant = await verifyBearer(db, TOKEN);
+    if (grant === null) throw new Error('тестовый PAT не прошёл verifyBearer');
+    const auditRows = await withIdentity(db, owner, (tx) =>
+      tx
+        .select()
+        .from(chatMessages)
+        .where(eq(chatMessages.id, batchAuditMessageId(owner, pendingId))),
+    );
+    const action = (auditRows[0]?.metadata as { actions?: ActionRecord[] }).actions?.[0];
+    expect(action).toBeDefined();
+    expect(action?.actor_kind).toBe('agent');
+    expect(action?.source).toBe('mcp');
+    expect(action?.actor_grant_id).toBe(grant.grantId);
   });
 });

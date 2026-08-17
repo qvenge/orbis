@@ -758,3 +758,140 @@ describe('dispatchTool: thread_post — сообщение в тред сущн�
     expect(msgs[0]?.content).toBe('Заметка №1');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Скоуп worker (С7, §4.14): гейт доступа ДО любой записи + сужение thread_post
+// ---------------------------------------------------------------------------
+
+describe('dispatchTool: скоуп worker — fail-closed гейт доступа (С7, §4.14)', () => {
+  const owner = freshUserId();
+  let grantId: string;
+  let ticket: WireEntity;
+  let project: WireEntity;
+  let note: WireEntity;
+
+  /** Контекст вызова от имени фонового исполнителя (MCP + грант со скоупом worker). */
+  const worker = () =>
+    ctxFor({
+      actorUserId: owner,
+      actorKind: 'agent',
+      source: 'mcp',
+      grant: { id: grantId, scope: 'worker', label: 'w' },
+    });
+
+  beforeAll(async () => {
+    // Строка гранта пишется под admin-DSN: issuePatGrant scope пока не принимает
+    // (Задача 8), а инвариант assertAssignment требует ЖИВОГО гранта владельца
+    grantId = newId();
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.execute(
+        sql`INSERT INTO agent_grants (id, owner_id, kind, label, scope)
+            VALUES (${grantId}::uuid, ${owner}::uuid, 'pat', 'worker-тест', 'worker')`,
+      );
+    } finally {
+      await adminClient.end();
+    }
+    project = await seedEntity(owner, {
+      title: 'Проект исполнителя',
+      tags: [],
+      aspects: { 'orbis/project': { stage: 'active' } },
+    });
+    ticket = await seedEntity(owner, {
+      title: 'Тикет исполнителя',
+      tags: [],
+      aspects: {
+        'orbis/task': { status: 'planned' },
+        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      },
+    });
+    note = await seedEntity(owner, { title: 'Личная заметка владельца', tags: [] });
+    const r = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'relation_create',
+          input: { source_id: project.id, target_id: ticket.id, relation_type: 'parent' },
+        },
+      ],
+    });
+    if (!r.ok) throw new Error(`сид связи проект→тикет: ${r.error.code} ${r.error.message}`);
+  });
+
+  test('worker: entity_update / attach_orbis_task / batch_execute → FORBIDDEN_LEVEL, ничего не записано', async () => {
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ['entity_update', { id: ticket.id, aspects: { 'orbis/task': { status: 'done' } } }],
+      ['attach_orbis_task', { entity_id: ticket.id, data: { status: 'done' } }],
+      [
+        'batch_execute',
+        {
+          batch_id: newId(),
+          operations: [
+            {
+              tool: 'entity_update',
+              input: { id: ticket.id, aspects: { 'orbis/task': { status: 'done' } } },
+            },
+          ],
+        },
+      ],
+      ['entity_create', { title: 'Сущность мимо назначения', tags: [] }],
+      ['relation_delete', { source_id: project.id, target_id: ticket.id, relation_type: 'parent' }],
+    ];
+    for (const [name, input] of calls) {
+      expectError(await dispatchTool(worker(), name, input), 'FORBIDDEN_LEVEL');
+    }
+    // Гейт стоит ДО записи: статус тикета не изменился, связь проект→тикет на месте
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, ticket.id)),
+    );
+    const task = (rows[0]?.aspects as { 'orbis/task'?: { status?: string } })['orbis/task'];
+    expect(task?.status).toBe('planned');
+  });
+
+  test('worker: entity_get / entity_query / budget_status исполняются', async () => {
+    const got = await dispatchTool(worker(), 'entity_get', { id: ticket.id });
+    expect(got.status).toBe('ok');
+    const queried = await dispatchTool(worker(), 'entity_query', { query: 'aspect=orbis/task' });
+    expect(queried.status).toBe('ok');
+    const budget = await dispatchTool(worker(), 'budget_status', {});
+    expect(budget.status).toBe('ok');
+  });
+
+  test('worker: thread_post в тред назначенного тикета и его проекта — ок; в тред чужой заметки — FORBIDDEN_LEVEL', async () => {
+    const onTicket = await dispatchTool(worker(), 'thread_post', {
+      entity_id: ticket.id,
+      content: 'Взял тикет в работу.',
+    });
+    expect(onTicket.status).toBe('ok');
+    const onProject = await dispatchTool(worker(), 'thread_post', {
+      entity_id: project.id,
+      content: 'Сводка по проекту.',
+    });
+    expect(onProject.status).toBe('ok');
+    // Заметка владельца исполнителю не назначена — отказ, и до записи: тред пуст
+    expectError(
+      await dispatchTool(worker(), 'thread_post', {
+        entity_id: note.id,
+        content: 'не моя заметка',
+      }),
+      'FORBIDDEN_LEVEL',
+    );
+    expect(await messagesIn(owner, entityThreadId(owner, note.id))).toHaveLength(0);
+  });
+
+  test('скоуп full сужению thread_post не подчиняется: пишет в любой свой тред', async () => {
+    const r = await dispatchTool(
+      ctxFor({
+        actorUserId: owner,
+        actorKind: 'agent',
+        source: 'mcp',
+        grant: { id: grantId, scope: 'full', label: 'f' },
+      }),
+      'thread_post',
+      { entity_id: note.id, content: 'Полный доступ пишет куда угодно в графе владельца.' },
+    );
+    expect(r.status).toBe('ok');
+  });
+});

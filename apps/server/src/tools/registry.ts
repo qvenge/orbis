@@ -26,7 +26,34 @@ export interface OrbisToolDef {
    * склеиваются в «_»), а executor ждёт форму attach_<id c заменой только «/»>.
    */
   aspectId?: string;
+  /**
+   * Глагол исполнителя (§9.3, С7): виден ТОЛЬКО вызову с грантом (MCP). У чата гранта
+   * нет — прогон адресуется конкретному доступу, и без гранта глагол не к кому отнести;
+   * поэтому реестр чата такие дефы отсекает (ai/send-message.ts), а dispatch держит
+   * вторую линию (вызов без ctx.grant → VALIDATION).
+   */
+  agentOnly?: boolean;
 }
+
+/**
+ * Глаголы исполнителя (§9.3, С7) — единый список имён. Сами дефы появятся в реестре
+ * позже (Задача 10); имена объявлены здесь, потому что на них уже ссылается гейт
+ * скоупа: правило доступа и набор имён обязаны жить в одном месте, иначе новый глагол
+ * молча окажется недоступен своему же исполнителю.
+ */
+export const AGENT_VERB_NAMES = [
+  'orbis_my_queue',
+  'orbis_claim_task',
+  'orbis_run_step',
+  'orbis_checkpoint',
+  'orbis_finish',
+] as const;
+
+/** Что доступно скоупу worker сверх read-тулов (С7): глаголы + thread_post. Всё прочее — отказ. */
+export const WORKER_SCOPE_TOOLS: ReadonlySet<string> = new Set([
+  ...AGENT_VERB_NAMES,
+  'thread_post',
+]);
 
 /** Карточка чата (02 §2.3) — собирается сервером как данные, рендерит 1c. */
 export type Card =
@@ -463,9 +490,11 @@ function attachToolDef(row: AspectToolRow): OrbisToolDef {
  *
  * Служебные аспекты (`SERVICE_ASPECT_IDS`, сегодня — orbis/agent-run) attach_*-тула НЕ
  * получают: прогон правит только сервер (С5/С7) глаголами orbis_claim_task / orbis_run_step
- * / orbis_checkpoint / orbis_finish. Без тула модель не сможет создать или переписать прогон
- * мимо глаголов. Фильтр стоит здесь, а не в `loadAspectToolRows`: этим же путём идут
- * `buildToolRegistry` и `scripts/llm-smoke.ts` — отсечение одно на всех потребителей.
+ * / orbis_checkpoint / orbis_finish. Без attach_*-тула ПРЯМОГО способа править прогон у
+ * модели нет; core-тулы (`entity_create`/`entity_update`, `batch_execute`) аспект принимают
+ * по-прежнему — их удерживает aiInstructions аспекта, см. «Известные границы» спеки.
+ * Фильтр стоит здесь, а не в `loadAspectToolRows`: этим же путём идут `buildToolRegistry`
+ * и `scripts/llm-smoke.ts` — отсечение одно на всех потребителей.
  */
 export function buildToolDefs(aspectRows: AspectToolRow[]): OrbisToolDef[] {
   const attachable = aspectRows.filter(
