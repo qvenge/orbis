@@ -773,3 +773,64 @@ describe('§13.6: decimal-точность в БД и persisted JSON', () => {
     }
   });
 });
+
+// ─── Служебные аспекты (02-core-os §3.9) ───
+// Третий пользователь со своими данными: эталонный датасет §6.2 не трогаем — его состав
+// и счётчики выдач зафиксированы тестами выше, а RLS даёт этой паре сущностей свою выборку.
+const USER_C = freshUserId();
+
+const ID_C = {
+  ticket: '019eb300-d5e1-7000-8000-000000000021',
+  run: '019eb300-d5e1-7000-8000-000000000022',
+} as const;
+
+describe('служебные аспекты (02-core-os §3.9): прогоны вне основных выдач', () => {
+  beforeAll(async () => {
+    await withIdentity(db, USER_C, async (tx) => {
+      await tx.insert(entities).values([
+        {
+          id: ID_C.ticket,
+          ownerId: USER_C,
+          title: 'Тикет',
+          tags: ['task'],
+          aspects: { 'orbis/task': { status: 'in_progress' } },
+          createdAt: new Date('2026-07-01T08:00:00Z'),
+          updatedAt: new Date('2026-07-01T08:00:00Z'),
+        },
+        {
+          // Прогон вставляется напрямую (как весь датасет файла): его пишет только сервер
+          // глаголами исполнителя, а проверяется здесь компилятор, а не путь записи.
+          id: ID_C.run,
+          ownerId: USER_C,
+          title: 'Прогон исполнителя',
+          tags: [],
+          aspects: {
+            'orbis/agent-run': {
+              grant_id: '019eb300-d5e1-7000-8000-0000000000c0',
+              outcome: 'running',
+              started_at: '2026-07-03T10:00:00Z',
+              last_step_at: '2026-07-03T10:05:00Z',
+              step_count: 0,
+              steps: [],
+            },
+          },
+          // Свежее тикета: без служебного условия прогон возглавил бы «свежее» (С5).
+          createdAt: new Date('2026-07-03T10:00:00Z'),
+          updatedAt: new Date('2026-07-03T10:05:00Z'),
+        },
+      ]);
+    });
+  });
+
+  test('запрос без aspect=orbis/agent-run не возвращает прогонов; с ним — возвращает', async () => {
+    const all = ids(await run(USER_C, 'sortBy=updated_at:desc'));
+    expect(all).toContain(ID_C.ticket);
+    expect(all).not.toContain(ID_C.run);
+    // Бейджи (02 §3.2) считают ту же выборку: compileCount идёт через тот же compileWhere.
+    expect(await runCount(USER_C, 'sortBy=updated_at:desc')).toBe(1);
+    // Запрос сам назвал служебный аспект — прячущее условие снимается целиком.
+    expect(ids(await run(USER_C, 'aspect=orbis/agent-run'))).toEqual([ID_C.run]);
+    // search= идёт тем же WHERE — прогон не всплывает и в поиске.
+    expect(await run(USER_C, 'search=Прогон')).toHaveLength(0);
+  });
+});

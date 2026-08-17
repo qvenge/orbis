@@ -22,6 +22,7 @@ import {
   type QueryFilter,
   type QueryRangeFilter,
   type QuerySortField,
+  SERVICE_ASPECT_IDS,
 } from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
@@ -169,6 +170,13 @@ function compileWhere(ast: QueryAst, ctx: CompileContext, aspects: Set<string>):
   const conds: SQL[] = [sql`true`];
   // Нет узла archived → только неархивные (§6.1); позиция — как в псевдо-SQL §6.1.
   if (!ast.filters.some((f) => f.kind === 'archived')) conds.push(sql`NOT archived`);
+  // Служебные аспекты (02-core-os §3.9): прогоны исполнителя поднимались бы в топ «свежего» на
+  // каждый orbis_run_step (С5). Прячем неявно — пока запрос сам не назвал такой аспект через
+  // aspect=. Условие индексом не ускоряется (GIN отрицание не покрывает): это построчный фильтр
+  // поверх остальной выборки — дёшево, одна проверка наличия ключа в jsonb.
+  if (!SERVICE_ASPECT_IDS.some((id) => aspects.has(id))) {
+    conds.push(sql`NOT (aspects ?| ${textArray([...SERVICE_ASPECT_IDS])})`);
+  }
   for (const f of ast.filters) {
     const c = compileFilter(f, ctx, aspects);
     if (c) conds.push(c);

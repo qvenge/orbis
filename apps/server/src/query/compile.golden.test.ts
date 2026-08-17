@@ -78,11 +78,12 @@ describe('golden: compileLatest — последнее значение поля
     const q = dialect.sqlToQuery(compileLatest(parsed.ast, CTX, 'amount'));
     expect(q.sql.replaceAll(/\s+/g, ' ').trim()).toBe(
       "SELECT (aspects->'orbis/financial'->>'amount')::numeric::text AS value FROM entities " +
-        'WHERE true AND NOT archived AND aspects ? $1 AND tags && ARRAY[$2]::text[] ' +
+        'WHERE true AND NOT archived AND NOT (aspects ?| ARRAY[$1]::text[]) ' +
+        'AND aspects ? $2 AND tags && ARRAY[$3]::text[] ' +
         "AND aspects->'orbis/financial'->>'amount' IS NOT NULL " +
         'ORDER BY updated_at DESC, id DESC LIMIT 1',
     );
-    expect(q.params).toEqual(['orbis/financial', 'savings']);
+    expect(q.params).toEqual(['orbis/agent-run', 'orbis/financial', 'savings']);
   });
 
   test('нечисловое и неизвестное поле — QueryFieldError (и он же QueryCompileError)', () => {
@@ -160,8 +161,8 @@ describe('поле-массив: containment вместо текстового �
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     const c = dialect.sqlToQuery(compileQuery(parsed.ast, { ...CTX, catalog: numeric }));
-    expect(c.sql).toContain('jsonb_build_array($4::text)');
-    expect(c.sql).toContain('jsonb_build_array($7::numeric)');
+    expect(c.sql).toContain('jsonb_build_array($5::text)');
+    expect(c.sql).toContain('jsonb_build_array($8::numeric)');
     // Нечисловой литерал лишней ветки не получает — обычный путь не дорожает.
     const plain = compileFor('aspect=orbis/category, aliases=такси');
     expect(plain.sql).not.toContain('::numeric');
