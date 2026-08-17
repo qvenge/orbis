@@ -10,15 +10,22 @@
 // `execute`. Журнал §7.8 с актором-агентом, inverse, Undo и карточки достаются даром,
 // а правило «один путь мутаций» (§9.1) не двоится. Собственных INSERT/UPDATE здесь нет.
 import {
+  type CheckpointInput,
+  type CheckpointResult,
   type ClaimTaskInput,
   type ClaimTaskResult,
   checkpointInput,
   claimTaskInput,
+  type FinishInput,
+  type FinishResult,
   finishInput,
   type MyQueueResult,
   myQueueInput,
   newId,
   type QueueTicket,
+  type RunStepInput,
+  type RunStepResult,
+  type RunUsageInput,
   runStepInput,
   type TaskStatus,
 } from '@orbis/shared';
@@ -31,7 +38,17 @@ import type { JournalSink, WireEntity } from '../executor/types';
 import type { GrantRef } from '../oauth/grants';
 import type { ToolDispatchResult } from '../tools/dispatch';
 import type { AGENT_VERB_NAMES } from '../tools/registry';
-import { assignedTickets, parentProject, runSummary, runsOfTicket, ticketById } from './queries';
+import {
+  assignedTickets,
+  parentProject,
+  type RunRow,
+  runById,
+  runSummary,
+  runsOfTicket,
+  type TicketRow,
+  ticketById,
+  ticketOfRun,
+} from './queries';
 import { sweepStaleRuns } from './sweep';
 
 export type AgentVerbName = (typeof AGENT_VERB_NAMES)[number];
@@ -90,6 +107,93 @@ function narrow<S extends z.ZodTypeAny>(schema: S, input: unknown, tool: string)
 /** Статусы, из которых тикет можно взять в работу (единственное место правила). */
 const CLAIMABLE_STATUSES: readonly TaskStatus[] = ['inbox', 'planned'];
 
+function iso(d: Date): string {
+  return d.toISOString();
+}
+
+/**
+ * Сущность из результата `execute`. Приведение через проверку, а не `as`: на
+ * идемпотентном повторе (§7.8) results — это ЧУЖОЙ сохранённый ответ, форму которого мы
+ * не выбирали, и голое приведение превращало бы повтор с занятым id в TypeError (500)
+ * вместо структурного отказа.
+ */
+function wireEntityAt(results: unknown[], index: number): WireEntity | null {
+  const row = results[index];
+  if (typeof row !== 'object' || row === null) return null;
+  const wire = row as Partial<WireEntity>;
+  if (typeof wire.id !== 'string') return null;
+  if (typeof wire.aspects !== 'object' || wire.aspects === null) return null;
+  return wire as WireEntity;
+}
+
+/**
+ * Отказ «под этим id вызова лежит не наш результат». Один текст на все глаголы: агенту
+ * важно ровно одно действие — взять новый id, а разбор того, чей именно ответ там лежал,
+ * ему не поможет (и знать чужое ему незачем).
+ */
+function replayMismatch(verb: string, batchId: string): ToolDispatchResult {
+  return err('CONFLICT', `id вызова уже использован другим действием — возьми новый`, {
+    tool: verb,
+    id: batchId,
+  });
+}
+
+/** Поле провалившегося предусловия из details CONFLICT'а (executor кладёт один элемент). */
+function preconditionField(details: unknown): string | undefined {
+  if (typeof details !== 'object' || details === null) return undefined;
+  const precondition = (details as { precondition?: unknown }).precondition;
+  if (typeof precondition !== 'object' || precondition === null) return undefined;
+  const field = (precondition as { field?: unknown }).field;
+  return typeof field === 'string' ? field : undefined;
+}
+
+/** Найденный прогон либо готовый структурный отказ — «или/или» без исключений. */
+type RunLookup =
+  | { run: RunRow; error?: undefined }
+  | { run?: undefined; error: ToolDispatchResult };
+
+/**
+ * Прогон под RLS владельца + предпроверки, общие трём глаголам.
+ *
+ * Три разных отказа намеренно: чужой владелец — `NOT_FOUND` (прогон за пределами графа
+ * агента для него не существует), чужой грант того же владельца — `CONFLICT` (прогон
+ * есть, но он не твой: у владельца может работать второй исполнитель), терминальный
+ * исход — `CONFLICT` со ссылкой на исход (инвариант 5), чтобы агент из ответа понял,
+ * ЧТО случилось с его работой, и не повторял вызов.
+ *
+ * Предпроверка не отменяет предусловий самого update'а: между чтением и записью прогон
+ * может подмести (С6). Она нужна ради внятного ответа — голый CONFLICT предусловия не
+ * назвал бы исход и причину.
+ */
+async function readRun(ctx: VerbCtx, runId: string, tail: string): Promise<RunLookup> {
+  const row = await withIdentity(ctx.db, ctx.ownerId, (tx) => runById(tx, runId));
+  if (row === null) return { error: err('NOT_FOUND', 'прогон не найден', { run_id: runId }) };
+  const run = row.run;
+  if (run.grant_id !== ctx.grant.id) {
+    return {
+      error: err('CONFLICT', 'прогон принадлежит другому исполнителю', { run_id: runId }),
+    };
+  }
+  if (run.outcome !== 'running') {
+    return {
+      error: err('CONFLICT', `прогон завершён (${run.outcome}) — ${tail}`, {
+        run_id: runId,
+        outcome: run.outcome,
+        ...(run.abandon_note !== undefined && { note: run.abandon_note }),
+      }),
+    };
+  }
+  return { run: row };
+}
+
+/** Предусловия «прогон всё ещё мой и всё ещё идёт» — общие шагу, чекпойнту и итогу. */
+function runStillMine(grantId: string): Array<{ aspect: string; field: string; in: unknown[] }> {
+  return [
+    { aspect: 'orbis/agent-run', field: 'outcome', in: ['running'] },
+    { aspect: 'orbis/agent-run', field: 'grant_id', in: [grantId] },
+  ];
+}
+
 export async function runAgentVerb(
   ctx: VerbCtx,
   name: AgentVerbName,
@@ -102,13 +206,12 @@ export async function runAgentVerb(
       return myQueue(ctx);
     case 'orbis_claim_task':
       return claimTask(ctx, narrow(claimTaskInput, input, name));
-    // Глаголы II (Задача 11): дефы в реестре уже есть — иначе агент не увидел бы круг
-    // целиком, а парность zod↔JSON Schema проверялась бы по частям. До реализации —
-    // честный структурный отказ, а не тихий успех.
     case 'orbis_run_step':
+      return runStep(ctx, narrow(runStepInput, input, name));
     case 'orbis_checkpoint':
+      return checkpoint(ctx, narrow(checkpointInput, input, name));
     case 'orbis_finish':
-      return err('VALIDATION', `глагол «${name}» ещё не реализован`, { tool: name });
+      return finish(ctx, narrow(finishInput, input, name));
   }
 }
 
@@ -254,9 +357,14 @@ async function claimTask(ctx: VerbCtx, input: ClaimTaskInput): Promise<ToolDispa
   // Порядок результатов = порядок операций. При идемпотентном повторе (§7.8) операции не
   // исполнялись вовсе, и локальный runId — не тот, что в графе: правду берём из
   // сохранённого ответа, иначе агент получил бы id несуществующего прогона.
-  const ticketWire = r.results[0] as WireEntity;
-  const runWire = r.results[1] as WireEntity;
-  const actualRunId = runWire.id;
+  const ticketWire = wireEntityAt(r.results, 0);
+  const runWire = wireEntityAt(r.results, 1);
+  // Форму сохранённого ответа мы не выбирали: под тем же id мог лечь ЛЮБОЙ batch
+  // владельца (правка заметки — тоже batch). Проверка формы, а не приведение: иначе
+  // повтор чужого id падал бы TypeError'ом в 500 вместо структурного отказа.
+  if (ticketWire === null || runWire === null) {
+    return replayMismatch('orbis_claim_task', batchId);
+  }
 
   // Ключ идемпотентности — ключ ВЫЗОВА, а не тикета: если агент переиспользовал `id` для
   // другого тикета, replay вернул бы ему чужой прогон, и шаги поехали бы не туда. Замена
@@ -269,6 +377,18 @@ async function claimTask(ctx: VerbCtx, input: ClaimTaskInput): Promise<ToolDispa
       claimed: ticketWire.id,
     });
   }
+  // …и ключ ОДНОГО исполнителя: audit-id считается по владельцу и batch_id, поэтому
+  // второй грант того же владельца, повторив id первого, получил бы на replay его прогон
+  // и начал бы писать в него шаги. Тикет здесь совпадает — различает только грант.
+  const runGrantId = runWire.aspects['orbis/agent-run']?.grant_id;
+  if (runGrantId !== ctx.grant.id) {
+    return err('CONFLICT', 'id вызова уже использован другим исполнителем — возьми новый', {
+      tool: 'orbis_claim_task',
+      id: batchId,
+      ticket_id: ticket.id,
+    });
+  }
+  const actualRunId = runWire.id;
 
   const history = await withIdentity(ctx.db, ctx.ownerId, async (tx) => {
     const runs = await runsOfTicket(tx, ticket.id);
@@ -291,4 +411,300 @@ async function claimTask(ctx: VerbCtx, input: ClaimTaskInput): Promise<ToolDispa
     replayed: r.idempotentReplay,
   };
   return ok(result);
+}
+
+// ---------------------------------------------------------------------------
+// orbis_run_step — след работы и отметка живости (С5, С6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Сколько раз глагол перечитывает прогон, проиграв CAS. Три, а не «пока не выйдет»:
+ * конкурируют шаги ОДНОГО прогона (он принадлежит одному гранту), их единицы, и трёх
+ * попыток хватает с запасом. Вечный ретрай под нагрузкой держал бы соединение вместо
+ * честного «повтори вызов».
+ */
+const STEP_CAS_ATTEMPTS = 3;
+
+/**
+ * Шаг прогона: строка в массиве `steps` + счётчик + отметка живости.
+ *
+ * Почему шаги живут на прогоне, а не только в журнале §7.8: сводка обязана пережить
+ * журнал (С5). Журнал — про мутации графа и Undo, он подрезается и читается по треду; а
+ * «что агент успел сделать» нужно человеку в карточке прогона и подметанию (С6, признак
+ * `external`) — спустя недели и без чтения чата.
+ *
+ * Почему CAS по счётчику, а не просто «допиши в массив»: агент зовёт тулы параллельно,
+ * а `steps` патчится целым массивом (merge аспекта — по полям). Без предусловия
+ * `step_count in [n]` второй шаг записал бы массив, собранный из состояния ДО первого, и
+ * первый шаг молча исчез бы. Предусловие превращает потерю в CONFLICT, а CONFLICT —
+ * в перечитывание: снаружи оба вызова успешны, порядок seq строгий.
+ */
+async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchResult> {
+  let lastConflict: ToolDispatchResult | null = null;
+  for (let attempt = 0; attempt < STEP_CAS_ATTEMPTS; attempt++) {
+    const found = await readRun(ctx, input.run_id, 'новые шаги не принимаются');
+    if (found.error !== undefined) return found.error;
+    const run = found.run.run;
+    const now = ctx.clock();
+    // `id` вызова = batch_id action'а §7.8; между попытками он НЕ меняется: проигравшая
+    // попытка ничего не записала (batch откатился целиком), а ключ идемпотентности
+    // обязан оставаться тем же — иначе повтор от агента раздвоил бы шаг.
+    const batchId = input.id ?? newId();
+    const n = run.step_count;
+    const step = {
+      seq: n + 1,
+      at: iso(now),
+      summary: input.summary,
+      external: input.external === true,
+      action_id: batchId,
+    };
+
+    const r = await execute(
+      ctx.db,
+      {
+        actorUserId: ctx.ownerId,
+        actorKind: 'agent',
+        source: 'mcp',
+        actorGrantId: ctx.grant.id,
+        runId: found.run.id,
+        batchId,
+        operations: [
+          {
+            tool: 'entity_update',
+            input: {
+              id: found.run.id,
+              precondition: [
+                ...runStillMine(ctx.grant.id),
+                // CAS: конкурентный шаг успел лечь → CONFLICT → перечитать и повторить
+                { aspect: 'orbis/agent-run', field: 'step_count', in: [n] },
+              ],
+              aspects: {
+                'orbis/agent-run': {
+                  steps: [...run.steps, step],
+                  step_count: n + 1,
+                  last_step_at: iso(now),
+                },
+              },
+            },
+          },
+        ],
+        clock: ctx.clock,
+      },
+      { sink: ctx.sink },
+    );
+
+    if (r.ok) {
+      const runWire = wireEntityAt(r.results, 0);
+      if (runWire === null || runWire.id !== found.run.id) {
+        return replayMismatch('orbis_run_step', batchId);
+      }
+      // Счётчик — из сохранённого ответа, а не локальное n+1: на повторе с тем же id
+      // (§7.8) операции не исполнялись, и правда о прогоне лежит только там.
+      const saved = runWire.aspects['orbis/agent-run']?.step_count;
+      const result: RunStepResult = {
+        run_id: runWire.id,
+        step_count: typeof saved === 'number' ? saved : n + 1,
+        action_id: r.actionId,
+      };
+      return ok(result);
+    }
+    if (r.error.code === 'CONFLICT' && preconditionField(r.error.details) === 'step_count') {
+      lastConflict = { status: 'error', error: r.error };
+      continue;
+    }
+    // Разошлось не по счётчику (прогон завершили или он уже не наш) — повторять нечего
+    return { status: 'error', error: r.error };
+  }
+  // Три подряд проигранных CAS — отдаём последний отказ как есть (со всеми details):
+  // это не «сервер сдался», а «прогон меняется быстрее, чем мы успеваем», и агенту
+  // честнее увидеть конфликт, чем молчаливо потерянный шаг.
+  return (
+    lastConflict ??
+    err('CONFLICT', 'шаг не записан: прогон меняется конкурентно — повтори вызов', {
+      run_id: input.run_id,
+    })
+  );
+}
+
+// ---------------------------------------------------------------------------
+// orbis_checkpoint / orbis_finish — прогон терминален, тикет возвращается человеку
+// ---------------------------------------------------------------------------
+
+/** Общая часть двух завершающих глаголов: что писать в прогон и что — в тикет. */
+interface CloseRunArgs {
+  verb: 'orbis_checkpoint' | 'orbis_finish';
+  run_id: string;
+  id?: string;
+  usage?: RunUsageInput;
+  session_url?: string;
+  /** Отказ предпроверки терминальности: хвост сообщения «прогон завершён (…) — …». */
+  terminalTail: string;
+  /**
+   * Патч прогона поверх общего хвоста (finished_at, last_step_at, usage, session_url).
+   * Функция от `now`, а не готовый объект: `asked_at` чекпойнта обязан совпасть с
+   * `finished_at` того же прогона — два вызова часов дали бы разъехавшиеся отметки
+   * одного события.
+   */
+  runPatch: (now: Date) => Record<string, unknown>;
+  /** Патч тикета; у итога зависит от may_close самого тикета (С8). */
+  taskPatch: (ticket: TicketRow) => Record<string, unknown>;
+  /** Статусы тикета, допустимые в ответе: иное = сохранённый ответ чужого вызова. */
+  expected: readonly TaskStatus[];
+}
+
+/**
+ * Завершение прогона: ОДИН batch из двух `entity_update` — прогон и его тикет.
+ *
+ * Одним batch'ем, а не двумя вызовами, потому что состояния «прогон закрыт, а тикет всё
+ * ещё in_progress» быть не должно ни на миг: подметание (С6) увидело бы тикет в работе
+ * без живого прогона, а владелец — работу, о которой никто не отчитался. Атомарность
+ * даёт executor: обе операции в одной транзакции, один action §7.8, откат — общий.
+ */
+async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchResult> {
+  const found = await readRun(ctx, args.run_id, args.terminalTail);
+  if (found.error !== undefined) return found.error;
+  const run = found.run;
+
+  const ticket = await withIdentity(ctx.db, ctx.ownerId, (tx) => ticketOfRun(tx, run.id));
+  // Прогон-сирота: закрывать нечего и некуда отчитываться. Случай не гипотетический —
+  // связь мог снять владелец, — и молча закрыть один прогон было бы хуже отказа.
+  if (ticket === null) {
+    return err('NOT_FOUND', 'у прогона нет тикета — некуда записать итог', { run_id: run.id });
+  }
+
+  const now = ctx.clock();
+  const batchId = args.id ?? newId();
+  const operations = [
+    {
+      tool: 'entity_update',
+      input: {
+        id: run.id,
+        precondition: runStillMine(ctx.grant.id),
+        aspects: {
+          'orbis/agent-run': {
+            ...args.runPatch(now),
+            finished_at: iso(now),
+            last_step_at: iso(now),
+            ...(args.usage !== undefined && { usage: args.usage }),
+            ...(args.session_url !== undefined && { session_url: args.session_url }),
+          },
+        },
+      },
+    },
+    {
+      tool: 'entity_update',
+      input: {
+        id: ticket.id,
+        // Тикет обязан быть ещё в работе: владелец мог вернуть его руками, и тогда
+        // отчёт агента поверх его решения был бы перезаписью чужого действия.
+        precondition: [{ aspect: 'orbis/task', field: 'status', in: ['in_progress'] }],
+        aspects: { 'orbis/task': args.taskPatch(ticket) },
+      },
+    },
+  ];
+
+  const r = await execute(
+    ctx.db,
+    {
+      actorUserId: ctx.ownerId,
+      actorKind: 'agent',
+      source: 'mcp',
+      actorGrantId: ctx.grant.id,
+      runId: run.id,
+      batchId,
+      operations,
+      clock: ctx.clock,
+    },
+    { sink: ctx.sink },
+  );
+  if (!r.ok) {
+    if (r.error.code === 'CONFLICT') {
+      // Одно сообщение на оба предусловия — как в захвате: агент всё равно не исправит
+      // ни то, ни другое, а разбор остаётся в details (`precondition`, `actual`).
+      return err(
+        'CONFLICT',
+        'прогон уже завершён либо его тикет больше не в работе — начни с orbis_my_queue',
+        r.error.details,
+      );
+    }
+    return { status: 'error', error: r.error };
+  }
+
+  const runWire = wireEntityAt(r.results, 0);
+  const ticketWire = wireEntityAt(r.results, 1);
+  const status = ticketWire?.aspects['orbis/task']?.status;
+  if (
+    runWire === null ||
+    ticketWire === null ||
+    runWire.id !== run.id ||
+    ticketWire.id !== ticket.id ||
+    typeof status !== 'string' ||
+    !(args.expected as readonly string[]).includes(status)
+  ) {
+    // Повтор с занятым id (§7.8): под ним лежит ответ другого вызова — отдать его
+    // значило бы соврать агенту про состояние ЕГО прогона.
+    return replayMismatch(args.verb, batchId);
+  }
+
+  const result: FinishResult = {
+    run_id: runWire.id,
+    ticket_id: ticketWire.id,
+    ticket_status: status === 'done' ? 'done' : 'waiting',
+    action_id: r.actionId,
+  };
+  return ok(result);
+}
+
+/**
+ * Чекпойнт (С3): агент останавливается вопросом. Тикет уходит в `waiting` с вопросом в
+ * `waiting_for` — то есть в то же состояние, что и при любом другом ожидании человека, и
+ * владелец видит вопрос там, где привык, а не в отдельном месте для агентских дел.
+ */
+async function checkpoint(ctx: VerbCtx, input: CheckpointInput): Promise<ToolDispatchResult> {
+  const out = await closeRun(ctx, {
+    verb: 'orbis_checkpoint',
+    run_id: input.run_id,
+    ...(input.id !== undefined && { id: input.id }),
+    ...(input.usage !== undefined && { usage: input.usage }),
+    ...(input.session_url !== undefined && { session_url: input.session_url }),
+    terminalTail: 'чекпойнт не принимается',
+    runPatch: (now) => ({
+      outcome: 'checkpoint',
+      checkpoint: { question: input.question, asked_at: iso(now) },
+    }),
+    taskPatch: () => ({ status: 'waiting', waiting_for: input.question }),
+    expected: ['waiting'],
+  });
+  // Ответ — CheckpointResult, сужение FinishResult: `ticket_status` у чекпойнта всегда
+  // 'waiting', и closeRun уже сверил его со списком `expected`.
+  if (out.status === 'ok') {
+    const result: CheckpointResult = { ...(out.result as FinishResult), ticket_status: 'waiting' };
+    return ok(result);
+  }
+  return out;
+}
+
+/**
+ * Итог (С8): «готово, проверь». Тикет закрывает НЕ агент — по умолчанию он уходит в
+ * `waiting` с отчётом, и решение «сделано» остаётся за человеком. `done` возможен
+ * только там, где владелец разрешил это заранее, назначением (`may_close`): разрешение
+ * даётся до работы и на конкретный тикет, а не выпрашивается по её итогам.
+ */
+async function finish(ctx: VerbCtx, input: FinishInput): Promise<ToolDispatchResult> {
+  return closeRun(ctx, {
+    verb: 'orbis_finish',
+    run_id: input.run_id,
+    ...(input.id !== undefined && { id: input.id }),
+    ...(input.usage !== undefined && { usage: input.usage }),
+    ...(input.session_url !== undefined && { session_url: input.session_url }),
+    terminalTail: 'итог не принимается',
+    runPatch: () => ({ outcome: 'finished', report: input.report }),
+    taskPatch: (ticket) =>
+      // Отсутствие may_close = запрет (С8): ajv default'ов не применяет, и «не сказано» —
+      // это «нельзя», а не «можно».
+      ticket.aspects['orbis/assignment']?.may_close === true
+        ? { status: 'done' }
+        : { status: 'waiting', waiting_for: input.report },
+    expected: ['waiting', 'done'],
+  });
 }

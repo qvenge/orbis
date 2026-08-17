@@ -208,6 +208,22 @@ export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
   return (rows as unknown as RawRow[]).map(toRunRow);
 }
 
+/**
+ * Прогон по id (глаголы шага, чекпойнта и итога). Чужой и несуществующий неразличимы —
+ * оба null, как у тикета: по той же причине, что и там (не быть оракулом чужого графа).
+ * Условие `aspects ? 'orbis/agent-run'` не декоративно: без него id любой сущности
+ * владельца проходил бы за прогон, и глагол падал бы на разборе пустого аспекта.
+ */
+export async function runById(tx: Tx, runId: string): Promise<RunRow | null> {
+  const rows = await tx.execute(
+    sql`SELECT id, title, created_at, aspects -> 'orbis/agent-run' AS run
+        FROM entities
+        WHERE id = ${runId}::uuid AND aspects ? 'orbis/agent-run'`,
+  );
+  const row = (rows as unknown as RawRow[])[0];
+  return row === undefined ? null : toRunRow(row);
+}
+
 /** Тикет прогона — его родитель по связи parent. Прогон-сирота даёт null. */
 export async function ticketOfRun(tx: Tx, runId: string): Promise<TicketRow | null> {
   const rows = await tx.execute(

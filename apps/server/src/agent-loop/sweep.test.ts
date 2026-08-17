@@ -2,77 +2,20 @@
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { MyQueueResult } from '@orbis/shared';
-import { eq } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
-import { chatMessages, chatThreads, entities } from '../db/schema';
-import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
-import type { ActionRecord, WireEntity } from '../executor/types';
-import { issuePatGrant, verifyBearer } from '../oauth/grants';
-import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
+import { dispatchTool } from '../tools/dispatch';
 import { RUN_STALE_AFTER_MS } from './constants';
 import { sweepStaleRuns } from './sweep';
+import { type AnyRecord, agentLoopHelpers, iso, T0 } from './test-helpers';
 
 requireEnv();
 
 const { db, client } = appDb();
-const T0 = new Date('2026-08-17T12:00:00.000Z');
 const MINUTE = 60_000;
-
-function iso(d: Date): string {
-  return d.toISOString();
-}
+const { seedEntity, link, aspectsOf, actionsOf, workerGrant, worker } = agentLoopHelpers(db);
 
 function minutesBefore(n: number): string {
   return iso(new Date(T0.getTime() - n * MINUTE));
-}
-
-type AnyRecord = Record<string, unknown>;
-
-async function seedEntity(owner: string, input: Record<string, unknown>): Promise<WireEntity> {
-  const r = await execute(db, {
-    actorUserId: owner,
-    actorKind: 'owner',
-    source: 'ui',
-    operations: [{ tool: 'entity_create', input }],
-  });
-  if (!r.ok) throw new Error(`seedEntity: ${r.error.code} ${r.error.message}`);
-  return r.results[0] as WireEntity;
-}
-
-async function link(owner: string, parentId: string, childId: string): Promise<void> {
-  const r = await execute(db, {
-    actorUserId: owner,
-    actorKind: 'owner',
-    source: 'ui',
-    operations: [
-      {
-        tool: 'relation_create',
-        input: { source_id: parentId, target_id: childId, relation_type: 'parent' },
-      },
-    ],
-  });
-  if (!r.ok) throw new Error(`link: ${r.error.code} ${r.error.message}`);
-}
-
-async function aspectsOf(owner: string, id: string): Promise<Record<string, AnyRecord>> {
-  const rows = await withIdentity(db, owner, (tx) =>
-    tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, id)),
-  );
-  const row = rows[0];
-  if (!row) throw new Error(`сущность ${id} не найдена`);
-  return row.aspects as Record<string, AnyRecord>;
-}
-
-async function actionsOf(owner: string): Promise<ActionRecord[]> {
-  const rows = await withIdentity(db, owner, (tx) =>
-    tx
-      .select({ metadata: chatMessages.metadata })
-      .from(chatMessages)
-      .innerJoin(chatThreads, eq(chatThreads.id, chatMessages.threadId))
-      .where(eq(chatThreads.ownerId, owner)),
-  );
-  return rows.flatMap((r) => (r.metadata as { actions?: ActionRecord[] }).actions ?? []);
 }
 
 /** Тикет в in_progress с прогоном-ребёнком; lastStepMinutesAgo задаёт «живость» прогона. */
@@ -115,25 +58,6 @@ async function seedRun(
   });
   await link(owner, ticket.id, run.id);
   return { ticketId: ticket.id, runId: run.id };
-}
-
-async function workerGrant(owner: string, label: string): Promise<string> {
-  const token = await issuePatGrant(db, { ownerId: owner, label, scope: 'worker' });
-  const identity = await verifyBearer(db, token);
-  if (identity === null) throw new Error('выданный worker-PAT не прошёл verifyBearer');
-  return identity.grantId;
-}
-
-function worker(owner: string, grantId: string): ToolCallCtx {
-  return {
-    db,
-    actorUserId: owner,
-    actorKind: 'agent',
-    source: 'mcp',
-    explicitCommand: false,
-    clock: () => T0,
-    grant: { id: grantId, scope: 'worker', label: 'w' },
-  };
 }
 
 beforeAll(async () => {
