@@ -122,6 +122,35 @@ async function expectEditorText(text: string): Promise<void> {
 }
 
 /**
+ * Ждёт, что в теле есть ВСЕ перечисленные куски. Порядок между ними НЕ проверяется — и это не
+ * послабление, а снятие зависимости от того, чего тест не контролирует.
+ *
+ * Куда попадёт набранное, в jsdom решает НЕ приложение. Замерено: `caretRangeFromPoint` и
+ * `caretPositionFromPoint` там отсутствуют (`undefined`), а все прямоугольники нулевые, поэтому
+ * `posAtCoords` ProseMirror позицию по клику разрешить не может НИКОГДА — состояние редактора о
+ * клике не узнаёт. Каретку в этих тестах держит связка jsdom + userEvent, а Tiptap отложенным
+ * кадром (`focus` → requestAnimationFrame → `view.focus()` → `selectionToDOM`) вправе переписать
+ * её из состояния PM, то есть в НАЧАЛО документа. Под нагрузкой кадр запаздывает, окно
+ * открывается — и набранное встаёт перед прежним текстом.
+ *
+ * Именно так и упал CI: ждали «тело и хвост», получили «и хвосттело» (нормализация пробелов в
+ * `toHaveTextContent` съедает ведущий пробел от « и хвост», вставленного в позицию 0). Проверяемое
+ * свойство при этом — «набранное не потеряно», а вовсе не «набранное встало в конец»: в браузере
+ * позиция каретки принадлежит человеку, приложение её после монтирования не трогает ни разу.
+ */
+async function expectEditorHas(...fragments: string[]): Promise<void> {
+  await waitFor(() => {
+    const box = screen.getByTestId('body-editor');
+    for (const fragment of fragments) expect(box).toHaveTextContent(fragment);
+  }, EDITOR_READY);
+}
+
+/** То же для поля разметки: сверяем наличие кусков, а не их порядок (см. expectEditorHas). */
+function expectMarkdownHas(area: HTMLElement, ...fragments: string[]): void {
+  for (const fragment of fragments) expect((area as HTMLTextAreaElement).value).toContain(fragment);
+}
+
+/**
  * Ожидание ОТРИЦАТЕЛЬНОГО ответа «редактор не встал».
  *
  * Раньше здесь стояли голые 50 мс, и это несоразмерно: положительному монтированию тот же файл
@@ -1555,7 +1584,7 @@ test('тумблер markdown открывается с тем, что НАБР�
   fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
 
   const area = await screen.findByTestId('markdown-source');
-  expect(area).toHaveValue('тело и хвост');
+  expectMarkdownHas(area, 'тело', 'и хвост');
 });
 
 test('ВНУТРИ ПАУЗЫ «Применить» без единой правки в поле ничего не теряет', async () => {
@@ -1581,13 +1610,13 @@ test('ВНУТРИ ПАУЗЫ «Применить» без единой пра�
   fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
   const area = await screen.findByTestId('markdown-source');
   // Премиса: поле открылось НАБРАННЫМ текстом — иначе «без изменений» ниже значило бы другое.
-  expect(area).toHaveValue('тело и хвост');
+  expectMarkdownHas(area, 'тело', 'и хвост');
   fireEvent.click(screen.getByRole('button', { name: 'Применить' }));
 
   await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
   // Набранное на месте: тумблер закрылся, ничего не переписав.
   await openEditor();
-  await expectEditorText('тело и хвост');
+  await expectEditorHas('тело', 'и хвост');
 });
 
 test('набранное, которое редактор НЕ отдал откату, остаётся и в режиме разметки', async () => {
@@ -1631,11 +1660,11 @@ test('набранное, которое редактор НЕ отдал отк
   await act(async () => {
     gates[0]?.fail(trpcError('INTERNAL_SERVER_ERROR'));
   });
-  await expectEditorText('тело и хвост ещё'); // премиса: подмену редактор отклонил
+  await expectEditorHas('тело', 'и хвост', 'ещё'); // премиса: подмену редактор отклонил
 
   await openDetailMenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
-  expect(await screen.findByTestId('markdown-source')).toHaveValue('тело и хвост ещё');
+  expectMarkdownHas(await screen.findByTestId('markdown-source'), 'тело', 'и хвост', 'ещё');
 }, 30_000);
 
 test('«Отмена» в тумблере не возвращает текст, который на экране уже заменён приехавшим', async () => {
@@ -1845,7 +1874,7 @@ test('выход из разметки ТЕМ ЖЕ пунктом меню не 
   await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
 
   await openEditor();
-  await expectEditorText('тело и хвост');
+  await expectEditorHas('тело', 'и хвост');
 }, 30_000);
 
 test('ВТОРОЙ заход в разметку после отказанной посадки не воскрешает протухшее', async () => {
@@ -1922,7 +1951,7 @@ test('выход из разметки сажает набранное ПОСЛ�
     screen.getByTestId('body-editor').querySelector('[contenteditable]') as HTMLElement,
     ' два',
   );
-  await expectEditorText('тело раз два');
+  await expectEditorHas('тело', 'раз', 'два');
 
   await openDetailMenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
@@ -1931,7 +1960,7 @@ test('выход из разметки сажает набранное ПОСЛ�
   await waitFor(() => expect(screen.queryByTestId('markdown-source')).toBeNull());
 
   await openEditor();
-  await expectEditorText('тело раз два');
+  await expectEditorHas('тело', 'раз', 'два');
 }, 30_000);
 
 test('правка из тумблера садится в редактор, а не остаётся в тумблере', async () => {
