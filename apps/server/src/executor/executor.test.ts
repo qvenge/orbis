@@ -2,10 +2,14 @@
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
+import { canonicalizeBody } from '@orbis/shared/doc';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
+import { readEntity } from '../entity-read';
+import { issuePatGrant, revokeGrant, verifyBearer } from '../oauth/grants';
+import { projectBodyTemplate } from '../seed/project-body';
 import { execute } from './executor';
 import type { ExecuteOk, ExecuteRequest, WireEntity } from './types';
 import { InMemoryJournalSink } from './types';
@@ -556,5 +560,237 @@ describe('executor: RLS и attach', () => {
     );
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('INVARIANT');
+  });
+});
+
+// ─────────────── ADE-срез 1: назначение и заготовка проекта (С4, С7, С10) ───────────────
+describe('ADE-срез 1: инварианты назначения и засев проекта', () => {
+  /** Тело, реально легшее в БД (а не то, что вернул executor): засев проверяется на чтении. */
+  async function bodyOf(id: string): Promise<string> {
+    const r = await withIdentity(db, userA, (tx) =>
+      readEntity(tx, userA, { id, include: ['body'] }),
+    );
+    return r.entity.body;
+  }
+
+  test('20. executor=agent без grant_id → VALIDATION; с чужим/отозванным грантом → NOT_FOUND', async () => {
+    const id = newId();
+    const bad = await execute(
+      db,
+      req('entity_create', {
+        id,
+        title: 'Т',
+        tags: [],
+        aspects: { 'orbis/task': { status: 'inbox' }, 'orbis/assignment': { executor: 'agent' } },
+      }),
+    );
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.error.code).toBe('VALIDATION');
+
+    const foreign = await execute(
+      db,
+      req('entity_create', {
+        id,
+        title: 'Т',
+        tags: [],
+        aspects: {
+          'orbis/task': { status: 'inbox' },
+          'orbis/assignment': { executor: 'agent', grant_id: newId() },
+        },
+      }),
+    );
+    expect(foreign.ok).toBe(false);
+    if (!foreign.ok) expect(foreign.error.code).toBe('NOT_FOUND');
+    expect(await countEntities(id)).toBe(0); // отказ стадии 4 — до первой записи
+  });
+
+  test('21. executor=agent с живым грантом владельца — ок; executor=human с grant_id → VALIDATION; отзыв гранта закрывает назначение', async () => {
+    const token = await issuePatGrant(db, { ownerId: userA, label: 'исполнитель' });
+    const identity = await verifyBearer(db, token);
+    expect(identity).not.toBeNull();
+    const grantId = identity?.grantId ?? '';
+
+    const ok = await execute(
+      db,
+      req('entity_create', {
+        id: newId(),
+        title: 'Т',
+        tags: [],
+        aspects: {
+          'orbis/task': { status: 'inbox' },
+          'orbis/assignment': { executor: 'agent', grant_id: grantId },
+        },
+      }),
+    );
+    expect(ok.ok).toBe(true);
+
+    const human = await execute(
+      db,
+      req('entity_create', {
+        id: newId(),
+        title: 'Т',
+        tags: [],
+        aspects: {
+          'orbis/task': { status: 'inbox' },
+          'orbis/assignment': { executor: 'human', grant_id: grantId },
+        },
+      }),
+    );
+    expect(human.ok).toBe(false);
+    if (!human.ok) expect(human.error.code).toBe('VALIDATION');
+
+    // Тот же инвариант на update-пути: чужой грант в merge аспектов отклоняется
+    const plain = firstEntity(
+      await execute(db, req('entity_create', { title: 'Тикет', tags: [] })),
+    );
+    const upd = await execute(
+      db,
+      req('entity_update', {
+        id: plain.id,
+        aspects: { 'orbis/assignment': { executor: 'agent', grant_id: newId() } },
+      }),
+    );
+    expect(upd.ok).toBe(false);
+    if (!upd.ok) expect(upd.error.code).toBe('NOT_FOUND');
+
+    // …и на attach-пути
+    const att = await execute(
+      db,
+      req('attach_orbis_assignment', {
+        entity_id: plain.id,
+        data: { executor: 'agent', grant_id: newId() },
+      }),
+    );
+    expect(att.ok).toBe(false);
+    if (!att.ok) expect(att.error.code).toBe('NOT_FOUND');
+
+    // Живой грант проходит обоими путями
+    const attOk = await execute(
+      db,
+      req('attach_orbis_assignment', {
+        entity_id: plain.id,
+        data: { executor: 'agent', grant_id: grantId },
+      }),
+    );
+    expect(attOk.ok).toBe(true);
+
+    // Отозванный грант — тот же NOT_FOUND, что и чужой
+    await revokeGrant(db, { ownerId: userA, grantId });
+    const revoked = await execute(
+      db,
+      req('entity_update', {
+        id: plain.id,
+        aspects: { 'orbis/assignment': { executor: 'agent', grant_id: grantId } },
+      }),
+    );
+    expect(revoked.ok).toBe(false);
+    if (!revoked.ok) expect(revoked.error.code).toBe('NOT_FOUND');
+
+    // Правка НЕ трогающая назначение проходит и при отозванном гранте: отзыв закрывает
+    // доступ, а не замораживает сущность (иначе тикет становится неправимым)
+    const other = await execute(db, req('entity_update', { id: plain.id, title: 'Тикет 2' }));
+    expect(other.ok).toBe(true);
+  });
+
+  test('22. создание сущности с orbis/project и пустым телом засевает заготовку с блоками; непустое тело не трогается', async () => {
+    const id = newId();
+    const r = await execute(
+      db,
+      req('entity_create', {
+        id,
+        title: 'Проект',
+        tags: [],
+        aspects: { 'orbis/project': { stage: 'active' } },
+      }),
+    );
+    expect(r.ok).toBe(true);
+    const body = await bodyOf(id);
+    expect(body).toContain(`{{query: aspect=orbis/agent-run, project_id=${id}`);
+    expect(body).toContain('children_of=this, aspect=orbis/task, status=waiting');
+    expect(body).toBe(projectBodyTemplate(id));
+    // канон: повторная канонизация не меняет тело
+    expect(canonicalizeBody(body).body).toBe(body);
+    // тело разобрано в документ, а не легло сырой строкой мимо конверсии
+    expect(firstEntity(r).bodyRefs).toEqual([]);
+
+    // Своё тело автора заготовкой не затирается
+    const own = newId();
+    const r2 = await execute(
+      db,
+      req('entity_create', {
+        id: own,
+        title: 'Проект со своим телом',
+        tags: [],
+        body: 'Мой процесс.',
+        aspects: { 'orbis/project': { stage: 'active' } },
+      }),
+    );
+    expect(r2.ok).toBe(true);
+    expect(await bodyOf(own)).toBe('Мой процесс.');
+
+    // Сущность без orbis/project заготовку не получает
+    const plain = firstEntity(
+      await execute(db, req('entity_create', { title: 'Заметка', tags: [] })),
+    );
+    expect(await bodyOf(plain.id)).toBe('');
+  });
+
+  test('23. attach_orbis_project на заметку с пустым телом засевает; с телом — нет; повторный attach не перезасевает', async () => {
+    const empty = firstEntity(
+      await execute(db, req('entity_create', { title: 'Пусто', tags: [] })),
+    );
+    const a = await execute(
+      db,
+      req('attach_orbis_project', { entity_id: empty.id, data: { stage: 'active' } }),
+    );
+    expect(a.ok).toBe(true);
+    expect(await bodyOf(empty.id)).toBe(projectBodyTemplate(empty.id));
+
+    // Повторный attach уже проектной сущности тело не переписывает
+    const again = await execute(
+      db,
+      req('attach_orbis_project', { entity_id: empty.id, data: { stage: 'paused' } }),
+    );
+    expect(again.ok).toBe(true);
+    expect(await bodyOf(empty.id)).toBe(projectBodyTemplate(empty.id));
+
+    // Непустое тело — не трогаем
+    const filled = firstEntity(
+      await execute(db, req('entity_create', { title: 'С телом', tags: [], body: 'Заметки.' })),
+    );
+    const b = await execute(
+      db,
+      req('attach_orbis_project', { entity_id: filled.id, data: { stage: 'active' } }),
+    );
+    expect(b.ok).toBe(true);
+    expect(await bodyOf(filled.id)).toBe('Заметки.');
+  });
+
+  test('24. entity_update, добавляющий orbis/project пустой заметке, засевает заготовку без expectedUpdatedAt', async () => {
+    const e = firstEntity(
+      await execute(db, req('entity_create', { title: 'Станет проектом', tags: [] })),
+    );
+    const r = await execute(
+      db,
+      req('entity_update', { id: e.id, aspects: { 'orbis/project': { stage: 'active' } } }),
+    );
+    expect(r.ok).toBe(true);
+    expect(await bodyOf(e.id)).toBe(projectBodyTemplate(e.id));
+
+    // Явное тело в том же патче побеждает заготовку (её вообще не засеваем)
+    const e2 = firstEntity(
+      await execute(db, req('entity_create', { title: 'Тоже проект', tags: [] })),
+    );
+    const r2 = await execute(
+      db,
+      req('entity_update', {
+        id: e2.id,
+        body: 'Своё.',
+        expectedUpdatedAt: e2.updatedAt,
+        aspects: { 'orbis/project': { stage: 'active' } },
+      }),
+    );
+    expect(r2.ok).toBe(true);
+    expect(await bodyOf(e2.id)).toBe('Своё.');
   });
 });

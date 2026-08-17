@@ -118,3 +118,29 @@ export function assertFinancialInvariant(
     );
   }
 }
+
+/**
+ * Пора ли засеять заготовку тела проекта (С10). Условия все четыре и все обязательны:
+ * аспект orbis/project ПОЯВЛЯЕТСЯ (а не правится — иначе смена stage перезасевала бы тело),
+ * тело сейчас пусто и своего тела вход не несёт (заготовка никогда не затирает написанное).
+ *
+ * Функция чистая и живёт здесь, а не в executor'е, ровно потому, что её три вызывающих
+ * (create / update / attach) обязаны спрашивать ОДНО И ТО ЖЕ: «пустое тело» — это условие
+ * поведения, а не деталь одной ветки.
+ *
+ * `currentBody` — тело ДО операции (у create — канон входа, то есть ''), `bodyInInput` —
+ * признак «вход несёт тело в любой из двух форм» (body или bodyDoc).
+ */
+export function needsProjectSeed(
+  prev: AspectsMap | undefined,
+  next: AspectsMap,
+  currentBody: string,
+  bodyInInput: boolean,
+): boolean {
+  return (
+    next['orbis/project'] !== undefined &&
+    prev?.['orbis/project'] === undefined &&
+    currentBody.trim() === '' &&
+    !bodyInInput
+  );
+}

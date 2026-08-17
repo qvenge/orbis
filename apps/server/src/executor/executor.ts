@@ -21,6 +21,7 @@ import {
 // Конверсия тела живёт в @orbis/shared/doc — ОДИН экземпляр правил разбора и сериализации
 // на сервер и клиент; своей копии у executor'а нет и быть не должно.
 import {
+  type BodyDoc,
   bodyDocError,
   bodyPairFromDoc,
   bodyRefsFromDoc,
@@ -45,12 +46,14 @@ import type { Db } from '../db/client';
 import { entities, entityOrigins, relations } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
+import { projectBodyTemplate } from '../seed/project-body';
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
 import { toWireEntity as toWire, toWireRelation } from '../wire';
 import { type AspectRegistry, loadAspectRegistry, validateAspectData } from './aspects-validate';
 import { ExecError } from './errors';
 import {
   assertAcyclicBlocks,
+  assertAssignment,
   assertNoDuplicateRelation,
   assertSingleBudgetParent,
   duplicateRelationError,
@@ -64,6 +67,7 @@ import {
   assertFinancialInvariant,
   financialRecurringNeedsDerivedFrom,
   mergeAspects,
+  needsProjectSeed,
   normalizeTags,
 } from './normalize';
 import type {
@@ -729,6 +733,30 @@ function preserveBodyBeforeDoc(patch: EntityPatch, current: EntityRow): void {
 }
 
 /**
+ * Три поля тела из markdown-строки: канон, документ и ссылки. ОДИН путь канонизации на всех,
+ * кто кладёт в тело строку, — строковую ветку entity_create/entity_update и засев заготовки
+ * проекта (С10). Второй экземпляр этих трёх строчек означал бы, что засеянное тело и
+ * написанное автором считаются по разным правилам, и расхождение вылезло бы не здесь, а в
+ * backlinks или в первом же пересчёте канона.
+ *
+ * Возвращает ПОЛЯ, а не пишет патч, потому что общая у трёх вызывающих только конверсия, а
+ * семантика записи у каждого своя: create кладёт их в values (и вдобавок в body_before_doc по
+ * своему правилу), update — в EntityPatch рядом с preserveBodyBeforeDoc, attach расширяет свой
+ * узкий .set() ТОЛЬКО при засеве. Хелпер, пишущий патч, пришлось бы параметризовать всеми
+ * тремя различиями — то есть вернуть их обратно вызывающим, но уже неявно.
+ */
+function bodyFieldsFromMarkdown(markdown: string): {
+  body: string;
+  bodyDoc: BodyDoc;
+  bodyRefs: string[];
+} {
+  // КАНОН, а не строка входа: body — производная документа (вердикт Б1).
+  const { doc, body } = canonicalizeBody(markdown);
+  // Ссылки — из ДЕРЕВА ∪ raw-блоков (Б2): backlinks не зависят от разбираемости тела.
+  return { body, bodyDoc: doc, bodyRefs: bodyRefsFromDoc(doc) };
+}
+
+/**
  * Стадия 3: строка сущности под замком. В batch виртуальная строка (эффект предыдущих
  * операций) имеет приоритет над БД; отсутствие в обоих источниках — NOT_FOUND у вызывающего.
  * RLS скрывает чужие строки — «чужая» и «несуществующая» неразличимы намеренно.
@@ -833,10 +861,9 @@ async function prepareEntityCreate(
   // body — КАНОН (сериализация собранного документа), а не строка входа: правда о теле одна,
   // и это документ; «как написала модель» эталоном быть не может (вердикт Б1).
   const tags = normalizeTags(input.tags);
-  const { doc: bodyDoc, body } = canonicalizeBody(input.body ?? '');
   // Ссылки — из дерева ∪ raw-блоков (Б2): `[[entity:…]]` в блоке кода связью не считается (Р7),
   // но тело, не разобранное целиком и уехавшее в rawBlock, backlinks не теряет.
-  const bodyRefs = bodyRefsFromDoc(bodyDoc);
+  let { body, bodyDoc, bodyRefs } = bodyFieldsFromMarkdown(input.body ?? '');
   const aspects: AspectsMap = {};
   for (const [aspectId, data] of Object.entries(input.aspects ?? {})) {
     aspects[aspectId] = { ...data };
@@ -894,6 +921,14 @@ async function prepareEntityCreate(
 
   // Стадия 4: доменные инварианты + entitlements-гейт — всё ДО первой записи
   await assertFinancial(ctx, id, aspects, batch);
+  // Живой грант в назначении (С4/С7): у create «затронуто» всё, что пришло во входе
+  await assertAssignment(ctx.tx, ctx.req.actorUserId, aspects);
+  // Заготовка тела проекта (С10). Засев живёт в executor'е, а не в роутере/адаптере: тогда
+  // проект, заведённый чатом, MCP и UI, получает одно и то же тело. У create «тело до
+  // операции» — это канон входа (пусто, если body не прислали).
+  if (needsProjectSeed(undefined, aspects, body, input.body !== undefined)) {
+    ({ body, bodyDoc, bodyRefs } = bodyFieldsFromMarkdown(projectBodyTemplate(id)));
+  }
   // Уникальность конверта (03-budget §2.1): дубль точной комбинации отклоняется
   const budgetAspect = aspects['orbis/budget'];
   if (budgetAspect !== undefined) {
@@ -1090,6 +1125,13 @@ async function prepareEntityUpdate(
     }
     // Стадия 4: инвариант §3.3 над финальным состоянием (ловит и detach orbis/schedule)
     await assertFinancial(ctx, input.id, nextAspects, batch);
+    // Живой грант в назначении (С4/С7) — только когда назначение ЗАТРОНУТО патчем.
+    // Проверять его на каждой правке нельзя: отзыв гранта иначе замораживал бы тикет
+    // целиком (даже переименование), а отзыв закрывает доступ агенту, а не сущность.
+    // Внутренний undo восстанавливает зафиксированное состояние — не проверяется.
+    if (ctx.internalUndo === undefined && touched.includes('orbis/assignment')) {
+      await assertAssignment(ctx.tx, ctx.req.actorUserId, nextAspects);
+    }
     // «Один budget-parent» (§4.2/§13.7) и для aspects-патча: mergeAspects добавляет
     // НОВЫЙ ключ — второй путь ретроспективного второго конверта помимо attach
     // (fix round ревью A1.1). Detach (null) второго budget-parent'а не создаёт.
@@ -1205,12 +1247,29 @@ async function prepareEntityUpdate(
   } else if (input.body !== undefined) {
     // КАНОН, а не input.body: body — производная документа, и сравнивать «как написала
     // модель» бессмысленно (вердикт Б1). FTS не страдает (проверено спайком), сиды каноничны.
-    const { doc, body } = canonicalizeBody(input.body);
+    const { body, bodyDoc, bodyRefs } = bodyFieldsFromMarkdown(input.body);
     patch.body = body;
-    patch.bodyDoc = doc;
+    patch.bodyDoc = bodyDoc;
     preserveBodyBeforeDoc(patch, current);
-    patch.bodyRefs = bodyRefsFromDoc(doc); // дерево ∪ raw — backlinks не теряются (Б2)
+    patch.bodyRefs = bodyRefs; // дерево ∪ raw — backlinks не теряются (Б2)
     changed.body = body;
+    prior.body = current.body;
+  } else if (
+    ctx.internalUndo === undefined &&
+    needsProjectSeed(currentAspects, nextAspects, current.body, false)
+  ) {
+    // Заготовка тела проекта (С10) — ветка ТРЕТЬЯ и последняя: сюда попадаем, только если
+    // вход тела не нёс (иначе отработала бы одна из двух веток выше), поэтому bodyInInput
+    // здесь заведомо false. Гейт expectedUpdatedAt (§5.2) не срабатывает и срабатывать не
+    // должен: он смотрит на ВХОД, а не на патч, и терять тут нечего — тело пусто.
+    const seeded = bodyFieldsFromMarkdown(projectBodyTemplate(input.id));
+    patch.body = seeded.body;
+    patch.bodyDoc = seeded.bodyDoc;
+    preserveBodyBeforeDoc(patch, current);
+    patch.bodyRefs = seeded.bodyRefs;
+    // Засев — часть эффекта операции, поэтому едет и в журнал: undo вернёт пустое тело
+    // вместе с аспектом, а не оставит заготовку на сущности, которая проектом быть перестала.
+    changed.body = seeded.body;
     prior.body = current.body;
   }
   if (input.tags !== undefined) {
@@ -1302,6 +1361,11 @@ async function prepareAttach(
   // Стадия 4
   const nextAspects: AspectsMap = { ...currentAspects, [aspectId]: data };
   await assertFinancial(ctx, input.entity_id, nextAspects, batch);
+  // Живой грант в назначении (С4/С7): attach — третий путь появления аспекта, и обходить
+  // им инвариант нельзя (тот же довод, что у «одного budget-parent» ниже)
+  if (aspectId === 'orbis/assignment') {
+    await assertAssignment(ctx.tx, ctx.req.actorUserId, nextAspects);
+  }
   // «Один budget-parent» (§4.2/§13.7) и для attach: аспект orbis/budget ретроспективно
   // делает сущность budget-parent'ом её financial-детей — инвариант проверяется не
   // только в relation_create, иначе attach обходит его (ревью 2026-07-09)
@@ -1317,9 +1381,23 @@ async function prepareAttach(
   }
   gateEntitlements(ctx, tool);
 
+  // Заготовка тела проекта (С10): attach — третий путь появления orbis/project наравне с
+  // create и update, и тело у всех трёх обязано получаться одинаковым.
+  const seed = needsProjectSeed(currentAspects, nextAspects, current.body, false)
+    ? bodyFieldsFromMarkdown(projectBodyTemplate(input.entity_id))
+    : undefined;
+
   // Эффект batch; updated_at строго растёт (monotonicUpdatedAt, §5.2)
   const updatedAt = monotonicUpdatedAt(now, current.updatedAt);
-  const afterRow: EntityRow = { ...current, aspects: nextAspects, updatedAt };
+  // Патч attach узкий: аспекты и updated_at, а поля тела — ТОЛЬКО при засеве
+  const patch: EntityPatch = { aspects: nextAspects, updatedAt };
+  if (seed !== undefined) {
+    patch.body = seed.body;
+    patch.bodyDoc = seed.bodyDoc;
+    preserveBodyBeforeDoc(patch, current);
+    patch.bodyRefs = seed.bodyRefs;
+  }
+  const afterRow = { ...current, ...patch } as EntityRow;
   batch?.entities.set(input.entity_id, afterRow);
 
   const journal: JournalPlan = {
@@ -1328,11 +1406,17 @@ async function prepareAttach(
     tool,
     title: current.title,
     operations: [{ op: tool, payload: { entity_id: input.entity_id, data } }],
-    // Стадии 6–7: inverse — прежнее значение аспект-ключа (null, если аспекта не было)
+    // Стадии 6–7: inverse — прежнее значение аспект-ключа (null, если аспекта не было);
+    // засеянное тело откатывается вместе с ним, иначе undo снял бы аспект, оставив
+    // заготовку проекта на заметке, у которой её не было
     inverse: [
       {
         op: 'entity_update',
-        payload: { id: input.entity_id, aspects: { [aspectId]: prev ?? null } },
+        payload: {
+          id: input.entity_id,
+          aspects: { [aspectId]: prev ?? null },
+          ...(seed !== undefined ? { body: current.body } : {}),
+        },
       },
     ],
   };
@@ -1344,7 +1428,7 @@ async function prepareAttach(
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const updated = await applyCtx.tx
         .update(entities)
-        .set({ aspects: nextAspects, updatedAt })
+        .set(patch)
         .where(eq(entities.id, input.entity_id))
         .returning();
       const row = updated[0];

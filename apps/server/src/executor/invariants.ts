@@ -1,12 +1,16 @@
 // apps/server/src/executor/invariants.ts
-// Доменные инварианты графа связей (§4.2) — стадия 4 конвейера, всё ДО первой записи.
+// Доменные инварианты стадии 4 — всё ДО первой записи: граф связей (§4.2) и те инварианты
+// аспектов, которым нужна БД (живой грант в назначении, С4/С7). Чистые нормализации аспектов
+// без обращения к БД живут в normalize.ts.
 //
 // Все проверки принимают опциональные «виртуальные» эффекты batch (§7.8): связи,
 // создаваемые/удаляемые предыдущими операциями того же batch, ещё не записаны в БД,
 // но обязаны быть видимы проверкам последующих операций.
-import { sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
+import { agentGrants } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from './errors';
+import type { AspectsMap } from './normalize';
 
 /** Идентичность связи — тройка rel_uniq (§4.2). */
 export interface RelationKey {
@@ -267,4 +271,56 @@ export async function assertNoDuplicateRelation(
     LIMIT 1
   `)) as unknown as Array<{ one: number }>;
   if (rows.length > 0) throw duplicateRelationError(key);
+}
+
+/**
+ * Живой грант в назначении (С4/С7): `orbis/assignment` с `executor=agent` обязан указывать
+ * на НЕОТОЗВАННЫЙ грант ВЛАДЕЛЬЦА сущности. Схема аспекта этого не выражает: `grant_id` лежит
+ * в jsonb, внешнего ключа туда нет, а `.refine` зода исчезает при генерации JSON Schema — ajv
+ * (стадия 2) проверяет только форму uuid. Поэтому связь «назначение → грант» держит executor,
+ * и это единственное место, где она держится: обойти его нечем — мутации графа идут только
+ * здесь.
+ *
+ * Проверяется в МОМЕНТ установки назначения, а не при каждой правке сущности: отзыв гранта
+ * закрывает доступ агенту (verifyBearer), но не обязан замораживать уже назначенные тикеты —
+ * иначе после отзыва их нельзя было бы даже переименовать. Вызывающая сторона зовёт эту
+ * проверку ровно тогда, когда аспект назначения появляется или меняется.
+ *
+ * Чтение agent_grants идёт под `SET LOCAL ROLE authenticated` (withIdentity): политика
+ * owner_owns_row показывает только строки владельца, но условие на owner_id всё равно
+ * оставлено явным — оно же служит фильтром «грант чужой» на любых иных ролях.
+ * Чужой и несуществующий грант неразличимы намеренно (единый NOT_FOUND, как у сущностей):
+ * иначе назначение стало бы оракулом чужих grant_id.
+ */
+export async function assertAssignment(tx: Tx, ownerId: string, next: AspectsMap): Promise<void> {
+  const a = next['orbis/assignment'];
+  if (!a) return;
+  if (a.executor === 'agent') {
+    if (typeof a.grant_id !== 'string') {
+      throw new ExecError('VALIDATION', 'назначение агенту требует grant_id', {
+        aspect: 'orbis/assignment',
+      });
+    }
+    const rows = await tx
+      .select({ id: agentGrants.id })
+      .from(agentGrants)
+      .where(
+        and(
+          eq(agentGrants.id, a.grant_id),
+          eq(agentGrants.ownerId, ownerId),
+          isNull(agentGrants.revokedAt),
+        ),
+      );
+    if (rows.length === 0) {
+      throw new ExecError('NOT_FOUND', 'грант исполнителя не найден или отозван', {
+        grant_id: a.grant_id,
+      });
+    }
+  } else if (a.grant_id !== undefined) {
+    // executor=human с грантом — не «лишнее поле», а рассогласование: тикет читался бы как
+    // назначенный агенту одним кодом и человеку другим.
+    throw new ExecError('VALIDATION', 'grant_id допустим только при executor=agent', {
+      aspect: 'orbis/assignment',
+    });
+  }
 }
