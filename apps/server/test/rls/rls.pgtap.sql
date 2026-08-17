@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(42);
+SELECT plan(43);
 
 -- Фикстуры под суперпользователем (обходит RLS)
 INSERT INTO entities (id, owner_id, title) VALUES
@@ -289,6 +289,18 @@ SELECT throws_ok(
             '00000000-0000-7000-8000-0000000000b1', 'подлог', 'тело',
             '00000000-0000-4000-8000-00000000000b', 'owner')$$,
   '42501', NULL, 'entity_versions: INSERT с чужим owner_id отклоняется WITH CHECK');
+-- Та же дыра, что закрыл 0002 у entity_origins: owner_id СВОЙ, а entity_id — ЧУЖАЯ
+-- сущность (B). Предикат только по owner_id это пропускал: RI-проверка FK идёт мимо RLS
+-- и чужую сущность видит. Версия чужой записи ломает сквозное владение §4.10, поэтому
+-- WITH CHECK требует ещё и владения самой сущностью → 42501.
+SELECT throws_ok(
+  $$INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id, actor_kind)
+    VALUES ('00000000-0000-7000-8000-0000000000c9',
+            '00000000-0000-4000-8000-00000000000a',
+            '00000000-0000-7000-8000-0000000000b1', 'версия чужой', 'тело',
+            '00000000-0000-4000-8000-00000000000a', 'owner')$$,
+  '42501', NULL,
+  'entity_versions: INSERT версии на чужую сущность (свой owner) отклоняется WITH CHECK');
 SELECT lives_ok(
   $$INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id, actor_kind)
     VALUES ('00000000-0000-7000-8000-0000000000a9',
