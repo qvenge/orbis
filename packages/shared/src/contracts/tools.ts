@@ -47,6 +47,16 @@ const bodyDocSchema = z.object({
   doc: z.object({ type: z.literal('doc'), content: z.array(z.record(z.unknown())) }).passthrough(),
 });
 
+// Тело приходит в ОДНОЙ из двух форм — гейт нужен обеим широким схемам (UI и exec).
+// Предикат и текст вынесены в общее место намеренно: два одинаковых по смыслу `.refine`
+// разъехались бы при первой же правке, а сообщение видит пользователь редактора.
+const bodyXorBodyDoc = (v: { body?: string | undefined; bodyDoc?: unknown }): boolean =>
+  !(v.body !== undefined && v.bodyDoc !== undefined);
+const BODY_XOR_BODY_DOC_ISSUE = {
+  message: 'body и bodyDoc одновременно недопустимы',
+  path: ['bodyDoc'],
+};
+
 /**
  * Вход tRPC-роутера entity.update: то же, что у тула, плюс структурная форма тела.
  *
@@ -57,11 +67,43 @@ const bodyDocSchema = z.object({
  */
 export const entityUpdateUiInput = entityUpdateInput
   .extend({ bodyDoc: bodyDocSchema.optional() })
-  .refine((v) => !(v.body !== undefined && v.bodyDoc !== undefined), {
-    message: 'body и bodyDoc одновременно недопустимы',
-    path: ['bodyDoc'],
-  });
+  .refine(bodyXorBodyDoc, BODY_XOR_BODY_DOC_ISSUE);
 export type EntityUpdateUiInput = z.infer<typeof entityUpdateUiInput>;
+
+/**
+ * CAS-предусловие правки (С7): значения полей аспектов, при которых правка допустима.
+ * Executor сверяет его со строкой, прочитанной ПОД `FOR UPDATE`, и пишет в той же
+ * транзакции — это и делает захват тикета исполнителем атомарным (два конкурентных
+ * `planned → in_progress` не могут оба увидеть `planned`).
+ *
+ * `in` — список ДОПУСТИМЫХ текущих значений (min 1: пустой список запрещал бы правку
+ * всегда, и это была бы опечатка, а не намерение). Элемент strict — лишний ключ в
+ * предусловии почти всегда опечатка имени поля, а «предусловие с опечаткой» молча
+ * пропускало бы гонку.
+ */
+export const entityUpdatePrecondition = z
+  .array(
+    z
+      .object({
+        aspect: z.string().min(1),
+        field: z.string().min(1),
+        in: z.array(z.unknown()).min(1),
+      })
+      .strict(),
+  )
+  .min(1);
+export type EntityUpdatePrecondition = z.infer<typeof entityUpdatePrecondition>;
+
+/**
+ * Надмножество для executor'а: UI-форма (bodyDoc) + серверное CAS-предусловие (С7).
+ * Тул и tRPC его не принимают — `precondition` это рычаг серверных путей (захват тикета,
+ * подметание, ответ на чекпойнт), а не поле, которое модель или клиент подставляет сами.
+ * Ровно поэтому схема отдельная, а `entityUpdateInput` (контракт ТУЛА) не растёт.
+ */
+export const entityUpdateExecInput = entityUpdateInput
+  .extend({ bodyDoc: bodyDocSchema.optional(), precondition: entityUpdatePrecondition.optional() })
+  .refine(bodyXorBodyDoc, BODY_XOR_BODY_DOC_ISSUE);
+export type EntityUpdateExecInput = z.infer<typeof entityUpdateExecInput>;
 
 export const attachAspectInput = z
   .object({

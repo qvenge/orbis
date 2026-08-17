@@ -1032,3 +1032,143 @@ describe('ADE-срез 1: закреплённые версии тела (С11)'
     expect(await versionIdsOf(e.id)).toEqual([]);
   });
 });
+
+describe('ADE-срез 1: CAS-предусловие entity_update (С7, инвариант 1)', () => {
+  /** Сид под предусловие: id задаётся явно — гонка обязана ссылаться на ОДНУ строку. */
+  async function create(
+    id: string,
+    aspects: Record<string, Record<string, unknown>>,
+  ): Promise<void> {
+    const r = await execute(db, req('entity_create', { id, title: 'Тикет', tags: [], aspects }));
+    expect(r.ok).toBe(true);
+  }
+
+  /** Захват тикета: planned/inbox → in_progress под предусловием (форма Задачи 10). */
+  const capture = (id: string): ExecuteRequest =>
+    req('entity_update', {
+      id,
+      precondition: [{ aspect: 'orbis/task', field: 'status', in: ['inbox', 'planned'] }],
+      aspects: { 'orbis/task': { status: 'in_progress' } },
+    });
+
+  test('предусловие выполнено → запись; не выполнено → CONFLICT с details {precondition, actual}', async () => {
+    const id = newId();
+    await create(id, { 'orbis/task': { status: 'planned', priority: 'high' } });
+
+    const ok = await execute(db, capture(id));
+    expect(ok.ok).toBe(true);
+    const task = aspectOf(firstEntity(ok), 'orbis/task');
+    expect(task.status).toBe('in_progress');
+    expect(task.priority).toBe('high'); // предусловие не подменяет merge §9.2
+
+    // Повтор: тикет уже захвачен — честный CONFLICT, а не STALE_VERSION и не молчаливая запись.
+    const again = await execute(db, capture(id));
+    expect(again.ok).toBe(false);
+    if (!again.ok) {
+      expect(again.error.code).toBe('CONFLICT');
+      expect(again.error.message).toBe('предусловие не выполнено: orbis/task.status');
+      // ОДИН провалившийся элемент, а не весь массив: CAS-шаг по step_count (Задача 11)
+      // читает details.precondition.field, чтобы решить, повторять ли попытку.
+      expect(again.error.details).toEqual({
+        reason: 'precondition_failed',
+        precondition: { aspect: 'orbis/task', field: 'status', in: ['inbox', 'planned'] },
+        actual: 'in_progress',
+      });
+    }
+  });
+
+  test('гонка: два конкурентных перехода planned→in_progress с одним предусловием — ровно один ok', async () => {
+    // Пять раундов подряд: одиночный зелёный раунд ничего не доказывает про CAS.
+    for (let round = 0; round < 5; round++) {
+      const id = newId();
+      await create(id, { 'orbis/task': { status: 'planned' } });
+      const op = () => execute(db, capture(id));
+      const [a, b] = await Promise.all([op(), op()]);
+      expect([a.ok, b.ok].filter(Boolean)).toHaveLength(1);
+      const loser = a.ok ? b : a;
+      if (!loser.ok) {
+        expect(loser.error.code).toBe('CONFLICT');
+        expect(loser.error.details).toMatchObject({ reason: 'precondition_failed' });
+      }
+      // Проигравший не записал ничего: статус ровно один переход от исходного.
+      const rows = await withIdentity(db, userA, (tx) =>
+        tx.execute(sql`SELECT aspects FROM entities WHERE id = ${id}`),
+      );
+      const stored = rows[0]?.aspects as Record<string, Record<string, unknown>>;
+      expect(aspectOf({ aspects: stored }, 'orbis/task').status).toBe('in_progress');
+    }
+  });
+
+  /** Batch тех же операций: предусловие обязано смотреть в ту же строку, что и merge. */
+  function batchReq(operations: Array<{ tool: string; input: unknown }>): ExecuteRequest {
+    return {
+      actorUserId: userA,
+      actorKind: 'owner',
+      source: 'fast_path',
+      operations,
+      batchId: newId(),
+      clock: () => T0,
+    };
+  }
+
+  const capturedThen = (id: string, allowed: string[]) => [
+    { tool: 'entity_update', input: { id, aspects: { 'orbis/task': { status: 'in_progress' } } } },
+    {
+      tool: 'entity_update',
+      input: {
+        id,
+        precondition: [{ aspect: 'orbis/task', field: 'status', in: allowed }],
+        aspects: { 'orbis/task': { priority: 'high' } },
+      },
+    },
+  ];
+
+  test('в batch предусловие сверяется по ВИРТУАЛЬНОЙ строке: эффект операции N виден операции N+1', async () => {
+    // Строка в БД во время подготовки batch ещё 'planned' (запись — на стадии apply),
+    // поэтому эти два случая различают ровно одно: читает ли предусловие ту же строку,
+    // что и merge, или делает свой SELECT мимо виртуального состояния.
+    const seen = newId();
+    await create(seen, { 'orbis/task': { status: 'planned' } });
+    const applied = await execute(db, batchReq(capturedThen(seen, ['in_progress'])));
+    expect(applied.ok).toBe(true);
+    const second = (applied as ExecuteOk).results[1] as WireEntity;
+    const after = aspectOf(second, 'orbis/task');
+    expect(after.status).toBe('in_progress');
+    expect(after.priority).toBe('high');
+
+    // Зеркало: предусловие на ДОБАТЧЕВОЕ значение не выполняется, и batch атомарно откатан.
+    const stale = newId();
+    await create(stale, { 'orbis/task': { status: 'planned' } });
+    const r = await execute(db, batchReq(capturedThen(stale, ['planned'])));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('CONFLICT');
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.execute(sql`SELECT aspects FROM entities WHERE id = ${stale}`),
+    );
+    const stored = rows[0]?.aspects as Record<string, Record<string, unknown>>;
+    expect(aspectOf({ aspects: stored }, 'orbis/task').status).toBe('planned');
+  });
+
+  test('предусловие по отсутствующему аспекту → CONFLICT (actual undefined)', async () => {
+    const id = newId();
+    await create(id, { 'orbis/note': {} });
+
+    const r = await execute(db, capture(id));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('CONFLICT');
+      expect(r.error.message).toBe('предусловие не выполнено: orbis/task.status');
+      const details = r.error.details as { reason: string; actual: unknown };
+      expect(details.reason).toBe('precondition_failed');
+      // Отсутствующее поле не совпадает ни с чем: захват несуществующего тикета невозможен.
+      expect(details.actual).toBeUndefined();
+    }
+    // Аспект не появился: отказ случился ДО merge.
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.execute(sql`SELECT aspects FROM entities WHERE id = ${id}`),
+    );
+    expect(Object.keys((rows[0]?.aspects as Record<string, unknown>) ?? {})).not.toContain(
+      'orbis/task',
+    );
+  });
+});

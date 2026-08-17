@@ -12,8 +12,9 @@ import {
   attachAspectInput,
   batchAuditMessageId,
   batchExecuteInput,
+  type EntityUpdatePrecondition,
   entityCreateInput,
-  entityUpdateUiInput,
+  entityUpdateExecInput,
   newId,
   relationCreateInput,
   relationDeleteInput,
@@ -823,6 +824,31 @@ async function loadEntityForUpdate(
 }
 
 /**
+ * CAS-предусловие (С7) против состояния строки, ПРОЧИТАННОЙ ПОД ЗАМКОМ. Вызывается только
+ * из prepareEntityUpdate сразу после loadEntityForUpdate — своего чтения не делает намеренно:
+ * второй SELECT снял бы весь смысл, сверяя значение вне транзакционного замка.
+ *
+ * Сравнение по JSON-форме: поля аспектов скалярные, а `===` на объектах сравнивал бы ссылки.
+ * Отсутствующее поле (и отсутствующий аспект) не совпадает ни с чем — захват несуществующего
+ * тикета невозможен.
+ */
+function assertPrecondition(precondition: EntityUpdatePrecondition, aspects: AspectsMap): void {
+  for (const p of precondition) {
+    const actual = aspects[p.aspect]?.[p.field];
+    if (p.in.some((v) => JSON.stringify(v) === JSON.stringify(actual))) continue;
+    throw new ExecError('CONFLICT', `предусловие не выполнено: ${p.aspect}.${p.field}`, {
+      // Второй смысл CONFLICT помимо занятого client-UUID — различает их именно reason
+      // (см. докблок errors.ts): потребители кодов не должны гадать по тексту сообщения.
+      reason: 'precondition_failed',
+      // ОДИН провалившийся элемент, а не весь массив: CAS-шаг по счётчику (Задача 11)
+      // читает details.precondition.field, чтобы решить, повторять ли попытку.
+      precondition: p,
+      actual,
+    });
+  }
+}
+
+/**
  * Financial-инвариант §3.3 с derived_from-веткой: наличие входящей derived_from
  * резолвится только когда от него зависит валидность (recurring=true без recurrence) —
  * из связей, объявленных тем же batch, либо из БД (минус удаляемые batch'ем).
@@ -1094,10 +1120,11 @@ async function prepareEntityUpdate(
   batch?: BatchState,
 ): Promise<PreparedOp> {
   // Стадия 1
-  // Надмножество тул-контракта: тулы шлют узкую форму (bodyDoc в ней просто отсутствует и
-  // отвергается ещё диспатчем), UI — широкую. Расширять сам entityUpdateInput нельзя: он —
-  // контракт ТУЛА, и bodyDoc в нём показался бы модели.
-  const input = parseEnvelope(entityUpdateUiInput, rawInput, 'entity_update');
+  // Надмножество тул-контракта: тулы шлют узкую форму (bodyDoc и precondition в ней просто
+  // отсутствуют и отвергаются ещё диспатчем), UI — форму с bodyDoc, серверные пути — ещё и
+  // с CAS-предусловием. Расширять сам entityUpdateInput нельзя: он — контракт ТУЛА, и оба
+  // поля в нём показались бы модели.
+  const input = parseEnvelope(entityUpdateExecInput, rawInput, 'entity_update');
 
   // Стадия 3: load state ПОД ЗАМКОМ — merge аспектов это read-modify-write, без
   // FOR UPDATE конкурентные патчи разных полей одного аспекта теряли бы правки
@@ -1105,6 +1132,17 @@ async function prepareEntityUpdate(
   if (!current) {
     throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.id });
   }
+  const currentAspects = current.aspects as AspectsMap;
+
+  // CAS-расширение стадий 4–5 (С7): предусловие сверяется по ТОЙ ЖЕ строке, что и весь
+  // остальной update — прочитанной под FOR UPDATE (в batch — по виртуальной строке, где
+  // видны эффекты предыдущих операций того же batch). Отдельный SELECT читал бы состояние
+  // ВНЕ замка, и два конкурентных захвата тикета оба увидели бы `planned`.
+  //
+  // Проверка идёт ДО гейта тела и ДО merge: проигравший захват не должен ни писать, ни
+  // получать STALE_VERSION вместо честного CONFLICT. Внутренний режим undo (§7.8)
+  // предусловий не встречает — inverse их не несёт, поэтому отдельной ветки здесь нет.
+  if (input.precondition) assertPrecondition(input.precondition, currentAspects);
 
   // §5.2: правка body требует optimistic-check по updated_at; патчи без body — LWW.
   // Внутренний режим undo (§7.8) требование ПРОПУСКАЕТ: Undo восстанавливает
@@ -1131,7 +1169,6 @@ async function prepareEntityUpdate(
   }
 
   const now = ctx.clock();
-  const currentAspects = current.aspects as AspectsMap;
 
   // Merge аспектов §9.2 + переходы §3.2; стадия 2 валидирует РЕЗУЛЬТАТ merge, не патч
   let nextAspects = currentAspects;

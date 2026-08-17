@@ -342,3 +342,30 @@ describe('relation.create / relation.delete / relation.listFor (§4.2)', () => {
     expect(gone.code).toBe('NOT_FOUND');
   });
 });
+
+describe('CAS-предусловие не протекает в tRPC (entity.update)', () => {
+  test('precondition во входе entity.update → BAD_REQUEST, правка не применена', async () => {
+    // Предусловие — параметр серверных путей (С7): его знает exec-схема executor'а,
+    // а вход роутера (entityUpdateUiInput) — strict-надмножество тул-контракта БЕЗ него.
+    // Клиент не должен получать CAS-рычаг вместе с обычной правкой карточки.
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const created = await caller.entity.create({
+      input: { title: 'Тикет', tags: [], aspects: { 'orbis/task': { status: 'planned' } } },
+      source: 'fast_path',
+    });
+
+    const e = await trpcError(
+      caller.entity.update({
+        id: created.id,
+        // @ts-expect-error: precondition — параметр exec-схемы, вход роутера его не знает
+        precondition: [{ aspect: 'orbis/task', field: 'status', in: ['planned'] }],
+        aspects: { 'orbis/task': { status: 'in_progress' } },
+      }),
+    );
+    expect(e.code).toBe('BAD_REQUEST');
+
+    const after = await caller.entity.get({ id: created.id });
+    expect(after.entity.aspects['orbis/task']).toEqual({ status: 'planned' });
+  });
+});

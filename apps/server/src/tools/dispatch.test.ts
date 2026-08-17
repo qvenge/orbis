@@ -895,3 +895,63 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     expect(r.status).toBe('ok');
   });
 });
+
+describe('CAS-предусловие не протекает в путь модели (dispatch/MCP)', () => {
+  // Тул-контракт модели не растёт ради сервера: precondition живёт в exec-схеме
+  // executor'а, а вход модели и MCP идёт через strict-схему тула (entityUpdateInput) —
+  // лишний ключ режется ДО классификации §7.10 и до executor'а. Соседи по смыслу —
+  // «bodyDoc не протекает в путь модели» (executor/body-doc.test.ts).
+  const PRECONDITION = [{ aspect: 'orbis/task', field: 'status', in: ['planned'] }];
+
+  test('одиночный entity_update с precondition от модели — VALIDATION, правка не применена', async () => {
+    const target = await seedEntity(userA, {
+      title: 'Тикет модели',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'planned' } },
+    });
+    const r = await dispatchTool(ctxFor(), 'entity_update', {
+      id: target.id,
+      precondition: PRECONDITION,
+      aspects: { 'orbis/task': { status: 'in_progress' } },
+    });
+    expectError(r, 'VALIDATION');
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.select().from(entities).where(eq(entities.id, target.id)),
+    );
+    expect((rows[0]?.aspects as Record<string, Record<string, unknown>>)['orbis/task']).toEqual({
+      status: 'planned',
+    });
+  });
+
+  test('precondition внутри операции batch_execute — VALIDATION с индексом операции', async () => {
+    const target = await seedEntity(userA, {
+      title: 'Тикет модели в batch',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'planned' } },
+    });
+    const r = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        {
+          tool: 'entity_update',
+          input: {
+            id: target.id,
+            precondition: PRECONDITION,
+            aspects: { 'orbis/task': { status: 'in_progress' } },
+          },
+        },
+      ],
+    });
+    expectError(r, 'VALIDATION');
+    if (r.status === 'error') {
+      expect((r.error.details as { index: number; tool: string }).index).toBe(0);
+      expect((r.error.details as { index: number; tool: string }).tool).toBe('entity_update');
+    }
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.select().from(entities).where(eq(entities.id, target.id)),
+    );
+    expect((rows[0]?.aspects as Record<string, Record<string, unknown>>)['orbis/task']).toEqual({
+      status: 'planned',
+    });
+  });
+});

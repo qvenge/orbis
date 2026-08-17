@@ -4,10 +4,11 @@
 // (chat/threads.ts), которым зависимость от executor/ не положена.
 // Коды: VALIDATION (стадии 1–2), NOT_FOUND, STALE_VERSION (§5.2), INVARIANT (§4.2/§3.3,
 // для цикла blocks в details — path, Task 10), FORBIDDEN_LEVEL (зарезервирован §7.10, 1b),
-// LIMIT (entitlements §8), CONFLICT (все пути details.reason='id_conflict': client-UUID
-// непригоден для создания — chat.appendMessage И entity_create executor'а, одиночный
-// и batch; единый wire-контракт финального ревью — 1b MCP и 1c retry-буфер ключуются
-// на кодах, 409 = конфликт ресурса).
+// LIMIT (entitlements §8), CONFLICT (details.reason различает ДВА пути, потребитель не
+// гадает по тексту: 'id_conflict' — client-UUID непригоден для создания, chat.appendMessage
+// И entity_create executor'а, одиночный и batch; 'precondition_failed' — CAS-предусловие
+// entity_update не выполнено под FOR UPDATE, С7. Единый wire-контракт финального ревью —
+// 1b MCP и 1c retry-буфер ключуются на кодах, 409 = конфликт ресурса).
 import { TRPCError } from '@trpc/server';
 
 export type ExecErrorCode =
