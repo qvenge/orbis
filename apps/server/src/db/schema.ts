@@ -16,8 +16,9 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 
-// Схема 10 таблиц по docs/prd/01-architecture.md §4: восемь исходных (§4.1–§4.8) и две
-// таблицы доступа внешних агентов (§4.13–§4.14, D34) — они дописаны в конец файла.
+// Схема 11 таблиц по docs/prd/01-architecture.md §4: восемь исходных (§4.1–§4.8), две
+// таблицы доступа внешних агентов (§4.13–§4.14, D34) — они дописаны в конец файла — и
+// entity_versions (ADE-срез 1, С11) с закреплёнными версиями тела.
 // RLS-политики и сид аспектов — Слайс 1; здесь только структура, defaults, индексы, FK.
 // owner_id логически ссылается на auth.users (Supabase); FK на auth-схему не объявляем —
 // она управляется Supabase, а не нашими миграциями.
@@ -60,7 +61,7 @@ export const entities = pgTable('entities', {
    *   UPDATE entities SET body = body_before_doc, body_doc = NULL
    *   WHERE id = '<id>' AND body_before_doc IS NOT NULL;
    *
-   * СНИМАТЬ КОЛОНКУ МОЖНО И НУЖНО — миграцией `0010_drop_body_before_doc.sql`, которая лежит
+   * СНИМАТЬ КОЛОНКУ МОЖНО И НУЖНО — миграцией `0012_drop_body_before_doc.sql`, которая лежит
    * рядом ГОТОВОЙ, но НЕ зарегистрирована в `meta/_journal.json`. Это не забывчивость: снятие
    * решает владелец, когда перенос признан удачным, — до тех пор текст, который человек из
    * заметки УДАЛИЛ, продолжает лежать в базе, и это осознанный размен «обратимость против
@@ -200,6 +201,34 @@ export const entityOrigins = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [unique('entity_origins_uniq').on(t.ownerId, t.namespace, t.externalId)],
+);
+
+// entity_versions (§2.2, ADE-срез 1, С11) — закреплённые версии тела: снимок текста с
+// подписью, который делает ЧЕЛОВЕК. Не история правок (её ведёт редактор), а те точки,
+// к которым он решил иметь возможность вернуться. Владение прямое, по owner_id, — как у
+// entity_origins: снимок принадлежит владельцу сущности и живёт под той же RLS.
+export const entityVersions = pgTable(
+  'entity_versions',
+  {
+    id: uuid('id').primaryKey(), // UUIDv7, генерирует сервер (newId)
+    ownerId: uuid('owner_id').notNull(),
+    // cascade: версия — снимок ТЕЛА конкретной сущности, без неё она ничего не значит.
+    // Держать снимки удалённой записи значит хранить текст, который человек уже стёр.
+    entityId: uuid('entity_id')
+      .notNull()
+      .references(() => entities.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(), // подпись версии — своими словами, её пишет человек
+    // markdown-проекция на момент снимка — ВСЕГДА. Она читаема без ProseMirror и переживает
+    // смену схемы документа, поэтому NOT NULL здесь именно она, а не body_doc.
+    body: text('body').notNull(),
+    // документ, если у сущности он на момент снимка уже был; NULL — тело ещё не бэкфиллено
+    bodyDoc: jsonb('body_doc'),
+    actorUserId: uuid('actor_user_id').notNull(),
+    actorKind: text('actor_kind').notNull(), // owner | agent (агент — со среза 4)
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // выдача версий одной сущности всегда «свежие сверху»: индекс покрывает и фильтр, и порядок
+  (t) => [index('entity_versions_entity_created').on(t.entityId, t.createdAt.desc())],
 );
 
 // §9.3 (D34): регистрации внешних агентов (DCR) и выданные им доступы.

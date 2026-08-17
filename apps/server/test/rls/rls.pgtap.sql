@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(38);
+SELECT plan(42);
 
 -- Фикстуры под суперпользователем (обходит RLS)
 INSERT INTO entities (id, owner_id, title) VALUES
@@ -35,16 +35,26 @@ INSERT INTO agent_grants (id, owner_id, client_id, kind, label, access_hash) VAL
    'pgtap-client', 'oauth', 'Claude Code', 'hash-a'),
   ('00000000-0000-7000-8000-0000000000b7', '00000000-0000-4000-8000-00000000000b',
    'pgtap-client', 'oauth', 'Claude Code', 'hash-b');
+-- Закреплённые версии тела (ADE-срез 1, С11) — по одной у A и у B: без строки B
+-- проверка «A видит ровно свою» была бы ложно-зелёной и при сломанном RLS.
+-- body_doc не задаём: версия, снятая с ещё не сконвертированного тела, — законный случай.
+INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id, actor_kind) VALUES
+  ('00000000-0000-7000-8000-0000000000a8', '00000000-0000-4000-8000-00000000000a',
+   '00000000-0000-7000-8000-0000000000a1', 'до правки A', 'тело A',
+   '00000000-0000-4000-8000-00000000000a', 'owner'),
+  ('00000000-0000-7000-8000-0000000000b8', '00000000-0000-4000-8000-00000000000b',
+   '00000000-0000-7000-8000-0000000000b1', 'до правки B', 'тело B',
+   '00000000-0000-4000-8000-00000000000b', 'owner');
 
--- 1) RLS включён и FORCE на всех 10 таблицах
+-- 1) RLS включён и FORCE на всех 11 таблицах
 SELECT is(
   (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind = 'r'
      AND c.relname IN ('entities','relations','aspect_definitions','user_settings',
                        'chat_threads','chat_messages','ai_usage','entity_origins',
-                       'agent_grants','oauth_clients')
+                       'agent_grants','oauth_clients','entity_versions')
      AND c.relrowsecurity AND c.relforcerowsecurity),
-  10, 'RLS ENABLE+FORCE на всех десяти таблицах');
+  11, 'RLS ENABLE+FORCE на всех одиннадцати таблицах');
 
 -- Как пользователь A
 SELECT set_config('request.jwt.claims',
@@ -262,6 +272,37 @@ RESET ROLE;
 
 -- Контроль анти-false-positive: админ видит данные обоих
 SELECT cmp_ok((SELECT count(*)::int FROM entities), '>=', 3, 'админ видит строки A и B');
+
+-- Группа 10: entity_versions — закреплённые версии тела (ADE-срез 1, С11).
+-- Identity ставим ЗАНОВО и явно: выше (группа 9) сброшена только РОЛЬ, а GUC
+-- request.jwt.claims живёт до конца транзакции — без явной установки проверки
+-- ушли бы под админа, который RLS обходит, и были бы ложно-зелёными.
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq('SELECT count(*)::int FROM entity_versions', ARRAY[1],
+  'entity_versions: A видит ровно свою версию');
+SELECT throws_ok(
+  $$INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id, actor_kind)
+    VALUES ('00000000-0000-7000-8000-0000000000c8',
+            '00000000-0000-4000-8000-00000000000b',
+            '00000000-0000-7000-8000-0000000000b1', 'подлог', 'тело',
+            '00000000-0000-4000-8000-00000000000b', 'owner')$$,
+  '42501', NULL, 'entity_versions: INSERT с чужим owner_id отклоняется WITH CHECK');
+SELECT lives_ok(
+  $$INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id, actor_kind)
+    VALUES ('00000000-0000-7000-8000-0000000000a9',
+            '00000000-0000-4000-8000-00000000000a',
+            '00000000-0000-7000-8000-0000000000a1', 'своя', 'тело A2',
+            '00000000-0000-4000-8000-00000000000a', 'owner')$$,
+  'entity_versions: INSERT своей версии проходит');
+RESET ROLE;
+-- Deny-by-default и здесь: claims чистим ЯВНО, иначе проверка унаследует identity A выше.
+SELECT set_config('request.jwt.claims', '', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq('SELECT count(*)::int FROM entity_versions', ARRAY[0],
+  'без identity: entity_versions — 0 строк');
+RESET ROLE;
 
 SELECT finish();
 ROLLBACK;
