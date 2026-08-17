@@ -19,7 +19,7 @@
 //   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
 //   bun scripts/ops.ts backfill-body-doc  # конверсия тел в body_doc — ТОЛЬКО после audit-bodies
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
-//   bun scripts/ops.ts issue-pat <owner-uuid> [метка]   # headless-токен агента (§9.3)
+//   bun scripts/ops.ts issue-pat <owner-uuid> [метка] [--scope worker]  # headless-токен (§9.3)
 import { join } from 'node:path';
 import { aspectJsonSchema, BUILTIN_ASPECT_META, diffBuiltinAspects } from '@orbis/shared';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -40,6 +40,7 @@ import {
 } from '../apps/server/src/db/backfill-body-doc';
 import * as schema from '../apps/server/src/db/schema';
 import { issuePatGrant } from '../apps/server/src/oauth/grants';
+import { PAT_USAGE, parsePatArgs } from '../apps/server/src/oauth/pat-args';
 
 const KEYCHAIN_ACCOUNT = 'orbis';
 const KEYCHAIN_SERVICE = 'orbis-prod-admin';
@@ -446,16 +447,21 @@ async function ping(): Promise<number> {
  * один раз и не восстановим (в базе только sha256).
  */
 async function issuePat(args: string[]): Promise<number> {
-  const ownerId = args[0];
-  const label = args[1] ?? 'headless-агент';
-  if (ownerId === undefined || ownerId === '') {
+  // Разбор — общий с локальным scripts/issue-pat.ts: `--scope worker` обязан значить
+  // на проде ровно то же, что на стенде. Незнакомая область или флаг — ОТКАЗ кодом 2,
+  // а не откат на 'full': опечатка иначе выдала бы самый широкий доступ вместо узкого,
+  // и невосстановимо — токен печатается один раз.
+  const parsed = parsePatArgs(args);
+  if ('error' in parsed) {
     console.error(
-      'issue-pat: нужен owner-uuid.\n' +
-        '  bun scripts/ops.ts issue-pat <owner-uuid> [метка]\n' +
-        'owner-uuid — из Supabase → Authentication → Users',
+      `issue-pat: ${parsed.error}.\n` +
+        `  bun scripts/ops.ts issue-pat ${PAT_USAGE}\n` +
+        'owner-uuid — из Supabase → Authentication → Users\n' +
+        '--scope worker — фоновый исполнитель: чтения и глаголы задач, без прочей записи',
     );
     return 2;
   }
+  const { ownerId, label, scope } = parsed;
   return withDb(async (sql) => {
     // Проверка владельца ДО выдачи. Опечатка в UUID иначе дала бы живой токен
     // несуществующего владельца: аутентификация им прошла бы, а агент молча видел бы
@@ -471,8 +477,10 @@ async function issuePat(args: string[]): Promise<number> {
       );
       return 2;
     }
-    const token = await issuePatGrant(drizzle(sql, { schema }), { ownerId, label });
-    console.log(`Токен выдан («${label}»). Показывается ОДИН раз — сохрани его сейчас:`);
+    const token = await issuePatGrant(drizzle(sql, { schema }), { ownerId, label, scope });
+    console.log(
+      `Токен выдан («${label}», область ${scope}). Показывается ОДИН раз — сохрани его сейчас:`,
+    );
     console.log(`  ${token}`);
     console.log('');
     console.log('Подключение агента (заголовочный путь, для claude -p / Agent SDK / CI):');
@@ -504,7 +512,7 @@ const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: stri
   ping: { run: ping, help: 'связность и версия PostgreSQL' },
   'issue-pat': {
     run: issuePat,
-    help: 'headless-токен агента: <owner-uuid> [метка] (печатает секрет ОДИН раз)',
+    help: `headless-токен агента: ${PAT_USAGE} (печатает секрет ОДИН раз)`,
   },
 };
 

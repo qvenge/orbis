@@ -5,7 +5,7 @@
 // ORBIS_PUBLIC_URL и запроса, поэтому файл гоняется без --env-file.
 import { afterEach, expect, test } from 'bun:test';
 import { join } from 'node:path';
-import { OAUTH_AUTHORIZE_PATH } from '@orbis/shared';
+import { GRANT_SCOPES, OAUTH_AUTHORIZE_PATH } from '@orbis/shared';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import {
@@ -72,7 +72,11 @@ test('метаданные AS перечисляют эндпоинты, S256 и
   // строгих клиентов, а не даёт мягкую деградацию.
   expect(body.response_types_supported).toEqual(['code']);
   expect(body.token_endpoint_auth_methods_supported).toEqual(['none']);
-  expect(body.scopes_supported).toEqual(['full']);
+  // Обе области среза объявлены документом: клиент, читающий метаданные, обязан видеть
+  // 'worker' — иначе выданный со скоупом исполнителя токен выглядит для него токеном
+  // с необъявленной областью. Список — из @orbis/shared, второй копии перечисления нет.
+  expect(body.scopes_supported).toEqual([...GRANT_SCOPES]);
+  expect(body.scopes_supported).toEqual(['full', 'worker']);
 });
 
 // NODE_ENV выставляется ЯВНО, а не берётся из окружения прогона: фолбэк на адрес

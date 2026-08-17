@@ -269,6 +269,31 @@ test('выданный код обменивается на токены', async
   expect(identity?.ownerId).toBe(owner);
 });
 
+// Задача 8, §4.14: радио на экране согласия обязано доехать до строки гранта. Без записи
+// область осталась бы на DEFAULT 'full' — владелец выбрал бы «только исполнитель», а агент
+// получил бы полный доступ, и молча.
+test('согласие пишет выбранную область в грант', async () => {
+  const clientId = await seedClient();
+  await ownerCaller.oauth.consent(consentInput(clientId, { scope: 'worker' }));
+  expect((await ownerCaller.oauth.listGrants())[0]).toMatchObject({ scope: 'worker' });
+});
+
+// Умолчание — полный доступ: экран согласия старого клиента (и любой вызов без поля)
+// обязан вести себя ровно как до среза, а не терять доступ молча.
+test('согласие без области выдаёт полный доступ', async () => {
+  const clientId = await seedClient();
+  await ownerCaller.oauth.consent(consentInput(clientId));
+  expect((await ownerCaller.oauth.listGrants())[0]).toMatchObject({ scope: 'full' });
+});
+
+// Незнакомая область отвергается схемой, а не приводится к 'full': приведение молча
+// расширяло бы доступ на опечатке в клиенте.
+test('незнакомая область не принимается', async () => {
+  const clientId = await seedClient();
+  const call = ownerCaller.oauth.consent(consentInput(clientId, { scope: 'admin' }));
+  expect(await rejectCode(call)).toBe('BAD_REQUEST');
+});
+
 // Подпись в списке «Агенты» — то же имя, что владелец видел на экране согласия, и та же
 // обрезка: иначе в список уедет строка на 16 КиБ.
 test('метка гранта — та же обрезанная подпись', async () => {
@@ -420,6 +445,14 @@ test('брошенная попытка авторизации доезжает 
   await issuePatGrant(db, { ownerId: owner, label: 'CI' });
   const pat = (await ownerCaller.oauth.listGrants()).find((g) => g.kind === 'pat');
   expect(pat).toMatchObject({ connected: true });
+});
+
+// Область — часть wire-формы гранта (WireAgentGrant.scope): по ней экран «Агенты» рисует
+// бейдж, и без поля владелец не отличает полный доступ от исполнителя.
+test('область доступа доезжает до экрана', async () => {
+  await issuePatGrant(db, { ownerId: owner, label: 'исполнитель', scope: 'worker' });
+  const [grant] = await ownerCaller.oauth.listGrants();
+  expect(grant?.scope).toBe('worker');
 });
 
 test('список доступов скоупится владельцем', async () => {

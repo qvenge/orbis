@@ -341,6 +341,73 @@ test('путь агента целиком: 401 → метаданные → DCR
   expect(afterBody.error?.code).toBe('UNAUTHORIZED');
 });
 
+// Вторая половина того же пути (Задача 8, §4.14): владелец выбирает на экране согласия
+// «только исполнитель». Проверяется вся цепочка выдачи сужения — согласие → строка гранта
+// → ответ /oauth/token → набор тулов, который агент реально видит. Разъедься любое звено
+// (скоуп не записан, ответ отдаёт литерал, гейт tools/list смотрит не туда), владелец
+// увидел бы на экране обещание сужения, а агент получил бы полный доступ.
+test('согласие со скоупом worker: токен объявляет worker, а /mcp не показывает entity_update', async () => {
+  // Свой клиент: путь начинается с той же регистрации, что и у полного доступа.
+  const regRes = await fetch(`${origin}/oauth/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ client_name: 'Фоновый исполнитель', redirect_uris: [REDIRECT] }),
+  });
+  expect(regRes.status).toBe(201);
+  const reg = (await regRes.json()) as RegistrationResponse;
+
+  const { verifier, challenge } = pkce();
+  const { redirectTo } = await ownerCaller.oauth.consent({
+    clientId: reg.client_id,
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+    codeChallengeMethod: 'S256',
+    scope: 'worker',
+  });
+  const code = new URL(redirectTo).searchParams.get('code');
+  if (code === null) throw new Error(`в адресе возврата нет кода: ${redirectTo}`);
+
+  const tokenRes = await fetch(`${origin}/oauth/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      code_verifier: verifier,
+      redirect_uri: REDIRECT,
+      client_id: reg.client_id,
+    }),
+  });
+  expect(tokenRes.status, `обмен кода: ${await tokenRes.clone().text()}`).toBe(200);
+  const tokens = (await tokenRes.json()) as TokenResponse;
+  // Клиент узнаёт о сужении из ответа обмена — иначе он считает себя полноправным до
+  // первого отказа dispatch'а.
+  expect(tokens.scope).toBe('worker');
+
+  const agent = new Client({ name: 'e2e-worker', version: '0.0.0' });
+  await agent.connect(
+    new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${tokens.access_token}` } },
+    }),
+  );
+  try {
+    const names = (await agent.listTools()).tools.map((t) => t.name);
+    // Чтения и thread_post — есть; произвольная запись в граф — нет. Глаголов
+    // исполнителя (orbis_claim_task и прочие) в реестре ещё нет — их заводят следующие
+    // задачи среза, и списком WORKER_SCOPE_TOOLS они уже разрешены.
+    expect(names).toContain('entity_query');
+    expect(names).toContain('thread_post');
+    expect(names).not.toContain('entity_update');
+    expect(names).not.toContain('entity_create');
+  } finally {
+    await agent.close();
+  }
+
+  // Владелец видит область на экране «Агенты» — иначе отзывать он будет вслепую.
+  const grants = await ownerCaller.oauth.listGrants();
+  expect(grants.find((g) => g.label === 'Фоновый исполнитель')?.scope).toBe('worker');
+});
+
 test('созданное агентом действие попало в журнал с атрибуцией agent/mcp', async () => {
   // Предыдущий тест создал сущность через OAuth-токен. Проверяем, что путь через новый
   // транспорт не потерял атрибуцию: карточка действия обязана лежать в ГЛОБАЛЬНОМ треде

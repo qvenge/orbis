@@ -3,7 +3,8 @@
 // веб-клиента (auth/config.ts): серверному HTML она не видна. Монтируется внутри
 // AuthProvider — незалогиненного он сам уводит на вход, и второго способа логина
 // заводить не приходится.
-import { type ReactNode, useMemo } from 'react';
+import type { GrantScope } from '@orbis/shared';
+import { type ReactNode, useId, useMemo, useState } from 'react';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Skeleton } from '../../ui/Skeleton';
@@ -46,6 +47,9 @@ function ConsentPrompt({
   const consent = trpc.oauth.consent.useMutation({
     onSuccess: (r) => navigate(r.redirectTo),
   });
+  // Область живёт в состоянии экрана, а не в адресе запроса: её выбирает ВЛАДЕЛЕЦ, и
+  // приди она параметром от агента — агент сам решал бы, сколько ему выдать.
+  const [scope, setScope] = useState<GrantScope>('full');
   // Занятость общая на обе кнопки, и `isSuccess` в ней не лишний: браузер после успеха
   // только начинает уходить, а «Отклонить» в это окно отправило бы access_denied по уже
   // ВЫДАННОМУ коду — владелец увидел бы в «Агентах» агента, которого считает отклонённым.
@@ -72,6 +76,8 @@ function ConsentPrompt({
         опасные — потребуют подтверждения в чате. Доступ отзывается в разделе «Настройки → Агенты».
       </p>
 
+      <ScopeChoice value={scope} onChange={setScope} disabled={busy} />
+
       {/* Адрес возврата — единственный признак, который подделать нельзя. Именем клиента
           не проверяется ничего: /oauth/register публичен, `client_name` сервер только режет
           до 64 символов, и назваться «Claude Code» может кто угодно — вместе со своим
@@ -96,6 +102,7 @@ function ConsentPrompt({
               codeChallengeMethod: 'S256',
               state: request.state,
               resource: request.resource,
+              scope,
             })
           }
         >
@@ -113,6 +120,80 @@ function ConsentPrompt({
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Варианты области (§4.14). Подпись «worker» оставлена в скобках намеренно: этим словом
+ * область называется и в ответе /oauth/token, и в конфигурации агента, и владельцу, который
+ * будет сверять одно с другим, термин нужен целиком. Пояснение под каждым вариантом —
+ * потому что решение принимается один раз, до первого действия агента, и переспросить
+ * экран уже не даст.
+ */
+const SCOPE_OPTIONS: ReadonlyArray<{ value: GrantScope; title: string; hint: string }> = [
+  {
+    value: 'full',
+    title: 'Полный доступ',
+    hint: 'Агент читает и изменяет весь ваш граф — как вы сами.',
+  },
+  {
+    value: 'worker',
+    title: 'Только исполнитель (worker)',
+    hint: 'Исполнитель видит граф и пишет только через глаголы задач; закрыть тикет сам не может.',
+  },
+];
+
+/**
+ * Выбор области. Радио, а не выпадающий список: вариантов два, и оба обязаны быть видны
+ * ЦЕЛИКОМ — вместе с тем, что каждый означает. Умолчание — полный доступ: сужение по
+ * умолчанию сломало бы подключение обычного агента молча, а владелец узнал бы об этом
+ * по непонятному отказу в чужой программе.
+ *
+ * Пояснение вынесено из <label> в отдельную строку с aria-describedby: попади оно внутрь
+ * метки, доступным именем радио стал бы весь абзац, и с клавиатуры вариант звучал бы
+ * лекцией вместо названия.
+ */
+function ScopeChoice({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: GrantScope;
+  onChange: (scope: GrantScope) => void;
+  disabled: boolean;
+}) {
+  // name группы — из useId: два экрана согласия на одной странице (в тестах — в одном
+  // документе) иначе делили бы одну радио-группу и гасили выбор друг друга.
+  const group = useId();
+  return (
+    <fieldset className="flex flex-col gap-2 rounded-control border border-line p-3">
+      <legend className="px-1 text-text-secondary text-xs">Сколько доступа выдать</legend>
+      {SCOPE_OPTIONS.map((option) => {
+        const id = `${group}-${option.value}`;
+        return (
+          <div key={option.value} className="flex items-start gap-2">
+            <input
+              id={id}
+              type="radio"
+              name={group}
+              className="mt-1 accent-accent"
+              checked={value === option.value}
+              disabled={disabled}
+              onChange={() => onChange(option.value)}
+              aria-describedby={`${id}-hint`}
+            />
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <label htmlFor={id} className="cursor-pointer text-sm">
+                {option.title}
+              </label>
+              <span id={`${id}-hint`} className="text-text-muted text-xs">
+                {option.hint}
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </fieldset>
   );
 }
 

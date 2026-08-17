@@ -2,7 +2,7 @@
 // Метаданные, по которым MCP-клиент находит вход (спека MCP 2025-06-18):
 // RFC 9728 для ресурса и RFC 8414 для authorization server. Оба документа —
 // публичные и неаутентифицированные по построению: это точка входа ДО всякого токена.
-import { OAUTH_AUTHORIZE_PATH } from '@orbis/shared';
+import { GRANT_SCOPES, OAUTH_AUTHORIZE_PATH } from '@orbis/shared';
 import type { Context, Hono } from 'hono';
 
 /** Подмножество env, которое читает резолвер базы; в тестах инжектится литералом. */
@@ -183,7 +183,10 @@ export function mountOAuthMetadata(app: Hono): void {
       // plain намеренно не поддержан: RFC его допускает, мы — нет
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['none'],
-      scopes_supported: ['full'],
+      // Обе области среза — из @orbis/shared, а не вторым перечислением: клиент,
+      // читающий метаданные, обязан видеть ту же пару значений, которую /oauth/token
+      // отдаёт в поле `scope`.
+      scopes_supported: [...GRANT_SCOPES],
     });
   });
 }

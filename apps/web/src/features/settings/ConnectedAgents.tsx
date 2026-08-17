@@ -3,6 +3,7 @@
 // входа: без него выданный агенту доступ не отозвать ничем, кроме SQL.
 import { formatDate } from '../../lib/format';
 import { MCP_URL, type RouterOutputs, trpc } from '../../trpc';
+import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
 import { Skeleton } from '../../ui/Skeleton';
 
@@ -11,6 +12,18 @@ type Grant = RouterOutputs['oauth']['listGrants'][number];
 /** kind — колонка базы ('oauth' | 'pat'); владельцу показываем, чем этот доступ является. */
 function kindLabel(kind: string): string {
   return kind === 'pat' ? 'токен для CI' : 'браузерный вход';
+}
+
+/**
+ * Подпись области (§4.14). Сравнение с 'worker', а не со списком: подпись — не гейт, и
+ * незнакомое значение колонки честнее показать как «полный доступ», чем как сужение,
+ * которого сервер не подтверждал. Сам гейт fail-closed и живёт на сервере (dispatch.ts).
+ *
+ * Бейдж стоит у КАЖДОЙ строки, а не только у сужённой: отсутствие пометки читалось бы как
+ * «пометку забыли», а не как «доступ полный», — а отзывать владелец будет по этой подписи.
+ */
+function scopeLabel(scope: string): string {
+  return scope === 'worker' ? 'исполнитель' : 'полный доступ';
 }
 
 /**
@@ -70,7 +83,10 @@ export function ConnectedAgents() {
             <div className="flex min-w-0 flex-col gap-0.5">
               {/* break-words: метка — подпись клиента, полностью подконтрольная тому, кто
                   регистрировался (сервер режет её до 64 код-поинтов, но не до узкой). */}
-              <span className="break-words text-sm">{g.label}</span>
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="break-words text-sm">{g.label}</span>
+                <Badge>{scopeLabel(g.scope)}</Badge>
+              </span>
               <span className="text-text-secondary text-xs">{metaLine(g, tz)}</span>
               {!g.connected && g.revokedAt === null && (
                 <span className="text-text-muted text-xs">

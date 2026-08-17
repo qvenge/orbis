@@ -58,6 +58,7 @@ test('код меняется на пару токенов, access пускае�
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   const pair = await exchangeAuthorizationCode(db, {
     code,
@@ -79,6 +80,7 @@ test('код одноразовый: повторный обмен отверг�
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   const pair = await exchangeAuthorizationCode(db, {
     code,
@@ -107,6 +109,7 @@ test('неверный verifier не проходит', async () => {
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   await expect(
     exchangeAuthorizationCode(db, {
@@ -128,6 +131,7 @@ test('код, выданный другому клиенту, не меняет�
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   await expect(
     exchangeAuthorizationCode(db, {
@@ -148,6 +152,7 @@ test('несовпадающий redirect_uri не меняет код', async (
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   await expect(
     exchangeAuthorizationCode(db, {
@@ -168,6 +173,7 @@ test('просроченный код не меняется', async () => {
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   // Состариваем срок прямым UPDATE — системное время не подменяем.
   await db
@@ -193,6 +199,7 @@ test('грант, отозванный между выдачей кода и о�
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   // Строка гранта видна владельцу сразу — значит кнопка «Отозвать» доступна в те
   // самые 60 секунд, пока код ещё не обменян.
@@ -222,6 +229,7 @@ test('refresh ротируется, старый больше не работа�
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   const first = await exchangeAuthorizationCode(db, {
     code,
@@ -247,6 +255,7 @@ test('реплей ротированного refresh гасит цепочку 
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   const first = await exchangeAuthorizationCode(db, {
     code,
@@ -278,6 +287,7 @@ test('чужой client_id не ротирует и НЕ гасит грант',
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   const pair = await exchangeAuthorizationCode(db, {
     code,
@@ -304,6 +314,7 @@ test('мёртвый refresh при предъявлении гасит гран
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   const pair = await exchangeAuthorizationCode(db, {
     code,
@@ -343,6 +354,59 @@ test('verifyBearer отдаёт область и подпись гранта, �
   expect(identity).toMatchObject({ ownerId: owner, scope: 'full', label: 'CI' });
 });
 
+// Задача 8: скоуп теперь ВЫДАЁТСЯ, а не только читается. До неё колонка заполнялась одним
+// лишь DEFAULT, и «выдать исполнителя» можно было только UPDATE'ом мимо кода — то есть
+// сузить доступ штатным путём было нечем.
+test('PAT выдаётся со скоупом worker, и его читает verifyBearer', async () => {
+  const pat = await issuePatGrant(db, { ownerId: owner, label: 'исполнитель', scope: 'worker' });
+  expect(await verifyBearer(db, pat)).toMatchObject({ scope: 'worker', label: 'исполнитель' });
+});
+
+// Умолчание — 'full': скрипты выдачи PAT зовут issuePatGrant без области, и молчаливое
+// сужение отобрало бы доступ у уже описанного в документации способа подключения.
+test('PAT без указанной области остаётся полным', async () => {
+  const pat = await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  expect(await verifyBearer(db, pat)).toMatchObject({ scope: 'full' });
+});
+
+// Скоуп кода доезжает до выданного по нему access-токена: между согласием владельца и
+// первым вызовом агента лежит обмен, и потеряйся область там — экран согласия обещал бы
+// сужение, которого на самом деле нет.
+test('область кода доезжает до токенов и до ответа обмена', async () => {
+  const clientId = await seedClient();
+  const { verifier, challenge } = pkce();
+  const code = await createAuthorizationCode(db, {
+    ownerId: owner,
+    clientId,
+    label: 'Исполнитель',
+    redirectUri: REDIRECT,
+    codeChallenge: challenge,
+    scope: 'worker',
+  });
+  const pair = await exchangeAuthorizationCode(db, {
+    code,
+    codeVerifier: verifier,
+    redirectUri: REDIRECT,
+    clientId,
+  });
+  expect(pair.scope).toBe('worker');
+  expect(await verifyBearer(db, pair.accessToken)).toMatchObject({ scope: 'worker' });
+  // Ротация область не расширяет: /oauth/token отвечает ею и на refresh, и клиент,
+  // сверяющий scope ответа, иначе увидел бы расширение доступа на пустом месте.
+  const rotated = await rotateRefresh(db, { refreshToken: pair.refreshToken, clientId });
+  expect(rotated.scope).toBe('worker');
+});
+
+// Экран «Настройки → Агенты» показывает область каждой строки: без неё владелец не
+// отличает полный доступ от исполнителя и не понимает, что именно отзывает.
+test('listGrants отдаёт область гранта', async () => {
+  await issuePatGrant(db, { ownerId: owner, label: 'исполнитель', scope: 'worker' });
+  await issuePatGrant(db, { ownerId: owner, label: 'CI' });
+  const grants = await listGrants(db, owner);
+  expect(grants.find((g) => g.label === 'исполнитель')?.scope).toBe('worker');
+  expect(grants.find((g) => g.label === 'CI')?.scope).toBe('full');
+});
+
 test('чужой владелец не отзывает грант', async () => {
   const pat = await issuePatGrant(db, { ownerId: owner, label: 'CI' });
   const identity = await verifyBearer(db, pat);
@@ -376,6 +440,7 @@ test('listGrants отличает необменянный код от подк�
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   expect((await listGrants(db, owner))[0]).toMatchObject({
     label: 'Claude Code',
@@ -434,6 +499,7 @@ test('повторный код не двигает дату уже проста
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   await exchangeAuthorizationCode(db, {
     code,
@@ -469,6 +535,7 @@ test('реплей ротированного refresh не двигает дат
     label: 'Claude Code',
     redirectUri: REDIRECT,
     codeChallenge: challenge,
+    scope: 'full',
   });
   const first = await exchangeAuthorizationCode(db, {
     code,

@@ -149,8 +149,12 @@ export function makeTokenHandler(deps: { db: Db }) {
         token_type: 'Bearer',
         expires_in: pair.expiresIn,
         refresh_token: pair.refreshToken,
-        // Единственная область, объявленная в метаданных (`scopes_supported: ['full']`).
-        scope: 'full',
+        // Область — из строки гранта, а не литерал: обе ветки выше (обмен кода и ротация)
+        // читают её тем же запросом, что выдаёт пару. Литералом сужение, выбранное
+        // владельцем на экране согласия, доехало бы до базы, но клиент видел бы «full» —
+        // и агент считал бы себя полноправным до первого отказа dispatch'а. На ротации
+        // это же поле — обещание, что обновление токена доступ не расширило.
+        scope: pair.scope,
       });
     } catch (e) {
       if (e instanceof OAuthError) {

@@ -14,6 +14,7 @@ const GRANT = {
   kind: 'oauth',
   label: 'Claude Code',
   connected: true,
+  scope: 'full',
   createdAt: '2026-08-01T10:00:00.000Z',
   lastUsedAt: '2025-08-10T09:00:00.000Z',
   revokedAt: null,
@@ -108,6 +109,19 @@ test('брошенная попытка авторизации не выдаёт
   // Отзыв в эти секунды — единственный способ погасить ещё не обменянный код,
   // и сервер такой отзыв чтит (grants.ts: exchangeAuthorizationCode).
   expect(screen.getByRole('button', revokeButton('Claude Code'))).toBeInTheDocument();
+});
+
+// Область гранта (Задача 8, §4.14) — то, что владелец обязан видеть ДО отзыва: полный
+// доступ и фоновый исполнитель отзываются одной и той же кнопкой, и без подписи строки
+// неразличимы. Бейдж стоит у каждой строки, а не только у сужённой: «нет пометки» читалось
+// бы как «пометку забыли», а не как «доступ полный».
+test('область доступа подписана у каждой строки', async () => {
+  renderWithProviders(
+    <ConnectedAgents />,
+    handler([GRANT, { ...GRANT, id: 'second', label: 'Исполнитель', scope: 'worker' }]),
+  );
+  expect(await screen.findByText('исполнитель')).toBeInTheDocument();
+  expect(screen.getByText('полный доступ')).toBeInTheDocument();
 });
 
 test('пустой список объясняет, как подключить агента, адресом этого стенда', async () => {

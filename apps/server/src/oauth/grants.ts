@@ -48,12 +48,21 @@ export interface TokenPair {
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
+  /**
+   * Область гранта, из которого выдана пара. Едет в ответе /oauth/token (`scope`, RFC 6749
+   * §5.1): клиент узнаёт о сужении единственным способом — из ответа обмена. Читается из
+   * той же строки, что и токены, и тем же запросом — иначе между записью области и её
+   * чтением помещался бы отзыв или повторная выдача.
+   */
+  scope: GrantScope;
 }
 
 export interface GrantSummary {
   id: string;
   kind: string;
   label: string;
+  /** Область (С2): экран «Агенты» подписывает ею строку — полный доступ или исполнитель. */
+  scope: GrantScope;
   /**
    * Агент забрал токены. false — согласие владельца есть, а обмена кода не было:
    * строка появляется в момент «Разрешить», и агент, который до обмена не дошёл
@@ -120,11 +129,11 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
   const row = rows[0];
   if (!row) return null;
   // Каст, а не разбор: колонка `scope` — text с DEFAULT 'full', перечисление живёт одним
-  // списком в @orbis/shared (GRANT_SCOPES), и сегодня в колонку не пишет никто — все
-  // строки приходят со значением по умолчанию. Откат на 'full' при незнакомом значении
-  // был бы здесь РАСШИРЕНИЕМ доступа (самый широкий скоуп по умолчанию), поэтому лукап
-  // отдаёт значение как есть, а решение о нём принимает гейт скоупа — и обязан быть
-  // fail-closed «не 'full' → не полный доступ», а не сравнением с одним лишь 'worker'.
+  // списком в @orbis/shared (GRANT_SCOPES), а пишут в неё выдача кода и issuePatGrant —
+  // значениями этого же списка. Откат на 'full' при незнакомом значении был бы здесь
+  // РАСШИРЕНИЕМ доступа (самый широкий скоуп по умолчанию), поэтому лукап отдаёт значение
+  // как есть, а решение о нём принимает гейт скоупа — и обязан быть fail-closed
+  // «не 'full' → не полный доступ», а не сравнением с одним лишь 'worker'.
   return {
     grantId: row.id,
     ownerId: row.ownerId,
@@ -133,7 +142,14 @@ export async function verifyBearer(db: Db, token: string): Promise<GrantIdentity
   };
 }
 
-/** Согласие владельца: строка гранта с одноразовым кодом, токенов ещё нет. */
+/**
+ * Согласие владельца: строка гранта с одноразовым кодом, токенов ещё нет.
+ *
+ * `scope` — ОБЯЗАТЕЛЬНОЕ поле, а не необязательное с умолчанием, хотя экран согласия и
+ * подставляет 'full' сам (zod-схема процедуры). Умолчание здесь молча выдавало бы САМЫЙ
+ * ШИРОКИЙ доступ всякому будущему вызову, забывшему про область, — то есть ошибка стоила
+ * бы владельцу полного графа. Обязательное поле превращает эту ошибку в отказ компилятора.
+ */
 export async function createAuthorizationCode(
   db: Db,
   input: {
@@ -142,6 +158,7 @@ export async function createAuthorizationCode(
     label: string;
     redirectUri: string;
     codeChallenge: string;
+    scope: GrantScope;
   },
 ): Promise<string> {
   const code = mintToken(CODE_PREFIX);
@@ -151,6 +168,7 @@ export async function createAuthorizationCode(
     clientId: input.clientId,
     kind: 'oauth',
     label: input.label,
+    scope: input.scope,
     codeHash: hashToken(code),
     codeChallenge: input.codeChallenge,
     codeExpiresAt: secondsFromNow(CODE_TTL_SECONDS),
@@ -211,11 +229,14 @@ export async function exchangeAuthorizationCode(
         isNull(agentGrants.revokedAt),
       ),
     )
-    .returning({ id: agentGrants.id });
-  if (claimed.length === 0) {
+    // Область читается ТЕМ ЖЕ запросом, что забирает код: отдельный SELECT после UPDATE
+    // отдал бы её из строки, которую в этот момент уже могли отозвать или переписать.
+    .returning({ id: agentGrants.id, scope: agentGrants.scope });
+  const row = claimed[0];
+  if (row === undefined) {
     throw new OAuthError('invalid_grant', 'код уже использован либо доступ отозван');
   }
-  return pair;
+  return { ...pair, scope: row.scope as GrantScope };
 }
 
 /**
@@ -247,8 +268,9 @@ export async function rotateRefresh(
         gt(agentGrants.refreshExpiresAt, new Date()),
       ),
     )
-    .returning({ id: agentGrants.id });
-  if (rows.length === 0) {
+    .returning({ id: agentGrants.id, scope: agentGrants.scope });
+  const rotated = rows[0];
+  if (rotated === undefined) {
     // Среди живых не нашли. Гасим цепочку только если предъявленный токен этому гранту
     // всё-таки принадлежит: совпал либо с текущим хешем (грант отозван или refresh
     // просрочен), либо с предыдущим — это и есть реплей уже ротированного токена,
@@ -266,13 +288,22 @@ export async function rotateRefresh(
       );
     throw new OAuthError('invalid_grant', 'refresh-токен недействителен');
   }
-  return pair;
+  // Ротация область не трогает: обновление токена — не новое согласие, и расширить доступ
+  // им было бы обходом экрана согласия.
+  return { ...pair, scope: rotated.scope as GrantScope };
 }
 
-/** Headless-доступ (Р4): та же таблица, без клиента и без срока. */
+/**
+ * Headless-доступ (Р4): та же таблица, без клиента и без срока.
+ *
+ * Область необязательна — в отличие от кода согласия: PAT выдаётся скриптом из командной
+ * строки, где `--scope` не указан у всех уже описанных в документации способов подключения,
+ * и обязательное поле сломало бы их. Умолчание 'full' здесь — сохранение прежнего
+ * поведения, а не решение о доступе: выбор делает тот, кто запускает скрипт.
+ */
 export async function issuePatGrant(
   db: Db,
-  input: { ownerId: string; label: string },
+  input: { ownerId: string; label: string; scope?: GrantScope },
 ): Promise<string> {
   const token = mintToken(PAT_PREFIX);
   await db.insert(agentGrants).values({
@@ -280,6 +311,7 @@ export async function issuePatGrant(
     ownerId: input.ownerId,
     kind: 'pat',
     label: input.label,
+    scope: input.scope ?? 'full',
     accessHash: hashToken(token),
   });
   return token;
@@ -297,6 +329,10 @@ export async function listGrants(db: Db, ownerId: string): Promise<GrantSummary[
       id: agentGrants.id,
       kind: agentGrants.kind,
       label: agentGrants.label,
+      // Каст типа, а не разбор — по той же причине, что в verifyBearer: перечисление
+      // живёт одним списком в @orbis/shared, а колонка — text. Приём тот же, что у
+      // `connected` строкой ниже (sql<T> в этом же select).
+      scope: sql<GrantScope>`${agentGrants.scope}`,
       connected: sql<boolean>`(${agentGrants.accessHash} IS NOT NULL OR ${agentGrants.refreshHash} IS NOT NULL)`,
       createdAt: agentGrants.createdAt,
       lastUsedAt: agentGrants.lastUsedAt,
@@ -334,7 +370,13 @@ export async function revokeGrant(
   return rows.length > 0;
 }
 
-function mintPair(): TokenPair {
+/**
+ * Токены пары БЕЗ области: минт ничего не знает о гранте, а область принадлежит строке,
+ * из которой пара выдаётся, — и приезжает из её же UPDATE ... RETURNING.
+ */
+type MintedTokens = Omit<TokenPair, 'scope'>;
+
+function mintPair(): MintedTokens {
   return {
     accessToken: mintToken(ACCESS_PREFIX),
     refreshToken: mintToken(REFRESH_PREFIX),
@@ -342,7 +384,7 @@ function mintPair(): TokenPair {
   };
 }
 
-function pairColumns(pair: TokenPair) {
+function pairColumns(pair: MintedTokens) {
   return {
     accessHash: hashToken(pair.accessToken),
     accessExpiresAt: secondsFromNow(ACCESS_TTL_SECONDS),

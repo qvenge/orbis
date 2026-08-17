@@ -9,9 +9,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { batchAuditMessageId, entityThreadId, globalThreadId, newId } from '@orbis/shared';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import type { WireChatMessage } from '../chat/messages';
 import { chatMessages, entities, oauthClients } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -67,19 +67,13 @@ beforeAll(async () => {
   delete process.env.ORBIS_PUBLIC_URL; // база метаданных = адрес запроса (локальный стенд)
   await truncateAll();
   TOKEN = await issuePatGrant(db, { ownerId: owner, label: 'тестовый агент' });
-  // Скоуп worker: issuePatGrant его пока не принимает (Задача 8) — строка правится
-  // под admin-DSN, мимо RLS; это тестовая обвязка, а не путь кода
-  WORKER_TOKEN = await issuePatGrant(db, { ownerId: owner, label: 'фоновый исполнитель' });
-  const workerGrant = await verifyBearer(db, WORKER_TOKEN);
-  if (workerGrant === null) throw new Error('worker-PAT не прошёл verifyBearer');
-  const { db: admin, client: adminClient } = adminDb();
-  try {
-    await admin.execute(
-      sql`UPDATE agent_grants SET scope = 'worker' WHERE id = ${workerGrant.grantId}::uuid`,
-    );
-  } finally {
-    await adminClient.end();
-  }
+  // Скоуп worker выдаётся штатным путём (Задача 8): правка строки под admin-DSN,
+  // стоявшая здесь прежде, обходила бы ровно тот код, который теперь и проверяется.
+  WORKER_TOKEN = await issuePatGrant(db, {
+    ownerId: owner,
+    label: 'фоновый исполнитель',
+    scope: 'worker',
+  });
 
   const app = new Hono();
   app.all('/mcp', makeMcpHandler({ db }));
@@ -252,6 +246,7 @@ describe('/mcp: аутентификация по гранту ДО MCP-логи
       label: 'Claude Code',
       redirectUri,
       codeChallenge: createHash('sha256').update(verifier).digest('base64url'),
+      scope: 'full',
     });
     const { accessToken } = await exchangeAuthorizationCode(db, {
       code,

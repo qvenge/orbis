@@ -11,6 +11,7 @@ import { aspectDefinitions, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
+import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { dispatchTool, type ToolCallCtx } from './dispatch';
 
 requireEnv();
@@ -780,18 +781,17 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     });
 
   beforeAll(async () => {
-    // Строка гранта пишется под admin-DSN: issuePatGrant scope пока не принимает
-    // (Задача 8), а инвариант assertAssignment требует ЖИВОГО гранта владельца
-    grantId = newId();
-    const { db: admin, client: adminClient } = adminDb();
-    try {
-      await admin.execute(
-        sql`INSERT INTO agent_grants (id, owner_id, kind, label, scope)
-            VALUES (${grantId}::uuid, ${owner}::uuid, 'pat', 'worker-тест', 'worker')`,
-      );
-    } finally {
-      await adminClient.end();
-    }
+    // Грант выдаётся штатным путём (Задача 8 научила issuePatGrant области): инвариант
+    // assertAssignment требует ЖИВОГО гранта владельца, а вставка строки руками обходила
+    // бы ровно тот код, которым скоуп теперь и записывается.
+    const token = await issuePatGrant(db, {
+      ownerId: owner,
+      label: 'worker-тест',
+      scope: 'worker',
+    });
+    const identity = await verifyBearer(db, token);
+    if (identity === null) throw new Error('выданный worker-PAT не прошёл verifyBearer');
+    grantId = identity.grantId;
     project = await seedEntity(owner, {
       title: 'Проект исполнителя',
       tags: [],

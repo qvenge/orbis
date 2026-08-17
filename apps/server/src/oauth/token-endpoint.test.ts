@@ -10,6 +10,7 @@
 // день, когда переменную добавят в apps/server/.env (мина, найденная пере-ревью Task 5).
 import { afterAll, beforeEach, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
+import type { GrantScope } from '@orbis/shared';
 import { Hono } from 'hono';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import type { AiDeps } from '../ai/send-message';
@@ -78,7 +79,9 @@ let seq = 0;
  * Клиент регистрируется прежде: `agent_grants.client_id` — внешний ключ на `oauth_clients`,
  * и грант без зарегистрированного клиента база просто не примет.
  */
-async function seedCode(): Promise<{ code: string; verifier: string; clientId: string }> {
+async function seedCode(
+  scope: GrantScope = 'full',
+): Promise<{ code: string; verifier: string; clientId: string }> {
   const clientId = `клиент-${++seq}`;
   await db
     .insert(oauthClients)
@@ -90,6 +93,7 @@ async function seedCode(): Promise<{ code: string; verifier: string; clientId: s
     label: 'проба',
     redirectUri: REDIRECT,
     codeChallenge: challengeFor(VERIFIER),
+    scope,
   });
   return { code, verifier: VERIFIER, clientId };
 }
@@ -135,10 +139,20 @@ test('authorization_code отдаёт пару токенов в форме OAut
   // проверку на тип и оставили клиента с refresh'ом в заголовке Authorization.
   expect(body.access_token).toMatch(/^orbis_at_[0-9a-f]{64}$/);
   expect(body.refresh_token).toMatch(/^orbis_rt_[0-9a-f]{64}$/);
-  // Область объявлена в метаданных (`scopes_supported: ['full']`) — молчаливая пропажа
-  // поля всплыла бы только на строгом клиенте.
+  // Область объявлена в метаданных (`scopes_supported`) — молчаливая пропажа поля
+  // всплыла бы только на строгом клиенте.
   expect(body.scope).toBe('full');
   expect(res.headers.get('cache-control')).toBe('no-store');
+});
+
+// Задача 8: `scope` в ответе — область ЭТОГО гранта, а не литерал. Литералом сужение,
+// выбранное владельцем на экране согласия, доезжало бы до базы, но клиент видел бы в
+// ответе «full» — и агент считал бы себя полноправным, пока не упрётся в первый отказ.
+test('область в ответе — из гранта, а не литерал', async () => {
+  const seeded = await seedCode('worker');
+  const res = await postForm(exchangeFields(seeded));
+  expect(res.status).toBe(200);
+  expect((await json(res)).scope).toBe('worker');
 });
 
 // Форма ответа — ещё не доказательство: хендлер, вернувший две случайные строки нужного
@@ -270,6 +284,22 @@ test('refresh_token выдаёт новую пару', async () => {
   // действительным, а вся защита от реплея держится на его смене (OAuth 2.1 §7.5).
   expect(body.refresh_token).not.toBe(first.refresh_token);
   expect(res.headers.get('cache-control')).toBe('no-store');
+});
+
+// Ротация — вторая ветка того же ответа, и область в ней обязана остаться прежней:
+// расширение доступа при обновлении токена было бы тихим обходом согласия владельца.
+test('ротация отдаёт ту же область, что и обмен кода', async () => {
+  const seeded = await seedCode('worker');
+  const exchanged = await json(await postForm(exchangeFields(seeded)));
+  const refreshToken = exchanged.refresh_token;
+  if (!refreshToken) throw new Error('обмен не вернул refresh_token');
+  const res = await postForm({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: seeded.clientId,
+  });
+  expect(res.status).toBe(200);
+  expect((await json(res)).scope).toBe('worker');
 });
 
 // ---------------------------------------------------------------------------

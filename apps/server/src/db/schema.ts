@@ -251,7 +251,10 @@ export const agentGrants = pgTable(
     clientId: text('client_id').references(() => oauthClients.clientId, { onDelete: 'cascade' }),
     kind: text('kind').notNull(), // oauth | pat
     label: text('label').notNull(),
-    scope: text('scope').notNull().default('full'), // Р6: значение пока одно
+    // Область гранта (С2, §4.14): 'full' — весь граф владельца, 'worker' — фоновый
+    // исполнитель. Пишется при выдаче кода и PAT; DEFAULT держит строки, заведённые до
+    // среза, и остаётся прежним поведением для вызовов без области.
+    scope: text('scope').notNull().default('full'),
     codeHash: text('code_hash'),
     codeChallenge: text('code_challenge'),
     codeExpiresAt: timestamp('code_expires_at', { withTimezone: true }),

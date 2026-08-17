@@ -4,6 +4,7 @@
 // (решение 12 плана; zod .datetime() в shared-схемах офсет не принимает).
 // БД хранит микросекунды, но драйвер парсит timestamptz в Date (мс), поэтому сравнение
 // expectedUpdatedAt (клиент видел wire-форму) с row.updatedAt.toISOString() симметрично.
+import type { GrantScope } from '@orbis/shared';
 import type { ChatRole, WireChatMessage } from './chat/messages';
 import type {
   aspectDefinitions,
@@ -183,6 +184,8 @@ export interface WireAgentGrant {
   label: string;
   /** Агент забрал токены; false — согласие есть, обмена кода не было (см. GrantSummary). */
   connected: boolean;
+  /** Область доступа (С2): по ней экран «Агенты» подписывает строку. */
+  scope: GrantScope;
   createdAt: string;
   lastUsedAt: string | null;
   revokedAt: string | null;
@@ -194,6 +197,7 @@ export function toWireAgentGrant(row: GrantSummary): WireAgentGrant {
     kind: row.kind,
     label: row.label,
     connected: row.connected,
+    scope: row.scope,
     createdAt: row.createdAt.toISOString(),
     lastUsedAt: row.lastUsedAt?.toISOString() ?? null,
     revokedAt: row.revokedAt?.toISOString() ?? null,

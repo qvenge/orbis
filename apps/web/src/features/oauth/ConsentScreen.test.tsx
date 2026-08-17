@@ -197,7 +197,40 @@ test('resource и state доезжают до сервера обоими выз
     codeChallengeMethod: 'S256',
     state: 'st-1',
     resource: 'https://orbis.example.com/mcp',
+    // Область выбирается на этом же экране (Задача 8, §4.14) и едет тем же вызовом:
+    // отдельного шага «сузить доступ» после выдачи кода нет и быть не может.
+    scope: 'full',
   });
+});
+
+// Радио — единственное место, где владелец выбирает, СКОЛЬКО отдаёт. Умолчание — полный
+// доступ: подключение агента общего назначения не должно молча ломаться сужением.
+test('область по умолчанию — полный доступ', async () => {
+  renderWithProviders(<ConsentScreen search={SEARCH} navigate={vi.fn()} />, HANDLER);
+  expect(await screen.findByRole('radio', { name: 'Полный доступ' })).toBeChecked();
+  expect(screen.getByRole('radio', { name: 'Только исполнитель (worker)' })).not.toBeChecked();
+});
+
+// Выбор обязан доехать до сервера: радио, не влияющее на вызов, — обещание сужения,
+// которого в базе не будет, и владелец узнает об этом только по чужим действиям агента.
+test('выбор исполнителя уезжает в согласие как scope=worker', async () => {
+  const { calls } = renderWithProviders(
+    <ConsentScreen search={SEARCH} navigate={vi.fn()} />,
+    HANDLER,
+  );
+  fireEvent.click(await screen.findByRole('radio', { name: 'Только исполнитель (worker)' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Разрешить' }));
+  await waitFor(() => expect(calls.some((c) => c.path === 'oauth.consent')).toBe(true));
+  expect(calls.find((c) => c.path === 'oauth.consent')?.input).toMatchObject({ scope: 'worker' });
+});
+
+// Что именно означает сужение — словами: «worker» само по себе владельцу ничего не
+// говорит, а решение он принимает один раз и без возможности переспросить.
+test('исполнитель объяснён словами, а не одним лишь термином', async () => {
+  renderWithProviders(<ConsentScreen search={SEARCH} navigate={vi.fn()} />, HANDLER);
+  await screen.findByText(/Claude Code/);
+  expect(screen.getByText(/пишет только через глаголы задач/)).toBeInTheDocument();
+  expect(screen.getByText(/закрыть тикет сам не может/)).toBeInTheDocument();
 });
 
 // Пока код выдаётся, обе кнопки обязаны быть заблокированы: повтор «Разрешить» выписал бы

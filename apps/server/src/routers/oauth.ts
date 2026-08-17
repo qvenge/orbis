@@ -2,6 +2,7 @@
 // Владельческая половина OAuth-флоу (§9.3): экран согласия в SPA ходит сюда под JWT.
 // Всё — ownerOnlyProcedure: выдача доступа агенту и управление им — операции владельца
 // аккаунта, и агент, уже имеющий грант, не должен выписывать себе новые.
+import { GRANT_SCOPES } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -110,6 +111,11 @@ export const oauthRouter = router({
         // правда, и расходиться им нельзя.
         codeChallengeMethod: z.literal('S256'),
         state: z.string().optional(),
+        // Область, выбранная владельцем радио-кнопкой на экране согласия (§4.14).
+        // Умолчание — 'full': поле появилось Задачей 8, и запрос без него обязан вести
+        // себя ровно как прежде. Незнакомое значение схема ОТВЕРГАЕТ, а не приводит к
+        // 'full': приведение молча расширяло бы доступ на опечатке в клиенте.
+        scope: z.enum(GRANT_SCOPES).default('full'),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -121,6 +127,7 @@ export const oauthRouter = router({
         label: clientName,
         redirectUri: input.redirectUri,
         codeChallenge: input.codeChallenge,
+        scope: input.scope,
       });
       // Адрес возврата строится ТОЛЬКО разбором и `.href`, никакой склейки `${uri}?code=…`.
       // Две причины, обе проверены пробой: (а) redirect_uri с УЖЕ имеющимся query законен
