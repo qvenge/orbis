@@ -30,7 +30,10 @@ apps/web        — PWA (React): экраны (Browser, Budget, Agenda, чат),
                   tRPC-клиент
 
 apps/server     — Hono + @hono/trpc-server: tRPC-роутеры entity/relation/
-                  aspect/user/ai/chat (PRD 01 §9.1), executor — семистадийный
+                  aspect/user/ai/chat/agentRun/version (PRD 01 §9.1),
+                  agent-loop — круг исполнителя (глаголы, очередь,
+                  подметание брошенных прогонов, откат прогона;
+                  PRD 01 §9.3, D37), executor — семистадийный
                   конвейер мутаций (PRD 01 §9.2), политика подтверждений
                   (PRD 01 §7.10), LLM-оркестрация за интерфейсом LLMProvider
                   поверх Vercel AI SDK (PRD 01 §7.7), MCP-сервер — тонкий
