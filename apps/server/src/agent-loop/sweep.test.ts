@@ -13,7 +13,8 @@ requireEnv();
 
 const { db, client } = appDb();
 const MINUTE = 60_000;
-const { seedEntity, link, aspectsOf, actionsOf, workerGrant, worker } = agentLoopHelpers(db);
+const { seedEntity, link, aspectsOf, actionsOf, workerGrant, worker, seedRoutine, seedRoutineRun } =
+  agentLoopHelpers(db);
 
 function minutesBefore(n: number): string {
   return iso(new Date(T0.getTime() - n * MINUTE));
@@ -336,6 +337,62 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
     expect((r.result as MyQueueResult).tickets.map((t) => t.id)).not.toContain(foreign.ticketId);
     expect((await aspectsOf(owner, foreign.runId))['orbis/agent-run']).toMatchObject({
       outcome: 'abandoned',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Рутинные прогоны (V1.12): та же метла, другой исход — failed, а не abandoned
+// ---------------------------------------------------------------------------
+
+describe('sweepStaleRuns: рутинный прогон закрывается как failed (V1.12)', () => {
+  test('прогон рутины без шагов дольше порога → failed + fail_note, тикета нет; грантовый прогон рядом — abandoned как был', async () => {
+    const owner = freshUserId();
+    const grantId = await workerGrant(owner, 'подметание рутин');
+    const routineId = await seedRoutine(owner, { title: 'Рутина, чей процесс умер' });
+    const { runId } = await seedRoutineRun(owner, {
+      routineId,
+      startedAt: new Date(T0.getTime() - 41 * MINUTE),
+      lastStepAt: new Date(T0.getTime() - 31 * MINUTE),
+    });
+    const ticketRun = await seedRun(owner, {
+      grantId,
+      ticketStatus: 'in_progress',
+      lastStepMinutesAgo: 31,
+      stepSummary: 'Прочитал тикет',
+      external: false,
+    });
+
+    const { swept } = await sweepStaleRuns(db, {
+      ownerId: owner,
+      actorKind: 'ai',
+      clock: () => T0,
+    });
+    expect(swept).toBe(2);
+
+    // Рутинный прогон: процесс остановлен — это ПРОВАЛ попытки бакета (её перезапустит
+    // ретрай раннера), а не «брошенная работа», которую владелец пойдёт разбирать
+    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
+    expect(run.outcome).toBe('failed');
+    expect(String(run.fail_note)).toContain('прогон прерван');
+    expect(String(run.fail_note)).toContain('31 мин');
+    expect(run.abandon_note).toBeUndefined();
+    expect(run.finished_at).toBe(iso(T0));
+    // Сама рутина подметанием не трогается: тикетной логики у неё нет вовсе
+    expect((await aspectsOf(owner, routineId))['orbis/routine']).toMatchObject({
+      stage: 'active',
+      mode: 'propose',
+    });
+
+    // Грантовый прогон того же владельца — прежний исход и прежняя починка тикета
+    const ticketRunAspect = (await aspectsOf(owner, ticketRun.runId))[
+      'orbis/agent-run'
+    ] as AnyRecord;
+    expect(ticketRunAspect.outcome).toBe('abandoned');
+    expect(String(ticketRunAspect.abandon_note)).toContain('оборван');
+    expect(ticketRunAspect.fail_note).toBeUndefined();
+    expect((await aspectsOf(owner, ticketRun.ticketId))['orbis/task']).toMatchObject({
+      status: 'planned',
     });
   });
 });

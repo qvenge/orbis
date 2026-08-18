@@ -10,7 +10,7 @@
 // Фабрика, а не свободные функции: каждый сьют держит СВОЙ пул (`appDb()` + `client.end()`
 // в afterAll), и передавать `db` первым аргументом в каждый вызов значило бы повторять его
 // в каждой строке теста.
-import { newId } from '@orbis/shared';
+import { newId, routineRunBatchId, routineRunId } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { chatMessages, chatThreads, entities, relations } from '../db/schema';
@@ -44,6 +44,33 @@ export interface AgentLoopHelpers {
     allowedTools?: Iterable<string>,
     over?: Partial<ToolCallCtx>,
   ) => ToolCallCtx & { routine: RoutineRef };
+  seedRoutine: (owner: string, over?: SeedRoutineOver) => Promise<string>;
+  seedRoutineRun: (owner: string, args: SeedRoutineRunArgs) => Promise<SeededRoutineRun>;
+}
+
+/** Чем отличается сидируемая рутина от умолчания: тело — инструкция, аспект — права. */
+export interface SeedRoutineOver {
+  title?: string;
+  /** Инструкция прогону: у рутины «что делать» лежит в ТЕЛЕ (V1.1), как у проекта. */
+  body?: string;
+  routine?: AnyRecord;
+}
+
+export interface SeedRoutineRunArgs {
+  routineId: string;
+  bucket?: string;
+  attempt?: number;
+  startedAt?: Date;
+  /** Отметка живости: ею подметание (С6, V1.12) отличает брошенный прогон от идущего. */
+  lastStepAt?: Date;
+  /** Поля аспекта прогона поверх умолчаний (исход, шаги, fail_note, proposal). */
+  run?: AnyRecord;
+}
+
+export interface SeededRoutineRun {
+  runId: string;
+  bucket: string;
+  attempt: number;
 }
 
 export function agentLoopHelpers(db: Db): AgentLoopHelpers {
@@ -162,5 +189,89 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
     };
   }
 
-  return { seedEntity, link, aspectsOf, childrenOf, actionsOf, workerGrant, worker, routineCtx };
+  /**
+   * Рутина владельца. Заводится ЕГО же рукой (`owner`/`ui`): инвариант запрета по объекту
+   * (V1.10) молчит только для источников владельца, и сид от имени рутины упирался бы в
+   * него — то есть проверял бы не то, что нужно сьюту.
+   */
+  async function seedRoutine(owner: string, over: SeedRoutineOver = {}): Promise<string> {
+    const e = await seedEntity(owner, {
+      title: over.title ?? 'Утренний обзор',
+      body: over.body ?? 'Пройди по задачам дня и предложи, что сделать.',
+      tags: [],
+      aspects: {
+        'orbis/routine': { stage: 'active', at: '07:00', mode: 'propose', ...over.routine },
+      },
+    });
+    return e.id;
+  }
+
+  /**
+   * Прогон рутины — ровно тем батчем, которым его заведёт раннер (V1.3): детерминированные
+   * id прогона и batch'а плюс связь `parent` рутина→прогон, всё одним `execute` от актора
+   * `ai` с источником `system` (бухгалтерия прогона, рулинг Р-7). Сид прямыми вставками
+   * разошёлся бы с боевым путём ровно в том, что проверяют глаголы: субъекте и связи.
+   */
+  async function seedRoutineRun(
+    owner: string,
+    args: SeedRoutineRunArgs,
+  ): Promise<SeededRoutineRun> {
+    const bucket = args.bucket ?? '2026-08-17T07:00';
+    const attempt = args.attempt ?? 1;
+    const runId = routineRunId(args.routineId, bucket, attempt);
+    // Часы батча = момент старта прогона: `created_at` сущности берётся из них, а порядок
+    // прогонов бакета (`runsForBucket`, история рутины) читается именно по нему — сид с
+    // общим T0 давал бы двум попыткам одинаковый ключ сортировки.
+    const startedAt = args.startedAt ?? T0;
+    const r = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'ai',
+      source: 'system',
+      runId,
+      batchId: routineRunBatchId(args.routineId, bucket, attempt),
+      clock: () => startedAt,
+      operations: [
+        {
+          tool: 'entity_create',
+          input: {
+            id: runId,
+            title: `Прогон рутины ${bucket}`,
+            tags: [],
+            aspects: {
+              'orbis/agent-run': {
+                routine_id: args.routineId,
+                bucket,
+                attempt,
+                outcome: 'running',
+                started_at: iso(startedAt),
+                last_step_at: iso(args.lastStepAt ?? startedAt),
+                step_count: 0,
+                steps: [],
+                ...args.run,
+              },
+            },
+          },
+        },
+        {
+          tool: 'relation_create',
+          input: { source_id: args.routineId, target_id: runId, relation_type: 'parent' },
+        },
+      ],
+    });
+    if (!r.ok) throw new Error(`seedRoutineRun: ${r.error.code} ${r.error.message}`);
+    return { runId, bucket, attempt };
+  }
+
+  return {
+    seedEntity,
+    link,
+    aspectsOf,
+    childrenOf,
+    actionsOf,
+    workerGrant,
+    worker,
+    routineCtx,
+    seedRoutine,
+    seedRoutineRun,
+  };
 }

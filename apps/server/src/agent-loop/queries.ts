@@ -2,7 +2,7 @@
 // Запросы круга исполнителя (§4.14, С7): читающие проверки и выборки, которыми
 // пользуются гейты и глаголы. Все — под уже открытым `withIdentity`-tx вызывающего
 // (RLS владельца), собственных мутаций здесь нет.
-import type { AgentRunAspect, RunSummary } from '@orbis/shared';
+import type { AgentRunAspect, RoutineAspect, RunSummary } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 
@@ -95,6 +95,18 @@ export interface ProjectRow {
   body: string;
 }
 
+/**
+ * Рутина в объёме, нужном раннеру (V1.13): расписание с правами — в аспекте, а «что
+ * делать» — в ТЕЛЕ (V1.1), ровно как «Процесс» у проекта. Поэтому тело здесь тянется
+ * всегда: без него прогону нечего сказать модели.
+ */
+export interface RoutineRow {
+  id: string;
+  title: string;
+  body: string;
+  routine: RoutineAspect;
+}
+
 /** Сырые строки sql-шаблона drizzle — приводим к своим формам одной точкой. */
 type RawRow = Record<string, unknown>;
 
@@ -118,6 +130,16 @@ function toRunRow(row: RawRow): RunRow {
     title: row.title as string,
     createdAt: row.created_at as Date,
     run: row.run as AgentRunAspect,
+  };
+}
+
+/** Та же честность приведения, что у прогона: аспект рутины валидирован ajv на записи. */
+function toRoutineRow(row: RawRow): RoutineRow {
+  return {
+    id: row.id as string,
+    title: row.title as string,
+    body: row.body as string,
+    routine: row.routine as RoutineAspect,
   };
 }
 
@@ -187,18 +209,83 @@ export async function parentProject(tx: Tx, ticketId: string): Promise<ProjectRo
   return { id: row.id as string, title: row.title as string, body: row.body as string };
 }
 
-/** Прогоны тикета (`children_of`), в порядке появления: история читается сверху вниз. */
-export async function runsOfTicket(tx: Tx, ticketId: string): Promise<RunRow[]> {
+/**
+ * Прогоны РОДИТЕЛЯ (`children_of`), в порядке появления: история читается сверху вниз.
+ *
+ * Родитель — тикет у внешнего исполнителя и рутина у внутреннего (V1.4): запрос никогда
+ * не спрашивал аспект родителя, он идёт по связи `parent`, — и обобщение свелось к имени.
+ */
+export async function runsOfParent(tx: Tx, parentId: string): Promise<RunRow[]> {
   const rows = await tx.execute(
     sql`SELECT e.id, e.title, e.created_at, e.aspects -> 'orbis/agent-run' AS run
         FROM entities e
         JOIN relations r ON r.target_id = e.id
-        WHERE r.source_id = ${ticketId}::uuid
+        WHERE r.source_id = ${parentId}::uuid
           AND r.relation_type = 'parent'
           AND e.aspects ? 'orbis/agent-run'
         ORDER BY e.created_at ASC`,
   );
   return (rows as unknown as RawRow[]).map(toRunRow);
+}
+
+/** Прежнее имя того же запроса — для вызывающих, которым родитель и есть тикет. */
+export const runsOfTicket = runsOfParent;
+
+/**
+ * Прогоны рутины за конкретный слот расписания (V1.3): все попытки бакета, старшая —
+ * первой. Именно этим запросом тик решает, заводить ли прогон и добирать ли попытку:
+ * пустая выдача = слот ещё не отработан, `failed` в хвосте = можно ретраить.
+ *
+ * Containment по колонке `aspects` (индекс `entities_aspects_gin`), а не разбор json-полей:
+ * пара (routine_id, bucket) — единственный отбор, который тик делает на каждом обороте.
+ * Архивные НЕ исключаются намеренно: убранный с глаз прогон всё равно занимает свой слот,
+ * иначе архивация прогона молча разрешала бы прогнать бакет заново.
+ */
+export async function runsForBucket(tx: Tx, routineId: string, bucket: string): Promise<RunRow[]> {
+  const ofBucket = JSON.stringify({ 'orbis/agent-run': { routine_id: routineId, bucket } });
+  const rows = await tx.execute(
+    sql`SELECT id, title, created_at, aspects -> 'orbis/agent-run' AS run
+        FROM entities
+        WHERE aspects @> ${ofBucket}::jsonb
+        ORDER BY created_at ASC`,
+  );
+  return (rows as unknown as RawRow[]).map(toRunRow);
+}
+
+/**
+ * Активные рутины владельца (V1.13) — то, что тик планировщика рассматривает к запуску.
+ *
+ * `paused` не отбирается: пауза — это «не запускать», и фильтровать её после выборки
+ * значило бы держать правило в двух местах. Архивные — тоже нет: архив значит «убрано с
+ * глаз», и рутина, которой нет на экранах, не должна ходить в фоне.
+ */
+export async function activeRoutines(tx: Tx): Promise<RoutineRow[]> {
+  const active = JSON.stringify({ 'orbis/routine': { stage: 'active' } });
+  const rows = await tx.execute(
+    sql`SELECT id, title, body, aspects -> 'orbis/routine' AS routine
+        FROM entities
+        WHERE NOT archived AND aspects @> ${active}::jsonb
+        ORDER BY created_at ASC`,
+  );
+  return (rows as unknown as RawRow[]).map(toRoutineRow);
+}
+
+/**
+ * Рутина по id — ручной прогон, экран рутины и восстановление контекста прогона.
+ *
+ * Приостановленная ОТДАЁТСЯ, в отличие от `activeRoutines`: пауза — про запуск по
+ * расписанию, а не про видимость, и экран обязан показать то, что владелец сам поставил
+ * на паузу. Архивная — null, как и у тикета: id из прежней выдачи не должен быть обходным
+ * путём запустить то, чего на экранах уже нет. Чужая и несуществующая под RLS неразличимы.
+ */
+export async function routineById(tx: Tx, id: string): Promise<RoutineRow | null> {
+  const rows = await tx.execute(
+    sql`SELECT id, title, body, aspects -> 'orbis/routine' AS routine
+        FROM entities
+        WHERE id = ${id}::uuid AND NOT archived AND aspects ? 'orbis/routine'`,
+  );
+  const row = (rows as unknown as RawRow[])[0];
+  return row === undefined ? null : toRoutineRow(row);
 }
 
 /**
@@ -287,5 +374,20 @@ export function runSummary(row: RunRow): RunSummary {
     ...(r.reply !== undefined && { reply: r.reply }),
     ...(r.abandon_note !== undefined && { abandon_note: r.abandon_note }),
     ...(r.session_url !== undefined && { session_url: r.session_url }),
+    // V1: рутинная половина сводки. Субъект и слот отвечают на «что было вчера в 07:00»,
+    // fail_note и статус предложения — на «почему в графе ничего не изменилось».
+    ...(r.routine_id !== undefined && { routine_id: r.routine_id }),
+    ...(r.bucket !== undefined && { bucket: r.bucket }),
+    ...(r.attempt !== undefined && { attempt: r.attempt }),
+    ...(r.fail_note !== undefined && { fail_note: r.fail_note }),
+    // Расхождения предусловия (proposal.mismatches) в сводку НЕ едут: это материал экрана
+    // предложения, а в хвосте истории они раздували бы каждый ответ раннера чужим разбором.
+    ...(r.proposal !== undefined && {
+      proposal: {
+        pending_id: r.proposal.pending_id,
+        status: r.proposal.status,
+        ...(r.proposal.decided_at !== undefined && { decided_at: r.proposal.decided_at }),
+      },
+    }),
   };
 }

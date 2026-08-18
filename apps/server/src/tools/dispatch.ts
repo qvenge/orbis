@@ -28,7 +28,12 @@ import {
 import { and, inArray, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import { isWorkerThreadTarget } from '../agent-loop/queries';
-import { AGENT_VERB_ENVELOPES, type AgentVerbName, runAgentVerb } from '../agent-loop/verbs';
+import {
+  AGENT_VERB_ENVELOPES,
+  type AgentVerbName,
+  type RunSubject,
+  runAgentVerb,
+} from '../agent-loop/verbs';
 import { escalateAfterMutation } from '../ai/escalation';
 import { budgetStatus } from '../budget/aggregates';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
@@ -307,18 +312,28 @@ export async function dispatchTool(
           { tool: pre.def.name, level },
         );
       }
-      // ctx.grant здесь заведомо есть: гейт agentOnly выше уже отбил вызов без гранта
-      // (глагол адресуется конкретному доступу). Проверка — вторая линия, не логика.
-      if (ctx.grant === undefined) {
-        return errorResult('VALIDATION', `глагол «${pre.def.name}» требует гранта (§9.3)`, {
-          tool: pre.def.name,
-        });
+      // Субъект прогона (V1.5): грант — внешний исполнитель, рутина — внутренний. Грант
+      // первым: он же и поверхность вызова (MCP), и оба ключа сразу означали бы вызов,
+      // собранный не тем, кто его шлёт. Субъект здесь заведомо есть — гейт agentOnly выше
+      // уже отбил вызов без обоих; проверка — вторая линия, не логика.
+      const subject: RunSubject | null =
+        ctx.grant !== undefined
+          ? { kind: 'grant', grant: ctx.grant }
+          : ctx.routine !== undefined
+            ? { kind: 'routine', routineId: ctx.routine.id }
+            : null;
+      if (subject === null) {
+        return errorResult(
+          'VALIDATION',
+          `глагол «${pre.def.name}» требует субъекта — гранта или рутины (§9.3, V1.5)`,
+          { tool: pre.def.name },
+        );
       }
       return await runAgentVerb(
         {
           db: ctx.db,
           ownerId: ctx.actorUserId,
-          grant: ctx.grant,
+          subject,
           clock: ctx.clock ?? (() => new Date()),
           sink,
         },

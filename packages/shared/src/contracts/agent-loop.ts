@@ -160,21 +160,28 @@ export interface RunStepResult {
   action_id: string;
 }
 
-/** Ответ `orbis_checkpoint`: прогон остановлен вопросом, тикет ушёл ждать владельца (С3). */
+/**
+ * Ответ `orbis_checkpoint`: прогон остановлен вопросом, тикет ушёл ждать владельца (С3).
+ *
+ * Пара ключей о тикете опциональна с V1: у прогона РУТИНЫ тикета нет по устройству (V1.4,
+ * прогон — дитя рутины), и «этого не было» здесь выражается отсутствием ключа, а не
+ * пустышкой — иначе внешний исполнитель читал бы `ticket_id: null` как потерянный тикет.
+ */
 export interface CheckpointResult {
   run_id: string;
-  ticket_id: string;
-  ticket_status: 'waiting';
+  ticket_id?: string;
+  ticket_status?: 'waiting';
   action_id: string;
 }
 
 /**
  * Ответ `orbis_finish`. `ticket_status` — 'waiting' («готово, проверь», С8) и лишь при
  * заранее выданном `may_close` — 'done': тикет закрывает не агент, а разрешение владельца.
+ * Ключей о тикете нет у закрытия рутинного прогона (V1.4) — см. CheckpointResult.
  */
 export interface FinishResult {
   run_id: string;
-  ticket_id: string;
-  ticket_status: 'waiting' | 'done';
+  ticket_id?: string;
+  ticket_status?: 'waiting' | 'done';
   action_id: string;
 }

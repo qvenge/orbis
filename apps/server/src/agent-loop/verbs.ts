@@ -36,7 +36,7 @@ import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
-import type { JournalSink, WireEntity } from '../executor/types';
+import type { ActorKind, JournalSink, MutationSource, WireEntity } from '../executor/types';
 import type { GrantRef } from '../oauth/grants';
 import type { ToolDispatchResult } from '../tools/dispatch';
 import type { AGENT_VERB_NAMES } from '../tools/registry';
@@ -46,7 +46,7 @@ import {
   type RunRow,
   runById,
   runSummary,
-  runsOfTicket,
+  runsOfParent,
   type TicketRow,
   ticketById,
   ticketOfRun,
@@ -56,17 +56,53 @@ import { sweepStaleRuns } from './sweep';
 export type AgentVerbName = (typeof AGENT_VERB_NAMES)[number];
 
 /**
- * Контекст исполнения глагола. `grant` не опционален: прогон адресуется КОНКРЕТНОМУ
- * доступу (С2) — глагол без гранта не к кому отнести, и вызов без него диспатч отбивает
- * гейтом `agentOnly` ещё до этого модуля.
+ * Кто ведёт прогон (V1.4, V1.5). Прогон адресуется КОНКРЕТНОМУ субъекту, и субъектов
+ * ровно два: внешний доступ (грант, С2) и рутина владельца. Та же развилка стоит на
+ * стороне графа инвариантом «ровно одно из grant_id/routine_id» (assertRunSubject) —
+ * здесь она в форме типа, чтобы «прогон без хозяина» не собирался в принципе.
+ */
+export type RunSubject =
+  | { kind: 'grant'; grant: GrantRef }
+  | { kind: 'routine'; routineId: string };
+
+/**
+ * Контекст исполнения глагола. `subject` не опционален: глагол без субъекта не к кому
+ * отнести, и вызов без него диспатч отбивает гейтом `agentOnly` ещё до этого модуля.
  */
 export type VerbCtx = {
   db: Db;
   ownerId: string;
-  grant: GrantRef;
+  subject: RunSubject;
   clock: () => Date;
   sink: JournalSink;
 };
+
+/**
+ * Актор и источник бухгалтерии прогона выводятся ИЗ СУБЪЕКТА, а не передаются полем
+ * (рулинг Р-7/В1): за шагом гранта стоит внешний агент, пришедший по MCP; за шагом
+ * рутины — внутренний AI, и его записи о прогоне (шаги, исход, чекпойнт) — не правка
+ * графа по существу, а протокол, поэтому источник `system`, а не `routine`. Одно место
+ * на обе половины: разъехавшись, они дали бы в журнале «агент» с источником `system`.
+ */
+export function actorOf(subject: RunSubject): {
+  actorKind: ActorKind;
+  source: MutationSource;
+  actorGrantId?: string;
+} {
+  return subject.kind === 'grant'
+    ? { actorKind: 'agent', source: 'mcp', actorGrantId: subject.grant.id }
+    : { actorKind: 'ai', source: 'system' };
+}
+
+/** Поле аспекта прогона, которым он привязан к субъекту (V1.4). */
+export function subjectField(s: RunSubject): 'grant_id' | 'routine_id' {
+  return s.kind === 'grant' ? 'grant_id' : 'routine_id';
+}
+
+/** Значение этого поля: id гранта либо id рутины. */
+export function subjectId(s: RunSubject): string {
+  return s.kind === 'grant' ? s.grant.id : s.routineId;
+}
 
 /**
  * Envelope-схемы глаголов — карта для диспатча: он валидирует вход ДО классификации
@@ -163,11 +199,11 @@ type RunLookup =
  * Прогон под RLS владельца + проверки принадлежности, общие трём глаголам.
  *
  * Два разных отказа намеренно: чужой владелец — `NOT_FOUND` (прогон за пределами графа
- * агента для него не существует), чужой грант того же владельца — `CONFLICT` (прогон
- * есть, но он не твой: у владельца может работать второй исполнитель). Проверка гранта
- * остаётся ПРЕДпроверкой и при повторе с тем же `id`: replay executor'а отдаёт
- * сохранённый ответ, не спрашивая, кто пришёл, — и чужой исполнитель получил бы чужой
- * прогон.
+ * агента для него не существует), чужой СУБЪЕКТ того же владельца — `CONFLICT` (прогон
+ * есть, но он не твой: у владельца может работать второй исполнитель и десяток рутин).
+ * Проверка субъекта остаётся ПРЕДпроверкой и при повторе с тем же `id`: replay
+ * executor'а отдаёт сохранённый ответ, не спрашивая, кто пришёл, — и чужой исполнитель
+ * получил бы чужой прогон.
  *
  * Терминальности здесь НЕТ: она зависит от того, послан ли ключ идемпотентности, и
  * решается в самих глаголах (см. `terminalError`).
@@ -175,9 +211,9 @@ type RunLookup =
 async function readRun(ctx: VerbCtx, runId: string): Promise<RunLookup> {
   const row = await withIdentity(ctx.db, ctx.ownerId, (tx) => runById(tx, runId));
   if (row === null) return { error: err('NOT_FOUND', 'прогон не найден', { run_id: runId }) };
-  if (row.run.grant_id !== ctx.grant.id) {
+  if (row.run[subjectField(ctx.subject)] !== subjectId(ctx.subject)) {
     return {
-      error: err('CONFLICT', 'прогон принадлежит другому исполнителю', { run_id: runId }),
+      error: err('CONFLICT', 'прогон принадлежит другому субъекту', { run_id: runId }),
     };
   }
   return { run: row };
@@ -248,23 +284,40 @@ function terminalFromPrecondition(
 function savedRunMatches(
   wire: WireEntity | null,
   runId: string,
-  grantId: string,
+  subject: RunSubject,
   outcome: string,
 ): boolean {
   if (wire === null || wire.id !== runId) return false;
   const saved = wire.aspects['orbis/agent-run'];
-  // Грант — как в захвате: replay отдаёт сохранённый ответ, не спрашивая, кто пришёл.
+  // Субъект — как в захвате: replay отдаёт сохранённый ответ, не спрашивая, кто пришёл.
   // Исход — против переиспользования id между глаголами: под id чекпойнта лежит прогон
   // в `checkpoint`, и отдать его как результат шага значило бы соврать про состояние.
-  return saved?.grant_id === grantId && saved?.outcome === outcome;
+  return saved?.[subjectField(subject)] === subjectId(subject) && saved?.outcome === outcome;
 }
 
 /** Предусловия «прогон всё ещё мой и всё ещё идёт» — общие шагу, чекпойнту и итогу. */
-function runStillMine(grantId: string): EntityUpdatePreconditionItem[] {
+function runStillMine(subject: RunSubject): EntityUpdatePreconditionItem[] {
   return [
     { aspect: 'orbis/agent-run', field: 'outcome', in: ['running'] },
-    { aspect: 'orbis/agent-run', field: 'grant_id', in: [grantId] },
+    { aspect: 'orbis/agent-run', field: subjectField(subject), in: [subjectId(subject)] },
   ];
+}
+
+/**
+ * Отказ «этот глагол — только для гранта» (V1.5). Очередь и захват стоят на тикетах и
+ * назначениях: они спрашивают «что назначено МНЕ» и «отдай мне вот это в работу», а
+ * рутине не назначают — её прогон заводит раннер по расписанию, и брать ей нечего.
+ *
+ * Fail-closed вторая линия, а не мёртвая ветка: белый список `allowed_tools` рутины —
+ * произвольные имена от владельца, и вписанный туда `orbis_claim_task` гейт режима
+ * пропустит (он сверяет имя, а не смысл).
+ */
+function grantOnlyVerb(name: AgentVerbName): ToolDispatchResult {
+  return err(
+    'VALIDATION',
+    `глагол «${name}» — только для гранта: у прогона рутины нет ни очереди, ни тикета (V1.5)`,
+    { tool: name },
+  );
 }
 
 export async function runAgentVerb(
@@ -273,12 +326,17 @@ export async function runAgentVerb(
   input: unknown,
 ): Promise<ToolDispatchResult> {
   switch (name) {
-    case 'orbis_my_queue':
+    case 'orbis_my_queue': {
       // Разбор ради fail-closed на лишних полях; своего содержимого у envelope нет
       narrow(myQueueInput, input, name);
-      return myQueue(ctx);
-    case 'orbis_claim_task':
-      return claimTask(ctx, narrow(claimTaskInput, input, name));
+      if (ctx.subject.kind !== 'grant') return grantOnlyVerb(name);
+      return myQueue(ctx, ctx.subject.grant);
+    }
+    case 'orbis_claim_task': {
+      const parsed = narrow(claimTaskInput, input, name);
+      if (ctx.subject.kind !== 'grant') return grantOnlyVerb(name);
+      return claimTask(ctx, ctx.subject.grant, parsed);
+    }
     case 'orbis_run_step':
       return runStep(ctx, narrow(runStepInput, input, name));
     case 'orbis_checkpoint':
@@ -292,25 +350,25 @@ export async function runAgentVerb(
 // orbis_my_queue — что мне назначено; по дороге подметает зависшие прогоны (С6)
 // ---------------------------------------------------------------------------
 
-async function myQueue(ctx: VerbCtx): Promise<ToolDispatchResult> {
+async function myQueue(ctx: VerbCtx, grant: GrantRef): Promise<ToolDispatchResult> {
   // Подметание ПЕРЕД выборкой, а не после: тикет, чей прогон только что признан
   // брошенным, обязан приехать агенту уже свободным — иначе он увидит его
   // `in_progress` и уйдёт ни с чем ровно в тот момент, когда работа освободилась.
   const { swept } = await sweepStaleRuns(ctx.db, {
     ownerId: ctx.ownerId,
     actorKind: 'agent',
-    actorGrantId: ctx.grant.id,
+    actorGrantId: grant.id,
     clock: ctx.clock,
   });
 
   const tickets = await withIdentity(ctx.db, ctx.ownerId, async (tx) => {
-    const rows = await assignedTickets(tx, ctx.grant.id);
+    const rows = await assignedTickets(tx, grant.id);
     const out: QueueTicket[] = [];
     for (const row of rows) {
       const task = row.aspects['orbis/task'] ?? {};
       const status = task.status as TaskStatus;
       const project = await parentProject(tx, row.id);
-      const runs = await runsOfTicket(tx, row.id);
+      const runs = await runsOfParent(tx, row.id);
       const last = runs.at(-1);
       out.push({
         id: row.id,
@@ -334,7 +392,11 @@ async function myQueue(ctx: VerbCtx): Promise<ToolDispatchResult> {
 // orbis_claim_task — атомарный захват (С7, инвариант 1)
 // ---------------------------------------------------------------------------
 
-async function claimTask(ctx: VerbCtx, input: ClaimTaskInput): Promise<ToolDispatchResult> {
+async function claimTask(
+  ctx: VerbCtx,
+  grant: GrantRef,
+  input: ClaimTaskInput,
+): Promise<ToolDispatchResult> {
   const ticket = await withIdentity(ctx.db, ctx.ownerId, (tx) => ticketById(tx, input.ticket_id));
   // Чужой и несуществующий тикет под RLS неразличимы намеренно: исполнителю не с чего
   // узнавать, что за пределами его назначений вообще что-то есть.
@@ -366,7 +428,7 @@ async function claimTask(ctx: VerbCtx, input: ClaimTaskInput): Promise<ToolDispa
         precondition: [
           { aspect: 'orbis/task', field: 'status', in: [...CLAIMABLE_STATUSES] },
           { aspect: 'orbis/assignment', field: 'executor', in: ['agent'] },
-          { aspect: 'orbis/assignment', field: 'grant_id', in: [ctx.grant.id] },
+          { aspect: 'orbis/assignment', field: 'grant_id', in: [grant.id] },
         ],
         aspects: { 'orbis/task': { status: 'in_progress' } },
       },
@@ -379,7 +441,7 @@ async function claimTask(ctx: VerbCtx, input: ClaimTaskInput): Promise<ToolDispa
         tags: [],
         aspects: {
           'orbis/agent-run': {
-            grant_id: ctx.grant.id,
+            grant_id: grant.id,
             // Денормализация проекта на прогон: прогоны — внуки проекта, а `this`
             // грамматики §6 достаёт только детей (блок «Последние прогоны» заготовки С10)
             ...(project !== null && { project_id: project.id }),
@@ -403,9 +465,7 @@ async function claimTask(ctx: VerbCtx, input: ClaimTaskInput): Promise<ToolDispa
     ctx.db,
     {
       actorUserId: ctx.ownerId,
-      actorKind: 'agent',
-      source: 'mcp',
-      actorGrantId: ctx.grant.id,
+      ...actorOf(ctx.subject),
       runId,
       batchId,
       operations,
@@ -454,7 +514,7 @@ async function claimTask(ctx: VerbCtx, input: ClaimTaskInput): Promise<ToolDispa
   // второй грант того же владельца, повторив id первого, получил бы на replay его прогон
   // и начал бы писать в него шаги. Тикет здесь совпадает — различает только грант.
   const runGrantId = runWire.aspects['orbis/agent-run']?.grant_id;
-  if (runGrantId !== ctx.grant.id) {
+  if (runGrantId !== grant.id) {
     return err('CONFLICT', 'id вызова уже использован другим исполнителем — возьми новый', {
       tool: 'orbis_claim_task',
       id: batchId,
@@ -464,7 +524,7 @@ async function claimTask(ctx: VerbCtx, input: ClaimTaskInput): Promise<ToolDispa
   const actualRunId = runWire.id;
 
   const history = await withIdentity(ctx.db, ctx.ownerId, async (tx) => {
-    const runs = await runsOfTicket(tx, ticket.id);
+    const runs = await runsOfParent(tx, ticket.id);
     return runs.filter((row) => row.id !== actualRunId).map(runSummary);
   });
 
@@ -545,9 +605,7 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
       ctx.db,
       {
         actorUserId: ctx.ownerId,
-        actorKind: 'agent',
-        source: 'mcp',
-        actorGrantId: ctx.grant.id,
+        ...actorOf(ctx.subject),
         runId: found.run.id,
         batchId,
         operations: [
@@ -556,7 +614,7 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
             input: {
               id: found.run.id,
               precondition: [
-                ...runStillMine(ctx.grant.id),
+                ...runStillMine(ctx.subject),
                 // CAS: конкурентный шаг успел лечь → CONFLICT → перечитать и повторить
                 { aspect: 'orbis/agent-run', field: 'step_count', in: [n] },
               ],
@@ -580,7 +638,7 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
       // На повторе с тем же id (§7.8) операции не исполнялись, и в results лежит
       // сохранённый ответ — снимок прогона на момент ТОГО шага (исход тогда был
       // `running`, даже если прогон закрыли позже).
-      if (runWire === null || !savedRunMatches(runWire, found.run.id, ctx.grant.id, 'running')) {
+      if (runWire === null || !savedRunMatches(runWire, found.run.id, ctx.subject, 'running')) {
         return replayMismatch('orbis_run_step', batchId);
       }
       // Счётчик — из сохранённого ответа, а не локальное n+1: правда о прогоне лежит там
@@ -629,17 +687,22 @@ interface TicketUpdate {
   precondition?: EntityUpdatePreconditionItem[];
 }
 
-/** Общая часть двух завершающих глаголов: что писать в прогон и что — в тикет. */
+/** Общая часть завершающих вызовов: что писать в прогон и что — в тикет. */
 interface CloseRunArgs {
-  verb: 'orbis_checkpoint' | 'orbis_finish';
+  /** Кто закрывает — имя глагола либо внутренний вызов раннера; едет в details отказов. */
+  verb: 'orbis_checkpoint' | 'orbis_finish' | 'closeRoutineRun';
   run_id: string;
   id?: string;
   usage?: RunUsageInput;
   session_url?: string;
   /** Отказ по терминальному прогону: хвост сообщения «прогон завершён (…) — …». */
   terminalTail: string;
-  /** Исход, в который глагол переводит прогон (он же — ожидаемый на replay). */
-  outcome: 'checkpoint' | 'finished';
+  /**
+   * Исход, в который вызов переводит прогон (он же — ожидаемый на replay). `failed` —
+   * только у рутинного субъекта (V1.4): внешнему исполнителю провал сообщать нечем, его
+   * оборванный прогон подметается (С6).
+   */
+  outcome: 'checkpoint' | 'finished' | 'failed';
   /**
    * Патч прогона поверх общего хвоста (finished_at, last_step_at, usage, session_url).
    * Функция от `now`, а не готовый объект: `asked_at` чекпойнта обязан совпасть с
@@ -647,10 +710,14 @@ interface CloseRunArgs {
    * одного события.
    */
   runPatch: (now: Date) => Record<string, unknown>;
-  /** Обновление тикета; у итога зависит от may_close самого тикета (С8). */
-  ticketUpdate: (ticket: TicketRow) => TicketUpdate;
+  /**
+   * Обновление тикета; у итога зависит от may_close самого тикета (С8). Обязательно для
+   * грантового субъекта и не нужно рутинному: прогон рутины — её дитя (V1.4), тикета у
+   * него нет, и тикетная логика его не видит.
+   */
+  ticketUpdate?: (ticket: TicketRow) => TicketUpdate;
   /** Статусы тикета, допустимые в ответе: иное = сохранённый ответ чужого вызова. */
-  expected: readonly TaskStatus[];
+  expected?: readonly TaskStatus[];
 }
 
 /**
@@ -660,6 +727,10 @@ interface CloseRunArgs {
  * ещё in_progress» быть не должно ни на миг: подметание (С6) увидело бы тикет в работе
  * без живого прогона, а владелец — работу, о которой никто не отчитался. Атомарность
  * даёт executor: обе операции в одной транзакции, один action §7.8, откат — общий.
+ *
+ * У рутинного субъекта операция ОДНА (V1.4): тикета нет, отчитываться некуда, а весь
+ * итог рутины — это сам прогон (отчёт, `fail_note`, судьба предложения). Батчем он
+ * остаётся ради ключа идемпотентности: ретрай тика обязан вернуть свой прежний ответ.
  */
 async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchResult> {
   const found = await readRun(ctx, args.run_id);
@@ -670,22 +741,36 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   const terminal = terminalBeforeWrite(run.run, args.run_id, args.id, args.terminalTail);
   if (terminal !== null) return terminal;
 
-  const ticket = await withIdentity(ctx.db, ctx.ownerId, (tx) => ticketOfRun(tx, run.id));
-  // Прогон-сирота: закрывать нечего и некуда отчитываться. Случай не гипотетический —
-  // связь мог снять владелец, — и молча закрыть один прогон было бы хуже отказа.
-  if (ticket === null) {
-    return err('NOT_FOUND', 'у прогона нет тикета — некуда записать итог', { run_id: run.id });
+  // Тикет ищется ТОЛЬКО грантовому прогону: у рутинного его нет по устройству, и общий
+  // запрос вернул бы null, который здесь значит «прогон-сирота» — отказ там, где всё в
+  // порядке. Родитель рутинного прогона — сама рутина (связь parent), а не тикет.
+  let ticket: TicketRow | null = null;
+  let ticketUpdate: TicketUpdate | null = null;
+  if (ctx.subject.kind === 'grant') {
+    ticket = await withIdentity(ctx.db, ctx.ownerId, (tx) => ticketOfRun(tx, run.id));
+    // Прогон-сирота: закрывать нечего и некуда отчитываться. Случай не гипотетический —
+    // связь мог снять владелец, — и молча закрыть один прогон было бы хуже отказа.
+    if (ticket === null) {
+      return err('NOT_FOUND', 'у прогона нет тикета — некуда записать итог', { run_id: run.id });
+    }
+    if (args.ticketUpdate === undefined) {
+      // Недостижимо: оба грантовых глагола несут тикетную половину. Fail-closed, чтобы
+      // будущий вызывающий не закрыл прогон, оставив тикет висеть `in_progress`.
+      return err('VALIDATION', 'закрытие грантового прогона без обновления тикета', {
+        run_id: run.id,
+      });
+    }
+    ticketUpdate = args.ticketUpdate(ticket);
   }
 
   const now = ctx.clock();
   const batchId = args.id ?? newId();
-  const ticketUpdate = args.ticketUpdate(ticket);
-  const operations = [
+  const operations: Array<{ tool: string; input: unknown }> = [
     {
       tool: 'entity_update',
       input: {
         id: run.id,
-        precondition: runStillMine(ctx.grant.id),
+        precondition: runStillMine(ctx.subject),
         aspects: {
           'orbis/agent-run': {
             ...args.runPatch(now),
@@ -697,7 +782,9 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
         },
       },
     },
-    {
+  ];
+  if (ctx.subject.kind === 'grant' && ticket !== null && ticketUpdate !== null) {
+    operations.push({
       tool: 'entity_update',
       input: {
         id: ticket.id,
@@ -709,21 +796,19 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
         precondition: [
           { aspect: 'orbis/task', field: 'status', in: ['in_progress'] },
           { aspect: 'orbis/assignment', field: 'executor', in: ['agent'] },
-          { aspect: 'orbis/assignment', field: 'grant_id', in: [ctx.grant.id] },
+          { aspect: 'orbis/assignment', field: 'grant_id', in: [ctx.subject.grant.id] },
           ...(ticketUpdate.precondition ?? []),
         ],
         aspects: { 'orbis/task': ticketUpdate.aspects },
       },
-    },
-  ];
+    });
+  }
 
   const r = await execute(
     ctx.db,
     {
       actorUserId: ctx.ownerId,
-      actorKind: 'agent',
-      source: 'mcp',
-      actorGrantId: ctx.grant.id,
+      ...actorOf(ctx.subject),
       runId: run.id,
       batchId,
       operations,
@@ -742,7 +827,9 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
       // статус тикета, ни снятое право закрытия, а разбор остаётся в details.
       return err(
         'CONFLICT',
-        'прогон уже завершён либо его тикет больше не в работе или не твой — начни с orbis_my_queue',
+        ticket === null
+          ? 'прогон уже завершён либо принадлежит другой рутине'
+          : 'прогон уже завершён либо его тикет больше не в работе или не твой — начни с orbis_my_queue',
         r.error.details,
       );
     }
@@ -750,18 +837,25 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   }
 
   const runWire = wireEntityAt(r.results, 0);
+  // Повтор с занятым id (§7.8): под ним лежит ответ другого вызова — отдать его значило
+  // бы соврать агенту про состояние ЕГО прогона.
+  if (runWire === null || !savedRunMatches(runWire, run.id, ctx.subject, args.outcome)) {
+    return replayMismatch(args.verb, batchId);
+  }
+  if (ticket === null) {
+    // Рутинный прогон: тикета нет — и ключей о нём в ответе тоже (V1.4)
+    const result: FinishResult = { run_id: runWire.id, action_id: r.actionId };
+    return ok(result);
+  }
+
   const ticketWire = wireEntityAt(r.results, 1);
   const status = ticketWire?.aspects['orbis/task']?.status;
   if (
-    runWire === null ||
     ticketWire === null ||
-    !savedRunMatches(runWire, run.id, ctx.grant.id, args.outcome) ||
     ticketWire.id !== ticket.id ||
     typeof status !== 'string' ||
-    !(args.expected as readonly string[]).includes(status)
+    !((args.expected ?? []) as readonly string[]).includes(status)
   ) {
-    // Повтор с занятым id (§7.8): под ним лежит ответ другого вызова — отдать его
-    // значило бы соврать агенту про состояние ЕГО прогона.
     return replayMismatch(args.verb, batchId);
   }
 
@@ -796,9 +890,14 @@ async function checkpoint(ctx: VerbCtx, input: CheckpointInput): Promise<ToolDis
     expected: ['waiting'],
   });
   // Ответ — CheckpointResult, сужение FinishResult: `ticket_status` у чекпойнта всегда
-  // 'waiting', и closeRun уже сверил его со списком `expected`.
+  // 'waiting', и closeRun уже сверил его со списком `expected`. У рутинного прогона
+  // тикета нет вовсе — тогда сужать нечего, ключи о тикете в ответе не появляются.
   if (out.status === 'ok') {
-    const result: CheckpointResult = { ...(out.result as FinishResult), ticket_status: 'waiting' };
+    const fin = out.result as FinishResult;
+    const result: CheckpointResult =
+      fin.ticket_id === undefined
+        ? { run_id: fin.run_id, action_id: fin.action_id }
+        : { ...fin, ticket_id: fin.ticket_id, ticket_status: 'waiting' };
     return ok(result);
   }
   return out;
@@ -834,5 +933,56 @@ async function finish(ctx: VerbCtx, input: FinishInput): Promise<ToolDispatchRes
           }
         : { aspects: { status: 'waiting', waiting_for: input.report } },
     expected: ['waiting', 'done'],
+  });
+}
+
+/**
+ * Закрытие прогона рутины исходом — ВНУТРЕННИЙ вызов раннера (V1.4), а не тул.
+ *
+ * Тулом ему быть нечем: за рутинным прогоном стоит не внешний агент, который отчитается
+ * сам, а наш же раннер, и итог он подводит в том числе тогда, когда модель кончилась
+ * отказом или дедлайном (`failed`) — то есть когда звать её уже некого.
+ *
+ * Идёт через тот же `closeRun`, что глаголы, а не мимо: предусловие «прогон всё ещё мой
+ * и всё ещё идёт», ключ идемпотентности и подмена ответа на replay обязаны быть теми же —
+ * иначе ретрай тика закрывал бы один прогон дважды и второй раз врал бы про исход.
+ */
+export async function closeRoutineRun(
+  ctx: VerbCtx,
+  args: {
+    runId: string;
+    outcome: 'finished' | 'failed';
+    report?: string;
+    failNote?: string;
+    usage?: RunUsageInput;
+    /**
+     * Судьба предложения (Задача 8) кладётся ТЕМ ЖЕ патчем, что исход: два патча дали бы
+     * миг «прогон закрыт, а предложения при нём нет» — ровно то состояние, по которому
+     * экран рутины решает, ждёт ли она ответа владельца.
+     */
+    proposal?: { pending_id: string; status: 'pending' };
+    id?: string;
+  },
+): Promise<ToolDispatchResult> {
+  if (ctx.subject.kind !== 'routine') {
+    // Fail-closed: у грантового прогона своя пара глаголов, и его закрытие обязано вести
+    // тикет (С8). Молча закрыть его здесь значило бы оставить тикет висеть in_progress.
+    return err('VALIDATION', 'closeRoutineRun закрывает только прогон рутины (V1.4)', {
+      run_id: args.runId,
+    });
+  }
+  return closeRun(ctx, {
+    verb: 'closeRoutineRun',
+    run_id: args.runId,
+    ...(args.id !== undefined && { id: args.id }),
+    ...(args.usage !== undefined && { usage: args.usage }),
+    terminalTail: 'итог не принимается',
+    outcome: args.outcome,
+    runPatch: () => ({
+      outcome: args.outcome,
+      ...(args.report !== undefined && { report: args.report }),
+      ...(args.failNote !== undefined && { fail_note: args.failNote }),
+      ...(args.proposal !== undefined && { proposal: args.proposal }),
+    }),
   });
 }

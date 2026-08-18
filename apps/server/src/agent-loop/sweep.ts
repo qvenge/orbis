@@ -2,6 +2,10 @@
 // Подметание брошенных прогонов (С6, инвариант 6): прогон, у которого дольше порога нет
 // ни одного шага, помечается `abandoned`, а его тикет перестаёт висеть `in_progress`.
 //
+// У рутинного прогона (V1.12) исход другой — `failed`: за ним стоял НАШ процесс, и его
+// остановка — провал попытки бакета, который раннер вправе перезапустить, а не брошенная
+// человеком работа, которую владелец пойдёт разбирать руками.
+//
 // Зовётся ДВУМЯ путями и только ими: `orbis_my_queue` (агент пришёл за работой) и
 // экраны проекта/тикета (Задача 13). Отдельного фонового процесса нет намеренно —
 // инвариант «тикет не висит in_progress навсегда» не должен зависеть ни от расписания,
@@ -14,7 +18,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind } from '../executor/types';
 import { RUN_STALE_AFTER_MS } from './constants';
-import { type RunRow, runsOfTicket, staleRuns, ticketOfRun } from './queries';
+import { type RunRow, runsOfParent, staleRuns, ticketOfRun } from './queries';
 
 // Боевой синк — один инстанс на модуль (состояния не хранит), как в tools/dispatch.ts.
 const sink = makeChatJournalSink();
@@ -34,13 +38,29 @@ export interface SweepArgs {
  * но причина у них общая, и расхождение двух формулировок читалось бы как два события.
  */
 function abandonNote(run: RunRow, idleMs: number): string {
-  const minutes = Math.round(idleMs / 60_000);
+  const minutes = idleMinutes(idleMs);
   const last = run.run.steps.at(-1);
   const external = run.run.steps.filter((s) => s.external).length;
   return (
     `Прогон оборван (нет шагов ${minutes} мин). Последний шаг: «${last?.summary ?? '—'}»; ` +
     `шагов с внешним эффектом: ${external}. ` +
     'Проверьте остатки работы (ветки, файлы) и верните тикет в работу.'
+  );
+}
+
+function idleMinutes(idleMs: number): number {
+  return Math.round(idleMs / 60_000);
+}
+
+/**
+ * Заметка о провале рутинного прогона (V1.12). Короткая и без разбора остатков, в отличие
+ * от `abandonNote`: разбирать владельцу нечего — прогон рутины не трогает внешний мир
+ * иначе как через executor, а его записи откатываются штатным Undo.
+ */
+function failNote(idleMs: number): string {
+  return (
+    `прогон прерван: нет шагов дольше ${idleMinutes(idleMs)} мин ` +
+    '(процесс остановлен или завис)'
   );
 }
 
@@ -63,7 +83,12 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
   const stale = await withIdentity(db, args.ownerId, (tx) => staleRuns(tx, before));
   let swept = 0;
   for (const run of stale) {
-    const ticket = await withIdentity(db, args.ownerId, (tx) => ticketOfRun(tx, run.id));
+    // Субъект прогона (V1.4) решает и исход, и то, есть ли вообще тикетная половина:
+    // родитель рутинного прогона — сама рутина, тикета у него нет по устройству.
+    const isRoutineRun = run.run.routine_id !== undefined;
+    const ticket = isRoutineRun
+      ? null
+      : await withIdentity(db, args.ownerId, (tx) => ticketOfRun(tx, run.id));
     // Статус тикета трогает ТОЛЬКО его последний прогон. Двух running-прогонов у тикета
     // хватает одного ручного жеста владельца («верни в planned» при живом прогоне A →
     // захват B), и тогда подметание старого хвоста A выбивало бы из работы тикет, над
@@ -72,11 +97,11 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
     const isLastRun =
       ticket !== null &&
       (await withIdentity(db, args.ownerId, async (tx) => {
-        const runs = await runsOfTicket(tx, ticket.id);
+        const runs = await runsOfParent(tx, ticket.id);
         return runs.at(-1)?.id === run.id;
       }));
     const idleMs = now.getTime() - new Date(run.run.last_step_at).getTime();
-    const note = abandonNote(run, idleMs);
+    const note = isRoutineRun ? failNote(idleMs) : abandonNote(run, idleMs);
     // «Тронул ли внешнее» решает не последний шаг, а весь прогон: агент мог создать
     // ветку первым шагом и упасть на пятом — остатки от этого никуда не делись (С6).
     const hasEffect = run.run.steps.some((s) => s.external);
@@ -95,9 +120,13 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
           ],
           aspects: {
             'orbis/agent-run': {
-              outcome: 'abandoned',
+              // Заметка ложится в СВОЁ поле исхода: `abandon_note` читается экранами как
+              // «работа брошена, разберите остатки», а `fail_note` — как «попытка не
+              // удалась»; одно поле на два разных события врало бы обоим.
+              ...(isRoutineRun
+                ? { outcome: 'failed', fail_note: note }
+                : { outcome: 'abandoned', abandon_note: note }),
               finished_at: now.toISOString(),
-              abandon_note: note,
             },
           },
         },

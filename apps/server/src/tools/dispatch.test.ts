@@ -1370,15 +1370,16 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     expect(await titleOf(target.id)).toBe('Цель рутины в propose');
 
     // orbis_checkpoint доступен рутине всегда (ROUTINE_BASE_TOOLS, рулинг В2): гейт режима
-    // его пропускает. Дальше вызов упирается в проверку «глагол требует гранта» — это
-    // ОЖИДАЕМОЕ промежуточное состояние до Задачи 7, которая заменит грант на subject;
-    // важен здесь именно НЕ-отказ гейта режима.
+    // его пропускает, и вызов доходит до самого глагола — тот берёт субъектом рутину
+    // (V1.5) и упирается в отсутствие прогона под этим id. Важен здесь именно НЕ-отказ
+    // гейта режима: отказ пришёл ПОСЛЕ него, из тела глагола.
     const checkpoint = await dispatchTool(ctx, 'orbis_checkpoint', {
       run_id: newId(),
       question: 'Продолжать?',
     });
-    expectError(checkpoint, 'VALIDATION');
-    if (checkpoint.status === 'error') expect(checkpoint.error.message).toContain('требует гранта');
+    expectError(checkpoint, 'NOT_FOUND');
+    if (checkpoint.status === 'error')
+      expect(checkpoint.error.message).toContain('прогон не найден');
 
     // orbis_propose: дефа в реестре ещё нет (Задача 8) — правило проверяем на самом гейте,
     // который dispatchTool зовёт для КАЖДОГО вызова (routineGate).
