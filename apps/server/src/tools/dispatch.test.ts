@@ -14,7 +14,7 @@ import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { dispatchTool, routineGate, type ToolCallCtx } from './dispatch';
-import { buildToolRegistry } from './registry';
+import { buildToolRegistry, type RoutineRef } from './registry';
 
 requireEnv();
 
@@ -1462,23 +1462,42 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     expect(defs.filter((d) => d.routineOnly === true)).toEqual([]);
   });
 
+  /** Рутина в минимальной валидной форме (V1.1) — автономии не выдаёт (mode propose). */
+  const ROUTINE_DATA = { stage: 'active', at: '07:00', mode: 'propose' };
+
+  /** Сколько живых рутин у владельца — тем же условием, что считает гейт лимита. */
+  async function routineCountOf(owner: string): Promise<number> {
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.execute(
+        sql`SELECT count(*)::int AS n FROM entities WHERE NOT archived AND aspects ? 'orbis/routine'`,
+      ),
+    );
+    return Number((rows as unknown as Array<{ n: number }>)[0]?.n ?? 0);
+  }
+
   test('лимит routines.max: вторая рутина → LIMIT; limit null — без ограничений', async () => {
     const owner = freshUserId();
     const first = await seedEntity(owner, { title: 'Утренний обзор', tags: [] });
     const second = await seedEntity(owner, { title: 'Вечерний разбор', tags: [] });
-    const data = { stage: 'active', at: '07:00', mode: 'propose' };
     const oneRoutine = ctxFor({
       actorUserId: owner,
       entitlements: () => ({ allowed: true, limit: 1 }),
     });
 
     expect(
-      (await dispatchTool(oneRoutine, 'attach_orbis_routine', { entity_id: first.id, data }))
-        .status,
+      (
+        await dispatchTool(oneRoutine, 'attach_orbis_routine', {
+          entity_id: first.id,
+          data: ROUTINE_DATA,
+        })
+      ).status,
     ).toBe('ok');
     // Лимит исчерпан первой рутиной — вторая не заводится
     expectError(
-      await dispatchTool(oneRoutine, 'attach_orbis_routine', { entity_id: second.id, data }),
+      await dispatchTool(oneRoutine, 'attach_orbis_routine', {
+        entity_id: second.id,
+        data: ROUTINE_DATA,
+      }),
       'LIMIT',
     );
     // …а правка уже заведённой рутины лимитом не считается: иначе он превратился бы
@@ -1487,7 +1506,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
       (
         await dispatchTool(oneRoutine, 'attach_orbis_routine', {
           entity_id: first.id,
-          data: { ...data, at: '08:00' },
+          data: { ...ROUTINE_DATA, at: '08:00' },
         })
       ).status,
     ).toBe('ok');
@@ -1497,9 +1516,70 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
       (
         await dispatchTool(ctxFor({ actorUserId: owner }), 'attach_orbis_routine', {
           entity_id: second.id,
-          data,
+          data: ROUTINE_DATA,
         })
       ).status,
     ).toBe('ok');
+  });
+
+  test('лимит routines.max в batch: считаются ЗАВОДИМЫЕ рутины, а не текущее их число', async () => {
+    // Группа исполняется целиком и уровнем preview (§7.10) — то есть СРАЗУ. Проверка
+    // «сейчас рутин меньше лимита» пропустила бы batch, переваливающий за лимит всеми
+    // своими операциями вместе: с limit 1 и нулём рутин завелись бы обе.
+    const owner = freshUserId();
+    const oneRoutine = ctxFor({
+      actorUserId: owner,
+      entitlements: () => ({ allowed: true, limit: 1 }),
+    });
+    const create = (title: string) => ({
+      tool: 'entity_create',
+      input: { title, tags: [], aspects: { 'orbis/routine': ROUTINE_DATA } },
+    });
+
+    expectError(
+      await dispatchTool(oneRoutine, 'batch_execute', {
+        batch_id: newId(),
+        operations: [create('Первая рутина группы'), create('Вторая рутина группы')],
+      }),
+      'LIMIT',
+    );
+    expect(await routineCountOf(owner)).toBe(0);
+
+    // Одна новая рутина в лимит помещается — отказ адресован масштабу, а не батчу
+    const ok = await dispatchTool(oneRoutine, 'batch_execute', {
+      batch_id: newId(),
+      operations: [create('Единственная рутина группы')],
+    });
+    expect(ok.status).toBe('ok');
+    expect(await routineCountOf(owner)).toBe(1);
+  });
+
+  test('batch_execute рутине закрыт даже белым списком (гейт режима)', async () => {
+    // Группа неисполнима рутиной по уровню (§7.10: preview ≠ execute), а белым списком
+    // сверяется только ВНЕШНЕЕ имя вызова — вложенные операции им не проверяются
+    const target = await seedEntity(userA, { title: 'Цель батча рутины', tags: [] });
+    const ctx = rt('act', ['batch_execute', 'entity_update']);
+    expectError(
+      await dispatchTool(ctx, 'batch_execute', {
+        batch_id: newId(),
+        operations: [{ tool: 'entity_update', input: { id: target.id, title: 'Через батч' } }],
+      }),
+      'FORBIDDEN_LEVEL',
+    );
+    expect(await titleOf(target.id)).toBe('Цель батча рутины');
+  });
+
+  test('фикстура routineCtx: подменённая рутина везёт СВОЙ прогон в ctx.runId', async () => {
+    // Обвязка Задач 7–9: расхождение ctx.runId и routine.runId всплыло бы только в
+    // глаголах, где прогон ищется по одному, а субъект — по другому
+    const real: RoutineRef = {
+      id: newId(),
+      runId: newId(),
+      mode: 'act',
+      allowedTools: new Set(['entity_update']),
+    };
+    const ctx = routineCtx(userA, 'propose', [], { routine: real });
+    expect(ctx.routine).toBe(real);
+    expect(ctx.runId).toBe(real.runId);
   });
 });

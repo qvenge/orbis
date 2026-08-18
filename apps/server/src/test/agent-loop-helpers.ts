@@ -152,9 +152,13 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
       source: 'routine',
       explicitCommand: false, // прямой команды владельца за фоновым прогоном нет
       clock: () => T0,
-      runId,
       ...over,
+      // runId по умолчанию берётся у РУТИНЫ, а не у локально сминченного прогона:
+      // подменяя рутину через `over`, тест подменяет и прогон, и разъехавшийся ctx.runId
+      // всплыл бы только в глаголах Задач 7–9. Явный `over.runId` уважается — он и есть
+      // способ проверить расхождение нарочно.
       routine: over.routine ?? routine,
+      runId: over.runId ?? (over.routine ?? routine).runId,
     };
   }
 

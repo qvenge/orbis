@@ -422,6 +422,22 @@ describe('routineToolDefs: реестр прогона рутины (V1.10, ру
     );
   });
 
+  test('batch_execute белым списком не открывается — ни в act, ни в propose', async () => {
+    // Группа рутине неисполнима по уровню (§7.10: preview ≠ execute), а гейт режима
+    // сверяет только внешнее имя вызова — вложенные операции белым списком не проверяются
+    const defs = await registryFor(userB);
+    for (const mode of ['propose', 'act'] as const) {
+      const names = routineToolDefs(defs, ref(mode, ['batch_execute', 'entity_update'])).map(
+        (d) => d.name,
+      );
+      expect(names).not.toContain('batch_execute');
+    }
+    // Отсечение точечное: соседнее имя того же белого списка на месте
+    expect(
+      routineToolDefs(defs, ref('act', ['batch_execute', 'entity_update'])).map((d) => d.name),
+    ).toContain('entity_update');
+  });
+
   test('act с пустым allowed_tools: рутина остаётся с чтениями и чекпойнтом', async () => {
     const defs = await registryFor(userB);
     const mutating = routineToolDefs(defs, ref('act'))

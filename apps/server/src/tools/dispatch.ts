@@ -827,9 +827,12 @@ function carriesRoutineAspect(tool: string, input: unknown): boolean {
  * Цена этого решения принята планом (Р-13): создание рутины рукой владельца из UI идёт
  * роутерами мимо dispatch и лимитом не считается — лимит адресован пути модели.
  *
- * Считаются только операции, которые заводят НОВУЮ рутину. attach/update над сущностью,
- * у которой аспект уже есть, — правка живой рутины: упёршийся в лимит владелец обязан
- * сохранить возможность править то, что уже завёл, иначе лимит превращается в блокировку.
+ * Считаются операции, которые заводят НОВУЮ рутину, и считается их ЧИСЛО, а не сам факт:
+ * batch исполняется целиком, и проверка «сейчас рутин меньше лимита» пропустила бы группу,
+ * переваливающую за лимит всеми своими операциями сразу. attach/update над сущностью, у
+ * которой аспект уже есть, — правка живой рутины и в счёт не идёт: упёршийся в лимит
+ * владелец обязан сохранить возможность править то, что уже завёл, иначе лимит
+ * превращается в блокировку.
  */
 async function gateRoutinesMax(
   ctx: ToolCallCtx,
@@ -843,7 +846,7 @@ async function gateRoutinesMax(
   const routineOps = ops.filter((op) => carriesRoutineAspect(op.tool, op.input));
   if (routineOps.length === 0) return null;
 
-  const createsNew = routineOps.some((op) => op.tool === 'entity_create');
+  const createdCount = routineOps.filter((op) => op.tool === 'entity_create').length;
   const overExisting = routineOps.filter((op) => op.tool !== 'entity_create');
   const targets = overExisting
     .map((op) => {
@@ -853,24 +856,26 @@ async function gateRoutinesMax(
     .filter((id): id is string => typeof id === 'string');
   // Неразобранный id (после envelope-валидации структурно невозможен) считаем новой
   // рутиной: гейт лимита не имеет права открываться от мусора во входе
-  const unresolvedTarget = targets.length !== overExisting.length;
+  const unresolvedCount = overExisting.length - targets.length;
 
   return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
     const alreadyRoutines =
       targets.length === 0 ? new Set<string>() : await routinesAmong(tx, targets);
-    const addsRoutine =
-      createsNew || unresolvedTarget || targets.some((id) => !alreadyRoutines.has(id));
-    if (!addsRoutine) return null;
+    // Set: две операции по одной цели заводят одну рутину, а не две
+    const newTargets = new Set(targets.filter((id) => !alreadyRoutines.has(id)));
+    const newRoutines = createdCount + newTargets.size + unresolvedCount;
+    if (newRoutines === 0) return null;
 
     const decision = (ctx.entitlements ?? resolveEntitlement)(ctx.actorUserId, ROUTINES_MAX_KEY);
     const denial = errorResult('LIMIT', `достигнут лимит рутин («${ROUTINES_MAX_KEY}»)`, {
       key: ROUTINES_MAX_KEY,
       limit: decision.limit,
+      requested: newRoutines,
     });
     // Отказ резолвера — «рутин на этом плане нет вовсе»: считать уже нечего
     if (!decision.allowed) return denial;
     if (decision.limit === null) return null; // безлимитный план (сегодняшний 'dev')
-    return (await countRoutines(tx)) < decision.limit ? null : denial;
+    return (await countRoutines(tx)) + newRoutines > decision.limit ? denial : null;
   });
 }
 
