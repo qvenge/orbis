@@ -110,8 +110,8 @@ test('внутри ThisEntityProvider entity.query получает thisEntityId
   });
 });
 
-// Вне сущности (Browser, закреплённые списки) разрешать `this` не из чего: поля в запросе
-// быть НЕ должно — иначе виджет тихо подставил бы чужой контекст.
+// Вне ТЕЛА записи (Browser, закреплённые списки) контекст не передаётся намеренно: поля в
+// запросе быть НЕ должно — иначе виджет тихо подставил бы чужой контекст.
 test('без провайдера поля thisEntityId в запросе нет вовсе', async () => {
   const { calls } = renderWithProviders(
     <QueryBlock query="children_of=this, aspect=orbis/task" />,

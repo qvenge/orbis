@@ -723,7 +723,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
     const body = await bodyOf(id);
     expect(body).toContain(`{{query: aspect=orbis/agent-run, project_id=${id}`);
     // Тикеты — по uuid проекта, а не по `this`: блок должен читаться и вне тела проекта
-    // (закреплённый список, Browser), где `this` разрешать не из чего (см. project-body.ts).
+    // (закреплённый список, Browser), где контекст записи не передаётся (см. project-body.ts).
     expect(body).toContain(`children_of=${id}, aspect=orbis/task, status=waiting`);
     expect(body).toBe(projectBodyTemplate(id));
     // канон: повторная канонизация не меняет тело
