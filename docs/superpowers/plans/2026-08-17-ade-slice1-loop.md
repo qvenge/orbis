@@ -10,6 +10,13 @@
 скоуп `worker`, пять глаголов исполнителя через executor, прогон-сущность с лентой шагов,
 чекпойнт с кнопкой ответа, закреплённые версии тела, откат прогона.
 
+> **Перенумеровано при исполнении:** решение журнала, которое план всюду звал «D36», записано
+> как **D37** — номер D36 занял отдельным решением владельца (модель монетизации, 2026-08-18).
+> Все упоминания ниже читаются как D37. Там же уточнён ярлык из Р-1/Задачи 17: развилка В1
+> закрыта по умолчанию (`thread_post` остался мимо executor'а), но записан этот факт формулой
+> «через executor идут ПЯТЬ глаголов исполнителя», а не «шесть глаголов-мутаций графа» —
+> вторая заставляла читателя пересчитывать и получать другой состав.
+
 **Архитектура:** ни одной новой подсистемы — четыре аспекта в реестре, одна таблица
 (`entity_versions`), одно CAS-предусловие в `entity_update`, пять тулов-глаголов, которые
 СОБИРАЮТ существующие операции executor'а в один batch (журнал §7.8, inverse, Undo — бесплатно),
@@ -217,7 +224,7 @@ executor и так. **По умолчанию:** оставить как ест�
 | tRPC | `routers/agent-run.ts`, `routers/version.ts` | `router.ts`, `wire.ts` |
 | query | — | `query/compile.ts` (служебные аспекты), тесты компилятора |
 | web | `features/entity-detail/{TicketWaitingBlock,AssignmentCard,RunsList,RunFeed,VersionsCard}.tsx`, `features/entity-detail/useTicketRuns.ts` | `DetailScreen.tsx`, `AspectCards.tsx`, `lib/field-labels.ts`, `features/oauth/ConsentScreen.tsx`, `features/settings/ConnectedAgents.tsx`, `features/chat/cards/renderCards.tsx`, тесты |
-| docs | `docs/superpowers/plans/2026-08-17-ade-slice1-loop.md` (этот файл) | `docs/prd/01-architecture.md` (§2.2, §3.8, §3.12–3.15, §4.14, §7.8, §7.10, §9.2, §9.3), `02-core-os.md` (§3.5, §3.9, §5 сценарий 9), `04-decision-log.md` (D36), `docs/implementation/02-ops-runbook.md`, `00-architecture.md` §5, спека среза |
+| docs | `docs/superpowers/plans/2026-08-17-ade-slice1-loop.md` (этот файл) | `docs/prd/01-architecture.md` (§2.2, §3.8, §3.12–3.15, §4.14, §7.8, §7.10, §9.2, §9.3), `02-core-os.md` (§3.5, §3.9, §5 сценарий 9), `04-decision-log.md` (D37), `docs/implementation/02-ops-runbook.md`, `00-architecture.md` §5, спека среза |
 
 ## Порядок и параллельность
 
@@ -1461,12 +1468,12 @@ export function RunFeed(props: { entity: WireEntity }): JSX.Element;
 
 ---
 
-### Задача 17: Документы к факту — PRD, D36, runbook, архитектура, спека среза
+### Задача 17: Документы к факту — PRD, D37, runbook, архитектура, спека среза
 
 **Файлы:**
 - Изменить: `docs/prd/01-architecture.md` (§2.2:87-98, §3:149,151, §3.8:299-312, новые §3.12–§3.15 после §3.11:331-347,
   §4.14:556, §7.8:826, §7.10:842-863, §9.2:920-930, §9.3:955,960,969), `docs/prd/02-core-os.md` (§3.5:369-469, §3.9:528-530, §5 сценарий 9:609-610),
-  `docs/prd/04-decision-log.md` (D36 между 348 и 351), `docs/implementation/02-ops-runbook.md` (:200-205 список ops, :225-233 таблица релизов с пересевом, :469-553 §3 выдача worker, :632-634 таблицы),
+  `docs/prd/04-decision-log.md` (D37 между 348 и 351), `docs/implementation/02-ops-runbook.md` (:200-205 список ops, :225-233 таблица релизов с пересевом, :469-553 §3 выдача worker, :632-634 таблицы),
   `docs/implementation/00-architecture.md` §5 ER (:332), `docs/superpowers/specs/2026-08-14-orbis-ade-slice1-design.md`
 
 - [ ] **Шаг 1: PRD 01-architecture** —
@@ -1497,7 +1504,7 @@ export function RunFeed(props: { entity: WireEntity }): JSX.Element;
   механизм — неявное исключение в компиляторе, пока `aspect=` не назвал его; §5 сценарий 9
   (`:610`): «двигает статусы задач по мере работы (`entity_update`)» → «двигает тикеты
   глаголами исполнителя (`orbis_claim_task` … `orbis_finish`); закрыть тикет сам не может (С8)».
-- [ ] **Шаг 3: D36** — по формату D35 (`04-decision-log.md:341-347`): решение (круг как общий
+- [ ] **Шаг 3: D37** — по формату D35 (`04-decision-log.md:341-347`): решение (круг как общий
   механизм; глаголы = batch операций executor'а с CAS-предусловием; скоуп `worker`; версии
   body-only; откат прогона с предпроверкой; служебные сущности; порог 30 мин; журнал наблюдений
   отложен), статус, обоснование, заменяет (D34 «скоупы остаются Future»), детали (спека, план).
@@ -1514,7 +1521,7 @@ export function RunFeed(props: { entity: WireEntity }): JSX.Element;
   границы» — полный грант и чат технически могут создать прогон вручную (`entity_create` с
   `orbis/agent-run`), удерживает только `aiInstructions`; `worker` не может.
 - [ ] **Шаг 6:** `grep -rn "значение пока одно" docs/prd` — пусто; коммит
-  `docs(prd): ADE-срез 1 к факту — §2.2, §3.12–3.15, §4.14, §7.8, §7.10, §9.2–9.3, 02 §3.5/§3.9/§5.9, D36, runbook (приёмка 15)`.
+  `docs(prd): ADE-срез 1 к факту — §2.2, §3.12–3.15, §4.14, §7.8, §7.10, §9.2–9.3, 02 §3.5/§3.9/§5.9, D37, runbook (приёмка 15)`.
 
 ---
 
@@ -1586,7 +1593,7 @@ ops.ts migrate  →  push main / Render Live  →  ops.ts seed-aspects  →  ops
 | 12. Версия закреплена, документ изменён, откат — канонично, аспекты/связи не тронуты | `entity_version_pin`, `version.restore` через executor, `VersionsCard` | 3, 5, 16 |
 | 13. Откат прогона — статусы вернулись; написано, что осталось в репозитории | `rollbackRun` + `note`, `RunFeed` | 13, 15 |
 | 14. Шаги в журнале с актором-агентом; «отмени последнее» отменяет действие исполнителя | `actor_grant_id`, undo шага, маркер в карточках | 6, 12, 15 |
-| 15. PRD к факту тем же изменением | §2.2, §3, §4.14, §7.10, §9.3, 02 §5.9 (+§7.8, §9.2, §3.5, §3.9, D36, runbook) | 17 |
+| 15. PRD к факту тем же изменением | §2.2, §3, §4.14, §7.10, §9.3, 02 §5.9 (+§7.8, §9.2, §3.5, §3.9, D37, runbook) | 17 |
 
 Инварианты дизайна → тесты: 1 (гонка захвата) — Задачи 9, 10; 2 (скоуп не трогает чужое) — 7, 12;
 3 (глаголы через executor, журнал, Undo) — 6, 10–12 (с оговоркой В1 по `thread_post`); 4 (не `pending`)
