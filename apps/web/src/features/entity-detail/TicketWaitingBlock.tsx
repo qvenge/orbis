@@ -67,6 +67,11 @@ export function TicketWaitingBlock({
   // намеренно — разъехаться им было бы негде.
   const waitingFor = typeof task.waiting_for === 'string' ? task.waiting_for : '';
   const pending = answerCheckpoint.isPending || update.isPending;
+  const failure = answerCheckpoint.isError
+    ? answerCheckpoint.error.message
+    : update.isError
+      ? update.error.message
+      : null;
 
   return (
     <section
@@ -90,9 +95,12 @@ export function TicketWaitingBlock({
           className="w-full rounded-control border border-line bg-surface px-3 py-2 text-sm text-text outline-none transition focus-visible:ring-2 focus-visible:ring-accent/40"
         />
       </div>
-      {answerCheckpoint.isError && (
+      {/* Отказ ЛЮБОЙ из двух кнопок: закрытие тикета отказывает так же, как ответ (тикет успели
+          закрыть из списка, сеть отвалилась), и молчание о нём читалось бы как «сохранено».
+          Одна строка на обе: нажимают их по очереди, обе разом в полёте не бывают. */}
+      {failure !== null && (
         <p role="alert" className="text-danger text-sm">
-          {answerCheckpoint.error.message}
+          {failure}
         </p>
       )}
       <div className="flex flex-wrap gap-2">
@@ -121,7 +129,13 @@ export function TicketWaitingBlock({
               update.mutate({
                 id: entity.id,
                 expectedUpdatedAt: entity.updatedAt,
-                aspects: { [TASK]: { status: 'done' } },
+                // `waiting_for: null` — конвенция среза: уходя из waiting, вопрос снимают, иначе
+                // он остался бы висеть на закрытом тикете и читался бы как открытый. Сервер
+                // делает ровно это на всех СВОИХ выходах из waiting (routers/agent-run.ts:129-131,
+                // agent-loop/sweep.ts:111); правка из UI не должна быть исключением.
+                // `completed_at` не шлём: его проставляет сам переход в done
+                // (executor/normalize.ts:57-68).
+                aspects: { [TASK]: { status: 'done', waiting_for: null } },
               })
             }
           >

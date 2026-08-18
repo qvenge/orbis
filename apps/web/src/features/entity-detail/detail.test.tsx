@@ -2292,6 +2292,35 @@ function TicketOnWarmCache() {
   return q.data ? <DetailScreen entityId="t1" /> : null;
 }
 
+/** Второй тикет — тот же экран, другой проп: переход внутри вкладки монтирования не меняет. */
+const TICKET_B = {
+  ...TICKET,
+  id: 't2',
+  title: 'Собрать релиз',
+  aspects: {
+    'orbis/task': { status: 'waiting', waiting_for: 'Тегать ли rc?' },
+    'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID },
+  },
+};
+
+function TwoTickets() {
+  const [id, setId] = useState('t1');
+  return (
+    <>
+      <button type="button" data-testid="go-t2" onClick={() => setId('t2')}>
+        на t2
+      </button>
+      {/* Возврат нужен, чтобы прогреть кэш соседнего тикета: только на ТЁПЛОМ кэше видно, что
+          блок ожидания живёт между записями, — на холодном его снимает сам `isTicket`, пока
+          запись едет (см. тест про черновик ответа). */}
+      <button type="button" data-testid="go-t1" onClick={() => setId('t1')}>
+        на t1
+      </button>
+      <DetailScreen entityId={id} />
+    </>
+  );
+}
+
 describe('ADE: тикет', () => {
   test('таб «Сущность»: виден вопрос чекпойнта и кнопка; ввод ответа → agentRun.answerCheckpoint с ticketId/runId/answer (приёмка 7–8)', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
@@ -2416,7 +2445,9 @@ describe('ADE: тикет', () => {
         aspects: Record<string, Record<string, unknown>>;
       };
       expect(input.id).toBe('t1');
-      expect(input.aspects['orbis/task']).toEqual({ status: 'done' });
+      // waiting_for снимается вместе с уходом из waiting — конвенция среза: вопрос рядом с
+      // закрытым тикетом читался бы как открытый (так же поступает сервер на своих выходах).
+      expect(input.aspects['orbis/task']).toEqual({ status: 'done', waiting_for: null });
     });
   });
 
@@ -2477,5 +2508,121 @@ describe('ADE: тикет', () => {
       expect(calls.filter((c) => c.path === 'agentRun.sweep').length).toBeGreaterThan(0),
     );
     expect(calls.filter((c) => c.path === 'agentRun.sweep')).toHaveLength(1);
+  });
+
+  test('переход тикет→тикет не показывает прогоны прежнего тикета', async () => {
+    // Экран монтируется БЕЗ key: смена записи меняет только проп, то есть КЛЮЧ запроса прогонов.
+    // Оставленные под новым ключом прежние данные — это не «чуть устаревший список»: заголовок
+    // блока брался бы из чужого исхода, а ответ владельца уехал бы с чужим runId.
+    const { calls } = renderWithProviders(<TwoTickets />, (path, input) => {
+      if (path === 'entity.get') {
+        const { id } = input as { id: string };
+        return {
+          entity: id === 't2' ? TICKET_B : TICKET,
+          relations: [],
+          thread: null,
+        };
+      }
+      // У второго тикета прогонов ещё нет вовсе — самый строгий случай для placeholder'а.
+      if (path === 'entity.query')
+        return (input as { query: string }).query.includes('t2') ? [] : [RUN];
+      if (path === 'oauth.listGrants') return [GRANT];
+      if (path === 'aspect.list') return [];
+      if (path === 'agentRun.sweep') return { swept: 0 };
+      return {};
+    });
+    // Премиса: у первого тикета прогон ЕСТЬ и виден — иначе проверка ниже зелена сама собой.
+    expect(await screen.findByTestId('run-r1')).toBeInTheDocument();
+    expect(await screen.findByText('Вопрос исполнителя')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('go-t2'));
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Собрать релиз' })).toBeInTheDocument(),
+    );
+    // Ни строки прежнего прогона, ни блока ожидания, собранного по нему.
+    await waitFor(() => expect(screen.queryByTestId('run-r1')).toBeNull());
+    expect(screen.queryByTestId('runs-list')).toBeNull();
+    expect(screen.queryByTestId('ticket-waiting')).toBeNull();
+    // И список прогонов второго тикета спрошен своим ключом.
+    expect(
+      calls.some(
+        (c) => c.path === 'entity.query' && (c.input as { query: string }).query.includes('t2'),
+      ),
+    ).toBe(true);
+  });
+
+  test('набранный ответ не переезжает на соседний тикет', async () => {
+    // Экран монтируется БЕЗ key, и блок ожидания без своего key пережил бы смену записи вместе
+    // с набранным текстом: владелец отправил бы соседнему исполнителю ответ, написанный не ему.
+    const runB = { ...RUN, id: 'r2' };
+    renderWithProviders(<TwoTickets />, (path, input) => {
+      if (path === 'entity.get') {
+        const { id } = input as { id: string };
+        return { entity: id === 't2' ? TICKET_B : TICKET, relations: [], thread: null };
+      }
+      if (path === 'entity.query')
+        return (input as { query: string }).query.includes('t2') ? [runB] : [RUN];
+      if (path === 'oauth.listGrants') return [GRANT];
+      if (path === 'aspect.list') return [];
+      if (path === 'agentRun.sweep') return { swept: 0 };
+      return {};
+    });
+    // Прогрев: сходить на t2 и вернуться. Без него переход идёт через кадр, где записи ещё нет,
+    // а `isTicket` ложен, — блок снимается сам собой, и проверка была бы зелена и без key.
+    fireEvent.click(screen.getByTestId('go-t2'));
+    expect(await screen.findByTestId('run-r2')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('go-t1'));
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Починить парсер' })).toBeInTheDocument(),
+    );
+
+    await userEvent.type(await screen.findByLabelText('Ответ'), 'Postgres');
+    fireEvent.click(screen.getByTestId('go-t2'));
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Собрать релиз' })).toBeInTheDocument(),
+    );
+    // Блок у второго тикета свой — и пустой, хотя кэш тёплый и промежуточного кадра не было.
+    expect(screen.getByLabelText('Ответ')).toHaveValue('');
+  });
+
+  test('прогон не стоит строкой в «Подзадачах» — там только настоящие подзадачи', async () => {
+    // Прогон — такой же ребёнок тикета по связи parent (verbs.ts), и без отсева служебных
+    // аспектов он показывался бы дважды: строкой подзадачи и строкой своей секции.
+    const relation = (targetId: string) => ({
+      id: `rel-${targetId}`,
+      sourceId: 't1',
+      targetId,
+      relationType: 'parent',
+      meta: {},
+      createdAt: '2026-08-17T10:00:00.000Z',
+      updatedAt: '2026-08-17T10:00:00.000Z',
+    });
+    const subtask = {
+      ...entity,
+      id: 's1',
+      title: 'Написать тест',
+      aspects: { 'orbis/task': { status: 'inbox' } },
+    };
+    renderWithProviders(<DetailScreen entityId="t1" />, (path, input) => {
+      if (path === 'entity.get') {
+        const { id } = input as { id: string };
+        if (id === 's1') return { entity: subtask, relations: [], thread: null };
+        if (id === 'r1') return { entity: RUN, relations: [], thread: null };
+        return { entity: TICKET, relations: [relation('s1'), relation('r1')], thread: null };
+      }
+      if (path === 'entity.query') return [RUN];
+      if (path === 'oauth.listGrants') return [GRANT];
+      if (path === 'aspect.list') return [];
+      if (path === 'agentRun.sweep') return { swept: 0 };
+      return {};
+    });
+    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
+    // Прогон уезжает из подзадач, как только приехала его запись: до этого он неотличим от
+    // обычного ребёнка, и прятать его заранее было бы гаданием.
+    await waitFor(() => expect(within(details).getAllByTestId('subtask')).toHaveLength(1));
+    expect(within(details).getByTestId('subtask')).toHaveTextContent('Написать тест');
+    expect(within(details).getByText('Подзадачи (1)')).toBeInTheDocument();
+    // …и при этом он на месте в своей секции — отсев не «потерял прогон».
+    expect(within(details).getByTestId('run-r1')).toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { newId } from '@orbis/shared';
+import { newId, SERVICE_ASPECT_IDS } from '@orbis/shared';
 import { Circle, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
@@ -18,11 +18,30 @@ type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number]
 // свой relation.listFor секция не заводит: это была ТА ЖЕ выборка вторым сетевым чтением
 // на каждое открытие detail (прецедент — Blocks). Поэтому и инвалидация после создания
 // идёт по ключу entity.get: своего ключа у секции больше нет.
+/** Служебная сущность (прогон исполнителя) — по наличию служебного аспекта. */
+function isService(aspects: Record<string, Record<string, unknown>> | undefined): boolean {
+  return aspects !== undefined && SERVICE_ASPECT_IDS.some((id) => aspects[id] !== undefined);
+}
+
 export function Subtasks({ parentId, relations }: { parentId: string; relations: Relation[] }) {
   const utils = trpc.useUtils();
   const childIds = relations
     .filter((r) => r.relationType === 'parent' && r.sourceId === parentId)
     .map((r) => r.targetId);
+  /**
+   * Дети читаются ЗДЕСЬ, чтобы отсеять служебные сущности (С5): прогон исполнителя — такой же
+   * ребёнок тикета по связи `parent` (agent-loop/verbs.ts:397-400), и без отсева каждый прогон
+   * стоял бы в подзадачах строкой, а рядом — второй раз в своей секции. Связь имён не несёт
+   * (WireRelation — одни id), поэтому «служебное ли это» известно только из самой записи.
+   *
+   * Сети это не добавляет НИСКОЛЬКО: ключ тот же `entity.get({id})`, которым EntityRef и так
+   * тянет заголовок каждой строки, — react-query дедупит их в один запрос на ребёнка.
+   *
+   * Пока запись не приехала, ребёнок считается подзадачей: прятать заранее — значит прятать то,
+   * о чём ничего не известно, и список моргал бы пустотой на каждом открытии.
+   */
+  const children = trpc.useQueries((t) => childIds.map((id) => t.entity.get({ id })));
+  const visibleIds = childIds.filter((_, i) => !isService(children[i]?.data?.entity.aspects));
   const [draft, setDraft] = useState('');
   const { show } = useToast();
   const push = useNav((s) => s.push);
@@ -75,11 +94,11 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
   return (
     <div className="flex flex-col gap-1">
       <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">
-        Подзадачи ({childIds.length})
+        Подзадачи ({visibleIds.length})
       </p>
-      {childIds.length > 0 && (
+      {visibleIds.length > 0 && (
         <ul className="flex flex-col">
-          {childIds.map((id) => (
+          {visibleIds.map((id) => (
             <li
               key={id}
               data-testid="subtask"
