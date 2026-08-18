@@ -1,8 +1,8 @@
 // apps/server/src/seed/onboarding.test.ts
 // Интеграционные тесты Task 13: онбординг-сидирование (02 §7) через createCallerFactory
 // против живой БД. Сид пишет НАПРЯМУЮ в tx под withIdentity, МИМО executor/журнала
-// (решение 6 плана): 12 категорий §7.1 + 5 smart lists §7.2 (три исходных + два верхних
-// горизонта планирования, E4) + настройки §7.3 + глобальный тред.
+// (решение 6 плана): 12 категорий §7.1 + 6 smart lists §7.2 (три исходных, два верхних
+// горизонта планирования (E4) и «Рутины» (V1.9)) + настройки §7.3 + глобальный тред.
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -26,11 +26,13 @@ import {
   DAILY_PLANNING_BODY,
   HORIZON_LIFE_BODY,
   HORIZON_YEAR_BODY,
+  ROUTINES_LIST_BODY,
   SEED_HORIZON_LISTS,
   SEED_SMART_LISTS,
   type SeedSmartList,
   UPCOMING_BODY,
 } from '../seed/smart-lists';
+import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { createCallerFactory } from '../trpc';
 
 requireEnv();
@@ -81,13 +83,13 @@ afterAll(async () => {
 });
 
 describe('user.seedOnboarding (02 §7): состав и одноразовость', () => {
-  test('создаёт ровно 12+5 сущностей, настройки и глобальный тред; повтор → {seeded:false}, count не растёт', async () => {
+  test('создаёт ровно 12+6 сущностей, настройки и глобальный тред; повтор → {seeded:false}, count не растёт', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
 
     const first = await caller.user.seedOnboarding();
     expect(first).toEqual({ seeded: true });
-    expect(await counts(user)).toEqual({ entities: 17, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
 
     // Глобальный тред — с NULL entity_id (§4.5)
     const { db: admin, client: adminClient } = adminDb();
@@ -103,7 +105,7 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
     // Одноразовость §7: повторный вызов ничего не добавляет
     const second = await caller.user.seedOnboarding();
     expect(second).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 17, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
   });
 
   test('конкурентные два seedOnboarding под разными коннекшнами → без дублей (детерминированные id + ON CONFLICT)', async () => {
@@ -124,7 +126,7 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
         clientVersion: null,
       });
       await Promise.all([callerA.user.seedOnboarding(), callerB.user.seedOnboarding()]);
-      expect(await counts(user)).toEqual({ entities: 17, settings: 1, threads: 1 });
+      expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
     } finally {
       await a.client.end();
       await b.client.end();
@@ -192,7 +194,7 @@ describe('категории §7.1', () => {
 });
 
 describe('smart lists §7.2 / §3.3', () => {
-  test('body всех пяти списков — байт-в-байт равен блокам 02 §3.3, в порядке документа', () => {
+  test('body всех шести списков — байт-в-байт равен блокам 02 §3.3, в порядке документа', () => {
     // Извлекаем ```markdown-блоки §3.3 из PRD и сверяем с константами сида
     const prdPath = join(import.meta.dir, '../../../../docs/prd/02-core-os.md');
     const prd = readFileSync(prdPath, 'utf8');
@@ -201,8 +203,8 @@ describe('smart lists §7.2 / §3.3', () => {
       if (block === undefined) throw new Error('markdown-блок без группы захвата');
       return block;
     });
-    // Первые пять markdown-блоков документа — §3.3, ровно в порядке SEED_SMART_LISTS:
-    // три исходных списка, затем два верхних горизонта планирования (E4).
+    // Первые шесть markdown-блоков документа — §3.3, ровно в порядке SEED_SMART_LISTS:
+    // три исходных списка, два верхних горизонта планирования (E4), «Рутины» (V1.9).
     expect(blocks.slice(0, SEED_SMART_LISTS.length)).toEqual(SEED_SMART_LISTS.map((s) => s.body));
     // Поимённо — чтобы падение называло виновника, а не «массивы не равны»
     expect(blocks[0]).toBe(DAILY_PLANNING_BODY);
@@ -210,9 +212,10 @@ describe('smart lists §7.2 / §3.3', () => {
     expect(blocks[2]).toBe(ALL_TASKS_BODY);
     expect(blocks[3]).toBe(HORIZON_YEAR_BODY);
     expect(blocks[4]).toBe(HORIZON_LIFE_BODY);
+    expect(blocks[5]).toBe(ROUTINES_LIST_BODY);
   });
 
-  test('все {{query:}}-блоки пяти списков парсятся собственным парсером (страховка от опечатки)', () => {
+  test('все {{query:}}-блоки шести списков парсятся собственным парсером (страховка от опечатки)', () => {
     const catalog = buildFieldCatalog(
       BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
     );
@@ -223,6 +226,7 @@ describe('smart lists §7.2 / §3.3', () => {
       'all-tasks': 1,
       'horizon-year': 1,
       'horizon-life': 1,
+      routines: 2,
     };
     expect(Object.keys(expectedBlocks).length).toBe(SEED_SMART_LISTS.length);
     for (const list of SEED_SMART_LISTS) {
@@ -242,7 +246,7 @@ describe('smart lists §7.2 / §3.3', () => {
   // Парсер — не компилятор: он проверяет форму, а SQL строит compile.ts со своим
   // исчерпывающим разбором токенов и типов полей. Блок, который парсится, но не
   // компилируется, приехал бы пользователю красной плашкой в готовом списке.
-  test('каждый query-блок пяти списков выполняется entity.query против живой БД', async () => {
+  test('каждый query-блок шести списков выполняется entity.query против живой БД', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
@@ -265,13 +269,13 @@ describe('smart lists §7.2 / §3.3', () => {
     }
   });
 
-  test('пять сущностей smart-list: tags, emoji, детерминированный id, порядок pinned', async () => {
+  test('шесть сущностей smart-list: tags, emoji, детерминированный id, порядок pinned', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
     const rows = await caller.entity.query({ query: 'tags=smart-list, sortBy=created_at:asc' });
-    expect(rows.length).toBe(5);
+    expect(rows.length).toBe(6);
     for (const r of rows) expect(r.tags).toEqual(['smart-list']);
 
     const byId = new Map(rows.map((r) => [r.id, r]));
@@ -309,7 +313,7 @@ describe('smart lists §7.2 / §3.3', () => {
 });
 
 describe('настройки §7.3 (getSettings / updateSettings)', () => {
-  test('getSettings: дефолты §7.3; pinnedEntities в порядке daily/upcoming/allTasks/Год', async () => {
+  test('getSettings: дефолты §7.3; pinnedEntities в порядке daily/upcoming/allTasks/Год/Рутины', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
@@ -326,6 +330,7 @@ describe('настройки §7.3 (getSettings / updateSettings)', () => {
       { id: seedSmartListId(user, 'upcoming'), order: 1 },
       { id: seedSmartListId(user, 'all-tasks'), order: 2 },
       { id: seedSmartListId(user, 'horizon-year'), order: 3 },
+      { id: seedSmartListId(user, 'routines'), order: 4 },
     ]);
   });
 
@@ -452,6 +457,7 @@ describe('installedViews: orbis-budget (§4.4, слайс 2)', () => {
       { id: seedSmartListId(user, 'upcoming'), order: 1 },
       { id: seedSmartListId(user, 'all-tasks'), order: 2 },
       { id: seedSmartListId(user, 'horizon-year'), order: 3 },
+      { id: seedSmartListId(user, 'routines'), order: 4 },
     ]);
   });
 });
@@ -560,12 +566,13 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: true });
 
     const lists = await caller.entity.query({ query: 'tags=smart-list' });
-    expect(lists.length).toBe(5);
+    expect(lists.length).toBe(6);
     const ids = new Set(lists.map((r) => r.id));
     for (const slug of HORIZONS) expect(ids.has(seedSmartListId(user, slug))).toBe(true);
     expect((await caller.user.getSettings()).pinnedEntities).toEqual([
       ...basePins(user),
       { id: seedSmartListId(user, 'horizon-year'), order: 3 },
+      { id: seedSmartListId(user, 'routines'), order: 4 },
     ]);
   });
 
@@ -577,22 +584,23 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
     // Откат к состоянию «до E4»: горизонтов нет, закреплены только три старых списка
     await deleteHorizons(user, HORIZONS);
     await caller.user.updateSettings({ pinnedEntities: basePins(user) });
-    expect(await counts(user)).toEqual({ entities: 15, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 16, settings: 1, threads: 1 });
 
     // Guard возвращает { seeded: false }, но бэкфилл дописывает недостающее
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 17, settings: 1, threads: 1 });
-    expect((await caller.entity.query({ query: 'tags=smart-list' })).length).toBe(5);
+    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    expect((await caller.entity.query({ query: 'tags=smart-list' })).length).toBe(6);
     expect((await caller.user.getSettings()).pinnedEntities).toEqual([
       ...basePins(user),
       { id: seedSmartListId(user, 'horizon-year'), order: 3 },
+      { id: seedSmartListId(user, 'routines'), order: 4 },
     ]);
 
     // Ещё два повтора — ни новых сущностей, ни второго закрепления «Года»
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 17, settings: 1, threads: 1 });
-    expect((await caller.user.getSettings()).pinnedEntities.length).toBe(4);
+    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    expect((await caller.user.getSettings()).pinnedEntities.length).toBe(5);
   });
 
   test('досевается РОВНО недостающее: удалён один горизонт — вставлен один, пин не тронут', async () => {
@@ -601,11 +609,11 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
     await caller.user.seedOnboarding();
 
     await deleteHorizons(user, ['horizon-life']);
-    expect(await counts(user)).toEqual({ entities: 16, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 17, settings: 1, threads: 1 });
     const settingsBefore = await caller.user.getSettings();
 
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 17, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
     const settingsAfter = await caller.user.getSettings();
     expect(settingsAfter.pinnedEntities).toEqual(settingsBefore.pinnedEntities);
     // «Год» уже закреплён — updated_at настроек бэкфилл не сдвигает
@@ -624,6 +632,7 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
     expect((await caller.user.getSettings()).pinnedEntities).toEqual([
       { id: custom, order: 0 },
       { id: seedSmartListId(user, 'horizon-year'), order: 1 },
+      { id: seedSmartListId(user, 'routines'), order: 2 },
     ]);
   });
 
@@ -651,7 +660,143 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
       { id: daily, order: 0 },
       { id: allTasks, order: 7 },
       { id: seedSmartListId(user, 'horizon-year'), order: 8 },
+      { id: seedSmartListId(user, 'routines'), order: 9 },
     ]);
+  });
+});
+
+// Задача 14 (V1.9, V1.14): шестой сидируемый список — «Рутины». Два блока, и порядок в
+// нём — не косметика: бейдж закреплённой сущности считает ПЕРВЫЙ query-блок body (§3.2),
+// поэтому первым стоит «Ждут ответа» — единственное, что требует действия владельца.
+//
+// Оба блока называют аспект ЯВНО, и в обоих случаях по своей причине. `orbis/agent-run` —
+// служебный (§3.9): без `aspect=` компилятор вырезал бы прогоны из выдачи, и список молча
+// показывал бы пусто. `stage=` — неоднозначен (orbis/project и orbis/routine), и запрос без
+// `aspect=` не скомпилировался бы вовсе.
+//
+// Бэкфилл — по образцу горизонтов (E4): своим набором, в guard-ветке сидирования.
+describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9)', () => {
+  const helpers = agentLoopHelpers(db);
+
+  /** id результатов N-го блока тела «Рутин» — тем же путём, каким его увидит виджет. */
+  async function idsOfBlock(user: string, index: number): Promise<Set<string>> {
+    const block = queryBlocksOf(ROUTINES_LIST_BODY)[index];
+    if (block === undefined) throw new Error(`в теле «Рутин» нет query-блока №${index}`);
+    const rows = await callerFor(user).entity.query({ query: block });
+    return new Set(rows.map((r) => r.id));
+  }
+
+  /** Симуляция владельца, засиденного ДО V1: списка нет, закреплены первые четыре. */
+  async function deleteRoutinesList(user: string): Promise<void> {
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin
+        .delete(entities)
+        .where(and(eq(entities.ownerId, user), eq(entities.id, seedSmartListId(user, 'routines'))));
+    } finally {
+      await adminClient.end();
+    }
+  }
+
+  const pinsBeforeV1 = (user: string) => [
+    { id: seedSmartListId(user, 'daily-planning'), order: 0 },
+    { id: seedSmartListId(user, 'upcoming'), order: 1 },
+    { id: seedSmartListId(user, 'all-tasks'), order: 2 },
+    { id: seedSmartListId(user, 'horizon-year'), order: 3 },
+  ];
+
+  test('новый владелец: шесть списков, «Рутины» шестым и пятым закреплением', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: true });
+
+    const rows = await caller.entity.query({ query: 'tags=smart-list, sortBy=created_at:asc' });
+    expect(rows.length).toBe(6);
+    const routines = rows.find((r) => r.id === seedSmartListId(user, 'routines'));
+    expect(routines?.title).toBe('Рутины');
+    expect(routines?.emoji).toBe('⏰');
+    expect(routines?.tags).toEqual(['smart-list']);
+    expect(routines?.body).toBe(ROUTINES_LIST_BODY);
+
+    expect((await caller.user.getSettings()).pinnedEntities).toEqual([
+      ...pinsBeforeV1(user),
+      { id: seedSmartListId(user, 'routines'), order: 4 },
+    ]);
+  });
+
+  test('засиденный ДО V1: повторный seedOnboarding досевает список и пин; повтор идемпотентен', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    // Откат к состоянию «до V1»: списка нет, в сайдбаре четыре прежних закрепления
+    await deleteRoutinesList(user);
+    await caller.user.updateSettings({ pinnedEntities: pinsBeforeV1(user) });
+    expect(await counts(user)).toEqual({ entities: 17, settings: 1, threads: 1 });
+
+    // Guard отдаёт { seeded: false } — досев живёт в его же ветке
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    const list = (await caller.entity.query({ query: 'tags=smart-list' })).find(
+      (r) => r.id === seedSmartListId(user, 'routines'),
+    );
+    expect(list?.title).toBe('Рутины');
+    expect(list?.body).toBe(ROUTINES_LIST_BODY);
+    expect((await caller.user.getSettings()).pinnedEntities).toEqual([
+      ...pinsBeforeV1(user),
+      { id: seedSmartListId(user, 'routines'), order: 4 },
+    ]);
+
+    // Ещё два повтора — ни второй сущности, ни второго закрепления
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    expect((await caller.user.getSettings()).pinnedEntities.length).toBe(5);
+  });
+
+  test('«Ждут ответа» находит прогон с исходом checkpoint и не находит отвеченный', async () => {
+    const user = freshUserId();
+    await callerFor(user).user.seedOnboarding();
+
+    const routineId = await helpers.seedRoutine(user, { title: 'Утренний обзор' });
+    const waiting = await helpers.seedRoutineRun(user, {
+      routineId,
+      bucket: '2026-08-18T07:00',
+      run: {
+        outcome: 'checkpoint',
+        checkpoint: { question: 'Списать 340 на «Еду»?', asked_at: '2026-08-18T07:00:10.000Z' },
+      },
+    });
+    const answered = await helpers.seedRoutineRun(user, {
+      routineId,
+      bucket: '2026-08-17T07:00',
+      run: {
+        outcome: 'answered',
+        checkpoint: { question: 'Уже спрашивал', asked_at: '2026-08-17T07:00:10.000Z' },
+        reply: { text: 'да', at: '2026-08-17T08:00:00.000Z' },
+      },
+    });
+
+    const ids = await idsOfBlock(user, 0);
+    expect(ids.has(waiting.runId)).toBe(true);
+    expect(ids.has(answered.runId)).toBe(false);
+    // Рутина — не прогон: во второй блок она попадёт, в первый нет
+    expect(ids.has(routineId)).toBe(false);
+  });
+
+  test('«Активные рутины» находит active и не находит paused', async () => {
+    const user = freshUserId();
+    await callerFor(user).user.seedOnboarding();
+
+    const active = await helpers.seedRoutine(user, { title: 'Активная' });
+    const paused = await helpers.seedRoutine(user, {
+      title: 'На паузе',
+      routine: { stage: 'paused' },
+    });
+
+    const ids = await idsOfBlock(user, 1);
+    expect(ids.has(active)).toBe(true);
+    expect(ids.has(paused)).toBe(false);
   });
 });
 

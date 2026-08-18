@@ -1,6 +1,6 @@
 // apps/server/src/seed/smart-lists.ts
-// Body пяти преднастроенных smart lists — трёх исходных и двух верхних горизонтов
-// планирования (E4) — БАЙТ-В-БАЙТ из 02-core-os §3.3 (template-литералы с сохранением
+// Body шести преднастроенных smart lists — трёх исходных, двух верхних горизонтов
+// планирования (E4) и «Рутин» (V1.9) — БАЙТ-В-БАЙТ из 02-core-os §3.3 (template-литералы с сохранением
 // переносов строк и 9-пробельных отступов continuation-строк). Инвариант байт-в-байт
 // закреплён тестом (onboarding.test.ts сверяет с markdown-блоками §3.3 PRD, по порядку).
 // Query-блоки — строго по грамматике 01-architecture §6.1 (парсуемость проверена тестом).
@@ -61,8 +61,30 @@ export const HORIZON_LIFE_BODY = `Горизонт «жизнь»: не спис
 
 {{query: tags=life, sortBy=updated_at:desc, display=list, title=Ценности и зоны ответственности}}`;
 
+// ─────────────────── Рутины (V1.9/V1.14, 02 §3.3/§7.2) ───────────────────
+// Список — вся навигация к рутинам в V1: отдельного экрана «Рутины» нет, а прогонов,
+// ждущих ответа, нет как сущности — это выборка по исходу.
+//
+// ПОРЯДОК БЛОКОВ — не косметика. Бейдж закреплённой сущности считает ПЕРВЫЙ query-блок её
+// body (02 §3.2), поэтому первым стоит «Ждут ответа»: цифра в сайдбаре обязана означать
+// «столько раз меня спросили», а не «столько у меня рутин» — второе не требует действий и
+// висело бы постоянным ненулевым бейджем, обесценивая его.
+//
+// ОБА БЛОКА НАЗЫВАЮТ АСПЕКТ ЯВНО, и в каждом — своя причина. `orbis/agent-run` служебный
+// (02 §3.9): пока запрос не назвал его, компилятор вычитает служебные сущности из выдачи, и
+// блок молча показывал бы пусто. `stage=` неоднозначен (orbis/project и orbis/routine —
+// 01-architecture §6.1): запрос без `aspect=` не скомпилировался бы вовсе.
+//
+// Сортировки разные по смыслу: ожидающие — по времени старта ВОЗРАСТАЮЩЕ (дольше всех ждущий
+// вопрос сверху, как «Ожидание» в Daily Planning), рутины — по недавней правке.
+export const ROUTINES_LIST_BODY = `Рутины — то, что Orbis делает сам по расписанию, и то, что ждёт вашего ответа.
+
+{{query: aspect=orbis/agent-run, outcome=checkpoint, sortBy=started_at:asc, display=list, title=Ждут ответа}}
+
+{{query: aspect=orbis/routine, stage=active, sortBy=updated_at:desc, display=list, title=Активные рутины}}`;
+
 export interface SeedSmartList {
-  slug: 'daily-planning' | 'upcoming' | 'all-tasks' | 'horizon-year' | 'horizon-life';
+  slug: 'daily-planning' | 'upcoming' | 'all-tasks' | 'horizon-year' | 'horizon-life' | 'routines';
   title: string;
   emoji: string;
   body: string;
@@ -77,11 +99,27 @@ export const SEED_HORIZON_LISTS = [
   { slug: 'horizon-life', title: 'Жизнь', emoji: '🧭', body: HORIZON_LIFE_BODY },
 ] as const satisfies readonly SeedSmartList[];
 
-// Порядок = порядок вставки; закрепляются в сайдбаре первые три и «Год» (02 §7.2,
+/**
+ * «Рутины» — отдельной константой по той же причине, что и горизонты: онбординг сидирует их
+ * вместе с остальными, а бэкфилл (onboarding.ts, guard-ветка) досевает существующему
+ * владельцу ровно этот список — не «всё, чего не хватает».
+ *
+ * Эмодзи — ⏰, а НЕ 🎯: 🎯 уже занят горизонтом «Год», и два одинаковых значка в сайдбаре
+ * читались бы как одна и та же вещь.
+ */
+export const SEED_ROUTINES_LIST = {
+  slug: 'routines',
+  title: 'Рутины',
+  emoji: '⏰',
+  body: ROUTINES_LIST_BODY,
+} as const satisfies SeedSmartList;
+
+// Порядок = порядок вставки; закрепляются в сайдбаре первые три, «Год» и «Рутины» (02 §7.2,
 // pinnedEntities §4.4) — «Жизнь» живёт в Browser по тегу smart-list.
 export const SEED_SMART_LISTS = [
   { slug: 'daily-planning', title: 'Daily Planning', emoji: '☀️', body: DAILY_PLANNING_BODY },
   { slug: 'upcoming', title: 'Upcoming', emoji: '🗓️', body: UPCOMING_BODY },
   { slug: 'all-tasks', title: 'All Tasks', emoji: '📋', body: ALL_TASKS_BODY },
   ...SEED_HORIZON_LISTS,
+  SEED_ROUTINES_LIST,
 ] as const satisfies readonly SeedSmartList[];

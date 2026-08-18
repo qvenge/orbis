@@ -1,7 +1,7 @@
 // apps/server/src/seed/onboarding.ts
-// Онбординг-сидирование (02 §7): 12 категорий §7.1 + 5 smart lists §7.2 (три исходных +
-// два верхних горизонта планирования, E4) + настройки §7.3 + глобальный тред §7.3. Один раз
-// на пользователя; повтор дублей не создаёт (§7).
+// Онбординг-сидирование (02 §7): 12 категорий §7.1 + 6 smart lists §7.2 (три исходных, два
+// верхних горизонта планирования (E4) и «Рутины» (V1.9)) + настройки §7.3 + глобальный тред
+// §7.3. Один раз на пользователя; повтор дублей не создаёт (§7).
 //
 // РЕШЕНИЕ 6 ПЛАНА: сид пишет НАПРЯМУЮ в tx под withIdentity, МИМО executor и журнала
 // действий (§7.8). Обоснование: 15 audit-сообщений при регистрации — это шум в ленте
@@ -23,7 +23,12 @@ import { ensureGlobalThread } from '../chat/threads';
 import { entities, userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { SEED_CATEGORIES } from './categories';
-import { SEED_HORIZON_LISTS, SEED_SMART_LISTS, type SeedSmartList } from './smart-lists';
+import {
+  SEED_HORIZON_LISTS,
+  SEED_ROUTINES_LIST,
+  SEED_SMART_LISTS,
+  type SeedSmartList,
+} from './smart-lists';
 
 // Формулы seed-слагов — серверная деталь (НЕ в shared): id порождается от owner_id
 // (workspace-scoped при введении workspace'ов, D11) и стабильного слага. uuid-библиотека
@@ -81,6 +86,7 @@ export async function seedOnboarding(
             AND NOT (${BUDGET_VIEW_ID} = ANY("installedViews"))`,
     );
     await backfillHorizons(tx, ownerId, now);
+    await backfillRoutinesList(tx, ownerId, now);
     return { seeded: false };
   }
 
@@ -103,21 +109,22 @@ export async function seedOnboarding(
     updatedAt: now,
   }));
 
-  // 5 smart lists §7.2 — сущности с тегом smart-list и body-query-блоками (§3.3):
-  // три исходных плюс два верхних горизонта планирования, «Год» и «Жизнь» (E4).
+  // 6 smart lists §7.2 — сущности с тегом smart-list и body-query-блоками (§3.3): три
+  // исходных, два верхних горизонта планирования, «Год» и «Жизнь» (E4), и «Рутины» (V1.9).
   const smartListRows = SEED_SMART_LISTS.map((s) => smartListRow(ownerId, s, now));
 
-  // Одна вставка на все 17 сущностей: детерминированный порядок id снимает риск взаимной
+  // Одна вставка на все 18 сущностей: детерминированный порядок id снимает риск взаимной
   // блокировки конкурентных сидов (обе транзакции блокируются на первой общей строке).
   await tx
     .insert(entities)
     .values([...categoryRows, ...smartListRows])
     .onConflictDoNothing();
 
-  // Настройки §7.3 — дефолты; pinnedEntities в порядке daily/upcoming/allTasks/«Год»
-  // (§7.2, §4.4). Из двух горизонтов закреплён ТОЛЬКО «Год»: закреплённая сущность стоит
-  // entity.count на каждую инвалидацию графа (web, lib/invalidate.ts), а «Жизнь»
-  // открывают раз в год — её находит Browser по тегу smart-list.
+  // Настройки §7.3 — дефолты; pinnedEntities в порядке daily/upcoming/allTasks/«Год»/
+  // «Рутины» (§7.2, §4.4). Из двух горизонтов закреплён ТОЛЬКО «Год»: закреплённая сущность
+  // стоит entity.count на каждую инвалидацию графа (web, lib/invalidate.ts), а «Жизнь»
+  // открывают раз в год — её находит Browser по тегу smart-list. «Рутины» закрепляются:
+  // их бейдж — счётчик вопросов, на которые владелец ещё не ответил (§3.2).
   await tx
     .insert(userSettings)
     .values({
@@ -132,6 +139,7 @@ export async function seedOnboarding(
         { id: seedSmartListId(ownerId, 'upcoming'), order: 1 },
         { id: seedSmartListId(ownerId, 'all-tasks'), order: 2 },
         { id: seedSmartListId(ownerId, PINNED_HORIZON_SLUG), order: 3 },
+        { id: seedSmartListId(ownerId, SEED_ROUTINES_LIST.slug), order: 4 },
       ],
       updatedAt: now,
     })
@@ -170,13 +178,9 @@ function smartListRow(ownerId: string, list: SeedSmartList, now: Date) {
  *
  * Идемпотентность: id горизонтов детерминированы (uuidv5 от слага), ON CONFLICT DO NOTHING
  * гасит повтор и НЕ перетирает тело, если пользователь правил список; закрепление «Года»
- * дописывается только при отсутствии его id в pinnedEntities (jsonb-containment по одному
- * ключу `id`, порядковый номер значения не важен), поэтому повторные запуски не плодят ни
- * сущностей, ни строк сайдбара, а кастомные закрепления и прочие поля настроек остаются
- * нетронутыми (updated_at сдвигается лишь при фактической правке — иначе web-синк LWW
- * дёргался бы на каждом старте сессии). `order` нового пина — max(order)+1, а НЕ длина
- * массива: после открепления в порядковых номерах остаются дыры ([0, 7] — длина 2), и по
- * длине новый пин встал бы в середину сайдбара.
+ * дописывается только при отсутствии его id в pinnedEntities — правила вставки пина и его
+ * цена описаны у pinIfAbsent. Повторные запуски не плодят ни сущностей, ни строк сайдбара, а
+ * кастомные закрепления и прочие поля настроек остаются нетронутыми.
  *
  * Цена решения — ДВЕ формы отката, которые сид не переживает: удалённый пользователем
  * горизонт следующий вызов сидирования воскресит, а откреплённый «Год» вернёт в сайдбар
@@ -190,7 +194,39 @@ async function backfillHorizons(tx: Tx, ownerId: string, now: Date): Promise<voi
     .values(SEED_HORIZON_LISTS.map((list) => smartListRow(ownerId, list, now)))
     .onConflictDoNothing();
 
-  const pinId = seedSmartListId(ownerId, PINNED_HORIZON_SLUG);
+  await pinIfAbsent(tx, ownerId, seedSmartListId(ownerId, PINNED_HORIZON_SLUG), now);
+}
+
+/**
+ * Бэкфилл V1 (§7.2): владелец, засиденный ДО «Рутин», не имеет шестого списка. Механика —
+ * ровно та же, что у горизонтов (адресный набор, детерминированный id, ON CONFLICT DO
+ * NOTHING, пин в конец), и та же цена: удалённый владельцем список следующее сидирование
+ * воскресит, открепление — вернёт в сайдбар.
+ *
+ * ПОЧЕМУ ОТДЕЛЬНАЯ ФУНКЦИЯ, А НЕ ПУНКТ В backfillHorizons. Разное «что досеваем» — разные
+ * функции: горизонты приехали в слайсе 3, «Рутины» в V1, и общий проход по SEED_SMART_LISTS
+ * воскрешал бы Daily Planning или All Tasks, удалённые владельцем осознанно (сид не
+ * отличает «никогда не было» от «удалено»). Общего у двух досевов ровно одно — вставка пина,
+ * и она вынесена в pinIfAbsent, чтобы третья копия jsonb-SQL не разъехалась с первыми двумя.
+ */
+async function backfillRoutinesList(tx: Tx, ownerId: string, now: Date): Promise<void> {
+  await tx
+    .insert(entities)
+    .values([smartListRow(ownerId, SEED_ROUTINES_LIST, now)])
+    .onConflictDoNothing();
+
+  await pinIfAbsent(tx, ownerId, seedSmartListId(ownerId, SEED_ROUTINES_LIST.slug), now);
+}
+
+/**
+ * Закрепление сущности в сайдбаре, если её там ещё нет. Отсутствие проверяется
+ * jsonb-containment по ОДНОМУ ключу `id` — порядковый номер значения при этом не важен, и
+ * пин, который владелец успел перетащить, повтором не задваивается. `order` нового пина —
+ * max(order)+1, а НЕ длина массива: после открепления в номерах остаются дыры ([0, 7] —
+ * длина 2), и по длине новый пин встал бы в СЕРЕДИНУ сайдбара. updated_at сдвигается только
+ * при фактической вставке — иначе web-синк LWW дёргался бы на каждом старте сессии.
+ */
+async function pinIfAbsent(tx: Tx, ownerId: string, pinId: string, now: Date): Promise<void> {
   await tx.execute(
     sql`UPDATE user_settings
         SET "pinnedEntities" = "pinnedEntities" || jsonb_build_array(

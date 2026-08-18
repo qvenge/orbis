@@ -7,6 +7,7 @@ import {
   DAILY_PLANNING_BODY,
   HORIZON_LIFE_BODY,
   HORIZON_YEAR_BODY,
+  ROUTINES_LIST_BODY,
   UPCOMING_BODY,
 } from './smart-lists';
 
@@ -16,6 +17,7 @@ const SEEDS: Array<[string, string]> = [
   ['All Tasks', ALL_TASKS_BODY],
   ['Горизонт «Год»', HORIZON_YEAR_BODY],
   ['Горизонт «Жизнь»', HORIZON_LIFE_BODY],
+  ['Рутины', ROUTINES_LIST_BODY],
 ];
 
 describe('сиды — канонические', () => {
