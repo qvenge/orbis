@@ -17,6 +17,7 @@ import { useToast } from '../../ui/toast-store';
 import { PlannedToFactCard } from '../budget/PlannedToFactCard';
 import { usePlanToFactPrompt } from '../budget/usePlanToFactPrompt';
 import { ChatThread } from '../chat/ChatThread';
+import { ThreadSkeleton } from '../chat/MessageList';
 import { EditorShell } from '../entity-editor/EditorShell';
 import { SaveIndicator } from '../entity-editor/SaveIndicator';
 import { sameDoc } from '../entity-editor/strip-ids';
@@ -397,8 +398,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
             {
               value: 'thread',
               label: 'Тред',
+              // key по id — по той же причине, что у ленты прогона и блока ожидания: экран
+              // монтируется БЕЗ key (router.tsx), и переход entity→entity меняет лишь проп. У
+              // вкладки же есть память о ЗАВЕДЁННОМ треде (см. EntityThreadTab), и переехав на
+              // соседнюю запись, она отдала бы её сообщения в чужой тред.
               content: thread ? (
-                <ChatThread threadId={thread.threadId} />
+                <EntityThreadTab key={`thread-${entity.id}`} entityId={entity.id} />
               ) : (
                 <p className="p-3 text-sm text-text-muted">Нет треда</p>
               ),
@@ -408,6 +413,67 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       </div>
     </>
   );
+}
+
+/**
+ * Вкладка «Тред» записи: СНАЧАЛА заводит тред, и только потом отдаёт его чату.
+ *
+ * Тред сущности ленив (§4.5): его id — формула (`uuidv5(owner:entity-thread:entity)`), и
+ * `entity.get` считает его, НЕ создавая строки. То есть у записи, тред которой ни разу не
+ * открывали, id есть, а треда нет, — и первое же сообщение отбивалось предпроверкой
+ * `ai.sendMessage` («тред не найден», NOT_FOUND), причём после того, как человек его набрал и
+ * отправил. Дефект предсуществующий, найден живым смоуком ADE-среза 1.
+ *
+ * Лечится там же, где лечит себя глобальный чат (ChatScreen): `chat.ensureThread` на
+ * монтировании. Разница только в аргументе (`{entityId}` против `{}`) и в моменте: вкладка
+ * «Тред» живой НЕ держится (keepMounted у неё нет), поэтому её монтирование и есть жест «человек
+ * открыл тред» — записи, куда не заходили, лишней мутации не платят.
+ *
+ * Гвард на ref, а не «эффект с пустыми зависимостями»: `<StrictMode>` (main.tsx) прогоняет
+ * эффекты монтирования ДВАЖДЫ. Про запись гварду знать незачем — вкладку монтируют с key по id
+ * записи (см. вызывающего), и на соседней записи это уже другой экземпляр.
+ *
+ * Чат поднимается ПОСЛЕ ответа, а не рядом с ним: до создания строки тред пуст в любом случае
+ * (`chat.listMessages` вернёт []), а вот отправка в него — та самая ошибка, ради которой всё это
+ * и написано. И threadId берётся из ОТВЕТА ensure, а не из `entity.get`: значения совпадают
+ * (формула одна), но правда о треде — у того, кто его завёл.
+ *
+ * ОТВЕТ БЕРЁТСЯ ИЗ ПРОМИСА (`mutateAsync` + своё состояние), а не из `ensure.data`, и это не
+ * вкусовщина — это обход поведения react-query под `<StrictMode>` (замерено, v5.101.2).
+ * StrictMode прогоняет эффекты монтирования дважды, отписка `useSyncExternalStore` между
+ * прогонами снимает наблюдателя с мутации (`MutationObserver.onUnsubscribe`), а обратно при
+ * повторной подписке он НЕ встаёт — парного `onSubscribe` в этой версии нет вовсе. Мутация
+ * доезжает, её ответ приходит, а `ensure.data` навсегда остаётся `undefined`: вкладка показывала
+ * бы скелетон вечно — в разработке, где StrictMode и включён (main.tsx). Промис же не зависит от
+ * наблюдателя ни в какой момент. ChatScreen читает `ensure.data` и этой болезнью болен — это
+ * отдельный (и только девелоперский) разговор, здесь он не лечится.
+ */
+function EntityThreadTab({ entityId }: { entityId: string }) {
+  const ensure = trpc.chat.ensureThread.useMutation();
+  const [ensured, setEnsured] = useState<{ threadId: string } | { failed: string } | null>(null);
+  const startedRef = useRef(false);
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+    void ensure.mutateAsync({ entityId }).then(
+      (r) => setEnsured({ threadId: r.threadId }),
+      // Отказ — вторым аргументом then, а не отдельным catch: своя ветка отказа обязана
+      // сработать РОВНО на отказе ensure, а не заодно на любой ошибке в setEnsured выше.
+      (e: unknown) => setEnsured({ failed: e instanceof Error ? e.message : String(e) }),
+    );
+  }, [entityId, ensure.mutateAsync]);
+
+  if (ensured === null) return <ThreadSkeleton />;
+  if ('failed' in ensured) {
+    // Молчать нельзя: без треда вкладка пуста, и вечный скелетон читался бы как «грузится»,
+    // хотя грузиться уже нечему.
+    return (
+      <p role="alert" className="p-3 text-sm text-danger">
+        Не удалось открыть тред записи. {ensured.failed}
+      </p>
+    );
+  }
+  return <ChatThread threadId={ensured.threadId} />;
 }
 
 /** Форма документа в кэше уже, чем `BodyDoc` (Record против JSONContent) — сводим приведением. */

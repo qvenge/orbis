@@ -1553,6 +1553,7 @@ test('вкладка «Тред» живой не держится: её зап�
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+    if (path === 'chat.ensureThread') return { threadId: 'th1' };
     if (path === 'chat.listMessages') return [];
     if (path === 'aspect.list') return [];
     return {};
@@ -1565,6 +1566,70 @@ test('вкладка «Тред» живой не держится: её зап�
   // выше означало бы лишь, что тред не спрашивает ничего и никогда.
   fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
   await waitFor(() => expect(threadCalls().length).toBeGreaterThan(0));
+});
+
+// --- тред сущности заводится ДО первого сообщения (дефект живого смоука) --------------------
+//
+// Тред сущности ленив (§4.5): `entity.get` считает его id формулой, НЕ создавая строки, — и
+// первое сообщение в неоткрытый тред отбивалось предпроверкой ai.sendMessage («тред не найден»,
+// NOT_FOUND) уже ПОСЛЕ того, как человек его набрал. Дефект предсуществующий; лечится тем же
+// приёмом, что в глобальном чате (ChatScreen), — ensureThread на монтировании.
+
+/** Тред detail-экрана: id из entity.get и id, который вернул ensure, НАМЕРЕННО разные. */
+const threadHandler: MockHandler = (path) => {
+  if (path === 'entity.get')
+    // `th-formula` — то, что detail знает БЕЗ создания строки. Ровно этот id и уходил в
+    // ai.sendMessage до починки; в ассертах ниже он служит отрицательным контролем.
+    return { entity, relations: [], thread: { threadId: 'th-formula', messages: [] } };
+  if (path === 'chat.ensureThread') return { threadId: 'th-ensured' };
+  if (path === 'chat.listMessages') return [];
+  if (path === 'aspect.list') return [];
+  return {};
+};
+
+test('открытие «Треда» заводит тред сущности — ровно один раз, и под StrictMode тоже', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, threadHandler, {
+    strict: true,
+  });
+  await screen.findByRole('tab', { name: 'Тред' });
+  const ensureCalls = () => calls.filter((c) => c.path === 'chat.ensureThread');
+  // Вкладку не открывали — тред не заводим: записи, куда не заходили, лишней мутации не платят.
+  expect(ensureCalls()).toEqual([]);
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
+  await screen.findByLabelText('Сообщение');
+  // Один вызов, а не два: StrictMode прогоняет эффекты монтирования дважды, и без гварда на
+  // ref каждое открытие вкладки стоило бы двух мутаций.
+  expect(ensureCalls()).toEqual([{ path: 'chat.ensureThread', input: { entityId: 'e1' } }]);
+});
+
+test('сообщение из «Треда» уходит в ЗАВЕДЁННЫЙ тред, а не в посчитанный формулой', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, threadHandler);
+  await screen.findByRole('tab', { name: 'Тред' });
+  fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
+
+  const field = await screen.findByLabelText('Сообщение');
+  await userEvent.type(field, 'привет');
+  fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+
+  await waitFor(() => expect(calls.some((c) => c.path === 'ai.sendMessage')).toBe(true));
+  const sent = calls.find((c) => c.path === 'ai.sendMessage');
+  expect(sent?.input).toMatchObject({ threadId: 'th-ensured', content: 'привет' });
+});
+
+test('тред завести не вышло — вкладка говорит об этом, а не показывает вечный скелетон', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'chat.ensureThread') throw trpcError('INTERNAL_SERVER_ERROR', 'база недоступна');
+    return threadHandler(path, undefined);
+  });
+  await screen.findByRole('tab', { name: 'Тред' });
+  fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
+
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('Не удалось открыть тред');
+  expect(alert).toHaveTextContent('база недоступна');
+  // И поля ввода нет: предлагать набрать текст, которому некуда уехать, — обман.
+  expect(screen.queryByLabelText('Сообщение')).toBeNull();
 });
 
 test('меню ⋮: «Править как markdown» показывает тело исходным текстом', async () => {
@@ -2948,10 +3013,12 @@ describe('ADE: прогон', () => {
     expect(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' })).toBeDisabled();
   });
 
-  test('откаченный (архивированный) прогон: бейдж архива, откат недоступен', async () => {
+  test('архивированный прогон: бейдж архива, откат недоступен', async () => {
     // Серия отмен возвращает аспект прогона к состоянию создания (`running`, шагов нет) и
     // архивирует запись. Без признака архива экран показывал бы такой прогон вечно идущим
     // с подсказкой «откатывать нечего» — то есть врал бы про уже сделанный откат.
+    // Но и бейдж, и подсказка говорят про АРХИВ, а не про откат: в архив прогон кладёт и
+    // «Архивировать» из меню ⋮, и такой прогон приходит сюда с целым аспектом и всеми шагами.
     const rolledBack = {
       ...RUN_ENTITY,
       archived: true,
@@ -2968,9 +3035,9 @@ describe('ADE: прогон', () => {
     };
     renderWithProviders(<DetailScreen entityId="r1" />, runHandler({ run: rolledBack }));
     const feed = await screen.findByTestId('run-feed');
-    expect(within(feed).getByText('в архиве (откачен)')).toBeInTheDocument();
+    expect(within(feed).getByText('в архиве')).toBeInTheDocument();
     expect(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' })).toBeDisabled();
-    expect(feed).toHaveTextContent('прогон откачен');
+    expect(feed).toHaveTextContent('Прогон в архиве — откат недоступен');
   });
 
   test('session_url чужой схемы — текстом, а не ссылкой', async () => {

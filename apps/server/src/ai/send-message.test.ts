@@ -6,7 +6,7 @@
 // ScriptedProvider ассертит ЗАПРОСЫ к модели: system НЕ в messages (контракт Task 7),
 // tool-результаты — каноническим сериализатором toolResultMessage (контракт Task 8).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { MAX_AGENT_STEPS, newId, processingMessageId } from '@orbis/shared';
+import { entityThreadId, MAX_AGENT_STEPS, newId, processingMessageId } from '@orbis/shared';
 import type { TRPCError } from '@trpc/server';
 import { eq } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -970,6 +970,33 @@ describe('ai.sendMessage: ошибка тула в цикле', () => {
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ kind: 'error_card', code: 'NOT_FOUND' });
     expect(r.assistantMessage.content).toBe('Не нашёл сущность.');
+  });
+});
+
+describe('ai.sendMessage: тред СУЩНОСТИ (дефект живого смоука ADE-среза 1)', () => {
+  test('до chat.ensureThread — NOT_FOUND, после — обычный ответ; провайдера дёргает только второй', async () => {
+    // Тред сущности ленив (§4.5): id считается формулой, строка не создаётся. Экран знал id
+    // (entity.get его отдаёт) и слал в него первое сообщение — предпроверка честно отбивала
+    // его NOT_FOUND. Семантика сервера верна и не менялась; тест держит ОБЕ её стороны, чтобы
+    // «починка» на клиенте не была однажды переложена сюда молчаливым созданием треда.
+    const user = freshUserId();
+    const entity = await seedEntity(user, { title: 'Носитель треда', tags: [] });
+    const threadId = entityThreadId(user, entity.id);
+    const scripted = new ScriptedProvider([endTurn('Готово')]);
+    const caller = callerWith(user, scripted);
+
+    const err = await trpcError(
+      caller.ai.sendMessage({ id: newId(), threadId, content: 'первое сообщение' }),
+    );
+    expect(err.code).toBe('NOT_FOUND');
+    // Отказ — ДО провайдера: несуществующий тред не стоит ни одного вызова модели.
+    expect(scripted.requests).toHaveLength(0);
+
+    expect(await caller.chat.ensureThread({ entityId: entity.id })).toEqual({ threadId });
+    const r = answered(
+      await caller.ai.sendMessage({ id: newId(), threadId, content: 'первое сообщение' }),
+    );
+    expect(r.assistantMessage.content).toBe('Готово');
   });
 });
 

@@ -209,22 +209,26 @@ export function RunFeed({ entity }: { entity: Entity }) {
   const alive = outcome === 'running';
 
   /**
-   * Прогон уже откачен. Серия отмен возвращает аспект к состоянию СОЗДАНИЯ (`outcome:
+   * Прогон в архиве — и это ВСЁ, что тут известно наверняка.
+   *
+   * Один путь сюда — сам откат: серия отмен возвращает аспект к состоянию СОЗДАНИЯ (`outcome:
    * running`, шагов нет) и архивирует запись — inverse'ом entity_create. Значит по аспекту
    * откаченный прогон неотличим от только что начатого, и единственный признак случившегося —
    * `archived`. Без него экран вечно показывал бы «идёт» с подсказкой «откатывать нечего»,
    * то есть врал бы про уже сделанный откат.
+   *
+   * Но путь не единственный: «Архивировать» есть в меню ⋮ ЛЮБОЙ записи, включая прогон, и
+   * архивированный руками прогон приходит сюда с целым аспектом и всеми шагами. Различить их
+   * нечем, поэтому и бейдж, и подсказка говорят ровно про архив, а не про откат.
    */
-  const rolledBack = entity.archived;
+  const inArchive = entity.archived;
 
   return (
     <section aria-label="Прогон агента" data-testid="run-feed" className="flex flex-col gap-4">
       <header className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-text-secondary">
-        {/* Исход архивированного прогона ничего не сообщает (см. rolledBack) — вместо него
+        {/* Исход архивированного прогона ничего не сообщает (см. inArchive) — вместо него
             бейдж о том, что с записью произошло на самом деле. */}
-        <Badge>
-          {rolledBack ? 'в архиве (откачен)' : (RUN_OUTCOME_LABELS[outcome] ?? outcome)}
-        </Badge>
+        <Badge>{inArchive ? 'в архиве' : (RUN_OUTCOME_LABELS[outcome] ?? outcome)}</Badge>
         {startedAt !== undefined && <span>начат {formatDate(startedAt, tz)}</span>}
         {finishedAt !== undefined && <span>· закончен {formatDate(finishedAt, tz)}</span>}
         {grantLabel !== undefined && (
@@ -313,15 +317,15 @@ export function RunFeed({ entity }: { entity: Entity }) {
           variant="outline"
           size="sm"
           className="self-start"
-          disabled={alive || rolledBack || rollback.isPending}
+          disabled={alive || inArchive || rollback.isPending}
           onClick={() => setConfirm(true)}
         >
           Откатить прогон в Orbis
         </Button>
-        {rolledBack ? (
-          <p className="text-text-muted text-xs">
-            Этот прогон откачен: его действия уже отменены, отменять больше нечего.
-          </p>
+        {inArchive ? (
+          // Нейтрально и намеренно: архив бывает и следом отката, и жестом владельца из меню ⋮
+          // (см. inArchive). «Прогон откачен» на втором пути было бы неправдой.
+          <p className="text-text-muted text-xs">Прогон в архиве — откат недоступен.</p>
         ) : (
           alive && (
             <p className="text-text-muted text-xs">
