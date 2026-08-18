@@ -8,11 +8,12 @@
 // JSON Schema уходит в определения тулов LLM/MCP. Парность двух представлений
 // (ключи и required) закреплена тестом registry.test.ts — рассинхрон падает в CI.
 
-import { RELATION_TYPES, SERVICE_ASPECT_IDS } from '@orbis/shared';
+import { PROPOSAL_ALLOWED_TOOLS, RELATION_TYPES, SERVICE_ASPECT_IDS } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { aspectDefinitions } from '../db/schema';
 import type { Tx } from '../db/with-identity';
+import { MAX_PROPOSAL_OPERATIONS } from '../routines/constants';
 
 export interface OrbisToolDef {
   name: string; // 'entity_query' | ... | 'attach_orbis_task' | ...
@@ -72,6 +73,26 @@ export const WORKER_SCOPE_TOOLS: ReadonlySet<string> = new Set([
 export const ROUTINE_BASE_TOOLS: ReadonlySet<string> = new Set(['orbis_checkpoint']);
 
 /**
+ * Глаголы круга исполнителя, закрытые рутине НАГЛУХО (V1.5) — даже вписанные владельцем в
+ * `allowed_tools`. Причины разные у двух пар, но обе про «этим распоряжается не модель»:
+ *
+ * - `orbis_run_step` и `orbis_finish` — бухгалтерия прогона. Шаги пишет раннер, и итог
+ *   прогона подводит тоже он (`closeRoutineRun`) — напрямую, минуя dispatch, в том числе
+ *   когда модель кончилась отказом или дедлайном. Модель, закрывшая прогон сама, обнулила
+ *   бы итог раннера: тот пришёл бы к уже терминальному прогону и получил CONFLICT на своём
+ *   же прогоне, а владелец увидел бы отчёт вместо настоящего исхода.
+ * - `orbis_my_queue` и `orbis_claim_task` — грантовые по устройству (у прогона рутины нет
+ *   ни очереди, ни тикета, agent-loop/verbs.ts): показывать их рутине значило бы обещать
+ *   ей отказ.
+ *
+ * `orbis_checkpoint` в список НЕ входит: он остаётся её единственным способом остановиться
+ * и спросить владельца (ROUTINE_BASE_TOOLS, рулинг В2).
+ */
+const ROUTINE_CLOSED_VERBS: ReadonlySet<string> = new Set(
+  AGENT_VERB_NAMES.filter((n) => !ROUTINE_BASE_TOOLS.has(n)),
+);
+
+/**
  * Рутина и её прогон в контексте вызова (V1.10) — вторая половина атрибуции рядом с
  * грантом (`GrantRef`): грант отвечает за внешнего исполнителя, это — за внутреннего.
  * `allowedTools` — белый список режима `act` из аспекта `orbis/routine.allowed_tools`,
@@ -93,6 +114,8 @@ export interface RoutineRef {
  * Чтения открыты все: рутина работает над графом владельца и обязана его видеть.
  * Мутации: база (`ROUTINE_BASE_TOOLS`) плюс — в `propose` РОВНО `orbis_propose`
  * (правку рутина не пишет, а предлагает), в `act` РОВНО белый список владельца.
+ * Сверх того из белого списка вычитаются `batch_execute` и круг внешнего исполнителя
+ * (`ROUTINE_CLOSED_VERBS`): их владелец не вправе открыть рутине даже намеренно.
  */
 export function routineToolAllowed(
   def: Pick<OrbisToolDef, 'name' | 'kind'>,
@@ -108,8 +131,10 @@ export function routineToolAllowed(
   // провозила бы внутрь что угодно.
   if (def.name === 'batch_execute') return false;
   if (ROUTINE_BASE_TOOLS.has(def.name)) return true;
-  // Имя строкой, а не ссылкой на деф: сам деф появится в реестре Задачей 8, а правило
-  // режима обязано существовать раньше — гейт fail-closed без него открыт настежь.
+  // Круг внешнего исполнителя рутине закрыт целиком, кроме чекпойнта (см. ROUTINE_CLOSED_VERBS)
+  if (ROUTINE_CLOSED_VERBS.has(def.name)) return false;
+  // Имя строкой, а не ссылкой на деф: правило доступа не должно зависеть от того, собран
+  // ли уже реестр (гейт зовётся и на дефах, подложенных тестом).
   return routine.mode === 'propose'
     ? def.name === 'orbis_propose'
     : routine.allowedTools.has(def.name);
@@ -186,6 +211,20 @@ export type Card =
       pattern: string;
       fromCategoryId: string;
       toCategoryId: string;
+    }
+  // V1.6: предложение рутины. Своя карточка, а не confirmation_card, потому что вопрос
+  // другой: не «подтвердить действие, которое я сейчас сделаю», а «принять предложение,
+  // сделанное ночью» — с объяснением прозой, ссылкой на рутину и её прогон и статусом,
+  // который приезжает с СЕРВЕРА (routine.proposal), а не считается клиентом по времени.
+  // Поля обязаны дословно совпадать с web-типом (chat/cards/types.ts) — union'ы сервера и
+  // web намеренно не общие.
+  | {
+      kind: 'proposal_card';
+      pendingId: string;
+      runId: string;
+      routineId: string;
+      summary: string;
+      explanation: string;
     }
   | { kind: 'error_card'; code: string; message: string };
 
@@ -490,6 +529,69 @@ const finishJsonSchema = {
 };
 
 /**
+ * Предложение рутины (V1.6) — вход `orbis_propose`, парный zod-схеме `proposeInput`
+ * (@orbis/shared/contracts/agent-loop; парность закреплена registry.test.ts).
+ *
+ * `input` операции описан как `type: 'object'` без свойств намеренно: форма зависит от
+ * тула операции, и повторять здесь четыре схемы значило бы завести им второе,
+ * расходящееся определение. Разбирает их строгими схемами сервер (routines/propose.ts) —
+ * то же разделение, что у `batch_execute`.
+ */
+const proposeJsonSchema = {
+  type: 'object',
+  properties: {
+    run_id: uuid,
+    explanation: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 4000,
+      description:
+        'зачем это нужно — прозой, для владельца: он читает объяснение, а не список операций',
+    },
+    operations: {
+      type: 'array',
+      minItems: 1,
+      maxItems: MAX_PROPOSAL_OPERATIONS,
+      items: {
+        type: 'object',
+        properties: {
+          tool: { type: 'string', enum: [...PROPOSAL_ALLOWED_TOOLS] },
+          input: { type: 'object' },
+        },
+        required: ['tool', 'input'],
+        additionalProperties: false,
+      },
+      description:
+        'правки, которые предлагается применить одной группой; предусловия сервер снимает сам — передавать их не нужно и нельзя',
+    },
+    id: verbCallId,
+  },
+  required: ['run_id', 'explanation', 'operations'],
+  additionalProperties: false,
+};
+
+/**
+ * Терминальный глагол режима `propose` (V1.6). В `AGENT_VERB_TOOLS` его нет и в
+ * `AGENT_VERB_NAMES` тоже: круг внешнего исполнителя он не расширяет — это единственный
+ * способ ВНУТРЕННЕГО исполнителя тронуть граф, и адресован он только прогону рутины.
+ */
+const PROPOSE_TOOL: OrbisToolDef = {
+  name: 'orbis_propose',
+  description:
+    'Предложить владельцу правки и закончить прогон. Это ЕДИНСТВЕННЫЙ способ что-то ' +
+    'изменить в режиме propose: сам ты не пишешь — предложение ложится в тред рутины и ждёт ' +
+    'кнопки владельца. В explanation объясни прозой, зачем это нужно: владелец читает ' +
+    'объяснение, а не список операций. Операции — entity_create, entity_update, ' +
+    'relation_create, relation_delete (до 50); предусловия («пока значение такое») сервер ' +
+    'снимает сам с текущих значений, передавать их не нужно. Рутины и назначения ' +
+    '(orbis/routine, orbis/assignment) предлагать нельзя — отказ. После вызова прогон ' +
+    'терминален: это последнее, что ты делаешь. Передавай id (uuid) для безопасного повтора.',
+  inputJsonSchema: proposeJsonSchema,
+  kind: 'mutate',
+  routineOnly: true,
+};
+
+/**
  * Глаголы исполнителя (§9.3, С7). `kind: 'mutate'` у всех пяти — включая orbis_my_queue,
  * который по смыслу читающий: он подметает брошенные прогоны по дороге (С6), то есть
  * пишет. Классификация §7.10 даёт им всем уровень execute (одиночная не-архивирующая
@@ -747,7 +849,7 @@ export function buildToolDefs(aspectRows: AspectToolRow[]): OrbisToolDef[] {
   const attachable = aspectRows.filter(
     (r) => !(SERVICE_ASPECT_IDS as readonly string[]).includes(r.id),
   );
-  return [...CORE_TOOLS, ...AGENT_VERB_TOOLS, ...attachable.map(attachToolDef)];
+  return [...CORE_TOOLS, ...AGENT_VERB_TOOLS, PROPOSE_TOOL, ...attachable.map(attachToolDef)];
 }
 
 /** Собирает реестр: core-тулы §9.2 + attach_<aspect> для каждого активного аспекта (§7.6). */

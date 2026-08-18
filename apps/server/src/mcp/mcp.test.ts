@@ -422,11 +422,11 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
 });
 
 // ---------------------------------------------------------------------------
-// tools/list: реестр §9.2 минус internalOnly
+// tools/list: реестр §9.2 минус internalOnly и routineOnly
 // ---------------------------------------------------------------------------
 
 describe('/mcp tools/list (§9.2)', () => {
-  test('состав = публичный реестр: 9 публичных core (с thread_post) + 5 глаголов + 12 attach_*, без internalOnly; имена/описания/схемы дословно', async () => {
+  test('состав = публичный реестр: 9 публичных core (с thread_post) + 5 глаголов + 12 attach_*, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
     const agent = await connectAgent(mainUrl());
     try {
       const { tools } = await agent.listTools();
@@ -475,12 +475,15 @@ describe('/mcp tools/list (§9.2)', () => {
         expect(names).toContain(`attach_orbis_${aspect}`);
       }
       expect(names).not.toContain('attach_orbis_agent_run');
+      // orbis_propose (V1.6) — routineOnly: внутреннему исполнителю рутины, не внешнему
+      expect(names).not.toContain('orbis_propose');
 
       // Дословная сверка с реестром (имя, описание, inputSchema) — адаптер ничего не
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
-      const publicDefs = defs.filter((d) => d.internalOnly !== true);
-      expect(tools).toHaveLength(publicDefs.length); // builtin-набор: 28 − 2 internalOnly = 26
+      const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
+      // builtin-набор: 29 − 2 internalOnly − 1 routineOnly = 26
+      expect(tools).toHaveLength(publicDefs.length);
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);
         expect(tool).toBeDefined();

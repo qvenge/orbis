@@ -21,6 +21,7 @@ import {
   entityUpdateInput,
   newId,
   parseQuery,
+  proposeInput,
   type QueryAst,
   relationCreateInput,
   relationDeleteInput,
@@ -68,6 +69,7 @@ import {
   QueryCompileError,
 } from '../query/compile';
 import { queryWithMaterialization } from '../recurring/with-materialization';
+import { runPropose } from '../routines/propose';
 import { toWireEntityFromSql } from '../wire';
 import {
   AGENT_VERB_NAMES,
@@ -312,10 +314,20 @@ export async function dispatchTool(
           { tool: pre.def.name, level },
         );
       }
-      // Субъект прогона (V1.5): грант — внешний исполнитель, рутина — внутренний. Грант
-      // первым: он же и поверхность вызова (MCP), и оба ключа сразу означали бы вызов,
-      // собранный не тем, кто его шлёт. Субъект здесь заведомо есть — гейт agentOnly выше
-      // уже отбил вызов без обоих; проверка — вторая линия, не логика.
+      // Субъект прогона (V1.5): грант — внешний исполнитель, рутина — внутренний. Ровно
+      // ОДИН из двух: грант приходит с MCP, рутина — из фонового прогона, и вместе они
+      // означают вызов, собранный не тем, кто его шлёт. Молчаливое «грант побеждает»
+      // писало бы шаги внешнего исполнителя в прогон рутины (или наоборот) — отказ
+      // fail-closed дешевле разбора такого журнала.
+      if (ctx.grant !== undefined && ctx.routine !== undefined) {
+        return errorResult(
+          'VALIDATION',
+          `контекст вызова собран неверно: и грант, и рутина — у глагола «${pre.def.name}» ровно один субъект (V1.5)`,
+          { tool: pre.def.name },
+        );
+      }
+      // Субъект здесь заведомо есть — гейт agentOnly выше уже отбил вызов без обоих;
+      // проверка — вторая линия, не логика.
       const subject: RunSubject | null =
         ctx.grant !== undefined
           ? { kind: 'grant', grant: ctx.grant }
@@ -340,6 +352,13 @@ export async function dispatchTool(
         pre.def.name,
         parsed,
       );
+    }
+    if (pre.def.name === 'orbis_propose') {
+      // Ветка стоит ДО runMutation, а не внутри него: предложение не проходит ни политику
+      // §7.10, ни инвариант 5 (V1.10) — оно и есть тот САНКЦИОНИРОВАННЫЙ способ отложить
+      // правку, ради которого инвариант 5 запрещает все остальные. Гейты доступа (реестр,
+      // routineGate) отработали выше; envelope разбирается здесь, как у глаголов.
+      return await runPropose(ctx, parseEnvelope(proposeInput, input, pre.def.name));
     }
     return await runMutation(ctx, pre.def, input, pre.keyFieldsByAspect, pre.execToolByName);
   } catch (e) {

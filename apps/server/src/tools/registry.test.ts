@@ -17,6 +17,7 @@ import {
   finishInput,
   myQueueInput,
   parseQuery,
+  proposeInput,
   relationCreateInput,
   relationDeleteInput,
   runStepInput,
@@ -115,14 +116,16 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.filter(
 ).map((id) => `attach_${id.replaceAll('/', '_').replaceAll('-', '_')}`);
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 11 core (с thread_post) + 5 глаголов + 12 attach_* = 28', async () => {
+  test('builtin-реестр (userB без кастомных): 11 core (с thread_post) + 5 глаголов + orbis_propose + 12 attach_* = 29', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
     expect(names).toContain('thread_post');
     for (const name of AGENT_VERB_NAMES) expect(names).toContain(name);
+    // orbis_propose — не глагол исполнителя (в AGENT_VERB_NAMES его нет), а тул рутины
+    expect(names).toContain('orbis_propose');
     for (const name of BUILTIN_ATTACH_NAMES) expect(names).toContain(name);
-    expect(defs.length).toBe(28);
+    expect(defs.length).toBe(29);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
   });
@@ -287,7 +290,7 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(def.kind).toBe('mutate');
     expect(def.description).toBe('Пиши часы сна числом.');
     expect((def.inputJsonSchema.properties as Record<string, unknown>).data).toEqual(CUSTOM_SCHEMA);
-    expect(defsA.length).toBe(29);
+    expect(defsA.length).toBe(30);
 
     const defsB = await registryFor(userB);
     expect(defsB.some((d) => d.name === 'attach_user_sleep_log')).toBe(false);
@@ -315,6 +318,8 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
     orbis_run_step: runStepInput,
     orbis_checkpoint: checkpointInput,
     orbis_finish: finishInput,
+    // Предложение рутины (V1.6) — тот же контракт парности, что у глаголов
+    orbis_propose: proposeInput,
   };
 
   test('каждый ключ zod-схемы есть в JSON Schema и наоборот; required = не-optional ключи zod', async () => {
@@ -383,18 +388,7 @@ describe('routineToolDefs: реестр прогона рутины (V1.10, ру
   });
 
   test('propose: все чтения + orbis_checkpoint + orbis_propose; ни одной мутации сверх', async () => {
-    // orbis_propose дефом появится в Задаче 8 — правило обязано быть готово раньше,
-    // иначе реестр раннера в день его появления молча оставит рутину без предложения
-    const defs: OrbisToolDef[] = [
-      ...(await registryFor(userB)),
-      {
-        name: 'orbis_propose',
-        description: 'предложение',
-        inputJsonSchema: {},
-        kind: 'mutate',
-        routineOnly: true,
-      },
-    ];
+    const defs: OrbisToolDef[] = await registryFor(userB);
     const names = routineToolDefs(defs, ref('propose')).map((d) => d.name);
 
     for (const d of defs.filter((x) => x.kind === 'read')) expect(names).toContain(d.name);
@@ -436,6 +430,23 @@ describe('routineToolDefs: реестр прогона рутины (V1.10, ру
     expect(
       routineToolDefs(defs, ref('act', ['batch_execute', 'entity_update'])).map((d) => d.name),
     ).toContain('entity_update');
+  });
+
+  test('круг внешнего исполнителя белым списком не открывается: act с [orbis_finish, entity_update] → без orbis_finish', async () => {
+    // Шаги пишет и итог подводит РАННЕР (closeRoutineRun) напрямую, минуя dispatch:
+    // модель, закрывшая прогон сама, обнулила бы его итог. Очередь и захват тикета —
+    // грантовые по устройству, у прогона рутины нет ни того, ни другого (V1.5).
+    const defs = await registryFor(userB);
+    const names = routineToolDefs(defs, ref('act', ['orbis_finish', 'entity_update'])).map(
+      (d) => d.name,
+    );
+    expect(names).not.toContain('orbis_finish');
+    expect(names).toContain('entity_update');
+    for (const closed of ['orbis_run_step', 'orbis_my_queue', 'orbis_claim_task']) {
+      expect(routineToolDefs(defs, ref('act', [closed])).map((d) => d.name)).not.toContain(closed);
+    }
+    // Чекпойнт — исключение из того же круга: он остаётся рутине всегда (рулинг В2)
+    expect(routineToolDefs(defs, ref('act')).map((d) => d.name)).toContain('orbis_checkpoint');
   });
 
   test('act с пустым allowed_tools: рутина остаётся с чтениями и чекпойнтом', async () => {

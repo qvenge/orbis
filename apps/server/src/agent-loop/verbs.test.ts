@@ -17,7 +17,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import { type AnyRecord, agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { sweepStaleRuns } from './sweep';
-import { closeRoutineRun, type VerbCtx } from './verbs';
+import { closeRoutineRun, runAgentVerb, type VerbCtx } from './verbs';
 
 requireEnv();
 
@@ -1119,17 +1119,20 @@ describe('субъект прогона — рутина (V1.5)', () => {
     expect(action?.actor_grant_id).toBeUndefined();
   });
 
-  test('orbis_run_step от рутинного прогона пишет шаг с CAS-счётчиком; прогон другой рутины → CONFLICT «другому субъекту»', async () => {
+  test('orbis_run_step рутинного прогона (вызовом раннера) пишет шаг с CAS-счётчиком; прогон другой рутины → CONFLICT «другому субъекту»', async () => {
+    // Шаг рутинного прогона идёт НЕ через dispatchTool: `orbis_run_step` закрыт рутине в
+    // реестре (V1.5, ROUTINE_CLOSED_VERBS) — бухгалтерию прогона ведёт раннер, а не
+    // модель. Раннер зовёт глагол напрямую, этим путём и проверяем.
     const routineId = await seedRoutine(owner, { title: 'Рутина шагов' });
     const { runId } = await seedRoutineRun(owner, { routineId });
-    const ctx = fromRun(routineId, runId, 'act', ['orbis_run_step'], { clock: () => T1 });
+    const ctx = verbCtx(routineId, () => T1);
 
     const first = okResult<RunStepResult>(
-      await dispatchTool(ctx, 'orbis_run_step', { run_id: runId, summary: 'Прочитал задачи дня' }),
+      await runAgentVerb(ctx, 'orbis_run_step', { run_id: runId, summary: 'Прочитал задачи дня' }),
     );
     expect(first.step_count).toBe(1);
     const second = okResult<RunStepResult>(
-      await dispatchTool(ctx, 'orbis_run_step', { run_id: runId, summary: 'Собрал предложение' }),
+      await runAgentVerb(ctx, 'orbis_run_step', { run_id: runId, summary: 'Собрал предложение' }),
     );
     expect(second.step_count).toBe(2);
     const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
@@ -1139,19 +1142,24 @@ describe('субъект прогона — рутина (V1.5)', () => {
 
     // Чужой субъект — не «не найдено», а конфликт: прогон есть, но он не этой рутины
     const otherId = await seedRoutine(owner, { title: 'Соседняя рутина' });
-    const other = await seedRoutineRun(owner, { routineId: otherId });
     const e = errorOf(
-      await dispatchTool(
-        fromRun(otherId, other.runId, 'act', ['orbis_run_step']),
-        'orbis_run_step',
-        {
-          run_id: runId,
-          summary: 'шаг в чужой прогон',
-        },
-      ),
+      await runAgentVerb(verbCtx(otherId), 'orbis_run_step', {
+        run_id: runId,
+        summary: 'шаг в чужой прогон',
+      }),
     );
     expect(e.code).toBe('CONFLICT');
     expect(e.message).toContain('другому субъекту');
+    expect(((await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord).step_count).toBe(2);
+
+    // Модели тот же глагол закрыт — даже вписанный владельцем в allowed_tools (V1.5)
+    const denied = errorOf(
+      await dispatchTool(fromRun(routineId, runId, 'act', ['orbis_run_step']), 'orbis_run_step', {
+        run_id: runId,
+        summary: 'шаг рукой модели',
+      }),
+    );
+    expect(denied.code).toBe('FORBIDDEN_LEVEL');
     expect(((await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord).step_count).toBe(2);
   });
 
@@ -1198,17 +1206,24 @@ describe('субъект прогона — рутина (V1.5)', () => {
     expect((await actionsOf(owner)).filter((a) => a.id === callId)).toHaveLength(1);
   });
 
-  test('orbis_my_queue / orbis_claim_task от рутины → VALIDATION: очередь и тикеты — только для гранта', async () => {
+  test('orbis_my_queue / orbis_claim_task рутине закрыты дважды: гейт режима (FORBIDDEN_LEVEL) и сам глагол (VALIDATION)', async () => {
     const routineId = await seedRoutine(owner, { title: 'Рутина без очереди' });
     const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-17T10:00' });
-    // Владелец мог вписать эти имена в allowed_tools — гейт режима их пропустит, и
-    // отказать обязан сам глагол (вторая линия, fail-closed)
+    // Владелец мог вписать эти имена в allowed_tools — реестр рутины их всё равно не
+    // отдаёт (V1.5): у прогона рутины нет ни очереди, ни тикета
     const ctx = fromRun(routineId, runId, 'act', ['orbis_my_queue', 'orbis_claim_task']);
 
-    const queue = errorOf(await dispatchTool(ctx, 'orbis_my_queue', {}));
+    expect(errorOf(await dispatchTool(ctx, 'orbis_my_queue', {})).code).toBe('FORBIDDEN_LEVEL');
+    expect(errorOf(await dispatchTool(ctx, 'orbis_claim_task', { ticket_id: newId() })).code).toBe(
+      'FORBIDDEN_LEVEL',
+    );
+
+    // Второй рубеж — сам глагол: он отказывает и внутреннему вызову раннера (fail-closed)
+    const verbs = verbCtx(routineId);
+    const queue = errorOf(await runAgentVerb(verbs, 'orbis_my_queue', {}));
     expect(queue.code).toBe('VALIDATION');
     expect(queue.message).toContain('только для гранта');
-    const claim = errorOf(await dispatchTool(ctx, 'orbis_claim_task', { ticket_id: newId() }));
+    const claim = errorOf(await runAgentVerb(verbs, 'orbis_claim_task', { ticket_id: newId() }));
     expect(claim.code).toBe('VALIDATION');
     expect(claim.message).toContain('только для гранта');
   });

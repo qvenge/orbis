@@ -1381,11 +1381,12 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     if (checkpoint.status === 'error')
       expect(checkpoint.error.message).toContain('прогон не найден');
 
-    // orbis_propose: дефа в реестре ещё нет (Задача 8) — правило проверяем на самом гейте,
-    // который dispatchTool зовёт для КАЖДОГО вызова (routineGate).
-    expect(
-      routineGate({ name: 'orbis_propose', kind: 'mutate', routineOnly: true }, ctx),
-    ).toBeNull();
+    // orbis_propose — единственная мутация, открытая режиму propose: гейт его пропускает
+    // (поведение самого глагола закрыто routines/propose.test.ts)
+    const defs = await withIdentity(db, userA, (tx) => buildToolRegistry(tx));
+    const propose = defs.find((d) => d.name === 'orbis_propose');
+    expect(propose).toBeDefined();
+    if (propose !== undefined) expect(routineGate(propose, ctx)).toBeNull();
   });
 
   test('act с allowed_tools [entity_update]: entity_update исполняется, entity_create и attach_orbis_task → FORBIDDEN_LEVEL', async () => {
@@ -1447,20 +1448,44 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
   });
 
   test('routineOnly-тул от chat|mcp → VALIDATION; обычный тул гейт не трогает', async () => {
-    // Деф orbis_propose появится в реестре Задачей 8 — там же его отсутствие в реестре
-    // чата и в MCP tools/list проверяется живьём. Здесь закрыто само правило: гейт,
-    // fail-closed которого никто не проверил, — это гейт, которого нет.
-    const propose = { name: 'orbis_propose', kind: 'mutate' as const, routineOnly: true };
+    const defs = await withIdentity(db, userA, (tx) => buildToolRegistry(tx));
+    // Единственный routineOnly-деф продового реестра — orbis_propose (V1.6). Правило
+    // проверяется на нём же, а не на подложенном объекте: гейт, отделённый от реестра,
+    // однажды разойдётся с ним молча.
+    expect(defs.filter((d) => d.routineOnly === true).map((d) => d.name)).toEqual([
+      'orbis_propose',
+    ]);
+    const propose = defs.find((d) => d.name === 'orbis_propose');
+    expect(propose).toBeDefined();
+    if (propose === undefined) return;
     for (const source of ['chat', 'mcp'] as const) {
       const denial = routineGate(propose, { source });
       expect(denial?.status).toBe('error');
       if (denial?.status === 'error') expect(denial.error.code).toBe('VALIDATION');
     }
     expect(routineGate({ name: 'entity_update', kind: 'mutate' }, { source: 'chat' })).toBeNull();
-    // В сегодняшнем продовом реестре routineOnly-дефов ещё нет — фильтры чата и MCP
-    // отсекать пока нечего, и это честно зафиксировано, а не выдано за покрытие
-    const defs = await withIdentity(db, userA, (tx) => buildToolRegistry(tx));
-    expect(defs.filter((d) => d.routineOnly === true)).toEqual([]);
+  });
+
+  test('и грант, и рутина сразу → VALIDATION: у глагола ровно один субъект (V1.5)', async () => {
+    // Fail-closed на СБОРКЕ контекста: молчаливое «грант побеждает» писало бы шаги
+    // внешнего исполнителя в прогон рутины, и разобрать такой журнал было бы нечем.
+    const grantToken = await issuePatGrant(db, {
+      ownerId: userA,
+      label: 'двойной субъект',
+      scope: 'full',
+    });
+    const identity = await verifyBearer(db, grantToken);
+    expect(identity).not.toBeNull();
+    if (identity === null) return;
+    const both = rt('act', ['orbis_run_step'], {
+      grant: { id: identity.grantId, scope: 'full', label: 'двойной субъект' },
+    });
+    const r = await dispatchTool(both, 'orbis_checkpoint', {
+      run_id: newId(),
+      question: 'Кому этот прогон?',
+    });
+    expectError(r, 'VALIDATION');
+    if (r.status === 'error') expect(r.error.message).toContain('и грант, и рутина');
   });
 
   /** Рутина в минимальной валидной форме (V1.1) — автономии не выдаёт (mode propose). */

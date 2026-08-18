@@ -185,3 +185,64 @@ export interface FinishResult {
   ticket_status?: 'waiting' | 'done';
   action_id: string;
 }
+
+// ---------------------------------------------------------------------------
+// Предложение рутины (V1.6, V1.7) — терминальный глагол режима `propose`
+// ---------------------------------------------------------------------------
+
+/**
+ * Что рутина вправе ПРЕДЛОЖИТЬ (V1.6). Форма сужена относительно реестра сознательно.
+ *
+ * `attach_*` здесь нет, хотя аспект он вешает тот же, что `entity_update`: имя attach-тула
+ * зависит от реестра аспектов владельца (§7.6), то есть форма предложения зависела бы от
+ * содержимого его базы — а предложение лежит в треде до решения владельца и обязано
+ * пережить любую правку реестра. Всё то же выражается `entity_update` с `aspects`.
+ *
+ * `batch_execute` нет по той же причине, по какой он закрыт рутине вовсе (registry.ts):
+ * список операций у предложения СВОЙ, и обёртка провозила бы внутрь непроверенное.
+ * `thread_post` и глаголы — не правки графа: их нечего откатывать и не о чем спрашивать.
+ */
+export const PROPOSAL_ALLOWED_TOOLS = [
+  'entity_create',
+  'entity_update',
+  'relation_create',
+  'relation_delete',
+] as const;
+export type ProposalAllowedTool = (typeof PROPOSAL_ALLOWED_TOOLS)[number];
+
+/**
+ * Одна операция предложения. `input` здесь намеренно `unknown`: его разбирает СТРОГАЯ
+ * схема своего тула уже на сервере (routines/propose.ts) — валидировать его дважды и
+ * по-разному значило бы завести второй контракт тула, который разъедется с первым.
+ */
+export const proposeOperation = z
+  .object({ tool: z.enum(PROPOSAL_ALLOWED_TOOLS), input: z.unknown() })
+  .strict();
+
+/**
+ * Вход `orbis_propose` (V1.6). `explanation` ОБЯЗАТЕЛЕН и не имеет умолчания: предложение
+ * читает владелец, и без прозы «зачем» список операций — это просьба довериться молча.
+ * Потолок 50 операций — тот же, что у раннера (server/routines/constants.ts).
+ */
+export const proposeInput = z
+  .object({
+    run_id: z.string().uuid(),
+    explanation: z.string().min(1).max(4000),
+    operations: z.array(proposeOperation).min(1).max(50),
+    id: z.string().uuid().optional(), // ключ идемпотентности вызова (= batchId §7.8)
+  })
+  .strict();
+
+export type ProposeOperation = z.infer<typeof proposeOperation>;
+export type ProposeInput = z.infer<typeof proposeInput>;
+
+/**
+ * Ответ `orbis_propose`: прогон закрыт, предложение лежит в треде рутины и ждёт владельца.
+ * `replayed` — повтор вызова с тем же `id`: второго предложения не создано (§7.8).
+ */
+export interface ProposeResult {
+  run_id: string;
+  pending_id: string;
+  operations: number;
+  replayed: boolean;
+}
