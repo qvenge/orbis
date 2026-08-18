@@ -1,9 +1,11 @@
 import { buildAppPath } from '@orbis/shared';
 import { Archive, ArchiveRestore, Code, EllipsisVertical, Link2, Pin } from 'lucide-react';
-import { lazy, Suspense, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
+import { invalidateGraph } from '../../lib/invalidate';
+import { useNav } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { DropdownMenu } from '../../ui/DropdownMenu';
@@ -19,16 +21,23 @@ import { SaveIndicator } from '../entity-editor/SaveIndicator';
 import { sameDoc } from '../entity-editor/strip-ids';
 import { type BodyDoc, type BodySave, useBodySave } from '../entity-editor/useBodySave';
 import { AspectCards } from './AspectCards';
+import { AssignmentCard } from './AssignmentCard';
 import { Backlinks } from './Backlinks';
 import { Blocks } from './Blocks';
 import { GoalProgress } from './GoalProgress';
 import { NativeRow } from './NativeRow';
+import { RunsList } from './RunsList';
 import { Subtasks } from './Subtasks';
+import { TicketWaitingBlock } from './TicketWaitingBlock';
 import { useEntityDetail } from './useEntityDetail';
+import { useTicketRuns } from './useTicketRuns';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 
 const GOAL = 'orbis/goal';
+const TASK = 'orbis/task';
+const ASSIGNMENT = 'orbis/assignment';
+const PROJECT = 'orbis/project';
 
 /**
  * Тумблер markdown — ТОЛЬКО ленивым импортом.
@@ -89,6 +98,48 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     setAsMarkdown(false);
   }
   const { show } = useToast();
+  const push = useNav((s) => s.push);
+  const activeTab = useNav((s) => s.activeTab);
+
+  /**
+   * ADE-срез 1 (С10). Тикет — задача С НАЗНАЧЕНИЕМ, а не всякая задача: чекпойнт-блок и история
+   * прогонов есть только у неё. Карточка назначения — у ЛЮБОЙ задачи (см. `detailsTab`): её и
+   * ставит владелец, а до этого тикета ещё нет.
+   *
+   * Читаем `get.data` ДО ветки скелетона: хуки обязаны идти безусловно, а «данных ещё нет»
+   * выражено флагом `enabled` — запрос уйдёт, когда станет известно, о чём спрашивать.
+   */
+  const loaded = get.data?.entity;
+  const isTicket =
+    loaded !== undefined &&
+    loaded.aspects[TASK] !== undefined &&
+    loaded.aspects[ASSIGNMENT] !== undefined;
+  const { runs, lastRun } = useTicketRuns(entityId, isTicket);
+
+  /**
+   * Подметание брошенных прогонов (С6) — на открытии тикета или проекта, ОДИН раз.
+   *
+   * Инвариант 6 («тикет не висит in_progress навсегда») не должен зависеть от того, что
+   * какой-то агент однажды придёт за очередью: владелец, открывший экран, чинит это сам, ничего
+   * об этом не зная. Отсюда и место — экран, а не фон.
+   *
+   * Гвард на ref, а не «эффект с пустыми зависимостями»: `<StrictMode>` (main.tsx) прогоняет
+   * эффекты монтирования ДВАЖДЫ, и без него каждое открытие стоило бы двух мутаций. Ключ гварда —
+   * id записи: экран монтируется БЕЗ key (router.tsx), и переход тикет→тикет внутри вкладки
+   * обязан подмести заново.
+   */
+  const sweepTarget = isTicket || (loaded !== undefined && loaded.aspects[PROJECT] !== undefined);
+  const sweep = trpc.agentRun.sweep.useMutation({
+    // Подметание МЕНЯЕТ граф (тикеты возвращаются в planned, прогоны становятся abandoned) —
+    // экран обязан показать результат сразу, а не через минуту протухания списков.
+    onSuccess: () => invalidateGraph(utils),
+  });
+  const sweptForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!sweepTarget || sweptForRef.current === entityId) return;
+    sweptForRef.current = entityId;
+    sweep.mutate({});
+  }, [entityId, sweepTarget, sweep.mutate]);
 
   async function copyLink() {
     // Форму пути знает ТОЛЬКО buildAppPath (B1): собранная здесь руками строка разъехалась
@@ -168,6 +219,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           unit={typeof goalUnit === 'string' ? goalUnit : undefined}
         />
       )}
+      {/* Тикет остановился и ждёт человека (С10, приёмка 7–8): вопрос исполнителя, итог работы
+          или разбор оборванного прогона — с полем ответа прямо здесь. Место — на «Сущности», а не
+          в «Деталях»: это не свойство записи, а то, ради чего её открыли. */}
+      {isTicket && <TicketWaitingBlock entity={entity} lastRun={lastRun} />}
       {/* Тело — РАЗМОНТИРУЕМОЕ по key. То же правило, что несла прежняя секция тела, и по той
           же причине, только цена ошибки выросла: роутер монтирует DetailScreen БЕЗ key
           (router.tsx), переход entity→entity меняет лишь проп, — а `useBodySave` при смене
@@ -192,10 +247,23 @@ export function DetailScreen({ entityId }: { entityId: string }) {
 
   const detailsTab = (
     <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
+      {/* Назначение — у ЛЮБОЙ задачи, а не только у тикета: исполнителя ставит владелец, и
+          именно этим жестом задача становится тикетом. */}
+      {entity.aspects[TASK] !== undefined && <AssignmentCard entity={entity} />}
       <AspectCards entity={entity} />
       {/* Секции 6–8 §3.5: связи уже приехали этим же entity.get — своих запросов графа
           секции не заводят. */}
       <Subtasks parentId={entity.id} relations={relations ?? []} />
+      {/* История прогонов — своей секцией, а не строками общих связей: у прогона есть исход,
+          длина и исполнитель, и читают их таблицей, а не списком заголовков. Открытие — тем же
+          push поверх стека активной вкладки, что и у подзадач. */}
+      {isTicket && (
+        <RunsList
+          ticketId={entity.id}
+          runs={runs}
+          onOpen={(id) => push(activeTab, { kind: 'entity', id })}
+        />
+      )}
       <Blocks entityId={entity.id} relations={relations ?? []} />
       <Backlinks items={backlinks ?? []} truncated={backlinksTruncated === true} />
     </div>

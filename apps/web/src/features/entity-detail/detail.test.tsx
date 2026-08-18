@@ -5,7 +5,7 @@ import { onlineManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { afterEach, beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
 import {
   installCrashTrap,
@@ -2205,4 +2205,277 @@ test('смена записи размонтирует тело и досыла�
   // И новая запись показывает СВОЁ тело в редакторе, а не унаследованное.
   await openEditor();
   await expectEditorText('тело второй');
+});
+
+// ─── ADE-срез 1: экран тикета (Задача 14) ────────────────────────────────────────────────
+//
+// Тикет — задача С НАЗНАЧЕНИЕМ: чекпойнт-блок и список прогонов показываются только у неё.
+// Карточка назначения — у ЛЮБОЙ задачи: исполнителя ставит владелец, и до него тикета ещё нет.
+
+const GRANT_ID = '9b1c1d2e-3f40-4a51-8b62-7c8d9e0f1a2b';
+
+/** Полная wire-форма гранта (oauth.listGrants): `scope` в ней есть с Задачи 8. */
+const GRANT = {
+  id: GRANT_ID,
+  kind: 'oauth',
+  label: 'worker-1',
+  connected: true,
+  createdAt: '2026-08-16T09:00:00.000Z',
+  lastUsedAt: '2026-08-17T09:00:00.000Z',
+  revokedAt: null,
+  scope: 'worker',
+};
+
+/** Прогон приезжает из entity.query — без bodyDoc и связей: запрос списка их не просит. */
+const RUN = {
+  id: 'r1',
+  ownerId: 'u',
+  title: 'Прогон: Починить парсер',
+  emoji: null,
+  body: '',
+  bodyRefs: [],
+  tags: [],
+  meta: {},
+  aspects: {
+    'orbis/agent-run': {
+      grant_id: GRANT_ID,
+      outcome: 'checkpoint',
+      started_at: '2026-08-17T10:00:00.000Z',
+      last_step_at: '2026-08-17T10:05:00.000Z',
+      step_count: 3,
+      steps: [],
+      checkpoint: { question: 'Какую БД брать?', asked_at: '2026-08-17T10:05:00.000Z' },
+    },
+  },
+  createdAt: '2026-08-17T10:00:00.000Z',
+  updatedAt: '2026-08-17T10:05:00.000Z',
+  archived: false,
+};
+
+/** `may_close` в аспекте НЕТ — отсутствие и есть false (С8): это и проверяет чекбокс. */
+const TICKET = {
+  ...entity,
+  id: 't1',
+  title: 'Починить парсер',
+  aspects: {
+    'orbis/task': { status: 'waiting', waiting_for: 'Какую БД брать?' },
+    'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID },
+  },
+};
+
+function adeHandler(opts: { entity?: unknown; runs?: unknown[] } = {}): MockHandler {
+  const target = opts.entity ?? TICKET;
+  return (path) => {
+    if (path === 'entity.get') return { entity: target, relations: [], thread: null };
+    if (path === 'entity.query') return opts.runs ?? [RUN];
+    if (path === 'oauth.listGrants') return [GRANT];
+    if (path === 'aspect.list') return [];
+    if (path === 'agentRun.sweep') return { swept: 0 };
+    if (path === 'agentRun.answerCheckpoint') return { ticket: target, run: RUN };
+    if (path === 'entity.update') return target;
+    return {};
+  };
+}
+
+/**
+ * Тикет, смонтированный НА ТЁПЛЫЙ КЭШ: запись уже прочитана, и экран получает её ПЕРВЫМ же
+ * рендером. Обычный сюжет — возврат на тикет, который только что открывали.
+ *
+ * Обёртка нужна ровно ради двойного прогона эффектов. Смонтируй `DetailScreen` на холодную —
+ * и первый (двойной) прогон придётся на экран БЕЗ данных, где подметать нечего: тикет ещё
+ * неизвестен. Эффект уйдёт один раз просто потому, что второй раз ему нечего было делать, — то
+ * есть проверка была бы зелена и у экрана вовсе без гварда. Замерено мутацией: снятый гвард
+ * при холодном монтировании тест переживает.
+ */
+function TicketOnWarmCache() {
+  const q = trpc.entity.get.useQuery(detailGetInput('t1'));
+  return q.data ? <DetailScreen entityId="t1" /> : null;
+}
+
+describe('ADE: тикет', () => {
+  test('таб «Сущность»: виден вопрос чекпойнта и кнопка; ввод ответа → agentRun.answerCheckpoint с ticketId/runId/answer (приёмка 7–8)', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
+    const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
+    expect(await within(panel).findByText('Какую БД брать?')).toBeInTheDocument();
+    // Заголовок — по исходу последнего прогона: у checkpoint это вопрос, а не итог.
+    expect(within(panel).getByText('Вопрос исполнителя')).toBeInTheDocument();
+    // …и закрывать тут нечего: «Закрыть тикет» есть только у сделанной работы (см. ниже).
+    expect(within(panel).queryByRole('button', { name: 'Закрыть тикет' })).toBeNull();
+
+    // Считаем чтения ДО жеста: тикет уже перечитывался (подметание при открытии зовёт
+    // invalidateGraph), и без отсечки проверка инвалидации ниже была бы зелена сама собой.
+    const readsBefore = calls.filter((c) => c.path === 'entity.get').length;
+    await userEvent.type(screen.getByLabelText('Ответ'), 'Postgres');
+    await userEvent.click(screen.getByRole('button', { name: 'Ответить и вернуть в работу' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'agentRun.answerCheckpoint')?.input).toEqual({
+        ticketId: 't1',
+        runId: 'r1',
+        answer: 'Postgres',
+      }),
+    );
+    // Ответ двигает и тикет (waiting → planned), и прогон: граф перечитывается целиком.
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(readsBefore),
+    );
+  });
+
+  test('таб «Детали»: карточка назначения показывает грант «worker-1» и may_close; смена may_close → entity.update с aspects.orbis/assignment', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
+    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
+    const card = within(details).getByTestId('assignment-card');
+    // Грант показан ПОДПИСЬЮ, а не идентификатором: отзывать и переназначать владелец
+    // будет по ней (та же конвенция, что в «Агентах» настроек).
+    expect(await within(card).findByText('worker-1')).toBeInTheDocument();
+
+    const mayClose = within(card).getByRole('checkbox', { name: 'Может закрывать сам' });
+    expect(mayClose).not.toBeChecked(); // поля в аспекте нет — значит false (С8)
+    await userEvent.click(mayClose);
+    await userEvent.click(within(card).getByRole('button', { name: 'Сохранить' }));
+
+    await waitFor(() => {
+      const input = calls.find((c) => c.path === 'entity.update')?.input as {
+        id: string;
+        aspects: Record<string, Record<string, unknown>>;
+      };
+      expect(input.id).toBe('t1');
+      expect(input.aspects['orbis/assignment']).toEqual({
+        executor: 'agent',
+        grant_id: GRANT_ID,
+        may_close: true,
+      });
+    });
+
+    // Второй карточки того же аспекта в общем списке свойств НЕТ: у назначения свой контрол,
+    // и сырой инпут рядом правил бы то же поле мимо инварианта исполнителя.
+    expect(within(details).queryByTestId('aspect-orbis/assignment')).toBeNull();
+  });
+
+  test('переключение агент → человек уходит с grant_id:null; «Снять назначение» снимает аспект целиком', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
+    const card = within(await screen.findByRole('tabpanel', { name: 'Детали' })).getByTestId(
+      'assignment-card',
+    );
+    // Выбранный доступ подставлен из аспекта: сохранение без касания списка обязано оставить
+    // тикет у того же агента.
+    expect(within(card).getByLabelText('Доступ агента')).toHaveValue(GRANT_ID);
+
+    await userEvent.click(within(card).getByRole('radio', { name: 'Человек' }));
+    await userEvent.click(within(card).getByRole('button', { name: 'Сохранить' }));
+    await waitFor(() => {
+      const input = calls.find((c) => c.path === 'entity.update')?.input as {
+        aspects: Record<string, Record<string, unknown> | null>;
+      };
+      // grant_id:null ОБЯЗАТЕЛЕН: пару (human, grant_id) сервер считает рассогласованием и
+      // отвечает VALIDATION, а патч мержится по полям — без null прежний грант пережил бы
+      // переключение.
+      expect(input.aspects['orbis/assignment']).toEqual({
+        executor: 'human',
+        grant_id: null,
+        may_close: null,
+      });
+    });
+
+    await userEvent.click(within(card).getByRole('button', { name: 'Снять назначение' }));
+    await waitFor(() => {
+      const last = calls.filter((c) => c.path === 'entity.update').at(-1)?.input as {
+        aspects: Record<string, unknown>;
+      };
+      expect(last.aspects['orbis/assignment']).toBeNull();
+    });
+  });
+
+  test('прогон завершён: заголовок «Готово, проверьте» и вторая кнопка — «Закрыть тикет»', async () => {
+    const finished = {
+      ...RUN,
+      aspects: {
+        'orbis/agent-run': {
+          ...RUN.aspects['orbis/agent-run'],
+          outcome: 'finished',
+          checkpoint: undefined,
+          finished_at: '2026-08-17T10:30:00.000Z',
+          report: 'Парсер починен, тесты зелёные.',
+        },
+      },
+    };
+    const { calls } = renderWithProviders(
+      <DetailScreen entityId="t1" />,
+      adeHandler({ runs: [finished] }),
+    );
+    const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
+    expect(await within(panel).findByText('Готово, проверьте')).toBeInTheDocument();
+    // Ответить можно и на итог (агент прочтёт его следующим захватом) — но у сделанной работы
+    // есть второй исход, которого нет у вопроса: закрыть тикет.
+    expect(
+      within(panel).getByRole('button', { name: 'Ответить и вернуть в работу' }),
+    ).toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole('button', { name: 'Закрыть тикет' }));
+    await waitFor(() => {
+      const input = calls.find((c) => c.path === 'entity.update')?.input as {
+        id: string;
+        aspects: Record<string, Record<string, unknown>>;
+      };
+      expect(input.id).toBe('t1');
+      expect(input.aspects['orbis/task']).toEqual({ status: 'done' });
+    });
+  });
+
+  test('таб «Детали»: список прогонов с исходом и числом шагов; клик открывает прогон', async () => {
+    renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
+    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
+    const row = await within(details).findByTestId('run-r1');
+    expect(row).toHaveTextContent('вопрос');
+    expect(row).toHaveTextContent('3 шага');
+    expect(row).toHaveTextContent('worker-1');
+
+    fireEvent.click(row);
+    // Открытие прогона — тем же жестом, что и подзадачи: push поверх стека АКТИВНОЙ вкладки.
+    const nav = useNav.getState();
+    expect(nav.activeTab).toBe('browser');
+    expect(nav.stacks.browser.at(-1)).toEqual({ kind: 'entity', id: 'r1' });
+  });
+
+  test('тикет не в waiting → чекпойнт-блока нет; заметка без orbis/task → назначения и прогонов нет', async () => {
+    const working = {
+      ...TICKET,
+      aspects: {
+        'orbis/task': { status: 'in_progress' },
+        'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID },
+      },
+    };
+    const first = renderWithProviders(
+      <DetailScreen entityId="t1" />,
+      adeHandler({ entity: working }),
+    );
+    await screen.findByRole('tabpanel', { name: 'Сущность' });
+    expect(screen.queryByTestId('ticket-waiting')).toBeNull();
+    // И это НЕ «экран потерял всё»: назначение и прогоны идущего тикета на месте.
+    expect(screen.getByTestId('assignment-card')).toBeInTheDocument();
+    expect(await screen.findByTestId('run-r1')).toBeInTheDocument();
+    first.unmount();
+
+    const note = { ...entity, id: 'n1', aspects: { 'orbis/note': {} } };
+    const { calls } = renderWithProviders(
+      <DetailScreen entityId="n1" />,
+      adeHandler({ entity: note }),
+    );
+    await screen.findByRole('tabpanel', { name: 'Детали' });
+    expect(screen.queryByTestId('ticket-waiting')).toBeNull();
+    expect(screen.queryByTestId('assignment-card')).toBeNull();
+    expect(screen.queryByTestId('runs-list')).toBeNull();
+    // Прогоны заметки не спрашиваются вовсе — ни запроса списка, ни подметания.
+    expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+    expect(calls.some((c) => c.path === 'agentRun.sweep')).toBe(false);
+  });
+
+  test('открытие тикета зовёт agentRun.sweep один раз (С6: подметание с экранов)', async () => {
+    // strict: <StrictMode> прогоняет эффекты монтирования ДВАЖДЫ — ровно как приложение в
+    // разработке (main.tsx). Без гварда подметание уходило бы двумя запросами на открытие.
+    const { calls } = renderWithProviders(<TicketOnWarmCache />, adeHandler(), { strict: true });
+    await screen.findAllByRole('tabpanel', { name: 'Сущность' });
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === 'agentRun.sweep').length).toBeGreaterThan(0),
+    );
+    expect(calls.filter((c) => c.path === 'agentRun.sweep')).toHaveLength(1);
+  });
 });

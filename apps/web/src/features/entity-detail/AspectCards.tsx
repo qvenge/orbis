@@ -11,6 +11,17 @@ type Entity = RouterOutputs['entity']['get']['entity'];
 const FINANCIAL = 'orbis/financial';
 const CATEGORY_REF = 'category_ref';
 
+/**
+ * Аспекты, у которых на экране ЕСТЬ СВОЯ карточка (ADE-срез 1): назначение исполнителя
+ * (AssignmentCard) и прогон агента (RunsList на тикете, лента шагов на самом прогоне).
+ *
+ * Дело не в дублировании вида, а в правке. Общая карточка предлагает инпут на каждое скалярное
+ * поле, и правка `executor` в обход инварианта исполнителя (executor=agent ⇔ живой grant_id,
+ * invariants.ts:295-326) отдавала бы VALIDATION на каждом втором нажатии; поля прогона и вовсе
+ * пишет только агент — вручную их править нечем и незачем.
+ */
+const HIDDEN_ASPECT_CARDS = new Set(['orbis/assignment', 'orbis/agent-run']);
+
 // Тихий инпут-в-строке-свойства: тот же вид у текстового поля и у пикера категории.
 const FIELD_CLASS =
   'w-full rounded-md bg-transparent px-2 py-1 text-sm text-text outline-none transition hover:bg-surface-2 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/40';
@@ -94,54 +105,62 @@ export function AspectCards({ entity }: { entity: Entity }) {
       )}
       {/* Notion-style свойства: секция без карточной рамки, значения — тихие инпуты
           без бордера (hover подсказывает редактируемость). */}
-      {Object.entries(aspects).map(([aspectId, fields]) => (
-        <section key={aspectId} data-testid={`aspect-${aspectId}`} className="flex flex-col gap-1">
-          <div className="flex items-center justify-between">
-            <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">
-              {aspectLabel(aspectId)}
-            </p>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-xs text-text-muted"
-              aria-label={`Снять ${aspectId}`}
-              onClick={() => mutation.mutate({ id: entity.id, aspects: { [aspectId]: null } })}
-            >
-              Снять аспект
-            </Button>
-          </div>
-          <dl className="grid grid-cols-[minmax(7rem,max-content)_1fr] items-center gap-x-3 gap-y-0.5 text-sm">
-            {Object.entries(fields).map(([field, value]) =>
-              // Единственное поле с собственным контролом: категория финансовой записи
-              // выбирается из списка, а не вписывается UUID'ом руками (K6). Прочие
-              // поля аспектов не трогаем — правка только пути category_ref.
-              aspectId === FINANCIAL && field === CATEGORY_REF ? (
-                <CategoryField
-                  key={field}
-                  value={typeof value === 'string' ? value : ''}
-                  onSelect={setCategory}
-                />
-              ) : !isScalar(value) ? (
-                <ReadOnlyField key={field} aspectId={aspectId} field={field} value={value} />
-              ) : (
-                <AspectField
-                  key={field}
-                  aspectId={aspectId}
-                  field={field}
-                  value={value}
-                  onSave={(raw) =>
-                    mutation.mutate({
-                      id: entity.id,
-                      expectedUpdatedAt: entity.updatedAt,
-                      aspects: { [aspectId]: { [field]: coerce(value, raw) } },
-                    })
-                  }
-                />
-              ),
-            )}
-          </dl>
-        </section>
-      ))}
+      {/* Фильтр по ПАРАМ, а не правка `aspects`: объект приехал из кэша React Query, и удаление
+          ключа из него испортило бы данные всем, кто читает тот же ключ. */}
+      {Object.entries(aspects)
+        .filter(([aspectId]) => !HIDDEN_ASPECT_CARDS.has(aspectId))
+        .map(([aspectId, fields]) => (
+          <section
+            key={aspectId}
+            data-testid={`aspect-${aspectId}`}
+            className="flex flex-col gap-1"
+          >
+            <div className="flex items-center justify-between">
+              <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">
+                {aspectLabel(aspectId)}
+              </p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-xs text-text-muted"
+                aria-label={`Снять ${aspectId}`}
+                onClick={() => mutation.mutate({ id: entity.id, aspects: { [aspectId]: null } })}
+              >
+                Снять аспект
+              </Button>
+            </div>
+            <dl className="grid grid-cols-[minmax(7rem,max-content)_1fr] items-center gap-x-3 gap-y-0.5 text-sm">
+              {Object.entries(fields).map(([field, value]) =>
+                // Единственное поле с собственным контролом: категория финансовой записи
+                // выбирается из списка, а не вписывается UUID'ом руками (K6). Прочие
+                // поля аспектов не трогаем — правка только пути category_ref.
+                aspectId === FINANCIAL && field === CATEGORY_REF ? (
+                  <CategoryField
+                    key={field}
+                    value={typeof value === 'string' ? value : ''}
+                    onSelect={setCategory}
+                  />
+                ) : !isScalar(value) ? (
+                  <ReadOnlyField key={field} aspectId={aspectId} field={field} value={value} />
+                ) : (
+                  <AspectField
+                    key={field}
+                    aspectId={aspectId}
+                    field={field}
+                    value={value}
+                    onSave={(raw) =>
+                      mutation.mutate({
+                        id: entity.id,
+                        expectedUpdatedAt: entity.updatedAt,
+                        aspects: { [aspectId]: { [field]: coerce(value, raw) } },
+                      })
+                    }
+                  />
+                ),
+              )}
+            </dl>
+          </section>
+        ))}
     </div>
   );
 }
