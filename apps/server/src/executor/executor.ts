@@ -1815,8 +1815,19 @@ async function prepareRelationDelete(
     k.targetId === key.targetId &&
     k.relationType === key.relationType;
 
-  // Стадия 3: строка связи под замком. Приоритет — виртуальная связь, созданная тем же
-  // batch (к моменту apply она уже будет вставлена); RLS скрывает чужие → NOT_FOUND.
+  // Стадия 3, ЧАСТЬ ПЕРВАЯ: концы связи под замком — только для источника routine (V1.10).
+  // Порядок захвата замков во всём executor'е — «сущности → связь»: prepareRelationCreate
+  // берёт оба конца (loadBothEndsForUpdate) и лишь потом вставляет строку связи, а batch
+  // [entity_update A; relation_delete A→B] блокирует A раньше R. Поэтому дозагрузка стоит
+  // ЗДЕСЬ, до строки связи: возьми мы её после, рутинное удаление держало бы R и ждало A,
+  // пока конкурент держит A и ждёт R — цикл, PG отстреливает одну tx (40P01), и прогон
+  // рутины падает непонятной ошибкой (гейт-ревью Задачи 4). Остальным источникам концы не
+  // нужны — им довольно строки связи, и лишний FOR UPDATE на каждом удалении не берётся.
+  const routineEnds =
+    ctx.req.source === 'routine' ? await loadBothEndsForUpdate(ctx, key, batch) : undefined;
+
+  // Стадия 3, ЧАСТЬ ВТОРАЯ: строка связи под замком. Приоритет — виртуальная связь, созданная
+  // тем же batch (к моменту apply она уже будет вставлена); RLS скрывает чужие → NOT_FOUND.
   const virtualIdx = batch ? batch.createdRelations.findIndex(matchesKey) : -1;
   let existingMeta: Record<string, unknown> = {};
   if (virtualIdx < 0) {
@@ -1842,14 +1853,12 @@ async function prepareRelationDelete(
 
   // Стадия 4
   // Запрет по объекту для источника routine (V1.10): «удалить» — такой же глагол, как
-  // «создать», и объект у него тот же. Концы связи берутся под замок ТОЛЬКО здесь: штатному
-  // relation_delete они не нужны (ему довольно строки связи), а два лишних FOR UPDATE на
-  // каждом удалении меняли бы порядок захвата замков всем остальным источникам.
-  if (ctx.req.source === 'routine') {
-    const ends = await loadBothEndsForUpdate(ctx, key, batch);
+  // «создать», и объект у него тот же. Проверка идёт по строкам, взятым под FOR UPDATE
+  // стадией 3, и до любой записи; сам захват — выше, ради порядка «сущности → связь».
+  if (routineEnds !== undefined) {
     assertRoutineRelationUntouchable(ctx.req.source, {
-      source: ends.source.aspects as AspectsMap,
-      target: ends.target.aspects as AspectsMap,
+      source: routineEnds.source.aspects as AspectsMap,
+      target: routineEnds.target.aspects as AspectsMap,
     });
   }
   gateEntitlements(ctx, 'relation_delete');

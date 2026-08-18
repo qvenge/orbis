@@ -1459,7 +1459,7 @@ describe('V1: источник routine не трогает рутины и на�
     expect((r.error.details as { reason?: string }).reason).toBe('routine_untouchable');
   }
 
-  test('пять пар «source routine — отказ / тот же вход из чата и системы — проходит»', async () => {
+  test('шесть пар «source routine — отказ / тот же вход из чата и системы — проходит»', async () => {
     // Пара 1: entity_update рутины. Запрет по ОБЪЕКТУ, а не по глаголу: правка одного
     // титула рутины — тоже правка рутины, аспектов патч не трогает вовсе.
     const target = firstEntity(
@@ -1580,7 +1580,7 @@ describe('V1: источник routine не трогает рутины и на�
     );
     expect(linkBySystem.ok).toBe(true);
 
-    // Пара 5b: relation_delete той же связи — «удалить» тоже глагол, объект тот же.
+    // Пара 6: relation_delete той же связи — «удалить» тоже глагол, объект тот же.
     expectUntouchable(
       await execute(
         db,
@@ -1630,5 +1630,83 @@ describe('V1: источник routine не трогает рутины и на�
     });
     expectUntouchable(r);
     expect(await countEntities(newEntityId)).toBe(0);
+  });
+
+  test('архивация рутины источником routine — отказ; та же архивация системой проходит', async () => {
+    // Архивация — правка БЕЗ аспектов вовсе: она видна только по `before` уже прочитанной
+    // строки. Ветка, ради которой проверка вынесена за гейт `input.aspects`.
+    const target = firstEntity(
+      await execute(
+        db,
+        req('entity_create', {
+          title: 'Рутина на архивацию',
+          tags: [],
+          aspects: { 'orbis/routine': routine() },
+        }),
+      ),
+    );
+    expectUntouchable(
+      await execute(db, req('entity_update', { id: target.id, archived: true }, asRoutine)),
+    );
+    const bySystem = await execute(
+      db,
+      req('entity_update', { id: target.id, archived: true }, { source: 'system' }),
+    );
+    expect(bySystem.ok).toBe(true);
+  });
+
+  test('attach ЧУЖОГО аспекта к сущности-рутине источником routine — отказ (запрет по объекту, не по аспекту)', async () => {
+    const target = firstEntity(
+      await execute(
+        db,
+        req('entity_create', {
+          title: 'Рутина под чужой аспект',
+          tags: [],
+          aspects: { 'orbis/routine': routine() },
+        }),
+      ),
+    );
+    // orbis/note аспектом рутины не является — запрещает сам ОБЪЕКТ (`before` несёт
+    // orbis/routine), иначе рутина дописывала бы себе поля мимо запрета
+    expectUntouchable(
+      await execute(
+        db,
+        req('attach_orbis_note', { entity_id: target.id, data: { pinned: true } }, asRoutine),
+      ),
+    );
+    const byChat = await execute(
+      db,
+      req(
+        'attach_orbis_note',
+        { entity_id: target.id, data: { pinned: true } },
+        { source: 'chat' },
+      ),
+    );
+    expect(byChat.ok).toBe(true);
+  });
+
+  test('attach_orbis_assignment источником routine — отказ (ветка touched-назначения на attach-пути)', async () => {
+    const ticket = firstEntity(
+      await execute(db, req('entity_create', { title: 'Тикет под attach', tags: [] })),
+    );
+    expectUntouchable(
+      await execute(
+        db,
+        req(
+          'attach_orbis_assignment',
+          { entity_id: ticket.id, data: { executor: 'human', assignee: 'Я' } },
+          asRoutine,
+        ),
+      ),
+    );
+    const byChat = await execute(
+      db,
+      req(
+        'attach_orbis_assignment',
+        { entity_id: ticket.id, data: { executor: 'human', assignee: 'Я' } },
+        { source: 'chat' },
+      ),
+    );
+    expect(byChat.ok).toBe(true);
   });
 });
