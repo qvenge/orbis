@@ -26,11 +26,12 @@ import { Backlinks } from './Backlinks';
 import { Blocks } from './Blocks';
 import { GoalProgress } from './GoalProgress';
 import { NativeRow } from './NativeRow';
+import { RunFeed } from './RunFeed';
 import { RunsList } from './RunsList';
 import { Subtasks } from './Subtasks';
 import { TicketWaitingBlock } from './TicketWaitingBlock';
 import { useEntityDetail } from './useEntityDetail';
-import { useTicketRuns } from './useTicketRuns';
+import { RUN_ASPECT, useTicketRuns } from './useTicketRuns';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 
@@ -228,6 +229,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       {isTicket && (
         <TicketWaitingBlock key={`waiting-${entity.id}`} entity={entity} lastRun={lastRun} />
       )}
+      {/* Экран самого прогона (С5, С12): лента шагов, исход и откат. Место — рядом с блоком
+          ожидания и по той же причине: у прогона нет «свойств», ради которых его открывают, —
+          есть работа, которую он проделал. Условие — по аспекту, а не по `isTicket`: прогон
+          это НЕ тикет (аспекта `orbis/task` у него нет), и подметание с историей прогонов ему
+          не положены. */}
+      {entity.aspects[RUN_ASPECT] !== undefined && <RunFeed entity={entity} />}
       {/* Тело — РАЗМОНТИРУЕМОЕ по key. То же правило, что несла прежняя секция тела, и по той
           же причине, только цена ошибки выросла: роутер монтирует DetailScreen БЕЗ key
           (router.tsx), переход entity→entity меняет лишь проп, — а `useBodySave` при смене

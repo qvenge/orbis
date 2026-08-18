@@ -24,6 +24,13 @@ export type CardHandlers = {
 type CardsMeta = {
   cards?: Card[];
   author_kind?: string;
+  /**
+   * Журнальная запись действия (§7.8): КТО двигал граф. Здесь только та часть формы
+   * `ActionRecord`, которую читает лента, — остальное ей не нужно, а полный тип живёт на
+   * сервере. Инвариант «один action на audit-сообщение» тот же, что у undo и отката: читаем
+   * `actions[0]`.
+   */
+  actions?: Array<{ actor_kind?: string; actor_grant_id?: string }>;
   retryId?: string;
   retryText?: string;
   fastPath?: FastPathMeta;
@@ -117,7 +124,8 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
 }
 
 // Диспетчер по metadata.cards[]: серверный Card-union рендерится клиентом (Task 10).
-// author_kind==='agent' → всё сообщение оборачивается в SystemMessage (🤖 агент, 02 §2.3).
+// Сообщение агента (author_kind) и действие агента (actions[0].actor_kind) оборачиваются в
+// SystemMessage (🤖 агент, 02 §2.3) — см. разбор у самой ветки.
 export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): ReactNode {
   const { meta, cards, confirmed } = readMeta(msg);
   const body = cards.map((card, i) => renderCard(card, i, { msg, meta, handlers, confirmed }));
@@ -138,6 +146,16 @@ export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): Reac
     );
   }
 
-  if (meta.author_kind === 'agent') return <SystemMessage>{body}</SystemMessage>;
+  /**
+   * Метка агента — по ЛЮБОМУ из двух признаков, а не по одному вместо другого (приёмка 14).
+   *
+   * `author_kind` помечает сообщение, которое агент написал САМ (02 §2.3). Но работу внешнего
+   * исполнителя владелец видит иначе: её приносит audit-запись действия, а её пишет сервер от
+   * системы — `author_kind` там не агентский, зато `actions[0].actor_kind === 'agent'`. Считать
+   * только второе значило бы потерять первое; заменить одно другим — тоже. Источника два,
+   * метка одна: «это делал не ты».
+   */
+  const byAction = meta.actions?.[0]?.actor_kind === 'agent';
+  if (meta.author_kind === 'agent' || byAction) return <SystemMessage>{body}</SystemMessage>;
   return <>{body}</>;
 }

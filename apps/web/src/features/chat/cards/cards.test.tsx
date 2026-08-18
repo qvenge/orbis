@@ -276,6 +276,42 @@ test('SystemMessage: author_kind=agent → префикс 🤖 агент', () =
   expect(screen.getByText(/агент/i)).toBeInTheDocument();
 });
 
+test('SystemMessage: журнальное действие с actor_kind=agent → та же метка «агент» (приёмка 14)', () => {
+  // Действия внешнего исполнителя приезжают в ленту audit-сообщением, которое пишет СЕРВЕР
+  // от системы: `author_kind` у него не агентский, а кто именно двигал граф — сказано в
+  // `metadata.actions[0].actor_kind` (§7.8). Без этой ветки работа агента была бы в журнале
+  // неотличима от работы владельца.
+  const card = { kind: 'entity_card', entityId: 'e', title: 'T', aspects: [], keyFields: {} };
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([card], {
+          metadata: {
+            cards: [card],
+            actions: [{ actor_kind: 'agent', actor_grant_id: 'g1' }],
+          },
+        }),
+      )}
+    </div>,
+  );
+  expect(screen.getByTestId('system-message')).toBeInTheDocument();
+  expect(screen.getByText(/агент/i)).toBeInTheDocument();
+});
+
+test('SystemMessage: действие владельца (actor_kind=owner) метки агента НЕ получает', () => {
+  // Премиса предыдущего теста: метку ставит именно агентский actor_kind, а не сам факт
+  // журнальной записи — иначе «агент» стоял бы над каждой правкой владельца.
+  const card = { kind: 'entity_card', entityId: 'e', title: 'T', aspects: [], keyFields: {} };
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([card], { metadata: { cards: [card], actions: [{ actor_kind: 'owner' }] } }),
+      )}
+    </div>,
+  );
+  expect(screen.queryByTestId('system-message')).toBeNull();
+});
+
 // --- Остаток конверта в fast-path-карточке (§4.1, B7) --------------------------------
 
 const finCard = {

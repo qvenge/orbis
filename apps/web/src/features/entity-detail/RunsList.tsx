@@ -4,15 +4,7 @@
 import { formatDate } from '../../lib/format';
 import { trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
-import { runAspect, type TicketRun } from './useTicketRuns';
-
-/** Исход прогона по-русски: `outcome` — enum схемы, незнакомое значение показываем как есть. */
-const OUTCOMES: Record<string, string> = {
-  running: 'идёт',
-  checkpoint: 'вопрос',
-  finished: 'готово',
-  abandoned: 'оборван',
-};
+import { RUN_OUTCOME_LABELS, runAspect, type TicketRun } from './useTicketRuns';
 
 /** Русское множественное: 1 шаг, 2–4 шага, 5–20 шагов (и 11–14 — «шагов»). */
 function stepsLabel(n: number): string {
@@ -65,7 +57,7 @@ export function RunsList({
                 className="flex w-full cursor-pointer flex-wrap items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-2/60"
               >
                 <span className="text-text-secondary">{formatDate(startedAt, tz)}</span>
-                <Badge>{OUTCOMES[outcome] ?? outcome}</Badge>
+                <Badge>{RUN_OUTCOME_LABELS[outcome] ?? outcome}</Badge>
                 <span className="text-text-secondary">· {stepsLabel(steps)}</span>
                 {grant !== undefined && (
                   <span className="break-words text-text-secondary">· {grant.label}</span>

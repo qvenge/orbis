@@ -266,6 +266,17 @@ export function useEntityDetail(entityId: string) {
         'orbis/task': {
           status: done ? 'done' : 'inbox',
           completed_at: done ? new Date().toISOString() : null,
+          /**
+           * `waiting_for: null` — конвенция ADE-среза 1, и обе стороны чекбокса её требуют
+           * одинаково: и `done`, и возврат в `inbox` уводят задачу ИЗ waiting, а патч
+           * аспектов мержится по полям (normalize.ts) — без явного null вопрос исполнителя
+           * пережил бы снятие галочки и висел бы на закрытой задаче, читаясь как открытый.
+           * Сервер делает ровно это на ВСЕХ своих выходах из waiting
+           * (routers/agent-run.ts:129-131, agent-loop/sweep.ts:111); правка из UI не должна
+           * быть исключением. Для задачи, которая в waiting не была, поле и так пусто —
+           * лишний null ничего не меняет.
+           */
+          waiting_for: null,
         },
       },
     });

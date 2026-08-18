@@ -2626,3 +2626,234 @@ describe('ADE: тикет', () => {
     expect(within(details).getByTestId('run-r1')).toBeInTheDocument();
   });
 });
+
+// ─── ADE-срез 1: экран прогона (Задача 15) ───────────────────────────────────────────────
+//
+// Прогон — НЕ тикет: аспекта `orbis/task` у него нет, поэтому ни блока ожидания, ни истории
+// прогонов, ни подметания на нём быть не должно. Всё, ради чего его открывают, рисует ОДНА
+// лента: общая карточка свойств аспект прогона прячет (AspectCards), а править его поля
+// владельцу нечем — их пишет исполнитель.
+
+/**
+ * Шаги приезжают из аспекта КАК ЕСТЬ, и порядок в массиве здесь нарочно перепутан: лента
+ * обязана строиться по `seq`, а не по тому, в каком порядке шаги легли в jsonb.
+ */
+const RUN_STEPS = [
+  { seq: 1, at: '2026-08-17T10:01:00.000Z', summary: 'Прочитал тикет и план', external: false },
+  { seq: 3, at: '2026-08-17T10:03:00.000Z', summary: 'Прогнал тесты', external: false },
+  { seq: 2, at: '2026-08-17T10:02:00.000Z', summary: 'Завёл ветку fix/parser', external: true },
+];
+
+const RUN_ASPECT_FINISHED = {
+  grant_id: GRANT_ID,
+  outcome: 'finished',
+  started_at: '2026-08-17T10:00:00.000Z',
+  finished_at: '2026-08-17T10:04:00.000Z',
+  last_step_at: '2026-08-17T10:03:00.000Z',
+  step_count: 3,
+  steps: RUN_STEPS,
+  report: 'Парсер починен, тесты зелёные.',
+  usage: { input_tokens: 12000, output_tokens: 3400, cost_usd: 0.42 },
+  session_url: 'https://agent.example/session/r1',
+};
+
+/** Сам прогон в объёме detail (entity.get): с телом и bodyDoc, как любая запись графа. */
+const RUN_ENTITY = {
+  ...entity,
+  id: 'r1',
+  title: 'Прогон: Починить парсер',
+  aspects: { 'orbis/agent-run': RUN_ASPECT_FINISHED },
+};
+
+/**
+ * Записка успешного отката приходит С СЕРВЕРА (agent-loop/rollback.ts ROLLBACK_NOTE) — здесь
+ * она НАРОЧНО другая. Повтори экран боевую фразу хардкодом, и проверка «текст про репозиторий
+ * виден» была бы зелена, не доказав ничего: граница «Orbis откатили, git не трогали» — слово
+ * сервера, и экран обязан печатать именно его.
+ */
+const ROLLBACK_NOTE = 'Откачено в Orbis; ветку и коммиты откатывайте git-ом (текст сервера).';
+
+function runHandler(opts: { run?: unknown; rollback?: unknown } = {}): MockHandler {
+  const target = opts.run ?? RUN_ENTITY;
+  return (path, input) => {
+    if (path === 'entity.get') {
+      const { id } = input as { id: string };
+      // Конфликтная строка дочитывает заголовок задетой сущности своим entity.get (EntityRef).
+      return id === 'r1' ? { entity: target, relations: [], thread: null } : { entity: TICKET };
+    }
+    if (path === 'oauth.listGrants') return [GRANT];
+    if (path === 'aspect.list') return [];
+    if (path === 'agentRun.rollback')
+      return opts.rollback ?? { ok: true, undone: ['a1', 'a2'], note: ROLLBACK_NOTE };
+    return {};
+  };
+}
+
+describe('ADE: прогон', () => {
+  test('лента шагов по возрастанию seq; «внешнее» только у своего шага; исход, отчёт, грант, расход и ссылка на сессию', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="r1" />, runHandler());
+    const feed = await screen.findByTestId('run-feed');
+
+    const steps = within(within(feed).getByTestId('run-steps')).getAllByRole('listitem');
+    expect(steps.map((li) => li.textContent)).toEqual([
+      expect.stringContaining('Прочитал тикет и план'),
+      expect.stringContaining('Завёл ветку fix/parser'),
+      expect.stringContaining('Прогнал тесты'),
+    ]);
+    // Метка «внешнее» — у шага, тронувшего мир ВНЕ Orbis (С5). По ней человек читает, чего
+    // откат ему не вернёт, поэтому лишняя метка тут так же вредна, как пропущенная.
+    expect(steps[1]).toHaveTextContent('внешнее');
+    expect(steps[0]).not.toHaveTextContent('внешнее');
+    expect(steps[2]).not.toHaveTextContent('внешнее');
+
+    expect(within(feed).getByText('готово')).toBeInTheDocument();
+    expect(within(feed).getByText('Парсер починен, тесты зелёные.')).toBeInTheDocument();
+    // Грант — подписью, как в истории прогонов: сырой uuid не отвечает, кто это делал.
+    expect(await within(feed).findByText('worker-1')).toBeInTheDocument();
+    expect(feed).toHaveTextContent('12000');
+    expect(feed).toHaveTextContent('$0.42');
+
+    const link = within(feed).getByRole('link', { name: /сесси/i });
+    expect(link).toHaveAttribute('href', 'https://agent.example/session/r1');
+    expect(link).toHaveAttribute('target', '_blank');
+    // rel обязателен: ссылка ведёт наружу, во владения исполнителя.
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
+    expect(link).toHaveAttribute('rel', expect.stringContaining('noreferrer'));
+
+    // Прогон — не тикет: подметать на нём нечего, блоков тикета на экране нет.
+    expect(screen.queryByTestId('ticket-waiting')).toBeNull();
+    expect(screen.queryByTestId('runs-list')).toBeNull();
+    expect(calls.some((c) => c.path === 'agentRun.sweep')).toBe(false);
+    // …и второй копии тех же полей общей карточкой свойств тоже нет.
+    expect(screen.queryByTestId('aspect-orbis/agent-run')).toBeNull();
+  });
+
+  test('вопрос, ответ владельца и записка обрыва — отдельными блоками', async () => {
+    const abandoned = {
+      ...RUN_ENTITY,
+      aspects: {
+        'orbis/agent-run': {
+          ...RUN_ASPECT_FINISHED,
+          outcome: 'abandoned',
+          report: undefined,
+          checkpoint: { question: 'Какую БД брать?', asked_at: '2026-08-17T10:02:30.000Z' },
+          reply: { text: 'Postgres', at: '2026-08-17T10:02:50.000Z' },
+          abandon_note: 'Исполнитель молчал 30 минут — прогон подмели.',
+        },
+      },
+    };
+    renderWithProviders(<DetailScreen entityId="r1" />, runHandler({ run: abandoned }));
+    const feed = await screen.findByTestId('run-feed');
+    expect(within(feed).getByText('оборван')).toBeInTheDocument();
+    expect(within(feed).getByText('Какую БД брать?')).toBeInTheDocument();
+    expect(within(feed).getByText('Postgres')).toBeInTheDocument();
+    expect(
+      within(feed).getByText('Исполнитель молчал 30 минут — прогон подмели.'),
+    ).toBeInTheDocument();
+  });
+
+  test('откат: подтверждение → agentRun.rollback({runId}); на экране записка сервера и число откаченных', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="r1" />, runHandler());
+    const feed = await screen.findByTestId('run-feed');
+    await userEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
+    // Подтверждение — модалкой из ui/, а не window.confirm: жест необратим, и спрашивать о
+    // нём надо тем же языком, что и всё остальное на экране.
+    const dialog = await screen.findByRole('dialog');
+
+    // Считаем чтения ДО жеста: экран уже читал запись, и проверка инвалидации ниже без
+    // отсечки была бы зелена сама собой.
+    const readsBefore = calls.filter((c) => c.path === 'entity.get').length;
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Откатить' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'agentRun.rollback')?.input).toEqual({ runId: 'r1' }),
+    );
+
+    const result = await screen.findByTestId('rollback-result');
+    expect(result).toHaveTextContent(ROLLBACK_NOTE);
+    expect(result).toHaveTextContent('2');
+    // Откат ДВИГАЕТ граф (тикет вернулся в очередь, прогон архивирован) — граф перечитывается.
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(readsBefore),
+    );
+  });
+
+  test('конфликт: список чужих правок и «Ничего не откачено»', async () => {
+    const { calls } = renderWithProviders(
+      <DetailScreen entityId="r1" />,
+      runHandler({
+        rollback: {
+          ok: false,
+          reason: 'conflict',
+          conflicts: [
+            {
+              entityId: 't1',
+              actionId: 'a9',
+              at: '2026-08-17T11:00:00.000Z',
+              source: 'ui',
+            },
+          ],
+        },
+      }),
+    );
+    const feed = await screen.findByTestId('run-feed');
+    await userEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
+    await userEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Откатить' }),
+    );
+
+    const result = await screen.findByTestId('rollback-result');
+    // Инвариант 7: конфликт значит, что граф НЕ тронут вовсе, — и сказать это надо словами.
+    expect(result).toHaveTextContent('Ничего не откачено');
+    // Задетая запись названа ЗАГОЛОВКОМ: по uuid человек не решит, чем он готов пожертвовать.
+    expect(await within(result).findByText('Починить парсер')).toBeInTheDocument();
+    // Источник правки — по-русски: «ui» не отвечает владельцу, своей это было рукой или чужой.
+    expect(result).toHaveTextContent('с экрана');
+    // Ничего не откачено — и перечитывать граф незачем: он не менялся. Считаем чтения САМОГО
+    // прогона: строка конфликта дочитывает заголовок задетой записи своим entity.get.
+    expect(
+      calls.filter((c) => c.path === 'entity.get' && (c.input as { id: string }).id === 'r1'),
+    ).toHaveLength(1);
+  });
+
+  test('частичный откат: сколько успели и на чём встали', async () => {
+    renderWithProviders(
+      <DetailScreen entityId="r1" />,
+      runHandler({
+        rollback: {
+          ok: false,
+          reason: 'partial',
+          undone: ['a1'],
+          failed: { actionId: 'a2', error: { code: 'VALIDATION', message: 'запись изменена' } },
+        },
+      }),
+    );
+    const feed = await screen.findByTestId('run-feed');
+    await userEvent.click(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' }));
+    await userEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Откатить' }),
+    );
+    const result = await screen.findByTestId('rollback-result');
+    // Часть отката уже в графе — молчать об этом нельзя: состояние графа теперь смешанное.
+    expect(result).toHaveTextContent('1');
+    expect(result).toHaveTextContent('запись изменена');
+  });
+
+  test('идущий прогон: откат недоступен', async () => {
+    const running = {
+      ...RUN_ENTITY,
+      aspects: {
+        'orbis/agent-run': {
+          ...RUN_ASPECT_FINISHED,
+          outcome: 'running',
+          finished_at: undefined,
+          report: undefined,
+        },
+      },
+    };
+    renderWithProviders(<DetailScreen entityId="r1" />, runHandler({ run: running }));
+    const feed = await screen.findByTestId('run-feed');
+    expect(within(feed).getByText('идёт')).toBeInTheDocument();
+    // Откатывать живой прогон бессмысленно: исполнитель допишет поверх отката (см. RunFeed).
+    expect(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' })).toBeDisabled();
+  });
+});

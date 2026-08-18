@@ -12,6 +12,19 @@ export type TicketRun = RouterOutputs['entity']['query'][number];
 
 export const RUN_ASPECT = 'orbis/agent-run';
 
+/**
+ * Исход прогона по-русски (`outcome` — enum схемы аспекта). Один источник на весь срез:
+ * подпись стоит и строкой истории на тикете (RunsList), и бейджем в шапке самого прогона
+ * (RunFeed), — разъехавшись, две копии читались бы как РАЗНЫЕ состояния одной записи.
+ * Незнакомое значение показываем как есть: догадка тут хуже сырого слова.
+ */
+export const RUN_OUTCOME_LABELS: Record<string, string> = {
+  running: 'идёт',
+  checkpoint: 'вопрос',
+  finished: 'готово',
+  abandoned: 'оборван',
+};
+
 /** Аспект прогона у сущности из выдачи; `undefined` — сущность не прогон. */
 export function runAspect(run: TicketRun): Record<string, unknown> | undefined {
   return run.aspects[RUN_ASPECT];
