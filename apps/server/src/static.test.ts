@@ -162,6 +162,53 @@ describe('static serving + SPA-fallback (Task 7)', () => {
     expect(await res.json()).toEqual({ status: 'ok', aspectDrift: 'unknown' });
   });
 
+  // V1.2: планировщик рутин наблюдаем через /health той же формой, что реестр аспектов:
+  // геттера нет — поля нет (тесты композиции, стенды без фона); выключен env'ом — 'off';
+  // включён, но первый тик ещё не прошёл — 'pending'; дальше — ISO последнего тика.
+  test('/health без геттера планировщика: форма прежняя, поля routineScheduler нет', async () => {
+    const res = await app.request('/health');
+    expect(await res.json()).toEqual({ status: 'ok' });
+  });
+
+  test('/health с геттером планировщика: off / pending / ISO последнего тика, статус ok', async () => {
+    const health = async (state: { enabled: boolean; lastTickAt: string | null }) => {
+      const res = await createApp({
+        db: {} as Db,
+        ai: {} as AiDeps,
+        webDistDir: distDir,
+        routineScheduler: () => state,
+      }).request('/health');
+      return res.json();
+    };
+    expect(await health({ enabled: false, lastTickAt: null })).toEqual({
+      status: 'ok',
+      routineScheduler: 'off',
+    });
+    expect(await health({ enabled: true, lastTickAt: null })).toEqual({
+      status: 'ok',
+      routineScheduler: 'pending',
+    });
+    expect(await health({ enabled: true, lastTickAt: '2026-08-18T04:30:00.000Z' })).toEqual({
+      status: 'ok',
+      routineScheduler: '2026-08-18T04:30:00.000Z',
+    });
+  });
+
+  test('/health несёт и дрейф реестра, и планировщик одновременно', async () => {
+    const both = createApp({
+      db: {} as Db,
+      ai: {} as AiDeps,
+      webDistDir: distDir,
+      aspectDrift: () => ({ status: 'unknown' as const }),
+      routineScheduler: () => ({ enabled: false, lastTickAt: null }),
+    });
+    expect(await (await both.request('/health')).json()).toEqual({
+      status: 'ok',
+      aspectDrift: 'unknown',
+      routineScheduler: 'off',
+    });
+  });
+
   test('/mcp GET НЕ перехвачен: всё ещё 405 (POST-only)', async () => {
     const res = await app.request('/mcp');
     expect(res.status).toBe(405);

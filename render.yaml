@@ -22,6 +22,12 @@ services:
       # session-пулер поддерживает prepared statements → prepare=true (для :6543 было бы false).
       - key: PG_PREPARE
         value: "true"
+      # Планировщик рутин (V1.2): тик раз в минуту внутри процесса, включается явно — на
+      # стенде и в тестах фон молчит. Порядок ввода на проде: миграция 0013 → пересев
+      # реестра → код → эта переменная (Р-14): включённый фон без политики 0013 не увидит
+      # ни одного владельца, а без реестра — упадёт на первой же записи прогона.
+      - key: ORBIS_ROUTINE_SCHEDULER
+        value: "1"
       # Supabase API для верификации JWT (jose): JWKS = {SUPABASE_URL}/auth/v1/.well-known/jwks.json.
       - key: SUPABASE_URL
         sync: false # https://<PROD_REF>.supabase.co

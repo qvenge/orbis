@@ -22,21 +22,29 @@ export function isValidTimeZone(timezone: string): boolean {
   }
 }
 
+/**
+ * Таймзона владельца из user_settings — под ЕГО identity (RLS скоупит выборку). Без строки
+ * (онбординг не пройден) — дефолт. Валидация зоны стоит на входе (routers/user.ts), но
+ * строка может прийти из БД мимо него (старая запись, админ-скрипт): RangeError означал бы
+ * 500 на КАЖДОМ чтении графа (а у планировщика — сломанный тик по всем рутинам владельца),
+ * поэтому мусор деградирует до дефолта, а не роняет вызывающего.
+ */
+export async function ownerTimeZone(tx: Tx, ownerId: string): Promise<string> {
+  const rows = await tx
+    .select({ timezone: userSettings.timezone })
+    .from(userSettings)
+    .where(eq(userSettings.ownerId, ownerId));
+  const stored = rows[0]?.timezone ?? DEFAULT_TIMEZONE;
+  return isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE;
+}
+
 export async function queryContext(
   tx: Tx,
   actorUserId: string,
   thisEntityId: string | null,
 ): Promise<CompileContext> {
   const catalog = await loadCatalog(tx);
-  const rows = await tx
-    .select({ timezone: userSettings.timezone })
-    .from(userSettings)
-    .where(eq(userSettings.ownerId, actorUserId));
-  const stored = rows[0]?.timezone ?? DEFAULT_TIMEZONE;
-  // Валидация зоны стоит на входе (routers/user.ts), но строка может прийти из БД
-  // мимо него (старая запись, админ-скрипт): RangeError здесь означал бы 500 на КАЖДОМ
-  // чтении графа, поэтому мусор деградирует до дефолта, а не роняет запрос.
-  const timezone = isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE;
+  const timezone = await ownerTimeZone(tx, actorUserId);
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
   return { catalog, thisEntityId, today, timezone };
 }

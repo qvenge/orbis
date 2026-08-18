@@ -52,13 +52,17 @@ const sink = makeChatJournalSink();
 type AspectsMap = Record<string, Record<string, unknown>>;
 type TemplateRow = typeof entities.$inferSelect;
 
-interface WallClock {
+// Стеночные часы владельца — экспортированы: планировщик рутин (routines/schedule.ts)
+// считает бакеты 'YYYY-MM-DDTЧЧ:ММ' в таймзоне владельца теми же двумя функциями, что
+// материализация — свой перевод «локальное время → instant» разошёлся бы с этим на первом
+// же переходе DST.
+export interface WallClock {
   date: string; // 'YYYY-MM-DD' — локальная дата instant'а в таймзоне
   time: { h: number; m: number; s: number }; // локальное время суток
 }
 
 /** Локальные дата и время instant'а в IANA-таймзоне (hourCycle h23: полночь — 00, не 24). */
-function wallClockIn(instant: Date, timeZone: string): WallClock {
+export function wallClockIn(instant: Date, timeZone: string): WallClock {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
     hourCycle: 'h23',
@@ -82,7 +86,7 @@ function wallClockIn(instant: Date, timeZone: string): WallClock {
  * Сохраняет время суток шаблона на каждую дату инстанса — сдвиг «дата + N суток в мс»
  * ломал бы час при переходе на летнее/зимнее время.
  */
-function instantOfLocal(dateISO: string, time: WallClock['time'], timeZone: string): Date {
+export function instantOfLocal(dateISO: string, time: WallClock['time'], timeZone: string): Date {
   const [y, m, d] = dateISO.split('-').map(Number) as [number, number, number];
   const desired = Date.UTC(y, m - 1, d, time.h, time.m, time.s);
   let guess = desired;

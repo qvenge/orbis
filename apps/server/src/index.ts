@@ -3,6 +3,7 @@ import { createApp, resolvePort } from './app';
 import { type AspectDriftStatus, reportAspectDriftOnStartup } from './db/aspect-drift';
 import { makeDb } from './db/client';
 import { assertPublicOriginConfigured } from './oauth/metadata';
+import { type RoutineScheduler, startRoutineScheduler } from './routines/scheduler';
 
 // Публичная база метаданных OAuth (§9.3) — ПЕРВОЙ: это чистая проверка конфигурации,
 // ей не нужны ни соединения, ни ключи, а цена ошибки высока. Кривое значение роняет
@@ -31,20 +32,54 @@ void reportAspectDriftOnStartup(db).then((d) => {
   aspectDrift = d;
 });
 
-const app = createApp({ db, ai, aspectDrift: () => aspectDrift });
+// Планировщик рутин (V1.2): тик раз в минуту в ЭТОМ процессе, включается явно переменной
+// окружения (Р-14) — на стенде и в тестах фон молчит, в render.yaml включён. Стартует
+// ПОСЛЕ подъёма сервера: /health должен отвечать до первого тика, а не после него.
+// Объявлен до createApp ради геттера в /health: 'off' | ISO последнего тика | 'pending'.
+let scheduler: RoutineScheduler | undefined;
+const app = createApp({
+  db,
+  ai,
+  aspectDrift: () => aspectDrift,
+  routineScheduler: () => ({
+    enabled: scheduler !== undefined,
+    lastTickAt: scheduler?.lastTickAt()?.toISOString() ?? null,
+  }),
+});
 
 const server = Bun.serve({
   port: resolvePort(),
   fetch: app.fetch,
 });
 
+if (process.env.ORBIS_ROUTINE_SCHEDULER === '1') {
+  scheduler = startRoutineScheduler({
+    db,
+    provider: ai.provider,
+    model: ai.model,
+    // Резолвер §8 из AiDeps: у боевых deps его нет (undefined → resolveEntitlement), но
+    // общий шов с чатом сохраняется — второй способ задать лимиты сюда не заводим
+    ...(ai.entitlements !== undefined && { entitlements: ai.entitlements }),
+    clock: () => new Date(),
+  });
+  console.log('[routines] планировщик рутин включён (ORBIS_ROUTINE_SCHEDULER=1)');
+}
+
 // Render шлёт SIGTERM на каждый деплой/рестарт и ждёт до 30 с. Без обработчика процесс
 // умирает мгновенно: агентная петля обрывается посреди шага (действия тулов уже применены,
 // assistant-сообщение не записано), пул соединений не дренится.
+//
+// Планировщик останавливается ДО client.end() (Р-12): stop() даёт раннеру рубильник —
+// идущий прогон закрывается `failed` «остановлен при выключении процесса» между шагами —
+// и дожидается тика; иначе пул рвался бы под транзакцией закрытия, а прогон висел бы
+// `running` до подметания. Рубильник дёргается сразу (до дренажа запросов), чтобы прогон
+// не тратил окно SIGTERM на лишний шаг модели.
 async function shutdown(signal: string): Promise<void> {
   console.log(`[server] ${signal}: останавливаюсь, дожидаюсь in-flight запросов`);
   try {
+    const schedulerStopped = scheduler?.stop();
     await server.stop(); // без force: активные запросы доживают
+    await schedulerStopped;
     await client.end({ timeout: 5 });
   } catch (e) {
     console.error('[server] ошибка при остановке:', e);

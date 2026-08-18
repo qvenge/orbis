@@ -3,8 +3,10 @@
 // (V1.8) и когда рутина сама себя останавливает (V1.12).
 //
 // Почему это отдельный модуль от раннера: и гашение незакрытого, и стоп-кран — правила
-// РУТИНЫ, а не цикла модели. Их зовёт раннер (Задача 9), а `startBucketRun` планировщика
-// (Задача 10) встанет рядом на те же `RoutineDeps` — цикл модели ему не нужен вовсе.
+// РУТИНЫ, а не цикла модели. Их зовёт раннер, а запуск прогона (`startBucketRun`
+// планировщика, `startManualRun` кнопки «прогнать сейчас») стоит рядом на тех же
+// `RoutineDeps` — цикл модели ему не нужен вовсе: «кто создал прогон, тот и гонит модель»
+// (V1.3), и создание отделено от гонки нарочно.
 //
 // Атрибуция всех записей этого модуля — `actorKind: 'ai'`, `source: 'system'` (рулинг
 // Р-7/В1): это протокол ведения прогонов, а не правка графа по существу. Отсюда два
@@ -12,20 +14,37 @@
 // только `system`) не снимает пометку «заменено» вместо правки модели, а инвариант
 // запрета по объекту (V1.10, молчит для владельческих и системных источников) не блокирует
 // паузу самой рутины.
-import { isManualBucket, newId } from '@orbis/shared';
-import { runSummary, runsOfParent } from '../agent-loop/queries';
+import {
+  isManualBucket,
+  manualBucket,
+  newId,
+  routineRunBatchId,
+  routineRunId,
+} from '@orbis/shared';
+import { type RunRow, runSummary, runsForBucket, runsOfParent } from '../agent-loop/queries';
 import type { Clock } from '../budget/aggregates';
 import { appendMessage } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
-import type { EntitlementResolver } from '../entitlements';
+import {
+  type EntitlementResolver,
+  ROUTINE_RUNS_PER_DAY_KEY,
+  resolveEntitlement,
+} from '../entitlements';
+import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { JournalSink } from '../executor/types';
 import type { LLMProvider } from '../llm/types';
 import { rejectPending } from '../policy/pending';
-import { CONSECUTIVE_FAILURES_TO_PAUSE, ROUTINE_HISTORY_TAIL } from './constants';
+import { wallClockIn } from '../recurring/materialize';
+import {
+  CONSECUTIVE_FAILURES_TO_PAUSE,
+  MAX_ATTEMPTS,
+  RETRY_DELAYS_MS,
+  ROUTINE_HISTORY_TAIL,
+} from './constants';
 import type { RoutineHistoryItem } from './context';
 
 /** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
@@ -284,6 +303,243 @@ export async function pauseIfFailing(
     }),
   );
   return { paused: true };
+}
+
+// ---------------------------------------------------------------------------
+// Запуск прогона (V1.3): бакет планировщика и ручной прогон
+// ---------------------------------------------------------------------------
+
+/**
+ * Чем кончилась попытка завести прогон. `started` — прогон создан ЭТИМ вызовом, и модель
+ * гонит вызывающий (инвариант 1); всё остальное — «не гоним», с причиной для тика и
+ * экрана. Причины: `replay` — тот же batch уже исполнен (конкурент опередил, PK audit'а);
+ * `id_conflict` — id прогона занят (конкурент опередил в той же миллисекунде); `running` —
+ * у рутины уже идёт прогон; `done` — слот отработан (терминальный исход, кроме failed);
+ * `attempts` — попытки бакета исчерпаны; `backoff` — пауза перед следующей попыткой ещё
+ * идёт; `limit` — лимит прогонов в сутки (V1.15).
+ */
+export type StartOutcome =
+  | { started: true; runId: string }
+  | {
+      started: false;
+      reason: 'replay' | 'id_conflict' | 'running' | 'limit' | 'attempts' | 'backoff' | 'done';
+    };
+
+/** Рутина в объёме, нужном запуску: id — для ключей и связи, title — для заголовка прогона. */
+export interface StartRoutineRef {
+  id: string;
+  title: string;
+}
+
+function skip(reason: Extract<StartOutcome, { started: false }>['reason']): StartOutcome {
+  return { started: false, reason };
+}
+
+/**
+ * Заводит прогон бакета (V1.3, инвариант 1) — ОДНИМ batch'ем `[entity_create(id =
+ * routineRunId), relation_create parent]` с детерминированным `batchId =
+ * routineRunBatchId(рутина, бакет, попытка)`.
+ *
+ * Почему batch, а не два вызова: прогон без связи с рутиной — сирота, которого не видит
+ * ни история, ни стоп-кран, ни экран; атомарность даёт executor. Почему детерминированный
+ * batchId (Р-1): replay-семантика одиночного entity_create в batch не действует — занятый
+ * id там всегда CONFLICT/id_conflict; а по PK audit-сообщения тот же batch у второго
+ * вызывающего становится `idempotentReplay`. Оба исхода читаются одинаково: «проиграл,
+ * модель не гоню» — и два тика в одну минуту (два инстанса на деплое) сходятся к одному
+ * прогону и одному вызову модели.
+ *
+ * Порядок проверок: идущий прогон → отработанный слот → попытки исчерпаны → пауза ретрая →
+ * лимит суток. «Идущий» проверяется по ВСЕЙ рутине, а не по слоту: у рутины
+ * не бывает двух прогонов разом (иначе оба гасили бы незакрытое друг у друга и подавали бы
+ * два предложения на одно утро); бакет при этом не пропадает — тик вернётся к нему через
+ * минуту, когда идущий закончится.
+ *
+ * Пауза ретрая — от `finished_at` последнего провала (см. RETRY_DELAYS_MS): сбой,
+ * закрытый подметанием через полчаса, не должен ретраиться в ту же секунду. Провал без
+ * `finished_at` в графе невозможен (закрытие пишет его всегда), но на всякий случай
+ * отсчёт берётся от `started_at`.
+ *
+ * Бухгалтерия прогона (Р-7): актор `ai`, источник `system`, `runId` — «отмени последнее»
+ * такое не трогает, а инвариант запрета по объекту (V1.10) для system молчит.
+ */
+export async function startBucketRun(
+  deps: RoutineDeps,
+  args: { ownerId: string; routine: StartRoutineRef; bucket: string },
+): Promise<StartOutcome> {
+  const { ownerId, routine, bucket } = args;
+  const { all, ofBucket } = await withIdentity(deps.db, ownerId, async (tx) => ({
+    all: await runsOfParent(tx, routine.id),
+    ofBucket: await runsForBucket(tx, routine.id, bucket),
+  }));
+
+  if (all.some((r) => r.run.outcome === 'running')) return skip('running');
+  // Идущих больше нет, значит любой не-failed исход слота — терминальный: слот отработан
+  if (ofBucket.some((r) => r.run.outcome !== 'failed')) return skip('done');
+  const failed = ofBucket.filter((r) => r.run.outcome === 'failed');
+  if (failed.length >= MAX_ATTEMPTS) return skip('attempts');
+  if (failed.length > 0) {
+    const delay =
+      RETRY_DELAYS_MS[failed.length - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1] ?? 0;
+    const lastFailedAt = Math.max(
+      ...failed.map((r) => Date.parse(r.run.finished_at ?? r.run.started_at)),
+    );
+    if (lastFailedAt + delay > deps.clock().getTime()) return skip('backoff');
+  }
+  // Сутки лимита — по дате бакета (см. overRunsPerDay), а не по «сегодня» тика
+  if (overRunsPerDay(deps, ownerId, all, bucket.slice(0, 10))) return skip('limit');
+
+  const attempt = failed.length + 1;
+  return createRun(deps, {
+    ownerId,
+    routine,
+    bucket,
+    attempt,
+    batchId: routineRunBatchId(routine.id, bucket, attempt),
+    title: `Прогон: ${routine.title} — ${bucket.replace('T', ' ')}`,
+  });
+}
+
+/**
+ * Ручной прогон «прогнать сейчас» (V1.3): свой ключ `manual:<ISO часов>`, плановый бакет
+ * не занимает, попытка всегда 1 (не ретраится), в стоп-кране не участвует (это уже в
+ * pauseIfFailing/раннере). Свежий `batchId`: повтор кнопки — новый прогон, а не replay
+ * старого; тот же ключ в ту же миллисекунду — `id_conflict`, не второй цикл.
+ *
+ * Два правила общие с бакетом: у рутины не бывает двух идущих прогонов, и лимит прогонов
+ * в сутки (V1.15) — тот же ключ: кнопка не должна обходить исчерпанный день. Сутки для
+ * ручного — локальная дата владельца на момент нажатия (`timeZone`).
+ */
+export async function startManualRun(
+  deps: RoutineDeps,
+  args: { ownerId: string; routine: StartRoutineRef; timeZone: string },
+): Promise<StartOutcome> {
+  const { ownerId, routine, timeZone } = args;
+  const now = deps.clock();
+  const all = await withIdentity(deps.db, ownerId, (tx) => runsOfParent(tx, routine.id));
+  if (all.some((r) => r.run.outcome === 'running')) return skip('running');
+  if (overRunsPerDay(deps, ownerId, all, wallClockIn(now, timeZone).date)) return skip('limit');
+
+  return createRun(deps, {
+    ownerId,
+    routine,
+    bucket: manualBucket(now.toISOString()),
+    attempt: 1,
+    batchId: newId(),
+    title: `Прогон: ${routine.title} — вручную`,
+  });
+}
+
+/**
+ * Лимит `routines.runs_per_day` (V1.15) через резолвер §8: считаются ПЛАНОВЫЕ прогоны
+ * рутины (бакет не `manual:`) любого исхода, чья ДАТА БАКЕТА — заданные локальные сутки.
+ *
+ * Почему по дате бакета, а не по created_at в таймзоне: сутки лимита — сутки рутины
+ * («её локальные сутки»), а не сутки, в которые сервер проснулся. Бакет 23:30, догнанный
+ * в 00:15, и его ретрай в 00:20 относятся ко вчерашнему дню и не съедают сегодняшний
+ * слот; счёт при этом не зависит от того, бодрствовал ли сервер (V1.2). Ручные прогоны
+ * не считаются (за ними стоит рука владельца, лимит — про автономный расход), но сами
+ * упираются в тот же лимит: кнопка не обходит исчерпанный день.
+ */
+function overRunsPerDay(
+  deps: RoutineDeps,
+  ownerId: string,
+  runs: RunRow[],
+  localDate: string,
+): boolean {
+  const decision = (deps.entitlements ?? resolveEntitlement)(ownerId, ROUTINE_RUNS_PER_DAY_KEY);
+  // Отказ резолвера — «прогонов на этом плане нет вовсе»: считать уже нечего
+  if (!decision.allowed) return true;
+  if (decision.limit === null) return false; // безлимитный план (сегодняшний 'dev')
+  const planned = runs.filter(
+    (r) =>
+      r.run.bucket !== undefined &&
+      !isManualBucket(r.run.bucket) &&
+      r.run.bucket.startsWith(localDate),
+  );
+  return planned.length >= decision.limit;
+}
+
+/**
+ * Собственно создание: тот же batch, что у фикстуры seedRoutineRun и у claim_task —
+ * сущность прогона в `running` со связью `parent` от рутины. Часы батча — `deps.clock`:
+ * из них берутся и `started_at` (от него раннер считает дедлайн), и `created_at`
+ * сущности (по нему читается порядок попыток).
+ */
+async function createRun(
+  deps: RoutineDeps,
+  args: {
+    ownerId: string;
+    routine: StartRoutineRef;
+    bucket: string;
+    attempt: number;
+    batchId: string;
+    title: string;
+  },
+): Promise<StartOutcome> {
+  const runId = routineRunId(args.routine.id, args.bucket, args.attempt);
+  const nowIso = deps.clock().toISOString();
+  const r = await execute(
+    deps.db,
+    {
+      actorUserId: args.ownerId,
+      actorKind: 'ai',
+      source: 'system',
+      runId,
+      batchId: args.batchId,
+      clock: deps.clock,
+      operations: [
+        {
+          tool: 'entity_create',
+          input: {
+            id: runId,
+            title: args.title,
+            tags: [],
+            aspects: {
+              'orbis/agent-run': {
+                routine_id: args.routine.id,
+                bucket: args.bucket,
+                attempt: args.attempt,
+                outcome: 'running',
+                started_at: nowIso,
+                last_step_at: nowIso,
+                step_count: 0,
+                steps: [],
+              },
+            },
+          },
+        },
+        {
+          tool: 'relation_create',
+          input: { source_id: args.routine.id, target_id: runId, relation_type: 'parent' },
+        },
+      ],
+    },
+    { sink: deps.sink ?? defaultSink },
+  );
+  if (!r.ok) {
+    // Проигранная гонка приходит двумя отказами, и оба значат одно — «этот прогон только
+    // что создал конкурент, модель не гоним»:
+    // - CONFLICT/id_conflict — id прогона занят (в batch занятый id всегда отказ, не replay);
+    // - INVARIANT/duplicate_relation — конкурент закоммитил МЕЖДУ нашими стадиями: проверка
+    //   id прошла (его строка ещё не была видна), а предпроверка связи parent (стадия 4
+    //   batch, до первой записи) уже увидела его связь рутина→прогон. Связь с этим ключом
+    //   существует только вместе с прогоном того же id, так что смысл тот же.
+    // Любой иной отказ — дефект, а не состояние графа (предусловий у batch нет): поднимаем
+    // доменной ошибкой, тик её залогирует, кнопка вернёт структурным отказом.
+    const details = r.error.details as { reason?: string; invariant?: string } | undefined;
+    const lostRace =
+      (r.error.code === 'CONFLICT' && details?.reason === 'id_conflict') ||
+      (r.error.code === 'INVARIANT' && details?.invariant === 'duplicate_relation');
+    if (lostRace) return skip('id_conflict');
+    throw new ExecError(
+      r.error.code as ExecErrorCode,
+      `прогон рутины не создан: ${r.error.message}`,
+      { routine_id: args.routine.id, bucket: args.bucket, details: r.error.details },
+    );
+  }
+  // Тот же batch уже исполнен конкурентом — сущность его, модель гонит он (Р-1)
+  if (r.idempotentReplay) return skip('replay');
+  return { started: true, runId };
 }
 
 /**

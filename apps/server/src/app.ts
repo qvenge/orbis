@@ -125,9 +125,22 @@ export interface AppDeps {
    * композиции, встроенные стенды) — /health про реестр молчит.
    */
   aspectDrift?: () => AspectDriftStatus;
+  /**
+   * Состояние планировщика рутин (V1.2) — тоже геттер: последний тик меняется каждую
+   * минуту. Геттера нет — /health про планировщик молчит (та же форма, что у aspectDrift).
+   * `enabled: false` — фон выключен env'ом (стенд, тесты); `lastTickAt: null` при
+   * включённом — первый тик ещё не прошёл.
+   */
+  routineScheduler?: () => { enabled: boolean; lastTickAt: string | null };
 }
 
-export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: AppDeps): Hono {
+export function createApp({
+  db,
+  ai,
+  webDistDir = WEB_DIST_DIR,
+  aspectDrift,
+  routineScheduler,
+}: AppDeps): Hono {
   const app = new Hono();
 
   // --- Защита от кликджекинга: ПЕРВЫМ middleware, на весь сервис ---
@@ -192,14 +205,23 @@ export function createApp({ db, ai, webDistDir = WEB_DIST_DIR, aspectDrift }: Ap
   // не-200 здесь превратил бы наблюдаемость ловушки в отказ деплоя (E1). Третье значение
   // — 'unknown': проверка не выполнилась (БД была недоступна на старте), и выдавать это
   // за «расхождений нет» нельзя — именно так ловушка снималась молча.
+  //
+  // Планировщик рутин (V1.2) — тем же правилом: поле появляется только с геттером и никогда
+  // не меняет код ответа. 'off' — выключен env'ом; 'pending' — включён, первого тика ещё не
+  // было; иначе ISO последнего тика — по нему внешний пингер (runbook §5) видит, что фон
+  // жив, а не только что процесс отвечает.
   app.get('/health', (c) => {
+    const body: Record<string, unknown> = { status: 'ok' };
     const state = aspectDrift?.();
-    if (state === undefined || state.status === 'ok') return c.json({ status: 'ok' });
-    if (state.status === 'unknown') return c.json({ status: 'ok', aspectDrift: 'unknown' });
-    return c.json({
-      status: 'ok',
-      aspectDrift: [...state.drift.missing, ...state.drift.drifted.map((d) => d.id)],
-    });
+    if (state !== undefined && state.status === 'unknown') body.aspectDrift = 'unknown';
+    else if (state !== undefined && state.status === 'drift') {
+      body.aspectDrift = [...state.drift.missing, ...state.drift.drifted.map((d) => d.id)];
+    }
+    const scheduler = routineScheduler?.();
+    if (scheduler !== undefined) {
+      body.routineScheduler = !scheduler.enabled ? 'off' : (scheduler.lastTickAt ?? 'pending');
+    }
+    return c.json(body);
   });
 
   // --- Same-origin раздача web-статики (Task 7, Вариант A) ---
