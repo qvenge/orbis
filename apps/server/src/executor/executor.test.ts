@@ -1428,3 +1428,207 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
     expect(step.ok).toBe(true);
   });
 });
+
+describe('V1: источник routine не трогает рутины и назначения (V1.10, инвариант 6)', () => {
+  /** Рутина в минимальной валидной форме (V1.1); «что делать» живёт в теле. */
+  const routine = (over: Record<string, unknown> = {}) => ({
+    stage: 'active',
+    at: '07:00',
+    mode: 'propose',
+    ...over,
+  });
+
+  /** Прогон рутины в минимальной валидной форме (V1.4) — субъектом routine_id. */
+  const run = (routineId: string) => ({
+    outcome: 'running',
+    started_at: '2026-08-18T07:00:00.000Z',
+    last_step_at: '2026-08-18T07:00:00.000Z',
+    step_count: 0,
+    steps: [],
+    routine_id: routineId,
+  });
+
+  /** Мутация от лица прогона рутины: source — единственный вход инварианта. */
+  const asRoutine = { source: 'routine', actorKind: 'ai' } as const;
+
+  /** Отказ по объекту — код и причина одни на всех пяти точках проверки. */
+  function expectUntouchable(r: Awaited<ReturnType<typeof execute>>): void {
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('FORBIDDEN_LEVEL');
+    expect((r.error.details as { reason?: string }).reason).toBe('routine_untouchable');
+  }
+
+  test('пять пар «source routine — отказ / тот же вход из чата и системы — проходит»', async () => {
+    // Пара 1: entity_update рутины. Запрет по ОБЪЕКТУ, а не по глаголу: правка одного
+    // титула рутины — тоже правка рутины, аспектов патч не трогает вовсе.
+    const target = firstEntity(
+      await execute(
+        db,
+        req('entity_create', {
+          title: 'Утренний обзор',
+          tags: [],
+          aspects: { 'orbis/routine': routine() },
+        }),
+      ),
+    );
+    expectUntouchable(
+      await execute(
+        db,
+        req('entity_update', { id: target.id, title: 'Переименовал себя' }, asRoutine),
+      ),
+    );
+    const byChat = await execute(
+      db,
+      req('entity_update', { id: target.id, title: 'Переименовал владелец' }, { source: 'chat' }),
+    );
+    expect(byChat.ok).toBe(true);
+
+    // Пара 2: attach_orbis_routine — третий путь появления аспекта, им рутина
+    // заводится на уже существующей сущности.
+    const plain = firstEntity(
+      await execute(db, req('entity_create', { title: 'Заметка', tags: [] })),
+    );
+    expectUntouchable(
+      await execute(
+        db,
+        req('attach_orbis_routine', { entity_id: plain.id, data: routine() }, asRoutine),
+      ),
+    );
+    const attachByChat = await execute(
+      db,
+      req('attach_orbis_routine', { entity_id: plain.id, data: routine() }, { source: 'chat' }),
+    );
+    expect(attachByChat.ok).toBe(true);
+
+    // Пара 3: entity_create с orbis/routine — рутина не плодит рутин.
+    expectUntouchable(
+      await execute(
+        db,
+        req(
+          'entity_create',
+          { title: 'Рутина от рутины', tags: [], aspects: { 'orbis/routine': routine() } },
+          asRoutine,
+        ),
+      ),
+    );
+    const createByChat = await execute(
+      db,
+      req(
+        'entity_create',
+        { title: 'Рутина от владельца', tags: [], aspects: { 'orbis/routine': routine() } },
+        { source: 'chat' },
+      ),
+    );
+    expect(createByChat.ok).toBe(true);
+
+    // Пара 4: orbis/assignment — второй запрещённый объект: рутина не раздаёт работу
+    // исполнителям. Сущность обычная, запрещает именно затронутый аспект.
+    const ticket = firstEntity(
+      await execute(db, req('entity_create', { title: 'Тикет', tags: [] })),
+    );
+    expectUntouchable(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          { id: ticket.id, aspects: { 'orbis/assignment': { executor: 'human', assignee: 'Я' } } },
+          asRoutine,
+        ),
+      ),
+    );
+    const assignBySystem = await execute(
+      db,
+      req(
+        'entity_update',
+        { id: ticket.id, aspects: { 'orbis/assignment': { executor: 'human', assignee: 'Я' } } },
+        { source: 'system' },
+      ),
+    );
+    expect(assignBySystem.ok).toBe(true);
+
+    // Пара 5: relation_create с рутиной на конце. Прогон рутины (orbis/agent-run с
+    // routine_id) рутиной НЕ является: его создание и связь parent рутина→прогон —
+    // бухгалтерия источником system (Р-7), инвариант на них молчит.
+    const runEntity = firstEntity(
+      await execute(
+        db,
+        req(
+          'entity_create',
+          { title: 'Прогон рутины', tags: [], aspects: { 'orbis/agent-run': run(target.id) } },
+          { source: 'system', actorKind: 'ai' },
+        ),
+      ),
+    );
+    expectUntouchable(
+      await execute(
+        db,
+        req(
+          'relation_create',
+          { source_id: target.id, target_id: runEntity.id, relation_type: 'parent' },
+          asRoutine,
+        ),
+      ),
+    );
+    const linkBySystem = await execute(
+      db,
+      req(
+        'relation_create',
+        { source_id: target.id, target_id: runEntity.id, relation_type: 'parent' },
+        { source: 'system', actorKind: 'ai' },
+      ),
+    );
+    expect(linkBySystem.ok).toBe(true);
+
+    // Пара 5b: relation_delete той же связи — «удалить» тоже глагол, объект тот же.
+    expectUntouchable(
+      await execute(
+        db,
+        req(
+          'relation_delete',
+          { source_id: target.id, target_id: runEntity.id, relation_type: 'parent' },
+          asRoutine,
+        ),
+      ),
+    );
+    const unlinkBySystem = await execute(
+      db,
+      req(
+        'relation_delete',
+        { source_id: target.id, target_id: runEntity.id, relation_type: 'parent' },
+        { source: 'system', actorKind: 'ai' },
+      ),
+    );
+    expect(unlinkBySystem.ok).toBe(true);
+  });
+
+  test('в batch источника routine один запрещённый op валит весь batch ДО записи', async () => {
+    const target = firstEntity(
+      await execute(
+        db,
+        req('entity_create', {
+          title: 'Рутина под batch',
+          tags: [],
+          aspects: { 'orbis/routine': routine() },
+        }),
+      ),
+    );
+    const newEntityId = newId();
+
+    // Разрешённая операция стоит ПЕРВОЙ: batch валидируется целиком на стадиях 1–4
+    // (prepareOp по всем операциям) до первого apply — значит и разрешённая не пишется.
+    const r = await execute(db, {
+      actorUserId: userA,
+      actorKind: 'ai',
+      source: 'routine',
+      batchId: newId(),
+      clock: () => T0,
+      operations: [
+        { tool: 'entity_create', input: { id: newEntityId, title: 'Итог обзора', tags: [] } },
+        { tool: 'entity_update', input: { id: target.id, title: 'Тронул рутину' } },
+      ],
+    });
+    expectUntouchable(r);
+    expect(await countEntities(newEntityId)).toBe(0);
+  });
+});

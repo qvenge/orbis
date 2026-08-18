@@ -25,6 +25,7 @@ function facts(over: Partial<ToolCallFacts> = {}): ToolCallFacts {
     explicitCommand: false,
     archives: false,
     isBatch: false,
+    grantsAutonomy: false,
     ...over,
   };
 }
@@ -158,6 +159,7 @@ describe('глаголы исполнителя и thread_post → execute (ин
         known: true,
         archives: false,
         isBatch: false,
+        grantsAutonomy: false,
       });
 
       // explicitCommand — единственный акторный вход, способный сдвинуть уровень
@@ -182,6 +184,7 @@ describe('factsFromToolCall: извлечение фактов формы выз
       known: true,
       archives: true,
       isBatch: false,
+      grantsAutonomy: false,
     });
   });
 
@@ -212,6 +215,7 @@ describe('factsFromToolCall: извлечение фактов формы выз
       known: true,
       archives: false,
       isBatch: false,
+      grantsAutonomy: false,
     });
   });
 
@@ -230,6 +234,7 @@ describe('factsFromToolCall: извлечение фактов формы выз
       archives: false,
       isBatch: true,
       batchSize: 2,
+      grantsAutonomy: false,
     });
   });
 
@@ -283,5 +288,157 @@ describe('entityUpdatePreviewDiff: diff карточки preview из журна
       before: undefined,
       after: { 'orbis/task': { status: 'done' } },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Инвариант 7 (V1.10): выдача автономии рутине — explicit-confirmation
+// ---------------------------------------------------------------------------
+
+/**
+ * Право рутины писать в граф выдаёт ТОЛЬКО владелец: `mode: act` и белый список
+ * `allowed_tools` — это доверенность, а не поле расписания. Проверяется на уровне политики,
+ * а не транспорта: правило одно для внутреннего чата и MCP (§9.3), иначе внешний агент
+ * получил бы автономию, обойдя карточку подтверждения другим каналом.
+ */
+describe('автономия рутине → explicit-confirmation (V1.10, инвариант 7)', () => {
+  const CREATE_DEF = { name: 'entity_create', kind: 'mutate' as const };
+  const UPDATE_DEF = { name: 'entity_update', kind: 'mutate' as const };
+  const ATTACH_DEF = { name: 'attach_orbis_routine', kind: 'mutate' as const };
+  const BATCH_DEF = { name: 'batch_execute', kind: 'mutate' as const };
+
+  const routine = (over: Record<string, unknown> = {}) => ({
+    stage: 'active',
+    at: '07:00',
+    mode: 'propose',
+    ...over,
+  });
+
+  /** Уровень «как в dispatch»: факты формы вызова + акторные факты. */
+  function levelOf(
+    def: { name: string; kind: 'read' | 'mutate' },
+    input: unknown,
+    actorKind: ToolCallFacts['actorKind'] = 'ai',
+  ): ReturnType<typeof classifyToolCall> {
+    return classifyToolCall({
+      ...factsFromToolCall(def, input),
+      actorKind,
+      explicitCommand: false,
+    });
+  }
+
+  test('create/attach рутины с mode act и правка mode|allowed_tools → explicit-confirmation актором ai и agent', () => {
+    const cases: Array<[string, { name: string; kind: 'mutate' }, unknown]> = [
+      [
+        'entity_create act-рутины',
+        CREATE_DEF,
+        {
+          title: 'Утренний обзор',
+          tags: [],
+          aspects: { 'orbis/routine': routine({ mode: 'act' }) },
+        },
+      ],
+      [
+        'attach_orbis_routine act',
+        ATTACH_DEF,
+        { entity_id: newId(), data: routine({ mode: 'act' }) },
+      ],
+      [
+        'entity_update mode',
+        UPDATE_DEF,
+        { id: newId(), aspects: { 'orbis/routine': { mode: 'act' } } },
+      ],
+      [
+        'entity_update allowed_tools',
+        UPDATE_DEF,
+        { id: newId(), aspects: { 'orbis/routine': { allowed_tools: ['entity_create'] } } },
+      ],
+      // Возврат в propose — тоже правка доверенности: разоружение рутины владелец
+      // обязан видеть так же, как её вооружение.
+      [
+        'entity_update mode обратно в propose',
+        UPDATE_DEF,
+        { id: newId(), aspects: { 'orbis/routine': { mode: 'propose' } } },
+      ],
+    ];
+    for (const [name, def, input] of cases) {
+      expect(factsFromToolCall(def, input).grantsAutonomy).toBe(true);
+      for (const actorKind of ['ai', 'agent'] as const) {
+        expect([name, levelOf(def, input, actorKind)]).toEqual([name, 'explicit-confirmation']);
+      }
+    }
+  });
+
+  test('актором owner ряд не срабатывает: владелец выдаёт автономию сам, подтверждать некому', () => {
+    const input = {
+      title: 'Утренний обзор',
+      tags: [],
+      aspects: { 'orbis/routine': routine({ mode: 'act' }) },
+    };
+    expect(levelOf(CREATE_DEF, input, 'owner')).toBe('execute');
+  });
+
+  test('mode propose и правка расписания автономии не выдают → execute', () => {
+    const created = {
+      title: 'Утренний обзор',
+      tags: [],
+      aspects: { 'orbis/routine': routine() },
+    };
+    expect(factsFromToolCall(CREATE_DEF, created).grantsAutonomy).toBe(false);
+    expect(levelOf(CREATE_DEF, created)).toBe('execute');
+
+    const attach = { entity_id: newId(), data: routine() };
+    expect(factsFromToolCall(ATTACH_DEF, attach).grantsAutonomy).toBe(false);
+    expect(levelOf(ATTACH_DEF, attach)).toBe('execute');
+
+    // Патч расписания и жизненного цикла доверенности не касается
+    const reschedule = {
+      id: newId(),
+      aspects: { 'orbis/routine': { at: '09:00', stage: 'paused' } },
+    };
+    expect(factsFromToolCall(UPDATE_DEF, reschedule).grantsAutonomy).toBe(false);
+    expect(levelOf(UPDATE_DEF, reschedule)).toBe('execute');
+
+    // Чужой аспект с полем mode — не рутина
+    const foreign = { id: newId(), aspects: { 'orbis/task': { status: 'done' } } };
+    expect(factsFromToolCall(UPDATE_DEF, foreign).grantsAutonomy).toBe(false);
+  });
+
+  test('batch: любая операция выдачи автономии поднимает весь batch (ряд ПЕРЕД isBatch → preview)', () => {
+    const withAutonomy = {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_create', input: { title: 'Итог', tags: [] } },
+        {
+          tool: 'attach_orbis_routine',
+          input: { entity_id: newId(), data: routine({ mode: 'act' }) },
+        },
+      ],
+    };
+    const f = factsFromToolCall(BATCH_DEF, withAutonomy);
+    expect(f.grantsAutonomy).toBe(true);
+    // Ряд масштаба здесь дал бы preview (2 операции) — автономия обязана быть первее
+    expect(f.isBatch).toBe(true);
+    expect(f.batchSize).toBe(2);
+    expect(levelOf(BATCH_DEF, withAutonomy)).toBe('explicit-confirmation');
+
+    const plain = {
+      batch_id: newId(),
+      operations: [{ tool: 'entity_create', input: { title: 'Итог', tags: [] } }],
+    };
+    expect(factsFromToolCall(BATCH_DEF, plain).grantsAutonomy).toBe(false);
+  });
+
+  test('ряды 1–6 не сдвинулись: grantsAutonomy=false по умолчанию, уровни прежние', () => {
+    expect(factsFromToolCall(UPDATE_DEF, { id: newId(), title: 'x' }).grantsAutonomy).toBe(false);
+    expect(classifyToolCall(facts({ known: false }))).toBe('forbidden'); // ряд 1
+    expect(classifyToolCall(facts({ kind: 'read' }))).toBe('execute'); // ряд 2
+    expect(classifyToolCall(facts({ archives: true }))).toBe('explicit-confirmation'); // ряд 3
+    expect(classifyToolCall(facts({ isBatch: true, batchSize: 11 }))).toBe('explicit-confirmation'); // ряд 4
+    expect(classifyToolCall(facts({ isBatch: true, batchSize: 2 }))).toBe('preview'); // ряд 5
+    expect(classifyToolCall(facts())).toBe('execute'); // ряд 6
+
+    // Ряд 1 первее автономии: незнакомый тул не исполняется ни на каком уровне
+    expect(classifyToolCall(facts({ known: false, grantsAutonomy: true }))).toBe('forbidden');
   });
 });

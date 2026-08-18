@@ -1239,3 +1239,72 @@ describe('Внутренние операции версий недостижи�
     });
   }
 });
+
+describe('V1: выдача автономии рутине из чата → pending_confirmation (V1.10, инвариант 7)', () => {
+  /** Рутина в минимальной валидной форме (V1.1). */
+  const routine = (over: Record<string, unknown> = {}) => ({
+    stage: 'active',
+    at: '07:00',
+    mode: 'propose',
+    ...over,
+  });
+
+  async function aspectsOf(id: string): Promise<Record<string, unknown>> {
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, id)),
+    );
+    return (rows[0]?.aspects ?? {}) as Record<string, unknown>;
+  }
+
+  test('attach_orbis_routine с mode act → pending_confirmation, карточка в треде, граф не тронут', async () => {
+    const host = await seedEntity(userA, { title: 'Хост-тред автономии', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const target = await seedEntity(userA, { title: 'Утренний обзор', tags: [] });
+
+    const r = await dispatchTool(ctxFor({ threadId }), 'attach_orbis_routine', {
+      entity_id: target.id,
+      data: routine({ mode: 'act' }),
+    });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation') return;
+    expect(r.card).toEqual({
+      kind: 'confirmation_card',
+      mode: 'explicit',
+      pendingId: r.pendingId,
+      summary: 'attach_orbis_routine',
+    });
+    // Право писать в граф не выдано до подтверждения владельца
+    expect(await aspectsOf(target.id)).toEqual({});
+    const msgs = await messagesIn(userA, threadId);
+    expect(msgs.length).toBe(1);
+    expect(msgs[0]?.id).toBe(r.pendingId);
+  });
+
+  test('entity_update рутины с mode act → pending_confirmation; режим в графе прежний', async () => {
+    const target = await seedEntity(userA, {
+      title: 'Вечерний разбор',
+      tags: [],
+      aspects: { 'orbis/routine': routine() },
+    });
+
+    const r = await dispatchTool(ctxFor(), 'entity_update', {
+      id: target.id,
+      aspects: { 'orbis/routine': { mode: 'act' } },
+    });
+    expect(r.status).toBe('pending_confirmation');
+    const stored = (await aspectsOf(target.id))['orbis/routine'] as { mode?: string } | undefined;
+    expect(stored?.mode).toBe('propose');
+  });
+
+  test('attach_orbis_routine с mode propose автономии не выдаёт → ok, аспект записан', async () => {
+    const target = await seedEntity(userA, { title: 'Обзор без прав', tags: [] });
+
+    const r = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: target.id,
+      data: routine(),
+    });
+    expect(r.status).toBe('ok');
+    const stored = (await aspectsOf(target.id))['orbis/routine'] as { mode?: string } | undefined;
+    expect(stored?.mode).toBe('propose');
+  });
+});

@@ -222,6 +222,8 @@ export async function dispatchTool(
         explicitCommand: ctx.explicitCommand,
         archives: false,
         isBatch: false,
+        // Незнакомому тулу нечего выдавать: ряд «!known» первый в таблице, факт не влияет
+        grantsAutonomy: false,
       });
       const gated = levelGate(level, name, `неизвестный тул «${name}» — вызов запрещён (§7.10)`);
       if (gated !== null) return gated;

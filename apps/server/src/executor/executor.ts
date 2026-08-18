@@ -58,6 +58,8 @@ import {
   assertAcyclicBlocks,
   assertAssignment,
   assertNoDuplicateRelation,
+  assertRoutineRelationUntouchable,
+  assertRoutineUntouchable,
   assertRunSubject,
   assertSingleBudgetParent,
   duplicateRelationError,
@@ -1045,6 +1047,9 @@ async function prepareEntityCreate(
   await assertAssignment(ctx.tx, ctx.req.actorUserId, aspects);
   // Ровно один субъект у прогона (V1.4) — тем же путём, что и назначение
   assertRunSubject(aspects);
+  // Запрет по объекту для источника routine (V1.10): у create строки «до» нет, а
+  // «затронуто» — всё, что пришло во входе
+  assertRoutineUntouchable(ctx.req.source, { next: aspects, touched: Object.keys(aspects) });
   // Заготовка тела проекта (С10). Засев живёт в executor'е, а не в роутере/адаптере: тогда
   // проект, заведённый чатом, MCP и UI, получает одно и то же тело. У create «тело до
   // операции» — это канон входа (пусто, если body не прислали ИЛИ прислали пустую строку:
@@ -1285,6 +1290,16 @@ async function prepareEntityUpdate(
     }
   }
 
+  // Запрет по объекту для источника routine (V1.10). Проверка стоит ВНЕ гейта
+  // `input.aspects` намеренно: переименование, архивация и правка тела рутины аспектов не
+  // трогают, но правкой рутины быть не перестают — запрет сформулирован по объекту, а не по
+  // содержимому патча. Строка прочитана под FOR UPDATE выше, запись — ниже.
+  assertRoutineUntouchable(ctx.req.source, {
+    before: currentAspects,
+    next: nextAspects,
+    touched,
+  });
+
   // Уникальность конверта (03-budget §2.1) над ФИНАЛЬНЫМ состоянием: и правка
   // комбинации, и разархивация (archived=false возвращает конверт в множество
   // неархивных) не должны создавать дубль. Внутренний undo восстанавливает
@@ -1511,6 +1526,13 @@ async function prepareAttach(
   // и потерять субъект, и добавить второй. Гейта по aspectId нет — проверка сама молчит,
   // когда прогона в итоговой карте не оказалось.
   assertRunSubject(nextAspects);
+  // Запрет по объекту для источника routine (V1.10): attach — третий путь появления
+  // аспекта, им рутина заводилась бы на готовой сущности мимо create
+  assertRoutineUntouchable(ctx.req.source, {
+    before: currentAspects,
+    next: nextAspects,
+    touched: [aspectId],
+  });
   // «Один budget-parent» (§4.2/§13.7) и для attach: аспект orbis/budget ретроспективно
   // делает сущность budget-parent'ом её financial-детей — инвариант проверяется не
   // только в relation_create, иначе attach обходит его (ревью 2026-07-09)
@@ -1686,6 +1708,12 @@ async function prepareRelationCreate(
   const { source, target } = await loadBothEndsForUpdate(ctx, key, batch);
 
   // Стадия 4: доменные инварианты графа (§4.2)
+  // Запрет по объекту для источника routine (V1.10): достаточно одного конца с
+  // orbis/routine — оба конца уже под FOR UPDATE (loadBothEndsForUpdate выше)
+  assertRoutineRelationUntouchable(ctx.req.source, {
+    source: source.aspects as AspectsMap,
+    target: target.aspects as AspectsMap,
+  });
   if (batch) await assertNoDuplicateRelation(ctx.tx, key, batch.graph()); // batch: дубль ловим ДО записи
   if (key.relationType === 'blocks') {
     await assertAcyclicBlocks(
@@ -1813,6 +1841,17 @@ async function prepareRelationDelete(
   }
 
   // Стадия 4
+  // Запрет по объекту для источника routine (V1.10): «удалить» — такой же глагол, как
+  // «создать», и объект у него тот же. Концы связи берутся под замок ТОЛЬКО здесь: штатному
+  // relation_delete они не нужны (ему довольно строки связи), а два лишних FOR UPDATE на
+  // каждом удалении меняли бы порядок захвата замков всем остальным источникам.
+  if (ctx.req.source === 'routine') {
+    const ends = await loadBothEndsForUpdate(ctx, key, batch);
+    assertRoutineRelationUntouchable(ctx.req.source, {
+      source: ends.source.aspects as AspectsMap,
+      target: ends.target.aspects as AspectsMap,
+    });
+  }
   gateEntitlements(ctx, 'relation_delete');
 
   // Эффекты batch: связь исчезает из виртуального графа

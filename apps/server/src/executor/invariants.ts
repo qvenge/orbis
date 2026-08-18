@@ -11,6 +11,7 @@ import { agentGrants } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from './errors';
 import type { AspectsMap } from './normalize';
+import type { MutationSource } from './types';
 
 /** Идентичность связи — тройка rel_uniq (§4.2). */
 export interface RelationKey {
@@ -353,4 +354,75 @@ export function assertRunSubject(next: AspectsMap): void {
       { aspect: 'orbis/agent-run', reason: 'run_subject' },
     );
   }
+}
+
+/**
+ * Запрет по объекту для источника `routine` (V1.10, инвариант 6): рутина не меняет рутины и
+ * не раздаёт назначения. Запрет сформулирован по ОБЪЕКТУ, а не по глаголу: неважно, каким
+ * тулом рутина дотянулась до `orbis/routine` или `orbis/assignment` — create, update, attach,
+ * связь — отказ один. Иначе рутина в режиме `act` могла бы расширить себе белый список
+ * `allowed_tools`, снять паузу с себя или соседней рутины и завести исполнителю новую работу:
+ * доверенность, выданную владельцем, нельзя переписывать её же руками.
+ *
+ * Точка проверки — стадия 4 executor'а, после чтения строки под `FOR UPDATE` и ДО первой
+ * записи, рядом с `assertAssignment`. Это единственный рубеж, который нельзя обойти: гейт
+ * режима в dispatch (V1.2) видит только имя тула, а `orbis_propose` — только форму
+ * предложения; обе проверки — до конвейера, а мутации графа идут только здесь.
+ *
+ * Смотрит РОВНО на `source === 'routine'`. Прогон рутины (`orbis/agent-run` с `routine_id`)
+ * рутиной НЕ является: его создание, шаги и связь `parent` рутина→прогон — бухгалтерия
+ * источником `system` (Р-7), и инвариант на ней молчит. Внутренний undo (§7.8) идёт тем же
+ * `system` — отдельного гейта `internalUndo` здесь поэтому нет.
+ *
+ * @param before аспекты строки ДО операции (update/attach; у create строки ещё нет)
+ * @param next аспекты после операции
+ * @param touched аспекты, которых операция касается (у create — весь вход, у attach — его аспект)
+ */
+export function assertRoutineUntouchable(
+  source: MutationSource,
+  args: { before?: AspectsMap; next: AspectsMap; touched: readonly string[] },
+): void {
+  if (source !== 'routine') return;
+  // Рутина запрещена и как ОБЪЕКТ правки (сущность уже рутина либо ею становится), и как
+  // затронутый аспект: detach `orbis/routine` в `next` не виден, но в `touched` — да.
+  const hitsRoutine =
+    args.before?.['orbis/routine'] !== undefined ||
+    args.next['orbis/routine'] !== undefined ||
+    args.touched.includes('orbis/routine');
+  // Назначение — только по `touched`: рутина вправе править СВОЙ тикет (титул, статус),
+  // но не переназначать его исполнителю.
+  const hitsAssignment = args.touched.includes('orbis/assignment');
+  if (!hitsRoutine && !hitsAssignment) return;
+  throw routineUntouchableError();
+}
+
+/**
+ * Тот же запрет по объекту для связей (V1.10, инвариант 6): рутина не привязывает ничего к
+ * рутине и не отвязывает от неё. Достаточно ОДНОГО конца с `orbis/routine` — направление
+ * связи ничего не меняет: и `parent` рутина→сущность, и обратная правят граф вокруг рутины.
+ *
+ * `ends.source`/`ends.target` — аспекты обоих концов, прочитанные под `FOR UPDATE`
+ * (`loadBothEndsForUpdate`): без замка проверка сверяла бы состояние, которое конкурент
+ * успел бы поменять до записи.
+ */
+export function assertRoutineRelationUntouchable(
+  source: MutationSource,
+  ends: { source: AspectsMap; target: AspectsMap },
+): void {
+  if (source !== 'routine') return;
+  if (ends.source['orbis/routine'] === undefined && ends.target['orbis/routine'] === undefined) {
+    return;
+  }
+  throw routineUntouchableError();
+}
+
+/**
+ * Единый отказ обоих запретов по объекту: код `FORBIDDEN_LEVEL` (§7.10 «forbidden» — не
+ * INVARIANT: граф остался бы целостным, отказано именно источнику), причина в `details` —
+ * потребитель различает её полем, а не разбором текста.
+ */
+function routineUntouchableError(): ExecError {
+  return new ExecError('FORBIDDEN_LEVEL', 'рутина не может менять рутины и назначения (V1.10)', {
+    reason: 'routine_untouchable',
+  });
 }

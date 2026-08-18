@@ -21,6 +21,12 @@ export interface ToolCallFacts {
   archives: boolean; // мутация архивации: archived: true в input (мягкое удаление)
   isBatch: boolean;
   batchSize?: number;
+  /**
+   * Выдача автономии рутине (V1.10): создание/attach рутины с `mode: 'act'` либо правка
+   * её доверенности (`mode`/`allowed_tools`). Право писать в граф без спроса выдаёт только
+   * владелец — модели и внешнему агенту оно достаётся через карточку подтверждения.
+   */
+  grantsAutonomy: boolean;
 }
 
 /**
@@ -32,12 +38,18 @@ export interface ToolCallFacts {
  * | kind === 'read'              | execute                | чтение без внешних эффектов |
  * | archives && !explicitCommand | explicit-confirmation  | архивация = мягкое удаление; инициатива модели/агента без прямой команды — чувствительно |
  * | isBatch && batchSize > 10    | explicit-confirmation  | масштаб приближается к bulk |
+ * | grantsAutonomy && !owner     | explicit-confirmation  | V1.10: право рутины писать в граф выдаёт только владелец |
  * | isBatch                      | preview                | bounded-масштаб: исполнить + информационный diff |
  * | иначе (одиночная мутация)    | execute                | single, обратимо (inverse в журнале §7.8) |
  *
- * actorKind — вход политики §7.10, но MVP-таблица по нему не ветвится: ряд archives
- * адресует инициативу модели/агента, а owner-актор до классификатора не доходит
- * (прямые действия владельца идут UI-роутерами мимо dispatch).
+ * actorKind — вход политики §7.10; MVP-таблица ветвится по нему ровно в одном ряду —
+ * автономии рутины (V1.10): владельцу подтверждать нечего, он и есть тот, у кого спрашивают.
+ * Прочие ряды по актору не ветвятся: ряд archives адресует инициативу модели/агента, а
+ * owner-актор до классификатора обычно не доходит (прямые действия владельца идут
+ * UI-роутерами мимо dispatch).
+ *
+ * Ряд автономии стоит ВЫШЕ «isBatch → preview» намеренно: preview исполняет действие и лишь
+ * показывает diff, то есть batch из двух операций провёз бы выдачу прав молча.
  */
 export function classifyToolCall(facts: ToolCallFacts): ConfirmationLevel {
   if (!facts.known) return 'forbidden';
@@ -46,6 +58,7 @@ export function classifyToolCall(facts: ToolCallFacts): ConfirmationLevel {
   if (facts.isBatch && facts.batchSize !== undefined && facts.batchSize > 10) {
     return 'explicit-confirmation';
   }
+  if (facts.grantsAutonomy && facts.actorKind !== 'owner') return 'explicit-confirmation';
   if (facts.isBatch) return 'preview';
   return 'execute';
 }
@@ -75,9 +88,14 @@ export function factsFromToolCall(
         archives: parsed.data.operations.some((op) => op.input.archived === true),
         isBatch: true,
         batchSize: parsed.data.operations.length,
+        // ЛЮБАЯ операция batch, выдающая автономию, поднимает уровень всего вызова:
+        // batch исполняется «всё или ничего», подтверждать его тоже приходится целиком
+        grantsAutonomy: parsed.data.operations.some((op) =>
+          grantsRoutineAutonomy(op.tool, op.input),
+        ),
       };
     }
-    return { ...base, archives: false, isBatch: false };
+    return { ...base, archives: false, isBatch: false, grantsAutonomy: false };
   }
   return {
     ...base,
@@ -86,7 +104,36 @@ export function factsFromToolCall(
     // envelope-валидации dispatch (fix round) ещё до классификации
     archives: def.name === 'entity_update' && isRecord(input) && input.archived === true,
     isBatch: false,
+    grantsAutonomy: grantsRoutineAutonomy(def.name, input),
   };
+}
+
+/**
+ * Выдаёт ли одна операция автономию рутине (V1.10): `mode: 'act'` — это доверенность писать
+ * в граф без спроса, а `allowed_tools` — её область. Правка ЛЮБОГО из двух полей считается
+ * выдачей, включая возврат в `propose`: разоружение рутины владелец обязан видеть так же,
+ * как её вооружение, иначе модель тихо снимала бы права, о которых он думает, что они есть.
+ * Правка расписания (`at`, `days`) и жизненного цикла (`stage`) доверенности не касается.
+ *
+ * Имя тула — единственный вход помимо payload'а: у attach-пути (`attach_orbis_routine`)
+ * аспект в имени, у create/update — ключ `aspects['orbis/routine']`. Форма проверяется
+ * защитно (input сюда доезжает уже envelope-валидированным, см. докблок factsFromToolCall).
+ */
+function grantsRoutineAutonomy(tool: string, input: unknown): boolean {
+  if (!isRecord(input)) return false;
+  if (tool === 'attach_orbis_routine') {
+    return isRecord(input.data) && input.data.mode === 'act';
+  }
+  if (tool !== 'entity_create' && tool !== 'entity_update') return false;
+  const aspects = input.aspects;
+  if (!isRecord(aspects)) return false;
+  const routine = aspects['orbis/routine'];
+  if (!isRecord(routine)) return false;
+  // create: правами наделяет только act — рутина в propose всё равно спросит владельца.
+  // update: merge §9.2 дописывает поля в живой аспект, поэтому значим сам ФАКТ правки
+  // доверенности, а не значение (act ↔ propose и правка белого списка — одно решение).
+  if (tool === 'entity_create') return routine.mode === 'act';
+  return 'mode' in routine || 'allowed_tools' in routine;
 }
 
 /**
