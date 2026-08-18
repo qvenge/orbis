@@ -4,9 +4,22 @@ export * from './contracts/agent-loop';
 export * from './contracts/budget';
 export * from './contracts/import';
 export * from './contracts/tools';
-// date.ts — внутренний модуль (toParts/epochDays/…); наружу выходит только сдвиг даты:
-// у сервера была своя копия в recurring/materialize.ts, третьей копии быть не должно
-export { addDays } from './date';
+// date.ts — почти весь внутренний модуль (fromParts/partsFromEpochDays/…); наружу выходит
+// сдвиг даты (у сервера была своя копия в recurring/materialize.ts, третьей копии быть не
+// должно) и календарь рутин: планировщик V1 считает по нему «сегодня подходит по дням» и
+// «наступил ли слот» — своей копии алфавита и своего парсера 'ЧЧ:ММ' у него быть не должно.
+export {
+  addDays,
+  epochDays,
+  HHMM_RE,
+  mondayIndex,
+  parseHHMM,
+  toParts,
+  WEEKDAY_INDEX,
+  WEEKDAYS,
+  type Weekday,
+  weekdayOfDate,
+} from './date';
 export * from './fast-path';
 export * from './ids';
 export * from './import/normalize';

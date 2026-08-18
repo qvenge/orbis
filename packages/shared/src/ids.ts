@@ -151,3 +151,34 @@ export function materializeBatchId(templateId: string, from: string, to: string)
 export function postFinancialBatchId(instanceId: string): string {
   return uuidv5(`post-financial:${instanceId.toLowerCase()}`, ORBIS_NAMESPACE);
 }
+
+/**
+ * Бакет ручного запуска рутины (V1.3): слот расписания — это локальные 'YYYY-MM-DDTЧЧ:ММ',
+ * а кнопка «Запустить сейчас» слота не имеет. Префикс отличает такой прогон от планового
+ * в любом запросе и не даёт ему занять id планового бакета того же дня.
+ */
+export function manualBucket(iso: string): string {
+  return `manual:${iso}`;
+}
+
+/**
+ * id сущности прогона рутины (V1.3). Детерминирован тройкой «рутина + бакет + попытка»:
+ * два тика (или тик и догон окна) одного слота сходятся к ОДНОЙ строке — проигравший
+ * получает replay/CONFLICT и модель не гоняет. Попытка в ключе обязательна: без неё ретрай
+ * после failed реплеился бы в строку провалившейся попытки вместо нового прогона.
+ */
+export function routineRunId(routineId: string, bucket: string, attempt: number): string {
+  return uuidv5(`routine-run:${routineId.toLowerCase()}:${bucket}:${attempt}`, ORBIS_NAMESPACE);
+}
+
+/**
+ * batch_id создания прогона рутины (V1.3) — своя формула, а не id прогона: audit-PK
+ * batchAuditMessageId считается ОТ batch_id, и совпадение сузило бы два независимых
+ * пространства ключей в одно. Идемпотентность та же: повтор того же бакета — тот же batch.
+ */
+export function routineRunBatchId(routineId: string, bucket: string, attempt: number): string {
+  return uuidv5(
+    `routine-run-batch:${routineId.toLowerCase()}:${bucket}:${attempt}`,
+    ORBIS_NAMESPACE,
+  );
+}

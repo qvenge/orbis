@@ -34,6 +34,17 @@ const FIELD_LABELS: Record<string, string> = {
   session_url: 'сессия',
   report: 'отчёт',
   project_id: 'проект',
+  // Поля аспектов V1 (routine/agent-run): те же карточки и те же свойства в Detail —
+  // без подписи владелец читал бы в них сырые ключи схемы.
+  at: 'время',
+  days: 'дни',
+  mode: 'режим',
+  allowed_tools: 'разрешённые инструменты',
+  routine_id: 'рутина',
+  bucket: 'бакет',
+  attempt: 'попытка',
+  fail_note: 'причина сбоя',
+  proposal: 'предложение',
 };
 
 export function fieldLabel(key: string): string {
@@ -75,6 +86,8 @@ const ASPECT_LABELS: Record<string, string> = {
   'orbis/repo': 'Репозиторий',
   'orbis/assignment': 'Назначение',
   'orbis/agent-run': 'Прогон исполнителя',
+  // Рутина (V1) — не служебная: она есть и в форме query-блока, и в карточках аспектов
+  'orbis/routine': 'Рутина',
 };
 
 export function aspectLabel(id: string): string {

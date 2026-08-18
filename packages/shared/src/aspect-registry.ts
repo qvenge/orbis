@@ -160,6 +160,25 @@ export const BUILTIN_ASPECT_META: BuiltinAspectMeta[] = [
     tagMappings: [],
     viewConfig: { keyFields: ['outcome', 'step_count'] },
   },
+  {
+    id: 'orbis/routine',
+    name: 'Routine',
+    namespace: 'orbis',
+    // 🎯 занят назначением и целью: иконка отличает рутину в списках, а не пересказывает её
+    icon: '⏰',
+    description: 'Повторяющаяся работа внутреннего исполнителя: расписание, режим, права',
+    aiInstructions:
+      'orbis/routine — рутина: повторяющаяся работа внутреннего исполнителя. ЧТО делать — в ' +
+      'теле сущности обычным текстом, в аспекте только расписание и права. at — локальное ' +
+      'время владельца «ЧЧ:ММ» (07:00, не 7:00); days — дни недели mo|tu|we|th|fr|sa|su, без ' +
+      'поля = каждый день. mode обязателен: propose — рутина ПРЕДЛАГАЕТ изменения владельцу ' +
+      'на подтверждение, act — применяет их сама, и тогда перечисли allowed_tools (ровно те ' +
+      'инструменты, что ей нужны). stage: active — рутина работает, paused — временно ' +
+      'отключена; «выключи рутину» — это paused, а не удаление. Поле stage есть и у ' +
+      'orbis/project, поэтому в entity_query всегда указывай aspect=orbis/routine.',
+    tagMappings: ['routine', 'рутина'],
+    viewConfig: { keyFields: ['stage', 'at', 'mode'] },
+  },
 ];
 
 /**

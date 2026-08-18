@@ -113,14 +113,14 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.filter(
 ).map((id) => `attach_${id.replaceAll('/', '_').replaceAll('-', '_')}`);
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 11 core (с thread_post) + 5 глаголов + 11 attach_* = 27', async () => {
+  test('builtin-реестр (userB без кастомных): 11 core (с thread_post) + 5 глаголов + 12 attach_* = 28', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
     expect(names).toContain('thread_post');
     for (const name of AGENT_VERB_NAMES) expect(names).toContain(name);
     for (const name of BUILTIN_ATTACH_NAMES) expect(names).toContain(name);
-    expect(defs.length).toBe(27);
+    expect(defs.length).toBe(28);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
   });
@@ -285,7 +285,7 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(def.kind).toBe('mutate');
     expect(def.description).toBe('Пиши часы сна числом.');
     expect((def.inputJsonSchema.properties as Record<string, unknown>).data).toEqual(CUSTOM_SCHEMA);
-    expect(defsA.length).toBe(28);
+    expect(defsA.length).toBe(29);
 
     const defsB = await registryFor(userB);
     expect(defsB.some((d) => d.name === 'attach_user_sleep_log')).toBe(false);

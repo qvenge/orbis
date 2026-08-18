@@ -1,7 +1,8 @@
 // Чистая календарная арифметика по строкам 'YYYY-MM-DD': никакого new Date(str)-парсинга
 // и таймзон (алгоритм days-from-civil Говарда Хиннанта, чистые целые). Дом календарной
 // математики монорепо: внутри пакета им пользуются recurrence.ts и import/normalize.ts,
-// наружу (index.ts) реэкспортируется только addDays — общий сдвиг даты для сервера.
+// наружу (index.ts) выходит сдвиг даты и календарь дней/времени рутин (V1.1) — планировщику
+// нужны и алфавит дней, и разбор 'ЧЧ:ММ', и связка «дата → день недели».
 
 export interface DateParts {
   y: number;
@@ -86,4 +87,44 @@ export function addDays(dateISO: string, days: number): string {
 /** Индекс дня недели (0 = понедельник): 1970-01-01 — четверг (индекс 3). */
 export function mondayIndex(days: number): number {
   return (((days + 3) % 7) + 7) % 7;
+}
+
+// ─── Дни недели и время суток (V1.1: расписание рутин) ────────────────────────
+// Алфавит один на монорепо: тем же кодом дней записано recurrence.byweekday (01 §3.1) и
+// `days` рутины. Разъехавшись, две нотации дали бы «понедельник» в одном месте и «mo» в
+// другом на одном и том же графе.
+
+export const WEEKDAYS = ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'su'] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+
+/** Индекс дня недели в WEEKDAYS; согласован с mondayIndex (0 = понедельник). */
+export const WEEKDAY_INDEX: Record<Weekday, number> = {
+  mo: 0,
+  tu: 1,
+  we: 2,
+  th: 3,
+  fr: 4,
+  sa: 5,
+  su: 6,
+};
+
+/** Локальное время суток 'ЧЧ:ММ' с обязательным ведущим нулём (поле `at` рутины). */
+export const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * 'ЧЧ:ММ' → {h, m}. Своей валидации нет намеренно: строка приходит из аспекта, где форму
+ * держит HHMM_RE в схеме реестра (ajv, стадия 2), — второй парсер был бы вторым мнением
+ * о формате. На непровалидированном входе вернёт NaN, и это честнее тихого фолбэка.
+ */
+export function parseHHMM(at: string): { h: number; m: number } {
+  return { h: Number(at.slice(0, 2)), m: Number(at.slice(3, 5)) };
+}
+
+/** День недели календарной даты 'YYYY-MM-DD' — предикат `days` рутины. */
+export function weekdayOfDate(dateISO: string): Weekday {
+  const day = WEEKDAYS[mondayIndex(epochDays(toParts(dateISO)))];
+  // mondayIndex возвращает 0..6, а WEEKDAYS ровно семиэлементен — ветка недостижима,
+  // но без неё noUncheckedIndexedAccess требует non-null assertion, а он врёт компилятору.
+  if (day === undefined) throw new RangeError(`Не удалось определить день недели: "${dateISO}"`);
+  return day;
 }

@@ -14,6 +14,8 @@ import type { AgentRunAspect, AgentRunStep, TaskAspect } from '../schemas/aspect
 export type TaskStatus = TaskAspect['status'];
 /** Исход прогона (`orbis/agent-run.outcome`). */
 export type RunOutcome = AgentRunAspect['outcome'];
+/** Статус предложения рутины (`orbis/agent-run.proposal.status`, V1.1). */
+export type ProposalStatus = NonNullable<AgentRunAspect['proposal']>['status'];
 
 /**
  * Расход прогона (§9.3, С2): агент сообщает его сам — проверить его сервер не может,
@@ -103,6 +105,13 @@ export interface RunSummary {
   session_url?: string;
   /** Последние ≤10 шагов прогона (хвост `steps`). */
   last_steps: AgentRunStep[];
+  // V1: рутинный прогон. Субъект и слот нужны истории самой рутины («что было вчера в 07:00»),
+  // а fail_note и судьба предложения — единственный способ понять, почему ничего не изменилось.
+  routine_id?: string;
+  bucket?: string;
+  attempt?: number;
+  fail_note?: string;
+  proposal?: { pending_id: string; status: ProposalStatus; decided_at?: string };
 }
 
 /** Строка очереди исполнителя: тикет + чей он проект + чем кончился прошлый прогон. */

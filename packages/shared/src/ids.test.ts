@@ -3,6 +3,7 @@ import {
   batchAuditMessageId,
   entityThreadId,
   globalThreadId,
+  manualBucket,
   materializeBatchId,
   memoryRuleDeclinedId,
   memoryRuleEntityId,
@@ -13,6 +14,8 @@ import {
   processingMessageId,
   recurringInstanceId,
   rejectMessageId,
+  routineRunBatchId,
+  routineRunId,
 } from './ids';
 
 describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () => {
@@ -43,6 +46,29 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
     expect(postFinancialBatchId(inst)).not.toBe(recurringInstanceId(inst, '2026-07-01'));
   });
 
+  test('routineRunId/routineRunBatchId (V1.3): детерминированы бакетом и попыткой, lowercase, без пересечений', () => {
+    const routine = '019DED47-D100-717A-8307-A5B7A5BE722F';
+    const bucket = '2026-08-18T07:00';
+    const id = routineRunId(routine, bucket, 1);
+    expect(id).toBe(routineRunId(routine.toLowerCase(), bucket, 1));
+    // Ретрай после сбоя — ДРУГОЙ прогон: без attempt в ключе вторая попытка реплеилась бы
+    // в строку первой и «повтор» молча возвращал бы провалившийся прогон
+    expect(id).not.toBe(routineRunId(routine, bucket, 2));
+    expect(id).not.toBe(routineRunId(routine, '2026-08-18T08:00', 1));
+    // Прогон и его batch_id живут в одном пространстве uuid: совпади они — audit-строка
+    // batch'а конфликтовала бы PK с самой сущностью прогона
+    expect(id).not.toBe(routineRunBatchId(routine, bucket, 1));
+    expect(routineRunBatchId(routine, bucket, 1)).toBe(
+      routineRunBatchId(routine.toLowerCase(), bucket, 1),
+    );
+    expect(routineRunBatchId(routine, bucket, 1)).not.toBe(routineRunBatchId(routine, bucket, 2));
+    // …и с формулой инстансов серии (тот же шаблон id + дата) тоже не пересекаются
+    expect(id).not.toBe(recurringInstanceId(routine, '2026-08-18'));
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+  test('manualBucket: ручной запуск отличим от слота расписания по префиксу', () => {
+    expect(manualBucket('2026-08-18T09:12:00.000Z')).toBe('manual:2026-08-18T09:12:00.000Z');
+  });
   test('формулы тредов детерминированы и различны', () => {
     const owner = '00000000-0000-4000-8000-00000000000a';
     const entity = '00000000-0000-7000-8000-0000000000a1';

@@ -17,6 +17,9 @@ function registryOf(id: AspectId): AspectRegistry {
   return new Map([[id, { id, ownerId: null, schema: aspectJsonSchema(id) }]]);
 }
 
+/** Произвольный валидный uuid — в этих тестах важна только ФОРМА поля, не адресат. */
+const NIL_ROUTINE = '019a0000-0000-7000-8000-000000000001';
+
 function accepts(id: AspectId, data: unknown): boolean {
   try {
     validateAspectData(registryOf(id), id, data);
@@ -94,6 +97,63 @@ describe('валидация аспектов по реестру (ajv strict, �
     expect(accepts('orbis/assignment', { executor: 'human', assignee: 'Биржан' })).toBe(true);
     expect(accepts('orbis/assignment', { executor: 'human', assignee: '' })).toBe(false);
     expect(accepts('orbis/assignment', { executor: 'human', may_close: 'да' })).toBe(false);
+  });
+
+  test('orbis/routine: pattern времени и enum режима доезжают до ajv (V1.1)', () => {
+    // Формат `at` — единственная защита планировщика от мусора: он разбирает строку двумя
+    // Number() без своей валидации, поэтому «7:00» в базе дал бы NaN-минуты молча.
+    expect(accepts('orbis/routine', { stage: 'active', at: '07:00', mode: 'propose' })).toBe(true);
+    expect(accepts('orbis/routine', { stage: 'active', at: '7:00', mode: 'propose' })).toBe(false);
+    expect(accepts('orbis/routine', { stage: 'active', at: '07:00' })).toBe(false); // mode обязателен
+    expect(accepts('orbis/routine', { stage: 'active', at: '07:00', mode: 'обсудить' })).toBe(
+      false,
+    );
+    expect(
+      accepts('orbis/routine', { stage: 'paused', at: '21:30', mode: 'act', days: ['mo', 'fr'] }),
+    ).toBe(true);
+    expect(accepts('orbis/routine', { stage: 'active', at: '07:00', mode: 'act', days: [] })).toBe(
+      false,
+    );
+    expect(
+      accepts('orbis/routine', { stage: 'active', at: '07:00', mode: 'act', days: ['вторник'] }),
+    ).toBe(false);
+  });
+
+  test('orbis/agent-run: grant_id перестал быть обязательным, форма bucket живёт в реестре (V1.4)', () => {
+    const base = {
+      outcome: 'running',
+      started_at: '2026-08-18T07:00:00.000Z',
+      last_step_at: '2026-08-18T07:00:00.000Z',
+      step_count: 0,
+      steps: [],
+    };
+    // Рутинный прогон гранта не имеет вовсе. «Ровно одно из grant_id/routine_id» реестр не
+    // выражает (это не форма, а домен) — его держит assertRunSubject в executor'е.
+    expect(accepts('orbis/agent-run', { ...base, routine_id: NIL_ROUTINE })).toBe(true);
+    expect(accepts('orbis/agent-run', { ...base })).toBe(true);
+    expect(accepts('orbis/agent-run', { ...base, routine_id: 'не-uuid' })).toBe(false);
+    expect(accepts('orbis/agent-run', { ...base, bucket: '2026-08-18T07:00', attempt: 2 })).toBe(
+      true,
+    );
+    expect(accepts('orbis/agent-run', { ...base, bucket: 'manual:2026-08-18T09:12:00.000Z' })).toBe(
+      true,
+    );
+    expect(accepts('orbis/agent-run', { ...base, bucket: '2026-08-18' })).toBe(false);
+    expect(accepts('orbis/agent-run', { ...base, outcome: 'failed', fail_note: 'таймаут' })).toBe(
+      true,
+    );
+    expect(
+      accepts('orbis/agent-run', {
+        ...base,
+        proposal: { pending_id: NIL_ROUTINE, status: 'pending' },
+      }),
+    ).toBe(true);
+    expect(
+      accepts('orbis/agent-run', {
+        ...base,
+        proposal: { pending_id: NIL_ROUTINE, status: 'pending', лишнее: 1 },
+      }),
+    ).toBe(false);
   });
 
   test('схемы ВСЕХ builtin-аспектов компилируются ajv в strict-режиме', () => {

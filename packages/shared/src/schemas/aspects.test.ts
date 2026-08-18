@@ -6,6 +6,7 @@ import {
   assignmentAspectSchema,
   projectAspectSchema,
   repoAspectSchema,
+  routineAspectSchema,
 } from './aspects';
 
 describe('схемы аспектов (01 §3.1–§3.7)', () => {
@@ -241,5 +242,99 @@ describe('аспекты ADE-среза 1 (С4)', () => {
       const js = aspectJsonSchema(id) as { additionalProperties?: boolean };
       expect(js.additionalProperties).toBe(false);
     }
+  });
+});
+
+describe('orbis/routine (V1.1)', () => {
+  test('минимальная форма: stage+at+mode; days и allowed_tools опциональны; JSON Schema additionalProperties=false', () => {
+    expect(
+      routineAspectSchema.safeParse({ stage: 'active', at: '07:00', mode: 'propose' }).success,
+    ).toBe(true);
+    expect(
+      routineAspectSchema.safeParse({
+        stage: 'paused',
+        at: '23:59',
+        mode: 'act',
+        days: ['mo', 'we', 'su'],
+        allowed_tools: ['entity_create'],
+      }).success,
+    ).toBe(true);
+    // ЧЧ:ММ строго: без ведущего нуля время сортируется и сравнивается как попало
+    expect(
+      routineAspectSchema.safeParse({ stage: 'active', at: '7:00', mode: 'propose' }).success,
+    ).toBe(false);
+    expect(
+      routineAspectSchema.safeParse({ stage: 'active', at: '24:00', mode: 'propose' }).success,
+    ).toBe(false);
+    // mode обязателен и БЕЗ умолчания (V1.1): «по умолчанию act» дало бы рутине право
+    // писать в граф молча, а «по умолчанию propose» — тихо ломало бы уже заведённые act
+    expect(routineAspectSchema.safeParse({ stage: 'active', at: '07:00' }).success).toBe(false);
+    expect(
+      routineAspectSchema.safeParse({
+        stage: 'active',
+        at: '07:00',
+        mode: 'act',
+        days: ['mo', 'xx'],
+      }).success,
+    ).toBe(false);
+    expect(
+      routineAspectSchema.safeParse({ stage: 'active', at: '07:00', mode: 'act', days: [] })
+        .success,
+    ).toBe(false); // пустой список ≠ «ежедневно»: для этого поле просто не задают
+    expect(
+      (aspectJsonSchema('orbis/routine') as { additionalProperties?: boolean })
+        .additionalProperties,
+    ).toBe(false);
+  });
+});
+
+describe('orbis/agent-run V1 (V1.4)', () => {
+  const base = {
+    outcome: 'running',
+    started_at: '2026-08-18T07:00:00.000Z',
+    last_step_at: '2026-08-18T07:00:00.000Z',
+    step_count: 0,
+    steps: [],
+  };
+  test('grant_id необязателен; routine_id/bucket/attempt/proposal принимаются; исходы failed/answered/stale валидны', () => {
+    // Рутинный прогон: субъект — рутина, гранта у него нет вовсе (grant_id стал опционален).
+    // «Ровно одно из grant_id/routine_id» схемой не выражается — держит assertRunSubject.
+    expect(
+      agentRunAspectSchema.safeParse({
+        ...base,
+        routine_id: '019a0000-0000-7000-8000-000000000001',
+        bucket: '2026-08-18T07:00',
+        attempt: 1,
+      }).success,
+    ).toBe(true);
+    // Ручной запуск: бакет — не слот расписания, а метка «по кнопке» с моментом нажатия
+    expect(
+      agentRunAspectSchema.safeParse({ ...base, bucket: 'manual:2026-08-18T09:12:00.000Z' })
+        .success,
+    ).toBe(true);
+    expect(agentRunAspectSchema.safeParse({ ...base, bucket: '07:00' }).success).toBe(false);
+    expect(agentRunAspectSchema.safeParse({ ...base, attempt: 0 }).success).toBe(false);
+    for (const outcome of ['failed', 'answered', 'stale']) {
+      expect(agentRunAspectSchema.safeParse({ ...base, outcome }).success).toBe(true);
+    }
+    expect(
+      agentRunAspectSchema.safeParse({
+        ...base,
+        outcome: 'failed',
+        fail_note: 'провайдер недоступен',
+        proposal: {
+          pending_id: '019a0000-0000-7000-8000-000000000002',
+          status: 'stale',
+          decided_at: '2026-08-18T07:10:00.000Z',
+          mismatches: [{ aspect: 'orbis/task', field: 'status', note: 'уже done' }],
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      agentRunAspectSchema.safeParse({
+        ...base,
+        proposal: { pending_id: '019a0000-0000-7000-8000-000000000002', status: 'неизвестно' },
+      }).success,
+    ).toBe(false);
   });
 });

@@ -24,6 +24,7 @@ export const BUILTIN_ASPECT_IDS = [
   'orbis/repo',
   'orbis/assignment',
   'orbis/agent-run',
+  'orbis/routine',
 ] as const;
 export type AspectId = (typeof BUILTIN_ASPECT_IDS)[number];
 

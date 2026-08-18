@@ -56,6 +56,7 @@ import {
   assertAcyclicBlocks,
   assertAssignment,
   assertNoDuplicateRelation,
+  assertRunSubject,
   assertSingleBudgetParent,
   duplicateRelationError,
   type RelationKey,
@@ -1007,6 +1008,8 @@ async function prepareEntityCreate(
   await assertFinancial(ctx, id, aspects, batch);
   // Живой грант в назначении (С4/С7): у create «затронуто» всё, что пришло во входе
   await assertAssignment(ctx.tx, ctx.req.actorUserId, aspects);
+  // Ровно один субъект у прогона (V1.4) — тем же путём, что и назначение
+  assertRunSubject(aspects);
   // Заготовка тела проекта (С10). Засев живёт в executor'е, а не в роутере/адаптере: тогда
   // проект, заведённый чатом, MCP и UI, получает одно и то же тело. У create «тело до
   // операции» — это канон входа (пусто, если body не прислали ИЛИ прислали пустую строку:
@@ -1227,6 +1230,12 @@ async function prepareEntityUpdate(
     // Внутренний undo восстанавливает зафиксированное состояние — не проверяется.
     if (ctx.internalUndo === undefined && touched.includes('orbis/assignment')) {
       await assertAssignment(ctx.tx, ctx.req.actorUserId, nextAspects);
+    }
+    // Ровно один субъект у прогона (V1.4) — только когда патч ЗАТРОНУЛ прогон: merge
+    // аспектов дописывает поля в существующий ключ, то есть второй субъект приезжает
+    // именно этим путём. Внутренний undo восстанавливает зафиксированное — не проверяется.
+    if (ctx.internalUndo === undefined && touched.includes('orbis/agent-run')) {
+      assertRunSubject(nextAspects);
     }
     // «Один budget-parent» (§4.2/§13.7) и для aspects-патча: mergeAspects добавляет
     // НОВЫЙ ключ — второй путь ретроспективного второго конверта помимо attach
@@ -1463,6 +1472,10 @@ async function prepareAttach(
   if (aspectId === 'orbis/assignment') {
     await assertAssignment(ctx.tx, ctx.req.actorUserId, nextAspects);
   }
+  // Ровно один субъект у прогона (V1.4): attach заменяет аспект ЦЕЛИКОМ, поэтому им можно
+  // и потерять субъект, и добавить второй. Гейта по aspectId нет — проверка сама молчит,
+  // когда прогона в итоговой карте не оказалось.
+  assertRunSubject(nextAspects);
   // «Один budget-parent» (§4.2/§13.7) и для attach: аспект orbis/budget ретроспективно
   // делает сущность budget-parent'ом её financial-детей — инвариант проверяется не
   // только в relation_create, иначе attach обходит его (ревью 2026-07-09)

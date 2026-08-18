@@ -4,6 +4,7 @@
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { AspectId } from '../constants';
+import { HHMM_RE, WEEKDAYS } from '../date';
 
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'ISO date YYYY-MM-DD');
 const timestampString = z
@@ -172,7 +173,21 @@ export const assignmentAspectSchema = z
   })
   .strict();
 
-export const RUN_OUTCOMES = ['running', 'checkpoint', 'finished', 'abandoned'] as const;
+/**
+ * Исходы прогона. Первые четыре — ADE-срез 1 (тикетный прогон); V1 добавляет три исхода
+ * рутинного: `failed` — прогон сорвался (провайдер, дедлайн, лимит попыток; причина в
+ * fail_note), `answered` — владелец ответил на чекпойнт (прогон закрыт ответом, а не
+ * отчётом), `stale` — предложение устарело и снято, ничего не применено (V1.4).
+ */
+export const RUN_OUTCOMES = [
+  'running',
+  'checkpoint',
+  'finished',
+  'abandoned',
+  'failed',
+  'answered',
+  'stale',
+] as const;
 const runStepSchema = z
   .object({
     seq: z.number().int().positive(),
@@ -189,9 +204,47 @@ const runUsageSchema = z
     cost_usd: z.number().nonnegative().optional(),
   })
   .strict();
+/** Статусы предложения рутины (V1.1): решение владельца и две причины снятия. */
+export const PROPOSAL_STATUSES = [
+  'pending',
+  'approved',
+  'rejected',
+  'superseded',
+  'stale',
+] as const;
+
 export const agentRunAspectSchema = z
   .object({
-    grant_id: z.string().uuid(),
+    // Субъект прогона — РОВНО ОДНО из grant_id/routine_id (V1.4). Схемой это не выражается:
+    // oneOf сделал бы поля невидимыми для каталога грамматики (тот читает properties верхнего
+    // уровня), а .refine исчезает при генерации JSON Schema. Инвариант держит executor
+    // (assertRunSubject) — единственный путь записи в граф.
+    grant_id: z.string().uuid().optional(), // тикетный прогон: чьим доступом работает исполнитель
+    routine_id: z.string().uuid().optional(), // рутинный прогон: чьё расписание его породило
+    /** Слот расписания 'YYYY-MM-DDTЧЧ:ММ' в локальном времени владельца либо 'manual:<ISO>'. */
+    bucket: z
+      .string()
+      .regex(/^(\d{4}-\d{2}-\d{2}T([01]\d|2[0-3]):[0-5]\d|manual:\S+)$/, 'слот расписания рутины')
+      .optional(),
+    attempt: z.number().int().min(1).optional(), // номер попытки бакета (ретраи после failed)
+    fail_note: z.string().max(2000).optional(), // почему прогон кончился failed
+    /** Предложение режима propose: карточка на подтверждение и её судьба. */
+    proposal: z
+      .object({
+        pending_id: z.string().uuid(),
+        status: z.enum(PROPOSAL_STATUSES),
+        decided_at: timestampString.optional(),
+        // Расхождения предусловия, из-за которых предложение снято (V1.4): показываются
+        // владельцу вместо «предусловие не выполнено» без объяснения.
+        mismatches: z
+          .array(
+            z.object({ aspect: z.string(), field: z.string(), note: z.string().max(500) }).strict(),
+          )
+          .max(50)
+          .optional(),
+      })
+      .strict()
+      .optional(),
     project_id: z.string().uuid().optional(), // денормализация: `this` грамматики не достаёт внуков
     outcome: z.enum(RUN_OUTCOMES),
     started_at: timestampString,
@@ -214,6 +267,29 @@ export const agentRunAspectSchema = z
   })
   .strict();
 
+// ─── V1 «Рутины» (спека 2026-08-18, V1.1) ─────────────────────────────────────
+export const ROUTINE_STAGES = ['active', 'paused'] as const;
+export const ROUTINE_MODES = ['propose', 'act'] as const;
+
+/**
+ * Рутина: «что делать» лежит в ТЕЛЕ сущности (как у заметки и проекта), здесь — только
+ * расписание и права. Поле жизненного цикла названо `stage` в тон orbis/project: третье
+ * `status` в реестре сделало бы `status=` без `aspect=` неоднозначным. Обратная сторона —
+ * теперь `stage=` тоже неоднозначен (project + routine), поэтому запросы к рутинам всегда
+ * пишутся с `aspect=orbis/routine`.
+ */
+export const routineAspectSchema = z
+  .object({
+    stage: z.enum(ROUTINE_STAGES),
+    at: z.string().regex(HHMM_RE, 'время ЧЧ:ММ'), // локальное время владельца, не UTC
+    days: z.array(z.enum(WEEKDAYS)).min(1).optional(), // поля нет = каждый день
+    // Режим ОБЯЗАТЕЛЕН и без умолчания (V1.1): умолчание act раздавало бы право писать в
+    // граф молча, умолчание propose — тихо разоружало бы уже заведённую act-рутину.
+    mode: z.enum(ROUTINE_MODES),
+    allowed_tools: z.array(z.string().min(1)).max(50).optional(), // имеет смысл только при mode=act
+  })
+  .strict();
+
 export const ASPECT_SCHEMAS = {
   'orbis/schedule': scheduleAspectSchema,
   'orbis/task': taskAspectSchema,
@@ -227,6 +303,7 @@ export const ASPECT_SCHEMAS = {
   'orbis/repo': repoAspectSchema,
   'orbis/assignment': assignmentAspectSchema,
   'orbis/agent-run': agentRunAspectSchema,
+  'orbis/routine': routineAspectSchema,
 } as const satisfies Record<AspectId, z.ZodTypeAny>;
 
 export function aspectJsonSchema(id: AspectId): Record<string, unknown> {
@@ -246,3 +323,4 @@ export type RepoAspect = z.infer<typeof repoAspectSchema>;
 export type AssignmentAspect = z.infer<typeof assignmentAspectSchema>;
 export type AgentRunAspect = z.infer<typeof agentRunAspectSchema>;
 export type AgentRunStep = z.infer<typeof runStepSchema>;
+export type RoutineAspect = z.infer<typeof routineAspectSchema>;

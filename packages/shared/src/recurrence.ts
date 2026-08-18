@@ -11,25 +11,16 @@ import {
   mondayIndex,
   partsFromEpochDays,
   toParts,
+  WEEKDAY_INDEX,
+  type Weekday,
 } from './date';
 
 export interface RecurrenceRule {
   freq: 'daily' | 'weekly' | 'monthly';
   interval: number; // ≥ 1
-  byweekday?: Array<'mo' | 'tu' | 'we' | 'th' | 'fr' | 'sa' | 'su'>; // только для weekly
+  byweekday?: Weekday[]; // только для weekly; алфавит один с `days` рутины (date.ts)
   until?: string; // 'YYYY-MM-DD' включительно
 }
-
-/** Понедельник — начало недели (weekStartDay-дефолт плана); индексы 0..6. */
-const WEEKDAY_INDEX: Record<string, number> = {
-  mo: 0,
-  tu: 1,
-  we: 2,
-  th: 3,
-  fr: 4,
-  sa: 5,
-  su: 6,
-};
 
 /**
  * Даты инстансов серии в [from; to] включительно. seriesStart — дата первого
@@ -113,7 +104,9 @@ function expandWeeklyByWeekday(
   }
   const offsets = [...new Set(byweekday)]
     .map((wd) => {
-      const idx = WEEKDAY_INDEX[wd];
+      // Тип обещает Weekday, но правило читается из JSON-аспекта: битые данные обходят
+      // типы, поэтому lookup сознательно расширен до undefined ради fail-fast ниже.
+      const idx: number | undefined = WEEKDAY_INDEX[wd];
       if (idx === undefined) throw new RangeError(`Неизвестный день недели: "${wd}"`);
       return idx;
     })

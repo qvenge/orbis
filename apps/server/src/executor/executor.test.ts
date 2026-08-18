@@ -1213,3 +1213,101 @@ describe('ADE-срез 1: CAS-предусловие entity_update (С7, инв�
     );
   });
 });
+
+describe('V1: инвариант субъекта прогона (V1.4)', () => {
+  /** Прогон в минимальной валидной форме — субъект дописывает тест. */
+  const run = (subject: Record<string, unknown>) => ({
+    outcome: 'running',
+    started_at: '2026-08-18T07:00:00.000Z',
+    last_step_at: '2026-08-18T07:00:00.000Z',
+    step_count: 0,
+    steps: [],
+    ...subject,
+  });
+
+  test('agent-run с routine_id и без grant_id — принимается; с обоими или без обоих — VALIDATION reason run_subject', async () => {
+    const ok = await execute(
+      db,
+      req('entity_create', {
+        title: 'Прогон рутины',
+        tags: [],
+        aspects: { 'orbis/agent-run': run({ routine_id: newId(), bucket: '2026-08-18T07:00' }) },
+      }),
+    );
+    expect(ok.ok).toBe(true);
+
+    // Два субъекта — не «лишнее поле»: прогон читался бы как тикетный одним кодом
+    // (rollback по гранту) и как рутинный другим (бухгалтерия бакета).
+    const both = await execute(
+      db,
+      req('entity_create', {
+        title: 'Прогон',
+        tags: [],
+        aspects: { 'orbis/agent-run': run({ grant_id: newId(), routine_id: newId() }) },
+      }),
+    );
+    expect(both.ok).toBe(false);
+    if (!both.ok) {
+      expect(both.error.code).toBe('VALIDATION');
+      expect((both.error.details as { reason?: string }).reason).toBe('run_subject');
+    }
+
+    const none = await execute(
+      db,
+      req('entity_create', { title: 'Прогон', tags: [], aspects: { 'orbis/agent-run': run({}) } }),
+    );
+    expect(none.ok).toBe(false);
+    if (!none.ok) {
+      expect(none.error.code).toBe('VALIDATION');
+      expect((none.error.details as { reason?: string }).reason).toBe('run_subject');
+    }
+  });
+
+  test('инвариант держится и на update-, и на attach-пути; правка прогона мимо субъекта проходит', async () => {
+    const created = firstEntity(
+      await execute(
+        db,
+        req('entity_create', {
+          title: 'Прогон рутины',
+          tags: [],
+          aspects: { 'orbis/agent-run': run({ routine_id: newId() }) },
+        }),
+      ),
+    );
+
+    // merge аспектов: дописать grant_id живому рутинному прогону — второй субъект
+    const upd = await execute(
+      db,
+      req('entity_update', {
+        id: created.id,
+        aspects: { 'orbis/agent-run': { grant_id: newId() } },
+      }),
+    );
+    expect(upd.ok).toBe(false);
+    if (!upd.ok) {
+      expect(upd.error.code).toBe('VALIDATION');
+      expect((upd.error.details as { reason?: string }).reason).toBe('run_subject');
+    }
+
+    // attach — третий путь появления аспекта: замена целиком, субъекта не осталось.
+    // Имя тула — с дефисом: resolveAttachAspect executor'а заменяет в id только «/»
+    // (публичное имя реестра `attach_orbis_agent_run` тут неприменимо — прогон служебный
+    // и attach-тула не публикует вовсе).
+    const att = await execute(
+      db,
+      req('attach_orbis_agent-run', { entity_id: created.id, data: run({}) }),
+    );
+    expect(att.ok).toBe(false);
+    if (!att.ok) {
+      expect(att.error.code).toBe('VALIDATION');
+      expect((att.error.details as { reason?: string }).reason).toBe('run_subject');
+    }
+
+    // Правка, не трогающая субъект, идёт как раньше: шаги прогона пишутся именно так
+    const step = await execute(
+      db,
+      req('entity_update', { id: created.id, aspects: { 'orbis/agent-run': { step_count: 1 } } }),
+    );
+    expect(step.ok).toBe(true);
+  });
+});
