@@ -3,7 +3,8 @@
 // executor/errors.ts (минорный долг Task 11): ExecError используют и не-executor-модули
 // (chat/threads.ts), которым зависимость от executor/ не положена.
 // Коды: VALIDATION (стадии 1–2), NOT_FOUND, STALE_VERSION (§5.2), INVARIANT (§4.2/§3.3,
-// для цикла blocks в details — path, Task 10), FORBIDDEN_LEVEL (зарезервирован §7.10, 1b),
+// для цикла blocks в details — path, Task 10), FORBIDDEN_LEVEL (§7.10 «forbidden»: гейт
+// скоупа гранта и периметр записи worker'а — tools/dispatch.ts, а также незнакомый тул),
 // LIMIT (entitlements §8), CONFLICT (details.reason различает ДВА пути, потребитель не
 // гадает по тексту: 'id_conflict' — client-UUID непригоден для создания, chat.appendMessage
 // И entity_create executor'а, одиночный и batch; 'precondition_failed' — CAS-предусловие
@@ -49,7 +50,7 @@ const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
   NOT_FOUND: 'NOT_FOUND',
   STALE_VERSION: 'CONFLICT',
   INVARIANT: 'UNPROCESSABLE_CONTENT',
-  FORBIDDEN_LEVEL: 'FORBIDDEN', // зарезервирован §7.10 (1b)
+  FORBIDDEN_LEVEL: 'FORBIDDEN', // §7.10 «forbidden»: скоуп гранта, периметр worker'а, незнакомый тул
   LIMIT: 'TOO_MANY_REQUESTS',
   CONFLICT: 'CONFLICT', // занятый client-UUID (id_conflict) — 409, как и STALE_VERSION
   // §7.9: сбой провайдера — 503. tRPC v11 имеет SERVICE_UNAVAILABLE (JSON-RPC-совместимые

@@ -3,6 +3,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { MyQueueResult } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { execute } from '../executor/executor';
 import { type AnyRecord, agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool } from '../tools/dispatch';
 import { RUN_STALE_AFTER_MS } from './constants';
@@ -198,5 +199,143 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
     expect(ticket?.last_run?.id).toBe(stale.runId);
     expect(ticket?.last_run?.outcome).toBe('abandoned');
     expect(String(ticket?.last_run?.abandon_note)).toContain('оборван');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Два running-прогона одного тикета (ручной сброс статуса владельцем)
+// ---------------------------------------------------------------------------
+
+describe('sweepStaleRuns: тикет чинится только по ПОСЛЕДНЕМУ прогону', () => {
+  /** Владелец правит тикет руками — своим путём, не глаголом исполнителя. */
+  async function patchTask(
+    owner: string,
+    ticketId: string,
+    patch: Record<string, unknown>,
+  ): Promise<void> {
+    const r = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        { tool: 'entity_update', input: { id: ticketId, aspects: { 'orbis/task': patch } } },
+      ],
+    });
+    if (!r.ok) throw new Error(`patchTask: ${r.error.code} ${r.error.message}`);
+  }
+
+  test('старый прогон подметается, тикет активного прогона остаётся in_progress, orbis_finish живого проходит', async () => {
+    const owner = freshUserId();
+    const grantId = await workerGrant(owner, 'два прогона одного тикета');
+    const ticket = await seedEntity(owner, {
+      title: 'Тикет, сброшенный владельцем руками',
+      tags: [],
+      aspects: {
+        'orbis/task': { status: 'planned' },
+        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      },
+    });
+
+    // Прогон A взят 31 минуту назад — к T0 он устарел
+    const staleAt = new Date(T0.getTime() - 31 * MINUTE);
+    const claimA = await dispatchTool(
+      worker(owner, grantId, { clock: () => staleAt }),
+      'orbis_claim_task',
+      { ticket_id: ticket.id },
+    );
+    if (claimA.status !== 'ok') throw new Error(`захват A: ${JSON.stringify(claimA)}`);
+    const runA = (claimA.result as { run_id: string }).run_id;
+
+    // Владелец руками вернул тикет в работу заново (намерение «начни сначала»): прогон A
+    // остаётся running — это и есть состояние с ДВУМЯ running-прогонами одного тикета.
+    await patchTask(owner, ticket.id, { status: 'planned' });
+    const claimB = await dispatchTool(worker(owner, grantId), 'orbis_claim_task', {
+      ticket_id: ticket.id,
+    });
+    if (claimB.status !== 'ok') throw new Error(`захват B: ${JSON.stringify(claimB)}`);
+    const runB = (claimB.result as { run_id: string }).run_id;
+    expect(runB).not.toBe(runA);
+
+    const { swept } = await sweepStaleRuns(db, {
+      ownerId: owner,
+      actorKind: 'owner',
+      clock: () => T0,
+      staleAfterMs: RUN_STALE_AFTER_MS,
+    });
+    expect(swept).toBe(1);
+
+    // Прогон A помечен, прогон B живёт, а тикет остался при СВОЁМ прогоне: подметание
+    // старого хвоста не имеет права выбить из работы того, кто работает сейчас.
+    expect((await aspectsOf(owner, runA))['orbis/agent-run']).toMatchObject({
+      outcome: 'abandoned',
+    });
+    expect((await aspectsOf(owner, runB))['orbis/agent-run']).toMatchObject({
+      outcome: 'running',
+    });
+    expect((await aspectsOf(owner, ticket.id))['orbis/task']).toMatchObject({
+      status: 'in_progress',
+    });
+
+    // …и живой прогон закрывается штатно, а не зависает до собственного подметания
+    const finished = await dispatchTool(worker(owner, grantId), 'orbis_finish', {
+      run_id: runB,
+      report: 'Готово: работа второго прогона доведена до конца.',
+    });
+    expect(finished.status).toBe('ok');
+  });
+
+  test('архивированный running-прогон подметается (инвариант 6 держится и после отката захвата)', async () => {
+    const owner = freshUserId();
+    const grantId = await workerGrant(owner, 'архивный прогон');
+    const { ticketId, runId } = await seedRun(owner, {
+      grantId,
+      ticketStatus: 'in_progress',
+      lastStepMinutesAgo: 31,
+      stepSummary: 'Начал и был архивирован',
+      external: false,
+    });
+    const archived = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_update', input: { id: runId, archived: true } }],
+    });
+    if (!archived.ok) throw new Error(`архивация прогона: ${archived.error.message}`);
+
+    const { swept } = await sweepStaleRuns(db, {
+      ownerId: owner,
+      actorKind: 'owner',
+      clock: () => T0,
+      staleAfterMs: RUN_STALE_AFTER_MS,
+    });
+    expect(swept).toBe(1);
+    expect((await aspectsOf(owner, runId))['orbis/agent-run']).toMatchObject({
+      outcome: 'abandoned',
+    });
+    // Тикет не остался висеть в работе с прогоном, которого на экранах уже нет
+    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'planned' });
+  });
+
+  test('очередь гранта A метёт брошенный прогон гранта B: подметание — про владельца, не про грант', async () => {
+    const owner = freshUserId();
+    const grantA = await workerGrant(owner, 'грант A');
+    const grantB = await workerGrant(owner, 'грант B');
+    const foreign = await seedRun(owner, {
+      grantId: grantB,
+      ticketStatus: 'in_progress',
+      lastStepMinutesAgo: 31,
+      stepSummary: 'Прогон гранта B',
+      external: false,
+    });
+
+    const r = await dispatchTool(worker(owner, grantA), 'orbis_my_queue', {});
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect((r.result as MyQueueResult).swept).toBe(1);
+    // Тикет гранта B в очередь гранта A не попал — метут прогоны, а видят только своё
+    expect((r.result as MyQueueResult).tickets.map((t) => t.id)).not.toContain(foreign.ticketId);
+    expect((await aspectsOf(owner, foreign.runId))['orbis/agent-run']).toMatchObject({
+      outcome: 'abandoned',
+    });
   });
 });

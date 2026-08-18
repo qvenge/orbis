@@ -9,9 +9,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { batchAuditMessageId, entityThreadId, globalThreadId, newId } from '@orbis/shared';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import type { WireChatMessage } from '../chat/messages';
 import { chatMessages, entities, oauthClients } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -100,6 +100,15 @@ async function connectAgent(url: string, token: string = TOKEN): Promise<Client>
   });
   await agent.connect(transport);
   return agent;
+}
+
+/** Статус тикета в БД — правда графа, а не ответ тула (приёмка 5 по проводу). */
+async function taskStatus(id: string): Promise<unknown> {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, id)),
+  );
+  return (rows[0]?.aspects as Record<string, Record<string, unknown>> | undefined)?.['orbis/task']
+    ?.status;
 }
 
 /** tools/call + разбор единственного text-контента как JSON (контракт адаптера). */
@@ -788,6 +797,39 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
     }
   });
 
+  test('НЕЗНАКОМОЕ значение scope сужает tools/list так же, как worker (fail-closed, С7)', async () => {
+    // Колонка `scope` — text, и значение мимо перечисления в неё попасть может (ручная
+    // правка, откат миграции, будущий скоуп на старом коде). Список обязан сужаться, а не
+    // открываться: сравнение с одним лишь 'worker' отдало бы такому гранту весь реестр.
+    const token = await issuePatGrant(db, { ownerId: owner, label: 'скоуп из будущего' });
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.execute(
+        sql`UPDATE agent_grants SET scope = 'foo' WHERE owner_id = ${owner}::uuid AND label = 'скоуп из будущего'`,
+      );
+    } finally {
+      await adminClient.end();
+    }
+
+    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
+    const allowed = new Set(
+      defs.filter((d) => d.kind === 'read' && d.internalOnly !== true).map((d) => d.name),
+    );
+    for (const name of WORKER_SCOPE_TOOLS) allowed.add(name);
+
+    const agent = await connectAgent(mainUrl(), token);
+    try {
+      const names = (await agent.listTools()).tools.map((t) => t.name);
+      expect(names.filter((n) => !allowed.has(n))).toEqual([]);
+      expect(names).not.toContain('entity_update');
+      // Не вырожденно: чтения и круг исполнителя на месте
+      expect(names).toContain('entity_query');
+      for (const verb of AGENT_VERB_NAMES) expect(names).toContain(verb);
+    } finally {
+      await agent.close();
+    }
+  });
+
   test('полный круг по проводу: orbis_my_queue → orbis_claim_task → orbis_run_step → orbis_finish (приёмка 4, 9, 10)', async () => {
     // Круг гоняется настоящим SDK-клиентом против поднятого сервера: между агентом и
     // глаголами лежат аутентификация по гранту, гейт скоупа, tools/call-сериализация и
@@ -834,6 +876,8 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
 
       const claimed = await callTool(agent, 'orbis_claim_task', { ticket_id: ticket.id });
       expect(claimed.isError).toBe(false);
+      // Приёмка 5 по проводу: захват — это ЗАПИСЬ в графе, а не только ответ тула
+      expect(await taskStatus(ticket.id)).toBe('in_progress');
       // Инвариант 4 по проводу: у глагола не бывает ответа «ждёт подтверждения»
       expect(claimed.payload.status).toBeUndefined();
       const claim = claimed.payload.result as { run_id: string; process: string | null };
@@ -927,5 +971,30 @@ describe('/mcp: pending-подтверждение несёт грант исх�
     expect(action?.actor_kind).toBe('agent');
     expect(action?.source).toBe('mcp');
     expect(action?.actor_grant_id).toBe(grant.grantId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Внутренние операции версий (С11) по проводу: их в реестре нет вовсе
+// ---------------------------------------------------------------------------
+
+describe('/mcp: entity_version_pin/delete недостижимы внешнему агенту (§9.2, С11)', () => {
+  test('в tools/list их нет, а tools/call даёт структурный отказ «неизвестный тул»', async () => {
+    const target = await seedEntity({ title: 'Цель закрепления мимо владельца', tags: [] });
+    const agent = await connectAgent(mainUrl());
+    try {
+      const names = (await agent.listTools()).tools.map((t) => t.name);
+      expect(names).not.toContain('entity_version_pin');
+      expect(names).not.toContain('entity_version_delete');
+
+      const r = await callTool(agent, 'entity_version_pin', {
+        entity_id: target.id,
+        label: 'из агента',
+      });
+      expect(r.isError).toBe(true);
+      expect(JSON.stringify(r.payload)).toContain('неизвест');
+    } finally {
+      await agent.close();
+    }
   });
 });

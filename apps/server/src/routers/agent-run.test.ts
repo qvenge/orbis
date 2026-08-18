@@ -157,6 +157,44 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     expect((await aspectsOf(owner, claim.run_id))['orbis/agent-run']?.reply).toBeUndefined();
   });
 
+  test('ответ адресуется ПОСЛЕДНЕМУ прогону тикета: старый прогон → CONFLICT, reply не записан', async () => {
+    const ticketId = await makeTicket('Тикет с двумя вопросами');
+    const first = okResult<ClaimTaskResult>(
+      await dispatchTool(worker(owner, grantId), 'orbis_claim_task', { ticket_id: ticketId }),
+    );
+    await dispatchTool(worker(owner, grantId), 'orbis_checkpoint', {
+      run_id: first.run_id,
+      question: 'Вопрос первого прогона?',
+    });
+    await a.agentRun.answerCheckpoint({ ticketId, runId: first.run_id, answer: 'Ответ первому' });
+
+    const second = okResult<ClaimTaskResult>(
+      await dispatchTool(worker(owner, grantId), 'orbis_claim_task', { ticket_id: ticketId }),
+    );
+    await dispatchTool(worker(owner, grantId), 'orbis_checkpoint', {
+      run_id: second.run_id,
+      question: 'Вопрос второго прогона?',
+    });
+
+    // Устаревший экран (или чужой вызов API) шлёт runId прошлого прогона: тикет ждёт, а
+    // прошлый прогон терминален — предусловия одни это пропустили бы, и ответ лёг бы не
+    // туда, а вопрос текущего прогона остался бы без ответа навсегда.
+    const e = await trpcError(
+      a.agentRun.answerCheckpoint({
+        ticketId,
+        runId: first.run_id,
+        answer: 'Ответ не в тот прогон',
+      }),
+    );
+    expect(e.code).toBe('CONFLICT');
+    // Ответ первого прогона на месте (тот, что был дан вовремя), второго — нет
+    expect(
+      ((await aspectsOf(owner, first.run_id))['orbis/agent-run']?.reply as AnyRecord).text,
+    ).toBe('Ответ первому');
+    expect((await aspectsOf(owner, second.run_id))['orbis/agent-run']?.reply).toBeUndefined();
+    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'waiting' });
+  });
+
   test('прогон чужого тикета → NOT_FOUND, ничего не записано', async () => {
     const first = await makeTicket('Тикет A');
     const second = await makeTicket('Тикет B');

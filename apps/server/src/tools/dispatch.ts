@@ -851,7 +851,7 @@ async function runThreadPost(
       if (!allowed) {
         throw new ExecError(
           'FORBIDDEN_LEVEL',
-          'worker пишет только в треды назначенных тикетов и их проектов (С7/С9)',
+          'worker пишет только в треды назначенных тикетов и их прямых родителей (С7/С9)',
           { tool: 'thread_post', entity_id: parsed.entity_id },
         );
       }

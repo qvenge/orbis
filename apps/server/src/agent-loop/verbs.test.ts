@@ -487,6 +487,30 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     if (!r.ok) throw new Error(`patchTask: ${r.error.code} ${r.error.message}`);
   }
 
+  /** Владелец переназначает тикет — тем же путём, что из карточки назначения. */
+  async function patchAssignment(ticketId: string, patch: Record<string, unknown>): Promise<void> {
+    const r = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        { tool: 'entity_update', input: { id: ticketId, aspects: { 'orbis/assignment': patch } } },
+      ],
+    });
+    if (!r.ok) throw new Error(`patchAssignment: ${r.error.code} ${r.error.message}`);
+  }
+
+  /** Владелец убирает запись с глаз — архив (не удаление). */
+  async function archive(id: string): Promise<void> {
+    const r = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_update', input: { id, archived: true } }],
+    });
+    if (!r.ok) throw new Error(`archive: ${r.error.code} ${r.error.message}`);
+  }
+
   beforeAll(async () => {
     grantId = await workerGrant(owner, 'исполнитель шагов');
     otherGrantId = await workerGrant(owner, 'второй исполнитель');
@@ -583,6 +607,28 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
       const steps = run.steps as Array<{ seq: number; summary: string }>;
       expect(steps.map((s) => s.seq)).toEqual([1, 2]);
       expect(new Set(steps.map((s) => s.summary))).toEqual(new Set(['шаг A', 'шаг B']));
+    }
+  }, 60_000);
+
+  test('четыре ПАРАЛЛЕЛЬНЫХ шага одного прогона: все ok, step_count 4, ни один шаг не потерян', async () => {
+    // Агент выпускает несколько tool-call'ов одним ходом (Claude Code так и делает), а CAS
+    // по step_count пропускает за круг ровно один шаг: k-му по порядку победы нужно k
+    // попыток. Четырёх параллельных шагов уже хватало, чтобы последний получил CONFLICT
+    // на ровном месте, — это про запас попыток, а не про поведение глагола.
+    for (let round = 0; round < 2; round++) {
+      const { runId } = await claimed(`Четыре параллельных шага ${round}`);
+      const ctx = worker(owner, grantId, { clock: () => T1 });
+      const summaries = ['шаг 1', 'шаг 2', 'шаг 3', 'шаг 4'];
+      const results = await Promise.all(
+        summaries.map((summary) => dispatchTool(ctx, 'orbis_run_step', { run_id: runId, summary })),
+      );
+      expect(results.map((r) => r.status)).toEqual(['ok', 'ok', 'ok', 'ok']);
+
+      const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
+      expect(run.step_count).toBe(4);
+      const steps = run.steps as Array<{ seq: number; summary: string }>;
+      expect(steps.map((s) => s.seq)).toEqual([1, 2, 3, 4]);
+      expect(new Set(steps.map((s) => s.summary))).toEqual(new Set(summaries));
     }
   }, 60_000);
 
@@ -879,6 +925,64 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     expect(run.outcome).toBe('running');
     expect(run.report).toBeUndefined();
     expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'planned' });
+  });
+
+  test('владелец переназначил тикет другому гранту между захватом и итогом → orbis_finish CONFLICT, тикет и прогон не тронуты', async () => {
+    // may_close=true намеренно: без сверки «тикет всё ещё МОЙ» право закрытия читалось бы
+    // из ЧУЖОГО назначения — и прогон закрыл бы тикет, который владелец уже отдал другому.
+    const { ticketId, runId } = await claimed('Тикет, отданный другому', true);
+    await patchAssignment(ticketId, {
+      executor: 'agent',
+      grant_id: otherGrantId,
+      may_close: true,
+    });
+
+    const e = errorOf(
+      await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
+        run_id: runId,
+        report: 'Готово',
+      }),
+    );
+    expect(e.code).toBe('CONFLICT');
+
+    // Batch откатился целиком: тикет остался в работе и с чужим назначением, прогон — running
+    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({
+      status: 'in_progress',
+    });
+    expect((await aspectsOf(owner, ticketId))['orbis/assignment']).toMatchObject({
+      grant_id: otherGrantId,
+    });
+    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
+    expect(run.outcome).toBe('running');
+    expect(run.report).toBeUndefined();
+  });
+
+  test('архивированный тикет: orbis_claim_task → NOT_FOUND, прогон не создан', async () => {
+    const ticketId = await makeTicket('Тикет, убранный в архив');
+    await archive(ticketId);
+
+    expect(
+      errorCode(
+        await dispatchTool(worker(owner, grantId), 'orbis_claim_task', { ticket_id: ticketId }),
+      ),
+    ).toBe('NOT_FOUND');
+    expect(await childrenOf(owner, ticketId)).toHaveLength(0);
+    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'planned' });
+  });
+
+  test('архивированный прогон: orbis_run_step → NOT_FOUND (для глаголов прогона больше нет)', async () => {
+    const { runId } = await claimed('Прогон, убранный в архив');
+    await archive(runId);
+
+    expect(
+      errorCode(
+        await dispatchTool(worker(owner, grantId, { clock: () => T1 }), 'orbis_run_step', {
+          run_id: runId,
+          summary: 'шаг в архивный прогон',
+        }),
+      ),
+    ).toBe('NOT_FOUND');
+    expect((await aspectsOf(owner, runId))['orbis/agent-run']).toMatchObject({ step_count: 0 });
   });
 
   test('прогон другого гранта: orbis_run_step/checkpoint/finish → CONFLICT «другому исполнителю»; чужой владелец и несуществующий прогон → NOT_FOUND', async () => {

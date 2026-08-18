@@ -9,7 +9,7 @@
 // подменой того самого решения, ради которого чекпойнт и останавливает работу.
 import { newId } from '@orbis/shared';
 import { z } from 'zod';
-import { runById, ticketOfRun } from '../agent-loop/queries';
+import { runById, runsOfTicket, ticketOfRun } from '../agent-loop/queries';
 import { rollbackRun } from '../agent-loop/rollback';
 import { sweepStaleRuns } from '../agent-loop/sweep';
 import { withIdentity } from '../db/with-identity';
@@ -81,6 +81,19 @@ export const agentRunRouter = router({
             throw new ExecError('CONFLICT', 'тикет не ждёт ответа — отвечать не на что', {
               ticketId: input.ticketId,
               status: ticket.aspects['orbis/task']?.status,
+            });
+          }
+          // Отвечают ПОСЛЕДНЕМУ прогону тикета. Все прошлые прогоны терминальны, и
+          // предусловие исхода их пропускает: устаревший экран (или чужой вызов API) с
+          // прежним runId положил бы ответ в старый прогон, вернул тикет в planned — а
+          // вопрос текущего прогона остался бы без ответа, и агент прочитал бы в истории
+          // чужую реплику. Порядок — тот же created_at ASC, что у экрана истории.
+          const runs = await runsOfTicket(tx, input.ticketId);
+          if (runs.at(-1)?.id !== input.runId) {
+            throw new ExecError('CONFLICT', 'ответ адресуется последнему прогону тикета', {
+              ticketId: input.ticketId,
+              runId: input.runId,
+              lastRunId: runs.at(-1)?.id,
             });
           }
         });

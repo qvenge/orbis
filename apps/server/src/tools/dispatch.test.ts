@@ -881,6 +881,81 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     expect(await messagesIn(owner, entityThreadId(owner, note.id))).toHaveLength(0);
   });
 
+  test('worker: thread_post в НЕСУЩЕСТВУЮЩИЙ id → FORBIDDEN_LEVEL, а не NOT_FOUND', async () => {
+    // Отличать «нет такой записи» от «не твоя» исполнителю не положено: иначе периметр
+    // превращается в оракул чужого графа — перебором id можно было бы узнать, что у
+    // владельца есть, а чего нет. Проверка периметра стоит ДО ensureEntityThread.
+    expectError(
+      await dispatchTool(worker(), 'thread_post', { entity_id: newId(), content: 'в никуда' }),
+      'FORBIDDEN_LEVEL',
+    );
+  });
+
+  test('worker: thread_post в АРХИВИРОВАННЫЙ назначенный тикет → FORBIDDEN_LEVEL', async () => {
+    const archivedTicket = await seedEntity(owner, {
+      title: 'Тикет, убранный в архив',
+      tags: [],
+      aspects: {
+        'orbis/task': { status: 'planned' },
+        'orbis/assignment': { executor: 'agent', grant_id: grantId },
+      },
+    });
+    const r = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_update', input: { id: archivedTicket.id, archived: true } }],
+    });
+    if (!r.ok) throw new Error(`архивация тикета: ${r.error.code} ${r.error.message}`);
+
+    // Архив — «убрано с глаз»: периметр записи исполнителя за ним не тянется
+    expectError(
+      await dispatchTool(worker(), 'thread_post', {
+        entity_id: archivedTicket.id,
+        content: 'пишу в архив',
+      }),
+      'FORBIDDEN_LEVEL',
+    );
+    expect(await messagesIn(owner, entityThreadId(owner, archivedTicket.id))).toHaveLength(0);
+  });
+
+  test('НЕЗНАКОМОЕ значение scope сужает доступ так же, как worker (fail-closed, С7)', async () => {
+    // Колонка `scope` — text: значение в неё могло лечь мимо нашего перечисления (ручная
+    // правка, откат миграции, будущий скоуп на старом коде). verifyBearer отдаёт его КАК
+    // ЕСТЬ, а гейт обязан читать «не full → не полный доступ». Сравнение с одним лишь
+    // 'worker' открыло бы такому гранту весь граф — ровно наоборот.
+    const token = await issuePatGrant(db, { ownerId: owner, label: 'скоуп из будущего' });
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.execute(
+        sql`UPDATE agent_grants SET scope = 'foo' WHERE owner_id = ${owner}::uuid AND label = 'скоуп из будущего'`,
+      );
+    } finally {
+      await adminClient.end();
+    }
+    const identity = await verifyBearer(db, token);
+    if (identity === null) throw new Error('PAT с незнакомым скоупом не прошёл verifyBearer');
+    // verifyBearer не нормализует значение — иначе гейт проверялся бы на подделке
+    expect(String(identity.scope)).toBe('foo');
+
+    const unknownScope = ctxFor({
+      actorUserId: owner,
+      actorKind: 'agent',
+      source: 'mcp',
+      grant: { id: identity.grantId, scope: identity.scope, label: identity.label },
+    });
+    expectError(
+      await dispatchTool(unknownScope, 'entity_update', {
+        id: ticket.id,
+        aspects: { 'orbis/task': { status: 'done' } },
+      }),
+      'FORBIDDEN_LEVEL',
+    );
+    // …и это не «отказ всему»: чтения и глаголы такому гранту открыты, как worker'у
+    expect((await dispatchTool(unknownScope, 'entity_get', { id: ticket.id })).status).toBe('ok');
+    expect((await dispatchTool(unknownScope, 'orbis_my_queue', {})).status).toBe('ok');
+  });
+
   test('скоуп full сужению thread_post не подчиняется: пишет в любой свой тред', async () => {
     const r = await dispatchTool(
       ctxFor({
@@ -1101,4 +1176,30 @@ describe('CAS-предусловие не протекает в путь мод�
       status: 'planned',
     });
   });
+});
+
+describe('Внутренние операции версий недостижимы из пути модели (С11, §9.2)', () => {
+  // Закрепление и удаление версии живут в exec-схемах executor'а и в CORE_TOOLS не
+  // регистрируются: единственный вход — роутер version (рука владельца). Проверка не
+  // декоративна — у precondition и bodyDoc такая же граница уже закреплена тестами выше,
+  // а у версий закрытость держалась только на том, что имён нет в реестре.
+  for (const tool of ['entity_version_pin', 'entity_version_delete']) {
+    test(`batch_execute с операцией ${tool} → VALIDATION «неизвестный тул операции»`, async () => {
+      const target = await seedEntity(userA, { title: `Цель ${tool}`, tags: [] });
+      const r = await dispatchTool(ctxFor(), 'batch_execute', {
+        batch_id: newId(),
+        operations: [{ tool, input: { entity_id: target.id, id: newId(), label: 'из модели' } }],
+      });
+      expectError(r, 'VALIDATION');
+      if (r.status === 'error') {
+        expect((r.error.details as { index: number; tool: string }).tool).toBe(tool);
+      }
+    });
+
+    test(`одиночный вызов ${tool} → неизвестный тул (структурный отказ, не исполнение)`, async () => {
+      const r = await dispatchTool(ctxFor(), tool, { entity_id: newId(), label: 'из модели' });
+      expect(r.status).toBe('error');
+      if (r.status === 'error') expect(r.error.message).toContain('неизвест');
+    });
+  }
 });

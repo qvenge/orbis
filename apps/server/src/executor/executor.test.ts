@@ -992,6 +992,19 @@ describe('ADE-срез 1: закреплённые версии тела (С11)'
     expect(await versionIdsOf(e.id)).toEqual([]);
   });
 
+  test('пробельная подпись версии → VALIDATION, строка не появляется', async () => {
+    // Подпись — единственное, чем владелец отличает снимки в списке: строка из пробелов
+    // рисуется пустотой, а в журнале даёт карточку «Закреплена версия «   »». `min(1)`
+    // без trim пропускал бы её, поэтому режем на схеме, а не на экране.
+    const e = firstEntity(
+      await execute(db, req('entity_create', { title: 'Под пробельную подпись', tags: [] })),
+    );
+    const r = await execute(db, req('entity_version_pin', { entity_id: e.id, label: '   ' }));
+    expect(r.ok).toBe(false);
+    expect((r as { error: { code: string } }).error.code).toBe('VALIDATION');
+    expect(await versionIdsOf(e.id)).toEqual([]);
+  });
+
   test('30. закрепление в batch: снимок берётся из виртуального состояния того же batch', async () => {
     // Сущности на стадии prepare в БД ещё нет — её создаёт ПРЕДЫДУЩАЯ операция batch (§7.8),
     // и тело снимка обязано быть её телом, а не отказом «сущность не найдена».

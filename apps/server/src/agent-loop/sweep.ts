@@ -14,7 +14,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind } from '../executor/types';
 import { RUN_STALE_AFTER_MS } from './constants';
-import { type RunRow, staleRuns, ticketOfRun } from './queries';
+import { type RunRow, runsOfTicket, staleRuns, ticketOfRun } from './queries';
 
 // Боевой синк — один инстанс на модуль (состояния не хранит), как в tools/dispatch.ts.
 const sink = makeChatJournalSink();
@@ -64,6 +64,17 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
   let swept = 0;
   for (const run of stale) {
     const ticket = await withIdentity(db, args.ownerId, (tx) => ticketOfRun(tx, run.id));
+    // Статус тикета трогает ТОЛЬКО его последний прогон. Двух running-прогонов у тикета
+    // хватает одного ручного жеста владельца («верни в planned» при живом прогоне A →
+    // захват B), и тогда подметание старого хвоста A выбивало бы из работы тикет, над
+    // которым прямо сейчас работает B. Порядок — тот же created_at ASC, что у очереди и
+    // экрана истории: «последний» здесь значит то же, что видит человек.
+    const isLastRun =
+      ticket !== null &&
+      (await withIdentity(db, args.ownerId, async (tx) => {
+        const runs = await runsOfTicket(tx, ticket.id);
+        return runs.at(-1)?.id === run.id;
+      }));
     const idleMs = now.getTime() - new Date(run.run.last_step_at).getTime();
     const note = abandonNote(run, idleMs);
     // «Тронул ли внешнее» решает не последний шаг, а весь прогон: агент мог создать
@@ -95,7 +106,7 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
 
     // Тикет чинится, только если он ДЕЙСТВИТЕЛЬНО висит в работе: владелец мог вернуть
     // его руками, и переписывать его статус задним числом сервер права не имеет.
-    if (ticket !== null && ticket.aspects['orbis/task']?.status === 'in_progress') {
+    if (ticket !== null && isLastRun && ticket.aspects['orbis/task']?.status === 'in_progress') {
       operations.push({
         tool: 'entity_update',
         input: {

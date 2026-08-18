@@ -8,8 +8,10 @@ import type { Tx } from '../db/with-identity';
 
 /**
  * Инвариант 2 спеки: «скоуп worker не может тронуть чужое». Периметр записи фонового
- * исполнителя — треды НАЗНАЧЕННЫХ ему тикетов и их проектов: тикет он ведёт, а в проект
- * пишет сводку «готово, проверь» (С8/С9). Всё остальное в графе владельца ему закрыто.
+ * исполнителя — треды НАЗНАЧЕННЫХ ему тикетов и их ПРЯМЫХ РОДИТЕЛЕЙ по связи parent:
+ * тикет он ведёт, а в родителя (обычно проект) пишет сводку «готово, проверь» (С8/С9).
+ * Аспект родителя проба не спрашивает намеренно — периметр задаёт связь, а не аспект.
+ * Всё остальное в графе владельца ему закрыто.
  *
  * Один SQL вместо двух чтений: сущность годится, если она сама — тикет с назначением на
  * ЭТОТ грант, либо она родитель такого тикета (`relations.relation_type='parent'`,
@@ -20,6 +22,11 @@ import type { Tx } from '../db/with-identity';
  * `executor: 'agent'` в пробе не декоративен: при `executor='human'` grant_id запрещён
  * инвариантом (assertAssignment), но проба обязана быть точной сама по себе — назначение
  * человеку не даёт прав никакому гранту.
+ *
+ * Архивные не годятся ни целью, ни тикетом-основанием: архив — «убрано с глаз», и писать
+ * туда исполнителю нечего. Цель присоединяется JOIN'ом, поэтому несуществующий id даёт
+ * пустую выборку — то есть FORBIDDEN_LEVEL, а не NOT_FOUND (исполнителю не с чего узнавать,
+ * что за пределами его назначений вообще что-то есть).
  */
 export async function isWorkerThreadTarget(
   tx: Tx,
@@ -33,13 +40,15 @@ export async function isWorkerThreadTarget(
   const rows = await tx.execute(
     sql`SELECT 1 AS ok
         FROM entities t
+        JOIN entities target ON target.id = ${entityId}::uuid AND NOT target.archived
         WHERE t.owner_id = ${ownerId}::uuid
+          AND NOT t.archived
           AND t.aspects @> ${assigned}::jsonb
           AND (
-            t.id = ${entityId}::uuid
+            t.id = target.id
             OR EXISTS (
               SELECT 1 FROM relations r
-              WHERE r.source_id = ${entityId}::uuid
+              WHERE r.source_id = target.id
                 AND r.target_id = t.id
                 AND r.relation_type = 'parent'
             )
@@ -137,11 +146,16 @@ export async function assignedTickets(tx: Tx, grantId: string): Promise<TicketRo
   return (rows as unknown as RawRow[]).map(toTicketRow);
 }
 
-/** Тикет с телом по id; чужой и несуществующий под RLS неразличимы — оба null. */
+/**
+ * Тикет с телом по id; чужой и несуществующий под RLS неразличимы — оба null.
+ *
+ * Архивный — тоже null, как и в очереди (assignedTickets): архив значит «убрано», и id из
+ * прежней выдачи не должен быть обходным путём взять в работу то, чего на экранах уже нет.
+ */
 export async function ticketById(tx: Tx, ticketId: string): Promise<TicketDetail | null> {
   const rows = await tx.execute(
     sql`SELECT id, title, body, aspects FROM entities
-        WHERE id = ${ticketId}::uuid AND aspects ? 'orbis/task'`,
+        WHERE id = ${ticketId}::uuid AND NOT archived AND aspects ? 'orbis/task'`,
   );
   const row = (rows as unknown as RawRow[])[0];
   if (row === undefined) return null;
@@ -189,7 +203,15 @@ export async function runsOfTicket(tx: Tx, ticketId: string): Promise<RunRow[]> 
 
 /**
  * Прогоны, брошенные к моменту `before` (С6): всё ещё `running`, а последний шаг старше
- * порога. Сравнение — подпутевое (`->>` с приведением к timestamptz), то есть seq scan:
+ * порога.
+ *
+ * Архивные ОТБИРАЮТСЯ наравне с остальными, в отличие от очереди: инвариант 6 («тикет не
+ * висит in_progress навсегда») — про состояние графа, а не про видимость на экране. Путь
+ * к архивированному running-прогону короткий: «отмени последнее» после захвата (inverse
+ * создания = archived:true) оставляет прогон running, а тикет — in_progress; исключи мы
+ * архивные, чинить это состояние стало бы нечем.
+ *
+ * Сравнение — подпутевое (`->>` с приведением к timestamptz), то есть seq scan:
  * containment по колонке отбирает running-прогоны индексом, а их у владельца единицы —
  * агент работает над одним тикетом за раз. Приведение к timestamptz, а не сравнение
  * строк: формат отметки схема допускает не единственный (смещение вместо `Z`, доли
@@ -200,8 +222,7 @@ export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
   const rows = await tx.execute(
     sql`SELECT id, title, created_at, aspects -> 'orbis/agent-run' AS run
         FROM entities
-        WHERE NOT archived
-          AND aspects @> ${running}::jsonb
+        WHERE aspects @> ${running}::jsonb
           AND (aspects -> 'orbis/agent-run' ->> 'last_step_at')::timestamptz < ${before.toISOString()}::timestamptz
         ORDER BY created_at ASC`,
   );
@@ -213,12 +234,16 @@ export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
  * оба null, как у тикета: по той же причине, что и там (не быть оракулом чужого графа).
  * Условие `aspects ? 'orbis/agent-run'` не декоративно: без него id любой сущности
  * владельца проходил бы за прогон, и глагол падал бы на разборе пустого аспекта.
+ *
+ * Архивный прогон — структурно «прогона нет»: шаги и итог дописывать некуда, раз владелец
+ * убрал запись (в том числе откатив собственный захват). Подметание при этом его ВИДИТ
+ * (staleRuns) — инвариант 6 держится и на архивных.
  */
 export async function runById(tx: Tx, runId: string): Promise<RunRow | null> {
   const rows = await tx.execute(
     sql`SELECT id, title, created_at, aspects -> 'orbis/agent-run' AS run
         FROM entities
-        WHERE id = ${runId}::uuid AND aspects ? 'orbis/agent-run'`,
+        WHERE id = ${runId}::uuid AND NOT archived AND aspects ? 'orbis/agent-run'`,
   );
   const row = (rows as unknown as RawRow[])[0];
   return row === undefined ? null : toRunRow(row);
