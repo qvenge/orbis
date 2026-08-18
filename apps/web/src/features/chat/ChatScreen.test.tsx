@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { registerRetrySend, useRetryBuffer } from '../../state/retry';
-import { renderWithProviders } from '../../test/harness';
+import { renderWithProviders, trpcError } from '../../test/harness';
 import { ChatScreen } from './ChatScreen';
 
 const settings = { defaultCurrency: 'RUB', timezone: 'Europe/Moscow', pinnedEntities: [] };
@@ -47,6 +47,49 @@ test('глобальный чат: pending ai.sendMessage → typing-индик�
   const typing = await screen.findByTestId('typing');
   expect(typing).toHaveAttribute('role', 'status');
   expect(typing).toHaveAttribute('aria-label', 'Ассистент печатает');
+});
+
+// --- глобальный чат под <StrictMode> (дефект живого смоука) --------------------------------
+//
+// В разработке приложение живёт под StrictMode (main.tsx), а он прогоняет эффекты монтирования
+// ДВАЖДЫ. Отписка `useSyncExternalStore` между прогонами снимает наблюдателя с мутации
+// (react-query 5.101.2, `MutationObserver.onUnsubscribe`), и обратно при повторной подписке он
+// НЕ встаёт — парного `onSubscribe` в этой версии нет вовсе. Мутация доезжает, её ответ
+// приходит, а `ensure.data` навсегда остаётся `undefined`: экран стоял на ThreadSkeleton вечно.
+
+const strictMocks = (path: string) => {
+  if (path === 'chat.ensureThread') return { threadId: 't1' };
+  if (path === 'chat.listMessages') return [];
+  if (path === 'user.getSettings') return settings;
+  if (path === 'entity.query') return [];
+  throw new Error(`unexpected ${path}`);
+};
+
+test('под StrictMode чат поднимается: тред заведён ровно один раз, поле ввода на экране', async () => {
+  const { calls } = renderWithProviders(<ChatScreen />, strictMocks, { strict: true });
+
+  // Скелетон уходит — то есть ответ ensure до экрана ДОЕХАЛ, а не потерялся вместе с
+  // наблюдателем мутации.
+  await screen.findByTestId('message-list');
+  expect(screen.getByLabelText('Сообщение')).toBeInTheDocument();
+
+  // Ровно одна мутация, а не две: двойной прогон эффектов не должен стоить второго треда.
+  expect(calls.filter((c) => c.path === 'chat.ensureThread')).toEqual([
+    { path: 'chat.ensureThread', input: {} },
+  ]);
+});
+
+test('тред завести не вышло — чат говорит об этом, а не показывает вечный скелетон', async () => {
+  renderWithProviders(<ChatScreen />, (path) => {
+    if (path === 'chat.ensureThread') throw trpcError('INTERNAL_SERVER_ERROR', 'база недоступна');
+    return strictMocks(path);
+  });
+
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('Не удалось открыть чат');
+  expect(alert).toHaveTextContent('база недоступна');
+  // И поля ввода нет: предлагать набрать текст, которому некуда уехать, — обман.
+  expect(screen.queryByLabelText('Сообщение')).toBeNull();
 });
 
 // --- «Ждут отправки: N» умеет досылать -------------------------------------------------

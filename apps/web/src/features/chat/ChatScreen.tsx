@@ -1,41 +1,44 @@
 import { Clock } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { useFlushBuffer, useOnline, useRetryBuffer } from '../../state/retry';
-import { trpc } from '../../trpc';
 import { Composer } from './Composer';
 import { MessageList, ThreadSkeleton } from './MessageList';
 import { useChatThread } from './useChatThread';
+import { type EnsuredThread, EnsureFailedNotice, useEnsuredThread } from './useEnsuredThread';
 import { useFastPath } from './useFastPath';
 
 // Глобальный тред (§2.1): fast-path применяется только здесь (D-g — вкладка Chat).
+//
+// Тред заводится через `useEnsuredThread` — тем же способом, что и тред записи на detail. Способ
+// не косметический: пока ответ ensure читался из `mutation.data`, экран под `<StrictMode>`
+// оставался на скелетоне НАВСЕГДА (отписка снимает наблюдателя с мутации и обратно он не
+// встаёт — подробности в самом хуке). В прод-сборке двойного прогона эффектов нет, поэтому
+// болезнь была только девелоперской, — но разработка велась вслепую на пустом экране.
 export function ChatScreen() {
-  const ensure = trpc.chat.ensureThread.useMutation();
-  const started = useRef(false);
-
-  // ensureThread один раз при монтировании (StrictMode-safe: ref гасит двойной вызов).
-  useEffect(() => {
-    if (started.current) return;
-    started.current = true;
-    ensure.mutate({});
-  }, [ensure.mutate]);
-
-  const threadId = ensure.data?.threadId;
+  const { state, retry } = useEnsuredThread();
   return (
     <div className="flex h-full flex-col">
       <ScreenHeader title="Чат" />
-      {threadId ? (
-        // Контент центрирован (шапка — на всю ширину main), скролл — внутри MessageList.
-        <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
-          <ThreadView threadId={threadId} />
-        </div>
-      ) : (
-        <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
-          <ThreadSkeleton />
-        </div>
-      )}
+      {/* Контент центрирован (шапка — на всю ширину main), скролл — внутри MessageList. */}
+      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col">
+        <ChatBody state={state} onRetry={retry} />
+      </div>
     </div>
   );
+}
+
+function ChatBody({ state, onRetry }: { state: EnsuredThread; onRetry: () => void }) {
+  if (state.status === 'pending') return <ThreadSkeleton />;
+  if (state.status === 'failed')
+    return (
+      <EnsureFailedNotice
+        what="Не удалось открыть чат."
+        message={state.message}
+        onRetry={onRetry}
+      />
+    );
+  return <ThreadView threadId={state.threadId} />;
 }
 
 function ThreadView({ threadId }: { threadId: string }) {

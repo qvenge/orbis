@@ -16,6 +16,7 @@ import {
 import { trpc } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { queryBlocks } from '../browser/query';
+import { resetEnsuredThreads } from '../chat/useEnsuredThread';
 import { AspectCards } from './AspectCards';
 import { DetailScreen } from './DetailScreen';
 import { detailGetInput } from './useEntityDetail';
@@ -77,6 +78,10 @@ const entity = {
 
 beforeEach(() => {
   localStorage.clear();
+  // Заведённые треды помнит МОДУЛЬ (useEnsuredThread), а модуль живёт дольше теста: без сброса
+  // первый же тест, открывший «Тред» записи e1, оставлял бы следующему нулевое число вызовов
+  // ensureThread — и проверка «завели ровно один раз» краснела бы от соседа, а не от кода.
+  resetEnsuredThreads();
   // requestIdleCallback, которого никто не дёрнет: редактор обязан вставать по ЖЕСТУ теста, а
   // не сам собой по запасному таймеру простоя (1500 мс) посреди чужого ожидания. jsdom своей
   // реализации не имеет, поэтому подмена именно ДОБАВЛЯЕТ ветку простоя — и она молчит
@@ -1630,6 +1635,68 @@ test('тред завести не вышло — вкладка говорит 
   expect(alert).toHaveTextContent('база недоступна');
   // И поля ввода нет: предлагать набрать текст, которому некуда уехать, — обман.
   expect(screen.queryByLabelText('Сообщение')).toBeNull();
+});
+
+// Вкладка «Тред» живой не держится (у неё нет keepMounted), поэтому её ПОВТОРНОЕ открытие
+// монтировало компонент заново — и снова звало ensureThread, мигая скелетоном поверх уже
+// закешированных сообщений. Мутация идемпотентна, но платить ею за каждое переключение вкладок
+// незачем: заведённый тред записи помнит модуль (useEnsuredThread).
+test('повторное открытие «Треда» той же записи тред НЕ заводит и скелетоном не мигает', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'chat.listMessages')
+      return [
+        {
+          id: 'm1',
+          threadId: 'th-ensured',
+          role: 'user',
+          content: 'первое',
+          metadata: {},
+          createdAt: '2026-07-05T10:00:00.000Z',
+        },
+      ];
+    return threadHandler(path, undefined);
+  });
+  await screen.findByRole('tab', { name: 'Тред' });
+  const ensureCalls = () => calls.filter((c) => c.path === 'chat.ensureThread');
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
+  await screen.findByText('первое');
+  expect(ensureCalls()).toHaveLength(1);
+
+  // Уход на соседнюю вкладку РАЗМОНТИРУЕТ «Тред» — с этого и начинался дефект.
+  fireEvent.click(screen.getByRole('tab', { name: 'Сущность' }));
+  expect(screen.queryByRole('tabpanel', { name: 'Тред' })).toBeNull();
+
+  fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
+  // СИНХРОННО, без единого ожидания: лента уже на экране, скелетона нет ни кадра.
+  const panel = tabPanel('Тред');
+  expect(within(panel).getByTestId('message-list')).toBeInTheDocument();
+  expect(within(panel).getByText('первое')).toBeInTheDocument();
+  expect(within(panel).queryByLabelText('Загрузка')).toBeNull();
+  expect(ensureCalls()).toHaveLength(1);
+});
+
+test('тред завести не вышло — «Повторить» пробует заново и поднимает ленту', async () => {
+  let attempt = 0;
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'chat.ensureThread') {
+      attempt += 1;
+      if (attempt === 1) throw trpcError('INTERNAL_SERVER_ERROR', 'база недоступна');
+      return { threadId: 'th-ensured' };
+    }
+    return threadHandler(path, undefined);
+  });
+  await screen.findByRole('tab', { name: 'Тред' });
+  fireEvent.click(screen.getByRole('tab', { name: 'Тред' }));
+
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('база недоступна');
+
+  fireEvent.click(within(alert).getByRole('button', { name: 'Повторить' }));
+
+  await screen.findByLabelText('Сообщение');
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(calls.filter((c) => c.path === 'chat.ensureThread')).toHaveLength(2);
 });
 
 test('меню ⋮: «Править как markdown» показывает тело исходным текстом', async () => {
