@@ -3,6 +3,7 @@ import {
   batchAuditMessageId,
   entityThreadId,
   globalThreadId,
+  isManualBucket,
   manualBucket,
   materializeBatchId,
   memoryRuleDeclinedId,
@@ -68,6 +69,8 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
   });
   test('manualBucket: ручной запуск отличим от слота расписания по префиксу', () => {
     expect(manualBucket('2026-08-18T09:12:00.000Z')).toBe('manual:2026-08-18T09:12:00.000Z');
+    expect(isManualBucket(manualBucket('2026-08-18T09:12:00.000Z'))).toBe(true);
+    expect(isManualBucket('2026-08-18T07:00')).toBe(false);
   });
   test('формулы тредов детерминированы и различны', () => {
     const owner = '00000000-0000-4000-8000-00000000000a';

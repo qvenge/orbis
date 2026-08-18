@@ -9,10 +9,13 @@ import { eq } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { type RoutineRow, routineById } from '../agent-loop/queries';
 import { rollbackRun } from '../agent-loop/rollback';
+import { closeRoutineRun } from '../agent-loop/verbs';
 import { MAX_TOKENS_NOTE, STEP_LIMIT_NOTE } from '../ai/send-message';
 import { aiUsage } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import type { ActionRecord } from '../executor/types';
+import { execute } from '../executor/executor';
+import { makeChatJournalSink } from '../executor/journal';
+import type { ActionRecord, JournalSink } from '../executor/types';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMResponse } from '../llm/types';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
@@ -65,18 +68,73 @@ function refusal(): LLMResponse {
   };
 }
 
-/** Провайдер, дёргающий чужую ручку между шагами: так тест двигает часы и рубильник. */
+/**
+ * Провайдер, дёргающий чужую ручку между шагами: так тест двигает часы и рубильник или
+ * закрывает прогон «чужой рукой» ровно между ответом модели и исполнением её вызовов.
+ */
 class HookedProvider implements LLMProvider {
   readonly modelId = MODEL;
   constructor(
     readonly inner: ScriptedProvider,
-    private readonly afterChat: () => void,
+    private readonly afterChat: () => void | Promise<void>,
   ) {}
   async chat(req: Parameters<LLMProvider['chat']>[0]): Promise<LLMResponse> {
     const r = await this.inner.chat(req);
-    this.afterChat();
+    await this.afterChat();
     return r;
   }
+}
+
+const realSink = makeChatJournalSink();
+
+/** Закрыть прогон «чужой рукой» — как это сделало бы подметание или другой процесс. */
+async function closeForeign(routineId: string, runId: string, failNote: string): Promise<void> {
+  const r = await closeRoutineRun(
+    {
+      db,
+      ownerId: owner,
+      subject: { kind: 'routine', routineId },
+      clock: () => T0,
+      sink: realSink,
+    },
+    { runId, outcome: 'failed', failNote },
+  );
+  if (r.status !== 'ok') throw new Error(`closeForeign: ${JSON.stringify(r)}`);
+}
+
+/**
+ * Журнальный синк, который бросает на первых `times` записях, а дальше делегирует
+ * боевому: так в цикл впрыскивается НЕ сбой провайдера, а инфраструктурная ошибка на
+ * записи шага — и закрытие прогона после неё уже проходит.
+ */
+function faultySink(times: number): JournalSink {
+  let left = times;
+  return {
+    write: async (tx, entry) => {
+      if (left > 0) {
+        left -= 1;
+        throw new Error('журнал недоступен: диск отвалился');
+      }
+      return realSink.write(tx, entry);
+    },
+    findByAuditId: (tx, id) => realSink.findByAuditId(tx, id),
+  };
+}
+
+function proposeCall(runId: string, taskId: string) {
+  return {
+    name: 'orbis_propose',
+    input: {
+      run_id: runId,
+      explanation: EXPLANATION,
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+        },
+      ],
+    },
+  };
 }
 
 function deps(provider: LLMProvider, over: Partial<RoutineDeps> = {}): RoutineDeps {
@@ -455,6 +513,25 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
 
     await failedRun(nextBucket(), 4);
     expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('paused');
+
+    // Владелец снял паузу и проверяет починку кнопкой: ручной прогон упал снова — но он
+    // не повод для оценки стоп-крана (V1.3), иначе тот же тап вернул бы паузу по хвосту
+    // из тех же трёх плановых сбоев
+    const unpaused = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: routineId, aspects: { 'orbis/routine': { stage: 'active' } } },
+        },
+      ],
+    });
+    expect(unpaused.ok).toBe(true);
+    const manual = await failedRun('manual:2026-08-17T13:00:00.000Z', 5);
+    expect(manual).toEqual({ outcome: 'failed', reason: 'provider' });
+    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('active');
   });
 
   test('отказ модели → failed refusal', async () => {
@@ -522,6 +599,129 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     const aspect = await runAspect(runId);
     expect(aspect.outcome).toBe('failed');
     expect(aspect.fail_note).toMatch(/лимит/);
+    expect(aspect.usage).toBeUndefined();
+  });
+
+  test('внутренняя ошибка раннера (журнал упал на записи шага) → прогон закрыт failed internal, а не оставлен running; если падает и закрытие — исключение уходит наверх', async () => {
+    const routineId = await seedRoutine(owner);
+    const bucket = nextBucket();
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket });
+    const provider = new ScriptedProvider([
+      toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
+      endTurn('не должно случиться'),
+    ]);
+
+    // Первая запись журнала (шаг после entity_query) бросает — не ExecError, а «диск
+    // отвалился»; закрытие прогона идёт уже через здоровый журнал
+    const end = await run(provider, { routineId, runId, bucket }, { sink: faultySink(1) });
+    expect(end).toEqual({ outcome: 'failed', reason: 'internal' });
+    expect(provider.requests).toHaveLength(1);
+    const aspect = await runAspect(runId);
+    expect(aspect.outcome).toBe('failed');
+    expect(aspect.fail_note).toMatch(/^внутренняя ошибка раннера: журнал недоступен/);
+    // токены сделанного шага — честный расход, и в аспекте тоже
+    expect(aspect.usage).toEqual({ input_tokens: 10, output_tokens: 5 });
+
+    // Журнал не поднимается вовсе: закрыть прогон нечем — исключение пробрасывается
+    // (тик ловит), прогон остаётся running и достаётся подметанию
+    const bucket2 = nextBucket();
+    const { runId: runId2 } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: bucket2,
+      startedAt: new Date(T0.getTime() + 60_000),
+    });
+    const provider2 = new ScriptedProvider([
+      toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
+    ]);
+    await expect(
+      run(provider2, { routineId, runId: runId2, bucket: bucket2 }, { sink: faultySink(99) }),
+    ).rejects.toThrow('журнал недоступен');
+    expect((await runAspect(runId2)).outcome).toBe('running');
+  });
+
+  test('терминальный тул отказал при живом прогоне (VALIDATION) → отказ ушёл модели, цикл продолжился, следующий orbis_propose закрыл прогон', async () => {
+    const routineId = await seedRoutine(owner);
+    const bucket = nextBucket();
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket });
+    const taskId = await seedTask('Продлить страховку');
+
+    const provider = new ScriptedProvider([
+      // attach_* в предложении недопустим (V1.6) → VALIDATION; прогон жив — модель поправится
+      toolUse([
+        {
+          name: 'orbis_propose',
+          input: {
+            run_id: runId,
+            explanation: EXPLANATION,
+            operations: [
+              { tool: 'attach_orbis_task', input: { entity_id: taskId, data: { status: 'done' } } },
+            ],
+          },
+        },
+      ]),
+      toolUse([proposeCall(runId, taskId)]),
+    ]);
+
+    const end = await run(provider, { routineId, runId, bucket });
+    expect(end).toEqual({ outcome: 'finished' });
+    expect(provider.requests).toHaveLength(2);
+    const afterDenial = provider.requests[1]?.messages.at(-1)?.content ?? '';
+    expect(afterDenial).toContain('[tool_result:orbis_propose]');
+    expect(afterDenial).toContain('VALIDATION');
+
+    const aspect = await runAspect(runId);
+    expect(aspect.outcome).toBe('finished');
+    expect(aspect.proposal?.status).toBe('pending');
+    // терминальный тул шага не пишет — ни удачный, ни отклонённый
+    expect(aspect.step_count).toBe(0);
+    expect(aspect.usage).toEqual({ input_tokens: 20, output_tokens: 10 });
+  });
+
+  test('прогон закрыт чужой рукой посреди цикла: терминальный тул → CONFLICT → foreign, RunEnd aborted, второго закрытия и дозаписи расхода нет', async () => {
+    const routineId = await seedRoutine(owner);
+    const bucket = nextBucket();
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket });
+    const taskId = await seedTask('Заказать линзы');
+
+    const inner = new ScriptedProvider([toolUse([proposeCall(runId, taskId)])]);
+    // Между ответом модели и исполнением orbis_propose прогон закрывает «подметание»
+    const provider = new HookedProvider(inner, () =>
+      closeForeign(routineId, runId, 'закрыт подметанием'),
+    );
+    const requestsBefore = (await usageRows())[0]?.requestCount ?? 0;
+
+    const end = await run(provider, { routineId, runId, bucket });
+    expect(end).toEqual({ outcome: 'failed', reason: 'aborted' });
+    expect(inner.requests).toHaveLength(1);
+    const aspect = await runAspect(runId);
+    // исход и заметка — чужие, раннер их не переписал; расход в аспект не дописывал
+    expect(aspect.outcome).toBe('failed');
+    expect(aspect.fail_note).toBe('закрыт подметанием');
+    expect(aspect.usage).toBeUndefined();
+    expect(aspect.proposal).toBeUndefined();
+    // но дневной счётчик честен: обращение к модели было
+    expect((await usageRows())[0]?.requestCount).toBe(requestsBefore + 1);
+  });
+
+  test('прогон закрыт чужой рукой посреди цикла: запись шага → CONFLICT → foreign, цикл не продолжается', async () => {
+    const routineId = await seedRoutine(owner);
+    const bucket = nextBucket();
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket });
+
+    const inner = new ScriptedProvider([
+      toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
+      endTurn('не должно случиться'),
+    ]);
+    const provider = new HookedProvider(inner, () =>
+      closeForeign(routineId, runId, 'закрыт подметанием'),
+    );
+
+    const end = await run(provider, { routineId, runId, bucket });
+    expect(end).toEqual({ outcome: 'failed', reason: 'aborted' });
+    expect(inner.requests).toHaveLength(1); // второго обращения к модели не было
+    const aspect = await runAspect(runId);
+    expect(aspect.fail_note).toBe('закрыт подметанием');
+    expect(aspect.step_count).toBe(0);
     expect(aspect.usage).toBeUndefined();
   });
 

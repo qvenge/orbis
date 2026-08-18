@@ -17,7 +17,7 @@
 //      CONFLICT.
 //   4. Исход прогона — не текст в чате, а состояние сущности: finished / checkpoint /
 //      failed с причиной (V1.12). Расход §4.7 пишется в дневной счётчик И в аспект прогона.
-import { MAX_AGENT_STEPS, type RunUsageInput } from '@orbis/shared';
+import { isManualBucket, MAX_AGENT_STEPS, type RunUsageInput } from '@orbis/shared';
 import { runById } from '../agent-loop/queries';
 import { closeRoutineRun, runAgentVerb, type VerbCtx } from '../agent-loop/verbs';
 import { recordUsage, type UsageTotals } from '../ai/metering';
@@ -58,10 +58,27 @@ const FAIL_NOTE_CAP = 2_000;
  * Чем кончился прогон — информационно для вызывающего (тик, «прогнать сейчас»). Само
  * состояние лежит в аспекте прогона: этот тип нужен, чтобы тик не перечитывал сущность
  * ради решения «ретраить ли» и мог отличить «не гоняли модель» от «модель отработала».
+ *
+ * Причины `failed`: `provider` — провайдер бросил; `deadline` — RUN_DEADLINE_MS между
+ * шагами; `limit` — гейт §8 до провайдера; `refusal` — модель отказалась; `no_proposal` —
+ * propose-прогон кончился без предложения; `aborted` — рубильник процесса ЛИБО прогон
+ * закрыт чужой рукой (подметание, другой процесс) — раннер его не трогал; `steps` — лимит
+ * шагов в propose; `internal` — исключение самого раннера вне обращения к провайдеру
+ * (БД, журнал, запись шага): прогон закрыт `failed`, чтобы не висеть `running` до
+ * подметания, а причина названа отдельно — это баг или инфраструктура, а не поведение
+ * модели, и ретраить его тиком имеет смысл ровно так же, как `provider`.
  */
 export type RunEnd = {
   outcome: 'finished' | 'checkpoint' | 'failed';
-  reason?: 'provider' | 'deadline' | 'limit' | 'refusal' | 'no_proposal' | 'aborted' | 'steps';
+  reason?:
+    | 'provider'
+    | 'deadline'
+    | 'limit'
+    | 'refusal'
+    | 'no_proposal'
+    | 'aborted'
+    | 'steps'
+    | 'internal';
 };
 
 /** Что цикл решил сделать с прогоном — приговор, который исполняется ПОСЛЕ цикла. */
@@ -185,6 +202,17 @@ export async function runRoutineRun(deps: RoutineDeps, args: RunRoutineRunArgs):
       verbCtx,
       usage,
     });
+  } catch (e) {
+    // Сбой провайдера цикл ловит сам; сюда долетает всё остальное — БД, журнал, запись
+    // шага. Пробросить значило бы оставить прогон в `running` до подметания (полчаса без
+    // ретрая и без стоп-крана). Закрываем `failed` с названной причиной; если упадёт и
+    // закрытие — исключение уйдёт наверх (тик Задачи 10 ловит), прогон подберёт sweep.
+    console.error('[routines] внутренняя ошибка раннера:', e);
+    verdict = {
+      kind: 'close',
+      end: { outcome: 'failed', reason: 'internal' },
+      failNote: `внутренняя ошибка раннера: ${e instanceof Error ? e.message : String(e)}`,
+    };
   } finally {
     // Расход §4.7 — отдельной короткой транзакцией и ВСЕГДА: потреблённые до сбоя шаги —
     // честный расход. Сбой метеринга не имеет права менять исход прогона.
@@ -429,7 +457,12 @@ async function settle(
   // Стоп-кран (V1.12) — после того, как исход лёг в граф: иначе последний сбой не попал бы
   // в счёт трёх. Ветка `foreign` тоже сюда: прогон закрыт как `failed` чужой рукой, и
   // считать его надо — счёт ведётся по графу, а не по нашим попыткам.
-  if (end.outcome === 'failed') {
+  //
+  // Ручной прогон в стоп-кране не участвует (V1.3) — ни как единица счёта (это уже внутри
+  // pauseIfFailing), ни как ПОВОД для оценки: владелец снял паузу и жмёт «прогнать
+  // сейчас», чтобы проверить починку, — а хвост плановых прогонов всё ещё три сбоя, и
+  // оценка по нему вернула бы паузу тем же тапом, которым он её снял.
+  if (end.outcome === 'failed' && !isManualBucket(args.bucket)) {
     await pauseIfFailing(deps, { ownerId: args.ownerId, routineId: args.routine.id });
   }
   return end;

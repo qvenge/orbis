@@ -9,6 +9,7 @@ import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers'
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ScriptedProvider } from '../llm/scripted';
+import { rejectPending } from '../policy/pending';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool } from '../tools/dispatch';
 import { CONSECUTIVE_FAILURES_TO_PAUSE, ROUTINE_HISTORY_TAIL } from './constants';
@@ -135,6 +136,39 @@ describe('supersedeOpen: новый прогон гасит незакрытое
     expect(note).toBeDefined();
     expect(note?.role).toBe('system');
     expect((note?.metadata as { routine_id?: string }).routine_id).toBe(routineId);
+  });
+
+  test('предложение уже отклонил владелец (reject-строка reason owner), статус на прогоне ещё pending → гашение НЕ переписывает его на superseded', async () => {
+    const routineId = await seedRoutine(owner);
+    const oldRunId = await seedProposal(routineId, '2026-08-16T07:00');
+    const run = (await aspectsOf(owner, oldRunId))['orbis/agent-run'] as {
+      proposal?: { pending_id: string; status: string };
+    };
+    const pendingId = run.proposal?.pending_id;
+    if (pendingId === undefined) throw new Error('у прогона нет предложения');
+    // Окно V1.8: владелец нажал «отклонить» (reject-строка с reason 'owner' уже лежит), а
+    // decideProposal (Задача 11) ещё не дописал статус на прогон — он по-прежнему pending
+    const owned = await rejectPending(db, { ownerId: owner, pendingId, reason: 'owner' });
+    expect(owned).toMatchObject({ ok: true, alreadyRejected: false, reason: 'owner' });
+    const { runId: newRunId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-17T07:00',
+      startedAt: minutes(10),
+    });
+
+    const out = await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newRunId });
+    expect(out).toEqual({ superseded: 0, staled: 0 });
+
+    // Статус пишет тот, чей reason в reject-строке: «заменено» поверх «владелец отклонил»
+    // соврало бы про его решение — прогон остался таким, каким его оставит decideProposal
+    const after = (await aspectsOf(owner, oldRunId))['orbis/agent-run'] as {
+      proposal?: { status: string };
+    };
+    expect(after.proposal?.status).toBe('pending');
+    const reject = (await threadRows(routineId)).find(
+      (r) => (r.metadata as { type?: string }).type === 'confirmation_rejected',
+    );
+    expect((reject?.metadata as { reason?: string }).reason).toBe('owner');
   });
 
   test('гасить нечего → нули, повтор идемпотентен (второй раз тоже нули)', async () => {

@@ -12,7 +12,7 @@
 // только `system`) не снимает пометку «заменено» вместо правки модели, а инвариант
 // запрета по объекту (V1.10, молчит для владельческих и системных источников) не блокирует
 // паузу самой рутины.
-import { newId } from '@orbis/shared';
+import { isManualBucket, newId } from '@orbis/shared';
 import { runSummary, runsOfParent } from '../agent-loop/queries';
 import type { Clock } from '../budget/aggregates';
 import { appendMessage } from '../chat/messages';
@@ -168,8 +168,20 @@ export async function supersedeOpen(
         console.error('[routines] предложение не отклонено как заменённое:', rejected.error);
         continue;
       }
+      if (rejected.alreadyRejected && rejected.reason !== 'superseded') {
+        // Между нашим чтением («ждёт решения») и отказом предложение уже отклонил кто-то
+        // другой — владелец кнопкой или проверка предусловий (Задача 11). Статус на прогоне
+        // пишет тот, чей reason стоит в reject-строке (она — источник правды, V1.8): наше
+        // «заменено» поверх его «отклонил» соврало бы владельцу про его же решение.
+        // Свой прежний reason 'superseded' — недописанный статус прошлого прохода, дописываем.
+        continue;
+      }
       // `proposal` — вложенный объект, а merge аспекта пополевой: патчим его целиком,
-      // иначе pending_id пропал бы вместе со ссылкой на карточку
+      // иначе pending_id пропал бы вместе со ссылкой на карточку. Предусловие — тот же
+      // объект, каким мы его прочитали (сравнение по JSON-форме, executor.ts): вложенное
+      // поле `proposal.status` грамматика предусловий адресовать не умеет, а целый объект
+      // умеет — и если решение владельца легло между чтением и патчем, CONFLICT оставит
+      // его статус нетронутым.
       const patched = await patchAspect(deps, {
         ownerId: args.ownerId,
         id: row.id,
@@ -182,9 +194,12 @@ export async function supersedeOpen(
             ...(run.proposal.mismatches !== undefined && { mismatches: run.proposal.mismatches }),
           },
         },
+        precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [run.proposal] }],
       });
       if (patched.ok) out.superseded += 1;
-      else console.error(`[routines] статус «заменено» не записан на ${row.id}:`, patched.code);
+      else if (patched.code !== 'CONFLICT') {
+        console.error(`[routines] статус «заменено» не записан на ${row.id}:`, patched.code);
+      }
       continue;
     }
 
@@ -236,9 +251,7 @@ export async function pauseIfFailing(
   args: { ownerId: string; routineId: string },
 ): Promise<{ paused: boolean }> {
   const runs = await withIdentity(deps.db, args.ownerId, (tx) => runsOfParent(tx, args.routineId));
-  const planned = runs.filter(
-    (r) => r.run.bucket !== undefined && !r.run.bucket.startsWith('manual:'),
-  );
+  const planned = runs.filter((r) => r.run.bucket !== undefined && !isManualBucket(r.run.bucket));
   const tail = planned.slice(-CONSECUTIVE_FAILURES_TO_PAUSE);
   if (tail.length < CONSECUTIVE_FAILURES_TO_PAUSE) return { paused: false };
   if (!tail.every((r) => r.run.outcome === 'failed')) return { paused: false };
