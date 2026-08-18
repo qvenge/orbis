@@ -440,7 +440,7 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
     ).toEqual({ started: false, reason: 'done' });
   });
 
-  test('два конкурентных запуска одного бакета: ровно один started, второй replay|id_conflict; сущность одна — 5 раундов (приёмка 13, Р-1)', async () => {
+  test('два конкурентных запуска одного бакета: ровно один started, второй replay|id_conflict|running; сущность одна — 5 раундов (приёмка 13, Р-1)', async () => {
     for (let round = 0; round < 5; round++) {
       const routineId = await seedRoutine(owner);
       const bucket = '2026-08-17T07:00';
@@ -458,8 +458,13 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
         runId: routineRunId(routineId, bucket, 1),
         bucket,
       });
-      // Проигравший различим по причине, но не по последствиям: сущность одна
-      expect(['replay', 'id_conflict']).toContain((lost[0] as { reason: string }).reason);
+      // Проигравший различим по причине, но не по последствиям: сущность одна. Причин три,
+      // потому что снимок проигравшего берётся ЛИБО до коммита победителя (тогда он идёт в
+      // execute и проигрывает там: replay по PK audit'а или занятый id/связь → id_conflict),
+      // ЛИБО после (тогда он видит идущий прогон → running); «done» невозможен — снимок один
+      expect(['replay', 'id_conflict', 'running']).toContain(
+        (lost[0] as { reason: string }).reason,
+      );
       expect((await runsOf(routineId)).map((r) => r.id)).toEqual([
         routineRunId(routineId, bucket, 1),
       ]);

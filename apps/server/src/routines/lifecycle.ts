@@ -33,13 +33,7 @@ import {
   routineRunId,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import {
-  type RunRow,
-  runById,
-  runSummary,
-  runsForBucket,
-  runsOfParent,
-} from '../agent-loop/queries';
+import { type RunRow, runById, runSummary, runsOfParent } from '../agent-loop/queries';
 import type { Clock } from '../budget/aggregates';
 import { appendMessage } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
@@ -419,10 +413,14 @@ export async function startBucketRun(
 ): Promise<StartOutcome> {
   const { ownerId, routine, bucket } = args;
   const now = deps.clock();
-  const { all, ofBucket } = await withIdentity(deps.db, ownerId, async (tx) => ({
-    all: await runsOfParent(tx, routine.id),
-    ofBucket: await runsForBucket(tx, routine.id, bucket),
-  }));
+  // ОДИН запрос и один снимок: слот вырезается из прогонов рутины в памяти, а не вторым
+  // запросом (runsForBucket). Два запроса даже в одной tx под READ COMMITTED видят разные
+  // снимки — конкурент мог закоммитить прогон между ними, и тогда «по рутине никто не
+  // идёт», а «в слоте есть не-failed» = running классифицировался бы как «отработан»
+  // (done). С одним снимком исход согласован: читали до коммита конкурента → идём в execute
+  // и проигрываем там (replay/id_conflict); после → видим его running.
+  const all = await withIdentity(deps.db, ownerId, (tx) => runsOfParent(tx, routine.id));
+  const ofBucket = all.filter((r) => r.run.bucket === bucket);
 
   if (all.some((r) => r.run.outcome === 'running')) return skip('running');
   // Идущих больше нет, значит любой не-failed исход слота — терминальный: слот отработан
