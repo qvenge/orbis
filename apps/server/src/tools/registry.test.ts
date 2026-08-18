@@ -32,6 +32,8 @@ import {
   buildToolRegistry,
   importCsvStartInput,
   type OrbisToolDef,
+  type RoutineRef,
+  routineToolDefs,
   threadPostInput,
   userQueryInput,
 } from './registry';
@@ -364,5 +366,67 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
         );
       await adminClient.end();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Реестр тулов рутины (V1.10): что видит модель прогона
+// ---------------------------------------------------------------------------
+
+describe('routineToolDefs: реестр прогона рутины (V1.10, рулинг В2)', () => {
+  /** Ссылка на рутину без живых сущностей: правило смотрит только на режим и список. */
+  const ref = (mode: 'propose' | 'act', allowed: string[] = []): RoutineRef => ({
+    id: '019e4466-aaaa-7e07-b5d4-64be9721da51',
+    runId: '019e4466-bbbb-7e07-b5d4-64be9721da52',
+    mode,
+    allowedTools: new Set(allowed),
+  });
+
+  test('propose: все чтения + orbis_checkpoint + orbis_propose; ни одной мутации сверх', async () => {
+    // orbis_propose дефом появится в Задаче 8 — правило обязано быть готово раньше,
+    // иначе реестр раннера в день его появления молча оставит рутину без предложения
+    const defs: OrbisToolDef[] = [
+      ...(await registryFor(userB)),
+      {
+        name: 'orbis_propose',
+        description: 'предложение',
+        inputJsonSchema: {},
+        kind: 'mutate',
+        routineOnly: true,
+      },
+    ];
+    const names = routineToolDefs(defs, ref('propose')).map((d) => d.name);
+
+    for (const d of defs.filter((x) => x.kind === 'read')) expect(names).toContain(d.name);
+    expect(names).toContain('orbis_checkpoint');
+    expect(names).toContain('orbis_propose');
+    // мутаций сверх базы и предложения нет — включая круг внешнего исполнителя
+    const mutating = routineToolDefs(defs, ref('propose')).filter((d) => d.kind === 'mutate');
+    expect(mutating.map((d) => d.name).sort()).toEqual(['orbis_checkpoint', 'orbis_propose']);
+  });
+
+  test('act: РОВНО белый список сверх чтений и базы; orbis_propose уже не показывается', async () => {
+    const defs = await registryFor(userB);
+    const names = routineToolDefs(defs, ref('act', ['entity_update', 'thread_post'])).map(
+      (d) => d.name,
+    );
+    const mutating = routineToolDefs(defs, ref('act', ['entity_update', 'thread_post']))
+      .filter((d) => d.kind === 'mutate')
+      .map((d) => d.name)
+      .sort();
+    expect(mutating).toEqual(['entity_update', 'orbis_checkpoint', 'thread_post']);
+    expect(names).toContain('entity_query');
+    // Имя вне реестра в белом списке ничего не добавляет (fail-closed сверяет с дефами)
+    expect(routineToolDefs(defs, ref('act', ['выдуманный_тул'])).map((d) => d.name)).not.toContain(
+      'выдуманный_тул',
+    );
+  });
+
+  test('act с пустым allowed_tools: рутина остаётся с чтениями и чекпойнтом', async () => {
+    const defs = await registryFor(userB);
+    const mutating = routineToolDefs(defs, ref('act'))
+      .filter((d) => d.kind === 'mutate')
+      .map((d) => d.name);
+    expect(mutating).toEqual(['orbis_checkpoint']);
   });
 });

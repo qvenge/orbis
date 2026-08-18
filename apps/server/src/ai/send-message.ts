@@ -300,8 +300,10 @@ async function runAgentLoop(
     // его законный потребитель, отсечение касается только MCP (Task 10)
     const llmTools: LLMToolDef[] = defs
       // agentOnly отсекается: у чата нет гранта — глаголы исполнителя ему не адресованы
-      // (прогон ведётся от имени конкретного доступа, §9.3/С7)
-      .filter((d) => d.agentOnly !== true)
+      // (прогон ведётся от имени конкретного доступа, §9.3/С7). routineOnly — по той же
+      // причине с другой стороны (V1.10): предложение рутины (orbis_propose) адресуется
+      // её прогону, а у чата прогона нет — предлагать ему нечего и некому
+      .filter((d) => d.agentOnly !== true && d.routineOnly !== true)
       .map((d) => ({
         name: d.name,
         description: d.description,

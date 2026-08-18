@@ -12,7 +12,9 @@ import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
-import { dispatchTool, type ToolCallCtx } from './dispatch';
+import { agentLoopHelpers } from '../test/agent-loop-helpers';
+import { dispatchTool, routineGate, type ToolCallCtx } from './dispatch';
+import { buildToolRegistry } from './registry';
 
 requireEnv();
 
@@ -731,6 +733,27 @@ describe('dispatchTool: thread_post — сообщение в тред сущн�
     expect(msgs[0]?.metadata).toEqual({ author_kind: 'ai', run_id: runId });
   });
 
+  // Прогон рутины помечается вдвойне: run_id ведёт в историю прогона, routine_id — в саму
+  // рутину. Одного run_id не хватило бы ленте: чтобы назвать автора, ей пришлось бы
+  // сходить за прогоном вторым запросом.
+  test('прогон рутины: пометка author_kind=ai, run_id прогона и routine_id рутины', async () => {
+    const { routineCtx } = agentLoopHelpers(db);
+    const target = await seedEntity(userA, { title: 'Задача рутины', tags: [] });
+    // thread_post — мутирующий тул: рутине он открыт только белым списком режима act
+    const ctx = routineCtx(userA, 'act', ['thread_post'], { clock: () => T0 });
+    const r = await dispatchTool(ctx, 'thread_post', {
+      entity_id: target.id,
+      content: 'Заметка от рутины.',
+    });
+    expect(r.status).toBe('ok');
+    const msgs = await messagesIn(userA, entityThreadId(userA, target.id));
+    expect(msgs[0]?.metadata).toEqual({
+      author_kind: 'ai',
+      run_id: ctx.runId,
+      routine_id: ctx.routine.id,
+    });
+  });
+
   test('владелец (actorKind=owner): metadata пустая — помечать автором самого владельца нечего', async () => {
     const target = await seedEntity(userA, { title: 'Задача владельца', tags: [] });
     const r = await dispatchTool(ctxFor({ actorKind: 'owner' }), 'thread_post', {
@@ -1306,5 +1329,177 @@ describe('V1: выдача автономии рутине из чата → pen
     expect(r.status).toBe('ok');
     const stored = (await aspectsOf(target.id))['orbis/routine'] as { mode?: string } | undefined;
     expect(stored?.mode).toBe('propose');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Гейт режима рутины (V1.10, инварианты 4–5)
+// ---------------------------------------------------------------------------
+
+describe('гейт режима рутины (V1.10, инварианты 4–5)', () => {
+  const { routineCtx } = agentLoopHelpers(db);
+  /** Контекст прогона рутины с часами сьюта (у `routineCtx` свой T0 круга исполнителя). */
+  const rt = (mode: 'propose' | 'act', allowed: string[] = [], over: Partial<ToolCallCtx> = {}) =>
+    routineCtx(userA, mode, allowed, { clock: () => T0, ...over });
+
+  async function titleOf(id: string): Promise<string | undefined> {
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.select({ title: entities.title }).from(entities).where(eq(entities.id, id)),
+    );
+    return rows[0]?.title;
+  }
+
+  test('propose: чтения проходят, мутации закрыты; orbis_checkpoint и orbis_propose гейт пропускает', async () => {
+    const target = await seedEntity(userA, {
+      title: 'Цель рутины в propose',
+      tags: ['routine-gate'],
+      aspects: { 'orbis/task': { status: 'inbox' } },
+    });
+    const ctx = rt('propose');
+
+    expect((await dispatchTool(ctx, 'entity_get', { id: target.id })).status).toBe('ok');
+    expect((await dispatchTool(ctx, 'entity_query', { query: 'tags=routine-gate' })).status).toBe(
+      'ok',
+    );
+
+    // Режим propose: писать в граф рутина не имеет права ВООБЩЕ — только предлагать
+    expectError(
+      await dispatchTool(ctx, 'entity_update', { id: target.id, title: 'Переименовано рутиной' }),
+      'FORBIDDEN_LEVEL',
+    );
+    expect(await titleOf(target.id)).toBe('Цель рутины в propose');
+
+    // orbis_checkpoint доступен рутине всегда (ROUTINE_BASE_TOOLS, рулинг В2): гейт режима
+    // его пропускает. Дальше вызов упирается в проверку «глагол требует гранта» — это
+    // ОЖИДАЕМОЕ промежуточное состояние до Задачи 7, которая заменит грант на subject;
+    // важен здесь именно НЕ-отказ гейта режима.
+    const checkpoint = await dispatchTool(ctx, 'orbis_checkpoint', {
+      run_id: newId(),
+      question: 'Продолжать?',
+    });
+    expectError(checkpoint, 'VALIDATION');
+    if (checkpoint.status === 'error') expect(checkpoint.error.message).toContain('требует гранта');
+
+    // orbis_propose: дефа в реестре ещё нет (Задача 8) — правило проверяем на самом гейте,
+    // который dispatchTool зовёт для КАЖДОГО вызова (routineGate).
+    expect(
+      routineGate({ name: 'orbis_propose', kind: 'mutate', routineOnly: true }, ctx),
+    ).toBeNull();
+  });
+
+  test('act с allowed_tools [entity_update]: entity_update исполняется, entity_create и attach_orbis_task → FORBIDDEN_LEVEL', async () => {
+    const target = await seedEntity(userA, {
+      title: 'Цель рутины в act',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'inbox' } },
+    });
+    const ctx = rt('act', ['entity_update']);
+
+    const ok = await dispatchTool(ctx, 'entity_update', {
+      id: target.id,
+      aspects: { 'orbis/task': { status: 'in_progress' } },
+    });
+    expect(ok.status).toBe('ok');
+
+    // Белый список — РОВНО список: соседний мутирующий тул им не открывается
+    expectError(
+      await dispatchTool(ctx, 'entity_create', { title: 'Мимо белого списка', tags: [] }),
+      'FORBIDDEN_LEVEL',
+    );
+    expectError(
+      await dispatchTool(ctx, 'attach_orbis_task', {
+        entity_id: target.id,
+        data: { status: 'done' },
+      }),
+      'FORBIDDEN_LEVEL',
+    );
+  });
+
+  test('act: архивация (небезопасно по §7.10) → FORBIDDEN_LEVEL, pending НЕ создан', async () => {
+    const target = await seedEntity(userA, { title: 'Цель архивации рутиной', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) =>
+      ensureEntityThread(tx, userA, target.id),
+    );
+    const ctx = rt('act', ['entity_update'], { threadId });
+
+    // Тул в белом списке, но уровень §7.10 у архивации — explicit-confirmation:
+    // инвариант 5 требует отказать, а не отложить (подтверждать в фоне некому)
+    expectError(
+      await dispatchTool(ctx, 'entity_update', { id: target.id, archived: true }),
+      'FORBIDDEN_LEVEL',
+    );
+    const msgs = await messagesIn(userA, threadId);
+    expect(
+      msgs.filter((m) => (m.metadata as Record<string, unknown>).pending !== undefined),
+    ).toEqual([]);
+    expect(await titleOf(target.id)).toBe('Цель архивации рутиной');
+  });
+
+  test('source routine без ctx.routine → FORBIDDEN_LEVEL (fail-closed), даже на чтении', async () => {
+    const target = await seedEntity(userA, { title: 'Цель без контекста рутины', tags: [] });
+    const broken = ctxFor({ source: 'routine', runId: newId() });
+    expectError(await dispatchTool(broken, 'entity_get', { id: target.id }), 'FORBIDDEN_LEVEL');
+    expectError(
+      await dispatchTool(broken, 'entity_update', { id: target.id, title: 'Не пройдёт' }),
+      'FORBIDDEN_LEVEL',
+    );
+  });
+
+  test('routineOnly-тул от chat|mcp → VALIDATION; обычный тул гейт не трогает', async () => {
+    // Деф orbis_propose появится в реестре Задачей 8 — там же его отсутствие в реестре
+    // чата и в MCP tools/list проверяется живьём. Здесь закрыто само правило: гейт,
+    // fail-closed которого никто не проверил, — это гейт, которого нет.
+    const propose = { name: 'orbis_propose', kind: 'mutate' as const, routineOnly: true };
+    for (const source of ['chat', 'mcp'] as const) {
+      const denial = routineGate(propose, { source });
+      expect(denial?.status).toBe('error');
+      if (denial?.status === 'error') expect(denial.error.code).toBe('VALIDATION');
+    }
+    expect(routineGate({ name: 'entity_update', kind: 'mutate' }, { source: 'chat' })).toBeNull();
+    // В сегодняшнем продовом реестре routineOnly-дефов ещё нет — фильтры чата и MCP
+    // отсекать пока нечего, и это честно зафиксировано, а не выдано за покрытие
+    const defs = await withIdentity(db, userA, (tx) => buildToolRegistry(tx));
+    expect(defs.filter((d) => d.routineOnly === true)).toEqual([]);
+  });
+
+  test('лимит routines.max: вторая рутина → LIMIT; limit null — без ограничений', async () => {
+    const owner = freshUserId();
+    const first = await seedEntity(owner, { title: 'Утренний обзор', tags: [] });
+    const second = await seedEntity(owner, { title: 'Вечерний разбор', tags: [] });
+    const data = { stage: 'active', at: '07:00', mode: 'propose' };
+    const oneRoutine = ctxFor({
+      actorUserId: owner,
+      entitlements: () => ({ allowed: true, limit: 1 }),
+    });
+
+    expect(
+      (await dispatchTool(oneRoutine, 'attach_orbis_routine', { entity_id: first.id, data }))
+        .status,
+    ).toBe('ok');
+    // Лимит исчерпан первой рутиной — вторая не заводится
+    expectError(
+      await dispatchTool(oneRoutine, 'attach_orbis_routine', { entity_id: second.id, data }),
+      'LIMIT',
+    );
+    // …а правка уже заведённой рутины лимитом не считается: иначе он превратился бы
+    // в блокировку того, что владелец уже завёл
+    expect(
+      (
+        await dispatchTool(oneRoutine, 'attach_orbis_routine', {
+          entity_id: first.id,
+          data: { ...data, at: '08:00' },
+        })
+      ).status,
+    ).toBe('ok');
+
+    // Боевой резолвер (limit null) ограничений не ставит
+    expect(
+      (
+        await dispatchTool(ctxFor({ actorUserId: owner }), 'attach_orbis_routine', {
+          entity_id: second.id,
+          data,
+        })
+      ).status,
+    ).toBe('ok');
   });
 });

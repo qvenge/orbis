@@ -62,6 +62,9 @@ export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
           .filter(
             (d) =>
               d.internalOnly !== true &&
+              // routineOnly (V1.10) — то же отсечение с другой стороны: тул внутреннего
+              // исполнителя рутины внешнему агенту не адресован и в его списке не нужен
+              d.routineOnly !== true &&
               // Скоуп гранта (С7, §4.14): фоновому исполнителю публикуются только
               // чтения, глаголы и thread_post — он не должен даже видеть тулов, которые
               // ему всё равно откажет dispatch. Условие «не full», а не «= worker»:

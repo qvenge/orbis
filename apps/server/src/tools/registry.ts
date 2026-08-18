@@ -30,9 +30,17 @@ export interface OrbisToolDef {
    * Глагол исполнителя (§9.3, С7): виден ТОЛЬКО вызову с грантом (MCP). У чата гранта
    * нет — прогон адресуется конкретному доступу, и без гранта глагол не к кому отнести;
    * поэтому реестр чата такие дефы отсекает (ai/send-message.ts), а dispatch держит
-   * вторую линию (вызов без ctx.grant → VALIDATION).
+   * вторую линию (вызов без субъекта — ни гранта, ни рутины — → VALIDATION; рутина стала
+   * вторым субъектом глаголов в V1.10, см. ROUTINE_BASE_TOOLS).
    */
   agentOnly?: boolean;
+  /**
+   * Зеркало `internalOnly` с другой стороны (V1.10): тул существует ТОЛЬКО для
+   * внутреннего исполнителя рутины (`orbis_propose`, Задача 8). Чат и MCP его не видят
+   * (фильтры ai/send-message.ts и mcp/server.ts) и не зовут (гейт tools/dispatch.ts):
+   * предложение адресуется прогону, и вне прогона его некуда положить.
+   */
+  routineOnly?: boolean;
 }
 
 /**
@@ -54,6 +62,59 @@ export const WORKER_SCOPE_TOOLS: ReadonlySet<string> = new Set([
   ...AGENT_VERB_NAMES,
   'thread_post',
 ]);
+
+/**
+ * Что доступно рутине ВСЕГДА, в любом режиме (V1.10, рулинг В2): чекпойнт — единственный
+ * способ прогона остановиться и спросить владельца. Отнять его у режима `propose` значило
+ * бы оставить рутину без выхода из тупика: предложить она может только правку графа,
+ * а вопрос — не правка.
+ */
+export const ROUTINE_BASE_TOOLS: ReadonlySet<string> = new Set(['orbis_checkpoint']);
+
+/**
+ * Рутина и её прогон в контексте вызова (V1.10) — вторая половина атрибуции рядом с
+ * грантом (`GrantRef`): грант отвечает за внешнего исполнителя, это — за внутреннего.
+ * `allowedTools` — белый список режима `act` из аспекта `orbis/routine.allowed_tools`,
+ * уже разобранный в множество: гейт зовётся на каждый вызов.
+ */
+export interface RoutineRef {
+  id: string;
+  runId: string;
+  mode: 'propose' | 'act';
+  allowedTools: ReadonlySet<string>;
+}
+
+/**
+ * Правило доступа рутины к тулу (V1.10) — ОДНО на реестр раннера и на гейт диспатча:
+ * реестр решает, что показать модели, гейт — что исполнить, и разойтись эти два ответа
+ * не имеют права (иначе модель зовёт показанное и получает отказ, либо наоборот —
+ * скрытое всё-таки исполняется).
+ *
+ * Чтения открыты все: рутина работает над графом владельца и обязана его видеть.
+ * Мутации: база (`ROUTINE_BASE_TOOLS`) плюс — в `propose` РОВНО `orbis_propose`
+ * (правку рутина не пишет, а предлагает), в `act` РОВНО белый список владельца.
+ */
+export function routineToolAllowed(
+  def: Pick<OrbisToolDef, 'name' | 'kind'>,
+  routine: RoutineRef,
+): boolean {
+  if (def.kind === 'read') return true;
+  if (ROUTINE_BASE_TOOLS.has(def.name)) return true;
+  // Имя строкой, а не ссылкой на деф: сам деф появится в реестре Задачей 8, а правило
+  // режима обязано существовать раньше — гейт fail-closed без него открыт настежь.
+  return routine.mode === 'propose'
+    ? def.name === 'orbis_propose'
+    : routine.allowedTools.has(def.name);
+}
+
+/**
+ * Реестр тулов для раннера рутины (V1.10): что видит модель прогона. Гейт диспатча —
+ * ВТОРОЙ рубеж на том же правиле (`routineToolAllowed`), а не единственный: список
+ * тулов — подсказка модели, доступ решает сервер на вызове.
+ */
+export function routineToolDefs(defs: OrbisToolDef[], routine: RoutineRef): OrbisToolDef[] {
+  return defs.filter((d) => routineToolAllowed(d, routine));
+}
 
 /** Карточка чата (02 §2.3) — собирается сервером как данные, рендерит 1c. */
 export type Card =

@@ -23,3 +23,15 @@ export const IMPORT_CSV_KEY = 'import.csv';
 export const resolveEntitlement: EntitlementResolver = (_subjectUserId, _key) => {
   return { allowed: true, limit: null };
 };
+
+/**
+ * Ключи §8 рутин (V1.15). `routines.max` — сколько рутин владелец может завести;
+ * гейт стоит в диспатче перед записью (создать рутину можно тремя тулами, и считать
+ * их по одному в каждом было бы тремя копиями одного правила).
+ * `routines.runs_per_day` — сколько ПЛАНОВЫХ прогонов одной рутины помещается в её
+ * локальные сутки; этот ключ читает раннер (Задача 10), а не диспатч: прогон заводит
+ * планировщик, а не модель. Оба объявлены здесь, рядом с остальными, чтобы будущий
+ * конфиг планов видел полный список ключей в одном месте.
+ */
+export const ROUTINES_MAX_KEY = 'routines.max';
+export const ROUTINE_RUNS_PER_DAY_KEY = 'routines.runs_per_day';

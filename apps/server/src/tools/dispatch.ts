@@ -25,6 +25,7 @@ import {
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
+import { and, inArray, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import { isWorkerThreadTarget } from '../agent-loop/queries';
 import { AGENT_VERB_ENVELOPES, type AgentVerbName, runAgentVerb } from '../agent-loop/verbs';
@@ -33,8 +34,14 @@ import { budgetStatus } from '../budget/aggregates';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import type { Db } from '../db/client';
+import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
-import { type EntitlementResolver, IMPORT_CSV_KEY, resolveEntitlement } from '../entitlements';
+import {
+  type EntitlementResolver,
+  IMPORT_CSV_KEY,
+  ROUTINES_MAX_KEY,
+  resolveEntitlement,
+} from '../entitlements';
 import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
@@ -65,6 +72,8 @@ import {
   importCsvStartInput,
   loadAspectToolRows,
   type OrbisToolDef,
+  type RoutineRef,
+  routineToolAllowed,
   type ThreadPostInput,
   threadPostInput,
   userQueryInput,
@@ -105,6 +114,13 @@ export interface ToolCallCtx {
    * дальше в запись журнала (§7.8).
    */
   grant?: GrantRef;
+  /**
+   * Рутина и её прогон, от имени которых идёт вызов (V1.10) — ровно то же место в
+   * контексте, что `grant` у внешнего исполнителя: субъект, которому адресован доступ.
+   * Есть ТОЛЬКО у `source: 'routine'`; отсутствие ключа при таком source — не «рутина
+   * неизвестна», а поломка вызывающего, и гейт ниже трактует это fail-closed.
+   */
+  routine?: RoutineRef;
   /**
    * Прогон, в рамках которого идёт вызов (V1.5) — вторая половина атрибуции рядом с
    * грантом: source говорит «рутина», это поле — КАКОЙ её прогон. Доезжает до action
@@ -155,6 +171,11 @@ export async function dispatchTool(
           ),
         };
       }
+      // Гейты рутины (V1.10) — рядом с internalOnly и ДО скоупа/политики/любой записи:
+      // «кому этот тул вообще адресован» решается раньше, чем «на каком уровне его
+      // исполнять». Разбор — в routineGate (та же функция под юнит-тестом).
+      const routineDenial = routineGate(def, ctx);
+      if (routineDenial !== null) return { kind: 'done', out: routineDenial };
       // Скоуп гранта (С7, §4.14): фоновому исполнителю открыты только чтения, глаголы
       // и thread_post. Условие фактическое — «грант есть И скоуп не full», а не
       // «скоуп === worker»: verifyBearer кастует text-колонку scope как есть
@@ -176,15 +197,17 @@ export async function dispatchTool(
           }),
         };
       }
-      // Глагол исполнителя без гранта (§9.3): чат сюда не доходит — реестр чата такие
-      // дефы отсекает (send-message.ts); эта ветка — вторая линия для любого другого
-      // вызывающего без гранта (прогон адресуется конкретному доступу, см. agentOnly)
-      if (def.agentOnly === true && ctx.grant === undefined) {
+      // Глагол исполнителя без СУБЪЕКТА (§9.3, V1.10): чат сюда не доходит — реестр чата
+      // такие дефы отсекает (send-message.ts); эта ветка — вторая линия для любого другого
+      // вызывающего. Условие — «нет ни гранта, ни рутины», а не «нет гранта»: прогон
+      // адресуется конкретному субъекту, и с V1 субъектов два — внешний доступ и рутина
+      // (Задача 7 сведёт их в общий RunSubject глаголов).
+      if (def.agentOnly === true && ctx.grant === undefined && ctx.routine === undefined) {
         return {
           kind: 'done',
           out: errorResult(
             'VALIDATION',
-            `тул «${name}» — глагол исполнителя, доступен только внешнему агенту с грантом (§9.3)`,
+            `тул «${name}» — глагол исполнителя, доступен только прогону с субъектом (§9.3)`,
             { tool: name },
           ),
         };
@@ -330,6 +353,50 @@ type Resolution =
 
 function errorResult(code: string, message: string, details?: unknown): ToolDispatchResult {
   return { status: 'error', error: { code, message, details } };
+}
+
+/**
+ * Гейты рутины pre-блока (V1.10, инварианты 4–5) — обе стороны одной границы, поэтому
+ * одной функцией: тул, адресованный ТОЛЬКО рутине, не отдаётся никому другому, а рутине
+ * не отдаётся ничего сверх её режима. Возвращает готовый отказ или null (проходим дальше).
+ *
+ * Чистая функция от (def, ctx) — не потому, что так короче, а потому, что деф
+ * `orbis_propose` появится в реестре только Задачей 8, а правило доступа обязано быть
+ * закрыто тестом уже сейчас: гейт fail-closed, который никто не проверил, — это гейт,
+ * которого нет.
+ *
+ * Fail-closed дважды: `source: 'routine'` без `ctx.routine` — отказ (какого режима
+ * держаться, неизвестно), и незнакомое имя в белом списке доступа не открывает
+ * (`routineToolAllowed` перечисляет разрешённое, а не запрещённое).
+ */
+export function routineGate(
+  def: Pick<OrbisToolDef, 'name' | 'kind' | 'routineOnly'>,
+  ctx: Pick<ToolCallCtx, 'source' | 'routine'>,
+): ToolDispatchResult | null {
+  if (ctx.source !== 'routine') {
+    // VALIDATION, а не FORBIDDEN_LEVEL: для чата и MCP такого тула просто не существует
+    // (их реестры его не публикуют) — это ошибка формы вызова, а не отказ по правам
+    if (def.routineOnly !== true) return null;
+    return errorResult(
+      'VALIDATION',
+      `тул «${def.name}» доступен только внутреннему исполнителю рутины (V1.10)`,
+      { tool: def.name, source: ctx.source },
+    );
+  }
+  const routine = ctx.routine;
+  if (routine === undefined) {
+    return errorResult(
+      'FORBIDDEN_LEVEL',
+      `вызов из прогона рутины без её контекста — тул «${def.name}» не исполняется (V1.10)`,
+      { tool: def.name },
+    );
+  }
+  if (routineToolAllowed(def, routine)) return null;
+  return errorResult(
+    'FORBIDDEN_LEVEL',
+    `тул «${def.name}» недоступен рутине в режиме «${routine.mode}» (V1.10)`,
+    { tool: def.name, mode: routine.mode },
+  );
 }
 
 /**
@@ -572,6 +639,24 @@ async function runMutation(
   const gated = levelGate(level, def.name);
   if (gated !== null) return gated;
 
+  // Инвариант 5 (V1.10): в фоне небезопасное ОТКЛОНЯЕТСЯ, а не откладывается. Уровни
+  // выше execute придуманы для разговора с владельцем — он тут же видит карточку и
+  // отвечает; за прогоном рутины владельца нет, и pending повис бы в её треде вопросом
+  // без контекста, а preview исполнил бы группу молча. Предлагать правки рутина обязана
+  // явно — глаголом orbis_propose (Задача 8), где у предложения есть объяснение и срок.
+  if (ctx.source === 'routine' && level !== 'execute') {
+    return errorResult(
+      'FORBIDDEN_LEVEL',
+      'в фоне небезопасное отклоняется, а не откладывается (V1.10)',
+      { tool: def.name, level },
+    );
+  }
+
+  // Лимит §8 на число рутин (V1.15) — ДО записи и до pending: право завести рутину
+  // проверяется там же, где проверяются все остальные права вызова.
+  const overLimit = await gateRoutinesMax(ctx, tool, payload, batchPayload);
+  if (overLimit !== null) return overLimit;
+
   if (level === 'explicit-confirmation') {
     // §7.10: действие НЕ исполняется — в тред пишется карточка-запрос с immutable
     // payload'ом (уже envelope-валидированным и с транслированными batch-именами);
@@ -708,6 +793,104 @@ async function runMutation(
     ...(card !== undefined && { card }),
     ...(actionId !== undefined && { actionId }),
   };
+}
+
+/**
+ * Аспект рутины на JS-стороне гейта лимита. В SQL ниже он остаётся литералом: оператор
+ * `?` jsonb с bind-параметром требует явного каста, а литерал читается как в остальных
+ * запросах репозитория (agent-loop/queries.ts) — расхождение двух написаний исключено
+ * тестом лимита, который гоняет обе стороны на живой БД.
+ */
+const ROUTINE_ASPECT = 'orbis/routine';
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Несёт ли операция аспект рутины: у attach-пути аспект в имени тула, у create/update —
+ * ключ в `aspects`. Значение обязано быть объектом: `null` в патче — это detach, он рутину
+ * не заводит, а снимает. Форма проверяется защитно — сюда доезжает уже
+ * envelope-валидированный payload (validateMutationEnvelope / validateBatchOperations).
+ */
+function carriesRoutineAspect(tool: string, input: unknown): boolean {
+  if (!isRecord(input)) return false;
+  if (tool === 'attach_orbis_routine') return isRecord(input.data);
+  if (tool !== 'entity_create' && tool !== 'entity_update') return false;
+  return isRecord(input.aspects) && isRecord(input.aspects[ROUTINE_ASPECT]);
+}
+
+/**
+ * Гейт §8 «сколько рутин можно завести» (V1.15). Стоит в диспатче, а не в стадии 4
+ * executor'а, по той же причине, что и гейт import.csv: резолвер §8 инжектируется
+ * контекстом вызова (`ctx.entitlements`), а модульный gateEntitlements executor'а — нет.
+ * Цена этого решения принята планом (Р-13): создание рутины рукой владельца из UI идёт
+ * роутерами мимо dispatch и лимитом не считается — лимит адресован пути модели.
+ *
+ * Считаются только операции, которые заводят НОВУЮ рутину. attach/update над сущностью,
+ * у которой аспект уже есть, — правка живой рутины: упёршийся в лимит владелец обязан
+ * сохранить возможность править то, что уже завёл, иначе лимит превращается в блокировку.
+ */
+async function gateRoutinesMax(
+  ctx: ToolCallCtx,
+  tool: string,
+  payload: unknown,
+  batchPayload: BatchExecuteInput | undefined,
+): Promise<ToolDispatchResult | null> {
+  // Имена в executor-форме (у batch — уже транслированные): у attach_orbis_routine обе
+  // формы совпадают. batch исполняется «всё или ничего» — рутину заводит ЛЮБАЯ операция
+  const ops = batchPayload?.operations ?? [{ tool, input: payload }];
+  const routineOps = ops.filter((op) => carriesRoutineAspect(op.tool, op.input));
+  if (routineOps.length === 0) return null;
+
+  const createsNew = routineOps.some((op) => op.tool === 'entity_create');
+  const overExisting = routineOps.filter((op) => op.tool !== 'entity_create');
+  const targets = overExisting
+    .map((op) => {
+      const input = op.input as Record<string, unknown>;
+      return op.tool === 'entity_update' ? input.id : input.entity_id;
+    })
+    .filter((id): id is string => typeof id === 'string');
+  // Неразобранный id (после envelope-валидации структурно невозможен) считаем новой
+  // рутиной: гейт лимита не имеет права открываться от мусора во входе
+  const unresolvedTarget = targets.length !== overExisting.length;
+
+  return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+    const alreadyRoutines =
+      targets.length === 0 ? new Set<string>() : await routinesAmong(tx, targets);
+    const addsRoutine =
+      createsNew || unresolvedTarget || targets.some((id) => !alreadyRoutines.has(id));
+    if (!addsRoutine) return null;
+
+    const decision = (ctx.entitlements ?? resolveEntitlement)(ctx.actorUserId, ROUTINES_MAX_KEY);
+    const denial = errorResult('LIMIT', `достигнут лимит рутин («${ROUTINES_MAX_KEY}»)`, {
+      key: ROUTINES_MAX_KEY,
+      limit: decision.limit,
+    });
+    // Отказ резолвера — «рутин на этом плане нет вовсе»: считать уже нечего
+    if (!decision.allowed) return denial;
+    if (decision.limit === null) return null; // безлимитный план (сегодняшний 'dev')
+    return (await countRoutines(tx)) < decision.limit ? null : denial;
+  });
+}
+
+/** Сколько живых рутин у актора (под RLS его же tx): архивные лимит не занимают. */
+async function countRoutines(tx: Tx): Promise<number> {
+  const rows = await tx.execute(
+    sql`SELECT count(*)::int AS n FROM entities WHERE NOT archived AND aspects ? 'orbis/routine'`,
+  );
+  return Number((rows as unknown as Array<{ n: number }>)[0]?.n ?? 0);
+}
+
+/** Какие из целей УЖЕ рутины — отличает правку живой рутины от заведения новой. */
+async function routinesAmong(tx: Tx, ids: string[]): Promise<Set<string>> {
+  // inArray, а не сырое `= ANY($1::uuid[])`: массив из шаблона `sql` уезжает в драйвер
+  // как есть и падает «malformed array literal» (идиома репозитория, routers/entity.ts)
+  const rows = await tx
+    .select({ id: entities.id })
+    .from(entities)
+    .where(and(inArray(entities.id, ids), sql`${entities.aspects} ? 'orbis/routine'`));
+  return new Set(rows.map((r) => r.id));
 }
 
 /** Имя тула в executor-форме: у attach_* «/» → «_», «-» сохраняется (см. aspectId). */
@@ -885,13 +1068,16 @@ async function runThreadPost(
       // Пометка автора — для всех НЕ-владельческих постов (§9.3, V1.6): внешний агент
       // и внутренний AI одинаково пишут в тред не от лица владельца, и он обязан это
       // видеть. Пометки нет только у самого владельца — сообщать ему, что автор он,
-      // нечего. Прогон (run_id) связывает пост с историей рутины; ключа нет вне прогона.
+      // нечего. Прогон (run_id) связывает пост с историей рутины, рутина (routine_id) —
+      // с самой рутиной: по прогону её пришлось бы искать вторым запросом, а лента
+      // показывает автора сразу. Обоих ключей нет вне прогона рутины.
       metadata:
         ctx.actorKind === 'owner'
           ? {}
           : {
               author_kind: ctx.actorKind,
               ...(ctx.runId !== undefined && { run_id: ctx.runId }),
+              ...(ctx.routine !== undefined && { routine_id: ctx.routine.id }),
             },
     };
     // client-UUID (§2.1, как appendUserMessage владельца): повтор с тем же id —

@@ -10,6 +10,7 @@
 // Фабрика, а не свободные функции: каждый сьют держит СВОЙ пул (`appDb()` + `client.end()`
 // в afterAll), и передавать `db` первым аргументом в каждый вызов значило бы повторять его
 // в каждой строке теста.
+import { newId } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { chatMessages, chatThreads, entities, relations } from '../db/schema';
@@ -18,6 +19,7 @@ import { execute } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import type { ToolCallCtx } from '../tools/dispatch';
+import type { RoutineRef } from '../tools/registry';
 
 /** Опорный момент времени сьютов круга: всё время в тестах отсчитывается от него. */
 export const T0 = new Date('2026-08-17T12:00:00.000Z');
@@ -36,6 +38,12 @@ export interface AgentLoopHelpers {
   actionsOf: (owner: string) => Promise<ActionRecord[]>;
   workerGrant: (owner: string, label: string) => Promise<string>;
   worker: (owner: string, grantId: string, over?: Partial<ToolCallCtx>) => ToolCallCtx;
+  routineCtx: (
+    owner: string,
+    mode: RoutineRef['mode'],
+    allowedTools?: Iterable<string>,
+    over?: Partial<ToolCallCtx>,
+  ) => ToolCallCtx & { routine: RoutineRef };
 }
 
 export function agentLoopHelpers(db: Db): AgentLoopHelpers {
@@ -123,5 +131,32 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
     };
   }
 
-  return { seedEntity, link, aspectsOf, childrenOf, actionsOf, workerGrant, worker };
+  /**
+   * Контекст вызова из прогона рутины (V1.10) — то же место, что `worker` занимает у
+   * внешнего исполнителя: субъект вызова плюс поверхность. id рутины и прогона минтятся
+   * прямо здесь: гейт режима смотрит ТОЛЬКО на контекст, живые сущности ему не нужны;
+   * тесту, которому нужны настоящие (прогон в БД), их подменяет `over.routine`.
+   */
+  function routineCtx(
+    owner: string,
+    mode: RoutineRef['mode'],
+    allowedTools: Iterable<string> = [],
+    over: Partial<ToolCallCtx> = {},
+  ): ToolCallCtx & { routine: RoutineRef } {
+    const runId = newId();
+    const routine: RoutineRef = { id: newId(), runId, mode, allowedTools: new Set(allowedTools) };
+    return {
+      db,
+      actorUserId: owner,
+      actorKind: 'ai', // за прогоном рутины стоит внутренний AI, а не внешний агент
+      source: 'routine',
+      explicitCommand: false, // прямой команды владельца за фоновым прогоном нет
+      clock: () => T0,
+      runId,
+      ...over,
+      routine: over.routine ?? routine,
+    };
+  }
+
+  return { seedEntity, link, aspectsOf, childrenOf, actionsOf, workerGrant, worker, routineCtx };
 }
