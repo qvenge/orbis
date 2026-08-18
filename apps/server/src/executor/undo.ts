@@ -35,8 +35,12 @@ async function findActionMessage(tx: Tx, actionId: string): Promise<FoundAction 
   return { threadId: row.thread_id as string, action };
 }
 
-/** Действие отменено ⇔ существует undo-сообщение с его id (§7.8). */
-async function isUndone(tx: Tx, actionId: string): Promise<boolean> {
+/**
+ * Действие отменено ⇔ существует undo-сообщение с его id (§7.8). Экспортируется ради
+ * отката прогона (agent-loop/rollback.ts): он отбирает по журналу неотменённые действия
+ * ещё до первой отмены, и своя копия этой пробы разошлась бы с undo при первой же правке.
+ */
+export async function isUndone(tx: Tx, actionId: string): Promise<boolean> {
   const probe = JSON.stringify({ type: 'undo', undoes: actionId });
   const rows = await tx.execute(
     sql`SELECT 1 AS hit FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,

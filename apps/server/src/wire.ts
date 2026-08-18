@@ -236,3 +236,39 @@ export function toWireAspectDefinition(row: AspectDefinitionRow): WireAspectDefi
     createdAt: row.createdAt.toISOString(),
   };
 }
+
+/**
+ * Одно расхождение предпроверки отката прогона (С12): «эту сущность после прогона тронуло
+ * вот это действие». Пары {сущность, действие} хватает экрану, чтобы человек понял, что
+ * именно он потеряет, — поэтому здесь id, а не заголовки: тянуть их значило бы читать
+ * граф ради ветки, которая обычно пуста.
+ */
+export interface RollbackConflict {
+  entityId: string;
+  actionId: string;
+  /** Когда действие легло в журнал (ISO, как все таймстампы wire-форм). */
+  at: string;
+  /** Источник действия (§7.8): по нему экран отличает правку человека от чужого агента. */
+  source: string;
+}
+
+/**
+ * Ответ `agentRun.rollback` (С12). Живёт здесь, а не в `executor/types.ts`, по тому же
+ * основанию, что `WireAgentGrant`: это форма tRPC-ОТВЕТА, собранная сервером, а не
+ * результат операции executor'а — тот отдаёт ExecuteResult, и откат прогона к нему не
+ * сводится (он серия отмен с собственной предпроверкой).
+ *
+ * Три исхода, а не «ok + error», потому что два отказа читаются человеком по-разному:
+ * `conflict` — «не откатили НИЧЕГО, вот что помешало» (инвариант 7), `partial` — «часть
+ * уже откачена, вот на чём встали». Смешать их в один код значило бы заставить экран
+ * гадать, в каком состоянии граф.
+ */
+export type WireRollbackResult =
+  | { ok: true; undone: string[]; note: string }
+  | { ok: false; reason: 'conflict'; conflicts: RollbackConflict[] }
+  | {
+      ok: false;
+      reason: 'partial';
+      undone: string[];
+      failed: { actionId: string; error: { code: string; message: string } };
+    };

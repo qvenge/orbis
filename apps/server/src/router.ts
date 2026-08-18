@@ -1,5 +1,6 @@
 // apps/server/src/router.ts
 // Сборка appRouter (§9.1): entity/relation/chat/ai — Task 12; user/aspect — Task 13.
+import { agentRunRouter } from './routers/agent-run';
 import { aiRouter } from './routers/ai';
 import { aspectRouter } from './routers/aspect';
 import { budgetRouter } from './routers/budget';
@@ -28,6 +29,9 @@ export const appRouter = router({
   version: versionRouter,
   // Владельческая половина OAuth (§9.3): экран согласия и управление доступами
   oauth: oauthRouter,
+  // Владельческая половина круга исполнителя (С3, С6, С12): ответ на чекпойнт,
+  // подметание с экранов, откат прогона
+  agentRun: agentRunRouter,
 });
 
 export type AppRouter = typeof appRouter;
