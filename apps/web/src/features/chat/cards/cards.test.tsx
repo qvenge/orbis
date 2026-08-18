@@ -1,7 +1,7 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../../state/navigation';
-import { renderWithProviders, trpcError } from '../../../test/harness';
+import { type MockHandler, renderWithProviders, trpcError } from '../../../test/harness';
 import { smoothAuditText } from '../format-audit';
 import { MEMORY_RULES_QUERY } from '../memoryRules';
 import type { ChatMessage } from '../useChatThread';
@@ -795,4 +795,139 @@ test('неизвестный kind по-прежнему не роняет лен
     </div>,
   );
   expect(screen.getByRole('alert')).toHaveTextContent('соседняя карточка жива');
+});
+
+// --- карточка предложения рутины (V1.6, V1.9) -------------------------------------------
+//
+// Карточка живёт в ленте ТРЕДА РУТИНЫ и на экране самого прогона — одна и та же (RunFeed
+// рисует её тем же компонентом). Поэтому здесь она проверяется в своём чат-виде: через
+// renderCards, ровно как её увидит владелец, открывший рутину утром.
+
+const PROPOSAL_CARD = {
+  kind: 'proposal_card',
+  pendingId: 'p1',
+  runId: 'rr1',
+  routineId: 'rt1',
+  // Пересказ модели у карточки есть — и экран его НЕ показывает: владелец принимает список
+  // правок, а не «2 правки» (V1.14).
+  summary: '2 правки',
+  explanation: 'Два дела просрочены — предлагаю перенести срок на сегодня.',
+};
+
+/**
+ * Операции — в форме `ProposalView.operations` (routers/routine.ts). Вторая строка нарочно с
+ * `before: 'absent'`: литерал значит «поля не было», и напечатать его сырым словом значило бы
+ * показать владельцу выдуманное текущее значение.
+ */
+const PROPOSAL_OPERATIONS = [
+  {
+    index: 0,
+    tool: 'entity_update',
+    entity: { id: 'e1', title: 'Купить билеты' },
+    aspect: 'orbis/task',
+    field: 'due_date',
+    before: '2026-08-10',
+    after: '2026-08-19',
+    summary: '«Купить билеты»: orbis/task.due_date',
+  },
+  {
+    index: 1,
+    tool: 'entity_update',
+    entity: { id: 'e2', title: 'Позвонить врачу' },
+    aspect: 'orbis/task',
+    field: 'status',
+    before: 'absent',
+    after: 'inbox',
+    summary: '«Позвонить врачу»: orbis/task.status',
+  },
+];
+
+const proposalHandler =
+  (over: Record<string, unknown> = {}): MockHandler =>
+  (path, input) => {
+    if (path === 'routine.proposal')
+      return {
+        pendingId: 'p1',
+        runId: 'rr1',
+        routineId: 'rt1',
+        status: 'pending',
+        explanation: PROPOSAL_CARD.explanation,
+        operations: PROPOSAL_OPERATIONS,
+        ...over,
+      };
+    // Заголовок цели дочитывает сам EntityRef (в предложении едет и id, и title — но на
+    // экране правды больше у ЖИВОЙ записи: заголовок мог измениться после ночного прогона).
+    if (path === 'entity.get') {
+      const { id } = input as { id: string };
+      const op = PROPOSAL_OPERATIONS.find((o) => o.entity.id === id);
+      return { entity: { id, title: op?.entity.title ?? `T-${id}` } };
+    }
+    return {};
+  };
+
+test('proposal_card: список операций с русскими подписями полей, объяснение прозой и обе кнопки при pending', async () => {
+  renderWithProviders(<div>{renderCards(msg([PROPOSAL_CARD]))}</div>, proposalHandler());
+  const card = await screen.findByTestId('proposal-card');
+
+  // Цель — ЗАГОЛОВКОМ (EntityRef), а не uuid: по нему владелец решает, принимать ли правку.
+  expect(await within(card).findByText('Купить билеты')).toBeInTheDocument();
+  expect(await within(card).findByText('Позвонить врачу')).toBeInTheDocument();
+  // Объяснение — то, ради чего карточку читают: что рутина увидела и почему предлагает это.
+  expect(card).toHaveTextContent('Два дела просрочены');
+  // Подписи полей — по-русски (fieldLabel), а не сырыми ключами схемы.
+  expect(card).toHaveTextContent('срок');
+  expect(card).toHaveTextContent('2026-08-10');
+  expect(card).toHaveTextContent('2026-08-19');
+  expect(card).toHaveTextContent('статус');
+  // `before: 'absent'` — «поля не было», а не значение «absent».
+  expect(card).toHaveTextContent('(не было)');
+  expect(card).not.toHaveTextContent('absent');
+  // Пересказ («2 правки») список НЕ заменяет.
+  expect(card).not.toHaveTextContent('2 правки');
+
+  expect(within(card).getByRole('button', { name: 'Принять' })).toBeInTheDocument();
+  expect(within(card).getByRole('button', { name: 'Отклонить' })).toBeInTheDocument();
+});
+
+test('proposal_card: решённое предложение показывает статус С СЕРВЕРА и кнопок не даёт', async () => {
+  // Клиентского срока годности (EXPIRY_MS у ConfirmationCard) здесь нет вовсе: судьбу
+  // предложения решает сервер (Р-17), и «устарело» на карточке — его слово, а не часы вкладки.
+  const approved = renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    proposalHandler({ status: 'approved', decidedAt: '2026-08-18T05:00:00.000Z' }),
+  );
+  let card = await screen.findByTestId('proposal-card');
+  expect(await within(card).findByText(/Принято/)).toBeInTheDocument();
+  expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
+  expect(within(card).queryByRole('button', { name: 'Отклонить' })).toBeNull();
+  // Операции остаются видны и после решения: карточка — след того, что владелец принял.
+  expect(card).toHaveTextContent('срок');
+  approved.unmount();
+
+  const superseded = renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    proposalHandler({ status: 'superseded', decidedAt: '2026-08-19T04:00:00.000Z' }),
+  );
+  card = await screen.findByTestId('proposal-card');
+  expect(await within(card).findByText('Заменено новым прогоном')).toBeInTheDocument();
+  expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
+  superseded.unmount();
+});
+
+test('маркер ленты: действие с source=routine помечено «рутина», а не «агент» (Р-16)', () => {
+  // Правку рутины приносит то же audit-сообщение, что и работу внешнего исполнителя, но
+  // actor_kind у неё 'ai' — по нему рутина неотличима от чат-агента. Различает их ИСТОЧНИК:
+  // владелец должен видеть, что это сделала его рутина ночью, а не он сам в разговоре.
+  const card = { kind: 'entity_card', entityId: 'e', title: 'T', aspects: [], keyFields: {} };
+  renderWithProviders(
+    <div>
+      {renderCards(
+        msg([card], {
+          metadata: { cards: [card], actions: [{ actor_kind: 'ai', source: 'routine' }] },
+        }),
+      )}
+    </div>,
+  );
+  expect(screen.getByTestId('system-message')).toHaveTextContent('рутина');
+  expect(screen.queryByText('агент')).toBeNull();
 });

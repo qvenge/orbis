@@ -15,9 +15,11 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
+import { ProposalCard } from '../chat/cards/ProposalCard';
 // Разбор полей аспекта — общим модулем (см. его шапку): у ленты прогона и у блока состояния
 // рутины правило одно, и копия разъехалась бы при первой же правке.
 import { num, obj, str } from './aspect-read';
+import { RoutineQuestionBlock } from './RoutineQuestionBlock';
 import { RUN_ASPECT, RUN_OUTCOME_LABELS } from './useTicketRuns';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
@@ -54,6 +56,9 @@ const SOURCE_LABELS: Record<string, string> = {
   quick_capture: 'быстрая запись',
   mcp: 'внешний агент',
   system: 'обслуживание круга',
+  // V1.5: правка рутины владельца. «Чужой агент» здесь было бы неправдой — рутину завёл он
+  // сам, а «своей рукой» ею назвать нельзя: в этот момент его не было в приложении.
+  routine: 'рутина',
 };
 
 interface Step {
@@ -98,6 +103,22 @@ function usageLine(raw: unknown): string | undefined {
   if (tokens.length > 0) parts.push(`${tokens.join(' / ')} токенов`);
   if (cost !== undefined) parts.push(`$${cost.toFixed(2)}`);
   return parts.length === 0 ? undefined : parts.join(' · ');
+}
+
+/**
+ * Слот расписания, за который отвечает прогон рутины (`bucket`, V1.2).
+ *
+ * Плановый бакет — МЕСТНОЕ стенное время владельца без зоны (`2026-08-18T07:00`), и через
+ * `formatDate` его гнать нельзя: Intl принял бы эту строку за время машины и сдвинул бы её в
+ * зону владельца ВТОРОЙ раз — «07:00» на экране стало бы «10:00». Печатаем как есть, заменив
+ * служебное «T» пробелом. Ручной прогон (`manual:<ISO>`) несёт настоящий момент — его
+ * форматируем обычным путём, тем же форматтером, что и всё остальное время на экране.
+ */
+function bucketLabel(bucket: string, tz?: string): string {
+  const MANUAL = 'manual:';
+  return bucket.startsWith(MANUAL)
+    ? `вручную · ${formatDate(bucket.slice(MANUAL.length), tz)}`
+    : `слот ${bucket.replace('T', ' ')}`;
 }
 
 /** Блок текста, написанного человеком или агентом: заголовок, время (если есть) и разметка. */
@@ -147,6 +168,16 @@ export function RunFeed({ entity }: { entity: Entity }) {
   const question = str(checkpoint?.question);
   const reply = obj(run.reply);
   const replyText = str(reply?.text);
+  /**
+   * Поля прогона РУТИНЫ (V1). Исполнитель у него внутренний и всегда один, поэтому вместо
+   * гранта в шапке стоит сама рутина, а вместо одного лишь «начат» — слот расписания, за
+   * который прогон отвечает, и номер попытки.
+   */
+  const routineId = str(run.routine_id);
+  const bucket = str(run.bucket);
+  const attempt = num(run.attempt);
+  const failNote = str(run.fail_note);
+  const proposal = obj(run.proposal);
   const usage = usageLine(run.usage);
   const sessionUrl = str(run.session_url);
   const report = str(run.report);
@@ -217,6 +248,18 @@ export function RunFeed({ entity }: { entity: Entity }) {
             · <span className="break-words">{grantLabel}</span>
           </span>
         )}
+        {/* Кто это делал у рутины — САМА РУТИНА, и названа она заголовком, а не uuid: гранта
+            у внутреннего исполнителя нет вовсе (Р-8), и пустое место на его месте читалось бы
+            как «исполнитель неизвестен». Ссылкой — оттуда владелец правит расписание и права. */}
+        {routineId !== undefined && (
+          <span>
+            · <EntityRef id={routineId} onOpen={openEntity} />
+          </span>
+        )}
+        {bucket !== undefined && <span>· {bucketLabel(bucket, tz)}</span>}
+        {/* Первая попытка — обычный ход дел, и «попытка 1» на каждом прогоне была бы шумом.
+            Вторая и третья — новость: рутина уже сбоила, и её перезапускали (V1.10). */}
+        {attempt !== undefined && attempt > 1 && <span>· попытка {attempt}</span>}
       </header>
 
       {usage !== undefined && <p className="text-text-muted text-xs">Расход: {usage}</p>}
@@ -275,20 +318,51 @@ export function RunFeed({ entity }: { entity: Entity }) {
         )}
       </div>
 
-      {question !== undefined && (
-        <TextBlock
-          title="Вопрос исполнителя"
-          at={str(checkpoint?.asked_at)}
-          text={question}
-          tz={tz}
+      {/* Вопрос рутины — блоком С ПОЛЕМ ОТВЕТА, а не текстом: у рутины нет тикета, куда
+          сервер кладёт вопрос внешнего исполнителя (`waiting_for`), и второго места, где
+          владелец мог бы ответить, не существует. У прогона внешнего исполнителя всё
+          наоборот: отвечают на тикете (TicketWaitingBlock), а здесь вопрос и ответ —
+          история работы, и поле ввода рядом с ними было бы вторым способом ответить. */}
+      {question !== undefined && routineId !== undefined ? (
+        <RoutineQuestionBlock
+          run={{
+            id: entity.id,
+            question,
+            asked_at: str(checkpoint?.asked_at) ?? entity.createdAt,
+            ...(replyText !== undefined && {
+              reply: { text: replyText, at: str(reply?.at) ?? entity.updatedAt },
+            }),
+            outcome,
+          }}
         />
+      ) : (
+        <>
+          {question !== undefined && (
+            <TextBlock
+              title="Вопрос исполнителя"
+              at={str(checkpoint?.asked_at)}
+              text={question}
+              tz={tz}
+            />
+          )}
+          {replyText !== undefined && (
+            <TextBlock title="Ответ владельца" at={str(reply?.at)} text={replyText} tz={tz} />
+          )}
+        </>
       )}
-      {replyText !== undefined && (
-        <TextBlock title="Ответ владельца" at={str(reply?.at)} text={replyText} tz={tz} />
-      )}
+      {/* Предложение рутины (V1.6) — той же карточкой, что и в ленте треда: владелец решает
+          его там, где увидел, и оба места обязаны показывать ОДИН статус, а он приезжает с
+          сервера. Условие — по полю аспекта: без предложения карточка не стоила бы запроса. */}
+      {proposal !== undefined && <ProposalCard runId={entity.id} />}
       {report !== undefined && <TextBlock title="Отчёт" text={report} tz={tz} />}
       {abandonNote !== undefined && (
         <TextBlock title="Почему прогон оборван" text={abandonNote} tz={tz} />
+      )}
+      {/* Сбой (V1.10) отличается от обрыва причиной: прогон сорвался САМ (провайдер не
+          ответил, вышел дедлайн, упал процесс), а не был подметён. Без записки «сбой» в шапке
+          остаётся сообщением, на которое нечем ответить. */}
+      {failNote !== undefined && (
+        <TextBlock title="Почему прогон сорвался" text={failNote} tz={tz} />
       )}
 
       <div className="flex flex-col gap-2">

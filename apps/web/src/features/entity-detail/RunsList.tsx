@@ -12,6 +12,20 @@ import { trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { RUN_OUTCOME_LABELS, runAspect, type TicketRun } from './useTicketRuns';
 
+/**
+ * Судьба предложения строкой истории (V1.6). Исход прогона о ней не говорит НИЧЕГО: «готово»
+ * значит лишь «модель отработала», а решает предложение владелец — иногда через день, иногда
+ * никогда. Без этого бейджа он не увидел бы в списке ни того, что от него чего-то ждут, ни
+ * того, чем кончилось вчерашнее предложение.
+ */
+const PROPOSAL_LABELS: Record<string, string> = {
+  pending: 'ждёт ответа',
+  approved: 'принято',
+  rejected: 'отклонено',
+  superseded: 'заменено',
+  stale: 'устарело',
+};
+
 /** Русское множественное: 1 шаг, 2–4 шага, 5–20 шагов (и 11–14 — «шагов»). */
 function stepsLabel(n: number): string {
   const teen = n % 100;
@@ -58,6 +72,15 @@ export function RunsList({
           const outcome = typeof a.outcome === 'string' ? a.outcome : '';
           const startedAt = typeof a.started_at === 'string' ? a.started_at : run.createdAt;
           const steps = typeof a.step_count === 'number' ? a.step_count : 0;
+          // Статус предложения — из аспекта прогона (он источник правды о судьбе, V1.6):
+          // отдельного запроса строка истории не стоит. Незнакомое значение печатаем сырым —
+          // та же честная деградация, что у исходов.
+          const proposal =
+            typeof a.proposal === 'object' && a.proposal !== null
+              ? (a.proposal as { status?: unknown }).status
+              : undefined;
+          const proposalLabel =
+            typeof proposal === 'string' ? (PROPOSAL_LABELS[proposal] ?? proposal) : undefined;
           // Грант — ПОДПИСЬЮ: сырой uuid в строке истории не отвечает на вопрос «кто это делал».
           const grant = grants.data?.find((g) => g.id === a.grant_id);
           return (
@@ -70,6 +93,13 @@ export function RunsList({
               >
                 <span className="text-text-secondary">{formatDate(startedAt, tz)}</span>
                 <Badge>{RUN_OUTCOME_LABELS[outcome] ?? outcome}</Badge>
+                {proposalLabel !== undefined && (
+                  // Нерешённое предложение — акцентом: это единственная строка списка, по
+                  // которой владельцу НАДО что-то сделать.
+                  <Badge tone={proposal === 'pending' ? 'accent' : 'default'}>
+                    предложение: {proposalLabel}
+                  </Badge>
+                )}
                 <span className="text-text-secondary">· {stepsLabel(steps)}</span>
                 {showGrant && grant !== undefined && (
                   <span className="break-words text-text-secondary">· {grant.label}</span>

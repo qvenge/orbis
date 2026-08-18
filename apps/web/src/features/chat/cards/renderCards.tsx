@@ -6,6 +6,7 @@ import { EntityCard } from './EntityCard';
 import { ErrorCard } from './ErrorCard';
 import { ImportReviewCard } from './ImportReviewCard';
 import { MemoryRuleCard } from './MemoryRuleCard';
+import { ProposalCard } from './ProposalCard';
 import { QueryResultCard } from './QueryResultCard';
 import { SystemMessage } from './SystemMessage';
 import type { Card } from './types';
@@ -29,8 +30,11 @@ type CardsMeta = {
    * `ActionRecord`, которую читает лента, — остальное ей не нужно, а полный тип живёт на
    * сервере. Инвариант «один action на audit-сообщение» тот же, что у undo и отката: читаем
    * `actions[0]`.
+   *
+   * `source` — ОТКУДА пришла правка (`MutationSource`). Ленте он нужен ровно за одним:
+   * рутина пишет граф от «ai», как и чат-агент, и по `actor_kind` они неотличимы (V1.9).
    */
-  actions?: Array<{ actor_kind?: string; actor_grant_id?: string }>;
+  actions?: Array<{ actor_kind?: string; actor_grant_id?: string; source?: string }>;
   retryId?: string;
   retryText?: string;
   fastPath?: FastPathMeta;
@@ -92,6 +96,11 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
       return <QueryResultCard key={i} card={card} />;
     case 'confirmation_card':
       return <ConfirmationCard key={i} card={card} createdAt={msg.createdAt} />;
+    case 'proposal_card':
+      // V1.6: всё, кроме `runId`, карточка читает с сервера (routine.proposal) — поля
+      // сообщения были бы снимком момента отправки, а решают предложение и позже, и с
+      // другого экрана. Компонент тот же, что на экране прогона (RunFeed).
+      return <ProposalCard key={i} runId={card.runId} />;
     case 'import_review':
       return <ImportReviewCard key={i} card={card} />;
     case 'memory_rule_suggestion':
@@ -155,7 +164,16 @@ export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): Reac
    * только второе значило бы потерять первое; заменить одно другим — тоже. Источника два,
    * метка одна: «это делал не ты».
    */
-  const byAction = meta.actions?.[0]?.actor_kind === 'agent';
+  const action = meta.actions?.[0];
+  /**
+   * Рутина — третий носитель той же метки и САМЫЙ точный из трёх (V1.9, Р-16). Её правки
+   * приходят audit-записью от «ai» — то есть по `actor_kind` она неотличима от агента чата, —
+   * но владельцу разница видна сразу: агент отвечает ему в разговоре, рутина правит граф
+   * ночью, пока его нет. Поэтому источник проверяется ПЕРВЫМ: «агент» поверх ночной правки
+   * был бы не полуправдой, а указанием не на того.
+   */
+  if (action?.source === 'routine') return <SystemMessage label="рутина">{body}</SystemMessage>;
+  const byAction = action?.actor_kind === 'agent';
   if (meta.author_kind === 'agent' || byAction) return <SystemMessage>{body}</SystemMessage>;
   return <>{body}</>;
 }

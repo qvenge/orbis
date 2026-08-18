@@ -61,6 +61,23 @@ export type ImportSummaryData = {
   adopted: number;
   skipped: number;
 };
+// V1.6: предложение рутины. Своя карточка, а не confirmation_card, потому что вопрос другой:
+// не «подтвердить действие, которое я сейчас сделаю», а «принять предложение, сделанное
+// ночью» — с объяснением прозой и списком самих правок. Поля обязаны ДОСЛОВНО совпадать с
+// серверным union (apps/server/src/tools/registry.ts) — типы намеренно не общие.
+//
+// Всё, кроме `runId`, компонент читает с сервера (`routine.proposal`), а не отсюда: статус в
+// ленте — снимок момента отправки, а решают предложение со второго экрана, гасят новым
+// прогоном и разводят с графом. `summary`/`explanation` остаются в контракте ради парности с
+// сервером и ради ленты без сети (content сообщения), но карточка их не читает.
+export type ProposalCardData = {
+  kind: 'proposal_card';
+  pendingId: string;
+  runId: string;
+  routineId: string;
+  summary: string;
+  explanation: string;
+};
 export type Card =
   | EntityCardData
   | QueryResultData
@@ -69,4 +86,5 @@ export type Card =
   | ImportReviewData
   | MemoryRuleSuggestionData
   | MemoryRuleDeclinedData
-  | ImportSummaryData;
+  | ImportSummaryData
+  | ProposalCardData;

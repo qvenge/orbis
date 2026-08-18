@@ -3669,3 +3669,246 @@ describe('V1: рутина', () => {
     expect(calls.filter((c) => c.path === 'agentRun.sweep')).toHaveLength(1);
   });
 });
+
+// --- Экран прогона РУТИНЫ (V1.9, V1.14; приёмка 3–6, 11) -------------------------------
+//
+// Та же лента, что у прогона внешнего исполнителя (`ADE: прогон`), и различия ровно там, где
+// различается работа: исполнитель внутренний (гранта нет — есть рутина-родитель, слот и
+// попытка), вопрос владельцу задаётся ПРЯМО ЗДЕСЬ (тикета, куда его положить, у рутины нет),
+// а результат режима «предлагает» — карточка предложения с самими правками.
+
+/** Прогон рутины в объёме detail. Аспект от теста к тесту разный, форма записи — одна. */
+const routineRunEntity = (aspect: Record<string, unknown>) => ({
+  ...entity,
+  id: 'rr1',
+  title: 'Прогон: Утренний разбор',
+  aspects: { 'orbis/agent-run': aspect },
+});
+
+const ROUTINE_RUN_CHECKPOINT = {
+  routine_id: 'rt1',
+  bucket: '2026-08-18T07:00',
+  attempt: 1,
+  outcome: 'checkpoint',
+  started_at: '2026-08-18T04:00:00.000Z',
+  step_count: 1,
+  steps: [
+    { seq: 1, at: '2026-08-18T04:00:30.000Z', summary: 'Прочитал инструкцию', external: false },
+  ],
+  checkpoint: { question: 'Переносить ли встречу с врачом?', asked_at: '2026-08-18T04:01:00.000Z' },
+};
+
+/** Предложение в форме `routine.proposal` (ProposalView): строки — по ПОЛЮ, а не по операции. */
+const PROPOSAL_VIEW = {
+  pendingId: 'p1',
+  runId: 'rr1',
+  routineId: 'rt1',
+  status: 'pending',
+  explanation: 'Два дела просрочены — предлагаю перенести срок на сегодня.',
+  operations: [
+    {
+      index: 0,
+      tool: 'entity_update',
+      entity: { id: 'e2', title: 'Купить билеты' },
+      aspect: 'orbis/task',
+      field: 'due_date',
+      before: '2026-08-10',
+      after: '2026-08-19',
+      summary: '«Купить билеты»: orbis/task.due_date',
+    },
+    {
+      index: 1,
+      tool: 'entity_create',
+      summary: 'Создать: Позвонить врачу (orbis/task)',
+    },
+  ],
+};
+
+function routineRunHandler(
+  opts: { aspect?: Record<string, unknown>; proposal?: unknown; decide?: unknown } = {},
+): MockHandler {
+  const run = routineRunEntity(opts.aspect ?? ROUTINE_RUN_CHECKPOINT);
+  return (path, input) => {
+    if (path === 'entity.get') {
+      const { id } = input as { id: string };
+      if (id === 'rr1') return { entity: run, relations: [], thread: null };
+      // Рутина-родитель и цели предложения дочитываются заголовками (EntityRef).
+      if (id === 'rt1') return { entity: ROUTINE, relations: [], thread: null };
+      const target = PROPOSAL_VIEW.operations.find((op) => op.entity?.id === id);
+      return {
+        entity: { ...entity, id, title: target?.entity?.title ?? `T-${id}` },
+        relations: [],
+        thread: null,
+      };
+    }
+    if (path === 'user.getSettings') return { timezone: 'UTC' };
+    if (path === 'aspect.list') return [];
+    if (path === 'routine.proposal') return opts.proposal ?? null;
+    if (path === 'routine.decideProposal')
+      return opts.decide ?? { status: 'applied', actionId: 'a1' };
+    if (path === 'routine.answerCheckpoint') return { runId: 'rr1' };
+    if (path === 'agentRun.rollback') return { ok: true, undone: ['a1'], note: ROLLBACK_NOTE };
+    return {};
+  };
+}
+
+describe('V1: прогон рутины', () => {
+  test('прогон с routine_id и outcome checkpoint: блок вопроса с полем ответа; «Ответить» зовёт routine.answerCheckpoint; шапка — рутина и слот, исполнителя нет (приёмка 5)', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="rr1" />, routineRunHandler());
+    const feed = await screen.findByTestId('run-feed');
+
+    expect(within(feed).getByText('вопрос')).toBeInTheDocument();
+    // Кто это делал — РУТИНА, и названа она заголовком: гранта у внутреннего исполнителя нет
+    // вовсе, и список доступов ради него не спрашивают.
+    expect(await within(feed).findByText('Утренний разбор')).toBeInTheDocument();
+    expect(feed).toHaveTextContent('2026-08-18 07:00');
+    // Первая попытка — обычный ход дел; «попытка 1» на каждом прогоне была бы шумом.
+    expect(feed).not.toHaveTextContent('попытка');
+    expect(calls.some((c) => c.path === 'oauth.listGrants')).toBe(false);
+
+    // Вопрос рутины владелец читает и отвечает ПРЯМО ЗДЕСЬ: тикета, куда сервер кладёт
+    // вопрос внешнего исполнителя (waiting_for), у рутины нет.
+    const block = within(feed).getByTestId('routine-question');
+    expect(block).toHaveTextContent('Переносить ли встречу с врачом?');
+    await userEvent.type(within(block).getByRole('textbox'), 'Перенеси на пятницу');
+    await userEvent.click(within(block).getByRole('button', { name: 'Ответить' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'routine.answerCheckpoint')?.input).toEqual({
+        runId: 'rr1',
+        answer: 'Перенеси на пятницу',
+      }),
+    );
+  });
+
+  test('прогон finished с предложением pending: карточка перечисляет сами операции, «Принять» → decideProposal approve; ответ stale → список расхождений (приёмка 3–4, 6)', async () => {
+    const { calls } = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        aspect: {
+          ...ROUTINE_RUN_CHECKPOINT,
+          outcome: 'finished',
+          checkpoint: undefined,
+          finished_at: '2026-08-18T04:02:00.000Z',
+          proposal: { pending_id: 'p1', status: 'pending' },
+        },
+        proposal: PROPOSAL_VIEW,
+        decide: {
+          status: 'stale',
+          mismatches: [
+            { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'done' },
+          ],
+        },
+      }),
+    );
+    const card = await screen.findByTestId('proposal-card');
+
+    // Владелец принимает СПИСОК ПРАВОК, а не пересказ модели (V1.14): поле, «было» и «станет».
+    expect(card).toHaveTextContent('срок');
+    expect(card).toHaveTextContent('2026-08-10');
+    expect(card).toHaveTextContent('2026-08-19');
+    expect(await within(card).findByText('Купить билеты')).toBeInTheDocument();
+    // Создание записи — своей строкой: у него нет ни «было», ни поля аспекта.
+    expect(card).toHaveTextContent('Создать: Позвонить врачу');
+    expect(card).not.toHaveTextContent('2 операции');
+
+    await userEvent.click(within(card).getByRole('button', { name: 'Принять' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'routine.decideProposal')?.input).toEqual({
+        runId: 'rr1',
+        decision: 'approve',
+      }),
+    );
+
+    // `stale` — ЗНАЧЕНИЕ ответа, а не сбой: граф разошёлся с предложением, и владельцу
+    // показывают, чем именно, а не плашку ошибки.
+    const stale = await within(card).findByTestId('proposal-stale');
+    expect(stale).toHaveTextContent('состояние изменилось');
+    expect(stale).toHaveTextContent('статус');
+    expect(stale).toHaveTextContent('inbox');
+    expect(stale).toHaveTextContent('done');
+  });
+
+  test('исходы V1: failed с причиной (откат доступен), answered с ответом, stale со словами «снят новым прогоном» (приёмка 11)', async () => {
+    const failed = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        aspect: {
+          ...ROUTINE_RUN_CHECKPOINT,
+          outcome: 'failed',
+          attempt: 3,
+          checkpoint: undefined,
+          fail_note: 'провайдер не ответил',
+          finished_at: '2026-08-18T04:01:00.000Z',
+        },
+      }),
+    );
+    let feed = await screen.findByTestId('run-feed');
+    expect(within(feed).getByText('сбой')).toBeInTheDocument();
+    // Причина сбоя — то, ради чего сорванный прогон открывают.
+    expect(feed).toHaveTextContent('провайдер не ответил');
+    // Не первая попытка — это новость: рутина уже сбоила и её переспрашивали.
+    expect(feed).toHaveTextContent('попытка 3');
+    // Сбой терминален, и сделанное до него откатывается как у любого законченного прогона.
+    expect(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' })).toBeEnabled();
+    failed.unmount();
+
+    const answered = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        aspect: {
+          ...ROUTINE_RUN_CHECKPOINT,
+          outcome: 'answered',
+          reply: { text: 'Перенеси на пятницу', at: '2026-08-18T06:00:00.000Z' },
+        },
+      }),
+    );
+    feed = await screen.findByTestId('run-feed');
+    expect(within(feed).getByText('отвечено')).toBeInTheDocument();
+    let block = within(feed).getByTestId('routine-question');
+    expect(block).toHaveTextContent('Переносить ли встречу с врачом?');
+    expect(block).toHaveTextContent('Перенеси на пятницу');
+    // Отвечать второй раз нечем: прогон закрыт ответом.
+    expect(within(block).queryByRole('textbox')).toBeNull();
+    answered.unmount();
+
+    const stale = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({ aspect: { ...ROUTINE_RUN_CHECKPOINT, outcome: 'stale' } }),
+    );
+    feed = await screen.findByTestId('run-feed');
+    expect(within(feed).getByText('снят')).toBeInTheDocument();
+    block = within(feed).getByTestId('routine-question');
+    // Вопрос остался без ответа не потому, что владелец промолчал, а потому что рутина
+    // спросила заново следующим прогоном — и сказать это надо словами.
+    expect(block).toHaveTextContent('снят новым прогоном');
+    expect(within(block).queryByRole('textbox')).toBeNull();
+    stale.unmount();
+  });
+
+  test('история прогонов рутины: судьба предложения бейджем, ожидание решения — словами (приёмка 4)', async () => {
+    const withProposal = (id: string, proposal: Record<string, unknown>) => ({
+      ...ROUTINE_RUN_DONE,
+      id,
+      aspects: {
+        'orbis/agent-run': { ...ROUTINE_RUN_DONE.aspects['orbis/agent-run'], proposal },
+      },
+    });
+    renderWithProviders(
+      <DetailScreen entityId="rt1" />,
+      routineHandler({
+        runs: [
+          withProposal('rp1', { pending_id: 'p1', status: 'pending' }),
+          withProposal('rp2', { pending_id: 'p2', status: 'approved' }),
+          withProposal('rp3', { pending_id: 'p3', status: 'superseded' }),
+        ],
+      }),
+    );
+    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
+    const list = within(details).getByTestId('runs-list');
+    // «готово» у прогона с нерешённым предложением означает лишь «модель отработала» —
+    // без второго слова владелец не увидел бы, что от него чего-то ждут.
+    expect(within(list).getByTestId('run-rp1')).toHaveTextContent('ждёт ответа');
+    expect(within(list).getByTestId('run-rp2')).toHaveTextContent('принято');
+    expect(within(list).getByTestId('run-rp3')).toHaveTextContent('заменено');
+  });
+});
