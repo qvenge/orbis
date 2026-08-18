@@ -1,4 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { expect, test, vi } from 'vitest';
 import { Badge } from './Badge';
 import { Button } from './Button';
@@ -160,6 +162,77 @@ test('onValueChange извещает о смене вкладки — и по к
   // Повторный жест по уже активной вкладке ничего не меняет — и извещать о нём не о чем.
   fireEvent.click(screen.getByRole('tab', { name: 'B' }));
   expect(seen).toEqual(['b']);
+});
+
+test('onValueChange: жест мышью целиком (mousedown+click) извещает РОВНО раз', async () => {
+  // Голый `fireEvent.click` выше проверяет свой путь триггера, а настоящая мышь идёт другим:
+  // активацию Radix вешает на mousedown. Оба пути срабатывают на одном жесте, и без отсечки
+  // повтора вызывающий получал бы два извещения на одно нажатие.
+  const seen: string[] = [];
+  render(
+    <Tabs
+      defaultValue="a"
+      onValueChange={(v) => seen.push(v)}
+      tabs={[
+        { value: 'a', label: 'A', content: <div>panel-a</div> },
+        { value: 'b', label: 'B', content: <div>panel-b</div> },
+      ]}
+    />,
+  );
+  await userEvent.click(screen.getByRole('tab', { name: 'B' }));
+  expect(seen).toEqual(['b']);
+});
+
+test('управляемый режим: вкладку задаёт `value` снаружи', () => {
+  // Второму потребителю признака активности (список версий на detail) нужен ОДИН источник
+  // правды: `Tabs` теряет своё состояние при каждом размонтировании экрана по скелетону.
+  function Host() {
+    const [value, setValue] = useState('a');
+    return (
+      <>
+        <button type="button" data-testid="ext-b" onClick={() => setValue('b')}>
+          снаружи на B
+        </button>
+        <Tabs
+          value={value}
+          onValueChange={setValue}
+          tabs={[
+            { value: 'a', label: 'A', content: <div>panel-a</div>, keepMounted: true },
+            { value: 'b', label: 'B', content: <div>panel-b</div>, keepMounted: true },
+          ]}
+        />
+      </>
+    );
+  }
+  render(<Host />);
+  expect(screen.getByRole('tabpanel', { name: 'A' })).toHaveAttribute('data-state', 'active');
+
+  // Смена ИЗВНЕ, мимо самих вкладок: так вкладку задаёт экран, вернувшийся к записи.
+  fireEvent.click(screen.getByTestId('ext-b'));
+  expect(screen.getByRole('tabpanel', { name: 'B' })).toHaveAttribute('data-state', 'active');
+
+  // …и клик по вкладке идёт тем же путём — через извещение к родителю.
+  fireEvent.click(screen.getByRole('tab', { name: 'A' }));
+  expect(screen.getByRole('tabpanel', { name: 'A' })).toHaveAttribute('data-state', 'active');
+});
+
+test('управляемый режим: без ответа родителя вкладка НЕ переключается сама', () => {
+  // Проверка того, что внутреннего состояния в этом режиме нет вовсе: будь оно, вкладка
+  // сменилась бы и без участия вызывающего — то есть вторая копия правды вернулась бы.
+  const seen: string[] = [];
+  render(
+    <Tabs
+      value="a"
+      onValueChange={(v) => seen.push(v)}
+      tabs={[
+        { value: 'a', label: 'A', content: <div>panel-a</div>, keepMounted: true },
+        { value: 'b', label: 'B', content: <div>panel-b</div>, keepMounted: true },
+      ]}
+    />,
+  );
+  fireEvent.click(screen.getByRole('tab', { name: 'B' }));
+  expect(seen).toEqual(['b']);
+  expect(screen.getByRole('tabpanel', { name: 'A' })).toHaveAttribute('data-state', 'active');
 });
 
 test('keepMounted держит СВОЮ вкладку живой, не трогая соседей', () => {

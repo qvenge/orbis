@@ -2926,6 +2926,61 @@ async function openDetails(): Promise<void> {
   fireEvent.click(await screen.findByRole('tab', { name: 'Детали' }));
 }
 
+/** Версия соседней записи — своя: по ней видно, чей список приехал после перехода. */
+const VERSION_E2 = {
+  id: 'v9',
+  entityId: 'e2',
+  label: 'версия второй',
+  hasDoc: true,
+  actorKind: 'owner',
+  createdAt: '2026-08-17T08:00:00.000Z',
+};
+
+const twoEntitiesVersionsHandler: MockHandler = (path, input) => {
+  if (path === 'entity.get') {
+    const { id } = input as { id: string };
+    return {
+      entity: { ...entity, id, title: id === 'e1' ? 'Задача' : 'Другая' },
+      relations: [],
+      thread: null,
+    };
+  }
+  if (path === 'aspect.list') return [];
+  if (path === 'version.list')
+    return (input as { entityId: string }).entityId === 'e1' ? VERSIONS : [VERSION_E2];
+  return {};
+};
+
+/** Как роутер: `<DetailScreen entityId={top.id} />` монтируется БЕЗ key (router.tsx). */
+function VersionsHost() {
+  const [id, setId] = useState('e1');
+  return (
+    <>
+      <button type="button" data-testid="go-e2" onClick={() => setId('e2')}>
+        на e2
+      </button>
+      <DetailScreen entityId={id} />
+    </>
+  );
+}
+
+/**
+ * Прогрев соседней записи ТЕМ ЖЕ ключом кэша, что читает экран: переход на неё пойдёт без
+ * скелетона, то есть БЕЗ размонтирования вкладок. Без прогрева тот же переход идёт холодным
+ * путём — и это два разных пути, на которых прежняя схема («состояние внутри Tabs + извещение
+ * наружу») вела себя по-разному.
+ */
+function WarmCache({ id }: { id: string }) {
+  trpc.entity.get.useQuery(detailGetInput(id));
+  return null;
+}
+
+/** Сколько раз спрашивали версии ИМЕННО этой записи. */
+const versionReads = (calls: { path: string; input: unknown }[], entityId: string): number =>
+  calls.filter(
+    (c) => c.path === 'version.list' && (c.input as { entityId: string }).entityId === entityId,
+  ).length;
+
 describe('ADE: версии', () => {
   test('меню ⋮ → «Закрепить версию»: диалог с подписью → version.pin({entityId,label}), список версий протухает', async () => {
     const { calls } = renderWithProviders(
@@ -3063,5 +3118,44 @@ describe('ADE: версии', () => {
     // Пустая секция обязана сказать, чем её наполнить: пункт меню найти неоткуда.
     expect(card).toHaveTextContent('Закрепить версию');
     expect(within(card).queryByRole('button', { name: 'Восстановить' })).toBeNull();
+  });
+
+  test('переход на НЕкэшированную запись с открытых «Деталей»: вкладка та же, версии соседа читаются один раз', async () => {
+    const { calls } = renderWithProviders(<VersionsHost />, twoEntitiesVersionsHandler);
+    await openDetails();
+    expect(await screen.findByText('до правки агентом')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('go-e2'));
+    // Холодный путь: соседнюю запись ещё не читали, экран показывает скелетон — вкладок в
+    // дереве нет вовсе, и `Tabs` встанет заново.
+    expect(screen.queryByRole('tab', { name: 'Детали' })).toBeNull();
+
+    await screen.findByRole('heading', { name: 'Другая' });
+    // Вкладка — та, на которой смотрели: правда о ней ОДНА и живёт у экрана, поэтому ремоунт
+    // `Tabs` её не сбрасывает. Прежде экран показывал «Сущность», а секция версий считала себя
+    // открытой и шла в сеть (ревью Задачи 16).
+    expect(screen.getByRole('tab', { name: 'Детали' })).toHaveAttribute('data-state', 'active');
+    expect(await screen.findByText('версия второй')).toBeInTheDocument();
+    expect(versionReads(calls, 'e2')).toBe(1);
+  });
+
+  test('переход на КЭШИРОВАННУЮ запись: тот же исход без скелетона и без лишних чтений', async () => {
+    const { calls } = renderWithProviders(
+      <>
+        <WarmCache id="e2" />
+        <VersionsHost />
+      </>,
+      twoEntitiesVersionsHandler,
+    );
+    await openDetails();
+    expect(await screen.findByText('до правки агентом')).toBeInTheDocument();
+    expect(versionReads(calls, 'e2')).toBe(0); // на соседа не смотрели — и не спрашивали
+
+    fireEvent.click(screen.getByTestId('go-e2'));
+    // Тёплый кэш: скелетона нет, вкладки те же — и вкладка всё равно «Детали».
+    expect(screen.getByRole('heading', { name: 'Другая' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Детали' })).toHaveAttribute('data-state', 'active');
+    expect(await screen.findByText('версия второй')).toBeInTheDocument();
+    expect(versionReads(calls, 'e2')).toBe(1);
   });
 });
