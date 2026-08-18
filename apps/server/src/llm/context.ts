@@ -16,6 +16,11 @@
 //
 // Токен-бюджеты §7.1 — ориентиры, не жёсткие константы: капы ниже (50 памятей,
 // превью 200/500, окно 30) — их механическое воплощение для MVP.
+//
+// V1.5: слои 1(динамика)–3 переиспользует контекст прогона рутины (routines/context.ts) —
+// у него свой промпт и своя история вместо треда, но инструкции аспектов, память и якорь
+// обязаны выглядеть для модели ТЕМ ЖЕ, чем в чате. Поэтому aspectInstructionsSection,
+// loadMemory/memoryLine/MEMORY_SECTION_HEADER и anchorBlock экспортируются, а не копируются.
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { excludeInfraSystemRows } from '../chat/messages';
 import { chatMessages, entities } from '../db/schema';
@@ -34,6 +39,12 @@ export const CONTEXT_HISTORY_LIMIT = 30;
 export const MEMORY_BODY_PREVIEW = 200;
 /** Превью body якорной сущности в слое 3 (§7.1: «превью body»). */
 export const ANCHOR_BODY_PREVIEW = 500;
+/**
+ * Потолок тела, которое идёт в якорь ЦЕЛИКОМ (`instruction`, V1.5): у рутины тело — это
+ * задание, и урезать его превью значило бы урезать задание. Потолок всё же есть: тело
+ * колонки не ограничено, а системный канал — ресурс прогона.
+ */
+export const ANCHOR_INSTRUCTION_CAP = 8000;
 
 const MEMORY_ASPECT = 'orbis/memory';
 
@@ -73,7 +84,7 @@ export function toolResultMessage(toolName: string, result: unknown): LLMMessage
 // Слой 2: память §7.4
 // ---------------------------------------------------------------------------
 
-interface MemoryItem {
+export interface MemoryItem {
   id: string;
   title: string;
   body: string;
@@ -83,6 +94,14 @@ interface MemoryItem {
 }
 
 /**
+ * Заголовок слоя 2. Константой, а не литералом в двух местах: тот же слой собирает
+ * контекст прогона рутины (routines/context.ts, V1.5), и разъехавшийся заголовок
+ * означал бы, что «память» в фоне выглядит для модели не тем же блоком, что в чате.
+ */
+export const MEMORY_SECTION_HEADER =
+  'Память о пользователе (факты и правила; учитывай их в ответах и действиях):';
+
+/**
  * Активные memory-сущности владельца (RLS текущего tx). Простой SELECT по
  * `aspects ? 'orbis/memory'` вместо прогона через query-компилятор §6 —
  * фильтр тривиален, а сортировка приоритета (§7.4) всё равно доменная:
@@ -90,7 +109,7 @@ interface MemoryItem {
  * «Недавно использованные» из §7.4 в MVP приближены updated_at (использование
  * памяти отдельно не трекается — осознанное упрощение слайса 1b).
  */
-async function loadMemory(tx: Tx): Promise<MemoryItem[]> {
+export async function loadMemory(tx: Tx): Promise<MemoryItem[]> {
   const rows = await tx
     .select({
       id: entities.id,
@@ -143,7 +162,7 @@ function flatten(s: string): string {
  * Инвариант формата — одна memory = одна строка списка: пробельные прогоны
  * (включая переводы строк body и title) схлопываются в один пробел ДО обрезки превью.
  */
-function memoryLine(m: MemoryItem): string {
+export function memoryLine(m: MemoryItem): string {
   const scope = m.scope ? `[${m.scope}]` : '';
   const flatBody = flatten(m.body);
   const body = flatBody ? `: ${preview(flatBody, MEMORY_BODY_PREVIEW)}` : '';
@@ -154,15 +173,38 @@ function memoryLine(m: MemoryItem): string {
 // Слой 3: якорная сущность (02 §2.2)
 // ---------------------------------------------------------------------------
 
-/** Компактный блок якоря: id (для тулов), title, tags, аспекты, превью body. */
-async function anchorBlock(tx: Tx, ownerId: string, anchorEntityId: string): Promise<string> {
+/** Как якорь показывает тело сущности. */
+export interface AnchorBlockOptions {
+  /**
+   * Первая строка блока. У треда это «о чём разговор», у прогона рутины — «вот твоё
+   * задание»: одна и та же сущность стоит в контексте по разным причинам, и молчаливо
+   * назвать инструкцию «якорной сущностью треда» значило бы соврать про её роль.
+   */
+  intro?: string;
+  /**
+   * Тело — ЦЕЛИКОМ и с переводами строк (V1.5). Для чата тело якоря — справка, и
+   * схлопнутое превью в 500 символов там уместно; для рутины тело — задание, а задание
+   * из списка пунктов, схлопнутое в одну строку и обрезанное на полуслове, перестаёт
+   * быть заданием. Защита `flatten` здесь не теряется зря: строки инструкции пишет сам
+   * владелец (или чат-AI под его подтверждением) — она и должна выглядеть инструкцией.
+   */
+  instruction?: boolean;
+}
+
+/** Компактный блок якоря: id (для тулов), title, tags, аспекты, тело. */
+export async function anchorBlock(
+  tx: Tx,
+  ownerId: string,
+  anchorEntityId: string,
+  opts: AnchorBlockOptions = {},
+): Promise<string> {
   // include: [] — только сама сущность, без relations/backlinks/треда
   // (историю треда несёт слой 4); невидимая/чужая → NOT_FOUND из readEntity
   const { entity } = await readEntity(tx, ownerId, { id: anchorEntityId, include: [] });
   // title/tags/body — данные владельца (их пишет и внешний агент через MCP): переводы
   // строк из них не должны подделывать строки этого блока (см. flatten).
   const lines = [
-    'Якорная сущность треда — текущий разговор идёт о ней:',
+    opts.intro ?? 'Якорная сущность треда — текущий разговор идёт о ней:',
     `id: ${entity.id}`,
     `title: ${flatten(entity.title)}`,
   ];
@@ -173,8 +215,13 @@ async function anchorBlock(tx: Tx, ownerId: string, anchorEntityId: string): Pro
     const parts = aspectIds.map((id) => `${id} ${JSON.stringify(entity.aspects[id])}`);
     lines.push(`аспекты: ${parts.join('; ')}`);
   }
-  if (entity.body)
-    lines.push(`body (превью): ${preview(flatten(entity.body), ANCHOR_BODY_PREVIEW)}`);
+  if (entity.body) {
+    lines.push(
+      opts.instruction === true
+        ? `Инструкция рутины (тело сущности):\n${preview(entity.body, ANCHOR_INSTRUCTION_CAP)}`
+        : `body (превью): ${preview(flatten(entity.body), ANCHOR_BODY_PREVIEW)}`,
+    );
+  }
   return lines.join('\n');
 }
 
@@ -251,25 +298,35 @@ async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> 
  * якорь и историю владельцем). anchorEntityId передаётся только для треда
  * сущности (02 §2.2) — глобальный тред слоя 3 не имеет.
  */
-export async function buildContext(tx: Tx, input: BuildContextInput): Promise<BuiltContext> {
-  const sections: string[] = [SYSTEM_PROMPT_V4];
-
-  // Слой 1 (динамическая часть): ai_instructions активных аспектов реестра
-  // (builtin + свои кастомные; собственное определение перекрывает builtin — §7.6)
+/**
+ * Слой 1 (динамическая часть): ai_instructions активных аспектов реестра
+ * (builtin + свои кастомные; собственное определение перекрывает builtin — §7.6).
+ * null — активных инструкций нет, секцию не заводим.
+ *
+ * Экспортируется целиком, а не в виде «загрузи строки и собери сам»: тот же слой нужен
+ * контексту прогона рутины (routines/context.ts, V1.5), а собранный дважды он разъехался
+ * бы форматом — и «инструкции аспектов» в фоне выглядели бы для модели иначе, чем в чате.
+ */
+export async function aspectInstructionsSection(tx: Tx): Promise<string | null> {
   const aspectRows = await loadAspectToolRows(tx);
   const instructions = aspectRows
     .filter((r) => r.aiInstructions)
     .map((r) => `- ${r.id}: ${r.aiInstructions}`);
-  if (instructions.length > 0) {
-    sections.push(`Инструкции активных аспектов:\n${instructions.join('\n')}`);
-  }
+  return instructions.length === 0
+    ? null
+    : `Инструкции активных аспектов:\n${instructions.join('\n')}`;
+}
+
+export async function buildContext(tx: Tx, input: BuildContextInput): Promise<BuiltContext> {
+  const sections: string[] = [SYSTEM_PROMPT_V4];
+
+  const instructions = await aspectInstructionsSection(tx);
+  if (instructions !== null) sections.push(instructions);
 
   // Слой 2: память §7.4
   const memory = await loadMemory(tx);
   if (memory.length > 0) {
-    sections.push(
-      `Память о пользователе (факты и правила; учитывай их в ответах и действиях):\n${memory.map(memoryLine).join('\n')}`,
-    );
+    sections.push(`${MEMORY_SECTION_HEADER}\n${memory.map(memoryLine).join('\n')}`);
   }
 
   // Слой 3: якорная сущность — только для треда сущности

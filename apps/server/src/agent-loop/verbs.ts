@@ -257,7 +257,17 @@ function terminalBeforeWrite(
   tail: string,
 ): ToolDispatchResult | null {
   if (run.outcome === 'running' || callId !== undefined) return null;
-  return terminalError(runId, run.outcome, run.abandon_note, tail);
+  return terminalError(runId, run.outcome, closeNote(run), tail);
+}
+
+/**
+ * Заметка о том, ЧЕМ кончился прогон, для details отказа. Две колонки, а не одна:
+ * `abandon_note` пишет подметание грантового прогона (С6), `fail_note` — рутинного (V1.12)
+ * и раннер при сбое. Читая только первую, отказ по рутинному прогону молчал бы о причине —
+ * ровно там, где она единственное, что объясняет «почему мою работу не приняли».
+ */
+function closeNote(run: AgentRunAspect): string | undefined {
+  return run.abandon_note ?? run.fail_note;
 }
 
 /**
@@ -275,7 +285,7 @@ function terminalFromPrecondition(
   return terminalError(
     runId,
     typeof actual === 'string' ? actual : run.outcome,
-    run.abandon_note,
+    closeNote(run),
     tail,
   );
 }
