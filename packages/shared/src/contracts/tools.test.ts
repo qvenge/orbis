@@ -6,7 +6,9 @@ import {
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
+  entityUpdateExecInput,
   entityUpdateInput,
+  entityUpdatePrecondition,
   relationCreateInput,
   relationDeleteInput,
 } from './tools';
@@ -81,6 +83,59 @@ describe('entityUpdateInput', () => {
   test('emoji: null допустим (сброс), строка допустима', () => {
     expect(entityUpdateInput.safeParse({ id: UUID, emoji: null }).success).toBe(true);
     expect(entityUpdateInput.safeParse({ id: UUID, emoji: '🔥' }).success).toBe(true);
+  });
+});
+
+describe('entityUpdatePrecondition (CAS, С7 + V1.7)', () => {
+  const IN = { aspect: 'orbis/task', field: 'status', in: ['planned'] };
+  const ABSENT = { aspect: 'orbis/task', field: 'due_date', absent: true };
+
+  test('обе формы валидны: `in` (значение из списка) и `absent` (поля ещё нет)', () => {
+    expect(entityUpdatePrecondition.safeParse([IN]).success).toBe(true);
+    expect(entityUpdatePrecondition.safeParse([ABSENT]).success).toBe(true);
+    expect(entityUpdatePrecondition.safeParse([IN, ABSENT]).success).toBe(true);
+  });
+
+  test('формы не смешиваются: `absent` вместе с `in` отклоняется (обе половины union strict)', () => {
+    // Смесь — это не «оба условия сразу», а опечатка: strict каждой половины ловит её
+    // здесь, иначе предусловие с лишним ключом молча пропускало бы гонку.
+    expect(
+      entityUpdatePrecondition.safeParse([
+        { aspect: 'orbis/task', field: 'status', absent: true, in: [1] },
+      ]).success,
+    ).toBe(false);
+  });
+
+  test('пункт без `in` и без `absent` отклоняется — условия в нём нет', () => {
+    expect(
+      entityUpdatePrecondition.safeParse([{ aspect: 'orbis/task', field: 'status' }]).success,
+    ).toBe(false);
+  });
+
+  test('`absent: false` отклоняется: «поле есть» выражается формой `in`, а не отрицанием', () => {
+    expect(
+      entityUpdatePrecondition.safeParse([
+        { aspect: 'orbis/task', field: 'due_date', absent: false },
+      ]).success,
+    ).toBe(false);
+  });
+
+  test('пустой список и пустой `in` отклоняются (min 1)', () => {
+    expect(entityUpdatePrecondition.safeParse([]).success).toBe(false);
+    expect(
+      entityUpdatePrecondition.safeParse([{ aspect: 'orbis/task', field: 'status', in: [] }])
+        .success,
+    ).toBe(false);
+  });
+
+  test('exec-схема принимает обе формы; тул-контракт модели не принимает ни одной', () => {
+    const input = {
+      id: UUID,
+      precondition: [ABSENT],
+      aspects: { 'orbis/task': { due_date: '2026-08-20' } },
+    };
+    expect(entityUpdateExecInput.safeParse(input).success).toBe(true);
+    expect(entityUpdateInput.safeParse(input).success).toBe(false);
   });
 });
 

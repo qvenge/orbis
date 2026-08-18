@@ -1082,12 +1082,21 @@ describe('ADE-срез 1: CAS-предусловие entity_update (С7, инв�
     if (!again.ok) {
       expect(again.error.code).toBe('CONFLICT');
       expect(again.error.message).toBe('предусловие не выполнено: orbis/task.status');
-      // ОДИН провалившийся элемент, а не весь массив: CAS-шаг по step_count (Задача 11)
-      // читает details.precondition.field, чтобы решить, повторять ли попытку.
+      // `precondition`/`actual` — ПЕРВЫЙ провалившийся элемент, а не весь массив: CAS-шаг
+      // по step_count читает details.precondition.field, чтобы решить, повторять ли попытку.
+      // Полный разбор — в mismatches (V1.7): по нему владельцу показывают, что разошлось.
       expect(again.error.details).toEqual({
         reason: 'precondition_failed',
         precondition: { aspect: 'orbis/task', field: 'status', in: ['inbox', 'planned'] },
         actual: 'in_progress',
+        mismatches: [
+          {
+            aspect: 'orbis/task',
+            field: 'status',
+            expected: ['inbox', 'planned'],
+            actual: 'in_progress',
+          },
+        ],
       });
     }
   });
@@ -1211,6 +1220,114 @@ describe('ADE-срез 1: CAS-предусловие entity_update (С7, инв�
     expect(Object.keys((rows[0]?.aspects as Record<string, unknown>) ?? {})).not.toContain(
       'orbis/task',
     );
+  });
+
+  test('форма absent (V1.7): поля нет → запись; поле появилось → CONFLICT с expected "absent"', async () => {
+    const id = newId();
+    await create(id, { 'orbis/task': { status: 'planned' } });
+
+    /** «Проставить срок, пока его не проставили» — ровно та правка, что не должна затирать чужую. */
+    const setDue = () =>
+      execute(
+        db,
+        req('entity_update', {
+          id,
+          precondition: [{ aspect: 'orbis/task', field: 'due_date', absent: true }],
+          aspects: { 'orbis/task': { due_date: '2026-08-20' } },
+        }),
+      );
+
+    const ok = await setDue();
+    expect(ok.ok).toBe(true);
+    expect(aspectOf(firstEntity(ok), 'orbis/task').due_date).toBe('2026-08-20');
+
+    // Повтор: поле уже есть — предусловие «пока его НЕТ» больше не выполнено.
+    const again = await setDue();
+    expect(again.ok).toBe(false);
+    if (!again.ok) {
+      expect(again.error.code).toBe('CONFLICT');
+      expect(again.error.message).toBe('предусловие не выполнено: orbis/task.due_date');
+      expect(again.error.details).toEqual({
+        reason: 'precondition_failed',
+        precondition: { aspect: 'orbis/task', field: 'due_date', absent: true },
+        actual: '2026-08-20',
+        mismatches: [
+          {
+            aspect: 'orbis/task',
+            field: 'due_date',
+            expected: 'absent',
+            actual: '2026-08-20',
+          },
+        ],
+      });
+    }
+
+    // Отсутствующий аспект — тоже «поля нет»: иначе первую же запись аспекта под absent
+    // (её главный случай) нельзя было бы защитить от гонки.
+    const bare = newId();
+    await create(bare, { 'orbis/note': {} });
+    const attached = await execute(
+      db,
+      req('entity_update', {
+        id: bare,
+        precondition: [{ aspect: 'orbis/task', field: 'status', absent: true }],
+        aspects: { 'orbis/task': { status: 'planned' } },
+      }),
+    );
+    expect(attached.ok).toBe(true);
+    expect(aspectOf(firstEntity(attached), 'orbis/task').status).toBe('planned');
+  });
+
+  test('mismatches содержит ВСЕ провалившиеся пункты, precondition/actual — первый', async () => {
+    // Владельцу показывают, ЧТО разошлось, а не только первое расхождение: предложение
+    // рутины применяется «всё или ничего», и «поправь и перезапусти» без полного списка
+    // превращается в угадайку. Бросок при этом один — предусловие не выполнено целиком.
+    const id = newId();
+    await create(id, {
+      'orbis/task': { status: 'in_progress', priority: 'high', due_date: '2026-08-20' },
+    });
+
+    const r = await execute(
+      db,
+      req('entity_update', {
+        id,
+        precondition: [
+          { aspect: 'orbis/task', field: 'status', in: ['planned'] }, // провал
+          { aspect: 'orbis/task', field: 'priority', in: ['high'] }, // выполнено
+          { aspect: 'orbis/task', field: 'due_date', absent: true }, // провал
+        ],
+        aspects: { 'orbis/task': { status: 'done' } },
+      }),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('CONFLICT');
+      // Сообщение — по первому, но с числом остальных: иначе текст врал бы, что расхождение одно.
+      expect(r.error.message).toBe('предусловие не выполнено: orbis/task.status (и ещё 1)');
+      const details = r.error.details as {
+        precondition: unknown;
+        actual: unknown;
+        mismatches: unknown[];
+      };
+      // Совместимость с verbs.ts: preconditionField читает details.precondition.field.
+      expect(details.precondition).toEqual({
+        aspect: 'orbis/task',
+        field: 'status',
+        in: ['planned'],
+      });
+      expect(details.actual).toBe('in_progress');
+      expect(details.mismatches).toEqual([
+        { aspect: 'orbis/task', field: 'status', expected: ['planned'], actual: 'in_progress' },
+        { aspect: 'orbis/task', field: 'due_date', expected: 'absent', actual: '2026-08-20' },
+      ]);
+    }
+
+    // Отказ на предусловии — до merge: не записано ничего.
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.execute(sql`SELECT aspects FROM entities WHERE id = ${id}`),
+    );
+    const stored = rows[0]?.aspects as Record<string, Record<string, unknown>>;
+    expect(aspectOf({ aspects: stored }, 'orbis/task').status).toBe('in_progress');
   });
 });
 

@@ -17,6 +17,7 @@ import {
   type ClaimTaskResult,
   checkpointInput,
   claimTaskInput,
+  type EntityUpdatePreconditionItem,
   type FinishInput,
   type FinishResult,
   finishInput,
@@ -139,20 +140,18 @@ function replayMismatch(verb: string, batchId: string): ToolDispatchResult {
   });
 }
 
-/** Поле провалившегося предусловия из details CONFLICT'а (executor кладёт один элемент). */
+/**
+ * Поле провалившегося предусловия из details CONFLICT'а. Executor кладёт туда ПЕРВЫЙ
+ * провалившийся элемент (полный список — в `details.mismatches`): глаголу нужен ровно
+ * один ответ — «прогон уже закрыт» это или что-то другое, — и первого пункта для него
+ * достаточно, а разбор всех расхождений адресован владельцу, не агенту.
+ */
 function preconditionField(details: unknown): string | undefined {
   if (typeof details !== 'object' || details === null) return undefined;
   const precondition = (details as { precondition?: unknown }).precondition;
   if (typeof precondition !== 'object' || precondition === null) return undefined;
   const field = (precondition as { field?: unknown }).field;
   return typeof field === 'string' ? field : undefined;
-}
-
-/** Форма CAS-предусловия `entity_update` (exec-схема; тул-контракта модели не касается). */
-interface Precondition {
-  aspect: string;
-  field: string;
-  in: unknown[];
 }
 
 /** Найденный прогон либо готовый структурный отказ — «или/или» без исключений. */
@@ -261,7 +260,7 @@ function savedRunMatches(
 }
 
 /** Предусловия «прогон всё ещё мой и всё ещё идёт» — общие шагу, чекпойнту и итогу. */
-function runStillMine(grantId: string): Precondition[] {
+function runStillMine(grantId: string): EntityUpdatePreconditionItem[] {
   return [
     { aspect: 'orbis/agent-run', field: 'outcome', in: ['running'] },
     { aspect: 'orbis/agent-run', field: 'grant_id', in: [grantId] },
@@ -627,7 +626,7 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
 interface TicketUpdate {
   aspects: Record<string, unknown>;
   /** Сверх общего «тикет ещё в работе». */
-  precondition?: Precondition[];
+  precondition?: EntityUpdatePreconditionItem[];
 }
 
 /** Общая часть двух завершающих глаголов: что писать в прогон и что — в тикет. */

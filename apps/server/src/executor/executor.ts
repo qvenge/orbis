@@ -13,9 +13,11 @@ import {
   batchAuditMessageId,
   batchExecuteInput,
   type EntityUpdatePrecondition,
+  type EntityUpdatePreconditionItem,
   entityCreateInput,
   entityUpdateExecInput,
   newId,
+  type PreconditionMismatch,
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
@@ -832,29 +834,62 @@ async function loadEntityForUpdate(
  * из prepareEntityUpdate сразу после loadEntityForUpdate — своего чтения не делает намеренно:
  * второй SELECT снял бы весь смысл, сверяя значение вне транзакционного замка.
  *
- * Сравнение по JSON-форме: поля аспектов скалярные, а `===` на объектах сравнивал бы ссылки.
- * Отсутствующее поле (и отсутствующий аспект) не совпадает ни с чем — захват несуществующего
- * тикета невозможен. Это обещание БЕЗУСЛОВНО: `actual === undefined` отсекается отдельно, до
- * сравнения, потому что JSON.stringify отображает undefined в undefined — и `in: [undefined]`
- * (одна опечатка в предусловии) иначе совпадал бы с отсутствием поля, то есть разрешал
- * правку ровно там, где предусловие и поставлено её запретить.
+ * Форма `in`: сравнение по JSON-форме — поля аспектов скалярные, а `===` на объектах сравнивал
+ * бы ссылки. Отсутствующее поле (и отсутствующий аспект) не совпадает ни с чем — захват
+ * несуществующего тикета невозможен. Это обещание БЕЗУСЛОВНО: `actual === undefined`
+ * отсекается отдельно, до сравнения, потому что JSON.stringify отображает undefined в
+ * undefined — и `in: [undefined]` (одна опечатка в предусловии) иначе совпадал бы с
+ * отсутствием поля, то есть разрешал правку ровно там, где предусловие и поставлено её
+ * запретить. Форма `absent` (V1.7) — зеркало того же: выполнена РОВНО когда поля нет.
+ *
+ * Проверяются ВСЕ пункты, даже когда первый уже провалился: бросок один, но список
+ * расхождений полный (`details.mismatches`). Выход на первом же несовпадении экономил бы
+ * несколько сравнений по уже прочитанной строке и стоил бы владельцу разбора по одному
+ * пункту за попытку — предложение рутины применяется «всё или ничего».
  */
 function assertPrecondition(precondition: EntityUpdatePrecondition, aspects: AspectsMap): void {
+  const mismatches: PreconditionMismatch[] = [];
+  /** Первый провалившийся ПУНКТ в исходной форме (не расхождение) — его читает verbs.ts. */
+  let failed: { item: EntityUpdatePreconditionItem; actual: unknown } | undefined;
+
   for (const p of precondition) {
     const actual = aspects[p.aspect]?.[p.field];
-    if (actual !== undefined && p.in.some((v) => JSON.stringify(v) === JSON.stringify(actual))) {
-      continue;
-    }
-    throw new ExecError('CONFLICT', `предусловие не выполнено: ${p.aspect}.${p.field}`, {
-      // Второй смысл CONFLICT помимо занятого client-UUID — различает их именно reason
-      // (см. докблок errors.ts): потребители кодов не должны гадать по тексту сообщения.
-      reason: 'precondition_failed',
-      // ОДИН провалившийся элемент, а не весь массив: CAS-шаг по счётчику (Задача 11)
-      // читает details.precondition.field, чтобы решить, повторять ли попытку.
-      precondition: p,
+    const satisfied =
+      'absent' in p
+        ? actual === undefined
+        : actual !== undefined && p.in.some((v) => JSON.stringify(v) === JSON.stringify(actual));
+    if (satisfied) continue;
+    failed ??= { item: p, actual };
+    mismatches.push({
+      aspect: p.aspect,
+      field: p.field,
+      expected: 'absent' in p ? 'absent' : p.in,
       actual,
     });
   }
+
+  if (failed === undefined) return;
+  const rest = mismatches.length - 1;
+  throw new ExecError(
+    'CONFLICT',
+    // Хвост «(и ещё N)» — чтобы текст не врал, будто расхождение одно: полный разбор
+    // читатель возьмёт из details.mismatches, но по сообщению обязан понять его размер.
+    `предусловие не выполнено: ${failed.item.aspect}.${failed.item.field}` +
+      (rest > 0 ? ` (и ещё ${rest})` : ''),
+    {
+      // Второй смысл CONFLICT помимо занятого client-UUID — различает их именно reason
+      // (см. докблок errors.ts): потребители кодов не должны гадать по тексту сообщения.
+      reason: 'precondition_failed',
+      // ПЕРВЫЙ провалившийся пункт, а не весь массив: CAS-шаг по счётчику читает
+      // details.precondition.field (verbs.ts), чтобы решить, повторять ли попытку, и
+      // менять эту форму ради нового поля значило бы ломать глаголы на ровном месте.
+      precondition: failed.item,
+      actual: failed.actual,
+      // Полный список — для владельца (V1.7): по нему карточка предложения показывает,
+      // что именно разошлось, вместо «поправь первое и попробуй ещё раз».
+      mismatches,
+    },
+  );
 }
 
 /**

@@ -71,28 +71,62 @@ export const entityUpdateUiInput = entityUpdateInput
 export type EntityUpdateUiInput = z.infer<typeof entityUpdateUiInput>;
 
 /**
- * CAS-предусловие правки (С7): значения полей аспектов, при которых правка допустима.
- * Executor сверяет его со строкой, прочитанной ПОД `FOR UPDATE`, и пишет в той же
- * транзакции — это и делает захват тикета исполнителем атомарным (два конкурентных
+ * Пункт CAS-предусловия правки (С7): условие на одно поле аспекта, при котором правка
+ * допустима. Executor сверяет его со строкой, прочитанной ПОД `FOR UPDATE`, и пишет в той
+ * же транзакции — это и делает захват тикета исполнителем атомарным (два конкурентных
  * `planned → in_progress` не могут оба увидеть `planned`).
  *
- * `in` — список ДОПУСТИМЫХ текущих значений (min 1: пустой список запрещал бы правку
- * всегда, и это была бы опечатка, а не намерение). Элемент strict — лишний ключ в
+ * Форм две, и вторая не сводится к первой:
+ * - `in` — список ДОПУСТИМЫХ текущих значений (min 1: пустой список запрещал бы правку
+ *   всегда, и это была бы опечатка, а не намерение);
+ * - `absent: true` — «применимо, пока поля НЕТ» (V1.7). Через `in` это невыразимо: там
+ *   отсутствие поля намеренно не совпадает ни с чем (докблок `assertPrecondition`), а
+ *   предложение рутины сплошь и рядом ДОПИСЫВАЕТ поле, которого ещё не было, — и обязано
+ *   проиграть тому, кто заполнил его первым, а не затереть его молча.
+ *
+ * Обе половины union strict, поэтому смесь `in` + `absent` отклоняется: лишний ключ в
  * предусловии почти всегда опечатка имени поля, а «предусловие с опечаткой» молча
- * пропускало бы гонку.
+ * пропускало бы ровно ту гонку, ради которой его и поставили. По той же причине нет
+ * `absent: false` — «поле есть, значение любое» это отдельное намерение, и пока за ним
+ * никто не пришёл, его отсутствие лучше молчаливого согласия на опечатку.
  */
-export const entityUpdatePrecondition = z
-  .array(
-    z
-      .object({
-        aspect: z.string().min(1),
-        field: z.string().min(1),
-        in: z.array(z.unknown()).min(1),
-      })
-      .strict(),
-  )
-  .min(1);
+export const entityUpdatePreconditionItem = z.union([
+  z
+    .object({
+      aspect: z.string().min(1),
+      field: z.string().min(1),
+      in: z.array(z.unknown()).min(1),
+    })
+    .strict(),
+  z
+    .object({
+      aspect: z.string().min(1),
+      field: z.string().min(1),
+      absent: z.literal(true),
+    })
+    .strict(),
+]);
+export type EntityUpdatePreconditionItem = z.infer<typeof entityUpdatePreconditionItem>;
+
+export const entityUpdatePrecondition = z.array(entityUpdatePreconditionItem).min(1);
 export type EntityUpdatePrecondition = z.infer<typeof entityUpdatePrecondition>;
+
+/**
+ * Одно расхождение предусловия — executor кладёт в `details.mismatches` ПО ОДНОМУ на
+ * каждый провалившийся пункт (V1.7). `expected` повторяет форму пункта: список допустимых
+ * значений либо литерал `'absent'`.
+ *
+ * Почему весь список, а не первое расхождение: предложение рутины применяется «всё или
+ * ничего», и владельцу, чтобы решить «принять заново или отклонить», нужно видеть, ЧТО
+ * разошлось. С одним первым пунктом разбор превращается в угадайку — поправил его,
+ * применил, получил тот же отказ по следующему.
+ */
+export interface PreconditionMismatch {
+  aspect: string;
+  field: string;
+  expected: unknown[] | 'absent';
+  actual: unknown;
+}
 
 /**
  * Надмножество для executor'а: UI-форма (bodyDoc) + серверное CAS-предусловие (С7).
