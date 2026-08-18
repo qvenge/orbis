@@ -8,13 +8,14 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { batchAuditMessageId, globalThreadId, newId, rejectMessageId } from '@orbis/shared';
 import { eq, inArray } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { ActionRecord, ExecuteResult, WireEntity } from '../executor/types';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
-import { approvePending, rejectPending } from './pending';
+import { approvePending, createPending, rejectPending } from './pending';
 
 requireEnv();
 
@@ -381,7 +382,12 @@ describe('rejectPending: отклонение карточки-запроса', 
     const reject = msgs[1];
     expect(reject?.id).toBe(rejectMessageId(userA, pendingId)); // детерминированный PK (fix round)
     expect(reject?.role).toBe('system');
-    expect(reject?.metadata).toEqual({ type: 'confirmation_rejected', rejects: pendingId });
+    // reason — причина отказа (V1.8): у кнопки владельца она всегда 'owner'
+    expect(reject?.metadata).toEqual({
+      type: 'confirmation_rejected',
+      rejects: pendingId,
+      reason: 'owner',
+    });
     expect(await archivedOf(userA, target.id)).toBe(false);
 
     // Повторный reject — идемпотентен: второго сообщения нет
@@ -412,5 +418,96 @@ describe('rejectPending: отклонение карточки-запроса', 
       expect(r.error.code).toBe('VALIDATION');
       expect(r.error.message).toContain('исполнено');
     }
+  });
+});
+
+// V1.5/V1.6/V1.8: pending предложения рутины несёт источник 'routine' и прогон, а отказ —
+// причину: «заменено новым прогоном» обязано быть отличимо от «владелец отказался».
+describe('атрибуция рутины: source routine, run_id и причина отказа', () => {
+  test('pending с source=routine и run_id: approve исполняет с runId → action журнала несёт run_id и source routine', async () => {
+    const target = await seedEntity(userA, { title: 'Цель предложения рутины', tags: [] });
+    const runId = newId();
+    const { pendingId } = await withIdentity(db, userA, (tx) =>
+      createPending(tx, {
+        actor: { userId: userA, kind: 'ai', source: 'routine', runId },
+        tool: 'batch_execute',
+        input: {
+          batch_id: newId(),
+          operations: [{ tool: 'entity_update', input: { id: target.id, archived: true } }],
+        },
+        level: 'explicit-confirmation',
+        clock,
+      }),
+    );
+
+    const r = await approvePending(db, { ownerId: userA, pendingId, clock });
+    expect(r.ok).toBe(true);
+    expect(await archivedOf(userA, target.id)).toBe(true);
+
+    // Атрибуция доживает до журнала: подтвердил владелец, но правку сделала рутина
+    // в конкретном прогоне — по run_id откат прогона (rollback.ts) найдёт это действие
+    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
+    const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
+    expect(action?.actor_kind).toBe('ai');
+    expect(action?.source).toBe('routine');
+    expect(action?.run_id).toBe(runId);
+  });
+
+  test('rejectPending с reason superseded → текст «заменено» и metadata.reason; повтор → alreadyRejected с ИСХОДНОЙ причиной', async () => {
+    const { pendingId } = await pendingArchive(undefined);
+
+    const r = await rejectPending(db, { ownerId: userA, pendingId, reason: 'superseded' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.alreadyRejected).toBe(false);
+    expect(r.reason).toBe('superseded');
+
+    const msg = await messageById(userA, rejectMessageId(userA, pendingId));
+    expect(msg?.content).toBe('Предложение заменено новым прогоном');
+    expect(msg?.metadata).toEqual({
+      type: 'confirmation_rejected',
+      rejects: pendingId,
+      reason: 'superseded',
+    });
+
+    // Журнал append-only (§4.6): второй вызов с ДРУГОЙ причиной сообщение не переписывает
+    // и возвращает ту причину, что записана — иначе владельцу показали бы не тот повод
+    const again = await rejectPending(db, { ownerId: userA, pendingId, reason: 'stale' });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.alreadyRejected).toBe(true);
+    expect(again.reason).toBe('superseded');
+    expect(msg?.content).toBe('Предложение заменено новым прогоном');
+  });
+
+  test('reason по умолчанию — owner; reject-сообщение старой формы (без reason) читается как owner', async () => {
+    const { pendingId } = await pendingArchive(undefined);
+    const r = await rejectPending(db, { ownerId: userA, pendingId });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.reason).toBe('owner');
+    const msg = await messageById(userA, rejectMessageId(userA, pendingId));
+    expect(msg?.content).toBe('Подтверждение отклонено');
+
+    // Сообщения, написанные ДО появления причины, ключа reason не несут (metadata
+    // неизменяема) — читаются как отказ владельца, а не как «причина неизвестна»
+    const legacy = await pendingArchive(undefined);
+    await withIdentity(db, userA, (tx) =>
+      appendMessageIdempotent(tx, {
+        id: rejectMessageId(userA, legacy.pendingId),
+        threadId: globalThreadId(userA),
+        role: 'system',
+        content: 'Подтверждение отклонено',
+        metadata: { type: 'confirmation_rejected', rejects: legacy.pendingId },
+      }),
+    );
+    const old = await rejectPending(db, {
+      ownerId: userA,
+      pendingId: legacy.pendingId,
+      reason: 'stale',
+    });
+    expect(old.ok).toBe(true);
+    if (!old.ok) return;
+    expect(old.alreadyRejected).toBe(true);
+    expect(old.reason).toBe('owner');
   });
 });

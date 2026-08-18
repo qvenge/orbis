@@ -84,14 +84,20 @@ export const aiRouter = router({
       return r;
     }),
 
-  /** Отклонение pending-подтверждения (§7.10): reject-сообщение в тред карточки. */
+  /**
+   * Отклонение pending-подтверждения (§7.10): reject-сообщение в тред карточки.
+   * Причина входом НЕ принимается: через эту процедуру отказывает владелец кнопкой, и
+   * это всегда 'owner' — 'superseded'/'stale' проставляет раннер рутины, зовя
+   * rejectPending напрямую. В ответе причина есть (V1.8): при повторном отказе она
+   * ИСХОДНАЯ, и клиенту важно отличить «владелец отказался» от «уже заменено».
+   */
   reject: ownerOnlyProcedure.input(pendingIdInput).mutation(async ({ ctx, input }) => {
     const r = await rejectPending(ctx.db, {
       ownerId: ctx.actorUserId,
       pendingId: input.pendingId,
     });
     if (!r.ok) throw execErrorToTRPC(r.error);
-    return { pendingId: r.pendingId, alreadyRejected: r.alreadyRejected };
+    return { pendingId: r.pendingId, alreadyRejected: r.alreadyRejected, reason: r.reason };
   }),
 
   /**

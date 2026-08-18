@@ -6,7 +6,21 @@ export type ActorKind = 'owner' | 'ai' | 'agent';
 // 'ui' — прямое действие владельца в UI (entity.update / relation.*), отличимое в
 // журнале от клиентского create ('fast_path'|'quick_capture'), внутреннего чата
 // ('chat'), MCP-агента ('mcp') и системного отката ('system').
-export type MutationSource = 'chat' | 'fast_path' | 'quick_capture' | 'mcp' | 'ui' | 'system';
+//
+// 'routine' (V1.5) — правка внутреннего исполнителя в прогоне рутины. Отдельный вариант,
+// а не 'chat': за чатом стоит владелец, который только что попросил, а за рутиной —
+// расписание, и владелец обязан видеть эту разницу в ленте. Не 'system': системный audit
+// из ленты спрятан (chat/messages.ts), а правку рутины владелец видит и отменяет.
+// Бухгалтерия самого прогона (создание, шаги, исход) идёт с 'system' — она не правка
+// графа по существу, а протокол (рулинг Р-7).
+export type MutationSource =
+  | 'chat'
+  | 'fast_path'
+  | 'quick_capture'
+  | 'mcp'
+  | 'ui'
+  | 'system'
+  | 'routine';
 
 export interface ExecuteRequest {
   actorUserId: string; // владелец графа (D11); в MVP актор-владелец = owner

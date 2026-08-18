@@ -32,9 +32,16 @@ import { AuditIdConflictError } from './types';
  *   кэше react-query (features/chat/useFastPath.ts), а из БД приезжает голая строка;
  * - 'mcp' | 'ui' | 'quick_capture' — карточки в ленте не было НИКОГДА, ни живьём, ни
  *   после перезагрузки: карточка тут была бы новой функцией, а не починкой;
- * - 'system' — audit скрыт фильтром ленты (chat/messages.ts), рисовать нечего.
+ * - 'system' — audit скрыт фильтром ленты (chat/messages.ts), рисовать нечего;
+ * - 'routine' (V1.5) — как fast_path, только хуже: у правки прогона НЕТ другого носителя
+ *   вовсе. Ответа ассистента за ней не стоит (диалога не было), клиентского кэша тоже
+ *   (владельца в этот момент не было в приложении) — audit-сообщение единственное, что
+ *   он увидит, и без клиентской формы от него осталась бы голая строка без «Отменить».
  */
-const FEED_CARD_SOURCES: ReadonlySet<MutationSource> = new Set<MutationSource>(['fast_path']);
+const FEED_CARD_SOURCES: ReadonlySet<MutationSource> = new Set<MutationSource>([
+  'fast_path',
+  'routine',
+]);
 
 /**
  * Карточка ленты — ВЕТКА серверного union'а Card (tools/registry.ts), а не копия его

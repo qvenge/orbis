@@ -70,7 +70,7 @@ const pendingRecord = z.object({
   tool: z.string().min(1), // executor-форма (attach_<aspect_id с заменой «/»>)
   input: z.record(z.unknown()), // immutable payload — envelope-валидирован при создании
   actor_kind: z.enum(['owner', 'ai', 'agent']),
-  source: z.enum(['chat', 'mcp']),
+  source: z.enum(['chat', 'mcp', 'routine']),
   /**
    * Грант исходного вызова (С2) — вторая половина той же атрибуции: approve владельца
    * исполняет план от имени запросившего, и владелец обязан видеть, КАКОЙ доступ его
@@ -79,6 +79,13 @@ const pendingRecord = z.object({
    * миграции не нужно: metadata — jsonb, схема читается без .strict().
    */
   actor_grant_id: z.string().optional(),
+  /**
+   * Прогон рутины, предложивший этот план (V1.6). Тот же приём, что с грантом: одобрил
+   * владелец, но в журнале §7.8 остаётся видно, ЧЕЙ прогон это предложил — по run_id
+   * действие находит откат прогона (rollback.ts) и история рутины. Ключа нет у чата,
+   * UI и MCP — там прогона нет; у записей до этой работы его тоже не было.
+   */
+  run_id: z.string().uuid().optional(),
   created_at: z.string(),
 });
 
@@ -87,15 +94,18 @@ export type PendingRecord = z.infer<typeof pendingRecord>;
 export interface PendingActor {
   userId: string; // владелец графа (D11)
   kind: ActorKind;
-  source: 'chat' | 'mcp';
+  source: 'chat' | 'mcp' | 'routine';
   /** Грант, от имени которого пришёл запрос (С2); нет у чата и UI — там актор сам владелец. */
   grantId?: string;
+  /** Прогон рутины, предложивший план (V1.6); есть только у source 'routine'. */
+  runId?: string;
 }
 
 /**
  * Карточка-запрос explicit-confirmation (§7.10): системное сообщение с
  * metadata.pending (immutable payload) + metadata.cards[confirmation_card
- * mode:'explicit']. НИЧЕГО в граф и журнал: сообщение не несёт metadata.actions,
+ * mode:'explicit'] — или карточка из args.card, если вызывающий рисует запрос по-своему
+ * (V1.6). НИЧЕГО в граф и журнал: сообщение не несёт metadata.actions,
  * поэтому для журнала §7.8 (undo-сканы containment'ом по actions) невидимо.
  *
  * id сообщения = pendingId — прямая адресация; поиск при approve/reject —
@@ -119,6 +129,13 @@ export async function createPending(
      */
     dedupeKey?: string;
     clock?: () => Date;
+    /**
+     * Карточка вместо confirmation_card по умолчанию (V1.6): предложение рутины рисуется
+     * своей карточкой (proposal_card) — у неё другой текст, другие кнопки и статус с
+     * сервера. Механика pending при этом та же: карточка — только представление, а
+     * исполняет approve сохранённый payload. Не задана → confirmation_card.
+     */
+    card?: Card;
   },
 ): Promise<{ pendingId: string; card: Card }> {
   if (args.level !== 'explicit-confirmation') {
@@ -130,7 +147,12 @@ export async function createPending(
     args.dedupeKey !== undefined ? pendingMessageId(args.actor.userId, args.dedupeKey) : newId();
   const threadId = args.threadId ?? (await ensureGlobalThread(tx, args.actor.userId));
   const summary = pendingSummary(args.tool, args.input);
-  const card: Card = { kind: 'confirmation_card', mode: 'explicit', pendingId, summary };
+  const card: Card = args.card ?? {
+    kind: 'confirmation_card',
+    mode: 'explicit',
+    pendingId,
+    summary,
+  };
   const createdAt = (args.clock ?? (() => new Date()))();
   // Идемпотентность по pendingId: при dedupeKey (batch_id) повтор того же batch даёт тот
   // же PK → ON CONFLICT возвращает ИСХОДНУЮ запись (append-only — сохранённый payload
@@ -151,6 +173,8 @@ export async function createPending(
         // Условная запись, а не `actor_grant_id: undefined`: ключ отсутствует у путей
         // без гранта — как в action'е журнала (executor.ts) и как проверяет тест
         ...(args.actor.grantId !== undefined && { actor_grant_id: args.actor.grantId }),
+        // То же и для прогона (V1.6): ключа нет у путей без рутины
+        ...(args.actor.runId !== undefined && { run_id: args.actor.runId }),
         created_at: createdAt.toISOString(),
       },
       cards: [card],
@@ -198,13 +222,51 @@ async function findPendingMessage(tx: Tx, pendingId: string): Promise<FoundPendi
   return { threadId: row.thread_id as string, pending: parsed.data };
 }
 
-/** Pending отклонён ⇔ существует сообщение {type:'confirmation_rejected', rejects}. */
-async function isRejected(tx: Tx, pendingId: string): Promise<boolean> {
+/**
+ * Причина отказа (V1.8): «владелец отказался» и «прогон заменил своё же предложение
+ * новым» — разные события, и рутина обязана их различать, иначе замена читалась бы как
+ * отказ владельца и останавливала бы её навсегда.
+ *
+ * 'owner' — кнопка владельца (по умолчанию); 'superseded' — раннер гасит предложение
+ * прошлого прогона своим новым; 'stale' — состояние изменилось, предложение больше
+ * не применимо.
+ */
+export type RejectReason = 'owner' | 'superseded' | 'stale';
+
+const rejectReason = z.enum(['owner', 'superseded', 'stale']);
+
+/** Текст reject-сообщения по причине — владелец читает ленту, а не значение поля. */
+const REJECT_CONTENT: Record<RejectReason, string> = {
+  owner: 'Подтверждение отклонено',
+  superseded: 'Предложение заменено новым прогоном',
+  stale: 'Предложение устарело: состояние изменилось',
+};
+
+/**
+ * Причина отказа pending'а, если он отклонён; undefined — не отклонён.
+ *
+ * Проба контейнментом — прежняя, {type, rejects} БЕЗ причины: отказ обязан находиться
+ * независимо от того, кто и почему его записал (иначе approve исполнил бы заменённое
+ * предложение). Причина читается уже из найденного сообщения.
+ *
+ * Сообщения, написанные до появления причины, ключа reason не несут (metadata
+ * неизменяема, §4.6) — читаются как отказ владельца: до V1.8 отклонить pending могла
+ * только его кнопка, так что это не догадка, а факт истории.
+ */
+async function rejectedReason(tx: Tx, pendingId: string): Promise<RejectReason | undefined> {
   const probe = JSON.stringify({ type: 'confirmation_rejected', rejects: pendingId });
   const rows = await tx.execute(
-    sql`SELECT 1 AS hit FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
+    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
   );
-  return rows.length > 0;
+  const row = rows[0];
+  if (!row) return undefined;
+  const parsed = rejectReason.safeParse((row.metadata as { reason?: unknown }).reason);
+  return parsed.success ? parsed.data : 'owner';
+}
+
+/** Pending отклонён ⇔ существует сообщение {type:'confirmation_rejected', rejects}. */
+async function isRejected(tx: Tx, pendingId: string): Promise<boolean> {
+  return (await rejectedReason(tx, pendingId)) !== undefined;
 }
 
 /**
@@ -290,6 +352,9 @@ export async function approvePending(
         // Грант исходного вызова доживает до исполнения (С2): подтвердил владелец, но в
         // журнале §7.8 видно, КАКОЙ доступ этот план попросил
         actorGrantId: found.pending.actor_grant_id,
+        // Прогон рутины — та же логика, что с грантом (V1.6): предложение одобрил
+        // владелец, но сделала правку рутина, и по run_id её найдёт откат прогона
+        runId: found.pending.run_id,
         threadId: found.threadId,
         operations,
         batchId: args.pendingId,
@@ -338,7 +403,7 @@ export async function approvePending(
 }
 
 export type RejectPendingResult =
-  | { ok: true; pendingId: string; alreadyRejected: boolean }
+  | { ok: true; pendingId: string; alreadyRejected: boolean; reason: RejectReason }
   | { ok: false; error: StructuredError };
 
 /**
@@ -354,11 +419,17 @@ export type RejectPendingResult =
  * (или сама коммитится первой, и approve увидит reject). Повторный reject
  * идемпотентен: проверка isRejected под замком + ON CONFLICT DO NOTHING по
  * детерминированному PK (двойная страховка — второго сообщения не бывает).
+ *
+ * Причина (V1.8) определяет текст сообщения и уезжает в metadata.reason. Повторный
+ * reject возвращает ИСХОДНУЮ причину, а не переданную: сообщение append-only, и врать
+ * про то, что записано в ленте, нельзя — раннер, гасящий уже отклонённое владельцем
+ * предложение, обязан увидеть 'owner', а не своё 'superseded'.
  */
 export async function rejectPending(
   db: Db,
-  args: { ownerId: string; pendingId: string },
+  args: { ownerId: string; pendingId: string; reason?: RejectReason },
 ): Promise<RejectPendingResult> {
+  const reason = args.reason ?? 'owner';
   try {
     return await withIdentity(db, args.ownerId, async (tx) => {
       await acquirePendingLock(tx, args.pendingId); // первым statement'ом — см. док выше
@@ -380,17 +451,23 @@ export async function rejectPending(
           { pendingId: args.pendingId, auditId },
         );
       }
-      if (await isRejected(tx, args.pendingId)) {
-        return { ok: true as const, pendingId: args.pendingId, alreadyRejected: true };
+      const already = await rejectedReason(tx, args.pendingId);
+      if (already !== undefined) {
+        return {
+          ok: true as const,
+          pendingId: args.pendingId,
+          alreadyRejected: true,
+          reason: already,
+        };
       }
       await appendMessageIdempotent(tx, {
         id: rejectMessageId(args.ownerId, args.pendingId),
         threadId: msg.threadId,
         role: 'system',
-        content: 'Подтверждение отклонено',
-        metadata: { type: 'confirmation_rejected', rejects: args.pendingId },
+        content: REJECT_CONTENT[reason],
+        metadata: { type: 'confirmation_rejected', rejects: args.pendingId, reason },
       });
-      return { ok: true as const, pendingId: args.pendingId, alreadyRejected: false };
+      return { ok: true as const, pendingId: args.pendingId, alreadyRejected: false, reason };
     });
   } catch (e) {
     if (e instanceof ExecError) {

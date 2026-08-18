@@ -142,6 +142,27 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     if (r.card?.kind === 'entity_card') expect(action?.id).toBe(r.card.undoActionId as string);
   });
 
+  // V1.5: прогон — вторая половина атрибуции. Без него правка модели неотличима от
+  // любой другой чатовой, и откат прогона (rollback.ts ищет действия контейнмент-пробой
+  // по run_id) не нашёл бы того, что она сделала.
+  test('entity_update с ctx.runId: прогон доезжает до action журнала', async () => {
+    const host = await seedEntity(userA, { title: 'Хост-тред прогона', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const target = await seedEntity(userA, { title: 'Цель прогона', tags: [] });
+    const runId = newId();
+
+    const r = await dispatchTool(ctxFor({ threadId, source: 'chat', runId }), 'entity_update', {
+      id: target.id,
+      title: 'Правка в прогоне',
+    });
+    expect(r.status).toBe('ok');
+
+    const msgs = await messagesIn(userA, threadId);
+    expect(msgs.length).toBe(1);
+    const action = (msgs[0]?.metadata as { actions?: ActionRecord[] }).actions?.[0];
+    expect(action?.run_id).toBe(runId);
+  });
+
   test('attach_orbis_task: аспект установлен; без threadId audit — в глобальный тред', async () => {
     const target = await seedEntity(userA, { title: 'Без аспекта', tags: [] });
     const globalThread = await withIdentity(db, userA, (tx) => ensureGlobalThread(tx, userA));
@@ -695,11 +716,26 @@ describe('dispatchTool: thread_post — сообщение в тред сущн�
     expect(msgs[0]?.metadata).toEqual({ author_kind: 'agent' });
   });
 
-  test('внутренний AI (actorKind=ai): без пометки author_kind', async () => {
+  // V1.6: у поста в треде теперь два не-владельческих автора — внешний агент и
+  // внутренний исполнитель рутины. Оба помечаются, иначе владелец не отличит их
+  // заметку от своей; прогон в run_id связывает пост с историей рутины.
+  test('внутренний AI (actorKind=ai) с runId: пометка author_kind=ai и run_id прогона', async () => {
     const target = await seedEntity(userA, { title: 'Задача AI', tags: [] });
-    const r = await dispatchTool(ctxFor(), 'thread_post', {
+    const runId = newId();
+    const r = await dispatchTool(ctxFor({ runId }), 'thread_post', {
       entity_id: target.id,
       content: 'Заметка от AI.',
+    });
+    expect(r.status).toBe('ok');
+    const msgs = await messagesIn(userA, entityThreadId(userA, target.id));
+    expect(msgs[0]?.metadata).toEqual({ author_kind: 'ai', run_id: runId });
+  });
+
+  test('владелец (actorKind=owner): metadata пустая — помечать автором самого владельца нечего', async () => {
+    const target = await seedEntity(userA, { title: 'Задача владельца', tags: [] });
+    const r = await dispatchTool(ctxFor({ actorKind: 'owner' }), 'thread_post', {
+      entity_id: target.id,
+      content: 'Заметка владельца.',
     });
     expect(r.status).toBe('ok');
     const msgs = await messagesIn(userA, entityThreadId(userA, target.id));

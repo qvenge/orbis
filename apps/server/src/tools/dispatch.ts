@@ -83,7 +83,12 @@ export interface ToolCallCtx {
   db: Db;
   actorUserId: string;
   actorKind: ActorKind; // 'owner' | 'ai' | 'agent'; в ExecuteRequest идёт как есть
-  source: 'chat' | 'mcp';
+  /**
+   * Поверхность вызова. 'routine' (V1.5) — внутренний исполнитель в прогоне рутины:
+   * не 'chat', потому что за прогоном не стоит владелец, который только что попросил,
+   * и правки рутины он обязан отличать в ленте.
+   */
+  source: 'chat' | 'mcp' | 'routine';
   threadId?: string; // тред диалога — туда лягут audit-сообщения
   explicitCommand: boolean; // вход политики §7.10; в 1b всегда false
   clock?: () => Date;
@@ -100,6 +105,13 @@ export interface ToolCallCtx {
    * дальше в запись журнала (§7.8).
    */
   grant?: GrantRef;
+  /**
+   * Прогон, в рамках которого идёт вызов (V1.5) — вторая половина атрибуции рядом с
+   * грантом: source говорит «рутина», это поле — КАКОЙ её прогон. Доезжает до action
+   * журнала как run_id, до pending-записи как run_id и до поста в треде. Ключа нет у
+   * обычного чата и MCP-вызова вне прогона.
+   */
+  runId?: string;
 }
 
 export type ToolDispatchResult =
@@ -573,6 +585,9 @@ async function runMutation(
           kind: ctx.actorKind,
           source: ctx.source,
           grantId: ctx.grant?.id,
+          // Прогон доживает до исполнения так же, как грант (V1.6): подтвердит владелец,
+          // но в журнале останется видно, какой прогон это предложил
+          runId: ctx.runId,
         },
         tool,
         input: payload,
@@ -598,6 +613,8 @@ async function runMutation(
       threadId: ctx.threadId,
       // undefined у чатовых и UI-путей — executor такой ключ в action не пишет
       actorGrantId: ctx.grant?.id,
+      // То же и для прогона (V1.5): по run_id действия прогона находит откат (rollback.ts)
+      runId: ctx.runId,
       operations: [{ tool, input: payload }],
       clock: ctx.clock,
     },
@@ -863,9 +880,17 @@ async function runThreadPost(
       threadId,
       role: 'user' as const,
       content: parsed.content,
-      // Пометка автора — только для внешнего агента (§9.3): владелец видит, что
-      // заметку в треде оставил не он и не внутренний AI
-      metadata: ctx.actorKind === 'agent' ? { author_kind: ctx.actorKind } : {},
+      // Пометка автора — для всех НЕ-владельческих постов (§9.3, V1.6): внешний агент
+      // и внутренний AI одинаково пишут в тред не от лица владельца, и он обязан это
+      // видеть. Пометки нет только у самого владельца — сообщать ему, что автор он,
+      // нечего. Прогон (run_id) связывает пост с историей рутины; ключа нет вне прогона.
+      metadata:
+        ctx.actorKind === 'owner'
+          ? {}
+          : {
+              author_kind: ctx.actorKind,
+              ...(ctx.runId !== undefined && { run_id: ctx.runId }),
+            },
     };
     // client-UUID (§2.1, как appendUserMessage владельца): повтор с тем же id —
     // идемпотентный ретрай (ON CONFLICT → исходный пост, append-only игнорирует новый

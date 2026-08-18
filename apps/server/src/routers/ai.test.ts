@@ -118,13 +118,19 @@ describe('ai.approve / ai.reject: полный цикл против живой 
     const { target, pendingId } = await seedPendingArchive();
     const caller = callerFor(userA);
 
+    // reason (V1.8): кнопка владельца — всегда 'owner'; 'superseded'/'stale' проставляет
+    // раннер рутины, и клиент обязан их различать
     const r = await caller.ai.reject({ pendingId });
-    expect(r).toEqual({ pendingId, alreadyRejected: false });
+    expect(r).toEqual({ pendingId, alreadyRejected: false, reason: 'owner' });
     const err = await trpcError(caller.ai.approve({ pendingId }));
     expect(err.code).toBe('BAD_REQUEST'); // VALIDATION «отклонено» маппингом errors.ts
     expect(await archivedOf(target.id)).toBe(false);
 
-    expect(await caller.ai.reject({ pendingId })).toEqual({ pendingId, alreadyRejected: true });
+    expect(await caller.ai.reject({ pendingId })).toEqual({
+      pendingId,
+      alreadyRejected: true,
+      reason: 'owner',
+    });
   });
 
   test('reject уже исполненного pending → BAD_REQUEST; reject чужого → NOT_FOUND', async () => {

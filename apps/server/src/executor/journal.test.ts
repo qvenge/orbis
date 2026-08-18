@@ -481,4 +481,42 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     expect(action.actor_grant_id).toBe(grantId);
     expect(action.run_id).toBe(runId);
   });
+
+  // V1.5: правки рутины владелец видит в ленте как свои быстрые — с кнопкой «Отменить».
+  // Собственного носителя карточки у источника 'routine' нет (ответа ассистента, как у
+  // 'chat', не будет: за прогоном не стоит диалог), поэтому единственный носитель —
+  // audit-сообщение, и форма обязана быть клиентской (с kind), иначе renderCards уйдёт
+  // в default и от карточки останется голая строка content.
+  test('12. source=routine: карточка ленты клиентской формы с Undo (белый список, как fast_path)', async () => {
+    const user = freshUserId();
+    const runId = newId();
+    const r = ok(
+      await execute(
+        db,
+        req(
+          user,
+          'entity_create',
+          { title: 'Создано рутиной', tags: [] },
+          { actorKind: 'ai', source: 'routine', runId },
+        ),
+        { sink },
+      ),
+    );
+    const e = r.results[0] as WireEntity;
+
+    const msg = first(await messagesInThread(globalThreadId(user)));
+    const action = first(actionsOf(msg));
+    expect(action.source).toBe('routine');
+    expect(action.run_id).toBe(runId);
+    expect((msg.metadata as { cards?: unknown[] }).cards).toEqual([
+      {
+        kind: 'entity_card',
+        entityId: e.id,
+        title: 'Создано рутиной',
+        aspects: [],
+        keyFields: {},
+        undoActionId: r.actionId,
+      },
+    ]);
+  });
 });
