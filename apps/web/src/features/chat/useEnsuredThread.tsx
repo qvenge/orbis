@@ -18,10 +18,19 @@ export type EnsuredThread =
  * ПОВЕРХ уже закешированных сообщений. Мутация идемпотентна, но платить ею и миганием за каждое
  * переключение вкладок незачем.
  *
- * Ключ — id сущности, и это безопасно: id уникален глобально, чужой владелец за ним встать не
- * может. У ГЛОБАЛЬНОГО треда такого ключа нет (он «мой», а кто «я» — модулю неизвестно), и
- * кешировать его по пустому ключу значило бы отдать тред прежнего владельца после смены
- * аккаунта в той же вкладке. Поэтому глобальный чат здесь не кешируется вовсе.
+ * Ключ — id сущности, и это безопасно НЕ потому, что id уникален (уникальность сама по себе
+ * ничего не обещает), а потому, что запись доступна только своему владельцу: id треда —
+ * формула от владельца И записи (`entityThreadId(ownerId, entityId)`), а `chat.ensureThread` —
+ * ownerOnly. Чужой актор той же записи не откроет вовсе, а свой получит ровно тот id, что
+ * лежит в кеше.
+ *
+ * У ГЛОБАЛЬНОГО треда ключа нет — потому что модуль НАМЕРЕННО не знает владельца. Ключ
+ * `global:${userId}` из `useAuth()` (AuthProvider) технически доступен и снял бы заодно
+ * предсуществующее «ensure на каждый вход во вкладку Чат», но заводить в этом модуле знание об
+ * аккаунте — решение шире хвоста, и оно отложено владельцу. Пока владелец не решил, кешировать
+ * глобальный тред по пустому ключу нельзя: после смены аккаунта в той же вкладке (AuthProvider
+ * разлогинивает без перезагрузки) модуль отдал бы тред прежнего. Поэтому глобальный чат здесь
+ * не кешируется вовсе.
  *
  * Кеш модульный, а не в сторе: он не состояние приложения, а память о совершённом действии, —
  * подписываться на него некому, и перерисовок от него быть не должно.
@@ -58,8 +67,14 @@ export function resetEnsuredThreads(): void {
  * ни в какой момент.
  *
  * Гвард на ref, а не «эффект с пустыми зависимостями»: двойной прогон эффектов иначе стоил бы
- * двух мутаций. Про смену записи гварду знать незачем — вкладку монтируют с key по id записи
- * (DetailScreen), и на соседней записи это уже другой экземпляр.
+ * двух мутаций. Но помнит он не «стартовали ли вообще», а ДЛЯ КАКОЙ записи стартовали, и это не
+ * запас на будущее. Сегодняшние вызывающие меняют запись только вместе с экземпляром (вкладку
+ * монтируют с `key` по id записи — DetailScreen), однако хук общий и экспортированный: первый
+ * же вызывающий без `key` получил бы на новой записи тред ПРЕЖНЕЙ — и сообщения уехали бы не
+ * туда, молча. Поэтому расхождение id хук лечит сам: сначала смотрит в кеш, при промахе —
+ * `pending` и новая мутация. Симметрично и ответ: промис отдаёт результат, только если запись
+ * за время полёта не сменилась, иначе поздний ответ прежней записи отбрасывается. В кеш он при
+ * этом ложится всё равно — под тем id, ДЛЯ КОТОРОГО спрашивали, а это по-прежнему правда.
  *
  * `retry` — тот же самый запуск: состояние возвращается в `pending` (скелетон) и ждёт ответа.
  */
@@ -68,35 +83,70 @@ export function useEnsuredThread(entityId?: string): {
   retry: () => void;
 } {
   const { mutateAsync } = trpc.chat.ensureThread.useMutation();
-  // Читается на ПЕРВОМ рендере: попадание в кеш означает «тред этой записи уже заведён», и
-  // тогда ни мутации, ни скелетона быть не должно — сразу лента.
-  const cached = entityId === undefined ? undefined : sessionThreads.get(entityId);
-  const [state, setState] = useState<EnsuredThread>(
-    cached === undefined ? { status: 'pending' } : { status: 'ready', threadId: cached },
-  );
-  const startedRef = useRef(cached !== undefined);
+  const [state, setState] = useState<EnsuredThread>(() => initialFor(entityId));
+  /**
+   * Запись, ДЛЯ КОТОРОЙ уже стартовали; `null` — ещё ни для какой. Отдельный `null`, а не
+   * сравнение с `entityId`, потому что `undefined` — законное значение ключа (глобальный тред),
+   * и «не стартовали» пришлось бы путать с «стартовали для глобального».
+   */
+  const startedForRef = useRef<{ entityId: string | undefined } | null>(null);
+
+  /**
+   * Проп сменился без ремоунта — состояние правится ПРЯМО В РЕНДЕРЕ (штатный приём React
+   * «adjusting state on prop change»), а не эффектом. Эффектом вызывающий получил бы один
+   * закоммиченный кадр с тредом ПРЕЖНЕЙ записи: `ChatThread` смонтировался бы с чужим
+   * threadId и успел бы сходить за его сообщениями.
+   */
+  const [seenEntityId, setSeenEntityId] = useState(entityId);
+  if (seenEntityId !== entityId) {
+    setSeenEntityId(entityId);
+    setState(initialFor(entityId));
+  }
 
   const start = useCallback(() => {
-    setState({ status: 'pending' });
-    void mutateAsync(entityId === undefined ? {} : { entityId }).then(
+    startedForRef.current = { entityId };
+    // Функцией, а не значением: на первом запуске состояние уже `pending`, и новый объект стоил
+    // бы пустого ре-рендера.
+    setState((s) => (s.status === 'pending' ? s : { status: 'pending' }));
+    // Запись фиксируется в замыкании: сравнение с ней на ответе и есть защита от позднего
+    // ответа прежней записи.
+    const requested = entityId;
+    void mutateAsync(requested === undefined ? {} : { entityId: requested }).then(
       (r) => {
-        if (entityId !== undefined) sessionThreads.set(entityId, r.threadId);
+        // В кеш — ВСЕГДА и под тем id, для которого спрашивали: этот ответ про него правда,
+        // даже если экран уже смотрит на соседнюю запись.
+        if (requested !== undefined) sessionThreads.set(requested, r.threadId);
+        if (startedForRef.current?.entityId !== requested) return;
         setState({ status: 'ready', threadId: r.threadId });
       },
       // Отказ — вторым аргументом then, а не отдельным catch: своя ветка отказа обязана
       // сработать РОВНО на отказе ensure, а не заодно на любой ошибке в ветке успеха выше.
-      (e: unknown) =>
-        setState({ status: 'failed', message: e instanceof Error ? e.message : String(e) }),
+      (e: unknown) => {
+        if (startedForRef.current?.entityId !== requested) return;
+        setState({ status: 'failed', message: e instanceof Error ? e.message : String(e) });
+      },
     );
   }, [entityId, mutateAsync]);
 
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
+    const startedFor = startedForRef.current;
+    if (startedFor !== null && startedFor.entityId === entityId) return;
+    startedForRef.current = { entityId };
+    // Попадание в кеш уже отдано начальным состоянием (initialFor) — мутация не нужна.
+    if (entityId !== undefined && sessionThreads.has(entityId)) return;
     start();
-  }, [start]);
+  }, [entityId, start]);
 
   return { state, retry: start };
+}
+
+/**
+ * С чего начинать для этой записи: попадание в кеш означает «тред уже заведён», и тогда ни
+ * мутации, ни кадра скелетона быть не должно — сразу лента.
+ */
+function initialFor(entityId: string | undefined): EnsuredThread {
+  const cached = entityId === undefined ? undefined : sessionThreads.get(entityId);
+  return cached === undefined ? { status: 'pending' } : { status: 'ready', threadId: cached };
 }
 
 /**
