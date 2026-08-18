@@ -354,7 +354,12 @@ export function RunFeed({ entity }: { entity: Entity }) {
           его там, где увидел, и оба места обязаны показывать ОДИН статус, а он приезжает с
           сервера. Условие — по полю аспекта: без предложения карточка не стоила бы запроса. */}
       {proposal !== undefined && <ProposalCard runId={entity.id} />}
-      {report !== undefined && <TextBlock title="Отчёт" text={report} tz={tz} />}
+      {/* Отчёт прогона-предложения — ТА ЖЕ проза, что и в карточке: `orbis_propose` кладёт
+          `explanation` обоими путями (routines/propose.ts), и второй раз она читалась бы как
+          второе объяснение. У прогонов без предложения отчёт — единственный носитель итога. */}
+      {report !== undefined && proposal === undefined && (
+        <TextBlock title="Отчёт" text={report} tz={tz} />
+      )}
       {abandonNote !== undefined && (
         <TextBlock title="Почему прогон оборван" text={abandonNote} tz={tz} />
       )}

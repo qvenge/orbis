@@ -89,9 +89,18 @@ export function ProposalCard({ runId }: { runId: string }) {
 
   const decide = trpc.routine.decideProposal.useMutation({
     onSuccess: (result) => {
-      // Принятое предложение — пачка правок в графе: списки, открытые записи и счётчики
-      // после него вчерашние (Р17). Отказ графа не двигает, и перечитывать нечего.
-      if (result.status === 'applied') invalidateGraph(utils);
+      /**
+       * Граф двигает ЛЮБОЕ решение, а не только принятое, — и это не перестраховка.
+       * `approve` исполняет пачку правок; но и `reject`, и `stale` пишут судьбу предложения в
+       * аспект самого прогона (`proposal.status`, `decided_at`, `mismatches`) обычным
+       * executor'ом, то есть меняют запись графа. Без инвалидации кэш держит её ещё 30 секунд
+       * (staleTime): история прогонов на экране рутины продолжала бы показывать «предложение:
+       * ждёт решения» после отказа, а обзор рутины — прежнее «ждёт».
+       */
+      invalidateGraph(utils);
+      // Принятое предложение правит и деньги (перенос категории, сумма, статус траты) —
+      // бюджетные агрегаты живут своим ключом и в invalidateGraph не входят (ConfirmationCard).
+      if (result.status === 'applied') void utils.budget.invalidate();
       setMismatches(result.status === 'stale' ? result.mismatches : null);
       // Статус карточки — с сервера ВСЕГДА, в том числе после своего же нажатия: `already`
       // значит, что предложение решили без нас, и локальное «принято» было бы неправдой.
@@ -113,14 +122,20 @@ export function ProposalCard({ runId }: { runId: string }) {
           }))
         : null;
 
+  /**
+   * Кнопки заблокированы и на время ПЕРЕЧИТЫВАНИЯ статуса, а не только полёта мутации: между
+   * ответом сервера и приездом нового статуса кнопка «Принять» ещё жива, и второй клик уходил
+   * бы в уже решённое предложение (сервер ответит `already`, но окно врать владельцу о
+   * состоянии карточки заводить незачем).
+   */
+  const busy = decide.isPending || proposal.isFetching;
+
   return (
     <Card data-testid="proposal-card" className="flex flex-col gap-3">
       {view === undefined ? (
         // Отказ чтения — СЛОВАМИ сервера, а не вечным многоточием: карточка приезжает из
         // ленты и на холодной вкладке, и «…» на месте кнопок читалось бы как «ещё грузится».
-        <p className="text-sm text-text-muted">
-          {proposal.isError ? proposal.error.message : '…'}
-        </p>
+        <p className="text-sm text-text-muted">{proposal.isError ? proposal.error.message : '…'}</p>
       ) : view === null ? (
         // `null` — не только «предложения нет»: прогон удалён, откачен или это вовсе не
         // рутинный прогон (routers/routine.ts). Для владельца все случаи одно и то же
@@ -188,25 +203,29 @@ export function ProposalCard({ runId }: { runId: string }) {
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="primary"
-                disabled={decide.isPending}
+                disabled={busy}
                 onClick={() => decide.mutate({ runId, decision: 'approve' })}
               >
                 Принять
               </Button>
               <Button
                 variant="ghost"
-                disabled={decide.isPending}
+                disabled={busy}
                 onClick={() => decide.mutate({ runId, decision: 'reject' })}
               >
                 Отклонить
               </Button>
             </div>
           ) : (
-            <p className="text-text-muted text-xs">
-              {view.status === 'approved'
-                ? `Принято${view.decidedAt === undefined ? '' : ` ${formatDate(view.decidedAt, tz)}`}`
-                : (STATUS_NOTES[view.status] ?? view.status)}
-            </p>
+            // Слово «Устарело» печатается ОДИН раз: у статуса `stale` его уже несёт заголовок
+            // блока расхождений, и вторая строка рядом читалась бы как второе сообщение.
+            (view.status !== 'stale' || staleRows === null) && (
+              <p className="text-text-muted text-xs">
+                {view.status === 'approved'
+                  ? `Принято${view.decidedAt === undefined ? '' : ` ${formatDate(view.decidedAt, tz)}`}`
+                  : (STATUS_NOTES[view.status] ?? view.status)}
+              </p>
+            )
           )}
         </>
       )}

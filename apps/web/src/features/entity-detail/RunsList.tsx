@@ -19,7 +19,9 @@ import { RUN_OUTCOME_LABELS, runAspect, type TicketRun } from './useTicketRuns';
  * того, чем кончилось вчерашнее предложение.
  */
 const PROPOSAL_LABELS: Record<string, string> = {
-  pending: 'ждёт ответа',
+  // «Ждёт решения», а не «ждёт ответа»: ответа ждёт ВОПРОС рутины (outcome `checkpoint`), и
+  // одно слово на два разных ожидания слило бы в списке «Рутины» два разных блока.
+  pending: 'ждёт решения',
   approved: 'принято',
   rejected: 'отклонено',
   superseded: 'заменено',

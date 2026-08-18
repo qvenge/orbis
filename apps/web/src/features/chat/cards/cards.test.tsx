@@ -857,6 +857,7 @@ const proposalHandler =
       };
     // Заголовок цели дочитывает сам EntityRef (в предложении едет и id, и title — но на
     // экране правды больше у ЖИВОЙ записи: заголовок мог измениться после ночного прогона).
+    if (path === 'routine.decideProposal') return { status: 'rejected' };
     if (path === 'entity.get') {
       const { id } = input as { id: string };
       const op = PROPOSAL_OPERATIONS.find((o) => o.entity.id === id);
@@ -930,4 +931,57 @@ test('маркер ленты: действие с source=routine помечен
   );
   expect(screen.getByTestId('system-message')).toHaveTextContent('рутина');
   expect(screen.queryByText('агент')).toBeNull();
+});
+
+test('proposal_card: «Отклонить» перечитывает и карточку, и ГРАФ (отказ тоже пишет в аспект прогона)', async () => {
+  // Отказ не трогает цели предложения — но пишет судьбу самого предложения в аспект прогона
+  // (`proposal.status`, `decided_at`). Это запись графа, и без инвалидации история прогонов на
+  // экране рутины держала бы «ждёт решения» ещё 30 секунд (staleTime), то есть показывала бы
+  // владельцу отменённое им же ожидание.
+  const { calls } = renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    proposalHandler(),
+  );
+  const card = await screen.findByTestId('proposal-card');
+  await within(card).findByText('Купить билеты');
+  const readsBefore = calls.filter((c) => c.path === 'entity.get').length;
+
+  fireEvent.click(within(card).getByRole('button', { name: 'Отклонить' }));
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'routine.decideProposal')?.input).toEqual({
+      runId: 'rr1',
+      decision: 'reject',
+    }),
+  );
+  // Статус карточки — с сервера: локальное «отклонено» соврало бы, реши предложение кто-то
+  // другой между чтением и нажатием (`already`).
+  await waitFor(() =>
+    expect(calls.filter((c) => c.path === 'routine.proposal').length).toBeGreaterThan(1),
+  );
+  await waitFor(() =>
+    expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(readsBefore),
+  );
+});
+
+test('proposal_card: у статуса stale расхождения показаны нотами, а слово «Устарело» — один раз', async () => {
+  // Ноту пишет сервер в аспект прогона (`mismatches[].note`) — она переживает и карточку, и
+  // сырые значения, и читается на экране прогона спустя дни.
+  renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    proposalHandler({
+      status: 'stale',
+      decidedAt: '2026-08-19T04:00:00.000Z',
+      mismatches: [
+        { aspect: 'orbis/task', field: 'status', note: 'ожидали «inbox», сейчас «done»' },
+      ],
+    }),
+  );
+  const card = await screen.findByTestId('proposal-card');
+  const stale = await within(card).findByTestId('proposal-stale');
+  expect(stale).toHaveTextContent('состояние изменилось');
+  expect(stale).toHaveTextContent('статус');
+  expect(stale).toHaveTextContent('ожидали «inbox», сейчас «done»');
+  // Два «Устарело» подряд читались бы как два разных сообщения об одном и том же.
+  expect(within(card).getAllByText(/Устарело/)).toHaveLength(1);
+  expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
 });

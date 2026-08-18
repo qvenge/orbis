@@ -3790,6 +3790,9 @@ describe('V1: прогон рутины', () => {
           checkpoint: undefined,
           finished_at: '2026-08-18T04:02:00.000Z',
           proposal: { pending_id: 'p1', status: 'pending' },
+          // `orbis_propose` кладёт объяснение и в отчёт прогона, и в карточку (propose.ts) —
+          // фикстура повторяет это дословно, иначе не поймать дубль на экране.
+          report: PROPOSAL_VIEW.explanation,
         },
         proposal: PROPOSAL_VIEW,
         decide: {
@@ -3810,6 +3813,11 @@ describe('V1: прогон рутины', () => {
     // Создание записи — своей строкой: у него нет ни «было», ни поля аспекта.
     expect(card).toHaveTextContent('Создать: Позвонить врачу');
     expect(card).not.toHaveTextContent('2 операции');
+    // Отчёт прогона-предложения — ТА ЖЕ проза, что и в карточке: печатать её вторым блоком
+    // значило бы показать владельцу два объяснения одного предложения.
+    const feed = screen.getByTestId('run-feed');
+    expect(within(feed).getAllByText(PROPOSAL_VIEW.explanation)).toHaveLength(1);
+    expect(within(feed).queryByText('Отчёт')).toBeNull();
 
     await userEvent.click(within(card).getByRole('button', { name: 'Принять' }));
     await waitFor(() =>
@@ -3907,7 +3915,7 @@ describe('V1: прогон рутины', () => {
     const list = within(details).getByTestId('runs-list');
     // «готово» у прогона с нерешённым предложением означает лишь «модель отработала» —
     // без второго слова владелец не увидел бы, что от него чего-то ждут.
-    expect(within(list).getByTestId('run-rp1')).toHaveTextContent('ждёт ответа');
+    expect(within(list).getByTestId('run-rp1')).toHaveTextContent('ждёт решения');
     expect(within(list).getByTestId('run-rp2')).toHaveTextContent('принято');
     expect(within(list).getByTestId('run-rp3')).toHaveTextContent('заменено');
   });
