@@ -3,6 +3,7 @@
 import { useId, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
 import { Markdown } from '../../lib/markdown/Markdown';
+import { openEntity } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { useEntityUpdate } from './useEntityDetail';
@@ -81,8 +82,12 @@ export function TicketWaitingBlock({
       <h3 className="font-medium text-sm">{HEADINGS[outcome]}</h3>
       {/* Разметкой, а не сырым текстом: агент пишет отчёты и вопросы markdown'ом — списками,
           кодом и ссылками. Компонент тот же, что у ленты чата и просмотра тела, и своего веса
-          в чанк detail не добавляет (EditorShell уже тянет его статически). */}
-      {waitingFor !== '' && <Markdown source={waitingFor} className="text-sm" />}
+          в чанк detail не добавляет (EditorShell уже тянет его статически). `onEntityLink` —
+          как в EditorShell: без него ссылка `[[entity:…]]` из отчёта агента уходит обычной и
+          ПЕРЕЗАГРУЖАЕТ SPA (контракт Markdown.tsx), а не открывает запись поверх стека. */}
+      {waitingFor !== '' && (
+        <Markdown source={waitingFor} className="text-sm" onEntityLink={openEntity} />
+      )}
       <div className="flex flex-col gap-1">
         <label htmlFor={answerId} className="text-sm text-text-secondary">
           Ответ

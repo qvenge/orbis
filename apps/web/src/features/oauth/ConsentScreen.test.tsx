@@ -230,7 +230,12 @@ test('исполнитель объяснён словами, а не одним
   renderWithProviders(<ConsentScreen search={SEARCH} navigate={vi.fn()} />, HANDLER);
   await screen.findByText(/Claude Code/);
   expect(screen.getByText(/пишет только через глаголы задач/)).toBeInTheDocument();
-  expect(screen.getByText(/закрыть тикет сам не может/)).toBeInTheDocument();
+  // Не «закрыть не может»: may_close владелец выставляет в назначении, и с ним orbis_finish
+  // тикет закрывает (С8). Экран согласия — единственное место, где владелец читает, что
+  // означает область, и обещать здесь больше, чем делает сервер, нельзя.
+  expect(
+    screen.getByText(/закрывает тикет только с явного разрешения владельца \(may_close\)/),
+  ).toBeInTheDocument();
 });
 
 // Пока код выдаётся, обе кнопки обязаны быть заблокированы: повтор «Разрешить» выписал бы

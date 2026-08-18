@@ -156,8 +156,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   const sweepTarget = isTicket || (loaded !== undefined && loaded.aspects[PROJECT] !== undefined);
   const sweep = trpc.agentRun.sweep.useMutation({
     // Подметание МЕНЯЕТ граф (тикеты возвращаются в planned, прогоны становятся abandoned) —
-    // экран обязан показать результат сразу, а не через минуту протухания списков.
-    onSuccess: () => invalidateGraph(utils),
+    // экран обязан показать результат сразу, а не через минуту протухания списков. Но только
+    // когда что-то подмели: обычный ответ — `{swept: 0}`, и безусловная инвалидация стоила бы
+    // второго entity.get с телом и bodyDoc на КАЖДОМ открытии тикета или проекта.
+    onSuccess: (r) => {
+      if (r.swept > 0) invalidateGraph(utils);
+    },
   });
   const sweptForRef = useRef<string | null>(null);
   useEffect(() => {
@@ -290,8 +294,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   const detailsTab = (
     <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
       {/* Назначение — у ЛЮБОЙ задачи, а не только у тикета: исполнителя ставит владелец, и
-          именно этим жестом задача становится тикетом. */}
-      {entity.aspects[TASK] !== undefined && <AssignmentCard entity={entity} />}
+          именно этим жестом задача становится тикетом. И у любой записи, где назначение уже
+          ЕСТЬ: сервер orbis/task для него не требует, а общая карточка свойств аспект прячет —
+          без этой ветки назначение на заметке было бы невидимо и неснимаемо. */}
+      {(entity.aspects[TASK] !== undefined || entity.aspects[ASSIGNMENT] !== undefined) && (
+        <AssignmentCard entity={entity} />
+      )}
       <AspectCards entity={entity} />
       {/* Версии тела (С11, приёмка 12) — рядом со свойствами записи, до секций графа: снимок
           хранит ТОЛЬКО тело, и к подзадачам, блокировкам и бэклинкам он отношения не имеет.

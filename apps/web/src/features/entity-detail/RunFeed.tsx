@@ -5,11 +5,12 @@
 // прячет (AspectCards.HIDDEN_ASPECT_CARDS), и правильно делает — поля прогона пишет агент
 // своими глаголами, а инпут рядом с ними предлагал бы владельцу править журнал работы.
 import { ExternalLink, Globe } from 'lucide-react';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { formatDate } from '../../lib/format';
 import { invalidateGraph } from '../../lib/invalidate';
 import { Markdown } from '../../lib/markdown/Markdown';
+import { openEntity } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
@@ -144,8 +145,9 @@ function TextBlock({
       </h4>
       {/* Разметкой, а не сырым текстом: отчёты и вопросы агент пишет markdown'ом — списками,
           кодом и ссылками. Компонент тот же, что у ленты чата и блока ожидания тикета, и
-          своего веса в чанк detail не добавляет. */}
-      <Markdown source={text} className="text-sm" />
+          своего веса в чанк detail не добавляет. `onEntityLink` не украшение: без него ссылка
+          `[[entity:…]]` из отчёта агента ПЕРЕЗАГРУЖАЕТ SPA (контракт Markdown.tsx). */}
+      <Markdown source={text} className="text-sm" onEntityLink={openEntity} />
     </section>
   );
 }
@@ -153,6 +155,7 @@ function TextBlock({
 export function RunFeed({ entity }: { entity: Entity }) {
   const utils = trpc.useUtils();
   const [confirm, setConfirm] = useState(false);
+  const cancelId = useId();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
 
   const run = entity.aspects[RUN_ASPECT] ?? {};
@@ -205,10 +208,23 @@ export function RunFeed({ entity }: { entity: Entity }) {
    */
   const alive = outcome === 'running';
 
+  /**
+   * Прогон уже откачен. Серия отмен возвращает аспект к состоянию СОЗДАНИЯ (`outcome:
+   * running`, шагов нет) и архивирует запись — inverse'ом entity_create. Значит по аспекту
+   * откаченный прогон неотличим от только что начатого, и единственный признак случившегося —
+   * `archived`. Без него экран вечно показывал бы «идёт» с подсказкой «откатывать нечего»,
+   * то есть врал бы про уже сделанный откат.
+   */
+  const rolledBack = entity.archived;
+
   return (
     <section aria-label="Прогон агента" data-testid="run-feed" className="flex flex-col gap-4">
       <header className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-text-secondary">
-        <Badge>{RUN_OUTCOME_LABELS[outcome] ?? outcome}</Badge>
+        {/* Исход архивированного прогона ничего не сообщает (см. rolledBack) — вместо него
+            бейдж о том, что с записью произошло на самом деле. */}
+        <Badge>
+          {rolledBack ? 'в архиве (откачен)' : (RUN_OUTCOME_LABELS[outcome] ?? outcome)}
+        </Badge>
         {startedAt !== undefined && <span>начат {formatDate(startedAt, tz)}</span>}
         {finishedAt !== undefined && <span>· закончен {formatDate(finishedAt, tz)}</span>}
         {grantLabel !== undefined && (
@@ -297,15 +313,21 @@ export function RunFeed({ entity }: { entity: Entity }) {
           variant="outline"
           size="sm"
           className="self-start"
-          disabled={alive || rollback.isPending}
+          disabled={alive || rolledBack || rollback.isPending}
           onClick={() => setConfirm(true)}
         >
           Откатить прогон в Orbis
         </Button>
-        {alive && (
+        {rolledBack ? (
           <p className="text-text-muted text-xs">
-            Прогон ещё идёт: откатывать его нечего — исполнитель допишет поверх отката.
+            Этот прогон откачен: его действия уже отменены, отменять больше нечего.
           </p>
+        ) : (
+          alive && (
+            <p className="text-text-muted text-xs">
+              Прогон ещё идёт: откатывать его нечего — исполнитель допишет поверх отката.
+            </p>
+          )
         )}
         {rollback.isError && (
           <p role="alert" className="text-danger text-sm">
@@ -365,14 +387,26 @@ export function RunFeed({ entity }: { entity: Entity }) {
         )}
       </div>
 
-      <Dialog open={confirm} onOpenChange={setConfirm} title="Откатить прогон в Orbis?">
+      <Dialog
+        open={confirm}
+        onOpenChange={setConfirm}
+        title="Откатить прогон в Orbis?"
+        // Фокус — на «Отмена», а не на первом таб-стопе (крестик) и тем более не на самом
+        // откате: жест переписывает граф, и Enter сразу по открытии модалки не должен его
+        // совершать (тот же приём, что в VersionsCard). По id, а не по ссылке: `Button` —
+        // не forwardRef-компонент.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          document.getElementById(cancelId)?.focus();
+        }}
+      >
         <div className="flex flex-col gap-3 pt-2">
           <p className="text-sm text-text-secondary">
             Действия исполнителя будут отменены по одному, в обратном порядке. Сделанное вне Orbis
             откат не трогает.
           </p>
           <div className="flex flex-wrap justify-end gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setConfirm(false)}>
+            <Button id={cancelId} variant="ghost" size="sm" onClick={() => setConfirm(false)}>
               Отмена
             </Button>
             <Button

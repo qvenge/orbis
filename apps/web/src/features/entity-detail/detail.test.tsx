@@ -2510,6 +2510,61 @@ describe('ADE: тикет', () => {
     expect(calls.filter((c) => c.path === 'agentRun.sweep')).toHaveLength(1);
   });
 
+  test('подметание вхолостую (swept=0) граф не перечитывает; swept>0 — перечитывает', async () => {
+    // Экран тикета открывают часто, а брошенный прогон — событие редкое: инвалидация на
+    // каждом открытии стоила бы второго entity.get с телом и bodyDoc (самый тяжёлый запрос
+    // экрана) ради ответа «ничего не подмели».
+    const idle = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
+    await screen.findByRole('tabpanel', { name: 'Сущность' });
+    await waitFor(() =>
+      expect(idle.calls.filter((c) => c.path === 'agentRun.sweep')).toHaveLength(1),
+    );
+    // Ответ подметания уже разобран (инвалидация ушла бы этим же тиком) — дочитываний нет
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(idle.calls.filter((c) => c.path === 'entity.get')).toHaveLength(1);
+    idle.unmount();
+
+    // …и это не «экран разучился перечитывать»: подмели хоть один прогон — граф протух
+    const swept = renderWithProviders(<DetailScreen entityId="t1" />, (path, input) => {
+      if (path === 'agentRun.sweep') return { swept: 1 };
+      return adeHandler()(path, input);
+    });
+    await screen.findByRole('tabpanel', { name: 'Сущность' });
+    await waitFor(() =>
+      expect(swept.calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(1),
+    );
+  });
+
+  test('orbis/assignment без orbis/task: карточка назначения видна (иначе назначение не снять)', async () => {
+    // Сервер назначения на не-задаче не запрещает (invariants.ts), а прячь мы карточку —
+    // владелец видел бы запись, которую агент считает своей, и не мог бы это отменить.
+    const assignedNote = {
+      ...entity,
+      id: 'n2',
+      aspects: { 'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID } },
+    };
+    renderWithProviders(<DetailScreen entityId="n2" />, adeHandler({ entity: assignedNote }));
+    await screen.findByRole('tabpanel', { name: 'Детали' });
+    const card = await screen.findByTestId('assignment-card');
+    expect(within(card).getByRole('button', { name: 'Снять назначение' })).toBeEnabled();
+  });
+
+  test('назначенный грант отозван: карточка говорит об этом и «Сохранить» заблокирована', async () => {
+    // Отозванный грант в списке живых не появляется, а черновик держит его id: без этой
+    // ветки select показывал бы плейсхолдер «— выберите доступ —», а «Сохранить» бодро
+    // слала бы отозванный id обратно — и сервер отвечал бы NOT_FOUND без объяснения.
+    const revoked = { ...GRANT, revokedAt: '2026-08-17T10:00:00.000Z' };
+    renderWithProviders(<DetailScreen entityId="t1" />, (path, input) => {
+      if (path === 'oauth.listGrants') return [revoked];
+      return adeHandler()(path, input);
+    });
+    const card = await screen.findByTestId('assignment-card');
+    expect(await within(card).findByText(/грант отозван/i)).toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+  });
+
   test('переход тикет→тикет не показывает прогоны прежнего тикета', async () => {
     // Экран монтируется БЕЗ key: смена записи меняет только проп, то есть КЛЮЧ запроса прогонов.
     // Оставленные под новым ключом прежние данные — это не «чуть устаревший список»: заголовок
@@ -2855,6 +2910,31 @@ describe('ADE: прогон', () => {
     expect(within(feed).getByText('идёт')).toBeInTheDocument();
     // Откатывать живой прогон бессмысленно: исполнитель допишет поверх отката (см. RunFeed).
     expect(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' })).toBeDisabled();
+  });
+
+  test('откаченный (архивированный) прогон: бейдж архива, откат недоступен', async () => {
+    // Серия отмен возвращает аспект прогона к состоянию создания (`running`, шагов нет) и
+    // архивирует запись. Без признака архива экран показывал бы такой прогон вечно идущим
+    // с подсказкой «откатывать нечего» — то есть врал бы про уже сделанный откат.
+    const rolledBack = {
+      ...RUN_ENTITY,
+      archived: true,
+      aspects: {
+        'orbis/agent-run': {
+          ...RUN_ASPECT_FINISHED,
+          outcome: 'running',
+          finished_at: undefined,
+          report: undefined,
+          step_count: 0,
+          steps: [],
+        },
+      },
+    };
+    renderWithProviders(<DetailScreen entityId="r1" />, runHandler({ run: rolledBack }));
+    const feed = await screen.findByTestId('run-feed');
+    expect(within(feed).getByText('в архиве (откачен)')).toBeInTheDocument();
+    expect(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' })).toBeDisabled();
+    expect(feed).toHaveTextContent('прогон откачен');
   });
 
   test('session_url чужой схемы — текстом, а не ссылкой', async () => {

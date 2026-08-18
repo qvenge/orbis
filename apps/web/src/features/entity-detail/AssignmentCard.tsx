@@ -65,6 +65,20 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
   const saved = entity.aspects[ASSIGNMENT];
   const savedGrantId = typeof saved?.grant_id === 'string' ? saved.grant_id : undefined;
   const savedGrant = live.find((g) => g.id === savedGrantId);
+  /**
+   * Грант отозвали ПОСЛЕ того, как назначение сохранили. В списке живых его больше нет, и
+   * контролируемый `<select>` не находит своего option — визуально он показывает первый
+   * пункт-плейсхолдер «— выберите доступ —», хотя черновик держит отозванный id. Молчать об
+   * этом нельзя дважды: назначение выглядит целым (а агент по нему ходить уже не может), и
+   * «Сохранить» бодро отправляла бы тот же мёртвый id, получая NOT_FOUND без объяснения.
+   *
+   * Условие через `grants.data !== undefined`, а не через пустой `live`: пока список едет,
+   * живых грантов не видно вовсе — и «отозван» было бы враньём на каждом открытии.
+   */
+  const grantsLoaded = grants.data !== undefined;
+  const savedGrantRevoked = grantsLoaded && savedGrantId !== undefined && savedGrant === undefined;
+  const draftGrantRevoked =
+    grantsLoaded && draft.grantId !== '' && !live.some((g) => g.id === draft.grantId);
 
   function save() {
     /**
@@ -104,6 +118,7 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
             {savedGrant?.label ?? (grants.isLoading ? '…' : (savedGrantId ?? '—'))}
           </span>
           {savedGrant !== undefined && <Badge>{scopeLabel(savedGrant.scope)}</Badge>}
+          {savedGrantRevoked && <Badge tone="danger">грант отозван</Badge>}
           {/* Согласие дано, а токены агент не забрал: ходить он не может, и назначение на него
               будет ждать вечно — молчать об этом нельзя (та же ветка в ConnectedAgents). */}
           {savedGrant?.connected === false && <Badge tone="danger">не подключён</Badge>}
@@ -149,6 +164,11 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
               </option>
             ))}
           </select>
+          {draftGrantRevoked && (
+            <p className="text-danger text-sm">
+              Этот доступ отозван — выберите живой из списка, иначе сервер откажет.
+            </p>
+          )}
           <label className="flex cursor-pointer items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -164,8 +184,12 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
       <div className="flex flex-wrap gap-2">
         <Button
           size="sm"
-          // Агент без гранта — гарантированный VALIDATION сервера: не отправляем вовсе.
-          disabled={mutation.isPending || (draft.executor === 'agent' && draft.grantId === '')}
+          // Агент без гранта — гарантированный VALIDATION сервера, с отозванным — NOT_FOUND:
+          // не отправляем вовсе ни то, ни другое.
+          disabled={
+            mutation.isPending ||
+            (draft.executor === 'agent' && (draft.grantId === '' || draftGrantRevoked))
+          }
           onClick={save}
         >
           Сохранить
