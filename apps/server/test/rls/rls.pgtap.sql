@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(43);
+SELECT plan(46);
 
 -- Фикстуры под суперпользователем (обходит RLS)
 INSERT INTO entities (id, owner_id, title) VALUES
@@ -314,6 +314,53 @@ SELECT set_config('request.jwt.claims', '', true);
 SET LOCAL ROLE authenticated;
 SELECT results_eq('SELECT count(*)::int FROM entity_versions', ARRAY[0],
   'без identity: entity_versions — 0 строк');
+RESET ROLE;
+
+-- Группа 11: user_settings под служебной ролью orbis_app — список владельцев для тика
+-- планировщика рутин (V1.13, инвариант 14, миграция 0013). Планировщик обходит владельцев
+-- БЕЗ identity (он не «чей-то»), а всю работу ведёт под withIdentity(владелец); bypass RLS
+-- не используется нигде, и это единственное место, где служебная роль читает данные графа
+-- владельцев. Читается ровно список owner_id — у́же по данным, чем entities.
+--
+-- Claims чистим ЯВНО: GUC request.jwt.claims живёт до конца транзакции (тот же урок, что
+-- в группе 10), а выше он выставлен на A. Планировщик ходит без identity — проверка обязана
+-- идти в тех же условиях, иначе она проверяла бы не тот путь.
+SELECT set_config('request.jwt.claims', '', true);
+-- SET ROLE orbis_app админу по умолчанию НЕДОСТУПЕН, и это не оплошность окружения:
+-- с PostgreSQL 16 неявный грант роли её создателю выдаётся с SET FALSE (роль создаёт
+-- scripts/setup-db.ts под админом, ADMIN OPTION у админа есть — SET нет). Право SET
+-- выдаём себе здесь же: транзакция откатывается, состояние базы не меняется — тот же
+-- приём, что с GRANT'ами в группе 9. INHERIT FALSE — чтобы админ не получил привилегии
+-- orbis_app в обход SET ROLE: тогда проверки ниже стали бы мерить не ту роль.
+GRANT orbis_app TO CURRENT_USER WITH SET TRUE, INHERIT FALSE;
+-- Право на entities выдаём ЗДЕСЬ же и по той же причине, что в группе 9: пин по отсутствию
+-- GRANT'а зависел бы от default privileges конкретной базы (локальный стек Supabase CLI и
+-- образ CI различаются), а «выдали право и всё равно ноль строк» верно в любом окружении.
+-- Выдача идёт до SET ROLE: под orbis_app раздавать права на чужую таблицу нечем.
+GRANT SELECT ON entities TO orbis_app;
+SET LOCAL ROLE orbis_app;
+-- Видны строки ОБОИХ владельцев: политика scheduler_reads_owner_list — USING (true),
+-- скоупить её нечем (под orbis_app auth.uid() пуст), и в этом весь смысл — планировщику
+-- нужен именно список чужих владельцев. Считаем только фикстурных A и B: таблица в живой
+-- базе не пуста (сьюты её не чистят перед pgTAP), и голый count был бы флаком.
+SELECT results_eq(
+  $$SELECT count(*)::int FROM user_settings
+    WHERE owner_id IN ('00000000-0000-4000-8000-00000000000a',
+                       '00000000-0000-4000-8000-00000000000b')$$,
+  ARRAY[2], 'user_settings: orbis_app видит строки обоих владельцев (список для планировщика)');
+-- И только на чтение: политика 0013 — FOR SELECT, грант — ровно SELECT. Оба барьера дают
+-- 42501; пинится итог «служебная роль настройки не пишет», а не то, какой из них сработал
+-- первым. owner D — четвёртый владелец без строки: PK user_settings = owner_id, и чужой A/B
+-- дал бы неоднозначность «отказ vs PK-конфликт».
+SELECT throws_ok(
+  $$INSERT INTO user_settings (owner_id)
+    VALUES ('00000000-0000-4000-8000-00000000000d')$$,
+  '42501', NULL, 'user_settings: orbis_app не может писать (политика и грант — только SELECT)');
+-- Граф служебной роли по-прежнему закрыт целиком: политики для orbis_app на entities нет,
+-- поэтому даже с выданным выше правом видно 0 строк. Это и есть «никакого bypass»:
+-- 0013 открывает список владельцев, а не их данные.
+SELECT results_eq('SELECT count(*)::int FROM entities', ARRAY[0],
+  'entities: даже с GRANT''ом orbis_app видит 0 строк (политики для служебной роли нет)');
 RESET ROLE;
 
 SELECT finish();
