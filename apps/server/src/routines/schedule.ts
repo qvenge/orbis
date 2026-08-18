@@ -63,3 +63,40 @@ export function dueBuckets(args: {
   }
   return out;
 }
+
+/**
+ * Горизонт поиска ближайшего срабатывания: неделя плюс сегодня. Дни недели — единственное,
+ * что прореживает расписание (`days` непуст по схеме), поэтому за восемь дней слот находится
+ * всегда; больший горизонт означал бы только лишние обороты цикла на невозможном входе.
+ */
+const NEXT_BUCKET_HORIZON_DAYS = 8;
+
+/**
+ * Момент СЛЕДУЮЩЕГО срабатывания рутины — то, что экран показывает строкой «следующее
+ * срабатывание» (V1.14). Зеркало `dueBuckets`, смотрящее вперёд, а не назад: те же
+ * `at`/`days`/таймзона владельца и тот же перевод местного времени в instant, поэтому
+ * обещание экрана и поведение тика не могут разъехаться на переходе DST.
+ *
+ * Сравнение строгое: в 07:00:00 сегодняшний слот уже НАСТУПИЛ (его и берёт `dueBuckets`),
+ * и показывать его как «следующее» значило бы обещать владельцу то, что уже произошло.
+ *
+ * `null` — расписание не даёт ни одного слота в горизонте; при непустом `days` это
+ * недостижимо, но вызывающий обязан уметь ответить «срабатывания нет» (рутина на паузе —
+ * его дело, а не этой функции: здесь считается расписание, а не разрешение работать).
+ */
+export function nextBucketAt(args: {
+  at: string;
+  days?: readonly Weekday[];
+  timeZone: string;
+  now: Date;
+}): Date | null {
+  const { h, m } = parseHHMM(args.at);
+  const today = wallClockIn(args.now, args.timeZone).date;
+  for (let ahead = 0; ahead <= NEXT_BUCKET_HORIZON_DAYS; ahead++) {
+    const date = addDays(today, ahead);
+    if (args.days !== undefined && !args.days.includes(weekdayOfDate(date))) continue;
+    const at = instantOfLocal(date, { h, m, s: 0 }, args.timeZone);
+    if (at.getTime() > args.now.getTime()) return at;
+  }
+  return null;
+}

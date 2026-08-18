@@ -10,6 +10,7 @@ import { entityRouter } from './routers/entity';
 import { importRouter } from './routers/import';
 import { oauthRouter } from './routers/oauth';
 import { relationRouter } from './routers/relation';
+import { routineRouter } from './routers/routine';
 import { userRouter } from './routers/user';
 import { versionRouter } from './routers/version';
 import { protectedProcedure, publicProcedure, router } from './trpc';
@@ -32,6 +33,9 @@ export const appRouter = router({
   // Владельческая половина круга исполнителя (С3, С6, С12): ответ на чекпойнт,
   // подметание с экранов, откат прогона
   agentRun: agentRunRouter,
+  // Владельческая половина внутреннего исполнителя (V1.3, V1.6, V1.9, V1.14): «прогнать
+  // сейчас», ответ на вопрос прогона, предложение и решение по нему, обзор рутины
+  routine: routineRouter,
 });
 
 export type AppRouter = typeof appRouter;
