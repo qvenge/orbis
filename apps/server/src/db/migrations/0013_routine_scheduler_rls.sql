@@ -28,6 +28,8 @@ CREATE POLICY scheduler_reads_owner_list ON user_settings FOR SELECT TO orbis_ap
 -- на таблицы public висят именно на authenticated (0001). Без SET ROLE они не активируются,
 -- поэтому под orbis_app запрос упирался бы в 42501 ДО всякой политики. Грант — ровно SELECT:
 -- вторая половина ответа на «только чтение», первая — FOR SELECT выше.
--- Оба барьера запинены поимённо в test/rls/rls.pgtap.sql (группа 11), там же пин на то,
--- что граф под этой ролью остался закрыт (entities — 0 строк даже с выданным правом).
+-- Форма обоих барьеров запинена в test/rls/rls.pgtap.sql (группа 11: политика — FOR SELECT,
+-- ровно для orbis_app; грант SELECT есть). Поведение — в src/routines/queries.test.ts:
+-- он идёт под подключением orbis_app, то есть в условиях планировщика, и пинит, что
+-- служебная роль видит чужих владельцев, настроек не пишет и графа не видит.
 GRANT SELECT ON user_settings TO orbis_app;
