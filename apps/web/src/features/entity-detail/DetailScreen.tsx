@@ -1,5 +1,5 @@
 import { buildAppPath } from '@orbis/shared';
-import { Archive, ArchiveRestore, Code, EllipsisVertical, Link2, Pin } from 'lucide-react';
+import { Archive, ArchiveRestore, Code, EllipsisVertical, History, Link2, Pin } from 'lucide-react';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
@@ -32,6 +32,7 @@ import { Subtasks } from './Subtasks';
 import { TicketWaitingBlock } from './TicketWaitingBlock';
 import { useEntityDetail } from './useEntityDetail';
 import { RUN_ASPECT, useTicketRuns } from './useTicketRuns';
+import { PinVersionDialog, VersionsCard } from './VersionsCard';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 
@@ -86,6 +87,15 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // экран монтируется без key, и режим правки, переехавший на соседнюю запись, открывал бы её
   // сырым текстом без единого жеста человека.
   const [asMarkdown, setAsMarkdown] = useState(false);
+  // Диалог «Закрепить версию» (С11): жест приходит из меню ⋮, а меню — в шапке, снаружи
+  // вкладок, поэтому и флаг живёт здесь. Монтируется диалог только открытым (см. VersionsCard).
+  const [pinVersion, setPinVersion] = useState(false);
+  /**
+   * Какая вкладка открыта. Нужна ровно одному потребителю — списку версий: «Детали» живут
+   * смонтированными всегда (keepMounted ниже), и без этого признака их запрос уходил бы на
+   * каждом открытии любой записи, включая те, где по вкладкам никто не ходил.
+   */
+  const [openTab, setOpenTab] = useState('entity');
   /**
    * Куда тело рисует свои плашки — узел НАД вкладками (см. `noticeHost` в разметке ниже).
    *
@@ -97,6 +107,9 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   if (prevIdRef.current !== entityId) {
     prevIdRef.current = entityId;
     setAsMarkdown(false);
+    // Диалог закрепления — про ТУ запись, из чьего меню его открыли: пережив переход, он
+    // закрепил бы соседнюю (экран монтируется без key, router.tsx).
+    setPinVersion(false);
   }
   const { show } = useToast();
   const push = useNav((s) => s.push);
@@ -234,7 +247,13 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           есть работа, которую он проделал. Условие — по аспекту, а не по `isTicket`: прогон
           это НЕ тикет (аспекта `orbis/task` у него нет), и подметание с историей прогонов ему
           не положены. */}
-      {entity.aspects[RUN_ASPECT] !== undefined && <RunFeed entity={entity} />}
+      {/* key — по той же причине, что у блока ожидания: экран монтируется БЕЗ key, и переход
+          прогон→прогон внутри вкладки меняет лишь проп, — а лента держит своё состояние
+          (открытое подтверждение отката, результат прошлого). Без key оно переехало бы на
+          соседний прогон. */}
+      {entity.aspects[RUN_ASPECT] !== undefined && (
+        <RunFeed key={`run-${entity.id}`} entity={entity} />
+      )}
       {/* Тело — РАЗМОНТИРУЕМОЕ по key. То же правило, что несла прежняя секция тела, и по той
           же причине, только цена ошибки выросла: роутер монтирует DetailScreen БЕЗ key
           (router.tsx), переход entity→entity меняет лишь проп, — а `useBodySave` при смене
@@ -263,6 +282,11 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           именно этим жестом задача становится тикетом. */}
       {entity.aspects[TASK] !== undefined && <AssignmentCard entity={entity} />}
       <AspectCards entity={entity} />
+      {/* Версии тела (С11, приёмка 12) — рядом со свойствами записи, до секций графа: снимок
+          хранит ТОЛЬКО тело, и к подзадачам, блокировкам и бэклинкам он отношения не имеет.
+          key — как у ленты прогона: у карточки своё состояние (выбранная версия, отказ
+          восстановления), и переезжать на соседнюю запись оно не должно. */}
+      <VersionsCard key={`versions-${entity.id}`} entity={entity} active={openTab === 'details'} />
       {/* Секции 6–8 §3.5: связи уже приехали этим же entity.get — своих запросов графа
           секции не заводят. */}
       <Subtasks parentId={entity.id} relations={relations ?? []} />
@@ -295,6 +319,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
             }}
             onArchive={() => setArchived(!entity.archived)}
             onCopyLink={() => void copyLink()}
+            onPinVersion={() => setPinVersion(true)}
             // Без документа пункта НЕТ вовсе. Показать его — значит предложить действие,
             // которое молча ничего не делает, а флаг после нажатия остался бы поднятым: приедь
             // документ следующим рефетчем — и тумблер открылся бы сам, без жеста человека.
@@ -304,6 +329,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           />
         }
       />
+      {/* Диалог закрепления версии — ВНЕ табов и по той же причине, что запасная ссылка ниже:
+          открывают его из меню, а меню одно на все вкладки. Монтируется только открытым —
+          набранная и брошенная подпись не переживает закрытие. */}
+      {pinVersion && <PinVersionDialog entityId={entity.id} onClose={() => setPinVersion(false)} />}
       {/* Запасной путь копирования — ВНЕ табов: ссылку просят из меню, а меню одно на все
           табы, и прятать ответ на вкладке «Сущность» значило бы иногда не отвечать вовсе. */}
       {manualLink !== null && manualLink.id === entityId && (
@@ -333,6 +362,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       <div className="mx-auto w-full max-w-3xl">
         <Tabs
           defaultValue="entity"
+          onValueChange={setOpenTab}
           tabs={[
             { value: 'entity', label: 'Сущность', content: entityTab, keepMounted: true },
             { value: 'details', label: 'Детали', content: detailsTab, keepMounted: true },
@@ -702,12 +732,15 @@ function DetailMenu({
   onPin,
   onArchive,
   onCopyLink,
+  onPinVersion,
   onToggleMarkdown,
   archived,
 }: {
   onPin: () => void;
   onArchive: () => void;
   onCopyLink: () => void;
+  /** Закрепить ВЕРСИЮ ТЕЛА (С11) — не путать с `onPin`, который держит запись в сайдбаре. */
+  onPinVersion: () => void;
   /** Не задан — править как markdown нечего (у записи нет документа), и пункта нет вовсе. */
   onToggleMarkdown?: () => void;
   archived: boolean;
@@ -741,6 +774,14 @@ function DetailMenu({
           label: 'Скопировать ссылку',
           icon: <Link2 size={16} aria-hidden />,
           onSelect: onCopyLink,
+        },
+        // Про ТЕЛО, а не про сайдбар — и стоит рядом с «Править как markdown», второй правкой
+        // тела, а не рядом с «Закрепить». Иконка тоже другая (History против Pin): два пункта
+        // с одной иконкой и почти одной подписью читались бы как один с опечаткой.
+        {
+          label: 'Закрепить версию',
+          icon: <History size={16} aria-hidden />,
+          onSelect: onPinVersion,
         },
         // Пункт появляется, только когда есть что править (см. проп): предлагать действие,
         // которое молча ничего не делает, хуже, чем не предлагать его вовсе.

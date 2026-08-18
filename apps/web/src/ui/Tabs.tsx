@@ -24,19 +24,38 @@ import { type ReactNode, useState } from 'react';
 export function Tabs({
   defaultValue,
   tabs,
+  onValueChange,
 }: {
   defaultValue: string;
   tabs: { value: string; label: string; content: ReactNode; keepMounted?: boolean }[];
+  /**
+   * Какая вкладка стала активной. Нужен ЖИВЫМ вкладкам: смонтированная неактивная вкладка не
+   * отличима изнутри от активной, а её секции вправе не ходить в сеть, пока на них не смотрят
+   * (версии тела на detail). Состояние по-прежнему держит компонент — это извещение, а не
+   * управление.
+   */
+  onValueChange?: (value: string) => void;
 }) {
   const [value, setValue] = useState(defaultValue);
+  /**
+   * Единственный вход смены вкладки — и своего пути (onClick триггера, см. ниже), и радиксова
+   * (mousedown, стрелки, фокус). Извещать из одного лишь `RT.Root` было бы НЕВЕРНО: свой
+   * onClick меняет состояние мимо Radix, и в этом пути извещения не случилось бы вовсе.
+   * Повторный вызов с тем же значением отсекается — оба пути срабатывают на одном жесте мыши.
+   */
+  const select = (next: string) => {
+    if (next === value) return;
+    setValue(next);
+    onValueChange?.(next);
+  };
   return (
-    <RT.Root value={value} onValueChange={setValue} className="flex flex-col">
+    <RT.Root value={value} onValueChange={select} className="flex flex-col">
       <RT.List className="flex gap-1 border-b border-line" aria-label="Вкладки">
         {tabs.map((t) => (
           <RT.Trigger
             key={t.value}
             value={t.value}
-            onClick={() => setValue(t.value)}
+            onClick={() => select(t.value)}
             // -mb-px кладёт 2px-подчёркивание триггера поверх 1px-границы ряда табов.
             className="-mb-px cursor-pointer border-b-2 border-transparent px-3 py-2 text-sm text-text-secondary outline-hidden transition hover:bg-surface-2/60 hover:text-text focus-visible:ring-2 focus-visible:ring-accent/60 data-[state=active]:border-accent data-[state=active]:text-text"
           >

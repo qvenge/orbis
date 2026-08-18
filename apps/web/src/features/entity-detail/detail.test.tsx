@@ -2856,4 +2856,212 @@ describe('ADE: прогон', () => {
     // Откатывать живой прогон бессмысленно: исполнитель допишет поверх отката (см. RunFeed).
     expect(within(feed).getByRole('button', { name: 'Откатить прогон в Orbis' })).toBeDisabled();
   });
+
+  test('session_url чужой схемы — текстом, а не ссылкой', async () => {
+    // Адрес сессии пишет ИСПОЛНИТЕЛЬ своим глаголом, то есть это чужой ввод в href.
+    // `javascript:` в href — исполнение чужого кода по клику владельца; показать такую
+    // строку текстом можно (иногда это опечатка), сделать кликабельной — нельзя.
+    const evil = {
+      ...RUN_ENTITY,
+      aspects: {
+        'orbis/agent-run': { ...RUN_ASPECT_FINISHED, session_url: 'javascript:alert(1)' },
+      },
+    };
+    renderWithProviders(<DetailScreen entityId="r1" />, runHandler({ run: evil }));
+    const feed = await screen.findByTestId('run-feed');
+    expect(within(feed).queryByRole('link', { name: /сесси/i })).toBeNull();
+    expect(feed).toHaveTextContent('javascript:alert(1)');
+  });
+});
+
+// ─── ADE-срез 1: закреплённые версии тела (Задача 16) ────────────────────────────────────
+//
+// Закрепление — страховка ВЛАДЕЛЬЦА перед тем, как отдать запись агенту: «сохрани как есть,
+// чтобы было куда вернуться». Отсюда и два жеста в разных местах экрана: закрепляют из меню ⋮
+// (оно одно на все вкладки), а восстанавливают из списка версий на «Деталях».
+
+/** Wire-форма version.list: тела в ней нет вовсе — вместо документа едет признак `hasDoc`. */
+const VERSIONS = [
+  {
+    id: 'v1',
+    entityId: 'e1',
+    label: 'до правки агентом',
+    hasDoc: true,
+    actorKind: 'owner',
+    createdAt: '2026-08-17T09:00:00.000Z',
+  },
+  {
+    id: 'v2',
+    entityId: 'e1',
+    label: 'после переноса корпуса',
+    hasDoc: false,
+    actorKind: 'owner',
+    createdAt: '2026-08-16T09:00:00.000Z',
+  },
+];
+
+function versionsHandler(
+  opts: { versions?: unknown[]; restore?: () => unknown } = {},
+): MockHandler {
+  return (path, input) => {
+    if (path === 'entity.get') return { entity, relations: [], thread: null };
+    if (path === 'aspect.list') return [];
+    if (path === 'version.list') return opts.versions ?? VERSIONS;
+    if (path === 'version.pin')
+      return {
+        id: 'v3',
+        entityId: 'e1',
+        label: (input as { label: string }).label,
+        hasDoc: true,
+        actorKind: 'owner',
+        createdAt: '2026-08-17T12:00:00.000Z',
+      };
+    if (path === 'version.restore') return (opts.restore ?? (() => entity))();
+    return {};
+  };
+}
+
+/** Открывает «Детали»: вкладка живая (keepMounted), но версии читаются по её АКТИВНОСТИ. */
+async function openDetails(): Promise<void> {
+  fireEvent.click(await screen.findByRole('tab', { name: 'Детали' }));
+}
+
+describe('ADE: версии', () => {
+  test('меню ⋮ → «Закрепить версию»: диалог с подписью → version.pin({entityId,label}), список версий протухает', async () => {
+    const { calls } = renderWithProviders(
+      <>
+        <DetailScreen entityId="e1" />
+        <Toaster />
+      </>,
+      versionsHandler(),
+    );
+    // Список открыт ЗАРАНЕЕ: только у прочитанного списка видно, протух ли он после закрепления.
+    await openDetails();
+    await waitFor(() => expect(calls.filter((c) => c.path === 'version.list')).toHaveLength(1));
+
+    await openDetailMenu();
+    // Пункт НОВЫЙ и отдельный: соседнее «Закрепить» — про сайдбар (закреплённые записи), и
+    // путать их нельзя.
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Закрепить версию' }));
+
+    const dialog = await screen.findByRole('dialog');
+    // Подпись обязательна: снимок без неё в списке не отличить от соседнего по дате.
+    expect(within(dialog).getByRole('button', { name: 'Закрепить' })).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText('Подпись'), 'до правки агентом');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Закрепить' }));
+
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'version.pin')?.input).toEqual({
+        entityId: 'e1',
+        label: 'до правки агентом',
+      }),
+    );
+    // Успех не молчит и не оставляет модалку открытой.
+    expect(await screen.findByText('Версия закреплена')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    // …и список перечитан: закреплённой версии в нём иначе не было бы до перезагрузки экрана.
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === 'version.list').length).toBeGreaterThan(1),
+    );
+  });
+
+  test('таб «Детали»: версии читаются ТОЛЬКО при открытии вкладки; в строке — подпись, дата и «есть документ»', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, versionsHandler());
+    await screen.findByRole('tabpanel', { name: 'Детали' });
+    // Вкладка живая с монтирования (keepMounted ради секций, которые читают уже приехавшее),
+    // а версии — свой запрос: платить им за каждое открытие записи, которую никто не листал
+    // по вкладкам, не за что.
+    expect(calls.filter((c) => c.path === 'version.list')).toEqual([]);
+
+    await openDetails();
+    const card = await screen.findByTestId('versions-card');
+    await waitFor(() => expect(within(card).getAllByRole('listitem')).toHaveLength(2));
+    const rows = within(card).getAllByRole('listitem');
+    expect(rows[0]).toHaveTextContent('до правки агентом');
+    // Дата — машиночитаемым `time`: текст её собирает Intl в зоне владельца, и сверять его
+    // строкой значило бы проверять часовой пояс машины, а не экран.
+    expect(rows[0]?.querySelector('time')).toHaveAttribute('datetime', '2026-08-17T09:00:00.000Z');
+    expect(rows[0]?.querySelector('time')?.textContent).not.toBe('');
+    // Признак документа: снимок «до бэкфилла» хранит только markdown, и восстановится он
+    // текстом — сказать об этом надо до нажатия, а не после.
+    expect(rows[0]).toHaveTextContent('есть документ');
+    expect(rows[1]).toHaveTextContent('только текст');
+    expect(calls.filter((c) => c.path === 'version.list')).toHaveLength(1);
+  });
+
+  test('«Восстановить» → подтверждение → version.restore({versionId, expectedUpdatedAt}) и перечитывание графа', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, versionsHandler());
+    await openDetails();
+    const card = await screen.findByTestId('versions-card');
+    await waitFor(() => expect(within(card).getAllByRole('listitem')).toHaveLength(2));
+    const row = within(card).getAllByRole('listitem')[0] as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: 'Восстановить' }));
+
+    // Подтверждение — модалкой из ui/, а не window.confirm: жест переписывает тело записи.
+    const dialog = await screen.findByRole('dialog');
+    // Фокус — на «Отмена»: необратимый жест не должен стоять под Enter'ом сразу по открытии.
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Отмена' })).toHaveFocus(),
+    );
+
+    const readsBefore = calls.filter((c) => c.path === 'entity.get').length;
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Восстановить' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'version.restore')?.input).toEqual({
+        versionId: 'v1',
+        // Метка версии — из ОТКРЫТОЙ записи: сервер сверит её и откажет, если тело правили,
+        // пока экран смотрел на список.
+        expectedUpdatedAt: entity.updatedAt,
+      }),
+    );
+    // Тело записи изменилось — граф перечитывается целиком (Р17).
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(readsBefore),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  test('409 при восстановлении: инлайн «Документ изменился в другом месте» и «Обновить»', async () => {
+    const { calls } = renderWithProviders(
+      <DetailScreen entityId="e1" />,
+      versionsHandler({
+        restore: () => {
+          throw trpcError('CONFLICT');
+        },
+      }),
+    );
+    await openDetails();
+    const card = await screen.findByTestId('versions-card');
+    await waitFor(() => expect(within(card).getAllByRole('listitem')).toHaveLength(2));
+    const row = within(card).getAllByRole('listitem')[0] as HTMLElement;
+    await userEvent.click(within(row).getByRole('button', { name: 'Восстановить' }));
+    await userEvent.click(
+      within(await screen.findByRole('dialog')).getByRole('button', { name: 'Восстановить' }),
+    );
+
+    // Плашка тела (screenConflict) сюда не зажигается — она питается только entity.update:
+    // о своём отказе секция версий обязана сказать сама.
+    const notice = await within(await screen.findByTestId('versions-card')).findByRole('alert');
+    expect(notice).toHaveTextContent('Документ изменился в другом месте — обновите экран');
+
+    const readsBefore = calls.filter((c) => c.path === 'entity.get').length;
+    await userEvent.click(within(notice).getByRole('button', { name: 'Обновить' }));
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === 'entity.get').length).toBeGreaterThan(readsBefore),
+    );
+    // Обновили — тревога уходит: висеть ей поверх перечитанной записи не о чем.
+    await waitFor(() =>
+      expect(within(screen.getByTestId('versions-card')).queryByRole('alert')).toBeNull(),
+    );
+  });
+
+  test('версий нет: «Версий нет» и подсказка, откуда их берут', async () => {
+    renderWithProviders(<DetailScreen entityId="e1" />, versionsHandler({ versions: [] }));
+    await openDetails();
+    const card = await screen.findByTestId('versions-card');
+    expect(await within(card).findByText(/Версий нет/)).toBeInTheDocument();
+    // Пустая секция обязана сказать, чем её наполнить: пункт меню найти неоткуда.
+    expect(card).toHaveTextContent('Закрепить версию');
+    expect(within(card).queryByRole('button', { name: 'Восстановить' })).toBeNull();
+  });
 });

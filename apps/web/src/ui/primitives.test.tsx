@@ -137,6 +137,31 @@ test('по умолчанию неактивная вкладка НЕ смон�
   expect(screen.queryByText('panel-b')).toBeNull();
 });
 
+test('onValueChange извещает о смене вкладки — и по клику мышью тоже', () => {
+  // Живая (keepMounted) вкладка изнутри не отличима от активной, а её секции вправе не ходить
+  // в сеть, пока на них не смотрят (версии тела на detail). Клик проверяется отдельно и не для
+  // симметрии: активацию Radix вешает на mousedown, поэтому свою смену состояния триггер делает
+  // СВОИМ onClick — извещай мы только из RT.Root, этот путь молчал бы, и запрос уходил бы
+  // никогда (или всегда).
+  const seen: string[] = [];
+  render(
+    <Tabs
+      defaultValue="a"
+      onValueChange={(v) => seen.push(v)}
+      tabs={[
+        { value: 'a', label: 'A', content: <div>panel-a</div>, keepMounted: true },
+        { value: 'b', label: 'B', content: <div>panel-b</div>, keepMounted: true },
+      ]}
+    />,
+  );
+  expect(seen).toEqual([]);
+  fireEvent.click(screen.getByRole('tab', { name: 'B' }));
+  expect(seen).toEqual(['b']);
+  // Повторный жест по уже активной вкладке ничего не меняет — и извещать о нём не о чем.
+  fireEvent.click(screen.getByRole('tab', { name: 'B' }));
+  expect(seen).toEqual(['b']);
+});
+
 test('keepMounted держит СВОЮ вкладку живой, не трогая соседей', () => {
   // Флаг — у каждой вкладки, а не у компонента. На detail живой обязана остаться ровно одна
   // («Сущность» с редактором, где лежит несохранённый текст и история отмены), а «Тред» —

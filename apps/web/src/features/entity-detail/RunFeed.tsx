@@ -43,6 +43,26 @@ function obj(v: unknown): Record<string, unknown> | undefined {
 }
 
 /**
+ * Годится ли адрес сессии в `href`. Его пишет ИСПОЛНИТЕЛЬ своим глаголом — то есть это чужой
+ * ввод, и в ссылке он превращается в код, который владелец запускает своим кликом:
+ * `javascript:` в href исполняется в нашем origin, `data:`/`blob:` открывают страницу, которую
+ * браузер считает нашей. Схему поэтому проверяем БЕЛЫМ списком, а не запретом «плохих».
+ *
+ * Не прошедший проверку адрес не прячется, а печатается ТЕКСТОМ: чаще всего это опечатка
+ * агента, и владельцу надо её увидеть, а не гадать, почему ссылки нет.
+ */
+function isWebUrl(raw: string): boolean {
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    // Относительный или битый адрес: базы у чужой строки нет, и достраивать её нашей —
+    // значит вести владельца по своему же приложению от имени исполнителя.
+    return false;
+  }
+}
+
+/**
  * Откуда пришла ЧУЖАЯ правка, помешавшая откату (`MutationSource`, executor/types.ts). Сырой
  * enum здесь не годится: «ui» ничего не сообщает владельцу, а решать по этой строке ему —
  * своей это было рукой или чужого агента. Незнакомое значение показываем как есть.
@@ -202,19 +222,24 @@ export function RunFeed({ entity }: { entity: Entity }) {
 
       {usage !== undefined && <p className="text-text-muted text-xs">Расход: {usage}</p>}
 
-      {sessionUrl !== undefined && (
-        // Ссылка наружу, во владения исполнителя: target + rel обязательны (открытая вкладка
-        // не должна получить ссылку на наш window, а реферер — на адрес записи владельца).
-        <a
-          href={sessionUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex w-fit items-center gap-1 text-accent text-sm hover:underline"
-        >
-          <ExternalLink size={14} aria-hidden />
-          Сессия исполнителя
-        </a>
-      )}
+      {sessionUrl !== undefined &&
+        (isWebUrl(sessionUrl) ? (
+          // Ссылка наружу, во владения исполнителя: target + rel обязательны (открытая вкладка
+          // не должна получить ссылку на наш window, а реферер — на адрес записи владельца).
+          <a
+            href={sessionUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex w-fit items-center gap-1 text-accent text-sm hover:underline"
+          >
+            <ExternalLink size={14} aria-hidden />
+            Сессия исполнителя
+          </a>
+        ) : (
+          <p className="text-sm text-text-muted">
+            Сессия исполнителя: <span className="break-all">{sessionUrl}</span>
+          </p>
+        ))}
 
       <div className="flex flex-col gap-1">
         <h3 className="text-2xs font-medium uppercase tracking-wide text-text-muted">
