@@ -32,13 +32,14 @@ import {
   relationDeleteInput,
 } from '@orbis/shared';
 import { eq, inArray } from 'drizzle-orm';
+import { runById } from '../agent-loop/queries';
 import { closeRoutineRun } from '../agent-loop/verbs';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import type { AspectsMap } from '../executor/normalize';
-import { createPending } from '../policy/pending';
+import { createPending, rejectPending } from '../policy/pending';
 import type { ToolCallCtx, ToolDispatchResult } from '../tools/dispatch';
 
 /** Боевой синк журнала — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
@@ -88,10 +89,19 @@ function editsNoun(n: number): string {
  * Предложение рутины: проверить форму, снять предусловия с ТЕКУЩИХ значений, положить
  * pending в тред рутины и закрыть прогон исходом `finished` с судьбой предложения.
  *
- * Порядок именно такой. Pending пишется ДО закрытия прогона: обратный порядок оставлял бы
+ * Порядок именно такой: pending пишется ДО закрытия прогона. Обратный порядок оставлял бы
  * при сбое закрытый прогон, который обещает владельцу предложение, а предложения нет —
- * тупик, из которого нечего нажать. Осечка в другую сторону (pending есть, прогон не
- * закрылся) чинится повтором вызова с тем же `id`: pending дедуплицирован по прогону.
+ * тупик, из которого нечего нажать.
+ *
+ * Осечка в другую сторону — pending лёг, а прогон не закрылся — повтором НЕ чинится:
+ * закрытие проваливается ровно тогда, когда прогон уже стал терминальным (подметание,
+ * дедлайн), и второй вызов упрётся в то же предусловие `outcome:'running'`. Поэтому
+ * сирота не допускается вовсе, двумя мерами:
+ *  - ПРЕДПРОВЕРКА прогона в той же транзакции ДО записи pending (`checkRun`): не `running`
+ *    и это не наше же предложение — структурный CONFLICT, ничего не записано;
+ *  - КОМПЕНСАЦИЯ субсекундной гонки: прогон стал терминальным между предпроверкой и
+ *    закрытием — уже записанный pending гасится `rejectPending(reason:'stale')`, чтобы он
+ *    не остался «принимаемым» (V1.8), и наружу идёт отказ закрытия.
  */
 export async function runPropose(
   ctx: ToolCallCtx,
@@ -109,6 +119,15 @@ export async function runPropose(
         source: ctx.source,
       },
     );
+  }
+  // Ровно один субъект (V1.5, симметрично сборке subject в dispatch.ts): грант приходит с
+  // MCP, рутина — из фонового прогона, и оба ключа сразу означают контекст, собранный не
+  // тем, кто шлёт вызов. Молчаливо предпочесть один из них значило бы приписать
+  // предложение не тому исполнителю.
+  if (ctx.grant !== undefined) {
+    return err('VALIDATION', 'контекст вызова собран неверно: и грант, и рутина (V1.5)', {
+      tool: 'orbis_propose',
+    });
   }
   // Прогон в предложении и прогон в контексте — это один прогон. Разойтись они могут
   // только если модель сочинила `run_id`: тогда pending был бы дедуплицирован по ЧУЖОМУ
@@ -151,11 +170,21 @@ export async function runPropose(
   const dedupeKey = `proposal:${routine.runId}`;
   const pendingId = pendingMessageId(ctx.actorUserId, dedupeKey);
 
-  const prepared = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+  const prepared = await withIdentity(ctx.db, ctx.actorUserId, async (tx): Promise<Prepared> => {
+    // Предпроверка прогона — ПЕРВОЙ, до любой работы и до записи: закрывать нечего, если
+    // прогон уже терминален, и pending в этом случае писать нельзя (см. докблок выше).
+    const state = await checkRun(tx, routine.id, routine.runId, pendingId);
+    if (state !== 'running') return state;
+
     const targets = await loadTargets(tx, parsed);
     if ('error' in targets) return targets;
 
     const operations: ExecOperation[] = [];
+    // Одно поле одной сущности — ОДНА операция на предложение. Две правки того же поля
+    // разошлись бы с собственными предусловиями: вторая сняла бы `in:[исходное]`, а
+    // применялась бы поверх первой (executor в батче читает виртуальную строку) и
+    // гарантированно упала бы CONFLICT'ом на approve — то есть у владельца, на его кнопке.
+    const seen = new Map<string, number>();
     for (const [index, op] of parsed.entries()) {
       if (op.tool !== 'entity_update') {
         // entity_create предусловий не имеет: сущности ещё нет, а занятый `id`
@@ -169,6 +198,8 @@ export async function runPropose(
         // Недостижимо: loadTargets уже вернул бы NOT_FOUND
         return { error: err('NOT_FOUND', 'сущность не найдена', { id: op.input.id }) };
       }
+      const clash = collides(seen, index, op.input);
+      if (clash !== null) return { error: clash };
       const built = buildUpdate(index, op.input, current);
       if ('error' in built) return built;
       operations.push(built.op);
@@ -178,7 +209,8 @@ export async function runPropose(
     // же, где её история, а не в общей ленте владельца.
     const threadId = await ensureEntityThread(tx, ctx.actorUserId, routine.id);
     // Повтор виден по существующей строке с тем же PK: `createPending` идемпотентен, но
-    // «завёл» и «нашёл» он не различает, а ответ обязан их различать (§7.8).
+    // «завёл» и «нашёл» он не различает, а ответ обязан их различать (§7.8). Сюда мы
+    // попадаем при ЖИВОМ прогоне — то есть это ретрай, у которого не дошло закрытие.
     const before = await tx
       .select({ id: chatMessages.id })
       .from(chatMessages)
@@ -209,9 +241,22 @@ export async function runPropose(
         explanation: input.explanation,
       },
     });
-    return { replayed: before.length > 0, operations: n };
+    return { kind: 'created', replayed: before.length > 0, operations: n };
   });
   if ('error' in prepared) return prepared.error;
+  if (prepared.kind === 'replay') {
+    // Прогон уже закрыт ЭТИМ ЖЕ предложением: повтор вызова (с `id` или без) обязан
+    // вернуть тот же ответ, а не закрывать прогон второй раз и не плодить карточку.
+    return {
+      status: 'ok',
+      result: {
+        run_id: routine.runId,
+        pending_id: pendingId,
+        operations: prepared.operations,
+        replayed: true,
+      } satisfies ProposeResult,
+    };
+  }
 
   // 6. Закрытие прогона — ОДНОЙ операцией с судьбой предложения (closeRoutineRun кладёт
   // `proposal` тем же патчем, что исход): состояния «прогон закрыт, а предложения при нём
@@ -232,7 +277,19 @@ export async function runPropose(
       ...(input.id !== undefined && { id: input.id }),
     },
   );
-  if (closed.status !== 'ok') return closed;
+  if (closed.status !== 'ok') {
+    // Гонка с подметанием (окно между предпроверкой и CAS закрытия): pending уже записан,
+    // а прогон, который должен был на него сослаться, закрыт чужой рукой. Гасим карточку
+    // причиной 'stale' — «предложение снято, потому что устарело», а не отказом владельца
+    // (V1.8). Свою неудачу компенсация проглатывает: наружу идёт причина отказа закрытия,
+    // а не вторая ошибка поверх неё.
+    await rejectPending(ctx.db, {
+      ownerId: ctx.actorUserId,
+      pendingId,
+      reason: 'stale',
+    });
+    return closed;
+  }
 
   const result: ProposeResult = {
     run_id: routine.runId,
@@ -241,6 +298,107 @@ export async function runPropose(
     replayed: prepared.replayed,
   };
   return { status: 'ok', result };
+}
+
+/** Что получилось собрать: предложение записано, узнан свой же повтор либо отказ. */
+type Prepared =
+  | { kind: 'replay'; operations: number }
+  | { kind: 'created'; operations: number; replayed: boolean }
+  | { error: ToolDispatchResult };
+
+/** Исход предпроверки прогона: работаем дальше либо готовый ответ вызывающему. */
+type RunCheck = 'running' | { kind: 'replay'; operations: number } | { error: ToolDispatchResult };
+
+/**
+ * Прогон ЖИВ и он наш? (fix round 1) Проверка стоит ДО записи pending, потому что
+ * `closeRoutineRun` на терминальном прогоне отказывает — и повтор вызова этого не чинит:
+ * предусловие `outcome:'running'` провалится и во второй раз. Без предпроверки в треде
+ * рутины оставалась бы карточка-зомби: `approvePending` её применит, а прогон о ней ничего
+ * не знает — ни V1.8 («следующий прогон гасит незакрытое»), ни статус рутины её не увидят.
+ *
+ * Терминальный прогон, у которого `proposal.pending_id` — РОВНО наш детерминированный
+ * pendingId, это не отказ, а собственный повтор: предложение уже лежит, прогон уже закрыт
+ * им же. Отвечаем replay'ем, ничего не трогая.
+ *
+ * Читаем без замка намеренно: авторитетную сверку делает CAS самого закрытия
+ * (`runStillMine` в closeRun), а субсекундную гонку компенсирует `rejectPending` выше.
+ * Замок здесь удерживался бы до конца всей транзакции сборки — дороже, чем компенсация.
+ */
+async function checkRun(
+  tx: Tx,
+  routineId: string,
+  runId: string,
+  pendingId: string,
+): Promise<RunCheck> {
+  const row = await runById(tx, runId);
+  if (row === null) return { error: err('NOT_FOUND', 'прогон не найден', { run_id: runId }) };
+  if (row.run.routine_id !== routineId) {
+    return { error: err('CONFLICT', 'прогон принадлежит другой рутине', { run_id: runId }) };
+  }
+  if (row.run.outcome === 'running') return 'running';
+  if (row.run.proposal?.pending_id === pendingId) {
+    // Размер берём из САМОГО предложения, а не из повторного вызова: ответ описывает то,
+    // что лежит в треде владельца, а не то, что модель прислала во второй раз.
+    const n = await storedOperationCount(tx, pendingId);
+    if (n !== null) return { kind: 'replay', operations: n };
+  }
+  return {
+    error: err('CONFLICT', `прогон завершён (${row.run.outcome}) — предложение не принимается`, {
+      run_id: runId,
+      outcome: row.run.outcome,
+    }),
+  };
+}
+
+/** Сколько операций в уже лежащем предложении; null — карточки нет (журнал повреждён). */
+async function storedOperationCount(tx: Tx, pendingId: string): Promise<number | null> {
+  const rows = await tx
+    .select({ metadata: chatMessages.metadata })
+    .from(chatMessages)
+    .where(eq(chatMessages.id, pendingId));
+  const stored = rows[0]?.metadata as
+    | { pending?: { input?: { operations?: unknown[] } } }
+    | undefined;
+  const operations = stored?.pending?.input?.operations;
+  return Array.isArray(operations) ? operations.length : null;
+}
+
+/**
+ * Не правит ли операция то, что УЖЕ правит предыдущая (fix round 1)? Ключ — сущность плюс
+ * поле аспекта (и отдельно тело: у него свой CAS по `updated_at`).
+ *
+ * Отказ здесь, а не на approve: предусловия обеих операций снимаются с ОДНОГО исходного
+ * состояния, а исполняются они последовательно поверх друг друга (в батче executor читает
+ * виртуальную строку) — вторая гарантированно разошлась бы со своим предусловием, и
+ * владелец получил бы CONFLICT на кнопке, которую ему предложили нажать.
+ */
+function collides(
+  seen: Map<string, number>,
+  index: number,
+  input: Record<string, unknown>,
+): ToolDispatchResult | null {
+  const id = input.id as string;
+  const keys: Array<{ key: string; what: string }> = [];
+  if (input.body !== undefined) keys.push({ key: `${id}\u0000body`, what: 'тело' });
+  const aspects = input.aspects as Record<string, Record<string, unknown> | null> | undefined;
+  for (const [aspectId, patch] of Object.entries(aspects ?? {})) {
+    if (patch === null) continue; // detach отклоняет buildUpdate — своим, более точным текстом
+    for (const field of Object.keys(patch)) {
+      keys.push({ key: `${id}\u0000${aspectId}\u0000${field}`, what: `${aspectId}.${field}` });
+    }
+  }
+  for (const { key, what } of keys) {
+    const first = seen.get(key);
+    if (first !== undefined) {
+      return err(
+        'VALIDATION',
+        `операции ${first + 1} и ${index + 1} правят одно и то же (${what} сущности ${id}) — в предложении так нельзя`,
+        { reason: 'proposal_conflicting_operations', index, first, id, field: what },
+      );
+    }
+    seen.set(key, index);
+  }
+  return null;
 }
 
 interface TargetRow {

@@ -10,9 +10,12 @@ import { entityThreadId, newId, type ProposeResult } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { rollbackRun } from '../agent-loop/rollback';
+import { closeRoutineRun } from '../agent-loop/verbs';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
+import { makeChatJournalSink } from '../executor/journal';
+import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { approvePending } from '../policy/pending';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
@@ -487,5 +490,150 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     const run = (await aspectsOf(owner, runId))['orbis/agent-run'];
     expect(run?.outcome).toBe('finished');
     expect(run?.proposal).toEqual({ pending_id: firstResult.pending_id, status: 'pending' });
+
+    // Повтор БЕЗ ключа идемпотентности — тоже replay: прогон уже закрыт ЭТИМ предложением,
+    // и узнаёт его предпроверка по детерминированному pendingId, а не по ключу вызова
+    const { id: _dropped, ...noCallId } = payload;
+    const third = await dispatchTool(ctx, 'orbis_propose', noCallId);
+    expect(third.status).toBe('ok');
+    if (third.status !== 'ok') return;
+    const thirdResult = third.result as ProposeResult;
+    expect(thirdResult.replayed).toBe(true);
+    expect(thirdResult.pending_id).toBe(firstResult.pending_id);
+    expect(thirdResult.operations).toBe(1);
+    expect(await pendingsInRoutineThread(routineId)).toBe(1);
+  });
+
+  test('прогон уже терминален (failed) → CONFLICT, pending НЕ создан (fix round 1)', async () => {
+    // Сирота-предложение недопустима: pending с proposal_card лежал бы в треде и
+    // применялся бы кнопкой, а прогон о нём ничего не знает — ни V1.8, ни статус рутины
+    const { routineId, runId, ctx } = await liveRoutine();
+    const taskId = await seedTask('Цель предложения от мёртвого прогона');
+
+    const closed = await closeRoutineRun(
+      {
+        db,
+        ownerId: owner,
+        subject: { kind: 'routine', routineId },
+        clock: () => T0,
+        sink: makeChatJournalSink(),
+      },
+      { runId, outcome: 'failed', failNote: 'дедлайн прогона' },
+    );
+    expect(closed.status).toBe('ok');
+
+    const r = await dispatchTool(ctx, 'orbis_propose', {
+      run_id: runId,
+      explanation: EXPLANATION,
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+        },
+      ],
+    });
+    expectError(r, 'CONFLICT');
+    expect(errorOf(r).message).toContain('прогон завершён (failed)');
+    expect(await pendingsInRoutineThread(routineId)).toBe(0);
+    // Исход прогона предложением не переписан
+    const run = (await aspectsOf(owner, runId))['orbis/agent-run'];
+    expect(run?.outcome).toBe('failed');
+    expect(run?.proposal).toBeUndefined();
+  });
+
+  test('run_id не тот, из которого сделан вызов → VALIDATION, pending НЕ создан', async () => {
+    const { routineId, ctx } = await liveRoutine();
+    const other = await liveRoutine();
+    const taskId = await seedTask('Цель чужого run_id');
+
+    const r = await dispatchTool(ctx, 'orbis_propose', {
+      run_id: other.runId,
+      explanation: EXPLANATION,
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+        },
+      ],
+    });
+    expectError(r, 'VALIDATION');
+    expect(errorOf(r).message).toContain('не тому прогону');
+    expect(await pendingsInRoutineThread(routineId)).toBe(0);
+    expect(await pendingsInRoutineThread(other.routineId)).toBe(0);
+    expect((await aspectsOf(owner, other.runId))['orbis/agent-run']?.outcome).toBe('running');
+  });
+
+  test('и грант, и рутина в контексте → VALIDATION (ровно один субъект, V1.5)', async () => {
+    const { routineId, runId, ctx } = await liveRoutine();
+    const taskId = await seedTask('Цель двойного субъекта');
+    // Грант полного скоупа: у worker-скоупа раньше сработал бы гейт §4.14, и до сборки
+    // субъекта вызов бы не дошёл — проверялся бы не тот рубеж
+    const token = await issuePatGrant(db, {
+      ownerId: owner,
+      label: 'propose-двойной-субъект',
+      scope: 'full',
+    });
+    const identity = await verifyBearer(db, token);
+    expect(identity).not.toBeNull();
+    if (identity === null) return;
+    const r = await dispatchTool(
+      { ...ctx, grant: { id: identity.grantId, scope: 'full', label: 'полный' } },
+      'orbis_propose',
+      {
+        run_id: runId,
+        explanation: EXPLANATION,
+        operations: [
+          {
+            tool: 'entity_update',
+            input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          },
+        ],
+      },
+    );
+    expectError(r, 'VALIDATION');
+    expect(errorOf(r).message).toContain('и грант, и рутина');
+    expect(await pendingsInRoutineThread(routineId)).toBe(0);
+  });
+
+  test('две операции на одно поле одной сущности → VALIDATION, pending НЕ создан', async () => {
+    const { routineId, runId, ctx } = await liveRoutine();
+    const taskId = await seedTask('Цель двух правок одного поля');
+    const base = { run_id: runId, explanation: EXPLANATION };
+
+    const r = await dispatchTool(ctx, 'orbis_propose', {
+      ...base,
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+        },
+        {
+          tool: 'entity_update',
+          input: { id: taskId, aspects: { 'orbis/task': { status: 'done' } } },
+        },
+      ],
+    });
+    expectError(r, 'VALIDATION');
+    expect((errorOf(r).details as { reason?: string }).reason).toBe(
+      'proposal_conflicting_operations',
+    );
+    expect(errorOf(r).message).toContain('orbis/task.status');
+
+    // Разные поля той же сущности — законная пара: их предусловия не пересекаются
+    const ok = await dispatchTool(ctx, 'orbis_propose', {
+      ...base,
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+        },
+        {
+          tool: 'entity_update',
+          input: { id: taskId, aspects: { 'orbis/task': { due_date: '2026-08-20' } } },
+        },
+      ],
+    });
+    expect(ok.status).toBe('ok');
+    expect(await pendingsInRoutineThread(routineId)).toBe(1);
   });
 });
