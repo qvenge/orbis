@@ -885,6 +885,42 @@ test('detail рендерит КАЖДЫЙ query-блок body: у Daily Plannin
   await waitFor(() => expect(screen.getByTestId('qb-item')).toHaveTextContent('Разобрать Inbox'));
 });
 
+// Живой смоук ADE-среза 1: заготовка тела проекта (С10) держала три блока `children_of=this`,
+// и все три отвечали структурной ошибкой «this вне контекста сущности» — виджет звал
+// entity.query БЕЗ thisEntityId, хотя ручка его принимает (routers/entity.ts). Секции «В
+// работе», «Ждут меня», «Бэклог» на экране проекта показывали ноль при живых тикетах.
+test('query-блок с `this` на detail получает контекст открытой сущности', async () => {
+  const body = '{{query: children_of=this, aspect=orbis/task, display=list, title=Подзадачи}}';
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get')
+      return {
+        entity: { ...entity, body, bodyDoc: parseBody(body), aspects: {} },
+        relations: [],
+        thread: null,
+      };
+    if (path === 'aspect.list') return realAspects;
+    if (path === 'entity.query') return [found('Тикет')];
+    return {};
+  });
+  await waitFor(() => expect(screen.getByTestId('qb-count')).toBeInTheDocument());
+  expect(screen.queryByTestId('qb-error')).not.toBeInTheDocument();
+  // Контекст — id ОТКРЫТОЙ записи: без него сервер бросает QueryCompileError, и секция пуста.
+  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
+    query: 'children_of=this, aspect=orbis/task, display=list, title=Подзадачи',
+    thisEntityId: 'e1',
+  });
+
+  // Второй кадр — редактор: тот же виджет живёт уже NodeView'ем внутри ProseMirror
+  // (QueryBlockWithView). Дерево React у него то же (ReactNodeViewRenderer рисует порталом из
+  // компонента редактора), но проверяем это, а не рассуждение: контекст, потерянный здесь,
+  // означал бы «блок работает до первого касания тела».
+  await openEditor();
+  await waitFor(() => expect(screen.getByTestId('qb-count')).toBeInTheDocument());
+  for (const c of calls.filter((c) => c.path === 'entity.query')) {
+    expect(c.input).toHaveProperty('thisEntityId', 'e1');
+  }
+});
+
 // --- меню ⋮ на detail: закрепить / архивировать / скопировать ссылку (§3.5) ------------
 // До слайса 3 «меню ⋮» из §3.5 было двумя icon-кнопками в шапке, а обещанного пункта
 // «Скопировать ссылку» не существовало вовсе. Теперь это настоящее меню, и оба прежних

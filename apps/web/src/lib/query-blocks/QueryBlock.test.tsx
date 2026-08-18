@@ -2,6 +2,7 @@ import { screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
 import { renderWithProviders } from '../../test/harness';
 import { QueryBlock } from './QueryBlock';
+import { ThisEntityProvider } from './this-entity';
 
 const aspectsResp = [
   {
@@ -85,4 +86,43 @@ test('невалидный блок → красная плашка с пози�
   expect(screen.queryByTestId('qb-item')).not.toBeInTheDocument();
   // §6.4-гейт: при ошибке entity.query не вызывается вовсе (enabled: ok === false).
   expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
+});
+
+// --- контекст сущности: `this` в блоке (§6.1) ------------------------------------------
+// Компилятор разрешает `this` только из thisEntityId (compile.ts → entityRefId), а виджет его
+// не передавал — блоки заготовки проекта (children_of=this) отвечали структурной ошибкой
+// «this вне контекста сущности». Проверяем оба края: с провайдером id уходит, без него — нет.
+test('внутри ThisEntityProvider entity.query получает thisEntityId (this разрешим)', async () => {
+  const { calls } = renderWithProviders(
+    <ThisEntityProvider id="p1">
+      <QueryBlock query="children_of=this, aspect=orbis/task" />
+    </ThisEntityProvider>,
+    (path) => {
+      if (path === 'aspect.list') return aspectsResp;
+      if (path === 'entity.query') return [ent('a')];
+      return {};
+    },
+  );
+  await waitFor(() => expect(screen.getByTestId('qb-count')).toHaveTextContent('1'));
+  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
+    query: 'children_of=this, aspect=orbis/task',
+    thisEntityId: 'p1',
+  });
+});
+
+// Вне сущности (Browser, закреплённые списки) разрешать `this` не из чего: поля в запросе
+// быть НЕ должно — иначе виджет тихо подставил бы чужой контекст.
+test('без провайдера поля thisEntityId в запросе нет вовсе', async () => {
+  const { calls } = renderWithProviders(
+    <QueryBlock query="children_of=this, aspect=orbis/task" />,
+    (path) => {
+      if (path === 'aspect.list') return aspectsResp;
+      if (path === 'entity.query') return [];
+      return {};
+    },
+  );
+  await waitFor(() => expect(screen.getByTestId('qb-count')).toBeInTheDocument());
+  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
+    query: 'children_of=this, aspect=orbis/task',
+  });
 });

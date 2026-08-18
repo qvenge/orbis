@@ -1,0 +1,31 @@
+import { createContext, type ReactNode, useContext } from 'react';
+
+/**
+ * Контекст «чья это сущность» для query-блоков (§6.1 `children_of=this` / `parents_of=this`).
+ *
+ * Грамматика запросов знает слово `this`, но компилятор разрешает его ТОЛЬКО из контекста
+ * (`compile.ts` → `entityRefId`: `thisEntityId === null` — структурная ошибка «this вне
+ * контекста сущности»). Сервер этот контекст принимает параметром `entity.query.thisEntityId`,
+ * а web его не передавал ни разу — из-за чего заготовка тела проекта (С10) показывала на экране
+ * проекта три пустые секции («В работе», «Ждут меня», «Бэклог») вместо своих тикетов.
+ *
+ * Провайдер, а не проп: блок доезжает до виджета через ТЕЛО сущности (EditorShell → сегменты,
+ * NodeView внутри ProseMirror), и протаскивать id через все эти слои значило бы менять их
+ * сигнатуры ради данных, которых они не касаются. NodeView живёт внутри дерева React экрана
+ * (ReactNodeViewRenderer), поэтому контекст до него доходит.
+ *
+ * Значение по умолчанию — `null`, и это НЕ «пока не дошло»: там, где блок читают вне сущности
+ * (Browser, закреплённые списки, конструктор запросов), `this` разрешать не из чего, и такой
+ * блок обязан честно отвечать ошибкой, а не молча брать чужой id.
+ */
+const ThisEntityContext = createContext<string | null>(null);
+
+/** Оборачивает поддерево, для которого `this` в query-блоках означает сущность `id`. */
+export function ThisEntityProvider({ id, children }: { id: string; children: ReactNode }) {
+  return <ThisEntityContext.Provider value={id}>{children}</ThisEntityContext.Provider>;
+}
+
+/** id сущности, которую значит `this` в этом месте дерева; `null` — контекста нет. */
+export function useThisEntityId(): string | null {
+  return useContext(ThisEntityContext);
+}

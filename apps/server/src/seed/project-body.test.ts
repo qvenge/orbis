@@ -41,11 +41,12 @@ describe('projectBodyTemplate', () => {
     }
   });
 
-  test('прогоны достаются по project_id, тикеты — по children_of=this', () => {
-    // Прогон — внук проекта (проект → тикет → прогон), `this` его не достаёт: поэтому в
-    // блок прогонов подставляется реальный uuid, а не `this`.
+  test('прогоны — по project_id, тикеты — по children_of=<uuid>; слова `this` в шаблоне нет', () => {
+    // Прогон — внук проекта (проект → тикет → прогон), связь его не достаёт: отсюда плоское
+    // project_id. Тикеты — дети, но и они по uuid: `this` разрешается только в теле самого
+    // проекта, а блок читают и снаружи (закреплённый список, Browser) — там он был бы ошибкой.
     expect(body).toContain(`{{query: aspect=orbis/agent-run, project_id=${projectId}`);
-    expect(body).toContain('children_of=this, aspect=orbis/task, status=waiting');
-    expect(body).not.toContain('children_of=this, aspect=orbis/agent-run');
+    expect(body).toContain(`children_of=${projectId}, aspect=orbis/task, status=waiting`);
+    expect(body).not.toContain('this');
   });
 });

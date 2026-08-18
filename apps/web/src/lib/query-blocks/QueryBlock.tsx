@@ -4,6 +4,7 @@ import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { parseBlock } from './parse';
+import { useThisEntityId } from './this-entity';
 import { useFieldCatalog } from './useFieldCatalog';
 
 /**
@@ -45,9 +46,20 @@ export function QueryBlock({
   const { catalog } = useFieldCatalog();
   const parsed = useMemo(() => (catalog ? parseBlock(query, catalog) : null), [catalog, query]);
   const ok = parsed?.ok === true;
+  /**
+   * Чем разрешается `this` в клаузах `children_of=`/`parents_of=` (§6.1). Ставит контекст тот,
+   * кто рисует тело сущности (DetailScreen → ThisEntityProvider); вне сущности его нет.
+   *
+   * Поле уходит на сервер ТОЛЬКО когда контекст есть, а не `thisEntityId: null`: у ручки вход
+   * `.strict()` с `z.string().uuid().optional()` (routers/entity.ts), и null развалил бы разбор
+   * входа у КАЖДОГО блока — включая те, где `this` не встречается вовсе.
+   */
+  const thisEntityId = useThisEntityId();
 
   // entity.query только при валидном блоке; §6.4 — при ошибке НИКОГДА не пустой список, а плашка.
-  const list = trpc.entity.query.useQuery({ query }, { enabled: ok });
+  const list = trpc.entity.query.useQuery(thisEntityId ? { query, thisEntityId } : { query }, {
+    enabled: ok,
+  });
 
   if (!parsed) {
     return (

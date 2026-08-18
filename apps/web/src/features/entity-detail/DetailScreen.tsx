@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { NotFoundScreen } from '../../app/NotFoundScreen';
 import { ScreenHeader } from '../../app/ScreenHeader';
 import { invalidateGraph } from '../../lib/invalidate';
+import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
 import { useNav } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -276,18 +277,26 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           со старым id дописал бы старый документ в новую запись, а `flush()` на размонтировании
           (там же, в хуке) не случился бы вовсе. key по id, НЕ по updatedAt: рефетч после каждого
           сохранения ремоунтил бы редактор, стирая набранное за время запроса. */}
-      <EntityBody
-        key={entity.id}
-        entity={entity}
-        asMarkdown={asMarkdown}
-        onCloseMarkdown={() => setAsMarkdown(false)}
-        screenConflict={conflict}
-        noticeHost={noticeHost}
-        onRefresh={() => {
-          void get.refetch();
-          dismissConflict();
-        }}
-      />
+      {/* Провайдер — вокруг ТЕЛА, потому что `this` в query-блоках (§6.1) означает запись, чьё
+          тело этот блок содержит. Query-блоки живут только здесь: первый кадр рисует их через
+          EditorShell, редактор — NodeView'ями внутри того же поддерева, — и обоим контекст
+          доходит. Снаружи тела (Browser, закреплённые списки, конструктор запросов) контекста
+          нет намеренно: разрешать `this` там не из чего, и блок обязан ответить ошибкой, а не
+          взять чужой id. */}
+      <ThisEntityProvider id={entity.id}>
+        <EntityBody
+          key={entity.id}
+          entity={entity}
+          asMarkdown={asMarkdown}
+          onCloseMarkdown={() => setAsMarkdown(false)}
+          screenConflict={conflict}
+          noticeHost={noticeHost}
+          onRefresh={() => {
+            void get.refetch();
+            dismissConflict();
+          }}
+        />
+      </ThisEntityProvider>
     </div>
   );
 
