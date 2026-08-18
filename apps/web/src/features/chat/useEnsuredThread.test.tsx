@@ -77,3 +77,27 @@ test('поздний ответ ПРЕЖНЕЙ записи состояние �
   // запрос (в кеш он при этом лёг — под id, для которого спрашивали).
   expect(releaseE1).toHaveLength(1);
 });
+
+// Под StrictMode React прогоняет и рендер, и эффекты монтирования ДВАЖДЫ — а состояние здесь
+// правится прямо в рендере (штатный приём «adjusting state on prop change»). У ошибки в таком
+// приёме ровно два исхода, и оба видны отсюда: лишняя мутация на второй прогон эффекта либо
+// «Too many re-renders» (React бросает из рендера, и renderWithProviders падает вместе с ним).
+test('смена записи под StrictMode: ровно две мутации, по одной на запись', async () => {
+  const { calls } = renderWithProviders(
+    <EnsureProbe />,
+    (path, input) => {
+      if (path === 'chat.ensureThread') return threadOf(input);
+      throw new Error(`unexpected ${path}`);
+    },
+    { strict: true },
+  );
+  await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('th-e1'));
+
+  fireEvent.click(screen.getByRole('button', { name: 'на e2' }));
+
+  await waitFor(() => expect(screen.getByTestId('probe')).toHaveTextContent('th-e2'));
+  expect(calls.filter((c) => c.path === 'chat.ensureThread').map((c) => c.input)).toEqual([
+    { entityId: 'e1' },
+    { entityId: 'e2' },
+  ]);
+});

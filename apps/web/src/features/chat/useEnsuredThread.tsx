@@ -132,8 +132,28 @@ export function useEnsuredThread(entityId?: string): {
     const startedFor = startedForRef.current;
     if (startedFor !== null && startedFor.entityId === entityId) return;
     startedForRef.current = { entityId };
-    // Попадание в кеш уже отдано начальным состоянием (initialFor) — мутация не нужна.
-    if (entityId !== undefined && sessionThreads.has(entityId)) return;
+    const cached = entityId === undefined ? undefined : sessionThreads.get(entityId);
+    if (cached !== undefined) {
+      /**
+       * Кеш ПЕРЕЧИТЫВАЕТСЯ, и найденное ДОВОДИТСЯ до состояния, а не просто отменяет мутацию.
+       *
+       * Соблазн написать здесь «попадание уже отдано начальным состоянием (initialFor) — просто
+       * выходим» велик и неверен: `initialFor` читал `Map` В РЕНДЕРЕ, а этот эффект бежит после
+       * коммита, и между двумя моментами `Map` могут наполнить — она пишется из `.then` чужого
+       * промиса, в том числе промиса УЖЕ РАЗМОНТИРОВАННОГО экземпляра. Сценарий целиком:
+       * открыть «Тред» (ensure в полёте) → уйти на «Сущность» (вкладка размонтирована, промис
+       * жив) → вернуться (новый экземпляр, кеш ещё пуст → `pending`) → ответ доезжает ровно в
+       * это окно. Молчаливый выход оставил бы экземпляр в `pending` НАВСЕГДА — тот самый вечный
+       * скелетон, ради которого весь этот срез и делался.
+       *
+       * Обновление функцией: в подавляющем большинстве случаев состояние уже `ready` с тем же
+       * id, и новый объект стоил бы пустого ре-рендера.
+       */
+      setState((s) =>
+        s.status === 'ready' && s.threadId === cached ? s : { status: 'ready', threadId: cached },
+      );
+      return;
+    }
     start();
   }, [entityId, start]);
 
