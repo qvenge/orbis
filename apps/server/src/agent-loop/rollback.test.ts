@@ -191,6 +191,43 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     expect(await isArchived(owner, runId)).toBe(false);
   });
 
+  test('чужая правка тикета МЕЖДУ claim и finish → ok:false, conflicts указывает тикет и action правки; ничего не откачено (инвариант 7)', async () => {
+    const { owner, grantId, ticketId } = await scene('Тикет с правкой между шагами');
+    const ctx = worker(owner, grantId);
+    const claim = okResult<ClaimTaskResult>(
+      await dispatchTool(ctx, 'orbis_claim_task', { ticket_id: ticketId }),
+    );
+    const runId = claim.run_id;
+
+    // Владелец правит тот же тикет ПОКА ПРОГОН ИДЁТ — самый обычный случай: прогон длится
+    // часами. Правка ложится в журнал МЕЖДУ действиями прогона, и окно предпроверки «после
+    // последнего действия» её бы не увидело
+    const a = createCaller({ actorUserId: owner, actorKind: 'owner', db, clientVersion: null });
+    await a.entity.update({ id: ticketId, aspects: { 'orbis/task': { priority: 'high' } } });
+    const edit = (await actionsOf(owner)).find((x) => x.source === 'ui' && x.run_id === undefined);
+    if (edit === undefined) throw new Error('правка владельца не попала в журнал');
+
+    await dispatchTool(ctx, 'orbis_finish', { run_id: runId, report: 'Готово' });
+
+    const undoneBefore = await undoMessages(owner);
+    const out = await rollbackRun(db, { actorUserId: owner, runId });
+
+    expect(out.ok).toBe(false);
+    if (out.ok) throw new Error('ожидался конфликт');
+    if (out.reason !== 'conflict') throw new Error('ожидался reason=conflict');
+    expect(out.conflicts).toContainEqual(
+      expect.objectContaining({ entityId: ticketId, actionId: edit.id, source: 'ui' }),
+    );
+    // Ничего не откачено, и приоритет владельца на месте: inverse захвата вернул бы
+    // `orbis/task` целиком к состоянию ДО claim и унёс бы его вместе со статусом
+    expect(await undoMessages(owner)).toBe(undoneBefore);
+    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({
+      status: 'waiting',
+      priority: 'high',
+    });
+    expect(await isArchived(owner, runId)).toBe(false);
+  });
+
   test('шаг уже отменён вручную (ai.undo) → пропускается, остальное откатывается', async () => {
     const { owner, grantId, ticketId } = await scene('Тикет с отменённым шагом');
     const ctx = worker(owner, grantId);

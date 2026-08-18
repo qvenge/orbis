@@ -138,22 +138,32 @@ function operationIds(op: ActionOperation): string[] {
 }
 
 /**
- * Чужие неотменённые действия ПОЗЖЕ последнего действия прогона по тем же сущностям
- * (шаг 3). Отбор — по составному курсору `(created_at, id) > (…)`, тем же ключом, что
- * и порядок шага 1: `created_at > tLast` пропустил бы действие той же миллисекунды, а
- * при precision 3 это не гипотетический случай.
+ * Чужие неотменённые действия по тем же сущностям в ОКНЕ ПРОГОНА (шаг 3) — от ПЕРВОГО
+ * его живого действия и до конца журнала.
+ *
+ * Окно от первого, а не от последнего, и это не придирка. Прогон — не мгновение: между
+ * `claim` и `finish` проходят часы, и владелец в это время правит тот же тикет руками
+ * (приоритет, срок, заметку). Такая правка ЛЕЖИТ МЕЖДУ действиями прогона, а inverse
+ * `entity_update` несёт прежнее значение ВСЕГО аспект-ключа (executor.ts, prior.aspects) —
+ * то есть отмена `claim` вернула бы `orbis/task` целиком к состоянию ДО захвата и стёрла
+ * бы правку владельца заодно со статусом. Окно «после последнего действия» её просто не
+ * видит: она раньше `finish`. Инвариант 7 требует показать её конфликтом, а не затереть,
+ * поэтому смотрим весь отрезок жизни прогона, а не его хвост.
+ *
+ * Отбор — по составному курсору `(created_at, id) > (…)`, тем же ключом, что и порядок
+ * шага 1: `created_at > t0` пропустил бы действие той же миллисекунды, а при precision 3
+ * это не гипотетический случай. Само первое действие прогона в окно не входит (строгое
+ * `>`), а остальные его действия отсеиваются ТЕМ ЖЕ предикатом, что отбирал их на шаге 1
+ * (`isRunAction`), — они и есть то, что мы собрались отменять. Предикат, а не голое
+ * сравнение run_id: ответ владельца на чекпойнт тоже несёт run_id, и по голому сравнению
+ * он молча выпал бы из конфликтов, то есть был бы снят откатом (инвариант 7).
+ * Уже отменённые чужие — не конфликт: их эффекта в графе больше нет.
  *
  * Containment `{"actions": []}` + непустая длина — тот же приём, что в undo.ts
  * findLastUndoable: он отсекает undo-сообщения и обычную переписку (у них нет `actions`).
  * Индексом он, в отличие от пробы шага 1, НЕ берётся (пустой контейнер не даёт ключей
  * jsonb_path_ops) — сужает здесь курсор по created_at (EXPLAIN: Index Scan по
- * chat_messages_thread_created), а containment остаётся фильтром. Этого достаточно:
- * позже последнего действия прогона у владельца лежит хвост журнала, а не весь журнал.
- * Действия ЭТОГО прогона отсеиваются ТЕМ ЖЕ предикатом, что отбирал их на шаге 1
- * (`isRunAction`), — они и есть то, что мы собрались отменять. Предикат, а не голое
- * сравнение run_id: ответ владельца на чекпойнт тоже несёт run_id, и по голому сравнению
- * он молча выпал бы из конфликтов, то есть был бы снят откатом (инвариант 7).
- * Уже отменённые чужие — не конфликт: их эффекта в графе больше нет.
+ * chat_messages_thread_created), а containment остаётся фильтром.
  *
  * Пара {сущность, действие} дедуплицируется: id обычно встречается и в операции, и в
  * inverse одного action'а, и без дедупликации экран показывал бы один конфликт дважды.
@@ -170,26 +180,32 @@ async function foreignChangesAfter(
         ORDER BY created_at ASC, id ASC`,
   );
   const conflicts: RollbackConflict[] = [];
-  const seen = new Set<string>();
   for (const row of rows as unknown as Array<Record<string, unknown>>) {
     const entry = toEntry(row);
     if (entry === undefined) continue;
     const action = entry.action;
     if (isRunAction(action, args.runId)) continue;
-    if (await isUndone(tx, action.id)) continue;
+    // Пересечение с `touched` считается ДО `isUndone`, и порядок здесь принципиален:
+    // проба «отменено?» — отдельный запрос НА КАЖДОЕ действие, а в окне долгого прогона
+    // у активного владельца лежат сотни чужих записей, к откату отношения не имеющих.
+    // Дешёвый фильтр в памяти сначала — и запрос уходит только за настоящими кандидатами.
+    // Set заодно даёт дедупликацию {действие, сущность}: id встречается и в операции, и
+    // в inverse одного action'а.
+    const hits = new Set<string>();
     for (const op of [...action.operations, ...action.inverse]) {
       for (const entityId of operationIds(op)) {
-        if (!args.touched.has(entityId)) continue;
-        const key = `${action.id}:${entityId}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        conflicts.push({
-          entityId,
-          actionId: action.id,
-          at: entry.at.toISOString(),
-          source: action.source,
-        });
+        if (args.touched.has(entityId)) hits.add(entityId);
       }
+    }
+    if (hits.size === 0) continue;
+    if (await isUndone(tx, action.id)) continue;
+    for (const entityId of hits) {
+      conflicts.push({
+        entityId,
+        actionId: action.id,
+        at: entry.at.toISOString(),
+        source: action.source,
+      });
     }
   }
   return conflicts;
@@ -200,6 +216,14 @@ async function foreignChangesAfter(
  * `withIdentity`: RLS на chat_messages скоупит журнал владельцем (§4.10), и без identity
  * выборка вернула бы пусто. Транзакция закрывается ДО серии отмен намеренно — undoAction
  * принимает `Db` и открывает собственную транзакцию, а вложенности здесь быть не должно.
+ *
+ * Отсюда честное TOCTOU-окно: между коммитом предпроверки и первым undo проходит время,
+ * и чужая правка, легшая ИМЕННО в этот зазор, конфликтом не станет — её затрёт LWW-откат
+ * (undo не сверяет состояние, см. шапку файла). Это свойство ДИЗАЙНА, а не недосмотр:
+ * закрыть окно можно было бы только замком на все затронутые сущности через обе фазы, а
+ * механика Undo, на которой стоит откат (решение плана — «механику самого Undo не
+ * трогаем»), транзакцию наружу не отдаёт. Цена промаха — одна потерянная правка, сделанная
+ * в те доли секунды, пока человек уже нажал «Откатить»; цена закрытия — переписанный Undo.
  *
  * Прогон, которого нет (или чужой — под RLS это неразличимо), даёт `ok` с пустым undone,
  * а не NOT_FOUND: «откатывать нечего» — это исход, а не отказ, и повторное нажатие кнопки
@@ -219,11 +243,14 @@ export async function rollbackRun(
     for (const entry of all) {
       if (!(await isUndone(tx, entry.action.id))) live.push(entry);
     }
-    const last = live[live.length - 1];
-    if (last === undefined) return { live, conflicts: [] as RollbackConflict[] };
+    // Окно предпроверки открывается ПЕРВЫМ живым действием прогона, а не последним:
+    // чужая правка между `claim` и `finish` — самый обычный случай, и она обязана стать
+    // конфликтом (см. докблок foreignChangesAfter)
+    const first = live[0];
+    if (first === undefined) return { live, conflicts: [] as RollbackConflict[] };
     const conflicts = await foreignChangesAfter(tx, {
       runId,
-      after: last,
+      after: first,
       touched: touchedEntities(live),
     });
     return { live, conflicts };
