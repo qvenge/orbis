@@ -3414,3 +3414,258 @@ describe('ADE: версии', () => {
     expect(versionReads(calls, 'e2')).toBe(1);
   });
 });
+
+/**
+ * Рутина в объёме detail (entity.get): «что делать» лежит в ТЕЛЕ, в аспекте — только
+ * расписание и права (V1.1). `days` непуст — иначе не проверить, что дни вообще печатаются.
+ */
+const ROUTINE = {
+  ...entity,
+  id: 'rt1',
+  title: 'Утренний разбор',
+  aspects: {
+    'orbis/routine': {
+      stage: 'active',
+      at: '07:00',
+      days: ['mo', 'we', 'fr'],
+      mode: 'propose',
+    },
+  },
+};
+
+/** Рутина-фикстура: поля аспекта разные от теста к тесту, форма записи — одна. */
+type RoutineFixture = Omit<typeof entity, 'aspects'> & {
+  aspects: { 'orbis/routine': Record<string, unknown> };
+};
+
+/** Момент следующего срабатывания — из routine.overview, часы там серверные (V1.14). */
+const NEXT_BUCKET_AT = '2026-08-19T04:00:00.000Z';
+
+/**
+ * Прогоны рутины приезжают ТЕМ ЖЕ `entity.query`, что и прогоны тикета (Р-8), — и отличаются
+ * от них ровно тем, что гранта у них нет вовсе: работу делал внутренний исполнитель.
+ * Порядок — как у сервера (`sortBy=created_at:desc`): последний прогон стоит первым.
+ */
+const ROUTINE_RUN_DONE = {
+  ...RUN,
+  id: 'rr2',
+  title: 'Прогон: Утренний разбор',
+  aspects: {
+    'orbis/agent-run': {
+      routine_id: 'rt1',
+      bucket: '2026-08-18T07:00',
+      attempt: 1,
+      outcome: 'finished',
+      started_at: '2026-08-18T04:00:00.000Z',
+      finished_at: '2026-08-18T04:02:00.000Z',
+      step_count: 2,
+      steps: [],
+    },
+  },
+};
+
+const ROUTINE_RUN_FAILED = {
+  ...RUN,
+  id: 'rr1',
+  title: 'Прогон: Утренний разбор',
+  aspects: {
+    'orbis/agent-run': {
+      routine_id: 'rt1',
+      bucket: '2026-08-17T07:00',
+      attempt: 3,
+      outcome: 'failed',
+      fail_note: 'провайдер не ответил',
+      started_at: '2026-08-17T04:00:00.000Z',
+      finished_at: '2026-08-17T04:01:00.000Z',
+      step_count: 1,
+      steps: [],
+    },
+  },
+};
+
+/**
+ * Обработчик экрана рутины. `stage` держится ПЕРЕМЕННОЙ, а не константой: пауза — это
+ * entity.update, после которого экран перечитывает запись, и неизменный ответ вернул бы
+ * «активна» поверх только что нажатой паузы — тест был бы зелен при любой реализации кнопки.
+ */
+function routineHandler(
+  opts: { entity?: RoutineFixture; runs?: unknown[]; overview?: unknown } = {},
+): MockHandler {
+  const base = opts.entity ?? ROUTINE;
+  let stage = (base.aspects['orbis/routine'] as { stage: string }).stage;
+  const current = () => ({
+    ...base,
+    aspects: { 'orbis/routine': { ...base.aspects['orbis/routine'], stage } },
+  });
+  return (path, input) => {
+    if (path === 'entity.get') return { entity: current(), relations: [], thread: null };
+    if (path === 'entity.query') return opts.runs ?? [ROUTINE_RUN_DONE, ROUTINE_RUN_FAILED];
+    if (path === 'routine.overview')
+      return (
+        opts.overview ?? {
+          nextBucketAt: stage === 'paused' ? null : NEXT_BUCKET_AT,
+          lastRun: null,
+          waiting: 0,
+          openProposal: false,
+        }
+      );
+    if (path === 'routine.runNow') return { runId: 'rr9' };
+    if (path === 'entity.update') {
+      const patch = (input as { aspects?: Record<string, { stage?: string }> }).aspects?.[
+        'orbis/routine'
+      ];
+      if (patch?.stage !== undefined) stage = patch.stage;
+      return current();
+    }
+    // Часовой пояс владельца — тот же шов, что у ленты прогона и истории: без него время
+    // печаталось бы в зоне машины, и проверка даты зависела бы от того, где идёт прогон.
+    if (path === 'user.getSettings') return { timezone: 'UTC' };
+    if (path === 'aspect.list') return [];
+    if (path === 'oauth.listGrants') return [GRANT];
+    if (path === 'agentRun.sweep') return { swept: 0 };
+    return {};
+  };
+}
+
+/** Рутина на ТЁПЛОМ кэше — ради двойного прогона эффектов (см. TicketOnWarmCache). */
+function RoutineOnWarmCache() {
+  const q = trpc.entity.get.useQuery(detailGetInput('rt1'));
+  return q.data ? <DetailScreen entityId="rt1" /> : null;
+}
+
+describe('V1: рутина', () => {
+  test('блок состояния: режим, время, дни и следующее срабатывание; прогоны без колонки исполнителя; блоков тикета нет (V1.14, приёмка 2)', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="rt1" />, routineHandler());
+    const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
+    const status = await within(panel).findByTestId('routine-status');
+
+    // Режим — словом, а не сырым enum: владелец решает по нему, спросят ли его перед правкой.
+    expect(status).toHaveTextContent('предлагает');
+    expect(status).toHaveTextContent('07:00');
+    expect(status).toHaveTextContent('пн, ср, пт');
+    // Следующее срабатывание приезжает ОДНИМ снимком с сервера (routine.overview) и печатается
+    // в зоне владельца — тем же форматтером, что и все значения времени на экране.
+    await waitFor(() => expect(status).toHaveTextContent('19 авг.'));
+    expect(status).toHaveTextContent('04:00');
+    // Итог последнего прогона — здесь же: ради него экран и открывают.
+    expect(status).toHaveTextContent('готово');
+
+    // Прогоны рутины читаются ТЕМ ЖЕ запросом, что и прогоны тикета (Р-8), — по детям рутины.
+    expect(
+      calls.some(
+        (c) => c.path === 'entity.query' && (c.input as { query: string }).query.includes('rt1'),
+      ),
+    ).toBe(true);
+    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
+    const list = within(details).getByTestId('runs-list');
+    expect(within(list).getByTestId('run-rr1')).toHaveTextContent('сбой');
+    expect(within(list).getByTestId('run-rr2')).toHaveTextContent('готово');
+    // Исполнителя у рутинного прогона нет вовсе: колонки нет, и список доступов не спрашивается.
+    expect(list).not.toHaveTextContent('worker-1');
+    expect(calls.some((c) => c.path === 'oauth.listGrants')).toBe(false);
+
+    // Тикетные блоки рутине не положены: у неё нет ни статуса waiting, ни назначения.
+    expect(screen.queryByTestId('ticket-waiting')).toBeNull();
+    expect(screen.queryByTestId('assignment-card')).toBeNull();
+  });
+
+  test('режим act печатает разрешённые инструменты; рутина на паузе — «на паузе» вместо времени', async () => {
+    const acting = {
+      ...ROUTINE,
+      aspects: {
+        'orbis/routine': {
+          stage: 'paused',
+          at: '21:30',
+          mode: 'act',
+          allowed_tools: ['entity_update', 'thread_post'],
+        },
+      },
+    };
+    renderWithProviders(<DetailScreen entityId="rt1" />, routineHandler({ entity: acting }));
+    const status = await screen.findByTestId('routine-status');
+    // «действует» без списка инструментов — это «действует как угодно»: право владелец читает
+    // целиком или не читает вовсе.
+    expect(status).toHaveTextContent('действует: entity_update, thread_post');
+    // Дней нет — расписание ежедневное (поля нет = каждый день, схема аспекта).
+    expect(status).toHaveTextContent('каждый день');
+    // Паузе времени срабатывания не обещают: рутина на паузе не сработает вовсе (V1.14).
+    await waitFor(() => expect(status).toHaveTextContent('на паузе'));
+    expect(await screen.findByRole('button', { name: 'Возобновить' })).toBeInTheDocument();
+  });
+
+  test('«Прогнать сейчас» зовёт routine.runNow и открывает прогон; «Пауза» шлёт stage paused и превращается в «Возобновить» (приёмка 10)', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="rt1" />, routineHandler());
+    const status = await screen.findByTestId('routine-status');
+
+    await userEvent.click(within(status).getByRole('button', { name: 'Прогнать сейчас' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'routine.runNow')?.input).toEqual({ routineId: 'rt1' }),
+    );
+    // Ответ приходит ДО модели (V1.3) — экран ведёт на сам прогон, поверх стека активной вкладки.
+    await waitFor(() =>
+      expect(useNav.getState().stacks.browser.at(-1)).toEqual({
+        kind: 'entity',
+        id: 'rr9',
+      }),
+    );
+
+    await userEvent.click(within(status).getByRole('button', { name: 'Пауза' }));
+    await waitFor(() => {
+      const input = calls.find((c) => c.path === 'entity.update')?.input as {
+        id: string;
+        aspects: Record<string, Record<string, unknown>>;
+      };
+      expect(input.id).toBe('rt1');
+      // Патч мержится по полям: расписание и права пауза не трогает.
+      expect(input.aspects['orbis/routine']).toEqual({ stage: 'paused' });
+    });
+    expect(await screen.findByRole('button', { name: 'Возобновить' })).toBeInTheDocument();
+  });
+
+  test('идёт прогон — «Прогнать сейчас» заблокирована; отказ сервера показан текстом', async () => {
+    const running = {
+      ...ROUTINE_RUN_DONE,
+      id: 'rr3',
+      aspects: {
+        'orbis/agent-run': {
+          ...ROUTINE_RUN_DONE.aspects['orbis/agent-run'],
+          outcome: 'running',
+          finished_at: undefined,
+        },
+      },
+    };
+    const busy = renderWithProviders(
+      <DetailScreen entityId="rt1" />,
+      routineHandler({ runs: [running] }),
+    );
+    const status = await screen.findByTestId('routine-status');
+    // Кнопка, которая гарантированно отказывает, хуже её отсутствия (та же логика, что у
+    // блока ожидания тикета) — но исчезать ей нельзя: владелец должен видеть, ПОЧЕМУ нельзя.
+    expect(within(status).getByRole('button', { name: 'Прогнать сейчас' })).toBeDisabled();
+    expect(status).toHaveTextContent('идёт прогон');
+    busy.unmount();
+
+    // …и отказ сервера (прогон успели начать в другой вкладке, исчерпан дневной лимит)
+    // владелец читает словами, а не молчанием кнопки.
+    renderWithProviders(<DetailScreen entityId="rt1" />, (path, input) => {
+      if (path === 'routine.runNow') throw trpcError('CONFLICT', 'прогон уже идёт');
+      return routineHandler()(path, input);
+    });
+    const second = await screen.findByTestId('routine-status');
+    await userEvent.click(within(second).getByRole('button', { name: 'Прогнать сейчас' }));
+    expect(await within(second).findByRole('alert')).toHaveTextContent('прогон уже идёт');
+  });
+
+  test('открытие рутины зовёт agentRun.sweep один раз (сорванный прогон закрывается с экрана)', async () => {
+    // Плановый прогон срывается вместе с процессом (деплой, падение) и остаётся running
+    // навсегда: владелец, открывший рутину, чинит это сам, ничего об этом не зная.
+    const { calls } = renderWithProviders(<RoutineOnWarmCache />, routineHandler(), {
+      strict: true,
+    });
+    await screen.findAllByRole('tabpanel', { name: 'Сущность' });
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === 'agentRun.sweep').length).toBeGreaterThan(0),
+    );
+    expect(calls.filter((c) => c.path === 'agentRun.sweep')).toHaveLength(1);
+  });
+});

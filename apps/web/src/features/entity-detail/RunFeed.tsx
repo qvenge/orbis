@@ -15,33 +15,12 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
+// Разбор полей аспекта — общим модулем (см. его шапку): у ленты прогона и у блока состояния
+// рутины правило одно, и копия разъехалась бы при первой же правке.
+import { num, obj, str } from './aspect-read';
 import { RUN_ASPECT, RUN_OUTCOME_LABELS } from './useTicketRuns';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
-
-/**
- * Разбор аспекта РУКАМИ, а не зод-схемой из `@orbis/shared`.
- *
- * Аспекты приезжают в wire-форме как `Record<string, unknown>` — тип по id аспекта клиенту
- * не известен, и без разбора это `unknown` в каждом поле. Соблазн взять готовую
- * `agentRunAspectSchema` велик, но она притащила бы zod в чанк `DetailScreen`, где его
- * сегодня нет вовсе (ни один модуль web не импортирует zod напрямую), — то есть заплатила бы
- * весом первого кадра записи за проверку данных, которые сервер уже провалидировал на записи.
- *
- * Отсюда правило разбора: поле неверной формы — как отсутствующее. Прогон рисуется тем, что
- * в нём разобралось; пустая лента честнее, чем красный экран на одном кривом шаге.
- */
-function str(v: unknown): string | undefined {
-  return typeof v === 'string' && v !== '' ? v : undefined;
-}
-function num(v: unknown): number | undefined {
-  return typeof v === 'number' ? v : undefined;
-}
-function obj(v: unknown): Record<string, unknown> | undefined {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
-    ? (v as Record<string, unknown>)
-    : undefined;
-}
 
 /**
  * Годится ли адрес сессии в `href`. Его пишет ИСПОЛНИТЕЛЬ своим глаголом — то есть это чужой

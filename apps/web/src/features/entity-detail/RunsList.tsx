@@ -1,6 +1,12 @@
-// История прогонов тикета (С5, приёмка 9): что агент делал, чем это кончилось и сколько шагов
-// заняло. Строки — ссылки на сами прогоны: подробности (лента шагов, откат) живут на их
-// собственных экранах, а не здесь.
+// История прогонов (С5, приёмка 9; V1.14, приёмка 2): что исполнитель делал, чем это кончилось
+// и сколько шагов заняло. Строки — ссылки на сами прогоны: подробности (лента шагов, откат)
+// живут на их собственных экранах, а не здесь.
+//
+// Секция одна на тикет и на рутину, и это не экономия: прогон устроен одинаково (тот же аспект,
+// те же исходы, тот же запрос по детям), а различает их РОВНО одно — исполнитель. У тикета он
+// внешний, и грант отвечает на вопрос «кто это делал»; у рутины исполнитель внутренний и всегда
+// один, поэтому колонки у неё нет вовсе (Р-8) — пустой столбец на каждой строке сообщал бы, что
+// исполнителя не знают, а его знают.
 import { formatDate } from '../../lib/format';
 import { trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
@@ -18,18 +24,24 @@ function stepsLabel(n: number): string {
 
 export function RunsList({
   runs,
+  showGrant = true,
   onOpen,
 }: {
-  /** Часть контракта секции; сама выборка уже скоуплена тикетом (useTicketRuns). */
-  ticketId: string;
+  /** Часть контракта секции; сама выборка уже скоуплена родителем (useTicketRuns). */
+  parentId: string;
   runs: TicketRun[];
+  /** Показывать ли исполнителя. `false` у рутины: исполнитель внутренний и всегда один. */
+  showGrant?: boolean;
   onOpen: (id: string) => void;
 }) {
   // Оба чтения — ПО УЖЕ ЖИВЫМ ключам кэша: часовой пояс тянет сам экран (DetailScreen), список
   // доступов — карточка назначения агентского тикета. Своей сети секция не добавляет; `enabled`
-  // страхует случай «тикет назначен человеку, а прогоны от прежнего агента остались».
+  // страхует случай «тикет назначен человеку, а прогоны от прежнего агента остались» — и
+  // закрывает список доступов у рутины, которой он не нужен ни для одной строки.
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
-  const grants = trpc.oauth.listGrants.useQuery(undefined, { enabled: runs.length > 0 });
+  const grants = trpc.oauth.listGrants.useQuery(undefined, {
+    enabled: showGrant && runs.length > 0,
+  });
 
   // Прогонов нет — секции нет вовсе: пустая «Прогоны (0)» на каждом тикете, которому агент ещё
   // не начал работать, — шум, а не сведения.
@@ -59,7 +71,7 @@ export function RunsList({
                 <span className="text-text-secondary">{formatDate(startedAt, tz)}</span>
                 <Badge>{RUN_OUTCOME_LABELS[outcome] ?? outcome}</Badge>
                 <span className="text-text-secondary">· {stepsLabel(steps)}</span>
-                {grant !== undefined && (
+                {showGrant && grant !== undefined && (
                   <span className="break-words text-text-secondary">· {grant.label}</span>
                 )}
               </button>

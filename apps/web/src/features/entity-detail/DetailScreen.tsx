@@ -29,6 +29,7 @@ import { Backlinks } from './Backlinks';
 import { Blocks } from './Blocks';
 import { GoalProgress } from './GoalProgress';
 import { NativeRow } from './NativeRow';
+import { ROUTINE_ASPECT, RoutineStatusBlock } from './RoutineStatusBlock';
 import { RunFeed } from './RunFeed';
 import { RunsList } from './RunsList';
 import { Subtasks } from './Subtasks';
@@ -142,7 +143,17 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     loaded !== undefined &&
     loaded.aspects[TASK] !== undefined &&
     loaded.aspects[ASSIGNMENT] !== undefined;
-  const { runs, lastRun } = useTicketRuns(entityId, isTicket);
+  /**
+   * V1.14. Рутина открывается ТЕМ ЖЕ экраном: тело — инструкция исполнителю, «Детали» — карточка
+   * аспекта и история прогонов, «Тред» — обсуждение и карточки предложений. Своего экрана у неё
+   * нет намеренно — она обычная запись графа, а не отдельная сущность приложения.
+   *
+   * Прогоны читаются тем же `useTicketRuns` и тем же запросом (`children_of=<рутина>`): прогон
+   * рутины — такая же дочерняя запись с аспектом `orbis/agent-run`, и второй выборки для неё
+   * заводить незачем.
+   */
+  const isRoutine = loaded !== undefined && loaded.aspects[ROUTINE_ASPECT] !== undefined;
+  const { runs, lastRun } = useTicketRuns(entityId, isTicket || isRoutine);
 
   /**
    * Подметание брошенных прогонов (С6) — на открытии тикета или проекта, ОДИН раз.
@@ -156,7 +167,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
    * id записи: экран монтируется БЕЗ key (router.tsx), и переход тикет→тикет внутри вкладки
    * обязан подмести заново.
    */
-  const sweepTarget = isTicket || (loaded !== undefined && loaded.aspects[PROJECT] !== undefined);
+  // Рутина — третья цель подметания, и по той же причине: плановый прогон срывается ВМЕСТЕ с
+  // процессом (деплой Render роняет контейнер посреди цикла) и остаётся `running` навсегда, а
+  // сервер до следующего тика планировщика об этом не узнает. Владелец, открывший рутину,
+  // чинит это сам, ничего об этом не зная.
+  const sweepTarget =
+    isTicket || isRoutine || (loaded !== undefined && loaded.aspects[PROJECT] !== undefined);
   const sweep = trpc.agentRun.sweep.useMutation({
     // Подметание МЕНЯЕТ граф (тикеты возвращаются в planned, прогоны становятся abandoned) —
     // экран обязан показать результат сразу, а не через минуту протухания списков. Но только
@@ -260,6 +276,15 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       {isTicket && (
         <TicketWaitingBlock key={`waiting-${entity.id}`} entity={entity} lastRun={lastRun} />
       )}
+      {/* Состояние рутины (V1.14): расписание, режим, следующее срабатывание, итог прошлого
+          прогона и два жеста владельца. Место — здесь же, рядом с телом-инструкцией: рутину
+          открывают ради того, что она делает и делает ли вообще.
+          key по id — по той же причине, что у блока ожидания: экран монтируется БЕЗ key
+          (router.tsx), а у блока своё состояние (отказ «прогон уже идёт»), и переезжать на
+          соседнюю рутину оно не должно. */}
+      {isRoutine && (
+        <RoutineStatusBlock key={`routine-${entity.id}`} entity={entity} lastRun={lastRun} />
+      )}
       {/* Экран самого прогона (С5, С12): лента шагов, исход и откат. Место — рядом с блоком
           ожидания и по той же причине: у прогона нет «свойств», ради которых его открывают, —
           есть работа, которую он проделал. Условие — по аспекту, а не по `isTicket`: прогон
@@ -324,10 +349,12 @@ export function DetailScreen({ entityId }: { entityId: string }) {
       {/* История прогонов — своей секцией, а не строками общих связей: у прогона есть исход,
           длина и исполнитель, и читают их таблицей, а не списком заголовков. Открытие — тем же
           push поверх стека активной вкладки, что и у подзадач. */}
-      {isTicket && (
+      {(isTicket || isRoutine) && (
         <RunsList
-          ticketId={entity.id}
+          parentId={entity.id}
           runs={runs}
+          // У рутины исполнитель внутренний и всегда один — колонка гранта ей не положена (Р-8).
+          showGrant={!isRoutine}
           onOpen={(id) => push(activeTab, { kind: 'entity', id })}
         />
       )}
