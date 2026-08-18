@@ -311,15 +311,17 @@ export async function pauseIfFailing(
 
 /**
  * Чем кончилась попытка завести прогон. `started` — прогон создан ЭТИМ вызовом, и модель
- * гонит вызывающий (инвариант 1); всё остальное — «не гоним», с причиной для тика и
- * экрана. Причины: `replay` — тот же batch уже исполнен (конкурент опередил, PK audit'а);
+ * гонит вызывающий (инвариант 1): `runId` и `bucket` — ровно то, что нужно `runRoutineRun`
+ * (бакет ручного прогона рождается внутри startManualRun, и вызывающему его больше взять
+ * неоткуда). Всё остальное — «не гоним», с причиной для тика и экрана.
+ * Причины: `replay` — тот же batch уже исполнен (конкурент опередил, PK audit'а);
  * `id_conflict` — id прогона занят (конкурент опередил в той же миллисекунде); `running` —
  * у рутины уже идёт прогон; `done` — слот отработан (терминальный исход, кроме failed);
  * `attempts` — попытки бакета исчерпаны; `backoff` — пауза перед следующей попыткой ещё
  * идёт; `limit` — лимит прогонов в сутки (V1.15).
  */
 export type StartOutcome =
-  | { started: true; runId: string }
+  | { started: true; runId: string; bucket: string }
   | {
       started: false;
       reason: 'replay' | 'id_conflict' | 'running' | 'limit' | 'attempts' | 'backoff' | 'done';
@@ -367,6 +369,7 @@ export async function startBucketRun(
   args: { ownerId: string; routine: StartRoutineRef; bucket: string },
 ): Promise<StartOutcome> {
   const { ownerId, routine, bucket } = args;
+  const now = deps.clock();
   const { all, ofBucket } = await withIdentity(deps.db, ownerId, async (tx) => ({
     all: await runsOfParent(tx, routine.id),
     ofBucket: await runsForBucket(tx, routine.id, bucket),
@@ -383,7 +386,7 @@ export async function startBucketRun(
     const lastFailedAt = Math.max(
       ...failed.map((r) => Date.parse(r.run.finished_at ?? r.run.started_at)),
     );
-    if (lastFailedAt + delay > deps.clock().getTime()) return skip('backoff');
+    if (lastFailedAt + delay > now.getTime()) return skip('backoff');
   }
   // Сутки лимита — по дате бакета (см. overRunsPerDay), а не по «сегодня» тика
   if (overRunsPerDay(deps, ownerId, all, bucket.slice(0, 10))) return skip('limit');
@@ -394,6 +397,7 @@ export async function startBucketRun(
     routine,
     bucket,
     attempt,
+    now,
     batchId: routineRunBatchId(routine.id, bucket, attempt),
     title: `Прогон: ${routine.title} — ${bucket.replace('T', ' ')}`,
   });
@@ -419,11 +423,14 @@ export async function startManualRun(
   if (all.some((r) => r.run.outcome === 'running')) return skip('running');
   if (overRunsPerDay(deps, ownerId, all, wallClockIn(now, timeZone).date)) return skip('limit');
 
+  // Те же `now` — и в ключе (manual:<ISO>), и в started_at/created_at прогона: два чтения
+  // часов дали бы бакет и отметку старта, разъехавшиеся на миллисекунды
   return createRun(deps, {
     ownerId,
     routine,
     bucket: manualBucket(now.toISOString()),
     attempt: 1,
+    now,
     batchId: newId(),
     title: `Прогон: ${routine.title} — вручную`,
   });
@@ -461,9 +468,10 @@ function overRunsPerDay(
 
 /**
  * Собственно создание: тот же batch, что у фикстуры seedRoutineRun и у claim_task —
- * сущность прогона в `running` со связью `parent` от рутины. Часы батча — `deps.clock`:
- * из них берутся и `started_at` (от него раннер считает дедлайн), и `created_at`
- * сущности (по нему читается порядок попыток).
+ * сущность прогона в `running` со связью `parent` от рутины. Часы батча — ОДИН момент
+ * `now`, прочитанный вызывающим: из него берутся и `started_at` (от него раннер считает
+ * дедлайн), и `created_at` сущности (по нему читается порядок попыток), и — у ручного
+ * прогона — сам ключ бакета; второе чтение часов развело бы их на миллисекунды.
  */
 async function createRun(
   deps: RoutineDeps,
@@ -472,12 +480,13 @@ async function createRun(
     routine: StartRoutineRef;
     bucket: string;
     attempt: number;
+    now: Date;
     batchId: string;
     title: string;
   },
 ): Promise<StartOutcome> {
   const runId = routineRunId(args.routine.id, args.bucket, args.attempt);
-  const nowIso = deps.clock().toISOString();
+  const nowIso = args.now.toISOString();
   const r = await execute(
     deps.db,
     {
@@ -486,7 +495,7 @@ async function createRun(
       source: 'system',
       runId,
       batchId: args.batchId,
-      clock: deps.clock,
+      clock: () => args.now,
       operations: [
         {
           tool: 'entity_create',
@@ -539,7 +548,7 @@ async function createRun(
   }
   // Тот же batch уже исполнен конкурентом — сущность его, модель гонит он (Р-1)
   if (r.idempotentReplay) return skip('replay');
-  return { started: true, runId };
+  return { started: true, runId, bucket: args.bucket };
 }
 
 /**

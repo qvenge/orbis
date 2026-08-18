@@ -7,7 +7,7 @@ import { entityThreadId, isManualBucket, routineRunBatchId, routineRunId } from 
 import { eq } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { runsOfParent } from '../agent-loop/queries';
-import { chatMessages } from '../db/schema';
+import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ROUTINE_RUNS_PER_DAY_KEY } from '../entitlements';
 import { execute } from '../executor/executor';
@@ -397,7 +397,7 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
       routine: routineRef(routineId),
       bucket,
     });
-    expect(first).toEqual({ started: true, runId: routineRunId(routineId, bucket, 1) });
+    expect(first).toEqual({ started: true, runId: routineRunId(routineId, bucket, 1), bucket });
     if (!first.started) throw new Error('unreachable');
 
     const run = (await aspectsOf(owner, first.runId))['orbis/agent-run'] as Record<string, unknown>;
@@ -453,7 +453,11 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
       const lost = [a, b].filter((o) => !o.started);
       expect(started).toHaveLength(1);
       expect(lost).toHaveLength(1);
-      expect(started[0]).toEqual({ started: true, runId: routineRunId(routineId, bucket, 1) });
+      expect(started[0]).toEqual({
+        started: true,
+        runId: routineRunId(routineId, bucket, 1),
+        bucket,
+      });
       // Проигравший различим по причине, но не по последствиям: сущность одна
       expect(['replay', 'id_conflict']).toContain((lost[0] as { reason: string }).reason);
       expect((await runsOf(routineId)).map((r) => r.id)).toEqual([
@@ -490,7 +494,7 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
       deps({ clock: () => new Date(T0.getTime() + firstDelay) }),
       args,
     );
-    expect(second).toEqual({ started: true, runId: routineRunId(routineId, bucket, 2) });
+    expect(second).toEqual({ started: true, runId: routineRunId(routineId, bucket, 2), bucket });
     expect(
       (await aspectsOf(owner, routineRunId(routineId, bucket, 2)))['orbis/agent-run'],
     ).toMatchObject({
@@ -515,7 +519,7 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
       deps({ clock: () => new Date(failedAt2.getTime() + secondDelay) }),
       args,
     );
-    expect(third).toEqual({ started: true, runId: routineRunId(routineId, bucket, 3) });
+    expect(third).toEqual({ started: true, runId: routineRunId(routineId, bucket, 3), bucket });
 
     // Третья провалилась — попыток больше нет, сколько бы времени ни прошло
     await patchRun(routineRunId(routineId, bucket, 3), {
@@ -606,6 +610,7 @@ describe('лимит routines.runs_per_day (V1.15): плановые прого�
     expect(started).toEqual({
       started: true,
       runId: routineRunId(routineId, '2026-08-17T07:00', 1),
+      bucket: '2026-08-17T07:00',
     });
     // Теперь сегодняшний плановый есть — ручной упирается (прогон идёт → running раньше лимита,
     // поэтому закрываем его)
@@ -639,7 +644,7 @@ describe('startManualRun: ручной прогон — свой ключ, не 
       timeZone: 'Europe/Moscow',
     });
     const bucket = `manual:${T0.toISOString()}`;
-    expect(first).toEqual({ started: true, runId: routineRunId(routineId, bucket, 1) });
+    expect(first).toEqual({ started: true, runId: routineRunId(routineId, bucket, 1), bucket });
     const run = (await aspectsOf(owner, routineRunId(routineId, bucket, 1)))[
       'orbis/agent-run'
     ] as Record<string, unknown>;
@@ -681,6 +686,31 @@ describe('startManualRun: ручной прогон — свой ключ, не 
         routine: routineRef(routineId),
         bucket: '2026-08-17T07:00',
       }),
-    ).toEqual({ started: true, runId: routineRunId(routineId, '2026-08-17T07:00', 1) });
+    ).toEqual({
+      started: true,
+      runId: routineRunId(routineId, '2026-08-17T07:00', 1),
+      bucket: '2026-08-17T07:00',
+    });
+  });
+
+  test('часы читаются один раз: при тикающих часах ключ manual:<ISO>, started_at и created_at совпадают до миллисекунды', async () => {
+    const routineId = await seedRoutine(owner);
+    let ticks = 0;
+    const ticking = deps({ clock: () => new Date(T0.getTime() + ticks++) });
+    const out = await startManualRun(ticking, {
+      ownerId: owner,
+      routine: routineRef(routineId),
+      timeZone: 'Europe/Moscow',
+    });
+    if (!out.started) throw new Error(`ручной прогон не заведён: ${out.reason}`);
+    expect(out.bucket).toBe(`manual:${T0.toISOString()}`);
+    // Второе чтение часов дало бы started_at на миллисекунду позже ключа — тикающие часы это ловят
+    const run = (await aspectsOf(owner, out.runId))['orbis/agent-run'] as Record<string, unknown>;
+    expect(run.started_at).toBe(T0.toISOString());
+    expect(run.last_step_at).toBe(T0.toISOString());
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.select({ createdAt: entities.createdAt }).from(entities).where(eq(entities.id, out.runId)),
+    );
+    expect(rows[0]?.createdAt.toISOString()).toBe(T0.toISOString());
   });
 });
