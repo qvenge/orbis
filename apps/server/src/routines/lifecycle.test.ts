@@ -268,6 +268,73 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
     expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('active');
   });
 
+  test('после снятия паузы владельцем старые провалы не считаются: один новый failed → паузы нет, ещё два → пауза снова (C1a-6)', async () => {
+    const routineId = await seedRoutine(owner);
+    await seedFailed(routineId, '2026-08-15T07:00', 1);
+    await seedFailed(routineId, '2026-08-16T07:00', 2);
+    await seedFailed(routineId, '2026-08-17T07:00', 3);
+    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: true });
+    const first = (await threadRows(routineId)).filter(
+      (r) => (r.metadata as { type?: string }).type === 'routine_paused',
+    );
+    expect(first).toHaveLength(1);
+    // Запись стоп-крана помнит последний учтённый провал — границу следующего счёта
+    expect((first[0]?.metadata as { run_id?: string }).run_id).toBe(
+      routineRunId(routineId, '2026-08-17T07:00', 1),
+    );
+
+    // Владелец снял паузу рукой: «причина устранена», счёт с нуля
+    const unpaused = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: routineId, aspects: { 'orbis/routine': { stage: 'active' } } },
+        },
+      ],
+      clock: () => minutes(4),
+    });
+    if (!unpaused.ok) throw new Error(unpaused.error.message);
+
+    // Один НОВЫЙ плановый сбой (транзиент): хвост старых [f,f,f] не считается — паузы нет,
+    // и попытки 2–3 бакета смогут случиться
+    await seedFailed(routineId, '2026-08-18T07:00', 5);
+    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
+    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('active');
+
+    // Ещё два новых подряд — три новых, пауза снова, вторая запись с новой границей
+    await seedFailed(routineId, '2026-08-19T07:00', 6);
+    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
+    await seedFailed(routineId, '2026-08-20T07:00', 7);
+    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: true });
+    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('paused');
+    const notes = (await threadRows(routineId)).filter(
+      (r) => (r.metadata as { type?: string }).type === 'routine_paused',
+    );
+    expect(notes).toHaveLength(2);
+    expect((notes[1]?.metadata as { run_id?: string }).run_id).toBe(
+      routineRunId(routineId, '2026-08-20T07:00', 1),
+    );
+  });
+
+  test('запись стоп-крана старого формата (без run_id) границы не даёт: считаются все плановые', async () => {
+    const routineId = await seedRoutine(owner);
+    await seedFailed(routineId, '2026-08-15T07:00', 1);
+    await seedFailed(routineId, '2026-08-16T07:00', 2);
+    await withIdentity(db, owner, (tx) =>
+      appendSystemNote(tx, {
+        ownerId: owner,
+        entityId: routineId,
+        content: 'Рутина поставлена на паузу (старый формат)',
+        metadata: { type: 'routine_paused', routine_id: routineId },
+      }),
+    );
+    await seedFailed(routineId, '2026-08-17T07:00', 3);
+    expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: true });
+  });
+
   test('удачный прогон в хвосте сбрасывает счёт', async () => {
     const routineId = await seedRoutine(owner);
     await seedFailed(routineId, '2026-08-15T07:00', 1);

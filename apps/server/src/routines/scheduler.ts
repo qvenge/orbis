@@ -15,7 +15,7 @@ import { sweepStaleRuns } from '../agent-loop/sweep';
 import { withIdentity } from '../db/with-identity';
 import { ownerTimeZone } from '../query/context';
 import { TICK_INTERVAL_MS } from './constants';
-import { type RoutineDeps, type StartOutcome, startBucketRun } from './lifecycle';
+import { pauseIfFailing, type RoutineDeps, type StartOutcome, startBucketRun } from './lifecycle';
 import { ownerIdsForScheduler } from './queries';
 import { runRoutineRun } from './runner';
 import { dueBuckets } from './schedule';
@@ -25,6 +25,8 @@ export interface TickResult {
   owners: number;
   /** Сколько зависших прогонов закрыло подметание. */
   swept: number;
+  /** Рутины, которые ЭТОТ тик поставил на паузу стоп-краном (после подметания, до запуска). */
+  paused: string[];
   /** id прогонов, созданных ЭТИМ тиком (и отработанных им же — инвариант 1). */
   started: string[];
   /** Наступившие бакеты, по которым прогон не заведён, с причиной (см. StartOutcome). */
@@ -36,8 +38,14 @@ export interface TickResult {
 }
 
 /**
- * Один тик: владельцы → под identity каждого: подметание → активные рутины → наступившие
- * бакеты → запуск → цикл модели, последовательно.
+ * Один тик: владельцы → под identity каждого: подметание → активные рутины → стоп-кран по
+ * графу → наступившие бакеты → запуск → цикл модели, последовательно.
+ *
+ * Стоп-кран В ТИКЕ (хвост C1b-3): раннер зовёт pauseIfFailing только после СВОЕГО сбоя, а
+ * прогон, закрытый подметанием (SIGKILL, OOM — крэш-луп процесса), через раннер не проходит.
+ * Три подряд подметённых провала оставляли рутину активной, и инвариант 12 нарушался до
+ * первого «живого» сбоя. Оценка по графу идемпотентна и дешёва (один запрос на рутину), а
+ * стоит она ДО решения о запуске: поставленная на паузу рутина бакет этим тиком не получает.
  *
  * Последовательно, а не параллельно, намеренно: у free-инстанса один процесс и три
  * соединения в пуле, а прогон — это до восьми обращений к модели; параллельные прогоны
@@ -55,7 +63,13 @@ export interface TickResult {
  */
 export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
   const owners = await ownerIdsForScheduler(deps.db);
-  const result: TickResult = { owners: owners.length, swept: 0, started: [], skipped: [] };
+  const result: TickResult = {
+    owners: owners.length,
+    swept: 0,
+    paused: [],
+    started: [],
+    skipped: [],
+  };
   // Функцией, а не полем: рубильник дёргают снаружи между нашими await, а сужение типа по
   // свойству TS держит через весь цикл — «после первой проверки уже не aborted»
   const aborted = (): boolean => deps.signal?.aborted === true;
@@ -95,6 +109,12 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
     for (const routine of routines) {
       if (aborted()) break;
       try {
+        // Стоп-кран по графу — ДО запуска: подметённые провалы считаются здесь (см. докблок)
+        const { paused } = await pauseIfFailing(deps, { ownerId, routineId: routine.id });
+        if (paused) {
+          result.paused.push(routine.id);
+          continue;
+        }
         const due = dueBuckets({
           at: routine.routine.at,
           ...(routine.routine.days !== undefined && { days: routine.routine.days }),

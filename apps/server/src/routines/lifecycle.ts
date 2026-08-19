@@ -27,6 +27,7 @@
 // его снимает «отмени последнее» (приёмка 3) и откат прогона (приёмка 11, rollback.ts).
 import {
   type AgentRunAspect,
+  entityThreadId,
   isManualBucket,
   manualBucket,
   newId,
@@ -314,6 +315,33 @@ export async function supersedeOpen(
   return out;
 }
 
+/** Тип системной записи стоп-крана в треде рутины (`metadata.type`). */
+export const ROUTINE_PAUSED_NOTE_TYPE = 'routine_paused';
+
+/**
+ * Последний плановый провал, УЧТЁННЫЙ последней записью стоп-крана в треде рутины
+ * (`metadata.run_id`), — граница, от которой счёт «три подряд» начинается заново.
+ * `undefined` — записи нет (рутина ещё ни разу не вставала по стоп-крану) либо она старого
+ * формата без `run_id` (записи до хвоста C1a-6): тогда считаются все, как прежде.
+ */
+async function lastPauseCut(
+  tx: Tx,
+  ownerId: string,
+  routineId: string,
+): Promise<string | undefined> {
+  const probe = JSON.stringify({ type: ROUTINE_PAUSED_NOTE_TYPE });
+  const rows = await tx.execute(
+    sql`SELECT metadata ->> 'run_id' AS run_id
+        FROM chat_messages
+        WHERE thread_id = ${entityThreadId(ownerId, routineId)}::uuid
+          AND metadata @> ${probe}::jsonb
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1`,
+  );
+  const runId = (rows as unknown as Array<{ run_id: unknown }>)[0]?.run_id;
+  return typeof runId === 'string' ? runId : undefined;
+}
+
 /**
  * Стоп-кран (V1.12): CONSECUTIVE_FAILURES_TO_PAUSE плановых прогонов подряд, закончившихся
  * `failed`, переводят рутину в `paused` с записью в её тред. Рутина, которая ломается
@@ -322,6 +350,17 @@ export async function supersedeOpen(
  * Считаются только ПЛАНОВЫЕ прогоны (бакет не `manual:`): ручной запускает владелец и
  * видит исход сразу, ставить его же кнопкой рутину на паузу было бы наказанием за проверку.
  *
+ * Считаются только провалы НОВЕЕ последней записи стоп-крана (хвост C1a-6): запись несёт
+ * `run_id` последнего учтённого провала, и прогоны до него включительно в новый счёт не
+ * идут. Иначе после того, как владелец снял паузу, первый же плановый сбой (транзиент
+ * провайдера) давал хвост [f, f, f] из СТАРЫХ провалов — пауза возвращалась немедленно, и
+ * попытки 2–3 бакета не случались вовсе. Снятие паузы рукой владельца — это и есть «счёт с
+ * нуля»: он сказал, что причина устранена.
+ *
+ * Идемпотентен и безопасен к повторному вызову (тик зовёт его каждую минуту для каждой
+ * активной рутины — хвост C1b-3, крэш-луп): читает граф, пишет только при переходе
+ * active → paused под предусловием.
+ *
  * Принятая цена, названная в спеке прямо: временно исчерпанный лимит тоже ставит на паузу —
  * снимается рукой.
  */
@@ -329,11 +368,20 @@ export async function pauseIfFailing(
   deps: RoutineDeps,
   args: { ownerId: string; routineId: string },
 ): Promise<{ paused: boolean }> {
-  const runs = await withIdentity(deps.db, args.ownerId, (tx) => runsOfParent(tx, args.routineId));
+  const { runs, cut } = await withIdentity(deps.db, args.ownerId, async (tx) => ({
+    runs: await runsOfParent(tx, args.routineId),
+    cut: await lastPauseCut(tx, args.ownerId, args.routineId),
+  }));
   const planned = runs.filter((r) => r.run.bucket !== undefined && !isManualBucket(r.run.bucket));
-  const tail = planned.slice(-CONSECUTIVE_FAILURES_TO_PAUSE);
+  // Граница — позиция учтённого провала в порядке создания (runsOfParent: created_at ASC);
+  // если его среди плановых нет (запись без run_id либо про чужой id) — считаем все
+  const cutIndex = cut === undefined ? -1 : planned.findIndex((r) => r.id === cut);
+  const fresh = planned.slice(cutIndex + 1);
+  const tail = fresh.slice(-CONSECUTIVE_FAILURES_TO_PAUSE);
   if (tail.length < CONSECUTIVE_FAILURES_TO_PAUSE) return { paused: false };
   if (!tail.every((r) => r.run.outcome === 'failed')) return { paused: false };
+  const lastCounted = tail[tail.length - 1];
+  if (lastCounted === undefined) return { paused: false }; // недостижимо: длина проверена
 
   // Предусловие `stage: active` — не оптимизация, а сериализация: два прогона, упавших
   // почти одновременно, иначе оба записали бы паузу и оба положили бы запись в тред.
@@ -359,7 +407,12 @@ export async function pauseIfFailing(
       ownerId: args.ownerId,
       entityId: args.routineId,
       content: `Рутина поставлена на паузу: ${CONSECUTIVE_FAILURES_TO_PAUSE} прогона подряд закончились сбоем. Снимите паузу, когда причина устранена.`,
-      metadata: { type: 'routine_paused', routine_id: args.routineId },
+      // run_id — последний учтённый провал: граница следующего счёта (см. lastPauseCut)
+      metadata: {
+        type: ROUTINE_PAUSED_NOTE_TYPE,
+        routine_id: args.routineId,
+        run_id: lastCounted.id,
+      },
     }),
   );
   return { paused: true };

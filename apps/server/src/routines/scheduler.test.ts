@@ -279,6 +279,59 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
     expect(await runsOf(owner, routineId)).toHaveLength(3);
   });
 
+  test('крэш-луп: два плановых failed + зависший третий → тик подметает его в failed и ТЕМ ЖЕ тиком ставит рутину на паузу, нового прогона нет (C1b-3)', async () => {
+    const owner = await newOwner();
+    const routineId = await newRoutine(owner);
+    // Два вчерашних провала закрыты кем угодно (раннером или подметанием) — по графу не видно
+    for (const [bucket, offset] of [
+      ['2026-08-16T07:00', -2 * 24 * 60],
+      ['2026-08-17T07:00', -24 * 60],
+    ] as const) {
+      await seedRoutineRun(owner, {
+        routineId,
+        bucket,
+        startedAt: minutes(offset),
+        run: { outcome: 'failed', fail_note: 'прогон прерван: процесс умер' },
+      });
+    }
+    // Сегодняшний бакет: процесс умер посреди прогона (SIGKILL) — шагов нет дольше порога.
+    // Раннера у него нет и не будет — pauseIfFailing из runner.ts не вызовется
+    await seedRoutineRun(owner, {
+      routineId,
+      bucket: BUCKET,
+      startedAt: new Date(T0.getTime() - RUN_STALE_AFTER_MS - 5 * 60_000),
+      lastStepAt: new Date(T0.getTime() - RUN_STALE_AFTER_MS - 60_000),
+    });
+    const provider = new ScriptedProvider([endTurn('не должно случиться')]);
+
+    const tick = await routineTick(deps(provider));
+    expect(tick.swept).toBeGreaterThanOrEqual(1);
+    expect((await runAspect(owner, routineRunId(routineId, BUCKET, 1))).outcome).toBe('failed');
+    // Стоп-кран сработал в тике, а не дожидался «живого» сбоя: рутина на паузе, с записью
+    expect(tick.paused).toContain(routineId);
+    expect(await stage(owner, routineId)).toBe('paused');
+    const notes = await withIdentity(db, owner, (tx) =>
+      tx
+        .select()
+        .from(chatMessages)
+        .where(eq(chatMessages.threadId, entityThreadId(owner, routineId))),
+    );
+    expect(
+      notes.filter((r) => (r.metadata as { type?: string }).type === 'routine_paused'),
+    ).toHaveLength(1);
+    // Ретрай бакета не заведён, модель не вызвана: паузой решение о запуске и кончилось
+    expect(tick.started).toEqual([]);
+    expect(tick.skipped.filter((s) => s.routineId === routineId)).toEqual([]);
+    expect(await runsOf(owner, routineId)).toHaveLength(3);
+    expect(provider.requests).toHaveLength(0);
+
+    // Следующий тик: рутина на паузе — не рассматривается, второй записи нет
+    const next = await routineTick(deps(provider, () => minutes(10)));
+    expect(next.paused).toEqual([]);
+    expect(next.started).toEqual([]);
+    expect(await runsOf(owner, routineId)).toHaveLength(3);
+  });
+
   test('paused рутина и running прогон — тик пропускает; зависший прогон подметается ДО решения о запуске (V1.12)', async () => {
     const owner = await newOwner();
     const paused = await newRoutine(owner, { stage: 'paused' });
