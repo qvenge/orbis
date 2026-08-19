@@ -101,3 +101,11 @@ test('лишние КАСТОМНЫЕ строки реестра дрейфом
   const rows = [...seeded(), { id: 'user/fitness', schema: {}, aiInstructions: '' }];
   expect(hasAspectDrift(diffBuiltinAspects(rows))).toBe(false);
 });
+
+test('orbis/routine: ai_instructions называют умолчание автономии — без явной просьбы владельца mode: propose (V1, PRD 02 §3.4)', () => {
+  // Умолчания в схеме нет намеренно (mode обязателен): предохранитель — указание модели
+  // здесь плюс гейт explicit-confirmation на выдачу act (policy/confirmation.ts).
+  const routine = BUILTIN_ASPECT_META.find((m) => m.id === 'orbis/routine');
+  expect(routine?.aiInstructions).toContain('mode: propose');
+  expect(routine?.aiInstructions).toContain('Без явной просьбы владельца');
+});
