@@ -4,6 +4,7 @@ import { type AspectDriftStatus, reportAspectDriftOnStartup } from './db/aspect-
 import { makeDb } from './db/client';
 import { assertPublicOriginConfigured } from './oauth/metadata';
 import { type RoutineScheduler, startRoutineScheduler } from './routines/scheduler';
+import { manualRuns } from './routines/shutdown';
 
 // Публичная база метаданных OAuth (§9.3) — ПЕРВОЙ: это чистая проверка конфигурации,
 // ей не нужны ни соединения, ни ключи, а цена ошибки высока. Кривое значение роняет
@@ -69,17 +70,21 @@ if (process.env.ORBIS_ROUTINE_SCHEDULER === '1') {
 // умирает мгновенно: агентная петля обрывается посреди шага (действия тулов уже применены,
 // assistant-сообщение не записано), пул соединений не дренится.
 //
-// Планировщик останавливается ДО client.end() (Р-12): stop() даёт раннеру рубильник —
-// идущий прогон закрывается `failed` «остановлен при выключении процесса» между шагами —
-// и дожидается тика; иначе пул рвался бы под транзакцией закрытия, а прогон висел бы
-// `running` до подметания. Рубильник дёргается сразу (до дренажа запросов), чтобы прогон
-// не тратил окно SIGTERM на лишний шаг модели.
+// Планировщик и ручные прогоны останавливаются ДО client.end() (Р-12, хвост C2-1):
+// stop()/shutdown() дают раннеру рубильник — идущий прогон закрывается `failed` «остановлен
+// при выключении процесса» между шагами — и дожидаются закрытия; иначе пул рвался бы под
+// транзакцией закрытия, а прогон висел бы `running` до подметания. Рубильники дёргаются
+// сразу (до дренажа запросов), чтобы прогон не тратил окно SIGTERM на лишний шаг модели.
+// Ручные прогоны («прогнать сейчас») — отдельный реестр (routines/shutdown.ts): они живут
+// вне тика, и stop() планировщика их не видит.
 async function shutdown(signal: string): Promise<void> {
   console.log(`[server] ${signal}: останавливаюсь, дожидаюсь in-flight запросов`);
   try {
     const schedulerStopped = scheduler?.stop();
+    const manualRunsStopped = manualRuns.shutdown();
     await server.stop(); // без force: активные запросы доживают
     await schedulerStopped;
+    await manualRunsStopped;
     await client.end({ timeout: 5 });
   } catch (e) {
     console.error('[server] ошибка при остановке:', e);

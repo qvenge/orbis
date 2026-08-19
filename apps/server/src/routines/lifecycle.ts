@@ -61,6 +61,7 @@ import {
   ROUTINE_HISTORY_TAIL,
 } from './constants';
 import type { RoutineHistoryItem } from './context';
+import { processRoutineLocks, type RoutineLocks } from './locks';
 
 /** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
 const defaultSink = makeChatJournalSink();
@@ -95,6 +96,13 @@ export interface RoutineDeps extends RoutineWriteDeps {
    * шаг дешевле, чем оставить прогон в `running` до подметания.
    */
   signal?: AbortSignal;
+  /**
+   * In-process замок по рутине вокруг «решить и создать прогон» (locks.ts): тик и «прогнать
+   * сейчас» в одно окно иначе заводили бы два running с разными ключами. По умолчанию —
+   * общий замок процесса; свой экземпляр подкладывают тесты межпроцессной гонки (два замка
+   * = два процесса).
+   */
+  locks?: RoutineLocks;
 }
 
 export interface SupersedeResult {
@@ -406,7 +414,11 @@ function skip(reason: Extract<StartOutcome, { started: false }>['reason']): Star
  * лимит суток. «Идущий» проверяется по ВСЕЙ рутине, а не по слоту: у рутины
  * не бывает двух прогонов разом (иначе оба гасили бы незакрытое друг у друга и подавали бы
  * два предложения на одно утро); бакет при этом не пропадает — тик вернётся к нему через
- * минуту, когда идущий закончится.
+ * минуту, когда идущий закончится. Внутри процесса это правило держит замок рутины
+ * (`deps.locks`, locks.ts): снимок и создание идут под ним, и запуск другого ключа той же
+ * рутины (ручной прогон, соседний бакет) в то же окно видит созданный прогон как `running`.
+ * Между процессами замка нет — там один и тот же бакет сходится по batch_id/PK (Р-1), а
+ * разные ключи (тик одного инстанса и кнопка на другом) остаются принятой щелью.
  *
  * Пауза ретрая — от `finished_at` последнего провала (см. RETRY_DELAYS_MS): сбой,
  * закрытый подметанием через полчаса, не должен ретраиться в ту же секунду. Провал без
@@ -417,6 +429,17 @@ function skip(reason: Extract<StartOutcome, { started: false }>['reason']): Star
  * такое не трогает, а инвариант запрета по объекту (V1.10) для system молчит.
  */
 export async function startBucketRun(
+  deps: RoutineDeps,
+  args: { ownerId: string; routine: StartRoutineRef; bucket: string },
+): Promise<StartOutcome> {
+  // Под замком рутины — и чтение снимка, и создание (locks.ts): внутри процесса два запуска
+  // одной рутины идут по очереди, и второй видит прогон первого как `running`
+  return (deps.locks ?? processRoutineLocks).run(args.routine.id, () =>
+    startBucketRunLocked(deps, args),
+  );
+}
+
+async function startBucketRunLocked(
   deps: RoutineDeps,
   args: { ownerId: string; routine: StartRoutineRef; bucket: string },
 ): Promise<StartOutcome> {
@@ -470,6 +493,16 @@ export async function startBucketRun(
  * ручного — локальная дата владельца на момент нажатия (`timeZone`).
  */
 export async function startManualRun(
+  deps: RoutineDeps,
+  args: { ownerId: string; routine: StartRoutineRef; timeZone: string },
+): Promise<StartOutcome> {
+  // Тот же замок, что у бакета (locks.ts): кнопка в секунду тика — второй, а не параллельный
+  return (deps.locks ?? processRoutineLocks).run(args.routine.id, () =>
+    startManualRunLocked(deps, args),
+  );
+}
+
+async function startManualRunLocked(
   deps: RoutineDeps,
   args: { ownerId: string; routine: StartRoutineRef; timeZone: string },
 ): Promise<StartOutcome> {

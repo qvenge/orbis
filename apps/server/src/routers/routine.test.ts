@@ -21,6 +21,7 @@ import { appRouter } from '../router';
 import type { RoutineDeps } from '../routines/lifecycle';
 import { startBucketRun, supersedeOpen } from '../routines/lifecycle';
 import { runRoutineRun } from '../routines/runner';
+import { makeRunRegistry } from '../routines/shutdown';
 import { agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { type Context, createCallerFactory } from '../trpc';
 
@@ -113,6 +114,7 @@ interface RunAspect {
   outcome: string;
   bucket?: string;
   report?: string;
+  fail_note?: string;
   reply?: { text: string; at: string };
   proposal?: {
     pending_id: string;
@@ -306,6 +308,57 @@ describe('routine.runNow', () => {
   test('несуществующая рутина → NOT_FOUND', async () => {
     const e = await trpcError(caller().routine.runNow({ routineId: newId() }));
     expect(e.code).toBe('NOT_FOUND');
+  });
+
+  test('остановка процесса во время ручного прогона: shutdown() реестра даёт рубильник → прогон failed «остановлен при выключении процесса»; shutdown ждёт закрытия (C2-1/E2-5)', async () => {
+    const routineId = await seedRoutine(owner, { title: 'Рутина: деплой посреди прогона' });
+    const runId = routineRunId(routineId, MANUAL_BUCKET, 1);
+    // Провайдер «думает», пока тест не отпустит: shutdown застаёт прогон посреди шага, и
+    // рубильник срабатывает на следующей проверке между шагами (как у планировщика, Р-12)
+    let release = (): void => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let calls = 0;
+    const provider: LLMProvider = {
+      modelId: MODEL,
+      async chat() {
+        calls += 1;
+        await gate;
+        return toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]);
+      },
+    };
+    // Свой реестр (не процессный): его остановка не должна задеть соседние тесты
+    const registry = makeRunRegistry();
+    const c = callerWith(provider, { manualRuns: registry });
+
+    expect(await c.routine.runNow({ routineId })).toEqual({ runId });
+    expect((await runAspect(runId)).outcome).toBe('running');
+    // Дожидаемся, пока раннер дойдёт до модели: рубильник должен застать прогон ПОСРЕДИ шага
+    // (до первого шага он закрылся бы тем же исходом, но не проверил бы ожидание shutdown)
+    const until = Date.now() + 3_000;
+    while (calls === 0) {
+      if (Date.now() > until) throw new Error('раннер не дошёл до модели');
+      await Bun.sleep(10);
+    }
+
+    let stopped = false;
+    const stopping = registry.shutdown().then(() => {
+      stopped = true;
+    });
+    // shutdown не завершается, пока прогон держит шаг
+    await Bun.sleep(40);
+    expect(stopped).toBe(false);
+    release();
+    await stopping;
+
+    const closed = await runAspect(runId);
+    expect(closed.outcome).toBe('failed');
+    expect(closed.fail_note).toBe('прогон остановлен при выключении процесса');
+    // После рубильника второго шага не было
+    expect(calls).toBe(1);
+    // Рутина НЕ на паузе: ручной прогон в стоп-кране не участвует
+    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('active');
   });
 });
 

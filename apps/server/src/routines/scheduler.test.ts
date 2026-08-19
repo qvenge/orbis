@@ -21,6 +21,7 @@ import type { LLMProvider, LLMResponse } from '../llm/types';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { MAX_ATTEMPTS, RETRY_DELAYS_MS } from './constants';
 import { type RoutineDeps, startBucketRun } from './lifecycle';
+import { makeRoutineLocks } from './locks';
 import { routineTick, startRoutineScheduler } from './scheduler';
 
 requireEnv();
@@ -173,7 +174,12 @@ describe('routineTick: бакет в таймзоне владельца, «со
       const runId = routineRunId(routineId, BUCKET, 1);
       const provider = new ScriptedProvider([endTurn(`раунд ${round}`)]);
 
-      const [a, b] = await Promise.all([routineTick(deps(provider)), routineTick(deps(provider))]);
+      // Два экземпляра замка рутины = два процесса (locks.ts): общий замок свёл бы второй тик
+      // к «уже идёт», а здесь проверяется именно межпроцессная сходимость по batch_id/PK
+      const [a, b] = await Promise.all([
+        routineTick({ ...deps(provider), locks: makeRoutineLocks() }),
+        routineTick({ ...deps(provider), locks: makeRoutineLocks() }),
+      ]);
       const started = [...a.started, ...b.started].filter((id) => id === runId);
       expect(started).toHaveLength(1);
       const lost = [...a.skipped, ...b.skipped].filter((s) => s.routineId === routineId);

@@ -31,6 +31,7 @@ import {
   startManualRun,
   supersedeOpen,
 } from './lifecycle';
+import { makeRoutineLocks } from './locks';
 
 requireEnv();
 
@@ -440,14 +441,17 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
     ).toEqual({ started: false, reason: 'done' });
   });
 
-  test('два конкурентных запуска одного бакета: ровно один started, второй replay|id_conflict|running; сущность одна — 5 раундов (приёмка 13, Р-1)', async () => {
+  test('два конкурентных запуска одного бакета ИЗ ДВУХ ПРОЦЕССОВ: ровно один started, второй replay|id_conflict|running; сущность одна — 5 раундов (приёмка 13, Р-1)', async () => {
     for (let round = 0; round < 5; round++) {
       const routineId = await seedRoutine(owner);
       const bucket = '2026-08-17T07:00';
       const args = { ownerId: owner, routine: routineRef(routineId), bucket };
+      // Два экземпляра замка = два процесса (locks.ts): межпроцессную гонку одного бакета
+      // держат batch_id/PK, и именно их здесь и проверяем — общий замок процесса свёл бы
+      // второй запуск к «уже идёт», не дав дойти до execute
       const [a, b] = await Promise.all([
-        startBucketRun(deps(), args),
-        startBucketRun(deps(), args),
+        startBucketRun(deps({ locks: makeRoutineLocks() }), args),
+        startBucketRun(deps({ locks: makeRoutineLocks() }), args),
       ]);
       const started = [a, b].filter((o) => o.started);
       const lost = [a, b].filter((o) => !o.started);
@@ -537,6 +541,32 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
       reason: 'attempts',
     });
     expect(await runsOf(routineId)).toHaveLength(3);
+  });
+
+  test('ручной прогон и бакет В ОДНО ОКНО одного процесса: ровно один started, второй — running (замок рутины, C1a-5/C2-2)', async () => {
+    // Без замка оба читали бы снимок без running и создавали бы прогоны с РАЗНЫМИ ключами
+    // (manual:<ISO> и бакет) — PK проигравшего не останавливает. Замок по умолчанию общий
+    // на процесс (processRoutineLocks): так делят его тик и кнопка «прогнать сейчас»
+    for (let round = 0; round < 5; round++) {
+      const routineId = await seedRoutine(owner);
+      const [manual, bucket] = await Promise.all([
+        startManualRun(deps(), {
+          ownerId: owner,
+          routine: routineRef(routineId),
+          timeZone: 'Europe/Moscow',
+        }),
+        startBucketRun(deps(), {
+          ownerId: owner,
+          routine: routineRef(routineId),
+          bucket: '2026-08-17T07:00',
+        }),
+      ]);
+      const started = [manual, bucket].filter((o) => o.started);
+      const lost = [manual, bucket].filter((o) => !o.started);
+      expect(started).toHaveLength(1);
+      expect(lost).toEqual([{ started: false, reason: 'running' }]);
+      expect(await runsOf(routineId)).toHaveLength(1);
+    }
   });
 
   test('идущий прогон ДРУГОГО слота (ручной) блокирует бакет: у рутины не бывает двух running', async () => {

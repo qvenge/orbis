@@ -36,6 +36,7 @@ import { ExecError } from '../errors';
 import { buildContext, toolResultMessage } from '../llm/context';
 import { type LLMProviderEnv, makeLLMProvider } from '../llm/provider';
 import type { LLMMessage, LLMProvider, LLMResponse, LLMToolDef } from '../llm/types';
+import type { RunRegistry } from '../routines/shutdown';
 import { dispatchTool } from '../tools/dispatch';
 import { buildToolRegistry, type Card } from '../tools/registry';
 import { toWireChatMessage } from '../wire';
@@ -77,6 +78,14 @@ export interface AiDeps {
   /** Резолвер §8; по умолчанию — боевой resolveEntitlement (dev безлимитен). */
   entitlements?: EntitlementResolver;
   clock?: () => Date;
+  /**
+   * Реестр ручных прогонов рутин (routines/shutdown.ts): сигнал остановки процесса для
+   * фонового раннера «прогнать сейчас» и учёт живых прогонов для shutdown в index.ts. Здесь,
+   * а не отдельным ключом контекста, потому что это тот же шов, которым роутер рутины
+   * получает провайдера и часы для того же прогона; по умолчанию — реестр процесса
+   * (`manualRuns`), тесты подкладывают свой.
+   */
+  manualRuns?: RunRegistry;
 }
 
 /**

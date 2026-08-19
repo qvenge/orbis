@@ -31,6 +31,7 @@ import {
 } from '../routines/lifecycle';
 import { runRoutineRun } from '../routines/runner';
 import { nextBucketAt } from '../routines/schedule';
+import { manualRuns } from '../routines/shutdown';
 import type { Context } from '../trpc';
 import { ownerOnlyProcedure, router } from '../trpc';
 
@@ -96,10 +97,14 @@ export const routineRouter = router({
    * Прогон на паузе разрешён намеренно: пауза — это «не запускать по расписанию», а рука
    * владельца выше расписания (и ровно ею проверяют, починилась ли сломанная рутина).
    *
-   * Фон не ждём и не сторожим: «кто создал прогон, тот и гонит модель» (инвариант 1), а
-   * если процесс умрёт посреди цикла, прогон подберёт подметание — тот же путь, что у
-   * планового бакета. Отсюда `.catch(console.error)`: необработанный reject уронил бы
-   * процесс, а раннер и так закрывает прогон сам на любом исходе.
+   * Фон не ждём, но СТОРОЖИМ остановку процесса (routines/shutdown.ts): прогон получает
+   * сигнал реестра и регистрируется в нём, и shutdown index.ts дёргает рубильник (раннер
+   * закроет прогон `failed` «остановлен при выключении процесса» между шагами) и дожидается
+   * закрытия до `client.end()` — иначе после SIGTERM (каждый деплой) ручной прогон висел бы
+   * `running` до подметания (30 мин), блокируя и кнопку, и плановый бакет. «Кто создал прогон,
+   * тот и гонит модель» (инвариант 1) сохраняется; SIGKILL по-прежнему чинит подметание.
+   * `.catch(console.error)`: необработанный reject уронил бы процесс, а раннер и так
+   * закрывает прогон сам на любом исходе.
    */
   runNow: ownerOnlyProcedure
     .input(routineIdInput)
@@ -115,12 +120,14 @@ export const routineRouter = router({
         }
 
         const ai = ctx.ai ?? defaultAiDeps();
+        const runs = ai.manualRuns ?? manualRuns;
         const deps = {
           db: ctx.db,
           provider: ai.provider,
           model: ai.model,
           entitlements: ai.entitlements,
           clock: ai.clock ?? (() => new Date()),
+          signal: runs.signal,
         };
         const started = await startManualRun(deps, {
           ownerId: ctx.actorUserId,
@@ -129,12 +136,16 @@ export const routineRouter = router({
         });
         if (!started.started) startRefusal(started);
 
-        void runRoutineRun(deps, {
-          ownerId: ctx.actorUserId,
-          routine,
-          runId: started.runId,
-          bucket: started.bucket,
-        }).catch(console.error);
+        void runs
+          .track(
+            runRoutineRun(deps, {
+              ownerId: ctx.actorUserId,
+              routine,
+              runId: started.runId,
+              bucket: started.bucket,
+            }),
+          )
+          .catch(console.error);
         return { runId: started.runId };
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);
