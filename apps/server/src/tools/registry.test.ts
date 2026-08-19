@@ -36,6 +36,7 @@ import {
   type RoutineRef,
   routineToolDefs,
   threadPostInput,
+  undoLastInput,
   userQueryInput,
 } from './registry';
 
@@ -108,6 +109,7 @@ const CORE_NAMES = [
   'user_query',
   'budget_status', // A6: read-агрегаты Budget (03-budget §4), доступен и MCP
   'import_csv_start', // C4c: вход в импорт из чата (03-budget §3.4), internalOnly
+  'undo_last', // хвост V1 (Д-1): «отмени последнее» словами в чате (§7.8), internalOnly
 ] as const;
 
 /** Служебные аспекты (orbis/agent-run) attach_*-тула не получают — их правит только сервер. */
@@ -116,7 +118,7 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.filter(
 ).map((id) => `attach_${id.replaceAll('/', '_').replaceAll('-', '_')}`);
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 11 core (с thread_post) + 5 глаголов + orbis_propose + 12 attach_* = 29', async () => {
+  test('builtin-реестр (userB без кастомных): 12 core (с thread_post и undo_last) + 5 глаголов + orbis_propose + 12 attach_* = 30', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
@@ -125,7 +127,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // orbis_propose — не глагол исполнителя (в AGENT_VERB_NAMES его нет), а тул рутины
     expect(names).toContain('orbis_propose');
     for (const name of BUILTIN_ATTACH_NAMES) expect(names).toContain(name);
-    expect(defs.length).toBe(29);
+    expect(defs.length).toBe(30);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
   });
@@ -162,10 +164,10 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('internalOnly: true только у user_query и import_csv_start (§9.2: MCP не отдаются)', async () => {
+  test('internalOnly: true только у user_query, import_csv_start и undo_last (§9.2: MCP не отдаются)', async () => {
     const defs = await registryFor(userB);
     for (const def of defs) {
-      if (def.name === 'user_query' || def.name === 'import_csv_start') {
+      if (['user_query', 'import_csv_start', 'undo_last'].includes(def.name)) {
         expect(def.internalOnly).toBe(true);
       } else {
         expect(def.internalOnly).not.toBe(true);
@@ -290,7 +292,7 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(def.kind).toBe('mutate');
     expect(def.description).toBe('Пиши часы сна числом.');
     expect((def.inputJsonSchema.properties as Record<string, unknown>).data).toEqual(CUSTOM_SCHEMA);
-    expect(defsA.length).toBe(30);
+    expect(defsA.length).toBe(31);
 
     const defsB = await registryFor(userB);
     expect(defsB.some((d) => d.name === 'attach_user_sleep_log')).toBe(false);
@@ -311,6 +313,7 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
     budget_status: budgetStatusInput,
     thread_post: threadPostInput,
     import_csv_start: importCsvStartInput,
+    undo_last: undoLastInput,
     // Глаголы исполнителя (§9.3): рукописная JSON Schema реестра ↔ envelope
     // @orbis/shared/contracts/agent-loop — рассинхрон падает здесь, а не у агента
     orbis_my_queue: myQueueInput,
@@ -429,6 +432,20 @@ describe('routineToolDefs: реестр прогона рутины (V1.10, ру
     // Отсечение точечное: соседнее имя того же белого списка на месте
     expect(
       routineToolDefs(defs, ref('act', ['batch_execute', 'entity_update'])).map((d) => d.name),
+    ).toContain('entity_update');
+  });
+
+  test('undo_last белым списком не открывается — ни в act, ни в propose (ROUTINE_CLOSED_TOOLS)', async () => {
+    // «Отмени последнее» снимает последнее видимое действие журнала ВЛАДЕЛЬЦА, чьё бы оно ни
+    // было: фоновый прогон с таким рычагом затирал бы правки владельца (инвариант 7)
+    const defs = await registryFor(userB);
+    for (const mode of ['propose', 'act'] as const) {
+      expect(
+        routineToolDefs(defs, ref(mode, ['undo_last', 'entity_update'])).map((d) => d.name),
+      ).not.toContain('undo_last');
+    }
+    expect(
+      routineToolDefs(defs, ref('act', ['undo_last', 'entity_update'])).map((d) => d.name),
     ).toContain('entity_update');
   });
 

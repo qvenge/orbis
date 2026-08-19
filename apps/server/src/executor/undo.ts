@@ -12,18 +12,24 @@ import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError } from './errors';
 import { execute } from './executor';
-import type { ActionRecord, ExecuteRequest, ExecuteResult } from './types';
+import type { ActionRecord, ExecuteErr, ExecuteOk, ExecuteRequest, ExecuteResult } from './types';
 
 interface FoundAction {
   threadId: string;
   action: ActionRecord;
+  /**
+   * Заголовок audit-сообщения (`card.title` синка, journal.ts) — единственная
+   * человекочитаемая строка о действии в журнале. Нужен только «отмени последнее»
+   * (см. UndoneAction); точечный undo по id знает, что отменяет, и без него.
+   */
+  title: string;
 }
 
 /** Сообщение с action по id — containment по GIN-индексу chat_messages_metadata_gin. */
 async function findActionMessage(tx: Tx, actionId: string): Promise<FoundAction | undefined> {
   const probe = JSON.stringify({ actions: [{ id: actionId }] });
   const rows = await tx.execute(
-    sql`SELECT thread_id, metadata FROM chat_messages
+    sql`SELECT thread_id, content, metadata FROM chat_messages
         WHERE metadata @> ${probe}::jsonb
         LIMIT 1`,
   );
@@ -32,7 +38,7 @@ async function findActionMessage(tx: Tx, actionId: string): Promise<FoundAction 
   const metadata = row.metadata as { actions?: ActionRecord[] };
   const action = metadata.actions?.find((a) => a.id === actionId);
   if (!action) return undefined; // недостижимо: containment гарантирует наличие
-  return { threadId: row.thread_id as string, action };
+  return { threadId: row.thread_id as string, action, title: String(row.content) };
 }
 
 /**
@@ -61,7 +67,7 @@ export async function isUndone(tx: Tx, actionId: string): Promise<boolean> {
  */
 async function findLastUndoable(tx: Tx): Promise<FoundAction | undefined> {
   const rows = await tx.execute(
-    sql`SELECT m.thread_id, m.metadata
+    sql`SELECT m.thread_id, m.content, m.metadata
         FROM chat_messages m
         WHERE m.metadata @> '{"actions": []}'::jsonb
           AND jsonb_array_length(m.metadata->'actions') > 0
@@ -79,7 +85,7 @@ async function findLastUndoable(tx: Tx): Promise<FoundAction | undefined> {
   const metadata = row.metadata as { actions?: ActionRecord[] };
   const action = metadata.actions?.[0];
   if (!action) return undefined; // недостижимо: фильтр требует непустой actions
-  return { threadId: row.thread_id as string, action };
+  return { threadId: row.thread_id as string, action, title: String(row.content) };
 }
 
 /**
@@ -163,17 +169,52 @@ export async function undoAction(
   }
 }
 
+/**
+ * Что именно отменило «отмени последнее» — для того, кто НЕ выбирал действие сам: чат-модели
+ * (тул `undo_last`, tools/dispatch.ts) нужно назвать владельцу откаченное, а `actionId` без
+ * подписи ей ничего не говорит. `title` — заголовок audit-сообщения («Создана сущность
+ * «…»»), `type`/`entityId` — из самой записи журнала.
+ */
+export interface UndoneAction {
+  actionId: string;
+  type: ActionRecord['type'];
+  entityId: string | null;
+  title: string;
+}
+
+/**
+ * Исход «отмени последнее»: тот же ExecuteResult, что у точечного undo, плюс `undone` при
+ * успехе. Отказ «отменять нечего» — NOT_FOUND с `details.reason: 'nothing_to_undo'`: чату он
+ * нужен как ШТАТНЫЙ ответ («нечего отменять»), а не как ошибка, и отличать его по тексту
+ * сообщения было бы хрупко.
+ */
+export type UndoLastResult = (ExecuteOk & { undone: UndoneAction }) | ExecuteErr;
+
 /** «Отмени последнее» (§7.8): inverse первого неотменённого действия с конца журнала. */
-export async function undoLast(db: Db, args: { actorUserId: string }): Promise<ExecuteResult> {
+export async function undoLast(db: Db, args: { actorUserId: string }): Promise<UndoLastResult> {
   try {
     const found = await withIdentity(db, args.actorUserId, (tx) => findLastUndoable(tx));
     if (!found) {
       return {
         ok: false,
-        error: { code: 'NOT_FOUND', message: 'неотменённых действий в журнале нет' },
+        error: {
+          code: 'NOT_FOUND',
+          message: 'неотменённых действий в журнале нет',
+          details: { reason: 'nothing_to_undo' },
+        },
       };
     }
-    return await applyUndo(db, args.actorUserId, found);
+    const result = await applyUndo(db, args.actorUserId, found);
+    if (!result.ok) return result;
+    return {
+      ...result,
+      undone: {
+        actionId: found.action.id,
+        type: found.action.type,
+        entityId: found.action.entity_id,
+        title: found.title,
+      },
+    };
   } catch (e) {
     if (e instanceof ExecError) {
       return { ok: false, error: { code: e.code, message: e.message, details: e.details } };

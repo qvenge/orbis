@@ -93,6 +93,17 @@ const ROUTINE_CLOSED_VERBS: ReadonlySet<string> = new Set(
 );
 
 /**
+ * Мутации, закрытые рутине ВСЕГДА — даже вписанные владельцем в `allowed_tools`:
+ * - `batch_execute` — обёртка провозила бы внутрь что угодно, а политика даёт группе
+ *   `preview` ≠ `execute` (подробно — в routineToolAllowed);
+ * - `undo_last` — «отмени последнее» снимает последнее ВИДИМОЕ действие журнала владельца,
+ *   чьё бы оно ни было: фоновый прогон, отменяющий правку владельца, — не работа рутины, а
+ *   дыра в инварианте 7 (чужое не затирается). Своё рутина не отменяет тоже: её правки
+ *   откатывает владелец кнопкой (Undo карточки, откат прогона).
+ */
+const ROUTINE_CLOSED_TOOLS: ReadonlySet<string> = new Set(['batch_execute', 'undo_last']);
+
+/**
  * Рутина и её прогон в контексте вызова (V1.10) — вторая половина атрибуции рядом с
  * грантом (`GrantRef`): грант отвечает за внешнего исполнителя, это — за внутреннего.
  * `allowedTools` — белый список режима `act` из аспекта `orbis/routine.allowed_tools`,
@@ -128,8 +139,8 @@ export function routineToolAllowed(
   // тул, который ей гарантированно откажут, значит нарушить «показанное = исполняемое».
   // Во-вторых, разрешить его было бы дырой: гейт режима сверяет с белым списком только
   // ВНЕШНЕЕ имя вызова, вложенные операции батча им не проверяются, — одна обёртка
-  // провозила бы внутрь что угодно.
-  if (def.name === 'batch_execute') return false;
+  // провозила бы внутрь что угодно. undo_last — там же и по своей причине (см. набор).
+  if (ROUTINE_CLOSED_TOOLS.has(def.name)) return false;
   if (ROUTINE_BASE_TOOLS.has(def.name)) return true;
   // Круг внешнего исполнителя рутине закрыт целиком, кроме чекпойнта (см. ROUTINE_CLOSED_VERBS)
   if (ROUTINE_CLOSED_VERBS.has(def.name)) return false;
@@ -257,6 +268,11 @@ export const threadPostInput = z
 // import_csv_start (Task C4c) — вход без полей НАМЕРЕННО: тул ничего не делает,
 // он лишь показывает карточку-вход в флоу импорта; strict — лишние поля отклоняются
 export const importCsvStartInput = z.object({}).strict();
+
+// undo_last (хвост V1, Д-1) — вход без полей: «отмени последнее» адресует последнее
+// видимое действие журнала владельца, выбирать модели нечего (§7.8 undoLast); точечный
+// undo по id остаётся кнопкой карточки (ai.undo), модели он не отдаётся.
+export const undoLastInput = z.object({}).strict();
 
 export type UserQueryInput = z.infer<typeof userQueryInput>;
 export type ThreadPostInput = z.infer<typeof threadPostInput>;
@@ -406,6 +422,12 @@ const budgetStatusJsonSchema = {
 };
 
 const importCsvStartJsonSchema = {
+  type: 'object',
+  properties: {},
+  additionalProperties: false,
+};
+
+const undoLastJsonSchema = {
   type: 'object',
   properties: {},
   additionalProperties: false,
@@ -757,6 +779,23 @@ const CORE_TOOLS: OrbisToolDef[] = [
     inputJsonSchema: importCsvStartJsonSchema,
     kind: 'read',
     internalOnly: true, // у внешнего агента (MCP) нет экрана — «открой импорт» ему бессмысленен
+  },
+  {
+    // Хвост V1 (Д-1 смоука): «отмени последнее» словами в чате. До него у чат-модели не было
+    // undo-тула вовсе — на фразу она правила граф вручную (второе действие вместо снятия
+    // первого). Тул — обёртка над undoLast §7.8: последнее ВИДИМОЕ действие журнала
+    // владельца (системные пропускаются), undo-запись в тот же тред; нового action не
+    // порождает — потому в ToolDispatchResult не отдаёт actionId (undo неотменяем).
+    // internalOnly: MCP-агент отменяет своё точечно (ai.undo — поверхность владельца; у
+    // агента — обратные операции); рутине закрыт наглухо (ROUTINE_CLOSED_TOOLS): фоновый
+    // прогон не вправе снимать действия владельца. Вторая линия — сам диспатч: только
+    // source 'chat' и актор 'ai'.
+    name: 'undo_last',
+    description:
+      'Отменить ПОСЛЕДНЕЕ действие в графе (Undo §7.8): «отмени последнее», «отмени», «верни как было», «убери, что только что сделал». Откатывает последнее видимое действие журнала пользователя — своё или пользователя, — независимо от того, в этом ли треде оно случилось. Вызывай ТОЛЬКО по явной просьбе пользователя отменить последнее; не чини правкой то, что нужно отменить, и не зови повторно ради «ещё раз отменить», не переспросив. Ответ: что именно отменено (actionId, тип, заголовок) либо «отменять нечего».',
+    inputJsonSchema: undoLastJsonSchema,
+    kind: 'mutate', // меняет граф (inverse через executor) — для политики и гейтов это мутация
+    internalOnly: true,
   },
   {
     name: 'thread_post',

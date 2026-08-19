@@ -1071,5 +1071,7 @@ describe('ai.sendMessage: реестр тулов чата не содержит
     expect(toolNames).toContain('entity_create');
     expect(toolNames).toContain('thread_post');
     expect(toolNames).toContain('user_query');
+    // «Отмени последнее» словами (хвост V1, Д-1) — internalOnly-тул именно чата
+    expect(toolNames).toContain('undo_last');
   });
 });

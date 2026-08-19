@@ -10,6 +10,7 @@ import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { aspectDefinitions, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
+import { makeChatJournalSink } from '../executor/journal';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
@@ -547,6 +548,131 @@ describe('dispatchTool: import_csv_start — вход в импорт из ча�
     expect(r.status).toBe('ok');
     const after = await rawWriteCounts(userA);
     expect(after).toEqual(before);
+  });
+});
+
+describe('dispatchTool: undo_last — «отмени последнее» словами в чате (хвост V1, Д-1; §7.8)', () => {
+  // Свой владелец: «последнее» считается по ВСЕМУ журналу владельца, и общий userA дал бы
+  // порядок, зависящий от соседних describe
+  const userU = freshUserId();
+  const chat = (over: Partial<ToolCallCtx> = {}) => ctxFor({ actorUserId: userU, ...over });
+
+  async function archivedOf(id: string): Promise<boolean | undefined> {
+    const rows = await withIdentity(db, userU, (tx) =>
+      tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
+    );
+    return rows[0]?.archived;
+  }
+
+  test('source=chat, актор ai: снимает последнее видимое действие журнала (fast_path владельца), результат — что откачено; повтор → «отменять нечего»', async () => {
+    // Действие владельца из другой поверхности (fast_path, журнал с синком): «отмени
+    // последнее» в чате обязано достать и его — журнал один на владельца
+    const created = await execute(
+      db,
+      {
+        actorUserId: userU,
+        actorKind: 'owner',
+        source: 'fast_path',
+        operations: [{ tool: 'entity_create', input: { title: 'Обед 340', tags: [] } }],
+      },
+      { sink: makeChatJournalSink() },
+    );
+    if (!created.ok) throw new Error(created.error.message);
+    const entity = created.results[0] as WireEntity;
+    expect(await archivedOf(entity.id)).toBe(false);
+
+    const r = await dispatchTool(chat(), 'undo_last', {});
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    // Нового action undo не порождает (неотменяем) — actionId в результате диспатча НЕТ,
+    // иначе send-message завёл бы на него ActionSummary как на undo-адресуемое действие
+    expect(r.actionId).toBeUndefined();
+    expect(r.card).toBeUndefined();
+    const result = r.result as Record<string, unknown>;
+    expect(result.undone).toBe(true);
+    expect(result.actionId).toBe(created.actionId);
+    expect(result.type).toBe('entity_created');
+    expect(result.entityId).toBe(entity.id);
+    expect(String(result.title)).toContain('Обед 340');
+    // Inverse применён: создание снято архивом
+    expect(await archivedOf(entity.id)).toBe(true);
+
+    // Второй раз отменять нечего — штатный ok, не error_card
+    const again = await dispatchTool(chat(), 'undo_last', {});
+    expect(again.status).toBe('ok');
+    if (again.status !== 'ok') return;
+    expect((again.result as Record<string, unknown>).undone).toBe(false);
+  });
+
+  test('системные действия пропускаются: последнее видимое — правка чата (source chat, актор ai)', async () => {
+    const target = await seedEntity(userU, { title: 'Правка чатом', tags: [] });
+    const edited = await dispatchTool(chat(), 'entity_update', {
+      id: target.id,
+      title: 'Правка чатом (переименовано)',
+    });
+    expect(edited.status).toBe('ok');
+    // Системная запись поверх — как материализация §5.4: «отмени последнее» её не берёт
+    const sys = await execute(
+      db,
+      {
+        actorUserId: userU,
+        actorKind: 'ai',
+        source: 'system',
+        operations: [{ tool: 'entity_create', input: { title: 'Системный след', tags: [] } }],
+      },
+      { sink: makeChatJournalSink() },
+    );
+    if (!sys.ok) throw new Error(sys.error.message);
+
+    const r = await dispatchTool(chat(), 'undo_last', {});
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    const result = r.result as Record<string, unknown>;
+    expect(result.undone).toBe(true);
+    expect(result.actionId).toBe(edited.status === 'ok' ? edited.actionId : undefined);
+    const rows = await withIdentity(db, userU, (tx) =>
+      tx.select({ title: entities.title }).from(entities).where(eq(entities.id, target.id)),
+    );
+    expect(rows[0]?.title).toBe('Правка чатом');
+    expect(await archivedOf((sys.results[0] as WireEntity).id)).toBe(false);
+  });
+
+  test('internalOnly fail-closed: source=mcp → VALIDATION; от прогона рутины → FORBIDDEN_LEVEL (закрыт и в act с allowed_tools [undo_last]); чат не-ai актором → FORBIDDEN_LEVEL', async () => {
+    const before = await execute(
+      db,
+      {
+        actorUserId: userU,
+        actorKind: 'owner',
+        source: 'fast_path',
+        operations: [{ tool: 'entity_create', input: { title: 'Не трогать', tags: [] } }],
+      },
+      { sink: makeChatJournalSink() },
+    );
+    if (!before.ok) throw new Error(before.error.message);
+    const untouched = (before.results[0] as WireEntity).id;
+
+    expectError(
+      await dispatchTool(chat({ actorKind: 'agent', source: 'mcp' }), 'undo_last', {}),
+      'VALIDATION',
+    );
+    const { routineCtx } = agentLoopHelpers(db);
+    for (const mode of ['propose', 'act'] as const) {
+      expectError(
+        await dispatchTool(routineCtx(userU, mode, ['undo_last']), 'undo_last', {}),
+        'FORBIDDEN_LEVEL',
+      );
+    }
+    // Вторая линия самого диспатча: чат, но актор не ai (контекст собран не тем вызывающим)
+    expectError(
+      await dispatchTool(chat({ actorKind: 'owner' }), 'undo_last', {}),
+      'FORBIDDEN_LEVEL',
+    );
+    // Ничего не откачено
+    expect(await archivedOf(untouched)).toBe(false);
+  });
+
+  test('строгий пустой envelope: лишнее поле → VALIDATION', async () => {
+    expectError(await dispatchTool(chat(), 'undo_last', { id: newId() }), 'VALIDATION');
   });
 });
 

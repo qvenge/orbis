@@ -434,6 +434,7 @@ describe('/mcp tools/list (§9.2)', () => {
 
       expect(names).not.toContain('user_query'); // internalOnly не публикуется (§9.2)
       expect(names).not.toContain('import_csv_start'); // internalOnly (C4c): у агента нет экрана импорта
+      expect(names).not.toContain('undo_last'); // internalOnly (хвост V1, Д-1): «отмени последнее» — рычаг чата владельца
       for (const name of [
         'entity_query',
         'entity_get',
@@ -482,7 +483,7 @@ describe('/mcp tools/list (§9.2)', () => {
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
       const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
-      // builtin-набор: 29 − 2 internalOnly − 1 routineOnly = 26
+      // builtin-набор: 30 − 3 internalOnly − 1 routineOnly = 26
       expect(tools).toHaveLength(publicDefs.length);
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);

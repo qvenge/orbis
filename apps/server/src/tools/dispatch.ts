@@ -53,6 +53,7 @@ import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, JournalSink, JournalWrite, WireEntity } from '../executor/types';
+import { undoLast } from '../executor/undo';
 import type { GrantRef } from '../oauth/grants';
 import {
   type ConfirmationLevel,
@@ -84,6 +85,7 @@ import {
   routineToolAllowed,
   type ThreadPostInput,
   threadPostInput,
+  undoLastInput,
   userQueryInput,
   WORKER_SCOPE_TOOLS,
 } from './registry';
@@ -230,6 +232,9 @@ export async function dispatchTool(
       // user_query — тот же хук материализации §5.4, что entity_query (обязательство
       // ревью A3): агрегат окна дат обязан видеть свеже-материализованные инстансы
       if (def.name === 'user_query') return { kind: 'user_query' };
+      // undo_last — вне pre-tx: undoLast применяет inverse через executor в СОБСТВЕННОМ tx
+      // (internal-режим, §7.8) и не проходит ни политику §7.10, ни runMutation — см. runUndoLast
+      if (def.name === 'undo_last') return { kind: 'undo_last' };
       if (def.kind === 'read')
         return { kind: 'done', out: await runRead(tx, ctx, def.name, input) };
       return {
@@ -266,6 +271,7 @@ export async function dispatchTool(
     if (pre.kind === 'entity_query') return await runEntityQuery(ctx, input);
     if (pre.kind === 'budget_status') return await runBudgetStatus(ctx, input);
     if (pre.kind === 'user_query') return await runUserQuery(ctx, input);
+    if (pre.kind === 'undo_last') return await runUndoLast(ctx, input);
     if (pre.def.name === 'thread_post') {
       // §7.10 распространяется и на thread_post (kind='mutate' в реестре — ради
       // политики): по MVP-таблице одиночная не-архивирующая мутация → execute, но
@@ -378,6 +384,7 @@ type Resolution =
   | { kind: 'entity_query' } // исполняется вне pre-tx — хук материализации §5.4
   | { kind: 'user_query' } // вне pre-tx — тот же хук материализации §5.4 (ревью A3)
   | { kind: 'budget_status' } // вне pre-tx — конвейер §2.8 (postDue + материализация)
+  | { kind: 'undo_last' } // вне pre-tx — undoLast открывает собственный tx (§7.8)
   | {
       kind: 'mutate';
       def: OrbisToolDef;
@@ -535,6 +542,57 @@ function importCsvStart(ctx: ToolCallCtx): ToolDispatchResult {
     },
     card: { kind: 'import_review' },
   };
+}
+
+/**
+ * undo_last (хвост V1, Д-1): «отмени последнее» словами в чате. Обёртка над `undoLast`
+ * §7.8 — снимает последнее видимое действие журнала владельца, кем бы оно ни было сделано.
+ *
+ * Мимо политики §7.10 и runMutation НАМЕРЕННО: undo — не мутация графа по существу, а
+ * снятие уже подтверждённой (владельцем или его же просьбой) правки; свой action он не
+ * порождает (undo неотменяем), поэтому `actionId` в ToolDispatchResult не отдаётся —
+ * тот означает «undo-адресуемое действие», а тут его нет. Владелец же может отменить
+ * ту же правку кнопкой на карточке — тул лишь даёт модели тот же рычаг по его слову.
+ *
+ * Только `source: 'chat'` и актор `ai` (реестр закрывает MCP через internalOnly, рутину —
+ * через ROUTINE_CLOSED_TOOLS; здесь — вторая линия, fail-closed): за чатом стоит владелец,
+ * только что попросивший отменить, а за фоном и внешним агентом — нет, и снимать его
+ * действия им нельзя.
+ *
+ * «Отменять нечего» — штатный ok-ответ модели, а не error_card в ленту: для владельца это
+ * не сбой, а ответ на вопрос.
+ */
+async function runUndoLast(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
+  parseEnvelope(undoLastInput, input, 'undo_last');
+  if (ctx.source !== 'chat' || ctx.actorKind !== 'ai') {
+    return errorResult(
+      'FORBIDDEN_LEVEL',
+      'undo_last доступен только внутреннему чату владельца (§7.8): фоновый прогон и внешний агент чужие действия не отменяют',
+      { tool: 'undo_last', source: ctx.source, actorKind: ctx.actorKind },
+    );
+  }
+  const r = await undoLast(ctx.db, { actorUserId: ctx.actorUserId });
+  if (r.ok) {
+    return {
+      status: 'ok',
+      result: {
+        undone: true,
+        actionId: r.undone.actionId,
+        type: r.undone.type,
+        ...(r.undone.entityId !== null && { entityId: r.undone.entityId }),
+        title: r.undone.title,
+        note: 'действие отменено; сообщи пользователю, что именно откачено',
+      },
+    };
+  }
+  const details = r.error.details as { reason?: string } | undefined;
+  if (r.error.code === 'NOT_FOUND' && details?.reason === 'nothing_to_undo') {
+    return {
+      status: 'ok',
+      result: { undone: false, note: 'отменять нечего: неотменённых действий в журнале нет' },
+    };
+  }
+  return { status: 'error', error: r.error };
 }
 
 /**
