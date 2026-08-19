@@ -26,9 +26,10 @@ export type RoutineRunQuestion = {
   reply?: { text: string; at: string };
   outcome: string;
   /**
-   * Прогон в архиве — след ОТКАТА рутинного прогона (rollback.ts): откат снимает вопрос
-   * (`stale`), и подпись обязана назвать причину — «снят новым прогоном» здесь было бы
-   * неправдой. Под архивом ответить нельзя ни при каком исходе (сервер: NOT_FOUND).
+   * Прогон в архиве: след ОТКАТА рутинного прогона (rollback.ts снимает вопрос `stale`) либо
+   * рука владельца из меню ⋮ — различить нечем, поэтому подпись нейтральная («прогон в
+   * архиве», как бейдж RunFeed), а не «снят новым прогоном», что здесь было бы неправдой.
+   * Под архивом ответить нельзя ни при каком исходе (сервер: NOT_FOUND).
    */
   archived?: boolean;
 };
@@ -89,7 +90,7 @@ export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
           снял вопрос сам (rollback.ts). Без этих слов экран показывал бы мёртвый вопрос, на
           который «почему-то нельзя ответить». */}
       {archived && run.reply === undefined ? (
-        <p className="text-sm text-text-muted">Вопрос снят: прогон откачен.</p>
+        <p className="text-sm text-text-muted">Вопрос снят: прогон в архиве.</p>
       ) : (
         run.outcome === 'stale' && (
           <p className="text-sm text-text-muted">Вопрос снят новым прогоном.</p>

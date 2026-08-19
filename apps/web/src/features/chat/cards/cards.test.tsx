@@ -930,10 +930,11 @@ test('proposal_card: решённое предложение показывае�
   rolledBack.unmount();
 });
 
-test('proposal_card: прогон откачен (runArchived) — у stale без расхождений подпись «прогон откачен», у pending кнопок нет (хвост ре-ревью)', async () => {
+test('proposal_card: прогон в архиве (runArchived) — у stale без расхождений подпись «прогон в архиве», у pending кнопок нет (хвост ре-ревью)', async () => {
   // Откат гасит открытое предложение: сервер отклоняет pending причиной stale и пишет
   // `stale` на прогон (rollback.ts → closeOpenOfRun). Без расхождений «Устарело» читалось бы
-  // как «граф разошёлся» — архив уточняет причину.
+  // как «граф разошёлся» — архив уточняет контекст; подпись нейтральна (путь в архив есть и
+  // рукой владельца из меню ⋮).
   const staled = renderWithProviders(
     <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
     proposalHandler({
@@ -943,20 +944,20 @@ test('proposal_card: прогон откачен (runArchived) — у stale бе
     }),
   );
   let card = await screen.findByTestId('proposal-card');
-  expect(await within(card).findByText('Устарело — прогон откачен')).toBeInTheDocument();
+  expect(await within(card).findByText('Устарело — прогон в архиве')).toBeInTheDocument();
   expect(within(card).queryByTestId('proposal-stale')).toBeNull();
   expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
   expect(within(card).queryByRole('button', { name: 'Отклонить' })).toBeNull();
   staled.unmount();
 
-  // Архивный прогон с ещё pending-предложением (запись до хвоста либо гонка отката):
+  // Архивный прогон с ещё pending-предложением (запись до хвоста либо архив рукой владельца):
   // решать по нему нельзя — сервер ответит NOT_FOUND, и кнопки вели бы в ошибку
   renderWithProviders(
     <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
     proposalHandler({ status: 'pending', runArchived: true }),
   );
   card = await screen.findByTestId('proposal-card');
-  expect(await within(card).findByText('Прогон откачен — предложение снято')).toBeInTheDocument();
+  expect(await within(card).findByText('Прогон в архиве — решение недоступно')).toBeInTheDocument();
   expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
   expect(within(card).queryByRole('button', { name: 'Отклонить' })).toBeNull();
   // Операции остаются видны: карточка — след того, что предлагалось

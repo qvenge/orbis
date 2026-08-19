@@ -3899,7 +3899,8 @@ describe('V1: прогон рутины', () => {
     stale.unmount();
 
     // Откат прогона с неотвеченным вопросом (хвост ре-ревью): сервер снимает вопрос (`stale`)
-    // и убирает прогон в архив — подпись называет откат, а не «новый прогон»; поля ответа нет
+    // и убирает прогон в архив — подпись про архив (нейтрально: в архив ведёт и рука
+    // владельца), а не «новый прогон»; поля ответа нет
     const rolledBack = renderWithProviders(
       <DetailScreen entityId="rr1" />,
       routineRunHandler({
@@ -3910,17 +3911,17 @@ describe('V1: прогон рутины', () => {
     feed = await screen.findByTestId('run-feed');
     expect(within(feed).getByText('в архиве')).toBeInTheDocument();
     block = within(feed).getByTestId('routine-question');
-    expect(block).toHaveTextContent('Вопрос снят: прогон откачен');
+    expect(block).toHaveTextContent('Вопрос снят: прогон в архиве');
     expect(block).not.toHaveTextContent('новым прогоном');
     expect(within(block).queryByRole('textbox')).toBeNull();
     rolledBack.unmount();
 
-    // Архивный прогон со всё ещё открытым вопросом (запись до хвоста): отвечать некуда —
-    // сервер под архивом прогон не находит; поля ответа нет, причина названа
+    // Архивный прогон со всё ещё открытым вопросом (запись до хвоста либо архив рукой):
+    // отвечать некуда — сервер под архивом прогон не находит; поля ответа нет, причина названа
     renderWithProviders(<DetailScreen entityId="rr1" />, routineRunHandler({ archived: true }));
     feed = await screen.findByTestId('run-feed');
     block = within(feed).getByTestId('routine-question');
-    expect(block).toHaveTextContent('Вопрос снят: прогон откачен');
+    expect(block).toHaveTextContent('Вопрос снят: прогон в архиве');
     expect(within(block).queryByRole('textbox')).toBeNull();
   });
 
