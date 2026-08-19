@@ -40,8 +40,10 @@ export function makeRunRegistry(): RunRegistry {
     async shutdown() {
       controller.abort();
       // allSettled: исход прогона (в т.ч. reject раннера) — дело того, кто его запустил
-      // (роутер вешает свой catch); остановке важно только дождаться
-      await Promise.allSettled([...inFlight]);
+      // (роутер вешает свой catch); остановке важно только дождаться. Циклом, а не одним
+      // снимком: запрос, проскочивший в окно дренажа после abort, регистрирует прогон, который
+      // закроется на первом же шаге (сигнал уже дёрнут), — дождаться надо и его
+      while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
     },
   };
 }
