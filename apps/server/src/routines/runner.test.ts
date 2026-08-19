@@ -639,6 +639,40 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     expect((await runAspect(runId2)).outcome).toBe('running');
   });
 
+  test('исключение ДО цикла модели (журнал упал в гашении прошлого предложения) → прогон закрыт failed internal, провайдер не вызван (C1a-2)', async () => {
+    // У прошлого прогона — живое предложение; гашение (supersedeOpen) пишет статус на прогон
+    // через журнал, и упавший синк бросает наружу ещё до контекста и провайдера. Прогон не
+    // должен висеть running до подметания: те же полчаса без ретрая, что и у падения в цикле.
+    const routineId = await seedRoutine(owner);
+    const pastBucket = nextBucket();
+    const { runId: pastRunId } = await seedRoutineRun(owner, { routineId, bucket: pastBucket });
+    const taskId = await seedTask('Цель прошлого предложения');
+    const pastEnd = await run(new ScriptedProvider([toolUse([proposeCall(pastRunId, taskId)])]), {
+      routineId,
+      runId: pastRunId,
+      bucket: pastBucket,
+    });
+    expect(pastEnd).toEqual({ outcome: 'finished' });
+    expect((await runAspect(pastRunId)).proposal?.status).toBe('pending');
+
+    const bucket = nextBucket();
+    const { runId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket,
+      startedAt: new Date(T0.getTime() + 60_000),
+    });
+    const provider = new ScriptedProvider([endTurn('не должно случиться')]);
+    const end = await run(provider, { routineId, runId, bucket }, { sink: faultySink(1) });
+    expect(end).toEqual({ outcome: 'failed', reason: 'internal' });
+    expect(provider.requests).toHaveLength(0);
+    const aspect = await runAspect(runId);
+    expect(aspect.outcome).toBe('failed');
+    expect(aspect.fail_note).toMatch(/^внутренняя ошибка раннера: журнал недоступен/);
+    // Гашение прошло наполовину: карточка отклонена (не через синк), статус на прогоне —
+    // нет; следующий прогон допишет его (supersedeOpen идемпотентен по alreadyRejected)
+    expect((await runAspect(pastRunId)).proposal?.status).toBe('pending');
+  });
+
   test('терминальный тул отказал при живом прогоне (VALIDATION) → отказ ушёл модели, цикл продолжился, следующий orbis_propose закрыл прогон', async () => {
     const routineId = await seedRoutine(owner);
     const bucket = nextBucket();

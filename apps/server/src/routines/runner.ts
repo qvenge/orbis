@@ -29,7 +29,7 @@ import {
 } from '../ai/send-message';
 import { ensureEntityThread } from '../chat/threads';
 import { withIdentity } from '../db/with-identity';
-import { resolveEntitlement } from '../entitlements';
+import { type EntitlementResolver, resolveEntitlement } from '../entitlements';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
@@ -108,7 +108,7 @@ export interface RunRoutineRunArgs {
  * иначе последний сбой в счёт не попадёт.
  */
 export async function runRoutineRun(deps: RoutineDeps, args: RunRoutineRunArgs): Promise<RunEnd> {
-  const { ownerId, routine, runId, bucket } = args;
+  const { ownerId, routine, runId } = args;
   const resolve = deps.entitlements ?? resolveEntitlement;
   const sink = deps.sink ?? defaultSink;
   const verbCtx: VerbCtx = {
@@ -130,6 +130,64 @@ export async function runRoutineRun(deps: RoutineDeps, args: RunRoutineRunArgs):
   }
   const startedAt = Date.parse(row.run.started_at);
 
+  const usage: UsageTotals = { inputTokens: 0, outputTokens: 0, requestCount: 0 };
+  let verdict: Verdict;
+  try {
+    // Шаги 1–3 (гашение, гейт, снимок графа) стоят ПОД тем же catch-all, что и цикл модели
+    // (финальное ревью V1, C1a-2): упавший синк журнала в гашении или отказ БД на сборке
+    // контекста иначе оставляли бы прогон `running` до подметания — полчаса без ретрая, с
+    // пропуском бакетов и «прогон уже идёт» на кнопке.
+    verdict = await prepareAndLoop(deps, {
+      args,
+      startedAt,
+      resolve,
+      verbCtx,
+      usage,
+    });
+  } catch (e) {
+    // Сбой провайдера цикл ловит сам; сюда долетает всё остальное — БД, журнал, запись
+    // шага. Пробросить значило бы оставить прогон в `running` до подметания (полчаса без
+    // ретрая и без стоп-крана). Закрываем `failed` с названной причиной; если упадёт и
+    // закрытие — исключение уйдёт наверх (тик Задачи 10 ловит), прогон подберёт sweep.
+    console.error('[routines] внутренняя ошибка раннера:', e);
+    verdict = {
+      kind: 'close',
+      end: { outcome: 'failed', reason: 'internal' },
+      failNote: `внутренняя ошибка раннера: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  } finally {
+    // Расход §4.7 — отдельной короткой транзакцией и ВСЕГДА: потреблённые до сбоя шаги —
+    // честный расход. Сбой метеринга не имеет права менять исход прогона.
+    if (usage.requestCount > 0) {
+      try {
+        await recordUsage(deps.db, { ownerId, model: deps.model, usage, clock: deps.clock });
+      } catch (e) {
+        console.error('[routines] метеринг ai_usage не записан:', e);
+      }
+    }
+  }
+
+  return await settle(deps, verbCtx, args, verdict, usage);
+}
+
+/**
+ * Шаги 1–3 подготовки прогона плюс цикл модели — всё, что может упасть исключением и
+ * обязано быть закрыто `failed internal` (см. catch-all в runRoutineRun). Исчерпанный лимит
+ * (шаг 2) — не исключение, а приговор: `failed limit` тем же путём, что и остальные исходы.
+ */
+async function prepareAndLoop(
+  deps: RoutineDeps,
+  run: {
+    args: RunRoutineRunArgs;
+    startedAt: number;
+    resolve: EntitlementResolver;
+    verbCtx: VerbCtx;
+    usage: UsageTotals;
+  },
+): Promise<Verdict> {
+  const { args, resolve, verbCtx, usage } = run;
+  const { ownerId, routine, runId, bucket } = args;
+
   // 1. V1.8: новый прогон гасит незакрытое от прошлых
   await supersedeOpen(deps, { ownerId, routineId: routine.id, exceptRunId: runId });
 
@@ -139,11 +197,11 @@ export async function runRoutineRun(deps: RoutineDeps, args: RunRoutineRunArgs):
     await gateAiEntitlements(deps.db, ownerId, resolve, deps.clock);
   } catch (e) {
     if (e instanceof ExecError && e.code === 'LIMIT') {
-      return await settle(deps, verbCtx, args, {
+      return {
         kind: 'close',
         end: { outcome: 'failed', reason: 'limit' },
         failNote: `прогон не запущен: ${e.message}`,
-      });
+      };
     }
     throw e;
   }
@@ -189,43 +247,16 @@ export async function runRoutineRun(deps: RoutineDeps, args: RunRoutineRunArgs):
     entitlements: resolve,
   };
 
-  const usage: UsageTotals = { inputTokens: 0, outputTokens: 0, requestCount: 0 };
-  let verdict: Verdict;
-  try {
-    verdict = await modelLoop(deps, {
-      args,
-      startedAt,
-      system,
-      messages,
-      tools,
-      toolCtx,
-      verbCtx,
-      usage,
-    });
-  } catch (e) {
-    // Сбой провайдера цикл ловит сам; сюда долетает всё остальное — БД, журнал, запись
-    // шага. Пробросить значило бы оставить прогон в `running` до подметания (полчаса без
-    // ретрая и без стоп-крана). Закрываем `failed` с названной причиной; если упадёт и
-    // закрытие — исключение уйдёт наверх (тик Задачи 10 ловит), прогон подберёт sweep.
-    console.error('[routines] внутренняя ошибка раннера:', e);
-    verdict = {
-      kind: 'close',
-      end: { outcome: 'failed', reason: 'internal' },
-      failNote: `внутренняя ошибка раннера: ${e instanceof Error ? e.message : String(e)}`,
-    };
-  } finally {
-    // Расход §4.7 — отдельной короткой транзакцией и ВСЕГДА: потреблённые до сбоя шаги —
-    // честный расход. Сбой метеринга не имеет права менять исход прогона.
-    if (usage.requestCount > 0) {
-      try {
-        await recordUsage(deps.db, { ownerId, model: deps.model, usage, clock: deps.clock });
-      } catch (e) {
-        console.error('[routines] метеринг ai_usage не записан:', e);
-      }
-    }
-  }
-
-  return await settle(deps, verbCtx, args, verdict, usage);
+  return modelLoop(deps, {
+    args,
+    startedAt: run.startedAt,
+    system,
+    messages,
+    tools,
+    toolCtx,
+    verbCtx,
+    usage,
+  });
 }
 
 /**
