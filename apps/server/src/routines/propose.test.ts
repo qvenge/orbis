@@ -373,7 +373,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     expect((await aspectsOf(owner, runId))['orbis/agent-run']?.outcome).toBe('running');
   });
 
-  test('операция над рутиной или с orbis/assignment (статически и по id из БД) → VALIDATION proposal_forbidden_target (приёмка 8)', async () => {
+  test('операция над рутиной, прогоном или с orbis/assignment (статически и по id из БД) → VALIDATION proposal_forbidden_target (приёмка 8)', async () => {
     const { routineId, runId, ctx } = await liveRoutine();
     const taskId = await seedTask('Цель запрета по объекту');
     const base = { run_id: runId, explanation: EXPLANATION };
@@ -399,6 +399,19 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       },
       // По БД: объект — сама рутина, её аспекта в патче нет
       { tool: 'entity_update', input: { id: routineId, title: 'Переименовать рутину' } },
+      // Прогон (A-1): подделка ответа владельца статически — и правка прогона по БД
+      {
+        tool: 'entity_update',
+        input: {
+          id: taskId,
+          aspects: { 'orbis/agent-run': { reply: { text: 'да', at: '2026-08-18T08:00:00.000Z' } } },
+        },
+      },
+      { tool: 'entity_update', input: { id: runId, title: 'Переписать прогон' } },
+      {
+        tool: 'relation_create',
+        input: { source_id: taskId, target_id: runId, relation_type: 'related_to' },
+      },
       // По БД: связь одним концом упирается в рутину
       {
         tool: 'relation_create',
@@ -635,5 +648,58 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     });
     expect(ok.status).toBe('ok');
     expect(await pendingsInRoutineThread(routineId)).toBe(1);
+  });
+
+  test('правка тела + любая другая правка той же сущности (в любом порядке) → VALIDATION proposal_conflicting_operations; тело одно — ok с expectedUpdatedAt (B2-2)', async () => {
+    const taskId = await seedTask('Цель правки тела');
+    const explanation = { explanation: EXPLANATION };
+    const bodyOp = { tool: 'entity_update', input: { id: taskId, body: 'Новый текст задачи' } };
+    const statusOp = {
+      tool: 'entity_update',
+      input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+    };
+
+    // Аспекты, потом тело — вторая операция читала бы виртуальную строку с бампнутым
+    // updated_at и гарантированно падала бы STALE_VERSION на approve
+    const first = await liveRoutine();
+    const r1 = await dispatchTool(first.ctx, 'orbis_propose', {
+      run_id: first.runId,
+      ...explanation,
+      operations: [statusOp, bodyOp],
+    });
+    expectError(r1, 'VALIDATION');
+    expect((errorOf(r1).details as { reason?: string }).reason).toBe(
+      'proposal_conflicting_operations',
+    );
+    // Тело, потом аспекты — тот же отказ: правило не зависит от порядка
+    const r2 = await dispatchTool(first.ctx, 'orbis_propose', {
+      run_id: first.runId,
+      ...explanation,
+      operations: [bodyOp, statusOp],
+    });
+    expectError(r2, 'VALIDATION');
+    expect((errorOf(r2).details as { reason?: string }).reason).toBe(
+      'proposal_conflicting_operations',
+    );
+    expect(await pendingsInRoutineThread(first.routineId)).toBe(0);
+    expect((await aspectsOf(owner, first.runId))['orbis/agent-run']?.outcome).toBe('running');
+
+    // Тело единственной операцией по сущности — законно; CAS снят сервером
+    const ok = await dispatchTool(first.ctx, 'orbis_propose', {
+      run_id: first.runId,
+      ...explanation,
+      operations: [bodyOp],
+    });
+    expect(ok.status).toBe('ok');
+    if (ok.status !== 'ok') return;
+    const msg = await messageById((ok.result as ProposeResult).pending_id);
+    const payload = (
+      msg?.metadata as {
+        pending: { input: { operations: Array<{ input: Record<string, unknown> }> } };
+      }
+    ).pending.input;
+    expect(payload.operations[0]?.input.body).toBe('Новый текст задачи');
+    expect(typeof payload.operations[0]?.input.expectedUpdatedAt).toBe('string');
+    expect(payload.operations[0]?.input.precondition).toBeUndefined();
   });
 });

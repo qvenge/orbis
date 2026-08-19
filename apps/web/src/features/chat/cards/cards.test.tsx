@@ -1000,3 +1000,47 @@ test('proposal_card: у статуса stale расхождения показа
   expect(within(card).getAllByText(/Устарело/)).toHaveLength(1);
   expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
 });
+
+test('proposal_card: расхождение по ТЕЛУ (aspect "", field body) печатается словами, а не отметками updated_at — и из ответа approve, и из ноты прогона', async () => {
+  // Из ответа «Принять»: сервер отдаёт CAS тела — две отметки updated_at (STALE_VERSION →
+  // stale). Владельцу они не читаются; смысл — «запись менялась».
+  const fromDecide = renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    (path, input) => {
+      if (path === 'routine.decideProposal')
+        return {
+          status: 'stale',
+          mismatches: [
+            {
+              aspect: '',
+              field: 'body',
+              expected: ['2026-08-18T05:00:00.000Z'],
+              actual: '2026-08-18T06:00:00.000Z',
+            },
+          ],
+        };
+      return proposalHandler()(path, input);
+    },
+  );
+  let card = await screen.findByTestId('proposal-card');
+  fireEvent.click(await within(card).findByRole('button', { name: 'Принять' }));
+  let stale = await within(card).findByTestId('proposal-stale');
+  expect(stale).toHaveTextContent('Тело: запись изменилась после составления предложения');
+  expect(stale).not.toHaveTextContent('2026-08-18T05:00');
+  fromDecide.unmount();
+
+  // Из ноты на прогоне (карточка открыта позже)
+  renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    proposalHandler({
+      status: 'stale',
+      decidedAt: '2026-08-19T04:00:00.000Z',
+      mismatches: [
+        { aspect: '', field: 'body', note: 'тело изменено после составления предложения' },
+      ],
+    }),
+  );
+  card = await screen.findByTestId('proposal-card');
+  stale = await within(card).findByTestId('proposal-stale');
+  expect(stale).toHaveTextContent('Тело: запись изменилась после составления предложения');
+});

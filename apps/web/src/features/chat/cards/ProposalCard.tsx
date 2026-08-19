@@ -75,6 +75,30 @@ function expectedText(expected: Mismatch['expected']): string {
   return expected === 'absent' ? 'поля не было' : expected.map(fmt).join(' / ');
 }
 
+/**
+ * Расхождение по ТЕЛУ сервер отдаёт с `aspect: ''`, `field: 'body'` (тело — вне аспектов), а
+ * ожидали/сейчас у него — отметки `updated_at` строки: CAS тела сравнивает версии, а не текст.
+ * Печатать владельцу два timestamp'а — значит показать ему то, что не читается; смысл один:
+ * запись менялась после того, как рутина её видела.
+ */
+function isBodyMismatch(m: { aspect: string; field: string }): boolean {
+  return m.aspect === '' && m.field === 'body';
+}
+
+const BODY_MISMATCH_TEXT = 'Тело: запись изменилась после составления предложения';
+
+/** Строка разбора расхождения из ответа `decideProposal` (сырые значения). */
+function mismatchText(m: Mismatch): string {
+  if (isBodyMismatch(m)) return BODY_MISMATCH_TEXT;
+  return `${aspectLabel(m.aspect)} · ${fieldLabel(m.field)}: ожидали ${expectedText(m.expected)}, сейчас ${fmt(m.actual)}`;
+}
+
+/** Строка разбора из аспекта прогона (нота уже словами). */
+function noteText(m: { aspect: string; field: string; note: string }): string {
+  if (isBodyMismatch(m)) return BODY_MISMATCH_TEXT;
+  return `${aspectLabel(m.aspect)} · ${fieldLabel(m.field)}: ${m.note}`;
+}
+
 export function ProposalCard({ runId }: { runId: string }) {
   const utils = trpc.useUtils();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
@@ -111,15 +135,9 @@ export function ProposalCard({ runId }: { runId: string }) {
   const view = proposal.data;
   const staleRows =
     mismatches !== null
-      ? mismatches.map((m) => ({
-          key: `${m.aspect}:${m.field}`,
-          text: `${aspectLabel(m.aspect)} · ${fieldLabel(m.field)}: ожидали ${expectedText(m.expected)}, сейчас ${fmt(m.actual)}`,
-        }))
+      ? mismatches.map((m) => ({ key: `${m.aspect}:${m.field}`, text: mismatchText(m) }))
       : view?.status === 'stale' && view.mismatches !== undefined
-        ? view.mismatches.map((m) => ({
-            key: `${m.aspect}:${m.field}`,
-            text: `${aspectLabel(m.aspect)} · ${fieldLabel(m.field)}: ${m.note}`,
-          }))
+        ? view.mismatches.map((m) => ({ key: `${m.aspect}:${m.field}`, text: noteText(m) }))
         : null;
 
   /**

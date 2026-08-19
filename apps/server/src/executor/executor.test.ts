@@ -1709,4 +1709,111 @@ describe('V1: источник routine не трогает рутины и на�
     );
     expect(byChat.ok).toBe(true);
   });
+
+  test('прогоны (orbis/agent-run) для источника routine тоже неприкосновенны: правка/закрытие/создание/связь — отказ; та же бухгалтерия системой проходит', async () => {
+    // Рутина в act с entity_update в белом списке знает свой run_id и могла бы подделать
+    // «ответ владельца» (reply), закрыть чужие failed-прогоны (обход стоп-крана) или
+    // завести фальшивый вопрос другой рутине. Все три — запрет по ОБЪЕКТУ, как и рутина.
+    const routineEntity = firstEntity(
+      await execute(
+        db,
+        req('entity_create', {
+          title: 'Рутина-хозяйка',
+          tags: [],
+          aspects: { 'orbis/routine': routine() },
+        }),
+      ),
+    );
+    const runEntity = firstEntity(
+      await execute(
+        db,
+        req(
+          'entity_create',
+          {
+            title: 'Прогон под правку',
+            tags: [],
+            aspects: { 'orbis/agent-run': run(routineEntity.id) },
+          },
+          { source: 'system', actorKind: 'ai' },
+        ),
+      ),
+    );
+
+    // Правка аспекта прогона (подделка ответа владельца)
+    expectUntouchable(
+      await execute(
+        db,
+        req(
+          'entity_update',
+          {
+            id: runEntity.id,
+            aspects: {
+              'orbis/agent-run': { reply: { text: 'да', at: '2026-08-18T08:00:00.000Z' } },
+            },
+          },
+          asRoutine,
+        ),
+      ),
+    );
+    // Правка прогона мимо аспекта (заголовок) — объект тот же
+    expectUntouchable(
+      await execute(
+        db,
+        req('entity_update', { id: runEntity.id, title: 'Переписал прогон' }, asRoutine),
+      ),
+    );
+    // Создание прогона (фальшивый вопрос)
+    expectUntouchable(
+      await execute(
+        db,
+        req(
+          'entity_create',
+          {
+            title: 'Фальшивый прогон',
+            tags: [],
+            aspects: { 'orbis/agent-run': { ...run(routineEntity.id), outcome: 'checkpoint' } },
+          },
+          asRoutine,
+        ),
+      ),
+    );
+    // Связь с прогоном на любом конце
+    const note = firstEntity(
+      await execute(db, req('entity_create', { title: 'Заметка', tags: [] })),
+    );
+    expectUntouchable(
+      await execute(
+        db,
+        req(
+          'relation_create',
+          { source_id: note.id, target_id: runEntity.id, relation_type: 'related_to' },
+          asRoutine,
+        ),
+      ),
+    );
+
+    // Бухгалтерия прогона источником system проходит как раньше (Р-7)
+    const bySystem = await execute(
+      db,
+      req(
+        'entity_update',
+        { id: runEntity.id, aspects: { 'orbis/agent-run': { step_count: 1 } } },
+        { source: 'system', actorKind: 'ai' },
+      ),
+    );
+    expect(bySystem.ok).toBe(true);
+    // Ответ владельца — ui
+    const byUi = await execute(
+      db,
+      req(
+        'entity_update',
+        {
+          id: runEntity.id,
+          aspects: { 'orbis/agent-run': { reply: { text: 'да', at: '2026-08-18T08:00:00.000Z' } } },
+        },
+        { source: 'ui', actorKind: 'owner' },
+      ),
+    );
+    expect(byUi.ok).toBe(true);
+  });
 });

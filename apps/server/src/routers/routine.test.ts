@@ -439,6 +439,58 @@ describe('routine.proposal / decideProposal', () => {
     expect(view?.mismatches?.[0]?.field).toBe('status');
   });
 
+  test('предложение с правкой ТЕЛА, цель менялась после составления → approve даёт stale с расхождением тела (не голую STALE_VERSION), pending отклонён причиной stale, нота на прогоне (A-2/B2-1)', async () => {
+    const routineId = await seedRoutine(owner, { title: 'Рутина: правка тела' });
+    const taskId = await seedTask('Переписать описание');
+    const runId = routineRunId(routineId, MANUAL_BUCKET, 1);
+    const provider = new ScriptedProvider([
+      toolUse([
+        {
+          name: 'orbis_propose',
+          input: {
+            run_id: runId,
+            explanation: EXPLANATION,
+            operations: [
+              { tool: 'entity_update', input: { id: taskId, body: 'Описание от рутины' } },
+            ],
+          },
+        },
+      ]),
+    ]);
+    await callerWith(provider).routine.runNow({ routineId });
+    const closed = await waitClosed(runId);
+    expect(closed.outcome).toBe('finished');
+    const pendingId = closed.proposal?.pending_id;
+    if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
+
+    // Владелец тронул НЕ тело, а статус — updated_at бампит любая правка сущности
+    await ownerSets(taskId, 'planned');
+
+    const decided = await callerLater().routine.decideProposal({ runId, decision: 'approve' });
+    expect(decided.status).toBe('stale');
+    if (decided.status !== 'stale') throw new Error('не stale');
+    expect(decided.mismatches).toHaveLength(1);
+    expect(decided.mismatches[0]).toMatchObject({ aspect: '', field: 'body' });
+    expect(typeof decided.mismatches[0]?.actual).toBe('string');
+
+    // Ничего не применено, карточка погашена причиной stale, нота — словами
+    const body = await withIdentity(db, owner, (tx) =>
+      tx.execute(sql`SELECT body FROM entities WHERE id = ${taskId}::uuid`),
+    );
+    expect((body as unknown as Array<{ body: string }>)[0]?.body).not.toBe('Описание от рутины');
+    expect(await rejectReason(pendingId)).toBe('stale');
+    const aspect = await runAspect(runId);
+    expect(aspect.proposal?.status).toBe('stale');
+    expect(aspect.proposal?.mismatches).toEqual([
+      { aspect: '', field: 'body', note: 'тело изменено после составления предложения' },
+    ]);
+    // Повторное «Принять» — уже решено, а не вторая ошибка
+    expect(await caller().routine.decideProposal({ runId, decision: 'approve' })).toEqual({
+      status: 'already',
+      proposalStatus: 'stale',
+    });
+  });
+
   test('reject закрывает предложение: статус rejected, граф не тронут (приёмка 5)', async () => {
     const { taskId, runId, pendingId } = await proposed('Оплатить счёт');
 

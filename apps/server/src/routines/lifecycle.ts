@@ -940,8 +940,9 @@ async function foreignDecision(
  * ревалидация. Три исхода конвейера разведены нарочно:
  *  - применилось: статус `approved` на прогоне, наружу `applied` с id действия (по нему
  *    работает «Отменить» §7.8);
- *  - предусловие не выполнено (V1.7): предложение УСТАРЕЛО — карточка гасится причиной
- *    `stale`, разбор расхождений ложится на прогон, наружу идёт значение, а не исключение;
+ *  - предусловие не выполнено (V1.7) либо разошёлся CAS тела (STALE_VERSION, см.
+ *    bodyMismatch): предложение УСТАРЕЛО — карточка гасится причиной `stale`, разбор
+ *    расхождений ложится на прогон, наружу идёт значение, а не исключение;
  *  - любая другая ошибка: наружу исключением. Это принятая цена контракта pending
  *    (§7.10) — полная валидация делается на approve, поэтому структурная ошибка возможна
  *    ПОСЛЕ нажатия «Принять».
@@ -965,7 +966,7 @@ async function approveProposal(
       : { status: 'already', proposalStatus: settled.proposalStatus };
   }
 
-  const mismatches = preconditionMismatches(applied.error);
+  const mismatches = preconditionMismatches(applied.error) ?? bodyMismatch(applied.error);
   if (mismatches === null) {
     // Не «устарело». Одна причина отказа всё же означает не сбой, а чужое решение: pending
     // отклонили между нашим чтением статуса и approve (гашение новым прогоном идёт именно
@@ -1091,6 +1092,24 @@ function preconditionMismatches(error: StructuredError): PreconditionMismatch[] 
 }
 
 /**
+ * Правка ТЕЛА в предложении разошлась с графом (финальное ревью V1, A-2/B2-1). У тела нет
+ * предусловия по значению — его CAS это `expectedUpdatedAt` строки, снятый при составлении
+ * (propose.ts buildUpdate), и executor отвечает на расхождение не CONFLICT/precondition_failed,
+ * а STALE_VERSION. Для владельца это то же самое «устарело»: сущность менялась после того,
+ * как рутина её видела (тело — или что угодно ещё: `updated_at` бампит любая правка).
+ * Расхождение выражается той же формой, что у полей: `aspect: ''` (тело — вне аспектов),
+ * `field: 'body'`, ожидали/сейчас — отметки `updated_at`. Не про STALE_VERSION — `null`.
+ */
+function bodyMismatch(error: StructuredError): PreconditionMismatch[] | null {
+  if (error.code !== 'STALE_VERSION') return null;
+  const details = error.details as { expected?: unknown; current?: unknown } | undefined;
+  return [{ aspect: '', field: 'body', expected: [details?.expected], actual: details?.current }];
+}
+
+/** Нота расхождения тела в аспекте прогона: отметки `updated_at` владельцу ничего не скажут. */
+const BODY_MISMATCH_NOTE = 'тело изменено после составления предложения';
+
+/**
  * Расхождения в форме, которая ложится в аспект прогона (V1.4): человекочитаемая строка
  * вместо сырых значений. Она переживает саму карточку и читается на экране прогона спустя
  * дни — «предусловие orbis/task.status не выполнено» там не сказало бы владельцу ничего.
@@ -1099,10 +1118,13 @@ function mismatchNotes(mismatches: readonly PreconditionMismatch[]): ProposalMis
   return mismatches.slice(0, MAX_MISMATCH_NOTES).map((m) => ({
     aspect: m.aspect,
     field: m.field,
-    note: `ожидали ${expectedText(m.expected)}, сейчас ${actualText(m.actual)}`.slice(
-      0,
-      MISMATCH_NOTE_MAX,
-    ),
+    note:
+      m.aspect === '' && m.field === 'body'
+        ? BODY_MISMATCH_NOTE
+        : `ожидали ${expectedText(m.expected)}, сейчас ${actualText(m.actual)}`.slice(
+            0,
+            MISMATCH_NOTE_MAX,
+          ),
   }));
 }
 

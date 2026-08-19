@@ -48,9 +48,13 @@ const sink = makeChatJournalSink();
 /**
  * Аспекты, до которых предложение не дотягивается вовсе (инвариант 6, V1.10). Тот же
  * список, что у `assertRoutineUntouchable`: доверенность, выданную владельцем, нельзя
- * переписывать её же руками, и раздавать работу исполнителю рутина тоже не вправе.
+ * переписывать её же руками, раздавать работу исполнителю рутина не вправе, а прогоны —
+ * бухгалтерия и ответы владельца, подделывать которые нельзя ни тулом, ни предложением.
  */
-const FORBIDDEN_ASPECTS = ['orbis/routine', 'orbis/assignment'] as const;
+const FORBIDDEN_ASPECTS = ['orbis/routine', 'orbis/agent-run', 'orbis/assignment'] as const;
+
+/** Аспекты, которые делают ЦЕЛЬ операции запретной по БД (сущность уже рутина/прогон). */
+const FORBIDDEN_TARGET_ASPECTS = ['orbis/routine', 'orbis/agent-run'] as const;
 
 /** Строгая схема входа каждого допустимого тула — та же, что у прямого вызова (§9.2). */
 const OPERATION_SCHEMAS = {
@@ -70,7 +74,7 @@ function err(code: string, message: string, details?: unknown): ToolDispatchResu
 function forbiddenTarget(index: number, tool: string, note: string): ToolDispatchResult {
   return err(
     'VALIDATION',
-    `операция ${index + 1} трогает рутину или назначение — предложить это нельзя (V1.6, инвариант 6): ${note}`,
+    `операция ${index + 1} трогает рутину, прогон или назначение — предложить это нельзя (V1.6, инвариант 6): ${note}`,
     { reason: 'proposal_forbidden_target', index, tool },
   );
 }
@@ -184,7 +188,7 @@ export async function runPropose(
     // разошлись бы с собственными предусловиями: вторая сняла бы `in:[исходное]`, а
     // применялась бы поверх первой (executor в батче читает виртуальную строку) и
     // гарантированно упала бы CONFLICT'ом на approve — то есть у владельца, на его кнопке.
-    const seen = new Map<string, number>();
+    const seen: Seen = { fields: new Map(), entities: new Map() };
     for (const [index, op] of parsed.entries()) {
       if (op.tool !== 'entity_update') {
         // entity_create предусловий не имеет: сущности ещё нет, а занятый `id`
@@ -363,23 +367,48 @@ async function storedOperationCount(tx: Tx, pendingId: string): Promise<number |
   return Array.isArray(operations) ? operations.length : null;
 }
 
+/** Что уже правят предыдущие операции предложения: поля по сущности и сами сущности. */
+interface Seen {
+  /** «сущность + аспект + поле» → номер первой операции. */
+  fields: Map<string, number>;
+  /** сущность → первая операция по ней и правит ли хоть одна из них тело. */
+  entities: Map<string, { index: number; body: boolean }>;
+}
+
 /**
  * Не правит ли операция то, что УЖЕ правит предыдущая (fix round 1)? Ключ — сущность плюс
- * поле аспекта (и отдельно тело: у него свой CAS по `updated_at`).
+ * поле аспекта.
  *
  * Отказ здесь, а не на approve: предусловия обеих операций снимаются с ОДНОГО исходного
  * состояния, а исполняются они последовательно поверх друг друга (в батче executor читает
  * виртуальную строку) — вторая гарантированно разошлась бы со своим предусловием, и
  * владелец получил бы CONFLICT на кнопке, которую ему предложили нажать.
+ *
+ * ТЕЛО — правило шире (финальное ревью V1, B2-2): правка тела сущности X несовместима с
+ * ЛЮБОЙ другой `entity_update` X в том же предложении, в любом порядке. У тела свой CAS по
+ * `updated_at` строки (§5.2), а `updated_at` бампит любая правка сущности: в батче вторая
+ * операция по X читает виртуальную строку с уже сдвинутым `updated_at`, и CAS тела, снятый
+ * с исходной строки, гарантированно даёт STALE_VERSION на approve — независимо от того,
+ * стоит правка тела первой или второй.
  */
 function collides(
-  seen: Map<string, number>,
+  seen: Seen,
   index: number,
   input: Record<string, unknown>,
 ): ToolDispatchResult | null {
   const id = input.id as string;
+  const hasBody = input.body !== undefined;
+  const prev = seen.entities.get(id);
+  if (prev !== undefined && (prev.body || hasBody)) {
+    return err(
+      'VALIDATION',
+      `операции ${prev.index + 1} и ${index + 1} правят одну сущность ${id}, и одна из них — её тело: правка тела в предложении должна быть единственной операцией по сущности`,
+      { reason: 'proposal_conflicting_operations', index, first: prev.index, id, field: 'тело' },
+    );
+  }
+  seen.entities.set(id, { index: prev?.index ?? index, body: (prev?.body ?? false) || hasBody });
+
   const keys: Array<{ key: string; what: string }> = [];
-  if (input.body !== undefined) keys.push({ key: `${id}\u0000body`, what: 'тело' });
   const aspects = input.aspects as Record<string, Record<string, unknown> | null> | undefined;
   for (const [aspectId, patch] of Object.entries(aspects ?? {})) {
     if (patch === null) continue; // detach отклоняет buildUpdate — своим, более точным текстом
@@ -388,7 +417,7 @@ function collides(
     }
   }
   for (const { key, what } of keys) {
-    const first = seen.get(key);
+    const first = seen.fields.get(key);
     if (first !== undefined) {
       return err(
         'VALIDATION',
@@ -396,7 +425,7 @@ function collides(
         { reason: 'proposal_conflicting_operations', index, first, id, field: what },
       );
     }
-    seen.set(key, index);
+    seen.fields.set(key, index);
   }
   return null;
 }
@@ -449,10 +478,19 @@ async function loadTargets(
       // Чужая строка и несуществующая под RLS неразличимы — единый NOT_FOUND (как в executor)
       return { error: err('NOT_FOUND', 'сущность не найдена', { id: w.id, index: w.index }) };
     }
-    // Запрет по объекту, половина «по БД»: аспекта рутины в патче может не быть вовсе —
-    // рутиной сущность делает её собственное состояние, а не форма операции.
-    if (row.aspects['orbis/routine'] !== undefined) {
-      return { error: forbiddenTarget(w.index, w.tool, `сущность ${w.id} — рутина`) };
+    // Запрет по объекту, половина «по БД»: аспекта рутины (прогона) в патче может не быть
+    // вовсе — рутиной или прогоном сущность делает её собственное состояние, а не форма
+    // операции.
+    for (const aspectId of FORBIDDEN_TARGET_ASPECTS) {
+      if (row.aspects[aspectId] !== undefined) {
+        return {
+          error: forbiddenTarget(
+            w.index,
+            w.tool,
+            `сущность ${w.id} — ${aspectId === 'orbis/routine' ? 'рутина' : 'прогон'}`,
+          ),
+        };
+      }
     }
   }
   return { rows };

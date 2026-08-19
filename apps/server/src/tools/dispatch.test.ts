@@ -1595,6 +1595,51 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     expect(await titleOf(target.id)).toBe('Цель батча рутины');
   });
 
+  test('act с allowed_tools [entity_update]: правка ПРОГОНА (свой run: reply/outcome) → FORBIDDEN_LEVEL routine_untouchable; бухгалтерия system проходит (A-1)', async () => {
+    // Рутина знает свой run_id (он в системном слое промпта) — подделать «ответ владельца»
+    // или закрыть прогон она не должна ни своим, ни чужим прогоном
+    const { seedRoutine, seedRoutineRun, aspectsOf } = agentLoopHelpers(db);
+    const routineId = await seedRoutine(userA, {
+      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+    });
+    const { runId } = await seedRoutineRun(userA, { routineId, bucket: '2026-08-20T07:00' });
+    const ctx = rt('act', ['entity_update'], {
+      routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(['entity_update']) },
+    });
+
+    const forged = await dispatchTool(ctx, 'entity_update', {
+      id: runId,
+      aspects: { 'orbis/agent-run': { reply: { text: 'да', at: T0.toISOString() } } },
+    });
+    expectError(forged, 'FORBIDDEN_LEVEL');
+    if (forged.status === 'error') {
+      expect((forged.error.details as { reason?: string }).reason).toBe('routine_untouchable');
+    }
+    const closed = await dispatchTool(ctx, 'entity_update', {
+      id: runId,
+      aspects: { 'orbis/agent-run': { outcome: 'finished' } },
+    });
+    expectError(closed, 'FORBIDDEN_LEVEL');
+    const run = (await aspectsOf(userA, runId))['orbis/agent-run'];
+    expect(run?.outcome).toBe('running');
+    expect(run?.reply).toBeUndefined();
+
+    // Та же запись шага бухгалтерией (system) — как её пишет раннер — проходит
+    const bySystem = await execute(db, {
+      actorUserId: userA,
+      actorKind: 'ai',
+      source: 'system',
+      runId,
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: runId, aspects: { 'orbis/agent-run': { step_count: 1 } } },
+        },
+      ],
+    });
+    expect(bySystem.ok).toBe(true);
+  });
+
   test('фикстура routineCtx: подменённая рутина везёт СВОЙ прогон в ctx.runId', async () => {
     // Обвязка Задач 7–9: расхождение ctx.runId и routine.runId всплыло бы только в
     // глаголах, где прогон ищется по одному, а субъект — по другому
