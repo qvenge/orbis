@@ -257,6 +257,26 @@ function compressSystemRow(content: string, metadata: Record<string, unknown>): 
 }
 
 /**
+ * Пометка автора для поста в тред НЕ от владельца (thread_post, tools/dispatch.ts
+ * runThreadPost): пост ложится `role: 'user'` с `metadata.author_kind`, и без пометки чат-модель
+ * читала бы слова ночной рутины или внешнего агента как реплику владельца — и отвечала бы
+ * «ему». Роль остаётся `user` (провайдер знает только user/assistant/system, а system в
+ * messages запрещена — контракт Task 7): автор помечается в тексте. Правило то же, что у
+ * маркера ленты на экране (web authorLabel): рутина (ai + прогон) → «рутина», агент →
+ * «агент», внутренний AI без прогона → «AI»; у владельца пометки нет — сообщать модели,
+ * что автор владелец, нечего.
+ */
+function authorPrefix(metadata: Record<string, unknown>): string {
+  const kind = metadata.author_kind;
+  if (kind === 'ai' && (metadata.routine_id !== undefined || metadata.run_id !== undefined)) {
+    return '[рутина]: ';
+  }
+  if (kind === 'agent') return '[агент]: ';
+  if (kind === 'ai') return '[AI]: ';
+  return '';
+}
+
+/**
  * Последние CONTEXT_HISTORY_LIMIT сообщений треда — В ХРОНОЛОГИЧЕСКОМ ПОРЯДКЕ.
  * Инфраструктурные system-строки (processing-маркеры §7.9, audit системных действий
  * §5.4) невидимы модели, как и клиенту — общий SQL-фрагмент с chat.listMessages
@@ -277,10 +297,16 @@ async function historyMessages(tx: Tx, threadId: string): Promise<LLMMessage[]> 
     .limit(CONTEXT_HISTORY_LIMIT);
   rows.reverse(); // выборка «последние N» шла с конца — возвращаем хронологию
   const msgs = rows.map((r) => {
-    if (r.role === 'user' || r.role === 'assistant') {
-      return { role: r.role, content: r.content } satisfies LLMMessage;
+    const metadata = r.metadata as Record<string, unknown>;
+    if (r.role === 'user') {
+      return {
+        role: 'user',
+        content: `${authorPrefix(metadata)}${r.content}`,
+      } satisfies LLMMessage;
     }
-    return compressSystemRow(r.content, r.metadata as Record<string, unknown>);
+    if (r.role === 'assistant')
+      return { role: 'assistant', content: r.content } satisfies LLMMessage;
+    return compressSystemRow(r.content, metadata);
   });
   // Инвариант «messages начинается с user» — требование Anthropic Messages API
   // (fix round Task 8): граница окна на assistant-сообщении или ведущем сжатом

@@ -311,6 +311,46 @@ describe('buildContext — слой 4: rolling-история (решение 6 
     expect(ctx.messages[1]?.role).toBe('assistant');
     expect(ctx.messages.every((m) => m.role !== 'system')).toBe(true);
   });
+
+  test('посты рутины/агента/AI в тред (role user, metadata.author_kind) помечаются автором в тексте, роль остаётся user; реплика владельца — без пометки (хвост финала)', async () => {
+    // Пост в тред (thread_post) ложится role 'user' с author_kind у не-владельца — без пометки
+    // чат-модель читала бы слова ночной рутины или внешнего агента как реплику владельца
+    const who = freshUserId();
+    const base = Date.UTC(2026, 5, 2, 9, 0, 0);
+    const threadId = await withIdentity(db, who, async (tx) => {
+      const id = await ensureGlobalThread(tx, who);
+      const rows: Array<{ content: string; metadata: Record<string, unknown> }> = [
+        { content: 'Посмотри мой план на день', metadata: {} },
+        {
+          content: 'Перенёс две задачи на сегодня',
+          metadata: { author_kind: 'ai', routine_id: newId(), run_id: newId() },
+        },
+        {
+          content: 'Ветка готова, тесты зелёные',
+          metadata: { author_kind: 'agent', run_id: newId() },
+        },
+        { content: 'Заметка от меня в тред', metadata: { author_kind: 'ai' } },
+      ];
+      for (const [i, row] of rows.entries()) {
+        await tx.insert(chatMessages).values({
+          id: newId(),
+          threadId: id,
+          role: 'user',
+          content: row.content,
+          metadata: row.metadata,
+          createdAt: new Date(base + (i + 1) * 1000),
+        });
+      }
+      return id;
+    });
+    const ctx = await withIdentity(db, who, (tx) => buildContext(tx, { ownerId: who, threadId }));
+    expect(ctx.messages).toEqual([
+      { role: 'user', content: 'Посмотри мой план на день' },
+      { role: 'user', content: '[рутина]: Перенёс две задачи на сегодня' },
+      { role: 'user', content: '[агент]: Ветка готова, тесты зелёные' },
+      { role: 'user', content: '[AI]: Заметка от меня в тред' },
+    ]);
+  });
 });
 
 describe('buildContext — слой 4: сжатие audit/системных сообщений', () => {
