@@ -12,6 +12,7 @@ import {
   readDraft,
 } from '../entity-editor/draft-storage';
 import { sameDoc } from '../entity-editor/strip-ids';
+import { runPollInterval } from './run-poll';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 type UpdateInput = RouterInputs['entity']['update'];
@@ -254,7 +255,11 @@ export function useEntityUpdate(entityId: string) {
 }
 
 export function useEntityDetail(entityId: string) {
-  const get = trpc.entity.get.useQuery(detailGetInput(entityId));
+  const get = trpc.entity.get.useQuery(detailGetInput(entityId), {
+    // Идущий прогон опрашивается сам (run-poll.ts): экран прогона после «Прогнать сейчас»
+    // иначе застывал бы на «идёт · 0 шагов» до перезагрузки. Для остальных записей — false.
+    refetchInterval: (query) => runPollInterval(query.state.data?.entity.aspects),
+  });
   const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
   const entity = get.data?.entity;
 

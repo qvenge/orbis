@@ -24,7 +24,15 @@ export type CardHandlers = {
 
 type CardsMeta = {
   cards?: Card[];
+  /**
+   * КТО написал сообщение, если не владелец: `'agent'` — внешний исполнитель по гранту,
+   * `'ai'` — внутренний AI (чат либо прогон рутины). Пишет только `thread_post`
+   * (tools/dispatch.ts runThreadPost); у сообщений самого владельца поля нет.
+   */
   author_kind?: string;
+  /** Прогон и рутина, из которых сделан пост (`thread_post` в прогоне рутины, V1.6). */
+  run_id?: string;
+  routine_id?: string;
   /**
    * Журнальная запись действия (§7.8): КТО двигал граф. Здесь только та часть формы
    * `ActionRecord`, которую читает лента, — остальное ей не нужно, а полный тип живёт на
@@ -132,13 +140,43 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
   }
 }
 
-// Диспетчер по metadata.cards[]: серверный Card-union рендерится клиентом (Task 10).
-// Сообщение агента (author_kind) и действие агента (actions[0].actor_kind) оборачиваются в
-// SystemMessage (🤖 агент, 02 §2.3) — см. разбор у самой ветки.
-export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): ReactNode {
+/**
+ * Подпись «кто это делал», если не владелец, — по ЛЮБОМУ из носителей метки, а не по одному
+ * вместо другого (приёмка 14, V1.9, Р-16); `undefined` — сообщение или действие владельца.
+ *
+ * `author_kind` помечает сообщение, которое написали САМИ агент или AI (thread_post, 02 §2.3).
+ * Но работу внешнего исполнителя владелец видит иначе: её приносит audit-запись действия, а её
+ * пишет сервер от системы — `author_kind` там не агентский, зато `actions[0].actor_kind ===
+ * 'agent'`. Считать только второе значило бы потерять первое; заменить одно другим — тоже.
+ *
+ * Рутина — САМЫЙ точный носитель из всех: её правки приходят audit-записью от «ai» (по
+ * `actor_kind` неотличимо от чат-агента), а её пост в тред — `author_kind: 'ai'` плюс
+ * `routine_id`/`run_id`. Владельцу разница видна сразу: агент отвечает ему в разговоре,
+ * рутина правит граф и пишет в треды ночью, пока его нет. Поэтому источник проверяется
+ * ПЕРВЫМ: «агент» поверх ночной правки был бы не полуправдой, а указанием не на того.
+ * Пост внутреннего AI из чата (`author_kind: 'ai'` без прогона) — «AI»: это тоже не слова
+ * владельца, и в пузыре владельца ему не место (финальное ревью V1, B1-1/D-1).
+ */
+export function authorLabel(msg: ChatMessage): string | undefined {
+  const meta = (msg.metadata ?? {}) as CardsMeta;
+  const action = meta.actions?.[0];
+  if (action?.source === 'routine') return 'рутина';
+  if (meta.author_kind === 'ai' && (meta.routine_id !== undefined || meta.run_id !== undefined)) {
+    return 'рутина';
+  }
+  if (meta.author_kind === 'agent' || action?.actor_kind === 'agent') return 'агент';
+  if (meta.author_kind === 'ai') return 'AI';
+  return undefined;
+}
+
+/**
+ * Карточки сообщения БЕЗ обёртки-метки — для ленты, которая ставит метку сама, вокруг
+ * текста и карточек вместе (MessageList: пост рутины/агента/AI в тред). `renderCards` ниже —
+ * то же плюс метка; два входа, а не флаг, чтобы вызывающий не мог забыть про метку молча.
+ */
+export function renderCardBodies(msg: ChatMessage, handlers: CardHandlers = {}): ReactNode[] {
   const { meta, cards, confirmed } = readMeta(msg);
   const body = cards.map((card, i) => renderCard(card, i, { msg, meta, handlers, confirmed }));
-
   // «Разобрать с AI» — только у подтверждённой fast-карточки (офлайн «⏳» недоступна до confirm).
   const fp = meta.fastPath;
   if (fp?.status === 'confirmed' && fp.entityId && handlers.onReparse) {
@@ -154,26 +192,15 @@ export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): Reac
       </Button>,
     );
   }
+  return body;
+}
 
-  /**
-   * Метка агента — по ЛЮБОМУ из двух признаков, а не по одному вместо другого (приёмка 14).
-   *
-   * `author_kind` помечает сообщение, которое агент написал САМ (02 §2.3). Но работу внешнего
-   * исполнителя владелец видит иначе: её приносит audit-запись действия, а её пишет сервер от
-   * системы — `author_kind` там не агентский, зато `actions[0].actor_kind === 'agent'`. Считать
-   * только второе значило бы потерять первое; заменить одно другим — тоже. Источника два,
-   * метка одна: «это делал не ты».
-   */
-  const action = meta.actions?.[0];
-  /**
-   * Рутина — третий носитель той же метки и САМЫЙ точный из трёх (V1.9, Р-16). Её правки
-   * приходят audit-записью от «ai» — то есть по `actor_kind` она неотличима от агента чата, —
-   * но владельцу разница видна сразу: агент отвечает ему в разговоре, рутина правит граф
-   * ночью, пока его нет. Поэтому источник проверяется ПЕРВЫМ: «агент» поверх ночной правки
-   * был бы не полуправдой, а указанием не на того.
-   */
-  if (action?.source === 'routine') return <SystemMessage label="рутина">{body}</SystemMessage>;
-  const byAction = action?.actor_kind === 'agent';
-  if (meta.author_kind === 'agent' || byAction) return <SystemMessage>{body}</SystemMessage>;
+// Диспетчер по metadata.cards[]: серверный Card-union рендерится клиентом (Task 10).
+// Сообщение агента (author_kind) и действие агента (actions[0].actor_kind) оборачиваются в
+// SystemMessage (🤖 агент, 02 §2.3) — см. authorLabel.
+export function renderCards(msg: ChatMessage, handlers: CardHandlers = {}): ReactNode {
+  const body = renderCardBodies(msg, handlers);
+  const label = authorLabel(msg);
+  if (label !== undefined) return <SystemMessage label={label}>{body}</SystemMessage>;
   return <>{body}</>;
 }

@@ -274,6 +274,53 @@ test('сообщение пользователя тоже markdown (челов�
   expect(screen.getByRole('article')).toHaveAttribute('data-role', 'user');
 });
 
+test('пост рутины в тред (role user + author_kind ai + routine_id) — НЕ пузырь владельца, а метка «рутина» над текстом (B1-1/D-1)', () => {
+  // Сервер пишет пост `thread_post` прогона рутины ролью `user` с metadata
+  // {author_kind:'ai', run_id, routine_id} (tools/dispatch.ts runThreadPost). Владелец утром не
+  // должен читать «перенёс срок» как СВОИ слова.
+  render(
+    <MessageList
+      messages={[
+        {
+          ...userMsg('r', 'Перенёс срок, см. план'),
+          metadata: { author_kind: 'ai', run_id: 'run-1', routine_id: 'rt-1' },
+        } as ChatMessage,
+      ]}
+      isTyping={false}
+    />,
+  );
+  const article = screen.getByRole('article');
+  expect(article).toHaveAttribute('data-author', 'рутина');
+  expect(article.className).not.toContain('self-end');
+  expect(screen.getByTestId('system-message')).toHaveTextContent('рутина');
+  // Текст на месте — внутри помеченного блока
+  expect(screen.getByTestId('system-message')).toHaveTextContent('Перенёс срок, см. план');
+});
+
+test('посты агента и чат-AI в тред тоже помечены («агент», «AI»); обычная реплика владельца — пузырь без метки', () => {
+  render(
+    <MessageList
+      messages={[
+        { ...userMsg('u', 'моя реплика') } as ChatMessage,
+        { ...userMsg('ai', 'от внутреннего AI'), metadata: { author_kind: 'ai' } } as ChatMessage,
+        {
+          ...userMsg('ag', 'от исполнителя'),
+          metadata: { author_kind: 'agent', run_id: 'run-9' },
+        } as ChatMessage,
+      ]}
+      isTyping={false}
+    />,
+  );
+  const articles = screen.getAllByRole('article');
+  const byText = (text: string) =>
+    articles.find((a) => a.textContent?.includes(text)) as HTMLElement;
+  expect(byText('моя реплика')).not.toHaveAttribute('data-author');
+  expect(byText('моя реплика').className).toContain('self-end');
+  expect(byText('от внутреннего AI')).toHaveAttribute('data-author', 'AI');
+  expect(byText('от исполнителя')).toHaveAttribute('data-author', 'агент');
+  expect(screen.getAllByTestId('system-message')).toHaveLength(2);
+});
+
 test('клик по [[entity:…]] открывает запись поверх стека АКТИВНОЙ вкладки', () => {
   // Ровно как тап по карточке в той же ленте (cards/EntityCard): push, без смены вкладки.
   useNav.setState({ activeTab: 'chat', stacks: emptyStacks() });

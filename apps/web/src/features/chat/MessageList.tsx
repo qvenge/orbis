@@ -4,7 +4,14 @@ import { Markdown } from '../../lib/markdown/Markdown';
 import { openEntity } from '../../state/navigation';
 import { EmptyState } from '../../ui/EmptyState';
 import { Skeleton } from '../../ui/Skeleton';
-import { type CardHandlers, contentDuplicatesCard, renderCards } from './cards/renderCards';
+import {
+  authorLabel,
+  type CardHandlers,
+  contentDuplicatesCard,
+  renderCardBodies,
+  renderCards,
+} from './cards/renderCards';
+import { SystemMessage } from './cards/SystemMessage';
 import { readSuggestions, Suggestions } from './Suggestions';
 import type { ChatMessage } from './useChatThread';
 
@@ -83,7 +90,29 @@ export function MessageList({
       {/* Пользователь — тихий серый пузырь справа; ассистент — без пузыря, текст и карточки
           прямо на листе (Notion AI / Claude): акцентный цвет сообщениям не принадлежит. */}
       {ordered.map((m) =>
-        m.role === 'user' ? (
+        m.role === 'user' && authorLabel(m) !== undefined ? (
+          /* Пост в тред от НЕ-владельца (thread_post рутины, агента или чат-AI): роль у него
+             `user`, но это не реплика владельца, и в его пузыре справа ему не место — иначе
+             утром владелец читал бы «перенёс срок, см. план» как СВОИ слова (V1.6, B1-1/D-1).
+             Метка (рутина / агент / AI) стоит НАД текстом, как у audit-карточек. */
+          <article
+            key={m.id}
+            data-role={m.role}
+            data-author={authorLabel(m)}
+            className="flex w-full max-w-[92%] flex-col gap-2 self-start text-sm text-text"
+          >
+            <SystemMessage label={authorLabel(m)}>
+              {m.content && (
+                <Markdown
+                  source={m.content}
+                  onEntityLink={openEntity}
+                  className="leading-relaxed"
+                />
+              )}
+              {renderCardBodies(m, { onRetry, onReparse })}
+            </SystemMessage>
+          </article>
+        ) : m.role === 'user' ? (
           <article
             key={m.id}
             data-role={m.role}

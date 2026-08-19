@@ -948,6 +948,24 @@ test('маркер ленты: действие с source=routine помечен
   expect(screen.queryByText('агент')).toBeNull();
 });
 
+test('маркер ленты: пост с author_kind=ai и routine_id → «рутина»; author_kind=ai без прогона → «AI» (B1-1)', () => {
+  const routinePost = renderWithProviders(
+    <div>
+      {renderCards(
+        msg([], { role: 'user', metadata: { author_kind: 'ai', routine_id: 'rt1', run_id: 'r1' } }),
+      )}
+    </div>,
+  );
+  expect(screen.getByTestId('system-message')).toHaveTextContent('рутина');
+  routinePost.unmount();
+
+  renderWithProviders(
+    <div>{renderCards(msg([], { role: 'user', metadata: { author_kind: 'ai' } }))}</div>,
+  );
+  expect(screen.getByTestId('system-message')).toHaveTextContent('AI');
+  expect(screen.queryByText('агент')).toBeNull();
+});
+
 test('proposal_card: «Отклонить» перечитывает и карточку, и ГРАФ (отказ тоже пишет в аспект прогона)', async () => {
   // Отказ не трогает цели предложения — но пишет судьбу самого предложения в аспект прогона
   // (`proposal.status`, `decided_at`). Это запись графа, и без инвалидации история прогонов на

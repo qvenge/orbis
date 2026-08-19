@@ -6,6 +6,7 @@
 // назвал (apps/server/src/query/compile.ts:206-216), иначе каждый шаг агента поднимал бы прогон в
 // топ «свежего». Без этого узла список тикета был бы пуст ВСЕГДА.
 import { type RouterOutputs, trpc } from '../../trpc';
+import { runPollInterval } from './run-poll';
 
 /** Прогон в объёме списка — ровно то, что отдаёт `entity.query` (без bodyDoc и связей). */
 export type TicketRun = RouterOutputs['entity']['query'][number];
@@ -53,7 +54,16 @@ export function useTicketRuns(
     // ответ владельца, — ответ уехал бы в прогон СОСЕДНЕГО тикета. А ради чего placeholder
     // ставят обычно — «не схлопнуть список на перечитывании» — здесь и без него: после
     // `invalidateGraph` ключ ТОТ ЖЕ, и react-query держит прежние данные до ответа.
-    { enabled },
+    {
+      enabled,
+      // Последний прогон идёт → список опрашивается (run-poll.ts): от него зависят блок
+      // состояния рутины («идёт прогон», кнопка «Прогнать сейчас») и блок ожидания тикета
+      refetchInterval: (query) => {
+        const rows = query.state.data;
+        const last = Array.isArray(rows) ? rows[0] : undefined;
+        return last === undefined ? false : runPollInterval(last.aspects);
+      },
+    },
   );
   // Array.isArray — та же защита, что в TransactionsScreen и CategoryField: секция живёт на
   // общем detail-экране, и неожиданная форма ответа не должна ронять всю страницу.
