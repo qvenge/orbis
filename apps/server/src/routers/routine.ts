@@ -110,6 +110,17 @@ export const routineRouter = router({
     .input(routineIdInput)
     .mutation(async ({ ctx, input }): Promise<{ runId: string }> => {
       try {
+        const ai = ctx.ai ?? defaultAiDeps();
+        const runs = ai.manualRuns ?? manualRuns;
+        // Рубильник уже дёрнут (процесс останавливается): заводить прогон бессмысленно —
+        // раннер закрыл бы его `failed aborted` на первом же шаге, попутно погасив открытое
+        // предложение прошлого прогона (supersedeOpen). Отказ ДО любой записи; клиент
+        // повторит после редеплоя
+        if (runs.signal.aborted) {
+          throw new ExecError('CONFLICT', 'сервер останавливается — повторите через минуту', {
+            reason: 'shutting_down',
+          });
+        }
         const { routine, timeZone } = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => ({
           routine: await routineById(tx, input.routineId),
           timeZone: await ownerTimeZone(tx, ctx.actorUserId),
@@ -119,8 +130,6 @@ export const routineRouter = router({
           throw new ExecError('NOT_FOUND', 'рутина не найдена', { routineId: input.routineId });
         }
 
-        const ai = ctx.ai ?? defaultAiDeps();
-        const runs = ai.manualRuns ?? manualRuns;
         const deps = {
           db: ctx.db,
           provider: ai.provider,

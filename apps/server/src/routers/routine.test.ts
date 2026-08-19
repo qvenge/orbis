@@ -9,7 +9,7 @@ import { manualBucket, newId, routineRunId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
-import { routineById } from '../agent-loop/queries';
+import { routineById, runsOfParent } from '../agent-loop/queries';
 import { ROUTINE_ROLLBACK_NOTE, rollbackRun } from '../agent-loop/rollback';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
@@ -359,6 +359,14 @@ describe('routine.runNow', () => {
     expect(calls).toBe(1);
     // Рутина НЕ на паузе: ручной прогон в стоп-кране не участвует
     expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('active');
+
+    // Под уже дёрнутым рубильником runNow прогон не заводит — CONFLICT «сервер
+    // останавливается», прогонов у рутины по-прежнему один (S-2)
+    const refused = await trpcError(c.routine.runNow({ routineId }));
+    expect(refused.code).toBe('CONFLICT');
+    expect(refused.message).toContain('останавливается');
+    const runs = await withIdentity(db, owner, (tx) => runsOfParent(tx, routineId));
+    expect(runs.map((r) => r.id)).toEqual([runId]);
   });
 });
 

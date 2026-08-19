@@ -113,6 +113,11 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
         const { paused } = await pauseIfFailing(deps, { ownerId, routineId: routine.id });
         if (paused) {
           result.paused.push(routine.id);
+          // Диагностика по Logs (runbook §7): пауза из тика — без «живого» сбоя раннера,
+          // иначе по логам её не отличить от тихого пропуска бакета
+          console.log(
+            `[routines] рутина ${routine.id} владельца ${ownerId} поставлена на паузу стоп-краном`,
+          );
           continue;
         }
         const due = dueBuckets({

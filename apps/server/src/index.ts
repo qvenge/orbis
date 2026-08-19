@@ -76,15 +76,18 @@ if (process.env.ORBIS_ROUTINE_SCHEDULER === '1') {
 // транзакцией закрытия, а прогон висел бы `running` до подметания. Рубильники дёргаются
 // сразу (до дренажа запросов), чтобы прогон не тратил окно SIGTERM на лишний шаг модели.
 // Ручные прогоны («прогнать сейчас») — отдельный реестр (routines/shutdown.ts): они живут
-// вне тика, и stop() планировщика их не видит.
+// вне тика, и stop() планировщика их не видит. Его shutdown() зовётся ДВАЖДЫ нарочно: первый
+// вызов — рубильник до дренажа (при пустом реестре он резолвится сразу и ждать ему нечего),
+// второй — ПОСЛЕ `server.stop()`: запрос runNow, доживший в дренаже, регистрирует прогон уже
+// после первого вызова, и дождаться его может только повторный (идемпотентный) shutdown.
 async function shutdown(signal: string): Promise<void> {
   console.log(`[server] ${signal}: останавливаюсь, дожидаюсь in-flight запросов`);
   try {
     const schedulerStopped = scheduler?.stop();
-    const manualRunsStopped = manualRuns.shutdown();
+    void manualRuns.shutdown(); // рубильник сразу; ожидание — повторным вызовом ниже
     await server.stop(); // без force: активные запросы доживают
     await schedulerStopped;
-    await manualRunsStopped;
+    await manualRuns.shutdown(); // дождаться и прогонов, зарегистрированных в дренаже
     await client.end({ timeout: 5 });
   } catch (e) {
     console.error('[server] ошибка при остановке:', e);
