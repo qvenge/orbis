@@ -1290,17 +1290,69 @@ describe('V1: выдача автономии рутине из чата → pen
     });
     expect(r.status).toBe('pending_confirmation');
     if (r.status !== 'pending_confirmation') return;
+    // Сводка называет, ЧТО подтверждается — рутину, режим и белый список, а не имя тула
+    // (V1.10, B1-2): снятие замка — осознанный акт человека
     expect(r.card).toEqual({
       kind: 'confirmation_card',
       mode: 'explicit',
       pendingId: r.pendingId,
-      summary: 'attach_orbis_routine',
+      summary: 'Автономия рутины «Утренний обзор»: режим act, инструменты: нет',
     });
     // Право писать в граф не выдано до подтверждения владельца
     expect(await aspectsOf(target.id)).toEqual({});
     const msgs = await messagesIn(userA, threadId);
     expect(msgs.length).toBe(1);
     expect(msgs[0]?.id).toBe(r.pendingId);
+    expect(msgs[0]?.content).toBe(
+      'Требуется подтверждение: Автономия рутины «Утренний обзор»: режим act, инструменты: нет',
+    );
+  });
+
+  test('сводка автономии: entity_update с allowed_tools — режим и список; entity_create — заголовок из входа; batch — по каждой выдающей операции', async () => {
+    const target = await seedEntity(userA, {
+      title: 'Вечерний разбор',
+      tags: [],
+      aspects: { 'orbis/routine': routine() },
+    });
+    const upd = await dispatchTool(ctxFor(), 'entity_update', {
+      id: target.id,
+      aspects: {
+        'orbis/routine': { mode: 'act', allowed_tools: ['entity_update', 'thread_post'] },
+      },
+    });
+    expect(upd.status).toBe('pending_confirmation');
+    if (upd.status !== 'pending_confirmation') return;
+    expect(upd.card).toMatchObject({
+      summary:
+        'Автономия рутины «Вечерний разбор»: режим act, инструменты: entity_update, thread_post',
+    });
+
+    const created = await dispatchTool(ctxFor(), 'entity_create', {
+      title: 'Ночной сбор',
+      tags: [],
+      aspects: { 'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_create'] }) },
+    });
+    expect(created.status).toBe('pending_confirmation');
+    if (created.status !== 'pending_confirmation') return;
+    expect(created.card).toMatchObject({
+      summary: 'Автономия рутины «Ночной сбор»: режим act, инструменты: entity_create',
+    });
+
+    const batch = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id: target.id, title: 'Переименовано' } },
+        {
+          tool: 'entity_update',
+          input: { id: target.id, aspects: { 'orbis/routine': { allowed_tools: [] } } },
+        },
+      ],
+    });
+    expect(batch.status).toBe('pending_confirmation');
+    if (batch.status !== 'pending_confirmation') return;
+    expect(batch.card).toMatchObject({
+      summary: 'Автономия рутины «Вечерний разбор»: инструменты: нет',
+    });
   });
 
   test('entity_update рутины с mode act → pending_confirmation; режим в графе прежний', async () => {

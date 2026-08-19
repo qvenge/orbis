@@ -26,7 +26,7 @@ import {
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
-import { and, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import { isWorkerThreadTarget } from '../agent-loop/queries';
 import {
@@ -59,6 +59,7 @@ import {
   classifyToolCall,
   entityUpdatePreviewDiff,
   factsFromToolCall,
+  grantsRoutineAutonomy,
 } from '../policy/confirmation';
 import { createPending, operationsNoun } from '../policy/pending';
 import {
@@ -665,8 +666,9 @@ async function runMutation(
   // §7.10: уровень определяет политика по типизированным фактам вызова, не модель;
   // forbidden и explicit-confirmation разворачиваются ДО execute — в БД и журнал (§7.8)
   // ничего не попадает
+  const facts = factsFromToolCall(def, payload);
   const level = classifyToolCall({
-    ...factsFromToolCall(def, payload),
+    ...facts,
     actorKind: ctx.actorKind,
     explicitCommand: ctx.explicitCommand,
   });
@@ -696,9 +698,17 @@ async function runMutation(
     // payload'ом (уже envelope-валидированным и с транслированными batch-именами);
     // до approve ничего не записано ни в граф, ни в журнал §7.8. Исполнение и
     // ревалидацию текущего состояния делает approve (policy/pending.ts)
-    const pending = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
+    const pending = await withIdentity(ctx.db, ctx.actorUserId, async (tx) =>
       createPending(tx, {
         threadId: ctx.threadId,
+        // Выдача автономии (V1.10): карточка обязана называть, ЧТО подтверждается — режим и
+        // белый список, — а не имя тула: снятие замка — осознанный акт человека (B1-2)
+        ...(facts.grantsAutonomy && {
+          summary: await autonomySummary(
+            tx,
+            batchPayload?.operations ?? [{ tool, input: payload }],
+          ),
+        }),
         // Грант едет в pending-запись: подтверждать будет владелец кнопкой, но
         // атрибуция исполнения остаётся за ТЕМ, кто попросил (§7.8, D11 + С2)
         actor: {
@@ -911,6 +921,61 @@ async function gateRoutinesMax(
     if (decision.limit === null) return null; // безлимитный план (сегодняшний 'dev')
     return (await countRoutines(tx)) + newRoutines > decision.limit ? denial : null;
   });
+}
+
+/**
+ * Сводка выдачи автономии для карточки подтверждения (V1.10, B1-2): по каждой операции,
+ * выдающей права, — рутина заголовком, режим и белый список. Заголовок живой цели читается
+ * из БД (под tx владельца); у создаваемой — из самого входа. Формат намеренно один и тот же
+ * для attach/create/update и для batch: владелец сверяет одно и то же — «кому, какой режим,
+ * какие инструменты».
+ */
+async function autonomySummary(
+  tx: Tx,
+  ops: ReadonlyArray<{ tool: string; input: unknown }>,
+): Promise<string> {
+  const parts: string[] = [];
+  for (const op of ops) {
+    if (!grantsRoutineAutonomy(op.tool, op.input) || !isRecord(op.input)) continue;
+    const routine =
+      op.tool === 'attach_orbis_routine'
+        ? op.input.data
+        : isRecord(op.input.aspects)
+          ? op.input.aspects[ROUTINE_ASPECT]
+          : undefined;
+    if (!isRecord(routine)) continue;
+    const targetId =
+      op.tool === 'entity_update'
+        ? op.input.id
+        : op.tool === 'attach_orbis_routine'
+          ? op.input.entity_id
+          : undefined;
+    const title =
+      typeof targetId === 'string'
+        ? ((await titleOf(tx, targetId)) ?? `${targetId.slice(0, 8)}…`)
+        : typeof op.input.title === 'string'
+          ? op.input.title
+          : 'новая рутина';
+    const facts: string[] = [];
+    if (typeof routine.mode === 'string') facts.push(`режим ${routine.mode}`);
+    // attach/create кладут аспект ЦЕЛИКОМ — отсутствующий белый список значит «нет
+    // инструментов», и это надо сказать; у update патч мержится, и молчание о списке
+    // значит «прежний»
+    if ('allowed_tools' in routine || op.tool !== 'entity_update') {
+      const tools = Array.isArray(routine.allowed_tools)
+        ? routine.allowed_tools.filter((t): t is string => typeof t === 'string')
+        : [];
+      facts.push(tools.length > 0 ? `инструменты: ${tools.join(', ')}` : 'инструменты: нет');
+    }
+    parts.push(`Автономия рутины «${title}»: ${facts.join(', ')}`);
+  }
+  return parts.join('; ');
+}
+
+/** Заголовок сущности под tx владельца; `undefined` — не видна (чужая или нет). */
+async function titleOf(tx: Tx, id: string): Promise<string | undefined> {
+  const rows = await tx.select({ title: entities.title }).from(entities).where(eq(entities.id, id));
+  return rows[0]?.title;
 }
 
 /** Сколько живых рутин у актора (под RLS его же tx): архивные лимит не занимают. */

@@ -136,6 +136,18 @@ export async function createPending(
      * исполняет approve сохранённый payload. Не задана → confirmation_card.
      */
     card?: Card;
+    /**
+     * Человекочитаемая сводка вместо умолчания (имя тула / «N операций») — для карточки и
+     * текста сообщения. Нужна там, где содержимое payload'а определяет ПРАВА (выдача
+     * автономии рутине, V1.10): владелец обязан видеть, что подтверждает — режим и белый
+     * список, а не «attach_orbis_routine».
+     */
+    summary?: string;
+    /**
+     * Текст сообщения-запроса вместо «Требуется подтверждение: <summary>». Предложение
+     * рутины — не подтверждение чата: его строка в ленте называет само событие.
+     */
+    content?: string;
   },
 ): Promise<{ pendingId: string; card: Card }> {
   if (args.level !== 'explicit-confirmation') {
@@ -146,7 +158,7 @@ export async function createPending(
   const pendingId =
     args.dedupeKey !== undefined ? pendingMessageId(args.actor.userId, args.dedupeKey) : newId();
   const threadId = args.threadId ?? (await ensureGlobalThread(tx, args.actor.userId));
-  const summary = pendingSummary(args.tool, args.input);
+  const summary = args.summary ?? pendingSummary(args.tool, args.input);
   const card: Card = args.card ?? {
     kind: 'confirmation_card',
     mode: 'explicit',
@@ -162,7 +174,7 @@ export async function createPending(
     id: pendingId,
     threadId,
     role: 'system',
-    content: `Требуется подтверждение: ${summary}`,
+    content: args.content ?? `Требуется подтверждение: ${summary}`,
     metadata: {
       pending: {
         id: pendingId,

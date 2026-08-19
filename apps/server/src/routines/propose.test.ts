@@ -131,6 +131,8 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     const msg = await messageById(result.pending_id);
     expect(msg).toBeDefined();
     expect(msg?.threadId).toBe(entityThreadId(owner, routineId));
+    // Строка ленты называет событие, а не «Требуется подтверждение: N операций» (D-4)
+    expect(msg?.content).toBe('Предложение рутины: 1 правка');
 
     const metadata = msg?.metadata as {
       pending: {

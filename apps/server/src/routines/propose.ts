@@ -258,6 +258,9 @@ export async function runPropose(
       level: 'explicit-confirmation',
       dedupeKey,
       clock: ctx.clock,
+      // Строка ленты называет событие («Предложение рутины: 2 правки»), а не «Требуется
+      // подтверждение: 2 операции»: это не подтверждение чата, а предложение (V1.6, D-4)
+      content: `Предложение рутины: ${n} ${editsNoun(n)}`,
       card: {
         kind: 'proposal_card',
         pendingId,

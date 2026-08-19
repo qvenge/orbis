@@ -119,7 +119,7 @@ export function factsFromToolCall(
  * аспект в имени, у create/update — ключ `aspects['orbis/routine']`. Форма проверяется
  * защитно (input сюда доезжает уже envelope-валидированным, см. докблок factsFromToolCall).
  */
-function grantsRoutineAutonomy(tool: string, input: unknown): boolean {
+export function grantsRoutineAutonomy(tool: string, input: unknown): boolean {
   if (!isRecord(input)) return false;
   if (tool === 'attach_orbis_routine') {
     return isRecord(input.data) && input.data.mode === 'act';
