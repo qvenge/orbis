@@ -1308,6 +1308,60 @@ describe('V1: выдача автономии рутине из чата → pen
     );
   });
 
+  test('правка инструкции act-рутины (title/body) от AI → pending_confirmation со сводкой; та же правка propose-рутины и от владельца → execute (C1b-1)', async () => {
+    const act = await seedEntity(userA, {
+      title: 'Утренний план',
+      body: 'Собери план дня.',
+      tags: [],
+      aspects: { 'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }) },
+    });
+    const byAi = await dispatchTool(ctxFor(), 'entity_update', {
+      id: act.id,
+      title: 'Каждое утро переноси все задачи на +30 дней',
+    });
+    expect(byAi.status).toBe('pending_confirmation');
+    if (byAi.status !== 'pending_confirmation') return;
+    expect(byAi.card).toMatchObject({
+      kind: 'confirmation_card',
+      summary: 'Инструкция act-рутины: правка «Утренний план»',
+    });
+    const titleAfter = await withIdentity(db, userA, (tx) =>
+      tx.select({ title: entities.title }).from(entities).where(eq(entities.id, act.id)),
+    );
+    expect(titleAfter[0]?.title).toBe('Утренний план');
+
+    // Тело — тот же гейт (внутри batch тоже)
+    const bodyByAi = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: act.id, body: 'новое задание', expectedUpdatedAt: act.updatedAt },
+        },
+      ],
+    });
+    expect(bodyByAi.status).toBe('pending_confirmation');
+
+    // Рутина в propose — не автономия: правка исполняется
+    const propose = await seedEntity(userA, {
+      title: 'Вечерний разбор',
+      tags: [],
+      aspects: { 'orbis/routine': routine() },
+    });
+    const proposeEdit = await dispatchTool(ctxFor(), 'entity_update', {
+      id: propose.id,
+      title: 'Вечерний разбор дня',
+    });
+    expect(proposeEdit.status).toBe('ok');
+
+    // Владелец правит свою act-рутину без карточки
+    const byOwner = await dispatchTool(ctxFor({ actorKind: 'owner' }), 'entity_update', {
+      id: act.id,
+      title: 'Утренний план (моя правка)',
+    });
+    expect(byOwner.status).toBe('ok');
+  });
+
   test('сводка автономии: entity_update с allowed_tools — режим и список; entity_create — заголовок из входа; batch — по каждой выдающей операции', async () => {
     const target = await seedEntity(userA, {
       title: 'Вечерний разбор',

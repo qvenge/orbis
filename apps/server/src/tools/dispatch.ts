@@ -667,13 +667,24 @@ async function runMutation(
   // forbidden и explicit-confirmation разворачиваются ДО execute — в БД и журнал (§7.8)
   // ничего не попадает
   const facts = factsFromToolCall(def, payload);
-  const level = classifyToolCall({
+  const classified = classifyToolCall({
     ...facts,
     actorKind: ctx.actorKind,
     explicitCommand: ctx.explicitCommand,
   });
-  const gated = levelGate(level, def.name);
+  const gated = levelGate(classified, def.name);
   if (gated !== null) return gated;
+
+  // Инструкция act-рутины — содержание её автономии (V1.10, C1b-1): тело и заголовок
+  // рутины с `mode: act` уезжают в системный слой прогона целиком, и правка их AI/агентом без
+  // подтверждения обходила бы замок, который держит гейт grantsAutonomy. Проверка по БД
+  // (объект — рутина в act), а не по форме: аспекта рутины в таком патче нет.
+  const ops = batchPayload?.operations ?? [{ tool, input: payload }];
+  const instructionOf =
+    ctx.actorKind === 'owner' || classified === 'explicit-confirmation'
+      ? []
+      : await actRoutineInstructionTargets(ctx, ops);
+  const level: ConfirmationLevel = instructionOf.length > 0 ? 'explicit-confirmation' : classified;
 
   // Инвариант 5 (V1.10): в фоне небезопасное ОТКЛОНЯЕТСЯ, а не откладывается. Уровни
   // выше execute придуманы для разговора с владельцем — он тут же видит карточку и
@@ -703,12 +714,12 @@ async function runMutation(
         threadId: ctx.threadId,
         // Выдача автономии (V1.10): карточка обязана называть, ЧТО подтверждается — режим и
         // белый список, — а не имя тула: снятие замка — осознанный акт человека (B1-2)
-        ...(facts.grantsAutonomy && {
-          summary: await autonomySummary(
-            tx,
-            batchPayload?.operations ?? [{ tool, input: payload }],
-          ),
-        }),
+        ...(facts.grantsAutonomy && { summary: await autonomySummary(tx, ops) }),
+        // Правка инструкции act-рутины (C1b-1) — тем же языком: кого и что правят
+        ...(!facts.grantsAutonomy &&
+          instructionOf.length > 0 && {
+            summary: `Инструкция act-рутины: правка «${instructionOf.join('», «')}»`,
+          }),
         // Грант едет в pending-запись: подтверждать будет владелец кнопкой, но
         // атрибуция исполнения остаётся за ТЕМ, кто попросил (§7.8, D11 + С2)
         actor: {
@@ -970,6 +981,35 @@ async function autonomySummary(
     parts.push(`Автономия рутины «${title}»: ${facts.join(', ')}`);
   }
   return parts.join('; ');
+}
+
+/**
+ * Заголовки act-рутин, чью ИНСТРУКЦИЮ (тело/заголовок) правят операции (V1.10, C1b-1) —
+ * пусто, если таких нет. Смотрит только `entity_update` с `body`/`bodyDoc`/`title`: правка
+ * расписания и режима идёт другими полями (её держит grantsAutonomy), пауза и метки
+ * содержания автономии не меняют. Условие «рутина в act» — по БД, containment'ом по колонке
+ * `aspects` (индекс `entities_aspects_gin`), под tx актора (RLS).
+ */
+async function actRoutineInstructionTargets(
+  ctx: ToolCallCtx,
+  ops: ReadonlyArray<{ tool: string; input: unknown }>,
+): Promise<string[]> {
+  const ids: string[] = [];
+  for (const op of ops) {
+    if (op.tool !== 'entity_update' || !isRecord(op.input)) continue;
+    const i = op.input;
+    if (i.body === undefined && i.bodyDoc === undefined && i.title === undefined) continue;
+    if (typeof i.id === 'string') ids.push(i.id);
+  }
+  if (ids.length === 0) return [];
+  const actRoutine = JSON.stringify({ [ROUTINE_ASPECT]: { mode: 'act' } });
+  return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+    const rows = await tx
+      .select({ title: entities.title })
+      .from(entities)
+      .where(and(inArray(entities.id, ids), sql`${entities.aspects} @> ${actRoutine}::jsonb`));
+    return rows.map((r) => r.title);
+  });
 }
 
 /** Заголовок сущности под tx владельца; `undefined` — не видна (чужая или нет). */
