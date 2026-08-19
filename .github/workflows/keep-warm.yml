@@ -1,0 +1,26 @@
+name: keep-warm
+# Пингер /health раз в 10 минут — стратегия 2 из runbook §5, с V1 «Рутины» часть поставки:
+# планировщик рутин — таймер ВНУТРИ процесса, спящий free-инстанс Render не тикает. Прецедент
+# «Render cron платный → GitHub Actions cron бесплатен» — backup.yml. Интервал 10, не 14: один
+# пропущенный пинг при 14 уже роняет сервис в 15-минутное окно сна (runbook §5). Расписание
+# GitHub исполняется с задержкой до нескольких минут — это принято: догон в окне 6 ч спасает
+# слот, если инстанс всё же уснул.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: keep-warm
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      # -f: не-2xx (например 503 при cold start) — провал шага, виден в истории ранов;
+      # -m 90: холодный старт free-инстанса ~1 мин — ждём его, а не считаем провалом.
+      - run: curl -fsS -m 90 https://orbis-64q4.onrender.com/health
