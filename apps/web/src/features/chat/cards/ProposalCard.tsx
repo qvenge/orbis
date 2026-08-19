@@ -222,7 +222,9 @@ export function ProposalCard({ runId }: { runId: string }) {
             (view.status !== 'stale' || staleRows === null) && (
               <p className="text-text-muted text-xs">
                 {view.status === 'approved'
-                  ? `Принято${view.decidedAt === undefined ? '' : ` ${formatDate(view.decidedAt, tz)}`}`
+                  ? // Прогон в архиве — след ОТКАТА (rollback.ts): принятый план уже снят, и
+                    // «Принято» без оговорки читалось бы как действующий
+                    `${view.runArchived ? 'Принято, затем откачено' : 'Принято'}${view.decidedAt === undefined ? '' : ` ${formatDate(view.decidedAt, tz)}`}`
                   : (STATUS_NOTES[view.status] ?? view.status)}
               </p>
             )

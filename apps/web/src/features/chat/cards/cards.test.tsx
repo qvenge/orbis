@@ -913,6 +913,21 @@ test('proposal_card: решённое предложение показывае�
   expect(await within(card).findByText('Заменено новым прогоном')).toBeInTheDocument();
   expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
   superseded.unmount();
+
+  // Принято, а прогон убран в архив — след ОТКАТА (приёмка 11): план уже снят, и карточка
+  // говорит это словами, а не «Принято» как о действующем.
+  const rolledBack = renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    proposalHandler({
+      status: 'approved',
+      decidedAt: '2026-08-18T05:00:00.000Z',
+      runArchived: true,
+    }),
+  );
+  card = await screen.findByTestId('proposal-card');
+  expect(await within(card).findByText(/Принято, затем откачено/)).toBeInTheDocument();
+  expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
+  rolledBack.unmount();
 });
 
 test('маркер ленты: действие с source=routine помечено «рутина», а не «агент» (Р-16)', () => {

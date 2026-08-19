@@ -7,16 +7,20 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { manualBucket, newId, routineRunId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
-import { rollbackRun } from '../agent-loop/rollback';
+import { routineById } from '../agent-loop/queries';
+import { ROUTINE_ROLLBACK_NOTE, rollbackRun } from '../agent-loop/rollback';
+import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
+import { undoLast } from '../executor/undo';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMRequest, LLMResponse } from '../llm/types';
 import { appRouter } from '../router';
 import type { RoutineDeps } from '../routines/lifecycle';
-import { supersedeOpen } from '../routines/lifecycle';
+import { startBucketRun, supersedeOpen } from '../routines/lifecycle';
+import { runRoutineRun } from '../routines/runner';
 import { agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { type Context, createCallerFactory } from '../trpc';
 
@@ -212,8 +216,54 @@ async function rejectReason(pendingId: string): Promise<string | undefined> {
   return row === undefined ? undefined : ((row.metadata as { reason?: string }).reason ?? 'owner');
 }
 
-function deps(): RoutineDeps {
-  return { db, provider: new ScriptedProvider([]), model: MODEL, clock: () => T0 };
+function deps(provider: LLMProvider = new ScriptedProvider([])): RoutineDeps {
+  return { db, provider, model: MODEL, clock: () => T0 };
+}
+
+/** Архивирован ли прогон — маркер отката рутинного прогона (rollback.ts). */
+async function isArchived(id: string): Promise<boolean> {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
+  );
+  const row = rows[0];
+  if (row === undefined) throw new Error(`сущность ${id} не найдена`);
+  return row.archived;
+}
+
+interface PlannedProposed extends Proposed {
+  bucket: string;
+  routineTitle: string;
+}
+
+let plannedSeq = 0;
+
+/**
+ * То же, что `proposed`, но ПЛАНОВЫМ прогоном: слот заводится `startBucketRun` (как тиком
+ * планировщика), модель гонится раннером в этом же тесте. Нужен там, где после отката
+ * проверяется судьба самого СЛОТА (ретрая нет), — у ручного прогона слота нет.
+ */
+async function plannedProposed(title: string, routineId?: string): Promise<PlannedProposed> {
+  const routineTitle = `Рутина: ${title}`;
+  const rid = routineId ?? (await seedRoutine(owner, { title: routineTitle }));
+  const taskId = await seedTask(title);
+  plannedSeq += 1;
+  const bucket = `2026-08-${String((plannedSeq % 28) + 1).padStart(2, '0')}T07:00`;
+  const started = await startBucketRun(deps(), {
+    ownerId: owner,
+    routine: { id: rid, title: routineTitle },
+    bucket,
+  });
+  if (!started.started) throw new Error(`слот не запущен: ${started.reason}`);
+  const runId = started.runId;
+  const routine = await withIdentity(db, owner, (tx) => routineById(tx, rid));
+  if (routine === null) throw new Error('рутина не найдена');
+  const provider = new ScriptedProvider([toolUse([proposeCall(runId, taskId)])]);
+  const end = await runRoutineRun(deps(provider), { ownerId: owner, routine, runId, bucket });
+  expect(end).toEqual({ outcome: 'finished' });
+  const aspect = await runAspect(runId);
+  const pendingId = aspect.proposal?.pending_id;
+  if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
+  return { routineId: rid, taskId, runId, pendingId, bucket, routineTitle };
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +314,7 @@ describe('routine.runNow', () => {
 // ---------------------------------------------------------------------------
 
 describe('routine.answerCheckpoint', () => {
-  test('вопрос → ответ: outcome answered с reply; действие владельца source ui и с run_id; откат прогона показывает конфликт, а не снимает ответ (инвариант 7)', async () => {
+  test('вопрос → ответ: outcome answered с reply; действие владельца source ui и с run_id; откат прогона не снимает ответ и не считает его конфликтом (инвариант 7)', async () => {
     // Вопрос задаёт НАСТОЯЩИЙ прогон: откат читает журнал, а сид фикстурой идёт мимо
     // синка (без audit-сообщений откатывать было бы нечего, и проверка стала бы пустой)
     const routineId = await seedRoutine(owner, { title: 'Рутина: вопрос' });
@@ -295,18 +345,22 @@ describe('routine.answerCheckpoint', () => {
     );
     expect(answerActions).toHaveLength(1);
 
-    // Инвариант 7: откат прогона не трогает решение владельца — оно чужое изменение
-    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
-    expect(rolled.ok).toBe(false);
-    if (rolled.ok) throw new Error('откат прошёл, ожидался конфликт');
-    expect(rolled.reason).toBe('conflict');
-    expect((await runAspect(runId)).reply?.text).toBe('Да, перенеси на 10:00');
-
     // Повторный ответ отвечать уже не на что
     const conflict = await trpcError(
       callerLater().routine.answerCheckpoint({ runId, answer: 'ещё раз' }),
     );
     expect(conflict.code).toBe('CONFLICT');
+
+    // Откат рутинного прогона инвертирует только РАБОТУ прогона (source routine); ответ
+    // владельца — решение о прогоне, а не работа в графе: он не снимается и конфликтом не
+    // считается (rollback.ts). Маркер отката — архив прогона.
+    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    expect(rolled.ok).toBe(true);
+    if (!rolled.ok) throw new Error('ожидался успешный откат');
+    expect(rolled.undone).toEqual([]);
+    expect((await runAspect(runId)).reply?.text).toBe('Да, перенеси на 10:00');
+    expect((await runAspect(runId)).outcome).toBe('answered');
+    expect(await isArchived(runId)).toBe(true);
   });
 
   test('прогон не найден (и тикетный прогон тоже) → NOT_FOUND', async () => {
@@ -330,6 +384,7 @@ describe('routine.proposal / decideProposal', () => {
     expect(view.routineId).toBe(routineId);
     expect(view.status).toBe('pending');
     expect(view.explanation).toBe(EXPLANATION);
+    expect(view.runArchived).toBe(false);
     expect(view.operations).toHaveLength(1);
     expect(view.operations[0]).toMatchObject({
       index: 0,
@@ -418,6 +473,116 @@ describe('routine.proposal / decideProposal', () => {
       run: { outcome: 'finished', finished_at: iso(T0), report: 'нечего предлагать' },
     });
     expect(await caller().routine.proposal({ runId })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Откат рутинного прогона (приёмка 3, 11; инвариант 9)
+// ---------------------------------------------------------------------------
+
+describe('откат рутинного прогона: decideProposal(approve) → rollbackRun / undoLast', () => {
+  test('approve → rollbackRun ok: план откачен, прогон архивирован, бухгалтерия (статус предложения) не тронута; повтор идемпотентен; слот отработан — startBucketRun → done', async () => {
+    const { routineId, routineTitle, taskId, runId, bucket } =
+      await plannedProposed('Разобрать почту');
+
+    const applied = await callerLater().routine.decideProposal({ runId, decision: 'approve' });
+    expect(applied.status).toBe('applied');
+    if (applied.status !== 'applied') throw new Error('не applied');
+    expect(await taskStatus(taskId)).toBe('planned');
+
+    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    expect(rolled.ok).toBe(true);
+    if (!rolled.ok) throw new Error(`ожидался успешный откат: ${JSON.stringify(rolled)}`);
+    // Инвертирована ТОЛЬКО работа прогона — принятое предложение (один batch-action)
+    expect(rolled.undone).toEqual([applied.actionId]);
+    expect(rolled.note).toBe(ROUTINE_ROLLBACK_NOTE);
+    expect(await taskStatus(taskId)).toBe('inbox');
+
+    // Бухгалтерия прогона на месте: исход, судьба предложения, связь с рутиной
+    const aspect = await runAspect(runId);
+    expect(aspect.outcome).toBe('finished');
+    expect(aspect.proposal?.status).toBe('approved');
+    // Маркер отката — архив (RunFeed показывает «в архиве»); карточка предложения при этом
+    // остаётся читаемой и знает про архив (ProposalCard: «Принято, затем откачено»)
+    expect(await isArchived(runId)).toBe(true);
+    const view = await caller().routine.proposal({ runId });
+    expect(view?.status).toBe('approved');
+    expect(view?.runArchived).toBe(true);
+
+    // Повторное нажатие безопасно: откатывать уже нечего, состояние то же
+    const again = await rollbackRun(db, { actorUserId: owner, runId });
+    expect(again).toEqual({ ok: true, undone: [], note: ROUTINE_ROLLBACK_NOTE });
+    expect(await taskStatus(taskId)).toBe('inbox');
+
+    // Слот отработан: архивный терминальный прогон занимает его — ретрая нет
+    const slot = await startBucketRun(deps(), {
+      ownerId: owner,
+      routine: { id: routineId, title: routineTitle },
+      bucket,
+    });
+    expect(slot).toEqual({ started: false, reason: 'done' });
+  });
+
+  test('сегодняшний прогон создан (связь parent с рутиной, гашение) → откат вчерашнего всё ещё ok', async () => {
+    const yesterday = await plannedProposed('Позвонить маме');
+    const applied = await callerLater().routine.decideProposal({
+      runId: yesterday.runId,
+      decision: 'approve',
+    });
+    expect(applied.status).toBe('applied');
+
+    // Сегодняшний прогон той же рутины: relation parent трогает рутину, гашение —
+    // прошлый прогон; ни то, ни другое — не сущности работы вчерашнего прогона
+    const today = await plannedProposed('Купить хлеб', yesterday.routineId);
+    expect((await runAspect(today.runId)).proposal?.status).toBe('pending');
+
+    const rolled = await rollbackRun(db, { actorUserId: owner, runId: yesterday.runId });
+    expect(rolled.ok).toBe(true);
+    expect(await taskStatus(yesterday.taskId)).toBe('inbox');
+    expect(await isArchived(yesterday.runId)).toBe(true);
+    // Сегодняшний прогон и его предложение не задеты
+    expect(await isArchived(today.runId)).toBe(false);
+    expect((await runAspect(today.runId)).proposal?.status).toBe('pending');
+    expect(await taskStatus(today.taskId)).toBe('inbox');
+  });
+
+  test('владелец тронул цель ПОСЛЕ принятия → конфликт по этой сущности, ничего не откачено, прогон не архивирован (инвариант 7)', async () => {
+    const { taskId, runId } = await proposed('Записаться в бассейн');
+    const applied = await callerLater().routine.decideProposal({ runId, decision: 'approve' });
+    expect(applied.status).toBe('applied');
+    // Правка ВЛАДЕЛЬЦА через роутер — с журналом (§7.8): откат читает конфликты из него,
+    // а `ownerSets` (execute без синка) правит только состояние
+    await callerLater().entity.update({
+      id: taskId,
+      aspects: { 'orbis/task': { status: 'done' } },
+    });
+
+    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    expect(rolled.ok).toBe(false);
+    if (rolled.ok) throw new Error('ожидался конфликт');
+    expect(rolled.reason).toBe('conflict');
+    if (rolled.reason !== 'conflict') throw new Error('ожидался reason=conflict');
+    expect(rolled.conflicts.map((c) => c.entityId)).toEqual([taskId]);
+    expect(await taskStatus(taskId)).toBe('done');
+    expect(await isArchived(runId)).toBe(false);
+  });
+
+  test('«отмени последнее» после approve снимает ПЛАН (batch предложения), а не пометку статуса на прогоне (приёмка 3)', async () => {
+    const { taskId, runId } = await proposed('Отнести обувь в ремонт');
+    const applied = await callerLater().routine.decideProposal({ runId, decision: 'approve' });
+    expect(applied.status).toBe('applied');
+    if (applied.status !== 'applied') throw new Error('не applied');
+
+    const undone = await undoLast(db, { actorUserId: owner });
+    expect(undone.ok).toBe(true);
+    expect(await taskStatus(taskId)).toBe('inbox');
+    // Статус предложения — бухгалтерия прогона (source system): «отмени последнее» её не видит
+    expect((await runAspect(runId)).proposal?.status).toBe('approved');
+    // Отменён именно batch предложения — откат прогона после этого пропускает его
+    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    expect(rolled.ok).toBe(true);
+    if (!rolled.ok) throw new Error('ожидался успешный откат');
+    expect(rolled.undone).toEqual([]);
   });
 });
 

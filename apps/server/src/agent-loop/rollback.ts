@@ -20,12 +20,29 @@
 // вызывающий получает `partial` со списком уже отменённого и адресом отказа, а граф
 // остаётся в понятном промежуточном состоянии (часть действий отменена, остальные — нет),
 // которое чинится повторным вызовом. Прятать это за «атомарно» было бы враньём.
+//
+// Два вида прогонов — две политики отката (V1, приёмка 11). Прогон ВНЕШНЕГО исполнителя
+// (грант) откатывается целиком: его создание, шаги, итог, подметание — всё это работа
+// круга ADE, и инверсия создания архивирует сам прогон. Прогон РУТИНЫ устроен иначе: его
+// сущность и связь с рутиной, шаги, закрытие и пометки судьбы предложения — БУХГАЛТЕРИЯ
+// (источник `system`, рулинг Р-7), а работа в графе — только модельные мутации режима `act`
+// и принятое владельцем предложение (источник `routine`). Инвертировать бухгалтерию нельзя:
+// откат возвращал бы прогон в `running` (архивным), подметание закрывало бы его `failed`, и
+// планировщик заводил бы попытку 2 — рутина предлагала бы вчерашний план заново через
+// полчаса после отката. Поэтому для рутинного прогона откат инвертирует ТОЛЬКО работу,
+// конфликты ищет только по её сущностям, а прогон помечает архивом ЯВНОЙ операцией: тот же
+// признак, по которому экран прогона (RunFeed) читает откаченный прогон ADE.
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
+import { execute } from '../executor/executor';
+import { makeChatJournalSink } from '../executor/journal';
 import type { ActionOperation, ActionRecord } from '../executor/types';
 import { isUndone, undoAction } from '../executor/undo';
 import type { RollbackConflict, WireRollbackResult } from '../wire';
+
+/** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
+const sink = makeChatJournalSink();
 
 /**
  * Постоянный текст успешного отката (С12). Именно постоянный, а не собранный по факту:
@@ -35,6 +52,15 @@ import type { RollbackConflict, WireRollbackResult } from '../wire';
 export const ROLLBACK_NOTE =
   'Откачены изменения в Orbis (статусы тикета, прогон). ' +
   "Ветку и коммиты в репозитории откат не трогает — откатывайте их git'ом.";
+
+/**
+ * Тот же постоянный текст для прогона РУТИНЫ (V1, приёмка 11). Про репозиторий здесь ни
+ * слова — у внутреннего исполнителя его нет; зато названо то, что отличает этот откат от
+ * грантового: сам прогон не «раскручен», а убран в архив как след отката.
+ */
+export const ROUTINE_ROLLBACK_NOTE =
+  'Откачены изменения прогона рутины в Orbis (правки и принятое предложение); ' +
+  'сам прогон убран в архив.';
 
 /** Запись журнала: сам action + отметка времени и id сообщения (ключ порядка). */
 interface JournalEntry {
@@ -81,6 +107,71 @@ function isRunAction(action: ActionRecord, runId: string): boolean {
 }
 
 /**
+ * Политика отката — чем прогон ГРАНТА отличается от прогона РУТИНЫ (шапка файла).
+ *
+ * `own` — действие прогона, которое откат ИНВЕРТИРУЕТ и по сущностям которого ищет
+ * конфликты. `about` — действие О прогоне, которое ни инвертируется, ни конфликтом не
+ * считается: у рутины это вся бухгалтерия (`system` + `run_id`: создание, шаги, закрытие,
+ * пометки судьбы предложения, дозапись расхода) и решения владельца по прогону (`ui` +
+ * `run_id`: ответ на вопрос). У гранта такого класса нет: там ответ владельца — чужое
+ * изменение (инвариант 7), а бухгалтерия — часть работы круга.
+ *
+ * `archive` — помечать ли прогон архивом явной операцией. У гранта архивирует инверсия
+ * его создания (создание — `own`); у рутины создание — бухгалтерия, и след отката
+ * приходится ставить отдельно, иначе экран показывал бы «готово» над откаченным планом.
+ */
+interface RollbackPolicy {
+  own(action: ActionRecord, runId: string): boolean;
+  about(action: ActionRecord, runId: string): boolean;
+  archive: boolean;
+  note: string;
+}
+
+const GRANT_POLICY: RollbackPolicy = {
+  own: isRunAction,
+  about: () => false,
+  archive: false,
+  note: ROLLBACK_NOTE,
+};
+
+/**
+ * Работа рутинного прогона — РОВНО источник `routine`: модельные мутации режима `act`
+ * (dispatch с `ctx.source === 'routine'`) и принятое предложение (approvePending исполняет
+ * pending с сохранённым `source: 'routine'`). Всё остальное с этим `run_id` — о прогоне.
+ */
+const ROUTINE_POLICY: RollbackPolicy = {
+  own: (action, runId) => action.run_id === runId && action.source === 'routine',
+  about: (action, runId) => action.run_id === runId,
+  archive: true,
+  note: ROUTINE_ROLLBACK_NOTE,
+};
+
+/** Что известно о сущности прогона: чей он и убран ли уже в архив. `null` — прогона нет. */
+interface RunFacts {
+  routineId: string | undefined;
+  archived: boolean;
+}
+
+/**
+ * Сущность прогона под identity — БЕЗ фильтра `NOT archived` (в отличие от `runById`):
+ * повторный откат обязан узнать уже архивированный прогон, чтобы не архивировать его второй
+ * раз и вести себя как первый успешный (см. докблок rollbackRun).
+ */
+async function runFacts(tx: Tx, runId: string): Promise<RunFacts | null> {
+  const rows = await tx.execute(
+    sql`SELECT archived, aspects -> 'orbis/agent-run' ->> 'routine_id' AS routine_id
+        FROM entities
+        WHERE id = ${runId}::uuid AND aspects ? 'orbis/agent-run'`,
+  );
+  const row = (rows as unknown as Array<Record<string, unknown>>)[0];
+  if (row === undefined) return null;
+  return {
+    routineId: typeof row.routine_id === 'string' ? row.routine_id : undefined,
+    archived: row.archived === true,
+  };
+}
+
+/**
  * Действия прогона в порядке журнала (шаг 1). Обратная ссылка `run_id` — containment-проба
  * `metadata @> {"actions":[{"run_id": …}]}`: единственная форма, которую берёт GIN
  * `jsonb_path_ops` (0001_rls_and_indexes.sql:123, проверено EXPLAIN — Bitmap Index Scan по
@@ -93,7 +184,7 @@ function isRunAction(action: ActionRecord, runId: string): boolean {
  * глагола ОДНОГО прогона в одну миллисекунду означали бы, что агент выпустил их
  * параллельно, а этого не допускает CAS-счётчик шагов (verbs.ts runStep).
  */
-async function runActions(tx: Tx, runId: string): Promise<JournalEntry[]> {
+async function runActions(tx: Tx, runId: string, policy: RollbackPolicy): Promise<JournalEntry[]> {
   const probe = JSON.stringify({ actions: [{ run_id: runId }] });
   const rows = await tx.execute(
     sql`SELECT id, created_at, metadata FROM chat_messages
@@ -103,7 +194,7 @@ async function runActions(tx: Tx, runId: string): Promise<JournalEntry[]> {
   const entries: JournalEntry[] = [];
   for (const row of rows as unknown as Array<Record<string, unknown>>) {
     const entry = toEntry(row);
-    if (entry !== undefined && isRunAction(entry.action, runId)) entries.push(entry);
+    if (entry !== undefined && policy.own(entry.action, runId)) entries.push(entry);
   }
   return entries;
 }
@@ -154,9 +245,12 @@ function operationIds(op: ActionOperation): string[] {
  * шага 1: `created_at > t0` пропустил бы действие той же миллисекунды, а при precision 3
  * это не гипотетический случай. Само первое действие прогона в окно не входит (строгое
  * `>`), а остальные его действия отсеиваются ТЕМ ЖЕ предикатом, что отбирал их на шаге 1
- * (`isRunAction`), — они и есть то, что мы собрались отменять. Предикат, а не голое
- * сравнение run_id: ответ владельца на чекпойнт тоже несёт run_id, и по голому сравнению
- * он молча выпал бы из конфликтов, то есть был бы снят откатом (инвариант 7).
+ * (`policy.own`), — они и есть то, что мы собрались отменять. Предикат, а не голое
+ * сравнение run_id: у гранта ответ владельца на чекпойнт тоже несёт run_id, и по голому
+ * сравнению он молча выпал бы из конфликтов, то есть был бы снят откатом (инвариант 7).
+ * У рутины действия «о прогоне» (`policy.about`) выпадают из конфликтов НАРОЧНО: сущность
+ * прогона не входит в touched (работа рутины её трогать не может — invariants.ts), а
+ * бухгалтерия и ответ владельца сами по себе не правят того, что откатывается.
  * Уже отменённые чужие — не конфликт: их эффекта в графе больше нет.
  *
  * Containment `{"actions": []}` + непустая длина — тот же приём, что в undo.ts
@@ -170,7 +264,12 @@ function operationIds(op: ActionOperation): string[] {
  */
 async function foreignChangesAfter(
   tx: Tx,
-  args: { runId: string; after: JournalEntry; touched: ReadonlySet<string> },
+  args: {
+    runId: string;
+    after: JournalEntry;
+    touched: ReadonlySet<string>;
+    policy: RollbackPolicy;
+  },
 ): Promise<RollbackConflict[]> {
   const rows = await tx.execute(
     sql`SELECT id, created_at, metadata FROM chat_messages
@@ -184,7 +283,9 @@ async function foreignChangesAfter(
     const entry = toEntry(row);
     if (entry === undefined) continue;
     const action = entry.action;
-    if (isRunAction(action, args.runId)) continue;
+    // Своё — то, что откатываем; «о прогоне» (у рутины — бухгалтерия и решения владельца)
+    // — не конфликт по политике: см. RollbackPolicy
+    if (args.policy.own(action, args.runId) || args.policy.about(action, args.runId)) continue;
     // Пересечение с `touched` считается ДО `isUndone`, и порядок здесь принципиален:
     // проба «отменено?» — отдельный запрос НА КАЖДОЕ действие, а в окне долгого прогона
     // у активного владельца лежат сотни чужих записей, к откату отношения не имеющих.
@@ -236,24 +337,34 @@ export async function rollbackRun(
   const { actorUserId, runId } = args;
 
   const plan = await withIdentity(db, actorUserId, async (tx) => {
-    const all = await runActions(tx, runId);
+    // Чей прогон — решает политику (шапка файла). Прогона нет (или он чужой под RLS) —
+    // грантовая политика по журналу даст пусто, как и раньше
+    const facts = await runFacts(tx, runId);
+    const policy = facts?.routineId !== undefined ? ROUTINE_POLICY : GRANT_POLICY;
+    const all = await runActions(tx, runId, policy);
     // Уже отменённые (вручную «отмени последнее» или прошлым откатом) выбывают: повторная
     // отмена вернула бы VALIDATION и уронила бы весь откат в partial на ровном месте
     const live: JournalEntry[] = [];
     for (const entry of all) {
       if (!(await isUndone(tx, entry.action.id))) live.push(entry);
     }
+    // Архивировать — только рутинный прогон, который есть и ещё не в архиве: повторный
+    // откат обязан вести себя как первый успешный, а не писать второй маркер
+    const archive = policy.archive && facts !== null && !facts.archived;
     // Окно предпроверки открывается ПЕРВЫМ живым действием прогона, а не последним:
     // чужая правка между `claim` и `finish` — самый обычный случай, и она обязана стать
     // конфликтом (см. докблок foreignChangesAfter)
     const first = live[0];
-    if (first === undefined) return { live, conflicts: [] as RollbackConflict[] };
+    if (first === undefined) {
+      return { live, conflicts: [] as RollbackConflict[], archive, note: policy.note };
+    }
     const conflicts = await foreignChangesAfter(tx, {
       runId,
       after: first,
       touched: touchedEntities(live),
+      policy,
     });
-    return { live, conflicts };
+    return { live, conflicts, archive, note: policy.note };
   });
 
   if (plan.conflicts.length > 0) {
@@ -280,5 +391,28 @@ export async function rollbackRun(
     }
     undone.push(entry.action.id);
   }
-  return { ok: true, undone, note: ROLLBACK_NOTE };
+  // Шаг 5 (только рутина): след отката — архив прогона явной операцией. Идёт ПОСЛЕ серии
+  // отмен и только при её полном успехе: partial оставляет прогон живым, чтобы повторное
+  // нажатие доделало откат. Атрибуция — владелец (это его жест) источником `system` с
+  // `run_id`: это запись О прогоне, а не работа в графе — «отмени последнее» её не берёт,
+  // а следующий откат того же прогона видит её как «о прогоне», не как конфликт.
+  if (plan.archive) {
+    const r = await execute(
+      db,
+      {
+        actorUserId,
+        actorKind: 'owner',
+        source: 'system',
+        runId,
+        operations: [{ tool: 'entity_update', input: { id: runId, archived: true } }],
+      },
+      { sink },
+    );
+    if (!r.ok) {
+      // Работа уже откачена — это исход, а не сбой; без маркера экран покажет прежний
+      // бейдж и живую кнопку, и повторное нажатие поставит маркер (откатывать уже нечего)
+      console.error(`[rollback] прогон ${runId} не помечен архивом:`, r.error);
+    }
+  }
+  return { ok: true, undone, note: plan.note };
 }

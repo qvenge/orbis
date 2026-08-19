@@ -20,8 +20,11 @@
 // рядом с `supersedeOpen` не для компании: судьбу одного и того же поля `proposal` пишут
 // оба, ОДНИМ правилом (CAS на весь объект) и в одном порядке (сначала pending, потом
 // статус), и разведённые по файлам эти правила разъехались бы на первой же правке.
-// Атрибуция у них другая и обязана быть другой — `owner`/`ui` со ссылкой на прогон:
-// решение владельца не должно сниматься откатом прогона (инвариант 7, rollback.ts).
+// Атрибуция расщеплена (см. PatchActor): ответ на вопрос — `owner`/`ui` со ссылкой на
+// прогон (это реплика владельца, и «отмени последнее» вправе её снять), а пометка судьбы
+// предложения — `owner`/`system` со ссылкой на прогон: это бухгалтерия О прогоне, само же
+// решение владельца воплощено батчем принятого предложения (source `routine`), и именно
+// его снимает «отмени последнее» (приёмка 3) и откат прогона (приёмка 11, rollback.ts).
 import {
   type AgentRunAspect,
   isManualBucket,
@@ -126,10 +129,16 @@ export async function appendSystemNote(
 }
 
 /**
- * Атрибуция патча (§7.8). Умолчание — бухгалтерия прогона (`ai`/`system`, рулинг Р-7);
- * решения владельца (ответ на вопрос, судьба предложения) переопределяют её на
- * `owner`/`ui` со ссылкой на прогон: это ЕГО действие, и откат прогона обязан видеть его
- * чужим изменением, а не своей работой (rollback.ts, инвариант 7).
+ * Атрибуция патча (§7.8). Умолчание — бухгалтерия прогона (`ai`/`system`, рулинг Р-7).
+ * Владельческие вызывающие переопределяют актора на `owner` со ссылкой на прогон, но
+ * ИСТОЧНИК у них разный, и разница значима для Undo и отката:
+ *  - ответ на вопрос — `ui`: реплика владельца, его действие в графе; «отмени последнее»
+ *    вправе её снять, а откат прогона (rollback.ts) её не трогает и конфликтом не считает —
+ *    у рутинного прогона инвертируется только работа источника `routine`;
+ *  - судьба предложения (approved/rejected/stale) — `system`: пометка О прогоне, а не
+ *    решение само по себе; решение владельца — это батч принятого предложения (`routine`),
+ *    и «отмени последнее» после «Принять» обязано снять план, а не вернуть карточке кнопки
+ *    (undoLast пропускает `system`, приёмка 3).
  */
 interface PatchActor {
   kind: ActorKind;
@@ -654,9 +663,10 @@ type RunProposal = NonNullable<AgentRunAspect['proposal']>;
  * не на что, и CONFLICT честнее записи ответа в снятый вопрос. Обратная гонка закрыта
  * там же: гашение проверяет своё предусловие тем же способом.
  *
- * Атрибуция — `owner`/`ui` плюс `runId` (см. шапку модуля): ссылка ставит ответ рядом с
- * вопросом на экране прогона, а `source: 'ui'` не даёт откату прогона снять его как работу
- * исполнителя (rollback.ts `isRunAction`, инвариант 7).
+ * Атрибуция — `owner`/`ui` плюс `runId` (см. PatchActor): ссылка ставит ответ рядом с
+ * вопросом на экране прогона, а `source: 'ui'` держит его вне работы прогона — откат
+ * рутинного прогона инвертирует только источник `routine` и ответ ни снимает, ни считает
+ * конфликтом (rollback.ts, инвариант 7).
  */
 export async function answerRoutineCheckpoint(
   deps: RoutineWriteDeps,
@@ -745,6 +755,13 @@ export interface ProposalView {
   decidedAt?: string;
   /** Заполнено у статуса `stale`: чем именно предложение разошлось с графом. */
   mismatches?: ProposalMismatchNote[];
+  /**
+   * Прогон убран в архив — след ОТКАТА рутинного прогона (rollback.ts): у принятого
+   * предложения это значит «принято, затем откачено», и карточка обязана это сказать, а не
+   * читаться как действующий план. Второй путь в архив — рука владельца из меню записи;
+   * различить их нечем, поэтому подпись говорит про откат только у `approved`.
+   */
+  runArchived: boolean;
   operations: ProposalOperationView[];
 }
 
@@ -796,7 +813,10 @@ export async function proposalView(
   args: { ownerId: string; runId: string },
 ): Promise<ProposalView | null> {
   return withIdentity(db, args.ownerId, async (tx) => {
-    const row = await runById(tx, args.runId);
+    // Архивный прогон ОТДАЁТСЯ (в отличие от `runById`): архив у рутинного прогона — след
+    // отката, и карточка принятого-затем-откаченного предложения обязана остаться читаемой
+    // в треде рутины, а не превратиться в «прогон не найден»
+    const row = await runRowAnyArchive(tx, args.runId);
     if (row === null) return null;
     const routineId = row.run.routine_id;
     const proposal = row.run.proposal;
@@ -815,9 +835,25 @@ export async function proposalView(
       explanation: stored.explanation ?? row.run.report ?? '',
       ...(proposal.decided_at !== undefined && { decidedAt: proposal.decided_at }),
       ...(proposal.mismatches !== undefined && { mismatches: proposal.mismatches }),
+      runArchived: row.archived,
       operations: await describeOperations(tx, stored.operations),
     };
   });
+}
+
+/** Прогон по id С архивными — только для чтения предложения (см. proposalView). */
+async function runRowAnyArchive(
+  tx: Tx,
+  runId: string,
+): Promise<{ run: AgentRunAspect; archived: boolean } | null> {
+  const rows = await tx.execute(
+    sql`SELECT archived, aspects -> 'orbis/agent-run' AS run
+        FROM entities
+        WHERE id = ${runId}::uuid AND aspects ? 'orbis/agent-run'`,
+  );
+  const row = (rows as unknown as Array<Record<string, unknown>>)[0];
+  if (row === undefined) return null;
+  return { run: row.run as AgentRunAspect, archived: row.archived === true };
 }
 
 /**
@@ -1029,7 +1065,9 @@ async function settleProposal(
       },
     },
     precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [args.proposal] }],
-    actor: { kind: 'owner', source: 'ui', runId: args.runId },
+    // `system`, а не `ui` (см. PatchActor): пометка судьбы — бухгалтерия прогона, и «отмени
+    // последнее» после «Принять» обязано снять сам план, а не эту пометку
+    actor: { kind: 'owner', source: 'system', runId: args.runId },
   });
   if (patched.ok) return { written: true };
   if (patched.error.code !== 'CONFLICT') {
