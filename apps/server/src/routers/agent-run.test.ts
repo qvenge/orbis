@@ -114,6 +114,8 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     expect(new Date(reply.at).getTime()).toBeGreaterThan(0);
     // Чекпойнт на месте: ответ дополняет прогон, а не затирает его вопрос
     expect(out.run.aspects['orbis/agent-run']?.checkpoint).toMatchObject({ question });
+    // Вопрос закрыт: исход `answered` — прогон уходит из блока «Ждут ответа» (V1, D38)
+    expect(out.run.aspects['orbis/agent-run']?.outcome).toBe('answered');
 
     // Один action на обе правки — иначе «Отменить» гасило бы половину ответа
     const uiActions = (await actionsOfRun(owner, runId)).filter((x) => x.source === 'ui');
@@ -129,6 +131,7 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
       waiting_for: question,
     });
     expect((await aspectsOf(owner, runId))['orbis/agent-run']?.reply).toBeUndefined();
+    expect((await aspectsOf(owner, runId))['orbis/agent-run']?.outcome).toBe('checkpoint');
 
     // Отвечаем заново — и следующий захват видит ответ в истории прогонов (приёмка 8)
     await a.agentRun.answerCheckpoint({ ticketId, runId, answer });
@@ -139,6 +142,27 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     const past = next.history.find((h) => h.id === runId);
     expect(past?.reply?.text).toBe(answer);
     expect(past?.checkpoint?.question).toBe(question);
+    expect(past?.outcome).toBe('answered');
+  });
+
+  test('ответ на прогон, законченный без вопроса (finished/abandoned), исход не переписывает — только reply', async () => {
+    const ticketId = await makeTicket('Тикет с итогом');
+    const claim = okResult<ClaimTaskResult>(
+      await dispatchTool(worker(owner, grantId), 'orbis_claim_task', { ticket_id: ticketId }),
+    );
+    await dispatchTool(worker(owner, grantId), 'orbis_finish', {
+      run_id: claim.run_id,
+      report: 'Готово, проверь',
+    });
+    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'waiting' });
+    const out = await a.agentRun.answerCheckpoint({
+      ticketId,
+      runId: claim.run_id,
+      answer: 'Принял, спасибо',
+    });
+    expect(out.run.aspects['orbis/agent-run']?.outcome).toBe('finished');
+    expect((out.run.aspects['orbis/agent-run']?.reply as AnyRecord).text).toBe('Принял, спасибо');
+    expect(out.ticket.aspects['orbis/task']).toEqual({ status: 'planned' });
   });
 
   test('по тикету не в waiting → CONFLICT', async () => {

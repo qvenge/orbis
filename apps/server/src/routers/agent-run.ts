@@ -64,7 +64,7 @@ export const agentRunRouter = router({
         // Предпроверка под RLS — ради ВНЯТНОГО отказа: гонку закрывают предусловия ниже,
         // но без чтения человек получал бы на неверную пару id безымянный CONFLICT
         // предусловия вместо «прогон не принадлежит этому тикету».
-        await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+        const outcome = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
           const run = await runById(tx, input.runId);
           // Чужой и несуществующий под RLS неразличимы — единый NOT_FOUND
           if (run === null) {
@@ -96,7 +96,14 @@ export const agentRunRouter = router({
               lastRunId: runs.at(-1)?.id,
             });
           }
+          return run.run.outcome;
         });
+        // Открытый ВОПРОС ответ закрывает: исход `checkpoint` → `answered` (V1, D38) — иначе
+        // отвеченный прогон вечно сидел бы в блоке «Ждут ответа» списка «Рутины» и в его
+        // бейдже (запрос `outcome=checkpoint` по всем прогонам; отсечь тикетные грамматика
+        // не умеет). Ответ на уже законченный прогон (`finished`/`abandoned` — человек ответил
+        // после итога или подметания) исход не переписывает: он не был вопросом.
+        const answersQuestion = outcome === 'checkpoint';
 
         const r = await execute(
           ctx.db,
@@ -118,16 +125,19 @@ export const agentRunRouter = router({
                   // его не перечитывает, и ответ утонул бы. `finished`/`abandoned`
                   // допущены наравне с `checkpoint`: человек мог ответить на вопрос уже
                   // после того, как прогон подмели (С6) или он успел завершиться сам.
+                  // Предусловие сужено до прочитанного исхода: CAS против второго экрана,
+                  // который успел ответить (и перевести вопрос в `answered`) секундой раньше.
                   precondition: [
                     {
                       aspect: 'orbis/agent-run',
                       field: 'outcome',
-                      in: ['checkpoint', 'finished', 'abandoned'],
+                      in: answersQuestion ? ['checkpoint'] : ['finished', 'abandoned'],
                     },
                   ],
                   aspects: {
                     'orbis/agent-run': {
                       reply: { text: input.answer, at: new Date().toISOString() },
+                      ...(answersQuestion && { outcome: 'answered' }),
                     },
                   },
                 },

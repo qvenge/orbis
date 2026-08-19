@@ -185,8 +185,9 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     // Ничего не откачено: ни одного undo-сообщения и состояния на месте
     expect(await undoMessages(owner)).toBe(undoneBefore);
     expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'planned' });
+    // Ответ владельца на месте: вопрос закрыт исходом `answered` (V1, D38), не снят откатом
     expect((await aspectsOf(owner, runId))['orbis/agent-run']).toMatchObject({
-      outcome: 'checkpoint',
+      outcome: 'answered',
     });
     expect(await isArchived(owner, runId)).toBe(false);
   });
