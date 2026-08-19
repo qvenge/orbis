@@ -238,13 +238,18 @@ export const routineRouter = router({
               })
             : null;
         const last = runs.at(-1);
+        // Архивный прогон — след отката (rollback.ts): его вопрос и предложение уже погашены
+        // (`stale`), а если запись старше хвоста и pending на нём остался — ответить и решить
+        // по нему всё равно нельзя (NOT_FOUND под архивом), и считать его «ждёт» значило бы
+        // обещать кнопку, которой нет
+        const live = runs.filter((r) => !r.archived);
         return {
           nextBucketAt: next === null ? null : next.toISOString(),
           lastRun: last === undefined ? null : runSummary(last),
           // «Ждут меня» (V1.9) — обычное равенство по исходу: состоянием вопроса
           // сделан сам исход прогона, отдельной сущности «вопрос» в срезе нет
-          waiting: runs.filter((r) => r.run.outcome === 'checkpoint').length,
-          openProposal: runs.some((r) => r.run.proposal?.status === 'pending'),
+          waiting: live.filter((r) => r.run.outcome === 'checkpoint').length,
+          openProposal: live.some((r) => r.run.proposal?.status === 'pending'),
         };
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);

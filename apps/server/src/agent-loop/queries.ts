@@ -85,6 +85,12 @@ export interface RunRow {
   id: string;
   title: string;
   createdAt: Date;
+  /**
+   * Убран ли прогон в архив. У рутинного прогона архив — след ОТКАТА (rollback.ts), и
+   * выборки прогонов архивные НЕ исключают (слот остаётся отработанным, история — полной);
+   * кому архив важен (обзор рутины: откаченный прогон не «ждёт»), тот смотрит сюда.
+   */
+  archived: boolean;
   run: AgentRunAspect;
 }
 
@@ -129,6 +135,7 @@ function toRunRow(row: RawRow): RunRow {
     id: row.id as string,
     title: row.title as string,
     createdAt: row.created_at as Date,
+    archived: row.archived === true,
     run: row.run as AgentRunAspect,
   };
 }
@@ -217,7 +224,7 @@ export async function parentProject(tx: Tx, ticketId: string): Promise<ProjectRo
  */
 export async function runsOfParent(tx: Tx, parentId: string): Promise<RunRow[]> {
   const rows = await tx.execute(
-    sql`SELECT e.id, e.title, e.created_at, e.aspects -> 'orbis/agent-run' AS run
+    sql`SELECT e.id, e.title, e.created_at, e.archived, e.aspects -> 'orbis/agent-run' AS run
         FROM entities e
         JOIN relations r ON r.target_id = e.id
         WHERE r.source_id = ${parentId}::uuid
@@ -248,7 +255,7 @@ export const runsOfTicket = runsOfParent;
 export async function runsForBucket(tx: Tx, routineId: string, bucket: string): Promise<RunRow[]> {
   const ofBucket = JSON.stringify({ 'orbis/agent-run': { routine_id: routineId, bucket } });
   const rows = await tx.execute(
-    sql`SELECT id, title, created_at, aspects -> 'orbis/agent-run' AS run
+    sql`SELECT id, title, created_at, archived, aspects -> 'orbis/agent-run' AS run
         FROM entities
         WHERE aspects @> ${ofBucket}::jsonb
         ORDER BY created_at ASC`,
@@ -313,7 +320,7 @@ export async function routineById(tx: Tx, id: string): Promise<RoutineRow | null
 export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
   const running = JSON.stringify({ 'orbis/agent-run': { outcome: 'running' } });
   const rows = await tx.execute(
-    sql`SELECT id, title, created_at, aspects -> 'orbis/agent-run' AS run
+    sql`SELECT id, title, created_at, archived, aspects -> 'orbis/agent-run' AS run
         FROM entities
         WHERE aspects @> ${running}::jsonb
           AND (aspects -> 'orbis/agent-run' ->> 'last_step_at')::timestamptz < ${before.toISOString()}::timestamptz
@@ -334,7 +341,7 @@ export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
  */
 export async function runById(tx: Tx, runId: string): Promise<RunRow | null> {
   const rows = await tx.execute(
-    sql`SELECT id, title, created_at, aspects -> 'orbis/agent-run' AS run
+    sql`SELECT id, title, created_at, archived, aspects -> 'orbis/agent-run' AS run
         FROM entities
         WHERE id = ${runId}::uuid AND NOT archived AND aspects ? 'orbis/agent-run'`,
   );

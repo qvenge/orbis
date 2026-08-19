@@ -334,6 +334,7 @@ export function RunFeed({ entity }: { entity: Entity }) {
               reply: { text: replyText, at: str(reply?.at) ?? entity.updatedAt },
             }),
             outcome,
+            archived: inArchive,
           }}
         />
       ) : (

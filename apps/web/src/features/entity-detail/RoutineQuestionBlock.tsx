@@ -25,6 +25,12 @@ export type RoutineRunQuestion = {
   asked_at: string;
   reply?: { text: string; at: string };
   outcome: string;
+  /**
+   * Прогон в архиве — след ОТКАТА рутинного прогона (rollback.ts): откат снимает вопрос
+   * (`stale`), и подпись обязана назвать причину — «снят новым прогоном» здесь было бы
+   * неправдой. Под архивом ответить нельзя ни при каком исходе (сервер: NOT_FOUND).
+   */
+  archived?: boolean;
 };
 
 export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
@@ -44,9 +50,11 @@ export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
   });
 
   // Отвечать можно РОВНО пока прогон ждёт (V1.4): `answered` уже закрыт ответом, `stale` снят
-  // новым прогоном, и обе кнопки сервер отклонил бы предусловием. Кнопка, которая
-  // гарантированно отказывает, хуже её отсутствия — тот же вывод, что у блока ожидания тикета.
-  const waiting = run.outcome === 'checkpoint';
+  // новым прогоном (или откатом), и обе кнопки сервер отклонил бы предусловием; архивный
+  // прогон он не находит вовсе. Кнопка, которая гарантированно отказывает, хуже её
+  // отсутствия — тот же вывод, что у блока ожидания тикета.
+  const archived = run.archived === true;
+  const waiting = run.outcome === 'checkpoint' && !archived;
 
   return (
     <section
@@ -77,10 +85,15 @@ export function RoutineQuestionBlock({ run }: { run: RoutineRunQuestion }) {
       )}
 
       {/* Вопрос без ответа остался не потому, что владелец промолчал: рутина спросила заново
-          следующим прогоном, и этот сняли (supersedeOpen). Без этих слов экран показывал бы
-          мёртвый вопрос, на который «почему-то нельзя ответить». */}
-      {run.outcome === 'stale' && (
-        <p className="text-sm text-text-muted">Вопрос снят новым прогоном.</p>
+          следующим прогоном, и этот сняли (supersedeOpen), — либо прогон откатили, и откат
+          снял вопрос сам (rollback.ts). Без этих слов экран показывал бы мёртвый вопрос, на
+          который «почему-то нельзя ответить». */}
+      {archived && run.reply === undefined ? (
+        <p className="text-sm text-text-muted">Вопрос снят: прогон откачен.</p>
+      ) : (
+        run.outcome === 'stale' && (
+          <p className="text-sm text-text-muted">Вопрос снят новым прогоном.</p>
+        )
       )}
 
       {waiting && (

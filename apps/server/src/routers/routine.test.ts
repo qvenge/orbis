@@ -672,6 +672,94 @@ describe('откат рутинного прогона: decideProposal(approve) 
     expect(await isArchived(runId)).toBe(false);
   });
 
+  test('откат прогона с ОТКРЫТЫМ предложением: pending отклонён причиной stale, статус на прогоне stale, прогон в архиве; decideProposal → NOT_FOUND, обзор не считает его открытым (хвост ре-ревью)', async () => {
+    const { routineId, taskId, runId, pendingId } = await proposed('Полить цветы');
+    expect((await runAspect(runId)).proposal?.status).toBe('pending');
+    expect((await caller().routine.overview({ routineId })).openProposal).toBe(true);
+
+    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    expect(rolled).toEqual({ ok: true, undone: [], note: ROUTINE_ROLLBACK_NOTE });
+    // Работы у прогона не было (предложение не принято) — граф не тронут
+    expect(await taskStatus(taskId)).toBe('inbox');
+    // Открытое погашено: карточке больше нечего предлагать
+    expect(await rejectReason(pendingId)).toBe('stale');
+    const aspect = await runAspect(runId);
+    expect(aspect.proposal?.status).toBe('stale');
+    expect(aspect.proposal?.decided_at).toBeDefined();
+    expect(await isArchived(runId)).toBe(true);
+    // Карточка читается (архивный прогон отдаётся) и знает и статус, и архив
+    const view = await caller().routine.proposal({ runId });
+    expect(view?.status).toBe('stale');
+    expect(view?.runArchived).toBe(true);
+    expect(view?.mismatches).toBeUndefined();
+    // Решать по нему нечего: под архивом прогон не найден (как и было), но теперь кнопок
+    // к этому NOT_FOUND у карточки нет
+    const e = await trpcError(callerLater().routine.decideProposal({ runId, decision: 'approve' }));
+    expect(e.code).toBe('NOT_FOUND');
+    expect((await caller().routine.overview({ routineId })).openProposal).toBe(false);
+    // Повтор отката — тот же исход, второго отказа pending'а нет
+    expect(await rollbackRun(db, { actorUserId: owner, runId })).toEqual({
+      ok: true,
+      undone: [],
+      note: ROUTINE_ROLLBACK_NOTE,
+    });
+    expect((await runAspect(runId)).proposal?.status).toBe('stale');
+  });
+
+  test('откат прогона с НЕОТВЕЧЕННЫМ вопросом: исход stale + запись в тред рутины, прогон в архиве; answerCheckpoint → NOT_FOUND, обзор не считает «ждёт» (хвост ре-ревью)', async () => {
+    const routineId = await seedRoutine(owner, { title: 'Рутина: вопрос и откат' });
+    const { runId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-10T07:00',
+      run: {
+        outcome: 'checkpoint',
+        checkpoint: { question: 'Какой приоритет у почты?', asked_at: T0.toISOString() },
+        finished_at: T0.toISOString(),
+      },
+    });
+    expect((await caller().routine.overview({ routineId })).waiting).toBe(1);
+
+    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    expect(rolled.ok).toBe(true);
+    expect((await runAspect(runId)).outcome).toBe('stale');
+    expect(await isArchived(runId)).toBe(true);
+    const notes = await withIdentity(db, owner, (tx) =>
+      tx.execute(
+        sql`SELECT content FROM chat_messages
+            WHERE metadata @> ${JSON.stringify({ type: 'routine_stale', run_id: runId })}::jsonb`,
+      ),
+    );
+    expect([...notes].map((r) => (r as { content: string }).content)).toEqual([
+      'Вопрос прогона снят: прогон откачен',
+    ]);
+    const e = await trpcError(callerLater().routine.answerCheckpoint({ runId, answer: 'Высокий' }));
+    expect(e.code).toBe('NOT_FOUND');
+    expect((await caller().routine.overview({ routineId })).waiting).toBe(0);
+  });
+
+  test('обзор не считает архивный прогон с pending/checkpoint старого формата (до хвоста — архив без гашения)', async () => {
+    const routineId = await seedRoutine(owner, { title: 'Рутина: старый архив' });
+    const { runId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-11T07:00',
+      run: {
+        outcome: 'checkpoint',
+        checkpoint: { question: 'Снять?', asked_at: T0.toISOString() },
+        finished_at: T0.toISOString(),
+      },
+    });
+    expect((await caller().routine.overview({ routineId })).waiting).toBe(1);
+    const archived = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'system',
+      runId,
+      operations: [{ tool: 'entity_update', input: { id: runId, archived: true } }],
+    });
+    if (!archived.ok) throw new Error(archived.error.message);
+    expect((await caller().routine.overview({ routineId })).waiting).toBe(0);
+  });
+
   test('«отмени последнее» после approve снимает ПЛАН (batch предложения), а не пометку статуса на прогоне (приёмка 3)', async () => {
     const { taskId, runId } = await proposed('Отнести обувь в ремонт');
     const applied = await callerLater().routine.decideProposal({ runId, decision: 'approve' });

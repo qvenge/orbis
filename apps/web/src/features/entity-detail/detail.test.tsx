@@ -3678,10 +3678,11 @@ describe('V1: рутина', () => {
 // а результат режима «предлагает» — карточка предложения с самими правками.
 
 /** Прогон рутины в объёме detail. Аспект от теста к тесту разный, форма записи — одна. */
-const routineRunEntity = (aspect: Record<string, unknown>) => ({
+const routineRunEntity = (aspect: Record<string, unknown>, archived = false) => ({
   ...entity,
   id: 'rr1',
   title: 'Прогон: Утренний разбор',
+  archived,
   aspects: { 'orbis/agent-run': aspect },
 });
 
@@ -3725,9 +3726,14 @@ const PROPOSAL_VIEW = {
 };
 
 function routineRunHandler(
-  opts: { aspect?: Record<string, unknown>; proposal?: unknown; decide?: unknown } = {},
+  opts: {
+    aspect?: Record<string, unknown>;
+    proposal?: unknown;
+    decide?: unknown;
+    archived?: boolean;
+  } = {},
 ): MockHandler {
-  const run = routineRunEntity(opts.aspect ?? ROUTINE_RUN_CHECKPOINT);
+  const run = routineRunEntity(opts.aspect ?? ROUTINE_RUN_CHECKPOINT, opts.archived ?? false);
   return (path, input) => {
     if (path === 'entity.get') {
       const { id } = input as { id: string };
@@ -3891,6 +3897,31 @@ describe('V1: прогон рутины', () => {
     expect(block).toHaveTextContent('снят новым прогоном');
     expect(within(block).queryByRole('textbox')).toBeNull();
     stale.unmount();
+
+    // Откат прогона с неотвеченным вопросом (хвост ре-ревью): сервер снимает вопрос (`stale`)
+    // и убирает прогон в архив — подпись называет откат, а не «новый прогон»; поля ответа нет
+    const rolledBack = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        aspect: { ...ROUTINE_RUN_CHECKPOINT, outcome: 'stale' },
+        archived: true,
+      }),
+    );
+    feed = await screen.findByTestId('run-feed');
+    expect(within(feed).getByText('в архиве')).toBeInTheDocument();
+    block = within(feed).getByTestId('routine-question');
+    expect(block).toHaveTextContent('Вопрос снят: прогон откачен');
+    expect(block).not.toHaveTextContent('новым прогоном');
+    expect(within(block).queryByRole('textbox')).toBeNull();
+    rolledBack.unmount();
+
+    // Архивный прогон со всё ещё открытым вопросом (запись до хвоста): отвечать некуда —
+    // сервер под архивом прогон не находит; поля ответа нет, причина названа
+    renderWithProviders(<DetailScreen entityId="rr1" />, routineRunHandler({ archived: true }));
+    feed = await screen.findByTestId('run-feed');
+    block = within(feed).getByTestId('routine-question');
+    expect(block).toHaveTextContent('Вопрос снят: прогон откачен');
+    expect(within(block).queryByRole('textbox')).toBeNull();
   });
 
   test('история прогонов рутины: судьба предложения бейджем, ожидание решения — словами (приёмка 4)', async () => {

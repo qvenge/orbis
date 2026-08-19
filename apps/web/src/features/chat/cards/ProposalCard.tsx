@@ -42,6 +42,17 @@ const STATUS_NOTES: Record<string, string> = {
 };
 
 /**
+ * Прогон в архиве — след ОТКАТА (rollback.ts): откат гасит открытое у прогона (`stale`), и
+ * у `stale` без расхождений архив означает именно «прогон откачен», а не «граф разошёлся».
+ * `pending` под архивом — запись до этого хвоста (или гонка: откат уже архивировал, гашение
+ * ещё не доехало): решать по ней нельзя (сервер ответит NOT_FOUND), кнопок нет.
+ */
+const ARCHIVED_NOTES: Record<string, string> = {
+  stale: 'Устарело — прогон откачен',
+  pending: 'Прогон откачен — предложение снято',
+};
+
+/**
  * Значение поля строкой. Пустая строка и `null` — «пусто», а не пропуск: в правке они
  * означают снятие значения, и молчание о них читалось бы как «поле не тронут».
  */
@@ -217,7 +228,7 @@ export function ProposalCard({ runId }: { runId: string }) {
             </div>
           )}
 
-          {view.status === 'pending' ? (
+          {view.status === 'pending' && !view.runArchived ? (
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="primary"
@@ -243,7 +254,9 @@ export function ProposalCard({ runId }: { runId: string }) {
                   ? // Прогон в архиве — след ОТКАТА (rollback.ts): принятый план уже снят, и
                     // «Принято» без оговорки читалось бы как действующий
                     `${view.runArchived ? 'Принято, затем откачено' : 'Принято'}${view.decidedAt === undefined ? '' : ` ${formatDate(view.decidedAt, tz)}`}`
-                  : (STATUS_NOTES[view.status] ?? view.status)}
+                  : ((view.runArchived ? ARCHIVED_NOTES[view.status] : undefined) ??
+                    STATUS_NOTES[view.status] ??
+                    view.status)}
               </p>
             )
           )}

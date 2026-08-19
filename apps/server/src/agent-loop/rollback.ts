@@ -32,6 +32,7 @@
 // полчаса после отката. Поэтому для рутинного прогона откат инвертирует ТОЛЬКО работу,
 // конфликты ищет только по её сущностям, а прогон помечает архивом ЯВНОЙ операцией: тот же
 // признак, по которому экран прогона (RunFeed) читает откаченный прогон ADE.
+import type { AgentRunAspect } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -39,6 +40,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActionOperation, ActionRecord } from '../executor/types';
 import { isUndone, undoAction } from '../executor/undo';
+import { closeOpenOfRun } from '../routines/lifecycle';
 import type { RollbackConflict, WireRollbackResult } from '../wire';
 
 /** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
@@ -119,11 +121,19 @@ function isRunAction(action: ActionRecord, runId: string): boolean {
  * `archive` — помечать ли прогон архивом явной операцией. У гранта архивирует инверсия
  * его создания (создание — `own`); у рутины создание — бухгалтерия, и след отката
  * приходится ставить отдельно, иначе экран показывал бы «готово» над откаченным планом.
+ *
+ * `closeOpen` — гасить ли открытое у прогона (непринятое предложение → `stale`,
+ * неотвеченный вопрос → `stale`; routines/lifecycle.ts closeOpenOfRun). У рутины — да:
+ * откаченный прогон не вправе держать на владельце ни кнопок «Принять/Отклонить», ни «ждёт
+ * ответа» — архивный прогон для decideProposal/answerCheckpoint «не найден», и карточка с
+ * живыми кнопками вела бы в NOT_FOUND, а обзор рутины считал бы их ожиданием. У гранта
+ * открытое у прогона — статус ТИКЕТА, и его возвращает инверсия бухгалтерии.
  */
 interface RollbackPolicy {
   own(action: ActionRecord, runId: string): boolean;
   about(action: ActionRecord, runId: string): boolean;
   archive: boolean;
+  closeOpen: boolean;
   note: string;
 }
 
@@ -131,6 +141,7 @@ const GRANT_POLICY: RollbackPolicy = {
   own: isRunAction,
   about: () => false,
   archive: false,
+  closeOpen: false,
   note: ROLLBACK_NOTE,
 };
 
@@ -143,13 +154,15 @@ const ROUTINE_POLICY: RollbackPolicy = {
   own: (action, runId) => action.run_id === runId && action.source === 'routine',
   about: (action, runId) => action.run_id === runId,
   archive: true,
+  closeOpen: true,
   note: ROUTINE_ROLLBACK_NOTE,
 };
 
-/** Что известно о сущности прогона: чей он и убран ли уже в архив. `null` — прогона нет. */
+/** Что известно о сущности прогона: чей он, убран ли уже в архив и сам аспект. `null` — прогона нет. */
 interface RunFacts {
   routineId: string | undefined;
   archived: boolean;
+  run: AgentRunAspect;
 }
 
 /**
@@ -159,16 +172,15 @@ interface RunFacts {
  */
 async function runFacts(tx: Tx, runId: string): Promise<RunFacts | null> {
   const rows = await tx.execute(
-    sql`SELECT archived, aspects -> 'orbis/agent-run' ->> 'routine_id' AS routine_id
+    sql`SELECT archived, aspects -> 'orbis/agent-run' AS run
         FROM entities
         WHERE id = ${runId}::uuid AND aspects ? 'orbis/agent-run'`,
   );
   const row = (rows as unknown as Array<Record<string, unknown>>)[0];
   if (row === undefined) return null;
-  return {
-    routineId: typeof row.routine_id === 'string' ? row.routine_id : undefined,
-    archived: row.archived === true,
-  };
+  // Аспект валидирован ajv на записи (стадия 2 executor'а) — приведение честно, как в queries.ts
+  const run = row.run as AgentRunAspect;
+  return { routineId: run.routine_id, archived: row.archived === true, run };
 }
 
 /**
@@ -351,12 +363,15 @@ export async function rollbackRun(
     // Архивировать — только рутинный прогон, который есть и ещё не в архиве: повторный
     // откат обязан вести себя как первый успешный, а не писать второй маркер
     const archive = policy.archive && facts !== null && !facts.archived;
+    // Гасить открытое — у рутинного прогона ВСЕГДА, в том числе уже архивного: повтор
+    // отката обязан долечить прогон, которому первый откат (до хвоста) оставил pending
+    const closeOpen = policy.closeOpen && facts !== null ? facts : null;
     // Окно предпроверки открывается ПЕРВЫМ живым действием прогона, а не последним:
     // чужая правка между `claim` и `finish` — самый обычный случай, и она обязана стать
     // конфликтом (см. докблок foreignChangesAfter)
     const first = live[0];
     if (first === undefined) {
-      return { live, conflicts: [] as RollbackConflict[], archive, note: policy.note };
+      return { live, conflicts: [] as RollbackConflict[], archive, closeOpen, note: policy.note };
     }
     const conflicts = await foreignChangesAfter(tx, {
       runId,
@@ -364,7 +379,7 @@ export async function rollbackRun(
       touched: touchedEntities(live),
       policy,
     });
-    return { live, conflicts, archive, note: policy.note };
+    return { live, conflicts, archive, closeOpen, note: policy.note };
   });
 
   if (plan.conflicts.length > 0) {
@@ -391,9 +406,28 @@ export async function rollbackRun(
     }
     undone.push(entry.action.id);
   }
-  // Шаг 5 (только рутина): след отката — архив прогона явной операцией. Идёт ПОСЛЕ серии
-  // отмен и только при её полном успехе: partial оставляет прогон живым, чтобы повторное
-  // нажатие доделало откат. Атрибуция — владелец (это его жест) источником `system` с
+  // Шаг 5 (только рутина): гашение открытого и след отката. Оба идут ПОСЛЕ серии отмен и
+  // только при её полном успехе: partial оставляет прогон живым, чтобы повторное нажатие
+  // доделало откат.
+  //
+  // Сначала гашение (непринятое предложение и неотвеченный вопрос → `stale`), потом архив:
+  // обратный порядок давал бы окно «архивный, но с живыми кнопками» — то самое, ради
+  // которого гашение здесь и стоит. Бухгалтерия гашения — `ai`/`system` (как у
+  // supersedeOpen): запись О прогоне, не работа; «отмени последнее» её не берёт.
+  if (plan.closeOpen !== null && plan.closeOpen.routineId !== undefined) {
+    await closeOpenOfRun(
+      { db, clock: () => new Date() },
+      {
+        ownerId: actorUserId,
+        routineId: plan.closeOpen.routineId,
+        runId,
+        run: plan.closeOpen.run,
+        reason: 'stale',
+        questionNote: 'Вопрос прогона снят: прогон откачен',
+      },
+    );
+  }
+  // Архив — явной операцией. Атрибуция — владелец (это его жест) источником `system` с
   // `run_id`: это запись О прогоне, а не работа в графе — «отмени последнее» её не берёт,
   // а следующий откат того же прогона видит её как «о прогоне», не как конфликт.
   if (plan.archive) {

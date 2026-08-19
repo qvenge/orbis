@@ -215,14 +215,8 @@ async function patchAspect(
  * `exceptRunId` — текущий прогон: он единственный, кого гасить нельзя ни при каких
  * условиях (иначе раннер снял бы собственное предложение сразу после того, как подал его).
  *
- * Порядок внутри пары «предложение»: СНАЧАЛА rejectPending, потом статус на прогоне.
- * Обратный порядок оставлял бы окно, в котором прогон уже говорит «заменено», а кнопка
- * «Принять» на карточке ещё работает — то есть владелец применил бы снятый план.
- * Обратная асимметрия безопасна: rejectPending идемпотентен (`alreadyRejected`), а
- * недописанный статус чинится следующим проходом.
- *
- * Снятое НЕ пропадает: оно остаётся в истории прогона (спека V1.8) — уходит только из
- * «ждут меня».
+ * Тело на один прогон — `closeOpenOfRun` (оно же у отката прогона): порядок, предусловия и
+ * уважение к чужому решению описаны там.
  */
 export async function supersedeOpen(
   deps: RoutineDeps,
@@ -230,87 +224,130 @@ export async function supersedeOpen(
 ): Promise<SupersedeResult> {
   const runs = await withIdentity(deps.db, args.ownerId, (tx) => runsOfParent(tx, args.routineId));
   const out: SupersedeResult = { superseded: 0, staled: 0 };
-  const now = deps.clock().toISOString();
 
   for (const row of runs) {
     if (row.id === args.exceptRunId) continue;
-    const run = row.run;
-
-    if (run.proposal?.status === 'pending') {
-      const rejected = await rejectPending(deps.db, {
-        ownerId: args.ownerId,
-        pendingId: run.proposal.pending_id,
-        reason: 'superseded',
-      });
-      if (!rejected.ok) {
-        // Карточка исчезла или уже исполнена: статус прогона тогда правит не гашение, а
-        // decideProposal (Задача 11) — переписывать его здесь значило бы соврать про судьбу
-        console.error('[routines] предложение не отклонено как заменённое:', rejected.error);
-        continue;
-      }
-      if (rejected.alreadyRejected && rejected.reason !== 'superseded') {
-        // Между нашим чтением («ждёт решения») и отказом предложение уже отклонил кто-то
-        // другой — владелец кнопкой или проверка предусловий (Задача 11). Статус на прогоне
-        // пишет тот, чей reason стоит в reject-строке (она — источник правды, V1.8): наше
-        // «заменено» поверх его «отклонил» соврало бы владельцу про его же решение.
-        // Свой прежний reason 'superseded' — недописанный статус прошлого прохода, дописываем.
-        continue;
-      }
-      // `proposal` — вложенный объект, а merge аспекта пополевой: патчим его целиком,
-      // иначе pending_id пропал бы вместе со ссылкой на карточку. Предусловие — тот же
-      // объект, каким мы его прочитали (сравнение по JSON-форме, executor.ts): вложенное
-      // поле `proposal.status` грамматика предусловий адресовать не умеет, а целый объект
-      // умеет — и если решение владельца легло между чтением и патчем, CONFLICT оставит
-      // его статус нетронутым.
-      const patched = await patchAspect(deps, {
-        ownerId: args.ownerId,
-        id: row.id,
-        aspect: 'orbis/agent-run',
-        patch: {
-          proposal: {
-            pending_id: run.proposal.pending_id,
-            status: 'superseded',
-            decided_at: now,
-            ...(run.proposal.mismatches !== undefined && { mismatches: run.proposal.mismatches }),
-          },
-        },
-        precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [run.proposal] }],
-      });
-      if (patched.ok) out.superseded += 1;
-      else if (patched.error.code !== 'CONFLICT') {
-        console.error(`[routines] статус «заменено» не записан на ${row.id}:`, patched.error.code);
-      }
-      continue;
-    }
-
-    if (run.outcome === 'checkpoint') {
-      const patched = await patchAspect(deps, {
-        ownerId: args.ownerId,
-        id: row.id,
-        aspect: 'orbis/agent-run',
-        patch: { outcome: 'stale' },
-        // Под замком исход мог уже стать `answered` (владелец ответил секунду назад) —
-        // тогда снимать вопрос нельзя: ответ важнее нового прогона
-        precondition: [{ aspect: 'orbis/agent-run', field: 'outcome', in: ['checkpoint'] }],
-      });
-      if (!patched.ok) {
-        // CONFLICT здесь — «владелец ответил, пока мы читали»: вопрос гасить уже нельзя
-        if (patched.error.code !== 'CONFLICT') {
-          console.error(`[routines] вопрос прогона ${row.id} не снят:`, patched.error.code);
-        }
-        continue;
-      }
-      out.staled += 1;
+    const closed = await closeOpenOfRun(deps, {
+      ownerId: args.ownerId,
+      routineId: args.routineId,
+      runId: row.id,
+      run: row.run,
+      reason: 'superseded',
       // Владелец видит в треде, почему вопрос пропал из «ждут меня» (V1.8)
-      await withIdentity(deps.db, args.ownerId, (tx) =>
-        appendSystemNote(tx, {
-          ownerId: args.ownerId,
-          entityId: args.routineId,
-          content: 'Вопрос прошлого прогона снят: рутина сработала заново',
-          metadata: { type: 'routine_stale', routine_id: args.routineId, run_id: row.id },
-        }),
-      );
+      questionNote: 'Вопрос прошлого прогона снят: рутина сработала заново',
+    });
+    if (closed.proposal) out.superseded += 1;
+    if (closed.question) out.staled += 1;
+  }
+  return out;
+}
+
+/**
+ * Гашение открытого у ОДНОГО прогона — общее тело `supersedeOpen` (причина `superseded`:
+ * рутина сработала заново) и отката прогона (rollback.ts, причина `stale`: прогон откачен,
+ * его предложение и вопрос больше не о чём). Непринятое предложение отклоняется с этой
+ * причиной и получает её статусом на прогоне; неотвеченный вопрос переходит в `stale` с
+ * системной записью в тред рутины.
+ *
+ * Порядок внутри пары «предложение»: СНАЧАЛА rejectPending, потом статус на прогоне.
+ * Обратный порядок оставлял бы окно, в котором прогон уже говорит «заменено», а кнопка
+ * «Принять» на карточке ещё работает — то есть владелец применил бы снятый план.
+ * Обратная асимметрия безопасна: rejectPending идемпотентен (`alreadyRejected`), а
+ * недописанный статус чинится следующим проходом.
+ *
+ * Снятое НЕ пропадает: оно остаётся в истории прогона (спека V1.8) — уходит только из
+ * «ждут меня». Ничего не бросает: гашение — гигиена, и её сбой не повод не сделать работу
+ * (новый прогон, откат); штатные CONFLICT (владелец успел решить/ответить) молчат.
+ */
+export async function closeOpenOfRun(
+  deps: RoutineWriteDeps,
+  args: {
+    ownerId: string;
+    routineId: string;
+    runId: string;
+    run: AgentRunAspect;
+    reason: Extract<RejectReason, 'superseded' | 'stale'>;
+    /** Текст системной записи в тред рутины при снятии вопроса. */
+    questionNote: string;
+  },
+): Promise<{ proposal: boolean; question: boolean }> {
+  const { ownerId, routineId, runId, run, reason } = args;
+  const out = { proposal: false, question: false };
+  const now = deps.clock().toISOString();
+
+  if (run.proposal?.status === 'pending') {
+    const rejected = await rejectPending(deps.db, {
+      ownerId,
+      pendingId: run.proposal.pending_id,
+      reason,
+    });
+    if (!rejected.ok) {
+      // Карточка исчезла или уже исполнена: статус прогона тогда правит не гашение, а
+      // decideProposal (Задача 11) — переписывать его здесь значило бы соврать про судьбу
+      console.error(`[routines] предложение не отклонено (${reason}):`, rejected.error);
+      return out;
     }
+    if (rejected.alreadyRejected && rejected.reason !== reason) {
+      // Между нашим чтением («ждёт решения») и отказом предложение уже отклонил кто-то
+      // другой — владелец кнопкой или проверка предусловий (Задача 11). Статус на прогоне
+      // пишет тот, чей reason стоит в reject-строке (она — источник правды, V1.8): наше
+      // «заменено» поверх его «отклонил» соврало бы владельцу про его же решение.
+      // Свой прежний reason — недописанный статус прошлого прохода, дописываем.
+      return out;
+    }
+    // `proposal` — вложенный объект, а merge аспекта пополевой: патчим его целиком,
+    // иначе pending_id пропал бы вместе со ссылкой на карточку. Предусловие — тот же
+    // объект, каким мы его прочитали (сравнение по JSON-форме, executor.ts): вложенное
+    // поле `proposal.status` грамматика предусловий адресовать не умеет, а целый объект
+    // умеет — и если решение владельца легло между чтением и патчем, CONFLICT оставит
+    // его статус нетронутым.
+    const patched = await patchAspect(deps, {
+      ownerId,
+      id: runId,
+      aspect: 'orbis/agent-run',
+      patch: {
+        proposal: {
+          pending_id: run.proposal.pending_id,
+          status: reason,
+          decided_at: now,
+          ...(run.proposal.mismatches !== undefined && { mismatches: run.proposal.mismatches }),
+        },
+      },
+      precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [run.proposal] }],
+    });
+    if (patched.ok) out.proposal = true;
+    else if (patched.error.code !== 'CONFLICT') {
+      console.error(`[routines] статус «${reason}» не записан на ${runId}:`, patched.error.code);
+    }
+    return out;
+  }
+
+  if (run.outcome === 'checkpoint') {
+    const patched = await patchAspect(deps, {
+      ownerId,
+      id: runId,
+      aspect: 'orbis/agent-run',
+      patch: { outcome: 'stale' },
+      // Под замком исход мог уже стать `answered` (владелец ответил секунду назад) —
+      // тогда снимать вопрос нельзя: ответ важнее нового прогона
+      precondition: [{ aspect: 'orbis/agent-run', field: 'outcome', in: ['checkpoint'] }],
+    });
+    if (!patched.ok) {
+      // CONFLICT здесь — «владелец ответил, пока мы читали»: вопрос гасить уже нельзя
+      if (patched.error.code !== 'CONFLICT') {
+        console.error(`[routines] вопрос прогона ${runId} не снят:`, patched.error.code);
+      }
+      return out;
+    }
+    out.question = true;
+    await withIdentity(deps.db, ownerId, (tx) =>
+      appendSystemNote(tx, {
+        ownerId,
+        entityId: routineId,
+        content: args.questionNote,
+        metadata: { type: 'routine_stale', routine_id: routineId, run_id: runId },
+      }),
+    );
   }
   return out;
 }
