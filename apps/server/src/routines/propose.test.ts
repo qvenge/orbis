@@ -6,17 +6,17 @@
 // разбор envelope — часть контракта глагола, и проверять его в обход них значило бы
 // закрыть тестом путь, которым модель не ходит.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { entityThreadId, newId, type ProposeResult } from '@orbis/shared';
+import { entityThreadId, newId, type ProposeResult, pendingMessageId } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { rollbackRun } from '../agent-loop/rollback';
-import { closeRoutineRun } from '../agent-loop/verbs';
+import { closeRoutineRun, runAgentVerb } from '../agent-loop/verbs';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
-import { approvePending } from '../policy/pending';
+import { approvePending, rejectPending } from '../policy/pending';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { AGENT_VERB_NAMES, buildToolRegistry, WORKER_SCOPE_TOOLS } from '../tools/registry';
@@ -514,6 +514,117 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     expect(thirdResult.replayed).toBe(true);
     expect(thirdResult.pending_id).toBe(firstResult.pending_id);
     expect(thirdResult.operations).toBe(1);
+    expect(await pendingsInRoutineThread(routineId)).toBe(1);
+  });
+
+  test("нетерминальный отказ закрытия (id вызова занят action'ом шага) → CONFLICT БЕЗ гашения pending; повтор с новым id связывает прогон с тем же pending (replayed), approve исполняет (B2)", async () => {
+    // Реестр просит «передавай id (uuid)», а в контексте модели лежат uuid прошлых action'ов
+    // (history → last_steps[].action_id); совпадение даёт replayMismatch при ЖИВОМ прогоне.
+    // Прежняя компенсация гасила pending на любом отказе — и повтор отдавал replayed со
+    // ссылкой на отклонённый pending: план дня терялся тихо.
+    const { routineId, runId, ctx } = await liveRoutine();
+    const taskId = await seedTask('Цель занятого id');
+    const stepId = newId();
+    const step = await runAgentVerb(
+      {
+        db,
+        ownerId: owner,
+        subject: { kind: 'routine', routineId },
+        clock: () => T0,
+        sink: makeChatJournalSink(),
+      },
+      'orbis_run_step',
+      { run_id: runId, id: stepId, summary: 'entity_query: ok', external: false },
+    );
+    expect(step.status).toBe('ok');
+
+    const operations = [
+      {
+        tool: 'entity_update',
+        input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+      },
+    ];
+    const clash = await dispatchTool(ctx, 'orbis_propose', {
+      run_id: runId,
+      explanation: EXPLANATION,
+      id: stepId,
+      operations,
+    });
+    expectError(clash, 'CONFLICT');
+    expect(errorOf(clash).message).toContain('id вызова уже использован');
+    // Прогон жив, pending лежит и НЕ отклонён
+    expect((await aspectsOf(owner, runId))['orbis/agent-run']?.outcome).toBe('running');
+    expect(await pendingsInRoutineThread(routineId)).toBe(1);
+
+    const again = await dispatchTool(ctx, 'orbis_propose', {
+      run_id: runId,
+      explanation: EXPLANATION,
+      id: newId(),
+      operations,
+    });
+    expect(again.status).toBe('ok');
+    if (again.status !== 'ok') return;
+    const result = again.result as ProposeResult;
+    expect(result.replayed).toBe(true);
+    expect(await pendingsInRoutineThread(routineId)).toBe(1);
+    const run = (await aspectsOf(owner, runId))['orbis/agent-run'];
+    expect(run?.outcome).toBe('finished');
+    expect(run?.proposal).toEqual({ pending_id: result.pending_id, status: 'pending' });
+
+    // Предложение действующее: «Принять» исполняет его
+    const applied = await approvePending(db, {
+      ownerId: owner,
+      pendingId: result.pending_id,
+      clock: () => T0,
+    });
+    expect(applied.ok).toBe(true);
+    expect((await aspectsOf(owner, taskId))['orbis/task']?.status).toBe('planned');
+  });
+
+  test('лежащий pending уже отклонён → повтор предложения не replayed, а CONFLICT proposal_already_rejected; прогон не закрыт (B2)', async () => {
+    const { routineId, runId, ctx } = await liveRoutine();
+    const taskId = await seedTask('Цель отклонённого повтора');
+    const operations = [
+      {
+        tool: 'entity_update',
+        input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+      },
+    ];
+    // Первый вызов падает на закрытии занятым id → pending лежит, прогон жив
+    const stepId = newId();
+    await runAgentVerb(
+      {
+        db,
+        ownerId: owner,
+        subject: { kind: 'routine', routineId },
+        clock: () => T0,
+        sink: makeChatJournalSink(),
+      },
+      'orbis_run_step',
+      { run_id: runId, id: stepId, summary: 'entity_query: ok', external: false },
+    );
+    const clash = await dispatchTool(ctx, 'orbis_propose', {
+      run_id: runId,
+      explanation: EXPLANATION,
+      id: stepId,
+      operations,
+    });
+    expectError(clash, 'CONFLICT');
+    const pendingId = pendingMessageId(owner, `proposal:${runId}`);
+    // Владелец успел отклонить карточку с экрана
+    const rejected = await rejectPending(db, { ownerId: owner, pendingId, reason: 'owner' });
+    expect(rejected.ok).toBe(true);
+
+    const again = await dispatchTool(ctx, 'orbis_propose', {
+      run_id: runId,
+      explanation: EXPLANATION,
+      operations,
+    });
+    expectError(again, 'CONFLICT');
+    expect((errorOf(again).details as { reason?: string }).reason).toBe(
+      'proposal_already_rejected',
+    );
+    expect((await aspectsOf(owner, runId))['orbis/agent-run']?.outcome).toBe('running');
     expect(await pendingsInRoutineThread(routineId)).toBe(1);
   });
 

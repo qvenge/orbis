@@ -253,7 +253,7 @@ const REJECT_CONTENT: Record<RejectReason, string> = {
  * неизменяема, §4.6) — читаются как отказ владельца: до V1.8 отклонить pending могла
  * только его кнопка, так что это не догадка, а факт истории.
  */
-async function rejectedReason(tx: Tx, pendingId: string): Promise<RejectReason | undefined> {
+export async function rejectedReason(tx: Tx, pendingId: string): Promise<RejectReason | undefined> {
   const probe = JSON.stringify({ type: 'confirmation_rejected', rejects: pendingId });
   const rows = await tx.execute(
     sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,

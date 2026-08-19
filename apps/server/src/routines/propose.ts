@@ -39,7 +39,7 @@ import { chatMessages, entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import type { AspectsMap } from '../executor/normalize';
-import { createPending, rejectPending } from '../policy/pending';
+import { createPending, rejectedReason, rejectPending } from '../policy/pending';
 import type { ToolCallCtx, ToolDispatchResult } from '../tools/dispatch';
 
 /** Боевой синк журнала — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
@@ -97,15 +97,22 @@ function editsNoun(n: number): string {
  * при сбое закрытый прогон, который обещает владельцу предложение, а предложения нет —
  * тупик, из которого нечего нажать.
  *
- * Осечка в другую сторону — pending лёг, а прогон не закрылся — повтором НЕ чинится:
- * закрытие проваливается ровно тогда, когда прогон уже стал терминальным (подметание,
- * дедлайн), и второй вызов упрётся в то же предусловие `outcome:'running'`. Поэтому
- * сирота не допускается вовсе, двумя мерами:
+ * Осечка в другую сторону — pending лёг, а прогон не закрылся — повтором НЕ чинится,
+ * КОГДА закрытие провалилось терминально: прогон уже стал терминальным (подметание, дедлайн)
+ * или перестал быть нашим, и второй вызов упрётся в то же предусловие. Поэтому сирота не
+ * допускается вовсе, двумя мерами:
  *  - ПРЕДПРОВЕРКА прогона в той же транзакции ДО записи pending (`checkRun`): не `running`
  *    и это не наше же предложение — структурный CONFLICT, ничего не записано;
  *  - КОМПЕНСАЦИЯ субсекундной гонки: прогон стал терминальным между предпроверкой и
  *    закрытием — уже записанный pending гасится `rejectPending(reason:'stale')`, чтобы он
  *    не остался «принимаемым» (V1.8), и наружу идёт отказ закрытия.
+ * Компенсация сужена до ТЕРМИНАЛЬНОГО отказа (финальное ревью V1, B2): нетерминальный
+ * отказ закрытия — прежде всего занятый `id` вызова (replayMismatch: модель взяла uuid из
+ * истории прогонов) — прогон живым оставляет, и повтор с новым `id` обязан связать его с
+ * УЖЕ лежащим pending'ом; погашенный компенсацией pending превратил бы этот повтор в
+ * прогон finished с предложением, которое «Принять» уже не исполнит. Поэтому перед
+ * гашением прогон перечитывается, а в ветке существующего pending'а отклонённая карточка —
+ * не replay, а отказ.
  */
 export async function runPropose(
   ctx: ToolCallCtx,
@@ -219,6 +226,21 @@ export async function runPropose(
       .select({ id: chatMessages.id })
       .from(chatMessages)
       .where(eq(chatMessages.id, pendingId));
+    if (before.length > 0) {
+      // Лежащий pending уже отклонён (владелец с карточки, гашение, прошлая компенсация):
+      // связать с ним прогон значило бы закрыть его предложением, которое «Принять» не
+      // исполнит. Это не replay и не «предложи заново» — отказ владельцу нечем отменить.
+      const rejected = await rejectedReason(tx, pendingId);
+      if (rejected !== undefined) {
+        return {
+          error: err(
+            'CONFLICT',
+            `предложение этого прогона уже отклонено (${rejected}) — повторить его нельзя`,
+            { reason: 'proposal_already_rejected', run_id: routine.runId, rejected },
+          ),
+        };
+      }
+    }
     const n = operations.length;
     await createPending(tx, {
       threadId,
@@ -287,11 +309,21 @@ export async function runPropose(
     // причиной 'stale' — «предложение снято, потому что устарело», а не отказом владельца
     // (V1.8). Свою неудачу компенсация проглатывает: наружу идёт причина отказа закрытия,
     // а не вторая ошибка поверх неё.
-    await rejectPending(ctx.db, {
-      ownerId: ctx.actorUserId,
-      pendingId,
-      reason: 'stale',
+    //
+    // Гасим ТОЛЬКО если прогон и правда больше не наш живой (перечитываем — состояние
+    // авторитетнее текста отказа): нетерминальный отказ (занятый `id` вызова и т. п.)
+    // оставляет прогон running, а pending — ждать повтора с новым `id` (см. шапку).
+    const alive = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+      const row = await runById(tx, routine.runId);
+      return row !== null && row.run.routine_id === routine.id && row.run.outcome === 'running';
     });
+    if (!alive) {
+      await rejectPending(ctx.db, {
+        ownerId: ctx.actorUserId,
+        pendingId,
+        reason: 'stale',
+      });
+    }
     return closed;
   }
 
