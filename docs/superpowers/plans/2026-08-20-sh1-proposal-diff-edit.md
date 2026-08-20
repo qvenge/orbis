@@ -495,7 +495,13 @@ export function buildEditedOperations(operations: unknown[], edits: ProposalEdit
 //   'edit_key_missing'       — (aspect?, field) нет в исходной операции: у аспектных — ключа в op.input.aspects[aspect],
 //                              у core — поля из словаря CORE_FIELD_LABELS (lifecycle.ts:914-921) нет в op.input;
 //   'edit_body_missing'      — body-правка там, где body не было (запись без CAS — Б3);
-//   'edit_duplicate'         — два edits на один ключ (index, aspect??'', field) или два body на один index
+//   'edit_duplicate'         — два edits на один ключ (index, aspect??'', field) или два body на один index;
+//   'edit_row_not_editable'  — правка адресована операции с tool !== 'entity_update' (граница спеки
+//                              «Строки entity_create не правятся», спека :404) — рулинг ревью Задачи 3;
+//   'edit_source_unsupported'— тул без exec-контракта или битый элемент payload'а (fail-closed, рулинг П-1);
+//   'edit_result_invalid'    — собранная операция не проходит контракт СВОЕГО тула (рулинг П-1:
+//                              валидировать схемой тула операции, а не безусловно entityUpdateExecInput —
+//                              payload не однороден, entity_create идёт без предусловий, propose.ts:200-205)
 ```
   Сборка: body-правка кладёт `bodyDoc` и **УДАЛЯЕТ ключ `body`** (XOR — refine
   `contracts/tools.ts:139`), `expectedUpdatedAt` ПЕРЕНОСИТСЯ как есть (Ш1.6,
