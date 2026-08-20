@@ -311,6 +311,12 @@ export async function closeOpenOfRun(
           status: reason,
           decided_at: now,
           ...(run.proposal.mismatches !== undefined && { mismatches: run.proposal.mismatches }),
+          // Происхождение предложения не зависит от его судьбы (Ш1.8): погашенное
+          // родилось из правки владельца ровно так же, как живое, и потеряв поле здесь,
+          // мы оборвали бы цепочку «кто чей потомок» молча — патч типом не проверяется
+          ...(run.proposal.edited_from !== undefined && {
+            edited_from: run.proposal.edited_from,
+          }),
         },
       },
       precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [run.proposal] }],
@@ -1186,6 +1192,11 @@ async function settleProposal(
         status: args.status,
         decided_at: deps.clock().toISOString(),
         ...(mismatches !== undefined && { mismatches }),
+        // См. closeOpenOfRun: решение владельца меняет судьбу предложения, но не его
+        // происхождение — след правки (Ш1.8) переживает и approve, и rejected, и stale
+        ...(args.proposal.edited_from !== undefined && {
+          edited_from: args.proposal.edited_from,
+        }),
       },
     },
     precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [args.proposal] }],

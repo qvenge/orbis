@@ -3,7 +3,13 @@
 // незакрытого от прошлых прогонов, стоп-кран после трёх сбоев, системная запись в
 // тред рутины и хвост истории.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { entityThreadId, isManualBucket, routineRunBatchId, routineRunId } from '@orbis/shared';
+import {
+  entityThreadId,
+  isManualBucket,
+  newId,
+  routineRunBatchId,
+  routineRunId,
+} from '@orbis/shared';
 import { eq } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { runsOfParent } from '../agent-loop/queries';
@@ -24,6 +30,7 @@ import {
 } from './constants';
 import {
   appendSystemNote,
+  decideProposal,
   pauseIfFailing,
   type RoutineDeps,
   routineHistory,
@@ -67,8 +74,15 @@ async function threadRows(routineId: string) {
   );
 }
 
-/** Живое предложение прошлого прогона: настоящий путь глагола, а не подложенный аспект. */
-async function seedProposal(routineId: string, bucket: string): Promise<string> {
+/**
+ * Живое предложение прошлого прогона: настоящий путь глагола, а не подложенный аспект.
+ * Возвращает и цель правки (`taskId`): предусловие снято по ЕЙ, и разойтись с графом
+ * (путь `stale`) можно только тронув её.
+ */
+async function seedProposal(
+  routineId: string,
+  bucket: string,
+): Promise<{ runId: string; taskId: string }> {
   const { runId } = await seedRoutineRun(owner, { routineId, bucket });
   const task = await seedEntity(owner, {
     title: `Задача для ${bucket}`,
@@ -89,13 +103,13 @@ async function seedProposal(routineId: string, bucket: string): Promise<string> 
     ],
   });
   if (r.status !== 'ok') throw new Error(`seedProposal: ${JSON.stringify(r)}`);
-  return runId;
+  return { runId, taskId: task.id };
 }
 
 describe('supersedeOpen: новый прогон гасит незакрытое (V1.8)', () => {
   test('pending-предложение прошлого прогона → отклонено как «заменено», статус на прогоне superseded', async () => {
     const routineId = await seedRoutine(owner);
-    const oldRunId = await seedProposal(routineId, '2026-08-16T07:00');
+    const { runId: oldRunId } = await seedProposal(routineId, '2026-08-16T07:00');
     const { runId: newRunId } = await seedRoutineRun(owner, {
       routineId,
       bucket: '2026-08-17T07:00',
@@ -153,7 +167,7 @@ describe('supersedeOpen: новый прогон гасит незакрытое
 
   test('предложение уже отклонил владелец (reject-строка reason owner), статус на прогоне ещё pending → гашение НЕ переписывает его на superseded', async () => {
     const routineId = await seedRoutine(owner);
-    const oldRunId = await seedProposal(routineId, '2026-08-16T07:00');
+    const { runId: oldRunId } = await seedProposal(routineId, '2026-08-16T07:00');
     const run = (await aspectsOf(owner, oldRunId))['orbis/agent-run'] as {
       proposal?: { pending_id: string; status: string };
     };
@@ -395,7 +409,7 @@ describe('appendSystemNote и routineHistory', () => {
 
   test('routineHistory: проекции предложения и ответа владельца заполнены', async () => {
     const routineId = await seedRoutine(owner);
-    const oldRunId = await seedProposal(routineId, '2026-08-16T07:00');
+    const { runId: oldRunId } = await seedProposal(routineId, '2026-08-16T07:00');
     const { runId: answeredId } = await seedRoutineRun(owner, {
       routineId,
       bucket: '2026-08-17T07:00',
@@ -814,5 +828,105 @@ describe('startManualRun: ручной прогон — свой ключ, не 
       tx.select({ createdAt: entities.createdAt }).from(entities).where(eq(entities.id, out.runId)),
     );
     expect(rows[0]?.createdAt.toISOString()).toBe(T0.toISOString());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Правка предложения (Ш1.8): `edited_from` — след того, что предложение родилось из
+// правки владельца. Писателя поля ещё нет, но оба пересборщика объекта `proposal`
+// (settleProposal и closeOpenOfRun) обязаны протаскивать его уже сейчас: патч они
+// собирают руками, `patchAspect` принимает `Record<string, unknown>` — забытое поле
+// оторвалось бы молча, и тип этого не поймает.
+// ---------------------------------------------------------------------------
+
+describe('edited_from переживает решение по предложению (Ш1.8)', () => {
+  /** Предложение прогона так, как его видит граф. */
+  async function proposalOf(runId: string): Promise<Record<string, unknown>> {
+    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as {
+      proposal?: Record<string, unknown>;
+    };
+    if (run.proposal === undefined) throw new Error(`у прогона ${runId} нет предложения`);
+    return run.proposal;
+  }
+
+  /** Помечает живое предложение как рождённое правкой — так же, как это сделает писатель. */
+  async function markEdited(runId: string): Promise<string> {
+    const editedFrom = newId();
+    await patchRun(runId, { proposal: { ...(await proposalOf(runId)), edited_from: editedFrom } });
+    return editedFrom;
+  }
+
+  test('settleProposal сохраняет edited_from при пометке approved', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId } = await seedProposal(routineId, '2026-08-16T07:00');
+    const editedFrom = await markEdited(runId);
+
+    const decided = await decideProposal(deps(), { ownerId: owner, runId, decision: 'approve' });
+    expect(decided.status).toBe('applied');
+
+    const proposal = await proposalOf(runId);
+    expect(proposal.status).toBe('approved');
+    expect(proposal.edited_from).toBe(editedFrom);
+  });
+
+  test('settleProposal сохраняет edited_from при пометке stale (предусловие разошлось)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId, taskId } = await seedProposal(routineId, '2026-08-16T07:00');
+    const editedFrom = await markEdited(runId);
+    // Владелец закрыл задачу сам — снятое предусловие `status in ['inbox']` больше не держится
+    const done = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: taskId, aspects: { 'orbis/task': { status: 'done' } } },
+        },
+      ],
+      clock: () => T0,
+    });
+    if (!done.ok) throw new Error(`закрытие задачи: ${done.error.code}`);
+
+    const decided = await decideProposal(deps(), { ownerId: owner, runId, decision: 'approve' });
+    expect(decided.status).toBe('stale');
+
+    const proposal = await proposalOf(runId);
+    expect(proposal.status).toBe('stale');
+    expect(proposal.mismatches).toBeDefined();
+    // Расхождения дописываются тем же патчем — и не должны вытеснить след правки
+    expect(proposal.edited_from).toBe(editedFrom);
+  });
+
+  test('settleProposal сохраняет edited_from при пометке rejected', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId } = await seedProposal(routineId, '2026-08-16T07:00');
+    const editedFrom = await markEdited(runId);
+
+    const decided = await decideProposal(deps(), { ownerId: owner, runId, decision: 'reject' });
+    expect(decided.status).toBe('rejected');
+
+    const proposal = await proposalOf(runId);
+    expect(proposal.status).toBe('rejected');
+    expect(proposal.edited_from).toBe(editedFrom);
+  });
+
+  test('closeOpenOfRun сохраняет edited_from при гашении superseded', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId: oldRunId } = await seedProposal(routineId, '2026-08-16T07:00');
+    const editedFrom = await markEdited(oldRunId);
+    const { runId: newRunId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-17T07:00',
+      startedAt: minutes(10),
+    });
+
+    expect(
+      await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newRunId }),
+    ).toEqual({ superseded: 1, staled: 0 });
+
+    const proposal = await proposalOf(oldRunId);
+    expect(proposal.status).toBe('superseded');
+    expect(proposal.edited_from).toBe(editedFrom);
   });
 });

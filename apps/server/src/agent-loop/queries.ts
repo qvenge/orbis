@@ -398,6 +398,9 @@ export function runSummary(row: RunRow): RunSummary {
         pending_id: r.proposal.pending_id,
         status: r.proposal.status,
         ...(r.proposal.decided_at !== undefined && { decided_at: r.proposal.decided_at }),
+        // След правки владельца (Ш1.8) — часть судьбы предложения, а не разбор
+        // расхождений: история рутины обязана отличать «принял» от «принял, переписав»
+        ...(r.proposal.edited_from !== undefined && { edited_from: r.proposal.edited_from }),
       },
     }),
   };

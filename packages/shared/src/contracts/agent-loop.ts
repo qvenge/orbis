@@ -111,7 +111,15 @@ export interface RunSummary {
   bucket?: string;
   attempt?: number;
   fail_note?: string;
-  proposal?: { pending_id: string; status: ProposalStatus; decided_at?: string };
+  // `edited_from` едет вместе со статусом (Ш1.8): «принято» и «принято с правками» —
+  // разная обратная связь, и без этого поля следующий прогон предложил бы то же слово в
+  // слово. Расхождения (`mismatches`) в сводку по-прежнему не едут.
+  proposal?: {
+    pending_id: string;
+    status: ProposalStatus;
+    decided_at?: string;
+    edited_from?: string;
+  };
 }
 
 /** Строка очереди исполнителя: тикет + чей он проект + чем кончился прошлый прогон. */

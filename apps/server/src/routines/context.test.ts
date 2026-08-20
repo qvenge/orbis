@@ -177,4 +177,38 @@ describe('buildRoutineContext: история вместо треда (V1.5, Р-
     expect(text).toContain('Не переноси, я сам напишу.');
     expect(text).toContain('AI-провайдер недоступен');
   });
+
+  test('принятое предложение: с edited_from — «принято с правками владельца», без него — прежняя строка байт-в-байт (Ш1.8)', async () => {
+    const routineId = await seedRoutine(owner);
+    const approved = (edited_from?: string): RoutineHistoryItem => ({
+      run: summary({
+        outcome: 'finished',
+        bucket: '2026-08-15T07:00',
+        report: 'Перенесу три просроченные задачи на сегодня.',
+        proposal: {
+          pending_id: RUN_ID,
+          status: 'approved',
+          ...(edited_from !== undefined && { edited_from }),
+        },
+      }),
+      proposalStatus: 'approved',
+      explanation: 'Перенесу три просроченные задачи на сегодня.',
+    });
+    /** Строка прогона — последняя в блоке истории (перед ней только шапка блока). */
+    const lineOf = async (item: RoutineHistoryItem): Promise<string | undefined> => {
+      const { messages } = await contextOf(routineId, [item]);
+      return (messages[0]?.content ?? '').split('\n').at(-1);
+    };
+
+    // Правку владельца следующий прогон обязан УВИДЕТЬ: без неё он предложит то же слово
+    // в слово, а «владелец принял» прочитается как «всё было верно»
+    expect(await lineOf(approved('019e4466-bbbb-7e07-b5d4-64be9721da51'))).toBe(
+      '— 2026-08-15T07:00: завершён; предлагал: «Перенесу три просроченные задачи на сегодня.»; предложение: принято с правками владельца',
+    );
+    // Прогон без правки не меняется ни на байт: поле опционально, и старые прогоны
+    // обязаны давать модели ровно тот же текст, что до Ш1
+    expect(await lineOf(approved())).toBe(
+      '— 2026-08-15T07:00: завершён; предлагал: «Перенесу три просроченные задачи на сегодня.»; предложение: владелец принял',
+    );
+  });
 });

@@ -110,6 +110,20 @@ function quote(text: string): string {
 }
 
 /**
+ * Судьба предложения человеческим языком. Отдельная функция, а не индекс в словаре,
+ * потому что «принято» и «принято С ПРАВКАМИ» (Ш1.8) — разная обратная связь: первое
+ * модель читает как «текст был верен» и повторит его слово в слово, второе — как «текст
+ * пришлось переписать». Правка — не статус, а происхождение живого предложения
+ * (`edited_from`), поэтому подпись подменяется здесь, а PROPOSAL_STATUS_LABEL остаётся
+ * словарём ровно пяти статусов схемы.
+ */
+function proposalLabel(status: ProposalStatus, proposal: RunSummary['proposal']): string {
+  return status === 'approved' && proposal?.edited_from !== undefined
+    ? 'принято с правками владельца'
+    : PROPOSAL_STATUS_LABEL[status];
+}
+
+/**
  * Одна строка истории: слот, исход и то, что от прогона осталось владельцу, — в порядке
  * «что рутина сделала → чем это кончилось». Строка на прогон, а не абзац: семь абзацев
  * прозы модель читает хуже семи строк одинаковой формы.
@@ -123,7 +137,7 @@ function historyLine(item: RoutineHistoryItem): string {
   const explanation = item.explanation ?? (r.proposal !== undefined ? r.report : undefined);
   if (explanation !== undefined) parts.push(`предлагал: ${quote(explanation)}`);
   const status = item.proposalStatus ?? r.proposal?.status;
-  if (status !== undefined) parts.push(`предложение: ${PROPOSAL_STATUS_LABEL[status]}`);
+  if (status !== undefined) parts.push(`предложение: ${proposalLabel(status, r.proposal)}`);
   // Отчёт прогона БЕЗ предложения — это отчёт режима act, а не проза предложения
   if (r.proposal === undefined && r.report !== undefined) parts.push(`отчёт: ${quote(r.report)}`);
   if (r.checkpoint !== undefined) parts.push(`спрашивал: ${quote(r.checkpoint.question)}`);

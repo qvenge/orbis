@@ -209,6 +209,41 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
     });
   });
 
+  test('edited_from предложения едет в сводку (Ш1.8): следующий прогон обязан узнать, что его текст правили', async () => {
+    const owner = freshUserId();
+    const routineId = await seedRoutine(owner, { title: 'Рутина правки' });
+    const pendingId = newId();
+    const editedFrom = newId();
+    const { runId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-17T07:00',
+      run: {
+        outcome: 'finished',
+        finished_at: iso(T0),
+        report: 'Перенесу три просроченные задачи на сегодня.',
+        proposal: {
+          pending_id: pendingId,
+          status: 'approved',
+          decided_at: iso(T0),
+          edited_from: editedFrom,
+        },
+      },
+    });
+
+    const rows = await withIdentity(db, owner, (tx) =>
+      runsForBucket(tx, routineId, '2026-08-17T07:00'),
+    );
+    const row = rows.find((x) => x.id === runId);
+    if (row === undefined) throw new Error('прогон не найден');
+
+    expect(runSummary(row).proposal).toEqual({
+      pending_id: pendingId,
+      status: 'approved',
+      decided_at: iso(T0),
+      edited_from: editedFrom,
+    });
+  });
+
   test('грантовая сводка рутинных ключей не заводит: `?` значит «этого не было»', async () => {
     const owner = freshUserId();
     const ticket = await seedEntity(owner, {

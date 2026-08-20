@@ -337,4 +337,21 @@ describe('orbis/agent-run V1 (V1.4)', () => {
       }).success,
     ).toBe(false);
   });
+
+  test('proposal.edited_from: uuid принимается, мусор отвергается, отсутствие поля валидно (Ш1.8)', () => {
+    const proposal = { pending_id: '019a0000-0000-7000-8000-000000000002', status: 'approved' };
+    // След правки владельца: id ИСХОДНОГО предложения на том, что родилось из его правки
+    expect(
+      agentRunAspectSchema.safeParse({
+        ...base,
+        proposal: { ...proposal, edited_from: '019a0000-0000-7000-8000-000000000003' },
+      }).success,
+    ).toBe(true);
+    expect(
+      agentRunAspectSchema.safeParse({ ...base, proposal: { ...proposal, edited_from: 'не-uuid' } })
+        .success,
+    ).toBe(false);
+    // Прогоны до Ш1 поля не несут вовсе — бэкфилла нет, и они обязаны остаться валидными
+    expect(agentRunAspectSchema.safeParse({ ...base, proposal }).success).toBe(true);
+  });
 });
