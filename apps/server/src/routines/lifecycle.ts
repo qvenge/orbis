@@ -33,6 +33,7 @@ import {
   newId,
   type PreconditionMismatch,
   type ProposalStatus,
+  pendingMessageId,
   routineRunBatchId,
   routineRunId,
 } from '@orbis/shared';
@@ -54,20 +55,25 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
 import type { LLMProvider } from '../llm/types';
 import {
+  acquirePendingLock,
   approvePending,
+  createPending,
   type RejectReason,
   rejectedReason,
   rejectPending,
+  rejectPendingTx,
 } from '../policy/pending';
 import { wallClockIn } from '../recurring/materialize';
 import {
   CONSECUTIVE_FAILURES_TO_PAUSE,
   CORE_FIELD_LABELS,
+  editsNoun,
   MAX_ATTEMPTS,
   RETRY_DELAYS_MS,
   ROUTINE_HISTORY_TAIL,
 } from './constants';
 import type { RoutineHistoryItem } from './context';
+import { buildEditedOperations, editsHash, isEmptyEdits, type ProposalEdits } from './edits';
 import { processRoutineLocks, type RoutineLocks } from './locks';
 
 /** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
@@ -282,25 +288,11 @@ export async function closeOpenOfRun(
   const now = deps.clock().toISOString();
 
   if (run.proposal?.status === 'pending') {
-    const rejected = await rejectPending(deps.db, {
-      ownerId,
-      pendingId: run.proposal.pending_id,
-      reason,
-    });
-    if (!rejected.ok) {
-      // Карточка исчезла или уже исполнена: статус прогона тогда правит не гашение, а
-      // decideProposal (Задача 11) — переписывать его здесь значило бы соврать про судьбу
-      console.error(`[routines] предложение не отклонено (${reason}):`, rejected.error);
-      return out;
-    }
-    if (rejected.alreadyRejected && rejected.reason !== reason) {
-      // Между нашим чтением («ждёт решения») и отказом предложение уже отклонил кто-то
-      // другой — владелец кнопкой или проверка предусловий (Задача 11). Статус на прогоне
-      // пишет тот, чей reason стоит в reject-строке (она — источник правды, V1.8): наше
-      // «заменено» поверх его «отклонил» соврало бы владельцу про его же решение.
-      // Свой прежний reason — недописанный статус прошлого прохода, дописываем.
-      return out;
-    }
+    const closed = await closeProposalOfRun(deps, { ownerId, proposal: run.proposal, reason });
+    // Гасить нечего: карточка исчезла, уже исполнена или решена ЧУЖОЙ причиной. Статус на
+    // прогоне пишет тот, чей reason стоит в reject-строке (она — источник правды, V1.8):
+    // наше «заменено» поверх его «отклонил» соврало бы владельцу про его же решение.
+    if (closed === null) return out;
     // `proposal` — вложенный объект, а merge аспекта пополевой: патчим его целиком,
     // иначе pending_id пропал бы вместе со ссылкой на карточку. Предусловие — тот же
     // объект, каким мы его прочитали (сравнение по JSON-форме, executor.ts): вложенное
@@ -313,16 +305,14 @@ export async function closeOpenOfRun(
       aspect: 'orbis/agent-run',
       patch: {
         proposal: {
-          pending_id: run.proposal.pending_id,
+          pending_id: closed.pendingId,
           status: reason,
           decided_at: now,
-          ...(run.proposal.mismatches !== undefined && { mismatches: run.proposal.mismatches }),
+          ...(closed.mismatches !== undefined && { mismatches: closed.mismatches }),
           // Происхождение предложения не зависит от его судьбы (Ш1.8): погашенное
           // родилось из правки владельца ровно так же, как живое, и потеряв поле здесь,
           // мы оборвали бы цепочку «кто чей потомок» молча — патч типом не проверяется
-          ...(run.proposal.edited_from !== undefined && {
-            edited_from: run.proposal.edited_from,
-          }),
+          ...(closed.editedFrom !== undefined && { edited_from: closed.editedFrom }),
         },
       },
       precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [run.proposal] }],
@@ -362,6 +352,70 @@ export async function closeOpenOfRun(
     );
   }
   return out;
+}
+
+/**
+ * Предел цепочки правок, за которой идёт гашение. Каждое звено — это один крэш между
+ * шагами лестницы, так что двух уже почти не бывает; предел стоит не ради длины, а чтобы
+ * порванные данные (ссылка на саму себя) не сделали гашение бесконечным.
+ */
+const MAX_EDIT_CHAIN = 8;
+
+/**
+ * Кого гасить у прогона и чью судьбу писать (V1.8 + Р-10). Обычно это само предложение
+ * прогона, но указатель мог остаться на ИСХОДНОМ, которое владелец поправил, а живёт
+ * правленое: перевод указателя идёт отдельной транзакцией, и крэш между ними — штатное
+ * окно. Не пойди гашение за правкой, новый прогон погасил бы мертвеца и оставил живое
+ * предложение, на которое никто не указывает: владелец видел бы кнопку «Принять» у плана,
+ * которого рутина уже не предлагает.
+ *
+ * `null` — гасить нечего: карточка исчезла, уже исполнена или решена ЧУЖОЙ причиной.
+ * Иначе — предложение, чью судьбу вызывающий и записывает на прогон.
+ */
+async function closeProposalOfRun(
+  deps: RoutineWriteDeps,
+  args: {
+    ownerId: string;
+    proposal: RunProposal;
+    reason: Extract<RejectReason, 'superseded' | 'stale'>;
+  },
+): Promise<{ pendingId: string; editedFrom?: string; mismatches?: ProposalMismatchNote[] } | null> {
+  const { ownerId, reason } = args;
+  let pendingId = args.proposal.pending_id;
+  let editedFrom = args.proposal.edited_from;
+  for (let hop = 0; hop < MAX_EDIT_CHAIN; hop++) {
+    const rejected = await rejectPending(deps.db, { ownerId, pendingId, reason });
+    if (!rejected.ok) {
+      // Карточка исчезла или уже исполнена: статус прогона тогда правит не гашение, а
+      // decideProposal — переписывать его здесь значило бы соврать про судьбу
+      console.error(`[routines] предложение не отклонено (${reason}):`, rejected.error);
+      return null;
+    }
+    if (!rejected.alreadyRejected || rejected.reason === reason) {
+      // Погасили сами либо дописываем недописанный статус прошлого прохода
+      return {
+        pendingId,
+        ...(editedFrom !== undefined && { editedFrom }),
+        // Разбор расхождений принадлежит ТОМУ предложению, у которого он снят: переносить
+        // его на правленое значило бы приписать ему чужие расхождения
+        ...(hop === 0 &&
+          args.proposal.mismatches !== undefined && {
+            mismatches: args.proposal.mismatches,
+          }),
+      };
+    }
+    // Чужое решение (владелец кнопкой, проверка предусловий) старше нашего
+    if (rejected.reason !== 'edited') return null;
+    const child = await withIdentity(deps.db, ownerId, (tx) => editedChildOf(tx, pendingId));
+    if (child === undefined) {
+      console.error(`[routines] предложение ${pendingId} погашено правкой без правленого`);
+      return null;
+    }
+    editedFrom = pendingId;
+    pendingId = child;
+  }
+  console.error(`[routines] цепочка правок длиннее ${MAX_EDIT_CHAIN} — гашение прекращено`);
+  return null;
 }
 
 /** Тип системной записи стоп-крана в треде рутины (`metadata.type`). */
@@ -1027,24 +1081,154 @@ async function runRowAnyArchive(
  * обязательство сервера, а не вежливость клиента. Указатель прогона уехал на другое —
  * `replaced`; исполнить сохранённый payload, которого владелец не читал, нельзя ни при
  * каком удобстве.
+ *
+ * Правки (Ш1.5) едут только с «Принять» и только непустые: пустая правка — это ровно
+ * сегодняшнее принятие, без второго предложения и без лестницы.
  */
 export async function decideProposal(
   deps: RoutineWriteDeps,
-  args: { ownerId: string; runId: string; pendingId: string; decision: 'approve' | 'reject' },
+  args: {
+    ownerId: string;
+    runId: string;
+    pendingId: string;
+    decision: 'approve' | 'reject';
+    /** Что владелец поправил в предложении перед принятием (Ш1.4). */
+    edits?: ProposalEdits;
+  },
 ): Promise<DecideProposalResult> {
-  const proposal = await readProposal(deps.db, args.ownerId, args.runId);
-  // Сверка ДО проверки статуса: живое предложение может быть уже решено, и тогда владелец,
-  // ткнувший в старую карточку, всё равно обязан узнать не «твоё решено», а «прогон живёт
-  // другим» — иначе он прочтёт чужую судьбу как судьбу своего предложения.
-  if (args.pendingId !== proposal.pending_id) {
-    return replacedProposal(deps.db, args.ownerId, args.pendingId, proposal);
+  // Пустая правка = правок нет (Развилка 12): клиент вправе слать `{}`, но заводить на
+  // ней второе предложение значило бы плодить копии на каждом «Принять» без изменений
+  const edits = args.edits !== undefined && !isEmptyEdits(args.edits) ? args.edits : undefined;
+  if (args.decision === 'reject' && edits !== undefined) {
+    // Отказ ничего не применяет, и принять правки «на память» некуда: журнал append-only,
+    // а вид, будто они учтены, — худшее, что можно ответить владельцу
+    throw new ExecError(
+      'VALIDATION',
+      'правки едут только с «Принять»: отклонение ничего не применяет',
+      { reason: 'edits_on_reject' },
+    );
   }
+
+  const live = await readProposal(deps.db, args.ownerId, args.runId);
+  const addressed = await addressedProposal(deps, { ...args, edits, live });
+  if (addressed.kind === 'answer') return addressed.result;
+  // Возобновление (Р-10): правленое предложение — наше, и решать по нему заново нечего,
+  // надо ДОВЕСТИ применение. Статус при этом не проверяем: он уже может быть `approved`
+  // (двойной тап), и ответ «уже решено» скрыл бы от владельца исход его же правки.
+  if (addressed.kind === 'resume') {
+    return approveProposal(deps, args.ownerId, args.runId, addressed.proposal);
+  }
+
+  const proposal = addressed.proposal;
   if (proposal.status !== 'pending') {
     return { status: 'already', proposalStatus: proposal.status };
   }
-  return args.decision === 'approve'
+  if (args.decision === 'reject') {
+    return rejectProposal(deps, args.ownerId, args.runId, proposal);
+  }
+  return edits === undefined
     ? approveProposal(deps, args.ownerId, args.runId, proposal)
-    : rejectProposal(deps, args.ownerId, args.runId, proposal);
+    : editAndApprove(deps, {
+        ownerId: args.ownerId,
+        runId: args.runId,
+        proposal,
+        edits,
+      });
+}
+
+/**
+ * Чем кончилось приведение адреса решения к тому, чем прогон живёт на самом деле.
+ *
+ * `decide` — адрес и указатель сошлись, решаем это предложение обычным порядком;
+ * `resume` — адресованное погашено ЭТОЙ ЖЕ правкой, и её правленое предложение надо
+ * доводить, а не решать заново; `answer` — решать нечего, ответ готов.
+ */
+type AddressedProposal =
+  | { kind: 'decide'; proposal: RunProposal }
+  | { kind: 'resume'; proposal: RunProposal }
+  | { kind: 'answer'; result: DecideProposalResult };
+
+/**
+ * Приведение адреса решения к указателю прогона — обе половины правила возобновления
+ * (Ш1.5, Р-10).
+ *
+ * Лестница правки физически не может быть одной транзакцией (перевод указателя идёт через
+ * executor, а тот открывает свою), поэтому состояние «исходное погашено, правленое лежит,
+ * указатель не переехал» — не экзотика, а штатное крэш-окно. Довести его обязан ЛЮБОЙ, кто
+ * на него наткнулся, с какой бы стороны ни пришёл:
+ *  - адресовано ПРАВЛЕНОЕ, а указатель на его мёртвом родителе → доводим шаг 2 и решаем
+ *    правленое, как если бы указатель переехал вовремя;
+ *  - адресовано ИСХОДНОЕ, погашенное правкой → у него есть дитя; доводим шаг 2 и либо
+ *    доводим применение (правка та же — владелец нажал второй раз), либо честно отвечаем
+ *    «заменено» с адресом живого. Ответ `replaced` на МЁРТВОЕ замкнул бы круг: экран
+ *    пошёл бы решать по нему и снова получил бы то же самое.
+ */
+async function addressedProposal(
+  deps: RoutineWriteDeps,
+  args: {
+    ownerId: string;
+    runId: string;
+    pendingId: string;
+    edits?: ProposalEdits;
+    live: RunProposal;
+  },
+): Promise<AddressedProposal> {
+  const { ownerId, runId, pendingId, live } = args;
+
+  if (pendingId === live.pending_id) {
+    // Быстрый путь. Одна проба всё же нужна: адресованное могла погасить правка, чей шаг 2
+    // не дошёл, — тогда решать по нему нечего, а его дитя ждёт указателя. Авторитетную
+    // проверку делает сама лестница под замком; здесь — как fast-path у approvePending.
+    const reason = await withIdentity(deps.db, ownerId, (tx) => rejectedReason(tx, pendingId));
+    if (reason !== 'edited') return { kind: 'decide', proposal: live };
+    return takeoverEdited(deps, args, live);
+  }
+
+  // Адресовано дитя живого: правка прошла, а указатель не переехал
+  const parent = await withIdentity(deps.db, ownerId, (tx) => editedFromOf(tx, pendingId));
+  if (parent !== undefined && parent === live.pending_id) {
+    const moved = await pointAtEdited(deps, { ownerId, runId, from: live, childId: pendingId });
+    return moved.pending_id === pendingId
+      ? { kind: 'decide', proposal: moved }
+      : { kind: 'answer', result: await replacedProposal(deps.db, ownerId, pendingId, moved) };
+  }
+
+  const reason = await withIdentity(deps.db, ownerId, (tx) => rejectedReason(tx, pendingId));
+  if (reason === 'edited') return takeoverEdited(deps, args, live);
+  return { kind: 'answer', result: replacedBy(live, reason ?? 'superseded') };
+}
+
+/**
+ * Адресованное предложение погашено ПРАВКОЙ — значит у него есть дитя (гонку за родителя
+ * выигрывает ровно один, и шаг 1 атомарен, поэтому дитя единственно по построению).
+ * Доводим шаг 2 и решаем, наша ли это правка: id дитяти детерминирован парой «родитель +
+ * личность правки», так что совпадение id и означает «та же самая правка».
+ */
+async function takeoverEdited(
+  deps: RoutineWriteDeps,
+  args: { ownerId: string; runId: string; pendingId: string; edits?: ProposalEdits },
+  live: RunProposal,
+): Promise<Extract<AddressedProposal, { kind: 'resume' | 'answer' }>> {
+  const { ownerId, runId, pendingId, edits } = args;
+  const child = await withIdentity(deps.db, ownerId, (tx) => editedChildOf(tx, pendingId));
+  if (child === undefined) {
+    // Причина стоит, а дитяти нет: чинить нечем, но и врать про судьбу не станем
+    console.error(`[routines] предложение ${pendingId} погашено правкой без правленого`);
+    return { kind: 'answer', result: replacedBy(live, 'edited') };
+  }
+  const current =
+    live.pending_id === pendingId
+      ? await pointAtEdited(deps, { ownerId, runId, from: live, childId: child })
+      : live;
+  if (current.pending_id !== child) {
+    // Указатель ушёл ещё дальше (цепочка правок либо гашение новым прогоном): чинит его
+    // следующий заход владельца — по одному звену за раз
+    return { kind: 'answer', result: replacedBy(current, 'edited') };
+  }
+  const mine = edits !== undefined && editedPendingId(ownerId, pendingId, edits) === child;
+  return mine
+    ? { kind: 'resume', proposal: current }
+    : { kind: 'answer', result: replacedBy(current, 'edited') };
 }
 
 /**
@@ -1062,12 +1246,242 @@ async function replacedProposal(
   live: RunProposal,
 ): Promise<DecideProposalResult> {
   const reason = await withIdentity(db, ownerId, (tx) => rejectedReason(tx, addressedId));
+  return replacedBy(live, reason ?? 'superseded');
+}
+
+function replacedBy(live: RunProposal, reason: RejectReason): DecideProposalResult {
   return {
     status: 'replaced',
     livePendingId: live.pending_id,
     liveStatus: live.status,
-    reason: reason ?? 'superseded',
+    reason,
   };
+}
+
+/**
+ * Ключ дедупликации правленого предложения — «какую правку и какого предложения». Из него
+ * `createPending` считает PK, поэтому двойной тап по «Принять» попадает в ТО ЖЕ
+ * предложение и в тот же батч, а не применяет правку дважды.
+ */
+function editDedupeKey(parentId: string, edits: ProposalEdits): string {
+  return `edit:${parentId}:${editsHash(edits)}`;
+}
+
+function editedPendingId(ownerId: string, parentId: string, edits: ProposalEdits): string {
+  return pendingMessageId(ownerId, editDedupeKey(parentId, edits));
+}
+
+/**
+ * Правленое предложение, рождённое из этого (Ш1.5) — контейнмент-проба по `edited_from`
+ * (индекс `chat_messages_metadata_gin`). `LIMIT 1` честен: дитя единственно по построению.
+ */
+async function editedChildOf(tx: Tx, parentId: string): Promise<string | undefined> {
+  const probe = JSON.stringify({ pending: { edited_from: parentId } });
+  const rows = await tx.execute(
+    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
+  );
+  const row = (rows as unknown as Array<Record<string, unknown>>)[0];
+  const id = (row?.metadata as { pending?: { id?: unknown } } | undefined)?.pending?.id;
+  return typeof id === 'string' ? id : undefined;
+}
+
+/** Предложение, из правки которого рождено это; `undefined` — оно не правленое. */
+async function editedFromOf(tx: Tx, pendingId: string): Promise<string | undefined> {
+  const probe = JSON.stringify({ pending: { id: pendingId } });
+  const rows = await tx.execute(
+    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
+  );
+  const row = (rows as unknown as Array<Record<string, unknown>>)[0];
+  const from = (row?.metadata as { pending?: { edited_from?: unknown } } | undefined)?.pending
+    ?.edited_from;
+  return typeof from === 'string' ? from : undefined;
+}
+
+/** Чем кончился шаг 1 лестницы — гашение исходного и рождение правленого одной транзакцией. */
+type EditStep1 =
+  | { kind: 'created' }
+  /** Исходное погасили раньше нас — своей же правкой (гонка, повтор) или чужим решением. */
+  | { kind: 'raced'; reason: RejectReason }
+  /** Указатель прогона уехал на другое предложение, пока мы шли к замку. */
+  | { kind: 'moved' }
+  /** Предложение решено между чтением и правкой. */
+  | { kind: 'decided'; status: ProposalStatus };
+
+/**
+ * Лестница правки (Ш1.5): правка владельца порождает НОВОЕ провалидированное предложение,
+ * исходное гаснет причиной `edited` в той же транзакции, указатель прогона переезжает
+ * CAS'ом, и дальше — прежний конвейер принятия.
+ *
+ * Почему не «поправить payload на месте»: журнал append-only (§4.6), и переписанное
+ * предложение стёрло бы то, что владелец читал. Почему не «применить правку мимо
+ * pending'а»: применение обязано остаться работой прогона (source `routine`, тот же
+ * `run_id`) — иначе принятая правка не откатится вместе с прогоном (приёмка 11) и не
+ * снимется «отмени последнее» (приёмка 10).
+ *
+ * Предусловия НЕ переснимаются (Ш1.6): предложение сверяется ровно с тем состоянием, из
+ * которого рутина его составила. Разошлось — `stale`, как и у неправленого.
+ */
+async function editAndApprove(
+  deps: RoutineWriteDeps,
+  args: { ownerId: string; runId: string; proposal: RunProposal; edits: ProposalEdits },
+): Promise<DecideProposalResult> {
+  const { ownerId, runId, proposal, edits } = args;
+  const parentId = proposal.pending_id;
+  const childId = editedPendingId(ownerId, parentId, edits);
+  const step1 = await createEditedProposal(deps, { ...args, childId });
+
+  if (step1.kind === 'decided') return { status: 'already', proposalStatus: step1.status };
+  if (step1.kind === 'raced') {
+    // Проиграли гонку за исходное. Своей же правкой — доводим её (дитя одно, и оно наше,
+    // если хеш совпал); чужим решением — оно старше нашего, и переписывать его нельзя.
+    if (step1.reason !== 'edited') return foreignDecision(deps.db, ownerId, runId, step1.reason);
+    const live = await readProposal(deps.db, ownerId, runId);
+    return resumeOrAnswer(
+      deps,
+      args,
+      await takeoverEdited(deps, { ...args, pendingId: parentId }, live),
+    );
+  }
+  if (step1.kind === 'moved') {
+    // Указатель увёл кто-то другой — а увести его может только чужая лестница; правило
+    // возобновления разберётся по свежему состоянию, как и на входе
+    const live = await readProposal(deps.db, ownerId, runId);
+    const addressed = await addressedProposal(deps, { ...args, pendingId: parentId, live });
+    return addressed.kind === 'decide'
+      ? { status: 'already', proposalStatus: addressed.proposal.status }
+      : resumeOrAnswer(deps, args, addressed);
+  }
+
+  // Шаг 2: указатель переезжает на правленое. Отдельной транзакцией — вложить её в шаг 1
+  // нельзя (execute открывает свою), и именно поэтому правило возобновления обязательно.
+  const live = await pointAtEdited(deps, { ownerId, runId, from: proposal, childId });
+  if (live.pending_id !== childId) return replacedBy(live, 'edited');
+  // Шаги 3–4: прежний конвейер — ревалидация, применение, судьба на прогоне
+  return approveProposal(deps, ownerId, runId, live);
+}
+
+async function resumeOrAnswer(
+  deps: RoutineWriteDeps,
+  args: { ownerId: string; runId: string },
+  addressed: AddressedProposal,
+): Promise<DecideProposalResult> {
+  return addressed.kind === 'answer'
+    ? addressed.result
+    : approveProposal(deps, args.ownerId, args.runId, addressed.proposal);
+}
+
+/**
+ * Шаг 1 лестницы ОДНОЙ транзакцией: исходное предложение гаснет причиной `edited`, а
+ * правленое ложится рядом. Атомарность здесь закрывает сразу три беды: сироту-предложение
+ * без гашения родителя, потерю правки при гашении без замены и гонку двух правок (вторая
+ * увидит родителя уже погашенным и второго дитяти не заведёт).
+ *
+ * Замок берётся ДО первого чтения состояния исходного (см. acquirePendingLock): перечитка
+ * указателя и payload'а идёт снапшотом, снятым уже под ним, а `rejectPendingTx` повторный
+ * захват того же ключа не удорожает. Внутри — только tx-варианты: `rejectPending(db, …)`
+ * отсюда повис бы на собственном замке до statement_timeout.
+ */
+async function createEditedProposal(
+  deps: RoutineWriteDeps,
+  args: {
+    ownerId: string;
+    runId: string;
+    proposal: RunProposal;
+    edits: ProposalEdits;
+    childId: string;
+  },
+): Promise<EditStep1> {
+  const { ownerId, runId, edits, childId } = args;
+  const parentId = args.proposal.pending_id;
+  return withIdentity(deps.db, ownerId, async (tx) => {
+    await acquirePendingLock(tx, parentId);
+    const row = await runById(tx, runId);
+    if (row === null || row.run.routine_id === undefined || row.run.proposal === undefined) {
+      // Прогон уехал в архив (откат) между чтением и правкой — тот же ответ, что у
+      // решения по откаченному прогону, а не выдуманный статус
+      throw new ExecError('NOT_FOUND', 'прогон рутины не найден', { runId });
+    }
+    const live = row.run.proposal;
+    if (live.pending_id !== parentId) return { kind: 'moved' };
+    if (live.status !== 'pending') return { kind: 'decided', status: live.status };
+
+    const stored = await storedProposal(tx, parentId);
+    if (stored === null) {
+      throw new ExecError('NOT_FOUND', 'предложение не найдено — править нечего', {
+        pendingId: parentId,
+      });
+    }
+    // Сборка ДО гашения: отказ правки (VALIDATION) обязан оставить исходное живым —
+    // ExecError отсюда откатывает всю транзакцию, а не половину лестницы
+    const operations = buildEditedOperations(stored.operations, edits);
+
+    const rejected = await rejectPendingTx(tx, { ownerId, pendingId: parentId, reason: 'edited' });
+    if (rejected.alreadyRejected) return { kind: 'raced', reason: rejected.reason };
+
+    const n = operations.length;
+    const summary = `${n} ${editsNoun(n)}`;
+    await createPending(tx, {
+      // Тред карточки исходного и есть тред рутины: правленое обязано лечь туда же, иначе
+      // лента рутины разорвётся, а `ensureEntityThread` здесь был бы вторым источником
+      threadId: rejected.threadId,
+      actor: { userId: ownerId, kind: 'ai', source: 'routine', runId, editedFrom: parentId },
+      tool: 'batch_execute',
+      input: { batch_id: childId, operations },
+      level: 'explicit-confirmation',
+      dedupeKey: editDedupeKey(parentId, edits),
+      clock: deps.clock,
+      content: `Предложение рутины: ${summary}`,
+      summary,
+      card: {
+        kind: 'proposal_card',
+        pendingId: childId,
+        runId,
+        routineId: row.run.routine_id,
+        summary,
+        // Проза — прежняя: владелец поправил значения, а не объяснение рутины
+        explanation: stored.explanation ?? row.run.report ?? '',
+        editedFrom: parentId,
+      },
+    });
+    return { kind: 'created' };
+  });
+}
+
+/**
+ * Шаг 2 лестницы: указатель прогона переезжает на правленое предложение — CAS на ВЕСЬ
+ * объект `proposal`, как у всякой записи его судьбы. Отдельная транзакция: `patchAspect`
+ * идёт через executor, а тот открывает собственную.
+ *
+ * Возвращает предложение, которым прогон живёт ПОСЛЕ попытки: своё при выигранном CAS и
+ * чужое при проигранном. Проиграть можно только тому, кто уже увёл указатель (чужая
+ * лестница либо гашение новым прогоном), и переписывать его результат нечем.
+ */
+async function pointAtEdited(
+  deps: RoutineWriteDeps,
+  args: { ownerId: string; runId: string; from: RunProposal; childId: string },
+): Promise<RunProposal> {
+  const next: RunProposal = {
+    pending_id: args.childId,
+    status: 'pending',
+    edited_from: args.from.pending_id,
+  };
+  const patched = await patchAspect(deps, {
+    ownerId: args.ownerId,
+    id: args.runId,
+    aspect: 'orbis/agent-run',
+    patch: { proposal: next },
+    precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [args.from] }],
+    // `system`, как у пометки судьбы (см. PatchActor): это бухгалтерия прогона, и «отмени
+    // последнее» после «Принять» обязано снять план, а не переезд указателя
+    actor: { kind: 'owner', source: 'system', runId: args.runId },
+  });
+  if (!patched.ok && patched.error.code !== 'CONFLICT') throw toExecError(patched.error);
+  // Перечитка в ЛЮБОМ исходе, а не только при проигранном CAS. Предусловие следующего шага
+  // сверяется JSON-ФОРМОЙ (executor: JSON.stringify обеих сторон), а jsonb нормализует
+  // порядок ключей объекта — собранный руками `next` не совпал бы с самим собой, лёгшим в
+  // БД, и решение по правленому упиралось бы в вечный CONFLICT. Отсюда правило: объект
+  // `proposal` для CAS всегда берётся ЧТЕНИЕМ, а не сборкой.
+  return readProposal(deps.db, args.ownerId, args.runId);
 }
 
 /**
@@ -1156,10 +1570,20 @@ async function approveProposal(
   });
 
   if (applied.ok) {
+    // Правленое предложение доносит до экрана, ЧТО именно применено: исходную карточку
+    // владелец видел своими глазами, и она обязана понять, что применено не ровно она
+    const editedFrom = proposal.edited_from;
+    const done: DecideProposalResult = {
+      status: 'applied',
+      actionId: applied.actionId,
+      ...(editedFrom !== undefined && { editedFrom }),
+    };
+    // Возобновление шагов 3–4 (двойной тап по «Принять»): батч исполнен идемпотентно, тем
+    // же actionId, а статус уже стоит — переписывать его значило бы плодить действие
+    // журнала с новым `decided_at` на каждый повторный тап
+    if (proposal.status === 'approved') return done;
     const settled = await settleProposal(deps, { ownerId, runId, proposal, status: 'approved' });
-    return settled.written
-      ? { status: 'applied', actionId: applied.actionId }
-      : { status: 'already', proposalStatus: settled.proposalStatus };
+    return settled.written ? done : { status: 'already', proposalStatus: settled.proposalStatus };
   }
 
   const mismatches = preconditionMismatches(applied.error) ?? bodyMismatch(applied.error);
@@ -1199,7 +1623,9 @@ async function approveProposal(
     mismatches: mismatchNotes(mismatches),
   });
   return settled.written
-    ? { status: 'stale', mismatches }
+    ? // Адрес устаревшего — у прогона их бывает двое (исходное и правленое), и карточка
+      // обязана узнать своё: иначе владелец не поймёт, чья работа потеряна
+      { status: 'stale', mismatches, pendingId: proposal.pending_id }
     : { status: 'already', proposalStatus: settled.proposalStatus };
 }
 

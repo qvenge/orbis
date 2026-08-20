@@ -7,10 +7,11 @@ import {
   entityThreadId,
   isManualBucket,
   newId,
+  pendingMessageId,
   routineRunBatchId,
   routineRunId,
 } from '@orbis/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { runsOfParent } from '../agent-loop/queries';
 import { chatMessages, entities } from '../db/schema';
@@ -19,7 +20,7 @@ import { ROUTINE_RUNS_PER_DAY_KEY } from '../entitlements';
 import { execute } from '../executor/executor';
 import type { ActionRecord } from '../executor/types';
 import { ScriptedProvider } from '../llm/scripted';
-import { rejectPending } from '../policy/pending';
+import { createPending, rejectPending, rejectPendingTx } from '../policy/pending';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool } from '../tools/dispatch';
 import {
@@ -28,6 +29,7 @@ import {
   RETRY_DELAYS_MS,
   ROUTINE_HISTORY_TAIL,
 } from './constants';
+import { buildEditedOperations, editsHash, editsSchema, type ProposalEdits } from './edits';
 import {
   appendSystemNote,
   decideProposal,
@@ -109,6 +111,103 @@ async function seedProposal(
   const pendingId = run.proposal?.pending_id;
   if (pendingId === undefined) throw new Error('seedProposal: прогон без предложения');
   return { runId, taskId: task.id, pendingId };
+}
+
+/** Причина отказа pending'а из ленты — источник правды о судьбе предложения (V1.8). */
+async function rejectReasonOf(pendingId: string): Promise<string | undefined> {
+  const probe = JSON.stringify({ type: 'confirmation_rejected', rejects: pendingId });
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.execute(sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`),
+  );
+  const row = (rows as unknown as Array<Record<string, unknown>>)[0];
+  return row === undefined ? undefined : ((row.metadata as { reason?: string }).reason ?? 'owner');
+}
+
+/** Правленые предложения, рождённые из этого, — по тому же полю, что читает лестница. */
+async function editedChildrenOf(parentId: string): Promise<string[]> {
+  const probe = JSON.stringify({ pending: { edited_from: parentId } });
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.execute(sql`SELECT id FROM chat_messages WHERE metadata @> ${probe}::jsonb`),
+  );
+  return [...(rows as unknown as Array<{ id: string }>)].map((r) => r.id);
+}
+
+/** Правка одного поля предложения `seedProposal`: строка `(0, orbis/task, status)`. */
+function statusEdit(value: string): ProposalEdits {
+  return editsSchema.parse({
+    fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value }],
+  });
+}
+
+async function taskStatusOf(taskId: string): Promise<unknown> {
+  return (await aspectsOf(owner, taskId))['orbis/task']?.status;
+}
+
+/** Предложение прогона так, как его видит граф. */
+async function proposalOf(runId: string): Promise<Record<string, unknown>> {
+  const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as {
+    proposal?: Record<string, unknown>;
+  };
+  if (run.proposal === undefined) throw new Error(`у прогона ${runId} нет предложения`);
+  return run.proposal;
+}
+
+/**
+ * Состояние «шаг 1 лестницы прошёл, шаг 2 не дошёл» — собранное руками ровно так, как его
+ * оставил бы крэш процесса между транзакциями: исходное предложение погашено причиной
+ * `edited`, правленое лежит рядом, а указатель прогона всё ещё смотрит на мёртвое.
+ *
+ * Собирается той же парой вызовов, что и сама лестница (иначе тест проверял бы фикстуру,
+ * а не крэш-окно), и в ОДНОЙ транзакции — атомарность шага 1 в том и состоит.
+ */
+async function crashedEdit(
+  run: { runId: string; routineId: string; pendingId: string },
+  edits: ProposalEdits,
+): Promise<string> {
+  const dedupeKey = `edit:${run.pendingId}:${editsHash(edits)}`;
+  const childId = pendingMessageId(owner, dedupeKey);
+  await withIdentity(db, owner, async (tx) => {
+    const probe = JSON.stringify({ pending: { id: run.pendingId } });
+    const rows = await tx.execute(
+      sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
+    );
+    const row = (rows as unknown as Array<Record<string, unknown>>)[0];
+    const stored = (row?.metadata as { pending?: { input?: { operations?: unknown[] } } }).pending
+      ?.input?.operations;
+    if (stored === undefined) throw new Error('crashedEdit: у предложения нет payload’а');
+    const rejected = await rejectPendingTx(tx, {
+      ownerId: owner,
+      pendingId: run.pendingId,
+      reason: 'edited',
+    });
+    await createPending(tx, {
+      threadId: rejected.threadId,
+      actor: {
+        userId: owner,
+        kind: 'ai',
+        source: 'routine',
+        runId: run.runId,
+        editedFrom: run.pendingId,
+      },
+      tool: 'batch_execute',
+      input: { batch_id: childId, operations: buildEditedOperations(stored, edits) },
+      level: 'explicit-confirmation',
+      dedupeKey,
+      clock: () => T0,
+      content: 'Предложение рутины: 1 правка',
+      summary: '1 правка',
+      card: {
+        kind: 'proposal_card',
+        pendingId: childId,
+        runId: run.runId,
+        routineId: run.routineId,
+        summary: '1 правка',
+        explanation: 'Правленое предложение',
+        editedFrom: run.pendingId,
+      },
+    });
+  });
+  return childId;
 }
 
 describe('supersedeOpen: новый прогон гасит незакрытое (V1.8)', () => {
@@ -845,15 +944,6 @@ describe('startManualRun: ручной прогон — свой ключ, не 
 // ---------------------------------------------------------------------------
 
 describe('edited_from переживает решение по предложению (Ш1.8)', () => {
-  /** Предложение прогона так, как его видит граф. */
-  async function proposalOf(runId: string): Promise<Record<string, unknown>> {
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as {
-      proposal?: Record<string, unknown>;
-    };
-    if (run.proposal === undefined) throw new Error(`у прогона ${runId} нет предложения`);
-    return run.proposal;
-  }
-
   /** Помечает живое предложение как рождённое правкой — так же, как это сделает писатель. */
   async function markEdited(runId: string): Promise<string> {
     const editedFrom = newId();
@@ -931,6 +1021,33 @@ describe('edited_from переживает решение по предложе�
     expect(proposal.edited_from).toBe(editedFrom);
   });
 
+  test('closeOpenOfRun гасит ПРАВЛЕНОЕ предложение, на которое указатель не переехал, и пишет статус по нему («решено без тебя», приёмка 13)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId: oldRunId, pendingId } = await seedProposal(routineId, '2026-08-16T07:00');
+    const child = await crashedEdit(
+      { runId: oldRunId, routineId, pendingId },
+      statusEdit('in_progress'),
+    );
+    const { runId: newRunId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-17T07:00',
+      startedAt: minutes(10),
+    });
+
+    // Новый прогон гасит открытое прошлого. Указатель смотрит на МЁРТВОГО родителя, а
+    // живёт дитя: не пойди гашение за правкой, оно вышло бы без записи и оставило бы
+    // живое предложение, на которое никто не указывает.
+    expect(
+      await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newRunId }),
+    ).toEqual({ superseded: 1, staled: 0 });
+
+    expect(await rejectReasonOf(child)).toBe('superseded');
+    const proposal = await proposalOf(oldRunId);
+    expect(proposal.pending_id).toBe(child);
+    expect(proposal.status).toBe('superseded');
+    expect(proposal.edited_from).toBe(pendingId);
+  });
+
   test('closeOpenOfRun сохраняет edited_from при гашении superseded', async () => {
     const routineId = await seedRoutine(owner);
     const { runId: oldRunId } = await seedProposal(routineId, '2026-08-16T07:00');
@@ -949,4 +1066,199 @@ describe('edited_from переживает решение по предложе�
     expect(proposal.status).toBe('superseded');
     expect(proposal.edited_from).toBe(editedFrom);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Правило возобновления лестницы правки (Ш1.5, Р-10). Лестница физически не может быть
+// одной транзакцией: перевод указателя идёт через executor, а тот открывает свою. Значит
+// крэш-окно «шаг 1 прошёл, шаг 2 не дошёл» — не редкость, а состояние, которое обязано
+// доводиться само, с ЛЮБОЙ стороны: и по адресу исходного предложения, и по адресу
+// правленого. Иначе владелец получает ответ «заменено» с указанием на мертвеца — круг,
+// из которого экрану не выйти.
+// ---------------------------------------------------------------------------
+
+describe('возобновление лестницы правки: крэш-окно между шагами 1 и 2 (Р-10)', () => {
+  /** Прогон с предложением и все три адреса, которыми оперирует правило. */
+  async function crashed(bucket: string, edits: ProposalEdits) {
+    const routineId = await seedRoutine(owner);
+    const seeded = await seedProposal(routineId, bucket);
+    const child = await crashedEdit({ ...seeded, routineId }, edits);
+    // Указатель не переехал: прогон всё ещё считает живым мёртвое предложение
+    expect(await proposalOf(seeded.runId)).toMatchObject({
+      pending_id: seeded.pendingId,
+      status: 'pending',
+    });
+    return { ...seeded, routineId, child };
+  }
+
+  test('решение по исходному с ТОЙ ЖЕ правкой доводит шаг 2 и применяет правленое (replay тапа, чей ответ не дошёл)', async () => {
+    const edits = statusEdit('in_progress');
+    const { runId, taskId, pendingId, child } = await crashed('2026-08-16T07:00', edits);
+
+    const decided = await decideProposal(deps(), {
+      ownerId: owner,
+      runId,
+      pendingId,
+      decision: 'approve',
+      edits,
+    });
+    expect(decided).toEqual({ status: 'applied', actionId: child, editedFrom: pendingId });
+
+    expect(await taskStatusOf(taskId)).toBe('in_progress');
+    expect(await proposalOf(runId)).toMatchObject({
+      pending_id: child,
+      status: 'approved',
+      edited_from: pendingId,
+    });
+    // Второго дитяти не завелось: личность правки та же — тот же pending
+    expect(await editedChildrenOf(pendingId)).toEqual([child]);
+  });
+
+  test('решение по исходному с ДРУГОЙ правкой доводит шаг 2 и отвечает replaced на живое дитя — чужую правку не применяет и своей не заводит', async () => {
+    const { runId, taskId, pendingId, child } = await crashed(
+      '2026-08-16T07:00',
+      statusEdit('in_progress'),
+    );
+
+    const decided = await decideProposal(deps(), {
+      ownerId: owner,
+      runId,
+      pendingId,
+      decision: 'approve',
+      edits: statusEdit('done'),
+    });
+    expect(decided).toEqual({
+      status: 'replaced',
+      livePendingId: child,
+      liveStatus: 'pending',
+      reason: 'edited',
+    });
+
+    // Ответ «заменено» не отменяет починки: указатель доведён до живого, и следующий
+    // заход владельца попадает уже в него
+    expect(await proposalOf(runId)).toMatchObject({
+      pending_id: child,
+      status: 'pending',
+      edited_from: pendingId,
+    });
+    expect(await taskStatusOf(taskId)).toBe('inbox');
+    expect(await editedChildrenOf(pendingId)).toEqual([child]);
+  });
+
+  test('решение по ПРАВЛЕНОМУ, пока указатель на мёртвом исходном, само доводит шаг 2 и применяет (вторая половина правила)', async () => {
+    const { runId, taskId, pendingId, child } = await crashed(
+      '2026-08-16T07:00',
+      statusEdit('in_progress'),
+    );
+
+    const decided = await decideProposal(deps(), {
+      ownerId: owner,
+      runId,
+      pendingId: child,
+      decision: 'approve',
+    });
+    expect(decided).toEqual({ status: 'applied', actionId: child, editedFrom: pendingId });
+    expect(await taskStatusOf(taskId)).toBe('in_progress');
+    expect(await proposalOf(runId)).toMatchObject({
+      pending_id: child,
+      status: 'approved',
+      edited_from: pendingId,
+    });
+  });
+
+  test('«Отклонить» правленого, пока указатель на мёртвом исходном, тоже доводит шаг 2 — и закрывает именно правленое', async () => {
+    const { runId, taskId, pendingId, child } = await crashed(
+      '2026-08-16T07:00',
+      statusEdit('in_progress'),
+    );
+
+    expect(
+      await decideProposal(deps(), { ownerId: owner, runId, pendingId: child, decision: 'reject' }),
+    ).toEqual({ status: 'rejected' });
+    expect(await rejectReasonOf(child)).toBe('owner');
+    expect(await proposalOf(runId)).toMatchObject({
+      pending_id: child,
+      status: 'rejected',
+      edited_from: pendingId,
+    });
+    expect(await taskStatusOf(taskId)).toBe('inbox');
+  });
+});
+
+describe('гонка двух правок одного предложения (Ш1.9, приёмка 15)', () => {
+  /**
+   * Две РАЗНЫЕ правки одного предложения, поданные одновременно. Инвариант: применяется
+   * ровно одна, второй владелец получает ответ, называющий живое предложение («молча не
+   * проигрывает никто»), и — главное — второго правленого предложения не заводится: сирота
+   * pending без указателя жил бы в ленте вечно.
+   *
+   * Гоняется 25 раз, как гонка approve ∥ reject (policy/pending.test.ts): один прогон
+   * ничего не доказывает — окно между гашением исходного и переводом указателя короткое.
+   * Победитель определяется по ФАКТУ ГРАФА, а не по порядку вызовов.
+   */
+  test('25 итераций Promise.all: ровно одно applied, второму — replaced с живым, сирот-предложений нет', async () => {
+    const iterations = 25;
+    let bothApplied = 0;
+    for (let i = 0; i < iterations; i++) {
+      const routineId = await seedRoutine(owner);
+      const { runId, taskId, pendingId } = await seedProposal(
+        routineId,
+        `2026-08-16T07:0${i % 10}`,
+      );
+      const first = statusEdit('in_progress');
+      const second = statusEdit('done');
+
+      const [a, b] = await Promise.all([
+        decideProposal(deps(), {
+          ownerId: owner,
+          runId,
+          pendingId,
+          decision: 'approve',
+          edits: first,
+        }),
+        decideProposal(deps(), {
+          ownerId: owner,
+          runId,
+          pendingId,
+          decision: 'approve',
+          edits: second,
+        }),
+      ]);
+      if (a.status === 'applied' && b.status === 'applied') {
+        bothApplied++; // несогласованный исход — считаем все итерации, отчёт в assert ниже
+        continue;
+      }
+
+      // Дитя одно на всю гонку — это и есть атомарность шага 1
+      const children = await editedChildrenOf(pendingId);
+      expect(children).toHaveLength(1);
+      const child = children[0];
+      const applied = a.status === 'applied' ? a : b;
+      const other = a.status === 'applied' ? b : a;
+      expect(applied.status).toBe('applied');
+      if (applied.status !== 'applied') throw new Error('ни одна правка не применена');
+      expect(applied.actionId).toBe(child as string);
+      expect(applied.editedFrom).toBe(pendingId);
+      // Проигравший узнаёт про живое предложение, а не молчит и не получает мертвеца.
+      // `liveStatus` — снимок момента ответа: победитель мог ещё не дописать статус, и
+      // требовать здесь `approved` значило бы пинить порядок двух транзакций.
+      expect(other).toMatchObject({
+        status: 'replaced',
+        livePendingId: child as string,
+        reason: 'edited',
+      });
+      if (other.status !== 'replaced') throw new Error('проигравший ответил не replaced');
+      expect(['pending', 'approved']).toContain(other.liveStatus);
+      // Победила ровно одна правка — по факту графа
+      const status = await taskStatusOf(taskId);
+      expect(status === 'in_progress' || status === 'done').toBe(true);
+      expect(await proposalOf(runId)).toMatchObject({
+        pending_id: child as string,
+        status: 'approved',
+        edited_from: pendingId,
+      });
+      expect(await rejectReasonOf(pendingId)).toBe('edited');
+    }
+    expect(bothApplied).toBe(0);
+  }, 120_000);
 });

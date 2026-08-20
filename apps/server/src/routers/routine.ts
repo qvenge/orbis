@@ -19,6 +19,7 @@ import { defaultAiDeps } from '../ai/send-message';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, execErrorToTRPC } from '../errors';
 import { ownerTimeZone } from '../query/context';
+import { editsSchema } from '../routines/edits';
 import {
   answerRoutineCheckpoint,
   type DecideProposalResult,
@@ -211,6 +212,12 @@ export const routineRouter = router({
            */
           pendingId: z.string().uuid(),
           decision: z.enum(['approve', 'reject']),
+          /**
+           * Что владелец поправил в предложении перед принятием (Ш1.4): значения полей и
+           * тело документом. Правка порождает НОВОЕ предложение — правила и потолки живут
+           * в routines/edits.ts, здесь только форма входа.
+           */
+          edits: editsSchema.optional(),
         })
         .strict(),
     )
@@ -221,6 +228,7 @@ export const routineRouter = router({
           runId: input.runId,
           pendingId: input.pendingId,
           decision: input.decision,
+          edits: input.edits,
         });
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);

@@ -6,6 +6,7 @@
 // прогоном через `runNow`: собранный руками pending проверял бы фикстуру, а не путь.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { manualBucket, newId, pendingMessageId, routineRunId } from '@orbis/shared';
+import { parseBody } from '@orbis/shared/doc';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -20,6 +21,7 @@ import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMRequest, LLMResponse } from '../llm/types';
 import { createPending } from '../policy/pending';
 import { appRouter } from '../router';
+import { editsHash, editsSchema } from '../routines/edits';
 import type { RoutineDeps } from '../routines/lifecycle';
 import { startBucketRun, supersedeOpen } from '../routines/lifecycle';
 import { runRoutineRun } from '../routines/runner';
@@ -123,6 +125,7 @@ interface RunAspect {
     status: string;
     decided_at?: string;
     mismatches?: Array<{ aspect: string; field: string; note: string }>;
+    edited_from?: string;
   };
 }
 
@@ -232,6 +235,84 @@ async function proposed(title: string): Promise<Proposed> {
   const pendingId = aspect.proposal?.pending_id;
   if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
   return { routineId, taskId, runId, pendingId };
+}
+
+/**
+ * То же, что `proposed`, но предложение правит и ТЕЛО (Ш1.11): без него правка тела
+ * адресовать нечего — `edits.body` меняет строку, которая в предложении уже есть.
+ */
+async function proposedWithBody(title: string): Promise<Proposed> {
+  const routineId = await seedRoutine(owner, { title: `Рутина: ${title}` });
+  const taskId = await seedTask(title);
+  const runId = routineRunId(routineId, MANUAL_BUCKET, 1);
+  const provider = new ScriptedProvider([
+    toolUse([
+      {
+        name: 'orbis_propose',
+        input: {
+          run_id: runId,
+          explanation: EXPLANATION,
+          operations: [
+            {
+              tool: 'entity_update',
+              input: {
+                id: taskId,
+                body: 'Черновик рутины',
+                aspects: { 'orbis/task': { status: 'planned' } },
+              },
+            },
+          ],
+        },
+      },
+    ]),
+  ]);
+  await callerWith(provider).routine.runNow({ routineId });
+  const aspect = await waitClosed(runId);
+  expect(aspect.outcome).toBe('finished');
+  const pendingId = aspect.proposal?.pending_id;
+  if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
+  return { routineId, taskId, runId, pendingId };
+}
+
+/**
+ * Тело, каким его присылает слой предложения: настоящий разбор markdown (блок кода и
+ * ссылка с подписью — то, на чём ломались бы потери сериализации) плюс блочные id, каких
+ * в схеме документа нет. В БД обязан лечь ВХОД: `nodeFromJSON().toJSON()` id потерял бы.
+ */
+function ownerDoc(): { v: number; doc: { type: 'doc'; content: Record<string, unknown>[] } } {
+  const parsed = parseBody(
+    'Правка владельца: [подпись](https://example.com)\n\n```ts\nconst a = 1;\n```',
+  );
+  const content = (parsed.doc.content ?? []).map((node, i) => ({
+    ...(node as Record<string, unknown>),
+    attrs: { ...((node as { attrs?: Record<string, unknown> }).attrs ?? {}), id: `blk-${i}` },
+  }));
+  return { v: parsed.v, doc: { type: 'doc', content } };
+}
+
+/** Тело записи документом — то, что реально легло в `body_doc`. */
+async function bodyDocOf(id: string): Promise<unknown> {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.execute(sql`SELECT body_doc FROM entities WHERE id = ${id}::uuid`),
+  );
+  return (rows as unknown as Array<{ body_doc: unknown }>)[0]?.body_doc;
+}
+
+/** Тело записи текстом — проекция документа, она же аварийный дубль (§2.1). */
+async function bodyOf(id: string): Promise<string | undefined> {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.execute(sql`SELECT body FROM entities WHERE id = ${id}::uuid`),
+  );
+  return (rows as unknown as Array<{ body: string }>)[0]?.body;
+}
+
+/** Сколько pending-предложений лежит в треде рутины (карточки, а не отказы). */
+async function pendingCount(runId: string): Promise<number> {
+  const probe = JSON.stringify({ pending: { run_id: runId } });
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.execute(sql`SELECT id FROM chat_messages WHERE metadata @> ${probe}::jsonb`),
+  );
+  return [...rows].length;
 }
 
 /** Причина отказа pending'а из ленты (append-only сообщение confirmation_rejected). */
@@ -762,6 +843,240 @@ describe('routine.proposal / decideProposal', () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Правка предложения до принятия (Ш1.5, Ш1.6, Ш1.11): «принять список правок, а не
+  // пересказ модели» доведено до конца — владелец правит значения и текст, и применяется
+  // РОВНО то, что он видел. Исходное предложение при этом не переписывается (журнал
+  // append-only): оно гаснет причиной `edited`, а рядом ложится новое, правленое.
+  // -------------------------------------------------------------------------
+
+  test('правка тела и поля + approve: в записи ровно присланный документ (блок кода, подпись ссылки, блочные id), правленое значение поля; исходное погашено edited; указатель на правленом; статус approved с edited_from; действие журнала — source routine, run_id и edited_from (приёмки 5, 6, 9)', async () => {
+    const { taskId, runId, pendingId } = await proposedWithBody('Описать переезд');
+    const doc = ownerDoc();
+    const edits = {
+      body: [{ index: 0, bodyDoc: doc }],
+      fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+    };
+
+    const applied = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+      edits,
+    });
+    expect(applied.status).toBe('applied');
+    if (applied.status !== 'applied') throw new Error('не applied');
+    // Экран исходной карточки обязан понять, что применено не ровно то, что он показывал
+    expect(applied.editedFrom).toBe(pendingId);
+
+    // Приёмка 6: применено то, что владелец видел, — его документ байт в байт (потери
+    // сериализации Ш1.11 не воспроизводятся) и его значение поля
+    expect(await bodyDocOf(taskId)).toEqual(doc);
+    expect(await taskStatus(taskId)).toBe('in_progress');
+
+    // Приёмка 9: исходное погашено ПРАВКОЙ, а не отказом владельца
+    expect(await rejectReason(pendingId)).toBe('edited');
+
+    const aspect = await runAspect(runId);
+    const editedId = aspect.proposal?.pending_id;
+    if (editedId === undefined) throw new Error('прогон без предложения');
+    expect(editedId).not.toBe(pendingId);
+    expect(aspect.proposal?.status).toBe('approved');
+    expect(aspect.proposal?.edited_from).toBe(pendingId);
+    // id правленого детерминирован содержимым правки: тот же тап — тот же pending
+    expect(editedId).toBe(
+      pendingMessageId(owner, `edit:${pendingId}:${editsHash(editsSchema.parse(edits))}`),
+    );
+    // Батч ключуется правленым предложением — по нему работают и «Отменить», и откат
+    expect(applied.actionId).toBe(editedId);
+
+    // В-1: журнал §7.8 знает и чья это работа, и что она — правка владельца
+    const action = (await actionsOf(owner)).find((a) => a.id === editedId);
+    expect(action?.source).toBe('routine');
+    expect(action?.run_id).toBe(runId);
+    expect(action?.edited_from).toBe(pendingId);
+  });
+
+  test('replay двойного тапа: та же правка дважды → второе предложение не заводится, ответ applied идемпотентен с тем же actionId (приёмка 14)', async () => {
+    const { taskId, runId, pendingId } = await proposed('Сдать отчёт');
+    const edits = {
+      fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+    };
+
+    const first = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+      edits,
+    });
+    expect(first.status).toBe('applied');
+    if (first.status !== 'applied') throw new Error('не applied');
+    expect(await pendingCount(runId)).toBe(2); // исходное + правленое, и всё
+
+    // Тот же запрос второй раз (кнопка нажата дважды, ретрай клиента): личность правки
+    // та же → тот же pendingId → тот же батч. Второй план не применяется и не заводится.
+    const again = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+      edits,
+    });
+    expect(again).toEqual({
+      status: 'applied',
+      actionId: first.actionId,
+      editedFrom: pendingId,
+    });
+    expect(await pendingCount(runId)).toBe(2);
+    expect(await taskStatus(taskId)).toBe('in_progress');
+    // Один батч в журнале, а не два
+    expect((await actionsOf(owner)).filter((a) => a.id === first.actionId)).toHaveLength(1);
+  });
+
+  test('пустые edits при совпавшем pendingId — путь ровно сегодняшний: правленого предложения нет, исходное принято как есть (приёмка 7)', async () => {
+    const { taskId, runId, pendingId } = await proposed('Купить билеты');
+
+    const applied = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+      edits: {},
+    });
+    expect(applied).toEqual({ status: 'applied', actionId: pendingId });
+    expect(await pendingCount(runId)).toBe(1); // второго предложения нет
+    expect(await taskStatus(taskId)).toBe('planned');
+    expect(await rejectReason(pendingId)).toBeUndefined();
+    const aspect = await runAspect(runId);
+    expect(aspect.proposal?.pending_id).toBe(pendingId);
+    expect(aspect.proposal?.status).toBe('approved');
+    expect(aspect.proposal?.edited_from).toBeUndefined();
+  });
+
+  test('правки при «Отклонить» → VALIDATION: отклонение ничего не применяет, и делать вид, что правки учтены, нельзя', async () => {
+    const { taskId, runId, pendingId } = await proposed('Отменить подписку');
+
+    const e = await trpcError(
+      callerLater().routine.decideProposal({
+        runId,
+        pendingId,
+        decision: 'reject',
+        edits: { fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'done' }] },
+      }),
+    );
+    expect(e.code).toBe('BAD_REQUEST');
+    // Ни отказа, ни правленого предложения: отказ входа стоит до всякой записи
+    expect(await rejectReason(pendingId)).toBeUndefined();
+    expect(await pendingCount(runId)).toBe(1);
+    expect((await runAspect(runId)).proposal?.status).toBe('pending');
+    expect(await taskStatus(taskId)).toBe('inbox');
+  });
+
+  test('правка + разошедшееся предусловие → stale с расхождениями и адресом правленого; правленое погашено stale, правки НЕ применены (Ш1.6, приёмка 12)', async () => {
+    const { taskId, runId, pendingId } = await proposedWithBody('Продлить абонемент');
+    await ownerSets(taskId, 'done'); // владелец успел раньше — снятое предусловие не держится
+    const doc = ownerDoc();
+
+    const decided = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+      edits: {
+        body: [{ index: 0, bodyDoc: doc }],
+        fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+      },
+    });
+    expect(decided.status).toBe('stale');
+    if (decided.status !== 'stale') throw new Error('не stale');
+    expect(decided.mismatches).toEqual([
+      { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'done' },
+    ]);
+
+    const aspect = await runAspect(runId);
+    const editedId = aspect.proposal?.pending_id;
+    if (editedId === undefined) throw new Error('прогон без предложения');
+    // Устарело ПРАВЛЕНОЕ — карточка обязана узнать своё среди двух
+    expect(decided.pendingId).toBe(editedId);
+    expect(editedId).not.toBe(pendingId);
+    expect(aspect.proposal?.status).toBe('stale');
+    expect(aspect.proposal?.edited_from).toBe(pendingId);
+    expect(await rejectReason(editedId)).toBe('stale');
+    expect(await rejectReason(pendingId)).toBe('edited');
+
+    // Ревалидация — до записи: ни правка тела, ни правка поля не применены
+    expect(await taskStatus(taskId)).toBe('done');
+    expect(await bodyOf(taskId)).toBe('');
+    expect(await bodyDocOf(taskId)).not.toEqual(doc);
+  });
+
+  test('правка ломает значение (сырая форма) → VALIDATION на применении: правленое живо и ждёт решения, указатель на нём — владелец правит и жмёт ещё раз (цена §7.10)', async () => {
+    const { taskId, runId, pendingId } = await proposed('Разобрать шкаф');
+
+    const e = await trpcError(
+      callerLater().routine.decideProposal({
+        runId,
+        pendingId,
+        decision: 'approve',
+        edits: {
+          fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'не-статус' }],
+        },
+      }),
+    );
+    expect(e.code).toBe('BAD_REQUEST');
+    expect(await taskStatus(taskId)).toBe('inbox');
+
+    // Лестница дошла до применения: исходное погашено, правленое живо, указатель на нём —
+    // иначе владельцу было бы некуда возвращаться со своей правкой
+    const aspect = await runAspect(runId);
+    const editedId = aspect.proposal?.pending_id;
+    if (editedId === undefined) throw new Error('прогон без предложения');
+    expect(editedId).not.toBe(pendingId);
+    expect(aspect.proposal?.status).toBe('pending');
+    expect(aspect.proposal?.edited_from).toBe(pendingId);
+    expect(await rejectReason(pendingId)).toBe('edited');
+    expect(await rejectReason(editedId)).toBeUndefined();
+
+    // Владелец правит правленое и жмёт ещё раз — обычный второй виток той же лестницы
+    const applied = await callerLater().routine.decideProposal({
+      runId,
+      pendingId: editedId,
+      decision: 'approve',
+      edits: { fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'done' }] },
+    });
+    expect(applied.status).toBe('applied');
+    if (applied.status !== 'applied') throw new Error('не applied');
+    expect(applied.editedFrom).toBe(editedId);
+    expect(await taskStatus(taskId)).toBe('done');
+  });
+
+  test('«Отклонить» правленого предложения закрывает его причиной owner, граф не тронут', async () => {
+    const { taskId, runId, pendingId } = await proposed('Вынести ёлку');
+    await trpcError(
+      callerLater().routine.decideProposal({
+        runId,
+        pendingId,
+        decision: 'approve',
+        edits: {
+          fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'не-статус' }],
+        },
+      }),
+    );
+    const editedId = (await runAspect(runId)).proposal?.pending_id;
+    if (editedId === undefined) throw new Error('прогон без предложения');
+
+    expect(
+      await callerLater().routine.decideProposal({
+        runId,
+        pendingId: editedId,
+        decision: 'reject',
+      }),
+    ).toEqual({ status: 'rejected' });
+    expect(await rejectReason(editedId)).toBe('owner');
+    const aspect = await runAspect(runId);
+    expect(aspect.proposal?.status).toBe('rejected');
+    // Судьба меняется, происхождение — нет
+    expect(aspect.proposal?.edited_from).toBe(pendingId);
+    expect(await taskStatus(taskId)).toBe('inbox');
+  });
+
   test('прогон без предложения → null', async () => {
     const routineId = await seedRoutine(owner, { title: 'Рутина: без предложения' });
     const { runId } = await seedRoutineRun(owner, {
@@ -979,6 +1294,59 @@ describe('откат рутинного прогона: decideProposal(approve) 
     // Статус предложения — бухгалтерия прогона (source system): «отмени последнее» её не видит
     expect((await runAspect(runId)).proposal?.status).toBe('approved');
     // Отменён именно batch предложения — откат прогона после этого пропускает его
+    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    expect(rolled.ok).toBe(true);
+    if (!rolled.ok) throw new Error('ожидался успешный откат');
+    expect(rolled.undone).toEqual([]);
+  });
+
+  test('откат прогона после принятия ПРАВЛЕНОГО инвертирует батч правленого предложения: правка владельца — работа прогона (source routine + run_id), а не его бухгалтерия (приёмка 11)', async () => {
+    const { taskId, runId, pendingId } = await proposed('Забрать справку');
+    const applied = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+      edits: {
+        fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+      },
+    });
+    expect(applied.status).toBe('applied');
+    if (applied.status !== 'applied') throw new Error('не applied');
+    expect(await taskStatus(taskId)).toBe('in_progress');
+
+    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    expect(rolled.ok).toBe(true);
+    if (!rolled.ok) throw new Error(`ожидался успешный откат: ${JSON.stringify(rolled)}`);
+    // Инвертирован батч ПРАВЛЕНОГО предложения — того, что применилось
+    expect(rolled.undone).toEqual([applied.actionId]);
+    expect(await taskStatus(taskId)).toBe('inbox');
+    // Бухгалтерия прогона на месте, вместе со следом правки
+    const aspect = await runAspect(runId);
+    expect(aspect.proposal?.status).toBe('approved');
+    expect(aspect.proposal?.edited_from).toBe(pendingId);
+    expect(await isArchived(runId)).toBe(true);
+  });
+
+  test('«отмени последнее» после принятия правленого снимает батч ПРАВЛЕНОГО предложения, а не пометку статуса (приёмка 10)', async () => {
+    const { taskId, runId, pendingId } = await proposed('Поменять шины');
+    const applied = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+      edits: {
+        fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+      },
+    });
+    expect(applied.status).toBe('applied');
+    if (applied.status !== 'applied') throw new Error('не applied');
+
+    const undone = await undoLast(db, { actorUserId: owner });
+    expect(undone.ok).toBe(true);
+    expect(await taskStatus(taskId)).toBe('inbox');
+    // Снят план, а не пометка: статус предложения и след правки на прогоне не тронуты
+    const aspect = await runAspect(runId);
+    expect(aspect.proposal?.status).toBe('approved');
+    expect(aspect.proposal?.edited_from).toBe(pendingId);
     const rolled = await rollbackRun(db, { actorUserId: owner, runId });
     expect(rolled.ok).toBe(true);
     if (!rolled.ok) throw new Error('ожидался успешный откат');

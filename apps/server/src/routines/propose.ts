@@ -41,6 +41,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { AspectsMap } from '../executor/normalize';
 import { createPending, rejectedReason, rejectPending } from '../policy/pending';
 import type { ToolCallCtx, ToolDispatchResult } from '../tools/dispatch';
+import { editsNoun } from './constants';
 
 /** Боевой синк журнала — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
 const sink = makeChatJournalSink();
@@ -77,16 +78,6 @@ function forbiddenTarget(index: number, tool: string, note: string): ToolDispatc
     `операция ${index + 1} трогает рутину, прогон или назначение — предложить это нельзя (V1.6, инвариант 6): ${note}`,
     { reason: 'proposal_forbidden_target', index, tool },
   );
-}
-
-/** Русский плюрал правок: 1 правка, 2 правки, 5 правок — сводку читает владелец. */
-function editsNoun(n: number): string {
-  const mod100 = n % 100;
-  if (mod100 >= 11 && mod100 <= 14) return 'правок';
-  const mod10 = n % 10;
-  if (mod10 === 1) return 'правка';
-  if (mod10 >= 2 && mod10 <= 4) return 'правки';
-  return 'правок';
 }
 
 /**
