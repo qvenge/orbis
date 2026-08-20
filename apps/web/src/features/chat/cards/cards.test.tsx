@@ -4,7 +4,8 @@ import { useNav } from '../../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError } from '../../../test/harness';
 import { smoothAuditText } from '../format-audit';
 import { MEMORY_RULES_QUERY } from '../memoryRules';
-import type { ChatMessage } from '../useChatThread';
+import { type ChatMessage, useChatThread } from '../useChatThread';
+import { ProposalCard } from './ProposalCard';
 import { renderCards } from './renderCards';
 
 const msg = (cards: unknown[], extra: Partial<ChatMessage> = {}): ChatMessage =>
@@ -1098,4 +1099,248 @@ test('proposal_card: расхождение по ТЕЛУ (aspect "", field body
   card = await screen.findByTestId('proposal-card');
   stale = await within(card).findByTestId('proposal-stale');
   expect(stale).toHaveTextContent('Тело: запись изменилась после составления предложения');
+});
+
+// --- Ш1.3: сверка pendingId, подписи правки, свёрнутый дифф, живая лента -----------------
+//
+// Карточка адресует КОНКРЕТНОЕ предложение (`pendingId` из metadata сообщения), а
+// `routine.proposal` отвечает про ЖИВОЕ предложение прогона. После правки владельца это два
+// разных предложения, и обе карточки треда делят один ключ кэша `{runId}` — отсюда все
+// проверки ниже.
+
+/**
+ * Строка ТЕЛА предложения: аспекта у неё нет (тело вне аспектов), а рядом едет дифф.
+ * `after` — полный markdown «станет»: он был единственной формой показа до Ш1 и остаётся
+ * запасной при любом `skipped` (приёмка 16).
+ */
+const BODY_MARKDOWN = 'ПОЛНЫЙ-МАРКДАУН-ТЕЛА';
+const bodyRow = (bodyDiff?: unknown) => ({
+  index: 2,
+  tool: 'entity_update',
+  entity: { id: 'e1', title: 'Купить билеты' },
+  field: 'body',
+  after: BODY_MARKDOWN,
+  summary: '«Купить билеты»: тело',
+  ...(bodyDiff !== undefined && { bodyDiff }),
+});
+
+/** Единицы диффа в форме `@orbis/shared/doc/diff` (DiffUnit): четыре не-`same` из пяти. */
+const DIFF_UNITS = [
+  { kind: 'same', before: 'Планы на день', after: 'Планы на день' },
+  { kind: 'added', after: 'позвонить в клинику' },
+  { kind: 'removed', before: 'забрать посылку' },
+  {
+    kind: 'changed',
+    before: 'встреча в 17:00',
+    after: 'встреча в 18:00',
+    parts: [
+      { kind: 'same', text: 'встреча в' },
+      { kind: 'removed', text: '17:00' },
+      { kind: 'added', text: '18:00' },
+    ],
+  },
+  { kind: 'added', after: 'четвёртая правка' },
+];
+
+test('карточка с pendingId≠view: «Заменено правкой владельца» (view.editedFrom совпал), БЕЗ операций и кнопок (приёмка 9, инвариант 6)', async () => {
+  const edited = renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    proposalHandler({ pendingId: 'p2', editedFrom: 'p1', status: 'pending' }),
+  );
+  let card = await screen.findByTestId('proposal-card');
+  expect(await within(card).findByTestId('proposal-replaced')).toHaveTextContent(
+    'Заменено правкой владельца — живое предложение ниже',
+  );
+  // Р-7: обе карточки прогона делят кэш `routine.proposal({runId})`, и `view` здесь описывает
+  // ЖИВОЕ P2. Список операций под шапкой исходного предложения был бы ЧУЖИМ.
+  expect(within(card).queryByTestId('proposal-operations')).toBeNull();
+  expect(card).not.toHaveTextContent('срок');
+  // Проза — тоже собственность живого предложения (explanation приезжает с ним).
+  expect(card).not.toHaveTextContent('Два дела просрочены');
+  // Инвариант 6: решать по замещённому нечем.
+  expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
+  expect(within(card).queryByRole('button', { name: 'Отклонить' })).toBeNull();
+  edited.unmount();
+
+  // Цепочка правок длиннее одного звена: живое — не моё дитя, и «правкой владельца» здесь
+  // было бы догадкой, а не фактом из данных.
+  renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    proposalHandler({ pendingId: 'p3', editedFrom: 'p2', status: 'pending' }),
+  );
+  card = await screen.findByTestId('proposal-card');
+  expect(await within(card).findByTestId('proposal-replaced')).toHaveTextContent(
+    'Заменено — живое предложение ниже',
+  );
+  expect(card).not.toHaveTextContent('правкой владельца');
+  expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
+});
+
+test('живая карточка с view.editedFrom: пометка правки; после approve — «Принято (с правками)» (инвариант 8)', async () => {
+  let status = 'pending';
+  const { calls } = renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    (path, input) => {
+      if (path === 'routine.decideProposal') {
+        status = 'approved';
+        return { status: 'applied', actionId: 'a1', editedFrom: 'p0' };
+      }
+      return proposalHandler({
+        editedFrom: 'p0',
+        status,
+        ...(status === 'approved' && { decidedAt: '2026-08-20T05:00:00.000Z' }),
+      })(path, input);
+    },
+  );
+  const card = await screen.findByTestId('proposal-card');
+  // Инвариант 8: владелец обязан видеть, что живое предложение — ЕГО правка, а не то, что
+  // составила рутина; исходное лежит выше в той же ленте.
+  expect(await within(card).findByTestId('proposal-edited')).toHaveTextContent(
+    'Правка владельца — исходное предложение выше',
+  );
+  expect(within(card).getByTestId('proposal-operations')).toBeInTheDocument();
+
+  fireEvent.click(within(card).getByRole('button', { name: 'Принять' }));
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'routine.decideProposal')?.input).toEqual({
+      runId: 'rr1',
+      pendingId: 'p1',
+      decision: 'approve',
+    }),
+  );
+  // «Принято» без оговорки читалось бы как «принято то, что предлагала рутина».
+  expect(await within(card).findByText(/Принято \(с правками\)/)).toBeInTheDocument();
+});
+
+test('свёрнутый дифф: счётчики и ≤3 блоков; skipped body_changed/too_large — прежняя форма с пометкой (приёмки 1, 12, 16)', async () => {
+  const withUnits = renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    proposalHandler({ operations: [bodyRow({ units: DIFF_UNITS })] }),
+  );
+  let card = await screen.findByTestId('proposal-card');
+  const diff = await within(card).findByTestId('proposal-body-diff');
+  // Счётчики — из units за один проход (сервер их не отдаёт: второе представление тех же
+  // чисел разошлось бы с первым).
+  expect(card).toHaveTextContent('+2 −1 ~1');
+  expect(diff).toHaveTextContent('позвонить в клинику');
+  expect(diff).toHaveTextContent('забрать посылку');
+  // Внутриблочные куски: общее слово рядом со снятым и добавленным временем.
+  expect(diff).toHaveTextContent('встреча в');
+  expect(diff).toHaveTextContent('17:00');
+  expect(diff).toHaveTextContent('18:00');
+  // Развилка 10: в карточке ТРИ первых не-`same` блока, дальше — запись.
+  expect(diff).not.toHaveTextContent('четвёртая правка');
+  // Стена нового текста — то, ради чего затевался дифф: её в карточке больше нет.
+  expect(card).not.toHaveTextContent(BODY_MARKDOWN);
+  // Приёмка 2: и строка записи, и «открыть запись» ведут на саму запись — существующей
+  // навигацией по entity id (полный дифф живёт там, а не в ленте).
+  fireEvent.click(await within(card).findByRole('button', { name: 'Купить билеты' }));
+  expect(useNav.getState().stacks.chat).toContainEqual({ kind: 'entity', id: 'e1' });
+  useNav.setState({ stacks: { chat: [], browser: [], agenda: [], budget: [] } });
+  fireEvent.click(await within(card).findByRole('button', { name: /открыть запись/i }));
+  expect(useNav.getState().stacks.chat).toContainEqual({ kind: 'entity', id: 'e1' });
+  withUnits.unmount();
+
+  // Приёмка 12 + 16: дифф не построен — показываем ПРЕЖНЮЮ форму и говорим словами, почему.
+  for (const [skipped, note] of [
+    ['body_changed', 'Тело изменилось после составления'],
+    ['too_large', 'Слишком большое тело — дифф не построен'],
+    ['rewritten', 'Тело переписано целиком — дифф не построен'],
+  ] as const) {
+    const view = renderWithProviders(
+      <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+      proposalHandler({ operations: [bodyRow({ skipped })] }),
+    );
+    card = await screen.findByTestId('proposal-card');
+    expect(await within(card).findByText(note)).toBeInTheDocument();
+    expect(card).toHaveTextContent(BODY_MARKDOWN);
+    // Кнопки живы: предложение принимается целиком, дифф — способ показа, а не условие.
+    expect(within(card).getByRole('button', { name: 'Принять' })).toBeInTheDocument();
+    view.unmount();
+  }
+
+  // `bodyDiff` может отсутствовать вовсе (решённое предложение, нечитаемый документ) — это
+  // не «считаем…», а «диффа нет»: прежняя форма и НИ СЛОВА про несостоявшийся дифф.
+  renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    proposalHandler({ operations: [bodyRow()] }),
+  );
+  card = await screen.findByTestId('proposal-card');
+  expect(await within(card).findByText(BODY_MARKDOWN)).toBeInTheDocument();
+  expect(within(card).queryByTestId('proposal-body-diff')).toBeNull();
+  expect(card).not.toHaveTextContent('дифф не построен');
+  expect(card).not.toHaveTextContent('Тело изменилось после составления');
+});
+
+/** Потребитель ленты треда — тот же хук, что и у настоящего экрана (ключ `chatThreadKey`). */
+function ThreadProbe() {
+  const { messages } = useChatThread('t1');
+  return <span data-testid="thread-count">{messages.length}</span>;
+}
+
+test('ответ replaced → подпись + refetch; onSuccess решения инвалидирует chatThreadKey (приёмки 9, 15)', async () => {
+  // Р-15: молча не проигрывает никто. Вкладка, открытая до правки, шлёт решение по мёртвому
+  // предложению и получает `replaced` — без подписи нажатие выглядело бы как «ничего не
+  // случилось».
+  const answered = renderWithProviders(
+    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    (path, input) =>
+      path === 'routine.decideProposal'
+        ? { status: 'replaced', livePendingId: 'p2', liveStatus: 'pending', reason: 'edited' }
+        : proposalHandler()(path, input),
+  );
+  let card = await screen.findByTestId('proposal-card');
+  const accept = await within(card).findByRole('button', { name: 'Принять' });
+  const readsBefore = answered.calls.filter((c) => c.path === 'routine.proposal').length;
+  fireEvent.click(accept);
+  expect(await within(card).findByTestId('proposal-replaced-answer')).toHaveTextContent(
+    'Заменено правкой владельца — живое предложение обновлено',
+  );
+  await waitFor(() =>
+    expect(answered.calls.filter((c) => c.path === 'routine.proposal').length).toBeGreaterThan(
+      readsBefore,
+    ),
+  );
+  answered.unmount();
+
+  // Р-8: лента треда живёт своим ключом react-query, которого invalidateGraph не касается.
+  // Решение дописывает в тред сообщение (отказ — свою строку, правка — вторую карточку), и
+  // без инвалидации оно не появилось бы до смены вкладки (staleTime 30 с).
+  const inThread = renderWithProviders(
+    <div>
+      <ThreadProbe />
+      {renderCards(msg([PROPOSAL_CARD]))}
+    </div>,
+    (path, input) => (path === 'chat.listMessages' ? [] : proposalHandler()(path, input)),
+  );
+  card = await screen.findByTestId('proposal-card');
+  await waitFor(() =>
+    expect(inThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1),
+  );
+  fireEvent.click(await within(card).findByRole('button', { name: 'Отклонить' }));
+  await waitFor(() =>
+    expect(inThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBeGreaterThan(1),
+  );
+  inThread.unmount();
+
+  // Рулинг П-5: экран прогона треда не знает вовсе, и карточка там ленту не трогает —
+  // `threadId` не «необязательный на всякий случай», а признак «я в ленте».
+  const outsideThread = renderWithProviders(
+    <div>
+      <ThreadProbe />
+      <ProposalCard runId="rr1" pendingId="p1" />
+    </div>,
+    (path, input) => (path === 'chat.listMessages' ? [] : proposalHandler()(path, input)),
+  );
+  card = await screen.findByTestId('proposal-card');
+  await waitFor(() =>
+    expect(outsideThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1),
+  );
+  fireEvent.click(await within(card).findByRole('button', { name: 'Отклонить' }));
+  await waitFor(() =>
+    expect(outsideThread.calls.filter((c) => c.path === 'routine.proposal').length).toBeGreaterThan(
+      1,
+    ),
+  );
+  expect(outsideThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1);
 });

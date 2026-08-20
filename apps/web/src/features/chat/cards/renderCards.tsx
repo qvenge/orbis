@@ -105,10 +105,20 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
     case 'confirmation_card':
       return <ConfirmationCard key={i} card={card} createdAt={msg.createdAt} />;
     case 'proposal_card':
-      // V1.6: всё, кроме `runId`, карточка читает с сервера (routine.proposal) — поля
-      // сообщения были бы снимком момента отправки, а решают предложение и позже, и с
-      // другого экрана. Компонент тот же, что на экране прогона (RunFeed).
-      return <ProposalCard key={i} runId={card.runId} />;
+      // V1.6: содержимое карточка читает с сервера (routine.proposal) — поля сообщения были
+      // бы снимком момента отправки, а решают предложение и позже, и с другого экрана.
+      // Из сообщения едет только АДРЕС: `pendingId` — какое предложение эта карточка
+      // показывает (после правки владельца их у прогона два, Ш1.3), `threadId` — что она
+      // стоит в ленте, которую решение обязано перечитать. Компонент тот же, что на экране
+      // прогона (RunFeed), и `threadId` там не передаётся: ленты у прогона нет.
+      return (
+        <ProposalCard
+          key={i}
+          runId={card.runId}
+          pendingId={card.pendingId}
+          threadId={msg.threadId}
+        />
+      );
     case 'import_review':
       return <ImportReviewCard key={i} card={card} />;
     case 'memory_rule_suggestion':
