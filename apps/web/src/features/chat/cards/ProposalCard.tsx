@@ -37,6 +37,7 @@ import {
   isBodyMismatch,
   type Mismatch,
   mismatchText,
+  OWNER_EDIT_NOTE,
   REPLACED_NOTES,
   type ReplacedReason,
   rowLabel,
@@ -284,8 +285,8 @@ export function ProposalCard({
           {view.editedFrom !== undefined && (
             <p data-testid="proposal-edited" className="text-text-muted text-xs">
               {threadId !== undefined
-                ? 'Правка владельца — исходное предложение выше'
-                : 'Правка владельца'}
+                ? `${OWNER_EDIT_NOTE} — исходное предложение выше`
+                : OWNER_EDIT_NOTE}
             </p>
           )}
 

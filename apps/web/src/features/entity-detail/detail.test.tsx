@@ -4266,4 +4266,33 @@ describe('слой предложения', () => {
     expect(screen.getByTestId('entity-body')).not.toHaveClass('hidden');
     expect(calls.filter((c) => c.path === 'routine.proposalsForEntity')).toHaveLength(1);
   });
+
+  test('предложение, рождённое правкой владельца → подпись и в свёрнутой плашке, и в развороте; без editedFrom — ни слова (инвариант 8)', async () => {
+    // Путь достижим `stale`-хвостом лестницы правки: владелец поправил и принял, применение
+    // ответило `stale` — P2 остался живым, с `edited_from`. Без подписи владелец открыл бы
+    // запись и принял СВОЙ ЖЕ текст как предложение рутины.
+    const edited = renderWithProviders(
+      <DetailScreen entityId="e1" />,
+      overlayHandler({ proposals: [proposalFor({ pendingId: 'p2', editedFrom: 'p1' })] }),
+    );
+    let plate = await screen.findByTestId('proposal-plate');
+    // Видна ДО разворота: свёрнутая плашка — всё, что увидит владелец, решивший не
+    // разворачивать, и именно она выдавала бы его текст за план рутины.
+    expect(within(plate).getByTestId('proposal-edited')).toHaveTextContent('Правка владельца');
+    togglePlate(plate);
+    expect(within(plate).getByTestId('proposal-edited')).toHaveTextContent('Правка владельца');
+    // «исходное предложение выше» — про ЛЕНТУ: на записи исходного нет вовсе (оно погашено и
+    // из списка ушло), и обещать его здесь значило бы послать владельца искать то, чего нет.
+    expect(plate).not.toHaveTextContent('выше');
+    edited.unmount();
+
+    // Обычное предложение рутины — прежним видом: ни подписи, ни слова о правке.
+    renderWithProviders(<DetailScreen entityId="e1" />, overlayHandler());
+    plate = await screen.findByTestId('proposal-plate');
+    expect(within(plate).queryByTestId('proposal-edited')).toBeNull();
+    expect(plate).not.toHaveTextContent('Правка владельца');
+    togglePlate(plate);
+    expect(within(plate).queryByTestId('proposal-edited')).toBeNull();
+    expect(plate).not.toHaveTextContent('Правка владельца');
+  });
 });

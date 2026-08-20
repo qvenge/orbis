@@ -43,6 +43,7 @@ import {
   fmt,
   type Mismatch,
   mismatchText,
+  OWNER_EDIT_NOTE,
   type ProposalRow,
   REPLACED_NOTES,
   type ReplacedReason,
@@ -303,6 +304,21 @@ function ProposalPlate({
           — {view.operations.length} {editsWord(view.operations.length)}
         </span>
       </button>
+
+      {/* Инвариант 8: это предложение рождено ПРАВКОЙ ВЛАДЕЛЬЦА, и он обязан это видеть —
+          иначе принимает свой же текст как план рутины. Признак — не статус (его у правки нет
+          и не будет), а происхождение: `editedFrom`.
+
+          Место — СНАРУЖИ разворота, у самой шапки, и это не украшение. Свёрнутая плашка —
+          всё, что увидит владелец, решивший не разворачивать; спрячь подпись внутрь разбора,
+          и обман жил бы ровно там, где его не видно. Достижимо это состояние `stale`-хвостом
+          лестницы: правка принята, применение ответило `stale` — правленое предложение
+          осталось живым и приезжает в список обычной строкой. */}
+      {view.editedFrom !== undefined && (
+        <p data-testid="proposal-edited" className="text-text-muted text-xs">
+          {OWNER_EDIT_NOTE}
+        </p>
+      )}
 
       {open && (
         /* Провайдер — потому что развёрнутый слой показывает ЧУЖОЙ ТЕКСТ этой записи, и
