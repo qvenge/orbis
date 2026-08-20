@@ -310,7 +310,12 @@ describe('diffBodyDocs — блочный дифф', () => {
 
 describe('diffBodyDocs — потолки', () => {
   test('умолчания — числа Развилки 6', () => {
-    expect(DIFF_LIMITS_DEFAULT).toEqual({ maxBlocks: 1000, maxBlockWords: 400, maxEditRatio: 0.3 });
+    expect(DIFF_LIMITS_DEFAULT).toEqual({
+      maxBlocks: 1000,
+      maxBlockWords: 400,
+      maxEditRatio: 0.3,
+      minEditBudget: 8,
+    });
   });
 
   test('полная перезапись: D сверх бюджета → skipped rewritten', () => {
@@ -340,31 +345,52 @@ describe('diffBodyDocs — потолки', () => {
     expect(at(unitsOf(narrow), 0).parts).not.toBeUndefined();
   });
 
-  test('ЗАМЕРЕННАЯ ЦЕНА доли без нижнего порога: мелкому телу бюджета не хватает', () => {
-    // Не «так задумано красиво», а зафиксированное следствие Развилки 6: изменённый блок стоит
-    // D = 2, поэтому одна правка требует ≥ 4 единиц. Тело из трёх единиц (ровно такие —
-    // UPCOMING_BODY, HORIZON_YEAR_BODY, ROUTINES_LIST_BODY у сидов прода) на правку одной строки
-    // отвечает «переписано целиком». Тест стоит здесь, чтобы появление нижнего порога было
-    // видимой правкой, а не тихим изменением поведения.
-    const trio = (first: string) => doc(p(first), p('Позвонить маме'), p('Забрать посылку'));
-    expect(diffBodyDocs(trio('Купить молоко'), trio('Купить молоко и хлеб'))).toEqual({
-      skipped: 'rewritten',
-    });
-    const quartet = (first: string) =>
-      doc(p(first), p('Позвонить маме'), p('Забрать посылку'), p('Оплатить счёт'));
-    expect(kinds(diffBodyDocs(quartet('Купить молоко'), quartet('Купить молоко и хлеб')))).toEqual([
-      'changed',
-      'same',
-      'same',
-      'same',
+  test('СТУПЕНЬКА бюджета: тело сида в 3 единицы правится, а не «переписывается целиком»', () => {
+    // Форма взята прямо у UPCOMING_BODY (apps/server/src/seed/smart-lists.ts:20): абзац и два
+    // смарт-листа, всего три единицы. Такое тело получает КАЖДЫЙ новый пользователь, и без
+    // нижней ступеньки бюджета правка одной строки отвечала бы «тело переписано целиком» —
+    // ложь владельцу (замер при исполнении Задачи 6, план поправлен коммитом 2aba4fa).
+    const upcoming = (intro: string) =>
+      doc(
+        p(intro),
+        {
+          type: 'queryBlock',
+          attrs: { query: 'aspect=orbis/task, due_date=next_7d, title=Ближайшие 7 дней' },
+        },
+        {
+          type: 'queryBlock',
+          attrs: { query: 'aspect=orbis/task, due_date=after_7d, title=Позже' },
+        },
+      );
+    const result = diffBodyDocs(
+      upcoming('Горизонт планирования: неделя и дальше.'),
+      upcoming('Горизонт планирования: две недели и дальше.'),
+    );
+    expect(kinds(result)).toEqual(['changed', 'same', 'same']);
+    expect(at(unitsOf(result), 0).parts).toEqual([
+      { kind: 'same', text: 'Горизонт планирования:' },
+      { kind: 'removed', text: 'неделя' },
+      { kind: 'added', text: 'две недели' },
+      { kind: 'same', text: 'и дальше.' },
     ]);
+    // Ступенька — именно то, что это чинит: обнули её, и вернётся прежняя ложь.
+    expect(
+      diffBodyDocs(
+        upcoming('Горизонт планирования: неделя и дальше.'),
+        upcoming('Горизонт планирования: две недели и дальше.'),
+        { minEditBudget: 0 },
+      ),
+    ).toEqual({ skipped: 'rewritten' });
   });
 
-  test('послабление бюджета возвращает дифф там, где умолчание пропускает', () => {
-    const before = doc(p('Купить молоко'), p('Позвонить маме'));
-    const after = doc(p('Купить молоко и хлеб'), p('Позвонить папе'));
+  test('ступенька НЕ отключает отсечку: большое тело с полной перезаписью по-прежнему пропускается', () => {
+    const before = doc(...Array.from({ length: 40 }, (_, i) => p(`было: строка номер ${i + 1}`)));
+    const after = doc(
+      ...Array.from({ length: 40 }, (_, i) => p(`совершенно другое содержимое ${i + 1}`)),
+    );
+    // D = 80 против бюджета max(8, 0.3·80) = 24 — ступенька в этом теле не участвует вовсе.
     expect(diffBodyDocs(before, after)).toEqual({ skipped: 'rewritten' });
-    expect(kinds(diffBodyDocs(before, after, { maxEditRatio: 1 }))).toEqual(['changed', 'changed']);
+    expect(kinds(diffBodyDocs(before, after, { maxEditRatio: 1 }))).toHaveLength(80);
   });
 });
 

@@ -72,6 +72,8 @@ export interface DiffLimits {
   maxBlockWords: number;
   /** Бюджет числа правок Myers, доля от (N + M). */
   maxEditRatio: number;
+  /** Нижняя ступенька того же бюджета: `maxD = max(minEditBudget, maxEditRatio·(N + M))`. */
+  minEditBudget: number;
 }
 
 /**
@@ -91,18 +93,24 @@ export interface DiffLimits {
  * целиком теле ПРОИГРЫВАЕТ наивному LCS (N = M = 4000, D = 8000: 584 мс против 155). А
  * «перегенерируй план дня целиком» — рядовой ход рутины, не авария.
  *
- * ИЗВЕСТНАЯ ЦЕНА доли БЕЗ НИЖНЕГО ПОРОГА (замерено на сидах прода, а не выведено): у доли нет
- * нижней ступеньки, поэтому МЕЛКОЕ тело на любую правку отвечает `skipped: 'rewritten'`.
- * Изменённый блок стоит D = 2, значит одна правка требует ≥ 4 единиц, две — ≥ 7, три — ≥ 10.
- * `UPCOMING_BODY`, `HORIZON_YEAR_BODY` и `ROUTINES_LIST_BODY` (по 3 единицы каждое) на правку
- * одной строки уже сегодня отвечают «тело переписано целиком», хотя переписана одна строка.
- * Число оставлено как предписано планом (Развилка 6); нижний порог — решение владельца, а не
- * имплементера, и он снимается заменой `maxD` на `Math.max(<порог>, доля·(N + M))`.
+ * `minEditBudget = 8` — НИЖНЯЯ СТУПЕНЬКА того же бюджета, и она не украшение, а починка лжи.
+ * У голой доли ступеньки нет, а изменённый блок стоит D = 2, поэтому одна правка требовала бы
+ * тела в ≥ 4 единицы, две — в ≥ 7, три — в ≥ 10. Замерено на сидах онбординга, а не выведено:
+ * `UPCOMING_BODY`, `HORIZON_YEAR_BODY` и `ROUTINES_LIST_BODY`
+ * (`apps/server/src/seed/smart-lists.ts:20,48,80`, по 3 единицы каждое) на правку ОДНОЙ строки
+ * отвечали бы `skipped: 'rewritten'`, то есть показывали бы владельцу «тело переписано целиком»
+ * там, где переписана одна строка.
+ *
+ * Ступенька ничего не стоит, и это следует из того, ЗАЧЕМ отсечка существует: она защищает от
+ * вырождения `O(ND)` в квадрат, а квадрат от восьми правок неизмерим. Порог включается только
+ * при `N + M < 27` — на телах в единицы блоков, где Myers мгновенен при любом D. Худший
+ * разрешённый случай (1000 единиц) ступенька не задевает вовсе: там бюджет по-прежнему 600.
  */
 export const DIFF_LIMITS_DEFAULT: DiffLimits = {
   maxBlocks: 1_000,
   maxBlockWords: 400,
   maxEditRatio: 0.3,
+  minEditBudget: 8,
 };
 
 /**
@@ -300,6 +308,7 @@ export function diffBodyDocs(
   const maxBlocks = limits?.maxBlocks ?? DIFF_LIMITS_DEFAULT.maxBlocks;
   const maxBlockWords = limits?.maxBlockWords ?? DIFF_LIMITS_DEFAULT.maxBlockWords;
   const maxEditRatio = limits?.maxEditRatio ?? DIFF_LIMITS_DEFAULT.maxEditRatio;
+  const minEditBudget = limits?.minEditBudget ?? DIFF_LIMITS_DEFAULT.minEditBudget;
 
   const oldBlocks = flattenBlocks(before);
   const newBlocks = flattenBlocks(after);
@@ -307,7 +316,14 @@ export function diffBodyDocs(
     return { skipped: 'too_large' };
   }
 
-  const maxD = Math.floor(maxEditRatio * (oldBlocks.length + newBlocks.length));
+  // Доля со СТУПЕНЬКОЙ, а не голая доля: отсечка нужна ради производительности (`O(ND)`
+  // вырождается в квадрат при D ~ N + M), а на теле в единицы блоков квадрат от восьми правок
+  // неизмерим. Без ступеньки тело из трёх единиц — три сида онбординга — на правку одной строки
+  // отвечало бы «переписано целиком».
+  const maxD = Math.max(
+    minEditBudget,
+    Math.floor(maxEditRatio * (oldBlocks.length + newBlocks.length)),
+  );
   const ops = myersOps(
     oldBlocks.map((b) => b.key),
     newBlocks.map((b) => b.key),
