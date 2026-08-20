@@ -57,6 +57,7 @@ import { approvePending, type RejectReason, rejectPending } from '../policy/pend
 import { wallClockIn } from '../recurring/materialize';
 import {
   CONSECUTIVE_FAILURES_TO_PAUSE,
+  CORE_FIELD_LABELS,
   MAX_ATTEMPTS,
   RETRY_DELAYS_MS,
   ROUTINE_HISTORY_TAIL,
@@ -915,16 +916,6 @@ const MISMATCH_NOTE_MAX = 500;
 
 /** Заголовок цели, которой не видно под identity (удалена или не наша). */
 const UNKNOWN_TITLE = 'запись недоступна';
-
-/** Поля сущности вне аспектов, которые предложение может тронуть (entityUpdateInput). */
-const CORE_FIELD_LABELS: Record<string, string> = {
-  body: 'тело',
-  title: 'заголовок',
-  emoji: 'эмодзи',
-  tags: 'метки',
-  archived: 'архив',
-  meta: 'служебные поля',
-};
 
 /** Структурированная ошибка обратно в доменную — её маппит в TRPCError роутер. */
 function toExecError(error: StructuredError): ExecError {

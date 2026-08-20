@@ -42,7 +42,10 @@ export const entityUpdateInput = z
 // строку (`{}`, `content` не массивом), стирая тело вместе с body_refs. `.passthrough()`
 // обязателен: без него zod срезал бы всё, чего нет в форме, и правда о теле приехала бы в БД
 // урезанной. Версию сверяет executor — здесь про DOC_SCHEMA_VERSION знать нечем.
-const bodyDocSchema = z.object({
+// Экспортирована (Ш1.11): правка предложения владельцем везёт тело ДОКУМЕНТОМ, и её
+// контракт обязан описывать тело ровно этой схемой. Вторая zod-модель дерева ProseMirror
+// разъехалась бы с этой ровно так же, как обе разъехались бы со схемой нод (см. выше).
+export const bodyDocSchema = z.object({
   v: z.number().int().positive(),
   doc: z.object({ type: z.literal('doc'), content: z.array(z.record(z.unknown())) }).passthrough(),
 });
