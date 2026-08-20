@@ -1086,6 +1086,92 @@ async function runRowAnyArchive(
 }
 
 /**
+ * Открытые предложения рутин, касающиеся записи (Ш1.3). Экран записи спрашивает сервер
+ * «есть ли по мне план, которого я не видел» — владелец не обязан узнавать о предложении
+ * из ленты чата, открыв запись сбоку.
+ *
+ * Ответ — СПИСОК, а не одно предложение: одну запись законно трогают предложения РАЗНЫХ
+ * рутин (приёмка 18), и решение по каждому своё. Предложение из нескольких записей
+ * находится по каждой из них (приёмка 17) и отдаётся целиком — слой показывает и строки
+ * по соседней записи, иначе владелец принимал бы половину того, что видит. На практике
+ * список из нуля или одного: у рутины открытых предложений не больше одного (V1.8).
+ *
+ * Порядок — по времени сообщения: старшее предложение первым, как в ленте.
+ */
+export async function openProposalsForEntity(
+  db: Db,
+  args: { ownerId: string; entityId: string },
+): Promise<ProposalView[]> {
+  const runIds = await withIdentity(db, args.ownerId, (tx) => liveProposalRuns(tx, args.entityId));
+  const views: ProposalView[] = [];
+  for (const runId of runIds) {
+    // Сборка — тем же `proposalView`, что и у карточки: у него уже есть заголовки целей,
+    // дифф тела и пометка происхождения, а вторая проекция того же предложения разъехалась
+    // бы с первой на первой же правке. Запросов на предложение выходит больше, чем
+    // минимально возможно, — цена принята: список это 0–1 элемент
+    const view = await proposalView(db, { ownerId: args.ownerId, runId });
+    if (view !== null) views.push(view);
+  }
+  return views;
+}
+
+/**
+ * Прогоны, чьё ЖИВОЕ предложение трогает запись. Проба — containment по сохранённому
+ * payload'у pending-сообщения; вложенный массив внутри пробы законен и уже используется
+ * эскалацией (ai/escalation.ts).
+ *
+ * ЗАМЕР, который стоит знать заранее: под `withIdentity` план этой пробы — **Seq Scan**
+ * (36 тыс. сообщений на локальной БД — 23 мс), а не обход `chat_messages_metadata_gin`.
+ * Форма пробы тут ни при чём: в обход RLS та же проба идёт Bitmap Index Scan'ом по этому
+ * индексу за 0.1 мс. Причина — `jsonb_contains` не leakproof (`pg_proc.proleakproof = f`),
+ * и под политикой планировщик не вправе опустить его в Index Cond; leakproof-условия
+ * (`uuid_eq`, `texteq`) индексы под той же политикой берут. Это общее свойство ВСЕХ
+ * containment-проб под RLS (`storedProposal`, `findPendingMessage`, `aspects @>` в
+ * entity_query), а не этой; лечится не здесь — только столбцом со скалярным ключом вместо
+ * пробы по jsonb.
+ *
+ * `source: 'routine'` стоит в САМОЙ пробе, а не фильтром после неё: чат-подтверждение
+ * несёт ровно те же операции по той же записи (тот же `batch_execute` с тем же `id`).
+ * Ответ оно не испортило бы и без этого условия — его сторожит живость ниже, — но проба,
+ * заведомо вытаскивающая чужие строки, живёт ровно до первой правки условий после неё, и
+ * ровно этим условием проба ляжет на индекс в день, когда его станет можно взять.
+ *
+ * Живость — ТРИ условия сразу, и третье не избыточно. Прогон не в архиве: архив рутинного
+ * прогона это след отката, решать по нему уже нечего. Статус `pending` на прогоне: он
+ * источник правды о судьбе. И `proposal.pending_id === id сообщения` — потому что после
+ * правки владельца в ленте лежат ДВА pending-сообщения одного прогона: погашенное
+ * исходное и живое правленое. Операции по записи несут оба, а прогон снова `pending` — без
+ * третьего условия владелец увидел бы на записи две плашки вместо одной, и одна из них
+ * вела бы на мёртвое предложение. Оно же отсекает pending рутины, который предложением не
+ * является вовсе (dispatch.ts:771 — подтверждение тула прогона несёт тот же `source` и тот
+ * же `run_id`).
+ */
+async function liveProposalRuns(tx: Tx, entityId: string): Promise<string[]> {
+  const probe = JSON.stringify({
+    pending: { source: 'routine', input: { operations: [{ input: { id: entityId } }] } },
+  });
+  const rows = await tx.execute(
+    sql`SELECT id, metadata -> 'pending' ->> 'run_id' AS run_id
+        FROM chat_messages
+        WHERE metadata @> ${probe}::jsonb
+        ORDER BY created_at, id`,
+  );
+  const runIds: string[] = [];
+  for (const row of rows as unknown as Array<{ id: string; run_id: string | null }>) {
+    // Предложение без прогона невозможно (propose.ts кладёт `run_id` всегда), но
+    // адресоваться нечем — молча пропускаем, а не падаем на чужой форме метаданных
+    if (row.run_id === null) continue;
+    const found = await runRowAnyArchive(tx, row.run_id);
+    if (found === null || found.archived) continue;
+    const proposal = found.run.proposal;
+    if (proposal === undefined || proposal.status !== 'pending') continue;
+    if (proposal.pending_id !== row.id) continue;
+    runIds.push(row.run_id);
+  }
+  return runIds;
+}
+
+/**
  * Решение владельца по предложению (V1.6): «Принять» исполняет СОХРАНЁННЫЙ payload без
  * обращения к модели, «Отклонить» закрывает предложение, не трогая граф.
  *

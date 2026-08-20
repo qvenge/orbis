@@ -452,6 +452,76 @@ async function plannedProposed(title: string, routineId?: string): Promise<Plann
   return { routineId: rid, taskId, runId, pendingId, bucket, routineTitle };
 }
 
+/**
+ * Предложение отдельной рутины из ПРОИЗВОЛЬНЫХ операций — там, где записи заводятся
+ * снаружи: одну запись трогают две рутины, а одно предложение накрывает две записи.
+ * Рутина своя у каждого вызова: `supersedeOpen` гасит открытое предложение соседнего
+ * прогона ТОЙ ЖЕ рутины, и общая рутина превратила бы второе предложение в `superseded`.
+ */
+async function proposedOps(
+  title: string,
+  operations: Array<{ tool: string; input: Record<string, unknown> }>,
+): Promise<{ routineId: string; runId: string; pendingId: string }> {
+  const routineId = await seedRoutine(owner, { title: `Рутина: ${title}` });
+  const runId = routineRunId(routineId, MANUAL_BUCKET, 1);
+  const provider = new ScriptedProvider([
+    toolUse([
+      { name: 'orbis_propose', input: { run_id: runId, explanation: EXPLANATION, operations } },
+    ]),
+  ]);
+  await callerWith(provider).routine.runNow({ routineId });
+  const aspect = await waitClosed(runId);
+  expect(aspect.outcome).toBe('finished');
+  const pendingId = aspect.proposal?.pending_id;
+  if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
+  return { routineId, runId, pendingId };
+}
+
+/**
+ * Чат-подтверждение (§7.10) с теми же операциями по той же записи. Отличается от
+ * предложения рутины ровно источником (`chat` против `routine`) — и отсекается ровно им:
+ * иначе экран записи показывал бы «по этой записи есть предложение рутины» там, где
+ * владелец просто не дожал кнопку в чате.
+ */
+async function chatConfirmation(taskId: string): Promise<string> {
+  const dedupeKey = `chat:${taskId}`;
+  const created = await withIdentity(db, owner, (tx) =>
+    createPending(tx, {
+      actor: { userId: owner, kind: 'ai', source: 'chat' },
+      tool: 'batch_execute',
+      input: {
+        batch_id: pendingMessageId(owner, dedupeKey),
+        operations: [
+          {
+            tool: 'entity_update',
+            input: { id: taskId, aspects: { 'orbis/task': { status: 'done' } } },
+          },
+        ],
+      },
+      level: 'explicit-confirmation',
+      dedupeKey,
+      clock: () => LATER,
+    }),
+  );
+  return created.pendingId;
+}
+
+/**
+ * Убрать прогон в архив ровно тем жестом, каким это делает откат (rollback.ts:433-442) —
+ * и НЕ трогая само предложение: нужно состояние «предложение ещё pending, а прогона в
+ * живых нет».
+ */
+async function archiveRun(runId: string): Promise<void> {
+  const r = await execute(db, {
+    actorUserId: owner,
+    actorKind: 'owner',
+    source: 'system',
+    runId,
+    operations: [{ tool: 'entity_update', input: { id: runId, archived: true } }],
+  });
+  if (!r.ok) throw new Error(`archiveRun: ${r.error.code} ${r.error.message}`);
+}
+
 // ---------------------------------------------------------------------------
 // runNow (V1.3, приёмка 10)
 // ---------------------------------------------------------------------------
@@ -1362,6 +1432,160 @@ describe('routine.proposal: дифф тела предложения', () => {
     if (diff === undefined || 'skipped' in diff) throw new Error('дифф не построен');
     expect(afterTexts(diff.units)).toEqual(flattenBlocks(doc.doc).map((b) => b.text));
     expect(await bodyOf(taskId)).toBe(''); // ничего не применено
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Открытые предложения по записи (Ш1.3): экран записи спрашивает сервер «есть ли по мне
+// план, которого я не видел», а не узнаёт об этом из ленты чата
+// ---------------------------------------------------------------------------
+
+describe('routine.proposalsForEntity', () => {
+  test('две рутины с открытыми предложениями по одной записи → обе, решение по каждому своё (приёмка 18)', async () => {
+    const taskId = await seedTask('Собрать документы');
+    const first = await proposedOps('первая по документам', [
+      {
+        tool: 'entity_update',
+        input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+      },
+    ]);
+    const second = await proposedOps('вторая по документам', [
+      { tool: 'entity_update', input: { id: taskId, title: 'Собрать документы к пятнице' } },
+    ]);
+
+    const both = await caller().routine.proposalsForEntity({ entityId: taskId });
+    expect(both.map((v) => v.pendingId).sort()).toEqual([first.pendingId, second.pendingId].sort());
+    expect(both.every((v) => v.status === 'pending')).toBe(true);
+    // Каждое ведёт на СВОЮ рутину: без этого владелец не поймёт, кто из двух что предлагает
+    expect(both.map((v) => v.routineId).sort()).toEqual([first.routineId, second.routineId].sort());
+
+    // Решение по одному не трогает второе: список сужается ровно на решённое
+    expect(
+      await callerLater().routine.decideProposal({
+        runId: first.runId,
+        pendingId: first.pendingId,
+        decision: 'reject',
+      }),
+    ).toEqual({ status: 'rejected' });
+
+    const left = await caller().routine.proposalsForEntity({ entityId: taskId });
+    expect(left).toHaveLength(1);
+    expect(left[0]?.pendingId).toBe(second.pendingId);
+    expect(left[0]?.status).toBe('pending');
+  });
+
+  test('чат-подтверждение (source=chat) по той же записи НЕ попадает; решённое и архивный прогон НЕ попадают', async () => {
+    const taskId = await seedTask('Оплатить страховку');
+    const live = await proposedOps('живое по страховке', [
+      {
+        tool: 'entity_update',
+        input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+      },
+    ]);
+
+    // Чат-подтверждение с ТЕМИ ЖЕ операциями по той же записи: голая проба по операциям
+    // притащила бы его, а решается оно другой кнопкой и к рутинам отношения не имеет
+    await chatConfirmation(taskId);
+
+    // Решённое предложение отдельной рутины
+    const decided = await proposedOps('решённое по страховке', [
+      { tool: 'entity_update', input: { id: taskId, title: 'Оплатить страховку до среды' } },
+    ]);
+    expect(
+      await callerLater().routine.decideProposal({
+        runId: decided.runId,
+        pendingId: decided.pendingId,
+        decision: 'reject',
+      }),
+    ).toEqual({ status: 'rejected' });
+
+    // Прогон в архиве (след отката) при СВОЁМ pending-предложении: решать по нему нельзя
+    const archived = await proposedOps('архивное по страховке', [
+      {
+        tool: 'entity_update',
+        input: { id: taskId, aspects: { 'orbis/task': { status: 'done' } } },
+      },
+    ]);
+    await archiveRun(archived.runId);
+    expect((await runAspect(archived.runId)).proposal?.status).toBe('pending');
+
+    const open = await caller().routine.proposalsForEntity({ entityId: taskId });
+    expect(open.map((v) => v.pendingId)).toEqual([live.pendingId]);
+  });
+
+  test('после правки владельца: мёртвый P1 не попадает, живой P2 попадает (условие pending_id = id сообщения)', async () => {
+    const taskId = await seedTask('Разобрать кладовку');
+    const { runId, pendingId } = await proposedOps('правка по кладовке', [
+      {
+        tool: 'entity_update',
+        input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+      },
+    ]);
+
+    // НАСТОЯЩАЯ лестница правки: значение ломает схему аспекта, поэтому применение падает
+    // VALIDATION уже после того, как P1 погашен `edited`, а P2 создан и живёт
+    await trpcError(
+      callerLater().routine.decideProposal({
+        runId,
+        pendingId,
+        decision: 'approve',
+        edits: {
+          fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'не-статус' }],
+        },
+      }),
+    );
+    const editedId = (await runAspect(runId)).proposal?.pending_id;
+    if (editedId === undefined) throw new Error('прогон без предложения');
+    expect(editedId).not.toBe(pendingId);
+    // Оба сообщения лежат в ленте и оба несут операции по этой записи — отличает их только
+    // указатель прогона
+    expect(await pendingCount(runId)).toBe(2);
+    expect((await runAspect(runId)).proposal?.status).toBe('pending');
+
+    const open = await caller().routine.proposalsForEntity({ entityId: taskId });
+    expect(open).toHaveLength(1);
+    expect(open[0]?.pendingId).toBe(editedId);
+    expect(open[0]?.editedFrom).toBe(pendingId);
+  });
+
+  test('предложение из нескольких записей находится по каждой из них (приёмка 17)', async () => {
+    const firstId = await seedTask('Заказать пропуск');
+    const secondId = await seedTask('Забрать пропуск');
+    const { pendingId } = await proposedOps('две записи одним предложением', [
+      {
+        tool: 'entity_update',
+        input: { id: firstId, aspects: { 'orbis/task': { status: 'planned' } } },
+      },
+      {
+        tool: 'entity_update',
+        input: { id: secondId, aspects: { 'orbis/task': { status: 'planned' } } },
+      },
+    ]);
+
+    for (const entityId of [firstId, secondId]) {
+      const open = await caller().routine.proposalsForEntity({ entityId });
+      expect(open.map((v) => v.pendingId)).toEqual([pendingId]);
+      // Предложение отдаётся ЦЕЛИКОМ: слой записи показывает и строки по соседней записи
+      expect(open[0]?.operations.map((o) => o.entity?.id)).toEqual([firstId, secondId]);
+    }
+
+    // Запись без предложений — пустой список, а не отсутствие ответа
+    expect(
+      await caller().routine.proposalsForEntity({ entityId: await seedTask('Тихая') }),
+    ).toEqual([]);
+  });
+
+  test('PAT-агенту хода нет: ownerOnly, как весь routine.*', async () => {
+    const taskId = await seedTask('Не для агента');
+    const agent = createCaller({
+      actorUserId: owner,
+      actorKind: 'agent',
+      db,
+      clientVersion: null,
+      ai: { provider: new ScriptedProvider([]), model: MODEL, clock: () => T0 },
+    });
+    const e = await trpcError(agent.routine.proposalsForEntity({ entityId: taskId }));
+    expect(e.code).toBe('FORBIDDEN');
   });
 });
 

@@ -7,7 +7,7 @@
 // routines/schedule.ts (календарь) и в routines/runner.ts (цикл модели) — здесь разбор
 // входа, подстановка identity и перевод доменных отказов в TRPCError.
 //
-// Все пять — ownerOnly, и это не осторожность: рутина — доверенность, выданная владельцем,
+// Все шесть — ownerOnly, и это не осторожность: рутина — доверенность, выданная владельцем,
 // и все решения по ней (запустить, ответить, принять план) принимает он сам. Внутреннему
 // исполнителю сюда хода нет по построению — его поверхность это глаголы и `orbis_propose`,
 // а инвариант запрета по объекту (V1.10) закрывает ему и обходной путь через граф.
@@ -24,6 +24,7 @@ import {
   answerRoutineCheckpoint,
   type DecideProposalResult,
   decideProposal,
+  openProposalsForEntity,
   type ProposalView,
   proposalView,
   type RoutineWriteDeps,
@@ -192,6 +193,22 @@ export const routineRouter = router({
     .query(
       ({ ctx, input }): Promise<ProposalView | null> =>
         proposalView(ctx.db, { ownerId: ctx.actorUserId, runId: input.runId }),
+    ),
+
+  /**
+   * Открытые предложения рутин по записи (Ш1.3): чем экран записи отвечает на «есть ли по
+   * мне план, которого я не видел». Список, а не одно: одну запись законно трогают
+   * предложения разных рутин, и решение по каждому своё (приёмка 18). Пустой список —
+   * обычный ответ, а не отсутствие.
+   *
+   * `ownerOnly`, как весь роутер: `entity.*` читается на `protectedProcedure`, и такая же
+   * процедура отдала бы PAT-агенту чужие планы владельца вместе с их операциями.
+   */
+  proposalsForEntity: ownerOnlyProcedure
+    .input(z.object({ entityId: z.string().uuid() }).strict())
+    .query(
+      ({ ctx, input }): Promise<ProposalView[]> =>
+        openProposalsForEntity(ctx.db, { ownerId: ctx.actorUserId, entityId: input.entityId }),
     ),
 
   /**
