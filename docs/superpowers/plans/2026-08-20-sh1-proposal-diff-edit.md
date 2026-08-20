@@ -590,8 +590,15 @@ test('storedProposal читает payload по pending_id: подложить В
   `apps/server/src/routines/lifecycle.ts:1035-1039` (`STATUS_BY_REJECT_REASON` + `'edited'` →
   `'superseded'`; `Extract` в `closeOpenOfRun` `:269` НЕ расширять), `:995-1131` (лестница в
   `decideProposal`/`approveProposal`), `:278-316` (`closeOpenOfRun` самолечение);
-  `apps/server/src/routines/context.ts:75-81` (`PROPOSAL_STATUS_LABEL` — superseded у прогона
-  с `edited_from` формулируется «заменено правкой владельца»); В-1:
+  ~~`apps/server/src/routines/context.ts:75-81` (`PROPOSAL_STATUS_LABEL`)~~ — **ОПРОВЕРГНУТО
+  пробоем при исполнении Задачи 5 (гейт-ревью fable, подтверждено чтением всех писателей
+  `proposal.status`):** статус `superseded` ИЗ-ЗА ПРАВКИ не возникает никогда.
+  `STATUS_BY_REJECT_REASON['edited']` читает единственный потребитель `foreignDecision`, который
+  ВОЗВРАЩАЕТ ответ, ничего не записывая; `closeOpenOfRun` типизирован `Extract<…,'superseded'|'stale'>`
+  и `'edited'` в него не входит. Значит `{status:'superseded', edited_from}` возникает только когда
+  НОВЫЙ ПРОГОН погасил правленое — и сегодняшняя подпись «заменено новым прогоном» ПРАВДИВА.
+  Переформулировка соврала бы модели. Случай «принято с правками» закрыт Задачей 1
+  (`context.ts:112-124`, коммит `ca5b59d`). Пункт вычеркнут; В-1:
   `apps/server/src/executor/types.ts:38,:40,:177-178` (`ExecuteRequest.editedFrom?`,
   `ActionRecord.edited_from?` — условная запись, никогда null), `executor.ts:443-444,:608-609`
   (две точки сборки action); `apps/server/src/routers/routine.ts` (вход + `edits: editsSchema.optional()`);
@@ -607,7 +614,10 @@ test('storedProposal читает payload по pending_id: подложить В
 пустые `edits` — путь ровно сегодняшний, Развилка 12; `edits` при `reject` → VALIDATION):
 1. **Один tx** (`withIdentity`): `acquirePendingLock(P1)` → `findPendingMessage(P1)` →
    перечитка `runById(runId)` (фильтрует NOT archived → null трактовать как «прогон в
-   архиве» → `already`). Случаи:
+   архиве» → ~~`already`~~ **`NOT_FOUND`** — ИСПРАВЛЕНО по итогам Задачи 5: у `already` обязателен
+   `ProposalStatus`, а из отфильтрованного прогона его взять неоткуда; тот же ответ уже запинен для
+   откаченного прогона (`routine.test.ts:1191-1216`), и он не должен зависеть от того, была ли правка).
+   Случаи:
    - указатель на P1, P1 жив → `rejectPendingTx(P1, 'edited')` **и**
      `createPending(tx, { threadId: <из rejectPendingTx>, actor: { userId, kind:'ai',
      source:'routine', runId, editedFrom: P1 }, tool:'batch_execute',
