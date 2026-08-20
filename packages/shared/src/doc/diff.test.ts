@@ -295,6 +295,73 @@ describe('diffBodyDocs — блочный дифф', () => {
     expect(unitsOf(result).some((u) => u.kind === 'changed')).toBe(false);
   });
 
+  test('СКРЕЩЕНИЕ пар не ломает порядок after-стороны (находка гейт-ревью)', () => {
+    // Точная форма из ревью: r0 «alpha beta» ближе к a2 (Дайс 0.8), чем к a0 (0.571), а r1
+    // ближе всего к a0 — жадный отбор без запрета скрещения выдавал after-сторону
+    // [a1, a2, a0] вместо [a0, a1, a2]. Инвариант порядка — контракт для Задач 7 и 11.
+    const before = doc(p('alpha beta'), p('alpha beta gamma delta'), ...filler(8));
+    const after = doc(
+      p('alpha beta gamma delta epsilon'),
+      p('мимо кассы совсем'),
+      p('alpha beta zeta'),
+      ...filler(8),
+    );
+    const result = diffBodyDocs(before, after);
+    const units = unitsOf(result);
+    expect(units.filter((u) => u.kind !== 'removed').map((u) => u.after)).toEqual([
+      'alpha beta gamma delta epsilon',
+      'мимо кассы совсем',
+      'alpha beta zeta',
+      ...filler(8).map((node) => flattenBlocks(doc(node))[0]?.text),
+    ]);
+    expect(units.filter((u) => u.kind !== 'added').map((u) => u.before)).toEqual([
+      'alpha beta',
+      'alpha beta gamma delta',
+      ...filler(8).map((node) => flattenBlocks(doc(node))[0]?.text),
+    ]);
+    // Скрещённая пара не спаривается вовсе — блок честно показывается заменой, а не
+    // изменением не на своём месте.
+    expect(units.slice(0, 4).map((u) => u.kind)).toEqual(['added', 'added', 'changed', 'removed']);
+  });
+
+  test('мягкий перенос разводит слова единицы, а blockText по-прежнему клеит впритык', () => {
+    // Shift+Enter в редакторе: клиентский пересчёт диффа берёт editor.getJSON(), так что
+    // случай боевой. Без разведения владелец увидел бы «Позвонить АнеКупить хлеб», а мера
+    // похожести получила бы слово «анекупить» (находка гейт-ревью).
+    const paragraph: JSONContent = {
+      type: 'paragraph',
+      content: [
+        { type: 'text', text: 'Позвонить Ане' },
+        { type: 'hardBreak' },
+        { type: 'text', text: 'Купить хлеб' },
+      ],
+    };
+    expect(flattenBlocks(doc(paragraph))[0]?.text).toBe('Позвонить Ане Купить хлеб');
+    // Вторая половина контракта: правило конверсии не тронуто — там склейка впритык, и
+    // разводить обязана развёртка, а не общий с convert.ts blockText.
+    expect(blockText(paragraph)).toBe('Позвонить АнеКупить хлеб');
+  });
+
+  test('щелчок чекбоксом на ПУСТОЙ задаче — changed, а не removed + added', () => {
+    // Дух правила, а не буква: слов нет, Дайс молчит, но ключи разошлись атрибутом, а типы
+    // совпали — это изменение (находка гейт-ревью).
+    const body = (checked: boolean) =>
+      doc(taskList(taskItem(checked, ''), taskItem(false, 'Оплатить счёт')), ...filler(6));
+    const units = unitsOf(diffBodyDocs(body(false), body(true)));
+    expect(units.map((u) => u.kind)).toEqual([
+      'changed',
+      'same',
+      'same',
+      'same',
+      'same',
+      'same',
+      'same',
+      'same',
+    ]);
+    expect(at(units, 0).before).toBe('');
+    expect(at(units, 0).after).toBe('');
+  });
+
   test('одинаковые тела → все единицы same, before и after заполнены обе', () => {
     const body = doc(heading(2, 'План'), ...filler(3), { type: 'horizontalRule' });
     const result = diffBodyDocs(body, body);
@@ -405,14 +472,27 @@ describe('сплошной пробой сопоставления', () => {
 
   test('единицы восстанавливают обе стороны дословно и в порядке документа (200 случаев)', () => {
     const random = rng(20260820);
-    const seen = { same: 0, added: 0, removed: 0, changed: 0 };
+    const seen = { same: 0, added: 0, removed: 0, changed: 0, crossable: 0 };
     for (let round = 0; round < 200; round += 1) {
-      const source = Array.from({ length: 1 + Math.floor(random() * 25) }, (_, i) => `блок ${i}`);
+      const source = Array.from({ length: 2 + Math.floor(random() * 24) }, (_, i) => `блок ${i}`);
       const edited: string[] = [];
-      for (const line of source) {
+      for (let i = 0; i < source.length; i += 1) {
+        const line = source[i] ?? '';
+        const next = source[i + 1];
         const roll = random();
-        if (roll < 0.15) continue; // удаление
-        if (roll < 0.3) edited.push(`${line} с правкой`);
+        // СКРЕЩЕНИЕ: две соседние похожие строки правятся ОБЕ и меняются местами. Ровно та
+        // форма, на которой гейт-ревью поймало нарушение порядка after-стороны: «блок i» ближе
+        // к «блок i с правкой» (Дайс 0.667), а он стоит ВТОРЫМ, — жадный отбор без запрета
+        // скрещения выдал бы пары (r0→a1, r1→a0) и порядок [a1, a0]. Без этой ветки генератор
+        // класс не порождает вовсе, и дефект уехал бы в следующую правку незамеченным.
+        if (roll < 0.15 && next !== undefined) {
+          edited.push(`${next} с правкой`, `${line} с правкой`);
+          seen.crossable += 1;
+          i += 1;
+          continue;
+        }
+        if (roll < 0.3) continue; // удаление
+        if (roll < 0.45) edited.push(`${line} с правкой`);
         else edited.push(line);
         if (random() < 0.15) edited.push(`вставка ${Math.floor(random() * 1000)}`);
       }
@@ -426,9 +506,9 @@ describe('сплошной пробой сопоставления', () => {
       expect(right, `раунд ${round}`).toEqual(edited);
       for (const unit of units) seen[unit.kind] += 1;
     }
-    // Страж от вакуумности: пробой обязан пройти через все четыре исхода, иначе он проверяет
-    // только тождественные тела.
-    for (const kind of ['same', 'added', 'removed', 'changed'] as const) {
+    // Страж от вакуумности: пробой обязан пройти через все четыре исхода И через класс
+    // скрещения, иначе он проверяет только тождественные тела и мимо дефекта ревью.
+    for (const kind of ['same', 'added', 'removed', 'changed', 'crossable'] as const) {
       expect(seen[kind], kind).toBeGreaterThan(50);
     }
   });

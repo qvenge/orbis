@@ -6,7 +6,7 @@ import type { JSONContent } from '@tiptap/core';
  * сервер — на показе предложения, клиент — на пересчёте в режиме правки.
  *
  * ФАЙЛ ЛИСТОВОЙ, И ЭТО ЗАКОН, А НЕ СТИЛЬ. Ни одного рантайм-импорта: `JSONContent` стирается
- * компилятором, а `verbatimModuleSyntax` (`tsconfig.base.json:10`) заставляет писать `import
+ * компилятором, а `verbatimModuleSyntax` (`tsconfig.base.json:11`) заставляет писать `import
  * type` явно — то есть листовость проверяет ещё и компилятор, не только тест-сосед.
  *
  * Импорт `./convert` или `./schema` ЗНАЧЕНИЕМ запрещён, и цена нарушения замерена, а не
@@ -204,23 +204,43 @@ export interface FlatBlock {
  * `[[entity:0F8F…]]` (разбор приводит id к нижнему регистру) считался пропажей и уводил
  * документ в raw (замерено, ре-ревью раунда 3).
  *
- * Куски склеиваются ВПРИТЫК, без разделителя: у конверсии это правило, и менять его нельзя —
- * она всё равно выбрасывает пробелы. Слова соседних блоков разводит развёртка (`unitPieces`),
- * а не эта функция.
+ * Куски склеиваются ВПРИТЫК, без разделителя, и `hardBreak` тоже ничего не разводит: у
+ * конверсии это правило, менять его нельзя — она всё равно выбрасывает пробелы. Слова разводит
+ * РАЗВЁРТКА: соседние блоки — `unitPieces`, мягкий перенос внутри блока — `unitLeafText`.
  */
 export function blockText(node: JSONContent): string {
   const out: string[] = [];
-  collectText(node, out);
+  collectText(node, out, '');
   return out.join('');
 }
 
-function collectText(node: JSONContent | undefined, out: string[]): void {
+/**
+ * Тот же писаный текст, но мягкий перенос (`hardBreak`, Shift+Enter в редакторе) разводит
+ * куски пробелом.
+ *
+ * Отдельная функция, а не отдельная РЕАЛИЗАЦИЯ: правило «что человек написал» остаётся одним
+ * на весь пакет, различается один параметр. Разводить обязана именно развёртка — `blockText`
+ * общий с `convert.ts`, и его склейка впритык там правило, а не деталь.
+ *
+ * Без этого абзац «Позвонить Ане⏎Купить хлеб» приезжал бы единицей «Позвонить АнеКупить хлеб»:
+ * владелец видел бы склейку в карточке, а мера похожести получала бы слово «анекупить»
+ * (найдено гейт-ревью, пробито тестом). Это ровно тот класс, от которого `unitPieces`
+ * защищает по своему докблоку, — защита не покрывала инлайн-случай.
+ */
+function unitLeafText(node: JSONContent): string {
+  const out: string[] = [];
+  collectText(node, out, ' ');
+  return out.join('');
+}
+
+function collectText(node: JSONContent | undefined, out: string[], breakText: string): void {
   if (!node) return;
   if (typeof node.text === 'string') out.push(node.text);
   const attrs = node.attrs ?? {};
   if (node.type === 'rawBlock' && typeof attrs.markdown === 'string') out.push(attrs.markdown);
   if (node.type === 'queryBlock' && typeof attrs.query === 'string') out.push(attrs.query);
-  for (const child of node.content ?? []) collectText(child, out);
+  if (breakText !== '' && node.type === 'hardBreak') out.push(breakText);
+  for (const child of node.content ?? []) collectText(child, out, breakText);
 }
 
 /** Пробелы схлопнуты: markdown вправе их переставлять, и считать это правкой нельзя. */
@@ -253,8 +273,9 @@ function unitPieces(node: JSONContent, nested: JSONContent[], out: string[]): vo
   );
   if (!hasBlockChild) {
     // Лист схемы: абзац, заголовок, кодовый блок, horizontalRule, rawBlock, queryBlock —
-    // у всех текст либо инлайновый, либо в атрибуте, и берётся целиком.
-    out.push(blockText(node));
+    // у всех текст либо инлайновый, либо в атрибуте, и берётся целиком. Мягкий перенос внутри
+    // разводит `unitLeafText`, иначе строки абзаца слиплись бы словами.
+    out.push(unitLeafText(node));
     return;
   }
   for (const child of children) {
@@ -383,17 +404,29 @@ function pairReplacement(
 ): DiffUnit[] {
   const pairOf: number[] = removed.map(() => -1);
   const usedAdded = new Set<number>();
+  // Пары МОНОТОННЫ по j: следующая пара не вправе взять добавленный блок левее уже занятого.
+  // Без этого запрета пары СКРЕЩИВАЮТСЯ (r0 берёт a2, r1 берёт a0), и сборка выдаёт
+  // after-сторону в порядке [a1, a2, a0] — ломается инвариант «единицы восстанавливают обе
+  // стороны в порядке документа», на который опирается сверка применённого тела (найдено
+  // гейт-ревью). Скрещение присуще и псевдокоду плана, отбор «лучший из приемлемых» его не
+  // создавал.
+  let takenUpTo = -1;
   for (let i = 0; i < removed.length; i += 1) {
     const source = at(removed, i);
     let bestJ = -1;
     let bestDice = -1;
     for (const offset of PAIR_WINDOW_OFFSETS) {
       const j = i + offset;
-      if (j < 0 || j >= added.length || usedAdded.has(j)) continue;
+      if (j <= takenUpTo || j >= added.length || usedAdded.has(j)) continue;
       const candidate = at(added, j);
       if (candidate.kind !== source.kind) continue;
       const { dice, containment } = similarity(source.text, candidate.text);
-      if (dice < PAIR_MIN_DICE && containment < 1) continue;
+      // Пустой текст с обеих сторон: слов нет, мера молчит (Дайс 0) — но пара приемлема.
+      // Ключи разошлись, типы гвардом выше совпали, значит разошёлся АТРИБУТ: щелчок чекбоксом
+      // на пустой задаче. Без этой оговорки буква правила («не same») соблюдалась бы, а дух
+      // («щелчок — changed») нет.
+      const bothEmpty = source.text === '' && candidate.text === '';
+      if (!bothEmpty && dice < PAIR_MIN_DICE && containment < 1) continue;
       if (dice > bestDice) {
         bestDice = dice;
         bestJ = j;
@@ -402,6 +435,7 @@ function pairReplacement(
     if (bestJ >= 0) {
       pairOf[i] = bestJ;
       usedAdded.add(bestJ);
+      takenUpTo = bestJ;
     }
   }
 
@@ -424,6 +458,9 @@ function pairReplacement(
     }
     drainAddedBefore(p);
     out.push(changedUnit(source.text, at(added, p).text, maxBlockWords));
+    // `max`, а не голое `p + 1`: пары монотонны по построению, поэтому ветка не срабатывает
+    // никогда — она страхует от ПОВТОРНОЙ выдачи добавленного блока, если запрет скрещения
+    // когда-нибудь снимут. От беспорядка она не спасает: порядок держит монотонность.
     j = Math.max(j, p + 1);
   }
   drainAddedBefore(added.length);
@@ -443,8 +480,11 @@ function changedUnit(before: string, after: string, maxBlockWords: number): Diff
 
 /** Мера похожести двух блоков: Дайс на МУЛЬТИМНОЖЕСТВЕ слов и вложение меньшего в большее.
  *
- *  Вложение рядом с Дайсом не украшение, а починка его единственной дырки — дописанного хвоста
- *  к короткому блоку: «Спорт» → «Спорт — заменить на бассейн» даёт Дайс 0.25 при вложении 1.0.
+ *  Вложение рядом с Дайсом не украшение, а починка его единственной дырки — ДЛИННОГО хвоста,
+ *  дописанного к короткому блоку. Числа посчитаны, а не переписаны: «Спорт» → «Спорт —
+ *  заменить на бассейн» даёт Дайс 2·1/(1+4) = 0.4 и порог проходит БЕЗ вложения — такой пример
+ *  правило не доказывает. Доказывает более длинный хвост: «Спорт» → «Спорт — заменить на
+ *  бассейн, абонемент до пятницы» — Дайс 2·1/(1+7) = 0.25 при вложении 1/1 = 1.0.
  *  Правило «Дайс ≥ 0.4 ИЛИ вложение = 1.0» замерено: FN 0.04 % при FP 3.42 % (у одного Дайса
  *  FN 3.50 %). Мультимножество, а не множество: у множеств истинные пары начинаются с 0.25. */
 function similarity(a: string, b: string): { dice: number; containment: number } {
