@@ -1149,7 +1149,7 @@ test('карточка с pendingId≠view: «Заменено правкой в
   );
   let card = await screen.findByTestId('proposal-card');
   expect(await within(card).findByTestId('proposal-replaced')).toHaveTextContent(
-    'Заменено правкой владельца — живое предложение ниже',
+    'Заменено правкой владельца — правленое предложение ниже',
   );
   // Р-7: обе карточки прогона делят кэш `routine.proposal({runId})`, и `view` здесь описывает
   // ЖИВОЕ P2. Список операций под шапкой исходного предложения был бы ЧУЖИМ.
@@ -1170,7 +1170,7 @@ test('карточка с pendingId≠view: «Заменено правкой в
   );
   card = await screen.findByTestId('proposal-card');
   expect(await within(card).findByTestId('proposal-replaced')).toHaveTextContent(
-    'Заменено — живое предложение ниже',
+    'Заменено — правленое предложение ниже',
   );
   expect(card).not.toHaveTextContent('правкой владельца');
   expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
@@ -1283,15 +1283,23 @@ test('ответ replaced → подпись + refetch; onSuccess решения
   // предложению и получает `replaced` — без подписи нажатие выглядело бы как «ничего не
   // случилось».
   const answered = renderWithProviders(
-    <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
+    <div>
+      <ThreadProbe />
+      {renderCards(msg([PROPOSAL_CARD]))}
+    </div>,
     (path, input) =>
       path === 'routine.decideProposal'
         ? { status: 'replaced', livePendingId: 'p2', liveStatus: 'pending', reason: 'edited' }
-        : proposalHandler()(path, input),
+        : path === 'chat.listMessages'
+          ? []
+          : proposalHandler()(path, input),
   );
   let card = await screen.findByTestId('proposal-card');
   const accept = await within(card).findByRole('button', { name: 'Принять' });
   const readsBefore = answered.calls.filter((c) => c.path === 'routine.proposal').length;
+  await waitFor(() =>
+    expect(answered.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1),
+  );
   fireEvent.click(accept);
   expect(await within(card).findByTestId('proposal-replaced-answer')).toHaveTextContent(
     'Заменено правкой владельца — живое предложение обновлено',
@@ -1300,6 +1308,15 @@ test('ответ replaced → подпись + refetch; onSuccess решения
     expect(answered.calls.filter((c) => c.path === 'routine.proposal').length).toBeGreaterThan(
       readsBefore,
     ),
+  );
+  // Приёмка 9 ГЛАВНЫМ сценарием: `replaced` приходит вкладке, открытой до правки, — то есть
+  // ровно тогда, когда в ленте УЖЕ появилась вторая карточка, которой эта вкладка не видит.
+  // Без перечитки ленты владелец сидел бы перед подписью «живое предложение обновлено» и
+  // пустым местом там, где оно лежит. Ниже это же свойство проверено на отказе; здесь оно
+  // проверяется на исходе, ради которого написано, — иначе оно следовало бы лишь из
+  // безусловности кода.
+  await waitFor(() =>
+    expect(answered.calls.filter((c) => c.path === 'chat.listMessages').length).toBeGreaterThan(1),
   );
   answered.unmount();
 

@@ -29,6 +29,7 @@ import { type RouterOutputs, trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
 import { chatThreadKey } from '../useChatThread';
+import { BODY_DIFF_SKIP_NOTES, BodyDiffUnits, type DiffUnit } from './BodyDiff';
 
 type ProposalView = NonNullable<RouterOutputs['routine']['proposal']>;
 type Operation = ProposalView['operations'][number];
@@ -37,9 +38,6 @@ type DecideResult = RouterOutputs['routine']['decideProposal'];
 type Mismatch = Extract<DecideResult, { status: 'stale' }>['mismatches'][number];
 /** Почему умерло предложение, по которому владелец решал (ответ `replaced`). */
 type ReplacedReason = Extract<DecideResult, { status: 'replaced' }>['reason'];
-type BodyDiff = NonNullable<Operation['bodyDiff']>;
-/** Единица показа диффа тела — блок документа в терминах `@orbis/shared/doc/diff`. */
-type DiffUnit = Extract<BodyDiff, { units: unknown }>['units'][number];
 
 /**
  * Судьба предложения словами. `approved` в словаре нет: у него печатается ещё и дата решения,
@@ -65,29 +63,16 @@ const ARCHIVED_NOTES: Record<string, string> = {
 };
 
 /**
- * Почему различия тела нет — СЛОВАМИ (Ш1.1). Причины три, и они означают разное: у
- * `body_changed` предложение вдобавок предскажет `stale` на «Принять», у остальных двух
- * предложение живо и принимается целиком — не построилась только картинка.
- *
- * Отсутствие `bodyDiff` вовсе в этот словарь НЕ входит и пометки не даёт: «диффа нет» — это
- * не «дифф не построен», и лишняя строка под решённым предложением была бы шумом.
- *
- * Экспортом — для слоя предложения на записи (Ш1.3, Задача 10): там те же три причины и
- * тот же владелец, а вторая копия словаря разошлась бы с этой на первой же правке текста.
- */
-export const BODY_DIFF_SKIP_NOTES: Record<string, string> = {
-  body_changed: 'Тело изменилось после составления',
-  too_large: 'Слишком большое тело — дифф не построен',
-  rewritten: 'Тело переписано целиком — дифф не построен',
-};
-
-/**
  * Судьба АДРЕСОВАННОГО предложения в ответе `replaced` — по причине его отказа, а не по
  * статусу живого. Тексты зеркалят серверные (`policy/pending.ts` REJECT_CONTENT): владелец
  * читает ленту и карточку подряд, и два разных слова про одно событие читались бы как два
  * события.
+ *
+ * Ключ — сам союз причин, а не `string`: серверный REJECT_CONTENT типизирован по
+ * `RejectReason` и падает СБОРКОЙ на новой причине, а `Record<string, string>` ронял бы её
+ * в запасное «Заменено» молча.
  */
-const REPLACED_NOTES: Record<string, string> = {
+const REPLACED_NOTES: Record<ReplacedReason, string> = {
   edited: 'Заменено правкой владельца',
   superseded: 'Заменено новым прогоном',
   stale: 'Устарело — состояние изменилось',
@@ -99,58 +84,6 @@ const REPLACED_NOTES: Record<string, string> = {
  * вопрос «стоит ли идти смотреть», а не заменяет запись: полный дифф — на записи (Ш1.3).
  */
 const COLLAPSED_DIFF_UNITS = 3;
-
-const PART_CLASS: Record<string, string> = {
-  same: '',
-  added: 'text-accent',
-  removed: 'text-text-muted line-through',
-};
-
-/**
- * Единицы различия тела списком — по одной строке на блок документа.
- *
- * Что рисуется: `added` — только «стало», `removed` — только «было» зачёркнутым, `changed` —
- * внутриблочные куски (`parts`), а если их нет (блок длиннее потолка слов) — «было → стало»
- * целиком. `same` в списке остаётся серым: он не мусор, а контекст, по которому владелец
- * узнаёт место правки.
- *
- * Экспортом — тому же слою на записи (Задача 10) и клиентскому диффу режима правки
- * (Задача 11): у них те же `DiffUnit` из `@orbis/shared/doc/diff` и то же правило показа.
- * ВАЖНО: компонент читает только структуру единиц и НИЧЕГО не импортирует из
- * `@orbis/shared/doc` — карточка живёт в эагерном чанке чата, и ребро на схему Tiptap
- * стоило бы там +154 кБ gzip (страж `scripts/check-lazy-chunks.ts`).
- */
-export function BodyDiffUnits({ units }: { units: readonly DiffUnit[] }) {
-  return (
-    <ul data-testid="proposal-body-diff" className="flex w-full flex-col gap-0.5">
-      {units.map((unit, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: порядок единиц документный и жёсткий (diff.ts), тексты блоков повторяются — место в списке и есть личность единицы
-        <li key={i} className="flex flex-wrap items-baseline gap-x-1">
-          {unit.parts !== undefined ? (
-            unit.parts.map((part, p) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: куски идут в порядке слов блока — место и есть личность куска
-              <span key={p} className={PART_CLASS[part.kind]}>
-                {part.text}
-              </span>
-            ))
-          ) : (
-            <>
-              {unit.kind !== 'same' && unit.before !== undefined && (
-                <span className="text-text-muted line-through">{unit.before}</span>
-              )}
-              {unit.kind === 'changed' && unit.after !== undefined && <span aria-hidden>→</span>}
-              {unit.after !== undefined && (
-                <span className={unit.kind === 'same' ? 'text-text-muted' : 'text-accent'}>
-                  {unit.after}
-                </span>
-              )}
-            </>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
 
 /** Сколько блоков добавлено, удалено и изменено — одним проходом по единицам. */
 function diffCounts(units: readonly DiffUnit[]): {
@@ -281,10 +214,15 @@ function approvedNote(view: ProposalView): string {
  *
  * «Ниже» — про ЛЕНТУ: правленое предложение приходит следующим сообщением треда и стоит под
  * этой карточкой. На экране прогона (треда нет) обещать «ниже» нечего.
+ *
+ * Слово «ПРАВЛЕНОЕ», а не «живое»: карточка ниже перестаёт быть живой в ту же секунду, когда
+ * владелец её принимает, — и подпись «живое предложение ниже» над строкой «Принято (с
+ * правками)» врала бы ровно в главном сценарии Ш1. «Правленое» верно во все моменты:
+ * происхождение соседней карточки не меняется от её судьбы.
  */
 function replacedNote(view: ProposalView, pendingId: string, inThread: boolean): string {
   const cause = view.editedFrom === pendingId ? 'Заменено правкой владельца' : 'Заменено';
-  return inThread ? `${cause} — живое предложение ниже` : cause;
+  return inThread ? `${cause} — правленое предложение ниже` : cause;
 }
 
 export function ProposalCard({
