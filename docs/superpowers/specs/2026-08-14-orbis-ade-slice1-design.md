@@ -491,6 +491,41 @@ provenance импорта. Сущностями версии не делаютс
    Сегодня «проект, отданный полностью» блокирует не спека и не гейт, а именно ручной запуск
    (мост `claude setup-token` + `claude -p` по крону), поэтому шов адресует главный тормоз.
 
+Ревалидация 2026-08-20 (`reviews/2026-08-20-market-rescan-validation.md`, части I–II) —
+уточнения к швам по свежему состоянию прецедентов:
+
+- **К пп. 1–2 (omp).** Отказ — больше не единственный исход: hashline вынесен в отдельный
+  пакет со SnapshotStore — «refusing *or attempting session-aware recovery* on mismatch»
+  (правка проигрывается на снимке «до» и 3-way-merge'ится на текущее содержимое; отказ — только
+  при конфликте merge). Дополнительные требования из их эволюции: «multi-section patches are
+  **preflighted up front so a partial batch never lands**» — переносится на наш `batch_execute`
+  и любую мультиблочную правку; авто-ремонт — только с доказательством («a repair lands only
+  when the repaired result is *shown* to parse — never on delimiter arithmetic alone»);
+  проверка и **после** применения, не только до. Их seen-line guard (право править только
+  показанное) включили по умолчанию и через три релиза сделали opt-in из-за ложных отказов —
+  у нас вводить как настройку, не как жёсткое правило. Грамматика-образец сменилась
+  (`PUT`/`CUT`/`MV`/`REM`, регистры `@name`), теги стали сессионными («not meaningful outside
+  that store») — наша форма `@@ anchor:"sha256-…" @@` не ломается, но ссылка «по образцу omp»
+  как на стабильную грамматику устарела.
+- **К пп. 4–6 (производные доки).** В первоисточнике Code Wiki — «regenerates the
+  documentation **after each change**» (мягче нашего «на каждый коммит»). Механизм стал
+  отраслевой нормой — три независимые реализации (Code Wiki, Repowise, deepseek-harness).
+  Два дополнения к шву из двух последних: **гейт дрейфа в CI** (dsh: генерируемый
+  config-catalog «verified fresh… every schema-validated key… must be locatable» — расхождение
+  роняет сборку) и **штамп свежести/уверенности на каждой производной странице** (Repowise:
+  «freshness and confidence scoring») — протухшая страница видна как протухшая, а не молча
+  врёт. К п. 6 — расширение от Repowise: не только «ссылкой в код», но и со степенью
+  проверенности («an anti-hallucination substring gate stamps it exact, fuzzy or unverified»).
+- **К п. 7 (удалённый исполнитель).** Рынок ушёл на ступень дальше по трём независимым
+  дорогам: Orca — среда задачи как декларативный рецепт в репозитории (`orca.yaml` +
+  lifecycle-скрипты; «Orca is a thin wrapper: your provider account, images, and billing stay
+  yours»); Buzz — формальная спека remote-агентов (инварианты: identity fail-closed, no
+  secrets in configuration, presence is status, at-most-one-live-instance; решение «No
+  management channel» — после деплоя всё наблюдение только через общую среду); bb — `bb.host`:
+  удалённое исполнение как свойство контракта плагина. Формулировка шва расширяется: «среда
+  исполнителя описывается декларацией при задаче и поднимается/гасится по её жизненному циклу;
+  SSH — первый транспорт».
+
 ## Что НЕ входит
 
 - Локальный раннер, ACP, живой поток `session/update`, интерактивные ворота.
