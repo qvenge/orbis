@@ -180,8 +180,12 @@ function rowKey(index: number, aspect: string | undefined, field: string): strin
 /**
  * Тело у операции есть в ЛЮБОЙ из двух форм. Ключ строки предложения у них общий (`body`):
  * подстановка документа вместо строки — это правка той же строки, а не новая.
+ *
+ * Экспортируется потому, что читателей стало два: сборка правки и ПОКАЗ (proposal-diff.ts).
+ * Второй такой предикат разъехался бы с первым молча — ровно на том, на чём и ломался показ
+ * правленого предложения: строка тела рисовалась по `body !== undefined`, а P2 несёт `bodyDoc`.
  */
-function hasBody(input: Record<string, unknown>): boolean {
+export function hasBody(input: Record<string, unknown>): boolean {
   return input.body !== undefined || input.bodyDoc !== undefined;
 }
 

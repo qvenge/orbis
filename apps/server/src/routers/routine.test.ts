@@ -6,7 +6,8 @@
 // прогоном через `runNow`: собранный руками pending проверял бы фикстуру, а не путь.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { manualBucket, newId, pendingMessageId, routineRunId } from '@orbis/shared';
-import { parseBody } from '@orbis/shared/doc';
+import { parseBody, readBodyDoc, serializeBody } from '@orbis/shared/doc';
+import { type DiffUnit, flattenBlocks } from '@orbis/shared/doc/diff';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -21,8 +22,12 @@ import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMRequest, LLMResponse } from '../llm/types';
 import { createPending } from '../policy/pending';
 import { appRouter } from '../router';
+import {
+  PROPOSAL_DIFF_MAX_BODY_BYTES,
+  PROPOSAL_DIFF_MAX_SOURCE_LINES,
+} from '../routines/constants';
 import { editsHash, editsSchema } from '../routines/edits';
-import type { RoutineDeps } from '../routines/lifecycle';
+import type { ProposalOperationView, RoutineDeps } from '../routines/lifecycle';
 import { startBucketRun, supersedeOpen } from '../routines/lifecycle';
 import { runRoutineRun } from '../routines/runner';
 import { makeRunRegistry } from '../routines/shutdown';
@@ -288,6 +293,78 @@ function ownerDoc(): { v: number; doc: { type: 'doc'; content: Record<string, un
     attrs: { ...((node as { attrs?: Record<string, unknown> }).attrs ?? {}), id: `blk-${i}` },
   }));
   return { v: parsed.v, doc: { type: 'doc', content } };
+}
+
+/**
+ * Предложение, правящее ТЕЛО СУЩЕСТВУЮЩЕГО текста: у записи уже есть тело, рутина предлагает
+ * другое. Отличие от `proposedWithBody` — там тело правится у пустой записи, а диффу нужна
+ * сторона «было».
+ */
+async function proposedBodyChange(
+  title: string,
+  current: string,
+  proposed: string,
+): Promise<Proposed> {
+  const routineId = await seedRoutine(owner, { title: `Рутина: ${title}` });
+  const created = await seedEntity(owner, {
+    title,
+    tags: [],
+    body: current,
+    aspects: { 'orbis/task': { status: 'inbox' } },
+  });
+  const taskId = created.id;
+  const runId = routineRunId(routineId, MANUAL_BUCKET, 1);
+  const provider = new ScriptedProvider([
+    toolUse([
+      {
+        name: 'orbis_propose',
+        input: {
+          run_id: runId,
+          explanation: EXPLANATION,
+          operations: [{ tool: 'entity_update', input: { id: taskId, body: proposed } }],
+        },
+      },
+    ]),
+  ]);
+  await callerWith(provider).routine.runNow({ routineId });
+  const aspect = await waitClosed(runId);
+  expect(aspect.outcome).toBe('finished');
+  const pendingId = aspect.proposal?.pending_id;
+  if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
+  return { routineId, taskId, runId, pendingId };
+}
+
+/** Строка тела в показе предложения — та единственная, ради которой считается дифф. */
+async function bodyRowOf(runId: string): Promise<ProposalOperationView> {
+  const view = await caller().routine.proposal({ runId });
+  if (view === null) throw new Error('предложение не найдено');
+  const row = view.operations.find((o) => o.field === 'body');
+  if (row === undefined) throw new Error('в предложении нет строки тела');
+  return row;
+}
+
+/**
+ * After-сторона диффа: тексты единиц, кроме удалённых. `after` заполнен у всех трёх видов
+ * (контракт DiffUnit) — его отсутствие это поломка, а не повод на неё зажмуриться.
+ */
+function afterTexts(units: DiffUnit[]): string[] {
+  return units
+    .filter((u) => u.kind !== 'removed')
+    .map((u) => {
+      if (u.after === undefined) throw new Error(`единица ${u.kind} без after`);
+      return u.after;
+    });
+}
+
+/** Тело в n непустых строк: абзацами, чтобы каждая строка была отдельным блоком. */
+function manyLines(n: number): string {
+  return Array.from({ length: n }, (_, i) => `Пункт ${i + 1}`).join('\n\n');
+}
+
+/** Тело сверх потолка БАЙТ, но в одну строку: срабатывает ровно байтовый сторож. */
+function heavyBody(): string {
+  const chunk = 'текст ';
+  return chunk.repeat(Math.ceil(PROPOSAL_DIFF_MAX_BODY_BYTES / Buffer.byteLength(chunk)) + 1);
 }
 
 /** Тело записи документом — то, что реально легло в `body_doc`. */
@@ -1085,6 +1162,206 @@ describe('routine.proposal / decideProposal', () => {
       run: { outcome: 'finished', finished_at: iso(T0), report: 'нечего предлагать' },
     });
     expect(await caller().routine.proposal({ runId })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Дифф тела в показе предложения (Ш1.1, Ш1.2)
+// ---------------------------------------------------------------------------
+
+describe('routine.proposal: дифф тела предложения', () => {
+  test('строка тела pending-предложения несёт bodyDiff.units и proposedDoc; изменённый блок — changed с parts (приёмки 1, 4)', async () => {
+    const { runId } = await proposedBodyChange(
+      'Позвонить в банк',
+      'Позвонить в банк в 10:00\n\nВзять паспорт',
+      'Позвонить в банк в 14:00\n\nВзять паспорт',
+    );
+
+    const row = await bodyRowOf(runId);
+    // Запасная форма показа на месте: полный markdown никуда не делся
+    expect(row.after).toBe('Позвонить в банк в 14:00\n\nВзять паспорт');
+
+    const diff = row.bodyDiff;
+    if (diff === undefined || 'skipped' in diff) throw new Error('дифф не построен');
+    expect(diff.units.map((u) => u.kind)).toEqual(['changed', 'same']);
+    const changed = diff.units[0];
+    expect(changed?.before).toBe('Позвонить в банк в 10:00');
+    expect(changed?.after).toBe('Позвонить в банк в 14:00');
+    // Приёмка 4: внутри изменённого блока видно ИМЕННО правку, а не весь блок целиком
+    expect(changed?.parts).toEqual([
+      { kind: 'same', text: 'Позвонить в банк в' },
+      { kind: 'removed', text: '10:00' },
+      { kind: 'added', text: '14:00' },
+    ]);
+    expect(diff.units[1]).toEqual({
+      kind: 'same',
+      before: 'Взять паспорт',
+      after: 'Взять паспорт',
+    });
+
+    // Документ предложенного тела — редактору слоя (Ш1.3/Ш1.11): его открывать на правку
+    const proposed = row.proposedDoc;
+    if (proposed === undefined) throw new Error('proposedDoc не отдан');
+    expect(flattenBlocks(proposed.doc).map((b) => b.text)).toEqual([
+      'Позвонить в банк в 14:00',
+      'Взять паспорт',
+    ]);
+    // Предложение не правлено владельцем — происхождения у него нет
+    expect((await caller().routine.proposal({ runId }))?.editedFrom).toBeUndefined();
+  });
+
+  test('ИНВАРИАНТ 1а: канон применённого тела равен after-стороне серверного диффа — approve и сверка flattenBlocks(readBodyDoc(тела записи)) с after-склейкой units', async () => {
+    const { taskId, runId, pendingId } = await proposedBodyChange(
+      'Собрать чемодан',
+      '# План\n\nПаспорт\n\n- носки\n- зарядка',
+      '# План поездки\n\nПаспорт и билеты\n\n- носки\n- зарядка\n- зонт',
+    );
+
+    const row = await bodyRowOf(runId);
+    const diff = row.bodyDiff;
+    if (diff === undefined || 'skipped' in diff) throw new Error('дифф не построен');
+    const afterSide = afterTexts(diff.units);
+
+    const applied = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+    });
+    expect(applied.status).toBe('applied');
+
+    // То, что легло в запись, — ровно то, что сервер показал «станет»: поэлементно и в
+    // порядке документа (инвариант порядка after-стороны у diffBodyDocs жёсткий)
+    const stored = readBodyDoc(await bodyDocOf(taskId), (await bodyOf(taskId)) ?? '');
+    expect(flattenBlocks(stored.doc).map((b) => b.text)).toEqual(afterSide);
+  });
+
+  test('тело записи тронуто после составления → bodyDiff {skipped: body_changed}, диффа нет (приёмка 12, С1)', async () => {
+    const { taskId, runId, pendingId } = await proposedBodyChange(
+      'Переписать заметку',
+      'Старый текст',
+      'Новый текст',
+    );
+    // Владелец тронул запись сам — updated_at бампит любая её правка
+    await ownerSets(taskId, 'planned');
+
+    const row = await bodyRowOf(runId);
+    expect(row.bodyDiff).toEqual({ skipped: 'body_changed' });
+    // Разбора не было — значит и документа редактору нет; запасная форма показа осталась
+    expect(row.proposedDoc).toBeUndefined();
+    expect(row.after).toBe('Новый текст');
+
+    // Ровно то, ради чего пометка и заведена: дифф против НОВОГО тела нарисовал бы
+    // согласие там, где «Принять» отвечает отказом
+    const decided = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+    });
+    expect(decided.status).toBe('stale');
+  });
+
+  test('тело сверх потолка (байты/строки) → {skipped: too_large}, after-форма на месте, кнопки живы (приёмка 16)', async () => {
+    // Сторона «стало»: предложено тело из PROPOSAL_DIFF_MAX_SOURCE_LINES + 1 непустых строк
+    const many = manyLines(PROPOSAL_DIFF_MAX_SOURCE_LINES + 1);
+    const wide = await proposedBodyChange('Разложить архив', 'Коротко', many);
+    const wideRow = await bodyRowOf(wide.runId);
+    expect(wideRow.bodyDiff).toEqual({ skipped: 'too_large' });
+    expect(wideRow.proposedDoc).toBeUndefined();
+    expect(wideRow.after).toBe(many);
+
+    // Кнопки живы и форма прежняя: предложение по-прежнему принимается целиком
+    const applied = await callerLater().routine.decideProposal({
+      runId: wide.runId,
+      pendingId: wide.pendingId,
+      decision: 'approve',
+    });
+    expect(applied.status).toBe('applied');
+    expect(await bodyOf(wide.taskId)).toContain(`Пункт ${PROPOSAL_DIFF_MAX_SOURCE_LINES + 1}`);
+
+    // Сторона «было»: у записи тело сверх потолка байт, предложено крошечное
+    const heavy = await proposedBodyChange('Сжать конспект', heavyBody(), 'Коротко и по делу');
+    const heavyRow = await bodyRowOf(heavy.runId);
+    expect(heavyRow.bodyDiff).toEqual({ skipped: 'too_large' });
+    expect(heavyRow.after).toBe('Коротко и по делу');
+
+    // ПОРЯДОК проверок: устаревание сильнее потолка. Тело и сверх потолка, и тронуто —
+    // владельцу говорят про устаревание, потому что «Принять» откажет именно по нему
+    await ownerSets(heavy.taskId, 'planned');
+    expect((await bodyRowOf(heavy.runId)).bodyDiff).toEqual({ skipped: 'body_changed' });
+  });
+
+  test('тело переписано целиком → {skipped: rewritten}, но proposedDoc отдан: разбор уже состоялся, и слой правки открывается', async () => {
+    const before = Array.from({ length: 40 }, (_, i) => `Альфа бета гамма ${i}`).join('\n\n');
+    const after = Array.from({ length: 40 }, (_, i) => `Ро сигма тау ${i + 100}`).join('\n\n');
+    const { runId } = await proposedBodyChange('Переписать план', before, after);
+
+    const row = await bodyRowOf(runId);
+    expect(row.bodyDiff).toEqual({ skipped: 'rewritten' });
+    expect(row.after).toBe(after);
+    // Отличие от до-разборных отказов: потолок не сработал, документ построен — значит его и
+    // отдаём, иначе владельцу нечего было бы открыть на правку ровно там, где правка нужнее
+    const proposed = row.proposedDoc;
+    if (proposed === undefined) throw new Error('proposedDoc не отдан');
+    expect(flattenBlocks(proposed.doc)).toHaveLength(40);
+  });
+
+  test('решённое предложение — bodyDiff и proposedDoc отсутствуют (Ш1.1: дифф только для pending)', async () => {
+    const { runId, pendingId } = await proposedBodyChange('Оплатить счёт', 'Было', 'Стало');
+    expect((await bodyRowOf(runId)).bodyDiff).toBeDefined();
+
+    expect(
+      (await callerLater().routine.decideProposal({ runId, pendingId, decision: 'reject' })).status,
+    ).toBe('rejected');
+
+    const view = await caller().routine.proposal({ runId });
+    expect(view?.status).toBe('rejected');
+    const row = await bodyRowOf(runId);
+    expect(row.bodyDiff).toBeUndefined();
+    expect(row.proposedDoc).toBeUndefined();
+    // Строка тела и её «станет» остаются: решённое предложение обязано читаться
+    expect(row.after).toBe('Стало');
+  });
+
+  test('правленое P2: строка тела на месте, после-сторона — присланный bodyDoc без канонизации (Ш1.11)', async () => {
+    const { taskId, runId, pendingId } = await proposedWithBody('Описать переезд');
+    const doc = ownerDoc();
+
+    // Правка ломает ЗНАЧЕНИЕ поля → применение падает VALIDATION, а правленое остаётся
+    // живым и ждёт решения: единственный способ увидеть pending-P2 в показе
+    await trpcError(
+      callerLater().routine.decideProposal({
+        runId,
+        pendingId,
+        decision: 'approve',
+        edits: {
+          body: [{ index: 0, bodyDoc: doc }],
+          fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'не-статус' }],
+        },
+      }),
+    );
+    const aspect = await runAspect(runId);
+    expect(aspect.proposal?.status).toBe('pending');
+    const editedId = aspect.proposal?.pending_id;
+    if (editedId === undefined) throw new Error('прогон без предложения');
+
+    const view = await caller().routine.proposal({ runId });
+    if (view === null) throw new Error('предложение не найдено');
+    expect(view.pendingId).toBe(editedId);
+    // Рулинг П-2: подпись «правка владельца» на карточке — по этому полю
+    expect(view.editedFrom).toBe(pendingId);
+
+    // Строка тела у правленого предложения ЕСТЬ: payload несёт bodyDoc, а не body
+    const row = view.operations.find((o) => o.field === 'body');
+    if (row === undefined) throw new Error('строки тела в правленом предложении нет');
+    expect(row.after).toBe(serializeBody(doc));
+    // Тело владельца берётся КАК ЕСТЬ: канонизация снесла бы блочные id
+    expect(row.proposedDoc).toEqual(doc);
+
+    // Дифф считается против тела ЗАПИСИ и after-стороной даёт ровно документ владельца
+    const diff = row.bodyDiff;
+    if (diff === undefined || 'skipped' in diff) throw new Error('дифф не построен');
+    expect(afterTexts(diff.units)).toEqual(flattenBlocks(doc.doc).map((b) => b.text));
+    expect(await bodyOf(taskId)).toBe(''); // ничего не применено
   });
 });
 

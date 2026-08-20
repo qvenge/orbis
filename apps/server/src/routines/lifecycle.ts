@@ -37,6 +37,7 @@ import {
   routineRunBatchId,
   routineRunId,
 } from '@orbis/shared';
+import type { BodyDoc } from '@orbis/shared/doc';
 import { sql } from 'drizzle-orm';
 import { type RunRow, runById, runSummary, runsOfParent } from '../agent-loop/queries';
 import type { Clock } from '../budget/aggregates';
@@ -75,6 +76,7 @@ import {
 import type { RoutineHistoryItem } from './context';
 import { buildEditedOperations, editsHash, isEmptyEdits, type ProposalEdits } from './edits';
 import { processRoutineLocks, type RoutineLocks } from './locks';
+import { type ProposalBodyDiff, type ProposalBodyRow, proposalBodyRows } from './proposal-diff';
 
 /** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
 const defaultSink = makeChatJournalSink();
@@ -920,6 +922,14 @@ export interface ProposalOperationView {
   before?: unknown;
   /** Значение, которое встанет после применения. */
   after?: unknown;
+  /**
+   * Различие тела построчно — только у строки тела и только у ЖИВОГО предложения (Ш1.1,
+   * Ш1.2). У решённого поля нет: решать нечего, а тело записи с тех пор ушло вперёд.
+   * `after` при этом остаётся всегда — это запасная форма показа при любом `skipped`.
+   */
+  bodyDiff?: ProposalBodyDiff;
+  /** Документ предложенного тела — редактору слоя правки; см. ProposalBodyRow.proposedDoc. */
+  proposedDoc?: BodyDoc;
   summary: string;
 }
 
@@ -944,6 +954,13 @@ export interface ProposalView {
   decidedAt?: string;
   /** Заполнено у статуса `stale`: чем именно предложение разошлось с графом. */
   mismatches?: ProposalMismatchNote[];
+  /**
+   * Предложение рождено ПРАВКОЙ владельца: здесь id исходного, которое эта правка погасила
+   * (Ш1.8). По нему экран подписывает карточки: живую — «правка владельца», исходную —
+   * «заменено правкой владельца». Отдельного статуса «правлено» нет намеренно: статус
+   * описывает судьбу живого предложения, а это — его происхождение.
+   */
+  editedFrom?: string;
   /**
    * Прогон убран в архив — след ОТКАТА рутинного прогона (rollback.ts): у принятого
    * предложения это значит «принято, затем откачено», и карточка обязана это сказать, а не
@@ -1042,8 +1059,13 @@ export async function proposalView(
       explanation: stored.explanation ?? row.run.report ?? '',
       ...(proposal.decided_at !== undefined && { decidedAt: proposal.decided_at }),
       ...(proposal.mismatches !== undefined && { mismatches: proposal.mismatches }),
+      ...(proposal.edited_from !== undefined && { editedFrom: proposal.edited_from }),
       runArchived: row.archived,
-      operations: await describeOperations(tx, stored.operations),
+      // Дифф тела — только у живого предложения (Ш1.1): статус берётся с прогона, он же
+      // источник правды о судьбе
+      operations: await describeOperations(tx, stored.operations, {
+        withDiff: proposal.status === 'pending',
+      }),
     };
   });
 }
@@ -1856,12 +1878,17 @@ function referencedIds(operations: readonly StoredOperation[]): string[] {
   return [...ids];
 }
 
-/** Предложение построчно: заголовки резолвятся под identity владельца (RLS). */
+/**
+ * Предложение построчно: заголовки резолвятся под identity владельца (RLS), а у строк тела
+ * живого предложения рядом считается дифф (`withDiff`, proposal-diff.ts).
+ */
 async function describeOperations(
   tx: Tx,
   operations: readonly StoredOperation[],
+  args: { withDiff: boolean },
 ): Promise<ProposalOperationView[]> {
   const titles = await titlesOf(tx, referencedIds(operations));
+  const bodies = await proposalBodyRows(tx, operations, args);
   const rows: ProposalOperationView[] = [];
   for (const [index, op] of operations.entries()) {
     if (op.tool === 'entity_create') {
@@ -1869,7 +1896,7 @@ async function describeOperations(
     } else if (op.tool === 'relation_create' || op.tool === 'relation_delete') {
       rows.push(relationRow(index, op, titles));
     } else if (op.tool === 'entity_update') {
-      rows.push(...updateRows(index, op.input, titles));
+      rows.push(...updateRows(index, op.input, titles, bodies.get(index)));
     } else {
       // Реестр предложения сужен (PROPOSAL_ALLOWED_TOOLS), сюда попасть нечему; но молча
       // проглотить незнакомую строку значило бы показать владельцу неполный список
@@ -1921,12 +1948,14 @@ function relationRow(
  *
  * Поля вне аспектов (заголовок, метки, тело, архив) предусловий не имеют вовсе — у тела
  * своё CAS по `updated_at`, у остальных нет и его. Такая строка едет без `before`: «что
- * встанет» владелец видит, «что было» ему покажет сама запись.
+ * встанет» владелец видит, «что было» ему покажет сама запись. У тела «что было» показывает
+ * дифф (`body`), и он приезжает готовым — считает его proposal-diff.ts.
  */
 function updateRows(
   index: number,
   input: Record<string, unknown>,
   titles: ReadonlyMap<string, string>,
+  body: ProposalBodyRow | undefined,
 ): ProposalOperationView[] {
   const id = String(input.id);
   const entity = { id, title: titleOf(titles, id) };
@@ -1951,6 +1980,22 @@ function updateRows(
     }
   }
   for (const [field, label] of Object.entries(CORE_FIELD_LABELS)) {
+    if (field === 'body') {
+      // Строка тела рисуется по РЕЗУЛЬТАТУ разбора тела, а не по `input.body`: у правленого
+      // предложения тело едет `bodyDoc` (Ш1.11), и проверка на `body` теряла бы строку целиком
+      if (body === undefined) continue;
+      rows.push({
+        index,
+        tool: 'entity_update',
+        entity,
+        field,
+        ...(body.after !== undefined && { after: body.after }),
+        ...(body.bodyDiff !== undefined && { bodyDiff: body.bodyDiff }),
+        ...(body.proposedDoc !== undefined && { proposedDoc: body.proposedDoc }),
+        summary: `«${entity.title}»: ${label}`,
+      });
+      continue;
+    }
     if (input[field] === undefined) continue;
     rows.push({
       index,
