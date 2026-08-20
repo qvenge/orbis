@@ -1097,6 +1097,13 @@ async function runRowAnyArchive(
  * список из нуля или одного: у рутины открытых предложений не больше одного (V1.8).
  *
  * Порядок — по времени сообщения: старшее предложение первым, как в ленте.
+ *
+ * В ответе только ЖИВОЕ: `status === 'pending'` и прогон не в архиве. Проба это уже
+ * проверила, но между её транзакцией и сборкой проходит вторая — за это окно владелец
+ * успевает решить предложение из другой вкладки, а откат — убрать прогон в архив.
+ * Перепроверка стоит одного сравнения и делает обещание экрану («всё, что здесь есть, —
+ * pending, значит у строки тела есть `bodyDiff` и `proposedDoc`») правдой, а не почти
+ * правдой.
  */
 export async function openProposalsForEntity(
   db: Db,
@@ -1110,7 +1117,9 @@ export async function openProposalsForEntity(
     // бы с первой на первой же правке. Запросов на предложение выходит больше, чем
     // минимально возможно, — цена принята: список это 0–1 элемент
     const view = await proposalView(db, { ownerId: args.ownerId, runId });
-    if (view !== null) views.push(view);
+    if (view === null) continue;
+    if (view.status !== 'pending' || view.runArchived) continue;
+    views.push(view);
   }
   return views;
 }
@@ -1120,17 +1129,31 @@ export async function openProposalsForEntity(
  * payload'у pending-сообщения; вложенный массив внутри пробы законен и уже используется
  * эскалацией (ai/escalation.ts).
  *
- * ЗАМЕР, который стоит знать заранее: под `withIdentity` план этой пробы — **Seq Scan**
- * (36 тыс. сообщений на локальной БД — 23 мс), а не обход `chat_messages_metadata_gin`.
- * Форма пробы тут ни при чём: в обход RLS та же проба идёт Bitmap Index Scan'ом по этому
- * индексу за 0.1 мс. Причина — `jsonb_contains` не leakproof (`pg_proc.proleakproof = f`),
- * и под политикой планировщик не вправе опустить его в Index Cond; leakproof-условия
- * (`uuid_eq`, `texteq`) индексы под той же политикой берут. Это общее свойство ВСЕХ
- * containment-проб под RLS (`storedProposal`, `findPendingMessage`, `aspects @>` в
- * entity_query), а не этой; лечится не здесь — только столбцом со скалярным ключом вместо
- * пробы по jsonb.
+ * Проб ТРИ, потому что затронуть запись предложение умеет тремя способами, и все три
+ * обещаны экраном:
+ *  - `input.id` — правка самой записи (`entity_update`); приёмки 3, 17, 18;
+ *  - `input.source_id` — связь, у которой запись является началом. Карточка перечисляет
+ *    источник связи отдельной строкой с `entity: {id: source_id}` (см. `relationRow`), а
+ *    приёмка 2 обещает: тап по записи из карточки открывает слой. Без этой пробы тап вёл
+ *    бы на запись без слоя — тупик того самого класса, против которого написан весь срез;
+ *  - `input.target_id` — второй конец связи затронут не меньше первого: «связать эту
+ *    задачу с проектом» меняет и проект, и приёмка 3 обещает плашку при ОБЫЧНОМ открытии
+ *    любой затронутой записи.
+ * Условия сложены `OR` в ОДНОМ запросе, а не тремя запросами с последующим слиянием: так
+ * дедупликация и общий порядок получаются построением (сообщение, совпавшее по двум
+ * пробам, — одна строка), а под RLS это ещё и один проход по таблице вместо трёх.
  *
- * `source: 'routine'` стоит в САМОЙ пробе, а не фильтром после неё: чат-подтверждение
+ * ЗАМЕР, который стоит знать заранее: под `withIdentity` план этой пробы — **Seq Scan**
+ * (36 тыс. сообщений на локальной БД — 24 мс на все три условия), а не обход
+ * `chat_messages_metadata_gin`. Форма проб тут ни при чём: в обход RLS тот же запрос идёт
+ * `BitmapOr` из трёх Bitmap Index Scan'ов по этому индексу за 0.1 мс. Причина —
+ * `jsonb_contains` не leakproof (`pg_proc.proleakproof = f`), и под политикой планировщик
+ * не вправе опустить его в Index Cond; leakproof-условия (`uuid_eq`, `texteq`) индексы под
+ * той же политикой берут. Это общее свойство ВСЕХ containment-проб под RLS
+ * (`storedProposal`, `findPendingMessage`, `aspects @>` в entity_query), а не этой; лечится
+ * не здесь — только столбцом со скалярным ключом вместо пробы по jsonb.
+ *
+ * `source: 'routine'` стоит в САМИХ пробах, а не фильтром после них: чат-подтверждение
  * несёт ровно те же операции по той же записи (тот же `batch_execute` с тем же `id`).
  * Ответ оно не испортило бы и без этого условия — его сторожит живость ниже, — но проба,
  * заведомо вытаскивающая чужие строки, живёт ровно до первой правки условий после неё, и
@@ -1147,13 +1170,18 @@ export async function openProposalsForEntity(
  * же `run_id`).
  */
 async function liveProposalRuns(tx: Tx, entityId: string): Promise<string[]> {
-  const probe = JSON.stringify({
-    pending: { source: 'routine', input: { operations: [{ input: { id: entityId } }] } },
-  });
+  // Ключ операции, которым адресуется запись: правка зовёт её `id`, связь — концами
+  // (`propose.ts` собирает relation_* как есть, полями source_id/target_id)
+  const probe = (field: 'id' | 'source_id' | 'target_id'): string =>
+    JSON.stringify({
+      pending: { source: 'routine', input: { operations: [{ input: { [field]: entityId } }] } },
+    });
   const rows = await tx.execute(
     sql`SELECT id, metadata -> 'pending' ->> 'run_id' AS run_id
         FROM chat_messages
-        WHERE metadata @> ${probe}::jsonb
+        WHERE metadata @> ${probe('id')}::jsonb
+           OR metadata @> ${probe('source_id')}::jsonb
+           OR metadata @> ${probe('target_id')}::jsonb
         ORDER BY created_at, id`,
   );
   const runIds: string[] = [];

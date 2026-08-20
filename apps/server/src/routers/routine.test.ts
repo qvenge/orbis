@@ -461,15 +461,21 @@ async function plannedProposed(title: string, routineId?: string): Promise<Plann
 async function proposedOps(
   title: string,
   operations: Array<{ tool: string; input: Record<string, unknown> }>,
+  // Часы прогона: через них задаётся `created_at` pending-сообщения (`propose.ts` отдаёт
+  // `ctx.clock` в `createPending`) — единственный способ развести два предложения во
+  // времени, когда проверяется ПОРЯДОК ответа
+  clock: () => Date = () => T0,
 ): Promise<{ routineId: string; runId: string; pendingId: string }> {
   const routineId = await seedRoutine(owner, { title: `Рутина: ${title}` });
-  const runId = routineRunId(routineId, MANUAL_BUCKET, 1);
+  // Бакет ручного прогона — из ТЕХ ЖЕ часов: id прогона детерминирован бакетом, и взять
+  // его из замороженного T0 при других часах значило бы разойтись с тем, что заведёт runNow
+  const runId = routineRunId(routineId, manualBucket(clock().toISOString()), 1);
   const provider = new ScriptedProvider([
     toolUse([
       { name: 'orbis_propose', input: { run_id: runId, explanation: EXPLANATION, operations } },
     ]),
   ]);
-  await callerWith(provider).routine.runNow({ routineId });
+  await callerWith(provider, { clock }).routine.runNow({ routineId });
   const aspect = await waitClosed(runId);
   expect(aspect.outcome).toBe('finished');
   const pendingId = aspect.proposal?.pending_id;
@@ -1441,23 +1447,29 @@ describe('routine.proposal: дифф тела предложения', () => {
 // ---------------------------------------------------------------------------
 
 describe('routine.proposalsForEntity', () => {
-  test('две рутины с открытыми предложениями по одной записи → обе, решение по каждому своё (приёмка 18)', async () => {
+  test('две рутины с открытыми предложениями по одной записи → обе В ПОРЯДКЕ ленты, решение по каждому своё (приёмка 18)', async () => {
     const taskId = await seedTask('Собрать документы');
+    // Часы разведены НАМЕРЕННО: у обоих предложений иначе один и тот же `created_at`
+    // (часы прогона заморожены на T0), и порядок ответа проверить было бы нечем
     const first = await proposedOps('первая по документам', [
       {
         tool: 'entity_update',
         input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
       },
     ]);
-    const second = await proposedOps('вторая по документам', [
-      { tool: 'entity_update', input: { id: taskId, title: 'Собрать документы к пятнице' } },
-    ]);
+    const second = await proposedOps(
+      'вторая по документам',
+      [{ tool: 'entity_update', input: { id: taskId, title: 'Собрать документы к пятнице' } }],
+      () => LATER,
+    );
 
     const both = await caller().routine.proposalsForEntity({ entityId: taskId });
-    expect(both.map((v) => v.pendingId).sort()).toEqual([first.pendingId, second.pendingId].sort());
+    // Порядок — по времени сообщения, старшее первым: сравнение через sort() пропустило бы
+    // регрессию ORDER BY, а экран рисует список сверху вниз
+    expect(both.map((v) => v.pendingId)).toEqual([first.pendingId, second.pendingId]);
     expect(both.every((v) => v.status === 'pending')).toBe(true);
     // Каждое ведёт на СВОЮ рутину: без этого владелец не поймёт, кто из двух что предлагает
-    expect(both.map((v) => v.routineId).sort()).toEqual([first.routineId, second.routineId].sort());
+    expect(both.map((v) => v.routineId)).toEqual([first.routineId, second.routineId]);
 
     // Решение по одному не трогает второе: список сужается ровно на решённое
     expect(
@@ -1573,6 +1585,57 @@ describe('routine.proposalsForEntity', () => {
     expect(
       await caller().routine.proposalsForEntity({ entityId: await seedTask('Тихая') }),
     ).toEqual([]);
+  });
+
+  test('предложение из ОДНОЙ связи находится по обоим концам: по источнику (тап из карточки, приёмка 2) и по цели (обычное открытие, приёмка 3)', async () => {
+    const taskId = await seedTask('Сверстать смету');
+    const project = await seedEntity(owner, {
+      title: 'Ремонт кухни',
+      tags: [],
+      aspects: { 'orbis/project': { stage: 'active' } },
+    });
+    // Ни одной entity_update: единственная операция адресуется концами связи, и проба по
+    // `id` не увидела бы это предложение вовсе
+    const { pendingId } = await proposedOps('связать задачу с проектом', [
+      {
+        tool: 'relation_create',
+        input: { source_id: taskId, target_id: project.id, relation_type: 'parent' },
+      },
+    ]);
+
+    // Источник: ровно та запись, которую карточка перечисляет строкой (relationRow ставит
+    // entity: {id: source_id}) — тап по ней обязан привести к слою, а не в тупик
+    const bySource = await caller().routine.proposalsForEntity({ entityId: taskId });
+    expect(bySource.map((v) => v.pendingId)).toEqual([pendingId]);
+    expect(bySource[0]?.operations[0]).toMatchObject({
+      index: 0,
+      tool: 'relation_create',
+      entity: { id: taskId, title: 'Сверстать смету' },
+    });
+
+    // Цель связи затронута не меньше источника, хотя в карточке отдельной строкой не стоит
+    const byTarget = await caller().routine.proposalsForEntity({ entityId: project.id });
+    expect(byTarget.map((v) => v.pendingId)).toEqual([pendingId]);
+  });
+
+  test('смешанное предложение (правка + две связи) находится по каждой из трёх записей ровно ОДИН раз — совпадение по двум пробам не двоит ответ', async () => {
+    const a = await seedTask('Собрать анализы');
+    const b = await seedTask('Записаться к врачу');
+    const c = await seedTask('Забрать заключение');
+    const { pendingId } = await proposedOps('приём у врача одним планом', [
+      { tool: 'entity_update', input: { id: a, aspects: { 'orbis/task': { status: 'planned' } } } },
+      { tool: 'relation_create', input: { source_id: a, target_id: b, relation_type: 'blocks' } },
+      { tool: 'relation_create', input: { source_id: b, target_id: c, relation_type: 'blocks' } },
+    ]);
+
+    // A совпадает с пробой по `id` (правка) И с пробой по `source_id` (первая связь);
+    // B — с пробой по `target_id` (первая связь) И по `source_id` (вторая). Оба обязаны
+    // приехать ОДНИМ элементом: иначе экран нарисовал бы две плашки одного предложения
+    for (const entityId of [a, b, c]) {
+      const open = await caller().routine.proposalsForEntity({ entityId });
+      expect(open.map((v) => v.pendingId)).toEqual([pendingId]);
+      expect(open[0]?.operations).toHaveLength(3);
+    }
   });
 
   test('PAT-агенту хода нет: ownerOnly, как весь routine.*', async () => {
