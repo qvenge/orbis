@@ -53,7 +53,12 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
 import type { LLMProvider } from '../llm/types';
-import { approvePending, type RejectReason, rejectPending } from '../policy/pending';
+import {
+  approvePending,
+  type RejectReason,
+  rejectedReason,
+  rejectPending,
+} from '../policy/pending';
 import { wallClockIn } from '../recurring/materialize';
 import {
   CONSECUTIVE_FAILURES_TO_PAUSE,
@@ -903,12 +908,40 @@ export interface ProposalView {
  * показывают плашку ошибки. `already` — предложение уже решено (владельцем со второго
  * экрана, гашением нового прогона, прошлой проверкой предусловий): повторное нажатие
  * обязано быть безопасным и внятным, а не вторым решением поверх первого.
+ *
+ * `replaced` — пятый исход и отдельный вариант, а не поле внутри `already`: у `already`
+ * смысл «предложение, по которому ты решаешь, уже решено», а здесь решать нечего вовсе —
+ * прогон живёт ДРУГИМ предложением, и экран обязан перечитать и показать его, а не
+ * дорисовать статус к тому, что видел.
  */
 export type DecideProposalResult =
-  | { status: 'applied'; actionId: string }
-  | { status: 'stale'; mismatches: PreconditionMismatch[] }
+  | {
+      status: 'applied';
+      actionId: string;
+      /**
+       * Применено предложение, рождённое правкой владельца: здесь id ИСХОДНОГО, которое
+       * эта правка погасила. Экран исходной карточки по нему понимает, что применено не
+       * ровно то, что он показывал.
+       */
+      editedFrom?: string;
+    }
+  | {
+      status: 'stale';
+      mismatches: PreconditionMismatch[];
+      /** Какое именно предложение устарело — карточке нужно узнать своё среди двух. */
+      pendingId?: string;
+    }
   | { status: 'rejected' }
-  | { status: 'already'; proposalStatus: ProposalStatus };
+  | { status: 'already'; proposalStatus: ProposalStatus }
+  | {
+      status: 'replaced';
+      /** Предложение, которым прогон живёт СЕЙЧАС: карточка ведёт владельца на него. */
+      livePendingId: string;
+      /** Его статус — по нему экран решает, рисовать ли кнопки, не ходя за ним второй раз. */
+      liveStatus: ProposalStatus;
+      /** Почему умерло АДРЕСОВАННОЕ — причина его отказа, а не судьба живого. */
+      reason: RejectReason;
+    };
 
 /** Максимум строк разбора в аспекте прогона и потолок одной строки (schemas/aspects.ts). */
 const MAX_MISMATCH_NOTES = 50;
@@ -942,7 +975,7 @@ export async function proposalView(
     const proposal = row.run.proposal;
     if (routineId === undefined || proposal === undefined) return null;
 
-    const stored = await storedProposal(tx, args.runId);
+    const stored = await storedProposal(tx, proposal.pending_id);
     if (stored === null) return null;
 
     return {
@@ -988,18 +1021,53 @@ async function runRowAnyArchive(
  * с ЕГО статусом. В том числе `superseded` и `stale`: погашенное новым прогоном или
  * разошедшееся с графом предложение принадлежит не этой кнопке, и переписывать его судьбу
  * своим «отклонено» значило бы соврать владельцу про то, что произошло на самом деле.
+ *
+ * Адрес решения — ПРЕДЛОЖЕНИЕ (`pendingId`), а не прогон: у прогона их бывает несколько
+ * (правка владельца гасит исходное и рождает новое), и «принимаю то, что вижу» —
+ * обязательство сервера, а не вежливость клиента. Указатель прогона уехал на другое —
+ * `replaced`; исполнить сохранённый payload, которого владелец не читал, нельзя ни при
+ * каком удобстве.
  */
 export async function decideProposal(
   deps: RoutineWriteDeps,
-  args: { ownerId: string; runId: string; decision: 'approve' | 'reject' },
+  args: { ownerId: string; runId: string; pendingId: string; decision: 'approve' | 'reject' },
 ): Promise<DecideProposalResult> {
   const proposal = await readProposal(deps.db, args.ownerId, args.runId);
+  // Сверка ДО проверки статуса: живое предложение может быть уже решено, и тогда владелец,
+  // ткнувший в старую карточку, всё равно обязан узнать не «твоё решено», а «прогон живёт
+  // другим» — иначе он прочтёт чужую судьбу как судьбу своего предложения.
+  if (args.pendingId !== proposal.pending_id) {
+    return replacedProposal(deps.db, args.ownerId, args.pendingId, proposal);
+  }
   if (proposal.status !== 'pending') {
     return { status: 'already', proposalStatus: proposal.status };
   }
   return args.decision === 'approve'
     ? approveProposal(deps, args.ownerId, args.runId, proposal)
     : rejectProposal(deps, args.ownerId, args.runId, proposal);
+}
+
+/**
+ * Решение адресовано предложению, которым прогон больше не живёт.
+ *
+ * Причина — из отказа САМОГО адресованного, а не из судьбы живого: адресованное погасил
+ * тот, кто увёл указатель, и владельцу важно, ПОЧЕМУ умерло то, что он читал. Отказа ещё
+ * не видно (окно между гашением и переводом указателя, либо адрес вовсе выдуман) —
+ * `superseded`: «его заменили», единственное, что известно наверняка.
+ */
+async function replacedProposal(
+  db: Db,
+  ownerId: string,
+  addressedId: string,
+  live: RunProposal,
+): Promise<DecideProposalResult> {
+  const reason = await withIdentity(db, ownerId, (tx) => rejectedReason(tx, addressedId));
+  return {
+    status: 'replaced',
+    livePendingId: live.pending_id,
+    liveStatus: live.status,
+    reason: reason ?? 'superseded',
+  };
 }
 
 /**
@@ -1281,12 +1349,17 @@ interface StoredProposal {
 
 /**
  * Сохранённое предложение из ленты: payload и объяснение с карточки. Проба — containment
- * по `run_id` (индекс `chat_messages_metadata_gin`, форма `jsonb_path_ops`), а не по
- * pendingId: адресом предложения владеет прогон, и один и тот же запрос находит карточку
- * и тогда, когда статус на прогоне ещё не дописан.
+ * по `pending.id` (индекс `chat_messages_metadata_gin`, форма `jsonb_path_ops`), та же, что
+ * у `findPendingMessage`.
+ *
+ * Именно по id, а не по `run_id`: у одного прогона pending-сообщений бывает несколько
+ * (правка владельца гасит исходное и кладёт рядом новое, тот же `run_id`), и `LIMIT 1` по
+ * прогону вернул бы произвольное из них — владелец увидел бы операции чужого предложения
+ * под адресом своего. Адресом по-прежнему владеет прогон, но добывается он с прогона
+ * (`proposal.pending_id`), а не угадывается запросом.
  */
-async function storedProposal(tx: Tx, runId: string): Promise<StoredProposal | null> {
-  const probe = JSON.stringify({ pending: { run_id: runId } });
+async function storedProposal(tx: Tx, pendingId: string): Promise<StoredProposal | null> {
+  const probe = JSON.stringify({ pending: { id: pendingId } });
   const rows = await tx.execute(
     sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
   );

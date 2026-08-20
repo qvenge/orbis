@@ -5,18 +5,20 @@
 // провайдер/часы, лекало send-message.test.ts), предложение рождается НАСТОЯЩИМ
 // прогоном через `runNow`: собранный руками pending проверял бы фикстуру, а не путь.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { manualBucket, newId, routineRunId } from '@orbis/shared';
+import { manualBucket, newId, pendingMessageId, routineRunId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { routineById, runsOfParent } from '../agent-loop/queries';
 import { ROUTINE_ROLLBACK_NOTE, rollbackRun } from '../agent-loop/rollback';
+import { ensureEntityThread } from '../chat/threads';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { undoLast } from '../executor/undo';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMRequest, LLMResponse } from '../llm/types';
+import { createPending } from '../policy/pending';
 import { appRouter } from '../router';
 import type { RoutineDeps } from '../routines/lifecycle';
 import { startBucketRun, supersedeOpen } from '../routines/lifecycle';
@@ -163,6 +165,30 @@ async function ownerSets(taskId: string, status: string): Promise<void> {
     ],
   });
   if (!r.ok) throw new Error(`ownerSets: ${r.error.code} ${r.error.message}`);
+}
+
+/**
+ * Перевести указатель прогона на ДРУГОЕ предложение. Пока лестницы правки нет, это
+ * единственный способ получить состояние «адресованное предложение прогону больше не
+ * принадлежит» — то самое, которое лестница будет создавать штатно.
+ */
+async function pointRunAt(runId: string, pendingId: string, status: string): Promise<void> {
+  const r = await execute(db, {
+    actorUserId: owner,
+    actorKind: 'owner',
+    source: 'system',
+    runId,
+    operations: [
+      {
+        tool: 'entity_update',
+        input: {
+          id: runId,
+          aspects: { 'orbis/agent-run': { proposal: { pending_id: pendingId, status } } },
+        },
+      },
+    ],
+  });
+  if (!r.ok) throw new Error(`pointRunAt: ${r.error.code} ${r.error.message}`);
 }
 
 function proposeCall(runId: string, taskId: string) {
@@ -458,7 +484,11 @@ describe('routine.proposal / decideProposal', () => {
     });
     expect(typeof view.operations[0]?.summary).toBe('string');
 
-    const applied = await caller().routine.decideProposal({ runId, decision: 'approve' });
+    const applied = await caller().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+    });
     expect(applied.status).toBe('applied');
     if (applied.status !== 'applied') throw new Error('не applied');
     expect(typeof applied.actionId).toBe('string');
@@ -469,7 +499,7 @@ describe('routine.proposal / decideProposal', () => {
     expect(typeof aspect.proposal?.decided_at).toBe('string');
     expect((await caller().routine.proposal({ runId }))?.status).toBe('approved');
 
-    const again = await caller().routine.decideProposal({ runId, decision: 'approve' });
+    const again = await caller().routine.decideProposal({ runId, pendingId, decision: 'approve' });
     expect(again).toEqual({ status: 'already', proposalStatus: 'approved' });
   });
 
@@ -477,7 +507,11 @@ describe('routine.proposal / decideProposal', () => {
     const { taskId, runId, pendingId } = await proposed('Отдать в ремонт');
     await ownerSets(taskId, 'done'); // владелец успел раньше
 
-    const decided = await caller().routine.decideProposal({ runId, decision: 'approve' });
+    const decided = await caller().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+    });
     expect(decided.status).toBe('stale');
     if (decided.status !== 'stale') throw new Error('не stale');
     expect(decided.mismatches).toEqual([
@@ -527,7 +561,11 @@ describe('routine.proposal / decideProposal', () => {
     // Владелец тронул НЕ тело, а статус — updated_at бампит любая правка сущности
     await ownerSets(taskId, 'planned');
 
-    const decided = await callerLater().routine.decideProposal({ runId, decision: 'approve' });
+    const decided = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+    });
     expect(decided.status).toBe('stale');
     if (decided.status !== 'stale') throw new Error('не stale');
     expect(decided.mismatches).toHaveLength(1);
@@ -546,7 +584,9 @@ describe('routine.proposal / decideProposal', () => {
       { aspect: '', field: 'body', note: 'тело изменено после составления предложения' },
     ]);
     // Повторное «Принять» — уже решено, а не вторая ошибка
-    expect(await caller().routine.decideProposal({ runId, decision: 'approve' })).toEqual({
+    expect(
+      await caller().routine.decideProposal({ runId, pendingId, decision: 'approve' }),
+    ).toEqual({
       status: 'already',
       proposalStatus: 'stale',
     });
@@ -555,7 +595,7 @@ describe('routine.proposal / decideProposal', () => {
   test('reject закрывает предложение: статус rejected, граф не тронут (приёмка 5)', async () => {
     const { taskId, runId, pendingId } = await proposed('Оплатить счёт');
 
-    const decided = await caller().routine.decideProposal({ runId, decision: 'reject' });
+    const decided = await caller().routine.decideProposal({ runId, pendingId, decision: 'reject' });
     expect(decided).toEqual({ status: 'rejected' });
     expect(await taskStatus(taskId)).toBe('inbox');
     expect(await rejectReason(pendingId)).toBe('owner');
@@ -563,19 +603,135 @@ describe('routine.proposal / decideProposal', () => {
   });
 
   test('предложение, погашенное новым прогоном, решению не поддаётся → already со статусом superseded', async () => {
-    const { routineId, taskId, runId } = await proposed('Записаться к врачу');
+    const { routineId, taskId, runId, pendingId } = await proposed('Записаться к врачу');
     await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newId() });
     expect((await runAspect(runId)).proposal?.status).toBe('superseded');
 
-    expect(await caller().routine.decideProposal({ runId, decision: 'approve' })).toEqual({
+    expect(
+      await caller().routine.decideProposal({ runId, pendingId, decision: 'approve' }),
+    ).toEqual({
       status: 'already',
       proposalStatus: 'superseded',
     });
-    expect(await caller().routine.decideProposal({ runId, decision: 'reject' })).toEqual({
-      status: 'already',
-      proposalStatus: 'superseded',
-    });
+    expect(await caller().routine.decideProposal({ runId, pendingId, decision: 'reject' })).toEqual(
+      {
+        status: 'already',
+        proposalStatus: 'superseded',
+      },
+    );
     expect(await taskStatus(taskId)).toBe('inbox');
+  });
+
+  test('решение по ЧУЖОМУ pendingId → replaced с живым предложением, граф не тронут («принимаю то, что вижу»)', async () => {
+    const { taskId, runId, pendingId } = await proposed('Сдать анализы');
+
+    const stranger = newId();
+    expect(
+      await caller().routine.decideProposal({ runId, pendingId: stranger, decision: 'approve' }),
+    ).toEqual({
+      status: 'replaced',
+      livePendingId: pendingId,
+      liveStatus: 'pending',
+      // Про адресованное неизвестно ничего: отказа по нему в ленте нет
+      reason: 'superseded',
+    });
+    // Ни исполнения, ни отказа: решение адресовано не тому, чем прогон живёт
+    expect(await taskStatus(taskId)).toBe('inbox');
+    expect((await runAspect(runId)).proposal?.status).toBe('pending');
+    expect(await rejectReason(pendingId)).toBeUndefined();
+
+    // «Отклонить» чужим адресом — тот же отказ, а не отказ живого предложения
+    expect(
+      await caller().routine.decideProposal({ runId, pendingId: stranger, decision: 'reject' }),
+    ).toEqual({
+      status: 'replaced',
+      livePendingId: pendingId,
+      liveStatus: 'pending',
+      reason: 'superseded',
+    });
+    expect((await runAspect(runId)).proposal?.status).toBe('pending');
+
+    // Живое предложение своим адресом решается как прежде
+    expect(await caller().routine.decideProposal({ runId, pendingId, decision: 'reject' })).toEqual(
+      { status: 'rejected' },
+    );
+  });
+
+  test('replaced: причина — из отказа АДРЕСОВАННОГО предложения, а не живого', async () => {
+    const { runId, pendingId } = await proposed('Забрать посылку');
+    expect(await caller().routine.decideProposal({ runId, pendingId, decision: 'reject' })).toEqual(
+      { status: 'rejected' },
+    );
+    expect(await rejectReason(pendingId)).toBe('owner');
+
+    const live = newId();
+    await pointRunAt(runId, live, 'pending');
+
+    expect(
+      await callerLater().routine.decideProposal({ runId, pendingId, decision: 'approve' }),
+    ).toEqual({
+      status: 'replaced',
+      livePendingId: live,
+      liveStatus: 'pending',
+      reason: 'owner',
+    });
+  });
+
+  test('операции предложения читаются по pending_id: у прогона ДВА pending-сообщения — показывается то, на которое указывает прогон', async () => {
+    const { routineId, taskId, runId, pendingId } = await proposed('Оплатить интернет');
+
+    // Второе pending-сообщение того же прогона — ровно то, что породит правка владельца:
+    // тот же run_id, свой payload, своя проза.
+    const secondExplanation = 'Правленое предложение: закрываю задачу сразу.';
+    const secondBatchId = `edit:${pendingId}:тест`;
+    const second = await withIdentity(db, owner, async (tx) => {
+      const threadId = await ensureEntityThread(tx, owner, routineId);
+      return createPending(tx, {
+        threadId,
+        actor: { userId: owner, kind: 'ai', source: 'routine', runId },
+        tool: 'batch_execute',
+        input: {
+          batch_id: pendingMessageId(owner, secondBatchId),
+          operations: [
+            {
+              tool: 'entity_update',
+              input: { id: taskId, aspects: { 'orbis/task': { status: 'done' } } },
+            },
+          ],
+        },
+        level: 'explicit-confirmation',
+        dedupeKey: secondBatchId,
+        clock: () => LATER,
+        card: {
+          kind: 'proposal_card',
+          pendingId: pendingMessageId(owner, secondBatchId),
+          runId,
+          routineId,
+          summary: '1 правка',
+          explanation: secondExplanation,
+        },
+        content: 'Предложение рутины: 1 правка',
+      });
+    });
+    expect(second.pendingId).not.toBe(pendingId);
+
+    await pointRunAt(runId, second.pendingId, 'pending');
+
+    const view = await caller().routine.proposal({ runId });
+    if (view === null) throw new Error('предложение не найдено');
+    expect(view.pendingId).toBe(second.pendingId);
+    // Проза и операции — ТОГО ЖЕ сообщения, что и адрес: иначе владелец решает по одному
+    // предложению, а видит операции другого
+    expect(view.explanation).toBe(secondExplanation);
+    expect(view.operations).toHaveLength(1);
+    expect(view.operations[0]).toMatchObject({
+      index: 0,
+      tool: 'entity_update',
+      entity: { id: taskId, title: 'Оплатить интернет' },
+      aspect: 'orbis/task',
+      field: 'status',
+      after: 'done',
+    });
   });
 
   test('прогон без предложения → null', async () => {
@@ -595,10 +751,14 @@ describe('routine.proposal / decideProposal', () => {
 
 describe('откат рутинного прогона: decideProposal(approve) → rollbackRun / undoLast', () => {
   test('approve → rollbackRun ok: план откачен, прогон архивирован, бухгалтерия (статус предложения) не тронута; повтор идемпотентен; слот отработан — startBucketRun → done', async () => {
-    const { routineId, routineTitle, taskId, runId, bucket } =
+    const { routineId, routineTitle, taskId, runId, pendingId, bucket } =
       await plannedProposed('Разобрать почту');
 
-    const applied = await callerLater().routine.decideProposal({ runId, decision: 'approve' });
+    const applied = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+    });
     expect(applied.status).toBe('applied');
     if (applied.status !== 'applied') throw new Error('не applied');
     expect(await taskStatus(taskId)).toBe('planned');
@@ -640,6 +800,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
     const yesterday = await plannedProposed('Позвонить маме');
     const applied = await callerLater().routine.decideProposal({
       runId: yesterday.runId,
+      pendingId: yesterday.pendingId,
       decision: 'approve',
     });
     expect(applied.status).toBe('applied');
@@ -660,8 +821,12 @@ describe('откат рутинного прогона: decideProposal(approve) 
   });
 
   test('владелец тронул цель ПОСЛЕ принятия → конфликт по этой сущности, ничего не откачено, прогон не архивирован (инвариант 7)', async () => {
-    const { taskId, runId } = await proposed('Записаться в бассейн');
-    const applied = await callerLater().routine.decideProposal({ runId, decision: 'approve' });
+    const { taskId, runId, pendingId } = await proposed('Записаться в бассейн');
+    const applied = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+    });
     expect(applied.status).toBe('applied');
     // Правка ВЛАДЕЛЬЦА через роутер — с журналом (§7.8): откат читает конфликты из него,
     // а `ownerSets` (execute без синка) правит только состояние
@@ -702,7 +867,9 @@ describe('откат рутинного прогона: decideProposal(approve) 
     expect(view?.mismatches).toBeUndefined();
     // Решать по нему нечего: под архивом прогон не найден (как и было), но теперь кнопок
     // к этому NOT_FOUND у карточки нет
-    const e = await trpcError(callerLater().routine.decideProposal({ runId, decision: 'approve' }));
+    const e = await trpcError(
+      callerLater().routine.decideProposal({ runId, pendingId, decision: 'approve' }),
+    );
     expect(e.code).toBe('NOT_FOUND');
     expect((await caller().routine.overview({ routineId })).openProposal).toBe(false);
     // Повтор отката — тот же исход, второго отказа pending'а нет
@@ -769,8 +936,12 @@ describe('откат рутинного прогона: decideProposal(approve) 
   });
 
   test('«отмени последнее» после approve снимает ПЛАН (batch предложения), а не пометку статуса на прогоне (приёмка 3)', async () => {
-    const { taskId, runId } = await proposed('Отнести обувь в ремонт');
-    const applied = await callerLater().routine.decideProposal({ runId, decision: 'approve' });
+    const { taskId, runId, pendingId } = await proposed('Отнести обувь в ремонт');
+    const applied = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+    });
     expect(applied.status).toBe('applied');
     if (applied.status !== 'applied') throw new Error('не applied');
 

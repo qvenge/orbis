@@ -82,7 +82,7 @@ async function threadRows(routineId: string) {
 async function seedProposal(
   routineId: string,
   bucket: string,
-): Promise<{ runId: string; taskId: string }> {
+): Promise<{ runId: string; taskId: string; pendingId: string }> {
   const { runId } = await seedRoutineRun(owner, { routineId, bucket });
   const task = await seedEntity(owner, {
     title: `Задача для ${bucket}`,
@@ -103,7 +103,12 @@ async function seedProposal(
     ],
   });
   if (r.status !== 'ok') throw new Error(`seedProposal: ${JSON.stringify(r)}`);
-  return { runId, taskId: task.id };
+  const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as {
+    proposal?: { pending_id?: string };
+  };
+  const pendingId = run.proposal?.pending_id;
+  if (pendingId === undefined) throw new Error('seedProposal: прогон без предложения');
+  return { runId, taskId: task.id, pendingId };
 }
 
 describe('supersedeOpen: новый прогон гасит незакрытое (V1.8)', () => {
@@ -858,10 +863,15 @@ describe('edited_from переживает решение по предложе�
 
   test('settleProposal сохраняет edited_from при пометке approved', async () => {
     const routineId = await seedRoutine(owner);
-    const { runId } = await seedProposal(routineId, '2026-08-16T07:00');
+    const { runId, pendingId } = await seedProposal(routineId, '2026-08-16T07:00');
     const editedFrom = await markEdited(runId);
 
-    const decided = await decideProposal(deps(), { ownerId: owner, runId, decision: 'approve' });
+    const decided = await decideProposal(deps(), {
+      ownerId: owner,
+      runId,
+      pendingId,
+      decision: 'approve',
+    });
     expect(decided.status).toBe('applied');
 
     const proposal = await proposalOf(runId);
@@ -871,7 +881,7 @@ describe('edited_from переживает решение по предложе�
 
   test('settleProposal сохраняет edited_from при пометке stale (предусловие разошлось)', async () => {
     const routineId = await seedRoutine(owner);
-    const { runId, taskId } = await seedProposal(routineId, '2026-08-16T07:00');
+    const { runId, taskId, pendingId } = await seedProposal(routineId, '2026-08-16T07:00');
     const editedFrom = await markEdited(runId);
     // Владелец закрыл задачу сам — снятое предусловие `status in ['inbox']` больше не держится
     const done = await execute(db, {
@@ -888,7 +898,12 @@ describe('edited_from переживает решение по предложе�
     });
     if (!done.ok) throw new Error(`закрытие задачи: ${done.error.code}`);
 
-    const decided = await decideProposal(deps(), { ownerId: owner, runId, decision: 'approve' });
+    const decided = await decideProposal(deps(), {
+      ownerId: owner,
+      runId,
+      pendingId,
+      decision: 'approve',
+    });
     expect(decided.status).toBe('stale');
 
     const proposal = await proposalOf(runId);
@@ -900,10 +915,15 @@ describe('edited_from переживает решение по предложе�
 
   test('settleProposal сохраняет edited_from при пометке rejected', async () => {
     const routineId = await seedRoutine(owner);
-    const { runId } = await seedProposal(routineId, '2026-08-16T07:00');
+    const { runId, pendingId } = await seedProposal(routineId, '2026-08-16T07:00');
     const editedFrom = await markEdited(runId);
 
-    const decided = await decideProposal(deps(), { ownerId: owner, runId, decision: 'reject' });
+    const decided = await decideProposal(deps(), {
+      ownerId: owner,
+      runId,
+      pendingId,
+      decision: 'reject',
+    });
     expect(decided.status).toBe('rejected');
 
     const proposal = await proposalOf(runId);

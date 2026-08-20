@@ -1017,6 +1017,9 @@ test('proposal_card: «Отклонить» перечитывает и карт
   await waitFor(() =>
     expect(calls.find((c) => c.path === 'routine.decideProposal')?.input).toEqual({
       runId: 'rr1',
+      // Адрес решения — предложение, которое владелец видел: сервер откажет, если
+      // указатель прогона успел переехать на другое
+      pendingId: 'p1',
       decision: 'reject',
     }),
   );

@@ -199,12 +199,27 @@ export const routineRouter = router({
    * расхождений и подпись статуса, а не плашку ошибки (та же логика, что у agentRun.rollback).
    */
   decideProposal: ownerOnlyProcedure
-    .input(z.object({ runId: z.string().uuid(), decision: z.enum(['approve', 'reject']) }).strict())
+    .input(
+      z
+        .object({
+          runId: z.string().uuid(),
+          /**
+           * Предложение, которое владелец ВИДЕЛ. Обязательно: у прогона их бывает
+           * несколько, и решение без адреса применило бы то, чего он не читал. Цена —
+           * вкладка, открытая до этого деплоя, получит VALIDATION до перезагрузки; громкий
+           * отказ безопаснее тихого исполнения чужого payload'а.
+           */
+          pendingId: z.string().uuid(),
+          decision: z.enum(['approve', 'reject']),
+        })
+        .strict(),
+    )
     .mutation(async ({ ctx, input }): Promise<DecideProposalResult> => {
       try {
         return await decideProposal(writeDeps(ctx), {
           ownerId: ctx.actorUserId,
           runId: input.runId,
+          pendingId: input.pendingId,
           decision: input.decision,
         });
       } catch (e) {

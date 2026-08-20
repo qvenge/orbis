@@ -235,14 +235,18 @@ export function ProposalCard({ runId }: { runId: string }) {
               <Button
                 variant="primary"
                 disabled={busy}
-                onClick={() => decide.mutate({ runId, decision: 'approve' })}
+                onClick={() =>
+                  decide.mutate({ runId, pendingId: view.pendingId, decision: 'approve' })
+                }
               >
                 Принять
               </Button>
               <Button
                 variant="ghost"
                 disabled={busy}
-                onClick={() => decide.mutate({ runId, decision: 'reject' })}
+                onClick={() =>
+                  decide.mutate({ runId, pendingId: view.pendingId, decision: 'reject' })
+                }
               >
                 Отклонить
               </Button>

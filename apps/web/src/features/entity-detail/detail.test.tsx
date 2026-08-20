@@ -3829,6 +3829,7 @@ describe('V1: прогон рутины', () => {
     await waitFor(() =>
       expect(calls.find((c) => c.path === 'routine.decideProposal')?.input).toEqual({
         runId: 'rr1',
+        pendingId: 'p1',
         decision: 'approve',
       }),
     );
