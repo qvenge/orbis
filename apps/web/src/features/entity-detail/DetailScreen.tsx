@@ -29,6 +29,7 @@ import { Backlinks } from './Backlinks';
 import { Blocks } from './Blocks';
 import { GoalProgress } from './GoalProgress';
 import { NativeRow } from './NativeRow';
+import { ProposalOverlay } from './ProposalOverlay';
 import { ROUTINE_ASPECT, RoutineStatusBlock } from './RoutineStatusBlock';
 import { RunFeed } from './RunFeed';
 import { RunsList } from './RunsList';
@@ -118,6 +119,19 @@ export function DetailScreen({ entityId }: { entityId: string }) {
    * будит. Один лишний проход на монтировании, до первой отрисовки, — вся цена.
    */
   const [noticeHost, setNoticeHost] = useState<HTMLElement | null>(null);
+  /**
+   * Развёрнут ли слой предложения (Ш1.3) — и, значит, спрятано ли тело записи.
+   *
+   * Признак живёт ЗДЕСЬ, потому что класс вешает эта разметка, а не слой: тело лежит внутри
+   * вкладки «Сущность», а слой стоит снаружи вкладок. Слой сообщает только «развёрнут /
+   * свёрнут» (см. `onOverlayExpanded`), а какой узел от этого прячется — дело экрана.
+   *
+   * ПРЯЧЕМ КЛАССОМ, А НЕ СНЯТИЕМ С МОНТИРОВАНИЯ, и это не стиль: `useBodySave` при
+   * размонтировании делает `flush()` отложенной правки, то есть отправку в сеть — ровно то,
+   * от чего слой и закрывает тело (Р-18). Живое под `display:none` тело правку не начнёт: до
+   * него не дотянуться ни кликом, ни табом.
+   */
+  const [proposalOpen, setProposalOpen] = useState(false);
   const prevIdRef = useRef(entityId);
   if (prevIdRef.current !== entityId) {
     prevIdRef.current = entityId;
@@ -125,6 +139,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
     // Диалог закрепления — про ТУ запись, из чьего меню его открыли: пережив переход, он
     // закрепил бы соседнюю (экран монтируется без key, router.tsx).
     setPinVersion(false);
+    // Слой переезжает на соседнюю запись вместе с экраном (монтируется без key), и его
+    // собственное состояние обнуляет `key` ниже. Но признак живёт ЗДЕСЬ, и один кадр между
+    // сменой пропа и его извещением тело соседней записи стояло бы спрятанным ни за что.
+    setProposalOpen(false);
   }
   const { show } = useToast();
   const push = useNav((s) => s.push);
@@ -311,20 +329,25 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           запросов) контекст записи не передаётся НАМЕРЕННО: `this` в вынесенном блоке означал
           бы «та запись, из чьего тела блок скопировали», а не «текущий экран», — и блок обязан
           ответить ошибкой, а не взять чужой id. */}
-      <ThisEntityProvider id={entity.id}>
-        <EntityBody
-          key={entity.id}
-          entity={entity}
-          asMarkdown={asMarkdown}
-          onCloseMarkdown={() => setAsMarkdown(false)}
-          screenConflict={conflict}
-          noticeHost={noticeHost}
-          onRefresh={() => {
-            void get.refetch();
-            dismissConflict();
-          }}
-        />
-      </ThisEntityProvider>
+      {/* Обёртка ради ОДНОГО класса: развёрнутый слой предложения (Ш1.3) прячет тело записи,
+          не размонтируя его (см. `proposalOpen` выше). Без класса обёртка не рисует ничего —
+          пустой div в flex-колонке занимает ровно то же место, что занимало бы тело. */}
+      <div data-testid="entity-body" className={proposalOpen ? 'hidden' : undefined}>
+        <ThisEntityProvider id={entity.id}>
+          <EntityBody
+            key={entity.id}
+            entity={entity}
+            asMarkdown={asMarkdown}
+            onCloseMarkdown={() => setAsMarkdown(false)}
+            screenConflict={conflict}
+            noticeHost={noticeHost}
+            onRefresh={() => {
+              void get.refetch();
+              dismissConflict();
+            }}
+          />
+        </ThisEntityProvider>
+      </div>
     </div>
   );
 
@@ -408,6 +431,19 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           сохранением». Портал переносит DOM, оставляя дерево React на месте, — поэтому
           `key={entity.id}` у тела и вся его память о правке работают ровно как прежде. */}
       <div ref={setNoticeHost} className="mx-auto w-full max-w-3xl px-4 md:px-6" />
+      {/* Слой предложения рутины (Ш1.3) — СОСЕДНИМ узлом, а не внутри `noticeHost` выше:
+          тот узел уже цель портала (плашки тела), и порядок двух порталов в один узел не
+          определён. Место то же по смыслу — снаружи вкладок: предложение видно и с «Деталей»,
+          и с «Треда», как и всё, что экран говорит о судьбе записи.
+
+          key по id — по той же причине, что у ленты прогона и блока ожидания: экран
+          монтируется БЕЗ key (router.tsx), а у слоя своя память (какие плашки развёрнуты,
+          буфер правок), и переехать на соседнюю запись она не должна. */}
+      <ProposalOverlay
+        key={`proposal-${entity.id}`}
+        entity={entity}
+        onOverlayExpanded={setProposalOpen}
+      />
       {/* Три таба — под шапкой; контент центрирован, шапка — на всю ширину.
           keepMounted у «Сущности» — ради редактора: Radix по умолчанию размонтирует неактивную
           вкладку, и уход на «Детали» уничтожил бы вместе с ней несохранённый текст и всю

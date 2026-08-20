@@ -23,12 +23,14 @@ const CATEGORY_REF = 'category_ref';
 const HIDDEN_ASPECT_CARDS = new Set(['orbis/assignment', 'orbis/agent-run']);
 
 // Тихий инпут-в-строке-свойства: тот же вид у текстового поля и у пикера категории.
-const FIELD_CLASS =
+// Экспортом — слою предложения на записи (Ш1.3): строка правки предложения обязана
+// выглядеть ровно как строка свойства, иначе владелец читал бы их как разные вещи.
+export const FIELD_CLASS =
   'w-full rounded-md bg-transparent px-2 py-1 text-sm text-text outline-none transition hover:bg-surface-2 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/40';
 
 // Восстановление типа поля из исходного значения (правка идёт как строка из Input).
 // Нескалярное сюда не доходит вовсе — такие поля не редактируются (см. isScalar).
-function coerce(original: unknown, raw: string): unknown {
+export function coerce(original: unknown, raw: string): unknown {
   if (typeof original === 'number') return Number(raw);
   if (typeof original === 'boolean') return raw === 'true';
   return raw;
@@ -42,7 +44,7 @@ function coerce(original: unknown, raw: string): unknown {
  * поле аспекта). То же касалось `orbis/schedule.recurrence` и `orbis/category.aliases`,
  * поэтому чинится общий случай, а не цель: редактируемо ровно то, что скаляр.
  */
-function isScalar(v: unknown): boolean {
+export function isScalar(v: unknown): boolean {
   return (
     v === null ||
     v === undefined ||
@@ -58,7 +60,7 @@ function isScalar(v: unknown): boolean {
  * читается через запятую, всё прочее — компактным JSON: это и есть та форма, в которой
  * значение уедет обратно на сервер, и по ней видно опечатку в запросе.
  */
-function readOnlyText(value: unknown): string {
+export function readOnlyText(value: unknown): string {
   // Пустой список — прочерк, а не пустое место: `aliases: ` без значения читается как
   // сломанная строка, а не как «алиасов нет».
   if (Array.isArray(value) && value.length === 0) return '—';
@@ -251,12 +253,25 @@ function ReadOnlyField({
   );
 }
 
-function AspectField({
+/**
+ * Строка «поле → значение» с тихой правкой по blur.
+ *
+ * Компонент НИЧЕГО не сохраняет сам: `onSave(raw)` отдаёт сырую строку из инпута, а что с
+ * ней делать — дело родителя. На самой записи родитель шлёт `entity.update` немедленно
+ * (см. AspectCards выше); в слое предложения (Ш1.3) — кладёт в буфер правок, потому что
+ * граф там двигает «Принять», а не набор в поле. Ровно ради второго родителя компонент и
+ * экспортирован: своя копия строки правки разошлась бы с этой видом и поведением.
+ *
+ * Правится только СКАЛЯР (см. isScalar): инпут отдаёт строку, а обратно в объект или массив
+ * она не превращается ничем.
+ */
+export function AspectField({
   aspectId,
   field,
   value,
   onSave,
 }: {
+  /** Идёт только в aria-label: без него у пяти инпутов подряд одно имя на всех. */
   aspectId: string;
   field: string;
   value: unknown;
@@ -276,7 +291,7 @@ function AspectField({
     if (draft === serverValue) setDraft(initial);
   }
 
-  // dt/dd — прямые дети grid'а из AspectCards (grid-cols-[auto_1fr]): все инпуты
+  // dt/dd — прямые дети `<dl>`-грида родителя (grid-cols-[auto_1fr]): все инпуты
   // начинаются с одной вертикали независимо от длины лейбла (лейблы выровнены вправо).
   return (
     <>

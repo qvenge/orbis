@@ -16,6 +16,7 @@ import {
 import { trpc } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { queryBlocks } from '../browser/query';
+import { useChatThread } from '../chat/useChatThread';
 import { resetEnsuredThreads } from '../chat/useEnsuredThread';
 import { AspectCards } from './AspectCards';
 import { DetailScreen } from './DetailScreen';
@@ -3951,5 +3952,318 @@ describe('V1: прогон рутины', () => {
     expect(within(list).getByTestId('run-rp1')).toHaveTextContent('ждёт решения');
     expect(within(list).getByTestId('run-rp2')).toHaveTextContent('принято');
     expect(within(list).getByTestId('run-rp3')).toHaveTextContent('заменено');
+  });
+});
+
+// ─── Ш1.3: слой предложения на записи ────────────────────────────────────────────────────
+//
+// Владелец не обязан узнавать о предложении рутины из ленты чата: открыл запись — увидел
+// плашку, развернул — прочитал дифф тела и строки правок, поправил значение и решил, не
+// уходя с записи. Слой стоит СНАРУЖИ вкладок (виден с любой) и, развёрнутый, прячет тело
+// записи классом: тело живёт под ним смонтированным (keepMounted), и случайный клик в него
+// сдвинул бы `updated_at`, сделав предложение stale (Р-18).
+
+/** Рутины, чьи имена стоят в плашках: слой дочитывает их обычным per-id entity.get. */
+const PROPOSAL_ROUTINES: Record<string, string> = {
+  rt7: 'Утренний разбор',
+  rt8: 'Вечерний обход',
+};
+
+/** Предложенное тело одной строкой: `toHaveTextContent` схлопывает пробелы, и многострочный
+ *  markdown в ассерциях читался бы хуже, чем проверяемое им свойство. */
+const PROPOSED_BODY = 'Планы на день, позвонить в клинику';
+
+/** Единицы диффа тела в форме `@orbis/shared/doc/diff` — как их отдаёт сервер (Ш1.1). */
+const OVERLAY_DIFF_UNITS = [
+  { kind: 'same', before: 'Планы на день', after: 'Планы на день' },
+  { kind: 'added', after: 'позвонить в клинику' },
+  { kind: 'removed', before: 'забрать посылку' },
+];
+
+/** Строка правки поля аспекта — форма ProposalOperationView (lifecycle.ts). */
+const statusRow = (over: Record<string, unknown> = {}) => ({
+  index: 0,
+  tool: 'entity_update',
+  entity: { id: 'e1', title: 'Задача' },
+  aspect: 'orbis/task',
+  field: 'status',
+  before: 'inbox',
+  after: 'done',
+  summary: '«Задача»: orbis/task.status',
+  ...over,
+});
+
+/** Строка тела: `after` (полный markdown) есть всегда, `bodyDiff` — только у живого. */
+const overlayBodyRow = (over: Record<string, unknown> = {}) => ({
+  index: 0,
+  tool: 'entity_update',
+  entity: { id: 'e1', title: 'Задача' },
+  field: 'body',
+  after: PROPOSED_BODY,
+  summary: '«Задача»: тело',
+  ...over,
+});
+
+const proposalFor = (over: Record<string, unknown> = {}) => ({
+  pendingId: 'p1',
+  runId: 'run1',
+  routineId: 'rt7',
+  status: 'pending',
+  explanation: 'Два дела просрочены',
+  runArchived: false,
+  operations: [statusRow(), overlayBodyRow({ bodyDiff: { units: OVERLAY_DIFF_UNITS } })],
+  ...over,
+});
+
+function overlayHandler(opts: { proposals?: unknown[]; decide?: unknown } = {}): MockHandler {
+  return (path, input) => {
+    if (path === 'entity.get') {
+      const { id } = input as { id: string };
+      const routine = PROPOSAL_ROUTINES[id];
+      // Заголовок рутины (и заголовки задетых записей) слой дочитывает тем же EntityRef,
+      // что и вся остальная разметка, — своим per-id ключом.
+      if (routine !== undefined) return { entity: { id, title: routine } };
+      return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+    }
+    if (path === 'routine.proposalsForEntity') return opts.proposals ?? [proposalFor()];
+    if (path === 'routine.decideProposal')
+      return opts.decide ?? { status: 'applied', actionId: 'a1' };
+    if (path === 'entity.update') return entity;
+    if (path === 'chat.listMessages') return [];
+    if (path === 'aspect.list') return [];
+    return {};
+  };
+}
+
+/** Потребитель ленты треда — тот же хук, что и вкладка «Тред» (ключ `chatThreadKey`). */
+function ThreadProbe() {
+  const { messages } = useChatThread('th1');
+  return <span data-testid="thread-count">{messages.length}</span>;
+}
+
+/** Разворачивает (или сворачивает) плашку её же заголовком. */
+function togglePlate(plate: HTMLElement): void {
+  fireEvent.click(within(plate).getByRole('button', { name: /Предложение рутины/ }));
+}
+
+describe('слой предложения', () => {
+  test('обычное открытие записи с открытым предложением → плашка «Предложение рутины…» (приёмка 3)', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, overlayHandler());
+    const plate = await screen.findByTestId('proposal-plate');
+    expect(plate).toHaveTextContent('Предложение рутины');
+    // Имя рутины, а не её uuid: плашка отвечает на вопрос «кто это предлагает».
+    expect(await within(plate).findByText('Утренний разбор')).toBeInTheDocument();
+    // Сколько правок — счётом строк предложения, с русским согласованием числа.
+    expect(plate).toHaveTextContent('2 правки');
+    // Спрашиваем по ОТКРЫТОЙ ЗАПИСИ, а не по прогону: владелец пришёл на запись, а не из ленты.
+    expect(calls.find((c) => c.path === 'routine.proposalsForEntity')?.input).toEqual({
+      entityId: 'e1',
+    });
+    // Свёрнутая плашка ничего не прячет и ничего не решает.
+    expect(screen.getByTestId('entity-body')).not.toHaveClass('hidden');
+    expect(within(plate).queryByRole('button', { name: 'Принять' })).toBeNull();
+    expect(within(plate).queryByTestId('proposal-body-diff')).toBeNull();
+  });
+
+  test('разворот: дифф тела блоками, строки полей before→after, кнопки; тело записи скрыто классом; сворачивание возвращает (приёмка 2)', async () => {
+    renderWithProviders(<DetailScreen entityId="e1" />, overlayHandler());
+    // Редактор поднимаем и печатаем в нём ДО разворота: размонтируй слой тело вместо того,
+    // чтобы спрятать его классом, — набранное исчезло бы вместе с ним, а `flush` черновика
+    // дёрнулся бы на размонтировании (Р-18).
+    const field = await editorField();
+    await userEvent.type(field, ' и хвост');
+    await expectEditorHas('и хвост');
+
+    const plate = await screen.findByTestId('proposal-plate');
+    togglePlate(plate);
+
+    // Полный дифф — со всеми единицами, включая контекстные `same`: это запись, а не лента,
+    // и место под различие здесь есть (Развилка 10).
+    const diff = await within(plate).findByTestId('proposal-body-diff');
+    expect(diff).toHaveTextContent('Планы на день');
+    expect(diff).toHaveTextContent('позвонить в клинику');
+    expect(diff).toHaveTextContent('забрать посылку');
+    // Строка поля: «было» из снятого предусловия и предложенное значение — правимым полем.
+    expect(plate).toHaveTextContent('inbox');
+    expect(within(plate).getByLabelText('orbis/task status')).toHaveValue('done');
+    expect(within(plate).getByRole('button', { name: 'Принять' })).toBeInTheDocument();
+    expect(within(plate).getByRole('button', { name: 'Отклонить' })).toBeInTheDocument();
+
+    // Р-18: тело спрятано КЛАССОМ и осталось смонтированным.
+    expect(screen.getByTestId('entity-body')).toHaveClass('hidden');
+    expect(screen.getByTestId('body-editor')).toBeInTheDocument();
+
+    // Сворачивание возвращает тело — и ровно то же самое: набранное на месте, значит редактор
+    // не поднимался заново.
+    togglePlate(plate);
+    expect(screen.getByTestId('entity-body')).not.toHaveClass('hidden');
+    await expectEditorHas('и хвост');
+    expect(within(plate).queryByTestId('proposal-body-diff')).toBeNull();
+  });
+
+  test('правка значения поля в строке → edits.fields в вызове decideProposal; принятое сворачивает слой и обновляет ленту треда (приёмки 6, 9)', async () => {
+    const { calls } = renderWithProviders(
+      <>
+        <ThreadProbe />
+        <DetailScreen entityId="e1" />
+      </>,
+      overlayHandler(),
+    );
+    const plate = await screen.findByTestId('proposal-plate');
+    togglePlate(plate);
+    expect(screen.getByTestId('entity-body')).toHaveClass('hidden');
+    const input = await within(plate).findByLabelText('orbis/task status');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'in_progress');
+    fireEvent.blur(input);
+    // Р-16: тот же `onSave` на самой записи (AspectCards) шлёт entity.update НЕМЕДЛЕННО.
+    // В слое правка обязана лечь в буфер: граф двигает «Принять», а не набор в поле.
+    expect(calls.some((c) => c.path === 'entity.update')).toBe(false);
+
+    const reads = () => calls.filter((c) => c.path === 'chat.listMessages').length;
+    await waitFor(() => expect(reads()).toBe(1));
+    fireEvent.click(within(plate).getByRole('button', { name: 'Принять' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'routine.decideProposal')?.input).toEqual({
+        runId: 'run1',
+        pendingId: 'p1',
+        decision: 'approve',
+        edits: {
+          fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+        },
+      }),
+    );
+    // Приёмка 9: правка рождает ВТОРУЮ карточку предложения в ленте рутины, и открытый тред
+    // без инвалидации показал бы её только через staleTime. Слой треда не знает — гасит по
+    // префиксу ключа.
+    await waitFor(() => expect(reads()).toBeGreaterThan(1));
+    // Принятое сворачивает слой: решать больше нечего, а тело записи обязано вернуться.
+    await waitFor(() => expect(screen.getByTestId('entity-body')).not.toHaveClass('hidden'));
+  });
+
+  test('два предложения двух рутин → две плашки, решение по каждому своё (приёмка 18)', async () => {
+    const second = proposalFor({
+      pendingId: 'p2',
+      runId: 'run2',
+      routineId: 'rt8',
+      explanation: 'Вечерний обход просит своё',
+      operations: [statusRow({ after: 'in_progress' })],
+    });
+    const { calls } = renderWithProviders(
+      <DetailScreen entityId="e1" />,
+      overlayHandler({ proposals: [proposalFor(), second] }),
+    );
+    const [morning, evening] = await screen.findAllByTestId('proposal-plate');
+    if (morning === undefined || evening === undefined) throw new Error('ожидались две плашки');
+    expect(await within(morning).findByText('Утренний разбор')).toBeInTheDocument();
+    expect(await within(evening).findByText('Вечерний обход')).toBeInTheDocument();
+
+    // Разворот второй не гасит первую: выбор одного предложения скрыл бы второе.
+    togglePlate(evening);
+    expect(within(evening).getByRole('button', { name: 'Принять' })).toBeInTheDocument();
+    expect(within(morning).queryByRole('button', { name: 'Принять' })).toBeNull();
+    expect(screen.getAllByTestId('proposal-plate')).toHaveLength(2);
+
+    // …и решение уходит с адресом ИМЕННО ЭТОГО предложения, а не первого в списке.
+    fireEvent.click(within(evening).getByRole('button', { name: 'Отклонить' }));
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'routine.decideProposal')?.input).toEqual({
+        runId: 'run2',
+        pendingId: 'p2',
+        decision: 'reject',
+      }),
+    );
+  });
+
+  test('skipped body_changed → пометка «Тело изменилось после составления» вместо диффа (приёмка 12)', async () => {
+    renderWithProviders(
+      <DetailScreen entityId="e1" />,
+      overlayHandler({
+        proposals: [
+          proposalFor({ operations: [overlayBodyRow({ bodyDiff: { skipped: 'body_changed' } })] }),
+        ],
+      }),
+    );
+    const plate = await screen.findByTestId('proposal-plate');
+    togglePlate(plate);
+    expect(await within(plate).findByText('Тело изменилось после составления')).toBeInTheDocument();
+    expect(within(plate).queryByTestId('proposal-body-diff')).toBeNull();
+    // Приёмка 16: дифф — способ показа, а не условие. Прежняя форма на месте, кнопки живы.
+    expect(plate).toHaveTextContent(PROPOSED_BODY);
+    expect(within(plate).getByRole('button', { name: 'Принять' })).toBeInTheDocument();
+  });
+
+  test('исходы решения: stale → расхождения списком, replaced → подпись и перечитка списка (приёмки 14, 15)', async () => {
+    const stale = renderWithProviders(
+      <DetailScreen entityId="e1" />,
+      overlayHandler({
+        decide: {
+          status: 'stale',
+          mismatches: [
+            { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'done' },
+            { aspect: '', field: 'body', expected: ['A'], actual: 'B' },
+          ],
+        },
+      }),
+    );
+    let plate = await screen.findByTestId('proposal-plate');
+    togglePlate(plate);
+    fireEvent.click(within(plate).getByRole('button', { name: 'Принять' }));
+    const box = await within(plate).findByTestId('proposal-stale');
+    expect(box).toHaveTextContent('ожидали inbox, сейчас done');
+    // Расхождение по телу — про версию записи, а не про текст: два timestamp'а владельцу
+    // ничего не сообщают.
+    expect(box).toHaveTextContent('Тело: запись изменилась после составления предложения');
+    // Устаревшее предложение сервер погасил тем же ответом — решать по нему больше нечем, и
+    // список НЕ перечитываем: разбор расхождений ушёл бы вместе с плашкой.
+    expect(within(plate).queryByRole('button', { name: 'Принять' })).toBeNull();
+    expect(stale.calls.filter((c) => c.path === 'routine.proposalsForEntity')).toHaveLength(1);
+    stale.unmount();
+
+    // Список ЖИВОЙ: после ответа `replaced` перечитка приносит ДРУГОЕ предложение (правленое,
+    // со своим pendingId) — плашка мёртвого исчезает, и подпись обязана это пережить.
+    let live: unknown = proposalFor();
+    const replaced = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
+      if (path === 'routine.proposalsForEntity') return [live];
+      if (path === 'routine.decideProposal') {
+        live = proposalFor({ pendingId: 'p9', editedFrom: 'p1' });
+        return { status: 'replaced', livePendingId: 'p9', liveStatus: 'pending', reason: 'edited' };
+      }
+      return overlayHandler()(path, input);
+    });
+    plate = await screen.findByTestId('proposal-plate');
+    togglePlate(plate);
+    const reads = () =>
+      replaced.calls.filter((c) => c.path === 'routine.proposalsForEntity').length;
+    const before = reads();
+    fireEvent.click(within(plate).getByRole('button', { name: 'Принять' }));
+    // Приёмка 15: молча не проигрывает никто — вкладка, открытая до правки, обязана узнать,
+    // что её нажатие ушло в уже мёртвое предложение. Подпись живёт НАД плашками: список под
+    // ней сейчас перечитается, и внутри плашки она умерла бы вместе с её `pendingId`.
+    expect(await screen.findByTestId('proposal-replaced-answer')).toHaveTextContent(
+      'Заменено правкой владельца — ниже живое предложение',
+    );
+    await waitFor(() => expect(reads()).toBeGreaterThan(before));
+    // …и переживает подмену: плашка мёртвого предложения ушла (развёрнутой она была, новая
+    // приезжает свёрнутой), а подпись осталась.
+    await waitFor(() =>
+      expect(
+        within(screen.getByTestId('proposal-plate')).queryByRole('button', { name: 'Принять' }),
+      ).toBeNull(),
+    );
+    expect(screen.getByTestId('proposal-replaced-answer')).toBeInTheDocument();
+  });
+
+  test('запись без предложений → ни плашки, ни спрятанного тела, ни второго запроса (приёмка 7 не задета)', async () => {
+    const { calls } = renderWithProviders(
+      <DetailScreen entityId="e1" />,
+      overlayHandler({ proposals: [] }),
+    );
+    await openEditor();
+    expect(screen.queryByTestId('proposal-plate')).toBeNull();
+    expect(screen.queryByTestId('proposal-overlay')).toBeNull();
+    // Тело поднимается ровно как прежде: слоя нет — и прятать нечего.
+    expect(screen.getByTestId('entity-body')).not.toHaveClass('hidden');
+    expect(calls.filter((c) => c.path === 'routine.proposalsForEntity')).toHaveLength(1);
   });
 });
