@@ -657,6 +657,34 @@ describe('routine.proposal / decideProposal', () => {
     );
   });
 
+  test('чужой pendingId при УЖЕ РЕШЁННОМ живом предложении → replaced, а не чужая судьба под видом своей (сверка адреса ДО проверки статуса)', async () => {
+    const { taskId, runId, pendingId } = await proposed('Продлить страховку');
+    expect(await caller().routine.decideProposal({ runId, pendingId, decision: 'reject' })).toEqual(
+      { status: 'rejected' },
+    );
+    expect((await runAspect(runId)).proposal?.status).toBe('rejected');
+
+    /**
+     * Порядок проверок в `decideProposal` — не косметика: сверка адреса стоит ДО проверки
+     * статуса. Поменяй их местами — и владелец, ткнувший в чужую (или устаревшую) карточку,
+     * получит `already: rejected`, то есть прочитает судьбу НЕ СВОЕГО предложения как
+     * судьбу своего. Сверка целого объекта нарочно: перестановка обязана падать громко.
+     */
+    expect(
+      await callerLater().routine.decideProposal({
+        runId,
+        pendingId: newId(),
+        decision: 'approve',
+      }),
+    ).toEqual({
+      status: 'replaced',
+      livePendingId: pendingId,
+      liveStatus: 'rejected',
+      reason: 'superseded',
+    });
+    expect(await taskStatus(taskId)).toBe('inbox');
+  });
+
   test('replaced: причина — из отказа АДРЕСОВАННОГО предложения, а не живого', async () => {
     const { runId, pendingId } = await proposed('Забрать посылку');
     expect(await caller().routine.decideProposal({ runId, pendingId, decision: 'reject' })).toEqual(
