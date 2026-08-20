@@ -283,15 +283,31 @@ async function isRejected(tx: Tx, pendingId: string): Promise<boolean> {
 
 /**
  * Сериализация approve/reject одного pendingId (fix round Task 6): advisory-lock
- * уровня транзакции — умирает на commit/rollback. Берётся ПЕРВЫМ statement'ом
- * tx reject'а и audit-tx approve (executor beforeStages): без него approve
- * (проверки в одном tx, исполнение в другом) и reject образуют write-skew —
- * оба проходят свои проверки до чужого коммита, и владелец получает «исполнено»
- * И «отклонено» одновременно. Ключ — hashtextextended(pendingId): pendingId
- * глобально уникален (uuidv7), межвладельческие коллизии хэша безвредны
- * (кратковременная лишняя сериализация, не ошибка).
+ * уровня транзакции — умирает на commit/rollback. Без него approve (проверки в одном
+ * tx, исполнение в другом) и reject образуют write-skew — оба проходят свои проверки
+ * до чужого коммита, и владелец получает «исполнено» И «отклонено» одновременно.
+ *
+ * КОНТРАКТ: замок берётся до ПЕРВОГО ЧТЕНИЯ СОСТОЯНИЯ этого pendingId в транзакции и
+ * не отпускается до её конца (xact-замок отдельно не отпускается вовсе). Формулировка
+ * «первым statement'ом транзакции» была бы неточной: первые два statement'а всегда
+ * ставит withIdentity (set_config + SET LOCAL ROLE, with-identity.ts) — проверяемое
+ * требование именно в порядке относительно ЧТЕНИЙ: всё, что прочитано после захвата,
+ * прочитано снапшотом READ COMMITTED, снятым уже под замком.
+ *
+ * Повторный захват того же ключа в ТОЙ ЖЕ транзакции — no-op: pg_advisory_xact_lock
+ * re-entrant для своей сессии и второй записи в pg_locks не заводит (замерено). Поэтому
+ * вызыватель, взявший замок сам, ничего не передаёт и ничего не отключает, а
+ * rejectPendingTx берёт замок безусловно — контракт держится механикой, а не
+ * дисциплиной вызывателя.
+ *
+ * Ключ — hashtextextended(pendingId): pendingId глобально уникален (uuidv7),
+ * межвладельческие коллизии хэша безвредны (кратковременная лишняя сериализация,
+ * не ошибка).
+ *
+ * Экспортирован ради лестницы правки (Ш1.5): её шаг 1 читает состояние P1 сам, ДО
+ * гашения, и обязан делать это под замком.
  */
-async function acquirePendingLock(tx: Tx, pendingId: string): Promise<void> {
+export async function acquirePendingLock(tx: Tx, pendingId: string): Promise<void> {
   await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${pendingId}, 0))`);
 }
 
@@ -414,73 +430,124 @@ export async function approvePending(
   }
 }
 
+/**
+ * Успешный исход отклонения — общая часть tx-варианта и обёртки.
+ *
+ * threadId — тред карточки-запроса, который findPendingMessage и так прочитал. Нужен
+ * лестнице правки (Ш1.5): новое предложение обязано лечь в ТОТ ЖЕ тред рутины, иначе
+ * createPending уронит его в глобальный тред владельца и лента треда разорвётся.
+ */
+export interface RejectPendingTxResult {
+  pendingId: string;
+  alreadyRejected: boolean;
+  reason: RejectReason;
+  threadId: string;
+}
+
 export type RejectPendingResult =
-  | { ok: true; pendingId: string; alreadyRejected: boolean; reason: RejectReason }
+  | ({ ok: true } & RejectPendingTxResult)
   | { ok: false; error: StructuredError };
 
 /**
- * Отклонение §7.10: журнал append-only (§4.6) — карточка-запрос не правится, в её
- * тред пишется НОВОЕ системное сообщение {type:'confirmation_rejected', rejects}
- * с детерминированным PK rejectMessageId(owner, pendingId) — идемпотентность reject
- * по PK, как у audit-сообщений (§7.8). Уже исполненный pending отклонить нельзя
- * (audit-сообщение по детерминированному PK уже существует) → VALIDATION.
+ * Отклонение §7.10 В ЧУЖОЙ ТРАНЗАКЦИИ — тело rejectPending без собственного withIdentity.
+ * Журнал append-only (§4.6): карточка-запрос не правится, в её тред пишется НОВОЕ
+ * системное сообщение {type:'confirmation_rejected', rejects} с детерминированным PK
+ * rejectMessageId(owner, pendingId) — идемпотентность reject по PK, как у audit-сообщений
+ * (§7.8). Уже исполненный pending отклонить нельзя (audit-сообщение по детерминированному
+ * PK уже существует) → VALIDATION.
  *
- * Сериализация против approve (fix round): advisory-lock по pendingId ПЕРВЫМ
- * statement'ом tx — конкурентный approve держит тот же замок в audit-tx; проверка
- * «уже исполнено» идёт строго после захвата, поэтому видит его закоммиченный audit
- * (или сама коммитится первой, и approve увидит reject). Повторный reject
- * идемпотентен: проверка isRejected под замком + ON CONFLICT DO NOTHING по
- * детерминированному PK (двойная страховка — второго сообщения не бывает).
+ * Сериализация против approve (fix round): advisory-lock по pendingId берётся ЗДЕСЬ, до
+ * первого чтения состояния (см. док acquirePendingLock) — конкурентный approve держит тот
+ * же замок в audit-tx; проверка «уже исполнено» идёт строго после захвата, поэтому видит
+ * его закоммиченный audit (или сама коммитится первой, и approve увидит reject).
+ * Повторный reject идемпотентен: проверка isRejected под замком + ON CONFLICT DO NOTHING
+ * по детерминированному PK (двойная страховка — второго сообщения не бывает).
  *
  * Причина (V1.8) определяет текст сообщения и уезжает в metadata.reason. Повторный
  * reject возвращает ИСХОДНУЮ причину, а не переданную: сообщение append-only, и врать
  * про то, что записано в ленте, нельзя — раннер, гасящий уже отклонённое владельцем
  * предложение, обязан увидеть 'owner', а не своё 'superseded'.
+ *
+ * КОНТРАКТ ВЫЗЫВАТЕЛЯ:
+ *  - tx открыт withIdentity(db, ownerId) для ТОГО ЖЕ владельца. Проверка этого стоила бы
+ *    round-trip на каждый вызов, поэтому её нет: findPendingMessage/rejectedReason
+ *    скоупит RLS по identity транзакции, а rejectMessageId/batchAuditMessageId считаются
+ *    от args.ownerId — рассинхрон дал бы отказ мимо цели. Тот же контракт у createPending.
+ *  - никакого чтения состояния этого pendingId в этой транзакции ДО вызова: замок берётся
+ *    здесь, и прочитанное раньше — снапшот до захвата (тот самый write-skew). Вызывателю,
+ *    которому состояние нужно раньше (лестница Ш1.5), — сначала acquirePendingLock.
+ *  - функция БРОСАЕТ ExecError вместо {ok:false}: внутри чужой транзакции отказ обязан её
+ *    откатить, а не позволить закоммитить половину лестницы. alreadyRejected при этом НЕ
+ *    ошибка и возвращается значением — решать по чужой причине вызывателю.
+ */
+export async function rejectPendingTx(
+  tx: Tx,
+  args: { ownerId: string; pendingId: string; reason?: RejectReason },
+): Promise<RejectPendingTxResult> {
+  const reason = args.reason ?? 'owner';
+  await acquirePendingLock(tx, args.pendingId); // до первого чтения — см. док выше
+  const msg = await findPendingMessage(tx, args.pendingId);
+  if (!msg) {
+    throw new ExecError('NOT_FOUND', `pending-подтверждение ${args.pendingId} не найдено`, {
+      pendingId: args.pendingId,
+    });
+  }
+  const auditId = batchAuditMessageId(args.ownerId, args.pendingId);
+  const executed = await tx
+    .select({ id: chatMessages.id })
+    .from(chatMessages)
+    .where(eq(chatMessages.id, auditId));
+  if (executed.length > 0) {
+    throw new ExecError(
+      'VALIDATION',
+      `подтверждение ${args.pendingId} уже исполнено — отклонить нельзя`,
+      { pendingId: args.pendingId, auditId },
+    );
+  }
+  const already = await rejectedReason(tx, args.pendingId);
+  if (already !== undefined) {
+    return {
+      pendingId: args.pendingId,
+      alreadyRejected: true,
+      reason: already,
+      threadId: msg.threadId,
+    };
+  }
+  await appendMessageIdempotent(tx, {
+    id: rejectMessageId(args.ownerId, args.pendingId),
+    threadId: msg.threadId,
+    role: 'system',
+    content: REJECT_CONTENT[reason],
+    metadata: { type: 'confirmation_rejected', rejects: args.pendingId, reason },
+  });
+  return {
+    pendingId: args.pendingId,
+    alreadyRejected: false,
+    reason,
+    threadId: msg.threadId,
+  };
+}
+
+/**
+ * Отклонение §7.10 собственной транзакцией — публичный вход для всех, у кого своей ещё
+ * нет (кнопка владельца, раннер рутины, компенсация propose). Вся семантика — в
+ * rejectPendingTx; здесь только identity-транзакция и превращение ExecError в
+ * {ok:false}. try/catch стоит СНАРУЖИ withIdentity намеренно: брошенный внутри ExecError
+ * сначала откатывает транзакцию и только потом становится структурным отказом.
+ *
+ * ИЗНУТРИ ОТКРЫТОЙ ТРАНЗАКЦИИ ЭТУ ФУНКЦИЮ ЗВАТЬ НЕЛЬЗЯ. Вложенного tx у postgres-js нет:
+ * db.transaction резервирует ДРУГУЮ коннекцию пула, и вызов повиснет на собственном же
+ * advisory-замке, который держит внешняя транзакция, — до statement_timeout (замерено
+ * 2546 мс до отказа). Это не ошибка компиляции и не исключение по месту, а зависание,
+ * которое найдёт только ревью. Из открытой транзакции — только rejectPendingTx(tx, …).
  */
 export async function rejectPending(
   db: Db,
   args: { ownerId: string; pendingId: string; reason?: RejectReason },
 ): Promise<RejectPendingResult> {
-  const reason = args.reason ?? 'owner';
   try {
-    return await withIdentity(db, args.ownerId, async (tx) => {
-      await acquirePendingLock(tx, args.pendingId); // первым statement'ом — см. док выше
-      const msg = await findPendingMessage(tx, args.pendingId);
-      if (!msg) {
-        throw new ExecError('NOT_FOUND', `pending-подтверждение ${args.pendingId} не найдено`, {
-          pendingId: args.pendingId,
-        });
-      }
-      const auditId = batchAuditMessageId(args.ownerId, args.pendingId);
-      const executed = await tx
-        .select({ id: chatMessages.id })
-        .from(chatMessages)
-        .where(eq(chatMessages.id, auditId));
-      if (executed.length > 0) {
-        throw new ExecError(
-          'VALIDATION',
-          `подтверждение ${args.pendingId} уже исполнено — отклонить нельзя`,
-          { pendingId: args.pendingId, auditId },
-        );
-      }
-      const already = await rejectedReason(tx, args.pendingId);
-      if (already !== undefined) {
-        return {
-          ok: true as const,
-          pendingId: args.pendingId,
-          alreadyRejected: true,
-          reason: already,
-        };
-      }
-      await appendMessageIdempotent(tx, {
-        id: rejectMessageId(args.ownerId, args.pendingId),
-        threadId: msg.threadId,
-        role: 'system',
-        content: REJECT_CONTENT[reason],
-        metadata: { type: 'confirmation_rejected', rejects: args.pendingId, reason },
-      });
-      return { ok: true as const, pendingId: args.pendingId, alreadyRejected: false, reason };
-    });
+    const r = await withIdentity(db, args.ownerId, (tx) => rejectPendingTx(tx, args));
+    return { ok: true, ...r };
   } catch (e) {
     if (e instanceof ExecError) {
       return { ok: false, error: { code: e.code, message: e.message, details: e.details } };

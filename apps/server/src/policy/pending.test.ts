@@ -6,16 +6,23 @@
 // audit-сообщения (batch-механика §7.8, batch_id = pendingId).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { batchAuditMessageId, globalThreadId, newId, rejectMessageId } from '@orbis/shared';
-import { eq, inArray } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import type { ActionRecord, ExecuteResult, WireEntity } from '../executor/types';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
-import { approvePending, createPending, rejectPending } from './pending';
+import {
+  acquirePendingLock,
+  approvePending,
+  createPending,
+  rejectPending,
+  rejectPendingTx,
+} from './pending';
 
 requireEnv();
 
@@ -418,6 +425,90 @@ describe('rejectPending: отклонение карточки-запроса', 
       expect(r.error.code).toBe('VALIDATION');
       expect(r.error.message).toContain('исполнено');
     }
+  });
+});
+
+// Ш1.5, шаг 1 лестницы правки: правка предложения гасит P1 и создаёт P2, и обе записи
+// обязаны лечь ОДНОЙ транзакцией — иначе крэш между ними оставляет сироту. Вложить
+// транзакцию нельзя (postgres-js берёт под неё другую коннекцию и самоблокируется на
+// advisory-замке), поэтому гашение существует и tx-вариантом.
+describe('rejectPendingTx: гашение в ЧУЖОЙ транзакции (Ш1.5, шаг 1 лестницы)', () => {
+  test('пишет reject-сообщение транзакцией вызывателя: искусственный rollback снаружи откатывает и гашение', async () => {
+    const { pendingId } = await pendingArchive(undefined);
+    const rejectId = rejectMessageId(userA, pendingId);
+
+    await expect(
+      withIdentity(db, userA, async (tx) => {
+        const r = await rejectPendingTx(tx, { ownerId: userA, pendingId });
+        expect(r.alreadyRejected).toBe(false);
+        // Сообщение видно ИЗНУТРИ этой транзакции до её коммита — значит писала его она,
+        // а не собственный tx гашения (тот был бы уже закоммичен и пережил бы откат)
+        const inTx = await tx
+          .select({ id: chatMessages.id })
+          .from(chatMessages)
+          .where(eq(chatMessages.id, rejectId));
+        expect(inTx.length).toBe(1);
+        throw new Error('искусственный откат лестницы');
+      }),
+    ).rejects.toThrow('искусственный откат лестницы');
+
+    // Снаружи не осталось ничего: гашение откатилось вместе с транзакцией вызывателя —
+    // это и есть атомарность шага 1 (P1 гасится и P2 создаётся либо обе, либо ни одной)
+    expect(await messageById(userA, rejectId)).toBeUndefined();
+
+    // Предложение живо и гасится начисто; ok-ветка обёртки несёт тред карточки
+    const after = await rejectPending(db, { ownerId: userA, pendingId });
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.alreadyRejected).toBe(false);
+    expect(after.threadId).toBe(globalThreadId(userA));
+  });
+
+  test('повторный захват замка того же pendingId в той же tx не блокирует (advisory xact-замок re-entrant)', async () => {
+    const { pendingId } = await pendingArchive(undefined);
+    // Замок берёт вызыватель (лестница читает состояние P1 под ним), а следом ещё раз —
+    // сам rejectPendingTx. Не будь повтор no-op'ом, второй захват ждал бы конца этой же
+    // транзакции, то есть самого себя, до statement_timeout: тест проходит ровно потому,
+    // что этого не происходит, и флага «замок уже взят» контракту не требуется.
+    const advisoryLocks = await withIdentity(db, userA, async (tx) => {
+      await acquirePendingLock(tx, pendingId);
+      const r = await rejectPendingTx(tx, { ownerId: userA, pendingId });
+      expect(r.alreadyRejected).toBe(false);
+      const rows = await tx.execute(
+        sql`SELECT count(*)::int AS n FROM pg_locks
+            WHERE locktype = 'advisory' AND pid = pg_backend_pid()`,
+      );
+      return (rows[0] as { n: number }).n;
+    });
+    expect(advisoryLocks).toBe(1); // два захвата — одна запись в pg_locks
+  });
+
+  test('возвращает threadId треда карточки-запроса — P2 лестницы ляжет в тред рутины, а не в глобальный', async () => {
+    const host = await seedEntity(userA, { title: 'Хост tx-гашения', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const { pendingId } = await pendingArchive(threadId);
+
+    const r = await withIdentity(db, userA, (tx) =>
+      rejectPendingTx(tx, { ownerId: userA, pendingId, reason: 'superseded' }),
+    );
+    expect(r).toEqual({ pendingId, alreadyRejected: false, reason: 'superseded', threadId });
+
+    // Внешняя транзакция закоммитилась — запись на месте, в том же треде и с тем же
+    // текстом, что у обёртки: тело гашения не раздвоилось
+    const msg = await messageById(userA, rejectMessageId(userA, pendingId));
+    expect(msg?.threadId).toBe(threadId);
+    expect(msg?.content).toBe('Предложение заменено новым прогоном');
+  });
+
+  test('бросает ExecError, а не возвращает {ok:false}: отказ обязан откатить транзакцию вызывателя', async () => {
+    const err = await withIdentity(db, userA, (tx) =>
+      rejectPendingTx(tx, { ownerId: userA, pendingId: newId() }),
+    ).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(ExecError);
+    expect((err as ExecError).code).toBe('NOT_FOUND');
   });
 });
 
