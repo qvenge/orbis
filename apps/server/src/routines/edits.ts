@@ -117,6 +117,8 @@ function compareText(a: string, b: string): number {
 type EditRejection =
   /** `index` правки указывает мимо payload'а. */
   | 'edit_index_out_of_range'
+  /** Строки этой операции не правятся вовсе: она не правит существующую запись. */
+  | 'edit_row_not_editable'
   /** Правка адресует ключ, которого в исходной операции нет (Б3: запись без предусловия). */
   | 'edit_key_missing'
   /** Правка тела там, где тела не было: писать его было бы не правкой, а дописыванием. */
@@ -164,9 +166,9 @@ const EXEC_SCHEMAS = new Map<string, z.ZodTypeAny>([
 ]);
 
 /**
- * Разделитель ключа строки предложения — NUL, а не пробел (как в `collides`,
- * propose.ts:451): имена полей приходят из схем аспектов владельца, и пробел ВНУТРИ
- * имени склеил бы два разных ключа в один, молча пропустив дубль правки.
+ * Разделитель ключа строки предложения — NUL, тем же приёмом, что `collides`
+ * (propose.ts:451). Не пробел: имена полей приходят из схем аспектов владельца, и пробел
+ * ВНУТРИ имени склеил бы два разных ключа в один, молча пропустив дубль правки.
  */
 const KEY_SEP = '\u0000';
 
@@ -246,7 +248,9 @@ export function buildEditedOperations(operations: unknown[], edits: ProposalEdit
   const claimed = new Set<string>();
 
   for (const edit of edits.body) {
-    const input = at(source, edit.index).input;
+    const op = at(source, edit.index);
+    assertRowEditable(op, edit.index);
+    const input = op.input;
     if (!hasBody(input)) {
       throw reject(
         'edit_body_missing',
@@ -263,7 +267,9 @@ export function buildEditedOperations(operations: unknown[], edits: ProposalEdit
   }
 
   for (const edit of edits.fields) {
-    const input = at(source, edit.index).input;
+    const op = at(source, edit.index);
+    assertRowEditable(op, edit.index);
+    const input = op.input;
     assertRowExists(input, edit.index, edit.aspect, edit.field);
     claim(claimed, edit.index, edit.aspect, edit.field);
     const target = at(result, edit.index).input;
@@ -315,6 +321,31 @@ function parseSource(op: unknown, index: number): StoredOperation {
     );
   }
   return parsed.data;
+}
+
+/**
+ * Правятся строки ТОЛЬКО той операции, которая правит существующую запись (`entity_update`).
+ *
+ * Граница названа спекой прямо (2026-08-19-proposal-diff-edit-design.md, «Известные
+ * границы»): «Строки `entity_create` не правятся. У создания нет предусловий
+ * (propose.ts:200-205), а правка заголовка новой задачи — это правка записи, которой ещё
+ * нет». То же и у связей: у `relation_*` строк-полей нет вовсе.
+ *
+ * Проверка стоит ОТДЕЛЬНО и раньше остальных, а не выводится из провала контракта тула:
+ * «эту строку править нельзя» и «правка сломала операцию» — разные ответы владельцу, и
+ * различать их вызывающий обязан по `reason`, а не по тексту. Сегодня такую правку не
+ * послать с экрана, но вход `decideProposal` открыт любому клиенту — граница обязана
+ * держаться сервером, а не формой карточки.
+ */
+function assertRowEditable(op: StoredOperation, index: number): void {
+  if (op.tool === 'entity_update') return;
+  throw reject(
+    'edit_row_not_editable',
+    op.tool === 'entity_create'
+      ? `строку операции ${index + 1} править нельзя: она создаёт новую запись, а правка — это другое значение у записи, которая уже есть`
+      : `строку операции ${index + 1} править нельзя: она не правит поля записи`,
+    { index, tool: op.tool },
+  );
 }
 
 /** Правка адресует СУЩЕСТВУЮЩУЮ строку предложения — иначе это дописывание, а не правка. */

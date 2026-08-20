@@ -241,6 +241,65 @@ describe('buildEditedOperations', () => {
     ).toBe('edit_duplicate');
   });
 
+  test('строки entity_create и связей не правятся вовсе → VALIDATION edit_row_not_editable', () => {
+    // Граница спеки («Известные границы»): правка заголовка новой задачи — это правка
+    // записи, которой ещё нет. С экрана такого не послать, но вход открыт любому клиенту.
+    const create = [createOp()];
+    expect(
+      reasonOf(() =>
+        buildEditedOperations(
+          create,
+          edits({ fields: [{ index: 0, field: 'title', value: 'Правленый' }] }),
+        ),
+      ),
+    ).toEqual({ code: 'VALIDATION', reason: 'edit_row_not_editable' });
+
+    // Поле аспекта создания — та же граница
+    const createWithAspect: Operation[] = [
+      {
+        tool: 'entity_create',
+        input: { title: 'Новая', tags: [], aspects: { 'orbis/task': { status: 'planned' } } },
+      },
+    ];
+    expect(
+      reasonOf(() =>
+        buildEditedOperations(
+          createWithAspect,
+          edits({ fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'done' }] }),
+        ),
+      ).reason,
+    ).toBe('edit_row_not_editable');
+
+    // Тело у создания есть, но строка всё равно не правится — и причина об этом, а не о
+    // контракте тула (иначе владелец читал бы «операция невалидна» вместо «править нельзя»)
+    expect(
+      reasonOf(() =>
+        buildEditedOperations(create, edits({ body: [{ index: 0, bodyDoc: BODY_DOC }] })),
+      ).reason,
+    ).toBe('edit_row_not_editable');
+
+    // У связей строк-полей нет вовсе
+    expect(
+      reasonOf(() =>
+        buildEditedOperations(
+          [relationOp()],
+          edits({ fields: [{ index: 0, field: 'title', value: 'нет' }] }),
+        ),
+      ).reason,
+    ).toBe('edit_row_not_editable');
+  });
+
+  test('null — принятое значение: «пусто» в поле аспекта собирается и проходит контракт тула', () => {
+    const built = buildEditedOperations(
+      [updateOp()],
+      edits({ fields: [{ index: 0, aspect: 'orbis/task', field: 'priority', value: null }] }),
+    );
+    const input = opAt(built, 0).input;
+    expect(input.aspects).toEqual({ 'orbis/task': { status: 'in_progress', priority: null } });
+    // Ключ остался на месте — снятие значения не выбрасывает строку из предложения
+    expect(entityUpdateExecInput.safeParse(input).success).toBe(true);
+  });
+
   test('собранная операция валидируется схемой СВОЕГО тула — fail-closed на всех, включая непатченные', () => {
     // Значение неверного типа: title: z.string().min(1) не принимает null
     expect(
@@ -251,13 +310,6 @@ describe('buildEditedOperations', () => {
         ),
       ),
     ).toEqual({ code: 'VALIDATION', reason: 'edit_result_invalid' });
-
-    // Тело документом у entity_create: его контракт про bodyDoc не знает (.strict())
-    expect(
-      reasonOf(() =>
-        buildEditedOperations([createOp()], edits({ body: [{ index: 0, bodyDoc: BODY_DOC }] })),
-      ).reason,
-    ).toBe('edit_result_invalid');
 
     // Непатченная операция тоже обязана пройти контракт — иначе провал вылезет у владельца
     const broken: Operation[] = [{ tool: 'entity_update', input: { id: 'не-uuid' } }];
