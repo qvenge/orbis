@@ -256,7 +256,16 @@ HEAD движется параллельными сессиями владель
 6. **Числа** (вопрос 6), константы `routines/constants.ts` + дефолты `diff.ts`:
    `PROPOSAL_DIFF_MAX_BODY_BYTES = 65536`, `PROPOSAL_DIFF_MAX_SOURCE_LINES = 400` (до-разборные,
    обе стороны), `PROPOSAL_DIFF_MAX_BLOCKS = 1000` (единиц развёртки; 1.8× максимума корпуса),
-   `PROPOSAL_DIFF_MAX_EDIT_RATIO = 0.3` (бюджет D Myers; сверх → `skipped:'rewritten'`),
+   `PROPOSAL_DIFF_MAX_EDIT_RATIO = 0.3` (бюджет D Myers; сверх → `skipped:'rewritten'`)
+   **+ `PROPOSAL_DIFF_MIN_EDIT_BUDGET = 8`: `maxD = Math.max(8, ratio·(N+M))`** — ИСПРАВЛЕНО при
+   исполнении Задачи 6 (замер, не вывод): у голой доли нет нижней ступеньки, а изменённый блок стоит
+   D = 2, поэтому одна правка требует ≥ 4 единиц. Три из шести сидов онбординга — `UPCOMING_BODY`,
+   `HORIZON_YEAR_BODY`, `ROUTINES_LIST_BODY` (`apps/server/src/seed/smart-lists.ts:20,48,80`, по 3
+   единицы) — на правку ОДНОЙ строки отвечали бы `skipped:'rewritten'`, то есть врали бы владельцу
+   «тело переписано целиком». Отсечка по D нужна ради производительности (Myers проигрывает LCS при
+   D~N+M), а на телах в единицы блоков Myers мгновенен при любом D — ступенька ничего не стоит,
+   ориентир 8 из замера,
+
    `PROPOSAL_DIFF_MAX_BLOCK_WORDS = 400` (внутриблочный дифф только для пар короче),
    `PROPOSAL_DIFF_SIMILARITY = 0.4` (Дайс) + правило вложения (∩/min = 1.0), окно спаривания
    ±2, тип узла в ключе спаривания обязан совпадать (taskItem ≠ listItem: чеклист →
@@ -694,8 +703,10 @@ export interface DiffPart { kind: 'same' | 'added' | 'removed'; text: string }
 export interface DiffUnit { kind: 'same' | 'added' | 'removed' | 'changed'; before?: string; after?: string; parts?: DiffPart[] }
 export type BodyDiffSkipReason = 'too_large' | 'rewritten';
 export type BodyDiffResult = { units: DiffUnit[] } | { skipped: BodyDiffSkipReason };
-export interface DiffLimits { maxBlocks: number; maxBlockWords: number; maxEditRatio: number }
-export const DIFF_LIMITS_DEFAULT: DiffLimits; // {maxBlocks: 1000, maxBlockWords: 400, maxEditRatio: 0.3} — Развилка 6
+export interface DiffLimits { maxBlocks: number; maxBlockWords: number; maxEditRatio: number; minEditBudget: number }
+export const DIFF_LIMITS_DEFAULT: DiffLimits; // {maxBlocks: 1000, maxBlockWords: 400, maxEditRatio: 0.3, minEditBudget: 8} — Развилка 6
+// maxD = Math.max(minEditBudget, maxEditRatio·(N+M)) — ступенька добавлена по замеру Задачи 6:
+// без неё тело в 3 единицы (три сида онбординга) на правку одной строки врало бы «переписано целиком»
 export function diffBodyDocs(before: JSONContent, after: JSONContent, limits?: Partial<DiffLimits>): BodyDiffResult;
 export interface FlatBlock { kind: string; key: string; text: string }
 export function flattenBlocks(doc: JSONContent): FlatBlock[];
