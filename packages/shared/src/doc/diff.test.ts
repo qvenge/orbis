@@ -1,0 +1,438 @@
+// bun:test, как ВЕСЬ пакет shared: у него "test": "bun test", и файл на vitest уронил бы
+// корневой прогон. Тела здесь строятся ДЕРЕВОМ, а не markdown'ом: `diff.ts` листовой и разбора
+// не знает — импорт `parseBody` сюда протащил бы схему Tiptap в тест листового модуля.
+import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import type { JSONContent } from '@tiptap/core';
+import {
+  type BodyDiffResult,
+  blockText,
+  DIFF_LIMITS_DEFAULT,
+  type DiffUnit,
+  diffBodyDocs,
+  flattenBlocks,
+} from './diff';
+
+const doc = (...content: JSONContent[]): JSONContent => ({ type: 'doc', content });
+const p = (text: string): JSONContent => ({
+  type: 'paragraph',
+  ...(text === '' ? {} : { content: [{ type: 'text', text }] }),
+});
+const heading = (level: number, text: string): JSONContent => ({
+  type: 'heading',
+  attrs: { level },
+  content: [{ type: 'text', text }],
+});
+const code = (language: string, text: string): JSONContent => ({
+  type: 'codeBlock',
+  attrs: { language },
+  content: [{ type: 'text', text }],
+});
+const taskItem = (checked: boolean, text: string): JSONContent => ({
+  type: 'taskItem',
+  attrs: { checked },
+  content: [p(text)],
+});
+const taskList = (...items: JSONContent[]): JSONContent => ({ type: 'taskList', content: items });
+const listItem = (text: string, ...rest: JSONContent[]): JSONContent => ({
+  type: 'listItem',
+  content: [p(text), ...rest],
+});
+const bulletList = (...items: JSONContent[]): JSONContent => ({
+  type: 'bulletList',
+  content: items,
+});
+
+/** Наполнитель: бюджет Myers считается от (N + M), и коротким телам правки его не хватает. */
+const filler = (n: number): JSONContent[] =>
+  Array.from({ length: n }, (_, i) => p(`строка наполнителя номер ${i + 1}`));
+
+const unitsOf = (result: BodyDiffResult): DiffUnit[] => {
+  if ('skipped' in result) throw new Error(`ожидались единицы, а дифф пропущен: ${result.skipped}`);
+  return result.units;
+};
+const kinds = (result: BodyDiffResult): string[] => unitsOf(result).map((u) => u.kind);
+const at = (units: DiffUnit[], i: number): DiffUnit => {
+  const u = units[i];
+  if (u === undefined) throw new Error(`нет единицы ${i} из ${units.length}`);
+  return u;
+};
+
+describe('flattenBlocks — правило развёртки', () => {
+  test('контейнеры прозрачны, их дети — единицы; вложенный подсписок даёт свои единицы', () => {
+    const flat = flattenBlocks(
+      doc(
+        heading(2, 'Расписание'),
+        taskList(taskItem(false, 'Первое'), taskItem(true, 'Второе')),
+        bulletList(listItem('Пункт', bulletList(listItem('Вложенный')))),
+        { type: 'blockquote', content: [p('Цитата')] },
+        {
+          type: 'table',
+          content: [
+            {
+              type: 'tableRow',
+              content: [
+                { type: 'tableCell', content: [p('Ячейка')] },
+                { type: 'tableHeader', content: [p('Заголовок')] },
+              ],
+            },
+          ],
+        },
+      ),
+    );
+    expect(flat.map((b) => b.kind)).toEqual([
+      'heading',
+      'taskItem',
+      'taskItem',
+      'listItem',
+      'listItem',
+      'paragraph',
+      'tableRow',
+    ]);
+    expect(flat.map((b) => b.text)).toEqual([
+      'Расписание',
+      'Первое',
+      'Второе',
+      'Пункт',
+      'Вложенный',
+      'Цитата',
+      'Ячейка Заголовок',
+    ]);
+  });
+
+  test('пустые единицы, horizontalRule, queryBlock и rawBlock не теряются', () => {
+    const flat = flattenBlocks(
+      doc(
+        p(''),
+        { type: 'horizontalRule' },
+        { type: 'queryBlock', attrs: { query: 'status:open' } },
+        { type: 'rawBlock', attrs: { markdown: '| a | b |' } },
+        p(''),
+      ),
+    );
+    expect(flat.map((b) => b.kind)).toEqual([
+      'paragraph',
+      'horizontalRule',
+      'queryBlock',
+      'rawBlock',
+      'paragraph',
+    ]);
+    expect(flat.map((b) => b.text)).toEqual(['', '', 'status:open', '| a | b |', '']);
+  });
+
+  test('ключ несёт тип и значимые атрибуты, а текст нормализуется', () => {
+    const one = (node: JSONContent) => {
+      const flat = flattenBlocks(doc(node));
+      const first = flat[0];
+      if (first === undefined) throw new Error('развёртка потеряла единственный блок');
+      return first;
+    };
+    expect(one(heading(2, '  Расписание   дня \n')).text).toBe('Расписание дня');
+    expect(one(heading(2, '  Расписание   дня \n')).key).toBe(
+      one(heading(2, 'Расписание дня')).key,
+    );
+    expect(one(heading(3, 'Расписание дня')).key).not.toBe(one(heading(2, 'Расписание дня')).key);
+    expect(one(p('Расписание дня')).key).not.toBe(one(heading(2, 'Расписание дня')).key);
+  });
+});
+
+describe('blockText — писаный текст блока', () => {
+  test('берёт текст узлов, markdown raw-блока и запрос смарт-листа; подпись ссылки — нет', () => {
+    expect(blockText(p('Привет'))).toBe('Привет');
+    expect(blockText({ type: 'rawBlock', attrs: { markdown: '| a |' } })).toBe('| a |');
+    expect(blockText({ type: 'queryBlock', attrs: { query: 'status:open' } })).toBe('status:open');
+    expect(
+      blockText({
+        type: 'paragraph',
+        content: [
+          { type: 'text', text: 'см. ' },
+          { type: 'entityRef', attrs: { entityId: 'x', label: 'Задача' } },
+        ],
+      }),
+    ).toBe('см. ');
+  });
+});
+
+describe('diffBodyDocs — блочный дифф', () => {
+  const plan = (third: string): JSONContent =>
+    doc(
+      taskList(
+        taskItem(false, '07:30 — подъём, зарядка 15 минут'),
+        taskItem(false, '08:00 — завтрак и почта'),
+        taskItem(false, third),
+        taskItem(false, '13:00 — обед'),
+        taskItem(false, '15:00 — разбор входящих'),
+        taskItem(false, '18:00 — спорт'),
+      ),
+    );
+
+  test('перенос «10:00 → 14:00» в пункте: changed с parts [removed, added, same хвост]', () => {
+    const result = diffBodyDocs(
+      plan('10:00 — созвон с командой'),
+      plan('14:00 — созвон с командой'),
+    );
+    expect(kinds(result)).toEqual(['same', 'same', 'changed', 'same', 'same', 'same']);
+    const changed = at(unitsOf(result), 2);
+    expect(changed.before).toBe('10:00 — созвон с командой');
+    expect(changed.after).toBe('14:00 — созвон с командой');
+    expect(changed.parts).toEqual([
+      { kind: 'removed', text: '10:00' },
+      { kind: 'added', text: '14:00' },
+      { kind: 'same', text: '— созвон с командой' },
+    ]);
+  });
+
+  test('стороны parts, склеенные пробелом, дают ровно before и after', () => {
+    const changed = at(
+      unitsOf(diffBodyDocs(plan('10:00 — созвон с командой'), plan('14:00 — созвон с Аней'))),
+      2,
+    );
+    const side = (skip: string) =>
+      (changed.parts ?? [])
+        .filter((part) => part.kind !== skip)
+        .map((part) => part.text)
+        .join(' ');
+    const { before, after } = changed;
+    if (before === undefined || after === undefined) throw new Error('у changed нет обеих сторон');
+    expect(side('added')).toBe(before);
+    expect(side('removed')).toBe(after);
+  });
+
+  test('вставка пункта НАД изменённым: окно спаривания находит пару, вставка — added', () => {
+    const before = doc(
+      taskList(
+        taskItem(false, '08:00 — завтрак и почта'),
+        taskItem(false, '09:00 — блок глубокой работы: дифф предложения, разведка кода'),
+        taskItem(false, '13:00 — обед'),
+        taskItem(false, '15:00 — разбор входящих'),
+        taskItem(false, '18:00 — спорт'),
+      ),
+    );
+    const after = doc(
+      taskList(
+        taskItem(false, '08:00 — завтрак и почта'),
+        taskItem(false, '10:00 — короткий синк с Аней по дизайну'),
+        taskItem(false, '11:00 — блок глубокой работы: дифф предложения, разведка кода'),
+        taskItem(false, '13:00 — обед'),
+        taskItem(false, '15:00 — разбор входящих'),
+        taskItem(false, '18:00 — спорт'),
+      ),
+    );
+    const result = diffBodyDocs(before, after);
+    expect(kinds(result)).toEqual(['same', 'added', 'changed', 'same', 'same', 'same']);
+    const units = unitsOf(result);
+    expect(at(units, 1).after).toBe('10:00 — короткий синк с Аней по дизайну');
+    expect(at(units, 1).before).toBeUndefined();
+    expect(at(units, 2).before).toBe(
+      '09:00 — блок глубокой работы: дифф предложения, разведка кода',
+    );
+    expect(at(units, 2).after).toBe(
+      '11:00 — блок глубокой работы: дифф предложения, разведка кода',
+    );
+  });
+
+  test('перестановка блоков → removed + added (известная граница спеки)', () => {
+    const a = p('Первый абзац про сроки');
+    const b = p('Второй абзац про бюджет');
+    const c = p('Третий абзац про риски');
+    const rest = filler(3);
+    const result = diffBodyDocs(doc(a, b, c, ...rest), doc(a, c, b, ...rest));
+    expect(kinds(result)).toEqual(['same', 'removed', 'same', 'added', 'same', 'same', 'same']);
+    const units = unitsOf(result);
+    expect(at(units, 1).before).toBe('Второй абзац про бюджет');
+    expect(at(units, 3).after).toBe('Второй абзац про бюджет');
+  });
+
+  test('щелчок чекбоксом, уровень заголовка и язык кодового блока — changed, а не same', () => {
+    const body = (checked: boolean, level: number, language: string): JSONContent =>
+      doc(
+        heading(level, 'Расписание дня'),
+        taskList(taskItem(checked, 'Позвонить в клинику'), taskItem(false, 'Оплатить счёт')),
+        code(language, 'const a = 1;'),
+        ...filler(8),
+      );
+    const result = diffBodyDocs(body(false, 2, 'ts'), body(true, 3, 'js'));
+    expect(kinds(result).filter((k) => k !== 'same')).toEqual(['changed', 'changed', 'changed']);
+    const changed = unitsOf(result).filter((u) => u.kind === 'changed');
+    expect(changed.map((u) => u.before)).toEqual([
+      'Расписание дня',
+      'Позвонить в клинику',
+      'const a = 1;',
+    ]);
+    expect(changed.map((u) => u.after)).toEqual(changed.map((u) => u.before));
+  });
+
+  test('дописанный хвост к короткому блоку: вложение 1.0 спаривает', () => {
+    const body = (sport: string): JSONContent => doc(p('Заметки недели'), p(sport), ...filler(4));
+    const result = diffBodyDocs(
+      body('Спорт'),
+      body('Спорт — заменить на бассейн, абонемент до пятницы'),
+    );
+    expect(kinds(result)).toEqual(['same', 'changed', 'same', 'same', 'same', 'same']);
+    const changed = at(unitsOf(result), 1);
+    expect(changed.parts).toEqual([
+      { kind: 'same', text: 'Спорт' },
+      { kind: 'added', text: '— заменить на бассейн, абонемент до пятницы' },
+    ]);
+  });
+
+  test('чеклист переписан маркированным списком → замена (типы не спариваются)', () => {
+    const before = doc(
+      taskList(taskItem(false, 'Позвонить в клинику'), taskItem(false, 'Оплатить счёт')),
+      ...filler(8),
+    );
+    const after = doc(
+      bulletList(listItem('Позвонить в клинику'), listItem('Оплатить счёт')),
+      ...filler(8),
+    );
+    const result = diffBodyDocs(before, after);
+    expect(kinds(result).filter((k) => k !== 'same')).toEqual([
+      'removed',
+      'removed',
+      'added',
+      'added',
+    ]);
+    expect(unitsOf(result).some((u) => u.kind === 'changed')).toBe(false);
+  });
+
+  test('одинаковые тела → все единицы same, before и after заполнены обе', () => {
+    const body = doc(heading(2, 'План'), ...filler(3), { type: 'horizontalRule' });
+    const result = diffBodyDocs(body, body);
+    expect(kinds(result)).toEqual(['same', 'same', 'same', 'same', 'same']);
+    for (const unit of unitsOf(result)) expect(unit.before).toBe(unit.after ?? '');
+    expect(unitsOf(result).every((u) => u.parts === undefined)).toBe(true);
+  });
+
+  test('пустые тела дают пустой список единиц', () => {
+    expect(unitsOf(diffBodyDocs(doc(), doc()))).toEqual([]);
+  });
+});
+
+describe('diffBodyDocs — потолки', () => {
+  test('умолчания — числа Развилки 6', () => {
+    expect(DIFF_LIMITS_DEFAULT).toEqual({ maxBlocks: 1000, maxBlockWords: 400, maxEditRatio: 0.3 });
+  });
+
+  test('полная перезапись: D сверх бюджета → skipped rewritten', () => {
+    const before = doc(...Array.from({ length: 10 }, (_, i) => p(`было: строка номер ${i + 1}`)));
+    const after = doc(
+      ...Array.from({ length: 10 }, (_, i) => p(`совершенно другое содержимое ${i + 1}`)),
+    );
+    expect(diffBodyDocs(before, after)).toEqual({ skipped: 'rewritten' });
+  });
+
+  test('блоков сверх maxBlocks → skipped too_large (проверяется каждая сторона)', () => {
+    const small = doc(...filler(2));
+    const big = doc(...filler(5));
+    expect(diffBodyDocs(small, big, { maxBlocks: 3 })).toEqual({ skipped: 'too_large' });
+    expect(diffBodyDocs(big, small, { maxBlocks: 3 })).toEqual({ skipped: 'too_large' });
+    expect('units' in diffBodyDocs(small, small, { maxBlocks: 3 })).toBe(true);
+  });
+
+  test('блок длиннее maxBlockWords — changed целиком, без parts', () => {
+    const long = (tail: string) =>
+      `${Array.from({ length: 30 }, (_, i) => `слово${i}`).join(' ')} ${tail}`;
+    const body = (tail: string) => doc(p(long(tail)), ...filler(5));
+    const wide = diffBodyDocs(body('конец'), body('финал'), { maxBlockWords: 10 });
+    const narrow = diffBodyDocs(body('конец'), body('финал'));
+    expect(at(unitsOf(wide), 0).kind).toBe('changed');
+    expect(at(unitsOf(wide), 0).parts).toBeUndefined();
+    expect(at(unitsOf(narrow), 0).parts).not.toBeUndefined();
+  });
+
+  test('ЗАМЕРЕННАЯ ЦЕНА доли без нижнего порога: мелкому телу бюджета не хватает', () => {
+    // Не «так задумано красиво», а зафиксированное следствие Развилки 6: изменённый блок стоит
+    // D = 2, поэтому одна правка требует ≥ 4 единиц. Тело из трёх единиц (ровно такие —
+    // UPCOMING_BODY, HORIZON_YEAR_BODY, ROUTINES_LIST_BODY у сидов прода) на правку одной строки
+    // отвечает «переписано целиком». Тест стоит здесь, чтобы появление нижнего порога было
+    // видимой правкой, а не тихим изменением поведения.
+    const trio = (first: string) => doc(p(first), p('Позвонить маме'), p('Забрать посылку'));
+    expect(diffBodyDocs(trio('Купить молоко'), trio('Купить молоко и хлеб'))).toEqual({
+      skipped: 'rewritten',
+    });
+    const quartet = (first: string) =>
+      doc(p(first), p('Позвонить маме'), p('Забрать посылку'), p('Оплатить счёт'));
+    expect(kinds(diffBodyDocs(quartet('Купить молоко'), quartet('Купить молоко и хлеб')))).toEqual([
+      'changed',
+      'same',
+      'same',
+      'same',
+    ]);
+  });
+
+  test('послабление бюджета возвращает дифф там, где умолчание пропускает', () => {
+    const before = doc(p('Купить молоко'), p('Позвонить маме'));
+    const after = doc(p('Купить молоко и хлеб'), p('Позвонить папе'));
+    expect(diffBodyDocs(before, after)).toEqual({ skipped: 'rewritten' });
+    expect(kinds(diffBodyDocs(before, after, { maxEditRatio: 1 }))).toEqual(['changed', 'changed']);
+  });
+});
+
+describe('сплошной пробой сопоставления', () => {
+  /** Свой генератор, а не Math.random: падение обязано воспроизводиться той же командой. */
+  const rng = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+
+  test('единицы восстанавливают обе стороны дословно и в порядке документа (200 случаев)', () => {
+    const random = rng(20260820);
+    const seen = { same: 0, added: 0, removed: 0, changed: 0 };
+    for (let round = 0; round < 200; round += 1) {
+      const source = Array.from({ length: 1 + Math.floor(random() * 25) }, (_, i) => `блок ${i}`);
+      const edited: string[] = [];
+      for (const line of source) {
+        const roll = random();
+        if (roll < 0.15) continue; // удаление
+        if (roll < 0.3) edited.push(`${line} с правкой`);
+        else edited.push(line);
+        if (random() < 0.15) edited.push(`вставка ${Math.floor(random() * 1000)}`);
+      }
+      const result = diffBodyDocs(doc(...source.map(p)), doc(...edited.map(p)), {
+        maxEditRatio: 1,
+      });
+      const units = unitsOf(result);
+      const left = units.filter((u) => u.kind !== 'added').map((u) => u.before);
+      const right = units.filter((u) => u.kind !== 'removed').map((u) => u.after);
+      expect(left, `раунд ${round}`).toEqual(source);
+      expect(right, `раунд ${round}`).toEqual(edited);
+      for (const unit of units) seen[unit.kind] += 1;
+    }
+    // Страж от вакуумности: пробой обязан пройти через все четыре исхода, иначе он проверяет
+    // только тождественные тела.
+    for (const kind of ['same', 'added', 'removed', 'changed'] as const) {
+      expect(seen[kind], kind).toBeGreaterThan(50);
+    }
+  });
+});
+
+describe('листовость модуля', () => {
+  const read = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+  /** Разбор — приём `apps/web/src/features/entity-editor/save.test.tsx:1388`: рантайм-импорт
+   *  отличается от типового отсутствием `type` сразу за `import`. */
+  const runtimeImports = (src: string) =>
+    [...src.matchAll(/^import\b(?!\s+type\b)(?!\s*[.(])[^'"`]*?(['"`])([^'"`]*)\1/gm)].flatMap(
+      (m) => (m[2] === undefined ? [] : [m[2]]),
+    );
+  const blankComments = (src: string) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+
+  test('исходник diff.ts не содержит рантайм-импортов', () => {
+    expect(runtimeImports(read('./diff.ts'))).toEqual([]);
+    // Положительный контроль: тот же разбор на тяжёлом соседе обязан сработать, иначе пустой
+    // список выше означал бы лишь сломанный разбор.
+    expect(runtimeImports(read('./convert.ts'))).toContain('@tiptap/core');
+  });
+
+  test('исходник diff.ts не упоминает ./convert и ./schema даже реэкспортом', () => {
+    expect(blankComments(read('./diff.ts'))).not.toMatch(/\.\/(convert|schema)/);
+  });
+
+  test('convert.ts берёт blockText из diff — писаный текст один на всех', () => {
+    const src = read('./convert.ts');
+    expect(runtimeImports(src)).toContain('./diff');
+    expect(src).not.toMatch(/function writtenText/);
+  });
+});

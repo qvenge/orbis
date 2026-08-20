@@ -1,4 +1,5 @@
 import { getSchema, type JSONContent } from '@tiptap/core';
+import { blockText } from './diff';
 import { OrbisMarkdownManager } from './manager';
 import { withCodeFences } from './nodes/code';
 import { BODY_REF_RE } from './nodes/entity-ref';
@@ -394,33 +395,17 @@ export function canonicalizeBody(markdown: string): { doc: BodyDoc; body: string
 }
 
 /**
- * Всё, что человек написал: текст узлов, дословная разметка raw-блоков, запрос смарт-листа.
  * Пробелы выброшены — markdown вправе их переставлять (перевод строки в конце блока,
  * выравнивание таблицы, схлопывание пустых строк), и считать это пропажей нельзя.
  *
- * ССЫЛКИ здесь НЕТ ни в каком виде, и обе половины этого — решения, а не упущение.
- *
- * ПОДПИСЬ не авторский текст, а вмороженный кеш заголовка (EntityChip показывает живой), и по
- * решению находки 2 сериализатор ОПУСКАЕТ подпись со скобкой — считать её пропажей значило бы
- * объявить поломкой собственную починку. Без этой оговорки чип с подписью «Задача ] хвост»
- * уводил весь документ в raw (замерено).
- *
- * ID убран как ИЗБЫТОЧНЫЙ и вредный: сверка ссылок ниже проверяет ровно то же и делает это
- * правильнее — она нечувствительна к регистру, а посимвольная сверка нет, поэтому
- * `[[entity:0F8F…]]` (разбор приводит id к нижнему регистру) считался пропажей и уводил
- * документ в raw (замерено, ре-ревью раунда 3).
+ * Само правило «что человек написал» (текст узлов, разметка raw-блока, запрос смарт-листа, и
+ * почему в нём НЕТ ссылки) живёт в `blockText` — там же его читает блочный дифф предложения.
+ * Реализация одна на весь пакет намеренно: две копии разошлись бы, и конверсия делала бы не
+ * то, что показывает дифф, — ровно урок `losesWord` выше. Ребро идёт ОТСЮДА в модуль диффа, и
+ * обратного быть не может: тот листовой, а значимый импорт этого файла стоил бы ему 156 кБ gzip
+ * в чанке экрана записи (замерено).
  */
-function writtenText(node: JSONContent | undefined, out: string[] = []): string[] {
-  if (!node) return out;
-  if (typeof node.text === 'string') out.push(node.text);
-  const attrs = node.attrs ?? {};
-  if (node.type === 'rawBlock' && typeof attrs.markdown === 'string') out.push(attrs.markdown);
-  if (node.type === 'queryBlock' && typeof attrs.query === 'string') out.push(attrs.query);
-  for (const child of node.content ?? []) writtenText(child, out);
-  return out;
-}
-
-const squash = (doc: JSONContent): string => writtenText(doc).join('').replace(/\s+/gu, '');
+const squash = (doc: JSONContent): string => blockText(doc).replace(/\s+/gu, '');
 
 /**
  * Подпоследовательность, а не равенство: разметка вправе ДОБАВИТЬ символы (маркер списка,
