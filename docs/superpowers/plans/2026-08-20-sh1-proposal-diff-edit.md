@@ -815,6 +815,14 @@ proposalsForEntity: ownerOnly.input(z.object({ entityId: z.string().uuid() }).st
 ```
   Проба (Р-17): `metadata @> ${probe}::jsonb` где
   `probe = {pending: {source: 'routine', input: {operations: [{input: {id: entityId}}]}}}`
+  **+ ДВЕ ПРОБЫ ТОЙ ЖЕ ФОРМЫ по `source_id` и `target_id` — ДОБАВЛЕНО по итогам гейт-ревью
+  Задачи 8 (рулинг контроллёра):** одной пробы по `id` НЕДОСТАТОЧНО. Предложение может нести
+  `relation_create`/`relation_delete` (`propose.ts:62-65`), которые адресуются `source_id`/
+  `target_id`, а НЕ `id` (`propose.ts:480-481`) — при этом карточка перечисляет source-запись как
+  `entity: {id: sourceId}` (`lifecycle.ts:2012-2029`). С одной пробой владелец видит запись в
+  карточке, тапает по ней (**приёмка 2**) и попадает на запись БЕЗ слоя; обычное открытие той же
+  записи (**приёмка 3**) не даёт плашки; смешанное предложение бьёт и **приёмку 17**. Ответ —
+  объединение трёх проб без дублей (одно сообщение может совпасть по нескольким).
   — сырой `tx.execute(sql…)` под `withIdentity` (RLS); GIN `jsonb_path_ops` существует с 0001
   (`0001_rls_and_indexes.sql:123`), прецедент вложенных массивов — `escalation.ts:138-157`.
   `source:'routine'` отсекает чат-подтверждения. Для каждого сообщения: прогон по
