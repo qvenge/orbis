@@ -8,7 +8,7 @@
 | Проверено по коду | `main` `b1eb3b0` (2026-08-20); адреса строк — на этот коммит |
 | Разведка | три конспекта в `.superpowers/sdd/2026-08-20-deferred-checkpoint/`: `recon-checkpoint-run.md`, `recon-pending-acceptance.md`, `recon-journal-undo.md` |
 | Прецеденты рынка | Cloudflare OS (отложенное подтверждение с пакетной приёмкой; их довод: синхронный HITL толкает к auto-approve), Orca decision gates (вопрос как адресуемая единица с вариантами) — `reviews/2026-08-20-market-rescan-validation.md`, II.2 и IV.2 п.1 |
-| Соседний шов | Ш1 «дифф предложения» (`specs/2026-08-19-proposal-diff-edit-design.md`, уходит в ревизию 2) — общие точки перечислены в §8 |
+| Соседний шов | Ш1 «дифф предложения» (`specs/2026-08-19-proposal-diff-edit-design.md`, ревизия 2 на main `ea58692`, D41; вопросы В-1/В-2 у владельца) — общие точки перечислены в §8 |
 
 ---
 
@@ -160,7 +160,7 @@ pending: {
 
 ## §8. Согласование с Ш1
 
-Ш1 (ревизия 2 не начата) и этот срез стоят на одном носителе и не противоречат друг другу; общие точки, обязательные к соблюдению здесь:
+Ш1 (ревизия 2 запушена владельцем параллельно этой спеке, `ea58692`; сверено — противоречий нет) и этот срез стоят на одном носителе; общие точки, обязательные к соблюдению здесь:
 
 1. Предусловия снимаются при постановке и не переснимаются (Ш1.6) — окно ожидания пачки длиннее, `stale` на approve честен.
 2. Правка отложенного действия до принятия — механика Ш1 (`новое pending + edited_from + reason 'edited'`) переносится без изменения этого среза; здесь правки нет (§10).
@@ -220,7 +220,7 @@ pending: {
 |---|---|
 | `packages/shared/src/contracts/agent-loop.ts` | схема `orbis_ask` (вход/выход); `checkpointInput` не меняется |
 | `packages/shared/src/schemas/aspects.ts` | `undecided?: true` в аспекте прогона (`.strict()` → пересев реестра) |
-| `apps/server/src/policy/pending.ts` | `kind`/`question`/`options` в `pendingRecord`; `answerMessageId`; процедура ответа; tx-вариант `rejectPending` (общий с Ш1 rev 2) |
+| `apps/server/src/policy/pending.ts` | `kind`/`question`/`options` в `pendingRecord`; `answerMessageId`; процедура ответа; tx-вариант `rejectPending` (то же требование ставит ревизия 2 Ш1 — делается один раз, кто первым дойдёт до реализации) |
 | `apps/server/src/tools/dispatch.ts` | гейт рутины: отложка вместо `FORBIDDEN_LEVEL` (ОЧ.4); гейт `orbis_ask` только внутреннему раннеру |
 | `apps/server/src/tools/registry.ts` | тул `orbis_ask`; правка описания `orbis_checkpoint` для рутины |
 | `apps/server/src/agent-loop/verbs.ts` | глагол `orbis_ask` (нетерминальный); `closeRun`/`closeRoutineRun` — `undecided` в close-патче |
