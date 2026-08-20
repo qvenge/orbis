@@ -1115,6 +1115,7 @@ export async function decideProposal(
   // Возобновление (Р-10): правленое предложение — наше, и решать по нему заново нечего,
   // надо ДОВЕСТИ применение. Статус при этом не проверяем: он уже может быть `approved`
   // (двойной тап), и ответ «уже решено» скрыл бы от владельца исход его же правки.
+  // Решение здесь всегда `approve`: «наше» опознаётся по правке, а правки едут только с ним.
   if (addressed.kind === 'resume') {
     return approveProposal(deps, args.ownerId, args.runId, addressed.proposal);
   }
@@ -1343,13 +1344,17 @@ async function editAndApprove(
     );
   }
   if (step1.kind === 'moved') {
-    // Указатель увёл кто-то другой — а увести его может только чужая лестница; правило
-    // возобновления разберётся по свежему состоянию, как и на входе
+    // Указатель увели под нами — а увести его может только чужая лестница, то есть
+    // исходное погашено правкой. Не погашено — значит прогон просто живёт другим
+    // предложением, и решать по прочитанному нечего.
     const live = await readProposal(deps.db, ownerId, runId);
-    const addressed = await addressedProposal(deps, { ...args, pendingId: parentId, live });
-    return addressed.kind === 'decide'
-      ? { status: 'already', proposalStatus: addressed.proposal.status }
-      : resumeOrAnswer(deps, args, addressed);
+    const reason = await withIdentity(deps.db, ownerId, (tx) => rejectedReason(tx, parentId));
+    if (reason !== 'edited') return replacedBy(live, reason ?? 'superseded');
+    return resumeOrAnswer(
+      deps,
+      args,
+      await takeoverEdited(deps, { ...args, pendingId: parentId }, live),
+    );
   }
 
   // Шаг 2: указатель переезжает на правленое. Отдельной транзакцией — вложить её в шаг 1
@@ -1360,10 +1365,15 @@ async function editAndApprove(
   return approveProposal(deps, ownerId, runId, live);
 }
 
+/**
+ * Довести применение либо отдать готовый ответ. Вариант `decide` сюда не принимается
+ * НАМЕРЕННО: там предложение неправленое, и «довести применение» означало бы применить
+ * payload рутины вместо правки владельца — ровно то, от чего защищает весь этот срез.
+ */
 async function resumeOrAnswer(
   deps: RoutineWriteDeps,
   args: { ownerId: string; runId: string },
-  addressed: AddressedProposal,
+  addressed: Extract<AddressedProposal, { kind: 'resume' | 'answer' }>,
 ): Promise<DecideProposalResult> {
   return addressed.kind === 'answer'
     ? addressed.result
