@@ -830,8 +830,17 @@ test('после правки: мёртвый P1 не попадает, живо
 test('предложение из нескольких записей находится по каждой из них (приёмка 17)', …);
 ```
 - [ ] **Шаг 2:** FAIL → **Шаг 3:** реализация; в леджер `facts.md` — EXPLAIN пробы на
-  локальной БД (ожидание: Bitmap Index Scan по `chat_messages_metadata_gin`; эмпирика этой
-  формы в этом цикле не снималась — прецедент `rollback.ts:187-190`).
+  локальной БД. **ОЖИДАНИЕ ОПРОВЕРГНУТО ЗАМЕРОМ при исполнении Задачи 8:** под `withIdentity`
+  (то есть под RLS) план — **Seq Scan**, не Bitmap Index Scan: 36 039 сообщений, 23.6 мс,
+  `Rows Removed by Filter: 36037`; при `enable_seqscan=off` индексного пути нет структурно.
+  Форма пробы при этом ВЕРНА — в обход RLS та же проба идёт `Bitmap Index Scan on
+  chat_messages_metadata_gin` за 0.096 мс. Причина: `jsonb_contains` не leakproof
+  (`proleakproof=f`), и под политикой его нельзя опустить в `Index Cond`; leakproof-условия
+  (`uuid_eq`, `texteq`) индексы под той же политикой берут. Дефект ПРЕ-СУЩЕСТВУЮЩИЙ и
+  ОБЩЕРЕПОЗИТОРНЫЙ: так же seq-сканируют `storedProposal`/`findPendingMessage` (16.4 мс) и
+  `entity_query` по `aspects` (`entities_aspects_gin` не берётся). Ш1 его не чинит — миграции
+  запрещены глобальным ограничением, а оба лечения (`ALTER FUNCTION … LEAKPROOF` — решение по
+  безопасности; скалярный столбец с btree — миграция) выходят за срез и требуют решения владельца.
 - [ ] **Шаг 4:** PASS, `bun run test`, `bun run typecheck`; коммит
   `feat(routines): запрос открытых предложений по записи (Ш1.3)`.
 
