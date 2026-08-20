@@ -77,6 +77,8 @@ export type ProposalCardData = {
   routineId: string;
   summary: string;
   explanation: string;
+  /** Ш1.5: id исходного предложения, которое погасила правка владельца; нет у неправленых. */
+  editedFrom?: string;
 };
 export type Card =
   | EntityCardData

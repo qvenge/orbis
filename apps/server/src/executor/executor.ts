@@ -442,6 +442,7 @@ async function executeBatch(
         // Только если заданы: пустых ключей в журнале не заводим (см. ActionRecord)
         ...(req.actorGrantId !== undefined && { actor_grant_id: req.actorGrantId }),
         ...(req.runId !== undefined && { run_id: req.runId }),
+        ...(req.editedFrom !== undefined && { edited_from: req.editedFrom }),
         operations: allPlans.flatMap((p) => p.journal.operations),
         inverse: aggregateInverse(allPlans),
       };
@@ -607,6 +608,7 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     // Только если заданы: пустых ключей в журнале не заводим (см. ActionRecord)
     ...(ctx.req.actorGrantId !== undefined && { actor_grant_id: ctx.req.actorGrantId }),
     ...(ctx.req.runId !== undefined && { run_id: ctx.req.runId }),
+    ...(ctx.req.editedFrom !== undefined && { edited_from: ctx.req.editedFrom }),
     operations: p.operations,
     inverse: p.inverse,
   };

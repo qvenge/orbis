@@ -20,6 +20,7 @@ import {
   acquirePendingLock,
   approvePending,
   createPending,
+  rejectedReason,
   rejectPending,
   rejectPendingTx,
 } from './pending';
@@ -600,5 +601,93 @@ describe('атрибуция рутины: source routine, run_id и причи�
     if (!old.ok) return;
     expect(old.alreadyRejected).toBe(true);
     expect(old.reason).toBe('owner');
+  });
+});
+
+// Ш1.5: правка владельца — ЧЕТВЁРТАЯ причина отказа. Она едет одной работой сразу
+// четырьмя точками (тип, zod-энам, текст ленты, статус на прогоне): забытый zod-энам —
+// единственная из них без компиляторной страховки, и забытый он молча откатывает причину
+// к 'owner', то есть превращает правку владельца в его же отказ.
+describe('причина отказа edited: правка владельца (Ш1.5)', () => {
+  test('reject reason edited: текст «Предложение заменено правкой владельца», metadata.reason=edited; читается обратно как edited, а не через fallback owner', async () => {
+    const { pendingId } = await pendingArchive(undefined);
+
+    const r = await rejectPending(db, { ownerId: userA, pendingId, reason: 'edited' });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.alreadyRejected).toBe(false);
+    expect(r.reason).toBe('edited');
+
+    const msg = await messageById(userA, rejectMessageId(userA, pendingId));
+    expect(msg?.content).toBe('Предложение заменено правкой владельца');
+    expect(msg?.metadata).toEqual({
+      type: 'confirmation_rejected',
+      rejects: pendingId,
+      reason: 'edited',
+    });
+
+    // Вот та самая проверка забытого zod-энама: причина ЧИТАЕТСЯ из ленты, и незнакомая
+    // строка откатывается к 'owner' (rejectedReason). Гашение новым прогоном обязано
+    // увидеть «правка», а не «владелец отклонил», — иначе оно перепишет чужую судьбу.
+    expect(await withIdentity(db, userA, (tx) => rejectedReason(tx, pendingId))).toBe('edited');
+    const again = await rejectPending(db, { ownerId: userA, pendingId, reason: 'superseded' });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.alreadyRejected).toBe(true);
+    expect(again.reason).toBe('edited');
+  });
+
+  test('edited_from: правленое предложение находится контейнмент-пробой по родителю, и поле доживает до action журнала (В-1)', async () => {
+    const target = await seedEntity(userA, { title: 'Цель правленого предложения', tags: [] });
+    const runId = newId();
+    const parentId = newId();
+    const { pendingId } = await withIdentity(db, userA, (tx) =>
+      createPending(tx, {
+        actor: {
+          userId: userA,
+          kind: 'ai',
+          source: 'routine',
+          runId,
+          // Ш1.5: это предложение рождено правкой владельца — вот кого она погасила
+          editedFrom: parentId,
+        },
+        tool: 'batch_execute',
+        input: {
+          batch_id: newId(),
+          operations: [{ tool: 'entity_update', input: { id: target.id, archived: true } }],
+        },
+        level: 'explicit-confirmation',
+        clock,
+      }),
+    );
+
+    // Проба по родителю — то, чем лестница ищет своё дитя в крэш-окне между шагами
+    const probe = JSON.stringify({ pending: { edited_from: parentId } });
+    const found = await withIdentity(db, userA, (tx) =>
+      tx.execute(sql`SELECT id FROM chat_messages WHERE metadata @> ${probe}::jsonb`),
+    );
+    expect([...found].map((r) => (r as { id: string }).id)).toEqual([pendingId]);
+
+    const r = await approvePending(db, { ownerId: userA, pendingId, clock });
+    expect(r.ok).toBe(true);
+    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
+    const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
+    expect(action?.run_id).toBe(runId);
+    // §7.8: журнал знает, что применено не то, что предложила рутина, а правка владельца
+    expect(action?.edited_from).toBe(parentId);
+  });
+
+  test('без правки ключа edited_from нет вовсе — ни в pending-записи, ни в action (условная запись, как run_id)', async () => {
+    const { pendingId } = await pendingArchive(undefined);
+    const pending = await messageById(userA, pendingId);
+    expect(Object.hasOwn((pending?.metadata as { pending: object }).pending, 'edited_from')).toBe(
+      false,
+    );
+
+    const r = await approvePending(db, { ownerId: userA, pendingId, clock });
+    expect(r.ok).toBe(true);
+    const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
+    const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
+    expect(action !== undefined && Object.hasOwn(action, 'edited_from')).toBe(false);
   });
 });

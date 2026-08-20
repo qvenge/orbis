@@ -236,6 +236,12 @@ export type Card =
       routineId: string;
       summary: string;
       explanation: string;
+      /**
+       * Ш1.5: карточка правленого предложения — id ИСХОДНОГО, которое эта правка погасила.
+       * По нему лента говорит «предложение с правками владельца», а карточка исходного
+       * знает, что живёт уже не она.
+       */
+      editedFrom?: string;
     }
   | { kind: 'error_card'; code: string; message: string };
 

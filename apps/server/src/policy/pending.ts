@@ -86,6 +86,16 @@ const pendingRecord = z.object({
    * UI и MCP — там прогона нет; у записей до этой работы его тоже не было.
    */
   run_id: z.string().uuid().optional(),
+  /**
+   * Предложение, из правки которого это рождено (Ш1.5): владелец поправил значения ДО
+   * принятия, исходное погашено причиной `edited`, а рядом легло вот это. Тот же приём,
+   * что с грантом и прогоном: ключа нет у всех, кто родился не из правки.
+   *
+   * Поле не декоративно — им лестница правки НАХОДИТ своё дитя контейнмент-пробой
+   * `{pending: {edited_from: <исходное>}}`, когда перевод указателя прогона не дошёл
+   * (крэш между шагами). Оно же уезжает в action журнала §7.8 (В-1).
+   */
+  edited_from: z.string().uuid().optional(),
   created_at: z.string(),
 });
 
@@ -99,6 +109,8 @@ export interface PendingActor {
   grantId?: string;
   /** Прогон рутины, предложивший план (V1.6); есть только у source 'routine'. */
   runId?: string;
+  /** Предложение, из правки которого рождено это (Ш1.5); есть только у правленых. */
+  editedFrom?: string;
 }
 
 /**
@@ -187,6 +199,9 @@ export async function createPending(
         ...(args.actor.grantId !== undefined && { actor_grant_id: args.actor.grantId }),
         // То же и для прогона (V1.6): ключа нет у путей без рутины
         ...(args.actor.runId !== undefined && { run_id: args.actor.runId }),
+        // И для правки (Ш1.5): ключ есть только у правленого предложения, и его отсутствие
+        // у всех прочих — то, что делает пробу «дитя этого предложения» точной
+        ...(args.actor.editedFrom !== undefined && { edited_from: args.actor.editedFrom }),
         created_at: createdAt.toISOString(),
       },
       cards: [card],
@@ -241,17 +256,29 @@ async function findPendingMessage(tx: Tx, pendingId: string): Promise<FoundPendi
  *
  * 'owner' — кнопка владельца (по умолчанию); 'superseded' — раннер гасит предложение
  * прошлого прогона своим новым; 'stale' — состояние изменилось, предложение больше
- * не применимо.
+ * не применимо; 'edited' — владелец поправил предложение до принятия (Ш1.5), и вместо
+ * этого рядом легло новое, правленое.
+ *
+ * 'edited' — это НЕ отказ владельца, и различать их обязаны все: рутина иначе прочитала
+ * бы «мой текст не подошёл» там, где владелец его дописал, а гашение новым прогоном
+ * переписало бы судьбу предложения, которого уже нет. Отдельного статуса предложения
+ * причина не заводит: судьба исходного живёт здесь, в ленте, а признак на живом — поле
+ * `edited_from` (Ш1.8).
  */
-export type RejectReason = 'owner' | 'superseded' | 'stale';
+export type RejectReason = 'owner' | 'superseded' | 'stale' | 'edited';
 
-const rejectReason = z.enum(['owner', 'superseded', 'stale']);
+// ВНИМАНИЕ: единственное из четырёх мест причины, где расширение НЕ ловит компилятор
+// (тип, REJECT_CONTENT и STATUS_BY_REJECT_REASON — Record'ы, они падают сборкой). Строка,
+// забытая здесь, откатывается fallback'ом rejectedReason к 'owner' — то есть правка
+// владельца молча превращается в его же отказ.
+const rejectReason = z.enum(['owner', 'superseded', 'stale', 'edited']);
 
 /** Текст reject-сообщения по причине — владелец читает ленту, а не значение поля. */
 const REJECT_CONTENT: Record<RejectReason, string> = {
   owner: 'Подтверждение отклонено',
   superseded: 'Предложение заменено новым прогоном',
   stale: 'Предложение устарело: состояние изменилось',
+  edited: 'Предложение заменено правкой владельца',
 };
 
 /**
@@ -383,6 +410,9 @@ export async function approvePending(
         // Прогон рутины — та же логика, что с грантом (V1.6): предложение одобрил
         // владелец, но сделала правку рутина, и по run_id её найдёт откат прогона
         runId: found.pending.run_id,
+        // И правка владельца (Ш1.5, В-1): применено не то, что предложила рутина, а
+        // правленое — журнал §7.8 обязан хранить, ЧТО именно эта правка заменила
+        editedFrom: found.pending.edited_from,
         threadId: found.threadId,
         operations,
         batchId: args.pendingId,
