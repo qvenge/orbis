@@ -737,6 +737,9 @@ test('convert.ts использует blockText из diff (писаный тек
 // ProposalOperationView — строка тела дополняется:
 bodyDiff?: { units: DiffUnit[] } | { skipped: 'body_changed' | 'too_large' | 'rewritten' };
 proposedDoc?: BodyDoc;   // канон предложенного тела — редактору слоя (Задача 11); только при status==='pending'
+// ProposalView — сам объект вида дополняется (рулинг предполёта П-2: Р-9 обещает поле, но ни одна
+// задача его не заводила; форма proposalView — зона ответственности этой задачи):
+editedFrom?: string;     // = run.proposal.edited_from; читают Задача 9 (подписи карточки) и Задача 10
 // after (полный markdown) ОСТАЁТСЯ — запасная форма показа при skipped (приёмка 16)
 ```
   Логика (только `status === 'pending'` — Ш1.1; для решённых поле отсутствует): для операции
@@ -820,7 +823,10 @@ test('предложение из нескольких записей наход
 **Интерфейсы (produces):**
 ```ts
 // ProposalCard.tsx:
-export function ProposalCard({ runId, pendingId }: { runId: string; pendingId?: string });
+export function ProposalCard({ runId, pendingId, threadId }: { runId: string; pendingId?: string; threadId?: string });
+// threadId — рулинг предполёта П-5: ветка (д) инвалидирует ленту треда, но сигнатура его не несла,
+// а второй вызыватель (RunFeed) треда не знает. renderCards передаёт ctx.msg.threadId, RunFeed — нет;
+// инвалидация chatThreadKey выполняется только при заданном threadId.
 // useChatThread.ts:
 export const chatThreadKey = (threadId: string) => ['chatThread', threadId] as const; // существующий ключ :10-12, теперь экспортом
 ```
