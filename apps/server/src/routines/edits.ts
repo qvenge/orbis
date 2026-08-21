@@ -189,6 +189,59 @@ export function hasBody(input: Record<string, unknown>): boolean {
   return input.body !== undefined || input.bodyDoc !== undefined;
 }
 
+/**
+ * Сколько СТРОК покажет предложение — то самое число, которое владелец пересчитает глазами.
+ *
+ * Считаем строки, а не операции, потому что строки он и видит: и карточка в треде, и плашка на
+ * записи рисуют СПИСОК СТРОК (`ProposalOperationView`), а одна операция `entity_update`, правящая
+ * статус и тело, даёт их две. Пока сводку считали операциями, об одном событии тред говорил
+ * «1 правка», а запись — «2 правки» (смоук Ш1, 4.6.1): два числа у одного предложения на двух
+ * экранах одного пути владельца.
+ *
+ * Правило повторяет `updateRows` (lifecycle.ts) — и это ЕДИНСТВЕННОЕ место, где оно повторено.
+ * Позвать сам `updateRows` отсюда нельзя: он строит СТРОКИ, а для этого ходит в базу за
+ * заголовками и диффом тела, — сводка же пишется внутри транзакции составления, до всякого
+ * показа. Расхождение двух правил сторожит тест «сводка предложения считает те же строки,
+ * что покажет `proposalView`»: он сверяет это число с длиной настоящего списка строк.
+ *
+ * Синхронность не случайна: строка тела появляется ровно там, где `hasBody` (см. `proposalBodyRows`),
+ * а это предикат по тому же payload'у — то есть число известно в момент записи и позже не поедет.
+ */
+export function countProposalRows(operations: readonly unknown[]): number {
+  let rows = 0;
+  for (const op of operations) {
+    // `unknown[]`, а не разобранный тип, потому что один из двух зовущих держит на руках
+    // результат `buildEditedOperations` — он тоже `unknown[]` (payload едет в jsonb как есть).
+    // Незнакомая форма даёт ОДНУ строку, ровно как незнакомый тул у `describeOperations`:
+    // промолчать значило бы соврать про размер предложения в меньшую сторону.
+    const { tool, input } = (op ?? {}) as { tool?: unknown; input?: unknown };
+    const patch =
+      typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
+    rows += tool === 'entity_update' ? updateRowCount(patch) : 1;
+  }
+  return rows;
+}
+
+/** Строки одной `entity_update`: поля аспектов плюс core-поля; ни одной видимой — всё равно одна. */
+function updateRowCount(input: Record<string, unknown>): number {
+  let rows = 0;
+  const aspects = input.aspects as Record<string, Record<string, unknown> | null> | undefined;
+  for (const patch of Object.values(aspects ?? {})) {
+    // Снятие аспекта предложением запрещено (propose.ts) и строки не даёт — как в `updateRows`.
+    if (patch === null) continue;
+    rows += Object.keys(patch).length;
+  }
+  for (const field of Object.keys(CORE_FIELD_LABELS)) {
+    if (field === 'body') {
+      if (hasBody(input)) rows += 1;
+      continue;
+    }
+    if (input[field] !== undefined) rows += 1;
+  }
+  // Операция без единой видимой правки: `updateRows` показывает у неё строку с одной целью.
+  return rows === 0 ? 1 : rows;
+}
+
 /** Патч аспекта операции, если он там есть и это объект (снятие аспекта payload не несёт). */
 function aspectPatch(
   input: Record<string, unknown>,

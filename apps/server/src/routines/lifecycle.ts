@@ -74,7 +74,13 @@ import {
   ROUTINE_HISTORY_TAIL,
 } from './constants';
 import type { RoutineHistoryItem } from './context';
-import { buildEditedOperations, editsHash, isEmptyEdits, type ProposalEdits } from './edits';
+import {
+  buildEditedOperations,
+  countProposalRows,
+  editsHash,
+  isEmptyEdits,
+  type ProposalEdits,
+} from './edits';
 import { processRoutineLocks, type RoutineLocks } from './locks';
 import { type ProposalBodyDiff, type ProposalBodyRow, proposalBodyRows } from './proposal-diff';
 
@@ -1564,7 +1570,9 @@ async function createEditedProposal(
     const rejected = await rejectPendingTx(tx, { ownerId, pendingId: parentId, reason: 'edited' });
     if (rejected.alreadyRejected) return { kind: 'raced', reason: rejected.reason };
 
-    const n = operations.length;
+    // Строки, а не операции, — как и у исходного предложения (см. `countProposalRows`):
+    // строка ленты у правленого обязана выглядеть так же, как у того, что оно заменило.
+    const n = countProposalRows(operations);
     const summary = `${n} ${editsNoun(n)}`;
     await createPending(tx, {
       // Тред карточки исходного и есть тред рутины: правленое обязано лечь туда же, иначе

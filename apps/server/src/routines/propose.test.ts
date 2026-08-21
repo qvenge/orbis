@@ -124,6 +124,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     if (r.status !== 'ok') return;
     const result = r.result as ProposeResult;
     expect(result.run_id).toBe(runId);
+    // А вот ответ ТУЛУ по-прежнему про операции: он про размер батча, а не про экран.
     expect(result.operations).toBe(1);
     expect(result.replayed).toBe(false);
 
@@ -131,8 +132,11 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     const msg = await messageById(result.pending_id);
     expect(msg).toBeDefined();
     expect(msg?.threadId).toBe(entityThreadId(owner, routineId));
-    // Строка ленты называет событие, а не «Требуется подтверждение: N операций» (D-4)
-    expect(msg?.content).toBe('Предложение рутины: 1 правка');
+    // Строка ленты называет событие, а не «Требуется подтверждение: N операций» (D-4).
+    // ДВЕ, хотя операция одна: считаются СТРОКИ предложения (`countProposalRows`) — их
+    // владелец и видит списком, и здесь их ровно две, `status` и `due_date`. Пока считали
+    // операции, лента говорила «1 правка» под списком из двух строк (смоук Ш1, 4.6.1).
+    expect(msg?.content).toBe('Предложение рутины: 2 правки');
 
     const metadata = msg?.metadata as {
       pending: {
@@ -167,7 +171,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
         pendingId: result.pending_id,
         runId,
         routineId,
-        summary: '1 правка',
+        summary: '2 правки',
         explanation: EXPLANATION,
       },
     ]);

@@ -42,6 +42,7 @@ import type { AspectsMap } from '../executor/normalize';
 import { createPending, rejectedReason, rejectPending } from '../policy/pending';
 import type { ToolCallCtx, ToolDispatchResult } from '../tools/dispatch';
 import { editsNoun } from './constants';
+import { countProposalRows } from './edits';
 
 /** Боевой синк журнала — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
 const sink = makeChatJournalSink();
@@ -232,7 +233,10 @@ export async function runPropose(
         };
       }
     }
-    const n = operations.length;
+    // Сводка считает СТРОКИ, а не операции: их владелец и видит списком в карточке и в
+    // плашке (см. `countProposalRows`). Ответ тулу ниже остаётся про ОПЕРАЦИИ — он про
+    // batch, а не про экран.
+    const n = countProposalRows(operations);
     await createPending(tx, {
       threadId,
       actor: {
@@ -261,7 +265,7 @@ export async function runPropose(
         explanation: input.explanation,
       },
     });
-    return { kind: 'created', replayed: before.length > 0, operations: n };
+    return { kind: 'created', replayed: before.length > 0, operations: operations.length };
   });
   if ('error' in prepared) return prepared.error;
   if (prepared.kind === 'replay') {

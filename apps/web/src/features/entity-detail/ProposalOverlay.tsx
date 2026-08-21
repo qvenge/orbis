@@ -143,7 +143,15 @@ function currentBodyDoc(entity: DetailEntity): BodyDoc['doc'] | null {
   return entity.bodyDoc == null ? null : asBodyDoc(entity.bodyDoc).doc;
 }
 
-/** Русское согласование числа: «1 правка», «2 правки», «5 правок». */
+/**
+ * Русское согласование числа: «1 правка», «2 правки», «5 правок».
+ *
+ * Зеркало серверного `editsNoun` (routines/constants.ts) — типы клиента и сервера здесь
+ * намеренно не общие. Считается тем же, чем считает сервер, — СТРОКАМИ предложения
+ * (`view.operations.length`, см. `countProposalRows`): один и тот же владелец читает эту
+ * плашку и строку ленты в треде, и два числа у одного предложения он списал бы на ошибку
+ * (смоук Ш1, 4.6.1). Строки, а не операции, потому что строки он и видит списком ниже.
+ */
 function editsWord(n: number): string {
   const hundred = n % 100;
   if (hundred >= 11 && hundred <= 14) return 'правок';

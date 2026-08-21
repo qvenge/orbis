@@ -14,7 +14,7 @@ import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers'
 import { routineById, runsOfParent } from '../agent-loop/queries';
 import { ROUTINE_ROLLBACK_NOTE, rollbackRun } from '../agent-loop/rollback';
 import { ensureEntityThread } from '../chat/threads';
-import { entities } from '../db/schema';
+import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { undoLast } from '../executor/undo';
@@ -23,6 +23,7 @@ import type { LLMProvider, LLMRequest, LLMResponse } from '../llm/types';
 import { createPending } from '../policy/pending';
 import { appRouter } from '../router';
 import {
+  editsNoun,
   PROPOSAL_DIFF_MAX_BODY_BYTES,
   PROPOSAL_DIFF_MAX_SOURCE_LINES,
 } from '../routines/constants';
@@ -136,6 +137,21 @@ interface RunAspect {
 
 async function runAspect(runId: string): Promise<RunAspect> {
   return (await aspectsOf(owner, runId))['orbis/agent-run'] as unknown as RunAspect;
+}
+
+/** Сообщение ленты по id — им экран рутины и показывает предложение владельцу. */
+async function messageById(id: string) {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.select().from(chatMessages).where(eq(chatMessages.id, id)),
+  );
+  return rows[0];
+}
+
+/** Карточка предложения из метаданных сообщения — вторая копия сводки, рядом со строкой ленты. */
+function cardOf(msg: { metadata?: unknown } | undefined): { summary?: string } | undefined {
+  const cards = (msg?.metadata as { cards?: { kind: string; summary?: string }[] } | undefined)
+    ?.cards;
+  return cards?.find((c) => c.kind === 'proposal_card');
 }
 
 async function taskStatus(taskId: string): Promise<unknown> {
@@ -1048,6 +1064,57 @@ describe('routine.proposal / decideProposal', () => {
     expect(action?.source).toBe('routine');
     expect(action?.run_id).toBe(runId);
     expect(action?.edited_from).toBe(pendingId);
+  });
+
+  test('сводка предложения считает те же строки, что покажет proposalView — и у исходного, и у правленого (смоук 4.6.1)', async () => {
+    /**
+     * Страж против ДВУХ ЧИСЕЛ У ОДНОГО ПРЕДЛОЖЕНИЯ. Сводку («2 правки») пишет составление
+     * внутри транзакции, до всякого показа, и считает её `countProposalRows` — своё правило,
+     * повторяющее `updateRows`. Разъедься эти два правила, и об одном событии тред скажет
+     * одно, а плашка на записи — другое: ровно это и нашёл живой смоук (4.6.1), когда сводка
+     * считала ОПЕРАЦИИ, а оба экрана рисовали СТРОКИ.
+     *
+     * Сверяется не число с числом, а СТРОКА ЛЕНТЫ с длиной настоящего списка строк — то есть
+     * ровно то, что владелец сравнил бы глазами, перейдя из треда на запись.
+     *
+     * `proposedWithBody` не случаен: это одна операция `entity_update`, дающая ДВЕ строки
+     * (статус и тело). На однострочном предложении оба правила совпадают, и тест был бы зелен
+     * при любом из них.
+     */
+    const { runId, pendingId } = await proposedWithBody('Свести числа');
+
+    const view = await caller().routine.proposal({ runId });
+    if (view === null) throw new Error('предложение не найдено');
+    // Премиса: строк действительно больше, чем операций, — иначе сверка ниже ничего не ловит.
+    expect(view.operations).toHaveLength(2);
+    expect(new Set(view.operations.map((op) => op.index)).size).toBe(1);
+
+    const rows = view.operations.length;
+    const first = await messageById(pendingId);
+    expect(first?.content).toBe(`Предложение рутины: ${rows} ${editsNoun(rows)}`);
+    expect(cardOf(first)?.summary).toBe(`${rows} ${editsNoun(rows)}`);
+
+    // Второй писатель сводки — лестница правки: у правленого предложения строка ленты обязана
+    // выглядеть так же, как у того, что оно заменило, и считаться тем же правилом.
+    const applied = await callerLater().routine.decideProposal({
+      runId,
+      pendingId,
+      decision: 'approve',
+      edits: {
+        fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+      },
+    });
+    expect(applied.status).toBe('applied');
+
+    const editedId = (await runAspect(runId)).proposal?.pending_id;
+    if (editedId === undefined) throw new Error('прогон без предложения');
+    const editedView = await caller().routine.proposal({ runId });
+    if (editedView === null) throw new Error('правленое предложение не найдено');
+    const editedRows = editedView.operations.length;
+    expect(editedRows).toBe(rows);
+    const second = await messageById(editedId);
+    expect(second?.content).toBe(`Предложение рутины: ${editedRows} ${editsNoun(editedRows)}`);
+    expect(cardOf(second)?.summary).toBe(`${editedRows} ${editsNoun(editedRows)}`);
   });
 
   test('replay двойного тапа: та же правка дважды → второе предложение не заводится, ответ applied идемпотентен с тем же actionId (приёмка 14)', async () => {
