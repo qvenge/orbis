@@ -130,7 +130,10 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // тулы рутины: первый предлагает правку, второй задаёт нетерминальный вопрос (D42 ОЧ.5)
     expect(names).toContain('orbis_propose');
     expect(names).toContain('orbis_ask');
-    // Деф вопроса — ровно тот, что объявлен реестром: пин ловит подмену описания и режима
+    // Пин присутствия и неизменности дефа на пути в реестр: сегодня `buildToolDefs` кладёт
+    // в список ТОТ ЖЕ объект, и сравнение проходит тождественно — падать ему есть от чего
+    // только в будущем, если сборка начнёт деф трансформировать (усечение описания и т. п.).
+    // Подмену routineOnly на agentOnly ловит НЕ он, а пин agentOnly ниже.
     expect(defs.find((d) => d.name === 'orbis_ask')).toEqual(ASK_TOOL);
     for (const name of BUILTIN_ATTACH_NAMES) expect(names).toContain(name);
     expect(defs.length).toBe(31);

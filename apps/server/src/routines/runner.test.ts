@@ -390,6 +390,47 @@ describe('runRoutineRun: режим act (V1.10)', () => {
     expect(aspect.report?.startsWith('Разобрал инбокс и начал переносить сроки, но')).toBe(true);
     expect(aspect.report).toContain(MAX_TOKENS_NOTE);
   });
+
+  test('сводка шага содержательна (D42): orbis_ask → «спросил: „…"» с усечением, отложка → «отложено: <сводка карточки>»; прочее — прежняя пара «имя: исход»', async () => {
+    // Шаги прогона читает ВЛАДЕЛЕЦ. «orbis_ask: ok» не говорит, что спросили, а
+    // «entity_update: pending_confirmation» — что отложили; ровно за этими двумя строками
+    // он и открывает прогон. Пин стоит здесь, в раннере: `ask.test.ts` ходит напрямую
+    // через dispatchTool и сводки шага не видит вовсе.
+    const routineId = await seedRoutine(owner, {
+      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+    });
+    const bucket = nextBucket();
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket });
+    const target = await seedEntity(owner, { title: 'Прошлогодний отчёт', tags: [] });
+
+    const short = 'Переносить ли встречу с понедельника?';
+    // Длиннее потолка сводки вопроса (120): владелец читает полный текст на карточке
+    const long = `Что делать с подпиской: ${'она дорожает третий год подряд, '.repeat(5)}продлевать?`;
+
+    const provider = new ScriptedProvider([
+      toolUse([{ name: 'orbis_ask', input: { run_id: runId, question: short } }]),
+      toolUse([{ name: 'orbis_ask', input: { run_id: runId, question: long } }]),
+      toolUse([{ name: 'entity_update', input: { id: target.id, archived: true } }]),
+      toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
+      endTurn('Спросил и отложил — жду решений.'),
+    ]);
+
+    const end = await run(provider, { routineId, runId, bucket });
+    expect(end).toEqual({ outcome: 'finished' });
+
+    const aspect = await runAspect(runId);
+    expect(aspect.step_count).toBe(4);
+    expect(aspect.steps.map((st) => st.summary)).toEqual([
+      `спросил: «${short}»`,
+      `спросил: «${`${long.slice(0, 119)}…`}»`,
+      'отложено: Архивация: «Прошлогодний отчёт»',
+      // Всё остальное осталось прежней парой «имя: исход» — сводка правится точечно
+      'entity_query: ok',
+    ]);
+
+    // Модели вопрос показан в обоих режимах: он в базе рутины, а не в белом списке
+    expect((provider.requests[0]?.tools ?? []).map((t) => t.name)).toContain('orbis_ask');
+  });
 });
 
 describe('runRoutineRun: вопрос владельцу и гашение незакрытого (V1.8, V1.9)', () => {
