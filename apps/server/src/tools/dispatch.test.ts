@@ -13,6 +13,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
+import { approvePending } from '../policy/pending';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { dispatchTool, routineDeferForbidden, routineGate, type ToolCallCtx } from './dispatch';
 import { buildToolRegistry, type RoutineRef } from './registry';
@@ -1569,7 +1570,7 @@ describe('V1: выдача автономии рутине из чата → pen
 // ---------------------------------------------------------------------------
 
 describe('гейт режима рутины (V1.10, инварианты 4–5)', () => {
-  const { routineCtx } = agentLoopHelpers(db);
+  const { routineCtx, seedRoutine } = agentLoopHelpers(db);
   /** Контекст прогона рутины с часами сьюта (у `routineCtx` свой T0 круга исполнителя). */
   const rt = (mode: 'propose' | 'act', allowed: string[] = [], over: Partial<ToolCallCtx> = {}) =>
     routineCtx(userA, mode, allowed, { clock: () => T0, ...over });
@@ -1649,23 +1650,32 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     );
   });
 
-  test('act: архивация (небезопасно по §7.10) → FORBIDDEN_LEVEL, pending НЕ создан', async () => {
+  test('act: архивация (небезопасно по §7.10) — уже не отказ, а отложка; гейт инварианта 5 её не ловит (D42 ОЧ.4)', async () => {
+    // БЫЛО (V1): FORBIDDEN_LEVEL «в фоне небезопасное отклоняется». СТАЛО: единица пачки в
+    // треде рутины — её содержимое закрывает сьют «отложка небезопасного действия рутины»
+    // ниже; здесь важно ровно одно — тул в белом списке, уровень выше `execute`, и путь
+    // доходит до отложки, а не упирается в гейт режима или в гейт инварианта 5.
+    const routineId = await seedRoutine(userA, {
+      title: 'Рутина архивации',
+      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+    });
     const target = await seedEntity(userA, { title: 'Цель архивации рутиной', tags: [] });
-    const threadId = await withIdentity(db, userA, (tx) =>
-      ensureEntityThread(tx, userA, target.id),
-    );
-    const ctx = rt('act', ['entity_update'], { threadId });
+    const ctx = rt('act', ['entity_update'], {
+      routine: {
+        id: routineId,
+        runId: newId(),
+        mode: 'act',
+        allowedTools: new Set(['entity_update']),
+      },
+    });
 
-    // Тул в белом списке, но уровень §7.10 у архивации — explicit-confirmation:
-    // инвариант 5 требует отказать, а не отложить (подтверждать в фоне некому)
-    expectError(
-      await dispatchTool(ctx, 'entity_update', { id: target.id, archived: true }),
-      'FORBIDDEN_LEVEL',
+    const r = await dispatchTool(ctx, 'entity_update', { id: target.id, archived: true });
+    expect(r.status).toBe('pending_confirmation');
+    // До решения владельца в графе по-прежнему ничего не изменилось (§7.10)
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, target.id)),
     );
-    const msgs = await messagesIn(userA, threadId);
-    expect(
-      msgs.filter((m) => (m.metadata as Record<string, unknown>).pending !== undefined),
-    ).toEqual([]);
+    expect(rows[0]?.archived).toBe(false);
     expect(await titleOf(target.id)).toBe('Цель архивации рутиной');
   });
 
@@ -1813,8 +1823,10 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
   });
 
   test('batch_execute рутине закрыт даже белым списком (гейт режима)', async () => {
-    // Группа неисполнима рутиной по уровню (§7.10: preview ≠ execute), а белым списком
-    // сверяется только ВНЕШНЕЕ имя вызова — вложенные операции им не проверяются
+    // Отказ даёт гейт РЕЖИМА (`routineToolAllowed`, registry.ts): batch_execute вычтен из
+    // белого списка рутины всегда — владелец не вправе открыть его ей даже намеренно.
+    // Уровень §7.10 тут ни при чём: до классификации вызов не доходит. Белым списком при
+    // этом сверяется только ВНЕШНЕЕ имя — вложенные операции им не проверяются
     const target = await seedEntity(userA, { title: 'Цель батча рутины', tags: [] });
     const ctx = rt('act', ['batch_execute', 'entity_update']);
     expectError(
@@ -2020,21 +2032,29 @@ describe('объектный пре-чек рутинной мутации (D42 
     expect(await check(link('relation_create', note.id, assigned.id))).toBeNull();
   });
 
-  test('обычная цель: отказ прежний, гейт инварианта 5 без reason; чатовый путь пре-чек не зовёт', async () => {
+  test('обычная цель: пре-чек пропускает — архивация уезжает в отложку, а не в отказ; чатовый путь пре-чек не зовёт', async () => {
     const plain = await seedEntity(userA, { title: 'Обычная запись рутины', tags: [] });
     const routineId = await seedRoutine(userA, { title: 'Рутина для чатового пути' });
-
-    // Отложки ещё нет (её строит Задача 5) — обычная архивация упирается в прежний гейт,
-    // и `reason` у него по-прежнему нет: пре-чек этой ситуации не касается
-    const denial = await dispatchTool(rt(['entity_update']), 'entity_update', {
-      id: plain.id,
-      archived: true,
+    const acting = await seedRoutine(userA, {
+      title: 'Рутина обычной цели',
+      routine: { mode: 'act', allowed_tools: ['entity_update'] },
     });
-    expectError(denial, 'FORBIDDEN_LEVEL');
-    if (denial.status === 'error') {
-      expect(denial.error.message).toContain('в фоне небезопасное отклоняется');
-      expect((denial.error.details as { reason?: string }).reason).toBeUndefined();
-    }
+
+    // Пре-чек касается ТОЛЬКО запретных объектов: обычная цель проходит его насквозь и
+    // становится единицей пачки (D42 ОЧ.4) — отказа с `reason` здесь нет и быть не должно
+    const deferred = await dispatchTool(
+      rt(['entity_update'], {
+        routine: {
+          id: acting,
+          runId: newId(),
+          mode: 'act',
+          allowedTools: new Set(['entity_update']),
+        },
+      }),
+      'entity_update',
+      { id: plain.id, archived: true },
+    );
+    expect(deferred.status).toBe('pending_confirmation');
 
     // Чат: пре-чек не зовётся вовсе — архивация РУТИНЫ по-прежнему уезжает в карточку
     // владельцу, который тут же на неё смотрит
@@ -2046,5 +2066,269 @@ describe('объектный пре-чек рутинной мутации (D42 
       archived: true,
     });
     expect(chat.status).toBe('pending_confirmation');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Отложка небезопасного действия рутины (D42 ОЧ.4, ОЧ.13)
+// ---------------------------------------------------------------------------
+
+describe('отложка небезопасного действия рутины (D42 ОЧ.4, ОЧ.13)', () => {
+  const { routineCtx, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
+
+  /**
+   * Контекст ЖИВОГО прогона ЖИВОЙ рутины: отложка кладёт карточку в тред рутины
+   * (`ensureEntityThread`), а он требует настоящей сущности — подменённый id `routineCtx`
+   * здесь не годится.
+   */
+  async function deferCtx(
+    owner: string,
+    over: Partial<ToolCallCtx> = {},
+  ): Promise<{ ctx: ToolCallCtx; routineId: string; runId: string; threadId: string }> {
+    const routineId = await seedRoutine(owner, {
+      title: 'Рутина отложки',
+      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+    });
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-21T07:00' });
+    const ctx = routineCtx(owner, 'act', ['entity_update'], {
+      clock: () => T0,
+      routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(['entity_update']) },
+      ...over,
+    });
+    const threadId = await withIdentity(db, owner, (tx) =>
+      ensureEntityThread(tx, owner, routineId),
+    );
+    return { ctx, routineId, runId, threadId };
+  }
+
+  /** Pending-сообщения треда — единицы пачки прогона, как их видит владелец. */
+  async function pendingsIn(owner: string, threadId: string) {
+    return (await messagesIn(owner, threadId)).filter(
+      (m) => (m.metadata as { pending?: unknown }).pending !== undefined,
+    );
+  }
+
+  async function archivedOf(owner: string, id: string): Promise<boolean | undefined> {
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
+    );
+    return rows[0]?.archived;
+  }
+
+  test('рутина act: архивация записи → pending kind:action с предусловием archived in:[false] и снимком заголовка в карточке; модели вернулся pending_confirmation с pendingId; прогон-журнал §7.8 пуст (приёмка 2)', async () => {
+    const owner = freshUserId();
+    // Тред вызова НАРОЧНО чужой: единица ложится в тред РУТИНЫ (V1.6) — там, где владелец
+    // читает её историю, — а не туда, куда пишет audit текущего вызова
+    const host = await seedEntity(owner, { title: 'Посторонний тред', tags: [] });
+    const hostThread = await withIdentity(db, owner, (tx) =>
+      ensureEntityThread(tx, owner, host.id),
+    );
+    const { ctx, routineId, runId, threadId } = await deferCtx(owner, { threadId: hostThread });
+    const target = await seedEntity(owner, {
+      title: 'Прошлогодний отчёт',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'done' } },
+    });
+
+    const r = await dispatchTool(ctx, 'entity_update', { id: target.id, archived: true });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation') return;
+
+    // Карточка своя, со снимком заголовка цели и строкой «было → станет»
+    expect(r.card).toEqual({
+      kind: 'deferred_action_card',
+      pendingId: r.pendingId,
+      runId,
+      routineId,
+      summary: 'Архивация: «Прошлогодний отчёт»',
+      rows: [{ field: 'archived', before: 'false', after: 'true' }],
+    });
+
+    // Запись — единица пачки: явный kind, прогон, снятое предусловие по колонке
+    const pendings = await pendingsIn(owner, threadId);
+    expect(pendings).toHaveLength(1);
+    const msg = pendings[0];
+    expect(msg?.id).toBe(r.pendingId);
+    const record = (msg?.metadata as { pending: Record<string, unknown> }).pending;
+    expect(record.kind).toBe('action');
+    expect(record.run_id).toBe(runId);
+    expect(record.source).toBe('routine');
+    expect(record.tool).toBe('entity_update');
+    expect((record.input as Record<string, unknown>).precondition).toEqual([
+      { aspect: 'orbis/entity', field: 'archived', in: [false] },
+    ]);
+    expect(msg?.content).toBe('Отложено до решения: Архивация: «Прошлогодний отчёт»');
+
+    // §7.8: отложка следа в журнале не оставляет — ни action'а, ни правки в графе
+    expect((msg?.metadata as { actions?: unknown }).actions).toBeUndefined();
+    expect(await archivedOf(owner, target.id)).toBe(false);
+    // …и в треде вызова не осталось вообще ничего
+    expect(await messagesIn(owner, hostThread)).toEqual([]);
+  });
+
+  test('ретрай того же вызова (в т.ч. с переставленными ключами JSON) → тот же pendingId, второй карточки нет (приёмка 15)', async () => {
+    const owner = freshUserId();
+    const { ctx, threadId } = await deferCtx(owner);
+    const target = await seedEntity(owner, { title: 'Цель ретрая', tags: [] });
+
+    const first = await dispatchTool(ctx, 'entity_update', { id: target.id, archived: true });
+    // Тот же вызов с ПЕРЕСТАВЛЕННЫМИ ключами: личность единицы — от каноникализованного
+    // payload'а, а не от текста JSON
+    const again = await dispatchTool(ctx, 'entity_update', { archived: true, id: target.id });
+    expect(first.status).toBe('pending_confirmation');
+    expect(again.status).toBe('pending_confirmation');
+    if (first.status !== 'pending_confirmation' || again.status !== 'pending_confirmation') return;
+
+    expect(again.pendingId).toBe(first.pendingId);
+    expect(await pendingsIn(owner, threadId)).toHaveLength(1);
+    // Карточка ретрая — та же самая, что владелец уже видит в ленте
+    expect(again.card).toEqual(first.card);
+  });
+
+  test('ретрай ПОСЛЕ правки цели владельцем → тот же pendingId и ПЕРВЫЙ снимок предусловий: личность единицы считается от ИСХОДНОГО payload модели, а предусловия не переснимаются (ОЧ.13, §9.4)', async () => {
+    const owner = freshUserId();
+    const { ctx, threadId } = await deferCtx(owner);
+    const target = await seedEntity(owner, {
+      title: 'Цель, которую тронули между попытками',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'inbox' } },
+    });
+    const call = { id: target.id, archived: true, aspects: { 'orbis/task': { status: 'done' } } };
+
+    const first = await dispatchTool(ctx, 'entity_update', call);
+    expect(first.status).toBe('pending_confirmation');
+    if (first.status !== 'pending_confirmation') return;
+
+    // Владелец сдвинул статус — ВТОРОЕ снятие предусловий дало бы `in:['in_progress']`
+    const own = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: target.id, aspects: { 'orbis/task': { status: 'in_progress' } } },
+        },
+      ],
+    });
+    expect(own.ok).toBe(true);
+
+    const again = await dispatchTool(ctx, 'entity_update', call);
+    expect(again.status).toBe('pending_confirmation');
+    if (again.status !== 'pending_confirmation') return;
+    // Хеш считается от payload'а МОДЕЛИ: он побайтово тот же, значит это тот же ретрай
+    expect(again.pendingId).toBe(first.pendingId);
+    const pendings = await pendingsIn(owner, threadId);
+    expect(pendings).toHaveLength(1);
+    // Предусловия — снимок ПЕРВОЙ постановки, а не сегодняшнего состояния
+    const record = (pendings[0]?.metadata as { pending: Record<string, unknown> }).pending;
+    expect((record.input as Record<string, unknown>).precondition).toEqual([
+      { aspect: 'orbis/task', field: 'status', in: ['inbox'] },
+      { aspect: 'orbis/entity', field: 'archived', in: [false] },
+    ]);
+    // Карточка ретрая — тоже исходная, со «было» первой попытки
+    expect(again.card).toEqual(first.card);
+    if (again.card.kind !== 'deferred_action_card') return;
+    expect(again.card.rows).toEqual([
+      { aspect: 'orbis/task', field: 'status', before: 'inbox', after: 'done' },
+      { field: 'archived', before: 'false', after: 'true' },
+    ]);
+  });
+
+  test('11-я открытая единица → VALIDATION «пачка полна» с reason run_units_cap; ретрай уже стоящей единицы кап НЕ отвергает (Р-15); прогон может продолжаться (приёмка 16)', async () => {
+    const owner = freshUserId();
+    const { ctx, threadId } = await deferCtx(owner);
+    const ids: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const e = await seedEntity(owner, { title: `Кандидат в архив ${i}`, tags: [] });
+      ids.push(e.id);
+      const r = await dispatchTool(ctx, 'entity_update', { id: e.id, archived: true });
+      expect(r.status).toBe('pending_confirmation');
+    }
+    expect(await pendingsIn(owner, threadId)).toHaveLength(10);
+
+    const eleventh = await seedEntity(owner, { title: 'Одиннадцатый', tags: [] });
+    const over = await dispatchTool(ctx, 'entity_update', { id: eleventh.id, archived: true });
+    expectError(over, 'VALIDATION');
+    if (over.status === 'error') {
+      expect(over.error.message).toContain('пачка полна');
+      expect(over.error.details).toEqual({ reason: 'run_units_cap', limit: 10 });
+    }
+    // Отказ структурный: карточки нет, граф не тронут — прогон продолжается дальше
+    expect(await pendingsIn(owner, threadId)).toHaveLength(10);
+    expect(await archivedOf(owner, eleventh.id)).toBe(false);
+
+    // Ретрай ДЕСЯТОЙ единицы при полной пачке — replay, а не отказ: наивный порядок
+    // «кап → запись» отверг бы повтор того, что уже стоит
+    const replay = await dispatchTool(ctx, 'entity_update', {
+      id: ids[9] as string,
+      archived: true,
+    });
+    expect(replay.status).toBe('pending_confirmation');
+    expect(await pendingsIn(owner, threadId)).toHaveLength(10);
+  });
+
+  test('«Принять» отложенную архивацию после изменения цели → stale с mismatches (предусловия сняты при постановке и не переснимаются — ОЧ.13, §9.4)', async () => {
+    const owner = freshUserId();
+    const { ctx } = await deferCtx(owner);
+    const target = await seedEntity(owner, { title: 'Цель, которую тронул владелец', tags: [] });
+
+    const r = await dispatchTool(ctx, 'entity_update', { id: target.id, archived: true });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation') return;
+
+    // Владелец архивировал сам — предусловие, снятое при постановке, больше не выполнено
+    const own = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_update', input: { id: target.id, archived: true } }],
+    });
+    expect(own.ok).toBe(true);
+
+    const applied = await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    expect(applied.ok).toBe(false);
+    if (applied.ok) return;
+    expect(applied.error.code).toBe('CONFLICT');
+    expect((applied.error.details as { mismatches?: unknown[] }).mismatches).toEqual([
+      { aspect: 'orbis/entity', field: 'archived', expected: [false], actual: true },
+    ]);
+  });
+
+  test('чат/MCP: ветка createPending байт-в-байт прежняя (dedupeKey batch-only, карточка confirmation_card)', async () => {
+    // Отложка — рычаг ТОЛЬКО фона: у чата и MCP за карточкой стоит владелец, который
+    // смотрит на неё сейчас, и ни единицей пачки, ни дедупом по содержимому она не стала
+    const owner = freshUserId();
+    const host = await seedEntity(owner, { title: 'Хост-тред', tags: [] });
+    const threadId = await withIdentity(db, owner, (tx) => ensureEntityThread(tx, owner, host.id));
+    const target = await seedEntity(owner, { title: 'Цель чата', tags: [] });
+
+    for (const source of ['chat', 'mcp'] as const) {
+      const r = await dispatchTool(
+        ctxFor({ actorUserId: owner, source, threadId }),
+        'entity_update',
+        { id: target.id, archived: true },
+      );
+      expect(r.status).toBe('pending_confirmation');
+      if (r.status !== 'pending_confirmation') continue;
+      expect(r.card).toEqual({
+        kind: 'confirmation_card',
+        mode: 'explicit',
+        pendingId: r.pendingId,
+        summary: 'entity_update',
+      });
+      const record = (
+        (await messagesIn(owner, threadId)).find((m) => m.id === r.pendingId)?.metadata as {
+          pending: Record<string, unknown>;
+        }
+      ).pending;
+      // Ни kind, ни run_id, ни предусловий: запись чатового пути не изменилась ни на ключ
+      expect(record.kind).toBeUndefined();
+      expect(record.run_id).toBeUndefined();
+      expect(record.input).toEqual({ id: target.id, archived: true });
+    }
+    // Дедуп ключуется batch_id: две одиночные архивации без него — две РАЗНЫЕ карточки
+    const pendings = await pendingsIn(owner, threadId);
+    expect(pendings).toHaveLength(2);
   });
 });

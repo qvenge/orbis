@@ -15,12 +15,14 @@ import {
   type BatchExecuteInput,
   batchExecuteInput,
   budgetStatusInput,
+  type EntityUpdatePreconditionItem,
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
   entityUpdateInput,
   newId,
   parseQuery,
+  pendingMessageId,
   proposeInput,
   type QueryAst,
   relationCreateInput,
@@ -40,7 +42,7 @@ import { budgetStatus } from '../budget/aggregates';
 import { appendMessage, appendMessageIdempotent } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
 import type { Db } from '../db/client';
-import { entities } from '../db/schema';
+import { chatMessages, entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import {
   type EntitlementResolver,
@@ -50,7 +52,7 @@ import {
 } from '../entitlements';
 import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
-import { execute } from '../executor/executor';
+import { ENTITY_PSEUDO_ASPECT, execute } from '../executor/executor';
 import { ROUTINE_UNTOUCHABLE_OBJECTS, routineUntouchableError } from '../executor/invariants';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, JournalSink, JournalWrite, WireEntity } from '../executor/types';
@@ -63,7 +65,7 @@ import {
   factsFromToolCall,
   grantsRoutineAutonomy,
 } from '../policy/confirmation';
-import { createPending, operationsNoun } from '../policy/pending';
+import { createPending, deferDedupeKey, listRunUnits, operationsNoun } from '../policy/pending';
 import {
   type CompileContext,
   compileCount,
@@ -72,7 +74,8 @@ import {
   QueryCompileError,
 } from '../query/compile';
 import { queryWithMaterialization } from '../recurring/with-materialization';
-import { runPropose } from '../routines/propose';
+import { CORE_FIELD_LABELS, MAX_RUN_UNITS } from '../routines/constants';
+import { buildUpdate, loadTargets, runPropose } from '../routines/propose';
 import { toWireEntityFromSql } from '../wire';
 import {
   AGENT_VERB_NAMES,
@@ -746,8 +749,8 @@ async function runMutation(
   const level: ConfirmationLevel = instructionOf.length > 0 ? 'explicit-confirmation' : classified;
 
   // Объектный пре-чек рутинной мутации (D42 ОЧ.4, блокер Б2): запрещённое ПО ОБЪЕКТУ
-  // отклоняется ДО постановки и не откладывается никогда. Стоит РАНЬШЕ гейта уровня
-  // намеренно: гейт со временем откроет отложку (Задача 5), а этому отказу открываться
+  // отклоняется ДО постановки и не откладывается никогда. Стоит РАНЬШЕ ветки отложки
+  // намеренно: небезопасное ПО УРОВНЮ теперь откладывается, а этому отказу открываться
   // нечем — ни один из четырёх его поводов не становится безопаснее оттого, что владелец
   // разберёт его позже. Уровень `execute` пре-чек не смотрит: там ничего не откладывается, и
   // запрет держит стадия 4 executor'а своим отказом — тем же кодом и с тем же `reason`.
@@ -764,15 +767,31 @@ async function runMutation(
     }
   }
 
-  // Инвариант 5 (V1.10): в фоне небезопасное ОТКЛОНЯЕТСЯ, а не откладывается. Уровни
-  // выше execute придуманы для разговора с владельцем — он тут же видит карточку и
-  // отвечает; за прогоном рутины владельца нет, и pending повис бы в её треде вопросом
-  // без контекста, а preview исполнил бы группу молча. Предлагать правки рутина обязана
-  // явно — глаголом orbis_propose (Задача 8), где у предложения есть объяснение и срок.
-  if (ctx.source === 'routine' && level !== 'execute') {
+  // Небезопасное действие фонового прогона — больше не отказ, а ЕДИНИЦА ПАЧКИ (D42 ОЧ.4):
+  // владелец решит её потом карточкой, а прогон продолжит работу. Одиночное — потому что
+  // групповой вызов рутине закрыт гейтом режима всегда (ROUTINE_CLOSED_TOOLS, registry.ts),
+  // и карточку группы, которую сегодня нечем ни собрать, ни показать, рождать не за что:
+  // условие fail-closed — batch на explicit-уровне упрётся в гейт инварианта 5 строкой ниже.
+  const defersUnit =
+    ctx.source === 'routine' && level === 'explicit-confirmation' && batchPayload === undefined;
+
+  // Инвариант 5 (V1.10) в формулировке D42 (§9.1): «В фоне небезопасное откладывается с
+  // продолжением работы; запрещённое — по уровню или по объекту — отклоняется и не
+  // откладывается никогда».
+  //
+  // Прежнее обоснование отказа («за прогоном владельца нет, и pending повис бы в её треде
+  // вопросом без контекста») снято: контекст пачке даёт отчёт завершившегося прогона рядом
+  // с карточками, а предусловия, снятые при постановке (ОЧ.13), не дают отложенному
+  // действию затереть правку владельца.
+  //
+  // Что осталось гейту: всё, что рутине и не откладывается, и не исполняется. Сегодня это
+  // `preview` (батч — но он рутине закрыт гейтом режима) и любой будущий уровень таблицы
+  // §7.10; `forbidden` сюда не доходит — его снял levelGate выше, а запрет ПО ОБЪЕКТУ —
+  // пре-чек строкой выше.
+  if (ctx.source === 'routine' && level !== 'execute' && !defersUnit) {
     return errorResult(
       'FORBIDDEN_LEVEL',
-      'в фоне небезопасное отклоняется, а не откладывается (V1.10)',
+      `в фоне откладывается только одиночное небезопасное действие — уровень «${level}» не исполняется и не откладывается (V1.10)`,
       { tool: def.name, level },
     );
   }
@@ -781,6 +800,8 @@ async function runMutation(
   // проверяется там же, где проверяются все остальные права вызова.
   const overLimit = await gateRoutinesMax(ctx, tool, payload, batchPayload);
   if (overLimit !== null) return overLimit;
+
+  if (defersUnit) return await deferRoutineUnit(ctx, def, tool, payload);
 
   if (level === 'explicit-confirmation') {
     // §7.10: действие НЕ исполняется — в тред пишется карточка-запрос с immutable
@@ -926,6 +947,234 @@ async function runMutation(
     ...(card !== undefined && { card }),
     ...(actionId !== undefined && { actionId }),
   };
+}
+
+/** Строка карточки отложенного действия — «было → станет» по одному полю (ОЧ.13). */
+type DeferredRow = { aspect?: string; field: string; before?: string; after: string };
+
+/**
+ * Отложка небезопасного действия рутины (D42 ОЧ.4, ОЧ.13) — ядро оси Б среза: вместо
+ * `FORBIDDEN_LEVEL` прогон получает честное `{status:'pending_confirmation', pendingId}` и
+ * работает дальше, а сам вызов ложится единицей пачки в тред РУТИНЫ — туда, где владелец
+ * читает её историю и её предложения.
+ *
+ * ПОРЯДОК ШАГОВ ЗНАЧИМ и не переставляется: проба существования по PK → есть запись, значит
+ * это РЕТРАЙ (капом он не отвергается) → иначе счёт открытых единиц → кап → снятие
+ * предусловий → запись. Наивный порядок «кап → запись» отверг бы повтор ДЕСЯТОЙ единицы:
+ * модель, повторившая шаг после сетевого чиха, получила бы «пачка полна» на том, что уже
+ * стоит в пачке, и стала бы чинить не то.
+ *
+ * ЛИЧНОСТЬ ЕДИНИЦЫ СЧИТАЕТСЯ ОТ ИСХОДНОГО PAYLOAD'А МОДЕЛИ (tool + envelope-input), а не от
+ * того, что уедет в запись: ретрай модели побайтово тот же, а предусловия ВТОРОГО снятия
+ * могли бы уже отличаться (владелец успел тронуть цель) — и один и тот же шаг дал бы
+ * владельцу вторую карточку. В `createPending` при этом едет input С предусловиями: на
+ * «Принять» исполняется именно он.
+ *
+ * ВСЁ — В ОДНОЙ ТРАНЗАКЦИИ ВЛАДЕЛЬЦА, и это контракт, а не удобство: `listRunUnits` требует
+ * `withIdentity` ТОГО ЖЕ владельца (иначе судьбы молча читаются как `open`, и кап считал бы
+ * уже решённое), а проба и запись обязаны видеть одну и ту же ленту.
+ */
+async function deferRoutineUnit(
+  ctx: ToolCallCtx,
+  def: OrbisToolDef,
+  tool: string,
+  payload: unknown,
+): Promise<ToolDispatchResult> {
+  const routine = ctx.routine;
+  const runId = ctx.runId;
+  if (routine === undefined || runId === undefined) {
+    // Недостижимо: `source:'routine'` без контекста рутины снимает routineGate ещё в
+    // pre-блоке. Fail-closed, а не `!`: единица без прогона не попала бы ни в пачку, ни в
+    // сверку `undecided` — она повисла бы в треде карточкой, которой никто не ждёт.
+    return errorResult(
+      'FORBIDDEN_LEVEL',
+      `отложить вызов «${def.name}» нечем: у вызова из прогона нет контекста рутины (V1.10)`,
+      { tool: def.name },
+    );
+  }
+  const dedupeKey = deferDedupeKey(runId, tool, payload);
+  const pendingId = pendingMessageId(ctx.actorUserId, dedupeKey);
+
+  return await withIdentity(ctx.db, ctx.actorUserId, async (tx): Promise<ToolDispatchResult> => {
+    // 1. Проба существования по PK (образец — `routines/propose.ts`): `createPending`
+    // идемпотентен, но «завёл» и «нашёл» он не различает, а кап различать обязан.
+    const found = await tx
+      .select({ metadata: chatMessages.metadata })
+      .from(chatMessages)
+      .where(eq(chatMessages.id, pendingId));
+    const existing = found[0];
+    if (existing !== undefined) {
+      // Карточка возвращается СОХРАНЁННАЯ, а не пересобранная: «было» в ней — снимок первой
+      // постановки (ОЧ.13, предусловия не переснимаются), и пересборка нарисовала бы модели
+      // одно, а владельцу в ленте — другое.
+      const stored = (existing.metadata as { cards?: unknown[] }).cards?.[0] as Card | undefined;
+      if (stored === undefined) {
+        throw new ExecError('VALIDATION', 'pending-запись повреждена — у единицы нет карточки', {
+          pendingId,
+        });
+      }
+      return { status: 'pending_confirmation', pendingId, card: stored };
+    }
+
+    // 2. Кап единиц на прогон (ОЧ.10) — по ОТКРЫТЫМ: решённая владельцем освобождает место.
+    // Отказ структурный, чтобы модель скорректировалась (§9.9); молчаливое усечение
+    // означало бы «сделано» для модели и «не было» для владельца.
+    const open = (await listRunUnits(tx, ctx.actorUserId, runId)).filter((u) => u.fate === 'open');
+    if (open.length >= MAX_RUN_UNITS) {
+      return errorResult('VALIDATION', 'пачка полна — заверши прогон', {
+        reason: 'run_units_cap',
+        limit: MAX_RUN_UNITS,
+      });
+    }
+
+    // 3. Предусловия и «было» снимаются ЗДЕСЬ и больше не переснимаются (ОЧ.13, §9.4)
+    const snapshot = await snapshotDeferredUnit(tx, tool, payload);
+    if ('error' in snapshot) return snapshot.error;
+
+    const pending = await createPending(tx, {
+      // Тред РУТИНЫ, а не тред вызова (V1.6): единица — событие рутины, и читается она там
+      // же, где вся её остальная переписка с владельцем.
+      threadId: await ensureEntityThread(tx, ctx.actorUserId, routine.id),
+      actor: { userId: ctx.actorUserId, kind: ctx.actorKind, source: 'routine', runId },
+      tool,
+      input: snapshot.input,
+      level: 'explicit-confirmation',
+      dedupeKey,
+      kind: 'action',
+      card: {
+        kind: 'deferred_action_card',
+        pendingId,
+        runId,
+        routineId: routine.id,
+        summary: snapshot.summary,
+        rows: snapshot.rows,
+      },
+      // Строка ленты называет СОБЫТИЕ, а не «требуется подтверждение»: за прогоном никто не
+      // стоит, подтверждать в моменте некому — владелец разберёт пачку позже.
+      content: `Отложено до решения: ${snapshot.summary}`,
+      clock: ctx.clock,
+    });
+    return { status: 'pending_confirmation', pendingId: pending.pendingId, card: pending.card };
+  });
+}
+
+/**
+ * Снятие предусловий единицы ПРИ ПОСТАНОВКЕ (D42 ОЧ.13) плюс строки «было → станет» для её
+ * карточки. Возвращает payload, который уедет в pending-запись, — исполнит его approve.
+ *
+ * Механика — ТА ЖЕ, что у предложения рутины, и теми же двумя функциями: `loadTargets`
+ * читает цели под RLS (отсутствующая — NOT_FOUND здесь, а не на кнопке владельца),
+ * `buildUpdate` собирает `entity_update` со снятыми предусловиями (`in:[текущее]` /
+ * `absent:true`; для тела — `expectedUpdatedAt` НАСТОЯЩЕГО снимка, модельный отбрасывается).
+ * Второй реализации той же пары в сервере нет намеренно: разъехавшись, она дала бы
+ * предложению и отложке РАЗНЫЕ предусловия на одном и том же патче.
+ *
+ * АРХИВАЦИЮ `buildUpdate` НЕ ПОКРЫВАЕТ — он ходит только по `input.aspects`, а `archived`
+ * это КОЛОНКА, и для чистой архивации список предусловий у него пуст. Предусловие по
+ * колонке (зарезервированный псевдо-аспект `orbis/entity`, см. `ENTITY_PSEUDO_ASPECT`)
+ * добавляет эта функция, а не `buildUpdate`: предложение обязано остаться байт-в-байт
+ * прежним. `in:[false]`, а НЕ `absent:true` — колонка NOT NULL DEFAULT false всегда несёт
+ * значение, и `absent` не был бы выполним никогда.
+ *
+ * Строку «было» для архивации тоже кладём здесь и явно: общий сборщик строк предложения
+ * (`routines/lifecycle.ts`, updateRows) строит «было» ТОЛЬКО из пар, совпавших с
+ * `input.aspects`, — предусловия по колонке там нет, и карточка архивации показывала бы
+ * владельцу одно «станет».
+ *
+ * Формы, кроме `entity_update`, — fail-closed отказ. Сегодня они недостижимы (уровень выше
+ * `execute` прочим даёт только выдача автономии, а её снимает объектный пре-чек), но если
+ * таблица §7.10 однажды поменяется, лучше прежний отказ, чем единица, которой нечем ни
+ * протухнуть, ни объяснить владельцу, что она сделает, — ровно то, чего велел не допускать
+ * блокер Б3 ревью спеки.
+ */
+async function snapshotDeferredUnit(
+  tx: Tx,
+  tool: string,
+  payload: unknown,
+): Promise<
+  { input: unknown; summary: string; rows: DeferredRow[] } | { error: ToolDispatchResult }
+> {
+  if (tool !== 'entity_update' || !isRecord(payload)) {
+    return {
+      error: errorResult(
+        'FORBIDDEN_LEVEL',
+        `в фоне вызов «${tool}» не откладывается: снять предусловия и показать «было» у него нечем (V1.10)`,
+        { tool },
+      ),
+    };
+  }
+  const targets = await loadTargets(tx, [{ tool, input: payload }]);
+  if ('error' in targets) return { error: targets.error };
+  const id = String(payload.id);
+  const current = targets.rows.get(id);
+  if (current === undefined) {
+    // Недостижимо: отсутствующую цель `loadTargets` уже вернул бы как NOT_FOUND
+    return { error: errorResult('NOT_FOUND', 'сущность не найдена', { id }) };
+  }
+  const built = buildUpdate(0, payload, current);
+  if ('error' in built) return { error: built.error };
+  const input: Record<string, unknown> = { ...built.op.input };
+
+  const rows: DeferredRow[] = [];
+  const aspects = payload.aspects as Record<string, Record<string, unknown> | null> | undefined;
+  for (const [aspect, patch] of Object.entries(aspects ?? {})) {
+    if (patch === null) continue; // снятие аспекта `buildUpdate` уже отверг выше
+    for (const [field, after] of Object.entries(patch)) {
+      const before = current.aspects[aspect]?.[field];
+      rows.push({
+        aspect,
+        field,
+        ...(before !== undefined && { before: rowValue(before) }),
+        after: rowValue(after),
+      });
+    }
+  }
+  // Поля вне аспектов — тем же списком, что читает экран предложения (CORE_FIELD_LABELS):
+  // второй перечень «что рутина вправе тронуть вне аспектов» разъехался бы с первым молча.
+  // Подписи оттуда НЕ берутся — их ставит web (см. док карточки в registry.ts).
+  for (const field of Object.keys(CORE_FIELD_LABELS)) {
+    const after = payload[field];
+    if (after === undefined) continue;
+    if (field === 'archived' && after === true) {
+      // `buildUpdate` кладёт в `precondition` ровно эту форму и валидирует собранную
+      // операцию `entityUpdateExecInput` — читаем её обратно, чтобы дописать пункт колонки
+      const fromAspects = built.op.input.precondition as EntityUpdatePreconditionItem[] | undefined;
+      input.precondition = [
+        ...(fromAspects ?? []),
+        { aspect: ENTITY_PSEUDO_ASPECT, field: 'archived', in: [false] },
+      ];
+      rows.push({ field, before: 'false', after: 'true' });
+      continue;
+    }
+    rows.push({ field, after: rowValue(after) });
+  }
+
+  // Заголовок цели читается отдельным запросом: `loadTargets` возвращает только аспекты и
+  // штамп версии, а трогать его тело нельзя — оно общее с предложением. Цена — один SELECT
+  // по PK на постановку единицы.
+  const title = (await titleOf(tx, id)) ?? id;
+  return {
+    input,
+    // Сводку читает ВЛАДЕЛЕЦ — в ленте рутины и в пачке: цель по имени, а не «entity_update»
+    summary: payload.archived === true ? `Архивация: «${title}»` : `Правка: «${title}»`,
+    rows,
+  };
+}
+
+/**
+ * Потолок значения в строке карточки. Тело записи или длинный список меток уехали бы в
+ * ленту целиком — а строка «было → станет» нужна владельцу, чтобы УЗНАТЬ правку, а не
+ * прочитать её содержимое: полное значение он видит на самой записи.
+ */
+const CARD_VALUE_CAP = 200;
+
+/**
+ * Значение поля строкой карточки: строки — как есть, прочее — JSON'ом. `String(объект)`
+ * дал бы владельцу «[object Object]», то есть строку без единого сведения.
+ */
+function rowValue(value: unknown): string {
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  return text.length <= CARD_VALUE_CAP ? text : `${text.slice(0, CARD_VALUE_CAP - 1)}…`;
 }
 
 /**
@@ -1091,9 +1340,15 @@ async function actRoutineInstructionTargets(
 }
 
 /**
- * Аспект назначения — четвёртый запретный объект рутины рядом с `ROUTINE_UNTOUCHABLE_OBJECTS`
- * (в executor'е он тоже отдельной веткой, `assertRoutineUntouchable`): раздавать исполнителю
- * работу — не то же самое, что править рутину, но запрещено рутине по той же причине.
+ * Аспект назначения — четвёртый запретный объект рутины рядом с `ROUTINE_UNTOUCHABLE_OBJECTS`:
+ * раздавать исполнителю работу — не то же самое, что править рутину, но запрещено рутине по
+ * той же причине.
+ *
+ * Зеркало executor'а здесь НЕПОЛНОЕ, и намеренно (рулинг Р4-1, разбор — в доке пре-чека
+ * ниже): стадия 4 (`assertRoutineUntouchable`, `executor/invariants.ts`) запрещает рутине
+ * ТРОГАТЬ аспект назначения (`touched`), а пре-чек запрещает трогать сущность, у которой он
+ * уже есть. Буква спеки среза (ОЧ.4, §9.1) требует второго; расхождение названо и вынесено
+ * владельцу как остаток.
  */
 const ASSIGNMENT_ASPECT = 'orbis/assignment';
 
@@ -1105,6 +1360,14 @@ const ASSIGNMENT_ASPECT = 'orbis/assignment';
  * исполняется не в момент постановки, а когда владелец нажмёт «Принять» — и отказ прилетел бы
  * ЕМУ, хотя виноват не он (тот же довод, что у пре-чека предложения, `routines/propose.ts`).
  * Карточка, которую executor гарантированно убьёт, не должна рождаться.
+ *
+ * НО ПО НАЗНАЧЕНИЮ ЭТА ВЕТКА СТРОЖЕ EXECUTOR'А, и это решено сознательно (рулинг координатора
+ * Р4-1). Стадия 4 ловит назначение только по `touched` (`executor/invariants.ts`) — то есть
+ * рутина вправе править СВОЙ назначенный тикет, и «архивировать назначенный тикет» на
+ * «Принять» прошло бы. Пре-чек же смотрит на СОСТОЯНИЕ цели и отказывает. Так написана буква
+ * спеки среза (ОЧ.4 и §9.1 говорят дважды: «цель в `ROUTINE_UNTOUCHABLE_OBJECTS` ∪
+ * `orbis/assignment`»), и для фонового актора выбран fail-closed: отказ виден агенту явно, он
+ * о нём доложит, цена узкая, откат — одна строка.
  *
  * Первые две проверки — не про executor вовсе, а про пачку: «Принять все» одним нажатием
  * сняло бы замок V1.10 мимоходом, если бы выдача автономии или правка инструкции act-рутины

@@ -472,8 +472,13 @@ interface TargetRow {
  *
  * Отсутствующая цель — NOT_FOUND здесь, а не на approve: предложение правки того, чего нет,
  * не станет валидным от ожидания, а владельцу пришлось бы разбирать отказ на своей кнопке.
+ *
+ * Экспортирована для отложки диспатча (D42 ОЧ.13, `tools/dispatch.ts`): единица пачки
+ * снимает предусловия ровно теми же двумя шагами, что предложение, — прочитать цель и
+ * собрать по ней `entity_update`. Второй такой пары в сервере быть не должно: разъехавшись,
+ * она дала бы предложению и отложке РАЗНЫЕ предусловия на одном и том же патче.
  */
-async function loadTargets(
+export async function loadTargets(
   tx: Tx,
   parsed: Array<{ tool: string; input: Record<string, unknown> }>,
 ): Promise<{ rows: Map<string, TargetRow> } | { error: ToolDispatchResult }> {
@@ -536,8 +541,14 @@ async function loadTargets(
  *
  * Патч тела едет со своим существующим CAS (§5.2) — `expectedUpdatedAt` текущей строки:
  * предусловия аспектов о теле ничего не знают, и без него правка тела затирала бы чужую.
+ *
+ * Экспортирована для отложки диспатча (D42 ОЧ.13) — см. довод у `loadTargets`. Функция
+ * ходит ТОЛЬКО по `input.aspects`, поэтому для чистой архивации (`{id, archived:true}`)
+ * даёт ПУСТОЙ список: `archived` — колонка, а не поле аспекта. Предусловие по колонке
+ * (псевдо-аспект `orbis/entity`, `executor.ts`) добавляет к результату сам диспатч — здесь
+ * оно появиться не может, потому что предложение обязано остаться байт-в-байт прежним.
  */
-function buildUpdate(
+export function buildUpdate(
   index: number,
   input: Record<string, unknown>,
   current: TargetRow,
