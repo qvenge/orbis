@@ -35,8 +35,10 @@ pending-единицами в своём треде, **продолжая про
 и ответ `reviews/2026-08-20-deferred-checkpoint-review-response.md` (противоречить им нельзя);
 спека V1 `2026-08-18-v1-routines-internal-runner-design.md` (инварианты и рулинги); план Ш1
 `docs/superpowers/plans/2026-08-20-sh1-proposal-diff-edit.md` — контракты трёх общих работ (§«Общие
-работы со Ш1» ниже). Предусловие: V1 в проде (main `01f8e81`). **Реализация Ш1 НЕ начата** —
-считать её несделанной, пока обратное не видно в `main`.
+работы со Ш1» ниже). Предусловие: V1 в проде (main `01f8e81`). **Ш1 ИСПОЛНЕН И В ПРОДЕ**
+(main `081d455`, 2026-08-21; правка 2026-08-21 по факту — в момент написания плана Ш1 не был
+начат): все три общие работы выполнены им, срез D42 их не повторяет — см. §«Общие работы со Ш1»
+и §«Дельта-разведка 081d455».
 
 ---
 
@@ -157,34 +159,74 @@ docs), то есть адреса спеки и ревью действител�
   `bun run typecheck` отдельно; гонный прецедент — `policy/pending.test.ts:330-368`
   (25 итераций `Promise.all`); сьюты делят БД (`truncateAll`) — не гонять параллельно.
 
+## Дельта-разведка `081d455` (правка 2026-08-21, до старта Задачи 1)
+
+План писался на `878613c`. К старту исполнения в `main` влит ВЕСЬ срез Ш1 (`081d455`), который
+переписал `policy/pending.ts`, `routines/lifecycle.ts`, `routines/context.ts`, `routers/routine.ts`
+и web-часть предложений. Семь читателей (opus) прошли по коду заново; конспекты —
+`.superpowers/sdd/2026-08-20-deferred-checkpoint/delta-recon-*.md`, сведённые факты и рулинги —
+`facts.md` того же леджера.
+
+**Правило для имплементеров: номер строки в тексте задач — ориентир, а не адрес; актуальный
+адрес брать из `delta-recon-*.md` или искать `grep`'ом по имени.** Ниже — только то, что меняет
+СОДЕРЖАНИЕ задач.
+
+| Задача | Что изменилось против текста плана |
+|---|---|
+| 2 | Кусок «`storedProposal`→id» и его тест ВЫЧЕРКНУТЫ (сделано Ш1). `unitHash` пишется по образцу существующего `editsHash` (`routines/edits.ts:94-98`). Гейт `kind` ставится в `approvePending` И в `rejectPendingTx` (обёртка получает его транзитом). `RejectReason` — четыре значения. `kind` в `metadata.pending` писать УСЛОВНО (образец `edited_from`, пин `pending.test.ts:682`) |
+| 3 | Tx-варианты НЕ нужны: `closeOpenOfRun` берёт `deps`, а не `tx`, и открывает `withIdentity` по месту. В докблок обеих новых процедур — предупреждение «из открытой транзакции звать нельзя» (образец `pending.ts:571-575`) |
+| 4 | `invariants.ts` лежит в **`executor/`**. Пара `('FORBIDDEN_LEVEL', reason:'routine_untouchable')` уже существует (`executor/invariants.ts:448`) — переиспользовать, не заводить свою; `routineUntouchableError` и `ROUTINE_UNTOUCHABLE_OBJECTS` экспортировать. Пре-чек стоит РАНЬШЕ `loadTargets`, чей собственный отказ (`VALIDATION`/`proposal_forbidden_target`, `propose.ts:76-82`) остаётся защитой в глубину |
+| **4b (НОВАЯ)** | Предусловие по колонке `archived` невыразимо сегодняшним контрактом — см. задачу ниже |
+| 5 | Предусловие архивации пишется псевдо-аспектом `orbis/entity` (Задача 4b); `buildUpdate`/`propose.ts` НЕ трогаются — псевдо-аспект добавляет только ветка отложки. `card.summary` без сужения по `kind` не скомпилируется (`summary` есть лишь у `confirmation_card`/`proposal_card`) |
+| 6 | Счётчики подтверждены пробоем: **30→31** и **31→32**; `routineOnly` 1→2; пин `agentOnly` (`registry.test.ts:178-197`) требует именно `routineOnly`. Ассерт чата — `send-message.test.ts:1068`. Новые варианты union `Card` — ПЕРЕД `registry.ts:246` |
+| 7 | Р-5 подтверждён, четвёртого пути нет; вызов из propose — `propose.ts:288`. `MAX_AGENT_STEPS` читается ещё и из `runner.test.ts:7` — импорт в тесте тоже правится. `checkpoint()` субъект не различает вовсе: первую проверку `ctx.subject.kind === 'routine'` вводит эта задача, грантовая половина — байт-в-байт (пин `verbs.test.ts:646-685`) |
+| 8 | Ветка предложения перекроена Ш1: pending-работа в `closeProposalOfRun` (`lifecycle.ts:383-427`), ранних выходов ТРИ (`:303`, `:332`, `:350`). Снимать надо **`:332`**; `:303` и `:350` — выходы «гасить нечего», они остаются. Поле `units` добавляется в возврат `closeOpenOfRun`, но в `SupersedeResult` НЕ протаскивается (читателя нет) |
+| 9 | Честное обоснование цены: containment под RLS идёт Seq Scan (`jsonb_contains` не leakproof — замер `lifecycle.ts:1152-1164`), ~26 мс на пробу, 7 проб хвоста ≈ 130–180 мс на сборку контекста. Это принято (контекст собирается раз за прогон при дедлайне 10 мин), но обосновывать «дешёвой GIN-пробой» нельзя. Плюрализатор `editsNoun` уже в `routines/constants.ts:83-90`. **Кап 10 считает ОТКРЫТЫЕ единицы, потолок истории — ВСЕ**, поэтому «и ещё N» достижимо |
+| 10 | `DecideProposalResult` — ПЯТЬ вариантов (добавлен `replaced`), копировать дословно нельзя. Расхождения предусловий у соседа — `PreconditionMismatch[]` (`lifecycle.ts:1007`), а `ProposalMismatchNote` (`:943`) — форма для аспекта, её делает `mismatchNotes` (`:1902`); брать ту, что отдаёт разбор CONFLICT. Лекало отказа в `routers/routine.ts` — `try/catch (e instanceof ExecError)`, не `execErrorToTRPC`. Undo — `executor/undo.ts:73` (файла `routines/undo.ts` нет) |
+| 11 | Докблок `smart-lists.ts:73`, `:78-79` и PRD `:357`, `:359` говорят «два блока» — правятся ТЕМ ЖЕ коммитом. Лекала UPDATE в онбординге есть (`onboarding.ts:82`, `:231`). Грамматика `undecided=true` пробита запуском: правок в `catalog.ts`/`parse.ts`/`compile.ts` не нужно |
+| 12 | Тред инвалидируется ЯВНО: Ш1 добавил `invalidateQueries({queryKey: chatThreadKey(threadId)})` (`ProposalCard.tsx:224-226`) — повторить. `rowLabel` переехал в `cards/proposal-text.ts:78-82`. Приём «свёртка решённого» — готовый, копировать с `ProposalOverlay.tsx` (`:185`, `:202-205`, `:231-243`, `:427-443`, `:460`, докблоки `:248-255`, `:449-451`), не строить с нуля |
+| 13 | Кнопок две и они разные: существующая «Прогнать сейчас» (`RoutineStatusBlock.tsx:197`) не трогается, новая на пачке — «Продолжить сейчас» (имя спеки §6/§7). `overview` мокается в `routineHandler` (`detail.test.tsx:3492-3529`), а не в `routineRunHandler`. Блок пачки прячется вместе со вкладками при развёрнутом слое предложения (`DetailScreen.tsx:472`) — это поведение Ш1, чинить не надо. Единица без карточки рисуется строкой-заглушкой из `question`/`summary`, молча пропадать не имеет права |
+| 14 | Каталог промптов Ш1 не тронул. Образец diff-гарда — `v3.test.ts:25-44` (не `:29-49`). Гард `routine-v1.test.ts:43` привязан к строке v1, которую v2 переписывает: **подгонять гард v1 под текст v2 запрещено** — v1 не правится |
+| 15 | Номер **D42 свободен** (последний в журнале — D41, `04-decision-log.md:417`; место — между `:428` и `:430`). Образец чек-листа деплоя — **Ш1-чек-лист `02-ops-runbook.md:455-523`** (тот же класс релиза: миграций нет, пересев ДО кода), а не V1-чек-лист (`:384-453`). В §7.10 Ш1 вставил абзац `01-architecture.md:1010` — новая формулировка обязана не читаться противоречием к доводу `:1012`. «Сайдбарный бейдж Рутин» — это §3.2 `:258`, не §1.5 |
+
 ## Общие работы со Ш1 (правило: «делается один раз, кто первым дойдёт»)
 
-Реализация Ш1 не начата (подтверждено grep'ом на HEAD: `rejectPendingTx` — 0 совпадений,
-`storedProposal` — по-прежнему `{pending:{run_id}}`). Для каждой работы действует условие:
-**если к старту задачи N работа уже в `main` — использовать как есть; иначе задача N делает
-её сама СТРОГО по контракту из плана Ш1 (продублирован ниже), без расхождений в сигнатурах.**
+> **Статус на 2026-08-21 (main `081d455`): ВСЕ ТРИ РАБОТЫ ВЫПОЛНЕНЫ Ш1.** Условие «если к
+> старту задачи работа уже в `main` — использовать как есть» сработало по всем трём;
+> контракты Ш1 ниже читаются как ОПИСАНИЕ существующего кода, а не как задание. Ни одна
+> задача D42 их не переделывает. Адреса — из `delta-recon-*.md` леджера.
 
 1. **Каноническая сериализация** (нужна Задаче 2). Контракт Ш1 (Развилка 3 и строка Р-12
    таблицы расхождений плана Ш1):
    канон — `canonicalJson` из `@orbis/shared` (рекурсивная сортировка ключей, порядок
    массивов сохраняется); хеши от канона — **sha256 lowercase hex** (иначе лоуэркейс
-   `pendingMessageId` схлопнет разные ключи). Статус на HEAD: `canonicalJson` УЖЕ
-   экспортирована (`aspect-registry.ts:193-201`) — часть «экспорт» выполнена; Задача 2
-   добавляет только серверный `unitHash` (см. её Интерфейсы).
-2. **Tx-вариант `rejectPending`** (нужен Задаче 8 условно). Контракт Ш1 (Развилка 2):
-   `rejectPendingTx(tx, args: {ownerId, pendingId, reason?}): Promise<RejectPendingResult>`,
-   бросает `ExecError`; `RejectPendingResult = {pendingId, alreadyRejected, reason, threadId}`;
-   `rejectPending(db, args)` — обёртка с прежним поведением; экспорт `acquirePendingLock`
-   с докблоком «замок до первого чтения состояния этого pendingId». **Сам этот срез
+   `pendingMessageId` схлопнет разные ключи). **Статус на `081d455`: ВЫПОЛНЕНА ЦЕЛИКОМ.**
+   `canonicalJson` экспортирована (`aspect-registry.ts:193-201`), и правило уже воплощено
+   готовой функцией `editsHash` (`routines/edits.ts:94-98` — sha256 lowercase hex от
+   `canonicalJson`; докблок `:83-93` фиксирует урок про лоуэркейс `pendingMessageId`).
+   Задача 2 добавляет `unitHash` как ВТОРУЮ функцию той же формы; вторую копию канона
+   заводить запрещено, форму брать с `editsHash`.
+2. **Tx-вариант `rejectPending`** (нужен Задаче 8 условно). **Статус на `081d455`: ВЫПОЛНЕНА.**
+   Фактические имена и адреса (контракт плана Ш1 назывался иначе — здесь верно):
+   `rejectPendingTx(tx, args) : Promise<RejectPendingTxResult>` — `pending.ts:516-562`;
+   `RejectPendingTxResult = {pendingId, alreadyRejected, reason, threadId}` — `:473-478`;
+   `RejectPendingResult = ({ok:true} & RejectPendingTxResult) | {ok:false; error}` — `:480-482`
+   (дискриминированный союз, НЕ четвёрка полей — план цитировал неверно);
+   обёртка `rejectPending(db, args)` — `:577-590`; `acquirePendingLock` экспортирован — `:337-339`.
+   `RejectReason` — ЧЕТЫРЕ значения (`owner|superseded|stale|edited`, `:268`), любой новый
+   `Record<RejectReason, …>` обязан покрыть четвёртый ключ. Обёртку `rejectPending(db, …)`
+   НЕЛЬЗЯ звать из открытой транзакции (докблок `:571-575`, зависание до statement_timeout).
+   **Сам этот срез
    tx-варианта не требует**: гашение зовёт `rejectPending`-обёртку последовательно, по
    единице за раз (атомарность между единицами не обещается — ОЧ.11). Задача 8 обязана лишь
    НЕ конфликтовать: `reason` остаётся enum'ом, новый optional-параметр `text?` добавляется
    в объект args (не ломает ни обёртку, ни будущий `rejectPendingTx`).
 3. **Перевод `storedProposal` на `{pending:{id}}`** (обязательное предусловие ОБОИХ срезов —
-   §8.5 спеки; делает Задача 2). Контракт Ш1 (Задача 4): проба
-   `{pending:{id: run.proposal.pending_id}}` формой `findPendingMessage` (`pending.ts:216-235`);
-   вызыватель один — `proposalView` (`lifecycle.ts:948`). Без перевода единицы на прогоне
-   ломают `routine.proposal` (LIMIT 1 без ORDER BY вернёт случайную запись — Р-8).
+   §8.5 спеки). **Статус на `081d455`: ВЫПОЛНЕНА** (коммит `ff274ab`):
+   `storedProposal(tx, pendingId)` — `lifecycle.ts:1953-1971`, проба
+   `JSON.stringify({ pending: { id: pendingId } })` `:1954`, докблок `:1947-1951` дословно
+   повторяет довод Р-8; вызывателей два — `proposalView` `:1055` и `createEditedProposal`
+   `:1564`. **Задача 2 этот кусок НЕ делает** (вычеркнут из её текста).
 
 ## Решения плана (владелец может отменить; план написан под них)
 
@@ -269,6 +311,7 @@ docs), то есть адреса спеки и ревью действител�
 | Область | Создать | Изменить |
 |---|---|---|
 | shared | — | `packages/shared/src/schemas/aspects.ts` (+`undecided` в `agentRunAspectSchema`), `schemas/aspects.test.ts`, `src/contracts/agent-loop.ts` (`askInput`, `AskResult`, `RunSummary.undecided?`), `src/ids.ts` (`answerMessageId`, `questionStaleMessageId`) |
+| executor | — | `apps/server/src/executor/executor.ts` (псевдо-аспект `orbis/entity` в `assertPrecondition` — Задача 4b), `packages/shared/src/contracts/tools.ts` (докблок предусловий) |
 | policy | — | `apps/server/src/policy/pending.ts` (`kind`/`question`/`options`, условная обязательность `tool`/`input`, `unitHash`, дедуп-ключи, гейты `kind`, `text?` у reject, `listRunUnits`, `answerPendingQuestion`, `stalePendingQuestion`), `pending.test.ts` |
 | dispatch | — | `apps/server/src/tools/dispatch.ts` (объектный пре-чек, отложка вместо `FORBIDDEN_LEVEL`, кап, ветка `orbis_ask`), `dispatch.test.ts` |
 | routines | `apps/server/src/routines/ask.ts`, `ask.test.ts` | `routines/propose.ts` (экспорт `loadTargets`/`buildUpdate`), `routines/lifecycle.ts` (`storedProposal`→id, `closeOpenOfRun` списком, `routineHistory` единицами, `answerQuestion`/`decideDeferred`/`decideAll`-ядра), `lifecycle.test.ts`, `routines/context.ts` (строки единиц, потолки), `context.test.ts`, `routines/constants.ts` (`ROUTINE_MAX_STEPS = 12`, `MAX_RUN_UNITS = 10`), `routines/runner.ts` (потолок шагов, сводка шага) |
@@ -284,7 +327,7 @@ docs), то есть адреса спеки и ревью действител�
 
 ```
 Веха A (контракты и носитель):   0 → 1 → 2 → 3
-Веха B (диспатч и глагол):       4 → 5 → 6          (5 требует 2 и 4; 6 требует 1, 2, 5 — MAX_RUN_UNITS)
+Веха B (диспатч и глагол):       4 → 4b → 5 → 6     (5 требует 2, 4 и 4b; 6 требует 1, 2, 5 — MAX_RUN_UNITS)
 Веха C (раннер/гашение/история): 7 → 8 → 9          (7 требует 1, 2; 8 требует 2, 3; 9 требует 8)
 Веха D (роутеры):                10 → 11             (10 требует 2, 3; 11 требует 1, 10)
 Веха E (web):                    12 → 13             (12 требует 5, 6, 10; 13 требует 10, 11, 12)
@@ -381,11 +424,11 @@ export function questionStaleMessageId(ownerId: string, pendingId: string): stri
 гейты в approve/reject, свои тексты судеб, хеш-ключи дедупа, единая проба открытых единиц —
 и обязательное предусловие обоих срезов: перевод `storedProposal` на `{pending:{id}}`.
 
-**Файлы:**
-- Изменить: `apps/server/src/policy/pending.ts` (`pendingRecord` `:68-90`; `approvePending`
-  `:299-407`; `rejectPending` `:440-490`; новые экспорты), `apps/server/src/routines/lifecycle.ts`
-  (`storedProposal` `:1286-1304`)
-- Тесты: `apps/server/src/policy/pending.test.ts`, `apps/server/src/routines/lifecycle.test.ts`
+**Файлы** (адреса — на `081d455`):
+- Изменить: `apps/server/src/policy/pending.ts` (`pendingRecord` `:68-100`; `createPending`
+  `:128-211`; `approvePending` `:379-464`; `rejectPendingTx` `:516-562` и обёртка `:577-590`;
+  новые экспорты). `lifecycle.ts` НЕ трогается.
+- Тесты: `apps/server/src/policy/pending.test.ts`
 
 **Интерфейсы (produces):**
 ```ts
@@ -457,11 +500,8 @@ export async function listRunUnits(tx: Tx, ownerId: string, runId: string): Prom
 //   approvePending / rejectPending: found.pending.kind === 'question' →
 //     ExecError('VALIDATION', 'это вопрос — на него отвечают, а не принимают/отклоняют').
 ```
-`storedProposal` (`lifecycle.ts:1286-1304`): проба `{pending:{run_id: runId}}` →
-`{pending:{id: run.proposal.pending_id}}` (общая работа Ш1 — §«Общие работы», п. 3).
-Сигнатура меняется: вызыватель `proposalView` (`:948`) передаёт `run.proposal.pending_id`
-(он в снимке уже есть); если `pending_id` отсутствует — `null` без запроса. **Если к старту
-задачи Ш1 уже перевёл `storedProposal` в main — этот кусок пропустить, использовать как есть.**
+~~`storedProposal` → `{pending:{id}}`~~ — **ВЫЧЕРКНУТО 2026-08-21: сделано Ш1**
+(`lifecycle.ts:1953-1971`, коммит `ff274ab`). Задача 2 `lifecycle.ts` не трогает вовсе.
 - [ ] **Шаг 1: падающие тесты** — `pending.test.ts`:
 ```ts
 test('запись kind:question с question/options и БЕЗ tool/input — валидна; kind:question с tool — VALIDATION; kind:action без tool — VALIDATION; запись без kind с tool/input — валидна (сегодняшние чатовые)', …);
@@ -471,12 +511,10 @@ test('rejectPending с text: в ленте текст единицы, metadata.r
 test('listRunUnits: прогон с вопросом, отложкой и ЧУЖИМ предложением (pending без kind, дедуп proposal:<runId>) → ровно две единицы, предложение не попало (Б5, приёмка 19-предусловие); порядок created_at,id', …);
 test('listRunUnits судьбы: approved по audit-PK, rejected с причиной, answered по answer-PK, stale по question-stale-PK; answered+stale одновременно → answered (ОЧ.8)', …);
 ```
-- [ ] **Шаг 2:** — `lifecycle.test.ts`:
-```ts
-test('storedProposal читает по pending_id: подложить ВТОРОЕ pending-сообщение (единицу) с тем же run_id — proposalView показывает операции того, на кого указывает прогон (Р-8)', …);
-```
+- [ ] **Шаг 2:** ~~тест `storedProposal`~~ — вычеркнут вместе с самим куском (сделано Ш1);
+  вместо него проверить, что сьют Ш1 уже покрывает Р-8, и записать это в отчёт.
 - [ ] **Шаг 3:** FAIL → реализация. — [ ] **Шаг 4:** PASS, `bun run test`, `bun run typecheck`;
-  коммит `feat(policy): pending-единицы — kind, гейты, unitHash, listRunUnits; storedProposal по pending_id (D42 ОЧ.2, Б5; общая работа Ш1)`.
+  коммит `feat(policy): pending-единицы — kind, гейты, unitHash, listRunUnits (D42 ОЧ.2, Б5)`.
 
 ---
 
@@ -587,6 +625,70 @@ test('рутина act: архивация ОБЫЧНОЙ записи по-пр
 
 ---
 
+### Задача 4b: Предусловие по колонке `archived` — псевдо-аспект `orbis/entity`
+
+**Заведена 2026-08-21 дельта-разведкой.** Спека ОЧ.13 требует для отложенной архивации
+предусловие «`archived absent/false`», а сегодня оно невыразимо: `archived` — колонка таблицы
+`entities`, а `assertPrecondition` смотрит только в карту аспектов
+(`executor/executor.ts:854-880`, `aspects[p.aspect]?.[p.field]`); контракт
+`entityUpdatePreconditionItem` (`packages/shared/src/contracts/tools.ts:96-111`) — strict-union
+`{aspect, field, in|absent}`, а `entityUpdatePrecondition` — `.min(1)`, то есть пустой список
+невалиден. Без этой задачи у Задачи 5 нет ни «было» из предусловия, ни достижимого `stale`
+(ровно блокер Б3 ревью спеки).
+
+**Решение:** зарезервированный псевдо-аспект **`orbis/entity`** — значения полей под ним берутся
+из СТРОКИ сущности, а не из карты аспектов. Контракт не меняется ни на символ (`aspect` — обычная
+строка), поэтому не двигаются ни `PreconditionMismatch`, ни `mismatchNotes`, ни рендер расхождений
+Ш1. Сегодня такое предусловие уже fail-closed (`aspects['orbis/entity']` не существует → CONFLICT),
+то есть поведение меняется только в сторону осмысленности.
+
+**Файлы:**
+- Изменить: `apps/server/src/executor/executor.ts` (`assertPrecondition` `:854-880` — источник
+  значений для псевдо-аспекта; вызов `:1198` получает строку сущности — `current` из
+  `loadEntityForUpdate` `:825-833` несёт всю строку, включая `archived`),
+  `packages/shared/src/contracts/tools.ts` (докблок `:88-95` — назвать зарезервированный id
+  и правило fail-closed; сам union не трогать)
+- Тесты: `apps/server/src/executor/executor.test.ts` (или где живут тесты предусловий — найти
+  по `assertPrecondition`/`precondition`), `packages/shared/src/schemas/aspects.test.ts`
+  (пин «`orbis/entity` НЕ в `ASPECT_SCHEMAS`»)
+
+**Интерфейсы (produces):**
+```ts
+// executor/executor.ts:
+export const ENTITY_PSEUDO_ASPECT = 'orbis/entity';
+// «Зарезервированный id: под ним предусловие адресует КОЛОНКИ строки сущности, а не аспект.
+//  Реестр аспектов закрыт (ASPECT_SCHEMAS) и такого id в нём нет — пиннится тестом. Сегодня
+//  поддержана одна колонка — archived; неизвестное поле даёт undefined, то есть расхождение
+//  (fail-closed), а не молчаливый пропуск.»
+function assertPrecondition(
+  precondition: EntityUpdatePrecondition,
+  aspects: AspectsMap,
+  entity: { archived: boolean },      // НОВЫЙ параметр
+): void;
+// внутри: const actual = p.aspect === ENTITY_PSEUDO_ASPECT
+//   ? (p.field === 'archived' ? entity.archived : undefined)
+//   : aspects[p.aspect]?.[p.field];
+// Форма расхождения (PreconditionMismatch) прежняя: aspect: 'orbis/entity', field: 'archived'.
+```
+Что НЕ делается: `propose.ts`/`buildUpdate` не трогаются (предложение остаётся байт-в-байт —
+псевдо-аспект пишет только ветка отложки Задачи 5); путь внутреннего undo предусловий не
+встречает (докблок `executor.ts:1195-1197`); других колонок под псевдо-аспект не заводится.
+- [ ] **Шаг 1: падающие тесты**:
+```ts
+// executor: entity_update с precondition [{aspect:'orbis/entity', field:'archived', in:[false]}]
+//   на НЕархивированной цели — проходит; на уже архивированной → CONFLICT с mismatch
+//   {aspect:'orbis/entity', field:'archived', expected:[false], actual:true};
+// неизвестное поле под псевдо-аспектом ({field:'нетакого', in:[1]}) → CONFLICT (fail-closed),
+//   не молчаливый пропуск;
+// обычные предусловия по настоящим аспектам не изменились байт-в-байт (прежние тесты зелёные);
+// aspects.test.ts: 'orbis/entity' отсутствует в ASPECT_SCHEMAS (защита от будущей коллизии).
+```
+- [ ] **Шаг 2:** FAIL → **Шаг 3:** реализация. — [ ] **Шаг 4:** PASS, `bun run test`,
+  `bun run lint`, `bun run typecheck`; коммит
+  `feat(executor): предусловие по колонке archived — зарезервированный псевдо-аспект orbis/entity (D42 ОЧ.13)`.
+
+---
+
 ### Задача 5: Отложка на диспатче — предусловия, кап, карточка, `pending_confirmation`
 
 Ядро оси Б (ОЧ.4/ОЧ.13): для `source:'routine'` уровень `explicit-confirmation` больше не
@@ -628,7 +730,10 @@ export const MAX_RUN_UNITS = 10;   // кап единиц на прогон (В4
 //   2) withIdentity-tx: targets = loadTargets(tx, операции) — NOT_FOUND здесь, не на approve;
 //      операции entity_update дополняются предусловиями buildUpdate (in:[текущее]/absent:true;
 //      body → expectedUpdatedAt настоящего снимка; модельный отбрасывается — Ш1.6/ОЧ.13);
-//      для архивации — archived absent/false + снимок заголовка цели в карточку;
+//      для архивации — { aspect:'orbis/entity', field:'archived', in:[false] } (псевдо-аспект
+//      Задачи 4b: buildUpdate ходит только по input.aspects и для чистой архивации даёт
+//      ПУСТОЙ список, а entityUpdatePrecondition — .min(1)) + снимок заголовка цели в карточку;
+//      сам buildUpdate/propose.ts НЕ правится — предусловие архивации добавляет эта ветка;
 //   3) pendingId = pendingMessageId(owner, deferDedupeKey(runId, tool, input С предусловиями? НЕТ:
 //      хеш считается от ИСХОДНОГО payload модели (tool + envelope-input) — ретрай модели
 //      побайтово тот же, а предусловия у второго снятия могли бы уже отличаться);
@@ -1272,7 +1377,7 @@ test('RunsList: бейдж «пачка решений» у undecided-прого
 | Веха | После задач | Проверка (коды возврата 0, машина незанята) |
 |---|---|---|
 | A. Контракты и носитель | 0–3 | `bun run db:prepare` (пересев), `bun run test`, `bun run lint`, `bun run typecheck`; ревью fable: инварианты §9.7, §9.8; гонный тест 25 итераций зелёный |
-| B. Диспатч и глагол | 4–6 | `bun run test`; ревью fable: инварианты §9.1, §9.4, §9.9; счётчики реестра 31/32 согласованы; `send-message.test:1069` и MCP-исключение зелёные |
+| B. Диспатч и глагол | 4, 4b, 5, 6 | `bun run test`; ревью fable: инварианты §9.1, §9.4, §9.9; счётчики реестра 31/32 согласованы; `send-message.test:1068` и MCP-исключение зелёные |
 | C. Раннер/гашение/история | 7–9 | `bun run test`; ревью fable: инварианты §9.5, §9.6, §9.8 (гашение), доставка ответов (приёмка 7-чтение) |
 | D. Роутеры | 10–11 | `bun run test`; ревью fable: §9.2, §9.5, приёмки 3–6, 10, 18, 19; сид ↔ PRD §3.3 байт-в-байт |
 | E. Web | 12–13 | web-сьют, `bun run --filter @orbis/web build`; ревью fable: приёмки 1, 6, 9 на стенде; свёртка решённых; предупреждение В3 |
@@ -1289,7 +1394,7 @@ query-блок) → `check` → мерж + push + CI → Render деплой →
 | Приёмка | Задачи |
 |---|---|
 | 1. Два вопроса, прогон продолжился, `undecided`, две карточки | 6 (ask), 7 (флажок), 12 (карточки), 16 (живьём) |
-| 2. Архивация отложена с «было», `pending_confirmation`, журнал чист | 5 |
+| 2. Архивация отложена с «было», `pending_confirmation`, журнал чист | 4b (предусловие по `archived`), 5 |
 | 3. «Принять» → `routine`+`run_id`, один action, откат отката | 10 (тест), 8 (откат гасит открытое) |
 | 4. «Отклонить» с текстом единицы; повтор — исходная причина | 10 (owner-текст), 2 (`text?` у reject) |
 | 5. Ответ; тот же — replay; другой — `already` с показом | 3 (ядро), 10 (роутер), 12 (показ) |
@@ -1315,7 +1420,7 @@ query-блок) → `check` → мерж + push + CI → Render деплой →
 | 1. Откладывается с продолжением; запрещённое — отказ навсегда | 4 (объектный пре-чек), 5 (отложка + новый докблок) |
 | 2. Единица атомарна (один pending = один batch); пачка — нет и не претендует | 5 (один вызов = один pending), 10 (approve = один batch, тест журнала), 11 (последовательность, сводка) |
 | 3. Зависимое — только внутри единицы; зависимостей между единицами нет | 5 (одиночный вызов = одна единица по построению; Р-16 — независимые честно проигрывают stale, тест в 10) |
-| 4. Предусловия снимаются при постановке и не переснимаются | 5 (buildUpdate при постановке; approvePending без правок — тест stale) |
+| 4. Предусловия снимаются при постановке и не переснимаются | 4b (носитель для `archived`), 5 (buildUpdate при постановке; approvePending без правок — тест stale) |
 | 5. Применённое — `routine`+`run_id`; ответ — ui-запись; патчи флажка — `system` | 10 (тесты атрибуции и undo), 3 (append-ответ без actions) |
 | 6. Живой прогон никогда не `undecided`; писатели — close/sweep/процедуры, все `system` | 7 (close+sweep), 8 (гашение), 10 (бухгалтерия) |
 | 7. Идемпотентность всех рёбер; другой ответ — `already` с показом | 2 (hash), 3 (ответ), 5/6 (постановка), 10 (решения), 11 (decideAll = N replay'ев) |
