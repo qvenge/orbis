@@ -458,7 +458,8 @@ async function closeUnitsOfRun(
   let closed = 0;
   try {
     // Порядок обхода — `created_at, id` самого `listRunUnits`: тай-брейк там не украшение,
-    // а условие того, что два обхода берут замки единиц в одном порядке (взаимоблокировка)
+    // а условие предсказуемости — два обхода идут по единицам одинаково. Про дедлок это НЕ:
+    // замок у каждой единицы свой и живёт одну короткую транзакцию (`decideAllOfRun`, ниже)
     const units = await withIdentity(deps.db, ownerId, (tx) => listRunUnits(tx, ownerId, runId));
     for (const unit of units) {
       if (unit.fate !== 'open') continue;
