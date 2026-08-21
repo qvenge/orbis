@@ -24,12 +24,21 @@
 //    правка предложения ушла бы в запись ДО того, как владелец нажал «Принять», и заодно
 //    сделала бы предложение устаревшим. Граф двигает только «Принять».
 //
-// Чего здесь НЕТ намеренно: режима правки тела (Задача 11 — редактор без `useBodySave`),
-// deep-link'а `?proposal=` (Развилка 5: шов назван, но не строится) и всякого импорта из
-// `@orbis/shared/doc` — слой эагерно достижим из чанка записи, и схема Tiptap стоила бы там
-// +154 кБ gzip в первом кадре (страж `scripts/check-lazy-chunks.ts`).
+// 4. ТЕЛО ПРАВИТСЯ РЕДАКТОРОМ БЕЗ `useBodySave` и без черновиков (Ш1.4, С8). Тот же
+//    `EditorShell`, что и у тела записи, но без единой связи с сохранением: автосохранение
+//    записало бы предложенный текст в САМУ ЗАПИСЬ с первого штриха и бампнуло `updated_at` —
+//    предложение сделало бы себя `stale` само от себя. Дифф в этом режиме считает клиент
+//    (Ш1.2) и по ПАУЗЕ: текущее тело уже на экране (DETAIL_INCLUDE), второй сети не нужно.
+//
+// Чего здесь НЕТ намеренно: deep-link'а `?proposal=` (Развилка 5: шов назван, но не строится)
+// и всякого импорта из `@orbis/shared/doc` БЕЗ `/diff` — слой эагерно достижим из чанка
+// записи, и схема Tiptap стоила бы там +154 кБ gzip в первом кадре. Сам `@orbis/shared/doc/diff`
+// ЛИСТОВОЙ и стоит +0.85 кБ gzip (замерено разведкой); правило `useBodySave.ts:28-34`
+// наследуется целиком, а сторожат его `scripts/check-lazy-chunks.ts` (состав чанка) и список
+// файлов в `save.test.tsx`.
+import { type BodyDiffResult, diffBodyDocs } from '@orbis/shared/doc/diff';
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { invalidateGraph } from '../../lib/invalidate';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
@@ -49,6 +58,9 @@ import {
   type ReplacedReason,
   rowLabel,
 } from '../chat/cards/proposal-text';
+import { EditorShell } from '../entity-editor/EditorShell';
+import { sameDoc } from '../entity-editor/strip-ids';
+import type { BodyDoc } from '../entity-editor/useBodySave';
 import { AspectField, coerce, isScalar, readOnlyText } from './AspectCards';
 
 type DetailEntity = RouterOutputs['entity']['get']['entity'];
@@ -57,6 +69,28 @@ type ProposalView = RouterOutputs['routine']['proposalsForEntity'][number];
 type FieldEdit = NonNullable<
   NonNullable<RouterInputs['routine']['decideProposal']['edits']>['fields']
 >[number];
+/** Правка тела — форма входа `decideProposal.edits.body`: тело едет ДОКУМЕНТОМ (Ш1.11). */
+type BodyEdit = NonNullable<
+  NonNullable<RouterInputs['routine']['decideProposal']['edits']>['body']
+>[number];
+
+/**
+ * Пауза клиентского пересчёта диффа в режиме правки (Ш1.2).
+ *
+ * Пересчёт НА ШТРИХ отменил бы замеренное решение экрана записи: показанный документ живёт
+ * там в рефе именно потому, что перерисовка на каждое нажатие стоит +3 мс (DetailScreen,
+ * замер на теле из сорока блоков), а сам `diffBodyDocs` на худшем реальном теле — 21 мс.
+ * Правленый документ поэтому копится в рефе, а дифф считается, когда владелец остановился.
+ */
+const DIFF_PAUSE_MS = 400;
+
+/**
+ * Форма документа в кэше и в payload'е уже, чем `BodyDoc` (Record против JSONContent) — сводим
+ * приведением, тем же, что у тела записи (`asBodyDoc` в DetailScreen).
+ */
+function asBodyDoc(stored: { v: number; doc: unknown }): BodyDoc {
+  return { v: stored.v, doc: stored.doc as BodyDoc['doc'] };
+}
 
 /**
  * Ключ строки предложения — та же тройка, которой строки адресует и сервер
@@ -93,6 +127,20 @@ function editableRow(op: ProposalRow): boolean {
  */
 function valueText(value: unknown): string {
   return isScalar(value) ? fmt(value) : readOnlyText(value);
+}
+
+/**
+ * Тело записи «сейчас» — сторона «было» клиентского диффа (Ш1.2). Берётся из УЖЕ загруженного
+ * ответа экрана (`DETAIL_INCLUDE` просит `bodyDoc` всегда), поэтому второй сети режим правки
+ * не стоит вовсе.
+ *
+ * `null` — документа у записи нет. Случай не штатный (сервер собирает документ даже для
+ * записей без колонки, `readBodyDoc`), но по wire-схеме возможен, и тогда правка тела не
+ * открывается: сравнивать набранное было бы не с чем, а показанный серверный дифф под
+ * редактором с чужим текстом врал бы.
+ */
+function currentBodyDoc(entity: DetailEntity): BodyDoc['doc'] | null {
+  return entity.bodyDoc == null ? null : asBodyDoc(entity.bodyDoc).doc;
 }
 
 /** Русское согласование числа: «1 правка», «2 правки», «5 правок». */
@@ -171,6 +219,7 @@ export function ProposalOverlay({
           key={view.pendingId}
           view={view}
           entityId={entity.id}
+          currentDoc={currentBodyDoc(entity)}
           open={expanded.includes(view.pendingId)}
           // Пока список перечитывается, решать нельзя ни по одной плашке: между ответом
           // сервера и приездом нового списка кнопка «Принять» ещё жива, и второй клик ушёл бы
@@ -199,6 +248,7 @@ export function ProposalOverlay({
 function ProposalPlate({
   view,
   entityId,
+  currentDoc,
   open,
   busy: listBusy,
   onToggle,
@@ -206,6 +256,8 @@ function ProposalPlate({
 }: {
   view: ProposalView;
   entityId: string;
+  /** Тело записи «сейчас» — сторона «было» клиентского диффа; `null` — документа нет. */
+  currentDoc: BodyDoc['doc'] | null;
   open: boolean;
   /** Список перечитывается — решать нельзя ни по одной плашке (см. вызов). */
   busy: boolean;
@@ -223,6 +275,32 @@ function ProposalPlate({
   const [edits, setEdits] = useState<Record<string, FieldEdit>>({});
   /** Расхождения ПОСЛЕДНЕГО нажатия «Принять» — в сыром виде, как их вернул сервер. */
   const [mismatches, setMismatches] = useState<Mismatch[] | null>(null);
+
+  /**
+   * Правленые ДОКУМЕНТЫ тела по номеру операции — В РЕФЕ, а не в состоянии, и это замер, а не
+   * вкус: новый `doc` на каждый штрих означал бы перерисовку плашки, эффект приезда в
+   * `BodyEditor` и сравнение по смыслу двух целых документов на КАЖДОЕ нажатие (замер экрана
+   * записи: 7.6–8.1 мс против 4.75–4.88). Реф живёт в ПЛАШКЕ, а не в строке: свернул плашку —
+   * строки размонтировались, а набранное обязано пережить это ровно так же, как переживает
+   * буфер правок значений.
+   */
+  const bodyEditsRef = useRef(new Map<number, BodyDoc>());
+  /**
+   * Клиентский дифф по номеру операции — состояние (его показывают), считается по паузе.
+   * Тоже в плашке: иначе сворачивание уносило бы картинку, и под редактором с набранным
+   * текстом снова вставал бы СЕРВЕРНЫЙ дифф, описывающий не то, что в редакторе.
+   */
+  const [bodyDiffs, setBodyDiffs] = useState<Record<number, BodyDiffResult>>({});
+  /** Какие строки тела открыты редактором. Переживает сворачивание по той же причине. */
+  const [editingBody, setEditingBody] = useState<readonly number[]>([]);
+  /** Отложенный пересчёт диффа — по таймеру на строку (см. DIFF_PAUSE_MS). */
+  const diffTimers = useRef(new Map<number, number>());
+  useEffect(
+    () => () => {
+      for (const id of diffTimers.current.values()) clearTimeout(id);
+    },
+    [],
+  );
 
   const decide = trpc.routine.decideProposal.useMutation({
     onSuccess: (result) => {
@@ -272,16 +350,67 @@ function ProposalPlate({
   const fieldEdits = Object.values(edits);
   const busy = decide.isPending || listBusy;
 
+  /**
+   * Правленый документ пришёл из редактора строки: кладём в буфер и заводим паузу пересчёта.
+   *
+   * Порядок важен: документ в реф — СРАЗУ, дифф — потом. «Принять», нажатое до истечения
+   * паузы, обязано послать последний набранный текст, а не тот, до которого успел досчитаться
+   * показ, — поэтому решение не ждёт диффа и кнопки на время паузы не гасятся.
+   */
+  function onBodyChange(index: number, next: BodyDoc): void {
+    bodyEditsRef.current.set(index, next);
+    if (currentDoc === null) return;
+    const timers = diffTimers.current;
+    const pending = timers.get(index);
+    if (pending !== undefined) clearTimeout(pending);
+    timers.set(
+      index,
+      window.setTimeout(() => {
+        setBodyDiffs((all) => ({ ...all, [index]: diffBodyDocs(currentDoc, next.doc) }));
+      }, DIFF_PAUSE_MS),
+    );
+  }
+
+  /**
+   * Правки тела к отправке. Документ, не отличающийся от предложенного ПО СМЫСЛУ, правкой не
+   * считается (Развилка 12): при монтировании редактор проставляет блочные id, и без снятия
+   * их `sameDoc`'ом каждое открытие редактора рождало бы новое предложение на пустом месте.
+   *
+   * Отличающийся уезжает КАК ЕСТЬ, вместе с блочными id: их исполнитель пишет не теряя, и
+   * «показано = применится» держится ровно на том, что в запись уедет этот самый документ, а
+   * не его пересборка.
+   */
+  function bodyEdits(): BodyEdit[] {
+    const out: BodyEdit[] = [];
+    for (const [index, edited] of bodyEditsRef.current) {
+      // Строк у одной операции бывает несколько (`index` у них общий), а документ — только у
+      // строки тела; поэтому ищем по наличию `proposedDoc`, а не по номеру.
+      const proposed = view.operations.find(
+        (op) => op.index === index && op.proposedDoc !== undefined,
+      )?.proposedDoc;
+      if (proposed !== undefined && sameDoc(edited.doc, asBodyDoc(proposed).doc)) continue;
+      out.push({ index, bodyDoc: edited as BodyEdit['bodyDoc'] });
+    }
+    return out;
+  }
+
   function send(decision: 'approve' | 'reject'): void {
     // `edits` уходят только с принятием и только непустыми: пустая правка — это ровно
     // сегодняшний путь (ни P2, ни лестницы, Развилка 12), и слать её значило бы плодить
-    // предложения на каждое нажатие.
-    const withEdits = decision === 'approve' && fieldEdits.length > 0;
+    // предложения на каждое нажатие. Пустые половины не досылаются по той же причине: у
+    // правки есть УСТОЙЧИВАЯ ЛИЧНОСТЬ (hash), и лишний ключ менял бы её без смысла.
+    const body = decision === 'approve' ? bodyEdits() : [];
+    const withEdits = decision === 'approve' && (fieldEdits.length > 0 || body.length > 0);
     decide.mutate({
       runId: view.runId,
       pendingId: view.pendingId,
       decision,
-      ...(withEdits && { edits: { fields: fieldEdits } }),
+      ...(withEdits && {
+        edits: {
+          ...(fieldEdits.length > 0 && { fields: fieldEdits }),
+          ...(body.length > 0 && { body }),
+        },
+      }),
     });
   }
 
@@ -333,6 +462,20 @@ function ProposalPlate({
                 <ProposalRowView
                   key={rowKey(op)}
                   op={op}
+                  entityId={entityId}
+                  hasCurrentDoc={currentDoc !== null}
+                  editing={editingBody.includes(op.index)}
+                  liveDiff={bodyDiffs[op.index]}
+                  onOpenEditor={() => setEditingBody((ids) => [...ids, op.index])}
+                  // Документ, с которого начинается правка: уже правленый, если владелец эту
+                  // строку трогал и свернул плашку, — иначе он увидел бы под своим текстом
+                  // текст рутины. Функцией, а не значением: строка снимает его РОВНО ОДИН раз,
+                  // при первом рендере режима правки (см. startRef).
+                  startDoc={() =>
+                    bodyEditsRef.current.get(op.index) ??
+                    (op.proposedDoc === undefined ? null : asBodyDoc(op.proposedDoc))
+                  }
+                  onBodyChange={(next) => onBodyChange(op.index, next)}
                   edited={edits[rowKey(op)]?.value}
                   onEdit={(raw) =>
                     setEdits((prev) => ({
@@ -401,6 +544,22 @@ const FIELD_GRID =
   'grid grid-cols-[minmax(7rem,max-content)_1fr] items-center gap-x-3 gap-y-0.5 text-sm';
 
 /**
+ * Почему у строки тела нет кнопки «Править». Кнопка, которой нет, объясняется ЗДЕСЬ, а не
+ * молчанием: владелец, правивший тело в соседнем предложении, иначе решил бы, что сломалось.
+ *
+ * Причин ровно две, и они разные по сути:
+ *  - `NO_BODY_EDIT_HERE` — открывать нечем: сервер не довёл предложенное тело до документа
+ *    (`proposedDoc` есть только при построенном диффе и при `skipped: 'rewritten'`; при
+ *    `body_changed` разбор не начинался, при до-разборном `too_large` документ и есть то,
+ *    чего потолок не даёт построить). Причину саму по себе рядом печатает пометка диффа;
+ *  - `NO_BODY_EDIT_FOREIGN` — строка правит тело ДРУГОЙ записи. Документ есть, а «было» на
+ *    этом экране нет: клиентский дифф считать не от чего. У той записи свой слой с тем же
+ *    предложением — там текст и правится (её EntityRef стоит в этой же строке).
+ */
+const NO_BODY_EDIT_HERE = 'Текст здесь не правится';
+const NO_BODY_EDIT_FOREIGN = 'Текст правится на самой записи';
+
+/**
  * Одна строка предложения: чью запись трогаем, что именно и во что превращаем.
  *
  * Строк показываются ВСЕ, включая те, что правят соседнюю запись: принимается предложение
@@ -409,21 +568,67 @@ const FIELD_GRID =
  */
 function ProposalRowView({
   op,
+  entityId,
+  hasCurrentDoc,
+  editing,
+  liveDiff,
+  startDoc,
+  onOpenEditor,
+  onBodyChange,
   edited,
   onEdit,
 }: {
   op: ProposalRow;
+  /** Запись, на которой стоит слой: у ЕЁ тела есть сторона «было» для клиентского диффа. */
+  entityId: string;
+  hasCurrentDoc: boolean;
+  /** Строка тела открыта редактором (режим правки, Ш1.4). */
+  editing: boolean;
+  /** Клиентский дифф последней паузы — он перекрывает серверный, пока идёт правка (Ш1.2). */
+  liveDiff?: BodyDiffResult;
+  /** Документ, с которого начинается правка; зовётся РОВНО ОДИН раз (см. startRef). */
+  startDoc: () => BodyDoc | null;
+  onOpenEditor: () => void;
+  onBodyChange: (next: BodyDoc) => void;
   /** Значение из буфера правок, если владелец эту строку уже трогал. */
   edited?: unknown;
   onEdit: (raw: string) => void;
 }) {
+  /**
+   * Документ редактора — СНИМОК на вход в режим правки, и личность его больше не меняется.
+   *
+   * Меняйся она — эффект приезда `BodyEditor` гонял бы `sameDoc` двух целых документов на
+   * каждую перерисовку плашки (а перерисовывает её и правка значения соседней строки, и
+   * перечитка списка), а при снятом фокусе ещё и подменял бы содержимое редактора текстом
+   * рутины поверх набранного владельцем. Реф с ленивой инициализацией даёт стабильность
+   * по построению, без зависимостей и без useMemo, которому пришлось бы верить.
+   */
+  const startRef = useRef<BodyDoc | null>(null);
+  if (editing && startRef.current === null) startRef.current = startDoc();
+
   // Различие тела едет отдельным полем и только у строки тела живого предложения (Ш1.1):
   // `units` — дифф, `skipped` — прежняя форма плюс причина словами, отсутствие поля вовсе —
   // просто прежняя форма (это «диффа нет», а не «дифф не построен»).
-  const diff = op.bodyDiff;
+  // В режиме правки поверх серверного встаёт клиентский (Ш1.2): тело под руками, и серверный
+  // описывал бы уже не то, что в редакторе.
+  const diff = liveDiff ?? op.bodyDiff;
   const units = diff !== undefined && 'units' in diff ? diff.units : undefined;
   const skipped = diff !== undefined && 'skipped' in diff ? diff.skipped : undefined;
   const editable = editableRow(op);
+
+  // Тело правится тут же, если есть ЧТО открыть (документ предложенного тела) и С ЧЕМ
+  // сравнивать (тело этой записи). Обе половины — не формальность: см. NO_BODY_EDIT_HERE.
+  const bodyRow = op.field === 'body';
+  const ownBody = op.entity === undefined || op.entity.id === entityId;
+  const canEditBody = bodyRow && ownBody && hasCurrentDoc && op.proposedDoc !== undefined;
+  // Пометка — только у ЖИВОГО предложения (`bodyDiff` есть только у него): под решённым она
+  // обещала бы правку там, где решать уже нечего.
+  const noEditNote =
+    bodyRow && !canEditBody && op.bodyDiff !== undefined
+      ? ownBody
+        ? NO_BODY_EDIT_HERE
+        : NO_BODY_EDIT_FOREIGN
+      : undefined;
 
   return (
     <li className="flex flex-col gap-1 border-line/60 border-b pb-2 last:border-b-0 last:pb-0">
@@ -439,13 +644,36 @@ function ProposalRowView({
         {op.before !== undefined && (
           <span className="text-text-muted line-through">{beforeText(op.before)}</span>
         )}
+        {/* Кнопка одноходовая: обратно в «только дифф» уходить незачем — клиентский дифф
+            стоит тут же, под редактором, и показывает то же самое про набранный текст.
+            Второй же смысл («закрыть» = «отменить правку»?) пришлось бы объяснять. */}
+        {canEditBody && !editing && (
+          <Button variant="ghost" size="sm" onClick={onOpenEditor}>
+            Править
+          </Button>
+        )}
       </span>
+
+      {/* Редактор БЕЗ `useBodySave` и без черновиков (С8) и без `onAccept`: слой не сохраняет
+          ничего — граф двигает только «Принять». Правка начинается с ПРЕДЛОЖЕННОГО текста
+          (Ш1.4), `markdown` — он же: первый кадр рисуется из него, пока едет ленивый чанк
+          редактора. Провайдер записи стоит выше, у границы разворота, — query-блоки
+          предложенного текста получают контекст этой записи. */}
+      {editing && (
+        <EditorShell
+          doc={startRef.current}
+          // `after` строки предложения объявлен `unknown` (у строк значений там что угодно);
+          // у строки ТЕЛА это markdown, и проверка типа здесь — сужение, а не защита.
+          markdown={typeof op.after === 'string' ? op.after : ''}
+          onChange={onBodyChange}
+        />
+      )}
 
       {units !== undefined ? (
         // Полный дифф, со всеми единицами: это запись, а не лента, и контекстные `same` здесь
         // не шум, а то, по чему владелец узнаёт место правки (Развилка 10).
         <BodyDiffUnits units={units} />
-      ) : editable ? (
+      ) : editing ? null : editable ? (
         <dl className={FIELD_GRID}>
           <AspectField
             aspectId={op.aspect ?? ''}
@@ -465,6 +693,7 @@ function ProposalRowView({
       {skipped !== undefined && (
         <span className="text-text-muted text-xs">{BODY_DIFF_SKIP_NOTES[skipped]}</span>
       )}
+      {noEditNote !== undefined && <span className="text-text-muted text-xs">{noEditNote}</span>}
     </li>
   );
 }

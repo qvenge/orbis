@@ -4015,7 +4015,9 @@ const proposalFor = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function overlayHandler(opts: { proposals?: unknown[]; decide?: unknown } = {}): MockHandler {
+function overlayHandler(
+  opts: { proposals?: unknown[]; decide?: unknown; entity?: typeof entity } = {},
+): MockHandler {
   return (path, input) => {
     if (path === 'entity.get') {
       const { id } = input as { id: string };
@@ -4023,7 +4025,13 @@ function overlayHandler(opts: { proposals?: unknown[]; decide?: unknown } = {}):
       // Заголовок рутины (и заголовки задетых записей) слой дочитывает тем же EntityRef,
       // что и вся остальная разметка, — своим per-id ключом.
       if (routine !== undefined) return { entity: { id, title: routine } };
-      return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
+      // Запись подменяема: клиентский дифф режима правки (Ш1.2) считается от `entity.bodyDoc`,
+      // и тестам правки нужно СВОЁ тело, отличимое от предложенного.
+      return {
+        entity: opts.entity ?? entity,
+        relations: [],
+        thread: { threadId: 'th1', messages: [] },
+      };
     }
     if (path === 'routine.proposalsForEntity') return opts.proposals ?? [proposalFor()];
     if (path === 'routine.decideProposal')
@@ -4294,5 +4302,233 @@ describe('слой предложения', () => {
     togglePlate(plate);
     expect(within(plate).queryByTestId('proposal-edited')).toBeNull();
     expect(plate).not.toHaveTextContent('Правка владельца');
+  });
+});
+
+// ─── Ш1.4 / Ш1.2: режим правки тела в слое предложения ───────────────────────────────────
+//
+// Владелец правит ПРЕДЛОЖЕННЫЙ текст прямо в слое — редактором, который начинается с
+// предложенного тела, а не с текущего («поправить предложение» не должно превращаться в
+// «написать заново»). Редактор монтируется БЕЗ `useBodySave` и без черновиков (С8):
+// автосохранение записало бы предложенный текст в саму запись с первого штриха и бампнуло
+// `updated_at` — предложение само сделало бы себя `stale`. Дифф в этом режиме пересчитывает
+// клиент (Ш1.2) — по ПАУЗЕ, а не на нажатие клавиши.
+
+/** Тело записи «сейчас»: сторона «было» клиентского диффа (`entity.bodyDoc`, DETAIL_INCLUDE). */
+const EDIT_CURRENT_BODY = 'Планы на день\n\nзабрать посылку';
+/** Предложенное тело: сторона «стало» до правки владельца. */
+const EDIT_PROPOSED_BODY = 'Планы на день\n\nпозвонить в клинику';
+
+/**
+ * Оба документа НАСТОЯЩИЕ (`parseBody`), а не подделанная форма: клиентский дифф считает их
+ * `diffBodyDocs`'ом по-настоящему, и фальшивое дерево дало бы зелёный тест на сломанном
+ * пересчёте.
+ */
+const EDIT_ENTITY = { ...entity, body: EDIT_CURRENT_BODY, bodyDoc: parseBody(EDIT_CURRENT_BODY) };
+
+/** Строка тела с ДОКУМЕНТОМ: только с ним слой открывает редактор (proposedDoc, Задача 7). */
+const editableBodyRow = (over: Record<string, unknown> = {}) =>
+  overlayBodyRow({
+    after: EDIT_PROPOSED_BODY,
+    bodyDiff: { units: OVERLAY_DIFF_UNITS },
+    proposedDoc: parseBody(EDIT_PROPOSED_BODY),
+    ...over,
+  });
+
+const editableProposal = (rowOver: Record<string, unknown> = {}) =>
+  proposalFor({ operations: [editableBodyRow(rowOver)] });
+
+function editHandler(over: Record<string, unknown> = {}): MockHandler {
+  return overlayHandler({ proposals: [editableProposal(over)], entity: EDIT_ENTITY });
+}
+
+/** Плашка развёрнута, режим правки включён, редактор слоя поднят касанием его первого кадра. */
+async function openBodyEditor(): Promise<{ plate: HTMLElement; field: HTMLElement }> {
+  const plate = await screen.findByTestId('proposal-plate');
+  togglePlate(plate);
+  fireEvent.click(await within(plate).findByRole('button', { name: 'Править' }));
+  // Тот же двухфазный подъём, что у тела записи: первый кадр — разметкой, редактор — по
+  // касанию (простой в этих тестах заглушён, см. beforeEach).
+  fireEvent.click(within(plate).getByTestId('editor-preview'));
+  await within(plate).findByTestId('body-editor', undefined, EDITOR_READY);
+  const field = () => within(plate).getByTestId('body-editor').querySelector('[contenteditable]');
+  await waitFor(() => expect(field()).not.toBeNull(), EDITOR_READY);
+  return { plate, field: field() as HTMLElement };
+}
+
+/** Вход последнего решения — то, что слой реально послал серверу. */
+function decideInput(calls: { path: string; input: unknown }[]): Record<string, unknown> {
+  const call = calls.find((c) => c.path === 'routine.decideProposal');
+  if (call === undefined) throw new Error('decideProposal не вызывался');
+  return call.input as Record<string, unknown>;
+}
+
+describe('режим правки тела в слое', () => {
+  test('открыть редактор слоя и уйти без «Принять» → ни одной мутации, updated_at не сдвинут, нового предложения нет (приёмка 8)', async () => {
+    const { calls, unmount } = renderWithProviders(<DetailScreen entityId="e1" />, editHandler());
+    const { plate, field } = await openBodyEditor();
+    await userEvent.type(field, ' срочно');
+    await waitFor(
+      () => expect(within(plate).getByTestId('body-editor')).toHaveTextContent('срочно'),
+      EDITOR_READY,
+    );
+
+    // `updated_at` двигает СЕРВЕР и только на принятом `entity.update` — значит «не сдвинут»
+    // проверяется журналом вызовов, а не отдельным полем. Нового предложения нет по той же
+    // причине: его рождает лестница правки, а её зовёт только `decideProposal`.
+    const mutations = () =>
+      calls.filter((c) => c.path === 'entity.update' || c.path === 'routine.decideProposal');
+    expect(mutations()).toEqual([]);
+
+    // Уход с записи — размонтирование. У тела записи здесь дослал бы отложенное `useBodySave`
+    // (`flush` на размонтировании); у редактора слоя досылать нечему — хука нет вовсе (С8).
+    unmount();
+    expect(mutations()).toEqual([]);
+    // Порог — как у соседних тестов с редактором в этом файле: монтирование стоит ленивого
+    // чанка и первой сборки схемы ProseMirror, а в полном прогоне web идёт четырьмя воркерами
+    // рядом с серверным сьютом. Дефолтные 5 с там означают уже не «дерево не готово», а
+    // голодание по CPU (тот же довод, что у EDITOR_READY).
+  }, 30_000);
+
+  test('правка в редакторе + «Принять» → decideProposal с edits.body[0].bodyDoc — документом редактора (приёмка 5)', async () => {
+    const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, editHandler());
+    const { plate, field } = await openBodyEditor();
+    await userEvent.type(field, ' срочно');
+    await waitFor(
+      () => expect(within(plate).getByTestId('body-editor')).toHaveTextContent('срочно'),
+      EDITOR_READY,
+    );
+
+    fireEvent.click(within(plate).getByRole('button', { name: 'Принять' }));
+    await waitFor(() => expect(decideInput(calls).edits).toBeDefined());
+    const edits = decideInput(calls).edits as {
+      body?: { index: number; bodyDoc: BodyDoc }[];
+      fields?: unknown[];
+    };
+    const body = edits.body ?? [];
+    expect(body).toHaveLength(1);
+    // Адрес — номер ОПЕРАЦИИ предложения: тело у сущности одно, и большего адреса не нужно.
+    expect(body[0]?.index).toBe(0);
+    // Едет ровно то, что показывал редактор (приёмка 5): текст сверяем проекцией документа.
+    const sent = body[0]?.bodyDoc as BodyDoc;
+    expect(serializeBody(sent)).toContain('срочно');
+    expect(serializeBody(sent)).toContain('позвонить в клинику');
+    // Блочные id уходят КАК ЕСТЬ — исполнитель пишет их не теряя, и «показано = применится»
+    // держится на том, что в запись уедет ровно этот документ, а не его пересборка.
+    expect(JSON.stringify(sent)).toContain('"id"');
+    // Правок значений в этом предложении нет — пустой список не досылается.
+    expect(edits.fields).toBeUndefined();
+  }, 30_000);
+
+  test('открыл редактор, ничего не изменил → edits.body ПУСТ, даже когда правка была и её отменили (sameDoc-гейт, Развилка 12)', async () => {
+    // Половина первая: редактор просто открыт. Простановка блочных id при монтировании
+    // правкой не считается — иначе каждое открытие редактора плодило бы новое предложение.
+    const first = renderWithProviders(<DetailScreen entityId="e1" />, editHandler());
+    const opened = await openBodyEditor();
+    fireEvent.click(within(opened.plate).getByRole('button', { name: 'Принять' }));
+    await waitFor(() =>
+      expect(first.calls.some((c) => c.path === 'routine.decideProposal')).toBe(true),
+    );
+    expect(decideInput(first.calls)).toEqual({
+      runId: 'run1',
+      pendingId: 'p1',
+      decision: 'approve',
+    });
+    first.unmount();
+
+    // Половина вторая — та, ради которой гейт и написан: набрал и отменил. `onChange` редактора
+    // уже прилетел, документ в буфере ЕСТЬ, и отличается он от предложенного только блочными
+    // id. Не отсеки его `sameDoc` — «Принять» рождало бы P2 на пустом месте.
+    //
+    // Отменяем ИМЕННО Ctrl+Z, а не Backspace: куда попадёт каретка в jsdom, приложение не
+    // решает (posAtCoords там не работает НИКОГДА, а отложенный кадр Tiptap вправе переставить
+    // её в конец — про это же предупреждает expectEditorHas). Backspace на этом и поплыл:
+    // прогон, где «X» встал в начало, стёр последнюю букву ПОСЛЕДНЕГО блока — тест краснел
+    // через раз. Отмена же возвращает документ целиком и от каретки не зависит вовсе.
+    const second = renderWithProviders(<DetailScreen entityId="e1" />, editHandler());
+    const undone = await openBodyEditor();
+    await userEvent.type(undone.field, 'X');
+    await waitFor(
+      () => expect(within(undone.plate).getByTestId('body-editor')).toHaveTextContent('X'),
+      EDITOR_READY,
+    );
+    await userEvent.keyboard('{Control>}z{/Control}');
+    await waitFor(
+      () => expect(within(undone.plate).getByTestId('body-editor')).not.toHaveTextContent('X'),
+      EDITOR_READY,
+    );
+    // Премиса половины: текст предложения вернулся ЦЕЛИКОМ — иначе «правки нет» ниже значило
+    // бы лишь, что мы сравнили два одинаково испорченных документа.
+    expect(within(undone.plate).getByTestId('body-editor')).toHaveTextContent(
+      'позвонить в клинику',
+    );
+
+    fireEvent.click(within(undone.plate).getByRole('button', { name: 'Принять' }));
+    await waitFor(() =>
+      expect(second.calls.some((c) => c.path === 'routine.decideProposal')).toBe(true),
+    );
+    expect(decideInput(second.calls)).toEqual({
+      runId: 'run1',
+      pendingId: 'p1',
+      decision: 'approve',
+    });
+    // Два редактора за один тест — вдвое дороже соседей; порог тот же, см. приёмку 8 выше.
+  }, 30_000);
+
+  test('клиентский дифф пересчитывается по ПАУЗЕ ввода, а не на каждый штрих', async () => {
+    renderWithProviders(<DetailScreen entityId="e1" />, editHandler());
+    const { plate, field } = await openBodyEditor();
+    const diff = () => within(plate).getByTestId('proposal-body-diff');
+    // До правки на экране СЕРВЕРНЫЙ дифф — тот, что приехал со строкой предложения.
+    expect(diff()).toHaveTextContent('забрать посылку');
+    expect(diff()).not.toHaveTextContent('срочно');
+
+    /**
+     * Проверяется ВРЕМЯ, а не отсутствие текста сразу после набора, и это не обходной путь.
+     *
+     * Поддельные часы здесь не работают: `user.type` под ними виснет (замерено — прогон
+     * умирает по таймауту теста), а отрицательный ассерт «через мгновение после набора диффа
+     * ещё нет» на настоящих часах зависел бы от того, успела ли машина за 400 мс, — то есть
+     * краснел бы под нагрузкой без единой поломки в коде.
+     *
+     * Ожидание же по нижней границе устойчиво в правильную сторону: медленная машина время
+     * только УВЕЛИЧИВАЕТ. А пересчёт на каждый штрих дал бы дифф прямо в ходе набора, то есть
+     * за единицы миллисекунд, — и ассерт покраснел бы именно на нём (пробито мутацией:
+     * пересчёт без паузы дал 123 мс против требуемых 400). Число выписано здесь, а не взято
+     * из модуля: это договор, и с импортом константы тест ехал бы за реализацией.
+     */
+    const started = Date.now();
+    await userEvent.type(field, ' срочно');
+    await waitFor(() => expect(diff()).toHaveTextContent('срочно'), EDITOR_READY);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(400);
+    // Дифф именно КЛИЕНТСКИЙ: считан от тела ЗАПИСИ, поэтому её строка осталась удалённой.
+    expect(diff()).toHaveTextContent('забрать посылку');
+  }, 30_000);
+
+  test('тело открыть нечем → кнопки «Править» нет и сказано почему: изменилось после составления / правится на своей записи', async () => {
+    // Разбор тела не начинался (`body_changed`), документа нет — открывать нечего. Пометка
+    // остаётся, кнопки решения живы (приёмки 12 и 16), но текст здесь не правится.
+    const changed = renderWithProviders(
+      <DetailScreen entityId="e1" />,
+      editHandler({ bodyDiff: { skipped: 'body_changed' }, proposedDoc: undefined }),
+    );
+    let plate = await screen.findByTestId('proposal-plate');
+    togglePlate(plate);
+    expect(within(plate).queryByRole('button', { name: 'Править' })).toBeNull();
+    expect(within(plate).getByText('Тело изменилось после составления')).toBeInTheDocument();
+    expect(within(plate).getByText('Текст здесь не правится')).toBeInTheDocument();
+    expect(within(plate).getByRole('button', { name: 'Принять' })).toBeInTheDocument();
+    changed.unmount();
+
+    // Строка тела СОСЕДНЕЙ записи: документ есть, а тела «было» на этом экране нет — дифф
+    // считать не от чего, и правится такой текст на своей записи, где у него свой слой.
+    renderWithProviders(
+      <DetailScreen entityId="e1" />,
+      editHandler({ entity: { id: 'e2', title: 'Соседняя' } }),
+    );
+    plate = await screen.findByTestId('proposal-plate');
+    togglePlate(plate);
+    expect(within(plate).queryByRole('button', { name: 'Править' })).toBeNull();
+    expect(within(plate).getByText('Текст правится на самой записи')).toBeInTheDocument();
   });
 });
