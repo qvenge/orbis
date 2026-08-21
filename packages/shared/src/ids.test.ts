@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  answerMessageId,
   batchAuditMessageId,
   entityThreadId,
   globalThreadId,
@@ -11,8 +12,10 @@ import {
   memoryRuleSuggestionId,
   newId,
   ORBIS_NAMESPACE,
+  pendingMessageId,
   postFinancialBatchId,
   processingMessageId,
+  questionStaleMessageId,
   recurringInstanceId,
   rejectMessageId,
   routineRunBatchId,
@@ -66,6 +69,34 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
     // …и с формулой инстансов серии (тот же шаблон id + дата) тоже не пересекаются
     expect(id).not.toBe(recurringInstanceId(routine, '2026-08-18'));
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+  test('answerMessageId/questionStaleMessageId (D42 ОЧ.9): детерминированы, регистр входа не значим, судьбы вопроса не пересекаются ни между собой, ни с pending/reject', () => {
+    const owner = '00000000-0000-4000-8000-00000000000A';
+    const pending = '019A0000-0000-7000-8000-000000000001';
+    const other = '019A0000-0000-7000-8000-000000000002';
+    const answer = answerMessageId(owner, pending);
+    const stale = questionStaleMessageId(owner, pending);
+
+    expect(answer).toBe(answerMessageId(owner.toLowerCase(), pending.toLowerCase()));
+    expect(answer).toBe(answerMessageId(owner.toUpperCase(), pending.toUpperCase()));
+    expect(stale).toBe(questionStaleMessageId(owner.toLowerCase(), pending.toLowerCase()));
+    expect(answer).not.toBe(answerMessageId(owner, other));
+    expect(stale).not.toBe(questionStaleMessageId(owner, other));
+
+    // Две судьбы ОДНОГО вопроса — две разные строки: совпади PK, гашение садилось бы
+    // поверх ответа и правило «первая судьба финальна» держать было бы нечем
+    expect(answer).not.toBe(stale);
+    // …и ни одна не садится на PK самой карточки вопроса (её id = pendingId) и на PK
+    // отказа действия: пространства ключей ids.ts не пересекаются по построению (:184-188)
+    expect(answer).not.toBe(pending.toLowerCase());
+    expect(stale).not.toBe(pending.toLowerCase());
+    expect(answer).not.toBe(pendingMessageId(owner, pending));
+    expect(stale).not.toBe(pendingMessageId(owner, pending));
+    expect(answer).not.toBe(rejectMessageId(owner, pending));
+    expect(stale).not.toBe(rejectMessageId(owner, pending));
+
+    expect(answer).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(stale).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
   test('manualBucket: ручной запуск отличим от слота расписания по префиксу', () => {
     expect(manualBucket('2026-08-18T09:12:00.000Z')).toBe('manual:2026-08-18T09:12:00.000Z');

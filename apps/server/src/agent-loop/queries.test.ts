@@ -5,7 +5,7 @@
 // отбор по паре (routine_id, bucket), порядок истории и то, что подметание с раннером
 // не увидят чужого (архивной, приостановленной рутины).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { newId } from '@orbis/shared';
+import { newId, type RunSummary } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
@@ -244,6 +244,39 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
     });
   });
 
+  test('undecided едет в сводку только как true (D42 ОЧ.6): при false ключа в сводке нет', async () => {
+    const owner = freshUserId();
+    const routineId = await seedRoutine(owner, { title: 'Рутина пачки' });
+    const open = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-17T07:00',
+      run: { outcome: 'finished', finished_at: iso(T0), undecided: true },
+    });
+    // Разобранная пачка: в АСПЕКТЕ флажок живёт значением false (снятие — запись, а не
+    // удаление ключа: предиката «поля нет» у грамматики §6 нет)
+    const decided = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-17T07:00',
+      attempt: 2,
+      startedAt: new Date(T0.getTime() + 5 * MINUTE),
+      run: { outcome: 'finished', finished_at: iso(T0), undecided: false },
+    });
+
+    const rows = await withIdentity(db, owner, (tx) =>
+      runsForBucket(tx, routineId, '2026-08-17T07:00'),
+    );
+    const summaryOf = (runId: string): RunSummary => {
+      const row = rows.find((x) => x.id === runId);
+      if (row === undefined) throw new Error('прогон не найден');
+      return runSummary(row);
+    };
+
+    expect(summaryOf(open.runId).undecided).toBe(true);
+    // …а в СВОДКЕ false не едет вовсе: читателю истории «разобрано» и «пачки не было»
+    // неразличимы, и ключ-пустышка заставлял бы его различать несуществующее
+    expect('undecided' in summaryOf(decided.runId)).toBe(false);
+  });
+
   test('грантовая сводка рутинных ключей не заводит: `?` значит «этого не было»', async () => {
     const owner = freshUserId();
     const ticket = await seedEntity(owner, {
@@ -277,5 +310,6 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
     expect('attempt' in summary).toBe(false);
     expect('fail_note' in summary).toBe(false);
     expect('proposal' in summary).toBe(false);
+    expect('undecided' in summary).toBe(false);
   });
 });

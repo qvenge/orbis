@@ -69,6 +69,23 @@ export const checkpointInput = z
   })
   .strict();
 
+/**
+ * Вопрос пачки: прогон НЕ останавливается (D42 ОЧ.5), в отличие от чекпойнта. Владелец
+ * разбирает вопрос постфактум, поэтому у входа нет ключа идемпотентности `id`: он не может
+ * прийти от модели — повтор того же вопроса обязан сойтись в ту же карточку по СОДЕРЖИМОМУ
+ * (ОЧ.9), а не по ключу, который модель вольна выдумать заново.
+ *
+ * `options` — до четырёх готовых ответов кнопками; список, не помещающийся на экран, —
+ * это требование довериться, а не выбор.
+ */
+export const askInput = z
+  .object({
+    run_id: z.string().uuid(),
+    question: z.string().min(1).max(4000),
+    options: z.array(z.string().min(1).max(200)).max(4).optional(),
+  })
+  .strict();
+
 /** Итог прогона: «готово, проверь» (С8) — тикет закрывает не агент. */
 export const finishInput = z
   .object({
@@ -85,6 +102,7 @@ export type MyQueueInput = z.infer<typeof myQueueInput>;
 export type ClaimTaskInput = z.infer<typeof claimTaskInput>;
 export type RunStepInput = z.infer<typeof runStepInput>;
 export type CheckpointInput = z.infer<typeof checkpointInput>;
+export type AskInput = z.infer<typeof askInput>;
 export type FinishInput = z.infer<typeof finishInput>;
 
 /**
@@ -111,6 +129,11 @@ export interface RunSummary {
   bucket?: string;
   attempt?: number;
   fail_note?: string;
+  // Пачка прогона осталась неразобранной (D42 ОЧ.6). В сводку едет ТОЛЬКО `true`: в аспекте
+  // снятое значение живёт как `false` (снятие — запись, не удаление ключа), но читателю
+  // истории «разобрано» и «пачки не было» неразличимы, и ключ-пустышка заставлял бы его
+  // различать несуществующее — та же конвенция `?`, что у ticket_id в CheckpointResult.
+  undecided?: true;
   // `edited_from` едет вместе со статусом (Ш1.8): «принято» и «принято с правками» —
   // разная обратная связь, и без этого поля следующий прогон предложил бы то же слово в
   // слово. Расхождения (`mismatches`) в сводку по-прежнему не едут.
@@ -180,6 +203,20 @@ export interface CheckpointResult {
   ticket_id?: string;
   ticket_status?: 'waiting';
   action_id: string;
+}
+
+/**
+ * Ответ `orbis_ask` (D42 ОЧ.5). `pending_id` — честный id заведённой карточки-вопроса, а не
+ * pending-ответ глагола: прогон продолжается, и модель вольна спросить ещё.
+ *
+ * `replayed` — повтор того же вопроса в том же прогоне: карточка одна, вторая не заведена
+ * (ключ идемпотентности выводится из содержимого, ОЧ.9). Без этого признака модель не
+ * отличила бы «спросил» от «уже спрашивал» и зациклилась бы на одном вопросе.
+ */
+export interface AskResult {
+  run_id: string;
+  pending_id: string;
+  replayed: boolean;
 }
 
 /**

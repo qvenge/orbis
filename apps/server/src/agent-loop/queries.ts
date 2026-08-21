@@ -391,6 +391,10 @@ export function runSummary(row: RunRow): RunSummary {
     ...(r.bucket !== undefined && { bucket: r.bucket }),
     ...(r.attempt !== undefined && { attempt: r.attempt }),
     ...(r.fail_note !== undefined && { fail_note: r.fail_note }),
+    // Пачка осталась неразобранной (D42 ОЧ.6). Снятый флажок лежит в аспекте значением
+    // `false`, но в сводку не едет: для читателя истории «разобрано» и «пачки не было» —
+    // одно и то же, а `undecided: false` заставляло бы его различать несуществующее.
+    ...(r.undecided === true && { undecided: true as const }),
     // Расхождения предусловия (proposal.mismatches) в сводку НЕ едут: это материал экрана
     // предложения, а в хвосте истории они раздували бы каждый ответ раннера чужим разбором.
     ...(r.proposal !== undefined && {

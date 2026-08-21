@@ -354,4 +354,22 @@ describe('orbis/agent-run V1 (V1.4)', () => {
     // Прогоны до Ш1 поля не несут вовсе — бэкфилла нет, и они обязаны остаться валидными
     expect(agentRunAspectSchema.safeParse({ ...base, proposal }).success).toBe(true);
   });
+
+  test('undecided: оба булевых значения валидны, отсутствие поля валидно, не-булево отвергается (D42 ОЧ.6)', () => {
+    expect(agentRunAspectSchema.safeParse({ ...base, undecided: true }).success).toBe(true);
+    // false — не мёртвое значение: снятие флажка — ЗАПИСЬ false, а не удаление ключа,
+    // иначе разобранную пачку нечем отличить от неразобранной (предиката «поля нет» у грамматики §6 нет)
+    expect(agentRunAspectSchema.safeParse({ ...base, undecided: false }).success).toBe(true);
+    // Прогоны до D42 флажка не несут вовсе — бэкфилла нет
+    expect(agentRunAspectSchema.safeParse({ ...base }).success).toBe(true);
+    expect(agentRunAspectSchema.safeParse({ ...base, undecided: 'yes' }).success).toBe(false);
+    // Каталог грамматики читает properties ВЕРХНЕГО уровня: бейдж и смарт-лист
+    // фильтруют прогоны по `undecided=true`, а вложенное поле было бы для запроса невидимо
+    const json = aspectJsonSchema('orbis/agent-run') as {
+      properties: Record<string, { type?: string }>;
+      required?: string[];
+    };
+    expect(json.properties.undecided?.type).toBe('boolean');
+    expect(json.required ?? []).not.toContain('undecided');
+  });
 });

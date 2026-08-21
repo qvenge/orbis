@@ -65,6 +65,29 @@ export function pendingMessageId(ownerId: string, batchId: string): string {
 }
 
 /**
+ * PK ответа владельца на вопрос пачки (D42 ОЧ.9). Судьбы вопроса — append-only сообщения,
+ * сама pending-запись не правится, поэтому «уже отвечено» видно только по существующей
+ * строке с этим PK: повтор того же ответа обязан быть replay'ем, а не второй записью и не
+ * CONFLICT'ом. Пространство `answer:` своё — см. урок ниже про непересечение.
+ */
+export function answerMessageId(ownerId: string, pendingId: string): string {
+  return uuidv5(`answer:${ownerId.toLowerCase()}:${pendingId.toLowerCase()}`, ORBIS_NAMESPACE);
+}
+
+/**
+ * PK гашения вопроса пачки следующим прогоном (D42 ОЧ.9). Отдельный ключ от ответа
+ * НАМЕРЕННО: судьба вопроса единственна («первая записанная финальна», ОЧ.8), и держится
+ * это правило перечиткой ОБОИХ PK под замком — совпади они, гашение садилось бы поверх
+ * ответа и различить две судьбы стало бы нечем.
+ */
+export function questionStaleMessageId(ownerId: string, pendingId: string): string {
+  return uuidv5(
+    `question-stale:${ownerId.toLowerCase()}:${pendingId.toLowerCase()}`,
+    ORBIS_NAMESPACE,
+  );
+}
+
+/**
  * PK системного маркера «ответ готовится» (ai.sendMessage): детерминирован по
  * client-UUID user-сообщения — конкурентный ретрай того же сообщения находит маркер
  * первого прогона и не запускает второй tool-цикл. Owner в формуле не нужен:
