@@ -59,10 +59,12 @@ import {
   acquirePendingLock,
   approvePending,
   createPending,
+  listRunUnits,
   type RejectReason,
   rejectedReason,
   rejectPending,
   rejectPendingTx,
+  stalePendingQuestion,
 } from '../policy/pending';
 import { wallClockIn } from '../recurring/materialize';
 import {
@@ -126,6 +128,13 @@ export interface RoutineDeps extends RoutineWriteDeps {
   locks?: RoutineLocks;
 }
 
+/**
+ * Итог гашения по ВСЕМ прошлым прогонам рутины. Числа погашенных ЕДИНИЦ пачки здесь нет
+ * намеренно (D42, рулинг Р0-5): читателя у него сегодня нет ни одного — раннер зовёт
+ * `supersedeOpen` ради самого гашения и результат не смотрит, — а расширять публичный
+ * результат без читателя значит заводить мёртвый контракт. Понадобится «погашено N
+ * отложек» в отчёте прогона — доедет одним полем, `closeOpenOfRun` его уже возвращает.
+ */
 export interface SupersedeResult {
   /** Сколько pending-предложений отклонено как «заменено». */
   superseded: number;
@@ -229,8 +238,9 @@ async function patchAspect(
 
 /**
  * Гасит незакрытое от ПРОШЛЫХ прогонов рутины (V1.8): непринятое предложение отклоняется
- * как «заменено», неотвеченный вопрос переходит в `stale`. Без этого к пятнице у владельца
- * четыре плана и три вопроса, и ни один не про сегодня.
+ * как «заменено», неотвеченный вопрос переходит в `stale`, а вся пачка единиц прошлого
+ * прогона — отложенные действия и вопросы — получает свои судьбы (D42 ОЧ.8). Без этого к
+ * пятнице у владельца четыре плана и три вопроса, и ни один не про сегодня.
  *
  * `exceptRunId` — текущий прогон: он единственный, кого гасить нельзя ни при каких
  * условиях (иначе раннер снял бы собственное предложение сразу после того, как подал его).
@@ -263,17 +273,39 @@ export async function supersedeOpen(
 }
 
 /**
+ * Текст судьбы ЕДИНИЦЫ пачки (D42 ОЧ.8, замечание С6 ревью спеки). Свой, а не
+ * `REJECT_CONTENT` из `policy/pending.ts`: тамошние строки писаны про предложение, и
+ * владелец, увидев «Предложение заменено новым прогоном» на отложенной АРХИВАЦИИ,
+ * прочитал бы неправду. Причина при этом та же самая — текст только представление, и
+ * второго источника правды о судьбе он не заводит (её читают `rejectedReason` и пачка).
+ *
+ * Ключей два, а не четыре: гашение знает ровно эти причины. `owner` пишет кнопка
+ * владельца, `edited` — лестница правки, и текст у них свой по месту.
+ */
+const UNIT_REJECT_CONTENT: Record<Extract<RejectReason, 'superseded' | 'stale'>, string> = {
+  superseded: 'Отложенное действие снято новым прогоном',
+  stale: 'Отложенное действие устарело: прогон откачен',
+};
+
+/**
  * Гашение открытого у ОДНОГО прогона — общее тело `supersedeOpen` (причина `superseded`:
  * рутина сработала заново) и отката прогона (rollback.ts, причина `stale`: прогон откачен,
- * его предложение и вопрос больше не о чём). Непринятое предложение отклоняется с этой
- * причиной и получает её статусом на прогоне; неотвеченный вопрос переходит в `stale` с
- * системной записью в тред рутины.
+ * его наследство больше не о чём).
+ *
+ * Гасится ТРОЙКА, а не «одно из двух» (D42 ОЧ.8): непринятое предложение получает причину
+ * в ленте и статусом на прогоне; терминальный вопрос переходит в `stale` с системной
+ * записью в тред рутины; вся ПАЧКА единиц прогона — отложенные действия и вопросы —
+ * получает свои судьбы со своими текстами (`closeUnitsOfRun`). Раньше первая же
+ * сработавшая ветка выходила из функции: у прогона могло быть либо предложение, либо
+ * вопрос, и третьего не было вовсе. Теперь может быть всё сразу — поэтому ветки идут
+ * подряд, а «гасить нечего» и CONFLICT обрывают ТОЛЬКО СВОЮ ветку.
  *
  * Порядок внутри пары «предложение»: СНАЧАЛА rejectPending, потом статус на прогоне.
  * Обратный порядок оставлял бы окно, в котором прогон уже говорит «заменено», а кнопка
  * «Принять» на карточке ещё работает — то есть владелец применил бы снятый план.
  * Обратная асимметрия безопасна: rejectPending идемпотентен (`alreadyRejected`), а
- * недописанный статус чинится следующим проходом.
+ * недописанный статус чинится следующим проходом. У единиц пачки — тот же порядок и тот
+ * же довод, только вместо статуса на прогоне у них общий флажок `undecided`.
  *
  * Снятое НЕ пропадает: оно остаётся в истории прогона (спека V1.8) — уходит только из
  * «ждут меня». Ничего не бросает: гашение — гигиена, и её сбой не повод не сделать работу
@@ -287,49 +319,50 @@ export async function closeOpenOfRun(
     runId: string;
     run: AgentRunAspect;
     reason: Extract<RejectReason, 'superseded' | 'stale'>;
-    /** Текст системной записи в тред рутины при снятии вопроса. */
+    /** Текст системной записи в тред рутины при снятии вопроса — он же текст судьбы вопросов пачки. */
     questionNote: string;
   },
-): Promise<{ proposal: boolean; question: boolean }> {
+): Promise<{ proposal: boolean; question: boolean; units: number }> {
   const { ownerId, routineId, runId, run, reason } = args;
-  const out = { proposal: false, question: false };
+  const out = { proposal: false, question: false, units: 0 };
   const now = deps.clock().toISOString();
 
   if (run.proposal?.status === 'pending') {
     const closed = await closeProposalOfRun(deps, { ownerId, proposal: run.proposal, reason });
-    // Гасить нечего: карточка исчезла, уже исполнена или решена ЧУЖОЙ причиной. Статус на
-    // прогоне пишет тот, чей reason стоит в reject-строке (она — источник правды, V1.8):
-    // наше «заменено» поверх его «отклонил» соврало бы владельцу про его же решение.
-    if (closed === null) return out;
-    // `proposal` — вложенный объект, а merge аспекта пополевой: патчим его целиком,
-    // иначе pending_id пропал бы вместе со ссылкой на карточку. Предусловие — тот же
-    // объект, каким мы его прочитали (сравнение по JSON-форме, executor.ts): вложенное
-    // поле `proposal.status` грамматика предусловий адресовать не умеет, а целый объект
-    // умеет — и если решение владельца легло между чтением и патчем, CONFLICT оставит
-    // его статус нетронутым.
-    const patched = await patchAspect(deps, {
-      ownerId,
-      id: runId,
-      aspect: 'orbis/agent-run',
-      patch: {
-        proposal: {
-          pending_id: closed.pendingId,
-          status: reason,
-          decided_at: now,
-          ...(closed.mismatches !== undefined && { mismatches: closed.mismatches }),
-          // Происхождение предложения не зависит от его судьбы (Ш1.8): погашенное
-          // родилось из правки владельца ровно так же, как живое, и потеряв поле здесь,
-          // мы оборвали бы цепочку «кто чей потомок» молча — патч типом не проверяется
-          ...(closed.editedFrom !== undefined && { edited_from: closed.editedFrom }),
+    // `null` — гасить нечего: карточка исчезла, уже исполнена или решена ЧУЖОЙ причиной.
+    // Статус на прогоне пишет тот, чей reason стоит в reject-строке (она — источник
+    // правды, V1.8): наше «заменено» поверх его «отклонил» соврало бы владельцу про его
+    // же решение. Ветка на этом кончается, но функция — нет: пачка ждёт своего гашения.
+    if (closed !== null) {
+      // `proposal` — вложенный объект, а merge аспекта пополевой: патчим его целиком,
+      // иначе pending_id пропал бы вместе со ссылкой на карточку. Предусловие — тот же
+      // объект, каким мы его прочитали (сравнение по JSON-форме, executor.ts): вложенное
+      // поле `proposal.status` грамматика предусловий адресовать не умеет, а целый объект
+      // умеет — и если решение владельца легло между чтением и патчем, CONFLICT оставит
+      // его статус нетронутым.
+      const patched = await patchAspect(deps, {
+        ownerId,
+        id: runId,
+        aspect: 'orbis/agent-run',
+        patch: {
+          proposal: {
+            pending_id: closed.pendingId,
+            status: reason,
+            decided_at: now,
+            ...(closed.mismatches !== undefined && { mismatches: closed.mismatches }),
+            // Происхождение предложения не зависит от его судьбы (Ш1.8): погашенное
+            // родилось из правки владельца ровно так же, как живое, и потеряв поле здесь,
+            // мы оборвали бы цепочку «кто чей потомок» молча — патч типом не проверяется
+            ...(closed.editedFrom !== undefined && { edited_from: closed.editedFrom }),
+          },
         },
-      },
-      precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [run.proposal] }],
-    });
-    if (patched.ok) out.proposal = true;
-    else if (patched.error.code !== 'CONFLICT') {
-      console.error(`[routines] статус «${reason}» не записан на ${runId}:`, patched.error.code);
+        precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [run.proposal] }],
+      });
+      if (patched.ok) out.proposal = true;
+      else if (patched.error.code !== 'CONFLICT') {
+        console.error(`[routines] статус «${reason}» не записан на ${runId}:`, patched.error.code);
+      }
     }
-    return out;
   }
 
   if (run.outcome === 'checkpoint') {
@@ -342,24 +375,124 @@ export async function closeOpenOfRun(
       // тогда снимать вопрос нельзя: ответ важнее нового прогона
       precondition: [{ aspect: 'orbis/agent-run', field: 'outcome', in: ['checkpoint'] }],
     });
-    if (!patched.ok) {
+    if (patched.ok) {
+      out.question = true;
+      await withIdentity(deps.db, ownerId, (tx) =>
+        appendSystemNote(tx, {
+          ownerId,
+          entityId: routineId,
+          content: args.questionNote,
+          metadata: { type: 'routine_stale', routine_id: routineId, run_id: runId },
+        }),
+      );
       // CONFLICT здесь — «владелец ответил, пока мы читали»: вопрос гасить уже нельзя
-      if (patched.error.code !== 'CONFLICT') {
-        console.error(`[routines] вопрос прогона ${runId} не снят:`, patched.error.code);
-      }
-      return out;
+    } else if (patched.error.code !== 'CONFLICT') {
+      console.error(`[routines] вопрос прогона ${runId} не снят:`, patched.error.code);
     }
-    out.question = true;
-    await withIdentity(deps.db, ownerId, (tx) =>
-      appendSystemNote(tx, {
-        ownerId,
-        entityId: routineId,
-        content: args.questionNote,
-        metadata: { type: 'routine_stale', routine_id: routineId, run_id: runId },
-      }),
-    );
+  }
+
+  const units = await closeUnitsOfRun(deps, args);
+  out.units = units.closed;
+
+  // Бухгалтерия пачки: разобранный прогон перестаёт числиться неразобранным. Условие
+  // двойное, потому что случая тоже два: погасили сами — флажок точно стоял; не погасили
+  // ничего, но флажок стоит — его не снял тот, кто решил последнюю единицу (сбой-лестница
+  // §5, признанная цена), и починить это обязан следующий проход. `complete:false` не
+  // снимает ничего: часть пачки могла остаться открытой, и «разобрано» было бы враньём.
+  if ((units.closed > 0 || run.undecided === true) && units.complete) {
+    // Снятие — ЗАПИСЬ `false`, а не удаление ключа: предиката «поля нет» у грамматики §6
+    // не существует, и запросом «разобранную пачку» иначе не отличить от неразобранной.
+    // Актор системный (§9.6, инвариант 5): пиши мы его от владельца, «отмени последнее»
+    // после «Принять» сняло бы флажок вместо действия (undoLast пропускает `system`).
+    const patched = await patchAspect(deps, {
+      ownerId,
+      id: runId,
+      aspect: 'orbis/agent-run',
+      patch: { undecided: false },
+      actor: { ...ACCOUNTING_ACTOR, runId },
+    });
+    if (!patched.ok) {
+      // Флажок — производная величина: не сняли сейчас — снимет следующее решение или
+      // гашение (лестница §5). Ронять из-за него настоящую работу нечем оправдать.
+      console.error(`[routines] флажок пачки не снят с ${runId}:`, patched.error.code);
+    }
   }
   return out;
+}
+
+/**
+ * Гашение ПАЧКИ одного прогона (D42 ОЧ.8): каждая ОТКРЫТАЯ единица получает свою судьбу —
+ * отложенное действие отклоняется причиной гашения и своим текстом (С6), вопрос переходит
+ * в `stale` тем же текстом, что уходит в тред при снятии терминального вопроса.
+ *
+ * Зовутся ОБЁРТКИ (`rejectPending(db, …)`, `stalePendingQuestion(db, …)`), а не tx-формы,
+ * и это не небрежность: обе берут СВОЙ advisory-замок по единице, и вызов изнутри чужой
+ * транзакции повис бы на нём до statement_timeout (докблок `rejectPending`). Открытой
+ * транзакции здесь нет — `closeOpenOfRun` принимает `deps`, а не `tx`, и единственная
+ * транзакция этой функции (чтение списка) закрывается ДО первого гашения. Понадобится
+ * когда-нибудь звать гашение из открытой транзакции — заводить tx-формы, а не «обходить».
+ *
+ * Атомарности между единицами нет и не обещается (инвариант §9.2): пачка — не батч, и
+ * крэш посреди обхода оставит часть погашенной, а остальное догасит следующий прогон.
+ *
+ * `complete:false` — обход не дошёл до конца (повреждённая pending-запись валит fail-closed
+ * `listRunUnits`, отказ БД): открытые единицы могли остаться, и флажок `undecided` снимать
+ * нельзя. Наружу при этом не бросаем — контракт `closeOpenOfRun` («ничего не бросает»)
+ * держится намеренно: сорванная гигиена не повод не запустить новый прогон и не откатить
+ * старый, а не погашенное владелец по-прежнему видит карточками в треде.
+ */
+async function closeUnitsOfRun(
+  deps: RoutineWriteDeps,
+  args: {
+    ownerId: string;
+    runId: string;
+    reason: Extract<RejectReason, 'superseded' | 'stale'>;
+    questionNote: string;
+  },
+): Promise<{ closed: number; complete: boolean }> {
+  const { ownerId, runId, reason } = args;
+  let closed = 0;
+  try {
+    // Порядок обхода — `created_at, id` самого `listRunUnits`: тай-брейк там не украшение,
+    // а условие того, что два обхода берут замки единиц в одном порядке (взаимоблокировка)
+    const units = await withIdentity(deps.db, ownerId, (tx) => listRunUnits(tx, ownerId, runId));
+    for (const unit of units) {
+      if (unit.fate !== 'open') continue;
+      if (unit.kind === 'action') {
+        const rejected = await rejectPending(deps.db, {
+          ownerId,
+          pendingId: unit.pendingId,
+          reason,
+          text: UNIT_REJECT_CONTENT[reason],
+        });
+        if (!rejected.ok) {
+          // «Уже исполнено» и «карточки нет»: единица решена или её в ленте больше нет —
+          // гасить нечего, и судьбу такой единицы пишет не гашение. Лог, а не отказ.
+          console.error(
+            `[routines] единица ${unit.pendingId} не погашена (${reason}):`,
+            rejected.error.code,
+          );
+          continue;
+        }
+        // Чужая причина старше нашей (владелец отклонил сам, лестница правки): судьба уже
+        // записана, и в счёт погашенного эта единица не идёт
+        if (!rejected.alreadyRejected) closed += 1;
+      } else {
+        // `staled:false` — либо вопрос отвечен (ОТВЕТ ВАЖНЕЕ ГАШЕНИЯ, ОЧ.8), либо погашен
+        // раньше. Различать эти два случая незачем: и там, и там судьба уже есть, и не наша
+        const staled = await stalePendingQuestion(deps.db, {
+          ownerId,
+          pendingId: unit.pendingId,
+          text: args.questionNote,
+        });
+        if (staled.staled) closed += 1;
+      }
+    }
+  } catch (e) {
+    console.error(`[routines] пачка прогона ${runId} погашена не вся (${reason}):`, e);
+    return { closed, complete: false };
+  }
+  return { closed, complete: true };
 }
 
 /**

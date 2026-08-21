@@ -4,6 +4,7 @@
 // тред рутины и хвост истории.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
+  type AgentRunAspect,
   entityThreadId,
   isManualBucket,
   newId,
@@ -14,13 +15,23 @@ import {
 import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { runsOfParent } from '../agent-loop/queries';
+import { rollbackRun } from '../agent-loop/rollback';
+import { closeRoutineRun, type VerbCtx } from '../agent-loop/verbs';
 import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { ROUTINE_RUNS_PER_DAY_KEY } from '../entitlements';
 import { execute } from '../executor/executor';
+import { makeChatJournalSink } from '../executor/journal';
 import type { ActionRecord } from '../executor/types';
 import { ScriptedProvider } from '../llm/scripted';
-import { createPending, rejectPending, rejectPendingTx } from '../policy/pending';
+import {
+  answerPendingQuestion,
+  approvePending,
+  createPending,
+  listRunUnits,
+  rejectPending,
+  rejectPendingTx,
+} from '../policy/pending';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool } from '../tools/dispatch';
 import {
@@ -32,6 +43,7 @@ import {
 import { buildEditedOperations, editsHash, editsSchema, type ProposalEdits } from './edits';
 import {
   appendSystemNote,
+  closeOpenOfRun,
   decideProposal,
   pauseIfFailing,
   type RoutineDeps,
@@ -331,6 +343,322 @@ describe('supersedeOpen: новый прогон гасит незакрытое
       await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: laterId }),
     ).toEqual({ superseded: 0, staled: 0 });
     expect((await aspectsOf(owner, asked.runId))['orbis/agent-run']?.outcome).toBe('stale');
+  });
+});
+
+describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)', () => {
+  /** Текст, с которым новый прогон снимает вопросы прошлого (тот же, что у supersedeOpen). */
+  const SUPERSEDE_NOTE = 'Вопрос прошлого прогона снят: рутина сработала заново';
+
+  /** Контекст внутреннего закрытия прогона раннером — им же ставится флажок `undecided`. */
+  function verbCtx(routineId: string): VerbCtx {
+    return {
+      db,
+      ownerId: owner,
+      subject: { kind: 'routine', routineId },
+      clock: () => T0,
+      sink: makeChatJournalSink(),
+    };
+  }
+
+  /**
+   * Вопрос-единица прогона НАСТОЯЩИМ путём (`orbis_ask` через диспатч), а не вставкой в
+   * ленту: гашение ищет единицы пробой по pending-записям, и сид мимо `createPending`
+   * проверял бы форму, которой в проде не бывает.
+   */
+  async function askUnit(routineId: string, runId: string, question: string): Promise<string> {
+    const r = await dispatchTool(
+      routineCtx(owner, 'act', [], {
+        routine: { id: routineId, runId, mode: 'act', allowedTools: new Set() },
+      }),
+      'orbis_ask',
+      { run_id: runId, question },
+    );
+    if (r.status !== 'ok') throw new Error(`askUnit: ${JSON.stringify(r)}`);
+    return (r.result as { pending_id: string }).pending_id;
+  }
+
+  /** Отложенное действие-единица тем же настоящим путём: архивация записи act-рутиной. */
+  async function deferUnit(
+    routineId: string,
+    runId: string,
+    title: string,
+  ): Promise<{ pendingId: string; targetId: string }> {
+    const target = await seedEntity(owner, {
+      title,
+      tags: [],
+      aspects: { 'orbis/task': { status: 'done' } },
+    });
+    const r = await dispatchTool(
+      routineCtx(owner, 'act', ['entity_update'], {
+        routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(['entity_update']) },
+      }),
+      'entity_update',
+      { id: target.id, archived: true },
+    );
+    if (r.status !== 'pending_confirmation') throw new Error(`deferUnit: ${JSON.stringify(r)}`);
+    return { pendingId: r.pendingId, targetId: target.id };
+  }
+
+  async function runAspect(runId: string): Promise<AgentRunAspect> {
+    return (await aspectsOf(owner, runId))['orbis/agent-run'] as unknown as AgentRunAspect;
+  }
+
+  async function unitsOf(runId: string) {
+    return withIdentity(db, owner, (tx) => listRunUnits(tx, owner, runId));
+  }
+
+  /** Строка ленты, записанная судьбой единицы: её ТЕКСТ владелец и читает (С6). */
+  async function ledgerRow(
+    probe: Record<string, unknown>,
+  ): Promise<{ content: string; metadata: Record<string, unknown> } | undefined> {
+    const json = JSON.stringify(probe);
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.execute(
+        sql`SELECT content, metadata FROM chat_messages WHERE metadata @> ${json}::jsonb LIMIT 1`,
+      ),
+    );
+    return (rows as unknown as Array<{ content: string; metadata: Record<string, unknown> }>)[0];
+  }
+
+  /** Бухгалтерские патчи, снявшие флажок с этого прогона: их должно быть ровно столько. */
+  async function clearingActions(runId: string): Promise<ActionRecord[]> {
+    return (await actionsOf(owner)).filter(
+      (a) => a.run_id === runId && JSON.stringify(a.operations).includes('"undecided":false'),
+    );
+  }
+
+  async function archivedOf(id: string): Promise<boolean | undefined> {
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
+    );
+    return rows[0]?.archived;
+  }
+
+  test('гасит СПИСОК: два вопроса + отложка + pending-предложение одного прогона; у единиц СВОИ тексты судеб, у предложения — прежний (С6, приёмка 8)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId, pendingId: proposalId } = await seedProposal(routineId, '2026-08-16T07:00');
+    // Предложение и пачка на ОДНОМ прогоне собраны нарочно: в проде режим рутины на прогон
+    // один, и вместе они не встретятся, — но гашение обязано пройти обе ветки И список, а
+    // не остановиться на первой сработавшей.
+    const first = await askUnit(routineId, runId, 'Переносить ли встречу с понедельника?');
+    const second = await askUnit(routineId, runId, 'Брать ли отчёт в работу сегодня?');
+    const defer = await deferUnit(routineId, runId, 'Прошлогодний отчёт');
+
+    const out = await closeOpenOfRun(deps(), {
+      ownerId: owner,
+      routineId,
+      runId,
+      run: await runAspect(runId),
+      reason: 'superseded',
+      questionNote: SUPERSEDE_NOTE,
+    });
+    expect(out).toEqual({ proposal: true, question: false, units: 3 });
+
+    // Предложение — прежним путём и прежним текстом: оно и правда предложение
+    expect((await proposalOf(runId)).status).toBe('superseded');
+    expect((await ledgerRow({ type: 'confirmation_rejected', rejects: proposalId }))?.content).toBe(
+      'Предложение заменено новым прогоном',
+    );
+    // А вот на отложенной архивации «Предложение снято новым прогоном» было бы неправдой
+    const deferRow = await ledgerRow({ type: 'confirmation_rejected', rejects: defer.pendingId });
+    expect(deferRow?.content).toBe('Отложенное действие снято новым прогоном');
+    expect((deferRow?.metadata as { reason?: string }).reason).toBe('superseded');
+    // Причина в metadata — прежний enum: текст только представление, второго источника
+    // правды о судьбе он не заводит
+    expect(await rejectReasonOf(defer.pendingId)).toBe('superseded');
+
+    for (const pendingId of [first, second]) {
+      expect((await ledgerRow({ type: 'question_stale', stales: pendingId }))?.content).toBe(
+        SUPERSEDE_NOTE,
+      );
+    }
+
+    // Открытых не осталось; отложенное действие ИСПОЛНЕНО не было — гашение его сняло
+    const units = await unitsOf(runId);
+    expect(units.map((u) => `${u.kind}:${u.fate}`).sort()).toEqual([
+      'action:rejected',
+      'question:stale',
+      'question:stale',
+    ]);
+    expect(await archivedOf(defer.targetId)).toBe(false);
+    // Порядок «сначала судьба pending, потом патч прогона»: статус на прогоне пишется
+    // ТОЛЬКО после успешного reject'а — иначе жила бы кнопка «Принять» под снятым планом
+    expect(await rejectReasonOf(proposalId)).toBe('superseded');
+  });
+
+  test('прогон с предложением И терминальным вопросом: гасятся ОБА — ранний return «либо-либо» снят (Р-5 разведки)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId, pendingId } = await seedProposal(routineId, '2026-08-16T08:00');
+    // Пара, которой прежний код не знал: он выходил из функции сразу после ветки
+    // предложения, и терминальный вопрос того же прогона оставался висеть на владельце
+    await patchRun(runId, {
+      outcome: 'checkpoint',
+      checkpoint: {
+        question: 'Без решения по бюджету дальше двигаться некуда — что делаем?',
+        asked_at: T0.toISOString(),
+      },
+    });
+
+    const out = await closeOpenOfRun(deps(), {
+      ownerId: owner,
+      routineId,
+      runId,
+      run: await runAspect(runId),
+      reason: 'superseded',
+      questionNote: SUPERSEDE_NOTE,
+    });
+    expect(out).toEqual({ proposal: true, question: true, units: 0 });
+    expect((await proposalOf(runId)).status).toBe('superseded');
+    expect(await rejectReasonOf(pendingId)).toBe('superseded');
+    expect((await runAspect(runId)).outcome).toBe('stale');
+    const note = (await threadRows(routineId)).find(
+      (r) => (r.metadata as { type?: string; run_id?: string }).type === 'routine_stale',
+    );
+    expect(note?.content).toBe(SUPERSEDE_NOTE);
+    // Единиц у прогона нет вовсе — снимать флажок нечем и незачем
+    expect((await runAspect(runId)).undecided).toBeUndefined();
+    expect(await clearingActions(runId)).toHaveLength(0);
+  });
+
+  test('гашение сняло undecided (запись false, актор {ai, system} + run_id); отвеченный вопрос гашение пережил — ответ важнее (приёмка 17)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-16T09:00' });
+    const answered = await askUnit(routineId, runId, 'Сдвигать ли дедлайн по отчёту?');
+    const open = await askUnit(routineId, runId, 'Кому отдать разбор писем?');
+    expect(
+      await answerPendingQuestion(db, { ownerId: owner, pendingId: answered, answer: 'сдвигай' }),
+    ).toEqual({ status: 'answered', pendingId: answered });
+    // Флажок ставит НАСТОЯЩИЙ его писатель — закрытие прогона (Задача 7), а не рука теста:
+    // снятие обязано работать ровно над тем, что оставляет пара «close-патч → гашение»
+    expect(
+      (
+        await closeRoutineRun(verbCtx(routineId), {
+          runId,
+          outcome: 'finished',
+          report: 'Разобрал день, вопросы оставил владельцу.',
+        })
+      ).status,
+    ).toBe('ok');
+    expect((await runAspect(runId)).undecided).toBe(true);
+
+    const out = await closeOpenOfRun(deps(), {
+      ownerId: owner,
+      routineId,
+      runId,
+      run: await runAspect(runId),
+      reason: 'superseded',
+      questionNote: SUPERSEDE_NOTE,
+    });
+    expect(out).toEqual({ proposal: false, question: false, units: 1 });
+
+    // Ответ важнее гашения: судьба отвеченного прежняя, строки гашения в ленте нет
+    const fates = new Map((await unitsOf(runId)).map((u) => [u.pendingId, u.fate]));
+    expect(fates.get(answered)).toBe('answered');
+    expect(fates.get(open)).toBe('stale');
+    expect(await ledgerRow({ type: 'question_stale', stales: answered })).toBeUndefined();
+
+    // Снятие — ЗАПИСЬ `false`, а не удаление ключа: предиката «поля нет» у грамматики §6
+    // нет, и разобранную пачку иначе нечем отличить запросом от неразобранной
+    expect((await runAspect(runId)).undecided).toBe(false);
+    const clearing = await clearingActions(runId);
+    expect(clearing).toHaveLength(1);
+    // §9.6: все писатели флажка — system, иначе «отмени последнее» после «Принять» снимало
+    // бы флажок вместо действия владельца (undoLast пропускает только system)
+    expect(clearing[0]?.actor_kind).toBe('ai');
+    expect(clearing[0]?.source).toBe('system');
+
+    // Повтор: гасить нечего и снимать нечего — второго бухгалтерского патча не появляется
+    expect(
+      await closeOpenOfRun(deps(), {
+        ownerId: owner,
+        routineId,
+        runId,
+        run: await runAspect(runId),
+        reason: 'superseded',
+        questionNote: SUPERSEDE_NOTE,
+      }),
+    ).toEqual({ proposal: false, question: false, units: 0 });
+    expect(await clearingActions(runId)).toHaveLength(1);
+  });
+
+  test('решённые единицы гашением не тронуты: исполненная пропущена, чужая причина отказа не перезаписана; флажок снят по «открытых не осталось»', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-16T10:00' });
+    const approved = await deferUnit(routineId, runId, 'Отчёт, который владелец согласился убрать');
+    const refused = await deferUnit(routineId, runId, 'Отчёт, который владелец решил оставить');
+    expect(
+      (
+        await closeRoutineRun(verbCtx(routineId), {
+          runId,
+          outcome: 'finished',
+          report: 'Две архивации отложил.',
+        })
+      ).status,
+    ).toBe('ok');
+    expect((await runAspect(runId)).undecided).toBe(true);
+
+    // Владелец разобрал пачку сам: одну единицу принял, вторую отклонил СВОЕЙ причиной
+    expect(
+      (await approvePending(db, { ownerId: owner, pendingId: approved.pendingId, clock: () => T0 }))
+        .ok,
+    ).toBe(true);
+    expect(
+      await rejectPending(db, { ownerId: owner, pendingId: refused.pendingId, reason: 'owner' }),
+    ).toMatchObject({ ok: true, alreadyRejected: false, reason: 'owner' });
+
+    const out = await closeOpenOfRun(deps(), {
+      ownerId: owner,
+      routineId,
+      runId,
+      run: await runAspect(runId),
+      reason: 'superseded',
+      questionNote: SUPERSEDE_NOTE,
+    });
+    expect(out).toEqual({ proposal: false, question: false, units: 0 });
+
+    const units = new Map((await unitsOf(runId)).map((u) => [u.pendingId, u]));
+    expect(units.get(approved.pendingId)?.fate).toBe('approved');
+    expect(await archivedOf(approved.targetId)).toBe(true); // исполненное осталось исполненным
+    expect(units.get(refused.pendingId)?.fate).toBe('rejected');
+    expect(units.get(refused.pendingId)?.reason).toBe('owner'); // чужая причина уважена
+    expect(
+      (await ledgerRow({ type: 'confirmation_rejected', rejects: refused.pendingId }))?.content,
+    ).toBe('Подтверждение отклонено');
+
+    // Гасить было нечего, но открытых не осталось — вторая половина правила снятия
+    expect((await runAspect(runId)).undecided).toBe(false);
+    expect(await clearingActions(runId)).toHaveLength(1);
+  });
+
+  test('rollbackRun: откат прогона гасит единицы причиной stale и СВОИМИ текстами отката (приёмка 3-хвост)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-16T11:00' });
+    const question = await askUnit(routineId, runId, 'Отменять ли завтрашний созвон?');
+    const defer = await deferUnit(routineId, runId, 'Черновик, который прогон хотел убрать');
+    expect(
+      (
+        await closeRoutineRun(verbCtx(routineId), {
+          runId,
+          outcome: 'finished',
+          report: 'Отложил архивацию и спросил.',
+        })
+      ).status,
+    ).toBe('ok');
+
+    // Откат наследует обобщение автоматически — своей причиной и своими текстами
+    expect((await rollbackRun(db, { actorUserId: owner, runId })).ok).toBe(true);
+
+    const deferRow = await ledgerRow({ type: 'confirmation_rejected', rejects: defer.pendingId });
+    expect(deferRow?.content).toBe('Отложенное действие устарело: прогон откачен');
+    expect((deferRow?.metadata as { reason?: string }).reason).toBe('stale');
+    expect((await ledgerRow({ type: 'question_stale', stales: question }))?.content).toBe(
+      'Вопрос прогона снят: прогон откачен',
+    );
+    expect((await unitsOf(runId)).every((u) => u.fate !== 'open')).toBe(true);
+    expect(await archivedOf(defer.targetId)).toBe(false);
+    // Откаченный прогон не держит на владельце ни кнопок, ни сигнала о неразобранном
+    expect((await runAspect(runId)).undecided).toBe(false);
   });
 });
 
