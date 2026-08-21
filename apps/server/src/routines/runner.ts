@@ -34,7 +34,7 @@ import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { toolResultMessage } from '../llm/context';
-import type { LLMMessage, LLMResponse, LLMToolDef } from '../llm/types';
+import type { LLMMessage, LLMResponse, LLMToolCall, LLMToolDef } from '../llm/types';
 import { dispatchTool, type ToolCallCtx, type ToolDispatchResult } from '../tools/dispatch';
 import { buildToolRegistry, type RoutineRef, routineToolDefs } from '../tools/registry';
 import { RUN_DEADLINE_MS } from './constants';
@@ -53,6 +53,14 @@ const TERMINAL_TOOLS: ReadonlySet<string> = new Set(['orbis_propose', 'orbis_che
 /** Потолки текстовых полей аспекта прогона (schemas/aspects.ts) — обрезаем ДО записи. */
 const REPORT_CAP = 20_000;
 const FAIL_NOTE_CAP = 2_000;
+const STEP_SUMMARY_CAP = 500;
+
+/**
+ * Сколько текста вопроса влезает в сводку шага. Меньше потолка самого шага намеренно: шаг
+ * — строка в списке, а не место для четырёх тысяч символов; полный текст владелец читает
+ * на карточке вопроса, которая лежит в том же треде.
+ */
+const ASK_STEP_CAP = 120;
 
 /**
  * Чем кончился прогон — информационно для вызывающего (тик, «прогнать сейчас»). Само
@@ -400,7 +408,7 @@ async function modelLoop(
       if (!terminal) {
         const stepResult = await runAgentVerb(verbCtx, 'orbis_run_step', {
           run_id: args.runId,
-          summary: `${call.name}: ${result.status}`,
+          summary: stepSummary(call, result),
           external: false,
         });
         if (stepResult.status === 'error') {
@@ -441,6 +449,28 @@ function toolResultPayload(r: ToolDispatchResult): unknown {
     return { status: 'pending_confirmation', pendingId: r.pendingId };
   }
   return { status: 'error', error: r.error };
+}
+
+/**
+ * Сводка шага для ВЛАДЕЛЬЦА (экран прогона и история прогонов), а не для отладки. Прежняя
+ * пара «имя: исход» остаётся всему, что и правда описывается ею, но у двух вызовов D42 она
+ * скрывает ровно то, ради чего владелец открывает прогон: `orbis_ask: ok` не говорит, ЧТО
+ * спросили, а `entity_update: pending_confirmation` — ЧТО отложили.
+ *
+ * `card.summary` без сужения по `kind` не скомпилируется — поля нет у карточки вопроса (на
+ * вопрос отвечают, сводки-заголовка у него нет) и у карточек, которых у этой ветки не
+ * бывает; отсутствие поля читается как «нечего сказать сверх имени тула».
+ */
+function stepSummary(call: LLMToolCall, result: ToolDispatchResult): string {
+  if (call.name === 'orbis_ask' && result.status === 'ok') {
+    const question = typeof call.input.question === 'string' ? call.input.question : '';
+    return cap(`спросил: «${cap(question, ASK_STEP_CAP)}»`, STEP_SUMMARY_CAP);
+  }
+  if (result.status === 'pending_confirmation') {
+    const summary = 'summary' in result.card ? result.card.summary : call.name;
+    return cap(`отложено: ${summary}`, STEP_SUMMARY_CAP);
+  }
+  return `${call.name}: ${result.status}`;
 }
 
 function cap(text: string, limit: number): string {

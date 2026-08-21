@@ -39,6 +39,9 @@ import {
   canonicalJson,
   newId,
   pendingMessageId,
+  QUESTION_MAX,
+  QUESTION_OPTION_MAX,
+  QUESTION_OPTIONS_MAX,
   questionStaleMessageId,
   rejectMessageId,
 } from '@orbis/shared';
@@ -73,11 +76,14 @@ export function operationsNoun(n: number): string {
 /**
  * Границы содержимого вопроса — ОДНА пара схем на читателя и писателя (Minor-2 ревью
  * Задачи 2). Разъехаться они не могут по построению: обе стороны ссылаются сюда, а не
- * повторяют числа. Значения — те же, что у `askInput` (`contracts/agent-loop.ts`):
- * вопрос до 4000, до четырёх вариантов по 200 символов.
+ * повторяют числа. САМИ ЧИСЛА — тоже не здесь: они пришли из `@orbis/shared` (Minor Р3-2
+ * ревью Задачи 3), потому что тех же границ держатся вход тула `askInput` и его JSON
+ * Schema в реестре, а тихо разъехавшийся писатель отказал бы там, где тул пропустил.
  */
-const questionText = z.string().min(1).max(4000);
-const questionOptions = z.array(z.string().min(1).max(200)).max(4);
+const questionText = z.string().min(1).max(QUESTION_MAX);
+const questionOptions = z
+  .array(z.string().min(1).max(QUESTION_OPTION_MAX))
+  .max(QUESTION_OPTIONS_MAX);
 
 /**
  * Формат metadata.pending карточки-запроса. Zod-парс при чтении — fail-closed:

@@ -11,6 +11,7 @@
 // тред); (4) thread_post — отдельная ветка мимо executor (см. runThreadPost), но тоже
 // через классификатор §7.10.
 import {
+  askInput,
   attachAspectInput,
   type BatchExecuteInput,
   batchExecuteInput,
@@ -74,6 +75,7 @@ import {
   QueryCompileError,
 } from '../query/compile';
 import { queryWithMaterialization } from '../recurring/with-materialization';
+import { runAsk } from '../routines/ask';
 import { CORE_FIELD_LABELS, MAX_RUN_UNITS } from '../routines/constants';
 import { buildUpdate, loadTargets, runPropose } from '../routines/propose';
 import { toWireEntityFromSql } from '../wire';
@@ -370,6 +372,15 @@ export async function dispatchTool(
       // правку, ради которого инвариант 5 запрещает все остальные. Гейты доступа (реестр,
       // routineGate) отработали выше; envelope разбирается здесь, как у глаголов.
       return await runPropose(ctx, parseEnvelope(proposeInput, input, pre.def.name));
+    }
+    if (pre.def.name === 'orbis_ask') {
+      // Ветка стоит ДО runMutation по той же причине, что у предложения, и по своей: вопрос
+      // не правит граф вовсе, и политике §7.10 его классифицировать нечем. Через ветку
+      // глаголов он тоже не пошёл бы (рулинг Р-1): та требует уровня `execute` и на любом
+      // другом отвечает VALIDATION «инвариант 4» — то есть pending, которым вопрос и
+      // является, там запрещён по построению. Гейты доступа (реестр, routineGate)
+      // отработали выше; envelope разбирается здесь, как у глаголов.
+      return await runAsk(ctx, parseEnvelope(askInput, input, pre.def.name));
     }
     return await runMutation(ctx, pre.def, input, pre.keyFieldsByAspect, pre.execToolByName);
   } catch (e) {
@@ -1115,6 +1126,24 @@ async function snapshotDeferredUnit(
   if ('error' in built) return { error: built.error };
   const input: Record<string, unknown> = { ...built.op.input };
 
+  // Заголовок и признак архива цели читаются отдельным запросом: `loadTargets` возвращает
+  // только аспекты и штамп версии, а трогать его тело нельзя — оно общее с предложением.
+  // Цена — один SELECT по PK на постановку единицы; `archived` едет тем же запросом.
+  const head = await entityHead(tx, id);
+  // Гард архивации (Minor ревью Задачи 5): предусловие по колонке ставится ниже ЛИТЕРАЛОМ
+  // `in:[false]`, а не снимком. Цель, УЖЕ архивированную — владельцем среди прогона или
+  // повторным намерением модели, — это превратило бы в карточку с «было: false», то есть в
+  // ложь владельцу, и в заведомый CONFLICT на «Принять», пока модель считает единицу
+  // поставленной. Отказываем структурно и карточки не рождаем.
+  if (payload.archived === true && head?.archived === true) {
+    return {
+      error: errorResult('CONFLICT', 'цель уже архивирована — откладывать нечего', {
+        reason: 'already_archived',
+        id,
+      }),
+    };
+  }
+
   const rows: DeferredRow[] = [];
   const aspects = payload.aspects as Record<string, Record<string, unknown> | null> | undefined;
   for (const [aspect, patch] of Object.entries(aspects ?? {})) {
@@ -1149,10 +1178,7 @@ async function snapshotDeferredUnit(
     rows.push({ field, after: rowValue(after) });
   }
 
-  // Заголовок цели читается отдельным запросом: `loadTargets` возвращает только аспекты и
-  // штамп версии, а трогать его тело нельзя — оно общее с предложением. Цена — один SELECT
-  // по PK на постановку единицы.
-  const title = (await titleOf(tx, id)) ?? id;
+  const title = head?.title ?? id;
   return {
     input,
     // Сводку читает ВЛАДЕЛЕЦ — в ленте рутины и в пачке: цель по имени, а не «entity_update»
@@ -1290,7 +1316,7 @@ async function autonomySummary(
           : undefined;
     const title =
       typeof targetId === 'string'
-        ? ((await titleOf(tx, targetId)) ?? `${targetId.slice(0, 8)}…`)
+        ? ((await entityHead(tx, targetId))?.title ?? `${targetId.slice(0, 8)}…`)
         : typeof op.input.title === 'string'
           ? op.input.title
           : 'новая рутина';
@@ -1452,10 +1478,20 @@ export async function routineDeferForbidden(
   return null;
 }
 
-/** Заголовок сущности под tx владельца; `undefined` — не видна (чужая или нет). */
-async function titleOf(tx: Tx, id: string): Promise<string | undefined> {
-  const rows = await tx.select({ title: entities.title }).from(entities).where(eq(entities.id, id));
-  return rows[0]?.title;
+/**
+ * Заголовок и признак архива сущности под tx владельца; `undefined` — не видна (чужая или
+ * её нет). Оба поля одним SELECT'ом по PK: `archived` нужен гарду отложки (карточка с
+ * ложным «было» не должна родиться), и второй запрос ради одной колонки был бы лишним.
+ */
+async function entityHead(
+  tx: Tx,
+  id: string,
+): Promise<{ title: string; archived: boolean } | undefined> {
+  const rows = await tx
+    .select({ title: entities.title, archived: entities.archived })
+    .from(entities)
+    .where(eq(entities.id, id));
+  return rows[0];
 }
 
 /** Сколько живых рутин у актора (под RLS его же tx): архивные лимит не занимают. */

@@ -2,6 +2,7 @@
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
+  askInput,
   aspectJsonSchema,
   attachAspectInput,
   BUILTIN_ASPECT_IDS,
@@ -30,6 +31,7 @@ import { aspectDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import {
   AGENT_VERB_NAMES,
+  ASK_TOOL,
   buildToolRegistry,
   importCsvStartInput,
   type OrbisToolDef,
@@ -118,16 +120,20 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.filter(
 ).map((id) => `attach_${id.replaceAll('/', '_').replaceAll('-', '_')}`);
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 12 core (с thread_post и undo_last) + 5 глаголов + orbis_propose + 12 attach_* = 30', async () => {
+  test('builtin-реестр (userB без кастомных): 12 core (с thread_post и undo_last) + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* = 31', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
     expect(names).toContain('thread_post');
     for (const name of AGENT_VERB_NAMES) expect(names).toContain(name);
-    // orbis_propose — не глагол исполнителя (в AGENT_VERB_NAMES его нет), а тул рутины
+    // orbis_propose и orbis_ask — не глаголы исполнителя (в AGENT_VERB_NAMES их нет), а
+    // тулы рутины: первый предлагает правку, второй задаёт нетерминальный вопрос (D42 ОЧ.5)
     expect(names).toContain('orbis_propose');
+    expect(names).toContain('orbis_ask');
+    // Деф вопроса — ровно тот, что объявлен реестром: пин ловит подмену описания и режима
+    expect(defs.find((d) => d.name === 'orbis_ask')).toEqual(ASK_TOOL);
     for (const name of BUILTIN_ATTACH_NAMES) expect(names).toContain(name);
-    expect(defs.length).toBe(30);
+    expect(defs.length).toBe(31);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
   });
@@ -292,7 +298,7 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(def.kind).toBe('mutate');
     expect(def.description).toBe('Пиши часы сна числом.');
     expect((def.inputJsonSchema.properties as Record<string, unknown>).data).toEqual(CUSTOM_SCHEMA);
-    expect(defsA.length).toBe(31);
+    expect(defsA.length).toBe(32);
 
     const defsB = await registryFor(userB);
     expect(defsB.some((d) => d.name === 'attach_user_sleep_log')).toBe(false);
@@ -323,6 +329,9 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
     orbis_finish: finishInput,
     // Предложение рутины (V1.6) — тот же контракт парности, что у глаголов
     orbis_propose: proposeInput,
+    // Вопрос пачки (D42 ОЧ.5). Запись сюда — РУЧНАЯ, и это единственная дыра теста:
+    // он итерируется по карте, и забытый тул не проверяется молча
+    orbis_ask: askInput,
   };
 
   test('каждый ключ zod-схемы есть в JSON Schema и наоборот; required = не-optional ключи zod', async () => {
@@ -390,16 +399,23 @@ describe('routineToolDefs: реестр прогона рутины (V1.10, ру
     allowedTools: new Set(allowed),
   });
 
-  test('propose: все чтения + orbis_checkpoint + orbis_propose; ни одной мутации сверх', async () => {
+  test('propose: все чтения + база (orbis_checkpoint, orbis_ask) + orbis_propose; ни одной мутации сверх', async () => {
     const defs: OrbisToolDef[] = await registryFor(userB);
     const names = routineToolDefs(defs, ref('propose')).map((d) => d.name);
 
     for (const d of defs.filter((x) => x.kind === 'read')) expect(names).toContain(d.name);
     expect(names).toContain('orbis_checkpoint');
+    // D42 ОЧ.5 (Б6 ревью): нетерминальный вопрос — в БАЗЕ рутины, а не рычаг режима act.
+    // Довод базы («оставить рутину без выхода нельзя») на вопрос распространяется целиком
+    expect(names).toContain('orbis_ask');
     expect(names).toContain('orbis_propose');
     // мутаций сверх базы и предложения нет — включая круг внешнего исполнителя
     const mutating = routineToolDefs(defs, ref('propose')).filter((d) => d.kind === 'mutate');
-    expect(mutating.map((d) => d.name).sort()).toEqual(['orbis_checkpoint', 'orbis_propose']);
+    expect(mutating.map((d) => d.name).sort()).toEqual([
+      'orbis_ask',
+      'orbis_checkpoint',
+      'orbis_propose',
+    ]);
   });
 
   test('act: РОВНО белый список сверх чтений и базы; orbis_propose уже не показывается', async () => {
@@ -411,7 +427,7 @@ describe('routineToolDefs: реестр прогона рутины (V1.10, ру
       .filter((d) => d.kind === 'mutate')
       .map((d) => d.name)
       .sort();
-    expect(mutating).toEqual(['entity_update', 'orbis_checkpoint', 'thread_post']);
+    expect(mutating).toEqual(['entity_update', 'orbis_ask', 'orbis_checkpoint', 'thread_post']);
     expect(names).toContain('entity_query');
     // Имя вне реестра в белом списке ничего не добавляет (fail-closed сверяет с дефами)
     expect(routineToolDefs(defs, ref('act', ['выдуманный_тул'])).map((d) => d.name)).not.toContain(
@@ -466,11 +482,12 @@ describe('routineToolDefs: реестр прогона рутины (V1.10, ру
     expect(routineToolDefs(defs, ref('act')).map((d) => d.name)).toContain('orbis_checkpoint');
   });
 
-  test('act с пустым allowed_tools: рутина остаётся с чтениями и чекпойнтом', async () => {
+  test('act с пустым allowed_tools: рутина остаётся с чтениями и базой (чекпойнт + вопрос)', async () => {
     const defs = await registryFor(userB);
     const mutating = routineToolDefs(defs, ref('act'))
       .filter((d) => d.kind === 'mutate')
-      .map((d) => d.name);
-    expect(mutating).toEqual(['orbis_checkpoint']);
+      .map((d) => d.name)
+      .sort();
+    expect(mutating).toEqual(['orbis_ask', 'orbis_checkpoint']);
   });
 });

@@ -70,6 +70,19 @@ export const checkpointInput = z
   .strict();
 
 /**
+ * Границы содержимого вопроса — ОДИН источник на ТРИ места (Minor Р3-2 ревью Задачи 3):
+ * контракт тула (`askInput` ниже), рукописная JSON Schema реестра (`askJsonSchema`,
+ * server/tools/registry.ts) и схемы записи/чтения pending (`policy/pending.ts`).
+ *
+ * Числа подняты сюда не для красоты: разъехавшись, эти три места дали бы ТИХУЮ дыру —
+ * тул вопрос пропустил бы, а `createPending` отказал, и вопрос не поставился бы вовсе,
+ * притом что виновата была бы пара цифр в разных файлах.
+ */
+export const QUESTION_MAX = 4000;
+export const QUESTION_OPTIONS_MAX = 4;
+export const QUESTION_OPTION_MAX = 200;
+
+/**
  * Вопрос пачки: прогон НЕ останавливается (D42 ОЧ.5), в отличие от чекпойнта. Владелец
  * разбирает вопрос постфактум, поэтому у входа нет ключа идемпотентности `id`: он не может
  * прийти от модели — повтор того же вопроса обязан сойтись в ту же карточку по СОДЕРЖИМОМУ
@@ -81,8 +94,11 @@ export const checkpointInput = z
 export const askInput = z
   .object({
     run_id: z.string().uuid(),
-    question: z.string().min(1).max(4000),
-    options: z.array(z.string().min(1).max(200)).max(4).optional(),
+    question: z.string().min(1).max(QUESTION_MAX),
+    options: z
+      .array(z.string().min(1).max(QUESTION_OPTION_MAX))
+      .max(QUESTION_OPTIONS_MAX)
+      .optional(),
   })
   .strict();
 

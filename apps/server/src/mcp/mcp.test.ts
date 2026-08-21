@@ -476,14 +476,16 @@ describe('/mcp tools/list (§9.2)', () => {
         expect(names).toContain(`attach_orbis_${aspect}`);
       }
       expect(names).not.toContain('attach_orbis_agent_run');
-      // orbis_propose (V1.6) — routineOnly: внутреннему исполнителю рутины, не внешнему
+      // orbis_propose (V1.6) и orbis_ask (D42 ОЧ.12) — routineOnly: внутреннему
+      // исполнителю рутины, не внешнему
       expect(names).not.toContain('orbis_propose');
+      expect(names).not.toContain('orbis_ask');
 
       // Дословная сверка с реестром (имя, описание, inputSchema) — адаптер ничего не
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
       const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
-      // builtin-набор: 30 − 3 internalOnly − 1 routineOnly = 26
+      // builtin-набор: 31 − 3 internalOnly − 2 routineOnly = 26
       expect(tools).toHaveLength(publicDefs.length);
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);

@@ -1691,12 +1691,16 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
 
   test('routineOnly-тул от chat|mcp → VALIDATION; обычный тул гейт не трогает', async () => {
     const defs = await withIdentity(db, userA, (tx) => buildToolRegistry(tx));
-    // Единственный routineOnly-деф продового реестра — orbis_propose (V1.6). Правило
-    // проверяется на нём же, а не на подложенном объекте: гейт, отделённый от реестра,
-    // однажды разойдётся с ним молча.
-    expect(defs.filter((d) => d.routineOnly === true).map((d) => d.name)).toEqual([
-      'orbis_propose',
-    ]);
+    // routineOnly-дефы продового реестра — orbis_propose (V1.6) и orbis_ask (D42 ОЧ.12).
+    // Правило проверяется на них же, а не на подложенном объекте: гейт, отделённый от
+    // реестра, однажды разойдётся с ним молча. Пометка именно routineOnly, а не agentOnly:
+    // agentOnly открыл бы тул MCP-гранту, а вопрос пачки грантовому пути закрыт (ОЧ.12).
+    expect(
+      defs
+        .filter((d) => d.routineOnly === true)
+        .map((d) => d.name)
+        .sort(),
+    ).toEqual(['orbis_ask', 'orbis_propose']);
     const propose = defs.find((d) => d.name === 'orbis_propose');
     expect(propose).toBeDefined();
     if (propose === undefined) return;
@@ -2266,6 +2270,39 @@ describe('отложка небезопасного действия рутин�
     });
     expect(replay.status).toBe('pending_confirmation');
     expect(await pendingsIn(owner, threadId)).toHaveLength(10);
+  });
+
+  test('цель УЖЕ архивирована → структурный отказ CONFLICT при постановке, карточки нет (Minor ревью Задачи 5)', async () => {
+    // Предусловие архивации ставится ЛИТЕРАЛОМ `in:[false]`, а не снимком. Если цель уже
+    // в архиве, карточка родилась бы с «было: false» — ЛОЖЬЮ владельцу — и с заведомым
+    // CONFLICT на «Принять», а модель считала бы единицу поставленной
+    const owner = freshUserId();
+    const { ctx, threadId } = await deferCtx(owner);
+    const target = await seedEntity(owner, { title: 'Уже в архиве', tags: [] });
+    const own = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_update', input: { id: target.id, archived: true } }],
+    });
+    expect(own.ok).toBe(true);
+
+    const r = await dispatchTool(ctx, 'entity_update', { id: target.id, archived: true });
+    expectError(r, 'CONFLICT');
+    if (r.status === 'error') {
+      expect(r.error.details).toEqual({ reason: 'already_archived', id: target.id });
+    }
+    expect(await pendingsIn(owner, threadId)).toHaveLength(0);
+  });
+
+  test('отложка с несуществующим id цели → NOT_FOUND на диспатче, pending не создан', async () => {
+    // Отказ обязан прийти МОДЕЛИ, здесь и сейчас, а не владельцу на кнопке «Принять»:
+    // регресс, уносящий его на approve, без этого пина прошёл бы незаметно
+    const owner = freshUserId();
+    const { ctx, threadId } = await deferCtx(owner);
+    const r = await dispatchTool(ctx, 'entity_update', { id: newId(), archived: true });
+    expectError(r, 'NOT_FOUND');
+    expect(await pendingsIn(owner, threadId)).toHaveLength(0);
   });
 
   test('«Принять» отложенную архивацию после изменения цели → stale с mismatches (предусловия сняты при постановке и не переснимаются — ОЧ.13, §9.4)', async () => {

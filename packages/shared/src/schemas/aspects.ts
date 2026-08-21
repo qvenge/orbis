@@ -304,6 +304,13 @@ export const routineAspectSchema = z
   })
   .strict();
 
+/**
+ * Реестр схем аспектов. Имя `orbis/entity` в него НЕ входит и входить не должно: оно
+ * зарезервировано под предусловия по КОЛОНКАМ записи (`ENTITY_PSEUDO_ASPECT`,
+ * server/executor/executor.ts) — аспекта с таким id нет, и появление его здесь сделало бы
+ * псевдо-аспект настоящим, а предусловие `{aspect:'orbis/entity', field:'archived'}` —
+ * двусмысленным (Minor Ф-4b-2 ревью Задачи 4b; сегодня это стережёт только соседний тест).
+ */
 export const ASPECT_SCHEMAS = {
   'orbis/schedule': scheduleAspectSchema,
   'orbis/task': taskAspectSchema,

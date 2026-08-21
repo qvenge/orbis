@@ -8,12 +8,19 @@
 // JSON Schema уходит в определения тулов LLM/MCP. Парность двух представлений
 // (ключи и required) закреплена тестом registry.test.ts — рассинхрон падает в CI.
 
-import { PROPOSAL_ALLOWED_TOOLS, RELATION_TYPES, SERVICE_ASPECT_IDS } from '@orbis/shared';
+import {
+  PROPOSAL_ALLOWED_TOOLS,
+  QUESTION_MAX,
+  QUESTION_OPTION_MAX,
+  QUESTION_OPTIONS_MAX,
+  RELATION_TYPES,
+  SERVICE_ASPECT_IDS,
+} from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { aspectDefinitions } from '../db/schema';
 import type { Tx } from '../db/with-identity';
-import { MAX_PROPOSAL_OPERATIONS } from '../routines/constants';
+import { MAX_PROPOSAL_OPERATIONS, MAX_RUN_UNITS } from '../routines/constants';
 
 export interface OrbisToolDef {
   name: string; // 'entity_query' | ... | 'attach_orbis_task' | ...
@@ -65,12 +72,19 @@ export const WORKER_SCOPE_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Что доступно рутине ВСЕГДА, в любом режиме (V1.10, рулинг В2): чекпойнт — единственный
- * способ прогона остановиться и спросить владельца. Отнять его у режима `propose` значило
- * бы оставить рутину без выхода из тупика: предложить она может только правку графа,
- * а вопрос — не правка.
+ * Что доступно рутине ВСЕГДА, в любом режиме (V1.10, рулинг В2; D42 ОЧ.5): два способа
+ * спросить владельца. Отнять их у режима `propose` значило бы оставить рутину без выхода
+ * из тупика: предложить она может только правку графа, а вопрос — не правка.
+ *
+ * - `orbis_checkpoint` — ТЕРМИНАЛЬНЫЙ: «без ответа дальше бессмысленно», прогон закрывается;
+ * - `orbis_ask` — НЕтерминальный (D42 ОЧ.5, Б6 ревью спеки): карточка владельцу, прогон
+ *   продолжается. Довод базы распространяется на него целиком — вопрос, стоящий прогону
+ *   всей оставшейся работы, и был той болью, ради которой затеян срез.
+ *
+ * Инвариант 4 V1 отсюда читается так: «в режиме `propose` любая мутация, кроме
+ * `orbis_propose` и глаголов базы (`orbis_checkpoint`, `orbis_ask`), отклоняется».
  */
-export const ROUTINE_BASE_TOOLS: ReadonlySet<string> = new Set(['orbis_checkpoint']);
+export const ROUTINE_BASE_TOOLS: ReadonlySet<string> = new Set(['orbis_checkpoint', 'orbis_ask']);
 
 /**
  * Глаголы круга исполнителя, закрытые рутине НАГЛУХО (V1.5) — даже вписанные владельцем в
@@ -265,6 +279,22 @@ export type Card =
        * приём ProposalCard) — серверного словаря подписей нет и заводить второй не надо.
        */
       rows: Array<{ aspect?: string; field: string; before?: string; after: string }>;
+    }
+  // D42 ОЧ.5: вопрос рутины владельцу — вторая разновидность единицы пачки. Своя карточка
+  // по причине сильнее, чем у соседей: на вопрос ОТВЕЧАЮТ, а не принимают его, и кнопки
+  // `confirmation_card` («Принять»/«Отклонить») вели бы владельца прямо в структурный отказ
+  // гейта рода (`policy/pending.ts`, assertNotQuestion). `question` едет целиком, а не
+  // сводкой: усечь его для показа — дело web, а вот дописать усечённое обратно оно не
+  // сможет. Поля обязаны дословно совпадать с web-типом (chat/cards/types.ts) — union'ы
+  // сервера и web намеренно не общие.
+  | {
+      kind: 'question_card';
+      pendingId: string;
+      runId: string;
+      routineId: string;
+      question: string;
+      /** До четырёх готовых ответов кнопками; порядок значим — владелец видит его. */
+      options?: string[];
     }
   | { kind: 'error_card'; code: string; message: string };
 
@@ -561,6 +591,38 @@ const checkpointJsonSchema = {
   additionalProperties: false,
 };
 
+/**
+ * Вопрос пачки (D42 ОЧ.5) — вход `orbis_ask`, парный zod-схеме `askInput`
+ * (@orbis/shared/contracts/agent-loop; парность закреплена registry.test.ts).
+ *
+ * Ключа идемпотентности `id` здесь НЕТ, в отличие от чекпойнта, и это не упущение:
+ * повтор того же вопроса обязан сойтись в ту же карточку по СОДЕРЖИМОМУ (ОЧ.9), а не по
+ * ключу, который модель вольна выдумать заново. Границы текста и вариантов — из общего
+ * экспорта shared: те же три числа держат вход тула, запись pending и чтение пачки.
+ */
+const askJsonSchema = {
+  type: 'object',
+  properties: {
+    run_id: uuid,
+    question: {
+      type: 'string',
+      minLength: 1,
+      maxLength: QUESTION_MAX,
+      description:
+        'вопрос владельцу: он прочитает его позже и без тебя — спрашивай самодостаточно, одним понятным вопросом',
+    },
+    options: {
+      type: 'array',
+      maxItems: QUESTION_OPTIONS_MAX,
+      items: { type: 'string', minLength: 1, maxLength: QUESTION_OPTION_MAX },
+      description:
+        'до четырёх готовых ответов кнопками; список, не помещающийся на экран, — это требование довериться, а не выбор',
+    },
+  },
+  required: ['run_id', 'question'],
+  additionalProperties: false,
+};
+
 const finishJsonSchema = {
   type: 'object',
   properties: {
@@ -643,6 +705,31 @@ const PROPOSE_TOOL: OrbisToolDef = {
 };
 
 /**
+ * НЕтерминальный вопрос владельцу (D42 ОЧ.5, ОЧ.12) — второй тул рутины рядом с
+ * предложением и вторая половина базы (`ROUTINE_BASE_TOOLS`) рядом с чекпойнтом.
+ *
+ * `routineOnly`, а НЕ `agentOnly`, и это выбор, а не оформление: `agentOnly` открыл бы
+ * вопрос MCP-гранту, а внешнему исполнителю он закрыт (ОЧ.12) — Orbis контролирует петлю
+ * только внутреннего раннера, и «Продолжить сейчас» для внешнего агента запускать нечем.
+ * Условие снятия гейта — появление запуска исполнителя (§10.1).
+ */
+export const ASK_TOOL: OrbisToolDef = {
+  name: 'orbis_ask',
+  description:
+    'Спросить владельца и РАБОТАТЬ ДАЛЬШЕ: вопрос ложится карточкой в тред рутины, прогон ' +
+    'НЕ останавливается. Ответа сейчас не будет — владелец разберёт вопрос позже, и ответ ' +
+    'придёт в историю следующего прогона; поэтому спрашивай самодостаточно и продолжай с ' +
+    'тем, что можно сделать без ответа. Если без ответа дальше идти бессмысленно — это не ' +
+    'сюда, а orbis_checkpoint: он закрывает прогон. В options можно дать до четырёх готовых ' +
+    'ответов кнопками. Повтор того же вопроса в том же прогоне вернёт ту же карточку ' +
+    '(replayed=true) — не переспрашивай одно и то же. Открытых вопросов и отложенных ' +
+    `действий у прогона не больше ${MAX_RUN_UNITS}: получил «пачка полна» — заканчивай прогон.`,
+  inputJsonSchema: askJsonSchema,
+  kind: 'mutate',
+  routineOnly: true,
+};
+
+/**
  * Глаголы исполнителя (§9.3, С7). `kind: 'mutate'` у всех пяти — включая orbis_my_queue,
  * который по смыслу читающий: он подметает брошенные прогоны по дороге (С6), то есть
  * пишет. Классификация §7.10 даёт им всем уровень execute (одиночная не-архивирующая
@@ -695,12 +782,19 @@ const AGENT_VERB_TOOLS: OrbisToolDef[] = [
   },
   {
     name: 'orbis_checkpoint',
+    // Описание переписано под ДВА субъекта (D42 ОЧ.5): у чекпойнта их с V1 два — внешний
+    // исполнитель с тикетом и прогон рутины, у которого ни тикета, ни orbis_claim_task
+    // нет. Прежний текст обещал рутине «тикет уходит в waiting» и «ответ придёт в историю
+    // следующего orbis_claim_task» — то есть врал ей про механику ответа. ПОВЕДЕНИЕ и
+    // контракт чекпойнта при этом не меняются ни на символ (спека D42 §11).
     description:
-      'Остановиться и спросить владельца: тикет уходит в waiting с твоим вопросом, прогон ' +
-      'закрывается. Зови, когда без решения человека дальше идти нельзя (выбор подхода, ' +
-      'доступ, противоречие в задании) — и заканчивай работу, ответ придёт в историю ' +
-      'следующего orbis_claim_task. После чекпойнта прогон терминален: шаги в него больше не ' +
-      'принимаются. Передавай id (uuid) для безопасного повтора.',
+      'Остановиться и спросить владельца, когда без решения человека дальше идти НЕЛЬЗЯ ' +
+      '(выбор подхода, доступ, противоречие в задании): прогон закрывается. Если ты работаешь ' +
+      'по тикету — тикет уходит в waiting с твоим вопросом, и ответ придёт в историю ' +
+      'следующего orbis_claim_task. Если ты прогон рутины — ни тикета, ни orbis_claim_task ' +
+      'нет: ответ придёт в историю её следующего прогона, а для вопроса, без которого работа ' +
+      'ПРОДОЛЖАЕТСЯ, у тебя есть нетерминальный orbis_ask. После чекпойнта прогон терминален: ' +
+      'шаги в него больше не принимаются. Передавай id (uuid) для безопасного повтора.',
     inputJsonSchema: checkpointJsonSchema,
     kind: 'mutate',
     agentOnly: true,
@@ -917,7 +1011,13 @@ export function buildToolDefs(aspectRows: AspectToolRow[]): OrbisToolDef[] {
   const attachable = aspectRows.filter(
     (r) => !(SERVICE_ASPECT_IDS as readonly string[]).includes(r.id),
   );
-  return [...CORE_TOOLS, ...AGENT_VERB_TOOLS, PROPOSE_TOOL, ...attachable.map(attachToolDef)];
+  return [
+    ...CORE_TOOLS,
+    ...AGENT_VERB_TOOLS,
+    PROPOSE_TOOL,
+    ASK_TOOL,
+    ...attachable.map(attachToolDef),
+  ];
 }
 
 /** Собирает реестр: core-тулы §9.2 + attach_<aspect> для каждого активного аспекта (§7.6). */
