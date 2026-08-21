@@ -464,7 +464,7 @@ function ProposalPlate({
                   op={op}
                   entityId={entityId}
                   hasCurrentDoc={currentDoc !== null}
-                  editing={editingBody.includes(op.index)}
+                  bodyOpen={editingBody.includes(op.index)}
                   liveDiff={bodyDiffs[op.index]}
                   onOpenEditor={() => setEditingBody((ids) => [...ids, op.index])}
                   // Документ, с которого начинается правка: уже правленый, если владелец эту
@@ -570,7 +570,7 @@ function ProposalRowView({
   op,
   entityId,
   hasCurrentDoc,
-  editing,
+  bodyOpen,
   liveDiff,
   startDoc,
   onOpenEditor,
@@ -582,8 +582,13 @@ function ProposalRowView({
   /** Запись, на которой стоит слой: у ЕЁ тела есть сторона «было» для клиентского диффа. */
   entityId: string;
   hasCurrentDoc: boolean;
-  /** Строка тела открыта редактором (режим правки, Ш1.4). */
-  editing: boolean;
+  /**
+   * Тело ЭТОЙ ОПЕРАЦИИ открыто редактором (Ш1.4) — свойство операции, не строки: правка тела
+   * адресуется номером операции (`edits.body[].index`), тело у неё одно. Строк же у операции
+   * бывает несколько с ОБЩИМ номером, и включать редактор вправе только строка тела (см.
+   * `editing` ниже).
+   */
+  bodyOpen: boolean;
   /** Клиентский дифф последней паузы — он перекрывает серверный, пока идёт правка (Ш1.2). */
   liveDiff?: BodyDiffResult;
   /** Документ, с которого начинается правка; зовётся РОВНО ОДИН раз (см. startRef). */
@@ -594,6 +599,25 @@ function ProposalRowView({
   edited?: unknown;
   onEdit: (raw: string) => void;
 }) {
+  // Тело правится тут же, если есть ЧТО открыть (документ предложенного тела) и С ЧЕМ
+  // сравнивать (тело этой записи). Обе половины — не формальность: см. NO_BODY_EDIT_HERE.
+  const bodyRow = op.field === 'body';
+  const ownBody = op.entity === undefined || op.entity.id === entityId;
+  const canEditBody = bodyRow && ownBody && hasCurrentDoc && op.proposedDoc !== undefined;
+
+  /**
+   * ГЕЙТ ПО СТРОКЕ ТЕЛА — не перестраховка, а починка. Режим правки и клиентский дифф плашка
+   * держит по номеру ОПЕРАЦИИ, а строк у операции бывает несколько с общим номером: один
+   * `entity_update`, правящий статус и тело, даёт две строки с `index: 0` (`updateRows`,
+   * lifecycle.ts) — ровно поэтому ключ строки здесь составной, а не один номер.
+   *
+   * Без гейта нажатие «Править» у строки тела гасило бы `AspectField` у строки СТАТУСА
+   * (`editing ? null` ниже — то есть приёмка 6 переставала бы работать), вешало под ней второй
+   * `EditorShell` с `markdown = 'done'`, а после первого штриха — и с ДОКУМЕНТОМ ТЕЛА из
+   * общего буфера; клиентский дифф рисовался бы под обеими строками.
+   */
+  const editing = bodyRow && bodyOpen;
+
   /**
    * Документ редактора — СНИМОК на вход в режим правки, и личность его больше не меняется.
    *
@@ -610,17 +634,12 @@ function ProposalRowView({
   // `units` — дифф, `skipped` — прежняя форма плюс причина словами, отсутствие поля вовсе —
   // просто прежняя форма (это «диффа нет», а не «дифф не построен»).
   // В режиме правки поверх серверного встаёт клиентский (Ш1.2): тело под руками, и серверный
-  // описывал бы уже не то, что в редакторе.
-  const diff = liveDiff ?? op.bodyDiff;
+  // описывал бы уже не то, что в редакторе. Тем же гейтом: `op.bodyDiff` у строки значения
+  // не бывает, а `liveDiff` приехал бы и к ней.
+  const diff = (bodyRow ? liveDiff : undefined) ?? op.bodyDiff;
   const units = diff !== undefined && 'units' in diff ? diff.units : undefined;
   const skipped = diff !== undefined && 'skipped' in diff ? diff.skipped : undefined;
   const editable = editableRow(op);
-
-  // Тело правится тут же, если есть ЧТО открыть (документ предложенного тела) и С ЧЕМ
-  // сравнивать (тело этой записи). Обе половины — не формальность: см. NO_BODY_EDIT_HERE.
-  const bodyRow = op.field === 'body';
-  const ownBody = op.entity === undefined || op.entity.id === entityId;
-  const canEditBody = bodyRow && ownBody && hasCurrentDoc && op.proposedDoc !== undefined;
   // Пометка — только у ЖИВОГО предложения (`bodyDiff` есть только у него): под решённым она
   // обещала бы правку там, где решать уже нечего.
   const noEditNote =

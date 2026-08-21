@@ -4342,6 +4342,19 @@ function editHandler(over: Record<string, unknown> = {}): MockHandler {
   return overlayHandler({ proposals: [editableProposal(over)], entity: EDIT_ENTITY });
 }
 
+/**
+ * Одна операция `entity_update`, правящая И ПОЛЕ, И ТЕЛО, — то есть две строки с ОБЩИМ
+ * `index`. Так их строит сервер (`updateRows`, lifecycle.ts), и ровно поэтому ключ строки на
+ * клиенте составной, а не один номер операции. Режим правки при этом свойство ОПЕРАЦИИ
+ * (`edits.body` адресуется её номером), и без гейта по строке тела он включался бы у обеих.
+ */
+function mixedHandler(): MockHandler {
+  return overlayHandler({
+    proposals: [proposalFor({ operations: [statusRow(), editableBodyRow()] })],
+    entity: EDIT_ENTITY,
+  });
+}
+
 /** Плашка развёрнута, режим правки включён, редактор слоя поднят касанием его первого кадра. */
 async function openBodyEditor(): Promise<{ plate: HTMLElement; field: HTMLElement }> {
   const plate = await screen.findByTestId('proposal-plate');
@@ -4492,15 +4505,22 @@ describe('режим правки тела в слое', () => {
      * краснел бы под нагрузкой без единой поломки в коде.
      *
      * Ожидание же по нижней границе устойчиво в правильную сторону: медленная машина время
-     * только УВЕЛИЧИВАЕТ. А пересчёт на каждый штрих дал бы дифф прямо в ходе набора, то есть
-     * за единицы миллисекунд, — и ассерт покраснел бы именно на нём (пробито мутацией:
-     * пересчёт без паузы дал 123 мс против требуемых 400). Число выписано здесь, а не взято
-     * из модуля: это договор, и с импортом константы тест ехал бы за реализацией.
+     * только УВЕЛИЧИВАЕТ. А пересчёт на каждый штрих дал бы дифф прямо в ходе набора — на
+     * отметке ниже он стоял бы на экране ЕЩЁ ДО снимка, то есть дал бы 0 мс.
+     *
+     * Отметка снимается ПОСЛЕ набора, а не до, и это разница по существу: с отметкой «до»
+     * в неё входило бы время самого набора, и на машине, где семь символов набираются дольше
+     * 400 мс, пересчёт на каждый штрих прошёл бы ассерт (находка ревью Minor-3). После набора
+     * в измерение попадает только ОСТАТОК паузы — поэтому и порог 300, а не 400: между
+     * последним нажатием (когда таймер и заводится) и снимком проходит несколько
+     * миллисекунд, и требовать полные 400 значило бы завести собственный флак. Запас против
+     * регресса при этом остаётся почти весь: пробито мутацией — пересчёт без паузы дал 2 мс
+     * на этой отметке (и 123 мс на прежней) против требуемых 300.
      */
-    const started = Date.now();
     await userEvent.type(field, ' срочно');
+    const typed = Date.now();
     await waitFor(() => expect(diff()).toHaveTextContent('срочно'), EDITOR_READY);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(400);
+    expect(Date.now() - typed).toBeGreaterThan(300);
     // Дифф именно КЛИЕНТСКИЙ: считан от тела ЗАПИСИ, поэтому её строка осталась удалённой.
     expect(diff()).toHaveTextContent('забрать посылку');
   }, 30_000);
@@ -4531,4 +4551,52 @@ describe('режим правки тела в слое', () => {
     expect(within(plate).queryByRole('button', { name: 'Править' })).toBeNull();
     expect(within(plate).getByText('Текст правится на самой записи')).toBeInTheDocument();
   });
+
+  test('поле и тело в ОДНОЙ операции (общий index): режим правки включается только у строки тела, правка поля остаётся', async () => {
+    // Форма реальная, а не выдуманная: `entity_update`, правящий статус и тело, даёт две
+    // строки предложения с index 0 (updateRows). Пока режим правки читался одним номером
+    // операции, «Править» гасил инпут значения у строки СТАТУСА (приёмка 6 недоступна) и
+    // вешал под ней второй редактор — с markdown'ом «done», а после первого же штриха и с
+    // документом ТЕЛА из общего буфера.
+    const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, mixedHandler());
+    const plate = await screen.findByTestId('proposal-plate');
+    togglePlate(plate);
+    fireEvent.click(await within(plate).findByRole('button', { name: 'Править' }));
+
+    // Редактор ровно один — у строки тела, и он же единственный первый кадр.
+    expect(within(plate).getAllByTestId('editor-preview')).toHaveLength(1);
+    // …а правка значения на месте: её у строки статуса никто не забирал.
+    expect(within(plate).getByLabelText('orbis/task status')).toHaveValue('done');
+
+    fireEvent.click(within(plate).getByTestId('editor-preview'));
+    await within(plate).findByTestId('body-editor', undefined, EDITOR_READY);
+    expect(within(plate).getAllByTestId('body-editor')).toHaveLength(1);
+    const field = within(plate)
+      .getByTestId('body-editor')
+      .querySelector('[contenteditable]') as HTMLElement;
+    await userEvent.type(field, ' срочно');
+    // Клиентский дифф после паузы рисуется ПОД ОДНОЙ строкой, а не под обеими.
+    await waitFor(
+      () => expect(within(plate).getByTestId('proposal-body-diff')).toHaveTextContent('срочно'),
+      EDITOR_READY,
+    );
+    expect(within(plate).getAllByTestId('proposal-body-diff')).toHaveLength(1);
+
+    // И обе половины правки уезжают вместе: тело документом, значение — своей строкой.
+    const input = within(plate).getByLabelText('orbis/task status');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'in_progress');
+    fireEvent.blur(input);
+    fireEvent.click(within(plate).getByRole('button', { name: 'Принять' }));
+    await waitFor(() => expect(decideInput(calls).edits).toBeDefined());
+    const edits = decideInput(calls).edits as {
+      body?: { index: number; bodyDoc: BodyDoc }[];
+      fields?: { index: number; field: string; value: unknown }[];
+    };
+    expect(edits.body).toHaveLength(1);
+    expect(edits.body?.[0]?.index).toBe(0);
+    expect(edits.fields).toEqual([
+      { index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' },
+    ]);
+  }, 30_000);
 });
