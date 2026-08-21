@@ -25,6 +25,7 @@ import type { ActionRecord, ExecuteResult, WireEntity } from '../executor/types'
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import {
   acquirePendingLock,
+  answerPendingQuestion,
   approvePending,
   askDedupeKey,
   createPending,
@@ -34,6 +35,7 @@ import {
   rejectedReason,
   rejectPending,
   rejectPendingTx,
+  stalePendingQuestion,
   unitHash,
 } from './pending';
 
@@ -796,31 +798,23 @@ async function craftPending(threadId: string, pending: Record<string, unknown>):
   return id;
 }
 
-/**
- * Ответ владельца на вопрос пачки — ФОРМА Задачи 3 (§9.5): автор — владелец, PK
- * детерминирован `answerMessageId`. Здесь это фикстура: судьбы пишет Задача 3, а
- * `listRunUnits` обязан читать ровно ту форму, которую она запишет.
- */
-async function answerQuestion(pendingId: string, threadId: string, answer: string): Promise<void> {
-  await withIdentity(db, userA, (tx) =>
-    appendMessageIdempotent(tx, {
-      id: answerMessageId(userA, pendingId),
-      threadId,
-      role: 'user',
-      content: `Ответ: «${answer}»`,
-      metadata: { type: 'question_answered', answers: pendingId, answer, source: 'ui' },
-    }),
-  );
-}
+/** Текст гашения вопроса — его даёт вызыватель: у гашения вопроса нет `RejectReason`. */
+const STALE_TEXT = 'Вопрос снят: его задал прошлый прогон';
 
-/** Гашение вопроса следующим прогоном — ФОРМА Задачи 3 (ОЧ.8), тоже фикстура. */
-async function staleQuestion(pendingId: string, threadId: string): Promise<void> {
+/**
+ * Гашение МИМО процедуры — фикстура ровно для одного состояния: ответ И гашение в ленте
+ * разом. Процедуры Задачи 3 его не создают (каждая под замком перечитывает чужой PK и
+ * уступает первой записанной судьбе), родить его может только запись мимо них — крэш
+ * чужого пути или ручная правка. Без подделки правило ОЧ.8 «ответ важнее гашения» у
+ * читателя не проверить вовсе, поэтому фикстура и осталась сырой.
+ */
+async function craftStale(pendingId: string, threadId: string): Promise<void> {
   await withIdentity(db, userA, (tx) =>
     appendMessageIdempotent(tx, {
       id: questionStaleMessageId(userA, pendingId),
       threadId,
       role: 'system',
-      content: 'Вопрос снят: его задал прошлый прогон',
+      content: STALE_TEXT,
       metadata: { type: 'question_stale', stales: pendingId },
     }),
   );
@@ -1115,12 +1109,19 @@ describe('listRunUnits: единицы прогона одной пробой (�
       (await rejectPending(db, { ownerId: userA, pendingId: dropped.pendingId, reason: 'stale' }))
         .ok,
     ).toBe(true);
-    await answerQuestion(answered, threadId, 'Карта');
-    await staleQuestion(staled, threadId);
+    // Судьбы вопроса пишут процедуры Задачи 3 — не фикстуры: так проверяется, что
+    // читатель читает ровно ту форму, которую писатель кладёт (контракт Задач 2↔3)
+    expect(
+      await answerPendingQuestion(db, { ownerId: userA, pendingId: answered, answer: 'Карта' }),
+    ).toEqual({ status: 'answered', pendingId: answered });
+    expect(
+      await stalePendingQuestion(db, { ownerId: userA, pendingId: staled, text: STALE_TEXT }),
+    ).toEqual({ staled: true });
     // Обе судьбы разом — крэш между ответом и гашением следующего прогона: побеждает
-    // ОТВЕТ (ОЧ.8), иначе владельцу сказали бы «снято» про то, что он уже решил
-    await answerQuestion(both, threadId, 'Да, продолжай');
-    await staleQuestion(both, threadId);
+    // ОТВЕТ (ОЧ.8), иначе владельцу сказали бы «снято» про то, что он уже решил.
+    // Гашение здесь — сырой фикстурой: процедура отвеченный вопрос не гасит (ОЧ.8)
+    await answerPendingQuestion(db, { ownerId: userA, pendingId: both, answer: 'Да, продолжай' });
+    await craftStale(both, threadId);
 
     const units = await unitsOf(runId);
     const fateOf = (id: string) => units.find((u) => u.pendingId === id);
@@ -1134,5 +1135,327 @@ describe('listRunUnits: единицы прогона одной пробой (�
     expect(fateOf(both)?.answer).toBe('Да, продолжай');
     expect(fateOf(open)?.fate).toBe('open');
     expect(fateOf(open)?.answer).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D42 Задача 3: СУДЬБЫ ВОПРОСА (ОЧ.8, ОЧ.9). Ответ и гашение — append-only сообщения
+// с детерминированными PK, обе процедуры под ОДНИМ замком pendingId, под замком
+// перечитываются ОБА PK: первая записанная судьба финальна, ответ важнее гашения.
+// ---------------------------------------------------------------------------
+
+/** Пара судеб вопроса в ленте — по обоим детерминированным PK разом. */
+async function fatesOf(pendingId: string) {
+  return {
+    answer: await messageById(userA, answerMessageId(userA, pendingId)),
+    stale: await messageById(userA, questionStaleMessageId(userA, pendingId)),
+  };
+}
+
+describe('answerPendingQuestion: ответ владельца — судьба вопроса (ОЧ.9, приёмка 5)', () => {
+  test('ответ на открытый вопрос → append с PK answerMessageId; повторный ТОТ ЖЕ ответ → replay answered, второй записи нет (приёмка 5)', async () => {
+    const runId = newId();
+    const host = await seedEntity(userA, { title: 'Хост ответа', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const pendingId = await askedQuestion(
+      runId,
+      'Какой счёт списать?',
+      ['Карта', 'Наличные'],
+      threadId,
+    );
+
+    const r = await answerPendingQuestion(db, {
+      ownerId: userA,
+      pendingId,
+      answer: 'Карта',
+      option: 0,
+    });
+    expect(r).toEqual({ status: 'answered', pendingId });
+
+    const msg = await messageById(userA, answerMessageId(userA, pendingId));
+    // Автор ответа — ВЛАДЕЛЕЦ (§6/§9.5 «ответы — ui-сообщения»), а не система
+    expect(msg?.role).toBe('user');
+    // Ответ ложится в тред карточки-запроса, а не в глобальный тред владельца
+    expect(msg?.threadId).toBe(threadId);
+    expect(msg?.content).toBe('Ответ: «Карта»');
+    expect(msg?.metadata).toEqual({
+      type: 'question_answered',
+      answers: pendingId,
+      answer: 'Карта',
+      option: 0, // ИНДЕКС варианта; answer при этом — его текст (клиент шлёт оба)
+      source: 'ui',
+    });
+    // Судьба не несёт actions → в журнал §7.8 и в Undo не попадает (инвариант §9.5)
+    expect(Object.hasOwn(msg?.metadata as object, 'actions')).toBe(false);
+    expect((await fatesOf(pendingId)).stale).toBeUndefined();
+
+    // Повтор ТОГО ЖЕ ответа — replay по PK: вторая запись не появляется, лента не растёт
+    const before = (await messagesIn(userA, threadId)).length;
+    expect(await answerPendingQuestion(db, { ownerId: userA, pendingId, answer: 'Карта' })).toEqual(
+      { status: 'answered', pendingId },
+    );
+    expect((await messagesIn(userA, threadId)).length).toBe(before);
+
+    const unit = (await unitsOf(runId)).find((u) => u.pendingId === pendingId);
+    expect(unit?.fate).toBe('answered');
+    expect(unit?.answer).toBe('Карта');
+  });
+
+  test('другой ответ после записанного → {already, answer: первый}; запись одна (С5, приёмка 5)', async () => {
+    const runId = newId();
+    const host = await seedEntity(userA, { title: 'Хост второго ответа', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const pendingId = await askedQuestion(runId, 'Какой счёт?', ['Карта', 'Наличные'], threadId);
+
+    await answerPendingQuestion(db, { ownerId: userA, pendingId, answer: 'Карта', option: 0 });
+    const before = (await messagesIn(userA, threadId)).length;
+
+    // Молча схлопывать разные ответы запрещено (С5): владелец обязан увидеть, ЧТО
+    // применилось, — иначе он уверен, что рутина пойдёт по «Наличные»
+    const second = await answerPendingQuestion(db, {
+      ownerId: userA,
+      pendingId,
+      answer: 'Наличные',
+      option: 1,
+    });
+    expect(second).toEqual({ status: 'already', answer: 'Карта' });
+
+    // Запись ОДНА и это первая: журнал append-only, второй ответ ничего не переписал
+    expect((await messagesIn(userA, threadId)).length).toBe(before);
+    const msg = await messageById(userA, answerMessageId(userA, pendingId));
+    expect(msg?.content).toBe('Ответ: «Карта»');
+    expect((msg?.metadata as { answer?: string; option?: number }).answer).toBe('Карта');
+    expect((msg?.metadata as { answer?: string; option?: number }).option).toBe(0);
+    expect((await unitsOf(runId))[0]?.answer).toBe('Карта');
+  });
+
+  test('ответ на погашенный → {stale}, записи нет (В2); гашение отвеченного → {staled:false}, ответ жив (ОЧ.8)', async () => {
+    const runId = newId();
+    const host = await seedEntity(userA, { title: 'Хост единственности судьбы', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+
+    // (а) Сначала гашение → ответ НЕ принимается (В2): карточка покажет «снят»
+    const staled = await askedQuestion(runId, 'Ждать доставку?', undefined, threadId);
+    expect(
+      await stalePendingQuestion(db, { ownerId: userA, pendingId: staled, text: STALE_TEXT }),
+    ).toEqual({ staled: true });
+    const staleMsg = await messageById(userA, questionStaleMessageId(userA, staled));
+    // Автор гашения — СИСТЕМА (в отличие от ответа: его автор — владелец)
+    expect(staleMsg?.role).toBe('system');
+    expect(staleMsg?.threadId).toBe(threadId);
+    expect(staleMsg?.content).toBe(STALE_TEXT);
+    expect(staleMsg?.metadata).toEqual({ type: 'question_stale', stales: staled });
+    expect(Object.hasOwn(staleMsg?.metadata as object, 'actions')).toBe(false);
+
+    expect(await answerPendingQuestion(db, { ownerId: userA, pendingId: staled, answer: 'Да' })) //
+      .toEqual({ status: 'stale' });
+    expect((await fatesOf(staled)).answer).toBeUndefined(); // ответ не записан вовсе
+
+    // Повторное гашение с ДРУГИМ текстом ничего не переписывает (append-only, §4.6)
+    expect(
+      await stalePendingQuestion(db, {
+        ownerId: userA,
+        pendingId: staled,
+        text: 'Другой текст гашения',
+      }),
+    ).toEqual({ staled: false });
+    expect((await messageById(userA, questionStaleMessageId(userA, staled)))?.content).toBe(
+      STALE_TEXT,
+    );
+
+    // (б) Обратный порядок: сначала ответ → гашение ПРОПУСКАЕТСЯ, ответ важнее (ОЧ.8)
+    const answered = await askedQuestion(runId, 'Продолжать перенос?', undefined, threadId);
+    await answerPendingQuestion(db, { ownerId: userA, pendingId: answered, answer: 'Да' });
+    expect(
+      await stalePendingQuestion(db, { ownerId: userA, pendingId: answered, text: STALE_TEXT }),
+    ).toEqual({ staled: false });
+    // Сообщения гашения НЕТ — при перевёрнутом правиле оно бы здесь лежало
+    expect((await fatesOf(answered)).stale).toBeUndefined();
+
+    const units = await unitsOf(runId);
+    expect(units.find((u) => u.pendingId === staled)?.fate).toBe('stale');
+    expect(units.find((u) => u.pendingId === answered)?.fate).toBe('answered');
+    expect(units.find((u) => u.pendingId === answered)?.answer).toBe('Да');
+  });
+
+  test('гонка ответ vs гашение: 25 итераций Promise.all — судьба ровно одна, первая записанная финальна, обе стороны сходятся на ней (приёмка 17)', async () => {
+    // Прецедент — гонка approve ∥ reject (:338-378). Здесь так же: обе процедуры берут
+    // pg_advisory_xact_lock(hashtextextended(pendingId)) ДО ПЕРВОГО ЧТЕНИЯ СОСТОЯНИЯ и
+    // под ним перечитывают ОБА PK судеб. Без замка обе прошли бы свои проверки до чужого
+    // коммита и записали бы РАЗНЫЕ PK — вопрос оказался бы и отвеченным, и снятым.
+    const iterations = 25;
+    let bothWritten = 0;
+    for (let i = 0; i < iterations; i++) {
+      const runId = newId();
+      const pendingId = await askedQuestion(runId, `Гонка ${i}: продолжать?`);
+      const [a, s] = await Promise.all([
+        answerPendingQuestion(db, { ownerId: userA, pendingId, answer: 'Да' }),
+        stalePendingQuestion(db, { ownerId: userA, pendingId, text: STALE_TEXT }),
+      ]);
+      const written = await fatesOf(pendingId);
+      if (written.answer !== undefined && written.stale !== undefined) {
+        bothWritten++; // несогласованный исход — считаем все итерации, assert ниже
+        continue;
+      }
+      const fate = (await unitsOf(runId))[0]?.fate;
+      if (s.staled) {
+        // Первым записалось гашение: ответ честно вернул stale и НИЧЕГО не записал
+        expect(a).toEqual({ status: 'stale' });
+        expect(written.answer).toBeUndefined();
+        expect(fate).toBe('stale');
+      } else {
+        // Первым записался ответ: гашение пропущено, ответ владельца жив
+        expect(a).toEqual({ status: 'answered', pendingId });
+        expect(written.stale).toBeUndefined();
+        expect(fate).toBe('answered');
+      }
+    }
+    expect(bothWritten).toBe(0); // ни одной итерации с двумя судьбами
+  });
+
+  test('answerPendingQuestion на kind:action → VALIDATION; на чужой/несуществующий pendingId — NOT_FOUND, как у rejectPending (fail-closed)', async () => {
+    const runId = newId();
+    const { pendingId: actionId } = await deferredAction(runId);
+
+    // На действие отвечать нечем — его принимают; гейт зеркален assertNotQuestion
+    await expect(
+      answerPendingQuestion(db, { ownerId: userA, pendingId: actionId, answer: 'Да' }),
+    ).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(
+      stalePendingQuestion(db, { ownerId: userA, pendingId: actionId, text: STALE_TEXT }),
+    ).rejects.toMatchObject({ code: 'VALIDATION' });
+    expect((await fatesOf(actionId)).answer).toBeUndefined();
+    expect((await fatesOf(actionId)).stale).toBeUndefined();
+    // Судьба действия не подменена: единица осталась открытой
+    expect((await unitsOf(runId)).find((u) => u.pendingId === actionId)?.fate).toBe('open');
+
+    // Чатовый pending без kind читается как действие — тот же отказ
+    const { pendingId: chatId } = await pendingArchive(undefined);
+    await expect(
+      answerPendingQuestion(db, { ownerId: userA, pendingId: chatId, answer: 'Да' }),
+    ).rejects.toMatchObject({ code: 'VALIDATION' });
+
+    // Чужой и несуществующий неразличимы: RLS скоупит журнал владельцем
+    const foreign = await askedQuestion(newId(), 'Вопрос владельца A');
+    await expect(
+      answerPendingQuestion(db, { ownerId: userB, pendingId: foreign, answer: 'Да' }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(
+      answerPendingQuestion(db, { ownerId: userA, pendingId: newId(), answer: 'Да' }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(
+      stalePendingQuestion(db, { ownerId: userA, pendingId: newId(), text: STALE_TEXT }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  test('обе судьбы в ленте (запись мимо процедур): процедура сходится с карточкой на ОТВЕТЕ, а не на гашении (ОЧ.8)', async () => {
+    const runId = newId();
+    const host = await seedEntity(userA, { title: 'Хост двойной судьбы', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const pendingId = await askedQuestion(runId, 'Двойная судьба?', undefined, threadId);
+
+    await answerPendingQuestion(db, { ownerId: userA, pendingId, answer: 'Да' });
+    await craftStale(pendingId, threadId); // так ляжет только запись мимо процедур
+
+    // Карточка показывает «отвечено» (ОЧ.8) — и процедура обязана говорить то же самое,
+    // иначе владельцу отвечают «снят» про вопрос, который в ленте помечен решённым
+    expect((await unitsOf(runId))[0]?.fate).toBe('answered');
+    expect(await answerPendingQuestion(db, { ownerId: userA, pendingId, answer: 'Да' })).toEqual({
+      status: 'answered',
+      pendingId,
+    });
+    expect(await answerPendingQuestion(db, { ownerId: userA, pendingId, answer: 'Нет' })).toEqual({
+      status: 'already',
+      answer: 'Да',
+    });
+    expect(await stalePendingQuestion(db, { ownerId: userA, pendingId, text: STALE_TEXT })).toEqual(
+      { staled: false },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Три Minor из гейт-ревью Задачи 2 (рулинг Р2-1 координатора) — тот же файл.
+// ---------------------------------------------------------------------------
+
+describe('границы вопроса проверяются при ЗАПИСИ (Minor-2 ревью Задачи 2)', () => {
+  test('question длиннее 4000 и больше четырёх вариантов — createPending отказывает VALIDATION до записи; пачка прогона остаётся читаемой', async () => {
+    const runId = newId();
+    const healthy = await askedQuestion(runId, 'Нормальный вопрос прогона');
+
+    const outOfBounds = async (question: string, options?: string[]) =>
+      withIdentity(db, userA, (tx) =>
+        createPending(tx, {
+          actor: { userId: userA, kind: 'ai', source: 'routine', runId },
+          kind: 'question',
+          question,
+          options,
+          level: 'explicit-confirmation',
+          dedupeKey: askDedupeKey(runId, question, options),
+          clock,
+        }),
+      );
+
+    // Читатель fail-closed: одна запись мимо границ уронила бы ВСЮ пачку прогона —
+    // вместе с гашением и сверкой undecided. Значит их стережёт и писатель
+    await expect(outOfBounds('я'.repeat(4001))).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(outOfBounds('')).rejects.toMatchObject({ code: 'VALIDATION' });
+    await expect(outOfBounds('Пять вариантов', ['1', '2', '3', '4', '5'])).rejects.toMatchObject({
+      code: 'VALIDATION',
+    });
+    await expect(outOfBounds('Длинный вариант', ['ок', 'о'.repeat(201)])).rejects.toMatchObject({
+      code: 'VALIDATION',
+    });
+
+    // Ни одна из четырёх записей не легла, и пачка читается
+    const units = await unitsOf(runId);
+    expect(units.map((u) => u.pendingId)).toEqual([healthy]);
+  });
+});
+
+describe('зеркальный запрет: у действия нет полей вопроса (Minor-3 ревью Задачи 2)', () => {
+  test('запись {kind:action, tool, input, question} — fail-closed при ЧТЕНИИ: одиночное чтение по id → VALIDATION «повреждена», проба пачки роняет пачку', async () => {
+    const runId = newId();
+    const host = await seedEntity(userA, { title: 'Хост гибрида', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const hybrid = await craftPending(threadId, {
+      id: newId(),
+      kind: 'action',
+      tool: 'entity_update',
+      input: { id: host.id, archived: true },
+      question: 'Подпись-гибрид',
+      actor_kind: 'ai',
+      source: 'routine',
+      run_id: runId,
+      created_at: T0.toISOString(),
+    });
+
+    // Запрет стоит в схеме — значит ловит у ВСЕХ читателей, а не только в RunUnit:
+    // и у одиночного чтения по id (approve/reject), и у пробы пачки
+    const approved = await approvePending(db, { ownerId: userA, pendingId: hybrid, clock });
+    expect(approved.ok).toBe(false);
+    if (!approved.ok) {
+      expect(approved.error.code).toBe('VALIDATION');
+      expect(approved.error.message).toContain('повреждена');
+    }
+    await expect(unitsOf(runId)).rejects.toMatchObject({ code: 'VALIDATION' });
+    // Граф не тронут: гибрид не исполнялся
+    expect(await archivedOf(userA, host.id)).toBe(false);
+  });
+});
+
+describe('listRunUnits: контракт по identity (Minor-1 ревью Задачи 2)', () => {
+  test('пин к докблоку: tx одного владельца + ownerId другого → единицы возвращаются, а судьбы молча читаются как open', async () => {
+    const runId = newId();
+    const pendingId = await askedQuestion(runId, 'Чей это ownerId?');
+    await answerPendingQuestion(db, { ownerId: userA, pendingId, answer: 'Владельца A' });
+    expect((await unitsOf(runId))[0]?.fate).toBe('answered');
+
+    // Цена рассинхрона, из-за которой докблок и написан: PK судеб считаются от
+    // переданного ownerId, а строки читаются под RLS транзакции — судьба не находится,
+    // и пачка выглядит навсегда нерешённой («Принять все» повторно жуёт решённое)
+    const mismatched = await withIdentity(db, userA, (tx) => listRunUnits(tx, userB, runId));
+    expect(mismatched.map((u) => u.pendingId)).toEqual([pendingId]);
+    expect(mismatched[0]?.fate).toBe('open');
   });
 });

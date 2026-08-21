@@ -71,6 +71,15 @@ export function operationsNoun(n: number): string {
 }
 
 /**
+ * Границы содержимого вопроса — ОДНА пара схем на читателя и писателя (Minor-2 ревью
+ * Задачи 2). Разъехаться они не могут по построению: обе стороны ссылаются сюда, а не
+ * повторяют числа. Значения — те же, что у `askInput` (`contracts/agent-loop.ts`):
+ * вопрос до 4000, до четырёх вариантов по 200 символов.
+ */
+const questionText = z.string().min(1).max(4000);
+const questionOptions = z.array(z.string().min(1).max(200)).max(4);
+
+/**
  * Формат metadata.pending карточки-запроса. Zod-парс при чтении — fail-closed:
  * повреждённая/чужеродная запись не исполняется. Без .strict() — форвард-совместимость
  * с будущими полями. actor_kind/source — атрибуция ИСХОДНОГО актора (§7.8, D11):
@@ -92,9 +101,9 @@ const pendingRecord = z
     tool: z.string().min(1).optional(), // executor-форма (attach_<aspect_id с заменой «/»>)
     input: z.record(z.unknown()).optional(), // immutable payload — envelope-валидирован при создании
     /** Текст вопроса владельцу (kind:'question'); границы — те же, что у `askInput`. */
-    question: z.string().min(1).max(4000).optional(),
+    question: questionText.optional(),
     /** Готовые ответы кнопками (kind:'question'), до четырёх — как в `askInput`. */
-    options: z.array(z.string().min(1).max(200)).max(4).optional(),
+    options: questionOptions.optional(),
     actor_kind: z.enum(['owner', 'ai', 'agent']),
     source: z.enum(['chat', 'mcp', 'routine']),
     /**
@@ -136,13 +145,24 @@ const pendingRecord = z
    *
    * Записи БЕЗ `kind` (чатовые pending'ы и предложения рутины) идут по ветке действия —
    * то самое правило обратной совместимости из докблока `kind`.
+   *
+   * ЗАПРЕТ ЗЕРКАЛЕН (Minor-3 ревью Задачи 2): у действия не может быть `question`/
+   * `options` ровно так же, как у вопроса — `tool`/`input`. Без второй половины запись
+   * `{kind:'action', tool, input, question}` схему проходила бы, и читатели, выводящие
+   * подпись единицы из полей (экран пачки, история), рисовали бы гибрид — действие,
+   * выглядящее вопросом. Запрет живёт в схеме, а не в сборке `RunUnit`, потому что схема
+   * стоит РАНЬШЕ и общая: она ловит гибрид и при одиночном чтении по id (approve/reject),
+   * а условие в спреде `RunUnit` чинило бы только пачку. Цена — та же, что у зеркальной
+   * комбинации: повреждённая единица роняет чтение целиком, и это намеренно (см.
+   * `parsePendingRecord`).
    */
   .superRefine((rec, ctx) => {
-    const forbid = (path: string) =>
+    const kindName = rec.kind ?? 'action';
+    const forbid = (path: string, kind: string) =>
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: [path],
-        message: `у записи kind:'question' поля «${path}» быть не может`,
+        message: `у записи kind:'${kind}' поля «${path}» быть не может`,
       });
     const require = (path: string, kind: string) =>
       ctx.addIssue({
@@ -151,13 +171,19 @@ const pendingRecord = z
         message: `у записи kind:'${kind}' поле «${path}» обязательно`,
       });
     if (rec.kind === 'question') {
-      if (rec.tool !== undefined) forbid('tool');
-      if (rec.input !== undefined) forbid('input');
+      if (rec.tool !== undefined) forbid('tool', 'question');
+      if (rec.input !== undefined) forbid('input', 'question');
       if (rec.question === undefined) require('question', 'question');
       return;
     }
-    if (rec.tool === undefined) require('tool', rec.kind ?? 'action');
-    if (rec.input === undefined) require('input', rec.kind ?? 'action');
+    // Запрет накрывает и записи БЕЗ `kind`: они читаются как действие, и гибрид остаётся
+    // гибридом независимо от того, явен ключ или нет. Совместимости это не стоит ничего —
+    // `question` в записи без `kind` не писал никто и никогда (единственный писатель —
+    // `createPending`, и до D42 поля вопроса у него не было вовсе)
+    if (rec.question !== undefined) forbid('question', kindName);
+    if (rec.options !== undefined) forbid('options', kindName);
+    if (rec.tool === undefined) require('tool', kindName);
+    if (rec.input === undefined) require('input', kindName);
   });
 
 export type PendingRecord = z.infer<typeof pendingRecord>;
@@ -299,6 +325,7 @@ export async function createPending(
   }
   const pendingId =
     args.dedupeKey !== undefined ? pendingMessageId(args.actor.userId, args.dedupeKey) : newId();
+  if (args.kind === 'question') assertQuestionBounds(pendingId, args.question, args.options);
   const threadId = args.threadId ?? (await ensureGlobalThread(tx, args.actor.userId));
   // У вопроса тула нет — `pendingSummary` вернул бы `undefined` в summary карточки и в
   // «Требуется подтверждение: undefined»; сводка вопроса — сам вопрос, усечённый
@@ -354,6 +381,31 @@ export async function createPending(
     },
   });
   return { pendingId, card };
+}
+
+/**
+ * Границы вопроса ПРИ ЗАПИСИ (Minor-2 ревью Задачи 2) — теми же схемами, что при чтении.
+ *
+ * Читатель fail-closed: `parsePendingRecord` внутри `listRunUnits` роняет ВСЮ пачку
+ * прогона, если хоть одна запись не прошла схему, — вместе с гашением и сверкой
+ * `undecided`. Значит запись, склеенная мимо `askInput` (внутренний вызыватель, собравший
+ * вопрос из строк), убила бы владельцу всю пачку целиком. Цена отказа писателю —
+ * непоставленный вопрос, цена молчания — неразбираемая пачка; поэтому проверяем здесь.
+ *
+ * ExecError VALIDATION, а не `Error` (как у неверного уровня выше): текст вопроса
+ * приходит от модели, и это доменный отказ вызывающему тулу, а не баг вызывателя.
+ */
+function assertQuestionBounds(pendingId: string, question: string, options?: string[]): void {
+  const parsed = z
+    .object({ question: questionText, options: questionOptions.optional() })
+    .safeParse({ question, options });
+  if (!parsed.success) {
+    throw new ExecError(
+      'VALIDATION',
+      'вопрос не помещается в границы записи — карточка не поставлена',
+      { pendingId, issues: parsed.error.issues },
+    );
+  }
 }
 
 /**
@@ -803,6 +855,198 @@ export async function rejectPending(db: Db, args: RejectPendingArgs): Promise<Re
 }
 
 /**
+ * Гейт рода записи для судеб ВОПРОСА — зеркало `assertNotQuestion`: на действие
+ * отвечать нечем, его принимают. Запись сюда чужой судьбы сделала бы действие
+ * «отвеченным» для пачки, а approve — по-прежнему возможным: две судьбы у одной единицы.
+ *
+ * Запись без `kind` (чатовый pending, предложение рутины) читается как действие — то же
+ * правило обратной совместимости, что в `pendingRecord`.
+ */
+function assertQuestion(pending: PendingRecord): void {
+  if (pending.kind !== 'question') {
+    throw new ExecError('VALIDATION', 'это действие — его принимают, а не отвечают', {
+      pendingId: pending.id,
+    });
+  }
+}
+
+/** Судьбы вопроса, НАЙДЕННЫЕ в ленте по двум детерминированным PK. */
+interface QuestionFates {
+  /** Ответ записан; `null` — сообщение есть, а строки `answer` в его metadata нет. */
+  answer?: string | null;
+  /** Гашение записано. */
+  staled?: true;
+}
+
+/**
+ * Перечитка ОБЕИХ судеб вопроса под уже взятым замком — сердце правила единственности
+ * (ОЧ.8): судьба у вопроса одна, и держится это тем, что каждая из двух процедур перед
+ * записью смотрит НЕ ТОЛЬКО на свой PK, но и на чужой. Смотреть только на свой — значит
+ * писать вторую судьбу поверх первой; смотреть без замка — значит успеть сделать это
+ * между чужой проверкой и чужим коммитом.
+ *
+ * Найденное СОБИРАЕТСЯ, а решение принимается вызывателями отдельным шагом: порядок
+ * строк в `IN`-выборке произволен, и правило «ответ важнее гашения», написанное
+ * присваиванием по ходу строк, было бы зелёным случайно (урок Задачи 2). Здесь каждая
+ * строка раскладывается по СВОЕМУ ключу, а не по своему номеру.
+ */
+async function readQuestionFates(
+  tx: Tx,
+  ownerId: string,
+  pendingId: string,
+): Promise<QuestionFates> {
+  const answerId = answerMessageId(ownerId, pendingId);
+  const staleId = questionStaleMessageId(ownerId, pendingId);
+  const rows = await tx
+    .select({ id: chatMessages.id, metadata: chatMessages.metadata })
+    .from(chatMessages)
+    .where(inArray(chatMessages.id, [answerId, staleId]));
+  const fates: QuestionFates = {};
+  for (const row of rows) {
+    if (row.id === answerId) {
+      const answer = (row.metadata as { answer?: unknown }).answer;
+      fates.answer = typeof answer === 'string' ? answer : null;
+    } else if (row.id === staleId) {
+      fates.staled = true;
+    }
+  }
+  return fates;
+}
+
+/**
+ * Исход ответа на вопрос пачки (ОЧ.9). Ошибки в союз НЕ входят и бросаются `ExecError`
+ * (NOT_FOUND на чужом и несуществующем, VALIDATION на действии): союз описывает СУДЬБУ
+ * вопроса, и «ошибка значением» в том же поле, где лежит применившийся ответ, заставила
+ * бы роутер различать их по строке.
+ */
+export type AnswerQuestionResult =
+  | { status: 'answered'; pendingId: string } // записан этот ответ — или его replay
+  | { status: 'already'; answer: string } // раньше применился ДРУГОЙ ответ (С5)
+  | { status: 'stale' }; // вопрос погашен, ответ НЕ записан (В2)
+
+/**
+ * Ответ владельца на вопрос пачки (§6, ОЧ.8/ОЧ.9): append-сообщение с детерминированным
+ * PK `answerMessageId(owner, pendingId)`; сама pending-запись не правится (§4.6), как и
+ * у остальных судеб.
+ *
+ * Автор ответа — ВЛАДЕЛЕЦ: `role:'user'` + `source:'ui'` (§6/§9.5 «ответы — ui-сообщения»),
+ * в отличие от гашения, автор которого — система. Сообщение не несёт `metadata.actions`,
+ * поэтому в журнал §7.8 и в Undo не попадает — это требование инварианта §9.5, а не
+ * деталь: ответ владельца ничего не меняет в графе и откатывать в нём нечего.
+ *
+ * ЕДИНСТВЕННОСТЬ СУДЬБЫ (ОЧ.8, Б4 ревью): замок берётся ДО ПЕРВОГО ЧТЕНИЯ СОСТОЯНИЯ (см.
+ * док `acquirePendingLock`), под ним перечитываются ОБА PK, первая записанная судьба
+ * финальна. Порядок разбора найденного:
+ *  - записан ответ, ТОТ ЖЕ текст → replay `answered`: повтор кнопки — не вторая запись;
+ *  - записан ответ, ДРУГОЙ текст → `already` с ПРИМЕНИВШИМСЯ (С5 ревью): молча схлопнуть
+ *    два разных ответа в «принято» нельзя — владелец ушёл бы уверенным, что рутина
+ *    пойдёт по второму;
+ *  - записано гашение → `stale` БЕЗ записи (В2): карточка показывает «снят следующим
+ *    прогоном» и ответа не принимает.
+ * Ответ проверяется РАНЬШЕ гашения намеренно. Обе записи разом эти процедуры не создают
+ * (каждая уступает чужой судьбе под общим замком), но если они всё же встретились в
+ * ленте — запись мимо процедур, крэш чужого пути, — истина та же, что у читателя пачки:
+ * ОТВЕТ ВАЖНЕЕ ГАШЕНИЯ (`listRunUnits`, ОЧ.8). Иначе процедура отвечала бы «снят» про
+ * вопрос, который в ленте помечен решённым.
+ *
+ * ИЗНУТРИ ОТКРЫТОЙ ТРАНЗАКЦИИ ЗВАТЬ НЕЛЬЗЯ — тот же капкан, что у `rejectPending`:
+ * вложенного tx у postgres-js нет, `db.transaction` резервирует ДРУГУЮ коннекцию пула, и
+ * вызов повиснет на собственном advisory-замке, который держит внешняя транзакция, — до
+ * statement_timeout (замерено 2546 мс). Это не ошибка компиляции и не исключение по
+ * месту, а зависание, которое найдёт только ревью. Tx-варианта у судеб вопроса пока нет
+ * намеренно: единственный вызыватель гашения из недр (`closeOpenOfRun`) принимает `deps`
+ * и открывает `withIdentity` по месту, а ответ приходит только роутером. Понадобится
+ * вызвать из открытой транзакции — заводить tx-форму, как у `rejectPendingTx`.
+ */
+export async function answerPendingQuestion(
+  db: Db,
+  args: { ownerId: string; pendingId: string; answer: string; option?: number },
+): Promise<AnswerQuestionResult> {
+  return withIdentity(db, args.ownerId, async (tx): Promise<AnswerQuestionResult> => {
+    await acquirePendingLock(tx, args.pendingId); // до первого чтения состояния
+    const msg = await findPendingMessage(tx, args.pendingId);
+    if (!msg) {
+      // Чужой и несуществующий неразличимы (RLS скоупит журнал владельцем) — как у
+      // approve/reject: по коду отказа нельзя узнать о чужих вопросах
+      throw new ExecError('NOT_FOUND', `вопрос ${args.pendingId} не найден`, {
+        pendingId: args.pendingId,
+      });
+    }
+    assertQuestion(msg.pending); // род записи неизменяем — перепроверять под замком нечего
+    const fates = await readQuestionFates(tx, args.ownerId, args.pendingId);
+    if (fates.answer !== undefined) {
+      if (fates.answer === args.answer) return { status: 'answered', pendingId: args.pendingId };
+      // `null` — сообщение ответа без текста (запись мимо процедуры): показать нечего,
+      // но выдать это за «твой ответ принят» нельзя — С5 запрещает схлопывание
+      return { status: 'already', answer: fates.answer ?? '' };
+    }
+    if (fates.staled === true) return { status: 'stale' };
+    await appendMessageIdempotent(tx, {
+      id: answerMessageId(args.ownerId, args.pendingId),
+      threadId: msg.threadId, // тред карточки-запроса: ответ ложится в ту же ленту
+      role: 'user',
+      content: `Ответ: «${args.answer}»`,
+      metadata: {
+        type: 'question_answered',
+        answers: args.pendingId,
+        answer: args.answer,
+        // Условная запись, как у `run_id`/`edited_from`: `option` — ИНДЕКС выбранного
+        // варианта (0..3), у свободного ответа его нет вовсе. Текст ответа при выборе
+        // кнопки — в `answer`, поэтому читателям пачки индекс не нужен
+        ...(args.option !== undefined && { option: args.option }),
+        source: 'ui',
+      },
+    });
+    return { status: 'answered', pendingId: args.pendingId };
+  });
+}
+
+/**
+ * Гашение вопроса пачки (ОЧ.8): нерешённые единицы прошлых прогонов снимает новый
+ * прогон — плановый или «Продолжить сейчас». Append-сообщение с детерминированным PK
+ * `questionStaleMessageId(owner, pendingId)`, автор — СИСТЕМА (`role:'system'`), в отличие
+ * от ответа. `metadata.actions` нет, как и у ответа: в журнал §7.8 и Undo не попадает.
+ *
+ * `text` — параметром, а не таблицей причин: у гашения вопроса нет `RejectReason`
+ * (четвёрка причин описывает судьбу ДЕЙСТВИЯ), а формулировка зависит от того, кто гасит
+ * — следующий прогон, откат или «Продолжить сейчас».
+ *
+ * `staled:false` — судьба уже записана, и НЕ ЭТА: либо вопрос отвечен (ОТВЕТ ВАЖНЕЕ
+ * ГАШЕНИЯ, ОЧ.8 — то же правило, что у терминального пути `lifecycle.ts:331-334`: сказать
+ * владельцу «снято» про то, что он уже решил, — потерять его решение), либо уже погашен
+ * раньше (повтор идемпотентен, исходный текст не переписывается — журнал append-only).
+ * Отличать эти два случая вызывателю не нужно: и там, и там гасить нечего.
+ *
+ * Замок, перечитка обоих PK и запрет вызова ИЗНУТРИ ОТКРЫТОЙ ТРАНЗАКЦИИ — те же, что у
+ * `answerPendingQuestion`; см. её докблок.
+ */
+export async function stalePendingQuestion(
+  db: Db,
+  args: { ownerId: string; pendingId: string; text: string },
+): Promise<{ staled: boolean }> {
+  return withIdentity(db, args.ownerId, async (tx) => {
+    await acquirePendingLock(tx, args.pendingId); // до первого чтения состояния
+    const msg = await findPendingMessage(tx, args.pendingId);
+    if (!msg) {
+      throw new ExecError('NOT_FOUND', `вопрос ${args.pendingId} не найден`, {
+        pendingId: args.pendingId,
+      });
+    }
+    assertQuestion(msg.pending);
+    const fates = await readQuestionFates(tx, args.ownerId, args.pendingId);
+    if (fates.answer !== undefined || fates.staled === true) return { staled: false };
+    await appendMessageIdempotent(tx, {
+      id: questionStaleMessageId(args.ownerId, args.pendingId),
+      threadId: msg.threadId,
+      role: 'system',
+      content: args.text,
+      metadata: { type: 'question_stale', stales: args.pendingId },
+    });
+    return { staled: true };
+  });
+}
+
+/**
  * Единица пачки прогона (D42): отложенное действие или вопрос — вместе с судьбой.
  *
  * ВАЖНО читателям: `fate:'stale'` достижим ТОЛЬКО у вопросов. Погашенное или протухшее
@@ -849,6 +1093,15 @@ export interface RunUnit {
  *
  * ОТВЕТ ВАЖНЕЕ ГАШЕНИЯ (ОЧ.8): если у вопроса есть и ответ, и гашение (крэш между шагами
  * следующего прогона), судьба — `answered`. То же правило, что у терминального пути.
+ *
+ * КОНТРАКТ ВЫЗЫВАТЕЛЯ (Minor-1 ревью Задачи 2), тот же, что у `rejectPendingTx`: tx обязан
+ * быть открыт `withIdentity(db, ownerId)` для ТОГО ЖЕ владельца. Проверка этого стоила бы
+ * round-trip на каждый вызов, поэтому её нет, а цена рассинхрона МОЛЧАЛИВАЯ и потому
+ * высокая: строки единиц скоупит RLS транзакции, а PK судеб считаются от переданного
+ * `ownerId` — единицы вернутся, но ни одна судьба не найдётся, и ВСЯ пачка прочитается
+ * как `open`. Владелец увидит навсегда нерешённую пачку, «Принять все» будет повторно
+ * жевать решённое, а сверка `undecided` никогда не снимет флажок. Ошибки при этом нет
+ * нигде — пин в `pending.test.ts` фиксирует именно этот исход.
  */
 export async function listRunUnits(tx: Tx, ownerId: string, runId: string): Promise<RunUnit[]> {
   const asQuestion = JSON.stringify({ pending: { run_id: runId, kind: 'question' } });
