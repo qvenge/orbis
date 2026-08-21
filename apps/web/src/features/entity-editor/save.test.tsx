@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
-import { type BodyDoc, parseBody } from '@orbis/shared/doc';
+import { type BodyDoc, DOC_EXTENSIONS, parseBody } from '@orbis/shared/doc';
 import { act, screen } from '@testing-library/react';
+import { getSchema } from '@tiptap/core';
+import { Node as PMNode } from '@tiptap/pm/model';
 import { useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { installCrashTrap, renderWithProviders, trpcError } from '../../test/harness';
@@ -405,6 +407,51 @@ test('документ, отличающийся лишь порядком кл�
 
   // Положительный контроль: смена САМОГО текста при том же порядке ключей — правка.
   s.api().onDocChange(ONE);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(1);
+});
+
+test('документ, отличающийся лишь УМОЛЧАНИЯМИ атрибутов, мутацию НЕ шлёт (ссылка, список, таблица)', async () => {
+  /**
+   * Третья причина того же отказа — и та, из-за которой открытие записи со ССЫЛКОЙ двигало
+   * `updated_at` на живом проде (смоук Ш1, Н-1). Разбор markdown не пишет атрибуты, значения
+   * которых подразумеваются; схема при посадке в редактор дописывает их все (`target`, `rel`,
+   * `class` марке ссылки, `start`/`type` нумерованному списку, четыре штуки каждой ячейке
+   * таблицы). Markdown при этом байт-в-байт тот же — сохранялся пустой ход, а платило за него
+   * предложение рутины: сдвинутый `updated_at` ломает его CAS, и оно становится `stale`.
+   *
+   * Сторона редактора берётся ПОСАДКОЙ В НАСТОЯЩУЮ СХЕМУ, а не выписывается руками, как у
+   * соседа выше: там разница в одном порядке ключей и её видно глазом, здесь же предмет — сам
+   * СПИСОК дописываемых атрибутов, и выписанный руками он проверял бы мою копию против моей же
+   * копии. Схему тест поднимает свободно: в чанк записи уезжает не он, а strip-ids.ts.
+   */
+  const md = 'см. [клинику](https://clinic.example/z)\n\n1. один\n\n| a |\n| --- |\n| 1 |';
+  const fromParse = parseBody(md);
+  const fromEditor: BodyDoc = {
+    v: fromParse.v,
+    doc: PMNode.fromJSON(getSchema(DOC_EXTENSIONS as never), fromParse.doc).toJSON(),
+  };
+  // Страж вакуумности: посадка обязана что-то ДОПИСАТЬ — иначе тест сверяет документ сам с
+  // собой и переживёт любую поломку сравнения.
+  expect(JSON.stringify(fromEditor)).not.toBe(JSON.stringify(fromParse));
+  expect(JSON.stringify(fromEditor)).toContain('"rel":"noopener noreferrer nofollow"');
+
+  const s = setup({ entity: { ownerId: OWNER, updatedAt: ENTITY.updatedAt, bodyDoc: fromParse } });
+  s.api().onDocChange(fromEditor);
+  await tick(SAVE_PAUSE);
+  expect(s.updates()).toHaveLength(0);
+  expect(s.stray()).toEqual([]);
+
+  // Положительный контроль, и он про ОСМЫСЛЕННОЕ значение, а не про текст: `target: '_self'`
+  // владелец мог поставить нарочно, и от умолчания оно отличается — такая правка обязана
+  // доехать. Иначе «снимаем умолчания» тихо превратилось бы в «не сохраняем атрибуты ссылки».
+  const retargeted = JSON.parse(JSON.stringify(fromEditor)) as BodyDoc;
+  const link = (
+    retargeted.doc.content?.[0]?.content?.[1]?.marks?.[0] as { attrs: Record<string, unknown> }
+  ).attrs;
+  expect(link.target).toBe('_blank');
+  link.target = '_self';
+  s.api().onDocChange(retargeted);
   await tick(SAVE_PAUSE);
   expect(s.updates()).toHaveLength(1);
 });

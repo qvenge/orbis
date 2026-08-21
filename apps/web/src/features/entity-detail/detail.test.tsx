@@ -4343,6 +4343,31 @@ function editHandler(over: Record<string, unknown> = {}): MockHandler {
 }
 
 /**
+ * Те же два тела, но СО ССЫЛКАМИ — самое бытовое содержимое записи и второй возбудитель
+ * болезни блочных id: марку `link` схема дополняет своими умолчаниями, которых в разборе
+ * markdown нет (см. `stripMarkDefaults`). Ссылки в ОБОИХ телах: сторона «было» ходит в
+ * клиентский дифф, и разница только в одной из сторон оставила бы половину пути непокрытой.
+ */
+const LINK_CURRENT_BODY = 'Планы на день\n\nзабрать [посылку](https://pvz.example/n7)';
+const LINK_PROPOSED_BODY = 'Планы на день\n\nпозвонить в [клинику](https://clinic.example/zuby)';
+
+const linkHandler = (): MockHandler =>
+  overlayHandler({
+    proposals: [
+      proposalFor({
+        operations: [
+          overlayBodyRow({
+            after: LINK_PROPOSED_BODY,
+            bodyDiff: { units: OVERLAY_DIFF_UNITS },
+            proposedDoc: parseBody(LINK_PROPOSED_BODY),
+          }),
+        ],
+      }),
+    ],
+    entity: { ...entity, body: LINK_CURRENT_BODY, bodyDoc: parseBody(LINK_CURRENT_BODY) },
+  });
+
+/**
  * Одна операция `entity_update`, правящая И ПОЛЕ, И ТЕЛО, — то есть две строки с ОБЩИМ
  * `index`. Так их строит сервер (`updateRows`, lifecycle.ts), и ровно поэтому ключ строки на
  * клиенте составной, а не один номер операции. Режим правки при этом свойство ОПЕРАЦИИ
@@ -4486,6 +4511,34 @@ describe('режим правки тела в слое', () => {
       decision: 'approve',
     });
     // Два редактора за один тест — вдвое дороже соседей; порог тот же, см. приёмку 8 выше.
+  }, 30_000);
+
+  test('тело со ССЫЛКОЙ: открыл редактор, ничего не менял → edits.body ПУСТ (нормализацию марки link владельцу не приписывают)', async () => {
+    /**
+     * Второй возбудитель той же болезни, что блочные id, — и он бил ровно в этот гейт.
+     *
+     * Марку `link` разбор markdown отдаёт как `{href, title}`, а схема ProseMirror дополняет её
+     * своими умолчаниями (`target: '_blank'`, `rel: 'noopener noreferrer nofollow'`,
+     * `class: null`). Пост-маунтовая транзакция UniqueID приносит эту разницу в `onUpdate`, и
+     * до `stripMarkDefaults` буфер правок наполнялся БЕЗ ЕДИНОГО НАЖАТИЯ: «Принять» слал
+     * `edits.body`, лестница правки рождала P2, лента получала «правку владельца», а история —
+     * «принято с правками владельца» на предложении, которого владелец не касался.
+     *
+     * Приёмки 7 и 8 этого не ловили: их тела были без ссылок.
+     */
+    const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, linkHandler());
+    const { plate } = await openBodyEditor();
+    // Премиса: редактор поднялся ИМЕННО на теле со ссылкой — иначе тест сторожил бы пустоту.
+    expect(within(plate).getByTestId('body-editor')).toHaveTextContent('клинику');
+    expect(within(plate).getByTestId('body-editor').querySelector('a[href]')).toBeInTheDocument();
+
+    fireEvent.click(within(plate).getByRole('button', { name: 'Принять' }));
+    await waitFor(() => expect(calls.some((c) => c.path === 'routine.decideProposal')).toBe(true));
+    expect(decideInput(calls)).toEqual({
+      runId: 'run1',
+      pendingId: 'p1',
+      decision: 'approve',
+    });
   }, 30_000);
 
   test('клиентский дифф пересчитывается по ПАУЗЕ ввода, а не на каждый штрих', async () => {

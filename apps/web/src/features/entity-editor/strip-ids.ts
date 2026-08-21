@@ -1,7 +1,8 @@
 import type { JSONContent } from '@tiptap/core';
 
 /**
- * Сравнение документов «по смыслу» — и список типов, у которых блочный id за смысл не считается.
+ * Сравнение документов «по смыслу» — и перечень всего, что редактор дописывает к документу сам:
+ * блочные id и умолчания атрибутов у нод и марок.
  *
  * Файл ЛИСТОВОЙ и обязан таким остаться: рантайм-импортов у него нет ни одного (тип JSONContent
  * стирается компилятором). Сравнение зовёт не только редактор, но и автосохранение
@@ -28,29 +29,135 @@ export const UNIQUE_ID_TYPES: readonly string[] = [
 ];
 
 /**
+ * Умолчания атрибутов НОД схемы: `тип → атрибут → значение, которое схема подставляет сама`.
+ *
+ * Зачем список нужен, замерено пробоем. Разбор markdown отдаёт узел БЕЗ атрибутов, значения
+ * которых и так подразумеваются (`1. один` — без `start`, ячейка таблицы — без `colspan`), а
+ * ProseMirror при посадке того же документа в редактор дописывает их все. Дальше — та же
+ * механика, что у блочных id: пост-маунтовая транзакция приносит разницу в `onUpdate`, и
+ * документ «менялся» там, где его никто не трогал. Следствий два, и оба живые:
+ *   - на ЗАПИСИ уходило автосохранение — байт-в-байт тот же markdown, но новый `updated_at`,
+ *     от которого предложение рутины само делалось `stale`;
+ *   - в СЛОЕ предложения наполнялся буфер `bodyEditsRef` — и «Принять» слал `edits.body` без
+ *     единого нажатия: рождался P2, лента получала «правку владельца», история — «принято с
+ *     правками владельца» на тексте, которого владелец не касался.
+ * Кто именно даёт разницу, ЗАМЕРЕНО (разбор markdown против посадки в схему, шестнадцать тел):
+ * ссылка, нумерованный список и ячейка таблицы — дают; абзац, заголовок, маркированный список,
+ * чеклист, цитата, блок кода, жирный/курсив и кодовая вставка — нет.
+ *
+ * Снимается атрибут ТОЛЬКО когда его значение РАВНО умолчанию, и это не осторожность, а то самое
+ * условие, при котором снятие ничего не прячет. У ProseMirror «атрибута нет» и «атрибут равен
+ * умолчанию» — один и тот же документ (посадка в схему превращает первое во второе), поэтому
+ * приведение к общей форме равняет ровно те деревья, которые и так значат одно. Осмысленное
+ * значение владельца от умолчания ОТЛИЧАЕТСЯ и уцелеет: `colspan: 2` у слитой ячейки,
+ * `align: 'center'` у выровненной, `title` у ссылки с подсказкой. А снятие галочки в чеклисте
+ * (`checked: true` → `false`) видно по ИСЧЕЗНОВЕНИЮ атрибута — сверка идёт после приведения
+ * обеих сторон, и «было true / стало умолчание» остаётся разницей.
+ *
+ * Список продублирован из схемы РУКАМИ, потому что файл листовой (см. докблок сверху): чтение
+ * умолчаний у настоящей схемы утащило бы её 156 кБ в чанк записи. Расхождение сторожит тест
+ * «таблицы умолчаний strip-ids совпадают со схемой» (`editor.test.tsx`) — он поднимает настоящую
+ * схему и сверяет обе таблицы двусторонне, поэтому новое расширение или смена умолчания красит
+ * прогон, а не тихо возвращает фантомную правку.
+ */
+export const NODE_ATTR_DEFAULTS: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+  heading: { level: 1 },
+  orderedList: { start: 1, type: null },
+  codeBlock: { language: null },
+  taskItem: { checked: false },
+  tableCell: { colspan: 1, rowspan: 1, colwidth: null, align: null },
+  tableHeader: { colspan: 1, rowspan: 1, colwidth: null, align: null },
+  entityRef: { entityId: null, label: null },
+  queryBlock: { query: '' },
+  rawBlock: { markdown: '' },
+};
+
+/**
+ * То же самое для МАРОК. Марка в схеме сегодня одна с атрибутами вовсе — `link`, — и она же
+ * оказалась самым дорогим возбудителем: ссылка в теле встречается чаще нумерованного списка и
+ * таблицы вместе взятых, а `target`/`rel`/`class` редактор дописывает КАЖДОЙ.
+ *
+ * Снятие блочных id и снятие умолчаний — одно лекарство от одной болезни, просто у неё четыре
+ * возбудителя (id, ссылка, нумерованный список, ячейка таблицы). Разделены таблицы потому, что
+ * имена нод и марок живут в схеме в разных пространствах, и одна общая молча склеила бы ноду с
+ * маркой, назовись они однажды одинаково.
+ */
+export const MARK_ATTR_DEFAULTS: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
+  link: {
+    href: null,
+    target: '_blank',
+    rel: 'noopener noreferrer nofollow',
+    class: null,
+    title: null,
+  },
+};
+
+/**
+ * Оставить у узла только ЗНАЧАЩИЕ атрибуты: без блочных id и без значений, равных умолчанию.
+ *
+ * `Object.is`, а не `===`: у `colwidth` умолчание `null`, а сравнивать значения приходится
+ * разнородные, и одна случайная пара `NaN` дала бы «не равно» на двух одинаковых документах.
+ */
+function meaningfulAttrs(
+  attrs: Record<string, unknown>,
+  defaults: Readonly<Record<string, unknown>> | undefined,
+  dropId: boolean,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(attrs).filter(
+      ([k, v]) =>
+        !(dropId && k === 'id') && !(defaults && k in defaults && Object.is(defaults[k], v)),
+    ),
+  );
+}
+
+/**
+ * Документ в общей форме: без всего, что дописывает к нему редактор сам.
+ *
  * UniqueID кладёт `attrs.id` во все перечисленные ему блоки ОТДЕЛЬНОЙ транзакцией уже после
  * монтирования, поэтому по строковому равенству документ «менялся» при каждом открытии записи —
  * и через две секунды уходило автосохранение без единого нажатия клавиши: рос updated_at, в
  * журнал ложился фантомный entity_updated, и «отмени последнее» отменяло бы открытие записи
  * (ревью Б4).
  *
- * Снимается атрибут ТОЛЬКО у тех типов, которым его ставит UniqueID. Прежний фильтр по одному
+ * `id` снимается ТОЛЬКО у тех типов, которым его ставит UniqueID. Прежний фильтр по одному
  * имени `id` на любой глубине был правилен ровно потому, что сегодня ни одна другая нода схемы
  * атрибута с таким именем не имеет: появись он у ноды-новичка (или переедь туда цель чипа) —
  * правка, меняющая только его, молча перестала бы считаться правкой и не сохранялась бы.
  * Долг Задачи 7.
+ *
+ * Умолчания атрибутов — второй, третий и четвёртый возбудители той же болезни; чем они дороги и
+ * почему снимаются только при равенстве умолчанию, см. `NODE_ATTR_DEFAULTS`.
  */
-export function stripIds(node: JSONContent): JSONContent {
-  const { attrs, content, ...rest } = node;
-  const managed = typeof node.type === 'string' && UNIQUE_ID_TYPES.includes(node.type);
-  const cleaned =
-    attrs && managed
-      ? Object.fromEntries(Object.entries(attrs).filter(([k]) => k !== 'id'))
-      : attrs;
+export function canonicalDoc(node: JSONContent): JSONContent {
+  const { attrs, marks, content, ...rest } = node;
+  const type = typeof node.type === 'string' ? node.type : undefined;
+  const cleaned = attrs
+    ? meaningfulAttrs(
+        attrs,
+        type === undefined ? undefined : NODE_ATTR_DEFAULTS[type],
+        type !== undefined && UNIQUE_ID_TYPES.includes(type),
+      )
+    : undefined;
+  // Марки идут тем же правилом, но БЕЗ снятия id: блочных id у марок не бывает, а атрибут с
+  // таким именем у марки-новичка значил бы что-то своё.
+  const cleanedMarks = marks?.map((mark) => {
+    const { attrs: markAttrs, ...markRest } = mark;
+    const markType = typeof mark.type === 'string' ? mark.type : undefined;
+    const kept = markAttrs
+      ? meaningfulAttrs(
+          markAttrs,
+          markType === undefined ? undefined : MARK_ATTR_DEFAULTS[markType],
+          false,
+        )
+      : undefined;
+    return { ...markRest, ...(kept && Object.keys(kept).length ? { attrs: kept } : {}) };
+  });
   return {
     ...rest,
     ...(cleaned && Object.keys(cleaned).length ? { attrs: cleaned } : {}),
-    ...(content ? { content: content.map(stripIds) } : {}),
+    ...(cleanedMarks ? { marks: cleanedMarks } : {}),
+    ...(content ? { content: content.map(canonicalDoc) } : {}),
   };
 }
 
@@ -70,6 +177,8 @@ function stable(doc: JSONContent): string {
   );
 }
 
-/** Равны ли документы по смыслу: с точностью до блочных id и порядка ключей. */
+/**
+ * Равны ли документы по смыслу: с точностью до блочных id, умолчаний атрибутов и порядка ключей.
+ */
 export const sameDoc = (a: JSONContent, b: JSONContent): boolean =>
-  stable(stripIds(a)) === stable(stripIds(b));
+  stable(canonicalDoc(a)) === stable(canonicalDoc(b));

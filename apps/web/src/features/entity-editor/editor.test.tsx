@@ -13,7 +13,7 @@ import { BodyEditor, htmlToPlainParagraphs } from './BodyEditor';
 import { BODY_PLACEHOLDER } from './body-box';
 import { EditorShell } from './EditorShell';
 import { EDITOR_EXTENSIONS } from './extensions';
-import { stripIds } from './strip-ids';
+import { canonicalDoc, MARK_ATTR_DEFAULTS, NODE_ATTR_DEFAULTS, UNIQUE_ID_TYPES } from './strip-ids';
 
 /** Сущность, на которую ссылается чип в телах ниже. */
 const KUPIT = '0f8fad5b-d9cb-469f-a165-70867728950e';
@@ -79,6 +79,58 @@ test('подменённые ноды в составе редактора ро�
   expect(EDITOR_EXTENSIONS.filter((e) => e.name === 'queryBlock')).toHaveLength(1);
 });
 
+test('таблицы умолчаний strip-ids совпадают со схемой — поимённо и по значению', () => {
+  /**
+   * `NODE_ATTR_DEFAULTS`/`MARK_ATTR_DEFAULTS` — копия умолчаний схемы, снятая РУКАМИ: файл
+   * сравнения листовой, и чтение настоящей схемы утащило бы её 156 кБ в чанк записи (докблок
+   * strip-ids.ts). Копия без стража — это ровно тот дефект, который она лечит: расходится она
+   * МОЛЧА, а расплата — фантомная правка (открытие записи двигает `updated_at`; «Принять» в
+   * слое шлёт `edits.body` без единого нажатия).
+   *
+   * Сверка ДВУСТОРОННЯЯ (`toEqual`, а не «каждый ключ таблицы есть в схеме»): пропущенный
+   * атрибут возвращает фантом, а лишний — прячет настоящую правку владельца. Ошибиться можно
+   * в обе стороны, и красить обязано тоже в обе.
+   */
+  type AttrSpec = { hasDefault: boolean; default?: unknown };
+  // Таблицу атрибутов prosemirror-model в своих типах не публикует — она есть только в рантайме.
+  const defaultsOf = (type: unknown): Record<string, unknown> =>
+    Object.fromEntries(
+      Object.entries((type as { attrs: Record<string, AttrSpec> }).attrs)
+        .filter(([, a]) => a.hasDefault)
+        .map(([k, a]) => [k, a.default]),
+    );
+  const tableOf = (types: Record<string, unknown>) =>
+    Object.fromEntries(
+      Object.entries(types)
+        .map(([name, t]) => [name, defaultsOf(t)] as const)
+        .filter(([, d]) => Object.keys(d).length > 0),
+    );
+
+  const doc = getSchema(DOC_EXTENSIONS as never);
+  expect(tableOf(doc.nodes)).toEqual(NODE_ATTR_DEFAULTS);
+  expect(tableOf(doc.marks)).toEqual(MARK_ATTR_DEFAULTS);
+  // Страж вакуумности: сорвись каст выше — обе таблицы вышли бы пустыми, и `toEqual` сравнивал
+  // бы пустоту с пустотой ровно до первой правки strip-ids.ts.
+  expect(MARK_ATTR_DEFAULTS.link?.rel).toBe('noopener noreferrer nofollow');
+  expect(NODE_ATTR_DEFAULTS.tableCell?.colspan).toBe(1);
+
+  /**
+   * Схема РЕДАКТОРА добавляет к тем же типам ровно один атрибут — блочный `id` UniqueID, и
+   * ровно у типов из `UNIQUE_ID_TYPES`. В таблицах умолчаний его нет НАМЕРЕННО: он снимается
+   * безусловно, а не по равенству умолчанию (правка, меняющая только `id`, правкой не
+   * является ни при каком его значении). Появись у редактора ещё один свой атрибут — сверка
+   * выше о нём не узнала бы вовсе, потому что смотрит на схему ДОКУМЕНТА.
+   */
+  const editor = getSchema(EDITOR_EXTENSIONS as never);
+  const extra = Object.entries(editor.nodes).flatMap(([name, t]) => {
+    const before = new Set(Object.keys(defaultsOf(doc.nodes[name])));
+    return Object.keys(defaultsOf(t))
+      .filter((a) => !before.has(a))
+      .map((a) => `${name}.${a}`);
+  });
+  expect(extra.sort()).toEqual([...UNIQUE_ID_TYPES].map((t) => `${t}.id`).sort());
+});
+
 test('UniqueID в составе редактора и его НЕТ в схеме документа', () => {
   // Атрибут id ставится только в редакторе (см. «Известные границы» дизайна): попав в
   // DOC_EXTENSIONS, он появился бы и на серверном разборе, где его никто не чистит.
@@ -91,7 +143,7 @@ test('UniqueID в составе редактора и его НЕТ в схем
 
 test('монтирование документа с сервера НЕ зовёт onChange — открытие не пишет в БД', async () => {
   // Два фантома, пойманные ревью: trailingNode дописывал пустой абзац (выключен в схеме),
-  // UniqueID проставляет id транзакцией после монтирования (гасится stripIds-сравнением).
+  // UniqueID проставляет id транзакцией после монтирования (гасится canonicalDoc-сравнением).
   const onChange = vi.fn();
   const h = held();
   const md = 'текст\n\n{{query: aspect=orbis/task, status=inbox}}'; // кончается блоком — худший случай
@@ -127,6 +179,54 @@ test('жирный текст в теле при открытии тоже не 
   await new Promise((r) => setTimeout(r, 50));
   // Страж вакуумности: марка в документе должна БЫТЬ, иначе тест ничего не утверждает.
   expect(JSON.stringify(h.editor?.getJSON())).toContain('"bold"');
+  expect(onChange).not.toHaveBeenCalled();
+});
+
+test('ссылка, нумерованный список и таблица при открытии не зовут onChange (умолчания атрибутов)', async () => {
+  /**
+   * Третья причина того же отказа, и самая дорогая: разбор markdown НЕ пишет атрибуты, значения
+   * которых подразумеваются, а схема при посадке дописывает их все — марке `link` три
+   * (`target`, `rel`, `class`), нумерованному списку `start` и `type`, каждой ячейке таблицы
+   * четыре. Пост-маунтовая транзакция UniqueID приносит эту разницу в `onUpdate`, и до
+   * `NODE_ATTR_DEFAULTS`/`MARK_ATTR_DEFAULTS` открытие такой записи слало фантомный
+   * `entity_update`: markdown байт-в-байт тот же, а `updated_at` новый — от чего живое
+   * предложение рутины на этой записи само делалось `stale` (смоук Ш1, Н-1).
+   *
+   * Тела в ОДНОМ редакторе, а не тремя тестами: причина отказа у всех трёх одна, и разводить
+   * её на три стенда значило бы втрое платить за монтирование ради одного и того же довода.
+   */
+  const onChange = vi.fn();
+  const h = held();
+  const md = [
+    'позвонить в [клинику](https://clinic.example/zuby)',
+    '',
+    '1. один',
+    '2. два',
+    '',
+    '| a | b |',
+    '| --- | --- |',
+    '| 1 | 2 |',
+  ].join('\n');
+  renderWithProviders(
+    <BodyEditor doc={parseBody(md)} onChange={onChange} onReady={(e) => (h.editor = e)} />,
+    handler,
+  );
+  await screen.findByTestId('body-editor');
+  await new Promise((r) => setTimeout(r, 50)); // даём UniqueID диспатчнуть свою транзакцию
+
+  // Страж вакуумности, и он тут обязателен вдвойне: без него тест зелен и когда разбор увёл
+  // всё тело в raw-блок (тогда ни ссылки, ни списка, ни таблицы в документе нет вовсе — и
+  // гасить нечего). Проверяются ИМЕННО дописанные атрибуты, а не наличие узлов: они и есть
+  // предмет.
+  const json = JSON.stringify(h.editor?.getJSON());
+  expect(h.editor?.getJSON().content?.map((n) => n.type)).toEqual([
+    'paragraph',
+    'orderedList',
+    'table',
+  ]);
+  expect(json).toContain('"rel":"noopener noreferrer nofollow"');
+  expect(json).toContain('"colspan":1');
+
   expect(onChange).not.toHaveBeenCalled();
 });
 
@@ -348,8 +448,9 @@ test('копия ИЗНУТРИ редактора вставляется цел
     'queryBlock',
   ]);
   expect(after.content?.[3]?.attrs?.query).toBe(' aspect=orbis/task, status=inbox');
-  // И целиком, с точностью до блочных id: круг копирования документ не меняет.
-  expect(stripIds(after)).toEqual(stripIds(before));
+  // И целиком, с точностью до того, что редактор дописывает сам (блочные id, умолчания
+  // атрибутов): круг копирования документ не меняет.
+  expect(canonicalDoc(after)).toEqual(canonicalDoc(before));
 
   // Тот же круг, но с прибавкой, которую делает настоящий браузер: он дописывает к содержимому
   // буфера `<meta charset=…>` и разметку границ фрагмента. Признак читается у первого ЭЛЕМЕНТА,
