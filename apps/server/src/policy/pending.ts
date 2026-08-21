@@ -24,14 +24,25 @@
 // генерирует сервер (uuidv7), коллизия с клиентским batch_id невероятна. Повторный
 // approve: findByAuditId → replay сохранённого результата; гонка одинаковых approve →
 // AuditIdConflictError → тот же replay (§7.8).
+//
+// ЕДИНИЦЫ ПАЧКИ (D42 ОЧ.2): тот же носитель несёт отложенные действия и ВОПРОСЫ рутины —
+// второго механизма «отложенного» не заводим. Отличие единицы от чатового pending и от
+// предложения рутины — ЯВНЫЙ `kind` в записи: по нему единицы находит `listRunUnits`, по
+// нему же approve/reject отказывают на вопросе (на вопрос отвечают, а не принимают его).
+// Всё остальное — идемпотентность по PK, advisory-замок, append-only судьба, атрибуция
+// сквозь одобрение — работает единицам как есть, ради чего носитель и переиспользован.
+import { createHash } from 'node:crypto';
 import {
+  answerMessageId,
   batchAuditMessageId,
   batchExecuteInput,
+  canonicalJson,
   newId,
   pendingMessageId,
+  questionStaleMessageId,
   rejectMessageId,
 } from '@orbis/shared';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { escalateAfterMutation } from '../ai/escalation';
 import { appendMessageIdempotent } from '../chat/messages';
@@ -65,39 +76,89 @@ export function operationsNoun(n: number): string {
  * с будущими полями. actor_kind/source — атрибуция ИСХОДНОГО актора (§7.8, D11):
  * approve владельца исполняет план от имени запросившего AI/агента.
  */
-const pendingRecord = z.object({
-  id: z.string().uuid(),
-  tool: z.string().min(1), // executor-форма (attach_<aspect_id с заменой «/»>)
-  input: z.record(z.unknown()), // immutable payload — envelope-валидирован при создании
-  actor_kind: z.enum(['owner', 'ai', 'agent']),
-  source: z.enum(['chat', 'mcp', 'routine']),
+const pendingRecord = z
+  .object({
+    id: z.string().uuid(),
+    /**
+     * Род записи (D42 ОЧ.2): `action` — отложенное действие, `question` — вопрос пачки.
+     *
+     * У ЕДИНИЦ прогона ключ обязателен и ЯВЕН (Б5 ревью): по нему их находит проба пачки
+     * `{pending:{run_id, kind}}`, и только явность отделяет единицу от предложения рутины
+     * (`orbis_propose`), которое живёт под тем же `run_id`. Отсутствие ключа читается как
+     * `action` ТОЛЬКО при одиночном чтении по id — это обратная совместимость чатовых
+     * pending'ов и предложений, а не «умолчание для новых записей».
+     */
+    kind: z.enum(['question', 'action']).optional(),
+    tool: z.string().min(1).optional(), // executor-форма (attach_<aspect_id с заменой «/»>)
+    input: z.record(z.unknown()).optional(), // immutable payload — envelope-валидирован при создании
+    /** Текст вопроса владельцу (kind:'question'); границы — те же, что у `askInput`. */
+    question: z.string().min(1).max(4000).optional(),
+    /** Готовые ответы кнопками (kind:'question'), до четырёх — как в `askInput`. */
+    options: z.array(z.string().min(1).max(200)).max(4).optional(),
+    actor_kind: z.enum(['owner', 'ai', 'agent']),
+    source: z.enum(['chat', 'mcp', 'routine']),
+    /**
+     * Грант исходного вызова (С2) — вторая половина той же атрибуции: approve владельца
+     * исполняет план от имени запросившего, и владелец обязан видеть, КАКОЙ доступ его
+     * попросил. Ключа нет у владельческих и чатовых путей (за ними стоит сам владелец) и
+     * не было у записей до этой работы — потому optional, а не обязательное поле;
+     * миграции не нужно: metadata — jsonb, схема читается без .strict().
+     */
+    actor_grant_id: z.string().optional(),
+    /**
+     * Прогон рутины, предложивший этот план (V1.6). Тот же приём, что с грантом: одобрил
+     * владелец, но в журнале §7.8 остаётся видно, ЧЕЙ прогон это предложил — по run_id
+     * действие находит откат прогона (rollback.ts) и история рутины. Ключа нет у чата,
+     * UI и MCP — там прогона нет; у записей до этой работы его тоже не было.
+     */
+    run_id: z.string().uuid().optional(),
+    /**
+     * Предложение, из правки которого это рождено (Ш1.5): владелец поправил значения ДО
+     * принятия, исходное погашено причиной `edited`, а рядом легло вот это. Тот же приём,
+     * что с грантом и прогоном: ключа нет у всех, кто родился не из правки.
+     *
+     * Поле не декоративно — им лестница правки НАХОДИТ своё дитя контейнмент-пробой
+     * `{pending: {edited_from: <исходное>}}`, когда перевод указателя прогона не дошёл
+     * (крэш между шагами). Оно же уезжает в action журнала §7.8 (В-1).
+     */
+    edited_from: z.string().uuid().optional(),
+    created_at: z.string(),
+  })
   /**
-   * Грант исходного вызова (С2) — вторая половина той же атрибуции: approve владельца
-   * исполняет план от имени запросившего, и владелец обязан видеть, КАКОЙ доступ его
-   * попросил. Ключа нет у владельческих и чатовых путей (за ними стоит сам владелец) и
-   * не было у записей до этой работы — потому optional, а не обязательное поле;
-   * миграции не нужно: metadata — jsonb, схема читается без .strict().
-   */
-  actor_grant_id: z.string().optional(),
-  /**
-   * Прогон рутины, предложивший этот план (V1.6). Тот же приём, что с грантом: одобрил
-   * владелец, но в журнале §7.8 остаётся видно, ЧЕЙ прогон это предложил — по run_id
-   * действие находит откат прогона (rollback.ts) и история рутины. Ключа нет у чата,
-   * UI и MCP — там прогона нет; у записей до этой работы его тоже не было.
-   */
-  run_id: z.string().uuid().optional(),
-  /**
-   * Предложение, из правки которого это рождено (Ш1.5): владелец поправил значения ДО
-   * принятия, исходное погашено причиной `edited`, а рядом легло вот это. Тот же приём,
-   * что с грантом и прогоном: ключа нет у всех, кто родился не из правки.
+   * Условная обязательность payload'а (ОЧ.2, §4): у ДЕЙСТВИЯ обязаны быть `tool`/`input`
+   * (их исполняет approve), у ВОПРОСА они запрещены, а обязателен `question`.
    *
-   * Поле не декоративно — им лестница правки НАХОДИТ своё дитя контейнмент-пробой
-   * `{pending: {edited_from: <исходное>}}`, когда перевод указателя прогона не дошёл
-   * (крэш между шагами). Оно же уезжает в action журнала §7.8 (В-1).
+   * Проверка живёт в схеме, а не у вызывателей, потому что это единственное место, через
+   * которое запись ЧИТАЕТСЯ: перепутанная комбинация — либо баг записи, либо чужеродное
+   * сообщение с ключом `pending`, и обе ведут туда же, куда повреждённый payload —
+   * в VALIDATION «pending-запись повреждена», а не в исполнение наугад. Действие без
+   * тула исполнять нечем, а «вопрос» с тулом проехал бы в executor мимо решения владельца.
+   *
+   * Записи БЕЗ `kind` (чатовые pending'ы и предложения рутины) идут по ветке действия —
+   * то самое правило обратной совместимости из докблока `kind`.
    */
-  edited_from: z.string().uuid().optional(),
-  created_at: z.string(),
-});
+  .superRefine((rec, ctx) => {
+    const forbid = (path: string) =>
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [path],
+        message: `у записи kind:'question' поля «${path}» быть не может`,
+      });
+    const require = (path: string, kind: string) =>
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [path],
+        message: `у записи kind:'${kind}' поле «${path}» обязательно`,
+      });
+    if (rec.kind === 'question') {
+      if (rec.tool !== undefined) forbid('tool');
+      if (rec.input !== undefined) forbid('input');
+      if (rec.question === undefined) require('question', 'question');
+      return;
+    }
+    if (rec.tool === undefined) require('tool', rec.kind ?? 'action');
+    if (rec.input === undefined) require('input', rec.kind ?? 'action');
+  });
 
 export type PendingRecord = z.infer<typeof pendingRecord>;
 
@@ -114,6 +175,108 @@ export interface PendingActor {
 }
 
 /**
+ * Личность единицы пачки: sha256 от канонической формы, НИЖНИМ РЕГИСТРОМ HEX.
+ *
+ * Регистр — не косметика (то же правило, что у `editsHash`, Развилка 3 Ш1): хеш уезжает
+ * в `dedupeKey`, а `pendingMessageId` ключ ЛОУЭРКЕЙСИТ (`ids.ts`) — в регистро-значимой
+ * кодировке две разные единицы схлопнулись бы в один PK, и повторная постановка вернула
+ * бы владельцу чужую карточку.
+ *
+ * Порядок ключей объектов личность НЕ меняет (`canonicalJson`: jsonb порядок ключей не
+ * хранит, и прошедший через БД payload обязан дать тот же хеш). Порядок ЭЛЕМЕНТОВ
+ * массива — меняет: варианты ответа владелец видит в присланном порядке, и переставленные
+ * кнопки — другой вопрос. Этим `unitHash` и отличается от `editsHash`, который массивы
+ * сортирует: у правки порядок строк — порядок экрана, у единицы — часть содержимого.
+ * Вторая функция той же формы заведена ровно из-за этой разницы нормализации.
+ */
+export function unitHash(value: unknown): string {
+  return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
+}
+
+/**
+ * Ключ дедупа вопроса (ОЧ.9): повтор ТОГО ЖЕ вопроса в том же прогоне обязан сойтись в
+ * ту же карточку — по СОДЕРЖИМОМУ, а не по ключу от модели (его она вольна выдумать
+ * заново, потому у `askInput` ключа идемпотентности и нет).
+ *
+ * «Нет вариантов» и «пустой список вариантов» — один и тот же вопрос: `?? []`.
+ */
+export function askDedupeKey(runId: string, question: string, options?: string[]): string {
+  return `ask:${runId}:${unitHash({ question, options: options ?? [] })}`;
+}
+
+/**
+ * Ключ дедупа отложенного действия (ОЧ.9): повторная попытка того же вызова в том же
+ * прогоне (модель повторила шаг) кладёт в пачку одну единицу, а не вторую такую же.
+ */
+export function deferDedupeKey(runId: string, tool: string, input: unknown): string {
+  return `defer:${runId}:${unitHash({ tool, input })}`;
+}
+
+/** Общая часть аргументов запроса — всё, что не зависит от рода записи. */
+interface CreatePendingCommon {
+  threadId?: string; // нет → глобальный тред владельца (как у audit-синка §7.8)
+  actor: PendingActor;
+  level: ConfirmationLevel;
+  /**
+   * Исходный batch_id модели: детерминирует pendingId (pendingMessageId) → ретрай
+   * того же batch на explicit-уровне даёт тот же PK, appendMessageIdempotent
+   * возвращает исходную карточку, а не плодит вторую (митигация Minor-4 Task 6).
+   * Нет ключа (одиночная мутация без batch_id) → серверный uuidv7, дедуп не применим.
+   */
+  dedupeKey?: string;
+  clock?: () => Date;
+  /**
+   * Карточка вместо confirmation_card по умолчанию (V1.6): предложение рутины рисуется
+   * своей карточкой (proposal_card) — у неё другой текст, другие кнопки и статус с
+   * сервера. Механика pending при этом та же: карточка — только представление, а
+   * исполняет approve сохранённый payload. Не задана → confirmation_card.
+   */
+  card?: Card;
+  /**
+   * Человекочитаемая сводка вместо умолчания (имя тула / «N операций») — для карточки и
+   * текста сообщения. Нужна там, где содержимое payload'а определяет ПРАВА (выдача
+   * автономии рутине, V1.10): владелец обязан видеть, что подтверждает — режим и белый
+   * список, а не «attach_orbis_routine».
+   */
+  summary?: string;
+  /**
+   * Текст сообщения-запроса вместо «Требуется подтверждение: <summary>». Предложение
+   * рутины — не подтверждение чата: его строка в ленте называет само событие.
+   */
+  content?: string;
+}
+
+/**
+ * Полезная нагрузка запроса — РАЗНАЯ у действия и у вопроса (D42 ОЧ.2), и союз, а не
+ * набор optional-полей, потому что перепутать их нельзя даже случайно: вопрос с тулом
+ * поехал бы в executor мимо решения владельца, а действие без тула нечего исполнять.
+ * Схема чтения (`pendingRecord`) ловит обе беды в проде; здесь их ловит компилятор.
+ *
+ * `kind` у единиц пачки ОБЯЗАН передаваться явно (Б5 ревью) — по нему их находит проба
+ * `{pending:{run_id, kind}}`. Ветка `kind?: 'action'` без ключа — это сегодняшние
+ * вызыватели (чат, `orbis_propose`, лестница правки Ш1): их записи остаются байт-в-байт
+ * прежними, потому что отсутствующий `kind` в metadata не пишется вовсе.
+ */
+export type CreatePendingArgs =
+  | (CreatePendingCommon & {
+      kind: 'question';
+      /** Текст вопроса владельцу — единственное обязательное содержимое вопроса. */
+      question: string;
+      /** До четырёх готовых ответов кнопками; порядок значим — владелец видит его. */
+      options?: string[];
+      tool?: never;
+      input?: never;
+    })
+  | (CreatePendingCommon & {
+      /** Явный `action` — у единиц пачки; отсутствие ключа — сегодняшние вызыватели. */
+      kind?: 'action';
+      tool: string; // executor-форма; для batch — 'batch_execute'
+      input: unknown; // envelope-валидированный payload (для batch — с транслированными именами)
+      question?: never;
+      options?: never;
+    });
+
+/**
  * Карточка-запрос explicit-confirmation (§7.10): системное сообщение с
  * metadata.pending (immutable payload) + metadata.cards[confirmation_card
  * mode:'explicit'] — или карточка из args.card, если вызывающий рисует запрос по-своему
@@ -127,40 +290,7 @@ export interface PendingActor {
  */
 export async function createPending(
   tx: Tx,
-  args: {
-    threadId?: string; // нет → глобальный тред владельца (как у audit-синка §7.8)
-    actor: PendingActor;
-    tool: string; // executor-форма; для batch — 'batch_execute'
-    input: unknown; // envelope-валидированный payload (для batch — с транслированными именами)
-    level: ConfirmationLevel;
-    /**
-     * Исходный batch_id модели: детерминирует pendingId (pendingMessageId) → ретрай
-     * того же batch на explicit-уровне даёт тот же PK, appendMessageIdempotent
-     * возвращает исходную карточку, а не плодит вторую (митигация Minor-4 Task 6).
-     * Нет ключа (одиночная мутация без batch_id) → серверный uuidv7, дедуп не применим.
-     */
-    dedupeKey?: string;
-    clock?: () => Date;
-    /**
-     * Карточка вместо confirmation_card по умолчанию (V1.6): предложение рутины рисуется
-     * своей карточкой (proposal_card) — у неё другой текст, другие кнопки и статус с
-     * сервера. Механика pending при этом та же: карточка — только представление, а
-     * исполняет approve сохранённый payload. Не задана → confirmation_card.
-     */
-    card?: Card;
-    /**
-     * Человекочитаемая сводка вместо умолчания (имя тула / «N операций») — для карточки и
-     * текста сообщения. Нужна там, где содержимое payload'а определяет ПРАВА (выдача
-     * автономии рутине, V1.10): владелец обязан видеть, что подтверждает — режим и белый
-     * список, а не «attach_orbis_routine».
-     */
-    summary?: string;
-    /**
-     * Текст сообщения-запроса вместо «Требуется подтверждение: <summary>». Предложение
-     * рутины — не подтверждение чата: его строка в ленте называет само событие.
-     */
-    content?: string;
-  },
+  args: CreatePendingArgs,
 ): Promise<{ pendingId: string; card: Card }> {
   if (args.level !== 'explicit-confirmation') {
     // Программная ошибка вызывающего, не доменный отказ: pending порождает только
@@ -170,7 +300,13 @@ export async function createPending(
   const pendingId =
     args.dedupeKey !== undefined ? pendingMessageId(args.actor.userId, args.dedupeKey) : newId();
   const threadId = args.threadId ?? (await ensureGlobalThread(tx, args.actor.userId));
-  const summary = args.summary ?? pendingSummary(args.tool, args.input);
+  // У вопроса тула нет — `pendingSummary` вернул бы `undefined` в summary карточки и в
+  // «Требуется подтверждение: undefined»; сводка вопроса — сам вопрос, усечённый
+  const summary =
+    args.summary ??
+    (args.kind === 'question'
+      ? questionSummary(args.question)
+      : pendingSummary(args.tool, args.input));
   const card: Card = args.card ?? {
     kind: 'confirmation_card',
     mode: 'explicit',
@@ -190,8 +326,18 @@ export async function createPending(
     metadata: {
       pending: {
         id: pendingId,
-        tool: args.tool,
-        input: args.input,
+        // Условная запись, как у `run_id`/`edited_from` ниже: у сегодняшних вызывателей
+        // (чат, предложение рутины, лестница правки) ключа нет вовсе, и их записи
+        // остаются байт-в-байт прежними — на это опираются пины Ш1
+        ...(args.kind !== undefined && { kind: args.kind }),
+        // Содержимое по роду записи (ОЧ.2): вопрос НЕ несёт tool/input, действие — несёт.
+        // Ровно эту пару комбинаций и стережёт `pendingRecord.superRefine` при чтении
+        ...(args.kind === 'question'
+          ? {
+              question: args.question,
+              ...(args.options !== undefined && { options: args.options }),
+            }
+          : { tool: args.tool, input: args.input }),
         actor_kind: args.actor.kind,
         source: args.actor.source,
         // Условная запись, а не `actor_grant_id: undefined`: ключ отсутствует у путей
@@ -209,6 +355,18 @@ export async function createPending(
   });
   return { pendingId, card };
 }
+
+/**
+ * Сводка вопроса — сам вопрос, усечённый до строки карточки. Отдельная функция, а не
+ * ветка в `pendingSummary`: та работает от тула, которого у вопроса нет.
+ */
+function questionSummary(question: string): string {
+  const one = question.trim().replace(/\s+/g, ' ');
+  return one.length > QUESTION_SUMMARY_MAX ? `${one.slice(0, QUESTION_SUMMARY_MAX)}…` : one;
+}
+
+/** Потолок сводки вопроса: карточка показывает строку, а не все 4000 символов текста. */
+const QUESTION_SUMMARY_MAX = 120;
 
 /** Summary карточки-запроса: batch — «N операций» (как preview), одиночный — имя тула. */
 function pendingSummary(tool: string, input: unknown): string {
@@ -237,7 +395,19 @@ async function findPendingMessage(tx: Tx, pendingId: string): Promise<FoundPendi
   );
   const row = rows[0];
   if (!row) return undefined;
-  const parsed = pendingRecord.safeParse((row.metadata as { pending?: unknown }).pending);
+  return {
+    threadId: row.thread_id as string,
+    pending: parsePendingRecord(pendingId, (row.metadata as { pending?: unknown }).pending),
+  };
+}
+
+/**
+ * Разбор записи с fail-closed отказом — общий для одиночного чтения по id и для пробы
+ * пачки (`listRunUnits`). Повреждённая единица не прячется из списка НАМЕРЕННО: спрятать
+ * её значило бы показать владельцу пачку решённой, пока в ней висит нерешённое.
+ */
+function parsePendingRecord(pendingId: string, value: unknown): PendingRecord {
+  const parsed = pendingRecord.safeParse(value);
   if (!parsed.success) {
     // fail-closed: повреждённый payload не исполняем (metadata неизменяема §4.6 —
     // сюда ведёт только баг записи или чужеродное сообщение с ключом pending)
@@ -246,7 +416,24 @@ async function findPendingMessage(tx: Tx, pendingId: string): Promise<FoundPendi
       issues: parsed.error.issues,
     });
   }
-  return { threadId: row.thread_id as string, pending: parsed.data };
+  return parsed.data;
+}
+
+/**
+ * Гейт рода записи (С7 ревью): на вопрос ОТВЕЧАЮТ, а не принимают и не отклоняют.
+ *
+ * Стоит в policy, а не в роутере: approve/reject зовут семь мест (кнопка чата, MCP,
+ * раннер рутины, лестница правки Ш1, компенсация propose), и роутерный гейт закрыл бы
+ * два из них. Судьба вопроса — своя пара сообщений (`answerMessageId` /
+ * `questionStaleMessageId`), и запись сюда чужой судьбы сделала бы вопрос неотвечаемым:
+ * судьба единственна и первая записанная финальна (ОЧ.8).
+ */
+function assertNotQuestion(pending: PendingRecord): void {
+  if (pending.kind === 'question') {
+    throw new ExecError('VALIDATION', 'это вопрос — на него отвечают, а не принимают/отклоняют', {
+      pendingId: pending.id,
+    });
+  }
 }
 
 /**
@@ -340,6 +527,15 @@ export async function acquirePendingLock(tx: Tx, pendingId: string): Promise<voi
 
 /** Операции ExecuteRequest из сохранённого payload (batch — собственная структура). */
 function toOperations(pending: PendingRecord): Array<{ tool: string; input: unknown }> {
+  if (pending.tool === undefined) {
+    // Недостижимо у валидной записи: `tool` обязателен всюду, кроме вопроса, а вопрос
+    // сюда не доходит — его отсекает `assertNotQuestion`. Проверка стоит потому, что
+    // условную обязательность держит `superRefine`, а его компилятор не видит: без неё
+    // «действие без тула» уехало бы в executor строкой `undefined`
+    throw new ExecError('VALIDATION', 'pending-запись повреждена — исполнение невозможно', {
+      pendingId: pending.id,
+    });
+  }
   if (pending.tool === 'batch_execute') {
     const env = batchExecuteInput.safeParse(pending.input);
     if (!env.success) {
@@ -388,6 +584,7 @@ export async function approvePending(
           pendingId: args.pendingId,
         });
       }
+      assertNotQuestion(msg.pending); // род записи неизменяем — перепроверять под замком нечего
       if (await isRejected(tx, args.pendingId)) {
         throw new ExecError(
           'VALIDATION',
@@ -464,6 +661,22 @@ export async function approvePending(
 }
 
 /**
+ * Аргументы отклонения — общие у tx-формы и обёртки.
+ *
+ * `text` (D42 С6 ревью) — своя строка ленты для ЕДИНИЦЫ пачки: «Отложенное действие
+ * снято новым прогоном» вместо «Предложение заменено новым прогоном». Причина при этом
+ * остаётся тем же enum'ом и в metadata пишется прежней: текст — только представление, и
+ * второго источника правды о судьбе он не заводит (её читают `rejectedReason` и статус
+ * прогона). Повтор ничего не переписывает — журнал append-only, §4.6.
+ */
+export interface RejectPendingArgs {
+  ownerId: string;
+  pendingId: string;
+  reason?: RejectReason;
+  text?: string;
+}
+
+/**
  * Успешный исход отклонения — общая часть tx-варианта и обёртки.
  *
  * threadId — тред карточки-запроса, который findPendingMessage и так прочитал. Нужен
@@ -515,7 +728,7 @@ export type RejectPendingResult =
  */
 export async function rejectPendingTx(
   tx: Tx,
-  args: { ownerId: string; pendingId: string; reason?: RejectReason },
+  args: RejectPendingArgs,
 ): Promise<RejectPendingTxResult> {
   const reason = args.reason ?? 'owner';
   await acquirePendingLock(tx, args.pendingId); // до первого чтения — см. док выше
@@ -525,6 +738,9 @@ export async function rejectPendingTx(
       pendingId: args.pendingId,
     });
   }
+  // Гейт — в tx-форме, а не в обёртке: иначе мимо него прошли бы вызовы из открытых
+  // транзакций (лестница правки Ш1, гашение пачки)
+  assertNotQuestion(msg.pending);
   const auditId = batchAuditMessageId(args.ownerId, args.pendingId);
   const executed = await tx
     .select({ id: chatMessages.id })
@@ -550,7 +766,7 @@ export async function rejectPendingTx(
     id: rejectMessageId(args.ownerId, args.pendingId),
     threadId: msg.threadId,
     role: 'system',
-    content: REJECT_CONTENT[reason],
+    content: args.text ?? REJECT_CONTENT[reason],
     metadata: { type: 'confirmation_rejected', rejects: args.pendingId, reason },
   });
   return {
@@ -574,10 +790,7 @@ export async function rejectPendingTx(
  * 2546 мс до отказа). Это не ошибка компиляции и не исключение по месту, а зависание,
  * которое найдёт только ревью. Из открытой транзакции — только rejectPendingTx(tx, …).
  */
-export async function rejectPending(
-  db: Db,
-  args: { ownerId: string; pendingId: string; reason?: RejectReason },
-): Promise<RejectPendingResult> {
+export async function rejectPending(db: Db, args: RejectPendingArgs): Promise<RejectPendingResult> {
   try {
     const r = await withIdentity(db, args.ownerId, (tx) => rejectPendingTx(tx, args));
     return { ok: true, ...r };
@@ -587,4 +800,166 @@ export async function rejectPending(
     }
     throw e;
   }
+}
+
+/**
+ * Единица пачки прогона (D42): отложенное действие или вопрос — вместе с судьбой.
+ *
+ * ВАЖНО читателям: `fate:'stale'` достижим ТОЛЬКО у вопросов. Погашенное или протухшее
+ * ДЕЙСТВИЕ — это `fate:'rejected'` с причиной: `'owner'` — «отклонено», `'stale'` —
+ * «устарело», `'superseded'` — «снято новым прогоном», `'edited'` — «заменено правкой».
+ * Подпись в UI выводится из ПАРЫ `fate + reason`, а не из одного поля.
+ */
+export interface RunUnit {
+  pendingId: string;
+  kind: 'question' | 'action';
+  /** Метка самой записи (`metadata.pending.created_at`), а не строки ленты. */
+  createdAt: string;
+  question?: string; // kind:'question'
+  options?: string[]; // kind:'question'
+  tool?: string; // kind:'action'
+  input?: Record<string, unknown>; // kind:'action'
+  /** Карточка из `metadata.cards[0]` — то, что владелец видит в ленте. */
+  card?: Card;
+  fate: 'open' | 'approved' | 'rejected' | 'answered' | 'stale';
+  reason?: RejectReason; // fate:'rejected'
+  answer?: string; // fate:'answered'
+}
+
+/**
+ * Единицы прогона с судьбами — единая проба для всех читателей пачки (сверка `undecided`,
+ * «принять все», гашение, история, экран прогона).
+ *
+ * ТОЛЬКО записи с ЯВНЫМ `kind` (Б5 ревью): предложение рутины (`orbis_propose`) живёт под
+ * тем же `run_id`, но `kind` не несёт — и в пачку не попадает. Именно поэтому у единиц
+ * ключ обязателен и явен, а правило «нет `kind` = действие» оставлено только одиночному
+ * чтению по id.
+ *
+ * ДВА запроса, и это дешевле одного на каждую единицу:
+ *  1) единицы — ОДИН containment-запрос с OR по двум пробам. Обоснование — не «оба по
+ *     GIN»: под RLS containment идёт Seq Scan (`jsonb_contains` не leakproof — замер Ш1,
+ *     `routines/lifecycle.ts`, докблок `liveProposalRuns`), поэтому выигрыш в том, что
+ *     таблица проходится ОДИН раз вместо двух, а дедуп и порядок получаются построением;
+ *  2) судьбы — SELECT по IN-списку детерминированных PK (`uuid_eq` leakproof, индекс под
+ *     RLS берётся): approve → `batchAuditMessageId`, reject → `rejectMessageId`, ответ →
+ *     `answerMessageId`, гашение → `questionStaleMessageId`. Ни одной пробы по ленте.
+ *
+ * Порядок — `created_at, id`: тай-брейк по id обязателен, иначе обход пачки («принять
+ * все») в разных вызовах брал бы advisory-замки в разном порядке — взаимная блокировка.
+ *
+ * ОТВЕТ ВАЖНЕЕ ГАШЕНИЯ (ОЧ.8): если у вопроса есть и ответ, и гашение (крэш между шагами
+ * следующего прогона), судьба — `answered`. То же правило, что у терминального пути.
+ */
+export async function listRunUnits(tx: Tx, ownerId: string, runId: string): Promise<RunUnit[]> {
+  const asQuestion = JSON.stringify({ pending: { run_id: runId, kind: 'question' } });
+  const asAction = JSON.stringify({ pending: { run_id: runId, kind: 'action' } });
+  const rows = await tx.execute(
+    sql`SELECT id, metadata FROM chat_messages
+        WHERE metadata @> ${asQuestion}::jsonb OR metadata @> ${asAction}::jsonb
+        ORDER BY created_at, id`,
+  );
+
+  const units: RunUnit[] = [];
+  /** PK судьбы → чья она и что означает; из ключей складывается второй запрос. */
+  const fateKeys = new Map<string, { pendingId: string; fate: RunUnit['fate'] }>();
+  for (const raw of rows as unknown as Array<Record<string, unknown>>) {
+    const record = parsePendingRecord(
+      raw.id as string,
+      (raw.metadata as { pending?: unknown }).pending,
+    );
+    const kind = record.kind;
+    if (kind === undefined) {
+      // Недостижимо: проба отбирает только записи с явным kind. Но молча пропустить
+      // такую строку нельзя — пачка выглядела бы решённой, пока в ней висит открытое
+      throw new ExecError('VALIDATION', 'pending-запись повреждена — единица без kind', {
+        pendingId: record.id,
+      });
+    }
+    const card = (raw.metadata as { cards?: unknown[] }).cards?.[0] as Card | undefined;
+    units.push({
+      pendingId: record.id,
+      kind,
+      createdAt: record.created_at,
+      ...(record.question !== undefined && { question: record.question }),
+      ...(record.options !== undefined && { options: record.options }),
+      ...(record.tool !== undefined && { tool: record.tool }),
+      ...(record.input !== undefined && { input: record.input }),
+      ...(card !== undefined && { card }),
+      fate: 'open',
+    });
+    if (kind === 'question') {
+      fateKeys.set(answerMessageId(ownerId, record.id), { pendingId: record.id, fate: 'answered' });
+      fateKeys.set(questionStaleMessageId(ownerId, record.id), {
+        pendingId: record.id,
+        fate: 'stale',
+      });
+    } else {
+      fateKeys.set(batchAuditMessageId(ownerId, record.id), {
+        pendingId: record.id,
+        fate: 'approved',
+      });
+      fateKeys.set(rejectMessageId(ownerId, record.id), { pendingId: record.id, fate: 'rejected' });
+    }
+  }
+  if (fateKeys.size === 0) return units;
+
+  const fates = await tx
+    .select({ id: chatMessages.id, metadata: chatMessages.metadata })
+    .from(chatMessages)
+    .where(inArray(chatMessages.id, [...fateKeys.keys()]));
+  /** Что НАШЛОСЬ по каждой единице; выбор судьбы — ниже, отдельно от порядка выборки. */
+  const found = new Map<string, WrittenFates>();
+  for (const row of fates) {
+    const key = fateKeys.get(row.id);
+    if (key === undefined) continue; // недостижимо: список PK и составил этот запрос
+    const metadata = row.metadata as { reason?: unknown; answer?: unknown };
+    const seen = found.get(key.pendingId) ?? {};
+    if (key.fate === 'answered') {
+      seen.answer = typeof metadata.answer === 'string' ? metadata.answer : null;
+    } else if (key.fate === 'stale') {
+      seen.stale = true;
+    } else if (key.fate === 'approved') {
+      seen.approved = true;
+    } else {
+      // Та же терпимость к истории, что у rejectedReason: сообщение без причины —
+      // отказ владельца (до V1.8 отклонить мог только он)
+      const parsed = rejectReason.safeParse(metadata.reason);
+      seen.rejected = parsed.success ? parsed.data : 'owner';
+    }
+    found.set(key.pendingId, seen);
+  }
+
+  for (const unit of units) {
+    const seen = found.get(unit.pendingId);
+    if (seen === undefined) continue; // ни одной судьбы не записано — единица открыта
+    if (unit.kind === 'question') {
+      // ОТВЕТ ВАЖНЕЕ ГАШЕНИЯ (ОЧ.8). Выбор сделан ЗДЕСЬ, а не присваиванием по ходу
+      // выборки: порядок строк в IN-запросе произволен, и правило, зависящее от него,
+      // было бы зелёным случайно.
+      if (seen.answer !== undefined) {
+        unit.fate = 'answered';
+        if (seen.answer !== null) unit.answer = seen.answer;
+      } else if (seen.stale === true) {
+        unit.fate = 'stale';
+      }
+      continue;
+    }
+    // У действия судьбы взаимоисключены замком (approve ∥ reject), но если в ленте
+    // лежат обе — истина та, что ИСПОЛНЕНА: эффект в графе уже есть
+    if (seen.approved === true) {
+      unit.fate = 'approved';
+    } else if (seen.rejected !== undefined) {
+      unit.fate = 'rejected';
+      unit.reason = seen.rejected;
+    }
+  }
+  return units;
+}
+
+/** Судьбы, НАЙДЕННЫЕ в ленте по детерминированным PK: `answer: null` — ответ без текста. */
+interface WrittenFates {
+  approved?: true;
+  rejected?: RejectReason;
+  answer?: string | null;
+  stale?: true;
 }

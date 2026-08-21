@@ -5,7 +5,14 @@
 // без обращения к LLM; идемпотентность approve — по PK детерминированного
 // audit-сообщения (batch-механика §7.8, batch_id = pendingId).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { batchAuditMessageId, globalThreadId, newId, rejectMessageId } from '@orbis/shared';
+import {
+  answerMessageId,
+  batchAuditMessageId,
+  globalThreadId,
+  newId,
+  questionStaleMessageId,
+  rejectMessageId,
+} from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { appendMessageIdempotent } from '../chat/messages';
@@ -19,10 +26,15 @@ import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import {
   acquirePendingLock,
   approvePending,
+  askDedupeKey,
   createPending,
+  deferDedupeKey,
+  listRunUnits,
+  type RunUnit,
   rejectedReason,
   rejectPending,
   rejectPendingTx,
+  unitHash,
 } from './pending';
 
 requireEnv();
@@ -691,5 +703,436 @@ describe('причина отказа edited: правка владельца (�
     const audit = await messageById(userA, batchAuditMessageId(userA, pendingId));
     const action = (audit?.metadata as { actions?: ActionRecord[] }).actions?.[0];
     expect(action !== undefined && Object.hasOwn(action, 'edited_from')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D42 «Пачка решений» (ОЧ.2, Б5 ревью): тот же pending несёт ЕДИНИЦЫ прогона —
+// отложенное действие и вопрос. Отличие единицы от сегодняшнего чатового pending и от
+// предложения рутины — ЯВНЫЙ `kind`: по нему единицы находит проба пачки, по нему же
+// approve/reject отказывают на вопросе («на него отвечают, а не принимают»).
+// ---------------------------------------------------------------------------
+
+/** Единица-действие пачки: pending с явным kind:'action', прогоном и defer-дедупом. */
+async function deferredAction(
+  runId: string,
+  threadId?: string,
+): Promise<{ target: WireEntity; pendingId: string }> {
+  const target = await seedEntity(userA, { title: 'Цель отложенного действия', tags: [] });
+  const input = { id: target.id, archived: true };
+  const { pendingId } = await withIdentity(db, userA, (tx) =>
+    createPending(tx, {
+      threadId,
+      actor: { userId: userA, kind: 'ai', source: 'routine', runId },
+      kind: 'action',
+      tool: 'entity_update',
+      input,
+      level: 'explicit-confirmation',
+      dedupeKey: deferDedupeKey(runId, 'entity_update', input),
+      clock,
+    }),
+  );
+  return { target, pendingId };
+}
+
+/** Единица-вопрос пачки (ОЧ.5): pending с kind:'question' и БЕЗ tool/input. */
+async function askedQuestion(
+  runId: string,
+  question: string,
+  options?: string[],
+  threadId?: string,
+): Promise<string> {
+  const { pendingId } = await withIdentity(db, userA, (tx) =>
+    createPending(tx, {
+      threadId,
+      actor: { userId: userA, kind: 'ai', source: 'routine', runId },
+      kind: 'question',
+      question,
+      options,
+      level: 'explicit-confirmation',
+      dedupeKey: askDedupeKey(runId, question, options),
+      clock,
+      content: `Вопрос рутины: ${question}`,
+    }),
+  );
+  return pendingId;
+}
+
+/** Предложение рутины (V1.6): pending того же прогона, но БЕЗ kind — не единица (Б5). */
+async function proposalOfRun(runId: string, threadId?: string): Promise<string> {
+  const target = await seedEntity(userA, { title: 'Цель предложения рутины', tags: [] });
+  const { pendingId } = await withIdentity(db, userA, (tx) =>
+    createPending(tx, {
+      threadId,
+      actor: { userId: userA, kind: 'ai', source: 'routine', runId },
+      tool: 'batch_execute',
+      input: {
+        batch_id: newId(),
+        operations: [{ tool: 'entity_update', input: { id: target.id, archived: true } }],
+      },
+      level: 'explicit-confirmation',
+      dedupeKey: `proposal:${runId}`,
+      clock,
+    }),
+  );
+  return pendingId;
+}
+
+/**
+ * Сырая pending-запись в ленте — фикстура для комбинаций, которых `createPending` не даёт
+ * (вопрос с тулом, действие без тула): их проверяет схема, а не вызыватель.
+ */
+async function craftPending(threadId: string, pending: Record<string, unknown>): Promise<string> {
+  const id = pending.id as string;
+  await withIdentity(db, userA, (tx) =>
+    appendMessageIdempotent(tx, {
+      id,
+      threadId,
+      role: 'system',
+      content: 'сырая pending-запись (фикстура)',
+      metadata: { pending },
+    }),
+  );
+  return id;
+}
+
+/**
+ * Ответ владельца на вопрос пачки — ФОРМА Задачи 3 (§9.5): автор — владелец, PK
+ * детерминирован `answerMessageId`. Здесь это фикстура: судьбы пишет Задача 3, а
+ * `listRunUnits` обязан читать ровно ту форму, которую она запишет.
+ */
+async function answerQuestion(pendingId: string, threadId: string, answer: string): Promise<void> {
+  await withIdentity(db, userA, (tx) =>
+    appendMessageIdempotent(tx, {
+      id: answerMessageId(userA, pendingId),
+      threadId,
+      role: 'user',
+      content: `Ответ: «${answer}»`,
+      metadata: { type: 'question_answered', answers: pendingId, answer, source: 'ui' },
+    }),
+  );
+}
+
+/** Гашение вопроса следующим прогоном — ФОРМА Задачи 3 (ОЧ.8), тоже фикстура. */
+async function staleQuestion(pendingId: string, threadId: string): Promise<void> {
+  await withIdentity(db, userA, (tx) =>
+    appendMessageIdempotent(tx, {
+      id: questionStaleMessageId(userA, pendingId),
+      threadId,
+      role: 'system',
+      content: 'Вопрос снят: его задал прошлый прогон',
+      metadata: { type: 'question_stale', stales: pendingId },
+    }),
+  );
+}
+
+/**
+ * Часы строки ленты: `created_at` пишет БД (`defaultNow`), задать его при вставке нечем, а
+ * порядок пачки — часть контракта `listRunUnits`. Фикстура правит колонку админ-DSN'ом,
+ * чтобы порядок был ЗАДАННЫЙ, а у двух единиц метка совпала — иначе тай-брейк по id не
+ * проверить. Правится не журнал (metadata неизменяема, §4.6), а часы теста.
+ */
+async function backdate(marks: Array<[string, string]>): Promise<void> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    for (const [id, at] of marks) {
+      await admin.execute(
+        sql`UPDATE chat_messages SET created_at = ${at}::timestamptz WHERE id = ${id}::uuid`,
+      );
+    }
+  } finally {
+    await adminClient.end();
+  }
+}
+
+async function unitsOf(runId: string): Promise<RunUnit[]> {
+  return withIdentity(db, userA, (tx) => listRunUnits(tx, userA, runId));
+}
+
+describe('pending-запись единицы: kind и условная обязательность tool/input (ОЧ.2, Б5)', () => {
+  test('запись kind:question с question/options и БЕЗ tool/input — валидна; kind:question с tool — VALIDATION; kind:action без tool — VALIDATION; запись без kind с tool/input — валидна (сегодняшние чатовые)', async () => {
+    const runId = newId();
+    const host = await seedEntity(userA, { title: 'Хост схемы единицы', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+
+    // (1) Вопрос без тула — валиден: его читает проба пачки, а не executor
+    const questionId = await askedQuestion(runId, 'Какой счёт списать?', ['Карта', 'Наличные']);
+    const units = await unitsOf(runId);
+    expect(units.map((u) => u.pendingId)).toEqual([questionId]);
+    expect(units[0]?.question).toBe('Какой счёт списать?');
+    expect(units[0]?.options).toEqual(['Карта', 'Наличные']);
+    expect(units[0]?.tool).toBeUndefined();
+
+    // (2) Вопрос С тулом — комбинация запрещена: fail-closed, как повреждённый payload.
+    // Иначе «вопрос» проехал бы в executor и исполнил чужой план мимо решения владельца
+    const questionWithTool = await craftPending(threadId, {
+      id: newId(),
+      kind: 'question',
+      question: 'Вопрос с тулом',
+      tool: 'entity_update',
+      input: { id: host.id, archived: true },
+      actor_kind: 'ai',
+      source: 'routine',
+      run_id: runId,
+      created_at: T0.toISOString(),
+    });
+    const badQuestion = await approvePending(db, {
+      ownerId: userA,
+      pendingId: questionWithTool,
+      clock,
+    });
+    expect(badQuestion.ok).toBe(false);
+    if (!badQuestion.ok) {
+      expect(badQuestion.error.code).toBe('VALIDATION');
+      expect(badQuestion.error.message).toContain('повреждена');
+    }
+
+    // (3) Действие без тула — та же структурная ошибка: исполнять нечего
+    const actionNoTool = await craftPending(threadId, {
+      id: newId(),
+      kind: 'action',
+      actor_kind: 'ai',
+      source: 'routine',
+      run_id: runId,
+      created_at: T0.toISOString(),
+    });
+    const badAction = await approvePending(db, { ownerId: userA, pendingId: actionNoTool, clock });
+    expect(badAction.ok).toBe(false);
+    if (!badAction.ok) {
+      expect(badAction.error.code).toBe('VALIDATION');
+      expect(badAction.error.message).toContain('повреждена');
+    }
+
+    // (4) Обратная совместимость: чатовый pending без kind с tool/input читается как
+    // раньше (правило «нет kind = действие» — только при одиночном чтении по id)
+    const { pendingId } = await pendingArchive(undefined);
+    const legacy = await rejectPending(db, { ownerId: userA, pendingId });
+    expect(legacy.ok).toBe(true);
+  });
+});
+
+describe('unitHash и ключи дедупа единиц (ОЧ.9, приёмка 15)', () => {
+  test('unitHash: перестановка ключей объекта не меняет хеш; другой input — другой хеш; формат /^[0-9a-f]{64}$/; deferDedupeKey от переставленных ключей JSON одинаков (приёмка 15)', () => {
+    const input = { id: 'e1', archived: true, aspects: { 'orbis/task': { status: 'done' } } };
+    const shuffled = { aspects: { 'orbis/task': { status: 'done' } }, archived: true, id: 'e1' };
+
+    // jsonb не хранит порядок ключей: пришедший через БД payload обязан дать тот же хеш
+    expect(unitHash({ tool: 'entity_update', input })).toBe(
+      unitHash({ input: shuffled, tool: 'entity_update' }),
+    );
+    expect(unitHash({ tool: 'entity_update', input })).toMatch(/^[0-9a-f]{64}$/);
+    expect(unitHash({ tool: 'entity_update', input: { id: 'e2' } })).not.toBe(
+      unitHash({ tool: 'entity_update', input }),
+    );
+
+    // Регистр — не косметика: pendingMessageId лоуэркейсит ключ целиком (ids.ts), и
+    // верхний регистр в хеше схлопнул бы две разные единицы в один PK
+    expect(unitHash({ tool: 'x' })).toBe(unitHash({ tool: 'x' }).toLowerCase());
+
+    const runId = newId();
+    expect(deferDedupeKey(runId, 'entity_update', input)).toBe(
+      deferDedupeKey(runId, 'entity_update', shuffled),
+    );
+    expect(deferDedupeKey(runId, 'entity_update', input)).toBe(
+      `defer:${runId}:${unitHash({ tool: 'entity_update', input })}`,
+    );
+    // Разные прогоны — разные ключи: пачка живёт внутри своего прогона
+    expect(deferDedupeKey(newId(), 'entity_update', input)).not.toBe(
+      deferDedupeKey(runId, 'entity_update', input),
+    );
+
+    expect(askDedupeKey(runId, 'Куда отнести расход?')).toBe(
+      `ask:${runId}:${unitHash({ question: 'Куда отнести расход?', options: [] })}`,
+    );
+    // «Нет вариантов» и «пустой список вариантов» — один и тот же вопрос
+    expect(askDedupeKey(runId, 'Куда отнести расход?')).toBe(
+      askDedupeKey(runId, 'Куда отнести расход?', []),
+    );
+    // А порядок вариантов значим: владелец видит кнопки в присланном порядке
+    expect(askDedupeKey(runId, 'Куда?', ['Еда', 'Дом'])).not.toBe(
+      askDedupeKey(runId, 'Куда?', ['Дом', 'Еда']),
+    );
+  });
+});
+
+describe('гейты kind: вопрос не принимают и не отклоняют (С7 ревью)', () => {
+  test('approvePending на kind:question → VALIDATION структурной ошибкой, граф не тронут; rejectPending на kind:question → VALIDATION', async () => {
+    const runId = newId();
+    const host = await seedEntity(userA, { title: 'Хост гейтов', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+    const pendingId = await askedQuestion(runId, 'Продолжать ли перенос?', undefined, threadId);
+
+    // Гейт стоит в policy, а не в роутере: approve/reject зовут семь мест (кнопка чата,
+    // раннер, лестница правки, MCP), и «вопрос» обязан отскакивать у всех одинаково
+    const approved = await approvePending(db, { ownerId: userA, pendingId, clock });
+    expect(approved.ok).toBe(false);
+    if (!approved.ok) {
+      expect(approved.error.code).toBe('VALIDATION');
+      expect(approved.error.message).toContain('вопрос');
+    }
+    // Ни исполнения, ни записи: audit-сообщения по детерминированному PK нет
+    expect(await messageById(userA, batchAuditMessageId(userA, pendingId))).toBeUndefined();
+
+    const rejected = await rejectPending(db, { ownerId: userA, pendingId });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.error.code).toBe('VALIDATION');
+      expect(rejected.error.message).toContain('вопрос');
+    }
+    expect(await messageById(userA, rejectMessageId(userA, pendingId))).toBeUndefined();
+
+    // В треде — только сама карточка вопроса: судьба не записана ни одной из попыток
+    expect((await messagesIn(userA, threadId)).length).toBe(1);
+    // И судьба вопроса осталась открытой — гейт не подменил её отказом
+    expect((await unitsOf(runId))[0]?.fate).toBe('open');
+  });
+});
+
+describe('текст отказа единицы: свой, а не «Предложение…» (С6 ревью)', () => {
+  test('rejectPending с text: в ленте текст единицы, metadata.reason прежний; повтор возвращает исходную причину; без text — прежние тексты байт-в-байт', async () => {
+    const runId = newId();
+    const { pendingId } = await deferredAction(runId);
+
+    const own = 'Отложенное действие снято новым прогоном';
+    const r = await rejectPending(db, {
+      ownerId: userA,
+      pendingId,
+      reason: 'superseded',
+      text: own,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.reason).toBe('superseded');
+
+    const msg = await messageById(userA, rejectMessageId(userA, pendingId));
+    expect(msg?.content).toBe(own);
+    // Текст — только в ленте: metadata судьбы не меняется, иначе читатели причины
+    // (rejectedReason, статус прогона) пришлось бы учить второму источнику правды
+    expect(msg?.metadata).toEqual({
+      type: 'confirmation_rejected',
+      rejects: pendingId,
+      reason: 'superseded',
+    });
+
+    // Повтор с ДРУГИМ текстом и причиной ничего не переписывает (журнал append-only)
+    const again = await rejectPending(db, {
+      ownerId: userA,
+      pendingId,
+      reason: 'stale',
+      text: 'Отложенное действие устарело',
+    });
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.alreadyRejected).toBe(true);
+    expect(again.reason).toBe('superseded');
+    expect((await messageById(userA, rejectMessageId(userA, pendingId)))?.content).toBe(own);
+
+    // Без text — прежние тексты причин, байт в байт: предложения и чатовые подтверждения
+    // этой работой не задеты
+    const plain = await deferredAction(runId);
+    await rejectPending(db, { ownerId: userA, pendingId: plain.pendingId, reason: 'stale' });
+    expect((await messageById(userA, rejectMessageId(userA, plain.pendingId)))?.content).toBe(
+      'Предложение устарело: состояние изменилось',
+    );
+    const { pendingId: chatId } = await pendingArchive(undefined);
+    await rejectPending(db, { ownerId: userA, pendingId: chatId });
+    expect((await messageById(userA, rejectMessageId(userA, chatId)))?.content).toBe(
+      'Подтверждение отклонено',
+    );
+  });
+});
+
+describe('listRunUnits: единицы прогона одной пробой (Б5, ОЧ.8)', () => {
+  test('прогон с вопросом, ДВУМЯ отложками и ЧУЖИМ предложением (pending без kind, дедуп proposal:<runId>) → в пачке только единицы, предложение и чужой прогон не попали (Б5, приёмка 19-предусловие); порядок created_at, id', async () => {
+    const runId = newId();
+    const host = await seedEntity(userA, { title: 'Хост пачки', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+
+    // Порядок ЗАПИСИ намеренно не совпадает с ожидаемым порядком чтения
+    const first = await deferredAction(runId, threadId);
+    const question = await askedQuestion(runId, 'Списывать с карты?', ['Да', 'Нет'], threadId);
+    const second = await deferredAction(runId, threadId);
+    const proposal = await proposalOfRun(runId, threadId);
+    // Единица чужого прогона: проба обязана скоупиться прогоном, а не только kind
+    const alien = await askedQuestion(newId(), 'Вопрос чужого прогона', undefined, threadId);
+
+    // Метка вопроса — позже обеих отложек, а у отложек метки РАВНЫ: так проверяются оба
+    // ключа порядка сразу (created_at, затем id)
+    await backdate([
+      [first.pendingId, '2026-07-04T12:00:01.000Z'],
+      [second.pendingId, '2026-07-04T12:00:01.000Z'],
+      [question, '2026-07-04T12:00:02.000Z'],
+    ]);
+
+    const units = await unitsOf(runId);
+    // Две отложки с РАВНОЙ меткой идут первыми и упорядочены по id, вопрос — за ними:
+    // порядок задан обоими ключами, а не порядком записи
+    const bothActions = [first.pendingId, second.pendingId].sort();
+    expect(units.map((u) => u.pendingId)).toEqual([...bothActions, question]);
+    // Предложение того же прогона (без kind) и вопрос ЧУЖОГО прогона — мимо пачки
+    expect(units.map((u) => u.pendingId)).not.toContain(proposal);
+    expect(units.map((u) => u.pendingId)).not.toContain(alien);
+
+    const asked = units[2];
+    expect(asked).toEqual({
+      pendingId: question,
+      kind: 'question',
+      createdAt: T0.toISOString(),
+      question: 'Списывать с карты?',
+      options: ['Да', 'Нет'],
+      card: {
+        kind: 'confirmation_card',
+        mode: 'explicit',
+        pendingId: question,
+        summary: 'Списывать с карты?',
+      },
+      fate: 'open',
+    });
+    const deferred = units.find((u) => u.pendingId === first.pendingId);
+    expect(deferred?.kind).toBe('action');
+    expect(deferred?.tool).toBe('entity_update');
+    expect(deferred?.input).toEqual({ id: first.target.id, archived: true });
+    expect(deferred?.question).toBeUndefined();
+    expect(deferred?.fate).toBe('open');
+  });
+
+  test('listRunUnits судьбы: approved по audit-PK, rejected с причиной, answered по answer-PK, stale по question-stale-PK; answered+stale одновременно → answered (ОЧ.8)', async () => {
+    const runId = newId();
+    const host = await seedEntity(userA, { title: 'Хост судеб пачки', tags: [] });
+    const threadId = await withIdentity(db, userA, (tx) => ensureEntityThread(tx, userA, host.id));
+
+    const applied = await deferredAction(runId, threadId);
+    const dropped = await deferredAction(runId, threadId);
+    const answered = await askedQuestion(runId, 'Какой счёт?', ['Карта'], threadId);
+    const staled = await askedQuestion(runId, 'Ждать доставку?', undefined, threadId);
+    const both = await askedQuestion(runId, 'Продолжать перенос?', undefined, threadId);
+    const open = await askedQuestion(runId, 'Ещё не решённый вопрос', undefined, threadId);
+
+    expect(
+      (await approvePending(db, { ownerId: userA, pendingId: applied.pendingId, clock })).ok,
+    ).toBe(true);
+    expect(
+      (await rejectPending(db, { ownerId: userA, pendingId: dropped.pendingId, reason: 'stale' }))
+        .ok,
+    ).toBe(true);
+    await answerQuestion(answered, threadId, 'Карта');
+    await staleQuestion(staled, threadId);
+    // Обе судьбы разом — крэш между ответом и гашением следующего прогона: побеждает
+    // ОТВЕТ (ОЧ.8), иначе владельцу сказали бы «снято» про то, что он уже решил
+    await answerQuestion(both, threadId, 'Да, продолжай');
+    await staleQuestion(both, threadId);
+
+    const units = await unitsOf(runId);
+    const fateOf = (id: string) => units.find((u) => u.pendingId === id);
+    expect(fateOf(applied.pendingId)?.fate).toBe('approved');
+    expect(fateOf(dropped.pendingId)?.fate).toBe('rejected');
+    expect(fateOf(dropped.pendingId)?.reason).toBe('stale');
+    expect(fateOf(answered)?.fate).toBe('answered');
+    expect(fateOf(answered)?.answer).toBe('Карта');
+    expect(fateOf(staled)?.fate).toBe('stale');
+    expect(fateOf(both)?.fate).toBe('answered');
+    expect(fateOf(both)?.answer).toBe('Да, продолжай');
+    expect(fateOf(open)?.fate).toBe('open');
+    expect(fateOf(open)?.answer).toBeUndefined();
   });
 });
