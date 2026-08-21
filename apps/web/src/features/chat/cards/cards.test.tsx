@@ -6,7 +6,9 @@ import { smoothAuditText } from '../format-audit';
 import { MEMORY_RULES_QUERY } from '../memoryRules';
 import { type ChatMessage, useChatThread } from '../useChatThread';
 import { ProposalCard } from './ProposalCard';
-import { renderCards } from './renderCards';
+import { QuestionCard } from './QuestionCard';
+import { contentDuplicatesCard, renderCards } from './renderCards';
+import type { QuestionCardData } from './types';
 
 const msg = (cards: unknown[], extra: Partial<ChatMessage> = {}): ChatMessage =>
   ({
@@ -1360,4 +1362,320 @@ test('ответ replaced → подпись + refetch; onSuccess решения
     ),
   );
   expect(outsideThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1);
+});
+
+// --- пачка решений (D42 §7): карточки вопроса и отложенного действия ----------------------
+//
+// Обе карточки живут в ДВУХ местах — лента треда рутины (renderCards по metadata.cards) и блок
+// пачки на экране прогона (Задача 13). Здесь они проверяются в чат-виде, ровно как их увидит
+// владелец, открывший рутину утром; вход без `threadId` (экран прогона) проверен отдельно.
+
+const QUESTION_CARD: QuestionCardData = {
+  kind: 'question_card',
+  pendingId: 'q1',
+  runId: 'rr9',
+  routineId: 'rt9',
+  question: 'Перенести встречу с врачом на четверг?',
+  options: ['Да, перенести', 'Нет, оставить'],
+};
+
+const DEFERRED_CARD = {
+  kind: 'deferred_action_card',
+  pendingId: 'd1',
+  runId: 'rr9',
+  routineId: 'rt9',
+  summary: 'Архивация: «Старый проект»',
+  rows: [
+    { aspect: 'orbis/task', field: 'status', before: 'inbox', after: 'done' },
+    // Поле САМОЙ ЗАПИСИ: аспекта у строки нет вовсе (tools/dispatch.ts snapshotDeferredUnit),
+    // псевдо-аспект `orbis/entity` появляется только в расхождении — см. тест ниже (Р0-7).
+    { field: 'archived', before: 'false', after: 'true' },
+  ],
+};
+
+/** Единица прогона, как её отдаёт `routine.runUnits` (policy/pending.ts RunUnit). */
+const questionUnit = (over: Record<string, unknown> = {}) => ({
+  pendingId: 'q1',
+  kind: 'question',
+  createdAt: '2026-08-20T03:00:00.000Z',
+  question: QUESTION_CARD.question,
+  options: QUESTION_CARD.options,
+  card: QUESTION_CARD,
+  fate: 'open',
+  ...over,
+});
+
+const actionUnit = (over: Record<string, unknown> = {}) => ({
+  pendingId: 'd1',
+  kind: 'action',
+  createdAt: '2026-08-20T03:01:00.000Z',
+  tool: 'entity_update',
+  card: DEFERRED_CARD,
+  fate: 'open',
+  ...over,
+});
+
+/** Пачка прогона + ответы мутаций; лента треда пустая (её перечитку считают тесты ниже). */
+const unitsHandler =
+  (units: unknown[], mutations: Record<string, unknown> = {}): MockHandler =>
+  (path) => {
+    if (path === 'routine.runUnits') return units;
+    if (path === 'chat.listMessages') return [];
+    return mutations[path] ?? {};
+  };
+
+test('question_card открытый: варианты кнопками и свободное поле; клик варианта шлёт текст и индекс; после ответа — свёрнутая строка-итог (судьба С СЕРВЕРА)', async () => {
+  // Судьбу карточка НЕ ставит себе сама (Р-10): сервер отдаёт `answered`, и только тогда
+  // форма уходит. `useState`-приём ConfirmationCard (:20, :79-80) здесь был бы ложью о
+  // состоянии — ответ мог не примениться вовсе (`already`/`stale`, тесты ниже).
+  let fate: Record<string, unknown> = { fate: 'open' };
+  const { calls } = renderWithProviders(<div>{renderCards(msg([QUESTION_CARD]))}</div>, (path) => {
+    if (path === 'routine.runUnits') return [questionUnit(fate)];
+    if (path === 'routine.answerQuestion') {
+      fate = { fate: 'answered', answer: 'Нет, оставить' };
+      return { status: 'answered', pendingId: 'q1' };
+    }
+    return {};
+  });
+  const card = await screen.findByTestId('question-card');
+  expect(card).toHaveTextContent('Перенести встречу с врачом на четверг?');
+  // Свободное поле стоит РЯДОМ с вариантами, а не вместо них: готовые ответы рутины не
+  // обязаны исчерпывать то, что владелец хочет сказать.
+  expect(await within(card).findByRole('button', { name: 'Нет, оставить' })).toBeInTheDocument();
+  expect(within(card).getByRole('textbox')).toBeInTheDocument();
+
+  // Нажат ВТОРОЙ вариант: индекс, зафиксированный на первом, был бы неотличим от литерала 0,
+  // а уезжает он в append-only metadata навсегда (Р3-3).
+  fireEvent.click(within(card).getByRole('button', { name: 'Нет, оставить' }));
+  // Текст варианта — тем же полем, что и свободный ответ; индекс — отдельно (routers/routine.ts)
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'routine.answerQuestion')?.input).toEqual({
+      pendingId: 'q1',
+      answer: 'Нет, оставить',
+      option: 1,
+    }),
+  );
+  expect(await within(card).findByText(/ответ: «Нет, оставить»/)).toBeInTheDocument();
+  expect(within(card).queryByRole('textbox')).toBeNull();
+  expect(within(card).queryByRole('button', { name: 'Да, перенести' })).toBeNull();
+});
+
+test('question_card: свободный ответ шлёт {pendingId, answer} БЕЗ option', async () => {
+  const { calls } = renderWithProviders(
+    <div>{renderCards(msg([QUESTION_CARD]))}</div>,
+    unitsHandler([questionUnit()], {
+      'routine.answerQuestion': { status: 'answered', pendingId: 'q1' },
+    }),
+  );
+  const card = await screen.findByTestId('question-card');
+  fireEvent.change(await within(card).findByRole('textbox'), {
+    target: { value: '  в пятницу  ' },
+  });
+  fireEvent.click(within(card).getByRole('button', { name: 'Ответить' }));
+  // `option` — индекс НАЖАТОЙ КНОПКИ, и у свободного ответа его нет: `option:0` означал бы
+  // «владелец выбрал первый вариант», а это уедет в append-only metadata навсегда (Р3-3).
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'routine.answerQuestion')?.input).toEqual({
+      pendingId: 'q1',
+      answer: 'в пятницу',
+    }),
+  );
+});
+
+test('question_card погашенный (fate stale): строка-итог «снят следующим прогоном», формы нет (В2)', async () => {
+  renderWithProviders(
+    <div>{renderCards(msg([QUESTION_CARD]))}</div>,
+    unitsHandler([questionUnit({ fate: 'stale' })]),
+  );
+  const card = await screen.findByTestId('question-card');
+  expect(await within(card).findByText(/снят следующим прогоном/)).toBeInTheDocument();
+  // Ответ на погашенный вопрос сервер не принимает (§14 В2) — формы, которая гарантированно
+  // отказывает, быть не должно.
+  expect(within(card).queryByRole('textbox')).toBeNull();
+  expect(within(card).queryByRole('button', { name: 'Да, перенести' })).toBeNull();
+  expect(within(card).queryByRole('button', { name: 'Ответить' })).toBeNull();
+  // Свёрнут лишь РАЗБОР: сам вопрос достаётся кликом, а не пропадает из ленты навсегда…
+  expect(within(card).queryByTestId('question-body')).toBeNull();
+  fireEvent.click(within(card).getByRole('button', { expanded: false }));
+  expect(within(card).getByTestId('question-body')).toBeInTheDocument();
+  // …но формы нет и в РАЗВЁРНУТОМ виде: её прячет судьба вопроса, а не свёртка. Иначе
+  // владелец, развернувший погашенный вопрос, получил бы кнопку, которой сервер откажет (В2).
+  expect(within(card).queryByRole('textbox')).toBeNull();
+  expect(within(card).queryByRole('button', { name: 'Да, перенести' })).toBeNull();
+  expect(within(card).queryByRole('button', { name: 'Ответить' })).toBeNull();
+});
+
+test('deferred_action_card: строки «было → станет» с русскими подписями; «Принять» шлёт decideDeferred; исход stale — расхождения СНАРУЖИ свёртки; судьба с сервера гасит кнопки', async () => {
+  let fate: Record<string, unknown> = { fate: 'open' };
+  const { calls } = renderWithProviders(<div>{renderCards(msg([DEFERRED_CARD]))}</div>, (path) => {
+    if (path === 'routine.runUnits') return [actionUnit(fate)];
+    if (path === 'routine.decideDeferred') {
+      // Протухшую единицу сервер ГАСИТ (lifecycle.ts): судьба — rejected c причиной stale
+      fate = { fate: 'rejected', reason: 'stale' };
+      return {
+        status: 'stale',
+        mismatches: [
+          { aspect: 'orbis/entity', field: 'archived', expected: [false], actual: true },
+        ],
+      };
+    }
+    return {};
+  });
+  const card = await screen.findByTestId('deferred-action-card');
+  expect(await within(card).findByRole('button', { name: 'Принять' })).toBeInTheDocument();
+  expect(card).toHaveTextContent('Архивация: «Старый проект»');
+  // Подписи строк — по-русски: поле аспекта парой «Аспект · поле»…
+  expect(card).toHaveTextContent('Задача · статус');
+  expect(card).toHaveTextContent('inbox');
+  expect(card).toHaveTextContent('done');
+  // …а поле САМОЙ ЗАПИСИ — одним fieldLabel: аспекта у него нет (Р0-7)
+  expect(card).toHaveTextContent('архив');
+  expect(card).not.toHaveTextContent('archived');
+
+  fireEvent.click(within(card).getByRole('button', { name: 'Принять' }));
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'routine.decideDeferred')?.input).toEqual({
+      pendingId: 'd1',
+      decision: 'approve',
+    }),
+  );
+  // `stale` — ЗНАЧЕНИЕ ответа, а не сбой (Р-2): владельцу показывают, ЧЕМ разошлось
+  const stale = await within(card).findByTestId('deferred-stale');
+  // Псевдо-аспект колонки читается по-русски, а не машинным id (Р0-7)
+  expect(stale).toHaveTextContent('Запись · архив: ожидали false, сейчас true');
+  expect(stale).not.toHaveTextContent('orbis/entity');
+  // Судьба приехала с сервера: карточка свернулась, кнопок нет…
+  expect(await within(card).findByText(/— устарело/)).toBeInTheDocument();
+  expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
+  expect(within(card).queryByRole('button', { name: 'Отклонить' })).toBeNull();
+  // …а расхождения остались ВИДНЫ: важное стоит снаружи разворота (ProposalOverlay :445-453),
+  // иначе ответ на собственное нажатие владельца спрятался бы вместе с разбором.
+  expect(within(card).getByTestId('deferred-stale')).toBeInTheDocument();
+});
+
+test('deferred_action_card: судьбы словами — принято / отклонено / снято новым прогоном; строки прячутся в разворот', async () => {
+  const approved = renderWithProviders(
+    <div>{renderCards(msg([DEFERRED_CARD]))}</div>,
+    unitsHandler([actionUnit({ fate: 'approved' })]),
+  );
+  let card = await screen.findByTestId('deferred-action-card');
+  expect(await within(card).findByText(/— принято/)).toBeInTheDocument();
+  // «Прячем всё, кроме требующего ответа» (§7): строки решённой единицы — в разворот
+  expect(within(card).queryByTestId('deferred-rows')).toBeNull();
+  fireEvent.click(within(card).getByRole('button', { expanded: false }));
+  expect(within(card).getByTestId('deferred-rows')).toBeInTheDocument();
+  approved.unmount();
+
+  const rejected = renderWithProviders(
+    <div>{renderCards(msg([DEFERRED_CARD]))}</div>,
+    unitsHandler([actionUnit({ fate: 'rejected', reason: 'owner' })]),
+  );
+  card = await screen.findByTestId('deferred-action-card');
+  expect(await within(card).findByText(/— отклонено/)).toBeInTheDocument();
+  rejected.unmount();
+
+  renderWithProviders(
+    <div>{renderCards(msg([DEFERRED_CARD]))}</div>,
+    unitsHandler([actionUnit({ fate: 'rejected', reason: 'superseded' })]),
+  );
+  card = await screen.findByTestId('deferred-action-card');
+  // Слова — ПРО ЕДИНИЦУ (С6): «Предложение заменено новым прогоном» на отложенной архивации
+  // владелец прочитал бы как неправду.
+  expect(await within(card).findByText(/— снято новым прогоном/)).toBeInTheDocument();
+  expect(card).not.toHaveTextContent('Предложение');
+});
+
+test('ответ already → показан ПРИМЕНИВШИЙСЯ ответ (С5); onSuccess перечитывает пачку и инвалидирует ленту треда (Р0-11)', async () => {
+  const inThread = renderWithProviders(
+    <div>
+      <ThreadProbe />
+      {renderCards(msg([QUESTION_CARD]))}
+    </div>,
+    unitsHandler([questionUnit()], {
+      // Другой ответ применился раньше — своё нажатие НЕ записано (policy/pending.ts)
+      'routine.answerQuestion': { status: 'already', answer: 'Нет, оставить' },
+    }),
+  );
+  const card = await screen.findByTestId('question-card');
+  await within(card).findByRole('button', { name: 'Да, перенести' });
+  const readsBefore = inThread.calls.filter((c) => c.path === 'routine.runUnits').length;
+  await waitFor(() =>
+    expect(inThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1),
+  );
+  fireEvent.click(within(card).getByRole('button', { name: 'Да, перенести' }));
+  // Молча не проигрывает никто: без этой строки нажатие выглядело бы как «ничего не случилось»
+  expect(await within(card).findByTestId('question-outcome')).toHaveTextContent('Нет, оставить');
+  // Р-10: судьбу карточка НЕ ставит себе по факту нажатия — сервер отдаёт единицу всё ещё
+  // открытой (ответ не записан), и форма обязана остаться. Локальное «отвечено» здесь и было
+  // бы той самой ложью, ради которой приём ConfirmationCard не копируется.
+  expect(within(card).getByRole('button', { name: 'Да, перенести' })).toBeInTheDocument();
+  expect(within(card).getByRole('textbox')).toBeInTheDocument();
+  // Судьба — всегда с сервера, в том числе после своего же нажатия
+  await waitFor(() =>
+    expect(inThread.calls.filter((c) => c.path === 'routine.runUnits').length).toBeGreaterThan(
+      readsBefore,
+    ),
+  );
+  // Лента треда живёт СВОИМ ключом, и invalidateGraph его не касается: ответ дописывает в тред
+  // строку, а решение единицы — судьбу (Р0-11, приём ProposalCard :224-226)
+  await waitFor(() =>
+    expect(inThread.calls.filter((c) => c.path === 'chat.listMessages').length).toBeGreaterThan(1),
+  );
+  inThread.unmount();
+
+  // Рулинг П-5: на экране прогона ленты нет вовсе — там `threadId` не передаётся, и карточка
+  // её не трогает. Тот же компонент, что рисует Задача 13.
+  const onRunScreen = renderWithProviders(
+    <div>
+      <ThreadProbe />
+      <QuestionCard card={QUESTION_CARD} />
+    </div>,
+    unitsHandler([questionUnit()], {
+      'routine.answerQuestion': { status: 'answered', pendingId: 'q1' },
+    }),
+  );
+  const runCard = await screen.findByTestId('question-card');
+  await within(runCard).findByRole('button', { name: 'Да, перенести' });
+  await waitFor(() =>
+    expect(onRunScreen.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1),
+  );
+  fireEvent.click(within(runCard).getByRole('button', { name: 'Да, перенести' }));
+  await waitFor(() =>
+    expect(onRunScreen.calls.filter((c) => c.path === 'routine.runUnits').length).toBeGreaterThan(
+      1,
+    ),
+  );
+  expect(onRunScreen.calls.filter((c) => c.path === 'chat.listMessages').length).toBe(1);
+});
+
+test('единицы пачки: текст сообщения не дублирует карточку абзацем (Ф-6a)', () => {
+  // Формат `content` пишет сервер ИЗ ТОГО ЖЕ текста, что кладёт в карточку: вопрос —
+  // routines/ask.ts, отложенное действие — tools/dispatch.ts. Заголовка у обеих карточек нет,
+  // и общий механизм (сверка с card.title) их не гасил.
+  expect(
+    contentDuplicatesCard(
+      msg([QUESTION_CARD], {
+        content: 'Вопрос владельцу: «Перенести встречу с врачом на четверг?»',
+      }),
+    ),
+  ).toBe(true);
+  expect(
+    contentDuplicatesCard(
+      msg([DEFERRED_CARD], { content: 'Отложено до решения: Архивация: «Старый проект»' }),
+    ),
+  ).toBe(true);
+  // Гасится ДОСЛОВНЫЙ повтор, а не всё подряд: чужой текст рядом с карточкой остаётся.
+  expect(contentDuplicatesCard(msg([QUESTION_CARD], { content: 'Рутина закончила разбор.' }))).toBe(
+    false,
+  );
+});
+
+test('единица пропала из пачки: карточка показывает свой текст и говорит об этом, а не исчезает (Н-3)', async () => {
+  renderWithProviders(<div>{renderCards(msg([DEFERRED_CARD]))}</div>, unitsHandler([]));
+  const card = await screen.findByTestId('deferred-action-card');
+  // Текст карточка берёт из САМОГО СООБЩЕНИЯ — он есть и без сети; с сервера приезжает только
+  // судьба. Молча пропасть единица не имеет права.
+  expect(card).toHaveTextContent('Архивация: «Старый проект»');
+  expect(await within(card).findByText(/не найдена/)).toBeInTheDocument();
+  expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
 });

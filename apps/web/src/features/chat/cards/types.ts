@@ -80,6 +80,42 @@ export type ProposalCardData = {
   /** Ш1.5: id исходного предложения, которое погасила правка владельца; нет у неправленых. */
   editedFrom?: string;
 };
+// D42 ОЧ.4/ОЧ.13: отложенное действие рутины — единица «Пачки решений». Своя карточка, а не
+// confirmation_card, по той же причине, что у предложения выше: вопрос другой — не
+// «подтвердить то, что я делаю прямо сейчас», а «решить то, что фон отложил ночью». Поля
+// обязаны ДОСЛОВНО совпадать с серверным union (apps/server/src/tools/registry.ts) — типы
+// намеренно не общие.
+//
+// Из карточки компонент читает ТЕКСТ (`summary`, `rows`): он есть в сообщении и виден без
+// сети. СУДЬБА единицы приезжает только с сервера (`routine.runUnits`), потому что решают
+// пачку и позже, и с другого экрана, и её же гасит следующий прогон.
+export type DeferredActionCardData = {
+  kind: 'deferred_action_card';
+  pendingId: string;
+  runId: string;
+  routineId: string;
+  summary: string;
+  /**
+   * «Было → станет» по одному полю. `aspect` есть у полей аспектов и отсутствует у полей самой
+   * записи (заголовок, метки, архив) — подпись такой строки ставит `unitRowLabel` одним
+   * `fieldLabel`. `before` — снятое ПРЕДУСЛОВИЕ (ОЧ.13), а не значение «сейчас»: единица
+   * сверится именно с ним, и показать текущее значило бы нарисовать согласие там, где будет
+   * отказ.
+   */
+  rows: Array<{ aspect?: string; field: string; before?: string; after: string }>;
+};
+// D42 ОЧ.5: вопрос рутины владельцу — вторая разновидность единицы пачки. На вопрос ОТВЕЧАЮТ,
+// а не принимают его: кнопки «Принять»/«Отклонить» вели бы владельца прямо в структурный отказ
+// гейта рода (server policy/pending.ts, assertNotQuestion). Поля — ДОСЛОВНО серверные.
+export type QuestionCardData = {
+  kind: 'question_card';
+  pendingId: string;
+  runId: string;
+  routineId: string;
+  question: string;
+  /** До четырёх готовых ответов кнопками; порядок значим — он уезжает в ответ индексом. */
+  options?: string[];
+};
 export type Card =
   | EntityCardData
   | QueryResultData
@@ -89,4 +125,6 @@ export type Card =
   | MemoryRuleSuggestionData
   | MemoryRuleDeclinedData
   | ImportSummaryData
-  | ProposalCardData;
+  | ProposalCardData
+  | DeferredActionCardData
+  | QuestionCardData;

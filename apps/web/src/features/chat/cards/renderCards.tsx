@@ -2,12 +2,14 @@ import type { ReactNode } from 'react';
 import { Button } from '../../../ui/Button';
 import type { ChatMessage } from '../useChatThread';
 import { ConfirmationCard } from './ConfirmationCard';
+import { DeferredActionCard } from './DeferredActionCard';
 import { EntityCard } from './EntityCard';
 import { ErrorCard } from './ErrorCard';
 import { ImportReviewCard } from './ImportReviewCard';
 import { MemoryRuleCard } from './MemoryRuleCard';
 import { ProposalCard } from './ProposalCard';
 import { QueryResultCard } from './QueryResultCard';
+import { QuestionCard } from './QuestionCard';
 import { SystemMessage } from './SystemMessage';
 import type { Card } from './types';
 
@@ -60,10 +62,29 @@ function readMeta(msg: ChatMessage): { meta: CardsMeta; cards: Card[]; confirmed
 }
 
 /**
- * Текст сообщения дублирует заголовок карточки, которую лента ФАКТИЧЕСКИ отрисовала?
- * Тогда абзац печатать не нужно (MessageList): audit-сообщение действия несёт
- * content = заголовку записи (apps/server/src/executor/journal.ts), и в ленте выходило
- * «Кофе» абзацем и «Кофе» карточкой подряд.
+ * Текст строки ленты, который карточка несёт САМА, — или `undefined`, если такого текста у
+ * неё нет. Сверка ниже ДОСЛОВНАЯ, поэтому формат здесь обязан быть копией серверного.
+ *
+ * Заголовок карточки — исходный случай: audit-сообщение действия несёт content = заголовку
+ * записи (apps/server/src/executor/journal.ts), и в ленте выходило «Кофе» абзацем и «Кофе»
+ * карточкой подряд.
+ *
+ * Единицы «Пачки решений» (D42) заголовка не имеют вовсе, а строку ленты сервер пишет ИЗ ТОГО
+ * ЖЕ текста, что кладёт в карточку: вопрос — `routines/ask.ts`, отложенное действие —
+ * `tools/dispatch.ts`. Без этих двух веток владелец читал бы вопрос дважды подряд — абзацем и
+ * карточкой (Ф-6a ревью Задачи 6). Расхождение формата с сервером НЕ опасно: сверка дословная,
+ * и разойдясь, она просто перестанет гасить абзац, а не спрячет что-то лишнее.
+ */
+function cardEchoText(card: Card): string | undefined {
+  if ('title' in card && typeof card.title === 'string') return card.title;
+  if (card.kind === 'question_card') return `Вопрос владельцу: «${card.question}»`;
+  if (card.kind === 'deferred_action_card') return `Отложено до решения: ${card.summary}`;
+  return undefined;
+}
+
+/**
+ * Текст сообщения дублирует то, что несёт карточка, которую лента ФАКТИЧЕСКИ отрисовала?
+ * Тогда абзац печатать не нужно (MessageList).
  *
  * Признак — ФАКТ рендера (renderCard вернул не null), а не список известных kind:
  * список разъехался бы со switch'ем в renderCard, и рассинхрон стоил бы потери текста.
@@ -74,13 +95,14 @@ export function contentDuplicatesCard(msg: ChatMessage, handlers: CardHandlers =
   const text = msg.content.trim();
   if (text === '') return false;
   const { meta, cards, confirmed } = readMeta(msg);
-  return cards.some(
-    (card, i) =>
-      'title' in card &&
-      typeof card.title === 'string' &&
-      card.title.trim() === text &&
-      renderCard(card, i, { msg, meta, handlers, confirmed }) !== null,
-  );
+  return cards.some((card, i) => {
+    const echo = cardEchoText(card);
+    return (
+      echo !== undefined &&
+      echo.trim() === text &&
+      renderCard(card, i, { msg, meta, handlers, confirmed }) !== null
+    );
+  });
 }
 
 type CardCtx = {
@@ -118,6 +140,18 @@ function renderCard(card: Card, i: number, ctx: CardCtx): ReactNode {
           pendingId={card.pendingId}
           threadId={msg.threadId}
         />
+      );
+    case 'deferred_action_card':
+    case 'question_card':
+      // D42 §7: единицы «Пачки решений». ТЕКСТ карточка берёт из сообщения (он неизменяем —
+      // предусловия и вопрос снимаются один раз), а СУДЬБУ читает с сервера сама
+      // (`routine.runUnits`, Р-10): пачку решают и позже, и с экрана прогона, и её гасит
+      // следующий прогон. `threadId` — признак «я в ленте»: по нему решение перечитывает
+      // тред (Р0-11); на экране прогона его нет вовсе (рулинг П-5, как у ProposalCard).
+      return card.kind === 'question_card' ? (
+        <QuestionCard key={i} card={card} threadId={msg.threadId} />
+      ) : (
+        <DeferredActionCard key={i} card={card} threadId={msg.threadId} />
       );
     case 'import_review':
       return <ImportReviewCard key={i} card={card} />;
