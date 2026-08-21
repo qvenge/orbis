@@ -3508,6 +3508,9 @@ function routineHandler(
           lastRun: null,
           waiting: 0,
           openProposal: false,
+          // D42: третий вид ожидания. Ноль по умолчанию — обычная рутина без пачки; тесты
+          // строки состояния подменяют весь обзор целиком.
+          undecided: 0,
         }
       );
     if (path === 'routine.runNow') return { runId: 'rr9' };
@@ -3732,6 +3735,11 @@ function routineRunHandler(
     proposal?: unknown;
     decide?: unknown;
     archived?: boolean;
+    /** Пачка решений прогона (D42): `routine.runUnits`. Пусто — пачки у прогона нет. */
+    units?: unknown[];
+    decideAll?: unknown;
+    /** Обзор рутины: блок пачки читает его РАДИ ПАУЗЫ (`nextBucketAt === null`). */
+    overview?: unknown;
   } = {},
 ): MockHandler {
   const run = routineRunEntity(opts.aspect ?? ROUTINE_RUN_CHECKPOINT, opts.archived ?? false);
@@ -3755,6 +3763,21 @@ function routineRunHandler(
       return opts.decide ?? { status: 'applied', actionId: 'a1' };
     if (path === 'routine.answerCheckpoint') return { runId: 'rr1' };
     if (path === 'agentRun.rollback') return { ok: true, undone: ['a1'], note: ROLLBACK_NOTE };
+    // D42: пачка решений. Пустой список — обычный ответ (прогон, который ничего не откладывал
+    // и ни о чём не спрашивал), поэтому он же и умолчание.
+    if (path === 'routine.runUnits') return opts.units ?? [];
+    if (path === 'routine.decideAll') return opts.decideAll ?? [];
+    if (path === 'routine.overview')
+      return (
+        opts.overview ?? {
+          nextBucketAt: NEXT_BUCKET_AT,
+          lastRun: null,
+          waiting: 0,
+          openProposal: false,
+          undecided: 1,
+        }
+      );
+    if (path === 'routine.runNow') return { runId: 'rr9' };
     return {};
   };
 }
@@ -3952,6 +3975,367 @@ describe('V1: прогон рутины', () => {
     expect(within(list).getByTestId('run-rp1')).toHaveTextContent('ждёт решения');
     expect(within(list).getByTestId('run-rp2')).toHaveTextContent('принято');
     expect(within(list).getByTestId('run-rp3')).toHaveTextContent('заменено');
+  });
+});
+
+// ─── D42: пачка решений ──────────────────────────────────────────────────────────────────
+//
+// Карточки единиц работают и в ленте треда, но тред — лента, где пачка тонет между
+// сообщениями. Блок на экране прогона даёт ей место как ЦЕЛОМУ: единицы подряд, «Принять
+// все» одним жестом и «Продолжить сейчас», которой рутина возвращается к работе. Плюс два
+// входа, чтобы пачку вообще заметить: бейдж в истории прогонов и строка в состоянии рутины.
+
+/** Карточка вопроса пачки — та же, что сервер кладёт в `metadata.cards[0]` (registry.ts). */
+const BATCH_QUESTION_CARD = {
+  kind: 'question_card',
+  pendingId: 'q1',
+  runId: 'rr1',
+  routineId: 'rt1',
+  // Текст НАМЕРЕННО другой, чем у терминального вопроса прогона: их сосуществование
+  // проверяется отдельным тестом, и одинаковый текст сделал бы его зелёным случайно.
+  question: 'Заказывать ли такси на утро?',
+  options: ['Да, заказать', 'Нет'],
+};
+
+const BATCH_ACTION_CARD = {
+  kind: 'deferred_action_card',
+  pendingId: 'd1',
+  runId: 'rr1',
+  routineId: 'rt1',
+  summary: 'Архивация: «Старый проект»',
+  rows: [{ field: 'archived', before: 'false', after: 'true' }],
+};
+
+/** Единица пачки в форме `routine.runUnits` (policy/pending.ts, RunUnit). */
+const batchQuestion = (over: Record<string, unknown> = {}) => ({
+  pendingId: 'q1',
+  kind: 'question',
+  createdAt: '2026-08-18T04:01:00.000Z',
+  question: BATCH_QUESTION_CARD.question,
+  options: BATCH_QUESTION_CARD.options,
+  card: BATCH_QUESTION_CARD,
+  fate: 'open',
+  ...over,
+});
+
+const batchAction = (over: Record<string, unknown> = {}) => ({
+  pendingId: 'd1',
+  kind: 'action',
+  createdAt: '2026-08-18T04:01:30.000Z',
+  tool: 'entity_update',
+  card: BATCH_ACTION_CARD,
+  fate: 'open',
+  ...over,
+});
+
+/** Второе отложенное действие: своя карточка со своим текстом — сводка адресует по нему. */
+const batchAction2 = (over: Record<string, unknown> = {}) =>
+  batchAction({
+    pendingId: 'd2',
+    card: { ...BATCH_ACTION_CARD, pendingId: 'd2', summary: 'Срок: «Купить билеты»' },
+    ...over,
+  });
+
+/** Прогон с неразобранной пачкой: закончился обычным `finished`, флажок стоит (ОЧ.6). */
+const RUN_WITH_BATCH = {
+  ...ROUTINE_RUN_CHECKPOINT,
+  outcome: 'finished',
+  checkpoint: undefined,
+  finished_at: '2026-08-18T04:02:00.000Z',
+  undecided: true,
+};
+
+/** Обзор рутины НА ПАУЗЕ: `nextBucketAt: null` — сработать ей нечем (RoutineOverview). */
+const PAUSED_OVERVIEW = {
+  nextBucketAt: null,
+  lastRun: null,
+  waiting: 0,
+  openProposal: false,
+  undecided: 1,
+};
+
+describe('D42: пачка решений на экране прогона', () => {
+  test('блок «Пачка решений»: карточки по единицам, единица без карточки — строкой-заглушкой; виден и по флажку, и по непустой пачке; без обоих его нет (приёмка 1-UI, Н-3)', async () => {
+    const full = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        aspect: RUN_WITH_BATCH,
+        units: [
+          batchQuestion(),
+          batchAction(),
+          // Единица БЕЗ карточки: `metadata.cards[0]` не сохранился (старая запись, чужой
+          // производитель). Молча пропадать она не имеет права — Н-3.
+          {
+            pendingId: 'd3',
+            kind: 'action',
+            createdAt: '2026-08-18T04:01:40.000Z',
+            tool: 'entity_update',
+            fate: 'open',
+          },
+        ],
+      }),
+    );
+    const block = await screen.findByTestId('run-decisions');
+    expect(block).toHaveTextContent('Пачка решений');
+    // Карточки — ТЕ ЖЕ, что в ленте треда: одно событие обязано выглядеть одинаково в обоих
+    // местах, и вторая пара компонентов разъехалась бы на первой правке.
+    expect(await within(block).findByTestId('question-card')).toHaveTextContent(
+      'Заказывать ли такси на утро?',
+    );
+    expect(within(block).getByTestId('deferred-action-card')).toHaveTextContent(
+      'Архивация: «Старый проект»',
+    );
+    const stub = within(block).getByTestId('unit-stub');
+    expect(stub).toHaveTextContent('entity_update');
+    // Судьба у заглушки та же, что у карточек: открытая единица — «ждёт решения», а не
+    // строка без подписи, по которой не понять, разобрана она или нет.
+    expect(stub).toHaveTextContent('ждёт решения');
+    full.unmount();
+
+    // Флажок мог потеряться (лестница §5: применение прошло, бухгалтерский патч упал) —
+    // блок обязан появиться и по одной непустой пачке.
+    const noFlag = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        aspect: { ...RUN_WITH_BATCH, undecided: undefined },
+        units: [batchAction({ fate: 'approved' })],
+      }),
+    );
+    expect(await screen.findByTestId('run-decisions')).toHaveTextContent('Архивация');
+    noFlag.unmount();
+
+    // Обратный случай: флажок стоит, а единиц пачка не отдала. Молчать здесь нельзя —
+    // прогон говорит «неразобрано», и пустое место читалось бы как «уже разобрано».
+    const flagOnly = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({ aspect: RUN_WITH_BATCH }),
+    );
+    expect(await screen.findByTestId('run-decisions')).toHaveTextContent('Единиц пачки нет');
+    flagOnly.unmount();
+
+    // Ни флажка, ни единиц — блока нет вовсе: заголовок на каждом прогоне был бы шумом.
+    const empty = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({ aspect: { ...RUN_WITH_BATCH, undecided: undefined } }),
+    );
+    await screen.findByTestId('run-feed');
+    await waitFor(() => expect(empty.calls.some((c) => c.path === 'routine.runUnits')).toBe(true));
+    expect(screen.queryByTestId('run-decisions')).toBeNull();
+  });
+
+  test('«Принять все» шлёт decideAll и печатает сводку по каждой единице: применено 2, устарело 1 с расхождениями; у пачки из одних вопросов кнопки нет (приёмка 6-UI, ОЧ.11)', async () => {
+    const many = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        aspect: RUN_WITH_BATCH,
+        units: [
+          batchAction(),
+          batchAction2(),
+          batchAction({ pendingId: 'd4', card: { ...BATCH_ACTION_CARD, pendingId: 'd4' } }),
+          batchQuestion(),
+        ],
+        decideAll: [
+          { pendingId: 'd1', status: 'applied', actionId: 'a1' },
+          { pendingId: 'd4', status: 'applied', actionId: 'a2' },
+          {
+            pendingId: 'd2',
+            status: 'stale',
+            mismatches: [
+              { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'done' },
+            ],
+          },
+        ],
+      }),
+    );
+    const block = await screen.findByTestId('run-decisions');
+    await within(block).findAllByTestId('deferred-action-card');
+    const readsBefore = many.calls.filter((c) => c.path === 'routine.runUnits').length;
+    // Адрес — ПРОГОН, а не список карточек клиента: между рисованием экрана и нажатием пачку
+    // мог тронуть следующий прогон, и решать по устаревшему списку значило бы жевать чужое.
+    await userEvent.click(within(block).getByRole('button', { name: 'Принять все' }));
+    await waitFor(() =>
+      expect(many.calls.find((c) => c.path === 'routine.decideAll')?.input).toEqual({
+        runId: 'rr1',
+      }),
+    );
+
+    // Атомарности между единицами нет и она не обещается (ОЧ.11) — значит экран обязан
+    // показать, что именно применилось, а что устарело и с какими расхождениями.
+    const summary = await within(block).findByTestId('decide-all-summary');
+    expect(summary).toHaveTextContent('Применено: 2');
+    expect(summary).toHaveTextContent('Устарело: 1');
+    // Протухшая названа СВОИМ текстом: в сводке из трёх строк «устарело» без имени единицы
+    // не отвечает на вопрос «что именно».
+    expect(summary).toHaveTextContent('Срок: «Купить билеты»');
+    expect(summary).toHaveTextContent('статус');
+    expect(summary).toHaveTextContent('inbox');
+    expect(summary).toHaveTextContent('done');
+    // Судьбы — С СЕРВЕРА и после своего же нажатия (Р-10): пачка перечитывается, а не
+    // перекрашивается локально по ответу сводки.
+    await waitFor(() =>
+      expect(many.calls.filter((c) => c.path === 'routine.runUnits').length).toBeGreaterThan(
+        readsBefore,
+      ),
+    );
+    many.unmount();
+
+    // Пачка из одних вопросов: «принять» вопрос нельзя вовсе — у него другая судьба и другой
+    // путь (ОЧ.11), и кнопка, которой нечего делать, обещала бы разбор, которого не будет.
+    renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({ aspect: RUN_WITH_BATCH, units: [batchQuestion()] }),
+    );
+    const questionsOnly = await screen.findByTestId('run-decisions');
+    await within(questionsOnly).findByTestId('question-card');
+    expect(within(questionsOnly).queryByRole('button', { name: 'Принять все' })).toBeNull();
+  });
+
+  test('повтор «Принять все» даёт ПУСТУЮ сводку — и она названа словами, а не молчанием (Р11-2)', async () => {
+    // Сервер отбирает только ОТКРЫТЫЕ действия (ОЧ.11): второе нажатие не жуёт решённое и
+    // возвращает пустой список, а не N строк «уже решено». Пустая область на месте сводки
+    // читалась бы как отказ кнопки.
+    renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({ aspect: RUN_WITH_BATCH, units: [batchAction()], decideAll: [] }),
+    );
+    const block = await screen.findByTestId('run-decisions');
+    await userEvent.click(within(block).getByRole('button', { name: 'Принять все' }));
+    expect(await within(block).findByTestId('decide-all-summary')).toHaveTextContent(
+      'Решать было нечего',
+    );
+  });
+
+  test('«Продолжить сейчас» зовёт runNow и ведёт на новый прогон; при неотвеченном терминальном вопросе — сперва предупреждение (приёмка 9, В3); на паузе кнопки нет, есть плашка (С2)', async () => {
+    const plain = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({ aspect: RUN_WITH_BATCH, units: [batchAction()] }),
+    );
+    let block = await screen.findByTestId('run-decisions');
+    // Терминального вопроса у прогона нет — гасить нечего, и лишний диалог был бы поборами
+    // за жест, который ничего не теряет.
+    await userEvent.click(within(block).getByRole('button', { name: 'Продолжить сейчас' }));
+    await waitFor(() =>
+      expect(plain.calls.find((c) => c.path === 'routine.runNow')?.input).toEqual({
+        routineId: 'rt1',
+      }),
+    );
+    // Ответ приходит ДО модели (V1.3) — за исходом владелец идёт на экран нового прогона.
+    await waitFor(() =>
+      expect(useNav.getState().stacks.browser.at(-1)).toEqual({ kind: 'entity', id: 'rr9' }),
+    );
+    plain.unmount();
+
+    // В3: у прогона висит НЕОТВЕЧЕННЫЙ терминальный вопрос, и новый прогон его погасит
+    // (ОЧ.8). Предупреждение — своей разметкой: window.confirm блокирует поток и в тестах
+    // не воспроизводится вовсе.
+    const risky = renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        aspect: { ...ROUTINE_RUN_CHECKPOINT, undecided: true },
+        units: [batchQuestion()],
+      }),
+    );
+    block = await screen.findByTestId('run-decisions');
+    await userEvent.click(within(block).getByRole('button', { name: 'Продолжить сейчас' }));
+    expect(await screen.findByText(/Неотвеченный вопрос прогона будет снят/)).toBeInTheDocument();
+    // Само нажатие ничего не отправило: жест необратим, и подтверждать его обязан владелец.
+    expect(risky.calls.some((c) => c.path === 'routine.runNow')).toBe(false);
+    await userEvent.click(screen.getByRole('button', { name: 'Продолжить' }));
+    await waitFor(() =>
+      expect(risky.calls.find((c) => c.path === 'routine.runNow')?.input).toEqual({
+        routineId: 'rt1',
+      }),
+    );
+    risky.unmount();
+
+    // С2: рутина на паузе прочитает ответы только после возобновления — и продолжать сейчас
+    // ей нечем. Кнопки нет, вместо неё плашка, объясняющая почему.
+    renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        aspect: RUN_WITH_BATCH,
+        units: [batchAction()],
+        overview: PAUSED_OVERVIEW,
+      }),
+    );
+    const paused = await screen.findByTestId('run-decisions');
+    expect(await within(paused).findByTestId('batch-paused')).toHaveTextContent(
+      'Рутина на паузе — ответы прочитает после возобновления',
+    );
+    expect(within(paused).queryByRole('button', { name: 'Продолжить сейчас' })).toBeNull();
+    // «Принять все» пауза не трогает: применить отложенное можно и остановленной рутине.
+    expect(within(paused).getByRole('button', { name: 'Принять все' })).toBeInTheDocument();
+  });
+
+  test('терминальный вопрос и пачка сосуществуют: блок вопроса и блок пачки видны одновременно (приёмка 9)', async () => {
+    renderWithProviders(
+      <DetailScreen entityId="rr1" />,
+      routineRunHandler({
+        aspect: { ...ROUTINE_RUN_CHECKPOINT, undecided: true },
+        units: [batchQuestion()],
+      }),
+    );
+    const feed = await screen.findByTestId('run-feed');
+    // Два ожидания РАЗНЫЕ: терминальный вопрос закрыл прогон (исход `checkpoint`), а единица
+    // пачки его не держала — прогон работал дальше. Один блок вместо двух означал бы, что
+    // ответив на одно, владелец закрыл и второе.
+    const terminal = within(feed).getByTestId('routine-question');
+    expect(terminal).toHaveTextContent('Переносить ли встречу с врачом?');
+    const block = await within(feed).findByTestId('run-decisions');
+    expect(block).toHaveTextContent('Заказывать ли такси на утро?');
+    expect(within(terminal).queryByTestId('question-card')).toBeNull();
+  });
+
+  test('история прогонов: у прогона с неразобранной пачкой — свой бейдж, отдельный от «ждёт решения» предложения (С8)', async () => {
+    const withAspect = (id: string, over: Record<string, unknown>) => ({
+      ...ROUTINE_RUN_DONE,
+      id,
+      aspects: {
+        'orbis/agent-run': { ...ROUTINE_RUN_DONE.aspects['orbis/agent-run'], ...over },
+      },
+    });
+    renderWithProviders(
+      <DetailScreen entityId="rt1" />,
+      routineHandler({
+        runs: [
+          withAspect('rb1', { undecided: true }),
+          withAspect('rb2', { proposal: { pending_id: 'p1', status: 'pending' } }),
+          withAspect('rb3', {}),
+        ],
+      }),
+    );
+    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
+    const list = within(details).getByTestId('runs-list');
+    // Третий вид ожидания — своим словом: «ждёт ответа» занято терминальным вопросом,
+    // «ждёт решения» — предложением, и общее слово слило бы в списке три разных жеста.
+    expect(within(list).getByTestId('run-rb1')).toHaveTextContent('пачка решений');
+    expect(within(list).getByTestId('run-rb1')).not.toHaveTextContent('ждёт');
+    expect(within(list).getByTestId('run-rb2')).toHaveTextContent('ждёт решения');
+    expect(within(list).getByTestId('run-rb2')).not.toHaveTextContent('пачка');
+    // Разобранная пачка бейджа не оставляет: он про то, что от владельца чего-то ждут.
+    expect(within(list).getByTestId('run-rb3')).not.toHaveTextContent('пачка');
+  });
+
+  test('состояние рутины: строка «Пачка решений» из overview.undecided; при нуле строки нет (Р-11)', async () => {
+    const withBatch = renderWithProviders(
+      <DetailScreen entityId="rt1" />,
+      routineHandler({
+        overview: { ...PAUSED_OVERVIEW, nextBucketAt: NEXT_BUCKET_AT, undecided: 2 },
+      }),
+    );
+    const status = await screen.findByTestId('routine-status');
+    // Поле `undecided` сервер считает давно; без этой строки оно повторило бы судьбу
+    // `waiting`/`openProposal` — посчитано и никем не прочитано (Р-11).
+    await waitFor(() => expect(status).toHaveTextContent('Пачка решений'));
+    expect(status).toHaveTextContent('2 прогона');
+    withBatch.unmount();
+
+    renderWithProviders(<DetailScreen entityId="rt1" />, routineHandler());
+    const clean = await screen.findByTestId('routine-status');
+    // Обзор приехал (следующее срабатывание уже напечатано) — и строки пачки в нём нет:
+    // «Пачка решений: 0 прогонов» на каждой рутине было бы шумом, а не сведениями.
+    await waitFor(() => expect(clean).toHaveTextContent('19 авг.'));
+    expect(clean).not.toHaveTextContent('Пачка решений');
   });
 });
 

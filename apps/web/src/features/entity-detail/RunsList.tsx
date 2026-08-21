@@ -7,7 +7,7 @@
 // внешний, и грант отвечает на вопрос «кто это делал»; у рутины исполнитель внутренний и всегда
 // один, поэтому колонки у неё нет вовсе (Р-8) — пустой столбец на каждой строке сообщал бы, что
 // исполнителя не знают, а его знают.
-import { formatDate } from '../../lib/format';
+import { formatDate, plural } from '../../lib/format';
 import { trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { RUN_OUTCOME_LABELS, runAspect, type TicketRun } from './useTicketRuns';
@@ -30,12 +30,7 @@ const PROPOSAL_LABELS: Record<string, string> = {
 
 /** Русское множественное: 1 шаг, 2–4 шага, 5–20 шагов (и 11–14 — «шагов»). */
 function stepsLabel(n: number): string {
-  const teen = n % 100;
-  const last = n % 10;
-  if (teen >= 11 && teen <= 14) return `${n} шагов`;
-  if (last === 1) return `${n} шаг`;
-  if (last >= 2 && last <= 4) return `${n} шага`;
-  return `${n} шагов`;
+  return `${n} ${plural(n, 'шаг', 'шага', 'шагов')}`;
 }
 
 export function RunsList({
@@ -102,6 +97,14 @@ export function RunsList({
                     предложение: {proposalLabel}
                   </Badge>
                 )}
+                {/* Неразобранная пачка (D42, С8) — ТРЕТИЙ вид ожидания, и слово у него своё:
+                    «ждёт ответа» занято терминальным вопросом, «ждёт решения» — предложением,
+                    и общее слово слило бы в списке три разных жеста на разных экранах.
+                    Всегда акцентом: бейдж и появляется только тогда, когда от владельца
+                    чего-то ждут. Числа единиц в нём нет намеренно — у списка их не бывает
+                    (флажок скалярный, ОЧ.6), а проба на каждую строку стоила бы Seq Scan под
+                    RLS; точное число читается на экране самого прогона. */}
+                {a.undecided === true && <Badge tone="accent">пачка решений</Badge>}
                 <span className="text-text-secondary">· {stepsLabel(steps)}</span>
                 {showGrant && grant !== undefined && (
                   <span className="break-words text-text-secondary">· {grant.label}</span>

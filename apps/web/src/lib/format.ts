@@ -47,3 +47,21 @@ export function formatDate(iso: string, tz?: string): string {
     minute: '2-digit',
   }).format(d);
 }
+
+/**
+ * Русское множественное: 1 прогон, 2–4 прогона, 5–20 прогонов (и 11–14 — «прогонов»).
+ * Возвращает СЛОВО, а не готовое «N слово»: разделитель между числом и словом у вызывающих
+ * свой (строка у одного, узлы разметки у другого).
+ *
+ * Общей функцией, а не копией в каждом месте: правило одно на язык, а мест уже два (шаги в
+ * истории прогонов, прогоны с неразобранной пачкой в состоянии рутины) — копия разъехалась бы
+ * на первой же правке одного из них.
+ */
+export function plural(n: number, one: string, few: string, many: string): string {
+  const teen = n % 100;
+  if (teen >= 11 && teen <= 14) return many;
+  const last = n % 10;
+  if (last === 1) return one;
+  if (last >= 2 && last <= 4) return few;
+  return many;
+}

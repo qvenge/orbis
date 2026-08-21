@@ -8,7 +8,7 @@
 // работы: у поля `at` один смысл («во сколько»), а у паузы — совсем другой («работает ли»), и
 // текстовый инпут рядом с кнопкой означал бы, что выключить рутину можно опечаткой.
 import type { ReactNode } from 'react';
-import { formatDate } from '../../lib/format';
+import { formatDate, plural } from '../../lib/format';
 import { invalidateGraph } from '../../lib/invalidate';
 import { openEntity } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
@@ -160,6 +160,20 @@ export function RoutineStatusBlock({
         {str(routine.at) ?? '—'} · {daysLabel(strArray(routine.days))}
       </Row>
       <Row label="Следующее срабатывание">{next}</Row>
+      {/* Неразобранная пачка (D42) — рядом со «следующим срабатыванием» и по той же причине:
+          обе строки отвечают на вопрос «что с рутиной прямо сейчас». Считает её сервер
+          АСПЕКТНЫМ фильтром по прогонам (С8), поэтому цифра — про ПРОГОНЫ с нерешённым, а не
+          про единицы: точное число единиц читается на экране самого прогона, туда и ведут
+          бейджи истории ниже.
+          Нуля здесь не бывает: «Пачка решений: 0 прогонов» на каждой рутине — шум, а не
+          сведения. И это единственный читатель поля: посчитанное, но никем не прочитанное
+          поле обзора — то, чем уже стали `waiting` и `openProposal` (Р-11). */}
+      {overview.data !== undefined && overview.data.undecided > 0 && (
+        <Row label="Пачка решений">
+          {overview.data.undecided}{' '}
+          {plural(overview.data.undecided, 'прогон', 'прогона', 'прогонов')}
+        </Row>
+      )}
       {outcome !== undefined && lastRun !== undefined && (
         <Row label="Последний прогон">
           {/* Ссылкой на сам прогон: «сбой» без возможности посмотреть, на чём именно, — это
