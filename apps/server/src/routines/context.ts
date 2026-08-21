@@ -25,7 +25,7 @@ import {
   MEMORY_SECTION_HEADER,
   memoryLine,
 } from '../llm/context';
-import { ROUTINE_SYSTEM_PROMPT, routineModeSection } from '../llm/prompts/routine-v1';
+import { ROUTINE_SYSTEM_PROMPT, routineModeSection } from '../llm/prompts/routine-v2';
 import type { LLMMessage } from '../llm/types';
 import type { RejectReason } from '../policy/pending';
 import { decisionsNoun } from './constants';

@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { RunSummary } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
-import { ROUTINE_SYSTEM_PROMPT } from '../llm/prompts/routine-v1';
+import { ROUTINE_SYSTEM_PROMPT } from '../llm/prompts/routine-v2';
 import { SYSTEM_PROMPT_V4 } from '../llm/prompts/v4';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { buildRoutineContext, type RoutineHistoryItem, type RoutineHistoryUnit } from './context';
