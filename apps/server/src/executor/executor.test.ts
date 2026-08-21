@@ -1331,6 +1331,238 @@ describe('ADE-срез 1: CAS-предусловие entity_update (С7, инв�
   });
 });
 
+describe('D42 ОЧ.13: псевдо-аспект orbis/entity — предусловие по колонке archived', () => {
+  /** Сид с явным id: предусловие обязано ссылаться на ОДНУ конкретную строку. */
+  async function create(
+    id: string,
+    aspects: Record<string, Record<string, unknown>> = { 'orbis/note': {} },
+  ): Promise<void> {
+    const r = await execute(
+      db,
+      req('entity_create', { id, title: 'Цель отложки', tags: [], aspects }),
+    );
+    expect(r.ok).toBe(true);
+  }
+
+  /** Отложенная архивация в форме Р0-7: «применимо, пока запись НЕ в архиве». */
+  const archiveIfLive = (id: string): ExecuteRequest =>
+    req('entity_update', {
+      id,
+      precondition: [{ aspect: 'orbis/entity', field: 'archived', in: [false] }],
+      archived: true,
+    });
+
+  async function archivedOf(id: string): Promise<boolean> {
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.execute(sql`SELECT archived FROM entities WHERE id = ${id}`),
+    );
+    return rows[0]?.archived as boolean;
+  }
+
+  test('archived=false → архивация проходит; повтор по уже архивированной → CONFLICT с mismatch по колонке', async () => {
+    const id = newId();
+    await create(id);
+
+    const ok = await execute(db, archiveIfLive(id));
+    expect(ok.ok).toBe(true);
+    expect(await archivedOf(id)).toBe(true);
+
+    // Повтор — ровно тот случай, ради которого предусловие и снимается при постановке
+    // отложки: цель успели заархивировать руками, и отложенное действие обязано протухнуть
+    // честным CONFLICT, а не молча архивировать второй раз.
+    const again = await execute(db, archiveIfLive(id));
+    expect(again.ok).toBe(false);
+    if (!again.ok) {
+      expect(again.error.code).toBe('CONFLICT');
+      expect(again.error.message).toBe('предусловие не выполнено: orbis/entity.archived');
+      // Форма расхождения — ПРЕЖНЯЯ (контракт не двигался): псевдо-аспект отличается от
+      // настоящего только источником значения, а не формой PreconditionMismatch.
+      expect(again.error.details).toEqual({
+        reason: 'precondition_failed',
+        precondition: { aspect: 'orbis/entity', field: 'archived', in: [false] },
+        actual: true,
+        mismatches: [
+          { aspect: 'orbis/entity', field: 'archived', expected: [false], actual: true },
+        ],
+      });
+    }
+  });
+
+  test('неизвестное поле под псевдо-аспектом → CONFLICT (fail-closed), а не молчаливый пропуск', async () => {
+    // Поддержана РОВНО одна колонка — archived. Опечатка в имени поля обязана отказать:
+    // «предусловие, которое ничего не проверяет» разрешило бы правку ровно там, где его и
+    // поставили её запретить (то же правило, что у отсутствующего поля настоящего аспекта).
+    const id = newId();
+    await create(id);
+    const r = await execute(
+      db,
+      req('entity_update', {
+        id,
+        precondition: [{ aspect: 'orbis/entity', field: 'нетакого', in: [1] }],
+        title: 'Переименована мимо предусловия',
+      }),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.code).toBe('CONFLICT');
+      expect(r.error.message).toBe('предусловие не выполнено: orbis/entity.нетакого');
+      expect(r.error.details).toMatchObject({
+        reason: 'precondition_failed',
+        mismatches: [{ aspect: 'orbis/entity', field: 'нетакого', expected: [1] }],
+      });
+    }
+    // Отказ — до записи: заголовок не поменялся.
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.execute(sql`SELECT title FROM entities WHERE id = ${id}`),
+    );
+    expect(rows[0]?.title).toBe('Цель отложки');
+  });
+
+  test('batch: предусловие читает ВИРТУАЛЬНУЮ строку — эффекты предыдущих операций видны', async () => {
+    // Стадии 1–4 всех операций batch идут до первой записи, поэтому источником archived
+    // обязана быть виртуальная строка BatchState, а не БД: иначе отложка в пачке сверялась бы
+    // с состоянием «до пачки».
+    const born = newId();
+    const okBatch = await execute(db, {
+      actorUserId: userA,
+      actorKind: 'owner',
+      source: 'fast_path',
+      clock: () => T0,
+      batchId: newId(),
+      operations: [
+        { tool: 'entity_create', input: { id: born, title: 'Создана в пачке', tags: [] } },
+        // В БД строки на этой стадии ещё нет — archived берётся из виртуальной строки create.
+        {
+          tool: 'entity_update',
+          input: {
+            id: born,
+            precondition: [{ aspect: 'orbis/entity', field: 'archived', in: [false] }],
+            archived: true,
+          },
+        },
+      ],
+    });
+    expect(okBatch.ok).toBe(true);
+    expect(await archivedOf(born)).toBe(true);
+
+    const id = newId();
+    await create(id);
+    const conflict = await execute(db, {
+      actorUserId: userA,
+      actorKind: 'owner',
+      source: 'fast_path',
+      clock: () => T0,
+      batchId: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id, archived: true } },
+        // Вторая операция обязана УВИДЕТЬ архивацию первой — иначе предусловие в пачке
+        // проверяло бы состояние «до пачки» и пропускало бы то, что должно отсекать.
+        {
+          tool: 'entity_update',
+          input: {
+            id,
+            precondition: [{ aspect: 'orbis/entity', field: 'archived', in: [false] }],
+            title: 'Не должна примениться',
+          },
+        },
+      ],
+    });
+    expect(conflict.ok).toBe(false);
+    if (!conflict.ok) {
+      expect(conflict.error.code).toBe('CONFLICT');
+      expect(conflict.error.details).toMatchObject({
+        reason: 'precondition_failed',
+        mismatches: [
+          { aspect: 'orbis/entity', field: 'archived', expected: [false], actual: true },
+        ],
+      });
+    }
+    // Пачка «всё или ничего»: откатилась и первая операция.
+    expect(await archivedOf(id)).toBe(false);
+  });
+
+  test('обычные предусловия не изменились: колонка не протекает в НАСТОЯЩИЙ аспект', async () => {
+    // Псевдо-аспект — отдельная ветка по точному id, а не «сначала колонки, потом аспекты».
+    // Проверяется старое поведение, а не новое: предусловие по полю `archived` НАСТОЯЩЕГО
+    // аспекта обязано видеть отсутствие поля в карте аспектов, а не значение колонки строки.
+    const id = newId();
+    await create(id, { 'orbis/task': { status: 'planned' } });
+
+    // `in: [false]` по несуществующему полю аспекта — расхождение (actual undefined),
+    // хотя колонка строки как раз равна false.
+    const viaIn = await execute(
+      db,
+      req('entity_update', {
+        id,
+        precondition: [{ aspect: 'orbis/task', field: 'archived', in: [false] }],
+        title: 'Мимо',
+      }),
+    );
+    expect(viaIn.ok).toBe(false);
+    if (!viaIn.ok) {
+      expect(viaIn.error.code).toBe('CONFLICT');
+      expect(viaIn.error.message).toBe('предусловие не выполнено: orbis/task.archived');
+    }
+
+    // Зеркало: `absent` по тому же полю ВЫПОЛНЕНО — в аспекте поля нет, и колонка его не «создаёт».
+    const viaAbsent = await execute(
+      db,
+      req('entity_update', {
+        id,
+        precondition: [{ aspect: 'orbis/task', field: 'archived', absent: true }],
+        title: 'Переименована',
+      }),
+    );
+    expect(viaAbsent.ok).toBe(true);
+    expect(firstEntity(viaAbsent).title).toBe('Переименована');
+  });
+
+  test('смешанный список: псевдо-аспект и настоящий в одном предусловии, mismatches полный', async () => {
+    // Порядок и полнота списка расхождений — прежние: псевдо-аспект встраивается в тот же
+    // цикл, а не обрабатывается отдельным проходом.
+    const id = newId();
+    await create(id, { 'orbis/task': { status: 'in_progress' } });
+    const r = await execute(
+      db,
+      req('entity_update', {
+        id,
+        precondition: [
+          { aspect: 'orbis/task', field: 'status', in: ['planned'] }, // провал
+          { aspect: 'orbis/entity', field: 'archived', in: [false] }, // выполнено
+          { aspect: 'orbis/entity', field: 'archived', absent: true }, // провал: колонка есть всегда
+        ],
+        archived: true,
+      }),
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error.message).toBe('предусловие не выполнено: orbis/task.status (и ещё 1)');
+      expect((r.error.details as { mismatches: unknown[] }).mismatches).toEqual([
+        { aspect: 'orbis/task', field: 'status', expected: ['planned'], actual: 'in_progress' },
+        { aspect: 'orbis/entity', field: 'archived', expected: 'absent', actual: false },
+      ]);
+    }
+  });
+
+  test('коллизия невозможна: orbis/entity нельзя завести настоящим аспектом', async () => {
+    // Безопасность зарезервированного имени стоит на закрытом реестре ASPECT_SCHEMAS
+    // (пин в packages/shared/src/schemas/aspects.test.ts). Здесь проверяется вторая половина:
+    // такой аспект нельзя записать в сущность, значит подменить источник значения нечем.
+    const id = newId();
+    const r = await execute(
+      db,
+      req('entity_create', {
+        id,
+        title: 'Подмена псевдо-аспекта',
+        tags: [],
+        aspects: { 'orbis/entity': { archived: false } },
+      }),
+    );
+    expect(r.ok).toBe(false);
+    expect(await countEntities(id)).toBe(0);
+  });
+});
+
 describe('V1: инвариант субъекта прогона (V1.4)', () => {
   /** Прогон в минимальной валидной форме — субъект дописывает тест. */
   const run = (subject: Record<string, unknown>) => ({

@@ -834,9 +834,35 @@ async function loadEntityForUpdate(
 }
 
 /**
+ * Зарезервированный id: под ним предусловие адресует КОЛОНКИ строки сущности, а не аспект
+ * (D42 ОЧ.13). Заведён потому, что отложенная архивация обязана нести предусловие
+ * «пока запись не в архиве», а `archived` — колонка таблицы `entities`, которой в карте
+ * аспектов нет вовсе: без псевдо-аспекта такая отложка не протухала бы НИКОГДА.
+ *
+ * Именно псевдо-аспект, а не новая форма пункта: `aspect` в контракте — обычная строка,
+ * поэтому не двигаются ни union `entityUpdatePreconditionItem`, ни `PreconditionMismatch`,
+ * ни его читатели (verbs.ts, карточка расхождений). И до этой ветки предусловие с таким id
+ * уже отказывало (`aspects['orbis/entity']` не существует) — здесь отказ становится
+ * осмысленным, а не открывается новая дыра.
+ *
+ * Реестр аспектов ЗАКРЫТ (`ASPECT_SCHEMAS`) и такого id в нём нет — пиннится тестом
+ * `packages/shared/src/schemas/aspects.test.ts`: пока это так, ветка по точному имени
+ * однозначна и настоящий аспект её не перехватит.
+ *
+ * Поддержана РОВНО одна колонка — `archived`. Неизвестное поле даёт `undefined`, то есть
+ * расхождение (fail-closed), а не молчаливый пропуск: предусловие с опечаткой обязано
+ * отказать, а не разрешить правку ровно там, где его поставили её запретить. По той же
+ * причине форма `absent` под псевдо-аспектом на `archived` не выполнена никогда — колонка
+ * значение несёт всегда; «пока не в архиве» пишется как `in: [false]`.
+ */
+export const ENTITY_PSEUDO_ASPECT = 'orbis/entity';
+
+/**
  * CAS-предусловие (С7) против состояния строки, ПРОЧИТАННОЙ ПОД ЗАМКОМ. Вызывается только
  * из prepareEntityUpdate сразу после loadEntityForUpdate — своего чтения не делает намеренно:
- * второй SELECT снял бы весь смысл, сверяя значение вне транзакционного замка.
+ * второй SELECT снял бы весь смысл, сверяя значение вне транзакционного замка. По той же
+ * причине колонки под псевдо-аспектом приходят параметром `entity` — из ТОЙ ЖЕ прочитанной
+ * строки; в batch это виртуальная строка, где видны эффекты предыдущих операций пачки.
  *
  * Форма `in`: сравнение по JSON-форме — поля аспектов скалярные, а `===` на объектах сравнивал
  * бы ссылки. Отсутствующее поле (и отсутствующий аспект) не совпадает ни с чем — захват
@@ -851,13 +877,24 @@ async function loadEntityForUpdate(
  * несколько сравнений по уже прочитанной строке и стоил бы владельцу разбора по одному
  * пункту за попытку — предложение рутины применяется «всё или ничего».
  */
-function assertPrecondition(precondition: EntityUpdatePrecondition, aspects: AspectsMap): void {
+function assertPrecondition(
+  precondition: EntityUpdatePrecondition,
+  aspects: AspectsMap,
+  entity: { archived: boolean },
+): void {
   const mismatches: PreconditionMismatch[] = [];
   /** Первый провалившийся ПУНКТ в исходной форме (не расхождение) — его читает verbs.ts. */
   let failed: { item: EntityUpdatePreconditionItem; actual: unknown } | undefined;
 
   for (const p of precondition) {
-    const actual = aspects[p.aspect]?.[p.field];
+    // Источник значения — по id аспекта: у зарезервированного это колонки строки
+    // (см. ENTITY_PSEUDO_ASPECT), у всех остальных — карта аспектов, байт-в-байт как было.
+    const actual =
+      p.aspect === ENTITY_PSEUDO_ASPECT
+        ? p.field === 'archived'
+          ? entity.archived
+          : undefined
+        : aspects[p.aspect]?.[p.field];
     const satisfied =
       'absent' in p
         ? actual === undefined
@@ -1195,7 +1232,7 @@ async function prepareEntityUpdate(
   // Проверка идёт ДО гейта тела и ДО merge: проигравший захват не должен ни писать, ни
   // получать STALE_VERSION вместо честного CONFLICT. Внутренний режим undo (§7.8)
   // предусловий не встречает — inverse их не несёт, поэтому отдельной ветки здесь нет.
-  if (input.precondition) assertPrecondition(input.precondition, currentAspects);
+  if (input.precondition) assertPrecondition(input.precondition, currentAspects, current);
 
   // §5.2: правка body требует optimistic-check по updated_at; патчи без body — LWW.
   // Внутренний режим undo (§7.8) требование ПРОПУСКАЕТ: Undo восстанавливает
