@@ -1,4 +1,20 @@
-// apps/server/src/perf.test.ts
+// apps/server/perf/perf.test.ts
+//
+// ПОЧЕМУ ЭТОТ ФАЙЛ ЛЕЖИТ ОТДЕЛЬНО ОТ src/ (решение владельца 2026-08-21).
+// Гейт обязан мерить КОД, а не загрузку машины. Корневой `bun run test` гонит сьюты трёх
+// пакетов ПАРАЛЛЕЛЬНО, и под этой нагрузкой медианы уезжали в 3–5 раз: `fastpath:create`
+// давал 158 мс при бюджете 150 и краснел, хотя изолированно та же медиана — 29.6 мс.
+// За срез Ш1 гейт так соврал трижды.
+// Разобрано два других выхода и оба отвергнуты: поднять порог — гейт перестанет ловить
+// настоящее замедление, ради которого заведён; оставить как есть — к красному привыкают
+// как к шуму, а это хуже отсутствия гейта.
+// Отсюда нынешняя раскладка: `bun test src test/` (скрипт `test` пакета) этот каталог НЕ
+// видит; гейт живёт в `bun run test:perf` и в CI стоит СВОИМ шагом после `bun run test`.
+// Цепочку `bun run test && bun run test:perf` пробовали и отвергли: сразу после
+// параллельного прогона засев фикстуры на 2000 сущностей иногда приезжал НЕПОЛНЫМ
+// (гейт падал на «сущность не найдена», seed 18 с вместо 23 с). Это разменяло бы один
+// флак на другой. Отдельный шаг CI держит гейт обязательным, не сцепляя его с нагрузкой.
+// Не возвращай файл в src/: там он снова начнёт мерить соседей по прогону.
 // Перф-гейт слайса 3 (D21): семь горячих серверных операций на объёме «граф владельца
 // через год» — 2000 сущностей (задачи/события/заметки), 1000 транзакций, 12 конвертов.
 // В таблице `entities` это 3031 строка: к перечисленному добавляются 12 категорий и
@@ -15,16 +31,16 @@
 // `perf: …`, а не по красному прогону, — за тем они и печатаются всегда (D21).
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../test/helpers';
-import { appRouter } from './router';
+import { appRouter } from '../src/router';
 import {
   measureMedian,
   perfEnvelopeCategoryId,
   perfGoalId,
   perfHubId,
   seedPerfFixture,
-} from './test/perf';
-import { createCallerFactory } from './trpc';
+} from '../src/test/perf';
+import { createCallerFactory } from '../src/trpc';
+import { appDb, freshUserId, requireEnv, truncateAll } from '../test/helpers';
 
 requireEnv();
 

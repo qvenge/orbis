@@ -5,9 +5,10 @@
   "scripts": {
     "dev": "bun run --hot src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test src test/",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "test:perf": "bun test perf/"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.8",
