@@ -226,7 +226,7 @@ async function prepareAndLoop(
   };
   const { threadId, system, messages, tools } = await withIdentity(deps.db, ownerId, async (tx) => {
     const thread = await ensureEntityThread(tx, ownerId, routine.id);
-    const history = await routineHistory(tx, routine.id, runId);
+    const history = await routineHistory(tx, ownerId, routine.id, runId);
     const ctx = await buildRoutineContext(tx, {
       ownerId,
       routine,

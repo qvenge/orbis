@@ -9,7 +9,7 @@ import { withIdentity } from '../db/with-identity';
 import { ROUTINE_SYSTEM_PROMPT } from '../llm/prompts/routine-v1';
 import { SYSTEM_PROMPT_V4 } from '../llm/prompts/v4';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
-import { buildRoutineContext, type RoutineHistoryItem } from './context';
+import { buildRoutineContext, type RoutineHistoryItem, type RoutineHistoryUnit } from './context';
 
 requireEnv();
 
@@ -209,6 +209,136 @@ describe('buildRoutineContext: история вместо треда (V1.5, Р-
     // обязаны давать модели ровно тот же текст, что до Ш1
     expect(await lineOf(approved())).toBe(
       '— 2026-08-15T07:00: завершён; предлагал: «Перенесу три просроченные задачи на сегодня.»; предложение: владелец принял',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Единицы пачки в строке истории (D42 ОЧ.7, блокер Б1 ревью спеки). Ленту треда этот
+// контекст не читает вовсе — значит ответы владельца и судьбы отложенных действий
+// доезжают следующему прогону ТОЛЬКО отсюда. Тесты бьют по каждой ветке подписи: одна
+// потерянная — это владелец, ответивший в пустоту.
+// ---------------------------------------------------------------------------
+
+describe('buildRoutineContext: единицы пачки в строке истории (D42 ОЧ.7, Б1)', () => {
+  const QUESTION = 'Переносить ли встречу с Ирой?';
+  const ANSWER = 'Не переноси, я сам напишу.';
+  const ACTION = 'Архивировать «Прошлогодний отчёт»';
+
+  /** Строка прогона — последняя в блоке истории (перед ней только шапка блока). */
+  async function lineOf(routineId: string, item: RoutineHistoryItem): Promise<string> {
+    const { messages } = await contextOf(routineId, [item]);
+    return (messages[0]?.content ?? '').split('\n').at(-1) ?? '';
+  }
+
+  /**
+   * Прогон-носитель единиц: голый `finished` без предложения, отчёта и чекпойнта — в
+   * строке остаются слот, исход и сами единицы, и ни одна проверка подписи не смешивается
+   * с прежними частями строки.
+   */
+  function withUnits(units: RoutineHistoryUnit[], omitted?: number): RoutineHistoryItem {
+    return {
+      run: summary({ outcome: 'finished', bucket: '2026-08-15T07:00' }),
+      units,
+      ...(omitted !== undefined && { unitsOmitted: omitted }),
+    };
+  }
+
+  const HEAD = '— 2026-08-15T07:00: завершён';
+
+  test('вопрос с ответом и принятая отложка: ответ владельца доезжает текстом (приёмка 7)', async () => {
+    const routineId = await seedRoutine(owner);
+    // Ровно та пара, ради которой написан весь срез: следующий прогон обязан прочитать,
+    // что он уже спрашивал и что ему ответили, — иначе спросит то же самое заново
+    expect(
+      await lineOf(
+        routineId,
+        withUnits([
+          { kind: 'question', text: QUESTION, fate: 'answered', answer: ANSWER },
+          { kind: 'action', text: ACTION, fate: 'approved' },
+        ]),
+      ),
+    ).toBe(
+      `${HEAD}; спрашивал: «${QUESTION}» — ответ: «${ANSWER}»; откладывал: «${ACTION}» — принято`,
+    );
+  });
+
+  test('вопрос: снят и без ответа — разные подписи (судьба вопроса единственна, ОЧ.8)', async () => {
+    const routineId = await seedRoutine(owner);
+    expect(
+      await lineOf(routineId, withUnits([{ kind: 'question', text: QUESTION, fate: 'stale' }])),
+    ).toBe(`${HEAD}; спрашивал: «${QUESTION}» — снят`);
+    expect(
+      await lineOf(routineId, withUnits([{ kind: 'question', text: QUESTION, fate: 'open' }])),
+    ).toBe(`${HEAD}; спрашивал: «${QUESTION}» — без ответа`);
+  });
+
+  test('ответ БЕЗ текста — «отвечено», а не «без ответа»: рутина не спросит второй раз', async () => {
+    const routineId = await seedRoutine(owner);
+    // Сообщение ответа, написанное мимо процедуры, `listRunUnits` читает как `answered`
+    // без `answer`: показать нечего, но выдать это за «владелец промолчал» нельзя
+    expect(
+      await lineOf(routineId, withUnits([{ kind: 'question', text: QUESTION, fate: 'answered' }])),
+    ).toBe(`${HEAD}; спрашивал: «${QUESTION}» — отвечено`);
+  });
+
+  test('отложка: ждёт решения — не «отклонено»', async () => {
+    const routineId = await seedRoutine(owner);
+    expect(
+      await lineOf(routineId, withUnits([{ kind: 'action', text: ACTION, fate: 'open' }])),
+    ).toBe(`${HEAD}; откладывал: «${ACTION}» — ждёт решения`);
+  });
+
+  test('отклонённая отложка: подпись из ПАРЫ (fate, reason) — три разные судьбы', async () => {
+    const routineId = await seedRoutine(owner);
+    const rejected = async (reason: 'owner' | 'stale' | 'superseded'): Promise<string> =>
+      lineOf(routineId, withUnits([{ kind: 'action', text: ACTION, fate: 'rejected', reason }]));
+    // Разница не косметическая: «отклонено» рутина обязана прочитать как «так не делай»,
+    // а «устарело»/«снято» — как «состояние ушло, попробуй заново по свежему»
+    expect(await rejected('owner')).toBe(`${HEAD}; откладывал: «${ACTION}» — отклонено`);
+    expect(await rejected('stale')).toBe(`${HEAD}; откладывал: «${ACTION}» — устарело`);
+    expect(await rejected('superseded')).toBe(`${HEAD}; откладывал: «${ACTION}» — снято`);
+  });
+
+  test('текст единицы и ответа обрезаны HISTORY_TEXT_CAP (500) — отчёт на 20к не вытеснит инструкцию', async () => {
+    const routineId = await seedRoutine(owner);
+    const long = 'я'.repeat(600);
+    const line = await lineOf(
+      routineId,
+      withUnits([{ kind: 'question', text: long, fate: 'answered', answer: long }]),
+    );
+    expect(line).toBe(`${HEAD}; спрашивал: «${'я'.repeat(500)}…» — ответ: «${'я'.repeat(500)}…»`);
+    expect(line).not.toContain('я'.repeat(501));
+  });
+
+  test('переполнение потолка истории — «и ещё N решений» со склонением', async () => {
+    const routineId = await seedRoutine(owner);
+    const unit: RoutineHistoryUnit = { kind: 'action', text: ACTION, fate: 'approved' };
+    const tail = async (omitted: number): Promise<string> =>
+      lineOf(routineId, withUnits([unit], omitted));
+    expect(await tail(1)).toBe(`${HEAD}; откладывал: «${ACTION}» — принято; и ещё 1 решение`);
+    expect(await tail(2)).toBe(`${HEAD}; откладывал: «${ACTION}» — принято; и ещё 2 решения`);
+    expect(await tail(5)).toBe(`${HEAD}; откладывал: «${ACTION}» — принято; и ещё 5 решений`);
+    expect(await tail(11)).toBe(`${HEAD}; откладывал: «${ACTION}» — принято; и ещё 11 решений`);
+    expect(await tail(21)).toBe(`${HEAD}; откладывал: «${ACTION}» — принято; и ещё 21 решение`);
+  });
+
+  test('прогон БЕЗ единиц — строка прежняя байт-в-байт: старые прогоны истории не меняются', async () => {
+    const routineId = await seedRoutine(owner);
+    // Ключа `units` у прогона до D42 нет вовсе (не пустой массив), и строка обязана
+    // остаться той же, что до среза: «и ещё 0 решений» или лишняя «;» — уже регресс
+    const item: RoutineHistoryItem = {
+      run: summary({
+        outcome: 'answered',
+        bucket: '2026-08-16T07:00',
+        report: 'Разобрал день.',
+        checkpoint: { question: QUESTION, asked_at: '2026-08-16T04:01:00.000Z' },
+        reply: { text: ANSWER, at: '2026-08-16T09:00:00.000Z' },
+      }),
+      reply: ANSWER,
+    };
+    expect(await lineOf(routineId, item)).toBe(
+      `— 2026-08-16T07:00: владелец ответил; отчёт: «Разобрал день.»; спрашивал: «${QUESTION}»; ответ владельца: «${ANSWER}»`,
     );
   });
 });

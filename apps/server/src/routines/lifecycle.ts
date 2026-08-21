@@ -61,6 +61,7 @@ import {
   createPending,
   listRunUnits,
   type RejectReason,
+  type RunUnit,
   rejectedReason,
   rejectPending,
   rejectPendingTx,
@@ -72,10 +73,11 @@ import {
   CORE_FIELD_LABELS,
   editsNoun,
   MAX_ATTEMPTS,
+  MAX_RUN_UNITS,
   RETRY_DELAYS_MS,
   ROUTINE_HISTORY_TAIL,
 } from './constants';
-import type { RoutineHistoryItem } from './context';
+import type { RoutineHistoryItem, RoutineHistoryUnit } from './context';
 import {
   buildEditedOperations,
   countProposalRows,
@@ -938,6 +940,37 @@ async function createRun(
 }
 
 /**
+ * Текст единицы для истории — ровно то, что видел владелец: у вопроса сам вопрос, у
+ * действия сводка его карточки («Архивация: «Прошлогодний отчёт»»), а не `tool` с `input`.
+ * Модель обязана прочитать в истории то, ПО ЧЕМУ принималось решение, иначе «отклонено»
+ * повиснет над строкой `entity_update`, из которой не видно ни записи, ни намерения.
+ *
+ * Запасные ветки недостижимы и стоят не для вида: `question` у вопроса и `tool` у действия
+ * обязательны по схеме записи (`pendingRecord.superRefine`), карточку единице всегда кладёт
+ * её постановщик (`deferRoutineUnit`, `routines/ask.ts`). Отказ вместо запасного текста
+ * уронил бы сборку контекста целиком — прогон остался бы без ВСЕЙ истории из-за одной
+ * подписи, а это дороже, чем строка с id вместо имени.
+ */
+function unitHistoryText(unit: RunUnit): string {
+  if (unit.kind === 'question') return unit.question ?? unit.pendingId;
+  if (unit.card !== undefined && 'summary' in unit.card) return unit.card.summary;
+  return unit.tool ?? unit.pendingId;
+}
+
+/** Единица пачки в объёме истории: id, payload и карточка модели не нужны. */
+function historyUnit(unit: RunUnit): RoutineHistoryUnit {
+  return {
+    kind: unit.kind,
+    text: unitHistoryText(unit),
+    fate: unit.fate,
+    // Причина едет с судьбой, а не сворачивается в подпись здесь: печать — дело контекста,
+    // и подпись отклонённого действия выводится из ПАРЫ (fate, reason)
+    ...(unit.reason !== undefined && { reason: unit.reason }),
+    ...(unit.answer !== undefined && { answer: unit.answer }),
+  };
+}
+
+/**
  * Хвост истории рутины для контекста модели (Р-18): последние `tail` прогонов, кроме
  * текущего, от старых к новым.
  *
@@ -945,29 +978,62 @@ async function createRun(
  * рутины прогоны копятся линейно, и через месяц история вытеснила бы из контекста саму
  * инструкцию. Проекции (`proposalStatus`, `reply`, `explanation`) заполняются здесь —
  * см. докблок RoutineHistoryItem.
+ *
+ * ЕДИНИЦЫ ПАЧКИ (D42 ОЧ.7) — здесь же, и это ЕДИНСТВЕННАЯ дорога ответов владельца в
+ * следующий прогон: контекст рутины ленту треда не читает вовсе («ВМЕСТО ЛЕНТЫ ТРЕДА —
+ * ИСТОРИЯ ПРОГОНОВ», `context.ts`), и без этого слоя владелец отвечал бы в пустоту —
+ * рутина спрашивала бы одно и то же каждое утро (блокер Б1 ревью спеки).
+ *
+ * `ownerId` ОТДЕЛЬНЫМ параметром, а не из tx: это КОНТРАКТ `listRunUnits` — tx обязан быть
+ * открыт `withIdentity` для ТОГО ЖЕ владельца, иначе судьбы молча не найдутся и вся пачка
+ * прочитается как открытая (модель увидела бы «без ответа» там, где владелец ответил).
+ *
+ * ЦЕНА, честно: проба единиц — containment по `metadata`, и под RLS её план — **Seq Scan**,
+ * а не обход `chat_messages_metadata_gin` (`jsonb_contains` не leakproof; замер и разбор —
+ * докблок `liveProposalRuns` ниже: 26.3 мс на одну пробу по `id` на стенде в 39 013
+ * сообщений). Проб столько, сколько прогонов в хвосте, — семь, то есть ≈130–180 мс на
+ * сборку контекста. Цена ПРИНЯТА: контекст собирается один раз за прогон при дедлайне в
+ * десять минут. Дешевле её делает не переписывание этого места, а скалярная колонка вместо
+ * пробы по jsonb — общее лекарство для ВСЕХ containment-проб под RLS.
+ *
+ * Пробы последовательны, а не `Promise.all`: у нас один tx, и параллельных запросов в нём
+ * не бывает по построению.
  */
 export async function routineHistory(
   tx: Tx,
+  ownerId: string,
   routineId: string,
   exceptRunId: string,
   tail: number = ROUTINE_HISTORY_TAIL,
 ): Promise<RoutineHistoryItem[]> {
   const runs = await runsOfParent(tx, routineId);
-  return runs
-    .filter((row) => row.id !== exceptRunId)
-    .slice(-tail)
-    .map((row) => {
-      const summary = runSummary(row);
-      return {
-        run: summary,
-        ...(summary.proposal !== undefined && { proposalStatus: summary.proposal.status }),
-        ...(summary.reply !== undefined && { reply: summary.reply.text }),
-        // Проза предложения живёт в `report` прогона (её кладёт orbis_propose): отчёт
-        // прогона БЕЗ предложения — это отчёт режима act, и объяснением он не является
-        ...(summary.proposal !== undefined &&
-          summary.report !== undefined && { explanation: summary.report }),
-      };
+  const items: RoutineHistoryItem[] = [];
+  for (const row of runs.filter((r) => r.id !== exceptRunId).slice(-tail)) {
+    const summary = runSummary(row);
+    // Предложение прогона в пачку НЕ попадает (Б5 ревью): проба идёт по явному `kind`,
+    // а у предложения его нет — иначе один и тот же текст модель прочитала бы дважды,
+    // как проекцию `explanation` и как единицу
+    const units = await listRunUnits(tx, ownerId, row.id);
+    // Потолок истории считает ВСЕ единицы, а кап пачки (MAX_RUN_UNITS) — только открытые:
+    // решённая освобождает место под капом, поэтому за длинный прогон их накапливается и
+    // больше десяти, и хвост «и ещё N» — не мёртвая ветка. Усекается именно хвост: ранние
+    // единицы прогона модель читает первыми, как и весь остальной порядок истории
+    const shown = units.slice(0, MAX_RUN_UNITS);
+    items.push({
+      run: summary,
+      ...(summary.proposal !== undefined && { proposalStatus: summary.proposal.status }),
+      ...(summary.reply !== undefined && { reply: summary.reply.text }),
+      // Проза предложения живёт в `report` прогона (её кладёт orbis_propose): отчёт
+      // прогона БЕЗ предложения — это отчёт режима act, и объяснением он не является
+      ...(summary.proposal !== undefined &&
+        summary.report !== undefined && { explanation: summary.report }),
+      // Ключа НЕТ у прогона без единиц (не пустой массив): прогоны до D42 обязаны давать
+      // прежнюю строку истории байт-в-байт
+      ...(shown.length > 0 && { units: shown.map(historyUnit) }),
+      ...(units.length > shown.length && { unitsOmitted: units.length - shown.length }),
     });
+  }
+  return items;
 }
 
 // ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ import { dispatchTool } from '../tools/dispatch';
 import {
   CONSECUTIVE_FAILURES_TO_PAUSE,
   MAX_ATTEMPTS,
+  MAX_RUN_UNITS,
   RETRY_DELAYS_MS,
   ROUTINE_HISTORY_TAIL,
 } from './constants';
@@ -124,6 +125,48 @@ async function seedProposal(
   const pendingId = run.proposal?.pending_id;
   if (pendingId === undefined) throw new Error('seedProposal: прогон без предложения');
   return { runId, taskId: task.id, pendingId };
+}
+
+/**
+ * Вопрос-единица прогона НАСТОЯЩИМ путём (`orbis_ask` через диспатч), а не вставкой в
+ * ленту: и гашение, и история ищут единицы пробой по pending-записям, и сид мимо
+ * `createPending` проверял бы форму, которой в проде не бывает.
+ *
+ * Модульная область, а не тело describe: читателей пачки два (гашение — ОЧ.8, история —
+ * ОЧ.7), и вторая копия того же сида разъехалась бы с первой на первой же правке формы.
+ */
+async function askUnit(routineId: string, runId: string, question: string): Promise<string> {
+  const r = await dispatchTool(
+    routineCtx(owner, 'act', [], {
+      routine: { id: routineId, runId, mode: 'act', allowedTools: new Set() },
+    }),
+    'orbis_ask',
+    { run_id: runId, question },
+  );
+  if (r.status !== 'ok') throw new Error(`askUnit: ${JSON.stringify(r)}`);
+  return (r.result as { pending_id: string }).pending_id;
+}
+
+/** Отложенное действие-единица тем же настоящим путём: архивация записи act-рутиной. */
+async function deferUnit(
+  routineId: string,
+  runId: string,
+  title: string,
+): Promise<{ pendingId: string; targetId: string }> {
+  const target = await seedEntity(owner, {
+    title,
+    tags: [],
+    aspects: { 'orbis/task': { status: 'done' } },
+  });
+  const r = await dispatchTool(
+    routineCtx(owner, 'act', ['entity_update'], {
+      routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(['entity_update']) },
+    }),
+    'entity_update',
+    { id: target.id, archived: true },
+  );
+  if (r.status !== 'pending_confirmation') throw new Error(`deferUnit: ${JSON.stringify(r)}`);
+  return { pendingId: r.pendingId, targetId: target.id };
 }
 
 /** Причина отказа pending'а из ленты — источник правды о судьбе предложения (V1.8). */
@@ -360,45 +403,6 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
       clock: () => T0,
       sink: makeChatJournalSink(),
     };
-  }
-
-  /**
-   * Вопрос-единица прогона НАСТОЯЩИМ путём (`orbis_ask` через диспатч), а не вставкой в
-   * ленту: гашение ищет единицы пробой по pending-записям, и сид мимо `createPending`
-   * проверял бы форму, которой в проде не бывает.
-   */
-  async function askUnit(routineId: string, runId: string, question: string): Promise<string> {
-    const r = await dispatchTool(
-      routineCtx(owner, 'act', [], {
-        routine: { id: routineId, runId, mode: 'act', allowedTools: new Set() },
-      }),
-      'orbis_ask',
-      { run_id: runId, question },
-    );
-    if (r.status !== 'ok') throw new Error(`askUnit: ${JSON.stringify(r)}`);
-    return (r.result as { pending_id: string }).pending_id;
-  }
-
-  /** Отложенное действие-единица тем же настоящим путём: архивация записи act-рутиной. */
-  async function deferUnit(
-    routineId: string,
-    runId: string,
-    title: string,
-  ): Promise<{ pendingId: string; targetId: string }> {
-    const target = await seedEntity(owner, {
-      title,
-      tags: [],
-      aspects: { 'orbis/task': { status: 'done' } },
-    });
-    const r = await dispatchTool(
-      routineCtx(owner, 'act', ['entity_update'], {
-        routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(['entity_update']) },
-      }),
-      'entity_update',
-      { id: target.id, archived: true },
-    );
-    if (r.status !== 'pending_confirmation') throw new Error(`deferUnit: ${JSON.stringify(r)}`);
-    return { pendingId: r.pendingId, targetId: target.id };
   }
 
   async function runAspect(runId: string): Promise<AgentRunAspect> {
@@ -907,7 +911,9 @@ describe('appendSystemNote и routineHistory', () => {
       startedAt: minutes(100),
     });
 
-    const history = await withIdentity(db, owner, (tx) => routineHistory(tx, routineId, currentId));
+    const history = await withIdentity(db, owner, (tx) =>
+      routineHistory(tx, owner, routineId, currentId),
+    );
     expect(history).toHaveLength(ROUTINE_HISTORY_TAIL);
     expect(history.map((h) => h.run.id)).toEqual(ids.slice(-ROUTINE_HISTORY_TAIL));
     expect(history.every((h) => h.run.id !== currentId)).toBe(true);
@@ -933,12 +939,151 @@ describe('appendSystemNote и routineHistory', () => {
       startedAt: minutes(10),
     });
 
-    const history = await withIdentity(db, owner, (tx) => routineHistory(tx, routineId, currentId));
+    const history = await withIdentity(db, owner, (tx) =>
+      routineHistory(tx, owner, routineId, currentId),
+    );
     const proposed = history.find((h) => h.run.id === oldRunId);
     expect(proposed?.proposalStatus).toBe('pending');
     expect(proposed?.explanation).toContain('Задача висит в инбоксе');
     const answered = history.find((h) => h.run.id === answeredId);
     expect(answered?.reply).toBe('Не переноси.');
+  });
+});
+
+describe('routineHistory: единицы пачки прошлых прогонов (D42 ОЧ.7, Б1)', () => {
+  const QUESTION = 'Переносить ли встречу с Ирой?';
+  const ANSWER = 'Не переноси, я сам напишу.';
+  const SECOND = 'Брать ли отчёт в работу сегодня?';
+
+  /** Хвост истории рутины глазами СЛЕДУЮЩЕГО прогона — ровно так его зовёт раннер. */
+  async function historyOf(routineId: string, exceptRunId: string) {
+    return withIdentity(db, owner, (tx) => routineHistory(tx, owner, routineId, exceptRunId));
+  }
+
+  test('единицы с судьбами: ответ владельца доезжает текстом, принятая отложка — своей судьбой', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-16T07:00' });
+    const answered = await askUnit(routineId, runId, QUESTION);
+    const defer = await deferUnit(routineId, runId, 'Прошлогодний отчёт');
+    await askUnit(routineId, runId, SECOND);
+    // Судьбы ставят НАСТОЯЩИЕ их писатели — кнопки владельца, а не рука теста
+    expect(
+      await answerPendingQuestion(db, { ownerId: owner, pendingId: answered, answer: ANSWER }),
+    ).toEqual({ status: 'answered', pendingId: answered });
+    expect(
+      (await approvePending(db, { ownerId: owner, pendingId: defer.pendingId, clock: () => T0 }))
+        .ok,
+    ).toBe(true);
+
+    const { runId: currentId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-17T07:00',
+      startedAt: minutes(10),
+    });
+    const item = (await historyOf(routineId, currentId)).find((h) => h.run.id === runId);
+    // Порядок — `created_at, id` самого listRunUnits, тексты — те, что видел владелец
+    expect(item?.units).toEqual([
+      { kind: 'question', text: QUESTION, fate: 'answered', answer: ANSWER },
+      { kind: 'action', text: 'Архивация: «Прошлогодний отчёт»', fate: 'approved' },
+      { kind: 'question', text: SECOND, fate: 'open' },
+    ]);
+    expect(item?.unitsOmitted).toBeUndefined();
+  });
+
+  test('отклонённая отложка едет с ПРИЧИНОЙ: подпись выводится из пары (fate, reason)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-14T07:00' });
+    const defer = await deferUnit(routineId, runId, 'Отчёт позапрошлого года');
+    expect(
+      await rejectPending(db, { ownerId: owner, pendingId: defer.pendingId, reason: 'owner' }),
+    ).toMatchObject({ ok: true, reason: 'owner' });
+
+    const { runId: currentId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-15T07:00',
+      startedAt: minutes(10),
+    });
+    const item = (await historyOf(routineId, currentId)).find((h) => h.run.id === runId);
+    expect(item?.units).toEqual([
+      {
+        kind: 'action',
+        text: 'Архивация: «Отчёт позапрошлого года»',
+        fate: 'rejected',
+        reason: 'owner',
+      },
+    ]);
+  });
+
+  test('прогон без единиц — ключа units нет вовсе (не пустой массив)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-13T07:00',
+      run: { outcome: 'finished', report: 'Готово', finished_at: T0.toISOString() },
+    });
+    const { runId: currentId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-14T07:00',
+      startedAt: minutes(10),
+    });
+    const item = (await historyOf(routineId, currentId)).find((h) => h.run.id === runId);
+    expect(item).toBeDefined();
+    // Именно ОТСУТСТВИЕ ключа, а не пустой массив: строка истории старого прогона обязана
+    // остаться байт-в-байт прежней, а `units: []` уже поменял бы форму элемента
+    expect(item !== undefined && 'units' in item).toBe(false);
+    expect(item !== undefined && 'unitsOmitted' in item).toBe(false);
+  });
+
+  test('предложение прогона в units не попадает: пробы единиц идут по явному kind (Б5)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId } = await seedProposal(routineId, '2026-08-12T07:00');
+    // Предложение и вопрос на ОДНОМ прогоне — нарочно: в проде режим у прогона один, но
+    // отличать их проба обязана не режимом, а ключом `kind`, которого у предложения нет
+    await askUnit(routineId, runId, SECOND);
+
+    const { runId: currentId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-13T07:00',
+      startedAt: minutes(10),
+    });
+    const item = (await historyOf(routineId, currentId)).find((h) => h.run.id === runId);
+    expect(item?.units).toEqual([{ kind: 'question', text: SECOND, fate: 'open' }]);
+    // Проза предложения едет прежней проекцией, а не единицей: два носителя одного и того
+    // же текста модель прочитала бы как два разных события
+    expect(JSON.stringify(item?.units)).not.toContain('Задача висит в инбоксе');
+    expect(item?.proposalStatus).toBe('pending');
+  });
+
+  test('свыше MAX_RUN_UNITS: в units ровно кап, остаток — в unitsOmitted (кап считает ОТКРЫТЫЕ)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-10T07:00' });
+    const asked: string[] = [];
+    for (let i = 0; i < MAX_RUN_UNITS; i++) {
+      asked.push(await askUnit(routineId, runId, `Вопрос №${i + 1}?`));
+    }
+    // Кап единиц считает ОТКРЫТЫЕ, а потолок истории — ВСЕ: два ответа освобождают место
+    // под капом, и за прогон единиц накапливается больше десяти. Ветка «и ещё N» живая
+    for (const pendingId of asked.slice(0, 2)) {
+      expect(await answerPendingQuestion(db, { ownerId: owner, pendingId, answer: 'да' })).toEqual({
+        status: 'answered',
+        pendingId,
+      });
+    }
+    for (let i = 0; i < 2; i++) await askUnit(routineId, runId, `Добавочный вопрос №${i + 1}?`);
+
+    const { runId: currentId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-11T07:00',
+      startedAt: minutes(20),
+    });
+    expect(await withIdentity(db, owner, (tx) => listRunUnits(tx, owner, runId))).toHaveLength(
+      MAX_RUN_UNITS + 2,
+    );
+    const item = (await historyOf(routineId, currentId)).find((h) => h.run.id === runId);
+    expect(item?.units).toHaveLength(MAX_RUN_UNITS);
+    expect(item?.unitsOmitted).toBe(2);
+    // Усекается ХВОСТ, а не голова: первыми модель читает те единицы, что были раньше
+    expect(item?.units?.[0]?.text).toBe('Вопрос №1?');
   });
 });
 
