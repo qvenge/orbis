@@ -4068,7 +4068,7 @@ describe('слой предложения', () => {
       entityId: 'e1',
     });
     // Свёрнутая плашка ничего не прячет и ничего не решает.
-    expect(screen.getByTestId('entity-body')).not.toHaveClass('hidden');
+    expect(screen.getByTestId('entity-tabs')).not.toHaveClass('hidden');
     expect(within(plate).queryByRole('button', { name: 'Принять' })).toBeNull();
     expect(within(plate).queryByTestId('proposal-body-diff')).toBeNull();
   });
@@ -4097,16 +4097,57 @@ describe('слой предложения', () => {
     expect(within(plate).getByRole('button', { name: 'Принять' })).toBeInTheDocument();
     expect(within(plate).getByRole('button', { name: 'Отклонить' })).toBeInTheDocument();
 
-    // Р-18: тело спрятано КЛАССОМ и осталось смонтированным.
-    expect(screen.getByTestId('entity-body')).toHaveClass('hidden');
+    // Р-18: вкладки спрятаны КЛАССОМ и остались смонтированными вместе с телом.
+    expect(screen.getByTestId('entity-tabs')).toHaveClass('hidden');
     expect(screen.getByTestId('body-editor')).toBeInTheDocument();
 
-    // Сворачивание возвращает тело — и ровно то же самое: набранное на месте, значит редактор
-    // не поднимался заново.
+    // Сворачивание возвращает вкладки — и тело ровно то же самое: набранное на месте, значит
+    // редактор не поднимался заново.
     togglePlate(plate);
-    expect(screen.getByTestId('entity-body')).not.toHaveClass('hidden');
+    expect(screen.getByTestId('entity-tabs')).not.toHaveClass('hidden');
     await expectEditorHas('и хвост');
     expect(within(plate).queryByTestId('proposal-body-diff')).toBeNull();
+  });
+
+  test('развёрнутая плашка прячет и «Детали»: поле-близнец «статус» недоступно, свёрнутая — возвращает (смоук Н-2)', async () => {
+    /**
+     * Ловушка, замеренная живым смоуком, а не выведенная. Поле «статус» в «Деталях» и строка
+     * правки «статус» в слое ВЫГЛЯДЯТ ОДИНАКОВО (общий `FIELD_CLASS` — сделано нарочно Задачей
+     * 10, чтобы владелец узнавал поле) и стоят в одном скролле. Но первое пишет в граф
+     * НЕМЕДЛЕННО, а второе применяется только по «Принять»: правка не в той из двух строк
+     * записала `status: done` за ~1 с без подтверждения, сдвинула `updated_at` и сделала
+     * предложение stale — вместе с набранными, но не отправленными правками.
+     *
+     * Проверяется КЛАСС, а не роль. В jsdom таблиц стилей нет, `.hidden` ни во что не
+     * вычисляется, и `getByRole` нашёл бы спрятанное поле как ни в чём не бывало — то есть
+     * ассерт по доступности был бы зелен и на снятом классе. Класс же и есть тот договор,
+     * которым экран прячет (см. `proposalOpen` в DetailScreen).
+     */
+    renderWithProviders(<DetailScreen entityId="e1" />, overlayHandler());
+    const plate = await screen.findByTestId('proposal-plate');
+    const tabs = screen.getByTestId('entity-tabs');
+
+    // Премиса ловушки, без которой тест ничего не утверждает: близнец РЕАЛЬНО существует и
+    // зовётся ТОЧНО ТАК ЖЕ, что строка правки в слое, — и живёт он именно под узлом вкладок.
+    const twin = within(tabs).getByLabelText('orbis/task status');
+    expect(twin).toHaveValue('inbox');
+    // Свёрнутая плашка ничего не прячет: до неё владелец правит «Детали» как раньше.
+    expect(tabs).not.toHaveClass('hidden');
+
+    togglePlate(plate);
+    // Оба поля теперь на экране разом — и вот тут второе обязано быть недоступно.
+    expect(within(plate).getByLabelText('orbis/task status')).toHaveValue('done');
+    expect(tabs).toHaveClass('hidden');
+    // Близнец не размонтирован, а спрятан: вкладка «Детали» держится живой (keepMounted), и
+    // размонтирование стоило бы её запросов при каждом развороте плашки.
+    expect(within(tabs).getByLabelText('orbis/task status')).toBe(twin);
+
+    // Свернул — вернулось всё, и ровно то же самое: «Детали» правятся как до слоя.
+    togglePlate(plate);
+    expect(tabs).not.toHaveClass('hidden');
+    fireEvent.change(twin, { target: { value: 'done' } });
+    fireEvent.blur(twin);
+    expect(twin).toHaveValue('done');
   });
 
   test('правка значения поля в строке → edits.fields в вызове decideProposal; принятое сворачивает слой и обновляет ленту треда (приёмки 6, 9)', async () => {
@@ -4119,7 +4160,7 @@ describe('слой предложения', () => {
     );
     const plate = await screen.findByTestId('proposal-plate');
     togglePlate(plate);
-    expect(screen.getByTestId('entity-body')).toHaveClass('hidden');
+    expect(screen.getByTestId('entity-tabs')).toHaveClass('hidden');
     const input = await within(plate).findByLabelText('orbis/task status');
     await userEvent.clear(input);
     await userEvent.type(input, 'in_progress');
@@ -4145,8 +4186,8 @@ describe('слой предложения', () => {
     // без инвалидации показал бы её только через staleTime. Слой треда не знает — гасит по
     // префиксу ключа.
     await waitFor(() => expect(reads()).toBeGreaterThan(1));
-    // Принятое сворачивает слой: решать больше нечего, а тело записи обязано вернуться.
-    await waitFor(() => expect(screen.getByTestId('entity-body')).not.toHaveClass('hidden'));
+    // Принятое сворачивает слой: решать больше нечего, а вкладки записи обязаны вернуться.
+    await waitFor(() => expect(screen.getByTestId('entity-tabs')).not.toHaveClass('hidden'));
   });
 
   test('два предложения двух рутин → две плашки, решение по каждому своё (приёмка 18)', async () => {
@@ -4270,8 +4311,8 @@ describe('слой предложения', () => {
     await openEditor();
     expect(screen.queryByTestId('proposal-plate')).toBeNull();
     expect(screen.queryByTestId('proposal-overlay')).toBeNull();
-    // Тело поднимается ровно как прежде: слоя нет — и прятать нечего.
-    expect(screen.getByTestId('entity-body')).not.toHaveClass('hidden');
+    // Вкладки на месте и тело поднимается ровно как прежде: слоя нет — и прятать нечего.
+    expect(screen.getByTestId('entity-tabs')).not.toHaveClass('hidden');
     expect(calls.filter((c) => c.path === 'routine.proposalsForEntity')).toHaveLength(1);
   });
 
