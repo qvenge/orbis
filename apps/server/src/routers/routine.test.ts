@@ -16,6 +16,7 @@ import { ROUTINE_ROLLBACK_NOTE, rollbackRun } from '../agent-loop/rollback';
 import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { undoLast } from '../executor/undo';
 import { ScriptedProvider } from '../llm/scripted';
@@ -29,7 +30,7 @@ import {
 } from '../routines/constants';
 import { editsHash, editsSchema } from '../routines/edits';
 import type { ProposalOperationView, RoutineDeps } from '../routines/lifecycle';
-import { startBucketRun, supersedeOpen } from '../routines/lifecycle';
+import { answerRunQuestion, startBucketRun, supersedeOpen } from '../routines/lifecycle';
 import { runRoutineRun } from '../routines/runner';
 import { makeRunRegistry } from '../routines/shutdown';
 import { agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
@@ -2033,6 +2034,56 @@ describe('routine.overview', () => {
     expect((await caller().routine.overview({ routineId })).nextBucketAt).toBeNull();
   });
 
+  test('undecided считает прогоны с флажком пачки (снятый и архивный — нет); propose-прогон со ждущим предложением в счёт не попал (приёмка 11, Б5, С8)', async () => {
+    const routineId = await seedRoutine(owner, { title: 'Рутина: бейдж пачки' });
+    await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-14T07:00',
+      startedAt: new Date(T0.getTime() - 4 * 24 * 3600_000),
+      run: { outcome: 'finished', finished_at: iso(T0), undecided: true },
+    });
+    // Разобранная пачка несёт `undecided:false` (снятие — запись, а не удаление ключа)
+    await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-15T07:00',
+      startedAt: new Date(T0.getTime() - 3 * 24 * 3600_000),
+      run: { outcome: 'finished', finished_at: iso(T0), undecided: false },
+    });
+    // Прогон без пачки вовсе — ключа нет
+    await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-16T07:00',
+      startedAt: new Date(T0.getTime() - 2 * 24 * 3600_000),
+      run: { outcome: 'finished', finished_at: iso(T0), report: 'всё спокойно' },
+    });
+    expect((await caller().routine.overview({ routineId })).undecided).toBe(1);
+
+    // Архивный (след отката) не считается — по тому же доводу, что и `waiting`: решать
+    // его пачку владельцу никто не мешает, но экран рутины обещал бы работу, которой на
+    // нём нет
+    const rolled = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-13T07:00',
+      startedAt: new Date(T0.getTime() - 5 * 24 * 3600_000),
+      run: { outcome: 'finished', finished_at: iso(T0), undecided: true },
+    });
+    await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_update', input: { id: rolled.runId, archived: true } }],
+    });
+    expect((await caller().routine.overview({ routineId })).undecided).toBe(1);
+
+    // Б5: предложение — НЕ пачка. Propose-прогон ждёт решения владельца, но `undecided`
+    // не несёт, и слить эти два ожидания в одну цифру значило бы обещать кнопку «Принять
+    // все» там, где решается план целиком
+    const p = await proposed('Бейдж и предложение');
+    const view = await caller().routine.overview({ routineId: p.routineId });
+    expect(view.openProposal).toBe(true);
+    expect(view.undecided).toBe(0);
+  });
+
   test('несуществующая рутина → NOT_FOUND', async () => {
     const e = await trpcError(caller().routine.overview({ routineId: newId() }));
     expect(e.code).toBe('NOT_FOUND');
@@ -2414,6 +2465,31 @@ describe('routine.answerQuestion: вопрос пачки (приёмка 5, В2
     expect(withOption.message).toContain('это действие');
     expect(await unitMessages(pendingId)).toEqual([]);
   });
+
+  test('ОТРИЦАТЕЛЬНЫЙ option на прямом вызове ядра → VALIDATION, ответ не записан (Minor-1 ревью Задачи 10)', async () => {
+    const { routineId, runId } = await batchRun('Отрицательный вариант');
+    const pendingId = await askUnit(routineId, runId, 'Какой из двух?', ['А', 'Б']);
+
+    // Ядро зовётся НАПРЯМУЮ, а не через роутер: через роутер `-1` не проходит схему входа
+    // (`min(0)`), и тест проверял бы zod. Но ядро экспортировано, и прямой вызыватель —
+    // `decideAllDeferred` рядом, будущий MCP-путь — уехал бы с `option:-1` в append-only
+    // metadata НАВСЕГДА: там его не исправить ни правкой, ни повторным ответом
+    const failed = await answerRunQuestion(
+      { db, clock: () => LATER },
+      { ownerId: owner, pendingId, answer: 'А', option: -1 },
+    ).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(failed).toBeInstanceOf(ExecError);
+    expect((failed as ExecError).code).toBe('VALIDATION');
+    expect(await unitMessages(pendingId)).toEqual([]);
+
+    // Гейт не задевает годный индекс: тот же вопрос отвечается вариантом №1
+    expect(
+      (await callerLater().routine.answerQuestion({ pendingId, answer: 'А', option: 0 })).status,
+    ).toBe('answered');
+  });
 });
 
 describe('бухгалтерия флажка пачки (§9.6, приёмка 18)', () => {
@@ -2530,4 +2606,128 @@ describe('routine.runUnits', () => {
     const { runId } = await batchRun('Пустая пачка');
     expect(await caller().routine.runUnits({ runId })).toEqual([]);
   });
+});
+
+// ---------------------------------------------------------------------------
+// «Принять все» (D42 ОЧ.11; приёмки 6, 10, 19)
+// ---------------------------------------------------------------------------
+
+describe('routine.decideAll', () => {
+  test('одна протухшая среди трёх: два applied и один stale с расхождениями; вопрос не тронут; порядок сводки — порядок пачки; повтор кнопки работы не делает (приёмка 6)', async () => {
+    const { routineId, runId } = await batchRun('Принять все');
+    const questionId = await askUnit(routineId, runId, 'Звонить подрядчику сегодня?', [
+      'Да',
+      'Нет',
+    ]);
+    const first = await deferUnit(routineId, runId, 'Акт сверки за май');
+    const stale = await deferUnit(routineId, runId, 'Акт сверки за июнь', {
+      aspects: { 'orbis/task': { status: 'done' } },
+    });
+    const last = await deferUnit(routineId, runId, 'Акт сверки за июль');
+    // Правка владельца своей рукой — то, обо что разбивается предусловие средней единицы
+    await ownerSets(stale.targetId, 'in_progress');
+
+    const summary = await callerLater().routine.decideAll({ runId });
+
+    // Порядок сводки = порядок пачки (`created_at, id` — контракт listRunUnits): экран
+    // рисует её тем же списком, что и карточки, а два нажатия обходят единицы одинаково
+    expect(summary.map((s) => s.pendingId)).toEqual([
+      first.pendingId,
+      stale.pendingId,
+      last.pendingId,
+    ]);
+    expect(summary.map((s) => s.status)).toEqual(['applied', 'stale', 'applied']);
+    const middle = summary[1];
+    if (middle?.status !== 'stale') throw new Error('средняя единица обязана протухнуть');
+    expect(middle.mismatches).toEqual([
+      { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'in_progress' },
+    ]);
+    // Протухшая соседей не блокирует: обе применены, её цель не тронута
+    expect(await isArchived(first.targetId)).toBe(true);
+    expect(await isArchived(last.targetId)).toBe(true);
+    expect(await isArchived(stale.targetId)).toBe(false);
+
+    // Вопрос кнопка не трогает: «принять» его нельзя вовсе (ОЧ.11), и открытым он
+    // продолжает держать флажок пачки
+    const units = await caller().routine.runUnits({ runId });
+    expect(units.find((u) => u.pendingId === questionId)?.fate).toBe('open');
+    expect(await undecidedOf(runId)).toBe(true);
+
+    // Повтор кнопки: открытых действий не осталось — сводка пуста, журнал не вырос
+    expect(await callerLater().routine.decideAll({ runId })).toEqual([]);
+    expect(
+      (await actionsOf(owner)).filter((a) => a.run_id === runId && a.source === 'routine'),
+    ).toHaveLength(2);
+  }, 20_000);
+
+  test('пачка из одних действий: кнопка разбирает её до конца — флажок снят ЯДРОМ решения, своей бухгалтерии у decideAll нет', async () => {
+    const { routineId, runId } = await batchRun('Пачка без вопросов');
+    const a = await deferUnit(routineId, runId, 'Договор аренды гаража');
+    const b = await deferUnit(routineId, runId, 'Смета подрядчика на кровлю');
+    expect(await undecidedOf(runId)).toBe(true);
+
+    const summary = await callerLater().routine.decideAll({ runId });
+    expect(summary.map((s) => s.status)).toEqual(['applied', 'applied']);
+    expect(await isArchived(a.targetId)).toBe(true);
+    expect(await isArchived(b.targetId)).toBe(true);
+    expect(await undecidedOf(runId)).toBe(false);
+  }, 20_000);
+
+  test('прогон без единиц → пустая сводка, а не отказ; отклонённую владельцем единицу кнопка не воскрешает', async () => {
+    const { routineId, runId } = await batchRun('Пустая пачка и отказ');
+    expect(await callerLater().routine.decideAll({ runId })).toEqual([]);
+
+    const rejected = await deferUnit(routineId, runId, 'Черновик сметы');
+    await callerLater().routine.decideDeferred({
+      pendingId: rejected.pendingId,
+      decision: 'reject',
+    });
+    // Кнопка берёт только ОТКРЫТЫЕ единицы: «Принять все» не отменяет прежний отказ
+    expect(await callerLater().routine.decideAll({ runId })).toEqual([]);
+    expect(await isArchived(rejected.targetId)).toBe(false);
+  });
+
+  test('предложение propose-прогона кнопка не трогает (проба по kind), decideProposal работает как прежде (приёмка 19)', async () => {
+    const p = await proposed('Пачка рядом с предложением');
+    const unit = await deferUnit(p.routineId, p.runId, 'Скан договора');
+
+    const summary = await callerLater().routine.decideAll({ runId: p.runId });
+    expect(summary.map((s) => s.pendingId)).toEqual([unit.pendingId]);
+    expect(summary[0]?.status).toBe('applied');
+    expect(await isArchived(unit.targetId)).toBe(true);
+    // План предложения не исполнен, статус на прогоне прежний
+    expect((await runAspect(p.runId)).proposal?.status).toBe('pending');
+    expect((await aspectsOf(owner, p.taskId))['orbis/task']?.status).toBe('inbox');
+
+    const decided = await callerLater().routine.decideProposal({
+      runId: p.runId,
+      pendingId: p.pendingId,
+      decision: 'approve',
+    });
+    expect(decided.status).toBe('applied');
+    expect((await runAspect(p.runId)).proposal?.status).toBe('approved');
+    expect((await aspectsOf(owner, p.taskId))['orbis/task']?.status).toBe('planned');
+  }, 20_000);
+
+  test('два одновременных «Принять все»: обе сводки вернулись, применение одно — журнал не вырос (N replay’ев)', async () => {
+    const { routineId, runId } = await batchRun('Два нажатия');
+    const a = await deferUnit(routineId, runId, 'Счёт за март');
+    const b = await deferUnit(routineId, runId, 'Счёт за апрель');
+
+    const [left, right] = await Promise.all([
+      callerLater().routine.decideAll({ runId }),
+      callerLater().routine.decideAll({ runId }),
+    ]);
+    // Кто из двух увидел единицы открытыми — гонка, и сводки могут разойтись длиной.
+    // Чего гонка НЕ вправе дать — второго применения: каждое «Принять» идемпотентно по
+    // batchId (приёмка 10), а обход в одном порядке разводит захваты замков единиц
+    for (const item of [...left, ...right]) {
+      expect(['applied', 'already']).toContain(item.status);
+    }
+    expect(await isArchived(a.targetId)).toBe(true);
+    expect(await isArchived(b.targetId)).toBe(true);
+    expect(
+      (await actionsOf(owner)).filter((x) => x.run_id === runId && x.source === 'routine'),
+    ).toHaveLength(2);
+  }, 20_000);
 });

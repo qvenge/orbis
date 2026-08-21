@@ -20,7 +20,7 @@ import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test
 import { entities } from '../db/schema';
 import { appRouter } from '../router';
 import { SEED_CATEGORIES } from '../seed/categories';
-import { seedSmartListId } from '../seed/onboarding';
+import { ROUTINES_LIST_BODY_BEFORE_BATCH, seedSmartListId } from '../seed/onboarding';
 import {
   ALL_TASKS_BODY,
   DAILY_PLANNING_BODY,
@@ -226,7 +226,7 @@ describe('smart lists §7.2 / §3.3', () => {
       'all-tasks': 1,
       'horizon-year': 1,
       'horizon-life': 1,
-      routines: 2,
+      routines: 3,
     };
     expect(Object.keys(expectedBlocks).length).toBe(SEED_SMART_LISTS.length);
     for (const list of SEED_SMART_LISTS) {
@@ -665,17 +665,21 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
   });
 });
 
-// Задача 14 (V1.9, V1.14): шестой сидируемый список — «Рутины». Два блока, и порядок в
-// нём — не косметика: бейдж закреплённой сущности считает ПЕРВЫЙ query-блок body (§3.2),
-// поэтому первым стоит «Ждут ответа» — единственное, что требует действия владельца.
+// Задача 14 (V1.9, V1.14) и D42: шестой сидируемый список — «Рутины». ТРИ блока, и
+// порядок в нём — не косметика: бейдж закреплённой сущности считает ПЕРВЫЙ query-блок body
+// (§3.2), поэтому первым стоит «Ждут ответа» — то, что требует действия владельца и
+// убывает от каждого ответа. Третий, «Пачка решений» (D42), стоит В КОНЦЕ: место первого
+// занято бейджем, а вставка в середину сдвинула бы индексы `idsOfBlock` ниже.
 //
-// Оба блока называют аспект ЯВНО, и в обоих случаях по своей причине. `orbis/agent-run` —
-// служебный (§3.9): без `aspect=` компилятор вырезал бы прогоны из выдачи, и список молча
-// показывал бы пусто. `stage=` — неоднозначен (orbis/project и orbis/routine), и запрос без
-// `aspect=` не скомпилировался бы вовсе.
+// Все три блока называют аспект ЯВНО, и на то две причины. `orbis/agent-run` — служебный
+// (§3.9): без `aspect=` компилятор вырезал бы прогоны из выдачи, и блок молча показывал бы
+// пусто. `stage=` — неоднозначен (orbis/project и orbis/routine), и запрос без `aspect=`
+// не скомпилировался бы вовсе.
 //
-// Бэкфилл — по образцу горизонтов (E4): своим набором, в guard-ветке сидирования.
-describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9)', () => {
+// Бэкфилл — двумя разными механизмами: сама сущность досевается по образцу горизонтов (E4,
+// своим набором в guard-ветке), а её ТЕЛО — условным UPDATE по байт-в-байт совпадению со
+// старым сидом (D42): правленое владельцем тело сид не переписывает.
+describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () => {
   const helpers = agentLoopHelpers(db);
 
   /** id результатов N-го блока тела «Рутин» — тем же путём, каким его увидит виджет. */
@@ -797,6 +801,144 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9)', () => {
     const ids = await idsOfBlock(user, 1);
     expect(ids.has(active)).toBe(true);
     expect(ids.has(paused)).toBe(false);
+  });
+
+  // D42 (приёмка 11): третий блок — «Пачка решений». Имя своё: «ждёт ответа» занято
+  // терминальным вопросом (первый блок), «ждёт решения» — предложением рутины, и слить
+  // три вида ожидания в один заголовок значило бы обещать одну кнопку на все три.
+  test('«Пачка решений» находит прогон с undecided=true и не находит ни разобранный, ни checkpoint-прогон без флажка; первый блок пачку не показывает', async () => {
+    const user = freshUserId();
+    await callerFor(user).user.seedOnboarding();
+
+    const routineId = await helpers.seedRoutine(user, { title: 'Ночная сводка' });
+    const undecided = await helpers.seedRoutineRun(user, {
+      routineId,
+      bucket: '2026-08-18T07:00',
+      run: { outcome: 'finished', undecided: true },
+    });
+    // Разобранная пачка несёт `undecided:false`: снятие флажка — ЗАПИСЬ, а не удаление
+    // ключа (предиката «поля нет» у грамматики §6.1 не существует)
+    const settled = await helpers.seedRoutineRun(user, {
+      routineId,
+      bucket: '2026-08-17T07:00',
+      run: { outcome: 'finished', undecided: false },
+    });
+    const checkpoint = await helpers.seedRoutineRun(user, {
+      routineId,
+      bucket: '2026-08-16T07:00',
+      run: {
+        outcome: 'checkpoint',
+        checkpoint: { question: 'Списать 340 на «Еду»?', asked_at: '2026-08-16T07:00:10.000Z' },
+      },
+    });
+
+    const batch = await idsOfBlock(user, 2);
+    expect(batch.has(undecided.runId)).toBe(true);
+    expect(batch.has(settled.runId)).toBe(false);
+    expect(batch.has(checkpoint.runId)).toBe(false);
+
+    // И обратно: терминальный вопрос — не пачка, пачка — не терминальный вопрос
+    const waiting = await idsOfBlock(user, 0);
+    expect(waiting.has(checkpoint.runId)).toBe(true);
+    expect(waiting.has(undecided.runId)).toBe(false);
+  });
+
+  // Решение 6 плана — самое чувствительное место среза. Тело «Рутин» у существующего
+  // владельца могло быть правлено руками, и сид чужого не переписывает: UPDATE только при
+  // байт-в-байт совпадении со СТАРЫМ сидом.
+  describe('бэкфилл тела: третий блок существующему владельцу', () => {
+    /** Тело списка «Рутины», его `body_doc` и отметка правки — админским DSN, мимо RLS. */
+    async function routinesBody(
+      user: string,
+    ): Promise<{ body: string; bodyDoc: unknown; updatedAt: Date }> {
+      const { db: admin, client: adminClient } = adminDb();
+      try {
+        const rows = await admin
+          .select({
+            body: entities.body,
+            bodyDoc: entities.bodyDoc,
+            updatedAt: entities.updatedAt,
+          })
+          .from(entities)
+          .where(
+            and(eq(entities.ownerId, user), eq(entities.id, seedSmartListId(user, 'routines'))),
+          );
+        const row = rows[0];
+        if (row === undefined) throw new Error('списка «Рутины» нет');
+        return row;
+      } finally {
+        await adminClient.end();
+      }
+    }
+
+    /** Откат тела к состоянию «до D42» + непустой body_doc, как у читанной записи. */
+    async function setRoutinesBody(user: string, body: string): Promise<void> {
+      const { db: admin, client: adminClient } = adminDb();
+      try {
+        await admin
+          .update(entities)
+          .set({
+            body,
+            bodyDoc: { v: 1, doc: { type: 'doc', content: [] } },
+            // Отметка правки — заведомо в прошлом: по её сдвигу видно, ЗАДЕЛ ли UPDATE
+            // строку, и «повтор — no-op» проверяется фактом, а не совпадением тел
+            updatedAt: new Date('2026-08-01T00:00:00.000Z'),
+          })
+          .where(
+            and(eq(entities.ownerId, user), eq(entities.id, seedSmartListId(user, 'routines'))),
+          );
+      } finally {
+        await adminClient.end();
+      }
+    }
+
+    test('СТАРОЕ сид-тело → обновлено новым, body_doc сброшен в NULL; повтор — no-op (строка не тронута)', async () => {
+      const user = freshUserId();
+      const caller = callerFor(user);
+      await caller.user.seedOnboarding();
+      await setRoutinesBody(user, ROUTINES_LIST_BODY_BEFORE_BATCH);
+
+      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+      const after = await routinesBody(user);
+      expect(after.body).toBe(ROUTINES_LIST_BODY);
+      // body_doc = NULL — ленивая переконверсия: старый документ описывал ДВА блока, и
+      // оставить его значило бы показывать владельцу тело без третьего
+      expect(after.bodyDoc).toBeNull();
+      expect(after.updatedAt.toISOString()).not.toBe('2026-08-01T00:00:00.000Z');
+
+      // Идемпотентно по построению: тело больше не равно старому сиду, условие не
+      // совпадёт — и `updated_at` стоит на месте, то есть строку никто не переписал
+      // (иначе web-синк LWW дёргал бы список на каждом старте сессии)
+      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+      const repeated = await routinesBody(user);
+      expect(repeated.body).toBe(ROUTINES_LIST_BODY);
+      expect(repeated.updatedAt.toISOString()).toBe(after.updatedAt.toISOString());
+      expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    });
+
+    test('ПРАВЛЕНОЕ владельцем тело не трогается никогда — ни телом, ни body_doc', async () => {
+      const user = freshUserId();
+      const caller = callerFor(user);
+      await caller.user.seedOnboarding();
+      const edited = `${ROUTINES_LIST_BODY_BEFORE_BATCH}\n\nМоя заметка: не трогать.`;
+      await setRoutinesBody(user, edited);
+
+      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+      const after = await routinesBody(user);
+      expect(after.body).toBe(edited);
+      expect(after.bodyDoc).not.toBeNull();
+    });
+
+    test('владелец, засиденный ДО «Рутин» вовсе: досев вставляет список сразу с тремя блоками', async () => {
+      const user = freshUserId();
+      const caller = callerFor(user);
+      await caller.user.seedOnboarding();
+      await deleteRoutinesList(user);
+
+      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+      expect((await routinesBody(user)).body).toBe(ROUTINES_LIST_BODY);
+      expect(queryBlocksOf((await routinesBody(user)).body).length).toBe(3);
+    });
   });
 });
 
