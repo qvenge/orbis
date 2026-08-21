@@ -1585,6 +1585,40 @@ test('deferred_action_card: судьбы словами — принято / о�
   expect(card).not.toHaveTextContent('Предложение');
 });
 
+test('deferred_action_card: исход already — подпись есть, но судьбу карточка НЕ ставит себе сама (Р-10)', async () => {
+  // Единицу решили без нас: со второго экрана либо гашением следующего прогона. Сервер
+  // отвечает `already` — а `runUnits` в этой вкладке ещё отдаёт единицу ОТКРЫТОЙ (перечитка
+  // прилетит своим кругом). Свернуться по факту УСПЕХА МУТАЦИИ значило бы нарисовать судьбу
+  // раньше сервера — ровно антиобразец `ConfirmationCard` (:20, :79-80), от которого весь
+  // приём и уводит. Проверяется здесь, потому что у вопроса тот же инвариант уже запинен, а у
+  // действия обе кнопки ведут во ВТОРУЮ мутацию — своё нажатие тут ничего не доказывает.
+  const { calls } = renderWithProviders(
+    <div>{renderCards(msg([DEFERRED_CARD]))}</div>,
+    unitsHandler([actionUnit()], {
+      'routine.decideDeferred': { status: 'already', fate: 'rejected' },
+    }),
+  );
+  const card = await screen.findByTestId('deferred-action-card');
+  fireEvent.click(await within(card).findByRole('button', { name: 'Принять' }));
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'routine.decideDeferred')?.input).toEqual({
+      pendingId: 'd1',
+      decision: 'approve',
+    }),
+  );
+  // Молча не проигрывает никто: владелец обязан узнать, что его нажатие ничего не решило
+  expect(await within(card).findByTestId('deferred-outcome')).toHaveTextContent(
+    'единица уже решена — отклонено',
+  );
+  // …и при этом карточка НЕ свернулась: сервер всё ещё говорит «открыта», значит открыта.
+  // Шапки-кнопки (то есть строки-итога с судьбой) у открытой единицы не бывает.
+  expect(within(card).queryByRole('button', { expanded: false })).toBeNull();
+  expect(within(card).queryByRole('button', { expanded: true })).toBeNull();
+  expect(within(card).getByTestId('deferred-rows')).toBeInTheDocument();
+  expect(within(card).getByRole('button', { name: 'Принять' })).toBeInTheDocument();
+  expect(within(card).getByRole('button', { name: 'Отклонить' })).toBeInTheDocument();
+});
+
 test('ответ already → показан ПРИМЕНИВШИЙСЯ ответ (С5); onSuccess перечитывает пачку и инвалидирует ленту треда (Р0-11)', async () => {
   const inThread = renderWithProviders(
     <div>
