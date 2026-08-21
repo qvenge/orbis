@@ -181,9 +181,52 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     expect(run?.outcome).toBe('finished');
     expect(run?.report).toBe(EXPLANATION);
     expect(run?.proposal).toEqual({ pending_id: result.pending_id, status: 'pending' });
+    // Само предложение — НЕ единица пачки (D42, приёмка 11): его запись живёт под тем же
+    // `run_id`, но явного `kind` не несёт, и проба `undecided` её не видит. Иначе каждый
+    // propose-прогон висел бы в смарт-листе «Ждут ответа» дважды — предложением и «пачкой»
+    expect(run?.undecided).toBeUndefined();
 
     // До решения владельца граф не тронут
     expect((await aspectsOf(owner, taskId))['orbis/task']).toEqual({ status: 'inbox' });
+  });
+
+  test('терминальный propose поверх открытого вопроса: прогон finished с proposal И undecided:true (второй путь закрытия, Р-5 / D42 ОЧ.6)', async () => {
+    // `orbis_propose` закрывает прогон СВОИМ вызовом `closeRoutineRun` (propose.ts), минуя
+    // settle раннера. Путь отдельный — значит и пропустить флажок он может отдельно: тогда
+    // пачка propose-прогона осталась бы владельцу невидимой, хотя карточки в треде лежат.
+    const { routineId, runId, ctx } = await liveRoutine();
+    const taskId = await seedTask('Задача предложения с вопросом');
+
+    expect(
+      (
+        await dispatchTool(ctx, 'orbis_ask', {
+          run_id: runId,
+          question: 'Переносить ли остальные задачи недели на следующую?',
+        })
+      ).status,
+    ).toBe('ok');
+
+    const r = await dispatchTool(ctx, 'orbis_propose', {
+      run_id: runId,
+      explanation: EXPLANATION,
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+        },
+      ],
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    const result = r.result as ProposeResult;
+
+    const run = (await aspectsOf(owner, runId))['orbis/agent-run'];
+    expect(run?.outcome).toBe('finished');
+    expect(run?.proposal).toEqual({ pending_id: result.pending_id, status: 'pending' });
+    // Предложение и пачка на одном прогоне уживаются: их читают разные экраны
+    expect(run?.undecided).toBe(true);
+    // В треде рутины две карточки — вопрос и предложение; в счёт `undecided` идёт первая
+    expect(await pendingsInRoutineThread(routineId)).toBe(2);
   });
 
   test('approvePending применяет всё одним батчем с run_id и source routine; rollbackRun возвращает исходное (инвариант 9)', async () => {

@@ -4,6 +4,7 @@
 // грантом скоупа worker: гейты скоупа и agentOnly (Задача 7) остаются в контуре теста.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type {
+  AskResult,
   CheckpointResult,
   ClaimTaskResult,
   FinishResult,
@@ -14,6 +15,7 @@ import { newId } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { answerPendingQuestion } from '../policy/pending';
 import { type AnyRecord, agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { sweepStaleRuns } from './sweep';
@@ -675,6 +677,10 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     expect(run.usage).toEqual({ input_tokens: 100, output_tokens: 20, cost_usd: 0.01 });
     expect(run.session_url).toBe('https://agent.example/session/1');
     expect(run.step_count).toBe(1); // чекпойнт шагов не дописывает
+    // Грантовый чекпойнт патч не менял и после D42: единиц пачки у внешнего исполнителя не
+    // бывает (`orbis_ask` ему закрыт гейтом ОЧ.12), и флажок `undecided` на его прогоне
+    // означал бы нерешённое, которого нет и разбирать которое владельцу негде
+    expect(run.undecided).toBeUndefined();
 
     // Прогон и тикет меняются ОДНИМ action'ом: откат вернёт их вместе
     const action = (await actionsOf(owner)).find((a) => a.id === c.action_id);
@@ -1087,6 +1093,17 @@ describe('субъект прогона — рутина (V1.5)', () => {
     };
   }
 
+  /**
+   * Открытая единица пачки на прогоне — НАСТОЯЩИМ путём (`orbis_ask` через диспатч), а не
+   * вставкой в ленту руками: флажок `undecided` считается пробой по pending-записям, и сид
+   * мимо `createPending` проверял бы форму записи, которой в проде не бывает.
+   */
+  async function askFrom(routineId: string, runId: string, question: string): Promise<string> {
+    return okResult<AskResult>(
+      await dispatchTool(fromRun(routineId, runId), 'orbis_ask', { run_id: runId, question }),
+    ).pending_id;
+  }
+
   test('orbis_checkpoint от рутинного прогона: outcome checkpoint, тикет не нужен; журнал — actor ai, source system, run_id', async () => {
     const routineId = await seedRoutine(owner, { title: 'Рутина чекпойнта' });
     const { runId } = await seedRoutineRun(owner, { routineId });
@@ -1110,6 +1127,9 @@ describe('субъект прогона — рутина (V1.5)', () => {
     });
     expect(run.routine_id).toBe(routineId);
     expect(run.grant_id).toBeUndefined();
+    // Единиц пачки у этого прогона нет — флажка тоже нет (не `false`): ставит его только
+    // проба, нашедшая открытое, а «прогон без пачки» и «пачка разобрана» — разные события
+    expect(run.undecided).toBeUndefined();
 
     // Бухгалтерия прогона (Р-7): актор — внутренний AI, источник — system, прогон адресован
     const action = (await actionsOf(owner)).find((a) => a.id === c.action_id);
@@ -1204,6 +1224,83 @@ describe('субъект прогона — рутина (V1.5)', () => {
     );
     expect(replay.action_id).toBe(failed.action_id);
     expect((await actionsOf(owner)).filter((a) => a.id === callId)).toHaveLength(1);
+  });
+
+  test("closeRoutineRun: открытая единица → close-патч несёт undecided:true ОДНИМ action'ом; единственная решённая → флажка нет (D42 ОЧ.6, С1)", async () => {
+    const routineId = await seedRoutine(owner, { title: 'Рутина с пачкой' });
+
+    // 1. Прогон оставил после себя нерешённое. Флажок — единственный дешёвый способ узнать
+    // об этом (его читают бейдж, смарт-лист и экран прогона), и ставится он ТЕМ ЖЕ патчем,
+    // что исход: два патча дали бы миг «прогон закрыт, а нерешённого при нём нет».
+    const open = await seedRoutineRun(owner, { routineId, bucket: '2026-08-18T07:00' });
+    await askFrom(routineId, open.runId, 'Переносить ли встречу с понедельника?');
+    const closed = okResult<FinishResult>(
+      await closeRoutineRun(verbCtx(routineId), {
+        runId: open.runId,
+        outcome: 'finished',
+        report: 'Разобрал день, один вопрос оставил владельцу.',
+      }),
+    );
+    const openRun = (await aspectsOf(owner, open.runId))['orbis/agent-run'] as AnyRecord;
+    expect(openRun.outcome).toBe('finished');
+    expect(openRun.undecided).toBe(true);
+    // Ровно один action на прогон — закрывающий: бухгалтерской дозаписи флажка следом нет
+    expect(
+      (await actionsOf(owner)).filter((a) => a.run_id === open.runId).map((a) => a.id),
+    ).toEqual([closed.action_id]);
+    // Актор прежний (§9.6): писатель флажка обязан быть `system`, иначе «отмени последнее»
+    // после «Принять» снимало бы флажок вместо действия владельца (undo пропускает system)
+    const action = (await actionsOf(owner)).find((a) => a.id === closed.action_id);
+    expect(action?.actor_kind).toBe('ai');
+    expect(action?.source).toBe('system');
+
+    // 2. Единственная единица прогона решена владельцем — писать нечего: флажка нет вовсе
+    const decided = await seedRoutineRun(owner, { routineId, bucket: '2026-08-18T08:00' });
+    const pendingId = await askFrom(routineId, decided.runId, 'Брать ли отчёт сегодня?');
+    expect(
+      await answerPendingQuestion(db, { ownerId: owner, pendingId, answer: 'да, бери' }),
+    ).toEqual({ status: 'answered', pendingId });
+    expect(
+      (
+        await closeRoutineRun(verbCtx(routineId), {
+          runId: decided.runId,
+          outcome: 'finished',
+          report: 'Владелец ответил, всё разобрано.',
+        })
+      ).status,
+    ).toBe('ok');
+    const decidedRun = (await aspectsOf(owner, decided.runId))['orbis/agent-run'] as AnyRecord;
+    expect(decidedRun.outcome).toBe('finished');
+    expect(decidedRun.undecided).toBeUndefined();
+  });
+
+  test('orbis_checkpoint рутинного прогона с открытой единицей: терминальный вопрос И пачка сосуществуют — {outcome:checkpoint, undecided:true} одним патчем (ОЧ.6, приёмка 9)', async () => {
+    // Третий путь закрытия (Р-5) — и единственный, где `checkpoint` вообще начинает
+    // различать субъекта: грантовая половина обязана остаться прежней, рутинная — нести
+    // флажок. Прогон при этом закрывается ОБЫЧНЫМ терминальным исходом: `RUN_OUTCOMES` не
+    // расширяется, «отложивший» прогон — не новый вид прогона (ОЧ.6).
+    const routineId = await seedRoutine(owner, { title: 'Рутина чекпойнта поверх пачки' });
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-18T09:00' });
+    await askFrom(routineId, runId, 'Какой из двух отчётов сдавать первым?');
+
+    const question = 'Без решения по бюджету дальше двигаться некуда — что делаем?';
+    const c = okResult<CheckpointResult>(
+      await dispatchTool(fromRun(routineId, runId), 'orbis_checkpoint', {
+        run_id: runId,
+        question,
+      }),
+    );
+    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
+    expect(run.outcome).toBe('checkpoint');
+    expect(run.checkpoint).toEqual({ question, asked_at: iso(T0) });
+    expect(run.undecided).toBe(true);
+    // Одним action'ом и прежним актором — те же два довода, что у closeRoutineRun выше
+    expect((await actionsOf(owner)).filter((a) => a.run_id === runId).map((a) => a.id)).toEqual([
+      c.action_id,
+    ]);
+    const action = (await actionsOf(owner)).find((a) => a.id === c.action_id);
+    expect(action?.actor_kind).toBe('ai');
+    expect(action?.source).toBe('system');
   });
 
   test('orbis_my_queue / orbis_claim_task рутине закрыты дважды: гейт режима (FORBIDDEN_LEVEL) и сам глагол (VALIDATION)', async () => {

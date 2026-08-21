@@ -10,14 +10,16 @@
 //
 //   1. Контекст свой (routines/context.ts): свой системный слой и история прогонов
 //      вместо ленты треда.
-//   2. Пределы жёстче: MAX_AGENT_STEPS как в чате плюс дедлайн прогона и рубильник
-//      остановки процесса — оба проверяются МЕЖДУ шагами (Р-15).
+//   2. Пределы СВОИ: ROUTINE_MAX_STEPS (D42 ОЧ.10) вместо чатового MAX_AGENT_STEPS плюс
+//      дедлайн прогона и рубильник остановки процесса — оба проверяются МЕЖДУ шагами
+//      (Р-15). Потолок разведён с чатовым потому, что оборванный чат человек продолжает
+//      репликой, а оборванный фоновый прогон оставляет утро без плана до следующего бакета.
 //   3. Каждый вызов инструмента становится ШАГОМ прогона (V1.5) — кроме терминальных
 //      глаголов: их исход и есть запись, а шаг поверх закрытого прогона получил бы
 //      CONFLICT.
 //   4. Исход прогона — не текст в чате, а состояние сущности: finished / checkpoint /
 //      failed с причиной (V1.12). Расход §4.7 пишется в дневной счётчик И в аспект прогона.
-import { isManualBucket, MAX_AGENT_STEPS, type RunUsageInput } from '@orbis/shared';
+import { isManualBucket, type RunUsageInput } from '@orbis/shared';
 import { runById } from '../agent-loop/queries';
 import { closeRoutineRun, runAgentVerb, type VerbCtx } from '../agent-loop/verbs';
 import { recordUsage, type UsageTotals } from '../ai/metering';
@@ -37,7 +39,7 @@ import { toolResultMessage } from '../llm/context';
 import type { LLMMessage, LLMResponse, LLMToolCall, LLMToolDef } from '../llm/types';
 import { dispatchTool, type ToolCallCtx, type ToolDispatchResult } from '../tools/dispatch';
 import { buildToolRegistry, type RoutineRef, routineToolDefs } from '../tools/registry';
-import { RUN_DEADLINE_MS } from './constants';
+import { ROUTINE_MAX_STEPS, RUN_DEADLINE_MS } from './constants';
 import { buildRoutineContext, type RoutineContextRoutine } from './context';
 import { pauseIfFailing, type RoutineDeps, routineHistory, supersedeOpen } from './lifecycle';
 
@@ -360,7 +362,7 @@ async function modelLoop(
       return { kind: 'close', end: { outcome: 'finished' }, report };
     }
 
-    if (step >= MAX_AGENT_STEPS) {
+    if (step >= ROUTINE_MAX_STEPS) {
       // Лимит шагов (V1.12): в act — штатное закрытие с пометкой (работа, скорее всего,
       // частично сделана и видна в шагах), в propose — `failed`: предложения нет.
       if (mode === 'propose') {

@@ -38,6 +38,7 @@ import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import type { ActorKind, JournalSink, MutationSource, WireEntity } from '../executor/types';
 import type { GrantRef } from '../oauth/grants';
+import { listRunUnits } from '../policy/pending';
 import type { ToolDispatchResult } from '../tools/dispatch';
 import type { AGENT_VERB_NAMES } from '../tools/registry';
 import {
@@ -690,6 +691,28 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
 // orbis_checkpoint / orbis_finish — прогон терминален, тикет возвращается человеку
 // ---------------------------------------------------------------------------
 
+/**
+ * Осталось ли у прогона нерешённое — проба ПЕРЕД сборкой close-патча (D42 ОЧ.6).
+ *
+ * Зачем флажок на аспекте вообще: `undecided` — единственный дешёвый способ спросить «у
+ * этого прогона осталось нерешённое?» без проб по треду. Его читают бейдж рутины,
+ * смарт-лист «Ждут ответа» и экран прогона — все аспектным фильтром. Поэтому проба стоит у
+ * КАЖДОГО пути закрытия (их три, Р-5), а не в одном «главном»: путь, забывший поставить
+ * флажок, оставляет владельцу пачку, о которой он никогда не узнает, — карточки в треде
+ * лежат, а позвать его некому.
+ *
+ * Своё `withIdentity`, а не переданная транзакция: `VerbCtx` несёт `db`, открытого tx вокруг
+ * глагола нет — как у соседних чтений (`readRun`, `ticketOfRun`). Владелец тот же, что в
+ * `ctx`, и это КОНТРАКТ `listRunUnits`, а не деталь стиля: под чужой идентичностью судьбы
+ * молча не найдутся и вся пачка прочитается открытой (её докблок).
+ */
+async function hasOpenUnits(ctx: VerbCtx, runId: string): Promise<boolean> {
+  const units = await withIdentity(ctx.db, ctx.ownerId, (tx) =>
+    listRunUnits(tx, ctx.ownerId, runId),
+  );
+  return units.some((u) => u.fate === 'open');
+}
+
 /** Патч тикета вместе с его собственными предусловиями (у итога — право на `done`). */
 interface TicketUpdate {
   aspects: Record<string, unknown>;
@@ -884,6 +907,14 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
  * владелец видит вопрос там, где привык, а не в отдельном месте для агентских дел.
  */
 async function checkpoint(ctx: VerbCtx, input: CheckpointInput): Promise<ToolDispatchResult> {
+  // Терминальный вопрос и пачка СОСУЩЕСТВУЮТ (ОЧ.6: «или checkpoint — тогда у прогона и
+  // терминальный вопрос, и пачка»): исход прогона от нерешённых единиц не меняется,
+  // `RUN_OUTCOMES` не расширяется, — но флажок обязан лечь и здесь. Это третий путь
+  // закрытия рутинного прогона (Р-5), и он единственный, где глагол сам смотрит на субъекта:
+  // грантовой половине проба не нужна и не положена — единиц у гранта не бывает по
+  // построению (`orbis_ask` внешнему исполнителю закрыт гейтом ОЧ.12), а лишнее чтение по
+  // его прогону меняло бы грантовый путь ради заведомо пустого ответа.
+  const undecided = ctx.subject.kind === 'routine' ? await hasOpenUnits(ctx, input.run_id) : false;
   const out = await closeRun(ctx, {
     verb: 'orbis_checkpoint',
     run_id: input.run_id,
@@ -895,6 +926,11 @@ async function checkpoint(ctx: VerbCtx, input: CheckpointInput): Promise<ToolDis
     runPatch: (now) => ({
       outcome: 'checkpoint',
       checkpoint: { question: input.question, asked_at: iso(now) },
+      // Флажок — ТЕМ ЖЕ патчем, что исход (довод тот же, что у `proposal` в
+      // closeRoutineRun): отдельной дозаписью он дал бы миг «прогон закрыт, а нерешённого
+      // при нём нет» — ровно то состояние, по которому бейдж решает, звать ли владельца.
+      // Актор патча при этом прежний (`{ai, system}`, `actorOf`) — инвариант §9.6.
+      ...(undecided && { undecided: true }),
     }),
     ticketUpdate: () => ({ aspects: { status: 'waiting', waiting_for: input.question } }),
     expected: ['waiting'],
@@ -981,6 +1017,9 @@ export async function closeRoutineRun(
       run_id: args.runId,
     });
   }
+  // Финальная сверка пачки (ОЧ.6): список единиц раннер ведёт в памяти, но истина о них —
+  // в ленте, и только она знает, что владелец успел решить, пока прогон работал.
+  const undecided = await hasOpenUnits(ctx, args.runId);
   return closeRun(ctx, {
     verb: 'closeRoutineRun',
     run_id: args.runId,
@@ -993,6 +1032,11 @@ export async function closeRoutineRun(
       ...(args.report !== undefined && { report: args.report }),
       ...(args.failNote !== undefined && { fail_note: args.failNote }),
       ...(args.proposal !== undefined && { proposal: args.proposal }),
+      // Флажок пачки — тем же патчем и по тому же доводу, что судьба предложения выше.
+      // Пишется ТОЛЬКО `true`: «нерешённого нет» и «пачки не было» здесь одно и то же
+      // событие, а `false` на аспекте значит «пачка была и разобрана» — это уже запись
+      // процедур решения и гашения, а не закрытия прогона.
+      ...(undecided && { undecided: true }),
     }),
   });
 }

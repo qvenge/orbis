@@ -19,6 +19,7 @@ import type { ActionRecord, JournalSink } from '../executor/types';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMProvider, LLMResponse } from '../llm/types';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
+import { ROUTINE_MAX_STEPS } from './constants';
 import type { RoutineDeps } from './lifecycle';
 import { type RunEnd, runRoutineRun } from './runner';
 
@@ -279,17 +280,28 @@ describe('runRoutineRun: режим propose (V1.5, V1.6)', () => {
     expect(aspect.fail_note).toMatch(/без предложения/);
   });
 
-  test('лимит шагов: propose → failed steps', async () => {
+  test('лимит шагов: propose → failed steps; потолок СВОЙ (ROUTINE_MAX_STEPS), вызовов провайдера ровно столько (D42 ОЧ.10)', async () => {
     const routineId = await seedRoutine(owner);
     const bucket = nextBucket();
     const { runId } = await seedRoutineRun(owner, { routineId, bucket });
-    const script = Array.from({ length: MAX_AGENT_STEPS }, () =>
-      toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
+    // Скрипт ровно в потолок: тринадцатый вызов провайдера уронил бы прогон в `provider`
+    // («скрипт исчерпан»), а не закрыл бы его по шагам, — то есть проверка «лишнего вызова
+    // нет» встроена в сам скрипт, а не дописана ассертом.
+    const provider = new ScriptedProvider(
+      Array.from({ length: ROUTINE_MAX_STEPS }, () =>
+        toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
+      ),
     );
 
-    const end = await run(new ScriptedProvider(script), { routineId, runId, bucket });
+    const end = await run(provider, { routineId, runId, bucket });
     expect(end).toEqual({ outcome: 'failed', reason: 'steps' });
     expect((await runAspect(runId)).fail_note).toMatch(/лимит шагов/);
+    // Шаг потолка — ВЫЗОВ ПРОВАЙДЕРА (С9), поэтому счёт запросов и есть счёт шагов.
+    // Второй ассерт — не тавтология: он и ловит возврат к чатовой константе. Будь потолок
+    // всё ещё MAX_AGENT_STEPS (=8), прогон закрылся бы на восьмом вызове и хвост скрипта
+    // остался бы нетронутым — первая проверка упала бы, но не объяснила бы почему.
+    expect(provider.requests).toHaveLength(ROUTINE_MAX_STEPS);
+    expect(ROUTINE_MAX_STEPS).toBeGreaterThan(MAX_AGENT_STEPS);
   });
 });
 
@@ -360,17 +372,20 @@ describe('runRoutineRun: режим act (V1.10)', () => {
     expect((await aspectsOf(owner, taskId))['orbis/task']?.status).toBe('inbox');
   });
 
-  test('лимит шагов: act → finished с пометкой в отчёте', async () => {
+  test('лимит шагов: act → finished с пометкой в отчёте; тот же потолок ROUTINE_MAX_STEPS', async () => {
     const routineId = await seedRoutine(owner, { routine: { mode: 'act' } });
     const bucket = nextBucket();
     const { runId } = await seedRoutineRun(owner, { routineId, bucket });
-    const script = Array.from({ length: MAX_AGENT_STEPS }, () =>
-      toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
+    const provider = new ScriptedProvider(
+      Array.from({ length: ROUTINE_MAX_STEPS }, () =>
+        toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task' } }]),
+      ),
     );
 
-    const end = await run(new ScriptedProvider(script), { routineId, runId, bucket });
+    const end = await run(provider, { routineId, runId, bucket });
     expect(end).toEqual({ outcome: 'finished' });
     expect((await runAspect(runId)).report).toContain(STEP_LIMIT_NOTE);
+    expect(provider.requests).toHaveLength(ROUTINE_MAX_STEPS);
   });
 
   test('обрыв по потолку токенов: act → finished, отчёт с видимой пометкой (не «успешный» обрубок)', async () => {

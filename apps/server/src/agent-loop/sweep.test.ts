@@ -3,7 +3,9 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { MyQueueResult } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
+import { listRunUnits } from '../policy/pending';
 import { type AnyRecord, agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool } from '../tools/dispatch';
 import { RUN_STALE_AFTER_MS } from './constants';
@@ -13,8 +15,17 @@ requireEnv();
 
 const { db, client } = appDb();
 const MINUTE = 60_000;
-const { seedEntity, link, aspectsOf, actionsOf, workerGrant, worker, seedRoutine, seedRoutineRun } =
-  agentLoopHelpers(db);
+const {
+  seedEntity,
+  link,
+  aspectsOf,
+  actionsOf,
+  workerGrant,
+  worker,
+  routineCtx,
+  seedRoutine,
+  seedRoutineRun,
+} = agentLoopHelpers(db);
 
 function minutesBefore(n: number): string {
   return iso(new Date(T0.getTime() - n * MINUTE));
@@ -378,6 +389,9 @@ describe('sweepStaleRuns: рутинный прогон закрывается �
     expect(String(run.fail_note)).toContain('31 мин');
     expect(run.abandon_note).toBeUndefined();
     expect(run.finished_at).toBe(iso(T0));
+    // Пачки у этого прогона нет — патч прежний: флажок ставит только проба, нашедшая
+    // открытую единицу, а не сам факт подметания рутинного прогона
+    expect(run.undecided).toBeUndefined();
     // Сама рутина подметанием не трогается: тикетной логики у неё нет вовсе
     expect((await aspectsOf(owner, routineId))['orbis/routine']).toMatchObject({
       stage: 'active',
@@ -394,5 +408,55 @@ describe('sweepStaleRuns: рутинный прогон закрывается �
     expect((await aspectsOf(owner, ticketRun.ticketId))['orbis/task']).toMatchObject({
       status: 'planned',
     });
+  });
+});
+
+describe('sweepStaleRuns: пачка переживает смерть процесса (D42 ОЧ.6, С1 ревью)', () => {
+  test('рутинный прогон с открытой единицей → failed С undecided:true; карточки единиц живы (приёмка 13)', async () => {
+    // «Рестарт и сон — основной вид сбоя» (V1.12): для рутины подметание не экзотика, а
+    // штатный конец прогона на засыпающем инстансе. Пропущенный здесь флажок означает
+    // пачку, которую владелец никогда не увидит: карточки в треде лежат, а сигнала нет.
+    const owner = freshUserId();
+    const routineId = await seedRoutine(owner, { title: 'Рутина, умершая с пачкой' });
+    const { runId } = await seedRoutineRun(owner, {
+      routineId,
+      startedAt: new Date(T0.getTime() - 41 * MINUTE),
+      lastStepAt: new Date(T0.getTime() - 31 * MINUTE),
+    });
+    // Единица заводится настоящим путём — вопрос из живого прогона; отметку живости
+    // `orbis_ask` не двигает, поэтому прогон остаётся брошенным
+    const asked = await dispatchTool(
+      routineCtx(owner, 'act', [], {
+        routine: { id: routineId, runId, mode: 'act', allowedTools: new Set() },
+      }),
+      'orbis_ask',
+      { run_id: runId, question: 'Отменять ли завтрашний созвон — он третий подряд?' },
+    );
+    expect(asked.status).toBe('ok');
+
+    const { swept } = await sweepStaleRuns(db, {
+      ownerId: owner,
+      actorKind: 'ai',
+      clock: () => T0,
+    });
+    expect(swept).toBe(1);
+
+    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
+    expect(run.outcome).toBe('failed');
+    expect(String(run.fail_note)).toContain('прогон прерван');
+    expect(run.undecided).toBe(true);
+
+    // Единицы подметание НЕ трогает: они переживают прогон и ждут решения владельца либо
+    // гашения следующим прогоном (ОЧ.8). «Подмели» значит «закрыли прогон», а не «сняли
+    // вопрос»: снятый вместе с процессом вопрос владелец никогда бы и не увидел
+    const units = await withIdentity(db, owner, (tx) => listRunUnits(tx, owner, runId));
+    expect(units).toHaveLength(1);
+    expect(units[0]?.kind).toBe('question');
+    expect(units[0]?.fate).toBe('open');
+
+    // Писатель флажка — система (§9.6): будь он `ui`, «отмени последнее» после «Принять»
+    // снимало бы флажок вместо действия владельца
+    const action = (await actionsOf(owner)).find((a) => a.run_id === runId);
+    expect(action?.source).toBe('system');
   });
 });

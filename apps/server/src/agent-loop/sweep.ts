@@ -17,6 +17,7 @@ import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind } from '../executor/types';
+import { listRunUnits } from '../policy/pending';
 import { RUN_STALE_AFTER_MS } from './constants';
 import { type RunRow, runsOfParent, staleRuns, ticketOfRun } from './queries';
 
@@ -105,6 +106,24 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
     // «Тронул ли внешнее» решает не последний шаг, а весь прогон: агент мог создать
     // ветку первым шагом и упасть на пятом — остатки от этого никуда не делись (С6).
     const hasEffect = run.run.steps.some((s) => s.external);
+    // Флажок пачки (D42 ОЧ.6, С1 ревью): смерть процесса не имеет права потерять «у этого
+    // прогона осталось нерешённое». Для рутины подметание — не экзотика, а ШТАТНЫЙ конец
+    // прогона: «рестарт и сон — основной вид сбоя» (V1.12) на засыпающем инстансе. Не
+    // поставив флажок здесь, мы оставили бы владельцу пачку, о которой он не узнает, —
+    // карточки в треде лежат, а бейдж и смарт-лист читают только аспект.
+    //
+    // Сами единицы подметание НЕ трогает: они переживают прогон и ждут решения владельца
+    // либо гашения следующим прогоном (ОЧ.8). У ГРАНТОВОГО прогона пробы нет и флажка нет —
+    // единиц у него не бывает (`orbis_ask` внешнему исполнителю закрыт гейтом ОЧ.12).
+    //
+    // Своё `withIdentity` — по образцу `ticketOfRun` выше; владелец тот же, и это контракт
+    // `listRunUnits`, а не деталь: под чужой идентичностью судьбы молча не найдутся и
+    // решённая пачка прочиталась бы открытой.
+    const undecided =
+      isRoutineRun &&
+      (await withIdentity(db, args.ownerId, async (tx) =>
+        (await listRunUnits(tx, args.ownerId, run.id)).some((u) => u.fate === 'open'),
+      ));
 
     const operations: Array<{ tool: string; input: unknown }> = [
       {
@@ -124,7 +143,11 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
               // «работа брошена, разберите остатки», а `fail_note` — как «попытка не
               // удалась»; одно поле на два разных события врало бы обоим.
               ...(isRoutineRun
-                ? { outcome: 'failed', fail_note: note }
+                ? // Флажок — в ТОТ ЖЕ CAS-патч, что исход: отдельной записью он либо
+                  // проиграл бы гонку тому же предусловию, либо лёг бы на прогон, который
+                  // подмести не удалось. Пишется только `true` — «нерешённого нет» флажком
+                  // не отмечается (снятие — работа процедур решения и гашения, ОЧ.6)
+                  { outcome: 'failed', fail_note: note, ...(undecided && { undecided: true }) }
                 : { outcome: 'abandoned', abandon_note: note }),
               finished_at: now.toISOString(),
             },
