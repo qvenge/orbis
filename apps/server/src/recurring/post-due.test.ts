@@ -367,6 +367,9 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     expect((await finOf(instanceId)).planned).toBe(true);
   });
 
+  // Таймаут поднят с дефолтных 5 с: тест ходит в живую БД, и под ПАРАЛЛЕЛЬНЫМ прогоном
+  // сьютов трёх пакетов ответы приходят медленнее лимита — падение было по нетерпению,
+  // а не по ошибке (изолированно тест зелёный). Замерено за срез Ш1, 2026-08-20/21.
   test('гонка: два конкурентных вызова с двух «устройств» → ровно один action в журнале', async () => {
     const iterations = 8;
     for (let i = 0; i < iterations; i++) {
@@ -387,10 +390,13 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
       expect(await budgetParents(instanceId)).toEqual([envelopeId]);
       expect(await actionMessageCount(postFinancialBatchId(instanceId))).toBe(1);
     }
-  });
+  }, 20_000);
 });
 
 describe('tRPC budget.postDue (заготовка роутера, наполнение — A6)', () => {
+  // Таймаут поднят с дефолтных 5 с: тест ходит в живую БД, и под ПАРАЛЛЕЛЬНЫМ прогоном
+  // сьютов трёх пакетов ответы приходят медленнее лимита — падение было по нетерпению,
+  // а не по ошибке (изолированно тест зелёный). Замерено за срез Ш1, 2026-08-20/21.
   test('владелец: постит due-инстансы на локальное «сегодня» (user_settings.timezone); агенту — FORBIDDEN', async () => {
     const user = freshUserId();
     const cat = newId();
@@ -422,5 +428,5 @@ describe('tRPC budget.postDue (заготовка роутера, наполне
     // Мутационная поверхность tRPC — поверхность владельца (§9.3)
     const agent = createCaller({ actorUserId: user, actorKind: 'agent', db, clientVersion: null });
     await expect(agent.budget.postDue()).rejects.toMatchObject({ code: 'FORBIDDEN' });
-  });
+  }, 20_000);
 });

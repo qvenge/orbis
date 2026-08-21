@@ -181,6 +181,9 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     expect((await aspectsOf(owner, claim.run_id))['orbis/agent-run']?.reply).toBeUndefined();
   });
 
+  // Таймаут поднят с дефолтных 5 с: тест ходит в живую БД, и под ПАРАЛЛЕЛЬНЫМ прогоном
+  // сьютов трёх пакетов ответы приходят медленнее лимита — падение было по нетерпению,
+  // а не по ошибке (изолированно тест зелёный). Замерено за срез Ш1, 2026-08-20/21.
   test('ответ адресуется ПОСЛЕДНЕМУ прогону тикета: старый прогон → CONFLICT, reply не записан', async () => {
     const ticketId = await makeTicket('Тикет с двумя вопросами');
     const first = okResult<ClaimTaskResult>(
@@ -217,7 +220,7 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     ).toBe('Ответ первому');
     expect((await aspectsOf(owner, second.run_id))['orbis/agent-run']?.reply).toBeUndefined();
     expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'waiting' });
-  });
+  }, 20_000);
 
   test('прогон чужого тикета → NOT_FOUND, ничего не записано', async () => {
     const first = await makeTicket('Тикет A');
