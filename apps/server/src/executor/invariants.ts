@@ -360,8 +360,13 @@ export function assertRunSubject(next: AspectsMap): void {
  * Аспекты, которые сущность делают ОБЪЕКТОМ запрета для источника `routine`: рутина и
  * прогон. Один список на оба запрета (сущностный и связевый) — разойдясь, они открыли бы
  * обходной путь через связь.
+ *
+ * Экспортируется третьему потребителю — объектному пре-чеку диспатча (D42 ОЧ.4), который
+ * отклоняет запрещённое ДО постановки в пачку решений. Свой список аспектов у пре-чека
+ * разошёлся бы с этим молча, и в пачку однажды попала бы карточка, которую стадия 4
+ * гарантированно убьёт на «Принять».
  */
-const ROUTINE_UNTOUCHABLE_OBJECTS = ['orbis/routine', 'orbis/agent-run'] as const;
+export const ROUTINE_UNTOUCHABLE_OBJECTS = ['orbis/routine', 'orbis/agent-run'] as const;
 
 function isUntouchableObject(aspects: AspectsMap | undefined): boolean {
   return (
@@ -440,8 +445,12 @@ export function assertRoutineRelationUntouchable(
  * Единый отказ обоих запретов по объекту: код `FORBIDDEN_LEVEL` (§7.10 «forbidden» — не
  * INVARIANT: граф остался бы целостным, отказано именно источнику), причина в `details` —
  * потребитель различает её полем, а не разбором текста.
+ *
+ * Тем же отказом отвечает пре-чек диспатча (D42 ОЧ.4), поймавший запрещённую цель раньше
+ * конвейера: на каком рубеже рутину остановили — её дело, а не вызывающего, и две разные
+ * формулировки одного запрета читались бы как два разных правила.
  */
-function routineUntouchableError(): ExecError {
+export function routineUntouchableError(): ExecError {
   return new ExecError(
     'FORBIDDEN_LEVEL',
     'рутина не может менять рутины, прогоны и назначения (V1.10)',

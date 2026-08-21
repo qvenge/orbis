@@ -51,6 +51,7 @@ import {
 import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
+import { ROUTINE_UNTOUCHABLE_OBJECTS, routineUntouchableError } from '../executor/invariants';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, JournalSink, JournalWrite, WireEntity } from '../executor/types';
 import { undoLast } from '../executor/undo';
@@ -744,6 +745,25 @@ async function runMutation(
       : await actRoutineInstructionTargets(ctx, ops);
   const level: ConfirmationLevel = instructionOf.length > 0 ? 'explicit-confirmation' : classified;
 
+  // Объектный пре-чек рутинной мутации (D42 ОЧ.4, блокер Б2): запрещённое ПО ОБЪЕКТУ
+  // отклоняется ДО постановки и не откладывается никогда. Стоит РАНЬШЕ гейта уровня
+  // намеренно: гейт со временем откроет отложку (Задача 5), а этому отказу открываться
+  // нечем — ни один из четырёх его поводов не становится безопаснее оттого, что владелец
+  // разберёт его позже. Уровень `execute` пре-чек не смотрит: там ничего не откладывается, и
+  // запрет держит стадия 4 executor'а своим отказом — тем же кодом и с тем же `reason`.
+  if (ctx.source === 'routine' && level !== 'execute') {
+    const forbidden = await routineDeferForbidden(ctx, ops, facts, instructionOf);
+    if (forbidden !== null) {
+      // `reason` — та же пара, что у запрета по объекту в executor'е: код FORBIDDEN_LEVEL
+      // перегружен шестью источниками, и различать их в тестах и UI больше нечем
+      return errorResult('FORBIDDEN_LEVEL', forbidden, {
+        tool: def.name,
+        level,
+        reason: 'routine_untouchable',
+      });
+    }
+  }
+
   // Инвариант 5 (V1.10): в фоне небезопасное ОТКЛОНЯЕТСЯ, а не откладывается. Уровни
   // выше execute придуманы для разговора с владельцем — он тут же видит карточку и
   // отвечает; за прогоном рутины владельца нет, и pending повис бы в её треде вопросом
@@ -1068,6 +1088,105 @@ async function actRoutineInstructionTargets(
       .where(and(inArray(entities.id, ids), sql`${entities.aspects} @> ${actRoutine}::jsonb`));
     return rows.map((r) => r.title);
   });
+}
+
+/**
+ * Аспект назначения — четвёртый запретный объект рутины рядом с `ROUTINE_UNTOUCHABLE_OBJECTS`
+ * (в executor'е он тоже отдельной веткой, `assertRoutineUntouchable`): раздавать исполнителю
+ * работу — не то же самое, что править рутину, но запрещено рутине по той же причине.
+ */
+const ASSIGNMENT_ASPECT = 'orbis/assignment';
+
+/**
+ * Объектный пре-чек рутинной мутации (D42 ОЧ.4, инвариант 1 среза): `null` — откладывать
+ * можно, строка — человекочитаемая причина отказа АГЕНТУ, здесь и сейчас.
+ *
+ * Зачем отдельный рубеж, когда те же запреты держит стадия 4 executor'а: отложенная карточка
+ * исполняется не в момент постановки, а когда владелец нажмёт «Принять» — и отказ прилетел бы
+ * ЕМУ, хотя виноват не он (тот же довод, что у пре-чека предложения, `routines/propose.ts`).
+ * Карточка, которую executor гарантированно убьёт, не должна рождаться.
+ *
+ * Первые две проверки — не про executor вовсе, а про пачку: «Принять все» одним нажатием
+ * сняло бы замок V1.10 мимоходом, если бы выдача автономии или правка инструкции act-рутины
+ * умели откладываться. Такое рутина обязана либо делать в лицо владельцу (чат, где он тут же
+ * смотрит на карточку), либо не делать.
+ *
+ * Порядок проверок значим: у операции может сойтись сразу несколько поводов (правка `mode`
+ * ЧУЖОЙ рутины — это и автономия, и запретная цель), и назвать агенту надо самый содержательный
+ * из них, иначе он будет чинить не то.
+ *
+ * Цели читаются одним SELECT по id — тем же способом и в том же месте конвейера, что и
+ * `actRoutineInstructionTargets` строкой выше (своей транзакции пре-чек не заводит, RLS —
+ * под `withIdentity` актора). Containment по `aspects` тут не нужен: у пре-чека на руках
+ * готовые id, а запретных аспектов четыре.
+ *
+ * Пре-чек разбирает ВСЕ формы операции, включая те, до которых таблица §7.10 сегодня его не
+ * доводит (связи и attach классифицируются как `execute`, batch рутине закрыт совсем): он —
+ * зеркало запрета по объекту, и зеркало, отражающее половину, разошлось бы со стадией 4
+ * молча, стоит таблице уровней однажды поменяться. По той же причине функция экспортирована —
+ * ровно как `routineGate` выше: рубеж, который никто не проверил, — это рубеж, которого нет.
+ */
+export async function routineDeferForbidden(
+  ctx: ToolCallCtx,
+  ops: ReadonlyArray<{ tool: string; input: unknown }>,
+  facts: { grantsAutonomy: boolean },
+  instructionOf: readonly string[],
+): Promise<string | null> {
+  if (facts.grantsAutonomy) {
+    return 'выдача автономии рутине из фона не откладывается: право писать в граф без спроса даёт только владелец и только глядя на карточку (V1.10)';
+  }
+  if (instructionOf.length > 0) {
+    return `правка инструкции act-рутины из фона не откладывается: «${instructionOf.join('», «')}» (V1.10)`;
+  }
+
+  // Цель правки и конец связи — разные множества запретных аспектов, и это не небрежность:
+  // executor запрещает связь только по рутине и прогону (`assertRoutineRelationUntouchable`),
+  // а назначенный тикет связями обвешивать не мешает. Пре-чек зеркалит его ровно, иначе он
+  // отказывал бы в том, что на «Принять» прошло бы.
+  const entityTargets: string[] = [];
+  const relationEnds: string[] = [];
+  for (const op of ops) {
+    if (!isRecord(op.input)) continue;
+    if (op.tool === 'entity_update') {
+      if (typeof op.input.id === 'string') entityTargets.push(op.input.id);
+    } else if (op.tool === 'relation_create' || op.tool === 'relation_delete') {
+      for (const end of [op.input.source_id, op.input.target_id]) {
+        if (typeof end === 'string') relationEnds.push(end);
+      }
+    } else if (op.tool.startsWith('attach_')) {
+      // attach — третий путь появления аспекта на ЖИВОЙ сущности; `entity_create` целей
+      // в БД не имеет вовсе, его запретные формы ловит проверка автономии выше и стадия 4
+      if (typeof op.input.entity_id === 'string') entityTargets.push(op.input.entity_id);
+    }
+  }
+  const ids = [...new Set([...entityTargets, ...relationEnds])];
+  if (ids.length === 0) return null;
+
+  const rows = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
+    tx
+      .select({ id: entities.id, aspects: entities.aspects })
+      .from(entities)
+      .where(inArray(entities.id, ids)),
+  );
+  const aspectsById = new Map(rows.map((r) => [r.id, r.aspects as Record<string, unknown>]));
+  // Невидимой цели (её нет или она чужая) пре-чек не касается: NOT_FOUND — честный ответ
+  // исполнения, и подменять его отказом по объекту значило бы разглашать, что строка есть.
+  const untouchable = (id: string): boolean => {
+    const aspects = aspectsById.get(id);
+    return (
+      aspects !== undefined && ROUTINE_UNTOUCHABLE_OBJECTS.some((a) => aspects[a] !== undefined)
+    );
+  };
+
+  for (const id of entityTargets) {
+    if (untouchable(id) || aspectsById.get(id)?.[ASSIGNMENT_ASPECT] !== undefined) {
+      return routineUntouchableError().message;
+    }
+  }
+  for (const id of relationEnds) {
+    if (untouchable(id)) return routineUntouchableError().message;
+  }
+  return null;
 }
 
 /** Заголовок сущности под tx владельца; `undefined` — не видна (чужая или нет). */

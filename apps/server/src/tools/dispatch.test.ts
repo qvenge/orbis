@@ -14,7 +14,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
-import { dispatchTool, routineGate, type ToolCallCtx } from './dispatch';
+import { dispatchTool, routineDeferForbidden, routineGate, type ToolCallCtx } from './dispatch';
 import { buildToolRegistry, type RoutineRef } from './registry';
 
 requireEnv();
@@ -1884,5 +1884,167 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     const ctx = routineCtx(userA, 'propose', [], { routine: real });
     expect(ctx.routine).toBe(real);
     expect(ctx.runId).toBe(real.runId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Объектный пре-чек рутинной мутации (D42 ОЧ.4, блокер Б2 ревью)
+// ---------------------------------------------------------------------------
+
+describe('объектный пре-чек рутинной мутации (D42 ОЧ.4)', () => {
+  const { routineCtx, seedRoutine, seedRoutineRun, aspectsOf } = agentLoopHelpers(db);
+  /** Субъект-рутина в act с часами сьюта (у `routineCtx` свой T0 круга исполнителя). */
+  const rt = (allowed: string[], over: Partial<ToolCallCtx> = {}) =>
+    routineCtx(userA, 'act', allowed, { clock: () => T0, ...over });
+
+  /**
+   * Отказ пре-чека: код и пара `reason` — те же, что у запрета по объекту на стадии 4
+   * executor'а (`invariants.ts`), различает источник отказа только текст.
+   */
+  function expectPrecheckDenial(
+    r: Awaited<ReturnType<typeof dispatchTool>>,
+    contains: string,
+  ): void {
+    expectError(r, 'FORBIDDEN_LEVEL');
+    if (r.status !== 'error') return;
+    expect((r.error.details as { reason?: string }).reason).toBe('routine_untouchable');
+    expect(r.error.message).toContain(contains);
+  }
+
+  test('цель — рутина, прогон или назначенный тикет: архивация → отказ на диспатче с reason routine_untouchable (приёмка 12)', async () => {
+    // Карточка «архивировать рутину», поставленная в пачку, умерла бы на «Принять» отказом
+    // executor'а — владельцу, который ни в чём не виноват. Значит она не должна родиться.
+    const routineId = await seedRoutine(userA, { title: 'Соседняя рутина' });
+    const { runId } = await seedRoutineRun(userA, { routineId, bucket: '2026-08-21T07:00' });
+    const assigned = await seedEntity(userA, {
+      title: 'Назначенный тикет',
+      tags: [],
+      aspects: {
+        'orbis/task': { status: 'inbox' },
+        'orbis/assignment': { executor: 'human', assignee: 'Пётр' },
+      },
+    });
+    const ctx = rt(['entity_update']);
+
+    for (const id of [routineId, runId, assigned.id]) {
+      expectPrecheckDenial(
+        await dispatchTool(ctx, 'entity_update', { id, archived: true }),
+        'рутина не может менять рутины, прогоны и назначения',
+      );
+    }
+  });
+
+  test('выдача автономии из фона (все три формы) → отказ на диспатче, не карточка в пачку (В1)', async () => {
+    // «Принять все» одним нажатием сняло бы замок V1.10 мимоходом — поэтому автономия
+    // не откладывается ни в какой форме
+    const other = await seedRoutine(userA, { title: 'Чужая рутина' });
+    const plain = await seedEntity(userA, { title: 'Кандидат в рутины', tags: [] });
+    const ctx = rt(['entity_update', 'attach_orbis_routine', 'entity_create']);
+
+    expectPrecheckDenial(
+      await dispatchTool(ctx, 'entity_update', {
+        id: other,
+        aspects: { 'orbis/routine': { mode: 'act' } },
+      }),
+      'выдача автономии',
+    );
+    expectPrecheckDenial(
+      await dispatchTool(ctx, 'attach_orbis_routine', {
+        entity_id: plain.id,
+        data: { stage: 'active', at: '07:00', mode: 'act' },
+      }),
+      'выдача автономии',
+    );
+    expectPrecheckDenial(
+      await dispatchTool(ctx, 'entity_create', {
+        title: 'Рутина руками рутины',
+        tags: [],
+        aspects: { 'orbis/routine': { stage: 'active', at: '07:00', mode: 'act' } },
+      }),
+      'выдача автономии',
+    );
+
+    // Ничего не записано: ни чужой режим, ни аспект на кандидате
+    expect((await aspectsOf(userA, other))['orbis/routine']?.mode).toBe('propose');
+    expect((await aspectsOf(userA, plain.id))['orbis/routine']).toBeUndefined();
+  });
+
+  test('правка инструкции act-рутины из фона → отказ на диспатче (пере-использован actRoutineInstructionTargets)', async () => {
+    const actRoutine = await seedRoutine(userA, {
+      title: 'Утренний обзор в act',
+      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+    });
+    const ctx = rt(['entity_update']);
+
+    expectPrecheckDenial(
+      await dispatchTool(ctx, 'entity_update', { id: actRoutine, body: 'Новая инструкция' }),
+      'инструкции act-рутины',
+    );
+  });
+
+  test('связь концом в рутине или прогоне → отказ пре-чека; конец-НАЗНАЧЕНИЕ связь не запрещает', async () => {
+    // До этой ветки диспатч сегодня не доводит: связи классифицируются как `execute`, а
+    // пре-чек зовётся только выше него, batch же рутине закрыт совсем (ROUTINE_CLOSED_TOOLS).
+    // Поэтому она проверяется прямым вызовом — тот же довод, по которому экспортирован
+    // routineGate: рубеж, который никто не проверил, — это рубеж, которого нет.
+    const routineId = await seedRoutine(userA, { title: 'Рутина как конец связи' });
+    const { runId } = await seedRoutineRun(userA, { routineId, bucket: '2026-08-21T08:00' });
+    const note = await seedEntity(userA, { title: 'Обычная заметка', tags: [] });
+    const assigned = await seedEntity(userA, {
+      title: 'Назначенный тикет как конец связи',
+      tags: [],
+      aspects: {
+        'orbis/task': { status: 'inbox' },
+        'orbis/assignment': { executor: 'human', assignee: 'Пётр' },
+      },
+    });
+    const ctx = rt(['relation_create', 'relation_delete']);
+    const link = (tool: string, source: string, target: string) => [
+      { tool, input: { source_id: source, target_id: target, relation_type: 'related_to' } },
+    ];
+    const check = (ops: Array<{ tool: string; input: Record<string, unknown> }>) =>
+      routineDeferForbidden(ctx, ops, { grantsAutonomy: false }, []);
+
+    // Цель связи — рутина; источник — прогон: направление запрета не меняет
+    expect(await check(link('relation_create', note.id, routineId))).toContain(
+      'рутина не может менять рутины, прогоны и назначения',
+    );
+    expect(await check(link('relation_delete', runId, note.id))).toContain(
+      'рутина не может менять рутины, прогоны и назначения',
+    );
+    // Обе стороны обычные — откладывать можно
+    expect(await check(link('relation_create', note.id, note.id))).toBeNull();
+    // …а назначение конец связи не запрещает: пре-чек зеркалит запрет executor'а РОВНО
+    // (assertRoutineRelationUntouchable смотрит только рутину и прогон), иначе он отказывал
+    // бы в том, что на «Принять» прошло бы
+    expect(await check(link('relation_create', note.id, assigned.id))).toBeNull();
+  });
+
+  test('обычная цель: отказ прежний, гейт инварианта 5 без reason; чатовый путь пре-чек не зовёт', async () => {
+    const plain = await seedEntity(userA, { title: 'Обычная запись рутины', tags: [] });
+    const routineId = await seedRoutine(userA, { title: 'Рутина для чатового пути' });
+
+    // Отложки ещё нет (её строит Задача 5) — обычная архивация упирается в прежний гейт,
+    // и `reason` у него по-прежнему нет: пре-чек этой ситуации не касается
+    const denial = await dispatchTool(rt(['entity_update']), 'entity_update', {
+      id: plain.id,
+      archived: true,
+    });
+    expectError(denial, 'FORBIDDEN_LEVEL');
+    if (denial.status === 'error') {
+      expect(denial.error.message).toContain('в фоне небезопасное отклоняется');
+      expect((denial.error.details as { reason?: string }).reason).toBeUndefined();
+    }
+
+    // Чат: пре-чек не зовётся вовсе — архивация РУТИНЫ по-прежнему уезжает в карточку
+    // владельцу, который тут же на неё смотрит
+    const threadId = await withIdentity(db, userA, (tx) =>
+      ensureEntityThread(tx, userA, routineId),
+    );
+    const chat = await dispatchTool(ctxFor({ threadId }), 'entity_update', {
+      id: routineId,
+      archived: true,
+    });
+    expect(chat.status).toBe('pending_confirmation');
   });
 });
