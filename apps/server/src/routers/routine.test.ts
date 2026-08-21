@@ -33,13 +33,15 @@ import { startBucketRun, supersedeOpen } from '../routines/lifecycle';
 import { runRoutineRun } from '../routines/runner';
 import { makeRunRegistry } from '../routines/shutdown';
 import { agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
+import { dispatchTool } from '../tools/dispatch';
 import { type Context, createCallerFactory } from '../trpc';
 
 requireEnv();
 
 const { db, client } = appDb();
 const owner = freshUserId();
-const { actionsOf, aspectsOf, seedEntity, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
+const { actionsOf, aspectsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } =
+  agentLoopHelpers(db);
 const createCaller = createCallerFactory(appRouter);
 
 const MODEL = 'scripted-model';
@@ -2034,5 +2036,498 @@ describe('routine.overview', () => {
   test('несуществующая рутина → NOT_FOUND', async () => {
     const e = await trpcError(caller().routine.overview({ routineId: newId() }));
     expect(e.code).toBe('NOT_FOUND');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Пачка решений: поштучные решения владельца (D42 §6; приёмки 3, 4, 5, 10, 18)
+// ---------------------------------------------------------------------------
+
+/**
+ * Рутина + ЗАКРЫТЫЙ прогон с флажком пачки — то состояние, в котором владелец её и
+ * застаёт: прогон отработал ночью, `undecided:true` поставил его close-патч (ОЧ.6).
+ * Единицы кладутся в него уже после закрытия — для ленты это те же сообщения, а сид
+ * настоящим прогоном стоил бы сценария модели ради состояния, которое от него не зависит.
+ */
+async function batchRun(title: string): Promise<{ routineId: string; runId: string }> {
+  const routineId = await seedRoutine(owner, { title: `Рутина: ${title}` });
+  const { runId } = await seedRoutineRun(owner, {
+    routineId,
+    run: { outcome: 'finished', finished_at: iso(T0), undecided: true },
+  });
+  return { routineId, runId };
+}
+
+/**
+ * Отложенное действие-единица НАСТОЯЩИМ путём (архивация записи act-рутиной через
+ * диспатч), а не вставкой в ленту: и предусловия ОЧ.13, и карточка, и `kind` рождаются
+ * там, и сид мимо `deferRoutineUnit` проверял бы форму, которой в проде не бывает.
+ */
+async function deferUnit(
+  routineId: string,
+  runId: string,
+  title: string,
+  over: Record<string, unknown> = {},
+): Promise<{ pendingId: string; targetId: string }> {
+  const targetId = await seedTask(title);
+  const r = await dispatchTool(
+    routineCtx(owner, 'act', ['entity_update'], {
+      routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(['entity_update']) },
+    }),
+    'entity_update',
+    { id: targetId, archived: true, ...over },
+  );
+  if (r.status !== 'pending_confirmation') throw new Error(`deferUnit: ${JSON.stringify(r)}`);
+  return { pendingId: r.pendingId, targetId };
+}
+
+/** Вопрос-единица тем же настоящим путём — `orbis_ask` через диспатч. */
+async function askUnit(
+  routineId: string,
+  runId: string,
+  question: string,
+  options?: string[],
+): Promise<string> {
+  const r = await dispatchTool(
+    routineCtx(owner, 'act', [], {
+      routine: { id: routineId, runId, mode: 'act', allowedTools: new Set() },
+    }),
+    'orbis_ask',
+    { run_id: runId, question, ...(options !== undefined && { options }) },
+  );
+  if (r.status !== 'ok') throw new Error(`askUnit: ${JSON.stringify(r)}`);
+  return (r.result as { pending_id: string }).pending_id;
+}
+
+/** Строки ленты по единице: отказ, ответ, гашение — по ним читается её судьба. */
+async function unitMessages(pendingId: string): Promise<Array<Record<string, unknown>>> {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.execute(
+      sql`SELECT id, content, metadata FROM chat_messages
+          WHERE metadata @> ${JSON.stringify({ rejects: pendingId })}::jsonb
+             OR metadata @> ${JSON.stringify({ answers: pendingId })}::jsonb
+             OR metadata @> ${JSON.stringify({ stales: pendingId })}::jsonb`,
+    ),
+  );
+  return [...(rows as unknown as Array<Record<string, unknown>>)];
+}
+
+/** Действия журнала, снимающие флажок пачки, — по ним читается их атрибуция (§9.6). */
+async function flagPatches(runId: string) {
+  return (await actionsOf(owner)).filter(
+    (a) =>
+      a.run_id === runId &&
+      a.operations.some(
+        (op) =>
+          (op.payload.aspects as { 'orbis/agent-run'?: { undecided?: unknown } } | undefined)?.[
+            'orbis/agent-run'
+          ]?.undecided === false,
+      ),
+  );
+}
+
+/** Флажок пачки на прогоне: `undefined` — ключа нет вовсе (пачки не было). */
+async function undecidedOf(runId: string): Promise<boolean | undefined> {
+  return ((await aspectsOf(owner, runId))['orbis/agent-run'] as { undecided?: boolean }).undecided;
+}
+
+describe('routine.decideDeferred: отложенное действие (D42 §6)', () => {
+  test('«Принять» отложенную архивацию → applied; запись заархивирована source=routine + run_id; в журнале один action; откат прогона откатывает и её (приёмка 3)', async () => {
+    const { routineId, runId } = await batchRun('Архив отчётов');
+    const { pendingId, targetId } = await deferUnit(routineId, runId, 'Прошлогодний отчёт');
+
+    const applied = await callerLater().routine.decideDeferred({ pendingId, decision: 'approve' });
+    expect(applied.status).toBe('applied');
+    if (applied.status !== 'applied') throw new Error('не applied');
+    expect(await isArchived(targetId)).toBe(true);
+
+    // Атрибуция — работа ПРОГОНА (§9.5): по паре source+run_id её находят журнал, Undo и
+    // откат прогона, и без неё «Принять» осталось бы работой ниоткуда
+    const own = (await actionsOf(owner)).filter(
+      (a) => a.run_id === runId && a.source === 'routine',
+    );
+    expect(own.length).toBe(1);
+    expect(own[0]?.id).toBe(applied.actionId);
+    expect(own[0]?.actor_kind).toBe('ai');
+
+    const rolled = await rollbackRun(db, { actorUserId: owner, runId });
+    expect(rolled.ok).toBe(true);
+    if (!rolled.ok) throw new Error(`ожидался успешный откат: ${JSON.stringify(rolled)}`);
+    expect(rolled.undone).toEqual([applied.actionId]);
+    expect(await isArchived(targetId)).toBe(false);
+  });
+
+  test('«Отклонить» → append-отказ с текстом единицы, граф не тронут; повтор reject возвращает already (приёмка 4)', async () => {
+    const { routineId, runId } = await batchRun('Отказ');
+    const { pendingId, targetId } = await deferUnit(routineId, runId, 'Черновик письма');
+
+    const rejected = await callerLater().routine.decideDeferred({ pendingId, decision: 'reject' });
+    expect(rejected).toEqual({ status: 'rejected' });
+    expect(await isArchived(targetId)).toBe(false);
+
+    // Текст СВОЙ, единицы: «Подтверждение отклонено» и «Предложение…» писаны про другое (С6)
+    const messages = await unitMessages(pendingId);
+    expect(messages.length).toBe(1);
+    expect(messages[0]?.content).toBe('Отложенное действие отклонено владельцем');
+    expect((messages[0]?.metadata as { reason?: string }).reason).toBe('owner');
+
+    const again = await callerLater().routine.decideDeferred({ pendingId, decision: 'reject' });
+    expect(again).toEqual({ status: 'already', fate: 'rejected' });
+    // Повтор ничего не дописал: журнал append-only, вторая строка отказа была бы второй судьбой
+    expect((await unitMessages(pendingId)).length).toBe(1);
+  });
+
+  test('двойной клик «Принять» → replay тем же actionId, одна запись в журнале (приёмка 10)', async () => {
+    const { routineId, runId } = await batchRun('Двойной клик');
+    const { pendingId, targetId } = await deferUnit(routineId, runId, 'Старая заметка');
+
+    const first = await callerLater().routine.decideDeferred({ pendingId, decision: 'approve' });
+    const second = await callerLater().routine.decideDeferred({ pendingId, decision: 'approve' });
+    expect(first.status).toBe('applied');
+    expect(second).toEqual(first);
+    expect(await isArchived(targetId)).toBe(true);
+    expect(
+      (await actionsOf(owner)).filter((a) => a.run_id === runId && a.source === 'routine'),
+    ).toHaveLength(1);
+  });
+
+  test('владелец тронул цель после постановки → approve даёт stale с расхождениями и гасит карточку (ОЧ.13); вторая НЕЗАВИСИМАЯ единица по тому же полю после applied первой → stale честно, не молча (Р-16)', async () => {
+    const { routineId, runId } = await batchRun('Устаревание');
+    const { pendingId, targetId } = await deferUnit(routineId, runId, 'Заявка на отпуск', {
+      aspects: { 'orbis/task': { status: 'done' } },
+    });
+    // Правка владельца своей рукой — ровно то, обо что предусловие ОЧ.13 и разбивается
+    await ownerSets(targetId, 'in_progress');
+
+    const stale = await callerLater().routine.decideDeferred({ pendingId, decision: 'approve' });
+    expect(stale.status).toBe('stale');
+    if (stale.status !== 'stale') throw new Error('не stale');
+    expect(stale.mismatches).toEqual([
+      { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'in_progress' },
+    ]);
+    expect(await isArchived(targetId)).toBe(false);
+    // Протухшая единица закрыта: предусловия не переснимаются (§9.4), и кнопка «Принять»
+    // на ней не заработает уже никогда — оставить её открытой значило бы обещать невозможное
+    const closed = await unitMessages(pendingId);
+    expect(closed.length).toBe(1);
+    expect((closed[0]?.metadata as { reason?: string }).reason).toBe('stale');
+    expect(closed[0]?.content).toBe('Отложенное действие устарело: состояние изменилось');
+
+    // Р-16: две единицы по ОДНОМУ полю независимы — применённая первая делает вторую
+    // устаревшей, и владелец обязан увидеть это расхождением, а не молчаливым «принято»
+    const { routineId: r2, runId: run2 } = await batchRun('Две единицы');
+    const target = await seedTask('Прошлогодний акт');
+    const one = await dispatchTool(
+      routineCtx(owner, 'act', ['entity_update'], {
+        routine: { id: r2, runId: run2, mode: 'act', allowedTools: new Set(['entity_update']) },
+      }),
+      'entity_update',
+      { id: target, archived: true },
+    );
+    const two = await dispatchTool(
+      routineCtx(owner, 'act', ['entity_update'], {
+        routine: { id: r2, runId: run2, mode: 'act', allowedTools: new Set(['entity_update']) },
+      }),
+      'entity_update',
+      { id: target, archived: true, aspects: { 'orbis/task': { status: 'done' } } },
+    );
+    if (one.status !== 'pending_confirmation' || two.status !== 'pending_confirmation') {
+      throw new Error('обе единицы обязаны отложиться');
+    }
+    expect(one.pendingId).not.toBe(two.pendingId);
+
+    const applied = await callerLater().routine.decideDeferred({
+      pendingId: one.pendingId,
+      decision: 'approve',
+    });
+    expect(applied.status).toBe('applied');
+    const second = await callerLater().routine.decideDeferred({
+      pendingId: two.pendingId,
+      decision: 'approve',
+    });
+    expect(second.status).toBe('stale');
+    if (second.status !== 'stale') throw new Error('вторая единица обязана протухнуть');
+    expect(second.mismatches).toEqual([
+      { aspect: 'orbis/entity', field: 'archived', expected: [false], actual: true },
+    ]);
+  });
+
+  test('approve отклонённой → already {fate:rejected}; reject применённой → already {fate:approved}', async () => {
+    const { routineId, runId } = await batchRun('Чужой ход');
+    const rejected = await deferUnit(routineId, runId, 'Смета на ремонт');
+    await callerLater().routine.decideDeferred({
+      pendingId: rejected.pendingId,
+      decision: 'reject',
+    });
+    expect(
+      await callerLater().routine.decideDeferred({
+        pendingId: rejected.pendingId,
+        decision: 'approve',
+      }),
+    ).toEqual({ status: 'already', fate: 'rejected' });
+    expect(await isArchived(rejected.targetId)).toBe(false);
+
+    const applied = await deferUnit(routineId, runId, 'Скан паспорта');
+    await callerLater().routine.decideDeferred({
+      pendingId: applied.pendingId,
+      decision: 'approve',
+    });
+    expect(
+      await callerLater().routine.decideDeferred({
+        pendingId: applied.pendingId,
+        decision: 'reject',
+      }),
+    ).toEqual({ status: 'already', fate: 'approved' });
+    expect(await isArchived(applied.targetId)).toBe(true);
+  });
+
+  test('гейты рода: decideDeferred на вопросе → структурный отказ (С7); на предложении прогона (записи без kind) — тоже, путь предложения ему не открыт (приёмка 19)', async () => {
+    const { routineId, runId } = await batchRun('Гейты');
+    const questionId = await askUnit(routineId, runId, 'Переносить ли встречу?');
+    for (const decision of ['approve', 'reject'] as const) {
+      const err = await trpcError(
+        callerLater().routine.decideDeferred({
+          pendingId: questionId,
+          decision,
+        }),
+      );
+      expect(err.code).toBe('BAD_REQUEST');
+    }
+    // Ответ на вопрос по-прежнему возможен: гейт запрещает ЧУЖУЮ судьбу, а не решение вовсе
+    expect(
+      (await callerLater().routine.answerQuestion({ pendingId: questionId, answer: 'Да' })).status,
+    ).toBe('answered');
+    // И судьбой гейт не смягчается: на ОТВЕЧЕННЫЙ вопрос «Принять» по-прежнему структурный
+    // отказ, а не «уже решено» — иначе экран получил бы разрешение принять то, что принимать
+    // нельзя вовсе
+    const answered = await trpcError(
+      callerLater().routine.decideDeferred({ pendingId: questionId, decision: 'approve' }),
+    );
+    expect(answered.code).toBe('BAD_REQUEST');
+    expect(answered.message).toContain('это вопрос');
+
+    // Предложение прогона — не единица пачки (Б5): у него нет `kind`, и решать его отсюда
+    // значило бы применить план мимо статуса на прогоне (decideProposal)
+    const proposal = await proposed('Не единица пачки');
+    const err = await trpcError(
+      callerLater().routine.decideDeferred({ pendingId: proposal.pendingId, decision: 'approve' }),
+    );
+    expect(err.code).toBe('BAD_REQUEST');
+    expect((await runAspect(proposal.runId)).proposal?.status).toBe('pending');
+  });
+
+  test('несуществующая единица → NOT_FOUND', async () => {
+    const err = await trpcError(
+      caller().routine.decideDeferred({ pendingId: newId(), decision: 'approve' }),
+    );
+    expect(err.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('routine.answerQuestion: вопрос пачки (приёмка 5, В2)', () => {
+  test('ответ → answered; тот же повторно → replay без второй записи; ДРУГОЙ → already с применившимся (С5)', async () => {
+    const { routineId, runId } = await batchRun('Ответы');
+    const pendingId = await askUnit(routineId, runId, 'Звонить подрядчику сегодня?', ['Да', 'Нет']);
+
+    expect(
+      await callerLater().routine.answerQuestion({ pendingId, answer: 'Да', option: 0 }),
+    ).toEqual({ status: 'answered', pendingId });
+    const written = await unitMessages(pendingId);
+    expect(written.length).toBe(1);
+    expect(written[0]?.content).toBe('Ответ: «Да»');
+    expect((written[0]?.metadata as { source?: string; option?: number }).source).toBe('ui');
+    expect((written[0]?.metadata as { option?: number }).option).toBe(0);
+
+    expect(
+      await callerLater().routine.answerQuestion({ pendingId, answer: 'Да', option: 0 }),
+    ).toEqual({ status: 'answered', pendingId });
+    expect((await unitMessages(pendingId)).length).toBe(1);
+
+    // Другой ответ молча не схлопывается (С5): владелец обязан увидеть, что применилось
+    expect(await callerLater().routine.answerQuestion({ pendingId, answer: 'Нет' })).toEqual({
+      status: 'already',
+      answer: 'Да',
+    });
+    expect((await unitMessages(pendingId)).length).toBe(1);
+  });
+
+  test('ответ на ПОГАШЕННЫЙ вопрос → stale, записи нет (В2)', async () => {
+    const { routineId, runId } = await batchRun('Гашение');
+    const pendingId = await askUnit(routineId, runId, 'Продлевать ли подписку?');
+    // Гасит новый прогон рутины — штатный путь V1.8/ОЧ.8
+    await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-18T07:00',
+      startedAt: new Date(T0.getTime() + 24 * 3600_000),
+    });
+    await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newId() });
+
+    expect(await callerLater().routine.answerQuestion({ pendingId, answer: 'Да' })).toEqual({
+      status: 'stale',
+    });
+    const messages = await unitMessages(pendingId);
+    expect(messages.length).toBe(1);
+    expect((messages[0]?.metadata as { type?: string }).type).toBe('question_stale');
+  });
+
+  test('option вне фактических вариантов единицы → VALIDATION, ответ НЕ записан (Р3-3)', async () => {
+    const { routineId, runId } = await batchRun('Варианты');
+    const withOptions = await askUnit(routineId, runId, 'Какой подрядчик?', ['Первый', 'Второй']);
+    const free = await askUnit(routineId, runId, 'Что написать в ответе?');
+
+    const outOfRange = await trpcError(
+      callerLater().routine.answerQuestion({ pendingId: withOptions, answer: 'Третий', option: 2 }),
+    );
+    expect(outOfRange.code).toBe('BAD_REQUEST');
+    expect(await unitMessages(withOptions)).toEqual([]);
+
+    const noOptions = await trpcError(
+      callerLater().routine.answerQuestion({ pendingId: free, answer: 'Да', option: 0 }),
+    );
+    expect(noOptions.code).toBe('BAD_REQUEST');
+    expect(await unitMessages(free)).toEqual([]);
+
+    // Свободный ответ без индекса на том же вопросе проходит
+    expect(
+      (await callerLater().routine.answerQuestion({ pendingId: free, answer: 'Да' })).status,
+    ).toBe('answered');
+  });
+
+  test('несуществующий вопрос → NOT_FOUND (чужой и несуществующий под RLS неразличимы)', async () => {
+    const err = await trpcError(
+      caller().routine.answerQuestion({ pendingId: newId(), answer: 'Да' }),
+    );
+    expect(err.code).toBe('NOT_FOUND');
+  });
+
+  test('answerQuestion на отложенном ДЕЙСТВИИ → структурный отказ (гейт рода, С7); с `option` первым говорит тот же гейт, а не сверка вариантов', async () => {
+    const { routineId, runId } = await batchRun('Не вопрос');
+    const { pendingId } = await deferUnit(routineId, runId, 'Договор аренды');
+    const err = await trpcError(callerLater().routine.answerQuestion({ pendingId, answer: 'Да' }));
+    expect(err.code).toBe('BAD_REQUEST');
+    expect(err.message).toContain('это действие');
+    // У действия вариантов нет по схеме записи, и сверка Р3-3 сказала бы «у вопроса нет
+    // варианта №1» — про вопрос, которого здесь не было. Род записи объявляется первым
+    const withOption = await trpcError(
+      callerLater().routine.answerQuestion({ pendingId, answer: 'Да', option: 0 }),
+    );
+    expect(withOption.message).toContain('это действие');
+    expect(await unitMessages(pendingId)).toEqual([]);
+  });
+});
+
+describe('бухгалтерия флажка пачки (§9.6, приёмка 18)', () => {
+  test('пока открытая единица есть — флажок стоит; после решения ПОСЛЕДНЕЙ он снят патчем source=system, и «отмени последнее» после «Принять» отменяет ПРИМЕНЁННОЕ действие, а не патч флажка', async () => {
+    const { routineId, runId } = await batchRun('Флажок');
+    const questionId = await askUnit(routineId, runId, 'Успеем к пятнице?');
+    const { pendingId, targetId } = await deferUnit(routineId, runId, 'Отчёт за июль');
+
+    // Первое решение пачку не разбирает: вопрос ещё открыт
+    await callerLater().routine.answerQuestion({ pendingId: questionId, answer: 'Успеем' });
+    expect(await undecidedOf(runId)).toBe(true);
+
+    const applied = await callerLater().routine.decideDeferred({ pendingId, decision: 'approve' });
+    expect(applied.status).toBe('applied');
+    if (applied.status !== 'applied') throw new Error('не applied');
+    expect(await undecidedOf(runId)).toBe(false);
+
+    // Патч флажка — `system` (§9.6): иначе «отмени последнее» снимало бы его вместо действия
+    const flag = await flagPatches(runId);
+    expect(flag.length).toBe(1);
+    expect(flag[0]?.source).toBe('system');
+    expect(flag[0]?.actor_kind).toBe('ai');
+
+    const undone = await undoLast(db, { actorUserId: owner });
+    expect(undone.ok).toBe(true);
+    // Отменено ПРИМЕНЁННОЕ действие: запись снова жива, а флажок остался снятым
+    expect(await isArchived(targetId)).toBe(false);
+    expect(await undecidedOf(runId)).toBe(false);
+
+    // Повторное нажатие второго патча не пишет: снимать нечего, а лишнее действие журнала
+    // на каждый клик — это шум в ленте владельца
+    await callerLater().routine.decideDeferred({ pendingId, decision: 'approve' });
+    expect(await flagPatches(runId)).toHaveLength(1);
+  });
+
+  test('единицы АРХИВНОГО прогона решаются, и флажок с него снимается: адресация по pendingId обходит `NOT archived` чтения прогона (Р-17)', async () => {
+    const { routineId, runId } = await batchRun('Архивный прогон');
+    const { pendingId, targetId } = await deferUnit(routineId, runId, 'Список покупок');
+    await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool: 'entity_update', input: { id: runId, archived: true } }],
+    });
+    expect(await isArchived(runId)).toBe(true);
+
+    const applied = await callerLater().routine.decideDeferred({ pendingId, decision: 'approve' });
+    expect(applied.status).toBe('applied');
+    expect(await isArchived(targetId)).toBe(true);
+    // Р-17 оказался мягче, чем ждал план: `NOT archived` стоит на ЧТЕНИИ прогона
+    // (`runById`), а правку архивной записи executor не запрещает — процедуры единиц не
+    // читают прогон вовсе, и бухгалтерия доводится до конца даже по откаченному прогону
+    expect(await undecidedOf(runId)).toBe(false);
+    // И пачка архивного прогона по-прежнему читается: `runUnits` тоже не ходит через runById
+    expect((await caller().routine.runUnits({ runId })).map((u) => u.fate)).toEqual(['approved']);
+  });
+});
+
+describe('routine.runUnits', () => {
+  test('единицы прогона с судьбами и карточками, в порядке постановки; предложение прогона в списке НЕТ (Б5)', async () => {
+    const { routineId, runId } = await batchRun('Список пачки');
+    const questionId = await askUnit(routineId, runId, 'Какой вариант?', ['А', 'Б']);
+    const { pendingId, targetId } = await deferUnit(routineId, runId, 'Акт сверки');
+    // Предложение того же прогона — под тем же run_id, но без `kind`
+    const proposalId = pendingMessageId(owner, `proposal:${runId}`);
+    await withIdentity(db, owner, async (tx) =>
+      createPending(tx, {
+        threadId: await ensureEntityThread(tx, owner, routineId),
+        actor: { userId: owner, kind: 'ai', source: 'routine', runId },
+        tool: 'batch_execute',
+        input: { batch_id: proposalId, operations: [] },
+        level: 'explicit-confirmation',
+        dedupeKey: `proposal:${runId}`,
+        clock: () => T0,
+        content: 'Предложение рутины: 1 правка',
+        summary: '1 правка',
+        card: {
+          kind: 'proposal_card',
+          pendingId: proposalId,
+          runId,
+          routineId,
+          summary: '1 правка',
+          explanation: EXPLANATION,
+        },
+      }),
+    );
+
+    await callerLater().routine.answerQuestion({ pendingId: questionId, answer: 'А', option: 0 });
+    const units = await caller().routine.runUnits({ runId });
+    expect(units.map((u) => u.pendingId)).toEqual([questionId, pendingId]);
+    expect(units[0]).toMatchObject({
+      kind: 'question',
+      question: 'Какой вариант?',
+      options: ['А', 'Б'],
+      fate: 'answered',
+      answer: 'А',
+      card: { kind: 'question_card', pendingId: questionId, runId, routineId },
+    });
+    expect(units[1]).toMatchObject({
+      kind: 'action',
+      tool: 'entity_update',
+      fate: 'open',
+      card: {
+        kind: 'deferred_action_card',
+        pendingId,
+        summary: 'Архивация: «Акт сверки»',
+        rows: [{ field: 'archived', before: 'false', after: 'true' }],
+      },
+    });
+    expect((units[1]?.input as { id?: string }).id).toBe(targetId);
+  });
+
+  test('у прогона без единиц — пустой список, а не отказ', async () => {
+    const { runId } = await batchRun('Пустая пачка');
+    expect(await caller().routine.runUnits({ runId })).toEqual([]);
   });
 });

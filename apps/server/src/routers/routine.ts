@@ -1,13 +1,14 @@
 // apps/server/src/routers/routine.ts
 // Роутер routine (§9.1, V1) — владельческая половина внутреннего исполнителя: «прогнать
 // сейчас» (V1.3), ответ на вопрос прогона (V1.9), чтение предложения и решение по нему
-// (V1.6, V1.7), обзор для экрана рутины (V1.14).
+// (V1.6, V1.7), обзор для экрана рутины (V1.14) и ПАЧКА РЕШЕНИЙ прогона — единицы,
+// отложенные фоном, с решением по каждой поштучно (D42 §6).
 //
 // ТОЛЬКО трансляция: правила живут в routines/lifecycle.ts (решения владельца), в
 // routines/schedule.ts (календарь) и в routines/runner.ts (цикл модели) — здесь разбор
 // входа, подстановка identity и перевод доменных отказов в TRPCError.
 //
-// Все шесть — ownerOnly, и это не осторожность: рутина — доверенность, выданная владельцем,
+// Все девять — ownerOnly, и это не осторожность: рутина — доверенность, выданная владельцем,
 // и все решения по ней (запустить, ответить, принять план) принимает он сам. Внутреннему
 // исполнителю сюда хода нет по построению — его поверхность это глаголы и `orbis_propose`,
 // а инвариант запрета по объекту (V1.10) закрывает ему и обходной путь через граф.
@@ -18,11 +19,15 @@ import { routineById, runSummary, runsOfParent } from '../agent-loop/queries';
 import { defaultAiDeps } from '../ai/send-message';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, execErrorToTRPC } from '../errors';
+import { type AnswerQuestionResult, listRunUnits, type RunUnit } from '../policy/pending';
 import { ownerTimeZone } from '../query/context';
 import { editsSchema } from '../routines/edits';
 import {
   answerRoutineCheckpoint,
+  answerRunQuestion,
+  type DecideDeferredResult,
   type DecideProposalResult,
+  decideDeferredUnit,
   decideProposal,
   openProposalsForEntity,
   type ProposalView,
@@ -248,6 +253,98 @@ export const routineRouter = router({
           edits: input.edits,
         });
       } catch (e) {
+        if (e instanceof ExecError) throw execErrorToTRPC(e);
+        throw e;
+      }
+    }),
+
+  /**
+   * Решение владельца по ЕДИНИЦЕ пачки (D42 §6; приёмки 3, 4, 10). Как и у предложения,
+   * устаревшее и уже решённое едут ЗНАЧЕНИЕМ: экран рисует по ним расхождения и подпись
+   * судьбы, а не плашку ошибки.
+   *
+   * Адрес — только `pendingId`, без прогона: единицы решаются поштучно (ОЧ.3), а прогон
+   * читается сервером из самой записи. Второй ключ здесь был бы не защитой, а поводом
+   * разойтись — карточка знает свой pendingId, и он один.
+   */
+  decideDeferred: ownerOnlyProcedure
+    .input(
+      z
+        .object({
+          pendingId: z.string().uuid(),
+          decision: z.enum(['approve', 'reject']),
+        })
+        .strict(),
+    )
+    .mutation(async ({ ctx, input }): Promise<DecideDeferredResult> => {
+      try {
+        return await decideDeferredUnit(writeDeps(ctx), {
+          ownerId: ctx.actorUserId,
+          pendingId: input.pendingId,
+          decision: input.decision,
+        });
+      } catch (e) {
+        if (e instanceof ExecError) throw execErrorToTRPC(e);
+        throw e;
+      }
+    }),
+
+  /**
+   * Ответ владельца на вопрос пачки (D42 §6, приёмка 5). Не то же, что `answerCheckpoint`:
+   * тот отвечает на ТЕРМИНАЛЬНЫЙ вопрос прогона (исход `checkpoint` на аспекте), а этот —
+   * на нетерминальный `orbis_ask`, который прогон задал по дороге и работал дальше.
+   *
+   * `option` — ИНДЕКС нажатой кнопки (0..3, потолок числа вариантов у `orbis_ask`); текст
+   * выбранного едет в `answer` тем же полем, что и свободный ответ. Диапазон здесь —
+   * только форма входа; сверку с вариантами САМОГО вопроса делает ядро (рулинг Р3-3).
+   */
+  answerQuestion: ownerOnlyProcedure
+    .input(
+      z
+        .object({
+          pendingId: z.string().uuid(),
+          answer: z.string().min(1).max(4000),
+          option: z.number().int().min(0).max(3).optional(),
+        })
+        .strict(),
+    )
+    .mutation(async ({ ctx, input }): Promise<AnswerQuestionResult> => {
+      try {
+        return await answerRunQuestion(writeDeps(ctx), {
+          ownerId: ctx.actorUserId,
+          pendingId: input.pendingId,
+          answer: input.answer,
+          ...(input.option !== undefined && { option: input.option }),
+        });
+      } catch (e) {
+        if (e instanceof ExecError) throw execErrorToTRPC(e);
+        throw e;
+      }
+    }),
+
+  /**
+   * Пачка решений прогона для его экрана (D42 §7): единицы с судьбами, в порядке
+   * постановки. Пустой список — обычный ответ, а не отсутствие: экран прогона открывается
+   * и у того, кто ничего не откладывал и ни о чём не спрашивал.
+   *
+   * Прогон через `runById` НЕ читается, как и в решениях (Р-17): тот стоит на
+   * `NOT archived`, и пачка откаченного прогона перестала бы показываться вовсе — вместе
+   * с судьбами, по которым владелец только и поймёт, что с ней стало.
+   *
+   * `withIdentity` здесь не плумбинг, а КОНТРАКТ `listRunUnits`: транзакция обязана быть
+   * открыта для ТОГО ЖЕ владельца, иначе судьбы молча не найдутся и вся пачка прочитается
+   * открытой (её докблок). Тот же приём, что у `runNow` и `overview` ниже.
+   */
+  runUnits: ownerOnlyProcedure
+    .input(runIdInput)
+    .query(async ({ ctx, input }): Promise<RunUnit[]> => {
+      try {
+        return await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
+          listRunUnits(tx, ctx.actorUserId, input.runId),
+        );
+      } catch (e) {
+        // Чтение пачки fail-closed: повреждённая запись роняет ВЕСЬ список (её докблок), и
+        // без перевода владелец получил бы 500 вместо внятного «запись повреждена»
         if (e instanceof ExecError) throw execErrorToTRPC(e);
         throw e;
       }

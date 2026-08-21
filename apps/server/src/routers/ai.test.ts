@@ -5,12 +5,13 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { WireEntity } from '../executor/types';
+import { createPending } from '../policy/pending';
 import { appRouter } from '../router';
 import { dispatchTool } from '../tools/dispatch';
 import { type Context, createCallerFactory } from '../trpc';
@@ -143,5 +144,55 @@ describe('ai.approve / ai.reject: полный цикл против живой 
 
     const foreign = await trpcError(callerFor(userB).ai.reject({ pendingId }));
     expect(foreign.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('ai.approve / ai.reject: гейт рода записи (D42 ОЧ.2, С7)', () => {
+  /**
+   * Вопрос пачки в ленте владельца. Собирается `createPending` напрямую, а не диспатчем
+   * рутины: этому сьюту нужен РОД записи, а не путь её постановки, и живая рутина с
+   * прогоном ради одного поля `kind` была бы фикстурой втрое дороже проверяемого.
+   */
+  async function seedQuestion(question: string): Promise<string> {
+    return withIdentity(db, userA, async (tx) => {
+      const created = await createPending(tx, {
+        actor: { userId: userA, kind: 'ai', source: 'routine', runId: newId() },
+        kind: 'question',
+        question,
+        level: 'explicit-confirmation',
+        dedupeKey: `ask-test:${question}`,
+      });
+      return created.pendingId;
+    });
+  }
+
+  test('вопрос принять/отклонить нельзя: структурный VALIDATION гейта, судьбы в ленте не появилось', async () => {
+    const pendingId = await seedQuestion('Переносить ли встречу?');
+    const caller = callerFor(userA);
+
+    for (const call of [
+      () => caller.ai.approve({ pendingId }),
+      () => caller.ai.reject({ pendingId }),
+    ]) {
+      const err = await trpcError(call());
+      expect(err.code).toBe('BAD_REQUEST'); // VALIDATION маппингом errors.ts
+      expect(err.message).toContain('это вопрос');
+    }
+
+    // Гейт стоит ДО записи: чужая судьба вопросу не досталась ни одной строкой
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.execute(
+        sql`SELECT id FROM chat_messages
+            WHERE metadata @> ${JSON.stringify({ rejects: pendingId })}::jsonb`,
+      ),
+    );
+    expect([...(rows as unknown as unknown[])]).toEqual([]);
+  });
+
+  test('чатовый pending без `kind` читается как действие — прежнее поведение approve не изменилось', async () => {
+    const { target, pendingId } = await seedPendingArchive();
+    const r = await callerFor(userA).ai.approve({ pendingId });
+    expect(r.ok).toBe(true);
+    expect(await archivedOf(target.id)).toBe(true);
   });
 });

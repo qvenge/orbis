@@ -56,7 +56,9 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
 import type { LLMProvider } from '../llm/types';
 import {
+  type AnswerQuestionResult,
   acquirePendingLock,
+  answerPendingQuestion,
   approvePending,
   createPending,
   listRunUnits,
@@ -2061,6 +2063,317 @@ async function settleProposal(
   }
   const status = await currentStatus(deps.db, args.ownerId, args.runId);
   return { written: false, proposalStatus: status ?? args.proposal.status };
+}
+
+// ---------------------------------------------------------------------------
+// Пачка решений (D42 §6): владелец решает единицы прогона ПОШТУЧНО.
+//
+// Соседство с предложением не случайно и не «по теме»: у решений по единице и по
+// предложению ОДНИ И ТЕ ЖЕ рёбра — тот же `approvePending` (он же ревалидация полным
+// конвейером), тот же разбор CONFLICT в расхождения, тот же append-only отказ. Разница
+// ровно в двух местах, и обе — предмет этого раздела: у единицы нет статуса на прогоне
+// (её судьбу целиком держит лента) и нет лестницы правки — зато есть ОБЩИЙ на всю пачку
+// флажок `undecided`, который снимает бухгалтерия после последнего решения.
+// ---------------------------------------------------------------------------
+
+/**
+ * Исход решения по единице пачки (§6). Форма родственна `DecideProposalResult` намеренно
+ * — экран решает единицу теми же двумя кнопками, — но `replaced` у неё нет: заменять
+ * единицу нечем (лестница правки живёт у предложения, §10.3), а `already` несёт СУДЬБУ
+ * единицы, а не статус предложения: у единицы статуса на прогоне не существует.
+ *
+ * `stale` — ЗНАЧЕНИЕ, а не исключение (рулинг Р-2, как у предложения): «состояние
+ * изменилось, вот что именно» — это ответ экрану, который он рисует списком расхождений.
+ */
+export type DecideDeferredResult =
+  | { status: 'applied'; actionId: string }
+  /** Предусловия единицы (ОЧ.13) разошлись с графом; карточка при этом уже погашена. */
+  | { status: 'stale'; mismatches: PreconditionMismatch[] }
+  | { status: 'rejected' }
+  /** Судьба у единицы уже есть — своя (повтор кнопки) или чужая (гашение, второй экран). */
+  | { status: 'already'; fate: RunUnit['fate'] };
+
+/**
+ * Тексты судеб, которые пишет РУКА ВЛАДЕЛЬЦА (С6 ревью спеки). Свои, а не `REJECT_CONTENT`
+ * из `policy/pending.ts` и не `UNIT_REJECT_CONTENT` гашения: тамошние строки писаны про
+ * предложение и про откат, и владелец, увидев «Предложение отклонено» на отложенной
+ * АРХИВАЦИИ, прочитал бы неправду. Причина при этом остаётся тем же enum'ом — текст
+ * только представление, и второго источника правды о судьбе он не заводит.
+ */
+const UNIT_REJECTED_BY_OWNER = 'Отложенное действие отклонено владельцем';
+const UNIT_STALE_BY_STATE = 'Отложенное действие устарело: состояние изменилось';
+
+/**
+ * Решение владельца по ОДНОЙ единице пачки (§6, приёмки 3, 4, 10).
+ *
+ * Адрес — `pendingId`, и прогон через `runById` НЕ читается (Р-17): тот стоит на
+ * `NOT archived`, а прогон уезжает в архив от отката — решения по единицам такого прогона
+ * упирались бы в NOT_FOUND, хотя решать их владельцу никто не запрещал.
+ *
+ * «Принять» — `approvePending`: сохранённый payload исполняется полным конвейером (он же
+ * ревалидация §7.10) с атрибуцией самой записи — `source:'routine'` + `run_id` (§9.5).
+ * Атрибуция здесь не деталь: по ней действие находят журнал §7.8, «отмени последнее» и
+ * откат прогона (rollback.ts), и без неё принятая единица была бы работой ниоткуда.
+ * Идемпотентность — существующий replay по `batchId = pendingId`: двойной клик даёт тот же
+ * `actionId` и ОДНУ запись в журнале (приёмка 10).
+ *
+ * «Отклонить» — `rejectPending` с причиной `owner` и СВОИМ текстом единицы; повтор
+ * возвращает исходную причину (append-only, §4.6) и маппится в `already`.
+ */
+export async function decideDeferredUnit(
+  deps: RoutineWriteDeps,
+  args: { ownerId: string; pendingId: string; decision: 'approve' | 'reject' },
+): Promise<DecideDeferredResult> {
+  const { ownerId, pendingId } = args;
+  const unit = await withIdentity(deps.db, ownerId, (tx) => unitRecord(tx, pendingId));
+  // Чужая и несуществующая под RLS неразличимы — единый NOT_FOUND, как у approve/reject
+  if (unit === null) {
+    throw new ExecError('NOT_FOUND', `единица пачки ${pendingId} не найдена`, { pendingId });
+  }
+  // Fail-closed по РОДУ носителя (Б5, приёмка 19): pending без `kind` — это чатовое
+  // подтверждение или ПРЕДЛОЖЕНИЕ рутины, а у предложения есть свой путь со статусом на
+  // прогоне (`decideProposal`). Применив его отсюда, мы исполнили бы план, о судьбе
+  // которого прогон продолжал бы говорить «ждёт решения».
+  if (unit.kind === undefined || unit.runId === undefined) {
+    throw new ExecError('VALIDATION', 'это не единица пачки — решать её здесь нечем', {
+      pendingId,
+    });
+  }
+  const runId = unit.runId;
+
+  // Вопрос сюда доезжает до самой policy НАРОЧНО: гейт рода (`assertNotQuestion`) —
+  // единственный источник этого отказа (С7), и второй его текст здесь разъехался бы с
+  // тем, что видит чатовый путь `ai.approve`. Цена — один лишний запрос на заведомом
+  // отказе; за неё берётся то, что ветка `already` ниже вопросам не достаётся: судьба
+  // `answered` не превратит «на вопрос отвечают» в «уже решено».
+  const decided =
+    args.decision === 'approve'
+      ? await approveUnit(deps, { ownerId, pendingId, runId, isAction: unit.kind === 'action' })
+      : await rejectUnit(deps, { ownerId, pendingId, runId, isAction: unit.kind === 'action' });
+
+  // Бухгалтерия — после ЛЮБОГО состоявшегося решения, включая `already` (§5, лестница
+  // сбоев): «Принять» исполнилось, а снятие флажка упало — чинится следующим решением или
+  // гашением, и повторное нажатие кнопки как раз и есть этот следующий раз.
+  await settleUndecided(deps, ownerId, runId);
+  return decided;
+}
+
+/** «Принять» единицу: исполнение сохранённого payload'а и разбор трёх исходов конвейера. */
+async function approveUnit(
+  deps: RoutineWriteDeps,
+  args: { ownerId: string; pendingId: string; runId: string; isAction: boolean },
+): Promise<DecideDeferredResult> {
+  const { ownerId, pendingId } = args;
+  const applied = await approvePending(deps.db, { ownerId, pendingId, clock: deps.clock });
+  if (applied.ok) return { status: 'applied', actionId: applied.actionId };
+
+  const mismatches = preconditionMismatches(applied.error) ?? bodyMismatch(applied.error);
+  if (mismatches === null) {
+    // Не «устарело». Часть таких отказов означает не сбой, а ЧУЖОЙ ХОД: единицу успели
+    // отклонить (гашение новым прогоном, второй экран) между чтением и approve. Отличаем
+    // по факту, а не по тексту: если у единицы с тех пор есть судьба, это `already`.
+    const fate = await unitFate(deps, args);
+    if (fate !== undefined && fate !== 'open') return { status: 'already', fate };
+    throw toExecError(applied.error);
+  }
+
+  // Устарело НАВСЕГДА: предусловия единицы снимаются при постановке и не переснимаются
+  // (§9.4, ОЧ.13), так что применимой она уже не станет. Поэтому карточка гасится, как у
+  // предложения, — оставить её открытой значило бы обещать владельцу кнопку, которая не
+  // сработает ни сегодня, ни завтра, и держать этим весь флажок пачки.
+  const rejected = await rejectPending(deps.db, {
+    ownerId,
+    pendingId,
+    reason: 'stale',
+    text: UNIT_STALE_BY_STATE,
+  });
+  if (!rejected.ok) {
+    // Гашение не удалось — применимее единица от этого не стала: расхождения владелец
+    // получит, а неудачу логируем (следующее решение или гашение допишут судьбу)
+    console.error(`[routines] устаревшая единица ${pendingId} не погашена:`, rejected.error.code);
+  } else if (rejected.alreadyRejected && rejected.reason !== 'stale') {
+    // Пока мы ревалидировали, единицу снял кто-то другой — его решение старше нашего
+    return { status: 'already', fate: 'rejected' };
+  }
+  return { status: 'stale', mismatches };
+}
+
+/** «Отклонить» единицу: append-отказ своим текстом, граф не тронут. */
+async function rejectUnit(
+  deps: RoutineWriteDeps,
+  args: { ownerId: string; pendingId: string; runId: string; isAction: boolean },
+): Promise<DecideDeferredResult> {
+  const { ownerId, pendingId } = args;
+  const rejected = await rejectPending(deps.db, {
+    ownerId,
+    pendingId,
+    reason: 'owner',
+    text: UNIT_REJECTED_BY_OWNER,
+  });
+  if (!rejected.ok) {
+    // «Уже исполнено» приезжает сюда отказом (VALIDATION) — для владельца, нажавшего
+    // «Отклонить» на применённой единице, это не сбой, а «поздно»
+    const fate = await unitFate(deps, args);
+    if (fate !== undefined && fate !== 'open') return { status: 'already', fate };
+    throw toExecError(rejected.error);
+  }
+  // Повтор своей же кнопки и чужая причина отвечают одинаково: судьба уже записана, и
+  // переписывать её нечем (журнал append-only). ЧЬЯ она — читается пачкой (`reason`).
+  return rejected.alreadyRejected
+    ? { status: 'already', fate: 'rejected' }
+    : { status: 'rejected' };
+}
+
+/**
+ * Ответ владельца на вопрос пачки (§6, приёмка 5).
+ *
+ * Тело — `answerPendingQuestion` (замок, перечитка обеих судеб, append-only запись, ОЧ.8);
+ * здесь к нему добавлены две вещи, которых политике знать неоткуда: сверка `option` с
+ * фактическими вариантами единицы и та же бухгалтерия флажка, что у решения по действию.
+ */
+export async function answerRunQuestion(
+  deps: RoutineWriteDeps,
+  args: { ownerId: string; pendingId: string; answer: string; option?: number },
+): Promise<AnswerQuestionResult> {
+  const { ownerId, pendingId } = args;
+  const unit = await withIdentity(deps.db, ownerId, (tx) => unitRecord(tx, pendingId));
+  // `null` и «не вопрос» не отвергаются здесь: NOT_FOUND и гейт рода — дело
+  // `answerPendingQuestion`, и второй их текст разъехался бы с первым
+  if (unit !== null && unit.kind === 'question' && args.option !== undefined) {
+    assertOption(pendingId, args.option, unit.options);
+  }
+  const answered = await answerPendingQuestion(deps.db, {
+    ownerId,
+    pendingId,
+    answer: args.answer,
+    ...(args.option !== undefined && { option: args.option }),
+  });
+  if (unit?.runId !== undefined) await settleUndecided(deps, ownerId, unit.runId);
+  return answered;
+}
+
+/**
+ * Сверка индекса варианта с САМОЙ ЕДИНИЦЕЙ (рулинг Р3-3). Границу держит этот слой, а не
+ * `answerPendingQuestion`: там на руках только вход клиента, а здесь ещё и запись — то
+ * есть фактические варианты, которые владелец видел кнопками.
+ *
+ * Почему это не косметика: `option` уезжает в append-only metadata НАВСЕГДА (§4.6), и
+ * `option:42` у вопроса с двумя кнопками не исправить уже ничем — ни правкой, ни повтором
+ * ответа. Схема входа роутера ловит только диапазон 0..3 (потолок числа вариантов вообще),
+ * а «столько ли их у ЭТОГО вопроса» знает только запись.
+ *
+ * Текст ответа с вариантом не сверяется намеренно: владелец вправе прислать свою
+ * формулировку выбранного (веб отправляет `options[i]`, MCP-клиент — что угодно), и
+ * равенство строк сделало бы контракт хрупким там, где он ничего не защищает — читатели
+ * пачки берут ТЕКСТ, индекс им не нужен вовсе (`listRunUnits`).
+ */
+function assertOption(pendingId: string, option: number, options?: string[]): void {
+  if (options === undefined || option >= options.length) {
+    throw new ExecError(
+      'VALIDATION',
+      `у вопроса нет варианта №${option + 1}: их ${options?.length ?? 0}`,
+      { pendingId, option, options: options?.length ?? 0 },
+    );
+  }
+}
+
+/**
+ * Бухгалтерия пачки: разобранный прогон перестаёт числиться неразобранным (§9.6, ОЧ.6).
+ *
+ * Форма патча — ровно та же, что у гашения (`closeOpenOfRun`): ЗАПИСЬ `false`, а не
+ * удаление ключа (предиката «поля нет» у грамматики §6 не существует, и запросом
+ * разобранную пачку иначе не отличить от неразобранной), актор — `{ai, system}` со ссылкой
+ * на прогон. Системный источник здесь — инвариант, а не стиль: пиши мы флажок от владельца,
+ * «отмени последнее» после «Принять» сняло бы ФЛАЖОК вместо применённого действия
+ * (`undoLast` пропускает `system`), то есть приёмка 18 ломалась бы молча.
+ *
+ * Порядок проверок — от дешёвой к дорогой, и это не только про скорость: флажок читается
+ * с прогона одним индексным SELECT по PK, а список единиц — containment-пробой (под RLS
+ * это Seq Scan, см. докблок `routineHistory`). Прогон БЕЗ флажка — самый частый случай на
+ * этом пути (живой прогон флажка ещё не имеет, разобранный — уже), и платить за него
+ * пробой ленты незачем. Заодно это правило «не пишем `false` тому, у кого нечего снимать»:
+ * лишний патч был бы лишним действием журнала на каждое повторное нажатие кнопки.
+ *
+ * Ничего не бросает: флажок — величина производная, и его неснятие не повод отменять
+ * состоявшееся решение владельца. Не сняли сейчас — снимет следующее решение или гашение
+ * (лестница §5).
+ *
+ * АРХИВНЫЙ прогон патчится наравне с живым, и это проверено, а не предположено: `NOT
+ * archived` стоит на ЧТЕНИИ прогона (`runById`), из-за которого решения по `pendingId` его
+ * и не читают (Р-17), а правку архивной записи executor не запрещает. То есть пачка
+ * откаченного прогона доразбирается до конца — включая флажок.
+ */
+async function settleUndecided(
+  deps: RoutineWriteDeps,
+  ownerId: string,
+  runId: string,
+): Promise<void> {
+  try {
+    const row = await withIdentity(deps.db, ownerId, (tx) => runRowAnyArchive(tx, runId));
+    if (row?.run.undecided !== true) return;
+    const units = await withIdentity(deps.db, ownerId, (tx) => listRunUnits(tx, ownerId, runId));
+    if (units.some((u) => u.fate === 'open')) return;
+    const patched = await patchAspect(deps, {
+      ownerId,
+      id: runId,
+      aspect: 'orbis/agent-run',
+      patch: { undecided: false },
+      actor: { ...ACCOUNTING_ACTOR, runId },
+    });
+    if (!patched.ok) {
+      console.error(`[routines] флажок пачки не снят с ${runId}:`, patched.error.code);
+    }
+  } catch (e) {
+    console.error(`[routines] пачка прогона ${runId} не сверена:`, e);
+  }
+}
+
+/** Судьба ОДНОЙ единицы — перечитывается после проигранной гонки (образец `currentStatus`). */
+async function unitFate(
+  deps: RoutineWriteDeps,
+  args: { ownerId: string; pendingId: string; runId: string; isAction: boolean },
+): Promise<RunUnit['fate'] | undefined> {
+  // Вопросу перечитка не положена: его отказ — это гейт рода (С7), а не проигранная
+  // гонка, и «уже отвечен» на approve означало бы «решено», хотя решать так нельзя вовсе
+  if (!args.isAction) return undefined;
+  const units = await withIdentity(deps.db, args.ownerId, (tx) =>
+    listRunUnits(tx, args.ownerId, args.runId),
+  );
+  return units.find((u) => u.pendingId === args.pendingId)?.fate;
+}
+
+/** Единица пачки в объёме, который нужен решениям: род, прогон и варианты ответа. */
+interface UnitRecord {
+  /** Явный род (ОЧ.2); `undefined` — запись не единица (чат, предложение рутины). */
+  kind?: 'question' | 'action';
+  runId?: string;
+  options?: string[];
+}
+
+/**
+ * Носитель единицы из ленты — проба containment'ом по `pending.id`, та же, что у
+ * `storedProposal` и `findPendingMessage`. Читается СЫРОЙ формой, а не схемой
+ * `pendingRecord` (она приватна в policy): решениям нужны три поля, а полный разбор —
+ * дело тех, кто пишет судьбу, и он уже стоит внутри `approvePending`/`rejectPending`.
+ *
+ * `null` — записи не видно: её нет либо она чужая (RLS скоупит ленту владельцем).
+ */
+async function unitRecord(tx: Tx, pendingId: string): Promise<UnitRecord | null> {
+  const probe = JSON.stringify({ pending: { id: pendingId } });
+  const rows = await tx.execute(
+    sql`SELECT metadata FROM chat_messages WHERE metadata @> ${probe}::jsonb LIMIT 1`,
+  );
+  const row = (rows as unknown as Array<Record<string, unknown>>)[0];
+  if (row === undefined) return null;
+  const pending = (row.metadata as { pending?: Record<string, unknown> }).pending ?? {};
+  const kind = pending.kind;
+  const runId = pending.run_id;
+  const options = pending.options;
+  return {
+    ...(kind === 'question' || kind === 'action' ? { kind } : {}),
+    ...(typeof runId === 'string' && { runId }),
+    ...(Array.isArray(options) && { options: options.filter((o) => typeof o === 'string') }),
+  };
 }
 
 /**
