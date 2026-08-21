@@ -276,7 +276,7 @@ export async function execute(
 
     const actionId = newId();
     return await withIdentity(db, req.actorUserId, async (tx) => {
-      // Шов сериализации §7.10 — первым statement'ом tx (см. ExecutorDeps.beforeStages)
+      // Шов сериализации §7.10 — до первого чтения состояния (см. ExecutorDeps.beforeStages)
       if (deps.beforeStages) await deps.beforeStages(tx);
       // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
       await lockBudgetContour(tx, req.actorUserId, [single]);
@@ -376,7 +376,7 @@ async function executeBatch(
 
   try {
     return await withIdentity(db, req.actorUserId, async (tx) => {
-      // Шов сериализации §7.10 — первым statement'ом tx, ДО replay-проверки и стадий
+      // Шов сериализации §7.10 — до первого чтения состояния, ДО replay-проверки и стадий
       // (см. ExecutorDeps.beforeStages): конкурентный reject либо закоммичен (проверка
       // beforeStages его увидит), либо ждёт этот tx и увидит audit-сообщение
       if (beforeStages) await beforeStages(tx);

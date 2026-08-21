@@ -367,8 +367,11 @@ function toOperations(pending: PendingRecord): Array<{ tool: string; input: unkn
  *
  * Сериализация против reject (fix round): проверка (2) в отдельном tx — лишь
  * fast-path; авторитетная перепроверка «не отклонён» выполняется ПОД advisory-lock'ом
- * по pendingId ПЕРВЫМ statement'ом audit-tx executor'а (beforeStages) — В ТОМ ЖЕ tx,
- * где пишется audit-сообщение. Конкурентный reject держит тот же замок: он либо
+ * по pendingId, взятым ДО ПЕРВОГО ЧТЕНИЯ СОСТОЯНИЯ в audit-tx executor'а (beforeStages) —
+ * В ТОМ ЖЕ tx, где пишется audit-сообщение. Именно «до первого чтения», а не «первым
+ * statement'ом»: два первых statement'а любого такого tx ставит сам `withIdentity`
+ * (set_config + SET LOCAL ROLE), и буквальная формулировка не выполнялась бы НИКОГДА —
+ * ни здесь, ни у reject'а. Точный контракт и цена ошибки — в доке `acquirePendingLock`. Конкурентный reject держит тот же замок: он либо
  * закоммитился ДО захвата (перепроверка увидит reject-сообщение свежим snapshot'ом
  * READ COMMITTED → «отклонено», ни одной записи), либо ждёт наш commit и увидит
  * audit-сообщение → «уже исполнено». Write-skew исключён; закреплено гонным тестом.

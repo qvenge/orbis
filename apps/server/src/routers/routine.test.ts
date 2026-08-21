@@ -477,21 +477,15 @@ async function plannedProposed(title: string, routineId?: string): Promise<Plann
 async function proposedOps(
   title: string,
   operations: Array<{ tool: string; input: Record<string, unknown> }>,
-  // Часы прогона: через них задаётся `created_at` pending-сообщения (`propose.ts` отдаёт
-  // `ctx.clock` в `createPending`) — единственный способ развести два предложения во
-  // времени, когда проверяется ПОРЯДОК ответа
-  clock: () => Date = () => T0,
 ): Promise<{ routineId: string; runId: string; pendingId: string }> {
   const routineId = await seedRoutine(owner, { title: `Рутина: ${title}` });
-  // Бакет ручного прогона — из ТЕХ ЖЕ часов: id прогона детерминирован бакетом, и взять
-  // его из замороженного T0 при других часах значило бы разойтись с тем, что заведёт runNow
-  const runId = routineRunId(routineId, manualBucket(clock().toISOString()), 1);
+  const runId = routineRunId(routineId, MANUAL_BUCKET, 1);
   const provider = new ScriptedProvider([
     toolUse([
       { name: 'orbis_propose', input: { run_id: runId, explanation: EXPLANATION, operations } },
     ]),
   ]);
-  await callerWith(provider, { clock }).routine.runNow({ routineId });
+  await callerWith(provider).routine.runNow({ routineId });
   const aspect = await waitClosed(runId);
   expect(aspect.outcome).toBe('finished');
   const pendingId = aspect.proposal?.pending_id;
@@ -1516,19 +1510,21 @@ describe('routine.proposal: дифф тела предложения', () => {
 describe('routine.proposalsForEntity', () => {
   test('две рутины с открытыми предложениями по одной записи → обе В ПОРЯДКЕ ленты, решение по каждому своё (приёмка 18)', async () => {
     const taskId = await seedTask('Собрать документы');
-    // Часы разведены НАМЕРЕННО: у обоих предложений иначе один и тот же `created_at`
-    // (часы прогона заморожены на T0), и порядок ответа проверить было бы нечем
+    // Порядок ответа держится на КОЛОНКЕ `created_at` сообщения, а её ставит `defaultNow()`
+    // — настоящими часами БД, которые прогону не подчиняются. Замер на этом тесте: 04:01:16.586
+    // и .746, то есть 160 мс разницы, тогда как `metadata.pending.created_at` у обоих
+    // одинаков. Развести предложения во времени часами прогона НЕЛЬЗЯ: `ctx.clock` доезжает
+    // только до метаданных, а сортировка их не читает вовсе (прежний комментарий здесь
+    // утверждал обратное и вёл за собой мёртвый параметр `clock` у `proposedOps`).
     const first = await proposedOps('первая по документам', [
       {
         tool: 'entity_update',
         input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
       },
     ]);
-    const second = await proposedOps(
-      'вторая по документам',
-      [{ tool: 'entity_update', input: { id: taskId, title: 'Собрать документы к пятнице' } }],
-      () => LATER,
-    );
+    const second = await proposedOps('вторая по документам', [
+      { tool: 'entity_update', input: { id: taskId, title: 'Собрать документы к пятнице' } },
+    ]);
 
     const both = await caller().routine.proposalsForEntity({ entityId: taskId });
     // Порядок — по времени сообщения, старшее первым: сравнение через sort() пропустило бы

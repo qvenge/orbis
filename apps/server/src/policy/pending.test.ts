@@ -341,8 +341,10 @@ describe('сериализация approve ∥ reject (fix round: write-skew з�
     // сущность заархивирована И «отклонение принято» одновременно (write-skew между
     // tx проверок approve и tx reject'а; окно длиной в конвейер executor'а).
     // После фикса оба пути сериализованы pg_advisory_xact_lock(hashtextextended(pendingId)):
-    // reject берёт замок первым statement'ом своего tx; approve — первым statement'ом
-    // audit-tx executor'а (beforeStages) с перепроверкой «не отклонён» под замком.
+    // и reject, и approve (через beforeStages audit-tx executor'а) берут замок ДО ПЕРВОГО
+    // ЧТЕНИЯ СОСТОЯНИЯ своего tx, а approve ещё и перепроверяет «не отклонён» под ним.
+    // «До первого чтения», а не «первым statement'ом»: два первых statement'а ставит сам
+    // withIdentity (set_config + SET LOCAL ROLE) — см. док acquirePendingLock.
     const iterations = 25;
     let bothOk = 0;
     for (let i = 0; i < iterations; i++) {
