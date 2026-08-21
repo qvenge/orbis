@@ -42,6 +42,7 @@ import {
 } from './constants';
 import { buildEditedOperations, editsHash, editsSchema, type ProposalEdits } from './edits';
 import {
+  answerRoutineCheckpoint,
   appendSystemNote,
   closeOpenOfRun,
   decideProposal,
@@ -580,6 +581,79 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
       }),
     ).toEqual({ proposal: false, question: false, units: 0 });
     expect(await clearingActions(runId)).toHaveLength(1);
+  });
+
+  test('предложение отклонил САМ владелец, а пачка открыта: «гасить нечего» обрывает только ветку предложения — единицы гасятся (мутация :303)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId, pendingId } = await seedProposal(routineId, '2026-08-16T12:00');
+    const defer = await deferUnit(routineId, runId, 'Отчёт, который прогон отложил');
+    // Окно V1.8: reject-строка владельца уже в ленте, а статус на прогоне ещё `pending` —
+    // `closeProposalOfRun` вернёт `null`, «решено ЧУЖОЙ причиной». Прежняя форма этого
+    // выхода уносила управление из ФУНКЦИИ целиком, и пачка висела бы на владельце вечно.
+    expect(await rejectPending(db, { ownerId: owner, pendingId, reason: 'owner' })).toMatchObject({
+      ok: true,
+      alreadyRejected: false,
+      reason: 'owner',
+    });
+
+    const out = await closeOpenOfRun(deps(), {
+      ownerId: owner,
+      routineId,
+      runId,
+      run: await runAspect(runId),
+      reason: 'superseded',
+      questionNote: SUPERSEDE_NOTE,
+    });
+    expect(out).toEqual({ proposal: false, question: false, units: 1 });
+
+    // Чужое решение не переписано ни в ленте, ни на прогоне
+    expect(await rejectReasonOf(pendingId)).toBe('owner');
+    expect((await proposalOf(runId)).status).toBe('pending');
+    // А единица пачки погашена своей причиной и своим текстом
+    expect(
+      (await ledgerRow({ type: 'confirmation_rejected', rejects: defer.pendingId }))?.content,
+    ).toBe('Отложенное действие снято новым прогоном');
+    expect((await unitsOf(runId)).every((u) => u.fate !== 'open')).toBe(true);
+  });
+
+  test('владелец ответил на терминальный вопрос, а пачка открыта: CONFLICT обрывает только ветку вопроса — единицы гасятся (мутация :350)', async () => {
+    const routineId = await seedRoutine(owner);
+    const { runId } = await seedRoutineRun(owner, {
+      routineId,
+      bucket: '2026-08-16T13:00',
+      run: {
+        outcome: 'checkpoint',
+        checkpoint: { question: 'Переносим ли релиз на неделю?', asked_at: T0.toISOString() },
+        finished_at: T0.toISOString(),
+      },
+    });
+    const question = await askUnit(routineId, runId, 'Кому отдать разбор писем?');
+    // Снимок прочитан ДО ответа — ровно та гонка, которую сторожит предусловие `outcome`:
+    // владелец ответил, пока мы читали, и терминальный вопрос гасить уже нельзя
+    const snapshot = await runAspect(runId);
+    await answerRoutineCheckpoint(deps(), { ownerId: owner, runId, answer: 'не переносим' });
+
+    const out = await closeOpenOfRun(deps(), {
+      ownerId: owner,
+      routineId,
+      runId,
+      run: snapshot,
+      reason: 'superseded',
+      questionNote: SUPERSEDE_NOTE,
+    });
+    expect(out).toEqual({ proposal: false, question: false, units: 1 });
+
+    // Ответ владельца цел: исход не переписан на `stale`, записи о снятии в треде нет
+    expect((await runAspect(runId)).outcome).toBe('answered');
+    expect(
+      (await threadRows(routineId)).some(
+        (r) => (r.metadata as { type?: string }).type === 'routine_stale',
+      ),
+    ).toBe(false);
+    // А единица пачки к терминальному вопросу отношения не имеет — она погашена
+    expect((await ledgerRow({ type: 'question_stale', stales: question }))?.content).toBe(
+      SUPERSEDE_NOTE,
+    );
   });
 
   test('решённые единицы гашением не тронуты: исполненная пропущена, чужая причина отказа не перезаписана; флажок снят по «открытых не осталось»', async () => {
