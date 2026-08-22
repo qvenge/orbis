@@ -85,6 +85,14 @@ Anytype (выбор AI-стека), Khoj (доставка рутины в ме�
 git-репозиторий), Honcho (примитив peer), Mem0/Supermemory (рынок памяти $50M+). Кладбище:
 Dot закрыт, Rewind закрыт, Limitless куплен Meta, Friend в «Museum of Failure», Reor мёртв.
 
+## Раунд 6 — 2026-08-22: codebase-memory-mcp
+
+Полный разбор — `reviews/2026-08-22-codebase-memory-mcp.md`.
+
+| Продукт | Ссылка | Что это | Что взято | Где лежит |
+|---|---|---|---|---|
+| codebase-memory-mcp | `github.com/DeusData/codebase-memory-mcp` | MCP-сервер: репозиторий → детерминированный граф кода (tree-sitter, SQLite, без LLM, 39.8k★, соло-мейнтейнер) с лучшей на рынке дисциплиной «честности про незнание» | шесть уточнений к Р2/швам 4–6 (surface-hash ≠ content-hash; decline-to-FULL; coverage перед негативным утверждением; три категории непокрытого; seeds-excluded радиус; revert — событие домена); MCP-дисциплины (профили тулов как allowlist процесса, эпистемический контракт в initialize, курсор привязан к поколению, урок fail-open-хука #858) — вторым входом в задачу «разбор MCP 2026-07-28»; НЕ берём: ADR-блоб, git-поллинг, runtime-зависимость (bus factor 1, OOM-баги, спорная экономия токенов #1129) | спека ADE, «Швы под будущее», дополнение 2026-08-22; ревалидация IV.3 п.10 |
+
 ## Методологический раунд — 2026-08-14: инструменты SDD
 
 GitHub Spec Kit, Kiro (AWS), OpenSpec, Tessl, fiberplane/drift — разобраны при независимом

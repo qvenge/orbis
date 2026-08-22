@@ -516,6 +516,27 @@ provenance импорта. Сущностями версии не делаютс
   «freshness and confidence scoring») — протухшая страница видна как протухшая, а не молча
   врёт. К п. 6 — расширение от Repowise: не только «ссылкой в код», но и со степенью
   проверенности («an anti-hallucination substring gate stamps it exact, fuzzy or unverified»).
+- **К пп. Р2 и 4–6, добавлено 2026-08-22 по разбору codebase-memory-mcp**
+  (`reviews/2026-08-22-codebase-memory-mcp.md`) — шесть уточнений к механике дрейф-гейта и
+  инвалидации производных:
+  (а) **хеш «поверхности» отдельно от хеша содержимого**: ключ инвалидации зависимых — sha256
+  канонической формы *определений* (сигнатур/контракта), не байтов файла — «a body edit leaves
+  a file's persisted LSP surface byte-identical… a surface change pulls in exactly the files
+  with edges into it»; правка тела не протухает производный док, если контракт не менялся;
+  (б) **fail-safe политика инвалидации**: замыкание зависимых — depth-1 без фикспойнта, а
+  «every uncertain case declines to a FULL rebuild… Declining is never wrong» — сомнение даёт
+  «дороже, но верно», никогда «тихо неверно»;
+  (в) **coverage перед негативным утверждением**: гейт не имеет права ответить «дрейфа нет»,
+  не доказав покрытие периметра («use scopes before negative/exhaustive claims»); покрытие —
+  «best-effort, never proof of completeness»;
+  (г) **три категории непокрытого** разводятся всегда: «частично распарсено» / «не смогли» /
+  «исключено намеренно» («deliberate and deterministic, not failures») — смешивание последних
+  двух и есть источник ложных тревог гейта;
+  (д) **честный радиус поражения**: изменённые символы исключаются из impact-набора («seeds
+  are excluded from impacted; a changed file reached from another changed file is not counted
+  as extra impact») — иначе радиус раздувается сам собой;
+  (е) **revert — такое же событие домена, как правка** (их баг #1339: откат к чистому дереву
+  не переиндексировал, граф остался с фантомами — класс бага, который Р2 обязан исключить).
 - **К п. 7 (удалённый исполнитель).** Рынок ушёл на ступень дальше по трём независимым
   дорогам: Orca — среда задачи как декларативный рецепт в репозитории (`orca.yaml` +
   lifecycle-скрипты; «Orca is a thin wrapper: your provider account, images, and billing stay
