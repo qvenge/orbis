@@ -23,7 +23,7 @@
 
 | Файл | Проба | Источник (gitignored) | Отчёт | Что нормативно |
 |---|---|---|---|---|
-| `p1-registry.json` | П1, 2026-08-25 | `.superpowers/probe/p1/registry.json` | `docs/superpowers/reviews/2026-08-25-probe-p1.md` | Словарь типов `type_dictionary` (10 базовых kind + 6 добавок) — §А2-2 взял его один-в-один, кроме двух переименований (ниже). Состав контрактов, подписок, шаблонов правил — образец нотации для части Б |
+| `p1-registry.json` | П1, 2026-08-25 | `.superpowers/probe/p1/registry.json` | `docs/superpowers/reviews/2026-08-25-probe-p1.md` | Словарь типов `type_dictionary` (10 базовых kind + 6 добавок) — §А2-2 воспроизводит его счёт и состав, кроме двух переименованных базовых kind (ниже). Состав контрактов, подписок, шаблонов правил — образец нотации для части Б |
 | `p1-schemas.json` | П1, 2026-08-25 | `.superpowers/probe/p1/schemas.json` | то же | JSON Schema конверта ответа и шести родов деклараций (`property_definition`, `aspect_delta`, `binding`, `action_definition`, `subscription_delta`, `rule`), `$defs.locstr/proptype/expr` — образец для схем деклараций части Б (срез Б-2), не для схем среза А |
 | `p1-mutation-check.ts` | П1, 2026-08-25 | `.superpowers/probe/p1/mutation-check.ts` | то же, §1 | Исполняемое доказательство, что 100 % структурной валидности П1 — не артефакт слабой схемы: 17 из 17 испорченных ответов отвергнуты, оба валидных приняты |
 | `p2-registry.json` | П2, 2026-08-25 | `.superpowers/probe/p2/registry.json` | `docs/superpowers/reviews/2026-08-25-probe-p2.md` | Мок-реестр ровно под подписку Budget — минимальный набор, на котором мерился прототип |
@@ -53,10 +53,18 @@ bun p1-mutation-check.ts
 `key`, `type`, `label`, `description`. Это **не** форма `property_definitions` §А2-1: нет
 `id`, `owner_id`, `status`, `scope`, `merged_into`, `module`, `rank`, `flags`, `created_at`.
 
-**Форма записи аспекта.** `aspects[]` несут `id`, `label`, `module`, `properties`, `implements`
-(+ `service`, `note` у части) — против §А3-1, где у аспекта та же четвёрка `id/key/label/description`
-плюс `ai_instructions`, `tag_mappings`, `view_config`, `rank`, `service`. Внутри —
-`properties[].property` вместо `property_id` (§А3-1) и **без `rank`**, который §А3-1 требует.
+**Форма записи аспекта.** Сверено построчно с §А3-1:
+
+| Поле §А3-1 | В П1 |
+|---|---|
+| `id`, `label`, `implements`, `module`, `service` | есть |
+| `key`, `description` | **нет** (§А3-1 требует у аспекта ту же четвёрку `id/key/label/description`, что у свойства) |
+| `ai_instructions`, `tag_mappings`, `view_config`, `aggregations` | **нет** |
+| `properties: [{property_id, required, rank}]` | есть как `properties: [{property, required?}]` — ключ `property` вместо `property_id` и **без `rank`** |
+
+Поля `rank` **на уровне аспекта** §А3-1 не требует (в §А3-1 `rank` встречается только внутри
+`properties[]`) — колонку `rank` в `aspect_definitions` закладывать не надо. У части аспектов П1
+есть свободный ключ `note`, которого в §А3-1 нет.
 
 **Словарь типов.** `type_dictionary` совпадает с §А2-2 по структуре (10 базовых + 6 добавок) и
 по всем шести добавкам (`time`, `registry_ref`, `cardinality`, `exclusiveMin`,
@@ -75,18 +83,28 @@ bun p1-mutation-check.ts
 | `orbis/envelope_limit` | `orbis/limit` (аспект `orbis/budget`) |
 | `orbis/grant_id` | `orbis/grant` (слито с `agent-run.grant_id`) |
 
-Оговорка о самой спеке: §А5-3(а) приводит пример грамматики как `orbis/envelope_limit>1000`, а
-§А8 в той же строке про `orbis/limit` пишет `orbis/limit>1000`. Это **расхождение внутри спеки**;
-действует таблица §А8 — имя свойства `orbis/limit`.
+Оговорка о самой спеке: решение §А5-3(а) приводит пример грамматики как
+`orbis/envelope_limit>1000`, тогда как §А8 в таблице `orbis/budget`, строка `limit`, пишет
+`orbis/limit>1000`. Это **расхождение внутри спеки**; действует таблица §А8 — имя свойства
+`orbis/limit`.
 
-Остальные 56 имён совпали, включая `orbis/finance_category` (то самое слияние
-`financial.category_ref` + `budget.category_ref` из принципов §А8).
+Разложение счёта: 58 свойств П1 = 6 `user/*` (с §А8 не сверяемы по построению) + 52 `orbis/*`,
+из них **50 совпали с §А8, 2 разошлись** (таблица выше). Среди совпавших — `orbis/finance_category`
+(то самое слияние `financial.category_ref` + `budget.category_ref` из принципов §А8).
 
-**Полнота.** П1 покрывает 58 свойств. §А8 сверх них называет служебные свойства прогона
-(`orbis/run_*`, `orbis/step_count`, `orbis/last_step_at`), core-проекции §А1-3
-(`orbis/archived`, `orbis/title`, `orbis/created_at`, `orbis/updated_at`), `orbis/bank_txn_id` и
-новые свойства реформы (`orbis/weight`, `orbis/undecided`, `orbis/parent_project`,
-`orbis/root_project`, `orbis/session_url`, `orbis/abandon_note`, `orbis/fail_note`, …).
+**Полнота.** П1 покрывает 52 свойства `orbis/*`; §А8 подводит итог словаря v1 в **73 доменных
+свойства плюс 4 core-проекции**. Что §А8 добавляет сверх П1 — по классам:
+
+| Класс | Свойства |
+|---|---|
+| Служебные свойства прогона (§А8 → `orbis/agent-run`, все `system_writable`, вне `attach_*` и промпт-каталога) | `orbis/run_routine`, `orbis/run_bucket`, `orbis/run_attempt`, `orbis/run_proposal`, `orbis/run_outcome`, `orbis/run_started_at`, `orbis/run_finished_at`, `orbis/run_steps`, `orbis/run_report`, `orbis/run_checkpoint`, `orbis/run_reply`, `orbis/run_usage`, `orbis/step_count`, `orbis/last_step_at`, `orbis/undecided`, `orbis/session_url`, `orbis/abandon_note`, `orbis/fail_note` |
+| Core-проекции §А1-3 (`storage: core`, в счёт словаря не входят) | `orbis/archived`, `orbis/title`, `orbis/created_at`, `orbis/updated_at` |
+| Модуль Финансы | `orbis/bank_txn_id` (system: пишет только CSV-импорт) |
+| Новые свойства реформы | `orbis/parent_project`, `orbis/root_project` (оба computed, правило `nearest_ancestor`, `model_writable: false`). Остальные «новые» из §А8 — `orbis/rule_pattern`, `orbis/rule_target`, `orbis/rule_scope` — в П1 **уже есть** |
+
+**Не сеять в v1:** `orbis/date` и `orbis/weight` §А8 называет общими понятиями будущих модулей и
+прямо оговаривает — «в v1 не сеются: свойство без потребителя — сирота с первого дня». В сид
+Задачи 3 они не идут.
 
 **Контракты** (`contracts[]`) — форма и состав до §Б1:
 
@@ -132,9 +150,12 @@ bun p1-mutation-check.ts
   §А8 (`orbis/limit`).
 - **Роль ребра `derived-from`** — §А4-3 переименовывает её в **`instance-of`** (`derived_from` —
   старое имя из кода). Роли `envelope-binding` и `category-parent` совпадают с §А4-3.
-- **Контракты**: форма `slots/class_sets/class_slot/implementations[].map` — не форма §Б1-1;
-  `money-movement` несёт 7 слотов (в том числе `template_marker`), §Б1-2 требует 9 названных;
-  `envelope` — 6 слотов, совпадает с §Б1-2.
+- **Контракты**: форма `slots/class_sets/class_slot/implementations[].map` — не форма §Б1-1.
+  `money-movement` несёт 7 слотов: 6 из девяти, названных §Б1-2 (`amount`, `currency`, `date`,
+  `planned`, `direction`, `category`), плюс `template_marker`, который §Б1-2 относит к отдельному
+  контракту ядра `orbis/recurrence`; недостают `recurring`, `counterparty`, `bank_txn_id`.
+  `envelope` — 6 слотов, совпадает с §Б1-2 (`category`, `limit`, `currency`, `period_start`,
+  `period_end`, `carryover`).
 
 ### `p2-subscription.budget.json`
 
@@ -150,7 +171,7 @@ bun p1-mutation-check.ts
 | №5 «живой конверт» в `unbudgeted` | **нет** — в файле только `unbound_via: "envelope-binding"`; условие «ребро на архивный конверт ≠ unbudgeted» §Б5-4 добавляет сверх пробы |
 | №6 разыменование в сортировке карточек | есть, узлом `{ref_title: "category"}` вместо `{deref: …}` §Б3-3 |
 
-Расходится и **нотация выражений** — файл писался до §Б3-5:
+Расходятся **нотация выражений** (файл писался до §Б3-5) и часть имён и состава:
 
 - Операции названы словами: `eq`, `lte`, `lt`, `gt`, `gte`, `add`, `sub`, `mul` — канон §Б3-5
   использует символы `=`, `<=`, `<`, `>`, `>=`, `+`, `-`, `*`.
@@ -164,9 +185,26 @@ bun p1-mutation-check.ts
 - Списки `coming_up`/`planned` разводят «инстанс vs ручная» через
   `requires_relation`/`excludes_relation` по роли **`derived-from`**; §Б5-4 предписывает предикат
   `has_relation(instance-of)` (Е-1), роль — `instance-of` (§А4-3).
-- Слоты в селекторе конверта названы `category`/`date`/`limit` — это имена слотов мок-контрактов
-  П2; §Б5-4 в той же строке пишет `finance_category`, `occurred_on` (имена свойств). Соответствие
-  «слот ↔ свойство» живёт в привязке контракта (§Б2), а не в подписке.
+- **Селектор конверта** (`sources.envelope.selector`, строки 12–15): эталон —
+  `match: ["category", "currency", "period"]`, `tie_break: ["shorter_period", "later_start", "min_id"]`.
+  Строка `envelope` §Б5-4 — `match: [finance_category, currency, period]`, `tie_break` тот же.
+  `tie_break` совпадает дословно; в `match` расходится **один элемент — `category` vs
+  `finance_category`**. Состав селектора — ровно три ключа (категория, валюта, период); имён `date`
+  и `limit` в селекторе нет (они живут в `counted_sets.facts` и `effective_limit`), и `limit`
+  совпадает с §А8 (`orbis/limit`).
+  Оговорка: §Б1-2 называет слот контракта `orbis/envelope` именно `category` (6 слотов: `category`,
+  `limit`, `currency`, `period_start`, `period_end`, `carryover`), а §Б5-4 в строке селектора пишет
+  имя свойства §А8 (`orbis/finance_category`) — то есть перед нами различие словаря внутри спеки
+  («слот» против «свойства»), а не ошибка эталона. Срез Б-1 обязан выбрать одно и держаться его;
+  соответствие «слот ↔ свойство» живёт в привязке контракта (§Б2), не в подписке.
+- **Набор `facts`** (`counted_sets.facts`, строки 20–27): эталон — `planned = false ∧ date ≤ today
+  ∧ not has(template_marker)`. Строка `movement` §Б5-4 — `planned=false ∧ occurred_on ≤ $today ∧ not
+  class(recurrence).template`. Первые два условия совпадают (`date` — имя слота money-movement
+  §Б1-2, `occurred_on` — имя свойства §А8 за этим слотом; та же пара «слот/свойство», что и выше).
+  Третье расходится **по существу**: эталон проверяет наличие слота `template_marker` у самого
+  money-movement (в `p2-registry.json` он и объявлен слотом money-movement), а §Б1-2 выносит
+  `template_marker` в отдельный контракт ядра `orbis/recurrence`, и §Б5-4 требует
+  `class(recurrence).template`.
 - `surface: "budget/overview"` — §Б5-1 берёт перечень поверхностей из манифестов модулей;
   в реестре П1 та же поверхность названа просто `budget`.
 
