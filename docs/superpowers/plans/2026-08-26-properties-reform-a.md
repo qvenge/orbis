@@ -387,7 +387,7 @@ test('канал начинается с PROMPT_BODY (переписанные �
 // -- 'apps/server/src' 'apps/server/test' 'apps/server/perf' 'packages/shared/src' 'apps/web/src' 'scripts' ':!*.snap' ':!apps/server/src/db/migrations/**'.
 export const LEGACY_MARKERS: ReadonlyArray<{ id: string; pattern: string; exclude?: RegExp[] }> = [
   { id: 'aspects-path',    pattern: String.raw`aspects(_legacy)?\s*->` },
-  { id: 'aspects-legacy',  pattern: String.raw`aspects_legacy|aspectsLegacy|legacy-form` },
+  { id: 'aspects-legacy',  pattern: String.raw`aspects_legacy|aspectsLegacy|aspectsMap|legacy-form` },  // aspectsMap живёт 4a→13c: приёмка 13c (Шаг 3) требует его от гейта — рулинг Р-П-4
   { id: 'relation-type',   pattern: String.raw`relation_type|relationType|RELATION_TYPES` },
   // entity-meta — адресуемые формы КОЛОНКИ сущности, не голое слово (голое `\bmeta\b` давало 281 совпадение, из них 41 в миграциях
   // и живые `relations.meta` в executor.ts:182-187/:1154 — находка 26); allowlist Задачи 23 перечисляет места relations.meta с причиной
