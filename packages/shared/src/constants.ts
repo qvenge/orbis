@@ -11,6 +11,46 @@ export const MAX_AGENT_STEPS = 8;
 export const RELATION_TYPES = ['parent', 'blocks', 'related_to', 'derived_from'] as const;
 export type RelationType = (typeof RELATION_TYPES)[number];
 
+/**
+ * Системные роли рёбер v1 (§А4-3 реформы свойств): роль — единственная истина ребра, и она
+ * заменяет `RELATION_TYPES` (расщепление `parent` на пять разных отношений — inv §1 п.8).
+ * Порядок — нормативный `rank` реестра. Колонку `relation_type` и константу выше снимает
+ * Задача 7a; до неё обе формы живут рядом, и это единственный интервал их сосуществования.
+ *
+ * `alternative-of` и `supersedes` — роли карты работ: встроенные записи сида уже в v1, без
+ * потребителя-кода (дешевле заложить при пересеве, чем досевать потом).
+ *
+ * Список живёт здесь, рядом с `BUILTIN_ASPECT_IDS`, а не в `registry/builtin-roles.ts`:
+ * у имени должен быть ровно один дом, иначе `export *` из двух файлов пакета делает его
+ * неоднозначным. Определения ролей ссылаются на этот список и пиннятся тестом.
+ */
+export const RELATION_ROLE_IDS = [
+  'subitem',
+  'ticket',
+  'run',
+  'envelope-binding',
+  'category-parent',
+  'dependency',
+  'mention',
+  'instance-of',
+  'ref',
+  'alternative-of',
+  'supersedes',
+] as const;
+export type RelationRoleId = (typeof RELATION_ROLE_IDS)[number];
+
+/**
+ * Семейство иерархии (§А4-3): `children_of`/`descendants_of` без `via=` компилятор
+ * разворачивает в `role IN (…)` по этому списку. `envelope-binding` в него НЕ входит —
+ * конверт не родитель транзакции, он её счётчик (Ч10-С1).
+ */
+export const HIERARCHICAL_ROLE_IDS = [
+  'subitem',
+  'ticket',
+  'run',
+  'category-parent',
+] as const satisfies readonly RelationRoleId[];
+
 export const BUILTIN_ASPECT_IDS = [
   'orbis/schedule',
   'orbis/task',
