@@ -178,6 +178,151 @@ test('неизвестный аргумент — код 2, а не молчал
   expect(r.err).toContain('--fix');
 });
 
+/**
+ * Позитивный контроль КАЖДОГО маркера: по образцу на каждую его альтернативу, по одной
+ * строке на альтернативу.
+ *
+ * Зачем построчно, а не «по образцу на маркер». Гейт-ревью замерило: замена паттерна на
+ * никогда-не-совпадающий у шести маркеров из десяти (`aspects-legacy`, `due-alias`,
+ * `rule-parser`, `pseudo-aspect`, `service-const`, `prop-type-heur`) не роняла ни одного
+ * теста, и точечное удаление `aspectsMap` из `aspects-legacy` — тоже. Сломанный маркер
+ * молча даёт ноль, а ноль — это ровно то, чего требует приёмка §С8-10: «ноль совпадений»
+ * оказался бы выполнен фиктивно, при живой старой форме в дереве.
+ *
+ * Число строк в образце и есть пин: выпадет альтернатива из паттерна — счёт разойдётся.
+ */
+const SAMPLES: ReadonlyArray<{
+  readonly id: string;
+  readonly lines: readonly string[];
+  /**
+   * Законные пересечения: какой ЧУЖОЙ маркер и на скольких строках обязан поймать этот же
+   * образец. Пересечения перечислены поимённо, а не прощены оптом, — иначе тест перестал
+   * бы замечать, что маркер расползся на чужую зону.
+   */
+  readonly alsoCaughtBy?: ReadonlyArray<{ readonly marker: string; readonly lines: number }>;
+}> = [
+  {
+    id: 'aspects-path',
+    lines: [
+      `const a = "select aspects->'orbis/task' from e";`,
+      `const b = "select aspects_legacy -> 'orbis/task' from e";`,
+    ],
+    // Вторая строка пиннит и `(_legacy)?`, и `\s*` — и по существу принадлежит обоим маркерам.
+    alsoCaughtBy: [{ marker: 'aspects-legacy', lines: 1 }],
+  },
+  {
+    id: 'aspects-legacy',
+    lines: [
+      'const a = aspects_legacy;',
+      'const b = aspectsLegacy;',
+      'const c = aspectsMap;',
+      `const d = 'legacy-form';`,
+    ],
+  },
+  {
+    id: 'relation-type',
+    lines: ['const a = relation_type;', 'const b = relationType;', 'const c = RELATION_TYPES;'],
+  },
+  {
+    id: 'entity-meta',
+    lines: [
+      'const a = entities.meta;',
+      `const b = 'entity_meta_gin';`,
+      'const c = { meta: row.meta };',
+      'const d = { meta: input.meta };',
+      'const e = { meta: values.meta };',
+      'const f = input.meta;',
+      'const g = { meta: {} };',
+    ],
+  },
+  { id: 'due-alias', lines: [`const a = "due=today";`] },
+  {
+    id: 'bare-field',
+    // Три префикса × четырнадцать имён полей: префиксы пиннятся отдельными строками,
+    // имена — по строке на имя (выпадет имя из паттерна — счёт строк разойдётся).
+    lines: [
+      `const p1 = "{{query: status=open}}";`,
+      `const p2 = "aspect=orbis/task status=open";`,
+      `const p3 = "sortBy=x status=open";`,
+      ...[
+        'stage',
+        'priority',
+        'kind',
+        'scope',
+        'outcome',
+        'undecided',
+        'due_date',
+        'start_at',
+        'occurred_on',
+        'planned',
+        'amount',
+        'direction',
+        'category_ref',
+      ].map((f) => `const f = "{{query: ${f}=x}}";`),
+    ],
+  },
+  { id: 'rule-parser', lines: ['const a = parseRuleTitle;', 'const b = formatRuleTitle;'] },
+  {
+    id: 'pseudo-aspect',
+    lines: ['const a = ENTITY_PSEUDO_ASPECT;', `const b = 'orbis/entity';`],
+  },
+  { id: 'service-const', lines: ['const a = SERVICE_ASPECT_IDS;'] },
+  { id: 'prop-type-heur', lines: ['const a = propType(x);'] },
+];
+
+test('позитивный контроль: у каждого маркера есть образец', () => {
+  // Новый маркер без образца остался бы незапиненным — тем самым отказом, что нашло ревью.
+  expect(SAMPLES.map((s) => s.id)).toEqual(LEGACY_MARKERS.map((m) => m.id));
+});
+
+test('позитивный контроль: каждый маркер ловит все свои формы и только свой файл', () => {
+  const files: Record<string, string> = {};
+  for (const s of SAMPLES) {
+    files[`apps/server/src/sample-${s.id}.ts`] = `${s.lines.join('\n')}\n`;
+  }
+  const reports = scan(repo(files));
+  const actual = Object.fromEntries(
+    reports.map((r) => [r.id, { files: r.files.slice().sort(), lines: r.hits.length }]),
+  );
+
+  const expected: Record<string, { files: string[]; lines: number }> = {};
+  for (const s of SAMPLES) {
+    expected[s.id] ??= { files: [], lines: 0 };
+    const own = expected[s.id] as { files: string[]; lines: number };
+    own.files.push(`apps/server/src/sample-${s.id}.ts`);
+    own.lines += s.lines.length;
+    for (const x of s.alsoCaughtBy ?? []) {
+      expected[x.marker] ??= { files: [], lines: 0 };
+      const foreign = expected[x.marker] as { files: string[]; lines: number };
+      foreign.files.push(`apps/server/src/sample-${s.id}.ts`);
+      foreign.lines += x.lines;
+    }
+  }
+  for (const v of Object.values(expected)) v.files.sort();
+
+  expect(actual).toEqual(expected);
+});
+
+test('гейт отказывается работать из подкаталога, а не печатает ложный ноль', () => {
+  // Замер ревью: из `<корень>/apps` гейт печатал «ok» и выходил с кодом 0 при живых
+  // нарушениях — pathspec'ы git grep отсчитываются от cwd и там ни с чем не совпадают.
+  const dir = repo({ 'apps/server/src/real.ts': 'const q = "aspects->x";\n' });
+  expect(() => scan(join(dir, 'apps'))).toThrow(/только из КОРНЯ репозитория/);
+
+  const r = cli(join(dir, 'apps'), '--gate');
+  expect(r.code).toBe(2); // не 0 («чисто») и не 1 («найдено») — отказ окружения
+  expect(r.err).toContain('только из КОРНЯ репозитория');
+  expect(r.out).not.toContain('ok — совпадений старой формы нет');
+});
+
+test('гейт отказывается работать вне git-репозитория', () => {
+  const outside = mkdtempSync(join(tmpdir(), 'orbis-legacy-form-nogit-'));
+  dirs.push(outside);
+  const r = cli(outside, '--gate');
+  expect(r.code).toBe(2);
+  expect(r.err).toContain('не рабочее дерево git');
+});
+
 test('имена маркеров — договор: на них ссылаются брифы задач среза', () => {
   expect(LEGACY_MARKERS.map((m) => m.id)).toEqual([
     'aspects-path',
