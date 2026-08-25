@@ -38,6 +38,18 @@ export async function ownerTimeZone(tx: Tx, ownerId: string): Promise<string> {
   return isValidTimeZone(stored) ? stored : DEFAULT_TIMEZONE;
 }
 
+/**
+ * «Сегодня» в указанной зоне, YYYY-MM-DD (en-CA даёт ровно этот вид).
+ *
+ * Отдельной функцией, а не строкой внутри queryContext: ту же дату кладут в системный
+ * канал LLM оба сборщика (llm/context.ts, routines/context.ts, §Б7-6-1). Пересчитанная
+ * на месте формула разъехалась бы с той, по которой резолвятся date-токены грамматики
+ * (today/overdue) — модель видела бы одно «сегодня», а её же запрос считался бы от другого.
+ */
+export function todayInTimeZone(timeZone: string, now: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone }).format(now);
+}
+
 export async function queryContext(
   tx: Tx,
   actorUserId: string,
@@ -45,6 +57,5 @@ export async function queryContext(
 ): Promise<CompileContext> {
   const catalog = await loadCatalog(tx);
   const timezone = await ownerTimeZone(tx, actorUserId);
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
-  return { catalog, thisEntityId, today, timezone };
+  return { catalog, thisEntityId, today: todayInTimeZone(timezone), timezone };
 }

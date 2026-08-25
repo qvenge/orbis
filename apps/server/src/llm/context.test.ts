@@ -1,22 +1,28 @@
 // apps/server/src/llm/context.test.ts
-// Интеграционные тесты buildContext (§7.1) против живой БД: слой 1 (промпт +
-// ai_instructions аспектов), слой 2 (память с капом и приоритетом §7.4), слой 3
-// (якорная сущность — только для треда сущности, 02 §2.2), слой 4 (rolling-история
-// CONTEXT_HISTORY_LIMIT, сжатие audit-сообщений без сырого JSON). Слой 5 — Task 9.
+// Интеграционные тесты buildContext (§7.1) против живой БД: слой 1 (тело промпта, дата
+// владельца §Б7-6-1 и ai_instructions аспектов), слой 2 (память с капом и приоритетом
+// §7.4), слой 3 (якорная сущность — только для треда сущности, 02 §2.2), слой 4
+// (rolling-история CONTEXT_HISTORY_LIMIT, сжатие audit-сообщений без сырого JSON), а
+// также порядок СОБРАННОГО канала: блок продолжений идёт последним (§Б7-6-2 — гард
+// переехал сюда с текста промпта, v4.test.ts). Слой 5 — Task 9.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { appendMessage } from '../chat/messages';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
-import { aspectDefinitions, chatMessages, entities } from '../db/schema';
+import { aspectDefinitions, chatMessages, entities, userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import {
   ANCHOR_BODY_PREVIEW,
   buildContext,
   CONTEXT_HISTORY_LIMIT,
+  CONTINUATIONS_BLOCK,
+  CONTINUATIONS_HEADING,
   MEMORY_BODY_PREVIEW,
   MEMORY_CAP,
+  PROMPT_BODY,
+  todaySection,
   toolResultMessage,
 } from './context';
 import { SYSTEM_PROMPT_V4 } from './prompts/v4';
@@ -67,15 +73,20 @@ function memoryLines(system: string): string[] {
   return system.split('\n').filter((l) => l.startsWith('— ['));
 }
 
-describe('buildContext — слой 1: промпт + ai_instructions аспектов', () => {
+describe('buildContext — слой 1: тело промпта + ai_instructions аспектов', () => {
   const user = freshUserId();
 
-  test('system начинается с SYSTEM_PROMPT_V4 и содержит ai_instructions активных аспектов из БД', async () => {
+  // Пин был `startsWith(SYSTEM_PROMPT_V4)`. После §Б7-6-2 блок продолжений уехал в ХВОСТ
+  // собранного канала, поэтому промпт лежит в канале двумя кусками и целиком в его начале
+  // больше не стоит ПО ПОСТРОЕНИЮ. Начало канала пиннится телом промпта, целостность
+  // текста — тем, что канал несёт оба куска и заканчивается вторым (тесты §Б7-6 ниже).
+  test('канал начинается с PROMPT_BODY и содержит ai_instructions активных аспектов из БД', async () => {
     const ctx = await withIdentity(db, user, async (tx) => {
       const threadId = await ensureGlobalThread(tx, user);
       return buildContext(tx, { ownerId: user, threadId });
     });
-    expect(ctx.system.startsWith(SYSTEM_PROMPT_V4)).toBe(true);
+    expect(ctx.system.startsWith(PROMPT_BODY)).toBe(true);
+    expect(ctx.system).toContain(CONTINUATIONS_BLOCK);
     // Инструкция builtin-аспекта — из реестра БД (сид), а не из констант кода
     const rows = await withIdentity(db, user, (tx) =>
       tx
@@ -87,6 +98,99 @@ describe('buildContext — слой 1: промпт + ai_instructions аспек
     if (!taskInstructions) throw new Error('builtin orbis/task не сидирован (bun run db:prepare)');
     expect(ctx.system).toContain('orbis/task');
     expect(ctx.system).toContain(taskInstructions);
+  });
+});
+
+describe('buildContext — §Б7-6: дата владельца и блок продолжений последним', () => {
+  test('CONTINUATIONS_HEADING встречается в SYSTEM_PROMPT_V4 ровно один раз; PROMPT_BODY + CONTINUATIONS_BLOCK === SYSTEM_PROMPT_V4', () => {
+    // Ровно один: split даёт две части только при единственном вхождении — иначе
+    // PROMPT_BODY отрезался бы по ПЕРВОМУ, и часть текста уехала бы в хвост канала
+    expect(SYSTEM_PROMPT_V4.split(CONTINUATIONS_HEADING)).toHaveLength(2);
+    // Части ВЫЧИСЛЯЮТСЯ из константы, а не копируются текстом (РП-18: v4.ts не правится
+    // ни байтом) — конкатенация обязана давать исходный промпт побайтно
+    expect(PROMPT_BODY + CONTINUATIONS_BLOCK).toBe(SYSTEM_PROMPT_V4);
+    expect(CONTINUATIONS_BLOCK.startsWith(CONTINUATIONS_HEADING)).toBe(true);
+    expect(PROMPT_BODY).not.toContain(CONTINUATIONS_HEADING);
+  });
+
+  test('todaySection: дата, день недели и зона владельца одной строкой', () => {
+    expect(todaySection({ today: '2026-08-26', timeZone: 'Europe/Moscow' })).toBe(
+      'Сегодня: 2026-08-26 (среда), таймзона владельца: Europe/Moscow.',
+    );
+  });
+
+  test('канал несёт дату владельца в его таймзоне — после промпта, до инструкций аспектов', async () => {
+    const user = freshUserId();
+    await withIdentity(db, user, (tx) =>
+      tx.insert(userSettings).values({ ownerId: user, timezone: 'Asia/Bangkok' }),
+    );
+    const ctx = await withIdentity(db, user, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, user);
+      // 18:30Z — это уже 01:30 СЛЕДУЮЩЕГО дня в Бангкоке: дата берётся в зоне владельца,
+      // а не в UTC сервера, иначе «сегодня» модели расходится с «сегодня» пользователя
+      return buildContext(tx, {
+        ownerId: user,
+        threadId,
+        clock: () => new Date('2026-08-26T18:30:00Z'),
+      });
+    });
+    const dateLine = 'Сегодня: 2026-08-27 (четверг), таймзона владельца: Asia/Bangkok.';
+    expect(ctx.system).toContain(dateLine);
+    // Позиция: сразу за телом промпта и выше инструкций аспектов
+    expect(ctx.system.indexOf(dateLine)).toBe(PROMPT_BODY.length);
+    expect(ctx.system.indexOf(dateLine)).toBeLessThan(
+      ctx.system.indexOf('Инструкции активных аспектов:'),
+    );
+  });
+
+  test('дата берётся в дефолтной зоне, когда строки user_settings ещё нет (онбординг не пройден)', async () => {
+    const user = freshUserId();
+    const ctx = await withIdentity(db, user, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, user);
+      return buildContext(tx, {
+        ownerId: user,
+        threadId,
+        clock: () => new Date('2026-08-26T22:30:00Z'),
+      });
+    });
+    // Europe/Moscow (UTC+3): 22:30Z — уже 01:30 следующего дня
+    expect(ctx.system).toContain(
+      'Сегодня: 2026-08-27 (четверг), таймзона владельца: Europe/Moscow.',
+    );
+  });
+
+  test('блок продолжений — ПОСЛЕДНЯЯ секция собранного канала при непустых памяти и якоре', async () => {
+    const user = freshUserId();
+    await createMemory(user, { title: 'ПАМЯТЬ-ХВОСТ', kind: 'rule' });
+    const anchorId = newId();
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values({
+        id: anchorId,
+        ownerId: user,
+        title: 'Якорь-хвост',
+        body: 'тело якоря',
+        aspects: { 'orbis/task': { status: 'in_progress' } },
+      }),
+    );
+    const ctx = await withIdentity(db, user, async (tx) => {
+      const threadId = await ensureEntityThread(tx, user, anchorId);
+      return buildContext(tx, { ownerId: user, threadId, anchorEntityId: anchorId });
+    });
+
+    // Случай не вырожденный: все четыре динамические секции в канале ЕСТЬ
+    expect(ctx.system).toContain('Сегодня: ');
+    expect(ctx.system).toContain('Инструкции активных аспектов:');
+    expect(ctx.system).toContain('ПАМЯТЬ-ХВОСТ');
+    expect(ctx.system).toContain(`id: ${anchorId}`);
+
+    // …и все они ВЫШЕ блока продолжений, а он замыкает канал: инструкция «отдельной
+    // последней строкой ответа» теряет силу примера, если после неё идёт ещё что-то
+    const tail = ctx.system.indexOf(CONTINUATIONS_HEADING);
+    expect(tail).toBeGreaterThan(ctx.system.indexOf('Сегодня: '));
+    expect(tail).toBeGreaterThan(ctx.system.indexOf('Инструкции активных аспектов:'));
+    expect(tail).toBeGreaterThan(ctx.system.indexOf('ПАМЯТЬ-ХВОСТ'));
+    expect(tail).toBeGreaterThan(ctx.system.indexOf(`id: ${anchorId}`));
+    expect(ctx.system.trimEnd().endsWith(CONTINUATIONS_BLOCK.trimEnd())).toBe(true);
   });
 });
 

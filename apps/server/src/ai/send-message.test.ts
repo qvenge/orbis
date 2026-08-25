@@ -15,6 +15,7 @@ import { aiUsage, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
+import { CONTINUATIONS_BLOCK, PROMPT_BODY } from '../llm/context';
 import { SYSTEM_PROMPT_V4, TOOL_RESULT_MARKER } from '../llm/prompts/v4';
 import { ScriptedProvider } from '../llm/scripted';
 import type { LLMMessage, LLMProvider, LLMRequest, LLMResponse } from '../llm/types';
@@ -226,7 +227,13 @@ describe('ai.sendMessage (а): «создай задачу» — цикл из t
     // тулы слоя 5 из реестра, окно заканчивается только что персистированным user-сообщением
     expect(scripted.requests).toHaveLength(2);
     for (const req of scripted.requests) {
-      expect(req.system.startsWith(SYSTEM_PROMPT_V4)).toBe(true);
+      // Промпт едет в канал ДВУМЯ кусками (§Б7-6-2: блок продолжений замыкает канал),
+      // поэтому `startsWith(SYSTEM_PROMPT_V4)` ложно по построению — пин переписан на
+      // «начинается телом промпта, содержит обе части, кончается блоком продолжений»
+      expect(req.system.startsWith(PROMPT_BODY)).toBe(true);
+      expect(req.system).toContain(CONTINUATIONS_BLOCK);
+      expect(req.system.trimEnd().endsWith(CONTINUATIONS_BLOCK.trimEnd())).toBe(true);
+      expect(PROMPT_BODY + CONTINUATIONS_BLOCK).toBe(SYSTEM_PROMPT_V4);
       expect(req.messages.every((m) => m.role === 'user' || m.role === 'assistant')).toBe(true);
       const toolNames = req.tools.map((t) => t.name);
       expect(toolNames).toContain('entity_create');

@@ -303,6 +303,9 @@ async function runAgentLoop(
       ownerId: input.ownerId,
       threadId: input.threadId,
       ...(anchorEntityId !== null && { anchorEntityId }),
+      // Часы вызова — те же, что у гейта и метеринга: «сегодня» в канале и день
+      // списания обязаны считаться от одного момента, а не от двух разных
+      clock,
     });
     const defs = await buildToolRegistry(tx);
     // OrbisToolDef → LLMToolDef; internalOnly (user_query) остаётся: внутренний чат —

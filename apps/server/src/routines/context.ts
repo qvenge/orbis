@@ -10,8 +10,8 @@
 //      решил, о чём спрашивала и что он ответил. Это единственный механизм обратной
 //      связи в V1 (обучения правил нет — «Известные границы» спеки).
 //
-// Остальные слои — те же и теми же функциями (инструкции аспектов, память, якорь):
-// разъехавшись, они дали бы «в фоне модель видит другой Orbis».
+// Остальные слои — те же и теми же функциями (дата владельца, инструкции аспектов,
+// память, якорь): разъехавшись, они дали бы «в фоне модель видит другой Orbis».
 //
 // Роль 'system' в messages ЗАПРЕЩЕНА (контракт провайдера — ai-sdk.ts бросает): и
 // история, и «сработала рутина» едут как 'user'. Инвариант «messages начинается с user»
@@ -24,6 +24,7 @@ import {
   loadMemory,
   MEMORY_SECTION_HEADER,
   memoryLine,
+  todaySectionFor,
 } from '../llm/context';
 import { ROUTINE_SYSTEM_PROMPT, routineModeSection } from '../llm/prompts/routine-v2';
 import type { LLMMessage } from '../llm/types';
@@ -91,6 +92,8 @@ export interface BuildRoutineContextInput {
   routine: RoutineContextRoutine;
   run: { id: string; bucket: string };
   history: RoutineHistoryItem[];
+  /** Часы прогона (§Б7-6-1) — те же, что у дедлайна и метеринга; по умолчанию системные. */
+  clock?: () => Date;
 }
 
 export interface BuiltRoutineContext {
@@ -271,6 +274,10 @@ export async function buildRoutineContext(
   const { routine } = input;
   const sections: string[] = [
     ROUTINE_SYSTEM_PROMPT,
+    // Дата — сразу за промптом, как и в чате (§Б7-6-1): рутина работает со «сроком
+    // сегодня» и «просрочено», и без даты считала бы их от даты обучения модели.
+    // Переставлять из-за неё нечего: блока продолжений у раннера нет.
+    await todaySectionFor(tx, input.ownerId, (input.clock ?? (() => new Date()))()),
     routineModeSection({
       mode: routine.routine.mode,
       allowedTools: routine.routine.allowed_tools ?? [],

@@ -1,6 +1,6 @@
 // apps/server/src/llm/context.ts
 // Сборка контекста LLM-вызова — пятислойная модель §7.1:
-//   слой 1 (промпт v4 + ai_instructions активных аспектов реестра),
+//   слой 1 (промпт v4 + дата владельца §Б7-6-1 + ai_instructions активных аспектов реестра),
 //   слой 2 (память §7.4: активные orbis/memory, кап MEMORY_CAP, приоритет rule/scope),
 //   слой 3 (якорная сущность треда — 02 §2.2, только если тред сущности),
 //   слой 4 (rolling-история треда) — слои 1–3 склеиваются в ПОЛЕ system,
@@ -18,18 +18,26 @@
 // превью 200/500, окно 30) — их механическое воплощение для MVP.
 //
 // V1.5: слои 1(динамика)–3 переиспользует контекст прогона рутины (routines/context.ts) —
-// у него свой промпт и своя история вместо треда, но инструкции аспектов, память и якорь
-// обязаны выглядеть для модели ТЕМ ЖЕ, чем в чате. Поэтому aspectInstructionsSection,
-// loadMemory/memoryLine/MEMORY_SECTION_HEADER и anchorBlock экспортируются, а не копируются.
+// у него свой промпт и своя история вместо треда, но инструкции аспектов, память, дата и
+// якорь обязаны выглядеть для модели ТЕМ ЖЕ, чем в чате. Поэтому aspectInstructionsSection,
+// todaySection/todaySectionFor, loadMemory/memoryLine/MEMORY_SECTION_HEADER и anchorBlock
+// экспортируются, а не копируются.
+//
+// §Б7-6: промпт v4 приезжает в канал ДВУМЯ кусками (PROMPT_BODY + CONTINUATIONS_BLOCK) —
+// блок продолжений обязан быть последним для модели, а не последним в тексте константы.
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { excludeInfraSystemRows } from '../chat/messages';
 import { chatMessages, entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { readEntity } from '../entity-read';
 import type { ActionRecord } from '../executor/types';
+import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { loadAspectToolRows } from '../tools/registry';
 import { SYSTEM_PROMPT_V4, TOOL_RESULT_MARKER } from './prompts/v4';
 import type { LLMMessage } from './types';
+
+/** Разделитель секций системного канала — пустая строка между абзацами. */
+const SECTION_SEPARATOR = '\n\n';
 
 /** Кап памяти §7.4: до ~50 активных memory-сущностей в слое 2. */
 export const MEMORY_CAP = 50;
@@ -48,11 +56,87 @@ export const ANCHOR_INSTRUCTION_CAP = 8000;
 
 const MEMORY_ASPECT = 'orbis/memory';
 
+/**
+ * Заголовок блока продолжений — точная подстрока SYSTEM_PROMPT_V4.
+ *
+ * По нему промпт делится на тело и хвост, потому что блок продолжений обязан замыкать
+ * СОБРАННЫЙ канал (§Б7-6-2): его инструкция «в КОНЦЕ ответа отдельной последней строкой»
+ * теряет силу примера, когда после неё модель видит ещё четыре секции — дату, инструкции
+ * аспектов, память и якорь.
+ */
+export const CONTINUATIONS_HEADING = 'Продолжения разговора:';
+
+const CONTINUATIONS_START = SYSTEM_PROMPT_V4.indexOf(CONTINUATIONS_HEADING);
+// Проверка на загрузке модуля, а не «когда-нибудь в тесте»: при -1 slice(0, -1) молча
+// отрезал бы последний символ промпта, и канал ушёл бы к модели покалеченным.
+if (CONTINUATIONS_START < 0) {
+  throw new Error(`SYSTEM_PROMPT_V4 не содержит заголовка «${CONTINUATIONS_HEADING}»`);
+}
+
+/**
+ * Тело промпта — всё до блока продолжений, ВКЛЮЧАЯ разделитель абзаца перед ним.
+ *
+ * Обе части ВЫЧИСЛЯЮТСЯ из SYSTEM_PROMPT_V4, а не выписаны текстом: правка промпта — это
+ * новая линейка (v5, правило v4.ts:2-4), и копия здесь тихо разошлась бы с оригиналом.
+ * Пин конкатенации — llm/context.test.ts.
+ */
+export const PROMPT_BODY = SYSTEM_PROMPT_V4.slice(0, CONTINUATIONS_START);
+/** Блок продолжений — хвост промпта; в канале идёт ПОСЛЕДНЕЙ секцией (§Б7-6-2). */
+export const CONTINUATIONS_BLOCK = SYSTEM_PROMPT_V4.slice(CONTINUATIONS_START);
+
+/** Дни недели по индексу Date#getUTCDay (0 — воскресенье). */
+const WEEKDAYS_RU = [
+  'воскресенье',
+  'понедельник',
+  'вторник',
+  'среда',
+  'четверг',
+  'пятница',
+  'суббота',
+];
+
+/**
+ * День недели по дате YYYY-MM-DD. Считается от полуночи UTC: `today` УЖЕ приведён к зоне
+ * владельца, и вторая примерка зоны сдвинула бы день. Имена — списком, а не Intl с
+ * локалью ru: строка канала пиннится тестом дословно, а набор локальных данных ICU
+ * зависит от сборки рантайма.
+ */
+function weekdayRu(today: string): string {
+  const name = WEEKDAYS_RU[new Date(`${today}T00:00:00Z`).getUTCDay()];
+  if (name === undefined) throw new Error(`не дата формата YYYY-MM-DD: «${today}»`);
+  return name;
+}
+
+/**
+ * Строка даты в таймзоне владельца — динамическая секция канала (§Б7-6-1), НЕ часть
+ * промпта: у промпта версия и побайтная фикстура, а дата меняется каждые сутки.
+ *
+ * Без неё модель считает «сегодня» от даты своего обучения — и «задачи на сегодня»,
+ * «перенеси на завтра», «просрочено» разъезжаются с тем, что видит владелец на экране.
+ */
+export function todaySection(input: { today: string; timeZone: string }): string {
+  return `Сегодня: ${input.today} (${weekdayRu(input.today)}), таймзона владельца: ${input.timeZone}.`;
+}
+
+/**
+ * Секция даты для канала: зона владельца из user_settings + «сегодня» в ней.
+ *
+ * Экспортируется, а не копируется в оба сборщика по той же причине, что и остальные слои
+ * (см. шапку файла): дата, собранная дважды, разъехалась бы форматом — и фоновый прогон
+ * видел бы «сегодня» иначе, чем чат.
+ */
+export async function todaySectionFor(tx: Tx, ownerId: string, now: Date): Promise<string> {
+  const timeZone = await ownerTimeZone(tx, ownerId);
+  return todaySection({ today: todayInTimeZone(timeZone, now), timeZone });
+}
+
 export interface BuildContextInput {
   ownerId: string;
   threadId: string;
   /** Сущность-якорь (02 §2.2) — передаётся ТОЛЬКО для треда сущности. */
   anchorEntityId?: string;
+  /** Часы вызова (§Б7-6-1) — те же, что у метеринга и гейта; по умолчанию системные. */
+  clock?: () => Date;
 }
 
 export interface BuiltContext {
@@ -347,24 +431,33 @@ export async function aspectInstructionsSection(tx: Tx): Promise<string | null> 
 }
 
 export async function buildContext(tx: Tx, input: BuildContextInput): Promise<BuiltContext> {
-  const sections: string[] = [SYSTEM_PROMPT_V4];
+  // Всё, что дописывается между телом промпта и блоком продолжений (§Б7-6-2)
+  const dynamic: string[] = [
+    await todaySectionFor(tx, input.ownerId, (input.clock ?? (() => new Date()))()),
+  ];
 
   const instructions = await aspectInstructionsSection(tx);
-  if (instructions !== null) sections.push(instructions);
+  if (instructions !== null) dynamic.push(instructions);
 
   // Слой 2: память §7.4
   const memory = await loadMemory(tx);
   if (memory.length > 0) {
-    sections.push(`${MEMORY_SECTION_HEADER}\n${memory.map(memoryLine).join('\n')}`);
+    dynamic.push(`${MEMORY_SECTION_HEADER}\n${memory.map(memoryLine).join('\n')}`);
   }
 
   // Слой 3: якорная сущность — только для треда сущности
   if (input.anchorEntityId) {
-    sections.push(await anchorBlock(tx, input.ownerId, input.anchorEntityId));
+    dynamic.push(await anchorBlock(tx, input.ownerId, input.anchorEntityId));
   }
 
   // Слой 4: rolling-история текущего треда (§7.3: скоупится разговор)
   const messages = await historyMessages(tx, input.threadId);
 
-  return { system: sections.join('\n\n'), messages };
+  // PROMPT_BODY уже кончается разделителем абзаца (он отрезан по месту заголовка блока
+  // продолжений) — первая динамическая секция приклеивается к нему напрямую, иначе между
+  // ними встали бы лишние пустые строки. Свойство склейки: при пустом dynamic канал
+  // побайтно равен SYSTEM_PROMPT_V4 — переставлена СБОРКА, а не текст промпта (РП-18).
+  const system = PROMPT_BODY + [...dynamic, CONTINUATIONS_BLOCK].join(SECTION_SEPARATOR);
+
+  return { system, messages };
 }

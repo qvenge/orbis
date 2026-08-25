@@ -49,6 +49,7 @@ async function contextOf(
   history: RoutineHistoryItem[] = [],
   mode: 'propose' | 'act' = 'propose',
   allowedTools?: string[],
+  clock?: () => Date,
 ) {
   return withIdentity(db, owner, (tx) =>
     buildRoutineContext(tx, {
@@ -66,12 +67,13 @@ async function contextOf(
       },
       run: { id: RUN_ID, bucket: '2026-08-17T07:00' },
       history,
+      ...(clock !== undefined && { clock }),
     }),
   );
 }
 
 describe('buildRoutineContext: системный слой (V1.5)', () => {
-  test('system = промпт раннера + секция режима + инструкции аспектов + память + якорь-рутина; чат-промпта в нём нет', async () => {
+  test('system = промпт раннера + дата + секция режима + инструкции аспектов + память + якорь-рутина; чат-промпта в нём нет', async () => {
     const routineId = await seedRoutine(owner, { title: 'Утренний обзор', body: INSTRUCTION });
     await seedEntity(owner, {
       title: 'Не назначать встречи до 10 утра',
@@ -93,6 +95,26 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
     expect(system).toContain('Память о пользователе');
     expect(system).toContain('Не назначать встречи до 10 утра');
     expect(system).toContain(`id: ${routineId}`);
+  });
+
+  // §Б7-6-1: фоновый прогон обязан знать дату не хуже чата — иначе «сегодняшние» задачи
+  // рутина считает от даты обучения модели. Блока продолжений у раннера нет (гард
+  // routine-v2.test.ts) — переставлять в его канале нечего, дата просто идёт за промптом.
+  test('routine-канал: дата владельца стоит сразу после ROUTINE_SYSTEM_PROMPT; блока продолжений нет', async () => {
+    const routineId = await seedRoutine(owner, { body: INSTRUCTION });
+    const { system } = await contextOf(
+      routineId,
+      [],
+      'propose',
+      undefined,
+      // Europe/Moscow (дефолт: строки user_settings у owner нет) — 22:30Z уже следующий день
+      () => new Date('2026-08-26T22:30:00Z'),
+    );
+    const dateLine = 'Сегодня: 2026-08-27 (четверг), таймзона владельца: Europe/Moscow.';
+    expect(system).toContain(dateLine);
+    expect(system.indexOf(dateLine)).toBe(`${ROUTINE_SYSTEM_PROMPT}\n\n`.length);
+    expect(system.indexOf(dateLine)).toBeLessThan(system.indexOf('режим: propose'));
+    expect(system).not.toContain('Продолжения разговора:');
   });
 
   test('инструкция рутины приезжает ЦЕЛИКОМ, со строками (тело = задание, V1.1)', async () => {
