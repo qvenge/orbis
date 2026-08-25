@@ -901,8 +901,8 @@ export async function rolloverPreview(
       })
       // Детерминированный порядок — как карточки Overview: title → id
       .sort((a, b) => {
-        const ka = `${a.categoryTitle} ${a.categoryId}`;
-        const kb = `${b.categoryTitle} ${b.categoryId}`;
+        const ka = `${a.categoryTitle}\u0000${a.categoryId}`;
+        const kb = `${b.categoryTitle}\u0000${b.categoryId}`;
         return ka < kb ? -1 : ka > kb ? 1 : 0;
       });
 

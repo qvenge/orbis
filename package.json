@@ -10,8 +10,9 @@
     "typecheck": "bun run --filter '*' typecheck",
     "lint": "biome check .",
     "format": "biome format --write .",
-    "test": "bun run --filter '*' test",
+    "test": "bun run --filter '*' test && bun test scripts/",
     "test:rls": "bun scripts/test-rls.ts",
+    "check:legacy-form": "bun scripts/check-legacy-form.ts",
     "db:prepare": "bun scripts/setup-db.ts && cd apps/server && DATABASE_URL=$DATABASE_URL_ADMIN bun run db:migrate && cd ../.. && bun scripts/seed-aspects.ts && bun run test:rls",
     "test:perf": "bun run --filter @orbis/server test:perf"
   },
