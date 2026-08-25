@@ -1,0 +1,413 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "orbis_declarations",
+  "description": "Ответ на просьбу владельца: пачка деклараций реестра Orbis, либо просьба уточнить, либо признание, что просьба — не декларация.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["declarations", "clarification_needed", "wrong_form"],
+  "properties": {
+    "declarations": {
+      "type": "array",
+      "description": "Декларации, которые надо записать в реестр. Пусто, если нужна форма не декларации или требуется уточнение.",
+      "items": {
+        "oneOf": [
+          {
+            "title": "property_definition",
+            "description": "Новое свойство в реестре (факт с тождеством).",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "key", "label", "description", "type"],
+            "properties": {
+              "kind": { "const": "property_definition" },
+              "key": { "type": "string", "pattern": "^(user|orbis)/[a-z0-9][a-z0-9_-]*$" },
+              "label": { "$ref": "#/$defs/locstr" },
+              "description": { "$ref": "#/$defs/locstr" },
+              "status": { "enum": ["active", "proposed"] },
+              "scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "aspect": { "type": "string" },
+                  "tags": { "type": "array", "items": { "type": "string" } },
+                  "children_of": { "type": "string" }
+                }
+              },
+              "type": { "$ref": "#/$defs/proptype" }
+            }
+          },
+          {
+            "title": "aspect_delta",
+            "description": "Пользовательская дельта поверх аспекта: добавить свойство, добавить вариант select-свойства, скрыть свойство, переименовать.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "aspect"],
+            "properties": {
+              "kind": { "const": "aspect_delta" },
+              "aspect": { "type": "string" },
+              "label": { "$ref": "#/$defs/locstr" },
+              "description": { "$ref": "#/$defs/locstr" },
+              "add_properties": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["property"],
+                  "properties": {
+                    "property": { "type": "string" },
+                    "required": { "type": "boolean" }
+                  }
+                }
+              },
+              "hide_properties": { "type": "array", "items": { "type": "string" } },
+              "add_variants": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["property", "key", "label", "value_map"],
+                  "properties": {
+                    "property": { "type": "string" },
+                    "key": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+                    "label": { "$ref": "#/$defs/locstr" },
+                    "value_map": {
+                      "type": "array",
+                      "description": "Отнесение варианта к классу КАЖДОГО контракта, где слот участвует (fail-closed). Пустой массив — только если слот не участвует ни в одном контракте.",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["contract", "slot", "class"],
+                        "properties": {
+                          "contract": { "type": "string" },
+                          "slot": { "type": "string" },
+                          "class": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "binding",
+            "description": "Привязка аспекта к контракту: какие свойства встают в слоты и как варианты ложатся на классы.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "aspect", "implements"],
+            "properties": {
+              "kind": { "const": "binding" },
+              "aspect": { "type": "string" },
+              "implements": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["contract", "bind"],
+                  "properties": {
+                    "contract": { "type": "string" },
+                    "bind": {
+                      "type": "object",
+                      "description": "слот → key свойства аспекта",
+                      "additionalProperties": { "type": "string" }
+                    },
+                    "fixed": {
+                      "type": "object",
+                      "description": "слот → постоянное значение/класс для всех записей этого аспекта (когда свойства под слот нет)",
+                      "additionalProperties": true
+                    },
+                    "value_map": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["slot", "variant", "class"],
+                        "properties": {
+                          "slot": { "type": "string" },
+                          "variant": {},
+                          "class": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "action_definition",
+            "description": "Именованное действие: параметры, предусловие, шаги-тулы, факты чувствительности, где предлагается.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "key", "label", "description", "steps", "sensitivity"],
+            "properties": {
+              "kind": { "const": "action_definition" },
+              "key": { "type": "string", "pattern": "^(user|orbis)/[a-z0-9][a-z0-9_-]*$" },
+              "label": { "$ref": "#/$defs/locstr" },
+              "description": { "$ref": "#/$defs/locstr" },
+              "params": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name"],
+                  "properties": {
+                    "name": { "type": "string" },
+                    "label": { "$ref": "#/$defs/locstr" },
+                    "type": { "$ref": "#/$defs/proptype" },
+                    "contract": { "type": "string" },
+                    "required": { "type": "boolean" }
+                  }
+                }
+              },
+              "precondition": { "$ref": "#/$defs/expr" },
+              "steps": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["tool", "args"],
+                  "properties": {
+                    "tool": { "type": "string" },
+                    "args": { "type": "object" }
+                  }
+                }
+              },
+              "sensitivity": {
+                "type": "array",
+                "items": { "enum": ["touches_money", "external", "irreversible", "changes_registry"] }
+              },
+              "offered_by": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["surface"],
+                  "properties": {
+                    "surface": { "enum": ["agenda", "budget", "list-row", "entity-detail", "chat-card", "browser"] },
+                    "when": { "$ref": "#/$defs/expr" },
+                    "label": { "$ref": "#/$defs/locstr" }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "title": "subscription_delta",
+            "description": "Дельта подписки поверхности: добавить источник/секцию, добавить условие скрытия.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "surface"],
+            "properties": {
+              "kind": { "const": "subscription_delta" },
+              "surface": { "enum": ["agenda", "budget", "list-row", "entity-detail", "chat-card", "browser"] },
+              "add_sources": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["id", "show"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "section": { "type": "string" },
+                    "label": { "$ref": "#/$defs/locstr" },
+                    "show": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["contract"],
+                      "properties": {
+                        "contract": { "type": "string" },
+                        "counted_set": { "type": "string" },
+                        "class_set": { "type": "string" },
+                        "window": { "type": "string" }
+                      }
+                    },
+                    "when": { "$ref": "#/$defs/expr" }
+                  }
+                }
+              },
+              "add_hide_when": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["when"],
+                  "properties": {
+                    "source": { "type": "string" },
+                    "when": { "$ref": "#/$defs/expr" }
+                  }
+                }
+              },
+              "set": { "type": "object" }
+            }
+          },
+          {
+            "title": "rule",
+            "description": "Правило из каталога шаблонов.",
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "template"],
+            "properties": {
+              "kind": { "const": "rule" },
+              "template": { "enum": ["requires_when", "on_enter_class", "default", "unique_among", "assign_level"] },
+              "owner": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "aspect": { "type": "string" },
+                  "property": { "type": "string" },
+                  "contract": { "type": "string" }
+                }
+              },
+              "label": { "$ref": "#/$defs/locstr" },
+              "description": { "$ref": "#/$defs/locstr" },
+              "property": { "type": "string" },
+              "when": { "$ref": "#/$defs/expr" },
+              "value": { "$ref": "#/$defs/expr" },
+              "contract": { "type": "string" },
+              "class": { "type": "string" },
+              "among": { "$ref": "#/$defs/expr" },
+              "level": { "enum": ["silent", "show", "discuss", "forbid"] },
+              "then": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["tool", "args"],
+                  "properties": {
+                    "tool": { "type": "string" },
+                    "args": { "type": "object" }
+                  }
+                }
+              }
+            },
+            "allOf": [
+              { "if": { "properties": { "template": { "const": "requires_when" } }, "required": ["template"] }, "then": { "required": ["property", "when"] } },
+              { "if": { "properties": { "template": { "const": "on_enter_class" } }, "required": ["template"] }, "then": { "required": ["contract", "class", "then"] } },
+              { "if": { "properties": { "template": { "const": "default" } }, "required": ["template"] }, "then": { "required": ["property", "value"] } },
+              { "if": { "properties": { "template": { "const": "unique_among" } }, "required": ["template"] }, "then": { "required": ["property", "among"] } },
+              { "if": { "properties": { "template": { "const": "assign_level" } }, "required": ["template"] }, "then": { "required": ["when", "level"] } }
+            ]
+          }
+        ]
+      }
+    },
+    "clarification_needed": {
+      "type": ["string", "null"],
+      "description": "Вопрос владельцу, если без ответа декларацию не записать. null — вопросов нет."
+    },
+    "wrong_form": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["detected", "suggested"],
+      "properties": {
+        "detected": { "type": "boolean", "description": "true — просьба не выражается декларациями реестра" },
+        "suggested": { "enum": ["routine", "batch", null], "description": "правильная форма: рутина (процесс с интеллектом) или batch (применение действия к результатам запроса)" }
+      }
+    }
+  },
+  "$defs": {
+    "locstr": {
+      "type": "object",
+      "description": "Подпись по локалям: {\"ru\": \"...\"}",
+      "minProperties": 1,
+      "additionalProperties": { "type": "string" }
+    },
+    "proptype": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["text", "select", "boolean", "integer", "decimal", "date", "timestamp", "ref", "uuid", "json", "time", "registry_ref"] },
+        "variants": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key", "label"],
+            "properties": {
+              "key": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*$" },
+              "label": { "$ref": "#/$defs/locstr" }
+            }
+          }
+        },
+        "min": { "type": "number" },
+        "max": { "type": "number" },
+        "exclusiveMin": { "type": "number" },
+        "exclusiveMax": { "type": "number" },
+        "integer": { "type": "boolean" },
+        "maxItems": { "type": "integer" },
+        "format": { "enum": ["url", "email", "color", "currency"] },
+        "pattern": { "type": "string" },
+        "maxLength": { "type": "integer" },
+        "cardinality": { "enum": ["one", "many"] },
+        "target": { "type": ["string", "null"] },
+        "default": {},
+        "model_writable": { "type": "boolean" }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "select" } }, "required": ["kind"] }, "then": { "required": ["variants"] } }
+      ]
+    },
+    "expr": {
+      "description": "Выражение — JSON AST. Либо узел-операция {op,args}, либо узел-значение.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "args"],
+          "properties": {
+            "op": { "enum": ["=", "!=", "<", "<=", ">", ">=", "and", "or", "not", "in", "+", "-", "*", "/", "class", "has"] },
+            "args": { "type": "array", "items": { "$ref": "#/$defs/expr" } }
+          }
+        },
+        { "type": "object", "additionalProperties": false, "required": ["const"], "properties": { "const": {} } },
+        { "type": "object", "additionalProperties": false, "required": ["prop"], "properties": { "prop": { "type": "string" } } },
+        { "type": "object", "additionalProperties": false, "required": ["param"], "properties": { "param": { "type": "string" } } },
+        { "type": "object", "additionalProperties": false, "required": ["ctx"], "properties": { "ctx": { "enum": ["$today", "$now", "$owner", "$entity"] } } },
+        { "type": "object", "additionalProperties": false, "required": ["core"], "properties": { "core": { "enum": ["title", "tags", "archived"] } } },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["slot"],
+          "properties": {
+            "slot": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["contract", "slot"],
+              "properties": { "contract": { "type": "string" }, "slot": { "type": "string" } }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["class"],
+          "properties": {
+            "class": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["contract"],
+              "properties": { "contract": { "type": "string" } }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["class_set"],
+          "properties": {
+            "class_set": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["contract", "set"],
+              "properties": { "contract": { "type": "string" }, "set": { "type": "string" } }
+            }
+          }
+        },
+        { "type": "object", "additionalProperties": false, "required": ["has"], "properties": { "has": { "type": "string" } } }
+      ]
+    }
+  }
+}

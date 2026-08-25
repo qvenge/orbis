@@ -1,0 +1,80 @@
+{
+  "_": "Мок-реестр пробы П2: ровно то, что нужно подписке Budget (Ч8). Свойства — Р2/Р3/Р11, роли — Р5, контракты — Ч4/Ч8, роли связей — Б4.",
+  "properties": {
+    "orbis/amount": { "key": "orbis/amount", "type": "decimal" },
+    "orbis/currency": { "key": "orbis/currency", "type": "string" },
+    "orbis/direction": { "key": "orbis/direction", "type": "select", "options": ["expense", "income"] },
+    "orbis/occurred_on": { "key": "orbis/occurred_on", "type": "date" },
+    "orbis/planned": { "key": "orbis/planned", "type": "bool" },
+    "orbis/category_ref": { "key": "orbis/category_ref", "type": "ref" },
+    "orbis/recurrence": { "key": "orbis/recurrence", "type": "object" },
+    "orbis/limit": { "key": "orbis/limit", "type": "decimal" },
+    "orbis/carryover": { "key": "orbis/carryover", "type": "decimal" },
+    "orbis/period_start": { "key": "orbis/period_start", "type": "date" },
+    "orbis/period_end": { "key": "orbis/period_end", "type": "date" },
+    "orbis/spend_class": { "key": "orbis/spend_class", "type": "select" },
+    "orbis/icon": { "key": "orbis/icon", "type": "string" },
+    "orbis/color": { "key": "orbis/color", "type": "string" }
+  },
+  "roles": {
+    "orbis/financial": {
+      "properties": ["orbis/amount", "orbis/currency", "orbis/direction", "orbis/occurred_on", "orbis/planned", "orbis/category_ref"]
+    },
+    "orbis/schedule": { "properties": ["orbis/recurrence"] },
+    "orbis/budget": {
+      "properties": ["orbis/category_ref", "orbis/limit", "orbis/carryover", "orbis/currency", "orbis/period_start", "orbis/period_end"]
+    },
+    "orbis/category": { "properties": ["orbis/spend_class", "orbis/icon", "orbis/color"] }
+  },
+  "contracts": {
+    "money-movement": {
+      "slots": ["amount", "currency", "date", "planned", "direction", "category", "template_marker"],
+      "class_sets": { "outflow": ["expense"], "inflow": ["income"] },
+      "class_slot": "direction",
+      "implementations": [
+        {
+          "role": "orbis/financial",
+          "map": {
+            "amount": "orbis/amount",
+            "currency": "orbis/currency",
+            "date": "orbis/occurred_on",
+            "planned": "orbis/planned",
+            "direction": "orbis/direction",
+            "category": "orbis/category_ref",
+            "template_marker": "orbis/recurrence"
+          }
+        }
+      ]
+    },
+    "envelope": {
+      "slots": ["limit", "carryover", "currency", "period_start", "period_end", "category"],
+      "implementations": [
+        {
+          "role": "orbis/budget",
+          "map": {
+            "limit": "orbis/limit",
+            "carryover": "orbis/carryover",
+            "currency": "orbis/currency",
+            "period_start": "orbis/period_start",
+            "period_end": "orbis/period_end",
+            "category": "orbis/category_ref"
+          }
+        }
+      ]
+    },
+    "category": {
+      "slots": ["spend_class", "icon", "color"],
+      "implementations": [
+        {
+          "role": "orbis/category",
+          "map": { "spend_class": "orbis/spend_class", "icon": "orbis/icon", "color": "orbis/color" }
+        }
+      ]
+    }
+  },
+  "relation_roles": {
+    "envelope-binding": { "source": "конверт", "target": "транзакция" },
+    "category-parent": { "source": "категория", "target": "подкатегория" },
+    "derived-from": { "source": "шаблон", "target": "инстанс" }
+  }
+}

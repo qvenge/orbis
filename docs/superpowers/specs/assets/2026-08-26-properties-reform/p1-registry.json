@@ -1,0 +1,294 @@
+{
+  "_": "Мок эффективного реестра владельца для пробы П1 (форма пути С, Р11-именование). Не прод-данные.",
+  "type_dictionary": {
+    "base_kinds": [
+      { "kind": "text", "note": "строка; конфиг pattern/format/maxLength (В8)" },
+      { "kind": "select", "note": "закрытый набор вариантов: variants[{key,label}]" },
+      { "kind": "boolean", "note": "истина/ложь" },
+      { "kind": "integer", "note": "целое; конфиг min/max (В8)" },
+      { "kind": "decimal", "note": "десятичная строка; конфиг min/max/exclusiveMin (В8)" },
+      { "kind": "date", "note": "YYYY-MM-DD" },
+      { "kind": "timestamp", "note": "ISO 8601 с таймзоной" },
+      { "kind": "ref", "note": "ссылка на сущность; конфиг target = запрос-ограничение цели" },
+      { "kind": "uuid", "note": "служебный идентификатор (не ссылка на сущность)" },
+      { "kind": "json", "note": "вложенный объект без разбора" }
+    ],
+    "additions_v8": [
+      { "add": "time", "note": "новый kind: ЧЧ:ММ локального времени" },
+      { "add": "registry_ref", "note": "новый kind: ссылка на запись реестра; target = contract|aspect|property|relation_role" },
+      { "add": "cardinality", "note": "конфиг любого скаляра: one (умолчание) | many" },
+      { "add": "exclusiveMin", "note": "конфиг decimal вместо lookahead-паттерна" },
+      { "add": "text.pattern|format|maxLength", "note": "конфиг text: format = url|email|color|currency" },
+      { "add": "bounds", "note": "конфиг: min|max|integer|maxItems" }
+    ]
+  },
+  "contracts": [
+    {
+      "id": "orbis/completable",
+      "label": { "ru": "завершаемость" },
+      "description": { "ru": "у записи есть состояние, которое можно закрыть; даёт чекбокс, зачёркивание, снятие блокировок" },
+      "slots": [
+        { "slot": "status", "required": true, "value": "class", "note": "свойство-состояние, каждый вариант отнесён к классу" },
+        { "slot": "closed_at", "required": false, "type": "timestamp", "note": "когда закрыто" }
+      ],
+      "classes": [
+        { "class": "done", "label": { "ru": "сделано" } },
+        { "class": "cancelled", "label": { "ru": "отменено" } },
+        { "class": "active", "label": { "ru": "в работе" } }
+      ],
+      "class_sets": [
+        { "set": "closed", "classes": ["done", "cancelled"], "note": "«больше не ждёт действия»" },
+        { "set": "open", "classes": ["active"] }
+      ]
+    },
+    {
+      "id": "orbis/when",
+      "label": { "ru": "когда" },
+      "description": { "ru": "запись привязана ко времени; даёт попадание в Agenda, колонку времени, окна дат" },
+      "slots": [
+        { "slot": "moment", "required": false, "type": "timestamp", "note": "момент события" },
+        { "slot": "due", "required": false, "type": "date", "note": "срок" },
+        { "slot": "all_day", "required": false, "type": "boolean" }
+      ],
+      "classes": [],
+      "class_sets": [],
+      "note": "нужен хотя бы один из moment/due"
+    },
+    {
+      "id": "orbis/money-movement",
+      "label": { "ru": "движение денег" },
+      "description": { "ru": "запись несёт сумму, которая участвует в бюджете" },
+      "slots": [
+        { "slot": "amount", "required": true, "type": "decimal" },
+        { "slot": "direction", "required": true, "value": "class" },
+        { "slot": "date", "required": true, "type": "date" },
+        { "slot": "category", "required": false, "type": "ref" },
+        { "slot": "currency", "required": false, "type": "text" },
+        { "slot": "planned", "required": false, "type": "boolean", "note": "отсутствие = false (В5)" }
+      ],
+      "classes": [
+        { "class": "expense", "label": { "ru": "расход" } },
+        { "class": "income", "label": { "ru": "доход" } },
+        { "class": "neutral", "label": { "ru": "не влияет на бюджет" }, "note": "перевод между своими счетами, возврат себе" }
+      ],
+      "class_sets": [
+        { "set": "counted_as_spending", "classes": ["expense"] },
+        { "set": "counted_as_earning", "classes": ["income"] }
+      ]
+    },
+    {
+      "id": "orbis/sensitivity",
+      "label": { "ru": "чувствительность" },
+      "description": { "ru": "факты о последствиях шага; политика и классификатор делегирования назначают по ним уровень" },
+      "facts": [
+        { "fact": "touches_money", "label": { "ru": "трогает деньги" } },
+        { "fact": "external", "label": { "ru": "выходит вовне (письмо, платёж, звонок)" } },
+        { "fact": "irreversible", "label": { "ru": "необратимо" } },
+        { "fact": "changes_registry", "label": { "ru": "меняет реестр (что видит и делает владелец)" } }
+      ],
+      "levels": [
+        { "level": "silent", "label": { "ru": "молча" } },
+        { "level": "show", "label": { "ru": "показать" } },
+        { "level": "discuss", "label": { "ru": "обсудить до исполнения" } },
+        { "level": "forbid", "label": { "ru": "нельзя" } }
+      ]
+    }
+  ],
+  "properties": [
+    { "key": "orbis/start_at", "type": { "kind": "timestamp" }, "label": { "ru": "начало" }, "description": { "ru": "момент начала события" } },
+    { "key": "orbis/end_at", "type": { "kind": "timestamp" }, "label": { "ru": "конец" }, "description": { "ru": "момент окончания события" } },
+    { "key": "orbis/duration_min", "type": { "kind": "integer", "min": 1 }, "label": { "ru": "длительность, мин" }, "description": { "ru": "длительность события в минутах" } },
+    { "key": "orbis/all_day", "type": { "kind": "boolean" }, "label": { "ru": "весь день" }, "description": { "ru": "событие занимает весь день" } },
+    { "key": "orbis/recurrence", "type": { "kind": "json" }, "label": { "ru": "повторение" }, "description": { "ru": "правило повторения события" } },
+    { "key": "orbis/location", "type": { "kind": "text" }, "label": { "ru": "место" }, "description": { "ru": "место события" } },
+    { "key": "orbis/timezone", "type": { "kind": "text" }, "label": { "ru": "таймзона" }, "description": { "ru": "таймзона события" } },
+
+    { "key": "orbis/task_status", "type": { "kind": "select", "variants": [
+        { "key": "inbox", "label": { "ru": "входящее" } },
+        { "key": "planned", "label": { "ru": "запланировано" } },
+        { "key": "in_progress", "label": { "ru": "в работе" } },
+        { "key": "waiting", "label": { "ru": "ожидание" } },
+        { "key": "done", "label": { "ru": "сделано" } },
+        { "key": "cancelled", "label": { "ru": "отменено" } } ] },
+      "label": { "ru": "статус" }, "description": { "ru": "состояние задачи" } },
+    { "key": "orbis/priority", "type": { "kind": "select", "variants": [
+        { "key": "low", "label": { "ru": "низкий" } }, { "key": "medium", "label": { "ru": "средний" } }, { "key": "high", "label": { "ru": "высокий" } } ] },
+      "label": { "ru": "приоритет" }, "description": { "ru": "приоритет задачи" } },
+    { "key": "orbis/due_date", "type": { "kind": "date" }, "label": { "ru": "срок" }, "description": { "ru": "дата, к которой задача должна быть сделана" } },
+    { "key": "orbis/completed_at", "type": { "kind": "timestamp" }, "label": { "ru": "закрыто" }, "description": { "ru": "момент закрытия записи" } },
+    { "key": "orbis/effort_min", "type": { "kind": "integer", "min": 1 }, "label": { "ru": "усилие, мин" }, "description": { "ru": "оценка трудозатрат в минутах" } },
+    { "key": "orbis/waiting_for", "type": { "kind": "text" }, "label": { "ru": "ждём от" }, "description": { "ru": "кого или чего ждёт задача" } },
+
+    { "key": "orbis/amount", "type": { "kind": "decimal", "exclusiveMin": 0 }, "label": { "ru": "сумма" }, "description": { "ru": "сумма операции, всегда положительная; знак задаёт направление" } },
+    { "key": "orbis/currency", "type": { "kind": "text", "format": "currency", "maxLength": 3 }, "label": { "ru": "валюта" }, "description": { "ru": "код валюты ISO-4217" } },
+    { "key": "orbis/direction", "type": { "kind": "select", "variants": [
+        { "key": "expense", "label": { "ru": "расход" } }, { "key": "income", "label": { "ru": "доход" } } ] },
+      "label": { "ru": "направление" }, "description": { "ru": "направление движения денег" } },
+    { "key": "orbis/finance_category", "type": { "kind": "ref", "target": "aspect=orbis/category" }, "label": { "ru": "категория" }, "description": { "ru": "категория доходов и расходов (модуль Финансы)" } },
+    { "key": "orbis/occurred_on", "type": { "kind": "date" }, "label": { "ru": "дата операции" }, "description": { "ru": "когда операция произошла" } },
+    { "key": "orbis/planned", "type": { "kind": "boolean", "default": false }, "label": { "ru": "план" }, "description": { "ru": "операция ещё не случилась, это план" } },
+    { "key": "orbis/recurring", "type": { "kind": "boolean" }, "label": { "ru": "повторяющаяся" }, "description": { "ru": "операция повторяется по расписанию" } },
+    { "key": "orbis/payment_method", "type": { "kind": "text" }, "label": { "ru": "способ оплаты" }, "description": { "ru": "чем оплачено" } },
+    { "key": "orbis/counterparty", "type": { "kind": "text" }, "label": { "ru": "контрагент" }, "description": { "ru": "кому или от кого" } },
+
+    { "key": "orbis/content_type", "type": { "kind": "select", "variants": [
+        { "key": "markdown", "label": { "ru": "markdown" } }, { "key": "plain", "label": { "ru": "текст" } }, { "key": "checklist", "label": { "ru": "чеклист" } } ] },
+      "label": { "ru": "формат" }, "description": { "ru": "формат содержимого заметки" } },
+    { "key": "orbis/pinned", "type": { "kind": "boolean" }, "label": { "ru": "закреплено" }, "description": { "ru": "заметка закреплена" } },
+
+    { "key": "orbis/envelope_limit", "type": { "kind": "decimal", "min": 0 }, "label": { "ru": "лимит" }, "description": { "ru": "лимит конверта на период" } },
+    { "key": "orbis/period_start", "type": { "kind": "date" }, "label": { "ru": "начало периода" }, "description": { "ru": "первый день периода конверта" } },
+    { "key": "orbis/period_end", "type": { "kind": "date" }, "label": { "ru": "конец периода" }, "description": { "ru": "последний день периода конверта" } },
+    { "key": "orbis/carryover", "type": { "kind": "decimal" }, "label": { "ru": "перенос" }, "description": { "ru": "остаток, перенесённый с прошлого периода" } },
+
+    { "key": "orbis/icon", "type": { "kind": "text", "maxLength": 8 }, "label": { "ru": "иконка" }, "description": { "ru": "эмодзи категории" } },
+    { "key": "orbis/color", "type": { "kind": "text", "format": "color" }, "label": { "ru": "цвет" }, "description": { "ru": "цвет категории" } },
+    { "key": "orbis/aliases", "type": { "kind": "text", "cardinality": "many" }, "label": { "ru": "синонимы" }, "description": { "ru": "синонимы для распознавания категории во вводе" } },
+    { "key": "orbis/spend_class", "type": { "kind": "select", "variants": [
+        { "key": "fixed", "label": { "ru": "обязательные" } }, { "key": "discretionary", "label": { "ru": "необязательные" } } ] },
+      "label": { "ru": "класс трат" }, "description": { "ru": "обязательность трат категории" } },
+
+    { "key": "orbis/memory_kind", "type": { "kind": "select", "variants": [
+        { "key": "fact", "label": { "ru": "факт" } }, { "key": "rule", "label": { "ru": "правило" } } ] },
+      "label": { "ru": "вид памяти" }, "description": { "ru": "факт о владельце или правило обработки ввода" } },
+    { "key": "orbis/rule_pattern", "type": { "kind": "text" }, "label": { "ru": "образец" }, "description": { "ru": "текст, по которому срабатывает правило памяти" } },
+    { "key": "orbis/rule_target", "type": { "kind": "ref", "target": "aspect=orbis/category" }, "label": { "ru": "цель правила" }, "description": { "ru": "куда правило памяти относит распознанное" } },
+    { "key": "orbis/rule_scope", "type": { "kind": "registry_ref", "target": "contract" }, "label": { "ru": "область правила" }, "description": { "ru": "контракт, к которому привязано правило памяти; пусто = глобально" } },
+
+    { "key": "orbis/progress_source", "type": { "kind": "json" }, "label": { "ru": "источник прогресса" }, "description": { "ru": "запрос и агрегат, из которых считается прогресс цели" } },
+    { "key": "orbis/target_value", "type": { "kind": "decimal", "exclusiveMin": 0 }, "label": { "ru": "целевое значение" }, "description": { "ru": "к какому числу идёт цель" } },
+    { "key": "orbis/current_value", "type": { "kind": "decimal", "min": 0, "model_writable": false }, "label": { "ru": "текущее значение" }, "description": { "ru": "кэш прогресса; считает сервер" } },
+    { "key": "orbis/unit", "type": { "kind": "text" }, "label": { "ru": "единица" }, "description": { "ru": "единица измерения цели" } },
+
+    { "key": "orbis/project_stage", "type": { "kind": "select", "variants": [
+        { "key": "active", "label": { "ru": "активен" } }, { "key": "paused", "label": { "ru": "на паузе" } }, { "key": "done", "label": { "ru": "завершён" } } ] },
+      "label": { "ru": "стадия проекта" }, "description": { "ru": "жизненный цикл проекта" } },
+    { "key": "orbis/repo_url", "type": { "kind": "text", "format": "url", "maxLength": 512 }, "label": { "ru": "репозиторий" }, "description": { "ru": "адрес репозитория" } },
+    { "key": "orbis/default_branch", "type": { "kind": "text", "maxLength": 128 }, "label": { "ru": "ветка по умолчанию" }, "description": { "ru": "основная ветка репозитория" } },
+
+    { "key": "orbis/executor", "type": { "kind": "select", "variants": [
+        { "key": "human", "label": { "ru": "человек" } }, { "key": "agent", "label": { "ru": "агент" } } ] },
+      "label": { "ru": "исполнитель" }, "description": { "ru": "кто выполняет тикет" } },
+    { "key": "orbis/grant_id", "type": { "kind": "uuid" }, "label": { "ru": "доступ" }, "description": { "ru": "грант, которым работает агент-исполнитель" } },
+    { "key": "orbis/assignee", "type": { "kind": "text" }, "label": { "ru": "кому" }, "description": { "ru": "имя человека-исполнителя" } },
+    { "key": "orbis/may_close", "type": { "kind": "boolean", "default": false }, "label": { "ru": "может закрыть" }, "description": { "ru": "исполнителю разрешено закрывать тикет самому" } },
+
+    { "key": "orbis/routine_stage", "type": { "kind": "select", "variants": [
+        { "key": "active", "label": { "ru": "работает" } }, { "key": "paused", "label": { "ru": "на паузе" } } ] },
+      "label": { "ru": "стадия рутины" }, "description": { "ru": "работает рутина или временно выключена" } },
+    { "key": "orbis/routine_at", "type": { "kind": "time" }, "label": { "ru": "время запуска" }, "description": { "ru": "локальное время запуска рутины" } },
+    { "key": "orbis/routine_days", "type": { "kind": "select", "cardinality": "many", "variants": [
+        { "key": "mo", "label": { "ru": "пн" } }, { "key": "tu", "label": { "ru": "вт" } }, { "key": "we", "label": { "ru": "ср" } },
+        { "key": "th", "label": { "ru": "чт" } }, { "key": "fr", "label": { "ru": "пт" } }, { "key": "sa", "label": { "ru": "сб" } }, { "key": "su", "label": { "ru": "вс" } } ] },
+      "label": { "ru": "дни" }, "description": { "ru": "дни недели запуска рутины; пусто = каждый день" } },
+    { "key": "orbis/routine_mode", "type": { "kind": "select", "variants": [
+        { "key": "propose", "label": { "ru": "предлагает" } }, { "key": "act", "label": { "ru": "действует" } } ] },
+      "label": { "ru": "режим рутины" }, "description": { "ru": "рутина предлагает изменения или применяет их сама" } },
+    { "key": "orbis/allowed_tools", "type": { "kind": "text", "cardinality": "many" }, "label": { "ru": "разрешённые тулы" }, "description": { "ru": "инструменты, доступные act-рутине" } },
+
+    { "key": "user/performed_at", "type": { "kind": "timestamp" }, "label": { "ru": "когда была" }, "description": { "ru": "когда тренировка состоялась" } },
+    { "key": "user/workout_status", "type": { "kind": "select", "variants": [
+        { "key": "planned", "label": { "ru": "запланирована" } }, { "key": "done", "label": { "ru": "проведена" } } ] },
+      "label": { "ru": "статус тренировки" }, "description": { "ru": "состояние тренировки" } },
+    { "key": "user/book_status", "type": { "kind": "select", "variants": [
+        { "key": "to-read", "label": { "ru": "хочу прочитать" } }, { "key": "reading", "label": { "ru": "читаю" } }, { "key": "finished", "label": { "ru": "прочитана" } } ] },
+      "label": { "ru": "статус книги" }, "description": { "ru": "где книга в чтении" } },
+    { "key": "user/price", "type": { "kind": "decimal", "exclusiveMin": 0 }, "label": { "ru": "цена" }, "description": { "ru": "сколько стоит хотелка" } },
+    { "key": "user/bought_on", "type": { "kind": "date" }, "label": { "ru": "куплено" }, "description": { "ru": "дата покупки; пусто = ещё не куплено" } },
+    { "key": "user/done_today", "type": { "kind": "boolean" }, "label": { "ru": "сделано сегодня" }, "description": { "ru": "привычка выполнена сегодня" } }
+  ],
+  "aspects": [
+    { "id": "orbis/schedule", "label": { "ru": "Событие" }, "module": "planner",
+      "properties": [ { "property": "orbis/start_at", "required": true }, { "property": "orbis/end_at" }, { "property": "orbis/duration_min" }, { "property": "orbis/all_day" }, { "property": "orbis/recurrence" }, { "property": "orbis/location" }, { "property": "orbis/timezone" } ],
+      "implements": [ { "contract": "orbis/when", "bind": { "moment": "orbis/start_at", "all_day": "orbis/all_day" } } ] },
+    { "id": "orbis/task", "label": { "ru": "Задача" }, "module": "planner",
+      "properties": [ { "property": "orbis/task_status", "required": true }, { "property": "orbis/priority" }, { "property": "orbis/due_date" }, { "property": "orbis/completed_at" }, { "property": "orbis/effort_min" }, { "property": "orbis/waiting_for" } ],
+      "implements": [
+        { "contract": "orbis/completable", "bind": { "status": "orbis/task_status", "closed_at": "orbis/completed_at" },
+          "value_map": [ { "slot": "status", "variant": "inbox", "class": "active" }, { "slot": "status", "variant": "planned", "class": "active" }, { "slot": "status", "variant": "in_progress", "class": "active" }, { "slot": "status", "variant": "waiting", "class": "active" }, { "slot": "status", "variant": "done", "class": "done" }, { "slot": "status", "variant": "cancelled", "class": "cancelled" } ] },
+        { "contract": "orbis/when", "bind": { "due": "orbis/due_date" } } ] },
+    { "id": "orbis/financial", "label": { "ru": "Операция" }, "module": "finance",
+      "properties": [ { "property": "orbis/amount", "required": true }, { "property": "orbis/direction", "required": true }, { "property": "orbis/finance_category", "required": true }, { "property": "orbis/occurred_on" }, { "property": "orbis/currency" }, { "property": "orbis/planned" }, { "property": "orbis/recurring" }, { "property": "orbis/payment_method" }, { "property": "orbis/counterparty" } ],
+      "implements": [
+        { "contract": "orbis/money-movement", "bind": { "amount": "orbis/amount", "direction": "orbis/direction", "date": "orbis/occurred_on", "category": "orbis/finance_category", "currency": "orbis/currency", "planned": "orbis/planned" },
+          "value_map": [ { "slot": "direction", "variant": "expense", "class": "expense" }, { "slot": "direction", "variant": "income", "class": "income" } ] } ] },
+    { "id": "orbis/note", "label": { "ru": "Заметка" }, "module": "core",
+      "properties": [ { "property": "orbis/content_type" }, { "property": "orbis/pinned" } ], "implements": [] },
+    { "id": "orbis/budget", "label": { "ru": "Конверт" }, "module": "finance",
+      "properties": [ { "property": "orbis/finance_category", "required": true }, { "property": "orbis/envelope_limit", "required": true }, { "property": "orbis/currency" }, { "property": "orbis/period_start", "required": true }, { "property": "orbis/period_end", "required": true }, { "property": "orbis/carryover" } ],
+      "implements": [] },
+    { "id": "orbis/category", "label": { "ru": "Категория" }, "module": "finance",
+      "properties": [ { "property": "orbis/icon" }, { "property": "orbis/color" }, { "property": "orbis/aliases" }, { "property": "orbis/spend_class" } ], "implements": [] },
+    { "id": "orbis/memory", "label": { "ru": "Память" }, "module": "memory",
+      "properties": [ { "property": "orbis/memory_kind", "required": true }, { "property": "orbis/rule_pattern" }, { "property": "orbis/rule_target" }, { "property": "orbis/rule_scope" } ], "implements": [] },
+    { "id": "orbis/goal", "label": { "ru": "Цель" }, "module": "goals",
+      "properties": [ { "property": "orbis/progress_source", "required": true }, { "property": "orbis/target_value", "required": true }, { "property": "orbis/current_value" }, { "property": "orbis/unit" } ], "implements": [] },
+    { "id": "orbis/project", "label": { "ru": "Проект" }, "module": "ade",
+      "properties": [ { "property": "orbis/project_stage", "required": true } ],
+      "implements": [ { "contract": "orbis/completable", "bind": { "status": "orbis/project_stage" },
+        "value_map": [ { "slot": "status", "variant": "active", "class": "active" }, { "slot": "status", "variant": "paused", "class": "active" }, { "slot": "status", "variant": "done", "class": "done" } ] } ] },
+    { "id": "orbis/repo", "label": { "ru": "Репозиторий" }, "module": "ade",
+      "properties": [ { "property": "orbis/repo_url", "required": true }, { "property": "orbis/default_branch", "required": true } ], "implements": [] },
+    { "id": "orbis/assignment", "label": { "ru": "Назначение" }, "module": "ade",
+      "properties": [ { "property": "orbis/executor", "required": true }, { "property": "orbis/grant_id" }, { "property": "orbis/assignee" }, { "property": "orbis/may_close" } ], "implements": [] },
+    { "id": "orbis/agent-run", "label": { "ru": "Прогон агента" }, "module": "ade", "service": true,
+      "properties": [], "implements": [], "note": "служебный аспект исполнителя: настраиваются только label/description" },
+    { "id": "orbis/routine", "label": { "ru": "Рутина" }, "module": "ade",
+      "properties": [ { "property": "orbis/routine_stage", "required": true }, { "property": "orbis/routine_at", "required": true }, { "property": "orbis/routine_days" }, { "property": "orbis/routine_mode", "required": true }, { "property": "orbis/allowed_tools" } ], "implements": [] },
+
+    { "id": "user/workout", "label": { "ru": "Тренировка" }, "module": "user",
+      "properties": [ { "property": "user/performed_at" }, { "property": "user/workout_status", "required": true } ],
+      "implements": [ { "contract": "orbis/completable", "bind": { "status": "user/workout_status" },
+        "value_map": [ { "slot": "status", "variant": "planned", "class": "active" }, { "slot": "status", "variant": "done", "class": "done" } ] } ] },
+    { "id": "user/book", "label": { "ru": "Книга" }, "module": "user",
+      "properties": [ { "property": "user/book_status", "required": true } ], "implements": [] },
+    { "id": "user/wishlist", "label": { "ru": "Хотелка" }, "module": "user",
+      "properties": [ { "property": "user/price", "required": true }, { "property": "user/bought_on" } ], "implements": [] },
+    { "id": "user/habit", "label": { "ru": "Привычка" }, "module": "user",
+      "properties": [ { "property": "user/done_today" } ], "implements": [] }
+  ],
+  "subscriptions": [
+    { "surface": "agenda", "owner": "seed:planner", "definition": {
+      "sources": [
+        { "id": "today", "section": "сегодня", "show": { "contract": "orbis/when", "window": "$today..$today+7d" } },
+        { "id": "overdue", "section": "просрочено", "show": { "contract": "orbis/when", "window": "..$today-1d" } }
+      ],
+      "hide_when": [ { "source": "*", "when": { "op": "in", "args": [ { "class": { "contract": "orbis/completable" } }, { "class_set": { "contract": "orbis/completable", "set": "closed" } } ] } } ]
+    } },
+    { "surface": "budget", "owner": "seed:finance", "definition": {
+      "sources": [
+        { "id": "movement", "show": { "contract": "orbis/money-movement", "counted_set": "counted_as_spending" },
+          "when": { "op": "and", "args": [ { "op": "=", "args": [ { "slot": { "contract": "orbis/money-movement", "slot": "planned" } }, { "const": false } ] }, { "op": "<=", "args": [ { "slot": { "contract": "orbis/money-movement", "slot": "date" } }, { "ctx": "$today" } ] } ] } }
+      ],
+      "aggregates": [
+        { "id": "spent", "formula": "sum(movement.amount) by envelope" },
+        { "id": "remaining", "formula": "effective_limit - spent" }
+      ],
+      "alerts": { "warn_at": 0.85 }
+    } },
+    { "surface": "list-row", "owner": "seed:core", "definition": {
+      "elements": [
+        { "order": 1, "contract": "orbis/completable", "element": "checkbox+strikethrough" },
+        { "order": 2, "contract": "orbis/money-movement", "element": "amount-with-tone" },
+        { "order": 3, "contract": "orbis/when", "element": "time-or-allday-badge" }
+      ]
+    } }
+  ],
+  "rule_templates": [
+    { "template": "requires_when", "fields": ["property", "when"], "note": "свойство обязательно, когда выражение истинно" },
+    { "template": "on_enter_class", "fields": ["contract", "class", "then"], "note": "когда запись входит в класс контракта — выполнить шаги" },
+    { "template": "default", "fields": ["property", "value"], "note": "значение по умолчанию (выражение)" },
+    { "template": "unique_among", "fields": ["property", "among"], "note": "значение уникально среди записей, попадающих под выражение" },
+    { "template": "assign_level", "fields": ["when", "level"], "note": "классификатор делегирования: условие → уровень (silent|show|discuss|forbid)" }
+  ],
+  "tools": [
+    { "tool": "entity_create", "args": "title, body?, tags?, aspects?, props?" },
+    { "tool": "entity_update", "args": "id, title?, body?, tags?, props?" },
+    { "tool": "entity_archive", "args": "id" },
+    { "tool": "attach_<aspect>", "args": "id, <поля аспекта>" },
+    { "tool": "relation_create", "args": "source, target, role" },
+    { "tool": "relation_delete", "args": "source, target, role" },
+    { "tool": "thread_post", "args": "entity, text" }
+  ],
+  "surfaces": ["agenda", "budget", "list-row", "entity-detail", "chat-card", "browser"]
+}

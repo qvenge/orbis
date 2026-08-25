@@ -1,0 +1,151 @@
+{
+  "_": "Подписка Budget из Ч8 (notes:320-334), переписанная в JSON. Ссылается ТОЛЬКО на контракты, слоты и именованные наборы — ни одного аспекта и ни одного сырого значения. Выражения — JSON AST по Б3 (тотальные: сравнения, арифметика decimal, булева логика, in, class(contract), has(prop)).",
+  "surface": "budget/overview",
+  "engine": "budget",
+  "currency_rule": "owner_default_if_absent",
+
+  "sources": {
+    "movement": { "contract": "money-movement", "counted_set": "facts" },
+    "envelope": {
+      "contract": "envelope",
+      "binding_role": "envelope-binding",
+      "selector": {
+        "match": ["category", "currency", "period"],
+        "tie_break": ["shorter_period", "later_start", "min_id"]
+      }
+    }
+  },
+
+  "counted_sets": {
+    "facts": {
+      "op": "and",
+      "args": [
+        { "op": "eq", "args": [{ "slot": "planned" }, { "lit": false }] },
+        { "op": "lte", "args": [{ "slot": "date" }, { "ctx": "today" }] },
+        { "op": "not", "args": [{ "op": "has", "args": [{ "slot": "template_marker" }] }] }
+      ]
+    },
+    "plans": { "op": "eq", "args": [{ "slot": "planned" }, { "lit": true }] }
+  },
+
+  "period": { "from": { "ctx": "month_start" }, "to": { "ctx": "month_end" } },
+
+  "phases": {
+    "upcoming": { "op": "lt", "args": [{ "ctx": "today" }, { "slot": "period_start" }] },
+    "closed": { "op": "gt", "args": [{ "ctx": "today" }, { "slot": "period_end" }] },
+    "active": { "op": "lit_default" }
+  },
+
+  "aggregates": {
+    "spent": {
+      "kind": "sum",
+      "over": "movement",
+      "of": { "slot": "amount" },
+      "bound_via": "envelope-binding",
+      "scope": "envelope",
+      "same_currency_as_envelope": true,
+      "where": { "op": "in_class_set", "args": [{ "contract": "money-movement" }, { "lit": "outflow" }] }
+    },
+    "effective_limit": {
+      "kind": "formula",
+      "scope": "envelope",
+      "expr": {
+        "op": "add",
+        "args": [{ "slot": "limit" }, { "op": "coalesce", "args": [{ "slot": "carryover" }, { "lit": "0" }] }]
+      }
+    },
+    "remaining": {
+      "kind": "formula",
+      "scope": "envelope",
+      "expr": { "op": "sub", "args": [{ "agg": "effective_limit" }, { "agg": "spent" }] }
+    },
+    "daily_pace": {
+      "kind": "formula",
+      "scope": "envelope",
+      "expr": {
+        "op": "if",
+        "args": [
+          {
+            "op": "and",
+            "args": [
+              { "op": "eq", "args": [{ "phase": true }, { "lit": "active" }] },
+              { "op": "gte", "args": [{ "agg": "remaining" }, { "lit": "0" }] }
+            ]
+          },
+          {
+            "op": "div_round2",
+            "args": [
+              { "agg": "remaining" },
+              { "op": "days_inclusive", "args": [{ "ctx": "today" }, { "slot": "period_end" }] }
+            ]
+          },
+          { "lit": null }
+        ]
+      }
+    },
+    "unbudgeted": {
+      "kind": "sum",
+      "over": "movement",
+      "of": { "slot": "amount" },
+      "unbound_via": "envelope-binding",
+      "group_by": { "slot": "category" },
+      "window": "period",
+      "currency": "owner_default_only",
+      "where": { "op": "in_class_set", "args": [{ "contract": "money-movement" }, { "lit": "outflow" }] }
+    },
+    "period_balance": {
+      "kind": "sum",
+      "over": "movement",
+      "of": { "slot": "amount" },
+      "group_by": { "slot": "direction" },
+      "window": "period",
+      "currency": "owner_default_only"
+    }
+  },
+
+  "rollup": {
+    "role": "category-parent",
+    "mode": "same_currency_only",
+    "applies_to": ["spent", "effective_limit"]
+  },
+
+  "alerts": {
+    "warn_at": 0.85,
+    "on_raw": true,
+    "skip_phases": ["upcoming"],
+    "when": {
+      "op": "gte",
+      "args": [{ "agg": "spent" }, { "op": "mul", "args": [{ "agg": "effective_limit" }, { "lit": 0.85 }] }]
+    }
+  },
+
+  "lists": {
+    "coming_up": {
+      "over": "movement",
+      "counted_set": "plans",
+      "requires_relation": { "role": "derived-from", "side": "target" },
+      "window": { "from": { "ctx": "today" }, "to": { "ctx": "horizon_14d" } },
+      "order_by": [{ "slot": "date" }, { "core": "id" }]
+    },
+    "planned": {
+      "over": "movement",
+      "counted_set": "plans",
+      "excludes_relation": { "role": "derived-from", "side": "target" },
+      "where": {
+        "op": "and",
+        "args": [
+          { "op": "in_class_set", "args": [{ "contract": "money-movement" }, { "lit": "outflow" }] },
+          { "op": "not", "args": [{ "op": "has", "args": [{ "slot": "template_marker" }] }] }
+        ]
+      },
+      "order_by": [{ "slot": "date" }, { "core": "id" }]
+    }
+  },
+
+  "cards": {
+    "order_by": [{ "ref_title": "category" }, { "slot": "period_start" }, { "core": "id" }],
+    "category_fields": { "contract": "category", "slots": ["icon", "color"] }
+  },
+
+  "rollover": { "source": "exact_calendar_month", "carry": { "agg": "remaining" } }
+}
