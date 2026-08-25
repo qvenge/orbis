@@ -382,8 +382,11 @@ test('канал начинается с PROMPT_BODY (переписанные �
 **Интерфейсы (produces):**
 ```ts
 // scripts/check-legacy-form.ts — `bun scripts/check-legacy-form.ts [--gate]`
-// Источник — `git grep -na` (`-a`/`--text`: файлы с NUL-байтами ТОЖЕ сопоставляются; `-I` пропустил бы ровно тот
-// файл, ради которого гейт заводится — находка 24 ревью плана); отсев не-исходников — pathspec'ом:
+// Источник — `git grep -na` (`-a`/`--text`: файлы с NUL-байтами сопоставляются С НОМЕРАМИ СТРОК; без флага git grep
+// печатает «Binary file … matches» без строк, `-I` выбрасывает признанные двоичными). ПОПРАВКА ЗАДАЧИ 0c (пробой,
+// подтверждён ре-ревью): исходное обоснование «`-I` пропустил бы `aggregates.ts`» НЕВЕРНО — git судит о двоичности по
+// первым 8000 байтам, а NUL там на 42-килобайтном смещении, и `git grep -nI` находит все 51 строку; молча пропускал
+// файл `grep -r` (ugrep 7.8.4 → 0 строк, rc 1). Выбор `-a` от этого не меняется. Отсев не-исходников — pathspec'ом:
 // -- 'apps/server/src' 'apps/server/test' 'apps/server/perf' 'packages/shared/src' 'apps/web/src' 'scripts' ':!*.snap' ':!apps/server/src/db/migrations/**'.
 export const LEGACY_MARKERS: ReadonlyArray<{ id: string; pattern: string; exclude?: RegExp[] }> = [
   { id: 'aspects-path',    pattern: String.raw`aspects(_legacy)?\s*->` },
