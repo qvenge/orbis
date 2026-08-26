@@ -927,10 +927,15 @@ test('web: proposal-text рисует «Тело изменилось» по bod
 
 **Интерфейсы (produces):**
 ```ts
-// executor/types.ts — операции inverse (внутренний режим undo; форма — entityPropsPatch Задачи 4b):
-export type InverseOp =
-  | { tool: 'entity_update'; input: { id: string; props?: Record<string, unknown>; unset?: string[]; aspects?: { attach?: string[]; detach?: string[] }; title?; body?; tags?; archived? } }
-  | { tool: 'relation_create' | 'relation_delete'; input: … };
+// ИСПОЛНЕНО ИНАЧЕ (гейт Задачи 6, находка 3; рулинг координатора Р-6-1). Отдельный тип `InverseOp`
+// НЕ заведён намеренно: `ActionRecord.operations/inverse` читаются из JSONB, поэтому более узкий тип
+// потребовал бы каста у каждого читателя (undo.ts, rollback.ts, escalation.ts берут payload.id), а
+// восьми видам операций был бы второй, более слабой копией контрактов тулов.
+// Фактические интерфейсы, на которые ссылаются Задачи 15 и 23:
+//   executor/props.ts — `StateDelta` (форма ДАННЫХ нагрузки: { props?, unset?, aspects?: {attach?, detach?} })
+//     и `stateDelta(до, после)`: обе половины записи журнала считаются по СОСТОЯНИЯМ, не по патчу;
+//   fail-closed гейт формы — `entityUpdateExecInput` (executor/types.ts): golden-тест обратимости
+//     гонит inverse ЧЕРЕЗ него, а не мимо. Импортировать `InverseOp` неоткуда — локальную копию не заводить.
 // ActionRecord.payload для entity_update: { id, props: {changed only}, unset, aspects: {attach, detach}, … } — БЕЗ meta, БЕЗ aspects-карты; id-ключи payload'а (id/source_id/target_id/entity_id) — прежние
 // escalation: extractRecategorizations читает payload.props['orbis/finance_category']; containment-проба по журналу — {"actions":[{"payload":{"props":{"orbis/finance_category":…}}}]}
 ```
@@ -2135,7 +2140,8 @@ export async function seedOwnerWorld(db, ownerId, deps): Promise<{ created: numb
   projectLegacyRelationType/rowFromLegacy/WireEntity.aspectsMap` (4a) — в 4b, 7a, 10a, 13c, 23;
   `MutationMechanism/applyPropsPatch/PropsPatch/entityPropsPatch/resolvePropertyRef/legacyPatchToProps/
   fromLegacyInput` (4b) — в 5, 6, 7a, 10a/10b, 12, 13c, 18; `comparePropertyValue/PreconditionMismatch/
-  ProposalDivergence.bodyChanged` (5) — в 6, 12, 13b; `InverseOp` (6) — в 15, 23;
+  ProposalDivergence.bodyChanged` (5) — в 6, 12, 13b; `StateDelta/stateDelta` + гейт формы `entityUpdateExecInput`
+  (6; `InverseOp` НЕ заведён — рулинг Р-6-1) — в 15, 23;
   `assertRoleConstraints/RelationKey.role/reform_role_heuristic` (7a) — в 7b, 9a, 11, 23;
   `recomputeProjectAncestors` (7b) — в 9a (П6), 15; `QueryAst/QueryFilterNode/parseQueryAst/
   printQueryAst/queryAstJsonSchema/assertStaticQuery/QUERY_DEPTH_CAP/toParseRegistry/
