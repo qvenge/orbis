@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./query": "./src/query/index.ts",
     "./doc": "./src/doc/index.ts",
     "./doc/diff": "./src/doc/diff.ts"
   },
@@ -24,5 +25,8 @@
     "uuid": "^11",
     "zod": "^3.24.0",
     "zod-to-json-schema": "^3"
+  },
+  "devDependencies": {
+    "ajv": "^8"
   }
 }

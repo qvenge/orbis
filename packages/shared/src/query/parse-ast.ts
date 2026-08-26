@@ -1,0 +1,958 @@
+/**
+ * Текст грамматики §А5-3 → канонический Q-AST (§А5-7), с резолвом имён ПО РЕЕСТРУ.
+ *
+ * Чем этот парсер принципиально отличается от `parse.ts` (§А5-3ж): неизвестное имя поля,
+ * аспекта или роли — ОТКАЗ С КОДОМ, а не молчаливый ноль результатов. Сегодня `aspect=`
+ * не проверяется ни парсером (`parse.ts:469-478`), ни компилятором (`compile.ts:233-235`),
+ * и опечатка `aspect=orbis/tsk` даёт пустой список, неотличимый от честной пустоты.
+ *
+ * Адресация имён (§А5-3а/б): машинная ручка — namespaced key (`orbis/limit>1000`), слэш и
+ * есть встроенная пометка «это свойство», поэтому коллизия с голыми reserved-словами
+ * невозможна по построению; человеческая — закавыченный label (`"срок"<=today`), резолв по
+ * локали, неоднозначность лечится `aspect=`.
+ *
+ * Разделители конструкций — запятая ИЛИ пробел вне кавычек. Запятая нужна дословно (тексты
+ * Agenda и сидов §А5-5 написаны через неё), пробел — потому что `via=` пристёгивается к
+ * предыдущему реляционному предикату отдельным словом (`!has_children via=subitem`).
+ * Следствие, названное вслух: значение с пробелом обязано быть в кавычках.
+ *
+ * Скобок в грамматике v1 НЕТ (§А5-3д): плоский текст — сахар, OR-дерево строит форма, AI
+ * или AST-вход тула (§А5-4). Печать при этом тотальна и невыразимое дерево печатает
+ * скобками (`print.ts`) — асимметрия намеренная и односторонняя.
+ *
+ * Токенайзер (маска кавычек, нарезка, снятие кавычек) повторяет `parse.ts:186-306`.
+ * Копия, а не вынос в общий модуль: план (РП-11) запрещает трогать `parse.ts` до Задачи 21,
+ * где старая грамматика умирает целиком вместе с этой копией.
+ */
+import { HHMM_RE } from '../date';
+import type {
+  AspectDefinition,
+  PropertyDefinition,
+  RelationRoleDefinition,
+} from '../registry/property-type';
+import type { PropertyType } from '../registry/types';
+import type {
+  QueryAst,
+  QueryDateToken,
+  QueryFilterNode,
+  QueryRelPredicate,
+  QueryScalar,
+  QuerySortField,
+} from './ast';
+import { QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES } from './ast';
+
+// ─────────────────────────── Реестр разбора ───────────────────────────
+
+/**
+ * Срез реестров, которого хватает разбору: словари по id + локаль читателя. Больше
+ * парсеру не нужно ничего — ни БД, ни сети, поэтому он одинаково работает в сиде, в
+ * транзакции сервера и в браузере.
+ */
+export interface ParseRegistry {
+  properties: ReadonlyMap<string, PropertyDefinition>;
+  aspects: ReadonlyMap<string, AspectDefinition>;
+  roles: ReadonlyMap<string, RelationRoleDefinition>;
+  locale: string;
+}
+
+/**
+ * ЕДИНСТВЕННЫЙ адаптер снимка реестра к форме разбора (находка 19 ревью плана): второе
+ * преобразование той же пары словарей неизбежно разошлось бы с этим в правилах fallback
+ * локали — а именно от них зависит, какое имя увидит человек в ошибке.
+ */
+export function toParseRegistry(
+  snapshot: {
+    properties: ReadonlyMap<string, PropertyDefinition>;
+    aspects: ReadonlyMap<string, AspectDefinition>;
+    roles: ReadonlyMap<string, RelationRoleDefinition>;
+  },
+  locale: string,
+): ParseRegistry {
+  return {
+    properties: snapshot.properties,
+    aspects: snapshot.aspects,
+    roles: snapshot.roles,
+    locale,
+  };
+}
+
+/**
+ * Подпись записи реестра в локали читателя: локаль пользователя → en → любая (§А2-1).
+ * Одно правило на печать и на разбор — иначе напечатанное имя не резолвилось бы обратно.
+ */
+export function effectiveLabel(label: Record<string, string>, locale: string): string {
+  return label[locale] ?? label.en ?? (Object.values(label)[0] as string);
+}
+
+// ─────────────────────────── Коды отказов ───────────────────────────
+
+export const QUERY_PARSE_CODES = [
+  'UNKNOWN_FIELD',
+  'UNKNOWN_ASPECT',
+  'UNKNOWN_ROLE',
+  'AMBIGUOUS_LABEL',
+  'TYPE',
+  'SYNTAX',
+  'QUERY_MULTI_ROLE',
+  'QUERY_JOIN',
+  'RESERVED',
+  'CLASS_NOT_AVAILABLE',
+] as const;
+export type QueryParseCode = (typeof QUERY_PARSE_CODES)[number];
+
+export type ParseAstResult =
+  | { ok: true; ast: QueryAst }
+  | { ok: false; error: { code: QueryParseCode; message: string; position?: number } };
+
+class QueryAstParseError extends Error {
+  constructor(
+    readonly code: QueryParseCode,
+    message: string,
+    readonly position: number,
+  ) {
+    super(message);
+    this.name = 'QueryAstParseError';
+  }
+}
+
+function fail(code: QueryParseCode, message: string, position: number): never {
+  throw new QueryAstParseError(code, message, position);
+}
+
+// ─────────────────────────── Токенайзер ───────────────────────────
+
+interface Part {
+  text: string;
+  offset: number;
+}
+
+/** Маска «символ вне кавычек»; `unclosedAt` — позиция незакрытой кавычки, иначе -1. */
+function quoteMask(text: string): { outside: boolean[]; unclosedAt: number } {
+  const outside = new Array<boolean>(text.length).fill(false);
+  let quoteOpen = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoteOpen !== -1) {
+      if (ch === '\\' && (text[i + 1] === '"' || text[i + 1] === '\\')) i++;
+      else if (ch === '"') quoteOpen = -1;
+    } else if (ch === '"') {
+      quoteOpen = i;
+    } else {
+      outside[i] = true;
+    }
+  }
+  return { outside, unclosedAt: quoteOpen };
+}
+
+const SEPARATOR_RE = /[\s,]/;
+
+/** Режет запрос по запятым и пробелам вне кавычек. */
+function splitTopLevel(input: string): Part[] {
+  const { outside, unclosedAt } = quoteMask(input);
+  if (unclosedAt !== -1) fail('SYNTAX', 'незакрытая кавычка', unclosedAt);
+  const parts: Part[] = [];
+  let start = 0;
+  for (let i = 0; i < input.length; i++) {
+    if (outside[i] && SEPARATOR_RE.test(input[i] as string)) {
+      parts.push({ text: input.slice(start, i), offset: start });
+      start = i + 1;
+    }
+  }
+  parts.push({ text: input.slice(start), offset: start });
+  return parts.filter((p) => p.text !== '');
+}
+
+/** Режет фрагмент по одиночному разделителю вне кавычек (`|`, `&`). */
+function splitPartBy(part: Part, delim: string): Part[] {
+  const { outside } = quoteMask(part.text);
+  const parts: Part[] = [];
+  let start = 0;
+  for (let i = 0; i < part.text.length; i++) {
+    if (outside[i] && part.text[i] === delim) {
+      parts.push({ text: part.text.slice(start, i), offset: part.offset + start });
+      start = i + 1;
+    }
+  }
+  parts.push({ text: part.text.slice(start), offset: part.offset + start });
+  return parts;
+}
+
+function findOutsideQuotes(text: string, chars: string): number {
+  const { outside } = quoteMask(text);
+  for (let i = 0; i < text.length; i++) {
+    if (outside[i] && chars.includes(text[i] as string)) return i;
+  }
+  return -1;
+}
+
+function findRangeDots(text: string): number {
+  const { outside } = quoteMask(text);
+  for (let i = 0; i + 1 < text.length; i++) {
+    if (outside[i] && outside[i + 1] && text[i] === '.' && text[i + 1] === '.') return i;
+  }
+  return -1;
+}
+
+function trimPart(part: Part): Part {
+  const leading = part.text.length - part.text.trimStart().length;
+  return { text: part.text.trim(), offset: part.offset + leading };
+}
+
+/** Снимает обрамляющие кавычки и разэкранирует `\"`/`\\`. */
+function unquote(raw: string, offset: number): string {
+  if (!raw.startsWith('"')) {
+    const q = raw.indexOf('"');
+    if (q !== -1) fail('SYNTAX', 'кавычки допустимы только вокруг всего значения', offset + q);
+    return raw;
+  }
+  let out = '';
+  let i = 1;
+  for (; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === '\\' && (raw[i + 1] === '"' || raw[i + 1] === '\\')) {
+      out += raw[i + 1];
+      i++;
+      continue;
+    }
+    if (ch === '"') break;
+    out += ch;
+  }
+  if (i >= raw.length) fail('SYNTAX', 'незакрытая кавычка', offset);
+  if (i !== raw.length - 1) {
+    fail('SYNTAX', 'лишние символы после закрывающей кавычки', offset + i + 1);
+  }
+  return out;
+}
+
+/** Операторы грамматики. Двухсимвольные ищутся первыми — иначе `<=` съелось бы как `<`. */
+type Op = '=' | '!=' | '>' | '<' | '>=' | '<=';
+
+interface Token {
+  /** Имя конструкции или поля — как написано (возможно, в кавычках). */
+  key: string;
+  keyOffset: number;
+  /** Ведущее `!`: отрицание всей конструкции (`!has_children`, `!tags=дом`). */
+  negated: boolean;
+  op: Op | null;
+  opOffset: number;
+  value: string;
+  valueOffset: number;
+}
+
+function tokenize(part: Part): Token {
+  let { text, offset } = part;
+  let negated = false;
+  if (text.startsWith('!') && text[1] !== '=') {
+    negated = true;
+    text = text.slice(1);
+    offset += 1;
+  }
+  const idx = findOutsideQuotes(text, '=><!');
+  if (idx === -1) {
+    return {
+      key: text,
+      keyOffset: offset,
+      negated,
+      op: null,
+      opOffset: offset,
+      value: '',
+      valueOffset: offset,
+    };
+  }
+  const ch = text[idx] as string;
+  const next = text[idx + 1];
+  let op: Op;
+  if (ch === '!') {
+    if (next !== '=') fail('SYNTAX', `оператор '!' сам по себе не существует`, offset + idx);
+    op = '!=';
+  } else if ((ch === '<' || ch === '>') && next === '=') {
+    op = ch === '<' ? '<=' : '>=';
+  } else {
+    op = ch as Op;
+  }
+  const rawKey = trimPart({ text: text.slice(0, idx), offset });
+  if (rawKey.text === '') fail('SYNTAX', 'пустое имя поля перед оператором', offset + idx);
+  const valueStart = idx + op.length;
+  const rawValue = trimPart({ text: text.slice(valueStart), offset: offset + valueStart });
+  if (rawValue.text === '') {
+    fail('SYNTAX', `пустое значение после '${op}'`, offset + valueStart);
+  }
+  return {
+    key: rawKey.text,
+    keyOffset: rawKey.offset,
+    negated,
+    op,
+    opOffset: offset + idx,
+    value: rawValue.text,
+    valueOffset: rawValue.offset,
+  };
+}
+
+// ─────────────────────────── Резолв имён ───────────────────────────
+
+/**
+ * Слова грамматики. Они перехватывают только ГОЛОЕ имя: `orbis/limit` однозначен по
+ * слэшу (§А5-3а/В11), поэтому свойство с ключом `limit` заводить не запрещено (§А2-4).
+ */
+const RESERVED_WORDS: ReadonlySet<string> = new Set([
+  'aspect',
+  'tags',
+  'excludeTags',
+  'has',
+  'has_relation',
+  'has_children',
+  'children_of',
+  'parents_of',
+  'descendants_of',
+  'ancestors_of',
+  'via',
+  'excludeBlocked',
+  'archived',
+  'search',
+  'sortBy',
+  'limit',
+  'display',
+  'title',
+  'class',
+]);
+
+interface Ctx {
+  reg: ParseRegistry;
+  byPropertyKey: Map<string, PropertyDefinition>;
+  byPropertyLabel: Map<string, PropertyDefinition[]>;
+  byAspectKey: Map<string, AspectDefinition>;
+  byAspectLabel: Map<string, AspectDefinition[]>;
+  byRoleKey: Map<string, RelationRoleDefinition>;
+  byRoleLabel: Map<string, RelationRoleDefinition[]>;
+  /** Аспекты, названные `aspect=` где угодно в запросе — разводка неоднозначных подписей. */
+  aspectsInQuery: Set<string>;
+  /** Свойства аспекта: propertyId → множество id аспектов-носителей. */
+  carriers: Map<string, Set<string>>;
+}
+
+function labelKey(text: string): string {
+  return text.trim().toLowerCase();
+}
+
+function pushLabel<T>(index: Map<string, T[]>, label: string, item: T): void {
+  const key = labelKey(label);
+  const list = index.get(key);
+  if (list) list.push(item);
+  else index.set(key, [item]);
+}
+
+function buildCtx(reg: ParseRegistry): Ctx {
+  const ctx: Ctx = {
+    reg,
+    byPropertyKey: new Map(),
+    byPropertyLabel: new Map(),
+    byAspectKey: new Map(),
+    byAspectLabel: new Map(),
+    byRoleKey: new Map(),
+    byRoleLabel: new Map(),
+    aspectsInQuery: new Set(),
+    carriers: new Map(),
+  };
+  for (const prop of reg.properties.values()) {
+    ctx.byPropertyKey.set(prop.key, prop);
+    pushLabel(ctx.byPropertyLabel, effectiveLabel(prop.label, reg.locale), prop);
+  }
+  for (const aspect of reg.aspects.values()) {
+    ctx.byAspectKey.set(aspect.key, aspect);
+    pushLabel(ctx.byAspectLabel, effectiveLabel(aspect.label, reg.locale), aspect);
+    for (const ref of aspect.properties) {
+      const set = ctx.carriers.get(ref.propertyId);
+      if (set) set.add(aspect.id);
+      else ctx.carriers.set(ref.propertyId, new Set([aspect.id]));
+    }
+  }
+  for (const role of reg.roles.values()) {
+    ctx.byRoleKey.set(role.key, role);
+    pushLabel(ctx.byRoleLabel, effectiveLabel(role.label, reg.locale), role);
+  }
+  return ctx;
+}
+
+/** Имя записи реестра: `"подпись"` — всегда label, иначе key (§А5-3а/б). */
+function isLabelForm(raw: string): boolean {
+  return raw.startsWith('"');
+}
+
+function resolveProperty(raw: string, offset: number, ctx: Ctx): PropertyDefinition {
+  if (isLabelForm(raw)) {
+    const label = unquote(raw, offset);
+    const found = ctx.byPropertyLabel.get(labelKey(label)) ?? [];
+    if (found.length === 0) fail('UNKNOWN_FIELD', `нет свойства с подписью «${label}»`, offset);
+    if (found.length === 1) return found[0] as PropertyDefinition;
+    const narrowed = found.filter((p) =>
+      [...(ctx.carriers.get(p.id) ?? [])].some((a) => ctx.aspectsInQuery.has(a)),
+    );
+    if (narrowed.length === 1) return narrowed[0] as PropertyDefinition;
+    const where = found
+      .map(
+        (p) =>
+          `${p.key} (${[...(ctx.carriers.get(p.id) ?? [])].sort().join(', ') || 'без аспекта'})`,
+      )
+      .join('; ');
+    return fail(
+      'AMBIGUOUS_LABEL',
+      `подпись «${label}» носят несколько свойств: ${where} — уточните запрос через aspect= или назовите key`,
+      offset,
+    );
+  }
+  const byKey = ctx.byPropertyKey.get(raw);
+  if (byKey) return byKey;
+  if (RESERVED_WORDS.has(raw)) {
+    return fail(
+      'RESERVED',
+      `'${raw}' — слово грамматики; свойство с таким ключом адресуется namespaced key (например 'orbis/${raw}')`,
+      offset,
+    );
+  }
+  return fail(
+    'UNKNOWN_FIELD',
+    `неизвестное свойство '${raw}': имена адресуются namespaced key ('orbis/…') или закавыченной подписью`,
+    offset,
+  );
+}
+
+function resolveAspect(raw: string, offset: number, ctx: Ctx): AspectDefinition {
+  if (isLabelForm(raw)) {
+    const label = unquote(raw, offset);
+    const found = ctx.byAspectLabel.get(labelKey(label)) ?? [];
+    if (found.length === 0) fail('UNKNOWN_ASPECT', `нет аспекта с подписью «${label}»`, offset);
+    if (found.length > 1) {
+      fail('AMBIGUOUS_LABEL', `подпись «${label}» носят несколько аспектов`, offset);
+    }
+    return found[0] as AspectDefinition;
+  }
+  const byKey = ctx.byAspectKey.get(raw);
+  if (byKey) return byKey;
+  return fail('UNKNOWN_ASPECT', `неизвестный аспект '${raw}'`, offset);
+}
+
+function resolveRole(raw: string, offset: number, ctx: Ctx): RelationRoleDefinition {
+  if (isLabelForm(raw)) {
+    const label = unquote(raw, offset);
+    const found = ctx.byRoleLabel.get(labelKey(label)) ?? [];
+    if (found.length === 0) fail('UNKNOWN_ROLE', `нет роли ребра с подписью «${label}»`, offset);
+    if (found.length > 1) {
+      fail('AMBIGUOUS_LABEL', `подпись «${label}» носят несколько ролей`, offset);
+    }
+    return found[0] as RelationRoleDefinition;
+  }
+  const byKey = ctx.byRoleKey.get(raw);
+  if (byKey) return byKey;
+  return fail('UNKNOWN_ROLE', `неизвестная роль ребра '${raw}'`, offset);
+}
+
+// ─────────────────────────── Значения по типу свойства ───────────────────────────
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DECIMAL_LITERAL_RE = /^-?\d+(\.\d+)?$/;
+const DATE_LITERAL_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_TIMESTAMP_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+const DATE_TOKENS: ReadonlySet<string> = new Set(QUERY_DATE_TOKENS);
+
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) return isLeapYear(year) ? 29 : 28;
+  return [4, 6, 9, 11].includes(month) ? 30 : 31;
+}
+
+/** Календарная валидность — прямой проверкой компонент: `Date.parse` молча катит 30 февраля. */
+function validCalendar(m: RegExpExecArray): boolean {
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  if (month < 1 || month > 12) return false;
+  return day >= 1 && day <= daysInMonth(year, month);
+}
+
+/** Значение свойства — список (§А2-2: `cardinality: many`, у `json` признак — `maxItems`). */
+function isListType(type: PropertyType): boolean {
+  if (type.kind === 'json') return type.maxItems !== undefined;
+  return 'cardinality' in type && type.cardinality === 'many';
+}
+
+/** Есть ли у типа линейный порядок: только у него осмысленны `>`, `<` и диапазон. */
+function isOrdered(type: PropertyType): boolean {
+  return ['number', 'decimal', 'date', 'timestamp', 'time'].includes(type.kind);
+}
+
+function acceptsDateToken(type: PropertyType): boolean {
+  return type.kind === 'date' || type.kind === 'timestamp';
+}
+
+/**
+ * Разбирает литерал по типу свойства из РЕЕСТРА (§А2-2) — без единой эвристики по тексту
+ * регэкспа, которой держался старый каталог (`catalog.ts:174-179`).
+ *
+ * Проверяется ФОРМА значения и принадлежность варианту `select` (набор вариантов — часть
+ * типа). Границы `min`/`max`/`maxLength` здесь не проверяются намеренно: это валидация
+ * ЗАПИСИ (`registry/value-schema.ts`), а фильтр по значению вне границ — законный запрос,
+ * который честно вернёт пусто.
+ */
+function parseScalar(prop: PropertyDefinition, el: Part): QueryScalar {
+  const text = unquote(el.text, el.offset);
+  const type = prop.type;
+  const bad = (expected: string): never =>
+    fail('TYPE', `свойство '${prop.key}' ожидает ${expected}, получено '${text}'`, el.offset);
+  switch (type.kind) {
+    case 'number': {
+      if (!DECIMAL_LITERAL_RE.test(text)) return bad('число');
+      const n = Number(text);
+      if (type.integer === true && !Number.isInteger(n)) return bad('целое число');
+      return n;
+    }
+    case 'decimal':
+      // Decimal остаётся СТРОКОЙ: число IEEE-754 потеряло бы хвост копеек ровно там, где
+      // его и сравнивают (§А7-3).
+      return DECIMAL_LITERAL_RE.test(text) ? text : bad('decimal-строку');
+    case 'boolean':
+      if (text === 'true') return true;
+      if (text === 'false') return false;
+      return bad('true или false');
+    case 'date': {
+      const m = DATE_LITERAL_RE.exec(text);
+      if (!m || !validCalendar(m)) return bad('дату YYYY-MM-DD');
+      return text;
+    }
+    case 'timestamp': {
+      const m = ISO_TIMESTAMP_RE.exec(text);
+      if (!m || !validCalendar(m)) return bad('момент ISO 8601');
+      return text;
+    }
+    case 'time':
+      return HHMM_RE.test(text) ? text : bad(`время 'ЧЧ:ММ'`);
+    case 'select': {
+      const keys = type.options.map((o) => o.key);
+      return keys.includes(text) ? text : bad(`один из вариантов: ${keys.join(', ')}`);
+    }
+    case 'ref':
+    case 'grant':
+      return UUID_RE.test(text) ? text : bad('UUID');
+    case 'json':
+      return fail(
+        'TYPE',
+        `по свойству '${prop.key}' фильтровать нечем: значение — вложенный объект (kind json)`,
+        el.offset,
+      );
+    default:
+      // text и registry_ref — свободная строка.
+      return text;
+  }
+}
+
+type Bound = QueryScalar | { token: QueryDateToken };
+
+/** Литерал ИЛИ относительное время; токен допустим только у date/timestamp (§А5-7). */
+function parseBound(prop: PropertyDefinition, el: Part): Bound {
+  if (el.text === '') fail('SYNTAX', 'пустой элемент значения', el.offset);
+  const raw = el.text.startsWith('"') ? null : el.text;
+  if (raw !== null && DATE_TOKENS.has(raw)) {
+    if (!acceptsDateToken(prop.type)) {
+      fail(
+        'TYPE',
+        `относительное время '${raw}' применимо только к свойствам типа date/timestamp; '${prop.key}' — ${prop.type.kind}`,
+        el.offset,
+      );
+    }
+    return { token: raw as QueryDateToken };
+  }
+  return parseScalar(prop, el);
+}
+
+// ─────────────────────────── Разбор конструкций ───────────────────────────
+
+interface Acc {
+  nodes: QueryFilterNode[];
+  ast: QueryAst;
+  /** Предикат, к которому пристёгивается следующий `via=`, и позиция его конструкции. */
+  lastRel: { pred: QueryRelPredicate; offset: number; kind: string } | null;
+  /** Предикаты, которым `via` обязателен (§А5-1): проверяются после всего разбора. */
+  needsVia: { pred: QueryRelPredicate; offset: number; kind: string }[];
+}
+
+function negate(node: QueryFilterNode, negated: boolean): QueryFilterNode {
+  return negated ? { not: node } : node;
+}
+
+/** Значение реляционного предиката: `this` либо UUID; предикат вместо них — `QUERY_JOIN`. */
+function parseEntityRef(t: Token): string {
+  if (t.op === null) fail('SYNTAX', `конструкция '${t.key}' требует значение`, t.keyOffset);
+  if (t.op !== '=') {
+    fail('RESERVED', `оператор '${t.op}' неприменим к слову грамматики '${t.key}'`, t.opOffset);
+  }
+  const value = unquote(t.value, t.valueOffset);
+  if (value === 'this' || UUID_RE.test(value)) return value;
+  if (findOutsideQuotes(t.value, '=><') !== -1) {
+    fail(
+      'QUERY_JOIN',
+      `'${t.key}' принимает UUID или this: соединение двух свободных сущностей за границей языка запросов (§А5-1)`,
+      t.valueOffset,
+    );
+  }
+  return fail('SYNTAX', `'${t.key}': ожидается UUID или this, получено '${value}'`, t.valueOffset);
+}
+
+function requireOp(t: Token, op: Op): string {
+  if (t.op === null) fail('SYNTAX', `конструкция '${t.key}' требует значение`, t.keyOffset);
+  if (t.op !== op) {
+    fail('RESERVED', `оператор '${t.op}' неприменим к слову грамматики '${t.key}'`, t.opOffset);
+  }
+  return t.value;
+}
+
+function assignOnce<K extends 'sortBy' | 'limit' | 'display' | 'title'>(
+  acc: Acc,
+  key: K,
+  t: Token,
+  value: NonNullable<QueryAst[K]>,
+): void {
+  if (acc.ast[key] !== undefined) {
+    fail('SYNTAX', `повторный параметр '${key}'`, t.keyOffset);
+  }
+  acc.ast[key] = value;
+}
+
+function parseSortBy(t: Token, ctx: Ctx): QuerySortField[] {
+  requireOp(t, '=');
+  return splitPartBy({ text: t.value, offset: t.valueOffset }, '|').map((raw) => {
+    const el = trimPart(raw);
+    if (el.text === '') fail('SYNTAX', 'пустой элемент sortBy', el.offset);
+    const colon = el.text.lastIndexOf(':');
+    if (colon === -1)
+      fail('SYNTAX', `sortBy: ожидается 'свойство:asc' или 'свойство:desc'`, el.offset);
+    const name = trimPart({ text: el.text.slice(0, colon), offset: el.offset });
+    const dir = el.text.slice(colon + 1).trim();
+    if (dir !== 'asc' && dir !== 'desc') {
+      fail('SYNTAX', `sortBy: направление asc или desc, получено '${dir}'`, el.offset + colon + 1);
+    }
+    const prop = resolveProperty(name.text, name.offset, ctx);
+    if (isListType(prop.type) || prop.type.kind === 'json') {
+      fail(
+        'TYPE',
+        `sortBy: по свойству '${prop.key}' сортировать нельзя — у значения нет линейного порядка`,
+        name.offset,
+      );
+    }
+    return { field: prop.id, dir };
+  });
+}
+
+/** Список тегов через `|`: один тег — узел, несколько — OR (отрицание вешает вызывающий). */
+function parseTags(t: Token): QueryFilterNode {
+  requireOp(t, '=');
+  const nodes = splitPartBy({ text: t.value, offset: t.valueOffset }, '|').map((raw) => {
+    const el = trimPart(raw);
+    if (el.text === '') fail('SYNTAX', 'пустой элемент списка тегов', el.offset);
+    return { tag: unquote(el.text, el.offset) } as QueryFilterNode;
+  });
+  return nodes.length === 1 ? (nodes[0] as QueryFilterNode) : { or: nodes };
+}
+
+/** Предикат свойства: оператор + значение (§А5-7). */
+function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
+  const value: Part = { text: t.value, offset: t.valueOffset };
+  const listy = isListType(prop.type);
+  const eqOp = listy ? ('contains' as const) : ('eq' as const);
+
+  if (t.op === '>' || t.op === '<' || t.op === '>=' || t.op === '<=') {
+    if (!isOrdered(prop.type) || listy) {
+      fail(
+        'TYPE',
+        `оператор '${t.op}' применим к свойствам с линейным порядком; '${prop.key}' — ${prop.type.kind}${listy ? ' (список)' : ''}`,
+        t.opOffset,
+      );
+    }
+    const bound = parseBound(prop, trimPart(value));
+    // `<=`/`>=` — ВКЛЮЧАЮЩИЙ range: отдельных gte/lte в каноне нет (§А5-7, находка 8).
+    if (t.op === '<=') return { prop: prop.id, op: 'range', value: { to: bound } };
+    if (t.op === '>=') return { prop: prop.id, op: 'range', value: { from: bound } };
+    return { prop: prop.id, op: t.op === '>' ? 'gt' : 'lt', value: bound };
+  }
+
+  if (t.op === '!=') {
+    const bound = parseBound(prop, trimPart(value));
+    // У списка «не равно» невыразимо одним оператором: отрицается вхождение элемента.
+    return listy
+      ? { not: { prop: prop.id, op: 'contains', value: bound } }
+      : { prop: prop.id, op: 'ne', value: bound };
+  }
+
+  const dots = findRangeDots(t.value);
+  if (dots !== -1) {
+    if (!isOrdered(prop.type) || listy) {
+      fail(
+        'TYPE',
+        `диапазон применим к свойствам с линейным порядком; '${prop.key}' — ${prop.type.kind}`,
+        t.valueOffset,
+      );
+    }
+    const from = trimPart({ text: t.value.slice(0, dots), offset: t.valueOffset });
+    const to = trimPart({ text: t.value.slice(dots + 2), offset: t.valueOffset + dots + 2 });
+    if (from.text === '') fail('SYNTAX', 'диапазон: пустая левая граница', t.valueOffset);
+    if (to.text === '') fail('SYNTAX', 'диапазон: пустая правая граница', to.offset);
+    return {
+      prop: prop.id,
+      op: 'range',
+      value: { from: parseBound(prop, from), to: parseBound(prop, to) },
+    };
+  }
+
+  const pipe = findOutsideQuotes(t.value, '|');
+  const amp = findOutsideQuotes(t.value, '&');
+  if (pipe !== -1 && amp !== -1) {
+    fail(
+      'SYNTAX',
+      'смешивание | и & в одном значении недопустимо',
+      t.valueOffset + Math.max(pipe, amp),
+    );
+  }
+
+  if (amp !== -1) {
+    // `!a&!b` — «ни одно из»: дерево `not(or(...))`, а не отдельный узел noneOf (§А5-7).
+    const nodes = splitPartBy(value, '&').map((raw) => {
+      const el = trimPart(raw);
+      if (!el.text.startsWith('!')) {
+        fail('SYNTAX', `в &-форме каждый элемент начинается с '!'`, el.offset);
+      }
+      const inner = trimPart({ text: el.text.slice(1), offset: el.offset + 1 });
+      return { prop: prop.id, op: eqOp, value: parseBound(prop, inner) } as QueryFilterNode;
+    });
+    return { not: nodes.length === 1 ? (nodes[0] as QueryFilterNode) : { or: nodes } };
+  }
+
+  const elements = splitPartBy(value, '|').map(trimPart);
+  if (elements.length === 1) {
+    const el = elements[0] as Part;
+    if (el.text.startsWith('!')) {
+      const inner = trimPart({ text: el.text.slice(1), offset: el.offset + 1 });
+      return { not: { prop: prop.id, op: eqOp, value: parseBound(prop, inner) } };
+    }
+    return { prop: prop.id, op: eqOp, value: parseBound(prop, el) };
+  }
+  const nodes = elements.map((el) => {
+    if (el.text.startsWith('!')) {
+      fail(
+        'SYNTAX',
+        `отрицание '!' внутри |-списка не поддерживается — используйте &-форму`,
+        el.offset,
+      );
+    }
+    return { prop: prop.id, op: eqOp, value: parseBound(prop, el) } as QueryFilterNode;
+  });
+  // §А5-3: анкор «anyOf → or». Узел `in` каноничен, но текстом не порождается: у плоской
+  // грамматики для `in` и `or` одна форма `p=a|b`, и печать обеих даёт её же.
+  return { or: nodes };
+}
+
+const REL_WITH_TARGET: ReadonlySet<string> = new Set([
+  'children_of',
+  'parents_of',
+  'descendants_of',
+  'ancestors_of',
+]);
+
+/** Конструкции, у которых ведущее `!` бессмысленно: проекция, уточнение и уже-отрицания. */
+const NOT_NEGATABLE: ReadonlySet<string> = new Set([
+  'via',
+  'sortBy',
+  'limit',
+  'display',
+  'title',
+  'excludeTags',
+  'excludeBlocked',
+]);
+
+function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
+  if (t.negated && NOT_NEGATABLE.has(t.key)) {
+    fail('SYNTAX', `конструкция '${t.key}' не отрицается`, t.keyOffset);
+  }
+  const push = (node: QueryFilterNode): void => {
+    acc.nodes.push(negate(node, t.negated));
+  };
+
+  // `via=` пристёгивается к предыдущему реляционному предикату — отдельным словом, потому
+  // что роль уточняет уже названный обход, а не заводит новую конструкцию.
+  if (t.key === 'via') {
+    if (t.negated) fail('SYNTAX', `'via' не отрицается: отрицается сам предикат`, t.keyOffset);
+    const target = acc.lastRel;
+    if (!target) {
+      fail('SYNTAX', `'via=' уточняет предыдущий реляционный предикат, а его нет`, t.keyOffset);
+    }
+    if (target.pred.via !== undefined) fail('SYNTAX', `повторный 'via'`, t.keyOffset);
+    target.pred.via = resolveRole(requireOp(t, '='), t.valueOffset, ctx).id;
+    return;
+  }
+
+  if (REL_WITH_TARGET.has(t.key)) {
+    const of = parseEntityRef(t);
+    const pred: QueryRelPredicate = { kind: t.key as QueryRelPredicate['kind'], of };
+    const slot = { pred, offset: t.keyOffset, kind: t.key };
+    acc.lastRel = slot;
+    // §А5-1: обход по нескольким ролям сразу за границей Q — роль обязана быть названа.
+    if (t.key === 'descendants_of' || t.key === 'ancestors_of') acc.needsVia.push(slot);
+    push({ rel: pred });
+    return;
+  }
+
+  switch (t.key) {
+    case 'aspect': {
+      // Сырое значение, а не снятое с кавычек: кавычки и есть признак label-формы (§А5-3б).
+      const aspect = resolveAspect(requireOp(t, '='), t.valueOffset, ctx);
+      push({ aspect: aspect.id });
+      return;
+    }
+    case 'tags':
+      push(parseTags(t));
+      return;
+    case 'excludeTags':
+      // Сахар сегодняшней грамматики: канон — отрицание над деревом (§А5-7).
+      acc.nodes.push({ not: parseTags(t) });
+      return;
+    case 'has': {
+      const prop = resolveProperty(requireOp(t, '='), t.valueOffset, ctx);
+      push({ has: prop.id });
+      return;
+    }
+    case 'has_relation':
+    case 'has_children': {
+      const pred: QueryRelPredicate = { kind: t.key };
+      if (t.op !== null) {
+        pred.via = resolveRole(requireOp(t, '='), t.valueOffset, ctx).id;
+      }
+      acc.lastRel = { pred, offset: t.keyOffset, kind: t.key };
+      push({ rel: pred });
+      return;
+    }
+    case 'excludeBlocked': {
+      if (unquote(requireOp(t, '='), t.valueOffset) !== 'true') {
+        fail('SYNTAX', `единственная форма — excludeBlocked=true`, t.valueOffset);
+      }
+      // ВРЕМЕННО дословно как сегодня (`compile.ts:254`): «есть входящее ребро роли
+      // dependency». Набор «closed» (состояние блокирующей работы) приедет с Б-1.
+      acc.nodes.push({ not: { rel: { kind: 'has_relation', via: 'dependency' } } });
+      return;
+    }
+    case 'archived': {
+      const v = unquote(requireOp(t, '='), t.valueOffset);
+      if (v !== 'true' && v !== 'any') {
+        fail('SYNTAX', `archived: ожидается true или any, получено '${v}'`, t.valueOffset);
+      }
+      push({ archived: v });
+      return;
+    }
+    case 'search':
+      push({ search: unquote(requireOp(t, '='), t.valueOffset) });
+      return;
+    case 'class':
+      // Часть Б: контрактов ещё нет, а молчаливое игнорирование дало бы запрос, который
+      // «работает» и отбирает не то.
+      fail(
+        'CLASS_NOT_AVAILABLE',
+        `предикат class появится с контрактами (часть Б реформы)`,
+        t.keyOffset,
+      );
+      return;
+    case 'sortBy':
+      assignOnce(acc, 'sortBy', t, parseSortBy(t, ctx));
+      return;
+    case 'limit': {
+      const v = unquote(requireOp(t, '='), t.valueOffset);
+      if (!/^\d+$/.test(v) || Number.parseInt(v, 10) <= 0) {
+        fail('SYNTAX', `limit: целое больше 0, получено '${v}'`, t.valueOffset);
+      }
+      assignOnce(acc, 'limit', t, Number.parseInt(v, 10));
+      return;
+    }
+    case 'display': {
+      const v = unquote(requireOp(t, '='), t.valueOffset);
+      if (!(QUERY_DISPLAY_MODES as readonly string[]).includes(v)) {
+        fail(
+          'SYNTAX',
+          `display: ${QUERY_DISPLAY_MODES.join(', ')}; получено '${v}'`,
+          t.valueOffset,
+        );
+      }
+      assignOnce(acc, 'display', t, v as NonNullable<QueryAst['display']>);
+      return;
+    }
+    case 'title':
+      assignOnce(acc, 'title', t, unquote(requireOp(t, '='), t.valueOffset));
+      return;
+    default: {
+      if (t.op === null) {
+        fail('SYNTAX', `ожидается конструкция вида имя=значение, получено '${t.key}'`, t.keyOffset);
+      }
+      const prop = resolveProperty(t.key, t.keyOffset, ctx);
+      push(parsePropNode(prop, t));
+    }
+  }
+}
+
+/** Разбирает текст §А5-3 в канонический Q-AST; отказы — структурные, с кодом и позицией. */
+export function parseQueryAst(text: string, reg: ParseRegistry): ParseAstResult {
+  try {
+    return { ok: true, ast: parseOrThrow(text, reg) };
+  } catch (e) {
+    if (e instanceof QueryAstParseError) {
+      return { ok: false, error: { code: e.code, message: e.message, position: e.position } };
+    }
+    throw e;
+  }
+}
+
+function parseOrThrow(text: string, reg: ParseRegistry): QueryAst {
+  // Переводы строк — те же разделители; замена 1:1 сохраняет длину, поэтому позиции
+  // ошибок остаются честными индексами в исходной строке.
+  const normalized = text.replace(/[\n\r]/g, ' ');
+  const ctx = buildCtx(reg);
+  const parts = splitTopLevel(normalized);
+  for (const part of parts) {
+    // Скобки — форма ПЕЧАТИ невыразимого дерева (`print.ts`), а не грамматики v1 (§А5-3д).
+    // Внутри кавычек они обычный текст, поэтому ищутся только вне их.
+    const paren = findOutsideQuotes(part.text, '()');
+    if (paren !== -1) {
+      fail(
+        'SYNTAX',
+        'скобок в грамматике v1 нет (§А5-3д): дерево строится формой или AST-входом тула',
+        part.offset + paren,
+      );
+    }
+  }
+  const tokens = parts.map(tokenize);
+
+  // Пре-пасс: `aspect=` разводит неоднозначные подписи независимо от порядка слов.
+  for (const t of tokens) {
+    if (t.key === 'aspect' && t.op === '=') {
+      ctx.aspectsInQuery.add(resolveAspect(t.value, t.valueOffset, ctx).id);
+    }
+  }
+
+  const acc: Acc = { nodes: [], ast: { filter: null }, lastRel: null, needsVia: [] };
+  for (const t of tokens) dispatch(t, ctx, acc);
+
+  for (const slot of acc.needsVia) {
+    if (slot.pred.via === undefined) {
+      fail(
+        'QUERY_MULTI_ROLE',
+        `'${slot.kind}' требует via=<роль>: обход сразу по нескольким ролям за границей языка запросов (§А5-1)`,
+        slot.offset,
+      );
+    }
+  }
+
+  acc.ast.filter =
+    acc.nodes.length === 0
+      ? null
+      : acc.nodes.length === 1
+        ? (acc.nodes[0] as QueryFilterNode)
+        : { and: acc.nodes };
+  return acc.ast;
+}

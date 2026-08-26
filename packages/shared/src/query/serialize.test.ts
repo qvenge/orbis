@@ -103,10 +103,6 @@ describe('serializeQuery: round-trip по всей грамматике §6.1', 
     );
   });
 
-  test('алиас due печатается каноническим именем due_date', () => {
-    expect(serializeQuery(astOf('due=today'))).toBe('due_date=today');
-  });
-
   test('порядок печати: фильтры в порядке массива, затем sortBy, search, limit, display, title', () => {
     const q =
       'title=T, display=list, limit=5, search=s, sortBy=created_at:asc, tags=a, aspect=orbis/task';

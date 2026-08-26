@@ -330,8 +330,8 @@ interface ResolvedField {
 }
 
 /**
- * Резолв имени поля (§6.1): core-поля → поля аспектов по каталогу; `due` — алиас
- * `orbis/task.due_date`. Зарезервированные ключи сюда не попадают (их снимает диспетчер).
+ * Резолв имени поля (§6.1): core-поля → поля аспектов по каталогу.
+ * Зарезервированные ключи сюда не попадают (их снимает диспетчер).
  * Неизвестное имя и неоднозначное имя без уточняющего `aspect=` — ошибки (§6.4).
  * `allowTitle` — только для sortBy: core-`title` доступен в сортировке, но не в фильтре.
  */
@@ -341,10 +341,10 @@ function resolveField(key: string, keyOffset: number, ctx: Ctx, allowTitle = fal
   }
   if (allowTitle && key === 'title') return { name: 'title', type: 'string', core: true };
 
-  const name = key === 'due' ? 'due_date' : key;
+  // §А5-3е реформы свойств: алиас `due` снят. Он был ЕДИНСТВЕННЫМ местом парсера, где id
+  // аспекта (`orbis/task`) был зашит в код, — и второй, неканонический способ назвать поле.
+  const name = key;
   let infos = ctx.catalog.fields[name] ?? [];
-  // Алиас документирован именно для orbis/task.due_date (§6.1).
-  if (key === 'due') infos = infos.filter((i) => i.aspect === 'orbis/task');
   if (infos.length === 0) fail(`неизвестное поле '${key}'`, keyOffset);
   if (infos.length > 1) {
     // Запрос содержит aspect=X и поле есть ровно в одном таком X — резолвим в X.

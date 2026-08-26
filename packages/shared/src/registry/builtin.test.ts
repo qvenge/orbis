@@ -293,9 +293,11 @@ test('слияния: finance_category и currency у financial И budget; grant
   // §А8: id называет смысл, суффикс `_ref` упразднён (В1).
   expect(BUILTIN_PROPERTY_META.filter((p) => p.id.endsWith('_ref'))).toEqual([]);
   expect(byId.get('orbis/grant')?.type.kind).toBe('grant');
+  // Цель ссылки — Q-AST целиком (§А6-1 «target?: Q-AST | Q-AST[]»), а не голый узел фильтра:
+  // форму сузила Задача 8 вместе с каноном §А5-7.
   expect(byId.get('orbis/finance_category')?.type).toEqual({
     kind: 'ref',
-    target: { aspect: 'orbis/category' },
+    target: { filter: { aspect: 'orbis/category' } },
   });
 });
 
@@ -479,7 +481,7 @@ const A8_TYPES: Record<string, string> = {
   'orbis/amount': 'decimal{exclusiveMin:0}|finance',
   'orbis/currency': 'text{format:currency,maxLength:3,minLength:3}|finance',
   'orbis/direction': 'select{options:2}|finance',
-  'orbis/finance_category': 'ref{target:{"aspect":"orbis/category"}}|finance',
+  'orbis/finance_category': 'ref{target:{"filter":{"aspect":"orbis/category"}}}|finance',
   'orbis/occurred_on': 'date|finance',
   'orbis/planned': 'boolean{default:false}|finance',
   'orbis/recurring': 'boolean|finance',
@@ -499,7 +501,7 @@ const A8_TYPES: Record<string, string> = {
   'orbis/memory_kind': 'select{options:2}|memory',
   'orbis/rule_scope': 'registry_ref{target:contract}|memory',
   'orbis/rule_pattern': 'text|memory',
-  'orbis/rule_target': 'ref{target:{"aspect":"orbis/category"}}|memory',
+  'orbis/rule_target': 'ref{target:{"filter":{"aspect":"orbis/category"}}}|memory',
   'orbis/progress_source': 'json{schema:json-schema}|goals',
   'orbis/target_value': 'decimal{exclusiveMin:0}|goals',
   'orbis/current_value': 'decimal{min:0}|goals',
@@ -511,7 +513,7 @@ const A8_TYPES: Record<string, string> = {
   'orbis/grant': 'grant|core',
   'orbis/assignee': 'text{maxLength:200,minLength:1}|core',
   'orbis/may_close': 'boolean{default:false}|core',
-  'orbis/run_routine': 'ref{target:{"aspect":"orbis/routine"}}|core',
+  'orbis/run_routine': 'ref{target:{"filter":{"aspect":"orbis/routine"}}}|core',
   'orbis/run_bucket': `text{pattern:${RUN_BUCKET_PATTERN}}|core`,
   'orbis/run_attempt': 'number{integer:true,min:1}|core',
   'orbis/fail_note': 'text{maxLength:2000}|core',
@@ -534,8 +536,8 @@ const A8_TYPES: Record<string, string> = {
   'orbis/routine_days': 'select{cardinality:many,minItems:1,options:7}|core',
   'orbis/routine_mode': 'select{options:2}|core',
   'orbis/allowed_tools': 'text{cardinality:many,maxItems:50,minLength:1}|core',
-  'orbis/parent_project': 'ref{target:{"aspect":"orbis/project"}}|ade',
-  'orbis/root_project': 'ref{target:{"aspect":"orbis/project"}}|ade',
+  'orbis/parent_project': 'ref{target:{"filter":{"aspect":"orbis/project"}}}|ade',
+  'orbis/root_project': 'ref{target:{"filter":{"aspect":"orbis/project"}}}|ade',
   'orbis/archived': 'boolean|core',
   'orbis/title': 'text|core',
   'orbis/created_at': 'timestamp|core',
