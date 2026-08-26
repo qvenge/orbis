@@ -46,6 +46,9 @@ const sink = makeChatJournalSink();
 const T0 = new Date('2026-08-26T10:00:00.000Z');
 const CATEGORY_A = '019e4466-aaaa-7e07-b5d4-64be9721da51';
 const CATEGORY_B = '019e4466-bbbb-7e07-b5d4-64be9721da52';
+// Своя категория у теста слитого свойства: конверт уникален по (категория, валюта, период)
+// на ВЛАДЕЛЬЦА (§2.1), а владелец у файла один — чужая комбинация дала бы отказ дубля.
+const CATEGORY_C = '019e4466-cccc-7e07-b5d4-64be9721da53';
 
 /** Свободное свойство владельца, у которого id и key РАЗНЫЕ — резолв входа по обоим. */
 const FREE_PROPERTY_ID = 'user/p-sleep';
@@ -646,6 +649,56 @@ describe('гейты флагов свойств', () => {
       reason: 'system_writable',
     });
     expect((await rowOf(imported.id)).props['orbis/bank_txn_id']).toBe('BNK-42');
+  });
+
+  test('замена носителя не стирает СЛИТОЕ свойство, объявленное остающимся аспектом (В1)', async () => {
+    // `orbis/finance_category` и `orbis/currency` объявлены И транзакцией, и конвертом (В1).
+    // `attach_orbis_budget` заменяет носитель целиком и их во входе НЕ несёт — но снимать
+    // их нельзя: они принадлежат и `orbis/financial`, который остаётся на записи. Снятие
+    // сделало бы законный attach отказом `REQUIRED` (оба аспекта требуют категорию) и
+    // заодно стёрло бы факт владельца у чужого носителя.
+    const e = entityOf(
+      await run('entity_create', {
+        title: 'Трата, ставшая конвертом',
+        tags: [],
+        aspects: {
+          'orbis/financial': {
+            amount: '900.00',
+            direction: 'expense',
+            category_ref: CATEGORY_C,
+            currency: 'RUB',
+            // Дата ВНЕ периода конверта ниже: иначе бюджет-хук выбрал бы конвертом саму
+            // запись (слитые категория и валюта совпадают по построению) и упал бы
+            // `self_relation` — маскируя проверяемое здесь.
+            occurred_on: '2026-08-26',
+          },
+        },
+      }),
+    );
+
+    ok(
+      await run('attach_orbis_budget', {
+        entity_id: e.id,
+        data: { limit: '30000.00', period_start: '2026-11-01', period_end: '2026-11-30' },
+      }),
+    );
+
+    const row = await expectProjection(e.id);
+    expect(row.props['orbis/finance_category']).toBe(CATEGORY_C);
+    expect(row.props['orbis/currency']).toBe('RUB');
+    expect(row.aspects.sort()).toEqual(['orbis/budget', 'orbis/financial']);
+    // Одно значение — два носителя: старая карта показывает его у обоих аспектов
+    expect(row.aspectsLegacy['orbis/financial']).toMatchObject({
+      category_ref: CATEGORY_C,
+      currency: 'RUB',
+    });
+    expect(row.aspectsLegacy['orbis/budget']).toMatchObject({
+      category_ref: CATEGORY_C,
+      currency: 'RUB',
+      period_start: '2026-11-01',
+    });
+    // …а СВОЁ поле транзакции, которого у конверта нет вовсе, замена не трогает тем более
+    expect(row.props['orbis/occurred_on']).toBe('2026-08-26');
   });
 
   test('замена с НОВЫМ периодом не переносит carryover прошлого периода (03-budget §2.6)', async () => {
