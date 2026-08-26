@@ -362,7 +362,7 @@ describe('propType: формы за пределами встроенного р
     expect(typeOf({})).toBe('unfilterable');
   });
   test('enumValues всегда строки — иначе сортировка по enum падала бы TypeError', () => {
-    // Порядок enum сравнивается с ТЕКСТОВОЙ проекцией `aspects->'A'->>'f'` (§6.1,
+    // Порядок enum сравнивается с ТЕКСТОВОЙ проекцией `aspects_legacy->'A'->>'f'` (§6.1,
     // compile.ts sortItem), поэтому числа и булевы обязаны приехать сюда строками;
     // раньше сюда шёл голый `prop.enum as string[]`, и `.replaceAll` падал на числе.
     const enumsOf = (prop: Record<string, unknown>) =>

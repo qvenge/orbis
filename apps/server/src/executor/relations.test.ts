@@ -380,7 +380,7 @@ describe('один budget-parent (§4.2, §13.7)', () => {
       await execute(db, req('entity_update', { id: x.id, title: 'Будущий конверт' })),
     );
     const entity = rows.results[0] as WireEntity;
-    expect('orbis/budget' in entity.aspects).toBe(false);
+    expect('orbis/budget' in entity.aspectsMap).toBe(false);
   });
 
   test('11c. entity_update.aspects с orbis/budget — тот же обход, что 11a: INVARIANT single_budget_parent', async () => {
@@ -401,7 +401,7 @@ describe('один budget-parent (§4.2, §13.7)', () => {
     expect(invariantOf(r)).toBe('single_budget_parent');
     // Аспект не приклеился
     const rows = ok(await execute(db, req('entity_update', { id: x.id, title: 'X (update)' })));
-    expect('orbis/budget' in (rows.results[0] as WireEntity).aspects).toBe(false);
+    expect('orbis/budget' in (rows.results[0] as WireEntity).aspectsMap).toBe(false);
   });
 
   test('11d. entity_update.aspects с orbis/budget: детей с другим конвертом нет → разрешён; detach бюджета не проверяется', async () => {
@@ -424,7 +424,7 @@ describe('один budget-parent (§4.2, §13.7)', () => {
     const detached = ok(
       await execute(db, req('entity_update', { id: x.id, aspects: { 'orbis/budget': null } })),
     );
-    expect('orbis/budget' in (detached.results[0] as WireEntity).aspects).toBe(false);
+    expect('orbis/budget' in (detached.results[0] as WireEntity).aspectsMap).toBe(false);
   });
 
   test('11b. attach orbis/budget: financial-дети без другого конверта → attach разрешён', async () => {
