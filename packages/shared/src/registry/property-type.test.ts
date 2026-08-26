@@ -203,3 +203,50 @@ test('формы деклараций строги: description обязател
       .success,
   ).toBe(false);
 });
+
+/**
+ * §А6-1 и §А2-1 требуют, чтобы `ref.target` и `scope` были Q-AST, а не «чем угодно».
+ * Пока эти поля были `z.unknown()` (до Задачи 8), в jsonb реестра проезжало ЛЮБОЕ значение —
+ * в том числе голый узел фильтра `{aspect: …}`, которым пять встроенных `ref` и были
+ * записаны. Гейт стоит именно здесь: откат схем к `unknown` обязан красить эти проверки.
+ */
+test('§А6-1: ref.target — Q-AST целиком, а не голый узел фильтра', () => {
+  const ok = (target: unknown) => propertyTypeSchema.safeParse({ kind: 'ref', target }).success;
+  // Ровно та форма, которой были записаны встроенные ссылки до Задачи 8.
+  expect(ok({ aspect: 'orbis/category' })).toBe(false);
+  expect(ok({ filter: { aspect: 'orbis/category' } })).toBe(true);
+  // Список альтернативных множеств (§А6-1 «Q-AST | Q-AST[]»).
+  expect(ok([{ filter: { aspect: 'orbis/category' } }, { filter: { tag: 'дом' } }])).toBe(true);
+  // Не-Q-AST: строка, голое дерево, посторонний ключ у корня, кривой узел.
+  expect(ok('orbis/category')).toBe(false);
+  expect(ok({ filter: { aspect: 'orbis/category' }, filters: [] })).toBe(false);
+  expect(ok({ filter: { prop: 'orbis/limit', op: 'gte', value: '1' } })).toBe(false);
+  expect(ok({ filter: null })).toBe(true);
+  // `target` необязателен (§А6-1 `target?`), но не «любой»: null — не Q-AST.
+  expect(propertyTypeSchema.safeParse({ kind: 'ref' }).success).toBe(true);
+  expect(ok(null)).toBe(false);
+});
+
+test('§А2-1: scope свойства — статический Q-AST, а не произвольный jsonb', () => {
+  const base = {
+    id: 'user/x',
+    ownerId: null,
+    key: 'user/x',
+    label: { ru: 'X' },
+    description: { ru: 'X' },
+    type: { kind: 'text' },
+    status: 'active',
+    rank: 1,
+  };
+  const ok = (scope: unknown) => propertyDefinitionSchema.safeParse({ ...base, scope }).success;
+  expect(ok(null)).toBe(true);
+  expect(ok({ filter: { aspect: 'orbis/task' } })).toBe(true);
+  expect(ok({ filter: { tag: 'дом' } })).toBe(true);
+  // Голый узел, произвольный jsonb и посторонний ключ — не Q-AST.
+  expect(ok({ aspect: 'orbis/task' })).toBe(false);
+  expect(ok({ anything: 1 })).toBe(false);
+  expect(ok('aspect=orbis/task')).toBe(false);
+  expect(ok({ filter: null, dropme: 1 })).toBe(false);
+  // Умолчание сохранилось: поле необязательно и по умолчанию пусто.
+  expect(propertyDefinitionSchema.parse(base).scope).toBeNull();
+});

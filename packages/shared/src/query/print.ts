@@ -1,0 +1,242 @@
+/**
+ * Печать канонического Q-AST (§А5-2: «печать — проекция при чтении: key для машин, label
+ * для человека — два рендера одного AST»). После переименования подписи устаревать нечему:
+ * в дереве лежат id, а имя подставляется на печати.
+ *
+ * Key-форма КАНОНИЧЕСКАЯ: по ней меряет дифф Ш1 (§А5-2), и она обратима — `parse(print(a))`
+ * даёт то же дерево (доказано `print.test.ts`, а не обещано докблоком).
+ *
+ * «Детерминированный порядок узлов» здесь означает: одно и то же дерево ВСЕГДА печатается
+ * одним и тем же текстом. Порядок детей `and`/`or` печать НЕ переставляет — он часть
+ * дерева: сортировка сделала бы `parse(print(a)) ≡ a` неверным для любого дерева, собранного
+ * формой не в алфавитном порядке. Проекция печатается фиксированным хвостом
+ * (`sortBy`, `limit`, `display`, `title`), потому что она — не предикаты и порядка не несёт.
+ *
+ * Печать ТОТАЛЬНА, а грамматика v1 — плоская (§А5-3д). Дерево, которое плоским текстом не
+ * выражается (OR между разными свойствами, вложенные группы), печатается СКОБКАМИ, и такой
+ * текст парсер v1 честно отвергает. Асимметрия односторонняя и намеренная: дифф и экран
+ * обязаны показать любое сохранённое дерево, а вводить скобками пока нечего.
+ */
+import type { QueryAst, QueryFilterNode, QueryPropValue, QueryScalar } from './ast';
+import { QUERY_DATE_TOKENS } from './ast';
+import { effectiveLabel, type ParseRegistry } from './parse-ast';
+
+export type QueryPrintForm = 'key' | 'label';
+
+const DATE_TOKEN_WORDS: ReadonlySet<string> = new Set(QUERY_DATE_TOKENS);
+
+/**
+ * Символы, при которых значение обязано быть в кавычках: разделители конструкций (запятая
+ * И пробел — §А5-3), оператор, разделители списка и отрицания, скобки печати, сами кавычки
+ * с бэкслешем.
+ */
+const QUOTE_TRIGGER_RE = /[\s,=|&<>!"\\()]/;
+
+/**
+ * Кавычки нужны ещё в трёх случаях, где неквотированный текст вернулся бы ДРУГИМ AST:
+ * `..` разобрался бы диапазоном; пустая строка — «пустое значение»; слово относительного
+ * времени (`today`) стало бы токеном, а не литералом.
+ */
+function needsQuote(value: string): boolean {
+  if (value === '') return true;
+  if (value !== value.trim()) return true;
+  if (value.includes('..')) return true;
+  if (DATE_TOKEN_WORDS.has(value)) return true;
+  return QUOTE_TRIGGER_RE.test(value);
+}
+
+function escapeQuotes(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function quote(value: string): string {
+  return needsQuote(value) ? `"${escapeQuotes(value)}"` : value;
+}
+
+/** Имя в label-форме закавычено ВСЕГДА — кавычки и есть признак «это поле» (§А5-3б). */
+function quoteAlways(value: string): string {
+  return `"${escapeQuotes(value)}"`;
+}
+
+interface Names {
+  prop(id: string): string;
+  aspect(id: string): string;
+  role(id: string): string;
+}
+
+/**
+ * Имя записи реестра в выбранной форме. Если id в реестре не нашёлся (запрос пережил
+ * удаление свойства), печатается сам id: печать обязана быть тотальной — молча потерять
+ * узел хуже, чем показать нерезолвенный id.
+ */
+function names(reg: ParseRegistry, form: QueryPrintForm): Names {
+  const pick = <T extends { key: string; label: Record<string, string> }>(
+    def: T | undefined,
+    id: string,
+  ): string => {
+    // Имя в label-форме ВСЕГДА в кавычках (§А5-3б) — в том числе нерезолвенный id.
+    // Экранирование ОБЯЗАТЕЛЬНО и здесь: подпись — свободный текст владельца (§А2-3), и
+    // свойство с label `Он "сказал"` без экранирования печаталось бы `"Он "сказал""=v`,
+    // то есть текстом, который парсер не соберёт обратно.
+    if (!def) return form === 'label' ? quoteAlways(id) : id;
+    return form === 'key' ? def.key : quoteAlways(effectiveLabel(def.label, reg.locale));
+  };
+  return {
+    prop: (id) => pick(reg.properties.get(id), id),
+    aspect: (id) => pick(reg.aspects.get(id), id),
+    role: (id) => pick(reg.roles.get(id), id),
+  };
+}
+
+function printScalar(value: QueryScalar): string {
+  if (typeof value === 'string') return quote(value);
+  return String(value);
+}
+
+function printBound(value: unknown): string {
+  if (typeof value === 'object' && value !== null && 'token' in value) {
+    return String((value as { token: string }).token);
+  }
+  return printScalar(value as QueryScalar);
+}
+
+/** Предикат свойства-«равенства», из которых складываются |- и &-списки. */
+interface EqLeaf {
+  prop: string;
+  op: 'eq' | 'contains';
+  value: QueryPropValue;
+}
+
+function asEqLeaf(node: QueryFilterNode): EqLeaf | null {
+  if (!('prop' in node)) return null;
+  if (node.op !== 'eq' && node.op !== 'contains') return null;
+  return { prop: node.prop, op: node.op, value: node.value };
+}
+
+/** `|`-список по ОДНОМУ свойству — форма OR, выразимая плоской грамматикой. */
+function asSamePropList(nodes: readonly QueryFilterNode[]): EqLeaf[] | null {
+  const leaves: EqLeaf[] = [];
+  for (const node of nodes) {
+    const leaf = asEqLeaf(node);
+    if (!leaf) return null;
+    if (leaves.length > 0 && (leaves[0] as EqLeaf).prop !== leaf.prop) return null;
+    leaves.push(leaf);
+  }
+  return leaves.length > 0 ? leaves : null;
+}
+
+/**
+ * ВТОРАЯ форма OR, выразимая плоским текстом: однородный список тегов — `tags=a|b`.
+ *
+ * Её отсутствие было настоящей дырой обратимости, а не пробелом в покрытии: дерево
+ * `{or:[{tag:'дом'},{tag:'дача'}]}` парсер САМ делает из боевого `tags=дом|дача`, а печать
+ * возвращала `(tags=дом | tags=дача)` — текст, который парсер v1 отвергает. Обещание
+ * обратимости key-формы (см. шапку файла) держалось на выборке фикстур, не покрывавшей то,
+ * что парсер производит из живого текста.
+ *
+ * Остальные не-prop листья в `|`-список НЕ сводятся, и это проверено разбором, а не
+ * догадкой: `aspect=a|b` парсер читает как ОДНО имя аспекта `a|b` (`UNKNOWN_ASPECT`),
+ * `has=a|b` — как одно имя свойства, а `search=a|b` собрал бы строку поиска `a|b`, то есть
+ * ДРУГОЕ дерево. Для них скобочная форма честнее: она отказывается разбираться вслух.
+ */
+function asTagList(nodes: readonly QueryFilterNode[]): string[] | null {
+  const tags: string[] = [];
+  for (const node of nodes) {
+    if (!('tag' in node)) return null;
+    tags.push(node.tag);
+  }
+  return tags.length > 0 ? tags : null;
+}
+
+function printTagList(tags: readonly string[]): string {
+  return `tags=${tags.map(quote).join('|')}`;
+}
+
+function printNode(node: QueryFilterNode, n: Names): string {
+  if ('and' in node) return `(${node.and.map((c) => printNode(c, n)).join(' & ')})`;
+  if ('or' in node) {
+    const list = asSamePropList(node.or);
+    if (list) {
+      return `${n.prop((list[0] as EqLeaf).prop)}=${list.map((l) => printBound(l.value)).join('|')}`;
+    }
+    const tags = asTagList(node.or);
+    if (tags) return printTagList(tags);
+    return `(${node.or.map((c) => printNode(c, n)).join(' | ')})`;
+  }
+  if ('not' in node) {
+    const inner = node.not;
+    if ('or' in inner) {
+      const list = asSamePropList(inner.or);
+      if (list) {
+        return `${n.prop((list[0] as EqLeaf).prop)}=${list.map((l) => `!${printBound(l.value)}`).join('&')}`;
+      }
+    }
+    const leaf = asEqLeaf(inner);
+    if (leaf) return `${n.prop(leaf.prop)}=!${printBound(leaf.value)}`;
+    // `excludeTags=a|b` парсер даёт как `not(or(tag…))`, и своей ветки этому случаю НЕ
+    // нужно: общий хвост ниже печатает `!` + свод из ветки `or`, то есть ровно `!tags=a|b`.
+    // Отдельная ветка здесь была — и оказалась мёртвой: мутация «снять её» не меняла ни
+    // одного вывода (найдено собственной мутацией М37 фикс-раунда 6).
+    // Двойное отрицание плоским текстом невыразимо: `!!X` парсер прочитал бы как имя
+    // конструкции `!X`, и отказ был бы не про то. Скобки дают ЧЕСТНОЕ сообщение —
+    // «скобок в грамматике v1 нет» (§А5-3д), то же, что у любого невыразимого дерева.
+    if ('not' in inner) return `!(${printNode(inner, n)})`;
+    return `!${printNode(inner, n)}`;
+  }
+  if ('prop' in node) {
+    const name = n.prop(node.prop);
+    switch (node.op) {
+      case 'eq':
+      case 'contains':
+        return `${name}=${printBound(node.value)}`;
+      case 'ne':
+        return `${name}!=${printBound(node.value)}`;
+      case 'gt':
+        return `${name}>${printBound(node.value)}`;
+      case 'lt':
+        return `${name}<${printBound(node.value)}`;
+      case 'in':
+        // `in` и OR по одному свойству делят одну текстовую форму: обратный разбор даёт OR
+        // (§А5-3д). Вход для `in` — AST тула (§А5-4), не текст.
+        return `${name}=${(node.value as QueryScalar[]).map(printScalar).join('|')}`;
+      default: {
+        const range = node.value as { from?: unknown; to?: unknown };
+        if (range.from !== undefined && range.to !== undefined) {
+          return `${name}=${printBound(range.from)}..${printBound(range.to)}`;
+        }
+        // Односторонняя ВКЛЮЧАЮЩАЯ граница — тот самый `<=`/`>=` (§А5-7, находка 8).
+        if (range.to !== undefined) return `${name}<=${printBound(range.to)}`;
+        return `${name}>=${printBound(range.from)}`;
+      }
+    }
+  }
+  if ('has' in node) return `has=${n.prop(node.has)}`;
+  if ('aspect' in node) return `aspect=${n.aspect(node.aspect)}`;
+  if ('tag' in node) return `tags=${quote(node.tag)}`;
+  if ('search' in node) return `search=${quote(node.search)}`;
+  if ('archived' in node) return `archived=${node.archived}`;
+  if ('class' in node) return `class=${node.class.contract}:${node.class.set}`;
+  const rel = node.rel;
+  const target = rel.of === undefined ? '' : `=${quote(rel.of)}`;
+  const via = rel.via === undefined ? '' : ` via=${n.role(rel.via)}`;
+  return `${rel.kind}${target}${via}`;
+}
+
+/** Печатает Q-AST в текст грамматики §А5-3: `key` — канон, `label` — для человека. */
+export function printQueryAst(ast: QueryAst, reg: ParseRegistry, form: QueryPrintForm): string {
+  const n = names(reg, form);
+  const parts: string[] = [];
+  if (ast.filter !== null) {
+    // Верхний `and` — и есть плоский список конструкций через запятую; всё остальное
+    // печатается одним выражением.
+    if ('and' in ast.filter) for (const child of ast.filter.and) parts.push(printNode(child, n));
+    else parts.push(printNode(ast.filter, n));
+  }
+  if (ast.sortBy) {
+    parts.push(`sortBy=${ast.sortBy.map((s) => `${n.prop(s.field)}:${s.dir}`).join('|')}`);
+  }
+  if (ast.limit !== undefined) parts.push(`limit=${ast.limit}`);
+  if (ast.display !== undefined) parts.push(`display=${ast.display}`);
+  if (ast.title !== undefined) parts.push(`title=${quote(ast.title)}`);
+  return parts.join(', ');
+}

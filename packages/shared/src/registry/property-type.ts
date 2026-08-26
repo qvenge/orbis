@@ -8,6 +8,7 @@
  * отброшенное поле уехало бы в базу как отсутствующее.
  */
 import { z } from 'zod';
+import { queryAstSchema } from '../query/ast';
 import { localizedTextSchema, propertyTypeSchema } from './types';
 
 /**
@@ -80,8 +81,10 @@ export const propertyDefinitionSchema = z
     status: z.enum(['active', 'proposed', 'deprecated']),
     /** §А1-3: `core` — хранение осталось колонкой, реестр даёт единый адрес Q-AST и CAS. */
     storage: z.enum(['props', 'core']).default('props'),
-    // Статический Q-AST (Р15); сужает Задача 8 вместе с каноном Q-AST — см. `ref.target`.
-    scope: z.unknown().nullable().default(null),
+    // Статический Q-AST (Р15): свойство-«колонка» показывается пустым на подходящих
+    // сущностях. Форма — канон §А5-7; «статичность» проверяет `assertStaticQuery`
+    // (см. докблок `ref.target`). v1 наполняет его только формами `aspect=`/`tags=` (№24).
+    scope: queryAstSchema.nullable().default(null),
     mergedInto: z.string().nullable().default(null),
     module: z.string().nullable().default(null),
     rank: z.number().int(),

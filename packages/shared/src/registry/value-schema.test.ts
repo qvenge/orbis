@@ -123,10 +123,14 @@ describe('propertyValueJsonSchema: словарь типов §А2-2 → JSON Sc
     expect(schemaOf('orbis/grant')).toMatchObject({ type: 'string', format: 'uuid' });
     expect(schemaOf('orbis/rule_scope')).toMatchObject({ type: 'string' });
     expect((schemaOf('orbis/rule_scope') as { format?: string }).format).toBeUndefined();
-    // ref many — массив uuid с капом из `max`
-    expect(
-      propertyValueJsonSchema({ kind: 'ref', target: null, cardinality: 'many', max: 3 }),
-    ).toMatchObject({ type: 'array', items: { type: 'string', format: 'uuid' }, maxItems: 3 });
+    // ref many — массив uuid с капом из `max`. `target` ОПУЩЕН, а не `null`: §А6-1 объявляет
+    // его необязательным (`target?: Q-AST | Q-AST[]`), и после сужения формы Задачей 8
+    // «цели нет» записывается отсутствием ключа, а не вторым способом сказать то же самое.
+    expect(propertyValueJsonSchema({ kind: 'ref', cardinality: 'many', max: 3 })).toMatchObject({
+      type: 'array',
+      items: { type: 'string', format: 'uuid' },
+      maxItems: 3,
+    });
   });
 
   test('cardinality many у скаляров: массив с minItems/maxItems, items — схема элемента', () => {

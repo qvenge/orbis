@@ -7,6 +7,9 @@
  * (`parse.test.ts`, блок «propType»): тип берётся из реального паттерна, не из догадки.
  */
 
+import type { AspectDefinition, PropertyDefinition } from '../registry/property-type';
+import type { PropertyType } from '../registry/types';
+
 export type FieldType =
   | 'string'
   | 'number'
@@ -192,4 +195,79 @@ function propType(prop: Record<string, unknown>): FieldType {
   }
   // Объект, разнотипный union, род без скалярного соответствия — фильтровать нечем.
   return 'unfilterable';
+}
+
+// ─────────────────── Каталог из реестра свойств (§А2-2, реформа) ───────────────────
+
+/**
+ * Тип поля ПО РЕЕСТРУ (§А2-2), без единой эвристики по тексту регэкспа.
+ *
+ * Именно этим новый каталог отличается от `propType` выше: там тип выводится из паттерна
+ * JSON Schema, и один символ в чужой схеме молча меняет тип поля (`orbis/run_bucket`
+ * не стал timestamp'ом только потому, что его паттерн начинается с `T([01]\d|`, а маркер
+ * ищется как `T\d{2}:`). Здесь тип приходит из `PropertyType` — угадывать нечего.
+ */
+function fieldTypeOfProperty(type: PropertyType): FieldType {
+  // Список скаляров фильтруется containment'ом — как сегодняшний `array` (`orbis/aliases`).
+  if (type.kind !== 'json' && 'cardinality' in type && type.cardinality === 'many') return 'array';
+  switch (type.kind) {
+    case 'number':
+      return type.integer === true ? 'integer' : 'number';
+    case 'decimal':
+      return 'decimal';
+    case 'boolean':
+      return 'boolean';
+    case 'date':
+      return 'date';
+    case 'timestamp':
+      return 'timestamp';
+    // Вложенный объект (`recurrence`, `progress_source`) выразимого фильтра не имеет.
+    case 'json':
+      return 'unfilterable';
+    // text, time, select, ref, grant, registry_ref — текстовая проекция значения.
+    default:
+      return 'string';
+  }
+}
+
+/**
+ * Каталог полей из реестра свойств. Ключ — **id свойства**: именно его несёт узел
+ * `{prop: <id>}` канона (§А5-7), и именно по нему компилятор адресует значение в `props`.
+ * У пользовательских свойств id — uuid, а key — слаг, поэтому ключевать каталог по key
+ * значило бы лишить компилятор адреса.
+ *
+ * `FieldInfo.aspect` заполняется единственным аспектом-носителем, если он один: адресом
+ * значения аспект больше не является (значение лежит в `props` по id), и поле остаётся
+ * только потому, что `FieldCatalog` — общая форма со старым компилятором до Задачи 21.
+ * Массив на ключ по той же причине: имя в новой адресации однозначно по построению
+ * (§А5-3а), и элемент в нём всегда ровно один.
+ */
+export function buildCatalogFromRegistry(reg: {
+  properties: ReadonlyMap<string, PropertyDefinition>;
+  aspects: ReadonlyMap<string, AspectDefinition>;
+}): FieldCatalog {
+  const carriers = new Map<string, string[]>();
+  for (const aspect of reg.aspects.values()) {
+    for (const ref of aspect.properties) {
+      const list = carriers.get(ref.propertyId);
+      if (list) list.push(aspect.id);
+      else carriers.set(ref.propertyId, [aspect.id]);
+    }
+  }
+  const fields: Record<string, FieldInfo[]> = {};
+  for (const prop of reg.properties.values()) {
+    const owners = carriers.get(prop.id) ?? [];
+    const info: FieldInfo = {
+      aspect: owners.length === 1 ? (owners[0] as string) : '',
+      type: fieldTypeOfProperty(prop.type),
+    };
+    // Порядок вариантов — `rank` объявления (§А2-2): на нём стоит сортировка enum-полей.
+    if (prop.type.kind === 'select') {
+      info.enumValues = [...prop.type.options]
+        .sort((a, b) => a.rank - b.rank)
+        .map((option) => option.key);
+    }
+    fields[prop.id] = [info];
+  }
+  return { fields };
 }

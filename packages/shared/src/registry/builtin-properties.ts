@@ -69,7 +69,18 @@ const RECURRENCE_SCHEMA = {
  * `goal.progress_source` — `aspects.ts:131-142`. Дискриминируемый союз, а не объект с
  * `.refine`: правило «field обязателен для sum и latest» обязано дожить до ajv, который
  * валидирует по реестру. Внутренний `query` хранится Q-AST (Р12/§А5-2), поэтому здесь он
- * объект, а не строка; его форму сужает Задача 8 вместе с каноном Q-AST.
+ * объект, а не строка.
+ *
+ * `query` намеренно остаётся `{type:'object'}`, а НЕ подставленной `queryAstJsonSchema`.
+ * Задача 8 (канон Q-AST) сузила `scope` и `ref.target`, но это поле не тронула, и вот
+ * почему: подстановка сюда схемы канона — решение о ФОРМЕ ХРАНЕНИЯ `progress_source`, и
+ * принимать его надо вместе с тем, кто эту форму читает. Читает её `goals/progress.ts`
+ * (сегодня — строкой через `parseQuery`, `:264-282`), а переводит на Q-AST Задача 9b
+ * вместе с переключением компилятора. Сузить схему раньше значило бы объявить в реестре
+ * форму, которой ни один потребитель ещё не пишет и не читает.
+ *
+ * **Владелец сужения — Задача 9b** (при переводе `goals/progress.ts` на Q-AST);
+ * `queryAstJsonSchema` для подстановки уже готова (`query/ast-json-schema.ts`).
  */
 const PROGRESS_SOURCE_SCHEMA = {
   anyOf: [
@@ -349,7 +360,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       ru: 'Категория доходов и расходов (модуль Финансы)',
       en: 'The income and expense category (Finance module)',
     },
-    type: { kind: 'ref', target: { aspect: 'orbis/category' } },
+    type: { kind: 'ref', target: { filter: { aspect: 'orbis/category' } } },
     module: 'finance',
   },
   {
@@ -568,7 +579,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       ru: 'Категория, которую правило подставляет при совпадении образца',
       en: 'The category the rule substitutes when the pattern matches',
     },
-    type: { kind: 'ref', target: { aspect: 'orbis/category' } },
+    type: { kind: 'ref', target: { filter: { aspect: 'orbis/category' } } },
     module: 'memory',
   },
 
@@ -726,7 +737,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       ru: 'Рутина, чьё расписание породило прогон',
       en: 'The routine whose schedule spawned the run',
     },
-    type: { kind: 'ref', target: { aspect: 'orbis/routine' } },
+    type: { kind: 'ref', target: { filter: { aspect: 'orbis/routine' } } },
     module: null,
     flags: { system_writable: true },
   },
@@ -1007,7 +1018,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       ru: 'Проект, ближайший к записи вверх по иерархии',
       en: 'The project closest to the record up the hierarchy',
     },
-    type: { kind: 'ref', target: { aspect: 'orbis/project' } },
+    type: { kind: 'ref', target: { filter: { aspect: 'orbis/project' } } },
     module: 'ade',
     flags: { model_writable: false, computed: { rule: 'nearest_ancestor' } },
   },
@@ -1018,7 +1029,7 @@ const ENTRIES: readonly PropertyEntry[] = [
       ru: 'Самый верхний проект над записью',
       en: 'The topmost project above the record',
     },
-    type: { kind: 'ref', target: { aspect: 'orbis/project' } },
+    type: { kind: 'ref', target: { filter: { aspect: 'orbis/project' } } },
     module: 'ade',
     flags: { model_writable: false, computed: { rule: 'nearest_ancestor' } },
   },

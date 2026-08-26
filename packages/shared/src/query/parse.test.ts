@@ -115,8 +115,8 @@ describe('parseQuery: позитивные случаи §6.1', () => {
       { kind: 'parents_of', of: { kind: 'this' } },
     ]);
   });
-  test('archived, limit, search, алиас due', () => {
-    const r = parse('archived=any, limit=30, search=API, due=today');
+  test('archived, limit, search', () => {
+    const r = parse('archived=any, limit=30, search=API, due_date=today');
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.ast.filters).toContainEqual({ kind: 'archived', value: 'any' });
@@ -127,6 +127,16 @@ describe('parseQuery: позитивные случаи §6.1', () => {
       field: 'due_date',
       condition: { kind: 'anyOf', values: [{ kind: 'date_token', token: 'today' }] },
     });
+  });
+
+  // §А5-3е: алиас `due` снят реформой свойств — единственный жёстко зашитый id аспекта
+  // в парсере (`parse.ts:344,347`) исчез вместе с ним. Имя поля теперь только каноническое.
+  test('алиас due снят: due=today — неизвестное поле', () => {
+    const r = parse('due<=today');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.message).toContain("неизвестное поле 'due'");
+    expect(parse('due=today').ok).toBe(false);
   });
 });
 

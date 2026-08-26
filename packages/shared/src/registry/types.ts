@@ -13,6 +13,7 @@
  * где его и сравнивают (§А7-3: `"10.0"` = `"10.00"` — сравнение по типу, не по тексту).
  */
 import { z } from 'zod';
+import { queryAstSchema } from '../query/ast';
 
 /** Закрытый словарь §А2-2. Порядок — как в таблице решения; на нём стоит приёмка «ровно 12». */
 export const PROPERTY_KINDS = [
@@ -130,10 +131,12 @@ export const propertyTypeSchema = z.discriminatedUnion('kind', [
   z
     .object({
       kind: z.literal('ref'),
-      // target — статическое подмножество Q-AST (§А6-1: без date-токенов, `search=`, `this`,
-      // проекции). Пока `unknown`: канон Q-AST и его схему заводит Задача 8, она же сужает
-      // это поле и подключает отказ SCOPE_NOT_STATIC. Раньше сужать нечем — типа ещё нет.
-      target: z.unknown(),
+      // target — Q-AST цели ссылки (§А6-1), одна или список альтернативных множеств.
+      // Форма проверяется схемой канона ЗДЕСЬ, а «статичность» (без date-токенов, `search`,
+      // `this` и проекции) — отдельным гейтом `assertStaticQuery` (`query/static.ts`,
+      // код SCOPE_NOT_STATIC): статичность зависит не от формы узла, а от его содержимого,
+      // и zod-схема, которая её проверяет, дала бы отказ БЕЗ имени причины.
+      target: z.union([queryAstSchema, z.array(queryAstSchema)]).optional(),
       cardinality: z.enum(['one', 'many']).optional(),
       max: z.number().int().min(1).optional(),
     })
