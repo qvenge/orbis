@@ -35,12 +35,17 @@ export interface RelationKey {
 }
 
 /**
- * Создаваемая batch'ем связь плюс признак «источник — конверт».
+ * Создаваемая batch'ем связь плюс признак «источник — конверт» НА МОМЕНТ СОЗДАНИЯ РЕБРА.
  *
  * Признак ЖИВЁТ до 0017 и только ради `assertSingleLegacyBudgetParent`: старая колонка
  * различает конверт-родителя по аспекту ИСТОЧНИКА, а у виртуального ребра источник — строка,
  * которой ещё нет в БД. Роль этого признака не заменяет: `subitem` от конверта и `subitem` от
- * проекта — одна роль и разный смысл для агрегатов. Уходит вместе с колонкой.
+ * проекта — одна роль и разный смысл для агрегатов.
+ *
+ * Это ФОЛБЭК, а не истина: аспекты источника мог поменять тот же batch уже ПОСЛЕ создания
+ * ребра (`attach_orbis_budget` следующей операцией) — тогда правду знает только виртуальная
+ * карта сущностей, см. `VirtualGraphEffects.aspectsOf`. Фолбэк нужен для источника, которого
+ * batch не трогал: в карте его нет, а строка в БД на момент создания ребра уже прочитана.
  */
 export interface VirtualRelationCreate extends RelationKey {
   sourceHasBudget: boolean;
@@ -53,6 +58,13 @@ export interface VirtualGraphEffects {
   deleted: ReadonlyArray<RelationKey>;
   /** Титул виртуальной сущности, созданной тем же batch (для сообщений об ошибках). */
   titleOf?: (id: string) => string | undefined;
+  /**
+   * Аспекты сущности ПОСЛЕ эффектов предыдущих операций batch; `undefined` — batch её не
+   * трогал, и правда о ней в БД. Без этого признак «источник — конверт» у виртуального ребра
+   * оставался бы замороженным на момент его создания, и порядок «сначала связь, потом
+   * бюджет» проносил бы мимо инварианта два конверта на одну транзакцию.
+   */
+  aspectsOf?: (id: string) => readonly string[] | undefined;
 }
 
 /**
@@ -415,7 +427,14 @@ export async function assertSingleLegacyBudgetParent(
     )
     .map((r) => r.source_id);
   const liveVirtual = (virtual?.created ?? [])
-    .filter((c) => c.targetId === key.targetId && c.sourceHasBudget && parentRoles.includes(c.role))
+    .filter((c) => {
+      if (c.targetId !== key.targetId || !parentRoles.includes(c.role)) return false;
+      // Признак читается на момент ПРОВЕРКИ: аспекты источника мог поменять тот же batch
+      // (в обе стороны — и приложить бюджет, и снять). Замороженный признак остаётся
+      // фолбэком для источника, которого batch не трогал: в карте его нет.
+      const aspects = virtual?.aspectsOf?.(c.sourceId);
+      return aspects === undefined ? c.sourceHasBudget : aspects.includes('orbis/budget');
+    })
     .map((c) => c.sourceId);
 
   const others = [...new Set([...liveDb, ...liveVirtual])].filter((src) => src !== key.sourceId);

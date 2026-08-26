@@ -1078,6 +1078,139 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
     expect(await legacyBudgetParents(txn.id)).toEqual([]);
   });
 
+  // Признак «источник — конверт» у ВИРТУАЛЬНОГО ребра batch: он обязан читаться на момент
+  // ПРОВЕРКИ, а не на момент создания ребра. Заморозь его — и порядок «сначала связь, потом
+  // бюджет» проносит мимо инварианта два конверта на одну транзакцию (тот же двойной счёт,
+  // что и в остальных тестах этого describe, только через batch).
+  test('31a. batch «сначала рёбра, потом бюджеты»: X и Y становятся конвертами ПОСЛЕ своих subitem → отказ', async () => {
+    const { txn } = await twoEnvelopesAndTxn();
+    const x = await createEntity({ title: 'X — будущий конверт' });
+    const y = await createEntity({ title: 'Y — будущий конверт' });
+    const r = err(
+      await execute(db, {
+        actorUserId: userA,
+        actorKind: 'owner',
+        source: 'chat',
+        batchId: newId(),
+        clock: () => T0,
+        operations: [
+          {
+            tool: 'relation_create',
+            input: { source_id: x.id, target_id: txn.id, role: 'subitem' },
+          },
+          {
+            tool: 'relation_create',
+            input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
+          },
+          { tool: 'attach_orbis_budget', input: { entity_id: x.id, data: budgetData() } },
+          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetData() } },
+        ],
+      }),
+    );
+    // Отказ идёт ИМЕННО от интервальной половины правила, а не от дубля или самосвязи
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('single_budget_parent');
+    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBe(true);
+    // batch атомарен: ни рёбер, ни аспектов
+    expect(await legacyBudgetParents(txn.id)).toEqual([]);
+  });
+
+  test('31b. обратный порядок «сначала бюджеты, потом рёбра» — тот же отказ (контроль-регресс)', async () => {
+    const { txn } = await twoEnvelopesAndTxn();
+    const x = await createEntity({ title: 'X — конверт сразу' });
+    const y = await createEntity({ title: 'Y — конверт сразу' });
+    const r = err(
+      await execute(db, {
+        actorUserId: userA,
+        actorKind: 'owner',
+        source: 'chat',
+        batchId: newId(),
+        clock: () => T0,
+        operations: [
+          { tool: 'attach_orbis_budget', input: { entity_id: x.id, data: budgetData() } },
+          {
+            tool: 'relation_create',
+            input: { source_id: x.id, target_id: txn.id, role: 'subitem' },
+          },
+          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetData() } },
+          {
+            tool: 'relation_create',
+            input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
+          },
+        ],
+      }),
+    );
+    expect(invariantOf(r)).toBe('single_budget_parent');
+    expect(await legacyBudgetParents(txn.id)).toEqual([]);
+  });
+
+  test('31c. ЗЕРКАЛЬНЫЙ случай: источник перестал быть конвертом тем же batch → его ребро не считается', async () => {
+    // Признак читается на момент проверки в ОБЕ стороны. Замороженный он запрещал бы здесь
+    // законное: у транзакции остаётся ровно один конверт-родитель — Y.
+    const { txn } = await twoEnvelopesAndTxn();
+    const x = await createEntity({
+      title: 'X — конверт, который им быть перестанет',
+      aspects: { 'orbis/budget': budgetData() },
+    });
+    const y = await createEntity({ title: 'Y — будущий конверт' });
+    ok(
+      await execute(db, {
+        actorUserId: userA,
+        actorKind: 'owner',
+        source: 'chat',
+        batchId: newId(),
+        clock: () => T0,
+        operations: [
+          {
+            tool: 'relation_create',
+            input: { source_id: x.id, target_id: txn.id, role: 'subitem' },
+          },
+          { tool: 'entity_update', input: { id: x.id, aspects: { 'orbis/budget': null } } },
+          {
+            tool: 'relation_create',
+            input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
+          },
+          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetData() } },
+        ],
+      }),
+    );
+    expect(await legacyBudgetParents(txn.id)).toEqual([y.id]);
+  });
+
+  test('31d. источник, которого batch НЕ трогал, считается по строке БД (фолбэк замороженного признака)', async () => {
+    // У такого источника резолвить нечего: его нет в виртуальной карте сущностей batch, и
+    // единственная правда о нём — признак, снятый при создании ребра с уже загруженной
+    // строки. Снятие фолбэка открыло бы дыру ровно на этом пути.
+    const { txn } = await twoEnvelopesAndTxn();
+    const x = await createEntity({
+      title: 'X — конверт ДО batch',
+      aspects: { 'orbis/budget': budgetData() },
+    });
+    const y = await createEntity({ title: 'Y — будущий конверт' });
+    const r = err(
+      await execute(db, {
+        actorUserId: userA,
+        actorKind: 'owner',
+        source: 'chat',
+        batchId: newId(),
+        clock: () => T0,
+        operations: [
+          {
+            tool: 'relation_create',
+            input: { source_id: x.id, target_id: txn.id, role: 'subitem' },
+          },
+          {
+            tool: 'relation_create',
+            input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
+          },
+          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetData() } },
+        ],
+      }),
+    );
+    expect(invariantOf(r)).toBe('single_budget_parent');
+    expect(await legacyBudgetParents(txn.id)).toEqual([]);
+  });
+
   test('32. ВТОРОЙ ВХОД: attach orbis/budget на источника subitem-ребра, когда у транзакции уже есть subitem от конверта', async () => {
     // Ни одного ребра роли `envelope-binding` в сценарии нет вовсе — ограничение роли здесь
     // молчит по построению, а агрегаты посчитали бы транзакцию дважды.

@@ -197,6 +197,11 @@ class BatchState {
       created: this.createdRelations,
       deleted: this.deletedRelations,
       titleOf: (id) => this.entities.get(id)?.title,
+      // Строки, ТРОНУТЫЕ batch'ем, лежат здесь уже в состоянии ПОСЛЕ операции (create /
+      // update / attach кладут afterRow) — значит проверка видит аспекты такими, какими они
+      // будут, а не какими были на момент создания ребра. `loadEntityForUpdate` сюда ничего
+      // не кладёт: нетронутый источник остаётся `undefined`, и у него в силе фолбэк.
+      aspectsOf: (id) => this.entities.get(id)?.aspects,
     };
   }
 }
