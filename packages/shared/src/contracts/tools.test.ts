@@ -191,38 +191,71 @@ describe('relationCreateInput / relationDeleteInput', () => {
     expect(relationCreateInput.safeParse({ ...base, relation_type: 'parent' }).success).toBe(false);
   });
 
+  /**
+   * АБСОЛЮТНЫЕ ожидания по каждому полю. Эквивалентность двух схем (тест ниже) ловит только
+   * РАСХОЖДЕНИЕ; синхронный дрейф — «свели обе к общей базе с ослабленным полем» — она не
+   * ловит по построению, а это ровно тот рефакторинг, ради которого пин и заводился.
+   * Поэтому здесь сказано, чего каждое поле обязано требовать САМО.
+   */
+  const FIELD_CASES: ReadonlyArray<{ field: string; value: unknown; ok: boolean; why: string }> = [
+    { field: 'source_id', value: UUID, ok: true, why: 'валидный uuid' },
+    { field: 'source_id', value: 'не-uuid', ok: false, why: 'строка не uuid' },
+    { field: 'source_id', value: 42, ok: false, why: 'не строка' },
+    { field: 'source_id', value: undefined, ok: false, why: 'поле обязательно' },
+    { field: 'target_id', value: UUID, ok: true, why: 'валидный uuid' },
+    { field: 'target_id', value: 'не-uuid', ok: false, why: 'строка не uuid' },
+    { field: 'target_id', value: 42, ok: false, why: 'не строка' },
+    { field: 'target_id', value: undefined, ok: false, why: 'поле обязательно' },
+    { field: 'role', value: 'subitem', ok: true, why: 'непустая строка' },
+    { field: 'role', value: '', ok: false, why: 'пустая строка не роль' },
+    { field: 'role', value: 7, ok: false, why: 'не строка' },
+    { field: 'role', value: undefined, ok: false, why: 'поле обязательно' },
+  ];
+
+  /** Полный валидный вход с подменённым одним полем; `undefined` — поле выброшено. */
+  function withField(field: string, value: unknown): Record<string, unknown> {
+    const input: Record<string, unknown> = { ...base, role: 'subitem' };
+    if (value === undefined) delete input[field];
+    else input[field] = value;
+    return input;
+  }
+
+  test.each([
+    ['relationCreateInput', relationCreateInput],
+    ['relationDeleteInput', relationDeleteInput],
+  ])('%s: каждое поле держит СВОЙ валидатор (абсолютный пин)', (name, schema) => {
+    for (const c of FIELD_CASES) {
+      expect({
+        name,
+        field: c.field,
+        why: c.why,
+        ok: schema.safeParse(withField(c.field, c.value)).success,
+      }).toEqual({
+        name,
+        field: c.field,
+        why: c.why,
+        ok: c.ok,
+      });
+    }
+    // strict и старая форма — тоже абсолютно, на обеих схемах
+    expect(schema.safeParse({ ...base, role: 'subitem', extra: 1 }).success).toBe(false);
+    expect(schema.safeParse({ ...base, relation_type: 'parent' }).success).toBe(false);
+  });
+
   // Тождество `toBe` снято реформой: у создания и удаления разошлись внутренние формы
   // (у create есть undo-надмножество с `meta`), и общий объект тянул бы правку одного
   // контракта во второй молча. Сравнивать сами схемы глубоким равенством нельзя — у zod
   // внутри функции, и `toEqual` падает на любых двух экземплярах; поэтому пиннится то,
-  // что здесь и важно: РАЗНЫЕ объекты ОДНОЙ формы и одного поведения.
+  // что здесь и важно: РАЗНЫЕ объекты ОДНОЙ формы и одного поведения. Абсолютные ожидания
+  // полей — в тесте выше: эквивалентность их не заменяет.
   test('delete — схема той же ФОРМЫ и того же поведения, но отдельный объект (§9.2)', () => {
     expect(relationDeleteInput).not.toBe(relationCreateInput);
     expect(Object.keys(relationDeleteInput.shape).sort()).toEqual(
       Object.keys(relationCreateInput.shape).sort(),
     );
-    // Образцы бьют по КАЖДОМУ полю в отдельности, а не по форме объекта целиком: набор,
-    // в котором `target_id` всегда валиден, не различил бы `z.string().uuid()` и голый
-    // `z.string()` — расхождение валидаторов уехало бы молча, а `relation.delete` с
-    // «не-uuid» доехал бы до PG и дал 22P02/500 вместо VALIDATION.
-    const good = 'subitem';
     const samples: unknown[] = [
-      // положительный контроль
-      { ...base, role: good },
-      // source_id: тип, формат, отсутствие
-      { ...base, source_id: 'не-uuid', role: good },
-      { ...base, source_id: 42, role: good },
-      { target_id: base.target_id, role: good },
-      // target_id: тот же набор проб — именно он был слепым пятном
-      { ...base, target_id: 'не-uuid', role: good },
-      { ...base, target_id: 42, role: good },
-      { source_id: UUID, role: good },
-      // role: пустая строка, не-строка, отсутствие
-      { ...base, role: '' },
-      { ...base, role: 7 },
-      { ...base },
-      // strict и старая форма
-      { ...base, role: good, extra: 1 },
+      ...FIELD_CASES.map((c) => withField(c.field, c.value)),
+      { ...base, role: 'subitem', extra: 1 },
       { ...base, relation_type: 'parent' },
     ];
     for (const sample of samples) {

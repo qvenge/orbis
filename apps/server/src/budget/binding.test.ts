@@ -1077,3 +1077,349 @@ describe('транзакция, ставшая конвертом: селект�
     expect(await budgetParents(other.id)).toEqual([txn.id]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Хук привязки против интервальной уникальности (7a→0017)
+// ---------------------------------------------------------------------------
+//
+// До 0017 `rel_uniq` стоит на ПРОЕКЦИИ роли, поэтому `subitem` и `envelope-binding` на одной
+// паре несовместимы. А ребро роли владельца от конверта к транзакции система создать
+// РАЗРЕШАЕТ. Значит хук обязан считать такое ребро привязкой — иначе он раз за разом пытается
+// поставить рядом своё `envelope-binding`, бьётся об уникальность и валит ЧУЖУЮ операцию
+// владельца (правку категории, суммы, даты — что угодно), причём НАВСЕГДА.
+//
+// Ровно так это и работало до реформы: `budgetParentsOfMany` читал `relation_type='parent'` с
+// источником-конвертом, ручное ребро само было привязкой, и хук выходил в no-op.
+describe('хук привязки и живое parent-ребро той же пары (интервал 7a→0017)', () => {
+  /** Источники, которых АГРЕГАТЫ считают конвертами-родителями (условие `spentByEnvelope`). */
+  async function legacyBudgetParents(txnId: string): Promise<string[]> {
+    const rows = await adminRows(
+      sql`SELECT r.source_id FROM relations r
+          JOIN entities e ON e.id = r.source_id
+          WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
+            AND 'orbis/budget' = ANY(e.aspects)
+          ORDER BY r.source_id`,
+    );
+    return rows.map((r) => r.source_id as string);
+  }
+
+  test('1. правка категории транзакции в категорию конверта, у которого уже есть subitem-ребро к ней', async () => {
+    const user = freshUserId();
+    const catEnvelope = newId();
+    const catOther = newId();
+    const { entity: env } = await createEntity(user, {
+      title: 'Конверт Еда',
+      aspects: { 'orbis/budget': budgetData(catEnvelope, '2026-07-01', '2026-07-31') },
+    });
+    const { entity: txn } = await createEntity(user, {
+      title: 'Трата другой категории',
+      aspects: { 'orbis/financial': finData(catOther, '2026-07-12') },
+    });
+    // Ребро роли ВЛАДЕЛЬЦА от конверта к транзакции — система его разрешает
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_create', {
+          source_id: env.id,
+          target_id: txn.id,
+          role: 'subitem',
+        }),
+        { sink },
+      ),
+    );
+
+    // …и правка категории на категорию конверта обязана пройти
+    ok(
+      await execute(
+        db,
+        req(user, 'entity_update', {
+          id: txn.id,
+          aspects: { 'orbis/financial': { category_ref: catEnvelope } },
+        }),
+        { sink },
+      ),
+    );
+    // Конверт-родитель по счёту агрегатов — РОВНО ОДИН (двойного счёта нет)
+    expect(await legacyBudgetParents(txn.id)).toEqual([env.id]);
+  });
+
+  test('2. attach orbis/budget на сущность с subitem-ребёнком-транзакцией той же категории', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    const { entity: txn } = await createEntity(user, {
+      title: 'Трата проекта',
+      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+    });
+    const { entity: x } = await createEntity(user, { title: 'Проект, ставший конвертом' });
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_create', { source_id: x.id, target_id: txn.id, role: 'subitem' }),
+        { sink },
+      ),
+    );
+
+    // «Сделать проект конвертом» обязано пройти
+    ok(
+      await execute(
+        db,
+        req(user, 'attach_orbis_budget', {
+          entity_id: x.id,
+          data: budgetData(cat, '2026-07-01', '2026-07-31'),
+        }),
+        { sink },
+      ),
+    );
+    expect(await legacyBudgetParents(txn.id)).toEqual([x.id]);
+  });
+
+  test('3. владелец заменил привязку своим ребром: правки financial продолжают проходить', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    const { entity: env } = await createEntity(user, {
+      title: 'Конверт Развлечения',
+      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+    });
+    const { entity: txn } = await createEntity(user, {
+      title: 'Кино',
+      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+    });
+    expect(await budgetParents(txn.id)).toEqual([env.id]); // привязал хук
+
+    // Снятие привязки и своё ребро — обе операции система разрешает
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_delete', {
+          source_id: env.id,
+          target_id: txn.id,
+          role: 'envelope-binding',
+        }),
+        { sink },
+      ),
+    );
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_create', { source_id: env.id, target_id: txn.id, role: 'subitem' }),
+        { sink },
+      ),
+    );
+
+    // …и после этого ЛЮБАЯ правка транзакции обязана проходить, а не отказывать навсегда
+    for (const patch of [
+      { amount: '999.00' },
+      { occurred_on: '2026-07-13' },
+      { category_ref: cat },
+    ]) {
+      ok(
+        await execute(
+          db,
+          req(user, 'entity_update', { id: txn.id, aspects: { 'orbis/financial': patch } }),
+          { sink },
+        ),
+      );
+    }
+    expect(await legacyBudgetParents(txn.id)).toEqual([env.id]);
+  });
+
+  test('4a. ребро от НЕ-конверта хук не трогает: subitem проекта переживает привязку и ребиндинг', async () => {
+    // Граница множества с другой стороны: «конверт-родитель» — это ребро от сущности с
+    // `orbis/budget`. Считай хук привязкой любое parent-ребро, он удалял бы связь
+    // «проект → задача» на каждой правке суммы — тихая потеря данных владельца.
+    const user = freshUserId();
+    const cat = newId();
+    const { entity: env } = await createEntity(user, {
+      title: 'Конверт Ремонт',
+      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+    });
+    const { entity: txn } = await createEntity(user, {
+      title: 'Краска',
+      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+    });
+    const { entity: project } = await createEntity(user, { title: 'Проект без бюджета' });
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_create', {
+          source_id: project.id,
+          target_id: txn.id,
+          role: 'subitem',
+        }),
+        { sink },
+      ),
+    );
+    expect(await budgetParents(txn.id)).toEqual([env.id]);
+
+    // Правка суммы гоняет хук: он обязан выйти в no-op и ничьих рёбер не тронуть
+    ok(
+      await execute(
+        db,
+        req(user, 'entity_update', {
+          id: txn.id,
+          aspects: { 'orbis/financial': { amount: '777.00' } },
+        }),
+        { sink },
+      ),
+    );
+    expect(await budgetParents(txn.id)).toEqual([env.id]);
+    const own = await adminRows(
+      sql`SELECT role FROM relations WHERE source_id = ${project.id} AND target_id = ${txn.id}`,
+    );
+    expect(own.map((r) => r.role as string)).toEqual(['subitem']);
+  });
+
+  test('4b. смена конверта снимает ребро ТОЙ РОЛИ, что есть: subitem владельца, а не envelope-binding', async () => {
+    // Удаляя привязку, хук обязан назвать роль существующей строки. Зашей он свою
+    // `envelope-binding` — `relation_delete` не нашёл бы строку и уронил бы правку владельца.
+    const user = freshUserId();
+    const catA = newId();
+    const catB = newId();
+    const { entity: envA } = await createEntity(user, {
+      title: 'Конверт A',
+      aspects: { 'orbis/budget': budgetData(catA, '2026-07-01', '2026-07-31') },
+    });
+    const { entity: envB } = await createEntity(user, {
+      title: 'Конверт B',
+      aspects: { 'orbis/budget': budgetData(catB, '2026-07-01', '2026-07-31') },
+    });
+    const { entity: txn } = await createEntity(user, {
+      title: 'Переезжающая трата',
+      aspects: { 'orbis/financial': finData(catA, '2026-07-12') },
+    });
+    // Заменяем системную привязку своим ребром той же пары
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_delete', {
+          source_id: envA.id,
+          target_id: txn.id,
+          role: 'envelope-binding',
+        }),
+        { sink },
+      ),
+    );
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_create', { source_id: envA.id, target_id: txn.id, role: 'subitem' }),
+        { sink },
+      ),
+    );
+
+    // Смена категории: конверт A обязан отпустить транзакцию, конверт B — принять
+    ok(
+      await execute(
+        db,
+        req(user, 'entity_update', {
+          id: txn.id,
+          aspects: { 'orbis/financial': { category_ref: catB } },
+        }),
+        { sink },
+      ),
+    );
+    expect(await legacyBudgetParents(txn.id)).toEqual([envB.id]);
+    const leftover = await adminRows(
+      sql`SELECT role FROM relations WHERE source_id = ${envA.id} AND target_id = ${txn.id}`,
+    );
+    expect(leftover).toEqual([]);
+  });
+
+  test('4c. отвязка шаблона снимает ребро ТОЙ РОЛИ, что есть (ветка fin=null)', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    const { entity: env } = await createEntity(user, {
+      title: 'Конверт подписок',
+      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+    });
+    const { entity: txn } = await createEntity(user, {
+      title: 'Подписка',
+      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+    });
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_delete', {
+          source_id: env.id,
+          target_id: txn.id,
+          role: 'envelope-binding',
+        }),
+        { sink },
+      ),
+    );
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_create', { source_id: env.id, target_id: txn.id, role: 'subitem' }),
+        { sink },
+      ),
+    );
+
+    // Конверсия в шаблон повторения — безусловная отвязка ВСЕХ конвертов-родителей
+    ok(
+      await execute(
+        db,
+        req(user, 'attach_orbis_schedule', {
+          entity_id: txn.id,
+          data: {
+            start_at: '2026-07-12T10:00:00+03:00',
+            recurrence: { freq: 'monthly', interval: 1 },
+          },
+        }),
+        { sink },
+      ),
+    );
+    expect(await legacyBudgetParents(txn.id)).toEqual([]);
+  });
+
+  test('4. хук СЧИТАЕТ ребро роли владельца привязкой: своего envelope-binding он не добавляет', async () => {
+    // Тест, которого не хватало: без него дыра дожила до гейта. Проверяется не «отказа нет»,
+    // а причина — хук видит существующее ребро и выходит в no-op.
+    const user = freshUserId();
+    const cat = newId();
+    const { entity: env } = await createEntity(user, {
+      title: 'Конверт Транспорт',
+      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+    });
+    const { entity: txn } = await createEntity(user, {
+      title: 'Такси',
+      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+    });
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_delete', {
+          source_id: env.id,
+          target_id: txn.id,
+          role: 'envelope-binding',
+        }),
+        { sink },
+      ),
+    );
+    ok(
+      await execute(
+        db,
+        req(user, 'relation_create', { source_id: env.id, target_id: txn.id, role: 'ticket' }),
+        { sink },
+      ),
+    );
+
+    // Правка ФИНАНСОВОГО аспекта — иначе хук не запускается вовсе и тест был бы вакуумным
+    const r = ok(
+      await execute(
+        db,
+        req(user, 'entity_update', {
+          id: txn.id,
+          aspects: { 'orbis/financial': { amount: '450.00' } },
+        }),
+        { sink },
+      ),
+    );
+    // Хук ничего не дописал: в action ровно одна операция — сама правка
+    const action = await actionById(r.actionId);
+    expect(action.operations.filter((o) => o.op.startsWith('relation_'))).toEqual([]);
+    // Ребро владельца на месте, второго ребра нет
+    expect(await budgetParents(txn.id)).toEqual([]); // роли envelope-binding нет
+    expect(await legacyBudgetParents(txn.id)).toEqual([env.id]); // но конверт-родитель есть
+  });
+});

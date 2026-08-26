@@ -456,15 +456,21 @@ export function duplicateRelationError(
  * 23505 здесь нельзя: после нарушения ограничения транзакция ABORTED, и назвать роль
  * помешавшей связи уже нечем — запрос из catch не выполнится.
  */
-function legacyIntervalError(key: RelationKey, existingRole: string): ExecError {
+function legacyIntervalError(
+  key: RelationKey,
+  existingRole: string,
+  existingDef: RelationRoleDefinition | undefined,
+): ExecError {
   const legacy = projectLegacyRelationType(key.role);
   return new ExecError(
     'INVARIANT',
-    `на этой паре сущностей уже есть связь роли «${existingRole}», и до contract-миграции 0017 уникальность стоит на старом типе «${legacy}», общем у обеих ролей — вторая связь пока невыразима (интервал реформы)`,
+    `на этой паре сущностей уже есть связь роли «${roleName(existingDef, existingRole)}», и до contract-миграции 0017 уникальность стоит на старом типе «${legacy}», общем у обеих ролей — вторая связь пока невыразима (интервал реформы)`,
     {
       invariant: 'duplicate_relation',
       legacyInterval: true,
       legacyRelationType: legacy,
+      // ID роли, а не её подпись: `details` читает КОД, и рядом лежащий `role` — тоже id.
+      // Подпись из реестра уехала бы сюда локализованной и сменилась бы вместе с label.
       existingRole,
       ...key,
     },
@@ -509,6 +515,6 @@ export async function assertNoDuplicateRelation(
   if (onPair.includes(key.role)) throw duplicateRelationError(key, def);
   const collision = onPair.find((role) => projectLegacyRelationType(role) === legacy);
   if (collision !== undefined) {
-    throw legacyIntervalError(key, roleName(reg.roles.get(collision), collision));
+    throw legacyIntervalError(key, collision, reg.roles.get(collision));
   }
 }

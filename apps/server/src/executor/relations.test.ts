@@ -760,6 +760,12 @@ describe('интервал 7a→0017: rel_uniq ещё стоит на проек
     // Отказ ЧЕСТНО называет причину интервалом, а не выдаёт «такая связь уже есть»
     expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBe(true);
     expect((r.error.details as { legacyRelationType?: string }).legacyRelationType).toBe('parent');
+    // `details` читает КОД: помешавшая роль — ID, как и соседнее `role`, а не подпись из
+    // реестра (та локализована и меняется вместе с label)
+    expect((r.error.details as { existingRole?: string }).existingRole).toBe('subitem');
+    expect((r.error.details as { role?: string }).role).toBe('ticket');
+    // …а человеку подпись достаётся из ТЕКСТА отказа
+    expect(r.error.message).toContain('Подпункт');
     expect(await relCount(project.id, child.id, 'ticket')).toBe(0);
   });
 
@@ -842,10 +848,10 @@ describe('интервал 7a→0017: rel_uniq ещё стоит на проек
 });
 
 describe('переходная колонка и эвристика миграции 0016', () => {
-  test('24. relation_type производится из role ТОТАЛЬНО (все 11 ролей проекции)', async () => {
+  test('24. relation_type производится из role ТОТАЛЬНО (все 11 ролей) и даёт ПЯТЬ значений', async () => {
     // Проекция считается ОДНОЙ функцией (`projectLegacyRelationType`), и записывает колонку
-    // единственный писатель — INSERT стадии 5. Проверяются те роли, которые в интервале
-    // достижимы на одной паре без коллизии rel_uniq: каждая — на своей паре сущностей.
+    // единственный писатель — INSERT стадии 5. Каждая роль — на своей паре сущностей, иначе
+    // роли одной проекции столкнулись бы на `rel_uniq` интервала.
     const cases: Array<[string, string]> = [
       ['subitem', 'parent'],
       ['ticket', 'parent'],
@@ -857,6 +863,11 @@ describe('переходная колонка и эвристика миграц
       ['alternative-of', 'related_to'],
       ['supersedes', 'related_to'],
       ['instance-of', 'derived_from'],
+      // `ref` — ОДИННАДЦАТАЯ роль, и её проекция даёт ПЯТОЕ значение колонки, которого в
+      // старом закрытом списке из четырёх не было. Строка пишется живьём именно поэтому:
+      // 0017 будет решать судьбу колонки по тому, что в ней РЕАЛЬНО лежит, и CHECK на
+      // четыре значения такую строку не вместил бы.
+      ['ref', 'ref'],
     ];
     for (const [role, legacy] of cases) {
       const a = await createEntity({ title: `Проекция-${role}-A` });
@@ -864,8 +875,14 @@ describe('переходная колонка и эвристика миграц
       ok(await createRelation(a.id, b.id, role, AS_SYSTEM));
       expect(await legacyTypeOf(a.id, b.id, role)).toBe(legacy);
     }
-    // Одиннадцатая роль `ref` в v1 без писателя (зеркало ссылочного свойства, часть Б);
-    // её проекция запинена юнитом `legacy-form.test.ts` на всех одиннадцати.
+    expect(cases.length).toBe(11); // тотальность: ни одна роль не пропущена
+    expect([...new Set(cases.map(([, legacy]) => legacy))].sort()).toEqual([
+      'blocks',
+      'derived_from',
+      'parent',
+      'ref',
+      'related_to',
+    ]);
   });
 
   test('25. reform_role_heuristic: роль из схлопнутого типа — по ОБОИМ концам', async () => {

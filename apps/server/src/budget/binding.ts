@@ -9,7 +9,7 @@ import { eq, sql } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
-import { ROLE_ENVELOPE_BINDING } from '../executor/relations';
+import { LEGACY_PARENT_ROLES, ROLE_ENVELOPE_BINDING } from '../executor/relations';
 import type { WireEntity } from '../executor/types';
 
 /** Дефолт схемы user_settings.defaultCurrency — фолбэк, пока строки настроек нет. */
@@ -153,10 +153,23 @@ export async function normalizeEnvelopeCurrency(
   }
 }
 
-/** Операция привязки, дописываемая executor'ом в тот же action (§2.3). */
+/**
+ * Операция привязки, дописываемая executor'ом в тот же action (§2.3).
+ *
+ * `role` у СОЗДАНИЯ всегда `envelope-binding` — привязку ставит система. У УДАЛЕНИЯ это роль
+ * той связи, которую хук увидел: до 0017 конвертом-родителем считается и ребро роли владельца
+ * (см. `budgetParentsOfMany`), а удалять надо ровно ту строку, что есть, — иначе
+ * `relation_delete` не найдёт её и уронит операцию владельца.
+ */
 export interface BudgetOpDesc {
   tool: 'relation_create' | 'relation_delete';
-  input: { source_id: string; target_id: string; role: typeof ROLE_ENVELOPE_BINDING };
+  input: { source_id: string; target_id: string; role: string };
+}
+
+/** Живая связь «конверт → транзакция» так, как её видит хук: источник и РОЛЬ ребра. */
+interface BudgetParentEdge {
+  sourceId: string;
+  role: string;
 }
 
 /** orbis/schedule.recurrence на той же сущности — признак шаблона повторения (§3.1). */
@@ -165,32 +178,46 @@ function hasScheduleRecurrence(aspects: Record<string, Record<string, unknown>>)
 }
 
 /**
- * Живые привязки к конвертам для НАБОРА транзакций одним запросом (§2.3). Порядок source_id
- * внутри транзакции — тот же ORDER BY, что и у одиночного чтения; транзакция без привязок
- * получает пустой массив.
+ * Живые конверты-родители НАБОРА транзакций одним запросом (§2.3). Порядок source_id внутри
+ * транзакции — тот же ORDER BY, что и у одиночного чтения; транзакция без родителей получает
+ * пустой массив.
  *
- * С реформой (§А4-3) отбор идёт по РОЛИ ребра, а прежний join к аспектам источника снят:
- * «конверт считает транзакцию» написано ролью `envelope-binding` и больше не выводится из
- * `orbis/budget` у источника. Разница видима ровно в одном месте — ребро от источника,
- * который бюджетом БЫТЬ ПЕРЕСТАЛ: раньше оно оставалось висеть невидимым для хука, теперь
- * хук его видит и снимает. Это и есть уборка, ради которой роль заводилась.
+ * ИНТЕРВАЛ 7a→0017: отбор идёт по `LEGACY_PARENT_ROLES` с источником-конвертом — ровно по
+ * тому множеству, которое считают агрегаты (`spentByEnvelope`) и стерегёт инвариант
+ * (`assertSingleLegacyBudgetParent`). Сузить его до одной роли `envelope-binding` нельзя, и
+ * это не вкусовщина: ребро роли ВЛАДЕЛЬЦА (`subitem`, `ticket`) от конверта к транзакции
+ * система создать разрешает, а `rel_uniq` до 0017 стоит на ПРОЕКЦИИ роли — значит рядом с
+ * ним своё `envelope-binding` уже не встанет. Не считай хук такое ребро привязкой, он бился
+ * бы об уникальность на КАЖДОЙ правке транзакции и валил бы операцию владельца навсегда.
+ *
+ * Возвращается и РОЛЬ: удалять устаревшую привязку надо ровно той строкой, что есть.
+ *
+ * С 0017 множество схлопнется до одной роли, join к аспектам источника станет лишним, и эта
+ * функция сойдётся с тем, чем была бы без интервала (перевод — правило Б-2).
  */
 async function budgetParentsOfMany(
   tx: Tx,
   txnIds: readonly string[],
-): Promise<Map<string, string[]>> {
-  const parents = new Map<string, string[]>(txnIds.map((id) => [id, []]));
+): Promise<Map<string, BudgetParentEdge[]>> {
+  const parents = new Map<string, BudgetParentEdge[]>(txnIds.map((id) => [id, []]));
   const unique = [...parents.keys()];
   if (unique.length === 0) return parents;
   const rows = (await tx.execute(sql`
-    SELECT r.target_id, r.source_id FROM relations r
+    SELECT r.target_id, r.source_id, r.role FROM relations r
+    JOIN entities e ON e.id = r.source_id
     WHERE r.target_id IN (${sql.join(
       unique.map((id) => sql`${id}`),
       sql`, `,
-    )}) AND r.role = ${ROLE_ENVELOPE_BINDING}
+    )}) AND r.role IN (${sql.join(
+      LEGACY_PARENT_ROLES.map((role) => sql`${role}`),
+      sql`, `,
+    )})
+      AND 'orbis/budget' = ANY(e.aspects)
     ORDER BY r.target_id, r.source_id
-  `)) as unknown as Array<{ target_id: string; source_id: string }>;
-  for (const row of rows) parents.get(row.target_id)?.push(row.source_id);
+  `)) as unknown as Array<{ target_id: string; source_id: string; role: string }>;
+  for (const row of rows) {
+    parents.get(row.target_id)?.push({ sourceId: row.source_id, role: row.role });
+  }
   return parents;
 }
 
@@ -245,7 +272,7 @@ function envelopeCacheKey(ownerId: string, c: EnvelopeCombination): string {
 export class BindingReads {
   private readonly currencies = new Map<string, string>();
   private readonly envelopes = new Map<string, string | null>();
-  private readonly parents = new Map<string, string[]>();
+  private readonly parents = new Map<string, BudgetParentEdge[]>();
 
   /** user_settings.defaultCurrency владельца — один раз за исполнение. */
   async defaultCurrency(tx: Tx, ownerId: string): Promise<string> {
@@ -265,8 +292,8 @@ export class BindingReads {
     return this.envelopes.get(envelopeCacheKey(args.ownerId, args.combination)) ?? null;
   }
 
-  /** Живые budget-parent'ы транзакции (§4.2). */
-  async parentsOf(tx: Tx, txnId: string): Promise<string[]> {
+  /** Живые конверты-родители транзакции с ролями их рёбер (§4.2). */
+  async parentsOf(tx: Tx, txnId: string): Promise<BudgetParentEdge[]> {
     await this.loadParents(tx, [txnId]);
     return this.parents.get(txnId) ?? [];
   }
@@ -342,9 +369,9 @@ async function targetBindingOps(
   const { txnId } = target;
   if (target.fin === null) {
     const current = await reads.parentsOf(tx, txnId);
-    return current.map((src) => ({
+    return current.map((edge) => ({
       tool: 'relation_delete' as const,
-      input: { source_id: src, target_id: txnId, role: ROLE_ENVELOPE_BINDING },
+      input: { source_id: edge.sourceId, target_id: txnId, role: edge.role },
     }));
   }
   const defCur = defaultCurrency ?? (await reads.defaultCurrency(tx, ownerId));
@@ -372,15 +399,17 @@ async function targetBindingOps(
   }
   const current = await reads.parentsOf(tx, txnId);
   const ops: BudgetOpDesc[] = [];
-  for (const src of current) {
-    if (src !== desired) {
+  for (const edge of current) {
+    if (edge.sourceId !== desired) {
       ops.push({
         tool: 'relation_delete',
-        input: { source_id: src, target_id: txnId, role: ROLE_ENVELOPE_BINDING },
+        input: { source_id: edge.sourceId, target_id: txnId, role: edge.role },
       });
     }
   }
-  if (desired !== null && !current.includes(desired)) {
+  // Ребро от НУЖНОГО конверта уже есть — неважно, какой оно роли: до 0017 конвертом-родителем
+  // его считают и агрегаты, и инвариант. Своё `envelope-binding` рядом хук не ставит.
+  if (desired !== null && !current.some((edge) => edge.sourceId === desired)) {
     ops.push({
       tool: 'relation_create',
       input: { source_id: desired, target_id: txnId, role: ROLE_ENVELOPE_BINDING },

@@ -124,8 +124,14 @@ export const relations = pgTable(
      * читают компилятор запросов, бюджет, agent-loop и импорт. Писать её напрямую
      * нельзя — она пересчитывается из роли на каждой вставке. Снимает contract-миграция
      * 0017 вместе с `rel_uniq` по этой тройке.
+     *
+     * Списка значений здесь НЕТ намеренно. Прежний хвостовой комментарий перечислял четыре
+     * типа, а проекция одиннадцати ролей даёт ПЯТЬ: `ref` (роль `ref`, зеркало ссылочного
+     * свойства) в старый список не входил. Читатель, заложившийся на четыре, написал бы в
+     * 0017 CHECK, который строки `ref` не вместит; единственный источник значений —
+     * `LegacyRelationType` в `executor/legacy-form.ts`.
      */
-    relationType: text('relation_type').notNull(), // parent | blocks | related_to | derived_from
+    relationType: text('relation_type').notNull(),
     meta: jsonb('meta').notNull().default({}),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
