@@ -666,7 +666,12 @@ describe('гейты флагов свойств', () => {
             amount: '900.00',
             direction: 'expense',
             category_ref: CATEGORY_C,
-            currency: 'RUB',
+            // Валюта НЕДЕФОЛТНАЯ намеренно. У обоих аспектов она необязательна, а
+            // `normalizeEnvelopeProps` подставляет на место пропавшего значения умолчание
+            // владельца (RUB): с 'RUB' в фикстуре currency-ассерты проходили бы и с вырезанной
+            // защитой — стёртую валюту молча восстанавливала бы подстановка, и половина пина
+            // оказалась бы вакуумной (найдено УЗКОЙ мутацией: защита снята только с валюты).
+            currency: 'USD',
             // Дата ВНЕ периода конверта ниже: иначе бюджет-хук выбрал бы конвертом саму
             // запись (слитые категория и валюта совпадают по построению) и упал бы
             // `self_relation` — маскируя проверяемое здесь.
@@ -685,16 +690,16 @@ describe('гейты флагов свойств', () => {
 
     const row = await expectProjection(e.id);
     expect(row.props['orbis/finance_category']).toBe(CATEGORY_C);
-    expect(row.props['orbis/currency']).toBe('RUB');
+    expect(row.props['orbis/currency']).toBe('USD');
     expect(row.aspects.sort()).toEqual(['orbis/budget', 'orbis/financial']);
     // Одно значение — два носителя: старая карта показывает его у обоих аспектов
     expect(row.aspectsLegacy['orbis/financial']).toMatchObject({
       category_ref: CATEGORY_C,
-      currency: 'RUB',
+      currency: 'USD',
     });
     expect(row.aspectsLegacy['orbis/budget']).toMatchObject({
       category_ref: CATEGORY_C,
-      currency: 'RUB',
+      currency: 'USD',
       period_start: '2026-11-01',
     });
     // …а СВОЁ поле транзакции, которого у конверта нет вовсе, замена не трогает тем более
