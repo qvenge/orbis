@@ -36,30 +36,65 @@ interface GoldenRecord {
 /**
  * Законные расхождения вердиктов. Пять первых — ужесточения §А8, названные Р-17/РП-8 ещё
  * в плане; три последних найдены сборкой корпуса и доказаны спекой (см. отчёт задачи).
+ *
+ * `records` — СКОЛЬКО записей корпуса стоит на причине; число точное, а не «хотя бы одна»:
+ * без него из трёх записей `MERGED_VALUE_CONFLICT` можно молча оставить одну (гейт-ревью 2).
  */
-const EXPECTED_DIFFS: Record<string, string> = {
+const EXPECTED_DIFFS: Record<string, { verdict: Verdict; records: number }> = {
   // §А8 orbis/category: `maxItems: 50` — в zod капа нет вовсе (`aspects.ts:107`).
-  ALIASES_MAX_50: 'reject',
+  ALIASES_MAX_50: { verdict: 'reject', records: 1 },
   // §А8 orbis/repo: `format: url` — в zod только длина (`aspects.ts:160`).
-  REPO_URL_FORMAT: 'reject',
+  REPO_URL_FORMAT: { verdict: 'reject', records: 1 },
   // §А8 orbis/schedule: `format: iana-tz` — в zod голая строка (`aspects.ts:49`).
-  TIMEZONE_IANA: 'reject',
+  TIMEZONE_IANA: { verdict: 'reject', records: 1 },
   // §А8 orbis/financial: `format: currency` = `^[A-Z]{3}$` — в zod только длина 3.
-  CURRENCY_UPPER3: 'reject',
+  CURRENCY_UPPER3: { verdict: 'reject', records: 1 },
   // §А8 orbis/agent-run: поле `project_id` УДАЛЕНО (замена — orbis/parent_project).
-  PROJECT_ID_REMOVED: 'reject',
+  PROJECT_ID_REMOVED: { verdict: 'reject', records: 1 },
   // В1 §А8: слитое свойство с РАЗНЫМИ значениями в двух аспектах невыразимо в плоской
-  // модели — конфликт, а не «последний выиграл».
-  MERGED_VALUE_CONFLICT: 'reject',
+  // модели — конфликт, а не «последний выиграл». Три слияния — три записи.
+  MERGED_VALUE_CONFLICT: { verdict: 'reject', records: 3 },
   // §А7-3: decimal сравнивается ПО ЗНАЧЕНИЮ, и «-0» = «0» проходит нижнюю границу min:0.
   // Старый `nonNegativeDecimal` отвергал «-0» текстом. Единственное расхождение, где
   // новый валидатор МЯГЧЕ старого по значению.
-  DECIMAL_SIGNED_ZERO: 'ok',
+  DECIMAL_SIGNED_ZERO: { verdict: 'ok', records: 1 },
   // §А5-2/Р12: `progress_source.query` сменил форму строка → Q-AST-объект. До канона
   // Q-AST (Задача 8) схема свойства принимает любой объект, поэтому пустой текст запроса
   // перестал отвергаться формой. Переходное послабление, закрывается Задачей 8.
-  QUERY_AST_FORM: 'ok',
+  QUERY_AST_FORM: { verdict: 'ok', records: 1 },
 };
+
+/**
+ * ТОЧНЫЙ состав корпуса: `[позитивных (оба вердикта ok), негативных (хотя бы один reject)]`
+ * на каждый из тринадцати аспектов. Пин точный, а не «хотя бы по одной», ровно потому, что
+ * приёмка §С8-1 гоняется постоянно до заморозки Задачей 23: с порогом «не меньше» любую
+ * неудобную запись можно было бы молча удалить, и красным это не стало бы (гейт-ревью 2).
+ * Санкционированное изменение корпуса обязано двигать и эту таблицу — видимым движением.
+ * Суммы столбцов больше `CORPUS_SIZE`: многоаспектная запись считается у каждого аспекта.
+ */
+const COVERAGE: Record<string, readonly [number, number]> = {
+  'orbis/schedule': [4, 7],
+  'orbis/task': [3, 8],
+  'orbis/financial': [6, 18],
+  'orbis/note': [2, 2],
+  'orbis/budget': [5, 10],
+  'orbis/category': [3, 6],
+  'orbis/memory': [2, 3],
+  'orbis/goal': [2, 13],
+  'orbis/project': [2, 3],
+  'orbis/repo': [2, 6],
+  'orbis/assignment': [3, 6],
+  'orbis/agent-run': [4, 23],
+  'orbis/routine': [2, 10],
+};
+
+/** Размер корпуса и его разбивка — все три числа точные. */
+const CORPUS_SIZE = 148;
+const POSITIVE_RECORDS = 35;
+const NEGATIVE_RECORDS = 113;
+const MULTI_ASPECT_RECORDS = 7;
+/** Сколько порч «убран required» делает мутационный тест ниже — тоже точное число. */
+const MUTATIONS_CHECKED = 90;
 
 const REG: PropsRegistry = {
   properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
@@ -89,8 +124,9 @@ function newVerdict(aspects: GoldenRecord['aspects']): Verdict {
 
 // `as unknown` — не небрежность: TS выводит из литерального JSON союз объектов с
 // `field?: undefined` у каждой записи, где поля нет, и такой союз не сравним с
-// `Record<string, Record<string, unknown>>`. Форму корпуса стережёт не компилятор, а тест
-// покрытия ниже (13 аспектов, причины расхождений, уникальность имён).
+// `Record<string, Record<string, unknown>>`. И форму, и СОСТАВ корпуса стережёт не
+// компилятор, а тест состава ниже: точные размер, разбивка по аспектам, число записей на
+// каждой причине расхождения и уникальность имён.
 const records = corpus as unknown as GoldenRecord[];
 
 describe('golden «сущность → вердикт» (приёмка §С8-1)', () => {
@@ -114,31 +150,57 @@ describe('golden «сущность → вердикт» (приёмка §С8-1
         wrong.push(`${record.name}: expectedDiff «${record.expectedDiff}» при совпавших вердиктах`);
       }
       if (record.expectedDiff !== undefined) {
-        const direction = EXPECTED_DIFFS[record.expectedDiff];
-        if (direction === undefined) wrong.push(`${record.name}: причина вне списка законных`);
-        else if (direction !== fresh) {
-          wrong.push(`${record.name}: «${record.expectedDiff}» ожидает новый вердикт ${direction}`);
+        const legal = EXPECTED_DIFFS[record.expectedDiff];
+        if (legal === undefined) wrong.push(`${record.name}: причина вне списка законных`);
+        else if (legal.verdict !== fresh) {
+          wrong.push(
+            `${record.name}: «${record.expectedDiff}» ожидает новый вердикт ${legal.verdict}`,
+          );
         }
       }
     }
     expect(wrong).toEqual([]);
   });
 
-  test('корпус покрывает все 13 аспектов позитивно и негативно, и каждую законную причину расхождения', () => {
+  test('состав корпуса запиннен ТОЧНО: 13 аспектов, разбивка позитивных и негативных, причины расхождений', () => {
+    // Пин на равенство, а не на порог: молча выкинутая запись обязана красить приёмку, а не
+    // проходить её (гейт-ревью 2 — прогон «удалил целую запись, всё зелено»).
+    const coverage: Record<string, readonly [number, number]> = {};
     for (const aspectId of BUILTIN_ASPECT_IDS) {
       const mine = records.filter((r) => Object.keys(r.aspects).includes(aspectId));
-      const positive = mine.filter((r) => r.legacyVerdict === 'ok' && r.newVerdict === 'ok');
-      const negative = mine.filter(
-        (r) => r.legacyVerdict === 'reject' || r.newVerdict === 'reject',
-      );
-      expect(`${aspectId}: позитивных ${positive.length > 0}`).toBe(`${aspectId}: позитивных true`);
-      expect(`${aspectId}: негативных ${negative.length > 0}`).toBe(`${aspectId}: негативных true`);
+      coverage[aspectId] = [
+        mine.filter((r) => r.legacyVerdict === 'ok' && r.newVerdict === 'ok').length,
+        mine.filter((r) => r.legacyVerdict === 'reject' || r.newVerdict === 'reject').length,
+      ];
     }
-    const used = new Set(records.map((r) => r.expectedDiff).filter((d) => d !== undefined));
-    expect([...used].sort()).toEqual(Object.keys(EXPECTED_DIFFS).sort());
-    // Корпус не должен усыхать незаметно: приёмка §С8-1 стоит на его объёме.
-    expect(records.length).toBeGreaterThanOrEqual(140);
+    expect(coverage).toEqual(COVERAGE);
+    // Каждый аспект покрыт с обеих сторон — это отдельное утверждение, а не следствие
+    // таблицы: таблицу правят, и правка «в ноль» обязана быть видна как нарушение смысла.
+    for (const [aspectId, [positive, negative]] of Object.entries(COVERAGE)) {
+      expect(`${aspectId}: ${positive > 0 && negative > 0}`).toBe(`${aspectId}: true`);
+    }
+
+    expect(records.length).toBe(CORPUS_SIZE);
+    expect(records.filter((r) => r.legacyVerdict === 'ok' && r.newVerdict === 'ok')).toHaveLength(
+      POSITIVE_RECORDS,
+    );
+    expect(
+      records.filter((r) => r.legacyVerdict === 'reject' || r.newVerdict === 'reject'),
+    ).toHaveLength(NEGATIVE_RECORDS);
+    expect(records.filter((r) => Object.keys(r.aspects).length > 1)).toHaveLength(
+      MULTI_ASPECT_RECORDS,
+    );
     expect(new Set(records.map((r) => r.name)).size).toBe(records.length);
+
+    // Причины расхождений: и набор кодов, и ЧИСЛО записей на каждом — точно.
+    const perCode: Record<string, number> = {};
+    for (const record of records) {
+      if (record.expectedDiff === undefined) continue;
+      perCode[record.expectedDiff] = (perCode[record.expectedDiff] ?? 0) + 1;
+    }
+    expect(perCode).toEqual(
+      Object.fromEntries(Object.entries(EXPECTED_DIFFS).map(([code, d]) => [code, d.records])),
+    );
   });
 
   test('мутационная проверка: испорченная фикстура (required убран) меняет вердикт нового валидатора', () => {
@@ -169,6 +231,8 @@ describe('golden «сущность → вердикт» (приёмка §С8-1
         }
       }
     }
-    expect(checked).toBeGreaterThan(20);
+    // Точное число порч: с порогом «больше двадцати» удаление позитивных записей корпуса
+    // тоже осталось бы незамеченным (гейт-ревью 2).
+    expect(checked).toBe(MUTATIONS_CHECKED);
   });
 });
