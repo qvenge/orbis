@@ -14,7 +14,14 @@
  * Разделители конструкций — запятая ИЛИ пробел вне кавычек. Запятая нужна дословно (тексты
  * Agenda и сидов §А5-5 написаны через неё), пробел — потому что `via=` пристёгивается к
  * предыдущему реляционному предикату отдельным словом (`!has_children via=subitem`).
- * Следствие, названное вслух: значение с пробелом обязано быть в кавычках.
+ *
+ * **Следствие, названное вслух: значение с пробелом обязано быть в кавычках, и это ломает
+ * УЖЕ СОХРАНЁННЫЕ тексты.** Сегодняшний `serialize.ts:158` печатает `title=Мои задачи`,
+ * `tags=дом дача` и `search=hello world` БЕЗ кавычек — новый разбор их отвергает. Полная
+ * опись пострадавших текстов с адресами — `PRODUCTION_QUERY_TEXTS` в `ast-fixtures.ts`.
+ * Интервал и владельцы перевода: Agenda — Задача 10c, сидированные тела смарт-листов —
+ * Задача 9b, конструкторы web — 10c, остальное — 21. До перевода живут ОБА разбора
+ * (РП-11), и ни один боевой текст новым парсером в бою не читается.
  *
  * Скобок в грамматике v1 НЕТ (§А5-3д): плоский текст — сахар, OR-дерево строит форма, AI
  * или AST-вход тула (§А5-4). Печать при этом тотальна и невыразимое дерево печатает
@@ -35,6 +42,7 @@ import type {
   QueryAst,
   QueryDateToken,
   QueryFilterNode,
+  QueryRelKind,
   QueryRelPredicate,
   QueryScalar,
   QuerySortField,
@@ -569,13 +577,55 @@ function parseBound(prop: PropertyDefinition, el: Part): Bound {
 
 // ─────────────────────────── Разбор конструкций ───────────────────────────
 
+/**
+ * ЧЕРНОВИК реляционного предиката. Готовый `QueryRelPredicate` связывает `kind` с
+ * обязательностью `via`/`of` (см. его докблок), а разбор эту связь собрать сразу не может:
+ * `via=` приезжает СЛЕДУЮЩИМ словом (`!has_children via=subitem`). Поэтому черновик
+ * свободен по форме, а связь проверяет один пост-пасс `assertRelShape` — он же и есть
+ * место, где черновик становится каноническим предикатом.
+ */
+interface RelDraft {
+  kind: QueryRelKind;
+  via?: string;
+  of?: string;
+}
+
+interface RelSlot {
+  pred: RelDraft;
+  offset: number;
+}
+
 interface Acc {
   nodes: QueryFilterNode[];
   ast: QueryAst;
-  /** Предикат, к которому пристёгивается следующий `via=`, и позиция его конструкции. */
-  lastRel: { pred: QueryRelPredicate; offset: number; kind: string } | null;
-  /** Предикаты, которым `via` обязателен (§А5-1): проверяются после всего разбора. */
-  needsVia: { pred: QueryRelPredicate; offset: number; kind: string }[];
+  /** Предикат, к которому пристёгивается следующий `via=`. */
+  lastRel: RelSlot | null;
+  /** Все реляционные предикаты запроса — форма проверяется после разбора. */
+  rels: RelSlot[];
+}
+
+/** Роли обязательны/запрещены по `kind` — норматив §А5-1, одно место на весь разбор. */
+function assertRelShape(slot: RelSlot): void {
+  const { kind, via, of } = slot.pred;
+  const needsVia = kind === 'descendants_of' || kind === 'ancestors_of' || kind === 'has_relation';
+  const needsOf =
+    kind === 'children_of' ||
+    kind === 'parents_of' ||
+    kind === 'descendants_of' ||
+    kind === 'ancestors_of';
+  if (needsVia && via === undefined) {
+    fail(
+      'QUERY_MULTI_ROLE',
+      `'${kind}' требует via=<роль>: без названной роли предикат шёл бы сразу по нескольким, а это за границей языка запросов (§А5-1)`,
+      slot.offset,
+    );
+  }
+  if (needsOf && of === undefined) {
+    fail('SYNTAX', `'${kind}' требует значение: UUID сущности или this`, slot.offset);
+  }
+  if (!needsOf && of !== undefined) {
+    fail('SYNTAX', `'${kind}' не принимает вторую сущность`, slot.offset);
+  }
 }
 
 function negate(node: QueryFilterNode, negated: boolean): QueryFilterNode {
@@ -792,13 +842,14 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
   }
 
   if (REL_WITH_TARGET.has(t.key)) {
-    const of = parseEntityRef(t);
-    const pred: QueryRelPredicate = { kind: t.key as QueryRelPredicate['kind'], of };
-    const slot = { pred, offset: t.keyOffset, kind: t.key };
+    const slot: RelSlot = {
+      pred: { kind: t.key as QueryRelKind, of: parseEntityRef(t) },
+      offset: t.keyOffset,
+    };
     acc.lastRel = slot;
-    // §А5-1: обход по нескольким ролям сразу за границей Q — роль обязана быть названа.
-    if (t.key === 'descendants_of' || t.key === 'ancestors_of') acc.needsVia.push(slot);
-    push({ rel: pred });
+    acc.rels.push(slot);
+    // Каст законен ровно потому, что `assertRelShape` пройдёт по acc.rels до возврата AST.
+    push({ rel: slot.pred as QueryRelPredicate });
     return;
   }
 
@@ -823,21 +874,28 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
     }
     case 'has_relation':
     case 'has_children': {
-      const pred: QueryRelPredicate = { kind: t.key };
+      const slot: RelSlot = { pred: { kind: t.key }, offset: t.keyOffset };
       if (t.op !== null) {
-        pred.via = resolveRole(requireOp(t, '='), t.valueOffset, ctx).id;
+        slot.pred.via = resolveRole(requireOp(t, '='), t.valueOffset, ctx).id;
       }
-      acc.lastRel = { pred, offset: t.keyOffset, kind: t.key };
-      push({ rel: pred });
+      acc.lastRel = slot;
+      acc.rels.push(slot);
+      push({ rel: slot.pred as QueryRelPredicate });
       return;
     }
     case 'excludeBlocked': {
       if (unquote(requireOp(t, '='), t.valueOffset) !== 'true') {
         fail('SYNTAX', `единственная форма — excludeBlocked=true`, t.valueOffset);
       }
-      // ВРЕМЕННО дословно как сегодня (`compile.ts:254`): «есть входящее ребро роли
-      // dependency». Набор «closed» (состояние блокирующей работы) приедет с Б-1.
-      acc.nodes.push({ not: { rel: { kind: 'has_relation', via: 'dependency' } } });
+      // ВРЕМЕННО дословно как сегодня (`compile.ts:254`): «на сущность есть ВХОДЯЩЕЕ ребро
+      // роли dependency», то есть она заблокирована. Набор «closed» (состояние блокирующей
+      // работы) приедет с Б-1. Направление — рулинг координатора, см. `QUERY_REL_ANCHOR`.
+      const slot: RelSlot = {
+        pred: { kind: 'has_relation', via: 'dependency' },
+        offset: t.keyOffset,
+      };
+      acc.rels.push(slot);
+      acc.nodes.push({ not: { rel: slot.pred as QueryRelPredicate } });
       return;
     }
     case 'archived': {
@@ -888,7 +946,15 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
       return;
     default: {
       if (t.op === null) {
-        fail('SYNTAX', `ожидается конструкция вида имя=значение, получено '${t.key}'`, t.keyOffset);
+        // Самый частый способ сюда попасть — НЕ опечатка, а значение с пробелом:
+        // `title=Мои задачи` рвётся на `title=Мои` и `задачи`, и второе слово приезжает
+        // конструкцией без оператора. Сообщение обязано называть настоящую причину, иначе
+        // человек ищет несуществующее поле «задачи» (§6.4: отказ объясняет, а не пугает).
+        fail(
+          'SYNTAX',
+          `ожидается конструкция вида имя=значение, получено '${t.key}'; если это часть значения с пробелом — возьмите значение в кавычки: title="Мои задачи"`,
+          t.keyOffset,
+        );
       }
       const prop = resolveProperty(t.key, t.keyOffset, ctx);
       push(parsePropNode(prop, t));
@@ -935,18 +1001,11 @@ function parseOrThrow(text: string, reg: ParseRegistry): QueryAst {
     }
   }
 
-  const acc: Acc = { nodes: [], ast: { filter: null }, lastRel: null, needsVia: [] };
+  const acc: Acc = { nodes: [], ast: { filter: null }, lastRel: null, rels: [] };
   for (const t of tokens) dispatch(t, ctx, acc);
 
-  for (const slot of acc.needsVia) {
-    if (slot.pred.via === undefined) {
-      fail(
-        'QUERY_MULTI_ROLE',
-        `'${slot.kind}' требует via=<роль>: обход сразу по нескольким ролям за границей языка запросов (§А5-1)`,
-        slot.offset,
-      );
-    }
-  }
+  // Пост-пасс, а не проверка на месте: `via=` — отдельное слово и приезжает ПОСЛЕ предиката.
+  for (const slot of acc.rels) assertRelShape(slot);
 
   acc.ast.filter =
     acc.nodes.length === 0

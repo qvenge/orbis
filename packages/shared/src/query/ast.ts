@@ -74,13 +74,49 @@ export interface QueryRangeValue {
 }
 export type QueryPropValue = QueryScalar | QueryTokenValue | QueryScalar[] | QueryRangeValue;
 
-export interface QueryRelPredicate {
-  kind: QueryRelKind;
-  /** id роли ребра (§А4-3). Без него иерархические предикаты идут по семейству иерархии. */
-  via?: string;
-  /** uuid сущности либо `this` — «сущность, в теле которой лежит запрос». */
-  of?: string;
-}
+/**
+ * Реляционный предикат §А5-7. Форма СВЯЗАНА с `kind`, и связь эта нормативная, а не
+ * косметическая: `descendants_of` без `via` — обход сразу по нескольким ролям, то есть
+ * запрос ЗА ГРАНИЦЕЙ языка (§А5-1, отказ `QUERY_MULTI_ROLE`), а `children_of` без `of` —
+ * предикат без второго конца. Текстовый путь такое отвергает всегда; но вход `ast:` тула
+ * `entity_query` (§А5-4) идёт МИМО парсера, и без связи в самой схеме гарантия §С8-3
+ * («невыразимое — ошибка, а не пустота») обходилась бы через тул.
+ *
+ * `of` — uuid сущности либо `this` («сущность, в теле которой лежит запрос»).
+ * `via` — id роли ребра (§А4-3); у `children_of`/`parents_of`/`has_children` он
+ * необязателен: без него предикат идёт по СЕМЕЙСТВУ иерархии (`HIERARCHICAL_ROLE_IDS`,
+ * §А4-2), и это ровно одна роль на строку графа, а не обход по нескольким.
+ */
+export type QueryRelPredicate =
+  | { kind: 'children_of' | 'parents_of'; via?: string; of: string }
+  | { kind: 'descendants_of' | 'ancestors_of'; via: string; of: string }
+  | { kind: 'has_relation'; via: string; of?: undefined }
+  | { kind: 'has_children'; via?: string; of?: undefined };
+
+/**
+ * Каким КОНЦОМ ребра стоит сама сущность в каждом реляционном предикате — норматив для
+ * компилятора (Задача 9a), а не подсказка. Сегодняшний компилятор кодирует то же самое
+ * тремя разными местами (`compile.ts:248` — `children_of` через `target_id`, `:250` —
+ * `parents_of` через `source_id`, `:254` — «заблокирована» через входящее ребро), и именно
+ * из-за трёх мест направление легко перепутать при переписывании.
+ *
+ * `has_relation` — ВХОДЯЩЕЕ ребро (рулинг координатора при предразборе Задачи 8): сущность
+ * стоит целью, `role = via`. Основания рулинга: несущий индекс `(target_id, role)` (Р-5
+ * плана), и сохранение поведения `excludeBlocked` — при «обоих направлениях» отрицание
+ * вычёркивало бы ещё и сами блокирующие работы, чего сегодня не делает (`compile.ts:262`).
+ */
+export const QUERY_REL_ANCHOR: Readonly<Record<QueryRelKind, 'source' | 'target'>> = {
+  // сущность — ребёнок: ребро идёт от `of` (родителя) к ней
+  children_of: 'target',
+  // сущность — родитель: ребро идёт от неё к `of`
+  parents_of: 'source',
+  descendants_of: 'target',
+  ancestors_of: 'source',
+  // «на сущность ссылаются ролью»: она ЦЕЛЬ ребра
+  has_relation: 'target',
+  // «у сущности есть дети»: она ИСТОЧНИК ребра
+  has_children: 'source',
+};
 
 /** Узел фильтра §А5-7. Форма каждого узла — один ключ-имя: разбор union'а по ключу. */
 export type QueryFilterNode =
@@ -137,13 +173,29 @@ const propNodeSchema = z.union([
   z.object({ prop: idSchema, op: z.literal('range'), value: rangeSchema }).strict(),
 ]);
 
-const relSchema = z
-  .object({
-    kind: z.enum(QUERY_REL_KINDS),
-    via: idSchema.optional(),
-    of: z.string().min(1).optional(),
-  })
-  .strict();
+/**
+ * Разбор по `kind`: каждая ветка называет, что обязательно, а что запрещено (см. докблок
+ * `QueryRelPredicate`). Дискриминируемый союз, а не один объект с `.superRefine`, — чтобы
+ * отказ приходил с именем ветки, а не общим «Invalid input».
+ */
+const relSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.enum(['children_of', 'parents_of']),
+      via: idSchema.optional(),
+      of: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.enum(['descendants_of', 'ancestors_of']),
+      via: idSchema,
+      of: z.string().min(1),
+    })
+    .strict(),
+  z.object({ kind: z.literal('has_relation'), via: idSchema }).strict(),
+  z.object({ kind: z.literal('has_children'), via: idSchema.optional() }).strict(),
+]);
 
 /**
  * Рекурсия через `z.lazy`. Вход помечен `unknown`, а не `QueryFilterNode`: схема — гейт

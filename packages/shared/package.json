@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./query": "./src/query/index.ts",
+    "./query/fixtures": "./src/query/ast-fixtures.ts",
     "./doc": "./src/doc/index.ts",
     "./doc/diff": "./src/doc/diff.ts"
   },

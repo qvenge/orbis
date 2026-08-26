@@ -12,7 +12,7 @@
  * Рекурсия — через `$ref: '#/$defs/node'`. `$defs` в draft-07 формально не ключевое слово,
  * но ссылка на него — обычный JSON-указатель и резолвится везде; имя выбрано по §А5-4.
  */
-import { QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES, QUERY_REL_KINDS } from './ast';
+import { QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES } from './ast';
 
 const SCALAR = { type: ['string', 'number', 'boolean'] } as const;
 const TOKEN = {
@@ -89,16 +89,34 @@ export const queryAstJsonSchema: Record<string, unknown> = {
         node({ aspect: PROP_ID }, ['aspect']),
         node({ tag: { type: 'string', minLength: 1 } }, ['tag']),
         node({ search: { type: 'string', minLength: 1 } }, ['search']),
+        // Форма реляционного предиката СВЯЗАНА с kind (см. докблок `QueryRelPredicate`):
+        // ветка на каждую комбинацию, а не один объект с необязательными via/of. Иначе
+        // `{kind:'descendants_of', of:'this'}` без роли проехал бы вход `ast:` тула мимо
+        // парсера — и §С8-3 «невыразимое — ошибка, а не пустота» обходилась бы через тул.
         node(
           {
-            rel: node(
-              {
-                kind: { enum: [...QUERY_REL_KINDS] },
-                via: PROP_ID,
-                of: { type: 'string', minLength: 1 },
-              },
-              ['kind'],
-            ),
+            rel: {
+              anyOf: [
+                node(
+                  {
+                    kind: { enum: ['children_of', 'parents_of'] },
+                    via: PROP_ID,
+                    of: { type: 'string', minLength: 1 },
+                  },
+                  ['kind', 'of'],
+                ),
+                node(
+                  {
+                    kind: { enum: ['descendants_of', 'ancestors_of'] },
+                    via: PROP_ID,
+                    of: { type: 'string', minLength: 1 },
+                  },
+                  ['kind', 'of', 'via'],
+                ),
+                node({ kind: { const: 'has_relation' }, via: PROP_ID }, ['kind', 'via']),
+                node({ kind: { const: 'has_children' }, via: PROP_ID }, ['kind']),
+              ],
+            },
           },
           ['rel'],
         ),

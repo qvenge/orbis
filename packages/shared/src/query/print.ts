@@ -45,9 +45,17 @@ function needsQuote(value: string): boolean {
   return QUOTE_TRIGGER_RE.test(value);
 }
 
+function escapeQuotes(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 function quote(value: string): string {
-  if (!needsQuote(value)) return value;
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  return needsQuote(value) ? `"${escapeQuotes(value)}"` : value;
+}
+
+/** Имя в label-форме закавычено ВСЕГДА — кавычки и есть признак «это поле» (§А5-3б). */
+function quoteAlways(value: string): string {
+  return `"${escapeQuotes(value)}"`;
 }
 
 interface Names {
@@ -67,8 +75,11 @@ function names(reg: ParseRegistry, form: QueryPrintForm): Names {
     id: string,
   ): string => {
     // Имя в label-форме ВСЕГДА в кавычках (§А5-3б) — в том числе нерезолвенный id.
-    if (!def) return form === 'label' ? `"${id}"` : id;
-    return form === 'key' ? def.key : `"${effectiveLabel(def.label, reg.locale)}"`;
+    // Экранирование ОБЯЗАТЕЛЬНО и здесь: подпись — свободный текст владельца (§А2-3), и
+    // свойство с label `Он "сказал"` без экранирования печаталось бы `"Он "сказал""=v`,
+    // то есть текстом, который парсер не соберёт обратно.
+    if (!def) return form === 'label' ? quoteAlways(id) : id;
+    return form === 'key' ? def.key : quoteAlways(effectiveLabel(def.label, reg.locale));
   };
   return {
     prop: (id) => pick(reg.properties.get(id), id),
@@ -133,6 +144,10 @@ function printNode(node: QueryFilterNode, n: Names): string {
     }
     const leaf = asEqLeaf(inner);
     if (leaf) return `${n.prop(leaf.prop)}=!${printBound(leaf.value)}`;
+    // Двойное отрицание плоским текстом невыразимо: `!!X` парсер прочитал бы как имя
+    // конструкции `!X`, и отказ был бы не про то. Скобки дают ЧЕСТНОЕ сообщение —
+    // «скобок в грамматике v1 нет» (§А5-3д), то же, что у любого невыразимого дерева.
+    if ('not' in inner) return `!(${printNode(inner, n)})`;
     return `!${printNode(inner, n)}`;
   }
   if ('prop' in node) {
