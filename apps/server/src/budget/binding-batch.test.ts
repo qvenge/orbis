@@ -86,16 +86,14 @@ async function createEntity(user: string, input: Record<string, unknown>): Promi
   return r.results[0] as WireEntity;
 }
 
-/** Живые budget-parent'ы транзакции — истина в БД (админ-DSN, обходит RLS). */
+/** Живые привязки транзакции к конвертам — истина в БД (админ-DSN, обходит RLS). */
 async function budgetParents(txnId: string): Promise<string[]> {
   const { db: admin, client: adminClient } = adminDb();
   try {
     const rows = [
       ...(await admin.execute(
         sql`SELECT r.source_id FROM relations r
-            JOIN entities e ON e.id = r.source_id
-            WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
-              AND e.aspects_legacy ? 'orbis/budget'
+            WHERE r.target_id = ${txnId} AND r.role = 'envelope-binding'
             ORDER BY r.source_id`,
       )),
     ];
@@ -332,7 +330,8 @@ function countingDb() {
  */
 const READS = {
   selector: (q: string) => q.includes("'orbis/budget'->>'period_end'"),
-  parents: (q: string) => q.includes("aspects_legacy ? 'orbis/budget'") && q.includes('ORDER BY'),
+  parents: (q: string) =>
+    q.includes('FROM relations r') && q.includes('ORDER BY r.target_id, r.source_id'),
   currency: (q: string) => q.includes('user_settings'),
 };
 

@@ -6,6 +6,7 @@
 // не увидят чужого (архивной, приостановленной рутины).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId, type RunSummary } from '@orbis/shared';
+import { sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
@@ -300,7 +301,16 @@ describe('runSummary: рутинные поля сводки (V1.4)', () => {
         },
       },
     });
-    await link(owner, ticket.id, run.id);
+    await link(owner, ticket.id, run.id, 'run');
+    // Роль ребра — та, что просил вызов: `link` не вправе подставить свою. До 0017
+    // `runsOfParent` идёт по ПЕРЕХОДНОЙ колонке и подмены роли не заметил бы, а после —
+    // потерял бы прогон молча (§А4-3).
+    const roles = await withIdentity(db, owner, (tx) =>
+      tx.execute(
+        sql`SELECT role FROM relations WHERE source_id = ${ticket.id}::uuid AND target_id = ${run.id}::uuid`,
+      ),
+    );
+    expect((roles as unknown as Array<{ role: string }>).map((r) => r.role)).toEqual(['run']);
 
     const rows = await withIdentity(db, owner, (tx) => runsOfParent(tx, ticket.id));
     const summary = runSummary(rows[0] as (typeof rows)[number]);

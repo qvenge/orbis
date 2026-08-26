@@ -42,15 +42,27 @@ function batchReq(
   };
 }
 
-function singleReq(tool: string, input: unknown): ExecuteRequest {
+function singleReq(
+  tool: string,
+  input: unknown,
+  over: Partial<ExecuteRequest> = {},
+): ExecuteRequest {
   return {
     actorUserId: userA,
     actorKind: 'owner',
     source: 'chat',
     operations: [{ tool, input }],
     clock: () => T0,
+    ...over,
   };
 }
+
+/**
+ * Механизм сида для СИСТЕМНЫХ ролей (§А4-4): `envelope-binding` и `instance-of` объявлены
+ * `created_by: system`, и прямое действие владельца их не ставит. В бою эти рёбра рождает
+ * хук бюджета и материализация; фикстура играет их роль и обязана это назвать.
+ */
+const AS_SEED = { mechanism: 'seed' } as const satisfies Partial<ExecuteRequest>;
 
 function ok(r: ExecuteResult): ExecuteOk {
   if (!r.ok) throw new Error(`ожидался успех, получено: ${JSON.stringify(r.error)}`);
@@ -98,12 +110,12 @@ async function entityCount(id: string): Promise<number> {
   }
 }
 
-async function relCount(sourceId: string, targetId: string, relationType: string): Promise<number> {
+async function relCount(sourceId: string, targetId: string, role: string): Promise<number> {
   const { db: admin, client: adminClient } = adminDb();
   try {
     const rows = await admin.execute(
       sql`SELECT count(*)::int AS n FROM relations
-          WHERE source_id = ${sourceId} AND target_id = ${targetId} AND relation_type = ${relationType}`,
+          WHERE source_id = ${sourceId} AND target_id = ${targetId} AND role = ${role}`,
     );
     return rows[0]?.n as number;
   } finally {
@@ -172,7 +184,7 @@ describe('batch_execute: атомарность (§7.8, §13.4)', () => {
             },
             {
               tool: 'relation_create',
-              input: { source_id: idA, target_id: idB, relation_type: 'related_to' },
+              input: { source_id: idA, target_id: idB, role: 'mention' },
             },
           ],
           newId(),
@@ -183,7 +195,7 @@ describe('batch_execute: атомарность (§7.8, §13.4)', () => {
     expect(r.error.code).toBe('VALIDATION');
     expect(await entityCount(idA)).toBe(0);
     expect(await entityCount(idB)).toBe(0);
-    expect(await relCount(idA, idB, 'related_to')).toBe(0);
+    expect(await relCount(idA, idB, 'mention')).toBe(0);
     expect(sink.entries.length).toBe(0); // action не создан (§13.4)
   });
 
@@ -197,7 +209,7 @@ describe('batch_execute: атомарность (§7.8, §13.4)', () => {
           [
             {
               tool: 'relation_create',
-              input: { source_id: idX, target_id: idY, relation_type: 'related_to' },
+              input: { source_id: idX, target_id: idY, role: 'mention' },
             },
             { tool: 'entity_create', input: { id: idX, title: 'X', tags: [] } },
             { tool: 'entity_create', input: { id: idY, title: 'Y', tags: [] } },
@@ -232,18 +244,18 @@ describe('batch_execute: успех, виртуальное состояние �
       { tool: 'attach_orbis_financial', input: { entity_id: txnId, data: finData() } },
       {
         tool: 'relation_create',
-        input: { source_id: envId, target_id: txnId, relation_type: 'parent' },
+        input: { source_id: envId, target_id: txnId, role: 'envelope-binding' },
       },
     ];
-    const r = ok(await execute(db, batchReq(operations, batchId), { sink }));
+    const r = ok(await execute(db, batchReq(operations, batchId, AS_SEED), { sink }));
     expect(r.actionId).toBe(batchId); // action получает id = batch_id (§7.8)
     expect(r.idempotentReplay).toBe(false);
     expect(r.results.length).toBe(4);
-    expect((r.results[3] as WireRelation).relationType).toBe('parent');
+    expect((r.results[3] as WireRelation).role).toBe('envelope-binding');
 
     expect(await entityCount(envId)).toBe(1);
     expect(await entityCount(txnId)).toBe(1);
-    expect(await relCount(envId, txnId, 'parent')).toBe(1);
+    expect(await relCount(envId, txnId, 'envelope-binding')).toBe(1);
 
     // стадии 6–7: ОДИН action на весь batch
     expect(sink.entries.length).toBe(1);
@@ -264,7 +276,7 @@ describe('batch_execute: успех, виртуальное состояние �
     expect(replay.results).toEqual(r.results); // исходный результат
     expect(sink.entries.length).toBe(1); // второй audit не записан
     expect(await entityCount(envId)).toBe(1);
-    expect(await relCount(envId, txnId, 'parent')).toBe(1);
+    expect(await relCount(envId, txnId, 'envelope-binding')).toBe(1);
   });
 
   test('4. форма-тул batch_execute (§9.2): единственная операция с envelope {batch_id, operations}', async () => {
@@ -303,11 +315,11 @@ describe('batch_execute: успех, виртуальное состояние �
     ok(
       await execute(
         db,
-        singleReq('relation_create', {
-          source_id: env1.id,
-          target_id: txn.id,
-          relation_type: 'parent',
-        }),
+        singleReq(
+          'relation_create',
+          { source_id: env1.id, target_id: txn.id, role: 'envelope-binding' },
+          AS_SEED,
+        ),
       ),
     );
 
@@ -318,23 +330,24 @@ describe('batch_execute: успех, виртуальное состояние �
           [
             {
               tool: 'relation_delete',
-              input: { source_id: env1.id, target_id: txn.id, relation_type: 'parent' },
+              input: { source_id: env1.id, target_id: txn.id, role: 'envelope-binding' },
             },
             {
               tool: 'relation_create',
-              input: { source_id: env2.id, target_id: txn.id, relation_type: 'parent' },
+              input: { source_id: env2.id, target_id: txn.id, role: 'envelope-binding' },
             },
           ],
           newId(),
+          AS_SEED,
         ),
       ),
     );
     expect(r.results.length).toBe(2);
-    expect(await relCount(env1.id, txn.id, 'parent')).toBe(0);
-    expect(await relCount(env2.id, txn.id, 'parent')).toBe(1);
+    expect(await relCount(env1.id, txn.id, 'envelope-binding')).toBe(0);
+    expect(await relCount(env2.id, txn.id, 'envelope-binding')).toBe(1);
   });
 
-  test('6. derived_from, создаваемая тем же batch, легитимизирует recurring=true без recurrence (§3.3)', async () => {
+  test('6. instance-of, создаваемая тем же batch, легитимизирует recurring=true без recurrence (§3.3)', async () => {
     const template = await createEntity({
       title: 'Шаблон подписки',
       aspects: {
@@ -362,23 +375,24 @@ describe('batch_execute: успех, виртуальное состояние �
                 id: instId,
                 title: 'Подписка июль',
                 tags: [],
-                // recurring=true без recurrence: валиден ТОЛЬКО благодаря derived_from ниже
+                // recurring=true без recurrence: валиден ТОЛЬКО благодаря instance-of ниже
                 aspects: { 'orbis/financial': finData({ amount: '500.00', recurring: true }) },
               },
             },
             {
               tool: 'relation_create',
-              input: { source_id: template.id, target_id: instId, relation_type: 'derived_from' },
+              input: { source_id: template.id, target_id: instId, role: 'instance-of' },
             },
           ],
           newId(),
+          AS_SEED,
         ),
       ),
     );
     expect(r.results.length).toBe(2);
-    expect(await relCount(template.id, instId, 'derived_from')).toBe(1);
+    expect(await relCount(template.id, instId, 'instance-of')).toBe(1);
 
-    // контроль: тот же create одиночным вызовом (без derived_from) → INVARIANT
+    // контроль: тот же create одиночным вызовом (без instance-of) → INVARIANT
     const alone = err(
       await execute(
         db,
@@ -468,11 +482,11 @@ describe('batch_execute: занятый id — reject, не replay (fix round р
     ok(
       await execute(
         db,
-        singleReq('relation_create', {
-          source_id: env1.id,
-          target_id: txn.id,
-          relation_type: 'parent',
-        }),
+        singleReq(
+          'relation_create',
+          { source_id: env1.id, target_id: txn.id, role: 'envelope-binding' },
+          AS_SEED,
+        ),
       ),
     );
 
@@ -487,10 +501,11 @@ describe('batch_execute: занятый id — reject, не replay (fix round р
             { tool: 'entity_create', input: { id: envX.id, title: 'Фантом', tags: [] } },
             {
               tool: 'relation_create',
-              input: { source_id: envX.id, target_id: txn.id, relation_type: 'parent' },
+              input: { source_id: envX.id, target_id: txn.id, role: 'envelope-binding' },
             },
           ],
           newId(),
+          AS_SEED,
         ),
         { sink },
       ),
@@ -499,8 +514,8 @@ describe('batch_execute: занятый id — reject, не replay (fix round р
     expect((r.error.details as { reason?: string }).reason).toBe('id_conflict');
 
     // ровно одна живая budget-parent у txn; связи от envX нет
-    expect(await relCount(env1.id, txn.id, 'parent')).toBe(1);
-    expect(await relCount(envX.id, txn.id, 'parent')).toBe(0);
+    expect(await relCount(env1.id, txn.id, 'envelope-binding')).toBe(1);
+    expect(await relCount(envX.id, txn.id, 'envelope-binding')).toBe(0);
     // audit не записан — фантомного inverse (архивации живого конверта) не существует
     expect(sink.entries.length).toBe(0);
     // сам конверт не тронут
@@ -554,11 +569,11 @@ describe('гибридная CTE ацикличности: виртуальны�
           [
             {
               tool: 'relation_create',
-              input: { source_id: a.id, target_id: b.id, relation_type: 'blocks' },
+              input: { source_id: a.id, target_id: b.id, role: 'dependency' },
             },
             {
               tool: 'relation_create',
-              input: { source_id: b.id, target_id: a.id, relation_type: 'blocks' },
+              input: { source_id: b.id, target_id: a.id, role: 'dependency' },
             },
           ],
           newId(),
@@ -566,12 +581,12 @@ describe('гибридная CTE ацикличности: виртуальны�
       ),
     );
     expect(r.error.code).toBe('INVARIANT');
-    expect((r.error.details as { invariant?: string }).invariant).toBe('blocks_cycle');
+    expect((r.error.details as { invariant?: string }).invariant).toBe('relation_cycle');
     // попытка B→A при виртуальном A→B: путь «B → A → B»
     expect((r.error.details as { path?: string[] }).path).toEqual([b.id, a.id, b.id]);
     // атомарность: и первое (само по себе валидное) ребро не записано
-    expect(await relCount(a.id, b.id, 'blocks')).toBe(0);
-    expect(await relCount(b.id, a.id, 'blocks')).toBe(0);
+    expect(await relCount(a.id, b.id, 'dependency')).toBe(0);
+    expect(await relCount(b.id, a.id, 'dependency')).toBe(0);
   });
 
   test('12. цикл из смеси БД-ребра и рёбер batch: в БД A→B, batch [B→C, C→A] → INVARIANT, точный path', async () => {
@@ -584,7 +599,7 @@ describe('гибридная CTE ацикличности: виртуальны�
         singleReq('relation_create', {
           source_id: a.id,
           target_id: b.id,
-          relation_type: 'blocks',
+          role: 'dependency',
         }),
       ),
     );
@@ -595,11 +610,11 @@ describe('гибридная CTE ацикличности: виртуальны�
           [
             {
               tool: 'relation_create',
-              input: { source_id: b.id, target_id: c.id, relation_type: 'blocks' },
+              input: { source_id: b.id, target_id: c.id, role: 'dependency' },
             },
             {
               tool: 'relation_create',
-              input: { source_id: c.id, target_id: a.id, relation_type: 'blocks' },
+              input: { source_id: c.id, target_id: a.id, role: 'dependency' },
             },
           ],
           newId(),
@@ -607,10 +622,10 @@ describe('гибридная CTE ацикличности: виртуальны�
       ),
     );
     expect(r.error.code).toBe('INVARIANT');
-    expect((r.error.details as { invariant?: string }).invariant).toBe('blocks_cycle');
+    expect((r.error.details as { invariant?: string }).invariant).toBe('relation_cycle');
     // попытка C→A при БД-ребре A→B и виртуальном B→C: путь «C → A → B → C»
     expect((r.error.details as { path?: string[] }).path).toEqual([c.id, a.id, b.id, c.id]);
-    expect(await relCount(b.id, c.id, 'blocks')).toBe(0); // batch откатен целиком
-    expect(await relCount(a.id, b.id, 'blocks')).toBe(1); // БД-ребро цело
+    expect(await relCount(b.id, c.id, 'dependency')).toBe(0); // batch откатен целиком
+    expect(await relCount(a.id, b.id, 'dependency')).toBe(1); // БД-ребро цело
   });
 });

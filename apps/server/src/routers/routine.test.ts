@@ -1676,7 +1676,7 @@ describe('routine.proposalsForEntity', () => {
     const { pendingId } = await proposedOps('связать задачу с проектом', [
       {
         tool: 'relation_create',
-        input: { source_id: taskId, target_id: project.id, relation_type: 'parent' },
+        input: { source_id: taskId, target_id: project.id, role: 'subitem' },
       },
     ]);
 
@@ -1701,8 +1701,8 @@ describe('routine.proposalsForEntity', () => {
     const c = await seedTask('Забрать заключение');
     const { pendingId } = await proposedOps('приём у врача одним планом', [
       { tool: 'entity_update', input: { id: a, aspects: { 'orbis/task': { status: 'planned' } } } },
-      { tool: 'relation_create', input: { source_id: a, target_id: b, relation_type: 'blocks' } },
-      { tool: 'relation_create', input: { source_id: b, target_id: c, relation_type: 'blocks' } },
+      { tool: 'relation_create', input: { source_id: a, target_id: b, role: 'dependency' } },
+      { tool: 'relation_create', input: { source_id: b, target_id: c, role: 'dependency' } },
     ]);
 
     // A совпадает с пробой по `id` (правка) И с пробой по `source_id` (первая связь);

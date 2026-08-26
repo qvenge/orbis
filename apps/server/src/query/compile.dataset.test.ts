@@ -444,18 +444,21 @@ const RELATIONS_A: (typeof relations.$inferInsert)[] = [
     id: crypto.randomUUID(),
     sourceId: ID.project,
     targetId: ID.taskToday,
+    role: 'subitem',
     relationType: 'parent',
   },
   {
     id: crypto.randomUUID(),
     sourceId: ID.project,
     targetId: ID.taskOverdue,
+    role: 'subitem',
     relationType: 'parent',
   },
   {
     id: crypto.randomUUID(),
     sourceId: ID.taskBlocker,
     targetId: ID.taskBlocked,
+    role: 'dependency',
     relationType: 'blocks',
   },
   {
@@ -463,6 +466,7 @@ const RELATIONS_A: (typeof relations.$inferInsert)[] = [
     id: crypto.randomUUID(),
     sourceId: ID.noteBlocker,
     targetId: ID.taskBlocked2,
+    role: 'dependency',
     relationType: 'blocks',
   },
   {
@@ -470,6 +474,7 @@ const RELATIONS_A: (typeof relations.$inferInsert)[] = [
     id: crypto.randomUUID(),
     sourceId: ID.taskDone,
     targetId: ID.taskToday,
+    role: 'dependency',
     relationType: 'blocks',
   },
 ];

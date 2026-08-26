@@ -192,7 +192,7 @@ beforeAll(async () => {
   await exec(userA, 'relation_create', {
     source_id: catParent,
     target_id: catChild,
-    relation_type: 'parent',
+    role: 'category-parent',
   });
 
   // Конверты — ДО транзакций (авто-привязка A4 подхватывает при создании транзакций)
@@ -600,7 +600,7 @@ describe('spent не считает recurring-шаблон (§2.2, §2.8)', () =
     await exec(user, 'relation_create', {
       source_id: st.envelope.id,
       target_id: tpl.id,
-      relation_type: 'parent',
+      role: 'envelope-binding',
     });
     const after = await envelopeForCategory(db, user, { categoryId: cat, date: today });
     expect(after?.spent).toBe('0.00');

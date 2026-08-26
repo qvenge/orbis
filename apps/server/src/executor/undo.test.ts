@@ -121,10 +121,10 @@ async function actionMessageCount(user: string): Promise<number> {
   return rows[0]?.n as number;
 }
 
-async function relCount(sourceId: string, targetId: string, relationType: string): Promise<number> {
+async function relCount(sourceId: string, targetId: string, role: string): Promise<number> {
   const rows = await adminRows(
     sql`SELECT count(*)::int AS n FROM relations
-        WHERE source_id = ${sourceId} AND target_id = ${targetId} AND relation_type = ${relationType}`,
+        WHERE source_id = ${sourceId} AND target_id = ${targetId} AND role = ${role}`,
   );
   return rows[0]?.n as number;
 }
@@ -487,15 +487,15 @@ describe('undoAction: связи и batch (§7.8)', () => {
         req(user, 'relation_create', {
           source_id: s.id,
           target_id: t.id,
-          relation_type: 'related_to',
+          role: 'mention',
         }),
         { sink },
       ),
     );
-    expect(await relCount(s.id, t.id, 'related_to')).toBe(1);
+    expect(await relCount(s.id, t.id, 'mention')).toBe(1);
 
     ok(await undoAction(db, { actorUserId: user, actionId: rel.actionId }));
-    expect(await relCount(s.id, t.id, 'related_to')).toBe(0);
+    expect(await relCount(s.id, t.id, 'mention')).toBe(0);
     expect(await undoMessageCount(user, rel.actionId)).toBe(1);
   });
 
@@ -517,7 +517,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
             { tool: 'entity_create', input: { id: tId, title: 'Пакет-Б', tags: [] } },
             {
               tool: 'relation_create',
-              input: { source_id: sId, target_id: tId, relation_type: 'related_to' },
+              input: { source_id: sId, target_id: tId, role: 'mention' },
             },
           ],
         },
@@ -528,7 +528,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
 
     const u = ok(await undoAction(db, { actorUserId: user, actionId: batchId }));
     expect(u.actionId).toBe(batchId);
-    expect(await relCount(sId, tId, 'related_to')).toBe(0);
+    expect(await relCount(sId, tId, 'mention')).toBe(0);
     expect((await entityRow(sId)).archived).toBe(true);
     expect((await entityRow(tId)).archived).toBe(true);
     expect(await undoMessageCount(user, batchId)).toBe(1);

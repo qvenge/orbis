@@ -9,11 +9,11 @@
 // (ключи и required) закреплена тестом registry.test.ts — рассинхрон падает в CI.
 
 import {
+  BUILTIN_RELATION_ROLE_META,
   PROPOSAL_ALLOWED_TOOLS,
   QUESTION_MAX,
   QUESTION_OPTION_MAX,
   QUESTION_OPTIONS_MAX,
-  RELATION_TYPES,
   SERVICE_ASPECT_IDS,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
@@ -433,14 +433,33 @@ const entityUpdateJsonSchema = {
   additionalProperties: false,
 };
 
+/**
+ * Роль ребра для LLM/MCP (§А4-3). Перечисление и подписи берутся из ВСТРОЕННОГО реестра
+ * ролей, а не пишутся здесь второй раз: описание роли обязано совпадать с тем, по которому
+ * стадия 4 её проверяет. Строка описания даёт модели ровно то, чего ей не хватало у
+ * схлопнутого `parent`, — что роль значит и КУДА она направлена («Конверт → Транзакция»).
+ *
+ * Собственных ролей владельца здесь нет: реестр тулов статический, а операции реестра —
+ * Задача 15; до неё роль владельца не создать (и стадия 4 её всё равно отвергает — до 0017
+ * у неё нет проекции в переходную колонку типа).
+ */
+const relationRoleSchema = {
+  type: 'string',
+  enum: BUILTIN_RELATION_ROLE_META.map((r) => r.id),
+  description: BUILTIN_RELATION_ROLE_META.map(
+    (r) =>
+      `${r.id} — ${r.label.ru}: ${r.description.ru} (${r.sourceLabel.ru} → ${r.targetLabel.ru})`,
+  ).join('; '),
+};
+
 const relationJsonSchema = {
   type: 'object',
   properties: {
     source_id: uuid,
     target_id: uuid,
-    relation_type: { type: 'string', enum: [...RELATION_TYPES] },
+    role: relationRoleSchema,
   },
-  required: ['source_id', 'target_id', 'relation_type'],
+  required: ['source_id', 'target_id', 'role'],
   additionalProperties: false,
 };
 

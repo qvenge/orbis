@@ -90,7 +90,7 @@ async function scene(title: string): Promise<Scene> {
       'orbis/assignment': { executor: 'agent', grant_id: grantId },
     },
   });
-  await link(owner, project.id, ticket.id);
+  await link(owner, project.id, ticket.id, 'ticket');
   return { owner, grantId, ticketId: ticket.id };
 }
 

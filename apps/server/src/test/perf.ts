@@ -268,7 +268,7 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
     ownerId,
     taskIds.slice(0, HUB_RELATIONS).map((id) => ({
       tool: 'relation_create',
-      input: { source_id: hubId, target_id: id, relation_type: 'related_to' },
+      input: { source_id: hubId, target_id: id, role: 'mention' },
     })),
   );
 

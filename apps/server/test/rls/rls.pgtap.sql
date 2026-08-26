@@ -135,16 +135,16 @@ SELECT lives_ok(
             'своя')$$,
   'INSERT со своим owner_id проходит');
 SELECT throws_ok(
-  $$INSERT INTO relations (id, source_id, target_id, relation_type)
+  $$INSERT INTO relations (id, source_id, target_id, role, relation_type)
     VALUES ('00000000-0000-7000-8000-0000000000c2',
             '00000000-0000-7000-8000-0000000000a1',
-            '00000000-0000-7000-8000-0000000000b1', 'related_to')$$,
+            '00000000-0000-7000-8000-0000000000b1', 'mention', 'related_to')$$,
   '42501', NULL, 'межпользовательская relation запрещена (§4.10)');
 SELECT lives_ok(
-  $$INSERT INTO relations (id, source_id, target_id, relation_type)
+  $$INSERT INTO relations (id, source_id, target_id, role, relation_type)
     VALUES ('00000000-0000-7000-8000-0000000000a5',
             '00000000-0000-7000-8000-0000000000a1',
-            '00000000-0000-7000-8000-0000000000a4', 'related_to')$$,
+            '00000000-0000-7000-8000-0000000000a4', 'mention', 'related_to')$$,
   'relation между двумя своими сущностями проходит');
 SELECT results_eq('SELECT count(*)::int FROM chat_messages', ARRAY[1],
   'сообщения видимы через владение тредом');

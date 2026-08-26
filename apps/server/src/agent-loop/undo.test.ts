@@ -82,7 +82,7 @@ describe('«отмени последнее» гасит шаг агента (п
         'orbis/assignment': { executor: 'agent', grant_id: grantId },
       },
     });
-    await link(owner, project.id, ticket.id);
+    await link(owner, project.id, ticket.id, 'ticket');
 
     const claimed = okResult<{ run_id: string }>(
       await dispatchTool(worker(owner, grantId), 'orbis_claim_task', { ticket_id: ticket.id }),

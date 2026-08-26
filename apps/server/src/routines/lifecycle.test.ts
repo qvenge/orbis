@@ -1127,6 +1127,20 @@ async function runsOf(routineId: string) {
   return withIdentity(db, owner, (tx) => runsOfParent(tx, routineId));
 }
 
+/**
+ * Роли рёбер рутина→прогон — прямо из БД. Читатель истории (`runsOfParent`) до 0017 идёт по
+ * ПЕРЕХОДНОЙ колонке и различает прогон аспектом, поэтому подмена роли ему незаметна;
+ * колонку снимает contract-миграция, и тогда неверная роль потеряет историю рутины молча.
+ */
+async function runRolesOf(routineId: string): Promise<string[]> {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.execute(
+      sql`SELECT role FROM relations WHERE source_id = ${routineId}::uuid ORDER BY created_at`,
+    ),
+  );
+  return (rows as unknown as Array<{ role: string }>).map((r) => r.role);
+}
+
 function routineRef(routineId: string): { id: string; title: string } {
   return { id: routineId, title: 'Утренний обзор' };
 }
@@ -1162,8 +1176,10 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
       steps: [],
     });
     expect(run.grant_id).toBeUndefined();
-    // Связь parent рутина→прогон — тем же batch'ем: прогон виден в истории рутины
+    // Связь рутина→прогон — тем же batch'ем: прогон виден в истории рутины
     expect((await runsOf(routineId)).map((r) => r.id)).toEqual([first.runId]);
+    // …и она несёт РОЛЬ `run` (§А4-3), а не общий `subitem`: прогон рутины — не её подпункт
+    expect(await runRolesOf(routineId)).toEqual(['run']);
     // Бухгалтерия прогона (Р-7): актор ai, источник system, run_id — и action именно
     // с детерминированным batch_id, по которому конкурент получит replay
     const action = (await actionsOf(owner)).find(

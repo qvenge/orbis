@@ -51,18 +51,18 @@ test('backlinks: явные related_to обеих сторон + упомина�
     input: { title: 'Упоминание', tags: [], body: `см. [[entity:${target.id}]]` },
     source: 'fast_path',
   });
-  // связь «в цель» и связь «из цели» — обе стороны related_to попадают в секцию
+  // связь «в цель» и связь «из цели» — обе стороны `mention` попадают в секцию
   await caller.relation.create({
     source_id: asSource.id,
     target_id: target.id,
-    relation_type: 'related_to',
+    role: 'mention',
   });
   await caller.relation.create({
     source_id: target.id,
     target_id: asTarget.id,
-    relation_type: 'related_to',
+    role: 'mention',
   });
-  // blocks-связь backlinks'ом НЕ является: она живёт в секции «Блокировки» (§3.5.7)
+  // связь `dependency` backlinks'ом НЕ является: она живёт в «Блокировках» (§3.5.7)
   const blocker = await caller.entity.create({
     input: { title: 'Блокер', tags: [] },
     source: 'fast_path',
@@ -70,7 +70,7 @@ test('backlinks: явные related_to обеих сторон + упомина�
   await caller.relation.create({
     source_id: blocker.id,
     target_id: target.id,
-    relation_type: 'blocks',
+    role: 'dependency',
   });
 
   const got = await caller.entity.get({ id: target.id, include: ['backlinks'] });
@@ -98,7 +98,7 @@ test('backlinks: и связь, и упоминание одной сущнос�
   await caller.relation.create({
     source_id: both.id,
     target_id: target.id,
-    relation_type: 'related_to',
+    role: 'mention',
   });
 
   const got = await caller.entity.get({ id: target.id, include: ['backlinks'] });
@@ -124,7 +124,7 @@ test('backlinks: архивные исключены (обе стороны — 
   await caller.relation.create({
     source_id: relArchived.id,
     target_id: target.id,
-    relation_type: 'related_to',
+    role: 'mention',
   });
   await caller.entity.update({ id: relArchived.id, archived: true });
   await caller.entity.update({ id: mentionArchived.id, archived: true });

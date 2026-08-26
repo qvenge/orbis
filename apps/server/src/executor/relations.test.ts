@@ -1,7 +1,8 @@
 // apps/server/src/executor/relations.test.ts
-// Интеграционные тесты Task 10: relation_create / relation_delete + доменные инварианты
-// графа (§4.2): rel_uniq-повтор, rel_no_self, ацикличность blocks с путём цикла,
-// один budget-parent (§13.7), derived_from-ветка financial-инварианта (§3.3).
+// Интеграционные тесты relation_create / relation_delete и ГЕНЕРИК-ограничений реестра
+// ролей (§А4-2/§А4-3): rel_uniq-повтор, rel_no_self, `acyclic` с путём цикла,
+// `target_max_incoming` (замена «одного budget-parent», §13.7), гейт `created_by: system`,
+// ветка `instance-of` financial-инварианта (§3.3) и ограничение интервала 7a→0017.
 // Реальная БД под withIdentity (RLS enforced), без моков.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
@@ -63,18 +64,22 @@ async function createEntity(
 async function createRelation(
   sourceId: string,
   targetId: string,
-  relationType: string,
+  role: string,
   over: Partial<ExecuteRequest> = {},
 ): Promise<ExecuteResult> {
   return execute(
     db,
-    req(
-      'relation_create',
-      { source_id: sourceId, target_id: targetId, relation_type: relationType },
-      over,
-    ),
+    req('relation_create', { source_id: sourceId, target_id: targetId, role }, over),
   );
 }
+
+/**
+ * Механизм для СИСТЕМНЫХ ролей (§А4-4): `envelope-binding`, `run` и `instance-of` объявлены
+ * `created_by: system`, и прямое действие владельца их не ставит. В бою эти рёбра рождают
+ * хук бюджета, глаголы исполнителя и материализация; фикстура играет их роль и обязана это
+ * назвать вслух — иначе она проверяла бы недостижимое состояние.
+ */
+const AS_SYSTEM: Partial<ExecuteRequest> = { mechanism: 'seed' };
 
 function finData(over: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -101,13 +106,13 @@ function budgetData(categoryRef: string = newId()): Record<string, unknown> {
   };
 }
 
-/** Число строк relations по тройке — админ-DSN (обходит RLS: истина в БД). */
-async function relCount(sourceId: string, targetId: string, relationType: string): Promise<number> {
+/** Число строк relations по паре концов и роли — админ-DSN (обходит RLS: истина в БД). */
+async function relCount(sourceId: string, targetId: string, role: string): Promise<number> {
   const { db: admin, client: adminClient } = adminDb();
   try {
     const rows = await admin.execute(
       sql`SELECT count(*)::int AS n FROM relations
-          WHERE source_id = ${sourceId} AND target_id = ${targetId} AND relation_type = ${relationType}`,
+          WHERE source_id = ${sourceId} AND target_id = ${targetId} AND role = ${role}`,
     );
     return rows[0]?.n as number;
   } finally {
@@ -115,15 +120,42 @@ async function relCount(sourceId: string, targetId: string, relationType: string
   }
 }
 
-/** Число живых parent-связей к target — для проверки «ровно одна» (§13.7). */
-async function parentCount(targetId: string): Promise<number> {
+/** Число живых входящих связей роли к target — для проверки `target_max_incoming`. */
+async function incomingCount(targetId: string, role: string): Promise<number> {
   const { db: admin, client: adminClient } = adminDb();
   try {
     const rows = await admin.execute(
       sql`SELECT count(*)::int AS n FROM relations
-          WHERE target_id = ${targetId} AND relation_type = 'parent'`,
+          WHERE target_id = ${targetId} AND role = ${role}`,
     );
     return rows[0]?.n as number;
+  } finally {
+    await adminClient.end();
+  }
+}
+
+/** Значение колонки-проекции у единственной связи пары — пин переходной колонки до 0017. */
+async function legacyTypeOf(sourceId: string, targetId: string, role: string): Promise<string> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const rows = await admin.execute(
+      sql`SELECT relation_type FROM relations
+          WHERE source_id = ${sourceId} AND target_id = ${targetId} AND role = ${role}`,
+    );
+    return rows[0]?.relation_type as string;
+  } finally {
+    await adminClient.end();
+  }
+}
+
+/** Прямой вызов эвристики миграции 0016 на временных jsonb-значениях (перепрогон не нужен). */
+async function heuristic(rt: string, src: string, tgt: string): Promise<string> {
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    const rows = await admin.execute(
+      sql`SELECT reform_role_heuristic(${rt}, ${src}::jsonb, ${tgt}::jsonb) AS role`,
+    );
+    return rows[0]?.role as string;
   } finally {
     await adminClient.end();
   }
@@ -145,108 +177,109 @@ afterAll(async () => {
 });
 
 describe('relation_create: базовая семантика (§4.2)', () => {
-  test('1. happy path related_to: строка в БД, wire-форма, action relation_created с inverse relation_delete', async () => {
+  test('1. happy path mention: строка в БД, wire-форма с ролью, action relation_created с inverse relation_delete', async () => {
     const a = await createEntity({ title: 'Проект' });
     const b = await createEntity({ title: 'Заметка' });
     const sink = new InMemoryJournalSink();
     const r = ok(
       await execute(
         db,
-        req('relation_create', { source_id: a.id, target_id: b.id, relation_type: 'related_to' }),
-        { sink },
+        req('relation_create', { source_id: a.id, target_id: b.id, role: 'mention' }),
+        {
+          sink,
+        },
       ),
     );
     expect(r.idempotentReplay).toBe(false);
     const wire = r.results[0] as WireRelation;
     expect(wire.sourceId).toBe(a.id);
     expect(wire.targetId).toBe(b.id);
-    expect(wire.relationType).toBe('related_to');
+    expect(wire.role).toBe('mention');
     expect(wire.createdAt).toBe(T0.toISOString());
-    expect(await relCount(a.id, b.id, 'related_to')).toBe(1);
+    expect(await relCount(a.id, b.id, 'mention')).toBe(1);
 
     // стадии 6–7: журнал §7.8 — relation_created, inverse — удаление связи
     expect(sink.entries.length).toBe(1);
     const entry = first(sink.entries);
     expect(entry.action.type).toBe('relation_created');
+    // Подпись карточки берётся из реестра ролей (Ч10-С3), а не из строки кода
+    expect(entry.card.title).toBe('Упоминание: «Проект» → «Заметка»');
     expect(entry.action.inverse).toEqual([
-      {
-        op: 'relation_delete',
-        payload: { source_id: a.id, target_id: b.id, relation_type: 'related_to' },
-      },
+      { op: 'relation_delete', payload: { source_id: a.id, target_id: b.id, role: 'mention' } },
     ]);
   });
 
   test('2. повтор той же тройки → структурированная INVARIANT duplicate_relation (23505 rel_uniq), не 500; строка одна', async () => {
     const a = await createEntity({ title: 'Дубль-источник' });
     const b = await createEntity({ title: 'Дубль-цель' });
-    ok(await createRelation(a.id, b.id, 'related_to'));
-    const r = err(await createRelation(a.id, b.id, 'related_to'));
+    ok(await createRelation(a.id, b.id, 'mention'));
+    const r = err(await createRelation(a.id, b.id, 'mention'));
     expect(r.error.code).toBe('INVARIANT');
     expect(invariantOf(r)).toBe('duplicate_relation');
-    expect(await relCount(a.id, b.id, 'related_to')).toBe(1);
+    expect(await relCount(a.id, b.id, 'mention')).toBe(1);
   });
 
   test('3. самосвязь → структурированная ошибка (превентивная проверка вместо CHECK rel_no_self), строки нет', async () => {
     const a = await createEntity({ title: 'Нарцисс' });
-    const r = err(await createRelation(a.id, a.id, 'related_to'));
+    const r = err(await createRelation(a.id, a.id, 'mention'));
     expect(r.error.code).toBe('INVARIANT');
     expect(invariantOf(r)).toBe('self_relation');
-    expect(await relCount(a.id, a.id, 'related_to')).toBe(0);
+    expect(await relCount(a.id, a.id, 'mention')).toBe(0);
   });
 
   test('4. чужая сущность (RLS скрывает) → NOT_FOUND единообразно: и как source, и как target', async () => {
     const mine = await createEntity({ title: 'Своя' });
     const foreign = await createEntity({ title: 'Чужая' }, { actorUserId: userB });
 
-    const asTarget = err(await createRelation(mine.id, foreign.id, 'related_to'));
+    const asTarget = err(await createRelation(mine.id, foreign.id, 'mention'));
     expect(asTarget.error.code).toBe('NOT_FOUND');
 
-    const asSource = err(await createRelation(foreign.id, mine.id, 'related_to'));
+    const asSource = err(await createRelation(foreign.id, mine.id, 'mention'));
     expect(asSource.error.code).toBe('NOT_FOUND');
 
-    expect(await relCount(mine.id, foreign.id, 'related_to')).toBe(0);
-    expect(await relCount(foreign.id, mine.id, 'related_to')).toBe(0);
+    expect(await relCount(mine.id, foreign.id, 'mention')).toBe(0);
+    expect(await relCount(foreign.id, mine.id, 'mention')).toBe(0);
   });
 
   test('5. несуществующая сущность → NOT_FOUND', async () => {
     const a = await createEntity({ title: 'Существующая' });
-    const r = err(await createRelation(a.id, newId(), 'related_to'));
+    const r = err(await createRelation(a.id, newId(), 'mention'));
     expect(r.error.code).toBe('NOT_FOUND');
   });
 });
 
-describe('ацикличность blocks (§4.2)', () => {
+describe('ацикличность роли (§А4-2, constraints.acyclic)', () => {
   test('6. цикл A→B→C→A отклонён: INVARIANT, details.path в порядке цикла, титулы в сообщении', async () => {
     const a = await createEntity({ title: 'A-задача' });
     const b = await createEntity({ title: 'B-задача' });
     const c = await createEntity({ title: 'C-задача' });
-    ok(await createRelation(b.id, c.id, 'blocks'));
-    ok(await createRelation(c.id, a.id, 'blocks'));
+    ok(await createRelation(b.id, c.id, 'dependency'));
+    ok(await createRelation(c.id, a.id, 'dependency'));
 
-    const r = err(await createRelation(a.id, b.id, 'blocks'));
+    const r = err(await createRelation(a.id, b.id, 'dependency'));
     expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('blocks_cycle');
+    expect(invariantOf(r)).toBe('relation_cycle');
     // details.path = [$source, …найденный путь…]: «A → B → C → A»
     expect((r.error.details as { path?: string[] }).path).toEqual([a.id, b.id, c.id, a.id]);
     expect(r.error.message).toContain('A-задача');
     expect(r.error.message).toContain('B-задача');
     expect(r.error.message).toContain('C-задача');
-    expect(await relCount(a.id, b.id, 'blocks')).toBe(0);
+    expect(await relCount(a.id, b.id, 'dependency')).toBe(0);
   });
 
   test('7. минимальный цикл из двух рёбер: при существующей B→A попытка A→B → path [A, B, A]', async () => {
     const a = await createEntity({ title: 'Взаимный-A' });
     const b = await createEntity({ title: 'Взаимный-B' });
-    ok(await createRelation(b.id, a.id, 'blocks'));
-    const r = err(await createRelation(a.id, b.id, 'blocks'));
+    ok(await createRelation(b.id, a.id, 'dependency'));
+    const r = err(await createRelation(a.id, b.id, 'dependency'));
     expect(r.error.code).toBe('INVARIANT');
     expect((r.error.details as { path?: string[] }).path).toEqual([a.id, b.id, a.id]);
   });
 
   // До фикса: FOR UPDATE брался только на концы нового ребра, а обход графа шёл в
   // READ COMMITTED — конкурентные вставки с непересекающимися вершинами не видели друг
-  // друга и вместе замыкали цикл A→B→C→D→A. Теперь blocks-записи владельца сериализованы
-  // advisory-lock'ом, и ровно одна из двух транзакций проходит.
+  // друга и вместе замыкали цикл A→B→C→D→A. Теперь записи владельца ПО ЭТОЙ РОЛИ
+  // сериализованы advisory-lock'ом `<owner>:<role>`, и ровно одна из двух транзакций проходит.
   test('8. гонка A→B ∥ C→D при существующих B→C и D→A: цикл не замыкается', async () => {
     for (let i = 0; i < 10; i++) {
       const [a, b, c, d] = await Promise.all([
@@ -255,17 +288,18 @@ describe('ацикличность blocks (§4.2)', () => {
         createEntity({ title: `race-C-${i}` }),
         createEntity({ title: `race-D-${i}` }),
       ]);
-      ok(await createRelation(b.id, c.id, 'blocks'));
-      ok(await createRelation(d.id, a.id, 'blocks'));
+      ok(await createRelation(b.id, c.id, 'dependency'));
+      ok(await createRelation(d.id, a.id, 'dependency'));
 
       const [r1, r2] = await Promise.all([
-        createRelation(a.id, b.id, 'blocks'),
-        createRelation(c.id, d.id, 'blocks'),
+        createRelation(a.id, b.id, 'dependency'),
+        createRelation(c.id, d.id, 'dependency'),
       ]);
 
       const applied = [r1, r2].filter((r) => r.ok).length;
       expect(applied).toBe(1); // второе ребро замкнуло бы цикл — обязано быть отклонено
-      const edges = (await relCount(a.id, b.id, 'blocks')) + (await relCount(c.id, d.id, 'blocks'));
+      const edges =
+        (await relCount(a.id, b.id, 'dependency')) + (await relCount(c.id, d.id, 'dependency'));
       expect(edges).toBe(1);
     }
   });
@@ -289,8 +323,8 @@ describe('ацикличность blocks (§4.2)', () => {
       const mids = await Promise.all(
         Array.from({ length: WIDTH }, (_, j) => createEntity({ title: `ромб-${i}-${j}` })),
       );
-      for (const mid of mids) ok(await createRelation(from.id, mid.id, 'blocks'));
-      for (const mid of mids) ok(await createRelation(mid.id, to.id, 'blocks'));
+      for (const mid of mids) ok(await createRelation(from.id, mid.id, 'dependency'));
+      for (const mid of mids) ok(await createRelation(mid.id, to.id, 'dependency'));
     }
     const head = first(anchors);
     const tail = anchors[DEPTH];
@@ -299,14 +333,14 @@ describe('ацикличность blocks (§4.2)', () => {
     // Ребро извне в голову ромба: обход стартует с головы и вынужден покрыть весь граф
     const outsider = await createEntity({ title: 'вне ромба' });
     const t0 = performance.now();
-    ok(await createRelation(outsider.id, head.id, 'blocks'));
+    ok(await createRelation(outsider.id, head.id, 'dependency'));
     const elapsedMs = performance.now() - t0;
     expect(elapsedMs).toBeLessThan(1000);
 
     // Замыкание хвост→голова — цикл: INVARIANT с восстановленным путём (кратчайшим)
-    const r = err(await createRelation(tail.id, head.id, 'blocks'));
+    const r = err(await createRelation(tail.id, head.id, 'dependency'));
     expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('blocks_cycle');
+    expect(invariantOf(r)).toBe('relation_cycle');
     const path = (r.error.details as { path?: string[] }).path ?? [];
     expect(path[0]).toBe(tail.id);
     expect(path[1]).toBe(head.id);
@@ -319,15 +353,15 @@ describe('ацикличность blocks (§4.2)', () => {
     const b = await createEntity({ title: 'Ромб-B' });
     const c = await createEntity({ title: 'Ромб-C' });
     const d = await createEntity({ title: 'Ромб-D' });
-    ok(await createRelation(a.id, b.id, 'blocks'));
-    ok(await createRelation(a.id, c.id, 'blocks'));
-    ok(await createRelation(b.id, d.id, 'blocks'));
-    ok(await createRelation(c.id, d.id, 'blocks'));
-    expect(await relCount(c.id, d.id, 'blocks')).toBe(1);
+    ok(await createRelation(a.id, b.id, 'dependency'));
+    ok(await createRelation(a.id, c.id, 'dependency'));
+    ok(await createRelation(b.id, d.id, 'dependency'));
+    ok(await createRelation(c.id, d.id, 'dependency'));
+    expect(await relCount(c.id, d.id, 'dependency')).toBe(1);
   });
 });
 
-describe('один budget-parent (§4.2, §13.7)', () => {
+describe('target_max_incoming роли envelope-binding (§А4-2; замена «одного budget-parent» §13.7)', () => {
   async function budgetFixture(): Promise<{ env1: WireEntity; env2: WireEntity; txn: WireEntity }> {
     const env1 = await createEntity({
       title: 'Конверт Еда',
@@ -344,37 +378,40 @@ describe('один budget-parent (§4.2, §13.7)', () => {
     return { env1, env2, txn };
   }
 
-  test('9. последовательно: вторая budget-parent связь к той же транзакции → INVARIANT single_budget_parent', async () => {
+  test('9. envelope-binding ×2 на одну транзакцию → INVARIANT target_max_incoming', async () => {
     const { env1, env2, txn } = await budgetFixture();
-    ok(await createRelation(env1.id, txn.id, 'parent'));
-    const r = err(await createRelation(env2.id, txn.id, 'parent'));
+    ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
+    const r = err(await createRelation(env2.id, txn.id, 'envelope-binding', AS_SYSTEM));
     expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('single_budget_parent');
-    expect(await parentCount(txn.id)).toBe(1);
+    expect(invariantOf(r)).toBe('target_max_incoming');
+    expect((r.error.details as { role?: string }).role).toBe('envelope-binding');
+    expect(await incomingCount(txn.id, 'envelope-binding')).toBe(1);
   });
 
-  test('10. parent от небюджетного источника не ограничен: проект и конверт сосуществуют', async () => {
+  test('10. ограничение считает ТОЛЬКО свою роль: subitem проекта и конверт сосуществуют', async () => {
     const { env1, txn } = await budgetFixture();
     const project = await createEntity({ title: 'Проект-родитель' });
-    ok(await createRelation(project.id, txn.id, 'parent'));
-    ok(await createRelation(env1.id, txn.id, 'parent')); // parent проекта не мешает конверту
-    expect(await parentCount(txn.id)).toBe(2); // проект + один конверт
+    ok(await createRelation(project.id, txn.id, 'subitem'));
+    ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
+    expect(await incomingCount(txn.id, 'subitem')).toBe(1);
+    expect(await incomingCount(txn.id, 'envelope-binding')).toBe(1);
   });
 
-  test('11a. attach orbis/budget на parent financial-ребёнка с другим конвертом → INVARIANT single_budget_parent (дыра §4.2)', async () => {
-    // Обход инварианта: сущность X без бюджета становится parent'ом транзакции T
-    // (не-бюджетный parent разрешён), затем attach orbis/budget ретроспективно
-    // делает X вторым budget-parent'ом T — attach обязан быть отклонён.
+  test('11a. РЕТРОСПЕКТИВНЫЙ путь: attach orbis/budget на источника subitem-ребра к чужому конверту → INVARIANT target_max_incoming (второй вход, §Б-2)', async () => {
+    // Ограничение роли смотрит на рёбра ЦЕЛИ и срабатывает на создании ребра. Здесь ребро
+    // не создаётся — меняется АСПЕКТ ИСТОЧНИКА, а старую колонку (её ещё читают агрегаты
+    // бюджета до 0017) это ретроспективно делает вторым budget-parent'ом. attach обязан
+    // быть отклонён.
     const { env1, txn } = await budgetFixture();
-    ok(await createRelation(env1.id, txn.id, 'parent'));
+    ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
     const x = await createEntity({ title: 'Будущий конверт' });
-    ok(await createRelation(x.id, txn.id, 'parent')); // parent без бюджета — легален (тест 10)
+    ok(await createRelation(x.id, txn.id, 'subitem')); // роль владельца — легальна (тест 10)
 
     const r = err(
       await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetData() })),
     );
     expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('single_budget_parent');
+    expect(invariantOf(r)).toBe('target_max_incoming');
     // Аспект не приклеился
     const rows = ok(
       await execute(db, req('entity_update', { id: x.id, title: 'Будущий конверт' })),
@@ -383,13 +420,13 @@ describe('один budget-parent (§4.2, §13.7)', () => {
     expect('orbis/budget' in entity.aspectsMap).toBe(false);
   });
 
-  test('11c. entity_update.aspects с orbis/budget — тот же обход, что 11a: INVARIANT single_budget_parent', async () => {
+  test('11c. entity_update.aspects с orbis/budget — тот же второй вход, что 11a: INVARIANT target_max_incoming', async () => {
     // Wire-контракт entity_update принимает aspects-патч: mergeAspects добавляет НОВЫЙ
-    // ключ — второй путь ретроспективного второго budget-parent'а помимо attach (fix round).
+    // ключ — второй путь ретроспективы помимо attach (fix round).
     const { env1, txn } = await budgetFixture();
-    ok(await createRelation(env1.id, txn.id, 'parent'));
+    ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));
     const x = await createEntity({ title: 'Будущий конверт (update)' });
-    ok(await createRelation(x.id, txn.id, 'parent'));
+    ok(await createRelation(x.id, txn.id, 'subitem'));
 
     const r = err(
       await execute(
@@ -398,7 +435,7 @@ describe('один budget-parent (§4.2, §13.7)', () => {
       ),
     );
     expect(r.error.code).toBe('INVARIANT');
-    expect(invariantOf(r)).toBe('single_budget_parent');
+    expect(invariantOf(r)).toBe('target_max_incoming');
     // Аспект не приклеился
     const rows = ok(await execute(db, req('entity_update', { id: x.id, title: 'X (update)' })));
     expect('orbis/budget' in (rows.results[0] as WireEntity).aspectsMap).toBe(false);
@@ -410,7 +447,7 @@ describe('один budget-parent (§4.2, §13.7)', () => {
       aspects: { 'orbis/financial': finData() },
     });
     const x = await createEntity({ title: 'Единственный конверт (update)' });
-    ok(await createRelation(x.id, txn.id, 'parent'));
+    ok(await createRelation(x.id, txn.id, 'subitem'));
 
     const attached = ok(
       await execute(
@@ -433,7 +470,7 @@ describe('один budget-parent (§4.2, §13.7)', () => {
       aspects: { 'orbis/financial': finData() },
     });
     const x = await createEntity({ title: 'Единственный конверт' });
-    ok(await createRelation(x.id, txn.id, 'parent'));
+    ok(await createRelation(x.id, txn.id, 'subitem'));
 
     const r = ok(
       await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetData() })),
@@ -442,21 +479,21 @@ describe('один budget-parent (§4.2, §13.7)', () => {
     expect('orbis/budget' in entity.aspectsMap).toBe(true);
   });
 
-  test('11. конкурентные привязки к двум конвертам (Promise.all) → ровно одна живая budget-parent (§13.7)', async () => {
+  test('11. конкурентные привязки к двум конвертам (Promise.all) → ровно одна живая envelope-binding', async () => {
     // 5 прогонов: доказываем сериализацию row-lock'ом, а не удачное расписание
     for (let i = 0; i < 5; i++) {
       const { env1, env2, txn } = await budgetFixture();
       const [r1, r2] = await Promise.all([
-        createRelation(env1.id, txn.id, 'parent'),
-        createRelation(env2.id, txn.id, 'parent'),
+        createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM),
+        createRelation(env2.id, txn.id, 'envelope-binding', AS_SYSTEM),
       ]);
       const succeeded = [r1, r2].filter((r) => r.ok);
       const failed = [r1, r2].filter((r) => !r.ok) as ExecuteErr[];
       expect(succeeded.length).toBe(1);
       expect(failed.length).toBe(1);
       expect(first(failed).error.code).toBe('INVARIANT');
-      expect(invariantOf(first(failed))).toBe('single_budget_parent');
-      expect(await parentCount(txn.id)).toBe(1); // ровно одна живая связь
+      expect(invariantOf(first(failed))).toBe('target_max_incoming');
+      expect(await incomingCount(txn.id, 'envelope-binding')).toBe(1); // ровно одна связь
     }
   });
 });
@@ -465,26 +502,26 @@ describe('relation_delete (§4.2)', () => {
   test('12. удаляет строку; action relation_deleted с inverse relation_create', async () => {
     const a = await createEntity({ title: 'Удаляемый-источник' });
     const b = await createEntity({ title: 'Удаляемая-цель' });
-    ok(await createRelation(a.id, b.id, 'related_to'));
+    ok(await createRelation(a.id, b.id, 'mention'));
 
     const sink = new InMemoryJournalSink();
     const r = ok(
       await execute(
         db,
-        req('relation_delete', { source_id: a.id, target_id: b.id, relation_type: 'related_to' }),
+        req('relation_delete', { source_id: a.id, target_id: b.id, role: 'mention' }),
         { sink },
       ),
     );
     const wire = r.results[0] as WireRelation;
     expect(wire.sourceId).toBe(a.id);
-    expect(await relCount(a.id, b.id, 'related_to')).toBe(0);
+    expect(await relCount(a.id, b.id, 'mention')).toBe(0);
 
     const entry = first(sink.entries);
     expect(entry.action.type).toBe('relation_deleted');
     expect(entry.action.inverse).toEqual([
       {
         op: 'relation_create',
-        payload: { source_id: a.id, target_id: b.id, relation_type: 'related_to', meta: {} },
+        payload: { source_id: a.id, target_id: b.id, role: 'mention', meta: {} },
       },
     ]);
   });
@@ -492,19 +529,19 @@ describe('relation_delete (§4.2)', () => {
   test('13. пересоздание после удаления — новая строка с новым id', async () => {
     const a = await createEntity({ title: 'Пересоздание-A' });
     const b = await createEntity({ title: 'Пересоздание-B' });
-    const created = ok(await createRelation(a.id, b.id, 'related_to'));
+    const created = ok(await createRelation(a.id, b.id, 'mention'));
     const firstId = (created.results[0] as WireRelation).id;
 
     ok(
       await execute(
         db,
-        req('relation_delete', { source_id: a.id, target_id: b.id, relation_type: 'related_to' }),
+        req('relation_delete', { source_id: a.id, target_id: b.id, role: 'mention' }),
       ),
     );
-    const recreated = ok(await createRelation(a.id, b.id, 'related_to'));
+    const recreated = ok(await createRelation(a.id, b.id, 'mention'));
     const secondId = (recreated.results[0] as WireRelation).id;
     expect(secondId).not.toBe(firstId);
-    expect(await relCount(a.id, b.id, 'related_to')).toBe(1);
+    expect(await relCount(a.id, b.id, 'mention')).toBe(1);
   });
 
   test('14. несуществующая связь → NOT_FOUND', async () => {
@@ -513,15 +550,15 @@ describe('relation_delete (§4.2)', () => {
     const r = err(
       await execute(
         db,
-        req('relation_delete', { source_id: a.id, target_id: b.id, relation_type: 'blocks' }),
+        req('relation_delete', { source_id: a.id, target_id: b.id, role: 'dependency' }),
       ),
     );
     expect(r.error.code).toBe('NOT_FOUND');
   });
 });
 
-describe('financial-инвариант: ветка derived_from (§3.3)', () => {
-  test('15. recurring=true без recurrence: с входящей derived_from — валиден, без — INVARIANT', async () => {
+describe('financial-инвариант: ветка instance-of (§3.3)', () => {
+  test('15. recurring=true без recurrence: с входящей instance-of — валиден, без — INVARIANT', async () => {
     const template = await createEntity({
       title: 'Шаблон аренды',
       aspects: {
@@ -542,9 +579,9 @@ describe('financial-инвариант: ветка derived_from (§3.3)', () => 
       title: 'Аренда июль',
       aspects: { 'orbis/financial': finData({ amount: '50000.00' }) },
     });
-    ok(await createRelation(template.id, instance.id, 'derived_from'));
+    ok(await createRelation(template.id, instance.id, 'instance-of', AS_SYSTEM));
 
-    // инстанс с входящей derived_from: recurring=true валиден без recurrence
+    // инстанс с входящей instance-of: recurring=true валиден без recurrence
     const upd = await execute(
       db,
       req('entity_update', {
@@ -554,7 +591,7 @@ describe('financial-инвариант: ветка derived_from (§3.3)', () => 
     );
     ok(upd);
 
-    // контроль: та же правка без derived_from → INVARIANT
+    // контроль: та же правка без instance-of → INVARIANT
     const orphan = await createEntity({
       title: 'Сирота',
       aspects: { 'orbis/financial': finData() },
@@ -569,5 +606,209 @@ describe('financial-инвариант: ветка derived_from (§3.3)', () => 
       ),
     );
     expect(bad.error.code).toBe('INVARIANT');
+  });
+});
+
+describe('acyclic для category-parent — НОВОЕ поведение реформы (§А4-2, Р-6)', () => {
+  function categoryData(): Record<string, unknown> {
+    return { icon: '🍏', spend_class: 'discretionary' };
+  }
+
+  test('16. цикл в дереве категорий отклонён: до реформы такой связи ничто не мешало', async () => {
+    const top = await createEntity({
+      title: 'Еда',
+      aspects: { 'orbis/category': categoryData() },
+    });
+    const mid = await createEntity({
+      title: 'Продукты',
+      aspects: { 'orbis/category': categoryData() },
+    });
+    ok(await createRelation(top.id, mid.id, 'category-parent'));
+    const r = err(await createRelation(mid.id, top.id, 'category-parent'));
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('relation_cycle');
+    expect((r.error.details as { role?: string }).role).toBe('category-parent');
+    // Путь цикла — в тексте отказа, титулами, а не голыми id (остаток C: путь)
+    expect(r.error.message).toContain('Продукты');
+    expect(r.error.message).toContain('Еда');
+    expect(await relCount(mid.id, top.id, 'category-parent')).toBe(0);
+  });
+
+  test('17. ацикличность считается ПО СВОЕЙ роли: обратное ребро другой роли на той же паре законно', async () => {
+    // Достижимость обходит рёбра ТОЛЬКО проверяемой роли. Дерево категорий и граф
+    // зависимостей ацикличны независимо, и ребро одной роли не замыкает цикл другой.
+    // (Ключ advisory-lock'а тоже разведён по ролям — `<owner>:<role>`, см. `assertAcyclic`;
+    // это свойство ПАРАЛЛЕЛИЗМА, а не результата: общий замок дал бы те же ответы, только
+    // с лишним ожиданием, и отличить его тестом можно было бы лишь по времени.)
+    const a = await createEntity({ title: 'Задача-A' });
+    const b = await createEntity({ title: 'Задача-B' });
+    ok(await createRelation(a.id, b.id, 'dependency'));
+    const catA = await createEntity({
+      title: 'Категория-A',
+      aspects: { 'orbis/category': categoryData() },
+    });
+    const catB = await createEntity({
+      title: 'Категория-B',
+      aspects: { 'orbis/category': categoryData() },
+    });
+    // Те же две вершины по другой роли: обратное ребро запрещено как dependency, но у
+    // категорий своё дерево и своя проверка
+    ok(await createRelation(catA.id, catB.id, 'category-parent'));
+    ok(await createRelation(catB.id, catA.id, 'dependency')); // обратное ребро ДРУГОЙ роли
+    expect(await relCount(catB.id, catA.id, 'dependency')).toBe(1);
+    expect(err(await createRelation(b.id, a.id, 'dependency')).error.code).toBe('INVARIANT');
+  });
+});
+
+describe('гейт created_by: system (§А4-4, отказ ROLE_SYSTEM_ONLY)', () => {
+  test('18. role=run из пользовательского вызова → ROLE_SYSTEM_ONLY; тот же вызов механизмом verb — ок', async () => {
+    const ticket = await createEntity({ title: 'Тикет' });
+    const run = await createEntity({ title: 'Прогон' });
+    const denied = err(await createRelation(ticket.id, run.id, 'run'));
+    expect(denied.error.code).toBe('ROLE_SYSTEM_ONLY');
+    expect((denied.error.details as { role?: string }).role).toBe('run');
+    expect(await relCount(ticket.id, run.id, 'run')).toBe(0);
+
+    ok(await createRelation(ticket.id, run.id, 'run', { mechanism: 'verb' }));
+    expect(await relCount(ticket.id, run.id, 'run')).toBe(1);
+  });
+
+  test('19. хук бюджета ставит envelope-binding САМ (mechanism hook), а тот же вызов владельцем — ROLE_SYSTEM_ONLY', async () => {
+    // Хук не зовёт execute — он строит операции в том же контексте и без ЯВНОЙ простановки
+    // механизма унаследовал бы `user`, то есть отказал бы системе в её собственной привязке.
+    const category = newId();
+    const envelope = await createEntity({
+      title: 'Конверт хука',
+      aspects: { 'orbis/budget': budgetData(category) },
+    });
+    const txn = await createEntity({
+      title: 'Транзакция хука',
+      aspects: { 'orbis/financial': finData({ category_ref: category }) },
+    });
+    // Привязку никто руками не создавал — её создал хук на создании транзакции
+    expect(await relCount(envelope.id, txn.id, 'envelope-binding')).toBe(1);
+
+    // …а руками ту же роль поставить нельзя: пусть даже на другой паре
+    const other = await createEntity({
+      title: 'Ещё транзакция',
+      aspects: { 'orbis/financial': finData({ category_ref: newId() }) },
+    });
+    const denied = err(await createRelation(envelope.id, other.id, 'envelope-binding'));
+    expect(denied.error.code).toBe('ROLE_SYSTEM_ONLY');
+  });
+
+  test('20. undo хуковой привязки восстанавливает её, хотя роль системная: откат проигрывает СВОЙ inverse', async () => {
+    const category = newId();
+    const envelope = await createEntity({
+      title: 'Конверт отката',
+      aspects: { 'orbis/budget': budgetData(category) },
+    });
+    const sink = new InMemoryJournalSink();
+    const created = ok(
+      await execute(
+        db,
+        req('entity_create', {
+          title: 'Транзакция отката',
+          tags: [],
+          aspects: { 'orbis/financial': finData({ category_ref: category }) },
+        }),
+        { sink },
+      ),
+    );
+    const txn = created.results[0] as WireEntity;
+    expect(await relCount(envelope.id, txn.id, 'envelope-binding')).toBe(1);
+    // inverse хуковой операции — удаление связи; обратный ей relation_create роли
+    // `envelope-binding` гейт пропускать ОБЯЗАН, иначе законную запись нельзя отменить
+    const inverse = first(sink.entries).action.inverse;
+    expect(inverse.some((op) => op.op === 'relation_delete')).toBe(true);
+  });
+});
+
+describe('интервал 7a→0017: rel_uniq ещё стоит на проекции роли (находка 55)', () => {
+  test('21. subitem + ticket на одной паре → отказ уникальности (ОЖИДАЕМО: обе проецируются в parent)', async () => {
+    const project = await createEntity({ title: 'Проект интервала' });
+    const child = await createEntity({ title: 'Ребёнок интервала' });
+    ok(await createRelation(project.id, child.id, 'subitem'));
+    const r = err(await createRelation(project.id, child.id, 'ticket'));
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('duplicate_relation');
+    // Отказ ЧЕСТНО называет причину интервалом, а не выдаёт «такая связь уже есть»
+    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBe(true);
+    expect((r.error.details as { legacyRelationType?: string }).legacyRelationType).toBe('parent');
+    expect(await relCount(project.id, child.id, 'ticket')).toBe(0);
+  });
+
+  test('22. subitem + mention на одной паре — обе живут: проекции разные', async () => {
+    const a = await createEntity({ title: 'Пара-A' });
+    const b = await createEntity({ title: 'Пара-B' });
+    ok(await createRelation(a.id, b.id, 'subitem'));
+    ok(await createRelation(a.id, b.id, 'mention'));
+    expect(await relCount(a.id, b.id, 'subitem')).toBe(1);
+    expect(await relCount(a.id, b.id, 'mention')).toBe(1);
+  });
+
+  test('23. повтор ТОЙ ЖЕ роли — обычный duplicate_relation, без пометки интервала', async () => {
+    const a = await createEntity({ title: 'Повтор-A' });
+    const b = await createEntity({ title: 'Повтор-B' });
+    ok(await createRelation(a.id, b.id, 'subitem'));
+    const r = err(await createRelation(a.id, b.id, 'subitem'));
+    expect(invariantOf(r)).toBe('duplicate_relation');
+    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBeUndefined();
+  });
+});
+
+describe('переходная колонка и эвристика миграции 0016', () => {
+  test('24. relation_type производится из role ТОТАЛЬНО (все 11 ролей проекции)', async () => {
+    // Проекция считается ОДНОЙ функцией (`projectLegacyRelationType`), и записывает колонку
+    // единственный писатель — INSERT стадии 5. Проверяются те роли, которые в интервале
+    // достижимы на одной паре без коллизии rel_uniq: каждая — на своей паре сущностей.
+    const cases: Array<[string, string]> = [
+      ['subitem', 'parent'],
+      ['ticket', 'parent'],
+      ['run', 'parent'],
+      ['envelope-binding', 'parent'],
+      ['category-parent', 'parent'],
+      ['dependency', 'blocks'],
+      ['mention', 'related_to'],
+      ['alternative-of', 'related_to'],
+      ['supersedes', 'related_to'],
+      ['instance-of', 'derived_from'],
+    ];
+    for (const [role, legacy] of cases) {
+      const a = await createEntity({ title: `Проекция-${role}-A` });
+      const b = await createEntity({ title: `Проекция-${role}-B` });
+      ok(await createRelation(a.id, b.id, role, AS_SYSTEM));
+      expect(await legacyTypeOf(a.id, b.id, role)).toBe(legacy);
+    }
+    // Одиннадцатая роль `ref` в v1 без писателя (зеркало ссылочного свойства, часть Б);
+    // её проекция запинена юнитом `legacy-form.test.ts` на всех одиннадцати.
+  });
+
+  test('25. reform_role_heuristic: восстановление роли из схлопнутого типа по аспектам концов', async () => {
+    expect(await heuristic('parent', '{"orbis/budget":{}}', '{"orbis/financial":{}}')).toBe(
+      'envelope-binding',
+    );
+    expect(await heuristic('derived_from', '{}', '{}')).toBe('instance-of');
+    expect(await heuristic('parent', '{}', '{}')).toBe('subitem');
+    expect(await heuristic('parent', '{}', '{"orbis/category":{}}')).toBe('category-parent');
+    expect(await heuristic('parent', '{}', '{"orbis/agent-run":{}}')).toBe('run');
+    expect(await heuristic('parent', '{"orbis/project":{}}', '{"orbis/assignment":{}}')).toBe(
+      'ticket',
+    );
+    expect(await heuristic('blocks', '{}', '{}')).toBe('dependency');
+    expect(await heuristic('related_to', '{}', '{}')).toBe('mention');
+  });
+
+  test('26. неизвестная роль → VALIDATION «нет такой роли», а не молчаливый parent и не отказ интервала', async () => {
+    const a = await createEntity({ title: 'Незнакомая-A' });
+    const b = await createEntity({ title: 'Незнакомая-B' });
+    const r = err(await createRelation(a.id, b.id, 'нет-такой-роли'));
+    expect(r.error.code).toBe('VALIDATION');
+    expect(r.error.message).toContain('неизвестная роль');
+    expect((r.error.details as { role?: string }).role).toBe('нет-такой-роли');
+    // Отказ идёт от РЕЕСТРА, а не от ограничения интервала 0017: у них разные причины и
+    // разная судьба (интервальный уходит с contract-миграцией, реестровый остаётся)
+    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBeUndefined();
+    expect(await relCount(a.id, b.id, 'нет-такой-роли')).toBe(0);
   });
 });

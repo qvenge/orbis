@@ -252,12 +252,14 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     });
     blockerId = blocker.id;
 
-    // blocker блокирует «купить кроссовки»: source блокирует target (§4.2)
+    // blocker блокирует «купить кроссовки»: source блокирует target (§4.2, роль dependency)
     const rel = await a.relation.create({
       source_id: blockerId,
       target_id: sneakersId,
-      relation_type: 'blocks',
+      role: 'dependency',
     });
+    expect(rel.role).toBe('dependency');
+    // Переходная колонка — производная от роли и до 0017 едет рядом
     expect(rel.relationType).toBe('blocks');
 
     const openTasks = 'aspect=orbis/task, status=!done&!cancelled';
@@ -295,9 +297,9 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(obed?.aspectsMap['orbis/financial']?.amount).toBe('340.00');
     expect(obed?.aspectsMap['orbis/financial']?.occurred_on).toBe('2026-07-03');
 
-    // Одна связь blocks
+    // Одна связь роли dependency
     expect(exp.relations.length).toBe(1);
-    expect(exp.relations[0]?.relationType).toBe('blocks');
+    expect(exp.relations[0]?.role).toBe('dependency');
 
     // Один тред (глобальный) и 7 сообщений: 1 user + 6 системных
     expect(exp.chatThreads.length).toBe(1);

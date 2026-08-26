@@ -36,6 +36,7 @@ import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
+import { ROLE_RUN } from '../executor/relations';
 import type {
   ActorKind,
   JournalSink,
@@ -509,7 +510,7 @@ async function claimTask(
     },
     {
       tool: 'relation_create',
-      input: { source_id: ticket.id, target_id: runId, relation_type: 'parent' },
+      input: { source_id: ticket.id, target_id: runId, role: ROLE_RUN },
     },
   ];
 

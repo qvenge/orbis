@@ -42,7 +42,7 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
         await relation.mutateAsync({
           source_id: context.parentId,
           target_id: ent.id,
-          relation_type: 'parent',
+          role: 'subitem',
         });
       }
       setText('');

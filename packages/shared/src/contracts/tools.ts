@@ -4,7 +4,6 @@
 // но §5.2 требует optimistic-check по updated_at при правке body; поле опционально
 // в envelope, обязательность при body enforce'ит executor.
 import { z } from 'zod';
-import { RELATION_TYPES } from '../constants';
 
 export const entityCreateInput = z
   .object({
@@ -246,14 +245,33 @@ export const attachAspectInput = z
   })
   .strict();
 
+/**
+ * Вход тулов связи (§А4-3): ребро несёт РОЛЬ, а не тип из закрытого списка. Роль —
+ * `z.string()`, а не `z.enum(RELATION_ROLE_IDS)`, потому что реестр ролей расширяем
+ * владельцем (§А4-2): сузив контракт до одиннадцати встроенных, мы закрыли бы собственную
+ * роль отказом схемы ещё до реестра. Существование роли и её ограничения проверяет стадия 4
+ * по снимку реестра — там же, где живут `acyclic`, `target_max_incoming` и `created_by`.
+ */
 export const relationCreateInput = z
   .object({
     source_id: z.string().uuid(),
     target_id: z.string().uuid(),
-    relation_type: z.enum(RELATION_TYPES),
+    role: z.string().min(1),
   })
   .strict();
-export const relationDeleteInput = relationCreateInput;
+/**
+ * ОТДЕЛЬНЫЙ объект той же формы, а не `= relationCreateInput`. Тождество было экономией на
+ * одну строку и держалось на том, что у создания и удаления совпадали ВСЕ поля; с реформой
+ * они расходятся (внутренняя форма создания несёт `meta` восстанавливаемой связи), и общий
+ * объект начал бы тянуть правку одного контракта во второй молча.
+ */
+export const relationDeleteInput = z
+  .object({
+    source_id: z.string().uuid(),
+    target_id: z.string().uuid(),
+    role: z.string().min(1),
+  })
+  .strict();
 
 export const batchExecuteInput = z
   .object({

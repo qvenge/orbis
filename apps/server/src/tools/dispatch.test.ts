@@ -993,7 +993,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
       operations: [
         {
           tool: 'relation_create',
-          input: { source_id: project.id, target_id: ticket.id, relation_type: 'parent' },
+          input: { source_id: project.id, target_id: ticket.id, role: 'ticket' },
         },
       ],
     });
@@ -1017,7 +1017,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
         },
       ],
       ['entity_create', { title: 'Сущность мимо назначения', tags: [] }],
-      ['relation_delete', { source_id: project.id, target_id: ticket.id, relation_type: 'parent' }],
+      ['relation_delete', { source_id: project.id, target_id: ticket.id, role: 'ticket' }],
     ];
     for (const [name, input] of calls) {
       expectError(await dispatchTool(worker(), name, input), 'FORBIDDEN_LEVEL');
@@ -1197,7 +1197,7 @@ describe('dispatchTool: глаголы исполнителя никогда н�
       operations: [
         {
           tool: 'relation_create',
-          input: { source_id: projectId, target_id: ticket.id, relation_type: 'parent' },
+          input: { source_id: projectId, target_id: ticket.id, role: 'ticket' },
         },
       ],
     });
@@ -2023,7 +2023,7 @@ describe('объектный пре-чек рутинной мутации (D42 
     });
     const ctx = rt(['relation_create', 'relation_delete']);
     const link = (tool: string, source: string, target: string) => [
-      { tool, input: { source_id: source, target_id: target, relation_type: 'related_to' } },
+      { tool, input: { source_id: source, target_id: target, role: 'mention' } },
     ];
     const check = (ops: Array<{ tool: string; input: Record<string, unknown> }>) =>
       routineDeferForbidden(ctx, ops, { grantsAutonomy: false }, []);

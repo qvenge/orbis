@@ -10,7 +10,7 @@
 // Фабрика, а не свободные функции: каждый сьют держит СВОЙ пул (`appDb()` + `client.end()`
 // в afterAll), и передавать `db` первым аргументом в каждый вызов значило бы повторять его
 // в каждой строке теста.
-import { newId, routineRunBatchId, routineRunId } from '@orbis/shared';
+import { newId, type RelationRoleId, routineRunBatchId, routineRunId } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { chatMessages, chatThreads, entities, relations } from '../db/schema';
@@ -32,7 +32,7 @@ export type AnyRecord = Record<string, unknown>;
 
 export interface AgentLoopHelpers {
   seedEntity: (owner: string, input: Record<string, unknown>) => Promise<WireEntity>;
-  link: (owner: string, parentId: string, childId: string) => Promise<void>;
+  link: (owner: string, sourceId: string, targetId: string, role: RelationRoleId) => Promise<void>;
   /** Старая карта аспектов строки (§А1-1): читает `aspects_legacy`. */
   aspectsOf: (owner: string, id: string) => Promise<Record<string, AnyRecord>>;
   /** Свойства строки по id (§А1-1) — то, чем аспекты сущности являются в новой форме. */
@@ -106,16 +106,25 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
     return r.results[0] as WireEntity;
   }
 
-  async function link(owner: string, parentId: string, childId: string): Promise<void> {
+  /**
+   * Ребро фикстуры по РОЛИ (§А4-3): «проект → тикет» это `ticket`, «тикет → прогон» —
+   * `run`, и различать их обязан сам сид. `mechanism: 'seed'` — потому что часть ролей
+   * системная (`run`): гейт `created_by` пропускает всё, кроме прямого действия владельца,
+   * а сид фикстуры действием владельца не является.
+   */
+  async function link(
+    owner: string,
+    sourceId: string,
+    targetId: string,
+    role: RelationRoleId,
+  ): Promise<void> {
     const r = await execute(db, {
       actorUserId: owner,
       actorKind: 'owner',
       source: 'ui',
+      mechanism: 'seed',
       operations: [
-        {
-          tool: 'relation_create',
-          input: { source_id: parentId, target_id: childId, relation_type: 'parent' },
-        },
+        { tool: 'relation_create', input: { source_id: sourceId, target_id: targetId, role } },
       ],
     });
     if (!r.ok) throw new Error(`link: ${r.error.code} ${r.error.message}`);
@@ -148,13 +157,13 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
     return row.props as AnyRecord;
   }
 
-  /** Дети сущности по связи parent (прогоны тикета). */
+  /** Прогоны сущности — связи роли `run` (§А4-3). */
   async function childrenOf(owner: string, parentId: string): Promise<string[]> {
     const rows = await withIdentity(db, owner, (tx) =>
       tx
         .select({ id: relations.targetId })
         .from(relations)
-        .where(and(eq(relations.sourceId, parentId), eq(relations.relationType, 'parent'))),
+        .where(and(eq(relations.sourceId, parentId), eq(relations.role, 'run'))),
     );
     return rows.map((r) => r.id);
   }
@@ -295,7 +304,7 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
         },
         {
           tool: 'relation_create',
-          input: { source_id: args.routineId, target_id: runId, relation_type: 'parent' },
+          input: { source_id: args.routineId, target_id: runId, role: 'run' },
         },
       ],
     });

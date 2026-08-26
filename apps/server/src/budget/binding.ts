@@ -9,6 +9,7 @@ import { eq, sql } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
+import { ROLE_ENVELOPE_BINDING } from '../executor/relations';
 import type { WireEntity } from '../executor/types';
 
 /** Дефолт схемы user_settings.defaultCurrency — фолбэк, пока строки настроек нет. */
@@ -33,6 +34,12 @@ export interface EnvelopeCombination {
 /** Строка батч-селектора: комбинация + ключ, под которым вызывающий ждёт ответ. */
 export interface EnvelopeQuery extends EnvelopeCombination {
   key: string;
+  /**
+   * Запись, которая конвертом для этой комбинации быть не может, — сама привязываемая
+   * транзакция (см. `targetBindingOps`). В общем случае не задаётся: комбинация одна на
+   * множество транзакций, и кэш селектора ключуется именно ею.
+   */
+  excludeId?: string;
 }
 
 /**
@@ -63,14 +70,16 @@ export async function selectEnvelopes(
   // Явные ::text — параметры VALUES без контекста типа PG вывести не может
   const values = unique.map(
     (r) =>
-      sql`(${r.key}::text, ${r.categoryRef}::text, ${r.currency}::text, ${r.occurredOn}::text)`,
+      sql`(${r.key}::text, ${r.categoryRef}::text, ${r.currency}::text, ${r.occurredOn}::text, ${r.excludeId ?? null}::uuid)`,
   );
   const rows = (await tx.execute(sql`
     SELECT q.k AS key, e.id AS id
-    FROM (VALUES ${sql.join(values, sql`, `)}) AS q(k, category_ref, currency, occurred_on)
+    FROM (VALUES ${sql.join(values, sql`, `)})
+      AS q(k, category_ref, currency, occurred_on, exclude_id)
     LEFT JOIN LATERAL (
       SELECT id FROM entities
       WHERE owner_id = ${args.ownerId} AND NOT archived
+        AND (q.exclude_id IS NULL OR id <> q.exclude_id)
         AND aspects_legacy->'orbis/budget'->>'category_ref' = q.category_ref
         AND coalesce(aspects_legacy->'orbis/budget'->>'currency', ${args.defaultCurrency}) = q.currency
         AND (aspects_legacy->'orbis/budget'->>'period_start') <= q.occurred_on
@@ -103,6 +112,8 @@ export async function selectEnvelope(
     occurredOn: string;
     /** Уже разрезолвленная дефолтная валюта — чтобы не перечитывать user_settings в циклах. */
     defaultCurrency?: string;
+    /** Запись, которая конвертом быть не может (сама привязываемая транзакция). */
+    excludeId?: string;
   },
 ): Promise<string | null> {
   const defCur = args.defaultCurrency ?? (await defaultCurrencyOf(tx, args.ownerId));
@@ -115,6 +126,7 @@ export async function selectEnvelope(
         categoryRef: args.categoryRef,
         currency: args.currency,
         occurredOn: args.occurredOn,
+        excludeId: args.excludeId,
       },
     ],
   });
@@ -144,7 +156,7 @@ export async function normalizeEnvelopeCurrency(
 /** Операция привязки, дописываемая executor'ом в тот же action (§2.3). */
 export interface BudgetOpDesc {
   tool: 'relation_create' | 'relation_delete';
-  input: { source_id: string; target_id: string; relation_type: 'parent' };
+  input: { source_id: string; target_id: string; role: typeof ROLE_ENVELOPE_BINDING };
 }
 
 /** orbis/schedule.recurrence на той же сущности — признак шаблона повторения (§3.1). */
@@ -153,9 +165,15 @@ function hasScheduleRecurrence(aspects: Record<string, Record<string, unknown>>)
 }
 
 /**
- * Живые budget-parent'ы НАБОРА транзакций одним запросом (parent-связи от сущностей
- * с orbis/budget, §4.2). Порядок source_id внутри транзакции — тот же ORDER BY, что
- * и у одиночного чтения; транзакция без родителей получает пустой массив.
+ * Живые привязки к конвертам для НАБОРА транзакций одним запросом (§2.3). Порядок source_id
+ * внутри транзакции — тот же ORDER BY, что и у одиночного чтения; транзакция без привязок
+ * получает пустой массив.
+ *
+ * С реформой (§А4-3) отбор идёт по РОЛИ ребра, а прежний join к аспектам источника снят:
+ * «конверт считает транзакцию» написано ролью `envelope-binding` и больше не выводится из
+ * `orbis/budget` у источника. Разница видима ровно в одном месте — ребро от источника,
+ * который бюджетом БЫТЬ ПЕРЕСТАЛ: раньше оно оставалось висеть невидимым для хука, теперь
+ * хук его видит и снимает. Это и есть уборка, ради которой роль заводилась.
  */
 async function budgetParentsOfMany(
   tx: Tx,
@@ -166,12 +184,10 @@ async function budgetParentsOfMany(
   if (unique.length === 0) return parents;
   const rows = (await tx.execute(sql`
     SELECT r.target_id, r.source_id FROM relations r
-    JOIN entities e ON e.id = r.source_id
     WHERE r.target_id IN (${sql.join(
       unique.map((id) => sql`${id}`),
       sql`, `,
-    )}) AND r.relation_type = 'parent'
-      AND e.aspects_legacy ? 'orbis/budget'
+    )}) AND r.role = ${ROLE_ENVELOPE_BINDING}
     ORDER BY r.target_id, r.source_id
   `)) as unknown as Array<{ target_id: string; source_id: string }>;
   for (const row of rows) parents.get(row.target_id)?.push(row.source_id);
@@ -328,27 +344,46 @@ async function targetBindingOps(
     const current = await reads.parentsOf(tx, txnId);
     return current.map((src) => ({
       tool: 'relation_delete' as const,
-      input: { source_id: src, target_id: txnId, relation_type: 'parent' as const },
+      input: { source_id: src, target_id: txnId, role: ROLE_ENVELOPE_BINDING },
     }));
   }
   const defCur = defaultCurrency ?? (await reads.defaultCurrency(tx, ownerId));
   const combination = combinationOf(target.fin, defCur);
   if (combination === null) return [];
-  const desired = await reads.envelopeOf(tx, { ownerId, defaultCurrency: defCur, combination });
+  let desired = await reads.envelopeOf(tx, { ownerId, defaultCurrency: defCur, combination });
+  if (desired === txnId) {
+    // Запись, которая ОДНОВРЕМЕННО транзакция и конверт, не считает сама себя: ребро в себя
+    // запрещено по построению (`rel_no_self`), а «конверт» здесь — она же. Раньше это было
+    // редкостью (нужно было вручную совпасть категорией), но с §А1-1 категория и валюта у
+    // транзакции и конверта — ОДНО свойство (В1), и `attach_orbis_budget` на транзакции с
+    // подходящим периодом попадал в себя ДЕТЕРМИНИРОВАННО: владелец получал
+    // `INVARIANT self_relation` вместо привязки.
+    //
+    // Селектор перезапускается с исключением, а не отдаёт `null`: транзакция обязана
+    // остаться в СВОЁМ конверте, если он есть, — иначе «пометил запись конвертом» тихо
+    // выкидывало бы её сумму из чужого бюджета. Запрос идёт мимо кэша `reads` намеренно:
+    // ключ кэша — комбинация, общая на множество транзакций, а исключение — своё у каждой.
+    desired = await selectEnvelope(tx, {
+      ownerId,
+      ...combination,
+      defaultCurrency: defCur,
+      excludeId: txnId,
+    });
+  }
   const current = await reads.parentsOf(tx, txnId);
   const ops: BudgetOpDesc[] = [];
   for (const src of current) {
     if (src !== desired) {
       ops.push({
         tool: 'relation_delete',
-        input: { source_id: src, target_id: txnId, relation_type: 'parent' },
+        input: { source_id: src, target_id: txnId, role: ROLE_ENVELOPE_BINDING },
       });
     }
   }
   if (desired !== null && !current.includes(desired)) {
     ops.push({
       tool: 'relation_create',
-      input: { source_id: desired, target_id: txnId, relation_type: 'parent' },
+      input: { source_id: desired, target_id: txnId, role: ROLE_ENVELOPE_BINDING },
     });
   }
   return ops;

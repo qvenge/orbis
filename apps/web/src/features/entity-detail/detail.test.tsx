@@ -367,7 +367,7 @@ test('подзадачи: список из entity.get; после создан�
                   id: 'r1',
                   sourceId: 'e1',
                   targetId: childId,
-                  relationType: 'parent',
+                  role: 'subitem',
                   meta: {},
                   createdAt: '2026-07-05T00:00:00.000Z',
                   updatedAt: '2026-07-05T00:00:00.000Z',
@@ -386,7 +386,7 @@ test('подзадачи: список из entity.get; после создан�
         id: 'r1',
         sourceId: 'e1',
         targetId: childId,
-        relationType: 'parent',
+        role: 'subitem',
         meta: {},
         createdAt: '2026-07-05T00:00:00.000Z',
         updatedAt: '2026-07-05T00:00:00.000Z',
@@ -439,7 +439,7 @@ test('создание подзадачи инвалидирует entity.query 
           id: 'r1',
           sourceId: 'e1',
           targetId: target_id,
-          relationType: 'parent',
+          role: 'subitem',
           meta: {},
           createdAt: '2026-07-05T00:00:00.000Z',
           updatedAt: '2026-07-05T00:00:00.000Z',
@@ -463,6 +463,12 @@ test('создание подзадачи инвалидирует entity.query 
   fireEvent.keyDown(field, { key: 'Enter' });
 
   await waitFor(() => expect(probes().length).toBeGreaterThan(1));
+  // Роль связи — `subitem` (§А4-3): по ней же секция и отбирает детей, поэтому чужая роль
+  // означала бы «подзадача создана, но в списке её нет»
+  expect(calls.find((c) => c.path === 'relation.create')?.input).toMatchObject({
+    source_id: 'e1',
+    role: 'subitem',
+  });
 });
 
 // Частичный отказ: entity.create прошёл, relation.create упал. Задача СОЗДАНА, и списки
@@ -1467,7 +1473,7 @@ const richHandler: MockHandler = (path, input) => {
           id: 'r1',
           sourceId: 'e1',
           targetId: 'kid',
-          relationType: 'parent',
+          role: 'subitem',
           meta: {},
           createdAt: 'x',
           updatedAt: 'y',
@@ -2828,14 +2834,15 @@ describe('ADE: тикет', () => {
     expect(screen.getByLabelText('Ответ')).toHaveValue('');
   });
 
-  test('прогон не стоит строкой в «Подзадачах» — там только настоящие подзадачи', async () => {
-    // Прогон — такой же ребёнок тикета по связи parent (verbs.ts), и без отсева служебных
-    // аспектов он показывался бы дважды: строкой подзадачи и строкой своей секции.
-    const relation = (targetId: string) => ({
+  test('прогон не стоит строкой в «Подзадачах» — их разводит РОЛЬ ребра, а не аспект записи', async () => {
+    // До реформы прогон был таким же ребёнком тикета по схлопнутому `parent` (verbs.ts), и
+    // развести его с подзадачей можно было только дочитав ЗАПИСЬ ребёнка. Теперь разница
+    // написана на ребре: подзадача — `subitem`, прогон — `run`.
+    const relation = (targetId: string, role: string) => ({
       id: `rel-${targetId}`,
       sourceId: 't1',
       targetId,
-      relationType: 'parent',
+      role,
       meta: {},
       createdAt: '2026-08-17T10:00:00.000Z',
       updatedAt: '2026-08-17T10:00:00.000Z',
@@ -2851,7 +2858,11 @@ describe('ADE: тикет', () => {
         const { id } = input as { id: string };
         if (id === 's1') return { entity: subtask, relations: [], thread: null };
         if (id === 'r1') return { entity: RUN, relations: [], thread: null };
-        return { entity: TICKET, relations: [relation('s1'), relation('r1')], thread: null };
+        return {
+          entity: TICKET,
+          relations: [relation('s1', 'subitem'), relation('r1', 'run')],
+          thread: null,
+        };
       }
       if (path === 'entity.query') return [RUN];
       if (path === 'oauth.listGrants') return [GRANT];
@@ -2860,8 +2871,8 @@ describe('ADE: тикет', () => {
       return {};
     });
     const details = await screen.findByRole('tabpanel', { name: 'Детали' });
-    // Прогон уезжает из подзадач, как только приехала его запись: до этого он неотличим от
-    // обычного ребёнка, и прятать его заранее было бы гаданием.
+    // Прогон не попадает в подзадачи НИ НА ОДНОМ кадре: роль известна из самой связи, и
+    // дочитывать запись ребёнка, чтобы это выяснить, больше не нужно.
     await waitFor(() => expect(within(details).getAllByTestId('subtask')).toHaveLength(1));
     expect(within(details).getByTestId('subtask')).toHaveTextContent('Написать тест');
     expect(within(details).getByText('Подзадачи (1)')).toBeInTheDocument();

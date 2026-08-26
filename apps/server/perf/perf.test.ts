@@ -222,12 +222,12 @@ test('фикстура наполнена: гейт меряет данные, �
 
   // fast-path: мерить надо ПОЛНЫЙ путь — вставку плюс бюджет-хук. Проверяем не то, что
   // create прошёл (он пройдёт и без конверта), а то, что транзакция реально привязана:
-  // связь `parent` от конверта (03-budget §2.3). Без неё замер молча съезжает на более
-  // дешёвый путь, и гейт остаётся зелёным при вдвое меньшей работе.
+  // связь роли `envelope-binding` от конверта (03-budget §2.3). Без неё замер молча съезжает
+  // на более дешёвый путь, и гейт остаётся зелёным при вдвое меньшей работе.
   const txn = await caller.entity.create(fastPathCreateInput());
   const bound = await caller.entity.get({ id: txn.id, include: ['relations'] });
   const parent = (bound.relations ?? []).find(
-    (r) => r.relationType === 'parent' && r.targetId === txn.id,
+    (r) => r.role === 'envelope-binding' && r.targetId === txn.id,
   );
   expect(parent).toBeDefined();
   const envelope = await caller.entity.get({ id: parent?.sourceId ?? '', include: [] });

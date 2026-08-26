@@ -31,7 +31,7 @@ import {
   canonicalizeBody,
   DOC_SCHEMA_VERSION,
 } from '@orbis/shared/doc';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   assertEnvelopeUnique,
@@ -56,23 +56,18 @@ import { toWireEntity as toWire, toWireRelation } from '../wire';
 import { assertEntityProps } from './aspects-validate';
 import { ExecError } from './errors';
 import {
-  assertAcyclicBlocks,
   assertAssignment,
-  assertNoDuplicateRelation,
   assertRoutineRelationUntouchable,
   assertRoutineUntouchable,
   assertRunSubject,
-  assertSingleBudgetParent,
-  duplicateRelationError,
-  type RelationKey,
   resolveEntityTitles,
-  type VirtualGraphEffects,
 } from './invariants';
 import {
   fromLegacyInput,
   hasPropsInput,
   legacyReplaceToProps,
   projectLegacyAspects,
+  projectLegacyRelationType,
 } from './legacy-form';
 import {
   type AspectsMap,
@@ -97,6 +92,18 @@ import {
   touchedProperties,
   writableOnly,
 } from './props';
+import {
+  assertNoDuplicateRelation,
+  assertRoleConstraints,
+  assertTargetMaxIncoming,
+  duplicateRelationError,
+  LEGACY_PARENT_ROLES,
+  type RelationKey,
+  ROLE_ENVELOPE_BINDING,
+  ROLE_INSTANCE_OF,
+  sameRelationKey,
+  type VirtualGraphEffects,
+} from './relations';
 import type {
   ActionOperation,
   ActionRecord,
@@ -172,10 +179,10 @@ interface PreparedOp {
 class BatchState {
   /** Строки сущностей ПОСЛЕ эффектов предыдущих операций batch (created/updated/attach). */
   readonly entities = new Map<string, EntityRow>();
-  readonly createdRelations: Array<RelationKey & { sourceHasBudget: boolean }> = [];
+  readonly createdRelations: RelationKey[] = [];
   readonly deletedRelations: RelationKey[] = [];
   /**
-   * target'ы derived_from-связей, объявленных ЛЮБОЙ операцией batch: batch атомарен,
+   * target'ы связей роли `instance-of`, объявленных ЛЮБОЙ операцией batch: batch атомарен,
    * поэтому financial-инвариант (§3.3) легитимируется связью независимо от её позиции.
    */
   readonly declaredDerivedFromTargets: ReadonlySet<string>;
@@ -519,7 +526,7 @@ function replayFromAudit(batchId: string, saved: JournalWrite): ExecuteResult {
   };
 }
 
-/** target'ы derived_from из envelope'ов relation_create — по ВСЕМ операциям batch (§3.3). */
+/** target'ы роли `instance-of` из envelope'ов relation_create — по ВСЕМ операциям batch (§3.3). */
 function collectDeclaredDerivedFrom(ops: Array<{ tool: string; input: unknown }>): Set<string> {
   const targets = new Set<string>();
   for (const op of ops) {
@@ -527,7 +534,7 @@ function collectDeclaredDerivedFrom(ops: Array<{ tool: string; input: unknown }>
     // Внутренняя форма шире публичной (meta опциональна): для публичных input'ов
     // различий нет, а inverse-операции undo несут meta — пре-пасс не должен их терять
     const parsed = relationCreateInternalInput.safeParse(op.input);
-    if (parsed.success && parsed.data.relation_type === 'derived_from') {
+    if (parsed.success && parsed.data.role === ROLE_INSTANCE_OF) {
       targets.add(parsed.data.target_id);
     }
   }
@@ -879,11 +886,17 @@ async function applyBudgetFollowUps(ctx: ExecCtx, hooks: BudgetHook[]): Promise<
   }
   if (targets.length > 0) await reads.prefetch(ctx.tx, { ownerId, targets });
 
+  // Механизм операций хука ПРОСТАВЛЯЕТСЯ ЯВНО (§А4-4). Хук не зовёт `execute` — он строит
+  // операции через `prepareOp` в ТОМ ЖЕ ctx и без этой строки унаследовал бы механизм
+  // вызывающего (для правки владельца в UI — `user`). Гейт `created_by: 'system'` роли
+  // `envelope-binding` тогда отказал бы системе в её собственной привязке: владелец правил
+  // бы категорию транзакции и получал ROLE_SYSTEM_ONLY на операции, которой не просил.
+  const hookCtx: ExecCtx = { ...ctx, mechanism: 'hook' };
   const applied: PreparedOp[] = [];
   for (const [i, hook] of hooks.entries()) {
     for (const desc of await budgetFollowUpDescs(ctx, hook, reads, branches[i])) {
-      const plan = await prepareOp(ctx, desc.tool, desc.input);
-      await plan.apply(ctx);
+      const plan = await prepareOp(hookCtx, desc.tool, desc.input);
+      await plan.apply(hookCtx);
       reads.invalidateParents(desc.input.target_id);
       applied.push(plan);
     }
@@ -1087,13 +1100,12 @@ async function hasIncomingDerivedFrom(
   const rows = await ctx.tx
     .select({ sourceId: relations.sourceId })
     .from(relations)
-    .where(and(eq(relations.targetId, entityId), eq(relations.relationType, 'derived_from')));
+    .where(and(eq(relations.targetId, entityId), eq(relations.role, ROLE_INSTANCE_OF)));
   const deleted = batch?.deletedRelations ?? [];
   return rows.some(
     (r) =>
       !deleted.some(
-        (d) =>
-          d.sourceId === r.sourceId && d.targetId === entityId && d.relationType === 'derived_from',
+        (d) => d.sourceId === r.sourceId && d.targetId === entityId && d.role === ROLE_INSTANCE_OF,
       ),
   );
 }
@@ -1857,41 +1869,55 @@ async function prepareAttach(
 }
 
 /**
- * Стадия 4 attach orbis/budget (§4.2/§13.7): у каждого financial-ребёнка сущности
- * (исходящие parent-связи, включая созданные/минус удалённые тем же batch) не должно
- * быть ДРУГОГО budget-parent'а — иначе attach ретроспективно создал бы второй конверт.
- * Строки детей берутся под замок (loadEntityForUpdate), сама проверка — переиспользование
- * assertSingleBudgetParent: тот же row-lock target'а и тот же INVARIANT-отказ.
+ * Стадия 4 attach orbis/budget (§4.2/§13.7) — ВТОРОЙ ВХОД в ограничение роли, и он остаётся
+ * кодом до части Б (правило Б-2).
+ *
+ * Почему он не выражается ролью. `target_max_incoming` роли `envelope-binding` смотрит на
+ * рёбра ЦЕЛИ и срабатывает на создании ребра. Здесь ребра не создаются вовсе: меняется
+ * АСПЕКТ ИСТОЧНИКА. Пока жива переходная колонка, «X стал конвертом» ретроспективно делает
+ * budget-parent'ами все его исходящие рёбра, проецирующиеся в `parent` (`budgetParentsOfMany`
+ * и агрегаты §2.10 читают именно её), — и у financial-ребёнка их оказывается два.
+ *
+ * Отсюда фильтр по `LEGACY_PARENT_ROLES`, а не по одной роли `envelope-binding`: ретроспектива
+ * живёт ровно на том множестве, которое видит старая колонка. Сама проверка — то же
+ * `assertTargetMaxIncoming` роли конверта: тот же row-lock цели и тот же INVARIANT-отказ.
  */
 async function assertBudgetAttachKeepsSingleParent(
   ctx: ExecCtx,
   entityId: string,
   batch?: BatchState,
 ): Promise<void> {
+  // Порог берётся из реестра, а не пишется здесь числом: ослабив ограничение роли,
+  // владелец обязан ослабить и ретроспективу — иначе она запрещала бы разрешённое.
+  const roleDef = ctx.registry.roles.get(ROLE_ENVELOPE_BINDING);
+  const max = roleDef?.constraints.target_max_incoming;
+  if (max === undefined) return;
+  const parentRoles = LEGACY_PARENT_ROLES as readonly string[];
   const rows = await ctx.tx
-    .select({ targetId: relations.targetId })
+    .select({ targetId: relations.targetId, role: relations.role })
     .from(relations)
-    .where(and(eq(relations.sourceId, entityId), eq(relations.relationType, 'parent')));
+    .where(and(eq(relations.sourceId, entityId), inArray(relations.role, [...parentRoles])));
   const deleted = batch?.deletedRelations ?? [];
   const childIds = new Set(
     rows
-      .map((r) => r.targetId)
       .filter(
-        (t) =>
+        (r) =>
           !deleted.some(
-            (d) => d.sourceId === entityId && d.targetId === t && d.relationType === 'parent',
+            (d) => d.sourceId === entityId && d.targetId === r.targetId && d.role === r.role,
           ),
-      ),
+      )
+      .map((r) => r.targetId),
   );
   for (const c of batch?.createdRelations ?? []) {
-    if (c.relationType === 'parent' && c.sourceId === entityId) childIds.add(c.targetId);
+    if (parentRoles.includes(c.role) && c.sourceId === entityId) childIds.add(c.targetId);
   }
   // FOR UPDATE в детерминированном порядке id — меньше дедлоков при перекрёстных
   // операциях над теми же детьми (как loadBothEndsForUpdate)
   for (const childId of [...childIds].sort()) {
     const child = await loadEntityForUpdate(ctx, childId, batch);
     if (!child || !hasAspect(child, 'orbis/financial')) continue;
-    await assertSingleBudgetParent(ctx.tx, entityId, childId, batch?.graph());
+    const key: RelationKey = { sourceId: entityId, targetId: childId, role: ROLE_ENVELOPE_BINDING };
+    await assertTargetMaxIncoming(ctx.tx, key, roleDef, max, batch?.graph());
   }
 }
 
@@ -1925,6 +1951,15 @@ async function loadBothEndsForUpdate(
 
 function hasAspect(row: EntityRow, aspectId: string): boolean {
   return row.aspects.includes(aspectId);
+}
+
+/**
+ * Подпись роли для карточки журнала (Ч10-С3): её даёт РЕЕСТР, а не строка кода. Неизвестная
+ * роль до карточки не доезжает (стадия 4 её отвергает) — фолбэк на id стоит ради
+ * до-реформенных action'ов, которые читает лента.
+ */
+function roleTitle(ctx: ExecCtx, role: string): string {
+  return ctx.registry.roles.get(role)?.label.ru ?? role;
 }
 
 /** Новая правда строки (§А1-1) как её видят слияние и доменные инварианты. */
@@ -1973,7 +2008,7 @@ async function prepareRelationCreate(
   const key: RelationKey = {
     sourceId: input.source_id,
     targetId: input.target_id,
-    relationType: input.relation_type,
+    role: input.role,
   };
 
   // Самосвязь — превентивно (честный текст вместо CHECK rel_no_self со стадии 5)
@@ -1994,60 +2029,50 @@ async function prepareRelationCreate(
     source: source.aspects,
     target: target.aspects,
   });
-  if (batch) await assertNoDuplicateRelation(ctx.tx, key, batch.graph()); // batch: дубль ловим ДО записи
-  if (key.relationType === 'blocks') {
-    await assertAcyclicBlocks(
-      ctx.tx,
-      ctx.req.actorUserId,
-      key.sourceId,
-      key.targetId,
-      batch?.graph(),
-    );
-  }
-  const sourceHasBudget = hasAspect(source, 'orbis/budget');
-  if (key.relationType === 'parent' && sourceHasBudget && hasAspect(target, 'orbis/financial')) {
-    await assertSingleBudgetParent(ctx.tx, key.sourceId, key.targetId, batch?.graph());
-  }
+  // Ограничения роли по реестру (§А4-2): acyclic, target_max_incoming, гейт created_by.
+  // Аспекты концов здесь больше не спрашиваются — смысл ребра написан его ролью.
+  // Идёт ПЕРВОЙ: она же проверяет, что роль вообще существует, а проверка дубля ниже уже
+  // считает её проекцию в старую колонку и на несуществующей роли упала бы голым Error.
+  await assertRoleConstraints(ctx.tx, ctx.registry, key, batch?.graph(), {
+    ownerId: ctx.req.actorUserId,
+    mechanism: ctx.mechanism,
+    undoReplay: ctx.internalUndo !== undefined,
+  });
+  // Дубль ловим ДО записи на ОБОИХ путях (не только в batch): под `rel_uniq` до 0017
+  // попадают две разные роли, и различить их случаи можно только пока транзакция жива.
+  await assertNoDuplicateRelation(ctx.tx, ctx.registry, key, batch?.graph());
   gateEntitlements(ctx, 'relation_create');
 
   const id = newId();
   const now = ctx.clock();
 
   // Эффект batch: связь видна проверкам следующих операций
-  batch?.createdRelations.push({ ...key, sourceHasBudget });
+  batch?.createdRelations.push(key);
 
   const journal: JournalPlan = {
     type: 'relation_created',
     entityId: key.sourceId,
     tool: 'relation_create',
-    title: `${key.relationType}: «${source.title}» → «${target.title}»`,
+    // Подпись роли — из реестра (Ч10-С3): её пишет определение, а не UI и не executor
+    title: `${roleTitle(ctx, key.role)}: «${source.title}» → «${target.title}»`,
     operations: [
       {
         op: 'relation_create',
-        payload: {
-          id,
-          source_id: key.sourceId,
-          target_id: key.targetId,
-          relation_type: key.relationType,
-        },
+        payload: { id, source_id: key.sourceId, target_id: key.targetId, role: key.role },
       },
     ],
     // §7.8: создание relation → её удаление
     inverse: [
       {
         op: 'relation_delete',
-        payload: {
-          source_id: key.sourceId,
-          target_id: key.targetId,
-          relation_type: key.relationType,
-        },
+        payload: { source_id: key.sourceId, target_id: key.targetId, role: key.role },
       },
     ],
   };
 
   return {
     journal,
-    // Стадия 5: вставка; повтор тройки под гонкой — 23505 rel_uniq → структурированная
+    // Стадия 5: вставка; повтор под гонкой — 23505 rel_uniq → структурированная
     // INVARIANT/duplicate_relation, не 500 (§4.2)
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       try {
@@ -2057,7 +2082,10 @@ async function prepareRelationCreate(
             id,
             sourceId: key.sourceId,
             targetId: key.targetId,
-            relationType: key.relationType,
+            role: key.role,
+            // ПЕРЕХОДНОЕ (до 0017): старая колонка пишется ПРОЕКЦИЕЙ роли и только здесь —
+            // другого писателя у неё нет, поэтому разъехаться с ролью она не может
+            relationType: projectLegacyRelationType(key.role),
             meta,
             createdAt: now,
             updatedAt: now,
@@ -2068,7 +2096,11 @@ async function prepareRelationCreate(
         return { result: toWireRelation(row) };
       } catch (e) {
         const pg = pgErrorInfo(e);
-        if (pg.code === '23505' && pg.constraint === 'rel_uniq') throw duplicateRelationError(key);
+        // Вторая линия под гонкой: пре-чек выше отработал до вставки, но конкурент мог
+        // закоммитить свою строку между стадиями 4 и 5.
+        if (pg.code === '23505' && pg.constraint === 'rel_uniq') {
+          throw duplicateRelationError(key, applyCtx.registry.roles.get(key.role));
+        }
         throw e;
       }
     },
@@ -2088,12 +2120,9 @@ async function prepareRelationDelete(
   const key: RelationKey = {
     sourceId: input.source_id,
     targetId: input.target_id,
-    relationType: input.relation_type,
+    role: input.role,
   };
-  const matchesKey = (k: RelationKey) =>
-    k.sourceId === key.sourceId &&
-    k.targetId === key.targetId &&
-    k.relationType === key.relationType;
+  const matchesKey = (k: RelationKey) => sameRelationKey(k, key);
 
   // Стадия 3, ЧАСТЬ ПЕРВАЯ: концы связи под замком — только для источника routine (V1.10).
   // Порядок захвата замков во всём executor'е — «сущности → связь»: prepareRelationCreate
@@ -2118,7 +2147,7 @@ async function prepareRelationDelete(
         and(
           eq(relations.sourceId, key.sourceId),
           eq(relations.targetId, key.targetId),
-          eq(relations.relationType, key.relationType),
+          eq(relations.role, key.role),
         ),
       )
       .for('update');
@@ -2160,15 +2189,11 @@ async function prepareRelationDelete(
     type: 'relation_deleted',
     entityId: key.sourceId,
     tool: 'relation_delete',
-    title: `удалена ${key.relationType}: «${titles.get(key.sourceId) ?? key.sourceId}» → «${titles.get(key.targetId) ?? key.targetId}»`,
+    title: `удалена ${roleTitle(ctx, key.role)}: «${titles.get(key.sourceId) ?? key.sourceId}» → «${titles.get(key.targetId) ?? key.targetId}»`,
     operations: [
       {
         op: 'relation_delete',
-        payload: {
-          source_id: key.sourceId,
-          target_id: key.targetId,
-          relation_type: key.relationType,
-        },
+        payload: { source_id: key.sourceId, target_id: key.targetId, role: key.role },
       },
     ],
     // §7.8: удаление relation → её пересоздание (meta сохраняется в inverse)
@@ -2178,7 +2203,7 @@ async function prepareRelationDelete(
         payload: {
           source_id: key.sourceId,
           target_id: key.targetId,
-          relation_type: key.relationType,
+          role: key.role,
           meta: existingMeta,
         },
       },
@@ -2187,7 +2212,8 @@ async function prepareRelationDelete(
 
   return {
     journal,
-    // Стадия 5: DELETE по тройке (строка под замком стадии 3 либо вставлена этим же batch)
+    // Стадия 5: DELETE по паре концов и роли (строка под замком стадии 3 либо вставлена
+    // этим же batch)
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const deleted = await applyCtx.tx
         .delete(relations)
@@ -2195,7 +2221,7 @@ async function prepareRelationDelete(
           and(
             eq(relations.sourceId, key.sourceId),
             eq(relations.targetId, key.targetId),
-            eq(relations.relationType, key.relationType),
+            eq(relations.role, key.role),
           ),
         )
         .returning();

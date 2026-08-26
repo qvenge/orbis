@@ -48,7 +48,7 @@ function createOp(): Operation {
 function relationOp(): Operation {
   return {
     tool: 'relation_create',
-    input: { source_id: TARGET, target_id: OTHER, relation_type: 'blocks' },
+    input: { source_id: TARGET, target_id: OTHER, role: 'dependency' },
   };
 }
 

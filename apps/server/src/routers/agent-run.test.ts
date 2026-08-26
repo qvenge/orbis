@@ -85,7 +85,7 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
         'orbis/assignment': { executor: 'agent', grant_id: grantId },
       },
     });
-    await link(owner, projectId, ticket.id);
+    await link(owner, projectId, ticket.id, 'ticket');
     return ticket.id;
   }
 
@@ -278,7 +278,7 @@ describe('agentRun.sweep (С6)', () => {
         },
       },
     });
-    await link(owner, ticket.id, run.id);
+    await link(owner, ticket.id, run.id, 'run');
     return { ticketId: ticket.id, runId: run.id };
   }
 

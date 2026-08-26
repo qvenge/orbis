@@ -524,7 +524,7 @@ describe('entity.get: прогресс приезжает с целью и то�
       await caller.relation.create({
         source_id: goal.id,
         target_id: child.id,
-        relation_type: 'parent',
+        role: 'subitem',
       });
     }
 

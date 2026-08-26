@@ -95,7 +95,7 @@ describe('orbis_my_queue: очередь исполнителя (§9.3, С7)', (
         },
       })
     ).id;
-    await link(owner, projectId, ticketId);
+    await link(owner, projectId, ticketId, 'ticket');
     await seedEntity(owner, {
       title: 'Тикет другого исполнителя',
       tags: [],
@@ -185,7 +185,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
         },
       })
     ).id;
-    await link(owner, projectId, id);
+    await link(owner, projectId, id, 'ticket');
     return id;
   }
 
@@ -443,7 +443,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
         },
       },
     });
-    await link(owner, ticketId, past.id);
+    await link(owner, ticketId, past.id, 'run');
 
     const c = okResult<ClaimTaskResult>(
       await dispatchTool(worker(owner, grantId), 'orbis_claim_task', { ticket_id: ticketId }),

@@ -113,13 +113,13 @@ test('мутации графа/журнала под агентом: entity/rel
       caller.relation.create({
         source_id: uuid,
         target_id: crypto.randomUUID(),
-        relation_type: 'related_to',
+        role: 'mention',
       }),
     () =>
       caller.relation.delete({
         source_id: uuid,
         target_id: crypto.randomUUID(),
-        relation_type: 'related_to',
+        role: 'mention',
       }),
     () => caller.chat.ensureThread({}),
     () => caller.chat.appendUserMessage({ id: crypto.randomUUID(), threadId: uuid, content: 'x' }),

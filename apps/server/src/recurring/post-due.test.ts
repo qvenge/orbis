@@ -337,7 +337,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
         req(user, 'relation_delete', {
           source_id: envelopeId,
           target_id: instanceId,
-          relation_type: 'parent',
+          role: 'envelope-binding',
         }),
         { sink },
       ),

@@ -1959,7 +1959,7 @@ describe('V1: источник routine не трогает рутины и на�
         db,
         req(
           'relation_create',
-          { source_id: target.id, target_id: runEntity.id, relation_type: 'parent' },
+          { source_id: target.id, target_id: runEntity.id, role: 'run' },
           asRoutine,
         ),
       ),
@@ -1968,7 +1968,7 @@ describe('V1: источник routine не трогает рутины и на�
       db,
       req(
         'relation_create',
-        { source_id: target.id, target_id: runEntity.id, relation_type: 'parent' },
+        { source_id: target.id, target_id: runEntity.id, role: 'run' },
         asAccounting,
       ),
     );
@@ -1980,7 +1980,7 @@ describe('V1: источник routine не трогает рутины и на�
         db,
         req(
           'relation_delete',
-          { source_id: target.id, target_id: runEntity.id, relation_type: 'parent' },
+          { source_id: target.id, target_id: runEntity.id, role: 'run' },
           asRoutine,
         ),
       ),
@@ -1989,7 +1989,7 @@ describe('V1: источник routine не трогает рутины и на�
       db,
       req(
         'relation_delete',
-        { source_id: target.id, target_id: runEntity.id, relation_type: 'parent' },
+        { source_id: target.id, target_id: runEntity.id, role: 'run' },
         asAccounting,
       ),
     );
@@ -2180,7 +2180,7 @@ describe('V1: источник routine не трогает рутины и на�
         db,
         req(
           'relation_create',
-          { source_id: note.id, target_id: runEntity.id, relation_type: 'related_to' },
+          { source_id: note.id, target_id: runEntity.id, role: 'mention' },
           asRoutine,
         ),
       ),

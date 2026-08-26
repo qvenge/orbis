@@ -56,6 +56,7 @@ import { ExecError, type ExecErrorCode, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { propertyOfLegacyField } from '../executor/legacy-form';
+import { ROLE_RUN } from '../executor/relations';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
 import type { LLMProvider } from '../llm/types';
 import {
@@ -920,7 +921,7 @@ async function createRun(
         },
         {
           tool: 'relation_create',
-          input: { source_id: args.routine.id, target_id: runId, relation_type: 'parent' },
+          input: { source_id: args.routine.id, target_id: runId, role: ROLE_RUN },
         },
       ],
     },
@@ -2672,7 +2673,7 @@ function relationRow(
 ): ProposalOperationView {
   const sourceId = String(op.input.source_id);
   const targetId = String(op.input.target_id);
-  const type = String(op.input.relation_type);
+  const role = String(op.input.role);
   const from = titleOf(titles, sourceId);
   const to = titleOf(titles, targetId);
   const verb = op.tool === 'relation_create' ? 'Связь' : 'Убрать связь';
@@ -2680,7 +2681,7 @@ function relationRow(
     index,
     tool: op.tool,
     entity: { id: sourceId, title: from },
-    summary: `${verb} ${type}: «${from}» → «${to}»`,
+    summary: `${verb} ${role}: «${from}» → «${to}»`,
   };
 }
 

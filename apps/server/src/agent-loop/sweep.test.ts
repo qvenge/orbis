@@ -69,7 +69,7 @@ async function seedRun(
       },
     },
   });
-  await link(owner, ticket.id, run.id);
+  await link(owner, ticket.id, run.id, 'run');
   return { ticketId: ticket.id, runId: run.id };
 }
 

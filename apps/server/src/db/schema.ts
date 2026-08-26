@@ -112,6 +112,19 @@ export const relations = pgTable(
     targetId: uuid('target_id')
       .notNull()
       .references(() => entities.id, { onDelete: 'cascade' }),
+    /**
+     * Роль ребра (§А4-3) — ЕДИНСТВЕННАЯ его правда: id строки реестра
+     * `relation_role_definitions`. Пять сегодняшних смыслов `parent` («часть внутри
+     * целого», «тикет проекта», «прогон», «транзакция в конверте», «дерево категорий»)
+     * различаются здесь поимённо, а не догадкой по аспектам концов.
+     */
+    role: text('role').notNull(),
+    /**
+     * ПРОИЗВОДНОЕ от роли (`projectLegacyRelationType`) и переходная колонка: её ещё
+     * читают компилятор запросов, бюджет, agent-loop и импорт. Писать её напрямую
+     * нельзя — она пересчитывается из роли на каждой вставке. Снимает contract-миграция
+     * 0017 вместе с `rel_uniq` по этой тройке.
+     */
     relationType: text('relation_type').notNull(), // parent | blocks | related_to | derived_from
     meta: jsonb('meta').notNull().default({}),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

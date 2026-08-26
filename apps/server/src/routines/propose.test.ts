@@ -531,16 +531,16 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       { tool: 'entity_update', input: { id: runId, title: 'Переписать прогон' } },
       {
         tool: 'relation_create',
-        input: { source_id: taskId, target_id: runId, relation_type: 'related_to' },
+        input: { source_id: taskId, target_id: runId, role: 'mention' },
       },
       // По БД: связь одним концом упирается в рутину
       {
         tool: 'relation_create',
-        input: { source_id: routineId, target_id: taskId, relation_type: 'parent' },
+        input: { source_id: routineId, target_id: taskId, role: 'subitem' },
       },
       {
         tool: 'relation_delete',
-        input: { source_id: taskId, target_id: routineId, relation_type: 'related_to' },
+        input: { source_id: taskId, target_id: routineId, role: 'mention' },
       },
     ];
 

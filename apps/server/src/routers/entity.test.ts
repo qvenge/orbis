@@ -301,14 +301,14 @@ describe('relation.create / relation.delete / relation.listFor (§4.2)', () => {
     const ab = await caller.relation.create({
       source_id: a.id,
       target_id: b.id,
-      relation_type: 'related_to',
+      role: 'mention',
     });
     expect(ab.sourceId).toBe(a.id);
     expect(ab.createdAt.endsWith('Z')).toBe(true);
     const ca = await caller.relation.create({
       source_id: c.id,
       target_id: a.id,
-      relation_type: 'parent',
+      role: 'subitem',
     });
 
     // обе стороны: A — source в ab и target в ca
@@ -320,7 +320,7 @@ describe('relation.create / relation.delete / relation.listFor (§4.2)', () => {
 
     // самосвязь — INVARIANT → UNPROCESSABLE_CONTENT
     const self = await trpcError(
-      caller.relation.create({ source_id: a.id, target_id: a.id, relation_type: 'related_to' }),
+      caller.relation.create({ source_id: a.id, target_id: a.id, role: 'mention' }),
     );
     expect(self.code).toBe('UNPROCESSABLE_CONTENT');
     expect((self.cause as unknown as { code: string }).code).toBe('INVARIANT');
@@ -330,14 +330,14 @@ describe('relation.create / relation.delete / relation.listFor (§4.2)', () => {
       await caller.relation.delete({
         source_id: a.id,
         target_id: b.id,
-        relation_type: 'related_to',
+        role: 'mention',
       }),
     ).toEqual({ ok: true });
     expect((await caller.relation.listFor({ entityId: a.id })).map((r) => r.id)).toEqual([ca.id]);
 
     // повторное удаление — NOT_FOUND
     const gone = await trpcError(
-      caller.relation.delete({ source_id: a.id, target_id: b.id, relation_type: 'related_to' }),
+      caller.relation.delete({ source_id: a.id, target_id: b.id, role: 'mention' }),
     );
     expect(gone.code).toBe('NOT_FOUND');
   });

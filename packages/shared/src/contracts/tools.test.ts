@@ -1,5 +1,6 @@
 // Юнит-тесты envelope-схем тулов §9.2: позитив + негативы (strict-лишний ключ, невалидный uuid).
 import { describe, expect, test } from 'bun:test';
+import { RELATION_ROLE_IDS } from '../constants';
 import {
   attachAspectInput,
   batchExecuteInput,
@@ -180,20 +181,44 @@ describe('attachAspectInput', () => {
 describe('relationCreateInput / relationDeleteInput', () => {
   const base = { source_id: UUID, target_id: '019e4466-2000-7e07-b5d4-64be9721da52' };
 
-  test('все четыре relation_type принимаются, прочее — нет', () => {
-    for (const t of ['parent', 'blocks', 'related_to', 'derived_from']) {
-      expect(relationCreateInput.safeParse({ ...base, relation_type: t }).success).toBe(true);
+  test('ребро несёт role: встроенная и кастомная роль принимаются, старый relation_type — нет', () => {
+    for (const role of [...RELATION_ROLE_IDS, 'my/своя-роль']) {
+      expect(relationCreateInput.safeParse({ ...base, role }).success).toBe(true);
     }
-    expect(relationCreateInput.safeParse({ ...base, relation_type: 'linked' }).success).toBe(false);
+    // Контракт роль НЕ сужает (реестр расширяем владельцем, §А4-2) — но пустая строка
+    // не роль, а старое поле типа отклоняется strict'ом: путь «забыли перевести» громкий
+    expect(relationCreateInput.safeParse({ ...base, role: '' }).success).toBe(false);
+    expect(relationCreateInput.safeParse({ ...base, relation_type: 'parent' }).success).toBe(false);
   });
 
-  test('delete — та же схема, что create (§9.2)', () => {
-    expect(relationDeleteInput).toBe(relationCreateInput);
+  // Тождество `toBe` снято реформой: у создания и удаления разошлись внутренние формы
+  // (у create есть undo-надмножество с `meta`), и общий объект тянул бы правку одного
+  // контракта во второй молча. Сравнивать сами схемы глубоким равенством нельзя — у zod
+  // внутри функции, и `toEqual` падает на любых двух экземплярах; поэтому пиннится то,
+  // что здесь и важно: РАЗНЫЕ объекты ОДНОЙ формы и одного поведения.
+  test('delete — схема той же ФОРМЫ и того же поведения, но отдельный объект (§9.2)', () => {
+    expect(relationDeleteInput).not.toBe(relationCreateInput);
+    expect(Object.keys(relationDeleteInput.shape).sort()).toEqual(
+      Object.keys(relationCreateInput.shape).sort(),
+    );
+    const samples: unknown[] = [
+      { ...base, role: 'subitem' },
+      { ...base, role: '' },
+      { ...base, role: 'subitem', extra: 1 },
+      { ...base, relation_type: 'parent' },
+      { ...base, source_id: 'x', role: 'subitem' },
+      { source_id: UUID, role: 'subitem' },
+    ];
+    for (const sample of samples) {
+      expect(relationDeleteInput.safeParse(sample).success).toBe(
+        relationCreateInput.safeParse(sample).success,
+      );
+    }
   });
 
   test('невалидный uuid source_id отклоняется', () => {
     expect(
-      relationCreateInput.safeParse({ ...base, source_id: 'x', relation_type: 'parent' }).success,
+      relationCreateInput.safeParse({ ...base, source_id: 'x', role: 'subitem' }).success,
     ).toBe(false);
   });
 });

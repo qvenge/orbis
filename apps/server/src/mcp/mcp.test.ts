@@ -867,7 +867,7 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
       operations: [
         {
           tool: 'relation_create',
-          input: { source_id: project.id, target_id: ticket.id, relation_type: 'parent' },
+          input: { source_id: project.id, target_id: ticket.id, role: 'ticket' },
         },
       ],
     });

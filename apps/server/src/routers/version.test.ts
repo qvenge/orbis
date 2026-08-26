@@ -61,7 +61,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
       input: { id: neighbour, title: 'Сосед', tags: [] },
       source: 'quick_capture',
     });
-    await a.relation.create({ source_id: id, target_id: neighbour, relation_type: 'related_to' });
+    await a.relation.create({ source_id: id, target_id: neighbour, role: 'mention' });
 
     const v = await a.version.pin({ entityId: id, label: 'до правки' });
     expect(v.hasDoc).toBe(true);

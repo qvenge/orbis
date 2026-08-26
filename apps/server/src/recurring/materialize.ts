@@ -21,6 +21,7 @@ import { entities, userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { ROLE_INSTANCE_OF } from '../executor/relations';
 import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
 
 /** Горизонт материализации: не дальше 14 дней вперёд от сегодня (§5.4). */
@@ -370,8 +371,9 @@ function instanceOps(
   return [
     { tool: 'entity_create', input },
     {
+      // РП-5: направление как у прежнего `derived_from` — источник ШАБЛОН, цель экземпляр
       tool: 'relation_create',
-      input: { source_id: template.id, target_id: id, relation_type: 'derived_from' },
+      input: { source_id: template.id, target_id: id, role: ROLE_INSTANCE_OF },
     },
   ];
 }

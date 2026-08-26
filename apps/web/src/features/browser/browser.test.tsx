@@ -97,6 +97,25 @@ test('QuickCapture: title-only через entity.create(source:quick_capture) б
   });
 });
 
+test('QuickCapture внутри записи: связь с родителем несёт роль subitem (§А4-3)', async () => {
+  // Ветка `context.kind === 'entity'`: быстрая запись внутри записи заводит ПОДПУНКТ.
+  // Роль здесь не украшение — по ней секция подзадач и отбирает детей, а прогон
+  // исполнителя (роль `run`) в неё попасть не должен.
+  const { calls } = renderWithProviders(
+    <QuickCapture context={{ kind: 'entity', parentId: 'p1' }} />,
+    (path) => (path === 'entity.create' ? ent('child', 'подзадача') : {}),
+  );
+  fireEvent.change(screen.getByLabelText(/быстрая запись/i), { target: { value: 'подзадача' } });
+  fireEvent.submit(screen.getByTestId('quick-capture-form'));
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'relation.create')?.input).toEqual({
+      source_id: 'p1',
+      target_id: 'child',
+      role: 'subitem',
+    }),
+  );
+});
+
 test('EntityList: загрузка → skeleton-ряды (role=status), не текст «Загрузка…»', () => {
   renderWithProviders(<EntityList />, () => new Promise(() => {})); // запрос висит
   expect(screen.getAllByRole('status', { name: 'Загрузка' }).length).toBeGreaterThanOrEqual(6);

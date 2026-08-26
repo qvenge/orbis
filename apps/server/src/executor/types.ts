@@ -158,6 +158,12 @@ export interface WireRelation {
   id: string;
   sourceId: string;
   targetId: string;
+  /** Правда ребра (§А4-3): id роли реестра. */
+  role: string;
+  /**
+   * ПЕРЕХОДНОЕ поле: проекция роли в старую колонку. Едет на клиент до contract-миграции
+   * 0017 — его ещё читает часть непереведённых экранов и тестов.
+   */
   relationType: string;
   meta: Record<string, unknown>;
   createdAt: string;

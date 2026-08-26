@@ -1,4 +1,4 @@
-import { newId, SERVICE_ASPECT_IDS } from '@orbis/shared';
+import { newId } from '@orbis/shared';
 import { Circle, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
@@ -11,37 +11,27 @@ import { useToast } from '../../ui/toast-store';
 
 type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
 
-// Подзадачи: дети через relation parent (source=родитель). Создание — quick_capture
+// Подзадачи: дети по РОЛИ `subitem` (source=родитель, §А4-3). Создание — quick_capture
 // entity_create + relation_create, оба под §5.2/журнал сервера.
 //
 // Связи приходят готовыми в entity.get(include:['relations']) экрана (prop relations) —
 // свой relation.listFor секция не заводит: это была ТА ЖЕ выборка вторым сетевым чтением
 // на каждое открытие detail (прецедент — Blocks). Поэтому и инвалидация после создания
 // идёт по ключу entity.get: своего ключа у секции больше нет.
-/** Служебная сущность (прогон исполнителя) — по наличию служебного аспекта. */
-function isService(aspects: Record<string, Record<string, unknown>> | undefined): boolean {
-  return aspects !== undefined && SERVICE_ASPECT_IDS.some((id) => aspects[id] !== undefined);
-}
 
 export function Subtasks({ parentId, relations }: { parentId: string; relations: Relation[] }) {
   const utils = trpc.useUtils();
-  const childIds = relations
-    .filter((r) => r.relationType === 'parent' && r.sourceId === parentId)
-    .map((r) => r.targetId);
   /**
-   * Дети читаются ЗДЕСЬ, чтобы отсеять служебные сущности (С5): прогон исполнителя — такой же
-   * ребёнок тикета по связи `parent` (agent-loop/verbs.ts:397-400), и без отсева каждый прогон
-   * стоял бы в подзадачах строкой, а рядом — второй раз в своей секции. Связь имён не несёт
-   * (WireRelation — одни id), поэтому «служебное ли это» известно только из самой записи.
-   *
-   * Сети это не добавляет НИСКОЛЬКО: ключ тот же `entity.get({id})`, которым EntityRef и так
-   * тянет заголовок каждой строки, — react-query дедупит их в один запрос на ребёнка.
-   *
-   * Пока запись не приехала, ребёнок считается подзадачей: прятать заранее — значит прятать то,
-   * о чём ничего не известно, и список моргал бы пустотой на каждом открытии.
+   * Отсева служебных сущностей здесь БОЛЬШЕ НЕТ, и это прямая выгода реформы. Раньше прогон
+   * исполнителя был таким же ребёнком тикета по схлопнутому `parent`, «служебное ли это»
+   * приходилось узнавать из самой ЗАПИСИ (по `orbis/agent-run`), а ради этого секция читала
+   * каждого ребёнка отдельным запросом и до его приезда показывала прогон подзадачей.
+   * Теперь прогон несёт роль `run`, а подзадача — `subitem`: разница написана на ребре, и
+   * список верен с первого кадра.
    */
-  const children = trpc.useQueries((t) => childIds.map((id) => t.entity.get({ id })));
-  const visibleIds = childIds.filter((_, i) => !isService(children[i]?.data?.entity.aspectsMap));
+  const visibleIds = relations
+    .filter((r) => r.role === 'subitem' && r.sourceId === parentId)
+    .map((r) => r.targetId);
   const [draft, setDraft] = useState('');
   const { show } = useToast();
   const push = useNav((s) => s.push);
@@ -70,7 +60,7 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
         source: 'quick_capture',
       });
       created = true;
-      await relate.mutateAsync({ source_id: parentId, target_id: id, relation_type: 'parent' });
+      await relate.mutateAsync({ source_id: parentId, target_id: id, role: 'subitem' });
       setDraft('');
     } catch {
       // Частичный отказ (задача создана, связь — нет) — НЕ «не удалось сохранить»:

@@ -233,12 +233,12 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
       expect(t2.isError).toBe(false);
       task2Id = (t2.payload.result as WireEntity).id;
 
-      // Задачи внутри проекта: проект — родитель (§4.2)
+      // Задачи внутри проекта: роль `subitem` — часть внутри целого (§А4-3)
       for (const childId of [task1Id, task2Id]) {
         const rel = await callTool(agent, 'relation_create', {
           source_id: projectId,
           target_id: childId,
-          relation_type: 'parent',
+          role: 'subitem',
         });
         expect(rel.isError).toBe(false);
       }
@@ -509,10 +509,8 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     for (const id of [projectId, task1Id, task2Id, noteId]) expect(ids.has(id)).toBe(true);
     for (const id of archiveIds) expect(ids.has(id)).toBe(true);
 
-    // Связи проект→задача (parent) — обе в дампе
-    const parents = exp.relations.filter(
-      (r) => r.relationType === 'parent' && r.sourceId === projectId,
-    );
+    // Связи проект→задача (роль subitem) — обе в дампе
+    const parents = exp.relations.filter((r) => r.role === 'subitem' && r.sourceId === projectId);
     expect(parents.map((r) => r.targetId).sort()).toEqual([task1Id, task2Id].sort());
 
     // Тред задачи 1 присутствует с инструкцией владельца и заметкой агента

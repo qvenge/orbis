@@ -40,11 +40,11 @@ const liveBlocker = ent('b1', 'Живой блокер', { 'orbis/task': { statu
 const doneBlocker = ent('b2', 'Закрытый блокер', { 'orbis/task': { status: 'done' } });
 const found = ent('x1', 'Найденная сущность');
 
-const rel = (id: string, sourceId: string, targetId: string, relationType: string) => ({
+const rel = (id: string, sourceId: string, targetId: string, role: string) => ({
   id,
   sourceId,
   targetId,
-  relationType,
+  role,
   meta: {},
   createdAt: '2026-07-05T00:00:00.000Z',
   updatedAt: '2026-07-05T00:00:00.000Z',
@@ -102,7 +102,7 @@ function handler(fx: Fixture) {
     if (path === 'entity.query') return [];
     if (path === 'relation.create') {
       if (fx.onRelationCreate) return fx.onRelationCreate();
-      return rel('new', 'e1', 'x1', 'blocks');
+      return rel('new', 'e1', 'x1', 'dependency');
     }
     if (path === 'relation.delete')
       return fx.onRelationDelete ? fx.onRelationDelete() : { ok: true };
@@ -167,10 +167,10 @@ test('блокировки: «блокирует» — исходящие, «з�
     <DetailScreen entityId="e1" />,
     handler({
       relations: [
-        rel('r1', 'e1', 't1', 'blocks'),
-        rel('r2', 'b1', 'e1', 'blocks'),
-        rel('r3', 'b2', 'e1', 'blocks'),
-        rel('r4', 'e1', 'c1', 'parent'), // не блокировка — секции не касается
+        rel('r1', 'e1', 't1', 'dependency'),
+        rel('r2', 'b1', 'e1', 'dependency'),
+        rel('r3', 'b2', 'e1', 'dependency'),
+        rel('r4', 'e1', 'c1', 'subitem'), // не блокировка — секции не касается
       ],
     }),
   );
@@ -221,7 +221,7 @@ test('добавление блокировки: поиск через entity.su
     expect(calls.find((c) => c.path === 'relation.create')?.input).toEqual({
       source_id: 'e1',
       target_id: 'x1',
-      relation_type: 'blocks',
+      role: 'dependency',
     }),
   );
 });
@@ -242,7 +242,7 @@ test('добавление блокировки: направление «заб
     expect(calls.find((c) => c.path === 'relation.create')?.input).toEqual({
       source_id: 'x1',
       target_id: 'e1',
-      relation_type: 'blocks',
+      role: 'dependency',
     }),
   );
 });
@@ -252,7 +252,7 @@ test('добавление блокировки: направление «заб
 test('снятие блокировки: крестик → подтверждение → relation.delete обеими сторонами', async () => {
   const { calls } = renderWithProviders(
     <DetailScreen entityId="e1" />,
-    handler({ relations: [rel('r1', 'e1', 't1', 'blocks')] }),
+    handler({ relations: [rel('r1', 'e1', 't1', 'dependency')] }),
   );
   expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
 
@@ -265,7 +265,7 @@ test('снятие блокировки: крестик → подтвержде
     expect(calls.find((c) => c.path === 'relation.delete')?.input).toEqual({
       source_id: 'e1',
       target_id: 't1',
-      relation_type: 'blocks',
+      role: 'dependency',
     }),
   );
 });
@@ -375,7 +375,7 @@ test('плашка: «Отмена» подтверждения убирает �
   renderWithProviders(
     <DetailScreen entityId="e1" />,
     handler({
-      relations: [rel('r1', 'e1', 't1', 'blocks')],
+      relations: [rel('r1', 'e1', 't1', 'dependency')],
       onRelationDelete: () => {
         throw trpcError('NOT_FOUND', 'связь уже снята');
       },
@@ -398,7 +398,7 @@ test('плашка: ошибка снятия сменяет ошибку соз
   renderWithProviders(
     <DetailScreen entityId="e1" />,
     handler({
-      relations: [rel('r1', 'e1', 't1', 'blocks')],
+      relations: [rel('r1', 'e1', 't1', 'dependency')],
       onRelationCreate: () => {
         throw trpcError('UNPROCESSABLE_CONTENT', 'blocks-связь замкнула бы цикл');
       },
@@ -498,7 +498,7 @@ test('снятие блокировки инвалидирует вторую с
       <ListProbe />
       <SideProbe id="t1" />
     </>,
-    handler({ relations: [rel('r1', 'e1', 't1', 'blocks')] }),
+    handler({ relations: [rel('r1', 'e1', 't1', 'dependency')] }),
   );
   expect(await screen.findByText('Ждёт меня')).toBeInTheDocument();
   const probes = () =>

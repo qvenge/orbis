@@ -119,13 +119,11 @@ async function adminRows(query: ReturnType<typeof sql>): Promise<Array<Record<st
   }
 }
 
-/** Живые budget-parent'ы транзакции — истина в БД (админ-DSN, обходит RLS). */
+/** Живые привязки транзакции к конвертам — истина в БД (админ-DSN, обходит RLS). */
 async function budgetParents(txnId: string): Promise<string[]> {
   const rows = await adminRows(
     sql`SELECT r.source_id FROM relations r
-        JOIN entities e ON e.id = r.source_id
-        WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
-          AND e.aspects_legacy ? 'orbis/budget'
+        WHERE r.target_id = ${txnId} AND r.role = 'envelope-binding'
         ORDER BY r.source_id`,
   );
   return rows.map((r) => r.source_id as string);
@@ -989,5 +987,93 @@ describe('дедлок «правка транзакции ∥ запись ко
       }
     }
     expect(failures).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Запись, которая одновременно транзакция и конверт (шов реформы)
+// ---------------------------------------------------------------------------
+//
+// До реформы такое совпадение требовало ручного попадания категорией. С §А1-1 категория и
+// валюта у транзакции и конверта — ОДНО свойство (В1), поэтому `attach_orbis_budget` на
+// транзакции с подходящим периодом попадает в себя ДЕТЕРМИНИРОВАННО: селектор выбирает
+// конвертом саму запись, а ребро в себя запрещено (`rel_no_self`). Владелец получал
+// `INVARIANT self_relation` — отказ, по которому понять нечего.
+describe('транзакция, ставшая конвертом: селектор не выбирает саму запись (§2.3)', () => {
+  test('attach orbis/budget на транзакцию с накрывающим периодом проходит, а не падает self_relation', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    const { entity: txn } = await createEntity(user, {
+      title: 'Транзакция, ставшая конвертом',
+      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+    });
+    // Период накрывает occurred_on самой записи; категория и валюта совпадают по построению
+    const r = ok(
+      await execute(
+        db,
+        req(user, 'attach_orbis_budget', {
+          entity_id: txn.id,
+          data: budgetData(cat, '2026-07-01', '2026-07-31'),
+        }),
+        { sink },
+      ),
+    );
+    expect('orbis/budget' in (r.results[0] as WireEntity).aspectsMap).toBe(true);
+    // Сама себе конвертом запись не стала
+    expect(await budgetParents(txn.id)).toEqual([]);
+  });
+
+  test('исключение себя не выбрасывает транзакцию из ЧУЖОГО конверта: она остаётся привязанной', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    // Широкий конверт месяца — он и должен считать транзакцию
+    const { entity: wide } = await createEntity(user, {
+      title: 'Конверт месяца',
+      aspects: { 'orbis/budget': budgetData(cat, '2026-07-01', '2026-07-31') },
+    });
+    const { entity: txn } = await createEntity(user, {
+      title: 'Транзакция в конверте месяца',
+      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+    });
+    expect(await budgetParents(txn.id)).toEqual([wide.id]);
+
+    // Запись помечают конвертом БОЛЕЕ УЗКОГО периода: по tie-break §2.3 победила бы она сама
+    ok(
+      await execute(
+        db,
+        req(user, 'attach_orbis_budget', {
+          entity_id: txn.id,
+          data: budgetData(cat, '2026-07-10', '2026-07-14'),
+        }),
+        { sink },
+      ),
+    );
+    // Себя она не считает, но и из чужого конверта не выпала: иначе «пометил конвертом»
+    // тихо выкидывало бы сумму из бюджета месяца
+    expect(await budgetParents(txn.id)).toEqual([wide.id]);
+  });
+
+  test('узкий конверт-транзакция считает ДРУГИЕ транзакции: исключение — только про себя', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    const { entity: txn } = await createEntity(user, {
+      title: 'Транзакция-конверт',
+      aspects: { 'orbis/financial': finData(cat, '2026-07-12') },
+    });
+    ok(
+      await execute(
+        db,
+        req(user, 'attach_orbis_budget', {
+          entity_id: txn.id,
+          data: budgetData(cat, '2026-07-10', '2026-07-14'),
+        }),
+        { sink },
+      ),
+    );
+    const { entity: other } = await createEntity(user, {
+      title: 'Соседняя транзакция',
+      aspects: { 'orbis/financial': finData(cat, '2026-07-13') },
+    });
+    expect(await budgetParents(other.id)).toEqual([txn.id]);
   });
 });
