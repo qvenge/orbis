@@ -5,12 +5,15 @@
  */
 import { expect, test } from 'bun:test';
 import type { PropertyDefinition } from '../registry/property-type';
+import type { QueryFilterNode } from './ast';
 import {
   AGENDA_QUERY_TEXTS,
   AST_FIXTURES,
   FIXTURE_PARSE_REGISTRY,
   FIXTURE_USER_LIST_ID,
   FIXTURE_USER_PROPERTY_ID,
+  INEXPRESSIBLE_QUERY_TEXTS,
+  PRODUCTION_QUERY_TEXTS,
 } from './ast-fixtures';
 import { parseQueryAst, type QueryParseCode } from './parse-ast';
 import { printQueryAst } from './print';
@@ -291,4 +294,105 @@ test('гарды квотирования: значение-двойник то�
   expect(
     printQueryAst({ filter: { prop: 'orbis/location', op: 'eq', value: 'дом' } }, REG, 'key'),
   ).toBe('orbis/location=дом');
+
+  // Свод тегов в `|`-список квотирует ЭЛЕМЕНТЫ: без этого тег с пробелом или с `|` внутри
+  // разъехался бы на два тега при обратном разборе. Теги владельца — свободный текст.
+  for (const tags of [
+    ['дом дача', 'офис'],
+    ['a|b', 'c'],
+    ['важно, срочно', 'потом'],
+  ]) {
+    const ast = { filter: { or: tags.map((tag) => ({ tag })) } };
+    const printed = printQueryAst(ast, REG, 'key');
+    expect(printed, tags.join('/')).toContain('"');
+    const back = parseQueryAst(printed, REG);
+    expect(back.ok, `${printed}: ${back.ok ? '' : back.error.message}`).toBe(true);
+    if (back.ok) expect(back.ast, printed).toEqual(ast);
+  }
+});
+
+/**
+ * Круг `parse(print(a)) ≡ a` по КЛАССУ, а не по выборке.
+ *
+ * Прежняя проверка обратимости ходила только по `AST_FIXTURES` — то есть по деревьям,
+ * которые я выбрал сам. Дыру нашли там, куда выборка не смотрела: `{or:[{tag},{tag}]}` —
+ * дерево, которое парсер САМ делает из боевого `tags=дом|дача`. Поэтому корпус здесь
+ * собирается не из фикстур, а из ВСЕГО, что в пакете есть текстом: ключ-формы фикстур,
+ * тексты Agenda, боевая опись целиком И каждая её конструкция по отдельности (после
+ * перевода имён Задачами 9b/10c разбираться начнут именно они), плюс тексты невыразимого.
+ */
+test('круг обратимости на всём, что разбирается: фикстуры, Agenda, боевая опись и её клаузы', () => {
+  /** Режет текст по запятым и переводам строк ВНЕ кавычек — как это делает разбор. */
+  const clauses = (text: string): string[] => {
+    const out: string[] = [];
+    let start = 0;
+    let quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (quoted) {
+        if (ch === '\\') i++;
+        else if (ch === '"') quoted = false;
+      } else if (ch === '"') quoted = true;
+      else if (ch === ',' || ch === '\n') {
+        out.push(text.slice(start, i));
+        start = i + 1;
+      }
+    }
+    out.push(text.slice(start));
+    return out.filter((c) => c.trim() !== '');
+  };
+
+  const corpus = new Set<string>();
+  for (const f of AST_FIXTURES) if (f.keyText) corpus.add(f.keyText);
+  for (const t of Object.values(AGENDA_QUERY_TEXTS)) corpus.add(t);
+  for (const t of INEXPRESSIBLE_QUERY_TEXTS) corpus.add(t.text);
+  for (const e of PRODUCTION_QUERY_TEXTS) {
+    corpus.add(e.text);
+    for (const c of clauses(e.text)) corpus.add(c);
+  }
+
+  const notReversible: string[] = [];
+  let parsed = 0;
+  for (const text of corpus) {
+    const first = parseQueryAst(text, REG);
+    if (!first.ok) continue; // не разбирается сегодня — это работа перевода, не печати
+    parsed++;
+    const printed = printQueryAst(first.ast, REG, 'key');
+    const second = parseQueryAst(printed, REG);
+    if (!second.ok || JSON.stringify(second.ast) !== JSON.stringify(first.ast)) {
+      notReversible.push(`«${text}» → печать «${printed}»`);
+    }
+  }
+
+  // Корпус обязан быть непустым и заметным — иначе тест зелен от того, что ничего не гонял.
+  expect(corpus.size).toBeGreaterThanOrEqual(120);
+  expect(parsed).toBeGreaterThanOrEqual(40);
+  // Список пуст ЯВНО: если какое-то дерево напечатать обратимо нельзя, тест назовёт его,
+  // а не промолчит.
+  expect(notReversible).toEqual([]);
+});
+
+test('OR по не-тегам плоским текстом не выражается — и печать говорит это вслух', () => {
+  // Свод в `|`-список законен только для однородных тегов: `aspect=a|b` разбор прочитал бы
+  // как ОДНО имя аспекта, `has=a|b` — как одно имя свойства, `search=a|b` дал бы ДРУГОЕ
+  // дерево (строку поиска `a|b`). Для них скобки — честный отказ, а не потеря.
+  const cases: [string, QueryFilterNode][] = [
+    ['aspect', { or: [{ aspect: 'orbis/task' }, { aspect: 'orbis/note' }] }],
+    ['has', { or: [{ has: 'orbis/recurrence' }, { has: 'orbis/location' }] }],
+    ['search', { or: [{ search: 'кофе' }, { search: 'чай' }] }],
+  ];
+  for (const [name, filter] of cases) {
+    const printed = printQueryAst({ filter }, REG, 'key');
+    expect(printed, name).toContain('(');
+    const back = parseQueryAst(printed, REG);
+    expect(back.ok, name).toBe(false);
+    if (!back.ok) expect(back.error.code, name).toBe('SYNTAX');
+  }
+  // А однородные теги — сводятся, и круг сходится в обе стороны.
+  expect(printQueryAst({ filter: { or: [{ tag: 'дом' }, { tag: 'дача' }] } }, REG, 'key')).toBe(
+    'tags=дом|дача',
+  );
+  expect(
+    printQueryAst({ filter: { not: { or: [{ tag: 'дом' }, { tag: 'дача' }] } } }, REG, 'key'),
+  ).toBe('!tags=дом|дача');
 });

@@ -113,7 +113,7 @@ function asEqLeaf(node: QueryFilterNode): EqLeaf | null {
   return { prop: node.prop, op: node.op, value: node.value };
 }
 
-/** `|`-список по ОДНОМУ свойству — единственная форма OR, выразимая плоской грамматикой. */
+/** `|`-список по ОДНОМУ свойству — форма OR, выразимая плоской грамматикой. */
 function asSamePropList(nodes: readonly QueryFilterNode[]): EqLeaf[] | null {
   const leaves: EqLeaf[] = [];
   for (const node of nodes) {
@@ -125,6 +125,33 @@ function asSamePropList(nodes: readonly QueryFilterNode[]): EqLeaf[] | null {
   return leaves.length > 0 ? leaves : null;
 }
 
+/**
+ * ВТОРАЯ форма OR, выразимая плоским текстом: однородный список тегов — `tags=a|b`.
+ *
+ * Её отсутствие было настоящей дырой обратимости, а не пробелом в покрытии: дерево
+ * `{or:[{tag:'дом'},{tag:'дача'}]}` парсер САМ делает из боевого `tags=дом|дача`, а печать
+ * возвращала `(tags=дом | tags=дача)` — текст, который парсер v1 отвергает. Обещание
+ * обратимости key-формы (см. шапку файла) держалось на выборке фикстур, не покрывавшей то,
+ * что парсер производит из живого текста.
+ *
+ * Остальные не-prop листья в `|`-список НЕ сводятся, и это проверено разбором, а не
+ * догадкой: `aspect=a|b` парсер читает как ОДНО имя аспекта `a|b` (`UNKNOWN_ASPECT`),
+ * `has=a|b` — как одно имя свойства, а `search=a|b` собрал бы строку поиска `a|b`, то есть
+ * ДРУГОЕ дерево. Для них скобочная форма честнее: она отказывается разбираться вслух.
+ */
+function asTagList(nodes: readonly QueryFilterNode[]): string[] | null {
+  const tags: string[] = [];
+  for (const node of nodes) {
+    if (!('tag' in node)) return null;
+    tags.push(node.tag);
+  }
+  return tags.length > 0 ? tags : null;
+}
+
+function printTagList(tags: readonly string[]): string {
+  return `tags=${tags.map(quote).join('|')}`;
+}
+
 function printNode(node: QueryFilterNode, n: Names): string {
   if ('and' in node) return `(${node.and.map((c) => printNode(c, n)).join(' & ')})`;
   if ('or' in node) {
@@ -132,6 +159,8 @@ function printNode(node: QueryFilterNode, n: Names): string {
     if (list) {
       return `${n.prop((list[0] as EqLeaf).prop)}=${list.map((l) => printBound(l.value)).join('|')}`;
     }
+    const tags = asTagList(node.or);
+    if (tags) return printTagList(tags);
     return `(${node.or.map((c) => printNode(c, n)).join(' | ')})`;
   }
   if ('not' in node) {
@@ -144,6 +173,10 @@ function printNode(node: QueryFilterNode, n: Names): string {
     }
     const leaf = asEqLeaf(inner);
     if (leaf) return `${n.prop(leaf.prop)}=!${printBound(leaf.value)}`;
+    // `excludeTags=a|b` парсер даёт как `not(or(tag…))`, и своей ветки этому случаю НЕ
+    // нужно: общий хвост ниже печатает `!` + свод из ветки `or`, то есть ровно `!tags=a|b`.
+    // Отдельная ветка здесь была — и оказалась мёртвой: мутация «снять её» не меняла ни
+    // одного вывода (найдено собственной мутацией М37 фикс-раунда 6).
     // Двойное отрицание плоским текстом невыразимо: `!!X` парсер прочитал бы как имя
     // конструкции `!X`, и отказ был бы не про то. Скобки дают ЧЕСТНОЕ сообщение —
     // «скобок в грамматике v1 нет» (§А5-3д), то же, что у любого невыразимого дерева.
