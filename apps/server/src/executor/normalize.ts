@@ -93,18 +93,29 @@ const ENVELOPE_IDENTITY = [
  * «переживающие замену» и «нет» пришлось бы руками, вторым списком без опоры на реестр —
  * ровно та вторая копия знания, которую реформа и убирает.
  *
- * Условие «прежнее значение БЫЛО и стало другим», а не «отличается от нового»: у создания
- * конверта прошлого состояния нет вовсе, и правило обязано молчать — иначе оно снимало бы
- * перенос у конвертов, которые правило rollover ровно с ним и создаёт (03-budget §3.5).
+ * УСТАРЕВШИМ считается только тот перенос, которого патч НЕ КАСАЛСЯ. Тронул сам патч —
+ * значит значение про НОВУЮ идентичность, и стирать его нельзя: продление конверта правкой
+ * («сменить период и положить новый остаток» — 03-budget §3.5) законно и одним действием.
+ * Признак — `touchedProperties` патча, а не сравнение значений: перенос мог совпасть с
+ * прежним по числу, оставаясь новым по смыслу. Это же условие поглощает и создание конверта
+ * правилом rollover: оно кладёт перенос своим же патчем.
+ *
+ * ЦЕНА, НАЗВАННАЯ ВСЛУХ: косвенно владелец может снять перенос двумя сменами идентичности
+ * (сменить валюту и вернуть обратно — правило сработает на первом шаге); это законно по
+ * 03-budget §3.5 (обнулять переносы — его право), а undo возвращает значение.
  *
  * Мутирует `next.props`. Внутренний undo его не зовёт: тот восстанавливает зафиксированное
  * состояние дословно, и «поправить» откат значило бы разойтись с журналом.
  */
-export function dropStaleCarryover(prev: EntityState, next: EntityState): void {
+export function dropStaleCarryover(
+  prev: EntityState,
+  next: EntityState,
+  touched: ReadonlySet<string>,
+): void {
   if (!next.aspects.includes('orbis/budget')) return;
-  if (next.props[CARRYOVER] === undefined) return;
+  if (next.props[CARRYOVER] === undefined || touched.has(CARRYOVER)) return;
   const identityChanged = ENVELOPE_IDENTITY.some(
-    (id) => prev.props[id] !== undefined && !sameScalar(prev.props[id], next.props[id]),
+    (id) => !sameScalar(prev.props[id], next.props[id]),
   );
   if (identityChanged) delete next.props[CARRYOVER];
 }

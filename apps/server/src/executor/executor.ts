@@ -1154,7 +1154,7 @@ async function prepareEntityCreate(
   }
   // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency ДО валидации,
   // проверки уникальности §2.1 и записи — комбинация всегда каноничная
-  await normalizeEnvelopeProps(ctx, before, state);
+  await normalizeEnvelopeProps(ctx, before, state, propsPatch);
 
   // Запрет по объекту для источника routine (V1.10) — ПЕРВЫМ из отказов: он про то, кому
   // вообще нельзя трогать этот объект, и не зависит ни от формы значения, ни от флагов
@@ -1432,7 +1432,9 @@ async function prepareEntityUpdate(
       // Нормализация валюты конверта (бэклог A7): патч мог снять currency или добавить
       // orbis/budget без неё — NULL не пишем, подставляем defaultCurrency ДО валидации и
       // проверки уникальности §2.1. Внутренний undo восстанавливает состояние verbatim.
-      if (touched.includes('orbis/budget')) await normalizeEnvelopeProps(ctx, before, state);
+      if (touched.includes('orbis/budget')) {
+        await normalizeEnvelopeProps(ctx, before, state, propsPatch);
+      }
       // Гейт флагов (§А2-5/Б6). Внутренний undo его ПРОПУСКАЕТ — ровно как семь проверок
       // ниже: он восстанавливает СВОЁ ЖЕ законно записанное состояние, и отказ здесь
       // означал бы, что законную запись нельзя отменить.
@@ -1690,7 +1692,7 @@ async function prepareAttach(
   const state = applyPropsPatch(before, propsPatch);
   if (aspectId === 'orbis/task') applyTaskCompletion(before, state, now); // §3.2 и для attach
   // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency и для attach-пути
-  await normalizeEnvelopeProps(ctx, before, state);
+  await normalizeEnvelopeProps(ctx, before, state, propsPatch);
 
   // Стадия 4, первый рубеж: запрет по объекту для источника routine (V1.10) — attach это
   // третий путь появления аспекта, им рутина заводилась бы на готовой сущности мимо
@@ -1889,15 +1891,17 @@ async function normalizeEnvelopeProps(
   ctx: ExecCtx,
   before: EntityState,
   state: EntityState,
+  patch: PropsPatch,
 ): Promise<void> {
   if (!state.aspects.includes('orbis/budget')) return;
   const draft: Record<string, unknown> = { currency: state.props['orbis/currency'] };
   await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, draft);
   state.props['orbis/currency'] = draft.currency;
-  // Перенос прошлого периода не переживает смену идентичности конверта (03-budget §2.6).
-  // Считается ПОСЛЕ подстановки валюты: она входит в идентичность, и до подстановки
-  // «валюты не было → стала RUB» читалось бы как смена конверта.
-  dropStaleCarryover(before, state);
+  // Перенос прошлого периода не переживает смену идентичности конверта (03-budget §2.6) —
+  // но только тот, которого патч не касался (см. dropStaleCarryover). Считается ПОСЛЕ
+  // подстановки валюты: она входит в идентичность, и до подстановки «валюты не было →
+  // стала RUB» читалось бы как смена конверта.
+  dropStaleCarryover(before, state, touchedProperties(patch));
 }
 
 async function prepareRelationCreate(

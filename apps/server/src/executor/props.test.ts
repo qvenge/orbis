@@ -693,6 +693,78 @@ describe('гейты флагов свойств', () => {
     expect(moved.aspectsLegacy['orbis/budget']).not.toHaveProperty('carryover');
   });
 
+  test('перенос, записанный ТЕМ ЖЕ патчем при смене периода, не считается устаревшим (продление конверта, §3.5)', async () => {
+    // Единственный законный писатель переноса — правило rollover. Сегодня оно продлевает
+    // конверт созданием, но §3.5 допускает и правку: «сменить период и положить новый
+    // остаток» — одно действие, и значение в нём про НОВУЮ идентичность.
+    const mk = async (title: string, start: string, end: string, carryover: string) =>
+      entityOf(
+        await run(
+          'entity_create',
+          {
+            title,
+            tags: [],
+            aspects: {
+              'orbis/budget': {
+                category_ref: CATEGORY_B,
+                currency: 'RUB',
+                limit: '20000.00',
+                period_start: start,
+                period_end: end,
+                carryover,
+              },
+            },
+          },
+          { mechanism: 'rule' },
+        ),
+      );
+
+    // Путь 1: правка (merge) — период меняется и перенос приезжает в том же патче
+    const byUpdate = await mk('Конверт под продление правкой', '2027-03-01', '2027-03-31', '10.00');
+    ok(
+      await run(
+        'entity_update',
+        {
+          id: byUpdate.id,
+          aspects: {
+            'orbis/budget': {
+              period_start: '2027-04-01',
+              period_end: '2027-04-30',
+              carryover: '777.00',
+            },
+          },
+        },
+        { mechanism: 'rule' },
+      ),
+    );
+    const updated = await expectProjection(byUpdate.id);
+    expect(updated.props['orbis/period_start']).toBe('2027-04-01');
+    expect(updated.props['orbis/carryover']).toBe('777.00');
+
+    // Путь 2: замена носителя (attach) — то же самое одним `attach_orbis_budget`
+    const byAttach = await mk('Конверт под продление attach', '2027-03-01', '2027-03-31', '10.00');
+    ok(
+      await run(
+        'attach_orbis_budget',
+        {
+          entity_id: byAttach.id,
+          data: {
+            category_ref: CATEGORY_B,
+            currency: 'RUB',
+            limit: '20000.00',
+            period_start: '2027-05-01',
+            period_end: '2027-05-31',
+            carryover: '888.00',
+          },
+        },
+        { mechanism: 'rule' },
+      ),
+    );
+    const attached = await expectProjection(byAttach.id);
+    expect(attached.props['orbis/period_start']).toBe('2027-05-01');
+    expect(attached.props['orbis/carryover']).toBe('888.00');
+  });
+
   test('перенос ПЕРЕЖИВАЕТ правку, не трогающую идентичность конверта, и не снимается при создании', async () => {
     const envelope = entityOf(
       await run(
@@ -714,8 +786,8 @@ describe('гейты флагов свойств', () => {
         { mechanism: 'rule' },
       ),
     );
-    // Создание переносом и живёт (правило rollover заводит конверт СРАЗУ с ним) — правило
-    // молчит там, где прошлого состояния не было вовсе.
+    // Создание переносом и живёт (правило rollover заводит конверт СРАЗУ с ним): перенос
+    // положил тот же патч, а устаревшим считается только тот, которого патч не касался.
     expect((await rowOf(envelope.id)).props['orbis/carryover']).toBe('500.00');
 
     // Правка лимита в том же периоде идентичность не трогает — перенос на месте
