@@ -442,6 +442,8 @@ export async function rollbackRun(
         actorUserId,
         actorKind: 'owner',
         source: 'system',
+        // Механизм — глагол исполнителя (§А4-4): это запись О прогоне, не правка графа
+        mechanism: 'verb',
         runId,
         operations: [{ tool: 'entity_update', input: { id: runId, archived: true } }],
       },

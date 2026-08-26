@@ -1,40 +1,74 @@
-// Стадия 2 валидации — путь, которым аспект реально проверяется в проде: JSON Schema ИЗ
-// РЕЕСТРА (генерируется из zod в shared) компилируется ajv{strict:true} и применяется к
-// данным. Тест на одной zod-схеме этот путь НЕ покрывает: `.refine` в JSON Schema не
-// попадает, поэтому правило, выраженное через refine, в проде отсутствует вовсе.
+// Стадия 2 валидации — путь, которым запись реально проверяется в проде ПОСЛЕ реформы:
+// реестр СВОЙСТВ (§А7-1), а не одна JSON Schema на аспект. Каждое свойство проверяется
+// схемой своего типа, каждый аспект — своими обязательными, неизвестный id в `props` —
+// отказ. Тест на одной zod-схеме этот путь НЕ покрывает: `.refine` в схему значения не
+// попадает, поэтому правило, выраженное через refine, в проде отсутствовало бы вовсе.
 //
-// БД не нужна: реестр здесь собирается в памяти ровно из того, что кладёт в колонку
-// `schema` сид реестров (apps/server/src/db/seed-registries.ts — `legacyAspectJsonSchema(id)`,
-// это тот же генератор, что зовётся здесь прежним именем `aspectJsonSchema`), — сравнение
-// схемы БД с этим источником стережёт отдельная проверка дрейфа (db/registry-drift.test.ts).
+// БД не нужна: снимок реестра собирается в памяти ровно из встроенных деклараций
+// (`BUILTIN_PROPERTY_META`/`BUILTIN_ASPECT_DEFS`) — того же источника, из которого их кладёт
+// в базу сид (`scripts/seed-registries.ts`); расхождение снимка с базой стережёт отдельная
+// проверка дрейфа (`db/registry-drift.test.ts`).
+//
+// Фикстуры записаны СТАРОЙ картой и переводятся `legacyAspectsToProps` — тем же переходом,
+// которым пользуется путь записи. Так тест продолжает читаться как «аспект с такими
+// данными», а проверяется при этом новый валидатор.
 
 import { describe, expect, test } from 'bun:test';
-import { type AspectId, aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
-import { type AspectRegistry, validateAspectData } from './aspects-validate';
+import {
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_PROPERTY_META,
+  BUILTIN_RELATION_ROLE_META,
+  legacyAspectsToProps,
+} from '@orbis/shared';
+import type { RegistrySnapshot } from '../registry/load';
+import type { PropsViolation } from '../registry/validate-props';
+import { assertEntityProps } from './aspects-validate';
 import { ExecError } from './errors';
 
-/** Реестр «как после свежего пересева»: builtin-схема из shared, owner_id NULL. */
-function registryOf(id: AspectId): AspectRegistry {
-  return new Map([[id, { id, ownerId: null, schema: aspectJsonSchema(id) }]]);
-}
+/** Снимок «как после свежего пересева»: встроенные строки, ни одной собственной. */
+const REG: RegistrySnapshot = {
+  properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+  aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+  roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+  ownerVersion: 0,
+  systemVersion: 1,
+};
 
 /** Произвольный валидный uuid — в этих тестах важна только ФОРМА поля, не адресат. */
 const NIL_ROUTINE = '019a0000-0000-7000-8000-000000000001';
 
-function accepts(id: AspectId, data: unknown): boolean {
+/** Отказ валидации по старой карте: перевод в свойства + стадия 2 исполнителя. */
+function verdict(aspects: Record<string, Record<string, unknown>>): ExecError | undefined {
+  const translated = legacyAspectsToProps(aspects);
+  if (!translated.ok) {
+    // Конфликт слитого свойства (В1) до валидатора не доезжает — его ловит граница входа
+    return new ExecError('VALIDATION', 'слитое свойство получило разные значения', {
+      violations: [],
+    });
+  }
   try {
-    validateAspectData(registryOf(id), id, data);
-    return true;
+    assertEntityProps(REG, { props: translated.props, aspects: translated.aspects });
+    return undefined;
   } catch (e) {
-    if (e instanceof ExecError && e.code === 'VALIDATION') return false;
+    if (e instanceof ExecError) return e;
     throw e;
   }
 }
 
-describe('валидация аспектов по реестру (ajv strict, решение 7)', () => {
-  test('orbis/goal: «field обязателен для sum/latest» ДОЖИВАЕТ до ajv, а не только до zod', () => {
+function accepts(id: string, data: unknown): boolean {
+  return verdict({ [id]: data as Record<string, unknown> }) === undefined;
+}
+
+function violationsOf(aspects: Record<string, Record<string, unknown>>): PropsViolation[] {
+  const error = verdict(aspects);
+  return ((error?.details as { violations?: PropsViolation[] } | undefined)?.violations ??
+    []) as PropsViolation[];
+}
+
+describe('валидация записи по реестру свойств (§А7-1)', () => {
+  test('orbis/goal: «field обязателен для sum/latest» ДОЖИВАЕТ до валидатора, а не только до zod', () => {
     // Ровно тот случай, ради которого правило структурное (anyOf), а не .refine:
-    // с refine ajv принял бы эту цель, и E2 делил бы на несуществующее поле.
+    // с refine валидатор принял бы эту цель, и E2 делил бы на несуществующее поле.
     expect(
       accepts('orbis/goal', {
         progress_source: { query: 'aspect=orbis/financial', aggregate: 'sum' },
@@ -63,7 +97,7 @@ describe('валидация аспектов по реестру (ajv strict, �
     ).toBe(true);
   });
 
-  test('orbis/goal: знаковость сумм тоже в реестре (pattern), не в refine', () => {
+  test('orbis/goal: знаковость сумм тоже в реестре (границы decimal), не в refine', () => {
     const src = { query: 'q', aggregate: 'count' };
     expect(accepts('orbis/goal', { progress_source: src, target_value: '0' })).toBe(false);
     expect(accepts('orbis/goal', { progress_source: src, target_value: '-5' })).toBe(false);
@@ -83,7 +117,7 @@ describe('валидация аспектов по реестру (ajv strict, �
     );
   });
 
-  test('orbis/assignment: uuid-формат grant_id доезжает до ajv, may_close без default', () => {
+  test('orbis/assignment: uuid-формат grant_id доезжает до валидатора, may_close без default', () => {
     // Инвариант «executor=agent ⇒ grant_id живого гранта владельца» держит assertAssignment,
     // но САМ формат обязан жить в реестре: иначе прод примет строку-мусор в grant_id.
     expect(
@@ -94,13 +128,13 @@ describe('валидация аспектов по реестру (ajv strict, �
     ).toBe(true);
     expect(accepts('orbis/assignment', { executor: 'agent', grant_id: 'не-uuid' })).toBe(false);
     expect(accepts('orbis/assignment', { executor: 'кто-то' })).toBe(false);
-    // may_close опционален и БЕЗ default'а: ajv их не применяет (С8), отсутствие = false
+    // may_close опционален и БЕЗ default'а: значение не материализуется (РП-9), отсутствие = false
     expect(accepts('orbis/assignment', { executor: 'human', assignee: 'Биржан' })).toBe(true);
     expect(accepts('orbis/assignment', { executor: 'human', assignee: '' })).toBe(false);
     expect(accepts('orbis/assignment', { executor: 'human', may_close: 'да' })).toBe(false);
   });
 
-  test('orbis/routine: pattern времени и enum режима доезжают до ajv (V1.1)', () => {
+  test('orbis/routine: pattern времени и enum режима доезжают до валидатора (V1.1)', () => {
     // Формат `at` — единственная защита планировщика от мусора: он разбирает строку двумя
     // Number() без своей валидации, поэтому «7:00» в базе дал бы NaN-минуты молча.
     expect(accepts('orbis/routine', { stage: 'active', at: '07:00', mode: 'propose' })).toBe(true);
@@ -120,7 +154,7 @@ describe('валидация аспектов по реестру (ajv strict, �
     ).toBe(false);
   });
 
-  test('orbis/agent-run: grant_id перестал быть обязательным, форма bucket живёт в реестре (V1.4)', () => {
+  test('orbis/agent-run: grant_id не обязателен, форма bucket живёт в реестре (V1.4)', () => {
     const base = {
       outcome: 'running',
       started_at: '2026-08-18T07:00:00.000Z',
@@ -157,24 +191,44 @@ describe('валидация аспектов по реестру (ajv strict, �
     ).toBe(false);
   });
 
-  test('схемы ВСЕХ builtin-аспектов компилируются ajv в strict-режиме', () => {
-    // strict:true бросает на незнакомых ключевых словах — сторож того, что генератор
-    // не выдал в реестр конструкцию, которую прод-валидатор не примет. Список берётся из
-    // BUILTIN_ASPECT_IDS, а не хардкодом: новый аспект попадает под проверку сам.
-    for (const id of BUILTIN_ASPECT_IDS) {
-      // Ключа нет НИ В ОДНОЙ builtin-схеме, а все они strict (additionalProperties:false),
-      // поэтому такие данные обязан отвергнуть КАЖДЫЙ аспект. Отсюда ровно один живой
-      // ассерт на каждой итерации — в том числе для orbis/note и orbis/category, у которых
-      // пустой объект валиден и проверять на `{}` было бы нечего.
-      let message: string | undefined;
-      try {
-        validateAspectData(registryOf(id), id, { __нет_такого_поля: 1 });
-      } catch (e) {
-        message = (e as ExecError).message;
-      }
-      // Отказ ПО СХЕМЕ = схема скомпилировалась. Провал компиляции дал бы
-      // «не компилируется», а принятые данные — undefined; оба валят ассерт.
-      expect(message).toContain('не проходят схему реестра');
-    }
+  test('коды нарушений: REQUIRED по аспекту, UNKNOWN_PROPERTY, TYPE — VALIDATION с details.violations', () => {
+    // REQUIRED: аспект добавляет свойству обязательность (Р5), и называет её именно аспект.
+    const required = violationsOf({ 'orbis/task': {} });
+    expect(required).toEqual([
+      { code: 'REQUIRED', aspectId: 'orbis/task', propertyId: 'orbis/task_status' },
+    ]);
+
+    // UNKNOWN_PROPERTY: поле, которого §А8 не знает (`agent-run.project_id` УДАЛЕНО) —
+    // отказ по СВОЙСТВУ, а не «лишний ключ аспекта»: носителем поля перестал быть аспект.
+    const unknown = violationsOf({
+      'orbis/agent-run': {
+        outcome: 'running',
+        started_at: '2026-08-18T07:00:00.000Z',
+        last_step_at: '2026-08-18T07:00:00.000Z',
+        step_count: 0,
+        steps: [],
+        project_id: NIL_ROUTINE,
+      },
+    });
+    expect(unknown).toEqual([{ code: 'UNKNOWN_PROPERTY', propertyId: 'orbis/project_id' }]);
+
+    // TYPE: сообщение называет id свойства — по нему владелец и правит форму.
+    const typed = violationsOf({ 'orbis/task': { status: 'придумано' } });
+    expect(typed).toHaveLength(1);
+    expect(typed[0]?.code).toBe('TYPE');
+    expect((typed[0] as { propertyId: string }).propertyId).toBe('orbis/task_status');
+
+    // Список ПОЛНЫЙ, а не «первое найденное»: владелец правит форму целиком.
+    const both = violationsOf({ 'orbis/repo': { url: 'не-урл' } });
+    expect(both.map((v) => v.code).sort()).toEqual(['REQUIRED', 'TYPE']);
+
+    // Всё это — один код ExecError, а не пять разных: потребители различают причину полем.
+    const error = verdict({ 'orbis/task': {} });
+    expect(error?.code).toBe('VALIDATION');
+  });
+
+  test('неизвестный аспект — UNKNOWN_ASPECT, а не молчаливый пропуск', () => {
+    const violations = violationsOf({ 'user/выдуманный': {} });
+    expect(violations).toEqual([{ code: 'UNKNOWN_ASPECT', aspectId: 'user/выдуманный' }]);
   });
 });

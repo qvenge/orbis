@@ -10,7 +10,7 @@
 // Фабрика, а не свободные функции: каждый сьют держит СВОЙ пул (`appDb()` + `client.end()`
 // в afterAll), и передавать `db` первым аргументом в каждый вызов значило бы повторять его
 // в каждой строке теста.
-import { legacyAspectsToProps, newId, routineRunBatchId, routineRunId } from '@orbis/shared';
+import { newId, routineRunBatchId, routineRunId } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { chatMessages, chatThreads, entities, relations } from '../db/schema';
@@ -77,12 +77,21 @@ export interface SeededRoutineRun {
 }
 
 export function agentLoopHelpers(db: Db): AgentLoopHelpers {
-  /** Сид-сущность через executor без синка — без audit-шума в тредах. */
+  /**
+   * Сид-сущность через executor без синка — без audit-шума в тредах.
+   *
+   * `mechanism: 'seed'` (§А4-4): фикстура кладёт готовое состояние, в том числе прогоны со
+   * служебными свойствами (`system_writable`, §А2-5), которые в проде пишет глагол
+   * исполнителя. Без механизма сид получал бы `COMPUTED_WRITE` — то есть тест падал бы на
+   * подготовке, а не на проверяемом поведении. Вычисляемые свойства (`model_writable:
+   * false`) сиду по-прежнему НЕ разрешены: кэш правила фикстуре подделывать незачем.
+   */
   async function seedEntity(owner: string, input: Record<string, unknown>): Promise<WireEntity> {
     const r = await execute(db, {
       actorUserId: owner,
       actorKind: 'owner',
       source: 'ui',
+      mechanism: 'seed',
       operations: [{ tool: 'entity_create', input }],
     });
     if (!r.ok) throw new Error(`seedEntity: ${r.error.code} ${r.error.message}`);
@@ -117,19 +126,18 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
   }
 
   /**
-   * Свойства сущности. ПОКА — перевод старой карты, а не чтение колонки `props`: писатель
-   * колонки появляется следующей задачей, до неё она пуста у каждой строки, и хелпер,
-   * читающий её сейчас, отвечал бы «свойств нет» на сущность со свойствами. Переезжает на
-   * колонку там же, где появляется писатель, — и все вызыватели этого не заметят.
+   * Свойства сущности — КОЛОНКА `props` (§А1-1), а не перевод старой карты: с этой задачи
+   * её пишет исполнитель, и она и есть правда. Перевод отвечал бы «того же самого» ровно
+   * до первого свойства, у которого носителя в старой форме нет (своё свойство владельца,
+   * свободное свойство §А1-2) — то есть молчал бы там, где расхождение и важно.
    */
   async function propsOf(owner: string, id: string): Promise<AnyRecord> {
-    const translated = legacyAspectsToProps(await aspectsOf(owner, id));
-    if (!translated.ok) {
-      throw new Error(
-        `propsOf(${id}): слитое свойство ${translated.conflict.propertyId} получило разные значения`,
-      );
-    }
-    return translated.props;
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.select({ props: entities.props }).from(entities).where(eq(entities.id, id)),
+    );
+    const row = rows[0];
+    if (!row) throw new Error(`сущность ${id} не найдена`);
+    return row.props as AnyRecord;
   }
 
   /** Дети сущности по связи parent (прогоны тикета). */
@@ -249,6 +257,9 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
       actorUserId: owner,
       actorKind: 'ai',
       source: 'system',
+      // Как у боевого пути (lifecycle.startRun): прогон целиком собран из служебных
+      // свойств, и пишет их глагол исполнителя (§А4-4/§А2-5).
+      mechanism: 'verb',
       runId,
       batchId: routineRunBatchId(args.routineId, bucket, attempt),
       clock: () => startedAt,

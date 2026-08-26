@@ -29,6 +29,7 @@ import {
   type AgentRunAspect,
   entityThreadId,
   isManualBucket,
+  legacyFieldToProperty,
   manualBucket,
   newId,
   type PreconditionMismatch,
@@ -219,6 +220,10 @@ async function patchAspect(
       actorUserId: args.ownerId,
       actorKind: actor.kind,
       source: actor.source,
+      // Механизм — глагол исполнителя (§А4-4) у ВСЕХ вызывающих этой воронки: и у фоновой
+      // бухгалтерии, и у ответа владельца на чекпойнт. Канал у них разный (`system`/`ui`),
+      // а пишут они одно и то же — служебные свойства прогона (`system_writable`, §А2-5).
+      mechanism: 'verb',
       ...(actor.runId !== undefined && { runId: actor.runId }),
       operations: [
         {
@@ -884,6 +889,8 @@ async function createRun(
       actorUserId: args.ownerId,
       actorKind: 'ai',
       source: 'system',
+      // Механизм — глагол исполнителя (§А4-4): прогон целиком собран из служебных свойств
+      mechanism: 'verb',
       runId,
       batchId: args.batchId,
       clock: () => args.now,
@@ -1141,12 +1148,14 @@ export interface ProposalOperationView {
   summary: string;
 }
 
-/** Расхождение предусловия в человекочитаемой форме — как оно лежит в аспекте прогона. */
-export interface ProposalMismatchNote {
-  aspect: string;
-  field: string;
-  note: string;
-}
+/**
+ * Расхождение предусловия в человекочитаемой форме — как оно лежит в аспекте прогона.
+ *
+ * Тип ВЫВЕДЕН из схемы, а не написан рядом: схема допускает две формы (новую по свойству и
+ * старую по паре «аспект + поле», см. `agentRunAspectSchema`), и вторая копия формы здесь
+ * разъехалась бы с ней молча — ровно там, где значение читается кастом, а не разбором.
+ */
+export type ProposalMismatchNote = NonNullable<RunProposal['mismatches']>[number];
 
 /**
  * Предложение рутины целиком для экрана (V1.6, V1.14): статус берётся с ПРОГОНА (он
@@ -2481,8 +2490,12 @@ const BODY_MISMATCH_NOTE = 'тело изменено после составл�
  */
 function mismatchNotes(mismatches: readonly PreconditionMismatch[]): ProposalMismatchNote[] {
   return mismatches.slice(0, MAX_MISMATCH_NOTES).map((m) => ({
-    aspect: m.aspect,
-    field: m.field,
+    // Единица расхождения — СВОЙСТВО (§А7-3/§А7-4), и реестр принимает у
+    // `orbis/run_proposal` только эту форму. Само предусловие ещё говорит парой
+    // «аспект + поле» (его перевод — Задача 5), поэтому пара переводится здесь той же
+    // картой, что и всё остальное; поле без строки в §А8 (`body` псевдо-расхождения тела)
+    // получает `orbis/<поле>` — тот же заведомо-неизвестный id, что и в переходной карте.
+    property: legacyFieldToProperty(m.aspect, m.field) ?? `orbis/${m.field}`,
     note:
       m.aspect === '' && m.field === 'body'
         ? BODY_MISMATCH_NOTE

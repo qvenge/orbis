@@ -101,7 +101,7 @@ const REG: PropsRegistry = {
   aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
 };
 
-/** Старый путь: zod-схема на каждый аспект; неизвестный аспект — отказ (`validateAspectData`). */
+/** Старый путь: zod-схема на каждый аспект; неизвестный аспект — отказ. */
 function legacyVerdict(aspects: GoldenRecord['aspects']): Verdict {
   for (const [aspectId, data] of Object.entries(aspects)) {
     const schema = ASPECT_SCHEMAS[aspectId as keyof typeof ASPECT_SCHEMAS];

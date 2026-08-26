@@ -191,6 +191,9 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
         // после чтения очереди отменяло бы подметание вместо действия человека.
         // Точечный откат по-прежнему возможен — по run_id (Задача 13).
         source: 'system',
+        // Механизм — глагол исполнителя (§А4-4): подметание закрывает прогон и пишет его
+        // служебные свойства, а они `system_writable` (§А2-5).
+        mechanism: 'verb',
         ...(args.actorGrantId !== undefined && { actorGrantId: args.actorGrantId }),
         runId: run.id,
         batchId: newId(),

@@ -10,7 +10,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { agentGrants } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from './errors';
-import type { AspectsMap } from './normalize';
+import type { EntityState } from './props';
 import type { MutationSource } from './types';
 
 /** Идентичность связи — тройка rel_uniq (§4.2). */
@@ -214,12 +214,14 @@ export async function assertSingleBudgetParent(
   // Блокировка строки транзакции — SQL дословно из задачи (§13.7)
   await tx.execute(sql`SELECT id FROM entities WHERE id = ${targetId} FOR UPDATE`);
 
-  // Живые budget-parent'ы target в БД (aspects_legacy ? 'orbis/budget' — признак конверта)
+  // Живые budget-parent'ы target в БД: признак конверта — аспект в СПИСКЕ `aspects`
+  // (§А1-1), а не ключ старой карты. Оператор `= ANY(...)` берёт GIN-индекс по массиву так
+  // же, как `?` брал его по jsonb, — доказано вердиктом EXPLAIN Задачи 9a.
   const rows = (await tx.execute(sql`
     SELECT r.source_id FROM relations r
     JOIN entities e ON e.id = r.source_id
     WHERE r.target_id = ${targetId} AND r.relation_type = 'parent'
-      AND e.aspects_legacy ? 'orbis/budget'
+      AND 'orbis/budget' = ANY(e.aspects)
   `)) as unknown as Array<{ source_id: string }>;
 
   const deletedInBatch = (virtual?.deleted ?? []).filter(
@@ -293,11 +295,12 @@ export async function assertNoDuplicateRelation(
  * Чужой и несуществующий грант неразличимы намеренно (единый NOT_FOUND, как у сущностей):
  * иначе назначение стало бы оракулом чужих grant_id.
  */
-export async function assertAssignment(tx: Tx, ownerId: string, next: AspectsMap): Promise<void> {
-  const a = next['orbis/assignment'];
-  if (!a) return;
-  if (a.executor === 'agent') {
-    if (typeof a.grant_id !== 'string') {
+export async function assertAssignment(tx: Tx, ownerId: string, next: EntityState): Promise<void> {
+  if (!next.aspects.includes('orbis/assignment')) return;
+  const executor = next.props['orbis/executor'];
+  const grantId = next.props['orbis/grant'];
+  if (executor === 'agent') {
+    if (typeof grantId !== 'string') {
       throw new ExecError('VALIDATION', 'назначение агенту требует grant_id', {
         aspect: 'orbis/assignment',
       });
@@ -307,17 +310,17 @@ export async function assertAssignment(tx: Tx, ownerId: string, next: AspectsMap
       .from(agentGrants)
       .where(
         and(
-          eq(agentGrants.id, a.grant_id),
+          eq(agentGrants.id, grantId),
           eq(agentGrants.ownerId, ownerId),
           isNull(agentGrants.revokedAt),
         ),
       );
     if (rows.length === 0) {
       throw new ExecError('NOT_FOUND', 'грант исполнителя не найден или отозван', {
-        grant_id: a.grant_id,
+        grant_id: grantId,
       });
     }
-  } else if (a.grant_id !== undefined) {
+  } else if (grantId !== undefined) {
     // executor=human с грантом — не «лишнее поле», а рассогласование: тикет читался бы как
     // назначенный агенту одним кодом и человеку другим.
     throw new ExecError('VALIDATION', 'grant_id допустим только при executor=agent', {
@@ -341,12 +344,14 @@ export async function assertAssignment(tx: Tx, ownerId: string, next: AspectsMap
  * Функция чистая (БД не нужна) и МОЛЧИТ, когда аспекта прогона в итоговой карте нет: её
  * зовут на всех трёх путях появления аспектов, и правка тикета без прогона — не её дело.
  */
-export function assertRunSubject(next: AspectsMap): void {
-  const run = next['orbis/agent-run'];
-  if (!run) return;
-  // Стадия 2 (ajv по реестру) отрабатывает раньше на всех трёх путях, поэтому здесь поле
+export function assertRunSubject(next: EntityState): void {
+  if (!next.aspects.includes('orbis/agent-run')) return;
+  // Стадия 2 (валидатор реестра) отрабатывает раньше на всех трёх путях, поэтому здесь поле
   // либо отсутствует, либо содержит uuid-строку: отдельная ветка на null была бы мёртвой.
-  const subjects = [run.grant_id, run.routine_id].filter((v) => v !== undefined);
+  // `orbis/grant` слито с назначением (В1) — на прогоне оно и есть «субъект-грант».
+  const subjects = [next.props['orbis/grant'], next.props['orbis/run_routine']].filter(
+    (v) => v !== undefined,
+  );
   if (subjects.length !== 1) {
     throw new ExecError(
       'VALIDATION',
@@ -368,10 +373,8 @@ export function assertRunSubject(next: AspectsMap): void {
  */
 export const ROUTINE_UNTOUCHABLE_OBJECTS = ['orbis/routine', 'orbis/agent-run'] as const;
 
-function isUntouchableObject(aspects: AspectsMap | undefined): boolean {
-  return (
-    aspects !== undefined && ROUTINE_UNTOUCHABLE_OBJECTS.some((id) => aspects[id] !== undefined)
-  );
+function isUntouchableObject(aspects: readonly string[] | undefined): boolean {
+  return aspects !== undefined && ROUTINE_UNTOUCHABLE_OBJECTS.some((id) => aspects.includes(id));
 }
 
 /**
@@ -401,13 +404,14 @@ function isUntouchableObject(aspects: AspectsMap | undefined): boolean {
  * Внутренний undo (§7.8) идёт тем же `system` — отдельного гейта `internalUndo` здесь
  * поэтому нет.
  *
- * @param before аспекты строки ДО операции (update/attach; у create строки ещё нет)
- * @param next аспекты после операции
- * @param touched аспекты, которых операция касается (у create — весь вход, у attach — его аспект)
+ * @param before СПИСОК аспектов строки ДО операции (update/attach; у create строки ещё нет)
+ * @param next список аспектов после операции
+ * @param touched аспекты, которых операция касается (навешенные, снятые и объявляющие
+ *   затронутое свойство — см. `touchedAspects`)
  */
 export function assertRoutineUntouchable(
   source: MutationSource,
-  args: { before?: AspectsMap; next: AspectsMap; touched: readonly string[] },
+  args: { before?: readonly string[]; next: readonly string[]; touched: readonly string[] },
 ): void {
   if (source !== 'routine') return;
   // Рутина и прогон запрещены и как ОБЪЕКТ правки (сущность уже такова либо ею становится),
@@ -428,13 +432,13 @@ export function assertRoutineUntouchable(
  * рутине или прогону и не отвязывает от них. Достаточно ОДНОГО конца-объекта — направление
  * связи ничего не меняет: и `parent` рутина→сущность, и обратная правят граф вокруг рутины.
  *
- * `ends.source`/`ends.target` — аспекты обоих концов, прочитанные под `FOR UPDATE`
+ * `ends.source`/`ends.target` — списки аспектов обоих концов, прочитанные под `FOR UPDATE`
  * (`loadBothEndsForUpdate`): без замка проверка сверяла бы состояние, которое конкурент
  * успел бы поменять до записи.
  */
 export function assertRoutineRelationUntouchable(
   source: MutationSource,
-  ends: { source: AspectsMap; target: AspectsMap },
+  ends: { source: readonly string[]; target: readonly string[] },
 ): void {
   if (source !== 'routine') return;
   if (!isUntouchableObject(ends.source) && !isUntouchableObject(ends.target)) return;

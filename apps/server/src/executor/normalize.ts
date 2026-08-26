@@ -1,7 +1,19 @@
 // apps/server/src/executor/normalize.ts
-// Доменные нормализации стадии 4 (§2.1, §3.2, §3.3, §4.1, §9.2).
+// Доменные нормализации стадии 4 (§2.1, §3.2, §3.3, §4.1, §9.2) — переписанные на `props`
+// (§А7-2: доменные инварианты части А остаются кодом, но адресуют свойства по id).
+//
+// Слияние состояния отсюда УШЛО: `mergeAspects` заменил `applyPropsPatch` (props.ts) —
+// единица слияния стала свойством, а не полем внутри аспект-ключа. Здесь остались ровно
+// доменные правила, каждое из которых спрашивает у состояния две вещи: несёт ли сущность
+// аспект (список `aspects[]`) и какое у неё значение свойства (`props` по id).
 import { ExecError } from './errors';
+import type { EntityState } from './props';
 
+/**
+ * Старая карта аспектов. Живёт до «Пересева мира»: её всё ещё читают CAS-предусловия
+ * (старая форма над проекцией — Задача 5), бюджет-хук и карточки. Единица слияния — уже
+ * свойство, поэтому здесь это тип ЧТЕНИЯ проекции, а не рабочая форма исполнителя.
+ */
 export type AspectData = Record<string, unknown>;
 export type AspectsMap = Record<string, AspectData>;
 
@@ -24,93 +36,75 @@ export function extractBodyRefs(body: string): string[] {
 }
 
 /**
- * Merge аспектов entity_update — семантика §9.2 ДОСЛОВНО: «aspects мержится по aspect-id,
- * а внутри аспекта — по полям (shallow merge: переданы только {status, completed_at} →
- * остальные поля аспекта сохраняются; поле со значением null удаляется); значение null
- * вместо объекта аспекта снимает аспект целиком (detach), остальные данные сущности
- * не затрагиваются». Результат merge валидируется ajv (стадия 2), не патч.
+ * Переходы `orbis/task_status` ↔ `orbis/completed_at` (§3.2) над РЕЗУЛЬТАТОМ слияния:
+ * переход в done без переданной даты — проставить clock(); уход из done — очистить дату.
+ * Мутирует `next.props`.
+ *
+ * Зовётся ровно тогда, когда патч ТРОНУЛ статус (и сущность несёт `orbis/task`). Прежний
+ * гейт был «патч тронул аспект задачи»; он шире, но разницы не даёт: при неизменном статусе
+ * оба условия перехода ложны по построению. Узкий гейт при этом честнее называет, от чего
+ * зависит правило.
  */
-export function mergeAspects(
-  current: AspectsMap,
-  patch: Record<string, Record<string, unknown> | null>,
-): { merged: AspectsMap; touched: string[] } {
-  const merged: AspectsMap = { ...current };
-  const touched = Object.keys(patch);
-  for (const [aspectId, value] of Object.entries(patch)) {
-    if (value === null) {
-      delete merged[aspectId]; // detach аспекта целиком
-      continue;
-    }
-    const next: AspectData = { ...(current[aspectId] ?? {}), ...value };
-    for (const [field, fieldValue] of Object.entries(next)) {
-      if (fieldValue === null) delete next[field]; // поле со значением null удаляется
-    }
-    merged[aspectId] = next;
+export function applyTaskCompletion(prev: EntityState, next: EntityState, now: Date): void {
+  const prevStatus = prev.props[TASK_STATUS];
+  const nextStatus = next.props[TASK_STATUS];
+  if (nextStatus === 'done' && prevStatus !== 'done' && next.props[COMPLETED_AT] === undefined) {
+    next.props[COMPLETED_AT] = now.toISOString();
   }
-  return { merged, touched };
-}
-
-/**
- * Переходы status ↔ completed_at (§3.2): переход в done без переданного completed_at →
- * проставить clock(); уход из done → очистить completed_at. Мутирует next.
- */
-export function applyTaskCompletion(
-  prev: AspectData | undefined,
-  next: AspectData,
-  now: Date,
-): void {
-  const prevStatus = prev?.status;
-  if (next.status === 'done' && prevStatus !== 'done' && next.completed_at === undefined) {
-    next.completed_at = now.toISOString();
-  }
-  if (prevStatus === 'done' && next.status !== 'done') {
-    delete next.completed_at;
+  if (prevStatus === 'done' && nextStatus !== 'done') {
+    delete next.props[COMPLETED_AT];
   }
 }
 
-/** orbis/schedule.recurrence на той же сущности — признак шаблона повторения (§3.1). */
-function hasScheduleRecurrence(aspects: AspectsMap): boolean {
-  const schedule = aspects['orbis/schedule'];
-  return (
-    schedule !== undefined &&
-    typeof schedule.recurrence === 'object' &&
-    schedule.recurrence !== null
-  );
+/** id свойств, которые доменные нормализации адресуют по имени (§А8). */
+export const TASK_STATUS = 'orbis/task_status';
+export const COMPLETED_AT = 'orbis/completed_at';
+const RECURRENCE = 'orbis/recurrence';
+const RECURRING = 'orbis/recurring';
+const OCCURRED_ON = 'orbis/occurred_on';
+
+/**
+ * `orbis/recurrence` на сущности, НЕСУЩЕЙ `orbis/schedule`, — признак шаблона повторения
+ * (§3.1). Аспект в условии обязателен, а не избыточен: значение свойства переживает снятие
+ * аспекта (Р9), и без проверки списка снятое расписание продолжало бы делать транзакцию
+ * шаблоном — то есть отвязывало бы её от конверта навсегда.
+ */
+function hasScheduleRecurrence(state: EntityState): boolean {
+  if (!state.aspects.includes('orbis/schedule')) return false;
+  const recurrence = state.props[RECURRENCE];
+  return typeof recurrence === 'object' && recurrence !== null;
 }
 
 /**
- * true, если валидность аспектов зависит от входящей derived_from-связи (§3.3):
- * recurring=true без recurrence легален только на инстансе шаблона. Вызывающая
- * сторона (executor) резолвит наличие связи (БД + связи, создаваемые тем же batch)
- * и передаёт результат в assertFinancialInvariant.
+ * true, если валидность зависит от входящей derived_from-связи (§3.3): `orbis/recurring`
+ * без recurrence легален только на инстансе шаблона. Наличие связи резолвит вызывающая
+ * сторона (executor) — БД плюс связи, создаваемые тем же batch.
  */
-export function financialRecurringNeedsDerivedFrom(aspects: AspectsMap): boolean {
-  const fin = aspects['orbis/financial'];
-  return fin?.recurring === true && !hasScheduleRecurrence(aspects);
+export function financialRecurringNeedsDerivedFrom(state: EntityState): boolean {
+  if (!state.aspects.includes('orbis/financial')) return false;
+  return state.props[RECURRING] === true && !hasScheduleRecurrence(state);
 }
 
 /**
- * Financial-инвариант §3.3 над ФИНАЛЬНЫМ состоянием аспектов сущности:
- * - recurring=true валиден при orbis/schedule.recurrence на той же сущности (шаблон)
- *   ИЛИ при входящей derived_from-связи (инстанс шаблона) — hasIncomingDerivedFrom
- *   резолвится вызывающей стороной (Task 10);
- * - не-шаблон (recurring falsy) обязан иметь occurred_on.
+ * Financial-инвариант §3.3 над ФИНАЛЬНЫМ состоянием сущности:
+ * - `orbis/recurring` = true валиден при `orbis/recurrence` на той же сущности (шаблон)
+ *   ИЛИ при входящей derived_from-связи (инстанс шаблона);
+ * - не-шаблон обязан иметь `orbis/occurred_on`.
+ *
+ * Молчит, если сущность не несёт `orbis/financial`: инвариант — про транзакцию, а не про
+ * значение суммы, оставшееся на записи после снятия аспекта (Р9).
  */
-export function assertFinancialInvariant(
-  aspects: AspectsMap,
-  hasIncomingDerivedFrom = false,
-): void {
-  const fin = aspects['orbis/financial'];
-  if (!fin) return;
-  if (fin.recurring === true) {
-    if (!hasScheduleRecurrence(aspects) && !hasIncomingDerivedFrom) {
+export function assertFinancialInvariant(state: EntityState, hasIncomingDerivedFrom = false): void {
+  if (!state.aspects.includes('orbis/financial')) return;
+  if (state.props[RECURRING] === true) {
+    if (!hasScheduleRecurrence(state) && !hasIncomingDerivedFrom) {
       throw new ExecError(
         'INVARIANT',
         'orbis/financial.recurring=true валиден только на шаблоне с orbis/schedule.recurrence или на инстансе с входящей derived_from (§3.3)',
         { invariant: 'financial_recurring_requires_recurrence' },
       );
     }
-  } else if (fin.occurred_on === undefined) {
+  } else if (state.props[OCCURRED_ON] === undefined) {
     throw new ExecError(
       'INVARIANT',
       'orbis/financial без recurring обязан иметь occurred_on (§3.3)',
@@ -149,14 +143,14 @@ export function hasBodyInInput(input: { body?: string; bodyDoc?: unknown }): boo
  * считается (её канон — то же самое пустое тело), пустой документ — считается.
  */
 export function needsProjectSeed(
-  prev: AspectsMap | undefined,
-  next: AspectsMap,
+  prev: EntityState | undefined,
+  next: EntityState,
   currentBody: string,
   bodyInInput: boolean,
 ): boolean {
   return (
-    next['orbis/project'] !== undefined &&
-    prev?.['orbis/project'] === undefined &&
+    next.aspects.includes('orbis/project') &&
+    prev?.aspects.includes('orbis/project') !== true &&
     currentBody.trim() === '' &&
     !bodyInInput
   );

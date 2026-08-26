@@ -1876,11 +1876,14 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     expect(run?.outcome).toBe('running');
     expect(run?.reply).toBeUndefined();
 
-    // Та же запись шага бухгалтерией (system) — как её пишет раннер — проходит
+    // Та же запись шага бухгалтерией (system) — как её пишет раннер — проходит.
+    // Механизм `verb` (§А4-4) обязателен: `step_count` — служебное свойство прогона
+    // (`system_writable`, §А2-5), и раннер пишет его именно так.
     const bySystem = await execute(db, {
       actorUserId: userA,
       actorKind: 'ai',
       source: 'system',
+      mechanism: 'verb',
       runId,
       operations: [
         {

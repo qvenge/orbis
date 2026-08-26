@@ -57,11 +57,18 @@ function ownerCaller(user: string) {
   return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
 }
 
+/**
+ * Фикстура через executor. `mechanism: 'seed'` (§А4-4): сид кладёт ГОТОВОЕ состояние, в том
+ * числе перенесённый остаток `orbis/carryover`, который в проде пишет правило rollover
+ * (`system_writable`, §А2-5). Без механизма фикстура падала бы `COMPUTED_WRITE` на
+ * подготовке, а не на проверяемом поведении.
+ */
 async function exec(user: string, tool: string, input: unknown): Promise<WireEntity> {
   const req: ExecuteRequest = {
     actorUserId: user,
     actorKind: 'owner',
     source: 'ui',
+    mechanism: 'seed',
     operations: [{ tool, input }],
   };
   const r = await execute(db, req, { sink });

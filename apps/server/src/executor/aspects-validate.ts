@@ -1,86 +1,56 @@
 // apps/server/src/executor/aspects-validate.ts
-// Стадия 2: валидация значений аспектов по JSON Schema ИЗ БД (aspect_definitions.schema) —
-// контракт «ajv по реестру» (решение 7 плана), НЕ по zod-схемам shared.
+// Стадия 2 конвейера (§9.2) после реформы: валидация записи ПО РЕЕСТРУ СВОЙСТВ (§А7-1) —
+// каждое свойство по своему типу, каждый аспект сущности по своим обязательным, неизвестных
+// id в `props` нет.
 //
-// Конфигурация ajv (Minor-4 ревью Task 5): strict: true + ajv-formats.
-// Реестр несёт format: "uuid" (category_ref и др.); в strict-режиме незнакомый format
-// БРОСАЕТ при компиляции схемы (проверено экспериментом: без addFormats компиляция
-// orbis/financial падает с «unknown format "uuid"»), а вне strict — молча не проверяется.
-// strict: true оставлен осознанно: builtin-схемы генерируются нами (zod-to-json-schema,
-// draft-07, без незнакомых ключевых слов), а кривая КАСТОМНАЯ схема (1b) должна давать
-// громкий структурированный отказ, не тихий пропуск. Кастомный format "decimal" не нужен —
-// знаковость денег уже в pattern'ах реестра (Task 5).
-import { Ajv, type ValidateFunction } from 'ajv';
-import addFormats from 'ajv-formats';
-import { sql } from 'drizzle-orm';
-import type { Tx } from '../db/with-identity';
+// Файл остался на месте, а его содержимое сменилось целиком, и это не косметика: раньше он
+// компилировал ajv по колонке `aspect_definitions.schema` (одна схема на аспект, поля внутри
+// неё), теперь зовёт `validateEntityProps` — валидатор реестра, у которого схема есть у
+// КАЖДОГО свойства отдельно (`registry/validate-props.ts`, Задача 2). Кеш скомпилированных
+// валидаторов при этом сохранился (§А7-1) — он переехал туда же, к схемам, и ключуется
+// текстом схемы: одинаковые типы делят один валидатор.
+//
+// Почему тонкая обёртка, а не вызов валидатора напрямую из executor.ts: валидатор возвращает
+// СПИСОК нарушений (владелец правит форму целиком, и отказ по одному полю за раз превращает
+// одну правку в пять заходов), а конвейер оперирует бросками ExecError. Перевод одного в
+// другое обязан быть один на все три точки записи — create, update, attach.
+import type { RegistrySnapshot } from '../registry/load';
+import { validateEntityProps } from '../registry/validate-props';
 import { ExecError } from './errors';
-
-const ajv = new Ajv({ strict: true, allErrors: true });
-addFormats(ajv);
-
-export interface AspectRegistryEntry {
-  id: string;
-  ownerId: string | null; // NULL = builtin (общий для всех)
-  schema: Record<string, unknown>;
-}
-
-export type AspectRegistry = Map<string, AspectRegistryEntry>;
+import type { EntityState } from './props';
 
 /**
- * Реестр аспектов, видимых актору: builtin (owner_id IS NULL) + собственные кастомные.
- * Читается тем же tx под withIdentity — RLS сама ограничивает видимость.
- * ORDER BY owner_id NULLS FIRST: при коллизии id собственное определение перекрывает builtin.
+ * Стадия 2: состояние сущности ПОСЛЕ слияния обязано проходить реестр.
+ *
+ * Проверяется всё состояние, а не только затронутая патчем часть, — так требует §А7-1
+ * («композиционная над результатом слияния»), и это не педантизм: свойства слиты (В1),
+ * поэтому правка через один аспект меняет обязательность у другого, а патч, снявший
+ * `orbis/amount`, ломает не тот аспект, через который пришёл.
+ *
+ * `details.violations` — весь список; `details.aspect`/`details.property` не заводятся:
+ * потребители кодов (карточка отказа, глаголы) читают структуру, а не разбирают текст.
  */
-export async function loadAspectRegistry(tx: Tx): Promise<AspectRegistry> {
-  const rows = (await tx.execute(
-    sql`SELECT id, owner_id, schema FROM aspect_definitions ORDER BY owner_id NULLS FIRST`,
-  )) as unknown as Array<{ id: string; owner_id: string | null; schema: Record<string, unknown> }>;
-  const registry: AspectRegistry = new Map();
-  for (const row of rows) {
-    registry.set(row.id, { id: row.id, ownerId: row.owner_id, schema: row.schema });
-  }
-  return registry;
+export function assertEntityProps(reg: RegistrySnapshot, state: EntityState): void {
+  const violations = validateEntityProps(reg, state);
+  if (violations.length === 0) return;
+  const first = violations[0];
+  throw new ExecError('VALIDATION', `запись не проходит реестр свойств: ${describe(first)}`, {
+    violations,
+  });
 }
 
-// Кэш скомпилированных валидаторов per (id, owner): builtin общие для всех пользователей.
-// schemaJson в записи — инвалидация при изменении схемы (кастомные аспекты редактируемы).
-const validatorCache = new Map<string, { schemaJson: string; validate: ValidateFunction }>();
-
-function getValidator(entry: AspectRegistryEntry): ValidateFunction {
-  const key = `${entry.ownerId ?? ''}|${entry.id}`;
-  const schemaJson = JSON.stringify(entry.schema);
-  const cached = validatorCache.get(key);
-  if (cached && cached.schemaJson === schemaJson) return cached.validate;
-  let validate: ValidateFunction;
-  try {
-    validate = ajv.compile(entry.schema);
-  } catch (e) {
-    // Некомпилируемая схема реестра (возможно у кастомных, 1b) — структурированный отказ
-    throw new ExecError('VALIDATION', `схема аспекта «${entry.id}» не компилируется`, {
-      aspect: entry.id,
-      reason: (e as Error).message,
-    });
-  }
-  validatorCache.set(key, { schemaJson, validate });
-  return validate;
-}
-
-/** Валидация данных одного аспекта по реестру; неизвестный аспект → VALIDATION. */
-export function validateAspectData(
-  registry: AspectRegistry,
-  aspectId: string,
-  data: unknown,
-): void {
-  const entry = registry.get(aspectId);
-  if (!entry) {
-    throw new ExecError('VALIDATION', `неизвестный аспект «${aspectId}»`, { aspect: aspectId });
-  }
-  const validate = getValidator(entry);
-  if (!validate(data)) {
-    throw new ExecError('VALIDATION', `данные аспекта «${aspectId}» не проходят схему реестра`, {
-      aspect: aspectId,
-      errors: validate.errors,
-    });
+function describe(violation: ReturnType<typeof validateEntityProps>[number] | undefined): string {
+  if (violation === undefined) return 'нарушение не названо'; // недостижимо: список непуст
+  switch (violation.code) {
+    case 'UNKNOWN_PROPERTY':
+      return `неизвестное свойство «${violation.propertyId}»`;
+    case 'UNKNOWN_ASPECT':
+      return `неизвестный аспект «${violation.aspectId}»`;
+    case 'DEPRECATED':
+      return `свойство «${violation.propertyId}» выведено из обращения`;
+    case 'REQUIRED':
+      return `аспект «${violation.aspectId}» требует свойство «${violation.propertyId}»`;
+    case 'TYPE':
+      return `значение «${violation.propertyId}»: ${violation.message}`;
   }
 }

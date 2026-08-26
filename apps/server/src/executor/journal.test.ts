@@ -128,6 +128,10 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       'entity_id',
       'id',
       'inverse',
+      // Вторая ось операции (§А4-4): КАКИМ МЕХАНИЗМОМ она сделана. Пишется всегда, в
+      // отличие от `run_id`/`actor_grant_id`: механизм есть у каждого действия, и «ключа
+      // нет» читалось бы как «неизвестно».
+      'mechanism',
       'operations',
       'source',
       'type',
@@ -138,6 +142,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
     expect(action.actor_user_id).toBe(user);
     expect(action.actor_kind).toBe('owner');
     expect(action.source).toBe('fast_path');
+    expect(action.mechanism).toBe('user'); // умолчание §А4-4: прямое действие владельца
     expect(action.operations).toEqual([
       {
         op: 'entity_create',
@@ -147,7 +152,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
           emoji: null,
           body: '',
           tags: ['кофе'],
-          meta: {},
+          // `meta` из полезной нагрузки ушла вместе с записью колонки (§А1-1)
           aspects: {},
         },
       },
@@ -296,6 +301,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       actor_user_id: user,
       actor_kind: 'owner',
       source: 'ui',
+      mechanism: 'user',
       operations: [],
       inverse: [],
     };
@@ -382,6 +388,7 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
       actor_user_id: user,
       actor_kind: 'owner',
       source: 'fast_path',
+      mechanism: 'user',
       operations: [],
       inverse: [],
     };

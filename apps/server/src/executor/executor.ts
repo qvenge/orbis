@@ -14,7 +14,7 @@ import {
   batchExecuteInput,
   type EntityUpdatePrecondition,
   type EntityUpdatePreconditionItem,
-  entityCreateInput,
+  entityCreateExecInput,
   entityUpdateExecInput,
   newId,
   type PreconditionMismatch,
@@ -49,10 +49,11 @@ import type { Db } from '../db/client';
 import { entities, entityOrigins, entityVersions, relations } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
+import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import { projectBodyTemplate } from '../seed/project-body';
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
 import { toWireEntity as toWire, toWireRelation } from '../wire';
-import { type AspectRegistry, loadAspectRegistry, validateAspectData } from './aspects-validate';
+import { assertEntityProps } from './aspects-validate';
 import { ExecError } from './errors';
 import {
   assertAcyclicBlocks,
@@ -68,15 +69,30 @@ import {
   type VirtualGraphEffects,
 } from './invariants';
 import {
+  fromLegacyInput,
+  hasPropsInput,
+  legacyReplaceToProps,
+  projectLegacyAspects,
+} from './legacy-form';
+import {
   type AspectsMap,
   applyTaskCompletion,
   assertFinancialInvariant,
   financialRecurringNeedsDerivedFrom,
   hasBodyInInput,
-  mergeAspects,
   needsProjectSeed,
   normalizeTags,
+  TASK_STATUS,
 } from './normalize';
+import {
+  applyPropsPatch,
+  assertPropsWritable,
+  type EntityState,
+  type PropsPatch,
+  resolvePropertyRef,
+  touchedAspects,
+  touchedProperties,
+} from './props';
 import type {
   ActionOperation,
   ActionRecord,
@@ -87,6 +103,7 @@ import type {
   InternalUndoMode,
   JournalSink,
   JournalWrite,
+  MutationMechanism,
   WireEntity,
   WireEntityVersion,
   WireOrigin,
@@ -99,7 +116,10 @@ type EntityPatch = Partial<typeof entities.$inferInsert>;
 
 interface ExecCtx {
   tx: Tx;
-  registry: AspectRegistry;
+  /** Снимок реестров владельца на транзакцию (§А10): по нему идут и резолв, и валидация. */
+  registry: RegistrySnapshot;
+  /** Механизм записи (§А4-4): ось гейтов флагов, отдельная от канала `req.source`. */
+  mechanism: MutationMechanism;
   req: ExecuteRequest;
   actionId: string;
   clock: () => Date;
@@ -278,12 +298,17 @@ export async function execute(
     return await withIdentity(db, req.actorUserId, async (tx) => {
       // Шов сериализации §7.10 — до первого чтения состояния (см. ExecutorDeps.beforeStages)
       if (deps.beforeStages) await deps.beforeStages(tx);
+      // Снимок реестра — ДО замка контура, и это безопасно: три SELECT'а по таблицам
+      // определений не берут ни строковых, ни advisory-блокировок, то есть в цикл ожидания
+      // §2.3 войти не могут. А замку он НУЖЕН: предикат контура теперь смотрит на id
+      // свойств financial/budget по реестру, а не на имена полей во входе (Р-27).
+      const registry = await loadRegistry(tx, req.actorUserId);
       // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
-      await lockBudgetContour(tx, req.actorUserId, [single]);
-      const registry = await loadAspectRegistry(tx);
+      await lockBudgetContour(tx, registry, req.actorUserId, [single]);
       const ctx: ExecCtx = {
         tx,
         registry,
+        mechanism: req.mechanism ?? 'user',
         req,
         actionId,
         clock,
@@ -380,10 +405,21 @@ async function executeBatch(
       // (см. ExecutorDeps.beforeStages): конкурентный reject либо закоммичен (проверка
       // beforeStages его увидит), либо ждёт этот tx и увидит audit-сообщение
       if (beforeStages) await beforeStages(tx);
+      // Снимок реестра — ДО замка контура (см. одиночный путь: плановые SELECT'ы в цикл
+      // ожидания не входят, а предикат контура без реестра неполон — Р-27)
+      const registry = await loadRegistry(tx, req.actorUserId);
       // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
-      await lockBudgetContour(tx, req.actorUserId, ops);
-      const registry = await loadAspectRegistry(tx);
-      const ctx: ExecCtx = { tx, registry, req, actionId: batchId, clock, sink, internalUndo };
+      await lockBudgetContour(tx, registry, req.actorUserId, ops);
+      const ctx: ExecCtx = {
+        tx,
+        registry,
+        mechanism: req.mechanism ?? 'user',
+        req,
+        actionId: batchId,
+        clock,
+        sink,
+        internalUndo,
+      };
 
       // Повтор batch_id: вернуть сохранённый результат, ничего не применяя (§7.8, §13.4).
       // Внутренний режим undo не идемпотентен по batch_id (id технический) — не проверяем.
@@ -439,6 +475,7 @@ async function executeBatch(
         actor_user_id: req.actorUserId,
         actor_kind: req.actorKind,
         source: req.source,
+        mechanism: ctx.mechanism,
         // Только если заданы: пустых ключей в журнале не заводим (см. ActionRecord)
         ...(req.actorGrantId !== undefined && { actor_grant_id: req.actorGrantId }),
         ...(req.runId !== undefined && { run_id: req.runId }),
@@ -493,29 +530,101 @@ function collectDeclaredDerivedFrom(ops: Array<{ tool: string; input: unknown }>
   return targets;
 }
 
+/** Аспекты, из которых состоит бюджет-контур владельца (§2.3): транзакция и конверт. */
+const BUDGET_CONTOUR_ASPECTS = ['orbis/financial', 'orbis/budget'] as const;
+
 /**
- * Трогает ли операция бюджет-контур — по СЫРОМУ входу, до стадий разбора.
+ * Свойства бюджет-контура — объединение свойств `orbis/financial` и `orbis/budget` ПО
+ * РЕЕСТРУ. Считается на каждый вызов и не кешируется: снимок реестра живёт одну транзакцию,
+ * а аспектов здесь два и свойств в них полтора десятка.
+ */
+function budgetContourProperties(reg: RegistrySnapshot): Set<string> {
+  const ids = new Set<string>();
+  for (const aspectId of BUDGET_CONTOUR_ASPECTS) {
+    for (const ref of reg.aspects.get(aspectId)?.properties ?? []) ids.add(ref.propertyId);
+  }
+  return ids;
+}
+
+/**
+ * Трогает ли операция бюджет-контур — по входу, до стадий разбора.
  *
- * Нужен ровно для одного: взять замок владельца ПЕРВЫМ statement'ом транзакции, до любых
- * строковых блокировок (см. lockBudgetContour ниже). Точность здесь не критична в сторону
- * «лишний раз взяли» (замок владельческий, реентерабельный и дешёвый), критична в сторону
- * «не взяли»: тогда путь вернётся к прежнему порядку захвата.
+ * Нужен ровно для одного: взять замок владельца ПЕРВЫМ блокирующим statement'ом транзакции,
+ * до любых строковых блокировок (см. lockBudgetContour ниже). Точность здесь не критична в
+ * сторону «лишний раз взяли» (замок владельческий, реентерабельный и дешёвый), критична в
+ * сторону «не взяли»: тогда путь вернётся к прежнему порядку захвата и вернётся дедлок E9.
+ *
+ * Ровно поэтому предикат ПЕРЕПИСАН на реестр (Р-27), а не оставлен нюхать имена полей.
+ * После реформы контур адресуется тремя разными способами сразу: старой картой аспектов
+ * (её ещё шлют тулы и web), новой формой `props`/`unset` по id ИЛИ key свойства и списком
+ * `aspects.attach/detach`. Прежний предикат («ключ 'orbis/financial' в карте `aspects`»)
+ * видел только первый — и на переведённом пути замок молча перестал бы браться. Тесты
+ * этого не показали бы: дедлок ловится не отказом, а таймаутом под конкуренцией.
  *
  * `archived` в entity_update: архивация/разархивация транзакции меняет привязку (ветка
  * archivedChanged бюджет-хука), а какие у сущности аспекты, по входу не видно.
+ *
+ * ЭКСПОРТИРОВАН РАДИ ТЕСТА, и это осознанно: провал предиката наблюдаем не отказом, а
+ * таймаутом под конкуренцией — поведенческий тест его не увидит, а увидит владелец, у
+ * которого правка транзакции однажды повиснет. Прямая проверка предиката — единственный
+ * дешёвый способ пиннить его формы.
  */
-function touchesBudgetContour(op: { tool: string; input: unknown }): boolean {
-  if (op.tool === 'attach_orbis_financial' || op.tool === 'attach_orbis_budget') return true;
+export function touchesBudgetContour(
+  reg: RegistrySnapshot,
+  op: { tool: string; input: unknown },
+): boolean {
+  if (op.tool.startsWith('attach_')) {
+    const aspectId = resolveAttachAspect(reg, op.tool);
+    if (
+      aspectId !== undefined &&
+      (BUDGET_CONTOUR_ASPECTS as readonly string[]).includes(aspectId)
+    ) {
+      return true;
+    }
+  }
   if (op.tool === 'batch_execute') {
     const env = op.input as { operations?: Array<{ tool: string; input: unknown }> } | null;
-    return (env?.operations ?? []).some(touchesBudgetContour);
+    return (env?.operations ?? []).some((inner) => touchesBudgetContour(reg, inner));
   }
-  const input = op.input as { aspects?: Record<string, unknown>; archived?: unknown } | null;
+  const input = op.input as {
+    aspects?: unknown;
+    props?: unknown;
+    unset?: unknown;
+    archived?: unknown;
+  } | null;
   if (input === null || typeof input !== 'object') return false;
   if (op.tool === 'entity_update' && input.archived !== undefined) return true;
+
+  const contourProps = budgetContourProperties(reg);
+  const touchesProperty = (keyOrId: string): boolean => {
+    const def = resolvePropertyRef(reg, keyOrId);
+    return contourProps.has(def?.id ?? keyOrId);
+  };
+  if (typeof input.props === 'object' && input.props !== null) {
+    if (Object.keys(input.props).some(touchesProperty)) return true;
+  }
+  if (
+    Array.isArray(input.unset) &&
+    input.unset.some((k) => typeof k === 'string' && touchesProperty(k))
+  ) {
+    return true;
+  }
+
   const aspects = input.aspects;
-  if (aspects === undefined || aspects === null || typeof aspects !== 'object') return false;
-  return 'orbis/financial' in aspects || 'orbis/budget' in aspects;
+  if (aspects === null || aspects === undefined || typeof aspects !== 'object') return false;
+  // Три формы `aspects`, и все три обязаны быть видны: список навешиваемых (create новой
+  // формы), `{attach, detach}` (update новой формы) и старая карта.
+  const named = Array.isArray(aspects)
+    ? aspects.filter((a): a is string => typeof a === 'string')
+    : isAspectsPatchInput(aspects)
+      ? [...(aspects.attach ?? []), ...(aspects.detach ?? [])]
+      : Object.keys(aspects);
+  return named.some((a) => (BUDGET_CONTOUR_ASPECTS as readonly string[]).includes(a));
+}
+
+/** Новая форма `aspects` во ВХОДЕ: у неё нет ключей, кроме attach/detach (см. fromLegacyInput). */
+function isAspectsPatchInput(value: object): value is { attach?: string[]; detach?: string[] } {
+  return Object.keys(value).every((k) => k === 'attach' || k === 'detach');
 }
 
 /**
@@ -533,10 +642,11 @@ function touchesBudgetContour(op: { tool: string; input: unknown }): boolean {
  */
 async function lockBudgetContour(
   tx: Tx,
+  reg: RegistrySnapshot,
   ownerId: string,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
 ): Promise<void> {
-  if (ops.some(touchesBudgetContour)) await lockOwnerBudget(tx, ownerId);
+  if (ops.some((op) => touchesBudgetContour(reg, op))) await lockOwnerBudget(tx, ownerId);
 }
 
 // ---------------------------------------------------------------------------
@@ -564,10 +674,14 @@ async function prepareOp(
   throw new ExecError('VALIDATION', `неизвестный тул «${tool}»`, { tool });
 }
 
-/** attach_<aspect>-тулы генерируются из реестра (§7.6): orbis/task → attach_orbis_task. */
-function resolveAttachAspect(registry: AspectRegistry, tool: string): string | undefined {
-  for (const id of registry.keys()) {
-    if (tool === `attach_${id.replace(/\//g, '_')}`) return id;
+/**
+ * attach_<аспект>-тулы генерируются из реестра (§7.6): `orbis/task` → `attach_orbis_task`.
+ * Имя собирается из КЛЮЧА аспекта, а не из его id: у встроенных они совпадают, а у своего
+ * аспекта владельца ключ — то, что он назвал, и именно его видит модель в списке тулов.
+ */
+function resolveAttachAspect(reg: RegistrySnapshot, tool: string): string | undefined {
+  for (const aspect of reg.aspects.values()) {
+    if (tool === `attach_${aspect.key.replace(/\//g, '_')}`) return aspect.id;
   }
   return undefined;
 }
@@ -605,6 +719,7 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
     actor_user_id: ctx.req.actorUserId,
     actor_kind: ctx.req.actorKind,
     source: ctx.req.source,
+    mechanism: ctx.mechanism,
     // Только если заданы: пустых ключей в журнале не заводим (см. ActionRecord)
     ...(ctx.req.actorGrantId !== undefined && { actor_grant_id: ctx.req.actorGrantId }),
     ...(ctx.req.runId !== undefined && { run_id: ctx.req.runId }),
@@ -941,14 +1056,14 @@ function assertPrecondition(
 async function assertFinancial(
   ctx: ExecCtx,
   entityId: string,
-  aspects: AspectsMap,
+  state: EntityState,
   batch?: BatchState,
 ): Promise<void> {
   let hasDerivedFrom = false;
-  if (financialRecurringNeedsDerivedFrom(aspects)) {
+  if (financialRecurringNeedsDerivedFrom(state)) {
     hasDerivedFrom = await hasIncomingDerivedFrom(ctx, entityId, batch);
   }
-  assertFinancialInvariant(aspects, hasDerivedFrom);
+  assertFinancialInvariant(state, hasDerivedFrom);
 }
 
 async function hasIncomingDerivedFrom(
@@ -1013,8 +1128,8 @@ async function prepareEntityCreate(
   rawInput: unknown,
   batch?: BatchState,
 ): Promise<PreparedOp> {
-  // Стадия 1
-  const input = parseEnvelope(entityCreateInput, rawInput, 'entity_create');
+  // Стадия 1: exec-надмножество — старая карта аспектов ЛИБО новая форма (§А1-1, РП-3)
+  const input = parseEnvelope(entityCreateExecInput, rawInput, 'entity_create');
   const now = ctx.clock();
   const id = input.id ?? newId();
 
@@ -1025,25 +1140,34 @@ async function prepareEntityCreate(
   // Ссылки — из дерева ∪ raw-блоков (Б2): `[[entity:…]]` в блоке кода связью не считается (Р7),
   // но тело, не разобранное целиком и уехавшее в rawBlock, backlinks не теряет.
   let { body, bodyDoc, bodyRefs } = bodyFieldsFromMarkdown(input.body ?? '');
-  const aspects: AspectsMap = {};
-  for (const [aspectId, data] of Object.entries(input.aspects ?? {})) {
-    aspects[aspectId] = { ...data };
-  }
+
+  // Слияние (§А7-1): у create «состояние до» — пустое, поэтому весь вход и есть патч.
+  const before: EntityState = { props: {}, aspects: [] };
+  const propsPatch = fromLegacyInput(ctx.registry, before, input);
+  const state = applyPropsPatch(before, propsPatch);
   // §3.2: create сразу в done без completed_at → проставить clock() (до стадии 2,
   // чтобы валидировалось финальное сохраняемое значение)
-  const task = aspects['orbis/task'];
-  if (task) applyTaskCompletion(undefined, task, now);
+  if (touchedProperties(propsPatch).has(TASK_STATUS) && state.aspects.includes('orbis/task')) {
+    applyTaskCompletion(before, state, now);
+  }
   // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency ДО валидации,
   // проверки уникальности §2.1 и записи — комбинация всегда каноничная
-  const budgetDraft = aspects['orbis/budget'];
-  if (budgetDraft !== undefined) {
-    await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, budgetDraft);
-  }
+  await normalizeEnvelopeProps(ctx, state);
 
-  // Стадия 2: ajv по схемам реестра из БД
-  for (const [aspectId, data] of Object.entries(aspects)) {
-    validateAspectData(ctx.registry, aspectId, data);
-  }
+  // Запрет по объекту для источника routine (V1.10) — ПЕРВЫМ из отказов: он про то, кому
+  // вообще нельзя трогать этот объект, и не зависит ни от формы значения, ни от флагов
+  // свойств. Стой он позже, рутина, подделывающая ответ владельца, получала бы
+  // `COMPUTED_WRITE` («это свойство пишет сервер») вместо честного «рутина не меняет
+  // прогоны» — два разных ответа на один запрет.
+  assertRoutineUntouchable(ctx.req.source, {
+    next: state.aspects,
+    touched: touchedAspects(ctx.registry, before, state, propsPatch),
+  });
+  // Гейт флагов (§А2-5/Б6) — ДО валидации значений: «вам сюда нельзя» честнее, чем
+  // «ваше значение не той формы», когда запись запрещена независимо от значения.
+  assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
+  // Стадия 2: реестр свойств (§А7-1) — по итоговому состоянию, а не по патчу
+  assertEntityProps(ctx.registry, state);
 
   // Стадия 3 (ТОЛЬКО batch): занятый id — reject, не replay. Идемпотентность batch
   // ключуется по batch_id (§7.8), а не по id операции: replay-семантика одиночного
@@ -1081,23 +1205,24 @@ async function prepareEntityCreate(
   }
 
   // Стадия 4: доменные инварианты + entitlements-гейт — всё ДО первой записи
-  await assertFinancial(ctx, id, aspects, batch);
+  await assertFinancial(ctx, id, state, batch);
   // Живой грант в назначении (С4/С7): у create «затронуто» всё, что пришло во входе
-  await assertAssignment(ctx.tx, ctx.req.actorUserId, aspects);
+  await assertAssignment(ctx.tx, ctx.req.actorUserId, state);
   // Ровно один субъект у прогона (V1.4) — тем же путём, что и назначение
-  assertRunSubject(aspects);
-  // Запрет по объекту для источника routine (V1.10): у create строки «до» нет, а
-  // «затронуто» — всё, что пришло во входе
-  assertRoutineUntouchable(ctx.req.source, { next: aspects, touched: Object.keys(aspects) });
+  assertRunSubject(state);
   // Заготовка тела проекта (С10). Засев живёт в executor'е, а не в роутере/адаптере: тогда
   // проект, заведённый чатом, MCP и UI, получает одно и то же тело. У create «тело до
   // операции» — это канон входа (пусто, если body не прислали ИЛИ прислали пустую строку:
   // что считать телом входа, решает hasBodyInInput — одно правило на все три пути).
-  if (needsProjectSeed(undefined, aspects, body, hasBodyInInput(input))) {
+  if (needsProjectSeed(undefined, state, body, hasBodyInInput(input))) {
     ({ body, bodyDoc, bodyRefs } = bodyFieldsFromMarkdown(projectBodyTemplate(id)));
   }
+  // Дуальная запись (§А1-1, до Задачи 23): старая карта — ПРОЕКЦИЯ новой правды, а не
+  // второй независимый перевод входа. Она же — вход доменных проверок бюджета, которые
+  // переводятся своей задачей (7a).
+  const aspectsLegacy = projectLegacyAspects(ctx.registry, state);
   // Уникальность конверта (03-budget §2.1): дубль точной комбинации отклоняется
-  const budgetAspect = aspects['orbis/budget'];
+  const budgetAspect = aspectsLegacy['orbis/budget'];
   if (budgetAspect !== undefined) {
     await assertEnvelopeUnique(ctx.tx, {
       ownerId: ctx.req.actorUserId,
@@ -1128,10 +1253,13 @@ async function prepareEntityCreate(
     bodyBeforeDoc: body,
     bodyRefs,
     tags,
-    meta: input.meta ?? {},
-    // Старая карта — в переименованную колонку; `props`/`aspects[]` строка получает
-    // дефолтами: их писатель появляется следующей задачей (РП-2).
-    aspectsLegacy: aspects,
+    // `meta` больше НЕ пишется (§А1-1): мешок был write-only во всех пяти зонах, свойства
+    // заменили его адресуемым значением, а колонка доживает до миграции 0017 пустой. Вход
+    // тула поле ещё принимает (контракт §9.2 не двигается до Задачи 12) — и молча роняет.
+    meta: {},
+    props: state.props,
+    aspects: state.aspects,
+    aspectsLegacy,
     createdAt: now,
     updatedAt: now,
     archived: false,
@@ -1153,8 +1281,10 @@ async function prepareEntityCreate(
           emoji: values.emoji,
           body,
           tags,
-          meta: values.meta,
-          aspects,
+          // Журнал ПОКА говорит старой картой (§А7-4 переводит его единицу в свойство —
+          // Задача 6): inverse обязан оставаться исполнимым тулом, а тулы до Задачи 12
+          // принимают карту. `meta` из полезной нагрузки ушла вместе с записью колонки.
+          aspects: aspectsLegacy,
         },
       },
     ],
@@ -1224,7 +1354,10 @@ async function prepareEntityUpdate(
   if (!current) {
     throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.id });
   }
+  // Старая карта — вход CAS (Задача 5 переводит предусловия на свойства) и источник
+  // прежних значений для журнала (Задача 6). Новая правда строки — `stateOf`.
   const currentAspects = current.aspectsLegacy as AspectsMap;
+  const before = stateOf(current);
 
   // CAS-расширение стадий 4–5 (С7): предусловие сверяется по ТОЙ ЖЕ строке, что и весь
   // остальной update — прочитанной под FOR UPDATE (в batch — по виртуальной строке, где
@@ -1262,90 +1395,85 @@ async function prepareEntityUpdate(
 
   const now = ctx.clock();
 
-  // Merge аспектов §9.2 + переходы §3.2; стадия 2 валидирует РЕЗУЛЬТАТ merge, не патч
-  let nextAspects = currentAspects;
+  // Слияние свойств (§А7-1) + переходы §3.2; стадия 2 валидирует РЕЗУЛЬТАТ, не патч
+  let state = before;
+  let propsPatch: PropsPatch = {};
   let touched: string[] = [];
-  if (input.aspects) {
-    if (ctx.internalUndo) {
-      // Внутренний режим undo (§7.8): inverse несёт прежнее значение ВСЕГО затронутого
-      // аспект-ключа — восстанавливаем ключ ЦЕЛИКОМ заменой (null → ключа не было).
-      // Shallow-merge §9.2 оставил бы поля, добавленные отменяемым действием, а
-      // нормализации §3.2 исказили бы зафиксированное состояние — не применяются.
-      const replaced: AspectsMap = { ...currentAspects };
-      touched = Object.keys(input.aspects);
-      for (const [aspectId, value] of Object.entries(input.aspects)) {
-        if (value === null) delete replaced[aspectId];
-        else replaced[aspectId] = { ...value };
+  if (hasPropsInput(input)) {
+    // Внутренний режим undo (§7.8): inverse несёт прежнее значение ВСЕГО затронутого
+    // аспект-ключа — восстанавливаем ключ ЦЕЛИКОМ (свойство, которого в значении нет,
+    // снимается; см. legacyReplaceToProps). Shallow-merge оставил бы поля, добавленные
+    // отменяемым действием, а нормализации §3.2 исказили бы зафиксированное состояние.
+    propsPatch = fromLegacyInput(ctx.registry, before, input, ctx.internalUndo !== undefined);
+    state = applyPropsPatch(before, propsPatch);
+    touched = touchedAspects(ctx.registry, before, state, propsPatch);
+  }
+
+  // Запрет по объекту для источника routine (V1.10). Стоит ЗДЕСЬ по двум причинам сразу.
+  // Первая (была и раньше): переименование, архивация и правка тела рутины аспектов не
+  // трогают, но правкой рутины быть не перестают — запрет сформулирован по объекту, а не
+  // по содержимому патча, поэтому он вне гейта «есть ли правка свойств». Вторая (реформа):
+  // он обязан отвечать РАНЬШЕ гейта флагов — иначе рутина, подделывающая ответ владельца,
+  // получала бы «это свойство пишет сервер» вместо «рутина не меняет прогоны».
+  // Строка прочитана под FOR UPDATE выше, запись — ниже.
+  assertRoutineUntouchable(ctx.req.source, {
+    before: before.aspects,
+    next: state.aspects,
+    touched,
+  });
+
+  if (hasPropsInput(input)) {
+    if (ctx.internalUndo === undefined) {
+      if (touchedProperties(propsPatch).has(TASK_STATUS) && state.aspects.includes('orbis/task')) {
+        applyTaskCompletion(before, state, now);
       }
-      nextAspects = replaced;
-    } else {
-      const m = mergeAspects(currentAspects, input.aspects);
-      nextAspects = m.merged;
-      touched = m.touched;
-      const mergedTask = nextAspects['orbis/task'];
-      if (touched.includes('orbis/task') && mergedTask) {
-        applyTaskCompletion(currentAspects['orbis/task'], mergedTask, now);
-      }
+      // Нормализация валюты конверта (бэклог A7): патч мог снять currency или добавить
+      // orbis/budget без неё — NULL не пишем, подставляем defaultCurrency ДО валидации и
+      // проверки уникальности §2.1. Внутренний undo восстанавливает состояние verbatim.
+      if (touched.includes('orbis/budget')) await normalizeEnvelopeProps(ctx, state);
+      // Гейт флагов (§А2-5/Б6). Внутренний undo его ПРОПУСКАЕТ — ровно как семь проверок
+      // ниже: он восстанавливает СВОЁ ЖЕ законно записанное состояние, и отказ здесь
+      // означал бы, что законную запись нельзя отменить.
+      assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
     }
-    // Нормализация валюты конверта (бэклог A7): merge мог удалить currency
-    // (поле со значением null) или добавить orbis/budget без неё — NULL не пишем,
-    // подставляем defaultCurrency ДО валидации и проверки уникальности §2.1.
-    // Внутренний undo восстанавливает зафиксированное состояние verbatim.
-    const mergedBudget = nextAspects['orbis/budget'];
-    if (
-      ctx.internalUndo === undefined &&
-      touched.includes('orbis/budget') &&
-      mergedBudget !== undefined
-    ) {
-      await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, mergedBudget);
-    }
-    for (const aspectId of touched) {
-      const data = nextAspects[aspectId];
-      if (data !== undefined) validateAspectData(ctx.registry, aspectId, data); // detach не валидируется
-    }
+    assertEntityProps(ctx.registry, state);
     // Стадия 4: инвариант §3.3 над финальным состоянием (ловит и detach orbis/schedule)
-    await assertFinancial(ctx, input.id, nextAspects, batch);
+    await assertFinancial(ctx, input.id, state, batch);
     // Живой грант в назначении (С4/С7) — только когда назначение ЗАТРОНУТО патчем.
     // Проверять его на каждой правке нельзя: отзыв гранта иначе замораживал бы тикет
     // целиком (даже переименование), а отзыв закрывает доступ агенту, а не сущность.
     // Внутренний undo восстанавливает зафиксированное состояние — не проверяется.
     if (ctx.internalUndo === undefined && touched.includes('orbis/assignment')) {
-      await assertAssignment(ctx.tx, ctx.req.actorUserId, nextAspects);
+      await assertAssignment(ctx.tx, ctx.req.actorUserId, state);
     }
-    // Ровно один субъект у прогона (V1.4) — только когда патч ЗАТРОНУЛ прогон: merge
-    // аспектов дописывает поля в существующий ключ, то есть второй субъект приезжает
+    // Ровно один субъект у прогона (V1.4) — только когда патч ЗАТРОНУЛ прогон: слияние
+    // дописывает свойства к уже навешенному аспекту, то есть второй субъект приезжает
     // именно этим путём. Внутренний undo восстанавливает зафиксированное — не проверяется.
     if (ctx.internalUndo === undefined && touched.includes('orbis/agent-run')) {
-      assertRunSubject(nextAspects);
+      assertRunSubject(state);
     }
-    // «Один budget-parent» (§4.2/§13.7) и для aspects-патча: mergeAspects добавляет
-    // НОВЫЙ ключ — второй путь ретроспективного второго конверта помимо attach
-    // (fix round ревью A1.1). Detach (null) второго budget-parent'а не создаёт.
+    // «Один budget-parent» (§4.2/§13.7) и для патча свойств: аспект конверта может
+    // появиться и так — второй путь ретроспективного второго конверта помимо attach
+    // (fix round ревью A1.1). Detach второго budget-parent'а не создаёт.
     // Внутренний undo восстанавливает зафиксированное состояние — не проверяется.
     if (
       ctx.internalUndo === undefined &&
       touched.includes('orbis/budget') &&
-      nextAspects['orbis/budget'] !== undefined
+      state.aspects.includes('orbis/budget')
     ) {
       await assertBudgetAttachKeepsSingleParent(ctx, input.id, batch);
     }
   }
 
-  // Запрет по объекту для источника routine (V1.10). Проверка стоит ВНЕ гейта
-  // `input.aspects` намеренно: переименование, архивация и правка тела рутины аспектов не
-  // трогают, но правкой рутины быть не перестают — запрет сформулирован по объекту, а не по
-  // содержимому патча. Строка прочитана под FOR UPDATE выше, запись — ниже.
-  assertRoutineUntouchable(ctx.req.source, {
-    before: currentAspects,
-    next: nextAspects,
-    touched,
-  });
+  // Дуальная запись (§А1-1): старая карта — проекция новой правды. Считается ОДИН раз и
+  // отсюда же уезжает в проверки бюджета (их перевод — Задача 7a) и в журнал.
+  const nextLegacy = projectLegacyAspects(ctx.registry, state);
 
   // Уникальность конверта (03-budget §2.1) над ФИНАЛЬНЫМ состоянием: и правка
   // комбинации, и разархивация (archived=false возвращает конверт в множество
   // неархивных) не должны создавать дубль. Внутренний undo восстанавливает
   // зафиксированное состояние — не проверяется (как прочие инварианты выше).
-  const nextBudget = ctx.internalUndo === undefined ? nextAspects['orbis/budget'] : undefined;
+  const nextBudget = ctx.internalUndo === undefined ? nextLegacy['orbis/budget'] : undefined;
   if (
     nextBudget !== undefined &&
     (touched.includes('orbis/budget') || (input.archived === false && current.archived))
@@ -1442,7 +1570,7 @@ async function prepareEntityUpdate(
     prior.body = current.body;
   } else if (
     ctx.internalUndo === undefined &&
-    needsProjectSeed(currentAspects, nextAspects, current.body, hasBodyInInput(input))
+    needsProjectSeed(before, state, current.body, hasBodyInInput(input))
   ) {
     // Заготовка тела проекта (С10). Ветка стоит ПЕРЕД строковой намеренно: `body: ''` — это
     // «тела не прислали» (hasBodyInInput), и строковая ветка записала бы пустоту, отменив
@@ -1474,21 +1602,19 @@ async function prepareEntityUpdate(
     changed.tags = patch.tags;
     prior.tags = current.tags;
   }
-  if (input.meta !== undefined) {
-    patch.meta = input.meta;
-    changed.meta = input.meta;
-    prior.meta = current.meta;
-  }
   if (input.archived !== undefined) {
     patch.archived = input.archived;
     changed.archived = input.archived;
     prior.archived = current.archived;
   }
-  if (input.aspects) {
-    patch.aspectsLegacy = nextAspects;
-    changed.aspects = Object.fromEntries(touched.map((k) => [k, nextAspects[k] ?? null]));
-    // §7.8: inverse аспектов — прежнее значение ВСЕГО затронутого ключа
-    // (shallow-merge делает пофазовый откат ненадёжным)
+  if (hasPropsInput(input)) {
+    patch.props = state.props;
+    patch.aspects = state.aspects;
+    patch.aspectsLegacy = nextLegacy;
+    changed.aspects = Object.fromEntries(touched.map((k) => [k, nextLegacy[k] ?? null]));
+    // §7.8: inverse аспектов — прежнее значение ВСЕГО затронутого ключа. Затронутыми
+    // считаются и аспекты, объявляющие слитое свойство (В1): правка категории у транзакции
+    // меняет карту и у конверта, и откат обязан вернуть обе.
     prior.aspects = Object.fromEntries(touched.map((k) => [k, currentAspects[k] ?? null]));
   }
   gateEntitlements(ctx, 'entity_update');
@@ -1544,46 +1670,56 @@ async function prepareAttach(
 
   const now = ctx.clock();
   const currentAspects = current.aspectsLegacy as AspectsMap;
+  const before = stateOf(current);
   const prev = currentAspects[aspectId];
-  const data = { ...input.data };
-  if (aspectId === 'orbis/task') applyTaskCompletion(prev, data, now); // §3.2 и для attach
+
+  // attach ставит носитель ЦЕЛИКОМ: свойство аспекта, не пришедшее в `data`, снимается —
+  // ровно то, что делала подмена аспект-ключа в старой форме.
+  const propsPatch = legacyReplaceToProps(ctx.registry, before, {
+    [aspectId]: { ...input.data },
+  });
+  const state = applyPropsPatch(before, propsPatch);
+  if (aspectId === 'orbis/task') applyTaskCompletion(before, state, now); // §3.2 и для attach
   // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency и для attach-пути
-  if (aspectId === 'orbis/budget') {
-    await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, data);
-  }
+  await normalizeEnvelopeProps(ctx, state);
 
-  // Стадия 2
-  validateAspectData(ctx.registry, aspectId, data);
+  // Стадия 4, первый рубеж: запрет по объекту для источника routine (V1.10) — attach это
+  // третий путь появления аспекта, им рутина заводилась бы на готовой сущности мимо
+  // create. Отвечает РАНЬШЕ гейта флагов: см. тот же довод в entity_update.
+  const touched = touchedAspects(ctx.registry, before, state, propsPatch);
+  assertRoutineUntouchable(ctx.req.source, {
+    before: before.aspects,
+    next: state.aspects,
+    touched,
+  });
 
-  // Стадия 4
-  const nextAspects: AspectsMap = { ...currentAspects, [aspectId]: data };
-  await assertFinancial(ctx, input.entity_id, nextAspects, batch);
+  // Гейт флагов (§А2-5/Б6) и стадия 2 — по итоговому состоянию
+  assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
+  assertEntityProps(ctx.registry, state);
+
+  await assertFinancial(ctx, input.entity_id, state, batch);
   // Живой грант в назначении (С4/С7): attach — третий путь появления аспекта, и обходить
   // им инвариант нельзя (тот же довод, что у «одного budget-parent» ниже)
   if (aspectId === 'orbis/assignment') {
-    await assertAssignment(ctx.tx, ctx.req.actorUserId, nextAspects);
+    await assertAssignment(ctx.tx, ctx.req.actorUserId, state);
   }
   // Ровно один субъект у прогона (V1.4): attach заменяет аспект ЦЕЛИКОМ, поэтому им можно
   // и потерять субъект, и добавить второй. Гейта по aspectId нет — проверка сама молчит,
   // когда прогона в итоговой карте не оказалось.
-  assertRunSubject(nextAspects);
-  // Запрет по объекту для источника routine (V1.10): attach — третий путь появления
-  // аспекта, им рутина заводилась бы на готовой сущности мимо create
-  assertRoutineUntouchable(ctx.req.source, {
-    before: currentAspects,
-    next: nextAspects,
-    touched: [aspectId],
-  });
+  assertRunSubject(state);
   // «Один budget-parent» (§4.2/§13.7) и для attach: аспект orbis/budget ретроспективно
   // делает сущность budget-parent'ом её financial-детей — инвариант проверяется не
   // только в relation_create, иначе attach обходит его (ревью 2026-07-09)
+  // Дуальная запись (§А1-1): старая карта — проекция новой правды; она же вход проверок
+  // бюджета (их перевод — Задача 7a) и полезной нагрузки журнала.
+  const nextLegacy = projectLegacyAspects(ctx.registry, state);
   if (aspectId === 'orbis/budget') {
     await assertBudgetAttachKeepsSingleParent(ctx, input.entity_id, batch);
     // Уникальность конверта (03-budget §2.1) — attach-путь той же комбинации
     await assertEnvelopeUnique(ctx.tx, {
       ownerId: ctx.req.actorUserId,
       entityId: input.entity_id,
-      budget: data,
+      budget: nextLegacy[aspectId] ?? {},
       virtualEntities: batch?.entities,
     });
   }
@@ -1592,14 +1728,19 @@ async function prepareAttach(
   // Заготовка тела проекта (С10): attach — третий путь появления orbis/project наравне с
   // create и update, и тело у всех трёх обязано получаться одинаковым. Вход attach тела не
   // несёт ВООБЩЕ (в схеме его нет) — отсюда false, а не hasBodyInInput.
-  const seed = needsProjectSeed(currentAspects, nextAspects, current.body, false)
+  const seed = needsProjectSeed(before, state, current.body, false)
     ? bodyFieldsFromMarkdown(projectBodyTemplate(input.entity_id))
     : undefined;
 
   // Эффект batch; updated_at строго растёт (monotonicUpdatedAt, §5.2)
   const updatedAt = monotonicUpdatedAt(now, current.updatedAt);
-  // Патч attach узкий: аспекты и updated_at, а поля тела — ТОЛЬКО при засеве
-  const patch: EntityPatch = { aspectsLegacy: nextAspects, updatedAt };
+  // Патч attach узкий: свойства с аспектами и updated_at, а поля тела — ТОЛЬКО при засеве
+  const patch: EntityPatch = {
+    props: state.props,
+    aspects: state.aspects,
+    aspectsLegacy: nextLegacy,
+    updatedAt,
+  };
   if (seed !== undefined) {
     patch.body = seed.body;
     patch.bodyDoc = seed.bodyDoc;
@@ -1614,7 +1755,11 @@ async function prepareAttach(
     entityId: input.entity_id,
     tool,
     title: current.title,
-    operations: [{ op: tool, payload: { entity_id: input.entity_id, data } }],
+    // Полезная нагрузка — старая карта аспекта ПОСЛЕ нормализаций (§3.2, валюта): журнал
+    // ПОКА говорит старой формой, и inverse обязан оставаться исполнимым тулом (Задача 6).
+    operations: [
+      { op: tool, payload: { entity_id: input.entity_id, data: nextLegacy[aspectId] ?? {} } },
+    ],
     // Стадии 6–7: inverse — прежнее значение аспект-ключа (null, если аспекта не было);
     // засеянное тело откатывается вместе с ним, иначе undo снял бы аспект, оставив
     // заготовку проекта на заметке, у которой её не было
@@ -1715,7 +1860,27 @@ async function loadBothEndsForUpdate(
 }
 
 function hasAspect(row: EntityRow, aspectId: string): boolean {
-  return (row.aspectsLegacy as AspectsMap)[aspectId] !== undefined;
+  return row.aspects.includes(aspectId);
+}
+
+/** Новая правда строки (§А1-1) как её видят слияние и доменные инварианты. */
+function stateOf(row: EntityRow): EntityState {
+  return { props: row.props as Record<string, unknown>, aspects: row.aspects };
+}
+
+/**
+ * Валюта конверта по умолчанию (бэклог A7) — на `props`, но ЧЕРЕЗ ту же функцию бюджета:
+ * умолчание владельца обязано жить в одном месте, а не в двух копиях запроса к настройкам.
+ *
+ * `orbis/currency` слито у транзакции и конверта (В1), поэтому подстановка идёт только когда
+ * значения нет вовсе: у записи, которая одновременно транзакция и конверт, валюта одна, и
+ * перезаписывать её умолчанием значило бы менять сумму транзакции задним числом.
+ */
+async function normalizeEnvelopeProps(ctx: ExecCtx, state: EntityState): Promise<void> {
+  if (!state.aspects.includes('orbis/budget')) return;
+  const draft: Record<string, unknown> = { currency: state.props['orbis/currency'] };
+  await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, draft);
+  state.props['orbis/currency'] = draft.currency;
 }
 
 async function prepareRelationCreate(
@@ -1752,8 +1917,8 @@ async function prepareRelationCreate(
   // Запрет по объекту для источника routine (V1.10): достаточно одного конца с
   // orbis/routine — оба конца уже под FOR UPDATE (loadBothEndsForUpdate выше)
   assertRoutineRelationUntouchable(ctx.req.source, {
-    source: source.aspectsLegacy as AspectsMap,
-    target: target.aspectsLegacy as AspectsMap,
+    source: source.aspects,
+    target: target.aspects,
   });
   if (batch) await assertNoDuplicateRelation(ctx.tx, key, batch.graph()); // batch: дубль ловим ДО записи
   if (key.relationType === 'blocks') {
@@ -1898,8 +2063,8 @@ async function prepareRelationDelete(
   // стадией 3, и до любой записи; сам захват — выше, ради порядка «сущности → связь».
   if (routineEnds !== undefined) {
     assertRoutineRelationUntouchable(ctx.req.source, {
-      source: routineEnds.source.aspectsLegacy as AspectsMap,
-      target: routineEnds.target.aspectsLegacy as AspectsMap,
+      source: routineEnds.source.aspects,
+      target: routineEnds.target.aspects,
     });
   }
   gateEntitlements(ctx, 'relation_delete');

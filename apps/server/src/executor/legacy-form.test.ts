@@ -124,25 +124,52 @@ test('rowFromLegacy: слитое свойство с разными значе�
   ).toThrow(/orbis\/finance_category/);
 });
 
-test('rowFromLegacy: поле, которое реформа переписала внутри, не выдаёт себя за круговой перевод', () => {
-  // `progress_source.query` меняет ФОРМУ (строка → Q-AST, §А5-2), поэтому обратной дороги
-  // у него нет. Фикстура, которая на такое поле опирается, обязана получить отказ, а не
-  // тихо разъехавшуюся колонку: в срезе А истина фикстуры — старая карта.
+test('rowFromLegacy: обёртка неразобранного запроса переживает круговой перевод, новая форма в старой карте — нет', () => {
+  // `progress_source.query` меняет ФОРМУ (строка → Q-AST, §А5-2), и в СТАРУЮ сторону этот
+  // перевод инвертируется точно: `{text: строка}` → строка. Инверсия обязательна ровно
+  // потому, что старую карту ещё читают: прогресс цели разбирает `progress_source` своей
+  // zod-схемой, где запрос — строка, и обёртка молча выключила бы прогресс у каждой цели.
+  const row = rowFromLegacy(reg, {
+    'orbis/goal': {
+      progress_source: { query: 'aspect=orbis/task', aggregate: 'count' },
+      target_value: '24',
+    },
+  });
+  expect(row.props['orbis/progress_source']).toEqual({
+    query: { text: 'aspect=orbis/task' },
+    aggregate: 'count',
+  });
+  expect(row.aspectsLegacy['orbis/goal']).toEqual({
+    progress_source: { query: 'aspect=orbis/task', aggregate: 'count' },
+    target_value: '24',
+  });
+
+  // А вот фикстура, написанная УЖЕ по-новому, старой картой невыразима — и обязана
+  // получить громкий отказ, а не тихо разъехавшуюся колонку.
   expect(() =>
     rowFromLegacy(reg, {
-      'orbis/goal': { progress_source: { query: 'aspect=orbis/task', aggregate: 'count' } },
+      'orbis/goal': {
+        progress_source: { query: { text: 'aspect=orbis/task' }, aggregate: 'count' },
+        target_value: '24',
+      },
     }),
   ).toThrow(/orbis\/goal/);
 });
 
-test('projectLegacyAspects: свойство без носителя в старой карте в неё не попадает', () => {
-  // Кастомный аспект владельца: у `user/hours` нет строки в переходной таблице §А8, и
-  // придумывать ей имя поля нельзя — старая карта такого поля никогда не знала.
+test('projectLegacyAspects: своё свойство владельца проецируется под своим прежним именем поля', () => {
+  // Строки в переходной таблице §А8 у `user/hours` нет и быть не может, но имя поля у него
+  // ЕСТЬ и не выдумано: локальная часть ключа — ровно то, чем старая форма это поле и
+  // звала (так его пишет конструктор аспекта, так читает карточка тула, keyFieldsByAspect).
+  //
+  // Задача 4a проекцию здесь обрывала, и это было верно, пока `props` никто не писал. С
+  // веха B она — ЕДИНСТВЕННЫЙ писатель `aspects_legacy`, а карту читают компилятор запросов
+  // (фильтр по полю кастомного аспекта), карточка тула и web: обрыв означал бы молчаливую
+  // потерю данных владельца.
   const map = projectLegacyAspects(reg, {
     props: { 'user/hours': 7, 'orbis/task_status': 'todo' },
     aspects: ['user/sleep-log', 'orbis/task'],
   });
-  expect(map).toEqual({ 'user/sleep-log': {}, 'orbis/task': { status: 'todo' } });
+  expect(map).toEqual({ 'user/sleep-log': { hours: 7 }, 'orbis/task': { status: 'todo' } });
 });
 
 test('projectLegacyAspects: свойство, не объявленное ни одним из аспектов сущности, не течёт в карту', () => {

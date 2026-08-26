@@ -1092,12 +1092,17 @@ describe('routineHistory: единицы пачки прошлых прогон�
 // ретраи с паузой, лимит прогонов в сутки; ручной прогон — свой ключ.
 // ---------------------------------------------------------------------------
 
-/** Патч аспекта прогона рукой владельца (как это сделал бы экран) — вне путей раннера. */
+/**
+ * Патч аспекта прогона рукой владельца (как это сделал бы экран) — вне путей раннера.
+ * `mechanism: 'verb'` — как на боевом пути экрана (routers/agent-run): свойства прогона
+ * `system_writable` (§А2-5), и пишет их бухгалтерия, каким бы каналом её ни позвали.
+ */
 async function patchRun(runId: string, patch: Record<string, unknown>): Promise<void> {
   const r = await execute(db, {
     actorUserId: owner,
     actorKind: 'owner',
     source: 'ui',
+    mechanism: 'verb',
     operations: [
       { tool: 'entity_update', input: { id: runId, aspects: { 'orbis/agent-run': patch } } },
     ],

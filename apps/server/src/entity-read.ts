@@ -107,9 +107,11 @@ export async function readEntity(
         SELECT id FROM rel
       )
       SELECT e.id, e.owner_id, e.title, e.emoji, e.body, e.body_refs, e.tags, e.meta,
-             -- Алиас на старую карту тот же, что в SELECT-листе компилятора (§6): его ждёт
-             -- toWireEntityFromSql, и оба уйдут вместе со старым носителем.
-             e.aspects_legacy AS aspects, e.created_at, e.updated_at, e.archived,
+             -- Столбцы те же, что в SELECT-листе компилятора (§6): их ждёт
+             -- toWireEntityFromSql, и списочное чтение обязано нести ту же новую форму,
+             -- что и одиночное (иначе backlinks молча отдают пустые props/aspects).
+             e.props, e.aspects, e.query_refs, e.aspects_legacy,
+             e.created_at, e.updated_at, e.archived,
              rel.id IS NOT NULL AS via_relation
         FROM ids
         JOIN entities e ON e.id = ids.id

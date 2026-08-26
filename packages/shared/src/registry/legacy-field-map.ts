@@ -141,6 +141,9 @@ function unmappedPropertyId(field: string): string {
 
 /**
  * Перевод форм значений, которые реформа поменяла ВНУТРИ (а не только переименовала).
+ * Экспортируется, потому что тот же перевод обязан делать исполнитель на границе входа
+ * (`executor/legacy-form.ts`): вторая копия правил разъехалась бы с этой при первой правке,
+ * и вердикты golden-корпуса приёмки §С8-1 перестали бы отвечать за путь записи.
  *
  * 1. `progress_source.query` — строка грамматики стала Q-AST (§А5-2, Р12). Разбирать текст
  *    здесь нечем (парсер Q-AST — Задача 8), поэтому неразобранный запрос заворачивается в
@@ -153,10 +156,34 @@ function unmappedPropertyId(field: string): string {
  * должна схема, а не карта, иначе вердикты старого и нового валидатора разъедутся не там,
  * где реформа что-то решила, а там, где карта что-то додумала.
  */
-function translateValue(propertyId: string, value: unknown): unknown {
+export function translateLegacyValue(propertyId: string, value: unknown): unknown {
   if (propertyId === 'orbis/progress_source') return translateProgressSource(value);
   if (propertyId === 'orbis/run_proposal') return translateProposal(value);
   return value;
+}
+
+/**
+ * ОБРАТНЫЙ ход перевода форм — для проекции `props` в старую карту (`aspects_legacy`).
+ *
+ * Инвертируется ровно то, что инвертируется ТОЧНО: обёртка неразобранного запроса
+ * (`{text: строка}` → строка). Больше ничего: у `proposal.mismatches` обратной функции нет
+ * (пара «аспект + поле» из id свойства не восстанавливается — слитые свойства и
+ * псевдо-аспект `orbis/entity` дают несколько прообразов), и её писатель переведён на новую
+ * форму вместо угадывания.
+ *
+ * Зачем инверсия вообще нужна, хотя §А5-2 объявляет Q-AST правдой: в срезе А старую карту
+ * ЧИТАЮТ (прогресс цели разбирает `progress_source.query` своей zod-схемой, где запрос —
+ * строка). Проекция, кладущая туда обёртку, молча выключила бы прогресс у каждой цели —
+ * без единого отказа, потому что расчёт целей fail-soft по построению.
+ */
+export function untranslateLegacyValue(propertyId: string, value: unknown): unknown {
+  if (propertyId !== 'orbis/progress_source') return value;
+  if (!isPlainObject(value)) return value;
+  const query = value.query;
+  if (!isPlainObject(query)) return value;
+  const keys = Object.keys(query);
+  if (keys.length !== 1 || keys[0] !== 'text' || typeof query.text !== 'string') return value;
+  return { ...value, query: query.text };
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -211,7 +238,7 @@ export function legacyAspectsToProps(aspects: LegacyAspects): LegacyTranslation 
   for (const [aspectId, data] of Object.entries(aspects)) {
     for (const [field, raw] of Object.entries(data)) {
       const propertyId = legacyFieldToProperty(aspectId, field) ?? unmappedPropertyId(field);
-      const value = translateValue(propertyId, raw);
+      const value = translateLegacyValue(propertyId, raw);
       const canonical = JSON.stringify(value) ?? 'undefined';
       const previous = seen.get(propertyId);
       if (previous !== undefined && previous !== canonical) {

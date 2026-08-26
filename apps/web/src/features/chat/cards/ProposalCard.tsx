@@ -124,10 +124,27 @@ function CollapsedBodyDiff({ units, entityId }: { units: readonly DiffUnit[]; en
   );
 }
 
-/** Строка разбора из аспекта прогона (нота уже словами). */
-function noteText(m: { aspect: string; field: string; note: string }): string {
+/** Расхождение, как оно лежит в аспекте прогона: по свойству (новая форма) или парой. */
+type ProposalNote = NonNullable<NonNullable<ProposalView['mismatches']>[number]>;
+
+/**
+ * Строка разбора из аспекта прогона (нота уже словами).
+ *
+ * Форм две, потому что единицей расхождения стало СВОЙСТВО (§А7-4), а прогоны, записанные
+ * раньше, несут прежнюю пару «аспект + поле». Ветка по наличию ключа, а не по типу-дискри-
+ * минанту: в жизни это переходное состояние одного и того же поля, и лишний тег в данных
+ * пережил бы сам переход.
+ */
+function noteText(m: ProposalNote): string {
+  if ('property' in m)
+    return `${fieldLabel(m.property.split('/').at(-1) ?? m.property)}: ${m.note}`;
   if (isBodyMismatch(m)) return BODY_MISMATCH_TEXT;
   return `${aspectLabel(m.aspect)} · ${fieldLabel(m.field)}: ${m.note}`;
+}
+
+/** Ключ строки списка: у новой формы — id свойства, у старой — пара. */
+function noteKey(m: ProposalNote): string {
+  return 'property' in m ? m.property : `${m.aspect}:${m.field}`;
 }
 
 /**
@@ -235,7 +252,7 @@ export function ProposalCard({
     mismatches !== null
       ? mismatches.map((m) => ({ key: `${m.aspect}:${m.field}`, text: mismatchText(m) }))
       : view?.status === 'stale' && view.mismatches !== undefined
-        ? view.mismatches.map((m) => ({ key: `${m.aspect}:${m.field}`, text: noteText(m) }))
+        ? view.mismatches.map((m) => ({ key: noteKey(m), text: noteText(m) }))
         : null;
 
   /**

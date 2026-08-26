@@ -558,6 +558,7 @@ async function patchRunUsage(
       actorUserId: args.ownerId,
       actorKind: 'ai',
       source: 'system', // бухгалтерия прогона (Р-7): не правка графа, а протокол
+      mechanism: 'verb', // расход — служебное свойство прогона (§А2-5)
       runId: args.runId,
       operations: [
         {

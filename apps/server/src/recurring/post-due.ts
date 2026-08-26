@@ -70,6 +70,8 @@ export async function postDueInstances(deps: PostDueDeps): Promise<{ posted: num
         actorUserId: ownerId,
         actorKind: 'owner',
         source: 'system',
+        // Механизм — материализация (§А4-4): переход «план → факт» делает сервер по сроку
+        mechanism: 'materialize',
         operations: [
           {
             tool: 'entity_update',

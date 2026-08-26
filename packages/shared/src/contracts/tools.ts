@@ -141,13 +141,72 @@ export interface PreconditionMismatch {
 }
 
 /**
- * Надмножество для executor'а: UI-форма (bodyDoc) + серверное CAS-предусловие (С7).
+ * ВНУТРЕННЯЯ форма правки значений (§А1-1, РП-3): плоский патч по свойствам плюс
+ * навешивание/снятие аспектов. Живёт в exec/UI-надмножествах и НЕ показывается модели до
+ * Задачи 12 — контракты тулов `entityCreateInput`/`entityUpdateInput` не растут ни на поле.
+ *
+ * Три части, и каждая выражает то, чего не выражают остальные:
+ *  - `props` — «поставить значение». Ключ — id свойства ИЛИ его `key`; какой именно,
+ *    решает резолв на границе (`resolvePropertyRef`): у встроенных они совпадают, а свои
+ *    свойства владелец адресует именем, которое сам и дал;
+ *  - `unset` — «снять значение». Отдельным списком, а не `null` в `props`, потому что
+ *    `null` — законное ЗНАЧЕНИЕ json-свойства, и совместить их значило бы навсегда
+ *    запретить его записывать;
+ *  - `aspects.attach`/`detach` — «изменить интерпретацию». Снятие аспекта значений НЕ
+ *    трогает (Р9): аспект — не владелец поля, и его снятие не повод терять факт владельца.
+ */
+export const entityPropsPatch = z
+  .object({
+    props: z.record(z.unknown()).optional(),
+    unset: z.array(z.string()).optional(),
+    aspects: z
+      .object({ attach: z.array(z.string()).optional(), detach: z.array(z.string()).optional() })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type EntityPropsPatch = z.infer<typeof entityPropsPatch>;
+
+/** Старая карта правки: `{id аспекта: {поле: значение|null}}`; `null` вместо объекта — detach. */
+const legacyAspectsPatch = z.record(z.union([z.record(z.unknown()), z.null()]));
+
+/**
+ * Надмножество entity_create для executor'а: старая карта аспектов ИЛИ новая форма
+ * (`props` + список навешиваемых аспектов).
+ *
+ * `aspects` — union, а не два разных поля: у создания это ОДНО понятие «с чем сущность
+ * рождается», и вторым именем оно бы просто раздвоилось. Формы различимы по типу значения
+ * (список строк против карты объектов), поэтому разбор однозначен, а вызывающий выбирает ту,
+ * на которую уже переведён: старую карту шлют тулы, web и не переведённые серверные пути
+ * (до Задач 13c/18), новую — всё, что переводится по мере задач среза.
+ */
+export const entityCreateExecInput = entityCreateInput
+  .extend({
+    props: z.record(z.unknown()).optional(),
+    aspects: z.union([z.array(z.string()), z.record(z.record(z.unknown()))]).optional(),
+  })
+  .strict();
+export type EntityCreateExecInput = z.infer<typeof entityCreateExecInput>;
+
+/**
+ * Надмножество для executor'а: UI-форма (bodyDoc) + серверное CAS-предусловие (С7) +
+ * внутренняя форма правки свойств (§А1-1).
  * Тул и tRPC его не принимают — `precondition` это рычаг серверных путей (захват тикета,
  * подметание, ответ на чекпойнт), а не поле, которое модель или клиент подставляет сами.
  * Ровно поэтому схема отдельная, а `entityUpdateInput` (контракт ТУЛА) не растёт.
+ *
+ * `aspects` здесь — union ДВУХ форм: старая карта (её шлют тулы, web и ещё не переведённые
+ * серверные пути) и `{attach, detach}` новой формы. Пустой объект `{}` разбирается первой
+ * веткой и означает пустой патч в обеих — расхождения между формами он не создаёт.
  */
 export const entityUpdateExecInput = entityUpdateInput
-  .extend({ bodyDoc: bodyDocSchema.optional(), precondition: entityUpdatePrecondition.optional() })
+  .extend({
+    bodyDoc: bodyDocSchema.optional(),
+    precondition: entityUpdatePrecondition.optional(),
+    props: entityPropsPatch.shape.props,
+    unset: entityPropsPatch.shape.unset,
+    aspects: z.union([legacyAspectsPatch, entityPropsPatch.shape.aspects.unwrap()]).optional(),
+  })
   .refine(bodyXorBodyDoc, BODY_XOR_BODY_DOC_ISSUE);
 export type EntityUpdateExecInput = z.infer<typeof entityUpdateExecInput>;
 

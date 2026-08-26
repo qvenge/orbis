@@ -133,7 +133,7 @@ interface RunAspect {
     pending_id: string;
     status: string;
     decided_at?: string;
-    mismatches?: Array<{ aspect: string; field: string; note: string }>;
+    mismatches?: Array<{ property: string; note: string }>;
     edited_from?: string;
   };
 }
@@ -204,6 +204,9 @@ async function pointRunAt(runId: string, pendingId: string, status: string): Pro
     actorUserId: owner,
     actorKind: 'owner',
     source: 'system',
+    // Как на боевом пути (lifecycle.patchAspect): указатель предложения — служебное
+    // свойство прогона (§А2-5), и пишет его глагол исполнителя.
+    mechanism: 'verb',
     runId,
     operations: [
       {
@@ -771,14 +774,15 @@ describe('routine.proposal / decideProposal', () => {
 
     const aspect = await runAspect(runId);
     expect(aspect.proposal?.status).toBe('stale');
-    expect(aspect.proposal?.mismatches?.[0]?.aspect).toBe('orbis/task');
-    expect(aspect.proposal?.mismatches?.[0]?.field).toBe('status');
+    // Единица расхождения на прогоне — СВОЙСТВО (§А7-4), а не пара «аспект + поле»:
+    // предусловие ещё говорит парой (её перевод — Задача 5), нота уже свойством.
+    expect(aspect.proposal?.mismatches?.[0]).toMatchObject({ property: 'orbis/task_status' });
     expect(aspect.proposal?.mismatches?.[0]?.note).toContain('ожидали');
     expect(aspect.proposal?.mismatches?.[0]?.note).toContain('done');
 
     const view = await caller().routine.proposal({ runId });
     expect(view?.status).toBe('stale');
-    expect(view?.mismatches?.[0]?.field).toBe('status');
+    expect(view?.mismatches?.[0]).toMatchObject({ property: 'orbis/task_status' });
   });
 
   test('предложение с правкой ТЕЛА, цель менялась после составления → approve даёт stale с расхождением тела (не голую STALE_VERSION), pending отклонён причиной stale, нота на прогоне (A-2/B2-1)', async () => {
@@ -828,7 +832,9 @@ describe('routine.proposal / decideProposal', () => {
     const aspect = await runAspect(runId);
     expect(aspect.proposal?.status).toBe('stale');
     expect(aspect.proposal?.mismatches).toEqual([
-      { aspect: '', field: 'body', note: 'тело изменено после составления предложения' },
+      // У расхождения тела свойства в §А8 нет (тело — не свойство), поэтому нота несёт
+      // заведомо неизвестный id той же формы, что и переходная карта: `orbis/<поле>`.
+      { property: 'orbis/body', note: 'тело изменено после составления предложения' },
     ]);
     // Повторное «Принять» — уже решено, а не вторая ошибка
     expect(

@@ -744,6 +744,8 @@ export async function confirmImport(
     actorUserId: ownerId,
     actorKind: 'owner', // импорт — путь владельца; LLM/MCP этот флоу не инициируют
     source: 'ui', // подтверждённое действие владельца на экране ревью (§3.4 шаг 4)
+    // Механизм — импорт (§А4-4): только ему разрешено писать `orbis/bank_txn_id` (§А2-5)
+    mechanism: 'import',
     batchId: input.batchId,
     operations,
   };

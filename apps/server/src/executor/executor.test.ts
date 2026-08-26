@@ -1564,6 +1564,12 @@ describe('D42 ОЧ.13: псевдо-аспект orbis/entity — предусл
 });
 
 describe('V1: инвариант субъекта прогона (V1.4)', () => {
+  /**
+   * Прогон пишет ГЛАГОЛ исполнителя (§А4-4): все его свойства `system_writable` (§А2-5),
+   * и без механизма фикстура получала бы `COMPUTED_WRITE` вместо проверяемого инварианта.
+   */
+  const asVerb = { mechanism: 'verb' } as const;
+
   /** Прогон в минимальной валидной форме — субъект дописывает тест. */
   const run = (subject: Record<string, unknown>) => ({
     outcome: 'running',
@@ -1577,11 +1583,15 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
   test('agent-run с routine_id и без grant_id — принимается; с обоими или без обоих — VALIDATION reason run_subject', async () => {
     const ok = await execute(
       db,
-      req('entity_create', {
-        title: 'Прогон рутины',
-        tags: [],
-        aspects: { 'orbis/agent-run': run({ routine_id: newId(), bucket: '2026-08-18T07:00' }) },
-      }),
+      req(
+        'entity_create',
+        {
+          title: 'Прогон рутины',
+          tags: [],
+          aspects: { 'orbis/agent-run': run({ routine_id: newId(), bucket: '2026-08-18T07:00' }) },
+        },
+        asVerb,
+      ),
     );
     expect(ok.ok).toBe(true);
 
@@ -1589,11 +1599,15 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
     // (rollback по гранту) и как рутинный другим (бухгалтерия бакета).
     const both = await execute(
       db,
-      req('entity_create', {
-        title: 'Прогон',
-        tags: [],
-        aspects: { 'orbis/agent-run': run({ grant_id: newId(), routine_id: newId() }) },
-      }),
+      req(
+        'entity_create',
+        {
+          title: 'Прогон',
+          tags: [],
+          aspects: { 'orbis/agent-run': run({ grant_id: newId(), routine_id: newId() }) },
+        },
+        asVerb,
+      ),
     );
     expect(both.ok).toBe(false);
     if (!both.ok) {
@@ -1603,7 +1617,11 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
 
     const none = await execute(
       db,
-      req('entity_create', { title: 'Прогон', tags: [], aspects: { 'orbis/agent-run': run({}) } }),
+      req(
+        'entity_create',
+        { title: 'Прогон', tags: [], aspects: { 'orbis/agent-run': run({}) } },
+        asVerb,
+      ),
     );
     expect(none.ok).toBe(false);
     if (!none.ok) {
@@ -1616,21 +1634,26 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
     const created = firstEntity(
       await execute(
         db,
-        req('entity_create', {
-          title: 'Прогон рутины',
-          tags: [],
-          aspects: { 'orbis/agent-run': run({ routine_id: newId() }) },
-        }),
+        req(
+          'entity_create',
+          {
+            title: 'Прогон рутины',
+            tags: [],
+            aspects: { 'orbis/agent-run': run({ routine_id: newId() }) },
+          },
+          asVerb,
+        ),
       ),
     );
 
     // merge аспектов: дописать grant_id живому рутинному прогону — второй субъект
     const upd = await execute(
       db,
-      req('entity_update', {
-        id: created.id,
-        aspects: { 'orbis/agent-run': { grant_id: newId() } },
-      }),
+      req(
+        'entity_update',
+        { id: created.id, aspects: { 'orbis/agent-run': { grant_id: newId() } } },
+        asVerb,
+      ),
     );
     expect(upd.ok).toBe(false);
     if (!upd.ok) {
@@ -1644,7 +1667,7 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
     // и attach-тула не публикует вовсе).
     const att = await execute(
       db,
-      req('attach_orbis_agent-run', { entity_id: created.id, data: run({}) }),
+      req('attach_orbis_agent-run', { entity_id: created.id, data: run({}) }, asVerb),
     );
     expect(att.ok).toBe(false);
     if (!att.ok) {
@@ -1655,7 +1678,11 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
     // Правка, не трогающая субъект, идёт как раньше: шаги прогона пишутся именно так
     const step = await execute(
       db,
-      req('entity_update', { id: created.id, aspects: { 'orbis/agent-run': { step_count: 1 } } }),
+      req(
+        'entity_update',
+        { id: created.id, aspects: { 'orbis/agent-run': { step_count: 1 } } },
+        asVerb,
+      ),
     );
     expect(step.ok).toBe(true);
   });
@@ -1682,6 +1709,13 @@ describe('V1: источник routine не трогает рутины и на�
 
   /** Мутация от лица прогона рутины: source — единственный вход инварианта. */
   const asRoutine = { source: 'routine', actorKind: 'ai' } as const;
+
+  /**
+   * Бухгалтерия прогона (Р-7): канал `system`, механизм — глагол исполнителя (§А4-4).
+   * Механизм здесь обязателен: свойства прогона `system_writable` (§А2-5), и без него
+   * «та же бухгалтерия системой проходит» перестало бы проходить.
+   */
+  const asAccounting = { source: 'system', actorKind: 'ai', mechanism: 'verb' } as const;
 
   /** Отказ по объекту — код и причина одни на всех пяти точках проверки. */
   function expectUntouchable(r: Awaited<ReturnType<typeof execute>>): void {
@@ -1788,7 +1822,7 @@ describe('V1: источник routine не трогает рутины и на�
         req(
           'entity_create',
           { title: 'Прогон рутины', tags: [], aspects: { 'orbis/agent-run': run(target.id) } },
-          { source: 'system', actorKind: 'ai' },
+          asAccounting,
         ),
       ),
     );
@@ -1807,7 +1841,7 @@ describe('V1: источник routine не трогает рутины и на�
       req(
         'relation_create',
         { source_id: target.id, target_id: runEntity.id, relation_type: 'parent' },
-        { source: 'system', actorKind: 'ai' },
+        asAccounting,
       ),
     );
     expect(linkBySystem.ok).toBe(true);
@@ -1828,7 +1862,7 @@ describe('V1: источник routine не трогает рутины и на�
       req(
         'relation_delete',
         { source_id: target.id, target_id: runEntity.id, relation_type: 'parent' },
-        { source: 'system', actorKind: 'ai' },
+        asAccounting,
       ),
     );
     expect(unlinkBySystem.ok).toBe(true);
@@ -1966,7 +2000,7 @@ describe('V1: источник routine не трогает рутины и на�
             tags: [],
             aspects: { 'orbis/agent-run': run(routineEntity.id) },
           },
-          { source: 'system', actorKind: 'ai' },
+          asAccounting,
         ),
       ),
     );
@@ -2030,11 +2064,15 @@ describe('V1: источник routine не трогает рутины и на�
       req(
         'entity_update',
         { id: runEntity.id, aspects: { 'orbis/agent-run': { step_count: 1 } } },
-        { source: 'system', actorKind: 'ai' },
+        asAccounting,
       ),
     );
     expect(bySystem.ok).toBe(true);
-    // Ответ владельца — ui
+    // Ответ владельца — канал `ui`, механизм `verb`: оси разные и обе значимы. Канал
+    // говорит «это рука владельца» (лента и undo смотрят сюда), механизм — «пишется
+    // служебное свойство прогона» (§А2-5). Ровно так этот путь и устроен в проде
+    // (routers/agent-run.ts): будь механизм умолчательным, ответ владельца получил бы
+    // COMPUTED_WRITE.
     const byUi = await execute(
       db,
       req(
@@ -2043,7 +2081,7 @@ describe('V1: источник routine не трогает рутины и на�
           id: runEntity.id,
           aspects: { 'orbis/agent-run': { reply: { text: 'да', at: '2026-08-18T08:00:00.000Z' } } },
         },
-        { source: 'ui', actorKind: 'owner' },
+        { source: 'ui', actorKind: 'owner', mechanism: 'verb' },
       ),
     );
     expect(byUi.ok).toBe(true);

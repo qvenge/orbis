@@ -19,10 +19,15 @@
 import {
   type LegacyAspects,
   legacyAspectsToProps,
+  legacyFieldToProperty,
   propertyToLegacyField,
   type RelationRoleId,
+  translateLegacyValue,
+  untranslateLegacyValue,
 } from '@orbis/shared';
 import type { RegistrySnapshot } from '../registry/load';
+import { ExecError } from './errors';
+import { type EntityState, type PropsPatch, resolvePropertyRef } from './props';
 
 /** Значения сегодняшней колонки `relations.relation_type` плюс `ref` (её v1 ещё не знает). */
 export type LegacyRelationType = 'parent' | 'blocks' | 'related_to' | 'derived_from' | 'ref';
@@ -92,13 +97,248 @@ export function projectLegacyAspects(
     const fields: Record<string, unknown> = {};
     for (const ref of reg.aspects.get(aspectId)?.properties ?? []) {
       if (!Object.hasOwn(state.props, ref.propertyId)) continue;
-      const field = propertyToLegacyField(ref.propertyId, aspectId);
-      if (field === undefined) continue;
-      fields[field] = state.props[ref.propertyId];
+      fields[legacyFieldOfProperty(reg, aspectId, ref.propertyId)] = untranslateLegacyValue(
+        ref.propertyId,
+        state.props[ref.propertyId],
+      );
     }
     out[aspectId] = fields;
   }
   return out;
+}
+
+/**
+ * Имя поля, под которым свойство лежало в старой карте.
+ *
+ * Две ветки, и вторая — не догадка. Встроенные пары даёт переходная таблица §А8. У СВОЕГО
+ * свойства владельца строки в ней нет и быть не может, и старым именем поля у него всегда
+ * была локальная часть ключа (`user/sleep-log` + поле `hours` → свойство `user/hours`): так
+ * его заводит конструктор аспекта, так его читает карточка тула
+ * (`keyFieldsByAspect`, tools/dispatch.ts), так его писал старый путь записи. Придуманного
+ * имени здесь нет — есть ровно то, которое старая форма и знала.
+ *
+ * ПОЧЕМУ ЭТО ИЗМЕНЕНИЕ ОТНОСИТЕЛЬНО ЗАДАЧИ 4a, где такое свойство в карту просто не
+ * попадало: тогда `props` никто не писал, и проекция была вспомогательной. С этой задачи она
+ * — ЕДИНСТВЕННЫЙ писатель `aspects_legacy`, а карту читают компилятор запросов (фильтр по
+ * полю кастомного аспекта), карточка тула и web. Проекция, теряющая своё поле владельца,
+ * молча выключила бы их все.
+ */
+function legacyFieldOfProperty(
+  reg: RegistrySnapshot,
+  aspectId: string,
+  propertyId: string,
+): string {
+  const mapped = propertyToLegacyField(propertyId, aspectId);
+  if (mapped !== undefined) return mapped;
+  const key = reg.properties.get(propertyId)?.key ?? propertyId;
+  return key.split('/').at(-1) ?? propertyId;
+}
+
+/**
+ * Обратный резолв: имя поля старой карты → id свойства. Сначала по объявленным свойствам
+ * аспекта (там же живут свои свойства владельца), затем по переходной таблице §А8, и лишь
+ * потом — «свойство с таким именем в namespace orbis», то есть заведомо неизвестный id.
+ *
+ * Последняя ветка не подстраховка, а НОСИТЕЛЬ ОТКАЗА: `orbis/agent-run.project_id` §А8
+ * удаляет, опечатка в имени поля тоже никуда не резолвится, и оба обязаны получить честный
+ * `UNKNOWN_PROPERTY` от валидатора — единственного места, где отказ по свойству называется.
+ * Своего отказа здесь нет намеренно: два разных кода на одну опечатку читались бы как два
+ * разных правила.
+ */
+function propertyOfLegacyField(reg: RegistrySnapshot, aspectId: string, field: string): string {
+  for (const ref of reg.aspects.get(aspectId)?.properties ?? []) {
+    if (legacyFieldOfProperty(reg, aspectId, ref.propertyId) === field) return ref.propertyId;
+  }
+  return legacyFieldToProperty(aspectId, field) ?? `orbis/${field}`;
+}
+
+/** Снятие значения в патче — отличается от любого записываемого значения (включая null). */
+const UNSET = Symbol('unset');
+
+/**
+ * Старая карта ПАТЧА (`{аспект: {поле: значение|null} | null}`) → патч свойств.
+ *
+ * Дословный перевод сегодняшней семантики `mergeAspects` (§9.2) в новую модель:
+ *  - `{аспект: null}` — detach аспекта. Значения при этом ОСТАЮТСЯ (Р9): в старой форме их
+ *    носителем был ключ карты, в новой носителя у них нет вовсе, и терять факт владельца
+ *    из-за смены интерпретации незачем;
+ *  - `{аспект: {поле: null}}` — снятие свойства (в старой форме «поле со значением null
+ *    удаляется»);
+ *  - `{аспект: {поле: значение}}` — запись свойства и навешивание аспекта (в старой форме
+ *    ключ карты появлялся сам собой).
+ *
+ * Слитое свойство (§А8/В1), получившее в ОДНОМ патче два разных значения, — отказ, а не
+ * «последний выиграл»: `financial.category_ref` и `budget.category_ref` это одно свойство,
+ * и молча выбранное значение — потерянный факт владельца.
+ */
+export function legacyPatchToProps(
+  reg: RegistrySnapshot,
+  patch: Record<string, Record<string, unknown> | null>,
+): PropsPatch {
+  const set: Record<string, unknown> = {};
+  const unset: string[] = [];
+  const attach: string[] = [];
+  const detach: string[] = [];
+  /** propertyId → каноническая запись намерения: текст значения либо UNSET. */
+  const intent = new Map<string, string | typeof UNSET>();
+
+  const remember = (propertyId: string, next: string | typeof UNSET, value: unknown): void => {
+    const prev = intent.get(propertyId);
+    if (prev !== undefined && prev !== next) {
+      throw new ExecError(
+        'VALIDATION',
+        `свойство ${propertyId} получило в одном патче два разных значения — в плоской модели это невыразимо (В1)`,
+        { reason: 'merged_property_conflict', property: propertyId, value },
+      );
+    }
+    intent.set(propertyId, next);
+  };
+
+  for (const [aspectId, value] of Object.entries(patch)) {
+    if (value === null) {
+      detach.push(aspectId);
+      continue;
+    }
+    attach.push(aspectId);
+    for (const [field, raw] of Object.entries(value)) {
+      const propertyId = propertyOfLegacyField(reg, aspectId, field);
+      if (raw === null) {
+        remember(propertyId, UNSET, null);
+        unset.push(propertyId);
+        continue;
+      }
+      const translated = translateLegacyValue(propertyId, raw);
+      remember(propertyId, JSON.stringify(translated) ?? 'undefined', translated);
+      set[propertyId] = translated;
+    }
+  }
+  return { set, unset, attach, detach };
+}
+
+/**
+ * Тот же перевод, но с семантикой ЗАМЕНЫ ключа целиком — форма inverse-операций журнала
+ * (§7.8) и тула `attach_<аспект>`.
+ *
+ * Разница с `legacyPatchToProps` ровно одна и она существенная: свойство аспекта, которого
+ * в значении НЕТ, снимается. В старой форме это выходило само собой (ключ карты
+ * подменялся целиком), в плоской модели снятие приходится назвать. Без него откат
+ * «действие дописало поле» оставлял бы дописанное значение в `props`: старая карта его уже
+ * не показывала бы (проекция идёт по свойствам аспекта), а следующее навешивание того же
+ * аспекта воскресило бы — расхождение, которое нашлось бы у владельца, а не в тестах.
+ *
+ * `{аспект: null}` (аспекта до действия не было) снимает и значения его свойств — по той же
+ * причине. Не снимаются лишь те, что объявлены ДРУГИМ аспектом, остающимся на сущности:
+ * слитое свойство (В1) принадлежит обоим, и снимать его вместе с одним из носителей значило
+ * бы стирать данные второго.
+ */
+export function legacyReplaceToProps(
+  reg: RegistrySnapshot,
+  cur: EntityState,
+  patch: Record<string, Record<string, unknown> | null>,
+): PropsPatch {
+  const base = legacyPatchToProps(reg, patch);
+  const detached = new Set(base.detach ?? []);
+  const remaining = new Set([
+    ...cur.aspects.filter((id) => !detached.has(id)),
+    ...(base.attach ?? []),
+  ]);
+  const unset = new Set(base.unset ?? []);
+  const set = base.set ?? {};
+
+  for (const [aspectId, value] of Object.entries(patch)) {
+    for (const ref of reg.aspects.get(aspectId)?.properties ?? []) {
+      if (Object.hasOwn(set, ref.propertyId)) continue;
+      // Свойство, которое объявляет другой оставшийся аспект, — не наше, чтобы его снимать.
+      const sharedWithOther = [...remaining].some(
+        (other) =>
+          other !== aspectId &&
+          (reg.aspects.get(other)?.properties ?? []).some((r) => r.propertyId === ref.propertyId),
+      );
+      if (sharedWithOther) continue;
+      if (
+        value === null ||
+        !Object.hasOwn(value, legacyFieldOfProperty(reg, aspectId, ref.propertyId))
+      ) {
+        unset.add(ref.propertyId);
+      }
+    }
+  }
+  return { set, unset: [...unset], attach: base.attach, detach: base.detach };
+}
+
+/** Вход исполнителя в любой из двух форм — то, что разбирают exec-надмножества контрактов. */
+export interface ExecPropsInput {
+  props?: Record<string, unknown>;
+  unset?: string[];
+  aspects?:
+    | Record<string, Record<string, unknown> | null>
+    | { attach?: string[]; detach?: string[] }
+    | string[];
+}
+
+/** true, если вход вообще несёт правку свойств (иначе стадии слияния не запускаются). */
+export function hasPropsInput(input: ExecPropsInput): boolean {
+  return input.props !== undefined || input.unset !== undefined || input.aspects !== undefined;
+}
+
+/**
+ * Нормализация ОБЕИХ форм входа в один патч свойств.
+ *
+ * Формы две и они сосуществуют до конца среза (Ф-16/РП-3): тулы, web и ещё не переведённые
+ * серверные пути шлют старую карту, переведённые — новую. Различаются по типу значения
+ * `aspects`: список строк (навесить) и объект `{attach, detach}` — новая форма, карта
+ * объектов/`null` — старая. Смесь законна: `props` новой формы поверх старой карты — ровно
+ * то, что нужно пути, который переводится по частям.
+ *
+ * Порядок наложения: сначала старая карта, потом явные `props`/`unset`. Явное намерение
+ * вызывающего сильнее того, что вывелось из карты, — иначе перевод пути по частям начинался
+ * бы с необъяснимого «моё значение не записалось».
+ *
+ * @param replaceKeys семантика ЗАМЕНЫ ключа для старой карты (attach-тул, inverse журнала).
+ */
+export function fromLegacyInput(
+  reg: RegistrySnapshot,
+  cur: EntityState,
+  input: ExecPropsInput,
+  replaceKeys = false,
+): PropsPatch {
+  const set: Record<string, unknown> = {};
+  const unset: string[] = [];
+  const attach: string[] = [];
+  const detach: string[] = [];
+
+  const aspects = input.aspects;
+  if (Array.isArray(aspects)) {
+    attach.push(...aspects);
+  } else if (aspects !== undefined && isAspectsPatch(aspects)) {
+    attach.push(...(aspects.attach ?? []));
+    detach.push(...(aspects.detach ?? []));
+  } else if (aspects !== undefined) {
+    const legacy = replaceKeys
+      ? legacyReplaceToProps(reg, cur, aspects)
+      : legacyPatchToProps(reg, aspects);
+    Object.assign(set, legacy.set);
+    unset.push(...(legacy.unset ?? []));
+    attach.push(...(legacy.attach ?? []));
+    detach.push(...(legacy.detach ?? []));
+  }
+
+  for (const [keyOrId, value] of Object.entries(input.props ?? {})) {
+    const def = resolvePropertyRef(reg, keyOrId);
+    // Неизвестный адрес уезжает В ТОМ ЖЕ ВИДЕ, что пришёл: отказ по свойству называет
+    // валидатор (`UNKNOWN_PROPERTY`), и подменять здесь имя значило бы прятать опечатку.
+    set[def?.id ?? keyOrId] = value;
+  }
+  for (const keyOrId of input.unset ?? []) {
+    unset.push(resolvePropertyRef(reg, keyOrId)?.id ?? keyOrId);
+  }
+
+  return { set, unset, attach, detach };
+}
+
+/** Новая форма `aspects` отличается от старой карты тем, что у неё нет чужих ключей. */
+function isAspectsPatch(value: object): value is { attach?: string[]; detach?: string[] } {
+  return Object.keys(value).every((k) => k === 'attach' || k === 'detach');
 }
 
 /** Три колонки строки `entities`, которые реформа держит согласованными. */

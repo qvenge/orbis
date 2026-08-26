@@ -300,7 +300,15 @@ async function materializeTemplate(
     );
     const r = await execute(
       db,
-      { actorUserId: ownerId, actorKind: 'owner', source: 'system', operations, batchId },
+      {
+        actorUserId: ownerId,
+        actorKind: 'owner',
+        source: 'system',
+        // Механизм — материализация (§А4-4): экземпляры повторяющегося рождает сервер
+        mechanism: 'materialize',
+        operations,
+        batchId,
+      },
       { sink },
     );
     if (r.ok) return r.idempotentReplay ? 0 : missing.length;

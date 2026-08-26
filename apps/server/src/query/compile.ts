@@ -57,9 +57,20 @@ export class QueryFieldError extends QueryCompileError {
 /** Дефолтный cap выдачи, когда limit= не задан (решение 11 плана); только compileQuery. */
 const DEFAULT_LIMIT = 500;
 
-/** Колонки полного SELECT по §4.1 — константа кода, не пользовательский ввод. */
+/**
+ * Колонки полного SELECT по §4.1 — константа кода, не пользовательский ввод.
+ *
+ * НОВАЯ форма (`props`, `aspects`, `query_refs`) в списке ОБЯЗАТЕЛЬНА с того момента, как
+ * исполнитель начал её писать: `toWireEntityFromSql` собирает из этой выдачи ту же
+ * wire-форму, что и одиночное чтение, и без трёх колонок списки (entity.query, backlinks,
+ * тул `entity_query`) отдавали бы пустые `props`/`aspects` там, где `entity.get` отдаёт
+ * правду. Молчаливое расхождение: списки выглядят рабочими, просто новая форма в них пуста.
+ *
+ * Алиас `aspects_legacy AS aspects` СНЯТ — имя `aspects` заняла новая правда, и два столбца
+ * с одним именем в выдаче постгреса разрешаются молча, «последний выигрывает».
+ */
 const ENTITY_COLUMNS =
-  'id, owner_id, title, emoji, body, body_refs, tags, meta, aspects_legacy AS aspects, created_at, updated_at, archived';
+  'id, owner_id, title, emoji, body, body_refs, tags, meta, props, aspects, query_refs, aspects_legacy, created_at, updated_at, archived';
 
 /** Полный SELECT: WHERE по фильтрам + ORDER BY + LIMIT (cap 500 без limit=). */
 export function compileQuery(ast: QueryAst, ctx: CompileContext): SQL {

@@ -985,6 +985,9 @@ export async function rolloverCreate(
     actorUserId: ownerId,
     actorKind: 'owner',
     source: 'ui', // подтверждённое действие владельца на экране Rollover (§3.5)
+    // Механизм — правило каталога (§А4-4): перенос остатка пишет `orbis/carryover`, и
+    // только правилу rollover это разрешено (§А2-5).
+    mechanism: 'rule',
     batchId: input.batchId,
     operations: input.rows.map((row) => {
       const title = categoryOr(catMap, row.categoryId).title;

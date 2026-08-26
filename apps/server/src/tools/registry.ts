@@ -955,7 +955,7 @@ export interface AspectToolRow {
 /**
  * Аспекты, видимые актору: builtin + собственные кастомные (RLS того же tx).
  * ORDER BY owner_id NULLS FIRST: при коллизии id собственное определение
- * перекрывает builtin — как в loadAspectRegistry executor'а.
+ * перекрывает builtin — как в снимке реестра исполнителя (`registry/load.ts`).
  */
 export async function loadAspectToolRows(tx: Tx): Promise<AspectToolRow[]> {
   const rows = await tx

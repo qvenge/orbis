@@ -78,21 +78,19 @@ export function toWireEntityFromSql(row: Record<string, unknown>): WireEntity {
       bodyRefs: row.body_refs,
       tags: row.tags,
       meta: row.meta,
-      // Старая карта приезжает под алиасом `aspects` — так её называют оба SELECT'а
-      // (компилятор §6 и backlinks), и алиас оставлен намеренно: без него переименование
-      // колонки переписало бы ещё и 27 golden-эталонов SQL, ничего не изменив по смыслу.
-      aspectsLegacy: row.aspects,
+      // Новая правда (§А1-1) и старая карта — обе из выдачи и обе под своими именами:
+      // алиас `aspects_legacy AS aspects` снят вместе с появлением писателя `props`
+      // (см. ENTITY_COLUMNS). Пока колонок здесь не было, списочные пути отдавали пустую
+      // новую форму при том, что одиночное чтение отдавало правду, — и ни один тест этого
+      // не пиннил.
+      props: row.props,
+      aspects: row.aspects,
+      queryRefs: row.query_refs,
+      aspectsLegacy: row.aspects_legacy,
       createdAt: toDate(row.created_at),
       updatedAt: toDate(row.updated_at),
       archived: row.archived,
     } as EntityRow),
-    // Новых колонок эти SELECT'ы НЕ тянут: до появления их писателя они пусты у каждой
-    // строки, а три пустых колонки в КАЖДОЙ строке списка — вес без единого читателя.
-    // Значения проставлены здесь явно, чтобы форма ответа была одинаковой на обоих путях
-    // (drizzle-строка и сырая выдача), а не «ключа нет».
-    props: {},
-    aspects: [],
-    queryRefs: [],
   };
 }
 

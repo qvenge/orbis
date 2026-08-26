@@ -679,8 +679,13 @@ describe('датасет §6.2: состав И порядок под RLS', () =
       USER_A,
       'aspect=orbis/task, status=!done&!cancelled, sortBy=priority:desc|updated_at:asc',
     );
+    // Столбец СТАРОЙ карты в выдаче компилятора теперь называется своим именем: алиас
+    // `aspects_legacy AS aspects` снят, потому что имя `aspects` занял список аспектов
+    // новой формы (§А1-1). Читать `r.aspects` как карту здесь значило бы получить массив и
+    // молча пустые приоритеты — ассерт, который компилятор не ловит.
     const priorities = rows.map(
-      (r) => (r.aspects as Record<string, { priority?: string }>)['orbis/task']?.priority ?? null,
+      (r) =>
+        (r.aspects_legacy as Record<string, { priority?: string }>)['orbis/task']?.priority ?? null,
     );
     expect(priorities).toEqual([
       'high',

@@ -36,7 +36,13 @@ import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
-import type { ActorKind, JournalSink, MutationSource, WireEntity } from '../executor/types';
+import type {
+  ActorKind,
+  JournalSink,
+  MutationMechanism,
+  MutationSource,
+  WireEntity,
+} from '../executor/types';
 import type { GrantRef } from '../oauth/grants';
 import { listRunUnits } from '../policy/pending';
 import type { ToolDispatchResult } from '../tools/dispatch';
@@ -88,11 +94,16 @@ export type VerbCtx = {
 export function actorOf(subject: RunSubject): {
   actorKind: ActorKind;
   source: MutationSource;
+  mechanism: MutationMechanism;
   actorGrantId?: string;
 } {
+  // `mechanism: 'verb'` — вторая ось (§А4-4), и она ОДНА для обеих половин: канал у прогона
+  // по гранту и у рутинного разный (`mcp` против `system`), а механизм один — это глагол
+  // исполнителя. Именно по нему проходит запись служебных свойств прогона
+  // (`system_writable`, §А2-5): без него бухгалтерия прогона получала бы COMPUTED_WRITE.
   return subject.kind === 'grant'
-    ? { actorKind: 'agent', source: 'mcp', actorGrantId: subject.grant.id }
-    : { actorKind: 'ai', source: 'system' };
+    ? { actorKind: 'agent', source: 'mcp', mechanism: 'verb', actorGrantId: subject.grant.id }
+    : { actorKind: 'ai', source: 'system', mechanism: 'verb' };
 }
 
 /** Поле аспекта прогона, которым он привязан к субъекту (V1.4). */
@@ -453,9 +464,16 @@ async function claimTask(
         aspects: {
           'orbis/agent-run': {
             grant_id: grant.id,
-            // Денормализация проекта на прогон: прогоны — внуки проекта, а `this`
-            // грамматики §6 достаёт только детей (блок «Последние прогоны» заготовки С10)
-            ...(project !== null && { project_id: project.id }),
+            // ДЕНОРМАЛИЗАЦИЯ ПРОЕКТА СНЯТА (§А8): поля `project_id` в реестре свойств нет —
+            // его заменяют вычисляемые `orbis/parent_project`/`orbis/root_project`, которые
+            // считает правило `nearest_ancestor` (часть Б). Писать его дальше нельзя: с
+            // переходом валидации на реестр значение уезжает под неизвестным id и получает
+            // `UNKNOWN_PROPERTY` — то есть захват тикета отказал бы целиком.
+            //
+            // ЦЕНА, НАЗВАННАЯ ВСЛУХ: блок «Последние прогоны» в заготовке тела проекта
+            // (`seed/project-body.ts`) фильтрует ровно по `project_id` и до появления
+            // правила отдаёт пустой список. Убирать блок здесь нельзя — тела проектов уже
+            // написаны, и вычищать их правкой шаблона значило бы менять чужой текст.
             outcome: 'running',
             started_at: nowIso,
             last_step_at: nowIso,

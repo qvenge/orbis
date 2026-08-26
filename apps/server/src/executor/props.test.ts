@@ -1,0 +1,686 @@
+// apps/server/src/executor/props.test.ts
+// Веха B реформы: исполнитель пишет НОВУЮ правду сущности — `props` по id свойства и список
+// `aspects[]` (§А1-1), а старая карта `aspects_legacy` становится её ПРОЕКЦИЕЙ. Здесь же
+// стоят гейты флагов (§А2-5), ось `mechanism` (§А4-4) и вторая форма входа (РП-3).
+//
+// Тесты интеграционные: реальная БД под withIdentity, без моков — ровно потому, что
+// проверяется СТРОКА, а не возвращённая wire-форма. Расхождение между тем, что уехало
+// клиенту, и тем, что легло в колонки, — как раз тот класс дефекта, ради которого дуальная
+// запись и держится под инвариантом.
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { newId } from '@orbis/shared';
+import { eq, sql } from 'drizzle-orm';
+import {
+  adminDb,
+  appDb,
+  freshUserId,
+  requireEnv,
+  seedCustomAspect,
+  truncateAll,
+} from '../../test/helpers';
+import { entities } from '../db/schema';
+import { withIdentity } from '../db/with-identity';
+import { readEntity } from '../entity-read';
+import { loadRegistry, type RegistrySnapshot } from '../registry/load';
+import type { PropsViolation } from '../registry/validate-props';
+import { toWireEntity } from '../wire';
+import { execute, touchesBudgetContour } from './executor';
+import { makeChatJournalSink } from './journal';
+import { projectLegacyAspects } from './legacy-form';
+import { applyPropsPatch, resolvePropertyRef, touchedProperties } from './props';
+import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from './types';
+import { undoAction } from './undo';
+
+requireEnv();
+
+const { db, client } = appDb();
+const owner = freshUserId();
+const sink = makeChatJournalSink();
+const T0 = new Date('2026-08-26T10:00:00.000Z');
+const CATEGORY_A = '019e4466-aaaa-7e07-b5d4-64be9721da51';
+const CATEGORY_B = '019e4466-bbbb-7e07-b5d4-64be9721da52';
+
+/** Свободное свойство владельца, у которого id и key РАЗНЫЕ — резолв входа по обоим. */
+const FREE_PROPERTY_ID = 'user/p-sleep';
+const FREE_PROPERTY_KEY = 'user/sleep-hours';
+
+let reg: RegistrySnapshot;
+
+function run(
+  tool: string,
+  input: unknown,
+  over: Partial<ExecuteRequest> = {},
+): Promise<ExecuteResult> {
+  return execute(
+    db,
+    {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [{ tool, input }],
+      clock: () => T0,
+      ...over,
+    },
+    { sink },
+  );
+}
+
+function ok(r: ExecuteResult): ExecuteOk {
+  if (!r.ok) throw new Error(`ожидался успех, получено ${r.error.code}: ${r.error.message}`);
+  return r;
+}
+
+function entityOf(r: ExecuteResult): WireEntity {
+  return ok(r).results[0] as WireEntity;
+}
+
+interface Row {
+  props: Record<string, unknown>;
+  aspects: string[];
+  aspectsLegacy: Record<string, Record<string, unknown>>;
+}
+
+/** Три колонки строки как они легли в БД (не wire-форма — именно колонки). */
+async function rowOf(id: string): Promise<Row> {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx
+      .select({
+        props: entities.props,
+        aspects: entities.aspects,
+        aspectsLegacy: entities.aspectsLegacy,
+      })
+      .from(entities)
+      .where(eq(entities.id, id)),
+  );
+  const row = rows[0];
+  if (row === undefined) throw new Error(`строка ${id} не найдена`);
+  return {
+    props: row.props as Record<string, unknown>,
+    aspects: row.aspects,
+    aspectsLegacy: row.aspectsLegacy as Record<string, Record<string, unknown>>,
+  };
+}
+
+/**
+ * Инвариант дуальной записи: старая карта — ровно проекция новой правды (§А1-1).
+ *
+ * Две половины, и вторая не украшение. Первая сверяет колонку с `projectLegacyAspects` —
+ * той же функцией, которой пишет исполнитель, поэтому одна она поймала бы расхождение
+ * ЗАПИСИ, но не порчу самой проекции (обе стороны сдвинулись бы вместе). Вторая проверяет
+ * то, что от проекции НЕ зависит: ключи старой карты — ровно список аспектов строки.
+ */
+async function expectProjection(id: string): Promise<Row> {
+  const row = await rowOf(id);
+  expect(row.aspectsLegacy).toEqual(
+    projectLegacyAspects(reg, { props: row.props, aspects: row.aspects }),
+  );
+  expect(Object.keys(row.aspectsLegacy).sort()).toEqual([...row.aspects].sort());
+  return row;
+}
+
+function violationsOf(r: ExecuteResult): PropsViolation[] {
+  if (r.ok) throw new Error('ожидался отказ');
+  return ((r.error.details as { violations?: PropsViolation[] }).violations ??
+    []) as PropsViolation[];
+}
+
+beforeAll(async () => {
+  await truncateAll();
+  await seedCustomAspect(owner, {
+    key: 'user/sleep-log',
+    label: { ru: 'Сон', en: 'Sleep' },
+    properties: [{ key: 'hours', type: { kind: 'number' }, required: true }],
+  });
+  // Свободное свойство (§А1-2): носителя-аспекта у него нет вовсе, а id и key НЕ совпадают —
+  // ровно та пара, на которой видно, что резолв входа принимает оба адреса.
+  const admin = adminDb();
+  try {
+    await admin.db.execute(sql`
+      INSERT INTO property_definitions
+        (id, owner_id, key, label, description, type, status, storage, rank, flags)
+      VALUES (${FREE_PROPERTY_ID}, ${owner}, ${FREE_PROPERTY_KEY},
+              ${JSON.stringify({ ru: 'Часов сна' })}::jsonb,
+              ${JSON.stringify({ ru: 'Сколько часов владелец спал' })}::jsonb,
+              ${JSON.stringify({ kind: 'number' })}::jsonb, 'active', 'props', 100, '{}'::jsonb)
+      ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO NOTHING`);
+  } finally {
+    await admin.client.end();
+  }
+  reg = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+});
+
+afterAll(async () => {
+  await truncateAll();
+  await client.end();
+});
+
+// ---------------------------------------------------------------------------
+// Что легло в строку
+// ---------------------------------------------------------------------------
+
+describe('исполнитель пишет props/aspects[] (§А1-1)', () => {
+  test('entity_create со старым патчем aspects → props по id, aspects[] и aspects_legacy = projectLegacyAspects(props, aspects)', async () => {
+    const e = entityOf(
+      await run('entity_create', {
+        title: 'Покупка кофе',
+        tags: [],
+        aspects: {
+          'orbis/financial': {
+            amount: '340.00',
+            currency: 'RUB',
+            direction: 'expense',
+            category_ref: CATEGORY_A,
+            occurred_on: '2026-08-26',
+          },
+        },
+      }),
+    );
+
+    const row = await expectProjection(e.id);
+    // Значения адресуются id СВОЙСТВА, а не парой «аспект + поле»
+    expect(row.props).toEqual({
+      'orbis/amount': '340.00',
+      'orbis/currency': 'RUB',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': CATEGORY_A,
+      'orbis/occurred_on': '2026-08-26',
+    });
+    expect(row.aspects).toEqual(['orbis/financial']);
+    // Старая карта не исчезла и не разъехалась: её пишет проекция (дуальная запись до 23)
+    expect(row.aspectsLegacy['orbis/financial']).toEqual({
+      amount: '340.00',
+      currency: 'RUB',
+      direction: 'expense',
+      category_ref: CATEGORY_A,
+      occurred_on: '2026-08-26',
+    });
+    // Мешок `meta` больше не пишется вовсе (§А1-1): колонка доживает до 0017 пустой
+    expect(e.meta).toEqual({});
+  });
+
+  test('entity_create с новой формой {props, aspects:[…]} (exec-вход) → та же строка; key и id принимаются', async () => {
+    const legacy = entityOf(
+      await run('entity_create', {
+        title: 'Обед',
+        tags: [],
+        aspects: {
+          'orbis/financial': {
+            amount: '500.00',
+            direction: 'expense',
+            category_ref: CATEGORY_A,
+            occurred_on: '2026-08-26',
+          },
+        },
+      }),
+    );
+    const fresh = entityOf(
+      await run('entity_create', {
+        title: 'Обед',
+        tags: [],
+        props: {
+          'orbis/amount': '500.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_A,
+          'orbis/occurred_on': '2026-08-26',
+        },
+        aspects: ['orbis/financial'],
+      }),
+    );
+
+    const a = await expectProjection(legacy.id);
+    const b = await expectProjection(fresh.id);
+    // Валюта подставлена умолчанием у конверта, а не у транзакции — обе строки совпадают
+    expect(b.props).toEqual(a.props);
+    expect(b.aspects).toEqual(a.aspects);
+    expect(b.aspectsLegacy).toEqual(a.aspectsLegacy);
+
+    // Тот же адрес — двумя именами: id свойства и его key (у своего свойства они разные)
+    const byId = entityOf(
+      await run('entity_create', {
+        title: 'Сон по id',
+        tags: [],
+        props: { [FREE_PROPERTY_ID]: 7 },
+      }),
+    );
+    const byKey = entityOf(
+      await run('entity_create', {
+        title: 'Сон по key',
+        tags: [],
+        props: { [FREE_PROPERTY_KEY]: 7 },
+      }),
+    );
+    expect((await rowOf(byId.id)).props).toEqual({ [FREE_PROPERTY_ID]: 7 });
+    expect((await rowOf(byKey.id)).props).toEqual({ [FREE_PROPERTY_ID]: 7 });
+    // Свободное свойство (§А1-2) живёт без аспекта — и в старую карту не течёт
+    expect((await rowOf(byKey.id)).aspectsLegacy).toEqual({});
+  });
+
+  test('detach аспекта оставляет значения свойств (Р9); explicit unset снимает свойство', async () => {
+    const e = entityOf(
+      await run('entity_create', {
+        title: 'Такси',
+        tags: [],
+        aspects: {
+          'orbis/financial': {
+            amount: '700.00',
+            direction: 'expense',
+            category_ref: CATEGORY_A,
+            occurred_on: '2026-08-26',
+          },
+        },
+      }),
+    );
+
+    ok(await run('entity_update', { id: e.id, aspects: { 'orbis/financial': null } }));
+    const afterDetach = await expectProjection(e.id);
+    expect(afterDetach.aspects).toEqual([]);
+    // Значение суммы — факт владельца, а не собственность аспекта (Р9)
+    expect(afterDetach.props['orbis/amount']).toBe('700.00');
+    // В старой карте его больше нет: носителя не осталось
+    expect(afterDetach.aspectsLegacy).toEqual({});
+
+    ok(await run('entity_update', { id: e.id, unset: ['orbis/amount'] }));
+    const afterUnset = await expectProjection(e.id);
+    expect(Object.hasOwn(afterUnset.props, 'orbis/amount')).toBe(false);
+    expect(afterUnset.props['orbis/direction']).toBe('expense');
+  });
+
+  test('financial+budget с разной category_ref в одном create → VALIDATION (В1)', async () => {
+    const r = await run('entity_create', {
+      title: 'Конверт и трата разом',
+      tags: [],
+      aspects: {
+        'orbis/financial': {
+          amount: '100.00',
+          direction: 'expense',
+          category_ref: CATEGORY_A,
+          occurred_on: '2026-08-26',
+        },
+        'orbis/budget': {
+          category_ref: CATEGORY_B,
+          limit: '5000.00',
+          period_start: '2026-08-01',
+          period_end: '2026-08-31',
+        },
+      },
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('VALIDATION');
+    expect((r.error.details as { reason?: string }).reason).toBe('merged_property_conflict');
+    expect((r.error.details as { property?: string }).property).toBe('orbis/finance_category');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Инвариант проекции под случайными патчами
+// ---------------------------------------------------------------------------
+
+describe('инвариант дуальной записи', () => {
+  test('после КАЖДОЙ мутации (create/update/attach/detach/undo) aspects_legacy === projectLegacyAspects(props, aspects) — 50 случайных патчей', async () => {
+    // Генератор детерминированный: упавший прогон обязан воспроизводиться, а не «иногда».
+    let seed = 20260826;
+    const rnd = (): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    const pick = <T>(items: readonly T[]): T => {
+      const v = items[Math.floor(rnd() * items.length)];
+      if (v === undefined) throw new Error('пустой список выбора');
+      return v;
+    };
+
+    const STATUSES = ['inbox', 'planned', 'in_progress', 'waiting', 'done', 'cancelled'] as const;
+    const PRIORITIES = ['low', 'medium', 'high'] as const;
+    const AMOUNTS = ['10.00', '340.50', '1000.00'] as const;
+
+    /** Валидный патч старой формы: у аспекта, который НАВЕШИВАЕТСЯ, обязательные всегда есть. */
+    const legacyPatch = (): Record<string, Record<string, unknown> | null> => {
+      switch (Math.floor(rnd() * 5)) {
+        case 0:
+          return { 'orbis/task': { status: pick(STATUSES), priority: pick(PRIORITIES) } };
+        case 1:
+          return { 'orbis/task': { priority: null } };
+        case 2:
+          return { 'orbis/note': { pinned: rnd() > 0.5 } };
+        case 3:
+          return {
+            'orbis/financial': {
+              amount: pick(AMOUNTS),
+              direction: pick(['expense', 'income'] as const),
+              category_ref: pick([CATEGORY_A, CATEGORY_B] as const),
+              occurred_on: '2026-08-26',
+            },
+          };
+        default:
+          return { 'orbis/financial': null };
+      }
+    };
+
+    const e = entityOf(
+      await run('entity_create', {
+        title: 'Подопытная запись',
+        tags: [],
+        aspects: { 'orbis/task': { status: 'inbox' } },
+      }),
+    );
+    await expectProjection(e.id);
+
+    let applied = 0;
+    let lastActionId: string | undefined;
+    for (let i = 0; i < 50; i++) {
+      const roll = rnd();
+      if (roll < 0.15 && lastActionId !== undefined) {
+        // Откат последнего действия — тоже мутация, и инвариант обязан пережить её
+        const undone = await undoAction(db, { actorUserId: owner, actionId: lastActionId });
+        expect(undone.ok).toBe(true);
+        lastActionId = undefined;
+      } else if (roll < 0.3) {
+        const r = ok(
+          await run('attach_orbis_note', { entity_id: e.id, data: { pinned: rnd() > 0.5 } }),
+        );
+        lastActionId = r.actionId;
+      } else {
+        const r = ok(await run('entity_update', { id: e.id, aspects: legacyPatch() }));
+        lastActionId = r.actionId;
+      }
+      applied += 1;
+      await expectProjection(e.id);
+    }
+    expect(applied).toBe(50);
+  }, 120_000);
+});
+
+// ---------------------------------------------------------------------------
+// Гейты флагов (§А2-5) и ось mechanism (§А4-4)
+// ---------------------------------------------------------------------------
+
+describe('гейты флагов свойств', () => {
+  const goalInput = (over: Record<string, unknown> = {}) => ({
+    title: 'Накопить',
+    tags: [],
+    aspects: {
+      'orbis/goal': {
+        progress_source: { query: 'aspect=orbis/financial', aggregate: 'count' },
+        target_value: '300000.00',
+        ...over,
+      },
+    },
+  });
+
+  test('запись orbis/current_value из тула → COMPUTED_WRITE; из mechanism rule — проходит', async () => {
+    const denied = await run('entity_create', goalInput({ current_value: '10' }));
+    expect(denied.ok).toBe(false);
+    if (denied.ok) return;
+    expect(denied.error.code).toBe('COMPUTED_WRITE');
+    expect(denied.error.details).toMatchObject({
+      property: 'orbis/current_value',
+      mechanism: 'user',
+      reason: 'model_writable',
+    });
+
+    // Кэш вычисления пишет правило каталога — и только оно (правило 3 §10)
+    const allowed = await run('entity_create', goalInput({ current_value: '10' }), {
+      mechanism: 'rule',
+    });
+    const row = await expectProjection(entityOf(allowed).id);
+    expect(row.props['orbis/current_value']).toBe('10');
+
+    // Цель БЕЗ кэша заводится обычным путём: гейт смотрит на свойство, а не на аспект
+    ok(await run('entity_create', goalInput()));
+  });
+
+  test('запись orbis/run_report с mechanism user → COMPUTED_WRITE (system_writable); с mechanism verb — проходит', async () => {
+    const routineId = newId();
+    const run0 = entityOf(
+      await run(
+        'entity_create',
+        {
+          title: 'Прогон рутины',
+          tags: [],
+          aspects: {
+            'orbis/agent-run': {
+              routine_id: routineId,
+              outcome: 'running',
+              started_at: '2026-08-26T07:00:00.000Z',
+              last_step_at: '2026-08-26T07:00:00.000Z',
+              step_count: 0,
+              steps: [],
+            },
+          },
+        },
+        { mechanism: 'verb' },
+      ),
+    );
+
+    const denied = await run('entity_update', {
+      id: run0.id,
+      aspects: { 'orbis/agent-run': { report: 'подделанный отчёт' } },
+    });
+    expect(denied.ok).toBe(false);
+    if (denied.ok) return;
+    expect(denied.error.code).toBe('COMPUTED_WRITE');
+    expect(denied.error.details).toMatchObject({
+      property: 'orbis/run_report',
+      mechanism: 'user',
+      reason: 'system_writable',
+    });
+
+    ok(
+      await run(
+        'entity_update',
+        { id: run0.id, aspects: { 'orbis/agent-run': { report: 'честный отчёт' } } },
+        { mechanism: 'verb' },
+      ),
+    );
+    const row = await expectProjection(run0.id);
+    expect(row.props['orbis/run_report']).toBe('честный отчёт');
+  });
+
+  test('internalUndo восстанавливает состояние с system_writable-свойствами без гейта', async () => {
+    const routineId = newId();
+    const created = entityOf(
+      await run(
+        'entity_create',
+        {
+          title: 'Прогон для отката',
+          tags: [],
+          aspects: {
+            'orbis/agent-run': {
+              routine_id: routineId,
+              outcome: 'running',
+              started_at: '2026-08-26T07:00:00.000Z',
+              last_step_at: '2026-08-26T07:00:00.000Z',
+              step_count: 0,
+              steps: [],
+            },
+          },
+        },
+        { mechanism: 'verb' },
+      ),
+    );
+    const patched = ok(
+      await run(
+        'entity_update',
+        {
+          id: created.id,
+          aspects: { 'orbis/agent-run': { outcome: 'finished', report: 'сделано' } },
+        },
+        { mechanism: 'verb' },
+      ),
+    );
+
+    // Откат идёт БЕЗ mechanism (умолчание `user`): без пропуска гейта он упал бы
+    // COMPUTED_WRITE, то есть законно записанное состояние стало бы неотменяемым.
+    const undone = await undoAction(db, { actorUserId: owner, actionId: patched.actionId });
+    expect(undone.ok).toBe(true);
+    const row = await expectProjection(created.id);
+    expect(row.props['orbis/run_outcome']).toBe('running');
+    expect(Object.hasOwn(row.props, 'orbis/run_report')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Замок бюджет-контура (Р-27)
+// ---------------------------------------------------------------------------
+
+describe('предикат замка бюджет-контура', () => {
+  test('патч orbis/amount берёт замок контура; патч orbis/priority — нет', () => {
+    const contour = (tool: string, input: unknown): boolean =>
+      touchesBudgetContour(reg, { tool, input });
+
+    // Новая форма: по id свойства и по key
+    expect(contour('entity_update', { id: 'x', props: { 'orbis/amount': '10.00' } })).toBe(true);
+    expect(contour('entity_update', { id: 'x', props: { 'orbis/limit': '10.00' } })).toBe(true);
+    expect(contour('entity_update', { id: 'x', unset: ['orbis/finance_category'] })).toBe(true);
+    expect(contour('entity_update', { id: 'x', props: { 'orbis/priority': 'high' } })).toBe(false);
+    expect(contour('entity_update', { id: 'x', unset: ['orbis/priority'] })).toBe(false);
+
+    // Новая форма списка аспектов и {attach, detach}
+    expect(contour('entity_update', { id: 'x', aspects: { detach: ['orbis/financial'] } })).toBe(
+      true,
+    );
+    expect(contour('entity_create', { title: 't', tags: [], aspects: ['orbis/budget'] })).toBe(
+      true,
+    );
+    expect(contour('entity_create', { title: 't', tags: [], aspects: ['orbis/task'] })).toBe(false);
+
+    // Старая карта и attach-тулы — как было
+    expect(contour('entity_update', { id: 'x', aspects: { 'orbis/financial': null } })).toBe(true);
+    expect(contour('attach_orbis_budget', { entity_id: 'x', data: {} })).toBe(true);
+    expect(contour('attach_orbis_task', { entity_id: 'x', data: {} })).toBe(false);
+    expect(contour('entity_update', { id: 'x', archived: true })).toBe(true);
+
+    // Вложенный batch виден насквозь
+    expect(
+      contour('batch_execute', {
+        batch_id: newId(),
+        operations: [
+          { tool: 'entity_update', input: { id: 'x', props: { 'orbis/priority': 'low' } } },
+          { tool: 'entity_update', input: { id: 'y', props: { 'orbis/amount': '1.00' } } },
+        ],
+      }),
+    ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Валидация по реестру свойств владельца
+// ---------------------------------------------------------------------------
+
+describe('валидация по реестру (§А7-1)', () => {
+  test('кастомный аспект с {hours: 7} проходит валидацию по property-строкам владельца; неизвестный key → UNKNOWN_PROPERTY', async () => {
+    const e = entityOf(await run('entity_create', { title: 'Ночь', tags: [] }));
+    ok(await run('attach_user_sleep-log', { entity_id: e.id, data: { hours: 7 } }));
+
+    const row = await expectProjection(e.id);
+    // Своё свойство владельца адресуется своим id — и попадает в старую карту под тем
+    // именем поля, которое старая форма и знала (локальная часть ключа)
+    expect(row.props).toEqual({ 'user/hours': 7 });
+    expect(row.aspects).toEqual(['user/sleep-log']);
+    expect(row.aspectsLegacy).toEqual({ 'user/sleep-log': { hours: 7 } });
+
+    const denied = await run('attach_user_sleep-log', {
+      entity_id: e.id,
+      data: { hours: 7, минуты: 30 },
+    });
+    expect(denied.ok).toBe(false);
+    expect(violationsOf(denied)).toContainEqual({
+      code: 'UNKNOWN_PROPERTY',
+      propertyId: 'orbis/минуты',
+    });
+  });
+
+  test('REQUIRED по аспекту и TYPE — тот же VALIDATION с details.violations', async () => {
+    const required = await run('entity_create', {
+      title: 'Задача без статуса',
+      tags: [],
+      aspects: ['orbis/task'],
+    });
+    expect(violationsOf(required)).toEqual([
+      { code: 'REQUIRED', aspectId: 'orbis/task', propertyId: 'orbis/task_status' },
+    ]);
+
+    const typed = await run('entity_create', {
+      title: 'Задача с чужим статусом',
+      tags: [],
+      props: { 'orbis/task_status': 'придумано' },
+      aspects: ['orbis/task'],
+    });
+    expect(violationsOf(typed).map((v) => v.code)).toEqual(['TYPE']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Одиночное чтение против списочного (обязательный пункт гейта Задачи 4a)
+// ---------------------------------------------------------------------------
+
+describe('списочные пути несут новую форму', () => {
+  test('entity_query и backlinks отдают те же props/aspects, что одиночное чтение', async () => {
+    const target = entityOf(await run('entity_create', { title: 'Цель ссылок', tags: [] }));
+    // Ссылающаяся заметка — она же и НЕСЁТ свойства: в backlinks цели приезжает именно она,
+    // и сравнивать надо её списочную форму с её же одиночной.
+    const note = entityOf(
+      await run('entity_create', {
+        title: 'Заметка со ссылкой',
+        tags: [],
+        body: `см. [[entity:${target.id}]]`,
+        aspects: { 'orbis/task': { status: 'planned', priority: 'high' } },
+      }),
+    );
+
+    const single = await withIdentity(db, owner, async (tx) => {
+      const rows = await tx.select().from(entities).where(eq(entities.id, note.id));
+      const row = rows[0];
+      if (row === undefined) throw new Error('строка не найдена');
+      return toWireEntity(row);
+    });
+
+    const listed = await withIdentity(db, owner, async (tx) => {
+      const found = await readEntity(tx, owner, { id: target.id, include: ['backlinks'] });
+      return found?.backlinks?.find((b) => b.entity.id === note.id)?.entity;
+    });
+    if (listed === undefined) throw new Error('заметка не нашлась в backlinks');
+
+    // Расхождение одиночного и списочного чтения — молчаливое: списки ВЫГЛЯДЯТ рабочими,
+    // просто новая форма в них пуста. Поэтому сравниваются все три поля целиком.
+    expect(listed.props).toEqual(single.props);
+    expect(listed.aspects).toEqual(single.aspects);
+    expect(listed.queryRefs).toEqual(single.queryRefs);
+    expect(listed.aspectsMap).toEqual(single.aspectsMap);
+    expect(listed.props).toEqual({ 'orbis/task_status': 'planned', 'orbis/priority': 'high' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Чистые функции модели
+// ---------------------------------------------------------------------------
+
+describe('applyPropsPatch и резолв адреса', () => {
+  test('detach не трогает значения, unset побеждает set, attach идёт после detach', () => {
+    const cur = { props: { 'orbis/amount': '1.00', 'orbis/priority': 'low' }, aspects: ['a', 'b'] };
+    const next = applyPropsPatch(cur, {
+      set: { 'orbis/priority': 'high' },
+      unset: ['orbis/priority'],
+      attach: ['b', 'c'],
+      detach: ['a', 'c'],
+    });
+    expect(next.props).toEqual({ 'orbis/amount': '1.00' });
+    expect(next.aspects).toEqual(['b', 'c']);
+    // Вход не мутирован: то же состояние читают проверки следующих операций batch
+    expect(cur.aspects).toEqual(['a', 'b']);
+    expect(cur.props['orbis/priority']).toBe('low');
+  });
+
+  test('touchedProperties считает и записи, и снятия', () => {
+    const touched = touchedProperties({ set: { x: 1 }, unset: ['y'], attach: ['orbis/task'] });
+    expect([...touched].sort()).toEqual(['x', 'y']);
+  });
+
+  test('resolvePropertyRef: сначала key, потом id; своя строка перекрывает системную', () => {
+    expect(resolvePropertyRef(reg, FREE_PROPERTY_KEY)?.id).toBe(FREE_PROPERTY_ID);
+    expect(resolvePropertyRef(reg, FREE_PROPERTY_ID)?.id).toBe(FREE_PROPERTY_ID);
+    expect(resolvePropertyRef(reg, 'orbis/amount')?.id).toBe('orbis/amount');
+    expect(resolvePropertyRef(reg, 'user/такого-нет')).toBeUndefined();
+  });
+});
