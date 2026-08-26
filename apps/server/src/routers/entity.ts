@@ -108,22 +108,26 @@ export interface EntitySuggestion {
   archived: boolean;
 }
 
-/** Ровно те пять колонок, из которых строится подсказка; у сырой строки имена те же. */
+/**
+ * Ровно те пять колонок, из которых строится подсказка. Сырой SELECT называет их ТАК ЖЕ —
+ * поэтому старая карта в нём идёт под алиасом `"aspectsLegacy"` (кавычки обязательны:
+ * без них Postgres свернул бы имя в нижний регистр, поле стало бы `undefined`, и статус
+ * молча приезжал бы `null` — тип `unknown` этого не ловит).
+ */
 interface SuggestionRow {
   id: unknown;
   title: unknown;
   emoji: unknown;
-  aspects: unknown;
+  aspectsLegacy: unknown;
   archived: unknown;
 }
 
 /**
  * Маппинг строки (jsonb уже разобран драйвером — как у toWireEntityFromSql) в форму
- * подсказки. Годится и сырой выдаче, и select'у drizzle: все пять имён односложные,
- * snake_case и camelCase у них совпадают.
+ * подсказки. Годится и сырой выдаче, и select'у drizzle: имена полей у обеих одинаковы.
  */
 function toSuggestion(row: SuggestionRow): EntitySuggestion {
-  const aspects = (row.aspects ?? {}) as Record<string, Record<string, unknown> | undefined>;
+  const aspects = (row.aspectsLegacy ?? {}) as Record<string, Record<string, unknown> | undefined>;
   const status = aspects['orbis/task']?.status;
   return {
     id: String(row.id),
@@ -275,7 +279,7 @@ export const entityRouter = router({
         // последнего ключа порядок таких строк определял бы план. id — UUIDv7, так что DESC
         // читается как «свежее выше» (тот же тай-брейк — llm/context.ts:126).
         const rows = await tx.execute(
-          sql`SELECT id, title, emoji, aspects, archived FROM entities
+          sql`SELECT id, title, emoji, aspects_legacy AS "aspectsLegacy", archived FROM entities
               WHERE archived = false AND lower(title) LIKE ${anywhere}
               ORDER BY (lower(title) LIKE ${fromStart}) DESC, updated_at DESC, id DESC
               LIMIT ${limit}`,
@@ -305,7 +309,7 @@ export const entityRouter = router({
             id: entities.id,
             title: entities.title,
             emoji: entities.emoji,
-            aspects: entities.aspects,
+            aspectsLegacy: entities.aspectsLegacy,
             archived: entities.archived,
           })
           .from(entities)

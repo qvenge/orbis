@@ -65,7 +65,7 @@ async function storedBudget(id: string): Promise<Record<string, unknown>> {
   try {
     const rows = [
       ...(await admin.execute(
-        sql`SELECT aspects->'orbis/budget' AS budget FROM entities WHERE id = ${id}`,
+        sql`SELECT aspects_legacy->'orbis/budget' AS budget FROM entities WHERE id = ${id}`,
       )),
     ];
     return (rows[0]?.budget ?? {}) as Record<string, unknown>;

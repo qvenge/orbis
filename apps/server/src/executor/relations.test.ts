@@ -418,7 +418,7 @@ describe('один budget-parent (§4.2, §13.7)', () => {
         req('entity_update', { id: x.id, aspects: { 'orbis/budget': budgetData() } }),
       ),
     );
-    expect('orbis/budget' in (attached.results[0] as WireEntity).aspects).toBe(true);
+    expect('orbis/budget' in (attached.results[0] as WireEntity).aspectsMap).toBe(true);
 
     // detach (null) не создаёт второго budget-parent'а — инвариант не должен мешать
     const detached = ok(
@@ -439,7 +439,7 @@ describe('один budget-parent (§4.2, §13.7)', () => {
       await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetData() })),
     );
     const entity = r.results[0] as WireEntity;
-    expect('orbis/budget' in entity.aspects).toBe(true);
+    expect('orbis/budget' in entity.aspectsMap).toBe(true);
   });
 
   test('11. конкурентные привязки к двум конвертам (Promise.all) → ровно одна живая budget-parent (§13.7)', async () => {

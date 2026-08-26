@@ -126,7 +126,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     obedId = obed.id;
     expect(() => entitySchema.parse(obed)).not.toThrow();
     // decimal хранится строкой без искажений IEEE-754 (§13.6)
-    expect(obed.aspects['orbis/financial']?.amount).toBe('340.00');
+    expect(obed.aspectsMap['orbis/financial']?.amount).toBe('340.00');
 
     // В глобальном треде появилось audit-сообщение с action создания и его inverse (§7.8)
     const msgs = await a.chat.listMessages({ threadId: globalA });
@@ -171,13 +171,13 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     sneakersId = sneakers.id;
     expect(() => entitySchema.parse(sneakers)).not.toThrow();
     // Три аспекта на одной сущности — cross-aspect (§2.4)
-    expect(Object.keys(sneakers.aspects).sort()).toEqual([
+    expect(Object.keys(sneakers.aspectsMap).sort()).toEqual([
       'orbis/financial',
       'orbis/schedule',
       'orbis/task',
     ]);
-    expect(sneakers.aspects['orbis/task']?.status).toBe('inbox');
-    expect(sneakers.aspects['orbis/financial']?.planned).toBe(true);
+    expect(sneakers.aspectsMap['orbis/task']?.status).toBe('inbox');
+    expect(sneakers.aspectsMap['orbis/financial']?.planned).toBe(true);
   });
 
   // ── Шаг 4: query Inbox-блока Daily Planning + count без limit ───────────────
@@ -202,8 +202,8 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
       id: sneakersId,
       aspects: { 'orbis/task': { status: 'done' } },
     });
-    expect(done.aspects['orbis/task']?.status).toBe('done');
-    expect(typeof done.aspects['orbis/task']?.completed_at).toBe('string');
+    expect(done.aspectsMap['orbis/task']?.status).toBe('done');
+    expect(typeof done.aspectsMap['orbis/task']?.completed_at).toBe('string');
 
     // actionId действия-обновления — из audit-сообщения глобального треда (§7.8)
     const before = await a.chat.listMessages({ threadId: globalA });
@@ -221,8 +221,8 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
 
     // Статус вернулся к inbox, completed_at снят (inverse восстановил ключ целиком, §7.8)
     const reverted = await a.entity.get({ id: sneakersId });
-    expect(reverted.entity.aspects['orbis/task']?.status).toBe('inbox');
-    expect(reverted.entity.aspects['orbis/task']?.completed_at).toBeUndefined();
+    expect(reverted.entity.aspectsMap['orbis/task']?.status).toBe('inbox');
+    expect(reverted.entity.aspectsMap['orbis/task']?.completed_at).toBeUndefined();
 
     // Undo добавил в тред undo-сообщение {type:'undo', undoes}
     const after = await a.chat.listMessages({ threadId: globalA });
@@ -292,8 +292,8 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
 
     // decimal «Обеда» сохранён строкой без искажений (§13.6, персистентный JSON)
     const obed = exp.entities.find((e) => e.id === obedId);
-    expect(obed?.aspects['orbis/financial']?.amount).toBe('340.00');
-    expect(obed?.aspects['orbis/financial']?.occurred_on).toBe('2026-07-03');
+    expect(obed?.aspectsMap['orbis/financial']?.amount).toBe('340.00');
+    expect(obed?.aspectsMap['orbis/financial']?.occurred_on).toBe('2026-07-03');
 
     // Одна связь blocks
     expect(exp.relations.length).toBe(1);
@@ -356,6 +356,6 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(aExp.relations.length).toBe(1);
     // «купить кроссовки» так и осталась inbox (B её не отменял/менял)
     const aSneakers = aExp.entities.find((e) => e.id === sneakersId);
-    expect(aSneakers?.aspects['orbis/task']?.status).toBe('inbox');
+    expect(aSneakers?.aspectsMap['orbis/task']?.status).toBe('inbox');
   });
 });

@@ -59,7 +59,7 @@ const DEFAULT_LIMIT = 500;
 
 /** Колонки полного SELECT по §4.1 — константа кода, не пользовательский ввод. */
 const ENTITY_COLUMNS =
-  'id, owner_id, title, emoji, body, body_refs, tags, meta, aspects, created_at, updated_at, archived';
+  'id, owner_id, title, emoji, body, body_refs, tags, meta, aspects_legacy AS aspects, created_at, updated_at, archived';
 
 /** Полный SELECT: WHERE по фильтрам + ORDER BY + LIMIT (cap 500 без limit=). */
 export function compileQuery(ast: QueryAst, ctx: CompileContext): SQL {
@@ -212,7 +212,7 @@ function compileWhere(ast: QueryAst, ctx: CompileContext, aspects: Set<string>):
   // Условие индексом не ускоряется (GIN отрицание не покрывает): это построчный фильтр
   // поверх остальной выборки — дёшево, одна проверка наличия ключа в jsonb.
   if (!namesServiceAspect(ast, ctx, aspects)) {
-    conds.push(sql`NOT (aspects ?| ${textArray([...SERVICE_ASPECT_IDS])})`);
+    conds.push(sql`NOT (aspects_legacy ?| ${textArray([...SERVICE_ASPECT_IDS])})`);
   }
   for (const f of ast.filters) {
     const c = compileFilter(f, ctx, aspects);
@@ -232,7 +232,7 @@ function compileFilter(f: QueryFilter, ctx: CompileContext, aspects: Set<string>
       return sql`NOT (tags && ${textArray(f.values)})`;
     case 'aspect':
       // Значение aspect= каталогом не проверяется — строго параметром.
-      return sql`aspects ? ${f.aspect}`;
+      return sql`aspects_legacy ? ${f.aspect}`;
     case 'field': {
       const ref = fieldRef(f.field, ctx, aspects);
       return f.condition.kind === 'anyOf'
@@ -251,7 +251,7 @@ function compileFilter(f: QueryFilter, ctx: CompileContext, aspects: Set<string>
     case 'excludeBlocked':
       // Блокер без task-аспекта жив: COALESCE(...,'') NOT IN ('done','cancelled') — §6.1.
       // Подзапрос по entities b тоже под RLS — чужой блокер невидим и не блокирует.
-      return sql`NOT EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = entities.id AND r.relation_type = 'blocks' AND COALESCE(b.aspects->'orbis/task'->>'status', '') NOT IN ('done', 'cancelled'))`;
+      return sql`NOT EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = entities.id AND r.relation_type = 'blocks' AND COALESCE(b.aspects_legacy->'orbis/task'->>'status', '') NOT IN ('done', 'cancelled'))`;
     case 'archived':
       // 'true' — только архивные; 'any' — условия нет вовсе (§6.1).
       return f.value === 'true' ? sql`archived` : null;
@@ -294,7 +294,7 @@ function catalogLit(value: string): SQL {
 
 /**
  * Резолв поля зеркально парсеру (§6.1): core-поля → колонки; поля аспектов → путь
- * `aspects->'A'->>'f'`; неоднозначность снята `aspect=` из запроса. Ошибки резолва
+ * `aspects_legacy->'A'->>'f'`; неоднозначность снята `aspect=` из запроса. Ошибки резолва
  * недостижимы — их отсёк парсер; проверки здесь — страховка от рассинхрона.
  */
 function fieldRef(name: string, ctx: CompileContext, aspects: Set<string>): FieldRef {
@@ -311,7 +311,7 @@ function fieldRef(name: string, ctx: CompileContext, aspects: Set<string>): Fiel
   }
   return {
     // Имя поля — ключ каталога (резолв выше подтвердил), id аспекта — из реестра.
-    expr: sql`aspects->${catalogLit(info.aspect)}->>${catalogLit(name)}`,
+    expr: sql`aspects_legacy->${catalogLit(info.aspect)}->>${catalogLit(name)}`,
     type: info.type,
     core: false,
     enumValues: info.enumValues,
@@ -339,13 +339,14 @@ function fieldRef(name: string, ctx: CompileContext, aspects: Set<string>): Fiel
 const NUMERIC_LITERAL_RE = /^-?\d{1,131072}(\.\d{1,16383})?$/;
 
 /**
- * Одна кодировка искомого элемента: `aspects @> {аспект: {поле: [элемент]}}`.
+ * Одна кодировка искомого элемента: `aspects_legacy @> {аспект: {поле: [элемент]}}`.
  *
- * Путь строится ЗАНОВО от корня `aspects`, а не поверх `ref.expr`: индексируется только
- * containment по самой колонке. Подпутевые формы (`aspects->'A'->'f' ? $1` и
- * `aspects->'A'->'f' @> '[…]'`) GIN-индексом entities_aspects_gin не покрываются —
- * проверено EXPLAIN на живой базе: Seq Scan обеих даже при enable_seqscan=off, тогда как
- * `aspects @> jsonb_build_object(…)` даёт Bitmap Index Scan (и с параметрами тоже).
+ * Путь строится ЗАНОВО от корня колонки, а не поверх `ref.expr`: индексируется только
+ * containment по самой колонке. Подпутевые формы (`aspects_legacy->'A'->'f' ? $1` и
+ * `aspects_legacy->'A'->'f' @> '[…]'`) GIN-индексом entities_aspects_legacy_gin не
+ * покрываются — проверено EXPLAIN на живой базе: Seq Scan обеих даже при enable_seqscan=off,
+ * тогда как `aspects_legacy @> jsonb_build_object(…)` даёт Bitmap Index Scan (и с
+ * параметрами тоже).
  *
  * Все три части — параметрами, включая id аспекта и имя поля: инвариант файла разрешает
  * им быть литералами (они из реестра), но параметр строже, а jsonb_build_object ключи
@@ -353,7 +354,7 @@ const NUMERIC_LITERAL_RE = /^-?\d{1,131072}(\.\d{1,16383})?$/;
  * и без каста Postgres отвечает «could not determine data type of parameter $1».
  */
 function containsEncoded(aspect: string, field: string, element: SQL): SQL {
-  return sql`aspects @> jsonb_build_object(${aspect}::text, jsonb_build_object(${field}::text, jsonb_build_array(${element})))`;
+  return sql`aspects_legacy @> jsonb_build_object(${aspect}::text, jsonb_build_object(${field}::text, jsonb_build_array(${element})))`;
 }
 
 /**
@@ -514,7 +515,7 @@ function dateTokenCond(ref: FieldRef, token: QueryDateToken, ctx: CompileContext
   }
 }
 
-/** `(aspects->'A'->>'f')::numeric` — сравнение через numeric, не float (§3.3). */
+/** `(aspects_legacy->'A'->>'f')::numeric` — сравнение через numeric, не float (§3.3). */
 function numericExpr(ref: FieldRef): SQL {
   return sql`(${ref.expr})::numeric`;
 }

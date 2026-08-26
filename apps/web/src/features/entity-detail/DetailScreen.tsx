@@ -161,8 +161,8 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   const loaded = get.data?.entity;
   const isTicket =
     loaded !== undefined &&
-    loaded.aspects[TASK] !== undefined &&
-    loaded.aspects[ASSIGNMENT] !== undefined;
+    loaded.aspectsMap[TASK] !== undefined &&
+    loaded.aspectsMap[ASSIGNMENT] !== undefined;
   /**
    * V1.14. Рутина открывается ТЕМ ЖЕ экраном: тело — инструкция исполнителю, «Детали» — карточка
    * аспекта и история прогонов, «Тред» — обсуждение и карточки предложений. Своего экрана у неё
@@ -172,7 +172,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
    * рутины — такая же дочерняя запись с аспектом `orbis/agent-run`, и второй выборки для неё
    * заводить незачем.
    */
-  const isRoutine = loaded !== undefined && loaded.aspects[ROUTINE_ASPECT] !== undefined;
+  const isRoutine = loaded !== undefined && loaded.aspectsMap[ROUTINE_ASPECT] !== undefined;
   const { runs, lastRun } = useTicketRuns(entityId, isTicket || isRoutine);
 
   /**
@@ -192,7 +192,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // сервер до следующего тика планировщика об этом не узнает. Владелец, открывший рутину,
   // чинит это сам, ничего об этом не зная.
   const sweepTarget =
-    isTicket || isRoutine || (loaded !== undefined && loaded.aspects[PROJECT] !== undefined);
+    isTicket || isRoutine || (loaded !== undefined && loaded.aspectsMap[PROJECT] !== undefined);
   const sweep = trpc.agentRun.sweep.useMutation({
     // Подметание МЕНЯЕТ граф (тикеты возвращаются в planned, прогоны становятся abandoned) —
     // экран обязан показать результат сразу, а не через минуту протухания списков. Но только
@@ -255,7 +255,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // её открывают, и «50%, 150 000 из 300 000» во второй вкладке ухудшило бы главный экран целей
   // ради чистоты раскладки. Единица достаётся из аспекта ЗДЕСЬ, заново: в AspectCards она
   // бралась из тела цикла по аспектам, а цикла тут нет.
-  const goalUnit = (entity.aspects as Record<string, Record<string, unknown> | undefined>)[GOAL]
+  const goalUnit = (entity.aspectsMap as Record<string, Record<string, unknown> | undefined>)[GOAL]
     ?.unit;
   const entityTab = (
     <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
@@ -314,7 +314,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           прогон→прогон внутри вкладки меняет лишь проп, — а лента держит своё состояние
           (открытое подтверждение отката, результат прошлого). Без key оно переехало бы на
           соседний прогон. */}
-      {entity.aspects[RUN_ASPECT] !== undefined && (
+      {entity.aspectsMap[RUN_ASPECT] !== undefined && (
         <RunFeed key={`run-${entity.id}`} entity={entity} />
       )}
       {/* Тело — РАЗМОНТИРУЕМОЕ по key. То же правило, что несла прежняя секция тела, и по той
@@ -354,7 +354,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           именно этим жестом задача становится тикетом. И у любой записи, где назначение уже
           ЕСТЬ: сервер orbis/task для него не требует, а общая карточка свойств аспект прячет —
           без этой ветки назначение на заметке было бы невидимо и неснимаемо. */}
-      {(entity.aspects[TASK] !== undefined || entity.aspects[ASSIGNMENT] !== undefined) && (
+      {(entity.aspectsMap[TASK] !== undefined || entity.aspectsMap[ASSIGNMENT] !== undefined) && (
         <AssignmentCard entity={entity} />
       )}
       <AspectCards entity={entity} />

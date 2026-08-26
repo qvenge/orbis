@@ -45,7 +45,7 @@ export function TicketWaitingBlock({
   });
   const { mutation: update } = useEntityUpdate(entity.id);
 
-  const task = entity.aspects[TASK];
+  const task = entity.aspectsMap[TASK];
   const run = lastRun === undefined ? undefined : runAspect(lastRun);
   const outcome = typeof run?.outcome === 'string' ? run.outcome : undefined;
   /**

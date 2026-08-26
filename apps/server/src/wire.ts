@@ -39,7 +39,11 @@ export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity
     bodyRefs: row.bodyRefs,
     tags: row.tags,
     meta: row.meta as Record<string, unknown>, // jsonb — как есть, не трогаем
-    aspects: row.aspects as Record<string, Record<string, unknown>>,
+    props: row.props as Record<string, unknown>,
+    aspects: row.aspects,
+    queryRefs: row.queryRefs,
+    // Старая карта наружу под новым именем: имя `aspects` заняла новая правда (§А1-1).
+    aspectsMap: row.aspectsLegacy as Record<string, Record<string, unknown>>,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     archived: row.archived,
@@ -64,20 +68,32 @@ function toDate(value: unknown): Date {
  * и не выбирает (SELECT перечисляет колонки явно).
  */
 export function toWireEntityFromSql(row: Record<string, unknown>): WireEntity {
-  return toWireEntity({
-    id: row.id,
-    ownerId: row.owner_id,
-    title: row.title,
-    emoji: row.emoji,
-    body: row.body,
-    bodyRefs: row.body_refs,
-    tags: row.tags,
-    meta: row.meta,
-    aspects: row.aspects,
-    createdAt: toDate(row.created_at),
-    updatedAt: toDate(row.updated_at),
-    archived: row.archived,
-  } as EntityRow);
+  return {
+    ...toWireEntity({
+      id: row.id,
+      ownerId: row.owner_id,
+      title: row.title,
+      emoji: row.emoji,
+      body: row.body,
+      bodyRefs: row.body_refs,
+      tags: row.tags,
+      meta: row.meta,
+      // Старая карта приезжает под алиасом `aspects` — так её называют оба SELECT'а
+      // (компилятор §6 и backlinks), и алиас оставлен намеренно: без него переименование
+      // колонки переписало бы ещё и 27 golden-эталонов SQL, ничего не изменив по смыслу.
+      aspectsLegacy: row.aspects,
+      createdAt: toDate(row.created_at),
+      updatedAt: toDate(row.updated_at),
+      archived: row.archived,
+    } as EntityRow),
+    // Новых колонок эти SELECT'ы НЕ тянут: до появления их писателя они пусты у каждой
+    // строки, а три пустых колонки в КАЖДОЙ строке списка — вес без единого читателя.
+    // Значения проставлены здесь явно, чтобы форма ответа была одинаковой на обоих путях
+    // (drizzle-строка и сырая выдача), а не «ключа нет».
+    props: {},
+    aspects: [],
+    queryRefs: [],
+  };
 }
 
 export function toWireRelation(row: RelationRow): WireRelation {

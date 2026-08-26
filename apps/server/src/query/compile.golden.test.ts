@@ -77,10 +77,10 @@ describe('golden: compileLatest — последнее значение поля
     if (!parsed.ok) return;
     const q = dialect.sqlToQuery(compileLatest(parsed.ast, CTX, 'amount'));
     expect(q.sql.replaceAll(/\s+/g, ' ').trim()).toBe(
-      "SELECT (aspects->'orbis/financial'->>'amount')::numeric::text AS value FROM entities " +
-        'WHERE true AND NOT archived AND NOT (aspects ?| ARRAY[$1]::text[]) ' +
-        'AND aspects ? $2 AND tags && ARRAY[$3]::text[] ' +
-        "AND aspects->'orbis/financial'->>'amount' IS NOT NULL " +
+      "SELECT (aspects_legacy->'orbis/financial'->>'amount')::numeric::text AS value FROM entities " +
+        'WHERE true AND NOT archived AND NOT (aspects_legacy ?| ARRAY[$1]::text[]) ' +
+        'AND aspects_legacy ? $2 AND tags && ARRAY[$3]::text[] ' +
+        "AND aspects_legacy->'orbis/financial'->>'amount' IS NOT NULL " +
         'ORDER BY updated_at DESC, id DESC LIMIT 1',
     );
     expect(q.params).toEqual(['orbis/agent-run', 'orbis/financial', 'savings']);
@@ -108,7 +108,7 @@ describe('golden: compileLatest — последнее значение поля
 });
 
 // Поле-массив внутри аспекта (orbis/category.aliases). До этой задачи каталог выдавал
-// его за строку, и `aspects->'A'->>'aliases' IN ($1)` сравнивал ТЕКСТ всего массива:
+// его за строку, и `aspects_legacy->'A'->>'aliases' IN ($1)` сравнивал ТЕКСТ всего массива:
 // `aliases=такси` давал тихий ноль, `aliases=!такси` возвращал все 12 категорий подряд.
 describe('поле-массив: containment вместо текстового равенства', () => {
   const compileFor = (query: string) => {
@@ -119,7 +119,7 @@ describe('поле-массив: containment вместо текстового �
 
   test('фильтр по полю-массиву компилируется в containment, а не в текстовое равенство', () => {
     const c = compileFor('aspect=orbis/category, aliases=такси');
-    expect(c.sql).toContain('aspects @> jsonb_build_object');
+    expect(c.sql).toContain('aspects_legacy @> jsonb_build_object');
     expect(c.sql).not.toContain(`->>'aliases'`);
     expect(c.params).toContain('такси');
     // Путь строится параметрами от корня aspects — то, что делает предикат индексным.
@@ -137,14 +137,14 @@ describe('поле-массив: containment вместо текстового �
 
   test('отрицание по массиву — NOT containment (сущности без аспекта проходят)', () => {
     const c = compileFor('aspect=orbis/category, aliases=!такси');
-    expect(c.sql).toContain('NOT (aspects @> jsonb_build_object');
+    expect(c.sql).toContain('NOT (aspects_legacy @> jsonb_build_object');
     // Ветки `IS NULL` тут нет намеренно: NOT (@>) истинно и без аспекта вовсе.
     expect(c.sql).not.toContain('IS NULL');
   });
 
   test('несколько отрицаний — AND по NOT containment', () => {
     const c = compileFor('aspect=orbis/category, aliases=!такси&!метро');
-    expect(c.sql.match(/NOT \(aspects @> jsonb_build_object/g)?.length).toBe(2);
+    expect(c.sql.match(/NOT \(aspects_legacy @> jsonb_build_object/g)?.length).toBe(2);
   });
 
   test('числовой на вид литерал ищется в обеих кодировках jsonb: "5" и 5', () => {

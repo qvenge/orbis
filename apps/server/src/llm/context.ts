@@ -187,7 +187,7 @@ export const MEMORY_SECTION_HEADER =
 
 /**
  * Активные memory-сущности владельца (RLS текущего tx). Простой SELECT по
- * `aspects ? 'orbis/memory'` вместо прогона через query-компилятор §6 —
+ * `aspects_legacy ? 'orbis/memory'` вместо прогона через query-компилятор §6 —
  * фильтр тривиален, а сортировка приоритета (§7.4) всё равно доменная:
  * kind=rule раньше fact, scoped раньше глобальных, затем свежесть updated_at.
  * «Недавно использованные» из §7.4 в MVP приближены updated_at (использование
@@ -199,14 +199,14 @@ export async function loadMemory(tx: Tx): Promise<MemoryItem[]> {
       id: entities.id,
       title: entities.title,
       body: entities.body,
-      aspects: entities.aspects,
+      aspectsLegacy: entities.aspectsLegacy,
       updatedAt: entities.updatedAt,
     })
     .from(entities)
-    .where(and(sql`${entities.aspects} ? ${MEMORY_ASPECT}`, eq(entities.archived, false)));
+    .where(and(sql`${entities.aspectsLegacy} ? ${MEMORY_ASPECT}`, eq(entities.archived, false)));
 
   const items: MemoryItem[] = rows.map((r) => {
-    const mem = (r.aspects as Record<string, Record<string, unknown>>)[MEMORY_ASPECT] ?? {};
+    const mem = (r.aspectsLegacy as Record<string, Record<string, unknown>>)[MEMORY_ASPECT] ?? {};
     return {
       id: r.id,
       title: r.title,
@@ -296,10 +296,10 @@ export async function anchorBlock(
     `title: ${flatten(entity.title)}`,
   ];
   if (entity.tags.length > 0) lines.push(`tags: ${entity.tags.map(flatten).join(', ')}`);
-  const aspectIds = Object.keys(entity.aspects);
+  const aspectIds = Object.keys(entity.aspectsMap);
   if (aspectIds.length > 0) {
     // Данные аспектов компактным JSON: статус задачи/суммы и т.п. — рабочий контекст
-    const parts = aspectIds.map((id) => `${id} ${JSON.stringify(entity.aspects[id])}`);
+    const parts = aspectIds.map((id) => `${id} ${JSON.stringify(entity.aspectsMap[id])}`);
     lines.push(`аспекты: ${parts.join('; ')}`);
   }
   if (entity.body) {

@@ -77,10 +77,10 @@ export const agentRunRouter = router({
               ticketId: input.ticketId,
             });
           }
-          if (ticket.aspects['orbis/task']?.status !== 'waiting') {
+          if (ticket.aspectsLegacy['orbis/task']?.status !== 'waiting') {
             throw new ExecError('CONFLICT', 'тикет не ждёт ответа — отвечать не на что', {
               ticketId: input.ticketId,
-              status: ticket.aspects['orbis/task']?.status,
+              status: ticket.aspectsLegacy['orbis/task']?.status,
             });
           }
           // Отвечают ПОСЛЕДНЕМУ прогону тикета. Все прошлые прогоны терминальны, и

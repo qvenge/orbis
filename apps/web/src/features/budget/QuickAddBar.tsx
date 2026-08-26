@@ -79,7 +79,7 @@ export function QuickAddBar({
   // Пилюли (§3.6): уникальные category_ref последних 20 транзакций по порядку, максимум 5.
   const recentRefs: string[] = [];
   for (const e of Array.isArray(recentQ.data) ? recentQ.data : []) {
-    const ref = (e.aspects as Record<string, { category_ref?: unknown } | undefined>)[
+    const ref = (e.aspectsMap as Record<string, { category_ref?: unknown } | undefined>)[
       'orbis/financial'
     ]?.category_ref;
     if (typeof ref === 'string' && !recentRefs.includes(ref)) recentRefs.push(ref);
@@ -135,7 +135,7 @@ export function QuickAddBar({
 
     // Всё для карточки — из ОТВЕТА: при replay (повтор после сбоя с отредактированной
     // формой) сервер вернул ранее записанную сущность, стейт формы ей не обязан совпадать.
-    const fin = ((created.aspects ?? {}) as Record<string, Record<string, unknown> | undefined>)[
+    const fin = ((created.aspectsMap ?? {}) as Record<string, Record<string, unknown> | undefined>)[
       'orbis/financial'
     ];
     const createdRef = typeof fin?.category_ref === 'string' ? fin.category_ref : categoryId;

@@ -159,7 +159,7 @@ export function RunFeed({ entity }: { entity: Entity }) {
   const cancelId = useId();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
 
-  const run = entity.aspects[RUN_ASPECT] ?? {};
+  const run = entity.aspectsMap[RUN_ASPECT] ?? {};
   const outcome = str(run.outcome) ?? '';
   const grantId = str(run.grant_id);
   const startedAt = str(run.started_at);

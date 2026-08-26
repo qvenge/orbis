@@ -54,12 +54,12 @@ const categories = [
   {
     id: 'cat-food',
     title: 'Еда',
-    aspects: { 'orbis/category': { aliases: ['обед', 'еда', 'кофе'], spend_class: 'variable' } },
+    aspectsMap: { 'orbis/category': { aliases: ['обед', 'еда', 'кофе'], spend_class: 'variable' } },
   },
   {
     id: 'cat-fun',
     title: 'Развлечения',
-    aspects: { 'orbis/category': { aliases: ['развлечения'], spend_class: 'variable' } },
+    aspectsMap: { 'orbis/category': { aliases: ['развлечения'], spend_class: 'variable' } },
   },
 ];
 // Memory-правила владельца (§7.5): заголовок — вся машиночитаемая часть правила (D3a),
@@ -69,7 +69,7 @@ const rules = [
     id: 'rule-1',
     title: 'кофе → Развлечения',
     updatedAt: '2026-07-20T10:00:00.000Z',
-    aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+    aspectsMap: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
   },
 ];
 

@@ -6,7 +6,15 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshUserId,
+  legacyEntityColumns,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
+import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
@@ -117,7 +125,7 @@ async function budgetParents(txnId: string): Promise<string[]> {
     sql`SELECT r.source_id FROM relations r
         JOIN entities e ON e.id = r.source_id
         WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
-          AND e.aspects ? 'orbis/budget'
+          AND e.aspects_legacy ? 'orbis/budget'
         ORDER BY r.source_id`,
   );
   return rows.map((r) => r.source_id as string);
@@ -218,13 +226,18 @@ describe('selectEnvelope: селектор конверта §2.3', () => {
         'orbis/budget': budgetData(catC, '2026-07-01', '2026-07-31', { currency: 'RUB' }),
       },
     });
-    const legacyAspects = JSON.stringify({
-      'orbis/budget': budgetData(catC, '2026-07-01', '2026-07-31'),
-    });
-    await adminRows(
-      sql`INSERT INTO entities (id, owner_id, title, aspects)
-          VALUES (${idSmall}, ${user}, 'legacy без currency (дефолт RUB)', ${legacyAspects}::jsonb)
-          RETURNING id`,
+    // Прямая вставка мимо исполнителя (в этом и смысл: строка «как из прошлого», без
+    // currency). Через drizzle, а не сырым SQL: строка обязана лечь во ВСЕ три колонки
+    // формы (§А1-1), а имя `aspects` теперь занято списком аспектов.
+    await withIdentity(db, user, async (tx) =>
+      tx.insert(entities).values({
+        id: idSmall,
+        ownerId: user,
+        title: 'legacy без currency (дефолт RUB)',
+        ...(await legacyEntityColumns(tx, user, {
+          'orbis/budget': budgetData(catC, '2026-07-01', '2026-07-31'),
+        })),
+      }),
     );
     const picked = await selector(user, {
       categoryRef: catC,

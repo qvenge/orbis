@@ -107,15 +107,15 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
 
     // Тикет вернулся в работу человека: хвост ожидания снят, а не оставлен рядом с planned
     expect(out.ticket.id).toBe(ticketId);
-    expect(out.ticket.aspects['orbis/task']).toEqual({ status: 'planned' });
+    expect(out.ticket.aspectsMap['orbis/task']).toEqual({ status: 'planned' });
     expect(out.run.id).toBe(runId);
-    const reply = out.run.aspects['orbis/agent-run']?.reply as { text: string; at: string };
+    const reply = out.run.aspectsMap['orbis/agent-run']?.reply as { text: string; at: string };
     expect(reply.text).toBe(answer);
     expect(new Date(reply.at).getTime()).toBeGreaterThan(0);
     // Чекпойнт на месте: ответ дополняет прогон, а не затирает его вопрос
-    expect(out.run.aspects['orbis/agent-run']?.checkpoint).toMatchObject({ question });
+    expect(out.run.aspectsMap['orbis/agent-run']?.checkpoint).toMatchObject({ question });
     // Вопрос закрыт: исход `answered` — прогон уходит из блока «Ждут ответа» (V1, D38)
-    expect(out.run.aspects['orbis/agent-run']?.outcome).toBe('answered');
+    expect(out.run.aspectsMap['orbis/agent-run']?.outcome).toBe('answered');
 
     // Один action на обе правки — иначе «Отменить» гасило бы половину ответа
     const uiActions = (await actionsOfRun(owner, runId)).filter((x) => x.source === 'ui');
@@ -160,9 +160,11 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
       runId: claim.run_id,
       answer: 'Принял, спасибо',
     });
-    expect(out.run.aspects['orbis/agent-run']?.outcome).toBe('finished');
-    expect((out.run.aspects['orbis/agent-run']?.reply as AnyRecord).text).toBe('Принял, спасибо');
-    expect(out.ticket.aspects['orbis/task']).toEqual({ status: 'planned' });
+    expect(out.run.aspectsMap['orbis/agent-run']?.outcome).toBe('finished');
+    expect((out.run.aspectsMap['orbis/agent-run']?.reply as AnyRecord).text).toBe(
+      'Принял, спасибо',
+    );
+    expect(out.ticket.aspectsMap['orbis/task']).toEqual({ status: 'planned' });
   });
 
   test('по тикету не в waiting → CONFLICT', async () => {

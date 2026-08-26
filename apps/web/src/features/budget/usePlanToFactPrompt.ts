@@ -17,8 +17,8 @@ export function usePlanToFactPrompt() {
   const [prompt, setPrompt] = useState<PlanToFactPrompt | null>(null);
 
   /** Звать при переводе задачи в done (по данным сущности ДО перевода). */
-  function onTaskDone(entity: { id: string; aspects: unknown }) {
-    const aspects = entity.aspects as Record<string, Record<string, unknown> | undefined>;
+  function onTaskDone(entity: { id: string; aspectsMap: unknown }) {
+    const aspects = entity.aspectsMap as Record<string, Record<string, unknown> | undefined>;
     const fin = aspects['orbis/financial'];
     // §2.7 — только planned-покупка; шаблон recurring (orbis/schedule.recurrence) не
     // предлагаем: его инстансы переводит системный конвейер postDue в свой день (§2.8).

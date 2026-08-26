@@ -33,7 +33,7 @@ export const RUN_OUTCOME_LABELS: Record<string, string> = {
 
 /** Аспект прогона у сущности из выдачи; `undefined` — сущность не прогон. */
 export function runAspect(run: TicketRun): Record<string, unknown> | undefined {
-  return run.aspects[RUN_ASPECT];
+  return run.aspectsMap[RUN_ASPECT];
 }
 
 export function useTicketRuns(
@@ -61,7 +61,7 @@ export function useTicketRuns(
       refetchInterval: (query) => {
         const rows = query.state.data;
         const last = Array.isArray(rows) ? rows[0] : undefined;
-        return last === undefined ? false : runPollInterval(last.aspects);
+        return last === undefined ? false : runPollInterval(last.aspectsMap);
       },
     },
   );

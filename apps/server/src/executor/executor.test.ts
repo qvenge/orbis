@@ -56,8 +56,8 @@ function first<T>(items: readonly T[]): T {
 }
 
 /** Данные аспекта с внятным падением, если аспекта нет. */
-function aspectOf(source: { aspects: Record<string, Record<string, unknown>> }, id: string) {
-  const a = source.aspects[id];
+function aspectOf(source: { aspectsMap: Record<string, Record<string, unknown>> }, id: string) {
+  const a = source.aspectsMap[id];
   if (a === undefined) throw new Error(`ожидался аспект ${id}`);
   return a;
 }
@@ -325,7 +325,7 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
       req('entity_update', { id: e.id, aspects: { 'orbis/task': null } }),
     );
     const e2 = firstEntity(detached);
-    expect('orbis/task' in e2.aspects).toBe(false);
+    expect('orbis/task' in e2.aspectsMap).toBe(false);
   });
 
   test('5c. результат merge валидируется ajv: удаление обязательного поля → VALIDATION', async () => {
@@ -416,10 +416,10 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
     expect(a.ok).toBe(true);
     expect(b.ok).toBe(true);
     const rows = await withIdentity(db, userA, (tx) =>
-      tx.execute(sql`SELECT aspects FROM entities WHERE id = ${e.id}`),
+      tx.execute(sql`SELECT aspects_legacy FROM entities WHERE id = ${e.id}`),
     );
-    const stored = rows[0]?.aspects as Record<string, Record<string, unknown>>;
-    const task = aspectOf({ aspects: stored }, 'orbis/task');
+    const stored = rows[0]?.aspects_legacy as Record<string, Record<string, unknown>>;
+    const task = aspectOf({ aspectsMap: stored }, 'orbis/task');
     expect(task.status).toBe('in_progress'); // правка A не потеряна
     expect(task.due_date).toBe('2026-07-05'); // правка B не потеряна
     expect(task.priority).toBe('low'); // исходное поле цело
@@ -899,7 +899,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
     const undone = await undoAction(db, { actorUserId: userA, actionId });
     expect(undone.ok).toBe(true);
     const after = firstEntity(undone);
-    expect(after.aspects['orbis/project']).toBeUndefined(); // аспект снят
+    expect(after.aspectsMap['orbis/project']).toBeUndefined(); // аспект снят
     expect(await bodyOf(e.id)).toBe(''); // и заготовка вместе с ним
   });
 
@@ -1116,10 +1116,10 @@ describe('ADE-срез 1: CAS-предусловие entity_update (С7, инв�
       }
       // Проигравший не записал ничего: статус ровно один переход от исходного.
       const rows = await withIdentity(db, userA, (tx) =>
-        tx.execute(sql`SELECT aspects FROM entities WHERE id = ${id}`),
+        tx.execute(sql`SELECT aspects_legacy FROM entities WHERE id = ${id}`),
       );
-      const stored = rows[0]?.aspects as Record<string, Record<string, unknown>>;
-      expect(aspectOf({ aspects: stored }, 'orbis/task').status).toBe('in_progress');
+      const stored = rows[0]?.aspects_legacy as Record<string, Record<string, unknown>>;
+      expect(aspectOf({ aspectsMap: stored }, 'orbis/task').status).toBe('in_progress');
     }
   });
 
@@ -1167,10 +1167,10 @@ describe('ADE-срез 1: CAS-предусловие entity_update (С7, инв�
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('CONFLICT');
     const rows = await withIdentity(db, userA, (tx) =>
-      tx.execute(sql`SELECT aspects FROM entities WHERE id = ${stale}`),
+      tx.execute(sql`SELECT aspects_legacy FROM entities WHERE id = ${stale}`),
     );
-    const stored = rows[0]?.aspects as Record<string, Record<string, unknown>>;
-    expect(aspectOf({ aspects: stored }, 'orbis/task').status).toBe('planned');
+    const stored = rows[0]?.aspects_legacy as Record<string, Record<string, unknown>>;
+    expect(aspectOf({ aspectsMap: stored }, 'orbis/task').status).toBe('planned');
   });
 
   test('предусловие по отсутствующему аспекту → CONFLICT (actual undefined)', async () => {
@@ -1189,9 +1189,9 @@ describe('ADE-срез 1: CAS-предусловие entity_update (С7, инв�
     }
     // Аспект не появился: отказ случился ДО merge.
     const rows = await withIdentity(db, userA, (tx) =>
-      tx.execute(sql`SELECT aspects FROM entities WHERE id = ${id}`),
+      tx.execute(sql`SELECT aspects_legacy FROM entities WHERE id = ${id}`),
     );
-    expect(Object.keys((rows[0]?.aspects as Record<string, unknown>) ?? {})).not.toContain(
+    expect(Object.keys((rows[0]?.aspects_legacy as Record<string, unknown>) ?? {})).not.toContain(
       'orbis/task',
     );
   });
@@ -1215,9 +1215,9 @@ describe('ADE-срез 1: CAS-предусловие entity_update (С7, инв�
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.code).toBe('CONFLICT');
     const rows = await withIdentity(db, userA, (tx) =>
-      tx.execute(sql`SELECT aspects FROM entities WHERE id = ${id}`),
+      tx.execute(sql`SELECT aspects_legacy FROM entities WHERE id = ${id}`),
     );
-    expect(Object.keys((rows[0]?.aspects as Record<string, unknown>) ?? {})).not.toContain(
+    expect(Object.keys((rows[0]?.aspects_legacy as Record<string, unknown>) ?? {})).not.toContain(
       'orbis/task',
     );
   });
@@ -1324,10 +1324,10 @@ describe('ADE-срез 1: CAS-предусловие entity_update (С7, инв�
 
     // Отказ на предусловии — до merge: не записано ничего.
     const rows = await withIdentity(db, userA, (tx) =>
-      tx.execute(sql`SELECT aspects FROM entities WHERE id = ${id}`),
+      tx.execute(sql`SELECT aspects_legacy FROM entities WHERE id = ${id}`),
     );
-    const stored = rows[0]?.aspects as Record<string, Record<string, unknown>>;
-    expect(aspectOf({ aspects: stored }, 'orbis/task').status).toBe('in_progress');
+    const stored = rows[0]?.aspects_legacy as Record<string, Record<string, unknown>>;
+    expect(aspectOf({ aspectsMap: stored }, 'orbis/task').status).toBe('in_progress');
   });
 });
 

@@ -85,7 +85,7 @@ export function RoutineStatusBlock({
   const utils = trpc.useUtils();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
 
-  const routine = entity.aspects[ROUTINE_ASPECT] ?? {};
+  const routine = entity.aspectsMap[ROUTINE_ASPECT] ?? {};
   const paused = str(routine.stage) === 'paused';
 
   /**

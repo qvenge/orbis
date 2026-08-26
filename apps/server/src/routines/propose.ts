@@ -461,7 +461,7 @@ function collides(
 }
 
 interface TargetRow {
-  aspects: AspectsMap;
+  aspectsLegacy: AspectsMap;
   updatedAt: Date;
 }
 
@@ -495,7 +495,11 @@ export async function loadTargets(
   if (wanted.length === 0) return { rows };
 
   const found = await tx
-    .select({ id: entities.id, aspects: entities.aspects, updatedAt: entities.updatedAt })
+    .select({
+      id: entities.id,
+      aspectsLegacy: entities.aspectsLegacy,
+      updatedAt: entities.updatedAt,
+    })
     .from(entities)
     .where(
       inArray(
@@ -504,7 +508,7 @@ export async function loadTargets(
       ),
     );
   for (const row of found) {
-    rows.set(row.id, { aspects: row.aspects as AspectsMap, updatedAt: row.updatedAt });
+    rows.set(row.id, { aspectsLegacy: row.aspectsLegacy as AspectsMap, updatedAt: row.updatedAt });
   }
 
   for (const w of wanted) {
@@ -517,7 +521,7 @@ export async function loadTargets(
     // вовсе — рутиной или прогоном сущность делает её собственное состояние, а не форма
     // операции.
     for (const aspectId of FORBIDDEN_TARGET_ASPECTS) {
-      if (row.aspects[aspectId] !== undefined) {
+      if (row.aspectsLegacy[aspectId] !== undefined) {
         return {
           error: forbiddenTarget(
             w.index,
@@ -568,7 +572,7 @@ export function buildUpdate(
       };
     }
     for (const field of Object.keys(patch)) {
-      const value = current.aspects[aspectId]?.[field];
+      const value = current.aspectsLegacy[aspectId]?.[field];
       precondition.push(
         value === undefined
           ? { aspect: aspectId, field, absent: true }

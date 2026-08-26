@@ -41,7 +41,7 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
    * о чём ничего не известно, и список моргал бы пустотой на каждом открытии.
    */
   const children = trpc.useQueries((t) => childIds.map((id) => t.entity.get({ id })));
-  const visibleIds = childIds.filter((_, i) => !isService(children[i]?.data?.entity.aspects));
+  const visibleIds = childIds.filter((_, i) => !isService(children[i]?.data?.entity.aspectsMap));
   const [draft, setDraft] = useState('');
   const { show } = useToast();
   const push = useNav((s) => s.push);

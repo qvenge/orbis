@@ -10,7 +10,7 @@
 // Фабрика, а не свободные функции: каждый сьют держит СВОЙ пул (`appDb()` + `client.end()`
 // в afterAll), и передавать `db` первым аргументом в каждый вызов значило бы повторять его
 // в каждой строке теста.
-import { newId, routineRunBatchId, routineRunId } from '@orbis/shared';
+import { legacyAspectsToProps, newId, routineRunBatchId, routineRunId } from '@orbis/shared';
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { chatMessages, chatThreads, entities, relations } from '../db/schema';
@@ -33,7 +33,10 @@ export type AnyRecord = Record<string, unknown>;
 export interface AgentLoopHelpers {
   seedEntity: (owner: string, input: Record<string, unknown>) => Promise<WireEntity>;
   link: (owner: string, parentId: string, childId: string) => Promise<void>;
+  /** Старая карта аспектов строки (§А1-1): читает `aspects_legacy`. */
   aspectsOf: (owner: string, id: string) => Promise<Record<string, AnyRecord>>;
+  /** Свойства строки по id (§А1-1) — то, чем аспекты сущности являются в новой форме. */
+  propsOf: (owner: string, id: string) => Promise<AnyRecord>;
   childrenOf: (owner: string, parentId: string) => Promise<string[]>;
   actionsOf: (owner: string) => Promise<ActionRecord[]>;
   workerGrant: (owner: string, label: string) => Promise<string>;
@@ -103,11 +106,30 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
 
   async function aspectsOf(owner: string, id: string): Promise<Record<string, AnyRecord>> {
     const rows = await withIdentity(db, owner, (tx) =>
-      tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, id)),
+      tx
+        .select({ aspectsLegacy: entities.aspectsLegacy })
+        .from(entities)
+        .where(eq(entities.id, id)),
     );
     const row = rows[0];
     if (!row) throw new Error(`сущность ${id} не найдена`);
-    return row.aspects as Record<string, AnyRecord>;
+    return row.aspectsLegacy as Record<string, AnyRecord>;
+  }
+
+  /**
+   * Свойства сущности. ПОКА — перевод старой карты, а не чтение колонки `props`: писатель
+   * колонки появляется следующей задачей, до неё она пуста у каждой строки, и хелпер,
+   * читающий её сейчас, отвечал бы «свойств нет» на сущность со свойствами. Переезжает на
+   * колонку там же, где появляется писатель, — и все вызыватели этого не заметят.
+   */
+  async function propsOf(owner: string, id: string): Promise<AnyRecord> {
+    const translated = legacyAspectsToProps(await aspectsOf(owner, id));
+    if (!translated.ok) {
+      throw new Error(
+        `propsOf(${id}): слитое свойство ${translated.conflict.propertyId} получило разные значения`,
+      );
+    }
+    return translated.props;
   }
 
   /** Дети сущности по связи parent (прогоны тикета). */
@@ -266,6 +288,7 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
     seedEntity,
     link,
     aspectsOf,
+    propsOf,
     childrenOf,
     actionsOf,
     workerGrant,

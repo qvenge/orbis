@@ -143,18 +143,18 @@ describe('категории §7.1', () => {
     const rows = await caller.entity.query({ query: 'tags=category, sortBy=created_at:asc' });
     expect(rows.length).toBe(12);
     for (const r of rows) {
-      const cat = r.aspects['orbis/category'];
+      const cat = r.aspectsMap['orbis/category'];
       expect(() => categoryAspectSchema.parse(cat)).not.toThrow();
     }
 
     // Доходные (Зарплата/Фриланс): ключа spend_class нет (не null — иначе ajv упадёт)
     const salary = rows.find((r) => r.title === 'Зарплата');
     expect(salary).toBeDefined();
-    expect('spend_class' in (salary?.aspects['orbis/category'] as object)).toBe(false);
+    expect('spend_class' in (salary?.aspectsMap['orbis/category'] as object)).toBe(false);
 
     // Расходная «Еда»: точные aliases и spend_class
     const food = rows.find((r) => r.title === 'Еда');
-    const foodAspect = food?.aspects['orbis/category'] as {
+    const foodAspect = food?.aspectsMap['orbis/category'] as {
       spend_class?: string;
       aliases?: string[];
       icon?: string;

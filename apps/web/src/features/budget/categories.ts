@@ -59,7 +59,7 @@ export function useCategoryTitle(categoryRef: string): {
 }
 
 export function toOption(e: QueryEntity): CategoryOption {
-  const cat = (e.aspects as Record<string, { icon?: unknown; color?: unknown } | undefined>)[
+  const cat = (e.aspectsMap as Record<string, { icon?: unknown; color?: unknown } | undefined>)[
     'orbis/category'
   ];
   return {

@@ -53,12 +53,12 @@ function applyPatch(entity: Entity, input: UpdateInput): Entity {
   }
   if (input.archived !== undefined) next.archived = input.archived;
   if (input.aspects) {
-    const aspects: Record<string, Record<string, unknown>> = { ...entity.aspects };
+    const aspects: Record<string, Record<string, unknown>> = { ...entity.aspectsMap };
     for (const [key, value] of Object.entries(input.aspects)) {
       if (value === null) delete aspects[key];
       else aspects[key] = { ...(aspects[key] ?? {}), ...value };
     }
-    next.aspects = aspects;
+    next.aspectsMap = aspects;
   }
   return next;
 }
@@ -258,7 +258,7 @@ export function useEntityDetail(entityId: string) {
   const get = trpc.entity.get.useQuery(detailGetInput(entityId), {
     // Идущий прогон опрашивается сам (run-poll.ts): экран прогона после «Прогнать сейчас»
     // иначе застывал бы на «идёт · 0 шагов» до перезагрузки. Для остальных записей — false.
-    refetchInterval: (query) => runPollInterval(query.state.data?.entity.aspects),
+    refetchInterval: (query) => runPollInterval(query.state.data?.entity.aspectsMap),
   });
   const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
   const entity = get.data?.entity;

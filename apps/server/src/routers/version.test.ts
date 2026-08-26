@@ -88,7 +88,7 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     });
     expect(restored.body).toBe(canonicalizeBody('# Раз\n\n- два\n').body);
     // Инвариант 8: откат трогает ТОЛЬКО тело — аспекты остаются текущими (С11),
-    expect(restored.aspects['orbis/task']).toEqual({ status: 'waiting' });
+    expect(restored.aspectsMap['orbis/task']).toEqual({ status: 'waiting' });
     // …как и связи: снимок их не хранит и восстановление не переписывает граф
     const after = await a.entity.get({ id, include: ['relations'] });
     expect(after.relations?.map((r) => r.targetId)).toEqual([neighbour]);

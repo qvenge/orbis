@@ -105,10 +105,11 @@ async function connectAgent(url: string, token: string = TOKEN): Promise<Client>
 /** Статус тикета в БД — правда графа, а не ответ тула (приёмка 5 по проводу). */
 async function taskStatus(id: string): Promise<unknown> {
   const rows = await withIdentity(db, owner, (tx) =>
-    tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, id)),
+    tx.select({ aspectsLegacy: entities.aspectsLegacy }).from(entities).where(eq(entities.id, id)),
   );
-  return (rows[0]?.aspects as Record<string, Record<string, unknown>> | undefined)?.['orbis/task']
-    ?.status;
+  return (rows[0]?.aspectsLegacy as Record<string, Record<string, unknown>> | undefined)?.[
+    'orbis/task'
+  ]?.status;
 }
 
 /** tools/call + разбор единственного text-контента как JSON (контракт адаптера). */
@@ -702,7 +703,7 @@ describe('/mcp: паттерн «что нового» (§9.3, сценарий 
     const rows = await withIdentity(db, owner, (tx) =>
       tx.select().from(entities).where(eq(entities.id, task.id)),
     );
-    const aspects = rows[0]?.aspects as Record<string, Record<string, unknown>>;
+    const aspects = rows[0]?.aspectsLegacy as Record<string, Record<string, unknown>>;
     expect(aspects['orbis/task']?.status).toBe('done');
 
     // Audit агентского entity_update — в глобальном треде владельца, actor 'agent'/'mcp'
@@ -915,12 +916,12 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
     // Состояние графа после круга: тикет ждёт владельца, прогон завершён с отчётом
     const rows = await withIdentity(db, owner, (tx) =>
       tx
-        .select({ id: entities.id, aspects: entities.aspects })
+        .select({ id: entities.id, aspectsLegacy: entities.aspectsLegacy })
         .from(entities)
         .where(inArray(entities.id, [ticket.id, runId])),
     );
     const byId = new Map(
-      rows.map((r) => [r.id, r.aspects as Record<string, Record<string, unknown>>]),
+      rows.map((r) => [r.id, r.aspectsLegacy as Record<string, Record<string, unknown>>]),
     );
     expect(byId.get(ticket.id)?.['orbis/task']?.status).toBe('waiting');
     const run = byId.get(runId)?.['orbis/agent-run'];

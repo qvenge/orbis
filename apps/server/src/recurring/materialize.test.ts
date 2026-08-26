@@ -112,12 +112,14 @@ describe('materializeInstances (01 §5.4)', () => {
     expect(first?.title).toBe('Утренняя пробежка');
     expect(first?.emoji).toBe('🏃');
     expect(first?.tags).toEqual(['health', 'run']);
-    const schedule = (first?.aspects as Record<string, Record<string, unknown>>)['orbis/schedule'];
+    const schedule = (first?.aspectsLegacy as Record<string, Record<string, unknown>>)[
+      'orbis/schedule'
+    ];
     expect(schedule?.recurrence).toBeUndefined();
     // 09:00 Москвы (UTC+3) даты инстанса — время из start_at шаблона
     expect(schedule?.start_at).toBe('2026-07-01T06:00:00.000Z');
     const second = rows.find((row) => row.id === recurringInstanceId(templateId, '2026-07-02'));
-    const secondSchedule = (second?.aspects as Record<string, Record<string, unknown>>)[
+    const secondSchedule = (second?.aspectsLegacy as Record<string, Record<string, unknown>>)[
       'orbis/schedule'
     ];
     expect(secondSchedule?.start_at).toBe('2026-07-02T06:00:00.000Z');
@@ -272,7 +274,7 @@ describe('materializeInstances (01 §5.4)', () => {
     );
     expect(rows.length).toBe(2);
     for (const row of rows) {
-      const aspects = row.aspects as Record<string, Record<string, unknown>>;
+      const aspects = row.aspectsLegacy as Record<string, Record<string, unknown>>;
       const fin = aspects['orbis/financial'];
       expect(fin?.planned).toBe(true);
       expect(fin?.recurring).toBe(true);
@@ -283,7 +285,8 @@ describe('materializeInstances (01 §5.4)', () => {
     const dates = rows
       .map(
         (row) =>
-          (row.aspects as Record<string, Record<string, unknown>>)['orbis/financial']?.occurred_on,
+          (row.aspectsLegacy as Record<string, Record<string, unknown>>)['orbis/financial']
+            ?.occurred_on,
       )
       .sort();
     expect(dates).toEqual(['2026-07-01', '2026-07-02']);

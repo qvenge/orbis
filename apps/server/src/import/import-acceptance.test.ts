@@ -165,7 +165,7 @@ async function rawBudgetParents(ids: string[]): Promise<Map<string, string[]>> {
       FROM relations r
       JOIN entities p ON p.id = r.source_id
       WHERE r.target_id IN (${list}) AND r.relation_type = 'parent'
-        AND p.aspects ? 'orbis/budget'
+        AND p.aspects_legacy ? 'orbis/budget'
       ORDER BY r.target_id, r.source_id
     `)) as unknown as Array<{ entity_id: string; envelope_id: string }>;
     const map = new Map<string, string[]>(ids.map((id) => [id, []]));

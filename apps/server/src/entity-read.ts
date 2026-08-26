@@ -107,7 +107,9 @@ export async function readEntity(
         SELECT id FROM rel
       )
       SELECT e.id, e.owner_id, e.title, e.emoji, e.body, e.body_refs, e.tags, e.meta,
-             e.aspects, e.created_at, e.updated_at, e.archived,
+             -- Алиас на старую карту тот же, что в SELECT-листе компилятора (§6): его ждёт
+             -- toWireEntityFromSql, и оба уйдут вместе со старым носителем.
+             e.aspects_legacy AS aspects, e.created_at, e.updated_at, e.archived,
              rel.id IS NOT NULL AS via_relation
         FROM ids
         JOIN entities e ON e.id = ids.id

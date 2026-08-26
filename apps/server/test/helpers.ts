@@ -1,5 +1,6 @@
 // apps/server/test/helpers.ts
 import {
+  type LegacyAspects,
   type LocalizedText,
   type PropertyType,
   propertyValueJsonSchema,
@@ -8,6 +9,9 @@ import {
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { makeDb } from '../src/db/client';
+import type { Tx } from '../src/db/with-identity';
+import { type LegacyRow, rowFromLegacy } from '../src/executor/legacy-form';
+import { loadRegistry } from '../src/registry/load';
 
 export function requireEnv(): void {
   for (const k of ['DATABASE_URL', 'DATABASE_URL_ADMIN']) {
@@ -186,4 +190,25 @@ export async function seedCustomAspect(ownerId: string, spec: CustomAspectSpec):
 function pgTextArray(values: string[]): string {
   if (values.length === 0) return `'{}'::text[]`;
   return `ARRAY[${values.map((v) => `'${v.replaceAll("'", "''")}'`).join(',')}]::text[]`;
+}
+
+/**
+ * Три колонки строки `entities` из старой карты аспектов — для фикстур с ПРЯМЫМ INSERT,
+ * минуя исполнителя.
+ *
+ * Зачем помощник, а не переименование поля: после миграции 0015 имя `aspects` занял СПИСОК
+ * аспектов новой формы, и фикстура, продолжающая писать в него карту, либо падает типом,
+ * либо (там, где тип `unknown`) молча кладёт карту не в ту колонку. Проекция одна на
+ * репозиторий — `executor/legacy-form.ts`, и фикстуры обязаны ходить через неё же, иначе
+ * они разойдутся с писателем новой правды.
+ *
+ * Снимок реестра читается на каждый вызов: фикстур в сьюте единицы, а кеш здесь стоил бы
+ * инвалидации после `seedCustomAspect`. Файл живёт до «Пересева мира» — вместе с проекцией.
+ */
+export async function legacyEntityColumns(
+  tx: Tx,
+  ownerId: string,
+  aspectsLegacy: LegacyAspects,
+): Promise<LegacyRow> {
+  return rowFromLegacy(await loadRegistry(tx, ownerId), aspectsLegacy);
 }

@@ -1284,9 +1284,9 @@ async function runRowAnyArchive(
   runId: string,
 ): Promise<{ run: AgentRunAspect; archived: boolean } | null> {
   const rows = await tx.execute(
-    sql`SELECT archived, aspects -> 'orbis/agent-run' AS run
+    sql`SELECT archived, aspects_legacy -> 'orbis/agent-run' AS run
         FROM entities
-        WHERE id = ${runId}::uuid AND aspects ? 'orbis/agent-run'`,
+        WHERE id = ${runId}::uuid AND aspects_legacy ? 'orbis/agent-run'`,
   );
   const row = (rows as unknown as Array<Record<string, unknown>>)[0];
   if (row === undefined) return null;
@@ -1362,7 +1362,7 @@ export async function openProposalsForEntity(
  * `jsonb_contains` не leakproof (`pg_proc.proleakproof = f`), и под политикой планировщик
  * не вправе опустить его в Index Cond; leakproof-условия (`uuid_eq`, `texteq`) индексы под
  * той же политикой берут. Это общее свойство ВСЕХ containment-проб под RLS
- * (`storedProposal`, `findPendingMessage`, `aspects @>` в entity_query), а не этой; лечится
+ * (`storedProposal`, `findPendingMessage`, `aspects_legacy @>` в entity_query), а не этой; лечится
  * не здесь — только столбцом со скалярным ключом вместо пробы по jsonb.
  *
  * `source: 'routine'` стоит в САМИХ пробах, а не фильтром после них: чат-подтверждение

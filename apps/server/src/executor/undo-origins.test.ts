@@ -19,7 +19,14 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type CanonicalRow, externalRowId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshUserId,
+  legacyEntityColumns,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { appRouter } from '../router';
@@ -150,7 +157,7 @@ async function envelopeParentTargets(): Promise<string[]> {
 /** Снимок строки сущности: ::text-касты дают стабильное байт-сравнение снимков. */
 async function entitySnapshot(id: string): Promise<EntitySnapshot> {
   const rows = await adminRows(
-    sql`SELECT archived, updated_at::text AS updated_at, aspects::text AS aspects
+    sql`SELECT archived, updated_at::text AS updated_at, aspects_legacy::text AS aspects
         FROM entities WHERE id = ${id}`,
   );
   const row = rows[0];
@@ -206,14 +213,14 @@ beforeAll(async () => {
   //   • envelope — конверт «Еда» на май: хук A4 привяжет созданные транзакции,
   //     и undo обязан снять привязки вместе со всей группой.
   const now = new Date();
-  await withIdentity(db, user, (tx) =>
+  await withIdentity(db, user, async (tx) =>
     tx.insert(entities).values([
       {
         id: adoptTargetId,
         ownerId: user,
         title: 'Ручной обед',
         tags: [],
-        aspects: {
+        ...(await legacyEntityColumns(tx, user, {
           'orbis/financial': {
             amount: '999.00',
             direction: 'expense',
@@ -221,7 +228,7 @@ beforeAll(async () => {
             occurred_on: '2026-05-09',
             counterparty: 'Ручной обед',
           },
-        },
+        })),
         createdAt: now,
         updatedAt: now,
       },
@@ -230,7 +237,7 @@ beforeAll(async () => {
         ownerId: user,
         title: 'Контрольная запись',
         tags: [],
-        aspects: {
+        ...(await legacyEntityColumns(tx, user, {
           'orbis/financial': {
             amount: '777.00',
             direction: 'expense',
@@ -238,7 +245,7 @@ beforeAll(async () => {
             occurred_on: '2026-05-05',
             counterparty: 'Контрольная запись',
           },
-        },
+        })),
         createdAt: now,
         updatedAt: now,
       },
@@ -247,7 +254,7 @@ beforeAll(async () => {
         ownerId: user,
         title: 'Конверт Еда',
         tags: [],
-        aspects: {
+        ...(await legacyEntityColumns(tx, user, {
           'orbis/budget': {
             category_ref: foodId,
             limit: '10000.00',
@@ -255,7 +262,7 @@ beforeAll(async () => {
             period_start: '2026-05-01',
             period_end: '2026-05-31',
           },
-        },
+        })),
         createdAt: now,
         updatedAt: now,
       },

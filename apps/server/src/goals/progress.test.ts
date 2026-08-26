@@ -380,7 +380,7 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
     const admin = adminDb();
     try {
       await admin.db.execute(
-        sql`UPDATE entities SET aspects = jsonb_set(aspects, '{orbis/financial,amount}', '"не число"') WHERE id = ${row.id}`,
+        sql`UPDATE entities SET aspects_legacy = jsonb_set(aspects_legacy, '{orbis/financial,amount}', '"не число"') WHERE id = ${row.id}`,
       );
     } finally {
       await admin.client.end();
@@ -423,7 +423,7 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
     const admin = adminDb();
     try {
       await admin.db.execute(
-        sql`UPDATE entities SET aspects = jsonb_set(aspects, '{orbis/financial,amount}', '"NaN"') WHERE id = ${row.id}`,
+        sql`UPDATE entities SET aspects_legacy = jsonb_set(aspects_legacy, '{orbis/financial,amount}', '"NaN"') WHERE id = ${row.id}`,
       );
     } finally {
       await admin.client.end();
@@ -736,7 +736,7 @@ describe('логи отказа: конфигурационный отказ н�
     const admin = adminDb();
     try {
       await admin.db.execute(
-        sql`UPDATE entities SET aspects = jsonb_set(aspects, '{orbis/goal,target_value}', '"0"') WHERE id = ${goal.id}`,
+        sql`UPDATE entities SET aspects_legacy = jsonb_set(aspects_legacy, '{orbis/goal,target_value}', '"0"') WHERE id = ${goal.id}`,
       );
     } finally {
       await admin.client.end();

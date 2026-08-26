@@ -161,7 +161,7 @@ function wireEntityAt(results: unknown[], index: number): WireEntity | null {
   if (typeof row !== 'object' || row === null) return null;
   const wire = row as Partial<WireEntity>;
   if (typeof wire.id !== 'string') return null;
-  if (typeof wire.aspects !== 'object' || wire.aspects === null) return null;
+  if (typeof wire.aspectsMap !== 'object' || wire.aspectsMap === null) return null;
   return wire as WireEntity;
 }
 
@@ -299,7 +299,7 @@ function savedRunMatches(
   outcome: string,
 ): boolean {
   if (wire === null || wire.id !== runId) return false;
-  const saved = wire.aspects['orbis/agent-run'];
+  const saved = wire.aspectsMap['orbis/agent-run'];
   // Субъект — как в захвате: replay отдаёт сохранённый ответ, не спрашивая, кто пришёл.
   // Исход — против переиспользования id между глаголами: под id чекпойнта лежит прогон
   // в `checkpoint`, и отдать его как результат шага значило бы соврать про состояние.
@@ -376,7 +376,7 @@ async function myQueue(ctx: VerbCtx, grant: GrantRef): Promise<ToolDispatchResul
     const rows = await assignedTickets(tx, grant.id);
     const out: QueueTicket[] = [];
     for (const row of rows) {
-      const task = row.aspects['orbis/task'] ?? {};
+      const task = row.aspectsLegacy['orbis/task'] ?? {};
       const status = task.status as TaskStatus;
       const project = await parentProject(tx, row.id);
       const runs = await runsOfParent(tx, row.id);
@@ -524,7 +524,7 @@ async function claimTask(
   // …и ключ ОДНОГО исполнителя: audit-id считается по владельцу и batch_id, поэтому
   // второй грант того же владельца, повторив id первого, получил бы на replay его прогон
   // и начал бы писать в него шаги. Тикет здесь совпадает — различает только грант.
-  const runGrantId = runWire.aspects['orbis/agent-run']?.grant_id;
+  const runGrantId = runWire.aspectsMap['orbis/agent-run']?.grant_id;
   if (runGrantId !== grant.id) {
     return err('CONFLICT', 'id вызова уже использован другим исполнителем — возьми новый', {
       tool: 'orbis_claim_task',
@@ -546,7 +546,7 @@ async function claimTask(
       id: ticketWire.id,
       title: ticketWire.title,
       body: ticketWire.body,
-      aspects: ticketWire.aspects,
+      aspects: ticketWire.aspectsMap,
     },
     project,
     // Процесс проекта — это его тело (С10): агент читает раздел «Процесс» при захвате.
@@ -653,7 +653,7 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
         return replayMismatch('orbis_run_step', batchId);
       }
       // Счётчик — из сохранённого ответа, а не локальное n+1: правда о прогоне лежит там
-      const saved = runWire.aspects['orbis/agent-run']?.step_count;
+      const saved = runWire.aspectsMap['orbis/agent-run']?.step_count;
       const result: RunStepResult = {
         run_id: runWire.id,
         step_count: typeof saved === 'number' ? saved : n + 1,
@@ -883,7 +883,7 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   }
 
   const ticketWire = wireEntityAt(r.results, 1);
-  const status = ticketWire?.aspects['orbis/task']?.status;
+  const status = ticketWire?.aspectsMap['orbis/task']?.status;
   if (
     ticketWire === null ||
     ticketWire.id !== ticket.id ||
@@ -969,7 +969,7 @@ async function finish(ctx: VerbCtx, input: FinishInput): Promise<ToolDispatchRes
     ticketUpdate: (ticket) =>
       // Отсутствие may_close = запрет (С8): ajv default'ов не применяет, и «не сказано» —
       // это «нельзя», а не «можно».
-      ticket.aspects['orbis/assignment']?.may_close === true
+      ticket.aspectsLegacy['orbis/assignment']?.may_close === true
         ? {
             // Право сверяется ещё раз под замком: владелец мог снять may_close между
             // нашим чтением и записью, и тогда `done` стал бы решением агента, а не его.

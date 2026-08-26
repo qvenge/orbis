@@ -73,7 +73,29 @@ export const entities = pgTable('entities', {
   bodyBeforeDoc: text('body_before_doc'),
   tags: text('tags').array().notNull().default(sql`'{}'`),
   meta: jsonb('meta').notNull().default({}),
-  aspects: jsonb('aspects').notNull().default({}),
+  /**
+   * СТАРАЯ карта аспектов `{id аспекта: {поле: значение}}` — носитель, который реформа
+   * снимает (§А1-1). Переименована из `aspects` миграцией 0015 и до миграции 0017 живёт
+   * рядом с новой правдой: её пишет проекция `executor/legacy-form.ts`, а читают ещё не
+   * переведённые запросы (доменные модули, компилятор §6, web через `wire.aspectsMap`).
+   * Новый код в неё не смотрит — он читает `props`/`aspects`.
+   */
+  aspectsLegacy: jsonb('aspects_legacy').notNull().default({}),
+  /**
+   * НОВАЯ правда значений (§А1-1): плоская карта `{id свойства: значение}` — один
+   * идентификатор на свойство независимо от того, сколько аспектов его носят (§А8/В1
+   * слили `orbis/finance_category`, `orbis/currency`, `orbis/grant`).
+   */
+  props: jsonb('props').notNull().default({}),
+  /** НОВАЯ правда интерпретаций: список id аспектов, а не карта (§А1-1, Р5). */
+  aspects: text('aspects').array().notNull().default(sql`'{}'`),
+  /**
+   * Id сущностей, на которые ссылаются ссылочные свойства этой строки (§А1-1): обратный
+   * индекс для «кто на меня ссылается» без обхода jsonb. Писателя заводит задача
+   * «Ссылочные свойства», до неё колонка пуста — но заведена сразу, вместе с остальными
+   * двумя: форма строки не должна меняться миграцией дважды.
+   */
+  queryRefs: text('query_refs').array().notNull().default(sql`'{}'`),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   archived: boolean('archived').notNull().default(false),

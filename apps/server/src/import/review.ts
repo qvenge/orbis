@@ -267,14 +267,14 @@ async function candidateWindow(
   to: string,
 ): Promise<Map<string, Candidate[]>> {
   const rows = (await tx.execute(sql`
-    SELECT id, title, aspects->'orbis/financial' AS fin
+    SELECT id, title, aspects_legacy->'orbis/financial' AS fin
     FROM entities
     WHERE owner_id = ${ownerId} AND NOT archived
-      AND aspects ? 'orbis/financial'
-      AND aspects->'orbis/schedule'->'recurrence' IS NULL
-      AND aspects->'orbis/financial'->>'occurred_on' >= ${from}
-      AND aspects->'orbis/financial'->>'occurred_on' <= ${to}
-    ORDER BY aspects->'orbis/financial'->>'occurred_on', id
+      AND aspects_legacy ? 'orbis/financial'
+      AND aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
+      AND aspects_legacy->'orbis/financial'->>'occurred_on' >= ${from}
+      AND aspects_legacy->'orbis/financial'->>'occurred_on' <= ${to}
+    ORDER BY aspects_legacy->'orbis/financial'->>'occurred_on', id
   `)) as unknown as Array<{ id: string; title: string; fin: Record<string, unknown> }>;
 
   const buckets = new Map<string, Candidate[]>();
@@ -318,9 +318,9 @@ async function candidateWindow(
  */
 async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCategory[]> {
   const rows = (await tx.execute(sql`
-    SELECT id, title, aspects->'orbis/category'->'aliases' AS aliases
+    SELECT id, title, aspects_legacy->'orbis/category'->'aliases' AS aliases
     FROM entities
-    WHERE owner_id = ${ownerId} AND NOT archived AND aspects ? 'orbis/category'
+    WHERE owner_id = ${ownerId} AND NOT archived AND aspects_legacy ? 'orbis/category'
     ORDER BY id
   `)) as unknown as Array<{ id: string; title: string; aliases: unknown }>;
   return rows.map((r) => ({
@@ -340,7 +340,7 @@ async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCate
  * правки едет вместе с заголовком (иначе конфликт двух правил на один паттерн импорт
  * разрешал бы иначе, чем быстрый ввод).
  *
- * Первый jsonb-предикат — containment `aspects ? 'orbis/memory'`: под него подходит
+ * Первый jsonb-предикат — containment `aspects_legacy ? 'orbis/memory'`: под него подходит
  * entities_aspects_gin, тогда как один `->>`-фильтр индексом не покрывается и каждый
  * import.review сканировал бы ВСЕ неархивные сущности владельца (после CSV-импортов это
  * тысячи строк). Тот же приём у ai/escalation.ts (hasEquivalentRule) и llm/context.ts.
@@ -350,9 +350,9 @@ async function memoryRules(tx: Tx, ownerId: string): Promise<FastPathRule[]> {
     SELECT title, updated_at
     FROM entities
     WHERE owner_id = ${ownerId} AND NOT archived
-      AND aspects ? 'orbis/memory'
-      AND aspects->'orbis/memory'->>'kind' = 'rule'
-      AND aspects->'orbis/memory'->>'scope' = 'orbis/financial'
+      AND aspects_legacy ? 'orbis/memory'
+      AND aspects_legacy->'orbis/memory'->>'kind' = 'rule'
+      AND aspects_legacy->'orbis/memory'->>'scope' = 'orbis/financial'
     ORDER BY id
   `)) as unknown as Array<{ title: string; updated_at: unknown }>;
   return rows.map((r) => ({ title: r.title, updatedAt: toIsoTime(r.updated_at) }));
@@ -488,16 +488,16 @@ async function unbudgetedOf(
   );
   const rows = await withIdentity(db, ownerId, async (tx) => {
     return (await tx.execute(sql`
-      SELECT e.aspects->'orbis/financial'->>'category_ref' AS category_ref,
+      SELECT e.aspects_legacy->'orbis/financial'->>'category_ref' AS category_ref,
              count(*)::int AS count
       FROM entities e
       WHERE e.id IN (${ids})
-        AND e.aspects->'orbis/financial'->>'category_ref' IS NOT NULL
+        AND e.aspects_legacy->'orbis/financial'->>'category_ref' IS NOT NULL
         AND NOT EXISTS (
           SELECT 1 FROM relations r
           JOIN entities p ON p.id = r.source_id
           WHERE r.target_id = e.id AND r.relation_type = 'parent'
-            AND p.aspects ? 'orbis/budget' AND NOT p.archived
+            AND p.aspects_legacy ? 'orbis/budget' AND NOT p.archived
         )
       GROUP BY 1
       ORDER BY 1
@@ -549,7 +549,7 @@ async function assertAdoptTargets(
       sql`, `,
     );
     const rows = (await tx.execute(sql`
-      SELECT id, archived, (aspects ? 'orbis/financial') AS financial
+      SELECT id, archived, (aspects_legacy ? 'orbis/financial') AS financial
       FROM entities
       WHERE owner_id = ${ownerId} AND id IN (${ids})
     `)) as unknown as Array<{ id: string; archived: boolean; financial: boolean }>;

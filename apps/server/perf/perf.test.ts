@@ -231,7 +231,7 @@ test('фикстура наполнена: гейт меряет данные, �
   );
   expect(parent).toBeDefined();
   const envelope = await caller.entity.get({ id: parent?.sourceId ?? '', include: [] });
-  expect(Object.keys(envelope.entity.aspects)).toContain('orbis/budget');
+  expect(Object.keys(envelope.entity.aspectsMap)).toContain('orbis/budget');
 
   // Цель: мерить надо ПОСЧИТАННЫЙ прогресс. Расчёт fail-soft (goals/progress.ts) — на
   // конфигурационном отказе (`invalid_query`, `invalid_field`, `array_field`) он выходит

@@ -76,7 +76,18 @@ export interface WireEntity {
   bodyRefs: string[];
   tags: string[];
   meta: Record<string, unknown>;
-  aspects: Record<string, Record<string, unknown>>;
+  /** НОВАЯ правда значений: плоско по id свойства (§А1-1). До Задачи 4b всегда пусто. */
+  props: Record<string, unknown>;
+  /** НОВАЯ правда интерпретаций: СПИСОК id аспектов, а не карта. До Задачи 4b всегда пусто. */
+  aspects: string[];
+  /** Обратные ссылки ссылочных свойств (§А1-1); писатель — задача ссылочных свойств. */
+  queryRefs: string[];
+  /**
+   * СТАРАЯ карта `{id аспекта: {поле: значение}}` — проекция из `aspects_legacy`. Имя
+   * сменилось, потому что имя `aspects` заняла новая правда; сама карта уезжает из
+   * wire-формы вместе со старым носителем (§А1-1), пока её читает web.
+   */
+  aspectsMap: Record<string, Record<string, unknown>>;
   createdAt: string;
   updatedAt: string;
   archived: boolean;

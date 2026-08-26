@@ -6,7 +6,7 @@ import type { Entity } from '../schemas/entity';
  *
  * Состав: задачи с разными status/priority/due_date, заметка, финансовые записи.
  * Формы аспектов — по PRD 01 §3 (схемы аспектов кодируются в Слайсе 1; здесь
- * `aspects` — плоские образцы, согласованные с нормативными таблицами §3.1–§3.4).
+ * `aspectsMap` — плоские образцы, согласованные с нормативными таблицами §3.1–§3.4).
  * Каждая фикстура обязана проходить `entitySchema` — см. `fixtures.test.ts`.
  */
 
@@ -22,6 +22,17 @@ export const FIXTURE_CATEGORY_INCOME_ID = '019d48ea-5100-7b31-9c22-40d1a2e37f88'
 /** Категория-сущность «Спорт». */
 export const FIXTURE_CATEGORY_SPORT_ID = '019d48ea-6a00-7c42-8d17-51e2b3f48a99';
 
+/**
+ * Новая правда (§А1-1) в этих фикстурах ПУСТА: писатель `props`/`aspects[]` появляется
+ * следующей задачей, а здесь важна ровно старая карта — по ней строятся golden запросов.
+ * Хелпером, а не тремя строками в каждой из десяти записей: удалять его — одно движение.
+ */
+const emptyNewForm = (): Pick<Entity, 'props' | 'aspects' | 'queryRefs'> => ({
+  props: {},
+  aspects: [],
+  queryRefs: [],
+});
+
 export const queryFixtures: Entity[] = [
   {
     // Задача: in_progress / high / срок сегодня-около — для status=, priority=, due_date=today.
@@ -33,7 +44,8 @@ export const queryFixtures: Entity[] = [
     bodyRefs: [],
     tags: ['task', 'work'],
     meta: {},
-    aspects: {
+    ...emptyNewForm(),
+    aspectsMap: {
       'orbis/task': {
         status: 'in_progress',
         priority: 'high',
@@ -55,7 +67,8 @@ export const queryFixtures: Entity[] = [
     bodyRefs: ['019e4466-1000-7e07-b5d4-64be9721da51'],
     tags: ['task', 'expense', 'running'],
     meta: {},
-    aspects: {
+    ...emptyNewForm(),
+    aspectsMap: {
       'orbis/task': {
         status: 'planned',
         priority: 'medium',
@@ -89,7 +102,8 @@ export const queryFixtures: Entity[] = [
     bodyRefs: [],
     tags: ['task'],
     meta: {},
-    aspects: {
+    ...emptyNewForm(),
+    aspectsMap: {
       'orbis/task': {
         status: 'inbox',
       },
@@ -108,7 +122,8 @@ export const queryFixtures: Entity[] = [
     bodyRefs: [],
     tags: ['task', 'home'],
     meta: {},
-    aspects: {
+    ...emptyNewForm(),
+    aspectsMap: {
       'orbis/task': {
         status: 'done',
         priority: 'low',
@@ -130,7 +145,8 @@ export const queryFixtures: Entity[] = [
     bodyRefs: [],
     tags: ['task', 'work'],
     meta: {},
-    aspects: {
+    ...emptyNewForm(),
+    aspectsMap: {
       'orbis/task': {
         status: 'waiting',
         priority: 'medium',
@@ -152,7 +168,8 @@ export const queryFixtures: Entity[] = [
     bodyRefs: [],
     tags: ['task'],
     meta: {},
-    aspects: {
+    ...emptyNewForm(),
+    aspectsMap: {
       'orbis/task': {
         status: 'cancelled',
         priority: 'low',
@@ -172,7 +189,8 @@ export const queryFixtures: Entity[] = [
     bodyRefs: [],
     tags: ['note', 'travel'],
     meta: {},
-    aspects: {
+    ...emptyNewForm(),
+    aspectsMap: {
       'orbis/note': {
         content_type: 'markdown',
         pinned: true,
@@ -192,7 +210,8 @@ export const queryFixtures: Entity[] = [
     bodyRefs: [],
     tags: ['expense', 'food'],
     meta: {},
-    aspects: {
+    ...emptyNewForm(),
+    aspectsMap: {
       'orbis/financial': {
         amount: '340.00',
         currency: 'RUB',
@@ -218,7 +237,8 @@ export const queryFixtures: Entity[] = [
     bodyRefs: [],
     tags: ['income'],
     meta: {},
-    aspects: {
+    ...emptyNewForm(),
+    aspectsMap: {
       'orbis/financial': {
         amount: '150000.00',
         currency: 'RUB',
@@ -243,7 +263,8 @@ export const queryFixtures: Entity[] = [
     bodyRefs: [],
     tags: ['expense', 'health'],
     meta: {},
-    aspects: {
+    ...emptyNewForm(),
+    aspectsMap: {
       'orbis/financial': {
         amount: '2000.00',
         currency: 'RUB',

@@ -48,13 +48,13 @@ export async function postDueInstances(deps: PostDueDeps): Promise<{ posted: num
     const rows = (await tx.execute(sql`
       SELECT e.id FROM entities e
       WHERE e.owner_id = ${ownerId} AND NOT e.archived
-        AND e.aspects->'orbis/financial'->>'planned' = 'true'
-        AND e.aspects->'orbis/financial'->>'occurred_on' <= ${today}
+        AND e.aspects_legacy->'orbis/financial'->>'planned' = 'true'
+        AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${today}
         AND EXISTS (
           SELECT 1 FROM relations r
           WHERE r.target_id = e.id AND r.relation_type = 'derived_from'
         )
-      ORDER BY e.aspects->'orbis/financial'->>'occurred_on', e.id
+      ORDER BY e.aspects_legacy->'orbis/financial'->>'occurred_on', e.id
     `)) as unknown as Array<{ id: string }>;
     return rows.map((r) => r.id);
   });

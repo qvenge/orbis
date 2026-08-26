@@ -25,7 +25,10 @@ const ent = (id: string, title: string, aspects: Aspects = {}) => ({
   bodyRefs: [],
   tags: [],
   meta: {},
-  aspects,
+  aspectsMap: aspects,
+  props: {},
+  aspects: [],
+  queryRefs: [],
   createdAt: '2026-07-05T00:00:00.000Z',
   updatedAt: '2026-07-05T10:00:00.000Z',
   archived: false,
@@ -55,7 +58,7 @@ const sugg = (e: ReturnType<typeof ent>) => ({
   id: e.id,
   title: e.title,
   emoji: e.emoji,
-  status: (e.aspects['orbis/task']?.status as string | undefined) ?? null,
+  status: (e.aspectsMap['orbis/task']?.status as string | undefined) ?? null,
   archived: e.archived,
 });
 

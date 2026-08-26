@@ -207,7 +207,7 @@ export async function goalProgressFor(
   ownerId: string,
   entity: WireEntity,
 ): Promise<GoalProgress | undefined> {
-  const raw = entity.aspects[GOAL_ASPECT];
+  const raw = entity.aspectsMap[GOAL_ASPECT];
   if (raw === undefined) return undefined;
   const goal = goalAspectSchema.safeParse(raw);
   if (!goal.success) {

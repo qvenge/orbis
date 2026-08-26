@@ -131,19 +131,19 @@ async function spentByEnvelope(
   );
   const rows = (await tx.execute(sql`
     SELECT r.source_id AS envelope_id,
-           coalesce(sum((e.aspects->'orbis/financial'->>'amount')::numeric), 0)::text AS spent
+           coalesce(sum((e.aspects_legacy->'orbis/financial'->>'amount')::numeric), 0)::text AS spent
     FROM relations r
     JOIN entities env ON env.id = r.source_id
     JOIN entities e   ON e.id = r.target_id
     WHERE r.relation_type = 'parent'
       AND r.source_id IN (${ids})
       AND e.owner_id = ${ownerId} AND NOT e.archived
-      AND e.aspects->'orbis/schedule'->'recurrence' IS NULL
-      AND e.aspects->'orbis/financial'->>'direction' = 'expense'
-      AND coalesce((e.aspects->'orbis/financial'->>'planned')::boolean, false) = false
-      AND (e.aspects->'orbis/financial'->>'occurred_on') <= ${today}
-      AND coalesce(e.aspects->'orbis/financial'->>'currency', ${defaultCurrency})
-          = coalesce(env.aspects->'orbis/budget'->>'currency', ${defaultCurrency})
+      AND e.aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
+      AND e.aspects_legacy->'orbis/financial'->>'direction' = 'expense'
+      AND coalesce((e.aspects_legacy->'orbis/financial'->>'planned')::boolean, false) = false
+      AND (e.aspects_legacy->'orbis/financial'->>'occurred_on') <= ${today}
+      AND coalesce(e.aspects_legacy->'orbis/financial'->>'currency', ${defaultCurrency})
+          = coalesce(env.aspects_legacy->'orbis/budget'->>'currency', ${defaultCurrency})
     GROUP BY r.source_id
   `)) as unknown as Array<{ envelope_id: string; spent: string }>;
   return new Map(rows.map((r) => [r.envelope_id, r.spent]));
@@ -165,7 +165,7 @@ async function categoriesById(tx: Tx, ids: string[]): Promise<Map<string, Catego
     sql`, `,
   );
   const rows = (await tx.execute(sql`
-    SELECT id, title, aspects->'orbis/category' AS category FROM entities
+    SELECT id, title, aspects_legacy->'orbis/category' AS category FROM entities
     WHERE id IN (${list})
   `)) as unknown as Array<{ id: string; title: string; category: Record<string, unknown> | null }>;
   return new Map(
@@ -198,7 +198,7 @@ async function categoryEdges(tx: Tx, ownerId: string): Promise<Map<string, strin
     JOIN entities t ON t.id = r.target_id
     WHERE r.relation_type = 'parent'
       AND s.owner_id = ${ownerId}
-      AND s.aspects ? 'orbis/category' AND t.aspects ? 'orbis/category'
+      AND s.aspects_legacy ? 'orbis/category' AND t.aspects_legacy ? 'orbis/category'
   `)) as unknown as Array<{ source_id: string; target_id: string }>;
   const children = new Map<string, string[]>();
   for (const r of rows) {
@@ -242,7 +242,7 @@ function rawEnvelopeOf(
   spentMap: Map<string, string>,
   defaultCurrency: string,
 ): RawEnvelope | null {
-  const budget = (row.aspects as AspectsMap)['orbis/budget'];
+  const budget = (row.aspectsLegacy as AspectsMap)['orbis/budget'];
   if (
     budget === undefined ||
     typeof budget.category_ref !== 'string' ||
@@ -340,8 +340,8 @@ async function rawEnvelopesOfMonth(
       and(
         eq(entities.ownerId, ownerId),
         eq(entities.archived, false),
-        sql`${entities.aspects}->'orbis/budget'->>'period_start' <= ${end}`,
-        sql`${entities.aspects}->'orbis/budget'->>'period_end' >= ${start}`,
+        sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_start' <= ${end}`,
+        sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_end' >= ${start}`,
       ),
     );
   const spentMap = await spentByEnvelope(
@@ -376,16 +376,16 @@ async function computeOverview(
   // Баланс периода (§2.5): факты в [start;end] и ≤ сегодня, валюта периода = дефолтная;
   // шаблоны recurring (orbis/schedule.recurrence) — не операции, исключены
   const balanceRows = (await tx.execute(sql`
-    SELECT e.aspects->'orbis/financial'->>'direction' AS direction,
-           coalesce(sum((e.aspects->'orbis/financial'->>'amount')::numeric), 0)::text AS total
+    SELECT e.aspects_legacy->'orbis/financial'->>'direction' AS direction,
+           coalesce(sum((e.aspects_legacy->'orbis/financial'->>'amount')::numeric), 0)::text AS total
     FROM entities e
     WHERE e.owner_id = ${ownerId} AND NOT e.archived
-      AND e.aspects->'orbis/schedule'->'recurrence' IS NULL
-      AND coalesce((e.aspects->'orbis/financial'->>'planned')::boolean, false) = false
-      AND e.aspects->'orbis/financial'->>'occurred_on' >= ${start}
-      AND e.aspects->'orbis/financial'->>'occurred_on' <= ${end}
-      AND e.aspects->'orbis/financial'->>'occurred_on' <= ${today}
-      AND coalesce(e.aspects->'orbis/financial'->>'currency', ${defCur}) = ${defCur}
+      AND e.aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
+      AND coalesce((e.aspects_legacy->'orbis/financial'->>'planned')::boolean, false) = false
+      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' >= ${start}
+      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${end}
+      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${today}
+      AND coalesce(e.aspects_legacy->'orbis/financial'->>'currency', ${defCur}) = ${defCur}
     GROUP BY 1
   `)) as unknown as Array<{ direction: string; total: string }>;
   const income = decAdd(balanceRows.find((r) => r.direction === 'income')?.total ?? '0', '0');
@@ -394,22 +394,22 @@ async function computeOverview(
   // Unbudgeted (§2.3 шаг 5, §3.1): фактические расходы периода БЕЗ budget-parent,
   // группировка по category_ref; чужая валюта в агрегат не входит (§5)
   const unbudgetedRows = (await tx.execute(sql`
-    SELECT e.aspects->'orbis/financial'->>'category_ref' AS category_id,
-           sum((e.aspects->'orbis/financial'->>'amount')::numeric)::text AS total
+    SELECT e.aspects_legacy->'orbis/financial'->>'category_ref' AS category_id,
+           sum((e.aspects_legacy->'orbis/financial'->>'amount')::numeric)::text AS total
     FROM entities e
     WHERE e.owner_id = ${ownerId} AND NOT e.archived
-      AND e.aspects->'orbis/schedule'->'recurrence' IS NULL
-      AND e.aspects->'orbis/financial'->>'direction' = 'expense'
-      AND coalesce((e.aspects->'orbis/financial'->>'planned')::boolean, false) = false
-      AND e.aspects->'orbis/financial'->>'occurred_on' >= ${start}
-      AND e.aspects->'orbis/financial'->>'occurred_on' <= ${end}
-      AND e.aspects->'orbis/financial'->>'occurred_on' <= ${today}
-      AND coalesce(e.aspects->'orbis/financial'->>'currency', ${defCur}) = ${defCur}
+      AND e.aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
+      AND e.aspects_legacy->'orbis/financial'->>'direction' = 'expense'
+      AND coalesce((e.aspects_legacy->'orbis/financial'->>'planned')::boolean, false) = false
+      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' >= ${start}
+      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${end}
+      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${today}
+      AND coalesce(e.aspects_legacy->'orbis/financial'->>'currency', ${defCur}) = ${defCur}
       AND NOT EXISTS (
         SELECT 1 FROM relations r
         JOIN entities p ON p.id = r.source_id
         WHERE r.target_id = e.id AND r.relation_type = 'parent'
-          AND p.aspects ? 'orbis/budget' AND NOT p.archived
+          AND p.aspects_legacy ? 'orbis/budget' AND NOT p.archived
       )
     GROUP BY 1
     ORDER BY 1
@@ -424,9 +424,9 @@ async function computeOverview(
       and(
         eq(entities.ownerId, ownerId),
         eq(entities.archived, false),
-        sql`${entities.aspects}->'orbis/financial'->>'planned' = 'true'`,
-        sql`${entities.aspects}->'orbis/financial'->>'occurred_on' >= ${today}`,
-        sql`${entities.aspects}->'orbis/financial'->>'occurred_on' <= ${horizon}`,
+        sql`${entities.aspectsLegacy}->'orbis/financial'->>'planned' = 'true'`,
+        sql`${entities.aspectsLegacy}->'orbis/financial'->>'occurred_on' >= ${today}`,
+        sql`${entities.aspectsLegacy}->'orbis/financial'->>'occurred_on' <= ${horizon}`,
         sql`EXISTS (SELECT 1 FROM relations r
                     WHERE r.target_id = ${entities.id} AND r.relation_type = 'derived_from')`,
       ),
@@ -441,9 +441,9 @@ async function computeOverview(
       and(
         eq(entities.ownerId, ownerId),
         eq(entities.archived, false),
-        sql`${entities.aspects}->'orbis/financial'->>'planned' = 'true'`,
-        sql`${entities.aspects}->'orbis/financial'->>'direction' = 'expense'`,
-        sql`${entities.aspects}->'orbis/schedule'->'recurrence' IS NULL`,
+        sql`${entities.aspectsLegacy}->'orbis/financial'->>'planned' = 'true'`,
+        sql`${entities.aspectsLegacy}->'orbis/financial'->>'direction' = 'expense'`,
+        sql`${entities.aspectsLegacy}->'orbis/schedule'->'recurrence' IS NULL`,
         sql`NOT EXISTS (SELECT 1 FROM relations r
                         WHERE r.target_id = ${entities.id} AND r.relation_type = 'derived_from')`,
       ),
@@ -453,7 +453,7 @@ async function computeOverview(
   const categoryIds = new Set<string>();
   for (const raw of raws) categoryIds.add(raw.categoryRef);
   for (const row of plannedRows) {
-    const ref = (row.aspects as AspectsMap)['orbis/financial']?.category_ref;
+    const ref = (row.aspectsLegacy as AspectsMap)['orbis/financial']?.category_ref;
     if (typeof ref === 'string') categoryIds.add(ref);
   }
   for (const r of unbudgetedRows) categoryIds.add(r.category_id);
@@ -501,7 +501,7 @@ async function computeOverview(
   const alertCount = countAlerts(raws, today);
 
   const finOf = (row: EntityRow) =>
-    ((row.aspects as AspectsMap)['orbis/financial'] ?? {}) as Record<string, unknown>;
+    ((row.aspectsLegacy as AspectsMap)['orbis/financial'] ?? {}) as Record<string, unknown>;
   const dateIdSort = (a: EntityRow, b: EntityRow) => {
     const ka = `${String(finOf(a).occurred_on ?? '')}\u0000${a.id}`;
     const kb = `${String(finOf(b).occurred_on ?? '')}\u0000${b.id}`;
@@ -600,9 +600,9 @@ export async function budgetStatus(
   return withIdentity(db, ownerId, async (tx) => {
     const overview = await computeOverview(tx, ownerId, m, today);
     const rows = (await tx.execute(sql`
-      SELECT id, title, aspects->'orbis/category'->>'spend_class' AS spend_class
+      SELECT id, title, aspects_legacy->'orbis/category'->>'spend_class' AS spend_class
       FROM entities
-      WHERE owner_id = ${ownerId} AND NOT archived AND aspects ? 'orbis/category'
+      WHERE owner_id = ${ownerId} AND NOT archived AND aspects_legacy ? 'orbis/category'
       ORDER BY title, id
     `)) as unknown as Array<{ id: string; title: string; spend_class: string | null }>;
     return {
@@ -683,11 +683,11 @@ export async function categoryTrend(
         and(
           eq(entities.ownerId, ownerId),
           eq(entities.archived, false),
-          sql`${entities.aspects}->'orbis/budget'->>'category_ref' = ${args.categoryId}`,
-          sql`${entities.aspects}->'orbis/budget'->>'period_start' >= ${`${first}-01`}`,
-          sql`${entities.aspects}->'orbis/budget'->>'period_start' <= ${monthRange(curMonth).end}`,
+          sql`${entities.aspectsLegacy}->'orbis/budget'->>'category_ref' = ${args.categoryId}`,
+          sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_start' >= ${`${first}-01`}`,
+          sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_start' <= ${monthRange(curMonth).end}`,
           // только валюта по умолчанию — см. валютную границу в docstring
-          sql`coalesce(${entities.aspects}->'orbis/budget'->>'currency', ${defCur}) = ${defCur}`,
+          sql`coalesce(${entities.aspectsLegacy}->'orbis/budget'->>'currency', ${defCur}) = ${defCur}`,
         ),
       );
     const spentMap = await spentByEnvelope(
@@ -789,20 +789,20 @@ export async function rolloverPreview(
         and(
           eq(entities.ownerId, ownerId),
           eq(entities.archived, false),
-          sql`${entities.aspects}->'orbis/budget'->>'period_start' = ${prevRange.start}`,
-          sql`${entities.aspects}->'orbis/budget'->>'period_end' = ${prevRange.end}`,
-          sql`coalesce(${entities.aspects}->'orbis/budget'->>'currency', ${defCur}) = ${defCur}`,
+          sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_start' = ${prevRange.start}`,
+          sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_end' = ${prevRange.end}`,
+          sql`coalesce(${entities.aspectsLegacy}->'orbis/budget'->>'currency', ${defCur}) = ${defCur}`,
         ),
       );
 
     // Категории с конвертом-преемником: месячный конверт целевого месяца (defaultCurrency)
     const succRows = (await tx.execute(sql`
-      SELECT DISTINCT aspects->'orbis/budget'->>'category_ref' AS category_id
+      SELECT DISTINCT aspects_legacy->'orbis/budget'->>'category_ref' AS category_id
       FROM entities
       WHERE owner_id = ${ownerId} AND NOT archived
-        AND aspects->'orbis/budget'->>'period_start' = ${targetRange.start}
-        AND aspects->'orbis/budget'->>'period_end' = ${targetRange.end}
-        AND coalesce(aspects->'orbis/budget'->>'currency', ${defCur}) = ${defCur}
+        AND aspects_legacy->'orbis/budget'->>'period_start' = ${targetRange.start}
+        AND aspects_legacy->'orbis/budget'->>'period_end' = ${targetRange.end}
+        AND coalesce(aspects_legacy->'orbis/budget'->>'currency', ${defCur}) = ${defCur}
     `)) as unknown as Array<{ category_id: string }>;
     const successors = new Set(succRows.map((r) => r.category_id));
 
@@ -847,29 +847,29 @@ export async function rolloverPreview(
     // участвует. Валютная граница NOT EXISTS симметрична остальным запросам (§5):
     // чужевалютный конверт RUB-траты не бюджетирует и категорию из превью не прячет.
     const spendingRows = (await tx.execute(sql`
-      SELECT e.aspects->'orbis/financial'->>'category_ref' AS category_id,
-             sum((e.aspects->'orbis/financial'->>'amount')::numeric)::text AS total
+      SELECT e.aspects_legacy->'orbis/financial'->>'category_ref' AS category_id,
+             sum((e.aspects_legacy->'orbis/financial'->>'amount')::numeric)::text AS total
       FROM entities e
       WHERE e.owner_id = ${ownerId} AND NOT e.archived
-        AND e.aspects->'orbis/financial'->>'category_ref' IS NOT NULL
-        AND e.aspects->'orbis/schedule'->'recurrence' IS NULL
-        AND e.aspects->'orbis/financial'->>'direction' = 'expense'
-        AND coalesce((e.aspects->'orbis/financial'->>'planned')::boolean, false) = false
-        AND e.aspects->'orbis/financial'->>'occurred_on' >= ${prevRange.start}
-        AND e.aspects->'orbis/financial'->>'occurred_on' <= ${prevRange.end}
-        AND e.aspects->'orbis/financial'->>'occurred_on' <= ${today}
-        AND coalesce(e.aspects->'orbis/financial'->>'currency', ${defCur}) = ${defCur}
+        AND e.aspects_legacy->'orbis/financial'->>'category_ref' IS NOT NULL
+        AND e.aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
+        AND e.aspects_legacy->'orbis/financial'->>'direction' = 'expense'
+        AND coalesce((e.aspects_legacy->'orbis/financial'->>'planned')::boolean, false) = false
+        AND e.aspects_legacy->'orbis/financial'->>'occurred_on' >= ${prevRange.start}
+        AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${prevRange.end}
+        AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${today}
+        AND coalesce(e.aspects_legacy->'orbis/financial'->>'currency', ${defCur}) = ${defCur}
         AND NOT EXISTS (
           SELECT 1 FROM entities env
           WHERE env.owner_id = ${ownerId} AND NOT env.archived
-            AND env.aspects->'orbis/budget'->>'category_ref'
-                = e.aspects->'orbis/financial'->>'category_ref'
-            AND coalesce(env.aspects->'orbis/budget'->>'currency', ${defCur}) = ${defCur}
-            AND env.aspects->'orbis/budget'->>'period_start' <= ${prevRange.end}
-            AND env.aspects->'orbis/budget'->>'period_end' >= ${prevRange.start}
+            AND env.aspects_legacy->'orbis/budget'->>'category_ref'
+                = e.aspects_legacy->'orbis/financial'->>'category_ref'
+            AND coalesce(env.aspects_legacy->'orbis/budget'->>'currency', ${defCur}) = ${defCur}
+            AND env.aspects_legacy->'orbis/budget'->>'period_start' <= ${prevRange.end}
+            AND env.aspects_legacy->'orbis/budget'->>'period_end' >= ${prevRange.start}
         )
       GROUP BY 1
-      HAVING sum((e.aspects->'orbis/financial'->>'amount')::numeric) > 0
+      HAVING sum((e.aspects_legacy->'orbis/financial'->>'amount')::numeric) > 0
       ORDER BY 1
     `)) as unknown as Array<{ category_id: string; total: string }>;
 
@@ -959,13 +959,13 @@ export async function rolloverCreate(
         sql`, `,
       );
       const succ = (await tx.execute(sql`
-        SELECT DISTINCT aspects->'orbis/budget'->>'category_ref' AS category_id
+        SELECT DISTINCT aspects_legacy->'orbis/budget'->>'category_ref' AS category_id
         FROM entities
         WHERE owner_id = ${ownerId} AND NOT archived
-          AND aspects->'orbis/budget'->>'category_ref' IN (${list})
-          AND aspects->'orbis/budget'->>'period_start' = ${start}
-          AND aspects->'orbis/budget'->>'period_end' = ${end}
-          AND coalesce(aspects->'orbis/budget'->>'currency', ${currency}) = ${currency}
+          AND aspects_legacy->'orbis/budget'->>'category_ref' IN (${list})
+          AND aspects_legacy->'orbis/budget'->>'period_start' = ${start}
+          AND aspects_legacy->'orbis/budget'->>'period_end' = ${end}
+          AND coalesce(aspects_legacy->'orbis/budget'->>'currency', ${currency}) = ${currency}
       `)) as unknown as Array<{ category_id: string }>;
       if (succ.length > 0) {
         throw new ExecError(

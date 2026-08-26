@@ -138,8 +138,8 @@ async function entityRow(id: string) {
   return rows[0];
 }
 
-function taskStatus(row: { aspects: unknown } | undefined): string | undefined {
-  const aspects = row?.aspects as Record<string, Record<string, unknown>> | undefined;
+function taskStatus(row: { aspectsLegacy: unknown } | undefined): string | undefined {
+  const aspects = row?.aspectsLegacy as Record<string, Record<string, unknown>> | undefined;
   return aspects?.['orbis/task']?.status as string | undefined;
 }
 
@@ -387,7 +387,8 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     const reverted = await entityRow(task1Id);
     expect(taskStatus(reverted)).toBe('in_progress');
     expect(
-      (reverted?.aspects as Record<string, Record<string, unknown>>)['orbis/task']?.completed_at,
+      (reverted?.aspectsLegacy as Record<string, Record<string, unknown>>)['orbis/task']
+        ?.completed_at,
     ).toBeUndefined();
 
     // Владелец повторным update возвращает статус в done

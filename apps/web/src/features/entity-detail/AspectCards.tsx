@@ -77,11 +77,11 @@ export function readOnlyText(value: unknown): string {
 // остался на «Сущности» — у цели он и есть то, ради чего её открывают, и прятать «50%,
 // 150 000 из 300 000» во вторую вкладку значило бы ухудшить главный экран целей ради
 // чистоты раскладки (Задача 15). Рисует его теперь DetailScreen, доставая `unit` из
-// `entity.aspects['orbis/goal']` напрямую.
+// `entity.aspectsMap['orbis/goal']` напрямую.
 export function AspectCards({ entity }: { entity: Entity }) {
   const { mutation, conflict } = useEntityUpdate(entity.id);
   const utils = trpc.useUtils();
-  const aspects = entity.aspects as Record<string, Record<string, unknown>>;
+  const aspects = entity.aspectsMap as Record<string, Record<string, unknown>>;
 
   // Смена категории (sign-off владельца K6) — обычный entity.update: перепривязку
   // транзакции к конверту делает серверный хук (фаза A), клиент ничего не связывает.

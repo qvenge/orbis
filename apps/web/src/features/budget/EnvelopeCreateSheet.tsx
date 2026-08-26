@@ -117,7 +117,7 @@ export function EnvelopeCreateSheet({
               {categoriesQ.isLoading ? 'Загрузка…' : 'Выберите категорию'}
             </option>
             {categories.map((c) => {
-              const icon = (c.aspects as Record<string, { icon?: unknown } | undefined>)[
+              const icon = (c.aspectsMap as Record<string, { icon?: unknown } | undefined>)[
                 'orbis/category'
               ]?.icon;
               return (

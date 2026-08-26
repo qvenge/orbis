@@ -21,7 +21,10 @@ const goal = {
   bodyRefs: [],
   tags: [],
   meta: {},
-  aspects: {
+  aspectsMap: {
+    props: {},
+    aspects: [],
+    queryRefs: [],
     'orbis/goal': {
       progress_source: {
         query: 'aspect=orbis/financial direction=income',
@@ -127,7 +130,7 @@ test('отрицательное текущее значение не теряе
 test('у не-цели полосы прогресса нет вовсе', async () => {
   const task = {
     ...goal,
-    aspects: { 'orbis/task': { status: 'inbox', priority: 'high' } },
+    aspectsMap: { 'orbis/task': { status: 'inbox', priority: 'high' } },
   };
   renderWithProviders(<DetailScreen entityId="g1" />, goalHandler(undefined, task));
   expect(await screen.findByLabelText('orbis/task status')).toBeInTheDocument();
@@ -207,7 +210,7 @@ test('объектное поле аспекта показано read-only, а 
 test('массив строк показан списком через запятую, а не Array.toString в инпуте', async () => {
   const category = {
     ...goal,
-    aspects: { 'orbis/category': { aliases: ['кофе', 'кофейня'], icon: '☕' } },
+    aspectsMap: { 'orbis/category': { aliases: ['кофе', 'кофейня'], icon: '☕' } },
   };
   renderWithProviders(<DetailScreen entityId="g1" />, goalHandler(undefined, category));
   expect(await screen.findByLabelText('orbis/category icon')).toBeInTheDocument();
@@ -219,7 +222,7 @@ test('массив строк показан списком через запя�
 
 // Пустой список — «алиасов нет», а не сломанная строка без значения.
 test('пустой массив показан прочерком, а не пустотой', async () => {
-  const category = { ...goal, aspects: { 'orbis/category': { aliases: [], icon: '☕' } } };
+  const category = { ...goal, aspectsMap: { 'orbis/category': { aliases: [], icon: '☕' } } };
   renderWithProviders(<DetailScreen entityId="g1" />, goalHandler(undefined, category));
   expect(await screen.findByTestId('aspect-value-orbis/category-aliases')).toHaveTextContent('—');
 });

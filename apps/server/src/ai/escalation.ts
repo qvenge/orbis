@@ -208,7 +208,7 @@ async function categoryTitleOf(tx: Tx, id: string): Promise<string | undefined> 
   const rows = await tx
     .select({ title: entities.title })
     .from(entities)
-    .where(and(eq(entities.id, id), sql`${entities.aspects} ? ${CATEGORY}`));
+    .where(and(eq(entities.id, id), sql`${entities.aspectsLegacy} ? ${CATEGORY}`));
   return rows[0]?.title;
 }
 
@@ -238,10 +238,10 @@ async function hasEquivalentRule(tx: Tx, pattern: string, categoryTitle: string)
     .from(entities)
     .where(
       and(
-        sql`${entities.aspects} ? ${MEMORY}`,
+        sql`${entities.aspectsLegacy} ? ${MEMORY}`,
         eq(entities.archived, false),
-        sql`${entities.aspects} -> ${MEMORY} ->> 'kind' = 'rule'`,
-        sql`${entities.aspects} -> ${MEMORY} ->> 'scope' = ${FINANCIAL}`,
+        sql`${entities.aspectsLegacy} -> ${MEMORY} ->> 'kind' = 'rule'`,
+        sql`${entities.aspectsLegacy} -> ${MEMORY} ->> 'scope' = ${FINANCIAL}`,
       ),
     );
   return rows.some((r) => {

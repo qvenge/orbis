@@ -8,7 +8,13 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { and, eq, isNull } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  freshUserId,
+  legacyEntityColumns,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { appendMessage } from '../chat/messages';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { aspectDefinitions, chatMessages, entities, userSettings } from '../db/schema';
@@ -52,16 +58,16 @@ async function createMemory(
   },
 ): Promise<string> {
   const id = newId();
-  await withIdentity(db, ownerId, (tx) =>
+  await withIdentity(db, ownerId, async (tx) =>
     tx.insert(entities).values({
       id,
       ownerId,
       title: opts.title,
       body: opts.body ?? '',
       archived: opts.archived ?? false,
-      aspects: {
+      ...(await legacyEntityColumns(tx, ownerId, {
         'orbis/memory': { kind: opts.kind, ...(opts.scope ? { scope: opts.scope } : {}) },
-      },
+      })),
       ...(opts.updatedAt ? { updatedAt: opts.updatedAt } : {}),
     }),
   );
@@ -163,13 +169,13 @@ describe('buildContext — §Б7-6: дата владельца и блок пр
     const user = freshUserId();
     await createMemory(user, { title: 'ПАМЯТЬ-ХВОСТ', kind: 'rule' });
     const anchorId = newId();
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, user, async (tx) =>
       tx.insert(entities).values({
         id: anchorId,
         ownerId: user,
         title: 'Якорь-хвост',
         body: 'тело якоря',
-        aspects: { 'orbis/task': { status: 'in_progress' } },
+        ...(await legacyEntityColumns(tx, user, { 'orbis/task': { status: 'in_progress' } })),
       }),
     );
     const ctx = await withIdentity(db, user, async (tx) => {
@@ -298,13 +304,13 @@ describe('buildContext — слой 3: якорная сущность (02 §2.2
 
   async function createAnchor(): Promise<string> {
     const id = newId();
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, user, async (tx) =>
       tx.insert(entities).values({
         id,
         ownerId: user,
         title: 'Якорь-проект',
         tags: ['project', 'ai'],
-        aspects: { 'orbis/task': { status: 'in_progress' } },
+        ...(await legacyEntityColumns(tx, user, { 'orbis/task': { status: 'in_progress' } })),
         body: `${'я'.repeat(ANCHOR_BODY_PREVIEW)}ОБРЕЗАННЫЙ-ХВОСТ`,
       }),
     );

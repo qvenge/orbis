@@ -71,13 +71,13 @@ export async function selectEnvelopes(
     LEFT JOIN LATERAL (
       SELECT id FROM entities
       WHERE owner_id = ${args.ownerId} AND NOT archived
-        AND aspects->'orbis/budget'->>'category_ref' = q.category_ref
-        AND coalesce(aspects->'orbis/budget'->>'currency', ${args.defaultCurrency}) = q.currency
-        AND (aspects->'orbis/budget'->>'period_start') <= q.occurred_on
-        AND (aspects->'orbis/budget'->>'period_end')   >= q.occurred_on
-      ORDER BY ((aspects->'orbis/budget'->>'period_end')::date
-              - (aspects->'orbis/budget'->>'period_start')::date) ASC,
-               (aspects->'orbis/budget'->>'period_start') DESC,
+        AND aspects_legacy->'orbis/budget'->>'category_ref' = q.category_ref
+        AND coalesce(aspects_legacy->'orbis/budget'->>'currency', ${args.defaultCurrency}) = q.currency
+        AND (aspects_legacy->'orbis/budget'->>'period_start') <= q.occurred_on
+        AND (aspects_legacy->'orbis/budget'->>'period_end')   >= q.occurred_on
+      ORDER BY ((aspects_legacy->'orbis/budget'->>'period_end')::date
+              - (aspects_legacy->'orbis/budget'->>'period_start')::date) ASC,
+               (aspects_legacy->'orbis/budget'->>'period_start') DESC,
                id ASC
       LIMIT 1
     ) e ON true
@@ -171,7 +171,7 @@ async function budgetParentsOfMany(
       unique.map((id) => sql`${id}`),
       sql`, `,
     )}) AND r.relation_type = 'parent'
-      AND e.aspects ? 'orbis/budget'
+      AND e.aspects_legacy ? 'orbis/budget'
     ORDER BY r.target_id, r.source_id
   `)) as unknown as Array<{ target_id: string; source_id: string }>;
   for (const row of rows) parents.get(row.target_id)?.push(row.source_id);
@@ -190,9 +190,9 @@ export interface BindingTarget {
 
 /** Цель привязки для сущности (§2.3); null — привязка не применяется (не транзакция/архив). */
 export function bindingTargetOf(entity: WireEntity): BindingTarget | null {
-  const fin = entity.aspects['orbis/financial'];
+  const fin = entity.aspectsMap['orbis/financial'];
   if (fin === undefined || entity.archived) return null;
-  if (hasScheduleRecurrence(entity.aspects)) return { txnId: entity.id, fin: null };
+  if (hasScheduleRecurrence(entity.aspectsMap)) return { txnId: entity.id, fin: null };
   return { txnId: entity.id, fin };
 }
 
@@ -401,7 +401,7 @@ interface RebindSide {
 }
 
 function sideOf(entity: WireEntity | null): RebindSide | null {
-  const budget = entity?.aspects['orbis/budget'];
+  const budget = entity?.aspectsMap['orbis/budget'];
   if (
     !budget ||
     typeof budget.category_ref !== 'string' ||
@@ -455,15 +455,15 @@ export async function rebindForEnvelope(
   // Затронутые транзакции: неархивные, с occurred_on (не шаблоны), категория и дата
   // в старом ИЛИ новом периоде. ORDER BY id — детерминированный порядок ops в action.
   const conds = sides.map(
-    (s) => sql`(aspects->'orbis/financial'->>'category_ref' = ${s.categoryRef}
-      AND aspects->'orbis/financial'->>'occurred_on' >= ${s.periodStart}
-      AND aspects->'orbis/financial'->>'occurred_on' <= ${s.periodEnd})`,
+    (s) => sql`(aspects_legacy->'orbis/financial'->>'category_ref' = ${s.categoryRef}
+      AND aspects_legacy->'orbis/financial'->>'occurred_on' >= ${s.periodStart}
+      AND aspects_legacy->'orbis/financial'->>'occurred_on' <= ${s.periodEnd})`,
   );
   const rows = (await tx.execute(sql`
-    SELECT id, aspects->'orbis/financial' AS fin FROM entities
+    SELECT id, aspects_legacy->'orbis/financial' AS fin FROM entities
     WHERE owner_id = ${ownerId} AND NOT archived
-      AND aspects->'orbis/financial'->>'occurred_on' IS NOT NULL
-      AND aspects->'orbis/schedule'->'recurrence' IS NULL
+      AND aspects_legacy->'orbis/financial'->>'occurred_on' IS NOT NULL
+      AND aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
       AND (${sql.join(conds, sql` OR `)})
     ORDER BY id
   `)) as unknown as Array<{ id: string; fin: Record<string, unknown> }>;
@@ -486,14 +486,22 @@ export async function rebindForEnvelope(
 interface EnvelopeRowLike {
   id: string;
   archived: boolean;
-  aspects: unknown;
+  /**
+   * Старая карта строки (§А1-1). Имя обязано совпадать с колонкой EntityRow: сюда приезжают
+   * ВИРТУАЛЬНЫЕ строки batch'а как есть, и поле `unknown` под старым именем `aspects` молча
+   * приняло бы новый список аспектов вместо карты — предикат вернул бы false на каждой
+   * строке, а компилятор бы промолчал.
+   */
+  aspectsLegacy: unknown;
 }
 
 function envelopeCombinationMatches(
-  aspects: unknown,
+  aspectsLegacy: unknown,
   key: { categoryRef: string; currency: string | null; periodStart: string; periodEnd: string },
 ): boolean {
-  const budget = (aspects as Record<string, Record<string, unknown>> | null)?.['orbis/budget'];
+  const budget = (aspectsLegacy as Record<string, Record<string, unknown>> | null)?.[
+    'orbis/budget'
+  ];
   if (budget === undefined || budget === null) return false;
   const currency = typeof budget.currency === 'string' ? budget.currency : null;
   return (
@@ -567,17 +575,21 @@ export async function assertEnvelopeUnique(
   const rows = (await tx.execute(sql`
     SELECT id FROM entities
     WHERE owner_id = ${ownerId} AND NOT archived AND id <> ${entityId}
-      AND aspects->'orbis/budget'->>'category_ref' = ${key.categoryRef}
-      AND (aspects->'orbis/budget'->>'currency') IS NOT DISTINCT FROM ${key.currency}
-      AND aspects->'orbis/budget'->>'period_start' = ${key.periodStart}
-      AND aspects->'orbis/budget'->>'period_end' = ${key.periodEnd}
+      AND aspects_legacy->'orbis/budget'->>'category_ref' = ${key.categoryRef}
+      AND (aspects_legacy->'orbis/budget'->>'currency') IS NOT DISTINCT FROM ${key.currency}
+      AND aspects_legacy->'orbis/budget'->>'period_start' = ${key.periodStart}
+      AND aspects_legacy->'orbis/budget'->>'period_end' = ${key.periodEnd}
     LIMIT 2
   `)) as unknown as Array<{ id: string }>;
 
   let existing = rows.map((r) => r.id).find((id) => !virtualEntities?.has(id));
   if (existing === undefined && virtualEntities !== undefined) {
     for (const row of virtualEntities.values()) {
-      if (row.id !== entityId && !row.archived && envelopeCombinationMatches(row.aspects, key)) {
+      if (
+        row.id !== entityId &&
+        !row.archived &&
+        envelopeCombinationMatches(row.aspectsLegacy, key)
+      ) {
         existing = row.id;
         break;
       }

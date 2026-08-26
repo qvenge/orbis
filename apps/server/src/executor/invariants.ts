@@ -214,12 +214,12 @@ export async function assertSingleBudgetParent(
   // Блокировка строки транзакции — SQL дословно из задачи (§13.7)
   await tx.execute(sql`SELECT id FROM entities WHERE id = ${targetId} FOR UPDATE`);
 
-  // Живые budget-parent'ы target в БД (aspects ? 'orbis/budget' — признак конверта)
+  // Живые budget-parent'ы target в БД (aspects_legacy ? 'orbis/budget' — признак конверта)
   const rows = (await tx.execute(sql`
     SELECT r.source_id FROM relations r
     JOIN entities e ON e.id = r.source_id
     WHERE r.target_id = ${targetId} AND r.relation_type = 'parent'
-      AND e.aspects ? 'orbis/budget'
+      AND e.aspects_legacy ? 'orbis/budget'
   `)) as unknown as Array<{ source_id: string }>;
 
   const deletedInBatch = (virtual?.deleted ?? []).filter(

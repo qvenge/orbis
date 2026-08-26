@@ -38,7 +38,7 @@ const RUN_ENTITY = {
   emoji: null,
   tags: [],
   archived: false,
-  aspects: { 'orbis/agent-run': RUN_ASPECT },
+  aspectsMap: { 'orbis/agent-run': RUN_ASPECT },
   createdAt: '2026-08-18T12:00:00.000Z',
   updatedAt: '2026-08-18T12:00:00.000Z',
 };
@@ -56,7 +56,7 @@ describe('экран прогона', () => {
         return {
           entity: {
             ...RUN_ENTITY,
-            aspects: { 'orbis/agent-run': { ...RUN_ASPECT, outcome } },
+            aspectsMap: { 'orbis/agent-run': { ...RUN_ASPECT, outcome } },
           },
           relations: [],
           thread: null,

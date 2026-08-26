@@ -158,7 +158,11 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
 
     // Тикет чинится, только если он ДЕЙСТВИТЕЛЬНО висит в работе: владелец мог вернуть
     // его руками, и переписывать его статус задним числом сервер права не имеет.
-    if (ticket !== null && isLastRun && ticket.aspects['orbis/task']?.status === 'in_progress') {
+    if (
+      ticket !== null &&
+      isLastRun &&
+      ticket.aspectsLegacy['orbis/task']?.status === 'in_progress'
+    ) {
       operations.push({
         tool: 'entity_update',
         input: {

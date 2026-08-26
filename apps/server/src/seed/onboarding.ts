@@ -22,6 +22,8 @@ import { v5 as uuidv5 } from 'uuid';
 import { ensureGlobalThread } from '../chat/threads';
 import { entities, userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
+import { rowFromLegacy } from '../executor/legacy-form';
+import { loadRegistry } from '../registry/load';
 import { SEED_CATEGORIES } from './categories';
 import {
   SEED_HORIZON_LISTS,
@@ -96,19 +98,24 @@ export async function seedOnboarding(
 
   // 12 категорий §7.1 — сущности с аспектом orbis/category; spend_class у доходных
   // ОТСУТСТВУЕТ (не null — иначе ajv-валидация упала бы при будущих правках, §3.6).
+  // Строка пишется в ТРЁХ колонках (§А1-1): новая правда (`props` по id свойства и список
+  // `aspects`) и старая карта, которую пока читают доменные модули и web. Через одну
+  // проекцию, а не двумя литералами: разъехавшиеся формы одной и той же категории —
+  // это молчаливое расхождение, которое нашлось бы уже на чужом красном тесте.
+  const reg = await loadRegistry(tx, ownerId);
   const categoryRows = SEED_CATEGORIES.map((c) => ({
     id: seedCategoryId(ownerId, c.slug),
     ownerId,
     title: c.title,
     tags: ['category'],
-    aspects: {
+    ...rowFromLegacy(reg, {
       'orbis/category': {
         icon: c.icon,
         color: c.color,
         aliases: [...c.aliases],
         ...(c.spendClass ? { spend_class: c.spendClass } : {}),
       },
-    },
+    }),
     createdAt: now,
     updatedAt: now,
   }));

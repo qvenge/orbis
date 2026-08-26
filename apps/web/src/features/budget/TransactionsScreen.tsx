@@ -317,7 +317,7 @@ export function TransactionsScreen() {
 }
 
 function categoryOf(e: QueryEntity, byId: Map<string, CategoryOption>): CategoryOption | undefined {
-  const ref = (e.aspects as Record<string, { category_ref?: unknown } | undefined>)[
+  const ref = (e.aspectsMap as Record<string, { category_ref?: unknown } | undefined>)[
     'orbis/financial'
   ]?.category_ref;
   return typeof ref === 'string' ? byId.get(ref) : undefined;
@@ -336,7 +336,7 @@ function TxRow({
   onRecategorize: () => void;
   onMakeRecurring: () => void;
 }) {
-  const fin = (entity.aspects as Record<string, Record<string, unknown> | undefined>)[
+  const fin = (entity.aspectsMap as Record<string, Record<string, unknown> | undefined>)[
     'orbis/financial'
   ];
   const occurredOn = typeof fin?.occurred_on === 'string' ? fin.occurred_on : null;

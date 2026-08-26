@@ -16,7 +16,8 @@ import type { Tx } from '../db/with-identity';
  * Один SQL вместо двух чтений: сущность годится, если она сама — тикет с назначением на
  * ЭТОТ грант, либо она родитель такого тикета (`relations.relation_type='parent'`,
  * направление как в грамматике §6: родитель — `source_id`, ребёнок — `target_id`).
- * Проверка назначения — containment по колонке `aspects` (индекс `entities_aspects_gin`),
+ * Проверка назначения — containment по колонке `aspects_legacy` (индекс
+ * `entities_aspects_legacy_gin`),
  * а не разбор json-полей: так условие остаётся индексируемым.
  *
  * `executor: 'agent'` в пробе не декоративен: при `executor='human'` grant_id запрещён
@@ -43,7 +44,7 @@ export async function isWorkerThreadTarget(
         JOIN entities target ON target.id = ${entityId}::uuid AND NOT target.archived
         WHERE t.owner_id = ${ownerId}::uuid
           AND NOT t.archived
-          AND t.aspects @> ${assigned}::jsonb
+          AND t.aspects_legacy @> ${assigned}::jsonb
           AND (
             t.id = target.id
             OR EXISTS (
@@ -68,7 +69,8 @@ export async function isWorkerThreadTarget(
 export interface TicketRow {
   id: string;
   title: string;
-  aspects: Record<string, Record<string, unknown>>;
+  /** Старая карта аспектов (§А1-1): носитель до «Пересева мира». */
+  aspectsLegacy: Record<string, Record<string, unknown>>;
   updatedAt: Date;
 }
 
@@ -77,7 +79,8 @@ export interface TicketDetail {
   id: string;
   title: string;
   body: string;
-  aspects: Record<string, Record<string, unknown>>;
+  /** Старая карта аспектов (§А1-1): носитель до «Пересева мира». */
+  aspectsLegacy: Record<string, Record<string, unknown>>;
 }
 
 /** Строка прогона: сам аспект + идентичность сущности (заголовок для карточек). */
@@ -120,7 +123,7 @@ function toTicketRow(row: RawRow): TicketRow {
   return {
     id: row.id as string,
     title: row.title as string,
-    aspects: row.aspects as Record<string, Record<string, unknown>>,
+    aspectsLegacy: row.aspects_legacy as Record<string, Record<string, unknown>>,
     updatedAt: row.updated_at as Date,
   };
 }
@@ -151,8 +154,8 @@ function toRoutineRow(row: RawRow): RoutineRow {
 }
 
 /**
- * Тикеты, назначенные гранту (очередь исполнителя). Containment по КОЛОНКЕ `aspects`
- * (`@>`) — покрыт GIN-индексом entities_aspects_gin; разбор json-полей (`->>`) сделал бы
+ * Тикеты, назначенные гранту (очередь исполнителя). Containment по КОЛОНКЕ `aspects_legacy`
+ * (`@>`) — покрыт GIN-индексом entities_aspects_legacy_gin; разбор json-полей (`->>`) сделал бы
  * условие неиндексируемым. `executor: 'agent'` в пробе обязателен: назначение человеку
  * не даёт прав никакому гранту (та же логика, что в isWorkerThreadTarget).
  *
@@ -165,11 +168,11 @@ export async function assignedTickets(tx: Tx, grantId: string): Promise<TicketRo
     'orbis/assignment': { executor: 'agent', grant_id: grantId },
   });
   const rows = await tx.execute(
-    sql`SELECT id, title, aspects, updated_at
+    sql`SELECT id, title, aspects_legacy, updated_at
         FROM entities
         WHERE NOT archived
-          AND aspects @> ${assigned}::jsonb
-          AND aspects ? 'orbis/task'
+          AND aspects_legacy @> ${assigned}::jsonb
+          AND aspects_legacy ? 'orbis/task'
         ORDER BY updated_at DESC`,
   );
   return (rows as unknown as RawRow[]).map(toTicketRow);
@@ -183,8 +186,8 @@ export async function assignedTickets(tx: Tx, grantId: string): Promise<TicketRo
  */
 export async function ticketById(tx: Tx, ticketId: string): Promise<TicketDetail | null> {
   const rows = await tx.execute(
-    sql`SELECT id, title, body, aspects FROM entities
-        WHERE id = ${ticketId}::uuid AND NOT archived AND aspects ? 'orbis/task'`,
+    sql`SELECT id, title, body, aspects_legacy FROM entities
+        WHERE id = ${ticketId}::uuid AND NOT archived AND aspects_legacy ? 'orbis/task'`,
   );
   const row = (rows as unknown as RawRow[])[0];
   if (row === undefined) return null;
@@ -192,7 +195,7 @@ export async function ticketById(tx: Tx, ticketId: string): Promise<TicketDetail
     id: row.id as string,
     title: row.title as string,
     body: row.body as string,
-    aspects: row.aspects as Record<string, Record<string, unknown>>,
+    aspectsLegacy: row.aspects_legacy as Record<string, Record<string, unknown>>,
   };
 }
 
@@ -207,7 +210,7 @@ export async function parentProject(tx: Tx, ticketId: string): Promise<ProjectRo
         JOIN relations r ON r.source_id = e.id
         WHERE r.target_id = ${ticketId}::uuid
           AND r.relation_type = 'parent'
-          AND e.aspects ? 'orbis/project'
+          AND e.aspects_legacy ? 'orbis/project'
         ORDER BY e.created_at ASC
         LIMIT 1`,
   );
@@ -224,12 +227,12 @@ export async function parentProject(tx: Tx, ticketId: string): Promise<ProjectRo
  */
 export async function runsOfParent(tx: Tx, parentId: string): Promise<RunRow[]> {
   const rows = await tx.execute(
-    sql`SELECT e.id, e.title, e.created_at, e.archived, e.aspects -> 'orbis/agent-run' AS run
+    sql`SELECT e.id, e.title, e.created_at, e.archived, e.aspects_legacy -> 'orbis/agent-run' AS run
         FROM entities e
         JOIN relations r ON r.target_id = e.id
         WHERE r.source_id = ${parentId}::uuid
           AND r.relation_type = 'parent'
-          AND e.aspects ? 'orbis/agent-run'
+          AND e.aspects_legacy ? 'orbis/agent-run'
         ORDER BY e.created_at ASC`,
   );
   return (rows as unknown as RawRow[]).map(toRunRow);
@@ -248,16 +251,17 @@ export const runsOfTicket = runsOfParent;
  * между двумя чтениями, и запуск классифицировал бы идущий прогон как отработанный слот.
  * Запрос остаётся для точечного чтения слота (экраны, диагностика).
  *
- * Containment по колонке `aspects` (индекс `entities_aspects_gin`), а не разбор json-полей.
+ * Containment по колонке `aspects_legacy` (индекс `entities_aspects_legacy_gin`), а не
+ * разбор json-полей.
  * Архивные НЕ исключаются намеренно: убранный с глаз прогон всё равно занимает свой слот,
  * иначе архивация прогона молча разрешала бы прогнать бакет заново.
  */
 export async function runsForBucket(tx: Tx, routineId: string, bucket: string): Promise<RunRow[]> {
   const ofBucket = JSON.stringify({ 'orbis/agent-run': { routine_id: routineId, bucket } });
   const rows = await tx.execute(
-    sql`SELECT id, title, created_at, archived, aspects -> 'orbis/agent-run' AS run
+    sql`SELECT id, title, created_at, archived, aspects_legacy -> 'orbis/agent-run' AS run
         FROM entities
-        WHERE aspects @> ${ofBucket}::jsonb
+        WHERE aspects_legacy @> ${ofBucket}::jsonb
         ORDER BY created_at ASC`,
   );
   return (rows as unknown as RawRow[]).map(toRunRow);
@@ -273,9 +277,9 @@ export async function runsForBucket(tx: Tx, routineId: string, bucket: string): 
 export async function activeRoutines(tx: Tx): Promise<RoutineRow[]> {
   const active = JSON.stringify({ 'orbis/routine': { stage: 'active' } });
   const rows = await tx.execute(
-    sql`SELECT id, title, body, aspects -> 'orbis/routine' AS routine
+    sql`SELECT id, title, body, aspects_legacy -> 'orbis/routine' AS routine
         FROM entities
-        WHERE NOT archived AND aspects @> ${active}::jsonb
+        WHERE NOT archived AND aspects_legacy @> ${active}::jsonb
         ORDER BY created_at ASC`,
   );
   return (rows as unknown as RawRow[]).map(toRoutineRow);
@@ -291,9 +295,9 @@ export async function activeRoutines(tx: Tx): Promise<RoutineRow[]> {
  */
 export async function routineById(tx: Tx, id: string): Promise<RoutineRow | null> {
   const rows = await tx.execute(
-    sql`SELECT id, title, body, aspects -> 'orbis/routine' AS routine
+    sql`SELECT id, title, body, aspects_legacy -> 'orbis/routine' AS routine
         FROM entities
-        WHERE id = ${id}::uuid AND NOT archived AND aspects ? 'orbis/routine'`,
+        WHERE id = ${id}::uuid AND NOT archived AND aspects_legacy ? 'orbis/routine'`,
   );
   const row = (rows as unknown as RawRow[])[0];
   return row === undefined ? null : toRoutineRow(row);
@@ -320,10 +324,10 @@ export async function routineById(tx: Tx, id: string): Promise<RoutineRow | null
 export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
   const running = JSON.stringify({ 'orbis/agent-run': { outcome: 'running' } });
   const rows = await tx.execute(
-    sql`SELECT id, title, created_at, archived, aspects -> 'orbis/agent-run' AS run
+    sql`SELECT id, title, created_at, archived, aspects_legacy -> 'orbis/agent-run' AS run
         FROM entities
-        WHERE aspects @> ${running}::jsonb
-          AND (aspects -> 'orbis/agent-run' ->> 'last_step_at')::timestamptz < ${before.toISOString()}::timestamptz
+        WHERE aspects_legacy @> ${running}::jsonb
+          AND (aspects_legacy -> 'orbis/agent-run' ->> 'last_step_at')::timestamptz < ${before.toISOString()}::timestamptz
         ORDER BY created_at ASC`,
   );
   return (rows as unknown as RawRow[]).map(toRunRow);
@@ -332,7 +336,7 @@ export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
 /**
  * Прогон по id (глаголы шага, чекпойнта и итога). Чужой и несуществующий неразличимы —
  * оба null, как у тикета: по той же причине, что и там (не быть оракулом чужого графа).
- * Условие `aspects ? 'orbis/agent-run'` не декоративно: без него id любой сущности
+ * Условие `aspects_legacy ? 'orbis/agent-run'` не декоративно: без него id любой сущности
  * владельца проходил бы за прогон, и глагол падал бы на разборе пустого аспекта.
  *
  * Архивный прогон — структурно «прогона нет»: шаги и итог дописывать некуда, раз владелец
@@ -341,9 +345,9 @@ export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
  */
 export async function runById(tx: Tx, runId: string): Promise<RunRow | null> {
   const rows = await tx.execute(
-    sql`SELECT id, title, created_at, archived, aspects -> 'orbis/agent-run' AS run
+    sql`SELECT id, title, created_at, archived, aspects_legacy -> 'orbis/agent-run' AS run
         FROM entities
-        WHERE id = ${runId}::uuid AND NOT archived AND aspects ? 'orbis/agent-run'`,
+        WHERE id = ${runId}::uuid AND NOT archived AND aspects_legacy ? 'orbis/agent-run'`,
   );
   const row = (rows as unknown as RawRow[])[0];
   return row === undefined ? null : toRunRow(row);
@@ -352,12 +356,12 @@ export async function runById(tx: Tx, runId: string): Promise<RunRow | null> {
 /** Тикет прогона — его родитель по связи parent. Прогон-сирота даёт null. */
 export async function ticketOfRun(tx: Tx, runId: string): Promise<TicketRow | null> {
   const rows = await tx.execute(
-    sql`SELECT e.id, e.title, e.aspects, e.updated_at
+    sql`SELECT e.id, e.title, e.aspects_legacy, e.updated_at
         FROM entities e
         JOIN relations r ON r.source_id = e.id
         WHERE r.target_id = ${runId}::uuid
           AND r.relation_type = 'parent'
-          AND e.aspects ? 'orbis/task'
+          AND e.aspects_legacy ? 'orbis/task'
         LIMIT 1`,
   );
   const row = (rows as unknown as RawRow[])[0];

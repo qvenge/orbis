@@ -65,7 +65,7 @@ export function useFastPath(threadId: string) {
   type SettingsOut = ReturnType<typeof utils.user.getSettings.getData>;
   function mapCtx(cats: QueryOut, settings: SettingsOut, rules: QueryOut): FastPathCtx {
     const categories: FastPathCategory[] = (cats ?? []).map((e) => {
-      const meta = (e.aspects?.['orbis/category'] ?? {}) as {
+      const meta = (e.aspectsMap?.['orbis/category'] ?? {}) as {
         aliases?: string[];
         spend_class?: string;
       };

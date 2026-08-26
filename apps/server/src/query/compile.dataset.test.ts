@@ -8,6 +8,8 @@ import { sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { rowFromLegacy } from '../executor/legacy-form';
+import { loadRegistry } from '../registry/load';
 import { type CompileContext, compileCount, compileQuery, loadCatalog } from './compile';
 
 requireEnv();
@@ -22,6 +24,17 @@ const TIMEZONE = 'Europe/Moscow';
 
 /** category_ref: FK на сущность не объявлен — категория-сущность для датасета не нужна. */
 const CAT = '019d48ea-4188-765d-8e96-93a0ad9c262a';
+
+/**
+ * Строка датасета объявлена СТАРОЙ картой аспектов: этот сьют — эталон компилятора §6,
+ * а компилятор до «Пересева мира» читает именно её. В БД строка при этом уезжает в ТРЁХ
+ * колонках (`datasetRows`): фикстура, положившая только карту, разошлась бы с писателем
+ * новой правды молча.
+ */
+type DatasetRow = Omit<
+  typeof entities.$inferInsert,
+  'props' | 'aspects' | 'queryRefs' | 'aspectsLegacy'
+> & { aspects: Record<string, Record<string, unknown>> };
 
 const ID = {
   project: '019eb300-d5e1-7000-8000-000000000001',
@@ -59,7 +72,7 @@ const ID = {
  * негатив для amount>500); blocks-связь; архивная сущность; родитель+дети.
  * updated_at разложен на две «половины» вокруг 2026-07-02 — для курсора агента (§9.3).
  */
-const DATASET_A: (typeof entities.$inferInsert)[] = [
+const DATASET_A: DatasetRow[] = [
   {
     id: ID.project,
     ownerId: USER_A,
@@ -397,7 +410,7 @@ const DATASET_A: (typeof entities.$inferInsert)[] = [
  * userA доказывает именно RLS, а не фильтры. updated_at — «ранняя половина»,
  * чтобы курсорный запрос под userB давал 0 строк.
  */
-const DATASET_B: (typeof entities.$inferInsert)[] = [
+const DATASET_B: DatasetRow[] = [
   {
     id: ID.taskB,
     ownerId: USER_B,
@@ -491,14 +504,23 @@ async function runCount(userId: string, query: string): Promise<number> {
 
 const ids = (rows: Record<string, unknown>[]) => rows.map((r) => r.id);
 
+/** Старая карта фикстуры → три колонки строки (одна проекция на весь репозиторий). */
+function datasetRows(
+  reg: Awaited<ReturnType<typeof loadRegistry>>,
+  rows: DatasetRow[],
+): (typeof entities.$inferInsert)[] {
+  return rows.map(({ aspects, ...rest }) => ({ ...rest, ...rowFromLegacy(reg, aspects) }));
+}
+
 beforeAll(async () => {
   await truncateAll(); // санкционировано: локальная тестовая БД
+  const reg = await withIdentity(db, USER_A, (tx) => loadRegistry(tx, USER_A));
   await withIdentity(db, USER_A, async (tx) => {
-    await tx.insert(entities).values(DATASET_A);
+    await tx.insert(entities).values(datasetRows(reg, DATASET_A));
     await tx.insert(relations).values(RELATIONS_A);
   });
   await withIdentity(db, USER_B, async (tx) => {
-    await tx.insert(entities).values(DATASET_B);
+    await tx.insert(entities).values(datasetRows(reg, DATASET_B));
   });
   // Каталог — из БД (builtin-реестр под RLS), а не из shared: заодно проверяет loadCatalog.
   catalog = await withIdentity(db, USER_A, (tx) => loadCatalog(tx));
@@ -743,7 +765,7 @@ describe('§13.6: decimal-точность в БД и persisted JSON', () => {
     // (а) сумма в БД: строго '0.30' — сравнение текстом из ::numeric, не через float
     const [sum] = await withIdentity(db, USER_A, async (tx) => [
       ...(await tx.execute(sql`
-        SELECT sum((aspects->'orbis/financial'->>'amount')::numeric)::text AS total
+        SELECT sum((aspects_legacy->'orbis/financial'->>'amount')::numeric)::text AS total
         FROM entities WHERE id IN (${ID.fin010}, ${ID.fin020})`)),
     ]);
     expect(sum?.total).toBe('0.30');
@@ -765,8 +787,8 @@ describe('§13.6: decimal-точность в БД и persisted JSON', () => {
     ] as const) {
       const rows = await withIdentity(db, user, async (tx) => [
         ...(await tx.execute(sql`
-          SELECT jsonb_typeof(aspects->'orbis/financial'->'amount') AS t
-          FROM entities WHERE aspects ? 'orbis/financial'`)),
+          SELECT jsonb_typeof(aspects_legacy->'orbis/financial'->'amount') AS t
+          FROM entities WHERE aspects_legacy ? 'orbis/financial'`)),
       ]);
       expect(rows).toHaveLength(expected);
       expect(rows.every((r) => r.t === 'string')).toBe(true);
@@ -787,38 +809,41 @@ const ID_C = {
 describe('служебные аспекты (02-core-os §3.9): прогоны вне основных выдач', () => {
   beforeAll(async () => {
     await withIdentity(db, USER_C, async (tx) => {
-      await tx.insert(entities).values([
-        {
-          id: ID_C.ticket,
-          ownerId: USER_C,
-          title: 'Тикет',
-          tags: ['task'],
-          aspects: { 'orbis/task': { status: 'in_progress' } },
-          createdAt: new Date('2026-07-01T08:00:00Z'),
-          updatedAt: new Date('2026-07-01T08:00:00Z'),
-        },
-        {
-          // Прогон вставляется напрямую (как весь датасет файла): его пишет только сервер
-          // глаголами исполнителя, а проверяется здесь компилятор, а не путь записи.
-          id: ID_C.run,
-          ownerId: USER_C,
-          title: 'Прогон исполнителя',
-          tags: [],
-          aspects: {
-            'orbis/agent-run': {
-              grant_id: '019eb300-d5e1-7000-8000-0000000000c0',
-              outcome: 'running',
-              started_at: '2026-07-03T10:00:00Z',
-              last_step_at: '2026-07-03T10:05:00Z',
-              step_count: 0,
-              steps: [],
-            },
+      const reg = await loadRegistry(tx, USER_C);
+      await tx.insert(entities).values(
+        datasetRows(reg, [
+          {
+            id: ID_C.ticket,
+            ownerId: USER_C,
+            title: 'Тикет',
+            tags: ['task'],
+            aspects: { 'orbis/task': { status: 'in_progress' } },
+            createdAt: new Date('2026-07-01T08:00:00Z'),
+            updatedAt: new Date('2026-07-01T08:00:00Z'),
           },
-          // Свежее тикета: без служебного условия прогон возглавил бы «свежее» (С5).
-          createdAt: new Date('2026-07-03T10:00:00Z'),
-          updatedAt: new Date('2026-07-03T10:05:00Z'),
-        },
-      ]);
+          {
+            // Прогон вставляется напрямую (как весь датасет файла): его пишет только сервер
+            // глаголами исполнителя, а проверяется здесь компилятор, а не путь записи.
+            id: ID_C.run,
+            ownerId: USER_C,
+            title: 'Прогон исполнителя',
+            tags: [],
+            aspects: {
+              'orbis/agent-run': {
+                grant_id: '019eb300-d5e1-7000-8000-0000000000c0',
+                outcome: 'running',
+                started_at: '2026-07-03T10:00:00Z',
+                last_step_at: '2026-07-03T10:05:00Z',
+                step_count: 0,
+                steps: [],
+              },
+            },
+            // Свежее тикета: без служебного условия прогон возглавил бы «свежее» (С5).
+            createdAt: new Date('2026-07-03T10:00:00Z'),
+            updatedAt: new Date('2026-07-03T10:05:00Z'),
+          },
+        ]),
+      );
     });
   });
 

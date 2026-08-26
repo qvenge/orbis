@@ -33,8 +33,8 @@ const ROW_CLASS =
  * мёртвое правило было неотличимо от рабочего. Источник неканоничных заголовков не только
  * рука владельца: модель тоже создаёт memory-сущности, а формат ей нигде не задан.
  */
-function isBrokenRule(e: { title: string; aspects: unknown }): boolean {
-  const memory = (e.aspects as Record<string, { kind?: unknown } | undefined>)['orbis/memory'];
+function isBrokenRule(e: { title: string; aspectsMap: unknown }): boolean {
+  const memory = (e.aspectsMap as Record<string, { kind?: unknown } | undefined>)['orbis/memory'];
   return memory?.kind === 'rule' && parseRuleTitle(e.title) === null;
 }
 

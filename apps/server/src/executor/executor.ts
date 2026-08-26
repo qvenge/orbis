@@ -627,8 +627,8 @@ function aggregateInverse(plans: readonly PreparedOp[]): ActionOperation[] {
 
 /** Данные аспект-ключа изменились операцией (стабильно для одинаковых объектов). */
 function hookAspectChanged(hook: BudgetHook, aspectId: string): boolean {
-  const before = (hook.before?.aspects as AspectsMap | undefined)?.[aspectId];
-  const after = (hook.after.aspects as AspectsMap)[aspectId];
+  const before = (hook.before?.aspectsLegacy as AspectsMap | undefined)?.[aspectId];
+  const after = (hook.after.aspectsLegacy as AspectsMap)[aspectId];
   return JSON.stringify(before) !== JSON.stringify(after);
 }
 
@@ -647,8 +647,8 @@ function budgetHookBranches(hook: BudgetHook): {
   unbind: boolean;
 } {
   const { before, after } = hook;
-  const beforeAspects = before?.aspects as AspectsMap | undefined;
-  const afterAspects = after.aspects as AspectsMap;
+  const beforeAspects = before?.aspectsLegacy as AspectsMap | undefined;
+  const afterAspects = after.aspectsLegacy as AspectsMap;
   const archivedChanged = before !== null && before.archived !== after.archived;
   return {
     // (в) сущность ПЕРЕСТАЛА быть транзакцией: detach orbis/financial. Ветка (а) сюда не
@@ -1129,7 +1129,9 @@ async function prepareEntityCreate(
     bodyRefs,
     tags,
     meta: input.meta ?? {},
-    aspects,
+    // Старая карта — в переименованную колонку; `props`/`aspects[]` строка получает
+    // дефолтами: их писатель появляется следующей задачей (РП-2).
+    aspectsLegacy: aspects,
     createdAt: now,
     updatedAt: now,
     archived: false,
@@ -1222,7 +1224,7 @@ async function prepareEntityUpdate(
   if (!current) {
     throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.id });
   }
-  const currentAspects = current.aspects as AspectsMap;
+  const currentAspects = current.aspectsLegacy as AspectsMap;
 
   // CAS-расширение стадий 4–5 (С7): предусловие сверяется по ТОЙ ЖЕ строке, что и весь
   // остальной update — прочитанной под FOR UPDATE (в batch — по виртуальной строке, где
@@ -1483,7 +1485,7 @@ async function prepareEntityUpdate(
     prior.archived = current.archived;
   }
   if (input.aspects) {
-    patch.aspects = nextAspects;
+    patch.aspectsLegacy = nextAspects;
     changed.aspects = Object.fromEntries(touched.map((k) => [k, nextAspects[k] ?? null]));
     // §7.8: inverse аспектов — прежнее значение ВСЕГО затронутого ключа
     // (shallow-merge делает пофазовый откат ненадёжным)
@@ -1541,7 +1543,7 @@ async function prepareAttach(
   }
 
   const now = ctx.clock();
-  const currentAspects = current.aspects as AspectsMap;
+  const currentAspects = current.aspectsLegacy as AspectsMap;
   const prev = currentAspects[aspectId];
   const data = { ...input.data };
   if (aspectId === 'orbis/task') applyTaskCompletion(prev, data, now); // §3.2 и для attach
@@ -1597,7 +1599,7 @@ async function prepareAttach(
   // Эффект batch; updated_at строго растёт (monotonicUpdatedAt, §5.2)
   const updatedAt = monotonicUpdatedAt(now, current.updatedAt);
   // Патч attach узкий: аспекты и updated_at, а поля тела — ТОЛЬКО при засеве
-  const patch: EntityPatch = { aspects: nextAspects, updatedAt };
+  const patch: EntityPatch = { aspectsLegacy: nextAspects, updatedAt };
   if (seed !== undefined) {
     patch.body = seed.body;
     patch.bodyDoc = seed.bodyDoc;
@@ -1713,7 +1715,7 @@ async function loadBothEndsForUpdate(
 }
 
 function hasAspect(row: EntityRow, aspectId: string): boolean {
-  return (row.aspects as AspectsMap)[aspectId] !== undefined;
+  return (row.aspectsLegacy as AspectsMap)[aspectId] !== undefined;
 }
 
 async function prepareRelationCreate(
@@ -1750,8 +1752,8 @@ async function prepareRelationCreate(
   // Запрет по объекту для источника routine (V1.10): достаточно одного конца с
   // orbis/routine — оба конца уже под FOR UPDATE (loadBothEndsForUpdate выше)
   assertRoutineRelationUntouchable(ctx.req.source, {
-    source: source.aspects as AspectsMap,
-    target: target.aspects as AspectsMap,
+    source: source.aspectsLegacy as AspectsMap,
+    target: target.aspectsLegacy as AspectsMap,
   });
   if (batch) await assertNoDuplicateRelation(ctx.tx, key, batch.graph()); // batch: дубль ловим ДО записи
   if (key.relationType === 'blocks') {
@@ -1896,8 +1898,8 @@ async function prepareRelationDelete(
   // стадией 3, и до любой записи; сам захват — выше, ради порядка «сущности → связь».
   if (routineEnds !== undefined) {
     assertRoutineRelationUntouchable(ctx.req.source, {
-      source: routineEnds.source.aspects as AspectsMap,
-      target: routineEnds.target.aspects as AspectsMap,
+      source: routineEnds.source.aspectsLegacy as AspectsMap,
+      target: routineEnds.target.aspectsLegacy as AspectsMap,
     });
   }
   gateEntitlements(ctx, 'relation_delete');

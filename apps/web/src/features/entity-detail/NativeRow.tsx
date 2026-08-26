@@ -180,7 +180,7 @@ export function NativeRow({
   onToggleTask: (done: boolean) => void;
   onSaveTitle?: (title: string) => void;
 }) {
-  const aspects = entity.aspects as Record<string, Record<string, unknown>>;
+  const aspects = entity.aspectsMap as Record<string, Record<string, unknown>>;
 
   const task = aspects['orbis/task'];
   if (task) {

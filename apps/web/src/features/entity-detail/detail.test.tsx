@@ -71,7 +71,10 @@ const entity = {
   bodyRefs: [],
   tags: ['work'],
   meta: {},
-  aspects: { 'orbis/task': { status: 'inbox', priority: 'high' } },
+  aspectsMap: { 'orbis/task': { status: 'inbox', priority: 'high' } },
+  props: {},
+  aspects: [],
+  queryRefs: [],
   createdAt: '2026-07-05T00:00:00.000Z',
   updatedAt: '2026-07-05T10:00:00.000Z',
   archived: false,
@@ -198,7 +201,7 @@ test('чекбокс task → entity.update status=done + completed_at', async (
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update')
-      return { ...entity, aspects: { 'orbis/task': { status: 'done', completed_at: 'now' } } };
+      return { ...entity, aspectsMap: { 'orbis/task': { status: 'done', completed_at: 'now' } } };
     if (path === 'aspect.list') return [];
     return {};
   });
@@ -600,7 +603,7 @@ function externalStatusChange(): { handler: MockHandler; getCalls: () => number 
   let getCalls = 0;
   const done = {
     ...entity,
-    aspects: { 'orbis/task': { status: 'done', priority: 'high' } },
+    aspectsMap: { 'orbis/task': { status: 'done', priority: 'high' } },
     updatedAt: '2026-07-05T11:00:00.000Z',
   };
   return {
@@ -652,7 +655,7 @@ const CAT_FUN = 'b8e1c9a4-2d5e-4c3b-8f7a-1e9d0c2b3a55';
 const finEntity = {
   ...entity,
   title: 'Кофе Хауз',
-  aspects: {
+  aspectsMap: {
     'orbis/financial': {
       amount: '340.00',
       currency: 'RUB',
@@ -672,7 +675,10 @@ const category = (id: string, title: string) => ({
   bodyRefs: [],
   tags: [],
   meta: {},
-  aspects: { 'orbis/category': {} },
+  aspectsMap: { 'orbis/category': {} },
+  props: {},
+  aspects: [],
+  queryRefs: [],
   createdAt: 'x',
   updatedAt: 'y',
   archived: false,
@@ -734,8 +740,8 @@ test('financial: запрос категорий упал → «Не удало�
 test('financial: список пришёл, а ссылка ведёт мимо него → «Категория не найдена»', async () => {
   const orphan = {
     ...finEntity,
-    aspects: {
-      'orbis/financial': { ...finEntity.aspects['orbis/financial'], category_ref: 'gone' },
+    aspectsMap: {
+      'orbis/financial': { ...finEntity.aspectsMap['orbis/financial'], category_ref: 'gone' },
     },
   };
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
@@ -758,7 +764,9 @@ test('financial: список пришёл, а ссылка ведёт мимо 
 test('financial: без категории при упавшем запросе — «Без категории», а не отказ', async () => {
   const noCategory = {
     ...finEntity,
-    aspects: { 'orbis/financial': { ...finEntity.aspects['orbis/financial'], category_ref: '' } },
+    aspectsMap: {
+      'orbis/financial': { ...finEntity.aspectsMap['orbis/financial'], category_ref: '' },
+    },
   };
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
@@ -777,8 +785,8 @@ test('financial: рефетч списка упал, но список уже е
   let queries = 0;
   const orphan = {
     ...finEntity,
-    aspects: {
-      'orbis/financial': { ...finEntity.aspects['orbis/financial'], category_ref: 'gone' },
+    aspectsMap: {
+      'orbis/financial': { ...finEntity.aspectsMap['orbis/financial'], category_ref: 'gone' },
     },
   };
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
@@ -846,7 +854,10 @@ const found = (title: string) => ({
   bodyRefs: [],
   tags: [],
   meta: {},
-  aspects: {},
+  aspectsMap: {},
+  props: {},
+  aspects: [],
+  queryRefs: [],
   createdAt: 'x',
   updatedAt: 'y',
   archived: false,
@@ -860,7 +871,7 @@ test('detail рендерит КАЖДЫЙ query-блок body: у Daily Plannin
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get')
       return {
-        entity: { ...entity, title: 'Daily Planning', body: DAILY_PLANNING_BODY, aspects: {} },
+        entity: { ...entity, title: 'Daily Planning', body: DAILY_PLANNING_BODY, aspectsMap: {} },
         relations: [],
         thread: null,
       };
@@ -900,7 +911,7 @@ test('query-блок с `this` на detail получает контекст о�
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return {
-        entity: { ...entity, body, bodyDoc: parseBody(body), aspects: {} },
+        entity: { ...entity, body, bodyDoc: parseBody(body), aspectsMap: {} },
         relations: [],
         thread: null,
       };
@@ -1435,7 +1446,7 @@ const GOAL_ENTITY = {
   id: 'e1',
   title: 'Накопить на отпуск',
   emoji: '🎯',
-  aspects: {
+  aspectsMap: {
     'orbis/goal': {
       progress_source: { query: 'aspect=orbis/financial', aggregate: 'sum', field: 'amount' },
       target_value: '300000.00',
@@ -1523,7 +1534,7 @@ test('полоса прогресса цели осталась на «Сущн�
   const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
   const bar = within(panel).getByTestId('goal-progress');
   expect(within(bar).getByText('150 000 / 300 000')).toBeInTheDocument();
-  // Единица достаётся из entity.aspects заново: в AspectCards она бралась из тела цикла по
+  // Единица достаётся из entity.aspectsMap заново: в AspectCards она бралась из тела цикла по
   // аспектам, а цикла на «Сущности» нет — потеряться ей проще простого.
   expect(within(bar).getByText('₽')).toBeInTheDocument();
   // Второй полосы в «Деталях» нет: два ответа на вопрос «как оно идёт» — это уже вопрос,
@@ -2410,7 +2421,10 @@ const RUN = {
   bodyRefs: [],
   tags: [],
   meta: {},
-  aspects: {
+  aspectsMap: {
+    props: {},
+    aspects: [],
+    queryRefs: [],
     'orbis/agent-run': {
       grant_id: GRANT_ID,
       outcome: 'checkpoint',
@@ -2431,7 +2445,7 @@ const TICKET = {
   ...entity,
   id: 't1',
   title: 'Починить парсер',
-  aspects: {
+  aspectsMap: {
     'orbis/task': { status: 'waiting', waiting_for: 'Какую БД брать?' },
     'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID },
   },
@@ -2471,7 +2485,7 @@ const TICKET_B = {
   ...TICKET,
   id: 't2',
   title: 'Собрать релиз',
-  aspects: {
+  aspectsMap: {
     'orbis/task': { status: 'waiting', waiting_for: 'Тегать ли rc?' },
     'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID },
   },
@@ -2591,9 +2605,9 @@ describe('ADE: тикет', () => {
   test('прогон завершён: заголовок «Готово, проверьте» и вторая кнопка — «Закрыть тикет»', async () => {
     const finished = {
       ...RUN,
-      aspects: {
+      aspectsMap: {
         'orbis/agent-run': {
-          ...RUN.aspects['orbis/agent-run'],
+          ...RUN.aspectsMap['orbis/agent-run'],
           outcome: 'finished',
           checkpoint: undefined,
           finished_at: '2026-08-17T10:30:00.000Z',
@@ -2643,7 +2657,7 @@ describe('ADE: тикет', () => {
   test('тикет не в waiting → чекпойнт-блока нет; заметка без orbis/task → назначения и прогонов нет', async () => {
     const working = {
       ...TICKET,
-      aspects: {
+      aspectsMap: {
         'orbis/task': { status: 'in_progress' },
         'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID },
       },
@@ -2659,7 +2673,7 @@ describe('ADE: тикет', () => {
     expect(await screen.findByTestId('run-r1')).toBeInTheDocument();
     first.unmount();
 
-    const note = { ...entity, id: 'n1', aspects: { 'orbis/note': {} } };
+    const note = { ...entity, id: 'n1', aspectsMap: { 'orbis/note': {} } };
     const { calls } = renderWithProviders(
       <DetailScreen entityId="n1" />,
       adeHandler({ entity: note }),
@@ -2717,7 +2731,7 @@ describe('ADE: тикет', () => {
     const assignedNote = {
       ...entity,
       id: 'n2',
-      aspects: { 'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID } },
+      aspectsMap: { 'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID } },
     };
     renderWithProviders(<DetailScreen entityId="n2" />, adeHandler({ entity: assignedNote }));
     await screen.findByRole('tabpanel', { name: 'Детали' });
@@ -2830,7 +2844,7 @@ describe('ADE: тикет', () => {
       ...entity,
       id: 's1',
       title: 'Написать тест',
-      aspects: { 'orbis/task': { status: 'inbox' } },
+      aspectsMap: { 'orbis/task': { status: 'inbox' } },
     };
     renderWithProviders(<DetailScreen entityId="t1" />, (path, input) => {
       if (path === 'entity.get') {
@@ -2891,7 +2905,7 @@ const RUN_ENTITY = {
   ...entity,
   id: 'r1',
   title: 'Прогон: Починить парсер',
-  aspects: { 'orbis/agent-run': RUN_ASPECT_FINISHED },
+  aspectsMap: { 'orbis/agent-run': RUN_ASPECT_FINISHED },
 };
 
 /**
@@ -2960,7 +2974,7 @@ describe('ADE: прогон', () => {
   test('вопрос, ответ владельца и записка обрыва — отдельными блоками', async () => {
     const abandoned = {
       ...RUN_ENTITY,
-      aspects: {
+      aspectsMap: {
         'orbis/agent-run': {
           ...RUN_ASPECT_FINISHED,
           outcome: 'abandoned',
@@ -3070,7 +3084,7 @@ describe('ADE: прогон', () => {
   test('идущий прогон: откат недоступен', async () => {
     const running = {
       ...RUN_ENTITY,
-      aspects: {
+      aspectsMap: {
         'orbis/agent-run': {
           ...RUN_ASPECT_FINISHED,
           outcome: 'running',
@@ -3095,7 +3109,7 @@ describe('ADE: прогон', () => {
     const rolledBack = {
       ...RUN_ENTITY,
       archived: true,
-      aspects: {
+      aspectsMap: {
         'orbis/agent-run': {
           ...RUN_ASPECT_FINISHED,
           outcome: 'running',
@@ -3119,7 +3133,7 @@ describe('ADE: прогон', () => {
     // строку текстом можно (иногда это опечатка), сделать кликабельной — нельзя.
     const evil = {
       ...RUN_ENTITY,
-      aspects: {
+      aspectsMap: {
         'orbis/agent-run': { ...RUN_ASPECT_FINISHED, session_url: 'javascript:alert(1)' },
       },
     };
@@ -3424,7 +3438,7 @@ const ROUTINE = {
   ...entity,
   id: 'rt1',
   title: 'Утренний разбор',
-  aspects: {
+  aspectsMap: {
     'orbis/routine': {
       stage: 'active',
       at: '07:00',
@@ -3435,8 +3449,8 @@ const ROUTINE = {
 };
 
 /** Рутина-фикстура: поля аспекта разные от теста к тесту, форма записи — одна. */
-type RoutineFixture = Omit<typeof entity, 'aspects'> & {
-  aspects: { 'orbis/routine': Record<string, unknown> };
+type RoutineFixture = Omit<typeof entity, 'aspectsMap'> & {
+  aspectsMap: { 'orbis/routine': Record<string, unknown> };
 };
 
 /** Момент следующего срабатывания — из routine.overview, часы там серверные (V1.14). */
@@ -3451,7 +3465,7 @@ const ROUTINE_RUN_DONE = {
   ...RUN,
   id: 'rr2',
   title: 'Прогон: Утренний разбор',
-  aspects: {
+  aspectsMap: {
     'orbis/agent-run': {
       routine_id: 'rt1',
       bucket: '2026-08-18T07:00',
@@ -3469,7 +3483,7 @@ const ROUTINE_RUN_FAILED = {
   ...RUN,
   id: 'rr1',
   title: 'Прогон: Утренний разбор',
-  aspects: {
+  aspectsMap: {
     'orbis/agent-run': {
       routine_id: 'rt1',
       bucket: '2026-08-17T07:00',
@@ -3493,10 +3507,10 @@ function routineHandler(
   opts: { entity?: RoutineFixture; runs?: unknown[]; overview?: unknown } = {},
 ): MockHandler {
   const base = opts.entity ?? ROUTINE;
-  let stage = (base.aspects['orbis/routine'] as { stage: string }).stage;
+  let stage = (base.aspectsMap['orbis/routine'] as { stage: string }).stage;
   const current = () => ({
     ...base,
-    aspects: { 'orbis/routine': { ...base.aspects['orbis/routine'], stage } },
+    aspectsMap: { 'orbis/routine': { ...base.aspectsMap['orbis/routine'], stage } },
   });
   return (path, input) => {
     if (path === 'entity.get') return { entity: current(), relations: [], thread: null };
@@ -3576,7 +3590,7 @@ describe('V1: рутина', () => {
   test('режим act печатает разрешённые инструменты; рутина на паузе — «на паузе» вместо времени', async () => {
     const acting = {
       ...ROUTINE,
-      aspects: {
+      aspectsMap: {
         'orbis/routine': {
           stage: 'paused',
           at: '21:30',
@@ -3630,9 +3644,9 @@ describe('V1: рутина', () => {
     const running = {
       ...ROUTINE_RUN_DONE,
       id: 'rr3',
-      aspects: {
+      aspectsMap: {
         'orbis/agent-run': {
-          ...ROUTINE_RUN_DONE.aspects['orbis/agent-run'],
+          ...ROUTINE_RUN_DONE.aspectsMap['orbis/agent-run'],
           outcome: 'running',
           finished_at: undefined,
         },
@@ -3687,7 +3701,7 @@ const routineRunEntity = (aspect: Record<string, unknown>, archived = false) => 
   id: 'rr1',
   title: 'Прогон: Утренний разбор',
   archived,
-  aspects: { 'orbis/agent-run': aspect },
+  aspectsMap: { 'orbis/agent-run': aspect },
 });
 
 const ROUTINE_RUN_CHECKPOINT = {
@@ -3954,8 +3968,8 @@ describe('V1: прогон рутины', () => {
     const withProposal = (id: string, proposal: Record<string, unknown>) => ({
       ...ROUTINE_RUN_DONE,
       id,
-      aspects: {
-        'orbis/agent-run': { ...ROUTINE_RUN_DONE.aspects['orbis/agent-run'], proposal },
+      aspectsMap: {
+        'orbis/agent-run': { ...ROUTINE_RUN_DONE.aspectsMap['orbis/agent-run'], proposal },
       },
     });
     renderWithProviders(
@@ -4290,8 +4304,8 @@ describe('D42: пачка решений на экране прогона', () =
     const withAspect = (id: string, over: Record<string, unknown>) => ({
       ...ROUTINE_RUN_DONE,
       id,
-      aspects: {
-        'orbis/agent-run': { ...ROUTINE_RUN_DONE.aspects['orbis/agent-run'], ...over },
+      aspectsMap: {
+        'orbis/agent-run': { ...ROUTINE_RUN_DONE.aspectsMap['orbis/agent-run'], ...over },
       },
     });
     renderWithProviders(

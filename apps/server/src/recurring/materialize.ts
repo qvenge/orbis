@@ -212,7 +212,7 @@ export async function materializeInstances(deps: MaterializeDeps): Promise<{ cre
       .where(
         and(
           eq(entities.archived, false),
-          sql`${entities.aspects} -> 'orbis/schedule' -> 'recurrence' IS NOT NULL`,
+          sql`${entities.aspectsLegacy} -> 'orbis/schedule' -> 'recurrence' IS NOT NULL`,
         ),
       );
     const settings = await tx
@@ -242,7 +242,7 @@ async function materializeTemplate(
   from: string,
   to: string,
 ): Promise<number> {
-  const aspects = template.aspects as AspectsMap;
+  const aspects = template.aspectsLegacy as AspectsMap;
   const schedule = aspects['orbis/schedule'];
   if (!schedule || typeof schedule.start_at !== 'string') return 0;
 
@@ -343,7 +343,7 @@ function instanceOps(
   }
 
   const instAspects: AspectsMap = { 'orbis/schedule': instSchedule as Record<string, unknown> };
-  const fin = (template.aspects as AspectsMap)['orbis/financial'];
+  const fin = (template.aspectsLegacy as AspectsMap)['orbis/financial'];
   if (fin) {
     // §5.4/§3.3: occurred_on = дата инстанса, planned=true (до перехода в факт),
     // recurring=true (инстанс шаблона); к конверту инстанс авто-привязывается бюджет-

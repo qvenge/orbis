@@ -33,7 +33,7 @@ export function formatDay(value: string): string {
  * `true`: Browser (EntityList) прежний, поведение по умолчанию не менялось.
  */
 export function EntityRow({ entity, showMeta = true }: { entity: Entity; showMeta?: boolean }) {
-  const aspects = entity.aspects as Record<string, Record<string, unknown>>;
+  const aspects = entity.aspectsMap as Record<string, Record<string, unknown>>;
   const task = aspects['orbis/task'];
   const financial = aspects['orbis/financial'];
   const schedule = aspects['orbis/schedule'];

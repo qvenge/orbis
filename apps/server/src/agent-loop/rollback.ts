@@ -177,9 +177,9 @@ interface RunFacts {
  */
 async function runFacts(tx: Tx, runId: string): Promise<RunFacts | null> {
   const rows = await tx.execute(
-    sql`SELECT archived, aspects -> 'orbis/agent-run' AS run
+    sql`SELECT archived, aspects_legacy -> 'orbis/agent-run' AS run
         FROM entities
-        WHERE id = ${runId}::uuid AND aspects ? 'orbis/agent-run'`,
+        WHERE id = ${runId}::uuid AND aspects_legacy ? 'orbis/agent-run'`,
   );
   const row = (rows as unknown as Array<Record<string, unknown>>)[0];
   if (row === undefined) return null;

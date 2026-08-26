@@ -118,7 +118,7 @@ async function adminRows(query: ReturnType<typeof sql>): Promise<Array<Record<st
 /** orbis/financial сущности — истина в БД (админ-DSN). */
 async function finOf(id: string): Promise<Record<string, unknown>> {
   const rows = await adminRows(
-    sql`SELECT aspects->'orbis/financial' AS fin FROM entities WHERE id = ${id}`,
+    sql`SELECT aspects_legacy->'orbis/financial' AS fin FROM entities WHERE id = ${id}`,
   );
   if (rows.length === 0) throw new Error(`сущность ${id} не найдена`);
   return rows[0]?.fin as Record<string, unknown>;
@@ -130,7 +130,7 @@ async function budgetParents(txnId: string): Promise<string[]> {
     sql`SELECT r.source_id FROM relations r
         JOIN entities e ON e.id = r.source_id
         WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
-          AND e.aspects ? 'orbis/budget'
+          AND e.aspects_legacy ? 'orbis/budget'
         ORDER BY r.source_id`,
   );
   return rows.map((r) => r.source_id as string);
@@ -142,13 +142,13 @@ async function budgetParents(txnId: string): Promise<string[]> {
  */
 async function spentOf(envelopeId: string): Promise<string> {
   const rows = await adminRows(
-    sql`SELECT COALESCE(SUM((e.aspects->'orbis/financial'->>'amount')::numeric), 0)::text AS spent
+    sql`SELECT COALESCE(SUM((e.aspects_legacy->'orbis/financial'->>'amount')::numeric), 0)::text AS spent
         FROM relations r
         JOIN entities e ON e.id = r.target_id
         WHERE r.source_id = ${envelopeId} AND r.relation_type = 'parent'
           AND NOT e.archived
-          AND e.aspects->'orbis/financial'->>'direction' = 'expense'
-          AND (e.aspects->'orbis/financial'->>'planned') IS DISTINCT FROM 'true'`,
+          AND e.aspects_legacy->'orbis/financial'->>'direction' = 'expense'
+          AND (e.aspects_legacy->'orbis/financial'->>'planned') IS DISTINCT FROM 'true'`,
   );
   return rows[0]?.spent as string;
 }

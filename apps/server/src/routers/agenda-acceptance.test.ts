@@ -247,7 +247,7 @@ describe('приёмка 02-core-os §8.4: задача с одним due_date',
     const row = rows.find((r) => r.id === task);
     expect(row).toBeDefined();
     // «в соответствующем дне»: раскладку по секциям делает клиент по этому же start_at
-    expect((row?.aspects['orbis/schedule'] as { start_at?: string } | undefined)?.start_at).toBe(
+    expect((row?.aspectsMap['orbis/schedule'] as { start_at?: string } | undefined)?.start_at).toBe(
       at(tomorrow, '14:00'),
     );
   });

@@ -95,7 +95,7 @@ async function budgetParents(txnId: string): Promise<string[]> {
         sql`SELECT r.source_id FROM relations r
             JOIN entities e ON e.id = r.source_id
             WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
-              AND e.aspects ? 'orbis/budget'
+              AND e.aspects_legacy ? 'orbis/budget'
             ORDER BY r.source_id`,
       )),
     ];
@@ -332,7 +332,7 @@ function countingDb() {
  */
 const READS = {
   selector: (q: string) => q.includes("'orbis/budget'->>'period_end'"),
-  parents: (q: string) => q.includes("aspects ? 'orbis/budget'") && q.includes('ORDER BY'),
+  parents: (q: string) => q.includes("aspects_legacy ? 'orbis/budget'") && q.includes('ORDER BY'),
   currency: (q: string) => q.includes('user_settings'),
 };
 

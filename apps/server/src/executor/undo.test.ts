@@ -62,7 +62,7 @@ async function adminRows(query: ReturnType<typeof sql>): Promise<Array<Record<st
 
 async function entityRow(id: string): Promise<Record<string, unknown>> {
   const rows = await adminRows(
-    sql`SELECT title, body, aspects, tags, archived FROM entities WHERE id = ${id}`,
+    sql`SELECT title, body, aspects_legacy, tags, archived FROM entities WHERE id = ${id}`,
   );
   const row = rows[0];
   if (!row) throw new Error(`сущность ${id} не найдена`);
@@ -183,7 +183,9 @@ describe('undoAction: entity_update — LWW-откат (§7.8, обязател�
     expect(row.body).toBe('v1'); // восстановлен несмотря на изменившийся updated_at
     // аспект-ключ восстановлен целиком: due_date и completed_at, добавленные
     // отменённой правкой, исчезли (shallow-merge оставил бы их)
-    expect((row.aspects as Record<string, unknown>)['orbis/task']).toEqual({ status: 'inbox' });
+    expect((row.aspects_legacy as Record<string, unknown>)['orbis/task']).toEqual({
+      status: 'inbox',
+    });
     // поле, не затронутое отменяемым действием, не откатывается
     expect(row.tags).toEqual(['later']);
   });
@@ -265,7 +267,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
     );
     ok(await undoAction(db, { actorUserId: user, actionId: attach.actionId }));
     const row = await entityRow(e.id);
-    expect(row.aspects).toEqual({}); // аспекта не было — ключ снят целиком
+    expect(row.aspects_legacy).toEqual({}); // аспекта не было — ключ снят целиком
   });
 });
 

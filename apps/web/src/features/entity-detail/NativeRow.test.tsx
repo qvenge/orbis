@@ -22,11 +22,11 @@ const category = (id: string, title: string) => ({
   ...base,
   id,
   title,
-  aspects: { 'orbis/category': { icon: '🍔' } },
+  aspectsMap: { 'orbis/category': { icon: '🍔' } },
 });
 
 const financial = (fields: Record<string, unknown>) =>
-  ({ ...base, aspects: { 'orbis/financial': fields } }) as never;
+  ({ ...base, aspectsMap: { 'orbis/financial': fields } }) as never;
 
 const CAT_FOOD = 'a3d6d4b2-7f3a-4a1f-9c1e-2d5b8f0a1c77';
 // Ссылка в категорию, которой в списке нет — запасной вариант «показать uuid».
@@ -121,7 +121,7 @@ test('financial: пока категории грузятся, бейджа с u
 test('нефинансовая строка список категорий не запрашивает', async () => {
   const { calls } = renderWithProviders(
     <NativeRow
-      entity={{ ...base, aspects: { 'orbis/task': { status: 'inbox' } } } as never}
+      entity={{ ...base, aspectsMap: { 'orbis/task': { status: 'inbox' } } } as never}
       onToggleTask={() => {}}
     />,
   );
@@ -133,7 +133,7 @@ test('task: рендерит чекбокс', () => {
   render(
     <NativeRow
       entity={
-        { ...base, aspects: { 'orbis/task': { status: 'inbox', priority: 'high' } } } as never
+        { ...base, aspectsMap: { 'orbis/task': { status: 'inbox', priority: 'high' } } } as never
       }
       onToggleTask={() => {}}
     />,
@@ -145,7 +145,7 @@ test('generic: 2-3 keyFields из реестра', () => {
   render(
     <NativeRow
       entity={
-        { ...base, aspects: { 'orbis/note': { content_type: 'text', pinned: true } } } as never
+        { ...base, aspectsMap: { 'orbis/note': { content_type: 'text', pinned: true } } } as never
       }
       onToggleTask={() => {}}
     />,
@@ -163,7 +163,7 @@ test('generic: незаполненное keyField не печатается п�
       entity={
         {
           ...base,
-          aspects: {
+          aspectsMap: {
             'orbis/goal': {
               progress_source: { query: 'q', aggregate: 'count' },
               target_value: '300000.00',
@@ -190,7 +190,7 @@ test('generic: ключи подписаны по-русски, а не сыро
       entity={
         {
           ...base,
-          aspects: { 'orbis/goal': { target_value: '300000.00', unit: '₽' } },
+          aspectsMap: { 'orbis/goal': { target_value: '300000.00', unit: '₽' } },
         } as never
       }
       onToggleTask={() => {}}
@@ -205,7 +205,7 @@ test('generic: ключи подписаны по-русски, а не сыро
 test('generic: незнакомый ключ печатается как есть', () => {
   render(
     <NativeRow
-      entity={{ ...base, aspects: { 'orbis/note': { content_type: 'text' } } } as never}
+      entity={{ ...base, aspectsMap: { 'orbis/note': { content_type: 'text' } } } as never}
       onToggleTask={() => {}}
     />,
   );
@@ -217,7 +217,7 @@ test('generic: незнакомый ключ печатается как ест�
 // больше не распознаётся» не было нигде: запись оставалась в «Памяти AI» и выглядела
 // живой, хотя ни fast-path, ни резолв импорта её уже не применяли.
 const memory = (kind: string, title: string) =>
-  ({ ...base, title, aspects: { 'orbis/memory': { kind, scope: 'orbis/financial' } } }) as never;
+  ({ ...base, title, aspectsMap: { 'orbis/memory': { kind, scope: 'orbis/financial' } } }) as never;
 
 test('память: правило с распознанным форматом предупреждения не показывает', () => {
   render(

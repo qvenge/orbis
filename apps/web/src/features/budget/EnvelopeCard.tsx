@@ -107,7 +107,7 @@ export interface EnvelopeViewModel {
 export function envelopeView(status: EnvelopeStatus): EnvelopeViewModel {
   const { category, phase } = status;
   const budget =
-    (status.envelope.aspects as Record<string, Record<string, unknown> | undefined>)[
+    (status.envelope.aspectsMap as Record<string, Record<string, unknown> | undefined>)[
       'orbis/budget'
     ] ?? {};
   const currency = typeof budget.currency === 'string' ? budget.currency : 'RUB';

@@ -139,8 +139,8 @@ async function envelopesOf(
   user: string,
 ): Promise<Array<{ id: string; archived: boolean; budget: Record<string, unknown> }>> {
   const rows = await adminRows(
-    sql`SELECT id, archived, aspects->'orbis/budget' AS budget FROM entities
-        WHERE owner_id = ${user} AND aspects ? 'orbis/budget' ORDER BY id`,
+    sql`SELECT id, archived, aspects_legacy->'orbis/budget' AS budget FROM entities
+        WHERE owner_id = ${user} AND aspects_legacy ? 'orbis/budget' ORDER BY id`,
   );
   return rows.map((r) => ({
     id: r.id as string,
@@ -155,7 +155,7 @@ async function budgetParents(txnId: string): Promise<string[]> {
     sql`SELECT r.source_id FROM relations r
         JOIN entities e ON e.id = r.source_id
         WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
-          AND e.aspects ? 'orbis/budget'
+          AND e.aspects_legacy ? 'orbis/budget'
         ORDER BY r.source_id`,
   );
   return rows.map((r) => r.source_id as string);

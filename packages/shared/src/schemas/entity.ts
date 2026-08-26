@@ -16,7 +16,15 @@ export const entitySchema = z.object({
   bodyRefs: z.array(z.string().uuid()).default([]),
   tags: z.array(z.string()).default([]),
   meta: z.record(z.any()).default({}),
-  aspects: z.record(z.any()).default({}),
+  // ПЕРЕХОДНАЯ форма (§А1-1): новая правда (`props` по id свойства, `aspects` списком,
+  // `queryRefs`) едет рядом со старой картой, переименованной в `aspectsMap`. Пара
+  // `aspectsMap`/`meta` уходит из wire-формы вместе со старым носителем — там же, где
+  // web перестаёт её читать; до тех пор обе обязаны быть в схеме, иначе `entitySchema.parse`
+  // молча срезал бы карту у каждого ответа.
+  props: z.record(z.unknown()).default({}),
+  aspects: z.array(z.string()).default([]),
+  queryRefs: z.array(z.string()).default([]),
+  aspectsMap: z.record(z.any()).default({}),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   archived: z.boolean().default(false),

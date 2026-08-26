@@ -131,7 +131,7 @@ export function CategoryScreen({ categoryId }: { categoryId: string }) {
 
   const category = catQ.data?.entity;
   const catAspect = category
-    ? (category.aspects as Record<string, Record<string, unknown> | undefined>)['orbis/category']
+    ? (category.aspectsMap as Record<string, Record<string, unknown> | undefined>)['orbis/category']
     : undefined;
   const icon = typeof catAspect?.icon === 'string' ? catAspect.icon : null;
   const threadId = catQ.data?.thread?.threadId;
@@ -343,7 +343,7 @@ function TrendSection({ points }: { points: CategoryTrendPoint[] }) {
 // Строка транзакции: дата DD.MM + native-рендер §3.6 (NativeRow) + 🔁 у recurring-инстанса
 // (признак: aspects['orbis/financial'].recurring === true). Тап → push detail сущности.
 function TransactionRow({ entity }: { entity: QueryEntity }) {
-  const fin = (entity.aspects as Record<string, Record<string, unknown> | undefined>)[
+  const fin = (entity.aspectsMap as Record<string, Record<string, unknown> | undefined>)[
     'orbis/financial'
   ];
   const occurredOn = typeof fin?.occurred_on === 'string' ? fin.occurred_on : null;

@@ -179,7 +179,7 @@ async function actionById(actionId: string): Promise<ActionRecord> {
 
 async function categoryRefOf(txnId: string): Promise<string | undefined> {
   const rows = await adminRows(
-    sql`SELECT aspects -> 'orbis/financial' ->> 'category_ref' AS ref
+    sql`SELECT aspects_legacy -> 'orbis/financial' ->> 'category_ref' AS ref
         FROM entities WHERE id = ${txnId}`,
   );
   return rows[0]?.ref as string | undefined;

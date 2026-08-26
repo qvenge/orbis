@@ -63,7 +63,7 @@ describe('entity.create / entity.get (§9.2)', () => {
 
     const got = await caller.entity.get({ id: created.id });
     expect(got.entity).toEqual(createdEntity);
-    expect(got.entity.aspects['orbis/task']).toEqual({ status: 'inbox' });
+    expect(got.entity.aspectsMap['orbis/task']).toEqual({ status: 'inbox' });
     // include default — body+relations; backlinks/thread не запрошены (§9.2)
     expect(got.relations).toEqual([]);
     expect(got.backlinks).toBeUndefined();
@@ -366,6 +366,6 @@ describe('CAS-предусловие не протекает в tRPC (entity.upd
     expect(e.code).toBe('BAD_REQUEST');
 
     const after = await caller.entity.get({ id: created.id });
-    expect(after.entity.aspects['orbis/task']).toEqual({ status: 'planned' });
+    expect(after.entity.aspectsMap['orbis/task']).toEqual({ status: 'planned' });
   });
 });

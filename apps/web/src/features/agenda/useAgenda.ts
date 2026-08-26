@@ -52,7 +52,7 @@ export const AGENDA_OVERDUE_DUE_QUERY = `aspect=orbis/task, due_date=overdue, st
 export const AGENDA_OVERDUE_START_QUERY = `aspect=orbis/task, aspect=orbis/schedule, start_at=overdue, status=!done&!cancelled, sortBy=start_at:asc, limit=${OVERDUE_LIMIT}`;
 
 function aspectOf(e: AgendaEntity, id: string): Record<string, unknown> | undefined {
-  return (e.aspects as Record<string, Record<string, unknown> | undefined>)[id];
+  return (e.aspectsMap as Record<string, Record<string, unknown> | undefined>)[id];
 }
 
 function stringField(e: AgendaEntity, aspect: string, field: string): string | null {

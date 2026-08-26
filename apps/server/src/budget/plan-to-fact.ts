@@ -55,8 +55,8 @@ export async function confirmPurchase(
     const rows = (await tx.execute(sql`
       SELECT
         e.archived AS archived,
-        e.aspects->'orbis/financial' AS fin,
-        e.aspects->'orbis/schedule'->'recurrence' AS recurrence,
+        e.aspects_legacy->'orbis/financial' AS fin,
+        e.aspects_legacy->'orbis/schedule'->'recurrence' AS recurrence,
         EXISTS (
           SELECT 1 FROM relations r
           WHERE r.target_id = e.id AND r.relation_type = 'derived_from'

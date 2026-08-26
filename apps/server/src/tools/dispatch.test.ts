@@ -173,7 +173,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
     const e = r.result as WireEntity;
-    expect(e.aspects['orbis/task']).toEqual({ status: 'in_progress', priority: 'high' });
+    expect(e.aspectsMap['orbis/task']).toEqual({ status: 'in_progress', priority: 'high' });
     expect(r.card?.kind).toBe('entity_card');
     if (r.card?.kind === 'entity_card') {
       expect(r.card.keyFields).toEqual({ status: 'in_progress', priority: 'high' });
@@ -216,7 +216,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     });
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
-    expect((r.result as WireEntity).aspects['user/sleep-log']).toEqual({ hours: 7.5 });
+    expect((r.result as WireEntity).aspectsMap['user/sleep-log']).toEqual({ hours: 7.5 });
     if (r.card?.kind === 'entity_card') expect(r.card.keyFields).toEqual({ hours: 7.5 });
   });
 
@@ -254,7 +254,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     if (r.status !== 'ok') return;
     const results = r.result as WireEntity[];
     expect(results.length).toBe(2);
-    expect(results[1]?.aspects['user/sleep-log']).toEqual({ hours: 6 });
+    expect(results[1]?.aspectsMap['user/sleep-log']).toEqual({ hours: 6 });
   });
 
   test('batch_execute: неизвестное имя операции → структурная VALIDATION с индексом элемента', async () => {
@@ -1024,9 +1024,12 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
     }
     // Гейт стоит ДО записи: статус тикета не изменился, связь проект→тикет на месте
     const rows = await withIdentity(db, owner, (tx) =>
-      tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, ticket.id)),
+      tx
+        .select({ aspectsLegacy: entities.aspectsLegacy })
+        .from(entities)
+        .where(eq(entities.id, ticket.id)),
     );
-    const task = (rows[0]?.aspects as { 'orbis/task'?: { status?: string } })['orbis/task'];
+    const task = (rows[0]?.aspectsLegacy as { 'orbis/task'?: { status?: string } })['orbis/task'];
     expect(task?.status).toBe('planned');
   });
 
@@ -1320,7 +1323,9 @@ describe('CAS-предусловие не протекает в путь мод�
     const rows = await withIdentity(db, userA, (tx) =>
       tx.select().from(entities).where(eq(entities.id, target.id)),
     );
-    expect((rows[0]?.aspects as Record<string, Record<string, unknown>>)['orbis/task']).toEqual({
+    expect(
+      (rows[0]?.aspectsLegacy as Record<string, Record<string, unknown>>)['orbis/task'],
+    ).toEqual({
       status: 'planned',
     });
   });
@@ -1352,7 +1357,9 @@ describe('CAS-предусловие не протекает в путь мод�
     const rows = await withIdentity(db, userA, (tx) =>
       tx.select().from(entities).where(eq(entities.id, target.id)),
     );
-    expect((rows[0]?.aspects as Record<string, Record<string, unknown>>)['orbis/task']).toEqual({
+    expect(
+      (rows[0]?.aspectsLegacy as Record<string, Record<string, unknown>>)['orbis/task'],
+    ).toEqual({
       status: 'planned',
     });
   });
@@ -1395,9 +1402,12 @@ describe('V1: выдача автономии рутине из чата → pen
 
   async function aspectsOf(id: string): Promise<Record<string, unknown>> {
     const rows = await withIdentity(db, userA, (tx) =>
-      tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, id)),
+      tx
+        .select({ aspectsLegacy: entities.aspectsLegacy })
+        .from(entities)
+        .where(eq(entities.id, id)),
     );
-    return (rows[0]?.aspects ?? {}) as Record<string, unknown>;
+    return (rows[0]?.aspectsLegacy ?? {}) as Record<string, unknown>;
   }
 
   test('attach_orbis_routine с mode act → pending_confirmation, карточка в треде, граф не тронут', async () => {
@@ -1735,7 +1745,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
   async function routineCountOf(owner: string): Promise<number> {
     const rows = await withIdentity(db, owner, (tx) =>
       tx.execute(
-        sql`SELECT count(*)::int AS n FROM entities WHERE NOT archived AND aspects ? 'orbis/routine'`,
+        sql`SELECT count(*)::int AS n FROM entities WHERE NOT archived AND aspects_legacy ? 'orbis/routine'`,
       ),
     );
     return Number((rows as unknown as Array<{ n: number }>)[0]?.n ?? 0);

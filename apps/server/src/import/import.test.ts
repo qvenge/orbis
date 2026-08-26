@@ -20,7 +20,14 @@ import {
 } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import { and, eq, sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshUserId,
+  legacyEntityColumns,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { aiUsage, entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { type EntitlementResolver, IMPORT_CSV_KEY } from '../entitlements';
@@ -148,7 +155,7 @@ async function rawFinancialCount(user: string): Promise<number> {
   try {
     const rows = (await admin.execute(sql`
       SELECT count(*)::int AS count FROM entities
-      WHERE owner_id = ${user} AND aspects ? 'orbis/financial'
+      WHERE owner_id = ${user} AND aspects_legacy ? 'orbis/financial'
     `)) as unknown as Array<{ count: number }>;
     return rows[0]?.count ?? 0;
   } finally {
@@ -162,7 +169,7 @@ async function financialEntities(user: string) {
     tx
       .select({ id: entities.id, title: entities.title, archived: entities.archived })
       .from(entities)
-      .where(and(eq(entities.ownerId, user), sql`aspects ? 'orbis/financial'`))
+      .where(and(eq(entities.ownerId, user), sql`aspects_legacy ? 'orbis/financial'`))
       .orderBy(entities.title),
   );
 }
@@ -515,13 +522,13 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);
     // Шаблон повторения: financial + orbis/schedule.recurrence, occurred_on есть
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, user, async (tx) =>
       tx.insert(entities).values({
         id: newId(),
         ownerId: user,
         title: 'NETFLIX',
         tags: [],
-        aspects: {
+        ...(await legacyEntityColumns(tx, user, {
           'orbis/financial': {
             amount: '599.00',
             direction: 'expense',
@@ -533,7 +540,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
             start_at: '2026-05-06T00:00:00Z',
             recurrence: { freq: 'monthly', interval: 1 },
           },
-        },
+        })),
         createdAt: new Date(),
         updatedAt: new Date(),
       }),
@@ -651,11 +658,11 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     });
     const aspects = await withIdentity(db, user, (tx) =>
       tx
-        .select({ aspects: entities.aspects })
+        .select({ aspectsLegacy: entities.aspectsLegacy })
         .from(entities)
         .where(eq(entities.id, r.entityIds[0] as string)),
     );
-    const financial = (aspects[0]?.aspects as Record<string, Record<string, unknown>>)[
+    const financial = (aspects[0]?.aspectsLegacy as Record<string, Record<string, unknown>>)[
       'orbis/financial'
     ];
     expect(financial).not.toHaveProperty('bank_txn_id'); // ключа нет вовсе, не пустая строка
@@ -830,7 +837,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
         title: 'Архивный обед',
         tags: [],
         archived: true,
-        aspects: {
+        ...(await legacyEntityColumns(tx, user, {
           'orbis/financial': {
             amount: '340.00',
             direction: 'expense',
@@ -838,7 +845,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
             occurred_on: '2026-05-03',
             counterparty: 'Обед',
           },
-        },
+        })),
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -870,7 +877,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
         ownerId: user,
         title: 'Ручной обед',
         tags: [],
-        aspects: {
+        ...(await legacyEntityColumns(tx, user, {
           'orbis/financial': {
             amount: '340.00',
             direction: 'expense',
@@ -878,7 +885,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
             occurred_on: '2026-05-03',
             counterparty: 'Обед',
           },
-        },
+        })),
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -958,13 +965,13 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     const { user, foodId, transportId } = await freshOwner();
     const caller = ownerCaller(user);
     // Конверт «Еда» на май — транзакция еды привяжется автоматически (A4), транспорт нет
-    await withIdentity(db, user, (tx) =>
+    await withIdentity(db, user, async (tx) =>
       tx.insert(entities).values({
         id: newId(),
         ownerId: user,
         title: 'Конверт Еда',
         tags: [],
-        aspects: {
+        ...(await legacyEntityColumns(tx, user, {
           'orbis/budget': {
             category_ref: foodId,
             limit: '10000.00',
@@ -972,7 +979,7 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
             period_start: '2026-05-01',
             period_end: '2026-05-31',
           },
-        },
+        })),
         createdAt: new Date(),
         updatedAt: new Date(),
       }),
@@ -1032,7 +1039,7 @@ describe('Undo импорта: origins удаляются физически (§
         ownerId: user,
         title: 'Ручной обед',
         tags: [],
-        aspects: {
+        ...(await legacyEntityColumns(tx, user, {
           'orbis/financial': {
             amount: '999.00',
             direction: 'expense',
@@ -1040,7 +1047,7 @@ describe('Undo импорта: origins удаляются физически (§
             occurred_on: '2026-05-09',
             counterparty: 'Ручной обед',
           },
-        },
+        })),
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -1442,7 +1449,9 @@ describe('import.confirm: валюта выписки (§5 «Чужая валю
     expect(confirmed.created).toBe(2);
     for (const id of confirmed.entityIds) {
       const e = await caller.entity.get({ id });
-      expect((e.entity.aspects['orbis/financial'] as Record<string, unknown>).currency).toBe('USD');
+      expect((e.entity.aspectsMap['orbis/financial'] as Record<string, unknown>).currency).toBe(
+        'USD',
+      );
     }
   });
 
@@ -1458,7 +1467,7 @@ describe('import.confirm: валюта выписки (§5 «Чужая валю
     });
     const e = await caller.entity.get({ id: confirmed.entityIds[0] as string });
     expect(
-      (e.entity.aspects['orbis/financial'] as Record<string, unknown>).currency,
+      (e.entity.aspectsMap['orbis/financial'] as Record<string, unknown>).currency,
     ).toBeUndefined();
   });
 

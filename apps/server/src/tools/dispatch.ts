@@ -1150,7 +1150,7 @@ async function snapshotDeferredUnit(
   for (const [aspect, patch] of Object.entries(aspects ?? {})) {
     if (patch === null) continue; // снятие аспекта `buildUpdate` уже отверг выше
     for (const [field, after] of Object.entries(patch)) {
-      const before = current.aspects[aspect]?.[field];
+      const before = current.aspectsLegacy[aspect]?.[field];
       rows.push({
         aspect,
         field,
@@ -1342,7 +1342,7 @@ async function autonomySummary(
  * пусто, если таких нет. Смотрит только `entity_update` с `body`/`bodyDoc`/`title`: правка
  * расписания и режима идёт другими полями (её держит grantsAutonomy), пауза и метки
  * содержания автономии не меняют. Условие «рутина в act» — по БД, containment'ом по колонке
- * `aspects` (индекс `entities_aspects_gin`), под tx актора (RLS).
+ * `aspects_legacy` (индекс `entities_aspects_legacy_gin`), под tx актора (RLS).
  */
 async function actRoutineInstructionTargets(
   ctx: ToolCallCtx,
@@ -1361,7 +1361,9 @@ async function actRoutineInstructionTargets(
     const rows = await tx
       .select({ title: entities.title })
       .from(entities)
-      .where(and(inArray(entities.id, ids), sql`${entities.aspects} @> ${actRoutine}::jsonb`));
+      .where(
+        and(inArray(entities.id, ids), sql`${entities.aspectsLegacy} @> ${actRoutine}::jsonb`),
+      );
     return rows.map((r) => r.title);
   });
 }
@@ -1407,7 +1409,7 @@ const ASSIGNMENT_ASPECT = 'orbis/assignment';
  *
  * Цели читаются одним SELECT по id — тем же способом и в том же месте конвейера, что и
  * `actRoutineInstructionTargets` строкой выше (своей транзакции пре-чек не заводит, RLS —
- * под `withIdentity` актора). Containment по `aspects` тут не нужен: у пре-чека на руках
+ * под `withIdentity` актора). Containment по `aspects_legacy` тут не нужен: у пре-чека на руках
  * готовые id, а запретных аспектов четыре.
  *
  * Пре-чек разбирает ВСЕ формы операции, включая те, до которых таблица §7.10 сегодня его не
@@ -1454,11 +1456,11 @@ export async function routineDeferForbidden(
 
   const rows = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
     tx
-      .select({ id: entities.id, aspects: entities.aspects })
+      .select({ id: entities.id, aspectsLegacy: entities.aspectsLegacy })
       .from(entities)
       .where(inArray(entities.id, ids)),
   );
-  const aspectsById = new Map(rows.map((r) => [r.id, r.aspects as Record<string, unknown>]));
+  const aspectsById = new Map(rows.map((r) => [r.id, r.aspectsLegacy as Record<string, unknown>]));
   // Невидимой цели (её нет или она чужая) пре-чек не касается: NOT_FOUND — честный ответ
   // исполнения, и подменять его отказом по объекту значило бы разглашать, что строка есть.
   const untouchable = (id: string): boolean => {
@@ -1498,7 +1500,7 @@ async function entityHead(
 /** Сколько живых рутин у актора (под RLS его же tx): архивные лимит не занимают. */
 async function countRoutines(tx: Tx): Promise<number> {
   const rows = await tx.execute(
-    sql`SELECT count(*)::int AS n FROM entities WHERE NOT archived AND aspects ? 'orbis/routine'`,
+    sql`SELECT count(*)::int AS n FROM entities WHERE NOT archived AND aspects_legacy ? 'orbis/routine'`,
   );
   return Number((rows as unknown as Array<{ n: number }>)[0]?.n ?? 0);
 }
@@ -1510,7 +1512,7 @@ async function routinesAmong(tx: Tx, ids: string[]): Promise<Set<string>> {
   const rows = await tx
     .select({ id: entities.id })
     .from(entities)
-    .where(and(inArray(entities.id, ids), sql`${entities.aspects} ? 'orbis/routine'`));
+    .where(and(inArray(entities.id, ids), sql`${entities.aspectsLegacy} ? 'orbis/routine'`));
   return new Set(rows.map((r) => r.id));
 }
 
@@ -1638,11 +1640,11 @@ function entityCard(
   keyFieldsMap: Map<string, string[]>,
   undoActionId: string | undefined,
 ): Card {
-  const aspects = Object.keys(e.aspects);
+  const aspects = Object.keys(e.aspectsMap);
   const keyFields: Record<string, unknown> = {};
   for (const aspectId of aspects) {
     for (const field of keyFieldsMap.get(aspectId) ?? []) {
-      const value = e.aspects[aspectId]?.[field];
+      const value = e.aspectsMap[aspectId]?.[field];
       if (value !== undefined) keyFields[field] = value;
     }
   }

@@ -31,7 +31,7 @@ interface Draft {
 }
 
 function draftOf(entity: Entity): Draft {
-  const a = entity.aspects[ASSIGNMENT];
+  const a = entity.aspectsMap[ASSIGNMENT];
   return {
     executor: a?.executor === 'agent' ? 'agent' : 'human',
     // Проверка на строку, а не на «не пусто»: оптимистичный патч кладёт в кэш именно `null`
@@ -62,7 +62,7 @@ export function AssignmentCard({ entity }: { entity: Entity }) {
   // Отозванный доступ выбирать нельзя: сервер откажет NOT_FOUND (invariants.ts:304-318).
   const live = (grants.data ?? []).filter((g) => g.revokedAt === null);
 
-  const saved = entity.aspects[ASSIGNMENT];
+  const saved = entity.aspectsMap[ASSIGNMENT];
   const savedGrantId = typeof saved?.grant_id === 'string' ? saved.grant_id : undefined;
   const savedGrant = live.find((g) => g.id === savedGrantId);
   /**

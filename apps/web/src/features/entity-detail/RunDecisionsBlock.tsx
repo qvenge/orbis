@@ -110,7 +110,7 @@ function UnitStub({ unit }: { unit: RunUnitView }) {
  * его проба была бы лишней на каждом открытии чужого экрана.
  */
 export function RunDecisionsBlock({ entity }: { entity: Entity }) {
-  const run = entity.aspects[RUN_ASPECT] ?? {};
+  const run = entity.aspectsMap[RUN_ASPECT] ?? {};
   const routineId = str(run.routine_id);
   if (routineId === undefined) return null;
   return (
