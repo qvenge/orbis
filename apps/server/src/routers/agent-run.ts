@@ -133,8 +133,7 @@ export const agentRunRouter = router({
                   // который успел ответить (и перевести вопрос в `answered`) секундой раньше.
                   precondition: [
                     {
-                      aspect: 'orbis/agent-run',
-                      field: 'outcome',
+                      property: 'orbis/run_outcome',
                       in: answersQuestion ? ['checkpoint'] : ['finished', 'abandoned'],
                     },
                   ],
@@ -152,7 +151,7 @@ export const agentRunRouter = router({
                   id: input.ticketId,
                   // Тикет всё ещё ждёт: между чтением и записью на него мог ответить
                   // второй экран владельца, и второй ответ поверх первого затёр бы его
-                  precondition: [{ aspect: 'orbis/task', field: 'status', in: ['waiting'] }],
+                  precondition: [{ property: 'orbis/task_status', in: ['waiting'] }],
                   // Уходя из waiting — снимаем waiting_for (конвенция среза, как в
                   // подметании и итоге): вопрос рядом с `planned` читался бы как открытый
                   aspects: { 'orbis/task': { status: 'planned', waiting_for: null } },

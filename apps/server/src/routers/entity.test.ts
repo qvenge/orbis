@@ -359,7 +359,7 @@ describe('CAS-предусловие не протекает в tRPC (entity.upd
       caller.entity.update({
         id: created.id,
         // @ts-expect-error: precondition — параметр exec-схемы, вход роутера его не знает
-        precondition: [{ aspect: 'orbis/task', field: 'status', in: ['planned'] }],
+        precondition: [{ property: 'orbis/task_status', in: ['planned'] }],
         aspects: { 'orbis/task': { status: 'in_progress' } },
       }),
     );

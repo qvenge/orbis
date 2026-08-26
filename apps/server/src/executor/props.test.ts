@@ -7,12 +7,17 @@
 // проверяется СТРОКА, а не возвращённая wire-форма. Расхождение между тем, что уехало
 // клиенту, и тем, что легло в колонки, — как раз тот класс дефекта, ради которого дуальная
 // запись и держится под инвариантом.
+
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   aspectJsonSchema,
   BUILTIN_ASPECT_IDS,
+  BUILTIN_PROPERTY_META,
   buildFieldCatalog,
   newId,
+  type PropertyType,
   parseQuery,
 } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
@@ -24,6 +29,7 @@ import {
   seedCustomAspect,
   truncateAll,
 } from '../../test/helpers';
+import { runStillMine, subjectProperty } from '../agent-loop/verbs';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { readEntity } from '../entity-read';
@@ -34,7 +40,12 @@ import { toWireEntity, toWireEntityFromSql } from '../wire';
 import { execute, touchesBudgetContour } from './executor';
 import { makeChatJournalSink } from './journal';
 import { projectLegacyAspects } from './legacy-form';
-import { applyPropsPatch, resolvePropertyRef, touchedProperties } from './props';
+import {
+  applyPropsPatch,
+  comparePropertyValue,
+  resolvePropertyRef,
+  touchedProperties,
+} from './props';
 import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from './types';
 import { undoAction } from './undo';
 
@@ -1213,5 +1224,180 @@ describe('applyPropsPatch и резолв адреса', () => {
       properties: new Map([['user/p-shadow', shadow], ...reg.properties]),
     };
     expect(resolvePropertyRef(reversed, 'orbis/run_report')?.id).toBe('user/p-shadow');
+  });
+});
+
+describe('comparePropertyValue: равенство по ТИПУ свойства (§А7-3)', () => {
+  test('decimal — численно: "10.0" = "10.00" = "10", а "10.01" — другое значение', () => {
+    // Ровно та ложь, ради которой сравнение и переписано: до реформы стороны сверялись
+    // `JSON.stringify`, и одна и та же сумма, записанная с другим числом нулей, давала
+    // ЛОЖНЫЙ CONFLICT — «кто-то опередил» там, где не опередил никто.
+    const amount: PropertyType = { kind: 'decimal', exclusiveMin: '0' };
+    expect(comparePropertyValue(amount, '10.0', '10.00')).toBe(true);
+    expect(comparePropertyValue(amount, '10', '10.000')).toBe(true);
+    expect(comparePropertyValue(amount, '-0.00', '0.00')).toBe(true);
+    expect(comparePropertyValue(amount, '10.01', '10.00')).toBe(false);
+    // Зеркало: то же сравнение как ТЕКСТ дало бы обратный ответ на первой паре — значит
+    // проверка отличает численное равенство от строкового, а не повторяет `===`.
+    // Через `unknown`, потому что на литералах tsc сам объявляет сравнение заведомо ложным,
+    // а нам нужно ПОКАЗАТЬ его ложность, а не спрятать.
+    expect(('10.0' as unknown) === ('10.00' as unknown)).toBe(false);
+  });
+
+  test('decimal fail-closed: не-строка и невыразимое число не совпадают ни с чем', () => {
+    // Сравнение стоит на пути записи, и бросок отсюда стал бы 500 вместо честного CONFLICT.
+    const amount: PropertyType = { kind: 'decimal' };
+    expect(comparePropertyValue(amount, 10, '10.00')).toBe(false);
+    expect(comparePropertyValue(amount, 'десять', '10.00')).toBe(false);
+    expect(comparePropertyValue(amount, 'десять', 'десять')).toBe(false);
+    expect(comparePropertyValue(amount, null, null)).toBe(false);
+  });
+
+  test('json — по канону: порядок ключей объекта не значение (jsonb его не хранит)', () => {
+    const json: PropertyType = { kind: 'json' };
+    expect(comparePropertyValue(json, { a: 1, b: 2 }, { b: 2, a: 1 })).toBe(true);
+    expect(comparePropertyValue(json, { a: 1 }, { a: 2 })).toBe(false);
+    // А вот порядок МАССИВА — значение, и канон его сохраняет.
+    expect(comparePropertyValue(json, { a: [1, 2] }, { a: [2, 1] })).toBe(false);
+    // Зеркало: голая ссылка совпала бы только сама с собой — значит сравниваются значения.
+    const same: unknown = { a: 1, b: 2 };
+    expect(same === ({ a: 1, b: 2 } as unknown)).toBe(false);
+    expect(comparePropertyValue(json, same, { a: 1, b: 2 })).toBe(true);
+  });
+
+  test('дата и отметка времени — по нормализованному ISO, а не по тексту', () => {
+    const ts: PropertyType = { kind: 'timestamp' };
+    expect(comparePropertyValue(ts, '2026-08-26T10:00:00Z', '2026-08-26T10:00:00.000Z')).toBe(true);
+    expect(comparePropertyValue(ts, '2026-08-26T10:00:00Z', '2026-08-26T10:00:01.000Z')).toBe(
+      false,
+    );
+    // Неразбираемая строка остаётся собой: сравнение не выдумывает ей значение.
+    expect(comparePropertyValue(ts, 'не дата', 'не дата')).toBe(true);
+    expect(comparePropertyValue(ts, 'не дата', 'тоже не дата')).toBe(false);
+  });
+
+  test('список (`cardinality: many`) — поэлементно и ПО ПОРЯДКУ, с проверкой длины', () => {
+    const list: PropertyType = { kind: 'text', cardinality: 'many', maxItems: 50 };
+    expect(comparePropertyValue(list, ['а', 'б'], ['а', 'б'])).toBe(true);
+    // Перестановка — другое значение: у списка порядок часть значения (дни рутины, тулы).
+    expect(comparePropertyValue(list, ['а', 'б'], ['б', 'а'])).toBe(false);
+    // Длина сверяется первой — иначе ['а'] совпадал бы с началом ['а','б'].
+    expect(comparePropertyValue(list, ['а'], ['а', 'б'])).toBe(false);
+    expect(comparePropertyValue(list, ['а', 'б'], ['а'])).toBe(false);
+    // Не список с обеих сторон — не совпадение: скаляр и список это разные значения.
+    expect(comparePropertyValue(list, 'а', ['а'])).toBe(false);
+    expect(comparePropertyValue(list, ['а'], 'а')).toBe(false);
+  });
+
+  test('список ДЕНЕГ сравнивается правилом денег поэлементно, а не текстом', () => {
+    // Проверка того, что `many` не подменяет правило типа своим: иначе список сумм сверялся
+    // бы строками, и «10.0» в нём снова разошлось бы с «10.00».
+    const money: PropertyType = { kind: 'decimal', cardinality: 'many', maxItems: 5 };
+    expect(comparePropertyValue(money, ['10.0', '2.50'], ['10.00', '2.5'])).toBe(true);
+    expect(comparePropertyValue(money, ['10.0', '2.50'], ['10.00', '2.51'])).toBe(false);
+  });
+
+  test('прочие типы — строгое равенство: text, boolean, select, number', () => {
+    expect(comparePropertyValue({ kind: 'text' }, 'а', 'а')).toBe(true);
+    expect(comparePropertyValue({ kind: 'text' }, 'а', 'А')).toBe(false);
+    expect(comparePropertyValue({ kind: 'boolean' }, false, false)).toBe(true);
+    // false и «нет значения» — разные вещи (РП-9): отсутствие отсекает сам assertPrecondition,
+    // но и здесь undefined не обязан совпадать с false.
+    expect(comparePropertyValue({ kind: 'boolean' }, false, undefined)).toBe(false);
+    expect(comparePropertyValue({ kind: 'number' }, 1, 1)).toBe(true);
+    expect(comparePropertyValue({ kind: 'number' }, 1, '1')).toBe(false);
+  });
+});
+
+describe('golden-близнец писателей предусловий (§А7-3)', () => {
+  /**
+   * Шесть файлов, в которых предусловия СТРОЯТСЯ. Список рукописный и это намеренно: он —
+   * половина проверки. Появится седьмой — счётчик ниже разойдётся, и переводить его придётся
+   * осознанно, а не «когда-нибудь заметим».
+   */
+  const WRITER_FILES = [
+    'agent-loop/sweep.ts',
+    'agent-loop/verbs.ts',
+    'routers/agent-run.ts',
+    'routines/lifecycle.ts',
+    'routines/propose.ts',
+    'tools/dispatch.ts',
+  ];
+
+  /** Место, где `precondition` ПОЛУЧАЕТ значение: литерал, генератор или push в накопитель. */
+  const ASSIGNMENT = /precondition(?:\.push\s*\(|\s*[:=]\s*(?:\[|runStillMine\())/;
+  /** Старая форма пункта — пара «аспект + поле». После §А7-3 её быть не должно нигде. */
+  const LEGACY_ITEM = /\{\s*aspect:\s*'[^']*',\s*field:/;
+
+  const sources = WRITER_FILES.map((path) => ({
+    path,
+    lines: readFileSync(join(import.meta.dir, '..', path), 'utf8').split('\n'),
+  }));
+
+  test('писателей ровно 18: 17 мест присвоения + один генератор-хелпер', () => {
+    // Число из плана среза, подтверждённое пересчётом разведки. Разошлось — значит писатель
+    // появился или исчез, и его форму надо посмотреть глазами: предусловие, забытое при
+    // переводе, отказывает не в тесте, а у владельца на кнопке «Принять».
+    const assignments = sources.flatMap(({ path, lines }) =>
+      lines.flatMap((line, index) => (ASSIGNMENT.test(line) ? [`${path}:${index + 1}`] : [])),
+    );
+    expect(assignments).toHaveLength(17);
+    // Восемнадцатый — `runStillMine`: он не присваивает `precondition`, а ОТДАЁТ пункты,
+    // которые потом кладут два разных глагола (шаг и закрытие прогона).
+    expect(runStillMine({ kind: 'routine', routineId: newId() })).toHaveLength(2);
+  });
+
+  test('закрытие прогона ставит предусловие ГЕНЕРАТОРОМ, а не своим списком', () => {
+    // Пин против тихой потери половины условия. `runStillMine` — это ДВА пункта: «прогон
+    // ещё идёт» и «прогон ВСЁ ЕЩЁ МОЙ», и второй под замком ловит то, чего не поймала
+    // предпроверка `readRun`: субъект мог смениться между чтением и записью. Заменить вызов
+    // своим однопунктовым списком — правка, которую не покажет ни один прогон сьюта (гонка
+    // субъектов в тесте не воспроизводима), поэтому здесь она ловится формой.
+    const verbs = sources.find((s) => s.path === 'agent-loop/verbs.ts');
+    const uses = (verbs?.lines ?? []).filter((line) => /precondition:\s*runStillMine\(/.test(line));
+    expect(uses).toHaveLength(1);
+    // Шаг прогона кладёт те же пункты россыпью — вместе с CAS по счётчику.
+    const spread = (verbs?.lines ?? []).filter((line) => /\.\.\.runStillMine\(/.test(line));
+    expect(spread).toHaveLength(1);
+  });
+
+  test('каждый названный property-id есть в словаре свойств', () => {
+    const known = new Set(BUILTIN_PROPERTY_META.map((p) => p.id));
+    const named = new Set<string>();
+    for (const { lines } of sources) {
+      for (const line of lines) {
+        const m = line.match(/\bproperty:\s*'([^']+)'/);
+        if (m?.[1] !== undefined) named.add(m[1]);
+      }
+    }
+    // Не пустой набор — иначе проверка «все известны» проходила бы на нуле имён.
+    expect(named.size).toBeGreaterThanOrEqual(10);
+    expect([...named].filter((id) => !known.has(id))).toEqual([]);
+
+    // Вычисляемый адрес субъекта прогона литералом не ловится — проверяем вызовом обеих
+    // веток: `orbis/grant` (слитое свойство, В1) и `orbis/run_routine`.
+    for (const subject of [
+      { kind: 'grant', grant: { id: newId() } },
+      { kind: 'routine', routineId: newId() },
+    ] as const) {
+      expect(known.has(subjectProperty(subject as never))).toBe(true);
+    }
+  });
+
+  test('пары «аспект + поле» в предусловиях не осталось ни в одном писателе', () => {
+    // Комментарии не считаются: докблоки НАЗЫВАЮТ старую форму, объясняя, почему её больше
+    // нет, и запретить им это значило бы вычеркнуть объяснение вместе с кодом.
+    const isComment = (line: string): boolean =>
+      line.trimStart().startsWith('*') || line.trimStart().startsWith('//');
+    for (const { path, lines } of sources) {
+      const legacy = lines.flatMap((line, index) =>
+        !isComment(line) && LEGACY_ITEM.test(line) ? [`${path}:${index + 1}`] : [],
+      );
+      expect(legacy).toEqual([]);
+    }
+    // Проверка не вакуумна: сам образец старой формы регулярка находит.
+    expect(LEGACY_ITEM.test("{ aspect: 'orbis/task', field: 'status', in: ['planned'] }")).toBe(
+      true,
+    );
   });
 });

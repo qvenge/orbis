@@ -1306,7 +1306,7 @@ describe('CAS-предусловие не протекает в путь мод�
   // executor'а, а вход модели и MCP идёт через strict-схему тула (entityUpdateInput) —
   // лишний ключ режется ДО классификации §7.10 и до executor'а. Соседи по смыслу —
   // «bodyDoc не протекает в путь модели» (executor/body-doc.test.ts).
-  const PRECONDITION = [{ aspect: 'orbis/task', field: 'status', in: ['planned'] }];
+  const PRECONDITION = [{ property: 'orbis/task_status', in: ['planned'] }];
 
   test('одиночный entity_update с precondition от модели — VALIDATION, правка не применена', async () => {
     const target = await seedEntity(userA, {
@@ -2166,7 +2166,7 @@ describe('отложка небезопасного действия рутин�
     expect(record.source).toBe('routine');
     expect(record.tool).toBe('entity_update');
     expect((record.input as Record<string, unknown>).precondition).toEqual([
-      { aspect: 'orbis/entity', field: 'archived', in: [false] },
+      { property: 'orbis/archived', in: [false] },
     ]);
     expect(msg?.content).toBe('Отложено до решения: Архивация: «Прошлогодний отчёт»');
 
@@ -2234,8 +2234,8 @@ describe('отложка небезопасного действия рутин�
     // Предусловия — снимок ПЕРВОЙ постановки, а не сегодняшнего состояния
     const record = (pendings[0]?.metadata as { pending: Record<string, unknown> }).pending;
     expect((record.input as Record<string, unknown>).precondition).toEqual([
-      { aspect: 'orbis/task', field: 'status', in: ['inbox'] },
-      { aspect: 'orbis/entity', field: 'archived', in: [false] },
+      { property: 'orbis/task_status', in: ['inbox'] },
+      { property: 'orbis/archived', in: [false] },
     ]);
     // Карточка ретрая — тоже исходная, со «было» первой попытки
     expect(again.card).toEqual(first.card);
@@ -2335,7 +2335,7 @@ describe('отложка небезопасного действия рутин�
     if (applied.ok) return;
     expect(applied.error.code).toBe('CONFLICT');
     expect((applied.error.details as { mismatches?: unknown[] }).mismatches).toEqual([
-      { aspect: 'orbis/entity', field: 'archived', expected: [false], actual: true },
+      { property: 'orbis/archived', expected: [false], actual: true },
     ]);
   });
 

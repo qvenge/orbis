@@ -49,14 +49,14 @@ import { Card } from '../../ui/Card';
 import { BODY_DIFF_SKIP_NOTES, BodyDiffUnits } from '../chat/cards/BodyDiff';
 import {
   beforeText,
+  divergenceRows,
   fmt,
-  type Mismatch,
-  mismatchText,
   OWNER_EDIT_NOTE,
   type ProposalRow,
   REPLACED_NOTES,
   type ReplacedReason,
   rowLabel,
+  type StaleRow,
 } from '../chat/cards/proposal-text';
 import { EditorShell } from '../entity-editor/EditorShell';
 import { sameDoc } from '../entity-editor/strip-ids';
@@ -282,7 +282,7 @@ function ProposalPlate({
    */
   const [edits, setEdits] = useState<Record<string, FieldEdit>>({});
   /** Расхождения ПОСЛЕДНЕГО нажатия «Принять» — в сыром виде, как их вернул сервер. */
-  const [mismatches, setMismatches] = useState<Mismatch[] | null>(null);
+  const [staleRows, setStaleRows] = useState<StaleRow[] | null>(null);
 
   /**
    * Правленые ДОКУМЕНТЫ тела по номеру операции — В РЕФЕ, а не в состоянии, и это замер, а не
@@ -321,7 +321,7 @@ function ProposalPlate({
       // Принятое предложение правит и деньги (перенос категории, сумма, статус траты) —
       // бюджетные агрегаты живут своим ключом и в invalidateGraph не входят.
       if (result.status === 'applied') void utils.budget.invalidate();
-      setMismatches(result.status === 'stale' ? result.mismatches : null);
+      setStaleRows(result.status === 'stale' ? divergenceRows(result) : null);
       onAnswer(result.status === 'replaced' ? result.reason : null);
       /**
        * Список предложений записи о решении сам не узнает — перечитываем его явно; вместе с
@@ -510,7 +510,7 @@ function ProposalPlate({
               </p>
             )}
 
-            {mismatches !== null && (
+            {staleRows !== null && (
               <div
                 // `stale` — ЗНАЧЕНИЕ ответа, а не сбой (Р-2): граф разошёлся с предложением, и
                 // владельцу показывают, чем именно, а не плашку ошибки.
@@ -520,8 +520,8 @@ function ProposalPlate({
               >
                 <p>Устарело — состояние изменилось.</p>
                 <ul className="flex flex-col gap-1 text-text-secondary text-xs">
-                  {mismatches.map((m) => (
-                    <li key={`${m.aspect}:${m.field}`}>{mismatchText(m)}</li>
+                  {staleRows.map((row) => (
+                    <li key={row.key}>{row.text}</li>
                   ))}
                 </ul>
               </div>
@@ -530,7 +530,7 @@ function ProposalPlate({
             {/* Кнопок нет у УСТАРЕВШЕГО: сервер погасил это предложение вместе с ответом
                 (`rejectPending(reason:'stale')`), и второе нажатие получило бы `already` —
                 кнопка, которая молча ничего не делает, хуже отсутствующей. */}
-            {mismatches === null && (
+            {staleRows === null && (
               <div className="flex flex-wrap gap-2">
                 <Button variant="primary" disabled={busy} onClick={() => send('approve')}>
                   Принять

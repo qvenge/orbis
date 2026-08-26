@@ -88,6 +88,7 @@ import {
 import {
   applyPropsPatch,
   assertPropsWritable,
+  comparePropertyValue,
   type EntityState,
   type PropsPatch,
   resolvePropertyRef,
@@ -951,43 +952,49 @@ async function loadEntityForUpdate(
 }
 
 /**
- * Зарезервированный id: под ним предусловие адресует КОЛОНКИ строки сущности, а не аспект
- * (D42 ОЧ.13). Заведён потому, что отложенная архивация обязана нести предусловие
- * «пока запись не в архиве», а `archived` — колонка таблицы `entities`, которой в карте
- * аспектов нет вовсе: без псевдо-аспекта такая отложка не протухала бы НИКОГДА.
+ * Значение CORE-свойства (§А1-3) из строки: хранение у него — колонка, а адрес — обычный id
+ * свойства. Отдельная функция, а не ветка внутри сверки, потому что тот же перевод
+ * «свойство ядра → колонка» понадобится компилятору запросов (§А5-1) — второй его копии
+ * быть не должно.
  *
- * Именно псевдо-аспект, а не новая форма пункта: `aspect` в контракте — обычная строка,
- * поэтому не двигаются ни union `entityUpdatePreconditionItem`, ни `PreconditionMismatch`,
- * ни его читатели (verbs.ts, карточка расхождений). И до этой ветки предусловие с таким id
- * уже отказывало (`aspects['orbis/entity']` не существует) — здесь отказ становится
- * осмысленным, а не открывается новая дыра.
- *
- * Реестр аспектов ЗАКРЫТ (`ASPECT_SCHEMAS`) и такого id в нём нет — пиннится тестом
- * `packages/shared/src/schemas/aspects.test.ts`: пока это так, ветка по точному имени
- * однозначна и настоящий аспект её не перехватит.
- *
- * Поддержана РОВНО одна колонка — `archived`. Неизвестное поле даёт `undefined`, то есть
- * расхождение (fail-closed), а не молчаливый пропуск: предусловие с опечаткой обязано
- * отказать, а не разрешить правку ровно там, где его поставили её запретить. По той же
- * причине форма `absent` под псевдо-аспектом на `archived` не выполнена никогда — колонка
- * значение несёт всегда; «пока не в архиве» пишется как `in: [false]`.
+ * Отметки времени отдаются ISO-СТРОКАМИ: в предусловии значение приезжает из JSON, где
+ * `Date` не существует, и сравнивать объект со строкой было бы сравнением разных вещей.
+ * Незнакомый core-id — `undefined`: он невозможен (список закрыт `CORE_PROPERTY_IDS`), но
+ * молчаливое совпадение здесь стоило бы дороже лишней ветки.
  */
-export const ENTITY_PSEUDO_ASPECT = 'orbis/entity';
+function corePropertyValue(propertyId: string, row: EntityRow): unknown {
+  if (propertyId === 'orbis/archived') return row.archived;
+  if (propertyId === 'orbis/title') return row.title;
+  if (propertyId === 'orbis/created_at') return row.createdAt.toISOString();
+  if (propertyId === 'orbis/updated_at') return row.updatedAt.toISOString();
+  return undefined;
+}
 
 /**
- * CAS-предусловие (С7) против состояния строки, ПРОЧИТАННОЙ ПОД ЗАМКОМ. Вызывается только
+ * CAS-предусловие (§А7-3) против состояния строки, ПРОЧИТАННОЙ ПОД ЗАМКОМ. Вызывается только
  * из prepareEntityUpdate сразу после loadEntityForUpdate — своего чтения не делает намеренно:
  * второй SELECT снял бы весь смысл, сверяя значение вне транзакционного замка. По той же
- * причине колонки под псевдо-аспектом приходят параметром `entity` — из ТОЙ ЖЕ прочитанной
- * строки; в batch это виртуальная строка, где видны эффекты предыдущих операций пачки.
+ * причине core-колонки приходят параметром `row` — из ТОЙ ЖЕ прочитанной строки; в batch это
+ * виртуальная строка, где видны эффекты предыдущих операций пачки.
  *
- * Форма `in`: сравнение по JSON-форме — поля аспектов скалярные, а `===` на объектах сравнивал
- * бы ссылки. Отсутствующее поле (и отсутствующий аспект) не совпадает ни с чем — захват
+ * Адрес пункта — id свойства, и источник значения выбирается по РЕЕСТРУ, а не по имени:
+ * `storage: 'core'` — колонка строки (§А1-3), всё остальное — `props`. Псевдо-аспекта
+ * `orbis/entity`, под которым колонка адресовалась раньше, больше нет: он был вторым,
+ * несовместимым способом сказать «это не поле аспекта», и жил ровно потому, что у пары
+ * «аспект + поле» для колонки не было имени.
+ *
+ * Свойство, которого в реестре НЕТ, — `VALIDATION`, а не расхождение. Это рулинг, а не
+ * вкус: над `CONFLICT` стоит retry-лестница глаголов, и опечатка в id, выглядящая как
+ * проигранная гонка, заставляла бы её перезапускать заведомо невыполнимое предусловие.
+ *
+ * Форма `in`: сравнение — `comparePropertyValue` по типу свойства (деньги численно, json
+ * каноном, список поэлементно). Отсутствующее значение не совпадает ни с чем — захват
  * несуществующего тикета невозможен. Это обещание БЕЗУСЛОВНО: `actual === undefined`
- * отсекается отдельно, до сравнения, потому что JSON.stringify отображает undefined в
- * undefined — и `in: [undefined]` (одна опечатка в предусловии) иначе совпадал бы с
- * отсутствием поля, то есть разрешал правку ровно там, где предусловие и поставлено её
- * запретить. Форма `absent` (V1.7) — зеркало того же: выполнена РОВНО когда поля нет.
+ * отсекается отдельно, до сравнения, потому что иначе `in: [undefined]` (одна опечатка в
+ * предусловии) совпадал бы с отсутствием значения, то есть разрешал правку ровно там, где
+ * предусловие и поставлено её запретить. Форма `absent` (V1.7) — зеркало того же: выполнена
+ * РОВНО когда значения нет. `default` типа её не отменяет (РП-9): он не материализуется на
+ * записи, и «поля ещё нет» обязано отличаться от «поле есть и равно умолчанию».
  *
  * Проверяются ВСЕ пункты, даже когда первый уже провалился: бросок один, но список
  * расхождений полный (`details.mismatches`). Выход на первом же несовпадении экономил бы
@@ -995,32 +1002,35 @@ export const ENTITY_PSEUDO_ASPECT = 'orbis/entity';
  * пункту за попытку — предложение рутины применяется «всё или ничего».
  */
 function assertPrecondition(
+  reg: RegistrySnapshot,
   precondition: EntityUpdatePrecondition,
-  aspects: AspectsMap,
-  entity: { archived: boolean },
+  state: EntityState,
+  row: EntityRow,
 ): void {
   const mismatches: PreconditionMismatch[] = [];
   /** Первый провалившийся ПУНКТ в исходной форме (не расхождение) — его читает verbs.ts. */
   let failed: { item: EntityUpdatePreconditionItem; actual: unknown } | undefined;
 
   for (const p of precondition) {
-    // Источник значения — по id аспекта: у зарезервированного это колонки строки
-    // (см. ENTITY_PSEUDO_ASPECT), у всех остальных — карта аспектов, байт-в-байт как было.
-    const actual =
-      p.aspect === ENTITY_PSEUDO_ASPECT
-        ? p.field === 'archived'
-          ? entity.archived
-          : undefined
-        : aspects[p.aspect]?.[p.field];
+    const def = resolvePropertyRef(reg, p.property);
+    if (def === undefined) {
+      throw new ExecError(
+        'VALIDATION',
+        `предусловие ссылается на неизвестное свойство «${p.property}» (§А7-3)`,
+        { property: p.property, reason: 'unknown_property' },
+      );
+    }
+    // Источник значения — по РЕЕСТРУ: у core-проекции это колонка строки (§А1-3), у всех
+    // остальных — новая правда значений `props`.
+    const actual = def.storage === 'core' ? corePropertyValue(def.id, row) : state.props[def.id];
     const satisfied =
       'absent' in p
         ? actual === undefined
-        : actual !== undefined && p.in.some((v) => JSON.stringify(v) === JSON.stringify(actual));
+        : actual !== undefined && p.in.some((v) => comparePropertyValue(def.type, v, actual));
     if (satisfied) continue;
     failed ??= { item: p, actual };
     mismatches.push({
-      aspect: p.aspect,
-      field: p.field,
+      property: p.property,
       expected: 'absent' in p ? 'absent' : p.in,
       actual,
     });
@@ -1032,15 +1042,14 @@ function assertPrecondition(
     'CONFLICT',
     // Хвост «(и ещё N)» — чтобы текст не врал, будто расхождение одно: полный разбор
     // читатель возьмёт из details.mismatches, но по сообщению обязан понять его размер.
-    `предусловие не выполнено: ${failed.item.aspect}.${failed.item.field}` +
-      (rest > 0 ? ` (и ещё ${rest})` : ''),
+    `предусловие не выполнено: ${failed.item.property}${rest > 0 ? ` (и ещё ${rest})` : ''}`,
     {
       // Второй смысл CONFLICT помимо занятого client-UUID — различает их именно reason
       // (см. докблок errors.ts): потребители кодов не должны гадать по тексту сообщения.
       reason: 'precondition_failed',
       // ПЕРВЫЙ провалившийся пункт, а не весь массив: CAS-шаг по счётчику читает
-      // details.precondition.field (verbs.ts), чтобы решить, повторять ли попытку, и
-      // менять эту форму ради нового поля значило бы ломать глаголы на ровном месте.
+      // details.precondition.property (verbs.ts), чтобы решить, повторять ли попытку, и
+      // менять эту форму ради нового свойства значило бы ломать глаголы на ровном месте.
       precondition: failed.item,
       actual: failed.actual,
       // Полный список — для владельца (V1.7): по нему карточка предложения показывает,
@@ -1356,8 +1365,8 @@ async function prepareEntityUpdate(
   if (!current) {
     throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.id });
   }
-  // Старая карта — вход CAS (Задача 5 переводит предусловия на свойства) и источник
-  // прежних значений для журнала (Задача 6). Новая правда строки — `stateOf`.
+  // Старая карта — источник прежних значений для журнала (Задача 6). Новая правда строки —
+  // `stateOf`, и с §А7-3 по ней же идёт CAS.
   const currentAspects = current.aspectsLegacy as AspectsMap;
   const before = stateOf(current);
 
@@ -1369,7 +1378,7 @@ async function prepareEntityUpdate(
   // Проверка идёт ДО гейта тела и ДО merge: проигравший захват не должен ни писать, ни
   // получать STALE_VERSION вместо честного CONFLICT. Внутренний режим undo (§7.8)
   // предусловий не встречает — inverse их не несёт, поэтому отдельной ветки здесь нет.
-  if (input.precondition) assertPrecondition(input.precondition, currentAspects, current);
+  if (input.precondition) assertPrecondition(ctx.registry, input.precondition, before, current);
 
   // §5.2: правка body требует optimistic-check по updated_at; патчи без body — LWW.
   // Внутренний режим undo (§7.8) требование ПРОПУСКАЕТ: Undo восстанавливает

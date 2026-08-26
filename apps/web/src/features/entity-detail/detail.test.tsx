@@ -3841,9 +3841,8 @@ describe('V1: прогон рутины', () => {
         proposal: PROPOSAL_VIEW,
         decide: {
           status: 'stale',
-          mismatches: [
-            { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'done' },
-          ],
+          mismatches: [{ property: 'orbis/task_status', expected: ['inbox'], actual: 'done' }],
+          bodyChanged: false,
         },
       }),
     );
@@ -4154,9 +4153,8 @@ describe('D42: пачка решений на экране прогона', () =
           {
             pendingId: 'd2',
             status: 'stale',
-            mismatches: [
-              { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'done' },
-            ],
+            mismatches: [{ property: 'orbis/task_status', expected: ['inbox'], actual: 'done' }],
+            bodyChanged: false,
           },
         ],
       }),
@@ -4646,10 +4644,9 @@ describe('слой предложения', () => {
       overlayHandler({
         decide: {
           status: 'stale',
-          mismatches: [
-            { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'done' },
-            { aspect: '', field: 'body', expected: ['A'], actual: 'B' },
-          ],
+          mismatches: [{ property: 'orbis/task_status', expected: ['inbox'], actual: 'done' }],
+          // Тело — ФЛАГ, а не пункт (РП-10): у него нет ни адреса свойства, ни значения.
+          bodyChanged: true,
         },
       }),
     );

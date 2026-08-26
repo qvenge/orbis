@@ -18,15 +18,9 @@ import { useState } from 'react';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
-import { beforeText, fmt, mismatchText } from './proposal-text';
+import { beforeText, divergenceRows, fmt, type StaleRow } from './proposal-text';
 import type { DeferredActionCardData } from './types';
-import {
-  actionFateNote,
-  UNIT_FATE_NOTES,
-  type UnitFate,
-  type UnitMismatch,
-  unitRowLabel,
-} from './unit-text';
+import { actionFateNote, UNIT_FATE_NOTES, type UnitFate, unitRowLabel } from './unit-text';
 import { useRunUnit } from './useRunUnit';
 
 export function DeferredActionCard({
@@ -55,7 +49,7 @@ export function DeferredActionCard({
    * Держим состоянием, потому что перечитанная единица про них не расскажет: сервер уже
    * ПОГАСИЛ протухшую единицу, и в пачке она лежит просто отклонённой по причине `stale`.
    */
-  const [mismatches, setMismatches] = useState<readonly UnitMismatch[] | null>(null);
+  const [staleRows, setStaleRows] = useState<readonly StaleRow[] | null>(null);
   /**
    * Ответ `already` последнего нажатия: решать было нечего — судьба у единицы уже есть, своя
    * (повтор кнопки) или чужая (второй экран, гашение). Держим по той же причине, что и
@@ -65,7 +59,7 @@ export function DeferredActionCard({
 
   const decide = trpc.routine.decideDeferred.useMutation({
     onSuccess: (result) => {
-      setMismatches(result.status === 'stale' ? result.mismatches : null);
+      setStaleRows(result.status === 'stale' ? divergenceRows(result) : null);
       setAlreadyFate(result.status === 'already' ? result.fate : null);
       // Бюджет перечитывается только у ПРИМЕНЁННОГО: отложенная правка могла тронуть сумму,
       // категорию или статус траты (см. `settled`).
@@ -112,7 +106,7 @@ export function DeferredActionCard({
       {/* Исход нажатия — СНАРУЖИ разворота, у самой шапки: единица сворачивается в ту же
           секунду, и расхождения, спрятанные в разбор, исчезли бы вместе с ним — то есть ровно
           там, где владелец их и ждёт после своего нажатия. */}
-      {mismatches !== null && (
+      {staleRows !== null && (
         <div
           // `stale` — ЗНАЧЕНИЕ ответа, а не сбой (Р-2): граф разошёлся с единицей, и владельцу
           // показывают, ЧЕМ именно, а не плашку ошибки. `status`, а не `alert`: ответ приезжает
@@ -123,8 +117,8 @@ export function DeferredActionCard({
         >
           <p>Устарело — состояние изменилось.</p>
           <ul className="flex flex-col gap-1 text-text-secondary text-xs">
-            {mismatches.map((m) => (
-              <li key={`${m.aspect}:${m.field}`}>{mismatchText(m)}</li>
+            {staleRows.map((row) => (
+              <li key={row.key}>{row.text}</li>
             ))}
           </ul>
         </div>

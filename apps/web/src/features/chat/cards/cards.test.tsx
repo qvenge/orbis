@@ -1053,9 +1053,7 @@ test('proposal_card: у статуса stale расхождения показа
     proposalHandler({
       status: 'stale',
       decidedAt: '2026-08-19T04:00:00.000Z',
-      mismatches: [
-        { aspect: 'orbis/task', field: 'status', note: 'ожидали «inbox», сейчас «done»' },
-      ],
+      mismatches: [{ property: 'orbis/task_status', note: 'ожидали «inbox», сейчас «done»' }],
     }),
   );
   const card = await screen.findByTestId('proposal-card');
@@ -1068,24 +1066,15 @@ test('proposal_card: у статуса stale расхождения показа
   expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();
 });
 
-test('proposal_card: расхождение по ТЕЛУ (aspect "", field body) печатается словами, а не отметками updated_at — и из ответа approve, и из ноты прогона', async () => {
-  // Из ответа «Принять»: сервер отдаёт CAS тела — две отметки updated_at (STALE_VERSION →
-  // stale). Владельцу они не читаются; смысл — «запись менялась».
+test('proposal_card: расхождение по ТЕЛУ приезжает ФЛАГОМ bodyChanged (РП-10) и печатается словами — и из ответа approve, и из ноты прогона', async () => {
+  // Из ответа «Принять»: у тела нет пункта предусловия вовсе — сервер отдаёт голый флаг, а
+  // список расхождений по свойствам ПУСТ. Место, забывшее развернуть флаг, показало бы
+  // владельцу «Устарело» без единой причины.
   const fromDecide = renderWithProviders(
     <div>{renderCards(msg([PROPOSAL_CARD]))}</div>,
     (path, input) => {
       if (path === 'routine.decideProposal')
-        return {
-          status: 'stale',
-          mismatches: [
-            {
-              aspect: '',
-              field: 'body',
-              expected: ['2026-08-18T05:00:00.000Z'],
-              actual: '2026-08-18T06:00:00.000Z',
-            },
-          ],
-        };
+        return { status: 'stale', mismatches: [], bodyChanged: true };
       return proposalHandler()(path, input);
     },
   );
@@ -1102,9 +1091,7 @@ test('proposal_card: расхождение по ТЕЛУ (aspect "", field body
     proposalHandler({
       status: 'stale',
       decidedAt: '2026-08-19T04:00:00.000Z',
-      mismatches: [
-        { aspect: '', field: 'body', note: 'тело изменено после составления предложения' },
-      ],
+      mismatches: [{ property: 'orbis/body', note: 'тело изменено после составления предложения' }],
     }),
   );
   card = await screen.findByTestId('proposal-card');
@@ -1523,9 +1510,8 @@ test('deferred_action_card: строки «было → станет» с рус
       fate = { fate: 'rejected', reason: 'stale' };
       return {
         status: 'stale',
-        mismatches: [
-          { aspect: 'orbis/entity', field: 'archived', expected: [false], actual: true },
-        ],
+        mismatches: [{ property: 'orbis/archived', expected: [false], actual: true }],
+        bodyChanged: false,
       };
     }
     return {};
@@ -1550,9 +1536,10 @@ test('deferred_action_card: строки «было → станет» с рус
   );
   // `stale` — ЗНАЧЕНИЕ ответа, а не сбой (Р-2): владельцу показывают, ЧЕМ разошлось
   const stale = await within(card).findByTestId('deferred-stale');
-  // Псевдо-аспект колонки читается по-русски, а не машинным id (Р0-7)
-  expect(stale).toHaveTextContent('Запись · архив: ожидали false, сейчас true');
-  expect(stale).not.toHaveTextContent('orbis/entity');
+  // Core-свойство колонки читается по-русски, а не машинным id (§А1-3): носителя-аспекта у
+  // него нет, и выдумывать его подписи больше нечем — псевдо-аспект снят Задачей 5.
+  expect(stale).toHaveTextContent('архив: ожидали false, сейчас true');
+  expect(stale).not.toHaveTextContent('orbis/archived');
   // Судьба приехала с сервера: карточка свернулась, кнопок нет…
   expect(await within(card).findByText(/— устарело/)).toBeInTheDocument();
   expect(within(card).queryByRole('button', { name: 'Принять' })).toBeNull();

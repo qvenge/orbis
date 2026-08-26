@@ -144,8 +144,17 @@ function legacyFieldOfProperty(
  * `UNKNOWN_PROPERTY` от валидатора — единственного места, где отказ по свойству называется.
  * Своего отказа здесь нет намеренно: два разных кода на одну опечатку читались бы как два
  * разных правила.
+ *
+ * Экспортирована для снятия предусловий предложения и отложенной единицы (§А7-3,
+ * `routines/propose.ts`): их адрес — id свойства, и второго резолва «поле старой карты →
+ * свойство» в сервере быть не должно — разъехавшись, он дал бы предусловие не по тому
+ * свойству, которое правит патч.
  */
-function propertyOfLegacyField(reg: RegistrySnapshot, aspectId: string, field: string): string {
+export function propertyOfLegacyField(
+  reg: RegistrySnapshot,
+  aspectId: string,
+  field: string,
+): string {
   for (const ref of reg.aspects.get(aspectId)?.properties ?? []) {
     if (legacyFieldOfProperty(reg, aspectId, ref.propertyId) === field) return ref.propertyId;
   }

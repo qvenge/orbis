@@ -16,7 +16,7 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { DeferredActionCard } from '../chat/cards/DeferredActionCard';
-import { mismatchText } from '../chat/cards/proposal-text';
+import { divergenceRows } from '../chat/cards/proposal-text';
 import { QuestionCard } from '../chat/cards/QuestionCard';
 import {
   actionFateNote,
@@ -223,7 +223,13 @@ function RunBatch({
       const unit = list.find((u) => u.pendingId === i.pendingId);
       // Единицы не нашлось — печатаем адрес: пропустить строку значило бы скрыть от владельца
       // то, что часть пачки не применилась.
-      return { ...i, text: unit === undefined ? i.pendingId : unitText(unit) };
+      return {
+        ...i,
+        text: unit === undefined ? i.pendingId : unitText(unit),
+        // Тело приезжает флагом (РП-10) — разворачиваем той же функцией, что и все прочие
+        // места показа: иначе «устарело по телу» стояло бы здесь с пустым списком причин.
+        rows: divergenceRows(i),
+      };
     });
   const failure = decideAll.isError
     ? decideAll.error.message
@@ -291,8 +297,8 @@ function RunBatch({
                     {item.text} — устарело: состояние изменилось.
                   </p>
                   <ul className="flex flex-col gap-1 text-text-secondary text-xs">
-                    {item.mismatches.map((m) => (
-                      <li key={`${m.aspect}:${m.field}`}>{mismatchText(m)}</li>
+                    {item.rows.map((row) => (
+                      <li key={row.key}>{row.text}</li>
                     ))}
                   </ul>
                 </div>

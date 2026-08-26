@@ -16,12 +16,6 @@ export type RunUnitView = RouterOutputs['routine']['runUnits'][number];
 export type UnitFate = RunUnitView['fate'];
 /** Почему отказано; поле есть только у `fate:'rejected'`. */
 export type UnitRejectReason = NonNullable<RunUnitView['reason']>;
-/** Сырое расхождение предусловия — форма ответа `decideDeferred` (не note-форма аспекта). */
-export type UnitMismatch = Extract<
-  RouterOutputs['routine']['decideDeferred'],
-  { status: 'stale' }
->['mismatches'][number];
-
 /**
  * Судьба ОТКЛОНЁННОГО действия словами — по ПАРЕ `fate + reason`, а не по одному полю:
  * протухшее и снятое действие сервер записывает тем же `rejected` (контракт `RunUnit`), и без

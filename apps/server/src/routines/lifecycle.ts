@@ -27,12 +27,13 @@
 // его снимает «отмени последнее» (приёмка 3) и откат прогона (приёмка 11, rollback.ts).
 import {
   type AgentRunAspect,
+  BODY_NOTE_PROPERTY,
   entityThreadId,
   isManualBucket,
-  legacyFieldToProperty,
   manualBucket,
   newId,
   type PreconditionMismatch,
+  type ProposalDivergence,
   type ProposalStatus,
   pendingMessageId,
   routineRunBatchId,
@@ -54,6 +55,7 @@ import {
 import { ExecError, type ExecErrorCode, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { propertyOfLegacyField } from '../executor/legacy-form';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
 import type { LLMProvider } from '../llm/types';
 import {
@@ -71,6 +73,7 @@ import {
   stalePendingQuestion,
 } from '../policy/pending';
 import { wallClockIn } from '../recurring/materialize';
+import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import {
   CONSECUTIVE_FAILURES_TO_PAUSE,
   CORE_FIELD_LABELS,
@@ -365,7 +368,7 @@ export async function closeOpenOfRun(
             ...(closed.editedFrom !== undefined && { edited_from: closed.editedFrom }),
           },
         },
-        precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [run.proposal] }],
+        precondition: [{ property: 'orbis/run_proposal', in: [run.proposal] }],
       });
       if (patched.ok) out.proposal = true;
       else if (patched.error.code !== 'CONFLICT') {
@@ -382,7 +385,7 @@ export async function closeOpenOfRun(
       patch: { outcome: 'stale' },
       // Под замком исход мог уже стать `answered` (владелец ответил секунду назад) —
       // тогда снимать вопрос нельзя: ответ важнее нового прогона
-      precondition: [{ aspect: 'orbis/agent-run', field: 'outcome', in: ['checkpoint'] }],
+      precondition: [{ property: 'orbis/run_outcome', in: ['checkpoint'] }],
     });
     if (patched.ok) {
       out.question = true;
@@ -645,7 +648,7 @@ export async function pauseIfFailing(
     id: args.routineId,
     aspect: 'orbis/routine',
     patch: { stage: 'paused' },
-    precondition: [{ aspect: 'orbis/routine', field: 'stage', in: ['active'] }],
+    precondition: [{ property: 'orbis/routine_stage', in: ['active'] }],
   });
   if (!paused.ok) {
     // CONFLICT — рутина уже на паузе (её поставил конкурент либо прошлый сбой): штатный
@@ -1100,7 +1103,7 @@ export async function answerRoutineCheckpoint(
       reply: { text: args.answer, at: deps.clock().toISOString() },
       outcome: 'answered',
     },
-    precondition: [{ aspect: 'orbis/agent-run', field: 'outcome', in: ['checkpoint'] }],
+    precondition: [{ property: 'orbis/run_outcome', in: ['checkpoint'] }],
     actor: { kind: 'owner', source: 'ui', runId: args.runId },
   });
   if (!patched.ok) throw toExecError(patched.error);
@@ -1215,7 +1218,10 @@ export type DecideProposalResult =
     }
   | {
       status: 'stale';
+      /** Расхождения по СВОЙСТВАМ (§А7-3). Тела здесь нет — оно рядом флагом (РП-10). */
       mismatches: PreconditionMismatch[];
+      /** Тело записи изменилось после составления предложения. */
+      bodyChanged: boolean;
       /** Какое именно предложение устарело — карточке нужно узнать своё среди двух. */
       pendingId?: string;
     }
@@ -1280,7 +1286,7 @@ export async function proposalView(
       runArchived: row.archived,
       // Дифф тела — только у живого предложения (Ш1.1): статус берётся с прогона, он же
       // источник правды о судьбе
-      operations: await describeOperations(tx, stored.operations, {
+      operations: await describeOperations(tx, args.ownerId, stored.operations, {
         withDiff: proposal.status === 'pending',
       }),
     };
@@ -1839,17 +1845,17 @@ async function pointAtEdited(
     id: args.runId,
     aspect: 'orbis/agent-run',
     patch: { proposal: next },
-    precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [args.from] }],
+    precondition: [{ property: 'orbis/run_proposal', in: [args.from] }],
     // `system`, как у пометки судьбы (см. PatchActor): это бухгалтерия прогона, и «отмени
     // последнее» после «Принять» обязано снять план, а не переезд указателя
     actor: { kind: 'owner', source: 'system', runId: args.runId },
   });
   if (!patched.ok && patched.error.code !== 'CONFLICT') throw toExecError(patched.error);
-  // Перечитка в ЛЮБОМ исходе, а не только при проигранном CAS. Предусловие следующего шага
-  // сверяется JSON-ФОРМОЙ (executor: JSON.stringify обеих сторон), а jsonb нормализует
-  // порядок ключей объекта — собранный руками `next` не совпал бы с самим собой, лёгшим в
-  // БД, и решение по правленому упиралось бы в вечный CONFLICT. Отсюда правило: объект
-  // `proposal` для CAS всегда берётся ЧТЕНИЕМ, а не сборкой.
+  // Перечитка в ЛЮБОМ исходе, а не только при проигранном CAS. Порядок ключей объекта после
+  // jsonb уже не важен — сравнение по типу свойства канонизирует json (§А7-3,
+  // `comparePropertyValue`), — но `next` собран из ЧАСТИ полей, а прочитанное предложение
+  // несёт ещё и то, что дописал сервер (`decided_at`, `mismatches`). Отсюда правило
+  // остаётся прежним: объект `proposal` для CAS всегда берётся ЧТЕНИЕМ, а не сборкой.
   return readProposal(deps.db, args.ownerId, args.runId);
 }
 
@@ -1955,8 +1961,8 @@ async function approveProposal(
     return settled.written ? done : { status: 'already', proposalStatus: settled.proposalStatus };
   }
 
-  const mismatches = preconditionMismatches(applied.error) ?? bodyMismatch(applied.error);
-  if (mismatches === null) {
+  const divergence = divergenceOf(applied.error);
+  if (divergence === null) {
     // Не «устарело». Одна причина отказа всё же означает не сбой, а чужое решение: pending
     // отклонили между нашим чтением статуса и approve (гашение новым прогоном идёт именно
     // в таком порядке). Отличаем её по факту, а не по тексту: если предложение с тех пор
@@ -1989,12 +1995,12 @@ async function approveProposal(
     runId,
     proposal,
     status: 'stale',
-    mismatches: mismatchNotes(mismatches),
+    mismatches: mismatchNotes(divergence),
   });
   return settled.written
     ? // Адрес устаревшего — у прогона их бывает двое (исходное и правленое), и карточка
       // обязана узнать своё: иначе владелец не поймёт, чья работа потеряна
-      { status: 'stale', mismatches, pendingId: proposal.pending_id }
+      { status: 'stale', ...divergence, pendingId: proposal.pending_id }
     : { status: 'already', proposalStatus: settled.proposalStatus };
 }
 
@@ -2061,7 +2067,7 @@ async function settleProposal(
         }),
       },
     },
-    precondition: [{ aspect: 'orbis/agent-run', field: 'proposal', in: [args.proposal] }],
+    precondition: [{ property: 'orbis/run_proposal', in: [args.proposal] }],
     // `system`, а не `ui` (см. PatchActor): пометка судьбы — бухгалтерия прогона, и «отмени
     // последнее» после «Принять» обязано снять сам план, а не эту пометку
     actor: { kind: 'owner', source: 'system', runId: args.runId },
@@ -2098,7 +2104,7 @@ async function settleProposal(
 export type DecideDeferredResult =
   | { status: 'applied'; actionId: string }
   /** Предусловия единицы (ОЧ.13) разошлись с графом; карточка при этом уже погашена. */
-  | { status: 'stale'; mismatches: PreconditionMismatch[] }
+  | { status: 'stale'; mismatches: PreconditionMismatch[]; bodyChanged: boolean }
   | { status: 'rejected' }
   /** Судьба у единицы уже есть — своя (повтор кнопки) или чужая (гашение, второй экран). */
   | { status: 'already'; fate: RunUnit['fate'] };
@@ -2239,8 +2245,8 @@ async function approveUnit(
   const applied = await approvePending(deps.db, { ownerId, pendingId, clock: deps.clock });
   if (applied.ok) return { status: 'applied', actionId: applied.actionId };
 
-  const mismatches = preconditionMismatches(applied.error) ?? bodyMismatch(applied.error);
-  if (mismatches === null) {
+  const divergence = divergenceOf(applied.error);
+  if (divergence === null) {
     // Не «устарело». Часть таких отказов означает не сбой, а ЧУЖОЙ ХОД: единицу успели
     // отклонить (гашение новым прогоном, второй экран) между чтением и approve. Отличаем
     // по факту, а не по тексту: если у единицы с тех пор есть судьба, это `already`.
@@ -2267,7 +2273,7 @@ async function approveUnit(
     // Пока мы ревалидировали, единицу снял кто-то другой — его решение старше нашего
     return { status: 'already', fate: 'rejected' };
   }
-  return { status: 'stale', mismatches };
+  return { status: 'stale', ...divergence };
 }
 
 /** «Отклонить» единицу: append-отказ своим текстом, граф не тронут. */
@@ -2466,18 +2472,27 @@ function preconditionMismatches(error: StructuredError): PreconditionMismatch[] 
 }
 
 /**
- * Правка ТЕЛА в предложении разошлась с графом (финальное ревью V1, A-2/B2-1). У тела нет
- * предусловия по значению — его CAS это `expectedUpdatedAt` строки, снятый при составлении
- * (propose.ts buildUpdate), и executor отвечает на расхождение не CONFLICT/precondition_failed,
- * а STALE_VERSION. Для владельца это то же самое «устарело»: сущность менялась после того,
- * как рутина её видела (тело — или что угодно ещё: `updated_at` бампит любая правка).
- * Расхождение выражается той же формой, что у полей: `aspect: ''` (тело — вне аспектов),
- * `field: 'body'`, ожидали/сейчас — отметки `updated_at`. Не про STALE_VERSION — `null`.
+ * Расхождение предложения (или отложенной единицы) с графом ЦЕЛИКОМ — оба его вида одним
+ * ответом (§А7-3, РП-10). Не про расхождение вовсе — `null`.
+ *
+ * Видов ровно два, и они взаимоисключающие, потому что отказ у операции один:
+ *  - предусловия по СВОЙСТВАМ не выполнены — `CONFLICT/precondition_failed`, список
+ *    `mismatches`;
+ *  - разошлось ТЕЛО — `STALE_VERSION`. У тела нет предусловия по значению: его CAS это
+ *    `expectedUpdatedAt` строки, снятый при составлении (propose.ts buildUpdate). Прежде это
+ *    подделывалось пунктом `{aspect:'', field:'body'}` — вторым способом сказать «здесь не
+ *    свойство», у которого не было ни адреса в пространстве свойств, ни осмысленного
+ *    `expected` (ехали отметки `updated_at`, владельцу они не говорят ничего). Теперь это
+ *    ФЛАГ, а `mismatches` остаётся списком расхождений по свойствам.
+ *
+ * Для владельца оба вида — одно и то же «устарело»: запись менялась после того, как рутина
+ * её видела (тело — или что угодно ещё: `updated_at` бампит любая правка).
  */
-function bodyMismatch(error: StructuredError): PreconditionMismatch[] | null {
-  if (error.code !== 'STALE_VERSION') return null;
-  const details = error.details as { expected?: unknown; current?: unknown } | undefined;
-  return [{ aspect: '', field: 'body', expected: [details?.expected], actual: details?.current }];
+function divergenceOf(error: StructuredError): ProposalDivergence | null {
+  const mismatches = preconditionMismatches(error);
+  if (mismatches !== null) return { mismatches, bodyChanged: false };
+  if (error.code === 'STALE_VERSION') return { mismatches: [], bodyChanged: true };
+  return null;
 }
 
 /** Нота расхождения тела в аспекте прогона: отметки `updated_at` владельцу ничего не скажут. */
@@ -2486,24 +2501,27 @@ const BODY_MISMATCH_NOTE = 'тело изменено после составл�
 /**
  * Расхождения в форме, которая ложится в аспект прогона (V1.4): человекочитаемая строка
  * вместо сырых значений. Она переживает саму карточку и читается на экране прогона спустя
- * дни — «предусловие orbis/task.status не выполнено» там не сказало бы владельцу ничего.
+ * дни — «предусловие orbis/task_status не выполнено» там не сказало бы владельцу ничего.
+ *
+ * Единица расхождения — СВОЙСТВО (§А7-3/§А7-4), и реестр принимает у `orbis/run_proposal`
+ * только форму `{property, note}`. Расхождение ТЕЛА свойством не является — оно приходит
+ * флагом и записывается нотой под `BODY_NOTE_PROPERTY`: одна форма ноты на оба вида, без
+ * второго способа сказать «а это не свойство».
  */
-function mismatchNotes(mismatches: readonly PreconditionMismatch[]): ProposalMismatchNote[] {
-  return mismatches.slice(0, MAX_MISMATCH_NOTES).map((m) => ({
-    // Единица расхождения — СВОЙСТВО (§А7-3/§А7-4), и реестр принимает у
-    // `orbis/run_proposal` только эту форму. Само предусловие ещё говорит парой
-    // «аспект + поле» (его перевод — Задача 5), поэтому пара переводится здесь той же
-    // картой, что и всё остальное; поле без строки в §А8 (`body` псевдо-расхождения тела)
-    // получает `orbis/<поле>` — тот же заведомо-неизвестный id, что и в переходной карте.
-    property: legacyFieldToProperty(m.aspect, m.field) ?? `orbis/${m.field}`,
-    note:
-      m.aspect === '' && m.field === 'body'
-        ? BODY_MISMATCH_NOTE
-        : `ожидали ${expectedText(m.expected)}, сейчас ${actualText(m.actual)}`.slice(
-            0,
-            MISMATCH_NOTE_MAX,
-          ),
-  }));
+function mismatchNotes(divergence: ProposalDivergence): ProposalMismatchNote[] {
+  const notes: ProposalMismatchNote[] = divergence.bodyChanged
+    ? [{ property: BODY_NOTE_PROPERTY, note: BODY_MISMATCH_NOTE }]
+    : [];
+  for (const m of divergence.mismatches) {
+    notes.push({
+      property: m.property,
+      note: `ожидали ${expectedText(m.expected)}, сейчас ${actualText(m.actual)}`.slice(
+        0,
+        MISMATCH_NOTE_MAX,
+      ),
+    });
+  }
+  return notes.slice(0, MAX_MISMATCH_NOTES);
 }
 
 function expectedText(expected: unknown[] | 'absent'): string {
@@ -2603,10 +2621,16 @@ function referencedIds(operations: readonly StoredOperation[]): string[] {
  */
 async function describeOperations(
   tx: Tx,
+  ownerId: string,
   operations: readonly StoredOperation[],
   args: { withDiff: boolean },
 ): Promise<ProposalOperationView[]> {
   const titles = await titlesOf(tx, referencedIds(operations));
+  // Снимок реестра нужен, чтобы найти «было»: патч едет старой картой, предусловие снято по
+  // СВОЙСТВУ (§А7-3), и пара «аспект + поле» переводится в id тем же резолвом, что и в
+  // `buildUpdate`. Своей таблицы здесь нет намеренно: разъехавшись с той, эта показывала бы
+  // владельцу пустой столбец «было» на полях кастомных аспектов — молча.
+  const reg = await loadRegistry(tx, ownerId);
   const bodies = await proposalBodyRows(tx, operations, args);
   const rows: ProposalOperationView[] = [];
   for (const [index, op] of operations.entries()) {
@@ -2615,7 +2639,7 @@ async function describeOperations(
     } else if (op.tool === 'relation_create' || op.tool === 'relation_delete') {
       rows.push(relationRow(index, op, titles));
     } else if (op.tool === 'entity_update') {
-      rows.push(...updateRows(index, op.input, titles, bodies.get(index)));
+      rows.push(...updateRows(reg, index, op.input, titles, bodies.get(index)));
     } else {
       // Реестр предложения сужен (PROPOSAL_ALLOWED_TOOLS), сюда попасть нечему; но молча
       // проглотить незнакомую строку значило бы показать владельцу неполный список
@@ -2671,6 +2695,7 @@ function relationRow(
  * дифф (`body`), и он приезжает готовым — считает его proposal-diff.ts.
  */
 function updateRows(
+  reg: RegistrySnapshot,
   index: number,
   input: Record<string, unknown>,
   titles: ReadonlyMap<string, string>,
@@ -2685,7 +2710,7 @@ function updateRows(
   for (const [aspect, patch] of Object.entries(aspects ?? {})) {
     if (patch === null) continue; // снятие аспекта предложением запрещено (propose.ts)
     for (const [field, after] of Object.entries(patch)) {
-      const known = before.get(`${aspect} ${field}`);
+      const known = before.get(propertyOfLegacyField(reg, aspect, field));
       rows.push({
         index,
         tool: 'entity_update',
@@ -2734,7 +2759,7 @@ function updateRows(
 }
 
 /**
- * Значения снятых предусловий по ключу «аспект + поле». Обёртка `{ value }` не декоративна:
+ * Значения снятых предусловий по id СВОЙСТВА (§А7-3). Обёртка `{ value }` не декоративна:
  * само значение бывает `null` и `false`, и различать «предусловия нет» от «предусловие
  * есть, и оно про null» по самому значению было бы нельзя.
  */
@@ -2743,9 +2768,9 @@ function preconditionValues(precondition: unknown): Map<string, { value: unknown
   if (!Array.isArray(precondition)) return out;
   for (const item of precondition) {
     if (typeof item !== 'object' || item === null) continue;
-    const p = item as { aspect?: unknown; field?: unknown; in?: unknown; absent?: unknown };
-    if (typeof p.aspect !== 'string' || typeof p.field !== 'string') continue;
-    const key = `${p.aspect} ${p.field}`;
+    const p = item as { property?: unknown; in?: unknown; absent?: unknown };
+    if (typeof p.property !== 'string') continue;
+    const key = p.property;
     if (p.absent === true) {
       // Литерал `'absent'` — контракт ProposalOperationView.before: «поля не было»
       out.set(key, { value: 'absent' });

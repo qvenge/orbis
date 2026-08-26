@@ -1,8 +1,8 @@
 // apps/server/src/executor/props.ts
 // Внутренняя модель исполнителя после реформы (§А1-1): правда сущности — плоские `props`
-// по id свойства и СПИСОК `aspects[]`. Здесь живут четыре вещи, и все четыре чистые:
-// применение патча, множество затронутых свойств, резолв адреса свойства и гейт прав записи
-// (§А2-5/§Б6).
+// по id свойства и СПИСОК `aspects[]`. Здесь живут пять вещей, и все пять чистые:
+// применение патча, множество затронутых свойств, резолв адреса свойства, гейт прав записи
+// (§А2-5/§Б6) и равенство значений по типу свойства (§А7-3, предусловия CAS).
 //
 // Почему отдельный файл, а не функции в executor.ts: слияние состояния — то место, где
 // реформа меняет СМЫСЛ операции, и его обязано быть видно без базы. `mergeAspects`
@@ -13,7 +13,8 @@
 // валидатор отвечает на вопрос «годится ли значение», а флаги — на вопрос «вправе ли ЭТОТ
 // источник его записать». Смешать их значило бы поселить право в двух домах (см. докблок
 // `validateEntityProps`).
-import type { PropertyDefinition } from '@orbis/shared';
+import { canonicalJson, type PropertyDefinition, type PropertyType } from '@orbis/shared';
+import { decCmp } from '../budget/decimal';
 import type { RegistrySnapshot } from '../registry/load';
 import { ExecError } from './errors';
 import type { MutationMechanism } from './types';
@@ -256,4 +257,70 @@ export function writableOnly(
     const def = reg.properties.get(propertyId);
     return def === undefined || writeDenial(def, mechanism) === undefined;
   });
+}
+
+/**
+ * Одно скалярное значение по правилам ТИПА свойства (§А7-3). Внутренность
+ * `comparePropertyValue`; список (`cardinality: 'many'`) разбирает она сама.
+ */
+function compareScalar(type: PropertyType, a: unknown, b: unknown): boolean {
+  if (type.kind === 'decimal') {
+    // Деньги сравниваются ЧИСЛЕННО: `"10.0"` и `"10.00"` — одна и та же сумма, а
+    // `JSON.stringify` объявлял их разными и ронял предусловие на пустом месте (inv §6 п.7).
+    // Не-строка и мусор в строке — `false`, а не бросок: сравнение обязано быть тотальным,
+    // потому что оно стоит на пути записи, и отказ здесь означал бы 500 вместо CONFLICT.
+    if (typeof a !== 'string' || typeof b !== 'string') return false;
+    try {
+      return decCmp(a, b) === 0;
+    } catch {
+      // fail-closed: невыразимое число не совпадает ни с чем, включая само себя
+      return false;
+    }
+  }
+  if (type.kind === 'json') {
+    // Значение — объект или массив, и `===` сравнивал бы ССЫЛКИ. Канон, а не голый
+    // `JSON.stringify`: jsonb не хранит порядок ключей, и прочитанное из базы значение
+    // иначе не совпадало бы с собой же, собранным в JS (см. `orbis/run_proposal`).
+    return canonicalJson(a) === canonicalJson(b);
+  }
+  if (type.kind === 'date' || type.kind === 'timestamp') {
+    // Одна и та же отметка времени записывается разными строками (`…T10:00:00Z` и
+    // `…T10:00:00.000Z`) — разными их считает только текстовое сравнение. Нормализуем обе
+    // стороны; неразбираемая строка остаётся собой, и тогда работает строгое равенство.
+    return normalizeIso(a) === normalizeIso(b);
+  }
+  return a === b;
+}
+
+/** ISO-строка в канонической форме; всё, что не разобралось, возвращается как есть. */
+function normalizeIso(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const at = new Date(value);
+  return Number.isNaN(at.getTime()) ? value : at.toISOString();
+}
+
+/**
+ * Равенство значений свойства ПО ЕГО ТИПУ (§А7-3) — единственное правило сравнения в
+ * предусловиях CAS.
+ *
+ * До реформы сравнение шло по `JSON.stringify` обеих сторон, и это врало сразу в двух
+ * местах: сумма `"10.0"` не совпадала с той же суммой `"10.00"` (у денег форма записи не
+ * значение), а объект, прочитанный из jsonb, не совпадал с собой же, собранным в JS
+ * (PostgreSQL не хранит порядок ключей). Оба случая давали не отказ валидации, а
+ * ЛОЖНЫЙ CONFLICT — «кто-то опередил» там, где не опередил никто.
+ *
+ * Список (`cardinality: 'many'`) сравнивается ПОЭЛЕМЕНТНО и по порядку: у списка скаляров
+ * порядок — часть значения (`orbis/routine_days`, `orbis/allowed_tools`), и объявить
+ * перестановку тем же значением значило бы разрешить правку поверх чужой перестановки.
+ * Длина сверяется первой — иначе `['a']` совпадал бы с началом `['a','b']`.
+ *
+ * Тотальна по построению: любая пара значений даёт `true` либо `false`. Бросок отсюда стал
+ * бы 500 на пути записи там, где домен ждёт честный CONFLICT.
+ */
+export function comparePropertyValue(type: PropertyType, a: unknown, b: unknown): boolean {
+  const many = 'cardinality' in type && (type as { cardinality?: string }).cardinality === 'many';
+  if (!many) return compareScalar(type, a, b);
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  return a.every((item, index) => compareScalar(type, item, b[index]));
 }

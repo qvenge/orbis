@@ -134,8 +134,8 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
           // Вторая половина — не перестраховка: между выборкой и записью мог лечь
           // шаг, и тогда прогон живой, а не брошенный.
           precondition: [
-            { aspect: 'orbis/agent-run', field: 'outcome', in: ['running'] },
-            { aspect: 'orbis/agent-run', field: 'last_step_at', in: [run.run.last_step_at] },
+            { property: 'orbis/run_outcome', in: ['running'] },
+            { property: 'orbis/last_step_at', in: [run.run.last_step_at] },
           ],
           aspects: {
             'orbis/agent-run': {
@@ -167,7 +167,7 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
         tool: 'entity_update',
         input: {
           id: ticket.id,
-          precondition: [{ aspect: 'orbis/task', field: 'status', in: ['in_progress'] }],
+          precondition: [{ property: 'orbis/task_status', in: ['in_progress'] }],
           aspects: {
             'orbis/task': hasEffect
               ? // Эффект был — возврат в planned запрещён (С6): он стёр бы факт, что

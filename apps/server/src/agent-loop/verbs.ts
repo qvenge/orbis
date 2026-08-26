@@ -111,6 +111,18 @@ export function subjectField(s: RunSubject): 'grant_id' | 'routine_id' {
   return s.kind === 'grant' ? 'grant_id' : 'routine_id';
 }
 
+/**
+ * То же самое СВОЙСТВОМ (§А7-3) — адрес привязки к субъекту в предусловии CAS.
+ *
+ * Отдельная функция, а не перевод `subjectField` картой: у гранта и у рутины это два разных
+ * свойства словаря (`orbis/grant` — слитое, его носят и назначение, и прогон), и одной
+ * строкой имя поля в id не превращается. Ветка та же, что у `subjectField`, но список
+ * значений другой, поэтому разъехаться они не могут молча — обе перечисляют оба случая.
+ */
+export function subjectProperty(s: RunSubject): 'orbis/grant' | 'orbis/run_routine' {
+  return s.kind === 'grant' ? 'orbis/grant' : 'orbis/run_routine';
+}
+
 /** Значение этого поля: id гранта либо id рутины. */
 export function subjectId(s: RunSubject): string {
   return s.kind === 'grant' ? s.grant.id : s.routineId;
@@ -189,17 +201,22 @@ function replayMismatch(verb: string, batchId: string): ToolDispatchResult {
 }
 
 /**
- * Поле провалившегося предусловия из details CONFLICT'а. Executor кладёт туда ПЕРВЫЙ
- * провалившийся элемент (полный список — в `details.mismatches`): глаголу нужен ровно
+ * СВОЙСТВО провалившегося предусловия из details CONFLICT'а (§А7-3). Executor кладёт туда
+ * ПЕРВЫЙ провалившийся элемент (полный список — в `details.mismatches`): глаголу нужен ровно
  * один ответ — «прогон уже закрыт» это или что-то другое, — и первого пункта для него
  * достаточно, а разбор всех расхождений адресован владельцу, не агенту.
+ *
+ * Читается id, а не имя поля: по этому ответу расходится ретрай-лестница шага (проигранный
+ * счётчик — повторить, закрытый прогон — терминальный ответ), и старое имя рядом с новой
+ * формой пункта дало бы `undefined` — то есть молчаливое превращение конкурентного шага в
+ * отказ прогона.
  */
-function preconditionField(details: unknown): string | undefined {
+function preconditionProperty(details: unknown): string | undefined {
   if (typeof details !== 'object' || details === null) return undefined;
   const precondition = (details as { precondition?: unknown }).precondition;
   if (typeof precondition !== 'object' || precondition === null) return undefined;
-  const field = (precondition as { field?: unknown }).field;
-  return typeof field === 'string' ? field : undefined;
+  const property = (precondition as { property?: unknown }).property;
+  return typeof property === 'string' ? property : undefined;
 }
 
 /** Найденный прогон либо готовый структурный отказ — «или/или» без исключений. */
@@ -317,11 +334,17 @@ function savedRunMatches(
   return saved?.[subjectField(subject)] === subjectId(subject) && saved?.outcome === outcome;
 }
 
-/** Предусловия «прогон всё ещё мой и всё ещё идёт» — общие шагу, чекпойнту и итогу. */
-function runStillMine(subject: RunSubject): EntityUpdatePreconditionItem[] {
+/**
+ * Предусловия «прогон всё ещё мой и всё ещё идёт» — общие шагу, чекпойнту и итогу.
+ *
+ * Экспортирована ради golden-близнеца писателей (`executor/props.test.ts`): она —
+ * восемнадцатый писатель предусловий и единственный, который сам ничего не присваивает,
+ * поэтому сканом по исходникам не ловится.
+ */
+export function runStillMine(subject: RunSubject): EntityUpdatePreconditionItem[] {
   return [
-    { aspect: 'orbis/agent-run', field: 'outcome', in: ['running'] },
-    { aspect: 'orbis/agent-run', field: subjectField(subject), in: [subjectId(subject)] },
+    { property: 'orbis/run_outcome', in: ['running'] },
+    { property: subjectProperty(subject), in: [subjectId(subject)] },
   ];
 }
 
@@ -448,9 +471,9 @@ async function claimTask(
         // увидеть `planned`. Три условия, а не одно: отобрать чужой тикет так же
         // недопустимо, как перехватить уже начатый.
         precondition: [
-          { aspect: 'orbis/task', field: 'status', in: [...CLAIMABLE_STATUSES] },
-          { aspect: 'orbis/assignment', field: 'executor', in: ['agent'] },
-          { aspect: 'orbis/assignment', field: 'grant_id', in: [grant.id] },
+          { property: 'orbis/task_status', in: [...CLAIMABLE_STATUSES] },
+          { property: 'orbis/executor', in: ['agent'] },
+          { property: 'orbis/grant', in: [grant.id] },
         ],
         aspects: { 'orbis/task': { status: 'in_progress' } },
       },
@@ -645,7 +668,7 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
               precondition: [
                 ...runStillMine(ctx.subject),
                 // CAS: конкурентный шаг успел лечь → CONFLICT → перечитать и повторить
-                { aspect: 'orbis/agent-run', field: 'step_count', in: [n] },
+                { property: 'orbis/step_count', in: [n] },
               ],
               aspects: {
                 'orbis/agent-run': {
@@ -680,14 +703,14 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
       return ok(result);
     }
     if (r.error.code === 'CONFLICT') {
-      const field = preconditionField(r.error.details);
-      if (field === 'step_count') {
+      const property = preconditionProperty(r.error.details);
+      if (property === 'orbis/step_count') {
         lastConflict = { status: 'error', error: r.error };
         continue;
       }
       // Свежий id на уже закрытом прогоне: предпроверка его пропустила ради replay,
       // отказ пришёл предусловием — но ответ агенту обязан быть тем же (инвариант 5)
-      if (field === 'outcome') {
+      if (property === 'orbis/run_outcome') {
         return terminalFromPrecondition(r.error.details, run, input.run_id, tail);
       }
     }
@@ -846,9 +869,9 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
         // `may_close` (С8), и без этой сверки право закрытия бралось бы из ЧУЖОГО
         // назначения. Пара условий, как в захвате: «мой» и «свободен» — разные вопросы.
         precondition: [
-          { aspect: 'orbis/task', field: 'status', in: ['in_progress'] },
-          { aspect: 'orbis/assignment', field: 'executor', in: ['agent'] },
-          { aspect: 'orbis/assignment', field: 'grant_id', in: [ctx.subject.grant.id] },
+          { property: 'orbis/task_status', in: ['in_progress'] },
+          { property: 'orbis/executor', in: ['agent'] },
+          { property: 'orbis/grant', in: [ctx.subject.grant.id] },
           ...(ticketUpdate.precondition ?? []),
         ],
         aspects: { 'orbis/task': ticketUpdate.aspects },
@@ -870,9 +893,9 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   );
   if (!r.ok) {
     if (r.error.code === 'CONFLICT') {
-      const field = preconditionField(r.error.details);
+      const property = preconditionProperty(r.error.details);
       // Свежий id на уже закрытом прогоне — тот же ответ, что дала бы предпроверка
-      if (field === 'outcome') {
+      if (property === 'orbis/run_outcome') {
         return terminalFromPrecondition(r.error.details, run.run, args.run_id, args.terminalTail);
       }
       // Одно сообщение на остальные предусловия — как в захвате: агент не исправит ни
@@ -991,7 +1014,7 @@ async function finish(ctx: VerbCtx, input: FinishInput): Promise<ToolDispatchRes
         ? {
             // Право сверяется ещё раз под замком: владелец мог снять may_close между
             // нашим чтением и записью, и тогда `done` стал бы решением агента, а не его.
-            precondition: [{ aspect: 'orbis/assignment', field: 'may_close', in: [true] }],
+            precondition: [{ property: 'orbis/may_close', in: [true] }],
             // Уходя из waiting — снимаем waiting_for (конвенция среза, как в подметании):
             // вопрос прошлого чекпойнта рядом с `done` читался бы как незакрытый.
             aspects: { status: 'done', waiting_for: null },

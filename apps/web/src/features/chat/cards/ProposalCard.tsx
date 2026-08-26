@@ -31,15 +31,15 @@ import { chatThreadKey } from '../useChatThread';
 import { BODY_DIFF_SKIP_NOTES, BodyDiffUnits, type DiffUnit } from './BodyDiff';
 import {
   beforeText,
+  divergenceRows,
   fmt,
-  type Mismatch,
-  mismatchText,
   noteKey,
   noteText,
   OWNER_EDIT_NOTE,
   REPLACED_NOTES,
   type ReplacedReason,
   rowLabel,
+  type StaleRow,
 } from './proposal-text';
 
 type ProposalView = NonNullable<RouterOutputs['routine']['proposal']>;
@@ -180,7 +180,7 @@ export function ProposalCard({
    * несёт значения (`ожидали inbox, сейчас done`), а аспект прогона — уже готовую ноту.
    * Первая точнее, вторая переживает перезагрузку; рисуем ту, что есть (см. `staleRows`).
    */
-  const [mismatches, setMismatches] = useState<Mismatch[] | null>(null);
+  const [decidedRows, setDecidedRows] = useState<StaleRow[] | null>(null);
   /**
    * Ответ `replaced` последнего нажатия: решать было нечего — прогон живёт ДРУГИМ
    * предложением. Держим состоянием ровно затем, зачем и расхождения: перечитанный `view`
@@ -202,7 +202,7 @@ export function ProposalCard({
       // Принятое предложение правит и деньги (перенос категории, сумма, статус траты) —
       // бюджетные агрегаты живут своим ключом и в invalidateGraph не входят (ConfirmationCard).
       if (result.status === 'applied') void utils.budget.invalidate();
-      setMismatches(result.status === 'stale' ? result.mismatches : null);
+      setDecidedRows(result.status === 'stale' ? divergenceRows(result) : null);
       setReplacedReason(result.status === 'replaced' ? result.reason : null);
       /**
        * Лента треда живёт СВОИМ ключом react-query, и `invalidateGraph` его не касается
@@ -225,11 +225,10 @@ export function ProposalCard({
 
   const view = proposal.data;
   const staleRows =
-    mismatches !== null
-      ? mismatches.map((m) => ({ key: `${m.aspect}:${m.field}`, text: mismatchText(m) }))
-      : view?.status === 'stale' && view.mismatches !== undefined
-        ? view.mismatches.map((m) => ({ key: noteKey(m), text: noteText(m) }))
-        : null;
+    decidedRows ??
+    (view?.status === 'stale' && view.mismatches !== undefined
+      ? view.mismatches.map((m) => ({ key: noteKey(m), text: noteText(m) }))
+      : null);
 
   /**
    * Кнопки заблокированы и на время ПЕРЕЧИТЫВАНИЯ статуса, а не только полёта мутации: между

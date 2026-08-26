@@ -29,9 +29,12 @@ function updateOp(): Operation {
       body: '# Было',
       expectedUpdatedAt: UPDATED_AT,
       aspects: { 'orbis/task': { status: 'in_progress', priority: 2 } },
+      // Форма §А7-3: адрес пункта — id свойства. Литеральный якорь, а не производная от
+      // кода: инвариант «правка владельца не меняет предусловие» сверяет два КАНОНА одной и
+      // той же формы, и на выведенной фикстуре он выродился бы в тавтологию.
       precondition: [
-        { aspect: 'orbis/task', field: 'status', in: ['planned'] },
-        { aspect: 'orbis/task', field: 'priority', absent: true },
+        { property: 'orbis/task_status', in: ['planned'] },
+        { property: 'orbis/priority', absent: true },
       ],
     },
   };

@@ -765,8 +765,11 @@ describe('routine.proposal / decideProposal', () => {
     expect(decided.status).toBe('stale');
     if (decided.status !== 'stale') throw new Error('не stale');
     expect(decided.mismatches).toEqual([
-      { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'done' },
+      { property: 'orbis/task_status', expected: ['inbox'], actual: 'done' },
     ]);
+    // Тело не трогали — флаг честно false (РП-10): «устарело» бывает двух видов, и экран
+    // обязан различать их, а не печатать оба текста разом.
+    expect(decided.bodyChanged).toBe(false);
 
     // Всё или ничего: правка предложения не применена
     expect(await taskStatus(taskId)).toBe('done');
@@ -774,8 +777,7 @@ describe('routine.proposal / decideProposal', () => {
 
     const aspect = await runAspect(runId);
     expect(aspect.proposal?.status).toBe('stale');
-    // Единица расхождения на прогоне — СВОЙСТВО (§А7-4), а не пара «аспект + поле»:
-    // предусловие ещё говорит парой (её перевод — Задача 5), нота уже свойством.
+    // Единица расхождения на прогоне — СВОЙСТВО (§А7-4), как и в самом предусловии (§А7-3).
     expect(aspect.proposal?.mismatches?.[0]).toMatchObject({ property: 'orbis/task_status' });
     expect(aspect.proposal?.mismatches?.[0]?.note).toContain('ожидали');
     expect(aspect.proposal?.mismatches?.[0]?.note).toContain('done');
@@ -819,9 +821,11 @@ describe('routine.proposal / decideProposal', () => {
     });
     expect(decided.status).toBe('stale');
     if (decided.status !== 'stale') throw new Error('не stale');
-    expect(decided.mismatches).toHaveLength(1);
-    expect(decided.mismatches[0]).toMatchObject({ aspect: '', field: 'body' });
-    expect(typeof decided.mismatches[0]?.actual).toBe('string');
+    // РП-10: тело — ФЛАГ, а не пункт списка. Пунктов по свойствам здесь нет ни одного:
+    // расхождение тела свойством не является, и подделывать его пунктом с пустым именем
+    // аспекта больше нечем — форма `PreconditionMismatch` такого поля не имеет вовсе.
+    expect(decided.bodyChanged).toBe(true);
+    expect(decided.mismatches).toEqual([]);
 
     // Ничего не применено, карточка погашена причиной stale, нота — словами
     const body = await withIdentity(db, owner, (tx) =>
@@ -1210,8 +1214,9 @@ describe('routine.proposal / decideProposal', () => {
     expect(decided.status).toBe('stale');
     if (decided.status !== 'stale') throw new Error('не stale');
     expect(decided.mismatches).toEqual([
-      { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'done' },
+      { property: 'orbis/task_status', expected: ['inbox'], actual: 'done' },
     ]);
+    expect(decided.bodyChanged).toBe(false);
 
     const aspect = await runAspect(runId);
     const editedId = aspect.proposal?.pending_id;
@@ -2260,8 +2265,9 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
     expect(stale.status).toBe('stale');
     if (stale.status !== 'stale') throw new Error('не stale');
     expect(stale.mismatches).toEqual([
-      { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'in_progress' },
+      { property: 'orbis/task_status', expected: ['inbox'], actual: 'in_progress' },
     ]);
+    expect(stale.bodyChanged).toBe(false);
     expect(await isArchived(targetId)).toBe(false);
     // Протухшая единица закрыта: предусловия не переснимаются (§9.4), и кнопка «Принять»
     // на ней не заработает уже никогда — оставить её открытой значило бы обещать невозможное
@@ -2305,7 +2311,7 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
     expect(second.status).toBe('stale');
     if (second.status !== 'stale') throw new Error('вторая единица обязана протухнуть');
     expect(second.mismatches).toEqual([
-      { aspect: 'orbis/entity', field: 'archived', expected: [false], actual: true },
+      { property: 'orbis/archived', expected: [false], actual: true },
     ]);
   });
 
@@ -2646,7 +2652,7 @@ describe('routine.decideAll', () => {
     const middle = summary[1];
     if (middle?.status !== 'stale') throw new Error('средняя единица обязана протухнуть');
     expect(middle.mismatches).toEqual([
-      { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'in_progress' },
+      { property: 'orbis/task_status', expected: ['inbox'], actual: 'in_progress' },
     ]);
     // Протухшая соседей не блокирует: обе применены, её цель не тронута
     expect(await isArchived(first.targetId)).toBe(true);

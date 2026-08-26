@@ -54,7 +54,7 @@ import {
 } from '../entitlements';
 import { readEntity } from '../entity-read';
 import { ExecError } from '../errors';
-import { ENTITY_PSEUDO_ASPECT, execute } from '../executor/executor';
+import { execute } from '../executor/executor';
 import { ROUTINE_UNTOUCHABLE_OBJECTS, routineUntouchableError } from '../executor/invariants';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, JournalSink, JournalWrite, WireEntity } from '../executor/types';
@@ -1040,7 +1040,7 @@ async function deferRoutineUnit(
     }
 
     // 3. Предусловия и «было» снимаются ЗДЕСЬ и больше не переснимаются (ОЧ.13, §9.4)
-    const snapshot = await snapshotDeferredUnit(tx, tool, payload);
+    const snapshot = await snapshotDeferredUnit(tx, ctx.actorUserId, tool, payload);
     if ('error' in snapshot) return snapshot.error;
 
     const pending = await createPending(tx, {
@@ -1083,7 +1083,7 @@ async function deferRoutineUnit(
  *
  * АРХИВАЦИЮ `buildUpdate` НЕ ПОКРЫВАЕТ — он ходит только по `input.aspects`, а `archived`
  * это КОЛОНКА, и для чистой архивации список предусловий у него пуст. Предусловие по
- * колонке (зарезервированный псевдо-аспект `orbis/entity`, см. `ENTITY_PSEUDO_ASPECT`)
+ * core-свойству `orbis/archived` (§А1-3: хранение колонкой, адрес — обычный id свойства)
  * добавляет эта функция, а не `buildUpdate`: предложение обязано остаться байт-в-байт
  * прежним. `in:[false]`, а НЕ `absent:true` — колонка NOT NULL DEFAULT false всегда несёт
  * значение, и `absent` не был бы выполним никогда.
@@ -1101,6 +1101,7 @@ async function deferRoutineUnit(
  */
 async function snapshotDeferredUnit(
   tx: Tx,
+  ownerId: string,
   tool: string,
   payload: unknown,
 ): Promise<
@@ -1115,7 +1116,7 @@ async function snapshotDeferredUnit(
       ),
     };
   }
-  const targets = await loadTargets(tx, [{ tool, input: payload }]);
+  const targets = await loadTargets(tx, ownerId, [{ tool, input: payload }]);
   if ('error' in targets) return { error: targets.error };
   const id = String(payload.id);
   const current = targets.rows.get(id);
@@ -1123,7 +1124,7 @@ async function snapshotDeferredUnit(
     // Недостижимо: отсутствующую цель `loadTargets` уже вернул бы как NOT_FOUND
     return { error: errorResult('NOT_FOUND', 'сущность не найдена', { id }) };
   }
-  const built = buildUpdate(0, payload, current);
+  const built = buildUpdate(targets.reg, 0, payload, current);
   if ('error' in built) return { error: built.error };
   const input: Record<string, unknown> = { ...built.op.input };
 
@@ -1169,10 +1170,7 @@ async function snapshotDeferredUnit(
       // `buildUpdate` кладёт в `precondition` ровно эту форму и валидирует собранную
       // операцию `entityUpdateExecInput` — читаем её обратно, чтобы дописать пункт колонки
       const fromAspects = built.op.input.precondition as EntityUpdatePreconditionItem[] | undefined;
-      input.precondition = [
-        ...(fromAspects ?? []),
-        { aspect: ENTITY_PSEUDO_ASPECT, field: 'archived', in: [false] },
-      ];
+      input.precondition = [...(fromAspects ?? []), { property: 'orbis/archived', in: [false] }];
       rows.push({ field, before: 'false', after: 'true' });
       continue;
     }

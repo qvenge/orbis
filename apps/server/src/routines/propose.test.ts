@@ -7,7 +7,7 @@
 // закрыть тестом путь, которым модель не ходит.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, newId, type ProposeResult, pendingMessageId } from '@orbis/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { rollbackRun } from '../agent-loop/rollback';
 import { closeRoutineRun, runAgentVerb } from '../agent-loop/verbs';
@@ -153,15 +153,16 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     expect(metadata.pending.actor_kind).toBe('ai');
     expect(metadata.pending.run_id).toBe(runId);
 
-    // Автоснятые предусловия (V1.7): текущее значение — в `in`, отсутствующее поле — `absent`
+    // Автоснятые предусловия (V1.7, §А7-3): адрес — id СВОЙСТВА, текущее значение — в `in`,
+    // отсутствующее — `absent`
     const payload = metadata.pending.input as {
       operations: Array<{ tool: string; input: Record<string, unknown> }>;
     };
     expect(payload.operations).toHaveLength(1);
     expect(payload.operations[0]?.tool).toBe('entity_update');
     expect(payload.operations[0]?.input.precondition).toEqual([
-      { aspect: 'orbis/task', field: 'status', in: ['inbox'] },
-      { aspect: 'orbis/task', field: 'due_date', absent: true },
+      { property: 'orbis/task_status', in: ['inbox'] },
+      { property: 'orbis/due_date', absent: true },
     ]);
 
     // Карточка предложения (V1.6) — своя, не confirmation_card
@@ -272,6 +273,76 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     expect((await aspectsOf(owner, otherId))['orbis/task']).toEqual({ status: 'inbox' });
   });
 
+  test('предусловие снимается по `props`, а не по проекции: форма значения у них РАЗНАЯ (orbis/progress_source)', async () => {
+    // Ловушка перевода. Патч предложения приезжает старой картой, и снять с него текущее
+    // значение можно двумя способами: из `aspects_legacy` (то, что видит рутина) или из
+    // `props` (то, с чем сверяется executor). У большинства свойств это одно и то же —
+    // и именно поэтому подмена прошла бы незаметно. У `orbis/progress_source` формы
+    // РАЗНЫЕ: в `props` запрос лежит Q-AST-обёрткой `{text}` (§А5-2), а проекция
+    // разворачивает её обратно в строку. Сняв предусловие с проекции, предложение
+    // получило бы вечный CONFLICT на «Принять» — у владельца, ни в чём не виноватого.
+    const { runId, ctx } = await liveRoutine();
+    const goal = await seedEntity(owner, {
+      title: 'Пробежать 100 км',
+      tags: [],
+      aspects: {
+        'orbis/goal': {
+          target_value: '100.00',
+          unit: 'км',
+          progress_source: { query: 'аспект=финансы', aggregate: 'sum', field: 'amount' },
+        },
+      },
+    });
+
+    // Две формы одного значения — если они совпадут, тест перестанет что-либо ловить.
+    const row = await withIdentity(db, owner, (tx) =>
+      tx.execute(sql`SELECT props, aspects_legacy FROM entities WHERE id = ${goal.id}`),
+    );
+    const stored = (row as unknown as Array<Record<string, unknown>>)[0];
+    const inProps = (stored?.props as Record<string, unknown>)['orbis/progress_source'];
+    const inLegacy = (stored?.aspects_legacy as Record<string, Record<string, unknown>>)[
+      'orbis/goal'
+    ]?.progress_source;
+    expect(inProps).not.toEqual(inLegacy);
+
+    const proposed = await dispatchTool(ctx, 'orbis_propose', {
+      run_id: runId,
+      explanation: EXPLANATION,
+      operations: [
+        {
+          tool: 'entity_update',
+          input: {
+            id: goal.id,
+            aspects: {
+              'orbis/goal': {
+                progress_source: { query: 'аспект=финансы', aggregate: 'latest', field: 'amount' },
+              },
+            },
+          },
+        },
+      ],
+    });
+    expect(proposed.status).toBe('ok');
+    if (proposed.status !== 'ok') return;
+    const pendingId = (proposed.result as ProposeResult).pending_id;
+
+    // Снятое предусловие — ровно то значение, что лежит в `props`.
+    const metadata = (await messageById(pendingId))?.metadata as {
+      pending: { input: { operations: Array<{ input: Record<string, unknown> }> } };
+    };
+    expect(metadata.pending.input.operations[0]?.input.precondition).toEqual([
+      { property: 'orbis/progress_source', in: [inProps] },
+    ]);
+
+    // И «Принять» проходит: граф с тех пор не менялся.
+    const applied = await approvePending(db, { ownerId: owner, pendingId });
+    expect(applied.ok).toBe(true);
+    const after = await aspectsOf(owner, goal.id);
+    expect((after['orbis/goal'] as Record<string, unknown>).progress_source).toMatchObject({
+      aggregate: 'latest',
+    });
+  });
+
   test('ручная правка до approve → CONFLICT precondition_failed с mismatches, ничего не применено (инвариант 8) — и для поля, которого не было', async () => {
     // Сценарий 1: владелец сам сдвинул статус
     const first = await liveRoutine();
@@ -314,7 +385,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     const details = denied.error.details as { reason: string; mismatches: unknown[] };
     expect(details.reason).toBe('precondition_failed');
     expect(details.mismatches).toEqual([
-      { aspect: 'orbis/task', field: 'status', expected: ['inbox'], actual: 'in_progress' },
+      { property: 'orbis/task_status', expected: ['inbox'], actual: 'in_progress' },
     ]);
     // «Всё или ничего»: соседняя операция того же предложения тоже не применилась
     expect((await aspectsOf(owner, untouchedId))['orbis/task']?.status).toBe('inbox');
@@ -355,7 +426,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     const details2 = denied2.error.details as { reason: string; mismatches: unknown[] };
     expect(details2.reason).toBe('precondition_failed');
     expect(details2.mismatches).toEqual([
-      { aspect: 'orbis/task', field: 'due_date', expected: 'absent', actual: '2026-09-01' },
+      { property: 'orbis/due_date', expected: 'absent', actual: '2026-09-01' },
     ]);
     expect((await aspectsOf(owner, dueId))['orbis/task']?.due_date).toBe('2026-09-01');
   });
@@ -399,7 +470,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
             input: {
               id: taskId,
               aspects: { 'orbis/task': { status: 'planned' } },
-              precondition: [{ aspect: 'orbis/task', field: 'status', in: ['done'] }],
+              precondition: [{ property: 'orbis/task_status', in: ['done'] }],
             },
           },
         ],

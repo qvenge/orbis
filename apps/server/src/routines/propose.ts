@@ -38,8 +38,10 @@ import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
+import { propertyOfLegacyField } from '../executor/legacy-form';
 import type { AspectsMap } from '../executor/normalize';
 import { createPending, rejectedReason, rejectPending } from '../policy/pending';
+import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import type { ToolCallCtx, ToolDispatchResult } from '../tools/dispatch';
 import { editsNoun } from './constants';
 import { countProposalRows } from './edits';
@@ -179,7 +181,7 @@ export async function runPropose(
     const state = await checkRun(tx, routine.id, routine.runId, pendingId);
     if (state !== 'running') return state;
 
-    const targets = await loadTargets(tx, parsed);
+    const targets = await loadTargets(tx, ctx.actorUserId, parsed);
     if ('error' in targets) return targets;
 
     const operations: ExecOperation[] = [];
@@ -203,7 +205,7 @@ export async function runPropose(
       }
       const clash = collides(seen, index, op.input);
       if (clash !== null) return { error: clash };
-      const built = buildUpdate(index, op.input, current);
+      const built = buildUpdate(targets.reg, index, op.input, current);
       if ('error' in built) return built;
       operations.push(built.op);
     }
@@ -462,6 +464,8 @@ function collides(
 
 interface TargetRow {
   aspectsLegacy: AspectsMap;
+  /** Новая правда значений (§А1-1) — по ней снимаются предусловия: их единица теперь свойство. */
+  props: Record<string, unknown>;
   updatedAt: Date;
 }
 
@@ -480,8 +484,15 @@ interface TargetRow {
  */
 export async function loadTargets(
   tx: Tx,
+  ownerId: string,
   parsed: Array<{ tool: string; input: Record<string, unknown> }>,
-): Promise<{ rows: Map<string, TargetRow> } | { error: ToolDispatchResult }> {
+): Promise<
+  { reg: RegistrySnapshot; rows: Map<string, TargetRow> } | { error: ToolDispatchResult }
+> {
+  // Снимок реестра берётся ЗДЕСЬ, вместе со строками, и уезжает вызывающему: предусловия
+  // снимаются по нему же (`buildUpdate`), и второй снимок, взятый отдельно, мог бы
+  // разойтись с первым на правке реестра между двумя чтениями.
+  const reg = await loadRegistry(tx, ownerId);
   const wanted: Array<{ index: number; tool: string; id: string }> = [];
   for (const [index, op] of parsed.entries()) {
     if (op.tool === 'entity_update') {
@@ -492,12 +503,13 @@ export async function loadTargets(
     }
   }
   const rows = new Map<string, TargetRow>();
-  if (wanted.length === 0) return { rows };
+  if (wanted.length === 0) return { reg, rows };
 
   const found = await tx
     .select({
       id: entities.id,
       aspectsLegacy: entities.aspectsLegacy,
+      props: entities.props,
       updatedAt: entities.updatedAt,
     })
     .from(entities)
@@ -508,7 +520,11 @@ export async function loadTargets(
       ),
     );
   for (const row of found) {
-    rows.set(row.id, { aspectsLegacy: row.aspectsLegacy as AspectsMap, updatedAt: row.updatedAt });
+    rows.set(row.id, {
+      aspectsLegacy: row.aspectsLegacy as AspectsMap,
+      props: row.props as Record<string, unknown>,
+      updatedAt: row.updatedAt,
+    });
   }
 
   for (const w of wanted) {
@@ -532,27 +548,35 @@ export async function loadTargets(
       }
     }
   }
-  return { rows };
+  return { reg, rows };
 }
 
 /**
  * Правка в exec-форме: тот же вход плюс СНЯТОЕ предусловие (V1.7).
  *
- * По каждому полю патча: поля не было — `absent: true`, поле есть — `in: [текущее]`. Оба
- * пункта об одном: «применимо, пока владелец не тронул это сам». Форма `absent` не сводится
- * к `in`: отсутствие поля не совпадает ни с одним значением (докблок assertPrecondition), а
- * предложение сплошь и рядом ДОПИСЫВАЕТ поле, которого ещё не было.
+ * По каждому полю патча: значения не было — `absent: true`, значение есть — `in: [текущее]`.
+ * Оба пункта об одном: «применимо, пока владелец не тронул это сам». Форма `absent` не
+ * сводится к `in`: отсутствие значения не совпадает ни с одним значением (докблок
+ * assertPrecondition), а предложение сплошь и рядом ДОПИСЫВАЕТ поле, которого ещё не было.
+ *
+ * Патч приходит СТАРОЙ картой (её шлёт рутина, и её же читает карточка предложения), а
+ * предусловие снимается по СВОЙСТВУ (§А7-3): каждое поле переводится в id тем же резолвом,
+ * которым переводит его сам исполнитель (`propertyOfLegacyField`), и текущее значение
+ * берётся из `props` — новой правды строки. Через `aspects_legacy` это делать нельзя:
+ * проекция обратима не везде (`orbis/progress_source` едет в неё развёрнутой обёрткой), и
+ * снятое по ней предусловие не совпало бы с тем, что сверяет executor.
  *
  * Патч тела едет со своим существующим CAS (§5.2) — `expectedUpdatedAt` текущей строки:
- * предусловия аспектов о теле ничего не знают, и без него правка тела затирала бы чужую.
+ * предусловия о теле ничего не знают, и без него правка тела затирала бы чужую.
  *
  * Экспортирована для отложки диспатча (D42 ОЧ.13) — см. довод у `loadTargets`. Функция
  * ходит ТОЛЬКО по `input.aspects`, поэтому для чистой архивации (`{id, archived:true}`)
- * даёт ПУСТОЙ список: `archived` — колонка, а не поле аспекта. Предусловие по колонке
- * (псевдо-аспект `orbis/entity`, `executor.ts`) добавляет к результату сам диспатч — здесь
- * оно появиться не может, потому что предложение обязано остаться байт-в-байт прежним.
+ * даёт ПУСТОЙ список: `archived` — не поле аспекта, а core-свойство (§А1-3). Предусловие по
+ * нему добавляет к результату сам диспатч — здесь оно появиться не может, потому что
+ * предложение обязано остаться байт-в-байт прежним.
  */
 export function buildUpdate(
+  reg: RegistrySnapshot,
   index: number,
   input: Record<string, unknown>,
   current: TargetRow,
@@ -561,8 +585,8 @@ export function buildUpdate(
   const aspects = input.aspects as Record<string, Record<string, unknown> | null> | undefined;
   for (const [aspectId, patch] of Object.entries(aspects ?? {})) {
     if (patch === null) {
-      // Снятие аспекта целиком: предусловия «аспект ещё на месте» в форме {aspect, field}
-      // не существует, а без него detach молча выигрывал бы у любой правки владельца.
+      // Снятие аспекта целиком: предусловия «аспект ещё на месте» в форме пункта по
+      // свойству не существует, а без него detach молча выигрывал бы у любой правки владельца.
       return {
         error: err(
           'VALIDATION',
@@ -572,11 +596,10 @@ export function buildUpdate(
       };
     }
     for (const field of Object.keys(patch)) {
-      const value = current.aspectsLegacy[aspectId]?.[field];
+      const property = propertyOfLegacyField(reg, aspectId, field);
+      const value = current.props[property];
       precondition.push(
-        value === undefined
-          ? { aspect: aspectId, field, absent: true }
-          : { aspect: aspectId, field, in: [value] },
+        value === undefined ? { property, absent: true } : { property, in: [value] },
       );
     }
   }

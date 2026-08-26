@@ -86,46 +86,66 @@ describe('entityUpdateInput', () => {
   });
 });
 
-describe('entityUpdatePrecondition (CAS, С7 + V1.7)', () => {
-  const IN = { aspect: 'orbis/task', field: 'status', in: ['planned'] };
-  const ABSENT = { aspect: 'orbis/task', field: 'due_date', absent: true };
+describe('entityUpdatePrecondition (CAS по свойству, §А7-3 + V1.7)', () => {
+  const IN = { property: 'orbis/task_status', in: ['planned'] };
+  const ABSENT = { property: 'orbis/due_date', absent: true };
 
-  test('обе формы валидны: `in` (значение из списка) и `absent` (поля ещё нет)', () => {
+  test('обе формы валидны: `in` (значение из списка) и `absent` (значения ещё нет)', () => {
     expect(entityUpdatePrecondition.safeParse([IN]).success).toBe(true);
     expect(entityUpdatePrecondition.safeParse([ABSENT]).success).toBe(true);
     expect(entityUpdatePrecondition.safeParse([IN, ABSENT]).success).toBe(true);
+  });
+
+  test('пара «аспект + поле» БОЛЬШЕ НЕ ПРИНИМАЕТСЯ: адрес пункта — id свойства', () => {
+    // Пин формы, а не косметика: пока старая пара проходила бы схему, писатель, забытый при
+    // переводе, молча слал бы предусловие, которое сверять не с чем, — и получал бы
+    // `VALIDATION` не в тесте, а у владельца на кнопке.
+    expect(
+      entityUpdatePrecondition.safeParse([
+        { aspect: 'orbis/task', field: 'status', in: ['planned'] },
+      ]).success,
+    ).toBe(false);
+    // И смесь двух форм — тоже: лишний ключ в предусловии это опечатка адреса.
+    expect(
+      entityUpdatePrecondition.safeParse([
+        { property: 'orbis/task_status', field: 'status', in: ['planned'] },
+      ]).success,
+    ).toBe(false);
   });
 
   test('формы не смешиваются: `absent` вместе с `in` отклоняется (обе половины union strict)', () => {
     // Смесь — это не «оба условия сразу», а опечатка: strict каждой половины ловит её
     // здесь, иначе предусловие с лишним ключом молча пропускало бы гонку.
     expect(
-      entityUpdatePrecondition.safeParse([
-        { aspect: 'orbis/task', field: 'status', absent: true, in: [1] },
-      ]).success,
+      entityUpdatePrecondition.safeParse([{ property: 'orbis/task_status', absent: true, in: [1] }])
+        .success,
     ).toBe(false);
   });
 
   test('пункт без `in` и без `absent` отклоняется — условия в нём нет', () => {
+    expect(entityUpdatePrecondition.safeParse([{ property: 'orbis/task_status' }]).success).toBe(
+      false,
+    );
+  });
+
+  test('`absent: false` отклоняется: «значение есть» выражается формой `in`, а не отрицанием', () => {
     expect(
-      entityUpdatePrecondition.safeParse([{ aspect: 'orbis/task', field: 'status' }]).success,
+      entityUpdatePrecondition.safeParse([{ property: 'orbis/due_date', absent: false }]).success,
     ).toBe(false);
   });
 
-  test('`absent: false` отклоняется: «поле есть» выражается формой `in`, а не отрицанием', () => {
-    expect(
-      entityUpdatePrecondition.safeParse([
-        { aspect: 'orbis/task', field: 'due_date', absent: false },
-      ]).success,
-    ).toBe(false);
-  });
-
-  test('пустой список и пустой `in` отклоняются (min 1)', () => {
+  test('пустой список, пустой `in` и пустой id отклоняются (min 1)', () => {
     expect(entityUpdatePrecondition.safeParse([]).success).toBe(false);
     expect(
-      entityUpdatePrecondition.safeParse([{ aspect: 'orbis/task', field: 'status', in: [] }])
-        .success,
+      entityUpdatePrecondition.safeParse([{ property: 'orbis/task_status', in: [] }]).success,
     ).toBe(false);
+    expect(entityUpdatePrecondition.safeParse([{ property: '', in: ['planned'] }]).success).toBe(
+      false,
+    );
+    // Обе половины union: пустой адрес в форме `absent` — та же опечатка.
+    expect(entityUpdatePrecondition.safeParse([{ property: '', absent: true }]).success).toBe(
+      false,
+    );
   });
 
   test('exec-схема принимает обе формы; тул-контракт модели не принимает ни одной', () => {
