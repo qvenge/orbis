@@ -92,6 +92,7 @@ import {
   resolvePropertyRef,
   touchedAspects,
   touchedProperties,
+  writableOnly,
 } from './props';
 import type {
   ActionOperation,
@@ -1678,6 +1679,12 @@ async function prepareAttach(
   const propsPatch = legacyReplaceToProps(ctx.registry, before, {
     [aspectId]: { ...input.data },
   });
+  // …но снимает ровно то, чем вызывающий вправе распоряжаться (§А2-5): `attach_orbis_financial`
+  // не несёт `orbis/bank_txn_id` — его нет в схеме тула и быть не может, — и стирать импортное
+  // тождество из-за навешивания аспекта значило бы терять факт владельца там, где он ни о чём
+  // таком не просил. Внутренний undo сюда не заходит (у него свой путь в entity_update) и
+  // восстанавливает зафиксированное состояние дословно.
+  propsPatch.replaced = writableOnly(ctx.registry, ctx.mechanism, propsPatch.replaced);
   const state = applyPropsPatch(before, propsPatch);
   if (aspectId === 'orbis/task') applyTaskCompletion(before, state, now); // §3.2 и для attach
   // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency и для attach-пути

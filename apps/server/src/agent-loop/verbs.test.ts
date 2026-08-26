@@ -28,6 +28,7 @@ const {
   seedEntity,
   link,
   aspectsOf,
+  propsOf,
   childrenOf,
   actionsOf,
   workerGrant,
@@ -232,6 +233,16 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     // `nearest_ancestor`, часть Б). Захват его больше не пишет — иначе получил бы
     // `UNKNOWN_PROPERTY` и не состоялся бы вовсе.
     expect(runAspects['orbis/agent-run']).not.toHaveProperty('project_id');
+
+    // НОВАЯ правда строки (§А1-1) на боевом пути глагола: значения лежат плоско по id
+    // свойства, а не парой «аспект + поле». Читается КОЛОНКА `props`, а не перевод старой
+    // карты, — иначе проверка молчала бы ровно там, где носителя в старой форме нет.
+    expect(await propsOf(owner, c.run_id)).toMatchObject({
+      'orbis/grant': grantId,
+      'orbis/run_outcome': 'running',
+      'orbis/step_count': 0,
+      'orbis/run_started_at': iso(T0),
+    });
 
     expect(await childrenOf(owner, ticketId)).toEqual([c.run_id]);
 

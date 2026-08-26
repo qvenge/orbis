@@ -8,7 +8,13 @@
 // клиенту, и тем, что легло в колонки, — как раз тот класс дефекта, ради которого дуальная
 // запись и держится под инвариантом.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { newId } from '@orbis/shared';
+import {
+  aspectJsonSchema,
+  BUILTIN_ASPECT_IDS,
+  buildFieldCatalog,
+  newId,
+  parseQuery,
+} from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import {
   adminDb,
@@ -21,9 +27,10 @@ import {
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { readEntity } from '../entity-read';
+import { compileQuery } from '../query/compile';
 import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import type { PropsViolation } from '../registry/validate-props';
-import { toWireEntity } from '../wire';
+import { toWireEntity, toWireEntityFromSql } from '../wire';
 import { execute, touchesBudgetContour } from './executor';
 import { makeChatJournalSink } from './journal';
 import { projectLegacyAspects } from './legacy-form';
@@ -45,6 +52,11 @@ const FREE_PROPERTY_ID = 'user/p-sleep';
 const FREE_PROPERTY_KEY = 'user/sleep-hours';
 
 let reg: RegistrySnapshot;
+
+/** Каталог полей грамматики §6 — тот же, что собирает боевой путь запросов. */
+const catalog = buildFieldCatalog(
+  BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
+);
 
 function run(
   tool: string,
@@ -477,6 +489,143 @@ describe('гейты флагов свойств', () => {
     expect(row.props['orbis/run_report']).toBe('честный отчёт');
   });
 
+  test('ЯВНОЕ снятие служебного свойства из тула → COMPUTED_WRITE обеими формами; из verb — проходит', async () => {
+    const routineId = newId();
+    const created = entityOf(
+      await run(
+        'entity_create',
+        {
+          title: 'Прогон с отчётом',
+          tags: [],
+          aspects: {
+            'orbis/agent-run': {
+              routine_id: routineId,
+              outcome: 'finished',
+              report: 'честный отчёт',
+              started_at: '2026-08-26T07:00:00.000Z',
+              last_step_at: '2026-08-26T07:00:00.000Z',
+              step_count: 0,
+              steps: [],
+            },
+          },
+        },
+        { mechanism: 'verb' },
+      ),
+    );
+
+    // Форма НОВАЯ: `unset` по id свойства
+    const byUnset = await run('entity_update', { id: created.id, unset: ['orbis/run_report'] });
+    expect(byUnset.ok).toBe(false);
+    if (byUnset.ok) return;
+    expect(byUnset.error.code).toBe('COMPUTED_WRITE');
+    expect(byUnset.error.details).toMatchObject({
+      property: 'orbis/run_report',
+      mechanism: 'user',
+      reason: 'system_writable',
+    });
+
+    // Форма СТАРАЯ: `{поле: null}` в карте аспектов — тот же отказ, тот же reason
+    const byNull = await run('entity_update', {
+      id: created.id,
+      aspects: { 'orbis/agent-run': { report: null } },
+    });
+    expect(byNull.ok).toBe(false);
+    if (byNull.ok) return;
+    expect(byNull.error.code).toBe('COMPUTED_WRITE');
+    expect(byNull.error.details).toMatchObject({
+      property: 'orbis/run_report',
+      reason: 'system_writable',
+    });
+
+    // Вычисляемое свойство — тем же гейтом: снять кэш правила тулу тоже нельзя
+    const goal = entityOf(
+      await run(
+        'entity_create',
+        {
+          title: 'Цель с кэшем',
+          tags: [],
+          aspects: {
+            'orbis/goal': {
+              progress_source: { query: 'aspect=orbis/financial', aggregate: 'count' },
+              target_value: '10',
+              current_value: '3',
+            },
+          },
+        },
+        { mechanism: 'rule' },
+      ),
+    );
+    const byComputed = await run('entity_update', {
+      id: goal.id,
+      unset: ['orbis/current_value'],
+    });
+    expect(byComputed.ok).toBe(false);
+    if (byComputed.ok) return;
+    expect(byComputed.error.details).toMatchObject({ reason: 'model_writable' });
+
+    // Значение на месте — ни одна из трёх проб ничего не стёрла
+    expect((await expectProjection(created.id)).props['orbis/run_report']).toBe('честный отчёт');
+    expect((await expectProjection(goal.id)).props['orbis/current_value']).toBe('3');
+
+    // Тот же глагол, которому свойство принадлежит, снимает его без препятствий
+    ok(
+      await run(
+        'entity_update',
+        { id: created.id, unset: ['orbis/run_report'] },
+        { mechanism: 'verb' },
+      ),
+    );
+    expect(Object.hasOwn((await expectProjection(created.id)).props, 'orbis/run_report')).toBe(
+      false,
+    );
+  });
+
+  test('замена носителя (attach) не стирает служебное значение, но снимает свои: bank_txn_id переживает attach_orbis_financial', async () => {
+    const imported = entityOf(
+      await run(
+        'entity_create',
+        {
+          title: 'Операция из выписки',
+          tags: [],
+          aspects: {
+            'orbis/financial': {
+              amount: '1200.00',
+              direction: 'expense',
+              category_ref: CATEGORY_A,
+              occurred_on: '2026-08-20',
+              payment_method: 'карта',
+              bank_txn_id: 'BNK-42',
+            },
+          },
+        },
+        { mechanism: 'import' },
+      ),
+    );
+
+    // attach заменяет носитель ЦЕЛИКОМ и приходит от лица владельца: `bank_txn_id` в схеме
+    // тула нет и быть не может, поэтому его снятие — не распоряжение автора.
+    ok(
+      await run('attach_orbis_financial', {
+        entity_id: imported.id,
+        data: {
+          amount: '1500.00',
+          direction: 'expense',
+          category_ref: CATEGORY_A,
+          occurred_on: '2026-08-20',
+        },
+      }),
+    );
+
+    const row = await expectProjection(imported.id);
+    expect(row.props['orbis/amount']).toBe('1500.00');
+    // Импортное тождество переживает навешивание аспекта…
+    expect(row.props['orbis/bank_txn_id']).toBe('BNK-42');
+    // …а СВОЁ поле, которого в `data` не было, замена честно снимает
+    expect(Object.hasOwn(row.props, 'orbis/payment_method')).toBe(false);
+    // …и его больше нет в старой карте: проекция и колонка сходятся (проверено выше)
+    expect(row.aspectsLegacy['orbis/financial']).toMatchObject({ bank_txn_id: 'BNK-42' });
+  });
+
   test('internalUndo восстанавливает состояние с system_writable-свойствами без гейта', async () => {
     const routineId = newId();
     const created = entityOf(
@@ -517,6 +666,93 @@ describe('гейты флагов свойств', () => {
     const row = await expectProjection(created.id);
     expect(row.props['orbis/run_outcome']).toBe('running');
     expect(Object.hasOwn(row.props, 'orbis/run_report')).toBe(false);
+  });
+});
+
+describe('затронутые аспекты считаются по свойствам, а не по форме входа', () => {
+  test('правка слитого свойства новой формой доносит инвариант до аспекта, который во входе не назван', async () => {
+    // `orbis/grant` слито у назначения и прогона (В1). Патч новой формы называет СВОЙСТВО и
+    // не называет ни одного аспекта — но прогон он затрагивает, и XOR субъекта (V1.4)
+    // обязан сработать: иначе в строке окажутся оба субъекта сразу.
+    const routineId = newId();
+    const created = entityOf(
+      await run(
+        'entity_create',
+        {
+          title: 'Прогон рутины',
+          tags: [],
+          aspects: {
+            'orbis/agent-run': {
+              routine_id: routineId,
+              outcome: 'running',
+              started_at: '2026-08-26T07:00:00.000Z',
+              last_step_at: '2026-08-26T07:00:00.000Z',
+              step_count: 0,
+              steps: [],
+            },
+          },
+        },
+        { mechanism: 'verb' },
+      ),
+    );
+
+    const r = await run(
+      'entity_update',
+      { id: created.id, props: { 'orbis/grant': newId() } },
+      { mechanism: 'verb' },
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('VALIDATION');
+    expect((r.error.details as { reason?: string }).reason).toBe('run_subject');
+
+    // Ничего не записано: субъект по-прежнему один
+    const row = await expectProjection(created.id);
+    expect(row.props['orbis/run_routine']).toBe(routineId);
+    expect(Object.hasOwn(row.props, 'orbis/grant')).toBe(false);
+  });
+
+  test('прежнее значение аспекта, названного только свойством, попадает в inverse (откат возвращает обе половины слияния)', async () => {
+    // Транзакция и конверт делят `orbis/finance_category`. Патч называет ОДИН аспект, а
+    // старая карта меняется у обоих — значит и в журнал обязаны уехать оба ключа.
+    const e = entityOf(
+      await run('entity_create', {
+        title: 'Транзакция и конверт разом',
+        tags: [],
+        aspects: {
+          'orbis/financial': {
+            amount: '100.00',
+            direction: 'expense',
+            category_ref: CATEGORY_A,
+            occurred_on: '2026-08-26',
+          },
+          // Период конверта НЕ накрывает дату транзакции намеренно: иначе бюджет-хук
+          // привязал бы запись к самой себе (rel_no_self), а проверяется здесь слияние
+          // свойств, а не привязка.
+          'orbis/budget': {
+            category_ref: CATEGORY_A,
+            limit: '5000.00',
+            period_start: '2026-07-01',
+            period_end: '2026-07-31',
+          },
+        },
+      }),
+    );
+    const patched = ok(
+      await run('entity_update', {
+        id: e.id,
+        aspects: { 'orbis/financial': { category_ref: CATEGORY_B } },
+      }),
+    );
+    expect((await expectProjection(e.id)).aspectsLegacy['orbis/budget']).toMatchObject({
+      category_ref: CATEGORY_B,
+    });
+
+    const undone = await undoAction(db, { actorUserId: owner, actionId: patched.actionId });
+    expect(undone.ok).toBe(true);
+    const back = await expectProjection(e.id);
+    expect(back.props['orbis/finance_category']).toBe(CATEGORY_A);
+    expect(back.aspectsLegacy['orbis/budget']).toMatchObject({ category_ref: CATEGORY_A });
   });
 });
 
@@ -642,6 +878,30 @@ describe('списочные пути несут новую форму', () => {
     });
     if (listed === undefined) throw new Error('заметка не нашлась в backlinks');
 
+    // Второй списочный путь — компилятор §6: та же выдача кормит и tRPC `entity.query`, и
+    // тул `entity_query` (tools/dispatch.ts). Он ходит своим SELECT-листом, и без него
+    // проверка накрывала бы только backlinks.
+    const queried = await withIdentity(db, owner, async (tx) => {
+      const parsed = parseQuery(`aspect=orbis/task, sortBy=created_at:desc`, catalog);
+      if (!parsed.ok) throw new Error(`невалидный запрос: ${parsed.error.message}`);
+      const rows = [
+        ...(await tx.execute(
+          compileQuery(parsed.ast, {
+            catalog,
+            thisEntityId: note.id,
+            today: '2026-08-26',
+            timezone: 'Europe/Moscow',
+          }),
+        )),
+      ] as Array<Record<string, unknown>>;
+      return rows.map(toWireEntityFromSql).find((e) => e.id === note.id);
+    });
+    if (queried === undefined) throw new Error('заметка не нашлась в выдаче entity_query');
+    expect(queried.props).toEqual(single.props);
+    expect(queried.aspects).toEqual(single.aspects);
+    expect(queried.queryRefs).toEqual(single.queryRefs);
+    expect(queried.aspectsMap).toEqual(single.aspectsMap);
+
     // Расхождение одиночного и списочного чтения — молчаливое: списки ВЫГЛЯДЯТ рабочими,
     // просто новая форма в них пуста. Поэтому сравниваются все три поля целиком.
     expect(listed.props).toEqual(single.props);
@@ -677,10 +937,35 @@ describe('applyPropsPatch и резолв адреса', () => {
     expect([...touched].sort()).toEqual(['x', 'y']);
   });
 
-  test('resolvePropertyRef: сначала key, потом id; своя строка перекрывает системную', () => {
+  test('resolvePropertyRef: сначала key, потом id', () => {
     expect(resolvePropertyRef(reg, FREE_PROPERTY_KEY)?.id).toBe(FREE_PROPERTY_ID);
     expect(resolvePropertyRef(reg, FREE_PROPERTY_ID)?.id).toBe(FREE_PROPERTY_ID);
     expect(resolvePropertyRef(reg, 'orbis/amount')?.id).toBe('orbis/amount');
     expect(resolvePropertyRef(reg, 'user/такого-нет')).toBeUndefined();
+  });
+
+  test('resolvePropertyRef: своя строка владельца перекрывает системную с тем же ключом', () => {
+    // Снимок собирается в памяти, а не сеется в базу, намеренно: строка, затеняющая
+    // системный ключ, изменила бы резолв во ВСЕХ соседних тестах файла — а проверяется
+    // здесь чистая функция, которой база не нужна.
+    const system = reg.properties.get('orbis/run_report');
+    if (system === undefined) throw new Error('в снимке нет orbis/run_report');
+    const shadow = { ...system, id: 'user/p-shadow', ownerId: owner, flags: {} };
+    const shadowed: RegistrySnapshot = {
+      ...reg,
+      properties: new Map([...reg.properties, ['user/p-shadow', shadow]]),
+    };
+
+    // Ключ один на двоих — выигрывает СВОЯ строка. Это не косметика: у системной стоит
+    // `system_writable`, у своей флагов нет, и перепутанный резолв перевернул бы права.
+    expect(resolvePropertyRef(shadowed, 'orbis/run_report')?.id).toBe('user/p-shadow');
+    expect(resolvePropertyRef(shadowed, 'user/p-shadow')?.id).toBe('user/p-shadow');
+    // Порядок перекрытия не зависит от порядка обхода: системная строка идёт первой
+    // (ORDER BY owner_id NULLS FIRST), и заменить её вправе только собственная.
+    const reversed: RegistrySnapshot = {
+      ...reg,
+      properties: new Map([['user/p-shadow', shadow], ...reg.properties]),
+    };
+    expect(resolvePropertyRef(reversed, 'orbis/run_report')?.id).toBe('user/p-shadow');
   });
 });

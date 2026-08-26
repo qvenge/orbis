@@ -21,7 +21,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { EntityRef } from '../../../lib/entity-ref/EntityRef';
-import { aspectLabel, fieldLabel } from '../../../lib/field-labels';
 import { formatDate } from '../../../lib/format';
 import { invalidateGraph } from '../../../lib/invalidate';
 import { openEntity } from '../../../state/navigation';
@@ -31,12 +30,12 @@ import { Card } from '../../../ui/Card';
 import { chatThreadKey } from '../useChatThread';
 import { BODY_DIFF_SKIP_NOTES, BodyDiffUnits, type DiffUnit } from './BodyDiff';
 import {
-  BODY_MISMATCH_TEXT,
   beforeText,
   fmt,
-  isBodyMismatch,
   type Mismatch,
   mismatchText,
+  noteKey,
+  noteText,
   OWNER_EDIT_NOTE,
   REPLACED_NOTES,
   type ReplacedReason,
@@ -122,29 +121,6 @@ function CollapsedBodyDiff({ units, entityId }: { units: readonly DiffUnit[]; en
       )}
     </span>
   );
-}
-
-/** Расхождение, как оно лежит в аспекте прогона: по свойству (новая форма) или парой. */
-type ProposalNote = NonNullable<NonNullable<ProposalView['mismatches']>[number]>;
-
-/**
- * Строка разбора из аспекта прогона (нота уже словами).
- *
- * Форм две, потому что единицей расхождения стало СВОЙСТВО (§А7-4), а прогоны, записанные
- * раньше, несут прежнюю пару «аспект + поле». Ветка по наличию ключа, а не по типу-дискри-
- * минанту: в жизни это переходное состояние одного и того же поля, и лишний тег в данных
- * пережил бы сам переход.
- */
-function noteText(m: ProposalNote): string {
-  if ('property' in m)
-    return `${fieldLabel(m.property.split('/').at(-1) ?? m.property)}: ${m.note}`;
-  if (isBodyMismatch(m)) return BODY_MISMATCH_TEXT;
-  return `${aspectLabel(m.aspect)} · ${fieldLabel(m.field)}: ${m.note}`;
-}
-
-/** Ключ строки списка: у новой формы — id свойства, у старой — пара. */
-function noteKey(m: ProposalNote): string {
-  return 'property' in m ? m.property : `${m.aspect}:${m.field}`;
 }
 
 /**

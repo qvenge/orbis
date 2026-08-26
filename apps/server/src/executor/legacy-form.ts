@@ -230,6 +230,10 @@ export function legacyPatchToProps(
  * причине. Не снимаются лишь те, что объявлены ДРУГИМ аспектом, остающимся на сущности:
  * слитое свойство (В1) принадлежит обоим, и снимать его вместе с одним из носителей значило
  * бы стирать данные второго.
+ *
+ * Порождённые заменой снятия едут в `replaced`, а не в `unset`, и это существенно для ПРАВ:
+ * `unset` — распоряжение автора («сотри отчёт»), `replaced` — форма операции («навесь
+ * аспект»). Гейт §А2-5 обязан видеть первое и не должен видеть второе (см. `PropsPatch`).
  */
 export function legacyReplaceToProps(
   reg: RegistrySnapshot,
@@ -243,11 +247,12 @@ export function legacyReplaceToProps(
     ...(base.attach ?? []),
   ]);
   const unset = new Set(base.unset ?? []);
+  const replaced = new Set<string>();
   const set = base.set ?? {};
 
   for (const [aspectId, value] of Object.entries(patch)) {
     for (const ref of reg.aspects.get(aspectId)?.properties ?? []) {
-      if (Object.hasOwn(set, ref.propertyId)) continue;
+      if (Object.hasOwn(set, ref.propertyId) || unset.has(ref.propertyId)) continue;
       // Свойство, которое объявляет другой оставшийся аспект, — не наше, чтобы его снимать.
       const sharedWithOther = [...remaining].some(
         (other) =>
@@ -259,11 +264,17 @@ export function legacyReplaceToProps(
         value === null ||
         !Object.hasOwn(value, legacyFieldOfProperty(reg, aspectId, ref.propertyId))
       ) {
-        unset.add(ref.propertyId);
+        replaced.add(ref.propertyId);
       }
     }
   }
-  return { set, unset: [...unset], attach: base.attach, detach: base.detach };
+  return {
+    set,
+    unset: [...unset],
+    replaced: [...replaced],
+    attach: base.attach,
+    detach: base.detach,
+  };
 }
 
 /** Вход исполнителя в любой из двух форм — то, что разбирают exec-надмножества контрактов. */
@@ -304,6 +315,7 @@ export function fromLegacyInput(
 ): PropsPatch {
   const set: Record<string, unknown> = {};
   const unset: string[] = [];
+  const replaced: string[] = [];
   const attach: string[] = [];
   const detach: string[] = [];
 
@@ -319,6 +331,7 @@ export function fromLegacyInput(
       : legacyPatchToProps(reg, aspects);
     Object.assign(set, legacy.set);
     unset.push(...(legacy.unset ?? []));
+    replaced.push(...(legacy.replaced ?? []));
     attach.push(...(legacy.attach ?? []));
     detach.push(...(legacy.detach ?? []));
   }
@@ -333,7 +346,7 @@ export function fromLegacyInput(
     unset.push(resolvePropertyRef(reg, keyOrId)?.id ?? keyOrId);
   }
 
-  return { set, unset, attach, detach };
+  return { set, unset, replaced, attach, detach };
 }
 
 /** Новая форма `aspects` отличается от старой карты тем, что у неё нет чужих ключей. */

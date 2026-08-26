@@ -11,6 +11,7 @@
 // чистый перенос, после второго потребителя он дорожает. Здесь только ТЕКСТ — без JSX и без
 // политики показа: что резать, что прятать и в каком порядке рисовать, каждое место решает
 // само (лента режет дифф до трёх блоков, запись показывает весь).
+import { BUILTIN_ASPECT_IDS, CORE_PROPERTY_IDS, propertyToLegacyField } from '@orbis/shared';
 import { aspectLabel, fieldLabel } from '../../../lib/field-labels';
 import type { RouterOutputs } from '../../../trpc';
 
@@ -97,6 +98,56 @@ export function isBodyMismatch(m: { aspect: string; field: string }): boolean {
 }
 
 export const BODY_MISMATCH_TEXT = 'Тело: запись изменилась после составления предложения';
+
+/** Расхождение, как оно лежит в аспекте прогона: по свойству (§А7-4) либо парой. */
+export type ProposalNote =
+  | { property: string; note: string }
+  | { aspect: string; field: string; note: string };
+
+/**
+ * id свойства → пара «аспект + поле», под которой у подписи ЕСТЬ русское имя.
+ *
+ * Подписи в `lib/field-labels` знают старые имена полей — на реестр их переводит Задача 13a.
+ * До неё расхождение, названное свойством, читалось бы как «task_status: ожидали done»
+ * вместо «Задача · статус: …», а расхождение тела — как «body: …» вместо своего текста.
+ * Перевод идёт по ТОЙ ЖЕ таблице соответствий `@orbis/shared`, что и весь остальной срез;
+ * второй таблицы здесь нет и не заводится.
+ *
+ * Три ветки — три класса свойств, и каждая нужна:
+ *  - объявленное встроенным аспектом: первый носитель и его имя поля;
+ *  - core-проекция (§А1-3, `orbis/archived` у отложенной архивации): её носителем в
+ *    предусловии был псевдо-аспект `orbis/entity` (D42 ОЧ.13) — у него подпись есть;
+ *  - всё прочее (`orbis/body` псевдо-расхождения тела, свои свойства владельца): аспекта
+ *    нет вовсе, и старым именем поля была локальная часть id — ровно то, что `isBodyMismatch`
+ *    и ждёт от расхождения тела.
+ *
+ * Слитое свойство (В1) имеет два носителя; берётся первый — от выбора зависит только слово
+ * слева от точки, а не смысл строки.
+ */
+export function legacyPairOf(propertyId: string): { aspect: string; field: string } {
+  for (const aspect of BUILTIN_ASPECT_IDS) {
+    const field = propertyToLegacyField(propertyId, aspect);
+    if (field !== undefined) return { aspect, field };
+  }
+  const local = propertyId.split('/').at(-1) ?? propertyId;
+  const isCore = (CORE_PROPERTY_IDS as readonly string[]).includes(propertyId);
+  return { aspect: isCore ? 'orbis/entity' : '', field: local };
+}
+
+/**
+ * Строка разбора из аспекта прогона (нота уже словами). Обе формы: свойство (§А7-4) и
+ * прежняя пара «аспект + поле» — прогоны, записанные до реформы, несут её.
+ */
+export function noteText(m: ProposalNote): string {
+  const pair = 'property' in m ? legacyPairOf(m.property) : m;
+  if (isBodyMismatch(pair)) return BODY_MISMATCH_TEXT;
+  return `${aspectLabel(pair.aspect)} · ${fieldLabel(pair.field)}: ${m.note}`;
+}
+
+/** Ключ строки списка: у новой формы — id свойства, у старой — пара. */
+export function noteKey(m: ProposalNote): string {
+  return 'property' in m ? m.property : `${m.aspect}:${m.field}`;
+}
 
 /** Строка разбора расхождения из ответа `decideProposal` (сырые значения). */
 export function mismatchText(m: Mismatch): string {

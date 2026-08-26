@@ -31,7 +31,21 @@ export interface EntityState {
  */
 export type PropsPatch = {
   set?: Record<string, unknown>;
+  /** ЯВНОЕ снятие: `unset` новой формы и `{поле: null}` старой карты — намерение автора. */
   unset?: string[];
+  /**
+   * Снятие, порождённое ФОРМОЙ операции, а не намерением: `attach_<аспект>` и inverse
+   * журнала подменяют носитель целиком, и свойство, не пришедшее в значении, исчезает само
+   * собой (`legacyReplaceToProps`).
+   *
+   * Отдельным списком, потому что это разные вещи для ПРАВ записи. «Сотри отчёт прогона» —
+   * такое же распоряжение, как «запиши отчёт прогона», и гейт §А2-5 обязан его видеть.
+   * А «навесь на транзакцию аспект финансов» распоряжением о `orbis/bank_txn_id` не
+   * является вовсе: автор о нём не говорил и говорить не мог (в схеме тула его нет).
+   * Слив их в один список, гейт либо пропускал бы стирание служебного значения, либо
+   * отказывал бы в законном `attach_orbis_financial` на записи из выписки.
+   */
+  replaced?: string[];
   attach?: string[];
   detach?: string[];
 };
@@ -44,10 +58,10 @@ export type PropsPatch = {
  *  - `detach` аспекта НЕ снимает значения свойств (Р9). Аспект — интерпретация, а не
  *    владелец поля: снятие «это транзакция» не делает сумму неправдой. Снимает значение
  *    только явный `unset`;
- *  - `unset` побеждает `set` на одном и том же свойстве. Такой патч противоречив по
- *    построению (см. отказ В1 в `legacyPatchToProps` — там противоречие ловится раньше и
- *    громче), и здесь важно не «что правильнее», а что исход ОДИН и тот же при любом порядке
- *    ключей во входе.
+ *  - снятие (`unset`/`replaced`) побеждает `set` на одном и том же свойстве. Такой патч
+ *    противоречив по построению (см. отказ В1 в `legacyPatchToProps` — там противоречие
+ *    ловится раньше и громче), и здесь важно не «что правильнее», а что исход ОДИН и тот же
+ *    при любом порядке ключей во входе.
  *
  * `attach` применяется ПОСЛЕ `detach` по той же причине: `{attach:[X], detach:[X]}` обязан
  * иметь один исход, а не зависеть от порядка обхода.
@@ -57,7 +71,7 @@ export function applyPropsPatch(cur: EntityState, patch: PropsPatch): EntityStat
   for (const [propertyId, value] of Object.entries(patch.set ?? {})) {
     props[propertyId] = value;
   }
-  for (const propertyId of patch.unset ?? []) {
+  for (const propertyId of [...(patch.unset ?? []), ...(patch.replaced ?? [])]) {
     delete props[propertyId];
   }
 
@@ -77,7 +91,9 @@ export function applyPropsPatch(cur: EntityState, patch: PropsPatch): EntityStat
  */
 export function touchedProperties(patch: PropsPatch): Set<string> {
   const touched = new Set<string>(Object.keys(patch.set ?? {}));
-  for (const propertyId of patch.unset ?? []) touched.add(propertyId);
+  for (const propertyId of [...(patch.unset ?? []), ...(patch.replaced ?? [])]) {
+    touched.add(propertyId);
+  }
   return touched;
 }
 
@@ -156,17 +172,33 @@ const COMPUTED_WRITE_MECHANISMS: ReadonlySet<MutationMechanism> = new Set<Mutati
   'materialize',
 ]);
 
+/** Причина отказа, если механизму нельзя трогать это свойство; `undefined` — можно. */
+function writeDenial(
+  def: PropertyDefinition,
+  mechanism: MutationMechanism,
+): 'model_writable' | 'system_writable' | undefined {
+  if (def.flags.model_writable === false && !COMPUTED_WRITE_MECHANISMS.has(mechanism)) {
+    return 'model_writable';
+  }
+  if (def.flags.system_writable === true && !SYSTEM_WRITABLE_MECHANISMS.has(mechanism)) {
+    return 'system_writable';
+  }
+  return undefined;
+}
+
 /**
- * Гейт прав записи (§А2-5/§Б6): вправе ли ЭТОТ механизм ставить значения этих свойств.
+ * Гейт прав записи (§А2-5/§Б6): вправе ли ЭТОТ механизм РАСПОРЯЖАТЬСЯ значениями этих
+ * свойств — и ставить, и снимать.
  *
- * Проверяются только ЗАПИСИ значений (`set`), не снятия. Причина не в снисходительности к
- * снятию, а в форме `attach_<аспект>`: он заменяет носитель ЦЕЛИКОМ, то есть в патче у него
- * `unset` на каждое не переданное свойство аспекта. Гейт по `unset` отказывал бы владельцу в
- * законном `attach_orbis_financial` на транзакции, приехавшей из выписки (у неё есть
- * `orbis/bank_txn_id`, а во входе тула его нет и быть не может). Снятие служебного значения
- * пользовательским путём остаётся возможным ровно как сегодня — это НЕ регресс, но и не
- * закрытая дыра; её закрывает единица отката «свойство» (§А7-4, Задача 6), где снятие
- * перестаёт быть побочным эффектом замены ключа.
+ * Снятие проверяется наравне с записью, и это не педантизм: «сотри отчёт прогона» — такое же
+ * распоряжение служебным значением, как «запиши отчёт прогона», и гейт, слепой к нему,
+ * закрывал бы дверь, оставив окно (проверено пробой: `unset` и `{поле: null}` от лица `user`
+ * стирали `orbis/run_report` и `orbis/current_value`).
+ *
+ * Не проверяется РОВНО ОДНО — снятие, порождённое заменой носителя (`patch.replaced`): оно
+ * не распоряжение автора, а форма операции `attach_<аспект>`/inverse. Их разводит уже
+ * граница входа (см. `PropsPatch.replaced`), а сами такие снятия отсекает `writableOnly`
+ * ниже, чтобы замена носителя не стирала того, что автор и записать бы не смог.
  *
  * Неизвестное свойство здесь пропускается молча: его отказ — дело валидатора
  * (`UNKNOWN_PROPERTY`), и два разных кода на одну опечатку читались бы как два разных правила.
@@ -176,22 +208,47 @@ export function assertPropsWritable(
   mechanism: MutationMechanism,
   patch: PropsPatch,
 ): void {
-  for (const propertyId of Object.keys(patch.set ?? {})) {
+  for (const propertyId of [...Object.keys(patch.set ?? {}), ...(patch.unset ?? [])]) {
     const def = reg.properties.get(propertyId);
     if (def === undefined) continue;
-    if (def.flags.model_writable === false && !COMPUTED_WRITE_MECHANISMS.has(mechanism)) {
+    const denial = writeDenial(def, mechanism);
+    if (denial === 'model_writable') {
       throw new ExecError(
         'COMPUTED_WRITE',
-        `свойство «${propertyId}» вычисляется сервером — записывать его нельзя (§А2-5)`,
+        `свойство «${propertyId}» вычисляется сервером — распоряжаться им нельзя (§А2-5)`,
         { property: propertyId, mechanism, reason: 'model_writable' },
       );
     }
-    if (def.flags.system_writable === true && !SYSTEM_WRITABLE_MECHANISMS.has(mechanism)) {
+    if (denial === 'system_writable') {
       throw new ExecError(
         'COMPUTED_WRITE',
-        `свойство «${propertyId}» пишет только сервер — механизму «${mechanism}» запись запрещена (§А2-5)`,
+        `свойство «${propertyId}» пишет только сервер — механизму «${mechanism}» распоряжаться им запрещено (§А2-5)`,
         { property: propertyId, mechanism, reason: 'system_writable' },
       );
     }
   }
+}
+
+/**
+ * Из снятий, порождённых заменой носителя, оставить те, которыми механизм вправе
+ * распоряжаться.
+ *
+ * Правило: замена носителя снимает ровно то, что вызывающий вправе был бы и записать.
+ * `attach_orbis_financial` на транзакции из выписки не несёт `orbis/bank_txn_id` — его нет в
+ * схеме тула и быть не может, — и молча стирать импортное тождество из-за навешивания
+ * аспекта означало бы терять факт владельца там, где он ни о чём таком не просил. Отказывать
+ * тоже нельзя: автор не сделал ничего запретного.
+ *
+ * НЕ применяется во внутреннем режиме undo: тот восстанавливает зафиксированное состояние
+ * дословно, и «сохранить лишнее» там было бы не бережностью, а расхождением с журналом.
+ */
+export function writableOnly(
+  reg: RegistrySnapshot,
+  mechanism: MutationMechanism,
+  propertyIds: readonly string[] | undefined,
+): string[] {
+  return (propertyIds ?? []).filter((propertyId) => {
+    const def = reg.properties.get(propertyId);
+    return def === undefined || writeDenial(def, mechanism) === undefined;
+  });
 }
