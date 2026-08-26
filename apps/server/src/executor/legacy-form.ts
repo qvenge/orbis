@@ -321,17 +321,23 @@ export function hasPropsInput(input: ExecPropsInput): boolean {
  * просто сказаны разными формами, и патч попросту противоречив. Детерминированный исход
  * важнее выдуманного старшинства; вход экзотический — смесь форм в одном патче.
  *
- * @param replaceKeys семантика ЗАМЕНЫ ключа для старой карты (attach-тул, inverse журнала).
+ * СЕМАНТИКИ ЗАМЕНЫ КЛЮЧА ЗДЕСЬ НЕТ, и это не пробел. У неё остался ровно один вызывающий —
+ * тул `attach_<аспект>`, для которого подмена носителя и есть смысл операции; он зовёт
+ * `legacyReplaceToProps` НАПРЯМУЮ (executor.ts, prepareAttach). Вторым входом сюда она была
+ * ради inverse журнала, а с §А7-4 нагрузка отката говорит свойствами и называет снятие
+ * явным `unset` — восстанавливать носитель стало нечего. Флаг-переключатель на две
+ * семантики жил бы дальше незапиненным (это и показала мутация M15 отчёта Задачи 6), и
+ * первый же переводимый путь, доверившись ему, попал бы в непроверенную ветку — поэтому он
+ * снят вместе с ней, а не оставлен «на всякий случай». Нужна замена — зовите
+ * `legacyReplaceToProps` прямо, как attach: там она названа по имени и проверена.
+ *
+ * По той же причине здесь нет и `replaced` в результате: его порождает ТОЛЬКО замена
+ * носителя, а её здесь больше не бывает. Потребители читают его через `?? []`, поэтому
+ * отсутствие ключа и пустой список для них — одно и то же.
  */
-export function fromLegacyInput(
-  reg: RegistrySnapshot,
-  cur: EntityState,
-  input: ExecPropsInput,
-  replaceKeys = false,
-): PropsPatch {
+export function fromLegacyInput(reg: RegistrySnapshot, input: ExecPropsInput): PropsPatch {
   const set: Record<string, unknown> = {};
   const unset: string[] = [];
-  const replaced: string[] = [];
   const attach: string[] = [];
   const detach: string[] = [];
 
@@ -342,12 +348,9 @@ export function fromLegacyInput(
     attach.push(...(aspects.attach ?? []));
     detach.push(...(aspects.detach ?? []));
   } else if (aspects !== undefined) {
-    const legacy = replaceKeys
-      ? legacyReplaceToProps(reg, cur, aspects)
-      : legacyPatchToProps(reg, aspects);
+    const legacy = legacyPatchToProps(reg, aspects);
     Object.assign(set, legacy.set);
     unset.push(...(legacy.unset ?? []));
-    replaced.push(...(legacy.replaced ?? []));
     attach.push(...(legacy.attach ?? []));
     detach.push(...(legacy.detach ?? []));
   }
@@ -362,7 +365,7 @@ export function fromLegacyInput(
     unset.push(resolvePropertyRef(reg, keyOrId)?.id ?? keyOrId);
   }
 
-  return { set, unset, replaced, attach, detach };
+  return { set, unset, attach, detach };
 }
 
 /** Новая форма `aspects` отличается от старой карты тем, что у неё нет чужих ключей. */

@@ -461,18 +461,18 @@ describe('golden: apply → undo → байт-в-байт по корпусу va
       // «До» непустое намеренно: свойство-сосед, которого патч не касается, обязан
       // пережить и запись, и откат — на этом стоит вся единица отката «свойство»
       const before: EntityState = { props: { [FREE_PROPERTY_ID]: 7 }, aspects: [] };
-      const patch = fromLegacyInput(reg, before, {
+      const patch = fromLegacyInput(reg, {
         aspects: record.aspects as unknown as Record<string, Record<string, unknown>>,
       });
       const after = applyPropsPatch(before, patch);
 
       // Полезная нагрузка «как исполнено» — тоже исполнимый тул: круг проверяется в обе стороны
       const forward = entityUpdateExecInput.parse({ id: PROBE_ID, ...stateDelta(before, after) });
-      const applied = applyPropsPatch(before, fromLegacyInput(reg, before, forward));
+      const applied = applyPropsPatch(before, fromLegacyInput(reg, forward));
       expect(canonicalJson(applied.props)).toBe(canonicalJson(after.props));
 
       const inverse = entityUpdateExecInput.parse({ id: PROBE_ID, ...stateDelta(after, before) });
-      const restored = applyPropsPatch(after, fromLegacyInput(reg, after, inverse));
+      const restored = applyPropsPatch(after, fromLegacyInput(reg, inverse));
 
       expect(canonicalJson(restored.props)).toBe(canonicalJson(before.props));
       expect([...restored.aspects].sort()).toEqual([...before.aspects].sort());
