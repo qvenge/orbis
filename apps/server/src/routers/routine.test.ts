@@ -2174,16 +2174,20 @@ async function unitMessages(pendingId: string): Promise<Array<Record<string, unk
   return [...(rows as unknown as Array<Record<string, unknown>>)];
 }
 
-/** Действия журнала, снимающие флажок пачки, — по ним читается их атрибуция (§9.6). */
+/**
+ * Действия журнала, снимающие флажок пачки, — по ним читается их атрибуция (§9.6).
+ *
+ * Адрес — id свойства в `payload.props`: с §А7-4 единица журнала стала свойством, и
+ * прежняя форма `payload.aspects['orbis/agent-run'].undecided` молча давала бы `undefined`
+ * (то есть пустой список действий и зелёный тест ни о чём).
+ */
 async function flagPatches(runId: string) {
   return (await actionsOf(owner)).filter(
     (a) =>
       a.run_id === runId &&
       a.operations.some(
         (op) =>
-          (op.payload.aspects as { 'orbis/agent-run'?: { undecided?: unknown } } | undefined)?.[
-            'orbis/agent-run'
-          ]?.undecided === false,
+          (op.payload.props as Record<string, unknown> | undefined)?.['orbis/undecided'] === false,
       ),
   );
 }

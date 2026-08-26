@@ -16,11 +16,14 @@ import {
   BUILTIN_ASPECT_IDS,
   BUILTIN_PROPERTY_META,
   buildFieldCatalog,
+  canonicalJson,
+  entityUpdateExecInput,
   newId,
   type PropertyType,
   parseQuery,
 } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
+import corpus from '../../test/golden/validator-verdicts.json';
 import {
   adminDb,
   appDb,
@@ -39,11 +42,13 @@ import type { PropsViolation } from '../registry/validate-props';
 import { toWireEntity, toWireEntityFromSql } from '../wire';
 import { execute, touchesBudgetContour } from './executor';
 import { makeChatJournalSink } from './journal';
-import { projectLegacyAspects } from './legacy-form';
+import { fromLegacyInput, projectLegacyAspects } from './legacy-form';
 import {
   applyPropsPatch,
   comparePropertyValue,
+  type EntityState,
   resolvePropertyRef,
+  stateDelta,
   touchedProperties,
 } from './props';
 import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from './types';
@@ -421,6 +426,63 @@ describe('инвариант дуальной записи', () => {
 // Гейты флагов (§А2-5) и ось mechanism (§А4-4)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Обратимость журнала (§А7-4, §С7-13)
+// ---------------------------------------------------------------------------
+
+describe('golden: apply → undo → байт-в-байт по корпусу validator-verdicts', () => {
+  /**
+   * Обещание §С7-13 в самой сильной форме, какая проверяется без базы: полезная нагрузка
+   * журнала и его inverse — это ДИФФЫ СОСТОЯНИЙ в обе стороны, поэтому применение inverse
+   * к состоянию «после» обязано давать состояние «до» дословно — по всем трём формам
+   * (`props`, `aspects[]`, проекция `aspects_legacy`).
+   *
+   * Корпус берётся чужой (`test/golden/validator-verdicts.json`, приёмка §С8-1): он собран
+   * до этой задачи и по другим источникам, поэтому подтвердить сам себя не может.
+   *
+   * Круг идёт ЧЕРЕЗ exec-надмножество контракта, а не мимо: `applyUndo` (undo.ts) строит из
+   * inverse ТУЛОВЫЙ вызов, и форма, не проходящая `entityUpdateExecInput`, отвалилась бы
+   * VALIDATION'ом — молча, потому что «ничего не сделал» и «отказался» на этом пути
+   * выглядят одинаково.
+   *
+   * `aspects[]` сверяется как МНОЖЕСТВО: это список интерпретаций, и порядок в нём —
+   * не факт о сущности (снятый и заново навешенный аспект встаёт в конец списка).
+   */
+  const POSITIVES = 35;
+  const PROBE_ID = '019e4466-dddd-7e07-b5d4-64be9721da54';
+
+  test(`${POSITIVES} позитивных записей корпуса: inverse возвращает props/aspects/aspects_legacy дословно`, () => {
+    const positives = corpus.filter((r) => r.legacyVerdict === 'ok' && r.newVerdict === 'ok');
+    // Число точное, а не «хотя бы»: с порогом «не меньше» неудобную запись можно было бы
+    // молча выкинуть из корпуса, и красным это не стало бы (урок гейт-ревью 2)
+    expect(positives.length).toBe(POSITIVES);
+
+    for (const record of positives) {
+      // «До» непустое намеренно: свойство-сосед, которого патч не касается, обязан
+      // пережить и запись, и откат — на этом стоит вся единица отката «свойство»
+      const before: EntityState = { props: { [FREE_PROPERTY_ID]: 7 }, aspects: [] };
+      const patch = fromLegacyInput(reg, before, {
+        aspects: record.aspects as unknown as Record<string, Record<string, unknown>>,
+      });
+      const after = applyPropsPatch(before, patch);
+
+      // Полезная нагрузка «как исполнено» — тоже исполнимый тул: круг проверяется в обе стороны
+      const forward = entityUpdateExecInput.parse({ id: PROBE_ID, ...stateDelta(before, after) });
+      const applied = applyPropsPatch(before, fromLegacyInput(reg, before, forward));
+      expect(canonicalJson(applied.props)).toBe(canonicalJson(after.props));
+
+      const inverse = entityUpdateExecInput.parse({ id: PROBE_ID, ...stateDelta(after, before) });
+      const restored = applyPropsPatch(after, fromLegacyInput(reg, after, inverse));
+
+      expect(canonicalJson(restored.props)).toBe(canonicalJson(before.props));
+      expect([...restored.aspects].sort()).toEqual([...before.aspects].sort());
+      expect(canonicalJson(projectLegacyAspects(reg, restored))).toBe(
+        canonicalJson(projectLegacyAspects(reg, before)),
+      );
+    }
+  });
+});
+
 describe('гейты флагов свойств', () => {
   const goalInput = (over: Record<string, unknown> = {}) => ({
     title: 'Накопить',
@@ -592,6 +654,55 @@ describe('гейты флагов свойств', () => {
     expect(Object.hasOwn((await expectProjection(created.id)).props, 'orbis/run_report')).toBe(
       false,
     );
+  });
+
+  test('откат ЯВНО снимает служебное свойство и гейт флагов его пропускает (§7.8 поверх §А2-5)', async () => {
+    // С единицей отката «свойство» (§А7-4) снятие на undo перестало быть побочным эффектом
+    // замены носителя и стало ЯВНЫМ `unset` — той самой формой, которой гейт §А2-5 отказывает
+    // тулу. Внутренний режим гейт пропускает по построению (откат ЗАКОННО записанного обязан
+    // проходить), и это обязано быть запинено: иначе первая же перестановка гейта выключила бы
+    // откат прогонов, и красным это не стало бы нигде.
+    const routineId = newId();
+    const run0 = entityOf(
+      await run(
+        'entity_create',
+        {
+          title: 'Прогон под откат',
+          tags: [],
+          aspects: {
+            'orbis/agent-run': {
+              routine_id: routineId,
+              outcome: 'running',
+              started_at: '2026-08-26T07:00:00.000Z',
+              last_step_at: '2026-08-26T07:00:00.000Z',
+              step_count: 0,
+              steps: [],
+            },
+          },
+        },
+        { mechanism: 'verb' },
+      ),
+    );
+    // Отчёт пишет глагол — законная запись служебного свойства
+    const wrote = ok(
+      await run(
+        'entity_update',
+        { id: run0.id, aspects: { 'orbis/agent-run': { report: 'отчёт глагола' } } },
+        { mechanism: 'verb' },
+      ),
+    );
+    expect((await expectProjection(run0.id)).props['orbis/run_report']).toBe('отчёт глагола');
+
+    // Тот же `unset` от лица тула — COMPUTED_WRITE (контрольная половина: гейт жив)
+    const denied = await run('entity_update', { id: run0.id, unset: ['orbis/run_report'] });
+    expect(denied.ok).toBe(false);
+    if (denied.ok) return;
+    expect(denied.error.code).toBe('COMPUTED_WRITE');
+
+    // А откат той же законной записи — проходит, и свойство снимается
+    const undone = await undoAction(db, { actorUserId: owner, actionId: wrote.actionId });
+    expect(undone.ok).toBe(true);
+    expect(Object.hasOwn((await expectProjection(run0.id)).props, 'orbis/run_report')).toBe(false);
   });
 
   test('замена носителя (attach) не стирает служебное значение, но снимает свои: bank_txn_id переживает attach_orbis_financial', async () => {
@@ -1224,6 +1335,65 @@ describe('applyPropsPatch и резолв адреса', () => {
       properties: new Map([['user/p-shadow', shadow], ...reg.properties]),
     };
     expect(resolvePropertyRef(reversed, 'orbis/run_report')?.id).toBe('user/p-shadow');
+  });
+});
+
+describe('stateDelta: дельта состояний — единица журнала и отката (§А7-4)', () => {
+  const st = (props: Record<string, unknown>, aspects: string[] = []): EntityState => ({
+    props,
+    aspects,
+  });
+
+  test('в дельту попадают ТОЛЬКО изменённые: записанное, снятое, навешенное, снятый аспект', () => {
+    const before = st({ a: 1, b: 2, c: 3 }, ['orbis/task', 'orbis/note']);
+    const after = st({ a: 1, b: 9, d: 4 }, ['orbis/task', 'orbis/goal']);
+    expect(stateDelta(before, after)).toEqual({
+      props: { b: 9, d: 4 }, // `a` не изменилось — его в записи нет
+      unset: ['c'],
+      aspects: { attach: ['orbis/goal'], detach: ['orbis/note'] },
+    });
+  });
+
+  test('inverse — зеркальная дельта: применение её к «после» даёт «до»', () => {
+    const before = st({ a: 1, b: 2, c: 3 }, ['orbis/task', 'orbis/note']);
+    const after = st({ a: 1, b: 9, d: 4 }, ['orbis/task', 'orbis/goal']);
+    expect(stateDelta(after, before)).toEqual({
+      props: { b: 2, c: 3 },
+      unset: ['d'],
+      aspects: { attach: ['orbis/note'], detach: ['orbis/goal'] },
+    });
+  });
+
+  test('пустых частей в записи нет вовсе: правка без снятий не несёт ключа unset', () => {
+    expect(stateDelta(st({ a: 1 }), st({ a: 2 }))).toEqual({ props: { a: 2 } });
+    expect(stateDelta(st({ a: 1 }), st({ a: 1 }))).toEqual({});
+    expect(stateDelta(st({}, ['orbis/note']), st({}, []))).toEqual({
+      aspects: { detach: ['orbis/note'] },
+    });
+  });
+
+  test('равенство значений — по КАНОНУ, а не по ссылке: тот же объект другим экземпляром не изменение', () => {
+    // Значения перекладываются между объектами на каждом слиянии, и «другой объект с теми
+    // же полями» изменением не является: попади он в журнал, владелец видел бы в карточке
+    // правку, которой не было, а откат возвращал бы значение поверх такого же
+    const before = st({ q: { freq: 'weekly', interval: 1 } });
+    const after = st({ q: { interval: 1, freq: 'weekly' } });
+    expect(stateDelta(before, after)).toEqual({});
+    // …но настоящая правка того же объекта — изменение
+    expect(stateDelta(before, st({ q: { freq: 'daily', interval: 1 } }))).toEqual({
+      props: { q: { freq: 'daily', interval: 1 } },
+    });
+  });
+
+  test('списки отсортированы: запись журнала не зависит от порядка обхода патча', () => {
+    // Порядок вставки — `m, a, z`: он не совпадает ни с прямым, ни с обратным порядком
+    // сортировки, поэтому ассерт краснеет и от «не сортировать», и от «сортировать наоборот»
+    const before = st({ m: 1, a: 1, z: 1 }, ['orbis/note', 'orbis/goal']);
+    const after = st({}, []);
+    expect(stateDelta(before, after)).toEqual({
+      unset: ['a', 'm', 'z'],
+      aspects: { detach: ['orbis/goal', 'orbis/note'] },
+    });
   });
 });
 

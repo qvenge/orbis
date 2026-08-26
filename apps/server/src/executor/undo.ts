@@ -93,6 +93,13 @@ async function findLastUndoable(tx: Tx): Promise<FoundAction | undefined> {
  * поэтому просто прогоняем их конвейером во внутреннем режиме. Multi-op inverse
  * (batch-действие) идёт batch-путём с техническим batchId — атомарность §7.8;
  * в журнал он не попадает (internal-режим пишет undo-сообщение вместо action).
+ *
+ * Отсюда требование к ФОРМЕ полезной нагрузки, которое ломается молча: `iv.payload`
+ * уезжает во вход тула и разбирается fail-closed'ом (`entityUpdateExecInput`), поэтому
+ * форма, которой контракт не знает, даёт не «ничего не сделал», а VALIDATION — а по
+ * ответу undo это неотличимо от честного отказа. С §А7-4 нагрузка — плоские `props`/
+ * `unset`/`aspects:{attach,detach}` (внутренняя форма §А1-1), и exec-надмножество их
+ * принимает; менять её здесь, не тронув контракт, нельзя.
  */
 async function applyUndo(db: Db, actorUserId: string, found: FoundAction): Promise<ExecuteResult> {
   const { action, threadId } = found;

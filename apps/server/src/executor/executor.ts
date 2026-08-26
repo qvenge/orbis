@@ -92,6 +92,7 @@ import {
   type EntityState,
   type PropsPatch,
   resolvePropertyRef,
+  stateDelta,
   touchedAspects,
   touchedProperties,
   writableOnly,
@@ -1292,10 +1293,14 @@ async function prepareEntityCreate(
           emoji: values.emoji,
           body,
           tags,
-          // Журнал ПОКА говорит старой картой (§А7-4 переводит его единицу в свойство —
-          // Задача 6): inverse обязан оставаться исполнимым тулом, а тулы до Задачи 12
-          // принимают карту. `meta` из полезной нагрузки ушла вместе с записью колонки.
-          aspects: aspectsLegacy,
+          // Единица журнала — СВОЙСТВО (§А7-4): нагрузка несёт плоские `props` по id и
+          // список аспектов — ровно ту форму, которую принимает вход исполнителя
+          // (`entityCreateExecInput`), потому что операция журнала обязана оставаться
+          // исполнимой. `meta` ушла вместе с записью колонки (§А1-1).
+          // Записано ВСЁ состояние, а не дельта: у создания «состояние до» пусто, и
+          // дельта совпадает с ним по построению.
+          props: state.props,
+          aspects: state.aspects,
         },
       },
     ],
@@ -1365,9 +1370,8 @@ async function prepareEntityUpdate(
   if (!current) {
     throw new ExecError('NOT_FOUND', 'сущность не найдена', { id: input.id });
   }
-  // Старая карта — источник прежних значений для журнала (Задача 6). Новая правда строки —
-  // `stateOf`, и с §А7-3 по ней же идёт CAS.
-  const currentAspects = current.aspectsLegacy as AspectsMap;
+  // Правда строки — `props`/`aspects[]` (§А1-1). Прежние значения для журнала берутся
+  // отсюда же: единица отката — свойство (§А7-4), и старая карта в этом больше не участвует.
   const before = stateOf(current);
 
   // CAS-расширение стадий 4–5 (С7): предусловие сверяется по ТОЙ ЖЕ строке, что и весь
@@ -1411,11 +1415,12 @@ async function prepareEntityUpdate(
   let propsPatch: PropsPatch = {};
   let touched: string[] = [];
   if (hasPropsInput(input)) {
-    // Внутренний режим undo (§7.8): inverse несёт прежнее значение ВСЕГО затронутого
-    // аспект-ключа — восстанавливаем ключ ЦЕЛИКОМ (свойство, которого в значении нет,
-    // снимается; см. legacyReplaceToProps). Shallow-merge оставил бы поля, добавленные
-    // отменяемым действием, а нормализации §3.2 исказили бы зафиксированное состояние.
-    propsPatch = fromLegacyInput(ctx.registry, before, input, ctx.internalUndo !== undefined);
+    // Одна форма разбора на все входы, включая внутренний режим undo (§7.8). Семантики
+    // «заменить ключ целиком» здесь БОЛЬШЕ НЕТ: с §А7-4 inverse говорит свойствами и
+    // называет снятие ЯВНО (`unset`), поэтому восстанавливать носитель нечего и незачем.
+    // `legacyReplaceToProps` осталась ровно у одного вызывающего — тула `attach_<аспект>`,
+    // где замена носителя это и есть смысл операции.
+    propsPatch = fromLegacyInput(ctx.registry, before, input);
     state = applyPropsPatch(before, propsPatch);
     touched = touchedAspects(ctx.registry, before, state, propsPatch);
   }
@@ -1640,12 +1645,21 @@ async function prepareEntityUpdate(
     patch.props = state.props;
     patch.aspects = state.aspects;
     patch.aspectsLegacy = nextLegacy;
-    changed.aspects = Object.fromEntries(touched.map((k) => [k, nextLegacy[k] ?? null]));
-    // §7.8: inverse аспектов — прежнее значение ВСЕГО затронутого ключа. Затронутыми
-    // считаются и аспекты, объявляющие слитое свойство (В1): правка категории у транзакции
-    // меняет карту и у конверта, и откат обязан вернуть обе.
-    prior.aspects = Object.fromEntries(touched.map((k) => [k, currentAspects[k] ?? null]));
   }
+  // Единица журнала и отката — СВОЙСТВО (§А7-4). Обе половины записи — дельты состояний,
+  // зеркальные друг другу, и отсюда обратимость «байт-в-байт» (§С7-13) по построению.
+  //
+  // Считается БЕЗУСЛОВНО, а не под `hasPropsInput`: дельта пуста ровно тогда, когда правки
+  // свойств не было (тогда `state === before`), и лишнего ключа в нагрузке не появится. Зато
+  // нормализация, тронувшая состояние мимо патча, попадёт в журнал при любом входе — а
+  // именно так и рождался угол с умолчанием валюты, где inverse не нёс материализованного
+  // значения и откат оставлял его в графе.
+  //
+  // Слитое свойство (В1) закрылось тем же движением: `orbis/finance_category` одно, и одна
+  // запись в дельте возвращает обе половины старой карты — считать «затронутые аспекты»
+  // ради второго ключа больше не нужно.
+  Object.assign(changed, stateDelta(before, state));
+  Object.assign(prior, stateDelta(state, before));
   gateEntitlements(ctx, 'entity_update');
 
   // Эффект batch: строка после патча видна следующим операциям
@@ -1698,9 +1712,7 @@ async function prepareAttach(
   }
 
   const now = ctx.clock();
-  const currentAspects = current.aspectsLegacy as AspectsMap;
   const before = stateOf(current);
-  const prev = currentAspects[aspectId];
 
   // attach ставит носитель ЦЕЛИКОМ: свойство аспекта, не пришедшее в `data`, снимается —
   // ровно то, что делала подмена аспект-ключа в старой форме.
@@ -1791,20 +1803,22 @@ async function prepareAttach(
     entityId: input.entity_id,
     tool,
     title: current.title,
-    // Полезная нагрузка — старая карта аспекта ПОСЛЕ нормализаций (§3.2, валюта): журнал
-    // ПОКА говорит старой формой, и inverse обязан оставаться исполнимым тулом (Задача 6).
+    // Полезная нагрузка — дельта состояний (§А7-4), то есть «что именно attach сделал»
+    // ПОСЛЕ нормализаций (§3.2, валюта). Не `data` входа: замена носителя снимает и то,
+    // чего во входе не было вовсе, и по одному лишь `data` этого не прочитать.
     operations: [
-      { op: tool, payload: { entity_id: input.entity_id, data: nextLegacy[aspectId] ?? {} } },
+      { op: tool, payload: { entity_id: input.entity_id, ...stateDelta(before, state) } },
     ],
-    // Стадии 6–7: inverse — прежнее значение аспект-ключа (null, если аспекта не было);
-    // засеянное тело откатывается вместе с ним, иначе undo снял бы аспект, оставив
-    // заготовку проекта на заметке, у которой её не было
+    // Стадии 6–7: inverse — зеркальная дельта, то есть прежние значения ровно тронутых
+    // свойств и снятие ровно добавленных (плюс detach аспекта, если его не было). Засеянное
+    // тело откатывается вместе с ним, иначе undo снял бы аспект, оставив заготовку проекта
+    // на заметке, у которой её не было
     inverse: [
       {
         op: 'entity_update',
         payload: {
           id: input.entity_id,
-          aspects: { [aspectId]: prev ?? null },
+          ...stateDelta(state, before),
           ...(seed !== undefined ? { body: current.body } : {}),
         },
       },

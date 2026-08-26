@@ -185,9 +185,15 @@ async function categoryRefOf(txnId: string): Promise<string | undefined> {
   return rows[0]?.ref as string | undefined;
 }
 
-/** Что прочитает скан журнала под личностью владельца (проба + потолок выборки). */
-async function scanActions(user: string): Promise<ActionRecord[]> {
-  return withIdentity(db, user, (tx) => scanFinancialUpdates(tx));
+/**
+ * Что прочитает скан журнала под личностью владельца (проба + потолок выборки).
+ *
+ * Проба с §А7-4 адресует ЗНАЧЕНИЕ свойства `orbis/finance_category`, а не аспект-ключ:
+ * ключ существования у containment'а нет, а ключ `props` без значения затянул бы под
+ * пробу любую правку любого свойства. `to` — те категории, в которые переносили.
+ */
+async function scanActions(user: string, to: readonly string[]): Promise<ActionRecord[]> {
+  return withIdentity(db, user, (tx) => scanFinancialUpdates(tx, to));
 }
 
 /** Владелец с двумя категориями: «Еда» (from) и «Развлечения» (to). */
@@ -418,16 +424,18 @@ describe('эскалация повторных исправлений кате�
         'orbis/financial': {
           amount: '340.00',
           direction: 'expense',
-          category_ref: food,
+          // ИМЕННО та категория, которую ищет проба ниже: иначе импорт не попадал бы под
+          // неё и без гейта по `op`, и тест зеленел бы, ничего не проверяя
+          category_ref: fun,
           occurred_on: '2026-07-20',
         },
       },
     });
     // Импорт журналируется ОДНИМ action type='batch', в котором только entity_create, а
-    // журнал entity_create несёт весь аспект в payload (executor.ts prepareEntityCreate).
-    // Без op в пробе такой batch попадал под неё целиком — до 300 строк operations +
-    // inverse + results, разбираемых синхронно внутри entity.update, ради нуля
-    // рекатегоризаций
+    // журнал entity_create несёт всё состояние в payload (executor.ts prepareEntityCreate)
+    // — то есть и категорию плоским свойством. Без `op` в пробе такой batch попадал бы под
+    // неё целиком — до 300 строк operations + inverse + results, разбираемых синхронно
+    // внутри entity.update, ради нуля рекатегоризаций
     ok(
       await execute(
         db,
@@ -441,11 +449,49 @@ describe('эскалация повторных исправлений кате�
         { sink },
       ),
     );
-    expect(await scanActions(user)).toEqual([]);
+    expect(await scanActions(user, [fun])).toEqual([]);
 
     // а настоящее исправление категории скан по-прежнему видит
     const actionId = await recategorizeRaw(user, await createTxn(user, 'Пятёрочка', food), fun);
-    expect((await scanActions(user)).map((a) => a.id)).toEqual([actionId]);
+    expect((await scanActions(user, [fun])).map((a) => a.id)).toEqual([actionId]);
+  });
+
+  test('13b. форма журнала §А7-4: исправление orbis/finance_category скан находит, правка orbis/amount — нет', async () => {
+    const { user, food, fun } = await freshOwner();
+    const txn = await createTxn(user, 'Пятёрочка', food);
+
+    // ПОЗИТИВ: запись найдена по ЗНАЧЕНИЮ свойства в `props`, и разбор даёт пару (from, to)
+    const actionId = await recategorizeRaw(user, txn, fun);
+    const scanned = await scanActions(user, [fun]);
+    expect(scanned.map((a) => a.id)).toEqual([actionId]);
+    expect(scanned[0]?.operations[0]?.payload).toEqual({
+      id: txn,
+      props: { 'orbis/finance_category': fun },
+    });
+    expect(scanned[0]?.inverse[0]?.payload).toEqual({
+      id: txn,
+      props: { 'orbis/finance_category': food },
+    });
+
+    // НЕГАТИВ: правка суммы той же транзакции под пробу не попадает вовсе — иначе скан
+    // затягивал бы любую правку любого свойства и вытеснял бы полезные записи потолком
+    const amount = ok(
+      await execute(
+        db,
+        req(user, [
+          {
+            tool: 'entity_update',
+            input: { id: txn, aspects: { 'orbis/financial': { amount: '999.00' } } },
+          },
+        ]),
+        { sink },
+      ),
+    );
+    expect((await scanActions(user, [fun])).map((a) => a.id)).toEqual([actionId]);
+    // и рекатегоризацией она не считается: разбор идёт по тому же property-id
+    expect(
+      await maybeSuggestRule({ db, ownerId: user, action: await actionById(amount.actionId) }),
+    ).toEqual({ suggested: false, reason: 'not_recategorization' });
   });
 
   test('14. скан журнала ограничен потолком выборки и берёт свежие действия', async () => {
@@ -470,13 +516,13 @@ describe('эскалация повторных исправлений кате�
                 operations: [
                   {
                     op: 'entity_update',
-                    payload: { id: fun, aspects: { 'orbis/financial': { category_ref: fun } } },
+                    payload: { id: fun, props: { 'orbis/finance_category': fun } },
                   },
                 ],
                 inverse: [
                   {
                     op: 'entity_update',
-                    payload: { id: fun, aspects: { 'orbis/financial': { category_ref: food } } },
+                    payload: { id: fun, props: { 'orbis/finance_category': food } },
                   },
                 ],
               },
@@ -491,7 +537,7 @@ describe('эскалация повторных исправлений кате�
       await tx.insert(chatMessages).values(made.map((m) => m.row));
     });
 
-    const scanned = (await scanActions(user)).map((a) => a.id).sort();
+    const scanned = (await scanActions(user, [fun])).map((a) => a.id).sort();
     expect(scanned.length).toBe(JOURNAL_SCAN_LIMIT);
     // и это именно свежие: усечены ровно `extra` самых старых
     expect(scanned).toEqual(

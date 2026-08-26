@@ -152,8 +152,11 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
           emoji: null,
           body: '',
           tags: ['кофе'],
-          // `meta` из полезной нагрузки ушла вместе с записью колонки (§А1-1)
-          aspects: {},
+          // `meta` из полезной нагрузки ушла вместе с записью колонки (§А1-1).
+          // Единица журнала — СВОЙСТВО (§А7-4): вместо карты `{аспект: {поле: …}}`
+          // полезная нагрузка несёт плоские `props` по id свойства и список аспектов.
+          props: {},
+          aspects: [],
         },
       },
     ]);
@@ -176,6 +179,90 @@ describe('боевой JournalSink: audit-сообщение в chat_messages (�
         undoActionId: r.actionId, // тот же id, что уходит в ai.undo({actionId})
       },
     ]);
+  });
+
+  test('1b. запись entity_update: props по id свойства, без meta и без карты аспектов; mechanism на месте (§А7-4)', async () => {
+    const user = freshUserId();
+    const created = ok(
+      await execute(
+        db,
+        req(user, 'entity_create', {
+          title: 'Тикет',
+          tags: [],
+          aspects: { 'orbis/task': { status: 'inbox', priority: 'low' } },
+        }),
+        { sink },
+      ),
+    );
+    const e = created.results[0] as WireEntity;
+
+    const updated = ok(
+      await execute(
+        db,
+        req(user, 'entity_update', {
+          id: e.id,
+          aspects: { 'orbis/task': { priority: 'high' }, 'orbis/note': { pinned: true } },
+        }),
+        { sink },
+      ),
+    );
+
+    const msgs = await messagesInThread(globalThreadId(user));
+    const actionOf = (id: string) =>
+      first(actionsOf(first(msgs.filter((m) => actionsOf(m)[0]?.id === id))));
+    // Запись СОЗДАНИЯ несёт то же самое: свойства по id и список аспектов, не карту
+    expect(actionOf(created.actionId).operations[0]?.payload).toEqual({
+      id: e.id,
+      title: 'Тикет',
+      emoji: null,
+      body: '',
+      tags: [],
+      props: { 'orbis/task_status': 'inbox', 'orbis/priority': 'low' },
+      aspects: ['orbis/task'],
+    });
+    const action = actionOf(updated.actionId);
+    // Тот же перечень полей записи, что и у create: реформа двигает ПОЛЕЗНУЮ НАГРУЗКУ,
+    // а не формат action (§7.8)
+    expect(Object.keys(action).sort()).toEqual([
+      'actor_kind',
+      'actor_user_id',
+      'entity_id',
+      'id',
+      'inverse',
+      'mechanism',
+      'operations',
+      'source',
+      'type',
+    ]);
+    expect(action.mechanism).toBe('user');
+    expect(action.operations).toEqual([
+      {
+        op: 'entity_update',
+        payload: {
+          id: e.id,
+          props: { 'orbis/pinned': true, 'orbis/priority': 'high' },
+          aspects: { attach: ['orbis/note'] },
+        },
+      },
+    ]);
+    expect(action.inverse).toEqual([
+      {
+        op: 'entity_update',
+        payload: {
+          id: e.id,
+          props: { 'orbis/priority': 'low' },
+          unset: ['orbis/pinned'],
+          aspects: { detach: ['orbis/note'] },
+        },
+      },
+    ]);
+    // Старой карты в полезной нагрузке нет ни в одной половине записи: у `aspects`
+    // новой формы ключи только `attach`/`detach`, id аспекта ключом означал бы карту
+    for (const op of [...action.operations, ...action.inverse]) {
+      expect(Object.hasOwn(op.payload, 'meta')).toBe(false);
+      const aspects = (op.payload.aspects ?? {}) as Record<string, unknown>;
+      expect(Object.keys(aspects).filter((k) => k !== 'attach' && k !== 'detach')).toEqual([]);
+    }
   });
 
   test('2. явный req.threadId: audit-сообщение попадает в указанный тред, не в глобальный', async () => {

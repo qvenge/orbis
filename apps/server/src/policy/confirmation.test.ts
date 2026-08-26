@@ -276,18 +276,47 @@ describe('entityUpdatePreviewDiff: diff карточки preview из журна
     });
   });
 
-  test('поле, которого прежде не было (нет в inverse) → before: undefined', () => {
+  test('свойства раскрыты поштучно: добавленное → before undefined, снятое → after undefined (§А7-4)', () => {
     const id = newId();
     const diff = entityUpdatePreviewDiff({
       operations: [
-        { op: 'entity_update', payload: { id, aspects: { 'orbis/task': { status: 'done' } } } },
+        {
+          op: 'entity_update',
+          payload: {
+            id,
+            props: {
+              'orbis/task_status': 'done',
+              'orbis/completed_at': '2026-08-26T10:00:00.000Z',
+            },
+            unset: ['orbis/due_date'],
+            aspects: { attach: ['orbis/task'] },
+          },
+        },
       ],
-      inverse: [{ op: 'entity_update', payload: { id } }],
+      inverse: [
+        {
+          op: 'entity_update',
+          payload: {
+            id,
+            props: { 'orbis/task_status': 'planned', 'orbis/due_date': '2026-07-10' },
+            unset: ['orbis/completed_at'],
+            aspects: { detach: ['orbis/task'] },
+          },
+        },
+      ],
     });
-    expect(diff.aspects).toEqual({
-      before: undefined,
-      after: { 'orbis/task': { status: 'done' } },
+    expect(diff).toEqual({
+      'orbis/task_status': { before: 'planned', after: 'done' },
+      // проставлено нормализацией §3.2 — прежде его не было
+      'orbis/completed_at': { before: undefined, after: '2026-08-26T10:00:00.000Z' },
+      // снято операцией — прежнее значение видно из inverse
+      'orbis/due_date': { before: '2026-07-10', after: undefined },
+      // смена интерпретации — отдельной строкой, полями её не разбирают
+      aspects: { before: { detach: ['orbis/task'] }, after: { attach: ['orbis/task'] } },
     });
+    // мешков `props`/`unset` в карточке не остаётся: они раскрыты
+    expect(Object.hasOwn(diff, 'props')).toBe(false);
+    expect(Object.hasOwn(diff, 'unset')).toBe(false);
   });
 });
 

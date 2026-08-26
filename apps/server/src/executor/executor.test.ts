@@ -550,9 +550,18 @@ describe('executor: RLS и attach', () => {
     const e1 = firstEntity(good);
     expect(aspectOf(e1, 'orbis/task').status).toBe('done');
     expect(aspectOf(e1, 'orbis/task').completed_at).toBe(T0.toISOString()); // done при attach
-    // inverse: прежнее значение аспект-ключа (null — аспекта не было)
+    // inverse — дельта состояний (§А7-4): снятие ровно тех свойств, что attach добавил,
+    // плюс detach аспекта, которого не было. `completed_at` проставила нормализация §3.2,
+    // мимо входа тула, — и она обязана быть в откате наравне со статусом
     expect(first(sink.entries).action.inverse).toEqual([
-      { op: 'entity_update', payload: { id: e.id, aspects: { 'orbis/task': null } } },
+      {
+        op: 'entity_update',
+        payload: {
+          id: e.id,
+          unset: ['orbis/completed_at', 'orbis/task_status'],
+          aspects: { detach: ['orbis/task'] },
+        },
+      },
     ]);
   });
 

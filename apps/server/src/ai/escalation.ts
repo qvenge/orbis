@@ -35,7 +35,26 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import type { ActionRecord } from '../executor/types';
 import type { Card } from '../tools/registry';
 
+/**
+ * ОСТАТОК C С НАЗВАННОЙ ГРАНИЦЕЙ (§С1-4, места Z2-89 и Z2-90; правило 5 «почему кодом»).
+ *
+ * Три якоря ниже и сшивка пар «было → стало» остаются РУКОПИСНЫМ кодом и после переноса
+ * журнала на свойства. Граница у каждого своя и названа:
+ *  • Z2-89, якоря: эскалация целиком — кандидат в рутину над тремя контрактами («деньги»,
+ *    «категоризуемость», «память»). Пока контрактов нет (часть Б), список носителей
+ *    выражать нечем, и литералы честнее выдуманной обобщённости;
+ *  • Z2-90, сшивка: суждение «две одинаковые правки = намерение владельца» — эвристика, а
+ *    не предикат. Языком запросов Q она не выражается (это не «какие сущности», а «что
+ *    значит повтор»), правилом каталога — тоже: у правила нет входа «история журнала».
+ *    За границей рода она и остаётся; V2 делает её правилом-данными (§Б4-3).
+ *
+ * Что реформа здесь ВСЁ-ТАКИ поменяла: адрес. Категория перестала быть полем внутри
+ * аспект-ключа и стала свойством по id — эвристика читает её по новому адресу, оставаясь
+ * той же эвристикой.
+ */
 const FINANCIAL = 'orbis/financial';
+/** Слитое свойство категории (§А8/В1): его объявляют и транзакция, и конверт. */
+const FINANCE_CATEGORY = 'orbis/finance_category';
 const MEMORY = 'orbis/memory';
 const CATEGORY = 'orbis/category';
 /** Окно скана журнала и окно подавления повторного предложения — §7.8, 30 дней. */
@@ -70,8 +89,29 @@ function idDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function categoryRefOf(payload: Record<string, unknown>): string | undefined {
-  const aspects = payload.aspects as Record<string, Record<string, unknown> | null> | undefined;
+/**
+ * Категория в полезной нагрузке ЖУРНАЛА (§А7-4): плоское свойство по id, а не поле внутри
+ * аспект-ключа. Адрес один на обе половины записи — и на `operations`, и на `inverse`.
+ */
+function categoryOf(payload: Record<string, unknown>): string | undefined {
+  const props = payload.props as Record<string, unknown> | undefined;
+  const ref = props?.[FINANCE_CATEGORY];
+  return typeof ref === 'string' ? ref : undefined;
+}
+
+/**
+ * Та же категория, но во ВХОДЕ операции, а не в журнале, — и вот тут форм ДВЕ.
+ *
+ * Читается вход тулов, UI и серверных путей, а он до Задачи 12 остаётся union'ом
+ * (`entityUpdateExecInput`): переведённые пути шлют `props` по id, непереведённые — старую
+ * карту `{аспект: {поле: …}}`. Один адрес здесь означал бы, что дешёвый гейт вызова молча
+ * перестаёт срабатывать ровно на том пути, которым правку категории делает владелец из UI,
+ * — эскалация просто выключилась бы, ничем это не показав.
+ */
+function categoryInInput(input: Record<string, unknown>): string | undefined {
+  const fromProps = categoryOf(input);
+  if (fromProps !== undefined) return fromProps;
+  const aspects = input.aspects as Record<string, Record<string, unknown> | null> | undefined;
   const ref = aspects?.[FINANCIAL]?.category_ref;
   return typeof ref === 'string' ? ref : undefined;
 }
@@ -80,16 +120,20 @@ function categoryRefOf(payload: Record<string, unknown>): string | undefined {
  * Пары (прежняя, новая) категории из ОДНОГО action журнала. Решение K5: одинаково
  * разбираются оба типа — 'entity_updated' (одна операция) и 'batch' (плоский
  * operations, агрегированный inverse, entity_id=null); пары сшиваются по payload.id.
- * entity_create в batch отсеивается сам: его inverse — архивация, без аспектов.
- * Опора на форму journal-payload'а executor'а (executor.ts prepareEntityUpdate):
- * changed.aspects/prior.aspects несут ВЕСЬ затронутый аспект-ключ целиком.
+ * entity_create в batch отсеивается сам: его inverse — архивация, без свойств.
+ * Опора на форму journal-payload'а executor'а (executor.ts prepareEntityUpdate): обе
+ * половины записи — дельты состояний, и категория лежит в них плоским свойством (§А7-4).
+ *
+ * Категория, которой ДО правки не было, парой не становится: `from` остаётся undefined
+ * (в inverse она приезжает списком `unset`, а не значением). Это то же поведение, что и
+ * до реформы, и оно верное — «поставили категорию впервые» исправлением не является.
  */
 function extractRecategorizations(action: ActionRecord): Recategorization[] {
   const before = new Map<string, string>();
   for (const op of action.inverse) {
     if (op.op !== 'entity_update') continue;
     const id = op.payload.id;
-    const ref = categoryRefOf(op.payload);
+    const ref = categoryOf(op.payload);
     if (typeof id === 'string' && ref !== undefined) before.set(id, ref);
   }
   const out: Recategorization[] = [];
@@ -97,7 +141,7 @@ function extractRecategorizations(action: ActionRecord): Recategorization[] {
     if (op.op !== 'entity_update') continue;
     const id = op.payload.id;
     if (typeof id !== 'string') continue;
-    const to = categoryRefOf(op.payload);
+    const to = categoryOf(op.payload);
     const from = before.get(id);
     if (to === undefined || from === undefined || from === to) continue;
     out.push({ entityId: id, from, to });
@@ -115,17 +159,27 @@ function extractRecategorizations(action: ActionRecord): Recategorization[] {
 export const JOURNAL_SCAN_LIMIT = 200;
 
 /**
- * Audit-сообщения журнала владельца за 30 дней, чей action ОБНОВЛЯЛ orbis/financial.
- * Containment по GIN (chat_messages_metadata_gin) сужает выборку. Отменённые действия
- * исключаются тем же NOT EXISTS, что и в findLastUndoable (undo.ts): «исправил →
- * отменил → исправил» не должно считаться двумя исправлениями.
+ * Audit-сообщения журнала владельца за 30 дней, чей action ПЕРЕНОСИЛ что-то в одну из
+ * названных категорий. Containment по GIN (chat_messages_metadata_gin) сужает выборку.
+ * Отменённые действия исключаются тем же NOT EXISTS, что и в findLastUndoable (undo.ts):
+ * «исправил → отменил → исправил» не должно считаться двумя исправлениями.
  *
- * `op:'entity_update'` в пробе ОБЯЗАТЕЛЕН. Без него под неё попадает любой batch, в
- * котором финансовая сущность СОЗДАВАЛАСЬ: журнал entity_create несёт весь аспект в
- * payload (executor.ts prepareEntityCreate), то есть каждый CSV-импорт (до 300 строк +
- * metadata.results) читался и разбирался целиком ради нуля полезных строк —
- * extractRecategorizations отбрасывает все op ≠ entity_update. И это происходило
- * синхронно внутри entity.update владельца.
+ * ПРОБА ИДЁТ ПО ЗНАЧЕНИЮ, а не по наличию ключа, и выбора здесь не было. До §А7-4 категория
+ * лежала полем внутри аспект-ключа, и `{aspects: {orbis/financial: {}}}` означало «есть
+ * такой ключ, а внутри что угодно»: пустой объект содержится в любом объекте. Плоское
+ * свойство — строка, и `{props: {orbis/finance_category: {}}}` не содержится в ней НИКОГДА
+ * (объект не содержится в скаляре), а `{props: {}}` затянул бы под пробу любую правку любого
+ * свойства и вытеснил бы полезные записи потолком выборки. Значение известно и без журнала:
+ * `considerOne` считает только исправления с ТОЙ ЖЕ парой категорий, что у текущего действия,
+ * поэтому список `to` — ровно то, что скану и нужно. Заодно проба стала УЖЕ прежней: правка
+ * суммы или контрагента под неё больше не попадает вовсе.
+ *
+ * `op:'entity_update'` ОБЯЗАТЕЛЕН по-прежнему. Без него под пробу попадает любой batch, в
+ * котором финансовая сущность СОЗДАВАЛАСЬ с этой категорией: журнал entity_create несёт всё
+ * состояние в payload (executor.ts prepareEntityCreate), то есть каждый CSV-импорт (до 300
+ * строк + metadata.results) читался и разбирался целиком ради нуля полезных строк —
+ * extractRecategorizations отбрасывает все op ≠ entity_update. И это происходило синхронно
+ * внутри entity.update владельца.
  *
  * ORDER BY + LIMIT: потолок ограничивает объём разбираемого JSONB и размер результата,
  * а не сам обход GIN; после сужения пробы каждая найденная строка потенциально полезна,
@@ -135,18 +189,37 @@ export const JOURNAL_SCAN_LIMIT = 200;
  * Экспортируется ради теста: проба — самая хрупкая часть эскалации, и «лишние
  * прочитанные строки» никак иначе не наблюдаемы.
  */
-export async function scanFinancialUpdates(tx: Tx): Promise<ActionRecord[]> {
-  const probe = (type: string): string =>
+export async function scanFinancialUpdates(
+  tx: Tx,
+  toCategoryIds: readonly string[],
+): Promise<ActionRecord[]> {
+  const targets = [...new Set(toCategoryIds)];
+  if (targets.length === 0) return [];
+  const probe = (type: string, category: string): string =>
     JSON.stringify({
       actions: [
-        { type, operations: [{ op: 'entity_update', payload: { aspects: { [FINANCIAL]: {} } } }] },
+        {
+          type,
+          operations: [
+            { op: 'entity_update', payload: { props: { [FINANCE_CATEGORY]: category } } },
+          ],
+        },
       ],
     });
+  // Дизъюнкция ЛИТЕРАЛЬНЫХ containment-предикатов, а не подзапрос по массиву проб: индексом
+  // (`jsonb_path_ops`) берётся только `metadata @> <константа>`, и коррелированный
+  // `EXISTS (… unnest …)` тихо увёл бы скан в seq scan — тесты этого не увидели бы вовсе.
+  const matches = sql.join(
+    targets.flatMap((category) => [
+      sql`m.metadata @> ${probe('entity_updated', category)}::jsonb`,
+      sql`m.metadata @> ${probe('batch', category)}::jsonb`,
+    ]),
+    sql` OR `,
+  );
   const rows = await tx.execute(
     sql`SELECT m.metadata FROM chat_messages m
         WHERE m.created_at > now() - make_interval(days => ${WINDOW_DAYS})
-          AND (m.metadata @> ${probe('entity_updated')}::jsonb
-               OR m.metadata @> ${probe('batch')}::jsonb)
+          AND (${matches})
           AND NOT EXISTS (
             SELECT 1 FROM chat_messages u
             WHERE u.metadata @> jsonb_build_object(
@@ -163,15 +236,24 @@ export async function scanFinancialUpdates(tx: Tx): Promise<ActionRecord[]> {
   return out;
 }
 
-/** Все рекатегоризации журнала владельца за 30 дней, кроме текущего действия. */
+/**
+ * Рекатегоризации журнала владельца за 30 дней В ТЕ ЖЕ категории, что и текущее действие,
+ * кроме него самого.
+ *
+ * Сужение по `to` — не оптимизация, а условие индексируемости пробы (см. `scanFinancialUpdates`):
+ * у containment'а нет предиката «ключ есть, значение любое». Оно же ничего не теряет:
+ * `considerOne` берёт из журнала ровно те исправления, у которых пара категорий совпадает
+ * с текущим, — всё остальное он отфильтровал бы и сам.
+ */
 async function journalRecategorizations(
   tx: Tx,
-  exceptActionId: string,
+  action: ActionRecord,
+  toCategoryIds: readonly string[],
 ): Promise<Recategorization[]> {
   const out: Recategorization[] = [];
-  for (const action of await scanFinancialUpdates(tx)) {
-    if (action.id === exceptActionId) continue;
-    out.push(...extractRecategorizations(action));
+  for (const found of await scanFinancialUpdates(tx, toCategoryIds)) {
+    if (found.id === action.id) continue;
+    out.push(...extractRecategorizations(found));
   }
   return out;
 }
@@ -419,8 +501,9 @@ export async function maybeSuggestRule(deps: {
     // рекатегоризации с уже отправленным предложением скана не бывает вовсе (гейт
     // подавления стоит раньше), и подъём заставил бы платить за него на пустом месте.
     let journal: Recategorization[] | undefined;
+    const targets = recats.map((rc) => rc.to);
     const loadJournal = async (): Promise<Recategorization[]> => {
-      journal ??= await journalRecategorizations(tx, deps.action.id);
+      journal ??= await journalRecategorizations(tx, deps.action, targets);
       return journal;
     };
     let last: SuggestRuleResult = { suggested: false, reason: 'not_recategorization' };
@@ -450,17 +533,19 @@ interface MutationOp {
 
 /**
  * Дешёвый гейт вызова (DF п.1): хоть одна операция действия — entity_update, меняющий
- * orbis/financial.category_ref. Смотрим на ОПЕРАЦИИ, а не на имя тула: групповую
- * рекатегоризацию план требует слать одним batch_execute, и гейт по имени
- * «entity_update» отсекал её целиком. Читающая половина к батчу готова и без этого
- * (extractRecategorizations разбирает плоский operations действия type='batch').
+ * категорию. Смотрим на ОПЕРАЦИИ, а не на имя тула: групповую рекатегоризацию план
+ * требует слать одним batch_execute, и гейт по имени «entity_update» отсекал её целиком.
+ * Читающая половина к батчу готова и без этого (extractRecategorizations разбирает плоский
+ * operations действия type='batch').
+ *
+ * Читается ВХОД операции, а не журнал, поэтому и адрес здесь двойной — см. `categoryInInput`.
  */
 function touchesCategoryRef(operations: readonly MutationOp[]): boolean {
   return operations.some((op) => {
     if (op.tool !== 'entity_update') return false;
     const input = op.input;
     if (typeof input !== 'object' || input === null) return false;
-    return categoryRefOf(input as Record<string, unknown>) !== undefined;
+    return categoryInInput(input as Record<string, unknown>) !== undefined;
   });
 }
 

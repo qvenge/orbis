@@ -141,16 +141,34 @@ export function grantsRoutineAutonomy(tool: string, input: unknown): boolean {
  * журнала §7.8 («как исполнено», после нормализаций), прежние — inverse[0].payload;
  * id — не изменение, исключается. Поле, которого прежде не было, честно даёт
  * before: undefined.
+ *
+ * Свойства раскрываются ПОШТУЧНО, каждое своей строкой. С §А7-4 они приезжают мешком
+ * (`props`, `unset`), и обход по верхним ключам показал бы владельцу одну строку «props:
+ * {объект} → {объект}» вместо перечня правок — то есть карточка подтверждения перестала бы
+ * называть, что именно подтверждают. Снятое свойство — строка с `after: undefined`, ровно
+ * так же, как добавленное даёт `before: undefined`.
+ *
+ * `aspects` строкой и остаётся: это смена интерпретации (`{attach, detach}`), а не значение
+ * свойства, и разбирать её на поля было бы враньём про то, что изменилось.
  */
 export function entityUpdatePreviewDiff(
   action: Pick<ActionRecord, 'operations' | 'inverse'>,
 ): Record<string, { before: unknown; after: unknown }> {
   const after = action.operations[0]?.payload ?? {};
   const before = action.inverse[0]?.payload ?? {};
+  const afterProps = (after.props ?? {}) as Record<string, unknown>;
+  const beforeProps = (before.props ?? {}) as Record<string, unknown>;
   const diff: Record<string, { before: unknown; after: unknown }> = {};
   for (const [key, value] of Object.entries(after)) {
-    if (key === 'id') continue;
+    if (key === 'id' || key === 'props' || key === 'unset') continue;
     diff[key] = { before: before[key], after: value };
+  }
+  for (const [propertyId, value] of Object.entries(afterProps)) {
+    diff[propertyId] = { before: beforeProps[propertyId], after: value };
+  }
+  // Снятое операцией: прежнее значение лежит в inverse — им откат его и возвращает
+  for (const propertyId of (after.unset ?? []) as string[]) {
+    diff[propertyId] = { before: beforeProps[propertyId], after: undefined };
   }
   return diff;
 }

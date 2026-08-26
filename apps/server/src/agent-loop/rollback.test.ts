@@ -31,6 +31,16 @@ function okResult<T>(r: Awaited<ReturnType<typeof dispatchTool>>): T {
   return r.result as T;
 }
 
+/** Свойства строки — новая правда сущности (§А1-1): её и восстанавливает откат. */
+async function propsOf(owner: string, id: string): Promise<Record<string, unknown>> {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.select({ props: entities.props }).from(entities).where(eq(entities.id, id)),
+  );
+  const row = rows[0];
+  if (!row) throw new Error(`сущность ${id} не найдена`);
+  return row.props as Record<string, unknown>;
+}
+
 /** Архивирован ли прогон: инверсия entity_create — архивация, а не удаление (§7.8). */
 async function isArchived(owner: string, id: string): Promise<boolean> {
   const rows = await withIdentity(db, owner, (tx) =>
@@ -121,6 +131,12 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     // Тикет — в том состоянии, в котором его застал захват (inverse захвата), а не в
     // in_progress: откат снимает ВЕСЬ прогон, а не последний его глагол
     expect((await aspectsOf(owner, ticketId))['orbis/task']).toEqual({ status: 'planned' });
+    // Восстановлена НОВАЯ правда (§А1-1), а не только её проекция: единица отката —
+    // свойство, и проверять надо ту колонку, из которой проекция и считается
+    const props = await propsOf(owner, ticketId);
+    expect(props['orbis/task_status']).toBe('planned');
+    // Назначение прогон не трогал — откат его и не касается
+    expect(props['orbis/executor']).toBe('agent');
     expect(await isArchived(owner, runId)).toBe(true);
   });
 
@@ -219,8 +235,12 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     expect(out.conflicts).toContainEqual(
       expect.objectContaining({ entityId: ticketId, actionId: edit.id, source: 'ui' }),
     );
-    // Ничего не откачено, и приоритет владельца на месте: inverse захвата вернул бы
-    // `orbis/task` целиком к состоянию ДО claim и унёс бы его вместе со статусом
+    // Ничего не откачено, и приоритет владельца на месте. С единицей отката «свойство»
+    // (§А7-4) inverse захвата унёс бы только `orbis/task_status`, а не весь `orbis/task`,
+    // — но конфликт всё равно ОБЯЗАН быть показан: `touchedEntities` считает по сущности
+    // (TOUCHED_KEYS — uuid-ключи payload'а), а не по свойству, и это осознанная
+    // перестраховка инварианта 7: лучше лишняя строка конфликта, чем затёртая правка
+    // владельца в том же свойстве
     expect(await undoMessages(owner)).toBe(undoneBefore);
     expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({
       status: 'waiting',

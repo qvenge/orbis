@@ -89,10 +89,82 @@ export function applyPropsPatch(cur: EntityState, patch: PropsPatch): EntityStat
 }
 
 /**
+ * Правка состояния в форме журнала (§А7-4): что изменилось между двумя состояниями.
+ *
+ * Ровно та форма, которую принимает вход исполнителя (`entityPropsPatch`), — и это не
+ * совпадение: полезная нагрузка журнала обязана оставаться ИСПОЛНИМОЙ, потому что
+ * `applyUndo` (undo.ts) строит из inverse туловый вызов и гонит его тем же конвейером.
+ */
+export interface StateDelta {
+  props?: Record<string, unknown>;
+  unset?: string[];
+  aspects?: { attach?: string[]; detach?: string[] };
+}
+
+/**
+ * Дельта двух состояний — единица журнала и единица отката (§А7-4).
+ *
+ * Считается по СОСТОЯНИЯМ, а не по патчу, и это существенно. Патч — то, что попросил автор;
+ * состояние «после» — то, что записано, и между ними стоят доменные нормализации, пишущие
+ * мимо патча: `applyTaskCompletion` дописывает `orbis/completed_at`, `dropStaleCarryover`
+ * снимает перенос, подстановка умолчания валюты кладёт `orbis/currency`. Inverse, собранный
+ * из патча, этих свойств не нёс бы — и откат оставлял бы в графе то, чего до операции не
+ * было. Отсюда же обратимость «байт-в-байт» (§С7-13) получается по построению: inverse —
+ * это `stateDelta(после, до)`, зеркало прямой дельты, а не второй, независимо написанный
+ * расчёт, который разошёлся бы с ней при первой же правке.
+ *
+ * Сравнение значений — по КАНОНУ, а не по ссылке: `props` перекладываются между объектами
+ * на каждом слиянии, и «другой объект с теми же полями» изменением не является — попади он
+ * в дельту, журнал распухал бы записями «поменяли на то же самое», а `entityUpdatePreviewDiff`
+ * показывал бы владельцу правку, которой не было. Канон здесь дешёвый и тотальный
+ * (`canonicalJson`), а не сравнение по типу свойства (`comparePropertyValue`): последнее
+ * отвечает на вопрос предусловий «то же ли это ЗНАЧЕНИЕ по правилам типа» и, например,
+ * объявило бы `"10.0"` и `"10.00"` одним и тем же — для CAS это верно, а для журнала было
+ * бы потерей факта: в колонку легло не то, что лежало.
+ *
+ * Списки отсортированы, а пустые части опущены: запись журнала сравнивается побайтно
+ * (пины формы, containment-пробы), и порядок, зависящий от обхода патча, делал бы её
+ * невоспроизводимой.
+ */
+export function stateDelta(from: EntityState, to: EntityState): StateDelta {
+  const props: Record<string, unknown> = {};
+  for (const [propertyId, value] of Object.entries(to.props)) {
+    if (
+      Object.hasOwn(from.props, propertyId) &&
+      canonicalJson(from.props[propertyId]) === canonicalJson(value)
+    ) {
+      continue;
+    }
+    props[propertyId] = value;
+  }
+  const unset = Object.keys(from.props)
+    .filter((propertyId) => !Object.hasOwn(to.props, propertyId))
+    .sort();
+
+  const had = new Set(from.aspects);
+  const has = new Set(to.aspects);
+  const attach = to.aspects.filter((id) => !had.has(id)).sort();
+  const detach = from.aspects.filter((id) => !has.has(id)).sort();
+
+  const delta: StateDelta = {};
+  if (Object.keys(props).length > 0) delta.props = props;
+  if (unset.length > 0) delta.unset = unset;
+  if (attach.length > 0 || detach.length > 0) {
+    delta.aspects = {
+      ...(attach.length > 0 && { attach }),
+      ...(detach.length > 0 && { detach }),
+    };
+  }
+  return delta;
+}
+
+/**
  * Свойства, которых патч КАСАЕТСЯ: и записанные, и снятые. По ним считается, какие аспекты
- * затронуты (единица журнала и инвариантов в срезе А — по-прежнему аспект-ключ, §А7-4
- * переводит её в Задаче 6), поэтому снятие обязано считаться наравне с записью: патч,
- * стирающий поле, трогает аспект ровно так же, как патч, его пишущий.
+ * затронуты — вход доменных проверок и запрета по объекту (V1.10), которым по-прежнему
+ * нужен АСПЕКТ («тронул ли патч прогон», «появился ли конверт»). Единица журнала и отката
+ * с §А7-4 — свойство, и считает её `stateDelta` выше, по состояниям, а не по патчу.
+ * Снятие считается наравне с записью: патч, стирающий поле, трогает аспект ровно так же,
+ * как патч, его пишущий.
  */
 export function touchedProperties(patch: PropsPatch): Set<string> {
   const touched = new Set<string>(Object.keys(patch.set ?? {}));

@@ -426,10 +426,22 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     return (rows as unknown as Array<{ content: string; metadata: Record<string, unknown> }>)[0];
   }
 
-  /** Бухгалтерские патчи, снявшие флажок с этого прогона: их должно быть ровно столько. */
+  /**
+   * Бухгалтерские патчи, снявшие флажок с этого прогона: их должно быть ровно столько.
+   *
+   * Адрес — id свойства: с §А7-4 единица журнала стала свойством, и поиск поля `undecided`
+   * внутри аспект-ключа не нашёл бы больше ничего (а ассерт «ровно ноль» рядом позеленел бы
+   * ни о чём).
+   */
   async function clearingActions(runId: string): Promise<ActionRecord[]> {
     return (await actionsOf(owner)).filter(
-      (a) => a.run_id === runId && JSON.stringify(a.operations).includes('"undecided":false'),
+      (a) =>
+        a.run_id === runId &&
+        a.operations.some(
+          (op) =>
+            (op.payload.props as Record<string, unknown> | undefined)?.['orbis/undecided'] ===
+            false,
+        ),
     );
   }
 

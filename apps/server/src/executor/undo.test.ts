@@ -1,7 +1,7 @@
 // apps/server/src/executor/undo.test.ts
 // Интеграционные тесты Task 11: Undo §7.8 — отмена НЕ правит журнал (новое
 // undo-сообщение в тот же тред), inverse через внутренний режим executor'а
-// (LWW-откат body без optimistic-check, восстановление аспект-ключа целиком),
+// (LWW-откат body без optimistic-check, восстановление ЗАТРОНУТЫХ СВОЙСТВ — §А7-4),
 // повторная отмена, undoLast со сканом с конца, undo связей и batch.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { materializeBatchId, newId, recurringInstanceId } from '@orbis/shared';
@@ -10,7 +10,14 @@ import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test
 import { materializeInstances } from '../recurring/materialize';
 import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
-import type { ExecuteErr, ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from './types';
+import type {
+  ActionRecord,
+  ExecuteErr,
+  ExecuteOk,
+  ExecuteRequest,
+  ExecuteResult,
+  WireEntity,
+} from './types';
 import { undoAction, undoLast } from './undo';
 
 requireEnv();
@@ -62,11 +69,33 @@ async function adminRows(query: ReturnType<typeof sql>): Promise<Array<Record<st
 
 async function entityRow(id: string): Promise<Record<string, unknown>> {
   const rows = await adminRows(
-    sql`SELECT title, body, aspects_legacy, tags, archived FROM entities WHERE id = ${id}`,
+    sql`SELECT title, body, props, aspects, aspects_legacy, tags, archived
+        FROM entities WHERE id = ${id}`,
   );
   const row = rows[0];
   if (!row) throw new Error(`сущность ${id} не найдена`);
   return row;
+}
+
+/** Значения свойств строки — новая правда сущности (§А1-1), а не её старая проекция. */
+async function propsOf(id: string): Promise<Record<string, unknown>> {
+  return (await entityRow(id)).props as Record<string, unknown>;
+}
+
+/** Запись журнала по id действия — по ней читается ФОРМА operations/inverse (§А7-4). */
+async function actionById(user: string, actionId: string): Promise<ActionRecord> {
+  const probe = JSON.stringify({ actions: [{ id: actionId }] });
+  const rows = await adminRows(
+    sql`SELECT m.metadata FROM chat_messages m
+        JOIN chat_threads t ON t.id = m.thread_id
+        WHERE t.owner_id = ${user} AND m.metadata @> ${probe}::jsonb
+        LIMIT 1`,
+  );
+  const action = (rows[0]?.metadata as { actions?: ActionRecord[] } | undefined)?.actions?.find(
+    (a) => a.id === actionId,
+  );
+  if (!action) throw new Error(`действие ${actionId} не найдено в журнале`);
+  return action;
 }
 
 /** Число undo-сообщений с данным action_id у владельца (по containment §7.8). */
@@ -137,43 +166,104 @@ describe('undoAction: создание → архивация (§7.8)', () => {
   });
 });
 
-describe('undoAction: entity_update — LWW-откат (§7.8, обязательство 2)', () => {
-  test('undo возвращает прежний title, body несмотря на optimistic-check и аспект-ключ ЦЕЛИКОМ', async () => {
+/**
+ * Единица отката — СВОЙСТВО (§А7-4). До реформы inverse нёс прежнее значение всего
+ * аспект-ключа, и отмена правки статуса возвращала `orbis/task` целиком: правку соседнего
+ * поля, легшую позже, откат уносил заодно. Здесь это и проверяется — и на форме записи
+ * журнала, и на итоговой строке.
+ */
+describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§7.8, §А7-4)', () => {
+  const T = new Date('2026-08-26T10:00:00.000Z');
+
+  test('inverse несёт прежние значения ТОЛЬКО затронутых свойств; третье свойство аспекта переживает откат', async () => {
     const user = freshUserId();
     const created = ok(
       await execute(
         db,
-        req(user, 'entity_create', {
-          title: 'Старый',
-          tags: [],
-          body: 'v1',
-          aspects: { 'orbis/task': { status: 'inbox' } },
-        }),
+        req(
+          user,
+          'entity_create',
+          {
+            title: 'Старый',
+            tags: [],
+            body: 'v1',
+            aspects: {
+              'orbis/task': { status: 'inbox', priority: 'low', due_date: '2026-07-01' },
+            },
+          },
+          { clock: () => T },
+        ),
         { sink },
       ),
     );
     const e = created.results[0] as WireEntity;
 
-    // правка: title + body (с optimistic-check §5.2) + патч аспекта, добавляющий
-    // поля (completed_at проставит сервер, due_date — патч), которых в прежнем ключе не было
+    // Правка ДВУХ свойств одного аспекта: третьего (due_date) патч не касается вовсе,
+    // а completed_at дописывает нормализация §3.2 — и она обязана попасть в откат
     const updated = ok(
       await execute(
         db,
-        req(user, 'entity_update', {
-          id: e.id,
-          title: 'Новый',
-          body: 'v2',
-          expectedUpdatedAt: e.updatedAt,
-          aspects: { 'orbis/task': { status: 'done', due_date: '2026-07-10' } },
-        }),
+        req(
+          user,
+          'entity_update',
+          {
+            id: e.id,
+            title: 'Новый',
+            body: 'v2',
+            expectedUpdatedAt: e.updatedAt,
+            aspects: { 'orbis/task': { status: 'done', priority: 'high' } },
+          },
+          { clock: () => T },
+        ),
         { sink },
       ),
     );
     const undoTarget = updated.actionId;
 
-    // ещё одна правка двигает updated_at вперёд: inverse с body (без expectedUpdatedAt)
-    // упёрся бы в §5.2 — undo применяет осознанный LWW-откат через internal-режим
-    ok(await execute(db, req(user, 'entity_update', { id: e.id, tags: ['later'] }), { sink }));
+    // Форма записи: единица — свойство по id, старой карты в полезной нагрузке нет
+    const action = await actionById(user, undoTarget);
+    expect(action.operations).toEqual([
+      {
+        op: 'entity_update',
+        payload: {
+          id: e.id,
+          title: 'Новый',
+          body: 'v2',
+          props: {
+            'orbis/task_status': 'done',
+            'orbis/priority': 'high',
+            'orbis/completed_at': T.toISOString(),
+          },
+        },
+      },
+    ]);
+    expect(action.inverse).toEqual([
+      {
+        op: 'entity_update',
+        payload: {
+          id: e.id,
+          title: 'Старый',
+          body: 'v1',
+          props: { 'orbis/priority': 'low', 'orbis/task_status': 'inbox' },
+          // completed_at до операции не было — откат его СНИМАЕТ, а не восстанавливает
+          unset: ['orbis/completed_at'],
+        },
+      },
+    ]);
+
+    // Правка соседнего свойства ПОСЛЕ отменяемого действия — то, что старая единица
+    // отката (весь аспект-ключ) уносила молча. Она же двигает updated_at вперёд:
+    // inverse с body упёрся бы в §5.2, если бы не внутренний режим
+    ok(
+      await execute(
+        db,
+        req(user, 'entity_update', {
+          id: e.id,
+          aspects: { 'orbis/task': { due_date: '2026-09-09' } },
+        }),
+        { sink },
+      ),
+    );
 
     const u = ok(await undoAction(db, { actorUserId: user, actionId: undoTarget }));
     expect(u.actionId).toBe(undoTarget);
@@ -181,13 +271,204 @@ describe('undoAction: entity_update — LWW-откат (§7.8, обязател�
     const row = await entityRow(e.id);
     expect(row.title).toBe('Старый');
     expect(row.body).toBe('v1'); // восстановлен несмотря на изменившийся updated_at
-    // аспект-ключ восстановлен целиком: due_date и completed_at, добавленные
-    // отменённой правкой, исчезли (shallow-merge оставил бы их)
+    const props = row.props as Record<string, unknown>;
+    expect(props['orbis/task_status']).toBe('inbox');
+    expect(props['orbis/priority']).toBe('low');
+    // Снято, а не восстановлено: до операции свойства не было
+    expect(Object.hasOwn(props, 'orbis/completed_at')).toBe(false);
+    // ДЕЛИВЕРЕБЛ §А7-4: чужая правка третьего свойства ПЕРЕЖИЛА откат
+    expect(props['orbis/due_date']).toBe('2026-09-09');
     expect((row.aspects_legacy as Record<string, unknown>)['orbis/task']).toEqual({
       status: 'inbox',
+      priority: 'low',
+      due_date: '2026-09-09',
     });
-    // поле, не затронутое отменяемым действием, не откатывается
-    expect(row.tags).toEqual(['later']);
+    // поле вне свойств, не затронутое отменяемым действием, тоже не откатывается
+    expect(row.tags).toEqual([]);
+  });
+
+  test('attach аспекта: inverse = detach + unset ровно добавленных свойств; чужие значения остаются', async () => {
+    const user = freshUserId();
+    const created = ok(
+      await execute(
+        db,
+        req(user, 'entity_create', {
+          title: 'Заметка',
+          tags: [],
+          aspects: { 'orbis/note': { pinned: true } },
+        }),
+        { sink },
+      ),
+    );
+    const e = created.results[0] as WireEntity;
+
+    const attached = ok(
+      await execute(
+        db,
+        req(
+          user,
+          'attach_orbis_task',
+          { entity_id: e.id, data: { status: 'planned', priority: 'high' } },
+          { clock: () => T },
+        ),
+        { sink },
+      ),
+    );
+
+    const action = await actionById(user, attached.actionId);
+    expect(action.operations).toEqual([
+      {
+        op: 'attach_orbis_task',
+        payload: {
+          entity_id: e.id,
+          props: { 'orbis/priority': 'high', 'orbis/task_status': 'planned' },
+          aspects: { attach: ['orbis/task'] },
+        },
+      },
+    ]);
+    expect(action.inverse).toEqual([
+      {
+        op: 'entity_update',
+        payload: {
+          id: e.id,
+          unset: ['orbis/priority', 'orbis/task_status'],
+          aspects: { detach: ['orbis/task'] },
+        },
+      },
+    ]);
+
+    ok(await undoAction(db, { actorUserId: user, actionId: attached.actionId }));
+    const row = await entityRow(e.id);
+    expect(row.aspects).toEqual(['orbis/note']);
+    // Значение, существовавшее ДО attach, откат не трогает
+    expect(row.props).toEqual({ 'orbis/pinned': true });
+    expect(row.aspects_legacy).toEqual({ 'orbis/note': { pinned: true } });
+  });
+
+  test('слитое свойство orbis/finance_category: одна правка — две половины старой карты, откат возвращает обе', async () => {
+    const user = freshUserId();
+    const catA = newId();
+    const catB = newId();
+    const created = ok(
+      await execute(
+        db,
+        req(user, 'entity_create', {
+          title: 'Транзакция-конверт',
+          tags: [],
+          aspects: {
+            'orbis/financial': {
+              amount: '340.00',
+              currency: 'RUB',
+              direction: 'expense',
+              category_ref: catA,
+              occurred_on: '2026-08-26',
+            },
+            // Период конверта НЕ покрывает дату транзакции намеренно: иначе бюджет-хук
+            // связал бы запись саму с собой (категория и валюта слиты по построению) и
+            // упал бы `self_relation`, маскируя проверяемое здесь
+            'orbis/budget': {
+              category_ref: catA,
+              limit: '1000.00',
+              currency: 'RUB',
+              period_start: '2026-11-01',
+              period_end: '2026-11-30',
+            },
+          },
+        }),
+        { sink },
+      ),
+    );
+    const e = created.results[0] as WireEntity;
+
+    const updated = ok(
+      await execute(
+        db,
+        req(user, 'entity_update', {
+          id: e.id,
+          aspects: { 'orbis/financial': { category_ref: catB } },
+        }),
+        { sink },
+      ),
+    );
+    // Одно свойство в журнале — при том, что старая карта поменялась у ДВУХ ключей (В1)
+    const action = await actionById(user, updated.actionId);
+    expect(action.operations[0]?.payload).toEqual({
+      id: e.id,
+      props: { 'orbis/finance_category': catB },
+    });
+    expect(action.inverse[0]?.payload).toEqual({
+      id: e.id,
+      props: { 'orbis/finance_category': catA },
+    });
+    const afterUpdate = (await entityRow(e.id)).aspects_legacy as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(afterUpdate['orbis/financial']?.category_ref).toBe(catB);
+    expect(afterUpdate['orbis/budget']?.category_ref).toBe(catB);
+
+    ok(await undoAction(db, { actorUserId: user, actionId: updated.actionId }));
+    const legacy = (await entityRow(e.id)).aspects_legacy as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(legacy['orbis/financial']?.category_ref).toBe(catA);
+    expect(legacy['orbis/budget']?.category_ref).toBe(catA);
+  });
+
+  test('материализованное умолчание валюты снимается откатом: шов слитого orbis/currency закрыт', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    // Транзакция БЕЗ валюты: у financial поле необязательно, умолчание не материализуется
+    const created = ok(
+      await execute(
+        db,
+        req(user, 'entity_create', {
+          title: 'Расход без валюты',
+          tags: [],
+          aspects: {
+            'orbis/financial': {
+              amount: '340.00',
+              direction: 'expense',
+              category_ref: cat,
+              occurred_on: '2026-08-26',
+            },
+          },
+        }),
+        { sink },
+      ),
+    );
+    const e = created.results[0] as WireEntity;
+    expect(Object.hasOwn(await propsOf(e.id), 'orbis/currency')).toBe(false);
+
+    // Аспект конверта навешивается НОВОЙ формой и БЕЗ валюты: категория у него уже есть
+    // (слитое свойство), поэтому патч не касается ни одного свойства financial — ровно тот
+    // угол, в котором прежний inverse (по аспект-ключам) не нёс financial-половину
+    const updated = ok(
+      await execute(
+        db,
+        req(user, 'entity_update', {
+          id: e.id,
+          props: {
+            'orbis/limit': '1000.00',
+            // Период вне даты транзакции — чтобы бюджет-хук не связал запись с самой собой
+            'orbis/period_start': '2026-11-01',
+            'orbis/period_end': '2026-11-30',
+          },
+          aspects: { attach: ['orbis/budget'] },
+        }),
+        { sink },
+      ),
+    );
+    const materialized = await propsOf(e.id);
+    expect(typeof materialized['orbis/currency']).toBe('string'); // умолчание владельца легло
+
+    ok(await undoAction(db, { actorUserId: user, actionId: updated.actionId }));
+    const props = await propsOf(e.id);
+    // ШОВ: до операции валюты не было — после отката её тоже нет
+    expect(Object.hasOwn(props, 'orbis/currency')).toBe(false);
+    expect(Object.hasOwn(props, 'orbis/limit')).toBe(false);
+    expect((await entityRow(e.id)).aspects).toEqual(['orbis/financial']);
   });
 });
 
