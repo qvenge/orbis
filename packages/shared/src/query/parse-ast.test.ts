@@ -234,7 +234,7 @@ test('опись боевых текстов: вердикт и флаги ка�
     Object.values(PRODUCTION_QUERY_STATS.byVerdict).reduce((a, b) => a + b, 0);
   expect(covered).toBe(PRODUCTION_QUERY_STATS.total);
 
-  // Пять адресов, которые разбираются уже сегодня, названы поимённо: «разбирается» — это
+  // Шесть адресов, которые разбираются уже сегодня, названы поимённо: «разбирается» — это
   // утверждение о КОНКРЕТНЫХ местах, а не число, которое можно подогнать.
   expect(PRODUCTION_QUERY_TEXTS.filter((e) => e.verdict === null).map((e) => e.where)).toEqual([
     'apps/web/src/features/chat/useFastPath.ts:17 (CATEGORY_QUERY)',
