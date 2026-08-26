@@ -1029,7 +1029,13 @@ CREATE INDEX relations_target_role ON relations (target_id, role);
 export interface RelationKey { sourceId: string; targetId: string; role: string }
 export async function assertRoleConstraints(tx, reg: RegistrySnapshot, key: RelationKey, effects: VirtualGraphEffects, mechanism: MutationMechanism): Promise<void>;
 // created_by:system + mechanism 'user' → ROLE_SYSTEM_ONLY; acyclic → assertAcyclic(role) (WITH RECURSIVE по (source_id, role), кап 32, advisory `<owner>:<role>`);
-// target_max_incoming → assertTargetMaxIncoming; неизвестная роль → VALIDATION; deprecated роль — создание отказ, чтение живо
+// target_max_incoming → assertTargetMaxIncoming; неизвестная роль → VALIDATION
+// СНЯТО рулингом Р-7a-1: «deprecated роль — создание отказ» в срезе А НЕВЫПОЛНИМО и не требуется.
+//   Спека §А4-2 перечисляет столбцы `relation_role_definitions` поимённо (id, owner_id, key, label,
+//   description, source_label, target_label, hierarchical, constraints, symmetric, module, rank,
+//   created_at) — колонки `status` среди них НЕТ, в отличие от `property_definitions` (§А2-1).
+//   Миграция 0014 спеке соответствует. Носителя статуса у ролей не существует, заводить его
+//   пятой миграцией запрещено. Жизненный цикл ролей — часть Б вместе с контрактами и модулями.
 ```
 - [ ] **Шаг 1:** применить 0016 на локальной базе ДО кода (`bun run db:prepare` — миграция обязана
   накатиться на пустой и на непустой базе). **Падающие тесты** (`relations.test.ts` 21 → роли,
