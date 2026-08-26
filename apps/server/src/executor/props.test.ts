@@ -602,8 +602,8 @@ describe('гейты флагов свойств', () => {
       ),
     );
 
-    // attach заменяет носитель ЦЕЛИКОМ и приходит от лица владельца: `bank_txn_id` в схеме
-    // тула нет и быть не может, поэтому его снятие — не распоряжение автора.
+    // attach заменяет носитель ЦЕЛИКОМ и приходит от лица владельца, но `bank_txn_id` он НЕ
+    // НАЗЫВАЕТ — значит и снятие его не распоряжение автора.
     ok(
       await run('attach_orbis_financial', {
         entity_id: imported.id,
@@ -624,6 +624,122 @@ describe('гейты флагов свойств', () => {
     expect(Object.hasOwn(row.props, 'orbis/payment_method')).toBe(false);
     // …и его больше нет в старой карте: проекция и колонка сходятся (проверено выше)
     expect(row.aspectsLegacy['orbis/financial']).toMatchObject({ bank_txn_id: 'BNK-42' });
+
+    // Фильтр — ТОЛЬКО про неназванное поле. Назвал явно — дошёл до гейта: схема
+    // `attach_*`-тула служебные поля пока пропускает (вывод их из `attach_*` — Задача 12),
+    // и отбивает их именно право записи, а не форма входа.
+    const named = await run('attach_orbis_financial', {
+      entity_id: imported.id,
+      data: {
+        amount: '1500.00',
+        direction: 'expense',
+        category_ref: CATEGORY_A,
+        occurred_on: '2026-08-20',
+        bank_txn_id: 'ПОДДЕЛКА',
+      },
+    });
+    expect(named.ok).toBe(false);
+    if (named.ok) return;
+    expect(named.error.code).toBe('COMPUTED_WRITE');
+    expect(named.error.details).toMatchObject({
+      property: 'orbis/bank_txn_id',
+      reason: 'system_writable',
+    });
+    expect((await rowOf(imported.id)).props['orbis/bank_txn_id']).toBe('BNK-42');
+  });
+
+  test('замена с НОВЫМ периодом не переносит carryover прошлого периода (03-budget §2.6)', async () => {
+    // Перенос кладёт правило rollover — единственный, кому это разрешено (§А2-5)
+    const envelope = entityOf(
+      await run(
+        'entity_create',
+        {
+          title: 'Конверт «Еда», июль',
+          tags: [],
+          aspects: {
+            'orbis/budget': {
+              category_ref: CATEGORY_A,
+              currency: 'RUB',
+              limit: '30000.00',
+              period_start: '2026-07-01',
+              period_end: '2026-07-31',
+              carryover: '-120.00',
+            },
+          },
+        },
+        { mechanism: 'rule' },
+      ),
+    );
+    expect((await rowOf(envelope.id)).props['orbis/carryover']).toBe('-120.00');
+
+    // Владелец переносит конверт на сентябрь. Идентичность конверта (§2.1) сменилась —
+    // июльский остаток к сентябрьскому лимиту отношения не имеет, и `effectiveLimit`
+    // (limit + carryover) молча завышаться не должен.
+    ok(
+      await run('attach_orbis_budget', {
+        entity_id: envelope.id,
+        data: {
+          category_ref: CATEGORY_A,
+          currency: 'RUB',
+          limit: '30000.00',
+          period_start: '2026-09-01',
+          period_end: '2026-09-30',
+        },
+      }),
+    );
+    const moved = await expectProjection(envelope.id);
+    expect(moved.props['orbis/period_start']).toBe('2026-09-01');
+    expect(Object.hasOwn(moved.props, 'orbis/carryover')).toBe(false);
+    expect(moved.aspectsLegacy['orbis/budget']).not.toHaveProperty('carryover');
+  });
+
+  test('перенос ПЕРЕЖИВАЕТ правку, не трогающую идентичность конверта, и не снимается при создании', async () => {
+    const envelope = entityOf(
+      await run(
+        'entity_create',
+        {
+          title: 'Конверт «Развлечения», август',
+          tags: [],
+          aspects: {
+            'orbis/budget': {
+              category_ref: CATEGORY_B,
+              currency: 'RUB',
+              limit: '10000.00',
+              period_start: '2026-08-01',
+              period_end: '2026-08-31',
+              carryover: '500.00',
+            },
+          },
+        },
+        { mechanism: 'rule' },
+      ),
+    );
+    // Создание переносом и живёт (правило rollover заводит конверт СРАЗУ с ним) — правило
+    // молчит там, где прошлого состояния не было вовсе.
+    expect((await rowOf(envelope.id)).props['orbis/carryover']).toBe('500.00');
+
+    // Правка лимита в том же периоде идентичность не трогает — перенос на месте
+    ok(
+      await run('entity_update', {
+        id: envelope.id,
+        aspects: { 'orbis/budget': { limit: '12000.00' } },
+      }),
+    );
+    const patched = await expectProjection(envelope.id);
+    expect(patched.props['orbis/limit']).toBe('12000.00');
+    expect(patched.props['orbis/carryover']).toBe('500.00');
+
+    // А смена периода тем же путём (merge, без attach) переносу тоже не даёт выжить:
+    // правило про идентичность конверта, а не про форму входа.
+    ok(
+      await run('entity_update', {
+        id: envelope.id,
+        aspects: { 'orbis/budget': { period_start: '2026-10-01', period_end: '2026-10-31' } },
+      }),
+    );
+    expect(Object.hasOwn((await expectProjection(envelope.id)).props, 'orbis/carryover')).toBe(
+      false,
+    );
   });
 
   test('internalUndo восстанавливает состояние с system_writable-свойствами без гейта', async () => {

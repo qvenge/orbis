@@ -59,9 +59,60 @@ export function applyTaskCompletion(prev: EntityState, next: EntityState, now: D
 /** id свойств, которые доменные нормализации адресуют по имени (§А8). */
 export const TASK_STATUS = 'orbis/task_status';
 export const COMPLETED_AT = 'orbis/completed_at';
+const CARRYOVER = 'orbis/carryover';
 const RECURRENCE = 'orbis/recurrence';
 const RECURRING = 'orbis/recurring';
 const OCCURRED_ON = 'orbis/occurred_on';
+
+/**
+ * Свойства, задающие ИДЕНТИЧНОСТЬ конверта (03-budget §2.1): по этой четвёрке он уникален,
+ * по ней же его находят транзакции. Список тот же, что у `assertEnvelopeUnique`.
+ */
+const ENVELOPE_IDENTITY = [
+  'orbis/finance_category',
+  'orbis/currency',
+  'orbis/period_start',
+  'orbis/period_end',
+] as const;
+
+/**
+ * Перенос остатка (`orbis/carryover`) не переживает смену идентичности конверта.
+ *
+ * Перенос — это «сколько осталось от ПРОШЛОГО периода ЭТОЙ категории», и он входит в
+ * `effectiveLimit = limit + carryover` (03-budget §2.6, `budget/aggregates.ts:264`). Стоит
+ * владельцу перенести конверт на новый период (или на другую категорию/валюту), и прежний
+ * остаток перестаёт что-либо значить: он посчитан не про этот период. Оставить его значило
+ * бы молча завысить лимит — и не отказом, который видно, а числом, которое врёт и в Overview,
+ * и в подсказках модели.
+ *
+ * ПОЧЕМУ ПРАВИЛОМ, А НЕ ПРАВОМ ЗАПИСИ. Соблазн был решить это гейтом флагов: раз `carryover`
+ * — `system_writable`, пусть замена носителя его и снимает, как снимала до реформы. Но гейт
+ * отвечает на вопрос «вправе ли этот механизм трогать свойство», а здесь вопрос другой —
+ * «осмысленно ли ещё это значение». Их разведение и есть суть §А2-5: право у свойства одно на
+ * все пути, а смысл значения зависит от домена. Классифицировать служебные свойства на
+ * «переживающие замену» и «нет» пришлось бы руками, вторым списком без опоры на реестр —
+ * ровно та вторая копия знания, которую реформа и убирает.
+ *
+ * Условие «прежнее значение БЫЛО и стало другим», а не «отличается от нового»: у создания
+ * конверта прошлого состояния нет вовсе, и правило обязано молчать — иначе оно снимало бы
+ * перенос у конвертов, которые правило rollover ровно с ним и создаёт (03-budget §3.5).
+ *
+ * Мутирует `next.props`. Внутренний undo его не зовёт: тот восстанавливает зафиксированное
+ * состояние дословно, и «поправить» откат значило бы разойтись с журналом.
+ */
+export function dropStaleCarryover(prev: EntityState, next: EntityState): void {
+  if (!next.aspects.includes('orbis/budget')) return;
+  if (next.props[CARRYOVER] === undefined) return;
+  const identityChanged = ENVELOPE_IDENTITY.some(
+    (id) => prev.props[id] !== undefined && !sameScalar(prev.props[id], next.props[id]),
+  );
+  if (identityChanged) delete next.props[CARRYOVER];
+}
+
+/** Значения идентичности конверта — скаляры (uuid, код валюты, даты); сравнение по канону. */
+function sameScalar(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 /**
  * `orbis/recurrence` на сущности, НЕСУЩЕЙ `orbis/schedule`, — признак шаблона повторения

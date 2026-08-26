@@ -78,6 +78,7 @@ import {
   type AspectsMap,
   applyTaskCompletion,
   assertFinancialInvariant,
+  dropStaleCarryover,
   financialRecurringNeedsDerivedFrom,
   hasBodyInInput,
   needsProjectSeed,
@@ -1153,7 +1154,7 @@ async function prepareEntityCreate(
   }
   // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency ДО валидации,
   // проверки уникальности §2.1 и записи — комбинация всегда каноничная
-  await normalizeEnvelopeProps(ctx, state);
+  await normalizeEnvelopeProps(ctx, before, state);
 
   // Запрет по объекту для источника routine (V1.10) — ПЕРВЫМ из отказов: он про то, кому
   // вообще нельзя трогать этот объект, и не зависит ни от формы значения, ни от флагов
@@ -1431,7 +1432,7 @@ async function prepareEntityUpdate(
       // Нормализация валюты конверта (бэклог A7): патч мог снять currency или добавить
       // orbis/budget без неё — NULL не пишем, подставляем defaultCurrency ДО валидации и
       // проверки уникальности §2.1. Внутренний undo восстанавливает состояние verbatim.
-      if (touched.includes('orbis/budget')) await normalizeEnvelopeProps(ctx, state);
+      if (touched.includes('orbis/budget')) await normalizeEnvelopeProps(ctx, before, state);
       // Гейт флагов (§А2-5/Б6). Внутренний undo его ПРОПУСКАЕТ — ровно как семь проверок
       // ниже: он восстанавливает СВОЁ ЖЕ законно записанное состояние, и отказ здесь
       // означал бы, что законную запись нельзя отменить.
@@ -1680,15 +1681,16 @@ async function prepareAttach(
     [aspectId]: { ...input.data },
   });
   // …но снимает ровно то, чем вызывающий вправе распоряжаться (§А2-5): `attach_orbis_financial`
-  // не несёт `orbis/bank_txn_id` — его нет в схеме тула и быть не может, — и стирать импортное
-  // тождество из-за навешивания аспекта значило бы терять факт владельца там, где он ни о чём
-  // таком не просил. Внутренний undo сюда не заходит (у него свой путь в entity_update) и
+  // НЕ НАЗЫВАЕТ `orbis/bank_txn_id` (в `data` его нет), и стирать импортное тождество из-за
+  // навешивания аспекта значило бы терять факт владельца там, где он ни о чём таком не просил.
+  // Названное явно поле доходит до гейта и получает `COMPUTED_WRITE` — фильтр только про
+  // НЕназванное. Внутренний undo сюда не заходит (у него свой путь в entity_update) и
   // восстанавливает зафиксированное состояние дословно.
   propsPatch.replaced = writableOnly(ctx.registry, ctx.mechanism, propsPatch.replaced);
   const state = applyPropsPatch(before, propsPatch);
   if (aspectId === 'orbis/task') applyTaskCompletion(before, state, now); // §3.2 и для attach
   // Нормализация валюты конверта (бэклог A7): NULL→defaultCurrency и для attach-пути
-  await normalizeEnvelopeProps(ctx, state);
+  await normalizeEnvelopeProps(ctx, before, state);
 
   // Стадия 4, первый рубеж: запрет по объекту для источника routine (V1.10) — attach это
   // третий путь появления аспекта, им рутина заводилась бы на готовой сущности мимо
@@ -1883,11 +1885,19 @@ function stateOf(row: EntityRow): EntityState {
  * значения нет вовсе: у записи, которая одновременно транзакция и конверт, валюта одна, и
  * перезаписывать её умолчанием значило бы менять сумму транзакции задним числом.
  */
-async function normalizeEnvelopeProps(ctx: ExecCtx, state: EntityState): Promise<void> {
+async function normalizeEnvelopeProps(
+  ctx: ExecCtx,
+  before: EntityState,
+  state: EntityState,
+): Promise<void> {
   if (!state.aspects.includes('orbis/budget')) return;
   const draft: Record<string, unknown> = { currency: state.props['orbis/currency'] };
   await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, draft);
   state.props['orbis/currency'] = draft.currency;
+  // Перенос прошлого периода не переживает смену идентичности конверта (03-budget §2.6).
+  // Считается ПОСЛЕ подстановки валюты: она входит в идентичность, и до подстановки
+  // «валюты не было → стала RUB» читалось бы как смена конверта.
+  dropStaleCarryover(before, state);
 }
 
 async function prepareRelationCreate(
