@@ -242,6 +242,7 @@ test('опись боевых текстов: вердикт и флаги ка�
     'apps/server/src/tools/registry.ts:846 (описание тула entity_query, пример 1)',
     'apps/server/src/llm/prompts/v4.ts:58 (шпаргалка грамматики, пример 1)',
     'apps/server/src/llm/prompts/routine-v2.ts:83 (шпаргалка грамматики рутин, пример 1)',
+    'apps/server/src/llm/prompts/v4.ts:78 (блок целей: «цели — aspect=orbis/goal»)',
   ]);
   // Класс RESERVED: слово грамматики в позиции имени свойства. Такой адрес не чинится
   // таблицей перевода полей аспектов — нужен namespaced key свойства ядра (`orbis/title`).
@@ -256,4 +257,23 @@ test('опись боевых текстов: вердикт и флаги ка�
     if (entry.frozen) expect(entry.owner, entry.where).toBe('заморожен');
     else expect(entry.owner, entry.where).not.toBe('заморожен');
   }
+
+  // `dynamic` — это РАБОТА для 10c (текст собирается из ввода, и ломает его подстановка,
+  // а не литерал), поэтому поле пиннится поимённо, а не остаётся прозой рядом с таблицей.
+  const dyn = PRODUCTION_QUERY_TEXTS.filter((e) => e.dynamic !== undefined);
+  expect(dyn.length).toBe(PRODUCTION_QUERY_STATS.dynamic);
+  expect(dyn.map((e) => e.where)).toEqual([
+    'apps/web/src/features/browser/query.ts:13 (тег владельца с пробелом; buildFilterQuery не квотирует вовсе)',
+    'apps/web/src/features/budget/txQuery.ts:66 + quoteValue :45 (поиск с пробелом)',
+  ]);
+  for (const entry of dyn) {
+    // Динамический адрес попал в опись ровно потому, что подстановка ломает разбор:
+    // текст-представитель обязан нести уже подставленный ломающий ввод.
+    expect(entry.spaceRisk, entry.where).toBe(true);
+    // Пометка обязана НАЗЫВАТЬ ломающий ввод, а не отделываться словом «динамический».
+    expect(entry.dynamic, entry.where).toContain('пробел');
+  }
+  // Правило квотирования каждого источника названо адресом: без него 10c не поймёт, почему
+  // одна строка txQuery в описи безопасна, а вторая нет.
+  expect(dyn[1]?.dynamic).toContain('txQuery.ts:45');
 });

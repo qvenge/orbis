@@ -480,11 +480,22 @@ export const INEXPRESSIBLE_QUERY_TEXTS: readonly { text: string; code: QueryPars
  * потребители `entity.query`/`entity.count`, сиды, шпаргалки промптов и описание тула), а не
  * по памяти: первая редакция описи, собранная по памяти, потеряла семь живых адресов.
  *
- * Что НЕ вошло и почему: мёртвые версии промптов (`prompts/v1..v3`, `routine-v1`) — они
- * никем не импортируются (живые входы — `llm/context.ts:36` → `v4`, `routines/context.ts:29`
- * → `routine-v2`); плейсхолдеры шпаргалки вида `sortBy=<поле>:asc` — это не запросы;
- * `SmartListSave.tsx:18` собственного текста не имеет — он оборачивает в `{{query:…}}`
- * строку из Browser, покрытую записями `browser/query.ts`.
+ * ГРАНИЦА описи, названная точно: сюда входит текст, который осмысленно скормить
+ * `parseQueryAst` целиком, — сохранённый запрос, строка конструктора и пример грамматики
+ * в промпте или описании тула. Не входит и почему:
+ *  - мёртвые версии промптов (`prompts/v1..v3`, `routine-v1`) — их не импортирует никто вне
+ *    тестов (живые входы: `llm/context.ts:36` → `v4`, `routines/context.ts:29` → `routine-v2`);
+ *  - плейсхолдеры шпаргалки (`children_of=<uuid>`, `sortBy=<поле>:asc`, `tags=<тег>|<тег>`,
+ *    `limit=<число>` — `v4.ts:61-62`, `routine-v2.ts:86-87`): это форма, а не запрос;
+ *  - **упоминания ПОЛЕЙ АСПЕКТА в прозе промпта** — `planned=true` (`v4.ts:50`, `:54`),
+ *    `all_day=true` (`v4.ts:55`), `direction=expense` и `spend_class=discretionary`
+ *    (`v4.ts:66`). Синтаксически они похожи на фильтр, но говорят, ЧТО ЗАПИСАТЬ в
+ *    `entity_create`/что лежит в выдаче `budget_status`, а не что отобрать; целого запроса
+ *    вокруг них нет, и собрать его пришлось бы выдумав. Переименование имён в этих строках
+ *    — работа Задачи 19 (её бриф уже называет `v4.ts:57-62, :78` и `routine-v2.ts:82-87`),
+ *    но опись запросов о них не свидетельствует;
+ *  - `SmartListSave.tsx:18` собственного текста не имеет — он оборачивает в `{{query:…}}`
+ *    строку из Browser, покрытую записями `browser/query.ts`.
  */
 export type QueryTextOwner = '9b' | '10c' | '19' | '9b/21' | 'заморожен';
 
@@ -583,7 +594,7 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '10c',
   },
   {
-    where: 'apps/web/src/features/budget/txQuery.ts:67 + quoteValue :45 (поиск с пробелом)',
+    where: 'apps/web/src/features/budget/txQuery.ts:66 + quoteValue :45 (поиск с пробелом)',
     text: 'aspect=orbis/financial, search=кофе эклер, sortBy=occurred_on:desc, limit=50',
     verdict: 'SYNTAX',
     spaceRisk: true,
@@ -869,6 +880,62 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     coreNames: ['updated_at'],
     owner: '19',
   },
+  {
+    where: 'apps/server/src/llm/prompts/v4.ts:59 (шпаргалка, пример |-списка)',
+    text: 'status=planned|in_progress',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: [],
+    owner: '19',
+  },
+  {
+    where: 'apps/server/src/llm/prompts/v4.ts:59 (шпаргалка, пример &-формы)',
+    text: 'status=!done&!cancelled',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: [],
+    owner: '19',
+  },
+  {
+    where: 'apps/server/src/llm/prompts/v4.ts:60 (шпаргалка, пример date-токенов)',
+    text: 'due_date=today|overdue',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: [],
+    owner: '19',
+  },
+  {
+    where: 'apps/server/src/llm/prompts/v4.ts:78 (блок целей: «цели — aspect=orbis/goal»)',
+    text: 'aspect=orbis/goal',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '19',
+  },
+  {
+    where: 'apps/server/src/llm/prompts/routine-v2.ts:84 (шпаргалка рутин, пример |-списка)',
+    text: 'status=planned|in_progress',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: [],
+    owner: '19',
+  },
+  {
+    where: 'apps/server/src/llm/prompts/routine-v2.ts:84 (шпаргалка рутин, пример &-формы)',
+    text: 'status=!done&!cancelled',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: [],
+    owner: '19',
+  },
+  {
+    where: 'apps/server/src/llm/prompts/routine-v2.ts:85 (шпаргалка рутин, пример date-токенов)',
+    text: 'due_date=today|overdue',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: [],
+    owner: '19',
+  },
 ];
 
 /**
@@ -876,14 +943,16 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
  * разбивка тоже точные). Любая правка описи обязана пройти через эти числа.
  */
 export const PRODUCTION_QUERY_STATS = {
-  total: 42,
+  total: 49,
   /** Разбирается новым парсером уже сегодня. */
-  parses: 5,
-  byVerdict: { UNKNOWN_FIELD: 33, SYNTAX: 2, RESERVED: 2 },
+  parses: 6,
+  byVerdict: { UNKNOWN_FIELD: 39, SYNTAX: 2, RESERVED: 2 },
   /** Незакавыченное значение с пробелом — не чинится переименованием полей. */
   spaceRisk: 14,
   /** Называет core-свойство голым именем — перевод по отдельной таблице §А1-3. */
   coreNames: 20,
   /** Замороженные образцы сверки: править нельзя вообще. */
   frozen: 2,
+  /** Текст собирается из ввода — ломает не сам литерал, а подстановка. */
+  dynamic: 2,
 } as const;
