@@ -965,7 +965,9 @@ test('escalation: исправление orbis/finance_category находитс
   смена аспекта источника при неизменных рёбрах — второй вход, остаток кода части А, перевод —
   правило Б-2»), `:260-275` (дубль — по `(source,target,role)`), `tools/registry.ts:441-443` (JSON
   Schema `relation_create`/`relation_delete`: `role` enum из реестра, описание — `label.ru` +
-  `source_label → target_label`), `tools/dispatch.ts:1441`, `routers/relation.ts:21,29,44`, восемь
+  `source_label → target_label`), `tools/dispatch.ts:1441` (**поправка разведки: это ПРЕДЧЕК, он не
+  пишет `relation_type` вовсе — роль там ставить нечему; счёт «восемь точек» от этого не меняется**),
+  `routers/relation.ts:21,29,44`, восемь
   точек: `budget/binding.ts:349-352` → `envelope-binding`, `:329-332`/`:342-345` (delete по роли),
   `recurring/materialize.ts:365-366` → `instance-of` (source = шаблон, РП-5), `agent-loop/verbs.ts:470-471`
   → `run`, `routines/lifecycle.ts:912-913` → `run`; `apps/server/src/wire.ts:83-93` (`WireRelation.role`;
@@ -974,8 +976,15 @@ test('escalation: исправление orbis/finance_category находитс
   `Blocks.tsx:176,276,277` (`dependency`), тесты `Blocks.test.tsx`, `detail.test.tsx` (11 мест);
   `src/test/agent-loop-helpers.ts:97` (`link(role)`), `src/test/perf.ts` (рёбра с ролью).
 - Mechanism-гейт `created_by: system` (§А4-4): `relation_create` роли с `constraints.created_by ===
-  'system'` при `mechanism === 'user'` → `ROLE_SYSTEM_ONLY` (отказ 13 §С1-2); хук бюджета зовёт
-  `execute` с `mechanism: 'hook'`, материализация — `'materialize'`, глаголы/lifecycle — `'verb'`.
+  'system'` при `mechanism === 'user'` → `ROLE_SYSTEM_ONLY` (отказ 13 §С1-2); материализация зовёт
+  `execute` с `mechanism: 'materialize'`, глаголы/lifecycle — `'verb'`.
+  **ПОПРАВКА по разведке 26.08 (после 4a/4b):** «хук бюджета зовёт `execute` с `mechanism: 'hook'`» —
+  НЕВЕРНО: хук `execute` не зовёт вовсе — `applyBudgetFollowUps` (`executor.ts:860-889`) идёт через
+  `prepareOp(ctx, …)` внутри уже открытой транзакции и наследует механизм вызывателя (по умолчанию
+  `'user'`). Поэтому Задача 7a обязана ЯВНО проставить `mechanism: 'hook'` на операциях, которые
+  порождает хук (иначе гейт `created_by: 'system'` роли `envelope-binding` откажет собственному
+  хуку бюджета) — и запинить это тестом «хук создаёт привязку конверта, пользовательский вызов
+  той же роли — `ROLE_SYSTEM_ONLY`».
 - **Ограничение интервала 7a→23 (находка 55):** пока `rel_uniq` стоит на `(source, target,
   relation_type)`, две роли, проецирующиеся в один legacy-тип (`subitem`+`ticket`, `subitem`+
   `envelope-binding`…), на одной паре сущностей невыразимы — фикстуры и код интервала такие пары не
