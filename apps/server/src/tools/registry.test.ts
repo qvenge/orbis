@@ -26,7 +26,14 @@ import {
 } from '@orbis/shared';
 import { eq, isNull, sql } from 'drizzle-orm';
 import type { z } from 'zod';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshUserId,
+  requireEnv,
+  seedCustomAspect,
+  truncateAll,
+} from '../../test/helpers';
 import { aspectDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import {
@@ -50,6 +57,11 @@ const userB = freshUserId();
 
 /** Кастомный аспект userA: id с '/' И '-' — проверка нормализации имени тула (решение 3). */
 const CUSTOM_ASPECT_ID = 'user/sleep-log';
+/**
+ * Старая форма схемы (колонка `schema`), которую хелпер собирает из типа свойства: до
+ * миграции 0017 именно она уезжает в `data` тула `attach_*` (Р-24). Ожидание записано
+ * дословно — оно и есть приёмка «хелпер пишет тулу ровно ту схему, что писала фикстура».
+ */
 const CUSTOM_SCHEMA = {
   type: 'object',
   properties: { hours: { type: 'number' } },
@@ -59,21 +71,13 @@ const CUSTOM_SCHEMA = {
 
 beforeAll(async () => {
   await truncateAll();
-  const { db: admin, client: adminClient } = adminDb();
-  try {
-    await admin.insert(aspectDefinitions).values({
-      id: CUSTOM_ASPECT_ID,
-      ownerId: userA,
-      name: 'Sleep Log',
-      namespace: 'user',
-      description: 'Трекинг сна.',
-      schema: CUSTOM_SCHEMA,
-      aiInstructions: 'Пиши часы сна числом.',
-      viewConfig: { keyFields: ['hours'] },
-    });
-  } finally {
-    await adminClient.end();
-  }
+  await seedCustomAspect(userA, {
+    key: CUSTOM_ASPECT_ID,
+    label: { ru: 'Сон', en: 'Sleep Log' },
+    description: { ru: 'Трекинг сна.', en: 'Sleep tracking.' },
+    aiInstructions: 'Пиши часы сна числом.',
+    properties: [{ key: 'hours', type: { kind: 'number' }, required: true }],
+  });
 });
 
 afterAll(async () => {
@@ -366,13 +370,11 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
     // Кастомный orbis/note userA поверх builtin: attach_orbis_note берёт описание кастомного
     const { db: admin, client: adminClient } = adminDb();
     try {
-      await admin.insert(aspectDefinitions).values({
-        id: 'orbis/note',
-        ownerId: userA,
-        name: 'Note (custom)',
-        namespace: 'orbis',
-        schema: { type: 'object', properties: {}, additionalProperties: false },
+      await seedCustomAspect(userA, {
+        key: 'orbis/note',
+        label: { ru: 'Заметка (своя)', en: 'Note (custom)' },
         aiInstructions: 'Кастомная инструкция заметки.',
+        properties: [],
       });
       const defs = await registryFor(userA);
       expect(defOf(defs, 'attach_orbis_note').description).toBe('Кастомная инструкция заметки.');

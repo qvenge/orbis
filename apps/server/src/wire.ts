@@ -204,19 +204,34 @@ export function toWireAgentGrant(row: GrantSummary): WireAgentGrant {
   };
 }
 
-/** Wire-форма aspect_definitions (§4.3): owner_id NULL = встроенный аспект. */
+/**
+ * Wire-форма aspect_definitions НОВОЙ формы (§А3-1): owner_id NULL = встроенный аспект.
+ *
+ * Что ушло и куда: `name` → `label` (per-locale), `description` стал per-locale, `icon` →
+ * `viewConfig.icon`, `namespace` — вычислимая часть `key` и отдельным полем не нужна.
+ * `properties` — ссылки на свойства реестра (`[{propertyId, required, rank}]`).
+ *
+ * `schema` ОСТАЁТСЯ (Р-24): по ней web строит каталог полей query-грамматики
+ * (`query-blocks/catalog.ts`), а сервер — вход `attach_*`-тула. Она станет производной от
+ * реестра свойств миграцией 0017; до тех пор это единственный носитель формы значений, и
+ * снимать её из wire раньше значило бы ослепить web на весь срез.
+ */
 export interface WireAspectDefinition {
   id: string;
   ownerId: string | null;
-  name: string;
-  namespace: string;
-  description: string | null;
-  icon: string | null;
-  schema: Record<string, unknown>;
+  key: string;
+  label: Record<string, string>;
+  description: Record<string, string>;
+  properties: { propertyId: string; required: boolean; rank: number }[];
+  /** NULL у строки реестра, заведённой уже по-новому (колонка старой формы, Р-24). */
+  schema: Record<string, unknown> | null;
   aiInstructions: string | null;
   tagMappings: string[];
   aggregations: Record<string, unknown> | null;
   viewConfig: Record<string, unknown> | null;
+  module: string | null;
+  service: boolean;
+  rank: number;
   createdAt: string;
 }
 
@@ -224,15 +239,18 @@ export function toWireAspectDefinition(row: AspectDefinitionRow): WireAspectDefi
   return {
     id: row.id,
     ownerId: row.ownerId,
-    name: row.name,
-    namespace: row.namespace,
-    description: row.description,
-    icon: row.icon,
-    schema: row.schema as Record<string, unknown>,
+    key: row.key,
+    label: row.label as Record<string, string>,
+    description: row.description as Record<string, string>,
+    properties: row.properties as WireAspectDefinition['properties'],
+    schema: row.schema as Record<string, unknown> | null,
     aiInstructions: row.aiInstructions,
     tagMappings: row.tagMappings,
     aggregations: row.aggregations as Record<string, unknown> | null,
     viewConfig: row.viewConfig as Record<string, unknown> | null,
+    module: row.module,
+    service: row.service,
+    rank: row.rank,
     createdAt: row.createdAt.toISOString(),
   };
 }

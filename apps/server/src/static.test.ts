@@ -123,19 +123,32 @@ describe('static serving + SPA-fallback (Task 7)', () => {
     expect(await res.json()).toEqual({ status: 'ok' });
   });
 
-  // E1: расхождение реестра аспектов наблюдаемо снаружи, но код ответа прежний —
-  // не-200 здесь завалил бы healthCheckPath Render, то есть превратил бы наблюдаемость
-  // ловушки в отказ деплоя. Без дрейфа (и пока проверка не ответила) поле не появляется.
-  test('/health при дрейфе реестра: 200 + список аспектов, статус остаётся ok', async () => {
+  // E1: расхождение реестров наблюдаемо снаружи, но код ответа прежний — не-200 здесь
+  // завалил бы healthCheckPath Render, то есть превратил бы наблюдаемость ловушки в отказ
+  // деплоя. Без дрейфа (и пока проверка не ответила) поле не появляется.
+  //
+  // Каждая строка списка несёт ИМЯ РЕЕСТРА: реестров шесть, и `orbis/task` без него не
+  // отличить от одноимённого свойства. Лишняя строка (`extra`) — тоже дрейф (Р-23) и
+  // тоже обязана быть видна оператору.
+  test('/health при дрейфе реестров: 200 + список с именем реестра, статус остаётся ok', async () => {
+    const empty = { missing: [], drifted: [], extra: [] };
     const withDrift = createApp({
       db: {} as Db,
       ai: {} as AiDeps,
       webDistDir: distDir,
-      aspectDrift: () => ({
+      registryDrift: () => ({
         status: 'drift' as const,
         drift: {
-          missing: ['orbis/memory' as const],
-          drifted: [{ id: 'orbis/financial' as const, what: ['schema' as const] }],
+          properties: { missing: ['orbis/amount'], drifted: [], extra: ['orbis/zzz'] },
+          aspects: {
+            missing: [],
+            drifted: [{ id: 'orbis/financial', what: ['schema'] }],
+            extra: [],
+          },
+          roles: empty,
+          contracts: empty,
+          subscriptions: { missing: [], drifted: [], extra: ['orbis/agenda'] },
+          actions: empty,
         },
       }),
     });
@@ -143,26 +156,31 @@ describe('static serving + SPA-fallback (Task 7)', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       status: 'ok',
-      aspectDrift: ['orbis/memory', 'orbis/financial'],
+      registryDrift: [
+        'properties:orbis/amount нет',
+        'properties:orbis/zzz лишний',
+        'aspects:orbis/financial schema',
+        'subscriptions:orbis/agenda лишний',
+      ],
     });
   });
 
   // Провал проверки обязан отличаться от «расхождений нет»: на холодном старте
   // Render+Supabase БД бывает недоступна, и раньше одна неудачная попытка навсегда
   // снимала ловушку, а /health отвечал ровно как на здоровом реестре.
-  test('/health при НЕвыполненной проверке: aspectDrift = "unknown", статус ok', async () => {
+  test('/health при НЕвыполненной проверке: registryDrift = "unknown", статус ok', async () => {
     const unknown = createApp({
       db: {} as Db,
       ai: {} as AiDeps,
       webDistDir: distDir,
-      aspectDrift: () => ({ status: 'unknown' as const }),
+      registryDrift: () => ({ status: 'unknown' as const }),
     });
     const res = await unknown.request('/health');
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'ok', aspectDrift: 'unknown' });
+    expect(await res.json()).toEqual({ status: 'ok', registryDrift: 'unknown' });
   });
 
-  // V1.2: планировщик рутин наблюдаем через /health той же формой, что реестр аспектов:
+  // V1.2: планировщик рутин наблюдаем через /health той же формой, что реестры:
   // геттера нет — поля нет (тесты композиции, стенды без фона); выключен env'ом — 'off';
   // включён, но первый тик ещё не прошёл — 'pending'; дальше — ISO последнего тика.
   test('/health без геттера планировщика: форма прежняя, поля routineScheduler нет', async () => {
@@ -194,17 +212,17 @@ describe('static serving + SPA-fallback (Task 7)', () => {
     });
   });
 
-  test('/health несёт и дрейф реестра, и планировщик одновременно', async () => {
+  test('/health несёт и дрейф реестров, и планировщик одновременно', async () => {
     const both = createApp({
       db: {} as Db,
       ai: {} as AiDeps,
       webDistDir: distDir,
-      aspectDrift: () => ({ status: 'unknown' as const }),
+      registryDrift: () => ({ status: 'unknown' as const }),
       routineScheduler: () => ({ enabled: false, lastTickAt: null }),
     });
     expect(await (await both.request('/health')).json()).toEqual({
       status: 'ok',
-      aspectDrift: 'unknown',
+      registryDrift: 'unknown',
       routineScheduler: 'off',
     });
   });

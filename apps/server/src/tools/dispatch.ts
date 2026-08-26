@@ -24,6 +24,7 @@ import {
   newId,
   parseQuery,
   pendingMessageId,
+  propertyToLegacyField,
   proposeInput,
   type QueryAst,
   relationCreateInput,
@@ -1607,12 +1608,27 @@ function validateBatchOperations(payload: BatchExecuteInput): BatchExecuteInput 
   };
 }
 
-/** keyFields карточки (02 §2.3): значения полей из viewConfig.keyFields каждого аспекта. */
+/**
+ * keyFields карточки (02 §2.3): значения полей из `view_config.keyFields` каждого аспекта.
+ *
+ * ПЕРЕХОДНЫЙ ШАГ реформы. В реестре `keyFields` лежат id СВОЙСТВ (новая форма §А3-1,
+ * миграция 0014), а данные сущности до 0015 — старой формы: карта `aspects[id][поле]`.
+ * Между ними переводит карта Задачи 1 (`propertyToLegacyField`) — та же, что переводит
+ * значения в golden-корпусе приёмки §С8-1.
+ *
+ * У КАСТОМНОГО аспекта карты нет по построению (его свойства завёл владелец), и старым
+ * именем поля служит локальная часть key свойства: `user/hours` → `hours`. Так их заводит
+ * `seedCustomAspect` в тестах, так же их заведёт конструктор Задачи 12.
+ *
+ * Шим уходит вместе со старой формой данных: Задача 4b переводит `entities` на `props`, и
+ * тогда карточка станет читать значения прямо по id свойства.
+ */
 function keyFieldsByAspect(rows: AspectToolRow[]): Map<string, string[]> {
   return new Map(
     rows.map((r) => {
       const kf = (r.viewConfig as { keyFields?: unknown } | null)?.keyFields;
-      return [r.id, Array.isArray(kf) ? kf.filter((f): f is string => typeof f === 'string') : []];
+      const ids = Array.isArray(kf) ? kf.filter((f): f is string => typeof f === 'string') : [];
+      return [r.id, ids.map((id) => propertyToLegacyField(id, r.id) ?? id.split('/').at(-1) ?? id)];
     }),
   );
 }

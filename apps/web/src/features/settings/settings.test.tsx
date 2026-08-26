@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { renderWithProviders } from '../../test/harness';
+import { AspectsList } from './AspectsList';
 import { ExportButton } from './ExportButton';
 import { GeneralForm } from './GeneralForm';
 import { SettingsScreen } from './SettingsScreen';
@@ -138,4 +139,32 @@ test('ExportButton формирует Blob с format:orbis-export', async () => 
   const blob = createObjectURL.mock.calls[0]?.[0] as Blob;
   const text = await blob.text();
   expect(JSON.parse(text).format).toBe('orbis-export');
+});
+
+// Реформа свойств: у аспекта четвёрка имён id/key/label/description, подпись — per-locale,
+// иконка — в `view_config`. Колонок `name` и `icon` больше нет, и экран обязан читать новую
+// форму, а не тихо рисовать пустые карточки (`a.name` на новой строке — undefined, и React
+// показал бы аспект без имени, ничего не сломав).
+test('AspectsList рендерит label.ru и иконку из viewConfig, а не снятые name/icon', async () => {
+  const aspect = {
+    id: 'orbis/task',
+    ownerId: null,
+    key: 'orbis/task',
+    label: { ru: 'Задача', en: 'Task' },
+    description: { ru: 'Действие со сроком', en: 'Action with a due date' },
+    properties: [],
+    schema: {},
+    aiInstructions: null,
+    tagMappings: [],
+    aggregations: null,
+    viewConfig: { keyFields: [], icon: '✅' },
+    module: null,
+    service: false,
+    rank: 2,
+    createdAt: '2026-08-26T00:00:00.000Z',
+  };
+  renderWithProviders(<AspectsList />, (path) => (path === 'aspect.list' ? [aspect] : {}));
+  expect(await screen.findByText('Задача')).toBeInTheDocument();
+  expect(screen.getByText('orbis/task')).toBeInTheDocument();
+  expect(screen.getByText('✅')).toBeInTheDocument();
 });

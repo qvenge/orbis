@@ -1,7 +1,7 @@
 import { makeAiDeps } from './ai/send-message';
 import { createApp, resolvePort } from './app';
-import { type AspectDriftStatus, reportAspectDriftOnStartup } from './db/aspect-drift';
 import { makeDb } from './db/client';
+import { type RegistryDriftStatus, reportRegistryDriftOnStartup } from './db/registry-drift';
 import { assertPublicOriginConfigured } from './oauth/metadata';
 import { type RoutineScheduler, startRoutineScheduler } from './routines/scheduler';
 import { manualRuns } from './routines/shutdown';
@@ -24,13 +24,14 @@ const { db, client } = makeDb();
 // ORBIS_LLM_PROVIDER — выбор неоднозначен, и молчаливый метерился бы чужой моделью
 const ai = makeAiDeps();
 
-// Реестр аспектов в БД против кода (E1). НЕ fail-fast и НЕ блокирует приём запросов:
-// пересев — шаг релиза с ноутбука владельца, и приложение обязано подняться, даже когда
-// его забыли. Результат доезжает в /health: расхождение — списком, невыполненная
-// проверка — «unknown» (молчать о ней нельзя, иначе ловушка тихо снята).
-let aspectDrift: AspectDriftStatus = { status: 'unknown' };
-void reportAspectDriftOnStartup(db).then((d) => {
-  aspectDrift = d;
+// Реестры в БД против кода — пять реестров и таблица действий (§А12-1 п.4). НЕ fail-fast и
+// НЕ блокирует приём запросов: пересев — шаг релиза с ноутбука владельца, и приложение
+// обязано подняться, даже когда его забыли. Результат доезжает в /health: расхождение —
+// списком, невыполненная проверка — «unknown» (молчать о ней нельзя, иначе ловушка тихо
+// снята).
+let registryDrift: RegistryDriftStatus = { status: 'unknown' };
+void reportRegistryDriftOnStartup(db).then((d) => {
+  registryDrift = d;
 });
 
 // Планировщик рутин (V1.2): тик раз в минуту в ЭТОМ процессе, включается явно переменной
@@ -41,7 +42,7 @@ let scheduler: RoutineScheduler | undefined;
 const app = createApp({
   db,
   ai,
-  aspectDrift: () => aspectDrift,
+  registryDrift: () => registryDrift,
   routineScheduler: () => ({
     enabled: scheduler !== undefined,
     lastTickAt: scheduler?.lastTickAt()?.toISOString() ?? null,

@@ -3,7 +3,7 @@
 // Зачем обёртка, а не голый DSN в окружении: админский DSN умеет и `DROP TABLE`.
 // Здесь он не отдаётся наружу и не печатается — операции перечислены поимённо,
 // всё остальное отклоняется. Это принцип наименьших полномочий: ассистент может
-// запустить `seed-aspects`, но не «что угодно на проде».
+// запустить `seed-registries`, но не «что угодно на проде».
 //
 // Секрет живёт в Ключнице macOS, а не в файле репозитория:
 //   security add-generic-password -a orbis -s orbis-prod-admin -U -w '<DSN>'
@@ -11,9 +11,9 @@
 // он не попадает, на диске открытым текстом не лежит.
 //
 // Использование:
-//   bun scripts/ops.ts check          # только чтение: расхождение реестра аспектов с кодом
-//   bun scripts/ops.ts migrate        # накатить неприменённые миграции схемы
-//   bun scripts/ops.ts seed-aspects   # upsert встроенных аспектов (идемпотентно)
+//   bun scripts/ops.ts check           # только чтение: расхождение реестров с кодом
+//   bun scripts/ops.ts migrate         # накатить неприменённые миграции схемы
+//   bun scripts/ops.ts seed-registries # upsert встроенных свойств, ролей и аспектов
 //   bun scripts/ops.ts coverage       # только чтение: покрытие транзакций (00-product §8)
 //   bun scripts/ops.ts census         # только чтение: сколько тел перенос изменит сильнее прочих
 //   bun scripts/ops.ts audit-bodies   # только чтение: агрегаты по корпусу тел перед конверсией
@@ -21,7 +21,14 @@
 //   bun scripts/ops.ts ping           # связность и версия PostgreSQL
 //   bun scripts/ops.ts issue-pat <owner-uuid> [метка] [--scope worker]  # headless-токен (§9.3)
 import { join } from 'node:path';
-import { aspectJsonSchema, BUILTIN_ASPECT_META, diffBuiltinAspects } from '@orbis/shared';
+import {
+  diffBuiltinRegistries,
+  hasRegistryDrift,
+  REGISTRY_KINDS,
+  type RegistryDbRow,
+  type RegistryDbRows,
+  registryDriftReport,
+} from '@orbis/shared';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
@@ -38,7 +45,9 @@ import {
   describeRoleAccess,
   drizzleBackfillIo,
 } from '../apps/server/src/db/backfill-body-doc';
+import { REGISTRY_DRIFT_QUERIES } from '../apps/server/src/db/registry-drift';
 import * as schema from '../apps/server/src/db/schema';
+import { seedRegistries, seedRegistriesReport } from '../apps/server/src/db/seed-registries';
 import { issuePatGrant } from '../apps/server/src/oauth/grants';
 import { PAT_USAGE, parsePatArgs } from '../apps/server/src/oauth/pat-args';
 
@@ -84,32 +93,39 @@ async function withDb<T>(fn: (sql: postgres.Sql) => Promise<T>): Promise<T> {
 }
 
 /**
- * Сверяет JSON Schema и ai_instructions встроенных аспектов в проде с кодом.
+ * Сверяет встроенные строки ПЯТИ реестров и таблицы действий в проде с кодом (§А12-1 п.4).
  *
- * Само сравнение (включая канонизацию JSON — jsonb не хранит порядок ключей) живёт в
- * `@orbis/shared` (`diffBuiltinAspects`): ту же функцию зовёт стартовая проверка сервера,
- * и второй реализации «что считать дрейфом» быть не должно — иначе ручная операция и
- * автоматическая проверка однажды разойдутся в ответах.
+ * И само сравнение (`diffBuiltinRegistries`, включая канонизацию JSON — jsonb не хранит
+ * порядок ключей), и ТЕКСТЫ ЗАПРОСОВ (`REGISTRY_DRIFT_QUERIES`) общие со стартовой
+ * проверкой сервера: второй реализации «что считать дрейфом» и «что для этого читать» быть
+ * не должно — иначе ручная операция и автоматическая проверка однажды разойдутся в ответах.
+ *
+ * Отличие от `/health` — момент: здесь чтение ЖИВОЕ, а /health отдаёт снимок, снятый на
+ * старте процесса. Расхождение между ними после пересева на поднятом сервисе — ожидаемое
+ * (runbook §1), и лечится рестартом, а не пересевом.
  */
 async function check(): Promise<number> {
   return withDb(async (sql) => {
-    const rows = await sql<{ id: string; schema: unknown; ai_instructions: string }[]>`
-      SELECT id, schema, ai_instructions FROM aspect_definitions WHERE owner_id IS NULL`;
-    const drift = diffBuiltinAspects(
-      rows.map((r) => ({ id: r.id, schema: r.schema, aiInstructions: r.ai_instructions })),
-    );
-    const bad = new Set<string>([...drift.missing, ...drift.drifted.map((d) => d.id)]);
-    for (const meta of BUILTIN_ASPECT_META) {
-      if (!bad.has(meta.id)) console.log(`✓ ${meta.id}`);
+    const rows = {} as RegistryDbRows;
+    for (const kind of REGISTRY_KINDS) {
+      rows[kind] = (await sql.unsafe(REGISTRY_DRIFT_QUERIES[kind])) as unknown as RegistryDbRow[];
     }
-    for (const id of drift.missing) console.log(`✗ ${id}: в проде НЕТ`);
-    for (const d of drift.drifted) console.log(`✗ ${d.id}: расходится (${d.what.join(' + ')})`);
+    const drift = diffBuiltinRegistries(rows);
+    for (const kind of REGISTRY_KINDS) {
+      const d = drift[kind];
+      const bad = d.missing.length + d.drifted.length + d.extra.length;
+      console.log(
+        `${bad === 0 ? '✓' : '✗'} ${kind}: строк ${rows[kind].length}, расхождений ${bad}`,
+      );
+    }
+    for (const line of registryDriftReport(drift)) console.log(line);
     console.log(
-      bad.size === 0
-        ? `\nРеестр в проде совпадает с кодом (${BUILTIN_ASPECT_META.length} аспектов).`
-        : `\nРасхождений: ${bad.size}. Починить: bun scripts/ops.ts seed-aspects`,
+      hasRegistryDrift(drift)
+        ? '\nНедостающее и расходящееся чинится: bun scripts/ops.ts seed-registries\n' +
+            'ЛИШНИЕ строки пересев не убирает — что с ними делать, решает человек.'
+        : '\nРеестры в проде совпадают с кодом.',
     );
-    return bad.size === 0 ? 0 : 1;
+    return hasRegistryDrift(drift) ? 1 : 0;
   });
 }
 
@@ -162,24 +178,10 @@ async function migrateOp(): Promise<number> {
   });
 }
 
-/** Тот же upsert, что scripts/seed-aspects.ts, но с секретом из Ключницы. */
-async function seedAspects(): Promise<number> {
+/** Тот же сид, что `scripts/seed-registries.ts`, но с секретом из Ключницы. */
+async function seedRegistriesOp(): Promise<number> {
   await withDb(async (sql) => {
-    for (const meta of BUILTIN_ASPECT_META) {
-      await sql`
-        INSERT INTO aspect_definitions
-          (id, owner_id, name, namespace, description, icon, schema,
-           ai_instructions, tag_mappings, view_config)
-        VALUES
-          (${meta.id}, NULL, ${meta.name}, ${meta.namespace}, ${meta.description},
-           ${meta.icon}, ${sql.json(aspectJsonSchema(meta.id))}, ${meta.aiInstructions},
-           ${meta.tagMappings}, ${sql.json(meta.viewConfig)})
-        ON CONFLICT (id) WHERE owner_id IS NULL DO UPDATE SET
-          name = EXCLUDED.name, description = EXCLUDED.description, icon = EXCLUDED.icon,
-          schema = EXCLUDED.schema, ai_instructions = EXCLUDED.ai_instructions,
-          tag_mappings = EXCLUDED.tag_mappings, view_config = EXCLUDED.view_config`;
-    }
-    console.log(`seed-aspects: ${BUILTIN_ASPECT_META.length} встроенных аспектов upsert'нуто`);
+    console.log(seedRegistriesReport(await seedRegistries(sql)));
   });
   return 0;
 }
@@ -493,9 +495,15 @@ async function issuePat(args: string[]): Promise<number> {
 }
 
 const OPS: Record<string, { run: (args: string[]) => Promise<number>; help: string }> = {
-  check: { run: check, help: 'только чтение: расхождение реестра аспектов прода с кодом' },
+  check: {
+    run: check,
+    help: 'только чтение: расхождение реестров прода с кодом (пять + действия)',
+  },
   migrate: { run: migrateOp, help: 'накатить неприменённые миграции схемы (идемпотентно)' },
-  'seed-aspects': { run: seedAspects, help: 'upsert встроенных аспектов (идемпотентно)' },
+  'seed-registries': {
+    run: seedRegistriesOp,
+    help: 'upsert встроенных свойств, ролей и аспектов (идемпотентно)',
+  },
   coverage: { run: coverage, help: 'только чтение: покрытие транзакций за 90 дней (§8)' },
   census: {
     run: censusBodies,

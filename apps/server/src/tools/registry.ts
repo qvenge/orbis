@@ -972,9 +972,15 @@ export async function loadAspectToolRows(tx: Tx): Promise<AspectToolRow[]> {
   for (const row of rows) {
     byId.set(row.id, {
       id: row.id,
-      description: row.description,
+      // `description` стала per-locale (§А2-1): здесь берётся русская локаль — тем же
+      // текстом, что лежал в колонке до реформы. Полный fallback «локаль пользователя →
+      // en → любая» ставит Задача 12 вместе с генерацией `attach_*` из реестра свойств:
+      // у тула сегодня нет ни локали актора, ни места, где её спросить.
+      description: (row.description as Record<string, string> | null)?.ru ?? null,
       aiInstructions: row.aiInstructions,
-      schema: row.schema as Record<string, unknown>,
+      // Колонка старой формы (Р-24). NULL быть не должно — её пишут и сид, и хелпер
+      // кастомных аспектов; пустой объект здесь безопаснее падения реестра тулов целиком.
+      schema: (row.schema as Record<string, unknown> | null) ?? {},
       viewConfig: row.viewConfig as Record<string, unknown> | null,
     });
   }

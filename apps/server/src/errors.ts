@@ -10,6 +10,18 @@
 // И entity_create executor'а, одиночный и batch; 'precondition_failed' — CAS-предусловие
 // entity_update не выполнено под FOR UPDATE, С7. Единый wire-контракт финального ревью —
 // 1b MCP и 1c retry-буфер ключуются на кодах, 409 = конфликт ресурса).
+//
+// КОДЫ РЕФОРМЫ СВОЙСТВ (D43) заведены ВСЕ РАЗОМ, а не по мере появления бросающих мест, и
+// это осознанно. `ExecErrorCode` — закрытый union, а `TRPC_CODE_BY_EXEC` ниже —
+// ИСЧЕРПЫВАЮЩИЙ `Record` по нему: код, добавленный без строки маппинга, роняет typecheck,
+// а код, добавленный вместе со строкой, но позже, — это ещё одна правка двух файлов в
+// каждой из десяти задач среза. Таблица кодов реформы ОДНА, и она здесь.
+//
+// Два кода приходят из `@orbis/shared`, а не объявляются здесь литералом: их бросает код,
+// который живёт в shared и про сервер не знает (`assertPatternRegular` — §А2-2), а имя кода
+// обязано быть одно на оба пакета. Импортируется КОНСТАНТА, `typeof` которой и есть
+// строковый литеральный тип, — так исчерпывающая проверка `Record` продолжает работать.
+import { PATTERN_NOT_REGULAR } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 
 export type ExecErrorCode =
@@ -20,7 +32,32 @@ export type ExecErrorCode =
   | 'FORBIDDEN_LEVEL'
   | 'LIMIT'
   | 'CONFLICT'
-  | 'LLM_UNAVAILABLE'; // §7.9: сбой LLM-провайдера — явная ошибка, не очередь (Task 9)
+  | 'LLM_UNAVAILABLE' // §7.9: сбой LLM-провайдера — явная ошибка, не очередь (Task 9)
+  // --- Реформа свойств (D43) ---
+  /** §А2-5/Б6: запись в свойство, которое пишет не этот источник (`model_writable: false`,
+   *  `system_writable: true`, `computed`). Отказ по ОБЪЕКТУ, не по актору. */
+  | 'COMPUTED_WRITE'
+  /** §С8-7: создание ребра роли с `created_by: system` из пользовательского тула. */
+  | 'ROLE_SYSTEM_ONLY'
+  /** §А2-1/Р15: `scope` свойства или `ref.target` — не статический Q-AST (date-токены,
+   *  `search=`, `this`, проекции внутри). Бросается из shared (Задача 8). */
+  | 'SCOPE_NOT_STATIC'
+  /** §А5-1, паспорт Q: запрос соединяет две свободные сущности — за границей языка Q.
+   *  Отдельный код, а не VALIDATION: «невыразимо» обязано отличаться от «написано с
+   *  ошибкой», иначе пустой результат читается как «ничего не нашлось» (§С8-3). */
+  | 'QUERY_JOIN'
+  /** §А5-1: обход по нескольким ролям сразу — тоже за границей Q. */
+  | 'QUERY_MULTI_ROLE'
+  /** §А2-7: кап 20 неподтверждённых `proposed` на владельца исчерпан. */
+  | 'REGISTRY_LIMIT'
+  /** §А3-3: дельта опирается на версию системного определения, которой уже нет
+   *  (трёхстороннее слияние не сошлось) — конфликт, а не ошибка ввода. */
+  | 'REGISTRY_CONFLICT'
+  /** §С7-11: запись в реестр замкнула граф зависимостей (свойство → правило → свойство). */
+  | 'REGISTRY_CYCLE'
+  /** §А2-2: паттерн текстового свойства вне класса RE2 (lookahead, обратная ссылка) —
+   *  такую схему не скомпилирует не-ECMA потребитель, и это причина `strict:false` D29. */
+  | typeof PATTERN_NOT_REGULAR;
 
 export class ExecError extends Error {
   readonly code: ExecErrorCode;
@@ -57,6 +94,24 @@ const TRPC_CODE_BY_EXEC: Record<ExecErrorCode, TRPCError['code']> = {
   // коды @trpc/server) — семантически точнее ближайших альтернатив (TIMEOUT/BAD_GATEWAY):
   // сервис временно недоступен, клиент показывает «повторить» (кнопка ретрая 1c)
   LLM_UNAVAILABLE: 'SERVICE_UNAVAILABLE',
+  // --- Реформа свойств (D43) ---
+  // 403 у обоих: запрет по ОБЪЕКТУ («это свойство сюда не пишут», «эту роль ставит только
+  // сервер»), а не по вводу — повторять запрос с другим текстом бессмысленно.
+  COMPUTED_WRITE: 'FORBIDDEN',
+  ROLE_SYSTEM_ONLY: 'FORBIDDEN',
+  // 400: декларация или запрос написаны так, что система их не принимает. QUERY_JOIN и
+  // QUERY_MULTI_ROLE — «невыразимо в языке Q», и 400 здесь честнее 422: клиент не может
+  // исправить данные, он обязан переписать запрос.
+  SCOPE_NOT_STATIC: 'BAD_REQUEST',
+  QUERY_JOIN: 'BAD_REQUEST',
+  QUERY_MULTI_ROLE: 'BAD_REQUEST',
+  [PATTERN_NOT_REGULAR]: 'BAD_REQUEST',
+  // 429 — как у LIMIT: кап `proposed` (§А2-7) снимается разбором пачки, а не другим вводом.
+  REGISTRY_LIMIT: 'TOO_MANY_REQUESTS',
+  // 409 — как у STALE_VERSION и CONFLICT: состояние реестра разошлось с тем, на которое
+  // опиралась операция, и разрешает это человек.
+  REGISTRY_CONFLICT: 'CONFLICT',
+  REGISTRY_CYCLE: 'CONFLICT',
 };
 
 export function execErrorToTRPC(error: StructuredError): TRPCError {

@@ -1,31 +1,81 @@
-// Сравнение реестра аспектов в БД с кодом — чистая половина стартовой проверки дрейфа
-// (ловушка релиза, бэклоги фаз C и D). Серверная половина (чтение таблицы под ролью
-// приложения) живёт в apps/server/src/db/aspect-drift.test.ts.
+// Сверка реестров в БД с кодом — чистая половина стартовой проверки дрейфа (ловушка
+// релиза, §А12-1 п.4). Серверная половина (чтение шести таблиц под ролью приложения)
+// живёт в apps/server/src/db/registry-drift.test.ts.
 import { expect, test } from 'bun:test';
 import {
   BUILTIN_ASPECT_META,
   canonicalJson,
-  diffBuiltinAspects,
-  hasAspectDrift,
+  diffBuiltinRegistries,
+  hasRegistryDrift,
+  type RegistryDbRows,
+  registryDriftIds,
+  registryDriftReport,
 } from './aspect-registry';
 import { BUILTIN_ASPECT_IDS } from './constants';
-import { aspectJsonSchema } from './schemas/aspects';
+import { BUILTIN_ASPECT_DEFS, BUILTIN_PROPERTY_META, BUILTIN_RELATION_ROLE_META } from './registry';
+import { legacyAspectJsonSchema } from './schemas/aspects';
 
-/** Реестр «как после свежего пересева» — эталон, от которого отходим в каждом тесте. */
-const seeded = () =>
-  BUILTIN_ASPECT_META.map((m) => ({
-    id: m.id as string,
-    schema: aspectJsonSchema(m.id),
-    aiInstructions: m.aiInstructions,
-  }));
+/**
+ * Реестры «как после свежего пересева» — эталон, от которого отходит каждый тест.
+ * Ключи строк — имена КОЛОНОК (snake_case), ровно как их отдаёт SELECT сидера.
+ */
+function seeded(): RegistryDbRows {
+  return {
+    properties: BUILTIN_PROPERTY_META.map((p) => ({
+      id: p.id,
+      key: p.key,
+      label: p.label,
+      description: p.description,
+      type: p.type,
+      status: p.status,
+      storage: p.storage,
+      scope: p.scope,
+      merged_into: p.mergedInto,
+      module: p.module,
+      rank: p.rank,
+      flags: p.flags,
+    })),
+    aspects: BUILTIN_ASPECT_DEFS.map((a) => ({
+      id: a.id,
+      key: a.key,
+      label: a.label,
+      description: a.description,
+      properties: a.properties,
+      ai_instructions: a.aiInstructions,
+      tag_mappings: a.tagMappings,
+      implements: a.implements,
+      view_config: a.viewConfig,
+      module: a.module,
+      service: a.service,
+      rank: a.rank,
+      schema: legacyAspectJsonSchema(a.id as (typeof BUILTIN_ASPECT_IDS)[number]),
+    })),
+    roles: BUILTIN_RELATION_ROLE_META.map((r) => ({
+      id: r.id,
+      key: r.key,
+      label: r.label,
+      description: r.description,
+      source_label: r.sourceLabel,
+      target_label: r.targetLabel,
+      hierarchical: r.hierarchical,
+      constraints: r.constraints,
+      symmetric: r.symmetric,
+      module: r.module,
+      rank: r.rank,
+    })),
+    contracts: [],
+    subscriptions: [],
+    actions: [],
+  };
+}
+
+const EMPTY = { missing: [], drifted: [], extra: [] };
 
 /**
  * BUILTIN_ASPECT_META — МАССИВ, а не Record<AspectId, …>, поэтому забытая запись не ловится
  * ни typecheck'ом (в отличие от ASPECT_SCHEMAS с его `satisfies Record<AspectId, …>`), ни
- * остальными тестами shared: аспект без meta не сеется скриптом, не попадает в attach_*-тулы
- * и в реестр UI — то есть приезжает полумёртвым молча. То же расхождение ловит
- * `apps/server/test/seed-aspects.test.ts`, но лишь при живой БД и уже выполненном пересеве;
- * здесь оно ловится чистой проверкой, до всякой инфраструктуры.
+ * остальными тестами shared: аспект без meta не попадает в attach_*-тулы и в реестр UI —
+ * то есть приезжает полумёртвым молча.
  */
 test('каждому BUILTIN_ASPECT_IDS соответствует ровно одна запись BUILTIN_ASPECT_META', () => {
   const metaIds = BUILTIN_ASPECT_META.map((m) => m.id);
@@ -43,63 +93,134 @@ test('canonicalJson: порядок МАССИВА значим (enum/required �
   expect(canonicalJson({ required: ['a', 'b'] })).not.toBe(canonicalJson({ required: ['b', 'a'] }));
 });
 
-test('свежий пересев — расхождений нет', () => {
-  const drift = diffBuiltinAspects(seeded());
-  expect(drift).toEqual({ missing: [], drifted: [] });
-  expect(hasAspectDrift(drift)).toBe(false);
+test('свежий пересев трёх реестров — расхождений нет, три пустых реестра тоже чисты', () => {
+  const drift = diffBuiltinRegistries(seeded());
+  expect(drift).toEqual({
+    properties: EMPTY,
+    aspects: EMPTY,
+    roles: EMPTY,
+    contracts: EMPTY,
+    subscriptions: EMPTY,
+    actions: EMPTY,
+  });
+  expect(hasRegistryDrift(drift)).toBe(false);
+  expect(registryDriftIds(drift)).toEqual([]);
 });
 
 test('строка прошла через jsonb (ключи переставлены) — это НЕ дрейф', () => {
   // Ровно то, что делает PostgreSQL с jsonb: ключи возвращаются в своём порядке.
-  const shuffled = seeded().map((r) => ({
+  const rows = seeded();
+  rows.aspects = rows.aspects.map((r) => ({
     ...r,
     schema: Object.fromEntries(
       Object.entries(r.schema as Record<string, unknown>).reverse(),
     ) as unknown,
   }));
-  expect(hasAspectDrift(diffBuiltinAspects(shuffled))).toBe(false);
+  expect(hasRegistryDrift(diffBuiltinRegistries(rows))).toBe(false);
 });
 
-test('аспекта нет в реестре — missing (релиз добавил аспект без пересева)', () => {
-  const rows = seeded().filter((r) => r.id !== 'orbis/memory');
-  expect(diffBuiltinAspects(rows)).toEqual({ missing: ['orbis/memory'], drifted: [] });
+test('свойства: нет строки — missing; разошёлся label — drifted с именем СТОЛБЦА', () => {
+  const rows = seeded();
+  rows.properties = rows.properties
+    .filter((r) => r.id !== 'orbis/task_status')
+    .map((r) => (r.id === 'orbis/due_date' ? { ...r, label: { ru: 'Не тот', en: 'Wrong' } } : r));
+  const drift = diffBuiltinRegistries(rows);
+  expect(drift.properties.missing).toEqual(['orbis/task_status']);
+  expect(drift.properties.drifted).toEqual([{ id: 'orbis/due_date', what: ['label'] }]);
+  expect(drift.properties.extra).toEqual([]);
+  expect(hasRegistryDrift(drift)).toBe(true);
+  expect(registryDriftIds(drift)).toEqual([
+    'properties:orbis/task_status нет',
+    'properties:orbis/due_date label',
+  ]);
 });
 
-test('в схеме БД нет нового поля — drifted:[schema] (самый частый случай ловушки)', () => {
-  const rows = seeded().map((r) =>
-    r.id === 'orbis/financial'
-      ? { ...r, schema: { ...(r.schema as Record<string, unknown>), properties: {} } }
-      : r,
+test('свойства: разошлись два столбца — названы оба, по алфавиту', () => {
+  const rows = seeded();
+  rows.properties = rows.properties.map((r) =>
+    r.id === 'orbis/amount' ? { ...r, type: { kind: 'text' }, rank: 999 } : r,
   );
-  expect(diffBuiltinAspects(rows)).toEqual({
-    missing: [],
-    drifted: [{ id: 'orbis/financial', what: ['schema'] }],
-  });
+  expect(diffBuiltinRegistries(rows).properties.drifted).toEqual([
+    { id: 'orbis/amount', what: ['rank', 'type'] },
+  ]);
 });
 
-test('устарели ai_instructions — дрейф тоже (они уезжают в описания attach_*-тулов)', () => {
-  const rows = seeded().map((r) =>
-    r.id === 'orbis/task' ? { ...r, aiInstructions: 'старый текст' } : r,
+// Р-23: односторонняя сверка (только «в коде есть → ищем в БД») пропускала запись,
+// удалённую из кода, — она продолжала валидировать данные в проде молча.
+test('ЛИШНЯЯ system-строка — тоже дрейф (двусторонняя сверка, Р-23)', () => {
+  const rows = seeded();
+  rows.properties = [
+    ...rows.properties,
+    { id: 'orbis/zzz', key: 'orbis/zzz', label: {}, description: {}, type: {}, rank: 0 },
+  ];
+  const drift = diffBuiltinRegistries(rows);
+  expect(drift.properties.extra).toEqual(['orbis/zzz']);
+  expect(hasRegistryDrift(drift)).toBe(true);
+  expect(registryDriftReport(drift)).toContain(
+    '  ✗ properties/orbis/zzz: в БД ЕСТЬ, в коде НЕТ (лишняя)',
   );
-  expect(diffBuiltinAspects(rows)).toEqual({
-    missing: [],
-    drifted: [{ id: 'orbis/task', what: ['ai_instructions'] }],
-  });
 });
 
-test('разошлись оба поля — оба и названы', () => {
-  const rows = seeded().map((r) =>
-    r.id === 'orbis/budget' ? { ...r, schema: {}, aiInstructions: 'старый текст' } : r,
+test('аспекты: устарела колонка schema — дрейф (носитель СТАРОЙ формы до 0017, Р-24)', () => {
+  const rows = seeded();
+  rows.aspects = rows.aspects.map((r) =>
+    r.id === 'orbis/financial' ? { ...r, schema: { type: 'object' } } : r,
   );
-  expect(diffBuiltinAspects(rows)).toEqual({
-    missing: [],
-    drifted: [{ id: 'orbis/budget', what: ['schema', 'ai_instructions'] }],
-  });
+  const drift = diffBuiltinRegistries(rows);
+  expect(drift.aspects.drifted).toEqual([{ id: 'orbis/financial', what: ['schema'] }]);
+  // Сводка обязана поднять расхождение ИМЕННО ЭТОГО реестра: без этих двух строк реестр,
+  // выпавший из обхода `hasRegistryDrift`/`registryDriftIds`, дал бы зелёный /health при
+  // красном поле в структуре — то есть ловушку, снятую молча.
+  expect(hasRegistryDrift(drift)).toBe(true);
+  expect(registryDriftIds(drift)).toEqual(['aspects:orbis/financial schema']);
 });
 
-test('лишние КАСТОМНЫЕ строки реестра дрейфом не считаются', () => {
-  const rows = [...seeded(), { id: 'user/fitness', schema: {}, aiInstructions: '' }];
-  expect(hasAspectDrift(diffBuiltinAspects(rows))).toBe(false);
+test('аспекты: устарели ai_instructions — дрейф (они уезжают в описания attach_*-тулов)', () => {
+  const rows = seeded();
+  rows.aspects = rows.aspects.map((r) =>
+    r.id === 'orbis/task' ? { ...r, ai_instructions: 'старый текст' } : r,
+  );
+  expect(diffBuiltinRegistries(rows).aspects.drifted).toEqual([
+    { id: 'orbis/task', what: ['ai_instructions'] },
+  ]);
+});
+
+test('роли: разошёлся source_label — дрейф с именем столбца (Ч10-С3)', () => {
+  const rows = seeded();
+  rows.roles = rows.roles.map((r) =>
+    r.id === 'envelope-binding' ? { ...r, source_label: { ru: 'Родитель' } } : r,
+  );
+  const drift = diffBuiltinRegistries(rows);
+  expect(drift.roles.drifted).toEqual([{ id: 'envelope-binding', what: ['source_label'] }]);
+  expect(hasRegistryDrift(drift)).toBe(true);
+  expect(registryDriftIds(drift)).toEqual(['roles:envelope-binding source_label']);
+});
+
+// §А12-1: контракты и подписки создаются срезом А ПУСТЫМИ, их сиды — первый акт Б-1.
+// Строка, положенная раньше гейта П5, обязана быть видна как дрейф, а не как «уже готово».
+test('контракты/подписки/действия: любая system-строка — extra (в срезе А они пусты)', () => {
+  const rows = seeded();
+  rows.contracts = [{ id: 'orbis/completable' }];
+  rows.actions = [{ id: 'orbis/close' }];
+  const drift = diffBuiltinRegistries(rows);
+  expect(drift.contracts).toEqual({ missing: [], drifted: [], extra: ['orbis/completable'] });
+  expect(drift.actions).toEqual({ missing: [], drifted: [], extra: ['orbis/close'] });
+  expect(drift.subscriptions).toEqual(EMPTY);
+  expect(hasRegistryDrift(drift)).toBe(true);
+  expect(registryDriftIds(drift)).toEqual([
+    'contracts:orbis/completable лишний',
+    'actions:orbis/close лишний',
+  ]);
+});
+
+test('registryDriftIds: плоский список для /health называет и реестр, и id', () => {
+  const rows = seeded();
+  rows.properties = rows.properties.filter((r) => r.id !== 'orbis/task_status');
+  rows.subscriptions = [{ id: 'orbis/agenda' }];
+  expect(registryDriftIds(diffBuiltinRegistries(rows))).toEqual([
+    'properties:orbis/task_status нет',
+    'subscriptions:orbis/agenda лишний',
+  ]);
 });
 
 test('orbis/routine: ai_instructions называют умолчание автономии — без явной просьбы владельца mode: propose (V1, PRD 02 §3.4)', () => {

@@ -5,13 +5,14 @@
 // SPA-fallback'ом (Hono исполняет matching-хендлеры в порядке регистрации; API-хендлер
 // возвращает Response и не зовёт next → serveStatic до него не доходит).
 import { trpcServer } from '@hono/trpc-server';
+import { registryDriftIds } from '@orbis/shared';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { serveStatic } from 'hono/bun';
 import type { AiDeps } from './ai/send-message';
 import { makeCreateContext } from './context';
-import type { AspectDriftStatus } from './db/aspect-drift';
 import type { Db } from './db/client';
+import type { RegistryDriftStatus } from './db/registry-drift';
 import { makeMcpHandler } from './mcp/transport';
 import { mountOAuthMetadata } from './oauth/metadata';
 import { makeRegisterHandler } from './oauth/register';
@@ -120,14 +121,14 @@ export interface AppDeps {
   /** Переопределение корня статики (тест/Docker); по умолчанию WEB_DIST_DIR. */
   webDistDir?: string;
   /**
-   * Состояние стартовой проверки реестра аспектов (E1) — геттер, потому что проверка
-   * асинхронная и приложение поднимается, не дожидаясь её. Геттера нет вовсе (тесты
-   * композиции, встроенные стенды) — /health про реестр молчит.
+   * Состояние стартовой проверки ПЯТИ реестров и таблицы действий (§А12-1 п.4) — геттер,
+   * потому что проверка асинхронная и приложение поднимается, не дожидаясь её. Геттера нет
+   * вовсе (тесты композиции, встроенные стенды) — /health про реестры молчит.
    */
-  aspectDrift?: () => AspectDriftStatus;
+  registryDrift?: () => RegistryDriftStatus;
   /**
    * Состояние планировщика рутин (V1.2) — тоже геттер: последний тик меняется каждую
-   * минуту. Геттера нет — /health про планировщик молчит (та же форма, что у aspectDrift).
+   * минуту. Геттера нет — /health про планировщик молчит (та же форма, что у registryDrift).
    * `enabled: false` — фон выключен env'ом (стенд, тесты); `lastTickAt: null` при
    * включённом — первый тик ещё не прошёл.
    */
@@ -138,7 +139,7 @@ export function createApp({
   db,
   ai,
   webDistDir = WEB_DIST_DIR,
-  aspectDrift,
+  registryDrift,
   routineScheduler,
 }: AppDeps): Hono {
   const app = new Hono();
@@ -204,7 +205,9 @@ export function createApp({
   // healthCheckPath Render, и тесты. Расхождение добавляет поле, но не меняет код ответа:
   // не-200 здесь превратил бы наблюдаемость ловушки в отказ деплоя (E1). Третье значение
   // — 'unknown': проверка не выполнилась (БД была недоступна на старте), и выдавать это
-  // за «расхождений нет» нельзя — именно так ловушка снималась молча.
+  // за «расхождений нет» нельзя — именно так ловушка снималась молча. Поле называется
+  // registryDrift (было aspectDrift): реестров теперь шесть, и каждая строка списка несёт
+  // имя реестра — иначе `orbis/task` в ответе не отличить от свойства с тем же id.
   //
   // Планировщик рутин (V1.2) — тем же правилом: поле появляется только с геттером и никогда
   // не меняет код ответа. 'off' — выключен env'ом; 'pending' — включён, первого тика ещё не
@@ -212,10 +215,10 @@ export function createApp({
   // жив, а не только что процесс отвечает.
   app.get('/health', (c) => {
     const body: Record<string, unknown> = { status: 'ok' };
-    const state = aspectDrift?.();
-    if (state !== undefined && state.status === 'unknown') body.aspectDrift = 'unknown';
+    const state = registryDrift?.();
+    if (state !== undefined && state.status === 'unknown') body.registryDrift = 'unknown';
     else if (state !== undefined && state.status === 'drift') {
-      body.aspectDrift = [...state.drift.missing, ...state.drift.drifted.map((d) => d.id)];
+      body.registryDrift = registryDriftIds(state.drift);
     }
     const scheduler = routineScheduler?.();
     if (scheduler !== undefined) {

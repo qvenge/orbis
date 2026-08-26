@@ -3,7 +3,7 @@
 -- Всё в одной транзакции с ROLLBACK: БД не мутируется.
 BEGIN;
 CREATE EXTENSION IF NOT EXISTS pgtap;
-SELECT plan(46);
+SELECT plan(89);
 
 -- Фикстуры под ролью с BYPASSRLS (обходит RLS; postgres здесь НЕ суперпользователь)
 INSERT INTO entities (id, owner_id, title) VALUES
@@ -13,8 +13,8 @@ INSERT INTO chat_threads (id, owner_id) VALUES
   ('00000000-0000-7000-8000-0000000000a2', '00000000-0000-4000-8000-00000000000a');
 INSERT INTO chat_messages (id, thread_id, role, content) VALUES
   ('00000000-0000-7000-8000-0000000000a3', '00000000-0000-7000-8000-0000000000a2', 'user', 'привет');
-INSERT INTO aspect_definitions (id, owner_id, name, namespace, schema)
-  VALUES ('orbis/pgtap-probe', NULL, 'Probe', 'orbis', '{}');
+INSERT INTO aspect_definitions (id, owner_id, key, label, description, schema)
+  VALUES ('orbis/pgtap-probe', NULL, 'orbis/pgtap-probe', '{"ru":"Проба"}', '{"ru":"Проба"}', '{}');
 -- Фикстуры для обеих сторон (A и B): без строки B проверки «видит только свою»
 -- были бы ложно-зелёными даже при сломанном RLS.
 INSERT INTO user_settings (owner_id) VALUES
@@ -46,15 +46,74 @@ INSERT INTO entity_versions (id, owner_id, entity_id, label, body, actor_user_id
    '00000000-0000-7000-8000-0000000000b1', 'до правки B', 'тело B',
    '00000000-0000-4000-8000-00000000000b', 'owner');
 
--- 1) RLS включён и FORCE на всех 11 таблицах
+-- Фикстуры реестров реформы (0014). У каждого — по ТРИ строки: встроенная (owner_id NULL,
+-- читается всеми), строка A и строка B. Без строки B проверки «видит только своё» были бы
+-- ложно-зелёными даже при полностью снятой RLS, а без встроенной — не различались бы
+-- политики read_builtin_or_own и update_own.
+-- Префикс id `pgtap/` отделяет пробы от 77 засеянных свойств, 11 ролей и 13 аспектов,
+-- которые в базе уже лежат: счётчики ниже считают ровно пробы.
+INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+  VALUES ('pgtap/probe', NULL, 'pgtap/probe', '{"ru":"П"}'::jsonb,
+          '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900);
+INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+  VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'pgtap/a', '{"ru":"П"}'::jsonb,
+          '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900);
+INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+  VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'pgtap/b', '{"ru":"П"}'::jsonb,
+          '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900);
+INSERT INTO relation_role_definitions
+  (id, owner_id, key, label, description, source_label, target_label, rank)
+  VALUES ('pgtap/probe', NULL, 'pgtap/probe', '{"ru":"Р"}'::jsonb,
+          '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900);
+INSERT INTO relation_role_definitions
+  (id, owner_id, key, label, description, source_label, target_label, rank)
+  VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'pgtap/a', '{"ru":"Р"}'::jsonb,
+          '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900);
+INSERT INTO relation_role_definitions
+  (id, owner_id, key, label, description, source_label, target_label, rank)
+  VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'pgtap/b', '{"ru":"Р"}'::jsonb,
+          '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900);
+INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+  VALUES ('pgtap/probe', NULL, 'pgtap/probe', '{"ru":"К"}'::jsonb,
+          '{"ru":"К"}'::jsonb, 'slots', 900);
+INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+  VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'pgtap/a', '{"ru":"К"}'::jsonb,
+          '{"ru":"К"}'::jsonb, 'slots', 900);
+INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+  VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'pgtap/b', '{"ru":"К"}'::jsonb,
+          '{"ru":"К"}'::jsonb, 'slots', 900);
+INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+  VALUES ('pgtap/probe', NULL, 'agenda', '{}'::jsonb, 900);
+INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+  VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'agenda', '{}'::jsonb, 900);
+INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+  VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'agenda', '{}'::jsonb, 900);
+INSERT INTO action_definitions (id, owner_id, key, label, description)
+  VALUES ('pgtap/probe', NULL, 'pgtap/probe', '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb);
+INSERT INTO action_definitions (id, owner_id, key, label, description)
+  VALUES ('pgtap/a', '00000000-0000-4000-8000-00000000000a', 'pgtap/a',
+          '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb);
+INSERT INTO action_definitions (id, owner_id, key, label, description)
+  VALUES ('pgtap/b', '00000000-0000-4000-8000-00000000000b', 'pgtap/b',
+          '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb);
+INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta) VALUES
+  ('00000000-0000-7000-8000-0000000000aa', '00000000-0000-4000-8000-00000000000a',
+   'property', 'orbis/priority', 1, '{"label":{"ru":"Своё"}}'),
+  ('00000000-0000-7000-8000-0000000000bb', '00000000-0000-4000-8000-00000000000b',
+   'property', 'orbis/priority', 1, '{"label":{"ru":"Чужое"}}');
+
+-- 1) RLS включён и FORCE на всех 18 таблицах (11 исходных + 7 реестров реформы, 0014)
 SELECT is(
   (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'public' AND c.relkind = 'r'
      AND c.relname IN ('entities','relations','aspect_definitions','user_settings',
                        'chat_threads','chat_messages','ai_usage','entity_origins',
-                       'agent_grants','oauth_clients','entity_versions')
+                       'agent_grants','oauth_clients','entity_versions',
+                       'property_definitions','relation_role_definitions',
+                       'contract_definitions','subscription_definitions',
+                       'action_definitions','registry_deltas','registry_system')
      AND c.relrowsecurity AND c.relforcerowsecurity),
-  11, 'RLS ENABLE+FORCE на всех одиннадцати таблицах');
+  18, 'RLS ENABLE+FORCE на всех восемнадцати таблицах');
 
 -- Как пользователь A
 SELECT set_config('request.jwt.claims',
@@ -67,11 +126,13 @@ SELECT results_eq(
   ARRAY[0], 'чужая сущность невидима');
 SELECT throws_ok(
   $$INSERT INTO entities (id, owner_id, title)
-    VALUES ('00000000-0000-7000-8000-0000000000c1', '00000000-0000-4000-8000-00000000000b', 'подлог')$$,
+    VALUES ('00000000-0000-7000-8000-0000000000c1', '00000000-0000-4000-8000-00000000000b',
+            'подлог')$$,
   '42501', NULL, 'INSERT с чужим owner_id отклоняется WITH CHECK');
 SELECT lives_ok(
   $$INSERT INTO entities (id, owner_id, title)
-    VALUES ('00000000-0000-7000-8000-0000000000a4', '00000000-0000-4000-8000-00000000000a', 'своя')$$,
+    VALUES ('00000000-0000-7000-8000-0000000000a4', '00000000-0000-4000-8000-00000000000a',
+            'своя')$$,
   'INSERT со своим owner_id проходит');
 SELECT throws_ok(
   $$INSERT INTO relations (id, source_id, target_id, relation_type)
@@ -91,10 +152,10 @@ SELECT results_eq($$SELECT count(*)::int FROM aspect_definitions WHERE id = 'orb
   ARRAY[1], 'встроенные аспекты читаемы');
 -- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки),
 -- поэтому проверяем не исключение, а неизменность встроенной строки.
-UPDATE aspect_definitions SET name = 'hack' WHERE id = 'orbis/pgtap-probe';
+UPDATE aspect_definitions SET label = '{"ru":"взлом"}' WHERE id = 'orbis/pgtap-probe';
 SELECT results_eq(
-  $$SELECT name FROM aspect_definitions WHERE id = 'orbis/pgtap-probe'$$,
-  ARRAY['Probe'::text], 'встроенные аспекты не правятся под authenticated');
+  $$SELECT label->>'ru' FROM aspect_definitions WHERE id = 'orbis/pgtap-probe'$$,
+  ARRAY['Проба'::text], 'встроенные аспекты не правятся под authenticated');
 
 -- Группа 1: user_settings — A видит только свою строку (в фикстурах есть и строка B)
 SELECT results_eq(
@@ -166,8 +227,9 @@ SELECT results_eq(
 
 -- Группа 6: builtin-аспекты (owner_id NULL) закрыты на запись под authenticated
 SELECT throws_ok(
-  $$INSERT INTO aspect_definitions (id, owner_id, name, namespace, schema)
-    VALUES ('orbis/pgtap-fake-builtin', NULL, 'Fake', 'orbis', '{}')$$,
+  $$INSERT INTO aspect_definitions (id, owner_id, key, label, description, schema)
+    VALUES ('orbis/pgtap-fake-builtin', NULL, 'orbis/pgtap-fake-builtin',
+            '{"ru":"Подлог"}', '{"ru":"Подлог"}', '{}')$$,
   '42501', NULL, 'aspect_definitions: INSERT builtin (owner_id NULL) отклоняется WITH CHECK');
 -- DELETE строки, отфильтрованной USING, — молчаливый «DELETE 0» (не ошибка),
 -- поэтому проверяем сохранность строки, а не исключение.
@@ -346,6 +408,239 @@ SELECT policy_roles_are('public', 'user_settings', 'scheduler_reads_owner_list',
 -- проверяется поведением в queries.test.ts.
 SELECT ok(has_table_privilege('orbis_app', 'public.user_settings', 'SELECT'),
   'user_settings: у orbis_app есть SELECT (грант 0013 — без него политика бесполезна)');
+
+
+-- Группы 12–16: пять реестров реформы (§С6). Форма проверок одна на все пять — политики у
+-- них тоже одни (read_builtin_or_own / write_own / update_own / delete_own), и расходиться
+-- им незачем.
+--
+-- Identity ставим ЗАНОВО и явно: группа 11 работала под админом, а GUC request.jwt.claims
+-- живёт до конца транзакции — без явной установки проверки ушли бы под роль, которая RLS
+-- обходит, и были бы ложно-зелёными.
+SELECT set_config('request.jwt.claims',
+  '{"sub":"00000000-0000-4000-8000-00000000000a","role":"authenticated"}', true);
+SET LOCAL ROLE authenticated;
+
+-- Группа 12: property_definitions
+SELECT results_eq(
+  $$SELECT count(*)::int FROM property_definitions WHERE id LIKE 'pgtap/%'$$,
+  ARRAY[2],
+  'property_definitions: A видит встроенную и свою — и ровно их (строка B невидима)');
+SELECT lives_ok(
+  $$INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+    VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'pgtap/a2', '{"ru":"П"}'::jsonb,
+            '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900)$$,
+  'property_definitions: INSERT своей строки проходит (write_own + GRANT)');
+SELECT throws_ok(
+  $$INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+    VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'pgtap/c', '{"ru":"П"}'::jsonb,
+            '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900)$$,
+  '42501', NULL, 'property_definitions: INSERT с чужим owner_id отклоняется WITH CHECK');
+SELECT throws_ok(
+  $$INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+    VALUES ('pgtap/c', NULL, 'pgtap/c', '{"ru":"П"}'::jsonb,
+            '{"ru":"П"}'::jsonb, '{"kind":"text"}'::jsonb, 900)$$,
+  '42501', NULL,
+    'property_definitions: INSERT встроенной строки (owner_id NULL) под authenticated отклоняется');
+-- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки), поэтому здесь
+-- проверяется не исключение, а НЕИЗМЕННОСТЬ встроенной строки.
+UPDATE property_definitions SET module = 'взлом' WHERE id = 'pgtap/probe';
+SELECT is((SELECT module FROM property_definitions WHERE id = 'pgtap/probe'), NULL,
+  'property_definitions: встроенная строка не правится под authenticated');
+-- Положительный контроль update_own В ТОМ ЖЕ ТЕСТЕ: без него проверка выше проходила бы и
+-- при вовсе отсутствующей политике UPDATE.
+UPDATE property_definitions SET module = 'своё' WHERE id = 'pgtap/a';
+SELECT is((SELECT module FROM property_definitions WHERE id = 'pgtap/a'), 'своё',
+  'property_definitions: свою строку владелец правит (update_own)');
+DELETE FROM property_definitions WHERE id = 'pgtap/a2';
+SELECT results_eq(
+  $$SELECT count(*)::int FROM property_definitions WHERE id = 'pgtap/a2'$$,
+  ARRAY[0],
+  'property_definitions: свою строку владелец удаляет (delete_own)');
+
+-- Группа 13: relation_role_definitions
+SELECT results_eq(
+  $$SELECT count(*)::int FROM relation_role_definitions WHERE id LIKE 'pgtap/%'$$,
+  ARRAY[2],
+  'relation_role_definitions: A видит встроенную и свою — и ровно их (строка B невидима)');
+SELECT lives_ok(
+  $$INSERT INTO relation_role_definitions
+  (id, owner_id, key, label, description, source_label, target_label, rank)
+    VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'pgtap/a2', '{"ru":"Р"}'::jsonb,
+            '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900)$$,
+  'relation_role_definitions: INSERT своей строки проходит (write_own + GRANT)');
+SELECT throws_ok(
+  $$INSERT INTO relation_role_definitions
+  (id, owner_id, key, label, description, source_label, target_label, rank)
+    VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'pgtap/c', '{"ru":"Р"}'::jsonb,
+            '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900)$$,
+  '42501', NULL, 'relation_role_definitions: INSERT с чужим owner_id отклоняется WITH CHECK');
+SELECT throws_ok(
+  $$INSERT INTO relation_role_definitions
+  (id, owner_id, key, label, description, source_label, target_label, rank)
+    VALUES ('pgtap/c', NULL, 'pgtap/c', '{"ru":"Р"}'::jsonb,
+            '{"ru":"Р"}'::jsonb, '{"ru":"И"}'::jsonb, '{"ru":"Ц"}'::jsonb, 900)$$,
+  '42501', NULL,
+    'relation_role_definitions: INSERT встроенной строки (owner_id NULL) отклоняется');
+-- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки), поэтому здесь
+-- проверяется не исключение, а НЕИЗМЕННОСТЬ встроенной строки.
+UPDATE relation_role_definitions SET module = 'взлом' WHERE id = 'pgtap/probe';
+SELECT is((SELECT module FROM relation_role_definitions WHERE id = 'pgtap/probe'), NULL,
+  'relation_role_definitions: встроенная строка не правится под authenticated');
+-- Положительный контроль update_own В ТОМ ЖЕ ТЕСТЕ: без него проверка выше проходила бы и
+-- при вовсе отсутствующей политике UPDATE.
+UPDATE relation_role_definitions SET module = 'своё' WHERE id = 'pgtap/a';
+SELECT is((SELECT module FROM relation_role_definitions WHERE id = 'pgtap/a'), 'своё',
+  'relation_role_definitions: свою строку владелец правит (update_own)');
+DELETE FROM relation_role_definitions WHERE id = 'pgtap/a2';
+SELECT results_eq(
+  $$SELECT count(*)::int FROM relation_role_definitions WHERE id = 'pgtap/a2'$$,
+  ARRAY[0],
+  'relation_role_definitions: свою строку владелец удаляет (delete_own)');
+
+-- Группа 14: contract_definitions
+SELECT results_eq(
+  $$SELECT count(*)::int FROM contract_definitions WHERE id LIKE 'pgtap/%'$$,
+  ARRAY[2],
+  'contract_definitions: A видит встроенную и свою — и ровно их (строка B невидима)');
+SELECT lives_ok(
+  $$INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+    VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'pgtap/a2', '{"ru":"К"}'::jsonb,
+            '{"ru":"К"}'::jsonb, 'slots', 900)$$,
+  'contract_definitions: INSERT своей строки проходит (write_own + GRANT)');
+SELECT throws_ok(
+  $$INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+    VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'pgtap/c', '{"ru":"К"}'::jsonb,
+            '{"ru":"К"}'::jsonb, 'slots', 900)$$,
+  '42501', NULL, 'contract_definitions: INSERT с чужим owner_id отклоняется WITH CHECK');
+SELECT throws_ok(
+  $$INSERT INTO contract_definitions (id, owner_id, key, label, description, kind, rank)
+    VALUES ('pgtap/c', NULL, 'pgtap/c', '{"ru":"К"}'::jsonb, '{"ru":"К"}'::jsonb, 'slots', 900)$$,
+  '42501', NULL,
+    'contract_definitions: INSERT встроенной строки (owner_id NULL) под authenticated отклоняется');
+-- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки), поэтому здесь
+-- проверяется не исключение, а НЕИЗМЕННОСТЬ встроенной строки.
+UPDATE contract_definitions SET module = 'взлом' WHERE id = 'pgtap/probe';
+SELECT is((SELECT module FROM contract_definitions WHERE id = 'pgtap/probe'), NULL,
+  'contract_definitions: встроенная строка не правится под authenticated');
+-- Положительный контроль update_own В ТОМ ЖЕ ТЕСТЕ: без него проверка выше проходила бы и
+-- при вовсе отсутствующей политике UPDATE.
+UPDATE contract_definitions SET module = 'своё' WHERE id = 'pgtap/a';
+SELECT is((SELECT module FROM contract_definitions WHERE id = 'pgtap/a'), 'своё',
+  'contract_definitions: свою строку владелец правит (update_own)');
+DELETE FROM contract_definitions WHERE id = 'pgtap/a2';
+SELECT results_eq(
+  $$SELECT count(*)::int FROM contract_definitions WHERE id = 'pgtap/a2'$$,
+  ARRAY[0],
+  'contract_definitions: свою строку владелец удаляет (delete_own)');
+
+-- Группа 15: subscription_definitions
+SELECT results_eq(
+  $$SELECT count(*)::int FROM subscription_definitions WHERE id LIKE 'pgtap/%'$$,
+  ARRAY[2],
+  'subscription_definitions: A видит встроенную и свою — и ровно их (строка B невидима)');
+SELECT lives_ok(
+  $$INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+    VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'agenda', '{}'::jsonb, 900)$$,
+  'subscription_definitions: INSERT своей строки проходит (write_own + GRANT)');
+SELECT throws_ok(
+  $$INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+    VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'agenda', '{}'::jsonb, 900)$$,
+  '42501', NULL, 'subscription_definitions: INSERT с чужим owner_id отклоняется WITH CHECK');
+SELECT throws_ok(
+  $$INSERT INTO subscription_definitions (id, owner_id, surface, definition, rank)
+    VALUES ('pgtap/c', NULL, 'agenda', '{}'::jsonb, 900)$$,
+  '42501', NULL,
+    'subscription_definitions: INSERT встроенной строки (owner_id NULL) отклоняется');
+-- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки), поэтому здесь
+-- проверяется не исключение, а НЕИЗМЕННОСТЬ встроенной строки.
+UPDATE subscription_definitions SET module = 'взлом' WHERE id = 'pgtap/probe';
+SELECT is((SELECT module FROM subscription_definitions WHERE id = 'pgtap/probe'), NULL,
+  'subscription_definitions: встроенная строка не правится под authenticated');
+-- Положительный контроль update_own В ТОМ ЖЕ ТЕСТЕ: без него проверка выше проходила бы и
+-- при вовсе отсутствующей политике UPDATE.
+UPDATE subscription_definitions SET module = 'своё' WHERE id = 'pgtap/a';
+SELECT is((SELECT module FROM subscription_definitions WHERE id = 'pgtap/a'), 'своё',
+  'subscription_definitions: свою строку владелец правит (update_own)');
+DELETE FROM subscription_definitions WHERE id = 'pgtap/a2';
+SELECT results_eq(
+  $$SELECT count(*)::int FROM subscription_definitions WHERE id = 'pgtap/a2'$$,
+  ARRAY[0],
+  'subscription_definitions: свою строку владелец удаляет (delete_own)');
+
+-- Группа 16: action_definitions
+SELECT results_eq(
+  $$SELECT count(*)::int FROM action_definitions WHERE id LIKE 'pgtap/%'$$,
+  ARRAY[2],
+  'action_definitions: A видит встроенную и свою — и ровно их (строка B невидима)');
+SELECT lives_ok(
+  $$INSERT INTO action_definitions (id, owner_id, key, label, description)
+    VALUES ('pgtap/a2', '00000000-0000-4000-8000-00000000000a', 'pgtap/a2',
+            '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb)$$,
+  'action_definitions: INSERT своей строки проходит (write_own + GRANT)');
+SELECT throws_ok(
+  $$INSERT INTO action_definitions (id, owner_id, key, label, description)
+    VALUES ('pgtap/c', '00000000-0000-4000-8000-00000000000b', 'pgtap/c',
+            '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb)$$,
+  '42501', NULL, 'action_definitions: INSERT с чужим owner_id отклоняется WITH CHECK');
+SELECT throws_ok(
+  $$INSERT INTO action_definitions (id, owner_id, key, label, description)
+    VALUES ('pgtap/c', NULL, 'pgtap/c', '{"ru":"Д"}'::jsonb, '{"ru":"Д"}'::jsonb)$$,
+  '42501', NULL,
+    'action_definitions: INSERT встроенной строки (owner_id NULL) под authenticated отклоняется');
+-- RLS молча фильтрует строки, не прошедшие USING (0 строк, без ошибки), поэтому здесь
+-- проверяется не исключение, а НЕИЗМЕННОСТЬ встроенной строки.
+UPDATE action_definitions SET module = 'взлом' WHERE id = 'pgtap/probe';
+SELECT is((SELECT module FROM action_definitions WHERE id = 'pgtap/probe'), NULL,
+  'action_definitions: встроенная строка не правится под authenticated');
+-- Положительный контроль update_own В ТОМ ЖЕ ТЕСТЕ: без него проверка выше проходила бы и
+-- при вовсе отсутствующей политике UPDATE.
+UPDATE action_definitions SET module = 'своё' WHERE id = 'pgtap/a';
+SELECT is((SELECT module FROM action_definitions WHERE id = 'pgtap/a'), 'своё',
+  'action_definitions: свою строку владелец правит (update_own)');
+DELETE FROM action_definitions WHERE id = 'pgtap/a2';
+SELECT results_eq($$SELECT count(*)::int FROM action_definitions WHERE id = 'pgtap/a2'$$, ARRAY[0],
+  'action_definitions: свою строку владелец удаляет (delete_own)');
+
+-- Группа 17: registry_deltas — таблица чисто владельца (owner_owns_row FOR ALL), встроенных
+-- дельт не бывает по определению.
+SELECT results_eq('SELECT count(*)::int FROM registry_deltas', ARRAY[1],
+  'registry_deltas: A видит ровно свою дельту');
+SELECT throws_ok(
+  $$INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+    VALUES ('00000000-0000-7000-8000-0000000000cc', '00000000-0000-4000-8000-00000000000b', 'property',
+            'orbis/limit', 1, '{}')$$,
+  '42501', NULL, 'registry_deltas: INSERT с чужим owner_id отклоняется WITH CHECK');
+SELECT lives_ok(
+  $$INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+    VALUES ('00000000-0000-7000-8000-0000000000dd', '00000000-0000-4000-8000-00000000000a', 'property',
+            'orbis/limit', 1, '{}')$$,
+  'registry_deltas: INSERT своей дельты проходит');
+
+-- Группа 18: registry_system — глобальная версия system-реестров. Читают все, пишет только
+-- сид под админской ролью: политики INSERT/UPDATE на таблице НЕТ намеренно.
+SELECT results_eq('SELECT count(*)::int FROM registry_system', ARRAY[1],
+  'registry_system: строка версии читается любым владельцем (read_all)');
+UPDATE registry_system SET version = -777 WHERE id = 1;
+SELECT results_eq('SELECT count(*)::int FROM registry_system WHERE version = -777', ARRAY[0],
+  'registry_system: версия не правится под authenticated (политики UPDATE нет)');
+SELECT throws_ok(
+  $$INSERT INTO registry_system (id, version) VALUES (2, 0)$$,
+  '42501', NULL,
+    'registry_system: вторая строка под authenticated отклоняется (политики INSERT нет)');
+RESET ROLE;
+
+-- Deny-by-default для реестров: claims чистим ЯВНО, иначе проверки унаследуют identity A.
+-- Ожидание здесь НЕ «ноль строк»: встроенные строки читаемы и без identity — на этом стоит
+-- стартовая проверка дрейфа (db/registry-drift.ts ходит без актора). Ноль обязан быть у
+-- строк ВЛАДЕЛЬЦЕВ.
+SELECT set_config('request.jwt.claims', '', true);
+SET LOCAL ROLE authenticated;
+SELECT results_eq($$SELECT count(*)::int FROM property_definitions WHERE id LIKE 'pgtap/%'$$,
+  ARRAY[1], 'без identity: из проб property_definitions видна только встроенная');
+SELECT results_eq('SELECT count(*)::int FROM registry_deltas', ARRAY[0],
+  'без identity: registry_deltas — 0 строк');
+RESET ROLE;
 
 SELECT finish();
 ROLLBACK;

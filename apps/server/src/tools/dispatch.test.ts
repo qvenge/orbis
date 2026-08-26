@@ -5,9 +5,16 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, newId } from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  freshUserId,
+  requireEnv,
+  seedCustomAspect,
+  truncateAll,
+} from '../../test/helpers';
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
-import { aspectDefinitions, chatMessages, entities } from '../db/schema';
+import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
@@ -69,25 +76,12 @@ beforeAll(async () => {
   await truncateAll();
   // Кастомный аспект userA с «-» в id: реестр публикует attach_user_sleep_log,
   // executor ждёт attach_user_sleep-log — тесты маппинга (одиночный и в batch)
-  const { db: admin, client: adminClient } = adminDb();
-  try {
-    await admin.insert(aspectDefinitions).values({
-      id: 'user/sleep-log',
-      ownerId: userA,
-      name: 'Sleep Log',
-      namespace: 'user',
-      schema: {
-        type: 'object',
-        properties: { hours: { type: 'number' } },
-        required: ['hours'],
-        additionalProperties: false,
-      },
-      aiInstructions: 'Пиши часы сна числом.',
-      viewConfig: { keyFields: ['hours'] },
-    });
-  } finally {
-    await adminClient.end();
-  }
+  await seedCustomAspect(userA, {
+    key: 'user/sleep-log',
+    label: { ru: 'Сон', en: 'Sleep Log' },
+    aiInstructions: 'Пиши часы сна числом.',
+    properties: [{ key: 'hours', type: { kind: 'number' }, required: true }],
+  });
 });
 
 afterAll(async () => {
