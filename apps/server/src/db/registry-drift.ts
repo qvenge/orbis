@@ -41,6 +41,15 @@ import type { Db } from './client';
  * запросы жили двумя копиями (`aspect-drift.ts:33` и `ops.ts:96-97`); с шестью таблицами
  * вместо одной такая пара разъехалась бы на первой же правке состава колонок.
  *
+ * ЧТО ИМЕННО ОБЩЕЕ, а что нет. Общее — определение дрейфа (`diffBuiltinRegistries`), состав
+ * читаемого (эти запросы) и снапшот-семантика (обе стороны читают в REPEATABLE READ
+ * READ ONLY). РАЗЛИЧАЕТСЯ роль, и намеренно: сервер читает под `authenticated`, потому что
+ * под ней он и работает — снятый грант обязан всплыть именно здесь; `ops.ts check` читает
+ * админской ролью, потому что отвечает на вопрос о ДАННЫХ прода и обязан ответить на него
+ * даже тогда, когда гранты или политики сломаны, — иначе дефект прав приходил бы оператору
+ * под видом «состояние реестров неизвестно». Это выбор, а не ограничение: админская роль
+ * `SET LOCAL ROLE authenticated` умеет (проверено пробоем).
+ *
  * Столбцы перечислены поимённо, а не `SELECT *`: имя столбца — это и есть содержимое поля
  * `what` в отчёте дрейфа, и `*` затащил бы туда `created_at`, который у пересеянной строки
  * законно другой.
@@ -68,26 +77,38 @@ export const REGISTRY_DRIFT_QUERIES: Record<RegistryKind, string> = {
 /**
  * Читает встроенные (`owner_id IS NULL`) строки шести таблиц и сравнивает с кодом.
  *
- * `SET LOCAL ROLE authenticated` обязателен: роль приложения NOINHERIT, гранты на таблицы
- * висят на `authenticated` (миграции 0001 и 0014, setup-db.ts). `withIdentity` для этого не
- * годится — он требует UUID актора, а у стартовой проверки актора нет; политика чтения
- * встроенных (`owner_id IS NULL OR owner_id = auth.uid()`) при пустых claims пропускает
- * ровно их.
+ * ЧТЕНИЕ ИДЁТ ПОД РОЛЬЮ ПРИЛОЖЕНИЯ, и это половина смысла проверки. Роль приложения
+ * NOINHERIT, гранты на таблицы висят на `authenticated` (миграции 0001 и 0014,
+ * setup-db.ts), поэтому забытый GRANT новой таблице даёт здесь 42501 — и проверка честно
+ * скажет `unknown` вместо тихого «расхождений нет». `withIdentity` для этого не годится: он
+ * требует UUID актора, а у стартовой проверки актора нет; политика чтения встроенных
+ * (`owner_id IS NULL OR owner_id = auth.uid()`) при пустых claims пропускает ровно их.
  *
- * Все шесть запросов — в ОДНОЙ транзакции: реестры между собой согласованы (аспект
- * ссылается на свойства), и снимок, собранный из шести отдельных транзакций, мог бы поймать
- * пересев на середине и назвать дрейфом то, чего нет.
+ * ЗАЧЕМ ТРАНЗАКЦИЯ — за `SET LOCAL`: вне транзакции он не действует (PostgreSQL применяет
+ * его до конца текущей tx, а её нет). Одной транзакции для согласованности снимка МАЛО:
+ * по умолчанию она READ COMMITTED, и каждый SELECT в ней берёт СВОЙ снапшот — пересев,
+ * идущий параллельно, мог бы попасть между двумя запросами и дать ложный дрейф
+ * (замерено пробоем: `current_setting('transaction_isolation')` внутри `db.transaction`
+ * без конфига = `read committed`).
+ *
+ * Поэтому изоляция поднята явно до REPEATABLE READ: все шесть запросов видят ОДИН снапшот,
+ * и «аспект ссылается на свойство, которого нет» больше не может быть артефактом момента
+ * чтения. `READ ONLY` — не оптимизация, а забор: проверка дрейфа не имеет права писать
+ * ни при какой ошибке, и это утверждение проверяет сервер, а не только ревью.
  */
 export async function checkRegistryDrift(db: Db): Promise<RegistryDrift> {
-  const rows = await db.transaction(async (tx) => {
-    await tx.execute(sql`SET LOCAL ROLE authenticated`);
-    const out = {} as RegistryDbRows;
-    for (const kind of REGISTRY_KINDS) {
-      const result = await tx.execute(sql.raw(REGISTRY_DRIFT_QUERIES[kind]));
-      out[kind] = result as unknown as RegistryDbRow[];
-    }
-    return out;
-  });
+  const rows = await db.transaction(
+    async (tx) => {
+      await tx.execute(sql`SET LOCAL ROLE authenticated`);
+      const out = {} as RegistryDbRows;
+      for (const kind of REGISTRY_KINDS) {
+        const result = await tx.execute(sql.raw(REGISTRY_DRIFT_QUERIES[kind]));
+        out[kind] = result as unknown as RegistryDbRow[];
+      }
+      return out;
+    },
+    { isolationLevel: 'repeatable read', accessMode: 'read only' },
+  );
   return diffBuiltinRegistries(rows);
 }
 

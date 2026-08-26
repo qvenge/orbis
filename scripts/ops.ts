@@ -103,13 +103,28 @@ async function withDb<T>(fn: (sql: postgres.Sql) => Promise<T>): Promise<T> {
  * Отличие от `/health` — момент: здесь чтение ЖИВОЕ, а /health отдаёт снимок, снятый на
  * старте процесса. Расхождение между ними после пересева на поднятом сервисе — ожидаемое
  * (runbook §1), и лечится рестартом, а не пересевом.
+ *
+ * Второе отличие — РОЛЬ, и оно намеренное. Стартовая проверка читает под `authenticated`,
+ * потому что под ней сервер и работает: снятый грант обязан всплыть именно там. Здесь
+ * чтение идёт админской ролью, потому что вопрос другой — «что лежит в проде», и ответ на
+ * него не должен зависеть от целости прав: иначе сломанная политика приходила бы оператору
+ * под видом «реестры неизвестны», и он чинил бы не то. Возможность стать `authenticated` у
+ * админской роли есть (проверено пробоем) — это выбор, а не ограничение.
+ *
+ * Снапшот-семантика при этом ТА ЖЕ, что у стартовой проверки: шесть запросов в одной
+ * транзакции REPEATABLE READ, иначе (READ COMMITTED) каждый SELECT взял бы свой снапшот и
+ * параллельный пересев дал бы ложный дрейф. `READ ONLY` — забор: операция объявлена
+ * «только чтение» в белом списке, и это утверждение проверяет сервер, а не только докблок.
  */
 async function check(): Promise<number> {
   return withDb(async (sql) => {
-    const rows = {} as RegistryDbRows;
-    for (const kind of REGISTRY_KINDS) {
-      rows[kind] = (await sql.unsafe(REGISTRY_DRIFT_QUERIES[kind])) as unknown as RegistryDbRow[];
-    }
+    const rows = await sql.begin('isolation level repeatable read read only', async (tx) => {
+      const out = {} as RegistryDbRows;
+      for (const kind of REGISTRY_KINDS) {
+        out[kind] = (await tx.unsafe(REGISTRY_DRIFT_QUERIES[kind])) as unknown as RegistryDbRow[];
+      }
+      return out;
+    });
     const drift = diffBuiltinRegistries(rows);
     for (const kind of REGISTRY_KINDS) {
       const d = drift[kind];

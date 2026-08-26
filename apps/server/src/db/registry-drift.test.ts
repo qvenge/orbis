@@ -82,6 +82,39 @@ test('засеянные реестры: расхождений нет и зап
   });
 });
 
+/**
+ * Пин обещания докблока `checkRegistryDrift`. Без него «шесть запросов видят один снапшот»
+ * остаётся словами: транзакция по умолчанию READ COMMITTED, и каждый SELECT в ней берёт
+ * СВОЙ снапшот (замерено пробоем) — то есть ровно то, что докблок обещал и чего не делал.
+ *
+ * Проверка ПОВЕДЕНЧЕСКАЯ, а не «в вызов передан объект конфига»: прокси-`Db` пробрасывает
+ * вызов настоящему и внутри ТОЙ ЖЕ транзакции спрашивает у PostgreSQL, в каком режиме она
+ * фактически открыта. Аргумент можно передать и мимо драйвера, режим соврать не может.
+ */
+test('чтение идёт в REPEATABLE READ и READ ONLY (снапшот один на шесть запросов)', async () => {
+  let mode: { iso: string; ro: string } | undefined;
+  const spy = {
+    transaction: (fn: unknown, config: unknown) =>
+      (db as unknown as { transaction: (f: unknown, c: unknown) => Promise<unknown> }).transaction(
+        async (tx: { execute: (q: unknown) => Promise<unknown> }) => {
+          const r = (await tx.execute(sql`SELECT current_setting('transaction_isolation') AS iso,
+                                                 current_setting('transaction_read_only') AS ro`)) as unknown as {
+            iso: string;
+            ro: string;
+          }[];
+          mode = r[0];
+          return (fn as (t: unknown) => Promise<unknown>)(tx);
+        },
+        config,
+      ),
+  } as unknown as typeof db;
+
+  const drift = await checkRegistryDrift(spy);
+  expect(mode).toEqual({ iso: 'repeatable read', ro: 'on' });
+  // И сама сверка при этом работает — режим не сломал ни SET LOCAL ROLE, ни запросы.
+  expect(hasRegistryDrift(drift)).toBe(false);
+});
+
 test('label свойства в БД разошёлся с кодом — drifted с именем столбца', async () => {
   try {
     await admin.db.execute(

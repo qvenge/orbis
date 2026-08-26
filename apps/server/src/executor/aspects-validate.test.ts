@@ -3,9 +3,10 @@
 // данным. Тест на одной zod-схеме этот путь НЕ покрывает: `.refine` в JSON Schema не
 // попадает, поэтому правило, выраженное через refine, в проде отсутствует вовсе.
 //
-// БД не нужна: реестр здесь собирается в памяти ровно из того, что кладёт в него
-// scripts/seed-aspects.ts (`aspectJsonSchema(id)`), — сравнение схемы БД с этим источником
-// стережёт отдельная проверка дрейфа (aspect-drift.test.ts).
+// БД не нужна: реестр здесь собирается в памяти ровно из того, что кладёт в колонку
+// `schema` сид реестров (apps/server/src/db/seed-registries.ts — `legacyAspectJsonSchema(id)`,
+// это тот же генератор, что зовётся здесь прежним именем `aspectJsonSchema`), — сравнение
+// схемы БД с этим источником стережёт отдельная проверка дрейфа (db/registry-drift.test.ts).
 
 import { describe, expect, test } from 'bun:test';
 import { type AspectId, aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
