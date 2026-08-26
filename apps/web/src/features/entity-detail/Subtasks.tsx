@@ -11,6 +11,9 @@ import { useToast } from '../../ui/toast-store';
 
 type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
 
+/** Роли рёбер, которые секция показывает подпунктами (§А4-3). */
+const SUBTASK_ROLES: readonly string[] = ['subitem', 'ticket'];
+
 // Подзадачи: дети по РОЛИ `subitem` (source=родитель, §А4-3). Создание — quick_capture
 // entity_create + relation_create, оба под §5.2/журнал сервера.
 //
@@ -26,11 +29,17 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
    * исполнителя был таким же ребёнком тикета по схлопнутому `parent`, «служебное ли это»
    * приходилось узнавать из самой ЗАПИСИ (по `orbis/agent-run`), а ради этого секция читала
    * каждого ребёнка отдельным запросом и до его приезда показывала прогон подзадачей.
-   * Теперь прогон несёт роль `run`, а подзадача — `subitem`: разница написана на ребре, и
-   * список верен с первого кадра.
+   * Теперь разница написана на ребре, и список верен с первого кадра.
+   *
+   * Ролей ДВЕ, а не одна: `ticket` — такая же работа внутри целого, как `subitem`, только
+   * у проекта, и до реформы она стояла здесь же (схлопнутый `parent` их не различал).
+   * Оставь мы один `subitem` — после бэкфилла 0016 владелец потерял бы тикеты проекта из
+   * вида, и вернуть их было бы нечем: писателя роли `ticket` в срезе А нет.
+   * `run` в список НЕ входит — ради этого разделение и заводилось; `category-parent` тоже:
+   * дерево категорий живёт на своём экране.
    */
   const visibleIds = relations
-    .filter((r) => r.role === 'subitem' && r.sourceId === parentId)
+    .filter((r) => SUBTASK_ROLES.includes(r.role) && r.sourceId === parentId)
     .map((r) => r.targetId);
   const [draft, setDraft] = useState('');
   const { show } = useToast();

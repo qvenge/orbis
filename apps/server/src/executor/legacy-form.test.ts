@@ -8,6 +8,7 @@ import { withIdentity } from '../db/with-identity';
 import type { RegistrySnapshot } from '../registry/load';
 import { loadRegistry } from '../registry/load';
 import { projectLegacyAspects, projectLegacyRelationType, rowFromLegacy } from './legacy-form';
+import { LEGACY_PARENT_ROLES } from './relations';
 
 requireEnv();
 
@@ -48,6 +49,23 @@ const EXPECTED_RELATION_TYPE: Record<string, string> = {
   'instance-of': 'derived_from',
   ref: 'ref',
 };
+
+test('LEGACY_PARENT_ROLES — РОВНО пять ролей нормативной таблицы, ни больше ни меньше', () => {
+  // Список выведен из проекции, и это защищает его снизу: роль, потерявшая проекцию в
+  // `parent`, выпадет сама. Сверху его не защищает ничто — а расширение здесь дороже
+  // сужения: `attach_orbis_budget` начал бы отказывать владельцу из-за `mention`-ребёнка,
+  // а ретроспектива поползла бы на рёбра, которых агрегаты не считают вовсе. Поэтому
+  // содержимое переписано РУКАМИ из §А4-3.
+  const actual: string[] = [...LEGACY_PARENT_ROLES].sort();
+  expect(actual).toEqual(['category-parent', 'envelope-binding', 'run', 'subitem', 'ticket']);
+  // …и остаётся согласованным с таблицей проекции: обе половины границы вместе
+  expect(actual).toEqual(
+    Object.entries(EXPECTED_RELATION_TYPE)
+      .filter(([, legacy]) => legacy === 'parent')
+      .map(([role]) => role)
+      .sort(),
+  );
+});
 
 test('projectLegacyRelationType тотальна на RELATION_ROLE_IDS (11)', () => {
   // Список ролей и таблица ожиданий сверяются между собой: новая роль без строки в таблице

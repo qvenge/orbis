@@ -18,8 +18,23 @@
 -- Эвристика восстановления роли из схлопнутого типа. Обратной функции к
 -- `projectLegacyRelationType` не существует (пять ролей → один `parent`), поэтому роль
 -- ДОГАДЫВАЕТСЯ по аспектам концов — ровно тем способом, который реформа и отменяет.
--- Порядок веток значим: `envelope-binding` проверяется до `category-parent`, иначе конверт
--- в дереве категорий увёл бы транзакцию не в ту роль.
+--
+-- Каждая ветка `parent` спрашивает ОБА конца, а не один. Это не педантизм: догадка по
+-- источнику одному ошибается в пользу СИСТЕМНОЙ роли, а системную роль владелец обратно уже
+-- не поставит (`ROLE_SYSTEM_ONLY`). Обычная заметка внутри конверта получила бы
+-- `envelope-binding`, пропала бы из «Подзадач», назвалась бы «Привязкой к конверту» — и
+-- вернуть её в подпункты было бы нечем. Условия сверены с теми, по которым читают САМИ
+-- потребители: конверт считает транзакцию (`spentByEnvelope` — ребёнок с `orbis/financial`),
+-- дерево категорий требует категорию с ОБЕИХ сторон (`categoryEdges`), прогон опознаётся
+-- аспектом цели (`runsOfParent`).
+--
+-- Порядок веток значим и запинен тестом: `envelope-binding` проверяется до `category-parent`
+-- (запись, которая одновременно конверт и категория, — прежде всего конверт).
+--
+-- Неизвестный тип РОНЯЕТ миграцию с именем типа в тексте. Прежний `ELSE 'subitem'` глотал
+-- бы и опечатку, и значение, которого код не знает: граф молча получил бы роль «подпункт»
+-- там, где смысл был другой, а разобрать это стало бы нечем — старая колонка уходит в 0017.
+-- Ради этого функция на plpgsql, а не на sql: RAISE в чистом SQL не выразить.
 --
 -- Читается `aspects_legacy`, а не новая `aspects`: у строк, существовавших до 0015, новый
 -- массив пуст (0015 данные не конвертировала), и по нему эвристика молча вернула бы
@@ -29,17 +44,30 @@
 -- на временных jsonb-значениях — иначе проверить эвристику можно было бы только перепрогоном
 -- миграции на подготовленных данных.
 CREATE FUNCTION reform_role_heuristic(rt text, src jsonb, tgt jsonb) RETURNS text
-  LANGUAGE sql IMMUTABLE AS $$
-  SELECT CASE
-    WHEN rt = 'blocks' THEN 'dependency'
-    WHEN rt = 'related_to' THEN 'mention'
-    WHEN rt = 'derived_from' THEN 'instance-of'
-    WHEN rt = 'parent' AND src ? 'orbis/budget' THEN 'envelope-binding'
-    WHEN rt = 'parent' AND tgt ? 'orbis/category' THEN 'category-parent'
-    WHEN rt = 'parent' AND tgt ? 'orbis/agent-run' THEN 'run'
-    WHEN rt = 'parent' AND src ? 'orbis/project' AND tgt ? 'orbis/assignment' THEN 'ticket'
-    ELSE 'subitem' END
-$$;--> statement-breakpoint
+  LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+  IF rt = 'blocks' THEN RETURN 'dependency'; END IF;
+  IF rt = 'related_to' THEN RETURN 'mention'; END IF;
+  IF rt = 'derived_from' THEN RETURN 'instance-of'; END IF;
+  -- `ref` колонка v1 не знает, но проекция роли `ref` даёт именно его: молчаливый `subitem`
+  -- здесь развёл бы эвристику с `projectLegacyRelationType` на ровном месте.
+  IF rt = 'ref' THEN RETURN 'ref'; END IF;
+  IF rt <> 'parent' THEN
+    RAISE EXCEPTION 'reform_role_heuristic: неизвестный relation_type «%» — роль не выводится', rt;
+  END IF;
+
+  IF jsonb_exists(src, 'orbis/budget') AND jsonb_exists(tgt, 'orbis/financial') THEN
+    RETURN 'envelope-binding';
+  END IF;
+  IF jsonb_exists(src, 'orbis/category') AND jsonb_exists(tgt, 'orbis/category') THEN
+    RETURN 'category-parent';
+  END IF;
+  IF jsonb_exists(tgt, 'orbis/agent-run') THEN RETURN 'run'; END IF;
+  IF jsonb_exists(src, 'orbis/project') AND jsonb_exists(tgt, 'orbis/assignment') THEN
+    RETURN 'ticket';
+  END IF;
+  RETURN 'subitem';
+END $$;--> statement-breakpoint
 
 ALTER TABLE relations ADD COLUMN role text;--> statement-breakpoint
 

@@ -34,10 +34,21 @@ export interface RelationKey {
   role: string;
 }
 
+/**
+ * Создаваемая batch'ем связь плюс признак «источник — конверт».
+ *
+ * Признак ЖИВЁТ до 0017 и только ради `assertSingleLegacyBudgetParent`: старая колонка
+ * различает конверт-родителя по аспекту ИСТОЧНИКА, а у виртуального ребра источник — строка,
+ * которой ещё нет в БД. Роль этого признака не заменяет: `subitem` от конверта и `subitem` от
+ * проекта — одна роль и разный смысл для агрегатов. Уходит вместе с колонкой.
+ */
+export interface VirtualRelationCreate extends RelationKey {
+  sourceHasBudget: boolean;
+}
+
 /** Виртуальные эффекты batch над графом связей (операции 1..N−1 для проверки операции N). */
 export interface VirtualGraphEffects {
-  /** Создаваемые связи. Признака «источник — конверт» здесь больше нет: его несёт роль. */
-  created: ReadonlyArray<RelationKey>;
+  created: ReadonlyArray<VirtualRelationCreate>;
   /** Удаляемые связи (например, перенос привязки батчем «удалить + создать»). */
   deleted: ReadonlyArray<RelationKey>;
   /** Титул виртуальной сущности, созданной тем же batch (для сообщений об ошибках). */
@@ -338,6 +349,85 @@ export async function assertTargetMaxIncoming(
       max,
       targetId: key.targetId,
       existingSourceId: existing,
+    },
+  );
+}
+
+/**
+ * ИНТЕРВАЛ 7a→0017: «транзакция списывается максимум из одного конверта» (§4.2/§13.7) на
+ * множестве СТАРОЙ колонки.
+ *
+ * Почему этого мало — `target_max_incoming` роли `envelope-binding`. Ограничение роли считает
+ * рёбра СВОЕЙ роли, а роль эта системная: владелец её не ставит вовсе. Зато агрегаты бюджета
+ * до contract-миграции считают детей конверта по переходной колонке (`spentByEnvelope`:
+ * `relation_type='parent'`, без роли) — то есть считают и `subitem`, и `ticket`, и любую
+ * другую роль владельца с той же проекцией. Ребро `subitem` от второго конверта проходило бы
+ * все ролевые проверки, а владелец увидел бы ОДНУ трату в ДВУХ конвертах.
+ *
+ * Поэтому счёт входящих идёт ровно по тому множеству, по которому считают агрегаты:
+ * `LEGACY_PARENT_ROLES` с источником, несущим `orbis/budget`. Порог берётся из строки реестра
+ * (`target_max_incoming` роли конверта) — правило одно, и ослабив роль, владелец ослабляет обе
+ * его половины.
+ *
+ * Применимость (аспекты концов) проверяет ВЫЗЫВАЮЩАЯ сторона — как и у прежнего
+ * `assertSingleBudgetParent`: у пути создания это аспекты нового ребра, у ретроспективного
+ * пути — сущность, которая конвертом становится.
+ *
+ * Рёбра ОТ ТОГО ЖЕ источника не считаются: повтор той же пары — территория `rel_uniq`, а
+ * второй конверт по определению другой.
+ *
+ * Умирает вместе с колонкой: с 0017 «конверт-родитель» выражается ровно ролью, и остаётся
+ * одно ограничение реестра (перевод — правило Б-2).
+ */
+export async function assertSingleLegacyBudgetParent(
+  tx: Tx,
+  reg: RegistrySnapshot,
+  key: RelationKey,
+  virtual?: VirtualGraphEffects,
+): Promise<void> {
+  const def = reg.roles.get(ROLE_ENVELOPE_BINDING);
+  const max = def?.constraints.target_max_incoming;
+  if (max === undefined) return;
+  const parentRoles = LEGACY_PARENT_ROLES as readonly string[];
+
+  // Row-lock строки цели сериализует конкурентов: проигравший увидит зафиксированную связь
+  // победителя и получит INVARIANT (тот же приём, что у `assertTargetMaxIncoming`).
+  await tx.execute(sql`SELECT id FROM entities WHERE id = ${key.targetId} FOR UPDATE`);
+
+  const rows = (await tx.execute(sql`
+    SELECT r.source_id, r.role FROM relations r
+    JOIN entities e ON e.id = r.source_id
+    WHERE r.target_id = ${key.targetId}
+      AND r.role IN (${sql.join(
+        parentRoles.map((r) => sql`${r}`),
+        sql`, `,
+      )})
+      AND 'orbis/budget' = ANY(e.aspects)
+  `)) as unknown as Array<{ source_id: string; role: string }>;
+
+  const deleted = virtual?.deleted ?? [];
+  const liveDb = rows
+    .filter(
+      (r) =>
+        !deleted.some(
+          (d) => d.sourceId === r.source_id && d.targetId === key.targetId && d.role === r.role,
+        ),
+    )
+    .map((r) => r.source_id);
+  const liveVirtual = (virtual?.created ?? [])
+    .filter((c) => c.targetId === key.targetId && c.sourceHasBudget && parentRoles.includes(c.role))
+    .map((c) => c.sourceId);
+
+  const others = [...new Set([...liveDb, ...liveVirtual])].filter((src) => src !== key.sourceId);
+  if (others.length < max) return;
+  throw new ExecError(
+    'INVARIANT',
+    `у записи уже есть конверт-родитель: транзакция списывается максимум из одного конверта (§4.2); до contract-миграции 0017 конвертом её считает ЛЮБАЯ связь от конверта, а не только роль «${roleName(def, ROLE_ENVELOPE_BINDING)}»; перенос — batch «удалить старую + создать новую»`,
+    {
+      invariant: 'single_budget_parent',
+      legacyInterval: true,
+      targetId: key.targetId,
+      existingSourceId: others[0],
     },
   );
 }

@@ -95,7 +95,7 @@ import {
 import {
   assertNoDuplicateRelation,
   assertRoleConstraints,
-  assertTargetMaxIncoming,
+  assertSingleLegacyBudgetParent,
   duplicateRelationError,
   LEGACY_PARENT_ROLES,
   type RelationKey,
@@ -103,6 +103,7 @@ import {
   ROLE_INSTANCE_OF,
   sameRelationKey,
   type VirtualGraphEffects,
+  type VirtualRelationCreate,
 } from './relations';
 import type {
   ActionOperation,
@@ -179,7 +180,7 @@ interface PreparedOp {
 class BatchState {
   /** Строки сущностей ПОСЛЕ эффектов предыдущих операций batch (created/updated/attach). */
   readonly entities = new Map<string, EntityRow>();
-  readonly createdRelations: RelationKey[] = [];
+  readonly createdRelations: VirtualRelationCreate[] = [];
   readonly deletedRelations: RelationKey[] = [];
   /**
    * target'ы связей роли `instance-of`, объявленных ЛЮБОЙ операцией batch: batch атомарен,
@@ -1878,9 +1879,10 @@ async function prepareAttach(
  * budget-parent'ами все его исходящие рёбра, проецирующиеся в `parent` (`budgetParentsOfMany`
  * и агрегаты §2.10 читают именно её), — и у financial-ребёнка их оказывается два.
  *
- * Отсюда фильтр по `LEGACY_PARENT_ROLES`, а не по одной роли `envelope-binding`: ретроспектива
- * живёт ровно на том множестве, которое видит старая колонка. Сама проверка — то же
- * `assertTargetMaxIncoming` роли конверта: тот же row-lock цели и тот же INVARIANT-отказ.
+ * Отсюда фильтр по `LEGACY_PARENT_ROLES` — и в перечислении детей, и в счёте их входящих:
+ * ретроспектива живёт ровно на том множестве, которое видит старая колонка. Сама проверка —
+ * `assertSingleLegacyBudgetParent`, то есть та же половина правила, что и на пути создания
+ * ребра; разъехавшись, эти два входа открыли бы дыру каждый со своей стороны.
  */
 async function assertBudgetAttachKeepsSingleParent(
   ctx: ExecCtx,
@@ -1889,9 +1891,11 @@ async function assertBudgetAttachKeepsSingleParent(
 ): Promise<void> {
   // Порог берётся из реестра, а не пишется здесь числом: ослабив ограничение роли,
   // владелец обязан ослабить и ретроспективу — иначе она запрещала бы разрешённое.
-  const roleDef = ctx.registry.roles.get(ROLE_ENVELOPE_BINDING);
-  const max = roleDef?.constraints.target_max_incoming;
-  if (max === undefined) return;
+  if (
+    ctx.registry.roles.get(ROLE_ENVELOPE_BINDING)?.constraints.target_max_incoming === undefined
+  ) {
+    return;
+  }
   const parentRoles = LEGACY_PARENT_ROLES as readonly string[];
   const rows = await ctx.tx
     .select({ targetId: relations.targetId, role: relations.role })
@@ -1916,8 +1920,11 @@ async function assertBudgetAttachKeepsSingleParent(
   for (const childId of [...childIds].sort()) {
     const child = await loadEntityForUpdate(ctx, childId, batch);
     if (!child || !hasAspect(child, 'orbis/financial')) continue;
+    // Считаем ПО ТОМУ ЖЕ множеству, по которому перечислили детей, — иначе половина правила
+    // терялась бы ровно там, где ретроспектива и нужна: у ребёнка, чей другой конверт держит
+    // ребро роли владельца (`subitem`), а не системной `envelope-binding`.
     const key: RelationKey = { sourceId: entityId, targetId: childId, role: ROLE_ENVELOPE_BINDING };
-    await assertTargetMaxIncoming(ctx.tx, key, roleDef, max, batch?.graph());
+    await assertSingleLegacyBudgetParent(ctx.tx, ctx.registry, key, batch?.graph());
   }
 }
 
@@ -2041,13 +2048,25 @@ async function prepareRelationCreate(
   // Дубль ловим ДО записи на ОБОИХ путях (не только в batch): под `rel_uniq` до 0017
   // попадают две разные роли, и различить их случаи можно только пока транзакция жива.
   await assertNoDuplicateRelation(ctx.tx, ctx.registry, key, batch?.graph());
+  // ВТОРАЯ ПОЛОВИНА «одного budget-parent» — та, которой ограничение роли не покрывает
+  // (§4.2/§13.7, интервал до 0017). Условие применимости — дословно прежнее: ребро от
+  // конверта к транзакции, проецирующееся в старый `parent`. Ролью здесь ничего не решается
+  // именно потому, что считают ЕЩЁ НЕ переведённые агрегаты.
+  const sourceHasBudget = hasAspect(source, 'orbis/budget');
+  if (
+    sourceHasBudget &&
+    hasAspect(target, 'orbis/financial') &&
+    (LEGACY_PARENT_ROLES as readonly string[]).includes(key.role)
+  ) {
+    await assertSingleLegacyBudgetParent(ctx.tx, ctx.registry, key, batch?.graph());
+  }
   gateEntitlements(ctx, 'relation_create');
 
   const id = newId();
   const now = ctx.clock();
 
   // Эффект batch: связь видна проверкам следующих операций
-  batch?.createdRelations.push(key);
+  batch?.createdRelations.push({ ...key, sourceHasBudget });
 
   const journal: JournalPlan = {
     type: 'relation_created',

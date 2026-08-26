@@ -201,18 +201,35 @@ describe('relationCreateInput / relationDeleteInput', () => {
     expect(Object.keys(relationDeleteInput.shape).sort()).toEqual(
       Object.keys(relationCreateInput.shape).sort(),
     );
+    // Образцы бьют по КАЖДОМУ полю в отдельности, а не по форме объекта целиком: набор,
+    // в котором `target_id` всегда валиден, не различил бы `z.string().uuid()` и голый
+    // `z.string()` — расхождение валидаторов уехало бы молча, а `relation.delete` с
+    // «не-uuid» доехал бы до PG и дал 22P02/500 вместо VALIDATION.
+    const good = 'subitem';
     const samples: unknown[] = [
-      { ...base, role: 'subitem' },
+      // положительный контроль
+      { ...base, role: good },
+      // source_id: тип, формат, отсутствие
+      { ...base, source_id: 'не-uuid', role: good },
+      { ...base, source_id: 42, role: good },
+      { target_id: base.target_id, role: good },
+      // target_id: тот же набор проб — именно он был слепым пятном
+      { ...base, target_id: 'не-uuid', role: good },
+      { ...base, target_id: 42, role: good },
+      { source_id: UUID, role: good },
+      // role: пустая строка, не-строка, отсутствие
       { ...base, role: '' },
-      { ...base, role: 'subitem', extra: 1 },
+      { ...base, role: 7 },
+      { ...base },
+      // strict и старая форма
+      { ...base, role: good, extra: 1 },
       { ...base, relation_type: 'parent' },
-      { ...base, source_id: 'x', role: 'subitem' },
-      { source_id: UUID, role: 'subitem' },
     ];
     for (const sample of samples) {
-      expect(relationDeleteInput.safeParse(sample).success).toBe(
-        relationCreateInput.safeParse(sample).success,
-      );
+      expect({
+        sample,
+        ok: relationDeleteInput.safeParse(sample).success,
+      }).toEqual({ sample, ok: relationCreateInput.safeParse(sample).success });
     }
   });
 

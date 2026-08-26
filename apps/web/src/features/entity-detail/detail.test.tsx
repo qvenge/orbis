@@ -2879,6 +2879,47 @@ describe('ADE: тикет', () => {
     // …и при этом он на месте в своей секции — отсев не «потерял прогон».
     expect(within(details).getByTestId('run-r1')).toBeInTheDocument();
   });
+
+  test('тикет проекта (роль ticket) стоит в «Подзадачах» наравне с subitem', async () => {
+    // После бэкфилла 0016 связь «проект → тикет» несёт роль `ticket`, а не `subitem`.
+    // Показывай секция только `subitem` — владелец потерял бы тикеты проекта из вида, и
+    // вернуть их было бы нечем: писателя роли `ticket` в срезе А нет вовсе.
+    const relation = (targetId: string, role: string) => ({
+      id: `rel-${targetId}`,
+      sourceId: 't1',
+      targetId,
+      role,
+      meta: {},
+      createdAt: '2026-08-17T10:00:00.000Z',
+      updatedAt: '2026-08-17T10:00:00.000Z',
+    });
+    const ticket = {
+      ...entity,
+      id: 'tk1',
+      title: 'Починить парсер',
+      aspectsMap: { 'orbis/task': { status: 'inbox' } },
+    };
+    renderWithProviders(<DetailScreen entityId="t1" />, (path, input) => {
+      if (path === 'entity.get') {
+        const { id } = input as { id: string };
+        if (id === 'tk1') return { entity: ticket, relations: [], thread: null };
+        if (id === 'r1') return { entity: RUN, relations: [], thread: null };
+        return {
+          entity: TICKET,
+          relations: [relation('tk1', 'ticket'), relation('r1', 'run')],
+          thread: null,
+        };
+      }
+      if (path === 'entity.query') return [RUN];
+      if (path === 'oauth.listGrants') return [GRANT];
+      if (path === 'aspect.list') return [];
+      if (path === 'agentRun.sweep') return { swept: 0 };
+      return {};
+    });
+    const details = await screen.findByRole('tabpanel', { name: 'Детали' });
+    await waitFor(() => expect(within(details).getAllByTestId('subtask')).toHaveLength(1));
+    expect(within(details).getByTestId('subtask')).toHaveTextContent('Починить парсер');
+  });
 });
 
 // ─── ADE-срез 1: экран прогона (Задача 15) ───────────────────────────────────────────────

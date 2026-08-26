@@ -6,6 +6,7 @@ import {
   aspectJsonSchema,
   attachAspectInput,
   BUILTIN_ASPECT_IDS,
+  BUILTIN_RELATION_ROLE_META,
   batchExecuteInput,
   budgetStatusInput,
   buildFieldCatalog,
@@ -309,6 +310,52 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
 
     const defsB = await registryFor(userB);
     expect(defsB.some((d) => d.name === 'attach_user_sleep_log')).toBe(false);
+  });
+});
+
+describe('роли рёбер в реестре тулов (§А4-3/§А4-4)', () => {
+  function roleSchemaOf(
+    defs: OrbisToolDef[],
+    tool: string,
+  ): { enum: string[]; description: string } {
+    const props = defOf(defs, tool).inputJsonSchema.properties as Record<string, unknown>;
+    return props.role as { enum: string[]; description: string };
+  }
+
+  test('relation_create НЕ предлагает модели системные роли: гейт created_by и enum сходятся', async () => {
+    // Иначе «положи трату в конверт Еда» → модель выбирает `envelope-binding` → отказ
+    // ROLE_SYSTEM_ONLY, и тупик возникает на ровном месте, из подсказки самого реестра.
+    const defs = await registryFor(userB);
+    const offered = roleSchemaOf(defs, 'relation_create').enum;
+    const systemOnly = BUILTIN_RELATION_ROLE_META.filter(
+      (r) => r.constraints.created_by === 'system',
+    ).map((r) => r.id);
+    expect(systemOnly.length).toBeGreaterThan(0); // иначе тест был бы вакуумным
+    for (const id of systemOnly) expect(offered).not.toContain(id);
+    expect(offered).toEqual(
+      BUILTIN_RELATION_ROLE_META.filter((r) => r.constraints.created_by !== 'system').map(
+        (r) => r.id,
+      ),
+    );
+  });
+
+  test('relation_delete предлагает ВСЕ одиннадцать: гейт стоит только на создании', async () => {
+    // Убрать привязку к конверту или ребро прогона владельцу никто не запрещает — иначе
+    // собственный граф стало бы нечем разбирать.
+    const defs = await registryFor(userB);
+    expect(roleSchemaOf(defs, 'relation_delete').enum).toEqual(
+      BUILTIN_RELATION_ROLE_META.map((r) => r.id),
+    );
+  });
+
+  test('описание роли — из реестра: смысл и направление, а не голый список id', async () => {
+    const defs = await registryFor(userB);
+    const description = roleSchemaOf(defs, 'relation_create').description;
+    const subitem = BUILTIN_RELATION_ROLE_META.find((r) => r.id === 'subitem');
+    if (!subitem) throw new Error('роль subitem не найдена в реестре');
+    expect(description).toContain(subitem.label.ru as string);
+    expect(description).toContain(subitem.description.ru as string);
+    expect(description).toContain(`${subitem.sourceLabel.ru} → ${subitem.targetLabel.ru}`);
   });
 });
 

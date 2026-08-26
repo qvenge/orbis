@@ -14,6 +14,7 @@ import {
   QUESTION_MAX,
   QUESTION_OPTION_MAX,
   QUESTION_OPTIONS_MAX,
+  type RelationRoleDefinition,
   SERVICE_ASPECT_IDS,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
@@ -443,21 +444,52 @@ const entityUpdateJsonSchema = {
  * Задача 15; до неё роль владельца не создать (и стадия 4 её всё равно отвергает — до 0017
  * у неё нет проекции в переходную колонку типа).
  */
-const relationRoleSchema = {
-  type: 'string',
-  enum: BUILTIN_RELATION_ROLE_META.map((r) => r.id),
-  description: BUILTIN_RELATION_ROLE_META.map(
-    (r) =>
-      `${r.id} — ${r.label.ru}: ${r.description.ru} (${r.sourceLabel.ru} → ${r.targetLabel.ru})`,
-  ).join('; '),
-};
+function relationRoleSchema(roles: readonly RelationRoleDefinition[]): Record<string, unknown> {
+  return {
+    type: 'string',
+    enum: roles.map((r) => r.id),
+    description: roles
+      .map(
+        (r) =>
+          `${r.id} — ${r.label.ru}: ${r.description.ru} (${r.sourceLabel.ru} → ${r.targetLabel.ru})`,
+      )
+      .join('; '),
+  };
+}
 
-const relationJsonSchema = {
+/**
+ * СОЗДАНИЕ видит только роли, которые вызывающему вообще разрешено ставить: роль с
+ * `created_by: 'system'` (§А4-4) отдаётся исключительно серверу, и предлагать её модели
+ * значит вести её в тупик — «положи трату в конверт Еда» → `envelope-binding` →
+ * `ROLE_SYSTEM_ONLY`. Признак читается из ТОЙ ЖЕ строки реестра, из которой строится
+ * описание: второй список системных ролей разъехался бы с гейтом молча.
+ */
+const CREATABLE_ROLES = BUILTIN_RELATION_ROLE_META.filter(
+  (r) => r.constraints.created_by !== 'system',
+);
+
+const relationCreateJsonSchema = {
   type: 'object',
   properties: {
     source_id: uuid,
     target_id: uuid,
-    role: relationRoleSchema,
+    role: relationRoleSchema(CREATABLE_ROLES),
+  },
+  required: ['source_id', 'target_id', 'role'],
+  additionalProperties: false,
+};
+
+/**
+ * УДАЛЕНИЕ видит все одиннадцать: гейт `created_by` стоит только на создании, и убрать
+ * привязку к конверту или ребро прогона владельцу никто не запрещает — иначе собственный
+ * граф стало бы нечем разбирать.
+ */
+const relationDeleteJsonSchema = {
+  type: 'object',
+  properties: {
+    source_id: uuid,
+    target_id: uuid,
+    role: relationRoleSchema(BUILTIN_RELATION_ROLE_META),
   },
   required: ['source_id', 'target_id', 'role'],
   additionalProperties: false,
@@ -886,14 +918,14 @@ const CORE_TOOLS: OrbisToolDef[] = [
   },
   {
     name: 'relation_create',
-    description: 'Создание связи между сущностями.',
-    inputJsonSchema: relationJsonSchema,
+    description: 'Создание связи между сущностями: роль ребра говорит, ЧЕМ она является.',
+    inputJsonSchema: relationCreateJsonSchema,
     kind: 'mutate',
   },
   {
     name: 'relation_delete',
-    description: 'Удаление связи между сущностями.',
-    inputJsonSchema: relationJsonSchema,
+    description: 'Удаление связи между сущностями: роль обязана совпасть с ролью ребра.',
+    inputJsonSchema: relationDeleteJsonSchema,
     kind: 'mutate',
   },
   {
