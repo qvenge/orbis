@@ -459,184 +459,431 @@ export const INEXPRESSIBLE_QUERY_TEXTS: readonly { text: string; code: QueryPars
   { text: '(orbis/task_status=done | orbis/priority=high)', code: 'SYNTAX' },
 ];
 
-// ─────────────── Опись боевых текстов запросов (рабочее задание 9b/10c/21) ───────────────
+// ─────────────── Опись боевых текстов запросов (рабочее задание 9b/10c/19/21) ───────────────
 
 /**
- * ВСЕ тексты запросов, которые живут в коде на момент Задачи 8, с адресом каждого.
+ * ВСЕ тексты запросов, живущие в коде на момент Задачи 8, — по строке на АДРЕС.
  *
  * Зачем список именно здесь и именно снимком: канон §А5-3 меняет адресацию имён (голое
- * `status=` → `orbis/task_status=`) и вводит пробел как разделитель конструкций, а значит
- * КАЖДЫЙ из этих текстов придётся переписать или закавычить. Пока перевода нет, единственная
- * защита от «переведём вслепую» — опись с вердиктом разбора на каждый текст; тест
- * `parse-ast.test.ts` прогоняет её и падает, если вердикт разошёлся с записанным.
+ * `status=` → `orbis/task_status=`), вводит пробел как разделитель конструкций и оставляет
+ * `title`/`limit`/`search` словами грамматики. Значит каждый из этих текстов придётся
+ * переписать, закавычить или адресовать namespaced key. Пока перевода нет, единственная
+ * защита от «переведём вслепую» — опись с вердиктом на каждый адрес; тест
+ * `parse-ast.test.ts` прогоняет её, пересчитывает флаги из самого текста и пиннит ТОЧНЫЕ
+ * числа: правка описи обязана быть видимым движением, а не тихим сдвигом.
  *
  * Копия текстов, а не импорт: `packages/shared` не зависит ни от `apps/web`, ни от
- * `apps/server` и зависеть не должен. Расхождение снимка с кодом ловит адрес в поле `where` —
+ * `apps/server` и зависеть не должен. Расхождение снимка с кодом ловит адрес в `where` —
  * при переводе его читают глазами.
  *
- * **Владелец перевода и интервал.** Тексты Agenda переводит Задача 10c (ключ-формы уже
- * лежат в `AGENDA_QUERY_TEXTS`), сидированные тела смарт-листов — Задача 9b вместе с
- * переключением сервера, конструкторы web (`browser/query.ts`, `txQuery.ts`) — Задача 10c,
- * остальные точечные строки — Задача 21 вместе со сносом старой грамматики. До этого
- * момента живут ОБА разбора (РП-11), и ни один из этих текстов новым парсером не читается
- * в бою.
+ * Собрано ГРЕПОМ по всем формам (`{{query:`, `aspect=`, `sortBy=`, `children_of=`, `tags=`,
+ * потребители `entity.query`/`entity.count`, сиды, шпаргалки промптов и описание тула), а не
+ * по памяти: первая редакция описи, собранная по памяти, потеряла семь живых адресов.
+ *
+ * Что НЕ вошло и почему: мёртвые версии промптов (`prompts/v1..v3`, `routine-v1`) — они
+ * никем не импортируются (живые входы — `llm/context.ts:36` → `v4`, `routines/context.ts:29`
+ * → `routine-v2`); плейсхолдеры шпаргалки вида `sortBy=<поле>:asc` — это не запросы;
+ * `SmartListSave.tsx:18` собственного текста не имеет — он оборачивает в `{{query:…}}`
+ * строку из Browser, покрытую записями `browser/query.ts`.
  */
+export type QueryTextOwner = '9b' | '10c' | '19' | '9b/21' | 'заморожен';
+
 export interface ProductionQueryText {
+  /** Файл и строка — по ним перевод сверяется с кодом. */
   where: string;
   text: string;
   /** Код отказа нового парсера или `null`, если текст разбирается уже сегодня. */
   verdict: QueryParseCode | null;
   /**
-   * Есть ли в тексте НЕЗАКАВЫЧЕННОЕ значение с пробелом. Такой текст не починится
-   * переименованием полей: пробел — разделитель конструкций (§А5-3), и значение обязано
-   * поехать в кавычках. Это тот класс, который иначе всплыл бы уже на переключении.
+   * Есть ли в ЭТОМ тексте НЕЗАКАВЫЧЕННОЕ значение с пробелом. Такой адрес не чинится
+   * переименованием полей: пробел — разделитель конструкций (§А5-3), значение обязано
+   * поехать в кавычках. У большинства адресов первым падает имя поля, поэтому пробел
+   * всплыл бы уже ПОСЛЕ перевода — тем и опасен.
    */
   spaceRisk: boolean;
+  /**
+   * Core-свойства (§А1-3), названные ГОЛЫМ именем. Их перевод — отдельная таблица:
+   * `orbis/created_at`, `orbis/updated_at`, `orbis/title`. `title` попадает сюда только в
+   * позиции `sortBy=title:` — в позиции фильтра `title=` остаётся словом грамматики
+   * (параметр заголовка) и перевода не требует; `archived=` — тоже слово грамматики.
+   */
+  coreNames: readonly string[];
+  /** Кто переводит адрес (Задача среза); `заморожен` — править нельзя вообще. */
+  owner: QueryTextOwner;
+  /**
+   * Текст — ЗАМОРОЖЕННЫЙ образец сверки: `onboarding.ts:290` сравнивает тело владельца с
+   * ним БАЙТ-В-БАЙТ (бэкфилл D42), и правка молча выключит бэкфилл. Перевод сида «Рутин»
+   * обязан завести ВТОРУЮ константу рядом, а не трогать эту (`onboarding.ts:231-245`).
+   */
+  frozen?: true;
+  /** Текст собирается из ввода: что именно ломает разбор. */
+  dynamic?: string;
 }
 
 const TX_UUID = '019d48ea-4188-765d-8e96-93a0ad9c262a';
 
 export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
-  // ── apps/web ──
   {
     where: 'apps/web/src/features/agenda/useAgenda.ts:38 (AGENDA_DAYS_QUERY)',
     text: 'aspect=orbis/schedule, start_at=today|next_7d, sortBy=start_at:asc, limit=200',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: [],
+    owner: '10c',
   },
   {
     where: 'apps/web/src/features/agenda/useAgenda.ts:45 (AGENDA_OVERDUE_DUE_QUERY)',
     text: 'aspect=orbis/task, due_date=overdue, status=!done&!cancelled, sortBy=due_date:asc, limit=200',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: [],
+    owner: '10c',
   },
   {
     where: 'apps/web/src/features/agenda/useAgenda.ts:52 (AGENDA_OVERDUE_START_QUERY)',
     text: 'aspect=orbis/task, aspect=orbis/schedule, start_at=overdue, status=!done&!cancelled, sortBy=start_at:asc, limit=200',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: [],
+    owner: '10c',
   },
   {
-    where: 'apps/web/src/features/browser/query.ts:13-18,24 (buildFilterQuery+browserQuery)',
+    where:
+      'apps/web/src/features/browser/query.ts:13-18,24 (buildFilterQuery+browserQuery, все фильтры)',
     text: 'tags=дом|дача, aspect=orbis/task, status=inbox, priority=high, created_at>2026-01-01, created_at<2026-12-31, sortBy=updated_at:desc, limit=50',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: ['created_at', 'updated_at'],
+    owner: '10c',
   },
   {
-    where: 'apps/web/src/features/browser/query.ts:13 (тег с пробелом — теги владельца свободны)',
+    where:
+      'apps/web/src/features/browser/query.ts:13 (тег владельца с пробелом; buildFilterQuery не квотирует вовсе)',
     text: 'tags=личные дела, sortBy=updated_at:desc, limit=50',
     verdict: 'SYNTAX',
     spaceRisk: true,
+    coreNames: ['updated_at'],
+    owner: '10c',
+    dynamic: 'тег владельца с пробелом — buildFilterQuery склеивает теги без квотирования',
   },
   {
     where: 'apps/web/src/features/budget/QuickAddBar.tsx:29 (RECENT_QUERY)',
     text: 'aspect=orbis/financial, sortBy=occurred_on:desc, limit=20',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: [],
+    owner: '10c',
   },
   {
     where: 'apps/web/src/features/budget/txQuery.ts:53-67 (buildTxQuery, все фильтры)',
-    text: `aspect=orbis/financial, occurred_on=2026-06-01..2026-06-30, category_ref=${TX_UUID}, direction=expense, planned=!true, amount=0.10..99999.99, search="кофе, эклер", sortBy=occurred_on:desc, limit=50`,
+    text: `aspect=orbis/financial, occurred_on=2026-06-01..2026-06-30, category_ref=${TX_UUID}, direction=expense, planned=!true, amount=0.10..99999.99, search=кофе, sortBy=occurred_on:desc, limit=50`,
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: [],
+    owner: '10c',
+  },
+  {
+    where: 'apps/web/src/features/budget/txQuery.ts:67 + quoteValue :45 (поиск с пробелом)',
+    text: 'aspect=orbis/financial, search=кофе эклер, sortBy=occurred_on:desc, limit=50',
+    verdict: 'SYNTAX',
+    spaceRisk: true,
+    coreNames: [],
+    owner: '10c',
+    dynamic:
+      'поисковый ввод с пробелом: quoteValue (txQuery.ts:45) квотирует только , | & " — пробел уезжает голым',
   },
   {
     where: 'apps/web/src/features/budget/CategoryScreen.tsx:117 (транзакции конверта)',
     text: `children_of=${TX_UUID}, aspect=orbis/financial, sortBy=occurred_on:desc, limit=50`,
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: [],
+    owner: '10c',
   },
   {
-    where: 'apps/web/src/features/chat/memoryRules.ts:12 (правила памяти)',
+    where: 'apps/web/src/features/budget/categories.ts:8 (CATEGORIES_QUERY — 7 потребителей)',
+    text: 'aspect=orbis/category, sortBy=title:asc, limit=200',
+    verdict: 'RESERVED',
+    spaceRisk: false,
+    coreNames: ['title'],
+    owner: '10c',
+  },
+  {
+    where:
+      'apps/web/src/features/budget/EnvelopeCreateSheet.tsx:55 (инлайн-дубль CATEGORIES_QUERY)',
+    text: 'aspect=orbis/category, sortBy=title:asc, limit=200',
+    verdict: 'RESERVED',
+    spaceRisk: false,
+    coreNames: ['title'],
+    owner: '10c',
+  },
+  {
+    where: 'apps/web/src/features/chat/memoryRules.ts:12 (MEMORY_RULES_QUERY)',
     text: 'aspect=orbis/memory, kind=rule, scope=orbis/financial',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: [],
+    owner: '10c',
   },
   {
-    where: 'apps/web/src/features/entity-detail/useTicketRuns.ts:45 (прогоны тикета)',
+    where: 'apps/web/src/features/chat/useFastPath.ts:17 (CATEGORY_QUERY)',
+    text: 'aspect=orbis/category',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '10c',
+  },
+  {
+    where: 'apps/web/src/features/entity-detail/useTicketRuns.ts:45 (прогоны тикета и рутины)',
     text: `children_of=${TX_UUID}, aspect=orbis/agent-run, sortBy=created_at:desc, limit=20`,
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: ['created_at'],
+    owner: '10c',
   },
   {
     where: 'apps/web/src/features/entity-editor/slash/items.ts:29 (NEW_QUERY_BLOCK)',
     text: ' sortBy=updated_at:desc, limit=10, title=Новый список',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: true,
+    coreNames: ['updated_at'],
+    owner: '10c',
   },
   {
     where: 'apps/web/src/features/settings/MemoryScreen.tsx:25 (MEMORY_FILTER)',
     text: 'aspect=orbis/memory',
     verdict: null,
     spaceRisk: false,
+    coreNames: [],
+    owner: '10c',
   },
-  // `SmartListSave.tsx:18` фиксированного текста не имеет: он оборачивает в `{{query:…}}`
-  // строку, пришедшую из Browser, — она уже покрыта записью `browser/query.ts` выше.
-  // ── apps/server/src/seed/smart-lists.ts (тела шести сидированных смарт-листов) ──
   {
-    where: 'apps/server/src/seed/smart-lists.ts (daily-planning, блок 1)',
+    where: 'apps/server/src/seed/smart-lists.ts:10 (daily-planning, блок 1 «Inbox»)',
     text: ' aspect=orbis/task, status=inbox,\n         sortBy=created_at:desc, display=list, title=Inbox',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: ['created_at'],
+    owner: '9b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts (daily-planning, блок 2)',
+    where: 'apps/server/src/seed/smart-lists.ts:13 (daily-planning, блок 2 «Сегодня»)',
     text: ' aspect=orbis/task, due_date=today|overdue, status=!done&!cancelled&!waiting,\n         excludeBlocked=true, sortBy=priority:desc|due_date:asc,\n         display=list, title=Сегодня',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: [],
+    owner: '9b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts (daily-planning, блок 3)',
+    where: 'apps/server/src/seed/smart-lists.ts:17 (daily-planning, блок 3 «Ожидание»)',
     text: ' aspect=orbis/task, status=waiting,\n         sortBy=updated_at:asc, display=compact, title=Ожидание',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: ['updated_at'],
+    owner: '9b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts (upcoming, блок 1)',
+    where: 'apps/server/src/seed/smart-lists.ts:22 (upcoming, блок 1 «Ближайшие 7 дней»)',
     text: ' aspect=orbis/task, due_date=next_7d, status=!done&!cancelled,\n         sortBy=due_date:asc|priority:desc, display=list, title=Ближайшие 7 дней',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: true,
+    coreNames: [],
+    owner: '9b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts (upcoming, блок 2)',
+    where: 'apps/server/src/seed/smart-lists.ts:25 (upcoming, блок 2 «Позже»)',
     text: ' aspect=orbis/task, due_date=after_7d, status=!done&!cancelled,\n         sortBy=due_date:asc, limit=30, display=compact, title=Позже',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: [],
+    owner: '9b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts (all-tasks)',
+    where: 'apps/server/src/seed/smart-lists.ts:28 (all-tasks)',
     text: ' aspect=orbis/task, status=!done&!cancelled,\n         sortBy=updated_at:desc, display=list, title=Все незакрытые задачи',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: true,
+    coreNames: ['updated_at'],
+    owner: '9b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts (horizon-year)',
+    where: 'apps/server/src/seed/smart-lists.ts:52 (horizon-year «Цели»)',
     text: ' aspect=orbis/goal, sortBy=updated_at:desc, display=list, title=Цели',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: false,
+    coreNames: ['updated_at'],
+    owner: '9b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts (horizon-life)',
+    where: 'apps/server/src/seed/smart-lists.ts:62 (horizon-life)',
     text: ' tags=life, sortBy=updated_at:desc, display=list, title=Ценности и зоны ответственности',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: true,
+    coreNames: ['updated_at'],
+    owner: '9b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts (routines, блок 1)',
+    where: 'apps/server/src/seed/smart-lists.ts:95 (routines, блок 1 «Ждут ответа»)',
     text: ' aspect=orbis/agent-run, outcome=checkpoint, sortBy=started_at:asc, display=list, title=Ждут ответа',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: true,
+    coreNames: [],
+    owner: '9b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts (routines, блок 2)',
+    where: 'apps/server/src/seed/smart-lists.ts:97 (routines, блок 2 «Активные рутины»)',
     text: ' aspect=orbis/routine, stage=active, sortBy=updated_at:desc, display=list, title=Активные рутины',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: true,
+    coreNames: ['updated_at'],
+    owner: '9b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts (routines, блок 3)',
+    where: 'apps/server/src/seed/smart-lists.ts:99 (routines, блок 3 «Пачка решений»)',
     text: ' aspect=orbis/agent-run, undecided=true, sortBy=started_at:asc, display=list, title=Пачка решений',
     verdict: 'UNKNOWN_FIELD',
     spaceRisk: true,
+    coreNames: [],
+    owner: '9b',
+  },
+  {
+    where: 'apps/server/src/seed/project-body.ts:31 (тело проекта, блок «В работе»)',
+    text: ` children_of=${TX_UUID}, aspect=orbis/task, status=in_progress, sortBy=updated_at:desc, display=list, title=В работе`,
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: true,
+    coreNames: ['updated_at'],
+    owner: '9b',
+  },
+  {
+    where: 'apps/server/src/seed/project-body.ts:35 (тело проекта, блок «Ждут меня»)',
+    text: ` children_of=${TX_UUID}, aspect=orbis/task, status=waiting, sortBy=updated_at:asc, display=list, title=Ждут меня`,
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: true,
+    coreNames: ['updated_at'],
+    owner: '9b',
+  },
+  {
+    where: 'apps/server/src/seed/project-body.ts:39 (тело проекта, блок «Бэклог»)',
+    text: ` children_of=${TX_UUID}, aspect=orbis/task, status=inbox|planned, sortBy=priority:desc|created_at:asc, display=list, title=Бэклог`,
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: ['created_at'],
+    owner: '9b',
+  },
+  {
+    where: 'apps/server/src/seed/project-body.ts:43 (тело проекта, блок «Последние прогоны»)',
+    text: ` aspect=orbis/agent-run, project_id=${TX_UUID}, sortBy=created_at:desc, limit=10, display=compact, title=Последние прогоны`,
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: true,
+    coreNames: ['created_at'],
+    owner: '9b',
+  },
+  {
+    where:
+      'apps/server/src/seed/onboarding.ts:248 (ROUTINES_LIST_BODY_BEFORE_BATCH, блок 1) — ПРАВИТЬ НЕЛЬЗЯ',
+    text: ' aspect=orbis/agent-run, outcome=checkpoint, sortBy=started_at:asc, display=list, title=Ждут ответа',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: true,
+    coreNames: [],
+    owner: 'заморожен',
+    frozen: true,
+  },
+  {
+    where:
+      'apps/server/src/seed/onboarding.ts:250 (ROUTINES_LIST_BODY_BEFORE_BATCH, блок 2) — ПРАВИТЬ НЕЛЬЗЯ',
+    text: ' aspect=orbis/routine, stage=active, sortBy=updated_at:desc, display=list, title=Активные рутины',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: true,
+    coreNames: ['updated_at'],
+    owner: 'заморожен',
+    frozen: true,
+  },
+  {
+    where: 'apps/server/src/test/perf.ts:324 (progress_source перф-фикстуры цели, гейт D21)',
+    text: 'aspect=orbis/financial, direction=expense',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: [],
+    owner: '9b',
+  },
+  {
+    where: 'apps/server/src/tools/registry.ts:846 (описание тула entity_query, пример 1)',
+    text: 'aspect=orbis/category, search=Еда',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '9b/21',
+  },
+  {
+    where: 'apps/server/src/tools/registry.ts:846 (описание тула entity_query, пример 2)',
+    text: 'aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: ['updated_at'],
+    owner: '9b/21',
+  },
+  {
+    where: 'apps/server/src/tools/registry.ts:846 (описание тула entity_query, пример 3)',
+    text: 'aspect=orbis/category, aliases=такси',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: [],
+    owner: '9b/21',
+  },
+  {
+    where: 'apps/server/src/llm/prompts/v4.ts:58 (шпаргалка грамматики, пример 1)',
+    text: 'aspect=orbis/category, search=Еда',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '19',
+  },
+  {
+    where: 'apps/server/src/llm/prompts/v4.ts:58 (шпаргалка грамматики, пример 2)',
+    text: 'aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: ['updated_at'],
+    owner: '19',
+  },
+  {
+    where: 'apps/server/src/llm/prompts/v4.ts:61 (шпаргалка грамматики, пример «доходы с тегом»)',
+    text: 'aspect=orbis/financial, direction=income, tags=savings',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: [],
+    owner: '19',
+  },
+  {
+    where: 'apps/server/src/llm/prompts/routine-v2.ts:83 (шпаргалка грамматики рутин, пример 1)',
+    text: 'aspect=orbis/category, search=Еда',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '19',
+  },
+  {
+    where: 'apps/server/src/llm/prompts/routine-v2.ts:83 (шпаргалка грамматики рутин, пример 2)',
+    text: 'aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20',
+    verdict: 'UNKNOWN_FIELD',
+    spaceRisk: false,
+    coreNames: ['updated_at'],
+    owner: '19',
   },
 ];
+
+/**
+ * Точная разбивка описи — пиннится тестом (образец: golden-корпус Задачи 2, где размер и
+ * разбивка тоже точные). Любая правка описи обязана пройти через эти числа.
+ */
+export const PRODUCTION_QUERY_STATS = {
+  total: 42,
+  /** Разбирается новым парсером уже сегодня. */
+  parses: 5,
+  byVerdict: { UNKNOWN_FIELD: 33, SYNTAX: 2, RESERVED: 2 },
+  /** Незакавыченное значение с пробелом — не чинится переименованием полей. */
+  spaceRisk: 14,
+  /** Называет core-свойство голым именем — перевод по отдельной таблице §А1-3. */
+  coreNames: 20,
+  /** Замороженные образцы сверки: править нельзя вообще. */
+  frozen: 2,
+} as const;

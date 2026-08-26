@@ -9,6 +9,7 @@ import { expect, test } from 'bun:test';
 import {
   FIXTURE_PARSE_REGISTRY,
   INEXPRESSIBLE_QUERY_TEXTS,
+  PRODUCTION_QUERY_STATS,
   PRODUCTION_QUERY_TEXTS,
 } from './ast-fixtures';
 import { buildCatalogFromRegistry } from './catalog';
@@ -174,32 +175,85 @@ test('значение с пробелом: отказ называет прич
   expect(ok('search="hello world"').filter).toEqual({ search: 'hello world' });
 });
 
-test('опись боевых текстов: вердикт разбора каждого совпадает с записанным', () => {
-  // Опись — рабочее задание Задачам 9b/10c/21. Тест падает, когда вердикт разошёлся:
+test('опись боевых текстов: вердикт и флаги каждого адреса совпадают с записанным', () => {
+  // Опись — рабочее задание Задачам 9b/10c/19/21. Тест падает, когда вердикт разошёлся:
   // либо текст в коде изменили, либо парсер стал разбирать/отвергать иначе.
-  expect(PRODUCTION_QUERY_TEXTS.length).toBeGreaterThanOrEqual(20);
   for (const entry of PRODUCTION_QUERY_TEXTS) {
     const r = parseQueryAst(entry.text, REG);
     const got = r.ok ? null : r.error.code;
     expect(got, `${entry.where}: «${entry.text}»`).toBe(entry.verdict);
   }
-  // Класс «пробел в незакавыченном значении» — тот, что НЕ чинится переименованием полей
-  // (у большинства текстов первым падает имя поля, и пробел всплыл бы уже ПОСЛЕ перевода).
-  // Флаг не на слово: он пересчитывается прямо здесь из самого текста.
+
+  // Флаги — не на слово: оба пересчитываются ИЗ САМОГО ТЕКСТА.
+  const stripQuoted = (text: string): string => text.replace(/"(?:\\.|[^"\\])*"/g, '""');
   const hasUnquotedSpacedValue = (text: string): boolean =>
-    text
-      // Закавыченные куски заменяем пустыми кавычками: внутри них пробел законен.
-      .replace(/"(?:\\.|[^"\\])*"/g, '""')
+    stripQuoted(text)
       .split(/[,\n]/)
       .some((chunk) => {
         const op = chunk.search(/[=<>]/);
         return op !== -1 && /\s/.test(chunk.slice(op + 1).trim());
       });
+  // `title` — ядро только в позиции сортировки: в позиции фильтра это слово грамматики
+  // (параметр заголовка) и переводу не подлежит. `archived=` — тоже слово грамматики.
+  const coreNamesOf = (text: string): string[] => {
+    const t = stripQuoted(text);
+    const found: string[] = [];
+    if (/(?:^|[,\s|=])title\s*:/.test(t)) found.push('title');
+    for (const name of ['created_at', 'updated_at']) {
+      if (new RegExp(`(?:^|[,\\s|=])${name}\\s*(?=[=<>:])`).test(t)) found.push(name);
+    }
+    return found.sort();
+  };
   for (const entry of PRODUCTION_QUERY_TEXTS) {
-    expect(hasUnquotedSpacedValue(entry.text), entry.where).toBe(entry.spaceRisk);
+    expect(hasUnquotedSpacedValue(entry.text), `spaceRisk: ${entry.where}`).toBe(entry.spaceRisk);
+    expect([...entry.coreNames].sort(), `coreNames: ${entry.where}`).toEqual(
+      coreNamesOf(entry.text),
+    );
   }
-  expect(PRODUCTION_QUERY_TEXTS.filter((e) => e.spaceRisk).length).toBe(8);
-  // Ни один боевой текст сегодня новым парсером не читается, кроме одного вырожденного.
-  const parses = PRODUCTION_QUERY_TEXTS.filter((e) => e.verdict === null).map((e) => e.text);
-  expect(parses).toEqual(['aspect=orbis/memory']);
+
+  // ТОЧНЫЕ числа: правка описи обязана быть видимым движением, а не тихим сдвигом.
+  const verdicts = PRODUCTION_QUERY_TEXTS.map((e) => e.verdict);
+  expect(PRODUCTION_QUERY_TEXTS.length).toBe(PRODUCTION_QUERY_STATS.total);
+  expect(verdicts.filter((v) => v === null).length).toBe(PRODUCTION_QUERY_STATS.parses);
+  for (const [code, count] of Object.entries(PRODUCTION_QUERY_STATS.byVerdict)) {
+    expect(verdicts.filter((v) => v === code).length, code).toBe(count);
+  }
+  expect(PRODUCTION_QUERY_TEXTS.filter((e) => e.spaceRisk).length).toBe(
+    PRODUCTION_QUERY_STATS.spaceRisk,
+  );
+  expect(PRODUCTION_QUERY_TEXTS.filter((e) => e.coreNames.length > 0).length).toBe(
+    PRODUCTION_QUERY_STATS.coreNames,
+  );
+  expect(PRODUCTION_QUERY_TEXTS.filter((e) => e.frozen === true).length).toBe(
+    PRODUCTION_QUERY_STATS.frozen,
+  );
+  // Сумма разбивки обязана покрывать опись целиком — иначе новый класс отказа проехал бы
+  // мимо чисел, оставив их формально верными.
+  const covered =
+    PRODUCTION_QUERY_STATS.parses +
+    Object.values(PRODUCTION_QUERY_STATS.byVerdict).reduce((a, b) => a + b, 0);
+  expect(covered).toBe(PRODUCTION_QUERY_STATS.total);
+
+  // Пять адресов, которые разбираются уже сегодня, названы поимённо: «разбирается» — это
+  // утверждение о КОНКРЕТНЫХ местах, а не число, которое можно подогнать.
+  expect(PRODUCTION_QUERY_TEXTS.filter((e) => e.verdict === null).map((e) => e.where)).toEqual([
+    'apps/web/src/features/chat/useFastPath.ts:17 (CATEGORY_QUERY)',
+    'apps/web/src/features/settings/MemoryScreen.tsx:25 (MEMORY_FILTER)',
+    'apps/server/src/tools/registry.ts:846 (описание тула entity_query, пример 1)',
+    'apps/server/src/llm/prompts/v4.ts:58 (шпаргалка грамматики, пример 1)',
+    'apps/server/src/llm/prompts/routine-v2.ts:83 (шпаргалка грамматики рутин, пример 1)',
+  ]);
+  // Класс RESERVED: слово грамматики в позиции имени свойства. Такой адрес не чинится
+  // таблицей перевода полей аспектов — нужен namespaced key свойства ядра (`orbis/title`).
+  const reserved = PRODUCTION_QUERY_TEXTS.filter((e) => e.verdict === 'RESERVED');
+  expect(reserved.map((e) => e.where)).toEqual([
+    'apps/web/src/features/budget/categories.ts:8 (CATEGORIES_QUERY — 7 потребителей)',
+    'apps/web/src/features/budget/EnvelopeCreateSheet.tsx:55 (инлайн-дубль CATEGORIES_QUERY)',
+  ]);
+  for (const entry of reserved) expect(entry.coreNames, entry.where).toEqual(['title']);
+  // Замороженные образцы сверки нельзя переводить на месте — у них отдельный владелец.
+  for (const entry of PRODUCTION_QUERY_TEXTS) {
+    if (entry.frozen) expect(entry.owner, entry.where).toBe('заморожен');
+    else expect(entry.owner, entry.where).not.toBe('заморожен');
+  }
 });
