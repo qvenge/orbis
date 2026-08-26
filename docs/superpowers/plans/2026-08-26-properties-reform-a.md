@@ -1173,7 +1173,7 @@ export function compileCountAst(ast, ctx): SQL; compileSumAst(ast, propertyId, c
 // листья: {prop, op} → (props->>'<id>')::<каст по kind> оп $n (decimal → ::numeric; date/timestamp → ::date/::timestamptz; boolean → COALESCE((props->>'<id>')::boolean,false) (РП-9); select/text → props->>'<id>'; many → props->'<id>' ?| ARRAY[$n] / @>); range → BETWEEN/>=/<=
 // {has} → props ? '<id>'; {aspect} → aspects @> ARRAY['<id>']; {tag} → tags @> ARRAY[$n]; {search} → FTS как сегодня; core-свойства → колонки;
 // {rel children_of of via} → EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.source_id = $n AND r.role = $via) (без via — role = ANY($hier), где $hier — роли с hierarchical из ctx.reg.roles — находка 15);
-// parents_of — зеркально; has_relation → EXISTS по (target_id = e.id AND role = $via) ИЛИ (source_id = e.id …); has_children → EXISTS (source_id = e.id AND role …);
+// parents_of — зеркально; has_relation → EXISTS по (target_id = e.id AND role = $via) — ТОЛЬКО ВХОДЯЩЕЕ ребро (правка по гейту Задачи 8: строка 75 плана, Р-5, опирается ровно на `(target_id, role)` для пробника Е-1, а «оба направления» сломали бы `excludeBlocked` — он начал бы вычёркивать и блокирующие сущности, регресс против `compile.ts:262`); has_children → EXISTS (source_id = e.id AND role …);
 // descendants_of/ancestors_of via → WITH RECURSIVE walk(id, depth) … WHERE depth < 32 (QUERY_DEPTH_CAP), по индексу (source_id, role)/(target_id, role);
 // ref-свойства в соединении — (props->>'<id>')::uuid ВСЕГДА (§А6-2);
 // служебные аспекты: если filter не называет service-аспект явно — AND NOT (aspects && ARRAY[<service ids из ctx.reg.aspects>]) (§А5-6);
