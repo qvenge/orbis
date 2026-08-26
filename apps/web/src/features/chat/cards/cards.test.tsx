@@ -1383,8 +1383,9 @@ const DEFERRED_CARD = {
   summary: 'Архивация: «Старый проект»',
   rows: [
     { aspect: 'orbis/task', field: 'status', before: 'inbox', after: 'done' },
-    // Поле САМОЙ ЗАПИСИ: аспекта у строки нет вовсе (tools/dispatch.ts snapshotDeferredUnit),
-    // псевдо-аспект `orbis/entity` появляется только в расхождении — см. тест ниже (Р0-7).
+    // Поле САМОЙ ЗАПИСИ: аспекта у строки нет вовсе (tools/dispatch.ts snapshotDeferredUnit).
+    // В расхождении оно приезжает core-свойством `orbis/archived` (§А1-3) и подписывается тем
+    // же одним словом — см. тест ниже: носителя-аспекта у core-проекции нет ни там, ни здесь.
     { field: 'archived', before: 'false', after: 'true' },
   ],
 };

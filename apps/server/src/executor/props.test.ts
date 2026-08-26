@@ -1297,7 +1297,10 @@ describe('comparePropertyValue: равенство по ТИПУ свойств�
     expect(comparePropertyValue(money, ['10.0', '2.50'], ['10.00', '2.51'])).toBe(false);
   });
 
-  test('прочие типы — строгое равенство: text, boolean, select, number', () => {
+  test('прочие типы — строгое равенство: text, boolean, number, select, ref, registry_ref, time', () => {
+    // Заголовок перечисляет РОВНО то, что проверяет тело. Прежний называл `select`, которого
+    // в теле не было, — та самая форма «утверждение шире проверки», на которой ветка ловилась
+    // трижды: читатель верит заголовку и второй раз этот случай уже не проверит.
     expect(comparePropertyValue({ kind: 'text' }, 'а', 'а')).toBe(true);
     expect(comparePropertyValue({ kind: 'text' }, 'а', 'А')).toBe(false);
     expect(comparePropertyValue({ kind: 'boolean' }, false, false)).toBe(true);
@@ -1306,6 +1309,44 @@ describe('comparePropertyValue: равенство по ТИПУ свойств�
     expect(comparePropertyValue({ kind: 'boolean' }, false, undefined)).toBe(false);
     expect(comparePropertyValue({ kind: 'number' }, 1, 1)).toBe(true);
     expect(comparePropertyValue({ kind: 'number' }, 1, '1')).toBe(false);
+
+    const select: PropertyType = {
+      kind: 'select',
+      options: [
+        { key: 'inbox', label: { ru: 'Инбокс', en: 'Inbox' }, rank: 1 },
+        { key: 'done', label: { ru: 'Готово', en: 'Done' }, rank: 2 },
+      ],
+    };
+    // Сравнивается КЛЮЧ варианта, лежащий в данных, а не его подпись (Р3).
+    expect(comparePropertyValue(select, 'inbox', 'inbox')).toBe(true);
+    expect(comparePropertyValue(select, 'inbox', 'done')).toBe(false);
+
+    // `ref` — ссылка на сущность, и это не украшение списка: `orbis/run_routine` имеет ровно
+    // этот kind, а он — вторая половина `runStillMine` для РУТИННЫХ прогонов («прогон всё ещё
+    // мой»). Сломай кто-нибудь fallthrough `compareScalar` — условие умрёт молча, и увидеть
+    // это можно только в гонке смены субъекта под замком, которой ни один сьют не ставит.
+    const ref: PropertyType = { kind: 'ref', cardinality: 'one' };
+    const RUN_A = '019e4466-aaaa-7e07-b5d4-64be9721da51';
+    const RUN_B = '019e4466-bbbb-7e07-b5d4-64be9721da52';
+    expect(comparePropertyValue(ref, RUN_A, RUN_A)).toBe(true);
+    expect(comparePropertyValue(ref, RUN_A, RUN_B)).toBe(false);
+    // uuid НЕ нормализуется по регистру: два разных написания — два разных значения, и
+    // «умная» нормализация здесь превратила бы CAS в угадайку.
+    expect(comparePropertyValue(ref, RUN_A, RUN_A.toUpperCase())).toBe(false);
+
+    // `registry_ref` — ссылка на строку реестра; правило то же, а kind другой, и через
+    // fallthrough он проходит своей веткой ровно так же, как `ref`.
+    const registryRef: PropertyType = { kind: 'registry_ref', target: 'property' };
+    expect(comparePropertyValue(registryRef, 'orbis/amount', 'orbis/amount')).toBe(true);
+    expect(comparePropertyValue(registryRef, 'orbis/amount', 'orbis/limit')).toBe(false);
+
+    // `time` — «ЧЧ:ММ», третий kind, доезжающий до общей ветки. Пин ровно на том же:
+    // отличать одно время от другого. ПЕРЕПРОВЕРЕНО: «09:00» ISO-веткой НЕ разбирается
+    // (`new Date('09:00')` — Invalid Date у V8, как и «9:00» и «09:00:00»), поэтому попытка
+    // «заодно нормализовать» время исход не меняет — говорить, будто такая правка что-то
+    // ломает, значило бы обещать проверку, которой здесь нет.
+    expect(comparePropertyValue({ kind: 'time' }, '09:00', '09:00')).toBe(true);
+    expect(comparePropertyValue({ kind: 'time' }, '09:00', '09:30')).toBe(false);
   });
 });
 
