@@ -327,9 +327,25 @@ export const ASPECT_SCHEMAS = {
   'orbis/routine': routineAspectSchema,
 } as const satisfies Record<AspectId, z.ZodTypeAny>;
 
-export function aspectJsonSchema(id: AspectId): Record<string, unknown> {
+/**
+ * JSON Schema аспекта СТАРОЙ формы — та, что лежит в `aspect_definitions.schema` до пересева
+ * (Р-24). Имя названо «legacy» с приходом реестра свойств: с этого момента у слова «схема
+ * аспекта» два смысла — эта склейка полей из zod и производная из словаря типов (§А3-1), и
+ * различать их обязано имя, а не комментарий у вызова.
+ *
+ * Она же — СТАРЫЙ валидатор golden-корпуса приёмки §С8-1: перевод доказывается прогоном
+ * одного входа через обе схемы, а значит эта функция обязана дожить до Задачи 23 нетронутой.
+ */
+export function legacyAspectJsonSchema(id: AspectId): Record<string, unknown> {
   return zodToJsonSchema(ASPECT_SCHEMAS[id], { $refStrategy: 'none' }) as Record<string, unknown>;
 }
+
+/**
+ * Прежнее имя. Двадцать мест зовут схему аспекта так, и переименовывать их сейчас — значит
+ * трогать двадцать файлов ради одного слова; вызовы переезжают вместе со своим смыслом,
+ * когда каждое из них переводится на реестр (Задачи 3, 4b, 12).
+ */
+export const aspectJsonSchema = legacyAspectJsonSchema;
 
 export type ScheduleAspect = z.infer<typeof scheduleAspectSchema>;
 export type TaskAspect = z.infer<typeof taskAspectSchema>;

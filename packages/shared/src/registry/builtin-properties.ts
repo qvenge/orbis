@@ -40,6 +40,18 @@ function options(...items: readonly (readonly [string, string, string])[]): Sele
 
 // ─── JSON Schema вложенных объектов (§А2-2: вложенное — kind `json`, отдельных kind нет) ───
 
+/**
+ * ISO-момент внутри вложенного объекта. Ровно тот же текст, что у `timestampString`
+ * (`schemas/aspects.ts:10-12`) и у ветки `timestamp` генератора схем: у четырёх полей
+ * прогона (`proposal.decided_at`, `steps[].at`, `checkpoint.asked_at`, `reply.at`) момент
+ * лежит НЕ отдельным свойством, а внутри json-значения, и словарь типов до него не
+ * достаёт. Без этой строки перевод молча ослабил бы четыре поля до голой строки — golden
+ * на валидных сущностях такого не видит, потому в корпусе на каждое из четырёх заведена
+ * негативная фикстура («вчера»).
+ */
+const TIMESTAMP_PATTERN =
+  '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$';
+
 /** `schedule.recurrence` — `aspects.ts:39-47`. */
 const RECURRENCE_SCHEMA = {
   type: 'object',
@@ -89,7 +101,7 @@ const RUN_PROPOSAL_SCHEMA = {
       type: 'string',
       enum: ['pending', 'approved', 'rejected', 'superseded', 'stale'],
     },
-    decided_at: { type: 'string' },
+    decided_at: { type: 'string', pattern: TIMESTAMP_PATTERN },
     mismatches: {
       type: 'array',
       maxItems: 50,
@@ -114,7 +126,7 @@ const RUN_STEP_SCHEMA = {
   type: 'object',
   properties: {
     seq: { type: 'integer', minimum: 1 },
-    at: { type: 'string' },
+    at: { type: 'string', pattern: TIMESTAMP_PATTERN },
     summary: { type: 'string', minLength: 1, maxLength: 500 },
     external: { type: 'boolean' },
     action_id: { type: 'string', format: 'uuid' },
@@ -128,7 +140,7 @@ const RUN_CHECKPOINT_SCHEMA = {
   type: 'object',
   properties: {
     question: { type: 'string', minLength: 1, maxLength: 4000 },
-    asked_at: { type: 'string' },
+    asked_at: { type: 'string', pattern: TIMESTAMP_PATTERN },
   },
   required: ['question', 'asked_at'],
   additionalProperties: false,
@@ -139,7 +151,7 @@ const RUN_REPLY_SCHEMA = {
   type: 'object',
   properties: {
     text: { type: 'string', minLength: 1, maxLength: 4000 },
-    at: { type: 'string' },
+    at: { type: 'string', pattern: TIMESTAMP_PATTERN },
   },
   required: ['text', 'at'],
   additionalProperties: false,
