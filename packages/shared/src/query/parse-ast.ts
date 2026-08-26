@@ -816,6 +816,14 @@ function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
   return { or: nodes };
 }
 
+/**
+ * KEY роли, которой сегодня выражена блокировка. Именно key, а не id: `excludeBlocked=true` —
+ * текстовый сахар, тождественный `!has_relation via=dependency`, а `via=` принимает key
+ * (§А5-3). Резолв через `resolveRole` даёт ту же ошибку `UNKNOWN_ROLE`, что и явная запись,
+ * если роли в реестре нет, — вместо дерева, ссылающегося на несуществующую роль.
+ */
+const EXCLUDE_BLOCKED_ROLE_KEY = 'dependency';
+
 const REL_WITH_TARGET: ReadonlySet<string> = new Set([
   'children_of',
   'parents_of',
@@ -904,8 +912,16 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
       // ВРЕМЕННО дословно как сегодня (`compile.ts:254`): «на сущность есть ВХОДЯЩЕЕ ребро
       // роли dependency», то есть она заблокирована. Набор «closed» (состояние блокирующей
       // работы) приедет с Б-1. Направление — рулинг координатора, см. `QUERY_REL_ANCHOR`.
+      //
+      // Роль РЕЗОЛВИТСЯ реестром, а не подставляется литералом: это шестнадцатая точка
+      // записи id в дерево, и на литерале она была единственной, где инвариант §А5-2 «в
+      // дереве лежат id» держался на совпадении `key === id` у встроенных ролей
+      // (`builtin-roles.ts:174`). У пользовательской роли (v1.5, Ч7) совпадения не будет.
       const slot: RelSlot = {
-        pred: { kind: 'has_relation', via: 'dependency' },
+        pred: {
+          kind: 'has_relation',
+          via: resolveRole(EXCLUDE_BLOCKED_ROLE_KEY, t.keyOffset, ctx).id,
+        },
         offset: t.keyOffset,
       };
       acc.rels.push(slot);

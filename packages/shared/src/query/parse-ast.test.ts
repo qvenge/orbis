@@ -315,3 +315,33 @@ test('отрицаемый aspect= не разводит неоднозначн�
   // Отрицаемый аспект сам по себе разбирается — снят только его вклад в разводку.
   expect(ok('!aspect=orbis/task').filter).toEqual({ not: { aspect: 'orbis/task' } });
 });
+
+/**
+ * Шестнадцатая точка записи id — `excludeBlocked` (`parse-ast.ts:923`). Мутация `.id`→`.key`
+ * на ней НЕДОКАЗАТЕЛЬНА, и это свойство данных, а не дыра в тесте: сахар по смыслу называет
+ * КОНКРЕТНУЮ встроенную роль `dependency`, а у всех 11 встроенных ролей `key === id`
+ * (`builtin-roles.ts:174` выводит key из id) — различить id и key на ней нечем ничем.
+ *
+ * Поэтому точка пиннится тем, что на ней РЕАЛЬНО может сломаться: резолвится ли роль по
+ * реестру вообще. Литерал в дереве прошёл бы и через реестр без этой роли — и запрос
+ * сослался бы на несуществующую роль молча, ровно против §А5-3ж.
+ */
+test('excludeBlocked резолвит роль по реестру, а не подставляет литерал', () => {
+  // На полном реестре сахар тождествен явной записи — включая id роли в дереве.
+  const sugar = ok('excludeBlocked=true');
+  const explicit = ok('!has_relation via=dependency');
+  expect(sugar.filter).toEqual(explicit.filter);
+  const role = REG.roles.get('dependency');
+  if (!role) throw new Error('роль dependency обязана быть в фикстурном реестре');
+  expect(sugar.filter).toEqual({ not: { rel: { kind: 'has_relation', via: role.id } } });
+
+  // Реестр без этой роли: резолвер обязан отказать так же, как на явной записи.
+  const roles = new Map(REG.roles);
+  roles.delete('dependency');
+  const without: typeof REG = { ...REG, roles };
+  for (const text of ['excludeBlocked=true', '!has_relation via=dependency']) {
+    const r = parseQueryAst(text, without);
+    expect(r.ok, `${text} разобрался без роли в реестре`).toBe(false);
+    if (!r.ok) expect(r.error.code, text).toBe('UNKNOWN_ROLE');
+  }
+});
