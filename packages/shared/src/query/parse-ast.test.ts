@@ -6,7 +6,9 @@
  * проезжает и парсер, и компилятор — `parse.ts:469-478`, `compile.ts:233-235`).
  */
 import { expect, test } from 'bun:test';
+import { queryAstSchema } from './ast';
 import {
+  AST_FIXTURES,
   FIXTURE_PARSE_REGISTRY,
   INEXPRESSIBLE_QUERY_TEXTS,
   PRODUCTION_QUERY_STATS,
@@ -276,4 +278,40 @@ test('опись боевых текстов: вердикт и флаги ка�
   // Правило квотирования каждого источника названо адресом: без него 10c не поймёт, почему
   // одна строка txQuery в описи безопасна, а вторая нет.
   expect(dyn[1]?.dynamic).toContain('txQuery.ts:45');
+});
+
+test('разбор не рождает дерево, которое канон отвергает: пустое значение — SYNTAX', () => {
+  // Канон объявляет `tag`, `search` и `title` непустыми (`min(1)`). Без этого гарда
+  // разбор давал бы AST, который сохранился бы в query-блок и перестал читаться на первой
+  // же перевалидации схемой — «сохранилось, но не читается» хуже честного отказа.
+  for (const text of ['search=""', 'tags=""', 'title=""', 'tags=дом|""', 'tags=""|дом']) {
+    const e = err(text);
+    expect(e.code, text).toBe('SYNTAX');
+    expect(e.message, text).toContain('пустое значение');
+  }
+  // Обратная сторона: всё, что разбор ВЕРНУЛ, обязано проходить схему канона — на всех
+  // фикстурах и на всей описи это и проверяется здесь одним прогоном.
+  for (const text of [
+    ...AST_FIXTURES.map((f) => f.keyText),
+    ...INEXPRESSIBLE_QUERY_TEXTS.map((f) => f.text),
+  ]) {
+    if (text === null) continue;
+    const r = parseQueryAst(text, REG);
+    if (!r.ok) continue;
+    expect(queryAstSchema.safeParse(r.ast).success, `${text} → ${JSON.stringify(r.ast)}`).toBe(
+      true,
+    );
+  }
+});
+
+test('отрицаемый aspect= не разводит неоднозначную подпись (§А5-3ж)', () => {
+  // `!aspect=orbis/task` запрос аспект ИСКЛЮЧАЕТ. Резолвить по нему «Статус» значило бы
+  // выбрать свойство, носителя которого в выдаче заведомо нет, — молчаливый ноль.
+  expect(err('!aspect=orbis/task "статус"=done').code).toBe('AMBIGUOUS_LABEL');
+  // Утвердительный аспект разводит по-прежнему.
+  expect(ok('aspect=orbis/task "статус"=done').filter).toEqual({
+    and: [{ aspect: 'orbis/task' }, { prop: 'user/task_status_alias', op: 'eq', value: 'done' }],
+  });
+  // Отрицаемый аспект сам по себе разбирается — снят только его вклад в разводку.
+  expect(ok('!aspect=orbis/task').filter).toEqual({ not: { aspect: 'orbis/task' } });
 });

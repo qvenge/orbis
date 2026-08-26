@@ -150,6 +150,18 @@ export interface QueryAst {
 
 const idSchema = z.string().min(1);
 
+/**
+ * `of` — «uuid | this» ДОСЛОВНО по §А5-7, и сужение живёт в схеме, а не только в парсере:
+ * вход `ast:` тула (§А5-4) идёт мимо разбора, и `of: 'banana'` доехал бы до компилятора,
+ * где Postgres ответил бы ошибкой каста `22P02` вместо структурного отказа с именем поля.
+ * Класс регулярки — RE2 (без просмотров и обратных ссылок): та же схема поедет чужому
+ * потребителю (§А5-4, проба провайдера).
+ */
+const REL_TARGET_RE =
+  /^(this|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/;
+export const REL_TARGET_PATTERN = REL_TARGET_RE.source;
+const relTargetSchema = z.string().regex(REL_TARGET_RE, 'ожидается UUID или this');
+
 const scalarSchema = z.union([z.string(), z.number(), z.boolean()]);
 const tokenSchema = z.object({ token: z.enum(QUERY_DATE_TOKENS) }).strict();
 const boundSchema = z.union([scalarSchema, tokenSchema]);
@@ -183,14 +195,14 @@ const relSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.enum(['children_of', 'parents_of']),
       via: idSchema.optional(),
-      of: z.string().min(1),
+      of: relTargetSchema,
     })
     .strict(),
   z
     .object({
       kind: z.enum(['descendants_of', 'ancestors_of']),
       via: idSchema,
-      of: z.string().min(1),
+      of: relTargetSchema,
     })
     .strict(),
   z.object({ kind: z.literal('has_relation'), via: idSchema }).strict(),

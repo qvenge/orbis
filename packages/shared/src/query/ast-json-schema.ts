@@ -12,7 +12,7 @@
  * Рекурсия — через `$ref: '#/$defs/node'`. `$defs` в draft-07 формально не ключевое слово,
  * но ссылка на него — обычный JSON-указатель и резолвится везде; имя выбрано по §А5-4.
  */
-import { QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES } from './ast';
+import { QUERY_DATE_TOKENS, QUERY_DISPLAY_MODES, REL_TARGET_PATTERN } from './ast';
 
 const SCALAR = { type: ['string', 'number', 'boolean'] } as const;
 const TOKEN = {
@@ -29,6 +29,8 @@ function node(properties: Record<string, unknown>, required: string[]): Record<s
 }
 
 const PROP_ID = { type: 'string', minLength: 1 } as const;
+/** `of?: uuid|"this"` §А5-7 — паттерн один на zod и на эту схему (см. `REL_TARGET_PATTERN`). */
+const REL_TARGET = { type: 'string', pattern: REL_TARGET_PATTERN } as const;
 
 export const queryAstJsonSchema: Record<string, unknown> = {
   $schema: 'http://json-schema.org/draft-07/schema#',
@@ -101,7 +103,7 @@ export const queryAstJsonSchema: Record<string, unknown> = {
                   {
                     kind: { enum: ['children_of', 'parents_of'] },
                     via: PROP_ID,
-                    of: { type: 'string', minLength: 1 },
+                    of: REL_TARGET,
                   },
                   ['kind', 'of'],
                 ),
@@ -109,7 +111,7 @@ export const queryAstJsonSchema: Record<string, unknown> = {
                   {
                     kind: { enum: ['descendants_of', 'ancestors_of'] },
                     via: PROP_ID,
-                    of: { type: 'string', minLength: 1 },
+                    of: REL_TARGET,
                   },
                   ['kind', 'of', 'via'],
                 ),

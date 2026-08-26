@@ -9,6 +9,7 @@ import {
   AGENDA_QUERY_TEXTS,
   AST_FIXTURES,
   FIXTURE_PARSE_REGISTRY,
+  FIXTURE_USER_LIST_ID,
   FIXTURE_USER_PROPERTY_ID,
 } from './ast-fixtures';
 import { parseQueryAst, type QueryParseCode } from './parse-ast';
@@ -163,4 +164,131 @@ test('дерево, невыразимое плоской грамматикой
   const back = parseQueryAst(printed, REG);
   expect(back.ok).toBe(false);
   if (!back.ok) expect(back.error.code).toBe('SYNTAX');
+});
+
+/**
+ * §А5-2 «в дереве лежат id, имя подставляется на печати» — пин на КАЖДОЙ точке, где парсер
+ * пишет id в дерево, а не на двух удобных.
+ *
+ * Урок гейт-ревью, ради которого тест такой длинный: прежняя проверка гоняла фикстуру
+ * key≠id только через `>` и `sortBy`, а мутация `.id`→`.key` ставилась СРАЗУ ВО ВСЕХ
+ * пятнадцати местах — краснели ровно две запиненные, и дыра выглядела закрытой. Групповая
+ * мутация доказывает «хоть где-то пиннится», а не «пиннится везде», поэтому каждая точка
+ * ниже проверяется отдельным разбором (и отдельной мутацией — таблица в отчёте).
+ */
+test('id-инвариант: КАЖДАЯ точка записи id в дерево пишет id, а печать возвращает key', () => {
+  const P = FIXTURE_USER_PROPERTY_ID; // number, key `user/effort_points`
+  const L = FIXTURE_USER_LIST_ID; // список, key `user/labels`
+  const A = 'user/note_alias'; // аспект, key `user/note-alias`
+  const R = 'user/mention_alias'; // роль, key `user/mention-alias`
+  // Ни один key не равен своему id — иначе весь тест выродился бы в тавтологию.
+  for (const [id, key] of [
+    [P, 'user/effort_points'],
+    [L, 'user/labels'],
+    [A, 'user/note-alias'],
+    [R, 'user/mention-alias'],
+  ] as const) {
+    expect(id, key).not.toBe(key);
+  }
+
+  // Четвёртый элемент — канонический текст печати, когда он НЕ равен входному: `!=` на
+  // списочном свойстве и `has_relation=<роль>` — входной сахар, у канона для них другая
+  // форма. Круг всё равно сходится — это проверяется разбором напечатанного.
+  const cases: [string, string, unknown, string?][] = [
+    ['sortBy', 'sortBy=user/effort_points:asc', null],
+    ['<= (range.to)', 'user/effort_points<=5', { prop: P, op: 'range', value: { to: 5 } }],
+    ['>= (range.from)', 'user/effort_points>=5', { prop: P, op: 'range', value: { from: 5 } }],
+    ['> (gt)', 'user/effort_points>3', { prop: P, op: 'gt', value: 3 }],
+    ['< (lt)', 'user/effort_points<3', { prop: P, op: 'lt', value: 3 }],
+    ['!= (ne)', 'user/effort_points!=5', { prop: P, op: 'ne', value: 5 }],
+    [
+      '!= на списке',
+      'user/labels!=кофе',
+      { not: { prop: L, op: 'contains', value: 'кофе' } },
+      'user/labels=!кофе',
+    ],
+    [
+      'диапазон a..b',
+      'user/effort_points=1..5',
+      { prop: P, op: 'range', value: { from: 1, to: 5 } },
+    ],
+    [
+      '&-форма',
+      'user/effort_points=!1&!2',
+      {
+        not: {
+          or: [
+            { prop: P, op: 'eq', value: 1 },
+            { prop: P, op: 'eq', value: 2 },
+          ],
+        },
+      },
+    ],
+    ['одиночное !v', 'user/effort_points=!1', { not: { prop: P, op: 'eq', value: 1 } }],
+    ['одиночное значение (eq)', 'user/effort_points=1', { prop: P, op: 'eq', value: 1 }],
+    [
+      'одиночное значение (contains)',
+      'user/labels=кофе',
+      { prop: L, op: 'contains', value: 'кофе' },
+    ],
+    [
+      '|-список',
+      'user/effort_points=1|2',
+      {
+        or: [
+          { prop: P, op: 'eq', value: 1 },
+          { prop: P, op: 'eq', value: 2 },
+        ],
+      },
+    ],
+    ['has=', 'has=user/effort_points', { has: P }],
+    ['aspect=', 'aspect=user/note-alias', { aspect: A }],
+    [
+      'via= отдельным словом',
+      'has_children via=user/mention-alias',
+      { rel: { kind: 'has_children', via: R } },
+    ],
+    [
+      'has_relation=<роль>',
+      'has_relation=user/mention-alias',
+      { rel: { kind: 'has_relation', via: R } },
+      'has_relation via=user/mention-alias',
+    ],
+  ];
+
+  for (const [point, text, expected, printedAs] of cases) {
+    const r = parseQueryAst(text, REG);
+    expect(r.ok, `${point}: ${r.ok ? '' : r.error.message}`).toBe(true);
+    if (!r.ok) continue;
+    if (expected !== null) expect(r.ast.filter, point).toEqual(expected as never);
+    else expect(r.ast.sortBy, point).toEqual([{ field: P, dir: 'asc' }]);
+    // Обратная сторона того же инварианта: печать обязана вернуть key, а не id.
+    const printed = printQueryAst(r.ast, REG, 'key');
+    expect(printed, `печать ${point}`).toBe(printedAs ?? text);
+    expect(printed, `печать ${point}: id не должен попадать в текст`).not.toContain(P);
+    expect(printed, `печать ${point}: id не должен попадать в текст`).not.toContain(L);
+    // Круг сходится и там, где печать выбрала другую форму того же дерева.
+    const back = parseQueryAst(printed, REG);
+    expect(back.ok, `обратный разбор ${point}`).toBe(true);
+    if (back.ok) expect(back.ast, `круг ${point}`).toEqual(r.ast);
+  }
+  // Все семнадцать точек перечислены здесь; счётчик стережёт от «добавил ветку — забыл пин».
+  expect(cases.length).toBe(17);
+});
+
+test('гарды квотирования: значение-двойник токена и `..` печатаются в кавычках', () => {
+  // `orbis/location` — kind text; литерал `today` в нём законен, но без кавычек он уехал бы
+  // текстом, который парсер читает как ОТНОСИТЕЛЬНОЕ ВРЕМЯ (и отвергает: тип не date).
+  for (const value of ['today', 'overdue', 'next_7d', 'after_7d', 'a..b', 'дом дача', '!нет', '']) {
+    const ast = { filter: { prop: 'orbis/location', op: 'eq' as const, value } };
+    const printed = printQueryAst(ast, REG, 'key');
+    expect(printed, value).toContain('"');
+    const back = parseQueryAst(printed, REG);
+    expect(back.ok, `${value}: ${back.ok ? '' : back.error.message}`).toBe(true);
+    if (back.ok) expect(back.ast, value).toEqual(ast);
+  }
+  // А обычное значение кавычками не обрастает — гард не превратился в «квотируем всё».
+  expect(
+    printQueryAst({ filter: { prop: 'orbis/location', op: 'eq', value: 'дом' } }, REG, 'key'),
+  ).toBe('orbis/location=дом');
 });

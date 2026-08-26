@@ -650,6 +650,20 @@ function parseEntityRef(t: Token): string {
   return fail('SYNTAX', `'${t.key}': ожидается UUID или this, получено '${value}'`, t.valueOffset);
 }
 
+/**
+ * Значение узлов `{tag}`, `{search}` и параметра `title` канон объявляет непустым
+ * (`min(1)` в `queryAstSchema`). Разбор обязан отказывать здесь, а не рождать дерево,
+ * которое собственная схема канона потом отвергнет: такой AST сохранился бы в query-блок
+ * и перестал читаться на первой же перевалидации (вход тула, `scope`, `ref.target`) —
+ * «сохранилось, но не читается» хуже честного отказа при вводе. Выбор именно такой, а не
+ * снятие `min(1)`: пустой тег и пустой поиск не отбирают ничего и означать ничего не могут,
+ * а `title=""` рисует над списком пустой заголовок.
+ */
+function nonEmpty(value: string, what: string, offset: number): string {
+  if (value === '') fail('SYNTAX', `пустое значение ${what} не имеет смысла`, offset);
+  return value;
+}
+
 function requireOp(t: Token, op: Op): string {
   if (t.op === null) fail('SYNTAX', `конструкция '${t.key}' требует значение`, t.keyOffset);
   if (t.op !== op) {
@@ -701,7 +715,7 @@ function parseTags(t: Token): QueryFilterNode {
   const nodes = splitPartBy({ text: t.value, offset: t.valueOffset }, '|').map((raw) => {
     const el = trimPart(raw);
     if (el.text === '') fail('SYNTAX', 'пустой элемент списка тегов', el.offset);
-    return { tag: unquote(el.text, el.offset) } as QueryFilterNode;
+    return { tag: nonEmpty(unquote(el.text, el.offset), 'тега', el.offset) } as QueryFilterNode;
   });
   return nodes.length === 1 ? (nodes[0] as QueryFilterNode) : { or: nodes };
 }
@@ -907,7 +921,9 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
       return;
     }
     case 'search':
-      push({ search: unquote(requireOp(t, '='), t.valueOffset) });
+      push({
+        search: nonEmpty(unquote(requireOp(t, '='), t.valueOffset), 'поиска', t.valueOffset),
+      });
       return;
     case 'class':
       // Часть Б: контрактов ещё нет, а молчаливое игнорирование дало бы запрос, который
@@ -942,7 +958,12 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
       return;
     }
     case 'title':
-      assignOnce(acc, 'title', t, unquote(requireOp(t, '='), t.valueOffset));
+      assignOnce(
+        acc,
+        'title',
+        t,
+        nonEmpty(unquote(requireOp(t, '='), t.valueOffset), 'заголовка', t.valueOffset),
+      );
       return;
     default: {
       if (t.op === null) {
@@ -995,8 +1016,11 @@ function parseOrThrow(text: string, reg: ParseRegistry): QueryAst {
   const tokens = parts.map(tokenize);
 
   // Пре-пасс: `aspect=` разводит неоднозначные подписи независимо от порядка слов.
+  // ОТРИЦАЕМЫЙ аспект (`!aspect=orbis/task`) сюда не идёт: запрос его ИСКЛЮЧАЕТ, и
+  // резолвить по нему подпись значило бы выбрать свойство, носителя которого в выдаче
+  // заведомо нет, — тот же молчаливый ноль, против которого §А5-3ж.
   for (const t of tokens) {
-    if (t.key === 'aspect' && t.op === '=') {
+    if (t.key === 'aspect' && t.op === '=' && !t.negated) {
       ctx.aspectsInQuery.add(resolveAspect(t.value, t.valueOffset, ctx).id);
     }
   }

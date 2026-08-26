@@ -44,6 +44,8 @@ export const FIXTURE_PARENT_ID = '019d48ea-4188-765d-8e96-93a0ad9c262a';
 
 /** id пользовательского свойства фикстур — uuid, как у всякого не-встроенного (§А2-1). */
 export const FIXTURE_USER_PROPERTY_ID = '019d48ea-4188-7c02-8e96-1f0000000001';
+/** То же для СПИСОЧНОГО свойства: ветка `contains` — отдельная точка записи id в дерево. */
+export const FIXTURE_USER_LIST_ID = '019d48ea-4188-7c02-8e96-1f0000000002';
 
 const EXTRA_PROPERTIES: readonly PropertyDefinition[] = [
   // Две подписи «Статус» на разных аспектах — единственный способ проверить §А5-3б
@@ -90,6 +92,16 @@ const EXTRA_PROPERTIES: readonly PropertyDefinition[] = [
     type: { kind: 'number' as const, integer: true, min: 1 },
     rank: 1004,
   },
+  // Списочное свойство с key ≠ id: через него проходят ветки `contains` и `!=` на списке —
+  // в них id пишется в дерево ОТДЕЛЬНЫМИ строками кода, и скалярная фикстура их не задевает.
+  {
+    id: FIXTURE_USER_LIST_ID,
+    key: 'user/labels',
+    label: { ru: 'Метки', en: 'Labels' },
+    description: { ru: 'Пользовательский список меток', en: 'A user list of labels' },
+    type: { kind: 'text' as const, cardinality: 'many' as const, maxItems: 20 },
+    rank: 1005,
+  },
   {
     id: 'user/timestamp_trap',
     key: 'user/timestamp_trap',
@@ -107,7 +119,7 @@ const EXTRA_PROPERTIES: readonly PropertyDefinition[] = [
 
 /** Аспекты-носители добавок: без них `aspect=` не развёл бы одинаковые подписи. */
 const EXTRA_REFS: Readonly<Record<string, readonly string[]>> = {
-  'orbis/task': ['user/task_status_alias', FIXTURE_USER_PROPERTY_ID],
+  'orbis/task': ['user/task_status_alias', FIXTURE_USER_PROPERTY_ID, FIXTURE_USER_LIST_ID],
   'orbis/project': ['user/project_status_alias'],
   'orbis/note': ['user/timestamp_trap'],
 };
@@ -185,11 +197,26 @@ export interface AstFixture {
    */
   keyText: string | null;
   /**
-   * Дерево, которое даст обратный разбор `keyText`, если оно НЕ равно исходному. Такой
-   * случай ровно один и он нормативный: у `in` и у `or` по одному свойству в плоской
-   * грамматике ОДНА форма `p=a|b`, и разбор канонически нормализует её в `or` (а список
-   * из одного значения — в `eq`). Поле существует, чтобы это правило было записано и
-   * проверено, а не пряталось за пометкой «не выражается».
+   * Дерево, которое даст обратный разбор `keyText`, если оно НЕ равно исходному.
+   *
+   * Таких классов ЧЕТЫРЕ, и все они — следствие того, что плоский текст беднее канона
+   * (первая редакция этого докблока утверждала «случай ровно один» — неправда):
+   *  1. `{op:'in'}` → `or`: у `in` и у `or` по одному свойству одна текстовая форма
+   *     `p=a|b`; список из одного значения сворачивается в `eq`;
+   *  2. `{or:[x]}` → `x`: одноэлементный OR печатается как сам элемент;
+   *  3. `{and:[x]}` → `x`: то же на верхнем уровне (корневой `and` и есть список
+   *     конструкций через запятую);
+   *  4. **`eq` ↔ `contains` на СПИСОЧНОМ свойстве**: `{prop:<список>, op:'eq'}` печатается
+   *     `p=v` и читается назад как `contains`, потому что оператор равенства для значения
+   *     из ≥2 элементов текст не различает.
+   *
+   * Четвёртый класс — не косметика, и его последствие названо вслух: дифф Ш1 меряет
+   * правки key-печатью (§А5-2), а `eq` и `contains` на списке дают ОДИН текст при РАЗНЫХ
+   * деревьях — значит правка `eq`→`contains` в предложении станет невидимой. Настоящая
+   * причина в том, что **канон не определяет `eq` на списочном свойстве**: §А5-7 даёт
+   * `contains` как оператор вхождения и молчит о том, значит ли `eq` «список равен
+   * [v]» или «список содержит v». Это ДОЛГ Задачи 9a (компилятор): пока значения нет,
+   * фикстура фиксирует наблюдаемое поведение, а не выдаёт его за решение.
    */
   normalizedTo?: QueryAst;
   /**
@@ -399,6 +426,27 @@ export const AST_FIXTURES: readonly AstFixture[] = [
     ast: { filter: { prop: 'orbis/task_status', op: 'in', value: ['planned'] } },
     keyText: 'orbis/task_status=planned',
     normalizedTo: { filter: { prop: 'orbis/task_status', op: 'eq', value: 'planned' } },
+    static: true,
+  },
+  {
+    name: 'or из одного узла нормализуется в сам узел',
+    ast: { filter: { or: [{ prop: 'orbis/task_status', op: 'eq', value: 'done' }] } },
+    keyText: 'orbis/task_status=done',
+    normalizedTo: { filter: { prop: 'orbis/task_status', op: 'eq', value: 'done' } },
+    static: true,
+  },
+  {
+    name: 'and из одного узла нормализуется в сам узел',
+    ast: { filter: { and: [{ aspect: 'orbis/task' }] } },
+    keyText: 'aspect=orbis/task',
+    normalizedTo: { filter: { aspect: 'orbis/task' } },
+    static: true,
+  },
+  {
+    name: 'eq на СПИСОЧНОМ свойстве неразличим с contains: один текст, два дерева (долг 9a)',
+    ast: { filter: { prop: 'orbis/aliases', op: 'eq', value: 'кофе' } },
+    keyText: 'orbis/aliases=кофе',
+    normalizedTo: { filter: { prop: 'orbis/aliases', op: 'contains', value: 'кофе' } },
     static: true,
   },
   {

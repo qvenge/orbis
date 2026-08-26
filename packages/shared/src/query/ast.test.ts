@@ -122,3 +122,55 @@ test('QUERY_REL_ANCHOR: направление каждого предиката
     not: { rel: { kind: 'has_relation', via: 'dependency' } },
   });
 });
+
+test('рекурсивный $ref работает НА ГЛУБИНЕ: мусор внутри and/or/not отвергают обе схемы', () => {
+  const validate = validator();
+  const both = (filter: unknown): [boolean, boolean] => [
+    queryAstSchema.safeParse({ filter }).success,
+    validate({ filter }) as boolean,
+  ];
+  // Прежняя проверка «zod совпадает с ajv» гоняла вложенными только ВАЛИДНЫЕ пробы, и
+  // порча `items` у `and` (→ `{}`) проходила весь сьют: ajv переставал спускаться внутрь,
+  // zod продолжал. Расхождение всплыло бы у чужого потребителя схемы (проба провайдера
+  // Задачи 9a, вход тула 9b), а не здесь. Ниже — мусор на глубине 1, 2 и 3.
+  const bad: [unknown, string][] = [
+    [{ and: [{ мусор: 1 }] }, 'мусор в and, глубина 1'],
+    [{ or: [{ мусор: 1 }] }, 'мусор в or, глубина 1'],
+    [{ not: { мусор: 1 } }, 'мусор в not, глубина 1'],
+    [{ and: [{ aspect: 'orbis/task' }, { or: [{ мусор: 1 }] }] }, 'мусор в or внутри and'],
+    [{ not: { and: [{ not: { мусор: 1 } }] } }, 'мусор на глубине 3'],
+    [{ and: [{ or: [{ not: { prop: 'p', op: 'gte', value: 1 } }] }] }, 'op gte на глубине 3'],
+    [{ and: [{ prop: 'p', op: 'eq', value: 1, extra: 2 }] }, 'лишний ключ узла на глубине 1'],
+    [
+      { or: [{ and: [{ rel: { kind: 'descendants_of', of: 'this' } }] }] },
+      'rel без via на глубине 2',
+    ],
+    [{ and: [{ archived: 'yes' }] }, 'чужое значение archived на глубине 1'],
+    [{ and: [] }, 'пустой and'],
+    [{ or: [] }, 'пустой or'],
+  ];
+  for (const [filter, why] of bad) {
+    const [zod, ajv] = both(filter);
+    expect(zod, `zod: ${why}`).toBe(false);
+    expect(ajv, `ajv: ${why}`).toBe(false);
+  }
+  // Валидная вложенность той же глубины принимается обеими — гард не выродился в «всё нельзя».
+  const ok = { and: [{ or: [{ not: { aspect: 'orbis/task' } }, { tag: 'дом' }] }] };
+  expect(both(ok)).toEqual([true, true]);
+});
+
+test('§А5-7: `of` — только uuid или this, и это знает СХЕМА, а не только парсер', () => {
+  const validate = validator();
+  const both = (of: string): [boolean, boolean] => {
+    const filter = { rel: { kind: 'children_of', of } };
+    return [queryAstSchema.safeParse({ filter }).success, validate({ filter }) as boolean];
+  };
+  expect(both('this')).toEqual([true, true]);
+  expect(both('019d48ea-4188-765d-8e96-93a0ad9c262a')).toEqual([true, true]);
+  expect(both('019D48EA-4188-765D-8E96-93A0AD9C262A')).toEqual([true, true]);
+  // Вход `ast:` тула идёт мимо парсера: без сужения в схеме `banana` доехал бы до SQL и
+  // вернулся ошибкой каста 22P02 вместо структурного отказа с именем поля.
+  for (const bad of ['banana', 'DROP TABLE entities', '', 'this ', '019d48ea-4188-765d-8e96']) {
+    expect(both(bad), bad).toEqual([false, false]);
+  }
+});
