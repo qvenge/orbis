@@ -30,7 +30,8 @@
 // вовсе, — на этом стоит клиентский фильтр «Факт» (`planned=!true`) и отрицание по
 // спискам. `COALESCE(<X>, false)` читается как «предикат ТОЧНО выполнен», и его отрицание
 // — «не выполнен или неизвестен», то есть ровно правило §6.1. Одно место на всё дерево:
-// у оператора `ne` своей ветки нет, он компилируется через ту же обёртку (см. `NE`).
+// у оператора `ne` своей ветки нет, он компилируется через ту же обёртку `negated` —
+// см. ветку `case 'ne'` в `scalarPropCond`.
 import type { AspectDefinition, PropertyDefinition, PropertyType } from '@orbis/shared';
 // Канон Q-AST — отдельным входом: в корневом барреле имена `QueryAst`/`QuerySortField`
 // заняты СТАРОЙ грамматикой до Задачи 21 (см. докблок `packages/shared/src/index.ts`).
@@ -315,10 +316,42 @@ function scalarParam(def: PropertyDefinition, value: QueryScalar): SQL {
 }
 
 /**
+ * ГЕЙТ ВРЕМЕНИ: сравнение по календарной дате допустимо только у date/timestamp-свойств.
+ *
+ * Канон объявляет это словами («токен — только у date/timestamp», §А5-7), но НЕ сужает
+ * схемой: `{prop, op, value: {token}}` разбирается для любого `prop`, потому что тип
+ * свойства знает реестр, а не узел. Через текст такое дерево не построить (парсер сверяет
+ * тип, `parse-ast.ts` `parseBound`), но вход `ast:` тула (§А5-4) идёт мимо парсера — а с
+ * Задачи 9b он становится боевым.
+ *
+ * Без этой проверки компилировались схемно-легальные деревья, падавшие уже в Postgres:
+ * `orbis/archived=today` давал `(archived AT TIME ZONE $2)::date` (ошибка на любых данных),
+ * `orbis/task_status>today` — `(props->>…)::timestamptz` и 22007 на первой же строке. Это
+ * ровно класс долга 5 гейта Задачи 8 — «валидация ДО SQL, иначе код ошибки Postgres вместо
+ * структурного отказа с именем поля», закрытый там для `of`-uuid, здесь для времени.
+ *
+ * ЧТО ЭТА ПРОВЕРКА НЕ ДЕЛАЕТ, названо прямо: она сверяет ВИД свойства, а не ФОРМУ литерала.
+ * `orbis/due_date=«банан»` со входа `ast:` по-прежнему доедет до Postgres и вернётся
+ * data exception, потому что разбор формы значения живёт в парсере (`parseScalar`), а
+ * второй его копией в компиляторе завелась бы вторая правда о том, что такое дата.
+ */
+function assertTemporal(ref: PropRef): void {
+  const kind = ref.def.type.kind;
+  if (kind === 'date' || kind === 'timestamp') return;
+  fail(
+    'TYPE',
+    `относительное время и сравнение по дате применимы только к свойствам date/timestamp; ` +
+      `'${ref.def.id}' — ${kind}`,
+    { property: ref.def.id, kind },
+  );
+}
+
+/**
  * Календарная дата значения в таймзоне владельца — левая сторона любого сравнения с
  * относительным временем (§6.1).
  */
 function dateExpr(ref: PropRef, ctx: CompileCtx): SQL {
+  assertTemporal(ref);
   if (ref.def.type.kind === 'date') return sql`(${ref.text})::date`;
   if (ref.core) return sql`(${ref.text} AT TIME ZONE ${ctx.timeZone})::date`;
   return sql`((${ref.text})::timestamptz AT TIME ZONE ${ctx.timeZone})::date`;
@@ -477,8 +510,15 @@ function rangeCond(ref: PropRef, value: QueryRangeValue, ctx: CompileCtx): SQL {
   }
   const byDate = isToken(from) || isToken(to);
   const left = byDate ? dateExpr(ref, ctx) : comparable(ref);
-  const side = (b: QueryBound): SQL =>
-    isToken(b) ? tokenAnchor(b.token, ctx) : byDate ? sql`${b}::date` : scalarParam(ref.def, b);
+  const side = (b: QueryBound): SQL => {
+    if (isToken(b)) return tokenAnchor(b.token, ctx);
+    if (!byDate) return scalarParam(ref.def, b);
+    // Литеральная граница РЯДОМ с токеном: слева стоит календарная дата, значит и справа
+    // обязана быть она. Тип литерала сверяется по реестру тем же гейтом, что и у обычных
+    // сравнений, — иначе `{from: 5, to: {token:'today'}}` уехало бы в `5::date`.
+    assertScalarType(ref.def, b);
+    return sql`${b}::date`;
+  };
   if (from !== undefined && to !== undefined) {
     return sql`${left} BETWEEN ${side(from)} AND ${side(to)}`;
   }
@@ -647,7 +687,7 @@ function compileNode(node: QueryFilterNode, ctx: CompileCtx): SQL {
     // пустое место, потому что канон допускает `{not: {archived:'any'}}` (текст `!archived=any`
     // разбирается) — и у отрицания обязан быть определённый ответ. Он определённый: «ни те
     // ни другие», то есть пусто. Само же снятие умолчания «только неархивные» делает не это
-    // выражение, а НАЛИЧИЕ узла `archived` в дереве (см. `hasArchivedNode`).
+    // выражение, а высказывание запроса об архивности (см. `decidesArchived`).
     return node.archived === 'any' ? sql`true` : sql`archived`;
   }
   // Часть Б: контрактов в срезе А нет, и молчаливое игнорирование дало бы запрос, который

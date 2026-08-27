@@ -169,49 +169,50 @@ test('дерево, невыразимое плоской грамматикой
   if (!back.ok) expect(back.error.code).toBe('SYNTAX');
 });
 
-test('sourceNotIn: сахар печатается сахаром, ЛЮБОЙ другой узел — скобками, а не тем же текстом', () => {
+test('sourceNotIn: сахар печатается сахаром, а скобочная форма различает КАЖДОЕ поле', () => {
   // Негатив к находке предфильтра: печать «по наличию поля» отдавала текст `excludeBlocked=true`
   // ЛЮБОМУ узлу с `sourceNotIn`, и обратный разбор возвращал каноническую тройку — то есть два
   // РАЗНЫХ дерева печатались одним текстом, а правка внутри узла в key-печати исчезала.
   // Достижимо не гипотетически: `sourceNotIn` уехал в JSON Schema провайдеру.
-  const sugar = {
+  const node = (via: string, prop: string, values: string[]) => ({
     filter: {
-      not: {
-        rel: {
-          kind: 'has_relation' as const,
-          via: 'dependency',
-          sourceNotIn: { prop: 'orbis/task_status', values: ['done', 'cancelled'] },
-        },
-      },
+      not: { rel: { kind: 'has_relation' as const, via, sourceNotIn: { prop, values } } },
     },
-  };
-  expect(printQueryAst(sugar, REG, 'key')).toBe('excludeBlocked=true');
+  });
+  const print = (ast: ReturnType<typeof node>) => printQueryAst(ast, REG, 'key');
 
-  // Три отличия по одному — каждое обязано увести узел из сахара: другая роль, другое
-  // свойство, другой набор значений.
-  const others = [
-    { via: 'subitem', prop: 'orbis/task_status', values: ['done', 'cancelled'] },
-    { via: 'dependency', prop: 'orbis/priority', values: ['done', 'cancelled'] },
-    { via: 'dependency', prop: 'orbis/task_status', values: ['done'] },
+  expect(print(node('dependency', 'orbis/task_status', ['done', 'cancelled']))).toBe(
+    'excludeBlocked=true',
+  );
+
+  // ПОФИЛДОВЫЕ ПАРЫ, а не «три разных узла»: набор, где варианты отличаются двумя полями
+  // сразу, переживает выброс одного поля из печати (проверено живым мутантом на гейте —
+  // «скобочная форма без values» прошла весь сьют). Поэтому здесь на КАЖДОЕ поле стоит пара,
+  // различающаяся ровно ИМ: выброси печать это поле — и пара схлопнется в один текст.
+  const base = node('subitem', 'orbis/task_status', ['done']);
+  const pairs: ReadonlyArray<readonly [string, ReturnType<typeof node>]> = [
+    ['via', node('mention', 'orbis/task_status', ['done'])],
+    ['prop', node('subitem', 'orbis/priority', ['done'])],
+    ['values', node('subitem', 'orbis/task_status', ['cancelled'])],
   ];
-  const texts = new Set<string>(['excludeBlocked=true']);
-  for (const { via, prop, values } of others) {
-    const ast = {
-      filter: {
-        not: { rel: { kind: 'has_relation' as const, via, sourceNotIn: { prop, values } } },
-      },
-    };
-    const printed = printQueryAst(ast, REG, 'key');
-    expect(printed, `${via}/${prop}/${values.join('+')} напечаталось сахаром`).not.toBe(
-      'excludeBlocked=true',
-    );
-    // Текст скобочный — значит разбор честно откажет, а не вернёт другое дерево.
-    const back = parseQueryAst(printed, REG);
-    expect(back.ok, `${printed} разобрался, хотя невыразим`).toBe(false);
-    texts.add(printed);
+  const printedBase = print(base);
+  for (const [field, other] of pairs) {
+    expect(print(other), `поле ${field} не различается печатью`).not.toBe(printedBase);
+    // И ни один из них не притворяется сахаром.
+    expect(print(other)).not.toBe('excludeBlocked=true');
   }
-  // И главное: ни один из четырёх узлов не делит текст с другим.
-  expect(texts.size).toBe(4);
+  expect(printedBase).not.toBe('excludeBlocked=true');
+
+  // Скобочная форма невыразима плоской грамматикой — разбор обязан отказать, а не вернуть
+  // другое дерево (§А5-3д).
+  for (const ast of [base, ...pairs.map(([, a]) => a)]) {
+    const back = parseQueryAst(print(ast), REG);
+    expect(back.ok, `${print(ast)} разобрался, хотя невыразим`).toBe(false);
+  }
+
+  // И круг: все пять узлов (сахар + база + три соседа) дают ПЯТЬ разных текстов.
+  const texts = new Set(['excludeBlocked=true', printedBase, ...pairs.map(([, a]) => print(a))]);
+  expect(texts.size).toBe(5);
 });
 
 /**

@@ -324,6 +324,78 @@ describe('core-проекции: карта колонок и высказыва
   });
 });
 
+describe('гейт времени: токен и граница по дате — только у date/timestamp (долг 5, класс)', () => {
+  // Все пять форм — схемно ЛЕГАЛЬНЫЕ деревья: канон объявляет ограничение словами, но не
+  // сужает схемой (тип свойства знает реестр, а не узел). Через текст их не построить —
+  // парсер сверяет тип; вход `ast:` тула идёт мимо парсера и с Задачи 9b становится боевым.
+  const cases: ReadonlyArray<readonly [string, QueryFilterNode, string]> = [
+    [
+      'eq-токен на boolean-core: было (archived AT TIME ZONE $2)::date — ошибка на любых данных',
+      { prop: 'orbis/archived', op: 'eq', value: { token: 'today' } },
+      'boolean',
+    ],
+    [
+      'gt-токен на select: было (props->>…)::timestamptz — 22007 на первой строке',
+      { prop: 'orbis/task_status', op: 'gt', value: { token: 'today' } },
+      'select',
+    ],
+    [
+      'lt-токен на decimal',
+      { prop: 'orbis/amount', op: 'lt', value: { token: 'overdue' } },
+      'decimal',
+    ],
+    [
+      'ne-токен на text (идёт тем же путём, что eq, но под отрицанием)',
+      { prop: 'orbis/location', op: 'ne', value: { token: 'today' } },
+      'text',
+    ],
+    [
+      'from-токен на нетемпоральном свойстве',
+      { prop: 'orbis/amount', op: 'range', value: { from: { token: 'today' } } },
+      'decimal',
+    ],
+  ];
+
+  for (const [name, node, kind] of cases) {
+    test(`отказ, а не SQL: ${name}`, () => {
+      const r = refusal(() => sqlOf(node));
+      expect(r.code).toBe('VALIDATION');
+      expect(r.reason).toBe('TYPE');
+      // Отказ обязан назвать И свойство, И его вид — иначе он не отличим от общего «тип не тот».
+      expect(r.message).toContain((node as { prop: string }).prop);
+      expect(r.message).toContain(kind);
+    });
+  }
+
+  test('литеральная граница рядом с токеном сверяется по реестру, а не уезжает в ::date', () => {
+    // `{from: 5, to: {token}}` на date-свойстве компилировалось в `5::date`.
+    const r = refusal(() =>
+      sqlOf({ prop: 'orbis/due_date', op: 'range', value: { from: 5, to: { token: 'today' } } }),
+    );
+    expect(r.reason).toBe('TYPE');
+    expect(r.message).toContain('orbis/due_date');
+    // Зеркально: скаляр не того типа во ВТОРОЙ границе.
+    expect(
+      refusal(() =>
+        sqlOf({ prop: 'orbis/due_date', op: 'range', value: { from: { token: 'today' }, to: 5 } }),
+      ).reason,
+    ).toBe('TYPE');
+  });
+
+  test('на date/timestamp те же формы компилируются — гейт не запрещает законное', () => {
+    expect(sqlOf({ prop: 'orbis/due_date', op: 'eq', value: { token: 'today' } })).toContain(
+      `(props->>'orbis/due_date')::date = $2::date`,
+    );
+    expect(sqlOf({ prop: 'orbis/start_at', op: 'gt', value: { token: 'today' } })).toContain(
+      'AT TIME ZONE $2',
+    );
+    // core-проекции времени тоже законны: kind у них timestamp.
+    expect(sqlOf({ prop: 'orbis/updated_at', op: 'eq', value: { token: 'today' } })).toContain(
+      '(updated_at AT TIME ZONE $2)::date',
+    );
+  });
+});
+
 describe('токен в роли ГРАНИЦЫ: якорь — день, вокруг которого токен определён', () => {
   // Канон разрешает токен в любой границе `range`, а §6.1 описывает токены как готовые
   // УСЛОВИЯ. Правило разведения названо в докблоке `tokenAnchor` и пиннится здесь: без пина
