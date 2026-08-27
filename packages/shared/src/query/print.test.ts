@@ -169,6 +169,51 @@ test('дерево, невыразимое плоской грамматикой
   if (!back.ok) expect(back.error.code).toBe('SYNTAX');
 });
 
+test('sourceNotIn: сахар печатается сахаром, ЛЮБОЙ другой узел — скобками, а не тем же текстом', () => {
+  // Негатив к находке предфильтра: печать «по наличию поля» отдавала текст `excludeBlocked=true`
+  // ЛЮБОМУ узлу с `sourceNotIn`, и обратный разбор возвращал каноническую тройку — то есть два
+  // РАЗНЫХ дерева печатались одним текстом, а правка внутри узла в key-печати исчезала.
+  // Достижимо не гипотетически: `sourceNotIn` уехал в JSON Schema провайдеру.
+  const sugar = {
+    filter: {
+      not: {
+        rel: {
+          kind: 'has_relation' as const,
+          via: 'dependency',
+          sourceNotIn: { prop: 'orbis/task_status', values: ['done', 'cancelled'] },
+        },
+      },
+    },
+  };
+  expect(printQueryAst(sugar, REG, 'key')).toBe('excludeBlocked=true');
+
+  // Три отличия по одному — каждое обязано увести узел из сахара: другая роль, другое
+  // свойство, другой набор значений.
+  const others = [
+    { via: 'subitem', prop: 'orbis/task_status', values: ['done', 'cancelled'] },
+    { via: 'dependency', prop: 'orbis/priority', values: ['done', 'cancelled'] },
+    { via: 'dependency', prop: 'orbis/task_status', values: ['done'] },
+  ];
+  const texts = new Set<string>(['excludeBlocked=true']);
+  for (const { via, prop, values } of others) {
+    const ast = {
+      filter: {
+        not: { rel: { kind: 'has_relation' as const, via, sourceNotIn: { prop, values } } },
+      },
+    };
+    const printed = printQueryAst(ast, REG, 'key');
+    expect(printed, `${via}/${prop}/${values.join('+')} напечаталось сахаром`).not.toBe(
+      'excludeBlocked=true',
+    );
+    // Текст скобочный — значит разбор честно откажет, а не вернёт другое дерево.
+    const back = parseQueryAst(printed, REG);
+    expect(back.ok, `${printed} разобрался, хотя невыразим`).toBe(false);
+    texts.add(printed);
+  }
+  // И главное: ни один из четырёх узлов не делит текст с другим.
+  expect(texts.size).toBe(4);
+});
+
 /**
  * §А5-2 «в дереве лежат id, имя подставляется на печати» — пин на КАЖДОЙ точке, где парсер
  * пишет id в дерево, а не на двух удобных.

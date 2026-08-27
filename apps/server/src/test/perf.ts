@@ -39,6 +39,41 @@ export async function measureMedian(
   return median;
 }
 
+/**
+ * p95 — та величина, которую называет приёмка §С8-13, и она НЕ медиана.
+ *
+ * Медиана прячет ровно то, ради чего порог заведён: половина замеров может лежать под ней с
+ * любым запасом, а хвост — вдвое выше, и гейт этого не увидит. Поэтому здесь nearest-rank:
+ * сортируем и берём элемент с номером ⌈0,95·n⌉ (нумерация с единицы) — при n = 20 это
+ * девятнадцатый из двадцати.
+ *
+ * Печатаются ВСЕ замеры, а не только итог: гейт из одного числа не даёт отличить «стабильно
+ * медленно» от «один выброс», а именно на этом различии в срезе А уже споткнулись дважды
+ * (бимодальность пересчёта предков нашлась глазами по строкам, а не по порогу). Число
+ * прогонов вызывающий задаёт сам; при n < 20 p95 вырождается в максимум — это честно, но
+ * тогда и порог сторожит максимум.
+ */
+export async function measureP95(
+  label: string,
+  runs: number,
+  fn: () => Promise<unknown>,
+): Promise<number> {
+  const samples: number[] = [];
+  for (let i = 0; i < runs; i++) {
+    const t0 = performance.now();
+    await fn();
+    samples.push(performance.now() - t0);
+  }
+  const sorted = [...samples].sort((a, b) => a - b);
+  const p95 = sorted[Math.ceil(0.95 * sorted.length) - 1] as number;
+  const median = sorted[Math.floor(sorted.length / 2)] as number;
+  console.log(
+    `perf: ${label} p95=${p95.toFixed(1)}ms median=${median.toFixed(1)}ms runs=${runs}` +
+      ` samples=[${samples.map((x) => x.toFixed(1)).join(', ')}]`,
+  );
+  return p95;
+}
+
 // --- объём фикстуры ---------------------------------------------------------
 /** Сущностей вне финансов: задачи + события + заметки-упоминания. */
 const TASKS = 1200;

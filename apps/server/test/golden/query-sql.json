@@ -307,6 +307,43 @@
     "params": ["orbis/agent-run", 500]
   },
   {
+    "name": "core-свойство архивности: orbis/archived=true снимает умолчание, как слово archived=",
+    "query": "orbis/archived=true",
+    "ast": {
+      "filter": {
+        "prop": "orbis/archived",
+        "op": "eq",
+        "value": true
+      }
+    },
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, props, aspects, query_refs, aspects_legacy, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND archived = $2::boolean LIMIT $3",
+    "params": ["orbis/agent-run", true, 500]
+  },
+  {
+    "name": "core-свойство архивности: orbis/archived=false — тоже высказывание, умолчания нет",
+    "query": "orbis/archived=false",
+    "ast": {
+      "filter": {
+        "prop": "orbis/archived",
+        "op": "eq",
+        "value": false
+      }
+    },
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, props, aspects, query_refs, aspects_legacy, created_at, updated_at, archived FROM entities e WHERE true AND NOT (aspects && ARRAY[$1]::text[]) AND archived = $2::boolean LIMIT $3",
+    "params": ["orbis/agent-run", false, 500]
+  },
+  {
+    "name": "has(orbis/archived) о ЗНАЧЕНИИ архивности не говорит — умолчание остаётся",
+    "query": "has=orbis/archived",
+    "ast": {
+      "filter": {
+        "has": "orbis/archived"
+      }
+    },
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, props, aspects, query_refs, aspects_legacy, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND archived IS NOT NULL LIMIT $2",
+    "params": ["orbis/agent-run", 500]
+  },
+  {
     "name": "Полнотекстовый поиск: search=API",
     "query": "search=API",
     "ast": {

@@ -8,7 +8,7 @@
  */
 
 import type { AspectDefinition, PropertyDefinition } from '../registry/property-type';
-import type { PropertyType } from '../registry/types';
+import type { PropertyKind, PropertyType } from '../registry/types';
 
 export type FieldType =
   | 'string'
@@ -33,6 +33,22 @@ export interface FieldInfo {
   type: FieldType;
   /** Значения enum в порядке объявления в схеме — норматив сортировки enum-полей (§6.1). */
   enumValues?: string[];
+  /**
+   * ТИП ИЗ РЕЕСТРА (§А2-2) — заполняет только `buildCatalogFromRegistry`; у старого
+   * `buildFieldCatalog` его нет и быть не может (там типа в источнике нет вовсе).
+   *
+   * Заведён потому, что `FieldType` беднее словаря реестра и обеднить его дальше нельзя:
+   * `time` в нём не представлен, и приведение к `'string'` теряет ПОРЯДОК — свойство
+   * упорядочено (`>`/`<`/диапазон по 'ЧЧ:ММ' хронологичны), а по `type` читатель решил бы
+   * обратное. Добавить `'time'` в `FieldType` нельзя, не тронув старый компилятор: его
+   * `filterShape`/`sortCast` разбирают союз исчерпывающе с `never`-гардом, а `compile.ts`
+   * до Задачи 9b не правится.
+   *
+   * ПРАВИЛО ДЛЯ ПОТРЕБИТЕЛЕЙ каталога из реестра (конструктор запросов, Задачи 10 и 13):
+   * читать `kind`, а `type` — только для совместимости со старой формой. Оба поля уходят
+   * вместе с `FieldCatalog` в Задаче 21, когда старая грамматика умирает.
+   */
+  kind?: PropertyKind;
 }
 
 /**
@@ -224,7 +240,9 @@ function fieldTypeOfProperty(type: PropertyType): FieldType {
     // Вложенный объект (`recurrence`, `progress_source`) выразимого фильтра не имеет.
     case 'json':
       return 'unfilterable';
-    // text, time, select, ref, grant, registry_ref — текстовая проекция значения.
+    // text, time, select, ref, grant, registry_ref — текстовая проекция значения. `time`
+    // приезжает сюда ПРИБЛИЖЕНИЕМ: у `FieldType` такого члена нет, и порядок, который у
+    // времени есть, по этому полю не виден — за ним читатель идёт в `FieldInfo.kind`.
     default:
       return 'string';
   }
@@ -260,6 +278,8 @@ export function buildCatalogFromRegistry(reg: {
     const info: FieldInfo = {
       aspect: owners.length === 1 ? (owners[0] as string) : '',
       type: fieldTypeOfProperty(prop.type),
+      // Правда о типе — рядом с приближением (см. докблок `FieldInfo.kind`).
+      kind: prop.type.kind,
     };
     // Порядок вариантов — `rank` объявления (§А2-2): на нём стоит сортировка enum-полей.
     if (prop.type.kind === 'select') {

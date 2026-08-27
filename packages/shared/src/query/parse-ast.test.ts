@@ -120,7 +120,7 @@ test('buildCatalogFromRegistry: тип поля из PropertyType, эврист�
   // `orbis/run_bucket` — kind text с паттерном, в котором есть `T…:`; старая эвристика
   // ловила timestamp по тексту регэкспа (`catalog.ts:177`), новая берёт тип из реестра.
   expect(catalog.fields['orbis/run_bucket']).toEqual([
-    { aspect: 'orbis/agent-run', type: 'string' },
+    { aspect: 'orbis/agent-run', type: 'string', kind: 'text' },
   ]);
   // Ловушка: паттерн специально написан так, что propType назвал бы поле timestamp.
   expect(catalog.fields['user/timestamp_trap']?.[0]?.type).toBe('string');
@@ -137,6 +137,23 @@ test('buildCatalogFromRegistry: тип поля из PropertyType, эврист�
   ]);
   // Ключ каталога — id свойства: именно его несёт узел `{prop: <id>}` (§А5-7).
   expect(Object.hasOwn(catalog.fields, 'task_status')).toBe(false);
+
+  // ПОРЯДОК У `time` НЕ ТЕРЯЕТСЯ. `FieldType` такого члена не знает, и по полю `type`
+  // свойство выглядит обычной строкой — читатель, поверивший ему, отобрал бы у времени
+  // `>`/`<`/диапазон, которые парсер как раз разрешает (`isOrdered`). Правду несёт `kind`,
+  // и он приходит из реестра дословно.
+  expect(catalog.fields['orbis/routine_at']?.[0]?.type).toBe('string');
+  expect(catalog.fields['orbis/routine_at']?.[0]?.kind).toBe('time');
+  // Тот же разрыв на `select`, `ref` и `grant` — все трое «строки» по `type` и различимы
+  // по `kind`; без него конструктор запросов (Задачи 10/13) не отличит их друг от друга.
+  expect(catalog.fields['orbis/task_status']?.[0]?.kind).toBe('select');
+  expect(catalog.fields['orbis/finance_category']?.[0]?.kind).toBe('ref');
+  // И это не выборочная удача: у КАЖДОЙ записи каталога `kind` есть и совпадает с реестром.
+  // Проверка идёт от реестра к каталогу — свойство, потерявшее `kind`, обязано краснеть,
+  // а не прятаться за тем, что его не назвали поимённо выше.
+  for (const [id, def] of REG.properties) {
+    expect(catalog.fields[id]?.[0]?.kind, id).toBe(def.type.kind);
+  }
 });
 
 test('фикстуры невыразимого: каждая даёт ОТКАЗ С КОДОМ, а не пустой список (§С8-3)', () => {

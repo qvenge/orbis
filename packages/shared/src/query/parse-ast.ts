@@ -849,6 +849,34 @@ const EXCLUDE_BLOCKED_ROLE_KEY: string = ROLE_DEPENDENCY;
 const EXCLUDE_BLOCKED_STATUS_KEY = 'orbis/task_status';
 const EXCLUDE_BLOCKED_CLOSED: readonly string[] = ['done', 'cancelled'];
 
+/**
+ * Совпадает ли предикат С САХАРОМ `excludeBlocked=true` — ровно, а не «похоже».
+ *
+ * Живёт здесь, рядом с константами сахара, потому что печать (`print.ts`) обязана спрашивать
+ * ТУ ЖЕ правду, из которой сахар собран. Сверять содержимое там своими литералами значило бы
+ * завести вторую правду о том, что такое «закрытая работа», и разъехаться с разбором молча.
+ *
+ * Почему сравнивается СОДЕРЖИМОЕ, а не наличие поля: `sourceNotIn` уехал в JSON Schema
+ * провайдеру, то есть вход `ast:` тула (§А5-4) вернёт узлы с ЛЮБЫМИ `via`/`prop`/`values`.
+ * Печать «по наличию» отдала бы им всем текст `excludeBlocked=true`, и обратный разбор вернул
+ * бы другое дерево — то есть `parse(print(a)) ≠ a`, а правка внутри такого узла стала бы в
+ * key-печати невидимой. Это дословно тот дефект, из-за которого `eq` на списочном свойстве
+ * отвергнут компилятором (долг 1 гейта Задачи 8), и второй раз впускать его нельзя.
+ */
+export function isExcludeBlockedSugar(pred: QueryRelPredicate, reg: ParseRegistry): boolean {
+  if (pred.kind !== 'has_relation' || pred.sourceNotIn === undefined) return false;
+  const role = [...reg.roles.values()].find((r) => r.key === EXCLUDE_BLOCKED_ROLE_KEY);
+  const prop = [...reg.properties.values()].find((p) => p.key === EXCLUDE_BLOCKED_STATUS_KEY);
+  if (!role || !prop) return false;
+  const { prop: propId, values } = pred.sourceNotIn;
+  return (
+    pred.via === role.id &&
+    propId === prop.id &&
+    values.length === EXCLUDE_BLOCKED_CLOSED.length &&
+    values.every((v, i) => v === EXCLUDE_BLOCKED_CLOSED[i])
+  );
+}
+
 const REL_WITH_TARGET: ReadonlySet<string> = new Set([
   'children_of',
   'parents_of',

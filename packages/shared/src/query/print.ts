@@ -17,9 +17,15 @@
  * текст парсер v1 честно отвергает. Асимметрия односторонняя и намеренная: дифф и экран
  * обязаны показать любое сохранённое дерево, а вводить скобками пока нечего.
  */
-import type { QueryAst, QueryFilterNode, QueryPropValue, QueryScalar } from './ast';
+import type {
+  QueryAst,
+  QueryFilterNode,
+  QueryPropValue,
+  QueryRelPredicate,
+  QueryScalar,
+} from './ast';
 import { QUERY_DATE_TOKENS } from './ast';
-import { effectiveLabel, type ParseRegistry } from './parse-ast';
+import { effectiveLabel, isExcludeBlockedSugar, type ParseRegistry } from './parse-ast';
 
 export type QueryPrintForm = 'key' | 'label';
 
@@ -62,6 +68,8 @@ interface Names {
   prop(id: string): string;
   aspect(id: string): string;
   role(id: string): string;
+  /** Совпадает ли реляционный предикат с сахаром `excludeBlocked=true` (см. его докблок). */
+  isBlockedSugar(pred: QueryRelPredicate): boolean;
 }
 
 /**
@@ -85,6 +93,10 @@ function names(reg: ParseRegistry, form: QueryPrintForm): Names {
     prop: (id) => pick(reg.properties.get(id), id),
     aspect: (id) => pick(reg.aspects.get(id), id),
     role: (id) => pick(reg.roles.get(id), id),
+    // Реестр нужен и здесь: сахар — это КОНКРЕТНЫЕ id роли и свойства, а в дереве лежат id,
+    // не ключи. Через `Names` (а не пятым параметром `printNode`), потому что это ровно тот
+    // же класс знания — «как назвать/опознать запись реестра».
+    isBlockedSugar: (pred) => isExcludeBlockedSugar(pred, reg),
   };
 }
 
@@ -167,12 +179,12 @@ function printNode(node: QueryFilterNode, n: Names): string {
     const inner = node.not;
     // Сахар `excludeBlocked=true` — ЕДИНСТВЕННАЯ текстовая форма отрицания ребра с условием
     // на дальний конец, и печать обязана её вернуть: иначе `parse(print(a)) ≡ a` неверно для
-    // каждого смарт-листа с этой конструкцией. Проверяется именно НАЛИЧИЕ `sourceNotIn`, а не
-    // его содержимое: набор «closed» задаёт разбор (`parse-ast.ts`), и сверять его здесь
-    // значило бы завести вторую правду о том, что такое «закрытая работа».
-    if ('rel' in inner && inner.rel.kind === 'has_relation' && inner.rel.sourceNotIn) {
-      return 'excludeBlocked=true';
-    }
+    // каждого смарт-листа с этой конструкцией. Сверяется СОДЕРЖИМОЕ узла, а не наличие поля,
+    // и сверяется чужой функцией (`isExcludeBlockedSugar`, `parse-ast.ts`) — тем же местом,
+    // из которого сахар собран: свои литералы здесь были бы второй правдой о «закрытой
+    // работе». Узел с другими `via`/`prop`/`values` этого текста не получает — он уходит в
+    // скобочную форму ниже, потому что иначе два РАЗНЫХ дерева печатались бы одним текстом.
+    if ('rel' in inner && n.isBlockedSugar(inner.rel)) return 'excludeBlocked=true';
     if ('or' in inner) {
       const list = asSamePropList(inner.or);
       if (list) {
@@ -227,11 +239,20 @@ function printNode(node: QueryFilterNode, n: Names): string {
   const rel = node.rel;
   const target = rel.of === undefined ? '' : `=${quote(rel.of)}`;
   const via = rel.via === undefined ? '' : ` via=${n.role(rel.via)}`;
-  // Положительная форма ребра с условием на дальний конец плоским текстом НЕ выражается:
-  // сахар `excludeBlocked=true` существует только под отрицанием (ветка `not` выше), а
-  // «покажи заблокированные живой работой» грамматика v1 сказать не умеет. Печатаем
-  // скобками — так же, как любое невыразимое дерево (§А5-3д), и разбор честно откажет.
-  if (rel.kind === 'has_relation' && rel.sourceNotIn) return `(${rel.kind}${via})`;
+  // Ребро с условием на дальний конец плоским текстом НЕ выражается — ни в положительной
+  // форме («покажи заблокированные живой работой» грамматика v1 сказать не умеет), ни в
+  // отрицательной с НЕканоническим условием (сахар — ровно одна тройка `via`/`prop`/`values`,
+  // см. ветку `not` выше). Печатаем скобками, как любое невыразимое дерево (§А5-3д): разбор
+  // честно откажет про скобки, и это лучше текста, который вернулся бы ДРУГИМ деревом.
+  //
+  // СОДЕРЖИМОЕ условия печатается ЦЕЛИКОМ, а не сворачивается в `(has_relation via=…)`.
+  // Иначе два узла, различающиеся только `prop` или набором значений, снова дали бы один
+  // текст — тот же дефект, только переехавший из сахара в скобочную форму, а дифф Ш1 меряет
+  // правки именно печатью (§А5-2). Скобки делают текст неразбираемым, но РАЗЛИЧИМЫМ.
+  if (rel.kind === 'has_relation' && rel.sourceNotIn) {
+    const { prop, values } = rel.sourceNotIn;
+    return `(${rel.kind}${via} sourceNotIn=${n.prop(prop)}:${values.map(printScalar).join('|')})`;
+  }
   return `${rel.kind}${target}${via}`;
 }
 

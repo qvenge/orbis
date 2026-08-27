@@ -1,7 +1,8 @@
 // apps/server/src/query/compile-ast.test.ts
 // Юнит-тесты нового компилятора: то, чего НЕ видно в golden, — отказы и чтение реестра.
 //
-// Golden (`compile.golden.test.ts`) пиннит текст SQL на 48 деревьях; здесь проверяется
+// Golden (`compile.golden.test.ts`) пиннит текст SQL на всех эталонах набора; здесь
+// проверяется
 // другое: что компилятор ОТКАЗЫВАЕТ там, где семантики нет, и что списки служебных
 // аспектов и иерархических ролей он берёт ИЗ СНИМКА РЕЕСТРА, а не из констант. Второе
 // проверяется единственным способом, который что-то доказывает, — подменой снимка:
@@ -172,6 +173,46 @@ describe('долг гейта Задачи 8: eq/ne на списке и contain
   });
 });
 
+describe('состояние дальнего конца (sourceNotIn): что оно умеет и где отказывает', () => {
+  const rel = (prop: string) =>
+    ({
+      rel: {
+        kind: 'has_relation' as const,
+        via: 'dependency',
+        sourceNotIn: { prop, values: ['done'] },
+      },
+    }) satisfies QueryFilterNode;
+
+  test('скалярное свойство — соединение с источником и COALESCE(…, "")', () => {
+    const sql = sqlOf(rel('orbis/task_status'));
+    expect(sql).toContain('JOIN entities b ON b.id = r.source_id');
+    // COALESCE — смысл, а не украшение: источник без значения обязан считаться НЕ закрытым,
+    // иначе `NULL NOT IN (…)` выбросил бы ребро и заметка-блокер перестала бы блокировать.
+    expect(sql).toContain(`COALESCE(b.props->>'orbis/task_status', '') NOT IN ($3)`);
+  });
+
+  test('список, вложенный объект и core-проекция — три отказа, а не тихая пустота', () => {
+    // Списочное свойство: скалярного значения у него нет, сравнивать нечего.
+    const list = refusal(() => sqlOf(rel('orbis/aliases')));
+    expect(list.reason).toBe('TYPE');
+    expect(list.message).toContain('orbis/aliases');
+    // json: `->>` отдал бы текст сериализации — то самое сравнение «текста всего значения».
+    expect(refusal(() => sqlOf(rel('orbis/recurrence'))).reason).toBe('TYPE');
+    // core-проекция: значение лежит колонкой, а не в `props` дальнего конца.
+    const core = refusal(() => sqlOf(rel('orbis/archived')));
+    expect(core.reason).toBe('TYPE');
+    expect(core.message).toContain('orbis/archived');
+    // И неизвестный id — своей причиной, а не общей.
+    expect(refusal(() => sqlOf(rel('orbis/нетtакого'))).reason).toBe('UNKNOWN_FIELD');
+  });
+
+  test('без sourceNotIn узел компилируется ровно как раньше — без соединения', () => {
+    const plain = sqlOf({ rel: { kind: 'has_relation', via: 'dependency' } });
+    expect(plain).toContain('EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id');
+    expect(plain).not.toContain('JOIN entities b');
+  });
+});
+
 describe('списки берутся ИЗ СНИМКА РЕЕСТРА, а не из констант кода', () => {
   test('служебный аспект — колонка service: подменили колонку, изменился WHERE', () => {
     // orbis/task объявлен служебным, orbis/agent-run — обычным: если бы список был
@@ -229,7 +270,7 @@ describe('списки берутся ИЗ СНИМКА РЕЕСТРА, а не 
   test('порядок вариантов select в сортировке — rank реестра, а не позиция в массиве', () => {
     const props = new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p]));
     const priority = props.get('orbis/priority');
-    if (!priority || priority.type.kind !== 'select') throw new Error('фикстура устарела');
+    if (priority?.type.kind !== 'select') throw new Error('фикстура устарела');
     props.set('orbis/priority', {
       ...priority,
       type: {
@@ -246,6 +287,40 @@ describe('списки берутся ИЗ СНИМКА РЕЕСТРА, а не 
       )
       .sql.replaceAll(/\s+/g, ' ');
     expect(sql).toContain(`WHEN 'low' THEN 11 WHEN 'medium' THEN 12 WHEN 'high' THEN 13`);
+  });
+});
+
+describe('core-проекции: карта колонок и высказывание об архивности', () => {
+  test('карта CORE_COLUMN покрывает ВСЕ core-свойства реестра', () => {
+    // Пятое core-свойство, заведённое в реестре без строки в карте, иначе дало бы
+    // `UNKNOWN_FIELD` в рантайме на первом же запросе — то есть красный прод вместо
+    // красного теста. Проверка идёт от РЕЕСТРА к карте, а не наоборот.
+    const core = BUILTIN_PROPERTY_META.filter((p) => p.storage === 'core').map((p) => p.id);
+    expect(core.length).toBeGreaterThan(0);
+    for (const id of core) {
+      // Компиляция предиката по core-свойству обязана пройти без отказа резолва.
+      expect(() => sqlOf({ has: id })).not.toThrow();
+    }
+    // И обратно: свойство `storage:'props'` в карту не попадает — иначе значение читалось бы
+    // из несуществующей колонки.
+    expect(() => sqlOf({ has: 'orbis/amount' })).not.toThrow();
+    expect(sqlOf({ has: 'orbis/amount' })).toContain(`props ? 'orbis/amount'`);
+  });
+
+  test('предикат по orbis/archived снимает умолчание, has(orbis/archived) — нет', () => {
+    // Без первого правила запрос компилировался бы в `NOT archived AND archived` — тихий
+    // ноль на любых данных (находка предфильтра).
+    const eqTrue = sqlOf({ prop: 'orbis/archived', op: 'eq', value: true });
+    expect(eqTrue).toContain('archived = $2::boolean');
+    expect(eqTrue).not.toContain('NOT archived');
+    // Отрицание — тоже высказывание о значении.
+    expect(sqlOf({ not: { prop: 'orbis/archived', op: 'eq', value: true } })).not.toContain(
+      'AND NOT archived AND',
+    );
+    // А `has` не выбирает между архивными и неархивными — умолчание остаётся.
+    expect(sqlOf({ has: 'orbis/archived' })).toContain('NOT archived');
+    // Прочие core-свойства умолчания не трогают.
+    expect(sqlOf({ prop: 'orbis/title', op: 'eq', value: 'Проект' })).toContain('NOT archived');
   });
 });
 

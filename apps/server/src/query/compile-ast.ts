@@ -129,8 +129,10 @@ interface PropRef {
  * подставленное `props->>` вернуло бы NULL там, где значение лежит в колонке, и весь
  * запрос стал бы тихо пустым.
  */
+const ARCHIVED_COLUMN = 'archived';
+
 const CORE_COLUMN: Readonly<Record<string, string>> = {
-  'orbis/archived': 'archived',
+  'orbis/archived': ARCHIVED_COLUMN,
   'orbis/title': 'title',
   'orbis/created_at': 'created_at',
   'orbis/updated_at': 'updated_at',
@@ -671,12 +673,32 @@ function walkNodes(node: QueryFilterNode, fn: (n: QueryFilterNode) => void): voi
   else if ('not' in node) walkNodes(node.not, fn);
 }
 
-/** Есть ли в дереве узел `archived` — на любой глубине и под любым числом отрицаний. */
-function hasArchivedNode(ast: QueryAst): boolean {
+/**
+ * ВЫСКАЗАЛСЯ ЛИ ЗАПРОС ОБ АРХИВНОСТИ — только тогда снимается умолчание «только неархивные».
+ *
+ * Способов высказаться ДВА, и второй не менее законен первого: слово грамматики `archived=`
+ * и предикат по core-свойству `orbis/archived` (§А1-3 завёл ему запись в реестре ровно
+ * затем, чтобы у колонки был единый адрес для Q-AST). Считать высказыванием только первый —
+ * значит компилировать `orbis/archived=true` в противоречие `NOT archived AND archived`,
+ * то есть в ноль строк на любых данных и без единой ошибки. Это ровно тот тихий ноль,
+ * против которого §6.4 и §С8-3, и найден он был на этом самом свойстве.
+ *
+ * `has(orbis/archived)` высказыванием НЕ считается, и это не придирка: у core-колонки ключ
+ * есть всегда, поэтому `has` не говорит о ЗНАЧЕНИИ архивности ничего — он не выбирает между
+ * архивными и неархивными, а значит и умолчание снимать ему нечем.
+ *
+ * Свойство опознаётся по РЕЕСТРУ (`storage: 'core'`) и по карте колонок, а не по литералу
+ * id: переименуют свойство в реестре — карта поедет вместе с ним, а литерал молча перестал
+ * бы совпадать.
+ */
+function decidesArchived(ast: QueryAst, ctx: CompileCtx): boolean {
   if (ast.filter === null) return false;
   let found = false;
   walkNodes(ast.filter, (n) => {
     if ('archived' in n) found = true;
+    if (!('prop' in n)) return;
+    const def = ctx.reg.properties.get(n.prop);
+    if (def?.storage === 'core' && CORE_COLUMN[def.id] === ARCHIVED_COLUMN) found = true;
   });
   return found;
 }
@@ -733,7 +755,7 @@ function namesServiceAspect(ast: QueryAst, ctx: CompileCtx, service: readonly st
  */
 function compileWhere(ast: QueryAst, ctx: CompileCtx): SQL {
   const conds: SQL[] = [sql`true`];
-  if (!hasArchivedNode(ast)) conds.push(sql`NOT archived`);
+  if (!decidesArchived(ast, ctx)) conds.push(sql`NOT archived`);
   const service = serviceAspectIds(ctx);
   if (service.length > 0 && !namesServiceAspect(ast, ctx, service)) {
     // Индексом не ускоряется (GIN отрицание не покрывает) — это построчный фильтр поверх

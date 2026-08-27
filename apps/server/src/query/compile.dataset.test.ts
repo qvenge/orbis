@@ -785,6 +785,24 @@ describe('датасет §6.2 на новом компиляторе: сост�
     expect(ids(await run(USER_A, 'aspect=orbis/task, archived=true'))).toEqual([ID.archived]);
   });
 
+  test('4c. core-свойство архивности: orbis/archived=true отдаёт архивную, а не пустоту', async () => {
+    // Живой негатив к находке предфильтра: пока предикат по core-свойству не считался
+    // высказыванием об архивности, этот запрос компилировался в `NOT archived AND archived`
+    // и возвращал ноль строк НА ЛЮБЫХ данных — без ошибки, то есть неотличимо от «ничего
+    // нет». §А1-3 завёл `orbis/archived` в реестр ровно затем, чтобы у колонки был адрес.
+    expect(ids(await run(USER_A, 'orbis/archived=true'))).toEqual([ID.archived]);
+    // Слово грамматики и core-свойство дают одно множество — два адреса одного факта.
+    expect(ids(await run(USER_A, 'archived=true'))).toEqual([ID.archived]);
+    // `=false` — тоже высказывание: архивной в выдаче нет, всё прочее есть.
+    const notArchived = ids(await run(USER_A, 'orbis/archived=false'));
+    expect(notArchived).not.toContain(ID.archived);
+    expect(notArchived).toContain(ID.project);
+    // А `has` о ЗНАЧЕНИИ архивности не говорит — умолчание «только неархивные» остаётся.
+    const withHas = ids(await run(USER_A, 'has=orbis/archived'));
+    expect(withHas).not.toContain(ID.archived);
+    expect(withHas).toEqual(notArchived);
+  });
+
   test('4b. search= находит по слову из body; отрицание поиска — всё остальное', async () => {
     expect(ids(await run(USER_A, 'search=платежей'))).toEqual([ID.project]);
     const rest = ids(await run(USER_A, '!search=платежей'));

@@ -124,7 +124,11 @@ export const aspectDefinitionSchema = z
     implements: z.array(z.unknown()).default([]),
     viewConfig: z.object({ keyFields: z.array(z.string()), icon: z.string().optional() }).strict(),
     module: z.string().nullable(),
-    /** §А3-1/Р-П-5: служебность — колонка реестра, а не список в коде (сегодня их три). */
+    /**
+     * §А3-1/Р-П-5: служебность — КОЛОНКА реестра, а не список в коде. Служебный аспект
+     * сегодня ровно один (`orbis/agent-run`), и именно поэтому колонка, а не константа:
+     * список из одного элемента заводят в коде особенно охотно.
+     */
     service: z.boolean(),
     rank: z.number().int(),
   })
