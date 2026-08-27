@@ -4,7 +4,7 @@ import { createContext, type ReactNode, useContext } from 'react';
  * Контекст «чья это сущность» для query-блоков (§6.1 `children_of=this` / `parents_of=this`).
  *
  * Грамматика запросов знает слово `this`, но компилятор разрешает его ТОЛЬКО из контекста
- * (`compile.ts` → `entityRefId`: `thisEntityId === null` — структурная ошибка «this вне
+ * (`query/compile-ast.ts` → `relTarget`: `thisEntityId === null` — структурная ошибка «this вне
  * контекста сущности»). Сервер этот контекст принимает параметром `entity.query.thisEntityId`,
  * а web его не передавал ни разу — из-за чего заготовка тела проекта (С10) показывала на экране
  * проекта три пустые секции («В работе», «Ждут меня», «Бэклог») вместо своих тикетов.

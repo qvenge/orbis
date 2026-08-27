@@ -138,7 +138,7 @@ const byId = new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p]));
 const defsById = new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a]));
 const metaById = new Map(BUILTIN_ASPECT_META.map((m) => [m.id, m]));
 
-/** Распаковка enum сквозь optional/array: порядок вариантов — норматив сортировки (compile.ts). */
+/** Распаковка enum сквозь optional/array: порядок вариантов — норматив сортировки (`compile-ast.ts`). */
 function enumValues(schema: z.ZodTypeAny): readonly string[] {
   let node = schema;
   for (let i = 0; i < 8; i += 1) {

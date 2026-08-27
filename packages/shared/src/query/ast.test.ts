@@ -7,7 +7,12 @@
 
 import { expect, test } from 'bun:test';
 import Ajv from 'ajv';
-import { QUERY_REL_ANCHOR, queryAstSchema } from './ast';
+import {
+  QUERY_REL_ANCHOR,
+  QUERY_TREE_DEPTH_CAP,
+  queryAstSchema,
+  queryTreeExceedsDepth,
+} from './ast';
 import { AST_FIXTURES, FIXTURE_PARSE_REGISTRY } from './ast-fixtures';
 import { queryAstJsonSchema } from './ast-json-schema';
 
@@ -184,4 +189,41 @@ test('§А5-7: `of` — только uuid или this, и это знает СХ
   for (const bad of ['banana', 'DROP TABLE entities', '', 'this ', '019d48ea-4188-765d-8e96']) {
     expect(both(bad), bad).toEqual([false, false]);
   }
+});
+
+// Кап глубины (I-6 гейта): единственное, что стоит МЕЖДУ недоверенным входом `ast:` и
+// двумя чужими порогами — рекурсией zod и парсером Postgres. Проверяется здесь, потому что
+// число — свойство ЯЗЫКА: оно обязано быть с запасом над настоящими запросами и на порядки
+// ниже того, где ломается чужой код.
+test('queryTreeExceedsDepth: явный обход, и он не падает там, где падает рекурсия', () => {
+  expect(queryTreeExceedsDepth({ filter: null }, QUERY_TREE_DEPTH_CAP)).toBe(false);
+  expect(queryTreeExceedsDepth('строка', QUERY_TREE_DEPTH_CAP)).toBe(false);
+  // Ровно на капе — ещё нет, на уровень глубже — уже да.
+  const chain = (n: number) => {
+    let node: unknown = { tag: 'дом' };
+    for (let i = 0; i < n; i++) node = { not: node };
+    return node;
+  };
+  expect(queryTreeExceedsDepth(chain(QUERY_TREE_DEPTH_CAP - 1), QUERY_TREE_DEPTH_CAP)).toBe(false);
+  expect(queryTreeExceedsDepth(chain(QUERY_TREE_DEPTH_CAP + 1), QUERY_TREE_DEPTH_CAP)).toBe(true);
+  // Массивы считаются уровнями наравне с объектами — иначе `{or:[…]}` обходил бы кап вдвое.
+  expect(queryTreeExceedsDepth({ or: [{ or: [{ tag: 'д' }] }] }, 3)).toBe(true);
+  expect(queryTreeExceedsDepth({ or: [{ or: [{ tag: 'д' }] }] }, 5)).toBe(false);
+  // Тот самый вход, на котором рекурсивная реализация исчерпала бы стек: обход итеративный,
+  // и вернуть ответ он обязан, а не упасть вместе с тем, от чего защищает.
+  expect(queryTreeExceedsDepth(chain(50000), QUERY_TREE_DEPTH_CAP)).toBe(true);
+});
+
+test('кап заведомо выше настоящих запросов: ни одна фикстура канона к нему не близка', () => {
+  // Число из докблока `QUERY_TREE_DEPTH_CAP` («самый глубокий эталон — 8») перестало бы
+  // быть правдой молча, если бы его никто не считал.
+  const depth = (v: unknown): number => {
+    if (typeof v !== 'object' || v === null) return 0;
+    let max = 0;
+    for (const child of Array.isArray(v) ? v : Object.values(v)) max = Math.max(max, depth(child));
+    return max + 1;
+  };
+  const deepest = Math.max(...AST_FIXTURES.map((f) => depth(f.ast)));
+  expect(deepest).toBeLessThanOrEqual(8);
+  expect(deepest * 4).toBeLessThan(QUERY_TREE_DEPTH_CAP);
 });

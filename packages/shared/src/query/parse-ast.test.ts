@@ -45,6 +45,9 @@ test('несуществующий календарный день — TYPE с �
   const e = err('orbis/start_at=2026-02-30T09:00:00Z');
   expect(e.code).toBe('TYPE');
   expect(e.position).toBeGreaterThan(0);
+  // Нулевого года не бывает — Postgres отвечает на него тем же 22008 (I-5 гейта).
+  expect(err('orbis/due_date=0000-01-01').code).toBe('TYPE');
+  expect(err('orbis/start_at=0000-06-15T12:00:00Z').code).toBe('TYPE');
   // У момента «существует» — это и время суток, и смещение зоны (I-1 предфильтра).
   expect(err('orbis/start_at=2026-08-27T25:00:00Z').code).toBe('TYPE');
   expect(err('orbis/start_at=2026-08-27T12:00:00+23:00').code).toBe('TYPE');

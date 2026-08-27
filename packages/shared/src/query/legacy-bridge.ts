@@ -140,7 +140,8 @@ function legacyFieldIndex(reg: ParseRegistry): Map<string, LegacyFieldOwner[]> {
  *
  * Узлы под `not` СЧИТАЮТСЯ: «покажи не-задачи» тоже называет аспект `orbis/task` — это
  * подсказка о том, про что запрос, а не про то, что попадёт в выдачу. Ровно так же вёл
- * себя старый резолв (`compile.ts`, `aspectsInQuery`): он собирал `aspect=` со всего
+ * себя старый резолв (`compile.ts`, `aspectsInQuery` — файл снят Задачей 9b, читается по
+ * git-истории): он собирал `aspect=` со всего
  * плоского списка, где отрицания как узла не было вовсе.
  */
 export function aspectsNamedInQueryAst(ast: QueryAst): Set<string> {
@@ -337,7 +338,8 @@ function sortField(
  * подменяет его отказом новой грамматики.
  *
  * Порядок узлов сохраняется, а `search=` приезжает ПОСЛЕДНИМ — так же, как его дописывал
- * старый компилятор (`compile.ts`, `compileWhere`): дерево читается как тот же запрос.
+ * старый компилятор (`compile.ts`, `compileWhere`; файл снят Задачей 9b): дерево читается
+ * как тот же запрос.
  */
 export function legacyAstToQueryAst(legacy: LegacyQueryAst, reg: ParseRegistry): QueryAst {
   const aspects = new Set<string>();

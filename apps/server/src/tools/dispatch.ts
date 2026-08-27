@@ -28,7 +28,13 @@ import {
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
-import { aspectsNamedInQueryAst, type QueryAst, resolveLegacyFieldId } from '@orbis/shared/query';
+import {
+  aspectsNamedInQueryAst,
+  QUERY_TREE_DEPTH_CAP,
+  type QueryAst,
+  queryTreeExceedsDepth,
+  resolveLegacyFieldId,
+} from '@orbis/shared/query';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import { isWorkerThreadTarget } from '../agent-loop/queries';
@@ -625,6 +631,7 @@ async function runUndoLast(ctx: ToolCallCtx, input: unknown): Promise<ToolDispat
  * расхождением дала бы «схема пропустила, компилятор упал».
  */
 async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
+  assertQueryTreeDepth(input);
   const parsed = parseEnvelope(entityQueryInput, input, 'entity_query');
   return queryWithMaterialization({
     db: ctx.db,
@@ -1765,33 +1772,39 @@ async function runThreadPost(
 // ---------------------------------------------------------------------------
 
 /**
- * Структурная валидация envelope read-тулов и thread_post (мутации валидирует executor).
+ * ГЕЙТ ГЛУБИНЫ входа `entity_query` — ПЕРВЫМ действием тула, до схемы и до компиляции.
  *
- * `RangeError` ловится ОТДЕЛЬНО и намеренно: схема канона Q-AST рекурсивна (`z.lazy`), и
- * достаточно глубокое дерево во входе `ast:` исчерпывает стек внутри самого `safeParse` —
- * то есть мимо `parsed.success`. Без этой ветки наружу уходил бы сырой `RangeError` вместо
- * структурного отказа, и модель получила бы не «твой запрос слишком глубок», а обрыв.
- * Кап глубины при этом не выдуман: ставить его пришлось бы ДО zod у каждого вызывающего,
- * то есть завести второе мнение о законном дереве (см. докблок `queryFilterNodeSchema`).
+ * Порядок здесь и есть суть. Ниже по конвейеру глубину не остановить ничем: `z.lazy`
+ * рекурсивен и исчерпывает стек внутри самого `safeParse`, а то, что через zod всё же
+ * проходит, компилируется в цепочку `NOT COALESCE(…)`, на которой уже парсер Postgres
+ * отвечает `42601 memory exhausted` — не `ExecError`, то есть мимо всех наших catch'ей.
+ * Между этими двумя порогами лежала полоса, в которой модель получала сырой обрыв вместо
+ * отказа; кап её закрывает целиком, потому что стоит РАНЬШЕ обоих и на два порядка ниже.
+ *
+ * Кап проверяется ЯВНЫМ итеративным обходом (`queryTreeExceedsDepth`), а не выводится из
+ * того, где ломается чужой стек: чужая граница зависит от версии zod, сборки Postgres и
+ * размера кадра, и число, снятое с неё, устарело бы молча.
+ *
+ * Вход у класса ровно один — `ast:` этого тула: tRPC-роутер принимает только текст, а
+ * текстовый разбор дерева не рекурсирует. Поэтому и гейт один, здесь.
  */
+function assertQueryTreeDepth(input: unknown): void {
+  if (!queryTreeExceedsDepth(input, QUERY_TREE_DEPTH_CAP)) return;
+  throw new ExecError(
+    'VALIDATION',
+    `entity_query: дерево запроса вложено глубже ${QUERY_TREE_DEPTH_CAP} уровней — ` +
+      `столько не нужно ни одному осмысленному запросу (самый глубокий эталон — 8)`,
+    { tool: 'entity_query', reason: 'QUERY_TOO_DEEP', cap: QUERY_TREE_DEPTH_CAP },
+  );
+}
+
+/** Структурная валидация envelope read-тулов и thread_post (мутации валидирует executor). */
 function parseEnvelope<S extends z.ZodTypeAny>(
   schema: S,
   input: unknown,
   tool: string,
 ): z.infer<S> {
-  let parsed: ReturnType<S['safeParse']>;
-  try {
-    parsed = schema.safeParse(input) as ReturnType<S['safeParse']>;
-  } catch (e) {
-    if (e instanceof RangeError) {
-      throw new ExecError(
-        'VALIDATION',
-        `input тула «${tool}» слишком глубоко вложен: разбор не поместился в стек`,
-        { tool, reason: 'INPUT_TOO_DEEP' },
-      );
-    }
-    throw e;
-  }
+  const parsed = schema.safeParse(input);
   if (!parsed.success) {
     throw new ExecError('VALIDATION', `невалидный input тула «${tool}»`, {
       tool,

@@ -34,7 +34,12 @@ import {
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
 } from '@orbis/shared';
-import { parseQueryAst, type QueryAst, toParseRegistry } from '@orbis/shared/query';
+import {
+  parseQueryAst,
+  QUERY_TREE_DEPTH_CAP,
+  type QueryAst,
+  toParseRegistry,
+} from '@orbis/shared/query';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import goldens from '../../test/golden/query-sql.json';
 import type { RegistrySnapshot } from '../registry/load';
@@ -99,6 +104,20 @@ describe('golden: Q-AST → SQL (новый компилятор, §А5-7)', () 
       expect(q.params).toEqual(g.params);
     });
   }
+});
+
+test('самый глубокий эталон набора — 8 уровней, то есть много ниже капа глубины', () => {
+  // Число живёт в докблоке `QUERY_TREE_DEPTH_CAP` («самый глубокий эталон — 8») и в тексте
+  // отказа гейта; посчитанное здесь, оно перестанет быть правдой громко, а не молча.
+  const depth = (v: unknown): number => {
+    if (typeof v !== 'object' || v === null) return 0;
+    let max = 0;
+    for (const child of Array.isArray(v) ? v : Object.values(v)) max = Math.max(max, depth(child));
+    return max + 1;
+  };
+  const deepest = Math.max(...GOLDENS.map((g) => depth(g.ast)));
+  expect(deepest).toBe(8);
+  expect(deepest).toBeLessThan(QUERY_TREE_DEPTH_CAP);
 });
 
 describe('golden: compileCountAst — COUNT(*) без limit/sortBy/капа (02 §3.2)', () => {

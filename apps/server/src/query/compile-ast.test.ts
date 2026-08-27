@@ -157,6 +157,11 @@ describe('отказы вместо тихой пустоты (§С8-3, §6.4)',
     // («в феврале всегда 28») и осталась бы зелёной на всех примерах выше.
     expect(bad({ prop: 'orbis/due_date', op: 'eq', value: '2029-02-29' }).reason).toBe('TYPE');
     expect(sqlOf({ prop: 'orbis/due_date', op: 'eq', value: '2028-02-29' })).toContain('::date');
+    // Нулевого года не бывает: форму он проходит, а Postgres отвечает 22008 (I-5 гейта).
+    expect(bad({ prop: 'orbis/due_date', op: 'eq', value: '0000-01-01' }).reason).toBe('TYPE');
+    expect(
+      bad({ prop: 'orbis/completed_at', op: 'eq', value: '0000-06-15T12:00:00Z' }).reason,
+    ).toBe('TYPE');
     // У момента «существует» — это и время суток, и смещение зоны: форму `\d{2}:\d{2}:\d{2}`
     // проходят и 25 часов, и `+23:00`, а Postgres отвечает на них 22008 (I-1 предфильтра).
     expect(

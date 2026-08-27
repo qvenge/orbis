@@ -539,21 +539,33 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
     }
   });
 
-  test('entity_query {ast}: дерево немыслимой глубины — VALIDATION, а не обрыв', () => {
-    // Схема канона рекурсивна (`z.lazy`), и глубокое дерево исчерпывает стек ВНУТРИ
-    // safeParse — мимо `parsed.success`. Без отдельной ветки наружу ушёл бы сырой
-    // RangeError, и модель получила бы обрыв вместо «твой запрос слишком глубок».
-    // Глубина взята минимальной из тех, что стек ИСЧЕРПЫВАЮТ (измерено: 5 000 разбираются,
-    // 8 000 уже нет). Прогон стоит секунды — столько zod и тратит, пока не упрётся; дешевле
-    // это не проверить, а непроверенным оставлять нельзя: утверждение стоит в докблоке.
-    let filter: unknown = { tag: 'дом' };
-    for (let i = 0; i < 8000; i++) filter = { not: filter };
-    return dispatchTool(ctxFor(), 'entity_query', { ast: { filter } }).then((r) => {
+  // Глубина входа `ast:` стережётся ЯВНЫМ капом ДО схемы и до компиляции. Ниже по
+  // конвейеру её не остановить ничем: zod рекурсивен и исчерпывает стек внутри safeParse,
+  // а то, что через него проходит, компилируется в цепочку `NOT COALESCE(…)`, на которой
+  // отвечает уже парсер Postgres (`42601 memory exhausted`) — не ExecError, то есть мимо
+  // всех catch'ей. Между двумя порогами лежала ПОЛОСА, где наружу уходил сырой обрыв;
+  // проверяются обе её стороны и середина.
+  test('entity_query {ast}: глубже капа — VALIDATION/QUERY_TOO_DEEP на всех порядках', async () => {
+    const nested = (n: number) => {
+      let filter: unknown = { tag: 'дом' };
+      for (let i = 0; i < n; i++) filter = { not: filter };
+      return { ast: { filter } };
+    };
+    // 5500 — середина той самой полосы. Числа порогов НЕ пиннятся: они свойства чужого
+    // кода (версия zod, сборка Postgres, размер кадра) и поедут без нашего ведома. Пиннится
+    // то, что теперь верно на любой их стороне: отказ структурный на всех порядках глубины.
+    for (const depth of [70, 5500, 8000]) {
+      const r = await dispatchTool(ctxFor(), 'entity_query', nested(depth));
       expectError(r, 'VALIDATION');
       if (r.status === 'error') {
-        expect((r.error.details as { reason?: string }).reason).toBe('INPUT_TOO_DEEP');
+        expect(`${depth}: ${(r.error.details as { reason?: string }).reason}`).toBe(
+          `${depth}: QUERY_TOO_DEEP`,
+        );
       }
-    });
+    }
+    // Кап отвергает ГЛУБИНУ, а не вложенность вообще: дерево вдвое мельче капа работает.
+    const ok = await dispatchTool(ctxFor(), 'entity_query', nested(20));
+    expect(ok.status).toBe('ok');
   });
 
   // Мост старой грамматики (переходный, умирает в Задаче 21): тексты сидов и Agenda ещё
@@ -565,6 +577,15 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
       tags: ['qtest-bridge'],
       aspects: { 'orbis/task': { status: 'inbox' } },
     });
+    // Вторая сущность под тем же тегом — КОНТРОЛЬ, и без неё тест односторонний: с одной
+    // строкой в выборке «мост перевёл условие по статусу» и «мост его молча выбросил» дают
+    // ОДИН И ТОТ ЖЕ ответ. Тот же класс, что в e2e (I-3): тест различает только то, что
+    // есть в фикстуре.
+    await seedEntity(userA, {
+      title: 'Мост: закрытая',
+      tags: ['qtest-bridge'],
+      aspects: { 'orbis/task': { status: 'done' } },
+    });
     const ids = async (query: string) => {
       const r = await dispatchTool(ctxFor(), 'entity_query', { query });
       expect(r.status).toBe('ok');
@@ -572,8 +593,11 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
     };
     const fresh = await ids('tags=qtest-bridge, orbis/task_status=inbox');
     const legacy = await ids('tags=qtest-bridge, aspect=orbis/task, status=inbox');
+    // Точный набор: условие по статусу обязано ОТСЕЯТЬ закрытую, а не просто «не упасть».
     expect(legacy).toEqual([created.id]);
     expect(legacy).toEqual(fresh);
+    // И тег ловит обе — то есть выборка была из чего сужать.
+    expect((await ids('tags=qtest-bridge')).length).toBe(2);
   });
 
   test('entity_get: include по умолчанию body+relations; несуществующий id → NOT_FOUND', async () => {
