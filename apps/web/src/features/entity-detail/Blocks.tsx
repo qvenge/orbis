@@ -1,3 +1,4 @@
+import { ROLE_DEPENDENCY } from '@orbis/shared';
 import { Ban, Plus, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNav } from '../../state/navigation';
@@ -58,7 +59,7 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
   const [direction, setDirection] = useState<Direction>('out');
   const [confirming, setConfirming] = useState<string | null>(null);
 
-  const blocks = relations.filter((r) => r.role === 'dependency');
+  const blocks = relations.filter((r) => r.role === ROLE_DEPENDENCY);
   const outgoing = blocks.filter((r) => r.sourceId === entityId);
   const incoming = blocks.filter((r) => r.targetId === entityId);
   const other = (r: Relation) => (r.sourceId === entityId ? r.targetId : r.sourceId);
@@ -173,7 +174,7 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
                     unrelate.mutate({
                       source_id: r.sourceId,
                       target_id: r.targetId,
-                      role: 'dependency',
+                      role: ROLE_DEPENDENCY,
                     })
                   }
                 >
@@ -273,8 +274,8 @@ export function Blocks({ entityId, relations }: { entityId: string; relations: R
                     onClick={() =>
                       relate.mutate(
                         direction === 'out'
-                          ? { source_id: entityId, target_id: e.id, role: 'dependency' }
-                          : { source_id: e.id, target_id: entityId, role: 'dependency' },
+                          ? { source_id: entityId, target_id: e.id, role: ROLE_DEPENDENCY }
+                          : { source_id: e.id, target_id: entityId, role: ROLE_DEPENDENCY },
                       )
                     }
                     className="w-full cursor-pointer truncate rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-surface-2/60"

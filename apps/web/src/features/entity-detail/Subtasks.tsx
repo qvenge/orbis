@@ -1,4 +1,4 @@
-import { newId } from '@orbis/shared';
+import { newId, ROLE_SUBITEM, ROLE_TICKET } from '@orbis/shared';
 import { Circle, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
@@ -11,8 +11,13 @@ import { useToast } from '../../ui/toast-store';
 
 type Relation = NonNullable<RouterOutputs['entity']['get']['relations']>[number];
 
-/** Роли рёбер, которые секция показывает подпунктами (§А4-3). */
-const SUBTASK_ROLES: readonly string[] = ['subitem', 'ticket'];
+/**
+ * Роли рёбер, которые секция показывает подпунктами (§А4-3). Константы, а не литералы:
+ * у web компилятор роль не стережёт (в контракте она `z.string()`), и переименование роли в
+ * реестре молча оставило бы секцию пустой — сборка бы не упала. Дом имён один на
+ * репозиторий — `@orbis/shared/constants`.
+ */
+const SUBTASK_ROLES: readonly string[] = [ROLE_SUBITEM, ROLE_TICKET];
 
 // Подзадачи: дети по РОЛИ `subitem` (source=родитель, §А4-3). Создание — quick_capture
 // entity_create + relation_create, оба под §5.2/журнал сервера.
@@ -69,7 +74,7 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
         source: 'quick_capture',
       });
       created = true;
-      await relate.mutateAsync({ source_id: parentId, target_id: id, role: 'subitem' });
+      await relate.mutateAsync({ source_id: parentId, target_id: id, role: ROLE_SUBITEM });
       setDraft('');
     } catch {
       // Частичный отказ (задача создана, связь — нет) — НЕ «не удалось сохранить»:

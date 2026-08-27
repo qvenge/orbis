@@ -1,4 +1,4 @@
-import { newId } from '@orbis/shared';
+import { newId, ROLE_SUBITEM } from '@orbis/shared';
 import { Plus } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
@@ -42,7 +42,7 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
         await relation.mutateAsync({
           source_id: context.parentId,
           target_id: ent.id,
-          role: 'subitem',
+          role: ROLE_SUBITEM,
         });
       }
       setText('');

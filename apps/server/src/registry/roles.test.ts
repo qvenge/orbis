@@ -10,6 +10,8 @@ import {
   ROLE_INSTANCE_OF,
   ROLE_MENTION,
   ROLE_RUN,
+  ROLE_SUBITEM,
+  ROLE_TICKET,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -77,6 +79,8 @@ test('каждая поимённая роль указывает на ту ро
   const owner = freshUserId();
   const reg = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
   const labelOf = (id: string): string | undefined => reg.roles.get(id)?.label.ru;
+  expect(labelOf(ROLE_SUBITEM)).toBe('Подпункт');
+  expect(labelOf(ROLE_TICKET)).toBe('Тикет');
   expect(labelOf(ROLE_INSTANCE_OF)).toBe('Экземпляр шаблона');
   expect(labelOf(ROLE_ENVELOPE_BINDING)).toBe('Привязка к конверту');
   expect(labelOf(ROLE_RUN)).toBe('Прогон');

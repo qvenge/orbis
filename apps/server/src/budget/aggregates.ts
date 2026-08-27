@@ -47,7 +47,9 @@ import { decAdd, decCmp, decDivBy, decMulInt, decSub } from './decimal';
 // проекции роли: связь роли владельца от конверта к транзакции хук считает привязкой и
 // второй, «правильной» рядом с ней не ставит — значит расход по ней есть, а в карточке
 // конверта его бы не стало. Перечисление ролей даёт `legacyParentRolesSql()` — один хелпер
-// на всех четверых читателей этого множества (см. его докблок в `executor/relations.ts`).
+// на все ПЯТЬ его call-сайтов, два из которых здесь (`spentByEnvelope` и unbudgeted). Что
+// именно у них общее, а что нет, перечисляет его докблок в `executor/relations.ts`: роль
+// одна на всех, а признак «источник — конверт» и фильтр архива у пятерых разные.
 
 type EntityRow = typeof entities.$inferSelect;
 type AspectsMap = Record<string, Record<string, unknown>>;

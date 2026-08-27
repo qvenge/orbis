@@ -40,15 +40,25 @@ export const RELATION_ROLE_IDS = [
 export type RelationRoleId = (typeof RELATION_ROLE_IDS)[number];
 
 /**
- * ВСЕ роли, которые код называет ПОИМЁННО, — и это их ЕДИНСТВЕННЫЙ дом на репозиторий.
+ * ВСЕ роли, которые код называет ПОИМЁННО, — и это их ЕДИНСТВЕННЫЙ дом на репозиторий:
+ * `apps/server`, `apps/web` и сам `@orbis/shared` берут их отсюда, своих литералов роли ни
+ * у кого нет.
  *
- * Дом здесь, а не в серверном `executor/relations.ts`, по одной причине: роль `dependency`
- * нужна ОБОИМ пакетам. Сервер фильтрует по ней `excludeBlocked` (`query/compile.ts`), а
- * парсер грамматики разворачивает в неё тот же сахар (`query/parse-ast.ts`) — и живёт он в
- * `@orbis/shared`, откуда `apps/server` не виден. Два дома здесь были бы не неудобством, а
- * ловушкой: переименование роли валит сборку в одном из них, а починивший по декларации
- * «другого места нет» второй не тронет — и отказ приедет в рантайме, на смарт-листе, который
- * сеется с `excludeBlocked=true` (`seed/smart-lists.ts`).
+ * Дом здесь, а не в серверном `executor/relations.ts`, потому что роль нужна ВСЕМ ТРЁМ
+ * пакетам, а `@orbis/shared` — единственный, кого видят двое других. `dependency`: сервер
+ * фильтрует по ней `excludeBlocked` (`query/compile.ts`), парсер грамматики разворачивает в
+ * неё тот же сахар (`query/parse-ast.ts`), web рисует ею секцию «Блокировки» и шлёт её в
+ * `relation.create`/`relation.delete` (`entity-detail/Blocks.tsx`). `subitem`/`ticket`: их
+ * называет секция подзадач (`entity-detail/Subtasks.tsx`) и быстрый захват
+ * (`browser/QuickCapture.tsx`).
+ *
+ * Почему это не педантизм. У web компилятор роль НЕ СТЕРЕЖЁТ: в контракте она
+ * `z.string().min(1)` (`contracts/tools.ts`), в `WireRelation.role` — обычная строка. Значит
+ * переименование роли в реестре валит сборку `shared` и `server` (см. `satisfies` ниже), но
+ * не web — и починивший по сигналу компилятора клиент не тронет. Секция «Блокировки» тогда
+ * молча опустеет (фильтр по старому имени не найдёт ничего), а кнопки продолжат слать старую
+ * роль и получать рантайм-`UNKNOWN_ROLE`. Ровно тот же сценарий у сеющегося смарт-листа с
+ * `excludeBlocked=true` (`seed/smart-lists.ts`), если разъедутся оси парсера и сервера.
  *
  * ДВЕ ОСИ АДРЕСАЦИИ, и это надо знать, читая список. Здесь лежат `id` ролей — то, что
  * хранит колонка `relations.role` и чем оперирует сервер. Парсер же адресует роль по `key`
@@ -66,9 +76,17 @@ export type RelationRoleId = (typeof RELATION_ROLE_IDS)[number];
  * Кто их читает: `instance-of` — материализация повторений и агрегаты (§3.1);
  * `envelope-binding` — бюджет-хук и инвариант «один budget-parent» (§4.2); `run` — глаголы
  * исполнителя и планировщик рутин (V1.4); `category-parent` — дерево категорий (§2.10);
- * `mention` — секция «Связанное» (§3.5.8); `dependency` — `excludeBlocked` грамматики §6 и
- * её сахар в парсере (до Задачи 9b, которая заводит `via=` для произвольной роли).
+ * `mention` — секция «Связанное» (§3.5.8); `dependency` — `excludeBlocked` грамматики §6, её
+ * сахар в парсере (до Задачи 9b, которая заводит `via=` для произвольной роли) и секция
+ * «Блокировки» web; `subitem` и `ticket` — секция подзадач web и быстрый захват.
+ *
+ * Список ПОЛНЫЙ, и это проверяемое утверждение, а не обещание: грепом по репозиторию
+ * литералов этих ролей вне этого файла нет (кроме фикстур тестов, где литерал — предмет
+ * проверки), а что каждая константа указывает на ТУ роль, чьё имя носит, пиннит
+ * `apps/server/src/registry/roles.test.ts` по подписям из сида.
  */
+export const ROLE_SUBITEM = 'subitem' satisfies RelationRoleId;
+export const ROLE_TICKET = 'ticket' satisfies RelationRoleId;
 export const ROLE_INSTANCE_OF = 'instance-of' satisfies RelationRoleId;
 export const ROLE_ENVELOPE_BINDING = 'envelope-binding' satisfies RelationRoleId;
 export const ROLE_RUN = 'run' satisfies RelationRoleId;
