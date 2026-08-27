@@ -39,7 +39,7 @@
  * где старая грамматика умирает целиком вместе с этой копией.
  */
 import { ROLE_DEPENDENCY } from '../constants';
-import { HHMM_RE } from '../date';
+import { HHMM_RE, hasValidCalendar } from '../date';
 import type {
   AspectDefinition,
   PropertyDefinition,
@@ -471,39 +471,6 @@ const ISO_TIMESTAMP_RE =
   /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
 const DATE_TOKENS: ReadonlySet<string> = new Set(QUERY_DATE_TOKENS);
 
-function isLeapYear(year: number): boolean {
-  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
-}
-
-function daysInMonth(year: number, month: number): number {
-  if (month === 2) return isLeapYear(year) ? 29 : 28;
-  return [4, 6, 9, 11].includes(month) ? 30 : 31;
-}
-
-/**
- * Существует ли такой день в календаре — для литерала даты или момента; для любого другого
- * текста ответ «да»: это не дата, и календарю до неё дела нет.
- *
- * Экспортировано ради компилятора (`query/compile-ast.ts`): схема значения свойства
- * (§А7-1) проверяет ФОРМУ паттерном `^\d{4}-\d{2}-\d{2}$`, и `2026-13-40` эту форму
- * проходит — падает такой литерал уже в Postgres (22008), то есть кодом ошибки вместо
- * структурного отказа с именем свойства. Календарь считается ровно один раз, здесь: вторая
- * его копия в компиляторе разошлась бы с этой на високосном феврале.
- */
-export function hasValidCalendar(text: string): boolean {
-  const m = DATE_LITERAL_RE.exec(text) ?? ISO_TIMESTAMP_RE.exec(text);
-  return m === null || validCalendar(m);
-}
-
-/** Календарная валидность — прямой проверкой компонент: `Date.parse` молча катит 30 февраля. */
-function validCalendar(m: RegExpExecArray): boolean {
-  const year = Number(m[1]);
-  const month = Number(m[2]);
-  const day = Number(m[3]);
-  if (month < 1 || month > 12) return false;
-  return day >= 1 && day <= daysInMonth(year, month);
-}
-
 /**
  * Значение свойства — список (§А2-2: `cardinality: many`, у `json` признак — `maxItems`).
  *
@@ -554,16 +521,12 @@ function parseScalar(prop: PropertyDefinition, el: Part): QueryScalar {
       if (text === 'true') return true;
       if (text === 'false') return false;
       return bad('true или false');
-    case 'date': {
-      const m = DATE_LITERAL_RE.exec(text);
-      if (!m || !validCalendar(m)) return bad('дату YYYY-MM-DD');
-      return text;
-    }
-    case 'timestamp': {
-      const m = ISO_TIMESTAMP_RE.exec(text);
-      if (!m || !validCalendar(m)) return bad('момент ISO 8601');
-      return text;
-    }
+    case 'date':
+      // Регексп — ФОРМА, `hasValidCalendar` — существование дня. Разделены потому, что у
+      // календаря в монорепо один дом (`date.ts`), общий с записью и компилятором.
+      return DATE_LITERAL_RE.test(text) && hasValidCalendar(text) ? text : bad('дату YYYY-MM-DD');
+    case 'timestamp':
+      return ISO_TIMESTAMP_RE.test(text) && hasValidCalendar(text) ? text : bad('момент ISO 8601');
     case 'time':
       return HHMM_RE.test(text) ? text : bad(`время 'ЧЧ:ММ'`);
     case 'select': {

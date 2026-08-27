@@ -15,6 +15,7 @@
 import {
   type AspectDefinition,
   type DecimalBounds,
+  hasValidCalendar,
   type PropertyDefinition,
   type PropertyType,
   propertyLiteralJsonSchema,
@@ -115,6 +116,41 @@ export function literalFormViolation(type: PropertyType, value: unknown): string
 }
 
 /**
+ * СУЩЕСТВУЕТ ЛИ календарный день у date/timestamp-значения. `undefined` — годится.
+ *
+ * Стоит рядом с `decimalViolation` и по той же причине, по которой рядом стоит тот: JSON
+ * Schema выражает ФОРМУ, а то, чего она выразить не может, проверяет спутник. Календарь она
+ * выразить не может вовсе — `2026-02-30` проходит паттерн `^\d{4}-\d{2}-\d{2}$` схемы
+ * значения (`value-schema.ts`), и ajv тут бессилен не по недосмотру, а по устройству.
+ *
+ * ПОЧЕМУ ЭТО ВАЖНЕЕ, ЧЕМ ВЫГЛЯДИТ. Без проверки значение записывается МОЛЧА, а падает
+ * позже и в другом месте: на первом же `::date` в запросе по этому свойству Postgres
+ * отвечает 22008, и смарт-лист владельца становится красным целиком. Дефект ЗАПИСИ,
+ * проявляющийся как поломка ЧТЕНИЯ, — класс, который труднее всего связать с причиной.
+ * Хуже того, `assertEntityProps` валидирует ВСЁ состояние после слияния, поэтому однажды
+ * записанное плохое значение стало бы замком на записи всей сущности.
+ *
+ * Календарь считает `date.ts` (`hasValidCalendar` поверх `lastDayOfMonth`) — дом
+ * календарной арифметики монорепо. Своей копии здесь нет и быть не должно: она разошлась бы
+ * с разбором запроса и компилятором ровно на високосном феврале.
+ *
+ * Гейт по виду свойства ОБЯЗАТЕЛЕН и стоит первой строкой: у `orbis/run_bucket` тип `text`,
+ * а паттерн несёт дату внутри — без гейта проверка отвергала бы и его (рулинг Р-9b-5:
+ * не трогаем, в SQL он не кастуется и чтения не роняет).
+ */
+function calendarViolation(type: PropertyType, value: unknown): string | undefined {
+  if (type.kind !== 'date' && type.kind !== 'timestamp') return undefined;
+  // Список дат во встроенном словаре не встречается, но `cardinality: many` разрешён у
+  // обоих типов (§А2-2), и проверять только скаляр значило бы оставить дыру своей формы.
+  const values = Array.isArray(value) ? value : [value];
+  for (const item of values) {
+    if (typeof item !== 'string') continue;
+    if (!hasValidCalendar(item)) return `значения «${item}» нет в календаре`;
+  }
+  return undefined;
+}
+
+/**
  * Нарушения записи сущности — списком, а не первым найденным: владелец правит форму целиком,
  * и отказ по одному полю за раз превращает одну правку в пять заходов.
  *
@@ -150,6 +186,12 @@ export function validateEntityProps(
         propertyId,
         message: ajv.errorsText(validate.errors, { dataVar: propertyId }),
       });
+      continue;
+    }
+    // Форма прошла — теперь то, чего форма не выражает: календарь и границы decimal.
+    const calendar = calendarViolation(def.type, value);
+    if (calendar !== undefined) {
+      violations.push({ code: 'TYPE', propertyId, message: calendar });
       continue;
     }
     const bounds = decimalBounds(schema);

@@ -12,6 +12,7 @@ export {
   addDays,
   epochDays,
   HHMM_RE,
+  hasValidCalendar,
   mondayIndex,
   parseHHMM,
   toParts,

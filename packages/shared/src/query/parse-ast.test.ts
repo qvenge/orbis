@@ -33,6 +33,25 @@ function err(text: string) {
   return r.error;
 }
 
+// Календарь на пути РАЗБОРА (Р-9b-5): форму даёт регексп парсера, существование дня —
+// общий `hasValidCalendar` из `date.ts`. Без этой проверки `orbis/due_date=2026-02-30`
+// разобрался бы в дерево и упал бы уже в Postgres (22008) — то есть кодом ошибки вместо
+// отказа с именем свойства и позицией.
+test('несуществующий календарный день — TYPE с позицией, а не дерево', () => {
+  for (const text of ['orbis/due_date=2026-02-30', 'orbis/due_date=2026-13-01']) {
+    const e = parseQueryAst(text, REG);
+    expect(e.ok ? 'разобралось' : `${e.error.code}`).toBe('TYPE');
+  }
+  const e = err('orbis/start_at=2026-02-30T09:00:00Z');
+  expect(e.code).toBe('TYPE');
+  expect(e.position).toBeGreaterThan(0);
+  // Високосный контроль: проверка обязана быть календарём, а не «в феврале всегда 28».
+  expect(ok('orbis/due_date=2028-02-29')).toEqual({
+    filter: { prop: 'orbis/due_date', op: 'eq', value: '2028-02-29' },
+  });
+  expect(err('orbis/due_date=2029-02-29').code).toBe('TYPE');
+});
+
 test('дерево and/not/or, включающий range из `<=` и обратимая печать key-формы', () => {
   const text =
     'aspect=orbis/task orbis/task_status=!done&!cancelled orbis/due_date<=today sortBy=orbis/priority:desc limit=20';

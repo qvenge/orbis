@@ -62,6 +62,12 @@ const EXPECTED_DIFFS: Record<string, { verdict: Verdict; records: number }> = {
   // Q-AST (Задача 8) схема свойства принимает любой объект, поэтому пустой текст запроса
   // перестал отвергаться формой. Переходное послабление, закрывается Задачей 8.
   QUERY_AST_FORM: { verdict: 'ok', records: 1 },
+  // Р-9b-5: календарная существуемость дня. Форму `^\\d{4}-\\d{2}-\\d{2}$` «2026-02-30»
+  // проходит у обоих валидаторов — она невыразима в JSON Schema и не выражена в zod
+  // (`aspects.ts:9` — голый регексп). Новый путь проверяет её спутником ajv (`date.ts`,
+  // `hasValidCalendar`), потому что иначе значение записывалось бы молча, а падало позже
+  // и в другом месте — на первом же `::date` в запросе (Postgres 22008).
+  CALENDAR_DAY_EXISTS: { verdict: 'reject', records: 1 },
 };
 
 /**
@@ -74,7 +80,7 @@ const EXPECTED_DIFFS: Record<string, { verdict: Verdict; records: number }> = {
  */
 const COVERAGE: Record<string, readonly [number, number]> = {
   'orbis/schedule': [4, 7],
-  'orbis/task': [3, 8],
+  'orbis/task': [3, 9],
   'orbis/financial': [6, 18],
   'orbis/note': [2, 2],
   'orbis/budget': [5, 10],
@@ -89,9 +95,9 @@ const COVERAGE: Record<string, readonly [number, number]> = {
 };
 
 /** Размер корпуса и его разбивка — все три числа точные. */
-const CORPUS_SIZE = 148;
+const CORPUS_SIZE = 149;
 const POSITIVE_RECORDS = 35;
-const NEGATIVE_RECORDS = 113;
+const NEGATIVE_RECORDS = 114;
 const MULTI_ASPECT_RECORDS = 7;
 /** Сколько порч «убран required» делает мутационный тест ниже — тоже точное число. */
 const MUTATIONS_CHECKED = 90;

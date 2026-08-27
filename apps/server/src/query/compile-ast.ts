@@ -38,11 +38,15 @@
 // — «не выполнен или неизвестен», то есть ровно правило §6.1. Одно место на всё дерево:
 // у оператора `ne` СВОЕЙ SQL-ФОРМЫ нет — ветка `case 'ne'` в `scalarPropCond` есть, но она
 // собирает предикат равенства и оборачивает его тем же `negated`.
-import type { AspectDefinition, PropertyDefinition, PropertyType } from '@orbis/shared';
+import {
+  type AspectDefinition,
+  hasValidCalendar,
+  type PropertyDefinition,
+  type PropertyType,
+} from '@orbis/shared';
 // Канон Q-AST — отдельным входом: в корневом барреле имена `QueryAst`/`QuerySortField`
 // заняты СТАРОЙ грамматикой до Задачи 21 (см. докблок `packages/shared/src/index.ts`).
 import {
-  hasValidCalendar,
   QUERY_DEPTH_CAP,
   type QueryAst,
   type QueryBound,
@@ -326,7 +330,8 @@ function assertScalarType(def: PropertyDefinition, value: QueryScalar): void {
     });
   }
   // Форма — ещё не календарь: `2026-13-40` проходит паттерн схемы и падает уже в Postgres
-  // (22008). Календарь считает парсер (`hasValidCalendar`), второй его копии здесь нет.
+  // (22008). Календарь считает `date.ts` — его дом в монорепо; тот же вызов стоит на разборе
+  // текста (`parse-ast.ts`) и на записи (`registry/validate-props.ts`).
   if ((kind === 'date' || kind === 'timestamp') && typeof value === 'string') {
     if (!hasValidCalendar(value)) {
       fail('TYPE', `свойство '${def.id}' (${kind}): дня '${value}' в календаре нет`, {

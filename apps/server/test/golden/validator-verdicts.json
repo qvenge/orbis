@@ -2201,5 +2201,17 @@
     "legacyVerdict": "ok",
     "newVerdict": "reject",
     "expectedDiff": "MERGED_VALUE_CONFLICT"
+  },
+  {
+    "name": "orbis/task: due_date «2026-02-30» — форма верна, дня в календаре нет",
+    "aspects": {
+      "orbis/task": {
+        "status": "planned",
+        "due_date": "2026-02-30"
+      }
+    },
+    "legacyVerdict": "ok",
+    "newVerdict": "reject",
+    "expectedDiff": "CALENDAR_DAY_EXISTS"
   }
 ]

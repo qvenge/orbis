@@ -153,6 +153,10 @@ describe('отказы вместо тихой пустоты (§С8-3, §6.4)',
     expect(bad({ prop: 'orbis/due_date', op: 'eq', value: '2026-02-30' }).message).toContain(
       'календаре',
     );
+    // Високосный контроль и здесь: без него проверка могла бы оказаться грубее календаря
+    // («в феврале всегда 28») и осталась бы зелёной на всех примерах выше.
+    expect(bad({ prop: 'orbis/due_date', op: 'eq', value: '2029-02-29' }).reason).toBe('TYPE');
+    expect(sqlOf({ prop: 'orbis/due_date', op: 'eq', value: '2028-02-29' })).toContain('::date');
     expect(bad({ prop: 'orbis/start_at', op: 'gt', value: '2026-07-03' }).reason).toBe('TYPE');
     expect(bad({ prop: 'orbis/routine_at', op: 'eq', value: '25:00' }).reason).toBe('TYPE');
     expect(bad({ prop: 'orbis/task_status', op: 'eq', value: 'готово' }).reason).toBe('TYPE');

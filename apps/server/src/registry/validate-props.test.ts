@@ -153,3 +153,73 @@ describe('границы decimal — decCmp, а не ajv (§А7-3, В8)', () => 
     expect(target('0.000')).toEqual(['TYPE']);
   });
 });
+
+// Календарь — не форма, и ajv его не выражает вовсе: `2026-02-30` проходит паттерн схемы
+// значения. Без этой проверки значение записывалось бы МОЛЧА, а падало позже и в другом
+// месте — на первом же `::date` в запросе (Postgres 22008), то есть дефект записи выглядел
+// бы поломкой чтения. Проверка живёт ВНЕ ajv, как и границы decimal, и потому не меняет ни
+// байта в `propertyValueJsonSchema` (значит, и в сидированной схеме аспекта).
+describe('календарь — hasValidCalendar, а не ajv (Р-9b-5)', () => {
+  const date = (value: unknown) =>
+    codes(validateEntityProps(REG, { props: { 'orbis/due_date': value }, aspects: [] }));
+  const stamp = (value: unknown) =>
+    codes(validateEntityProps(REG, { props: { 'orbis/start_at': value }, aspects: [] }));
+
+  test('несуществующий день отвергается и у date, и у timestamp', () => {
+    expect(date('2026-02-30')).toEqual(['TYPE']);
+    expect(date('2026-13-01')).toEqual(['TYPE']);
+    expect(date('2026-04-31')).toEqual(['TYPE']);
+    expect(date('2026-01-00')).toEqual(['TYPE']);
+    // У момента календарный день — те же первые десять символов, и второго правила нет.
+    expect(stamp('2026-02-30T09:00:00Z')).toEqual(['TYPE']);
+    expect(stamp('2026-13-01T09:00:00+03:00')).toEqual(['TYPE']);
+  });
+
+  test('високосный контроль: 29 февраля есть в 2028 и нет в 2029', () => {
+    // Без этой пары проверка могла бы оказаться ГРУБЕЕ календаря («в феврале всегда 28»)
+    // и осталась бы зелёной на всех примерах выше.
+    expect(date('2028-02-29')).toEqual([]);
+    expect(date('2029-02-29')).toEqual(['TYPE']);
+    expect(stamp('2028-02-29T09:00:00Z')).toEqual([]);
+    expect(stamp('2029-02-29T09:00:00Z')).toEqual(['TYPE']);
+    // Вековые годы — то же правило, что у `lastDayOfMonth`: 2000 високосный, 1900 нет.
+    expect(date('2000-02-29')).toEqual([]);
+    expect(date('1900-02-29')).toEqual(['TYPE']);
+  });
+
+  test('здоровые значения проходят, а отказ называет свойство и значение', () => {
+    expect(date('2026-07-05')).toEqual([]);
+    expect(stamp('2026-07-05T09:00:00+03:00')).toEqual([]);
+    const violations = validateEntityProps(REG, {
+      props: { 'orbis/due_date': '2026-02-30' },
+      aspects: [],
+    });
+    expect(violations).toEqual([
+      {
+        code: 'TYPE',
+        propertyId: 'orbis/due_date',
+        message: 'значения «2026-02-30» нет в календаре',
+      },
+    ]);
+  });
+
+  test('форма проверяется РАНЬШЕ календаря: мусор отвергает ajv, а не этот спутник', () => {
+    // Иначе `hasValidCalendar('банан')` вернул бы true («это не дата»), и мусор проехал бы.
+    expect(date('банан')).toEqual(['TYPE']);
+    expect(date('05.07.2026')).toEqual(['TYPE']);
+    expect(date(20260705)).toEqual(['TYPE']);
+  });
+
+  test('гейт по виду свойства: текстовое свойство с датой внутри паттерна не задето', () => {
+    // `orbis/run_bucket` — тип text, паттерн несёт дату; в SQL он не кастуется, и Р-9b-5
+    // оставил его как есть. Снятый гейт отвергал бы его молча.
+    expect(
+      codes(
+        validateEntityProps(REG, {
+          props: { 'orbis/run_bucket': '2026-02-30T07:00' },
+          aspects: [],
+        }),
+      ),
+    ).toEqual([]);
+  });
+});
