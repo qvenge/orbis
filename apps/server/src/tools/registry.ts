@@ -17,6 +17,7 @@ import {
   type RelationRoleDefinition,
   SERVICE_ASPECT_IDS,
 } from '@orbis/shared';
+import { queryAstJsonSchema } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { aspectDefinitions } from '../db/schema';
@@ -357,16 +358,47 @@ export type ThreadPostInput = z.infer<typeof threadPostInput>;
 
 const uuid = { type: 'string', format: 'uuid' } as const;
 
+/**
+ * `entity_query` — два входа, ровно один за вызов (§А5-4).
+ *
+ * Дерево канона приезжает сюда ЦЕЛИКОМ, а не ссылкой на внешний документ: схема уходит
+ * провайдеру (D29 — прогон на Responses API), а он никаких `$ref` за пределы объекта не
+ * резолвит. Рекурсия внутри дерева выражена `$ref: '#/$defs/node'` — указатель от КОРНЯ
+ * документа, поэтому определение узла обязано лежать в `$defs` самой схемы тула, а не
+ * вложенным в свойство `ast`. Отсюда и разборка `queryAstJsonSchema` на части: `$defs`
+ * поднимаются наверх, тело объекта ложится в `ast`, а `$schema`/`title` выбрасываются —
+ * это метаданные отдельного документа, и внутри чужой схемы они означали бы не то.
+ *
+ * Взаимное исключение — `oneOf` из двух `required`, а не «ast сильнее query»: два непустых
+ * входа означают два разных запроса в одном вызове, и молчаливый выбор победителя был бы
+ * отбором «не того» (§С8-3). Тот же вердикт даёт и zod-envelope — парность закреплена
+ * тестом `registry.test.ts`.
+ */
+const {
+  $schema: _astSchemaMeta,
+  $defs: astDefs,
+  title: _astTitle,
+  ...astBody
+} = queryAstJsonSchema;
+
 const entityQueryJsonSchema = {
   type: 'object',
   properties: {
     query: {
       type: 'string',
       minLength: 1,
-      description: 'строка в грамматике запросов Orbis §6, включая sortBy и limit',
+      description: 'строка в грамматике запросов Orbis §А5-3, включая sortBy и limit',
+    },
+    ast: {
+      ...astBody,
+      description:
+        'разобранный запрос деревом (§А5-7): and/or/not любой вложенности над предикатами. ' +
+        'Бери его, когда условие не выражается плоской строкой — например «(срок сегодня ИЛИ ' +
+        'просрочено) И не заблокировано». Имена в дереве — id свойств и аспектов, не подписи.',
     },
   },
-  required: ['query'],
+  $defs: astDefs,
+  oneOf: [{ required: ['query'] }, { required: ['ast'] }],
   additionalProperties: false,
 };
 
@@ -519,11 +551,12 @@ const batchExecuteJsonSchema = {
 const userQueryJsonSchema = {
   type: 'object',
   properties: {
-    query: { type: 'string', minLength: 1, description: 'строка в грамматике §6' },
+    query: { type: 'string', minLength: 1, description: 'строка в грамматике §А5-3' },
     aggregate: { type: 'string', enum: ['sum', 'count'] },
     field: {
       type: 'string',
-      description: 'обязателен при aggregate=sum: числовое поле аспекта (например amount)',
+      description:
+        'обязателен при aggregate=sum: числовое свойство — id или key (например orbis/amount)',
     },
   },
   required: ['query', 'aggregate'],
@@ -879,8 +912,11 @@ const CORE_TOOLS: OrbisToolDef[] = [
   {
     name: 'entity_query',
     // Примеры грамматики в description (fix round Task 8): модель не видит
-    // спецификацию §6 — без образцов синтаксиса холодный резолв category_ref
+    // спецификацию §А5-3 — без образцов синтаксиса холодный резолв category_ref
     // (инструкция системного промпта v1) гарантированно бился бы о парсер.
+    // Форма имён в примерах — NAMESPACED KEY (§А5-3а): голое `status=` серверный разбор
+    // читает только переходным мостом старой грамматики (умирает в Задаче 21), и учить
+    // модель по нему значило бы учить умирающему языку.
     // Третий пример — про aliases: синтаксис фильтра по полю-массиву ничем не
     // отличается от обычного равенства, и без образца модель не догадается, что
     // «такси» ищется среди синонимов категории, а не в её названии. Описание
@@ -894,7 +930,7 @@ const CORE_TOOLS: OrbisToolDef[] = [
     // Нормализация регистра в самом предикате требует функционального
     // GIN-индекса, то есть новой миграции, и вынесена в бэклог.
     description:
-      'Поиск/фильтрация сущностей грамматикой запросов Orbis (§6). Возвращает список сущностей (core-поля + tags + aspects). Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20»; «aspect=orbis/category, aliases=такси» (резолв категории по синониму: aliases — массив, фильтр ищет точное вхождение — регистр важен, синонимы строчные).',
+      'Поиск/фильтрация сущностей грамматикой запросов Orbis (§А5-3) или готовым деревом (ast). Возвращает список сущностей (core-поля + tags + aspects). Имена свойств и аспектов — namespaced key со слэшем. Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, limit=20»; «aspect=orbis/category, orbis/aliases=такси» (резолв категории по синониму: aliases — список, фильтр ищет точное вхождение — регистр важен, синонимы строчные).',
     inputJsonSchema: entityQueryJsonSchema,
     kind: 'read',
   },

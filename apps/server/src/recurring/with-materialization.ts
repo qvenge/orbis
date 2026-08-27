@@ -3,10 +3,10 @@
 // потребителей query-движка (01 §5.4: «любой запрос диапазона дат материализует»):
 // tRPC-роутер entity (query/count) и LLM/MCP-диспатч entity_query. Роутер budget (A6)
 // вызывает materializeInstances явно со своим окном — этот каркас ему не нужен.
-import type { QueryAst } from '@orbis/shared';
+import type { QueryAst } from '@orbis/shared/query';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
-import type { CompileContext } from '../query/compile';
+import type { CompileCtx } from '../query/compile-ast';
 import { queryContext } from '../query/context';
 import { materializationWindow, materializeInstances } from './materialize';
 
@@ -16,9 +16,9 @@ export interface QueryWithMaterializationOpts<T> {
   /** Сущность-контекст `this` (query-блок в body) или null. */
   thisEntityId: string | null;
   /** Разбор запроса; ошибку парсинга мапит вызывающий (TRPCError у роутера, ExecError у диспатча). */
-  parse: (cctx: CompileContext) => QueryAst;
+  parse: (cctx: CompileCtx) => QueryAst;
   /** Компиляция + исполнение под withIdentity-tx. */
-  run: (tx: Tx, ast: QueryAst, cctx: CompileContext) => Promise<T>;
+  run: (tx: Tx, ast: QueryAst, cctx: CompileCtx) => Promise<T>;
 }
 
 /**
@@ -38,7 +38,7 @@ export async function queryWithMaterialization<T>(
         kind: 'materialize';
         window: { from: string; to: string };
         ast: QueryAst;
-        cctx: CompileContext;
+        cctx: CompileCtx;
       };
   const phase1 = await withIdentity(db, actorUserId, async (tx): Promise<Phase1> => {
     const cctx = await queryContext(tx, actorUserId, opts.thisEntityId);

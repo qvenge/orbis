@@ -22,14 +22,13 @@ import {
   entityQueryInput,
   entityUpdateInput,
   newId,
-  parseQuery,
   pendingMessageId,
   propertyToLegacyField,
   proposeInput,
-  type QueryAst,
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
+import { type QueryAst, resolveLegacyFieldId } from '@orbis/shared/query';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import { isWorkerThreadTarget } from '../agent-loop/queries';
@@ -69,12 +68,12 @@ import {
 } from '../policy/confirmation';
 import { createPending, deferDedupeKey, listRunUnits, operationsNoun } from '../policy/pending';
 import {
-  type CompileContext,
-  compileCount,
-  compileQuery,
-  compileSum,
-  QueryCompileError,
-} from '../query/compile';
+  type CompileCtx,
+  compileCountAst,
+  compileQueryAst,
+  compileSumAst,
+} from '../query/compile-ast';
+import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { runAsk } from '../routines/ask';
 import { CORE_FIELD_LABELS, MAX_RUN_UNITS } from '../routines/constants';
@@ -613,9 +612,17 @@ async function runUndoLast(ctx: ToolCallCtx, input: unknown): Promise<ToolDispat
 
 /**
  * entity_query с хуком материализации (§5.4, fix round A3): тот же общий каркас, что у
- * entity.query/count роутера, — окно по start_at/occurred_on материализует recurring-
- * инстансы ДО компиляции; ошибки парсинга/компиляции — ExecError/VALIDATION (§6.4),
- * их развернёт catch dispatchTool.
+ * entity.query/count роутера, — окно по датам материализует recurring-инстансы ДО
+ * компиляции; ошибки разбора/компиляции — ExecError/VALIDATION (§6.4), их развернёт catch
+ * dispatchTool.
+ *
+ * ДВА ВХОДА, ОДИН ПУТЬ (§А5-4): текст разбирается в то же дерево, что приходит в `ast`, и
+ * дальше они неразличимы — окно, компиляция и карточка одни на оба. Дерево со входа `ast`
+ * уже прошло схему канона в envelope (`entityQueryInput`), а по РЕЕСТРУ его проверяет
+ * компилятор — неизвестный id свойства, аспекта или роли он отвергает `VALIDATION` с
+ * причиной `UNKNOWN_FIELD`/`UNKNOWN_ASPECT`/`UNKNOWN_ROLE`. Второй сверки по реестру здесь
+ * нет намеренно: она была бы вторым мнением о том, что в реестре есть, и первым же
+ * расхождением дала бы «схема пропустила, компилятор упал».
  */
 async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
   const parsed = parseEnvelope(entityQueryInput, input, 'entity_query');
@@ -623,9 +630,9 @@ async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDis
     db: ctx.db,
     actorUserId: ctx.actorUserId,
     thisEntityId: null, // `this` вне контекста сущности
-    parse: (cctx) => parseAstOrThrow(parsed.query, cctx),
+    parse: (cctx) => parsed.ast ?? parseQueryText(parsed.query as string, cctx),
     run: async (tx, ast, cctx) => {
-      const compiled = compileOrThrow(() => compileQuery(ast, cctx));
+      const compiled = compileQueryAst(ast, cctx);
       const rows = await tx.execute(compiled);
       const entities = [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
       const card: Card = {
@@ -655,7 +662,13 @@ async function runBudgetStatus(ctx: ToolCallCtx, input: unknown): Promise<ToolDi
  * user_query (решение 7 плана): агрегация НА SQL — sum через ::numeric::text
  * (точность decimal §3.3, не JS-float), count(*) без limit (агрегат по всей выборке).
  * Хук материализации §5.4 (обязательство ревью A3): тот же каркас, что entity_query, —
- * агрегат с окном по start_at/occurred_on считается ПОСЛЕ материализации инстансов окна.
+ * агрегат с окном по датам считается ПОСЛЕ материализации инстансов окна.
+ *
+ * `field` — АДРЕС СВОЙСТВА, а не имя поля аспекта: компилятор канона адресует значение в
+ * `props` по id (§А5-2). Резолвится он тем же правилом, что имена в тексте запроса
+ * (`resolveLegacyFieldId`): id, key или старое имя поля — до Задачи 21 модель видит в
+ * примерах и промптах именно старые (`amount`), и отвергать их значило бы сломать вопрос
+ * «сколько потрачено» на ровном месте.
  */
 async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispatchResult> {
   const parsed = parseEnvelope(userQueryInput, input, 'user_query');
@@ -669,12 +682,10 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
     db: ctx.db,
     actorUserId: ctx.actorUserId,
     thisEntityId: null, // `this` вне контекста сущности
-    parse: (cctx) => parseAstOrThrow(parsed.query, cctx),
+    parse: (cctx) => parseQueryText(parsed.query, cctx),
     run: async (tx, ast, cctx) => {
       if (parsed.aggregate === 'count') {
-        // compileOrThrow обязателен и здесь: QueryCompileError (например children_of=this
-        // вне контекста) — структурная VALIDATION, не throw мимо catch (fix round)
-        const compiledCount = compileOrThrow(() => compileCount(ast, cctx));
+        const compiledCount = compileCountAst(ast, cctx);
         const rows = await tx.execute(compiledCount);
         const count = Number(rows[0]?.count);
         return {
@@ -685,7 +696,7 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
       }
       // aggregate === 'sum'; field проверен выше
       const field = parsed.field as string;
-      const compiled = compileOrThrow(() => compileSum(ast, cctx, field));
+      const compiled = compileSumAst(ast, sumProperty(field, cctx), cctx);
       const rows = await tx.execute(compiled);
       const count = Number(rows[0]?.count);
       const value = (rows[0]?.sum as string | null) ?? '0'; // пустая выборка: sum NULL → '0'
@@ -696,6 +707,22 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
       };
     },
   });
+}
+
+/**
+ * Имя поля агрегата → id свойства. Не резолвится — структурная VALIDATION с именем, которое
+ * прислала модель: у `compileSumAst` на руках был бы только несуществующий id, и отказ
+ * назвал бы его вместо того, что написал вызывающий.
+ */
+function sumProperty(field: string, cctx: CompileCtx): string {
+  const id = resolveLegacyFieldId(field, parseRegistryOf(cctx));
+  if (id === undefined) {
+    throw new ExecError('VALIDATION', `user_query: свойства '${field}' нет в реестре`, {
+      tool: 'user_query',
+      field,
+    });
+  }
+  return id;
 }
 
 function aggregateCard(
@@ -1748,25 +1775,8 @@ function parseEnvelope<S extends z.ZodTypeAny>(
   return parsed.data;
 }
 
-/** Разбор запроса грамматики §6: ошибка парсинга → VALIDATION со структурой §6.4. */
-function parseAstOrThrow(query: string, cctx: CompileContext): QueryAst {
-  const parsed = parseQuery(query, cctx.catalog);
-  if (!parsed.ok) {
-    throw new ExecError('VALIDATION', parsed.error.message, {
-      position: parsed.error.position,
-    });
-  }
-  return parsed.ast;
-}
-
-/** Структурная ошибка компиляции (`this` вне контекста, нечисловое поле sum) → VALIDATION. */
-function compileOrThrow<T>(fn: () => T): T {
-  try {
-    return fn();
-  } catch (e) {
-    if (e instanceof QueryCompileError) {
-      throw new ExecError('VALIDATION', e.message);
-    }
-    throw e;
-  }
-}
+/**
+ * Структурный отказ компиляции (`this` вне контекста, нечисловое свойство sum, значение не
+ * той формы) компилятор канона уже бросает как `ExecError('VALIDATION')` — перевод больше
+ * не нужен, и обёртка осталась бы враньём про то, что здесь что-то происходит.
+ */

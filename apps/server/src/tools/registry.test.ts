@@ -3,13 +3,13 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   askInput,
-  aspectJsonSchema,
   attachAspectInput,
+  BUILTIN_ASPECT_DEFS,
   BUILTIN_ASPECT_IDS,
+  BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   batchExecuteInput,
   budgetStatusInput,
-  buildFieldCatalog,
   checkpointInput,
   claimTaskInput,
   entityCreateInput,
@@ -18,15 +18,15 @@ import {
   entityUpdateInput,
   finishInput,
   myQueueInput,
-  parseQuery,
   proposeInput,
   relationCreateInput,
   relationDeleteInput,
   runStepInput,
   SERVICE_ASPECT_IDS,
 } from '@orbis/shared';
+import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { eq, isNull, sql } from 'drizzle-orm';
-import type { z } from 'zod';
+import { z } from 'zod';
 import {
   adminDb,
   appDb,
@@ -210,17 +210,38 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('entity_query: description содержит примеры грамматики §6 (fix round Task 8)', async () => {
-    // Модель не видит спецификацию §6 — без примеров в description холодный резолв
+  test('entity_query: description содержит примеры грамматики §А5-3 (fix round Task 8)', async () => {
+    // Модель не видит спецификацию §А5-3 — без примеров в description холодный резолв
     // category_ref (инструкция промпта v1) гарантированно бился бы о парсер
     const def = defOf(await registryFor(userB), 'entity_query');
     expect(def.description).toContain('aspect=orbis/category, search=Еда');
     expect(def.description).toContain(
-      'aspect=orbis/task, status=!done&!cancelled, sortBy=updated_at:desc, limit=20',
+      'aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, limit=20',
     );
-    // Синтаксис фильтра по полю-массиву неотличим от равенства: без образца модель не
-    // догадается искать «такси» среди синонимов категории, а не в её названии.
-    expect(def.description).toContain('aspect=orbis/category, aliases=такси');
+    // Синтаксис фильтра по списочному свойству неотличим от равенства: без образца модель
+    // не догадается искать «такси» среди синонимов категории, а не в её названии.
+    expect(def.description).toContain('aspect=orbis/category, orbis/aliases=такси');
+  });
+
+  test('entity_query: второй вход — дерево канона, и его схема уехала В тул целиком', async () => {
+    // Провайдер (D29) не резолвит `$ref` за пределы документа тула: определение узла обязано
+    // лежать в `$defs` САМОЙ схемы тула, иначе рекурсивная ветка приедет к нему битой.
+    const def = defOf(await registryFor(userB), 'entity_query');
+    const schema = def.inputJsonSchema;
+    const props = schema.properties as Record<string, Record<string, unknown>>;
+    expect(Object.keys(props).sort()).toEqual(['ast', 'query']);
+    expect((schema.$defs as Record<string, unknown>).node).toBeDefined();
+    // Ровно один вход за вызов — тем же вердиктом, что даёт zod-envelope.
+    expect(schema.oneOf).toEqual([{ required: ['query'] }, { required: ['ast'] }]);
+    expect(entityQueryInput.safeParse({ query: 'tags=x', ast: { filter: null } }).success).toBe(
+      false,
+    );
+    expect(entityQueryInput.safeParse({}).success).toBe(false);
+    expect(entityQueryInput.safeParse({ ast: { filter: { tag: 'дом' } } }).success).toBe(true);
+    // Ссылка внутри дерева осталась указателем ОТ КОРНЯ — иначе она указывала бы в пустоту.
+    expect(JSON.stringify(props.ast)).toContain('#/$defs/node');
+    // Метаданные отдельного документа внутрь чужой схемы не едут.
+    expect(props.ast?.$schema).toBeUndefined();
   });
 
   // Пример — это то, ЧТО МОДЕЛЬ СКОПИРУЕТ. Непарсящийся образец хуже отсутствия примера:
@@ -253,12 +274,20 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Не равенство: четвёртый пример — законная правка, и она обязана попасть под ту же
     // проверку, а не уронить тест на счётчике.
     expect(examples.length).toBeGreaterThanOrEqual(3);
-    const catalog = buildFieldCatalog(
-      BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
+    // Разбор — НОВОЙ грамматикой по реестру, БЕЗ переходного моста: мост читает умирающую
+    // форму, и пример, живой только через него, учил бы модель тому, что исчезнет в
+    // Задаче 21. Реестр — встроенный, тот же, что кладёт сид.
+    const reg = toParseRegistry(
+      {
+        properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+        aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+        roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+      },
+      'ru',
     );
     for (const example of examples) {
-      const r = parseQuery(example, catalog);
-      expect(r.ok ? null : `${example}: ${r.error.message}`).toBeNull();
+      const r = parseQueryAst(example, reg);
+      expect(r.ok ? null : `${example}: ${r.error.code} ${r.error.message}`).toBeNull();
     }
   });
 });
@@ -360,8 +389,20 @@ describe('роли рёбер в реестре тулов (§А4-3/§А4-4)', (
 });
 
 describe('парность zod-envelope ↔ рукописная JSON Schema (§9.2)', () => {
+  /**
+   * Объект внутри envelope: у `entity_query` схема обёрнута `.refine` («ровно одно из
+   * query|ast», §А5-4), а у `ZodEffects` нет ни `.shape`, ни `.isOptional()` по ключам.
+   * Разворачиваем до объекта, а не заводим вторую схему без правила: правило и форма
+   * обязаны жить в одном месте, иначе парность проверялась бы у ДРУГОЙ схемы.
+   */
   // biome-ignore lint/suspicious/noExplicitAny: доступ к .shape любого ZodObject
-  const ZOD_BY_TOOL: Record<string, z.ZodObject<any>> = {
+  const objectOf = (schema: z.ZodTypeAny): z.ZodObject<any> =>
+    schema instanceof z.ZodEffects
+      ? objectOf(schema.innerType() as z.ZodTypeAny)
+      : // biome-ignore lint/suspicious/noExplicitAny: см. выше
+        (schema as z.ZodObject<any>);
+
+  const ZOD_BY_TOOL: Record<string, z.ZodTypeAny> = {
     entity_query: entityQueryInput,
     entity_get: entityGetInput,
     entity_create: entityCreateInput,
@@ -390,7 +431,8 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
 
   test('каждый ключ zod-схемы есть в JSON Schema и наоборот; required = не-optional ключи zod', async () => {
     const defs = await registryFor(userB);
-    for (const [tool, zodSchema] of Object.entries(ZOD_BY_TOOL)) {
+    for (const [tool, schema] of Object.entries(ZOD_BY_TOOL)) {
+      const zodSchema = objectOf(schema);
       const jsonSchema = defOf(defs, tool).inputJsonSchema;
       const props = Object.keys(jsonSchema.properties as Record<string, unknown>).sort();
       const zodKeys = Object.keys(zodSchema.shape).sort();

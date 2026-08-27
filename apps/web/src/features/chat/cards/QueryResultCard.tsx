@@ -23,7 +23,7 @@ export function QueryResultCard({ card }: { card: QueryResultData }) {
           >
             {card.aggregate.value}
           </span>
-          {/* count у агрегата — это count(*) по ВСЕЙ выборке (compile.ts:71-91), то есть
+          {/* count у агрегата — это count(*) по ВСЕЙ выборке (`compile-ast.ts`, compileSumAst), то есть
               число, которого на экране больше нет нигде. У op='count' оно совпадает со
               значением агрегата — дубль не печатаем. */}
           {card.aggregate.op !== 'count' && (

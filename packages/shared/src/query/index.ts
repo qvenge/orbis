@@ -16,6 +16,10 @@
 export * from './ast';
 export * from './ast-json-schema';
 export { buildCatalogFromRegistry } from './catalog';
+// Переходный мост старой грамматики (Задача 9b, умирает вместе с ней в Задаче 21): он
+// здесь, а не в корневом барреле, потому что отдаёт КАНОН — и потребитель у него один,
+// серверный разбор текста.
+export * from './legacy-bridge';
 export * from './parse-ast';
 export * from './print';
 export * from './static';

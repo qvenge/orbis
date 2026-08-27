@@ -464,6 +464,101 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
     expectError(r, 'VALIDATION');
   });
 
+  // §А5-4: у тула два входа, и второй существует ради того, чего плоская строка НЕ
+  // выражает, — дерева. Поэтому проверяется не «ast принимается», а что он отбирает и
+  // где отказывает: схема канона на входе, реестр — компилятором.
+  test('entity_query {ast}: дерево канона отбирает; {query}+{ast} вместе и неизвестный id — VALIDATION', async () => {
+    const inbox = await seedEntity(userA, {
+      title: 'Дерево: inbox',
+      tags: ['qtest-ast'],
+      aspects: { 'orbis/task': { status: 'inbox' } },
+    });
+    await seedEntity(userA, {
+      title: 'Дерево: done',
+      tags: ['qtest-ast'],
+      aspects: { 'orbis/task': { status: 'done' } },
+    });
+
+    // `(статус inbox ИЛИ planned) И тег` — плоской строкой §А5-3 такое не пишется.
+    const ok = await dispatchTool(ctxFor(), 'entity_query', {
+      ast: {
+        filter: {
+          and: [
+            { tag: 'qtest-ast' },
+            {
+              or: [
+                { prop: 'orbis/task_status', op: 'eq', value: 'inbox' },
+                { prop: 'orbis/task_status', op: 'eq', value: 'planned' },
+              ],
+            },
+          ],
+        },
+        title: 'Дерево',
+      },
+    });
+    expect(ok.status).toBe('ok');
+    if (ok.status !== 'ok') return;
+    expect((ok.result as WireEntity[]).map((e) => e.id)).toEqual([inbox.id]);
+    // Проекция читается из того же дерева — карточка не знает, текстом её просили или ast.
+    expect((ok.card as { title?: string }).title).toBe('Дерево');
+
+    // Два входа сразу — два разных запроса в одном вызове; молчаливый победитель был бы
+    // отбором «не того» (§С8-3).
+    expectError(
+      await dispatchTool(ctxFor(), 'entity_query', {
+        query: 'tags=qtest-ast',
+        ast: { filter: null },
+      }),
+      'VALIDATION',
+    );
+    // Ни одного — тоже отказ, а не «весь граф».
+    expectError(await dispatchTool(ctxFor(), 'entity_query', {}), 'VALIDATION');
+
+    // Схема канона стоит на входе: узел с чужим ключом до компилятора не доезжает.
+    expectError(
+      await dispatchTool(ctxFor(), 'entity_query', { ast: { filter: { нетtакого: 1 } } }),
+      'VALIDATION',
+    );
+
+    // А вот РЕЕСТР проверяет компилятор — id, которого в нём нет, даёт UNKNOWN_FIELD.
+    const unknown = await dispatchTool(ctxFor(), 'entity_query', {
+      ast: { filter: { prop: 'orbis/нетtакого', op: 'eq', value: 'x' } },
+    });
+    expectError(unknown, 'VALIDATION');
+    if (unknown.status === 'error') {
+      expect((unknown.error.details as { reason?: string }).reason).toBe('UNKNOWN_FIELD');
+    }
+
+    // Форма литерала — тоже до SQL: 'банан' рядом с ::date дал бы ошибку Postgres.
+    const badForm = await dispatchTool(ctxFor(), 'entity_query', {
+      ast: { filter: { prop: 'orbis/due_date', op: 'eq', value: 'банан' } },
+    });
+    expectError(badForm, 'VALIDATION');
+    if (badForm.status === 'error') {
+      expect((badForm.error.details as { reason?: string }).reason).toBe('TYPE');
+    }
+  });
+
+  // Мост старой грамматики (переходный, умирает в Задаче 21): тексты сидов и Agenda ещё
+  // старой формы, и сервер обязан читать ОБЕ. Проверяется РАВЕНСТВО ВЫДАЧИ, а не «обе не
+  // упали»: мост, отдающий другое дерево, был бы хуже отказа.
+  test('entity_query: старая форма текста и новая дают ОДИН результат', async () => {
+    const created = await seedEntity(userA, {
+      title: 'Мост',
+      tags: ['qtest-bridge'],
+      aspects: { 'orbis/task': { status: 'inbox' } },
+    });
+    const ids = async (query: string) => {
+      const r = await dispatchTool(ctxFor(), 'entity_query', { query });
+      expect(r.status).toBe('ok');
+      return r.status === 'ok' ? (r.result as WireEntity[]).map((e) => e.id) : [];
+    };
+    const fresh = await ids('tags=qtest-bridge, orbis/task_status=inbox');
+    const legacy = await ids('tags=qtest-bridge, aspect=orbis/task, status=inbox');
+    expect(legacy).toEqual([created.id]);
+    expect(legacy).toEqual(fresh);
+  });
+
   test('entity_get: include по умолчанию body+relations; несуществующий id → NOT_FOUND', async () => {
     const created = await seedEntity(userA, { title: 'Читаемая', tags: [] });
     const r = await dispatchTool(ctxFor(), 'entity_get', { id: created.id });

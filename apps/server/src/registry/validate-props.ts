@@ -16,6 +16,8 @@ import {
   type AspectDefinition,
   type DecimalBounds,
   type PropertyDefinition,
+  type PropertyType,
+  propertyLiteralJsonSchema,
   propertyValueJsonSchema,
   X_ORBIS_DECIMAL,
   X_ORBIS_TYPE,
@@ -90,6 +92,26 @@ function decimalViolation(bounds: DecimalBounds, value: unknown): string | undef
     }
   }
   return undefined;
+}
+
+/**
+ * Форма ОДНОГО ЛИТЕРАЛА по типу свойства: `undefined` — годится, строка — человеческий
+ * текст нарушения.
+ *
+ * Живёт здесь, а не в компиляторе запросов, по одной причине: ajv в проекте настроен
+ * ровно один раз (strict + ajv-formats + два собственных keyword'а), и кеш скомпилированных
+ * валидаторов ключуется текстом схемы. Второй инстанс ajv рядом означал бы второй набор
+ * правил strict-режима — то есть схема, годная для записи, могла бы не скомпилироваться для
+ * сравнения.
+ *
+ * Потребитель — `query/compile-ast.ts` (гейт значения предиката): вход `ast:` тула §А5-4
+ * идёт мимо парсера, и без этой проверки литерал не той формы доезжал бы до Postgres.
+ */
+export function literalFormViolation(type: PropertyType, value: unknown): string | undefined {
+  const validate = getValidator(propertyLiteralJsonSchema(type));
+  if (validate(value)) return undefined;
+  // `validate.errors` — состояние функции ajv; читается сразу же, до следующего вызова.
+  return ajv.errorsText(validate.errors, { dataVar: 'значение' });
 }
 
 /**

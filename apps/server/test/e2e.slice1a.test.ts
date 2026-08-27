@@ -195,6 +195,38 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(count).toBe(1);
   });
 
+  // ── Шаг 4b: КАЖДЫЙ query-блок сидированных смарт-листов исполняется сервером ──
+  test('шаг 4b: все query-блоки шести смарт-листов исполняются через мост старой формы', async () => {
+    // С Задачи 9b сервер разбирает текст каноном (§А5-3), а тела смарт-листов написаны
+    // СТАРОЙ формой и переводятся только Задачей 21. Между этими двумя задачами их читает
+    // переходный мост — и проверять его надо на настоящих телах из БД, а не на образцах в
+    // тесте: образец переживёт правку сида, а владелец увидит красную плашку.
+    const lists = await a.entity.query({ query: 'tags=smart-list' });
+    expect(lists.length).toBeGreaterThanOrEqual(6);
+    const blocks = lists.flatMap((e) =>
+      [...(e.body ?? '').matchAll(/\{\{query:([\s\S]*?)\}\}/g)].map((m) => (m[1] as string).trim()),
+    );
+    // Страховка от «регулярка перестала находить»: пустой список прошёл бы цикл молча.
+    expect(blocks.length).toBeGreaterThanOrEqual(9);
+    for (const block of blocks) {
+      // Отказ обязан быть видимым в отчёте вместе с самим текстом блока: без него
+      // «не прошло» приходится искать, перебирая тела руками.
+      const rows = await a.entity.query({ query: block }).catch((e: unknown) => {
+        throw new Error(`блок не исполнился: «${block}» — ${(e as Error).message}`);
+      });
+      expect(Array.isArray(rows)).toBe(true);
+      // Бейдж сайдбара считает первый блок тем же путём — count обязан пройти тоже.
+      const { count } = await a.entity.count({ query: block });
+      expect(typeof count).toBe('number');
+    }
+    // Блок «Сегодня» отбирает не пусто и не всё: сегодняшняя задача в нём есть, а
+    // сидированные категории — нет. Иначе «исполнился» означало бы «вернул что угодно».
+    const today = blocks.find((b) => b.includes('due_date=today'));
+    if (today === undefined) throw new Error('в телах нет блока «Сегодня»');
+    const todayRows = await a.entity.query({ query: today });
+    expect(todayRows.every((r) => r.aspectsMap['orbis/task'] !== undefined)).toBe(true);
+  });
+
   // ── Шаг 5: update→done, undo, повторный undo → ошибка ──────────────────────
   test('шаг 5: update статус→done (completed_at); undoLast возвращает статус; повторный undo → BAD_REQUEST', async () => {
     // Переход в done проставляет completed_at сервером (§3.2)

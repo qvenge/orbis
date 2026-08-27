@@ -136,6 +136,53 @@ function elementSchema(type: PropertyType): Record<string, unknown> {
 }
 
 /**
+ * Ключевые слова ГРАНИЦ — единственное, чем схема СРАВНЕНИЯ отличается от схемы записи
+ * (см. `propertyLiteralJsonSchema`). Список закрыт и перечислен здесь один раз: границы
+ * пишет `elementSchema` выше, и второе их перечисление на месте разъехалось бы с ним при
+ * первом же новом ограничении словаря.
+ */
+const BOUND_KEYWORDS: readonly string[] = [
+  'minimum',
+  'maximum',
+  'minLength',
+  'maxLength',
+  'minItems',
+  'maxItems',
+  X_ORBIS_DECIMAL,
+];
+
+/**
+ * JSON Schema ОДНОГО ЛИТЕРАЛА для СРАВНЕНИЯ — та же схема, по которой проверяется запись,
+ * минус границы и минус обёртка списка.
+ *
+ * Зачем отдельная функция и почему именно такая разница. Компилятор запросов обязан знать
+ * ФОРМУ литерала: `{prop:'orbis/due_date', op:'eq', value:'банан'}` со входа `ast:` тула
+ * (§А5-4) иначе собрал бы SQL с `'банан'` рядом с `::date` и вернул бы data exception
+ * Postgres вместо структурного отказа с именем свойства. Форма уже описана ровно один раз —
+ * здесь, на стороне записи; второй её копией в компиляторе завелась бы вторая правда о том,
+ * что такое дата.
+ *
+ * ГРАНИЦЫ ПРИ ЭТОМ СНЯТЫ, и это не упрощение, а СЕМАНТИКА: `min`/`max`/`maxLength` — правило
+ * ЗАПИСИ, а фильтр по значению вне границ (`orbis/amount>1000000` при максимуме меньше) —
+ * законный запрос, который честно вернёт пусто. То же решение и теми же словами записано в
+ * парсере (`query/parse-ast.ts`, докблок `parseScalar`): язык запросов границ не проверяет.
+ * Обёртка списка снята потому, что в предикате сравнивается ЭЛЕМЕНТ (`contains`), а не весь
+ * список.
+ */
+export function propertyLiteralJsonSchema(type: PropertyType): Record<string, unknown> {
+  const full = propertyValueJsonSchema(type);
+  const items = full.items;
+  const element: Record<string, unknown> =
+    full.type === 'array' && typeof items === 'object' && items !== null
+      ? { ...(items as Record<string, unknown>) }
+      : { ...full };
+  for (const keyword of BOUND_KEYWORDS) delete element[keyword];
+  // `x-orbis-type` живёт только на верхнем уровне схемы значения, а элемент списка его не
+  // несёт: восстанавливаем, чтобы у любой схемы этой пары была копия типа (ref Р1).
+  return { ...element, [X_ORBIS_TYPE]: type };
+}
+
+/**
  * JSON Schema значения ОДНОГО свойства по его типу; `x-orbis-type` — копия типа (ref Р1).
  *
  * Признак списка у скаляров — `cardinality: 'many'` (§А2-2), у `json` — наличие `maxItems`

@@ -331,7 +331,7 @@ test('select-варианты: ASCII key, порядок rank = порядок e
     expect(zodField).toBeDefined();
     if (zodField === undefined) continue;
     const expected = enumValues(zodField);
-    // Порядок вариантов — норматив: по нему сортируются смарт-листы (compile.ts:569-583).
+    // Порядок вариантов — норматив: по нему сортируются смарт-листы (`compile-ast.ts`, sortItem).
     expect(`${propertyId}: ${type.options.map((o) => o.key).join(',')}`).toBe(
       `${propertyId}: ${expected.join(',')}`,
     );

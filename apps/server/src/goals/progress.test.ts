@@ -374,13 +374,15 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
     const user = freshUserId();
     const caller = callerFor(user);
     const row = await createIncome(caller, 'Взнос', '10.00', ['drift']);
-    // Рассинхрон реестра и данных: каталог считает amount числом, а в JSONB текст.
+    // Рассинхрон реестра и данных: реестр считает orbis/amount числом, а в JSONB текст.
     // Через executor такое не пройдёт (ajv), поэтому пишем админ-DSN мимо него —
-    // ровно как это выглядело бы после ручной правки или дрейфа схемы аспекта.
+    // ровно как это выглядело бы после ручной правки или дрейфа определения свойства.
+    // Портится `props` (НОВАЯ форма хранения, §А1-1): именно её читает компилятор канона,
+    // и порча старой карты после Задачи 9b на SQL уже не влияет вовсе.
     const admin = adminDb();
     try {
       await admin.db.execute(
-        sql`UPDATE entities SET aspects_legacy = jsonb_set(aspects_legacy, '{orbis/financial,amount}', '"не число"') WHERE id = ${row.id}`,
+        sql`UPDATE entities SET props = jsonb_set(props, '{orbis/amount}', '"не число"') WHERE id = ${row.id}`,
       );
     } finally {
       await admin.client.end();
@@ -423,7 +425,7 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
     const admin = adminDb();
     try {
       await admin.db.execute(
-        sql`UPDATE entities SET aspects_legacy = jsonb_set(aspects_legacy, '{orbis/financial,amount}', '"NaN"') WHERE id = ${row.id}`,
+        sql`UPDATE entities SET props = jsonb_set(props, '{orbis/amount}', '"NaN"') WHERE id = ${row.id}`,
       );
     } finally {
       await admin.client.end();
@@ -604,14 +606,19 @@ describe('entity.get: прогресс приезжает с целью и то�
       await countingCaller.entity.get({ id: goal.id });
       const goalQueries = [...seen];
 
-      // Каталог полей читается ТОЛЬКО расчётом прогресса — его отсутствие и есть
-      // доказательство, что ветка по аспекту не пускает обычную сущность в расчёт.
+      // Реестр читается ТОЛЬКО расчётом прогресса — его отсутствие и есть доказательство,
+      // что ветка по аспекту не пускает обычную сущность в расчёт.
       expect(plainQueries.some((q) => q.includes('aspect_definitions'))).toBe(false);
       expect(goalQueries.some((q) => q.includes('aspect_definitions'))).toBe(true);
-      // Измерено: 6 запросов на обычную сущность (begin + 2 identity + сущность +
-      // связи + commit) и 10 на цель (+ каталог, + таймзона, + savepoint, + агрегат).
+      // Измерено: 6 запросов на обычную сущность (begin + 2 identity + сущность + связи +
+      // commit) и 14 на цель (+ пять запросов снимка реестра, + таймзона, + savepoint,
+      // + агрегат). Было 10: снимок реестра §А10-1 стоит пяти запросов там, где старый
+      // каталог полей стоил одного (`SELECT id, schema FROM aspect_definitions`), — это
+      // цена перехода на реестр, названная числом, а не спрятанная. Процессный кеш по
+      // ключу `(owner, version)` заводит Задача 14; когда он появится, число здесь упадёт,
+      // и упасть оно обязано ЗАМЕТНО — на то тест и считает запросы.
       expect(plainQueries.length).toBe(6);
-      expect(goalQueries.length).toBe(10);
+      expect(goalQueries.length).toBe(14);
     } finally {
       await counted.end();
     }

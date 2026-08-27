@@ -22,20 +22,21 @@
 //    конца, и наружу уезжают только они: агрегат считает SQL через `::numeric`, а
 //    процент клиент выводит из тех же строк точным BigInt (§3.3). Числа с плавающей
 //    точкой контракт этой функции не пересекают вовсе.
-import { type GoalAspect, goalAspectSchema, parseQuery } from '@orbis/shared';
+import { type GoalAspect, goalAspectSchema } from '@orbis/shared';
+import { type QueryAst, resolveLegacyFieldId } from '@orbis/shared/query';
 import type { SQL } from 'drizzle-orm';
 import { decRatio } from '../budget/decimal';
 import type { Tx } from '../db/with-identity';
+import { ExecError } from '../errors';
 import type { WireEntity } from '../executor/types';
 import {
-  type CompileContext,
-  compileCount,
-  compileLatest,
-  compileSum,
-  QueryCompileError,
-  QueryFieldError,
-} from '../query/compile';
+  type CompileCtx,
+  compileCountAst,
+  compileLatestAst,
+  compileSumAst,
+} from '../query/compile-ast';
 import { queryContext } from '../query/context';
+import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 
 /**
  * Почему прогресс не посчитался. Один литерал был бы враньём разной степени:
@@ -234,11 +235,14 @@ export async function goalProgressFor(
  */
 export async function computeGoalProgress(
   tx: Tx,
-  ctx: CompileContext,
+  ctx: CompileCtx,
   goal: GoalAspect,
 ): Promise<GoalProgress> {
   const target = goal.target_value;
   const src = goal.progress_source;
+  // Сущность-хозяин query-блока: у `CompileCtx` поле НЕОБЯЗАТЕЛЬНОЕ («контекста нет»), а
+  // журналу нужен один вид отсутствия — иначе строка лога отличалась бы от вызывающего.
+  const goalId = ctx.thisEntityId ?? null;
   const failed = (unsupported: GoalProgressUnsupported): GoalProgress => ({
     current: '0',
     target,
@@ -255,49 +259,67 @@ export async function computeGoalProgress(
     logFailure(
       'array_field',
       src.field,
-      ctx.thisEntityId,
+      goalId,
       `отказ array_field: поле '${src.field}' указывает внутрь JSONB-массива, механизм целей такие поля не считает (§12 п.6)`,
     );
     return failed('array_field');
   }
 
-  const parsed = parseQuery(src.query, ctx.catalog);
-  if (!parsed.ok) {
+  // `progress_source.query` остаётся ТЕКСТОМ (хранение дерева — Задача 10b), поэтому он
+  // разбирается на каждом чтении цели — той же единственной точкой, что и запросы тулов:
+  // цель, написанная старой формой, обязана читаться ровно так же, как смарт-лист.
+  let ast: QueryAst;
+  try {
+    ast = parseQueryText(src.query, ctx);
+  } catch (e) {
+    if (!(e instanceof ExecError)) throw e;
     logFailure(
       'parse',
       src.query,
-      ctx.thisEntityId,
-      `отказ invalid_query: запрос '${src.query}' не разобрался грамматикой §6.1 — ${parsed.error.message} (позиция ${parsed.error.position})`,
+      goalId,
+      `отказ invalid_query: запрос '${src.query}' не разобрался грамматикой §6.1 — ${e.message}`,
     );
     return failed('invalid_query');
+  }
+
+  // Имя поля агрегата резолвится ДО компиляции и своим ярлыком: у компилятора канона на
+  // руках был бы только id, и «нет такого свойства» стало бы неотличимо от неизвестного id
+  // внутри самого запроса — то есть `invalid_field` и `invalid_query` слились бы.
+  let property = '';
+  if (src.aggregate !== 'count') {
+    const resolved = resolveLegacyFieldId(src.field, parseRegistryOf(ctx));
+    if (resolved === undefined) {
+      const message = `поле '${src.field}' не разрешилось реестром: нет такого свойства или оно неоднозначно`;
+      logFailure('compile_field', message, goalId, `отказ invalid_field: ${message}`);
+      return failed('invalid_field');
+    }
+    property = resolved;
   }
 
   let compiled: SQL;
   try {
     compiled =
       src.aggregate === 'count'
-        ? compileCount(parsed.ast, ctx)
+        ? compileCountAst(ast, ctx)
         : src.aggregate === 'sum'
-          ? compileSum(parsed.ast, ctx, src.field)
-          : compileLatest(parsed.ast, ctx, src.field);
+          ? compileSumAst(ast, property, ctx)
+          : compileLatestAst(ast, property, ctx);
   } catch (e) {
-    // QueryFieldError — подкласс QueryCompileError, порядок проверок значим.
-    // Сообщения компилятора уже человеческие и называют поле/тип — своего текста поверх
-    // им не нужно, нужен только ярлык, по которому строку ищут в логе.
-    if (e instanceof QueryFieldError) {
-      logFailure('compile_field', e.message, ctx.thisEntityId, `отказ invalid_field: ${e.message}`);
+    if (!(e instanceof ExecError)) throw e;
+    // Причина `FIELD` — отказ ПО ПОЛЮ АГРЕГАТА (тип не числовой), всё остальное — отказ по
+    // самому запросу. Сообщения компилятора уже человеческие и называют свойство/тип —
+    // своего текста поверх им не нужно, нужен только ярлык, по которому строку ищут в логе.
+    if ((e.details as { reason?: unknown } | undefined)?.reason === 'FIELD') {
+      logFailure('compile_field', e.message, goalId, `отказ invalid_field: ${e.message}`);
       return failed('invalid_field');
     }
-    if (e instanceof QueryCompileError) {
-      logFailure(
-        'compile_query',
-        e.message,
-        ctx.thisEntityId,
-        `отказ invalid_query: запрос '${src.query}' не скомпилировался — ${e.message}`,
-      );
-      return failed('invalid_query');
-    }
-    throw e;
+    logFailure(
+      'compile_query',
+      e.message,
+      goalId,
+      `отказ invalid_query: запрос '${src.query}' не скомпилировался — ${e.message}`,
+    );
+    return failed('invalid_query');
   }
 
   let current: string;
@@ -323,7 +345,7 @@ export async function computeGoalProgress(
     logFailure(
       'aggregate',
       src.aggregate,
-      ctx.thisEntityId,
+      goalId,
       `отказ compute_failed: агрегат ${src.aggregate} не выполнился`,
       e,
     );
@@ -349,7 +371,7 @@ export async function computeGoalProgress(
     logFailure(
       'ratio',
       null,
-      ctx.thisEntityId,
+      goalId,
       `отказ compute_failed: доля не посчиталась (current='${current}', target='${target}')`,
       e,
     );

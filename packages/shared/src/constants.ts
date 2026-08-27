@@ -65,7 +65,7 @@ export type RelationRoleId = (typeof RELATION_ROLE_IDS)[number];
  *
  * Дом здесь, а не в серверном `executor/relations.ts`, потому что роль нужна ВСЕМ ТРЁМ
  * пакетам, а `@orbis/shared` — единственный, кого видят двое других. `dependency`: сервер
- * фильтрует по ней `excludeBlocked` (`query/compile.ts`), парсер грамматики разворачивает в
+ * фильтрует по ней `excludeBlocked` (`query/compile-ast.ts`), парсер грамматики разворачивает в
  * неё тот же сахар (`query/parse-ast.ts`), web рисует ею секцию «Блокировки» и шлёт её в
  * `relation.create`/`relation.delete` (`entity-detail/Blocks.tsx`). `subitem`/`ticket`: их
  * называет секция подзадач (`entity-detail/Subtasks.tsx`) и быстрый захват

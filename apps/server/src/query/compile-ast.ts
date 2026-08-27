@@ -22,6 +22,12 @@
 //  3. Служебность аспекта читается из колонки `service` реестра (§А5-6/§А3-1), а не из
 //     списка в коде.
 //
+// АДРЕСА ВИДА `compile.ts:NNN` НИЖЕ — В СНЯТОМ ФАЙЛЕ. Старый компилятор
+// `apps/server/src/query/compile.ts` удалён Задачей 9b вместе с последним потребителем;
+// ссылки на него историчны и читаются по git-истории этого пути (последняя ревизия —
+// коммит перед 9b). Оставлены они потому, что называют ПОВЕДЕНИЕ, которое реформа
+// обязалась не менять, и без адреса проверить это обязательство было бы негде.
+//
 // ТРЁХЗНАЧНАЯ ЛОГИКА И ПРАВИЛО «NULL ПРОХОДИТ». `{not: X}` компилируется в
 // `NOT COALESCE(<X>, false)`, а не в голый `NOT (<X>)`. Разница наблюдаема: у сущности без
 // свойства предикат равен NULL, голый `NOT NULL` — тоже NULL, и WHERE такую строку
@@ -36,6 +42,7 @@ import type { AspectDefinition, PropertyDefinition, PropertyType } from '@orbis/
 // Канон Q-AST — отдельным входом: в корневом барреле имена `QueryAst`/`QuerySortField`
 // заняты СТАРОЙ грамматикой до Задачи 21 (см. докблок `packages/shared/src/index.ts`).
 import {
+  hasValidCalendar,
   QUERY_DEPTH_CAP,
   type QueryAst,
   type QueryBound,
@@ -50,6 +57,7 @@ import {
 import { type SQL, sql } from 'drizzle-orm';
 import { ExecError } from '../errors';
 import type { RegistrySnapshot } from '../registry/load';
+import { literalFormViolation } from '../registry/validate-props';
 
 /**
  * Контекст компиляции. Имена полей — из плана (на них ссылаются Задачи 9b, 10a/10b, 11, 13c).
@@ -204,6 +212,21 @@ function comparable(ref: PropRef): SQL {
   return castedExpr(ref.text, ref.def.type);
 }
 
+/**
+ * Типы, чья текстовая проекция `->>` И ЕСТЬ значение: ветка `default` у `castedExpr` ниже
+ * возвращает её нетронутой. Список стоит рядом с самим кастом и согласован с ним тестом
+ * («текстом читаются ровно те типы, которым каст не нужен») — иначе он был бы вторым
+ * мнением о том, что такое значение свойства.
+ */
+const TEXT_PROJECTED_KINDS: ReadonlySet<PropertyType['kind']> = new Set([
+  'text',
+  'time',
+  'select',
+  'ref',
+  'grant',
+  'registry_ref',
+]);
+
 /** Каст текстовой проекции `props->>` к типу свойства (§А2-2). */
 function castedExpr(text: SQL, type: PropertyType): SQL {
   switch (type.kind) {
@@ -273,28 +296,45 @@ function isToken(value: unknown): value is { token: QueryDateToken } {
 }
 
 /**
- * Соответствие JS-типа значения типу свойства из реестра.
+ * Гейт значения предиката: ВИД и ФОРМА литерала — по схеме значения свойства (§А7-1).
  *
- * Проверка нужна ровно потому, что вход `ast:` тула (§А5-4) идёт МИМО парсера: там
- * `{prop:'orbis/aliases', op:'contains', value: 5}` пройдёт схему канона (значение —
- * скаляр) и без этой ветки уехал бы в `props @> '{"orbis/aliases":[5]}'`, который в
- * jsonb строго типизирован и не найдёт `["5"]`. То есть — тихий ноль ровно того класса,
- * против которого §А5-3ж и §С8-3.
+ * Проверка нужна ровно потому, что вход `ast:` тула (§А5-4) идёт МИМО парсера и с Задачи 9b
+ * боевой. Без неё пролезали два разных класса, и оба тихие:
+ *  - НЕ ТОТ ВИД: `{prop:'orbis/aliases', op:'contains', value: 5}` проходит схему канона
+ *    (значение — скаляр) и уезжает в `props @> '{"orbis/aliases":[5]}'`, который в jsonb
+ *    строго типизирован и не найдёт `["5"]` — тихий ноль (§А5-3ж, §С8-3);
+ *  - НЕ ТА ФОРМА: `{prop:'orbis/due_date', op:'eq', value:'банан'}` собирал SQL с `'банан'`
+ *    рядом с `::date` и возвращал data exception Postgres вместо структурного отказа с
+ *    именем свойства (долг гейта Задачи 9a, п. 1).
  *
- * `decimal` требует именно СТРОКУ: число IEEE-754 в границе теряет хвост копеек там же,
- * где его и сравнивают (§А7-3).
+ * ВТОРОЙ ПРАВДЫ О ФОРМЕ ЗДЕСЬ НЕТ: `propertyLiteralJsonSchema` — та же схема, по которой
+ * проверяется ЗАПИСЬ значения, минус границы (`min`/`max`/`maxLength`) и минус обёртка
+ * списка. Границы сняты по смыслу, а не для простоты: они правило записи, а фильтр по
+ * значению вне границ — законный запрос, который честно вернёт пусто (то же решение и теми
+ * же словами стоит в парсере, `parse-ast.ts`, докблок `parseScalar`).
+ *
+ * `decimal` при этом требует именно СТРОКУ: число IEEE-754 в границе теряет хвост копеек
+ * там же, где его и сравнивают (§А7-3), — и это тоже сказано схемой, а не здесь.
  */
 function assertScalarType(def: PropertyDefinition, value: QueryScalar): void {
   const kind = def.type.kind;
-  const actual = typeof value;
-  const expected =
-    kind === 'number' ? 'number' : kind === 'boolean' ? 'boolean' : ('string' as const);
-  if (actual === expected) return;
-  fail(
-    'TYPE',
-    `свойство '${def.id}' (${kind}) ожидает значение типа ${expected}, получено ${actual}`,
-    { property: def.id, value },
-  );
+  const violation = literalFormViolation(def.type, value);
+  if (violation !== undefined) {
+    fail('TYPE', `свойство '${def.id}' (${kind}) не принимает это значение: ${violation}`, {
+      property: def.id,
+      value,
+    });
+  }
+  // Форма — ещё не календарь: `2026-13-40` проходит паттерн схемы и падает уже в Postgres
+  // (22008). Календарь считает парсер (`hasValidCalendar`), второй его копии здесь нет.
+  if ((kind === 'date' || kind === 'timestamp') && typeof value === 'string') {
+    if (!hasValidCalendar(value)) {
+      fail('TYPE', `свойство '${def.id}' (${kind}): дня '${value}' в календаре нет`, {
+        property: def.id,
+        value,
+      });
+    }
+  }
 }
 
 /** Параметр-литерал с кастом по типу свойства — правая сторона сравнения. */
@@ -605,13 +645,21 @@ function walkCond(
  * `COALESCE(…, '')` — не украшение, а СМЫСЛ: у источника значения может не быть вовсе
  * (блокер без аспекта задачи), и такой источник обязан считаться НЕ закрытым, иначе
  * `NULL NOT IN (…)` дал бы NULL, ребро выпало бы из EXISTS, и заметка-блокер перестала бы
- * блокировать. Форма дословно та же, что у сегодняшнего компилятора (`compile.ts:272`),
+ * блокировать. Форма дословно та же, что была у старого компилятора (`compile.ts:272`),
  * только по `props` вместо старой карты, — потому что менять наблюдаемое поведение реформа
  * не имеет права.
  *
- * Сравнение ТЕКСТОВОЕ и по проекции `->>`: набор «закрытых» задаёт разбор ключами вариантов
- * select (`done`, `cancelled`), а `->>` отдаёт ровно их. Каст по типу свойства здесь был бы
- * лишним звеном: значения приходят не от пользователя, а из сахара.
+ * СРАВНЕНИЕ ТЕКСТОВОЕ И БЕЗ КАСТА, и это накладывает на узел проверяемое условие: слева
+ * стоит проекция `->>`, справа — строковый параметр, значит свойство обязано быть таким,
+ * чья текстовая проекция И ЕСТЬ значение (`TEXT_PROJECTED_KINDS`), а значения — строками.
+ * У сахара `excludeBlocked` так и есть: набор «закрытых» задаёт разбор ключами вариантов
+ * select (`done`, `cancelled`), а `->>` отдаёт ровно их.
+ *
+ * ПОЧЕМУ ЭТО ПРОВЕРЯЕТСЯ, А НЕ ПОДРАЗУМЕВАЕТСЯ. Здесь стояла фраза «значения приходят не от
+ * пользователя, а из сахара» — с Задачи 9b она ложь: `sourceNotIn` уехал в JSON Schema
+ * провайдеру, вход `ast:` тула боевой, и узел приезжает с ЛЮБЫМИ `prop`/`values`.
+ * `{prop:'orbis/start_at', values:['5']}` сравнил бы текст ХРАНЕНИЯ ISO-момента со строкой
+ * '5' — предикат, ложный всегда и молча.
  */
 function sourceNotInCond(
   spec: { prop: string; values: readonly QueryScalar[] },
@@ -632,8 +680,19 @@ function sourceNotInCond(
       { property: def.id },
     );
   }
-  const values = spec.values.map((v) => sql`${String(v)}`);
-  return sql`COALESCE(b.props->>${lit(def.id)}, '') NOT IN (${sql.join(values, sql`, `)})`;
+  if (!TEXT_PROJECTED_KINDS.has(def.type.kind)) {
+    return fail(
+      'TYPE',
+      `состояние дальнего конца по свойству '${def.id}' (${def.type.kind}) не поддержано: ` +
+        `сравнение идёт текстом, а у этого типа текстовая проекция — форма хранения, а не значение`,
+      { property: def.id, kind: def.type.kind },
+    );
+  }
+  for (const value of spec.values) assertScalarType(def, value);
+  return sql`COALESCE(b.props->>${lit(def.id)}, '') NOT IN (${sql.join(
+    spec.values.map((v) => sql`${v}`),
+    sql`, `,
+  )})`;
 }
 
 /**

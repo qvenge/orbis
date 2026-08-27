@@ -1,13 +1,22 @@
 // apps/server/src/query/context.ts
-// CompileContext запроса (§6.1) — общий хелпер роутера entity (tRPC) и диспатча
-// тулов LLM/MCP (tools/dispatch.ts): каталог — из реестра на запрос (решение Task 8 1a);
-// timezone — из user_settings владельца (RLS скоупит выборку), без строки
-// (онбординг-сидирование — Task 13 1a) — дефолт 'Europe/Moscow'; today — «сегодня»
-// в этой таймзоне (en-CA даёт ровно YYYY-MM-DD). Вызывается ТОЛЬКО под withIdentity.
+// CompileCtx запроса (§А5-7) — общий хелпер роутера entity (tRPC) и диспатча тулов
+// LLM/MCP (tools/dispatch.ts): снимок реестров — на запрос (§А10-1, кеш по (owner,
+// version) заводит Задача 14); timezone — из user_settings владельца (RLS скоупит
+// выборку), без строки (онбординг-сидирование — Task 13 1a) — дефолт 'Europe/Moscow';
+// today — «сегодня» в этой таймзоне (en-CA даёт ровно YYYY-MM-DD). Вызывается ТОЛЬКО
+// под withIdentity.
+//
+// Что здесь изменила Задача 9b: контекст больше не носит каталог полей старой грамматики
+// (`FieldCatalog` собирался из колонки `aspect_definitions.schema`), а носит СНИМОК
+// РЕЕСТРА — из него компилятор берёт тип свойства, служебность аспекта и семейство ролей,
+// и из него же разбирает текст запроса `query/parse-text.ts`. Один снимок на запрос, а не
+// два чтения: реестр читается пятью запросами, и второй его загрузкой ради разбора текста
+// платил бы каждый вызов entity.query.
 import { eq } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
-import { type CompileContext, loadCatalog } from './compile';
+import { loadRegistry } from '../registry/load';
+import type { CompileCtx } from './compile-ast';
 
 /** Дефолт таймзоны при отсутствующей строке настроек (онбординг ещё не пройден). */
 export const DEFAULT_TIMEZONE = 'Europe/Moscow';
@@ -54,8 +63,8 @@ export async function queryContext(
   tx: Tx,
   actorUserId: string,
   thisEntityId: string | null,
-): Promise<CompileContext> {
-  const catalog = await loadCatalog(tx);
-  const timezone = await ownerTimeZone(tx, actorUserId);
-  return { catalog, thisEntityId, today: todayInTimeZone(timezone), timezone };
+): Promise<CompileCtx> {
+  const reg = await loadRegistry(tx, actorUserId);
+  const timeZone = await ownerTimeZone(tx, actorUserId);
+  return { ownerId: actorUserId, reg, thisEntityId, today: todayInTimeZone(timeZone), timeZone };
 }

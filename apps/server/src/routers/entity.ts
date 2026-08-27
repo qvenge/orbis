@@ -8,9 +8,8 @@ import {
   entityResolveRefsInput,
   entitySuggestInput,
   entityUpdateUiInput,
-  parseQuery,
-  type QueryAst,
 } from '@orbis/shared';
+import type { QueryAst } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
 import { inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -24,12 +23,8 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { WireEntity } from '../executor/types';
 import { type GoalProgress, goalProgressFor } from '../goals/progress';
-import {
-  type CompileContext,
-  compileCount,
-  compileQuery,
-  QueryCompileError,
-} from '../query/compile';
+import { type CompileCtx, compileCountAst, compileQueryAst } from '../query/compile-ast';
+import { parseQueryText } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireEntityFromSql } from '../wire';
@@ -38,38 +33,43 @@ import { toWireEntityFromSql } from '../wire';
 // а тред/сообщение он пишет тем же tx, что executor (§7.8).
 const sink = makeChatJournalSink();
 
-/** Разбор запроса: ошибки парсинга → BAD_REQUEST, структура в cause (§6.4). */
-function parseOrThrow(query: string, cctx: CompileContext): QueryAst {
-  const parsed = parseQuery(query, cctx.catalog);
-  if (!parsed.ok) {
-    // Клиент (1c) рендерит красную плашку по {message, position}
+/**
+ * Разбор и компиляция запроса: структурный отказ → BAD_REQUEST со структурой в `cause` (§6.4).
+ *
+ * Обе стадии ходят через ОДИН перевод, потому что обе теперь бросают одно и то же —
+ * `ExecError('VALIDATION')`: разбор текста (`parseQueryText`, обе формы) и компилятор канона
+ * (`compile-ast`, неизвестный id свойства, `this` вне контекста, значение не той формы).
+ * Клиент (1c) рисует красную плашку по `{message, position}`, и позиция приезжает в
+ * `details` там, где она есть, — у компиляции её нет и не бывает.
+ */
+function queryErrorToTRPC(e: unknown): never {
+  if (e instanceof ExecError && e.code === 'VALIDATION') {
     throw new TRPCError({
       code: 'BAD_REQUEST',
-      message: parsed.error.message,
-      cause: parsed.error,
+      message: e.message,
+      cause: { message: e.message, ...(e.details as Record<string, unknown> | undefined) },
     });
   }
-  return parsed.ast;
+  throw e;
 }
 
-/** Компиляция AST: ошибки компиляции → BAD_REQUEST (§6.4). */
+function parseOrThrow(query: string, cctx: CompileCtx): QueryAst {
+  try {
+    return parseQueryText(query, cctx);
+  } catch (e) {
+    return queryErrorToTRPC(e);
+  }
+}
+
 function compileAstOrThrow(
   ast: QueryAst,
-  cctx: CompileContext,
-  compile: typeof compileQuery | typeof compileCount,
+  cctx: CompileCtx,
+  compile: typeof compileQueryAst | typeof compileCountAst,
 ) {
   try {
     return compile(ast, cctx);
   } catch (e) {
-    if (e instanceof QueryCompileError) {
-      // Структурная ошибка компиляции (`this` вне контекста): позиция неизвестна
-      throw new TRPCError({
-        code: 'BAD_REQUEST',
-        message: e.message,
-        cause: { message: e.message },
-      });
-    }
-    throw e;
+    return queryErrorToTRPC(e);
   }
 }
 
@@ -83,7 +83,7 @@ function runQueryWithMaterialization<T>(
   db: Db,
   actorUserId: string,
   input: { query: string; thisEntityId?: string },
-  run: (tx: Tx, ast: QueryAst, cctx: CompileContext) => Promise<T>,
+  run: (tx: Tx, ast: QueryAst, cctx: CompileCtx) => Promise<T>,
 ): Promise<T> {
   return queryWithMaterialization({
     db,
@@ -228,7 +228,7 @@ export const entityRouter = router({
 
   query: protectedProcedure.input(querySignature).query(({ ctx, input }) =>
     runQueryWithMaterialization(ctx.db, ctx.actorUserId, input, async (tx, ast, cctx) => {
-      const compiled = compileAstOrThrow(ast, cctx, compileQuery);
+      const compiled = compileAstOrThrow(ast, cctx, compileQueryAst);
       const rows = await tx.execute(compiled);
       return [...rows].map((r) => toWireEntityFromSql(r as Record<string, unknown>));
     }),
@@ -318,10 +318,10 @@ export const entityRouter = router({
       }),
   ),
 
-  // Бейджи (02 §3.2): count игнорирует limit — compileCount не включает его по построению
+  // Бейджи (02 §3.2): count игнорирует limit — compileCountAst не включает его по построению
   count: protectedProcedure.input(querySignature).query(({ ctx, input }) =>
     runQueryWithMaterialization(ctx.db, ctx.actorUserId, input, async (tx, ast, cctx) => {
-      const compiled = compileAstOrThrow(ast, cctx, compileCount);
+      const compiled = compileAstOrThrow(ast, cctx, compileCountAst);
       const rows = await tx.execute(compiled);
       return { count: Number(rows[0]?.count) };
     }),

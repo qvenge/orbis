@@ -4,6 +4,9 @@
 // но §5.2 требует optimistic-check по updated_at при правке body; поле опционально
 // в envelope, обязательность при body enforce'ит executor.
 import { z } from 'zod';
+// Канон Q-AST — отдельным входом: в корневом барреле пакета имя `QueryAst` занято СТАРОЙ
+// грамматикой до Задачи 21 (см. докблок `packages/shared/src/index.ts`).
+import { queryAstSchema } from '../query/ast';
 
 export const entityCreateInput = z
   .object({
@@ -284,7 +287,30 @@ export const batchExecuteInput = z
   })
   .strict();
 
-export const entityQueryInput = z.object({ query: z.string().min(1) }).strict();
+/**
+ * `entity_query` принимает текст ГРАММАТИКИ или готовый Q-AST — РОВНО ОДНО из двух (§А5-4).
+ *
+ * Зачем второй вход. Плоский текст §А5-3 не выражает дерева: скобок в грамматике v1 нет, и
+ * «(срок сегодня ИЛИ просрочено) И не заблокировано» в одну строку не пишется. Модель же
+ * дерево строит легко — ей нужна не строка, а структура, и §А5-4 даёт её JSON Schema'ой
+ * канона. Текстовый вход при этом остаётся: по нему написан весь корпус смарт-листов, и
+ * ронять его ради второго входа было бы разменом.
+ *
+ * ПОЧЕМУ «РОВНО ОДНО», а не «ast сильнее query»: два непустых входа означают два разных
+ * запроса в одном вызове, и молчаливый выбор победителя — это отбор «не того», причём
+ * невидимый (§С8-3). Ни одного — просто пустой вызов.
+ *
+ * Схема AST здесь ТА ЖЕ (`queryAstSchema`), что валидирует дерево в `scope` свойства и в
+ * теле query-блока: вход тула — недоверенный, и второй, «специально для тула», схемой мы
+ * завели бы второй канон.
+ */
+export const entityQueryInput = z
+  .object({ query: z.string().min(1).optional(), ast: queryAstSchema.optional() })
+  .strict()
+  .refine(
+    (v) => (v.query === undefined) !== (v.ast === undefined),
+    'entity_query принимает ровно одно: текст запроса (query) ИЛИ готовое дерево (ast)',
+  );
 export const entityGetInput = z
   .object({
     id: z.string().uuid(),

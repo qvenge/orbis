@@ -11,11 +11,17 @@ import {
   addDays,
   expandRecurrence,
   materializeBatchId,
-  type QueryAst,
   type RecurrenceRule,
   ROLE_INSTANCE_OF,
   recurringInstanceId,
 } from '@orbis/shared';
+import type {
+  QueryAst,
+  QueryBound,
+  QueryDateToken,
+  QueryFilterNode,
+  QueryRangeValue,
+} from '@orbis/shared/query';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { entities, userSettings } from '../db/schema';
@@ -40,8 +46,19 @@ const RETRO_DAYS = 92;
 /** Формат даты окна/фильтра — только структура; арифметика живёт в @orbis/shared addDays. */
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Поля-триггеры хука: date/timestamp-поля аспектов orbis/schedule и orbis/financial. */
-const MATERIALIZABLE_FIELDS = new Set(['start_at', 'occurred_on']);
+/**
+ * Свойства-триггеры хука (§А5-2: в дереве лежат id, не имена полей). Три, а не два:
+ * `orbis/due_date` добавлен Задачей 9b — списки «Сегодня», «Ближайшие 7 дней» и «Позже»
+ * отбирают recurring-задачи именно по сроку, и без него материализация под них не
+ * запускалась вовсе (окно давал только соседний `start_at`, которого у задачи может не
+ * быть). Список — константа кода: это свойство ИСПОЛНЕНИЯ (что мы умеем порождать лениво),
+ * а не свойство запроса.
+ */
+const MATERIALIZABLE_PROPERTIES = new Set([
+  'orbis/start_at',
+  'orbis/due_date',
+  'orbis/occurred_on',
+]);
 
 /** Попыток на шаблон при гонке конкурентных материализаций пересекающихся окон. */
 const MAX_ATTEMPTS = 3;
@@ -102,17 +119,24 @@ export function instantOfLocal(dateISO: string, time: WallClock['time'], timeZon
 }
 
 /**
- * Окно материализации из AST запроса (§5.4: любой запрос диапазона дат материализует
- * видимый диапазон). Чистая AST-прогулка без обращений к БД — запросы без date-условий
- * не платят ничего. Условие — по полям start_at/occurred_on (аспекты orbis/schedule,
- * orbis/financial): относительные токены дают явный диапазон (overdue и прочий
- * «открытый низ» — только сегодня и будущее: прошлое лениво не порождаем),
- * литеральная 'YYYY-MM-DD' — окно этого дня; абсолютный диапазон `occurred_on=a..b`
- * (kind 'date', B5 — обязательство бэклога A) — окно [a; b]; абсолютные сравнения:
- * `>X` — от следующего дня до горизонта +14д, `<X` — открытый низ (как overdue:
- * только сегодня и будущее) до дня перед X. Несколько условий объединяются
- * в [min from; max to]; горизонт +14д и ретро-пол −92д (RETRO_DAYS, fix round B5)
- * обрезает materializeInstances — окно здесь не клампится.
+ * Окно материализации из Q-AST запроса (§5.4: любой запрос диапазона дат материализует
+ * видимый диапазон). Чистая прогулка по ДЕРЕВУ фильтра без обращений к БД — запросы без
+ * условий по датам не платят ничего.
+ *
+ * ЧТО ЗНАЧИТ «ПО ДЕРЕВУ» И ПОЧЕМУ ИМЕННО ТАК. Окно — это ВЕРХНЯЯ ОЦЕНКА того, что запрос
+ * способен показать, поэтому ветки `and` и `or` дают в него одинаковый вклад: у `or`
+ * показаться может любая из них, а у `and` лишнее окно стоит нескольких лишних инстансов,
+ * которых никто не увидит, — но пропущенное окно стоит пустого списка у владельца.
+ * Поддерево под `not` окно НЕ СУЖАЕТ и вклада не даёт: «срок не сегодня» не обещает, что
+ * сегодняшних инстансов в выдаче не будет, — они просто отберутся другим условием.
+ *
+ * Правила по узлам (дословно те же, что были у плоского обхода, — реформа окно не меняет):
+ * относительный токен разворачивается в свой диапазон (`overdue` и прочий «открытый низ» —
+ * только сегодня и будущее: прошлое лениво не порождаем), литеральная 'YYYY-MM-DD' — окно
+ * этого дня, `range` — [from; to] с подстановкой открытой границы (низ — сегодня, верх —
+ * горизонт +14д), `gt`/`lt` — от следующего дня и до дня перед. Несколько условий
+ * объединяются в [min from; max to]; горизонт +14д и ретро-пол −92д (RETRO_DAYS) обрезает
+ * materializeInstances — окно здесь не клампится.
  */
 export function materializationWindow(
   ast: QueryAst,
@@ -124,52 +148,95 @@ export function materializationWindow(
     from = from === null || f < from ? f : from;
     to = to === null || t > to ? t : to;
   };
-  for (const filter of ast.filters) {
-    if (
-      (filter.kind !== 'field' && filter.kind !== 'range' && filter.kind !== 'comparison') ||
-      !MATERIALIZABLE_FIELDS.has(filter.field)
-    ) {
-      continue;
+  const horizon = () => addDays(today, HORIZON_DAYS);
+
+  /** Диапазон, который токен задаёт САМ ПО СЕБЕ (позиция равенства). */
+  const tokenWindow = (token: QueryDateToken): { from: string; to: string } => {
+    switch (token) {
+      case 'today':
+      case 'overdue': // открытый низ: материализуем только сегодня и будущее
+        return { from: today, to: today };
+      case 'next_7d':
+        return { from: today, to: addDays(today, 7) };
+      case 'after_7d':
+        return { from: addDays(today, 8), to: horizon() };
     }
-    if (filter.kind === 'range') {
-      // Абсолютный диапазон date-поля (B5): границы включительно, обе гарантированы парсером
-      if (filter.min.kind === 'date' && filter.max.kind === 'date') {
-        widen(filter.min.value, filter.max.value);
-      }
-      continue;
-    }
-    if (filter.kind === 'comparison') {
-      if (filter.value.kind !== 'date') continue;
-      if (filter.op === '>') {
-        // Строго после X; верх не ограничен → горизонт +14д от сегодня
-        widen(addDays(filter.value.value, 1), addDays(today, HORIZON_DAYS));
-      } else {
-        // Строго до X — открытый низ: материализуем только сегодня и будущее (как overdue)
-        widen(today, addDays(filter.value.value, -1));
-      }
-      continue;
-    }
-    // noneOf («не эти даты») диапазона не задаёт
-    if (filter.condition.kind !== 'anyOf') continue;
-    for (const v of filter.condition.values) {
-      if (v.kind === 'date_token') {
-        switch (v.token) {
-          case 'today':
-          case 'overdue': // открытый низ: материализуем только сегодня и будущее
-            widen(today, today);
-            break;
-          case 'next_7d':
-            widen(today, addDays(today, 7));
-            break;
-          case 'after_7d':
-            widen(addDays(today, 8), addDays(today, HORIZON_DAYS));
-            break;
+  };
+
+  /** День, ВОКРУГ которого токен определён, — когда он стоит границей диапазона. */
+  const tokenAnchor = (token: QueryDateToken): string =>
+    token === 'next_7d' || token === 'after_7d' ? addDays(today, 7) : today;
+
+  /** Календарный день границы: литерал 'YYYY-MM-DD', токен — его якорь; иначе null. */
+  const boundDay = (bound: QueryBound | undefined): string | null => {
+    if (bound === undefined) return null;
+    if (typeof bound === 'object') return tokenAnchor(bound.token);
+    return typeof bound === 'string' && DATE_RE.test(bound) ? bound : null;
+  };
+
+  const visitProp = (node: { prop: string; op: string; value: unknown }): void => {
+    if (!MATERIALIZABLE_PROPERTIES.has(node.prop)) return;
+    const value = node.value;
+    switch (node.op) {
+      case 'eq': {
+        if (typeof value === 'object' && value !== null && 'token' in value) {
+          const w = tokenWindow((value as { token: QueryDateToken }).token);
+          widen(w.from, w.to);
+          return;
         }
-      } else if (DATE_RE.test(v.value)) {
-        widen(v.value, v.value);
+        const day = boundDay(value as QueryBound);
+        if (day !== null) widen(day, day);
+        return;
       }
+      case 'in': {
+        for (const v of value as unknown[]) {
+          const day = boundDay(v as QueryBound);
+          if (day !== null) widen(day, day);
+        }
+        return;
+      }
+      case 'gt': {
+        // Строго после X; верх не ограничен → горизонт +14д от сегодня.
+        const day = boundDay(value as QueryBound);
+        if (day !== null) widen(addDays(day, 1), horizon());
+        return;
+      }
+      case 'lt': {
+        // Строго до X — открытый низ: материализуем только сегодня и будущее (как overdue).
+        const day = boundDay(value as QueryBound);
+        if (day !== null) widen(today, addDays(day, -1));
+        return;
+      }
+      case 'range': {
+        const range = value as QueryRangeValue;
+        const lo = boundDay(range.from);
+        const hi = boundDay(range.to);
+        if (lo === null && hi === null) return;
+        // Открытая граница берётся оттуда же, откуда её брали сравнения: низ — сегодня,
+        // верх — горизонт. `range` несёт и `<=`/`>=` — у канона своих операторов для них нет.
+        widen(lo ?? today, hi ?? horizon());
+        return;
+      }
+      // `ne` и `contains` диапазона не задают: «не эта дата» — это не интервал.
+      default:
+        return;
     }
-  }
+  };
+
+  const visit = (node: QueryFilterNode): void => {
+    if ('not' in node) return; // отрицание окно не сужает — см. докблок
+    if ('and' in node) {
+      for (const child of node.and) visit(child);
+      return;
+    }
+    if ('or' in node) {
+      for (const child of node.or) visit(child);
+      return;
+    }
+    if ('prop' in node) visitProp(node);
+  };
+
+  if (ast.filter !== null) visit(ast.filter);
   return from !== null && to !== null ? { from, to } : null;
 }
 

@@ -12,16 +12,13 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  aspectJsonSchema,
-  BUILTIN_ASPECT_IDS,
   BUILTIN_PROPERTY_META,
-  buildFieldCatalog,
   canonicalJson,
   entityUpdateExecInput,
   newId,
   type PropertyType,
-  parseQuery,
 } from '@orbis/shared';
+import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { eq, sql } from 'drizzle-orm';
 import corpus from '../../test/golden/validator-verdicts.json';
 import {
@@ -36,7 +33,7 @@ import { runStillMine, subjectProperty } from '../agent-loop/verbs';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { readEntity } from '../entity-read';
-import { compileQuery } from '../query/compile';
+import { compileQueryAst } from '../query/compile-ast';
 import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import type { PropsViolation } from '../registry/validate-props';
 import { toWireEntity, toWireEntityFromSql } from '../wire';
@@ -71,11 +68,6 @@ const FREE_PROPERTY_ID = 'user/p-sleep';
 const FREE_PROPERTY_KEY = 'user/sleep-hours';
 
 let reg: RegistrySnapshot;
-
-/** Каталог полей грамматики §6 — тот же, что собирает боевой путь запросов. */
-const catalog = buildFieldCatalog(
-  BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
-);
 
 function run(
   tool: string,
@@ -1250,15 +1242,19 @@ describe('списочные пути несут новую форму', () => {
     // тул `entity_query` (tools/dispatch.ts). Он ходит своим SELECT-листом, и без него
     // проверка накрывала бы только backlinks.
     const queried = await withIdentity(db, owner, async (tx) => {
-      const parsed = parseQuery(`aspect=orbis/task, sortBy=created_at:desc`, catalog);
+      const parsed = parseQueryAst(
+        `aspect=orbis/task, sortBy=orbis/created_at:desc`,
+        toParseRegistry(reg, 'ru'),
+      );
       if (!parsed.ok) throw new Error(`невалидный запрос: ${parsed.error.message}`);
       const rows = [
         ...(await tx.execute(
-          compileQuery(parsed.ast, {
-            catalog,
+          compileQueryAst(parsed.ast, {
+            ownerId: owner,
+            reg,
             thisEntityId: note.id,
             today: '2026-08-26',
-            timezone: 'Europe/Moscow',
+            timeZone: 'Europe/Moscow',
           }),
         )),
       ] as Array<Record<string, unknown>>;

@@ -140,6 +140,64 @@ describe('отказы вместо тихой пустоты (§С8-3, §6.4)',
       'TYPE',
     );
   });
+
+  // Долг гейта Задачи 9a, п. 1: гейт времени сверял ВИД свойства, но не ФОРМУ литерала, и
+  // `orbis/due_date='банан'` уезжал в `'банан'::date` — data exception Postgres вместо
+  // структурного отказа с именем свойства. Форма приходит из схемы ЗАПИСИ значения
+  // (`propertyLiteralJsonSchema`), второй правды о том, что такое дата, нет.
+  test('форма литерала: дата, момент, время и вариант select проверяются ДО SQL', () => {
+    const bad = (node: QueryFilterNode) => refusal(() => sqlOf(node));
+    expect(bad({ prop: 'orbis/due_date', op: 'eq', value: 'банан' }).reason).toBe('TYPE');
+    // Календарь — не форма: `2026-13-40` проходит паттерн схемы и падал бы уже в Postgres.
+    expect(bad({ prop: 'orbis/due_date', op: 'eq', value: '2026-13-40' }).reason).toBe('TYPE');
+    expect(bad({ prop: 'orbis/due_date', op: 'eq', value: '2026-02-30' }).message).toContain(
+      'календаре',
+    );
+    expect(bad({ prop: 'orbis/start_at', op: 'gt', value: '2026-07-03' }).reason).toBe('TYPE');
+    expect(bad({ prop: 'orbis/routine_at', op: 'eq', value: '25:00' }).reason).toBe('TYPE');
+    expect(bad({ prop: 'orbis/task_status', op: 'eq', value: 'готово' }).reason).toBe('TYPE');
+    expect(bad({ prop: 'orbis/amount', op: 'eq', value: '1 000' }).reason).toBe('TYPE');
+    // Границы range идут тем же гейтом — иначе форма проверялась бы у половины предикатов.
+    expect(bad({ prop: 'orbis/due_date', op: 'range', value: { to: 'банан' } }).reason).toBe(
+      'TYPE',
+    );
+    expect(bad({ prop: 'orbis/task_status', op: 'in', value: ['inbox', 'готово'] }).reason).toBe(
+      'TYPE',
+    );
+    // Отказ называет свойство: без имени человек ищет ошибку не там.
+    expect(bad({ prop: 'orbis/due_date', op: 'eq', value: 'банан' }).message).toContain(
+      'orbis/due_date',
+    );
+  });
+
+  test('форма — не границы: значение вне min/max/maxLength компилируется (законный запрос)', () => {
+    // §А7-1 границы — правило ЗАПИСИ. Фильтр по значению вне границ обязан вернуть пусто, а
+    // не отказать: то же решение и теми же словами записано в парсере (`parseScalar`).
+    // Свойства берутся из словаря по НАЛИЧИЮ границы: подставленный литерал перестал бы
+    // проверять правило, как только границу из словаря убрали бы.
+    const withBound = (has: (t: Record<string, unknown>) => boolean) => {
+      const def = BUILTIN_PROPERTY_META.find(
+        (p) => p.storage !== 'core' && has(p.type as unknown as Record<string, unknown>),
+      );
+      if (def === undefined) throw new Error('в словаре нет свойства с такой границей');
+      return def;
+    };
+    const num = withBound((t) => t.kind === 'number' && t.min !== undefined);
+    expect(sqlOf({ prop: num.id, op: 'lt', value: -1 })).toContain('::numeric');
+    const dec = withBound((t) => t.kind === 'decimal' && t.min !== undefined);
+    expect(sqlOf({ prop: dec.id, op: 'gt', value: '-1' })).toContain('::numeric');
+    // Без `format`/`pattern`: иначе длинная строка нарушила бы ФОРМУ, и тест доказывал бы
+    // не то, о чём написан (проверено пробой на `orbis/currency`).
+    const txt = withBound(
+      (t) =>
+        t.kind === 'text' &&
+        t.maxLength !== undefined &&
+        t.format === undefined &&
+        t.pattern === undefined,
+    );
+    const long = 'я'.repeat(((txt.type as { maxLength: number }).maxLength ?? 0) + 1);
+    expect(sqlOf({ prop: txt.id, op: 'eq', value: long })).toContain('props->>');
+  });
 });
 
 describe('долг гейта Задачи 8: eq/ne на списке и contains на скаляре — отказ', () => {
@@ -210,6 +268,78 @@ describe('состояние дальнего конца (sourceNotIn): что �
     const plain = sqlOf({ rel: { kind: 'has_relation', via: 'dependency' } });
     expect(plain).toContain('EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id');
     expect(plain).not.toContain('JOIN entities b');
+  });
+
+  // С Задачи 9b вход `ast:` боевой, и узел приезжает с ЛЮБЫМИ prop/values: докблок
+  // `sourceNotInCond` больше не вправе обосновывать отсутствие каста тем, что «значения
+  // приходят из сахара». Условие, которым он обоснован теперь, проверяемо — вот оно.
+  test('текстом читаются РОВНО те типы, которым castedExpr не нужен каст', () => {
+    const uuid = '019eb2f4-1a00-7b6e-9c01-5d2f8a3b4c10';
+    // По свойству на каждый скалярный тип словаря, значение — заведомо правильной ФОРМЫ:
+    // иначе отказ пришёл бы от гейта формы, а не от того правила, которое здесь проверяется.
+    const textual: Array<[string, string]> = [
+      ['orbis/location', 'дом'],
+      ['orbis/routine_at', '07:00'],
+      ['orbis/task_status', 'done'],
+      ['orbis/rule_target', uuid],
+      ['orbis/grant', uuid],
+      ['orbis/rule_scope', 'orbis/money-movement'],
+    ];
+    const casted: Array<[string, string | number | boolean]> = [
+      ['orbis/duration_min', 30],
+      ['orbis/amount', '100.00'],
+      ['orbis/due_date', '2026-07-03'],
+      ['orbis/start_at', '2026-07-03T09:00:00Z'],
+      ['orbis/planned', true],
+    ];
+    for (const [prop, value] of textual) {
+      const node = {
+        rel: {
+          kind: 'has_relation' as const,
+          via: 'dependency',
+          sourceNotIn: { prop, values: [value] },
+        },
+      };
+      expect(`${prop}: ${sqlOf(node).includes('JOIN entities b')}`).toBe(`${prop}: true`);
+    }
+    for (const [prop, value] of casted) {
+      const node = {
+        rel: {
+          kind: 'has_relation' as const,
+          via: 'dependency',
+          sourceNotIn: { prop, values: [value] },
+        },
+      };
+      const r = refusal(() => sqlOf(node));
+      expect(`${prop}: ${r.reason}`).toBe(`${prop}: TYPE`);
+      expect(r.message).toContain('форма хранения');
+    }
+    // Перечисленные типы обязаны покрывать ВЕСЬ скалярный словарь: новый тип, добавленный в
+    // §А2-2 и забытый здесь, роняет этот тест, а не проезжает молча.
+    const covered = new Set(
+      [...textual, ...casted].map(([prop]) => {
+        const def = BUILTIN_PROPERTY_META.find((p) => p.id === prop);
+        if (def === undefined) throw new Error(`нет свойства ${prop}`);
+        return def.type.kind;
+      }),
+    );
+    for (const p of BUILTIN_PROPERTY_META) {
+      const type = p.type;
+      const listy = 'cardinality' in type && type.cardinality === 'many';
+      if (p.storage === 'core' || listy || type.kind === 'json') continue;
+      expect(`${type.kind} покрыт: ${covered.has(type.kind)}`).toBe(`${type.kind} покрыт: true`);
+    }
+  });
+
+  test('значения sourceNotIn проверяются формой: не тот вариант select — отказ, а не ложь', () => {
+    const node = {
+      rel: {
+        kind: 'has_relation' as const,
+        via: 'dependency',
+        sourceNotIn: { prop: 'orbis/task_status', values: ['готово'] },
+      },
+    } satisfies QueryFilterNode;
+    expect(refusal(() => sqlOf(node)).reason).toBe('TYPE');
   });
 });
 

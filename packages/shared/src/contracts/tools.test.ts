@@ -309,6 +309,22 @@ describe('entityQueryInput / entityGetInput', () => {
     expect(entityQueryInput.safeParse({ query: '' }).success).toBe(false);
   });
 
+  test('§А5-4: РОВНО одно из query|ast — ни оба, ни ни одного', () => {
+    // Второй вход существует ради того, чего плоская строка не выражает, — дерева.
+    expect(entityQueryInput.safeParse({ ast: { filter: { tag: 'дом' } } }).success).toBe(true);
+    expect(entityQueryInput.safeParse({ ast: { filter: null } }).success).toBe(true);
+    // Два непустых входа — два разных запроса в одном вызове: молчаливый победитель был бы
+    // отбором «не того» (§С8-3), поэтому отказ, а не приоритет.
+    expect(entityQueryInput.safeParse({ query: 'tags=x', ast: { filter: null } }).success).toBe(
+      false,
+    );
+    expect(entityQueryInput.safeParse({}).success).toBe(false);
+    // Дерево проверяется ТОЙ ЖЕ схемой канона, что и `scope` свойства: узел с чужим ключом
+    // до сервера не доезжает.
+    expect(entityQueryInput.safeParse({ ast: { filter: { нетtакого: 1 } } }).success).toBe(false);
+    expect(entityQueryInput.safeParse({ ast: {} }).success).toBe(false);
+  });
+
   test('get: include из enum §9.2, прочее отклоняется', () => {
     expect(
       entityGetInput.safeParse({ id: UUID, include: ['body', 'relations', 'backlinks', 'thread'] })

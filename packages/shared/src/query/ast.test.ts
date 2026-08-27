@@ -106,7 +106,7 @@ test('QUERY_REL_ANCHOR: направление каждого предиката
   // подписи самого реестра: у роли `dependency` цель — «Заблокированная работа», источник —
   // «Блокирующая работа». Если направление подменить на 'source', под
   // `!has_relation via=dependency` начнут попадать САМИ БЛОКИРОВЩИКИ — регресс против
-  // сегодняшнего `excludeBlocked` (`compile.ts:262`).
+  // прежнего `excludeBlocked` (`compile.ts:262`; файл снят Задачей 9b, адрес по git-истории).
   expect(QUERY_REL_ANCHOR.has_relation).toBe('target');
   expect(anchorLabel('dependency', 'has_relation')).toBe('Заблокированная работа');
   expect(role('dependency')?.sourceLabel.ru).toBe('Блокирующая работа');

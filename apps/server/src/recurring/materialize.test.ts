@@ -3,7 +3,14 @@
 // Интеграционные тесты против живой БД: инстансы порождает ТОЛЬКО сервер, через
 // executor (source='system'), с детерминированными uuidv5-id и горизонтом 14 дней.
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
-import { addDays, type FieldCatalog, parseQuery, recurringInstanceId } from '@orbis/shared';
+import {
+  addDays,
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_PROPERTY_META,
+  BUILTIN_RELATION_ROLE_META,
+  recurringInstanceId,
+} from '@orbis/shared';
+import { parseQueryAny, type QueryFilterNode, toParseRegistry } from '@orbis/shared/query';
 import { and, eq, inArray } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
@@ -389,21 +396,29 @@ describe('materializeInstances (01 §5.4)', () => {
   });
 });
 
-describe('materializationWindow — детект окна по AST (чистая функция, ноль запросов к БД)', () => {
+describe('materializationWindow — детект окна по ДЕРЕВУ (чистая функция, ноль запросов к БД)', () => {
   const today = '2026-07-10';
+  /**
+   * Окно по ТЕКСТУ запроса: разбор — боевой (`parseQueryAny`, обе формы), реестр —
+   * встроенный. Через текст, а не через собранное руками дерево, намеренно: окно считается
+   * по тому, что реально приезжает из продукта, и подставленное дерево скрыло бы, если бы
+   * разбор клал предикат под другой узел.
+   */
+  const REG = toParseRegistry(
+    {
+      properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+      aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+      roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+    },
+    'ru',
+  );
   const win = (query: string) => {
-    // Мини-каталог: start_at (timestamp, orbis/schedule), occurred_on (date, orbis/financial)
-    const catalog: FieldCatalog = {
-      fields: {
-        start_at: [{ aspect: 'orbis/schedule', type: 'timestamp' }],
-        occurred_on: [{ aspect: 'orbis/financial', type: 'date' }],
-        status: [{ aspect: 'orbis/task', type: 'string' }],
-      },
-    };
-    const parsed = parseQuery(query, catalog);
-    if (!parsed.ok) throw new Error(parsed.error.message);
+    const parsed = parseQueryAny(query, REG);
+    if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
     return materializationWindow(parsed.ast, today);
   };
+  /** Окно по готовому дереву — там, где текст плоской грамматики его не выражает (§А5-3д). */
+  const winAst = (filter: QueryFilterNode) => materializationWindow({ filter }, today);
 
   test('запрос без date/timestamp-условий — окна нет', () => {
     expect(win('aspect=orbis/task, status=inbox')).toBeNull();
@@ -429,8 +444,7 @@ describe('materializationWindow — детект окна по AST (чистая
     expect(win('occurred_on=2026-07-12')).toEqual({ from: '2026-07-12', to: '2026-07-12' });
   });
 
-  test('date-токен на чужом поле (due_date и т.п.) окна не даёт', () => {
-    // status — не date-поле; окна нет и парсер бы отверг токен; берём чистый литерал
+  test('условие по НЕ-датному свойству окна не даёт', () => {
     expect(win('status=inbox')).toBeNull();
   });
 
@@ -446,23 +460,70 @@ describe('materializationWindow — детект окна по AST (чистая
     });
   });
 
-  test('абсолютные сравнения date-поля (B5): > — от следующего дня до горизонта; < — открытый низ от сегодня', () => {
+  test('абсолютные сравнения date-поля (B5): > — от следующего дня до горизонта; < — открытый низ', () => {
     // occurred_on>X: строго после X; верх не ограничен → горизонт +14д от сегодня
     expect(win('occurred_on>2026-07-12')).toEqual({ from: '2026-07-13', to: '2026-07-24' });
     // occurred_on<X: открытый низ — только сегодня и будущее (как overdue), верх — день до X
     expect(win('occurred_on<2026-07-15')).toEqual({ from: today, to: '2026-07-14' });
+    // Односторонний range (`<=`/`>=` канона): открытая граница берётся оттуда же. Форма
+    // ТОЛЬКО новая — `<=` старая грамматика не выражает вовсе, и мост тут не помогает.
+    expect(win('orbis/occurred_on<=2026-07-15')).toEqual({ from: today, to: '2026-07-15' });
+    expect(win('orbis/occurred_on>=2026-07-15')).toEqual({ from: '2026-07-15', to: '2026-07-24' });
   });
 
-  test('диапазон/сравнение НЕ-date-полей окна не дают (amount, updated_at)', () => {
-    const catalog: FieldCatalog = {
-      fields: { amount: [{ aspect: 'orbis/financial', type: 'decimal' }] },
-    };
-    const p1 = parseQuery('amount=500..2000', catalog);
-    if (!p1.ok) throw new Error(p1.error.message);
-    expect(materializationWindow(p1.ast, today)).toBeNull();
-    const p2 = parseQuery('updated_at>2026-07-01T00:00:00Z', catalog);
-    if (!p2.ok) throw new Error(p2.error.message);
-    expect(materializationWindow(p2.ast, today)).toBeNull();
+  test('диапазон/сравнение НЕ-датных свойств окна не дают (amount, updated_at)', () => {
+    expect(win('amount=500..2000')).toBeNull();
+    expect(win('updated_at>2026-07-01T00:00:00Z')).toBeNull();
+  });
+
+  test('срок задачи (orbis/due_date) окно ДАЁТ — на нём стоят «Сегодня» и «Ближайшие 7 дней»', () => {
+    // Раньше окно давал только соседний start_at, и recurring-задача со сроком в списке
+    // «Сегодня» не материализовалась вовсе — список молча показывал меньше.
+    expect(win('aspect=orbis/task, due_date=today|overdue')).toEqual({ from: today, to: today });
+    expect(win('aspect=orbis/task, due_date=next_7d')).toEqual({ from: today, to: '2026-07-17' });
+  });
+
+  test('ветка or даёт окно наравне с and: показаться может любая', () => {
+    expect(
+      winAst({
+        or: [
+          { prop: 'orbis/start_at', op: 'range', value: { to: { token: 'next_7d' } } },
+          { prop: 'orbis/due_date', op: 'range', value: { to: { token: 'next_7d' } } },
+        ],
+      }),
+    ).toEqual({ from: today, to: '2026-07-17' });
+  });
+
+  test('поддерево под not окно НЕ сужает и вклада не даёт', () => {
+    // Само по себе отрицание окна не порождает: «срок не сегодня» — не диапазон.
+    expect(
+      winAst({ not: { prop: 'orbis/due_date', op: 'eq', value: { token: 'today' } } }),
+    ).toBeNull();
+    // И рядом с положительным условием оно окно не режет: остаётся ровно его диапазон.
+    expect(
+      winAst({
+        and: [
+          { prop: 'orbis/due_date', op: 'eq', value: { token: 'next_7d' } },
+          { not: { prop: 'orbis/due_date', op: 'eq', value: { token: 'today' } } },
+        ],
+      }),
+    ).toEqual({ from: today, to: '2026-07-17' });
+  });
+
+  test('вложенность любой глубины: условие под тремя узлами всё равно найдено', () => {
+    expect(
+      winAst({
+        and: [
+          { aspect: 'orbis/task' },
+          {
+            or: [
+              { tag: 'дом' },
+              { and: [{ prop: 'orbis/start_at', op: 'eq', value: '2026-07-12' }] },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({ from: '2026-07-12', to: '2026-07-12' });
   });
 });
 
