@@ -10,14 +10,22 @@
 // всего графа → изоляция второго пользователя (RLS §4.10) на трёх срезах: query
 // категорий, undoLast и экспорт.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { entitySchema, globalThreadId, newId } from '@orbis/shared';
+import { addDays, entitySchema, globalThreadId, newId } from '@orbis/shared';
 import { TRPCError } from '@trpc/server';
 import type { ActionRecord } from '../src/executor/types';
+import { DEFAULT_TIMEZONE, todayInTimeZone } from '../src/query/context';
 import { appRouter } from '../src/router';
 import { SEED_CATEGORIES } from '../src/seed/categories';
 import { seedCategoryId } from '../src/seed/onboarding';
 import { createCallerFactory } from '../src/trpc';
 import { appDb, freshUserId, requireEnv, truncateAll } from './helpers';
+
+/**
+ * «Сегодня» глазами СЕРВЕРА: та же функция и та же зона по умолчанию, которыми date-токены
+ * разворачивает компилятор. Своя строка здесь разъехалась бы с ним на каждом прогоне возле
+ * полуночи, и блок «Сегодня» в шаге 4b начал бы мигать без всякой связи с кодом.
+ */
+const TODAY = todayInTimeZone(DEFAULT_TIMEZONE);
 
 requireEnv();
 
@@ -55,6 +63,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   let obedId = ''; // id сущности «Обед» (fast-path-расход)
   let sneakersId = ''; // id задачи «купить кроссовки» (cross-aspect)
   let blockerId = ''; // id задачи-блокера
+  let laterId = ''; // id задачи со сроком за горизонтом (контроль блока «Сегодня»)
   let updateActionId = ''; // id действия entity_update (для повторного undo)
 
   beforeAll(async () => {
@@ -155,7 +164,11 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
         title: 'Купить кроссовки',
         tags: ['task'],
         aspects: {
-          'orbis/task': { status: 'inbox' },
+          // `due_date` — СЕГОДНЯ, и это не украшение фикстуры: на нём стоит единственная
+          // проверка ОСМЫСЛЕННОСТИ выдачи моста (шаг 4b). Без срока блок «Сегодня» отбирал
+          // бы пусто, и любой ассерт над пустым списком проходил бы при любом поведении
+          // компилятора — ровно та инертность, которую нашёл предфильтр (I-3).
+          'orbis/task': { status: 'inbox', due_date: TODAY },
           // planned-операция §3.3 обязана иметь дату occurred_on
           'orbis/financial': {
             amount: '5000.00',
@@ -201,6 +214,22 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     // СТАРОЙ формой и переводятся только Задачей 21. Между этими двумя задачами их читает
     // переходный мост — и проверять его надо на настоящих телах из БД, а не на образцах в
     // тесте: образец переживёт правку сида, а владелец увидит красную плашку.
+    //
+    // Вторая задача — КОНТРОЛЬ, и без неё проверка ниже односторонняя: с одной задачей в
+    // графе «блок отобрал правильно» и «блок отобрал всё» дают ОДИН И ТОТ ЖЕ ответ, и
+    // ассерт их не различает (ровно та инертность, что нашёл предфильтр, I-3). Срок у неё
+    // за горизонтом: «Сегодня» обязан её НЕ показать, «Позже» — показать.
+    const later = await a.entity.create({
+      source: 'quick_capture',
+      input: {
+        id: newId(),
+        title: 'Продлить страховку',
+        tags: ['task'],
+        aspects: { 'orbis/task': { status: 'inbox', due_date: addDays(TODAY, 30) } },
+      },
+    });
+    laterId = later.id;
+
     const lists = await a.entity.query({ query: 'tags=smart-list' });
     expect(lists.length).toBeGreaterThanOrEqual(6);
     const blocks = lists.flatMap((e) =>
@@ -219,12 +248,25 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
       const { count } = await a.entity.count({ query: block });
       expect(typeof count).toBe('number');
     }
-    // Блок «Сегодня» отбирает не пусто и не всё: сегодняшняя задача в нём есть, а
-    // сидированные категории — нет. Иначе «исполнился» означало бы «вернул что угодно».
+    // ОСМЫСЛЕННОСТЬ ВЫДАЧИ, а не «вызов не бросил». Блок «Сегодня» отбирает РОВНО одну
+    // сущность графа — задачу со сроком сегодня; всё остальное (18 сидированных, расход
+    // «Обед») в него не попадает ни по аспекту, ни по сроку. Точный набор, а не «непусто»
+    // и не «все с аспектом task»: обе крайности — пустая выдача и выдача целиком — обязаны
+    // краснеть, и обе краснеют (проверено двумя противоположными мутациями `tokenCond`).
     const today = blocks.find((b) => b.includes('due_date=today'));
     if (today === undefined) throw new Error('в телах нет блока «Сегодня»');
     const todayRows = await a.entity.query({ query: today });
-    expect(todayRows.every((r) => r.aspectsMap['orbis/task'] !== undefined)).toBe(true);
+    expect(todayRows.map((r) => r.id)).toEqual([sneakersId]);
+    // И бейдж сайдбара считает то же самое: у count своя ветка компиляции.
+    expect((await a.entity.count({ query: today })).count).toBe(1);
+
+    // Обратная сторона того же факта: задача со сроком через месяц стоит в «Позже» и
+    // отсутствует в «Сегодня». Без этой пары ассерт выше краснел бы только на «пусто», а
+    // на «отобрал всё подряд» оставался бы зелёным.
+    expect(todayRows.map((r) => r.id)).not.toContain(laterId);
+    const later7 = blocks.find((b) => b.includes('due_date=after_7d'));
+    if (later7 === undefined) throw new Error('в телах нет блока «Позже»');
+    expect((await a.entity.query({ query: later7 })).map((r) => r.id)).toEqual([laterId]);
   });
 
   // ── Шаг 5: update→done, undo, повторный undo → ошибка ──────────────────────
@@ -295,33 +337,39 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(rel.relationType).toBe('blocks');
 
     const openTasks = 'aspect=orbis/task, status=!done&!cancelled';
-    // Без excludeBlocked видны обе задачи (обе inbox после undo шага 5)
+    // Без excludeBlocked видны все открытые задачи (после undo шага 5 их три: кроссовки,
+    // блокер и контрольная «Продлить страховку» из шага 4b)
     const all = await a.entity.query({ query: openTasks });
     const allIds = all.map((r) => r.id);
     expect(allIds).toContain(sneakersId);
     expect(allIds).toContain(blockerId);
+    expect(allIds).toContain(laterId);
 
     // С excludeBlocked=true заблокированная (target живой blocks) исчезает, блокер остаётся
     const unblocked = await a.entity.query({ query: `${openTasks}, excludeBlocked=true` });
     const unblockedIds = unblocked.map((r) => r.id);
     expect(unblockedIds).not.toContain(sneakersId);
     expect(unblockedIds).toContain(blockerId);
-    expect(unblockedIds).toEqual([blockerId]);
+    // Точный НАБОР, а не «содержит»: сахар обязан вычесть ровно заблокированную и никого
+    // больше. Порядок не задан (в блоке нет sortBy), поэтому сравниваются отсортированные.
+    expect([...unblockedIds].sort()).toEqual([blockerId, laterId].sort());
   });
 
   // ── Шаг 7: экспорт содержит ВЕСЬ граф A (сущности, связи, сообщения, настройки) ─
-  test('шаг 7: exportData(A) — 21 сущность, 1 связь, 1 тред, 7 сообщений (вкл. audit и undo)', async () => {
+  test('шаг 7: exportData(A) — 22 сущности, 1 связь, 1 тред, 8 сообщений (вкл. audit и undo)', async () => {
     const exp = await a.user.exportData();
     expect(exp.format).toBe('orbis-export');
     expect(exp.version).toBe(1);
 
-    // 18 сидов + «Обед» + «купить кроссовки» + «Дождаться зарплаты» = 21
-    expect(exp.entities.length).toBe(21);
+    // 18 сидов + «Обед» + «купить кроссовки» + «Продлить страховку» (контроль шага 4b) +
+    // «Дождаться зарплаты» = 22
+    expect(exp.entities.length).toBe(22);
     for (const e of exp.entities) expect(() => entitySchema.parse(e)).not.toThrow();
     const expIds = new Set(exp.entities.map((e) => e.id));
     expect(expIds.has(obedId)).toBe(true);
     expect(expIds.has(sneakersId)).toBe(true);
     expect(expIds.has(blockerId)).toBe(true);
+    expect(expIds.has(laterId)).toBe(true);
     for (const c of SEED_CATEGORIES) expect(expIds.has(seedCategoryId(userA, c.slug))).toBe(true);
 
     // decimal «Обеда» сохранён строкой без искажений (§13.6, персистентный JSON)
@@ -333,17 +381,17 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(exp.relations.length).toBe(1);
     expect(exp.relations[0]?.role).toBe('dependency');
 
-    // Один тред (глобальный) и 7 сообщений: 1 user + 6 системных
+    // Один тред (глобальный) и 8 сообщений: 1 user + 7 системных
     expect(exp.chatThreads.length).toBe(1);
     expect(exp.chatThreads[0]?.entityId).toBeNull();
-    expect(exp.chatMessages.length).toBe(7);
+    expect(exp.chatMessages.length).toBe(8);
     // Пользовательская реплика присутствует
     expect(exp.chatMessages.some((m) => m.role === 'user' && m.content === 'обед 340')).toBe(true);
-    // audit-сообщений с непустым action — 5 (create×3, update×1, relation×1)
+    // audit-сообщений с непустым action — 6 (create×4, update×1, relation×1)
     const auditCount = exp.chatMessages.filter(
       (m) => ((m.metadata as JournalMeta).actions ?? []).length > 0,
     ).length;
-    expect(auditCount).toBe(5);
+    expect(auditCount).toBe(6);
     // ровно одно undo-сообщение
     const undoCount = exp.chatMessages.filter(
       (m) => (m.metadata as JournalMeta).type === 'undo',
@@ -386,7 +434,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
 
     // Граф A не тронут вмешательствами B (перекрёстная проверка изоляции)
     const aExp = await a.user.exportData();
-    expect(aExp.entities.length).toBe(21);
+    expect(aExp.entities.length).toBe(22);
     expect(aExp.relations.length).toBe(1);
     // «купить кроссовки» так и осталась inbox (B её не отменял/менял)
     const aSneakers = aExp.entities.find((e) => e.id === sneakersId);

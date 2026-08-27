@@ -23,7 +23,7 @@
 //    процент клиент выводит из тех же строк точным BigInt (§3.3). Числа с плавающей
 //    точкой контракт этой функции не пересекают вовсе.
 import { type GoalAspect, goalAspectSchema } from '@orbis/shared';
-import { type QueryAst, resolveLegacyFieldId } from '@orbis/shared/query';
+import { aspectsNamedInQueryAst, type QueryAst, resolveLegacyFieldId } from '@orbis/shared/query';
 import type { SQL } from 'drizzle-orm';
 import { decRatio } from '../budget/decimal';
 import type { Tx } from '../db/with-identity';
@@ -284,10 +284,16 @@ export async function computeGoalProgress(
 
   // Имя поля агрегата резолвится ДО компиляции и своим ярлыком: у компилятора канона на
   // руках был бы только id, и «нет такого свойства» стало бы неотличимо от неизвестного id
-  // внутри самого запроса — то есть `invalid_field` и `invalid_query` слились бы.
+  // внутри самого запроса — то есть `invalid_field` и `invalid_query` слились бы. Аспекты
+  // самого запроса участвуют в резолве (как `aspectsInQuery` у старого компилятора): ими
+  // автор цели разводит имя, которое носят несколько аспектов.
   let property = '';
   if (src.aggregate !== 'count') {
-    const resolved = resolveLegacyFieldId(src.field, parseRegistryOf(ctx));
+    const resolved = resolveLegacyFieldId(
+      src.field,
+      parseRegistryOf(ctx),
+      aspectsNamedInQueryAst(ast),
+    );
     if (resolved === undefined) {
       const message = `поле '${src.field}' не разрешилось реестром: нет такого свойства или оно неоднозначно`;
       logFailure('compile_field', message, goalId, `отказ invalid_field: ${message}`);

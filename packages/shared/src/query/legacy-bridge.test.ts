@@ -12,7 +12,13 @@ import {
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
 } from '../registry';
-import { legacyCatalogFromRegistry, parseQueryAny, resolveLegacyFieldId } from './legacy-bridge';
+import type { QueryFilterNode } from './ast';
+import {
+  aspectsNamedInQueryAst,
+  legacyCatalogFromRegistry,
+  parseQueryAny,
+  resolveLegacyFieldId,
+} from './legacy-bridge';
 import { type ParseRegistry, parseQueryAst, toParseRegistry } from './parse-ast';
 
 const REG: ParseRegistry = toParseRegistry(
@@ -126,11 +132,52 @@ describe('parseQueryAny: отказ наружу — всегда от НОВО�
     expect(r.error.code).toBe('CLASS_NOT_AVAILABLE');
   });
 
+  test('ЦЕНА правила: у текста старой формы с настоящей ошибкой она не называется', () => {
+    // Запрос разбирается мостом до `display` и спотыкается на нём, но наружу уходит отказ
+    // новой грамматики — про первое имя, на котором остановилась ОНА. Настоящая причина
+    // («display: compact, list или table») не звучит. Это осознанная цена правила «наружу —
+    // новая грамматика» (докблок `parseQueryAny`), и она обязана быть видимой в тесте, а не
+    // всплыть находкой: молча такое поведение выглядит багом резолва имён.
+    const r = parseQueryAny('aspect=orbis/task, status=inbox, display=мозаика', REG);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error.code).toBe('UNKNOWN_FIELD');
+    expect(r.error.message).toContain('status');
+    expect(r.error.message).not.toContain('display');
+  });
+
   test('непереводимое значение (булево свойство со строкой) — отказ канона, а не кривое дерево', () => {
     const r = parseQueryAny('aspect=orbis/agent-run, undecided=ага', REG);
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error.code).toBe('UNKNOWN_FIELD');
+  });
+});
+
+describe('aspectsNamedInQueryAst: чем запрос разводит неоднозначное имя', () => {
+  test('собирает aspect= со всего дерева, включая ветки под not и or', () => {
+    // Обход итеративный (стек, а не рекурсия): дерево приезжает недоверенным входом `ast:`.
+    expect(
+      aspectsNamedInQueryAst({
+        filter: {
+          and: [
+            { aspect: 'orbis/task' },
+            { or: [{ tag: 'дом' }, { aspect: 'orbis/schedule' }] },
+            { not: { aspect: 'orbis/note' } },
+          ],
+        },
+      }),
+    ).toEqual(new Set(['orbis/task', 'orbis/schedule', 'orbis/note']));
+    expect(aspectsNamedInQueryAst({ filter: null })).toEqual(new Set());
+    expect(aspectsNamedInQueryAst({ filter: { tag: 'дом' } })).toEqual(new Set());
+  });
+
+  test('глубокое дерево обходится без исчерпания стека', () => {
+    // Тот самый вход, на котором рекурсивный обход упал бы RangeError'ом: если бы обход
+    // был рекурсивным, поле агрегата переставало бы резолвиться ровно на таких запросах.
+    let filter: QueryFilterNode = { aspect: 'orbis/task' };
+    for (let i = 0; i < 20000; i++) filter = { not: filter };
+    expect(aspectsNamedInQueryAst({ filter })).toEqual(new Set(['orbis/task']));
   });
 });
 

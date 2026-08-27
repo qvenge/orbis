@@ -381,7 +381,13 @@ const {
   ...astBody
 } = queryAstJsonSchema;
 
-const entityQueryJsonSchema = {
+/**
+ * Экспортирована ради живой пробы §С8-4 (`scripts/probe-openai-schema.ts`): проба обязана
+ * гонять провайдеру ТУ ЖЕ схему, что отгружается, а не собранную рядом. Своя копия у пробы
+ * была третьей правдой о схеме и не заметила бы, например, корневого `oneOf` — самой
+ * капризной у OpenAI конструкции, из-за которой и родилось решение D29.
+ */
+export const entityQueryJsonSchema = {
   type: 'object',
   properties: {
     query: {

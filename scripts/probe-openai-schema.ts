@@ -29,6 +29,7 @@ import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
 import Ajv from 'ajv';
 import { OpenAIProvider } from '../apps/server/src/llm/openai';
 import type { LLMToolDef } from '../apps/server/src/llm/types';
+import { entityQueryJsonSchema } from '../apps/server/src/tools/registry';
 
 const apiKey = process.env.OPENAI_API_KEY;
 if (!apiKey) {
@@ -40,38 +41,31 @@ if (!apiKey) {
 }
 
 /**
- * Схема входа тула. `$defs` ПОДНЯТЫ на корень, а сама схема Q-AST вложена без них.
+ * Схема входа тула — ТА САМАЯ, что отгружается (`tools/registry.ts`), а не собранная здесь.
  *
- * Это не косметика: указатель `#/$defs/node` резолвится от КОРНЯ документа, которым для
- * провайдера является схема тула, а не наша схема запроса. Оставь мы `$defs` внутри —
- * ссылка указывала бы в никуда, и отказ пришёл бы не про язык запросов, а про битый $ref.
+ * Раньше проба строила свою: один вход `ast`, корневой `required`. Отгружается же другая —
+ * ДВА входа (`query` и `ast`) и корневой `oneOf` вместо `required` (§А5-4, «ровно одно из
+ * двух»). Проба на своей схеме доказывала бы только то, что провайдер принимает КАКУЮ-ТО
+ * схему, и не тронула бы самую капризную у OpenAI конструкцию — корневой `oneOf` в
+ * параметрах функции. Решение D29 родилось ровно из «схему разобрали глазами, а отказ
+ * пришёл от провайдера», и повторять это на второй такой же мелочи нельзя.
+ *
+ * `$defs` подняты на корень схемы ТУЛА — это делает сам `registry.ts`, и правильность
+ * подъёма проба тоже теперь проверяет живьём: указатель `#/$defs/node` резолвится от корня
+ * документа, которым для провайдера является схема тула.
  */
-const {
-  $schema: _schema,
-  $defs,
-  ...astSchema
-} = queryAstJsonSchema as Record<string, unknown> & {
-  $defs: unknown;
-};
-
-const inputSchema: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    ast: astSchema,
-    title: { type: 'string', description: 'Заголовок списка, если он нужен' },
-  },
-  required: ['ast'],
-  additionalProperties: false,
-  $defs,
-};
+const inputSchema: Record<string, unknown> = entityQueryJsonSchema;
+const $defs = inputSchema.$defs;
 
 const tools: LLMToolDef[] = [
   {
     name: 'entity_query',
+    // Описание — своё, короткое: проба меряет СХЕМУ, а не боевую формулировку тула, и
+    // тащить сюда весь боевой текст значило бы мерить заодно и её длину.
     description:
       'Отобрать записи владельца разобранным запросом Orbis (Q-AST). ' +
-      'Поле `ast` — дерево фильтра и параметры проекции; имена свойств, аспектов и ролей — ' +
-      'namespaced-ключи вида orbis/task_status.',
+      'Заполняй поле `ast` — дерево фильтра и параметры проекции; имена свойств, аспектов и ' +
+      'ролей — namespaced-ключи вида orbis/task_status. Поле `query` не используй.',
     inputSchema,
   },
 ];
@@ -92,6 +86,19 @@ const validate = ajv.compile(queryAstJsonSchema);
 
 console.log('probe-openai-schema: модель', provider.modelId);
 console.log('probe-openai-schema: транспорт Responses API, strict:false (D29)');
+// ЧТО ИМЕННО ОТГРУЖАЕТСЯ — печатается целиком: без этой строки «схема принята» не говорит,
+// КАКАЯ схема принята, и проба на подменённой форме выглядела бы так же зелено.
+console.log(
+  'probe-openai-schema: корень отгружаемой схемы —',
+  JSON.stringify({
+    type: inputSchema.type,
+    properties: Object.keys(inputSchema.properties as Record<string, unknown>).sort(),
+    required: inputSchema.required,
+    oneOf: inputSchema.oneOf,
+    additionalProperties: inputSchema.additionalProperties,
+    $defs: Object.keys((inputSchema.$defs ?? {}) as Record<string, unknown>),
+  }),
+);
 const branches = (($defs as { node?: { anyOf?: unknown[] } })?.node?.anyOf ?? []) as Array<{
   properties?: { rel?: { anyOf?: unknown[] } };
 }>;
@@ -137,7 +144,7 @@ for (const [name, text] of texts) {
       messages: [
         {
           role: 'user',
-          content: `Собери запрос по этому описанию и вызови entity_query: ${text}`,
+          content: `Собери запрос по этому описанию и вызови entity_query, заполнив поле ast: ${text}`,
         },
       ],
       tools,

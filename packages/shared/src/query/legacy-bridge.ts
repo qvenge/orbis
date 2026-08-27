@@ -133,6 +133,30 @@ function legacyFieldIndex(reg: ParseRegistry): Map<string, LegacyFieldOwner[]> {
 }
 
 /**
+ * Аспекты, НАЗВАННЫЕ запросом, — для резолва неоднозначного имени поля (§А5-3ж, `aspect=`
+ * разводит подписи). Обход итеративный, а не рекурсивный: дерево приезжает недоверенным
+ * входом `ast:` тула, и рекурсия по нему исчерпала бы стек на том же входе, на котором его
+ * исчерпывает zod (см. докблок `queryFilterNodeSchema`).
+ *
+ * Узлы под `not` СЧИТАЮТСЯ: «покажи не-задачи» тоже называет аспект `orbis/task` — это
+ * подсказка о том, про что запрос, а не про то, что попадёт в выдачу. Ровно так же вёл
+ * себя старый резолв (`compile.ts`, `aspectsInQuery`): он собирал `aspect=` со всего
+ * плоского списка, где отрицания как узла не было вовсе.
+ */
+export function aspectsNamedInQueryAst(ast: QueryAst): Set<string> {
+  const found = new Set<string>();
+  const stack: QueryFilterNode[] = ast.filter === null ? [] : [ast.filter];
+  while (stack.length > 0) {
+    const node = stack.pop() as QueryFilterNode;
+    if ('aspect' in node) found.add(node.aspect);
+    else if ('and' in node) stack.push(...node.and);
+    else if ('or' in node) stack.push(...node.or);
+    else if ('not' in node) stack.push(node.not);
+  }
+  return found;
+}
+
+/**
  * Старое имя поля → id свойства канона (§А5-2: в дереве лежат id, не подписи).
  *
  * Правила резолва повторяют `resolveField` старого парсера: сначала core-имена, затем
@@ -344,6 +368,19 @@ export function legacyAstToQueryAst(legacy: LegacyQueryAst, reg: ParseRegistry):
  *
  * Отказ, который увидит человек, ВСЕГДА от новой грамматики — и когда мост не позвали, и
  * когда он не справился (см. шапку файла).
+ *
+ * ЦЕНА ЭТОГО ПРАВИЛА, названная вслух: у текста СТАРОЙ формы с настоящей ошибкой человек
+ * увидит не её. `'aspect=orbis/task, status=inbox, display=мозаика'` разбирается мостом до
+ * `display`, спотыкается на нём — и наружу уходит отказ новой грамматики про `status`
+ * («неизвестное свойство»), потому что именно на нём она остановилась первой. Настоящая
+ * причина («display: compact, list или table») не называется никогда.
+ *
+ * Почему цена принята. Альтернатива — отдавать отказ СТАРОЙ грамматики, когда мост был
+ * позван, — учит умирающему языку: человек чинит `display`, получает работающий запрос
+ * старой формы и узнаёт о переводе только в Задаче 21, когда мост исчезнет и красным
+ * станет уже всё. §А5-3ж при этом не нарушен: отказ есть, он структурный и с позицией,
+ * молчаливого нуля нет. Цена конечна по времени (умирает с мостом) и по объёму (49
+ * боевых текстов описи, все переводятся Задачами 10c и 21).
  */
 export function parseQueryAny(text: string, reg: ParseRegistry): ParseAstResult {
   const fresh = parseQueryAst(text, reg);

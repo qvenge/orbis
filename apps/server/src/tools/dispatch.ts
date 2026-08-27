@@ -28,7 +28,7 @@ import {
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
-import { type QueryAst, resolveLegacyFieldId } from '@orbis/shared/query';
+import { aspectsNamedInQueryAst, type QueryAst, resolveLegacyFieldId } from '@orbis/shared/query';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { z } from 'zod';
 import { isWorkerThreadTarget } from '../agent-loop/queries';
@@ -696,7 +696,7 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
       }
       // aggregate === 'sum'; field проверен выше
       const field = parsed.field as string;
-      const compiled = compileSumAst(ast, sumProperty(field, cctx), cctx);
+      const compiled = compileSumAst(ast, sumProperty(field, ast, cctx), cctx);
       const rows = await tx.execute(compiled);
       const count = Number(rows[0]?.count);
       const value = (rows[0]?.sum as string | null) ?? '0'; // пустая выборка: sum NULL → '0'
@@ -713,9 +713,14 @@ async function runUserQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDispa
  * Имя поля агрегата → id свойства. Не резолвится — структурная VALIDATION с именем, которое
  * прислала модель: у `compileSumAst` на руках был бы только несуществующий id, и отказ
  * назвал бы его вместо того, что написал вызывающий.
+ *
+ * Аспекты САМОГО ЗАПРОСА участвуют в резолве, как и у старого компилятора
+ * (`aspectsInQuery`): старое имя может носить несколько аспектов, и `aspect=` в запросе —
+ * единственное, чем автор их разводит. Без этого `sum` по неоднозначному имени отказывал
+ * бы там, где текст запроса всё уже сказал, — сужение молчаливое и не названное нигде.
  */
-function sumProperty(field: string, cctx: CompileCtx): string {
-  const id = resolveLegacyFieldId(field, parseRegistryOf(cctx));
+function sumProperty(field: string, ast: QueryAst, cctx: CompileCtx): string {
+  const id = resolveLegacyFieldId(field, parseRegistryOf(cctx), aspectsNamedInQueryAst(ast));
   if (id === undefined) {
     throw new ExecError('VALIDATION', `user_query: свойства '${field}' нет в реестре`, {
       tool: 'user_query',
@@ -1759,13 +1764,34 @@ async function runThreadPost(
 // Общие хелперы
 // ---------------------------------------------------------------------------
 
-/** Структурная валидация envelope read-тулов и thread_post (мутации валидирует executor). */
+/**
+ * Структурная валидация envelope read-тулов и thread_post (мутации валидирует executor).
+ *
+ * `RangeError` ловится ОТДЕЛЬНО и намеренно: схема канона Q-AST рекурсивна (`z.lazy`), и
+ * достаточно глубокое дерево во входе `ast:` исчерпывает стек внутри самого `safeParse` —
+ * то есть мимо `parsed.success`. Без этой ветки наружу уходил бы сырой `RangeError` вместо
+ * структурного отказа, и модель получила бы не «твой запрос слишком глубок», а обрыв.
+ * Кап глубины при этом не выдуман: ставить его пришлось бы ДО zod у каждого вызывающего,
+ * то есть завести второе мнение о законном дереве (см. докблок `queryFilterNodeSchema`).
+ */
 function parseEnvelope<S extends z.ZodTypeAny>(
   schema: S,
   input: unknown,
   tool: string,
 ): z.infer<S> {
-  const parsed = schema.safeParse(input);
+  let parsed: ReturnType<S['safeParse']>;
+  try {
+    parsed = schema.safeParse(input) as ReturnType<S['safeParse']>;
+  } catch (e) {
+    if (e instanceof RangeError) {
+      throw new ExecError(
+        'VALIDATION',
+        `input тула «${tool}» слишком глубоко вложен: разбор не поместился в стек`,
+        { tool, reason: 'INPUT_TOO_DEEP' },
+      );
+    }
+    throw e;
+  }
   if (!parsed.success) {
     throw new ExecError('VALIDATION', `невалидный input тула «${tool}»`, {
       tool,

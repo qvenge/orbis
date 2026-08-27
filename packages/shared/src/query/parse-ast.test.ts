@@ -45,6 +45,12 @@ test('несуществующий календарный день — TYPE с �
   const e = err('orbis/start_at=2026-02-30T09:00:00Z');
   expect(e.code).toBe('TYPE');
   expect(e.position).toBeGreaterThan(0);
+  // У момента «существует» — это и время суток, и смещение зоны (I-1 предфильтра).
+  expect(err('orbis/start_at=2026-08-27T25:00:00Z').code).toBe('TYPE');
+  expect(err('orbis/start_at=2026-08-27T12:00:00+23:00').code).toBe('TYPE');
+  expect(ok('orbis/start_at=2026-08-27T23:59:59+15:59')).toEqual({
+    filter: { prop: 'orbis/start_at', op: 'eq', value: '2026-08-27T23:59:59+15:59' },
+  });
   // Високосный контроль: проверка обязана быть календарём, а не «в феврале всегда 28».
   expect(ok('orbis/due_date=2028-02-29')).toEqual({
     filter: { prop: 'orbis/due_date', op: 'eq', value: '2028-02-29' },
