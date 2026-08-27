@@ -25,6 +25,7 @@ import {
   myQueueInput,
   newId,
   type QueueTicket,
+  ROLE_RUN,
   type RunStepInput,
   type RunStepResult,
   type RunUsageInput,
@@ -36,7 +37,6 @@ import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
-import { ROLE_RUN } from '../executor/relations';
 import type {
   ActorKind,
   JournalSink,

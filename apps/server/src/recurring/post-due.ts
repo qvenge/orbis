@@ -8,13 +8,12 @@
 // с двух устройств сходятся к одному action по audit-PK (§7.8), повтор — replay;
 // Undo перехода «липкий» — заново инстанс не постится, воля владельца уважается.
 // Один batch на ОДИН инстанс: отказ по одному инстансу не валит остальные.
-import { postFinancialBatchId } from '@orbis/shared';
+import { postFinancialBatchId, ROLE_INSTANCE_OF } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import { ROLE_INSTANCE_OF } from '../executor/relations';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 

@@ -13,6 +13,7 @@ import {
   materializeBatchId,
   type QueryAst,
   type RecurrenceRule,
+  ROLE_INSTANCE_OF,
   recurringInstanceId,
 } from '@orbis/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -21,7 +22,6 @@ import { entities, userSettings } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import { ROLE_INSTANCE_OF } from '../executor/relations';
 import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
 
 /** Горизонт материализации: не дальше 14 дней вперёд от сегодня (§5.4). */

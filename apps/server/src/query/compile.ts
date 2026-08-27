@@ -22,11 +22,11 @@ import {
   type QueryFilter,
   type QueryRangeFilter,
   type QuerySortField,
+  ROLE_DEPENDENCY,
   SERVICE_ASPECT_IDS,
 } from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
-import { ROLE_DEPENDENCY } from '../executor/relations';
 import { hierarchicalRolesSql } from '../registry/roles';
 
 export interface CompileContext {

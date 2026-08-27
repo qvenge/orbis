@@ -1011,6 +1011,29 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
     expect(await legacyBudgetParents(txn.id)).toEqual([env1.id]);
   });
 
+  /**
+   * СЕТЬ ПОД SQL-ПОЛОВИНОЙ ИНВАРИАНТА (ре-ревью 7b). Тесты 27/28 ставят первым ребром
+   * `envelope-binding`, а 31/31a-d идут по ВИРТУАЛЬНОЙ половине (JS-массив batch) — то есть
+   * сужение множества в SQL-запросе `assertSingleLegacyBudgetParent` переживали все они, и
+   * краснел ровно один тест на весь инвариант (32, через attach).
+   *
+   * Здесь существующее ребро — роль ВЛАДЕЛЬЦА и лежит СТРОКОЙ В БД (отдельный вызов, не
+   * batch), поэтому найти его может только SELECT инварианта. Сузь его до `envelope-binding`
+   * — и второй конверт встанет рядом с первым, а владелец увидит одну трату в двух конвертах.
+   */
+  test('28a. существующее ребро роли ВЛАДЕЛЬЦА лежит в БД: второй конверт отбивает SQL-половина инварианта', async () => {
+    const { env1, env2, txn } = await twoEnvelopesAndTxn();
+    // Первое ребро — `subitem`, руками владельца и ОТДЕЛЬНЫМ действием: к моменту второго
+    // вызова оно уже закоммичено, виртуального графа batch у проверки нет.
+    ok(await createRelation(env1.id, txn.id, 'subitem'));
+    // Второе — системная привязка, какую поставил бы хук бюджета
+    const r = err(await createRelation(env2.id, txn.id, 'envelope-binding', AS_SYSTEM));
+    expect(r.error.code).toBe('INVARIANT');
+    expect(invariantOf(r)).toBe('single_budget_parent');
+    expect((r.error.details as { legacyInterval?: boolean }).legacyInterval).toBe(true);
+    expect(await legacyBudgetParents(txn.id)).toEqual([env1.id]);
+  });
+
   test('28. та же дыра ролью ticket (любая роль владельца, проецирующаяся в parent)', async () => {
     const { env1, env2, txn } = await twoEnvelopesAndTxn();
     ok(await createRelation(env1.id, txn.id, 'envelope-binding', AS_SYSTEM));

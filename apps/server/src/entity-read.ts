@@ -5,14 +5,18 @@
 // entitySchema всегда несёт body), include управляет доп. секциями.
 // Вызывается ТОЛЬКО под withIdentity (RLS, §4.10); ошибки — ExecError (роутер
 // мапит в TRPCError, диспатч — в структурированный error-результат).
-import { type EntityGetUiInput, entityThreadId, type LocalizedText } from '@orbis/shared';
+import {
+  type EntityGetUiInput,
+  entityThreadId,
+  type LocalizedText,
+  ROLE_MENTION,
+} from '@orbis/shared';
 import { readBodyDoc } from '@orbis/shared/doc';
 import { desc, eq, or, sql } from 'drizzle-orm';
 import type { WireChatMessage } from './chat/messages';
 import { chatMessages, entities, relations } from './db/schema';
 import type { Tx } from './db/with-identity';
 import { ExecError } from './errors';
-import { ROLE_MENTION } from './executor/relations';
 import type { WireEntity, WireRelation } from './executor/types';
 import { effectiveRolesSql } from './registry/roles';
 import { toWireChatMessage, toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
@@ -35,8 +39,8 @@ export interface Backlink {
   viaLabel: string;
 }
 
-// Роль секции «Связанное» — `ROLE_MENTION` (общий дом поимённых ролей,
-// `executor/relations.ts`). До реформы секцию собирал схлопнутый `related_to`, куда
+// Роль секции «Связанное» — `ROLE_MENTION` (общий дом поимённых ролей —
+// `@orbis/shared/constants`). До реформы секцию собирал схлопнутый `related_to`, куда
 // проецируются ещё `alternative-of` и `supersedes`, — то есть «это альтернатива» и «это
 // замена» показывались как «связь». Роль их развела, и секция теперь ровно про упоминания;
 // рёбра `ref` ссылочных свойств присоединит Задача 11.

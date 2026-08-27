@@ -3,6 +3,14 @@
 // и снимок `hierarchicalRoles(reg)` обязаны давать один и тот же список — иначе бюджет,
 // круг исполнителя и компилятор запросов начали бы ходить по разным множествам ролей.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import {
+  ROLE_CATEGORY_PARENT,
+  ROLE_DEPENDENCY,
+  ROLE_ENVELOPE_BINDING,
+  ROLE_INSTANCE_OF,
+  ROLE_MENTION,
+  ROLE_RUN,
+} from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
@@ -52,4 +60,27 @@ test('своя строка роли перекрывает встроенную
   const snapshot = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
   expect(hierarchicalRoles(snapshot).sort()).toEqual(['category-parent', 'run', 'ticket']);
   expect(await fromSql(owner)).toEqual(['category-parent', 'run', 'ticket']);
+});
+
+/**
+ * ЯКОРЬ ПОИМЁННЫХ РОЛЕЙ (`@orbis/shared/constants`). `satisfies RelationRoleId` проверяет
+ * только то, что константа — ОДНА ИЗ одиннадцати ролей; что она именно ТА, чьё имя носит,
+ * не проверяет ничто: repoint `ROLE_RUN` на `subitem` собирается молча, а писатель и
+ * читатель, взявшие одну константу, разъезжаются согласованно и сквозной тест этого не
+ * видит (проверено мутациями G4/G5 ре-ревью).
+ *
+ * Независимый оракул здесь — РУССКАЯ ПОДПИСЬ роли из сида: она приходит из
+ * `builtin-roles.ts` отдельным литералом и переживает переименование id. Читается из ЖИВОЙ
+ * базы, поэтому заодно проверяет, что константа вообще резолвится в реестре владельца.
+ */
+test('каждая поимённая роль указывает на ту роль, чьё имя носит (подпись из сида)', async () => {
+  const owner = freshUserId();
+  const reg = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  const labelOf = (id: string): string | undefined => reg.roles.get(id)?.label.ru;
+  expect(labelOf(ROLE_INSTANCE_OF)).toBe('Экземпляр шаблона');
+  expect(labelOf(ROLE_ENVELOPE_BINDING)).toBe('Привязка к конверту');
+  expect(labelOf(ROLE_RUN)).toBe('Прогон');
+  expect(labelOf(ROLE_CATEGORY_PARENT)).toBe('Родительская категория');
+  expect(labelOf(ROLE_MENTION)).toBe('Упоминание');
+  expect(labelOf(ROLE_DEPENDENCY)).toBe('Зависимость');
 });

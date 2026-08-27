@@ -16,6 +16,7 @@ import {
   batchAuditMessageId,
   type ConfirmPurchaseInput,
   type ConfirmPurchaseResult,
+  ROLE_INSTANCE_OF,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
@@ -23,7 +24,6 @@ import { withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import { ROLE_INSTANCE_OF } from '../executor/relations';
 import type { ExecuteRequest } from '../executor/types';
 
 // Синк один на модуль (как post-due.ts / rollover): состояния не хранит, audit-сообщение

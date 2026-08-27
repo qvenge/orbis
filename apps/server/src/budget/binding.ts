@@ -5,11 +5,12 @@
 // period_start, (3) меньший UUID. Вызывается executor'ом ПОСЛЕ применения породившей
 // операции тем же tx: SQL видит фактическое состояние (включая операции того же batch),
 // а дописанные операции входят в тот же action журнала → Undo откатывает целиком.
+import { ROLE_ENVELOPE_BINDING } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
-import { legacyParentRolesSql, ROLE_ENVELOPE_BINDING } from '../executor/relations';
+import { legacyParentRolesSql } from '../executor/relations';
 import type { WireEntity } from '../executor/types';
 
 /** Дефолт схемы user_settings.defaultCurrency — фолбэк, пока строки настроек нет. */

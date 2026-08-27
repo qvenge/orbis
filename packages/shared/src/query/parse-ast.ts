@@ -31,6 +31,7 @@
  * Копия, а не вынос в общий модуль: план (РП-11) запрещает трогать `parse.ts` до Задачи 21,
  * где старая грамматика умирает целиком вместе с этой копией.
  */
+import { ROLE_DEPENDENCY } from '../constants';
 import { HHMM_RE } from '../date';
 import type {
   AspectDefinition,
@@ -817,12 +818,19 @@ function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
 }
 
 /**
- * KEY роли, которой сегодня выражена блокировка. Именно key, а не id: `excludeBlocked=true` —
- * текстовый сахар, тождественный `!has_relation via=dependency`, а `via=` принимает key
- * (§А5-3). Резолв через `resolveRole` даёт ту же ошибку `UNKNOWN_ROLE`, что и явная запись,
- * если роли в реестре нет, — вместо дерева, ссылающегося на несуществующую роль.
+ * Роль, которой сегодня выражена блокировка, — та же `ROLE_DEPENDENCY`, по которой фильтрует
+ * сервер (`query/compile.ts`). Общая константа, а не свой литерал: два литерала на одну роль
+ * стоят на РАЗНЫХ осях (здесь нужен key, серверу — id), и переименование роли валило бы
+ * сборку только на одной из них, оставив вторую молча старой.
+ *
+ * Здесь она читается как KEY, и это законно: `excludeBlocked=true` — текстовый сахар,
+ * тождественный `!has_relation via=dependency`, а `via=` принимает key (§А5-3). У встроенных
+ * ролей key = id (`builtin-roles.ts` выводит его из id, равенство запиннено
+ * `registry/builtin.test.ts`), поэтому одна константа служит обеим осям. Своя строка
+ * владельца с другим key даст `UNKNOWN_ROLE` — ту же ошибку, что и явная запись, вместо
+ * дерева, ссылающегося на несуществующую роль.
  */
-const EXCLUDE_BLOCKED_ROLE_KEY = 'dependency';
+const EXCLUDE_BLOCKED_ROLE_KEY: string = ROLE_DEPENDENCY;
 
 const REL_WITH_TARGET: ReadonlySet<string> = new Set([
   'children_of',

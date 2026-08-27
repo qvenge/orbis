@@ -15,7 +15,12 @@
 // executor'а (`ExecCtx`, `PreparedOp`, `BatchState`, `loadEntityForUpdate`, `parseEnvelope`,
 // `gateEntitlements`…), и вынос стадий превратил бы одностороннюю зависимость в цикл
 // `executor ⇄ relations`. Переехало то, что действительно самостоятельно — язык ролей.
-import { RELATION_ROLE_IDS, type RelationRoleDefinition, type RelationRoleId } from '@orbis/shared';
+import {
+  RELATION_ROLE_IDS,
+  type RelationRoleDefinition,
+  type RelationRoleId,
+  ROLE_ENVELOPE_BINDING,
+} from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import type { RegistrySnapshot } from '../registry/load';
@@ -68,32 +73,6 @@ export interface VirtualGraphEffects {
 }
 
 /**
- * ВСЕ роли, которые код ядра называет ПОИМЁННО, — и это ЕДИНСТВЕННОЕ их место.
- *
- * Литералы собраны здесь и типизованы `RelationRoleId` ради одного свойства: переименование
- * роли в реестре обязано валить СБОРКУ, а не молча менять поведение. Молча оно поменялось бы
- * везде — бюджет считал бы пустое множество трат, компилятор перестал бы отсекать
- * заблокированное, секция «Связанное» опустела бы, — и каждый из этих отказов выглядел бы
- * как «просто ничего не нашлось».
- *
- * Список полный, потому что «в одном месте» — обещание, которое дороже удобства: свой
- * литерал в модуле-читателе экономит один импорт и стоит ровно того, что рядом с ним
- * невидно, какие ещё роли код знает по имени.
- *
- * Кто их читает: `instance-of` — материализация повторений и агрегаты (§3.1);
- * `envelope-binding` — бюджет-хук и инвариант «один budget-parent» (§4.2);
- * `run` — глаголы исполнителя и планировщик рутин (V1.4); `category-parent` — дерево
- * категорий (§2.10); `mention` — секция «Связанное» (§3.5.8); `dependency` — `excludeBlocked`
- * грамматики §6 (до Задачи 9b, которая заводит `via=` для произвольной роли).
- */
-export const ROLE_INSTANCE_OF = 'instance-of' satisfies RelationRoleId;
-export const ROLE_ENVELOPE_BINDING = 'envelope-binding' satisfies RelationRoleId;
-export const ROLE_RUN = 'run' satisfies RelationRoleId;
-export const ROLE_CATEGORY_PARENT = 'category-parent' satisfies RelationRoleId;
-export const ROLE_MENTION = 'mention' satisfies RelationRoleId;
-export const ROLE_DEPENDENCY = 'dependency' satisfies RelationRoleId;
-
-/**
  * Роли, которые ПЕРЕХОДНАЯ колонка `relation_type` видит как `parent`. Список ВЫВЕДЕН из
  * проекции, а не написан второй раз: разъехавшись с ней, он открыл бы дыру ровно там, где
  * закрывает её — на непереведённых читателях старой колонки (бюджет, компилятор запросов,
@@ -112,8 +91,20 @@ export const LEGACY_PARENT_ROLES: readonly RelationRoleId[] = RELATION_ROLE_IDS.
  * Почему хелпер, а не четыре одинаковых `sql.join` по месту: именно расхождение этого
  * множества у двух его читателей стоило владельцу двойного счёта денег (C1 Задачи 7a).
  * Пока копия одна, «сузить на всякий случай» можно только здесь — и это видно всем
- * четверым сразу. Умирает вместе с колонкой в 0017: с ней множество схлопывается до одной
- * роли `envelope-binding`, и перечисление становится не нужно.
+ * четверым сразу.
+ *
+ * ЧТО ИМЕННО УНИФИЦИРОВАНО — только РОЛЬ ребра, и обещать больше нельзя. Предикат
+ * «конверт-родитель» состоит из трёх частей, и две другие у четверых по-прежнему РАЗНЫЕ:
+ *   • признак «источник — конверт» написан двумя способами — `'orbis/budget' = ANY(e.aspects)`
+ *     (инвариант, хук) и `p.aspects_legacy ? 'orbis/budget'` (агрегаты, импорт). На интервале
+ *     дуальной записи (§А1-1) обе колонки заполняет один писатель, поэтому множества совпадают;
+ *   • `NOT p.archived` стоит у двух из четырёх (агрегаты, импорт) и не стоит у двух других.
+ * Оба расхождения — ДО-реформенные и ЗАПАРКОВАНЫ осознанно (см. отчёт Задачи 7b, §6):
+ * трогать поведение денег переводом читателей на роли не входило в задачу. Приводить их к
+ * одному виду — отдельное решение владельца, а не побочный эффект уборки.
+ *
+ * Умирает вместе с колонкой в 0017: с ней множество схлопывается до одной роли
+ * `envelope-binding`, и перечисление становится не нужно.
  */
 export function legacyParentRolesSql(): SQL {
   return sql.join(

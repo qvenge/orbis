@@ -36,6 +36,7 @@ import {
   type ProposalDivergence,
   type ProposalStatus,
   pendingMessageId,
+  ROLE_RUN,
   routineRunBatchId,
   routineRunId,
 } from '@orbis/shared';
@@ -56,7 +57,6 @@ import { ExecError, type ExecErrorCode, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { propertyOfLegacyField } from '../executor/legacy-form';
-import { ROLE_RUN } from '../executor/relations';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
 import type { LLMProvider } from '../llm/types';
 import {

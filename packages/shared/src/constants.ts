@@ -40,6 +40,43 @@ export const RELATION_ROLE_IDS = [
 export type RelationRoleId = (typeof RELATION_ROLE_IDS)[number];
 
 /**
+ * ВСЕ роли, которые код называет ПОИМЁННО, — и это их ЕДИНСТВЕННЫЙ дом на репозиторий.
+ *
+ * Дом здесь, а не в серверном `executor/relations.ts`, по одной причине: роль `dependency`
+ * нужна ОБОИМ пакетам. Сервер фильтрует по ней `excludeBlocked` (`query/compile.ts`), а
+ * парсер грамматики разворачивает в неё тот же сахар (`query/parse-ast.ts`) — и живёт он в
+ * `@orbis/shared`, откуда `apps/server` не виден. Два дома здесь были бы не неудобством, а
+ * ловушкой: переименование роли валит сборку в одном из них, а починивший по декларации
+ * «другого места нет» второй не тронет — и отказ приедет в рантайме, на смарт-листе, который
+ * сеется с `excludeBlocked=true` (`seed/smart-lists.ts`).
+ *
+ * ДВЕ ОСИ АДРЕСАЦИИ, и это надо знать, читая список. Здесь лежат `id` ролей — то, что
+ * хранит колонка `relations.role` и чем оперирует сервер. Парсер же адресует роль по `key`
+ * (§А5-3: `via=` принимает key). У встроенных ролей это одно и то же — `builtin-roles.ts`
+ * выводит `key` из `id`, и равенство запиннено (`registry/builtin.test.ts`, «key = id»), —
+ * поэтому одна константа честно служит обеим осям. Своя строка владельца с ДРУГИМ key даст
+ * парсеру честный `UNKNOWN_ROLE`, ровно как явная запись `via=dependency`, а серверный
+ * фильтр по id продолжит работать: оси разошлись — и это видно, а не молча.
+ *
+ * `satisfies RelationRoleId`: переименование роли в нормативном списке обязано валить
+ * СБОРКУ. Молча оно поменяло бы поведение везде — бюджет считал бы пустое множество трат,
+ * компилятор перестал бы отсекать заблокированное, секция «Связанное» опустела бы, — и
+ * каждый из этих отказов выглядел бы как «просто ничего не нашлось».
+ *
+ * Кто их читает: `instance-of` — материализация повторений и агрегаты (§3.1);
+ * `envelope-binding` — бюджет-хук и инвариант «один budget-parent» (§4.2); `run` — глаголы
+ * исполнителя и планировщик рутин (V1.4); `category-parent` — дерево категорий (§2.10);
+ * `mention` — секция «Связанное» (§3.5.8); `dependency` — `excludeBlocked` грамматики §6 и
+ * её сахар в парсере (до Задачи 9b, которая заводит `via=` для произвольной роли).
+ */
+export const ROLE_INSTANCE_OF = 'instance-of' satisfies RelationRoleId;
+export const ROLE_ENVELOPE_BINDING = 'envelope-binding' satisfies RelationRoleId;
+export const ROLE_RUN = 'run' satisfies RelationRoleId;
+export const ROLE_CATEGORY_PARENT = 'category-parent' satisfies RelationRoleId;
+export const ROLE_MENTION = 'mention' satisfies RelationRoleId;
+export const ROLE_DEPENDENCY = 'dependency' satisfies RelationRoleId;
+
+/**
  * Семейство иерархии (§А4-3): `children_of`/`descendants_of` без `via=` компилятор
  * разворачивает в `role IN (…)` по этому списку. `envelope-binding` в него НЕ входит —
  * конверт не родитель транзакции, он её счётчик (Ч10-С1).

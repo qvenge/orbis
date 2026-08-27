@@ -18,6 +18,8 @@ import {
   batchAuditMessageId,
   type CategoryTrendPoint,
   type EnvelopeStatus,
+  ROLE_CATEGORY_PARENT,
+  ROLE_INSTANCE_OF,
   type RolloverInput,
   type RolloverPreview,
   type RolloverResult,
@@ -29,11 +31,7 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import {
-  legacyParentRolesSql,
-  ROLE_CATEGORY_PARENT,
-  ROLE_INSTANCE_OF,
-} from '../executor/relations';
+import { legacyParentRolesSql } from '../executor/relations';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
 import { materializeInstances } from '../recurring/materialize';
