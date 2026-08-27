@@ -75,8 +75,11 @@ const MIN_CALENDAR_YEAR = 1;
  * связать с причиной, поэтому проверка стоит на ВСЕХ трёх путях сразу: разбор запроса
  * (`query/parse-ast.ts`), компиляция запроса (`query/compile-ast.ts`), запись
  * (`registry/validate-props.ts`). Импорт выписки закрывает тот же класс четвёртым местом —
- * через `toParts` (`contracts/import.ts`), потому что там значение и так разбирается в
- * части для календарной арифметики дедупа.
+ * через `toParts` (`contracts/import.ts`), потому что там значение и так разбирается на
+ * части для календарной арифметики дедупа. «Тот же» здесь буквально: `toParts` сверяет год
+ * тем же `MIN_CALENDAR_YEAR`, то есть расширение «существует» на ЭРУ доехало и до импорта.
+ * Разъедься они — фраза стала бы ложной ровно на нулевом годе, а строка выписки падала бы
+ * не на границе, а на коммите.
  *
  * ДОМ У КАЛЕНДАРЯ НОВОГО ПУТИ — здесь, и он один: считает `lastDayOfMonth`, тот же,
  * которым живут `toParts` и вся арифметика recurrence. Своя копия «сколько дней в феврале»
@@ -112,14 +115,23 @@ export function hasValidCalendar(text: string): boolean {
   return Number(offset.slice(1, 3)) <= MAX_TZ_OFFSET_HOURS && Number(offset.slice(4, 6)) <= 59;
 }
 
-/** Строгий разбор 'YYYY-MM-DD' с проверкой календарной валидности. */
+/**
+ * Строгий разбор 'YYYY-MM-DD' с проверкой календарной валидности — включая ЭРУ.
+ *
+ * Год сверяется тем же `MIN_CALENDAR_YEAR`, что и `hasValidCalendar`: «существует» обязано
+ * значить одно и то же по обе стороны. Иначе граница импорта выписки
+ * (`contracts/import.ts` — единственный потребитель, который проверяет дату через
+ * `toParts`) пропускала бы `0000-01-01` в review и роняла бы строку только на коммите, где
+ * её ловит уже `validateEntityProps`. Отказать сразу дешевле, чем отказать после разбора
+ * всей выписки, — и `2026-02-30` там отвергается именно здесь и именно так.
+ */
 export function toParts(dateISO: string): DateParts {
   const match = DATE_RE.exec(dateISO);
   if (!match) throw new RangeError(`Некорректная дата (ожидается YYYY-MM-DD): "${dateISO}"`);
   const y = Number(match[1]);
   const m = Number(match[2]);
   const d = Number(match[3]);
-  if (m < 1 || m > 12 || d < 1 || d > lastDayOfMonth(y, m)) {
+  if (y < MIN_CALENDAR_YEAR || m < 1 || m > 12 || d < 1 || d > lastDayOfMonth(y, m)) {
     throw new RangeError(`Несуществующая календарная дата: "${dateISO}"`);
   }
   return { y, m, d };

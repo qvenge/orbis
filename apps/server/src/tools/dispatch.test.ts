@@ -542,7 +542,7 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
   // Глубина входа `ast:` стережётся ЯВНЫМ капом ДО схемы и до компиляции. Ниже по
   // конвейеру её не остановить ничем: zod рекурсивен и исчерпывает стек внутри safeParse,
   // а то, что через него проходит, компилируется в цепочку `NOT COALESCE(…)`, на которой
-  // отвечает уже парсер Postgres (`42601 memory exhausted`) — не ExecError, то есть мимо
+  // отвечает уже парсер Postgres (исчерпание его собственного стека) — не ExecError, мимо
   // всех catch'ей. Между двумя порогами лежала ПОЛОСА, где наружу уходил сырой обрыв;
   // проверяются обе её стороны и середина.
   test('entity_query {ast}: глубже капа — VALIDATION/QUERY_TOO_DEEP на всех порядках', async () => {
@@ -566,6 +566,14 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
     // Кап отвергает ГЛУБИНУ, а не вложенность вообще: дерево вдвое мельче капа работает.
     const ok = await dispatchTool(ctxFor(), 'entity_query', nested(20));
     expect(ok.status).toBe('ok');
+    // Меряется ДЕРЕВО, а не конверт: `{ast:{filter: chain(n)}}` даёт n+2 уровня AST,
+    // поэтому последняя законная цепочка — на два короче капа, а следующая уже отвергнута.
+    // Пара соседних, а не «мелкое ок / огромное отказ»: иначе граница не запинена.
+    expect((await dispatchTool(ctxFor(), 'entity_query', nested(62))).status).toBe('ok');
+    expect((await dispatchTool(ctxFor(), 'entity_query', nested(63))).status).toBe('error');
+    // Текст отказа называет ровно ту величину, которую код и меряет, — сам кап.
+    const refused = await dispatchTool(ctxFor(), 'entity_query', nested(63));
+    if (refused.status === 'error') expect(refused.error.message).toContain('64');
   });
 
   // Мост старой грамматики (переходный, умирает в Задаче 21): тексты сидов и Agenda ещё

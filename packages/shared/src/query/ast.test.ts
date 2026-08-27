@@ -198,14 +198,18 @@ test('§А5-7: `of` — только uuid или this, и это знает СХ
 test('queryTreeExceedsDepth: явный обход, и он не падает там, где падает рекурсия', () => {
   expect(queryTreeExceedsDepth({ filter: null }, QUERY_TREE_DEPTH_CAP)).toBe(false);
   expect(queryTreeExceedsDepth('строка', QUERY_TREE_DEPTH_CAP)).toBe(false);
-  // Ровно на капе — ещё нет, на уровень глубже — уже да.
+  // ГРАНИЦА ПИННИТСЯ С ОБЕИХ СТОРОН, и это не педантизм: пара «глубоко ок / ещё глубже
+  // отказ» не отличает `depth > cap` от `depth > cap + 1` — мутация на один уровень
+  // переживала весь сьют (находка ре-ревью). Проверяются ДВЕ СОСЕДНИЕ цепочки: последняя
+  // законная и первая, которая обязана быть отвергнута.
   const chain = (n: number) => {
     let node: unknown = { tag: 'дом' };
     for (let i = 0; i < n; i++) node = { not: node };
     return node;
   };
+  // `chain(n)` даёт n+1 уровень JSON (n объектов `not` плюс лист `{tag}`).
   expect(queryTreeExceedsDepth(chain(QUERY_TREE_DEPTH_CAP - 1), QUERY_TREE_DEPTH_CAP)).toBe(false);
-  expect(queryTreeExceedsDepth(chain(QUERY_TREE_DEPTH_CAP + 1), QUERY_TREE_DEPTH_CAP)).toBe(true);
+  expect(queryTreeExceedsDepth(chain(QUERY_TREE_DEPTH_CAP), QUERY_TREE_DEPTH_CAP)).toBe(true);
   // Массивы считаются уровнями наравне с объектами — иначе `{or:[…]}` обходил бы кап вдвое.
   expect(queryTreeExceedsDepth({ or: [{ or: [{ tag: 'д' }] }] }, 3)).toBe(true);
   expect(queryTreeExceedsDepth({ or: [{ or: [{ tag: 'д' }] }] }, 5)).toBe(false);

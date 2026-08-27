@@ -587,6 +587,15 @@ describe('import.review: статусы строк (§3.4.1)', () => {
       caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS }),
     );
     expect(err.code).toBe('BAD_REQUEST');
+
+    // Нулевой год — тот же класс и та же граница: он тоже проходит регексп, но не
+    // существует. Раньше он проезжал review и падал бы уже на коммите, где его ловит
+    // `validateEntityProps`, — то есть отказ приходил бы позже и не про строку выписки.
+    const zeroYear = makeRow({ occurredOn: '0000-01-01', amount: '10.00', counterparty: 'X' });
+    const zeroErr = await trpcError(
+      caller.import.review({ rows: [zeroYear], fileHash: FILE_A, namespace: NS }),
+    );
+    expect(zeroErr.code).toBe('BAD_REQUEST');
   });
 
   test('namespace вне контракта «csv:<источник>» отклоняется схемой', async () => {
