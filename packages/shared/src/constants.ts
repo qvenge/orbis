@@ -51,6 +51,21 @@ export const HIERARCHICAL_ROLE_IDS = [
   'category-parent',
 ] as const satisfies readonly RelationRoleId[];
 
+/**
+ * Имя правила вычисления предков (§А8, Ч9): значение `flags.computed.rule` у
+ * `orbis/parent_project`/`orbis/root_project` И имя правила в системной строке журнала о
+ * пересчёте (`executor/ancestors.ts`).
+ *
+ * ОДНА константа на обе стороны, а не два одинаковых литерала: строка правила в реестре
+ * каталога появится только в части Б (Б-2), и до неё имя живёт исключительно в коде. Пиши
+ * его дважды — и переименование правила развело бы флаг свойства с журналом, а нашлось бы
+ * это не сборкой и не тестом, а владельцем, читающим «пересчитано по правилу», которого в
+ * реестре нет. Дом константы здесь, рядом с `RELATION_ROLE_IDS`, по той же причине: у имени
+ * должен быть ровно один дом, иначе `export *` из двух файлов пакета делает его
+ * неоднозначным.
+ */
+export const RULE_NEAREST_ANCESTOR = 'nearest_ancestor';
+
 export const BUILTIN_ASPECT_IDS = [
   'orbis/schedule',
   'orbis/task',

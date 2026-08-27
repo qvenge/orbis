@@ -9,11 +9,12 @@
 // журнала «пересчитано N сущностей» — она пишется только самим движком и только когда он
 // действительно что-то пересчитал.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { newId } from '@orbis/shared';
+import { newId, RULE_NEAREST_ANCESTOR } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { loadRegistry } from '../registry/load';
 import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
 import type {
@@ -220,6 +221,31 @@ test('прогон под тикетом под проектом получае�
   ]);
   expect(await ancestorsOf(owner, ticket.id)).toEqual({ parent: p.id, root: p.id });
   expect(await ancestorsOf(owner, run.id)).toEqual({ parent: p.id, root: p.id });
+});
+
+// Одна константа (`RULE_NEAREST_ANCESTOR`) держит имя правила на обеих сторонах — во флаге
+// встроенного свойства и в строке журнала. Но между константой и БОЕВЫМ реестром стоит СИД,
+// и сверить их может только живая база: отставший сид развёл бы «пересчитано по правилу X» с
+// правилом, которое реестр объявляет у свойства.
+test('имя правила в журнале — то же, что во flags.computed.rule строки реестра', async () => {
+  const owner = freshUserId();
+  const p = await project(owner, 'Проект имени правила');
+  const task = await createEntity(owner, { title: 'Задача имени правила' });
+  const sink = new InMemoryJournalSink();
+  await relate(owner, p.id, task.id, 'subitem', {}, sink);
+
+  const reg = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  const fromRegistry = reg.properties.get('orbis/parent_project')?.flags.computed?.rule;
+  // Отсутствие флага — это НЕ «правило не задано», а сломанный сид: без него движок не
+  // объявлен вовсе. Проверяем строкой, а не `?.`, иначе тест был бы зелен на пустом реестре.
+  expect(fromRegistry).toBe(RULE_NEAREST_ANCESTOR);
+  // …и корневое свойство считает ТО ЖЕ правило: два имени означали бы два движка
+  expect(reg.properties.get('orbis/root_project')?.flags.computed?.rule).toBe(
+    RULE_NEAREST_ANCESTOR,
+  );
+  expect(recomputeOps(sink)).toEqual([
+    { op: 'props_recomputed', payload: { rule: RULE_NEAREST_ANCESTOR, recomputed: 1 } },
+  ]);
 });
 
 test('неиерархическая связь пересчёт не запускает: строки «пересчитано» в журнале нет', async () => {

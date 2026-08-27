@@ -22,19 +22,12 @@ import {
   type QueryFilter,
   type QueryRangeFilter,
   type QuerySortField,
-  type RelationRoleId,
   SERVICE_ASPECT_IDS,
 } from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
+import { ROLE_DEPENDENCY } from '../executor/relations';
 import { hierarchicalRolesSql } from '../registry/roles';
-
-/**
- * Роль зависимости (§А4-3) — единственная, что проецировалась в старый тип `blocks`.
- * Литерал назван по имени и типизован: переименование роли в реестре обязано валить
- * сборку, а не молча выключать `excludeBlocked` на всех смарт-листах владельца.
- */
-const ROLE_DEPENDENCY = 'dependency' satisfies RelationRoleId;
 
 export interface CompileContext {
   catalog: FieldCatalog;

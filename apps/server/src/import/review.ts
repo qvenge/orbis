@@ -49,7 +49,7 @@ import { type EntitlementResolver, IMPORT_CSV_KEY, resolveEntitlement } from '..
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import { LEGACY_PARENT_ROLES } from '../executor/relations';
+import { legacyParentRolesSql } from '../executor/relations';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { LLMRequest, LLMResponse } from '../llm/types';
 import type { Card } from '../tools/registry';
@@ -502,10 +502,7 @@ async function unbudgetedOf(
         AND NOT EXISTS (
           SELECT 1 FROM relations r
           JOIN entities p ON p.id = r.source_id
-          WHERE r.target_id = e.id AND r.role IN (${sql.join(
-            LEGACY_PARENT_ROLES.map((role) => sql`${role}`),
-            sql`, `,
-          )})
+          WHERE r.target_id = e.id AND r.role IN (${legacyParentRolesSql()})
             AND p.aspects_legacy ? 'orbis/budget' AND NOT p.archived
         )
       GROUP BY 1

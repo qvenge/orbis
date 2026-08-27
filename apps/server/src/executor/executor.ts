@@ -18,6 +18,7 @@ import {
   entityUpdateExecInput,
   newId,
   type PreconditionMismatch,
+  RULE_NEAREST_ANCESTOR,
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
@@ -53,11 +54,7 @@ import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import { projectBodyTemplate } from '../seed/project-body';
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
 import { toWireEntity as toWire, toWireRelation } from '../wire';
-import {
-  RULE_ID as ANCESTORS_RULE_ID,
-  PROJECT_ASPECT,
-  recomputeProjectAncestors,
-} from './ancestors';
+import { PROJECT_ASPECT, recomputeProjectAncestors } from './ancestors';
 import { assertEntityProps } from './aspects-validate';
 import { ExecError } from './errors';
 import {
@@ -810,7 +807,7 @@ async function applyAncestorRecompute(
   // исключение из §7.8, а не пропуск: откат восстанавливает рёбра, а по ним пересчёт
   // повторяется сам (см. вызов из ветки internalUndo). Обратная операция «вернуть прежние
   // значения кэша» была бы вторым источником правды о том, что и так выводится из графа.
-  return [{ op: 'props_recomputed', payload: { rule: ANCESTORS_RULE_ID, recomputed } }];
+  return [{ op: 'props_recomputed', payload: { rule: RULE_NEAREST_ANCESTOR, recomputed } }];
 }
 
 /** Данные аспект-ключа изменились операцией (стабильно для одинаковых объектов). */

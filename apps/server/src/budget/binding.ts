@@ -9,7 +9,7 @@ import { eq, sql } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
-import { LEGACY_PARENT_ROLES, ROLE_ENVELOPE_BINDING } from '../executor/relations';
+import { legacyParentRolesSql, ROLE_ENVELOPE_BINDING } from '../executor/relations';
 import type { WireEntity } from '../executor/types';
 
 /** Дефолт схемы user_settings.defaultCurrency — фолбэк, пока строки настроек нет. */
@@ -208,10 +208,7 @@ async function budgetParentsOfMany(
     WHERE r.target_id IN (${sql.join(
       unique.map((id) => sql`${id}`),
       sql`, `,
-    )}) AND r.role IN (${sql.join(
-      LEGACY_PARENT_ROLES.map((role) => sql`${role}`),
-      sql`, `,
-    )})
+    )}) AND r.role IN (${legacyParentRolesSql()})
       AND 'orbis/budget' = ANY(e.aspects)
     ORDER BY r.target_id, r.source_id
   `)) as unknown as Array<{ target_id: string; source_id: string; role: string }>;

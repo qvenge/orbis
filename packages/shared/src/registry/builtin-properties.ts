@@ -24,6 +24,7 @@
  * который сам не проходит собственную схему, до сида доехать не должен.
  */
 import type { z } from 'zod';
+import { RULE_NEAREST_ANCESTOR } from '../constants';
 import { type PropertyDefinition, propertyDefinitionSchema } from './property-type';
 import type { SelectOption } from './types';
 
@@ -1010,7 +1011,9 @@ const ENTRIES: readonly PropertyEntry[] = [
 
   // ─── Новые свойства реформы (§А8) ──────────────────────────────────────────
   // Носителя-аспекта у них нет намеренно: это вычисляемые свойства проекции иерархии
-  // (Ч9), они живут на любой сущности под проектом. Правило `nearest_ancestor` — Задача Б.
+  // (Ч9), они живут на любой сущности под проектом. Считает их правило `nearest_ancestor`
+  // (движок — `executor/ancestors.ts`); СТРОКА правила в реестре каталога — часть Б (Б-2),
+  // поэтому имя правила пока держит константа `RULE_NEAREST_ANCESTOR`, общая с движком.
   {
     id: 'orbis/parent_project',
     label: { ru: 'Ближайший проект', en: 'Nearest project' },
@@ -1020,7 +1023,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     },
     type: { kind: 'ref', target: { filter: { aspect: 'orbis/project' } } },
     module: 'ade',
-    flags: { model_writable: false, computed: { rule: 'nearest_ancestor' } },
+    flags: { model_writable: false, computed: { rule: RULE_NEAREST_ANCESTOR } },
   },
   {
     id: 'orbis/root_project',
@@ -1031,7 +1034,7 @@ const ENTRIES: readonly PropertyEntry[] = [
     },
     type: { kind: 'ref', target: { filter: { aspect: 'orbis/project' } } },
     module: 'ade',
-    flags: { model_writable: false, computed: { rule: 'nearest_ancestor' } },
+    flags: { model_writable: false, computed: { rule: RULE_NEAREST_ANCESTOR } },
   },
 
   // ─── Core-проекции §А1-3 (storage: 'core') ─────────────────────────────────

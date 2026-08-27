@@ -16,7 +16,7 @@
 // `gateEntitlements`…), и вынос стадий превратил бы одностороннюю зависимость в цикл
 // `executor ⇄ relations`. Переехало то, что действительно самостоятельно — язык ролей.
 import { RELATION_ROLE_IDS, type RelationRoleDefinition, type RelationRoleId } from '@orbis/shared';
-import { sql } from 'drizzle-orm';
+import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import type { RegistrySnapshot } from '../registry/load';
 import { ExecError } from './errors';
@@ -68,13 +68,30 @@ export interface VirtualGraphEffects {
 }
 
 /**
- * Роли, которые код ядра называет ПОИМЁННО. Литералы собраны в одно место и типизованы
- * `RelationRoleId`: переименование роли в реестре обязано валить сборку, а не молча менять
- * поведение бюджета, повторений и прогонов.
+ * ВСЕ роли, которые код ядра называет ПОИМЁННО, — и это ЕДИНСТВЕННОЕ их место.
+ *
+ * Литералы собраны здесь и типизованы `RelationRoleId` ради одного свойства: переименование
+ * роли в реестре обязано валить СБОРКУ, а не молча менять поведение. Молча оно поменялось бы
+ * везде — бюджет считал бы пустое множество трат, компилятор перестал бы отсекать
+ * заблокированное, секция «Связанное» опустела бы, — и каждый из этих отказов выглядел бы
+ * как «просто ничего не нашлось».
+ *
+ * Список полный, потому что «в одном месте» — обещание, которое дороже удобства: свой
+ * литерал в модуле-читателе экономит один импорт и стоит ровно того, что рядом с ним
+ * невидно, какие ещё роли код знает по имени.
+ *
+ * Кто их читает: `instance-of` — материализация повторений и агрегаты (§3.1);
+ * `envelope-binding` — бюджет-хук и инвариант «один budget-parent» (§4.2);
+ * `run` — глаголы исполнителя и планировщик рутин (V1.4); `category-parent` — дерево
+ * категорий (§2.10); `mention` — секция «Связанное» (§3.5.8); `dependency` — `excludeBlocked`
+ * грамматики §6 (до Задачи 9b, которая заводит `via=` для произвольной роли).
  */
 export const ROLE_INSTANCE_OF = 'instance-of' satisfies RelationRoleId;
 export const ROLE_ENVELOPE_BINDING = 'envelope-binding' satisfies RelationRoleId;
 export const ROLE_RUN = 'run' satisfies RelationRoleId;
+export const ROLE_CATEGORY_PARENT = 'category-parent' satisfies RelationRoleId;
+export const ROLE_MENTION = 'mention' satisfies RelationRoleId;
+export const ROLE_DEPENDENCY = 'dependency' satisfies RelationRoleId;
 
 /**
  * Роли, которые ПЕРЕХОДНАЯ колонка `relation_type` видит как `parent`. Список ВЫВЕДЕН из
@@ -85,6 +102,25 @@ export const ROLE_RUN = 'run' satisfies RelationRoleId;
 export const LEGACY_PARENT_ROLES: readonly RelationRoleId[] = RELATION_ROLE_IDS.filter(
   (role) => projectLegacyRelationType(role) === 'parent',
 );
+
+/**
+ * Тот же список как SQL-перечисление для `role IN (…)` — ОДИН хелпер на все четыре запроса,
+ * которым нужно множество «конверт-родитель» на интервале до 0017: инвариант ниже, хук
+ * привязки (`budget/binding.ts`), агрегаты (`budget/aggregates.ts`) и карточка импорта
+ * (`import/review.ts`).
+ *
+ * Почему хелпер, а не четыре одинаковых `sql.join` по месту: именно расхождение этого
+ * множества у двух его читателей стоило владельцу двойного счёта денег (C1 Задачи 7a).
+ * Пока копия одна, «сузить на всякий случай» можно только здесь — и это видно всем
+ * четверым сразу. Умирает вместе с колонкой в 0017: с ней множество схлопывается до одной
+ * роли `envelope-binding`, и перечисление становится не нужно.
+ */
+export function legacyParentRolesSql(): SQL {
+  return sql.join(
+    LEGACY_PARENT_ROLES.map((role) => sql`${role}`),
+    sql`, `,
+  );
+}
 
 export function sameRelationKey(a: RelationKey, b: RelationKey): boolean {
   return a.sourceId === b.sourceId && a.targetId === b.targetId && a.role === b.role;
@@ -410,10 +446,7 @@ export async function assertSingleLegacyBudgetParent(
     SELECT r.source_id, r.role FROM relations r
     JOIN entities e ON e.id = r.source_id
     WHERE r.target_id = ${key.targetId}
-      AND r.role IN (${sql.join(
-        parentRoles.map((r) => sql`${r}`),
-        sql`, `,
-      )})
+      AND r.role IN (${legacyParentRolesSql()})
       AND 'orbis/budget' = ANY(e.aspects)
   `)) as unknown as Array<{ source_id: string; role: string }>;
 
