@@ -8,7 +8,9 @@
     "test": "bun test src test/",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "test:perf": "bun test perf/"
+    "test:perf": "bun test perf/perf.test.ts",
+    "test:perf:graph": "bun test perf/graph.test.ts",
+    "test:perf:explain": "bun test perf/explain.test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.8",

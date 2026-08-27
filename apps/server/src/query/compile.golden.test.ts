@@ -1,11 +1,35 @@
 // apps/server/src/query/compile.golden.test.ts
-// Golden-тесты «запрос §6.1 → SQL+params» (§6.2). Фикстуры — НЕ «что вышло»,
-// а проверенный вручную эталон: каждый снятый {sql, params} сверен с нормативной
-// таблицей семантики Task 8 и псевдо-SQL PRD 01 §6.1 (чеклист — в отчёте задачи).
+// Golden-тесты «текст запроса → Q-AST → SQL+params» (§6.2, §А5-7). Фикстуры — НЕ «что
+// вышло», а посчитанный ВРУЧНУЮ эталон: каждая пара {sql, params} выведена из нормативной
+// таблицы семантики PRD 01 §6.1 и перечня узлов §А5-7, а не снята с прогона. Порядок
+// работы над файлом (он же защита от того, чтобы компилятор выписал себе справку):
+// считать руками — сверить — дописывать, читая дифф. Записывать сюда вывод компилятора
+// ЗАПРЕЩЕНО: эталон, снятый с реализации, подтверждает только то, что она не изменилась.
+//
+// Проверяются ДВА перехода, потому что сломаться они могут порознь:
+//   1. `query` → `ast` — парсер по реестру (`parseQueryAst`, Задача 8);
+//   2. `ast` → `sql`/`params` — НОВЫЙ компилятор (`compile-ast.ts`, эта задача).
+// Эталон с `query: null` — дерево, которое плоская грамматика v1 не выражает (§А5-3д):
+// у него проверяется только второй переход.
+//
+// НИЖЕ ПО ФАЙЛУ (после golden-блоков) живут юнит-тесты СТАРОГО компилятора `compile.ts`.
+// Он не тронут этой задачей и работает до Задачи 9b — снимать с него покрытие в задаче,
+// которая его не переключает, значило бы разменять проверенное поведение на аккуратность
+// раскладки файлов.
 import { describe, expect, test } from 'bun:test';
-import { aspectJsonSchema, BUILTIN_ASPECT_IDS, buildFieldCatalog, parseQuery } from '@orbis/shared';
+import {
+  aspectJsonSchema,
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_ASPECT_IDS,
+  BUILTIN_PROPERTY_META,
+  BUILTIN_RELATION_ROLE_META,
+  buildFieldCatalog,
+  parseQuery,
+} from '@orbis/shared';
+import { parseQueryAst, type QueryAst, toParseRegistry } from '@orbis/shared/query';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import goldens from '../../test/golden/query-sql.json';
+import type { RegistrySnapshot } from '../registry/load';
 import {
   compileCount,
   compileLatest,
@@ -14,56 +38,130 @@ import {
   QueryCompileError,
   QueryFieldError,
 } from './compile';
+import { type CompileCtx, compileCountAst, compileQueryAst } from './compile-ast';
 
 const dialect = new PgDialect();
-const catalog = buildFieldCatalog(
-  BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
-);
-const CTX = {
-  catalog,
-  thisEntityId: '00000000-0000-7000-8000-0000000000f1',
+
+/**
+ * Снимок реестра из ВСТРОЕННЫХ словарей — без БД. Того же состава, что кладёт сид
+ * (`scripts/seed-registries.ts` берёт те же три массива), поэтому эталон здесь и выдача на
+ * живой базе (`compile.dataset.test.ts`) считаются по одному и тому же реестру.
+ */
+const REG: RegistrySnapshot = {
+  properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+  aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+  roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+  ownerVersion: 0,
+  systemVersion: 1,
+};
+
+const PARSE_REG = toParseRegistry(REG, 'ru');
+
+const CTX: CompileCtx = {
+  ownerId: '00000000-0000-7000-8000-0000000000a1',
   today: '2026-07-03',
-  timezone: 'Europe/Moscow',
-} as const;
+  timeZone: 'Europe/Moscow',
+  reg: REG,
+  thisEntityId: '00000000-0000-7000-8000-0000000000f1',
+};
 
 interface Golden {
   name: string;
-  query: string;
+  /** Текст key-формы; null — дерево плоской грамматикой v1 не выражается (§А5-3д). */
+  query: string | null;
+  ast: QueryAst;
   sql: string;
   params: unknown[];
-  /** Опционально: эталон compileCount для той же строки запроса (бейджи 02 §3.2). */
+  /** Опционально: эталон `compileCountAst` для той же строки (бейджи 02 §3.2). */
   countSql?: string;
   countParams?: unknown[];
 }
 
-describe('golden: грамматика → SQL (§6.2)', () => {
-  for (const g of goldens as Golden[]) {
+const GOLDENS = goldens as Golden[];
+
+const flat = (text: string): string => text.replaceAll(/\s+/g, ' ').trim();
+
+describe('golden: текст → Q-AST (парсер по реестру, §А5-3)', () => {
+  for (const g of GOLDENS.filter((x) => x.query !== null)) {
     test(g.name, () => {
-      const parsed = parseQuery(g.query, catalog);
-      expect(parsed.ok).toBe(true);
-      if (!parsed.ok) return;
-      const q = dialect.sqlToQuery(compileQuery(parsed.ast, CTX));
-      expect(q.sql.replaceAll(/\s+/g, ' ').trim()).toBe(g.sql);
+      const parsed = parseQueryAst(g.query as string, PARSE_REG);
+      if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
+      expect(parsed.ast).toEqual(g.ast);
+    });
+  }
+});
+
+describe('golden: Q-AST → SQL (новый компилятор, §А5-7)', () => {
+  for (const g of GOLDENS) {
+    test(g.name, () => {
+      const q = dialect.sqlToQuery(compileQueryAst(g.ast, CTX));
+      expect(flat(q.sql)).toBe(g.sql);
       expect(q.params).toEqual(g.params);
     });
   }
 });
 
-describe('golden: compileCount — COUNT(*) без limit/sortBy/cap (02 §3.2)', () => {
-  const withCount = (goldens as Golden[]).filter(
+describe('golden: compileCountAst — COUNT(*) без limit/sortBy/капа (02 §3.2)', () => {
+  const withCount = GOLDENS.filter(
     (x): x is Golden & { countSql: string; countParams: unknown[] } => x.countSql !== undefined,
   );
+  test('эталоны count заведены не на один запрос', () => {
+    expect(withCount.length).toBeGreaterThanOrEqual(3);
+  });
   for (const g of withCount) {
     test(g.name, () => {
-      const parsed = parseQuery(g.query, catalog);
-      expect(parsed.ok).toBe(true);
-      if (!parsed.ok) return;
-      const q = dialect.sqlToQuery(compileCount(parsed.ast, CTX));
-      expect(q.sql.replaceAll(/\s+/g, ' ').trim()).toBe(g.countSql);
+      const q = dialect.sqlToQuery(compileCountAst(g.ast, CTX));
+      expect(flat(q.sql)).toBe(g.countSql);
       expect(q.params).toEqual(g.countParams);
     });
   }
 });
+
+/**
+ * Мутации эталона: порча ОДНОГО оператора обязана ломать сверку.
+ *
+ * Без этой проверки зелёный golden доказывал бы только то, что сверка выполнилась, — а не
+ * то, что она различает. Порядок мутаций перебирается до первой применимой, и «ни одна не
+ * подошла» — ОШИБКА, а не пропуск: эталон, который нечем испортить, сверяется вхолостую.
+ */
+const MUTATIONS: readonly (readonly [string, string])[] = [
+  [' AND ', ' OR '],
+  [' = ', ' <> '],
+  [' > ', ' < '],
+  [' < ', ' > '],
+  ['NOT COALESCE', 'COALESCE'],
+  ['NOT archived', 'archived'],
+  ['@>', '&&'],
+  ['?', '@?'],
+];
+
+describe('golden: мутация эталона ломает сверку', () => {
+  for (const g of GOLDENS) {
+    test(g.name, () => {
+      const mutation = MUTATIONS.find(([from]) => g.sql.includes(from));
+      if (!mutation) throw new Error(`эталон «${g.name}» нечем испортить: сверка вхолостую`);
+      const [from, to] = mutation;
+      const mutated = g.sql.replace(from, to);
+      expect(mutated).not.toBe(g.sql);
+      const actual = flat(dialect.sqlToQuery(compileQueryAst(g.ast, CTX)).sql);
+      expect(actual).not.toBe(mutated);
+    });
+  }
+});
+
+// ─────────────────────── Юнит-тесты СТАРОГО компилятора (`compile.ts`) ───────────────────────
+// Он жив до Задачи 9b и до неё же остаётся под своими проверками; каталог и контекст у него
+// свои — старой формы (поля аспектов, а не id свойств).
+
+const legacyCatalog = buildFieldCatalog(
+  BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
+);
+const LEGACY_CTX = {
+  catalog: legacyCatalog,
+  thisEntityId: '00000000-0000-7000-8000-0000000000f1',
+  today: '2026-07-03',
+  timezone: 'Europe/Moscow',
+} as const;
 
 describe('golden: compileLatest — последнее значение поля (§11.3, цели)', () => {
   test('та же WHERE-выборка, свой порядок, LIMIT 1; sortBy/limit запроса игнорируются', () => {
@@ -71,11 +169,11 @@ describe('golden: compileLatest — последнее значение поля
     // и в своём порядке — ровно как compileCount игнорирует limit (02 §3.2).
     const parsed = parseQuery(
       'aspect=orbis/financial, tags=savings, sortBy=amount:desc, limit=5',
-      catalog,
+      legacyCatalog,
     );
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    const q = dialect.sqlToQuery(compileLatest(parsed.ast, CTX, 'amount'));
+    const q = dialect.sqlToQuery(compileLatest(parsed.ast, LEGACY_CTX, 'amount'));
     expect(q.sql.replaceAll(/\s+/g, ' ').trim()).toBe(
       "SELECT (aspects_legacy->'orbis/financial'->>'amount')::numeric::text AS value FROM entities " +
         'WHERE true AND NOT archived AND NOT (aspects_legacy ?| ARRAY[$1]::text[]) ' +
@@ -87,19 +185,19 @@ describe('golden: compileLatest — последнее значение поля
   });
 
   test('нечисловое и неизвестное поле — QueryFieldError (и он же QueryCompileError)', () => {
-    const parsed = parseQuery('aspect=orbis/financial', catalog);
+    const parsed = parseQuery('aspect=orbis/financial', legacyCatalog);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     // Подкласс обязан оставаться ловимым старыми catch-ами по QueryCompileError:
     // на этом держатся маппинги в BAD_REQUEST (роутер) и VALIDATION (диспатч тулов).
-    expect(() => compileLatest(parsed.ast, CTX, 'counterparty')).toThrow(QueryFieldError);
-    expect(() => compileLatest(parsed.ast, CTX, 'counterparty')).toThrow(QueryCompileError);
-    expect(() => compileLatest(parsed.ast, CTX, 'нетtакого')).toThrow(QueryFieldError);
-    expect(() => compileSum(parsed.ast, CTX, 'counterparty')).toThrow(QueryFieldError);
+    expect(() => compileLatest(parsed.ast, LEGACY_CTX, 'counterparty')).toThrow(QueryFieldError);
+    expect(() => compileLatest(parsed.ast, LEGACY_CTX, 'counterparty')).toThrow(QueryCompileError);
+    expect(() => compileLatest(parsed.ast, LEGACY_CTX, 'нетtакого')).toThrow(QueryFieldError);
+    expect(() => compileSum(parsed.ast, LEGACY_CTX, 'counterparty')).toThrow(QueryFieldError);
     // Ошибка запроса (а не поля) подклассом НЕ является — иначе цель не отличила бы
     // сломанный запрос от сломанного поля (§11.3, fail-soft прогресса).
-    const noThis = { ...CTX, thisEntityId: null };
-    const self = parseQuery('children_of=this', catalog);
+    const noThis = { ...LEGACY_CTX, thisEntityId: null };
+    const self = parseQuery('children_of=this', legacyCatalog);
     expect(self.ok).toBe(true);
     if (!self.ok) return;
     expect(() => compileCount(self.ast, noThis)).not.toThrow(QueryFieldError);
@@ -112,9 +210,9 @@ describe('golden: compileLatest — последнее значение поля
 // `aliases=такси` давал тихий ноль, `aliases=!такси` возвращал все 12 категорий подряд.
 describe('поле-массив: containment вместо текстового равенства', () => {
   const compileFor = (query: string) => {
-    const parsed = parseQuery(query, catalog);
+    const parsed = parseQuery(query, legacyCatalog);
     if (!parsed.ok) throw new Error(`невалидный запрос в тесте: ${parsed.error.message}`);
-    return dialect.sqlToQuery(compileQuery(parsed.ast, CTX));
+    return dialect.sqlToQuery(compileQuery(parsed.ast, LEGACY_CTX));
   };
 
   test('фильтр по полю-массиву компилируется в containment, а не в текстовое равенство', () => {
@@ -160,7 +258,7 @@ describe('поле-массив: containment вместо текстового �
     const parsed = parseQuery('aspect=x/probe, nums=5', numeric);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    const c = dialect.sqlToQuery(compileQuery(parsed.ast, { ...CTX, catalog: numeric }));
+    const c = dialect.sqlToQuery(compileQuery(parsed.ast, { ...LEGACY_CTX, catalog: numeric }));
     expect(c.sql).toContain('jsonb_build_array($5::text)');
     expect(c.sql).toContain('jsonb_build_array($8::numeric)');
     // Нечисловой литерал лишней ветки не получает — обычный путь не дорожает.
@@ -183,7 +281,7 @@ describe('поле-массив: containment вместо текстового �
       const parsed = parseQuery(`aspect=x/probe, nums=${literal}`, numeric);
       expect(parsed.ok).toBe(true);
       if (!parsed.ok) throw new Error(parsed.error.message);
-      return dialect.sqlToQuery(compileQuery(parsed.ast, { ...CTX, catalog: numeric }));
+      return dialect.sqlToQuery(compileQuery(parsed.ast, { ...LEGACY_CTX, catalog: numeric }));
     };
     // На границе — ветка есть (такое значение numeric принимает, проверено на живой базе)
     expect(sqlFor(`0.${'1'.repeat(16383)}`).sql).toContain('::numeric');
@@ -197,20 +295,20 @@ describe('поле-массив: containment вместо текстового �
 
   test('сортировка по массиву недостижима парсером, но компилятор не молчит', () => {
     // Раньше default sortCast сортировал бы по тексту JSON — по порядку сериализации.
-    const parsed = parseQuery('aspect=orbis/category, sortBy=title:asc', catalog);
+    const parsed = parseQuery('aspect=orbis/category, sortBy=title:asc', legacyCatalog);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     const broken = { ...parsed.ast, sortBy: [{ field: 'aliases', direction: 'asc' as const }] };
-    expect(() => compileQuery(broken, CTX)).toThrow(QueryCompileError);
+    expect(() => compileQuery(broken, LEGACY_CTX)).toThrow(QueryCompileError);
     // Внутреннее имя типа наружу не выпускается — как и в отказах парсера.
-    expect(() => compileQuery(broken, CTX)).toThrow(/типа 'массив'/);
+    expect(() => compileQuery(broken, LEGACY_CTX)).toThrow(/типа 'массив'/);
   });
 
   test('фильтр по нефильтруемому полю недостижим парсером, но компилятор не молчит', () => {
     // Симметрично сортировке и по той же причине: ветка скаляра сравнила бы `->>` —
     // текст сериализации всего объекта, то есть тихий ноль на равенстве и вся таблица
     // на отрицании. Ровно тот дефект, который чинила эта ветка, только этажом ниже.
-    const parsed = parseQuery('aspect=orbis/schedule', catalog);
+    const parsed = parseQuery('aspect=orbis/schedule', legacyCatalog);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     const broken = {
@@ -227,19 +325,21 @@ describe('поле-массив: containment вместо текстового �
         },
       ],
     };
-    expect(() => compileQuery(broken, CTX)).toThrow(QueryCompileError);
-    expect(() => compileQuery(broken, CTX)).toThrow(/типа 'не скаляр'/);
+    expect(() => compileQuery(broken, LEGACY_CTX)).toThrow(QueryCompileError);
+    expect(() => compileQuery(broken, LEGACY_CTX)).toThrow(/типа 'не скаляр'/);
   });
 
   test('агрегат по полю-массиву отказывает человеческим именем типа', () => {
-    const parsed = parseQuery('aspect=orbis/category', catalog);
+    const parsed = parseQuery('aspect=orbis/category', legacyCatalog);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    expect(() => compileSum(parsed.ast, CTX, 'aliases')).toThrow(/тип 'массив' не числовой/);
-    const sched = parseQuery('aspect=orbis/schedule', catalog);
+    expect(() => compileSum(parsed.ast, LEGACY_CTX, 'aliases')).toThrow(/тип 'массив' не числовой/);
+    const sched = parseQuery('aspect=orbis/schedule', legacyCatalog);
     expect(sched.ok).toBe(true);
     if (!sched.ok) return;
-    expect(() => compileSum(sched.ast, CTX, 'recurrence')).toThrow(/тип 'не скаляр' не числовой/);
+    expect(() => compileSum(sched.ast, LEGACY_CTX, 'recurrence')).toThrow(
+      /тип 'не скаляр' не числовой/,
+    );
   });
 
   test('enum с числовыми значениями сортируется, а не падает TypeError', () => {
@@ -251,22 +351,22 @@ describe('поле-массив: containment вместо текстового �
     const parsed = parseQuery('aspect=x/probe, sortBy=level:asc', numeric);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    const c = dialect.sqlToQuery(compileQuery(parsed.ast, { ...CTX, catalog: numeric }));
+    const c = dialect.sqlToQuery(compileQuery(parsed.ast, { ...LEGACY_CTX, catalog: numeric }));
     expect(c.sql).toContain(`WHEN '3' THEN 0 WHEN '1' THEN 1 WHEN '2' THEN 2`);
   });
 });
 
 describe('this вне контекста сущности — структурная ошибка компиляции', () => {
-  const noThis = { ...CTX, thisEntityId: null };
+  const noThis = { ...LEGACY_CTX, thisEntityId: null };
   test('children_of=this при thisEntityId=null', () => {
-    const parsed = parseQuery('children_of=this', catalog);
+    const parsed = parseQuery('children_of=this', legacyCatalog);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(() => compileQuery(parsed.ast, noThis)).toThrow(QueryCompileError);
     expect(() => compileQuery(parsed.ast, noThis)).toThrow(/this вне контекста сущности/);
   });
   test('parents_of=this при thisEntityId=null — и в compileCount тоже', () => {
-    const parsed = parseQuery('parents_of=this', catalog);
+    const parsed = parseQuery('parents_of=this', legacyCatalog);
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(() => compileCount(parsed.ast, noThis)).toThrow(/this вне контекста сущности/);

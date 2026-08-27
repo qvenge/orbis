@@ -1,0 +1,238 @@
+// apps/server/perf/explain.test.ts
+//
+// ЗАМЕР ПЛАНОВ — вход миграции 0017 («Пересев мира», Задача 23). Три GIN'а, заведённые
+// миграцией 0015 под новую форму хранения, обязаны доказать, что ими пользуются: тот, что
+// не доказал, там же и снимается. Поэтому файл печатает ВЕРДИКТ по каждому индексу, а не
+// просто «зелено».
+//
+// Гоняется отдельным скриптом `bun run test:perf:explain` — вне CI и вне `bun run test`
+// (корпус на 50 000 строк сеется минутами). Повторно гоняется в Задаче 23 как приёмка.
+//
+// ПОЧЕМУ ПОД РОЛЬЮ ПРИЛОЖЕНИЯ, А НЕ ПОД АДМИН-DSN. Роль без `BYPASSRLS` получает поверх
+// запроса политику `owner_owns_row` (`owner_id = (SELECT auth.uid())`), и планировщик видит
+// ДРУГОЙ запрос: у него появляется второй отбор, меняется оценка селективности, а вместе с
+// ней — и выбор доступа. Вердикт, снятый под админом, к бою отношения не имеет (§А1-4/§С8-10).
+//
+// ТРИ ВОПРОСА, А НЕ ОДИН, и их нельзя путать:
+//   1. ВЫБРАН ли индекс планировщиком под ролью приложения — это и есть «им пользуются»;
+//   2. МОЖЕТ ли он быть выбран под ней вообще (`enable_seqscan = off`);
+//   3. берётся ли он под АДМИН-DSN, где политик нет.
+// Третий вопрос отделяет «индекс не подходит запросу» от «индекс подходит, но RLS его не
+// пускает», и без него вердикт «не используется» читался бы как «снимайте» в обоих случаях.
+// Ловушка, уже стоившая этой ветке времени: подзапросная форма `= ANY((SELECT …))` роняет
+// GIN молча — то есть «не выбран» бывает свойством ЗАПРОСА, а не индекса.
+//
+// ЧТО ЗАМЕР ПОКАЗАЛ (2026-08-27) И ПОЧЕМУ ЭТО ГЛАВНОЕ В ФАЙЛЕ. Под ролью приложения ни один
+// GIN на `entities` НЕ ПРИМЕНИМ — и это не про селективность и не про размер корпуса.
+// Политика `owner_owns_row` (0001) — security qual, а операторы containment НЕ leakproof
+// (`pg_proc.proleakproof = false` у `jsonb_contains`, `arraycontains`, `jsonb_exists`;
+// пиннится тестом ниже). PostgreSQL обязан проверить security qual ПЕРВОЙ, а индексное
+// условие проверяется до неё — поэтому не-leakproof предикат индексным условием стать не
+// может в принципе. Под админ-DSN тот же запрос берёт GIN и отрабатывает за доли
+// миллисекунды; под ролью приложения — Bitmap Heap Scan по `entities_owner_updated` с
+// фильтром по куче (44 мс против 0,5 мс на 50 000 строк).
+//
+// Отсюда и предупреждение выжимки «роль без BYPASSRLS видит другой план» оказалось сильнее,
+// чем звучало: под админом план не просто другой — он недостижим для приложения. Вердикт
+// «снимать ли индекс» из этого НЕ следует автоматически: под админ-DSN ходят сиды, скрипты
+// и `ops.ts`, и для них индексы работают. Решение — за владельцем спеки и Задачей 23.
+import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { type SQL, sql } from 'drizzle-orm';
+import { withIdentity } from '../src/db/with-identity';
+import { compileCountAst } from '../src/query/compile-ast';
+import { loadRegistry, type RegistrySnapshot } from '../src/registry/load';
+import {
+  ensureGraphFixture,
+  GRAPH_ENTITIES,
+  GRAPH_OWNER_ID,
+  RARE_ASPECT,
+  RARE_PROPERTY,
+  RARE_VALUE,
+} from '../src/test/graph-fixture';
+import { adminDb, appDb, requireEnv } from '../test/helpers';
+
+requireEnv();
+
+const { db, client } = appDb();
+
+let reg: RegistrySnapshot;
+
+beforeAll(async () => {
+  const fixture = await ensureGraphFixture();
+  console.log(
+    `explain: корпус ${fixture.entities} сущностей / ${fixture.relations} рёбер` +
+      ` (${fixture.seeded ? 'засеян' : 'взят из кеша'})`,
+  );
+  expect(fixture.entities).toBe(GRAPH_ENTITIES);
+  reg = await withIdentity(db, GRAPH_OWNER_ID, (tx) => loadRegistry(tx, GRAPH_OWNER_ID));
+}, 900_000);
+
+afterAll(async () => {
+  await client.end();
+});
+
+/** Плоский текст плана: EXPLAIN (FORMAT JSON) под ролью приложения. */
+async function planOf(query: SQL, forceIndex: boolean): Promise<string> {
+  const rows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => {
+    if (forceIndex) await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+    return [...(await tx.execute(sql`EXPLAIN (FORMAT JSON) ${query}`))];
+  });
+  return JSON.stringify(rows);
+}
+
+/** Тот же план, но под админ-DSN: политик нет, значит нет и security qual. */
+async function adminPlanOf(query: SQL): Promise<string> {
+  const admin = adminDb();
+  try {
+    const rows = await admin.db.transaction(async (tx) => [
+      ...(await tx.execute(sql`EXPLAIN (FORMAT JSON) ${query}`)),
+    ]);
+    return JSON.stringify(rows);
+  } finally {
+    await admin.client.end();
+  }
+}
+
+interface Verdict {
+  index: string;
+  chosen: boolean;
+  usable: boolean;
+  usableWithoutRls: boolean;
+  note: string;
+}
+
+const verdicts: Verdict[] = [];
+
+async function verdictFor(index: string, query: SQL, note: string): Promise<Verdict> {
+  const chosen = (await planOf(query, false)).includes(index);
+  const usable = (await planOf(query, true)).includes(index);
+  const usableWithoutRls = (await adminPlanOf(query)).includes(index);
+  const v: Verdict = { index, chosen, usable, usableWithoutRls, note };
+  verdicts.push(v);
+  console.log(
+    `explain: ${index} — под ролью приложения ${chosen ? 'ВЫБРАН' : 'НЕ выбран'}, ` +
+      `при enable_seqscan=off ${usable ? 'пригоден' : 'НЕ пригоден'}; ` +
+      `под админ-DSN ${usableWithoutRls ? 'ВЫБРАН' : 'не выбран'} — ${note}`,
+  );
+  return v;
+}
+
+const ctx = () => ({
+  ownerId: GRAPH_OWNER_ID,
+  today: '2026-07-03',
+  timeZone: 'Europe/Moscow',
+  reg,
+});
+
+test('вердикт по entities_props_gin: горячий запрос — containment по props', async () => {
+  // Горячий запрос — ровно тот, что порождает компилятор для `<списочное свойство>=v`:
+  // containment ОТ КОРНЯ колонки. Подпутевая форма (`props->'x' ?| …`) этим индексом не
+  // покрывается вовсе, и вердикт по ней был бы вердиктом о другой форме запроса.
+  const query = compileCountAst(
+    { filter: { prop: RARE_PROPERTY, op: 'contains', value: RARE_VALUE } },
+    ctx(),
+  );
+  const v = await verdictFor(
+    'entities_props_gin',
+    query,
+    `props @> {"${RARE_PROPERTY}":["${RARE_VALUE}"]} на ${GRAPH_ENTITIES} строках, ~50 совпадений`,
+  );
+  // Тест не утверждает, что индекс ДОЛЖЕН быть выбран, — он утверждает, что вердикт снят
+  // и однозначен. Решение о снятии индекса принимает Задача 23 по этим двум флагам.
+  expect(typeof v.chosen).toBe('boolean');
+  expect(typeof v.usable).toBe('boolean');
+}, 300_000);
+
+test('вердикт по entities_aspects_gin: горячий запрос — членство в аспекте', async () => {
+  const query = compileCountAst({ filter: { aspect: RARE_ASPECT } }, ctx());
+  const v = await verdictFor(
+    'entities_aspects_gin',
+    query,
+    `aspects @> ARRAY['${RARE_ASPECT}'] на ${GRAPH_ENTITIES} строках, ~50 совпадений`,
+  );
+  expect(typeof v.chosen).toBe('boolean');
+  expect(typeof v.usable).toBe('boolean');
+}, 300_000);
+
+test('вердикт по entities_query_refs_gin: писателя ещё нет (рулинг Р-П-1)', async () => {
+  // Колонка `query_refs` пуста у всех строк: её писатель появляется только в Задаче 21
+  // (ссылки внутри тел). Поэтому индекс ИЗЪЯТ из правила «неподтверждённый снимается», а
+  // вердикт по нему снимается в Задаче 23 — здесь печатается то, что можно измерить сейчас.
+  const rows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
+    ...(await tx.execute(sql`
+      SELECT count(*) FILTER (WHERE query_refs <> '{}') AS filled FROM entities
+       WHERE owner_id = ${GRAPH_OWNER_ID}::uuid`)),
+  ]);
+  const filled = Number((rows[0] as { filled?: unknown })?.filled);
+  const query = sql`SELECT count(*) FROM entities e WHERE query_refs @> ARRAY['019eb2f4-1a00-7b6e-9c01-5d2f8a3b4c10']`;
+  const v = await verdictFor(
+    'entities_query_refs_gin',
+    query,
+    `query_refs заполнены у ${filled} строк из ${GRAPH_ENTITIES} — писатель приезжает в Задаче 21`,
+  );
+  expect(filled).toBe(0);
+  expect(typeof v.usable).toBe('boolean');
+}, 300_000);
+
+test('вердикт по (source_id, role): несущий индекс рекурсивного обхода', async () => {
+  // Не GIN и не кандидат на снятие — но именно на нём стоит П6, и если обход перестанет
+  // его брать, порог поедет молча вместе с планом.
+  const query = compileCountAst(
+    {
+      filter: {
+        rel: {
+          kind: 'descendants_of',
+          via: 'subitem',
+          of: '00000000-0000-7000-8000-0000000000f1',
+        },
+      },
+    },
+    ctx(),
+  );
+  const v = await verdictFor(
+    'relations_source_role',
+    query,
+    'рекурсивный обход вниз по (source_id, role)',
+  );
+  expect(v.usable).toBe(true);
+}, 300_000);
+
+test('ПРИЧИНА, а не только симптом: операторы containment не leakproof', async () => {
+  // Это утверждение — проверяемое, и проверяется оно у самого Postgres, а не в комментарии.
+  // Пока флаг `proleakproof` у этих трёх функций false, GIN под RLS индексным условием быть
+  // не может; станет true (или изменится модель RLS) — тест покраснеет, и вердикты выше
+  // придётся снимать заново.
+  const rows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
+    ...(await tx.execute(sql`
+      SELECT proname, proleakproof FROM pg_proc
+       WHERE oid IN ('jsonb_contains(jsonb,jsonb)'::regprocedure,
+                     'arraycontains(anyarray,anyarray)'::regprocedure,
+                     'jsonb_exists(jsonb,text)'::regprocedure)
+       ORDER BY proname`)),
+  ]);
+  console.log('explain: leakproof-флаги операторов —', JSON.stringify(rows));
+  expect(rows).toHaveLength(3);
+  for (const r of rows) expect((r as { proleakproof: boolean }).proleakproof).toBe(false);
+}, 300_000);
+
+test('сводка вердиктов напечатана по всем четырём индексам', () => {
+  expect(verdicts.map((v) => v.index).sort()).toEqual(
+    [
+      'entities_aspects_gin',
+      'entities_props_gin',
+      'entities_query_refs_gin',
+      'relations_source_role',
+    ].sort(),
+  );
+  console.log('explain: СВОДКА ДЛЯ МИГРАЦИИ 0017');
+  for (const v of verdicts) {
+    const verdict = v.chosen
+      ? 'ОСТАВИТЬ — используется приложением'
+      : v.usableWithoutRls
+        ? 'приложением НЕ используется (RLS не пускает не-leakproof предикат); работает только под админ-DSN'
+        : 'форма запроса индексом не покрывается ни под какой ролью';
+    console.log(
+      `  ${v.index}: chosen=${v.chosen} usable=${v.usable} admin=${v.usableWithoutRls} — ${verdict}`,
+    );
+  }
+});

@@ -1,16 +1,30 @@
 // apps/server/src/query/compile.dataset.test.ts
-// Эталонный датасет §6.2: скомпилированный SQL исполняется на реальной БД
-// (локальный Supabase) СТРОГО под withIdentity — компилятор не добавляет
-// owner-фильтр, изоляцию даёт RLS (§4.10). Проверяется состав И порядок.
+// Эталонный датасет §6.2 на НОВОМ компиляторе (`compile-ast.ts`): скомпилированный SQL
+// исполняется на реальной БД (локальный Supabase) СТРОГО под withIdentity — компилятор не
+// добавляет owner-фильтр, изоляцию даёт RLS (§4.10). Проверяется состав И порядок.
+//
+// Тексты запросов переписаны в key-форму §А5-3 (`orbis/task_status` вместо `status`), а
+// значения с пробелами закавычены: новый разбор идёт по РЕЕСТРУ, и старые тексты он
+// отвергает по построению (см. докблок `parse-ast.ts`). Строки датасета при этом прежние —
+// фикстура объявлена старой картой и уезжает в БД тремя колонками (`rowFromLegacy`).
+//
+// ОДНО МЕСТО, ГДЕ ВЫДАЧА ИЗМЕНИЛАСЬ, и это не опечатка теста: `excludeBlocked=true`. Новый
+// разбор кодирует его как `!has_relation via=dependency` — «на сущность НЕТ входящего ребра
+// dependency», без взгляда на состояние блокирующей работы. Сегодняшний компилятор смотрел
+// и на состояние (`compile.ts:262`: блокер в `done`/`cancelled` не блокирует), поэтому
+// «отпущенный» блокер теперь тоже прячет задачу. Набор «закрытых состояний» — это контракт
+// `completable`, он приезжает срезом Б-1; до него интервал живёт с этой семантикой, и она
+// здесь ЗАПИНЕНА, а не обойдена (тест 1 ниже называет обе выдачи).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { type FieldCatalog, parseQuery } from '@orbis/shared';
+import { parseQueryAst, type QueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { rowFromLegacy } from '../executor/legacy-form';
-import { loadRegistry } from '../registry/load';
-import { type CompileContext, compileCount, compileQuery, loadCatalog } from './compile';
+import { loadRegistry, type RegistrySnapshot } from '../registry/load';
+import { type CompileCtx, compileCountAst, compileQueryAst } from './compile-ast';
 
 requireEnv();
 
@@ -64,6 +78,7 @@ const ID = {
   catSalary: '019eb300-d5e1-7000-8000-00000000001b',
   finPlanned: '019eb300-d5e1-7000-8000-000000000017',
   finFact: '019eb300-d5e1-7000-8000-000000000018',
+  eventOverdue: '019eb300-d5e1-7000-8000-00000000001c',
 } as const;
 
 /**
@@ -402,6 +417,24 @@ const DATASET_A: DatasetRow[] = [
     createdAt: new Date('2026-06-20T10:02:00Z'),
     updatedAt: new Date('2026-07-01T10:02:00Z'),
   },
+  {
+    // Событие с ПРОСРОЧЕННЫМ началом и правилом повторения — вход сразу для двух новых
+    // проверок: OR-дерева «просрочено по сроку ИЛИ по началу» (§А5-5) и `has(prop)` по
+    // json-свойству. updated_at — «ранняя половина» (< 2026-07-02), чтобы не менять выдачу
+    // курсорного теста 3.
+    id: ID.eventOverdue,
+    ownerId: USER_A,
+    title: 'Еженедельная планёрка (начало вчера)',
+    tags: ['event'],
+    aspects: {
+      'orbis/schedule': {
+        start_at: '2026-07-01T10:00:00+03:00',
+        recurrence: { freq: 'weekly', interval: 1 },
+      },
+    },
+    createdAt: new Date('2026-06-20T11:00:00Z'),
+    updatedAt: new Date('2026-07-01T17:00:00Z'),
+  },
 ];
 
 /**
@@ -479,30 +512,38 @@ const RELATIONS_A: (typeof relations.$inferInsert)[] = [
   },
 ];
 
-/** Блок «Сегодня» Daily Planning — дословно из 02 §3.3. */
+/** Блок «Сегодня» Daily Planning — 02 §3.3 в key-форме §А5-3. */
 const DAILY_TODAY =
-  'aspect=orbis/task, due_date=today|overdue, status=!done&!cancelled&!waiting,\n' +
-  '         excludeBlocked=true, sortBy=priority:desc|due_date:asc,\n' +
+  'aspect=orbis/task, orbis/due_date=today|overdue,\n' +
+  '         orbis/task_status=!done&!cancelled&!waiting,\n' +
+  '         excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc,\n' +
   '         display=list, title=Сегодня';
 
-let catalog: FieldCatalog;
+let reg: RegistrySnapshot;
 
-function ctx(): CompileContext {
-  return { catalog, thisEntityId: null, today: TODAY, timezone: TIMEZONE };
+function ctx(): CompileCtx {
+  return { ownerId: USER_A, today: TODAY, timeZone: TIMEZONE, reg, thisEntityId: null };
 }
 
-/** Парсит, компилирует и исполняет запрос под identity пользователя (RLS-путь). */
-async function run(userId: string, query: string): Promise<Record<string, unknown>[]> {
-  const parsed = parseQuery(query, catalog);
-  if (!parsed.ok) throw new Error(`невалидный запрос в тесте: ${parsed.error.message}`);
-  const compiled = compileQuery(parsed.ast, ctx());
+function astOf(query: string): QueryAst {
+  const parsed = parseQueryAst(query, toParseRegistry(reg, 'ru'));
+  if (!parsed.ok)
+    throw new Error(`невалидный запрос в тесте: ${parsed.error.code} ${parsed.error.message}`);
+  return parsed.ast;
+}
+
+/** Разбирает, компилирует и исполняет запрос под identity пользователя (RLS-путь). */
+async function runAst(userId: string, ast: QueryAst): Promise<Record<string, unknown>[]> {
+  const compiled = compileQueryAst(ast, ctx());
   return withIdentity(db, userId, async (tx) => [...(await tx.execute(compiled))]);
 }
 
+function run(userId: string, query: string): Promise<Record<string, unknown>[]> {
+  return runAst(userId, astOf(query));
+}
+
 async function runCount(userId: string, query: string): Promise<number> {
-  const parsed = parseQuery(query, catalog);
-  if (!parsed.ok) throw new Error(`невалидный запрос в тесте: ${parsed.error.message}`);
-  const compiled = compileCount(parsed.ast, ctx());
+  const compiled = compileCountAst(astOf(query), ctx());
   const rows = await withIdentity(db, userId, async (tx) => [...(await tx.execute(compiled))]);
   return Number(rows[0]?.count);
 }
@@ -511,15 +552,15 @@ const ids = (rows: Record<string, unknown>[]) => rows.map((r) => r.id);
 
 /** Старая карта фикстуры → три колонки строки (одна проекция на весь репозиторий). */
 function datasetRows(
-  reg: Awaited<ReturnType<typeof loadRegistry>>,
+  snapshot: RegistrySnapshot,
   rows: DatasetRow[],
 ): (typeof entities.$inferInsert)[] {
-  return rows.map(({ aspects, ...rest }) => ({ ...rest, ...rowFromLegacy(reg, aspects) }));
+  return rows.map(({ aspects, ...rest }) => ({ ...rest, ...rowFromLegacy(snapshot, aspects) }));
 }
 
 beforeAll(async () => {
   await truncateAll(); // санкционировано: локальная тестовая БД
-  const reg = await withIdentity(db, USER_A, (tx) => loadRegistry(tx, USER_A));
+  reg = await withIdentity(db, USER_A, (tx) => loadRegistry(tx, USER_A));
   await withIdentity(db, USER_A, async (tx) => {
     await tx.insert(entities).values(datasetRows(reg, DATASET_A));
     await tx.insert(relations).values(RELATIONS_A);
@@ -527,129 +568,177 @@ beforeAll(async () => {
   await withIdentity(db, USER_B, async (tx) => {
     await tx.insert(entities).values(datasetRows(reg, DATASET_B));
   });
-  // Каталог — из БД (builtin-реестр под RLS), а не из shared: заодно проверяет loadCatalog.
-  catalog = await withIdentity(db, USER_A, (tx) => loadCatalog(tx));
 });
 
 afterAll(async () => {
   await client.end();
 });
 
-describe('датасет §6.2: состав И порядок под RLS', () => {
-  test('loadCatalog: каталог из aspect_definitions несёт типы и порядок enum', () => {
-    expect(catalog.fields.priority?.[0]).toMatchObject({
-      aspect: 'orbis/task',
-      enumValues: ['low', 'medium', 'high'],
-    });
-    expect(catalog.fields.amount?.[0]?.type).toBe('decimal');
-    expect(catalog.fields.due_date?.[0]?.type).toBe('date');
-    expect(catalog.fields.start_at?.[0]?.type).toBe('timestamp');
+describe('датасет §6.2 на новом компиляторе: состав И порядок под RLS', () => {
+  test('0. реестр из БД несёт типы и порядок вариантов select', () => {
+    const priority = reg.properties.get('orbis/priority');
+    expect(priority?.type.kind).toBe('select');
+    if (priority?.type.kind === 'select') {
+      expect(priority.type.options.map((o) => o.key)).toEqual(['low', 'medium', 'high']);
+    }
+    expect(reg.properties.get('orbis/amount')?.type.kind).toBe('decimal');
+    expect(reg.properties.get('orbis/due_date')?.type.kind).toBe('date');
+    expect(reg.properties.get('orbis/start_at')?.type.kind).toBe('timestamp');
+    // Умолчание чтения (РП-9) приезжает из реестра, а не подставляется всем булевым.
+    expect(reg.properties.get('orbis/planned')?.type).toMatchObject({ default: false });
+    expect(reg.properties.get('orbis/all_day')?.type).not.toMatchObject({ default: false });
   });
 
-  test('1. «Сегодня» Daily Planning: просроченная и сегодняшняя, priority:desc, без заблокированной и без чужих', () => {
-    // taskBlocked исключён живым task-блокером; taskBlocked2 — блокером БЕЗ
-    // task-аспекта (COALESCE-семантика §6.1); taskDone — по статусу; taskB — RLS.
-    // taskToday остаётся, хотя на нём blocks-связь от done-блокера («отпущен»).
-    // Порядок: high → medium.
-    return run(USER_A, DAILY_TODAY).then((rows) => {
-      expect(ids(rows)).toEqual([ID.taskToday, ID.taskOverdue]);
-    });
+  test('1. «Сегодня»: остаётся только просроченная — excludeBlocked интервала прячет и «отпущенных»', async () => {
+    // taskBlocked исключён живым блокером, taskBlocked2 — блокером-заметкой, taskDone — по
+    // статусу, taskB — RLS. taskToday тоже уходит, и ЭТО НОВОЕ: на нём висит входящее ребро
+    // dependency от закрытой задачи, а «закрытость» до контракта `completable` (Б-1) не
+    // выразима. Старый компилятор оставлял его (`compile.ts:262` смотрел на статус блокера).
+    expect(ids(await run(USER_A, DAILY_TODAY))).toEqual([ID.taskOverdue]);
+    // Отпущенность блокера действительно НЕ учитывается: у taskToday блокер в done, и его
+    // единственное отличие от taskBlocked — именно статус блокера.
+    const both = ids(
+      await run(USER_A, 'aspect=orbis/task, has_relation=dependency, sortBy=orbis/created_at:asc'),
+    );
+    expect(both).toEqual([ID.taskBlocked, ID.taskBlocked2, ID.taskToday]);
   });
 
-  test('1a. бейдж (02 §3.2): compileCount игнорирует limit, compileQuery — нет', async () => {
+  test('1a. бейдж (02 §3.2): compileCountAst игнорирует limit, compileQueryAst — нет', async () => {
     const q =
-      'aspect=orbis/task, due_date=today|overdue, status=!done&!cancelled&!waiting,' +
-      ' excludeBlocked=true, sortBy=priority:desc|due_date:asc, limit=1';
-    expect(ids(await run(USER_A, q))).toEqual([ID.taskToday]);
-    expect(await runCount(USER_A, q)).toBe(2);
+      'aspect=orbis/task, orbis/due_date=today|overdue, orbis/task_status=!done&!cancelled&!waiting,' +
+      ' excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc, limit=1';
+    expect(ids(await run(USER_A, q))).toEqual([ID.taskOverdue]);
+    expect(await runCount(USER_A, q)).toBe(1);
+    // Тот же запрос без excludeBlocked — четыре задачи: limit режет выдачу, но не счётчик.
+    const wide =
+      'aspect=orbis/task, orbis/due_date=today|overdue, orbis/task_status=!done&!cancelled&!waiting,' +
+      ' sortBy=orbis/priority:desc|orbis/due_date:asc, limit=1';
+    expect(await run(USER_A, wide)).toHaveLength(1);
+    expect(await runCount(USER_A, wide)).toBe(4);
   });
 
-  test('2. decimal через ::numeric: amount>500 находит "1000.00", но не "340.00"', async () => {
+  test('2. decimal через ::numeric: orbis/amount>500 находит "1000.00", но не "340.00"', async () => {
     // Лексикографически '1000.00' < '500' — находка "1000.00" доказывает numeric-сравнение (§3.3).
-    expect(ids(await run(USER_A, 'amount>500'))).toEqual([ID.fin1000]);
+    expect(ids(await run(USER_A, 'orbis/amount>500'))).toEqual([ID.fin1000]);
   });
 
-  test('2a. amount=0.10..0.30 находит "0.10", "0.20" и "0.30" (границы включительно)', async () => {
-    expect(ids(await run(USER_A, 'amount=0.10..0.30, sortBy=amount:asc'))).toEqual([
+  test('2a. orbis/amount=0.10..0.30 — границы включительно', async () => {
+    expect(ids(await run(USER_A, 'orbis/amount=0.10..0.30, sortBy=orbis/amount:asc'))).toEqual([
       ID.fin010,
       ID.fin020,
-      ID.fin030, // верхняя граница диапазона — включительно
+      ID.fin030,
+    ]);
+    // Тот же диапазон включающим range без верхней границы (`>=`): §А5-7 не знает gte.
+    expect(ids(await run(USER_A, 'orbis/amount>=1000, sortBy=orbis/amount:asc'))).toEqual([
+      ID.fin1000,
     ]);
   });
 
-  test('2b. абсолютный диапазон date-поля (B5): occurred_on=2026-06-26..2026-06-30 — границы включительно', async () => {
-    // Лексикографика ISO-дат = хронология; fin010 (06-25) и fin1000 (07-02) вне окна,
-    // finB (07-01, чужой) невидим и без date-фильтра — RLS.
+  test('2b. date-свойство сравнивается как ::date, а не как текст', async () => {
     expect(
-      ids(await run(USER_A, 'occurred_on=2026-06-26..2026-06-30, sortBy=occurred_on:asc')),
+      ids(
+        await run(USER_A, 'orbis/occurred_on=2026-06-26..2026-06-30, sortBy=orbis/occurred_on:asc'),
+      ),
     ).toEqual([ID.fin020, ID.fin030, ID.fin340]);
-    // Сравнение: строго после 2026-06-30 — только июльская запись
-    expect(ids(await run(USER_A, 'occurred_on>2026-06-30'))).toEqual([ID.fin1000]);
+    expect(ids(await run(USER_A, 'orbis/occurred_on>2026-06-30'))).toEqual([ID.fin1000]);
+    // Включающая верхняя граница той же датой (`<=`) — тот же хвост окна.
+    expect(
+      ids(await run(USER_A, 'orbis/occurred_on<=2026-06-25, sortBy=orbis/occurred_on:asc')),
+    ).toEqual([ID.finFact, ID.finPlanned, ID.fin010]);
   });
 
-  test('2c. фильтр «Факт» (финал B): planned=!true — NULL и явный false проходят, true скрыт', async () => {
-    // Клиентский фильтр «Факт» экрана «Транзакции» (txQuery.ts): quick-add/fast-path/LLM
-    // ключ planned не пишут — noneOf `!true` компилируется в (IS NULL OR NOT IN ('true')),
-    // запись без ключа проходит; семантика = серверные агрегаты coalesce(...,false).
-    // `planned=false` (anyOf) отфильтровал бы NULL — рукописные транзакции исчезли бы.
-    const fact = await run(USER_A, 'aspect=orbis/financial, planned=!true, sortBy=occurred_on:asc');
+  test('2c. умолчание чтения (РП-9): orbis/planned=!true — NULL и явный false проходят', async () => {
+    const fact = await run(
+      USER_A,
+      'aspect=orbis/financial, orbis/planned=!true, sortBy=orbis/occurred_on:asc',
+    );
     expect(ids(fact)).toEqual([
       ID.finFact, // явный planned=false — виден
-      ID.fin010, // без ключа planned — виден (NULL проходит)
+      ID.fin010, // ключа planned нет вовсе — виден (умолчание реестра false)
       ID.fin020,
       ID.fin030,
       ID.fin340,
       ID.fin1000,
     ]);
-    // Симметрия: фильтр «План» — только явный true
-    expect(ids(await run(USER_A, 'aspect=orbis/financial, planned=true'))).toEqual([ID.finPlanned]);
+    expect(ids(await run(USER_A, 'aspect=orbis/financial, orbis/planned=true'))).toEqual([
+      ID.finPlanned,
+    ]);
+    // Оператор `ne` даёт ТО ЖЕ множество, что `=!v` (одна семантика «не равно», решение 10).
+    expect(
+      ids(
+        await run(
+          USER_A,
+          'aspect=orbis/financial, orbis/planned!=true, sortBy=orbis/occurred_on:asc',
+        ),
+      ),
+    ).toEqual(ids(fact));
   });
 
-  test('2d. поле-массив (aliases): containment находит ОДНУ категорию, отрицание — остальные', async () => {
-    // Главное доказательство задачи, и на живой базе, а не по строке SQL: `->>'aliases'`
-    // сравнивал текст всего массива, поэтому `=такси` давал 0 строк, а `!такси` — ВСЕ.
-    expect(ids(await run(USER_A, 'aspect=orbis/category, aliases=такси'))).toEqual([
+  test('2d. списочное свойство: containment находит одну категорию, отрицание — остальные', async () => {
+    expect(ids(await run(USER_A, 'aspect=orbis/category, orbis/aliases=такси'))).toEqual([
       ID.catTransport,
     ]);
-    // Отрицание: «Транспорт» ушёл, прочие категории на месте (ветки IS NULL в SQL нет —
-    // NOT (@>) сам пропускает и сущности без этого аспекта, решение 10).
     expect(
-      ids(await run(USER_A, 'aspect=orbis/category, aliases=!такси, sortBy=title:asc')),
+      ids(await run(USER_A, 'aspect=orbis/category, orbis/aliases=!такси, sortBy=orbis/title:asc')),
     ).toEqual([ID.catFood, ID.catSalary]);
-    // OR значений — объединение, а не пересечение (§6.1)
     expect(
-      ids(await run(USER_A, 'aspect=orbis/category, aliases=такси|кофе, sortBy=title:asc')),
+      ids(
+        await run(
+          USER_A,
+          'aspect=orbis/category, orbis/aliases=такси|кофе, sortBy=orbis/title:asc',
+        ),
+      ),
     ).toEqual([ID.catFood, ID.catTransport]);
-    // Два фильтра по одному полю — AND: обоих алиасов требует «Транспорт» и находит
-    expect(ids(await run(USER_A, 'aspect=orbis/category, aliases=метро, aliases=такси'))).toEqual([
-      ID.catTransport,
-    ]);
-    // Элемент ищется ЦЕЛИКОМ и точно: ни подстрока алиаса, ни другой регистр не проходят
-    for (const q of ['aliases=такс', 'aliases=Такси']) {
+    expect(
+      ids(await run(USER_A, 'aspect=orbis/category, orbis/aliases=метро, orbis/aliases=такси')),
+    ).toEqual([ID.catTransport]);
+    // Элемент ищется ЦЕЛИКОМ и точно: ни подстрока, ни другой регистр не проходят.
+    for (const q of ['orbis/aliases=такс', 'orbis/aliases=Такси']) {
       expect(await run(USER_A, `aspect=orbis/category, ${q}`)).toHaveLength(0);
     }
   });
 
-  test('2e. отрицание по массиву БЕЗ aspect=: сущности без этого аспекта проходят (решение 10)', async () => {
-    // Все запросы 2d идут с `aspect=orbis/category`, который сущности без аспекта отсекает
-    // сам, — там правило «NULL проходит» держится только докблоком. Здесь оно проверено
-    // на данных: `aliases=!такси` без aspect= обязан вернуть ВСЮ неархивную выборку минус
-    // «Транспорт», включая задачи и транзакции, у которых orbis/category нет вовсе.
-    const all = ids(await run(USER_A, 'sortBy=created_at:asc|title:asc'));
-    const negated = ids(await run(USER_A, 'aliases=!такси, sortBy=created_at:asc|title:asc'));
+  test('2f. отрицание СКАЛЯРНОГО свойства пропускает записи, где свойства нет вовсе', async () => {
+    // Решение 10 §6.1 («NULL проходит») в новой форме держится на том, что `not` компилируется
+    // тотально: `NOT COALESCE(pred, false)`. У голого `NOT (pred)` предикат по отсутствующему
+    // ключу равен NULL, и WHERE вычеркнул бы такие записи молча.
+    //
+    // Проверяется ИМЕННО на скаляре и БЕЗ `aspect=`: у `orbis/planned` умолчание объявлено
+    // реестром (COALESCE стоит уже в самом выражении), у списка containment по отсутствующему
+    // ключу даёт false, а не NULL, — на обоих мутация «убрать тотальность» проходит незаметно.
+    const all = ids(await run(USER_A, 'sortBy=orbis/created_at:asc|orbis/title:asc'));
+    const notDone = ids(
+      await run(USER_A, 'orbis/task_status=!done, sortBy=orbis/created_at:asc|orbis/title:asc'),
+    );
+    expect(notDone).toEqual(all.filter((id) => id !== ID.taskDone));
+    // Явно: в выдаче есть записи БЕЗ orbis/task_status вовсе.
+    expect(notDone).toContain(ID.project);
+    expect(notDone).toContain(ID.fin010);
+    expect(notDone).toContain(ID.eventOverdue);
+    // Оператор `ne` даёт то же множество — у «не равно» одна семантика (см. шапку файла).
+    expect(
+      ids(
+        await run(USER_A, 'orbis/task_status!=done, sortBy=orbis/created_at:asc|orbis/title:asc'),
+      ),
+    ).toEqual(notDone);
+  });
+
+  test('2e. отрицание по списку БЕЗ aspect=: сущности без свойства проходят', async () => {
+    const all = ids(await run(USER_A, 'sortBy=orbis/created_at:asc|orbis/title:asc'));
+    const negated = ids(
+      await run(USER_A, 'orbis/aliases=!такси, sortBy=orbis/created_at:asc|orbis/title:asc'),
+    );
     expect(negated).toEqual(all.filter((id) => id !== ID.catTransport));
-    // Явно: в выдаче есть сущность вовсе без аспекта orbis/category, а «Транспорта» нет
-    expect(negated).toContain(ID.project); // aspects: {} — ни одного аспекта
-    expect(negated).toContain(ID.taskInbox); // только orbis/task
+    expect(negated).toContain(ID.project);
+    expect(negated).toContain(ID.taskInbox);
     expect(negated).not.toContain(ID.catTransport);
-    // Не выродилось в «вернуть всё»: одна сущность из выборки действительно ушла
     expect(negated).toHaveLength(all.length - 1);
   });
 
-  test('3. курсор агента (§9.3): updated_at> середины вставки — только поздняя половина', async () => {
+  test('3. курсор агента (§9.3): orbis/updated_at> середины вставки — поздняя половина', async () => {
     const rows = await run(
       USER_A,
-      'updated_at>2026-07-02T00:00:00Z, archived=any, sortBy=updated_at:asc',
+      'orbis/updated_at>2026-07-02T00:00:00Z, archived=any, sortBy=orbis/updated_at:asc',
     );
     expect(ids(rows)).toEqual([
       ID.taskBlocked,
@@ -661,9 +750,15 @@ describe('датасет §6.2: состав И порядок под RLS', () =
     ]);
   });
 
-  test('4. children_of=<проект> — только дети, по сроку', async () => {
-    const rows = await run(USER_A, `children_of=${ID.project}, sortBy=due_date:asc`);
+  test('4. children_of=<проект> без via — семейство иерархии из реестра', async () => {
+    const rows = await run(USER_A, `children_of=${ID.project}, sortBy=orbis/due_date:asc`);
     expect(ids(rows)).toEqual([ID.taskOverdue, ID.taskToday]);
+    // Та же выдача с явной ролью: у детей проекта в датасете роль subitem.
+    expect(
+      ids(await run(USER_A, `children_of=${ID.project} via=subitem, sortBy=orbis/due_date:asc`)),
+    ).toEqual([ID.taskOverdue, ID.taskToday]);
+    // Чужая роль — пусто, а не «всё равно дети».
+    expect(await run(USER_A, `children_of=${ID.project} via=ticket`)).toHaveLength(0);
   });
 
   test('4a. archived: по умолчанию скрыта, archived=any включает архивную', async () => {
@@ -673,24 +768,23 @@ describe('датасет §6.2: состав И порядок под RLS', () =
     const withArchived = ids(await run(USER_A, 'aspect=orbis/task, archived=any'));
     expect(withArchived).toContain(ID.archived);
     expect(withArchived).toHaveLength(13);
+    expect(ids(await run(USER_A, 'aspect=orbis/task, archived=true'))).toEqual([ID.archived]);
   });
 
-  test('4b. search= находит по слову из body', async () => {
+  test('4b. search= находит по слову из body; отрицание поиска — всё остальное', async () => {
     expect(ids(await run(USER_A, 'search=платежей'))).toEqual([ID.project]);
+    const rest = ids(await run(USER_A, '!search=платежей'));
+    expect(rest).not.toContain(ID.project);
+    expect(rest).toContain(ID.taskInbox);
   });
 
-  test('5. sortBy=priority:desc: high → medium → low → NULL (порядок enum, NULLS LAST)', async () => {
+  test('5. sortBy=orbis/priority:desc — порядок вариантов реестра, NULLS LAST', async () => {
     const rows = await run(
       USER_A,
-      'aspect=orbis/task, status=!done&!cancelled, sortBy=priority:desc|updated_at:asc',
+      'aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/priority:desc|orbis/updated_at:asc',
     );
-    // Столбец СТАРОЙ карты в выдаче компилятора теперь называется своим именем: алиас
-    // `aspects_legacy AS aspects` снят, потому что имя `aspects` занял список аспектов
-    // новой формы (§А1-1). Читать `r.aspects` как карту здесь значило бы получить массив и
-    // молча пустые приоритеты — ассерт, который компилятор не ловит.
     const priorities = rows.map(
-      (r) =>
-        (r.aspects_legacy as Record<string, { priority?: string }>)['orbis/task']?.priority ?? null,
+      (r) => (r.props as Record<string, unknown>)['orbis/priority'] ?? null,
     );
     expect(priorities).toEqual([
       'high',
@@ -721,14 +815,12 @@ describe('датасет §6.2: состав И порядок под RLS', () =
   });
 
   test('6. RLS: userB не видит данных userA (и наоборот)', async () => {
-    // «Сегодня» под B — ТОЛЬКО своя задача (симметрия изоляции).
     expect(ids(await run(USER_B, DAILY_TODAY))).toEqual([ID.taskB]);
-    // Запросы по данным A под B — 0 строк.
     for (const q of [
       `children_of=${ID.project}`,
-      'amount=0.10..0.30',
+      'orbis/amount=0.10..0.30',
       'search=платежей',
-      'updated_at>2026-07-02T00:00:00Z, archived=any',
+      'orbis/updated_at>2026-07-02T00:00:00Z, archived=any',
     ]) {
       expect(await run(USER_B, q)).toHaveLength(0);
     }
@@ -737,16 +829,11 @@ describe('датасет §6.2: состав И порядок под RLS', () =
 
 describe('блоки Upcoming и «Ожидание» (02 §3.3) исполняются на датасете', () => {
   test('7. Upcoming «Ближайшие 7 дней»: next_7d включает сегодня, блокировка НЕ скрывает', async () => {
-    // Дословная форма блока из 02 §3.3 (без excludeBlocked — горизонт планирования).
     const rows = await run(
       USER_A,
-      'aspect=orbis/task, due_date=next_7d, status=!done&!cancelled,\n' +
-        '         sortBy=due_date:asc|priority:desc, display=list, title=Ближайшие 7 дней',
+      'aspect=orbis/task, orbis/due_date=next_7d, orbis/task_status=!done&!cancelled,\n' +
+        '         sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"',
     );
-    // 2026-07-03: {taskToday, taskBlocked} — обе high, их взаимный порядок sortBy
-    // не определяет; затем taskBlocked2 (medium, видна — excludeBlocked здесь нет),
-    // 2026-07-06: taskNext7. taskDone — по статусу, taskOverdue — вне диапазона,
-    // taskAfter7* — за горизонтом, taskWaiting* — без due_date, taskB — RLS.
     expect(ids(rows).slice(0, 2).sort()).toEqual([ID.taskToday, ID.taskBlocked].sort());
     expect(ids(rows).slice(2)).toEqual([ID.taskBlocked2, ID.taskNext7]);
   });
@@ -754,61 +841,63 @@ describe('блоки Upcoming и «Ожидание» (02 §3.3) исполня�
   test('7a. Upcoming «Позже»: after_7d — строго после горизонта, по сроку', async () => {
     const rows = await run(
       USER_A,
-      'aspect=orbis/task, due_date=after_7d, status=!done&!cancelled,\n' +
-        '         sortBy=due_date:asc, limit=30, display=compact, title=Позже',
+      'aspect=orbis/task, orbis/due_date=after_7d, orbis/task_status=!done&!cancelled,\n' +
+        '         sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже',
     );
     expect(ids(rows)).toEqual([ID.taskAfter7, ID.taskAfter7b]);
   });
 
-  test('7b. «Ожидание»: status=waiting, давно ждущие сверху (updated_at:asc)', async () => {
+  test('7b. «Ожидание»: orbis/task_status=waiting, давно ждущие сверху', async () => {
     const rows = await run(
       USER_A,
-      'aspect=orbis/task, status=waiting,\n' +
-        '         sortBy=updated_at:asc, display=compact, title=Ожидание',
+      'aspect=orbis/task, orbis/task_status=waiting,\n' +
+        '         sortBy=orbis/updated_at:asc, display=compact, title=Ожидание',
     );
     expect(ids(rows)).toEqual([ID.taskWaiting1, ID.taskWaiting2]);
   });
 });
 
-describe('§13.6: decimal-точность в БД и persisted JSON', () => {
-  test('0.10+0.20=0.30 в numeric, carryover -0.10+0.40, amount=0.30, JSON без IEEE-754', async () => {
-    // (а) сумма в БД: строго '0.30' — сравнение текстом из ::numeric, не через float
-    const [sum] = await withIdentity(db, USER_A, async (tx) => [
-      ...(await tx.execute(sql`
-        SELECT sum((aspects_legacy->'orbis/financial'->>'amount')::numeric)::text AS total
-        FROM entities WHERE id IN (${ID.fin010}, ${ID.fin020})`)),
-    ]);
-    expect(sum?.total).toBe('0.30');
+describe('новое в каноне: OR-дерево разных свойств, has(prop), обход по роли', () => {
+  test('8. OR «просрочено по сроку ИЛИ по началу» (§А5-5) — плоским текстом невыразимо', async () => {
+    // Три запроса Agenda со склейкой на клиенте заменяются ОДНИМ деревом. Текст такое дерево
+    // не выражает (скобок в грамматике v1 нет), поэтому AST собирается здесь руками — ровно
+    // так, как его соберёт форма или вход `ast:` тула (§А5-4).
+    const ast: QueryAst = {
+      filter: {
+        or: [
+          { prop: 'orbis/due_date', op: 'eq', value: { token: 'overdue' } },
+          { prop: 'orbis/start_at', op: 'eq', value: { token: 'overdue' } },
+        ],
+      },
+      sortBy: [{ field: 'orbis/created_at', dir: 'asc' }],
+    };
+    expect(ids(await runAst(USER_A, ast))).toEqual([ID.eventOverdue, ID.taskOverdue]);
+    // Каждая половина по отдельности даёт свою сущность — объединение не выродилось в одну.
+    expect(ids(await run(USER_A, 'orbis/due_date=overdue'))).toEqual([ID.taskOverdue]);
+    expect(ids(await run(USER_A, 'orbis/start_at=overdue'))).toEqual([ID.eventOverdue]);
+  });
 
-    // (б) carryover (01-арх §3.3): -0.10 + 0.40 = 0.30 той же numeric-арифметикой
-    const [carry] = await withIdentity(db, USER_A, async (tx) => [
-      ...(await tx.execute(sql`SELECT (('-0.10')::numeric + ('0.40')::numeric)::text AS v`)),
-    ]);
-    expect(carry?.v).toBe('0.30');
+  test('9. has(prop) — наличие ключа в props, а не его значение (дыра inv §1 п.11)', async () => {
+    expect(ids(await run(USER_A, 'has=orbis/recurrence'))).toEqual([ID.eventOverdue]);
+    // Отрицание: у остальных ключа нет — и они возвращаются все.
+    const without = ids(await run(USER_A, '!has=orbis/recurrence'));
+    expect(without).not.toContain(ID.eventOverdue);
+    expect(without).toContain(ID.project);
+    // has по свойству, которого нет ни у кого из выборки, — честный ноль.
+    expect(await run(USER_A, 'has=orbis/session_url')).toHaveLength(0);
+  });
 
-    // (в) грамматика: amount=0.30 находит ровно сущность с amount '0.30'
-    expect(ids(await run(USER_A, 'amount=0.30'))).toEqual([ID.fin030]);
-
-    // (г) persisted JSON: amount всех financial-сущностей датасета — jsonb-строка,
-    // IEEE-754 number в БД отсутствует (под обоими пользователями, RLS скоупит выборку)
-    for (const [user, expected] of [
-      [USER_A, 7], // +finPlanned/finFact (тест 2c, финал B)
-      [USER_B, 1],
-    ] as const) {
-      const rows = await withIdentity(db, user, async (tx) => [
-        ...(await tx.execute(sql`
-          SELECT jsonb_typeof(aspects_legacy->'orbis/financial'->'amount') AS t
-          FROM entities WHERE aspects_legacy ? 'orbis/financial'`)),
-      ]);
-      expect(rows).toHaveLength(expected);
-      expect(rows.every((r) => r.t === 'string')).toBe(true);
-    }
+  test('10. has_children / !has_children via=subitem — «терминальная задача»', async () => {
+    expect(ids(await run(USER_A, 'has_children via=subitem, sortBy=orbis/created_at:asc'))).toEqual(
+      [ID.project],
+    );
+    const terminal = ids(await run(USER_A, 'aspect=orbis/task, !has_children via=subitem'));
+    expect(terminal).not.toContain(ID.project);
+    expect(terminal).toContain(ID.taskToday);
   });
 });
 
-// ─── Служебные аспекты (02-core-os §3.9) ───
-// Третий пользователь со своими данными: эталонный датасет §6.2 не трогаем — его состав
-// и счётчики выдач зафиксированы тестами выше, а RLS даёт этой паре сущностей свою выборку.
+// ─── Служебные аспекты (02-core-os §3.9, §А5-6) ───
 const USER_C = freshUserId();
 
 const ID_C = {
@@ -816,12 +905,12 @@ const ID_C = {
   run: '019eb300-d5e1-7000-8000-000000000022',
 } as const;
 
-describe('служебные аспекты (02-core-os §3.9): прогоны вне основных выдач', () => {
+describe('служебные аспекты: спрятаны, пока не названы; список — колонка service реестра', () => {
   beforeAll(async () => {
     await withIdentity(db, USER_C, async (tx) => {
-      const reg = await loadRegistry(tx, USER_C);
+      const own = await loadRegistry(tx, USER_C);
       await tx.insert(entities).values(
-        datasetRows(reg, [
+        datasetRows(own, [
           {
             id: ID_C.ticket,
             ownerId: USER_C,
@@ -832,8 +921,6 @@ describe('служебные аспекты (02-core-os §3.9): прогоны �
             updatedAt: new Date('2026-07-01T08:00:00Z'),
           },
           {
-            // Прогон вставляется напрямую (как весь датасет файла): его пишет только сервер
-            // глаголами исполнителя, а проверяется здесь компилятор, а не путь записи.
             id: ID_C.run,
             ownerId: USER_C,
             title: 'Прогон исполнителя',
@@ -848,7 +935,6 @@ describe('служебные аспекты (02-core-os §3.9): прогоны �
                 steps: [],
               },
             },
-            // Свежее тикета: без служебного условия прогон возглавил бы «свежее» (С5).
             createdAt: new Date('2026-07-03T10:00:00Z'),
             updatedAt: new Date('2026-07-03T10:05:00Z'),
           },
@@ -857,31 +943,39 @@ describe('служебные аспекты (02-core-os §3.9): прогоны �
     });
   });
 
-  test('запрос без aspect=orbis/agent-run не возвращает прогонов; с ним — возвращает', async () => {
-    const all = ids(await run(USER_C, 'sortBy=updated_at:desc'));
+  test('11. запрос без aspect=orbis/agent-run не возвращает прогонов; с ним — возвращает', async () => {
+    const all = ids(await run(USER_C, 'sortBy=orbis/updated_at:desc'));
     expect(all).toContain(ID_C.ticket);
     expect(all).not.toContain(ID_C.run);
-    // Бейджи (02 §3.2) считают ту же выборку: compileCount идёт через тот же compileWhere.
-    expect(await runCount(USER_C, 'sortBy=updated_at:desc')).toBe(1);
-    // Запрос сам назвал служебный аспект — прячущее условие снимается целиком.
+    expect(await runCount(USER_C, 'sortBy=orbis/updated_at:desc')).toBe(1);
     expect(ids(await run(USER_C, 'aspect=orbis/agent-run'))).toEqual([ID_C.run]);
-    // search= идёт тем же WHERE — прогон не всплывает и в поиске.
     expect(await run(USER_C, 'search=Прогон')).toHaveLength(0);
   });
 
-  test('поле служебного аспекта в фильтре — то же упоминание, что aspect=', async () => {
-    // Поля orbis/agent-run уникальны в каталоге, так что `outcome=running` резолвится в
-    // служебный аспект и БЕЗ aspect=. Без этого запрос компилировался бы в противоречие
-    // (исключение аспекта AND условие по его полю) и молча отдавал ноль строк.
-    expect(ids(await run(USER_C, 'outcome=running'))).toEqual([ID_C.run]);
-    expect(ids(await run(USER_C, 'step_count<5'))).toEqual([ID_C.run]);
-    // Граница правила: sortBy целью выборки не является — общий список прогонов не втягивает.
-    expect(ids(await run(USER_C, 'sortBy=step_count:desc'))).toEqual([ID_C.ticket]);
+  test('12. свойство служебного аспекта — то же упоминание, что aspect=', async () => {
+    expect(ids(await run(USER_C, 'orbis/run_outcome=running'))).toEqual([ID_C.run]);
+    expect(ids(await run(USER_C, 'orbis/step_count<5'))).toEqual([ID_C.run]);
+    // Граница правила: sortBy целью выборки не является — прогоны не втягивает.
+    expect(ids(await run(USER_C, 'sortBy=orbis/step_count:desc'))).toEqual([ID_C.ticket]);
+  });
+
+  test('13. прячущее условие собрано ИЗ КОЛОНКИ service, а не из списка в коде', async () => {
+    // Проверяется не текст условия, а совпадение его параметров с тем, что лежит в БД:
+    // список в коде дал бы то же условие при пустой колонке и разъехался бы молча.
+    const rows = await withIdentity(db, USER_C, async (tx) => [
+      ...(await tx.execute(sql`SELECT id FROM aspect_definitions WHERE service ORDER BY id`)),
+    ]);
+    const fromDb = rows.map((r) => r.id as string);
+    expect(fromDb.length).toBeGreaterThan(0);
+    const compiled = new PgDialect().sqlToQuery(
+      compileQueryAst({ filter: { tag: 'task' } }, ctx()),
+    );
+    expect(compiled.sql).toContain('NOT (aspects && ARRAY[');
+    for (const id of fromDb) expect(compiled.params).toContain(id);
   });
 });
 
 // ─── Семейство иерархии в children_of/parents_of (§А4-3, Ч10-С1) ───
-// Четвёртый пользователь: эталонный датасет §6.2 не трогаем — его состав запинен выше.
 const USER_D = freshUserId();
 
 const ID_D = {
@@ -895,9 +989,9 @@ const ID_D = {
 describe('children_of/parents_of: семейство иерархии из реестра, а не схлопнутый parent', () => {
   beforeAll(async () => {
     await withIdentity(db, USER_D, async (tx) => {
-      const reg = await loadRegistry(tx, USER_D);
+      const own = await loadRegistry(tx, USER_D);
       await tx.insert(entities).values(
-        datasetRows(reg, [
+        datasetRows(own, [
           {
             id: ID_D.project,
             ownerId: USER_D,
@@ -985,17 +1079,138 @@ describe('children_of/parents_of: семейство иерархии из ре�
     });
   });
 
-  test('children_of берёт ВСЁ семейство иерархии: и subitem, и ticket', async () => {
-    const rows = ids(await run(USER_D, `children_of=${ID_D.project}, sortBy=created_at:asc`));
-    expect(rows).toEqual([ID_D.ticket, ID_D.subtask]);
+  test('14. children_of берёт ВСЁ семейство иерархии: и subitem, и ticket', async () => {
+    expect(
+      ids(await run(USER_D, `children_of=${ID_D.project}, sortBy=orbis/created_at:asc`)),
+    ).toEqual([ID_D.ticket, ID_D.subtask]);
   });
 
-  test('envelope-binding в семейство иерархии НЕ входит: конверт не родитель транзакции', async () => {
+  test('15. envelope-binding в семейство НЕ входит: конверт не родитель транзакции', async () => {
     expect(ids(await run(USER_D, `children_of=${ID_D.envelope}`))).toEqual([]);
     expect(ids(await run(USER_D, `parents_of=${ID_D.txn}`))).toEqual([]);
+    // Явной ролью — находится: исключено именно семейство, а не само ребро.
+    expect(ids(await run(USER_D, `children_of=${ID_D.envelope} via=envelope-binding`))).toEqual([
+      ID_D.txn,
+    ]);
   });
 
-  test('parents_of симметричен children_of по тому же семейству', async () => {
+  test('16. parents_of симметричен children_of по тому же семейству', async () => {
     expect(ids(await run(USER_D, `parents_of=${ID_D.ticket}`))).toEqual([ID_D.project]);
+  });
+});
+
+// ─── Рекурсивный обход и кап глубины (§А5-1, QUERY_DEPTH_CAP) ───
+const USER_E = freshUserId();
+
+/** Цепочка subitem длиной 40 + ветка на глубине 2 — вход обоих тестов обхода. */
+const CHAIN_LENGTH = 40;
+const chainId = (i: number) => `019eb301-d5e1-7000-8000-${String(i).padStart(12, '0')}`;
+const BRANCH_ID = chainId(900);
+
+describe('descendants_of/ancestors_of: обход по одной роли и кап глубины 32', () => {
+  beforeAll(async () => {
+    await withIdentity(db, USER_E, async (tx) => {
+      const own = await loadRegistry(tx, USER_E);
+      const rows: DatasetRow[] = [];
+      for (let i = 0; i <= CHAIN_LENGTH; i++) {
+        rows.push({
+          id: chainId(i),
+          ownerId: USER_E,
+          title: `Узел ${i}`,
+          tags: [],
+          aspects: {},
+          createdAt: new Date(`2026-07-01T00:00:00Z`),
+          updatedAt: new Date(`2026-07-01T00:00:00Z`),
+        });
+      }
+      rows.push({
+        id: BRANCH_ID,
+        ownerId: USER_E,
+        title: 'Ветка на глубине 2',
+        tags: [],
+        aspects: {},
+        createdAt: new Date('2026-07-01T00:00:00Z'),
+        updatedAt: new Date('2026-07-01T00:00:00Z'),
+      });
+      await tx.insert(entities).values(datasetRows(own, rows));
+      const edges = [];
+      for (let i = 0; i < CHAIN_LENGTH; i++) {
+        edges.push({
+          id: crypto.randomUUID(),
+          sourceId: chainId(i),
+          targetId: chainId(i + 1),
+          role: 'subitem',
+          relationType: 'parent' as const,
+        });
+      }
+      edges.push({
+        id: crypto.randomUUID(),
+        sourceId: chainId(1),
+        targetId: BRANCH_ID,
+        role: 'subitem',
+        relationType: 'parent' as const,
+      });
+      await tx.insert(relations).values(edges);
+    });
+  });
+
+  test('17. descendants_of via=subitem: глубина 3 достижима, ветка тоже, кап 32 обрезает', async () => {
+    const rows = ids(await run(USER_E, `descendants_of=${chainId(0)} via=subitem, limit=1000`));
+    // Узел глубины 3 — на месте (обход не одноуровневый).
+    expect(rows).toContain(chainId(3));
+    // Ветка на глубине 2 — тоже: это обход дерева, а не одной цепочки.
+    expect(rows).toContain(BRANCH_ID);
+    // Кап: последний достижимый узел цепочки — 32-й, следующий уже нет.
+    expect(rows).toContain(chainId(32));
+    expect(rows).not.toContain(chainId(33));
+    expect(rows).not.toContain(chainId(CHAIN_LENGTH));
+    // 32 узла цепочки + одна ветка; цепочка из 40 бесконечного обхода не даёт.
+    expect(rows).toHaveLength(33);
+  });
+
+  test('18. ancestors_of via=subitem — зеркальный обход вверх', async () => {
+    const rows = ids(await run(USER_E, `ancestors_of=${chainId(5)} via=subitem, limit=1000`));
+    expect(rows.sort()).toEqual([0, 1, 2, 3, 4].map(chainId).sort());
+    // Ветка предком пятого узла не является — обход идёт вверх, а не по всему дереву.
+    expect(rows).not.toContain(BRANCH_ID);
+  });
+
+  test('19. чужая роль — пустой обход, а не «всё равно всё поддерево»', async () => {
+    expect(
+      await run(USER_E, `descendants_of=${chainId(0)} via=category-parent, limit=1000`),
+    ).toHaveLength(0);
+  });
+
+  test('20. RLS: чужое поддерево невидимо даже по своему запросу', async () => {
+    expect(await run(USER_A, `descendants_of=${chainId(0)} via=subitem, limit=1000`)).toHaveLength(
+      0,
+    );
+  });
+});
+
+describe('§13.6: decimal-точность в новой форме хранения', () => {
+  test('21. 0.10+0.20=0.30 в numeric, orbis/amount=0.30, JSON без IEEE-754', async () => {
+    const [sum] = await withIdentity(db, USER_A, async (tx) => [
+      ...(await tx.execute(sql`
+        SELECT sum((props->>'orbis/amount')::numeric)::text AS total
+        FROM entities WHERE id IN (${ID.fin010}, ${ID.fin020})`)),
+    ]);
+    expect(sum?.total).toBe('0.30');
+
+    expect(ids(await run(USER_A, 'orbis/amount=0.30'))).toEqual([ID.fin030]);
+
+    // persisted JSON: сумма во ВСЕХ financial-строках — jsonb-строка, а не число IEEE-754.
+    for (const [user, expected] of [
+      [USER_A, 7],
+      [USER_B, 1],
+    ] as const) {
+      const rows = await withIdentity(db, user, async (tx) => [
+        ...(await tx.execute(sql`
+          SELECT jsonb_typeof(props->'orbis/amount') AS t
+          FROM entities WHERE aspects @> ARRAY['orbis/financial']`)),
+      ]);
+      expect(rows).toHaveLength(expected);
+      expect(rows.every((r) => r.t === 'string')).toBe(true);
+    }
   });
 });
