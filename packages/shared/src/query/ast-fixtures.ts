@@ -322,9 +322,31 @@ export const AST_FIXTURES: readonly AstFixture[] = [
     static: true,
   },
   {
-    name: 'excludeBlocked как отрицание ребра роли',
+    // Пользовательская запись: «нет входящих рёбер роли dependency». О СОСТОЯНИИ блокирующей
+    // работы она не спрашивает — и условия состояния получать не должна.
+    name: 'отрицание ребра роли: !has_relation via=dependency',
     ast: { filter: { not: { rel: { kind: 'has_relation', via: 'dependency' } } } },
     keyText: '!has_relation via=dependency',
+    static: true,
+  },
+  {
+    // А это — САХАР `excludeBlocked=true`, и дерево у него ДРУГОЕ: ребро плюс состояние
+    // дальнего конца (`sourceNotIn`). Две записи рядом именно для того, чтобы разницу было
+    // видно глазами: слить их значило бы либо потерять условие состояния у смарт-листов,
+    // либо навязать его пользовательскому запросу.
+    name: 'excludeBlocked=true — ребро dependency ПЛЮС состояние блокирующей работы',
+    ast: {
+      filter: {
+        not: {
+          rel: {
+            kind: 'has_relation',
+            via: 'dependency',
+            sourceNotIn: { prop: 'orbis/task_status', values: ['done', 'cancelled'] },
+          },
+        },
+      },
+    },
+    keyText: 'excludeBlocked=true',
     static: true,
   },
   {

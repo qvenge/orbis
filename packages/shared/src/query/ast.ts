@@ -90,8 +90,40 @@ export type QueryPropValue = QueryScalar | QueryTokenValue | QueryScalar[] | Que
 export type QueryRelPredicate =
   | { kind: 'children_of' | 'parents_of'; via?: string; of: string }
   | { kind: 'descendants_of' | 'ancestors_of'; via: string; of: string }
-  | { kind: 'has_relation'; via: string; of?: undefined }
+  | { kind: 'has_relation'; via: string; of?: undefined; sourceNotIn?: QueryRelSourceNotIn }
   | { kind: 'has_children'; via?: string; of?: undefined };
+
+/**
+ * Состояние ВТОРОГО конца ребра у `has_relation` — «ребро считается, только если у его
+ * ИСТОЧНИКА свойство `prop` не имеет ни одного из значений `values` (в том числе когда
+ * значения нет вовсе)».
+ *
+ * ЗАЧЕМ ЭТО В КАНОНЕ И ПОЧЕМУ ИМЕННО В ТАКОЙ ФОРМЕ. Спека определяет `excludeBlocked`
+ * ПОЛНОСТЬЮ: `has_relation(dependency) ∧ class(completable) ∉ closed` — то есть предикат по
+ * ребру ВМЕСТЕ с условием на дальний конец. Контрактов в срезе А нет, но и выбросить
+ * условие нельзя: сегодняшний компилятор смотрит на статус блокера (`compile.ts:272`), и без
+ * этого условия «отпущенный» блокер (задача в `done`) начал бы прятать работу — то есть
+ * реформа поменяла бы то, что владелец видит в блоке «Сегодня».
+ *
+ * Почему поле, а не «условие статуса на все узлы `has_relation`»: узел
+ * `{not:{rel:{has_relation, via:'dependency'}}}` порождается И сахаром `excludeBlocked=true`,
+ * И пользовательским `!has_relation=dependency`. Это РАЗНЫЕ намерения («не заблокировано
+ * живой работой» и «нет входящих рёбер этой роли»), и различить их можно только в самом
+ * дереве.
+ *
+ * Почему НЕ общий `where: QueryFilterNode` (форма, к которой канон придёт в Б-1): общее
+ * условие на дальний конец — это полноценный второй компилятор в подзапросе (свои алиасы
+ * строки, свои вложенные рёбра, свой `search`), и заводить его ради одного интервального
+ * случая значило бы отдать наружу схему, которую компилятор среза А поддерживает наполовину.
+ * Это поле — УЖЕ форма Б-1 с точностью до способа сказать «closed»: с приходом контрактов
+ * оно заменяется на `class`, а не дополняется.
+ */
+export interface QueryRelSourceNotIn {
+  /** id свойства ИСТОЧНИКА ребра (§А5-7: в дереве лежат id, не подписи). */
+  prop: string;
+  /** Значения, при которых ребро НЕ считается; пустой список бессмыслен и запрещён схемой. */
+  values: QueryScalar[];
+}
 
 /**
  * Каким КОНЦОМ ребра стоит сама сущность в каждом реляционном предикате — норматив для
@@ -205,7 +237,16 @@ const relSchema = z.discriminatedUnion('kind', [
       of: relTargetSchema,
     })
     .strict(),
-  z.object({ kind: z.literal('has_relation'), via: idSchema }).strict(),
+  z
+    .object({
+      kind: z.literal('has_relation'),
+      via: idSchema,
+      sourceNotIn: z
+        .object({ prop: idSchema, values: z.array(scalarSchema).min(1) })
+        .strict()
+        .optional(),
+    })
+    .strict(),
   z.object({ kind: z.literal('has_children'), via: idSchema.optional() }).strict(),
 ]);
 

@@ -115,7 +115,22 @@ export const queryAstJsonSchema: Record<string, unknown> = {
                   },
                   ['kind', 'of', 'via'],
                 ),
-                node({ kind: { const: 'has_relation' }, via: PROP_ID }, ['kind', 'via']),
+                node(
+                  {
+                    kind: { const: 'has_relation' },
+                    via: PROP_ID,
+                    // Состояние дальнего конца ребра (см. `QueryRelSourceNotIn`): в срезе А
+                    // им выражен `excludeBlocked`, в Б-1 его заменяет `class`.
+                    sourceNotIn: node(
+                      {
+                        prop: PROP_ID,
+                        values: { type: 'array', minItems: 1, items: SCALAR },
+                      },
+                      ['prop', 'values'],
+                    ),
+                  },
+                  ['kind', 'via'],
+                ),
                 node({ kind: { const: 'has_children' }, via: PROP_ID }, ['kind']),
               ],
             },

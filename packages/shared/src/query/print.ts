@@ -165,6 +165,14 @@ function printNode(node: QueryFilterNode, n: Names): string {
   }
   if ('not' in node) {
     const inner = node.not;
+    // Сахар `excludeBlocked=true` — ЕДИНСТВЕННАЯ текстовая форма отрицания ребра с условием
+    // на дальний конец, и печать обязана её вернуть: иначе `parse(print(a)) ≡ a` неверно для
+    // каждого смарт-листа с этой конструкцией. Проверяется именно НАЛИЧИЕ `sourceNotIn`, а не
+    // его содержимое: набор «closed» задаёт разбор (`parse-ast.ts`), и сверять его здесь
+    // значило бы завести вторую правду о том, что такое «закрытая работа».
+    if ('rel' in inner && inner.rel.kind === 'has_relation' && inner.rel.sourceNotIn) {
+      return 'excludeBlocked=true';
+    }
     if ('or' in inner) {
       const list = asSamePropList(inner.or);
       if (list) {
@@ -219,6 +227,11 @@ function printNode(node: QueryFilterNode, n: Names): string {
   const rel = node.rel;
   const target = rel.of === undefined ? '' : `=${quote(rel.of)}`;
   const via = rel.via === undefined ? '' : ` via=${n.role(rel.via)}`;
+  // Положительная форма ребра с условием на дальний конец плоским текстом НЕ выражается:
+  // сахар `excludeBlocked=true` существует только под отрицанием (ветка `not` выше), а
+  // «покажи заблокированные живой работой» грамматика v1 сказать не умеет. Печатаем
+  // скобками — так же, как любое невыразимое дерево (§А5-3д), и разбор честно откажет.
+  if (rel.kind === 'has_relation' && rel.sourceNotIn) return `(${rel.kind}${via})`;
   return `${rel.kind}${target}${via}`;
 }
 

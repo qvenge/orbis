@@ -557,6 +557,44 @@ function walkCond(
 }
 
 /**
+ * Состояние ВТОРОГО конца ребра (`QueryRelSourceNotIn`): ребро считается, только если у
+ * ИСТОЧНИКА свойство не имеет ни одного из перечисленных значений.
+ *
+ * `COALESCE(…, '')` — не украшение, а СМЫСЛ: у источника значения может не быть вовсе
+ * (блокер без аспекта задачи), и такой источник обязан считаться НЕ закрытым, иначе
+ * `NULL NOT IN (…)` дал бы NULL, ребро выпало бы из EXISTS, и заметка-блокер перестала бы
+ * блокировать. Форма дословно та же, что у сегодняшнего компилятора (`compile.ts:272`),
+ * только по `props` вместо старой карты, — потому что менять наблюдаемое поведение реформа
+ * не имеет права.
+ *
+ * Сравнение ТЕКСТОВОЕ и по проекции `->>`: набор «закрытых» задаёт разбор ключами вариантов
+ * select (`done`, `cancelled`), а `->>` отдаёт ровно их. Каст по типу свойства здесь был бы
+ * лишним звеном: значения приходят не от пользователя, а из сахара.
+ */
+function sourceNotInCond(
+  spec: { prop: string; values: readonly QueryScalar[] },
+  ctx: CompileCtx,
+): SQL {
+  const def = propertyOrFail(spec.prop, ctx);
+  if (isListType(def.type) || def.type.kind === 'json') {
+    return fail(
+      'TYPE',
+      `состояние дальнего конца по свойству '${def.id}' невыразимо: у списка и вложенного объекта нет скалярного значения`,
+      { property: def.id },
+    );
+  }
+  if (def.storage === 'core') {
+    return fail(
+      'TYPE',
+      `состояние дальнего конца по core-проекции '${def.id}' не поддержано: значение лежит колонкой`,
+      { property: def.id },
+    );
+  }
+  const values = spec.values.map((v) => sql`${String(v)}`);
+  return sql`COALESCE(b.props->>${lit(def.id)}, '') NOT IN (${sql.join(values, sql`, `)})`;
+}
+
+/**
  * Реляционный предикат §А5-7. Каким КОНЦОМ ребра стоит сама сущность — норматив
  * `QUERY_REL_ANCHOR` (`@orbis/shared`, `query/ast.ts`); здесь он исполняется.
  *
@@ -572,7 +610,9 @@ function relCond(pred: QueryRelPredicate, ctx: CompileCtx): SQL {
     case 'parents_of':
       return sql`EXISTS (SELECT 1 FROM relations r WHERE r.source_id = e.id AND r.target_id = ${relTarget(pred.of, ctx)} AND ${roleCond(pred.via, ctx)})`;
     case 'has_relation':
-      return sql`EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND ${roleCond(pred.via, ctx)})`;
+      return pred.sourceNotIn === undefined
+        ? sql`EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND ${roleCond(pred.via, ctx)})`
+        : sql`EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND ${roleCond(pred.via, ctx)} AND ${sourceNotInCond(pred.sourceNotIn, ctx)})`;
     case 'has_children':
       return sql`EXISTS (SELECT 1 FROM relations r WHERE r.source_id = e.id AND ${roleCond(pred.via, ctx)})`;
     case 'descendants_of':

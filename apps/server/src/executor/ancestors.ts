@@ -124,19 +124,46 @@ export async function recomputeProjectAncestors(
     -- Родителей у иерархической роли может быть несколько, поэтому «ближайший» и «корневой»
     -- доопределены детерминированно: сначала глубина, потом старшинство записи. Молча
     -- выбранный «любой» давал бы разный ответ на одном и том же графе.
-    nearest AS (
-      SELECT DISTINCT ON (start_id) start_id, project_id FROM proj
-       ORDER BY start_id, depth ASC, created_at ASC, project_id ASC
-    ),
-    root AS (
-      SELECT DISTINCT ON (start_id) start_id, project_id FROM proj
-       ORDER BY start_id, depth DESC, created_at ASC, project_id ASC
+    --
+    -- ОДНА группировка вместо двух "DISTINCT ON", и это правка ПО ЗАМЕРУ, а не по вкусу
+    -- (перф-гейт П6, "perf/graph.test.ts", корпус 50 000 сущностей / 149 999 рёбер,
+    -- поддерево 4999 узлов, 2026-08-27):
+    --
+    --   два "DISTINCT ON" + два LEFT JOIN       — 4589 мс;
+    --   "AS MATERIALIZED" у обоих (первая гипотеза) — 5431 мс, то есть ХУЖЕ;
+    --   одна группировка (эта форма)              —  475 мс.
+    --   на МАЛОМ поддереве (6 узлов) все три формы равны: 6,4 / 5,5 / 6,4 мс.
+    --
+    -- Числа выше сняты на ЧИСТОМ SELECT той же формы (без UPDATE) — так три варианта
+    -- сравнимы между собой. Полный "recomputeProjectAncestors" на том же поддереве: до
+    -- правки 1,76 с в лучшем режиме планировщика и 12,1 с в худшем (режим менялся между
+    -- прогонами), после правки 0,43…0,60 с на шести прогонах — режим один. Порог П6 в 1 с
+    -- до правки не брался ни разу, после берётся с запасом.
+    --
+    -- Почему так. "nearest" и "root" читались по одному разу каждый, PostgreSQL 12+ такой
+    -- CTE инлайнит, и в плане обе половины оказывались внутри "Nested Loop Left Join":
+    -- материализованный набор из 2500 строк пересканировался на КАЖДУЮ из 5000 строк
+    -- поддерева — 12,5 млн сравнений вместо одного хеш-соединения. Выбор соединения зависит
+    -- от оценок и потому был нестабилен между прогонами (отсюда и два режима), а пересчёт
+    -- идёт ВНУТРИ транзакции правки владельца ("executor.ts"): «повезёт с планом» там не
+    -- аргумент. Группировка убирает выбор: обе величины берутся за один проход по "proj",
+    -- и соединение с поддеревом остаётся ровно одно.
+    --
+    -- Равенство форм проверено на данных, а не выведено: "(array_agg(x ORDER BY …))[1]" —
+    -- это и есть первая строка "DISTINCT ON" с тем же ORDER BY, и выдачи обеих форм совпали
+    -- и на поддереве 4999 узлов, и на поддереве из шести.
+    picked AS (
+      SELECT start_id,
+             (array_agg(project_id ORDER BY depth ASC, created_at ASC, project_id ASC))[1]
+               AS parent_project,
+             (array_agg(project_id ORDER BY depth DESC, created_at ASC, project_id ASC))[1]
+               AS root_project
+        FROM proj GROUP BY start_id
     ),
     computed AS (
-      SELECT s.id, n.project_id AS parent_project, rt.project_id AS root_project
+      SELECT s.id, p.parent_project, p.root_project
         FROM subtree s
-        LEFT JOIN nearest n ON n.start_id = s.id
-        LEFT JOIN root rt ON rt.start_id = s.id
+        LEFT JOIN picked p ON p.start_id = s.id
     )
     UPDATE entities e
        SET props = (e.props - ${PROP_PARENT_PROJECT}::text - ${PROP_ROOT_PROJECT}::text)

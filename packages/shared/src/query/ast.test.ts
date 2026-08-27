@@ -116,10 +116,21 @@ test('QUERY_REL_ANCHOR: направление каждого предиката
   expect(anchorLabel('subitem', 'descendants_of')).toBe('Подпункт');
   expect(anchorLabel('subitem', 'ancestors_of')).toBe('Родитель');
   expect(anchorLabel('subitem', 'has_children')).toBe('Родитель');
-  // Текстовый сахар `excludeBlocked=true` обязан давать ИМЕННО этот предикат.
-  const blocked = AST_FIXTURES.find((f) => f.keyText === '!has_relation via=dependency');
-  expect(blocked?.ast.filter).toEqual({
+  // Пользовательская запись и текстовый сахар дают РАЗНЫЕ деревья, и оба живут в наборе
+  // фикстур: у первого — голое ребро, у второго ещё и состояние блокирующей работы.
+  const explicit = AST_FIXTURES.find((f) => f.keyText === '!has_relation via=dependency');
+  expect(explicit?.ast.filter).toEqual({
     not: { rel: { kind: 'has_relation', via: 'dependency' } },
+  });
+  const sugar = AST_FIXTURES.find((f) => f.keyText === 'excludeBlocked=true');
+  expect(sugar?.ast.filter).toEqual({
+    not: {
+      rel: {
+        kind: 'has_relation',
+        via: 'dependency',
+        sourceNotIn: { prop: 'orbis/task_status', values: ['done', 'cancelled'] },
+      },
+    },
   });
 });
 

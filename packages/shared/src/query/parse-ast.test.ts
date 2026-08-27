@@ -85,9 +85,17 @@ test('has= и отрицание реляционного предиката с 
     not: { rel: { kind: 'has_children', via: 'subitem' } },
   });
   expect(ok('has_children').filter).toEqual({ rel: { kind: 'has_children' } });
-  // excludeBlocked остаётся сахаром сегодняшней формы (набор closed приедет с Б-1).
+  // `excludeBlocked` — сахар ПОЛНОЙ сегодняшней формы: ребро роли `dependency` ПЛЮС
+  // состояние блокирующей работы. Без второго условия «отпущенный» блокер (задача в done)
+  // начал бы прятать работу, то есть реформа поменяла бы наблюдаемое поведение.
   expect(ok('excludeBlocked=true').filter).toEqual({
-    not: { rel: { kind: 'has_relation', via: 'dependency' } },
+    not: {
+      rel: {
+        kind: 'has_relation',
+        via: 'dependency',
+        sourceNotIn: { prop: 'orbis/task_status', values: ['done', 'cancelled'] },
+      },
+    },
   });
 });
 
@@ -326,22 +334,43 @@ test('отрицаемый aspect= не разводит неоднозначн�
  * реестру вообще. Литерал в дереве прошёл бы и через реестр без этой роли — и запрос
  * сослался бы на несуществующую роль молча, ровно против §А5-3ж.
  */
-test('excludeBlocked резолвит роль по реестру, а не подставляет литерал', () => {
-  // На полном реестре сахар тождествен явной записи — включая id роли в дереве.
+test('excludeBlocked резолвит роль и свойство по реестру, а не подставляет литералы', () => {
   const sugar = ok('excludeBlocked=true');
   const explicit = ok('!has_relation via=dependency');
-  expect(sugar.filter).toEqual(explicit.filter);
   const role = REG.roles.get('dependency');
-  if (!role) throw new Error('роль dependency обязана быть в фикстурном реестре');
-  expect(sugar.filter).toEqual({ not: { rel: { kind: 'has_relation', via: role.id } } });
+  const status = REG.properties.get('orbis/task_status');
+  if (!role || !status) throw new Error('роль и свойство обязаны быть в фикстурном реестре');
+  expect(sugar.filter).toEqual({
+    not: {
+      rel: {
+        kind: 'has_relation',
+        via: role.id,
+        sourceNotIn: { prop: status.id, values: ['done', 'cancelled'] },
+      },
+    },
+  });
 
-  // Реестр без этой роли: резолвер обязан отказать так же, как на явной записи.
+  // САХАР И ЯВНАЯ ЗАПИСЬ — РАЗНЫЕ ДЕРЕВЬЯ, и это норматив, а не побочный эффект.
+  // `excludeBlocked=true` значит «не заблокировано ЖИВОЙ работой», `!has_relation
+  // via=dependency` — «нет входящих рёбер этой роли». Слей мы их, условие состояния
+  // повисло бы на пользовательском запросе, который о состоянии не спрашивал.
+  expect(explicit.filter).toEqual({ not: { rel: { kind: 'has_relation', via: role.id } } });
+  expect(sugar.filter).not.toEqual(explicit.filter);
+
+  // Реестр без роли: резолвер обязан отказать так же, как на явной записи.
   const roles = new Map(REG.roles);
   roles.delete('dependency');
-  const without: typeof REG = { ...REG, roles };
   for (const text of ['excludeBlocked=true', '!has_relation via=dependency']) {
-    const r = parseQueryAst(text, without);
+    const r = parseQueryAst(text, { ...REG, roles });
     expect(r.ok, `${text} разобрался без роли в реестре`).toBe(false);
     if (!r.ok) expect(r.error.code, text).toBe('UNKNOWN_ROLE');
   }
+
+  // Реестр без СВОЙСТВА статуса: сахару неоткуда взять набор «closed» — отказ, а не
+  // молчаливая ссылка на несуществующее свойство (§А5-3ж).
+  const properties = new Map(REG.properties);
+  properties.delete('orbis/task_status');
+  const noStatus = parseQueryAst('excludeBlocked=true', { ...REG, properties });
+  expect(noStatus.ok).toBe(false);
+  if (!noStatus.ok) expect(noStatus.error.code).toBe('UNKNOWN_FIELD');
 });

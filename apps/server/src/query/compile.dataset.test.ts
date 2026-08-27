@@ -8,13 +8,11 @@
 // отвергает по построению (см. докблок `parse-ast.ts`). Строки датасета при этом прежние —
 // фикстура объявлена старой картой и уезжает в БД тремя колонками (`rowFromLegacy`).
 //
-// ОДНО МЕСТО, ГДЕ ВЫДАЧА ИЗМЕНИЛАСЬ, и это не опечатка теста: `excludeBlocked=true`. Новый
-// разбор кодирует его как `!has_relation via=dependency` — «на сущность НЕТ входящего ребра
-// dependency», без взгляда на состояние блокирующей работы. Сегодняшний компилятор смотрел
-// и на состояние (`compile.ts:262`: блокер в `done`/`cancelled` не блокирует), поэтому
-// «отпущенный» блокер теперь тоже прячет задачу. Набор «закрытых состояний» — это контракт
-// `completable`, он приезжает срезом Б-1; до него интервал живёт с этой семантикой, и она
-// здесь ЗАПИНЕНА, а не обойдена (тест 1 ниже называет обе выдачи).
+// ВЫДАЧА НЕ ИЗМЕНИЛАСЬ НИ В ОДНОМ СЦЕНАРИИ — это требование, а не совпадение: реформа не
+// имеет права менять то, что владелец видит. Отдельного внимания стоит `excludeBlocked=true`:
+// сахар несёт ОБА условия сегодняшней семантики — входящее ребро роли `dependency` И
+// состояние блокирующей работы (`compile.ts:272`). Тест 1 ниже проверяет обе половины
+// порознь: задача с ЗАВЕРШЁННЫМ блокером видна, с активным — скрыта.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { parseQueryAst, type QueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
@@ -589,26 +587,42 @@ describe('датасет §6.2 на новом компиляторе: сост�
     expect(reg.properties.get('orbis/all_day')?.type).not.toMatchObject({ default: false });
   });
 
-  test('1. «Сегодня»: остаётся только просроченная — excludeBlocked интервала прячет и «отпущенных»', async () => {
-    // taskBlocked исключён живым блокером, taskBlocked2 — блокером-заметкой, taskDone — по
-    // статусу, taskB — RLS. taskToday тоже уходит, и ЭТО НОВОЕ: на нём висит входящее ребро
-    // dependency от закрытой задачи, а «закрытость» до контракта `completable` (Б-1) не
-    // выразима. Старый компилятор оставлял его (`compile.ts:262` смотрел на статус блокера).
-    expect(ids(await run(USER_A, DAILY_TODAY))).toEqual([ID.taskOverdue]);
-    // Отпущенность блокера действительно НЕ учитывается: у taskToday блокер в done, и его
-    // единственное отличие от taskBlocked — именно статус блокера.
-    const both = ids(
+  test('1. «Сегодня»: завершённый блокер НЕ прячет задачу, активный — прячет', async () => {
+    // Состав выдачи — ровно тот же, что даёт сегодняшний компилятор (§6.1, 02 §3.3):
+    // taskBlocked исключён ЖИВЫМ блокером (taskBlocker в in_progress), taskBlocked2 —
+    // блокером-заметкой БЕЗ статуса (по COALESCE он живой), taskDone — по своему статусу,
+    // taskB — по RLS. taskToday ОСТАЁТСЯ: его блокер taskDone уже завершён.
+    expect(ids(await run(USER_A, DAILY_TODAY))).toEqual([ID.taskToday, ID.taskOverdue]);
+
+    // Три половинки того же утверждения — порознь, чтобы «видна/скрыта» не держалось на
+    // одном списке. Все три задачи имеют входящее ребро роли dependency и различаются
+    // ТОЛЬКО состоянием блокера.
+    const blockedAtAll = ids(
       await run(USER_A, 'aspect=orbis/task, has_relation=dependency, sortBy=orbis/created_at:asc'),
     );
-    expect(both).toEqual([ID.taskBlocked, ID.taskBlocked2, ID.taskToday]);
+    expect(blockedAtAll).toEqual([ID.taskBlocked, ID.taskBlocked2, ID.taskToday]);
+    // а) сахар их различает: под excludeBlocked остаётся только та, чей блокер завершён
+    const notBlocked = ids(
+      await run(USER_A, 'aspect=orbis/task, excludeBlocked=true, sortBy=orbis/created_at:asc'),
+    );
+    expect(notBlocked).toContain(ID.taskToday); // блокер в done — задача ВИДНА
+    expect(notBlocked).not.toContain(ID.taskBlocked); // блокер in_progress — СКРЫТА
+    expect(notBlocked).not.toContain(ID.taskBlocked2); // блокер без статуса — СКРЫТА
+    // б) пользовательская запись `!has_relation=dependency` о состоянии не спрашивает и
+    // прячет ВСЕ три: слей мы сахар с ней — taskToday пропала бы из «Сегодня».
+    const noEdgeAtAll = ids(
+      await run(USER_A, 'aspect=orbis/task, !has_relation=dependency, sortBy=orbis/created_at:asc'),
+    );
+    for (const id of blockedAtAll) expect(noEdgeAtAll).not.toContain(id);
+    expect(notBlocked).not.toEqual(noEdgeAtAll);
   });
 
   test('1a. бейдж (02 §3.2): compileCountAst игнорирует limit, compileQueryAst — нет', async () => {
     const q =
       'aspect=orbis/task, orbis/due_date=today|overdue, orbis/task_status=!done&!cancelled&!waiting,' +
       ' excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc, limit=1';
-    expect(ids(await run(USER_A, q))).toEqual([ID.taskOverdue]);
-    expect(await runCount(USER_A, q)).toBe(1);
+    expect(ids(await run(USER_A, q))).toEqual([ID.taskToday]);
+    expect(await runCount(USER_A, q)).toBe(2);
     // Тот же запрос без excludeBlocked — четыре задачи: limit режет выдачу, но не счётчик.
     const wide =
       'aspect=orbis/task, orbis/due_date=today|overdue, orbis/task_status=!done&!cancelled&!waiting,' +

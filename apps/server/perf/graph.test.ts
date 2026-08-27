@@ -36,6 +36,13 @@ requireEnv();
 
 const { db, client } = appDb();
 
+/**
+ * Потолок для МАЛОГО поддерева. Порога спеки у него нет — есть требование «правка ради
+ * больших поддеревьев не должна ломать малые». Число взято кратно измеренному (8…12 мс),
+ * как и все прочие пороги файла.
+ */
+const SMALL_CEILING_MS = 150;
+
 /** Пороги П6 (§С8-13) — ДОСЛОВНО из спеки, а не «то, что получилось». */
 const BUDGETS_MS = {
   /** Обход поддерева под RLS запросом, который реально уходит из query-блока. */
@@ -45,37 +52,16 @@ const BUDGETS_MS = {
 } as const;
 
 /**
- * ИЗВЕСТНОЕ РАСХОЖДЕНИЕ СО СПЕКОЙ, названное вслух и разобранное до причины, а не спрятанное
- * подъёмом порога.
+ * ОБА порога П6 берутся, и второй из них — только после правки движка предков.
  *
- * ЧТО ИЗМЕРЕНО (2026-08-27, локальный Supabase, Apple Silicon, корпус ниже). Пересчёт
- * предков на поддереве 4999 узлов при пороге П6 в 1 с дал ДВА устойчивых режима:
- *   • 1,72 с и 1,41 с — два прогона подряд на одном корпусе;
- *   • 12,0 / 12,0 / 12,1 / 12,2 с — четыре прогона подряд после полного `bun run test`
- *     (TRUNCATE и пересев корпуса). Повторный `ANALYZE` режим не вернул.
- * Повторный вызов при этом правит НОЛЬ строк (`recomputed=0`) — стоимость делает не запись.
- *
- * ПОЧЕМУ ДВА РЕЖИМА. `EXPLAIN (ANALYZE)` полного запроса показывает: обход вниз стоит 70 мс,
- * обход вверх — 430 мс, а остальные 11 с уходят в `Nested Loop Left Join`, внутри которого
- * подзапросы `nearest` и `root` (оба — `DISTINCT ON` над `proj`) исполняются ЗАНОВО НА
- * КАЖДУЮ строку `subtree`: `Sort (rows=5000, loops=5000)`. То есть пять тысяч повторных
- * сортировок вместо одной. Планировщик волен ЛИБО материализовать эти CTE один раз, либо
- * инлайнить их в цикл, и оба режима — его законный выбор на одних и тех же данных.
- *
- * ЧТО С ЭТИМ ДЕЛАТЬ — НЕ ЗДЕСЬ. Движок предков живёт в `executor/ancestors.ts` (Задача 7b),
- * и эта задача его не трогает; лекарство известно и стоит одного слова — `nearest AS
- * MATERIALIZED (…)` / `root AS MATERIALIZED (…)`, что запрещает планировщику инлайнить их в
- * цикл. Решение (править движок, поднять порог или ограничить размер пересчитываемого
- * поддерева) — за координатором и владельцем спеки.
- *
- * Пока решения нет, гейт сторожит ПОТОЛОК, а не спековый порог: он всё ещё ловит регрессию
- * в разы (ради чего и заведён), но не краснеет на известном и отчитанном расхождении.
- * Красный от рождения гейт перестают читать, и тогда он не ловит уже ничего. Потолок взят
- * над МЕДЛЕННЫМ режимом: гейт не должен мигать от того, какой план выбрал планировщик.
+ * До правки `recomputeProjectAncestors` на поддереве 4999 узлов давал ДВА режима на одних и
+ * тех же данных: 1762 / 1776 / 1776 мс в лучшем и 12 030 / 12 090 / 12 148 / 12 248 мс в
+ * худшем; порог 1000 мс не брался ни в одном. Причина и лекарство разобраны в докблоке самой
+ * правки — `executor/ancestors.ts`, CTE `picked`: два `DISTINCT ON` с двумя LEFT JOIN
+ * заменены одной группировкой. После правки — 428 / 477 / 497 / 575 / 575 / 599 мс на шести
+ * прогонах, режим ОДИН. Малое поддерево (6 узлов) не подорожало: 8,7 / 9,7 / 9,9 мс до и
+ * 8,5 / 8,6 / 9,0 / 9,2 мс после.
  */
-const KNOWN_MISS: Readonly<Record<string, { measured: number; ceiling: number }>> = {
-  'recompute:subtree5k': { measured: 12150, ceiling: 20000 },
-};
 
 /**
  * Корень замера обхода — узел ПЕРВОГО уровня: его поддерево ≈ 5000 узлов, ровно тот объём,
@@ -86,9 +72,21 @@ const KNOWN_MISS: Readonly<Record<string, { measured: number; ceiling: number }>
  */
 const SUBTREE_ROOT_LEVEL = 1;
 
+/**
+ * Второй корень замера — МАЛОЕ поддерево (единицы узлов, уровень 5). Он здесь не ради
+ * полноты: `MATERIALIZED` в движке предков (`executor/ancestors.ts`) — подсказка
+ * планировщику, и подсказка эта бывает вредной. На пяти тысячах узлов она экономит
+ * повторные сортировки, а на семи могла бы стоить дороже, чем экономит: материализация
+ * платит за себя только если результат читают много раз. Пока эта строка меряется, «стало
+ * лучше большим и хуже малым» видно числом, а не предполагается.
+ */
+const SMALL_ROOT_LEVEL = 5;
+
 let reg: RegistrySnapshot;
 let subtreeRoot: string;
 let subtreeSize: number;
+let smallRoot: string;
+let smallSize: number;
 
 /**
  * Запрос обхода. `limit` НЕ задан намеренно: без него компилятор ставит умолчание §6.1
@@ -125,6 +123,19 @@ beforeAll(async () => {
   ]);
   subtreeSize = Number((rows[0] as { count?: unknown })?.count);
   console.log(`perf: поддерево замера — ${subtreeSize} узлов (уровень ${SUBTREE_ROOT_LEVEL})`);
+  smallRoot = graphNodeId(SMALL_ROOT_LEVEL, Math.floor(graphLevelSize(SMALL_ROOT_LEVEL) / 2));
+  const smallRows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
+    ...(await tx.execute(
+      compileCountAst(walkAllAst(smallRoot), {
+        ownerId: GRAPH_OWNER_ID,
+        today: '2026-07-03',
+        timeZone: 'Europe/Moscow',
+        reg,
+      }),
+    )),
+  ]);
+  smallSize = Number((smallRows[0] as { count?: unknown })?.count);
+  console.log(`perf: малое поддерево — ${smallSize} узлов (уровень ${SMALL_ROOT_LEVEL})`);
 }, 900_000);
 
 afterAll(async () => {
@@ -196,6 +207,16 @@ test('П6: descendants_of под RLS и пересчёт предков на п�
     ),
   );
 
+  // Малое поддерево — та же операция на единицах узлов (см. докблок SMALL_ROOT_LEVEL).
+  await withIdentity(db, GRAPH_OWNER_ID, (tx) =>
+    recomputeProjectAncestors(tx, GRAPH_OWNER_ID, [smallRoot], reg),
+  );
+  const recomputeSmall = await measureMedian('recompute:subtree-small', 7, () =>
+    withIdentity(db, GRAPH_OWNER_ID, (tx) =>
+      recomputeProjectAncestors(tx, GRAPH_OWNER_ID, [smallRoot], reg),
+    ),
+  );
+
   // Пересчёт действительно что-то посчитал: обнулим кэш на поддереве и проверим, что вызов
   // возвращает число правок того же порядка, что размер поддерева. Без этой проверки
   // «≤ 1 с» выполнял бы и вызов, который не нашёл ни одной строки.
@@ -212,16 +233,24 @@ test('П6: descendants_of под RLS и пересчёт предков на п�
     ['descendants_of:subtree', subtree],
     ['recompute:subtree5k', recompute],
   ] as const) {
-    const miss = KNOWN_MISS[key];
-    if (miss) {
-      console.log(
-        `perf: ${key} — порог П6 ${BUDGETS_MS[key]} мс НЕ достигнут (замер ${ms.toFixed(0)} мс,` +
-          ` отчитано как расхождение; потолок сторожа ${miss.ceiling} мс)`,
-      );
-      if (ms > miss.ceiling) over.push(`${key}=${ms.toFixed(0)}ms > потолок ${miss.ceiling}ms`);
-      continue;
-    }
-    if (ms > BUDGETS_MS[key]) over.push(`${key}=${ms.toFixed(0)}ms > ${BUDGETS_MS[key]}ms`);
+    // Строка про порог П6 печатается на КАЖДОМ прогоне и для достигнутого порога тоже:
+    // «достигнут» — такой же факт замера, как «не достигнут», и исчезнуть из вывода он не
+    // должен, иначе следующий читатель не отличит «порог взят» от «строку забыли».
+    const met = ms <= BUDGETS_MS[key];
+    console.log(
+      `perf: ${key} — порог П6 ${BUDGETS_MS[key]} мс ${met ? 'ДОСТИГНУТ' : 'НЕ достигнут'}` +
+        ` (замер ${ms.toFixed(0)} мс)`,
+    );
+    if (!met) over.push(`${key}=${ms.toFixed(0)}ms > ${BUDGETS_MS[key]}ms`);
+  }
+  // Малое поддерево порога П6 не несёт, но сторожит своё: пересчёт на единицах узлов не
+  // должен стоить как на тысячах — иначе подсказка планировщику съела бы больше, чем дала.
+  console.log(
+    `perf: recompute:subtree-small — ${recomputeSmall.toFixed(0)} мс на ${smallSize} узлах` +
+      ` (потолок сторожа ${SMALL_CEILING_MS} мс)`,
+  );
+  if (recomputeSmall > SMALL_CEILING_MS) {
+    over.push(`recompute:subtree-small=${recomputeSmall.toFixed(0)}ms > ${SMALL_CEILING_MS}ms`);
   }
   expect(over).toEqual([]);
 }, 900_000);

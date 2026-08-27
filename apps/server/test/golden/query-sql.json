@@ -28,7 +28,11 @@
             "not": {
               "rel": {
                 "kind": "has_relation",
-                "via": "dependency"
+                "via": "dependency",
+                "sourceNotIn": {
+                  "prop": "orbis/task_status",
+                  "values": ["done", "cancelled"]
+                }
               }
             }
           },
@@ -54,12 +58,14 @@
       "display": "compact",
       "title": "Активные задачи проекта"
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, props, aspects, query_refs, aspects_legacy, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND NOT COALESCE((props->>'orbis/task_status' = $2 OR props->>'orbis/task_status' = $3), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.role = $4), false) AND EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.source_id = $5 AND r.role = ANY(ARRAY[$6, $7, $8, $9]::text[]))) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $10",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, props, aspects, query_refs, aspects_legacy, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND NOT COALESCE((props->>'orbis/task_status' = $2 OR props->>'orbis/task_status' = $3), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $4 AND COALESCE(b.props->>'orbis/task_status', '') NOT IN ($5, $6)), false) AND EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.source_id = $7 AND r.role = ANY(ARRAY[$8, $9, $10, $11]::text[]))) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $12",
     "params": [
       "orbis/agent-run",
       "done",
       "cancelled",
       "dependency",
+      "done",
+      "cancelled",
       "00000000-0000-7000-8000-0000000000f1",
       "category-parent",
       "run",
@@ -67,12 +73,14 @@
       "ticket",
       20
     ],
-    "countSql": "SELECT count(*) FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND NOT COALESCE((props->>'orbis/task_status' = $2 OR props->>'orbis/task_status' = $3), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.role = $4), false) AND EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.source_id = $5 AND r.role = ANY(ARRAY[$6, $7, $8, $9]::text[])))",
+    "countSql": "SELECT count(*) FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND NOT COALESCE((props->>'orbis/task_status' = $2 OR props->>'orbis/task_status' = $3), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $4 AND COALESCE(b.props->>'orbis/task_status', '') NOT IN ($5, $6)), false) AND EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.source_id = $7 AND r.role = ANY(ARRAY[$8, $9, $10, $11]::text[])))",
     "countParams": [
       "orbis/agent-run",
       "done",
       "cancelled",
       "dependency",
+      "done",
+      "cancelled",
       "00000000-0000-7000-8000-0000000000f1",
       "category-parent",
       "run",
@@ -162,7 +170,11 @@
             "not": {
               "rel": {
                 "kind": "has_relation",
-                "via": "dependency"
+                "via": "dependency",
+                "sourceNotIn": {
+                  "prop": "orbis/task_status",
+                  "values": ["done", "cancelled"]
+                }
               }
             }
           }
@@ -181,7 +193,7 @@
       "display": "list",
       "title": "Сегодня"
     },
-    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, props, aspects, query_refs, aspects_legacy, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND ((props->>'orbis/due_date')::date = $2::date OR (props->>'orbis/due_date')::date < $3::date) AND NOT COALESCE((props->>'orbis/task_status' = $4 OR props->>'orbis/task_status' = $5 OR props->>'orbis/task_status' = $6), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.role = $7), false)) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $8",
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, props, aspects, query_refs, aspects_legacy, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND (aspects @> ARRAY['orbis/task'] AND ((props->>'orbis/due_date')::date = $2::date OR (props->>'orbis/due_date')::date < $3::date) AND NOT COALESCE((props->>'orbis/task_status' = $4 OR props->>'orbis/task_status' = $5 OR props->>'orbis/task_status' = $6), false) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $7 AND COALESCE(b.props->>'orbis/task_status', '') NOT IN ($8, $9)), false)) ORDER BY CASE props->>'orbis/priority' WHEN 'low' THEN 1 WHEN 'medium' THEN 2 WHEN 'high' THEN 3 END DESC NULLS LAST, (props->>'orbis/due_date')::date ASC NULLS LAST LIMIT $10",
     "params": [
       "orbis/agent-run",
       "2026-07-03",
@@ -190,6 +202,8 @@
       "cancelled",
       "waiting",
       "dependency",
+      "done",
+      "cancelled",
       500
     ]
   },
@@ -887,6 +901,26 @@
     },
     "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, props, aspects, query_refs, aspects_legacy, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND EXISTS (SELECT 1 FROM relations r WHERE r.target_id = e.id AND r.role = $2) LIMIT $3",
     "params": ["orbis/agent-run", "dependency", 500]
+  },
+  {
+    "name": "excludeBlocked=true — ребро dependency ПЛЮС состояние блокера (сахар ≠ !has_relation)",
+    "query": "excludeBlocked=true",
+    "ast": {
+      "filter": {
+        "not": {
+          "rel": {
+            "kind": "has_relation",
+            "via": "dependency",
+            "sourceNotIn": {
+              "prop": "orbis/task_status",
+              "values": ["done", "cancelled"]
+            }
+          }
+        }
+      }
+    },
+    "sql": "SELECT id, owner_id, title, emoji, body, body_refs, tags, meta, props, aspects, query_refs, aspects_legacy, created_at, updated_at, archived FROM entities e WHERE true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND NOT COALESCE(EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = e.id AND r.role = $2 AND COALESCE(b.props->>'orbis/task_status', '') NOT IN ($3, $4)), false) LIMIT $5",
+    "params": ["orbis/agent-run", "dependency", "done", "cancelled", 500]
   },
   {
     "name": "orbis/limit>1000 — namespaced key бьёт слово грамматики limit (В11)",

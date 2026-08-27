@@ -589,6 +589,8 @@ interface RelDraft {
   kind: QueryRelKind;
   via?: string;
   of?: string;
+  /** Состояние дальнего конца — заполняет только сахар `excludeBlocked` (см. ниже). */
+  sourceNotIn?: { prop: string; values: string[] };
 }
 
 interface RelSlot {
@@ -832,6 +834,21 @@ function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
  */
 const EXCLUDE_BLOCKED_ROLE_KEY: string = ROLE_DEPENDENCY;
 
+/**
+ * Свойство и набор значений, которыми интервал А выражает «блокирующая работа ЗАКРЫТА».
+ *
+ * Спека даёт для этого `class(completable) ∉ closed` (§таблица), но контрактов в срезе А
+ * нет, а выбросить условие нельзя: сегодня его проверяет компилятор (`compile.ts:272`,
+ * `COALESCE(...,'') NOT IN ('done','cancelled')`), и без него «отпущенный» блокер начал бы
+ * прятать работу. Поэтому набор назван здесь ДОСЛОВНО тем же, что стоит в сегодняшнем SQL,
+ * и заменяется на `class` вместе с контрактами — целиком, а не дополняется.
+ *
+ * Ключ свойства резолвится РЕЕСТРОМ (как и роль рядом): реестр без `orbis/task_status`
+ * обязан дать `UNKNOWN_FIELD`, а не дерево, ссылающееся на несуществующее свойство.
+ */
+const EXCLUDE_BLOCKED_STATUS_KEY = 'orbis/task_status';
+const EXCLUDE_BLOCKED_CLOSED: readonly string[] = ['done', 'cancelled'];
+
 const REL_WITH_TARGET: ReadonlySet<string> = new Set([
   'children_of',
   'parents_of',
@@ -917,9 +934,15 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
       if (unquote(requireOp(t, '='), t.valueOffset) !== 'true') {
         fail('SYNTAX', `единственная форма — excludeBlocked=true`, t.valueOffset);
       }
-      // ВРЕМЕННО дословно как сегодня (`compile.ts:254`): «на сущность есть ВХОДЯЩЕЕ ребро
-      // роли dependency», то есть она заблокирована. Набор «closed» (состояние блокирующей
-      // работы) приедет с Б-1. Направление — рулинг координатора, см. `QUERY_REL_ANCHOR`.
+      // Дословно как сегодня (`compile.ts:272`): «на сущность есть ВХОДЯЩЕЕ ребро роли
+      // dependency ОТ НЕЗАКРЫТОЙ работы». Оба условия обязательны: без второго «отпущенный»
+      // блокер (задача в done) начал бы прятать работу, и блок «Сегодня» показал бы владельцу
+      // меньше, чем показывает сейчас, — то есть реформа поменяла бы наблюдаемое поведение.
+      // Набор «closed» выражен статусом напрямую и заменяется на `class(completable)` вместе
+      // с контрактами (Б-1). Направление — рулинг координатора, см. `QUERY_REL_ANCHOR`.
+      //
+      // Именно поэтому сахар и явная запись `!has_relation via=dependency` дают РАЗНЫЕ
+      // деревья: у них разные намерения, и различить их можно только в самом дереве.
       //
       // Роль РЕЗОЛВИТСЯ реестром, а не подставляется литералом: это шестнадцатая точка
       // записи id в дерево, и на литерале она была единственной, где инвариант §А5-2 «в
@@ -929,6 +952,10 @@ function dispatch(t: Token, ctx: Ctx, acc: Acc): void {
         pred: {
           kind: 'has_relation',
           via: resolveRole(EXCLUDE_BLOCKED_ROLE_KEY, t.keyOffset, ctx).id,
+          sourceNotIn: {
+            prop: resolveProperty(EXCLUDE_BLOCKED_STATUS_KEY, t.keyOffset, ctx).id,
+            values: [...EXCLUDE_BLOCKED_CLOSED],
+          },
         },
         offset: t.keyOffset,
       };
