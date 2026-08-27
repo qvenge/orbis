@@ -92,11 +92,37 @@ const validate = ajv.compile(queryAstJsonSchema);
 
 console.log('probe-openai-schema: модель', provider.modelId);
 console.log('probe-openai-schema: транспорт Responses API, strict:false (D29)');
-console.log(
-  `probe-openai-schema: ветвей в $defs.node.anyOf — ${
-    (($defs as { node?: { anyOf?: unknown[] } })?.node?.anyOf ?? []).length
-  }`,
+const branches = (($defs as { node?: { anyOf?: unknown[] } })?.node?.anyOf ?? []) as Array<{
+  properties?: { rel?: { anyOf?: unknown[] } };
+}>;
+console.log(`probe-openai-schema: ветвей в $defs.node.anyOf — ${branches.length}`);
+
+/**
+ * ЧТО ИМЕННО УЕХАЛО ПРОВАЙДЕРУ — печатается, а не подразумевается.
+ *
+ * Без этой строки проба «проходила» бы и на схеме, из которой расширение выпало: зелёный
+ * прогон доказывал бы только то, что провайдер принимает КАКУЮ-ТО схему. Тот же класс
+ * ошибки, что «зелёный прогон без мутанта»: подстановку надо подтверждать, а не полагать.
+ */
+const relBranches = branches.flatMap((b) => b.properties?.rel?.anyOf ?? []);
+const hasRelation = relBranches.find(
+  (b) =>
+    (b as { properties?: { kind?: { const?: string } } }).properties?.kind?.const ===
+    'has_relation',
 );
+console.log(
+  'probe-openai-schema: ветка has_relation, уехавшая провайдеру —',
+  JSON.stringify(hasRelation),
+);
+if (
+  !hasRelation ||
+  !(hasRelation as { properties?: Record<string, unknown> }).properties?.sourceNotIn
+) {
+  console.error(
+    'probe-openai-schema: в отправленной схеме НЕТ поля sourceNotIn — проба проверила бы не ту схему',
+  );
+  process.exit(1);
+}
 
 let accepted = false;
 let ok = 0;
