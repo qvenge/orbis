@@ -5,17 +5,20 @@
 import type { AgentRunAspect, RoutineAspect, RunSummary } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
+import { hierarchicalRolesSql } from '../registry/roles';
 
 /**
  * Инвариант 2 спеки: «скоуп worker не может тронуть чужое». Периметр записи фонового
- * исполнителя — треды НАЗНАЧЕННЫХ ему тикетов и их ПРЯМЫХ РОДИТЕЛЕЙ по связи parent:
+ * исполнителя — треды НАЗНАЧЕННЫХ ему тикетов и их ПРЯМЫХ РОДИТЕЛЕЙ по иерархии:
  * тикет он ведёт, а в родителя (обычно проект) пишет сводку «готово, проверь» (С8/С9).
  * Аспект родителя проба не спрашивает намеренно — периметр задаёт связь, а не аспект.
  * Всё остальное в графе владельца ему закрыто.
  *
  * Один SQL вместо двух чтений: сущность годится, если она сама — тикет с назначением на
- * ЭТОТ грант, либо она родитель такого тикета (`relations.relation_type='parent'`,
- * направление как в грамматике §6: родитель — `source_id`, ребёнок — `target_id`).
+ * ЭТОТ грант, либо она родитель такого тикета по ИЕРАРХИЧЕСКОЙ роли (§А4-3; направление
+ * как в грамматике §6: родитель — `source_id`, ребёнок — `target_id`). Список ролей —
+ * подзапрос по реестру, а не литерал: роль с признаком `hierarchical` заводится операциями
+ * реестра, и написанная в коде четвёрка её не увидела бы.
  * Проверка назначения — containment по колонке `aspects_legacy` (индекс
  * `entities_aspects_legacy_gin`),
  * а не разбор json-полей: так условие остаётся индексируемым.
@@ -51,7 +54,7 @@ export async function isWorkerThreadTarget(
               SELECT 1 FROM relations r
               WHERE r.source_id = target.id
                 AND r.target_id = t.id
-                AND r.relation_type = 'parent'
+                AND r.role IN (${hierarchicalRolesSql()})
             )
           )
         LIMIT 1`,
@@ -200,19 +203,23 @@ export async function ticketById(tx: Tx, ticketId: string): Promise<TicketDetail
 }
 
 /**
- * Проект-родитель тикета (`parents_of` грамматики §6: родитель — `source_id`). Тикет без
- * проекта — законный случай (личная задача владельца), поэтому null, а не ошибка.
+ * Проект тикета — ВЫЧИСЛЕННЫЙ предок `orbis/parent_project` (§А8, правило
+ * `nearest_ancestor`), а не JOIN по одному ребру.
+ *
+ * До реформы здесь стоял одноуровневый `parents_of`, и он отвечал «проекта нет» на любом
+ * тикете, лежащем под задачей проекта, — а такие тикеты владелец заводит постоянно. Теперь
+ * ответ считает движок предков (`executor/ancestors.ts`) тем же tx, что и правку рёбер, и
+ * очередь исполнителя читает ровно то значение, которое лежит в графе.
+ *
+ * Тикет без проекта над собой — законный случай (личная задача владельца), поэтому null,
+ * а не ошибка. Чужой проект под RLS невидим: JOIN не соединится, и ответ тот же null.
  */
 export async function parentProject(tx: Tx, ticketId: string): Promise<ProjectRow | null> {
   const rows = await tx.execute(
-    sql`SELECT e.id, e.title, e.body
-        FROM entities e
-        JOIN relations r ON r.source_id = e.id
-        WHERE r.target_id = ${ticketId}::uuid
-          AND r.relation_type = 'parent'
-          AND e.aspects_legacy ? 'orbis/project'
-        ORDER BY e.created_at ASC
-        LIMIT 1`,
+    sql`SELECT p.id, p.title, p.body
+        FROM entities t
+        JOIN entities p ON p.id = (t.props->>'orbis/parent_project')::uuid
+        WHERE t.id = ${ticketId}::uuid`,
   );
   const row = (rows as unknown as RawRow[])[0];
   if (row === undefined) return null;
@@ -223,7 +230,10 @@ export async function parentProject(tx: Tx, ticketId: string): Promise<ProjectRo
  * Прогоны РОДИТЕЛЯ (`children_of`), в порядке появления: история читается сверху вниз.
  *
  * Родитель — тикет у внешнего исполнителя и рутина у внутреннего (V1.4): запрос никогда
- * не спрашивал аспект родителя, он идёт по связи `parent`, — и обобщение свелось к имени.
+ * не спрашивал аспект родителя, он идёт по иерархической связи, — и обобщение свелось
+ * к имени. Прогон вешается ролью `run`, но отбор идёт по всему семейству иерархии: сузив
+ * его до одной роли, запрос потерял бы прогон, привязанный владельцем вручную (`subitem`),
+ * — а история прогонов обязана показывать то же, что показывала до реформы.
  */
 export async function runsOfParent(tx: Tx, parentId: string): Promise<RunRow[]> {
   const rows = await tx.execute(
@@ -231,7 +241,7 @@ export async function runsOfParent(tx: Tx, parentId: string): Promise<RunRow[]> 
         FROM entities e
         JOIN relations r ON r.target_id = e.id
         WHERE r.source_id = ${parentId}::uuid
-          AND r.relation_type = 'parent'
+          AND r.role IN (${hierarchicalRolesSql()})
           AND e.aspects_legacy ? 'orbis/agent-run'
         ORDER BY e.created_at ASC`,
   );
@@ -353,14 +363,14 @@ export async function runById(tx: Tx, runId: string): Promise<RunRow | null> {
   return row === undefined ? null : toRunRow(row);
 }
 
-/** Тикет прогона — его родитель по связи parent. Прогон-сирота даёт null. */
+/** Тикет прогона — его родитель по иерархической связи. Прогон-сирота даёт null. */
 export async function ticketOfRun(tx: Tx, runId: string): Promise<TicketRow | null> {
   const rows = await tx.execute(
     sql`SELECT e.id, e.title, e.aspects_legacy, e.updated_at
         FROM entities e
         JOIN relations r ON r.source_id = e.id
         WHERE r.target_id = ${runId}::uuid
-          AND r.relation_type = 'parent'
+          AND r.role IN (${hierarchicalRolesSql()})
           AND e.aspects_legacy ? 'orbis/task'
         LIMIT 1`,
   );

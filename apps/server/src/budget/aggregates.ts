@@ -10,6 +10,8 @@
 // [today; today+14] (A3) — ОБА исполняют executor в собственных tx, поэтому зовутся
 // ДО withIdentity-tx агрегатов (вложение истощало бы пул соединений — тот же принцип,
 // что recurring/with-materialization.ts).
+
+import type { RelationRoleId } from '@orbis/shared';
 import {
   addDays,
   type BudgetOverview,
@@ -21,13 +23,14 @@ import {
   type RolloverPreview,
   type RolloverResult,
 } from '@orbis/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, type SQL, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { entities, userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { LEGACY_PARENT_ROLES, ROLE_INSTANCE_OF } from '../executor/relations';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { DEFAULT_TIMEZONE, isValidTimeZone } from '../query/context';
 import { materializeInstances } from '../recurring/materialize';
@@ -35,6 +38,25 @@ import { postDueInstances } from '../recurring/post-due';
 import { toWireEntity } from '../wire';
 import { defaultCurrencyOf, selectEnvelope } from './binding';
 import { decAdd, decCmp, decDivBy, decMulInt, decSub } from './decimal';
+
+/**
+ * ИНТЕРВАЛ 7a→0017 (§13.7, урок C1 Задачи 7a). «Конверт-родитель» здесь — то же множество,
+ * что у хука привязки (`budgetParentsOfMany`) и у инварианта «один budget-parent»
+ * (`assertSingleLegacyBudgetParent`): ЛЮБАЯ связь от конверта, проецирующаяся в старый
+ * `parent`. Сузить агрегат до одной роли `envelope-binding` нельзя, пока `rel_uniq` стоит на
+ * проекции роли: связь роли владельца от конверта к транзакции хук считает привязкой и
+ * второй, «правильной» рядом с ней не ставит — значит расход по ней есть, а в карточке
+ * конверта его бы не стало. С 0017 множество схлопнется до роли, и хелпер уйдёт.
+ */
+function legacyParentRoles(): SQL {
+  return sql.join(
+    LEGACY_PARENT_ROLES.map((role) => sql`${role}`),
+    sql`, `,
+  );
+}
+
+/** Роль дерева категорий (§А4-3): её называет §2.10, а не проекция старой колонки. */
+const ROLE_CATEGORY_PARENT = 'category-parent' satisfies RelationRoleId;
 
 type EntityRow = typeof entities.$inferSelect;
 type AspectsMap = Record<string, Record<string, unknown>>;
@@ -135,7 +157,7 @@ async function spentByEnvelope(
     FROM relations r
     JOIN entities env ON env.id = r.source_id
     JOIN entities e   ON e.id = r.target_id
-    WHERE r.relation_type = 'parent'
+    WHERE r.role IN (${legacyParentRoles()})
       AND r.source_id IN (${ids})
       AND e.owner_id = ${ownerId} AND NOT e.archived
       AND e.aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
@@ -190,13 +212,22 @@ function categoryOr(map: Map<string, CategoryInfo>, id: string): CategoryInfo {
   return map.get(id) ?? { id, title: '', icon: null, color: null, spendClass: null };
 }
 
-/** Рёбра дерева категорий (§2.10): parent-связи между category-сущностями владельца. */
+/**
+ * Рёбра дерева категорий (§2.10) — связи роли `category-parent` между category-сущностями.
+ *
+ * ЗДЕСЬ РОЛЬ СУЖАЕТ, и это названная перемена, а не перевод один-в-один. До реформы дерево
+ * категорий собирала любая связь, проецирующаяся в старый `parent`: «часть внутри целого»
+ * между двумя категориями считалась деревом наравне с настоящим родством. Реформа завела
+ * роли ровно затем, чтобы эти смыслы не путались (§А4-3), и дерево категорий теперь ровно
+ * одно — то, которое владелец назвал деревом. Связь `subitem` между категориями остаётся
+ * связью, но агрегат родительской карточки её не собирает.
+ */
 async function categoryEdges(tx: Tx, ownerId: string): Promise<Map<string, string[]>> {
   const rows = (await tx.execute(sql`
     SELECT r.source_id, r.target_id FROM relations r
     JOIN entities s ON s.id = r.source_id
     JOIN entities t ON t.id = r.target_id
-    WHERE r.relation_type = 'parent'
+    WHERE r.role = ${ROLE_CATEGORY_PARENT}
       AND s.owner_id = ${ownerId}
       AND s.aspects_legacy ? 'orbis/category' AND t.aspects_legacy ? 'orbis/category'
   `)) as unknown as Array<{ source_id: string; target_id: string }>;
@@ -408,14 +439,14 @@ async function computeOverview(
       AND NOT EXISTS (
         SELECT 1 FROM relations r
         JOIN entities p ON p.id = r.source_id
-        WHERE r.target_id = e.id AND r.relation_type = 'parent'
+        WHERE r.target_id = e.id AND r.role IN (${legacyParentRoles()})
           AND p.aspects_legacy ? 'orbis/budget' AND NOT p.archived
       )
     GROUP BY 1
     ORDER BY 1
   `)) as unknown as Array<{ category_id: string; total: string }>;
 
-  // Coming up (§2.8): материализованные recurring-инстансы (derived_from — дискриминатор)
+  // Coming up (§2.8): материализованные recurring-инстансы (роль `instance-of` — дискриминатор)
   // с planned=true на 14 дней; due-инстансы сегодняшнего дня уже переведены postDue
   const comingRows = await tx
     .select()
@@ -428,11 +459,11 @@ async function computeOverview(
         sql`${entities.aspectsLegacy}->'orbis/financial'->>'occurred_on' >= ${today}`,
         sql`${entities.aspectsLegacy}->'orbis/financial'->>'occurred_on' <= ${horizon}`,
         sql`EXISTS (SELECT 1 FROM relations r
-                    WHERE r.target_id = ${entities.id} AND r.relation_type = 'derived_from')`,
+                    WHERE r.target_id = ${entities.id} AND r.role = ${ROLE_INSTANCE_OF})`,
       ),
     );
 
-  // Planned (§2.7): ручные запланированные покупки — planned=true БЕЗ derived_from
+  // Planned (§2.7): ручные запланированные покупки — planned=true БЕЗ связи `instance-of`
   // (и не шаблоны); окном месяца не режутся — это список намерений, не агрегат периода
   const plannedRows = await tx
     .select()
@@ -445,7 +476,7 @@ async function computeOverview(
         sql`${entities.aspectsLegacy}->'orbis/financial'->>'direction' = 'expense'`,
         sql`${entities.aspectsLegacy}->'orbis/schedule'->'recurrence' IS NULL`,
         sql`NOT EXISTS (SELECT 1 FROM relations r
-                        WHERE r.target_id = ${entities.id} AND r.relation_type = 'derived_from')`,
+                        WHERE r.target_id = ${entities.id} AND r.role = ${ROLE_INSTANCE_OF})`,
       ),
     );
 

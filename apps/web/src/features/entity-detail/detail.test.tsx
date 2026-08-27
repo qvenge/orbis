@@ -1479,7 +1479,15 @@ const richHandler: MockHandler = (path, input) => {
           updatedAt: 'y',
         },
       ],
-      backlinks: [{ entity: { ...entity, id: 'src', title: 'Кто ссылается' }, via: 'mention' }],
+      backlinks: [
+        {
+          entity: { ...entity, id: 'src', title: 'Кто ссылается' },
+          via: 'mention',
+          // Подпись направления приезжает ГОТОВОЙ с сервера (реестр ролей, Ч10-С3) —
+          // своего словаря у секции больше нет.
+          viaLabel: 'упоминание',
+        },
+      ],
       thread: { threadId: 'th1', messages: [] },
     };
   }
@@ -1515,6 +1523,8 @@ test('«Детали» показывает аспекты, подзадачи, 
   expect(within(details).getByLabelText('Новая подзадача')).toBeInTheDocument();
   expect(within(details).getByRole('button', { name: 'Добавить блокировку' })).toBeInTheDocument();
   expect(within(details).getByText(/Связанное/)).toBeInTheDocument();
+  // Подпись строки — та, что прислал сервер, а не выведенная клиентом из `via`
+  expect(within(details).getByTestId('backlink')).toHaveTextContent('упоминание');
 
   // И ничего из этого не осталось на «Сущности»: вкладка — чистый документ.
   const panel = tabPanel('Сущность');

@@ -49,6 +49,7 @@ import { type EntitlementResolver, IMPORT_CSV_KEY, resolveEntitlement } from '..
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { LEGACY_PARENT_ROLES } from '../executor/relations';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { LLMRequest, LLMResponse } from '../llm/types';
 import type { Card } from '../tools/registry';
@@ -475,6 +476,11 @@ function isWireEntity(result: unknown): result is WireEntity {
  * §3.4 шаг 5 («Без конверта: 3 — Образование, Прочее»). ОДИН запрос ПОСЛЕ execute и
  * вне его транзакции: привязку дописывает бюджет-хук, и её результат виден только
  * после коммита.
+ *
+ * «Конверт-родитель» — то же множество, что у хука, инварианта и агрегатов
+ * (`LEGACY_PARENT_ROLES` с источником-конвертом, интервал 7a→0017, §13.7): карточка импорта
+ * обязана считать «без конверта» так же, как считает его экран бюджета, иначе владелец
+ * увидит в итоге импорта одно число, а во вкладке Budget — другое.
  */
 async function unbudgetedOf(
   db: Db,
@@ -496,7 +502,10 @@ async function unbudgetedOf(
         AND NOT EXISTS (
           SELECT 1 FROM relations r
           JOIN entities p ON p.id = r.source_id
-          WHERE r.target_id = e.id AND r.relation_type = 'parent'
+          WHERE r.target_id = e.id AND r.role IN (${sql.join(
+            LEGACY_PARENT_ROLES.map((role) => sql`${role}`),
+            sql`, `,
+          )})
             AND p.aspects_legacy ? 'orbis/budget' AND NOT p.archived
         )
       GROUP BY 1

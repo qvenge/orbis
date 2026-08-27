@@ -230,7 +230,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     });
     // §А8 УДАЛЯЕТ денормализацию проекта на прогон: свойства `project_id` в реестре нет,
     // его заменяют вычисляемые `orbis/parent_project`/`orbis/root_project` (правило
-    // `nearest_ancestor`, часть Б). Захват его больше не пишет — иначе получил бы
+    // `nearest_ancestor`). Захват его больше не пишет — иначе получил бы
     // `UNKNOWN_PROPERTY` и не состоялся бы вовсе.
     expect(runAspects['orbis/agent-run']).not.toHaveProperty('project_id');
 
@@ -242,6 +242,10 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
       'orbis/run_outcome': 'running',
       'orbis/step_count': 0,
       'orbis/run_started_at': iso(T0),
+      // …и вместо снятого `project_id` на прогоне лежит ВЫЧИСЛЕННЫЙ предок: связь
+      // «тикет → прогон» иерархическая, и её создание тем же batch запустило пересчёт
+      'orbis/parent_project': projectId,
+      'orbis/root_project': projectId,
     });
 
     expect(await childrenOf(owner, ticketId)).toEqual([c.run_id]);

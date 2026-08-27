@@ -879,3 +879,123 @@ describe('служебные аспекты (02-core-os §3.9): прогоны �
     expect(ids(await run(USER_C, 'sortBy=step_count:desc'))).toEqual([ID_C.ticket]);
   });
 });
+
+// ─── Семейство иерархии в children_of/parents_of (§А4-3, Ч10-С1) ───
+// Четвёртый пользователь: эталонный датасет §6.2 не трогаем — его состав запинен выше.
+const USER_D = freshUserId();
+
+const ID_D = {
+  project: '019eb300-d5e1-7000-8000-000000000031',
+  ticket: '019eb300-d5e1-7000-8000-000000000032',
+  subtask: '019eb300-d5e1-7000-8000-000000000033',
+  envelope: '019eb300-d5e1-7000-8000-000000000034',
+  txn: '019eb300-d5e1-7000-8000-000000000035',
+} as const;
+
+describe('children_of/parents_of: семейство иерархии из реестра, а не схлопнутый parent', () => {
+  beforeAll(async () => {
+    await withIdentity(db, USER_D, async (tx) => {
+      const reg = await loadRegistry(tx, USER_D);
+      await tx.insert(entities).values(
+        datasetRows(reg, [
+          {
+            id: ID_D.project,
+            ownerId: USER_D,
+            title: 'Проект D',
+            tags: [],
+            aspects: { 'orbis/project': { stage: 'active' } },
+            createdAt: new Date('2026-07-01T08:00:00Z'),
+            updatedAt: new Date('2026-07-01T08:00:00Z'),
+          },
+          {
+            id: ID_D.ticket,
+            ownerId: USER_D,
+            title: 'Тикет D',
+            tags: [],
+            aspects: { 'orbis/task': { status: 'planned' } },
+            createdAt: new Date('2026-07-01T09:00:00Z'),
+            updatedAt: new Date('2026-07-01T09:00:00Z'),
+          },
+          {
+            id: ID_D.subtask,
+            ownerId: USER_D,
+            title: 'Подпункт D',
+            tags: [],
+            aspects: { 'orbis/task': { status: 'planned' } },
+            createdAt: new Date('2026-07-01T10:00:00Z'),
+            updatedAt: new Date('2026-07-01T10:00:00Z'),
+          },
+          {
+            id: ID_D.envelope,
+            ownerId: USER_D,
+            title: 'Конверт D',
+            tags: [],
+            aspects: {
+              'orbis/budget': {
+                category_ref: '019eb300-d5e1-7000-8000-0000000000d1',
+                limit: '1000.00',
+                period_start: '2026-07-01',
+                period_end: '2026-07-31',
+              },
+            },
+            createdAt: new Date('2026-07-01T11:00:00Z'),
+            updatedAt: new Date('2026-07-01T11:00:00Z'),
+          },
+          {
+            id: ID_D.txn,
+            ownerId: USER_D,
+            title: 'Расход D',
+            tags: [],
+            aspects: {
+              'orbis/financial': {
+                amount: '100.00',
+                direction: 'expense',
+                category_ref: '019eb300-d5e1-7000-8000-0000000000d1',
+                occurred_on: '2026-07-02',
+              },
+            },
+            createdAt: new Date('2026-07-01T12:00:00Z'),
+            updatedAt: new Date('2026-07-01T12:00:00Z'),
+          },
+        ]),
+      );
+      await tx.insert(relations).values([
+        {
+          id: crypto.randomUUID(),
+          sourceId: ID_D.project,
+          targetId: ID_D.ticket,
+          role: 'ticket',
+          relationType: 'parent',
+        },
+        {
+          id: crypto.randomUUID(),
+          sourceId: ID_D.project,
+          targetId: ID_D.subtask,
+          role: 'subitem',
+          relationType: 'parent',
+        },
+        {
+          id: crypto.randomUUID(),
+          sourceId: ID_D.envelope,
+          targetId: ID_D.txn,
+          role: 'envelope-binding',
+          relationType: 'parent',
+        },
+      ]);
+    });
+  });
+
+  test('children_of берёт ВСЁ семейство иерархии: и subitem, и ticket', async () => {
+    const rows = ids(await run(USER_D, `children_of=${ID_D.project}, sortBy=created_at:asc`));
+    expect(rows).toEqual([ID_D.ticket, ID_D.subtask]);
+  });
+
+  test('envelope-binding в семейство иерархии НЕ входит: конверт не родитель транзакции', async () => {
+    expect(ids(await run(USER_D, `children_of=${ID_D.envelope}`))).toEqual([]);
+    expect(ids(await run(USER_D, `parents_of=${ID_D.txn}`))).toEqual([]);
+  });
+
+  test('parents_of симметричен children_of по тому же семейству', async () => {
+    expect(ids(await run(USER_D, `parents_of=${ID_D.ticket}`))).toEqual([ID_D.project]);
+  });
+});

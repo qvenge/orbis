@@ -22,10 +22,19 @@ import {
   type QueryFilter,
   type QueryRangeFilter,
   type QuerySortField,
+  type RelationRoleId,
   SERVICE_ASPECT_IDS,
 } from '@orbis/shared';
 import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
+import { hierarchicalRolesSql } from '../registry/roles';
+
+/**
+ * Роль зависимости (§А4-3) — единственная, что проецировалась в старый тип `blocks`.
+ * Литерал назван по имени и типизован: переименование роли в реестре обязано валить
+ * сборку, а не молча выключать `excludeBlocked` на всех смарт-листах владельца.
+ */
+const ROLE_DEPENDENCY = 'dependency' satisfies RelationRoleId;
 
 export interface CompileContext {
   catalog: FieldCatalog;
@@ -255,14 +264,19 @@ function compileFilter(f: QueryFilter, ctx: CompileContext, aspects: Set<string>
     case 'range':
       return compileRange(f, ctx, aspects);
     case 'children_of':
-      // Дети X: X — родитель (source), дети — target (§6.1).
-      return sql`id IN (SELECT target_id FROM relations WHERE source_id = ${entityRefId(f.of, ctx)} AND relation_type = 'parent')`;
+      // Дети X: X — родитель (source), дети — target (§6.1). Роли — СЕМЕЙСТВО иерархии из
+      // реестра (§А4-3): `envelope-binding` в него не входит, конверт не родитель
+      // транзакции (Ч10-С1), — и это единственная перемена относительно схлопнутого
+      // `parent`, который сюда собирал и привязки бюджета.
+      return sql`id IN (SELECT target_id FROM relations WHERE source_id = ${entityRefId(f.of, ctx)} AND role IN (${hierarchicalRolesSql()}))`;
     case 'parents_of':
-      return sql`id IN (SELECT source_id FROM relations WHERE target_id = ${entityRefId(f.of, ctx)} AND relation_type = 'parent')`;
+      return sql`id IN (SELECT source_id FROM relations WHERE target_id = ${entityRefId(f.of, ctx)} AND role IN (${hierarchicalRolesSql()}))`;
     case 'excludeBlocked':
       // Блокер без task-аспекта жив: COALESCE(...,'') NOT IN ('done','cancelled') — §6.1.
       // Подзапрос по entities b тоже под RLS — чужой блокер невидим и не блокирует.
-      return sql`NOT EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = entities.id AND r.relation_type = 'blocks' AND COALESCE(b.aspects_legacy->'orbis/task'->>'status', '') NOT IN ('done', 'cancelled'))`;
+      // Роль `dependency` — единственная, что проецировалась в старый `blocks`, поэтому
+      // перевод здесь один-в-один (ВРЕМЕННО: `via=` для произвольной роли — Задача 9b).
+      return sql`NOT EXISTS (SELECT 1 FROM relations r JOIN entities b ON b.id = r.source_id WHERE r.target_id = entities.id AND r.role = ${ROLE_DEPENDENCY} AND COALESCE(b.aspects_legacy->'orbis/task'->>'status', '') NOT IN ('done', 'cancelled'))`;
     case 'archived':
       // 'true' — только архивные; 'any' — условия нет вовсе (§6.1).
       return f.value === 'true' ? sql`archived` : null;

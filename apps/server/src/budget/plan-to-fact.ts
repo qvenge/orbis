@@ -23,6 +23,7 @@ import { withIdentity } from '../db/with-identity';
 import { ExecError, type ExecErrorCode } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { ROLE_INSTANCE_OF } from '../executor/relations';
 import type { ExecuteRequest } from '../executor/types';
 
 // Синк один на модуль (как post-due.ts / rollover): состояния не хранит, audit-сообщение
@@ -59,7 +60,7 @@ export async function confirmPurchase(
         e.aspects_legacy->'orbis/schedule'->'recurrence' AS recurrence,
         EXISTS (
           SELECT 1 FROM relations r
-          WHERE r.target_id = e.id AND r.relation_type = 'derived_from'
+          WHERE r.target_id = e.id AND r.role = ${ROLE_INSTANCE_OF}
         ) AS derived
       FROM entities e
       WHERE e.id = ${input.entityId} AND e.owner_id = ${ownerId}

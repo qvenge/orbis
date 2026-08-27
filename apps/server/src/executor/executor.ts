@@ -53,6 +53,11 @@ import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import { projectBodyTemplate } from '../seed/project-body';
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
 import { toWireEntity as toWire, toWireRelation } from '../wire';
+import {
+  RULE_ID as ANCESTORS_RULE_ID,
+  PROJECT_ASPECT,
+  recomputeProjectAncestors,
+} from './ancestors';
 import { assertEntityProps } from './aspects-validate';
 import { ExecError } from './errors';
 import {
@@ -170,6 +175,12 @@ interface PreparedOp {
   journal: JournalPlan;
   apply(ctx: ExecCtx): Promise<OpOutcome>;
   budgetHook?: BudgetHook;
+  /**
+   * Сущности, чьё ПОДДЕРЕВО операция могла сдвинуть по правилу `nearest_ancestor` (§А8):
+   * цель изменённого иерархического ребра либо сущность, у которой навесили/сняли
+   * `orbis/project`. Пересчёт запускается после стадии 5 (см. `applyAncestorRecompute`).
+   */
+  ancestorRoots?: string[];
 }
 
 /**
@@ -343,12 +354,21 @@ export async function execute(
       // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
       // undo-сообщение — undo не порождает нового action (undo неотменяем, §7.8).
       // Иначе — обычный журнал; идемпотентный replay по client-UUID его пропускает (§5.3)
-      if (ctx.internalUndo) await ctx.internalUndo.writeUndoMessage(tx);
-      else if (out.replay !== true) {
+      if (ctx.internalUndo) {
+        // Пересчёт предков (§А8) откату НУЖЕН: inverse вернул ребро, предки обязаны сойтись
+        // с восстановленным графом. Журнала у undo нет, поэтому строка пересчёта отбрасывается.
+        await applyAncestorRecompute(ctx, [plan]);
+        await ctx.internalUndo.writeUndoMessage(tx);
+      } else if (out.replay !== true) {
         const allPlans = [plan, ...followUps];
+        // Пересчёт — ПОСЛЕ бюджет-хука: снятие устаревшей привязки удаляет ребро роли
+        // владельца (`budgetParentsOfMany` до 0017 считает привязкой и её), а такая роль
+        // бывает иерархической — считать предков до хука значило бы считать их по графу,
+        // которого к коммиту уже нет.
+        const recomputeOps = await applyAncestorRecompute(ctx, allPlans);
         await writeJournal(ctx, {
           ...plan.journal,
-          operations: allPlans.flatMap((p) => p.journal.operations),
+          operations: [...allPlans.flatMap((p) => p.journal.operations), ...recomputeOps],
           inverse: aggregateInverse(allPlans),
         });
       }
@@ -472,6 +492,8 @@ async function executeBatch(
       // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
       // undo-сообщение (undo не порождает нового action — undo неотменяем, §7.8)
       if (internalUndo) {
+        // См. одиночный путь: откату пересчёт предков нужен, журнала у него нет.
+        await applyAncestorRecompute(ctx, plans);
         await internalUndo.writeUndoMessage(tx);
         return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
       }
@@ -483,6 +505,8 @@ async function executeBatch(
         plans.flatMap((p) => (p.budgetHook ? [p.budgetHook] : [])),
       );
       const allPlans = [...plans, ...followUps];
+      // Пересчёт предков — после бюджет-хука (см. одиночный путь).
+      const recomputeOps = await applyAncestorRecompute(ctx, allPlans);
       // Обычный batch: ОДИН action на весь batch, id = batch_id; inverse — в обратном
       // порядке исполнения (§7.8). PK audit-сообщения — batchAuditMessageId.
       const action: ActionRecord = {
@@ -497,7 +521,7 @@ async function executeBatch(
         ...(req.actorGrantId !== undefined && { actor_grant_id: req.actorGrantId }),
         ...(req.runId !== undefined && { run_id: req.runId }),
         ...(req.editedFrom !== undefined && { edited_from: req.editedFrom }),
-        operations: allPlans.flatMap((p) => p.journal.operations),
+        operations: [...allPlans.flatMap((p) => p.journal.operations), ...recomputeOps],
         inverse: aggregateInverse(allPlans),
       };
       await sink.write(tx, {
@@ -755,6 +779,38 @@ async function writeJournal(ctx: ExecCtx, p: JournalPlan): Promise<void> {
 /** Inverse планов в порядке отката: обратный порядок исполнения, внутри плана — тоже (§7.8). */
 function aggregateInverse(plans: readonly PreparedOp[]): ActionOperation[] {
   return [...plans].reverse().flatMap((p) => [...p.journal.inverse].reverse());
+}
+
+/**
+ * Пересчёт вычисляемых предков (§А8, правило `nearest_ancestor`) — ПОСЛЕ применения всех
+ * операций и ТЕМ ЖЕ tx: значения обязаны быть согласованы с графом на момент коммита, а не
+ * «когда-нибудь потом» фоновой задачей.
+ *
+ * Зовётся и во внутреннем режиме undo, в отличие от бюджет-хука: откат правки ребра
+ * восстанавливает рёбра, и предки обязаны сойтись с восстановленным графом. Именно поэтому
+ * у пересчёта НЕТ inverse (см. ниже): «отменить пересчёт» — это пересчитать заново.
+ *
+ * Возвращает строки журнала: одну, если что-то действительно пересчиталось, и ни одной
+ * иначе. Пустая строка «пересчитано 0» была бы шумом в каждом действии владельца.
+ */
+async function applyAncestorRecompute(
+  ctx: ExecCtx,
+  plans: readonly PreparedOp[],
+): Promise<ActionOperation[]> {
+  const roots = plans.flatMap((p) => p.ancestorRoots ?? []);
+  if (roots.length === 0) return [];
+  const { recomputed } = await recomputeProjectAncestors(
+    ctx.tx,
+    ctx.req.actorUserId,
+    roots,
+    ctx.registry,
+  );
+  if (recomputed === 0) return [];
+  // Половина «operations» у этой строки есть, половины «inverse» — нет, и это ЗАКОННОЕ
+  // исключение из §7.8, а не пропуск: откат восстанавливает рёбра, а по ним пересчёт
+  // повторяется сам (см. вызов из ветки internalUndo). Обратная операция «вернуть прежние
+  // значения кэша» была бы вторым источником правды о том, что и так выводится из графа.
+  return [{ op: 'props_recomputed', payload: { rule: ANCESTORS_RULE_ID, recomputed } }];
 }
 
 /** Данные аспект-ключа изменились операцией (стабильно для одинаковых объектов). */
@@ -1710,6 +1766,7 @@ async function prepareEntityUpdate(
   return {
     journal,
     budgetHook: { before: current, after: afterRow },
+    ...ancestorRootsOnProjectChange(input.id, before, state),
     // Стадия 5
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const updated = await applyCtx.tx
@@ -1860,6 +1917,7 @@ async function prepareAttach(
   return {
     journal,
     budgetHook: { before: current, after: afterRow },
+    ...ancestorRootsOnProjectChange(input.entity_id, before, state),
     // Стадия 5
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const updated = await applyCtx.tx
@@ -1872,6 +1930,25 @@ async function prepareAttach(
       return { result: toWire(row) };
     },
   };
+}
+
+/**
+ * Сущность СТАЛА проектом или перестала им быть — значит у всего, что под ней, сменился
+ * ближайший проект (§А8). Один резолв на оба пути появления аспекта (attach и entity_update):
+ * разъехавшись, они дали бы пересчёт по одному входу и молчание по другому.
+ *
+ * `entity_create` сюда не входит намеренно: у только что созданной сущности нет ни детей,
+ * ни родителей, и пересчитывать под ней нечего. Ребро, созданное тем же batch, приносит
+ * свой корень само.
+ */
+function ancestorRootsOnProjectChange(
+  entityId: string,
+  before: EntityState,
+  after: EntityState,
+): { ancestorRoots?: string[] } {
+  const was = before.aspects.includes(PROJECT_ASPECT);
+  const is = after.aspects.includes(PROJECT_ASPECT);
+  return was === is ? {} : { ancestorRoots: [entityId] };
 }
 
 /**
@@ -2055,8 +2132,9 @@ async function prepareRelationCreate(
   await assertNoDuplicateRelation(ctx.tx, ctx.registry, key, batch?.graph());
   // ВТОРАЯ ПОЛОВИНА «одного budget-parent» — та, которой ограничение роли не покрывает
   // (§4.2/§13.7, интервал до 0017). Условие применимости — дословно прежнее: ребро от
-  // конверта к транзакции, проецирующееся в старый `parent`. Ролью здесь ничего не решается
-  // именно потому, что считают ЕЩЁ НЕ переведённые агрегаты.
+  // конверта к транзакции, проецирующееся в старый `parent`. Одной ролью здесь ничего не
+  // решается потому, что то же множество считают агрегаты (`spentByEnvelope`) и хук
+  // привязки: сузь его здесь — и владелец увидит одну трату в двух конвертах.
   const sourceHasBudget = hasAspect(source, 'orbis/budget');
   if (
     sourceHasBudget &&
@@ -2096,6 +2174,11 @@ async function prepareRelationCreate(
 
   return {
     journal,
+    // Предок меняется у ЦЕЛИ ребра и всего, что под ней: «родитель → ребёнок» — это
+    // source → target (§6). У неиерархической роли предки не меняются вовсе.
+    ...(ctx.registry.roles.get(key.role)?.hierarchical === true && {
+      ancestorRoots: [key.targetId],
+    }),
     // Стадия 5: вставка; повтор под гонкой — 23505 rel_uniq → структурированная
     // INVARIANT/duplicate_relation, не 500 (§4.2)
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
@@ -2236,6 +2319,10 @@ async function prepareRelationDelete(
 
   return {
     journal,
+    // Снятое иерархическое ребро сдвигает предков того же поддерева, что и созданное.
+    ...(ctx.registry.roles.get(key.role)?.hierarchical === true && {
+      ancestorRoots: [key.targetId],
+    }),
     // Стадия 5: DELETE по паре концов и роли (строка под замком стадии 3 либо вставлена
     // этим же batch)
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {

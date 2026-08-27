@@ -2638,7 +2638,7 @@ async function describeOperations(
     if (op.tool === 'entity_create') {
       rows.push(createRow(index, op.input));
     } else if (op.tool === 'relation_create' || op.tool === 'relation_delete') {
-      rows.push(relationRow(index, op, titles));
+      rows.push(relationRow(reg, index, op, titles));
     } else if (op.tool === 'entity_update') {
       rows.push(...updateRows(reg, index, op.input, titles, bodies.get(index)));
     } else {
@@ -2666,7 +2666,14 @@ function createRow(index: number, input: Record<string, unknown>): ProposalOpera
   };
 }
 
+/**
+ * Строка предложения о связи. Роль подписывает РЕЕСТР (Ч10-С3), а не её id: владелец читает
+ * «Связь Тикет: …», а не «Связь ticket: …», и своя роль владельца подписывается тем же
+ * движением. Фолбэк на id — для роли, которой в реестре уже нет (предложение переживает
+ * правку реестра): показать id честнее, чем спрятать строку или соврать чужим словом.
+ */
 function relationRow(
+  reg: RegistrySnapshot,
   index: number,
   op: StoredOperation,
   titles: ReadonlyMap<string, string>,
@@ -2681,7 +2688,7 @@ function relationRow(
     index,
     tool: op.tool,
     entity: { id: sourceId, title: from },
-    summary: `${verb} ${role}: «${from}» → «${to}»`,
+    summary: `${verb} ${reg.roles.get(role)?.label.ru ?? role}: «${from}» → «${to}»`,
   };
 }
 

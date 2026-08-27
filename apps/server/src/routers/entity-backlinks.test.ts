@@ -1,9 +1,10 @@
 // apps/server/src/routers/entity-backlinks.test.ts
 // Task D5 (02-core-os §3.5.8, sign-off владельца K1): отдельной процедуры entity.backlinks
 // НЕТ — расширен существующий include:['backlinks'] в entity-read.ts. Секция объединённая:
-// явные related_to обеих сторон (via 'relation') + упоминания по body_refs (via 'mention'),
-// без архивных, потолок 100. Контракт readEntity общий с LLM/MCP-диспатчем (tools/dispatch),
-// поэтому форма ответа пиннится здесь.
+// явные связи роли `mention` обеих сторон (via 'relation') + упоминания по body_refs
+// (via 'mention'), без архивных, потолок 100, подпись направления — из реестра ролей.
+// Контракт readEntity общий с LLM/MCP-диспатчем (tools/dispatch), поэтому форма ответа
+// пиннится здесь.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -32,7 +33,7 @@ function viaById(backlinks: { entity: { id: string }; via: string }[] | undefine
   return new Map((backlinks ?? []).map((b) => [b.entity.id, b.via]));
 }
 
-test('backlinks: явные related_to обеих сторон + упоминания body_refs с пометкой источника', async () => {
+test('backlinks: связи роли mention обеих сторон + упоминания body_refs с пометкой источника', async () => {
   const user = freshUserId();
   const caller = callerFor(user);
   const target = await caller.entity.create({
@@ -82,6 +83,78 @@ test('backlinks: явные related_to обеих сторон + упомина�
   expect(via.size).toBe(3);
   // Список поместился целиком — признака усечения нет (DF п.4)
   expect(got.backlinksTruncated).toBeUndefined();
+});
+
+test('backlinks: секция «Связанное» подписывает направление из реестра ролей', async () => {
+  const user = freshUserId();
+  const caller = callerFor(user);
+  const target = await caller.entity.create({
+    input: { title: 'Цель подписей', tags: [] },
+    source: 'fast_path',
+  });
+  const mentions = await caller.entity.create({
+    input: { title: 'Тот, кто сослался', tags: [] },
+    source: 'fast_path',
+  });
+  const mentioned = await caller.entity.create({
+    input: { title: 'Тот, на кого сослались', tags: [] },
+    source: 'fast_path',
+  });
+  const inBody = await caller.entity.create({
+    input: { title: 'Упомянувший телом', tags: [], body: `см. [[entity:${target.id}]]` },
+    source: 'fast_path',
+  });
+  await caller.relation.create({ source_id: mentions.id, target_id: target.id, role: 'mention' });
+  await caller.relation.create({ source_id: target.id, target_id: mentioned.id, role: 'mention' });
+
+  const got = await caller.entity.get({ id: target.id, include: ['backlinks'] });
+  const labels = new Map((got.backlinks ?? []).map((b) => [b.entity.id, b.viaLabel]));
+  // Подписи — ИЗ РЕЕСТРА (builtin-roles: source_label/target_label роли `mention`),
+  // а не из словаря клиента: у web своего словаря направлений больше нет.
+  expect(labels.get(mentions.id)).toBe('Упоминает');
+  expect(labels.get(mentioned.id)).toBe('Упомянуто');
+  // У ссылки из тела роли нет вовсе — её подпись общая
+  expect(labels.get(inBody.id)).toBe('упоминание');
+
+  // Своя строка реестра перекрывает встроенную — подпись едет из неё
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    await admin.execute(sql`
+      INSERT INTO relation_role_definitions
+        (id, owner_id, key, label, description, source_label, target_label,
+         hierarchical, constraints, "symmetric", module, rank)
+      SELECT id, ${user}::uuid, key, label, description,
+             '{"ru":"Ссылается на нас"}'::jsonb, target_label,
+             hierarchical, constraints, "symmetric", module, rank
+        FROM relation_role_definitions WHERE id = 'mention' AND owner_id IS NULL`);
+  } finally {
+    await adminClient.end();
+  }
+  const after = await caller.entity.get({ id: target.id, include: ['backlinks'] });
+  expect(after.backlinks?.find((b) => b.entity.id === mentions.id)?.viaLabel).toBe(
+    'Ссылается на нас',
+  );
+});
+
+// Обе стороны одной пары — это ОДНА строка секции, а не две: направления сворачиваются
+// до объединения источников, иначе взаимное упоминание раздваивало бы запись в списке.
+test('backlinks: взаимное упоминание — одна строка, подпись входящего направления', async () => {
+  const user = freshUserId();
+  const caller = callerFor(user);
+  const target = await caller.entity.create({
+    input: { title: 'Взаимная цель', tags: [] },
+    source: 'fast_path',
+  });
+  const both = await caller.entity.create({
+    input: { title: 'Взаимный сосед', tags: [] },
+    source: 'fast_path',
+  });
+  await caller.relation.create({ source_id: both.id, target_id: target.id, role: 'mention' });
+  await caller.relation.create({ source_id: target.id, target_id: both.id, role: 'mention' });
+
+  const got = await caller.entity.get({ id: target.id, include: ['backlinks'] });
+  expect(got.backlinks?.map((b) => b.entity.id)).toEqual([both.id]);
+  expect(got.backlinks?.[0]?.viaLabel).toBe('Упоминает');
 });
 
 test('backlinks: и связь, и упоминание одной сущностью → одна строка с пометкой «связь»', async () => {

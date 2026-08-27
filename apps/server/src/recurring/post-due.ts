@@ -14,6 +14,7 @@ import type { Db } from '../db/client';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { ROLE_INSTANCE_OF } from '../executor/relations';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -52,7 +53,7 @@ export async function postDueInstances(deps: PostDueDeps): Promise<{ posted: num
         AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${today}
         AND EXISTS (
           SELECT 1 FROM relations r
-          WHERE r.target_id = e.id AND r.relation_type = 'derived_from'
+          WHERE r.target_id = e.id AND r.role = ${ROLE_INSTANCE_OF}
         )
       ORDER BY e.aspects_legacy->'orbis/financial'->>'occurred_on', e.id
     `)) as unknown as Array<{ id: string }>;

@@ -297,6 +297,90 @@ afterAll(async () => {
   await client.end();
 });
 
+/**
+ * ИНТЕРВАЛ 7a→0017 (урок C1 Задачи 7a). Конвертом-родителем транзакции до contract-миграции
+ * считается ЛЮБАЯ связь от конверта, проецирующаяся в старый `parent`, — так её видят и хук
+ * привязки (`budgetParentsOfMany`), и инвариант «один budget-parent»
+ * (`assertSingleLegacyBudgetParent`). Агрегаты обязаны считать ТО ЖЕ множество: сузив их до
+ * одной роли `envelope-binding`, мы получили бы расход, которого владелец в конверте не
+ * видит, и «свободно» больше реального.
+ *
+ * Проба идёт ролью `subitem` — той самой, которой владелец связывает записи руками.
+ */
+describe('множество «конверт-родитель» на интервале до 0017 (§13.7)', () => {
+  const userC = freshUserId();
+  const catC = seedCategoryId(userC, 'food');
+  const catOther = seedCategoryId(userC, 'entertainment');
+  let envC = '';
+  let txnManual = '';
+
+  beforeAll(async () => {
+    await withIdentity(db, userC, (tx) => seedOnboarding(tx, userC));
+    envC = (await exec(userC, 'entity_create', envelope(catC, cmStart, cmEnd, '10000.00'))).id;
+    // Транзакция ЧУЖОЙ категории — авто-привязка (A4) её к этому конверту не ставит…
+    txnManual = (await exec(userC, 'entity_create', txn(catOther, '700.00', today))).id;
+    // …а владелец связывает её с конвертом руками, обычной иерархической ролью
+    await exec(userC, 'relation_create', {
+      source_id: envC,
+      target_id: txnManual,
+      role: 'subitem',
+    });
+  });
+
+  test('связь роли владельца от конверта к транзакции входит в spent конверта', async () => {
+    const ov = await budgetOverview(db, userC, curMonth);
+    expect(envById(ov, envC).spent).toBe('700.00');
+  });
+
+  test('та же связь выводит транзакцию из unbudgeted: у обоих читателей одно множество', async () => {
+    const ov = await budgetOverview(db, userC, curMonth);
+    expect(ov.unbudgeted.map((u) => u.category.id)).not.toContain(catOther);
+  });
+
+  // НАЗВАННАЯ ПЕРЕМЕНА реформы (§А4-3): дерево категорий §2.10 собирает роль
+  // `category-parent`, а не любая связь, проецировавшаяся в старый `parent`. «Часть внутри
+  // целого» между двумя категориями связью остаётся, но родительскую карточку не наполняет.
+  test('дерево категорий собирает только роль category-parent: subitem между категориями агрегат не наполняет', async () => {
+    const top = (
+      await exec(userC, 'entity_create', {
+        title: 'Верхняя категория',
+        tags: [],
+        aspects: { 'orbis/category': { spend_class: 'discretionary' } },
+      })
+    ).id;
+    const nested = (
+      await exec(userC, 'entity_create', {
+        title: 'Вложенная категория',
+        tags: [],
+        aspects: { 'orbis/category': { spend_class: 'discretionary' } },
+      })
+    ).id;
+    await exec(userC, 'relation_create', { source_id: top, target_id: nested, role: 'subitem' });
+    const envTop = (await exec(userC, 'entity_create', envelope(top, cmStart, cmEnd, '5000.00')))
+      .id;
+    const envNested = (
+      await exec(userC, 'entity_create', envelope(nested, cmStart, cmEnd, '4000.00'))
+    ).id;
+    await exec(userC, 'entity_create', txn(nested, '1500.00', today));
+
+    const ov = await budgetOverview(db, userC, curMonth);
+    expect(envById(ov, envNested).spent).toBe('1500.00');
+    // Роль связи — не `category-parent`, значит для §2.10 это НЕ дерево
+    expect(envById(ov, envTop).spent).toBe('0.00');
+    expect(envById(ov, envTop).effectiveLimit).toBe('5000.00');
+  });
+
+  test('связь от НЕ-конверта конвертом-родителем не делает: в spent её нет', async () => {
+    const plain = (await exec(userC, 'entity_create', { title: 'Просто запись', tags: [] })).id;
+    const free = (await exec(userC, 'entity_create', txn(catOther, '900.00', today))).id;
+    await exec(userC, 'relation_create', { source_id: plain, target_id: free, role: 'subitem' });
+    const ov = await budgetOverview(db, userC, curMonth);
+    expect(envById(ov, envC).spent).toBe('700.00');
+    // …и она осталась unbudgeted — родителя-конверта у неё нет
+    expect(ov.unbudgeted.map((u) => u.category.id)).toContain(catOther);
+  });
+});
+
 describe('budget.overview: spent и формулы конверта (§2.2, §2.4)', () => {
   test('spent — только факт-расходы своей валюты до сегодня; carryover входит в effectiveLimit', async () => {
     const ov = await budgetOverview(db, userA, curMonth);

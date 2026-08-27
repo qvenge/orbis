@@ -11,13 +11,21 @@ import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers'
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
-import { activeRoutines, routineById, runSummary, runsForBucket, runsOfParent } from './queries';
+import {
+  activeRoutines,
+  parentProject,
+  routineById,
+  runSummary,
+  runsForBucket,
+  runsOfParent,
+  ticketOfRun,
+} from './queries';
 
 requireEnv();
 
 const { db, client } = appDb();
 const MINUTE = 60_000;
-const { seedEntity, link, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
+const { seedEntity, link, propsOf, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
 
 beforeAll(async () => {
   await truncateAll();
@@ -88,6 +96,103 @@ describe('runsOfParent: прогоны родителя — и тикета, и 
 
     const rows = await withIdentity(db, owner, (tx) => runsOfParent(tx, routineId));
     expect(rows.map((r) => r.id)).toEqual([a.runId, b.runId]);
+  });
+});
+
+describe('parentProject / ticketOfRun: проект и тикет через роли (§А4-3)', () => {
+  test('очередь исполнителя: тикеты по роли ticket/run; parentProject → props.orbis/parent_project', async () => {
+    const owner = freshUserId();
+    const project = await seedEntity(owner, {
+      title: 'Проект очереди',
+      tags: [],
+      body: 'Процесс проекта',
+      aspects: { 'orbis/project': { stage: 'active' } },
+    });
+    const ticket = await seedEntity(owner, {
+      title: 'Тикет очереди',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'planned' } },
+    });
+    await link(owner, project.id, ticket.id, 'ticket');
+    const run = await seedRoutineRun(owner, { routineId: ticket.id, bucket: '2026-08-27T07:00' });
+
+    const got = await withIdentity(db, owner, async (tx) => ({
+      project: await parentProject(tx, ticket.id),
+      runs: await runsOfParent(tx, ticket.id),
+      ticketOf: await ticketOfRun(tx, run.runId),
+    }));
+    expect(got.project).toEqual({
+      id: project.id,
+      title: 'Проект очереди',
+      body: 'Процесс проекта',
+    });
+    // Ровно то же значение лежит на тикете вычисленным (§А8): у очереди и у графа один ответ
+    expect((await propsOf(owner, ticket.id))['orbis/parent_project']).toBe(project.id);
+    expect(got.runs.map((r) => r.id)).toEqual([run.runId]);
+    expect(got.ticketOf?.id).toBe(ticket.id);
+  });
+
+  test('тикет ЧЕРЕЗ подзадачу: проект находится по вычисленному предку, а не по одному ребру', async () => {
+    const owner = freshUserId();
+    const project = await seedEntity(owner, {
+      title: 'Проект в глубину',
+      tags: [],
+      aspects: { 'orbis/project': { stage: 'active' } },
+    });
+    const middle = await seedEntity(owner, { title: 'Промежуточная задача', tags: [] });
+    const ticket = await seedEntity(owner, {
+      title: 'Глубокий тикет',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'planned' } },
+    });
+    await link(owner, project.id, middle.id, 'subitem');
+    await link(owner, middle.id, ticket.id, 'subitem');
+
+    const got = await withIdentity(db, owner, (tx) => parentProject(tx, ticket.id));
+    expect(got?.id).toBe(project.id);
+  });
+
+  // Проектов над тикетом бывает несколько: очередь показывает БЛИЖАЙШИЙ («в каком проекте
+  // я работаю»), а не самый верхний — иначе исполнитель получил бы процесс не той затеи.
+  test('под подпроектом внутри проекта очередь показывает БЛИЖАЙШИЙ проект, не корневой', async () => {
+    const owner = freshUserId();
+    const top = await seedEntity(owner, {
+      title: 'Корневой проект',
+      tags: [],
+      body: 'Процесс корня',
+      aspects: { 'orbis/project': { stage: 'active' } },
+    });
+    const sub = await seedEntity(owner, {
+      title: 'Подпроект',
+      tags: [],
+      body: 'Процесс подпроекта',
+      aspects: { 'orbis/project': { stage: 'active' } },
+    });
+    const ticket = await seedEntity(owner, {
+      title: 'Тикет подпроекта',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'planned' } },
+    });
+    await link(owner, top.id, sub.id, 'subitem');
+    await link(owner, sub.id, ticket.id, 'ticket');
+
+    const got = await withIdentity(db, owner, (tx) => parentProject(tx, ticket.id));
+    expect(got).toEqual({ id: sub.id, title: 'Подпроект', body: 'Процесс подпроекта' });
+    // …и корневой при этом посчитан тоже — но живёт в СВОЁМ свойстве
+    const props = await propsOf(owner, ticket.id);
+    expect(props['orbis/root_project']).toBe(top.id);
+  });
+
+  test('тикет без проекта над собой — законный случай: null, а не отказ', async () => {
+    const owner = freshUserId();
+    const parent = await seedEntity(owner, { title: 'Просто задача', tags: [] });
+    const ticket = await seedEntity(owner, {
+      title: 'Личный тикет',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'planned' } },
+    });
+    await link(owner, parent.id, ticket.id, 'subitem');
+    expect(await withIdentity(db, owner, (tx) => parentProject(tx, ticket.id))).toBeNull();
   });
 });
 

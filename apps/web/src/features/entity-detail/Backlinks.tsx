@@ -3,13 +3,14 @@ import type { RouterOutputs } from '../../trpc';
 
 type Backlink = NonNullable<RouterOutputs['entity']['get']['backlinks']>[number];
 
-// Пометка источника (02-core-os §3.5.8): явная related_to-связь или упоминание в теле.
-const VIA_LABEL: Record<string, string> = { relation: 'связь', mention: 'упоминание' };
-
 /**
  * Секция 8 «Связанное (backlinks)» — ОДНА секция из двух источников: сервер отдаёт их
- * готовым списком в entity.get(include:['backlinks']) с пометкой via, поэтому титулы
- * здесь не дочитываются (в отличие от блокировок). Пустая секция скрыта (§3.5).
+ * готовым списком в entity.get(include:['backlinks']) с ГОТОВОЙ подписью направления,
+ * поэтому титулы здесь не дочитываются (в отличие от блокировок). Пустая секция скрыта (§3.5).
+ *
+ * Своего словаря направлений у клиента больше нет (Ч10-С3): подпись даёт реестр ролей
+ * (`source_label`/`target_label`), и своя роль владельца подписывается сама собой — а
+ * словарь в клиенте показал бы у неё чужое слово или голый id.
  *
  * truncated — сервер упёрся в потолок выборки (DF п.4): счётчик показывается как «N+»,
  * иначе «Связанное (100)» читалось бы как точное число связей (урок C6).
@@ -26,7 +27,7 @@ export function Backlinks({ items, truncated }: { items: Backlink[]; truncated: 
         {truncated ? '+' : ''})
       </p>
       <ul className="flex flex-col">
-        {items.map(({ entity, via }) => (
+        {items.map(({ entity, viaLabel }) => (
           <li
             key={entity.id}
             data-testid="backlink"
@@ -40,7 +41,7 @@ export function Backlinks({ items, truncated }: { items: Backlink[]; truncated: 
             >
               {entity.title}
             </button>
-            <span className="shrink-0 text-2xs text-text-muted">{VIA_LABEL[via] ?? via}</span>
+            <span className="shrink-0 text-2xs text-text-muted">{viaLabel}</span>
           </li>
         ))}
       </ul>

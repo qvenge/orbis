@@ -64,7 +64,7 @@ const sugg = (e: ReturnType<typeof ent>) => ({
 
 type Fixture = {
   relations?: ReturnType<typeof rel>[];
-  backlinks?: { entity: ReturnType<typeof ent>; via: string }[];
+  backlinks?: { entity: ReturnType<typeof ent>; via: string; viaLabel: string }[];
   backlinksTruncated?: boolean;
   onRelationCreate?: () => unknown;
   onRelationDelete?: () => unknown;
@@ -443,13 +443,16 @@ test('пикер: закрытая задача не предлагается б
   expect(screen.getByRole('button', { name: 'Найденная сущность' })).toBeInTheDocument();
 });
 
-test('backlinks: одна секция, пометка источника «связь» / «упоминание»', async () => {
+// Подпись направления приходит ГОТОВОЙ с сервера (реестр ролей, Ч10-С3): клиент её только
+// печатает. Своего словаря `via → слово` у секции больше нет, и подписи здесь — те, что
+// реально отдаёт entity-read.ts (`source_label.ru` роли `mention` и «упоминание» у body_refs).
+test('backlinks: одна секция, подпись направления — та, что прислал сервер', async () => {
   renderWithProviders(
     <DetailScreen entityId="e1" />,
     handler({
       backlinks: [
-        { entity: ent('l1', 'Явная связь'), via: 'relation' },
-        { entity: ent('m1', 'Упомянувшая заметка'), via: 'mention' },
+        { entity: ent('l1', 'Явная связь'), via: 'relation', viaLabel: 'Упоминает' },
+        { entity: ent('m1', 'Упомянувшая заметка'), via: 'mention', viaLabel: 'упоминание' },
       ],
     }),
   );
@@ -458,7 +461,7 @@ test('backlinks: одна секция, пометка источника «св
   expect(screen.getByText('Упомянувшая заметка')).toBeInTheDocument();
   // Список поместился целиком — счётчик точный, без «+»
   expect(screen.getByText('Связанное (2)')).toBeInTheDocument();
-  expect(screen.getByText('связь')).toBeInTheDocument();
+  expect(screen.getByText('Упоминает')).toBeInTheDocument();
   expect(screen.getByText('упоминание')).toBeInTheDocument();
 });
 
@@ -524,7 +527,7 @@ test('backlinks: усечённый список показан как «+», а
   renderWithProviders(
     <DetailScreen entityId="e1" />,
     handler({
-      backlinks: [{ entity: ent('l1', 'Явная связь'), via: 'relation' }],
+      backlinks: [{ entity: ent('l1', 'Явная связь'), via: 'relation', viaLabel: 'Упоминает' }],
       backlinksTruncated: true,
     }),
   );

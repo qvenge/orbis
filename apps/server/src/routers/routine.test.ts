@@ -1073,6 +1073,36 @@ describe('routine.proposal / decideProposal', () => {
     expect(action?.edited_from).toBe(pendingId);
   });
 
+  test('строка предложения о связи подписана РОЛЬЮ ИЗ РЕЕСТРА, а не её id (Ч10-С3)', async () => {
+    const routineId = await seedRoutine(owner, { title: 'Рутина связей' });
+    const parentId = await seedTask('Родитель связи');
+    const childId = await seedTask('Ребёнок связи');
+    const runId = routineRunId(routineId, MANUAL_BUCKET, 1);
+    const provider = new ScriptedProvider([
+      toolUse([
+        {
+          name: 'orbis_propose',
+          input: {
+            run_id: runId,
+            explanation: EXPLANATION,
+            operations: [
+              {
+                tool: 'relation_create',
+                input: { source_id: parentId, target_id: childId, role: 'subitem' },
+              },
+            ],
+          },
+        },
+      ]),
+    ]);
+    await callerWith(provider).routine.runNow({ routineId });
+    expect((await waitClosed(runId)).outcome).toBe('finished');
+
+    const view = await caller().routine.proposal({ runId });
+    // Русская подпись роли `subitem` из встроенного реестра — «Подпункт»
+    expect(view?.operations[0]?.summary).toBe('Связь Подпункт: «Родитель связи» → «Ребёнок связи»');
+  });
+
   test('сводка предложения считает те же строки, что покажет proposalView — и у исходного, и у правленого (смоук 4.6.1)', async () => {
     /**
      * Страж против ДВУХ ЧИСЕЛ У ОДНОГО ПРЕДЛОЖЕНИЯ. Сводку («2 правки») пишет составление
