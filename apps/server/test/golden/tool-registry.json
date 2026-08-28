@@ -1382,17 +1382,6 @@
                 "kind": "text"
               },
               "description": "Контрагент — Кому заплачено или от кого получено"
-            },
-            "orbis/bank_txn_id": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 128,
-              "x-orbis-type": {
-                "kind": "text",
-                "minLength": 1,
-                "maxLength": 128
-              },
-              "description": "Идентификатор операции банка — Тождество операции в выписке банка — по нему ловится повтор при импорте"
             }
           },
           "required": ["orbis/amount", "orbis/direction", "orbis/finance_category"],
@@ -1532,14 +1521,6 @@
                 "kind": "date"
               },
               "description": "Конец периода — По какой день конверт считает включительно"
-            },
-            "orbis/carryover": {
-              "type": "string",
-              "pattern": "^-?\\d+(\\.\\d+)?$",
-              "x-orbis-type": {
-                "kind": "decimal"
-              },
-              "description": "Перенос остатка — Остаток прошлого периода, перенесённый в этот"
             }
           },
           "required": [
@@ -2720,18 +2701,6 @@
                 "exclusiveMin": "0"
               },
               "description": "Целевое значение — Число, к которому цель идёт"
-            },
-            "orbis/current_value": {
-              "type": "string",
-              "pattern": "^-?\\d+(\\.\\d+)?$",
-              "x-orbis-decimal": {
-                "min": "0"
-              },
-              "x-orbis-type": {
-                "kind": "decimal",
-                "min": "0"
-              },
-              "description": "Текущее значение — Насколько цель продвинулась на сейчас"
             },
             "orbis/unit": {
               "type": "string",

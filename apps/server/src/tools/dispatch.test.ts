@@ -87,6 +87,14 @@ async function propsOfRowA(id: string, owner = userA): Promise<Record<string, un
   return (rows[0]?.props ?? {}) as Record<string, unknown>;
 }
 
+/** Заголовок строки под identity владельца — проба «отказ случился ДО исполнения». */
+async function titleOfRowA(id: string, owner = userA): Promise<string | undefined> {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.select({ title: entities.title }).from(entities).where(eq(entities.id, id)),
+  );
+  return rows[0]?.title;
+}
+
 /** Список интерпретаций строки — вторая половина новой правды. */
 async function aspectsOfRowA(id: string, owner = userA): Promise<string[]> {
   const rows = await withIdentity(db, owner, (tx) =>
@@ -433,6 +441,54 @@ describe('LLM-контракты entity_create/entity_update на свойств
     if (foreign.status === 'error') {
       expect((foreign.error.details as { nearest?: string }).nearest).toBeUndefined();
     }
+  });
+
+  test('unset с опечаткой → VALIDATION UNKNOWN_PROPERTY: граница — ЕДИНСТВЕННАЯ защита снятия', async () => {
+    // Дальше по конвейеру опечатка в `unset` — МОЛЧАЛИВЫЙ УСПЕХ: гейт прав пропускает
+    // неизвестный id (`writeDenial` его не знает), `applyPropsPatch` удаляет ключ, которого
+    // нет, а валидатор видит валидное состояние. То есть у второй половины патча нет ни
+    // одного рубежа, кроме этой границы, — и `props`-ветка её не заменяет.
+    const target = await seedEntity(userA, {
+      title: 'Цель опечатки в unset',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'waiting', waiting_for: 'курьера' } },
+    });
+
+    const typo = await dispatchTool(ctxFor(), 'entity_update', {
+      id: target.id,
+      unset: ['orbis/waiting_fo'],
+    });
+    expectError(typo, 'VALIDATION');
+    if (typo.status !== 'error') return;
+    const details = typo.error.details as { reason?: string; property?: string; nearest?: string };
+    expect(details.reason).toBe('UNKNOWN_PROPERTY');
+    expect(details.property).toBe('orbis/waiting_fo');
+    expect(details.nearest).toBe('orbis/waiting_for');
+
+    // Обе стороны границы в одной фикстуре: ПРАВИЛЬНОЕ имя в том же `unset` проходит и
+    // действительно снимает значение — иначе «отказ» был бы отказом чему угодно.
+    expect((await propsOfRowA(target.id))['orbis/waiting_for']).toBe('курьера');
+    const ok = await dispatchTool(ctxFor(), 'entity_update', {
+      id: target.id,
+      unset: ['orbis/waiting_for'],
+    });
+    expect(ok.status).toBe('ok');
+    expect((await propsOfRowA(target.id))['orbis/waiting_for']).toBeUndefined();
+
+    // И в batch та же граница: `unset` вложенной операции проверяется наравне с верхней.
+    const inBatch = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id: target.id, title: 'Переименование' } },
+        { tool: 'entity_update', input: { id: target.id, unset: ['orbis/waiting_fo'] } },
+      ],
+    });
+    expectError(inBatch, 'VALIDATION');
+    if (inBatch.status === 'error') {
+      expect((inBatch.error.details as { reason?: string }).reason).toBe('UNKNOWN_PROPERTY');
+    }
+    // Отказ ДО исполнения: заголовок соседней операции батча не поехал.
+    expect(await titleOfRowA(target.id)).toBe('Цель опечатки в unset');
   });
 
   test('entity_update: unset снимает значение, aspects.detach снимает аспект — значения остаются (Р9)', async () => {

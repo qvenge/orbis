@@ -15,7 +15,7 @@
  * `kind` здесь нет и быть не должно — вторая правда о том, что такое `decimal` или `select`,
  * разошлась бы с валидатором записи молча.
  */
-import type { AspectDefinition, PropertyDefinition } from './property-type';
+import { type AspectDefinition, type PropertyDefinition, writableFromTool } from './property-type';
 import { effectiveLabel } from './types';
 import { propertyValueJsonSchema } from './value-schema';
 
@@ -62,7 +62,21 @@ function parameterDescription(def: PropertyDefinition, locale: string): string {
  *
  * ПОРЯДОК свойств — по `rank` ссылки аспекта (§Б7-3): JSON сохраняет порядок вставки, и
  * модель читает поля в том же порядке, в каком их видит владелец на форме. Сортировка
- * СТАБИЛЬНАЯ (`toSorted` по `rank`) — при равных `rank` порядок остаётся объявленным.
+ * СТАБИЛЬНАЯ (копия через `[...]` и `Array.prototype.sort`, который в ES2019+ стабилен) —
+ * при равных `rank` порядок остаётся объявленным.
+ *
+ * СЛУЖЕБНЫЕ И ВЫЧИСЛЯЕМЫЕ СВОЙСТВА В СХЕМУ НЕ ПОПАДАЮТ (§А2-5, №33). `system_writable`
+ * (`orbis/bank_txn_id` — пишет импорт, `orbis/carryover` — правило rollover, поля прогона —
+ * глаголы) и `model_writable: false` (`orbis/current_value` — кэш вычисления) тулу недоступны
+ * по построению: назвав их в `data`, модель получает гарантированный `COMPUTED_WRITE`.
+ * Спека вынесла их из `attach_*` ровно затем, чтобы ПОВЕРХНОСТЬ НЕ ОБЕЩАЛА ЗАПРЕЩЁННОГО, —
+ * предикат один на shared (`writableFromTool`) и сверен с гейтом прав тестом.
+ *
+ * Обязательность при этом не подделывается: отфильтрованное свойство не попадает и в
+ * `required`. Служебных ОБЯЗАТЕЛЬНЫХ полей у неслужебных аспектов нет (все пять
+ * обязательных `system_writable` — у `orbis/agent-run`, а он тула не получает вовсе), так
+ * что неисполнимого тула эта ветка породить не может; появись такой аспект — он и должен
+ * быть служебным.
  *
  * Ссылка на свойство, которого нет в снимке, ПРОПУСКАЕТСЯ, а не роняет тул: снимок
  * скоупится RLS и правилами модулей, и аспект, у которого одно поле стало невидимым, обязан
@@ -79,6 +93,7 @@ export function aspectToolJsonSchema(
   for (const ref of [...aspect.properties].sort((a, b) => a.rank - b.rank)) {
     const def = reg.properties.get(ref.propertyId);
     if (def === undefined) continue;
+    if (!writableFromTool(def)) continue;
     properties[def.key] = {
       ...propertyValueJsonSchema(def.type),
       description: parameterDescription(def, locale),

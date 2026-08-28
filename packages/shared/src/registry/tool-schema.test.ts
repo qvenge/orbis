@@ -4,7 +4,7 @@
 import { describe, expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS } from './builtin-aspects';
 import { BUILTIN_PROPERTY_META } from './builtin-properties';
-import type { AspectDefinition } from './property-type';
+import { type AspectDefinition, writableFromTool } from './property-type';
 import { aspectToolJsonSchema, attachToolName, type ToolSchemaRegistry } from './tool-schema';
 import { X_ORBIS_TYPE } from './value-schema';
 
@@ -131,6 +131,52 @@ describe('aspectToolJsonSchema (§А9-1)', () => {
       {}) as Record<string, unknown>;
     expect(Object.keys(props)).not.toContain('orbis/priority');
     expect(Object.keys(props)).toContain('orbis/task_status');
+  });
+
+  test('служебные и вычисляемые свойства В СХЕМУ НЕ ПОПАДАЮТ (§А2-5, №33)', () => {
+    // Спека вынесла их из `attach_*` затем, чтобы поверхность не обещала запрещённого:
+    // назвав такое поле в `data`, модель получает гарантированный `COMPUTED_WRITE`.
+    const financial = Object.keys(propsOf('orbis/financial'));
+    expect(financial).not.toContain('orbis/bank_txn_id'); // system_writable: пишет импорт
+    // Соседние поля того же аспекта на месте — фильтр точечный, а не «выкинули аспект».
+    expect(financial).toContain('orbis/amount');
+    expect(Object.keys(propsOf('orbis/budget'))).not.toContain('orbis/carryover'); // rule
+    // model_writable: false — кэш вычисления, его пишет правило, а не модель.
+    expect(Object.keys(propsOf('orbis/goal'))).not.toContain('orbis/current_value');
+    expect(Object.keys(propsOf('orbis/goal'))).toContain('orbis/target_value');
+
+    // Ни один параметр НИ ОДНОГО встроенного тула не является запрещённым к записи.
+    for (const aspect of BUILTIN_ASPECT_DEFS.filter((a) => !a.service)) {
+      const keys = Object.keys(
+        (aspectToolJsonSchema(aspect, reg, 'ru').properties ?? {}) as Record<string, unknown>,
+      );
+      const forbidden = keys.filter((key) => {
+        const def = BUILTIN_PROPERTY_META.find((p) => p.key === key);
+        return def !== undefined && !writableFromTool(def);
+      });
+      expect(`${aspect.id}: ${forbidden.join(',')}`).toBe(`${aspect.id}: `);
+    }
+    // Проба не вырожденна: запрещённые к записи свойства у этих аспектов ЕСТЬ — они просто
+    // не доезжают до схемы. Иначе цикл выше проходил бы и на генераторе без фильтра.
+    expect(
+      aspectById
+        .get('orbis/financial')
+        ?.properties.map((r) => BUILTIN_PROPERTY_META.find((p) => p.id === r.propertyId))
+        .filter((p) => p !== undefined && !writableFromTool(p))
+        .map((p) => p?.id),
+    ).toEqual(['orbis/bank_txn_id']);
+  });
+
+  test('отфильтрованное свойство не подделывает обязательность: его нет и в required', () => {
+    // Гипотетический аспект, объявивший служебное свойство ОБЯЗАТЕЛЬНЫМ: схема обязана
+    // остаться исполнимой, а не требовать поля, которого в ней нет.
+    const withService: AspectDefinition = {
+      ...aspect('orbis/financial'),
+      properties: [{ propertyId: 'orbis/bank_txn_id', required: true, rank: 1 }],
+    };
+    const schema = aspectToolJsonSchema(withService, reg, 'ru');
+    expect(Object.keys((schema.properties ?? {}) as Record<string, unknown>)).toEqual([]);
+    expect(schema.required).toEqual([]);
   });
 
   test('обязательное свойство вне снимка не попадает и в required (иначе тул неисполним)', () => {

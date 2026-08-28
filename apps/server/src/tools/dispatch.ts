@@ -72,6 +72,8 @@ import {
   entityUpdatePreviewDiff,
   factsFromToolCall,
   grantsRoutineAutonomy,
+  ROUTINE_MODE_PROPERTY,
+  ROUTINE_TOOLS_PROPERTY,
 } from '../policy/confirmation';
 import { createPending, deferDedupeKey, listRunUnits, operationsNoun } from '../policy/pending';
 import {
@@ -1305,13 +1307,6 @@ function rowValue(value: unknown): string {
  */
 const ROUTINE_ASPECT = 'orbis/routine';
 
-/**
- * Свойства доверенности рутины (§А9-1) — те же два адреса, что читает гейт §7.10
- * (`grantsRoutineAutonomy`): сводка карточки обязана называть ровно то, что подняло уровень.
- */
-const ROUTINE_MODE_PROPERTY = 'orbis/routine_mode';
-const ROUTINE_TOOLS_PROPERTY = 'orbis/allowed_tools';
-
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -1699,8 +1694,10 @@ function assertBatchToolsKnown(input: unknown, known: ReadonlySet<string>): Batc
 /**
  * Envelope-схемы мутирующих core-тулов §9.2 (shared) — для структурной валидации ДО
  * классификации §7.10 (fix round Task 5). batch_execute и thread_post здесь не нужны:
- * batch валидируют translateBatchInput + validateBatchOperations, thread_post — своя
- * ветка dispatchTool; ключи — исполнительные имена (у core они совпадают с реестровыми).
+ * batch валидируют `assertBatchToolsKnown` + `validateBatchOperations`, thread_post — своя
+ * ветка dispatchTool. Ключи — имена реестра: с Задачи 12 исполнительная форма им равна
+ * (§А9-1, общая `attachToolName`), и «исполнительных имён» как отдельного словаря больше
+ * не существует.
  */
 const MUTATION_ENVELOPES: Record<string, z.ZodTypeAny> = {
   entity_create: entityCreateInput,
@@ -1727,7 +1724,8 @@ function validateMutationEnvelope(def: OrbisToolDef, input: unknown): unknown {
 /**
  * Структурная валидация вложенных операций batch ДО классификации §7.10 (fix round
  * Task 5): operations[].input проверяется схемой соответствующего мутирующего тула
- * (имена уже в executor-форме после translateBatchInput). Имена, непригодные для batch
+ * (имена — реестровые, они же исполнительные; `assertBatchToolsKnown` уже отверг те, что
+ * реестру неизвестны). Имена, непригодные для batch
  * (read-тулы, thread_post, вложенный batch_execute), не валидируются — их отклоняет
  * стадия 1 executor'а собственной честной ошибкой, валидировать их envelope бессмысленно.
  * Возвращает payload с ПРОВАЛИДИРОВАННЫМИ input'ами операций.

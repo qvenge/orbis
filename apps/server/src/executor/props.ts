@@ -323,8 +323,14 @@ function editDistance(a: string, b: string, cap: number): number {
  *
  * Потолок расстояния — четверть длины и не меньше единицы. Он и есть граница между
  * «опечатка» и «другое слово»: без потолка на `user/сон` нашёлся бы `orbis/amount`, и
- * подсказка уводила бы в сторону увереннее, чем молчание. Из равных побеждает первый в
- * ПОРЯДКЕ РЕЕСТРА (rank объявления) — иначе подсказка плавала бы между вызовами.
+ * подсказка уводила бы в сторону увереннее, чем молчание.
+ *
+ * ИЗ РАВНЫХ ПОБЕЖДАЕТ МЕНЬШИЙ КЛЮЧ ПО АЛФАВИТУ, и это сортировка, а не порядок обхода.
+ * Снимок реестра собран запросом `ORDER BY owner_id` — порядок строк внутри половины БД не
+ * гарантирует вовсе, и обход `Map` в порядке вставки давал бы на двух одинаково близких
+ * ключах РАЗНУЮ подсказку между прогонами (та же недетерминированность, что чинилась в
+ * `carrierAspects`). `rank` для тай-брейка не годится: он уникален только внутри одной
+ * половины реестра, и системное со своим свойством делят номера.
  */
 export function nearestPropertyKey(reg: RegistrySnapshot, keyOrId: string): string | undefined {
   const cap = Math.max(1, Math.floor(keyOrId.length / 4));
@@ -332,7 +338,12 @@ export function nearestPropertyKey(reg: RegistrySnapshot, keyOrId: string): stri
   for (const def of reg.properties.values()) {
     const distance = editDistance(keyOrId.toLowerCase(), def.key.toLowerCase(), cap);
     if (distance > cap) continue;
-    if (best === undefined || distance < best.distance) best = { key: def.key, distance };
+    if (best === undefined) {
+      best = { key: def.key, distance };
+      continue;
+    }
+    if (distance < best.distance) best = { key: def.key, distance };
+    else if (distance === best.distance && def.key < best.key) best = { key: def.key, distance };
   }
   return best?.key;
 }

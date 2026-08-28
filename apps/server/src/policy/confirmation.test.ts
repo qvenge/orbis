@@ -400,6 +400,26 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
         UPDATE_DEF,
         { id: newId(), props: { 'orbis/routine_mode': 'propose' } },
       ],
+      // РАЗОРУЖЕНИЕ ЧЕРЕЗ `unset` — вторая половина патча (§А9-1). В старой карте оно
+      // выражалось значением (`{allowed_tools: null}`) и попадало под то же условие; в
+      // новой форме снятие — ОТДЕЛЬНЫЙ список, и читатель одних `props` пропускал бы его
+      // мимо замка (регресс, найденный гейт-ревью: `execute` вместо подтверждения).
+      [
+        'entity_update unset allowed_tools (снятие белого списка)',
+        UPDATE_DEF,
+        { id: newId(), unset: ['orbis/allowed_tools'] },
+      ],
+      [
+        'entity_update unset routine_mode (снятие режима)',
+        UPDATE_DEF,
+        { id: newId(), unset: ['orbis/routine_mode'] },
+      ],
+      // Обе половины разом — тот же ответ, а не «одна перебила другую»
+      [
+        'entity_update props + unset вместе',
+        UPDATE_DEF,
+        { id: newId(), props: { 'orbis/routine_mode': 'act' }, unset: ['orbis/allowed_tools'] },
+      ],
     ];
     for (const [name, def, input] of cases) {
       expect(factsFromToolCall(def, input).grantsAutonomy).toBe(true);
@@ -444,6 +464,16 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
     // Чужое свойство — не доверенность рутины
     const foreign = { id: newId(), props: { 'orbis/task_status': 'done' } };
     expect(factsFromToolCall(UPDATE_DEF, foreign).grantsAutonomy).toBe(false);
+
+    // Обе стороны границы `unset` в одной фикстуре: снятие ЧУЖОГО свойства замка не
+    // трогает — иначе ветка `unset` ловила бы всё подряд и «сработала» бы вакуумно.
+    const unsetForeign = { id: newId(), unset: ['orbis/waiting_for'] };
+    expect(factsFromToolCall(UPDATE_DEF, unsetForeign).grantsAutonomy).toBe(false);
+    expect(levelOf(UPDATE_DEF, unsetForeign)).toBe('execute');
+    // …а снятие свойства доверенности — трогает (тот же вход, другое имя свойства).
+    const unsetAutonomy = { id: newId(), unset: ['orbis/allowed_tools'] };
+    expect(factsFromToolCall(UPDATE_DEF, unsetAutonomy).grantsAutonomy).toBe(true);
+    expect(levelOf(UPDATE_DEF, unsetAutonomy)).toBe('explicit-confirmation');
   });
 
   test('batch: любая операция выдачи автономии поднимает весь batch (ряд ПЕРЕД isBatch → preview)', () => {

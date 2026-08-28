@@ -17,6 +17,7 @@ import {
   entityUpdateExecInput,
   newId,
   type PropertyType,
+  writableFromTool,
 } from '@orbis/shared';
 import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { eq, sql } from 'drizzle-orm';
@@ -45,9 +46,11 @@ import {
   applyPropsPatch,
   comparePropertyValue,
   type EntityState,
+  nearestPropertyKey,
   resolvePropertyRef,
   stateDelta,
   touchedProperties,
+  writableOnly,
 } from './props';
 import type { ExecuteOk, ExecuteRequest, ExecuteResult, WireEntity } from './types';
 import { undoAction } from './undo';
@@ -480,6 +483,24 @@ describe('golden: apply → undo → байт-в-байт по корпусу va
 });
 
 describe('гейты флагов свойств', () => {
+  test('поверхность и гейт прав отвечают одно: writableFromTool ≡ writeDenial(механизм тула)', () => {
+    // Два представления одного правила: ПОВЕРХНОСТЬ решает, показывать ли свойство в
+    // `attach_*` (§А2-5, shared `writableFromTool`), а ГЕЙТ ПРАВ — пропускать ли запись
+    // (`writableOnly` по механизму). Разъедься они — и тул снова начал бы обещать модели
+    // запрещённое, причём молча: схема бы звала, а исполнитель отказывал.
+    const ids = BUILTIN_PROPERTY_META.map((p) => p.id);
+    const bySurface = BUILTIN_PROPERTY_META.filter(writableFromTool).map((p) => p.id);
+    // Механизм тула — `user`: ни в перечне §А4-4 (system_writable), ни среди пишущих кэш.
+    expect(writableOnly(reg, 'user', ids)).toEqual(bySurface);
+    // Не вырожденно: запрещённые к записи из тула свойства ЕСТЬ, и их ровно те три
+    // семейства, что называет §А2-5, плюс кэши правил.
+    const denied = ids.filter((id) => !bySurface.includes(id));
+    expect(denied.length).toBeGreaterThan(0);
+    expect(denied).toContain('orbis/bank_txn_id');
+    expect(denied).toContain('orbis/carryover');
+    expect(denied).toContain('orbis/current_value');
+  });
+
   const goalInput = (over: Record<string, unknown> = {}) => ({
     title: 'Накопить',
     tags: [],
@@ -746,9 +767,14 @@ describe('гейты флагов свойств', () => {
     // …и его больше нет в старой карте: проекция и колонка сходятся (проверено выше)
     expect(row.aspectsLegacy['orbis/financial']).toMatchObject({ bank_txn_id: 'BNK-42' });
 
-    // Фильтр — ТОЛЬКО про неназванное поле. Назвал явно — дошёл до гейта: схема
-    // `attach_*`-тула служебные поля пока пропускает (вывод их из `attach_*` — Задача 12),
-    // и отбивает их именно право записи, а не форма входа.
+    // Фильтр — ТОЛЬКО про неназванное поле. Назвал явно — дошёл до гейта прав.
+    //
+    // Схема `attach_orbis_financial` служебных полей БОЛЬШЕ НЕ НЕСЁТ (§А2-5/№33, фикс-раунд
+    // 1 Задачи 12: `writableFromTool` выводит их из генератора), и модель, читающая схему,
+    // такого входа не составит. Но исполнитель — ВТОРОЙ рубеж, а не единственный: `data`
+    // приходит как `additionalProperties`-объект, и вход мимо схемы (свой клиент, ретрай
+    // старого payload'а, батч) обязан упереться в право записи, а не проехать. Именно это
+    // здесь и проверяется — гейт §А2-5 держит поле, которого в схеме уже нет.
     const named = await run('attach_orbis_financial', {
       entity_id: imported.id,
       data: {
@@ -1308,6 +1334,35 @@ describe('applyPropsPatch и резолв адреса', () => {
   test('touchedProperties считает и записи, и снятия', () => {
     const touched = touchedProperties({ set: { x: 1 }, unset: ['y'], attach: ['orbis/task'] });
     expect([...touched].sort()).toEqual(['x', 'y']);
+  });
+
+  test('nearestPropertyKey: подсказка на опечатку, тишина на чужом слове, детерминизм на равных', () => {
+    // Опечатка на символ — ровно тот промах, ради которого подсказка и заведена.
+    expect(nearestPropertyKey(reg, 'orbis/amout')).toBe('orbis/amount');
+    expect(nearestPropertyKey(reg, 'orbis/task_statuss')).toBe('orbis/task_status');
+    // Другое слово подсказки не получает: потолок и есть граница «опечатка ↔ не опечатка».
+    expect(nearestPropertyKey(reg, 'user/выдуманное-поле')).toBeUndefined();
+    // Точное имя резолвится само и до подсказки не доходит — но и она указывает на него же.
+    expect(nearestPropertyKey(reg, 'orbis/amount')).toBe('orbis/amount');
+
+    // ДЕТЕРМИНИЗМ на равном расстоянии: два кандидата на дистанции 1 от одного входа.
+    // Порядок обхода снимка не гарантирован (`ORDER BY owner_id`), поэтому тай-брейк —
+    // алфавит, и ответ обязан быть одним и тем же на снимках с РАЗНЫМ порядком вставки.
+    const template = reg.properties.get('orbis/amount');
+    if (template === undefined) throw new Error('в снимке нет orbis/amount');
+    const twins: RegistrySnapshot = {
+      ...reg,
+      properties: new Map([
+        ['user/p-a', { ...template, id: 'user/p-a', key: 'user/aa' }],
+        ['user/p-b', { ...template, id: 'user/p-b', key: 'user/ba' }],
+      ]),
+    };
+    const reversed: RegistrySnapshot = {
+      ...twins,
+      properties: new Map([...twins.properties].reverse()),
+    };
+    expect(nearestPropertyKey(twins, 'user/ca')).toBe('user/aa');
+    expect(nearestPropertyKey(reversed, 'user/ca')).toBe('user/aa');
   });
 
   test('resolvePropertyRef: сначала key, потом id', () => {

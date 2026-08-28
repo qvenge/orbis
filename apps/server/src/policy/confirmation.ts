@@ -109,6 +109,25 @@ export function factsFromToolCall(
 }
 
 /**
+ * Адреса ДОВЕРЕННОСТИ рутины (§А9-1) — ОДНО объявление на систему.
+ *
+ * Читателей два и вопросы у них разные: гейт §7.10 ниже решает, поднимать ли уровень до
+ * `explicit-confirmation`, а сводка карточки (`tools/dispatch.ts`, `autonomySummary`) —
+ * что назвать владельцу. Пока адреса стояли в двух местах, карточка могла молча
+ * рассказывать не о том, что подняло уровень: это ровно класс обоих Critical ветки
+ * («множество должно быть ОДНИМ у всех потребителей»).
+ *
+ * Режим отдельной константой рядом со списком: у создания значим ТОЛЬКО он (`act`), а
+ * список — про «любая правка доверенности».
+ */
+export const ROUTINE_MODE_PROPERTY = 'orbis/routine_mode';
+export const ROUTINE_TOOLS_PROPERTY = 'orbis/allowed_tools';
+export const AUTONOMY_PROPERTIES: readonly string[] = [
+  ROUTINE_MODE_PROPERTY,
+  ROUTINE_TOOLS_PROPERTY,
+];
+
+/**
  * Выдаёт ли одна операция автономию рутине (V1.10): `mode: 'act'` — это доверенность писать
  * в граф без спроса, а `allowed_tools` — её область. Правка ЛЮБОГО из двух полей считается
  * выдачей, включая возврат в `propose`: разоружение рутины владелец обязан видеть так же,
@@ -121,27 +140,34 @@ export function factsFromToolCall(
  * (`aspects['orbis/routine']`), и с переводом контрактов тулов замок остался бы висеть на
  * форме, которой модель больше не пользуется, — то есть перестал бы держать.
  *
+ * СМОТРЯТСЯ ОБЕ ПОЛОВИНЫ ПАТЧА — `props` И `unset`, и это не симметрия ради симметрии.
+ * В старой карте разоружение выражалось значением (`{allowed_tools: null}`) и попадало под
+ * то же `'allowed_tools' in routine`; в новой форме снятие — ОТДЕЛЬНЫЙ СПИСОК, и читатель
+ * одних `props` пропускал бы `unset: ['orbis/allowed_tools']` мимо замка. Дыра найдена
+ * гейт-ревью фикс-раундом 1: `classifyToolCall` при `actorKind: 'ai'` давал на таком входе
+ * `execute`, то есть чатовая модель или MCP-агент снимали бы белый список рутины молча, без
+ * карточки. Обещание докблока выше («разоружение владелец обязан видеть так же, как
+ * вооружение») до этой правки было ложным ровно на новой форме.
+ *
  * Свойства адресуются id, а не `key`: у встроенных они совпадают (§А2-1), а подменить
  * встроенное свойство своей строкой с тем же ключом владелец не может — частичный индекс
  * реестра разводит собственные и системные записи по разным namespace'ам. Форма проверяется
  * защитно (input сюда доезжает уже envelope-валидированным, см. докблок factsFromToolCall).
  */
-const ROUTINE_MODE = 'orbis/routine_mode';
-const ROUTINE_ALLOWED_TOOLS = 'orbis/allowed_tools';
-
 export function grantsRoutineAutonomy(tool: string, input: unknown): boolean {
   if (!isRecord(input)) return false;
   if (tool === 'attach_orbis_routine') {
-    return isRecord(input.data) && input.data[ROUTINE_MODE] === 'act';
+    return isRecord(input.data) && input.data[ROUTINE_MODE_PROPERTY] === 'act';
   }
   if (tool !== 'entity_create' && tool !== 'entity_update') return false;
-  const props = input.props;
-  if (!isRecord(props)) return false;
+  const props = isRecord(input.props) ? input.props : {};
   // create: правами наделяет только act — рутина в propose всё равно спросит владельца.
+  // Снятия у создания не бывает вовсе: снимать нечего, записи ещё нет.
+  if (tool === 'entity_create') return props[ROUTINE_MODE_PROPERTY] === 'act';
   // update: патч дописывает свойства в живую запись, поэтому значим сам ФАКТ правки
   // доверенности, а не значение (act ↔ propose и правка белого списка — одно решение).
-  if (tool === 'entity_create') return props[ROUTINE_MODE] === 'act';
-  return ROUTINE_MODE in props || ROUTINE_ALLOWED_TOOLS in props;
+  const unset = Array.isArray(input.unset) ? input.unset : [];
+  return AUTONOMY_PROPERTIES.some((p) => p in props || unset.includes(p));
 }
 
 /**

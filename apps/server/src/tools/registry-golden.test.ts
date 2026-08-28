@@ -13,6 +13,11 @@
 // пересдаётся ОТДЕЛЬНЫМ движением с объяснением в коммите (`bun test … --update-golden`
 // здесь нет намеренно — автоматическое обновление и есть тот способ, которым эталоны
 // перестают что-либо значить).
+//
+// Пересдача: `buildToolRegistry` на чистом сиде → `JSON.stringify(snap, null, 2)` в этот
+// файл → `bunx biome check --write` по нему (форматтер репозитория раскладывает JSON
+// по-своему, и без этого шага падает `lint`). Сверка идёт по `canonicalJson` РАЗОБРАННОГО
+// JSON, поэтому форматирование на смысл эталона не влияет.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { canonicalJson } from '@orbis/shared';
 import GOLDEN from '../../test/golden/tool-registry.json';
