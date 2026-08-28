@@ -2426,9 +2426,165 @@ describe('V1: выдача автономии рутине из чата → pen
     });
     expect(becomes.status).toBe('pending_confirmation');
     if (becomes.status !== 'pending_confirmation') return;
+    // ОЖИДАНИЕ ПЕРЕПИСАНО ФИКС-РАУНДОМ 5 (Р-12-5), И ЭТО СКАЗАНО ВСЛУХ: тот же вызов теперь
+    // называет и НАВЕШИВАНИЕ носителя — запись становится живой act-рутиной, а не просто
+    // получает свойства. Прежняя строка была не неправдой, а неполнотой: шестой путь тогда не
+    // был закрыт, и фикстура задевала его, ничего про него не требуя.
     expect(becomes.card).toMatchObject({
-      summary: 'Автономия рутины «Просто заметка»: режим act',
+      summary: 'Автономия рутины «Просто заметка»: режим act, навешивает аспект рутины',
     });
+  });
+
+  test('НАВЕШИВАНИЕ АСПЕКТА на боевые значения → подтверждение; на мирные — ok (шестой путь, Р-12-5)', async () => {
+    // Значения доверенности переживают снятие аспекта (Р9) и живут на любой записи, поэтому
+    // «сделай эту запись рутиной» — самостоятельный акт вооружения, даже когда в патче нет ни
+    // одного свойства. Сценарий: владелец подтвердил «снимает аспект рутины» и считает рутину
+    // убранной — модель следующим вызовом бесшумно возвращала её вооружённой.
+    const ghost = await seedEntity(userA, { title: 'Бывшая act-рутина', tags: [] });
+    await withIdentity(db, userA, (tx) =>
+      tx
+        .update(entities)
+        .set({
+          props: {
+            'orbis/routine_stage': 'active',
+            'orbis/routine_at': '07:00',
+            'orbis/routine_mode': 'act',
+            'orbis/allowed_tools': ['entity_update'],
+          },
+        })
+        .where(eq(entities.id, ghost.id)),
+    );
+    const revive = await dispatchTool(ctxFor(), 'entity_update', {
+      id: ghost.id,
+      aspects: { attach: ['orbis/routine'] },
+    });
+    expect(revive.status).toBe('pending_confirmation');
+    if (revive.status !== 'pending_confirmation') return;
+    // Карточка называет, ЧЕМ оживает рутина: свойств в патче НЕТ ни одного, значения итоговые.
+    expect(revive.card).toMatchObject({
+      summary:
+        'Автономия рутины «Бывшая act-рутина»: режим act, инструменты: entity_update, навешивает аспект рутины',
+    });
+    expect(await aspectsOfRow(ghost.id)).toEqual([]);
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: та же форма вызова на МИРНЫХ значениях (propose, списка нет) —
+    // обычное заведение рутины, исполняется молча. Отличие от ряда выше ровно одно: значения.
+    const calm = await seedEntity(userA, { title: 'Бывшая propose-рутина', tags: [] });
+    await withIdentity(db, userA, (tx) =>
+      tx
+        .update(entities)
+        .set({
+          props: {
+            'orbis/routine_stage': 'active',
+            'orbis/routine_at': '07:00',
+            'orbis/routine_mode': 'propose',
+          },
+        })
+        .where(eq(entities.id, calm.id)),
+    );
+    const plain = await dispatchTool(ctxFor(), 'entity_update', {
+      id: calm.id,
+      aspects: { attach: ['orbis/routine'] },
+    });
+    expect(plain.status).toBe('ok');
+    expect(await aspectsOfRow(calm.id)).toEqual(['orbis/routine']);
+
+    // ТРЕТЬЯ СТОРОНА: уровень считается по ИТОГОВОМУ состоянию, а не по одной половине вызова.
+    // `props` здесь доверенности не касается (время запуска), поэтому гейт формы молчит —
+    // ответить обязано состояние.
+    const both = await seedEntity(userA, { title: 'Оживляемая с расписанием', tags: [] });
+    await withIdentity(db, userA, (tx) =>
+      tx
+        .update(entities)
+        .set({
+          props: {
+            'orbis/routine_stage': 'active',
+            'orbis/routine_at': '07:00',
+            'orbis/routine_mode': 'act',
+          },
+        })
+        .where(eq(entities.id, both.id)),
+    );
+    const withSchedule = await dispatchTool(ctxFor(), 'entity_update', {
+      id: both.id,
+      props: { 'orbis/routine_at': '09:00' },
+      aspects: { attach: ['orbis/routine'] },
+    });
+    expect(withSchedule.status).toBe('pending_confirmation');
+
+    // …и в обратную сторону: тот же вызов СНИМАЕТ боевой режим тем же патчем — итог мирный.
+    // (Карточку он всё равно требует: патч трогает доверенность, и это ветка формы, не
+    // состояния. Здесь важно, что проба носителя на итоге не настаивает на своём «вооружает».)
+    const disarming = await dispatchTool(ctxFor(), 'entity_update', {
+      id: both.id,
+      props: { 'orbis/routine_mode': 'propose' },
+      aspects: { attach: ['orbis/routine'] },
+    });
+    expect(disarming.status).toBe('pending_confirmation');
+    if (disarming.status !== 'pending_confirmation') return;
+    expect(disarming.card).toMatchObject({
+      summary: 'Автономия рутины «Оживляемая с расписанием»: режим propose',
+    });
+
+    // ЧЕТВЁРТАЯ: аспект УЖЕ на строке — навешивать нечего, доверенность не двигается.
+    const already = await seedEntity(userA, {
+      title: 'Уже рутина',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
+      },
+    });
+    const noop = await dispatchTool(ctxFor(), 'entity_update', {
+      id: already.id,
+      aspects: { attach: ['orbis/routine'] },
+    });
+    expect(noop.status).toBe('ok');
+  });
+
+  test('«отнимать нечего» — ОДИН ответ у обоих видов снятия носителя (Minor-2 фикс-раунда 4)', async () => {
+    // Безоружная рутина (propose, список ЕСТЬ и он пуст). `detach` у неё проходил молча, а
+    // безобидный attach с новым временем сообщал «снимает белый список» — снятие того, чего
+    // нет. Один смысл — один ответ; теперь оба вида спрашивают `autonomyArmed`.
+    const idle = await seedEntity(userA, {
+      title: 'Безоружная с пустым списком',
+      tags: [],
+      aspects: { 'orbis/routine': routine({ allowed_tools: [] }) },
+    });
+    expect((await propsOfRow(idle.id))['orbis/allowed_tools']).toEqual([]);
+
+    const reschedule = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: idle.id,
+      data: routineProps({ 'orbis/routine_at': '09:00' }),
+    });
+    expect(reschedule.status).toBe('ok');
+    const detach = await dispatchTool(ctxFor(), 'entity_update', {
+      id: idle.id,
+      aspects: { detach: ['orbis/routine'] },
+    });
+    expect(detach.status).toBe('ok');
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: у ВООРУЖЁННОЙ оба вида по-прежнему требуют карточки — ответ
+    // один и там. Отличие от рядов выше ровно одно: в списке есть элемент.
+    const armed = await seedEntity(userA, {
+      title: 'Вооружённая с непустым списком',
+      tags: [],
+      aspects: { 'orbis/routine': routine({ allowed_tools: ['entity_update'] }) },
+    });
+    const reschedArmed = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: armed.id,
+      data: routineProps({ 'orbis/routine_at': '09:00' }),
+    });
+    expect(reschedArmed.status).toBe('pending_confirmation');
+    if (reschedArmed.status !== 'pending_confirmation') return;
+    expect(reschedArmed.card).toMatchObject({
+      summary:
+        'Автономия рутины «Вооружённая с непустым списком»: режим propose, снимает белый список',
+    });
+    const detachArmed = await dispatchTool(ctxFor(), 'entity_update', {
+      id: armed.id,
+      aspects: { detach: ['orbis/routine'] },
+    });
+    expect(detachArmed.status).toBe('pending_confirmation');
   });
 
   test('сводка адресуется ОПЕРАЦИЕЙ, а не id цели; правка инструкции называется рядом со снятием', async () => {

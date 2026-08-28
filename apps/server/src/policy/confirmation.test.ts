@@ -483,7 +483,7 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
     // систему — тот же вызов на ВООРУЖЁННОЙ рутине стирает её белый список заменой носителя
     // (§А7-4) или гасит её режим эхом. Разоружение по-прежнему требует карточки, но видит
     // его не классификатор (он чист и состояния не знает), а диспатч —
-    // `autonomyDisarmedByCarrier`, который держит и четвёртый путь (снятие аспекта рутины у
+    // `autonomyChangedByCarrier`, который держит и четвёртый путь (снятие аспекта рутины у
     // вооружённой, Р-12-3); пин обеих сторон живёт на живой БД в `dispatch.test.ts`.
     const attach = { entity_id: newId(), data: routine() };
     expect(factsFromToolCall(ATTACH_DEF, attach).grantsAutonomy).toBe(false);
@@ -609,7 +609,7 @@ describe('адреса доверенности ≡ реестр (Minor-4)', () 
 
   test('вооружённость считает ОДНА функция: набор и состояние отвечают одинаково', () => {
     // `autonomyArmed` зовут двое: гейт (набор из payload'а) и проба состояния по БД
-    // (`autonomyDisarmedByCarrier`). Пока формулы стояли врозь, `allowed_tools: []` был
+    // (`autonomyChangedByCarrier`). Пока формулы стояли врозь, `allowed_tools: []` был
     // «выдачей» у одного и «безоружностью» у другого.
     for (const values of [
       { [ROUTINE_MODE_PROPERTY]: 'act' },
