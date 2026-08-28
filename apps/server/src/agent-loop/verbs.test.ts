@@ -174,10 +174,31 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
   let otherGrantId = '';
   let projectId = '';
 
+  /** Сохранённый ответ вызова (§7.8) как он лежит в журнале — админ-DSN, мимо RLS. */
+  async function savedResults(callId: string): Promise<Array<Record<string, unknown>>> {
+    const auditId = batchAuditMessageId(owner, callId);
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const rows = await admin
+        .select({ metadata: chatMessages.metadata })
+        .from(chatMessages)
+        .where(eq(chatMessages.id, auditId));
+      const md = rows[0]?.metadata as { results?: Array<Record<string, unknown>> } | undefined;
+      if (md?.results === undefined) throw new Error(`снимок ответа ${auditId} не найден`);
+      return md.results;
+    } finally {
+      await adminClient.end();
+    }
+  }
+
   /**
    * Правка СОХРАНЁННОГО ответа (§7.8) админ-DSN — мимо исполнителя, как расходящаяся
    * строка `entities` у соседних проб. Иначе форму снимка не выбрать: обе колонки в нём
    * согласованы по построению, и «какую читает replay» поведением не наблюдаемо.
+   *
+   * Подтверждение подстановки живёт СНАРУЖИ — вызывающий читает снимок `savedResults` до
+   * и после. Внутри колбэка ему делать нечего: мутация, съедающая колбэк целиком, съела бы
+   * вместе с ним и проверку, и проба молча стала бы вакуумной.
    */
   async function patchSavedResults(
     callId: string,
@@ -399,10 +420,19 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
         id: callA,
       }),
     );
+    // Проекцию несут СУЩНОСТИ снимка (тикет и прогон); у третьей строки, связи, её нет
+    // вовсе. Считаем до правки — иначе «снимок без проекции узнаётся» однажды проверялось
+    // бы на снимке, где её и так не было.
+    const withProjection = (rows: Array<Record<string, unknown>>) =>
+      rows.filter((row) => Object.hasOwn(row, 'aspectsMap')).length;
+    expect(withProjection(await savedResults(callA))).toBe(2);
     await patchSavedResults(callA, (results) => {
       for (const row of results) delete row.aspectsMap;
       return results;
     });
+    // …и после: подтверждение подстановки СНАРУЖИ колбэка — мутация, съедающая правку
+    // целиком, обязана краснеть здесь, а не проходить незамеченной.
+    expect(withProjection(await savedResults(callA))).toBe(0);
     const c2 = okResult<ClaimTaskResult>(
       await dispatchTool(worker(owner, grantId), 'orbis_claim_task', {
         ticket_id: ticketA,
@@ -423,11 +453,14 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     await patchSavedResults(callB, (results) => {
       const run = results[1];
       if (run === undefined) throw new Error('в снимке нет строки прогона');
-      // Грант в `props` на месте — различает случай ТОЛЬКО признак носителя.
-      expect((run.props as Record<string, unknown>)['orbis/grant']).toBe(grantId);
       run.aspects = (run.aspects as string[]).filter((a) => a !== 'orbis/agent-run');
       return results;
     });
+    // Подтверждение подстановки — тоже снаружи: аспект снят, а грант в `props` остался,
+    // то есть случай различает ТОЛЬКО признак носителя.
+    const savedRun = (await savedResults(callB))[1];
+    expect(savedRun?.aspects).not.toContain('orbis/agent-run');
+    expect((savedRun?.props as Record<string, unknown>)['orbis/grant']).toBe(grantId);
     const r = await dispatchTool(worker(owner, grantId), 'orbis_claim_task', {
       ticket_id: ticketB,
       id: callB,

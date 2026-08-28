@@ -141,6 +141,56 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     if (r.card?.kind === 'entity_card') expect(action?.id).toBe(r.card.undoActionId as string);
   });
 
+  // Проба расхождением колонок (§А1-1) для КАРТОЧКИ: список её аспектов читается из новой
+  // правды (`e.aspects`), а значения `keyFields` — из проекции, и это разные вещи по
+  // причине, а не по недосмотру (см. докблок `entityCard`). Разводит колонки админ-DSN
+  // мимо исполнителя; единственный путь, читающий такую строку и НИЧЕГО в ней не
+  // переписывающий, — идемпотентный replay одиночного `entity_create` (стадия 3 отдаёт
+  // `toWire` прочитанной строки).
+  test('карточка перечисляет аспекты новой правдой: replay по разошедшейся строке всё равно называет аспект', async () => {
+    const id = newId();
+    const input = {
+      id,
+      title: 'Задача с расхождением колонок',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'inbox' } },
+    };
+    const first = await dispatchTool(ctxFor(), 'entity_create', input);
+    expect(first.status).toBe('ok');
+    if (first.status !== 'ok' || first.card?.kind !== 'entity_card') {
+      throw new Error('ожидалась карточка сущности');
+    }
+    expect(first.card.aspects).toEqual(['orbis/task']);
+    expect(first.card.keyFields).toEqual({ status: 'inbox' });
+
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const before = await admin
+        .select({ aspectsLegacy: entities.aspectsLegacy, aspects: entities.aspects })
+        .from(entities)
+        .where(eq(entities.id, id));
+      // Подтверждение подстановки: до правки проекция ключ НЕСЛА, иначе проба была бы
+      // вакуумной — «удалили то, чего и не было».
+      expect(Object.keys((before[0]?.aspectsLegacy ?? {}) as object)).toEqual(['orbis/task']);
+      expect(before[0]?.aspects).toEqual(['orbis/task']);
+      await admin.update(entities).set({ aspectsLegacy: {} }).where(eq(entities.id, id));
+    } finally {
+      await adminClient.end();
+    }
+
+    const replay = await dispatchTool(ctxFor(), 'entity_create', input);
+    expect(replay.status).toBe('ok');
+    if (replay.status !== 'ok' || replay.card?.kind !== 'entity_card') {
+      throw new Error('ожидалась карточка сущности');
+    }
+    // Список аспектов пережил опустевшую проекцию — читается `aspects[]`.
+    expect(replay.card.aspects).toEqual(['orbis/task']);
+    // …а `keyFields` на той же строке пусты: они и есть та половина карточки, что осталась
+    // на проекции (контракт карточки, перевод — Задача 13c). Заодно это доказывает, что
+    // правка колонок ДЕЙСТВИТЕЛЬНО состоялась.
+    expect(replay.card.keyFields).toEqual({});
+  });
+
   // V1.5: прогон — вторая половина атрибуции. Без него правка модели неотличима от
   // любой другой чатовой, и откат прогона (rollback.ts ищет действия контейнмент-пробой
   // по run_id) не нашёл бы того, что она сделала.
