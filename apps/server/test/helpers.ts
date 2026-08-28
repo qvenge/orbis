@@ -9,6 +9,7 @@ import {
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { makeDb } from '../src/db/client';
+import type { entities } from '../src/db/schema';
 import type { Tx } from '../src/db/with-identity';
 import { type LegacyRow, rowFromLegacy } from '../src/executor/legacy-form';
 import { loadRegistry } from '../src/registry/load';
@@ -211,4 +212,45 @@ export async function legacyEntityColumns(
   aspectsLegacy: LegacyAspects,
 ): Promise<LegacyRow> {
   return rowFromLegacy(await loadRegistry(tx, ownerId), aspectsLegacy);
+}
+
+/** Строка `entities` с РАЗОШЕДШИМИСЯ колонками — вход `divergentEntityRow`. */
+export interface DivergentRowSpec {
+  ownerId: string;
+  id: string;
+  title: string;
+  /** НОВАЯ правда (§А1-1): значения по id свойства. */
+  props: Record<string, unknown>;
+  /** НОВАЯ правда: список интерпретаций. */
+  aspects: string[];
+  /** СТАРАЯ карта — вторая, НАМЕРЕННО расходящаяся сторона пробы; по умолчанию пустая. */
+  legacy?: LegacyAspects;
+  archived?: boolean;
+}
+
+/**
+ * Строка `entities`, у которой новая правда (`props`/`aspects[]`) и старая карта
+ * (`aspects_legacy`) говорят РАЗНОЕ, — прямой INSERT мимо исполнителя.
+ *
+ * ЗАЧЕМ ТАКАЯ ФИКСТУРА ВООБЩЕ. На интервале дуальной записи (§А1-1) обе колонки пишет один
+ * писатель (`projectLegacyAspects`), поэтому в проде они равны по построению. Пока они
+ * равны, перевод читателя с одной колонки на другую НЕ НАБЛЮДАЕМ поведением: и старый, и
+ * новый код дают одинаковый ответ, любой тест зелёный в обе стороны. Расхождение — это
+ * вопрос «какую колонку ты читаешь», заданный так, что ответ виден; ничего другого этот
+ * помощник не проверяет и проверять не может.
+ *
+ * Почему он живёт здесь, а не в сьюте: `legacyEntityColumns` (выше) — фикстура СОГЛАСОВАННОЙ
+ * строки, и обе формы обязаны стоять рядом, чтобы «согласованная или разошедшаяся» был
+ * выбор, а не случайность соседнего файла.
+ */
+export function divergentEntityRow(spec: DivergentRowSpec): typeof entities.$inferInsert {
+  return {
+    id: spec.id,
+    ownerId: spec.ownerId,
+    title: spec.title,
+    props: spec.props,
+    aspects: spec.aspects,
+    aspectsLegacy: spec.legacy ?? {},
+    ...(spec.archived === undefined ? {} : { archived: spec.archived }),
+  };
 }

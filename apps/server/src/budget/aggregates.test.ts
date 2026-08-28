@@ -8,7 +8,14 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type BudgetOverview, type BudgetStatusResult, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  divergentEntityRow,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
+import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
@@ -851,5 +858,601 @@ describe('clock-шов: границы дат (Task A1)', () => {
     expect(after.rows).toHaveLength(1);
     expect(after.rows[0]?.prevSpent).toBe('7000.00');
     expect(after.rows[0]?.carryover).toBe('3000.00'); // 10000 − 7000 (§2.6)
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Задача 10a: агрегаты читают НОВУЮ правду строки (§А1-1) — `props` и `aspects[]`
+// ---------------------------------------------------------------------------
+/**
+ * ПРОБА РАСХОЖДЕНИЕМ КОЛОНОК. Фикстура кладёт строки, у которых `props`/`aspects[]` и старая
+ * карта аспектов говорят РАЗНОЕ, и спрашивает у агрегатов, чей ответ они дают.
+ *
+ * Такого состояния прод не производит: на интервале §А1-1 обе колонки пишет один писатель
+ * (`projectLegacyAspects`), и они равны по построению. Ровно поэтому проба и нужна: пока они
+ * равны, ЛЮБОЙ перевод читателя с одной колонки на другую зелёный, и «переведено» отличить
+ * от «не переведено» поведением нельзя. Расхождение — единственный способ спросить про
+ * ИСТОЧНИК, а источник и есть предмет этой задачи.
+ *
+ * Строки пишутся прямым INSERT'ом (как датасет компилятора `compile.dataset.test.ts`): через
+ * исполнителя разойтись колонками невозможно по построению.
+ *
+ * Даты фиксированы (октябрь 2026) и «сегодня» подменяется clock-швом: общая фикстура файла
+ * привязана к реальному сегодня и смешению не подлежит. Онбординг НЕ сеется намеренно —
+ * `budgetStatus` перечисляет ВСЕ категории владельца, и двенадцать сидовых заслонили бы
+ * пробу; валюта по умолчанию при этом деградирует к фолбэку RUB (`defaultCurrencyOf`).
+ */
+describe('источник значений Финансов — props/aspects[], а не старая карта (§А1-1, Задача 10a)', () => {
+  const userD = freshUserId();
+  const octClock = () => new Date('2026-10-15T09:00:00Z'); // 12:00 15.10 по Москве
+  const OCT = '2026-10';
+
+  const catA = newId(); // категория ТОЛЬКО по списку аспектов (в старой карте ключа нет)
+  const catB = newId(); // категория, у которой props и карта дают разные icon/color/class
+  const catNoEnv = newId(); // категория без конверта — вход Unbudgeted
+  const catTreeChild = newId(); // дочерняя категория дерева §2.10
+  const envA = newId(); // конверт catB: период/лимит в props ≠ период/лимит в карте
+  const envTreeParent = newId();
+  const envTreeChild = newId();
+  const envGhost = newId(); // «конверт» только по списку аспектов — вход NOT EXISTS Unbudgeted
+
+  type Row = typeof entities.$inferInsert;
+
+  function entityRow(
+    id: string,
+    title: string,
+    props: Record<string, unknown>,
+    aspects: string[],
+    legacy: Record<string, Record<string, unknown>>,
+  ): Row {
+    return divergentEntityRow({ ownerId: userD, id, title, props, aspects, legacy });
+  }
+
+  /** Транзакция: props — левая колонка пробы, `legacyFin` — правая (та же форма полей). */
+  function txnRow(
+    id: string,
+    title: string,
+    props: Record<string, unknown>,
+    legacyFin: Record<string, unknown>,
+    extra: { aspects?: string[]; legacy?: Record<string, Record<string, unknown>> } = {},
+  ): Row {
+    return entityRow(id, title, props, extra.aspects ?? ['orbis/financial'], {
+      'orbis/financial': legacyFin,
+      ...(extra.legacy ?? {}),
+    });
+  }
+
+  const txnAmount = newId();
+  const txnEnvCurrency = newId();
+  const txnPlannedProps = newId();
+  const txnFactProps = newId();
+  const txnCurrency = newId();
+  const txnDirection = newId();
+  const txnTemplate = newId();
+  const txnFuture = newId();
+  const txnTreeChild = newId();
+  const txnGhostBound = newId();
+  // Значения БЕЗ аспекта-носителя: так выглядит запись после detach (Р9 — снятие аспекта
+  // значений не трогает). В старой карте их не было вовсе, в `props` они остаются, и
+  // читатель без признака аспекта посчитал бы по ним деньги.
+  const txnDetached = newId();
+  const txnDetachedBound = newId();
+  const envDetached = newId();
+  // «Категория» без аспекта категории и конверт на неё: сторожат признак носителя на ОБОИХ
+  // концах ребра дерева §2.10.
+  const pseudoCat = newId();
+  const envPseudo = newId();
+
+  beforeAll(async () => {
+    const rows: Row[] = [
+      // Категории. catA несёт аспект ТОЛЬКО списком — проба containment
+      // (носитель ищется элементом списка `aspects`, а не ключом старой карты).
+      entityRow(catA, 'Категория списком', { 'orbis/icon': '🟢' }, ['orbis/category'], {}),
+      entityRow(
+        catB,
+        'Категория с расхождением',
+        { 'orbis/icon': '🟩', 'orbis/color': '#00aa00', 'orbis/spend_class': 'fixed' },
+        ['orbis/category'],
+        { 'orbis/category': { icon: '🟥', color: '#aa0000', spend_class: 'discretionary' } },
+      ),
+      entityRow(catNoEnv, 'Категория без конверта', { 'orbis/icon': '🧺' }, ['orbis/category'], {}),
+      entityRow(catTreeChild, 'Дочерняя категория', { 'orbis/icon': '🌿' }, ['orbis/category'], {}),
+
+      // Конверт catB: в props — октябрь 2026 и лимит 5000, в карте — январь 2025 и лимит 1.
+      entityRow(
+        envA,
+        'Конверт расхождения',
+        {
+          'orbis/finance_category': catB,
+          'orbis/limit': '5000.00',
+          'orbis/currency': 'RUB',
+          'orbis/period_start': '2026-10-01',
+          'orbis/period_end': '2026-10-31',
+        },
+        ['orbis/budget'],
+        {
+          'orbis/budget': {
+            category_ref: catB,
+            limit: '1.00',
+            currency: 'RUB',
+            period_start: '2025-01-01',
+            period_end: '2025-01-31',
+          },
+        },
+      ),
+      // Дерево §2.10: родитель catA (аспект только списком) и его ребёнок.
+      entityRow(
+        envTreeParent,
+        'Конверт родителя дерева',
+        {
+          'orbis/finance_category': catA,
+          'orbis/limit': '1000.00',
+          'orbis/currency': 'RUB',
+          'orbis/period_start': '2026-10-01',
+          'orbis/period_end': '2026-10-31',
+        },
+        ['orbis/budget'],
+        {
+          'orbis/budget': {
+            category_ref: catA,
+            limit: '1000.00',
+            currency: 'RUB',
+            period_start: '2026-10-01',
+            period_end: '2026-10-31',
+          },
+        },
+      ),
+      entityRow(
+        envTreeChild,
+        'Конверт ребёнка дерева',
+        {
+          'orbis/finance_category': catTreeChild,
+          'orbis/limit': '2000.00',
+          'orbis/currency': 'RUB',
+          'orbis/period_start': '2026-10-01',
+          'orbis/period_end': '2026-10-31',
+        },
+        ['orbis/budget'],
+        {
+          // Лимит в карте занижен НАМЕРЕННО: по нему трата 300 даёт перерасход и бейдж
+          // §6.1 считает конверт тревожным, по props (2000) — нет. Это единственное, что
+          // отличает две стороны в тесте бейджа ниже.
+          'orbis/budget': {
+            category_ref: catTreeChild,
+            limit: '100.00',
+            currency: 'RUB',
+            period_start: '2026-10-01',
+            period_end: '2026-10-31',
+          },
+        },
+      ),
+      // «Конверт» только по списку аспектов: период вне октября, чтобы карточкой он не был,
+      // — его роль в пробе одна, быть источником связи для NOT EXISTS Unbudgeted.
+      entityRow(
+        envGhost,
+        'Конверт списком',
+        {
+          'orbis/finance_category': catNoEnv,
+          'orbis/limit': '10.00',
+          'orbis/currency': 'RUB',
+          'orbis/period_start': '2024-01-01',
+          'orbis/period_end': '2024-01-31',
+        },
+        ['orbis/budget'],
+        {},
+      ),
+
+      // Транзакции: у каждой ОДНО расхождение, чтобы красное указывало на конкретное чтение.
+      txnRow(
+        txnAmount,
+        'Сумма из props',
+        {
+          'orbis/amount': '700.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': catB,
+          'orbis/occurred_on': '2026-10-10',
+        },
+        {
+          amount: '70000.00',
+          direction: 'expense',
+          category_ref: catB,
+          occurred_on: '2026-10-10',
+        },
+      ),
+      txnRow(
+        txnEnvCurrency,
+        'Валюта против валюты конверта',
+        {
+          'orbis/amount': '999.00',
+          'orbis/currency': 'USD',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': catB,
+          'orbis/occurred_on': '2026-10-10',
+        },
+        {
+          amount: '999.00',
+          currency: 'RUB',
+          direction: 'expense',
+          category_ref: catB,
+          occurred_on: '2026-10-10',
+        },
+      ),
+      txnRow(
+        txnPlannedProps,
+        'План по props, факт по карте',
+        {
+          'orbis/amount': '111.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': catB,
+          'orbis/occurred_on': '2026-10-20',
+          'orbis/planned': true,
+        },
+        {
+          amount: '111.00',
+          direction: 'expense',
+          category_ref: catB,
+          occurred_on: '2026-10-20',
+          planned: false,
+        },
+      ),
+      // РП-9: в props свойства НЕТ вовсе — «отсутствие = false», то есть факт.
+      txnRow(
+        txnFactProps,
+        'Факт по props (свойства нет), план по карте',
+        {
+          'orbis/amount': '222.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': catNoEnv,
+          'orbis/occurred_on': '2026-10-11',
+        },
+        {
+          amount: '222.00',
+          direction: 'expense',
+          category_ref: catNoEnv,
+          occurred_on: '2026-10-11',
+          planned: true,
+        },
+      ),
+      txnRow(
+        txnCurrency,
+        'Чужая валюта по props',
+        {
+          'orbis/amount': '333.00',
+          'orbis/currency': 'USD',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': catNoEnv,
+          'orbis/occurred_on': '2026-10-12',
+        },
+        {
+          amount: '333.00',
+          currency: 'RUB',
+          direction: 'expense',
+          category_ref: catNoEnv,
+          occurred_on: '2026-10-12',
+        },
+      ),
+      txnRow(
+        txnDirection,
+        'Направление из props',
+        {
+          'orbis/amount': '444.00',
+          'orbis/direction': 'income',
+          'orbis/finance_category': catNoEnv,
+          'orbis/occurred_on': '2026-10-13',
+        },
+        {
+          amount: '444.00',
+          direction: 'expense',
+          category_ref: catNoEnv,
+          occurred_on: '2026-10-13',
+        },
+      ),
+      // Шаблон повторения: `orbis/recurrence` есть в props и нет в старой карте.
+      txnRow(
+        txnTemplate,
+        'Шаблон по props',
+        {
+          'orbis/amount': '555.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': catNoEnv,
+          'orbis/occurred_on': '2026-10-14',
+          'orbis/recurrence': { freq: 'weekly', interval: 1 },
+        },
+        {
+          amount: '555.00',
+          direction: 'expense',
+          category_ref: catNoEnv,
+          occurred_on: '2026-10-14',
+        },
+        {
+          aspects: ['orbis/financial', 'orbis/schedule'],
+          legacy: { 'orbis/schedule': {} },
+        },
+      ),
+      txnRow(
+        txnFuture,
+        'Будущая дата по props',
+        {
+          'orbis/amount': '666.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': catNoEnv,
+          'orbis/occurred_on': '2026-10-25',
+        },
+        {
+          amount: '666.00',
+          direction: 'expense',
+          category_ref: catNoEnv,
+          occurred_on: '2026-10-05',
+        },
+      ),
+      txnRow(
+        txnTreeChild,
+        'Трата дочерней категории',
+        {
+          'orbis/amount': '300.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': catTreeChild,
+          'orbis/occurred_on': '2026-10-10',
+        },
+        {
+          amount: '300.00',
+          direction: 'expense',
+          category_ref: catTreeChild,
+          occurred_on: '2026-10-10',
+        },
+      ),
+      // Транзакция без аспекта `orbis/financial`: значения в props остались, носителя нет.
+      entityRow(
+        txnDetached,
+        'Расход без аспекта',
+        {
+          'orbis/amount': '4321.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': catNoEnv,
+          'orbis/occurred_on': '2026-10-08',
+        },
+        [],
+        {},
+      ),
+      // То же, но под конвертом envA: сторожит признак аспекта в spent конверта.
+      entityRow(
+        txnDetachedBound,
+        'Расход без аспекта под конвертом',
+        {
+          'orbis/amount': '5432.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': catB,
+          'orbis/occurred_on': '2026-10-08',
+        },
+        [],
+        {},
+      ),
+      entityRow(pseudoCat, 'Не категория', { 'orbis/icon': '❌' }, [], {}),
+      entityRow(
+        envPseudo,
+        'Конверт не-категории',
+        {
+          'orbis/finance_category': pseudoCat,
+          'orbis/limit': '400.00',
+          'orbis/currency': 'RUB',
+          'orbis/period_start': '2026-10-01',
+          'orbis/period_end': '2026-10-31',
+        },
+        ['orbis/budget'],
+        {},
+      ),
+      // Конверт без аспекта `orbis/budget`: свойства периода и лимита в props остались.
+      entityRow(
+        envDetached,
+        'Конверт без аспекта',
+        {
+          'orbis/finance_category': catB,
+          'orbis/limit': '9999.00',
+          'orbis/currency': 'RUB',
+          'orbis/period_start': '2026-10-01',
+          'orbis/period_end': '2026-10-31',
+        },
+        [],
+        {},
+      ),
+      txnRow(
+        txnGhostBound,
+        'Трата под конвертом-списком',
+        {
+          'orbis/amount': '888.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': catNoEnv,
+          'orbis/occurred_on': '2026-10-09',
+        },
+        {
+          amount: '888.00',
+          direction: 'expense',
+          category_ref: catNoEnv,
+          occurred_on: '2026-10-09',
+        },
+      ),
+    ];
+
+    // Связи кладутся прямо: `relation_type` — проекция роли, ровно как её пишет исполнитель.
+    const edges = [
+      { source: envA, target: txnAmount, role: 'envelope-binding', type: 'parent' },
+      { source: envA, target: txnEnvCurrency, role: 'envelope-binding', type: 'parent' },
+      { source: envA, target: txnPlannedProps, role: 'envelope-binding', type: 'parent' },
+      { source: envTreeChild, target: txnTreeChild, role: 'envelope-binding', type: 'parent' },
+      { source: envGhost, target: txnGhostBound, role: 'subitem', type: 'parent' },
+      { source: envA, target: txnDetachedBound, role: 'envelope-binding', type: 'parent' },
+      { source: catA, target: catTreeChild, role: 'category-parent', type: 'parent' },
+      // Ребро дерева к НЕ-категории: агрегат родителя его собирать не должен.
+      { source: catB, target: pseudoCat, role: 'category-parent', type: 'parent' },
+    ];
+
+    await withIdentity(db, userD, async (tx) => {
+      await tx.insert(entities).values(rows);
+      await tx.insert(relations).values(
+        edges.map((e) => ({
+          id: newId(),
+          sourceId: e.source,
+          targetId: e.target,
+          role: e.role,
+          relationType: e.type,
+        })),
+      );
+    });
+  });
+
+  test('карточка конверта берёт период и лимит из props: конверт октября, лимит 5000', async () => {
+    const ov = await budgetOverview(db, userD, OCT, octClock);
+    const st = ov.envelopes.find((e) => e.envelope.id === envA);
+    expect(st).toBeDefined();
+    expect(st?.effectiveLimit).toBe('5000.00');
+    expect(st?.phase).toBe('active');
+    // Старая карта поставила бы конверт в январь 2025 — в октябрьской выдаче его бы не было.
+  });
+
+  /**
+   * Вторая сторона границы: значения читаются ТОЛЬКО под приложенным аспектом. Строка после
+   * detach несёт полный набор свойств конверта/транзакции и обязана быть невидимой для всех
+   * агрегатов — иначе снятие аспекта перестало бы что-либо значить для денег.
+   */
+  test('значения без аспекта-носителя не считаются ни конвертом, ни транзакцией', async () => {
+    const ov = await budgetOverview(db, userD, OCT, octClock);
+    expect(ov.envelopes.map((e) => e.envelope.id)).not.toContain(envDetached);
+    // 4321 (без аспекта) не попал ни в баланс, ни в Unbudgeted; 5432 — не попал в spent
+    // конверта, хотя связь `envelope-binding` от envA к нему есть.
+    expect(ov.balance.expense).toBe('2110.00');
+    expect(ov.envelopes.find((e) => e.envelope.id === envA)?.spent).toBe('700.00');
+    expect(ov.unbudgeted.map((u) => u.total)).toEqual(['222.00']);
+
+    // Селектор §2.3 такую строку конвертом тоже не считает: иначе он выбрал бы её вместо
+    // envA (тот же период, меньший uuid решал бы tie-break произвольно).
+    const st = await envelopeForCategory(
+      db,
+      userD,
+      { categoryId: catB, date: '2026-10-10' },
+      octClock,
+    );
+    expect(st?.envelope.id).toBe(envA);
+  });
+
+  test('spent конверта считает сумму и валюту из props (§2.2, §5)', async () => {
+    const ov = await budgetOverview(db, userD, OCT, octClock);
+    const st = ov.envelopes.find((e) => e.envelope.id === envA);
+    // 700 (сумма из props) — и НЕ 70000 из карты; USD-транзакция в RUB-конверт не входит,
+    // хотя карта называет её рублёвой; план по props в spent не входит, хотя карта зовёт
+    // его фактом.
+    expect(st?.spent).toBe('700.00');
+  });
+
+  test('баланс периода собран по props: направление, валюта, дата и «нет planned = факт»', async () => {
+    const ov = await budgetOverview(db, userD, OCT, octClock);
+    // expense: 700 (txnAmount) + 222 (факт по props) + 888 (под конвертом-списком) = 1810.
+    // Не входят: 999 и 333 (USD по props), 111 (план по props), 444 (доход по props),
+    // 555 (шаблон по props), 666 (будущая дата по props), 300 — входит, это тоже расход.
+    expect(ov.balance.expense).toBe('2110.00');
+    expect(ov.balance.income).toBe('444.00');
+    expect(ov.balance.balance).toBe('-1666.00');
+  });
+
+  test('planned собирает план по props, а не по карте (§2.7, РП-9)', async () => {
+    const ov = await budgetOverview(db, userD, OCT, octClock);
+    expect(ov.planned.map((p) => p.entity.id)).toEqual([txnPlannedProps]);
+    expect(ov.planned[0]?.amount).toBe('111.00');
+    expect(ov.planned[0]?.categoryTitle).toBe('Категория с расхождением');
+  });
+
+  test('Unbudgeted: группировка по категории props, а конверт-родитель — по списку аспектов', async () => {
+    const ov = await budgetOverview(db, userD, OCT, octClock);
+    // Единственная строка — catNoEnv на 222.00: 888.00 увёл конверт, несомый ТОЛЬКО
+    // списком аспектов; 333.00 — чужая валюта, 555.00 — шаблон, 666.00 — будущая дата.
+    expect(ov.unbudgeted).toEqual([
+      {
+        category: { id: catNoEnv, title: 'Категория без конверта', icon: '🧺' },
+        total: '222.00',
+      },
+    ]);
+  });
+
+  test('карточка категории берёт icon/color из props', async () => {
+    const ov = await budgetOverview(db, userD, OCT, octClock);
+    const st = ov.envelopes.find((e) => e.envelope.id === envA);
+    expect(st?.category).toEqual({
+      id: catB,
+      title: 'Категория с расхождением',
+      icon: '🟩',
+      color: '#00aa00',
+    });
+  });
+
+  test('дерево категорий §2.10 собрано по списку аспектов и роли category-parent', async () => {
+    const ov = await budgetOverview(db, userD, OCT, octClock);
+    const parent = ov.envelopes.find((e) => e.envelope.id === envTreeParent);
+    // Родитель показывает СВОЙ лимит плюс лимит ребёнка и расход ребёнка (§2.10).
+    expect(parent?.effectiveLimit).toBe('3000.00');
+    expect(parent?.spent).toBe('300.00');
+
+    // Вторая сторона: ребро `category-parent` к НЕ-категории деревом не считается —
+    // иначе конверт catB собрал бы ещё 400.00 лимита конверта не-категории.
+    expect(ov.envelopes.find((e) => e.envelope.id === envA)?.effectiveLimit).toBe('5000.00');
+  });
+
+  test('budget_status: категории и spend_class — из списка аспектов и props', async () => {
+    const st = await budgetStatus(db, userD, OCT, octClock);
+    // Порядок — `ORDER BY title, id` запроса; список полный, потому что онбординг не сеялся.
+    expect(st.categories).toEqual([
+      { id: catTreeChild, title: 'Дочерняя категория', spendClass: null },
+      { id: catNoEnv, title: 'Категория без конверта', spendClass: null },
+      { id: catB, title: 'Категория с расхождением', spendClass: 'fixed' },
+      { id: catA, title: 'Категория списком', spendClass: null },
+    ]);
+  });
+
+  test('селектор конверта (§2.3) выбирает по периоду из props', async () => {
+    const st = await envelopeForCategory(
+      db,
+      userD,
+      { categoryId: catB, date: '2026-10-10' },
+      octClock,
+    );
+    expect(st?.envelope.id).toBe(envA);
+    expect(st?.effectiveLimit).toBe('5000.00');
+  });
+
+  test('мини-тренд категории (§3.2) читает конверты по props', async () => {
+    const trend = await categoryTrend(db, userD, { categoryId: catB, months: 1 }, octClock);
+    expect(trend).toEqual([{ period: OCT, spent: '700.00', limit: '5000.00' }]);
+  });
+
+  test('превью rollover (§3.5) видит месячный конверт октября по props', async () => {
+    const preview = await rolloverPreview(db, userD, '2026-11', octClock);
+    expect(preview.needsSetup).toBe(false);
+    // Порядок строк — title → id; catNoEnv попадает сюда без конверта: его октябрьские
+    // траты по props видит запрос «категории с тратами БЕЗ конверта прошлого месяца».
+    // pseudoCat замыкает список: `categoriesById` берёт title из СТРОКИ (как и до перевода),
+    // признак аспекта гасит только карточку — icon/color/spend_class.
+    expect(preview.rows.map((r) => r.categoryId)).toEqual([
+      catTreeChild,
+      catNoEnv,
+      catB,
+      catA,
+      pseudoCat,
+    ]);
+    // carryover = effectiveLimit − spent (§2.6): 5000 − 700 у catB.
+    expect(preview.rows.find((r) => r.categoryId === catB)?.carryover).toBe('4300.00');
+    // Категория без конверта: переносить нечего, suggestedLimit — трата вверх до сотни.
+    // 1110 = 222 + 888: оба октябрьских факта по props. Не вошли 333 (USD по props),
+    // 555 (шаблон по props) и 666 (дата 25.10 по props — позже «сегодня»).
+    // Конверт-родитель здесь роли не играет: этот запрос смотрит на конверты КАТЕГОРИИ,
+    // а период envGhost (январь 2024) октябрь не пересекает.
+    expect(preview.rows.find((r) => r.categoryId === catNoEnv)).toMatchObject({
+      prevSpent: '1110.00',
+      carryover: '0.00',
+      suggestedLimit: '1200.00',
+    });
+  });
+
+  test('бейдж §6.1 берёт лимит конверта из props', async () => {
+    // По props ни один октябрьский конверт не в тревоге: 700 из 5000, 300 из 2000, 0 из 1000.
+    // По старой карте лимит envTreeChild — 100, и та же трата 300 дала бы ровно одну тревогу.
+    expect(await budgetAlertCount(db, userD, OCT, octClock)).toBe(0);
   });
 });

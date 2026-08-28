@@ -24,7 +24,7 @@ import {
   type RolloverPreview,
   type RolloverResult,
 } from '@orbis/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import { type AnyColumn, and, eq, type SQL, sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { entities, userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -52,7 +52,40 @@ import { decAdd, decCmp, decDivBy, decMulInt, decSub } from './decimal';
 // одна на всех, а признак «источник — конверт» и фильтр архива у пятерых разные.
 
 type EntityRow = typeof entities.$inferSelect;
-type AspectsMap = Record<string, Record<string, unknown>>;
+
+/**
+ * Значения строки (§А1-1) — но ТОЛЬКО если аспект-носитель приложен.
+ *
+ * Признак аспекта здесь не перестраховка, а точный перевод старой формы. Старая карта
+ * складывала значение ПОД аспект, поэтому снятие аспекта уносило его из неё целиком; в
+ * `props` значение при снятии ОСТАЁТСЯ (Р9: аспект — не владелец поля). Читатель без этого
+ * признака считал бы деньги на записи, которая транзакцией быть перестала, — путь живой,
+ * его исполняет `unbindOps` (detach `orbis/financial`).
+ *
+ * Та же оговорка стоит в SQL этого файла: там признак пишется как
+ * `'<аспект>' = ANY(<алиас>.aspects)` в WHERE.
+ */
+function propsOf(row: EntityRow, aspectId: string): Record<string, unknown> {
+  return row.aspects.includes(aspectId) ? (row.props as Record<string, unknown>) : {};
+}
+
+/**
+ * SQL-условие «сущность НЕ шаблон повторения» (§2.8).
+ *
+ * Помощник, а не строка по месту, потому что в новой форме это уже не одна проверка на
+ * NULL, а ПАРА «аспект приложен И свойство задано»: потерять вторую половину при переписи —
+ * ровно один невнимательный copy-paste, а цена — шаблон, посчитанный вместе со своими
+ * инстансами, то есть двойной расход у владельца. В этом файле условие пишет только он —
+ * все ПЯТЬ мест (spent конверта, баланс, Unbudgeted, planned, траты превью rollover) зовут
+ * его. Шестое место того же условия — `rebindForEnvelope` в `binding.ts`; общего дома у них
+ * нет, потому что `aggregates.ts` импортирует `binding.ts`, а не наоборот.
+ *
+ * Аргументы — выражения колонок, а не имя алиаса: половина мест это сырой SQL с алиасом
+ * (`e.aspects`), половина — drizzle-условия над `entities`, и строкой обе формы не выразить.
+ */
+function notRecurringTemplateSql(aspectsCol: SQL | AnyColumn, propsCol: SQL | AnyColumn): SQL {
+  return sql`NOT ('orbis/schedule' = ANY(${aspectsCol}) AND ${propsCol}->'orbis/recurrence' IS NOT NULL)`;
+}
 
 /** Горизонт Coming up и материализации — 14 дней (01-arch §5.4). */
 const HORIZON_DAYS = 14;
@@ -129,8 +162,12 @@ function daysInclusive(from: string, to: string): number {
  * (planned=false) детей по relation parent, occurred_on ≤ сегодня, валюта транзакции
  * (coalesce с defaultCurrency) = валюте СВОЕГО конверта (join env — конверты набора
  * могут быть в разных валютах; чужая валюта в spent не входит, §5). Шаблоны recurring
- * (orbis/schedule.recurrence) — не операции (§2.8): висящая parent-связь на шаблон
+ * (orbis/recurrence) — не операции (§2.8): висящая parent-связь на шаблон
  * (легаси-данные, ручной relation_create) не должна давать двойной счёт с инстансами.
+ *
+ * У источника (`env`) признак «это конверт» НЕ проверяется — как и до перевода: набор
+ * `envelopeIds` вызывающий уже отобрал по аспекту бюджета, и вторая проверка была бы
+ * тавтологией (перечень расхождений пятерых читателей — в докблоке `legacyParentRolesSql`).
  */
 async function spentByEnvelope(
   tx: Tx,
@@ -146,19 +183,20 @@ async function spentByEnvelope(
   );
   const rows = (await tx.execute(sql`
     SELECT r.source_id AS envelope_id,
-           coalesce(sum((e.aspects_legacy->'orbis/financial'->>'amount')::numeric), 0)::text AS spent
+           coalesce(sum((e.props->>'orbis/amount')::numeric), 0)::text AS spent
     FROM relations r
     JOIN entities env ON env.id = r.source_id
     JOIN entities e   ON e.id = r.target_id
     WHERE r.role IN (${legacyParentRolesSql()})
       AND r.source_id IN (${ids})
       AND e.owner_id = ${ownerId} AND NOT e.archived
-      AND e.aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
-      AND e.aspects_legacy->'orbis/financial'->>'direction' = 'expense'
-      AND coalesce((e.aspects_legacy->'orbis/financial'->>'planned')::boolean, false) = false
-      AND (e.aspects_legacy->'orbis/financial'->>'occurred_on') <= ${today}
-      AND coalesce(e.aspects_legacy->'orbis/financial'->>'currency', ${defaultCurrency})
-          = coalesce(env.aspects_legacy->'orbis/budget'->>'currency', ${defaultCurrency})
+      AND 'orbis/financial' = ANY(e.aspects)
+      AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
+      AND e.props->>'orbis/direction' = 'expense'
+      AND coalesce((e.props->>'orbis/planned')::boolean, false) = false
+      AND (e.props->>'orbis/occurred_on') <= ${today}
+      AND coalesce(e.props->>'orbis/currency', ${defaultCurrency})
+          = coalesce(env.props->>'orbis/currency', ${defaultCurrency})
     GROUP BY r.source_id
   `)) as unknown as Array<{ envelope_id: string; spent: string }>;
   return new Map(rows.map((r) => [r.envelope_id, r.spent]));
@@ -180,21 +218,27 @@ async function categoriesById(tx: Tx, ids: string[]): Promise<Map<string, Catego
     sql`, `,
   );
   const rows = (await tx.execute(sql`
-    SELECT id, title, aspects_legacy->'orbis/category' AS category FROM entities
+    SELECT id, title, props, ('orbis/category' = ANY(aspects)) AS is_category FROM entities
     WHERE id IN (${list})
-  `)) as unknown as Array<{ id: string; title: string; category: Record<string, unknown> | null }>;
+  `)) as unknown as Array<{
+    id: string;
+    title: string;
+    props: Record<string, unknown>;
+    is_category: boolean;
+  }>;
   return new Map(
     rows.map((r) => {
-      const c = r.category ?? {};
+      // Не категория — карточка пустая: ровно то, что давала старая карта без своего ключа.
+      const c = r.is_category ? r.props : {};
+      const spendClass = c['orbis/spend_class'];
       return [
         r.id,
         {
           id: r.id,
           title: r.title,
-          icon: typeof c.icon === 'string' ? c.icon : null,
-          color: typeof c.color === 'string' ? c.color : null,
-          spendClass:
-            c.spend_class === 'fixed' || c.spend_class === 'discretionary' ? c.spend_class : null,
+          icon: typeof c['orbis/icon'] === 'string' ? c['orbis/icon'] : null,
+          color: typeof c['orbis/color'] === 'string' ? c['orbis/color'] : null,
+          spendClass: spendClass === 'fixed' || spendClass === 'discretionary' ? spendClass : null,
         },
       ];
     }),
@@ -222,7 +266,7 @@ async function categoryEdges(tx: Tx, ownerId: string): Promise<Map<string, strin
     JOIN entities t ON t.id = r.target_id
     WHERE r.role = ${ROLE_CATEGORY_PARENT}
       AND s.owner_id = ${ownerId}
-      AND s.aspects_legacy ? 'orbis/category' AND t.aspects_legacy ? 'orbis/category'
+      AND 'orbis/category' = ANY(s.aspects) AND 'orbis/category' = ANY(t.aspects)
   `)) as unknown as Array<{ source_id: string; target_id: string }>;
   const children = new Map<string, string[]>();
   for (const r of rows) {
@@ -252,7 +296,8 @@ function descendantsOf(children: Map<string, string[]>, root: string): Set<strin
 
 interface RawEnvelope {
   row: EntityRow;
-  budget: Record<string, unknown>;
+  /** Свойства конверта (§А1-1) — источник limit для тренда и превью rollover. */
+  props: Record<string, unknown>;
   categoryRef: string;
   periodStart: string;
   periodEnd: string;
@@ -266,26 +311,30 @@ function rawEnvelopeOf(
   spentMap: Map<string, string>,
   defaultCurrency: string,
 ): RawEnvelope | null {
-  const budget = (row.aspectsLegacy as AspectsMap)['orbis/budget'];
+  const props = propsOf(row, 'orbis/budget');
+  const categoryRef = props['orbis/finance_category'];
+  const periodStart = props['orbis/period_start'];
+  const periodEnd = props['orbis/period_end'];
+  const limit = props['orbis/limit'];
   if (
-    budget === undefined ||
-    typeof budget.category_ref !== 'string' ||
-    typeof budget.period_start !== 'string' ||
-    typeof budget.period_end !== 'string' ||
-    typeof budget.limit !== 'string'
+    typeof categoryRef !== 'string' ||
+    typeof periodStart !== 'string' ||
+    typeof periodEnd !== 'string' ||
+    typeof limit !== 'string'
   ) {
     return null; // структурно битый конверт не роняет Overview (валидность держит executor)
   }
-  const carryover = typeof budget.carryover === 'string' ? budget.carryover : '0';
+  const carryover = props['orbis/carryover'];
+  const currency = props['orbis/currency'];
   return {
     row,
-    budget,
-    categoryRef: budget.category_ref,
-    periodStart: budget.period_start,
-    periodEnd: budget.period_end,
-    currency: typeof budget.currency === 'string' ? budget.currency : defaultCurrency,
+    props,
+    categoryRef,
+    periodStart,
+    periodEnd,
+    currency: typeof currency === 'string' ? currency : defaultCurrency,
     spent: decAdd(spentMap.get(row.id) ?? '0', '0'), // нормализация к канону "0.00"
-    effectiveLimit: decAdd(budget.limit, carryover),
+    effectiveLimit: decAdd(limit, typeof carryover === 'string' ? carryover : '0'),
   };
 }
 
@@ -364,8 +413,9 @@ async function rawEnvelopesOfMonth(
       and(
         eq(entities.ownerId, ownerId),
         eq(entities.archived, false),
-        sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_start' <= ${end}`,
-        sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_end' >= ${start}`,
+        sql`'orbis/budget' = ANY(${entities.aspects})`,
+        sql`${entities.props}->>'orbis/period_start' <= ${end}`,
+        sql`${entities.props}->>'orbis/period_end' >= ${start}`,
       ),
     );
   const spentMap = await spentByEnvelope(
@@ -398,18 +448,19 @@ async function computeOverview(
   const raws = await rawEnvelopesOfMonth(tx, ownerId, month, today, defCur);
 
   // Баланс периода (§2.5): факты в [start;end] и ≤ сегодня, валюта периода = дефолтная;
-  // шаблоны recurring (orbis/schedule.recurrence) — не операции, исключены
+  // шаблоны recurring (свойство orbis/recurrence) — не операции, исключены
   const balanceRows = (await tx.execute(sql`
-    SELECT e.aspects_legacy->'orbis/financial'->>'direction' AS direction,
-           coalesce(sum((e.aspects_legacy->'orbis/financial'->>'amount')::numeric), 0)::text AS total
+    SELECT e.props->>'orbis/direction' AS direction,
+           coalesce(sum((e.props->>'orbis/amount')::numeric), 0)::text AS total
     FROM entities e
     WHERE e.owner_id = ${ownerId} AND NOT e.archived
-      AND e.aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
-      AND coalesce((e.aspects_legacy->'orbis/financial'->>'planned')::boolean, false) = false
-      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' >= ${start}
-      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${end}
-      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${today}
-      AND coalesce(e.aspects_legacy->'orbis/financial'->>'currency', ${defCur}) = ${defCur}
+      AND 'orbis/financial' = ANY(e.aspects)
+      AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
+      AND coalesce((e.props->>'orbis/planned')::boolean, false) = false
+      AND e.props->>'orbis/occurred_on' >= ${start}
+      AND e.props->>'orbis/occurred_on' <= ${end}
+      AND e.props->>'orbis/occurred_on' <= ${today}
+      AND coalesce(e.props->>'orbis/currency', ${defCur}) = ${defCur}
     GROUP BY 1
   `)) as unknown as Array<{ direction: string; total: string }>;
   const income = decAdd(balanceRows.find((r) => r.direction === 'income')?.total ?? '0', '0');
@@ -418,22 +469,23 @@ async function computeOverview(
   // Unbudgeted (§2.3 шаг 5, §3.1): фактические расходы периода БЕЗ budget-parent,
   // группировка по category_ref; чужая валюта в агрегат не входит (§5)
   const unbudgetedRows = (await tx.execute(sql`
-    SELECT e.aspects_legacy->'orbis/financial'->>'category_ref' AS category_id,
-           sum((e.aspects_legacy->'orbis/financial'->>'amount')::numeric)::text AS total
+    SELECT e.props->>'orbis/finance_category' AS category_id,
+           sum((e.props->>'orbis/amount')::numeric)::text AS total
     FROM entities e
     WHERE e.owner_id = ${ownerId} AND NOT e.archived
-      AND e.aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
-      AND e.aspects_legacy->'orbis/financial'->>'direction' = 'expense'
-      AND coalesce((e.aspects_legacy->'orbis/financial'->>'planned')::boolean, false) = false
-      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' >= ${start}
-      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${end}
-      AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${today}
-      AND coalesce(e.aspects_legacy->'orbis/financial'->>'currency', ${defCur}) = ${defCur}
+      AND 'orbis/financial' = ANY(e.aspects)
+      AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
+      AND e.props->>'orbis/direction' = 'expense'
+      AND coalesce((e.props->>'orbis/planned')::boolean, false) = false
+      AND e.props->>'orbis/occurred_on' >= ${start}
+      AND e.props->>'orbis/occurred_on' <= ${end}
+      AND e.props->>'orbis/occurred_on' <= ${today}
+      AND coalesce(e.props->>'orbis/currency', ${defCur}) = ${defCur}
       AND NOT EXISTS (
         SELECT 1 FROM relations r
         JOIN entities p ON p.id = r.source_id
         WHERE r.target_id = e.id AND r.role IN (${legacyParentRolesSql()})
-          AND p.aspects_legacy ? 'orbis/budget' AND NOT p.archived
+          AND 'orbis/budget' = ANY(p.aspects) AND NOT p.archived
       )
     GROUP BY 1
     ORDER BY 1
@@ -448,9 +500,10 @@ async function computeOverview(
       and(
         eq(entities.ownerId, ownerId),
         eq(entities.archived, false),
-        sql`${entities.aspectsLegacy}->'orbis/financial'->>'planned' = 'true'`,
-        sql`${entities.aspectsLegacy}->'orbis/financial'->>'occurred_on' >= ${today}`,
-        sql`${entities.aspectsLegacy}->'orbis/financial'->>'occurred_on' <= ${horizon}`,
+        sql`'orbis/financial' = ANY(${entities.aspects})`,
+        sql`coalesce((${entities.props}->>'orbis/planned')::boolean, false)`,
+        sql`${entities.props}->>'orbis/occurred_on' >= ${today}`,
+        sql`${entities.props}->>'orbis/occurred_on' <= ${horizon}`,
         sql`EXISTS (SELECT 1 FROM relations r
                     WHERE r.target_id = ${entities.id} AND r.role = ${ROLE_INSTANCE_OF})`,
       ),
@@ -465,9 +518,10 @@ async function computeOverview(
       and(
         eq(entities.ownerId, ownerId),
         eq(entities.archived, false),
-        sql`${entities.aspectsLegacy}->'orbis/financial'->>'planned' = 'true'`,
-        sql`${entities.aspectsLegacy}->'orbis/financial'->>'direction' = 'expense'`,
-        sql`${entities.aspectsLegacy}->'orbis/schedule'->'recurrence' IS NULL`,
+        sql`'orbis/financial' = ANY(${entities.aspects})`,
+        sql`coalesce((${entities.props}->>'orbis/planned')::boolean, false)`,
+        sql`${entities.props}->>'orbis/direction' = 'expense'`,
+        notRecurringTemplateSql(entities.aspects, entities.props),
         sql`NOT EXISTS (SELECT 1 FROM relations r
                         WHERE r.target_id = ${entities.id} AND r.role = ${ROLE_INSTANCE_OF})`,
       ),
@@ -477,7 +531,7 @@ async function computeOverview(
   const categoryIds = new Set<string>();
   for (const raw of raws) categoryIds.add(raw.categoryRef);
   for (const row of plannedRows) {
-    const ref = (row.aspectsLegacy as AspectsMap)['orbis/financial']?.category_ref;
+    const ref = propsOf(row, 'orbis/financial')['orbis/finance_category'];
     if (typeof ref === 'string') categoryIds.add(ref);
   }
   for (const r of unbudgetedRows) categoryIds.add(r.category_id);
@@ -524,11 +578,10 @@ async function computeOverview(
   // Бейдж §6.1 — общий countAlerts (единая формула с budget.alertCount)
   const alertCount = countAlerts(raws, today);
 
-  const finOf = (row: EntityRow) =>
-    ((row.aspectsLegacy as AspectsMap)['orbis/financial'] ?? {}) as Record<string, unknown>;
+  const finOf = (row: EntityRow) => propsOf(row, 'orbis/financial');
   const dateIdSort = (a: EntityRow, b: EntityRow) => {
-    const ka = `${String(finOf(a).occurred_on ?? '')}\u0000${a.id}`;
-    const kb = `${String(finOf(b).occurred_on ?? '')}\u0000${b.id}`;
+    const ka = `${String(finOf(a)['orbis/occurred_on'] ?? '')}\u0000${a.id}`;
+    const kb = `${String(finOf(b)['orbis/occurred_on'] ?? '')}\u0000${b.id}`;
     return ka < kb ? -1 : ka > kb ? 1 : 0;
   };
 
@@ -538,14 +591,14 @@ async function computeOverview(
     envelopes: statuses,
     comingUp: [...comingRows].sort(dateIdSort).map((row) => ({
       entity: toWireEntity(row),
-      occurredOn: String(finOf(row).occurred_on ?? ''),
-      amount: String(finOf(row).amount ?? '0'),
-      direction: String(finOf(row).direction ?? ''),
+      occurredOn: String(finOf(row)['orbis/occurred_on'] ?? ''),
+      amount: String(finOf(row)['orbis/amount'] ?? '0'),
+      direction: String(finOf(row)['orbis/direction'] ?? ''),
     })),
     planned: [...plannedRows].sort(dateIdSort).map((row) => ({
       entity: toWireEntity(row),
-      amount: String(finOf(row).amount ?? '0'),
-      categoryTitle: categoryOr(catMap, String(finOf(row).category_ref ?? '')).title,
+      amount: String(finOf(row)['orbis/amount'] ?? '0'),
+      categoryTitle: categoryOr(catMap, String(finOf(row)['orbis/finance_category'] ?? '')).title,
     })),
     unbudgeted: unbudgetedRows.map((r) => {
       const c = categoryOr(catMap, r.category_id);
@@ -624,9 +677,9 @@ export async function budgetStatus(
   return withIdentity(db, ownerId, async (tx) => {
     const overview = await computeOverview(tx, ownerId, m, today);
     const rows = (await tx.execute(sql`
-      SELECT id, title, aspects_legacy->'orbis/category'->>'spend_class' AS spend_class
+      SELECT id, title, props->>'orbis/spend_class' AS spend_class
       FROM entities
-      WHERE owner_id = ${ownerId} AND NOT archived AND aspects_legacy ? 'orbis/category'
+      WHERE owner_id = ${ownerId} AND NOT archived AND 'orbis/category' = ANY(aspects)
       ORDER BY title, id
     `)) as unknown as Array<{ id: string; title: string; spend_class: string | null }>;
     return {
@@ -707,11 +760,12 @@ export async function categoryTrend(
         and(
           eq(entities.ownerId, ownerId),
           eq(entities.archived, false),
-          sql`${entities.aspectsLegacy}->'orbis/budget'->>'category_ref' = ${args.categoryId}`,
-          sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_start' >= ${`${first}-01`}`,
-          sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_start' <= ${monthRange(curMonth).end}`,
+          sql`'orbis/budget' = ANY(${entities.aspects})`,
+          sql`${entities.props}->>'orbis/finance_category' = ${args.categoryId}`,
+          sql`${entities.props}->>'orbis/period_start' >= ${`${first}-01`}`,
+          sql`${entities.props}->>'orbis/period_start' <= ${monthRange(curMonth).end}`,
           // только валюта по умолчанию — см. валютную границу в docstring
-          sql`coalesce(${entities.aspectsLegacy}->'orbis/budget'->>'currency', ${defCur}) = ${defCur}`,
+          sql`coalesce(${entities.props}->>'orbis/currency', ${defCur}) = ${defCur}`,
         ),
       );
     const spentMap = await spentByEnvelope(
@@ -732,8 +786,8 @@ export async function categoryTrend(
         // штриховая линия limit §3.2 — сумма limit (без carryover)
         limit:
           prev === undefined
-            ? decAdd(String(raw.budget.limit), '0')
-            : decAdd(prev.limit, String(raw.budget.limit)),
+            ? decAdd(String(raw.props['orbis/limit']), '0')
+            : decAdd(prev.limit, String(raw.props['orbis/limit'])),
       });
     }
     return monthsList.map((period) => {
@@ -813,20 +867,22 @@ export async function rolloverPreview(
         and(
           eq(entities.ownerId, ownerId),
           eq(entities.archived, false),
-          sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_start' = ${prevRange.start}`,
-          sql`${entities.aspectsLegacy}->'orbis/budget'->>'period_end' = ${prevRange.end}`,
-          sql`coalesce(${entities.aspectsLegacy}->'orbis/budget'->>'currency', ${defCur}) = ${defCur}`,
+          sql`'orbis/budget' = ANY(${entities.aspects})`,
+          sql`${entities.props}->>'orbis/period_start' = ${prevRange.start}`,
+          sql`${entities.props}->>'orbis/period_end' = ${prevRange.end}`,
+          sql`coalesce(${entities.props}->>'orbis/currency', ${defCur}) = ${defCur}`,
         ),
       );
 
     // Категории с конвертом-преемником: месячный конверт целевого месяца (defaultCurrency)
     const succRows = (await tx.execute(sql`
-      SELECT DISTINCT aspects_legacy->'orbis/budget'->>'category_ref' AS category_id
+      SELECT DISTINCT props->>'orbis/finance_category' AS category_id
       FROM entities
       WHERE owner_id = ${ownerId} AND NOT archived
-        AND aspects_legacy->'orbis/budget'->>'period_start' = ${targetRange.start}
-        AND aspects_legacy->'orbis/budget'->>'period_end' = ${targetRange.end}
-        AND coalesce(aspects_legacy->'orbis/budget'->>'currency', ${defCur}) = ${defCur}
+        AND 'orbis/budget' = ANY(aspects)
+        AND props->>'orbis/period_start' = ${targetRange.start}
+        AND props->>'orbis/period_end' = ${targetRange.end}
+        AND coalesce(props->>'orbis/currency', ${defCur}) = ${defCur}
     `)) as unknown as Array<{ category_id: string }>;
     const successors = new Set(succRows.map((r) => r.category_id));
 
@@ -849,7 +905,7 @@ export async function rolloverPreview(
       const raw = rawEnvelopeOf(row, spentMap, defCur);
       if (raw === null || successors.has(raw.categoryRef)) continue;
       const remaining = decSub(raw.effectiveLimit, raw.spent);
-      const limit = decAdd(String(raw.budget.limit), '0'); // нормализация к канону
+      const limit = decAdd(String(raw.props['orbis/limit']), '0'); // нормализация к канону
       const acc = byCat.get(raw.categoryRef);
       byCat.set(
         raw.categoryRef,
@@ -871,29 +927,30 @@ export async function rolloverPreview(
     // участвует. Валютная граница NOT EXISTS симметрична остальным запросам (§5):
     // чужевалютный конверт RUB-траты не бюджетирует и категорию из превью не прячет.
     const spendingRows = (await tx.execute(sql`
-      SELECT e.aspects_legacy->'orbis/financial'->>'category_ref' AS category_id,
-             sum((e.aspects_legacy->'orbis/financial'->>'amount')::numeric)::text AS total
+      SELECT e.props->>'orbis/finance_category' AS category_id,
+             sum((e.props->>'orbis/amount')::numeric)::text AS total
       FROM entities e
       WHERE e.owner_id = ${ownerId} AND NOT e.archived
-        AND e.aspects_legacy->'orbis/financial'->>'category_ref' IS NOT NULL
-        AND e.aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
-        AND e.aspects_legacy->'orbis/financial'->>'direction' = 'expense'
-        AND coalesce((e.aspects_legacy->'orbis/financial'->>'planned')::boolean, false) = false
-        AND e.aspects_legacy->'orbis/financial'->>'occurred_on' >= ${prevRange.start}
-        AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${prevRange.end}
-        AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${today}
-        AND coalesce(e.aspects_legacy->'orbis/financial'->>'currency', ${defCur}) = ${defCur}
+        AND 'orbis/financial' = ANY(e.aspects)
+        AND e.props->>'orbis/finance_category' IS NOT NULL
+        AND ${notRecurringTemplateSql(sql.raw('e.aspects'), sql.raw('e.props'))}
+        AND e.props->>'orbis/direction' = 'expense'
+        AND coalesce((e.props->>'orbis/planned')::boolean, false) = false
+        AND e.props->>'orbis/occurred_on' >= ${prevRange.start}
+        AND e.props->>'orbis/occurred_on' <= ${prevRange.end}
+        AND e.props->>'orbis/occurred_on' <= ${today}
+        AND coalesce(e.props->>'orbis/currency', ${defCur}) = ${defCur}
         AND NOT EXISTS (
           SELECT 1 FROM entities env
           WHERE env.owner_id = ${ownerId} AND NOT env.archived
-            AND env.aspects_legacy->'orbis/budget'->>'category_ref'
-                = e.aspects_legacy->'orbis/financial'->>'category_ref'
-            AND coalesce(env.aspects_legacy->'orbis/budget'->>'currency', ${defCur}) = ${defCur}
-            AND env.aspects_legacy->'orbis/budget'->>'period_start' <= ${prevRange.end}
-            AND env.aspects_legacy->'orbis/budget'->>'period_end' >= ${prevRange.start}
+            AND 'orbis/budget' = ANY(env.aspects)
+            AND env.props->>'orbis/finance_category' = e.props->>'orbis/finance_category'
+            AND coalesce(env.props->>'orbis/currency', ${defCur}) = ${defCur}
+            AND env.props->>'orbis/period_start' <= ${prevRange.end}
+            AND env.props->>'orbis/period_end' >= ${prevRange.start}
         )
       GROUP BY 1
-      HAVING sum((e.aspects_legacy->'orbis/financial'->>'amount')::numeric) > 0
+      HAVING sum((e.props->>'orbis/amount')::numeric) > 0
       ORDER BY 1
     `)) as unknown as Array<{ category_id: string; total: string }>;
 
@@ -983,13 +1040,14 @@ export async function rolloverCreate(
         sql`, `,
       );
       const succ = (await tx.execute(sql`
-        SELECT DISTINCT aspects_legacy->'orbis/budget'->>'category_ref' AS category_id
+        SELECT DISTINCT props->>'orbis/finance_category' AS category_id
         FROM entities
         WHERE owner_id = ${ownerId} AND NOT archived
-          AND aspects_legacy->'orbis/budget'->>'category_ref' IN (${list})
-          AND aspects_legacy->'orbis/budget'->>'period_start' = ${start}
-          AND aspects_legacy->'orbis/budget'->>'period_end' = ${end}
-          AND coalesce(aspects_legacy->'orbis/budget'->>'currency', ${currency}) = ${currency}
+          AND 'orbis/budget' = ANY(aspects)
+          AND props->>'orbis/finance_category' IN (${list})
+          AND props->>'orbis/period_start' = ${start}
+          AND props->>'orbis/period_end' = ${end}
+          AND coalesce(props->>'orbis/currency', ${currency}) = ${currency}
       `)) as unknown as Array<{ category_id: string }>;
       if (succ.length > 0) {
         throw new ExecError(
@@ -1020,15 +1078,15 @@ export async function rolloverCreate(
         input: {
           title: title === '' ? `Конверт ${input.month}` : `Конверт «${title}» ${input.month}`,
           tags: [],
-          aspects: {
-            'orbis/budget': {
-              category_ref: row.categoryId,
-              limit: row.limit,
-              carryover: row.carryover,
-              currency: defCur,
-              period_start: start,
-              period_end: end,
-            },
+          // Внутренняя форма §А1-1: список навешиваемых аспектов + значения по id свойства.
+          aspects: ['orbis/budget'],
+          props: {
+            'orbis/finance_category': row.categoryId,
+            'orbis/limit': row.limit,
+            'orbis/carryover': row.carryover,
+            'orbis/currency': defCur,
+            'orbis/period_start': start,
+            'orbis/period_end': end,
           },
         },
       };

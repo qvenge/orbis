@@ -8,7 +8,16 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  divergentEntityRow,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
+import { entities } from '../db/schema';
+import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
@@ -109,13 +118,11 @@ async function adminRows(query: ReturnType<typeof sql>): Promise<Array<Record<st
   }
 }
 
-/** orbis/financial сущности — истина в БД (админ-DSN). */
-async function finOf(id: string): Promise<Record<string, unknown>> {
-  const rows = await adminRows(
-    sql`SELECT aspects_legacy->'orbis/financial' AS fin FROM entities WHERE id = ${id}`,
-  );
+/** Свойства сущности — истина в БД (админ-DSN). */
+async function propsOf(id: string): Promise<Record<string, unknown>> {
+  const rows = await adminRows(sql`SELECT props FROM entities WHERE id = ${id}`);
   if (rows.length === 0) throw new Error(`сущность ${id} не найдена`);
-  return rows[0]?.fin as Record<string, unknown>;
+  return rows[0]?.props as Record<string, unknown>;
 }
 
 /** Живые budget-parent'ы транзакции. */
@@ -124,7 +131,7 @@ async function budgetParents(txnId: string): Promise<string[]> {
     sql`SELECT r.source_id FROM relations r
         JOIN entities e ON e.id = r.source_id
         WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
-          AND e.aspects_legacy ? 'orbis/budget'
+          AND 'orbis/budget' = ANY(e.aspects)
         ORDER BY r.source_id`,
   );
   return rows.map((r) => r.source_id as string);
@@ -133,13 +140,13 @@ async function budgetParents(txnId: string): Promise<string[]> {
 /** spent конверта прямым SQL (01 §3.5): факт-расходы (planned≠true), без today-фильтра. */
 async function spentOf(envelopeId: string): Promise<string> {
   const rows = await adminRows(
-    sql`SELECT COALESCE(SUM((e.aspects_legacy->'orbis/financial'->>'amount')::numeric), 0)::text AS spent
+    sql`SELECT COALESCE(SUM((e.props->>'orbis/amount')::numeric), 0)::text AS spent
         FROM relations r
         JOIN entities e ON e.id = r.target_id
         WHERE r.source_id = ${envelopeId} AND r.relation_type = 'parent'
           AND NOT e.archived
-          AND e.aspects_legacy->'orbis/financial'->>'direction' = 'expense'
-          AND (e.aspects_legacy->'orbis/financial'->>'planned') IS DISTINCT FROM 'true'`,
+          AND e.props->>'orbis/direction' = 'expense'
+          AND (e.props->>'orbis/planned') IS DISTINCT FROM 'true'`,
   );
   return rows[0]?.spent as string;
 }
@@ -175,11 +182,11 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     expect(r.actionId).toBe(batchId);
 
     // planned снят, occurred_on = фактическая дата, прочие поля financial сохранены (§9.2)
-    const fin = await finOf(purchase);
-    expect(fin.planned).toBe(false);
-    expect(fin.occurred_on).toBe(ACTUAL_ON);
-    expect(fin.amount).toBe('8000.00');
-    expect(fin.category_ref).toBe(cat);
+    const fin = await propsOf(purchase);
+    expect(fin['orbis/planned']).toBe(false);
+    expect(fin['orbis/occurred_on']).toBe(ACTUAL_ON);
+    expect(fin['orbis/amount']).toBe('8000.00');
+    expect(fin['orbis/finance_category']).toBe(cat);
 
     // конверт переселектён по НОВОЙ дате: августовский, не июльский; расход вошёл в spent
     expect(await budgetParents(purchase)).toEqual([augEnv]);
@@ -203,15 +210,15 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
       occurredOn: ACTUAL_ON,
       batchId,
     });
-    expect((await finOf(purchase)).planned).toBe(false);
+    expect((await propsOf(purchase))['orbis/planned']).toBe(false);
     expect(await budgetParents(purchase)).toEqual([augEnv]);
 
     // Undo целиком: план + прежняя дата + прежний конверт (§2.7 «обратимо целиком»)
     const u = await undoAction(db, { actorUserId: user, actionId: batchId });
     expect(u.ok).toBe(true);
-    const fin = await finOf(purchase);
-    expect(fin.planned).toBe(true);
-    expect(fin.occurred_on).toBe(PLANNED_ON);
+    const fin = await propsOf(purchase);
+    expect(fin['orbis/planned']).toBe(true);
+    expect(fin['orbis/occurred_on']).toBe(PLANNED_ON);
     expect(await budgetParents(purchase)).toEqual([julyEnv]);
     expect(await spentOf(augEnv)).toBe('0');
   });
@@ -231,7 +238,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
     expect(second.idempotentReplay).toBe(true);
     expect(second.actionId).toBe(batchId);
 
-    expect((await finOf(purchase)).planned).toBe(false);
+    expect((await propsOf(purchase))['orbis/planned']).toBe(false);
     expect(await budgetParents(purchase)).toEqual([augEnv]);
     expect(await actionMessageCount(batchId)).toBe(1);
   });
@@ -295,7 +302,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
       message: expect.stringContaining('разархивируйте'),
     });
     // не тронута: осталась архивным планом
-    expect((await finOf(planned.id)).planned).toBe(true);
+    expect((await propsOf(planned.id))['orbis/planned']).toBe(true);
   });
 
   test('recurring-инстанс (derived_from) → INVARIANT (его переводит postDue, §2.8)', async () => {
@@ -329,7 +336,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
       today: PLANNED_ON,
     });
     const instanceId = recurringInstanceId(template.id, PLANNED_ON);
-    expect((await finOf(instanceId)).planned).toBe(true);
+    expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
 
     await expect(
       ownerCaller(user).budget.confirmPurchase({
@@ -339,7 +346,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
       }),
     ).rejects.toMatchObject({ code: 'UNPROCESSABLE_CONTENT' });
     // не тронут: остался planned-прогнозом
-    expect((await finOf(instanceId)).planned).toBe(true);
+    expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
   });
 
   test('шаблон recurring → INVARIANT', async () => {
@@ -403,7 +410,7 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
         batchId: newId(),
       }),
     ).rejects.toMatchObject({ code: 'UNPROCESSABLE_CONTENT' });
-    expect((await finOf(purchase)).planned).toBe(true);
+    expect((await propsOf(purchase))['orbis/planned']).toBe(true);
   });
 
   test('мутация — поверхность владельца: агенту FORBIDDEN (§9.3)', async () => {
@@ -418,5 +425,86 @@ describe('budget.confirmPurchase (03-budget §2.7): перевод planned→fac
         batchId: newId(),
       }),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Задача 10a: пречек §2.7 читает НОВУЮ правду строки (§А1-1)
+// ---------------------------------------------------------------------------
+/**
+ * ПРОБА РАСХОЖДЕНИЕМ КОЛОНОК (тот же приём, что в `aggregates.test.ts`/`binding.test.ts`):
+ * строка кладётся прямым INSERT'ом так, что `props` и старая карта говорят про `planned`
+ * ПРОТИВОПОЛОЖНОЕ, и тест спрашивает, чей ответ даёт пречек. Обе стороны границы: план по
+ * props переводится, факт по props — отвергается.
+ */
+describe('пречек §2.7 читает planned из props (§А1-1, РП-9, Задача 10a)', () => {
+  function divergentRow(
+    user: string,
+    id: string,
+    props: Record<string, unknown>,
+    legacyFin: Record<string, unknown>,
+  ): typeof entities.$inferInsert {
+    return divergentEntityRow({
+      ownerId: user,
+      id,
+      title: 'Покупка расхождения',
+      props,
+      aspects: ['orbis/financial'],
+      legacy: { 'orbis/financial': legacyFin },
+    });
+  }
+
+  const finProps = (over: Record<string, unknown>) => ({
+    'orbis/amount': '1000.00',
+    'orbis/direction': 'expense',
+    'orbis/finance_category': newId(),
+    'orbis/occurred_on': PLANNED_ON,
+    ...over,
+  });
+
+  test('план по props переводится в факт, хотя старая карта зовёт его фактом', async () => {
+    const user = freshUserId();
+    const id = newId();
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values(
+        divergentRow(user, id, finProps({ 'orbis/planned': true }), {
+          amount: '1000.00',
+          direction: 'expense',
+          occurred_on: PLANNED_ON,
+          planned: false,
+        }),
+      ),
+    );
+
+    await ownerCaller(user).budget.confirmPurchase({
+      entityId: id,
+      occurredOn: ACTUAL_ON,
+      batchId: newId(),
+    });
+    expect((await propsOf(id))['orbis/planned']).toBe(false);
+    expect((await propsOf(id))['orbis/occurred_on']).toBe(ACTUAL_ON);
+  });
+
+  test('факт по props (свойства нет — РП-9) отвергается, хотя старая карта зовёт его планом', async () => {
+    const user = freshUserId();
+    const id = newId();
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values(
+        divergentRow(user, id, finProps({}), {
+          amount: '1000.00',
+          direction: 'expense',
+          occurred_on: PLANNED_ON,
+          planned: true,
+        }),
+      ),
+    );
+
+    await expect(
+      ownerCaller(user).budget.confirmPurchase({
+        entityId: id,
+        occurredOn: ACTUAL_ON,
+        batchId: newId(),
+      }),
+    ).rejects.toMatchObject({ code: 'UNPROCESSABLE_CONTENT' });
   });
 });

@@ -9,6 +9,7 @@ import { sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
+  divergentEntityRow,
   freshUserId,
   legacyEntityColumns,
   requireEnv,
@@ -27,7 +28,7 @@ import type {
   WireEntity,
 } from '../executor/types';
 import { undoAction } from '../executor/undo';
-import { selectEnvelope } from './binding';
+import { assertEnvelopeUnique, selectEnvelope } from './binding';
 
 requireEnv();
 
@@ -1018,7 +1019,7 @@ describe('транзакция, ставшая конвертом: селект�
         { sink },
       ),
     );
-    expect('orbis/budget' in (r.results[0] as WireEntity).aspectsMap).toBe(true);
+    expect((r.results[0] as WireEntity).aspects).toContain('orbis/budget');
     // Сама себе конвертом запись не стала
     expect(await budgetParents(txn.id)).toEqual([]);
   });
@@ -1421,5 +1422,219 @@ describe('хук привязки и живое parent-ребро той же п
     // Ребро владельца на месте, второго ребра нет
     expect(await budgetParents(txn.id)).toEqual([]); // роли envelope-binding нет
     expect(await legacyBudgetParents(txn.id)).toEqual([env.id]); // но конверт-родитель есть
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Задача 10a: привязка и уникальность читают НОВУЮ правду строки (§А1-1)
+// ---------------------------------------------------------------------------
+/**
+ * ПРОБА РАСХОЖДЕНИЕМ КОЛОНОК — тот же приём, что в `aggregates.test.ts`: строки кладутся
+ * прямым INSERT'ом так, что `props` и старая карта аспектов говорят РАЗНОЕ, и тест
+ * спрашивает, чей ответ даёт селектор, ребиндинг и проверка уникальности. Прод такого
+ * состояния не производит (обе колонки пишет один писатель), поэтому иначе «переведено» от
+ * «не переведено» поведением не отличить.
+ */
+describe('привязка читает props/aspects[], а не старую карту (§А1-1, Задача 10a)', () => {
+  const catProps = newId();
+  const catLegacy = newId();
+
+  /** Строка с расхождением: props — левая колонка пробы, `legacy` — правая. */
+  function divergentRow(
+    user: string,
+    id: string,
+    title: string,
+    props: Record<string, unknown>,
+    aspects: string[],
+    legacy: Record<string, Record<string, unknown>>,
+  ): typeof entities.$inferInsert {
+    return divergentEntityRow({ ownerId: user, id, title, props, aspects, legacy });
+  }
+
+  test('селектор §2.3 выбирает конверт по категории, валюте и периоду из props', async () => {
+    const user = freshUserId();
+    const envId = newId();
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values(
+        divergentRow(
+          user,
+          envId,
+          'Конверт расхождения',
+          {
+            'orbis/finance_category': catProps,
+            'orbis/limit': '30000.00',
+            'orbis/currency': 'RUB',
+            'orbis/period_start': '2026-07-01',
+            'orbis/period_end': '2026-07-31',
+          },
+          ['orbis/budget'],
+          {
+            'orbis/budget': {
+              category_ref: catLegacy,
+              limit: '30000.00',
+              currency: 'USD',
+              period_start: '2030-01-01',
+              period_end: '2030-01-31',
+            },
+          },
+        ),
+      ),
+    );
+
+    // Комбинация из props попадает в конверт…
+    expect(
+      await selector(user, { categoryRef: catProps, currency: 'RUB', occurredOn: '2026-07-12' }),
+    ).toBe(envId);
+    // …а комбинация из старой карты — нет: обе стороны границы, а не одна.
+    expect(
+      await selector(user, { categoryRef: catLegacy, currency: 'USD', occurredOn: '2030-01-12' }),
+    ).toBeNull();
+  });
+
+  test('ребиндинг при создании конверта находит транзакции по категории и дате из props', async () => {
+    const user = freshUserId();
+    const txnId = newId();
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values(
+        divergentRow(
+          user,
+          txnId,
+          'Транзакция расхождения',
+          {
+            'orbis/amount': '340.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': catProps,
+            'orbis/occurred_on': '2026-07-12',
+          },
+          ['orbis/financial'],
+          {
+            'orbis/financial': {
+              amount: '340.00',
+              direction: 'expense',
+              category_ref: catLegacy,
+              occurred_on: '2030-01-12',
+            },
+          },
+        ),
+      ),
+    );
+
+    // Конверт создаётся ПОСЛЕ транзакции — привязку дописывает ребиндинг (§2.3), а не
+    // хук создания транзакции: путь, который переводит эта задача.
+    const { entity: env } = await createEntity(user, {
+      title: 'Конверт июля',
+      aspects: { 'orbis/budget': budgetData(catProps, '2026-07-01', '2026-07-31') },
+    });
+    expect(await budgetParents(txnId)).toEqual([env.id]);
+  });
+
+  test('уникальность §2.1 сравнивает комбинацию из props', async () => {
+    const user = freshUserId();
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values(
+        divergentRow(
+          user,
+          newId(),
+          'Занятая комбинация',
+          {
+            'orbis/finance_category': catProps,
+            'orbis/limit': '30000.00',
+            'orbis/currency': 'RUB',
+            'orbis/period_start': '2026-07-01',
+            'orbis/period_end': '2026-07-31',
+          },
+          ['orbis/budget'],
+          {
+            'orbis/budget': {
+              category_ref: catLegacy,
+              limit: '30000.00',
+              currency: 'USD',
+              period_start: '2030-01-01',
+              period_end: '2030-01-31',
+            },
+          },
+        ),
+      ),
+    );
+
+    // Та же комбинация, что в props занятой строки, — отказ…
+    const clash = err(
+      await execute(
+        db,
+        req(user, 'entity_create', {
+          title: 'Дубль',
+          tags: [],
+          aspects: { 'orbis/budget': budgetData(catProps, '2026-07-01', '2026-07-31') },
+        }),
+        { sink },
+      ),
+    );
+    expect(invariantOf(clash)).toBe('duplicate_envelope');
+    // …а комбинация из старой карты занятой не считается: проверка смотрит одну колонку.
+    ok(
+      await execute(
+        db,
+        req(user, 'entity_create', {
+          title: 'Не дубль',
+          tags: [],
+          aspects: {
+            'orbis/budget': budgetData(catLegacy, '2030-01-01', '2030-01-31', { currency: 'USD' }),
+          },
+        }),
+        { sink },
+      ),
+    );
+  });
+
+  /**
+   * Р-30: `IS NOT DISTINCT FROM` в сравнении валюты. NULL-валюта обязана совпасть сама с
+   * собой — с обычным `=` сравнение дало бы NULL, дубль не нашёлся бы, и у владельца
+   * появилась бы вторая строка на ту же комбинацию.
+   *
+   * Через исполнитель эту ветку не достать: `normalizeEnvelopeCurrency` подставляет явную
+   * валюту ДО проверки, и NULL остаётся только у до-реформенных строк. Поэтому проверка
+   * зовётся напрямую — обе стороны границы, NULL против NULL и NULL против явной валюты.
+   */
+  test('уникальность §2.1: NULL-валюта совпадает сама с собой, но не с явной (Р-30)', async () => {
+    const user = freshUserId();
+    const legacyEnvId = newId();
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values(
+        divergentRow(
+          user,
+          legacyEnvId,
+          'Конверт без валюты',
+          {
+            'orbis/finance_category': catProps,
+            'orbis/limit': '30000.00',
+            'orbis/period_start': '2026-09-01',
+            'orbis/period_end': '2026-09-30',
+          },
+          ['orbis/budget'],
+          {},
+        ),
+      ),
+    );
+
+    const props = {
+      'orbis/finance_category': catProps,
+      'orbis/limit': '30000.00',
+      'orbis/period_start': '2026-09-01',
+      'orbis/period_end': '2026-09-30',
+    };
+    await expect(
+      withIdentity(db, user, (tx) =>
+        assertEnvelopeUnique(tx, { ownerId: user, entityId: newId(), props }),
+      ),
+    ).rejects.toMatchObject({ details: { invariant: 'duplicate_envelope' } });
+
+    // Явная валюта — ДРУГАЯ комбинация (§2.1 сравнивает точно): отказа нет.
+    await withIdentity(db, user, (tx) =>
+      assertEnvelopeUnique(tx, {
+        ownerId: user,
+        entityId: newId(),
+        props: { ...props, 'orbis/currency': 'RUB' },
+      }),
+    );
   });
 });

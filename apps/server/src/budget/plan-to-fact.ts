@@ -56,8 +56,10 @@ export async function confirmPurchase(
     const rows = (await tx.execute(sql`
       SELECT
         e.archived AS archived,
-        e.aspects_legacy->'orbis/financial' AS fin,
-        e.aspects_legacy->'orbis/schedule'->'recurrence' AS recurrence,
+        ('orbis/financial' = ANY(e.aspects)) AS financial,
+        CASE WHEN 'orbis/schedule' = ANY(e.aspects) THEN e.props->'orbis/recurrence' END
+          AS recurrence,
+        e.props->'orbis/planned' AS planned,
         EXISTS (
           SELECT 1 FROM relations r
           WHERE r.target_id = e.id AND r.role = ${ROLE_INSTANCE_OF}
@@ -66,12 +68,13 @@ export async function confirmPurchase(
       WHERE e.id = ${input.entityId} AND e.owner_id = ${ownerId}
     `)) as unknown as Array<{
       archived: boolean;
-      fin: Record<string, unknown> | null;
+      financial: boolean;
       recurrence: unknown;
+      planned: unknown;
       derived: boolean;
     }>;
     const row = rows[0];
-    if (row === undefined || row.fin === null) {
+    if (row === undefined || !row.financial) {
       throw invariant('сущность не является запланированной покупкой (нет orbis/financial) — §2.7');
     }
     if (row.archived) {
@@ -87,7 +90,8 @@ export async function confirmPurchase(
         'recurring-инстанс переводит в факт системный конвейер в свой день (§2.8), а не ручное подтверждение',
       );
     }
-    if (row.fin.planned !== true) {
+    // РП-9: отсутствие свойства читается как false — «уже факт», а не «неизвестно».
+    if (row.planned !== true) {
       throw invariant('операция уже переведена в факт (planned=false) — переводить нечего (§2.7)');
     }
   });
@@ -104,7 +108,8 @@ export async function confirmPurchase(
         tool: 'entity_update',
         input: {
           id: input.entityId,
-          aspects: { 'orbis/financial': { planned: false, occurred_on: input.occurredOn } },
+          // Внутренняя форма §А1-1: значения по id свойства.
+          props: { 'orbis/planned': false, 'orbis/occurred_on': input.occurredOn },
         },
       },
     ],

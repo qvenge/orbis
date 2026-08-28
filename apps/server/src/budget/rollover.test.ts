@@ -144,15 +144,15 @@ async function adminRows(query: ReturnType<typeof sql>): Promise<Array<Record<st
 /** Все конверты владельца (включая архивные) — истина в БД (админ-DSN). */
 async function envelopesOf(
   user: string,
-): Promise<Array<{ id: string; archived: boolean; budget: Record<string, unknown> }>> {
+): Promise<Array<{ id: string; archived: boolean; props: Record<string, unknown> }>> {
   const rows = await adminRows(
-    sql`SELECT id, archived, aspects_legacy->'orbis/budget' AS budget FROM entities
-        WHERE owner_id = ${user} AND aspects_legacy ? 'orbis/budget' ORDER BY id`,
+    sql`SELECT id, archived, props FROM entities
+        WHERE owner_id = ${user} AND 'orbis/budget' = ANY(aspects) ORDER BY id`,
   );
   return rows.map((r) => ({
     id: r.id as string,
     archived: r.archived as boolean,
-    budget: r.budget as Record<string, unknown>,
+    props: r.props as Record<string, unknown>,
   }));
 }
 
@@ -162,7 +162,7 @@ async function budgetParents(txnId: string): Promise<string[]> {
     sql`SELECT r.source_id FROM relations r
         JOIN entities e ON e.id = r.source_id
         WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
-          AND e.aspects_legacy ? 'orbis/budget'
+          AND 'orbis/budget' = ANY(e.aspects)
         ORDER BY r.source_id`,
   );
   return rows.map((r) => r.source_id as string);
@@ -359,13 +359,13 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
     expect(created).toHaveLength(2);
     for (const e of created) {
       expect(e.archived).toBe(false);
-      expect(e.budget.period_start).toBe(targetStart);
-      expect(e.budget.period_end).toBe(targetEnd);
-      expect(e.budget.currency).toBe('RUB');
+      expect(e.props['orbis/period_start']).toBe(targetStart);
+      expect(e.props['orbis/period_end']).toBe(targetEnd);
+      expect(e.props['orbis/currency']).toBe('RUB');
     }
-    const foodEnv = created.find((e) => e.budget.category_ref === catFood);
-    expect(foodEnv?.budget.limit).toBe('30000.00');
-    expect(foodEnv?.budget.carryover).toBe('1200.00');
+    const foodEnv = created.find((e) => e.props['orbis/finance_category'] === catFood);
+    expect(foodEnv?.props['orbis/limit']).toBe('30000.00');
+    expect(foodEnv?.props['orbis/carryover']).toBe('1200.00');
 
     // Один action на весь batch (атомарность журнала) и авто-перехват A4-хуком
     expect(await actionMessageCount(batchId)).toBe(1);
@@ -397,7 +397,7 @@ describe('budget.rollover (03-budget §3.5): атомарное создание
     expect(second.actionId).toBe(batchId);
 
     const envs = await envelopesOf(user);
-    expect(envs.filter((e) => e.budget.period_start === targetStart)).toHaveLength(1);
+    expect(envs.filter((e) => e.props['orbis/period_start'] === targetStart)).toHaveLength(1);
     expect(await actionMessageCount(batchId)).toBe(1);
   });
 

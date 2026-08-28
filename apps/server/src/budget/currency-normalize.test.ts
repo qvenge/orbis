@@ -59,16 +59,12 @@ function budgetData(
   };
 }
 
-/** Сохранённый orbis/budget сущности — истина в БД (админ-DSN, обходит RLS). */
-async function storedBudget(id: string): Promise<Record<string, unknown>> {
+/** Сохранённые свойства сущности — истина в БД (админ-DSN, обходит RLS). */
+async function storedProps(id: string): Promise<Record<string, unknown>> {
   const { db: admin, client: adminClient } = adminDb();
   try {
-    const rows = [
-      ...(await admin.execute(
-        sql`SELECT aspects_legacy->'orbis/budget' AS budget FROM entities WHERE id = ${id}`,
-      )),
-    ];
-    return (rows[0]?.budget ?? {}) as Record<string, unknown>;
+    const rows = [...(await admin.execute(sql`SELECT props FROM entities WHERE id = ${id}`))];
+    return (rows[0]?.props ?? {}) as Record<string, unknown>;
   } finally {
     await adminClient.end();
   }
@@ -101,7 +97,7 @@ describe('нормализация currency конверта NULL→defaultCurre
       ),
     );
     const id = (r.results[0] as { id: string }).id;
-    expect((await storedBudget(id)).currency).toBe('RUB');
+    expect((await storedProps(id))['orbis/currency']).toBe('RUB');
   });
 
   test('create без currency при user_settings.defaultCurrency=EUR → сохраняется EUR', async () => {
@@ -119,7 +115,7 @@ describe('нормализация currency конверта NULL→defaultCurre
       ),
     );
     const id = (r.results[0] as { id: string }).id;
-    expect((await storedBudget(id)).currency).toBe('EUR');
+    expect((await storedProps(id))['orbis/currency']).toBe('EUR');
   });
 
   test('ГЛАВНЫЙ A7-кейс: конверт без currency + конверт с явной defaultCurrency на ту же (категория, период) → duplicate_envelope', async () => {
@@ -256,7 +252,7 @@ describe('нормализация currency конверта NULL→defaultCurre
       ),
     );
     expect(free.ok).toBe(true);
-    expect((await storedBudget(hostId)).currency).toBe('RUB');
+    expect((await storedProps(hostId))['orbis/currency']).toBe('RUB');
   });
 
   test('update-путь: patch {currency: null} не оставляет NULL — нормализуется в defaultCurrency', async () => {
@@ -283,7 +279,7 @@ describe('нормализация currency конверта NULL→defaultCurre
         { sink },
       ),
     );
-    expect((await storedBudget(id)).currency).toBe('RUB');
+    expect((await storedProps(id))['orbis/currency']).toBe('RUB');
   });
 
   test('update-путь: перевод периода в комбинацию, занятую NULL-нормализованным конвертом → duplicate_envelope', async () => {

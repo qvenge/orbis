@@ -1305,12 +1305,11 @@ async function prepareEntityCreate(
   // переводятся своей задачей (7a).
   const aspectsLegacy = projectLegacyAspects(ctx.registry, state);
   // Уникальность конверта (03-budget §2.1): дубль точной комбинации отклоняется
-  const budgetAspect = aspectsLegacy['orbis/budget'];
-  if (budgetAspect !== undefined) {
+  if (state.aspects.includes('orbis/budget')) {
     await assertEnvelopeUnique(ctx.tx, {
       ownerId: ctx.req.actorUserId,
       entityId: id,
-      budget: budgetAspect,
+      props: state.props,
       virtualEntities: batch?.entities,
     });
   }
@@ -1592,15 +1591,15 @@ async function prepareEntityUpdate(
   // комбинации, и разархивация (archived=false возвращает конверт в множество
   // неархивных) не должны создавать дубль. Внутренний undo восстанавливает
   // зафиксированное состояние — не проверяется (как прочие инварианты выше).
-  const nextBudget = ctx.internalUndo === undefined ? nextLegacy['orbis/budget'] : undefined;
   if (
-    nextBudget !== undefined &&
+    ctx.internalUndo === undefined &&
+    state.aspects.includes('orbis/budget') &&
     (touched.includes('orbis/budget') || (input.archived === false && current.archived))
   ) {
     await assertEnvelopeUnique(ctx.tx, {
       ownerId: ctx.req.actorUserId,
       entityId: input.id,
-      budget: nextBudget,
+      props: state.props,
       virtualEntities: batch?.entities,
     });
   }
@@ -1853,7 +1852,7 @@ async function prepareAttach(
     await assertEnvelopeUnique(ctx.tx, {
       ownerId: ctx.req.actorUserId,
       entityId: input.entity_id,
-      budget: nextLegacy[aspectId] ?? {},
+      props: state.props,
       virtualEntities: batch?.entities,
     });
   }
@@ -2054,8 +2053,10 @@ function stateOf(row: EntityRow): EntityState {
 }
 
 /**
- * Валюта конверта по умолчанию (бэклог A7) — на `props`, но ЧЕРЕЗ ту же функцию бюджета:
- * умолчание владельца обязано жить в одном месте, а не в двух копиях запроса к настройкам.
+ * Валюта конверта по умолчанию (бэклог A7) — ЧЕРЕЗ функцию бюджета: умолчание владельца
+ * обязано жить в одном месте, а не в двух копиях запроса к настройкам. Подставляется прямо
+ * в `props`: с переводом бюджета на новую форму (Задача 10a) промежуточный объект «поле
+ * старой карты» стал лишним звеном, которое умело только разъехаться с колонкой.
  *
  * `orbis/currency` слито у транзакции и конверта (В1), поэтому подстановка идёт только когда
  * значения нет вовсе: у записи, которая одновременно транзакция и конверт, валюта одна, и
@@ -2068,9 +2069,7 @@ async function normalizeEnvelopeProps(
   patch: PropsPatch,
 ): Promise<void> {
   if (!state.aspects.includes('orbis/budget')) return;
-  const draft: Record<string, unknown> = { currency: state.props['orbis/currency'] };
-  await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, draft);
-  state.props['orbis/currency'] = draft.currency;
+  await normalizeEnvelopeCurrency(ctx.tx, ctx.req.actorUserId, state.props);
   // Перенос прошлого периода не переживает смену идентичности конверта (03-budget §2.6) —
   // но только тот, которого патч не касался (см. dropStaleCarryover). Считается ПОСЛЕ
   // подстановки валюты: она входит в идентичность, и до подстановки «валюты не было →

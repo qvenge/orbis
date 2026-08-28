@@ -329,9 +329,10 @@ function countingDb() {
  * ORDER BY.
  */
 const READS = {
-  selector: (q: string) => q.includes("'orbis/budget'->>'period_end'"),
+  selector: (q: string) => q.includes("'orbis/period_end'"),
   parents: (q: string) =>
-    q.includes('FROM relations r') && q.includes('ORDER BY r.target_id, r.source_id'),
+    q.includes("'orbis/budget' = ANY(e.aspects)") &&
+    q.includes('ORDER BY r.target_id, r.source_id'),
   currency: (q: string) => q.includes('user_settings'),
 };
 
