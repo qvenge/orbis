@@ -8,6 +8,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { execute } from '../executor/executor';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -259,4 +260,62 @@ test('backlinks: потолок 100 строк — свежие первыми, 
   // усечены именно САМЫЕ СТАРЫЕ — пять последних
   expect(titles).not.toContain('Ссылка 101');
   expect(titles).not.toContain('Ссылка 105');
+});
+
+// §А6-2/§А8 «backlinks видят правила» (находка 9 ревью плана): до зеркала-ребра открытая
+// категория не показывала ни своих транзакций, ни правил памяти, которые её назначают, —
+// ссылка жила значением в `props`, а секция ходила только по рёбрам.
+//
+// Источники создаются через `execute` с НОВОЙ формой (`props` по id): tRPC-вход
+// `entityCreateInput` — это ещё тул-контракт старой карты (перевод — Задача 12), и
+// `orbis/rule_target` в неё не выражается вовсе.
+test('backlinks категории: транзакции и правила памяти по ref, подпись — label свойства', async () => {
+  const user = freshUserId();
+  const caller = callerFor(user);
+  const category = await caller.entity.create({
+    input: { title: 'Еда', tags: [], aspects: { 'orbis/category': {} } },
+    source: 'fast_path',
+  });
+  const created = async (input: Record<string, unknown>): Promise<string> => {
+    const r = await execute(db, {
+      actorUserId: user,
+      actorKind: 'owner',
+      source: 'fast_path',
+      operations: [{ tool: 'entity_create', input }],
+    });
+    if (!r.ok) throw new Error(JSON.stringify(r.error));
+    return (r.results[0] as { id: string }).id;
+  };
+  const txn = await created({
+    title: 'Обед',
+    tags: [],
+    aspects: ['orbis/financial'],
+    props: {
+      'orbis/amount': '340.00',
+      'orbis/direction': 'expense',
+      'orbis/occurred_on': '2026-08-20',
+      'orbis/finance_category': category.id,
+    },
+  });
+  const rule = await created({
+    title: 'пятёрочка → Еда',
+    tags: [],
+    aspects: ['orbis/memory'],
+    props: {
+      'orbis/memory_kind': 'rule',
+      'orbis/rule_pattern': 'пятёрочка',
+      'orbis/rule_target': category.id,
+    },
+  });
+
+  const got = await caller.entity.get({ id: category.id, include: ['backlinks'] });
+  const via = viaById(got.backlinks);
+  expect(via.get(txn)).toBe('ref');
+  expect(via.get(rule)).toBe('ref');
+  expect(via.size).toBe(2);
+  // Подпись — label СВОЙСТВА из meta.property, а не подпись роли `ref` («Откуда ссылка»):
+  // владельцу важно, ЧЕМ на категорию сослались, и у двух источников это разные свойства.
+  const labels = new Map((got.backlinks ?? []).map((b) => [b.entity.id, b.viaLabel]));
+  expect(labels.get(txn)).toBe('Категория');
+  expect(labels.get(rule)).toBe('Назначаемая категория');
 });

@@ -97,7 +97,9 @@ export type RelationRoleId = (typeof RELATION_ROLE_IDS)[number];
  * исполнителя и планировщик рутин (V1.4); `category-parent` — дерево категорий (§2.10);
  * `mention` — секция «Связанное» (§3.5.8); `dependency` — `excludeBlocked` грамматики §6, её
  * сахар в парсере (до Задачи 9b, которая заводит `via=` для произвольной роли) и секция
- * «Блокировки» web; `subitem` и `ticket` — секция подзадач web и быстрый захват.
+ * «Блокировки» web; `subitem` и `ticket` — секция подзадач web и быстрый захват; `ref` —
+ * зеркало ссылочного свойства (§А6-2): его ставит и снимает `registry/ref.ts`, по нему же
+ * идут обратный обход импорта и секция «Связанное».
  *
  * Список ПОЛНЫЙ, и это проверяемое утверждение, а не обещание: грепом по репозиторию
  * литералов этих ролей вне этого файла нет (кроме фикстур тестов, где литерал — предмет
@@ -112,6 +114,7 @@ export const ROLE_RUN = 'run' satisfies RelationRoleId;
 export const ROLE_CATEGORY_PARENT = 'category-parent' satisfies RelationRoleId;
 export const ROLE_MENTION = 'mention' satisfies RelationRoleId;
 export const ROLE_DEPENDENCY = 'dependency' satisfies RelationRoleId;
+export const ROLE_REF = 'ref' satisfies RelationRoleId;
 
 /**
  * Семейство иерархии (§А4-3): `children_of`/`descendants_of` без `via=` компилятор

@@ -18,6 +18,7 @@ import {
   applyMemoryRules,
   batchAuditMessageId,
   type CanonicalRow,
+  type ContractIdV1,
   csvMappingToolJsonSchema,
   externalRowId,
   type FastPathCategory,
@@ -36,6 +37,7 @@ import {
   MAX_IMPORT_ROWS,
   newId,
   normalizeCounterparty,
+  ROLE_REF,
 } from '@orbis/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { recordUsage } from '../ai/metering';
@@ -57,6 +59,21 @@ import type { Card } from '../tools/registry';
 // Синк один на модуль (как rollover/post-due): состояния не хранит, audit-сообщение
 // batch пишется тем же tx, что и операции исполнителя (§7.8).
 const sink = makeChatJournalSink();
+
+/**
+ * Свойство категории (§А8/В1) — оно же подпись зеркала-ребра в `meta.property`. Литералом
+ * его тут писать нельзя дважды: один и тот же id называет и ЗНАЧЕНИЕ на сущности, и
+ * ПОДПИСЬ на ребре, и разъехавшись, они дали бы «без конверта» пустым при целых данных.
+ */
+const PROP_FINANCE_CATEGORY = 'orbis/finance_category';
+
+/**
+ * Область действия денежных correction-правил (§А8/В3): `orbis/rule_scope` — это
+ * `registry_ref{target: contract}`, и с Задачи 11 сервер проверяет значение против
+ * `contract_definitions ∪ CONTRACT_IDS_V1`. Прежний `orbis/financial` был id АСПЕКТА и
+ * теперь честно отвергается записью — селектор обязан спрашивать контракт.
+ */
+const CONTRACT_MONEY_MOVEMENT = 'orbis/money-movement' satisfies ContractIdV1;
 
 /**
  * Зависимости review/confirm (у analyze резолвер входит в AiDeps): резолвер §8 —
@@ -337,7 +354,7 @@ async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCate
 
 /**
  * Активные correction-правила владельца (`orbis/memory`, `kind=rule`,
- * `scope=orbis/financial`) — вся машиночитаемая часть правила живёт в title (K19.4),
+ * `scope=orbis/money-movement`) — вся машиночитаемая часть правила живёт в title (K19.4),
  * разбирает его shared. Порядок стабилен (`ORDER BY id`), но на результат не влияет:
  * приоритет правил задаёт applyMemoryRules — в том числе по updated_at, поэтому время
  * правки едет вместе с заголовком (иначе конфликт двух правил на один паттерн импорт
@@ -359,7 +376,7 @@ async function memoryRules(tx: Tx, ownerId: string): Promise<FastPathRule[]> {
     WHERE owner_id = ${ownerId} AND NOT archived
       AND 'orbis/memory' = ANY(aspects)
       AND props->>'orbis/memory_kind' = 'rule'
-      AND props->>'orbis/rule_scope' = 'orbis/financial'
+      AND props->>'orbis/rule_scope' = ${CONTRACT_MONEY_MOVEMENT}
     ORDER BY id
   `)) as unknown as Array<{ title: string; updated_at: unknown }>;
   return rows.map((r) => ({ title: r.title, updatedAt: toIsoTime(r.updated_at) }));
@@ -493,7 +510,16 @@ function isWireEntity(result: unknown): result is WireEntity {
  * Признак `'orbis/financial' = ANY(e.aspects)` на ЦЕЛИ — не перестраховка: `orbis/budget`
  * делит с `orbis/financial` свойство `orbis/finance_category` (В1 §А8), и без него в
  * «без конверта» попал бы сам конверт, случайно оказавшийся в списке созданных импортом.
- * Старая карта различала это адресом аспекта, `props` — нет.
+ * Старая карта различала это адресом аспекта, `props` — нет. С зеркалом-ребром (§А6-2)
+ * признак нужен ровно так же: ребро роли `ref` есть и у конверта.
+ *
+ * «Кто ссылается на категорию» считается ПО ГРАФУ — ребром роли `ref` с `meta.property`
+ * (§А6-2), а не разбором `props->>` (§А8 «backlinks видят правила», находка 9 ревью плана).
+ * Разница не косметическая: `->>`-фильтр по jsonb индексом не покрывается, а индекс
+ * `(target_id, role)` — тот же, которым идут обратный обход детали и секция «Связанное»,
+ * то есть «кто в этой категории» у импорта, у экрана и у обхода теперь ОДИН механизм.
+ * Зеркало ставит исполнитель в той же транзакции, что и значение, поэтому строки, созданные
+ * этим же `confirm`, к моменту запроса уже с рёбрами.
  */
 async function unbudgetedOf(
   db: Db,
@@ -507,12 +533,13 @@ async function unbudgetedOf(
   );
   const rows = await withIdentity(db, ownerId, async (tx) => {
     return (await tx.execute(sql`
-      SELECT e.props->>'orbis/finance_category' AS category_ref,
+      SELECT ref.target_id AS category_ref,
              count(*)::int AS count
       FROM entities e
+      JOIN relations ref ON ref.source_id = e.id AND ref.role = ${ROLE_REF}
+                        AND ref.meta->>'property' = ${PROP_FINANCE_CATEGORY}
       WHERE e.id IN (${ids})
         AND 'orbis/financial' = ANY(e.aspects)
-        AND e.props->>'orbis/finance_category' IS NOT NULL
         AND NOT EXISTS (
           SELECT 1 FROM relations r
           JOIN entities p ON p.id = r.source_id

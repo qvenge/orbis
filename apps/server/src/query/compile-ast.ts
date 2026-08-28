@@ -859,8 +859,15 @@ function namesServiceAspect(ast: QueryAst, ctx: CompileCtx, service: readonly st
 /**
  * WHERE целиком: умолчание архивности, скрытие служебных аспектов, само дерево.
  * Порядок частей — как в псевдо-SQL §6.1, чтобы эталон читался рядом с нормативом.
+ *
+ * Экспортируется ради ОДНОГО потребителя — проверки значения ссылочного свойства
+ * (`registry/ref.ts`, §А6-1). Ему нужно множество цели БЕЗ проекции: `compileQueryAst`
+ * навешивает `LIMIT 500`, и сверка «эта ли цель в множестве» по усечённой выдаче отвечала
+ * бы «нет» у 501-й категории владельца. Собрать своё WHERE рядом нельзя: умолчание
+ * архивности (`NOT archived`) — ровно то, чем §А6-3 выбивает архивную цель из множества, и
+ * второй его экземпляр разошёлся бы с запросами при первой же правке §6.1.
  */
-function compileWhere(ast: QueryAst, ctx: CompileCtx): SQL {
+export function compileWhere(ast: QueryAst, ctx: CompileCtx): SQL {
   const conds: SQL[] = [sql`true`];
   if (!decidesArchived(ast, ctx)) conds.push(sql`NOT archived`);
   const service = serviceAspectIds(ctx);

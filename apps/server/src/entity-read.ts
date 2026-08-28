@@ -10,6 +10,7 @@ import {
   entityThreadId,
   type LocalizedText,
   ROLE_MENTION,
+  ROLE_REF,
 } from '@orbis/shared';
 import { readBodyDoc } from '@orbis/shared/doc';
 import { desc, eq, or, sql } from 'drizzle-orm';
@@ -18,11 +19,16 @@ import { chatMessages, entities, relations } from './db/schema';
 import type { Tx } from './db/with-identity';
 import { ExecError } from './errors';
 import type { WireEntity, WireRelation } from './executor/types';
-import { effectiveRolesSql } from './registry/roles';
+import { effectivePropertiesSql, effectiveRolesSql } from './registry/roles';
 import { toWireChatMessage, toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
 
-/** Источник обратной ссылки (02-core-os §3.5.8): явная связь роли `mention` или body_refs. */
-export type BacklinkVia = 'relation' | 'mention';
+/**
+ * Источник обратной ссылки (02-core-os §3.5.8): явная связь роли `mention`, упоминание из
+ * body_refs или ССЫЛОЧНОЕ СВОЙСТВО — ребро роли `ref` (§А6-2, §А8 «backlinks видят
+ * правила»). Третий вариант появился вместе с зеркалом ссылок: до него открытая категория
+ * не показывала ни своих транзакций, ни правил памяти, которые её назначают.
+ */
+export type BacklinkVia = 'relation' | 'mention' | 'ref';
 
 export interface Backlink {
   entity: WireEntity;
@@ -30,7 +36,9 @@ export interface Backlink {
   /**
    * Подпись направления, готовая к показу: её даёт РЕЕСТР ролей (Ч10-С3), а не словарь в
    * web. Для связи это подпись ДРУГОЙ стороны («Упоминает» у того, кто сослался на нас,
-   * «Упомянуто» у того, на кого сослались мы), для body_refs — «упоминание».
+   * «Упомянуто» у того, на кого сослались мы), для body_refs — «упоминание», а для
+   * ссылочного свойства — `label` САМОГО СВОЙСТВА («Категория»), а не роли `ref`: владельцу
+   * важно, ЧЕМ на него сослались, и подпись роли («Откуда ссылка») этого не говорит.
    *
    * Поле обязательное, а не опциональное: секция показывает подпись у каждой строки, и
    * `undefined` тут значил бы «нарисуй что-нибудь сам» — ровно тот словарь в клиенте,
@@ -39,11 +47,12 @@ export interface Backlink {
   viaLabel: string;
 }
 
-// Роль секции «Связанное» — `ROLE_MENTION` (общий дом поимённых ролей —
+// Роли секции «Связанное» — `ROLE_MENTION` и `ROLE_REF` (общий дом поимённых ролей —
 // `@orbis/shared/constants`). До реформы секцию собирал схлопнутый `related_to`, куда
 // проецируются ещё `alternative-of` и `supersedes`, — то есть «это альтернатива» и «это
-// замена» показывались как «связь». Роль их развела, и секция теперь ровно про упоминания;
-// рёбра `ref` ссылочных свойств присоединит Задача 11.
+// замена» показывались как «связь». Роль их развела, и секция стала ровно про упоминания;
+// рёбра `ref` присоединены к ней §А6-2: открытая категория обязана показывать и свои
+// транзакции, и правила памяти, которые её назначают (§А8 «backlinks видят правила»).
 
 /** Потолок объединённой секции «Связанное» (sign-off K1): это экран, а не выгрузка. */
 const BACKLINKS_LIMIT = 100;
@@ -76,6 +85,24 @@ async function mentionSideLabels(tx: Tx): Promise<{ source: string; target: stri
     source: def.source_label.ru ?? ROLE_MENTION,
     target: def.target_label.ru ?? ROLE_MENTION,
   };
+}
+
+/**
+ * Русские подписи СВОЙСТВ по их id — из эффективного реестра (§А6-2): ими подписаны
+ * ссылочные обратные связи. Спрашивается ТОЛЬКО когда в секции есть хоть одно ребро `ref`.
+ *
+ * Свойство, которого в реестре нет, подписи не получает (карта его просто не содержит), и
+ * вызывающий подставит id: сломанный реестр не должен ронять чтение сущности — ровно то же
+ * правило, что у подписей ролей выше.
+ */
+async function propertyLabels(tx: Tx, ids: readonly string[]): Promise<Map<string, string>> {
+  const rows = (await tx.execute(sql`
+    SELECT d.id, d.label FROM ${effectivePropertiesSql()} d
+     WHERE d.id IN (${sql.join(
+       ids.map((id) => sql`${id}`),
+       sql`, `,
+     )})`)) as unknown as Array<{ id: string; label: LocalizedText }>;
+  return new Map(rows.flatMap((r) => (r.label.ru === undefined ? [] : [[r.id, r.label.ru]])));
 }
 
 export interface EntityReadResult {
@@ -159,10 +186,20 @@ export async function readEntity(
         -- до объединения ids. Без свёртки LEFT JOIN ниже раздвоил бы такую строку.
         -- Приоритет входящему: «на нас сослались» — то, ради чего секция и открывается.
         SELECT id, bool_or(incoming) AS incoming FROM rel GROUP BY id
+      ), ref_side AS MATERIALIZED (
+        -- Источники ссылочных свойств (§А6-2): только ВХОДЯЩИЕ. Исходящих здесь нет
+        -- намеренно — цель собственной ссылки владелец и так видит значением свойства на
+        -- этой же карточке, и вторая её строка в «Связанном» была бы тем же фактом дважды.
+        -- Строка на источник ровно одна: rel_uniq не вмещает двух рёбер роли ref между той
+        -- же парой концов, поэтому свёртки, как у rel_side выше, здесь не требуется.
+        SELECT source_id AS id, meta->>'property' AS property FROM relations
+          WHERE target_id = ${row.id} AND role = ${ROLE_REF}
       ), ids AS (
         SELECT id FROM entities WHERE body_refs @> ARRAY[${row.id}]::text[]
         UNION
         SELECT id FROM rel_side
+        UNION
+        SELECT id FROM ref_side
       )
       SELECT e.id, e.owner_id, e.title, e.emoji, e.body, e.body_refs, e.tags, e.meta,
              -- Столбцы те же, что в SELECT-листе компилятора (§6): их ждёт
@@ -171,10 +208,12 @@ export async function readEntity(
              e.props, e.aspects, e.query_refs, e.aspects_legacy,
              e.created_at, e.updated_at, e.archived,
              rel_side.id IS NOT NULL AS via_relation,
-             rel_side.incoming AS via_incoming
+             rel_side.incoming AS via_incoming,
+             ref_side.property AS via_property
         FROM ids
         JOIN entities e ON e.id = ids.id
         LEFT JOIN rel_side ON rel_side.id = e.id
+        LEFT JOIN ref_side ON ref_side.id = e.id
        WHERE NOT e.archived
        -- СВЕЖИЕ первыми (DF п.4): при возрастающем порядке потолок отбрасывал ровно ту
        -- связь, которую пользователь только что создал. Лишняя строка сверх потолка —
@@ -185,22 +224,43 @@ export async function readEntity(
     const truncated = refs.length > BACKLINKS_LIMIT;
     // Подписи сторон — одним запросом и ТОЛЬКО когда в секции есть хоть одна связь: у
     // упоминаний из тела роли нет вовсе, и на большинстве открытий detail запрос не уходит.
-    const sides = refs.some((r) => r.via_relation === true)
+    const shown = refs.slice(0, BACKLINKS_LIMIT);
+    const sides = shown.some((r) => r.via_relation === true)
       ? await mentionSideLabels(tx)
       : undefined;
-    // Связь сильнее упоминания: сущность, которая и связана, и ссылается в теле,
-    // приходит ОДНОЙ строкой с пометкой «связь».
-    out.backlinks = refs.slice(0, BACKLINKS_LIMIT).map((r) => ({
+    // Подписи свойств — тем же правилом «только если есть кого подписывать»; берутся по
+    // ПОКАЗЫВАЕМЫМ строкам, а не по всей выдаче: усечённая строка подписи не получит.
+    const properties = [
+      ...new Set(
+        shown.flatMap((r) => (typeof r.via_property === 'string' ? [r.via_property] : [])),
+      ),
+    ];
+    const propertyLabelById =
+      properties.length > 0 ? await propertyLabels(tx, properties) : new Map<string, string>();
+    // Ссылка свойства сильнее связи, связь — сильнее упоминания: у сущности, пришедшей
+    // сразу двумя путями, строка ОДНА, и подписана она самым точным из них — тем, который
+    // называет ИМЕННО ЧЕМ на нас сослались.
+    out.backlinks = shown.map((r) => {
       // toWireEntityFromSql, а не toWireEntity: в сырой выдаче drizzle гасит date-парсеры
       // postgres.js, и created_at/updated_at приезжают строкой PG (прецедент — агрегаты).
-      entity: toWireEntityFromSql(r),
-      via: r.via_relation === true ? ('relation' as const) : ('mention' as const),
-      viaLabel:
-        r.via_relation === true
-          ? // Подпись ДРУГОЙ стороны: на нас сослались — она источник, сослались мы — цель.
-            ((r.via_incoming === true ? sides?.source : sides?.target) ?? ROLE_MENTION)
-          : MENTION_LABEL,
-    }));
+      const entity = toWireEntityFromSql(r);
+      if (typeof r.via_property === 'string') {
+        return {
+          entity,
+          via: 'ref' as const,
+          viaLabel: propertyLabelById.get(r.via_property) ?? r.via_property,
+        };
+      }
+      return {
+        entity,
+        via: r.via_relation === true ? ('relation' as const) : ('mention' as const),
+        viaLabel:
+          r.via_relation === true
+            ? // Подпись ДРУГОЙ стороны: на нас сослались — она источник, сослались мы — цель.
+              ((r.via_incoming === true ? sides?.source : sides?.target) ?? ROLE_MENTION)
+            : MENTION_LABEL,
+      };
+    });
     if (truncated) out.backlinksTruncated = true;
   }
   if (include.has('thread')) {

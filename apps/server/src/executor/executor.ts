@@ -52,7 +52,16 @@ import type { Db } from '../db/client';
 import { entities, entityOrigins, entityVersions, relations } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
+import type { CompileCtx } from '../query/compile-ast';
+import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { loadRegistry, type RegistrySnapshot } from '../registry/load';
+import {
+  assertReferenceProps,
+  changedRefProps,
+  markRefSourcesNeedsReview,
+  type RefPropChange,
+  syncRefMirror,
+} from '../registry/ref';
 import { projectBodyTemplate } from '../seed/project-body';
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
 import { toWireEntity as toWire, toWireRelation } from '../wire';
@@ -140,6 +149,38 @@ interface ExecCtx {
   sink: JournalSink;
   /** Внутренний режим undo (§7.8) — см. InternalUndoMode; только из undo.ts. */
   internalUndo?: InternalUndoMode;
+  /**
+   * Контекст компиляции запросов (§А5-7) — ЛЕНИВЫЙ и на транзакцию: его спрашивает
+   * единственный потребитель, проверка ссылочных свойств (§А6-1), и только когда операция
+   * ДЕЙСТВИТЕЛЬНО пишет ссылку. Иначе каждая правка заголовка платила бы лишним SELECT'ом
+   * по `user_settings` за таймзону, которой ей не нужно.
+   */
+  compileCtx?: Promise<CompileCtx>;
+}
+
+/**
+ * Контекст компиляции для проверки ссылок. Реестр берётся из снимка транзакции (второй его
+ * загрузкой платил бы каждый вызов), таймзона — из настроек владельца, «сегодня» — от часов
+ * операции, а не от `new Date()`: компиляция обязана быть детерминированной вместе со всей
+ * остальной транзакцией.
+ *
+ * `today`/`timeZone` при этом множеством цели НЕ читаются: `ref.target` прошёл
+ * `assertStaticQuery` (`query/static.ts`), а тот запрещает date-токены именно затем, чтобы
+ * ссылка, законная в понедельник, во вторник не оказывалась вне цели. Поля здесь потому, что
+ * их требует ОБЩИЙ контекст компилятора, а не потому, что их кто-то спросит.
+ */
+function compileCtxOf(ctx: ExecCtx): Promise<CompileCtx> {
+  ctx.compileCtx ??= (async () => {
+    const timeZone = await ownerTimeZone(ctx.tx, ctx.req.actorUserId);
+    return {
+      ownerId: ctx.req.actorUserId,
+      reg: ctx.registry,
+      thisEntityId: null,
+      timeZone,
+      today: todayInTimeZone(timeZone, ctx.clock()),
+    };
+  })();
+  return ctx.compileCtx;
 }
 
 interface OpOutcome {
@@ -178,6 +219,25 @@ interface PreparedOp {
    * `orbis/project`. Пересчёт запускается после стадии 5 (см. `applyAncestorRecompute`).
    */
   ancestorRoots?: string[];
+  /**
+   * Ссылочная половина записи свойств (§А6): что проверить против множеств `target` и какие
+   * зеркала-рёбра пересобрать. И то и другое — ПОСЛЕ стадии 5 (см. `applyRefEffects`).
+   */
+  refWrite?: {
+    entityId: string;
+    /** Итоговые значения свойств: по ним идут и проверка целей, и сборка зеркала. */
+    props: Record<string, unknown>;
+    /** Затронутые ССЫЛОЧНЫЕ свойства (`ref`/`registry_ref`) — вход проверки §А6-1. */
+    touched: string[];
+    /** Ссылочные свойства, чьё зеркало пересобирается (§А6-2). */
+    mirror: RefPropChange[];
+  };
+  /**
+   * Сущность, которую операция УБРАЛА В АРХИВ: её источники ссылок получают `needs-review`
+   * (§А6-3) той же транзакцией. Не «архивна», а «стала архивной» — иначе каждая правка
+   * архивной записи перепомечала бы её источников заново.
+   */
+  archivedRefTarget?: string;
 }
 
 /**
@@ -355,6 +415,9 @@ export async function execute(
         // Пересчёт предков (§А8) откату НУЖЕН: inverse вернул ребро, предки обязаны сойтись
         // с восстановленным графом. Журнала у undo нет, поэтому строка пересчёта отбрасывается.
         await applyAncestorRecompute(ctx, [plan]);
+        // Зеркала ссылок (§А6-2) — по той же причине: откат вернул ЗНАЧЕНИЕ, ребро обязано
+        // сойтись с ним (своего inverse у зеркала нет — см. шапку `registry/ref.ts`).
+        await applyRefEffects(ctx, [plan]);
         await ctx.internalUndo.writeUndoMessage(tx);
       } else if (out.replay !== true) {
         const allPlans = [plan, ...followUps];
@@ -363,9 +426,14 @@ export async function execute(
         // бывает иерархической — считать предков до хука значило бы считать их по графу,
         // которого к коммиту уже нет.
         const recomputeOps = await applyAncestorRecompute(ctx, allPlans);
+        const refOps = await applyRefEffects(ctx, allPlans);
         await writeJournal(ctx, {
           ...plan.journal,
-          operations: [...allPlans.flatMap((p) => p.journal.operations), ...recomputeOps],
+          operations: [
+            ...allPlans.flatMap((p) => p.journal.operations),
+            ...recomputeOps,
+            ...refOps,
+          ],
           inverse: aggregateInverse(allPlans),
         });
       }
@@ -489,8 +557,9 @@ async function executeBatch(
       // Стадии 6–7. Внутренний режим undo: вместо action тем же tx пишется
       // undo-сообщение (undo не порождает нового action — undo неотменяем, §7.8)
       if (internalUndo) {
-        // См. одиночный путь: откату пересчёт предков нужен, журнала у него нет.
+        // См. одиночный путь: откату пересчёт предков и сведение зеркал нужны, журнала нет.
         await applyAncestorRecompute(ctx, plans);
+        await applyRefEffects(ctx, plans);
         await internalUndo.writeUndoMessage(tx);
         return { ok: true as const, actionId: batchId, results, idempotentReplay: false };
       }
@@ -504,6 +573,7 @@ async function executeBatch(
       const allPlans = [...plans, ...followUps];
       // Пересчёт предков — после бюджет-хука (см. одиночный путь).
       const recomputeOps = await applyAncestorRecompute(ctx, allPlans);
+      const refOps = await applyRefEffects(ctx, allPlans);
       // Обычный batch: ОДИН action на весь batch, id = batch_id; inverse — в обратном
       // порядке исполнения (§7.8). PK audit-сообщения — batchAuditMessageId.
       const action: ActionRecord = {
@@ -518,7 +588,7 @@ async function executeBatch(
         ...(req.actorGrantId !== undefined && { actor_grant_id: req.actorGrantId }),
         ...(req.runId !== undefined && { run_id: req.runId }),
         ...(req.editedFrom !== undefined && { edited_from: req.editedFrom }),
-        operations: [...allPlans.flatMap((p) => p.journal.operations), ...recomputeOps],
+        operations: [...allPlans.flatMap((p) => p.journal.operations), ...recomputeOps, ...refOps],
         inverse: aggregateInverse(allPlans),
       };
       await sink.write(tx, {
@@ -808,6 +878,96 @@ async function applyAncestorRecompute(
   // повторяется сам (см. вызов из ветки internalUndo). Обратная операция «вернуть прежние
   // значения кэша» была бы вторым источником правды о том, что и так выводится из графа.
   return [{ op: 'props_recomputed', payload: { rule: RULE_NEAREST_ANCESTOR, recomputed } }];
+}
+
+/**
+ * Ссылочная половина записи свойств (§А6) в форме плана. Считается на стадии 4 вместе с
+ * остальными проверками, а исполняется после стадии 5 — см. `applyRefEffects`.
+ */
+function refWriteOf(
+  ctx: ExecCtx,
+  entityId: string,
+  before: EntityState,
+  after: EntityState,
+  patch: PropsPatch,
+): { refWrite?: PreparedOp['refWrite'] } {
+  const touchedIds = touchedProperties(patch);
+  const touched = [...touchedIds].filter((propertyId) => {
+    const kind = ctx.registry.properties.get(propertyId)?.type.kind;
+    return kind === 'ref' || kind === 'registry_ref';
+  });
+  const mirror = changedRefProps(ctx.registry, before.props, after.props, touchedIds);
+  if (touched.length === 0 && mirror.length === 0) return {};
+  return { refWrite: { entityId, props: after.props, touched, mirror } };
+}
+
+/**
+ * Следствия ссылочных свойств (§А6) — ПОСЛЕ применения всех операций и ТЕМ ЖЕ tx: цели
+ * ссылок проверяются против объявленных множеств, зеркала рёбер приводятся к записанным
+ * значениям, источники ссылок на только что заархивированную цель получают `needs-review`.
+ *
+ * ПОЧЕМУ ПРОВЕРКА ЦЕЛЕЙ СТОИТ ЗДЕСЬ, А НЕ НА СТАДИИ 4 «до первой записи». Множество цели
+ * вычисляет компилятор запросов ПО БАЗЕ (§А6-1), а виртуального состояния batch он не видит
+ * и видеть не может: чтобы увидеть, ему пришлось бы уметь исполнять Q-AST в памяти — вторая
+ * реализация языка запросов, ровно та, которую реформа убирает. Стой проверка на стадии 4,
+ * законный batch «заведи категорию, положи в неё трату» получал бы «цель не найдена»: на
+ * момент его стадий строки категории в базе ещё нет. После стадии 5 состояние в транзакции
+ * ИТОГОВОЕ, и вопрос задаётся ровно тому, кто на него отвечает. Атомарности это не стоит
+ * ничего: отказ бросается тем же ExecError из той же tx — она откатывается целиком.
+ *
+ * Внутренний режим undo проверку ПРОПУСКАЕТ (как и стадия 4 у остальных инвариантов): он
+ * восстанавливает своё же законно записанное состояние, а цель могли заархивировать уже
+ * после — отказ означал бы, что законную запись нельзя отменить. Зеркала при этом сводятся:
+ * откат вернул ЗНАЧЕНИЕ, а своего inverse у ребра нет вовсе (см. шапку `registry/ref.ts`).
+ *
+ * В журнал уезжает ОДНА строка и только про пометку: зеркало производно от свойства, которое
+ * в журнале уже есть, и вторая запись о том же факте была бы шумом, а тег `needs-review`
+ * ложится на ЧУЖИЕ сущности, и без этой строки владелец не узнал бы, откуда он взялся.
+ * Обратной операции у пометки нет намеренно: разархивация цели не разбирает ссылки за
+ * владельца — она возвращает цель, а «требует разбора» снимает тот, кто разобрал.
+ */
+async function applyRefEffects(
+  ctx: ExecCtx,
+  plans: readonly PreparedOp[],
+): Promise<ActionOperation[]> {
+  if (ctx.internalUndo === undefined) {
+    for (const plan of plans) {
+      if (plan.refWrite === undefined || plan.refWrite.touched.length === 0) continue;
+      await assertReferenceProps(
+        ctx.tx,
+        ctx.registry,
+        () => compileCtxOf(ctx),
+        plan.refWrite.props,
+        plan.refWrite.touched,
+      );
+    }
+  }
+  for (const plan of plans) {
+    if (plan.refWrite === undefined || plan.refWrite.mirror.length === 0) continue;
+    await syncRefMirror(
+      ctx.tx,
+      ctx.req.actorUserId,
+      plan.refWrite.entityId,
+      plan.refWrite.mirror,
+      ctx.registry,
+    );
+  }
+  const ops: ActionOperation[] = [];
+  for (const plan of plans) {
+    if (plan.archivedRefTarget === undefined) continue;
+    const marked = await markRefSourcesNeedsReview(
+      ctx.tx,
+      ctx.req.actorUserId,
+      plan.archivedRefTarget,
+    );
+    if (marked > 0) {
+      ops.push({
+        op: 'ref_sources_marked',
+        payload: { target: plan.archivedRefTarget, marked },
+      });
+    }
+  }
+  return ops;
 }
 
 /** Данные аспект-ключа изменились операцией (стабильно для одинаковых объектов). */
@@ -1251,6 +1411,8 @@ async function prepareEntityCreate(
   assertPropsWritable(ctx.registry, ctx.mechanism, propsPatch);
   // Стадия 2: реестр свойств (§А7-1) — по итоговому состоянию, а не по патчу
   assertEntityProps(ctx.registry, state);
+  // Ссылочная половина записи (§А6): проверка целей и зеркала — после стадии 5.
+  const refWrite = refWriteOf(ctx, id, before, state, propsPatch);
 
   // Стадия 3 (ТОЛЬКО batch): занятый id — reject, не replay. Идемпотентность batch
   // ключуется по batch_id (§7.8), а не по id операции: replay-семантика одиночного
@@ -1382,6 +1544,7 @@ async function prepareEntityCreate(
   return {
     journal,
     budgetHook: { before: null, after: values as EntityRow },
+    ...refWrite,
     // Стадия 5: идемпотентная вставка по client-UUID (§5.3, §9.1)
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const inserted = await applyCtx.tx
@@ -1763,6 +1926,11 @@ async function prepareEntityUpdate(
     journal,
     budgetHook: { before: current, after: afterRow },
     ...ancestorRootsOnProjectChange(input.id, before, state),
+    // Ссылочная половина записи (§А6): проверка целей и зеркала — после стадии 5.
+    ...refWriteOf(ctx, input.id, before, state, propsPatch),
+    // «Стала архивной», а не «архивна»: повторная архивация уже архивной цели источников не
+    // перепомечает (сам тег идемпотентен, но и лишнего UPDATE по её источникам не будет).
+    ...(input.archived === true && !current.archived && { archivedRefTarget: input.id }),
     // Стадия 5
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const updated = await applyCtx.tx
@@ -1914,6 +2082,8 @@ async function prepareAttach(
     journal,
     budgetHook: { before: current, after: afterRow },
     ...ancestorRootsOnProjectChange(input.entity_id, before, state),
+    // Ссылочная половина записи (§А6): проверка целей и зеркала — после стадии 5.
+    ...refWriteOf(ctx, input.entity_id, before, state, propsPatch),
     // Стадия 5
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
       const updated = await applyCtx.tx

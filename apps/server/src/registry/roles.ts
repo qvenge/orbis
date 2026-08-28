@@ -1,6 +1,6 @@
 // apps/server/src/registry/roles.ts
 //
-// Эффективный реестр РОЛЕЙ для путей, у которых снимка (`loadRegistry`) на руках нет:
+// Эффективные реестры РОЛЕЙ и СВОЙСТВ для путей, у которых снимка (`loadRegistry`) на руках нет:
 // сырые SQL-запросы бюджета, круга исполнителя и чтения backlinks (компилятор запросов
 // в этом списке был до Задачи 9b — теперь он ходит по снимку `CompileCtx.reg`). Их вызывающие держат `tx` и не держат `RegistrySnapshot`, а тащить снимок
 // через полтора десятка сигнатур значило бы грузить пять SELECT'ов определений на каждый
@@ -25,6 +25,17 @@ import type { RegistrySnapshot } from './load';
 export function effectiveRolesSql(): SQL {
   return sql`(SELECT DISTINCT ON (id) *
                 FROM relation_role_definitions
+               ORDER BY id, owner_id DESC NULLS LAST)`;
+}
+
+/**
+ * То же для реестра СВОЙСТВ: подпись ссылочного ребра в секции «Связанное» — это `label`
+ * свойства из `meta.property` (§А6-2, §А8), и читателю нужна та же строка, что увидел бы
+ * снимок. Правило коллизии одно на оба подзапроса и стоит рядом ровно поэтому.
+ */
+export function effectivePropertiesSql(): SQL {
+  return sql`(SELECT DISTINCT ON (id) *
+                FROM property_definitions
                ORDER BY id, owner_id DESC NULLS LAST)`;
 }
 

@@ -1,0 +1,530 @@
+// apps/server/src/registry/ref.test.ts
+// Ссылочные kind'ы §А6 на живой базе: `ref` (проверка цели компиляцией множества
+// `target`, зеркало-ребро роли `ref`, архивация цели), `registry_ref` (по таблице
+// целевого реестра ∪ `CONTRACT_IDS_V1`) и `grant` (существующий инвариант назначения).
+//
+// Через `execute()`, а не вызовом `assertRefValue` напрямую: проверяется не функция, а
+// РУБЕЖ — что путь записи в неё заходит на всех трёх точках (create, update, attach).
+import { afterAll, beforeAll, expect, test } from 'bun:test';
+import {
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_PROPERTY_META,
+  BUILTIN_RELATION_ROLE_META,
+  newId,
+} from '@orbis/shared';
+import { sql } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { withIdentity } from '../db/with-identity';
+import { execute } from '../executor/executor';
+import { makeChatJournalSink } from '../executor/journal';
+import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
+import { undoAction } from '../executor/undo';
+import type { CompileCtx } from '../query/compile-ast';
+import type { RegistrySnapshot } from './load';
+import { refTargetMembershipSql } from './ref';
+
+requireEnv();
+
+const { db, client } = appDb();
+const T0 = new Date('2026-08-27T09:00:00.000Z');
+
+/** Снимок реестра из ВСТРОЕННЫХ словарей — тот же приём, что у `compile.golden.test.ts`. */
+const GOLDEN_REG: RegistrySnapshot = {
+  properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+  aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+  roles: new Map(BUILTIN_RELATION_ROLE_META.map((r) => [r.id, r])),
+  ownerVersion: 0,
+  systemVersion: 1,
+};
+
+const GOLDEN_CTX: CompileCtx = {
+  ownerId: '00000000-0000-7000-8000-0000000000a1',
+  today: '2026-08-27',
+  timeZone: 'Europe/Moscow',
+  reg: GOLDEN_REG,
+  thisEntityId: null,
+};
+
+function req(
+  user: string,
+  ops: Array<{ tool: string; input: unknown }>,
+  over: Partial<ExecuteRequest> = {},
+): ExecuteRequest {
+  return {
+    actorUserId: user,
+    actorKind: 'owner',
+    source: 'fast_path',
+    operations: ops,
+    clock: () => T0,
+    ...over,
+  };
+}
+
+function okEntity(r: ExecuteResult): WireEntity {
+  if (!r.ok) throw new Error(`ожидался успех, получено ${JSON.stringify(r.error)}`);
+  return r.results[0] as WireEntity;
+}
+
+function err(r: ExecuteResult): { code: string; message: string; details?: unknown } {
+  if (r.ok) throw new Error('ожидался отказ, получен успех');
+  return r.error;
+}
+
+/** Причина отказа из details — потребитель читает структуру, а не разбирает текст. */
+function reasonOf(r: ExecuteResult): unknown {
+  return (err(r).details as { reason?: unknown } | undefined)?.reason;
+}
+
+async function createCategory(user: string, title: string): Promise<string> {
+  const e = okEntity(
+    await execute(
+      db,
+      req(user, [
+        { tool: 'entity_create', input: { title, tags: [], aspects: { 'orbis/category': {} } } },
+      ]),
+    ),
+  );
+  return e.id;
+}
+
+/** Транзакция с категорией — новой формой (`props` по id свойства). */
+async function createTxn(user: string, title: string, categoryId?: string): Promise<string> {
+  const e = okEntity(
+    await execute(
+      db,
+      req(user, [
+        {
+          tool: 'entity_create',
+          input: {
+            title,
+            tags: [],
+            aspects: ['orbis/financial'],
+            props: {
+              'orbis/amount': '340.00',
+              'orbis/direction': 'expense',
+              'orbis/occurred_on': '2026-08-20',
+              ...(categoryId === undefined ? {} : { 'orbis/finance_category': categoryId }),
+            },
+          },
+        },
+      ]),
+    ),
+  );
+  return e.id;
+}
+
+/** Зеркала-рёбра роли `ref` этой сущности: цель + свойство из `meta`. */
+async function refEdges(
+  user: string,
+  entityId: string,
+): Promise<Array<{ target: string; property: unknown }>> {
+  return await withIdentity(db, user, async (tx) => {
+    const rows = (await tx.execute(sql`
+      SELECT target_id, meta->>'property' AS property, relation_type
+        FROM relations
+       WHERE source_id = ${entityId}::uuid AND role = 'ref'
+       ORDER BY target_id`)) as unknown as Array<{
+      target_id: string;
+      property: string | null;
+      relation_type: string;
+    }>;
+    for (const r of rows) {
+      // Переходная колонка — проекция роли, и писать её мимо проекции нельзя (§А4-3).
+      expect(r.relation_type).toBe('ref');
+    }
+    return rows.map((r) => ({ target: r.target_id, property: r.property }));
+  });
+}
+
+async function tagsOf(user: string, entityId: string): Promise<string[]> {
+  return await withIdentity(db, user, async (tx) => {
+    const rows = (await tx.execute(
+      sql`SELECT tags FROM entities WHERE id = ${entityId}::uuid`,
+    )) as unknown as Array<{ tags: string[] }>;
+    const row = rows[0];
+    if (row === undefined) throw new Error('сущность не найдена');
+    return row.tags;
+  });
+}
+
+beforeAll(async () => {
+  await truncateAll();
+});
+
+afterAll(async () => {
+  await client.end();
+});
+
+test('ref: множество цели компилируется тем же движком и соединяется по id с ::uuid', () => {
+  // Эталон посчитан ВРУЧНУЮ по §6.1 и §А5-7, а не снят с прогона (та же дисциплина, что у
+  // `compile.golden.test.ts`): `compileWhere` даёт `true` + умолчание архивности + скрытие
+  // служебных аспектов + само дерево, а соединение по id добавляет эта функция.
+  // Касты — предмет проверки: `aspects && ARRAY[…]::text[]` у служебных и `::uuid[]` у
+  // списка целей. Без второго `e.id = ANY($1)` сравнивал бы uuid с text и падал бы ошибкой
+  // оператора вместо честного «цель не в множестве».
+  const def = BUILTIN_PROPERTY_META.find((p) => p.id === 'orbis/finance_category');
+  if (def === undefined || def.type.kind !== 'ref') throw new Error('свойство-ссылка не найдено');
+  const q = new PgDialect().sqlToQuery(
+    refTargetMembershipSql(def.type, ['019e4466-aaaa-7e07-b5d4-64be9721da51'], GOLDEN_CTX),
+  );
+  expect(q.sql.replaceAll(/\s+/g, ' ').trim()).toBe(
+    'SELECT e.id FROM entities e WHERE (' +
+      "(true AND NOT archived AND NOT (aspects && ARRAY[$1]::text[]) AND aspects @> ARRAY['orbis/category'])" +
+      ') AND e.id = ANY(ARRAY[$2]::uuid[])',
+  );
+  expect(q.params).toEqual(['orbis/agent-run', '019e4466-aaaa-7e07-b5d4-64be9721da51']);
+});
+
+test('ref: значение вне множества target — VALIDATION REF_TARGET «цель не в множестве target»', async () => {
+  const user = freshUserId();
+  const note = okEntity(
+    await execute(
+      db,
+      req(user, [{ tool: 'entity_create', input: { title: 'Заметка', tags: [] } }]),
+    ),
+  );
+  const category = await createCategory(user, 'Еда');
+
+  // Заметка существует и видима владельцу, но множество цели — `aspect=orbis/category`
+  const r = await execute(
+    db,
+    req(user, [
+      {
+        tool: 'entity_create',
+        input: {
+          title: 'Обед',
+          tags: [],
+          aspects: ['orbis/financial'],
+          props: {
+            'orbis/amount': '340.00',
+            'orbis/direction': 'expense',
+            'orbis/occurred_on': '2026-08-20',
+            'orbis/finance_category': note.id,
+          },
+        },
+      },
+    ]),
+  );
+  expect(err(r).code).toBe('VALIDATION');
+  expect(reasonOf(r)).toBe('REF_TARGET');
+  expect(err(r).message).toContain('цель не в множестве target');
+
+  // Несуществующая (и чужая — RLS их не различает) цель называется своей причиной
+  const missing = await execute(
+    db,
+    req(user, [
+      {
+        tool: 'entity_create',
+        input: {
+          title: 'Обед 2',
+          tags: [],
+          aspects: ['orbis/financial'],
+          props: {
+            'orbis/amount': '1.00',
+            'orbis/direction': 'expense',
+            'orbis/occurred_on': '2026-08-20',
+            'orbis/finance_category': newId(),
+          },
+        },
+      },
+    ]),
+  );
+  expect(err(missing).message).toContain('не найдена');
+
+  // Та же запись с ЗАКОННОЙ целью проходит — отказ выше про цель, а не про форму записи
+  const good = await createTxn(user, 'Обед 3', category);
+  expect(good).toBeTruthy();
+});
+
+test('ref: установка/смена/снятие создаёт/переносит/удаляет ребро role=ref с meta.property; ребро пересоздаётся при расхождении', async () => {
+  const user = freshUserId();
+  const food = await createCategory(user, 'Еда');
+  const fun = await createCategory(user, 'Развлечения');
+
+  // Установка
+  const txn = await createTxn(user, 'Обед', food);
+  expect(await refEdges(user, txn)).toEqual([{ target: food, property: 'orbis/finance_category' }]);
+
+  // Смена — ребро ПЕРЕНОСИТСЯ, а не добавляется вторым
+  const moved = await execute(
+    db,
+    req(user, [
+      { tool: 'entity_update', input: { id: txn, props: { 'orbis/finance_category': fun } } },
+    ]),
+  );
+  expect(moved.ok).toBe(true);
+  expect(await refEdges(user, txn)).toEqual([{ target: fun, property: 'orbis/finance_category' }]);
+
+  // Расхождение: ребро есть, значения нет — истина СВОЙСТВО, ребро пересоздаётся.
+  // Подмена делается админским подключением, то есть МИМО исполнителя: иначе проверка
+  // жила бы внутри того же кода, который проверяется.
+  const { db: admin, client: adminClient } = adminDb();
+  try {
+    await admin.execute(sql`
+      UPDATE relations SET target_id = ${food}::uuid
+       WHERE source_id = ${txn}::uuid AND role = 'ref'`);
+  } finally {
+    await adminClient.end();
+  }
+  expect(await refEdges(user, txn)).toEqual([{ target: food, property: 'orbis/finance_category' }]);
+  // Правка ТЕМ ЖЕ значением (свойство не меняется) обязана вернуть ребро к правде
+  const resync = await execute(
+    db,
+    req(user, [
+      { tool: 'entity_update', input: { id: txn, props: { 'orbis/finance_category': fun } } },
+    ]),
+  );
+  expect(resync.ok).toBe(true);
+  expect(await refEdges(user, txn)).toEqual([{ target: fun, property: 'orbis/finance_category' }]);
+
+  // Снятие — ребра не остаётся. Проверяется на `orbis/rule_target`, а не на
+  // `orbis/finance_category`: у транзакции категория ОБЯЗАТЕЛЬНА (`orbis/financial`
+  // объявляет её required), и снятие там отвергает валидатор реестра раньше зеркала.
+  const rule = okEntity(
+    await execute(
+      db,
+      req(user, [
+        {
+          tool: 'entity_create',
+          input: {
+            title: 'пятёрочка → Еда',
+            tags: [],
+            aspects: ['orbis/memory'],
+            props: { 'orbis/memory_kind': 'rule', 'orbis/rule_target': food },
+          },
+        },
+      ]),
+    ),
+  );
+  expect(await refEdges(user, rule.id)).toEqual([{ target: food, property: 'orbis/rule_target' }]);
+  const unset = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: rule.id, unset: ['orbis/rule_target'] } }]),
+  );
+  expect(unset.ok).toBe(true);
+  expect(await refEdges(user, rule.id)).toEqual([]);
+});
+
+test('ref: архивация цели помечает источники needs-review; повторная установка той же категории — отказ', async () => {
+  const user = freshUserId();
+  const food = await createCategory(user, 'Еда');
+  const one = await createTxn(user, 'Обед', food);
+  const two = await createTxn(user, 'Ужин', food);
+  expect(await tagsOf(user, one)).toEqual([]);
+
+  const archived = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: food, archived: true } }]),
+  );
+  expect(archived.ok).toBe(true);
+  expect(await tagsOf(user, one)).toEqual(['needs-review']);
+  expect(await tagsOf(user, two)).toEqual(['needs-review']);
+
+  // Повторная архивация тега не плодит — ни та же цель, ни ВТОРАЯ цель того же источника.
+  // Вторая цель важнее первой: у первой пометку не повторяет уже сам исполнитель («стала
+  // архивной», а не «архивна»), и без второй проверка идемпотентности самого UPDATE'а
+  // исчезала бы вместе с этим гейтом.
+  const again = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: food, archived: true } }]),
+  );
+  expect(again.ok).toBe(true);
+  expect(await tagsOf(user, one)).toEqual(['needs-review']);
+
+  const rules = await createCategory(user, 'Правила');
+  const tagged = await execute(
+    db,
+    req(user, [
+      { tool: 'entity_update', input: { id: one, props: { 'orbis/rule_target': rules } } },
+    ]),
+  );
+  expect(tagged.ok).toBe(true);
+  const second = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: rules, archived: true } }]),
+  );
+  expect(second.ok).toBe(true);
+  expect(await tagsOf(user, one)).toEqual(['needs-review']);
+
+  // Архивная цель выпала из множества target — пере-установка того же значения отказ
+  const three = await execute(
+    db,
+    req(user, [
+      {
+        tool: 'entity_update',
+        input: { id: two, props: { 'orbis/finance_category': food } },
+      },
+    ]),
+  );
+  expect(err(three).code).toBe('VALIDATION');
+  expect(reasonOf(three)).toBe('REF_TARGET');
+  expect(err(three).message).toContain('цель архивна');
+
+  // …но САМА запись-источник не заморожена: ссылка остаётся, правка соседнего поля идёт
+  const rename = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: two, title: 'Ужин поздний' } }]),
+  );
+  expect(rename.ok).toBe(true);
+  expect(await refEdges(user, two)).toEqual([{ target: food, property: 'orbis/finance_category' }]);
+});
+
+test('ref/registry_ref: run_routine принимает только рутину; rule_scope — контракт из CONTRACT_IDS_V1', async () => {
+  const user = freshUserId();
+  const note = okEntity(
+    await execute(
+      db,
+      req(user, [{ tool: 'entity_create', input: { title: 'Не рутина', tags: [] } }]),
+    ),
+  );
+  // Свойства прогона — system_writable (§А2-5), поэтому механизм записи `verb`. Аспект
+  // прогона намеренно НЕ навешивается: он требует ещё пять служебных свойств, а предмет
+  // проверки — цель ссылки, а не полнота аспекта (свойство живёт и без носителя, §А1-1).
+  const run = await execute(
+    db,
+    req(
+      user,
+      [
+        {
+          tool: 'entity_create',
+          input: { title: 'Прогон', tags: [], props: { 'orbis/run_routine': note.id } },
+        },
+      ],
+      { mechanism: 'verb', source: 'system' },
+    ),
+  );
+  expect(err(run).code).toBe('VALIDATION');
+  expect(reasonOf(run)).toBe('REF_TARGET');
+  expect(err(run).message).toContain('цель не в множестве target');
+
+  // registry_ref{target: contract}: шим интервала А→Б-1 (РП-6)
+  const okScope = await execute(
+    db,
+    req(user, [
+      {
+        tool: 'entity_create',
+        input: {
+          title: 'пятёрочка → Продукты',
+          tags: [],
+          aspects: ['orbis/memory'],
+          props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/money-movement' },
+        },
+      },
+    ]),
+  );
+  expect(okScope.ok).toBe(true);
+
+  const badScope = await execute(
+    db,
+    req(user, [
+      {
+        tool: 'entity_create',
+        input: {
+          title: 'мусор → Продукты',
+          tags: [],
+          aspects: ['orbis/memory'],
+          props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/nope' },
+        },
+      },
+    ]),
+  );
+  expect(err(badScope).code).toBe('VALIDATION');
+  expect(reasonOf(badScope)).toBe('REF_TARGET');
+  expect(err(badScope).message).toContain('не найдена');
+});
+
+test('ref: batch «заведи категорию и положи в неё трату» проходит — цель ищется по ИТОГОВОМУ состоянию tx', async () => {
+  const user = freshUserId();
+  const categoryId = newId();
+  const r = await execute(
+    db,
+    req(
+      user,
+      [
+        {
+          tool: 'entity_create',
+          input: {
+            id: categoryId,
+            title: 'Транспорт',
+            tags: [],
+            aspects: { 'orbis/category': {} },
+          },
+        },
+        {
+          tool: 'entity_create',
+          input: {
+            title: 'Такси',
+            tags: [],
+            aspects: ['orbis/financial'],
+            props: {
+              'orbis/amount': '420.00',
+              'orbis/direction': 'expense',
+              'orbis/occurred_on': '2026-08-21',
+              'orbis/finance_category': categoryId,
+            },
+          },
+        },
+      ],
+      { batchId: newId() },
+    ),
+  );
+  if (!r.ok) throw new Error(JSON.stringify(r.error));
+  const txn = (r.results[1] as WireEntity).id;
+  expect(await refEdges(user, txn)).toEqual([
+    { target: categoryId, property: 'orbis/finance_category' },
+  ]);
+});
+
+test('ref: два ссылочных свойства на одну цель — одно ребро, а не отказ (rel_uniq до 0017)', async () => {
+  const user = freshUserId();
+  const food = await createCategory(user, 'Еда');
+  // `orbis/rule_target` и `orbis/finance_category` — оба ref в категорию; на одной записи
+  // они дают одну пару (источник, цель), а `rel_uniq` до 0017 вмещает её один раз.
+  const both = await execute(
+    db,
+    req(user, [
+      {
+        tool: 'entity_create',
+        input: {
+          title: 'пятёрочка → Еда',
+          tags: [],
+          props: { 'orbis/rule_target': food, 'orbis/finance_category': food },
+        },
+      },
+    ]),
+  );
+  if (!both.ok) throw new Error(JSON.stringify(both.error));
+  const edges = await refEdges(user, (both.results[0] as WireEntity).id);
+  expect(edges).toHaveLength(1);
+  expect(edges[0]?.target).toBe(food);
+});
+
+test('ref: undo правки категории возвращает и свойство, и зеркало-ребро', async () => {
+  const user = freshUserId();
+  const sink = makeChatJournalSink();
+  const food = await createCategory(user, 'Еда');
+  const fun = await createCategory(user, 'Развлечения');
+  const txn = await createTxn(user, 'Обед', food);
+  // Ребро от СОЗДАНИЯ ставится тем же движком — иначе откат ниже нечего было бы возвращать
+  expect(await refEdges(user, txn)).toEqual([{ target: food, property: 'orbis/finance_category' }]);
+
+  const moved = await execute(
+    db,
+    req(user, [
+      { tool: 'entity_update', input: { id: txn, props: { 'orbis/finance_category': fun } } },
+    ]),
+    { sink },
+  );
+  if (!moved.ok) throw new Error(JSON.stringify(moved.error));
+  expect(await refEdges(user, txn)).toEqual([{ target: fun, property: 'orbis/finance_category' }]);
+
+  const undone = await undoAction(db, { actorUserId: user, actionId: moved.actionId });
+  expect(undone.ok).toBe(true);
+  // Единица отката — СВОЙСТВО (§А7-4); ребро производно и сходится за ним само
+  const back = okEntity(
+    await execute(db, req(user, [{ tool: 'entity_update', input: { id: txn, title: 'Обед' } }])),
+  );
+  expect(back.props['orbis/finance_category']).toBe(food);
+  expect(await refEdges(user, txn)).toEqual([{ target: food, property: 'orbis/finance_category' }]);
+});

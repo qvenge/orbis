@@ -17,6 +17,7 @@
 // подавление повтора идёт тем же 30-дневным сканом, что и подавление по уже
 // отправленному предложению (зеркало rejectPending §7.10).
 import {
+  type ContractIdV1,
   counterpartySimilarity,
   DUP_SIMILARITY_THRESHOLD,
   formatRuleTitle,
@@ -33,6 +34,9 @@ import type { Db } from '../db/client';
 import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import type { ActionRecord } from '../executor/types';
+import type { CompileCtx } from '../query/compile-ast';
+import { queryContext } from '../query/context';
+import { refTargetMembershipSql } from '../registry/ref';
 import type { Card } from '../tools/registry';
 
 /**
@@ -59,7 +63,11 @@ const MEMORY = 'orbis/memory';
 /** Поля правила памяти после реформы — свойства по id, не поля внутри аспект-ключа. */
 const MEMORY_KIND = 'orbis/memory_kind';
 const RULE_SCOPE = 'orbis/rule_scope';
-const CATEGORY = 'orbis/category';
+/**
+ * Область денежных правил памяти (§А8/В3): `orbis/rule_scope` стал ссылкой на КОНТРАКТ, и
+ * прежний `orbis/financial` (id аспекта) сервер с Задачи 11 не принимает.
+ */
+const CONTRACT_MONEY_MOVEMENT = 'orbis/money-movement' satisfies ContractIdV1;
 /** Окно скана журнала и окно подавления повторного предложения — §7.8, 30 дней. */
 const WINDOW_DAYS = 30;
 /** «После двух одинаковых исправлений» (§7.8), считая текущее. */
@@ -288,12 +296,34 @@ async function titleOf(tx: Tx, id: string): Promise<string | undefined> {
   return rows[0]?.title;
 }
 
-/** Название категории — оно и есть связь правила с категорией (см. shared/memory/rule.ts). */
-async function categoryTitleOf(tx: Tx, id: string): Promise<string | undefined> {
-  const rows = await tx
-    .select({ title: entities.title })
-    .from(entities)
-    .where(and(eq(entities.id, id), sql`${CATEGORY} = ANY(${entities.aspects})`));
+/**
+ * Название категории — оно и есть связь правила с категорией (см. shared/memory/rule.ts).
+ *
+ * «Что такое категория» здесь БОЛЬШЕ НЕ РЕШАЕТСЯ: множество берётся из `target` свойства
+ * `orbis/finance_category` (§А6-1) — того самого, чью правку эскалация и разбирает. Прежде
+ * рядом стоял свой предикат по аспекту, и это была вторая правда: расширь владелец цель
+ * ссылки своей строкой реестра — запись прошла бы валидатором и молча не дала бы правила.
+ *
+ * Архивная цель выпадает из множества сама (`compileWhere` даёт `NOT archived`), и это
+ * ровно то поведение, что было: предлагать правило в убранную категорию незачем.
+ *
+ * `undefined` — «категорией не является либо невидима»: у эскалации это штатный исход
+ * (`category_not_found`), а не отказ, поэтому проверка НЕ бросающая.
+ */
+async function categoryTitleOf(
+  tx: Tx,
+  compileCtx: () => Promise<CompileCtx>,
+  id: string,
+): Promise<string | undefined> {
+  const ctx = await compileCtx();
+  const def = ctx.reg.properties.get(FINANCE_CATEGORY);
+  // Сломанный реестр не роняет пост-коммитный путь: правила просто не предлагаются.
+  if (def === undefined || def.type.kind !== 'ref') return undefined;
+  const rows = (await tx.execute(sql`
+    SELECT title FROM entities
+     WHERE id IN (${refTargetMembershipSql(def.type, [id], ctx)})`)) as unknown as Array<{
+    title: string;
+  }>;
   return rows[0]?.title;
 }
 
@@ -330,7 +360,7 @@ async function hasEquivalentRule(tx: Tx, pattern: string, categoryTitle: string)
         sql`${MEMORY} = ANY(${entities.aspects})`,
         eq(entities.archived, false),
         sql`${entities.props} ->> ${MEMORY_KIND} = 'rule'`,
-        sql`${entities.props} ->> ${RULE_SCOPE} = ${FINANCIAL}`,
+        sql`${entities.props} ->> ${RULE_SCOPE} = ${CONTRACT_MONEY_MOVEMENT}`,
       ),
     );
   return rows.some((r) => {
@@ -419,6 +449,7 @@ async function alreadyOffered(tx: Tx, pattern: string, rc: Recategorization): Pr
 async function considerOne(
   tx: Tx,
   ownerId: string,
+  compileCtx: () => Promise<CompileCtx>,
   loadJournal: () => Promise<Recategorization[]>,
   rc: Recategorization,
 ): Promise<SuggestRuleResult> {
@@ -431,7 +462,7 @@ async function considerOne(
   // Длинный паттерн правилом не станет: он ушёл бы в неудаляемую строку журнала и
   // читался бы каждым последующим подавлением (см. RULE_PATTERN_MAX).
   if (pattern.length > RULE_PATTERN_MAX) return { suggested: false, reason: 'pattern_too_long' };
-  const categoryTitle = await categoryTitleOf(tx, rc.to);
+  const categoryTitle = await categoryTitleOf(tx, compileCtx, rc.to);
   if (categoryTitle === undefined) return { suggested: false, reason: 'category_not_found' };
 
   // Гейт подавления стоит ДО скана журнала намеренно: на уже предложенной или
@@ -508,6 +539,14 @@ export async function maybeSuggestRule(deps: {
     // рекатегоризации с уже отправленным предложением скана не бывает вовсе (гейт
     // подавления стоит раньше), и подъём заставил бы платить за него на пустом месте.
     let journal: Recategorization[] | undefined;
+    // Контекст компиляции — один на действие и ЛЕНИВЫЙ по той же причине, что и скан
+    // журнала: он стоит загрузки реестров и настроек владельца, а до `categoryTitleOf`
+    // доходят не все рекатегоризации (гейты паттерна отвечают раньше).
+    let compiled: Promise<CompileCtx> | undefined;
+    const compileCtx = (): Promise<CompileCtx> => {
+      compiled ??= queryContext(tx, deps.ownerId, null);
+      return compiled;
+    };
     const targets = recats.map((rc) => rc.to);
     const loadJournal = async (): Promise<Recategorization[]> => {
       journal ??= await journalRecategorizations(tx, deps.action, targets);
@@ -515,7 +554,7 @@ export async function maybeSuggestRule(deps: {
     };
     let last: SuggestRuleResult = { suggested: false, reason: 'not_recategorization' };
     for (const rc of recats) {
-      last = await considerOne(tx, deps.ownerId, loadJournal, rc);
+      last = await considerOne(tx, deps.ownerId, compileCtx, loadJournal, rc);
       if (last.suggested) return last;
     }
     return last;
