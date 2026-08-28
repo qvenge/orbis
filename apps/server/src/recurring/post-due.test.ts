@@ -10,6 +10,7 @@ import {
   adminDb,
   appDb,
   divergentEntityRow,
+  executeWithFixtureCategories as execute,
   freshUserId,
   requireEnv,
   truncateAll,
@@ -17,7 +18,6 @@ import {
 import { envelopeForCategory } from '../budget/aggregates';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type {
   ActionRecord,

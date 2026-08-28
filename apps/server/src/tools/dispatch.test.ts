@@ -9,6 +9,7 @@ import {
   adminDb,
   appDb,
   divergentEntityRow,
+  executeWithFixtureCategories as execute,
   freshUserId,
   requireEnv,
   seedCustomAspect,
@@ -17,7 +18,6 @@ import {
 import { ensureEntityThread, ensureGlobalThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
@@ -32,6 +32,12 @@ const { db, client } = appDb();
 const userA = freshUserId();
 const userB = freshUserId();
 const CATEGORY_REF = '019e4466-aaaa-7e07-b5d4-64be9721da51';
+/**
+ * Своя категория для userC. С §А6-1 ссылка обязана указывать на категорию ТОГО ЖЕ
+ * владельца, а id сущности глобально уникален — общая на два владельца константа
+ * доставалась бы первому, и второму цель была бы «не найдена» (RLS её скрывает).
+ */
+const CATEGORY_REF_C = '019e4466-cccc-7e07-b5d4-64be9721da51';
 const T0 = new Date('2026-07-04T10:00:00.000Z');
 
 function ctxFor(over: Partial<ToolCallCtx> = {}): ToolCallCtx {
@@ -990,7 +996,7 @@ describe('dispatchTool: user_query материализует окно запр�
         'orbis/financial': {
           amount: '150.00',
           direction: 'expense',
-          category_ref: CATEGORY_REF,
+          category_ref: CATEGORY_REF_C,
           recurring: true,
         },
       },

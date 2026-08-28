@@ -24,6 +24,7 @@ import corpus from '../../test/golden/validator-verdicts.json';
 import {
   adminDb,
   appDb,
+  executeWithFixtureCategories as execute,
   freshUserId,
   requireEnv,
   seedCustomAspect,
@@ -37,7 +38,7 @@ import { compileQueryAst } from '../query/compile-ast';
 import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import type { PropsViolation } from '../registry/validate-props';
 import { toWireEntity, toWireEntityFromSql } from '../wire';
-import { execute, touchesBudgetContour } from './executor';
+import { touchesBudgetContour } from './executor';
 import { makeChatJournalSink } from './journal';
 import { fromLegacyInput, projectLegacyAspects } from './legacy-form';
 import {

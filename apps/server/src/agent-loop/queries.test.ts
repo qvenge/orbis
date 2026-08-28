@@ -10,13 +10,13 @@ import { sql } from 'drizzle-orm';
 import {
   appDb,
   divergentEntityRow,
+  executeWithFixtureCategories as execute,
   freshUserId,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
 import { agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import {
   activeRoutines,
@@ -124,7 +124,15 @@ describe('parentProject / ticketOfRun: проект и тикет через р�
       aspects: { 'orbis/task': { status: 'planned' } },
     });
     await link(owner, project.id, ticket.id, 'ticket');
-    const run = await seedRoutineRun(owner, { routineId: ticket.id, bucket: '2026-08-27T07:00' });
+    // Субъект прогона — рутина (§А6-1 проверяет `orbis/run_routine` по множеству
+    // `aspect=orbis/routine`), а РОДИТЕЛЬ в очереди — тикет: `runsOfParent`/`ticketOfRun`
+    // ходят по роли `run`, и именно её источник здесь и проверяется.
+    const routineId = await seedRoutine(owner, { title: 'Рутина очереди' });
+    const run = await seedRoutineRun(owner, {
+      routineId,
+      parentId: ticket.id,
+      bucket: '2026-08-27T07:00',
+    });
 
     const got = await withIdentity(db, owner, async (tx) => ({
       project: await parentProject(tx, ticket.id),

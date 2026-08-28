@@ -10,14 +10,15 @@ import {
   adminDb,
   appDb,
   divergentEntityRow,
+  executeWithFixtureCategories as execute,
   freshUserId,
   legacyEntityColumns,
   requireEnv,
+  seedRefTargetRows,
   truncateAll,
 } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type {
   ActionRecord,
@@ -745,6 +746,9 @@ describe('уникальность конверта: (category_ref, currency, pe
 
   test('batch: два create одной комбинации в одном batch → INVARIANT до первой записи', async () => {
     const catB = newId();
+    // Категория заводится ДО снимка счётчика: обстановка ссылки (§А6-1) не должна попасть
+    // в разницу «до/после», которой тест меряет откат batch.
+    await seedRefTargetRows(user, [{ id: catB, aspect: 'orbis/category' }]);
     const sinkEntriesBefore = await adminRows(
       sql`SELECT count(*)::int AS n FROM entities WHERE owner_id = ${user}`,
     );

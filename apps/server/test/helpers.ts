@@ -8,10 +8,12 @@ import {
   X_ORBIS_TYPE,
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { makeDb } from '../src/db/client';
+import { type Db, makeDb } from '../src/db/client';
 import type { entities } from '../src/db/schema';
 import type { Tx } from '../src/db/with-identity';
+import { execute } from '../src/executor/executor';
 import { type LegacyRow, rowFromLegacy } from '../src/executor/legacy-form';
+import type { ExecuteRequest, ExecuteResult, ExecutorDeps } from '../src/executor/types';
 import { loadRegistry } from '../src/registry/load';
 
 export function requireEnv(): void {
@@ -253,4 +255,118 @@ export function divergentEntityRow(spec: DivergentRowSpec): typeof entities.$inf
     aspectsLegacy: spec.legacy ?? {},
     ...(spec.archived === undefined ? {} : { archived: spec.archived }),
   };
+}
+
+/**
+ * Цели ссылок с ЗАДАННЫМИ id — фикстура ссылочных свойств (§А6-1).
+ *
+ * До реформы `category_ref` в фикстурах был любым uuid: сервер его не проверял, и «категория»
+ * существовала только как строка в jsonb. С Задачи 11 значение `orbis/finance_category`
+ * проверяется компиляцией множества `target` (`aspect=orbis/category`) под RLS, и выдуманный
+ * id — честный отказ `REF_TARGET`. Фикстуре при этом нужна не другая ссылка, а настоящая
+ * цель: id остаётся тем же, что был, поэтому остальные утверждения сьютов не меняются.
+ *
+ * Прямой INSERT мимо исполнителя — намеренно (как у `divergentEntityRow`): категория здесь
+ * ОБСТАНОВКА, а не предмет проверки, и гонять её через конвейер значило бы удваивать время
+ * каждого сьюта ради строки из трёх колонок. `ON CONFLICT DO NOTHING` делает вызов
+ * идемпотентным: сьюты зовут её и на общий id describe-блока, и повторно внутри тестов.
+ */
+export async function seedRefTargetRows(
+  ownerId: string,
+  targets: ReadonlyArray<{ id: string; aspect: string }>,
+): Promise<void> {
+  if (targets.length === 0) return;
+  const { db, client } = adminDb();
+  try {
+    const seen = new Set<string>();
+    for (const target of targets) {
+      if (seen.has(target.id)) continue;
+      seen.add(target.id);
+      await db.execute(sql`
+        INSERT INTO entities (id, owner_id, title, tags, props, aspects, aspects_legacy)
+        VALUES (${target.id}::uuid, ${ownerId}::uuid, ${`Цель ссылки (${target.aspect})`},
+                '{}'::text[], '{}'::jsonb, ARRAY[${target.aspect}]::text[],
+                jsonb_build_object(${target.aspect}::text, '{}'::jsonb))
+        ON CONFLICT (id) DO NOTHING`);
+    }
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * Ссылочные свойства фикстур и АСПЕКТ, которым описано множество их цели (§А6-1). Старая
+ * форма входа называет их полями аспект-ключа, новая — id свойства; фикстуры сьютов пишут и
+ * так и так, поэтому оба имени перечислены здесь один раз.
+ *
+ * Список закрыт намеренно и держится РОВНО фикстурами: это не второй реестр, а перечень тех
+ * ссылок, которые сьюты выдумывали до §А6-1. Свойство, которого здесь нет, обстановкой не
+ * чинится — и это правильно: пусть падает и заводит себе цель осознанно.
+ */
+const FIXTURE_REF_TARGET_ASPECT: Readonly<Record<string, string>> = {
+  category_ref: 'orbis/category',
+  'orbis/finance_category': 'orbis/category',
+  rule_target: 'orbis/category',
+  'orbis/rule_target': 'orbis/category',
+  routine_id: 'orbis/routine',
+  'orbis/run_routine': 'orbis/routine',
+};
+
+/** uuid — та же форма, что у значения kind `ref` (`format: uuid` схемы значения). */
+const FIXTURE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Завести цели под ВСЕ ссылочные свойства, названные во входе исполнителя (§А6-1).
+ *
+ * Ставится в фикстурный «воронкообразный» помощник сьюта — тот единственный, через который
+ * тесты файла создают сущности. Так правка на файл ровно одна, а не по одной на каждый
+ * выдуманный uuid; и так же она не задевает утверждений: id ссылки остаётся тем, что выбрала
+ * фикстура, — меняется лишь то, что теперь у него есть настоящая цель.
+ *
+ * Обход рекурсивный, потому что вход бывает трёх форм: старая карта аспектов
+ * (`aspects: {'orbis/financial': {category_ref}}`), новая (`props: {'orbis/finance_category'}`)
+ * и envelope батча (`operations[].input`). Разбирать их порознь значило бы завести три
+ * фикстурных правила там, где правило одно: «названная категория обязана существовать».
+ */
+export async function seedCategoriesOfInput(ownerId: string, input: unknown): Promise<void> {
+  const targets: Array<{ id: string; aspect: string }> = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (typeof node !== 'object' || node === null) return;
+    for (const [key, value] of Object.entries(node)) {
+      const aspect = FIXTURE_REF_TARGET_ASPECT[key];
+      if (aspect !== undefined && typeof value === 'string' && FIXTURE_UUID_RE.test(value)) {
+        targets.push({ id: value, aspect });
+      }
+      walk(value);
+    }
+  };
+  walk(input);
+  await seedRefTargetRows(ownerId, targets);
+}
+
+/**
+ * Исполнитель ДЛЯ ФИКСТУР: перед применением заводит категории, названные ссылочными
+ * свойствами входа (`seedCategoriesOfInput`), и дальше зовёт настоящий `execute`.
+ *
+ * ЗАЧЕМ ОН ЕСТЬ. До §А6-1 сьюты писали `category_ref: newId()` — сервер ссылку не проверял, и
+ * «категория» жила строкой в jsonb. Теперь ссылка обязана указывать на живую категорию
+ * владельца, и у двух десятков сьютов обстановка перестала быть законной. Предмет их проверок
+ * при этом не изменился ни в одном: им нужна транзакция В КАКОЙ-НИБУДЬ категории, а не
+ * конкретная категория. Обёртка чинит обстановку одним импортом на файл вместо сотни правок
+ * по месту — и оставляет id ссылок ровно теми, что выбрали сами фикстуры.
+ *
+ * ЧЕГО ОНА НЕ ДЕЛАЕТ И ГДЕ ЕЙ НЕ МЕСТО: она ГАСИТ отказ `REF_TARGET` по несуществующей
+ * категории. Сьют, который проверяет САМ этот отказ, обязан звать `execute` напрямую —
+ * так и сделано в `registry/ref.test.ts`, где обёртки нет вовсе.
+ */
+export function executeWithFixtureCategories(
+  db: Db,
+  req: ExecuteRequest,
+  deps?: ExecutorDeps,
+): Promise<ExecuteResult> {
+  return seedCategoriesOfInput(req.actorUserId, req.operations).then(() => execute(db, req, deps));
 }

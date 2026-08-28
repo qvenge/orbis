@@ -356,7 +356,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   });
 
   // ── Шаг 7: экспорт содержит ВЕСЬ граф A (сущности, связи, сообщения, настройки) ─
-  test('шаг 7: exportData(A) — 22 сущности, 1 связь, 1 тред, 8 сообщений (вкл. audit и undo)', async () => {
+  test('шаг 7: exportData(A) — 22 сущности, 3 связи (dependency + два зеркала ref), 1 тред, 8 сообщений (вкл. audit и undo)', async () => {
     const exp = await a.user.exportData();
     expect(exp.format).toBe('orbis-export');
     expect(exp.version).toBe(1);
@@ -377,9 +377,18 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(obed?.aspectsMap['orbis/financial']?.amount).toBe('340.00');
     expect(obed?.aspectsMap['orbis/financial']?.occurred_on).toBe('2026-07-03');
 
-    // Одна связь роли dependency
-    expect(exp.relations.length).toBe(1);
-    expect(exp.relations[0]?.role).toBe('dependency');
+    // Три связи: одна роли `dependency` (шаг 6) и два зеркала ссылочных свойств (§А6-2) —
+    // «Обед» и «купить кроссовки» несут `orbis/finance_category`, и на каждую категорию
+    // исполнитель поставил ребро роли `ref` с подписью свойства в `meta`.
+    const byRole = new Map(exp.relations.map((r) => [r.role, r]));
+    expect(exp.relations.length).toBe(3);
+    expect(byRole.has('dependency')).toBe(true);
+    const refEdges = exp.relations.filter((r) => r.role === 'ref');
+    expect(refEdges.length).toBe(2);
+    expect(new Set(refEdges.map((r) => r.sourceId))).toEqual(new Set([obedId, sneakersId]));
+    for (const edge of refEdges) {
+      expect((edge.meta as { property?: string }).property).toBe('orbis/finance_category');
+    }
 
     // Один тред (глобальный) и 8 сообщений: 1 user + 7 системных
     expect(exp.chatThreads.length).toBe(1);
@@ -435,7 +444,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     // Граф A не тронут вмешательствами B (перекрёстная проверка изоляции)
     const aExp = await a.user.exportData();
     expect(aExp.entities.length).toBe(22);
-    expect(aExp.relations.length).toBe(1);
+    expect(aExp.relations.length).toBe(3);
     // «купить кроссовки» так и осталась inbox (B её не отменял/менял)
     const aSneakers = aExp.entities.find((e) => e.id === sneakersId);
     expect(aSneakers?.aspectsMap['orbis/task']?.status).toBe('inbox');

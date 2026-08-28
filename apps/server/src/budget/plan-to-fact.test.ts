@@ -12,13 +12,13 @@ import {
   adminDb,
   appDb,
   divergentEntityRow,
+  executeWithFixtureCategories as execute,
   freshUserId,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';

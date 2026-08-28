@@ -6,12 +6,18 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { globalThreadId, memoryRuleSuggestionId, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  executeWithFixtureCategories as execute,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { appendMessage } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
 import { chatMessages } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type {
   ActionRecord,
@@ -209,7 +215,7 @@ async function createRule(user: string): Promise<WireEntity> {
   return createEntity(user, {
     title: 'пятерочка → Развлечения',
     tags: [],
-    aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+    aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
   });
 }
 

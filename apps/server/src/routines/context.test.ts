@@ -79,7 +79,7 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
       title: 'Не назначать встречи до 10 утра',
       body: 'Утро — для работы над задачами.',
       tags: [],
-      aspects: { 'orbis/memory': { kind: 'rule', scope: 'календарь' } },
+      aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/recurrence' } },
     });
 
     const { system } = await contextOf(routineId);

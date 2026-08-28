@@ -14,7 +14,7 @@
  * их место заняли `orbis/memory_kind` и `orbis/rule_scope` (В7 инвентаря).
  */
 export const MEMORY_RULES_QUERY = {
-  query: 'aspect=orbis/memory, orbis/memory_kind=rule, orbis/rule_scope=orbis/financial',
+  query: 'aspect=orbis/memory, orbis/memory_kind=rule, orbis/rule_scope=orbis/money-movement',
 } as const;
 
 /** Правила меняются редко (эскалация §7.8) — держим их в кэше 5 минут, а не 30 секунд. */

@@ -6,9 +6,15 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { materializeBatchId, newId, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  executeWithFixtureCategories as execute,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { materializeInstances } from '../recurring/materialize';
-import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
 import type {
   ActionRecord,

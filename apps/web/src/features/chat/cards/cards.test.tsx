@@ -669,7 +669,7 @@ describe('memory_rule_suggestion (детерминированное время)
     };
     expect(input.input.title).toBe('кофе → Развлечения');
     expect(input.input.aspects).toEqual({
-      'orbis/memory': { kind: 'rule', scope: 'orbis/financial' },
+      'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' },
     });
     expect(input.input.tags).toEqual([]);
     expect(input.input.body).toBeTruthy(); // короткое пояснение, откуда правило взялось

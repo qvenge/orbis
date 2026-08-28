@@ -7,10 +7,17 @@ import type { QueryAst } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  executeWithFixtureCategories as execute,
+  freshUserId,
+  requireEnv,
+  seedRefTargetRows,
+  truncateAll,
+} from '../../test/helpers';
 import * as schema from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
 import type { CompileCtx } from '../query/compile-ast';
 import { queryContext } from '../query/context';
 import { parseQueryText } from '../query/parse-text';
@@ -24,7 +31,23 @@ const { db, client } = appDb();
 const createCaller = createCallerFactory(appRouter);
 
 /** Категория-ссылка финансовых сущностей: uuid, существования executor не требует. */
-const CATEGORY_REF = '019e4466-bbbb-7e07-b5d4-64be9721da51';
+/**
+ * Категория владельца под ссылку транзакции. С §А6-1 значение `orbis/finance_category`
+ * проверяется по множеству `aspect=orbis/category`, то есть цель обязана существовать И
+ * принадлежать ТОМУ ЖЕ владельцу; сьют же заводит нового владельца в каждом тесте, а id
+ * сущности глобально уникален — одна константа на всех больше не годится. id выводится из
+ * владельца, поэтому остаётся детерминированным.
+ */
+function categoryOf(user: string): string {
+  return `019e4466-bbbb-7e07-b5d4-${user.replaceAll('-', '').slice(0, 12)}`;
+}
+
+/** Категория владельца в БД: обстановка ссылки, а не предмет проверки (см. `categoryOf`). */
+async function ensureCategory(user: string): Promise<string> {
+  const id = categoryOf(user);
+  await seedRefTargetRows(user, [{ id, aspect: 'orbis/category' }]);
+  return id;
+}
 
 function callerFor(user: string) {
   return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
@@ -32,22 +55,32 @@ function callerFor(user: string) {
 
 type Caller = ReturnType<typeof callerFor>;
 
-function income(amount: string, tags: string[], occurredOn = '2026-07-04') {
+function income(categoryRef: string, amount: string, tags: string[], occurredOn = '2026-07-04') {
   return {
     tags,
     aspects: {
       'orbis/financial': {
         amount,
         direction: 'income',
-        category_ref: CATEGORY_REF,
+        category_ref: categoryRef,
         occurred_on: occurredOn,
       },
     },
   };
 }
 
-async function createIncome(caller: Caller, title: string, amount: string, tags: string[]) {
-  return caller.entity.create({ input: { title, ...income(amount, tags) }, source: 'ui' });
+async function createIncome(
+  user: string,
+  caller: Caller,
+  title: string,
+  amount: string,
+  tags: string[],
+) {
+  const categoryRef = await ensureCategory(user);
+  return caller.entity.create({
+    input: { title, ...income(categoryRef, amount, tags) },
+    source: 'ui',
+  });
 }
 
 /**
@@ -177,10 +210,10 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
   test('aggregate=sum складывает поле по отобранным сущностям', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    await createIncome(caller, 'Отложил в мае', '100000.00', ['savings']);
-    await createIncome(caller, 'Отложил в июне', '50000.00', ['savings']);
+    await createIncome(user, caller, 'Отложил в мае', '100000.00', ['savings']);
+    await createIncome(user, caller, 'Отложил в июне', '50000.00', ['savings']);
     // Мимо выборки: другой тег и другое направление — доказывают, что фильтр работает
-    await createIncome(caller, 'Зарплата', '400000.00', ['salary']);
+    await createIncome(user, caller, 'Зарплата', '400000.00', ['salary']);
     await caller.entity.create({
       input: {
         title: 'Продукты',
@@ -189,7 +222,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
           'orbis/financial': {
             amount: '3000.00',
             direction: 'expense',
-            category_ref: CATEGORY_REF,
+            category_ref: await ensureCategory(user),
             occurred_on: '2026-07-04',
           },
         },
@@ -240,9 +273,9 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
     const caller = callerFor(user);
     // Массивов чисел во встроенных аспектах нет, поэтому «последнее измерение»
     // моделируется реальным числовым полем — orbis/financial.amount (взносы по кредиту).
-    const first = await createIncome(caller, 'Взнос 1', '82.5', ['loan']);
-    await createIncome(caller, 'Взнос 2', '81.0', ['loan']);
-    await createIncome(caller, 'Взнос 3', '80.5', ['loan']);
+    const first = await createIncome(user, caller, 'Взнос 1', '82.5', ['loan']);
+    await createIncome(user, caller, 'Взнос 2', '81.0', ['loan']);
+    await createIncome(user, caller, 'Взнос 3', '80.5', ['loan']);
     // Правка ПЕРВОЙ сущности делает её последней по updated_at: если бы порядок брался
     // из created_at или из физического порядка строк, ответ был бы 80.5.
     await caller.entity.update({ id: first.id, title: 'Взнос 1 (уточнён)' });
@@ -288,7 +321,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
   test('перевыполненная цель отдаёт значение как есть, не подрезая его целью', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    await createIncome(caller, 'Премия', '150000.00', ['savings']);
+    await createIncome(user, caller, 'Премия', '150000.00', ['savings']);
 
     const p = await progressOf(user, {
       progress_source: {
@@ -311,7 +344,7 @@ describe('computeGoalProgress: источник хранится ДЕРЕВОМ 
   test('дерево-литерал считается, а ЗАКОННЫЙ текст того же запроса — нет: конвертера старого текста нет', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    await createIncome(caller, 'Отложил', '100.00', ['savings']);
+    await createIncome(user, caller, 'Отложил', '100.00', ['savings']);
 
     // Дерево написано РУКАМИ, мимо парсера: иначе тест доказывал бы совпадение парсера с
     // самим собой, а не то, что расчёт принимает канон.
@@ -364,9 +397,9 @@ describe('computeGoalProgress: изоляция владельца', () => {
     // Утечка становится настоящей, если процесс поднимут под ролью с правами на
     // таблицы (админ-DSN — он в репозитории есть) или роли выдадут гранты. Тест
     // сторожит сам инвариант, а не одну его реализацию.
-    await createIncome(callerFor(other), 'Чужой доход', '999999.00', ['savings']);
-    await createIncome(callerFor(other), 'Ещё чужой', '888888.00', ['savings']);
-    await createIncome(callerFor(me), 'Мой доход', '100.00', ['savings']);
+    await createIncome(other, callerFor(other), 'Чужой доход', '999999.00', ['savings']);
+    await createIncome(other, callerFor(other), 'Ещё чужой', '888888.00', ['savings']);
+    await createIncome(me, callerFor(me), 'Мой доход', '100.00', ['savings']);
 
     const source = { query: 'aspect=orbis/financial, tags=savings' } as const;
     const sum = await progressOf(me, {
@@ -497,7 +530,7 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
   test('нечисловое значение в числовом поле — compute_failed, транзакция жива', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    const row = await createIncome(caller, 'Взнос', '10.00', ['drift']);
+    const row = await createIncome(user, caller, 'Взнос', '10.00', ['drift']);
     // Рассинхрон реестра и данных: реестр считает orbis/amount числом, а в JSONB текст.
     // Через executor такое не пройдёт (ajv), поэтому пишем админ-DSN мимо него —
     // ровно как это выглядело бы после ручной правки или дрейфа определения свойства.
@@ -532,13 +565,15 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
       const rows = await tx.execute(sql`SELECT count(*)::text AS n FROM entities`);
       return (rows[0] as { n: string }).n;
     });
-    expect(stillReadable).toBe('1');
+    // Две строки владельца: сам взнос и категория-цель его ссылки (обстановка §А6-1).
+    // Проверяется тут не число, а то, что запрос ПОСЛЕ упавшего вообще отвечает.
+    expect(stillReadable).toBe('2');
   });
 
   test('NaN на выходе агрегата — тоже compute_failed, и ловит его ДРУГОЙ catch', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    const row = await createIncome(caller, 'Взнос', '10.00', ['nan']);
+    const row = await createIncome(user, caller, 'Взнос', '10.00', ['nan']);
     // 'NaN' — ЗАКОННОЕ значение numeric в PostgreSQL: каст не падает, падает уже разбор
     // decimal-строки в decRatio. То есть путь идёт мимо SQL-catch и упирается во второй,
     // «долевой». Без него отказ выглядел бы в логе как отказ базы — ярлык один, но
@@ -585,7 +620,7 @@ describe('entity.get: прогресс приезжает с целью и то�
   test('снятый аспект цели гасит полосу, хотя источник и цель остались в props (Р9)', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    await createIncome(caller, 'Отложил', '75000.00', ['savings']);
+    await createIncome(user, caller, 'Отложил', '75000.00', ['savings']);
     const goal = await createGoal(user, {
       title: 'Цель, с которой снимут аспект',
       progress_source: {
@@ -622,7 +657,7 @@ describe('entity.get: прогресс приезжает с целью и то�
   test('цель получает goalProgress, обычная сущность — нет', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    await createIncome(caller, 'Отложил', '75000.00', ['savings']);
+    await createIncome(user, caller, 'Отложил', '75000.00', ['savings']);
     const goal = await createGoal(user, {
       title: 'Накопить 300 000 ₽',
       tags: ['goal'],

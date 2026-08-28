@@ -4,13 +4,19 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { canonicalizeBody, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  executeWithFixtureCategories as execute,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 import { readEntity } from '../entity-read';
 import { issuePatGrant, revokeGrant, verifyBearer } from '../oauth/grants';
 import { projectBodyTemplate } from '../seed/project-body';
-import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
 import type {
   ActionRecord,

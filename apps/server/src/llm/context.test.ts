@@ -211,7 +211,7 @@ describe('buildContext — слой 2: память с капом и приор�
     await createMemory(user, {
       title: 'RULE-SCOPED',
       kind: 'rule',
-      scope: 'orbis/financial',
+      scope: 'orbis/money-movement',
       body: 'бар → категория Развлечения',
       updatedAt: new Date(base - 1_000_000),
     });
@@ -239,7 +239,7 @@ describe('buildContext — слой 2: память с капом и приор�
     // Кап: 55 активных memory → ровно MEMORY_CAP строк
     expect(lines.length).toBe(MEMORY_CAP);
     // Приоритет: оба rule впереди, scoped — первым (несмотря на более старый updated_at)
-    expect(lines[0]).toStartWith('— [rule][orbis/financial] RULE-SCOPED');
+    expect(lines[0]).toStartWith('— [rule][orbis/money-movement] RULE-SCOPED');
     expect(lines[1]).toStartWith('— [rule] RULE-GLOBAL');
     // fact сортируются updated_at desc: свежие в капе, старейшие вытеснены
     expect(ctx.system).toContain('FACT-51');

@@ -59,6 +59,15 @@ export interface SeedRoutineOver {
 
 export interface SeedRoutineRunArgs {
   routineId: string;
+  /**
+   * Источник ребра `run` — тот, на ком прогон висит в графе. Умолчание — сама рутина.
+   *
+   * Отдельно от `routineId` он понадобился с §А6-1: субъект прогона (`orbis/run_routine`)
+   * теперь ПРОВЕРЯЕТСЯ против множества `aspect=orbis/routine`, а «родитель» прогона в
+   * очереди исполнителя бывает и тикетом. До проверки фикстура могла звать тикет рутиной —
+   * строка не сверялась ни с чем; теперь роли разведены явно.
+   */
+  parentId?: string;
   bucket?: string;
   attempt?: number;
   startedAt?: Date;
@@ -290,7 +299,7 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
         },
         {
           tool: 'relation_create',
-          input: { source_id: args.routineId, target_id: runId, role: 'run' },
+          input: { source_id: args.parentId ?? args.routineId, target_id: runId, role: 'run' },
         },
       ],
     });

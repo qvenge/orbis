@@ -6,14 +6,19 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { MAX_AGENT_STEPS } from '@orbis/shared';
 import { eq } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  executeWithFixtureCategories as execute,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { type RoutineRow, routineById } from '../agent-loop/queries';
 import { rollbackRun } from '../agent-loop/rollback';
 import { closeRoutineRun } from '../agent-loop/verbs';
 import { MAX_TOKENS_NOTE, STEP_LIMIT_NOTE } from '../ai/send-message';
 import { aiUsage } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActionRecord, JournalSink } from '../executor/types';
 import { ScriptedProvider } from '../llm/scripted';

@@ -11,11 +11,16 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { newId, RULE_NEAREST_ANCESTOR } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  executeWithFixtureCategories as execute,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { loadRegistry } from '../registry/load';
-import { execute } from './executor';
 import { makeChatJournalSink } from './journal';
 import type {
   ActionOperation,

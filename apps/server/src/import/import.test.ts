@@ -247,7 +247,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
       input: {
         title: 'пятерочка → Еда',
         tags: [],
-        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
       },
       source: 'ui',
     });
@@ -272,7 +272,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
       input: {
         title: 'пятерочка → Еда',
         tags: [],
-        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
       },
       source: 'ui',
     });
@@ -304,7 +304,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
           ownerId: user,
           id: newId(),
           title: 'пятерочка → Еда',
-          props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/financial' },
+          props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/money-movement' },
           // Аспекта памяти НЕТ — правило снято, значения пережили снятие.
           aspects: [],
         }),
@@ -333,7 +333,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
         input: {
           title,
           tags: [],
-          aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+          aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
         },
         source: 'ui' as const,
       });
@@ -371,7 +371,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
       input: {
         title: 'кофе → Транспорт',
         tags: [],
-        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
       },
       source: 'ui',
     });

@@ -9,11 +9,16 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entityThreadId, MAX_AGENT_STEPS, newId, processingMessageId } from '@orbis/shared';
 import type { TRPCError } from '@trpc/server';
 import { eq } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  executeWithFixtureCategories as execute,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { ensureGlobalThread } from '../chat/threads';
 import { aiUsage, chatMessages, entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { CONTINUATIONS_BLOCK, PROMPT_BODY } from '../llm/context';
 import { SYSTEM_PROMPT_V4, TOOL_RESULT_MARKER } from '../llm/prompts/v4';

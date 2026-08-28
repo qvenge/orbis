@@ -8,8 +8,14 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
-import { execute } from '../executor/executor';
+import {
+  adminDb,
+  appDb,
+  executeWithFixtureCategories as execute,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteErr, ExecuteOk, ExecuteRequest, ExecuteResult } from '../executor/types';
 

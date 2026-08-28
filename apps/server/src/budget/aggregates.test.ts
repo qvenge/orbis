@@ -11,13 +11,13 @@ import { sql } from 'drizzle-orm';
 import {
   appDb,
   divergentEntityRow,
+  executeWithFixtureCategories as execute,
   freshUserId,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import { appRouter } from '../router';
 import { seedCategoryId, seedOnboarding } from '../seed/onboarding';

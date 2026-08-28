@@ -17,7 +17,7 @@ const CATEGORY_QUERY = { query: 'aspect=orbis/category' };
 // Литерал СВОЙ, а не импорт из `memoryRules.ts`: съедь обе стороны вместе — и подмена
 // запроса перестала бы наблюдаться тестом вовсе.
 const RULES_QUERY = {
-  query: 'aspect=orbis/memory, orbis/memory_kind=rule, orbis/rule_scope=orbis/financial',
+  query: 'aspect=orbis/memory, orbis/memory_kind=rule, orbis/rule_scope=orbis/money-movement',
 };
 
 function threadMsgs(qc: QueryClient): ChatMessage[] {

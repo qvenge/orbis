@@ -14,8 +14,13 @@
 // «Сегодня» фиксировано подменяемым Clock (Task A1) — прогон не зависит от даты запуска.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
-import { execute } from '../executor/executor';
+import {
+  appDb,
+  executeWithFixtureCategories as execute,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { Clock } from './aggregates';
 import { budgetOverview, budgetStatus, rolloverPreview } from './aggregates';

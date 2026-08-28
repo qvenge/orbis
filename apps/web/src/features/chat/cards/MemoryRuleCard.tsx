@@ -98,7 +98,7 @@ export function MemoryRuleCard({
         // Короткое пояснение, откуда правило взялось: пользователь курирует память
         // сам (§7.4), и через месяц строка «кофе → Развлечения» должна объясняться.
         body: `Правило создано из повторных исправлений категории на «${card.categoryTitle}».`,
-        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
       },
       source: 'ui',
     });

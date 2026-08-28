@@ -15,13 +15,13 @@ import { and, eq, inArray } from 'drizzle-orm';
 import {
   appDb,
   divergentEntityRow,
+  executeWithFixtureCategories as execute,
   freshUserId,
   requireEnv,
   truncateAll,
 } from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { execute } from '../executor/executor';
 import { appRouter } from '../router';
 import { dispatchTool } from '../tools/dispatch';
 import { createCallerFactory } from '../trpc';
