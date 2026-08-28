@@ -646,9 +646,9 @@ describe('spent не считает recurring-шаблон (§2.2, §2.8)', () =
     await exec(user, 'attach_orbis_schedule', {
       entity_id: fact.id,
       data: {
-        start_at: `${today}T12:00:00+03:00`,
-        timezone: TZ,
-        recurrence: { freq: 'monthly', interval: 1 },
+        'orbis/start_at': `${today}T12:00:00+03:00`,
+        'orbis/timezone': TZ,
+        'orbis/recurrence': { freq: 'monthly', interval: 1 },
       },
     });
 

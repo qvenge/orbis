@@ -242,7 +242,7 @@ async function prepareAndLoop(
     });
     // Реестр раннера — второй рубеж того же правила, что гейт диспатча (V1.10):
     // показанное модели и исполняемое сервером обязаны совпадать
-    const defs = routineToolDefs(await buildToolRegistry(tx), routineRef);
+    const defs = routineToolDefs(await buildToolRegistry(tx, ownerId), routineRef);
     const llmTools: LLMToolDef[] = defs.map((d) => ({
       name: d.name,
       description: d.description,

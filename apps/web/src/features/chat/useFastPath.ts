@@ -1,4 +1,5 @@
 import {
+  type EntityCreateInput,
   type FastPathCategory,
   type FastPathCtx,
   newId,
@@ -43,6 +44,19 @@ type FastPathMeta = { entityId?: string; text: string; status: 'confirmed' | 'pe
  *  - офлайн уверенный → retry-буфер + карточка «⏳ ждёт отправки» (LLM офлайн недоступен).
  * reparse — «разобрать с AI»: архив fast-сущности + исходная строка LLM-путём (одна строка ≠ две сущности).
  */
+/**
+ * keyFields карточки быстрого ввода из разобранного создания (§А9-1, Задача 12).
+ *
+ * Ключи — id СВОЙСТВ (`orbis/amount`), как их теперь кладёт `parseFastPath` и как их
+ * присылает сервер в `entity_card`: две карточки одного и того же события (мгновенная
+ * клиентская и серверная) обязаны говорить одним языком, иначе после ответа сервера
+ * подписи в ленте молча менялись бы. Русские подписи ставит `fieldLabel` — до Задачи 13c
+ * он этих ключей ещё не знает и покажет их сырыми; это ОДНА поверхность и она названа.
+ */
+function fastPathCard(create: EntityCreateInput): Record<string, unknown> {
+  return { ...(create.props ?? {}), title: create.title };
+}
+
 export function useFastPath(threadId: string) {
   const queryClient = useQueryClient();
   const utils = trpc.useUtils();
@@ -206,8 +220,7 @@ export function useFastPath(threadId: string) {
           insertSystemNote(`Не удалось сохранить запись офлайн — скопируйте текст: «${text}»`);
           return;
         }
-        const fin = (parsed.create.aspects?.['orbis/financial'] ?? {}) as Record<string, unknown>;
-        insertCard({ ...fin, title: parsed.create.title }, '⏳ ждёт отправки', {
+        insertCard(fastPathCard(parsed.create), '⏳ ждёт отправки', {
           text,
           status: 'pending',
         });
@@ -231,8 +244,7 @@ export function useFastPath(threadId: string) {
     }
 
     // Онлайн + уверенно → мгновенная карточка «⚡ без AI» + entity.create (оптимизм §2.5).
-    const fin = (parsed.create.aspects?.['orbis/financial'] ?? {}) as Record<string, unknown>;
-    const card = { ...fin, title: parsed.create.title };
+    const card = fastPathCard(parsed.create);
     const cardId = insertCard(card, '⚡ без AI', {
       entityId: parsed.create.id,
       text,

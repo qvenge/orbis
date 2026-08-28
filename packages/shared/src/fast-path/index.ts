@@ -213,19 +213,21 @@ export function parseFastPath(text: string, ctx: FastPathCtx): FastPathResult {
   if (!category) return { ok: false, reason: 'unknown_category' };
 
   const today = ctx.today ?? new Date().toISOString().slice(0, 10);
+  // Новая форма создания (§А9-1/§А1-1): значения — `props` по id свойства, аспект — просто
+  // тем, чем он и стал: пометкой в списке. Адреса здесь ИМЕННО id, а не `key`: у встроенных
+  // свойств они совпадают, но быстрый путь — машинный, и резолв на границе ему не нужен.
   const create: EntityCreateInput = {
     id: newId(),
     title,
     tags: [],
-    aspects: {
-      'orbis/financial': {
-        amount,
-        direction: income ? 'income' : 'expense',
-        currency,
-        occurred_on: today,
-        category_ref: category.id,
-      },
+    props: {
+      'orbis/amount': amount,
+      'orbis/direction': income ? 'income' : 'expense',
+      'orbis/currency': currency,
+      'orbis/occurred_on': today,
+      'orbis/finance_category': category.id,
     },
+    aspects: ['orbis/financial'],
   };
   return { ok: true, create };
 }

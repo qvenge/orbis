@@ -427,7 +427,7 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
 // ---------------------------------------------------------------------------
 
 describe('/mcp tools/list (§9.2)', () => {
-  test('состав = публичный реестр: 9 публичных core (с thread_post) + 5 глаголов + 12 attach_*, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
+  test('состав = публичный реестр: 10 публичных core (с thread_post и property_catalog) + 5 глаголов + 12 attach_*, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
     const agent = await connectAgent(mainUrl());
     try {
       const { tools } = await agent.listTools();
@@ -445,6 +445,9 @@ describe('/mcp tools/list (§9.2)', () => {
         'relation_delete',
         'batch_execute',
         'budget_status',
+        // §А9-3: каталог свойств публикуется полному доступу — это чтение реестра,
+        // и внешнему агенту с `full` он адресован так же, как чату владельца.
+        'property_catalog',
         'thread_post',
         // Глаголы исполнителя (§9.3): грант есть у любого MCP-вызова, поэтому agentOnly
         // список не сужает — сужает его только скоуп (тест worker ниже)
@@ -484,10 +487,11 @@ describe('/mcp tools/list (§9.2)', () => {
 
       // Дословная сверка с реестром (имя, описание, inputSchema) — адаптер ничего не
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
-      const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
+      const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
       const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
-      // builtin-набор: 31 − 3 internalOnly − 2 routineOnly = 26
+      // builtin-набор: 32 − 3 internalOnly − 2 routineOnly = 27
       expect(tools).toHaveLength(publicDefs.length);
+      expect(tools).toHaveLength(27);
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);
         expect(tool).toBeDefined();
@@ -686,7 +690,7 @@ describe('/mcp: паттерн «что нового» (§9.3, сценарий 
       // 3) работа сделана вне Orbis; агент закрывает задачу и оставляет заметку в тред
       const done = await callTool(agent, 'entity_update', {
         id: task.id,
-        aspects: { 'orbis/task': { status: 'done' } },
+        props: { 'orbis/task_status': 'done' },
       });
       expect(done.isError).toBe(false);
 
@@ -699,12 +703,11 @@ describe('/mcp: паттерн «что нового» (§9.3, сценарий 
       await agent.close();
     }
 
-    // Статус обновлён shallow-merge'ем аспекта
+    // Статус обновлён слиянием свойств (§А7-1): в НОВОЙ правде строки
     const rows = await withIdentity(db, owner, (tx) =>
       tx.select().from(entities).where(eq(entities.id, task.id)),
     );
-    const aspects = rows[0]?.aspectsLegacy as Record<string, Record<string, unknown>>;
-    expect(aspects['orbis/task']?.status).toBe('done');
+    expect((rows[0]?.props as Record<string, unknown>)['orbis/task_status']).toBe('done');
 
     // Audit агентского entity_update — в глобальном треде владельца, actor 'agent'/'mcp'
     const agentUpdate = (await globalAuditActions()).find(
@@ -744,6 +747,9 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
         'relation_delete',
         'batch_execute',
         'attach_orbis_task',
+        // §А9-4/РП-14: `fullScopeOnly` — исключение из «чтения открыты все». Каталог
+        // свойств это карта поверхности ВЛАДЕЛЬЦА, фону она не адресована.
+        'property_catalog',
       ]) {
         expect(names).not.toContain(name);
       }
@@ -761,8 +767,34 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
       ]) {
         expect(names).toContain(name);
       }
+      // Ровно девять: три чтения + thread_post + пять глаголов. Число здесь, а не только
+      // поимённый список, потому что список ловит пропажу, а число — ПОЯВЛЕНИЕ лишнего.
+      expect(names).toHaveLength(9);
     } finally {
       await agent.close();
+    }
+  });
+
+  test('tools/call property_catalog worker-грантом → isError, FORBIDDEN_LEVEL (список — не единственная линия)', async () => {
+    // Тул ЧИТАЮЩИЙ, и правило «чтения открыты все» пропустило бы его на вызове, даже
+    // спрятав из списка: гейт вызова обязан смотреть `fullScopeOnly` отдельной осью.
+    const agent = await connectAgent(mainUrl(), WORKER_TOKEN);
+    try {
+      const r = await callTool(agent, 'property_catalog', { q: 'катег' });
+      expect(r.isError).toBe(true);
+      expect((r.payload.error as { code?: string }).code).toBe('FORBIDDEN_LEVEL');
+    } finally {
+      await agent.close();
+    }
+    // …а полному доступу тот же вызов отвечает каталогом — отказ адресован скоупу, не тулу.
+    const full = await connectAgent(mainUrl());
+    try {
+      const r = await callTool(full, 'property_catalog', { q: 'катег' });
+      expect(r.isError).toBe(false);
+      const rows = (r.payload.result as { properties: Array<{ key: string }> }).properties;
+      expect(rows.map((p) => p.key)).toContain('orbis/finance_category');
+    } finally {
+      await full.close();
     }
   });
 
@@ -788,11 +820,16 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
     // молчит про НОВЫЙ мутирующий тул, который однажды появится в реестре. Инвариант
     // закрывает именно это: список worker'а не может вырасти ничем, кроме чтений и
     // явно разрешённого набора (§4.14, fail-closed).
-    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
+    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
     const allowed = new Set(
-      defs.filter((d) => d.kind === 'read' && d.internalOnly !== true).map((d) => d.name),
+      defs
+        .filter((d) => d.kind === 'read' && d.internalOnly !== true && d.fullScopeOnly !== true)
+        .map((d) => d.name),
     );
     for (const name of WORKER_SCOPE_TOOLS) allowed.add(name);
+    // Не вырожденно: `fullScopeOnly` действительно кого-то вычитает — иначе инвариант
+    // проверял бы правило, которого в наборе нет.
+    expect(defs.some((d) => d.kind === 'read' && d.fullScopeOnly === true)).toBe(true);
 
     const agent = await connectAgent(mainUrl(), WORKER_TOKEN);
     try {
@@ -821,7 +858,7 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
       await adminClient.end();
     }
 
-    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
+    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
     const allowed = new Set(
       defs.filter((d) => d.kind === 'read' && d.internalOnly !== true).map((d) => d.name),
     );

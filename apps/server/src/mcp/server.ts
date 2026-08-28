@@ -56,7 +56,7 @@ export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
   server.setRequestHandler(
     ListToolsRequestSchema,
     sanitized(async (): Promise<ListToolsResult> => {
-      const defs = await withIdentity(deps.db, ownerId, (tx) => buildToolRegistry(tx));
+      const defs = await withIdentity(deps.db, ownerId, (tx) => buildToolRegistry(tx, ownerId));
       return {
         tools: defs
           .filter(
@@ -70,7 +70,15 @@ export function makeMcpServer(deps: McpDeps, identity: GrantIdentity): Server {
               // ему всё равно откажет dispatch. Условие «не full», а не «= worker»:
               // незнакомое значение колонки scope обязано сужать список, а не открывать
               // полный (grants.ts). Отказ на вызове — вторая линия, не единственная.
-              (identity.scope === 'full' || d.kind === 'read' || WORKER_SCOPE_TOOLS.has(d.name)),
+              //
+              // `fullScopeOnly` (§А9-4, РП-14) — исключение из «чтения открыты все»:
+              // `property_catalog` это карта поверхности владельца целиком, и фоновому
+              // исполнителю она не адресована. Признак читается с ДЕФА, а не заводит
+              // дыру в `WORKER_SCOPE_TOOLS`: тот перечисляет разрешённое фону, а тут
+              // вопрос другой — кому тул вообще адресован.
+              (identity.scope === 'full' ||
+                (d.fullScopeOnly !== true &&
+                  (d.kind === 'read' || WORKER_SCOPE_TOOLS.has(d.name)))),
           )
           .map((d) => ({
             name: d.name,

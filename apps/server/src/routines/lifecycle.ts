@@ -62,7 +62,6 @@ import {
 import { ExecError, type ExecErrorCode, type StructuredError } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
-import { propertyOfLegacyField } from '../executor/legacy-form';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
 import type { LLMProvider } from '../llm/types';
 import {
@@ -100,6 +99,13 @@ import {
 } from './edits';
 import { processRoutineLocks, type RoutineLocks } from './locks';
 import { type ProposalBodyDiff, type ProposalBodyRow, proposalBodyRows } from './proposal-diff';
+import { namedAspects } from './propose';
+
+/**
+ * «Станет» у строки СНЯТИЯ свойства. Литерал, а не отсутствие ключа: `after` — обязательное
+ * поле строки предложения, и пустое значение владелец прочитал бы как «строку не дорисовали».
+ */
+const UNSET_ROW_VALUE = '—';
 
 /** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
 const defaultSink = makeChatJournalSink();
@@ -1143,7 +1149,14 @@ export interface ProposalOperationView {
   tool: string;
   /** Цель под identity владельца: id и ЗАГОЛОВОК (у связей — конец-источник). */
   entity?: { id: string; title: string };
+  /**
+   * ПУСТУЕТ с Задачи 12 и остаётся в форме ради экрана, который её ещё читает (web,
+   * Задача 13c): строка предложения адресуется СВОЙСТВОМ (§А1-1), а не парой «аспект +
+   * поле», и сервер этого ключа больше не пишет. Снять его отсюда — правка контракта
+   * вместе с web, а не в одиночку.
+   */
   aspect?: string;
+  /** Адрес строки: id свойства (`orbis/amount`) либо core-поле (`title`, `tags`, `body`). */
   field?: string;
   /**
    * Текущее значение на момент СОСТАВЛЕНИЯ предложения — снятое предусловие (V1.7), а не
@@ -2648,10 +2661,8 @@ async function describeOperations(
   args: { withDiff: boolean },
 ): Promise<ProposalOperationView[]> {
   const titles = await titlesOf(tx, referencedIds(operations));
-  // Снимок реестра нужен, чтобы найти «было»: патч едет старой картой, предусловие снято по
-  // СВОЙСТВУ (§А7-3), и пара «аспект + поле» переводится в id тем же резолвом, что и в
-  // `buildUpdate`. Своей таблицы здесь нет намеренно: разъехавшись с той, эта показывала бы
-  // владельцу пустой столбец «было» на полях кастомных аспектов — молча.
+  // Снимок реестра нужен строке СВЯЗИ: роль подписывает реестр (Ч10-С3). Строкам правки он
+  // больше не нужен — адреса свойств в сохранённом payload'е уже id (`buildUpdate`).
   const reg = await loadRegistry(tx, ownerId);
   const bodies = await proposalBodyRows(tx, operations, args);
   const rows: ProposalOperationView[] = [];
@@ -2661,7 +2672,7 @@ async function describeOperations(
     } else if (op.tool === 'relation_create' || op.tool === 'relation_delete') {
       rows.push(relationRow(reg, index, op, titles));
     } else if (op.tool === 'entity_update') {
-      rows.push(...updateRows(reg, index, op.input, titles, bodies.get(index)));
+      rows.push(...updateRows(index, op.input, titles, bodies.get(index)));
     } else {
       // Реестр предложения сужен (PROPOSAL_ALLOWED_TOOLS), сюда попасть нечему; но молча
       // проглотить незнакомую строку значило бы показать владельцу неполный список
@@ -2677,7 +2688,8 @@ function titleOf(titles: ReadonlyMap<string, string>, id: string): string {
 
 function createRow(index: number, input: Record<string, unknown>): ProposalOperationView {
   const title = typeof input.title === 'string' ? input.title : 'без заголовка';
-  const aspects = Object.keys((input.aspects as Record<string, unknown> | undefined) ?? {});
+  // Аспекты создания — СПИСОК (§А9-1); разбор один на всех читателей предложения.
+  const aspects = namedAspects(input);
   return {
     index,
     tool: 'entity_create',
@@ -2724,7 +2736,6 @@ function relationRow(
  * дифф (`body`), и он приезжает готовым — считает его proposal-diff.ts.
  */
 function updateRows(
-  reg: RegistrySnapshot,
   index: number,
   input: Record<string, unknown>,
   titles: ReadonlyMap<string, string>,
@@ -2735,22 +2746,38 @@ function updateRows(
   const before = preconditionValues(input.precondition);
   const rows: ProposalOperationView[] = [];
 
-  const aspects = input.aspects as Record<string, Record<string, unknown> | null> | undefined;
-  for (const [aspect, patch] of Object.entries(aspects ?? {})) {
-    if (patch === null) continue; // снятие аспекта предложением запрещено (propose.ts)
-    for (const [field, after] of Object.entries(patch)) {
-      const known = before.get(propertyOfLegacyField(reg, aspect, field));
-      rows.push({
-        index,
-        tool: 'entity_update',
-        entity,
-        aspect,
-        field,
-        ...(known !== undefined && { before: known.value }),
-        after,
-        summary: `«${entity.title}»: ${aspect}.${field}`,
-      });
-    }
+  // Строка на СВОЙСТВО (§А1-1), а не на пару «аспект + поле»: аспект перестал быть
+  // владельцем поля, и `aspect` у строки свойства теперь не заполняется вовсе — web
+  // подписывает такую строку по `field` (id свойства) до перевода Задачей 13c.
+  // Адреса в сохранённом payload'е — УЖЕ id: их нормализовал `buildUpdate` при составлении
+  // предложения (там же, где снял предусловия). Второй резолв здесь был бы мёртвой веткой.
+  const props = (input.props as Record<string, unknown> | undefined) ?? {};
+  for (const [property, after] of Object.entries(props)) {
+    const known = before.get(property);
+    rows.push({
+      index,
+      tool: 'entity_update',
+      entity,
+      field: property,
+      ...(known !== undefined && { before: known.value }),
+      after,
+      summary: `«${entity.title}»: ${property}`,
+    });
+  }
+  // Снятие значения — тоже строка: без неё владелец увидел бы предложение, которое молча
+  // стирает поле. `after` у неё — литерал «—», а не `undefined`: у строки предложения
+  // «станет» обязательное поле, и пустое значение читалось бы как «строку не показали».
+  for (const property of (input.unset as string[] | undefined) ?? []) {
+    const known = before.get(property);
+    rows.push({
+      index,
+      tool: 'entity_update',
+      entity,
+      field: property,
+      ...(known !== undefined && { before: known.value }),
+      after: UNSET_ROW_VALUE,
+      summary: `«${entity.title}»: снять ${property}`,
+    });
   }
   for (const [field, label] of Object.entries(CORE_FIELD_LABELS)) {
     if (field === 'body') {

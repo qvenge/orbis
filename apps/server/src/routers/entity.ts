@@ -3,7 +3,7 @@
 // коды executor'а → TRPCError. Бизнес-логики здесь нет: мутации идут единственным путём
 // через execute (§9.2), чтения — под withIdentity (RLS, §4.10).
 import {
-  entityCreateInput,
+  entityCreateUiInput,
   entityGetUiInput,
   entityResolveRefsInput,
   entitySuggestInput,
@@ -159,7 +159,10 @@ export const entityRouter = router({
   // 'chat'/'mcp'/'system' недостижимы через этот роутер по построению.
   create: ownerOnlyProcedure
     .input(
-      z.object({ input: entityCreateInput, source: z.enum(['fast_path', 'quick_capture', 'ui']) }),
+      z.object({
+        input: entityCreateUiInput,
+        source: z.enum(['fast_path', 'quick_capture', 'ui']),
+      }),
     )
     .mutation(async ({ ctx, input }): Promise<WireEntity & { actionId?: string }> => {
       const r = await execute(

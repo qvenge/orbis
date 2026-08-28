@@ -401,7 +401,10 @@ describe('инвариант дуальной записи', () => {
         lastActionId = undefined;
       } else if (roll < 0.3) {
         const r = ok(
-          await run('attach_orbis_note', { entity_id: e.id, data: { pinned: rnd() > 0.5 } }),
+          await run('attach_orbis_note', {
+            entity_id: e.id,
+            data: { 'orbis/pinned': rnd() > 0.5 },
+          }),
         );
         lastActionId = r.actionId;
       } else {
@@ -726,10 +729,10 @@ describe('гейты флагов свойств', () => {
       await run('attach_orbis_financial', {
         entity_id: imported.id,
         data: {
-          amount: '1500.00',
-          direction: 'expense',
-          category_ref: CATEGORY_A,
-          occurred_on: '2026-08-20',
+          'orbis/amount': '1500.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_A,
+          'orbis/occurred_on': '2026-08-20',
         },
       }),
     );
@@ -749,11 +752,11 @@ describe('гейты флагов свойств', () => {
     const named = await run('attach_orbis_financial', {
       entity_id: imported.id,
       data: {
-        amount: '1500.00',
-        direction: 'expense',
-        category_ref: CATEGORY_A,
-        occurred_on: '2026-08-20',
-        bank_txn_id: 'ПОДДЕЛКА',
+        'orbis/amount': '1500.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': CATEGORY_A,
+        'orbis/occurred_on': '2026-08-20',
+        'orbis/bank_txn_id': 'ПОДДЕЛКА',
       },
     });
     expect(named.ok).toBe(false);
@@ -799,7 +802,11 @@ describe('гейты флагов свойств', () => {
     ok(
       await run('attach_orbis_budget', {
         entity_id: e.id,
-        data: { limit: '30000.00', period_start: '2026-11-01', period_end: '2026-11-30' },
+        data: {
+          'orbis/limit': '30000.00',
+          'orbis/period_start': '2026-11-01',
+          'orbis/period_end': '2026-11-30',
+        },
       }),
     );
 
@@ -852,11 +859,11 @@ describe('гейты флагов свойств', () => {
       await run('attach_orbis_budget', {
         entity_id: envelope.id,
         data: {
-          category_ref: CATEGORY_A,
-          currency: 'RUB',
-          limit: '30000.00',
-          period_start: '2026-09-01',
-          period_end: '2026-09-30',
+          'orbis/finance_category': CATEGORY_A,
+          'orbis/currency': 'RUB',
+          'orbis/limit': '30000.00',
+          'orbis/period_start': '2026-09-01',
+          'orbis/period_end': '2026-09-30',
         },
       }),
     );
@@ -922,12 +929,12 @@ describe('гейты флагов свойств', () => {
         {
           entity_id: byAttach.id,
           data: {
-            category_ref: CATEGORY_B,
-            currency: 'RUB',
-            limit: '20000.00',
-            period_start: '2027-05-01',
-            period_end: '2027-05-31',
-            carryover: '888.00',
+            'orbis/finance_category': CATEGORY_B,
+            'orbis/currency': 'RUB',
+            'orbis/limit': '20000.00',
+            'orbis/period_start': '2027-05-01',
+            'orbis/period_end': '2027-05-31',
+            'orbis/carryover': '888.00',
           },
         },
         { mechanism: 'rule' },
@@ -1166,25 +1173,26 @@ describe('предикат замка бюджет-контура', () => {
 // ---------------------------------------------------------------------------
 
 describe('валидация по реестру (§А7-1)', () => {
-  test('кастомный аспект с {hours: 7} проходит валидацию по property-строкам владельца; неизвестный key → UNKNOWN_PROPERTY', async () => {
+  test('кастомный аспект с {user/hours: 7} проходит валидацию по property-строкам владельца; неизвестный key → UNKNOWN_PROPERTY', async () => {
     const e = entityOf(await run('entity_create', { title: 'Ночь', tags: [] }));
-    ok(await run('attach_user_sleep-log', { entity_id: e.id, data: { hours: 7 } }));
+    // Имя тула — общее (§А9-1, `attachToolName`): «/» и «-» ключа аспекта → «_».
+    ok(await run('attach_user_sleep_log', { entity_id: e.id, data: { 'user/hours': 7 } }));
 
     const row = await expectProjection(e.id);
-    // Своё свойство владельца адресуется своим id — и попадает в старую карту под тем
+    // Своё свойство владельца адресуется своим key — и попадает в старую карту под тем
     // именем поля, которое старая форма и знала (локальная часть ключа)
     expect(row.props).toEqual({ 'user/hours': 7 });
     expect(row.aspects).toEqual(['user/sleep-log']);
     expect(row.aspectsLegacy).toEqual({ 'user/sleep-log': { hours: 7 } });
 
-    const denied = await run('attach_user_sleep-log', {
+    const denied = await run('attach_user_sleep_log', {
       entity_id: e.id,
-      data: { hours: 7, минуты: 30 },
+      data: { 'user/hours': 7, 'user/минуты': 30 },
     });
     expect(denied.ok).toBe(false);
     expect(violationsOf(denied)).toContainEqual({
       code: 'UNKNOWN_PROPERTY',
-      propertyId: 'orbis/минуты',
+      propertyId: 'user/минуты',
     });
   });
 

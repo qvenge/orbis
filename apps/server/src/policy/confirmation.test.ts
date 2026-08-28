@@ -7,6 +7,7 @@
 // (describe.skip удалён этой задачей).
 import { describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
+import type { RegistrySnapshot } from '../registry/load';
 import { AGENT_VERB_NAMES, buildToolDefs } from '../tools/registry';
 import {
   classifyToolCall,
@@ -127,13 +128,22 @@ describe('classifyToolCall: таблица MVP §7.10 — ряд за рядом
  * §7.10 попадал ровно в `execute`: у фонового прогона нет человека, который нажал бы
  * «подтвердить», и карточка `explicit-confirmation` висела бы вечно, а прогон встал.
  *
- * Дефы берутся из НАСТОЯЩЕГО реестра (`buildToolDefs([])` — core + глаголы; attach_*
- * требуют строк аспектов, а их здесь и не проверяем), а факты — из `factsFromToolCall`.
+ * Дефы берутся из НАСТОЯЩЕГО реестра (`buildToolDefs` на ПУСТОМ снимке — core + глаголы;
+ * attach_* требуют аспектов, а их здесь и не проверяем), а факты — из `factsFromToolCall`.
  * Выдуманный `{kind:'mutate'}` в тесте закрепил бы намерение автора теста, а не то, что
  * реестр реально объявляет: смена `kind` глагола на что-то иное обязана падать здесь.
  */
+/** Снимок без единой строки реестра: core-тулы и глаголы от него не зависят. */
+const EMPTY_REGISTRY: RegistrySnapshot = {
+  properties: new Map(),
+  aspects: new Map(),
+  roles: new Map(),
+  ownerVersion: 0,
+  systemVersion: 0,
+};
+
 describe('глаголы исполнителя и thread_post → execute (инвариант 4, ряд 6 таблицы §7.10)', () => {
-  const defs = buildToolDefs([]);
+  const defs = buildToolDefs(EMPTY_REGISTRY);
   /** Валидные envelope-входы: форма вызова — вход фактов, а не декорация. */
   const inputs: Record<string, Record<string, unknown>> = {
     orbis_my_queue: {},
@@ -336,10 +346,14 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
   const ATTACH_DEF = { name: 'attach_orbis_routine', kind: 'mutate' as const };
   const BATCH_DEF = { name: 'batch_execute', kind: 'mutate' as const };
 
+  /**
+   * Доверенность рутины СВОЙСТВАМИ (§А9-1): `props` у create/update, `data` у `attach_*`.
+   * Старой карты гейт больше не читает — контракты тулов её не принимают (Задача 12).
+   */
   const routine = (over: Record<string, unknown> = {}) => ({
-    stage: 'active',
-    at: '07:00',
-    mode: 'propose',
+    'orbis/routine_stage': 'active',
+    'orbis/routine_at': '07:00',
+    'orbis/routine_mode': 'propose',
     ...over,
   });
 
@@ -364,30 +378,27 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
         {
           title: 'Утренний обзор',
           tags: [],
-          aspects: { 'orbis/routine': routine({ mode: 'act' }) },
+          props: routine({ 'orbis/routine_mode': 'act' }),
+          aspects: ['orbis/routine'],
         },
       ],
       [
         'attach_orbis_routine act',
         ATTACH_DEF,
-        { entity_id: newId(), data: routine({ mode: 'act' }) },
+        { entity_id: newId(), data: routine({ 'orbis/routine_mode': 'act' }) },
       ],
-      [
-        'entity_update mode',
-        UPDATE_DEF,
-        { id: newId(), aspects: { 'orbis/routine': { mode: 'act' } } },
-      ],
+      ['entity_update mode', UPDATE_DEF, { id: newId(), props: { 'orbis/routine_mode': 'act' } }],
       [
         'entity_update allowed_tools',
         UPDATE_DEF,
-        { id: newId(), aspects: { 'orbis/routine': { allowed_tools: ['entity_create'] } } },
+        { id: newId(), props: { 'orbis/allowed_tools': ['entity_create'] } },
       ],
       // Возврат в propose — тоже правка доверенности: разоружение рутины владелец
       // обязан видеть так же, как её вооружение.
       [
         'entity_update mode обратно в propose',
         UPDATE_DEF,
-        { id: newId(), aspects: { 'orbis/routine': { mode: 'propose' } } },
+        { id: newId(), props: { 'orbis/routine_mode': 'propose' } },
       ],
     ];
     for (const [name, def, input] of cases) {
@@ -402,7 +413,8 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
     const input = {
       title: 'Утренний обзор',
       tags: [],
-      aspects: { 'orbis/routine': routine({ mode: 'act' }) },
+      props: routine({ 'orbis/routine_mode': 'act' }),
+      aspects: ['orbis/routine'],
     };
     expect(levelOf(CREATE_DEF, input, 'owner')).toBe('execute');
   });
@@ -411,7 +423,8 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
     const created = {
       title: 'Утренний обзор',
       tags: [],
-      aspects: { 'orbis/routine': routine() },
+      props: routine(),
+      aspects: ['orbis/routine'],
     };
     expect(factsFromToolCall(CREATE_DEF, created).grantsAutonomy).toBe(false);
     expect(levelOf(CREATE_DEF, created)).toBe('execute');
@@ -423,13 +436,13 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
     // Патч расписания и жизненного цикла доверенности не касается
     const reschedule = {
       id: newId(),
-      aspects: { 'orbis/routine': { at: '09:00', stage: 'paused' } },
+      props: { 'orbis/routine_at': '09:00', 'orbis/routine_stage': 'paused' },
     };
     expect(factsFromToolCall(UPDATE_DEF, reschedule).grantsAutonomy).toBe(false);
     expect(levelOf(UPDATE_DEF, reschedule)).toBe('execute');
 
-    // Чужой аспект с полем mode — не рутина
-    const foreign = { id: newId(), aspects: { 'orbis/task': { status: 'done' } } };
+    // Чужое свойство — не доверенность рутины
+    const foreign = { id: newId(), props: { 'orbis/task_status': 'done' } };
     expect(factsFromToolCall(UPDATE_DEF, foreign).grantsAutonomy).toBe(false);
   });
 
@@ -440,7 +453,7 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
         { tool: 'entity_create', input: { title: 'Итог', tags: [] } },
         {
           tool: 'attach_orbis_routine',
-          input: { entity_id: newId(), data: routine({ mode: 'act' }) },
+          input: { entity_id: newId(), data: routine({ 'orbis/routine_mode': 'act' }) },
         },
       ],
     };

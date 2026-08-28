@@ -20,6 +20,7 @@ import { approvePending, rejectPending } from '../policy/pending';
 import { agentLoopHelpers, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { AGENT_VERB_NAMES, buildToolRegistry, WORKER_SCOPE_TOOLS } from '../tools/registry';
+import { proposalView } from './lifecycle';
 
 requireEnv();
 
@@ -65,7 +66,8 @@ async function seedTask(title: string): Promise<string> {
   const e = await seedEntity(owner, {
     title,
     tags: [],
-    aspects: { 'orbis/task': { status: 'inbox' } },
+    props: { 'orbis/task_status': 'inbox' },
+    aspects: ['orbis/task'],
   });
   return e.id;
 }
@@ -115,7 +117,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
           tool: 'entity_update',
           input: {
             id: taskId,
-            aspects: { 'orbis/task': { status: 'planned', due_date: '2026-08-20' } },
+            props: { 'orbis/task_status': 'planned', 'orbis/due_date': '2026-08-20' },
           },
         },
       ],
@@ -217,7 +219,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
       ],
     });
@@ -245,11 +247,11 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
         {
           tool: 'entity_update',
-          input: { id: otherId, aspects: { 'orbis/task': { status: 'done' } } },
+          input: { id: otherId, props: { 'orbis/task_status': 'done' } },
         },
       ],
     });
@@ -282,10 +284,68 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     expect(await propsOf(owner, otherId)).not.toHaveProperty('orbis/waiting_for');
   });
 
+  test('предложение СНЯТИЯ (`unset`): payload несёт unset, предусловие — текущее значение, строка «снять»', async () => {
+    // Снятие значения — вторая половина новой формы (§А9-1), и она не сводится к первой:
+    // `null` в `props` это законное ЗНАЧЕНИЕ json-свойства, а не «убрать». Без своей
+    // проверки перевод предложения на `props` молча терял бы половину: рутина предлагала
+    // бы снять поле, а payload вёз бы `undefined` — то есть ничего.
+    const { runId, ctx } = await liveRoutine();
+    const waiting = await seedEntity(owner, {
+      title: 'Ждём ответа банка',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'waiting', waiting_for: 'ответа банка' } },
+    });
+
+    const r = await dispatchTool(ctx, 'orbis_propose', {
+      run_id: runId,
+      explanation: EXPLANATION,
+      operations: [
+        {
+          tool: 'entity_update',
+          input: {
+            id: waiting.id,
+            props: { 'orbis/task_status': 'in_progress' },
+            unset: ['orbis/waiting_for'],
+          },
+        },
+      ],
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    const pendingId = (r.result as ProposeResult).pending_id;
+    const msg = await messageById(pendingId);
+    // Две СТРОКИ на одну операцию: правка и снятие — владелец видит обе.
+    expect(msg?.content).toBe('Предложение рутины: 2 правки');
+
+    const payload = (
+      msg?.metadata as {
+        pending: { input: { operations: Array<{ input: Record<string, unknown> }> } };
+      }
+    ).pending.input;
+    const input = payload.operations[0]?.input as Record<string, unknown>;
+    expect(input.props).toEqual({ 'orbis/task_status': 'in_progress' });
+    expect(input.unset).toEqual(['orbis/waiting_for']);
+    // Предусловие снято и на снимаемое свойство: без него `unset` молча выиграл бы у
+    // владельца, успевшего заполнить поле по-своему.
+    expect(input.precondition).toEqual([
+      { property: 'orbis/task_status', in: ['waiting'] },
+      { property: 'orbis/waiting_for', in: ['ответа банка'] },
+    ]);
+
+    // Экран предложения: строка снятия называет свойство и «станет» литералом «—».
+    const view = await proposalView(db, { ownerId: owner, runId });
+    expect(
+      view?.operations.map((o) => ({ field: o.field, before: o.before, after: o.after })),
+    ).toEqual([
+      { field: 'orbis/task_status', before: 'waiting', after: 'in_progress' },
+      { field: 'orbis/waiting_for', before: 'ответа банка', after: '—' },
+    ]);
+  });
+
   test('предусловие снимается по `props`, а не по проекции: форма значения у них РАЗНАЯ (orbis/progress_source)', async () => {
-    // Ловушка перевода. Патч предложения приезжает старой картой, и снять с него текущее
-    // значение можно двумя способами: из `aspects_legacy` (то, что видит рутина) или из
-    // `props` (то, с чем сверяется executor). У большинства свойств это одно и то же —
+    // Ловушка перевода. Снять текущее значение можно двумя способами: из `aspects_legacy`
+    // (проекция старой формы) или из `props` (то, с чем сверяется executor). У большинства
+    // свойств это одно и то же —
     // и именно поэтому подмена прошла бы незаметно. У `orbis/progress_source` формы
     // РАЗНЫЕ: в `props` запрос лежит Q-AST-обёрткой `{text}` (§А5-2), а проекция
     // разворачивает её обратно в строку. Сняв предусловие с проекции, предложение
@@ -294,6 +354,9 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     const goal = await seedEntity(owner, {
       title: 'Пробежать 100 км',
       tags: [],
+      // СТАРОЙ картой намеренно: она проходит через переходный перевод, который и
+      // заворачивает текст запроса в `{text}` (§А5-2) — то самое расхождение форм, которое
+      // тест и проверяет. Путь `execute` обе формы принимает (exec-надмножество).
       aspects: {
         'orbis/goal': {
           target_value: '100.00',
@@ -322,9 +385,13 @@ describe('orbis_propose: предложение и предусловия (V1.6,
           tool: 'entity_update',
           input: {
             id: goal.id,
-            aspects: {
-              'orbis/goal': {
-                progress_source: { query: 'аспект=финансы', aggregate: 'latest', field: 'amount' },
+            // Патч предложения — НОВОЙ формой (§А9-1), и значение в ней уже такое, каким
+            // оно лежит в `props`: обёртка `{text}` запроса, а не голая строка.
+            props: {
+              'orbis/progress_source': {
+                query: { text: 'аспект=финансы' },
+                aggregate: 'latest',
+                field: 'orbis/amount',
               },
             },
           },
@@ -361,11 +428,11 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
         {
           tool: 'entity_update',
-          input: { id: untouchedId, aspects: { 'orbis/task': { status: 'done' } } },
+          input: { id: untouchedId, props: { 'orbis/task_status': 'done' } },
         },
       ],
     });
@@ -380,7 +447,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'in_progress' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'in_progress' } },
         },
       ],
     });
@@ -406,7 +473,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       operations: [
         {
           tool: 'entity_update',
-          input: { id: dueId, aspects: { 'orbis/task': { due_date: '2026-08-20' } } },
+          input: { id: dueId, props: { 'orbis/due_date': '2026-08-20' } },
         },
       ],
     });
@@ -421,7 +488,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       operations: [
         {
           tool: 'entity_update',
-          input: { id: dueId, aspects: { 'orbis/task': { due_date: '2026-09-01' } } },
+          input: { id: dueId, props: { 'orbis/due_date': '2026-09-01' } },
         },
       ],
     });
@@ -461,7 +528,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
         ...base,
         operations: Array.from({ length: 51 }, () => ({
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         })),
       }),
       'VALIDATION',
@@ -476,7 +543,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
             tool: 'entity_update',
             input: {
               id: taskId,
-              aspects: { 'orbis/task': { status: 'planned' } },
+              props: { 'orbis/task_status': 'planned' },
               precondition: [{ property: 'orbis/task_status', in: ['done'] }],
             },
           },
@@ -490,7 +557,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       await dispatchTool(ctx, 'orbis_propose', {
         ...base,
         operations: [
-          { tool: 'entity_update', input: { id: taskId, aspects: { 'orbis/task': null } } },
+          { tool: 'entity_update', input: { id: taskId, aspects: { detach: ['orbis/task'] } } },
         ],
       }),
       'VALIDATION',
@@ -513,17 +580,22 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
         input: {
           title: 'Своя новая рутина',
           tags: [],
-          aspects: { 'orbis/routine': { stage: 'active', at: '08:00', mode: 'act' } },
+          props: {
+            'orbis/routine_stage': 'active',
+            'orbis/routine_at': '08:00',
+            'orbis/routine_mode': 'act',
+          },
+          aspects: ['orbis/routine'],
         },
       },
       {
         tool: 'entity_update',
-        input: { id: taskId, aspects: { 'orbis/routine': { mode: 'act' } } },
+        input: { id: taskId, props: { 'orbis/routine_mode': 'act' } },
       },
       // Статически: назначение исполнителю
       {
         tool: 'entity_update',
-        input: { id: taskId, aspects: { 'orbis/assignment': { executor: 'agent' } } },
+        input: { id: taskId, props: { 'orbis/executor': 'agent' } },
       },
       // По БД: объект — сама рутина, её аспекта в патче нет
       { tool: 'entity_update', input: { id: routineId, title: 'Переименовать рутину' } },
@@ -532,7 +604,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
         tool: 'entity_update',
         input: {
           id: taskId,
-          aspects: { 'orbis/agent-run': { reply: { text: 'да', at: '2026-08-18T08:00:00.000Z' } } },
+          props: { 'orbis/run_reply': { text: 'да', at: '2026-08-18T08:00:00.000Z' } },
         },
       },
       { tool: 'entity_update', input: { id: runId, title: 'Переписать прогон' } },
@@ -570,7 +642,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
       ],
     };
@@ -588,7 +660,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     const grantId = await workerGrant(owner, 'propose-mcp');
     expectError(await dispatchTool(worker(owner, grantId), 'orbis_propose', payload), 'VALIDATION');
 
-    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx));
+    const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
     expect(defs.find((d) => d.name === 'orbis_propose')?.routineOnly).toBe(true);
     // Фильтры публикации: чат (send-message.ts) и MCP (mcp/server.ts) режут routineOnly
     expect(defs.filter((d) => d.routineOnly !== true).map((d) => d.name)).not.toContain(
@@ -609,7 +681,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
       ],
     };
@@ -672,7 +744,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     const operations = [
       {
         tool: 'entity_update',
-        input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+        input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
       },
     ];
     const clash = await dispatchTool(ctx, 'orbis_propose', {
@@ -718,7 +790,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     const operations = [
       {
         tool: 'entity_update',
-        input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+        input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
       },
     ];
     // Первый вызов падает на закрытии занятым id → pending лежит, прогон жив
@@ -783,7 +855,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
       ],
     });
@@ -807,7 +879,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
       ],
     });
@@ -840,7 +912,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
         operations: [
           {
             tool: 'entity_update',
-            input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+            input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
           },
         ],
       },
@@ -860,11 +932,11 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'done' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'done' } },
         },
       ],
     });
@@ -872,7 +944,9 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     expect((errorOf(r).details as { reason?: string }).reason).toBe(
       'proposal_conflicting_operations',
     );
-    expect(errorOf(r).message).toContain('orbis/task.status');
+    // Единица столкновения — СВОЙСТВО (§А1-1), и отказ называет именно его, а не пару
+    // «аспект + поле»: два аспекта делят одно свойство, и по паре они выглядели бы разными.
+    expect(errorOf(r).message).toContain('orbis/task_status');
 
     // Разные поля той же сущности — законная пара: их предусловия не пересекаются
     const ok = await dispatchTool(ctx, 'orbis_propose', {
@@ -880,11 +954,11 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { due_date: '2026-08-20' } } },
+          input: { id: taskId, props: { 'orbis/due_date': '2026-08-20' } },
         },
       ],
     });
@@ -898,7 +972,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     const bodyOp = { tool: 'entity_update', input: { id: taskId, body: 'Новый текст задачи' } };
     const statusOp = {
       tool: 'entity_update',
-      input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+      input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
     };
 
     // Аспекты, потом тело — вторая операция читала бы виртуальную строку с бампнутым

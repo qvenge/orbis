@@ -112,6 +112,16 @@ function budgetData(categoryRef: string = newId()): Record<string, unknown> {
   };
 }
 
+/** Тот же конверт СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). */
+function budgetProps(categoryRef: string = newId()): Record<string, unknown> {
+  return {
+    'orbis/finance_category': categoryRef,
+    'orbis/limit': '30000.00',
+    'orbis/period_start': '2026-07-01',
+    'orbis/period_end': '2026-07-31',
+  };
+}
+
 /** Число строк relations по паре концов и роли — админ-DSN (обходит RLS: истина в БД). */
 async function relCount(sourceId: string, targetId: string, role: string): Promise<number> {
   const { db: admin, client: adminClient } = adminDb();
@@ -438,7 +448,7 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
     ok(await createRelation(x.id, txn.id, 'subitem')); // роль владельца — легальна (тест 10)
 
     const r = err(
-      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetData() })),
+      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetProps() })),
     );
     expect(r.error.code).toBe('INVARIANT');
     expect(invariantOf(r)).toBe('single_budget_parent');
@@ -504,7 +514,7 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
     ok(await createRelation(x.id, txn.id, 'subitem'));
 
     const r = ok(
-      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetData() })),
+      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetProps() })),
     );
     const entity = r.results[0] as WireEntity;
     expect('orbis/budget' in entity.aspectsMap).toBe(true);
@@ -1074,7 +1084,7 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
     ok(await createRelation(x.id, txn.id, 'mention'));
 
     const r = ok(
-      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetData() })),
+      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetProps() })),
     );
     expect('orbis/budget' in (r.results[0] as WireEntity).aspectsMap).toBe(true);
     expect(await legacyBudgetParents(txn.id)).toEqual([env1.id]);
@@ -1131,8 +1141,8 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
             tool: 'relation_create',
             input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
           },
-          { tool: 'attach_orbis_budget', input: { entity_id: x.id, data: budgetData() } },
-          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetData() } },
+          { tool: 'attach_orbis_budget', input: { entity_id: x.id, data: budgetProps() } },
+          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetProps() } },
         ],
       }),
     );
@@ -1156,12 +1166,12 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
         batchId: newId(),
         clock: () => T0,
         operations: [
-          { tool: 'attach_orbis_budget', input: { entity_id: x.id, data: budgetData() } },
+          { tool: 'attach_orbis_budget', input: { entity_id: x.id, data: budgetProps() } },
           {
             tool: 'relation_create',
             input: { source_id: x.id, target_id: txn.id, role: 'subitem' },
           },
-          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetData() } },
+          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetProps() } },
           {
             tool: 'relation_create',
             input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
@@ -1199,7 +1209,7 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
             tool: 'relation_create',
             input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
           },
-          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetData() } },
+          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetProps() } },
         ],
       }),
     );
@@ -1232,7 +1242,7 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
             tool: 'relation_create',
             input: { source_id: y.id, target_id: txn.id, role: 'subitem' },
           },
-          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetData() } },
+          { tool: 'attach_orbis_budget', input: { entity_id: y.id, data: budgetProps() } },
         ],
       }),
     );
@@ -1249,7 +1259,7 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
     ok(await createRelation(x.id, txn.id, 'subitem'));
 
     const r = err(
-      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetData() })),
+      await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetProps() })),
     );
     expect(r.error.code).toBe('INVARIANT');
     expect(invariantOf(r)).toBe('single_budget_parent');

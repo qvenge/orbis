@@ -19,7 +19,7 @@ const UPDATED_AT = '2026-08-20T10:00:00.000Z';
 
 type Operation = { tool: string; input: Record<string, unknown> };
 
-/** Правка тела и двух полей аспекта — ровно то, что собирает propose.ts (buildUpdate). */
+/** Правка тела и двух СВОЙСТВ — ровно то, что собирает propose.ts (buildUpdate). */
 function updateOp(): Operation {
   return {
     tool: 'entity_update',
@@ -28,7 +28,7 @@ function updateOp(): Operation {
       title: 'Заголовок',
       body: '# Было',
       expectedUpdatedAt: UPDATED_AT,
-      aspects: { 'orbis/task': { status: 'in_progress', priority: 2 } },
+      props: { 'orbis/task_status': 'in_progress', 'orbis/priority': 2 },
       // Форма §А7-3: адрес пункта — id свойства. Литеральный якорь, а не производная от
       // кода: инвариант «правка владельца не меняет предусловие» сверяет два КАНОНА одной и
       // той же формы, и на выведенной фикстуре он выродился бы в тавтологию.
@@ -102,20 +102,21 @@ describe('buildEditedOperations', () => {
     expect(source[0]).toEqual(updateOp());
   });
 
-  test('правка поля аспекта и core-поля меняет ровно значение; остальное байт-в-байт', () => {
+  test('правка свойства и core-поля меняет ровно значение; остальное байт-в-байт', () => {
     const source = [updateOp(), relationOp()];
     const built = buildEditedOperations(
       source,
       edits({
         fields: [
-          { index: 0, aspect: 'orbis/task', field: 'priority', value: 5 },
+          // Строка предложения адресуется id СВОЙСТВА (§А1-1): аспекта у неё нет.
+          { index: 0, field: 'orbis/priority', value: 5 },
           { index: 0, field: 'title', value: 'Другой заголовок' },
         ],
       }),
     );
 
     const first = opAt(built, 0).input;
-    expect(first.aspects).toEqual({ 'orbis/task': { status: 'in_progress', priority: 5 } });
+    expect(first.props).toEqual({ 'orbis/task_status': 'in_progress', 'orbis/priority': 5 });
     expect(first.title).toBe('Другой заголовок');
     expect(first.body).toBe('# Было');
     expect(first.precondition).toEqual(updateOp().input.precondition);
@@ -123,36 +124,37 @@ describe('buildEditedOperations', () => {
     expect(opAt(built, 1)).toEqual(relationOp());
   });
 
-  test('две правки одного аспекта складываются: первая не теряется под второй', () => {
+  test('две правки одной операции складываются: первая не теряется под второй', () => {
     const built = buildEditedOperations(
       [updateOp()],
       edits({
         fields: [
-          { index: 0, aspect: 'orbis/task', field: 'status', value: 'planned' },
-          { index: 0, aspect: 'orbis/task', field: 'priority', value: 1 },
+          { index: 0, field: 'orbis/task_status', value: 'planned' },
+          { index: 0, field: 'orbis/priority', value: 1 },
         ],
       }),
     );
-    expect(opAt(built, 0).input.aspects).toEqual({
-      'orbis/task': { status: 'planned', priority: 1 },
+    expect(opAt(built, 0).input.props).toEqual({
+      'orbis/task_status': 'planned',
+      'orbis/priority': 1,
     });
   });
 
   test('новый ключ поля → VALIDATION edit_key_missing (Б3: запись без предусловия)', () => {
     const source = [updateOp()];
-    // Поля нет в патче аспекта — предусловия под него никто не снимал
+    // Свойства нет в `props` — предусловия под него никто не снимал
     expect(
       reasonOf(() =>
         buildEditedOperations(
           source,
           edits({
-            fields: [{ index: 0, aspect: 'orbis/task', field: 'due', value: '2026-09-01' }],
+            fields: [{ index: 0, field: 'orbis/due_date', value: '2026-09-01' }],
           }),
         ),
       ),
     ).toEqual({ code: 'VALIDATION', reason: 'edit_key_missing' });
 
-    // Аспекта нет в операции вовсе
+    // Правка СТАРОЙ формой («аспект.поле») — строк с таким адресом больше нет вовсе (§А1-1)
     expect(
       reasonOf(() =>
         buildEditedOperations(
@@ -257,18 +259,23 @@ describe('buildEditedOperations', () => {
       ),
     ).toEqual({ code: 'VALIDATION', reason: 'edit_row_not_editable' });
 
-    // Поле аспекта создания — та же граница
+    // Свойство создания — та же граница
     const createWithAspect: Operation[] = [
       {
         tool: 'entity_create',
-        input: { title: 'Новая', tags: [], aspects: { 'orbis/task': { status: 'planned' } } },
+        input: {
+          title: 'Новая',
+          tags: [],
+          props: { 'orbis/task_status': 'planned' },
+          aspects: ['orbis/task'],
+        },
       },
     ];
     expect(
       reasonOf(() =>
         buildEditedOperations(
           createWithAspect,
-          edits({ fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'done' }] }),
+          edits({ fields: [{ index: 0, field: 'orbis/task_status', value: 'done' }] }),
         ),
       ).reason,
     ).toBe('edit_row_not_editable');
@@ -292,13 +299,13 @@ describe('buildEditedOperations', () => {
     ).toBe('edit_row_not_editable');
   });
 
-  test('null — принятое значение: «пусто» в поле аспекта собирается и проходит контракт тула', () => {
+  test('null — принятое значение: «пусто» в свойстве собирается и проходит контракт тула', () => {
     const built = buildEditedOperations(
       [updateOp()],
-      edits({ fields: [{ index: 0, aspect: 'orbis/task', field: 'priority', value: null }] }),
+      edits({ fields: [{ index: 0, field: 'orbis/priority', value: null }] }),
     );
     const input = opAt(built, 0).input;
-    expect(input.aspects).toEqual({ 'orbis/task': { status: 'in_progress', priority: null } });
+    expect(input.props).toEqual({ 'orbis/task_status': 'in_progress', 'orbis/priority': null });
     // Ключ остался на месте — снятие значения не выбрасывает строку из предложения
     expect(entityUpdateExecInput.safeParse(input).success).toBe(true);
   });
@@ -347,12 +354,12 @@ describe('editsHash', () => {
     const a = edits({
       fields: [
         { index: 1, field: 'title', value: 'вторая' },
-        { index: 0, aspect: 'orbis/task', field: 'status', value: 'done' },
+        { index: 0, field: 'orbis/task_status', value: 'done' },
       ],
     });
     const b = edits({
       fields: [
-        { index: 0, aspect: 'orbis/task', field: 'status', value: 'done' },
+        { index: 0, field: 'orbis/task_status', value: 'done' },
         { index: 1, field: 'title', value: 'вторая' },
       ],
     });
@@ -364,7 +371,7 @@ describe('editsHash', () => {
     // Другое значение — другая личность правки
     const c = edits({
       fields: [
-        { index: 0, aspect: 'orbis/task', field: 'status', value: 'planned' },
+        { index: 0, field: 'orbis/task_status', value: 'planned' },
         { index: 1, field: 'title', value: 'вторая' },
       ],
     });

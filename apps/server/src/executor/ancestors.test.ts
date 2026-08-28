@@ -278,7 +278,10 @@ test('навешивание и снятие аспекта orbis/project пер
   ok(
     await execute(
       db,
-      req(owner, 'attach_orbis_project', { entity_id: mid.id, data: { stage: 'active' } }),
+      req(owner, 'attach_orbis_project', {
+        entity_id: mid.id,
+        data: { 'orbis/project_stage': 'active' },
+      }),
       { sink: attachSink },
     ),
   );

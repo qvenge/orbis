@@ -7,10 +7,19 @@
  * слияния: `orbis/finance_category` носят и `financial`, и `budget`; `orbis/currency` — оба;
  * `orbis/grant` — `assignment` и `agent-run`. Одно свойство, один тип, разные носители.
  *
- * `aiInstructions`, `tagMappings` и `viewConfig` перенесены из `aspect-registry.ts` ДОСЛОВНО
- * и пиннятся тестом на равенство, пока старый реестр жив (он умирает Задачей 3). Копия, а не
- * импорт, намеренно: строка нового реестра должна быть самодостаточной — сид Задачи 3 пишет
- * в БД именно её, а старый файл к тому моменту уже исчезнет.
+ * `tagMappings` и `viewConfig` перенесены из `aspect-registry.ts` ДОСЛОВНО и пиннятся тестом
+ * на равенство, пока старый реестр жив. Копия, а не импорт, намеренно: строка нового реестра
+ * должна быть самодостаточной — сид пишет в БД именно её, а старый файл однажды исчезнет.
+ *
+ * `aiInstructions` — ЕДИНСТВЕННОЕ, что ДОСЛОВНЫМ не осталось (рулинг Р-1-1, Задача 12).
+ * Перенесённые тексты описывали снятую форму: «category_ref — uuid категории», «scope —
+ * aspect-id домена», «Иерархия — через relation parent», «executor=agent требует grant_id».
+ * Инструкция аспекта — то, ЧТО МОДЕЛЬ ПРОЧТЁТ И СКОПИРУЕТ, и с Задачи 12 она обязана
+ * говорить формой среза А: свойства адресуются `key` (`orbis/amount`), аспекты — списком,
+ * иерархия — ролью ребра (`subitem`, `ticket`, `category-parent`), назначение агента —
+ * свойствами `orbis/executor` + `orbis/grant`. Пин равенства с `aspect-registry.ts` по
+ * `aiInstructions` снят вместе с этим (`builtin.test.ts`), а запрет снятых имён закреплён
+ * грепом там же — иначе следующая правка вернула бы их молча.
  *
  * Порядок `properties[]` и их `rank` — порядок строк таблицы §А8, он же порядок полей в
  * сегодняшних zod-схемах; `rank` аспекта — позиция в `BUILTIN_ASPECT_IDS`.
@@ -47,7 +56,7 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/timezone', false],
     ],
     aiInstructions:
-      'Применяй, когда во вводе есть дата или время события. start_at обязателен (ISO 8601 с таймзоной пользователя). recurrence задаётся только на шаблоне повторения; инстансы порождает сервер.',
+      'Применяй, когда во вводе есть дата или время события. orbis/start_at обязателен (ISO 8601 с таймзоной пользователя). orbis/recurrence задаётся только на шаблоне повторения; инстансы порождает сервер.',
     tagMappings: ['schedule', 'event', 'meeting', 'appointment'],
     viewConfig: {
       keyFields: ['orbis/start_at', 'orbis/end_at', 'orbis/all_day'],
@@ -72,7 +81,7 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/waiting_for', false],
     ],
     aiInstructions:
-      'Применяй к действиям. status по умолчанию inbox; явный срок → due_date (date, не timestamp). completed_at проставляет сервер при переходе в done — не передавай его сам.',
+      'Применяй к действиям. orbis/task_status по умолчанию inbox; явный срок → orbis/due_date (дата, не момент). orbis/completed_at проставляет сервер при переходе в done — не передавай его сам.',
     tagMappings: ['task', 'todo', 'action', 'deadline'],
     viewConfig: {
       keyFields: ['orbis/task_status', 'orbis/due_date', 'orbis/priority'],
@@ -103,7 +112,7 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/bank_txn_id', false],
     ],
     aiInstructions:
-      'amount — строка decimal (например "340.00"), всегда положительная; знак задаёт direction. category_ref — uuid категории-сущности: резолви по aliases категорий через entity_query. occurred_on — дата операции в таймзоне пользователя. bank_txn_id заполняется ТОЛЬКО импортом банковской выписки — никогда не выставляй его сам.',
+      'orbis/amount — строка decimal (например "340.00"), всегда положительная; знак задаёт orbis/direction. orbis/finance_category — ссылка на сущность-категорию: резолви её через entity_query по синонимам («aspect=orbis/category, orbis/aliases=такси»). orbis/occurred_on — дата операции в таймзоне пользователя. orbis/bank_txn_id заполняется ТОЛЬКО импортом банковской выписки — никогда не выставляй его сам.',
     tagMappings: ['expense', 'income', 'payment', 'cost'],
     viewConfig: {
       keyFields: ['orbis/amount', 'orbis/direction', 'orbis/finance_category'],
@@ -124,7 +133,7 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/pinned', false],
     ],
     aiInstructions:
-      'Применяй, когда пользователь фиксирует мысль/заметку/документ. Текст кладётся в body сущности, не в поля аспекта.',
+      'Применяй, когда пользователь фиксирует мысль/заметку/документ. Текст кладётся в body сущности, а не в свойства.',
     tagMappings: ['note', 'thought', 'idea', 'journal'],
     viewConfig: { keyFields: ['orbis/content_type', 'orbis/pinned'], icon: '📝' },
     module: null, // ядро: заметка не выключается вместе с модулем (§Б8-2)
@@ -146,7 +155,7 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/carryover', false],
     ],
     aiInstructions:
-      'Конверт на период: category_ref, limit (decimal-строка), period_start/period_end включительно. spent не хранится — вычисляется из транзакций-детей.',
+      'Конверт на период: orbis/finance_category, orbis/limit (decimal-строка), orbis/period_start и orbis/period_end включительно. Потраченное не хранится — сервер считает его по транзакциям конверта.',
     tagMappings: ['budget', 'envelope', 'limit'],
     viewConfig: {
       keyFields: ['orbis/limit', 'orbis/period_start', 'orbis/period_end'],
@@ -169,7 +178,7 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/spend_class', false],
     ],
     aiInstructions:
-      'Категория — сущность, не строка. aliases — синонимы в нижнем регистре (рус+англ) для резолва ввода. Иерархия — через relation parent.',
+      'Категория — сущность, не строка. orbis/aliases — синонимы в нижнем регистре (рус+англ) для резолва ввода. Дерево категорий — рёбра роли category-parent (родительская категория → подкатегория), а не свойство.',
     tagMappings: ['category'],
     viewConfig: {
       keyFields: ['orbis/icon', 'orbis/color', 'orbis/spend_class'],
@@ -194,7 +203,7 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/rule_target', false],
     ],
     aiInstructions:
-      'kind=fact — знание о пользователе; kind=rule — правило обработки («бар → Развлечения»). scope — aspect-id домена, к которому правило привязано; пусто = глобально.',
+      'orbis/memory_kind=fact — знание о пользователе; kind=rule — правило обработки («бар → Развлечения»). orbis/rule_scope — ссылка на запись реестра: аспект домена, к которому правило привязано; пусто = глобально.',
     tagMappings: ['memory', 'preference', 'rule'],
     viewConfig: { keyFields: ['orbis/memory_kind', 'orbis/rule_scope'], icon: '🧠' },
     module: 'memory',
@@ -214,7 +223,7 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/unit', false],
     ],
     aiInstructions:
-      'Применяй, когда у намерения есть измеримая цель («накопить 300000», «прочитать 24 книги»). target_value — decimal-строка, строго больше нуля. progress_source описывает, ОТКУДА берётся факт: query — запрос §6.1 по сущностям, aggregate — count (считает сущности; field при нём ЗАПРЕЩЁН, не передавай его) либо sum/latest (field ОБЯЗАТЕЛЕН — имя поля аспекта, например amount). unit — непустая подпись единицы, если она есть. current_value считает сервер, обходя граф; никогда не задавай и не правь его сам.',
+      'Применяй, когда у намерения есть измеримая цель («накопить 300000», «прочитать 24 книги»). orbis/target_value — decimal-строка, строго больше нуля. orbis/progress_source описывает, ОТКУДА берётся факт: query — дерево запроса по сущностям, aggregate — count (считает сущности; field при нём ЗАПРЕЩЁН, не передавай его) либо sum/latest (field ОБЯЗАТЕЛЕН — key свойства, например orbis/amount). orbis/unit — непустая подпись единицы, если она есть. orbis/current_value считает сервер, обходя граф; никогда не задавай и не правь его сам.',
     tagMappings: ['goal'],
     viewConfig: {
       keyFields: ['orbis/target_value', 'orbis/current_value', 'orbis/unit'],
@@ -232,11 +241,11 @@ const ENTRIES: readonly AspectEntry[] = [
     },
     properties: [['orbis/project_stage', true]],
     aiInstructions:
-      'orbis/project — проект: затея с жизненным циклом (stage: active|paused|done). Тикеты проекта — ' +
-      'дочерние сущности с orbis/task (relation parent от проекта к тикету). «Сделай A, B, C» в треде ' +
-      'проекта = создать по тикету на пункт (status inbox), детьми проекта. Тело проекта с живыми ' +
-      'блоками сервер засевает сам при пустом теле — не пиши его вручную. Кодовое (репозиторий, ' +
-      'ветка) — в orbis/repo на той же сущности, не здесь.',
+      'orbis/project — проект: затея с жизненным циклом (orbis/project_stage: active|paused|done). ' +
+      'Тикеты проекта — дочерние сущности с orbis/task, привязанные ребром роли ticket от проекта к ' +
+      'тикету. «Сделай A, B, C» в треде проекта = создать по тикету на пункт (orbis/task_status ' +
+      'inbox), детьми проекта. Тело проекта с живыми блоками сервер засевает сам при пустом теле — ' +
+      'не пиши его вручную. Кодовое (репозиторий, ветка) — в orbis/repo на той же сущности, не здесь.',
     tagMappings: ['project', 'проект'],
     viewConfig: { keyFields: ['orbis/project_stage'], icon: '📁' },
     module: 'ade',
@@ -254,8 +263,8 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/default_branch', true],
     ],
     aiInstructions:
-      'orbis/repo — репозиторий код-проекта: url и default_branch. Ставится на ту же сущность, что ' +
-      'orbis/project, только если проект — про код.',
+      'orbis/repo — репозиторий код-проекта: orbis/repo_url и orbis/default_branch. Ставится на ту же ' +
+      'сущность, что orbis/project, только если проект — про код.',
     tagMappings: ['repo', 'репозиторий'],
     viewConfig: { keyFields: ['orbis/repo_url', 'orbis/default_branch'], icon: '🗂️' },
     module: 'ade',
@@ -276,10 +285,11 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/may_close', false],
     ],
     aiInstructions:
-      'orbis/assignment — исполнитель тикета. executor=agent требует grant_id — uuid доступа из ' +
+      'orbis/assignment — исполнитель тикета. orbis/executor=agent требует orbis/grant — доступ из ' +
       '«Настройки → Агенты»; его выставляет владелец (обычно кнопкой на экране тикета) — НИКОГДА не ' +
-      'выдумывай uuid и не подставляй чужой. executor=human — assignee текстом. may_close (по ' +
-      'умолчанию false) разрешает исполнителю закрывать тикет самому — включай только по прямой просьбе.',
+      'выдумывай его и не подставляй чужой. orbis/executor=human — orbis/assignee текстом. ' +
+      'orbis/may_close (по умолчанию false) разрешает исполнителю закрывать тикет самому — включай ' +
+      'только по прямой просьбе.',
     tagMappings: ['assignee', 'исполнитель'],
     viewConfig: { keyFields: ['orbis/executor', 'orbis/may_close'], icon: '🎯' },
     // Ядро-исполнитель, не ADE: назначение нужно и ADE, и рутинам, а «модуль требует
@@ -345,15 +355,14 @@ const ENTRIES: readonly AspectEntry[] = [
     ],
     aiInstructions:
       'orbis/routine — рутина: повторяющаяся работа внутреннего исполнителя. ЧТО делать — в ' +
-      'теле сущности обычным текстом, в аспекте только расписание и права. at — локальное ' +
-      'время владельца «ЧЧ:ММ» (07:00, не 7:00); days — дни недели mo|tu|we|th|fr|sa|su, без ' +
-      'поля = каждый день. mode обязателен: propose — рутина ПРЕДЛАГАЕТ изменения владельцу ' +
-      'на подтверждение, act — применяет их сама, и тогда перечисли allowed_tools (ровно те ' +
-      'инструменты, что ей нужны). Без явной просьбы владельца действовать самостоятельно ' +
-      'заводи рутину с mode: propose — act выдаётся только по его прямому слову. ' +
-      'stage: active — рутина работает, paused — временно ' +
-      'отключена; «выключи рутину» — это paused, а не удаление. Поле stage есть и у ' +
-      'orbis/project, поэтому в entity_query всегда указывай aspect=orbis/routine.',
+      'теле сущности обычным текстом, в свойствах только расписание и права. orbis/routine_at — ' +
+      'локальное время владельца «ЧЧ:ММ» (07:00, не 7:00); orbis/routine_days — дни недели ' +
+      'mo|tu|we|th|fr|sa|su, без свойства = каждый день. orbis/routine_mode обязателен: propose — ' +
+      'рутина ПРЕДЛАГАЕТ изменения владельцу на подтверждение, act — применяет их сама, и тогда ' +
+      'перечисли orbis/allowed_tools (ровно те инструменты, что ей нужны). Без явной просьбы ' +
+      'владельца действовать самостоятельно заводи рутину с orbis/routine_mode: propose — act ' +
+      'выдаётся только по его прямому слову. orbis/routine_stage: active — рутина работает, ' +
+      'paused — временно отключена; «выключи рутину» — это paused, а не удаление.',
     tagMappings: ['routine', 'рутина'],
     viewConfig: {
       keyFields: ['orbis/routine_stage', 'orbis/routine_at', 'orbis/routine_mode'],

@@ -231,7 +231,7 @@ function proposeCall(runId: string, taskId: string) {
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
       ],
     },
@@ -286,7 +286,7 @@ async function proposedWithBody(title: string): Promise<Proposed> {
               input: {
                 id: taskId,
                 body: 'Черновик рутины',
-                aspects: { 'orbis/task': { status: 'planned' } },
+                props: { 'orbis/task_status': 'planned' },
               },
             },
           ],
@@ -517,7 +517,7 @@ async function chatConfirmation(taskId: string): Promise<string> {
         operations: [
           {
             tool: 'entity_update',
-            input: { id: taskId, aspects: { 'orbis/task': { status: 'done' } } },
+            input: { id: taskId, props: { 'orbis/task_status': 'done' } },
           },
         ],
       },
@@ -728,8 +728,8 @@ describe('routine.proposal / decideProposal', () => {
       index: 0,
       tool: 'entity_update',
       entity: { id: taskId, title: 'Позвонить в банк' },
-      aspect: 'orbis/task',
-      field: 'status',
+      // Строка адресуется СВОЙСТВОМ (§А1-1): пары «аспект + поле» у неё больше нет.
+      field: 'orbis/task_status',
       before: 'inbox',
       after: 'planned',
     });
@@ -983,7 +983,7 @@ describe('routine.proposal / decideProposal', () => {
           operations: [
             {
               tool: 'entity_update',
-              input: { id: taskId, aspects: { 'orbis/task': { status: 'done' } } },
+              input: { id: taskId, props: { 'orbis/task_status': 'done' } },
             },
           ],
         },
@@ -1016,8 +1016,7 @@ describe('routine.proposal / decideProposal', () => {
       index: 0,
       tool: 'entity_update',
       entity: { id: taskId, title: 'Оплатить интернет' },
-      aspect: 'orbis/task',
-      field: 'status',
+      field: 'orbis/task_status',
       after: 'done',
     });
   });
@@ -1034,7 +1033,7 @@ describe('routine.proposal / decideProposal', () => {
     const doc = ownerDoc();
     const edits = {
       body: [{ index: 0, bodyDoc: doc }],
-      fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+      fields: [{ index: 0, field: 'orbis/task_status', value: 'in_progress' }],
     };
 
     const applied = await callerLater().routine.decideProposal({
@@ -1141,7 +1140,7 @@ describe('routine.proposal / decideProposal', () => {
       pendingId,
       decision: 'approve',
       edits: {
-        fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+        fields: [{ index: 0, field: 'orbis/task_status', value: 'in_progress' }],
       },
     });
     expect(applied.status).toBe('applied');
@@ -1160,7 +1159,7 @@ describe('routine.proposal / decideProposal', () => {
   test('replay двойного тапа: та же правка дважды → второе предложение не заводится, ответ applied идемпотентен с тем же actionId (приёмка 14)', async () => {
     const { taskId, runId, pendingId } = await proposed('Сдать отчёт');
     const edits = {
-      fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+      fields: [{ index: 0, field: 'orbis/task_status', value: 'in_progress' }],
     };
 
     const first = await callerLater().routine.decideProposal({
@@ -1219,7 +1218,7 @@ describe('routine.proposal / decideProposal', () => {
         runId,
         pendingId,
         decision: 'reject',
-        edits: { fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'done' }] },
+        edits: { fields: [{ index: 0, field: 'orbis/task_status', value: 'done' }] },
       }),
     );
     expect(e.code).toBe('BAD_REQUEST');
@@ -1241,7 +1240,7 @@ describe('routine.proposal / decideProposal', () => {
       decision: 'approve',
       edits: {
         body: [{ index: 0, bodyDoc: doc }],
-        fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+        fields: [{ index: 0, field: 'orbis/task_status', value: 'in_progress' }],
       },
     });
     expect(decided.status).toBe('stale');
@@ -1277,7 +1276,7 @@ describe('routine.proposal / decideProposal', () => {
         pendingId,
         decision: 'approve',
         edits: {
-          fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'не-статус' }],
+          fields: [{ index: 0, field: 'orbis/task_status', value: 'не-статус' }],
         },
       }),
     );
@@ -1300,7 +1299,7 @@ describe('routine.proposal / decideProposal', () => {
       runId,
       pendingId: editedId,
       decision: 'approve',
-      edits: { fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'done' }] },
+      edits: { fields: [{ index: 0, field: 'orbis/task_status', value: 'done' }] },
     });
     expect(applied.status).toBe('applied');
     if (applied.status !== 'applied') throw new Error('не applied');
@@ -1316,7 +1315,7 @@ describe('routine.proposal / decideProposal', () => {
         pendingId,
         decision: 'approve',
         edits: {
-          fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'не-статус' }],
+          fields: [{ index: 0, field: 'orbis/task_status', value: 'не-статус' }],
         },
       }),
     );
@@ -1519,7 +1518,7 @@ describe('routine.proposal: дифф тела предложения', () => {
         decision: 'approve',
         edits: {
           body: [{ index: 0, bodyDoc: doc }],
-          fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'не-статус' }],
+          fields: [{ index: 0, field: 'orbis/task_status', value: 'не-статус' }],
         },
       }),
     );
@@ -1566,7 +1565,7 @@ describe('routine.proposalsForEntity', () => {
     const first = await proposedOps('первая по документам', [
       {
         tool: 'entity_update',
-        input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+        input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
       },
     ]);
     const second = await proposedOps('вторая по документам', [
@@ -1601,7 +1600,7 @@ describe('routine.proposalsForEntity', () => {
     const live = await proposedOps('живое по страховке', [
       {
         tool: 'entity_update',
-        input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+        input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
       },
     ]);
 
@@ -1625,7 +1624,7 @@ describe('routine.proposalsForEntity', () => {
     const archived = await proposedOps('архивное по страховке', [
       {
         tool: 'entity_update',
-        input: { id: taskId, aspects: { 'orbis/task': { status: 'done' } } },
+        input: { id: taskId, props: { 'orbis/task_status': 'done' } },
       },
     ]);
     await archiveRun(archived.runId);
@@ -1640,7 +1639,7 @@ describe('routine.proposalsForEntity', () => {
     const { runId, pendingId } = await proposedOps('правка по кладовке', [
       {
         tool: 'entity_update',
-        input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+        input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
       },
     ]);
 
@@ -1652,7 +1651,7 @@ describe('routine.proposalsForEntity', () => {
         pendingId,
         decision: 'approve',
         edits: {
-          fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'не-статус' }],
+          fields: [{ index: 0, field: 'orbis/task_status', value: 'не-статус' }],
         },
       }),
     );
@@ -1676,11 +1675,11 @@ describe('routine.proposalsForEntity', () => {
     const { pendingId } = await proposedOps('две записи одним предложением', [
       {
         tool: 'entity_update',
-        input: { id: firstId, aspects: { 'orbis/task': { status: 'planned' } } },
+        input: { id: firstId, props: { 'orbis/task_status': 'planned' } },
       },
       {
         tool: 'entity_update',
-        input: { id: secondId, aspects: { 'orbis/task': { status: 'planned' } } },
+        input: { id: secondId, props: { 'orbis/task_status': 'planned' } },
       },
     ]);
 
@@ -1733,7 +1732,7 @@ describe('routine.proposalsForEntity', () => {
     const b = await seedTask('Записаться к врачу');
     const c = await seedTask('Забрать заключение');
     const { pendingId } = await proposedOps('приём у врача одним планом', [
-      { tool: 'entity_update', input: { id: a, aspects: { 'orbis/task': { status: 'planned' } } } },
+      { tool: 'entity_update', input: { id: a, props: { 'orbis/task_status': 'planned' } } },
       { tool: 'relation_create', input: { source_id: a, target_id: b, role: 'dependency' } },
       { tool: 'relation_create', input: { source_id: b, target_id: c, role: 'dependency' } },
     ]);
@@ -1981,7 +1980,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
       pendingId,
       decision: 'approve',
       edits: {
-        fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+        fields: [{ index: 0, field: 'orbis/task_status', value: 'in_progress' }],
       },
     });
     expect(applied.status).toBe('applied');
@@ -2008,7 +2007,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
       pendingId,
       decision: 'approve',
       edits: {
-        fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+        fields: [{ index: 0, field: 'orbis/task_status', value: 'in_progress' }],
       },
     });
     expect(applied.status).toBe('applied');
@@ -2293,7 +2292,7 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
   test('владелец тронул цель после постановки → approve даёт stale с расхождениями и гасит карточку (ОЧ.13); вторая НЕЗАВИСИМАЯ единица по тому же полю после applied первой → stale честно, не молча (Р-16)', async () => {
     const { routineId, runId } = await batchRun('Устаревание');
     const { pendingId, targetId } = await deferUnit(routineId, runId, 'Заявка на отпуск', {
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: { 'orbis/task_status': 'done' },
     });
     // Правка владельца своей рукой — ровно то, обо что предусловие ОЧ.13 и разбивается
     await ownerSets(targetId, 'in_progress');
@@ -2329,7 +2328,7 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
         routine: { id: r2, runId: run2, mode: 'act', allowedTools: new Set(['entity_update']) },
       }),
       'entity_update',
-      { id: target, archived: true, aspects: { 'orbis/task': { status: 'done' } } },
+      { id: target, archived: true, props: { 'orbis/task_status': 'done' } },
     );
     if (one.status !== 'pending_confirmation' || two.status !== 'pending_confirmation') {
       throw new Error('обе единицы обязаны отложиться');
@@ -2670,7 +2669,7 @@ describe('routine.decideAll', () => {
     ]);
     const first = await deferUnit(routineId, runId, 'Акт сверки за май');
     const stale = await deferUnit(routineId, runId, 'Акт сверки за июнь', {
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: { 'orbis/task_status': 'done' },
     });
     const last = await deferUnit(routineId, runId, 'Акт сверки за июль');
     // Правка владельца своей рукой — то, обо что разбивается предусловие средней единицы

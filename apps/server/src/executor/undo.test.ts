@@ -314,7 +314,7 @@ describe('undoAction: entity_update — LWW-откат по СВОЙСТВУ (§
         req(
           user,
           'attach_orbis_task',
-          { entity_id: e.id, data: { status: 'planned', priority: 'high' } },
+          { entity_id: e.id, data: { 'orbis/task_status': 'planned', 'orbis/priority': 'high' } },
           { clock: () => T },
         ),
         { sink },
@@ -548,7 +548,7 @@ describe('undoAction: связи и batch (§7.8)', () => {
     const attach = ok(
       await execute(
         db,
-        req(user, 'attach_orbis_task', { entity_id: e.id, data: { status: 'inbox' } }),
+        req(user, 'attach_orbis_task', { entity_id: e.id, data: { 'orbis/task_status': 'inbox' } }),
         { sink },
       ),
     );

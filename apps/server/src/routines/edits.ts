@@ -222,15 +222,11 @@ export function countProposalRows(operations: readonly unknown[]): number {
   return rows;
 }
 
-/** Строки одной `entity_update`: поля аспектов плюс core-поля; ни одной видимой — всё равно одна. */
+/** Строки одной `entity_update`: свойства (записанные и снятые) плюс core-поля; ни одной видимой — всё равно одна. */
 function updateRowCount(input: Record<string, unknown>): number {
-  let rows = 0;
-  const aspects = input.aspects as Record<string, Record<string, unknown> | null> | undefined;
-  for (const patch of Object.values(aspects ?? {})) {
-    // Снятие аспекта предложением запрещено (propose.ts) и строки не даёт — как в `updateRows`.
-    if (patch === null) continue;
-    rows += Object.keys(patch).length;
-  }
+  // По строке на СВОЙСТВО (§А1-1): записанное в `props` и снятое через `unset`. Снятие
+  // аспекта строки не даёт — его предложение вообще не поддерживает (propose.ts).
+  let rows = propertyRows(input).length;
   for (const field of Object.keys(CORE_FIELD_LABELS)) {
     if (field === 'body') {
       if (hasBody(input)) rows += 1;
@@ -242,17 +238,33 @@ function updateRowCount(input: Record<string, unknown>): number {
   return rows === 0 ? 1 : rows;
 }
 
-/** Патч аспекта операции, если он там есть и это объект (снятие аспекта payload не несёт). */
-function aspectPatch(
-  input: Record<string, unknown>,
-  aspect: string,
-): Record<string, unknown> | undefined {
-  const aspects = input.aspects as Record<string, unknown> | undefined;
-  const patch = aspects?.[aspect];
-  return patch !== null && typeof patch === 'object' && !Array.isArray(patch)
-    ? (patch as Record<string, unknown>)
-    : undefined;
+/**
+ * Строки-СВОЙСТВА операции: записанные (`props`) и снятые (`unset`), в порядке показа.
+ *
+ * Одна функция на счёт строк и на множество их ключей — те же две половины, что рисует
+ * `updateRows` (lifecycle.ts). Адреса здесь уже id: их нормализовал `buildUpdate` при
+ * составлении предложения, и второго резолва (а значит и снимка реестра) тут не нужно.
+ */
+function propertyRows(input: Record<string, unknown>): Array<{ property: string; unset: boolean }> {
+  const props =
+    typeof input.props === 'object' && input.props !== null
+      ? (input.props as Record<string, unknown>)
+      : {};
+  const unset = Array.isArray(input.unset)
+    ? input.unset.filter((v): v is string => typeof v === 'string')
+    : [];
+  return [
+    ...Object.keys(props).map((property) => ({ property, unset: false })),
+    ...unset.map((property) => ({ property, unset: true })),
+  ];
 }
+
+/**
+ * Пометка строки СНЯТИЯ в ключе. Занимает слот, где прежде стоял аспект: аспект строкой
+ * свойства больше не адресуется (§А1-1), а «поставить X» и «снять X» — две РАЗНЫЕ строки
+ * одного свойства, и общий ключ схлопнул бы их в одну.
+ */
+const UNSET_ROW_KIND = 'unset';
 
 /**
  * Множество ключей строк одной операции — то, что владелец видит списком и на что даёт
@@ -261,11 +273,8 @@ function aspectPatch(
  */
 function operationKeys(index: number, input: Record<string, unknown>): Set<string> {
   const keys = new Set<string>();
-  const aspects = (input.aspects as Record<string, unknown> | undefined) ?? {};
-  for (const aspect of Object.keys(aspects)) {
-    const patch = aspectPatch(input, aspect);
-    if (patch === undefined) continue;
-    for (const field of Object.keys(patch)) keys.add(rowKey(index, aspect, field));
+  for (const row of propertyRows(input)) {
+    keys.add(rowKey(index, row.unset ? UNSET_ROW_KIND : undefined, row.property));
   }
   for (const field of Object.keys(CORE_FIELD_LABELS)) {
     if (field === 'body') {
@@ -330,16 +339,14 @@ export function buildEditedOperations(operations: unknown[], edits: ProposalEdit
     assertRowExists(input, edit.index, edit.aspect, edit.field);
     claim(claimed, edit.index, edit.aspect, edit.field);
     const target = at(result, edit.index).input;
-    if (edit.aspect === undefined) {
+    if (Object.hasOwn(CORE_FIELD_LABELS, edit.field)) {
       target[edit.field] = edit.value;
       continue;
     }
-    // Копии, а не запись на месте: `aspects` и патч приехали из исходного payload'а.
-    // Читается ТЕКУЩИЙ патч сборки, а не исходный: двум правкам одного аспекта иначе
-    // выжила бы только последняя — первая молча потерялась бы вместе со своей строкой.
-    const aspects = { ...(target.aspects as Record<string, unknown>) };
-    aspects[edit.aspect] = { ...aspectPatch(target, edit.aspect), [edit.field]: edit.value };
-    target.aspects = aspects;
+    // Копия, а не запись на месте: `props` приехал из исходного payload'а. Читается ТЕКУЩАЯ
+    // сборка, а не исходник: двум правкам одной операции иначе выжила бы только последняя —
+    // первая молча потерялась бы вместе со своей строкой.
+    target.props = { ...(target.props as Record<string, unknown>), [edit.field]: edit.value };
   }
 
   assertInvariants(source, result);
@@ -413,17 +420,13 @@ function assertRowExists(
   field: string,
 ): void {
   if (aspect !== undefined) {
-    // Ключа нет в патче аспекта — значит и предусловия под него никто не снимал (Б3):
-    // правка записала бы поле мимо CAS, молча выиграв у того, кто заполнил его первым.
-    const patch = aspectPatch(input, aspect);
-    if (patch === undefined || !Object.hasOwn(patch, field)) {
-      throw reject(
-        'edit_key_missing',
-        `операция ${index + 1} не правит ${aspect}.${field} — такой строки в предложении нет`,
-        { index, aspect, field },
-      );
-    }
-    return;
+    // Строк «аспект.поле» больше нет (§А1-1): строка предложения адресуется СВОЙСТВОМ, и
+    // правка с аспектом — это правка по карте, которой в payload'е уже не существует.
+    throw reject(
+      'edit_key_missing',
+      `строк по аспектам в предложении больше нет — правь свойство по его адресу (операция ${index + 1}, ${aspect}.${field})`,
+      { index, aspect, field },
+    );
   }
   if (field === 'body') {
     throw reject(
@@ -432,12 +435,22 @@ function assertRowExists(
       { index, field },
     );
   }
-  // Вне аспектов правится только то, что владелец видит СТРОКОЙ предложения, и только там,
-  // где операция это поле уже трогает: `id`, `precondition` и CAS — не строки, а механика.
-  if (!Object.hasOwn(CORE_FIELD_LABELS, field) || input[field] === undefined) {
+  // Правится только то, что владелец видит СТРОКОЙ предложения, и только там, где операция
+  // это уже трогает: `id`, `precondition` и CAS — не строки, а механика.
+  //
+  // СТРОКА СНЯТИЯ не правится тоже, и это не пробел: у неё нет значения, которое можно
+  // поменять, — «снять свойство» либо принимают, либо отклоняют предложение целиком.
+  // Ключа нет в `props` — значит и предусловия под него никто не снимал (Б3): правка
+  // записала бы поле мимо CAS, молча выиграв у того, кто заполнил его первым.
+  const core = Object.hasOwn(CORE_FIELD_LABELS, field);
+  const props =
+    typeof input.props === 'object' && input.props !== null
+      ? (input.props as Record<string, unknown>)
+      : {};
+  if (core ? input[field] === undefined : !Object.hasOwn(props, field)) {
     throw reject(
       'edit_key_missing',
-      `операция ${index + 1} не правит поле «${field}» — такой строки в предложении нет`,
+      `операция ${index + 1} не правит «${field}» — такой строки в предложении нет`,
       { index, field },
     );
   }

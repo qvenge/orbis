@@ -45,7 +45,7 @@ import type {
   PropertyDefinition,
   RelationRoleDefinition,
 } from '../registry/property-type';
-import type { PropertyType } from '../registry/types';
+import { effectiveLabel, type PropertyType } from '../registry/types';
 import type {
   QueryAst,
   QueryDateToken,
@@ -95,10 +95,13 @@ export function toParseRegistry(
 /**
  * Подпись записи реестра в локали читателя: локаль пользователя → en → любая (§А2-1).
  * Одно правило на печать и на разбор — иначе напечатанное имя не резолвилось бы обратно.
+ *
+ * Реэкспорт, а не определение: с Задачи 12 то же правило читает генератор схем `attach_*`
+ * (`registry/tool-schema.ts`), и дом у него теперь при самом типе `LocalizedText`
+ * (`registry/types.ts`). Импорт `effectiveLabel` из `@orbis/shared/query` при этом остался
+ * рабочим — потребители канона Q-AST его не меняли.
  */
-export function effectiveLabel(label: Record<string, string>, locale: string): string {
-  return label[locale] ?? label.en ?? (Object.values(label)[0] as string);
-}
+export { effectiveLabel };
 
 /**
  * Локаль владельца — та, в которой резолвятся ЗАКАВЫЧЕННЫЕ подписи имён (§А5-3б) и в которой

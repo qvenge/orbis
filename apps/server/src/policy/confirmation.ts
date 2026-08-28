@@ -116,24 +116,32 @@ export function factsFromToolCall(
  * Правка расписания (`at`, `days`) и жизненного цикла (`stage`) доверенности не касается.
  *
  * Имя тула — единственный вход помимо payload'а: у attach-пути (`attach_orbis_routine`)
- * аспект в имени, у create/update — ключ `aspects['orbis/routine']`. Форма проверяется
+ * аспект в имени, у create/update доверенность лежит в `props` по СВОЙСТВАМ
+ * `orbis/routine_mode` и `orbis/allowed_tools` (§А9-1). Прежде она читалась из старой карты
+ * (`aspects['orbis/routine']`), и с переводом контрактов тулов замок остался бы висеть на
+ * форме, которой модель больше не пользуется, — то есть перестал бы держать.
+ *
+ * Свойства адресуются id, а не `key`: у встроенных они совпадают (§А2-1), а подменить
+ * встроенное свойство своей строкой с тем же ключом владелец не может — частичный индекс
+ * реестра разводит собственные и системные записи по разным namespace'ам. Форма проверяется
  * защитно (input сюда доезжает уже envelope-валидированным, см. докблок factsFromToolCall).
  */
+const ROUTINE_MODE = 'orbis/routine_mode';
+const ROUTINE_ALLOWED_TOOLS = 'orbis/allowed_tools';
+
 export function grantsRoutineAutonomy(tool: string, input: unknown): boolean {
   if (!isRecord(input)) return false;
   if (tool === 'attach_orbis_routine') {
-    return isRecord(input.data) && input.data.mode === 'act';
+    return isRecord(input.data) && input.data[ROUTINE_MODE] === 'act';
   }
   if (tool !== 'entity_create' && tool !== 'entity_update') return false;
-  const aspects = input.aspects;
-  if (!isRecord(aspects)) return false;
-  const routine = aspects['orbis/routine'];
-  if (!isRecord(routine)) return false;
+  const props = input.props;
+  if (!isRecord(props)) return false;
   // create: правами наделяет только act — рутина в propose всё равно спросит владельца.
-  // update: merge §9.2 дописывает поля в живой аспект, поэтому значим сам ФАКТ правки
+  // update: патч дописывает свойства в живую запись, поэтому значим сам ФАКТ правки
   // доверенности, а не значение (act ↔ propose и правка белого списка — одно решение).
-  if (tool === 'entity_create') return routine.mode === 'act';
-  return 'mode' in routine || 'allowed_tools' in routine;
+  if (tool === 'entity_create') return props[ROUTINE_MODE] === 'act';
+  return ROUTINE_MODE in props || ROUTINE_ALLOWED_TOOLS in props;
 }
 
 /**

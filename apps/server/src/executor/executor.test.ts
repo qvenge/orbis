@@ -500,10 +500,16 @@ describe('executor: optimistic-check body (§5.2, §13.1)', () => {
   test('6e. монотонный updated_at и для attach_<aspect> в один тик clock', async () => {
     const e = await createNote(); // T0
     const a1 = firstEntity(
-      await execute(db, req('attach_orbis_task', { entity_id: e.id, data: { status: 'inbox' } })),
+      await execute(
+        db,
+        req('attach_orbis_task', { entity_id: e.id, data: { 'orbis/task_status': 'inbox' } }),
+      ),
     ).updatedAt;
     const a2 = firstEntity(
-      await execute(db, req('attach_orbis_task', { entity_id: e.id, data: { status: 'planned' } })),
+      await execute(
+        db,
+        req('attach_orbis_task', { entity_id: e.id, data: { 'orbis/task_status': 'planned' } }),
+      ),
     ).updatedAt;
     expect(new Date(a1).getTime()).toBeGreaterThan(T0.getTime());
     expect(new Date(a2).getTime()).toBeGreaterThan(new Date(a1).getTime());
@@ -542,7 +548,7 @@ describe('executor: RLS и attach', () => {
 
     const bad = await execute(
       db,
-      req('attach_orbis_task', { entity_id: e.id, data: { status: 'not-a-status' } }),
+      req('attach_orbis_task', { entity_id: e.id, data: { 'orbis/task_status': 'not-a-status' } }),
     );
     expect(bad.ok).toBe(false);
     if (!bad.ok) expect(bad.error.code).toBe('VALIDATION');
@@ -550,7 +556,7 @@ describe('executor: RLS и attach', () => {
     const sink = new InMemoryJournalSink();
     const good = await execute(
       db,
-      req('attach_orbis_task', { entity_id: e.id, data: { status: 'done' } }),
+      req('attach_orbis_task', { entity_id: e.id, data: { 'orbis/task_status': 'done' } }),
       { sink },
     );
     const e1 = firstEntity(good);
@@ -578,7 +584,11 @@ describe('executor: RLS и attach', () => {
       db,
       req('attach_orbis_financial', {
         entity_id: e.id,
-        data: { amount: '10.00', direction: 'expense', category_ref: CATEGORY_REF },
+        data: {
+          'orbis/amount': '10.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CATEGORY_REF,
+        },
       }),
     );
     expect(r.ok).toBe(false);
@@ -689,7 +699,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
       db,
       req('attach_orbis_assignment', {
         entity_id: plain.id,
-        data: { executor: 'agent', grant_id: newId() },
+        data: { 'orbis/executor': 'agent', 'orbis/grant': newId() },
       }),
     );
     expect(att.ok).toBe(false);
@@ -700,7 +710,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
       db,
       req('attach_orbis_assignment', {
         entity_id: plain.id,
-        data: { executor: 'agent', grant_id: grantId },
+        data: { 'orbis/executor': 'agent', 'orbis/grant': grantId },
       }),
     );
     expect(attOk.ok).toBe(true);
@@ -780,7 +790,10 @@ describe('ADE-срез 1: инварианты назначения и засе�
     );
     const a = await execute(
       db,
-      req('attach_orbis_project', { entity_id: empty.id, data: { stage: 'active' } }),
+      req('attach_orbis_project', {
+        entity_id: empty.id,
+        data: { 'orbis/project_stage': 'active' },
+      }),
     );
     expect(a.ok).toBe(true);
     expect(await bodyOf(empty.id)).toBe(projectBodyTemplate(empty.id));
@@ -788,7 +801,10 @@ describe('ADE-срез 1: инварианты назначения и засе�
     // Повторный attach уже проектной сущности тело не переписывает
     const again = await execute(
       db,
-      req('attach_orbis_project', { entity_id: empty.id, data: { stage: 'paused' } }),
+      req('attach_orbis_project', {
+        entity_id: empty.id,
+        data: { 'orbis/project_stage': 'paused' },
+      }),
     );
     expect(again.ok).toBe(true);
     expect(await bodyOf(empty.id)).toBe(projectBodyTemplate(empty.id));
@@ -799,7 +815,10 @@ describe('ADE-срез 1: инварианты назначения и засе�
     );
     const b = await execute(
       db,
-      req('attach_orbis_project', { entity_id: filled.id, data: { stage: 'active' } }),
+      req('attach_orbis_project', {
+        entity_id: filled.id,
+        data: { 'orbis/project_stage': 'active' },
+      }),
     );
     expect(b.ok).toBe(true);
     expect(await bodyOf(filled.id)).toBe('Заметки.');
@@ -904,7 +923,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
     );
     const attached = await execute(
       db,
-      req('attach_orbis_project', { entity_id: e.id, data: { stage: 'active' } }),
+      req('attach_orbis_project', { entity_id: e.id, data: { 'orbis/project_stage': 'active' } }),
       { sink },
     );
     expect(attached.ok).toBe(true);
@@ -1714,6 +1733,16 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
     ...subject,
   });
 
+  /** Тот же прогон СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). */
+  const runProps = (subject: Record<string, unknown> = {}) => ({
+    'orbis/run_outcome': 'running',
+    'orbis/run_started_at': '2026-08-18T07:00:00.000Z',
+    'orbis/last_step_at': '2026-08-18T07:00:00.000Z',
+    'orbis/step_count': 0,
+    'orbis/run_steps': [],
+    ...subject,
+  });
+
   test('agent-run с routine_id и без grant_id — принимается; с обоими или без обоих — VALIDATION reason run_subject', async () => {
     const ok = await execute(
       db,
@@ -1796,12 +1825,13 @@ describe('V1: инвариант субъекта прогона (V1.4)', () => 
     }
 
     // attach — третий путь появления аспекта: замена целиком, субъекта не осталось.
-    // Имя тула — с дефисом: resolveAttachAspect executor'а заменяет в id только «/»
-    // (публичное имя реестра `attach_orbis_agent_run` тут неприменимо — прогон служебный
-    // и attach-тула не публикует вовсе).
+    // Имя тула — то же, что было бы в реестре (`attachToolName`, §А9-1): с Задачи 12
+    // нормализация одна на реестр, диспатч и исполнителя, и прежней «исполнительной»
+    // формы с дефисом не существует. Реестр этот тул всё равно не публикует — прогон
+    // служебный (колонка `service`), — но исполнитель имя резолвит.
     const att = await execute(
       db,
-      req('attach_orbis_agent-run', { entity_id: created.id, data: run({}) }, asVerb),
+      req('attach_orbis_agent_run', { entity_id: created.id, data: runProps() }, asVerb),
     );
     expect(att.ok).toBe(false);
     if (!att.ok) {
@@ -1828,6 +1858,14 @@ describe('V1: источник routine не трогает рутины и на�
     stage: 'active',
     at: '07:00',
     mode: 'propose',
+    ...over,
+  });
+
+  /** Та же рутина СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). */
+  const routineProps = (over: Record<string, unknown> = {}) => ({
+    'orbis/routine_stage': 'active',
+    'orbis/routine_at': '07:00',
+    'orbis/routine_mode': 'propose',
     ...over,
   });
 
@@ -1892,12 +1930,16 @@ describe('V1: источник routine не трогает рутины и на�
     expectUntouchable(
       await execute(
         db,
-        req('attach_orbis_routine', { entity_id: plain.id, data: routine() }, asRoutine),
+        req('attach_orbis_routine', { entity_id: plain.id, data: routineProps() }, asRoutine),
       ),
     );
     const attachByChat = await execute(
       db,
-      req('attach_orbis_routine', { entity_id: plain.id, data: routine() }, { source: 'chat' }),
+      req(
+        'attach_orbis_routine',
+        { entity_id: plain.id, data: routineProps() },
+        { source: 'chat' },
+      ),
     );
     expect(attachByChat.ok).toBe(true);
 
@@ -2071,14 +2113,18 @@ describe('V1: источник routine не трогает рутины и на�
     expectUntouchable(
       await execute(
         db,
-        req('attach_orbis_note', { entity_id: target.id, data: { pinned: true } }, asRoutine),
+        req(
+          'attach_orbis_note',
+          { entity_id: target.id, data: { 'orbis/pinned': true } },
+          asRoutine,
+        ),
       ),
     );
     const byChat = await execute(
       db,
       req(
         'attach_orbis_note',
-        { entity_id: target.id, data: { pinned: true } },
+        { entity_id: target.id, data: { 'orbis/pinned': true } },
         { source: 'chat' },
       ),
     );
@@ -2094,7 +2140,7 @@ describe('V1: источник routine не трогает рутины и на�
         db,
         req(
           'attach_orbis_assignment',
-          { entity_id: ticket.id, data: { executor: 'human', assignee: 'Я' } },
+          { entity_id: ticket.id, data: { 'orbis/executor': 'human', 'orbis/assignee': 'Я' } },
           asRoutine,
         ),
       ),
@@ -2103,7 +2149,7 @@ describe('V1: источник routine не трогает рутины и на�
       db,
       req(
         'attach_orbis_assignment',
-        { entity_id: ticket.id, data: { executor: 'human', assignee: 'Я' } },
+        { entity_id: ticket.id, data: { 'orbis/executor': 'human', 'orbis/assignee': 'Я' } },
         { source: 'chat' },
       ),
     );

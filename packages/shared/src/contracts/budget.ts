@@ -4,9 +4,29 @@
 // Все суммы — decimal-строки (01-arch §3.3); формулы считает ТОЛЬКО сервер
 // (aggregates.ts), клиент отображает готовые значения.
 import { z } from 'zod';
+import { BUILTIN_PROPERTY_META } from '../registry/builtin-properties';
 import { entitySchema } from '../schemas/entity';
 
 const decimal = z.string().regex(/^-?\d+(\.\d+)?$/, 'decimal-строка');
+
+/**
+ * Направление операции в wire — варианты берутся ИЗ РЕЕСТРА (§А2-2), а не переписываются
+ * сюда руками (Р-10a-1, Z4-117 §С1-4).
+ *
+ * До реформы здесь стояло `z.string()`: третье, самое слабое зеркало одного и того же
+ * перечисления рядом с `contracts/import.ts` и определением свойства. Именно оно и молчало
+ * бы, если бы вариант однажды разошёлся — а провалиться в этом месте должно ГРОМКО:
+ * `comingUp` едет и в web, и в LLM-тул `budget_status`.
+ *
+ * `z.enum` требует непустого кортежа литералов, поэтому список раскрывается в него явно, а
+ * `assert` ловит две поломки сразу: свойство исчезло из реестра и оно перестало быть `select`.
+ */
+const DIRECTION_TYPE = BUILTIN_PROPERTY_META.find((p) => p.id === 'orbis/direction')?.type;
+if (DIRECTION_TYPE?.kind !== 'select') {
+  throw new Error('contracts/budget: orbis/direction нет в реестре или он больше не select');
+}
+const [DIRECTION_FIRST, ...DIRECTION_REST] = DIRECTION_TYPE.options.map((o) => o.key);
+const direction = z.enum([DIRECTION_FIRST as string, ...DIRECTION_REST]);
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'ISO date YYYY-MM-DD');
 /** Месяц Overview (§3.1): заголовок периода с переключателем [◀ месяц ▶]. */
 export const monthString = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'месяц YYYY-MM');
@@ -41,7 +61,7 @@ export const budgetOverviewSchema = z.object({
       entity: entitySchema,
       occurredOn: dateString,
       amount: decimal,
-      direction: z.string(),
+      direction,
     }),
   ),
   // Planned — ручные запланированные покупки (§2.7; без derived_from)

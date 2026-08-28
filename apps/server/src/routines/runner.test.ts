@@ -136,7 +136,7 @@ function proposeCall(runId: string, taskId: string) {
       operations: [
         {
           tool: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
       ],
     },
@@ -224,7 +224,7 @@ describe('runRoutineRun: режим propose (V1.5, V1.6)', () => {
             operations: [
               {
                 tool: 'entity_update',
-                input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+                input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
               },
             ],
           },
@@ -344,7 +344,7 @@ describe('runRoutineRun: режим act (V1.10)', () => {
       toolUse([
         {
           name: 'entity_update',
-          input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+          input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
         },
       ]),
       endTurn('Перевёл задачу в план.'),
@@ -498,7 +498,7 @@ describe('runRoutineRun: вопрос владельцу и гашение не�
               operations: [
                 {
                   tool: 'entity_update',
-                  input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+                  input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
                 },
               ],
             },
@@ -527,7 +527,7 @@ describe('runRoutineRun: вопрос владельцу и гашение не�
               operations: [
                 {
                   tool: 'entity_update',
-                  input: { id: taskId, aspects: { 'orbis/task': { status: 'planned' } } },
+                  input: { id: taskId, props: { 'orbis/task_status': 'planned' } },
                 },
               ],
             },
@@ -588,7 +588,7 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
       operations: [
         {
           tool: 'entity_update',
-          input: { id: routineId, aspects: { 'orbis/routine': { stage: 'active' } } },
+          input: { id: routineId, props: { 'orbis/routine_stage': 'active' } },
         },
       ],
     });

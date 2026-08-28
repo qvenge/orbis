@@ -4,7 +4,7 @@
 // (решение 12 плана; zod .datetime() в shared-схемах офсет не принимает).
 // БД хранит микросекунды, но драйвер парсит timestamptz в Date (мс), поэтому сравнение
 // expectedUpdatedAt (клиент видел wire-форму) с row.updatedAt.toISOString() симметрично.
-import type { GrantScope } from '@orbis/shared';
+import type { GrantScope, PropertyDefinition } from '@orbis/shared';
 import type { ChatRole, WireChatMessage } from './chat/messages';
 import type {
   aspectDefinitions,
@@ -46,6 +46,65 @@ export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity
     aspectsMap: row.aspectsLegacy as Record<string, Record<string, unknown>>,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    archived: row.archived,
+  };
+}
+
+/**
+ * Сущность в форме, которую видит МОДЕЛЬ (§А9-2, Р12 «key для машин»).
+ *
+ * Чем она отличается от `toWireEntity` и почему проекции ДВЕ, а не одна:
+ *  - `props` адресованы **key** свойства, а не id. Модель обязана писать тем же именем,
+ *    которым читала (`props` тулов, `unset`, `entity_query`), а id ПОЛЬЗОВАТЕЛЬСКОГО
+ *    свойства — uuid, и до модели он доезжать не должен;
+ *  - `meta` нет вовсе: мешок снят (§А1-3), и печатать пустой объект значило бы обещать
+ *    модели место, куда можно писать мимо реестра;
+ *  - старой карты аспектов (`aspectsMap`) нет: аспект перестал быть владельцем полей (Р5),
+ *    и вторая, вложенная копия тех же значений учила бы модель адресовать поле парой
+ *    «аспект + имя» — формой, которой в реестре свойств нет;
+ *  - `ownerId` и `queryRefs` не едут: первое модель знает по построению (это владелец
+ *    вызова), второе — служебный индекс ссылок тела, читателя у него в чате нет.
+ *
+ * Внутренний wire (`toWireEntity`) остаётся по id и с картой: web строит формы и контролы
+ * по реестру и адресует значения id (§А9-2, асимметрия названа спекой).
+ *
+ * Свойство, которого нет в снимке, печатается ПОД СВОИМ id: значение существует, и молча
+ * потерять его хуже, чем показать машинным адресом. Такое бывает ровно у следа переезда —
+ * строка реестра снята, значения на сущностях остались (§А10-3).
+ */
+export interface LlmEntity {
+  id: string;
+  title: string;
+  emoji: string | null;
+  body: string | null;
+  bodyRefs: string[];
+  tags: string[];
+  props: Record<string, unknown>;
+  aspects: string[];
+  createdAt: string;
+  updatedAt: string;
+  archived: boolean;
+}
+
+export function toLlmEntity(
+  row: WireEntity,
+  reg: { properties: Map<string, PropertyDefinition> },
+): LlmEntity {
+  const props: Record<string, unknown> = {};
+  for (const [propertyId, value] of Object.entries(row.props)) {
+    props[reg.properties.get(propertyId)?.key ?? propertyId] = value;
+  }
+  return {
+    id: row.id,
+    title: row.title,
+    emoji: row.emoji,
+    body: row.body,
+    bodyRefs: row.bodyRefs,
+    tags: row.tags,
+    props,
+    aspects: row.aspects,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
     archived: row.archived,
   };
 }

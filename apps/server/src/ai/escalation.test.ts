@@ -121,7 +121,7 @@ async function recategorizeViaChat(
 ): Promise<void> {
   const r = await dispatchTool(chatCtx(user), 'entity_update', {
     id: txnId,
-    aspects: { 'orbis/financial': { category_ref: categoryRef } },
+    props: { 'orbis/finance_category': categoryRef },
   });
   if (r.status !== 'ok') throw new Error(`dispatchTool: ${JSON.stringify(r)}`);
 }
@@ -139,7 +139,7 @@ async function recategorizeBatchViaChat(
     batch_id: newId(),
     operations: txnIds.map((id) => ({
       tool: 'entity_update',
-      input: { id, aspects: { 'orbis/financial': { category_ref: categoryRef } } },
+      input: { id, props: { 'orbis/finance_category': categoryRef } },
     })),
   });
   if (r.status !== 'ok') throw new Error(`dispatchTool batch: ${JSON.stringify(r)}`);
@@ -147,7 +147,7 @@ async function recategorizeBatchViaChat(
 
 /** Рекатегоризация мимо роутера — когда тесту нужен actionId для прямого вызова. */
 async function recategorizeRaw(user: string, txnId: string, categoryRef: string): Promise<string> {
-  const input = { id: txnId, aspects: { 'orbis/financial': { category_ref: categoryRef } } };
+  const input = { id: txnId, props: { 'orbis/finance_category': categoryRef } };
   return ok(await execute(db, req(user, [{ tool: 'entity_update', input }]), { sink })).actionId;
 }
 
@@ -346,7 +346,7 @@ describe('эскалация повторных исправлений кате�
           ...req(user, [
             {
               tool: 'entity_update',
-              input: { id: a, aspects: { 'orbis/financial': { category_ref: fun } } },
+              input: { id: a, props: { 'orbis/finance_category': fun } },
             },
             { tool: 'entity_create', input: { title: 'Попутная', tags: [] } },
           ]),
@@ -384,6 +384,8 @@ describe('эскалация повторных исправлений кате�
 
     const spy = spyOn(console, 'error').mockImplementation(() => {});
     try {
+      // UI-роутер СТАРОЙ картой намеренно: до Задач 13c и 18 web шлёт именно её, и
+      // дешёвый гейт вызова (`categoryInInput`) обязан читать обе формы.
       const updated = await ownerCaller(user).entity.update({
         id: b,
         aspects: { 'orbis/financial': { category_ref: fun } },
@@ -508,7 +510,7 @@ describe('эскалация повторных исправлений кате�
         req(user, [
           {
             tool: 'entity_update',
-            input: { id: txn, aspects: { 'orbis/financial': { amount: '999.00' } } },
+            input: { id: txn, props: { 'orbis/amount': '999.00' } },
           },
         ]),
         { sink },
@@ -698,7 +700,7 @@ describe('эскалация повторных исправлений кате�
     try {
       const r = await dispatchTool(chatCtx(user), 'entity_update', {
         id: b,
-        aspects: { 'orbis/financial': { category_ref: fun } },
+        props: { 'orbis/finance_category': fun },
       });
       expect(r.status).toBe('ok');
       expect(await categoryRefOf(b)).toBe(fun);
@@ -828,7 +830,7 @@ describe('эскалация повторных исправлений кате�
         batch_id: newId(),
         operations: second.map((id) => ({
           tool: 'entity_update',
-          input: { id, aspects: { 'orbis/financial': { category_ref: fun } } },
+          input: { id, props: { 'orbis/finance_category': fun } },
         })),
       });
       expect(r.status).toBe('ok');
@@ -863,7 +865,7 @@ describe('эскалация: уборочная фаза', () => {
       batch_id: newId(),
       operations: ids.map((id) => ({
         tool: 'entity_update',
-        input: { id, aspects: { 'orbis/financial': { category_ref: fun } } },
+        input: { id, props: { 'orbis/finance_category': fun } },
       })),
     };
     const r = ok(
@@ -906,7 +908,7 @@ describe('эскалация: уборочная фаза', () => {
       batch_id: newId(),
       operations: ids.map((id) => ({
         tool: 'entity_update',
-        input: { id, aspects: { 'orbis/financial': { category_ref: fun } } },
+        input: { id, props: { 'orbis/finance_category': fun } },
       })),
     });
     expect(pending.status).toBe('pending_confirmation');

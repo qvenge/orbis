@@ -155,9 +155,10 @@ test('memory-правила грузятся в ctx парсера и перек
   ).toBe(true);
   await waitFor(() => {
     const created = calls.find((x) => x.path === 'entity.create')?.input as {
-      input: { aspects: Record<string, { category_ref?: string }> };
+      input: { props: Record<string, unknown> };
     };
-    expect(created.input.aspects['orbis/financial']?.category_ref).toBe('cat-fun');
+    // Новая форма создания (§А9-1): категория — свойство по id, а не поле аспекта.
+    expect(created.input.props['orbis/finance_category']).toBe('cat-fun');
   });
 });
 
@@ -192,9 +193,9 @@ test('тёплый кэш правил: зависший запрос прави
   // Карточка на экране, и правило из тёплого кэша применено (Развлечения, а не Еда по alias).
   expect(threadMsgs(qc).length).toBe(1);
   const created = calls.find((c) => c.path === 'entity.create')?.input as {
-    input: { aspects: Record<string, { category_ref?: string }> };
+    input: { props: Record<string, unknown> };
   };
-  expect(created.input.aspects['orbis/financial']?.category_ref).toBe('cat-fun');
+  expect(created.input.props['orbis/finance_category']).toBe('cat-fun');
 });
 
 // 03-budget §4.1 (B7): остаток конверта на карточке — ПОСЛЕ записи; успешный create

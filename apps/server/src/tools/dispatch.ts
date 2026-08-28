@@ -23,13 +23,13 @@ import {
   entityUpdateInput,
   newId,
   pendingMessageId,
-  propertyToLegacyField,
   proposeInput,
   relationCreateInput,
   relationDeleteInput,
 } from '@orbis/shared';
 import {
   aspectsNamedInQueryAst,
+  OWNER_LOCALE,
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
   queryTreeExceedsDepth,
@@ -62,7 +62,7 @@ import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { ROUTINE_UNTOUCHABLE_OBJECTS, routineUntouchableError } from '../executor/invariants';
 import { makeChatJournalSink } from '../executor/journal';
-import { propertyOfLegacyField } from '../executor/legacy-form';
+import { nearestPropertyKey, resolvePropertyRef } from '../executor/props';
 import type { ActorKind, JournalSink, JournalWrite, WireEntity } from '../executor/types';
 import { undoLast } from '../executor/undo';
 import type { GrantRef } from '../oauth/grants';
@@ -82,17 +82,17 @@ import {
 } from '../query/compile-ast';
 import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
+import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import { runAsk } from '../routines/ask';
 import { CORE_FIELD_LABELS, MAX_RUN_UNITS } from '../routines/constants';
 import { buildUpdate, loadTargets, runPropose } from '../routines/propose';
-import { toWireEntityFromSql } from '../wire';
+import { toLlmEntity, toWireEntityFromSql } from '../wire';
+import { propertyCatalogInput, runPropertyCatalog } from './property-catalog';
 import {
   AGENT_VERB_NAMES,
-  type AspectToolRow,
   buildToolDefs,
   type Card,
   importCsvStartInput,
-  loadAspectToolRows,
   type OrbisToolDef,
   type RoutineRef,
   routineToolAllowed,
@@ -178,8 +178,12 @@ export async function dispatchTool(
     // Резолв тула и чтения — один withIdentity-tx (RLS); мутации исполняются после:
     // execute открывает собственный tx, вложить его в текущий нельзя.
     const pre = await withIdentity(ctx.db, ctx.actorUserId, async (tx): Promise<Resolution> => {
-      const rows = await loadAspectToolRows(tx);
-      const defs = buildToolDefs(rows);
+      // Снимок реестров — ОДИН на вызов, и он же уезжает дальше: по нему собираются
+      // определения тулов, резолвятся ключи свойств на границе и печатается LLM-проекция.
+      // Второй снимок, взятый отдельно, мог бы разойтись с первым на правке реестра между
+      // двумя чтениями (тот же довод, что у `loadTargets` предложения).
+      const reg = await loadRegistry(tx, ctx.actorUserId);
+      const defs = buildToolDefs(reg);
       const def = defs.find((d) => d.name === name);
       if (!def) return { kind: 'unknown' };
       // internalOnly — fail-closed прямо в диспатче (fix round): фильтрация списка
@@ -206,11 +210,15 @@ export async function dispatchTool(
       // полный (fail-closed). Гейт стоит здесь, рядом с internalOnly, а не в
       // классификаторе §7.10: тот по актору сознательно не ветвится, а скоуп — ось
       // доступа. Отказ структурированный (§7.10 «forbidden»), ДО любой записи.
+      //
+      // `fullScopeOnly` (§А9-4, РП-14) — вторая ось того же гейта: тул, адресованный
+      // только полному доступу, закрыт фону ДАЖЕ БУДУЧИ ЧТЕНИЕМ. Без этой половины
+      // `property_catalog` пролетал бы сюда по ветке «чтения открыты все» — то есть
+      // список тулов сужался бы, а вызов по угаданному имени всё равно работал.
       if (
         ctx.grant !== undefined &&
         ctx.grant.scope !== 'full' &&
-        def.kind !== 'read' &&
-        !WORKER_SCOPE_TOOLS.has(def.name)
+        (def.fullScopeOnly === true || (def.kind !== 'read' && !WORKER_SCOPE_TOOLS.has(def.name)))
       ) {
         return {
           kind: 'done',
@@ -249,12 +257,13 @@ export async function dispatchTool(
       // (internal-режим, §7.8) и не проходит ни политику §7.10, ни runMutation — см. runUndoLast
       if (def.name === 'undo_last') return { kind: 'undo_last' };
       if (def.kind === 'read')
-        return { kind: 'done', out: await runRead(tx, ctx, def.name, input) };
+        return { kind: 'done', out: await runRead(tx, ctx, reg, def.name, input) };
       return {
         kind: 'mutate',
         def,
-        keyFieldsByAspect: keyFieldsByAspect(rows),
-        execToolByName: execToolNames(defs),
+        reg,
+        keyFieldsByAspect: keyFieldsByAspect(reg),
+        knownTools: knownToolNames(defs),
       };
     });
     if (pre.kind === 'unknown') {
@@ -389,7 +398,7 @@ export async function dispatchTool(
       // отработали выше; envelope разбирается здесь, как у глаголов.
       return await runAsk(ctx, parseEnvelope(askInput, input, pre.def.name));
     }
-    return await runMutation(ctx, pre.def, input, pre.keyFieldsByAspect, pre.execToolByName);
+    return await runMutation(ctx, pre.def, input, pre.reg, pre.keyFieldsByAspect, pre.knownTools);
   } catch (e) {
     // Доменные отказы (NOT_FOUND, VALIDATION, ...) — структурированный error-результат;
     // инфраструктурные ошибки и баги не маскируются (та же дисциплина, что в execute)
@@ -410,9 +419,11 @@ type Resolution =
   | {
       kind: 'mutate';
       def: OrbisToolDef;
+      /** Снимок реестров вызова: резолв ключей свойств на границе и LLM-проекция ответа. */
+      reg: RegistrySnapshot;
       keyFieldsByAspect: Map<string, string[]>;
-      /** Реестровое имя → executor-форма (для трансляции вложенных операций batch). */
-      execToolByName: Map<string, string>;
+      /** Имена тулов реестра — гейт вложенных операций batch (перевода имён больше нет). */
+      knownTools: ReadonlySet<string>;
     };
 
 function errorResult(code: string, message: string, details?: unknown): ToolDispatchResult {
@@ -519,6 +530,7 @@ function captureSink(inner: JournalSink): { sink: JournalSink; entries: JournalW
 async function runRead(
   tx: Tx,
   ctx: ToolCallCtx,
+  reg: RegistrySnapshot,
   name: string,
   input: unknown,
 ): Promise<ToolDispatchResult> {
@@ -527,6 +539,16 @@ async function runRead(
   if (name === 'entity_get') {
     const parsed = parseEnvelope(entityGetInput, input, 'entity_get');
     return { status: 'ok', result: await readEntity(tx, ctx.actorUserId, parsed) };
+  }
+  if (name === 'property_catalog') {
+    // Каталог читается из СНИМКА реестра — того же, по которому собран список тулов и по
+    // которому валидируется запись. Отдельного запроса к таблицам реестра здесь нет
+    // намеренно: он был бы вторым мнением о том, что в реестре есть.
+    const parsed = parseEnvelope(propertyCatalogInput, input, 'property_catalog');
+    return {
+      status: 'ok',
+      result: await runPropertyCatalog(tx, reg, parsed, OWNER_LOCALE),
+    };
   }
   if (name === 'import_csv_start') {
     parseEnvelope(importCsvStartInput, input, 'import_csv_start');
@@ -649,7 +671,11 @@ async function runEntityQuery(ctx: ToolCallCtx, input: unknown): Promise<ToolDis
         count: entities.length,
         entityIds: entities.map((e) => e.id),
       };
-      return { status: 'ok', result: entities, card };
+      // МОДЕЛИ уезжает LLM-проекция (§А9-2): props по key, без `meta` и без старой карты
+      // аспектов. Карточка при этом строится по id — её читает web (02 §2.3), и там адрес
+      // значения остаётся машинным. Реестр берётся из контекста компиляции: он же
+      // разбирал и компилировал этот запрос, и второй снимок мог бы с ним разойтись.
+      return { status: 'ok', result: entities.map((e) => toLlmEntity(e, cctx.reg)), card };
     },
   });
 }
@@ -760,26 +786,38 @@ async function runMutation(
   ctx: ToolCallCtx,
   def: OrbisToolDef,
   input: unknown,
+  reg: RegistrySnapshot,
   keyFieldsMap: Map<string, string[]>,
-  execToolByName: Map<string, string>,
+  knownTools: ReadonlySet<string>,
 ): Promise<ToolDispatchResult> {
-  // Имя тула для executor'а: у attach_* он ждёт форму attach_<aspect_id с заменой
-  // только «/»> — восстанавливаем из aspectId (см. OrbisToolDef.aspectId).
+  // Имя тула — ОДНО на реестр, диспатч и исполнителя (общая `attachToolName`, §А9-1):
+  // переводить его здесь больше не во что.
   // Структурная валидация ДО классификации (§7.10 дословно: уровень получает tool-call
   // ПОСЛЕ структурной валидации input'а): невалидный envelope — честная VALIDATION с
   // zod-issues (путь самокоррекции модели), а не wouldBe; для batch — трансляция имён
   // (fix round Task 4) плюс валидация каждого operations[].input схемой его тула.
   // Факты классификатора дальше извлекаются из уже ПРОВАЛИДИРОВАННОГО payload'а.
-  const tool = execToolName(def);
+  const tool = def.name;
   const batchPayload =
     def.name === 'batch_execute'
-      ? validateBatchOperations(translateBatchInput(input, execToolByName))
+      ? validateBatchOperations(assertBatchToolsKnown(input, knownTools))
       : undefined;
   const payload = batchPayload ?? validateMutationEnvelope(def, input);
 
   // §7.10: уровень определяет политика по типизированным фактам вызова, не модель;
   // forbidden и explicit-confirmation разворачиваются ДО execute — в БД и журнал (§7.8)
   // ничего не попадает
+  // Адреса свойств — ПО ГРАНИЦЕ (§А9-1): неизвестный key отвергается здесь, с подсказкой
+  // ближайшего, а не доезжает до валидатора записи. Разница не косметическая: валидатор
+  // отвечает `UNKNOWN_PROPERTY` уже внутри исполнения и по ИДЕНТИФИКАТОРУ, то есть модели,
+  // написавшей `orbis/amout`, он повторяет её же опечатку и молчит о том, что рядом есть
+  // `orbis/amount`. Проверяются все операции разом — одиночная мутация это список из одной.
+  const unknownProperty = unknownPropertyError(
+    reg,
+    batchPayload?.operations ?? [{ tool, input: payload }],
+  );
+  if (unknownProperty !== null) return unknownProperty;
+
   const facts = factsFromToolCall(def, payload);
   const classified = classifyToolCall({
     ...facts,
@@ -1002,7 +1040,14 @@ async function runMutation(
 }
 
 /** Строка карточки отложенного действия — «было → станет» по одному полю (ОЧ.13). */
-type DeferredRow = { aspect?: string; field: string; before?: string; after: string };
+type DeferredRow = { field: string; before?: string; after: string };
+
+/**
+ * «Станет» у строки СНЯТИЯ свойства в карточке отложенной единицы. Тот же литерал, что у
+ * строки предложения (`routines/lifecycle.ts`): владелец видит обе карточки в одной пачке,
+ * и два разных обозначения одного и того же читались бы как два разных исхода.
+ */
+const DEFERRED_UNSET_VALUE = '—';
 
 /**
  * Отложка небезопасного действия рутины (D42 ОЧ.4, ОЧ.13) — ядро оси Б среза: вместо
@@ -1187,23 +1232,28 @@ async function snapshotDeferredUnit(
   }
 
   const rows: DeferredRow[] = [];
-  const aspects = payload.aspects as Record<string, Record<string, unknown> | null> | undefined;
-  for (const [aspect, patch] of Object.entries(aspects ?? {})) {
-    if (patch === null) continue; // снятие аспекта `buildUpdate` уже отверг выше
-    for (const [field, after] of Object.entries(patch)) {
-      // «Было» читается из НОВОЙ правды по id свойства — тем же резолвом, которым снимает
-      // предусловия `buildUpdate` (иначе карточка показала бы владельцу одно «было», а CAS
-      // сверял бы другое). Признак носителя обязателен (Р9): значение переживает снятие
-      // аспекта, и без него карточка обещала бы «было» там, где аспекта на строке нет.
-      const property = propertyOfLegacyField(targets.reg, aspect, field);
-      const before = current.aspects.includes(aspect) ? current.props[property] : undefined;
-      rows.push({
-        aspect,
-        field,
-        ...(before !== undefined && { before: rowValue(before) }),
-        after: rowValue(after),
-      });
-    }
+  // Строка на СВОЙСТВО (§А1-1): аспект её больше не адресует, и поля `aspect` у неё нет.
+  // «Было» читается из НОВОЙ правды по тому же id, по которому `buildUpdate` снял
+  // предусловие (иначе карточка показала бы владельцу одно «было», а CAS сверял бы другое);
+  // адреса в собранной операции уже нормализованы в id — там же, где снимались предусловия.
+  const built_props = (built.op.input.props as Record<string, unknown> | undefined) ?? {};
+  for (const [property, after] of Object.entries(built_props)) {
+    const before = current.props[property];
+    rows.push({
+      field: property,
+      ...(before !== undefined && { before: rowValue(before) }),
+      after: rowValue(after),
+    });
+  }
+  for (const property of (built.op.input.unset as string[] | undefined) ?? []) {
+    const before = current.props[property];
+    rows.push({
+      field: property,
+      ...(before !== undefined && { before: rowValue(before) }),
+      // «Станет» у снятия — тот же литерал, что у строки предложения: пустое «станет»
+      // владелец прочитал бы как недорисованную строку.
+      after: DEFERRED_UNSET_VALUE,
+    });
   }
   // Поля вне аспектов — тем же списком, что читает экран предложения (CORE_FIELD_LABELS):
   // второй перечень «что рутина вправе тронуть вне аспектов» разъехался бы с первым молча.
@@ -1255,21 +1305,36 @@ function rowValue(value: unknown): string {
  */
 const ROUTINE_ASPECT = 'orbis/routine';
 
+/**
+ * Свойства доверенности рутины (§А9-1) — те же два адреса, что читает гейт §7.10
+ * (`grantsRoutineAutonomy`): сводка карточки обязана называть ровно то, что подняло уровень.
+ */
+const ROUTINE_MODE_PROPERTY = 'orbis/routine_mode';
+const ROUTINE_TOOLS_PROPERTY = 'orbis/allowed_tools';
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 /**
- * Несёт ли операция аспект рутины: у attach-пути аспект в имени тула, у create/update —
- * ключ в `aspects`. Значение обязано быть объектом: `null` в патче — это detach, он рутину
- * не заводит, а снимает. Форма проверяется защитно — сюда доезжает уже
- * envelope-валидированный payload (validateMutationEnvelope / validateBatchOperations).
+ * ЗАВОДИТ ли операция рутину: у attach-пути аспект в имени тула, у create/update — имя
+ * аспекта в списке `aspects` (у создания) или в `aspects.attach` (у правки), §А9-1.
+ *
+ * Считается именно НАВЕШИВАНИЕ, а не правка свойств рутины: лимит §8 отвечает на вопрос
+ * «сколько рутин заведено», и патч `orbis/routine_at` живой рутины его не касается. Снятие
+ * (`detach`) рутину тоже не заводит — потому `namedAspects` здесь не годится, она читает
+ * обе стороны сразу. Форма проверяется защитно — сюда доезжает уже envelope-валидированный
+ * payload (validateMutationEnvelope / validateBatchOperations).
  */
 function carriesRoutineAspect(tool: string, input: unknown): boolean {
   if (!isRecord(input)) return false;
   if (tool === 'attach_orbis_routine') return isRecord(input.data);
-  if (tool !== 'entity_create' && tool !== 'entity_update') return false;
-  return isRecord(input.aspects) && isRecord(input.aspects[ROUTINE_ASPECT]);
+  if (tool === 'entity_create') {
+    return Array.isArray(input.aspects) && input.aspects.includes(ROUTINE_ASPECT);
+  }
+  if (tool !== 'entity_update') return false;
+  const attach = isRecord(input.aspects) ? input.aspects.attach : undefined;
+  return Array.isArray(attach) && attach.includes(ROUTINE_ASPECT);
 }
 
 /**
@@ -1345,12 +1410,10 @@ async function autonomySummary(
   const parts: string[] = [];
   for (const op of ops) {
     if (!grantsRoutineAutonomy(op.tool, op.input) || !isRecord(op.input)) continue;
-    const routine =
-      op.tool === 'attach_orbis_routine'
-        ? op.input.data
-        : isRecord(op.input.aspects)
-          ? op.input.aspects[ROUTINE_ASPECT]
-          : undefined;
+    // Доверенность лежит там же, где её читает гейт (§А9-1): у attach — в `data` по key
+    // свойства, у create/update — в `props`. Второе место чтения разъехалось бы с гейтом, и
+    // карточка называла бы владельцу не то, что подтверждается.
+    const routine = op.tool === 'attach_orbis_routine' ? op.input.data : op.input.props;
     if (!isRecord(routine)) continue;
     const targetId =
       op.tool === 'entity_update'
@@ -1365,13 +1428,15 @@ async function autonomySummary(
           ? op.input.title
           : 'новая рутина';
     const facts: string[] = [];
-    if (typeof routine.mode === 'string') facts.push(`режим ${routine.mode}`);
-    // attach/create кладут аспект ЦЕЛИКОМ — отсутствующий белый список значит «нет
-    // инструментов», и это надо сказать; у update патч мержится, и молчание о списке
-    // значит «прежний»
-    if ('allowed_tools' in routine || op.tool !== 'entity_update') {
-      const tools = Array.isArray(routine.allowed_tools)
-        ? routine.allowed_tools.filter((t): t is string => typeof t === 'string')
+    const mode = routine[ROUTINE_MODE_PROPERTY];
+    if (typeof mode === 'string') facts.push(`режим ${mode}`);
+    // attach/create кладут набор ЦЕЛИКОМ — отсутствующий белый список значит «нет
+    // инструментов», и это надо сказать; у update патч дописывает свойства, и молчание о
+    // списке значит «прежний»
+    if (ROUTINE_TOOLS_PROPERTY in routine || op.tool !== 'entity_update') {
+      const allowed = routine[ROUTINE_TOOLS_PROPERTY];
+      const tools = Array.isArray(allowed)
+        ? allowed.filter((t): t is string => typeof t === 'string')
         : [];
       facts.push(tools.length > 0 ? `инструменты: ${tools.join(', ')}` : 'инструменты: нет');
     }
@@ -1565,41 +1630,70 @@ async function routinesAmong(tx: Tx, ids: string[]): Promise<Set<string>> {
   return new Set(rows.map((r) => r.id));
 }
 
-/** Имя тула в executor-форме: у attach_* «/» → «_», «-» сохраняется (см. aspectId). */
-function execToolName(def: OrbisToolDef): string {
-  return def.aspectId !== undefined ? `attach_${def.aspectId.replaceAll('/', '_')}` : def.name;
-}
-
-/** Маппинг реестровое имя → executor-форма по всем тулам (для операций batch). */
-function execToolNames(defs: OrbisToolDef[]): Map<string, string> {
-  return new Map(defs.map((d) => [d.name, execToolName(d)]));
+/**
+ * Отказ «такого свойства нет» ПО ГРАНИЦЕ тула (§А9-1) — `null`, если все адреса известны.
+ *
+ * Смотрятся только `props` и `unset`: имена ПАРАМЕТРОВ `attach_*` схема тула уже перечислила
+ * поимённо (`additionalProperties: false`), а имена аспектов — не свойства, их отвергает
+ * валидатор своим кодом `UNKNOWN_ASPECT`.
+ *
+ * Отказ структурный и с `reason`: код `VALIDATION` перегружен, и различать «опечатка в
+ * имени свойства» от «значение не того типа» в тестах и в самокоррекции модели больше нечем.
+ */
+function unknownPropertyError(
+  reg: RegistrySnapshot,
+  ops: ReadonlyArray<{ tool: string; input: unknown }>,
+): ToolDispatchResult | null {
+  for (const op of ops) {
+    if (!isRecord(op.input)) continue;
+    const props = isRecord(op.input.props) ? Object.keys(op.input.props) : [];
+    const unset = Array.isArray(op.input.unset)
+      ? op.input.unset.filter((v): v is string => typeof v === 'string')
+      : [];
+    for (const keyOrId of [...props, ...unset]) {
+      if (resolvePropertyRef(reg, keyOrId) !== undefined) continue;
+      const nearest = nearestPropertyKey(reg, keyOrId);
+      return errorResult(
+        'VALIDATION',
+        `свойства «${keyOrId}» нет в реестре${nearest === undefined ? '' : ` — возможно, «${nearest}»`}`,
+        {
+          tool: op.tool,
+          reason: 'UNKNOWN_PROPERTY',
+          property: keyOrId,
+          ...(nearest !== undefined && { nearest }),
+        },
+      );
+    }
+  }
+  return null;
 }
 
 /**
- * Трансляция envelope batch_execute: operations[].tool — реестровые имена (их публикует
- * buildToolRegistry и видят LLM/MCP) → executor-форма. Имя вне реестра — структурная
- * VALIDATION с индексом элемента. Известные, но непригодные для batch имена (read-тулы,
- * thread_post, вложенный batch_execute) транслируются как есть — их отклоняет стадия 1
- * executor'а собственной честной ошибкой.
+ * Имена тулов реестра — для проверки операций batch.
+ *
+ * ПЕРЕВОДА БОЛЬШЕ НЕТ, и его отсутствие — суть правки (§А9-1, Задача 12). Прежде здесь
+ * жила ВТОРАЯ нормализация имени `attach_*` («/» → «_», дефис сохраняется), потому что
+ * исполнитель ждал не то имя, которое реестр показывал модели. Обе сведены в общую
+ * `attachToolName`, имя стало одним на всех — и переводчику посередине стало нечего делать.
+ * Осталась только проверка «такой тул в реестре есть»: имя вне реестра — структурная
+ * VALIDATION с индексом элемента, а известные, но непригодные для batch (read-тулы,
+ * thread_post, вложенный batch_execute) отклоняет стадия 1 executor'а своей ошибкой.
  */
-function translateBatchInput(
-  input: unknown,
-  execToolByName: Map<string, string>,
-): BatchExecuteInput {
+function knownToolNames(defs: OrbisToolDef[]): ReadonlySet<string> {
+  return new Set(defs.map((d) => d.name));
+}
+
+function assertBatchToolsKnown(input: unknown, known: ReadonlySet<string>): BatchExecuteInput {
   const parsed = parseEnvelope(batchExecuteInput, input, 'batch_execute');
-  return {
-    batch_id: parsed.batch_id,
-    operations: parsed.operations.map((op, index) => {
-      const tool = execToolByName.get(op.tool);
-      if (tool === undefined) {
-        throw new ExecError('VALIDATION', `batch_execute: неизвестный тул операции «${op.tool}»`, {
-          index,
-          tool: op.tool,
-        });
-      }
-      return { tool, input: op.input };
-    }),
-  };
+  for (const [index, op] of parsed.operations.entries()) {
+    if (!known.has(op.tool)) {
+      throw new ExecError('VALIDATION', `batch_execute: неизвестный тул операции «${op.tool}»`, {
+        index,
+        tool: op.tool,
+      });
+    }
+  }
+  return parsed;
 }
 
 /**
@@ -1660,28 +1754,17 @@ function validateBatchOperations(payload: BatchExecuteInput): BatchExecuteInput 
 }
 
 /**
- * keyFields карточки (02 §2.3): значения полей из `view_config.keyFields` каждого аспекта.
+ * keyFields карточки (02 §2.3): id свойств из `view_config.keyFields` каждого аспекта.
  *
- * ПЕРЕХОДНЫЙ ШАГ реформы. В реестре `keyFields` лежат id СВОЙСТВ (новая форма §А3-1,
- * миграция 0014), а данные сущности до 0015 — старой формы: карта `aspects[id][поле]`.
- * Между ними переводит карта Задачи 1 (`propertyToLegacyField`) — та же, что переводит
- * значения в golden-корпусе приёмки §С8-1.
- *
- * У КАСТОМНОГО аспекта карты нет по построению (его свойства завёл владелец), и старым
- * именем поля служит локальная часть key свойства: `user/hours` → `hours`. Так их заводит
- * `seedCustomAspect` в тестах, так же их заведёт конструктор Задачи 12.
- *
- * Шим уходит вместе со старой формой данных: Задача 4b переводит `entities` на `props`, и
- * тогда карточка станет читать значения прямо по id свойства.
+ * Переходный шим снят (Задача 12): прежде id свойства переводился в СТАРОЕ ИМЯ ПОЛЯ
+ * (`propertyToLegacyField`), потому что значения читались из карты `aspects[id][поле]`, а
+ * web искал подпись по имени поля. Обе половины ушли: значения лежат в `props` по id
+ * (§А1-1), и карточка адресует их тем же id, что и всё остальное. Цена названа вслух: до
+ * Задачи 13c web не находит подпись по новому ключу и покажет сам ключ — это ОДНА
+ * поверхность (карточка чата), и держать ради неё вторую правду об адресе значения дороже.
  */
-function keyFieldsByAspect(rows: AspectToolRow[]): Map<string, string[]> {
-  return new Map(
-    rows.map((r) => {
-      const kf = (r.viewConfig as { keyFields?: unknown } | null)?.keyFields;
-      const ids = Array.isArray(kf) ? kf.filter((f): f is string => typeof f === 'string') : [];
-      return [r.id, ids.map((id) => propertyToLegacyField(id, r.id) ?? id.split('/').at(-1) ?? id)];
-    }),
-  );
+function keyFieldsByAspect(reg: RegistrySnapshot): Map<string, string[]> {
+  return new Map([...reg.aspects.values()].map((a) => [a.id, a.viewConfig.keyFields]));
 }
 
 function entityCard(
@@ -1691,16 +1774,14 @@ function entityCard(
 ): Card {
   // Список аспектов — из НОВОЙ правды (§А1-1): он и есть то, чем аспект стал.
   const aspects = e.aspects;
-  // А вот ЗНАЧЕНИЯ ключевых полей читаются проекцией, и это не пропуск перевода: ключи
-  // карточки — имена ПОЛЕЙ старой формы (см. `keyFieldsByAspect` выше: id свойства уже
-  // переведён в имя поля через `propertyToLegacyField`), потому что по ним web ищет
-  // подпись (`fieldLabel`). Перевод карточки на id свойств — это смена КОНТРАКТА
-  // карточки, а не чтения, и делается он вместе с web (Задача 13c).
+  // Значения — из НОВОЙ правды по id свойства (§А1-1). Признак носителя обязателен (Р9):
+  // значение переживает снятие аспекта, и без проверки списка карточка показывала бы поле
+  // аспекта, которого на записи уже нет.
   const keyFields: Record<string, unknown> = {};
   for (const aspectId of aspects) {
-    for (const field of keyFieldsMap.get(aspectId) ?? []) {
-      const value = e.aspectsMap[aspectId]?.[field];
-      if (value !== undefined) keyFields[field] = value;
+    for (const propertyId of keyFieldsMap.get(aspectId) ?? []) {
+      const value = e.props[propertyId];
+      if (value !== undefined) keyFields[propertyId] = value;
     }
   }
   return {

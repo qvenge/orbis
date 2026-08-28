@@ -10,6 +10,7 @@
 // частичного следа.
 import {
   attachAspectInput,
+  attachToolName,
   batchAuditMessageId,
   batchExecuteInput,
   type EntityUpdatePrecondition,
@@ -78,7 +79,6 @@ import {
 import {
   fromLegacyInput,
   hasPropsInput,
-  legacyReplaceToProps,
   projectLegacyAspects,
   projectLegacyRelationType,
 } from './legacy-form';
@@ -99,6 +99,7 @@ import {
   comparePropertyValue,
   type EntityState,
   type PropsPatch,
+  replaceAspectProps,
   resolvePropertyRef,
   stateDelta,
   touchedAspects,
@@ -792,10 +793,15 @@ async function prepareOp(
  * attach_<аспект>-тулы генерируются из реестра (§7.6): `orbis/task` → `attach_orbis_task`.
  * Имя собирается из КЛЮЧА аспекта, а не из его id: у встроенных они совпадают, а у своего
  * аспекта владельца ключ — то, что он назвал, и именно его видит модель в списке тулов.
+ *
+ * Нормализация — ОБЩАЯ `attachToolName` (§А9-1, Задача 12). До неё их было две: реестр
+ * заменял «/» и «-» на «_», исполнитель — только «/», и на каждом аспекте с дефисом в ключе
+ * модель звала одно имя, а исполнитель ждал другое; держал их вместе переводчик в диспатче.
+ * Одна функция снимает и переводчика, и повод им разойтись.
  */
 function resolveAttachAspect(reg: RegistrySnapshot, tool: string): string | undefined {
   for (const aspect of reg.aspects.values()) {
-    if (tool === `attach_${aspect.key.replace(/\//g, '_')}`) return aspect.id;
+    if (tool === attachToolName(aspect.key)) return aspect.id;
   }
   return undefined;
 }
@@ -1658,8 +1664,8 @@ async function prepareEntityUpdate(
     // Одна форма разбора на все входы, включая внутренний режим undo (§7.8). Семантики
     // «заменить ключ целиком» здесь БОЛЬШЕ НЕТ: с §А7-4 inverse говорит свойствами и
     // называет снятие ЯВНО (`unset`), поэтому восстанавливать носитель нечего и незачем.
-    // `legacyReplaceToProps` осталась ровно у одного вызывающего — тула `attach_<аспект>`,
-    // где замена носителя это и есть смысл операции.
+    // Замена носителя целиком живёт ровно у одного вызывающего — тула `attach_<аспект>`
+    // (`replaceAspectProps`), где она и есть смысл операции.
     //
     // ЦЕНА, НАЗВАННАЯ ВСЛУХ: ДО-РЕФОРМЕННЫЕ ЗАПИСИ ЖУРНАЛА ОТКАТЫВАЮТСЯ НЕТОЧНО.
     // Записи, сделанные до перевода журнала на свойства, несут inverse старой картой
@@ -1975,10 +1981,9 @@ async function prepareAttach(
   const before = stateOf(current);
 
   // attach ставит носитель ЦЕЛИКОМ: свойство аспекта, не пришедшее в `data`, снимается —
-  // ровно то, что делала подмена аспект-ключа в старой форме.
-  const propsPatch = legacyReplaceToProps(ctx.registry, before, {
-    [aspectId]: { ...input.data },
-  });
+  // ровно то, что делала подмена аспект-ключа в старой форме. `data` адресуется КЛЮЧАМИ
+  // СВОЙСТВ (§А9-1) — той же формой, которую объявляет схема тула.
+  const propsPatch = replaceAspectProps(ctx.registry, before, aspectId, input.data);
   // …но снимает ровно то, чем вызывающий вправе распоряжаться (§А2-5): `attach_orbis_financial`
   // НЕ НАЗЫВАЕТ `orbis/bank_txn_id` (в `data` его нет), и стирать импортное тождество из-за
   // навешивания аспекта значило бы терять факт владельца там, где он ни о чём таком не просил.

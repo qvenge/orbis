@@ -5,11 +5,13 @@ import {
   attachAspectInput,
   batchExecuteInput,
   entityCreateInput,
+  entityCreateUiInput,
   entityGetInput,
   entityQueryInput,
   entityUpdateExecInput,
   entityUpdateInput,
   entityUpdatePrecondition,
+  entityUpdateUiInput,
   relationCreateInput,
   relationDeleteInput,
 } from './tools';
@@ -21,17 +23,45 @@ describe('entityCreateInput', () => {
     expect(entityCreateInput.safeParse({ title: 'Кроссовки', tags: [] }).success).toBe(true);
   });
 
-  test('полный валидный: id/emoji/body/meta/aspects', () => {
+  test('полный валидный: id/emoji/body/props/aspects списком (§А9-1)', () => {
     const r = entityCreateInput.safeParse({
       id: UUID,
       title: 'Кроссовки',
       emoji: '👟',
       body: 'текст',
       tags: ['Shopping'],
-      meta: { raw: 'кроссовки 8000' },
-      aspects: { 'orbis/task': { status: 'inbox' } },
+      props: { 'orbis/task_status': 'inbox' },
+      aspects: ['orbis/task'],
     });
     expect(r.success).toBe(true);
+  });
+
+  test('старая карта аспектов и `meta` контрактом ТУЛА больше не принимаются (§А9-1)', () => {
+    // Обе формы — то, чем модель писала мимо реестра: `meta` не проверялась ничем, а карта
+    // адресовала поле парой «аспект + имя», которой в реестре свойств нет.
+    expect(
+      entityCreateInput.safeParse({
+        title: 'x',
+        tags: [],
+        aspects: { 'orbis/task': { status: 'inbox' } },
+      }).success,
+    ).toBe(false);
+    expect(
+      entityCreateInput.safeParse({ title: 'x', tags: [], meta: { raw: 'кроссовки 8000' } })
+        .success,
+    ).toBe(false);
+    // …а НАДМНОЖЕСТВО tRPC-роутера старую карту принимает — до Задачи 13c (web не переведён).
+    expect(
+      entityCreateUiInput.safeParse({
+        title: 'x',
+        tags: [],
+        aspects: { 'orbis/task': { status: 'inbox' } },
+      }).success,
+    ).toBe(true);
+    // `meta` не принимает и оно: мешок снят везде (§А1-3), а не спрятан за вторым входом.
+    expect(
+      entityCreateUiInput.safeParse({ title: 'x', tags: [], meta: { raw: 'x' } }).success,
+    ).toBe(false);
   });
 
   test('tags обязателен (§9.2: string[]*)', () => {
@@ -54,12 +84,36 @@ describe('entityCreateInput', () => {
 });
 
 describe('entityUpdateInput', () => {
-  test('частичный патч валиден; aspects принимает объект и null (detach)', () => {
+  test('частичный патч валиден: props по key, unset и aspects {attach, detach} (§А9-1)', () => {
     const r = entityUpdateInput.safeParse({
       id: UUID,
-      aspects: { 'orbis/task': { status: 'done' }, 'orbis/note': null },
+      props: { 'orbis/task_status': 'done' },
+      unset: ['orbis/waiting_for'],
+      aspects: { attach: ['orbis/task'], detach: ['orbis/note'] },
     });
     expect(r.success).toBe(true);
+  });
+
+  test('старая карта аспектов контрактом ТУЛА не принимается, UI-надмножеством — да', () => {
+    const legacy = { id: UUID, aspects: { 'orbis/task': { status: 'done' }, 'orbis/note': null } };
+    expect(entityUpdateInput.safeParse(legacy).success).toBe(false);
+    expect(entityUpdateUiInput.safeParse(legacy).success).toBe(true);
+    // Новая форма проходит ОБЕ схемы: перевод потребителя не ломает соседа.
+    const modern = { id: UUID, props: { 'orbis/task_status': 'done' } };
+    expect(entityUpdateInput.safeParse(modern).success).toBe(true);
+    expect(entityUpdateUiInput.safeParse(modern).success).toBe(true);
+  });
+
+  test('precondition контракту ТУЛА неизвестен — модель не подставляет CAS сама (§А7-3)', () => {
+    // Непротекание держится именно strict-схемой тула: `runPropose` на неё и опирается,
+    // снимая предусловия сервером с текущих значений.
+    const withPre = {
+      id: UUID,
+      props: { 'orbis/task_status': 'done' },
+      precondition: [{ property: 'orbis/task_status', in: ['planned'] }],
+    };
+    expect(entityUpdateInput.safeParse(withPre).success).toBe(false);
+    expect(entityUpdateExecInput.safeParse(withPre).success).toBe(true);
   });
 
   test('expectedUpdatedAt — ISO datetime; мусор отклоняется', () => {

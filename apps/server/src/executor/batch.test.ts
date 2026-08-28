@@ -90,6 +90,17 @@ function finData(over: Record<string, unknown> = {}): Record<string, unknown> {
   };
 }
 
+/** Та же транзакция СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). */
+function finProps(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    'orbis/amount': '340.00',
+    'orbis/direction': 'expense',
+    'orbis/finance_category': CATEGORY_REF,
+    'orbis/occurred_on': '2026-07-04',
+    ...over,
+  };
+}
+
 /**
  * Конверт со СВОЕЙ категорией (default — свежий uuid): тесты этого файла проверяют
  * механику batch на РУЧНЫХ parent-связях, а с A4 (03-budget §2.3) executor
@@ -247,7 +258,7 @@ describe('batch_execute: успех, виртуальное состояние �
         },
       },
       { tool: 'entity_create', input: { id: txnId, title: 'Кофе', tags: [] } },
-      { tool: 'attach_orbis_financial', input: { entity_id: txnId, data: finData() } },
+      { tool: 'attach_orbis_financial', input: { entity_id: txnId, data: finProps() } },
       {
         tool: 'relation_create',
         input: { source_id: envId, target_id: txnId, role: 'envelope-binding' },

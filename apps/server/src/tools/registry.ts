@@ -7,21 +7,31 @@
 // с zod-envelope shared (contracts/tools.ts): zod валидирует вход на исполнении,
 // JSON Schema уходит в определения тулов LLM/MCP. Парность двух представлений
 // (ключи и required) закреплена тестом registry.test.ts — рассинхрон падает в CI.
+//
+// А вот `attach_*` НЕ пишутся руками вовсе: с Задачи 12 их имя и схема `data` —
+// производные от реестра свойств (§А9-1, `attachToolName`/`aspectToolJsonSchema` в shared).
+// Отсюда следствие, которого у рукописных схем нет: правка ОДНОЙ строки реестра меняет
+// поверхность, которую видит модель, и ловит это только эталон снимка реестра тулов
+// (`test/golden/tool-registry.json`, `registry-golden.test.ts`).
 
 import {
+  type AspectDefinition,
+  aspectToolJsonSchema,
+  attachToolName,
   BUILTIN_RELATION_ROLE_META,
+  effectiveLabel,
   PROPOSAL_ALLOWED_TOOLS,
   QUESTION_MAX,
   QUESTION_OPTION_MAX,
   QUESTION_OPTIONS_MAX,
   type RelationRoleDefinition,
-  SERVICE_ASPECT_IDS,
 } from '@orbis/shared';
-import { queryAstJsonSchema } from '@orbis/shared/query';
+import { OWNER_LOCALE, queryAstJsonSchema } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { aspectDefinitions } from '../db/schema';
 import type { Tx } from '../db/with-identity';
+import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import { MAX_PROPOSAL_OPERATIONS, MAX_RUN_UNITS } from '../routines/constants';
 
 export interface OrbisToolDef {
@@ -62,6 +72,21 @@ export interface OrbisToolDef {
    * тому, от кого оба тула закрыты.
    */
   routineOnly?: boolean;
+  /**
+   * Тул адресован ТОЛЬКО полному доступу владельца (§А9-4, РП-14): скоуп `worker` его не
+   * видит и не может вызвать, даже если это ЧТЕНИЕ.
+   *
+   * Отдельный флаг, а не запись в `WORKER_SCOPE_TOOLS`: тот набор перечисляет мутации,
+   * ОТКРЫТЫЕ фону, и правило «чтения открыты все» держится им же. Первое исключение из
+   * этого правила (`property_catalog` — карта поверхности владельца целиком) выражается
+   * признаком на самом дефе, а не дырой в наборе разрешённого: набор отвечает на вопрос
+   * «что фону можно», флаг — на вопрос «кому этот тул вообще адресован».
+   *
+   * На рутину флаг НЕ распространяется (`routineToolAllowed` его не смотрит): рутина
+   * работает над графом владельца от его имени и обязана его видеть — это тот же довод,
+   * по которому ей открыты все прочие чтения.
+   */
+  fullScopeOnly?: boolean;
 }
 
 /**
@@ -282,16 +307,18 @@ export type Card =
       routineId: string;
       summary: string;
       /**
-       * «Было → станет» по одному полю. `aspect` есть у полей аспектов и отсутствует у
-       * полей самой записи (заголовок, метки, архив). `before` приходит из ПРЕДУСЛОВИЯ,
-       * снятого при постановке (ОЧ.13), а не из графа «сейчас»: единица сверится именно с
-       * ним, и показать текущее значение значило бы нарисовать согласие там, где будет
-       * отказ (тот же довод, что у строк предложения, `routines/lifecycle.ts`).
+       * «Было → станет» по одному полю. `field` — id СВОЙСТВА (`orbis/amount`) либо
+       * core-поле записи (`title`, `tags`, `archived`): с Задачи 12 адрес у строки один, и
+       * прежнего ключа `aspect` у неё больше нет — аспект перестал быть владельцем поля
+       * (§А1-1). `before` приходит из ПРЕДУСЛОВИЯ, снятого при постановке (ОЧ.13), а не из
+       * графа «сейчас»: единица сверится именно с ним, и показать текущее значение значило
+       * бы нарисовать согласие там, где будет отказ (тот же довод, что у строк предложения,
+       * `routines/lifecycle.ts`).
        *
-       * `aspect`/`field` едут СЫРЫМИ: русские подписи ставит web (aspectLabel/fieldLabel,
-       * приём ProposalCard) — серверного словаря подписей нет и заводить второй не надо.
+       * `field` едет СЫРЫМ: русские подписи ставит web (fieldLabel, приём ProposalCard) —
+       * серверного словаря подписей нет и заводить второй не надо.
        */
-      rows: Array<{ aspect?: string; field: string; before?: string; after: string }>;
+      rows: Array<{ field: string; before?: string; after: string }>;
     }
   // D42 ОЧ.5: вопрос рутины владельцу — вторая разновидность единицы пачки. Своя карточка
   // по причине сильнее, чем у соседей: на вопрос ОТВЕЧАЮТ, а не принимают его, и кнопки
@@ -423,6 +450,22 @@ const entityGetJsonSchema = {
   additionalProperties: false,
 };
 
+/**
+ * `props` в контрактах создания и правки (§А9-1): ПЛОСКАЯ карта «свойство → значение».
+ *
+ * Схема нарочно открытая (`additionalProperties: true`, без перечисления ключей): полный
+ * список свойств здесь означал бы копию каталога в КАЖДОМ определении тула, а он и так
+ * едет в `attach_*` по аспектам и в `property_catalog` по запросу. Форму значения проверяет
+ * реестр на исполнении (§А7-1) — отказ называет свойство и причину, а не «не прошло схему».
+ */
+const propsJsonSchema = {
+  type: 'object',
+  additionalProperties: true,
+  description:
+    'значения свойств по их key (orbis/amount, orbis/task_status) — id тоже принимается; ' +
+    'какие свойства бывают у аспекта, показывает его attach_*-тул, остальные — property_catalog',
+};
+
 const entityCreateJsonSchema = {
   type: 'object',
   properties: {
@@ -435,11 +478,11 @@ const entityCreateJsonSchema = {
       items: { type: 'string' },
       description: 'обязателен (может быть пустым)',
     },
-    meta: { type: 'object' },
+    props: propsJsonSchema,
     aspects: {
-      type: 'object',
-      additionalProperties: { type: 'object' },
-      description: 'значения валидируются JSON-схемами реестра аспектов',
+      type: 'array',
+      items: { type: 'string' },
+      description: 'аспекты, с которыми сущность рождается, списком id (orbis/financial)',
     },
   },
   required: ['title', 'tags'],
@@ -459,16 +502,55 @@ const entityUpdateJsonSchema = {
     emoji: { type: ['string', 'null'] },
     body: { type: 'string' },
     tags: { type: 'array', items: { type: 'string' } },
-    meta: { type: 'object' },
+    props: propsJsonSchema,
+    unset: {
+      type: 'array',
+      items: { type: 'string' },
+      description:
+        'СНЯТЬ эти свойства. Отдельным списком, а не null в props: null — законное значение ' +
+        'json-свойства, и через него снятие было бы неотличимо от записи',
+    },
     aspects: {
       type: 'object',
-      additionalProperties: { type: ['object', 'null'] },
+      properties: {
+        attach: { type: 'array', items: { type: 'string' } },
+        detach: { type: 'array', items: { type: 'string' } },
+      },
+      additionalProperties: false,
       description:
-        'мержится по aspect-id, внутри аспекта — по полям (shallow merge; поле null удаляется); null вместо объекта снимает аспект целиком (detach)',
+        'навесить/снять интерпретацию. Снятие аспекта значения НЕ удаляет: аспект — не ' +
+        'владелец поля, и факт владельца переживает смену интерпретации',
     },
     archived: { type: 'boolean' },
   },
   required: ['id'],
+  additionalProperties: false,
+};
+
+/**
+ * `property_catalog` (§А9-3). Фильтры перечислены схемой, а не свободным текстом: тул
+ * читает МОДЕЛЬ, и «попробуй так» в описании она превращает в вызовы с выдуманными ключами.
+ */
+const propertyCatalogJsonSchema = {
+  type: 'object',
+  properties: {
+    q: {
+      type: 'string',
+      minLength: 1,
+      description: 'слово: ищется в key, подписи и описании свойства, регистр не важен',
+    },
+    aspect: { type: 'string', description: 'только свойства этого аспекта (orbis/financial)' },
+    module: { type: 'string', description: 'только свойства модуля (finance, planner, ade…)' },
+    status: {
+      type: 'string',
+      enum: ['active', 'proposed', 'deprecated'],
+      description: 'по умолчанию — все; proposed доступны ТОЛЬКО отсюда, в промпт они не входят',
+    },
+    contract: {
+      type: 'string',
+      description: 'контракты появятся позже — сейчас параметр ничего не сужает',
+    },
+  },
   additionalProperties: false,
 };
 
@@ -562,7 +644,7 @@ const userQueryJsonSchema = {
     field: {
       type: 'string',
       description:
-        'обязателен при aggregate=sum: числовое свойство — id или key (например orbis/amount)',
+        'обязателен при aggregate=sum: key числового свойства (orbis/amount); id тоже принимается',
     },
   },
   required: ['query', 'aggregate'],
@@ -948,13 +1030,18 @@ const CORE_TOOLS: OrbisToolDef[] = [
   },
   {
     name: 'entity_create',
-    description: 'Создание сущности.',
+    description:
+      'Создание сущности. Значения — props по key свойства (orbis/amount), интерпретации — ' +
+      'aspects списком. Отдельного «мешка» для структуры больше нет: то, чего нет в реестре ' +
+      'свойств, пишется словами в body.',
     inputJsonSchema: entityCreateJsonSchema,
     kind: 'mutate',
   },
   {
     name: 'entity_update',
-    description: 'Частичное обновление сущности: передаются только изменяемые поля.',
+    description:
+      'Частичное обновление сущности: передаются только изменяемые поля. props ставит ' +
+      'значения, unset снимает их, aspects.attach/detach меняет интерпретацию.',
     inputJsonSchema: entityUpdateJsonSchema,
     kind: 'mutate',
   },
@@ -993,6 +1080,23 @@ const CORE_TOOLS: OrbisToolDef[] = [
       'Готовые агрегаты бюджета месяца (03-budget): конверты (spent/effectiveLimit/remaining/dailyPace), баланс периода, comingUp (recurring-инстансы на 14 дней), planned (ручные запланированные покупки), unbudgeted и spend_class категорий. Используй для финансовых вопросов («что по бюджету?», «могу позволить X?», остатки конвертов). planned и comingUp уже включают будущие recurring-оттоки — НЕ суммируй recurring отдельно (двойной вычет).',
     inputJsonSchema: budgetStatusJsonSchema,
     kind: 'read',
+  },
+  {
+    // §А9-3: единственный путь модели к свойствам БЕЗ attach_*-тула — к свободным (их не
+    // объявляет ни один аспект) и к `proposed` (§А2-7: в промпт они не входят). Полный
+    // каталог в промпте не масштабируется (§Б7-2), поэтому уточнение стоит вызова, а не
+    // токенов на каждом запросе.
+    name: 'property_catalog',
+    description:
+      'Каталог свойств: чем вообще можно описывать записи. Ищи здесь, когда нужного поля нет ' +
+      'ни в одном attach_*-туле — свободные свойства и предложенные (proposed) видны только ' +
+      'отсюда. Возвращает key (им и пиши значение в props), подпись, смысл, тип с вариантами, ' +
+      'аспекты-носители и сколько записей это свойство уже заполнили. Фильтры: q (слово), ' +
+      'aspect, module, status.',
+    inputJsonSchema: propertyCatalogJsonSchema,
+    kind: 'read',
+    // Карта поверхности владельца целиком — фоновому исполнителю она не адресована (§А9-4)
+    fullScopeOnly: true,
   },
   {
     // Task C4c (03-budget §3.4): импорт инициируется и из чата — тул-аффорданс, чей
@@ -1036,7 +1140,15 @@ const CORE_TOOLS: OrbisToolDef[] = [
 // Динамические attach_* из реестра аспектов (§7.6)
 // ---------------------------------------------------------------------------
 
-/** Строка реестра аспектов в объёме, нужном тулам и карточкам (02 §2.3 keyFields). */
+/**
+ * Строка реестра аспектов в объёме, нужном СЛОЮ ИНСТРУКЦИЙ ПРОМПТА (`llm/context.ts`).
+ *
+ * Реестру тулов и карточкам она больше не нужна: с Задачи 12 они собираются из снимка
+ * `loadRegistry` — того же, по которому валидируется запись. Здесь остался ровно один
+ * читатель — секция «Инструкции активных аспектов»: ей нужны `id` и `aiInstructions`, но не
+ * нужен `ownerId`, а `loadRegistry` без него не зовётся (снимок скоупится и под админским
+ * подключением, где политик RLS нет вовсе).
+ */
 export interface AspectToolRow {
   id: string;
   description: string | null;
@@ -1080,57 +1192,66 @@ export async function loadAspectToolRows(tx: Tx): Promise<AspectToolRow[]> {
   return [...byId.values()];
 }
 
-/** Имя attach-тула (решение 3 плана): «/» и «-» запрещены в именах тулов LLM/MCP. */
-function attachToolName(aspectId: string): string {
-  return `attach_${aspectId.replaceAll('/', '_').replaceAll('-', '_')}`;
-}
-
-function attachToolDef(row: AspectToolRow): OrbisToolDef {
+/**
+ * Определение `attach_<аспект>` — целиком из РЕЕСТРА СВОЙСТВ (§А9-1).
+ *
+ * Что изменилось против прежней сборки и почему это важно: `data` больше не колонка
+ * `aspect_definitions.schema` (старая форма, Р-24), а склейка схем значений тех свойств,
+ * на которые аспект ссылается. Колонка была вторым, независимым описанием тех же полей —
+ * и разъезжалась с реестром ровно там, где реестр и правят.
+ *
+ * Имя — по КЛЮЧУ аспекта через общую `attachToolName`: та же функция называет тул реестру,
+ * диспатчу и исполнителю (см. её докблок в shared).
+ */
+function attachToolDef(aspect: AspectDefinition, reg: RegistrySnapshot): OrbisToolDef {
   return {
-    name: attachToolName(row.id),
-    // §7.6: описание тула — ai_instructions аспекта (fallback — description)
-    description: row.aiInstructions || row.description || '',
-    // Envelope §9.2 {entity_id, data} + JSON Schema аспекта ИЗ БД — модель видит
-    // точную форму data; на исполнении её валидирует стадия 2 executor'а (ajv)
+    name: attachToolName(aspect.key),
+    // §7.6: описание тула — ai_instructions аспекта (fallback — его description в локали)
+    description: aspect.aiInstructions || effectiveLabel(aspect.description, OWNER_LOCALE) || '',
+    // Envelope §9.2 {entity_id, data}: форму `data` даёт эффективный набор аспекта, на
+    // исполнении её проверяет тот же реестр (валидатор записи, §А7-1)
     inputJsonSchema: {
       type: 'object',
       properties: {
         entity_id: { type: 'string', format: 'uuid' },
-        data: row.schema,
+        data: aspectToolJsonSchema(aspect, reg, OWNER_LOCALE),
       },
       required: ['entity_id', 'data'],
       additionalProperties: false,
     },
     kind: 'mutate',
-    aspectId: row.id,
+    aspectId: aspect.id,
   };
 }
 
 /**
- * Сборка реестра из загруженных строк аспектов (синхронная часть — для dispatch).
+ * Сборка реестра из снимка реестров (синхронная часть — для dispatch).
  *
- * Служебные аспекты (`SERVICE_ASPECT_IDS`, сегодня — orbis/agent-run) attach_*-тула НЕ
- * получают: прогон правит только сервер (С5/С7) глаголами orbis_claim_task / orbis_run_step
- * / orbis_checkpoint / orbis_finish. Без attach_*-тула ПРЯМОГО способа править прогон у
- * модели нет; core-тулы (`entity_create`/`entity_update`, `batch_execute`) аспект принимают
- * по-прежнему — их удерживает aiInstructions аспекта, см. «Известные границы» спеки.
- * Фильтр стоит здесь, а не в `loadAspectToolRows`: этим же путём идут `buildToolRegistry`
- * и `scripts/llm-smoke.ts` — отсечение одно на всех потребителей.
+ * СЛУЖЕБНОСТЬ ЧИТАЕТСЯ ИЗ КОЛОНКИ `service` (§А3-1, Р-П-5), а не из списка в коде: список
+ * из одного элемента (`orbis/agent-run`) как раз и заводят особенно охотно, и лежал он до
+ * реформы в трёх копиях (inv §3). Служебный аспект attach_*-тула НЕ получает: прогон правит
+ * только сервер (С5/С7) глаголами orbis_claim_task / orbis_run_step / orbis_checkpoint /
+ * orbis_finish. Прямого способа править прогон у модели без тула нет; core-тулы аспект
+ * принимают по-прежнему — их удерживает `aiInstructions` аспекта («Известные границы» спеки).
+ *
+ * Порядок attach_*-тулов — `rank` аспекта: реестр тулов сравнивается с эталоном
+ * (`registry-golden.test.ts`) как СПИСОК, и порядок, зависящий от порядка строк из БД, делал
+ * бы эталон флаковым.
  */
-export function buildToolDefs(aspectRows: AspectToolRow[]): OrbisToolDef[] {
-  const attachable = aspectRows.filter(
-    (r) => !(SERVICE_ASPECT_IDS as readonly string[]).includes(r.id),
-  );
+export function buildToolDefs(reg: RegistrySnapshot): OrbisToolDef[] {
+  const attachable = [...reg.aspects.values()]
+    .filter((a) => !a.service)
+    .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
   return [
     ...CORE_TOOLS,
     ...AGENT_VERB_TOOLS,
     PROPOSE_TOOL,
     ASK_TOOL,
-    ...attachable.map(attachToolDef),
+    ...attachable.map((a) => attachToolDef(a, reg)),
   ];
 }
 
-/** Собирает реестр: core-тулы §9.2 + attach_<aspect> для каждого активного аспекта (§7.6). */
-export async function buildToolRegistry(tx: Tx): Promise<OrbisToolDef[]> {
-  return buildToolDefs(await loadAspectToolRows(tx));
+/** Собирает реестр: core-тулы §9.2 + attach_<aspect> для каждого неслужебного аспекта (§7.6). */
+export async function buildToolRegistry(tx: Tx, ownerId: string): Promise<OrbisToolDef[]> {
+  return buildToolDefs(await loadRegistry(tx, ownerId));
 }

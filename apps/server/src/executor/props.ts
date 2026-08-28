@@ -38,20 +38,20 @@ export type PropsPatch = {
    * Снятие, порождённое ФОРМОЙ операции, а не намерением: тул `attach_<аспект>` подменяет
    * носитель целиком, и свойство, не пришедшее в его `data`, исчезает само собой.
    *
-   * Производитель у поля РОВНО ОДИН — `legacyReplaceToProps`, и зовёт её только attach-путь
-   * (`prepareAttach`). Вторым был inverse журнала, и его здесь больше нет: с §А7-4 нагрузка
-   * отката говорит свойствами и называет снятие ЯВНЫМ `unset` (поле выше), носителя не
-   * подменяет вовсе — переключатель семантик у `fromLegacyInput` снят вместе с веткой.
-   * То есть поле живёт ради `attach_*`, а не ради отката.
+   * Производитель у поля РОВНО ОДИН — `replaceAspectProps` ниже, и зовёт её только
+   * attach-путь (`prepareAttach`). Вторым был inverse журнала, и его здесь больше нет: с
+   * §А7-4 нагрузка отката говорит свойствами и называет снятие ЯВНЫМ `unset` (поле выше),
+   * носителя не подменяет вовсе — переключатель семантик у `fromLegacyInput` снят вместе с
+   * веткой. То есть поле живёт ради `attach_*`, а не ради отката.
    *
    * Отдельным списком, потому что это разные вещи для ПРАВ записи. «Сотри отчёт прогона» —
    * такое же распоряжение, как «запиши отчёт прогона», и гейт §А2-5 обязан его видеть.
    * А «навесь на транзакцию аспект финансов» распоряжением о `orbis/bank_txn_id` не
    * является вовсе: автор о нём НЕ ГОВОРИЛ — поле просто отсутствует в его `data`.
-   * (Сказать он его, к слову, может: схема `attach_*`-тула генерируется из колонки
-   * `aspect_definitions.schema`, и служебные поля в ней пока есть — вывод их из `attach_*`
-   * по §А2-5 делает Задача 12. Но названное поле доходит до гейта и получает честный
-   * `COMPUTED_WRITE`; здесь речь ровно о НЕназванном.)
+   * (Сказать он его, к слову, может: схема `attach_*`-тула генерируется из ЭФФЕКТИВНОГО
+   * НАБОРА аспекта (§А9-1), и служебные свойства в нём есть — вывод их из `attach_*` по
+   * §А2-5 остаётся за реестром прав, а не за формой тула. Но названное поле доходит до
+   * гейта и получает честный `COMPUTED_WRITE`; здесь речь ровно о НЕназванном.)
    * Слив их в один список, гейт либо пропускал бы стирание служебного значения, либо
    * отказывал бы в законном `attach_orbis_financial` на записи из выписки.
    */
@@ -226,6 +226,115 @@ export function resolvePropertyRef(
     if (byKey === undefined || (byKey.ownerId === null && def.ownerId !== null)) byKey = def;
   }
   return byKey ?? reg.properties.get(keyOrId);
+}
+
+/**
+ * Патч тула `attach_<аспект>` (§А9-1): значения из `data` плюс СНЯТИЕ всего, что аспект
+ * объявляет, а вызывающий не назвал.
+ *
+ * «Не назвал — значит снять» и есть смысл операции: attach ставит носитель ЦЕЛИКОМ. В
+ * старой карте это выходило само собой (ключ аспекта подменялся), в плоской модели снятие
+ * приходится назвать явно — и оно едет в `replaced`, а не в `unset`, потому что порождено
+ * ФОРМОЙ операции, а не намерением автора (разбор — в докблоке `PropsPatch`).
+ *
+ * НЕ снимаются свойства, объявленные ДРУГИМ аспектом, который на записи остаётся: слитое
+ * свойство (В1: `orbis/finance_category` носят и финансы, и бюджет) принадлежит обоим, и
+ * снять его вместе с одним носителем значило бы стереть данные второго.
+ *
+ * Ключи `data` — `key` свойства или его id: резолв один и тот же на всех границах входа
+ * (`resolvePropertyRef`). Неизвестный адрес уезжает КАК ПРИШЁЛ — отказ по свойству называет
+ * валидатор записи (`UNKNOWN_PROPERTY`), и подменять здесь имя значило бы прятать опечатку.
+ */
+export function replaceAspectProps(
+  reg: RegistrySnapshot,
+  cur: EntityState,
+  aspectId: string,
+  data: Record<string, unknown>,
+): PropsPatch {
+  const set: Record<string, unknown> = {};
+  for (const [keyOrId, value] of Object.entries(data)) {
+    set[resolvePropertyRef(reg, keyOrId)?.id ?? keyOrId] = value;
+  }
+  const remaining = new Set([...cur.aspects, aspectId]);
+  const replaced: string[] = [];
+  for (const ref of reg.aspects.get(aspectId)?.properties ?? []) {
+    if (Object.hasOwn(set, ref.propertyId)) continue;
+    const sharedWithOther = [...remaining].some(
+      (other) =>
+        other !== aspectId &&
+        (reg.aspects.get(other)?.properties ?? []).some((r) => r.propertyId === ref.propertyId),
+    );
+    if (sharedWithOther) continue;
+    replaced.push(ref.propertyId);
+  }
+  return { set, unset: [], replaced, attach: [aspectId], detach: [] };
+}
+
+/**
+ * Аспекты-НОСИТЕЛИ свойства: кто его объявляет (§А3-1). Пусто — свойство свободное (§А1-2).
+ *
+ * ОДНА функция на всех серверных потребителей: каталог свойств (`usage.aspects`) и запрет
+ * по объекту в предложении рутины (аспект, названный не именем, а своим полем). Второй
+ * обход тех же ссылок разошёлся бы с первым молча — ровно тот класс, из-за которого список
+ * служебных аспектов до реформы лежал в трёх копиях (inv §3).
+ *
+ * Порядок — `rank` аспекта: снимок собран запросом с `ORDER BY owner_id`, то есть порядок
+ * строк БД внутри половины реестра не гарантирован, и выдача плавала бы между вызовами.
+ */
+export function carrierAspects(reg: RegistrySnapshot, propertyId: string): string[] {
+  return [...reg.aspects.values()]
+    .filter((a) => a.properties.some((r) => r.propertyId === propertyId))
+    .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key))
+    .map((a) => a.id);
+}
+
+/**
+ * Расстояние Левенштейна с потолком: за `cap` не считаем — результат всё равно не подойдёт,
+ * а без потолка обход всех ключей реестра стоил бы квадрата на каждой опечатке.
+ */
+function editDistance(a: string, b: string, cap: number): number {
+  if (Math.abs(a.length - b.length) > cap) return cap + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const value = Math.min(
+        (prev[j] as number) + 1,
+        (row[j - 1] as number) + 1,
+        (prev[j - 1] as number) + cost,
+      );
+      row.push(value);
+      if (value < best) best = value;
+    }
+    if (best > cap) return cap + 1; // вся строка уже дальше потолка — дальше не считаем
+    prev = row;
+  }
+  return prev[b.length] as number;
+}
+
+/**
+ * Ближайший по написанию `key` реестра — подсказка к отказу «такого свойства нет» (§А9-1).
+ *
+ * Зачем она вообще. Модель адресует свойство ИМЕНЕМ, и её типичная ошибка — не выдумка, а
+ * промах на символ (`orbis/amout`, `orbis/task_state`). Отказ, который повторяет ей её же
+ * опечатку, самокоррекции не даёт: следующий вызов будет с тем же именем.
+ *
+ * Потолок расстояния — четверть длины и не меньше единицы. Он и есть граница между
+ * «опечатка» и «другое слово»: без потолка на `user/сон` нашёлся бы `orbis/amount`, и
+ * подсказка уводила бы в сторону увереннее, чем молчание. Из равных побеждает первый в
+ * ПОРЯДКЕ РЕЕСТРА (rank объявления) — иначе подсказка плавала бы между вызовами.
+ */
+export function nearestPropertyKey(reg: RegistrySnapshot, keyOrId: string): string | undefined {
+  const cap = Math.max(1, Math.floor(keyOrId.length / 4));
+  let best: { key: string; distance: number } | undefined;
+  for (const def of reg.properties.values()) {
+    const distance = editDistance(keyOrId.toLowerCase(), def.key.toLowerCase(), cap);
+    if (distance > cap) continue;
+    if (best === undefined || distance < best.distance) best = { key: def.key, distance };
+  }
+  return best?.key;
 }
 
 /**

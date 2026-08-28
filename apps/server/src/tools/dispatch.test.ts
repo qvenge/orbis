@@ -79,10 +79,26 @@ function expectError(r: Awaited<ReturnType<typeof dispatchTool>>, code: string):
   if (r.status === 'error') expect(r.error.code).toBe(code);
 }
 
+/** Новая правда строки (§А1-1) под identity владельца: значения по id свойства. */
+async function propsOfRowA(id: string, owner = userA): Promise<Record<string, unknown>> {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.select({ props: entities.props }).from(entities).where(eq(entities.id, id)),
+  );
+  return (rows[0]?.props ?? {}) as Record<string, unknown>;
+}
+
+/** Список интерпретаций строки — вторая половина новой правды. */
+async function aspectsOfRowA(id: string, owner = userA): Promise<string[]> {
+  const rows = await withIdentity(db, owner, (tx) =>
+    tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, id)),
+  );
+  return rows[0]?.aspects ?? [];
+}
+
 beforeAll(async () => {
   await truncateAll();
-  // Кастомный аспект userA с «-» в id: реестр публикует attach_user_sleep_log,
-  // executor ждёт attach_user_sleep-log — тесты маппинга (одиночный и в batch)
+  // Кастомный аспект userA с «-» в ключе: на нём видно, что имя тула ОДНО у реестра,
+  // диспатча и исполнителя (§А9-1) — прежде нормализаций было две.
   await seedCustomAspect(userA, {
     key: 'user/sleep-log',
     label: { ru: 'Сон', en: 'Sleep Log' },
@@ -118,7 +134,8 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     const r = await dispatchTool(ctxFor({ threadId }), 'entity_create', {
       title: 'Тестовая задача',
       tags: ['dispatch'],
-      aspects: { 'orbis/task': { status: 'inbox' } },
+      props: { 'orbis/task_status': 'inbox' },
+      aspects: ['orbis/task'],
     });
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
@@ -126,13 +143,14 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     expect(e.title).toBe('Тестовая задача');
     expect(e.createdAt).toBe(T0.toISOString());
 
-    // карточка (02 §2.3): keyFields по viewConfig аспекта (status/due_date/priority → только status)
+    // Карточка (02 §2.3): keyFields — id СВОЙСТВ из viewConfig аспекта (§А9-2, Задача 12);
+    // из трёх ключевых заполнено только состояние.
     expect(r.card).toEqual({
       kind: 'entity_card',
       entityId: e.id,
       title: 'Тестовая задача',
       aspects: ['orbis/task'],
-      keyFields: { status: 'inbox' },
+      keyFields: { 'orbis/task_status': 'inbox' },
       undoActionId: expect.any(String),
     });
 
@@ -147,19 +165,21 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     if (r.card?.kind === 'entity_card') expect(action?.id).toBe(r.card.undoActionId as string);
   });
 
-  // Проба расхождением колонок (§А1-1) для КАРТОЧКИ: список её аспектов читается из новой
-  // правды (`e.aspects`), а значения `keyFields` — из проекции, и это разные вещи по
-  // причине, а не по недосмотру (см. докблок `entityCard`). Разводит колонки админ-DSN
+  // Проба расхождением колонок (§А1-1) для КАРТОЧКИ. До Задачи 12 её половины читались из
+  // РАЗНЫХ колонок: список аспектов — из новой правды, значения `keyFields` — из старой
+  // проекции. Теперь обе читаются из новой (`aspects[]` и `props`), и проба проверяет
+  // именно это: опустевшая проекция карточку НЕ трогает вовсе. Разводит колонки админ-DSN
   // мимо исполнителя; единственный путь, читающий такую строку и НИЧЕГО в ней не
   // переписывающий, — идемпотентный replay одиночного `entity_create` (стадия 3 отдаёт
   // `toWire` прочитанной строки).
-  test('карточка перечисляет аспекты новой правдой: replay по разошедшейся строке всё равно называет аспект', async () => {
+  test('карточка читает ТОЛЬКО новую правду: опустевшая проекция не меняет ни аспектов, ни keyFields', async () => {
     const id = newId();
     const input = {
       id,
       title: 'Задача с расхождением колонок',
       tags: [],
-      aspects: { 'orbis/task': { status: 'inbox' } },
+      props: { 'orbis/task_status': 'inbox' },
+      aspects: ['orbis/task'],
     };
     const first = await dispatchTool(ctxFor(), 'entity_create', input);
     expect(first.status).toBe('ok');
@@ -167,7 +187,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
       throw new Error('ожидалась карточка сущности');
     }
     expect(first.card.aspects).toEqual(['orbis/task']);
-    expect(first.card.keyFields).toEqual({ status: 'inbox' });
+    expect(first.card.keyFields).toEqual({ 'orbis/task_status': 'inbox' });
 
     const { db: admin, client: adminClient } = adminDb();
     try {
@@ -189,12 +209,23 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     if (replay.status !== 'ok' || replay.card?.kind !== 'entity_card') {
       throw new Error('ожидалась карточка сущности');
     }
-    // Список аспектов пережил опустевшую проекцию — читается `aspects[]`.
+    // Обе половины пережили опустевшую проекцию: список — из `aspects[]`, значения — из
+    // `props`. Именно вторая строка и есть перевод Задачи 12: до неё она была бы `{}`.
     expect(replay.card.aspects).toEqual(['orbis/task']);
-    // …а `keyFields` на той же строке пусты: они и есть та половина карточки, что осталась
-    // на проекции (контракт карточки, перевод — Задача 13c). Заодно это доказывает, что
-    // правка колонок ДЕЙСТВИТЕЛЬНО состоялась.
-    expect(replay.card.keyFields).toEqual({});
+    expect(replay.card.keyFields).toEqual({ 'orbis/task_status': 'inbox' });
+
+    // Подтверждение, что правка колонок ДЕЙСТВИТЕЛЬНО состоялась и проба не вакуумна:
+    // проекция на строке пуста, а карточка выше её содержимое всё равно назвала.
+    const { db: check, client: checkClient } = adminDb();
+    try {
+      const after = await check
+        .select({ aspectsLegacy: entities.aspectsLegacy })
+        .from(entities)
+        .where(eq(entities.id, id));
+      expect(after[0]?.aspectsLegacy).toEqual({});
+    } finally {
+      await checkClient.end();
+    }
   });
 
   // V1.5: прогон — вторая половина атрибуции. Без него правка модели неотличима от
@@ -225,7 +256,7 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
 
     const r = await dispatchTool(ctxFor(), 'attach_orbis_task', {
       entity_id: target.id,
-      data: { status: 'in_progress', priority: 'high' },
+      data: { 'orbis/task_status': 'in_progress', 'orbis/priority': 'high' },
     });
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
@@ -233,7 +264,10 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     expect(e.aspectsMap['orbis/task']).toEqual({ status: 'in_progress', priority: 'high' });
     expect(r.card?.kind).toBe('entity_card');
     if (r.card?.kind === 'entity_card') {
-      expect(r.card.keyFields).toEqual({ status: 'in_progress', priority: 'high' });
+      expect(r.card.keyFields).toEqual({
+        'orbis/task_status': 'in_progress',
+        'orbis/priority': 'high',
+      });
       expect(r.card.undoActionId).toBeDefined();
     }
 
@@ -263,18 +297,28 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     expectError(bad, 'VALIDATION');
   });
 
-  test('attach_* кастомного аспекта с «-» в id: имя реестра мапится в executor-форму через aspectId', async () => {
-    // Реестр: attach_user_sleep_log («-» → «_»); executor ждёт attach_user_sleep-log
-    // (замена только «/») — без маппинга по aspectId вызов не резолвился бы (решение 3)
+  test('attach_* кастомного аспекта с «-» в ключе: имя ОДНО у реестра, диспатча и исполнителя (§А9-1)', async () => {
+    // До Задачи 12 нормализаций было две: реестр показывал `attach_user_sleep_log`, а
+    // исполнитель ждал `attach_user_sleep-log` (замена только «/»), и держал их вместе
+    // переводчик в диспатче. Дефис в ключе — единственное место, где они расходились.
     const target = await seedEntity(userA, { title: 'Сон', tags: [] });
     const r = await dispatchTool(ctxFor(), 'attach_user_sleep_log', {
       entity_id: target.id,
-      data: { hours: 7.5 },
+      data: { 'user/hours': 7.5 },
     });
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
-    expect((r.result as WireEntity).aspectsMap['user/sleep-log']).toEqual({ hours: 7.5 });
-    if (r.card?.kind === 'entity_card') expect(r.card.keyFields).toEqual({ hours: 7.5 });
+    expect((r.result as WireEntity).props['user/hours']).toBe(7.5);
+    expect((r.result as WireEntity).aspects).toContain('user/sleep-log');
+    if (r.card?.kind === 'entity_card') expect(r.card.keyFields).toEqual({ 'user/hours': 7.5 });
+    // Прежнего имени исполнительной формы больше не существует: диспатч ничего не переводит.
+    expectError(
+      await dispatchTool(ctxFor(), 'attach_user_sleep-log', {
+        entity_id: target.id,
+        data: { 'user/hours': 8 },
+      }),
+      'FORBIDDEN_LEVEL',
+    );
   });
 
   test('batch_execute: атомарная группа исполняется, results по операциям, один audit-action типа batch', async () => {
@@ -297,21 +341,22 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
   });
 
   test('batch_execute: вложенный attach по ПУБЛИЧНОМУ имени реестра (дефисный кастомный аспект) → успех', async () => {
-    // fix round: operations[].tool приходят в реестровых именах — dispatch обязан
-    // транслировать их в executor-форму так же, как top-level вызов (через aspectId)
+    // Имя операции — реестровое, и с Задачи 12 оно же исполнительное (§А9-1): переводить
+    // нечего, диспатч только проверяет, что тул в реестре есть.
     const id = newId();
     const r = await dispatchTool(ctxFor(), 'batch_execute', {
       batch_id: newId(),
       operations: [
         { tool: 'entity_create', input: { id, title: 'batch + attach', tags: [] } },
-        { tool: 'attach_user_sleep_log', input: { entity_id: id, data: { hours: 6 } } },
+        { tool: 'attach_user_sleep_log', input: { entity_id: id, data: { 'user/hours': 6 } } },
       ],
     });
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
     const results = r.result as WireEntity[];
     expect(results.length).toBe(2);
-    expect(results[1]?.aspectsMap['user/sleep-log']).toEqual({ hours: 6 });
+    expect(results[1]?.props['user/hours']).toBe(6);
+    expect(results[1]?.aspects).toContain('user/sleep-log');
   });
 
   test('batch_execute: неизвестное имя операции → структурная VALIDATION с индексом элемента', async () => {
@@ -326,6 +371,183 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     if (r.status === 'error') {
       expect((r.error.details as { index: number; tool: string }).index).toBe(1);
       expect((r.error.details as { index: number; tool: string }).tool).toBe('no_such_tool');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Модель-обращённая поверхность (§А9-1/§А9-2, приёмка §С8-2): контракты тулов говорят
+// свойствами по `key`, проекция ответа — тоже, старой карты и `meta` в них больше нет.
+// ---------------------------------------------------------------------------
+
+describe('LLM-контракты entity_create/entity_update на свойствах (§А9-1)', () => {
+  test('entity_create: props по key И по id, аспект списком; неизвестный key → VALIDATION с подсказкой', async () => {
+    const r = await dispatchTool(ctxFor(), 'entity_create', {
+      title: 'Такси до аэропорта',
+      tags: [],
+      // ОБЕ стороны границы в одной фикстуре: два свойства адресованы `key`, третье — id
+      // (у встроенных они совпадают, но резолв обязан принимать оба — §А9-1).
+      props: {
+        'orbis/amount': '10.00',
+        'orbis/direction': 'expense',
+        'orbis/occurred_on': '2026-07-04',
+        'orbis/finance_category': CATEGORY_REF,
+      },
+      aspects: ['orbis/financial'],
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    const created = r.result as WireEntity;
+    // В СТРОКЕ значения лежат по id свойства (§А1-1), а не по имени поля аспекта. Набор
+    // ТОЧНЫЙ: доменный инвариант финансов (`occurred_on` обязателен у факта) прошёл — то
+    // есть вход доехал до конца конвейера записи, а не остановился на схеме.
+    expect(await propsOfRowA(created.id)).toEqual({
+      'orbis/amount': '10.00',
+      'orbis/direction': 'expense',
+      'orbis/occurred_on': '2026-07-04',
+      'orbis/finance_category': CATEGORY_REF,
+    });
+    expect(await aspectsOfRowA(created.id)).toEqual(['orbis/financial']);
+
+    // Неизвестный адрес отвергается НА ГРАНИЦЕ и с подсказкой ближайшего ключа.
+    const typo = await dispatchTool(ctxFor(), 'entity_create', {
+      title: 'Опечатка в имени свойства',
+      tags: [],
+      props: { 'orbis/amout': '10.00' },
+    });
+    expectError(typo, 'VALIDATION');
+    if (typo.status !== 'error') return;
+    const details = typo.error.details as { reason?: string; property?: string; nearest?: string };
+    expect(details.reason).toBe('UNKNOWN_PROPERTY');
+    expect(details.property).toBe('orbis/amout');
+    expect(details.nearest).toBe('orbis/amount');
+    expect(typo.error.message).toContain('orbis/amount');
+
+    // Далёкое имя подсказки НЕ получает: «похоже» — это опечатка, а не другое слово.
+    const foreign = await dispatchTool(ctxFor(), 'entity_create', {
+      title: 'Совсем чужое имя',
+      tags: [],
+      props: { 'user/выдуманное-поле': 1 },
+    });
+    expectError(foreign, 'VALIDATION');
+    if (foreign.status === 'error') {
+      expect((foreign.error.details as { nearest?: string }).nearest).toBeUndefined();
+    }
+  });
+
+  test('entity_update: unset снимает значение, aspects.detach снимает аспект — значения остаются (Р9)', async () => {
+    const target = await seedEntity(userA, {
+      title: 'Задача с ожиданием',
+      tags: [],
+      aspects: { 'orbis/task': { status: 'waiting', waiting_for: 'ответа банка' } },
+    });
+    expect((await propsOfRowA(target.id))['orbis/waiting_for']).toBe('ответа банка');
+
+    const unset = await dispatchTool(ctxFor(), 'entity_update', {
+      id: target.id,
+      unset: ['orbis/waiting_for'],
+    });
+    expect(unset.status).toBe('ok');
+    const afterUnset = await propsOfRowA(target.id);
+    expect(afterUnset['orbis/waiting_for']).toBeUndefined();
+    // Снялось РОВНО названное: соседнее свойство того же аспекта на месте.
+    expect(afterUnset['orbis/task_status']).toBe('waiting');
+
+    // Снятие аспекта значения НЕ трогает (Р9): аспект — не владелец поля.
+    const detach = await dispatchTool(ctxFor(), 'entity_update', {
+      id: target.id,
+      aspects: { detach: ['orbis/task'] },
+    });
+    expect(detach.status).toBe('ok');
+    expect(await aspectsOfRowA(target.id)).toEqual([]);
+    expect((await propsOfRowA(target.id))['orbis/task_status']).toBe('waiting');
+
+    // …и обратно: attach возвращает интерпретацию, значения при этом не переписывая.
+    const attach = await dispatchTool(ctxFor(), 'entity_update', {
+      id: target.id,
+      aspects: { attach: ['orbis/task'] },
+    });
+    expect(attach.status).toBe('ok');
+    expect(await aspectsOfRowA(target.id)).toEqual(['orbis/task']);
+    expect((await propsOfRowA(target.id))['orbis/task_status']).toBe('waiting');
+  });
+
+  test('meta и старая карта аспектов в LLM-туле → VALIDATION; UI-роутер старую карту ПРИНИМАЕТ (до 13c)', async () => {
+    const target = await seedEntity(userA, { title: 'Цель старой формы', tags: [] });
+    // `additionalProperties: false` контракта тула: мешка `meta` больше нет вовсе (§А1-3).
+    expectError(
+      await dispatchTool(ctxFor(), 'entity_create', {
+        title: 'С мешком',
+        tags: [],
+        meta: { amount: '500.00', direction: 'expense' },
+      }),
+      'VALIDATION',
+    );
+    expectError(
+      await dispatchTool(ctxFor(), 'entity_update', {
+        id: target.id,
+        aspects: { 'orbis/task': { status: 'done' } },
+      }),
+      'VALIDATION',
+    );
+
+    // …а надмножество tRPC-роутера старую карту принимает: web переводится Задачей 13c,
+    // и до неё владелец обязан править свои записи из UI.
+    const viaUi = await execute(db, {
+      actorUserId: userA,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: target.id, aspects: { 'orbis/task': { status: 'done' } } },
+        },
+      ],
+    });
+    expect(viaUi.ok).toBe(true);
+    expect((await propsOfRowA(target.id))['orbis/task_status']).toBe('done');
+  });
+
+  test('entity_query печатает props по KEY, без meta и без карты аспектов (§А9-2)', async () => {
+    const owner = freshUserId();
+    // Обе стороны границы в фикстуре: встроенное свойство (key = id) и СВОЁ, у которого
+    // key и id РАЗНЫЕ, — только на втором видно, что печатается именно key.
+    const admin = adminDb();
+    try {
+      await admin.db.execute(sql`
+        INSERT INTO property_definitions
+          (id, owner_id, key, label, description, type, status, storage, rank, flags)
+        VALUES ('user/p-mood', ${owner}, 'user/mood',
+                ${JSON.stringify({ ru: 'Настроение' })}::jsonb,
+                ${JSON.stringify({ ru: 'Как прошёл день' })}::jsonb,
+                ${JSON.stringify({ kind: 'number' })}::jsonb, 'active', 'props', 300, '{}'::jsonb)
+        ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO NOTHING`);
+    } finally {
+      await admin.client.end();
+    }
+    const created = await seedEntity(owner, {
+      title: 'День с настроением',
+      tags: ['llm-projection'],
+      props: { 'orbis/task_status': 'inbox', 'user/p-mood': 8 },
+      aspects: ['orbis/task'],
+    });
+
+    const r = await dispatchTool(ctxFor({ actorUserId: owner }), 'entity_query', {
+      query: 'tags=llm-projection',
+    });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    const rows = r.result as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    const row = rows[0] as Record<string, unknown>;
+    expect(row.props).toEqual({ 'orbis/task_status': 'inbox', 'user/mood': 8 });
+    // Внутренний id пользовательского свойства до модели НЕ доезжает (Р12).
+    expect(Object.keys(row.props as object)).not.toContain('user/p-mood');
+    expect(row.aspects).toEqual(['orbis/task']);
+    expect(row.id).toBe(created.id);
+    // Ни мешка, ни старой карты, ни служебных полей внутреннего wire.
+    for (const gone of ['meta', 'aspectsMap', 'ownerId', 'queryRefs']) {
+      expect(`${gone}: ${gone in row}`).toBe(`${gone}: false`);
     }
   });
 });
@@ -1204,7 +1426,7 @@ describe('dispatchTool: скоуп worker — fail-closed гейт доступ�
   test('worker: entity_update / attach_orbis_task / batch_execute → FORBIDDEN_LEVEL, ничего не записано', async () => {
     const calls: Array<[string, Record<string, unknown>]> = [
       ['entity_update', { id: ticket.id, aspects: { 'orbis/task': { status: 'done' } } }],
-      ['attach_orbis_task', { entity_id: ticket.id, data: { status: 'done' } }],
+      ['attach_orbis_task', { entity_id: ticket.id, data: { 'orbis/task_status': 'done' } }],
       [
         'batch_execute',
         {
@@ -1601,6 +1823,18 @@ describe('V1: выдача автономии рутине из чата → pen
     ...over,
   });
 
+  /**
+   * Та же рутина, но СВОЙСТВАМИ (§А9-1) — форма, которой говорят тулы: `props` у
+   * create/update и `data` у `attach_*`. Старая карта выше осталась ровно у фикстур
+   * `seedEntity`: они идут через `execute`, а exec-надмножество принимает обе формы.
+   */
+  const routineProps = (over: Record<string, unknown> = {}) => ({
+    'orbis/routine_stage': 'active',
+    'orbis/routine_at': '07:00',
+    'orbis/routine_mode': 'propose',
+    ...over,
+  });
+
   /** Список аспектов строки (§А1-1): «право писать в граф не выдано» — это пустой список. */
   async function aspectsOfRow(id: string): Promise<string[]> {
     const rows = await withIdentity(db, userA, (tx) =>
@@ -1624,7 +1858,7 @@ describe('V1: выдача автономии рутине из чата → pen
 
     const r = await dispatchTool(ctxFor({ threadId }), 'attach_orbis_routine', {
       entity_id: target.id,
-      data: routine({ mode: 'act' }),
+      data: routineProps({ 'orbis/routine_mode': 'act' }),
     });
     expect(r.status).toBe('pending_confirmation');
     if (r.status !== 'pending_confirmation') return;
@@ -1708,8 +1942,9 @@ describe('V1: выдача автономии рутине из чата → pen
     });
     const upd = await dispatchTool(ctxFor(), 'entity_update', {
       id: target.id,
-      aspects: {
-        'orbis/routine': { mode: 'act', allowed_tools: ['entity_update', 'thread_post'] },
+      props: {
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update', 'thread_post'],
       },
     });
     expect(upd.status).toBe('pending_confirmation');
@@ -1722,7 +1957,11 @@ describe('V1: выдача автономии рутине из чата → pen
     const created = await dispatchTool(ctxFor(), 'entity_create', {
       title: 'Ночной сбор',
       tags: [],
-      aspects: { 'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_create'] }) },
+      props: routineProps({
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_create'],
+      }),
+      aspects: ['orbis/routine'],
     });
     expect(created.status).toBe('pending_confirmation');
     if (created.status !== 'pending_confirmation') return;
@@ -1736,7 +1975,7 @@ describe('V1: выдача автономии рутине из чата → pen
         { tool: 'entity_update', input: { id: target.id, title: 'Переименовано' } },
         {
           tool: 'entity_update',
-          input: { id: target.id, aspects: { 'orbis/routine': { allowed_tools: [] } } },
+          input: { id: target.id, props: { 'orbis/allowed_tools': [] } },
         },
       ],
     });
@@ -1756,7 +1995,7 @@ describe('V1: выдача автономии рутине из чата → pen
 
     const r = await dispatchTool(ctxFor(), 'entity_update', {
       id: target.id,
-      aspects: { 'orbis/routine': { mode: 'act' } },
+      props: { 'orbis/routine_mode': 'act' },
     });
     expect(r.status).toBe('pending_confirmation');
     expect((await propsOfRow(target.id))['orbis/routine_mode']).toBe('propose');
@@ -1767,7 +2006,7 @@ describe('V1: выдача автономии рутине из чата → pen
 
     const r = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
       entity_id: target.id,
-      data: routine(),
+      data: routineProps(),
     });
     expect(r.status).toBe('ok');
     expect((await propsOfRow(target.id))['orbis/routine_mode']).toBe('propose');
@@ -1825,7 +2064,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
 
     // orbis_propose — единственная мутация, открытая режиму propose: гейт его пропускает
     // (поведение самого глагола закрыто routines/propose.test.ts)
-    const defs = await withIdentity(db, userA, (tx) => buildToolRegistry(tx));
+    const defs = await withIdentity(db, userA, (tx) => buildToolRegistry(tx, userA));
     const propose = defs.find((d) => d.name === 'orbis_propose');
     expect(propose).toBeDefined();
     if (propose !== undefined) expect(routineGate(propose, ctx)).toBeNull();
@@ -1841,7 +2080,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
 
     const ok = await dispatchTool(ctx, 'entity_update', {
       id: target.id,
-      aspects: { 'orbis/task': { status: 'in_progress' } },
+      props: { 'orbis/task_status': 'in_progress' },
     });
     expect(ok.status).toBe('ok');
 
@@ -1853,7 +2092,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     expectError(
       await dispatchTool(ctx, 'attach_orbis_task', {
         entity_id: target.id,
-        data: { status: 'done' },
+        data: { 'orbis/task_status': 'done' },
       }),
       'FORBIDDEN_LEVEL',
     );
@@ -1899,7 +2138,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
   });
 
   test('routineOnly-тул от chat|mcp → VALIDATION; обычный тул гейт не трогает', async () => {
-    const defs = await withIdentity(db, userA, (tx) => buildToolRegistry(tx));
+    const defs = await withIdentity(db, userA, (tx) => buildToolRegistry(tx, userA));
     // routineOnly-дефы продового реестра — orbis_propose (V1.6) и orbis_ask (D42 ОЧ.12).
     // Правило проверяется на них же, а не на подложенном объекте: гейт, отделённый от
     // реестра, однажды разойдётся с ним молча. Пометка именно routineOnly, а не agentOnly:
@@ -1944,7 +2183,11 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
   });
 
   /** Рутина в минимальной валидной форме (V1.1) — автономии не выдаёт (mode propose). */
-  const ROUTINE_DATA = { stage: 'active', at: '07:00', mode: 'propose' };
+  const ROUTINE_DATA = {
+    'orbis/routine_stage': 'active',
+    'orbis/routine_at': '07:00',
+    'orbis/routine_mode': 'propose',
+  };
 
   /**
    * Сколько живых рутин у владельца — ТЕМ ЖЕ условием, что считает гейт лимита
@@ -1992,7 +2235,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
       (
         await dispatchTool(oneRoutine, 'attach_orbis_routine', {
           entity_id: first.id,
-          data: { ...ROUTINE_DATA, at: '08:00' },
+          data: { ...ROUTINE_DATA, 'orbis/routine_at': '08:00' },
         })
       ).status,
     ).toBe('ok');
@@ -2053,7 +2296,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
       (
         await dispatchTool(oneRoutine, 'attach_orbis_routine', {
           entity_id: ghostRoutine,
-          data: { ...ROUTINE_DATA, at: '08:00' },
+          data: { ...ROUTINE_DATA, 'orbis/routine_at': '08:00' },
         })
       ).status,
     ).toBe('ok');
@@ -2070,7 +2313,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     });
     const create = (title: string) => ({
       tool: 'entity_create',
-      input: { title, tags: [], aspects: { 'orbis/routine': ROUTINE_DATA } },
+      input: { title, tags: [], props: ROUTINE_DATA, aspects: ['orbis/routine'] },
     });
 
     expectError(
@@ -2122,7 +2365,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
 
     const forged = await dispatchTool(ctx, 'entity_update', {
       id: runId,
-      aspects: { 'orbis/agent-run': { reply: { text: 'да', at: T0.toISOString() } } },
+      props: { 'orbis/run_reply': { text: 'да', at: T0.toISOString() } },
     });
     expectError(forged, 'FORBIDDEN_LEVEL');
     if (forged.status === 'error') {
@@ -2130,7 +2373,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
     }
     const closed = await dispatchTool(ctx, 'entity_update', {
       id: runId,
-      aspects: { 'orbis/agent-run': { outcome: 'finished' } },
+      props: { 'orbis/run_outcome': 'finished' },
     });
     expectError(closed, 'FORBIDDEN_LEVEL');
     const run = await propsOf(userA, runId);
@@ -2228,14 +2471,18 @@ describe('объектный пре-чек рутинной мутации (D42 
     expectPrecheckDenial(
       await dispatchTool(ctx, 'entity_update', {
         id: other,
-        aspects: { 'orbis/routine': { mode: 'act' } },
+        props: { 'orbis/routine_mode': 'act' },
       }),
       'выдача автономии',
     );
     expectPrecheckDenial(
       await dispatchTool(ctx, 'attach_orbis_routine', {
         entity_id: plain.id,
-        data: { stage: 'active', at: '07:00', mode: 'act' },
+        data: {
+          'orbis/routine_stage': 'active',
+          'orbis/routine_at': '07:00',
+          'orbis/routine_mode': 'act',
+        },
       }),
       'выдача автономии',
     );
@@ -2243,7 +2490,12 @@ describe('объектный пре-чек рутинной мутации (D42 
       await dispatchTool(ctx, 'entity_create', {
         title: 'Рутина руками рутины',
         tags: [],
-        aspects: { 'orbis/routine': { stage: 'active', at: '07:00', mode: 'act' } },
+        props: {
+          'orbis/routine_stage': 'active',
+          'orbis/routine_at': '07:00',
+          'orbis/routine_mode': 'act',
+        },
+        aspects: ['orbis/routine'],
       }),
       'выдача автономии',
     );
@@ -2486,7 +2738,7 @@ describe('отложка небезопасного действия рутин�
       tags: [],
       aspects: { 'orbis/task': { status: 'inbox' } },
     });
-    const call = { id: target.id, archived: true, aspects: { 'orbis/task': { status: 'done' } } };
+    const call = { id: target.id, archived: true, props: { 'orbis/task_status': 'done' } };
 
     const first = await dispatchTool(ctx, 'entity_update', call);
     expect(first.status).toBe('pending_confirmation');
@@ -2522,8 +2774,9 @@ describe('отложка небезопасного действия рутин�
     // Карточка ретрая — тоже исходная, со «было» первой попытки
     expect(again.card).toEqual(first.card);
     if (again.card.kind !== 'deferred_action_card') return;
+    // Строка адресуется СВОЙСТВОМ (§А1-1): ключа `aspect` у неё больше нет.
     expect(again.card.rows).toEqual([
-      { aspect: 'orbis/task', field: 'status', before: 'inbox', after: 'done' },
+      { field: 'orbis/task_status', before: 'inbox', after: 'done' },
       { field: 'archived', before: 'false', after: 'true' },
     ]);
   });

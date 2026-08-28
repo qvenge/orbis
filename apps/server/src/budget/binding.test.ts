@@ -97,6 +97,25 @@ function budgetData(
   };
 }
 
+/**
+ * Тот же конверт СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). Старая карта выше осталась
+ * у фикстур `entity_create`/`entity_update` через `execute`: exec-надмножество принимает обе.
+ */
+function budgetProps(
+  categoryRef: string,
+  periodStart: string,
+  periodEnd: string,
+  over: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    'orbis/finance_category': categoryRef,
+    'orbis/limit': '30000.00',
+    'orbis/period_start': periodStart,
+    'orbis/period_end': periodEnd,
+    ...over,
+  };
+}
+
 /** Транзакция (orbis/financial). */
 function finData(
   categoryRef: string,
@@ -704,7 +723,7 @@ describe('уникальность конверта: (category_ref, currency, pe
         db,
         req(user, 'attach_orbis_budget', {
           entity_id: x.id,
-          data: budgetData(cat, '2026-07-01', '2026-07-31'),
+          data: budgetProps(cat, '2026-07-01', '2026-07-31'),
         }),
         { sink },
       ),
@@ -822,8 +841,8 @@ describe('конверсия транзакции в recurring-шаблон сн
         req(user, 'attach_orbis_schedule', {
           entity_id: txnId,
           data: {
-            start_at: '2026-07-05T09:00:00.000Z',
-            recurrence: { freq: 'monthly', interval: 1 },
+            'orbis/start_at': '2026-07-05T09:00:00.000Z',
+            'orbis/recurrence': { freq: 'monthly', interval: 1 },
           },
         }),
         { sink },
@@ -1018,7 +1037,7 @@ describe('транзакция, ставшая конвертом: селект�
         db,
         req(user, 'attach_orbis_budget', {
           entity_id: txn.id,
-          data: budgetData(cat, '2026-07-01', '2026-07-31'),
+          data: budgetProps(cat, '2026-07-01', '2026-07-31'),
         }),
         { sink },
       ),
@@ -1048,7 +1067,7 @@ describe('транзакция, ставшая конвертом: селект�
         db,
         req(user, 'attach_orbis_budget', {
           entity_id: txn.id,
-          data: budgetData(cat, '2026-07-10', '2026-07-14'),
+          data: budgetProps(cat, '2026-07-10', '2026-07-14'),
         }),
         { sink },
       ),
@@ -1070,7 +1089,7 @@ describe('транзакция, ставшая конвертом: селект�
         db,
         req(user, 'attach_orbis_budget', {
           entity_id: txn.id,
-          data: budgetData(cat, '2026-07-10', '2026-07-14'),
+          data: budgetProps(cat, '2026-07-10', '2026-07-14'),
         }),
         { sink },
       ),
@@ -1170,7 +1189,7 @@ describe('хук привязки и живое parent-ребро той же п
         db,
         req(user, 'attach_orbis_budget', {
           entity_id: x.id,
-          data: budgetData(cat, '2026-07-01', '2026-07-31'),
+          data: budgetProps(cat, '2026-07-01', '2026-07-31'),
         }),
         { sink },
       ),
@@ -1367,8 +1386,8 @@ describe('хук привязки и живое parent-ребро той же п
         req(user, 'attach_orbis_schedule', {
           entity_id: txn.id,
           data: {
-            start_at: '2026-07-12T10:00:00+03:00',
-            recurrence: { freq: 'monthly', interval: 1 },
+            'orbis/start_at': '2026-07-12T10:00:00+03:00',
+            'orbis/recurrence': { freq: 'monthly', interval: 1 },
           },
         }),
         { sink },

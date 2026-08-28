@@ -307,7 +307,7 @@ async function runAgentLoop(
       // списания обязаны считаться от одного момента, а не от двух разных
       clock,
     });
-    const defs = await buildToolRegistry(tx);
+    const defs = await buildToolRegistry(tx, input.ownerId);
     // OrbisToolDef → LLMToolDef; internalOnly (user_query) остаётся: внутренний чат —
     // его законный потребитель, отсечение касается только MCP (Task 10)
     const llmTools: LLMToolDef[] = defs

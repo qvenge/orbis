@@ -402,7 +402,7 @@ test('роли: 11 id, иерархия, target_max_incoming конверта, a
   expect(roleById.get('envelope-binding')?.targetLabel.ru).toBe('Транзакция');
 });
 
-test('все 13 keyFields, tagMappings и ai_instructions перенесены и равны aspect-registry.ts', () => {
+test('все 13 keyFields и tagMappings перенесены и равны aspect-registry.ts', () => {
   expect(BUILTIN_ASPECT_META.length).toBe(13);
   // Р-16: списков keyFields ровно 13 — orbis/note (aspect-registry.ts:61) в их числе.
   expect(BUILTIN_ASPECT_META.filter((m) => m.viewConfig.keyFields.length > 0).length).toBe(13);
@@ -427,7 +427,9 @@ test('все 13 keyFields, tagMappings и ai_instructions перенесены �
     );
     expect(def.viewConfig.icon).toBe(meta.icon);
     expect(def.tagMappings).toEqual(meta.tagMappings);
-    expect(def.aiInstructions).toBe(meta.aiInstructions);
+    // `aiInstructions` СЮДА БОЛЬШЕ НЕ ВХОДЯТ (рулинг Р-1-1, Задача 12): перенесённые
+    // дословно тексты описывали снятую форму, и равенство со старым реестром закрепляло бы
+    // именно её. Что пришло на смену пину — грепом ниже.
     expect(def.key).toBe(def.id); // у встроенных key = id; имя тула attach_* — из key
     expect(def.ownerId).toBeNull();
     expect(def.label.en).toBe(meta.name);
@@ -435,6 +437,39 @@ test('все 13 keyFields, tagMappings и ai_instructions перенесены �
     expect((def.label.ru ?? '').length).toBeGreaterThan(0);
     expect((def.description.en ?? '').length).toBeGreaterThan(0);
   }
+});
+
+/**
+ * Инструкции аспектов говорят формой среза А (рулинг Р-1-1, §А9-1).
+ *
+ * Это ЕДИНСТВЕННОЕ, что модель читает про аспект помимо схемы тула, и написанное в ней имя
+ * поля она скопирует буквально. Пять снятых имён перечислены поимённо, а не «нет старых
+ * форм вообще»: расплывчатое условие ловило бы что угодно и не сказало бы, что чинить.
+ */
+test('aiInstructions не поминают снятые формы (Р-1-1): category_ref, grant_id, project_id, aspect-id, relation parent', () => {
+  const FORBIDDEN = ['category_ref', 'grant_id', 'project_id', 'aspect-id', 'relation parent'];
+  for (const def of BUILTIN_ASPECT_DEFS) {
+    const text = def.aiInstructions ?? '';
+    for (const bad of FORBIDDEN) {
+      expect(`${def.id}: ${text.includes(bad) ? bad : '—'}`).toBe(`${def.id}: —`);
+    }
+  }
+  // Не вырожденно: у всех тринадцати инструкция есть, и в ней есть namespaced key.
+  expect(BUILTIN_ASPECT_DEFS.filter((d) => (d.aiInstructions ?? '').length > 0).length).toBe(13);
+  // Ровно одна инструкция обходится без namespaced key — у заметки нечего адресовать
+  // (её содержимое живёт в body). Список, а не число: падение назовёт виновника.
+  expect(
+    BUILTIN_ASPECT_DEFS.filter((d) => !/orbis\/[a-z_]+/.test(d.aiInstructions ?? '')).map(
+      (d) => d.id,
+    ),
+  ).toEqual(['orbis/note']);
+  // Форма среза А названа прямо там, где прежде стояли снятые имена.
+  const byId = new Map(BUILTIN_ASPECT_DEFS.map((d) => [d.id, d.aiInstructions ?? '']));
+  expect(byId.get('orbis/financial')).toContain('orbis/finance_category');
+  expect(byId.get('orbis/category')).toContain('category-parent');
+  expect(byId.get('orbis/memory')).toContain('orbis/rule_scope');
+  expect(byId.get('orbis/assignment')).toContain('orbis/grant');
+  expect(byId.get('orbis/project')).toContain('роли ticket');
 });
 
 test('CONTRACT_IDS_V1 — ровно 8 id §Б1-2', () => {

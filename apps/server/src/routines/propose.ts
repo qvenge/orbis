@@ -38,7 +38,7 @@ import { ensureEntityThread } from '../chat/threads';
 import { chatMessages, entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
-import { propertyOfLegacyField } from '../executor/legacy-form';
+import { carrierAspects, resolvePropertyRef } from '../executor/props';
 import { createPending, rejectedReason, rejectPending } from '../policy/pending';
 import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import type { ToolCallCtx, ToolDispatchResult } from '../tools/dispatch';
@@ -160,17 +160,9 @@ export async function runPropose(
     parsed.push({ tool: op.tool, input: r.data as Record<string, unknown> });
   }
 
-  // 3а. Запрет по объекту, статическая половина: аспект в САМОЙ операции.
-  for (const [index, op] of parsed.entries()) {
-    const aspects = op.input.aspects as Record<string, unknown> | undefined;
-    if (aspects === undefined) continue;
-    for (const aspectId of FORBIDDEN_ASPECTS) {
-      if (aspectId in aspects) return forbiddenTarget(index, op.tool, `аспект ${aspectId}`);
-    }
-  }
-
-  // 3б–4. Всё, что требует состояния графа, — одной транзакцией под RLS: строки целей
-  // читаются один раз и служат сразу двум делам — запрету по объекту и снятию предусловий.
+  // 3а–4. Всё, что требует РЕЕСТРА и состояния графа, — одной транзакцией под RLS: снимок
+  // и строки целей читаются один раз и служат трём делам — запрету по объекту (обе его
+  // половины), снятию предусловий и сборке операций.
   const dedupeKey = `proposal:${routine.runId}`;
   const pendingId = pendingMessageId(ctx.actorUserId, dedupeKey);
 
@@ -182,6 +174,23 @@ export async function runPropose(
 
     const targets = await loadTargets(tx, ctx.actorUserId, parsed);
     if ('error' in targets) return targets;
+
+    // Запрет по объекту, СТАТИЧЕСКАЯ половина: аспект, названный самой операцией.
+    //
+    // Названий у аспекта теперь ДВА, и второе появилось вместе с новой формой (§А9-1):
+    // прямое (`aspects` списком или `{attach, detach}`) и КОСВЕННОЕ — через свойство,
+    // которое этот аспект объявляет. Патч `{props: {'orbis/routine_mode': 'act'}}` имени
+    // рутины не содержит вовсе, а рутиной запись делает именно он. Смотреть только прямое
+    // имя значило бы оставить инвариант 6 открытым ровно на той форме, на которую всё и
+    // переводится. Носители берутся общей `carrierAspects` — той же, что показывает их
+    // каталогу свойств.
+    for (const [index, op] of parsed.entries()) {
+      for (const aspectId of operationAspects(targets.reg, op.input)) {
+        if ((FORBIDDEN_ASPECTS as readonly string[]).includes(aspectId)) {
+          return { error: forbiddenTarget(index, op.tool, `аспект ${aspectId}`) };
+        }
+      }
+    }
 
     const operations: ExecOperation[] = [];
     // Одно поле одной сущности — ОДНА операция на предложение. Две правки того же поля
@@ -403,9 +412,52 @@ async function storedOperationCount(tx: Tx, pendingId: string): Promise<number |
   return Array.isArray(operations) ? operations.length : null;
 }
 
-/** Что уже правят предыдущие операции предложения: поля по сущности и сами сущности. */
+/**
+ * Имена аспектов, названные САМОЙ операцией, — в обеих формах (§А9-1): список у создания,
+ * `{attach, detach}` у правки. Одна функция на оба вопроса («что запрещено по объекту» и
+ * «что здесь вообще названо»): второй разбор той же формы разъехался бы с первым молча.
+ *
+ * `detach` считается наравне с `attach`: снять аспект рутины — такое же распоряжение
+ * доверенностью, как навесить его (инвариант 6).
+ */
+export function namedAspects(input: Record<string, unknown>): string[] {
+  const aspects = input.aspects;
+  if (Array.isArray(aspects)) return aspects.filter((a): a is string => typeof a === 'string');
+  if (typeof aspects !== 'object' || aspects === null) return [];
+  const patch = aspects as { attach?: unknown; detach?: unknown };
+  return [patch.attach, patch.detach]
+    .flatMap((list) => (Array.isArray(list) ? list : []))
+    .filter((a): a is string => typeof a === 'string');
+}
+
+/**
+ * Аспекты, которых КАСАЕТСЯ операция: названные прямо (`aspects`) плюс носители свойств,
+ * которые она правит или снимает. Одно множество на обе половины запрета по объекту.
+ */
+export function operationAspects(reg: RegistrySnapshot, input: Record<string, unknown>): string[] {
+  const out = new Set<string>(namedAspects(input));
+  for (const keyOrId of touchedProperties(input)) {
+    const property = resolvePropertyRef(reg, keyOrId)?.id ?? keyOrId;
+    for (const aspectId of carrierAspects(reg, property)) out.add(aspectId);
+  }
+  return [...out];
+}
+
+/**
+ * Свойства, которых касается операция: записанные (`props`) и снятые (`unset`). Адреса едут
+ * КАК ПРИШЛИ (key или id) — нормализует их вызывающий, у которого на руках снимок реестра.
+ */
+export function touchedProperties(input: Record<string, unknown>): string[] {
+  const props = typeof input.props === 'object' && input.props !== null ? input.props : {};
+  const unset = Array.isArray(input.unset)
+    ? input.unset.filter((v): v is string => typeof v === 'string')
+    : [];
+  return [...Object.keys(props as Record<string, unknown>), ...unset];
+}
+
+/** Что уже правят предыдущие операции предложения: свойства по сущности и сами сущности. */
 interface Seen {
-  /** «сущность + аспект + поле» → номер первой операции. */
+  /** «сущность + свойство» → номер первой операции. */
   fields: Map<string, number>;
   /** сущность → первая операция по ней и правит ли хоть одна из них тело. */
   entities: Map<string, { index: number; body: boolean }>;
@@ -444,13 +496,14 @@ function collides(
   }
   seen.entities.set(id, { index: prev?.index ?? index, body: (prev?.body ?? false) || hasBody });
 
+  // Единица столкновения — СВОЙСТВО (§А1-1), а не пара «аспект + поле»: два аспекта делят
+  // одно свойство (В1: `orbis/finance_category` носят и финансы, и бюджет), и по старому
+  // ключу две операции над ним выглядели бы независимыми, а исполнялись бы одна поверх
+  // другой. Снятие (`unset`) считается наравне с записью: снять и записать одно свойство в
+  // одном предложении — то же самое столкновение.
   const keys: Array<{ key: string; what: string }> = [];
-  const aspects = input.aspects as Record<string, Record<string, unknown> | null> | undefined;
-  for (const [aspectId, patch] of Object.entries(aspects ?? {})) {
-    if (patch === null) continue; // detach отклоняет buildUpdate — своим, более точным текстом
-    for (const field of Object.keys(patch)) {
-      keys.push({ key: `${id}\u0000${aspectId}\u0000${field}`, what: `${aspectId}.${field}` });
-    }
+  for (const property of touchedProperties(input)) {
+    keys.push({ key: `${id}\u0000${property}`, what: property });
   }
   for (const { key, what } of keys) {
     const first = seen.fields.get(key);
@@ -564,21 +617,21 @@ export async function loadTargets(
  * сводится к `in`: отсутствие значения не совпадает ни с одним значением (докблок
  * assertPrecondition), а предложение сплошь и рядом ДОПИСЫВАЕТ поле, которого ещё не было.
  *
- * Патч приходит СТАРОЙ картой (её шлёт рутина, и её же читает карточка предложения), а
- * предусловие снимается по СВОЙСТВУ (§А7-3): каждое поле переводится в id тем же резолвом,
- * которым переводит его сам исполнитель (`propertyOfLegacyField`), и текущее значение
- * берётся из `props` — новой правды строки. Через проекцию `aspects_legacy` это делать
- * нельзя: она обратима не везде (`orbis/progress_source` едет в неё развёрнутой обёрткой),
- * и снятое по ней предусловие не совпало бы с тем, что сверяет executor.
+ * Патч приходит НОВОЙ формой (§А9-1, Задача 12): `props` по key или id и `unset`. Адрес
+ * пункта — id свойства (§А7-3), поэтому каждый ключ проходит `resolvePropertyRef` — тот же
+ * резолв, которым читает его исполнитель; текущее значение берётся из `props` строки —
+ * новой правды. Через проекцию `aspects_legacy` это делать нельзя: она обратима не везде
+ * (`orbis/progress_source` едет в неё развёрнутой обёрткой), и снятое по ней предусловие не
+ * совпало бы с тем, что сверяет executor.
  *
  * Патч тела едет со своим существующим CAS (§5.2) — `expectedUpdatedAt` текущей строки:
  * предусловия о теле ничего не знают, и без него правка тела затирала бы чужую.
  *
  * Экспортирована для отложки диспатча (D42 ОЧ.13) — см. довод у `loadTargets`. Функция
- * ходит ТОЛЬКО по `input.aspects`, поэтому для чистой архивации (`{id, archived:true}`)
- * даёт ПУСТОЙ список: `archived` — не поле аспекта, а core-свойство (§А1-3). Предусловие по
- * нему добавляет к результату сам диспатч — здесь оно появиться не может, потому что
- * предложение обязано остаться байт-в-байт прежним.
+ * ходит ТОЛЬКО по `props`/`unset`, поэтому для чистой архивации (`{id, archived:true}`)
+ * даёт ПУСТОЙ список: `archived` — core-свойство (§А1-3), а не значение в `props`.
+ * Предусловие по нему добавляет к результату сам диспатч — здесь оно появиться не может,
+ * потому что предложение обязано остаться байт-в-байт прежним.
  */
 export function buildUpdate(
   reg: RegistrySnapshot,
@@ -586,32 +639,43 @@ export function buildUpdate(
   input: Record<string, unknown>,
   current: TargetRow,
 ): { op: ExecOperation } | { error: ToolDispatchResult } {
+  const aspects = input.aspects as { attach?: string[]; detach?: string[] } | undefined;
+  const detached = aspects?.detach ?? [];
+  if (detached.length > 0) {
+    // Снятие аспекта целиком: предусловия «аспект ещё на месте» в форме пункта по
+    // свойству не существует, а без него detach молча выигрывал бы у любой правки владельца.
+    return {
+      error: err(
+        'VALIDATION',
+        `снятие аспекта предложением не поддерживается (операция ${index + 1}, ${detached.join(', ')})`,
+        { reason: 'proposal_detach_unsupported', index, aspect: detached[0] },
+      ),
+    };
+  }
   const precondition: EntityUpdatePreconditionItem[] = [];
-  const aspects = input.aspects as Record<string, Record<string, unknown> | null> | undefined;
-  for (const [aspectId, patch] of Object.entries(aspects ?? {})) {
-    if (patch === null) {
-      // Снятие аспекта целиком: предусловия «аспект ещё на месте» в форме пункта по
-      // свойству не существует, а без него detach молча выигрывал бы у любой правки владельца.
-      return {
-        error: err(
-          'VALIDATION',
-          `снятие аспекта предложением не поддерживается (операция ${index + 1}, ${aspectId})`,
-          { reason: 'proposal_detach_unsupported', index, aspect: aspectId },
-        ),
-      };
-    }
-    for (const field of Object.keys(patch)) {
-      const property = propertyOfLegacyField(reg, aspectId, field);
-      const value = current.props[property];
-      precondition.push(
-        value === undefined ? { property, absent: true } : { property, in: [value] },
-      );
+  // Адреса НОРМАЛИЗУЮТСЯ В ID прямо в сохраняемом payload'е, а не только в предусловии.
+  // Предложение переживает решение владельца во времени, и его читают ещё двое —
+  // показ строк (`lifecycle.ts`) и правка владельцем (`edits.ts`), у которых снимка реестра
+  // на руках нет. Оставь мы во входе `key`, эти трое адресовали бы одно свойство разными
+  // именами, и правка строки не нашла бы своей строки на кастомном свойстве (там key ≠ id).
+  const props: Record<string, unknown> = {};
+  const unset: string[] = [];
+  for (const keyOrId of touchedProperties(input)) {
+    const property = resolvePropertyRef(reg, keyOrId)?.id ?? keyOrId;
+    const value = current.props[property];
+    precondition.push(value === undefined ? { property, absent: true } : { property, in: [value] });
+    if (Object.hasOwn((input.props as Record<string, unknown> | undefined) ?? {}, keyOrId)) {
+      props[property] = (input.props as Record<string, unknown>)[keyOrId];
+    } else {
+      unset.push(property);
     }
   }
 
-  const { expectedUpdatedAt: _fromModel, ...rest } = input;
+  const { expectedUpdatedAt: _fromModel, props: _rawProps, unset: _rawUnset, ...rest } = input;
   const built = {
     ...rest,
+    ...(Object.keys(props).length > 0 && { props }),
+    ...(unset.length > 0 && { unset }),
     // Модельный expectedUpdatedAt отбрасывается намеренно: CAS предложения снимается ТОГДА
     // ЖЕ, когда предусловия, — с той же прочитанной строки. Без тела он вообще ни на что не
     // влияет (executor смотрит на него только при правке body), и хранить его значило бы

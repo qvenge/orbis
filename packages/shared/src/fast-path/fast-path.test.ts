@@ -16,13 +16,17 @@ describe('fast-path parseFastPath (§7.5)', () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.create.title).toBe('обед');
-    expect(r.create.aspects?.['orbis/financial']).toMatchObject({
-      amount: '340.00',
-      direction: 'expense',
-      currency: 'RUB',
-      occurred_on: '2026-07-05',
-      category_ref: 'cat-food',
+    // Новая форма (§А1-1): значения — плоским `props` по id свойства, аспект — списком.
+    expect(r.create.props).toEqual({
+      'orbis/amount': '340.00',
+      'orbis/direction': 'expense',
+      'orbis/currency': 'RUB',
+      'orbis/occurred_on': '2026-07-05',
+      'orbis/finance_category': 'cat-food',
     });
+    expect(r.create.aspects).toEqual(['orbis/financial']);
+    // Старой карты в выдаче нет вовсе — иначе перевод остался бы наполовину.
+    expect((r.create as Record<string, unknown>).meta).toBeUndefined();
     expect(r.create.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-/i); // UUIDv7
   });
 
@@ -30,31 +34,31 @@ describe('fast-path parseFastPath (§7.5)', () => {
     const r = parseFastPath('+150000 зарплата', ctx);
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.create.aspects?.['orbis/financial']).toMatchObject({
-      amount: '150000.00',
-      direction: 'income',
-      category_ref: 'cat-salary',
+    expect(r.create.props).toMatchObject({
+      'orbis/amount': '150000.00',
+      'orbis/direction': 'income',
+      'orbis/finance_category': 'cat-salary',
     });
   });
 
   test('"кофе 127.50" → 127.50', () => {
     const r = parseFastPath('кофе 127.50', ctx);
-    expect(r.ok && r.create.aspects?.['orbis/financial']?.amount).toBe('127.50');
+    expect(r.ok && r.create.props?.['orbis/amount']).toBe('127.50');
   });
 
   test('"кофе 99,90" → 99.90 (запятая как разделитель)', () => {
     const r = parseFastPath('кофе 99,90', ctx);
-    expect(r.ok && r.create.aspects?.['orbis/financial']?.amount).toBe('99.90');
+    expect(r.ok && r.create.props?.['orbis/amount']).toBe('99.90');
   });
 
   test('"кофе 4 usd" → currency USD', () => {
     const r = parseFastPath('кофе 4 usd', ctx);
-    expect(r.ok && r.create.aspects?.['orbis/financial']?.currency).toBe('USD');
+    expect(r.ok && r.create.props?.['orbis/currency']).toBe('USD');
   });
 
   test('"обед 340 $" → currency USD (символ)', () => {
     const r = parseFastPath('обед 340 $', ctx);
-    expect(r.ok && r.create.aspects?.['orbis/financial']?.currency).toBe('USD');
+    expect(r.ok && r.create.props?.['orbis/currency']).toBe('USD');
   });
 
   test('неизвестная категория → уступает LLM', () => {
@@ -78,7 +82,7 @@ describe('fast-path parseFastPath (§7.5)', () => {
 });
 
 /**
- * category_ref разобранной строки или undefined, если парсер уступил. Правило задаётся
+ * `orbis/finance_category` разобранной строки или undefined, если парсер уступил. Правило задаётся
  * либо голым заголовком (время правки не важно), либо парой {title, updatedAt} — там,
  * где проверяется приоритет свежего правила.
  */
@@ -86,7 +90,7 @@ function refOf(text: string, rules?: Array<string | FastPathRule>): string | und
   const asRules = rules?.map((r) => (typeof r === 'string' ? { title: r, updatedAt: '' } : r));
   const r = parseFastPath(text, asRules === undefined ? ctx : { ...ctx, rules: asRules });
   if (!r.ok) return undefined;
-  const ref = r.create.aspects?.['orbis/financial']?.category_ref;
+  const ref = r.create.props?.['orbis/finance_category'];
   return typeof ref === 'string' ? ref : undefined;
 }
 

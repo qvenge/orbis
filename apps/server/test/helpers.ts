@@ -80,7 +80,12 @@ export async function truncateAll(): Promise<void> {
 
 /** Одно свойство кастомного аспекта: локальное имя поля + тип из словаря §А2-2. */
 export interface CustomAspectProperty {
-  /** Локальное имя поля БЕЗ namespace: оно же ключ в `data` тула `attach_*`. */
+  /**
+   * Локальное имя поля БЕЗ namespace: id и `key` свойства собираются из него и namespace'а
+   * аспекта (`user/hours`). В `data` тула `attach_*` уезжает ИМЕННО ПОЛНЫЙ key (§А9-1,
+   * Задача 12), а локальное имя остаётся только в колонке старой формы `schema`, которую
+   * тул больше не читает.
+   */
   key: string;
   type: PropertyType;
   required?: boolean;

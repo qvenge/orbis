@@ -1,0 +1,3100 @@
+[
+  {
+    "name": "entity_query",
+    "description": "Поиск/фильтрация сущностей грамматикой запросов Orbis (§А5-3) или готовым деревом (ast). Возвращает список сущностей (core-поля + tags + aspects). Имена свойств и аспектов — namespaced key со слэшем. Примеры: «aspect=orbis/category, search=Еда»; «aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, limit=20»; «aspect=orbis/category, orbis/aliases=такси» (резолв категории по синониму: aliases — список, фильтр ищет точное вхождение — регистр важен, синонимы строчные).",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "description": "строка в грамматике запросов Orbis §А5-3, включая sortBy и limit"
+        },
+        "ast": {
+          "description": "разобранный запрос деревом (§А5-7): and/or/not любой вложенности над предикатами. Бери его, когда условие не выражается плоской строкой — например «(срок сегодня ИЛИ просрочено) И не заблокировано». Имена в дереве — id свойств и аспектов, не подписи.",
+          "type": "object",
+          "properties": {
+            "filter": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/node"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sortBy": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "dir": {
+                    "enum": ["asc", "desc"]
+                  }
+                },
+                "required": ["field", "dir"],
+                "additionalProperties": false
+              }
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "display": {
+              "enum": ["compact", "list", "table"]
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["filter"],
+          "additionalProperties": false
+        }
+      },
+      "$defs": {
+        "node": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "and": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "#/$defs/node"
+                  }
+                }
+              },
+              "required": ["and"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "or": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "$ref": "#/$defs/node"
+                  }
+                }
+              },
+              "required": ["or"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "not": {
+                  "$ref": "#/$defs/node"
+                }
+              },
+              "required": ["not"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "prop": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "op": {
+                  "enum": ["eq", "ne", "gt", "lt"]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": ["string", "number", "boolean"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "token": {
+                          "enum": ["today", "overdue", "next_7d", "after_7d"]
+                        }
+                      },
+                      "required": ["token"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": ["prop", "op", "value"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "prop": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "op": {
+                  "const": "in"
+                },
+                "value": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": ["string", "number", "boolean"]
+                  }
+                }
+              },
+              "required": ["prop", "op", "value"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "prop": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "op": {
+                  "const": "contains"
+                },
+                "value": {
+                  "type": ["string", "number", "boolean"]
+                }
+              },
+              "required": ["prop", "op", "value"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "prop": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "op": {
+                  "const": "range"
+                },
+                "value": {
+                  "type": "object",
+                  "properties": {
+                    "from": {
+                      "anyOf": [
+                        {
+                          "type": ["string", "number", "boolean"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "enum": ["today", "overdue", "next_7d", "after_7d"]
+                            }
+                          },
+                          "required": ["token"],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "to": {
+                      "anyOf": [
+                        {
+                          "type": ["string", "number", "boolean"]
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "token": {
+                              "enum": ["today", "overdue", "next_7d", "after_7d"]
+                            }
+                          },
+                          "required": ["token"],
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "additionalProperties": false,
+                  "minProperties": 1
+                }
+              },
+              "required": ["prop", "op", "value"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "has": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["has"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "aspect": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["aspect"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "tag": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["tag"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "search": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": ["search"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "rel": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "enum": ["children_of", "parents_of"]
+                        },
+                        "via": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "of": {
+                          "type": "string",
+                          "pattern": "^(this|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+                        }
+                      },
+                      "required": ["kind", "of"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "enum": ["descendants_of", "ancestors_of"]
+                        },
+                        "via": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "of": {
+                          "type": "string",
+                          "pattern": "^(this|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+                        }
+                      },
+                      "required": ["kind", "of", "via"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "has_relation"
+                        },
+                        "via": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "sourceNotIn": {
+                          "type": "object",
+                          "properties": {
+                            "prop": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "values": {
+                              "type": "array",
+                              "minItems": 1,
+                              "items": {
+                                "type": ["string", "number", "boolean"]
+                              }
+                            }
+                          },
+                          "required": ["prop", "values"],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": ["kind", "via"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "const": "has_children"
+                        },
+                        "via": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": ["kind"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "required": ["rel"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "archived": {
+                  "enum": ["true", "any"]
+                }
+              },
+              "required": ["archived"],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "class": {
+                  "type": "object",
+                  "properties": {
+                    "contract": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "set": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "required": ["contract", "set"],
+                  "additionalProperties": false
+                }
+              },
+              "required": ["class"],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "required": ["query"]
+        },
+        {
+          "required": ["ast"]
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "entity_get",
+    "description": "Полное чтение одной сущности: body, связи, backlinks, тред.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["body", "relations", "backlinks", "thread"]
+          },
+          "description": "по умолчанию body+relations; backlinks — кто ссылается: ссылочные свойства (via \"ref\", подпись — имя свойства), явные связи роли mention (via \"relation\") и упоминания через body_refs (via \"mention\"), без архивных, до 100; thread — сообщения треда сущности"
+        }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "entity_create",
+    "description": "Создание сущности. Значения — props по key свойства (orbis/amount), интерпретации — aspects списком. Отдельного «мешка» для структуры больше нет: то, чего нет в реестре свойств, пишется словами в body.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "опционален; передавай для идемпотентности повторов"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "emoji": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "обязателен (может быть пустым)"
+        },
+        "props": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "значения свойств по их key (orbis/amount, orbis/task_status) — id тоже принимается; какие свойства бывают у аспекта, показывает его attach_*-тул, остальные — property_catalog"
+        },
+        "aspects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "аспекты, с которыми сущность рождается, списком id (orbis/financial)"
+        }
+      },
+      "required": ["title", "tags"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "entity_update",
+    "description": "Частичное обновление сущности: передаются только изменяемые поля. props ставит значения, unset снимает их, aspects.attach/detach меняет интерпретацию.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "expectedUpdatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "updated_at сущности, которую видел клиент; обязателен при правке body (§5.2)"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "emoji": {
+          "type": ["string", "null"]
+        },
+        "body": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "props": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "значения свойств по их key (orbis/amount, orbis/task_status) — id тоже принимается; какие свойства бывают у аспекта, показывает его attach_*-тул, остальные — property_catalog"
+        },
+        "unset": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "СНЯТЬ эти свойства. Отдельным списком, а не null в props: null — законное значение json-свойства, и через него снятие было бы неотличимо от записи"
+        },
+        "aspects": {
+          "type": "object",
+          "properties": {
+            "attach": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "detach": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false,
+          "description": "навесить/снять интерпретацию. Снятие аспекта значения НЕ удаляет: аспект — не владелец поля, и факт владельца переживает смену интерпретации"
+        },
+        "archived": {
+          "type": "boolean"
+        }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "relation_create",
+    "description": "Создание связи между сущностями: роль ребра говорит, ЧЕМ она является.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "target_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "subitem",
+            "ticket",
+            "category-parent",
+            "dependency",
+            "mention",
+            "alternative-of",
+            "supersedes"
+          ],
+          "description": "subitem — Подпункт: Обычная иерархия: часть внутри целого — дефолт для «сделай список дел» (Родитель → Подпункт); ticket — Тикет: Единица работы проекта: то, что исполнитель берёт в прогон (Проект → Тикет); category-parent — Родительская категория: Дерево категорий финансов: подкатегория внутри категории (Родительская категория → Подкатегория); dependency — Зависимость: Работа не начнётся, пока не сделана другая (Блокирующая работа → Заблокированная работа); mention — Упоминание: Запись упоминает другую по смыслу, без подчинения (Упоминает → Упомянуто); alternative-of — Альтернатива: Другой способ добиться того же результата (Альтернатива → Исходный вариант); supersedes — Замещает: Запись отменяет прежнюю и встаёт на её место (Замена → Замещённое)"
+        }
+      },
+      "required": ["source_id", "target_id", "role"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "relation_delete",
+    "description": "Удаление связи между сущностями: роль обязана совпасть с ролью ребра.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "source_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "target_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "subitem",
+            "ticket",
+            "run",
+            "envelope-binding",
+            "category-parent",
+            "dependency",
+            "mention",
+            "instance-of",
+            "ref",
+            "alternative-of",
+            "supersedes"
+          ],
+          "description": "subitem — Подпункт: Обычная иерархия: часть внутри целого — дефолт для «сделай список дел» (Родитель → Подпункт); ticket — Тикет: Единица работы проекта: то, что исполнитель берёт в прогон (Проект → Тикет); run — Прогон: Прогон исполнителя, порождённый тикетом или рутиной (Субъект прогона → Прогон); envelope-binding — Привязка к конверту: Транзакция, которую считает конверт бюджета (Конверт → Транзакция); category-parent — Родительская категория: Дерево категорий финансов: подкатегория внутри категории (Родительская категория → Подкатегория); dependency — Зависимость: Работа не начнётся, пока не сделана другая (Блокирующая работа → Заблокированная работа); mention — Упоминание: Запись упоминает другую по смыслу, без подчинения (Упоминает → Упомянуто); instance-of — Экземпляр шаблона: Запись порождена шаблоном повторения (Шаблон → Экземпляр); ref — Ссылка свойства: Зеркало значения ссылочного свойства в графе: истина — свойство, ребро производно (Откуда ссылка → Цель ссылки); alternative-of — Альтернатива: Другой способ добиться того же результата (Альтернатива → Исходный вариант); supersedes — Замещает: Запись отменяет прежнюю и встаёт на её место (Замена → Замещённое)"
+        }
+      },
+      "required": ["source_id", "target_id", "role"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "batch_execute",
+    "description": "Атомарная группа мутаций с единым Undo.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "batch_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "tool": {
+                "type": "string"
+              },
+              "input": {
+                "type": "object"
+              }
+            },
+            "required": ["tool", "input"],
+            "additionalProperties": false
+          },
+          "description": "мутирующие core- и attach_*-тулы, кроме самого batch_execute; порядок значим — весь batch валидируется до начала и выполняется одной транзакцией"
+        }
+      },
+      "required": ["batch_id", "operations"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "user_query",
+    "description": "Вопрос-агрегация по выборке («сколько потрачено на еду за месяц»): sum/count поверх запроса грамматики §6.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "description": "строка в грамматике §А5-3"
+        },
+        "aggregate": {
+          "type": "string",
+          "enum": ["sum", "count"]
+        },
+        "field": {
+          "type": "string",
+          "description": "обязателен при aggregate=sum: key числового свойства (orbis/amount); id тоже принимается"
+        }
+      },
+      "required": ["query", "aggregate"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "budget_status",
+    "description": "Готовые агрегаты бюджета месяца (03-budget): конверты (spent/effectiveLimit/remaining/dailyPace), баланс периода, comingUp (recurring-инстансы на 14 дней), planned (ручные запланированные покупки), unbudgeted и spend_class категорий. Используй для финансовых вопросов («что по бюджету?», «могу позволить X?», остатки конвертов). planned и comingUp уже включают будущие recurring-оттоки — НЕ суммируй recurring отдельно (двойной вычет).",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "month": {
+          "type": "string",
+          "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+          "description": "месяц YYYY-MM; по умолчанию — текущий месяц пользователя"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "property_catalog",
+    "description": "Каталог свойств: чем вообще можно описывать записи. Ищи здесь, когда нужного поля нет ни в одном attach_*-туле — свободные свойства и предложенные (proposed) видны только отсюда. Возвращает key (им и пиши значение в props), подпись, смысл, тип с вариантами, аспекты-носители и сколько записей это свойство уже заполнили. Фильтры: q (слово), aspect, module, status.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "q": {
+          "type": "string",
+          "minLength": 1,
+          "description": "слово: ищется в key, подписи и описании свойства, регистр не важен"
+        },
+        "aspect": {
+          "type": "string",
+          "description": "только свойства этого аспекта (orbis/financial)"
+        },
+        "module": {
+          "type": "string",
+          "description": "только свойства модуля (finance, planner, ade…)"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "proposed", "deprecated"],
+          "description": "по умолчанию — все; proposed доступны ТОЛЬКО отсюда, в промпт они не входят"
+        },
+        "contract": {
+          "type": "string",
+          "description": "контракты появятся позже — сейчас параметр ничего не сужает"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "import_csv_start",
+    "description": "Вход в импорт банковской выписки (CSV): показывает пользователю карточку, с которой он откроет экран импорта. Вызывай, когда пользователь просит импортировать выписку/CSV из банка («импортируй выписку»). Сам тул НИЧЕГО не импортирует и файла не видит — выписка выбирается и разбирается локально в браузере пользователя.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "undo_last",
+    "description": "Отменить ПОСЛЕДНЕЕ действие в графе (Undo §7.8): «отмени последнее», «отмени», «верни как было», «убери, что только что сделал». Откатывает последнее видимое действие журнала пользователя — своё или пользователя, — независимо от того, в этом ли треде оно случилось. Вызывай ТОЛЬКО по явной просьбе пользователя отменить последнее; не чини правкой то, что нужно отменить, и не зови повторно ради «ещё раз отменить», не переспросив. Ответ: что именно отменено (actionId, тип, заголовок) либо «отменять нечего».",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "thread_post",
+    "description": "Сообщение в тред сущности (заметка о ходе/результате работы). Не мутирует граф.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "client-UUID сообщения: повтор с тем же id — идемпотентный ретрай (не плодит второй пост)"
+        },
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["entity_id", "content"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "orbis_my_queue",
+    "description": "Что мне назначено: список тикетов этого доступа с их статусом, проектом и сводкой последнего прогона. Брать в работу можно только тикеты с claimable=true (статус inbox или planned) — остальные ждут владельца. По дороге сервер помечает брошенные прогоны (поле swept: сколько подмёл) и возвращает их тикеты в очередь. Начинай круг с этого вызова и бери ОДИН тикет за раз.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "orbis_claim_task",
+    "description": "Атомарно взять назначенный мне тикет в работу: тикет → in_progress, создаётся прогон (сущность). Возвращает задание (title, body, аспекты), body проекта с описанием процесса и историю прошлых прогонов (их отчёты, вопросы и ответы владельца). Отказ CONFLICT — тикет уже в работе или не мой: не повторяй, возьми другой из orbis_my_queue. Передавай id (uuid) — повтор с тем же id безопасен. Работай над одним тикетом за раз; шаги фиксируй orbis_run_step, вопросы — orbis_checkpoint, итог — orbis_finish (тикет не закрывай сам).",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "ticket_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "id вызова: повтор с тем же значением безопасен — работа не делается заново"
+        },
+        "session_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "ссылка на сессию исполнителя — владелец сможет посмотреть, как шла работа"
+        }
+      },
+      "required": ["ticket_id"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "orbis_run_step",
+    "description": "Зафиксировать шаг прогона: короткая сводка того, что сделано. Ставь external=true, если шаг тронул внешнее (создал ветку, изменил файлы, сходил в сеть) — по этому признаку сервер решает, можно ли безопасно перезапустить прогон, если он оборвётся. Зови регулярно: прогон без шагов дольше получаса считается брошенным. Возвращает step_count. Отказ CONFLICT — прогон уже завершён или чужой: не повторяй, начни с orbis_my_queue. Передавай id (uuid) для безопасного повтора.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "что сделано на этом шаге — одной фразой, для человека"
+        },
+        "external": {
+          "type": "boolean",
+          "description": "true, если шаг тронул внешнее: ветка, файлы, сеть — всё вне Orbis. По этому признаку сервер решает, можно ли безопасно перезапустить оборванный прогон"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "id вызова: повтор с тем же значением безопасен — работа не делается заново"
+        }
+      },
+      "required": ["run_id", "summary"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "orbis_checkpoint",
+    "description": "Остановиться и спросить владельца, когда без решения человека дальше идти НЕЛЬЗЯ (выбор подхода, доступ, противоречие в задании): прогон закрывается. Если ты работаешь по тикету — тикет уходит в waiting с твоим вопросом, и ответ придёт в историю следующего orbis_claim_task. Если ты прогон рутины — ни тикета, ни orbis_claim_task нет: ответ придёт в историю её следующего прогона, а для вопроса, без которого работа ПРОДОЛЖАЕТСЯ, у тебя есть нетерминальный orbis_ask. После чекпойнта прогон терминален: шаги в него больше не принимаются. Передавай id (uuid) для безопасного повтора.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "description": "вопрос владельцу: чего не хватает для продолжения"
+        },
+        "usage": {
+          "type": "object",
+          "properties": {
+            "input_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "output_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cost_usd": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "session_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "ссылка на сессию исполнителя — владелец сможет посмотреть, как шла работа"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "id вызова: повтор с тем же значением безопасен — работа не делается заново"
+        }
+      },
+      "required": ["run_id", "question"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "orbis_finish",
+    "description": "Итог прогона: «готово, проверь». В report опиши, что сделано и что проверить — это читает владелец. Тикет НЕ закрывается: он уходит в waiting на проверку (в done — только если владелец заранее разрешил это назначением). Сам статус тикета не меняй. После orbis_finish прогон терминален. Передавай id (uuid) для безопасного повтора.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "report": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 20000,
+          "description": "что сделано и что проверить — это читает владелец, а не другой агент"
+        },
+        "usage": {
+          "type": "object",
+          "properties": {
+            "input_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "output_tokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "cost_usd": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "session_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "ссылка на сессию исполнителя — владелец сможет посмотреть, как шла работа"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "id вызова: повтор с тем же значением безопасен — работа не делается заново"
+        }
+      },
+      "required": ["run_id", "report"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "orbis_propose",
+    "description": "Предложить владельцу правки и закончить прогон. Это ЕДИНСТВЕННЫЙ способ что-то изменить в режиме propose: сам ты не пишешь — предложение ложится в тред рутины и ждёт кнопки владельца. В explanation объясни прозой, зачем это нужно: владелец читает объяснение, а не список операций. Операции — entity_create, entity_update, relation_create, relation_delete (до 50); предусловия («пока значение такое») сервер снимает сам с текущих значений, передавать их не нужно. Рутины и назначения (orbis/routine, orbis/assignment) предлагать нельзя — отказ. После вызова прогон терминален: это последнее, что ты делаешь. Передавай id (uuid) для безопасного повтора.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "description": "зачем это нужно — прозой, для владельца: он читает объяснение, а не список операций"
+        },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "properties": {
+              "tool": {
+                "type": "string",
+                "enum": ["entity_create", "entity_update", "relation_create", "relation_delete"]
+              },
+              "input": {
+                "type": "object"
+              }
+            },
+            "required": ["tool", "input"],
+            "additionalProperties": false
+          },
+          "description": "правки, которые предлагается применить одной группой; предусловия сервер снимает сам — передавать их не нужно и нельзя"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "id вызова: повтор с тем же значением безопасен — работа не делается заново"
+        }
+      },
+      "required": ["run_id", "explanation", "operations"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "orbis_ask",
+    "description": "Спросить владельца и РАБОТАТЬ ДАЛЬШЕ: вопрос ложится карточкой в тред рутины, прогон НЕ останавливается. Ответа сейчас не будет — владелец разберёт вопрос позже, и ответ придёт в историю следующего прогона; поэтому спрашивай самодостаточно и продолжай с тем, что можно сделать без ответа. Если без ответа дальше идти бессмысленно — это не сюда, а orbis_checkpoint: он закрывает прогон. В options можно дать до четырёх готовых ответов кнопками. Повтор того же вопроса в том же прогоне вернёт ту же карточку (replayed=true) — не переспрашивай одно и то же. Открытых вопросов и отложенных действий у прогона не больше 10: получил «пачка полна» — заканчивай прогон.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000,
+          "description": "вопрос владельцу: он прочитает его позже и без тебя — спрашивай самодостаточно, одним понятным вопросом"
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 4,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": "до четырёх готовых ответов кнопками; список, не помещающийся на экран, — это требование довериться, а не выбор"
+        }
+      },
+      "required": ["run_id", "question"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_schedule",
+    "description": "Применяй, когда во вводе есть дата или время события. orbis/start_at обязателен (ISO 8601 с таймзоной пользователя). orbis/recurrence задаётся только на шаблоне повторения; инстансы порождает сервер.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/start_at": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+              "x-orbis-type": {
+                "kind": "timestamp"
+              },
+              "description": "Начало — Когда событие начинается"
+            },
+            "orbis/end_at": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+              "x-orbis-type": {
+                "kind": "timestamp"
+              },
+              "description": "Окончание — Когда событие заканчивается"
+            },
+            "orbis/duration_min": {
+              "type": "integer",
+              "minimum": 1,
+              "x-orbis-type": {
+                "kind": "number",
+                "min": 1,
+                "integer": true
+              },
+              "description": "Длительность, мин — Сколько времени событие занимает"
+            },
+            "orbis/all_day": {
+              "type": "boolean",
+              "x-orbis-type": {
+                "kind": "boolean"
+              },
+              "description": "Весь день — Событие занимает день целиком, без часов"
+            },
+            "orbis/recurrence": {
+              "type": "object",
+              "required": ["freq", "interval"],
+              "properties": {
+                "freq": {
+                  "enum": ["daily", "weekly", "monthly"],
+                  "type": "string"
+                },
+                "until": {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                "interval": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "byweekday": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "x-orbis-type": {
+                "kind": "json",
+                "schema": {
+                  "type": "object",
+                  "required": ["freq", "interval"],
+                  "properties": {
+                    "freq": {
+                      "enum": ["daily", "weekly", "monthly"],
+                      "type": "string"
+                    },
+                    "until": {
+                      "type": "string",
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                    },
+                    "interval": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "byweekday": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "description": "Повторение — Правило, по которому событие повторяется"
+            },
+            "orbis/location": {
+              "type": "string",
+              "x-orbis-type": {
+                "kind": "text"
+              },
+              "description": "Место — Где событие происходит"
+            },
+            "orbis/timezone": {
+              "type": "string",
+              "pattern": "^(UTC|[A-Za-z][A-Za-z0-9_+-]*(\\/[A-Za-z0-9_+-]+)+)$",
+              "x-orbis-type": {
+                "kind": "text",
+                "format": "iana-tz"
+              },
+              "description": "Часовой пояс — В каком поясе прочитано время события"
+            }
+          },
+          "required": ["orbis/start_at"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_task",
+    "description": "Применяй к действиям. orbis/task_status по умолчанию inbox; явный срок → orbis/due_date (дата, не момент). orbis/completed_at проставляет сервер при переходе в done — не передавай его сам.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/task_status": {
+              "type": "string",
+              "enum": ["inbox", "planned", "in_progress", "waiting", "done", "cancelled"],
+              "x-orbis-type": {
+                "kind": "select",
+                "options": [
+                  {
+                    "key": "inbox",
+                    "label": {
+                      "en": "Inbox",
+                      "ru": "Входящие"
+                    },
+                    "rank": 1
+                  },
+                  {
+                    "key": "planned",
+                    "label": {
+                      "en": "Planned",
+                      "ru": "Запланирована"
+                    },
+                    "rank": 2
+                  },
+                  {
+                    "key": "in_progress",
+                    "label": {
+                      "en": "In progress",
+                      "ru": "В работе"
+                    },
+                    "rank": 3
+                  },
+                  {
+                    "key": "waiting",
+                    "label": {
+                      "en": "Waiting",
+                      "ru": "Ожидает"
+                    },
+                    "rank": 4
+                  },
+                  {
+                    "key": "done",
+                    "label": {
+                      "en": "Done",
+                      "ru": "Сделана"
+                    },
+                    "rank": 5
+                  },
+                  {
+                    "key": "cancelled",
+                    "label": {
+                      "en": "Cancelled",
+                      "ru": "Отменена"
+                    },
+                    "rank": 6
+                  }
+                ]
+              },
+              "description": "Состояние задачи — На каком шаге работа над задачей (варианты: inbox|planned|in_progress|waiting|done|cancelled)"
+            },
+            "orbis/priority": {
+              "type": "string",
+              "enum": ["low", "medium", "high"],
+              "x-orbis-type": {
+                "kind": "select",
+                "options": [
+                  {
+                    "key": "low",
+                    "label": {
+                      "en": "Low",
+                      "ru": "Низкий"
+                    },
+                    "rank": 1
+                  },
+                  {
+                    "key": "medium",
+                    "label": {
+                      "en": "Medium",
+                      "ru": "Средний"
+                    },
+                    "rank": 2
+                  },
+                  {
+                    "key": "high",
+                    "label": {
+                      "en": "High",
+                      "ru": "Высокий"
+                    },
+                    "rank": 3
+                  }
+                ]
+              },
+              "description": "Приоритет — Насколько задача важнее прочих (варианты: low|medium|high)"
+            },
+            "orbis/due_date": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "x-orbis-type": {
+                "kind": "date"
+              },
+              "description": "Срок — К какому дню задача должна быть сделана"
+            },
+            "orbis/completed_at": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?(Z|[+-]\\d{2}:\\d{2})$",
+              "x-orbis-type": {
+                "kind": "timestamp"
+              },
+              "description": "Когда завершена — Момент перехода задачи в закрытое состояние"
+            },
+            "orbis/effort_min": {
+              "type": "integer",
+              "minimum": 1,
+              "x-orbis-type": {
+                "kind": "number",
+                "min": 1,
+                "integer": true
+              },
+              "description": "Трудоёмкость, мин — Сколько времени задача, по оценке, потребует"
+            },
+            "orbis/waiting_for": {
+              "type": "string",
+              "x-orbis-type": {
+                "kind": "text"
+              },
+              "description": "Ждём — Чего или кого задача ждёт, чтобы сдвинуться"
+            }
+          },
+          "required": ["orbis/task_status"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_financial",
+    "description": "orbis/amount — строка decimal (например \"340.00\"), всегда положительная; знак задаёт orbis/direction. orbis/finance_category — ссылка на сущность-категорию: резолви её через entity_query по синонимам («aspect=orbis/category, orbis/aliases=такси»). orbis/occurred_on — дата операции в таймзоне пользователя. orbis/bank_txn_id заполняется ТОЛЬКО импортом банковской выписки — никогда не выставляй его сам.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/amount": {
+              "type": "string",
+              "pattern": "^-?\\d+(\\.\\d+)?$",
+              "x-orbis-decimal": {
+                "exclusiveMin": "0"
+              },
+              "x-orbis-type": {
+                "kind": "decimal",
+                "exclusiveMin": "0"
+              },
+              "description": "Сумма — Величина операции; знак задаёт направление, а не сама сумма"
+            },
+            "orbis/currency": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$",
+              "minLength": 3,
+              "maxLength": 3,
+              "x-orbis-type": {
+                "kind": "text",
+                "format": "currency",
+                "minLength": 3,
+                "maxLength": 3
+              },
+              "description": "Валюта — В какой валюте выражены деньги записи"
+            },
+            "orbis/direction": {
+              "type": "string",
+              "enum": ["income", "expense"],
+              "x-orbis-type": {
+                "kind": "select",
+                "options": [
+                  {
+                    "key": "income",
+                    "label": {
+                      "en": "Income",
+                      "ru": "Доход"
+                    },
+                    "rank": 1
+                  },
+                  {
+                    "key": "expense",
+                    "label": {
+                      "en": "Expense",
+                      "ru": "Расход"
+                    },
+                    "rank": 2
+                  }
+                ]
+              },
+              "description": "Направление — Деньги приходят или уходят (варианты: income|expense)"
+            },
+            "orbis/finance_category": {
+              "type": "string",
+              "format": "uuid",
+              "x-orbis-type": {
+                "kind": "ref",
+                "target": {
+                  "filter": {
+                    "aspect": "orbis/category"
+                  }
+                }
+              },
+              "description": "Категория — Категория доходов и расходов (модуль Финансы)"
+            },
+            "orbis/occurred_on": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "x-orbis-type": {
+                "kind": "date"
+              },
+              "description": "Дата операции — День, когда операция случилась"
+            },
+            "orbis/planned": {
+              "type": "boolean",
+              "x-orbis-type": {
+                "kind": "boolean",
+                "default": false
+              },
+              "description": "Планируемая — Операция ещё не случилась, а только намечена"
+            },
+            "orbis/recurring": {
+              "type": "boolean",
+              "x-orbis-type": {
+                "kind": "boolean"
+              },
+              "description": "Повторяющаяся — Запись — шаблон регулярной операции"
+            },
+            "orbis/payment_method": {
+              "type": "string",
+              "x-orbis-type": {
+                "kind": "text"
+              },
+              "description": "Способ оплаты — Чем заплачено"
+            },
+            "orbis/counterparty": {
+              "type": "string",
+              "x-orbis-type": {
+                "kind": "text"
+              },
+              "description": "Контрагент — Кому заплачено или от кого получено"
+            },
+            "orbis/bank_txn_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "x-orbis-type": {
+                "kind": "text",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "description": "Идентификатор операции банка — Тождество операции в выписке банка — по нему ловится повтор при импорте"
+            }
+          },
+          "required": ["orbis/amount", "orbis/direction", "orbis/finance_category"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_note",
+    "description": "Применяй, когда пользователь фиксирует мысль/заметку/документ. Текст кладётся в body сущности, а не в свойства.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/content_type": {
+              "type": "string",
+              "enum": ["markdown", "plain", "checklist"],
+              "x-orbis-type": {
+                "kind": "select",
+                "options": [
+                  {
+                    "key": "markdown",
+                    "label": {
+                      "en": "Markdown",
+                      "ru": "Markdown"
+                    },
+                    "rank": 1
+                  },
+                  {
+                    "key": "plain",
+                    "label": {
+                      "en": "Plain text",
+                      "ru": "Обычный текст"
+                    },
+                    "rank": 2
+                  },
+                  {
+                    "key": "checklist",
+                    "label": {
+                      "en": "Checklist",
+                      "ru": "Чек-лист"
+                    },
+                    "rank": 3
+                  }
+                ]
+              },
+              "description": "Вид текста — Как читать тело записи (варианты: markdown|plain|checklist)"
+            },
+            "orbis/pinned": {
+              "type": "boolean",
+              "x-orbis-type": {
+                "kind": "boolean"
+              },
+              "description": "Закреплена — Запись держится наверху списков"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_budget",
+    "description": "Конверт на период: orbis/finance_category, orbis/limit (decimal-строка), orbis/period_start и orbis/period_end включительно. Потраченное не хранится — сервер считает его по транзакциям конверта.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/finance_category": {
+              "type": "string",
+              "format": "uuid",
+              "x-orbis-type": {
+                "kind": "ref",
+                "target": {
+                  "filter": {
+                    "aspect": "orbis/category"
+                  }
+                }
+              },
+              "description": "Категория — Категория доходов и расходов (модуль Финансы)"
+            },
+            "orbis/limit": {
+              "type": "string",
+              "pattern": "^-?\\d+(\\.\\d+)?$",
+              "x-orbis-decimal": {
+                "min": "0"
+              },
+              "x-orbis-type": {
+                "kind": "decimal",
+                "min": "0"
+              },
+              "description": "Лимит — Сколько по этой категории можно потратить за период"
+            },
+            "orbis/currency": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$",
+              "minLength": 3,
+              "maxLength": 3,
+              "x-orbis-type": {
+                "kind": "text",
+                "format": "currency",
+                "minLength": 3,
+                "maxLength": 3
+              },
+              "description": "Валюта — В какой валюте выражены деньги записи"
+            },
+            "orbis/period_start": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "x-orbis-type": {
+                "kind": "date"
+              },
+              "description": "Начало периода — С какого дня конверт считает"
+            },
+            "orbis/period_end": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+              "x-orbis-type": {
+                "kind": "date"
+              },
+              "description": "Конец периода — По какой день конверт считает включительно"
+            },
+            "orbis/carryover": {
+              "type": "string",
+              "pattern": "^-?\\d+(\\.\\d+)?$",
+              "x-orbis-type": {
+                "kind": "decimal"
+              },
+              "description": "Перенос остатка — Остаток прошлого периода, перенесённый в этот"
+            }
+          },
+          "required": [
+            "orbis/finance_category",
+            "orbis/limit",
+            "orbis/period_start",
+            "orbis/period_end"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_category",
+    "description": "Категория — сущность, не строка. orbis/aliases — синонимы в нижнем регистре (рус+англ) для резолва ввода. Дерево категорий — рёбра роли category-parent (родительская категория → подкатегория), а не свойство.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/icon": {
+              "type": "string",
+              "x-orbis-type": {
+                "kind": "text"
+              },
+              "description": "Иконка — Значок категории в списках"
+            },
+            "orbis/color": {
+              "type": "string",
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "x-orbis-type": {
+                "kind": "text",
+                "format": "color"
+              },
+              "description": "Цвет — Цвет категории в списках и ведомостях"
+            },
+            "orbis/aliases": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 50,
+              "x-orbis-type": {
+                "kind": "text",
+                "cardinality": "many",
+                "maxItems": 50
+              },
+              "description": "Синонимы — Слова, по которым ввод узнаёт категорию"
+            },
+            "orbis/spend_class": {
+              "type": "string",
+              "enum": ["fixed", "discretionary"],
+              "x-orbis-type": {
+                "kind": "select",
+                "options": [
+                  {
+                    "key": "fixed",
+                    "label": {
+                      "en": "Fixed",
+                      "ru": "Обязательная"
+                    },
+                    "rank": 1
+                  },
+                  {
+                    "key": "discretionary",
+                    "label": {
+                      "en": "Discretionary",
+                      "ru": "Необязательная"
+                    },
+                    "rank": 2
+                  }
+                ]
+              },
+              "description": "Класс траты — Трата обязательная или та, от которой можно отказаться (варианты: fixed|discretionary)"
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_memory",
+    "description": "orbis/memory_kind=fact — знание о пользователе; kind=rule — правило обработки («бар → Развлечения»). orbis/rule_scope — ссылка на запись реестра: аспект домена, к которому правило привязано; пусто = глобально.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/memory_kind": {
+              "type": "string",
+              "enum": ["fact", "rule"],
+              "x-orbis-type": {
+                "kind": "select",
+                "options": [
+                  {
+                    "key": "fact",
+                    "label": {
+                      "en": "Fact",
+                      "ru": "Факт"
+                    },
+                    "rank": 1
+                  },
+                  {
+                    "key": "rule",
+                    "label": {
+                      "en": "Rule",
+                      "ru": "Правило"
+                    },
+                    "rank": 2
+                  }
+                ]
+              },
+              "description": "Род записи — Запись памяти — факт о владельце или правило обработки ввода (варианты: fact|rule)"
+            },
+            "orbis/rule_scope": {
+              "type": "string",
+              "x-orbis-type": {
+                "kind": "registry_ref",
+                "target": "contract"
+              },
+              "description": "Область действия — К какому понятию относится запись памяти"
+            },
+            "orbis/rule_pattern": {
+              "type": "string",
+              "x-orbis-type": {
+                "kind": "text"
+              },
+              "description": "Образец — Текст, по которому правило узнаёт ввод"
+            },
+            "orbis/rule_target": {
+              "type": "string",
+              "format": "uuid",
+              "x-orbis-type": {
+                "kind": "ref",
+                "target": {
+                  "filter": {
+                    "aspect": "orbis/category"
+                  }
+                }
+              },
+              "description": "Назначаемая категория — Категория, которую правило подставляет при совпадении образца"
+            }
+          },
+          "required": ["orbis/memory_kind"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_goal",
+    "description": "Применяй, когда у намерения есть измеримая цель («накопить 300000», «прочитать 24 книги»). orbis/target_value — decimal-строка, строго больше нуля. orbis/progress_source описывает, ОТКУДА берётся факт: query — дерево запроса по сущностям, aggregate — count (считает сущности; field при нём ЗАПРЕЩЁН, не передавай его) либо sum/latest (field ОБЯЗАТЕЛЕН — key свойства, например orbis/amount). orbis/unit — непустая подпись единицы, если она есть. orbis/current_value считает сервер, обходя граф; никогда не задавай и не правь его сам.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/progress_source": {
+              "$defs": {
+                "node": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "required": ["and"],
+                      "properties": {
+                        "and": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/node"
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["or"],
+                      "properties": {
+                        "or": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/$defs/node"
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["not"],
+                      "properties": {
+                        "not": {
+                          "$ref": "#/$defs/node"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["prop", "op", "value"],
+                      "properties": {
+                        "op": {
+                          "enum": ["eq", "ne", "gt", "lt"]
+                        },
+                        "prop": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "value": {
+                          "anyOf": [
+                            {
+                              "type": ["string", "number", "boolean"]
+                            },
+                            {
+                              "type": "object",
+                              "required": ["token"],
+                              "properties": {
+                                "token": {
+                                  "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["prop", "op", "value"],
+                      "properties": {
+                        "op": {
+                          "const": "in"
+                        },
+                        "prop": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "value": {
+                          "type": "array",
+                          "items": {
+                            "type": ["string", "number", "boolean"]
+                          },
+                          "minItems": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["prop", "op", "value"],
+                      "properties": {
+                        "op": {
+                          "const": "contains"
+                        },
+                        "prop": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "value": {
+                          "type": ["string", "number", "boolean"]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["prop", "op", "value"],
+                      "properties": {
+                        "op": {
+                          "const": "range"
+                        },
+                        "prop": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "value": {
+                          "type": "object",
+                          "properties": {
+                            "to": {
+                              "anyOf": [
+                                {
+                                  "type": ["string", "number", "boolean"]
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["token"],
+                                  "properties": {
+                                    "token": {
+                                      "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
+                            },
+                            "from": {
+                              "anyOf": [
+                                {
+                                  "type": ["string", "number", "boolean"]
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["token"],
+                                  "properties": {
+                                    "token": {
+                                      "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "minProperties": 1,
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["has"],
+                      "properties": {
+                        "has": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["aspect"],
+                      "properties": {
+                        "aspect": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["tag"],
+                      "properties": {
+                        "tag": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["search"],
+                      "properties": {
+                        "search": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["rel"],
+                      "properties": {
+                        "rel": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "required": ["kind", "of"],
+                              "properties": {
+                                "of": {
+                                  "type": "string",
+                                  "pattern": "^(this|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+                                },
+                                "via": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "kind": {
+                                  "enum": ["children_of", "parents_of"]
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": ["kind", "of", "via"],
+                              "properties": {
+                                "of": {
+                                  "type": "string",
+                                  "pattern": "^(this|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+                                },
+                                "via": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "kind": {
+                                  "enum": ["descendants_of", "ancestors_of"]
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": ["kind", "via"],
+                              "properties": {
+                                "via": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "kind": {
+                                  "const": "has_relation"
+                                },
+                                "sourceNotIn": {
+                                  "type": "object",
+                                  "required": ["prop", "values"],
+                                  "properties": {
+                                    "prop": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "values": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": ["string", "number", "boolean"]
+                                      },
+                                      "minItems": 1
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": ["kind"],
+                              "properties": {
+                                "via": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "kind": {
+                                  "const": "has_children"
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["archived"],
+                      "properties": {
+                        "archived": {
+                          "enum": ["true", "any"]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["class"],
+                      "properties": {
+                        "class": {
+                          "type": "object",
+                          "required": ["contract", "set"],
+                          "properties": {
+                            "set": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "contract": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "anyOf": [
+                {
+                  "type": "object",
+                  "required": ["query", "aggregate"],
+                  "properties": {
+                    "query": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "title": "Orbis Q-AST",
+                          "required": ["filter"],
+                          "properties": {
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "title": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "filter": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/node"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "sortBy": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": ["field", "dir"],
+                                "properties": {
+                                  "dir": {
+                                    "enum": ["asc", "desc"]
+                                  },
+                                  "field": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              "minItems": 1
+                            },
+                            "display": {
+                              "enum": ["compact", "list", "table"]
+                            }
+                          },
+                          "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["text"],
+                          "properties": {
+                            "text": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "aggregate": {
+                      "const": "count"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "required": ["query", "aggregate", "field"],
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "query": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "title": "Orbis Q-AST",
+                          "required": ["filter"],
+                          "properties": {
+                            "limit": {
+                              "type": "integer",
+                              "minimum": 1
+                            },
+                            "title": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "filter": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/$defs/node"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "sortBy": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "required": ["field", "dir"],
+                                "properties": {
+                                  "dir": {
+                                    "enum": ["asc", "desc"]
+                                  },
+                                  "field": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                },
+                                "additionalProperties": false
+                              },
+                              "minItems": 1
+                            },
+                            "display": {
+                              "enum": ["compact", "list", "table"]
+                            }
+                          },
+                          "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["text"],
+                          "properties": {
+                            "text": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "aggregate": {
+                      "enum": ["sum", "latest"],
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              ],
+              "x-orbis-type": {
+                "kind": "json",
+                "schema": {
+                  "$defs": {
+                    "node": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": ["and"],
+                          "properties": {
+                            "and": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/$defs/node"
+                              },
+                              "minItems": 1
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["or"],
+                          "properties": {
+                            "or": {
+                              "type": "array",
+                              "items": {
+                                "$ref": "#/$defs/node"
+                              },
+                              "minItems": 1
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["not"],
+                          "properties": {
+                            "not": {
+                              "$ref": "#/$defs/node"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["prop", "op", "value"],
+                          "properties": {
+                            "op": {
+                              "enum": ["eq", "ne", "gt", "lt"]
+                            },
+                            "prop": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": ["string", "number", "boolean"]
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["token"],
+                                  "properties": {
+                                    "token": {
+                                      "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["prop", "op", "value"],
+                          "properties": {
+                            "op": {
+                              "const": "in"
+                            },
+                            "prop": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "value": {
+                              "type": "array",
+                              "items": {
+                                "type": ["string", "number", "boolean"]
+                              },
+                              "minItems": 1
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["prop", "op", "value"],
+                          "properties": {
+                            "op": {
+                              "const": "contains"
+                            },
+                            "prop": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "value": {
+                              "type": ["string", "number", "boolean"]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["prop", "op", "value"],
+                          "properties": {
+                            "op": {
+                              "const": "range"
+                            },
+                            "prop": {
+                              "type": "string",
+                              "minLength": 1
+                            },
+                            "value": {
+                              "type": "object",
+                              "properties": {
+                                "to": {
+                                  "anyOf": [
+                                    {
+                                      "type": ["string", "number", "boolean"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": ["token"],
+                                      "properties": {
+                                        "token": {
+                                          "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                },
+                                "from": {
+                                  "anyOf": [
+                                    {
+                                      "type": ["string", "number", "boolean"]
+                                    },
+                                    {
+                                      "type": "object",
+                                      "required": ["token"],
+                                      "properties": {
+                                        "token": {
+                                          "enum": ["today", "overdue", "next_7d", "after_7d"]
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    }
+                                  ]
+                                }
+                              },
+                              "minProperties": 1,
+                              "additionalProperties": false
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["has"],
+                          "properties": {
+                            "has": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["aspect"],
+                          "properties": {
+                            "aspect": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["tag"],
+                          "properties": {
+                            "tag": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["search"],
+                          "properties": {
+                            "search": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["rel"],
+                          "properties": {
+                            "rel": {
+                              "anyOf": [
+                                {
+                                  "type": "object",
+                                  "required": ["kind", "of"],
+                                  "properties": {
+                                    "of": {
+                                      "type": "string",
+                                      "pattern": "^(this|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+                                    },
+                                    "via": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "kind": {
+                                      "enum": ["children_of", "parents_of"]
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["kind", "of", "via"],
+                                  "properties": {
+                                    "of": {
+                                      "type": "string",
+                                      "pattern": "^(this|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$"
+                                    },
+                                    "via": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "kind": {
+                                      "enum": ["descendants_of", "ancestors_of"]
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["kind", "via"],
+                                  "properties": {
+                                    "via": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "kind": {
+                                      "const": "has_relation"
+                                    },
+                                    "sourceNotIn": {
+                                      "type": "object",
+                                      "required": ["prop", "values"],
+                                      "properties": {
+                                        "prop": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "values": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": ["string", "number", "boolean"]
+                                          },
+                                          "minItems": 1
+                                        }
+                                      },
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                },
+                                {
+                                  "type": "object",
+                                  "required": ["kind"],
+                                  "properties": {
+                                    "via": {
+                                      "type": "string",
+                                      "minLength": 1
+                                    },
+                                    "kind": {
+                                      "const": "has_children"
+                                    }
+                                  },
+                                  "additionalProperties": false
+                                }
+                              ]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["archived"],
+                          "properties": {
+                            "archived": {
+                              "enum": ["true", "any"]
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "required": ["class"],
+                          "properties": {
+                            "class": {
+                              "type": "object",
+                              "required": ["contract", "set"],
+                              "properties": {
+                                "set": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "contract": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      ]
+                    }
+                  },
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "required": ["query", "aggregate"],
+                      "properties": {
+                        "query": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "title": "Orbis Q-AST",
+                              "required": ["filter"],
+                              "properties": {
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1
+                                },
+                                "title": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "filter": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/node"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "sortBy": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": ["field", "dir"],
+                                    "properties": {
+                                      "dir": {
+                                        "enum": ["asc", "desc"]
+                                      },
+                                      "field": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "additionalProperties": false
+                                  },
+                                  "minItems": 1
+                                },
+                                "display": {
+                                  "enum": ["compact", "list", "table"]
+                                }
+                              },
+                              "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": ["text"],
+                              "properties": {
+                                "text": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        "aggregate": {
+                          "const": "count"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": ["query", "aggregate", "field"],
+                      "properties": {
+                        "field": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "query": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "title": "Orbis Q-AST",
+                              "required": ["filter"],
+                              "properties": {
+                                "limit": {
+                                  "type": "integer",
+                                  "minimum": 1
+                                },
+                                "title": {
+                                  "type": "string",
+                                  "minLength": 1
+                                },
+                                "filter": {
+                                  "anyOf": [
+                                    {
+                                      "$ref": "#/$defs/node"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "sortBy": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "required": ["field", "dir"],
+                                    "properties": {
+                                      "dir": {
+                                        "enum": ["asc", "desc"]
+                                      },
+                                      "field": {
+                                        "type": "string",
+                                        "minLength": 1
+                                      }
+                                    },
+                                    "additionalProperties": false
+                                  },
+                                  "minItems": 1
+                                },
+                                "display": {
+                                  "enum": ["compact", "list", "table"]
+                                }
+                              },
+                              "description": "Канонический разобранный запрос Orbis (§А5-7): дерево and/or/not над предикатами и отдельные поля проекции.",
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "required": ["text"],
+                              "properties": {
+                                "text": {
+                                  "type": "string",
+                                  "minLength": 1
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
+                        "aggregate": {
+                          "enum": ["sum", "latest"],
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "description": "Источник прогресса — Откуда берётся текущее значение цели"
+            },
+            "orbis/target_value": {
+              "type": "string",
+              "pattern": "^-?\\d+(\\.\\d+)?$",
+              "x-orbis-decimal": {
+                "exclusiveMin": "0"
+              },
+              "x-orbis-type": {
+                "kind": "decimal",
+                "exclusiveMin": "0"
+              },
+              "description": "Целевое значение — Число, к которому цель идёт"
+            },
+            "orbis/current_value": {
+              "type": "string",
+              "pattern": "^-?\\d+(\\.\\d+)?$",
+              "x-orbis-decimal": {
+                "min": "0"
+              },
+              "x-orbis-type": {
+                "kind": "decimal",
+                "min": "0"
+              },
+              "description": "Текущее значение — Насколько цель продвинулась на сейчас"
+            },
+            "orbis/unit": {
+              "type": "string",
+              "minLength": 1,
+              "x-orbis-type": {
+                "kind": "text",
+                "minLength": 1
+              },
+              "description": "Единица — В чём меряется прогресс цели"
+            }
+          },
+          "required": ["orbis/progress_source", "orbis/target_value"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_project",
+    "description": "orbis/project — проект: затея с жизненным циклом (orbis/project_stage: active|paused|done). Тикеты проекта — дочерние сущности с orbis/task, привязанные ребром роли ticket от проекта к тикету. «Сделай A, B, C» в треде проекта = создать по тикету на пункт (orbis/task_status inbox), детьми проекта. Тело проекта с живыми блоками сервер засевает сам при пустом теле — не пиши его вручную. Кодовое (репозиторий, ветка) — в orbis/repo на той же сущности, не здесь.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/project_stage": {
+              "type": "string",
+              "enum": ["active", "paused", "done"],
+              "x-orbis-type": {
+                "kind": "select",
+                "options": [
+                  {
+                    "key": "active",
+                    "label": {
+                      "en": "Active",
+                      "ru": "Активен"
+                    },
+                    "rank": 1
+                  },
+                  {
+                    "key": "paused",
+                    "label": {
+                      "en": "Paused",
+                      "ru": "На паузе"
+                    },
+                    "rank": 2
+                  },
+                  {
+                    "key": "done",
+                    "label": {
+                      "en": "Done",
+                      "ru": "Завершён"
+                    },
+                    "rank": 3
+                  }
+                ]
+              },
+              "description": "Стадия проекта — Проект идёт, стоит на паузе или завершён (варианты: active|paused|done)"
+            }
+          },
+          "required": ["orbis/project_stage"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_repo",
+    "description": "orbis/repo — репозиторий код-проекта: orbis/repo_url и orbis/default_branch. Ставится на ту же сущность, что orbis/project, только если проект — про код.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/repo_url": {
+              "type": "string",
+              "format": "uri",
+              "minLength": 1,
+              "maxLength": 512,
+              "x-orbis-type": {
+                "kind": "text",
+                "format": "url",
+                "minLength": 1,
+                "maxLength": 512
+              },
+              "description": "Адрес репозитория — Где лежит код проекта"
+            },
+            "orbis/default_branch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "x-orbis-type": {
+                "kind": "text",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "description": "Ветка по умолчанию — С какой ветки исполнитель начинает работу"
+            }
+          },
+          "required": ["orbis/repo_url", "orbis/default_branch"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_assignment",
+    "description": "orbis/assignment — исполнитель тикета. orbis/executor=agent требует orbis/grant — доступ из «Настройки → Агенты»; его выставляет владелец (обычно кнопкой на экране тикета) — НИКОГДА не выдумывай его и не подставляй чужой. orbis/executor=human — orbis/assignee текстом. orbis/may_close (по умолчанию false) разрешает исполнителю закрывать тикет самому — включай только по прямой просьбе.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/executor": {
+              "type": "string",
+              "enum": ["human", "agent"],
+              "x-orbis-type": {
+                "kind": "select",
+                "options": [
+                  {
+                    "key": "human",
+                    "label": {
+                      "en": "Human",
+                      "ru": "Человек"
+                    },
+                    "rank": 1
+                  },
+                  {
+                    "key": "agent",
+                    "label": {
+                      "en": "Agent",
+                      "ru": "Агент"
+                    },
+                    "rank": 2
+                  }
+                ]
+              },
+              "description": "Исполнитель — Работу ведёт человек или агент (варианты: human|agent)"
+            },
+            "orbis/grant": {
+              "type": "string",
+              "format": "uuid",
+              "x-orbis-type": {
+                "kind": "grant"
+              },
+              "description": "Доступ агента — Каким доступом владельца работает агент"
+            },
+            "orbis/assignee": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "x-orbis-type": {
+                "kind": "text",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "description": "Кто делает — Имя человека, который взял работу"
+            },
+            "orbis/may_close": {
+              "type": "boolean",
+              "x-orbis-type": {
+                "kind": "boolean",
+                "default": false
+              },
+              "description": "Может закрыть — Исполнителю разрешено закрыть работу самому"
+            }
+          },
+          "required": ["orbis/executor"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "attach_orbis_routine",
+    "description": "orbis/routine — рутина: повторяющаяся работа внутреннего исполнителя. ЧТО делать — в теле сущности обычным текстом, в свойствах только расписание и права. orbis/routine_at — локальное время владельца «ЧЧ:ММ» (07:00, не 7:00); orbis/routine_days — дни недели mo|tu|we|th|fr|sa|su, без свойства = каждый день. orbis/routine_mode обязателен: propose — рутина ПРЕДЛАГАЕТ изменения владельцу на подтверждение, act — применяет их сама, и тогда перечисли orbis/allowed_tools (ровно те инструменты, что ей нужны). Без явной просьбы владельца действовать самостоятельно заводи рутину с orbis/routine_mode: propose — act выдаётся только по его прямому слову. orbis/routine_stage: active — рутина работает, paused — временно отключена; «выключи рутину» — это paused, а не удаление.",
+    "inputJsonSchema": {
+      "type": "object",
+      "properties": {
+        "entity_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "orbis/routine_stage": {
+              "type": "string",
+              "enum": ["active", "paused"],
+              "x-orbis-type": {
+                "kind": "select",
+                "options": [
+                  {
+                    "key": "active",
+                    "label": {
+                      "en": "Active",
+                      "ru": "Активна"
+                    },
+                    "rank": 1
+                  },
+                  {
+                    "key": "paused",
+                    "label": {
+                      "en": "Paused",
+                      "ru": "На паузе"
+                    },
+                    "rank": 2
+                  }
+                ]
+              },
+              "description": "Стадия рутины — Рутина работает или временно отключена (варианты: active|paused)"
+            },
+            "orbis/routine_at": {
+              "type": "string",
+              "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+              "x-orbis-type": {
+                "kind": "time"
+              },
+              "description": "Время запуска — В котором часу рутина срабатывает по локальному времени владельца"
+            },
+            "orbis/routine_days": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["mo", "tu", "we", "th", "fr", "sa", "su"]
+              },
+              "minItems": 1,
+              "x-orbis-type": {
+                "kind": "select",
+                "options": [
+                  {
+                    "key": "mo",
+                    "label": {
+                      "en": "Mon",
+                      "ru": "Пн"
+                    },
+                    "rank": 1
+                  },
+                  {
+                    "key": "tu",
+                    "label": {
+                      "en": "Tue",
+                      "ru": "Вт"
+                    },
+                    "rank": 2
+                  },
+                  {
+                    "key": "we",
+                    "label": {
+                      "en": "Wed",
+                      "ru": "Ср"
+                    },
+                    "rank": 3
+                  },
+                  {
+                    "key": "th",
+                    "label": {
+                      "en": "Thu",
+                      "ru": "Чт"
+                    },
+                    "rank": 4
+                  },
+                  {
+                    "key": "fr",
+                    "label": {
+                      "en": "Fri",
+                      "ru": "Пт"
+                    },
+                    "rank": 5
+                  },
+                  {
+                    "key": "sa",
+                    "label": {
+                      "en": "Sat",
+                      "ru": "Сб"
+                    },
+                    "rank": 6
+                  },
+                  {
+                    "key": "su",
+                    "label": {
+                      "en": "Sun",
+                      "ru": "Вс"
+                    },
+                    "rank": 7
+                  }
+                ],
+                "cardinality": "many",
+                "minItems": 1
+              },
+              "description": "Дни недели — По каким дням недели рутина срабатывает (варианты: mo|tu|we|th|fr|sa|su)"
+            },
+            "orbis/routine_mode": {
+              "type": "string",
+              "enum": ["propose", "act"],
+              "x-orbis-type": {
+                "kind": "select",
+                "options": [
+                  {
+                    "key": "propose",
+                    "label": {
+                      "en": "Propose",
+                      "ru": "Предлагает"
+                    },
+                    "rank": 1
+                  },
+                  {
+                    "key": "act",
+                    "label": {
+                      "en": "Act",
+                      "ru": "Действует"
+                    },
+                    "rank": 2
+                  }
+                ]
+              },
+              "description": "Режим — Рутина предлагает изменения владельцу или применяет их сама (варианты: propose|act)"
+            },
+            "orbis/allowed_tools": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "maxItems": 50,
+              "x-orbis-type": {
+                "kind": "text",
+                "minLength": 1,
+                "cardinality": "many",
+                "maxItems": 50
+              },
+              "description": "Разрешённые инструменты — Чем рутине позволено пользоваться"
+            }
+          },
+          "required": ["orbis/routine_stage", "orbis/routine_at", "orbis/routine_mode"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["entity_id", "data"],
+      "additionalProperties": false
+    }
+  }
+]

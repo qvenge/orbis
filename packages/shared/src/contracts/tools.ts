@@ -8,6 +8,44 @@ import { z } from 'zod';
 // грамматикой до Задачи 21 (см. докблок `packages/shared/src/index.ts`).
 import { queryAstSchema } from '../query/ast';
 
+/**
+ * ВНУТРЕННЯЯ форма правки значений (§А1-1, РП-3): плоский патч по свойствам плюс
+ * навешивание/снятие аспектов.
+ *
+ * Три части, и каждая выражает то, чего не выражают остальные:
+ *  - `props` — «поставить значение». Ключ — `key` свойства ИЛИ его id; какой именно,
+ *    решает резолв на границе (`resolvePropertyRef`): у встроенных они совпадают, а свои
+ *    свойства владелец адресует именем, которое сам и дал;
+ *  - `unset` — «снять значение». Отдельным списком, а не `null` в `props`, потому что
+ *    `null` — законное ЗНАЧЕНИЕ json-свойства, и совместить их значило бы навсегда
+ *    запретить его записывать;
+ *  - `aspects.attach`/`detach` — «изменить интерпретацию». Снятие аспекта значений НЕ
+ *    трогает (Р9): аспект — не владелец поля, и его снятие не повод терять факт владельца.
+ *
+ * С Задачи 12 это и есть форма ТУЛОВ (§А9-1): `entityCreateInput`/`entityUpdateInput` ниже
+ * собраны из этих же кусков, и «внутренняя форма» осталась внутренней только в том смысле,
+ * что её же используют серверные пути мимо тулов.
+ */
+export const entityPropsPatch = z
+  .object({
+    props: z.record(z.unknown()).optional(),
+    unset: z.array(z.string()).optional(),
+    aspects: z
+      .object({ attach: z.array(z.string()).optional(), detach: z.array(z.string()).optional() })
+      .strict()
+      .optional(),
+  })
+  .strict();
+export type EntityPropsPatch = z.infer<typeof entityPropsPatch>;
+
+/**
+ * КОНТРАКТ ТУЛА `entity_create` (§А9-1) — то, что видит модель.
+ *
+ * `props` адресуются `key` свойства (`orbis/amount`), `aspects` — просто список того, с чем
+ * сущность рождается. `meta` из контракта УШЛА (§А1-3): мешок был write-only во всех пяти
+ * зонах, а модель, которой его показывали, писала в него структуру мимо реестра — то есть
+ * мимо валидации, мимо запросов и мимо любого читателя.
+ */
 export const entityCreateInput = z
   .object({
     id: z.string().uuid().optional(),
@@ -15,11 +53,20 @@ export const entityCreateInput = z
     emoji: z.string().optional(),
     body: z.string().optional(),
     tags: z.array(z.string()), // обязателен по §9.2 (может быть пустым)
-    meta: z.record(z.unknown()).optional(),
-    aspects: z.record(z.record(z.unknown())).optional(),
+    props: entityPropsPatch.shape.props,
+    // У СОЗДАНИЯ аспекты — список, а не `{attach, detach}`: снимать у ещё не существующей
+    // сущности нечего, и форма с `detach` обещала бы модели невыполнимое.
+    aspects: z.array(z.string()).optional(),
   })
   .strict();
 
+/**
+ * КОНТРАКТ ТУЛА `entity_update` (§А9-1). `unset` и `aspects.detach` — то, чего у создания
+ * нет и быть не может; `precondition` — то, чего нет ЗДЕСЬ и не будет: CAS-предусловие это
+ * рычаг серверных путей (захват тикета, предложение рутины, отложенная единица), и модель,
+ * подставляющая его сама, подделывала бы гонку, которую предусловие и призвано ловить
+ * (см. `entityUpdateExecInput`).
+ */
 export const entityUpdateInput = z
   .object({
     id: z.string().uuid(),
@@ -28,11 +75,39 @@ export const entityUpdateInput = z
     emoji: z.string().nullable().optional(),
     body: z.string().optional(),
     tags: z.array(z.string()).optional(),
-    meta: z.record(z.unknown()).optional(),
-    aspects: z.record(z.union([z.record(z.unknown()), z.null()])).optional(),
+    props: entityPropsPatch.shape.props,
+    unset: entityPropsPatch.shape.unset,
+    aspects: entityPropsPatch.shape.aspects,
     archived: z.boolean().optional(),
   })
   .strict();
+
+// ---------------------------------------------------------------------------
+// Переходные формы `aspects` (РП-3): старая карта «аспект → поля» живёт рядом с новой,
+// пока web и не переведённые серверные пути на неё не переехали (Задачи 13c и 18).
+// Объявлены ЗДЕСЬ, до первого потребителя: `const` в TDZ до своей инициализации, и
+// ссылка выше по файлу упала бы ReferenceError при загрузке модуля (тот же довод, что у
+// `entityGetUiInput` ниже).
+// ---------------------------------------------------------------------------
+
+/** Старая карта правки: `{id аспекта: {поле: значение|null}}`; `null` вместо объекта — detach. */
+const legacyAspectsPatch = z.record(z.union([z.record(z.unknown()), z.null()]));
+
+/**
+ * `aspects` НАДМНОЖЕСТВА СОЗДАНИЯ: новый список ИЛИ старая карта `{аспект: {поле: значение}}`.
+ *
+ * Union, а не два разных поля: у создания это ОДНО понятие «с чем сущность рождается», и
+ * вторым именем оно бы просто раздвоилось. Формы различимы по типу значения (список строк
+ * против карты объектов), поэтому разбор однозначен, а вызывающий выбирает ту, на которую
+ * уже переведён: старую карту шлют web и ещё не переведённые серверные пути, новую — тулы
+ * (§А9-1) и всё, что переведено.
+ *
+ * Объявлена ОДНИМ объектом на два надмножества создания: разъехавшись, они дали бы форму,
+ * которую tRPC принимает, а executor отвергает (или наоборот).
+ */
+const legacyOrListAspects = {
+  aspects: z.union([z.array(z.string()), z.record(z.record(z.unknown()))]).optional(),
+};
 
 // Форму документа контракт не разбирает: её знает схема нод (@orbis/shared/doc), а дублирующая
 // zod-модель дерева ProseMirror разъехалась бы с ней при первой же новой ноде. Импортировать
@@ -63,15 +138,22 @@ const BODY_XOR_BODY_DOC_ISSUE = {
 };
 
 /**
- * Вход tRPC-роутера entity.update: то же, что у тула, плюс структурная форма тела.
+ * Вход tRPC-роутера entity.update: то же, что у тула, плюс структурная форма тела и СТАРАЯ
+ * карта аспектов.
  *
  * Почему отдельной схемой, а не расширением `entityUpdateInput`: та — контракт ТУЛА, её парность
  * с рукописной JSON Schema реестра (tools/registry.ts) проверяет тест, и рост схемы показал бы
  * `bodyDoc` модели — а дизайн держит тул-контракт строковым. Один путь записи (executor), два
- * входа с разными полномочиями.
+ * входа с разными полномочиями. С Задачи 12 разница выросла на вторую половину: тул говорит
+ * только новой формой (§А9-1), роутер принимает и старую карту — до Задач 13c и 18.
  */
 export const entityUpdateUiInput = entityUpdateInput
-  .extend({ bodyDoc: bodyDocSchema.optional() })
+  .extend({
+    bodyDoc: bodyDocSchema.optional(),
+    // Старая карта — до Задач 13c (web) и 18 (`MemoryRuleCard`): их формы правки ещё
+    // говорят «аспект.поле». Union той же формы, что у exec-надмножества ниже.
+    aspects: z.union([legacyAspectsPatch, entityPropsPatch.shape.aspects.unwrap()]).optional(),
+  })
   .refine(bodyXorBodyDoc, BODY_XOR_BODY_DOC_ISSUE);
 export type EntityUpdateUiInput = z.infer<typeof entityUpdateUiInput>;
 
@@ -172,51 +254,24 @@ export interface ProposalDivergence {
 export const BODY_NOTE_PROPERTY = 'orbis/body';
 
 /**
- * ВНУТРЕННЯЯ форма правки значений (§А1-1, РП-3): плоский патч по свойствам плюс
- * навешивание/снятие аспектов. Живёт в exec/UI-надмножествах и НЕ показывается модели до
- * Задачи 12 — контракты тулов `entityCreateInput`/`entityUpdateInput` не растут ни на поле.
+ * Вход tRPC-роутера `entity.create`: то же, что у тула, плюс СТАРАЯ карта аспектов.
  *
- * Три части, и каждая выражает то, чего не выражают остальные:
- *  - `props` — «поставить значение». Ключ — id свойства ИЛИ его `key`; какой именно,
- *    решает резолв на границе (`resolvePropertyRef`): у встроенных они совпадают, а свои
- *    свойства владелец адресует именем, которое сам и дал;
- *  - `unset` — «снять значение». Отдельным списком, а не `null` в `props`, потому что
- *    `null` — законное ЗНАЧЕНИЕ json-свойства, и совместить их значило бы навсегда
- *    запретить его записывать;
- *  - `aspects.attach`/`detach` — «изменить интерпретацию». Снятие аспекта значений НЕ
- *    трогает (Р9): аспект — не владелец поля, и его снятие не повод терять факт владельца.
+ * Отдельной схемой, а не расширением контракта тула на месте, по той же причине, что у
+ * `entityUpdateUiInput`: та — контракт ТУЛА, её парность с рукописной JSON Schema реестра
+ * проверяет тест, и рост схемы показал бы модели форму, от которой её как раз уводят (§А9-1).
+ * Живёт до Задачи 13c — она переводит web на `props`.
  */
-export const entityPropsPatch = z
-  .object({
-    props: z.record(z.unknown()).optional(),
-    unset: z.array(z.string()).optional(),
-    aspects: z
-      .object({ attach: z.array(z.string()).optional(), detach: z.array(z.string()).optional() })
-      .strict()
-      .optional(),
-  })
-  .strict();
-export type EntityPropsPatch = z.infer<typeof entityPropsPatch>;
-
-/** Старая карта правки: `{id аспекта: {поле: значение|null}}`; `null` вместо объекта — detach. */
-const legacyAspectsPatch = z.record(z.union([z.record(z.unknown()), z.null()]));
+export const entityCreateUiInput = entityCreateInput.extend(legacyOrListAspects).strict();
+export type EntityCreateUiInput = z.infer<typeof entityCreateUiInput>;
 
 /**
- * Надмножество entity_create для executor'а: старая карта аспектов ИЛИ новая форма
- * (`props` + список навешиваемых аспектов).
- *
- * `aspects` — union, а не два разных поля: у создания это ОДНО понятие «с чем сущность
- * рождается», и вторым именем оно бы просто раздвоилось. Формы различимы по типу значения
- * (список строк против карты объектов), поэтому разбор однозначен, а вызывающий выбирает ту,
- * на которую уже переведён: старую карту шлют тулы, web и не переведённые серверные пути
- * (до Задач 13c/18), новую — всё, что переводится по мере задач среза.
+ * Надмножество entity_create для executor'а: обе формы `aspects` (см. `legacyOrListAspects`).
+ * Совпадает сегодня с UI-входом побайтово и всё-таки объявлено отдельно: они отвечают на
+ * разные вопросы («что принимает роутер владельца» и «что умеет исполнитель»), и первое же
+ * их расхождение — например, серверный путь с формой, которой у роутера нет, — иначе тянуло
+ * бы правку одного контракта во второй молча.
  */
-export const entityCreateExecInput = entityCreateInput
-  .extend({
-    props: z.record(z.unknown()).optional(),
-    aspects: z.union([z.array(z.string()), z.record(z.record(z.unknown()))]).optional(),
-  })
-  .strict();
+export const entityCreateExecInput = entityCreateInput.extend(legacyOrListAspects).strict();
 export type EntityCreateExecInput = z.infer<typeof entityCreateExecInput>;
 
 /**
@@ -234,8 +289,6 @@ export const entityUpdateExecInput = entityUpdateInput
   .extend({
     bodyDoc: bodyDocSchema.optional(),
     precondition: entityUpdatePrecondition.optional(),
-    props: entityPropsPatch.shape.props,
-    unset: entityPropsPatch.shape.unset,
     aspects: z.union([legacyAspectsPatch, entityPropsPatch.shape.aspects.unwrap()]).optional(),
   })
   .refine(bodyXorBodyDoc, BODY_XOR_BODY_DOC_ISSUE);

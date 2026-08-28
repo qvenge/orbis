@@ -128,7 +128,11 @@ test('шаблон не попадает в список planned-покупок 
   );
   await exec(user, 'attach_orbis_schedule', {
     entity_id: tpl.id,
-    data: { start_at: SERIES_START, timezone: 'Europe/Moscow', recurrence: RECURRENCE },
+    data: {
+      'orbis/start_at': SERIES_START,
+      'orbis/timezone': 'Europe/Moscow',
+      'orbis/recurrence': RECURRENCE,
+    },
   });
   // Положительный контроль: ручная planned-покупка §2.7 в списке остаётся
   const purchase = await exec(

@@ -65,6 +65,22 @@ function budgetData(
   };
 }
 
+/** Тот же конверт СВОЙСТВАМИ — форма `data` у `attach_*` (§А9-1). */
+function budgetProps(
+  categoryRef: string,
+  start: string,
+  end: string,
+  over: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    'orbis/finance_category': categoryRef,
+    'orbis/limit': '10000.00',
+    'orbis/period_start': start,
+    'orbis/period_end': end,
+    ...over,
+  };
+}
+
 /** Сохранённые свойства сущности — истина в БД (админ-DSN, обходит RLS). */
 async function storedProps(id: string): Promise<Record<string, unknown>> {
   const { db: admin, client: adminClient } = adminDb();
@@ -239,7 +255,7 @@ describe('нормализация currency конверта NULL→defaultCurre
         db,
         req(user, 'attach_orbis_budget', {
           entity_id: hostId,
-          data: budgetData(cat, '2026-07-01', '2026-07-31'),
+          data: budgetProps(cat, '2026-07-01', '2026-07-31'),
         }),
         { sink },
       ),
@@ -252,7 +268,7 @@ describe('нормализация currency конверта NULL→defaultCurre
         db,
         req(user, 'attach_orbis_budget', {
           entity_id: hostId,
-          data: budgetData(cat, '2026-08-01', '2026-08-31'),
+          data: budgetProps(cat, '2026-08-01', '2026-08-31'),
         }),
         { sink },
       ),

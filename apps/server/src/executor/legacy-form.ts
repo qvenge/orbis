@@ -27,7 +27,7 @@ import {
 } from '@orbis/shared';
 import type { RegistrySnapshot } from '../registry/load';
 import { ExecError } from './errors';
-import { type EntityState, type PropsPatch, resolvePropertyRef } from './props';
+import { type PropsPatch, resolvePropertyRef } from './props';
 
 /** Значения сегодняшней колонки `relations.relation_type` плюс `ref` (её v1 ещё не знает). */
 export type LegacyRelationType = 'parent' | 'blocks' | 'related_to' | 'derived_from' | 'ref';
@@ -224,68 +224,6 @@ export function legacyPatchToProps(
   return { set, unset, attach, detach };
 }
 
-/**
- * Тот же перевод, но с семантикой ЗАМЕНЫ ключа целиком — форма inverse-операций журнала
- * (§7.8) и тула `attach_<аспект>`.
- *
- * Разница с `legacyPatchToProps` ровно одна и она существенная: свойство аспекта, которого
- * в значении НЕТ, снимается. В старой форме это выходило само собой (ключ карты
- * подменялся целиком), в плоской модели снятие приходится назвать. Без него откат
- * «действие дописало поле» оставлял бы дописанное значение в `props`: старая карта его уже
- * не показывала бы (проекция идёт по свойствам аспекта), а следующее навешивание того же
- * аспекта воскресило бы — расхождение, которое нашлось бы у владельца, а не в тестах.
- *
- * `{аспект: null}` (аспекта до действия не было) снимает и значения его свойств — по той же
- * причине. Не снимаются лишь те, что объявлены ДРУГИМ аспектом, остающимся на сущности:
- * слитое свойство (В1) принадлежит обоим, и снимать его вместе с одним из носителей значило
- * бы стирать данные второго.
- *
- * Порождённые заменой снятия едут в `replaced`, а не в `unset`, и это существенно для ПРАВ:
- * `unset` — распоряжение автора («сотри отчёт»), `replaced` — форма операции («навесь
- * аспект»). Гейт §А2-5 обязан видеть первое и не должен видеть второе (см. `PropsPatch`).
- */
-export function legacyReplaceToProps(
-  reg: RegistrySnapshot,
-  cur: EntityState,
-  patch: Record<string, Record<string, unknown> | null>,
-): PropsPatch {
-  const base = legacyPatchToProps(reg, patch);
-  const detached = new Set(base.detach ?? []);
-  const remaining = new Set([
-    ...cur.aspects.filter((id) => !detached.has(id)),
-    ...(base.attach ?? []),
-  ]);
-  const unset = new Set(base.unset ?? []);
-  const replaced = new Set<string>();
-  const set = base.set ?? {};
-
-  for (const [aspectId, value] of Object.entries(patch)) {
-    for (const ref of reg.aspects.get(aspectId)?.properties ?? []) {
-      if (Object.hasOwn(set, ref.propertyId) || unset.has(ref.propertyId)) continue;
-      // Свойство, которое объявляет другой оставшийся аспект, — не наше, чтобы его снимать.
-      const sharedWithOther = [...remaining].some(
-        (other) =>
-          other !== aspectId &&
-          (reg.aspects.get(other)?.properties ?? []).some((r) => r.propertyId === ref.propertyId),
-      );
-      if (sharedWithOther) continue;
-      if (
-        value === null ||
-        !Object.hasOwn(value, legacyFieldOfProperty(reg, aspectId, ref.propertyId))
-      ) {
-        replaced.add(ref.propertyId);
-      }
-    }
-  }
-  return {
-    set,
-    unset: [...unset],
-    replaced: [...replaced],
-    attach: base.attach,
-    detach: base.detach,
-  };
-}
-
 /** Вход исполнителя в любой из двух форм — то, что разбирают exec-надмножества контрактов. */
 export interface ExecPropsInput {
   props?: Record<string, unknown>;
@@ -323,13 +261,14 @@ export function hasPropsInput(input: ExecPropsInput): boolean {
  *
  * СЕМАНТИКИ ЗАМЕНЫ КЛЮЧА ЗДЕСЬ НЕТ, и это не пробел. У неё остался ровно один вызывающий —
  * тул `attach_<аспект>`, для которого подмена носителя и есть смысл операции; он зовёт
- * `legacyReplaceToProps` НАПРЯМУЮ (executor.ts, prepareAttach). Вторым входом сюда она была
- * ради inverse журнала, а с §А7-4 нагрузка отката говорит свойствами и называет снятие
- * явным `unset` — восстанавливать носитель стало нечего. Флаг-переключатель на две
- * семантики жил бы дальше незапиненным (это и показала мутация M15 отчёта Задачи 6), и
- * первый же переводимый путь, доверившись ему, попал бы в непроверенную ветку — поэтому он
- * снят вместе с ней, а не оставлен «на всякий случай». Нужна замена — зовите
- * `legacyReplaceToProps` прямо, как attach: там она названа по имени и проверена.
+ * `replaceAspectProps` НАПРЯМУЮ (`executor/props.ts`, из `prepareAttach`), и говорит она уже
+ * свойствами, а не старой картой (§А9-1). Вторым входом сюда замена была ради inverse
+ * журнала, а с §А7-4 нагрузка отката называет снятие явным `unset` — восстанавливать
+ * носитель стало нечего. Флаг-переключатель на две семантики жил бы дальше незапиненным
+ * (это и показала мутация M15 отчёта Задачи 6), и первый же переводимый путь, доверившись
+ * ему, попал бы в непроверенную ветку — поэтому он снят вместе с ней, а не оставлен «на
+ * всякий случай». Нужна замена — зовите `replaceAspectProps` прямо, как attach: там она
+ * названа по имени и проверена.
  *
  * По той же причине здесь нет и `replaced` в результате: его порождает ТОЛЬКО замена
  * носителя, а её здесь больше не бывает. Потребители читают его через `?? []`, поэтому

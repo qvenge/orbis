@@ -220,7 +220,8 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
       const t1 = await callTool(agent, 'entity_create', {
         title: 'Серверное ядро',
         tags: ['task'],
-        aspects: { 'orbis/task': { status: 'inbox' } },
+        props: { 'orbis/task_status': 'inbox' },
+        aspects: ['orbis/task'],
       });
       expect(t1.isError).toBe(false);
       task1Id = (t1.payload.result as WireEntity).id;
@@ -228,7 +229,8 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
       const t2 = await callTool(agent, 'entity_create', {
         title: 'MCP-адаптер',
         tags: ['task'],
-        aspects: { 'orbis/task': { status: 'inbox' } },
+        props: { 'orbis/task_status': 'inbox' },
+        aspects: ['orbis/task'],
       });
       expect(t2.isError).toBe(false);
       task2Id = (t2.payload.result as WireEntity).id;
@@ -248,7 +250,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
         title: 'Архитектура Orbis',
         tags: ['note'],
         body: 'Ядро online-first + агентная петля.',
-        aspects: { 'orbis/note': {} },
+        aspects: ['orbis/note'],
       });
       expect(note.isError).toBe(false);
       noteId = (note.payload.result as WireEntity).id;
@@ -335,7 +337,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
       // Работа сделана вне Orbis — агент закрывает задачу
       const done = await callTool(agent, 'entity_update', {
         id: task1Id,
-        aspects: { 'orbis/task': { status: 'done' } },
+        props: { 'orbis/task_status': 'done' },
       });
       expect(done.isError).toBe(false);
 

@@ -4,8 +4,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
   askInput,
   attachAspectInput,
+  attachToolName,
   BUILTIN_ASPECT_DEFS,
-  BUILTIN_ASPECT_IDS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   batchExecuteInput,
@@ -22,11 +22,13 @@ import {
   relationCreateInput,
   relationDeleteInput,
   runStepInput,
-  SERVICE_ASPECT_IDS,
+  X_ORBIS_TYPE,
 } from '@orbis/shared';
 import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { eq, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
+// Эталон реестра тулов — ИСТОЧНИК счётчиков этого файла (РП-13): см. `registry-golden.test.ts`.
+import TOOL_REGISTRY_GOLDEN from '../../test/golden/tool-registry.json';
 import {
   adminDb,
   appDb,
@@ -37,6 +39,7 @@ import {
 } from '../../test/helpers';
 import { aspectDefinitions } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { propertyCatalogInput } from './property-catalog';
 import {
   AGENT_VERB_NAMES,
   ASK_TOOL,
@@ -59,14 +62,22 @@ const userB = freshUserId();
 /** Кастомный аспект userA: id с '/' И '-' — проверка нормализации имени тула (решение 3). */
 const CUSTOM_ASPECT_ID = 'user/sleep-log';
 /**
- * Старая форма схемы (колонка `schema`), которую хелпер собирает из типа свойства: до
- * миграции 0017 именно она уезжает в `data` тула `attach_*` (Р-24). Ожидание записано
- * дословно — оно и есть приёмка «хелпер пишет тулу ровно ту схему, что писала фикстура».
+ * Схема `data` кастомного тула — теперь она СОБИРАЕТСЯ ИЗ РЕЕСТРА СВОЙСТВ (§А9-1), а не
+ * берётся из колонки `aspect_definitions.schema`. Ожидание записано дословно и целиком:
+ * имя параметра — `key` свойства (не локальная часть), описание — «подпись — смысл» локали,
+ * копия типа едет аннотацией. Колонка `schema` при этом у фикстуры по-прежнему заполнена —
+ * тем и ценно, что тул её больше НЕ читает.
  */
 const CUSTOM_SCHEMA = {
   type: 'object',
-  properties: { hours: { type: 'number' } },
-  required: ['hours'],
+  properties: {
+    'user/hours': {
+      type: 'number',
+      [X_ORBIS_TYPE]: { kind: 'number' },
+      description: 'hours — Поле hours (user/sleep-log)',
+    },
+  },
+  required: ['user/hours'],
   additionalProperties: false,
 };
 
@@ -86,7 +97,7 @@ afterAll(async () => {
 });
 
 function registryFor(userId: string): Promise<OrbisToolDef[]> {
-  return withIdentity(db, userId, (tx) => buildToolRegistry(tx));
+  return withIdentity(db, userId, (tx) => buildToolRegistry(tx, userId));
 }
 
 function defOf(defs: OrbisToolDef[], name: string): OrbisToolDef {
@@ -115,17 +126,23 @@ const CORE_NAMES = [
   'batch_execute',
   'user_query',
   'budget_status', // A6: read-агрегаты Budget (03-budget §4), доступен и MCP
+  'property_catalog', // §А9-3: путь модели к свойствам без attach_*-тула; fullScopeOnly
   'import_csv_start', // C4c: вход в импорт из чата (03-budget §3.4), internalOnly
   'undo_last', // хвост V1 (Д-1): «отмени последнее» словами в чате (§7.8), internalOnly
 ] as const;
 
-/** Служебные аспекты (orbis/agent-run) attach_*-тула не получают — их правит только сервер. */
-const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_IDS.filter(
-  (id) => !(SERVICE_ASPECT_IDS as readonly string[]).includes(id),
-).map((id) => `attach_${id.replaceAll('/', '_').replaceAll('-', '_')}`);
+/**
+ * Служебные аспекты (orbis/agent-run) attach_*-тула не получают — их правит только сервер.
+ * Признак служебности берётся из ВСТРОЕННОГО РЕЕСТРА (колонка `service`, §А3-1), а не из
+ * списка `SERVICE_ASPECT_IDS`: сервер отбирает по ней же, и список в тесте был бы вторым
+ * мнением о том, что служебно.
+ */
+const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_DEFS.filter((a) => !a.service).map((a) =>
+  attachToolName(a.key),
+);
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 12 core (с thread_post и undo_last) + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* = 31', async () => {
+  test('builtin-реестр (userB без кастомных): 13 core (с property_catalog) + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* = 32', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
@@ -141,7 +158,11 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Подмену routineOnly на agentOnly ловит НЕ он, а пин agentOnly ниже.
     expect(defs.find((d) => d.name === 'orbis_ask')).toEqual(ASK_TOOL);
     for (const name of BUILTIN_ATTACH_NAMES) expect(names).toContain(name);
-    expect(defs.length).toBe(31);
+    // Счётчик — ПРОИЗВОДНЫЙ от эталона реестра тулов (`test/golden/tool-registry.json`):
+    // эталон снят при чистом сиде и он же сторожит состав. Второе число, написанное здесь
+    // руками, разошлось бы с ним молча — и «сколько тулов у модели» перестало бы иметь один
+    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 32 тула, пиннит `registry-golden`.
+    expect(defs.length).toBe(TOOL_REGISTRY_GOLDEN.length);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
   });
@@ -162,7 +183,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('kind: entity_query/entity_get/user_query/budget_status/import_csv_start — read, остальные — mutate', async () => {
+  test('kind: чтения — entity_query/entity_get/user_query/budget_status/property_catalog/import_csv_start, остальные — mutate', async () => {
     const defs = await registryFor(userB);
     for (const def of defs) {
       const expected = [
@@ -170,12 +191,23 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
         'entity_get',
         'user_query',
         'budget_status',
+        'property_catalog',
         'import_csv_start',
       ].includes(def.name)
         ? 'read'
         : 'mutate';
-      expect(def.kind).toBe(expected);
+      expect({ name: def.name, kind: def.kind }).toEqual({ name: def.name, kind: expected });
     }
+  });
+
+  test('fullScopeOnly: true РОВНО у property_catalog (§А9-4) — и он при этом чтение', async () => {
+    // Признак нужен именно потому, что тул читающий: правило «чтения открыты все» его бы
+    // пропустило, и `worker` получил бы карту поверхности владельца целиком.
+    const defs = await registryFor(userB);
+    expect(defs.filter((d) => d.fullScopeOnly === true).map((d) => d.name)).toEqual([
+      'property_catalog',
+    ]);
+    expect(defOf(defs, 'property_catalog').kind).toBe('read');
   });
 
   test('internalOnly: true только у user_query, import_csv_start и undo_last (§9.2: MCP не отдаются)', async () => {
@@ -308,7 +340,49 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(defOf(defs, 'attach_orbis_task').description).toBe(expected as string);
   });
 
-  test('attach_orbis_task: inputJsonSchema = envelope {entity_id, data: <схема аспекта из БД>}', async () => {
+  test('attach_orbis_task: параметры — key свойств по rank, required из ссылок аспекта, описание из локали (§А9-1)', async () => {
+    const defs = await registryFor(userB);
+    const schema = defOf(defs, 'attach_orbis_task').inputJsonSchema;
+    expect(Object.keys(schema.properties as Record<string, unknown>)).toEqual([
+      'entity_id',
+      'data',
+    ]);
+    const data = (schema.properties as Record<string, Record<string, unknown>>).data as Record<
+      string,
+      unknown
+    >;
+    // Имена параметров — namespaced key, порядок — rank ссылок аспекта (§Б7-3).
+    expect(Object.keys(data.properties as Record<string, unknown>)).toEqual([
+      'orbis/task_status',
+      'orbis/priority',
+      'orbis/due_date',
+      'orbis/completed_at',
+      'orbis/effort_min',
+      'orbis/waiting_for',
+    ]);
+    expect(data.required).toEqual(['orbis/task_status']);
+    expect(data.additionalProperties).toBe(false);
+    const status = (data.properties as Record<string, Record<string, unknown>>)[
+      'orbis/task_status'
+    ];
+    // enum по rank вариантов и описание «подпись — смысл» локали владельца плюс варианты.
+    expect(status?.enum).toEqual([
+      'inbox',
+      'planned',
+      'in_progress',
+      'waiting',
+      'done',
+      'cancelled',
+    ]);
+    expect(status?.description).toBe(
+      'Состояние задачи — На каком шаге работа над задачей (варианты: inbox|planned|in_progress|waiting|done|cancelled)',
+    );
+    expect((status?.[X_ORBIS_TYPE] as { kind?: string } | undefined)?.kind).toBe('select');
+  });
+
+  test('колонка aspect_definitions.schema тулу БОЛЬШЕ НЕ ИСТОЧНИК: она в БД есть, а схема тула другая', async () => {
+    // Пин перевода: пока обе формы совпадали бы, «читаем реестр» было бы недоказуемо.
+    // Колонка старой формы адресует поле локальным именем (`status`), реестр — key.
     const defs = await registryFor(userB);
     const rows = await withIdentity(db, userB, (tx) =>
       tx
@@ -318,15 +392,25 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
           sql`${aspectDefinitions.id} = 'orbis/task' AND ${isNull(aspectDefinitions.ownerId)}`,
         ),
     );
-    expect(defOf(defs, 'attach_orbis_task').inputJsonSchema).toEqual({
-      type: 'object',
-      properties: {
-        entity_id: { type: 'string', format: 'uuid' },
-        data: rows[0]?.schema as Record<string, unknown>,
-      },
-      required: ['entity_id', 'data'],
-      additionalProperties: false,
-    });
+    const column = rows[0]?.schema as { properties?: Record<string, unknown> } | null;
+    expect(Object.keys(column?.properties ?? {})).toContain('status');
+    const data = (
+      defOf(defs, 'attach_orbis_task').inputJsonSchema.properties as Record<
+        string,
+        Record<string, unknown>
+      >
+    ).data;
+    expect(Object.keys(data?.properties ?? {})).not.toContain('status');
+  });
+
+  test('служебный аспект (колонка service) тула не получает — и это ЕДИНСТВЕННЫЙ такой', async () => {
+    const names = (await registryFor(userB)).map((d) => d.name);
+    const service = BUILTIN_ASPECT_DEFS.filter((a) => a.service);
+    expect(service.map((a) => a.id)).toEqual(['orbis/agent-run']);
+    for (const a of service) expect(names).not.toContain(attachToolName(a.key));
+    for (const a of BUILTIN_ASPECT_DEFS.filter((x) => !x.service)) {
+      expect(names).toContain(attachToolName(a.key));
+    }
   });
 
   test('кастомный аспект userA: attach_user_sleep_log («/» и «-» → «_»), схема из БД; userB его не видит (RLS)', async () => {
@@ -335,7 +419,7 @@ describe('buildToolRegistry: attach_* из реестра аспектов (§7.
     expect(def.kind).toBe('mutate');
     expect(def.description).toBe('Пиши часы сна числом.');
     expect((def.inputJsonSchema.properties as Record<string, unknown>).data).toEqual(CUSTOM_SCHEMA);
-    expect(defsA.length).toBe(32);
+    expect(defsA.length).toBe(TOOL_REGISTRY_GOLDEN.length + 1);
 
     const defsB = await registryFor(userB);
     expect(defsB.some((d) => d.name === 'attach_user_sleep_log')).toBe(false);
@@ -404,6 +488,7 @@ describe('парность zod-envelope ↔ рукописная JSON Schema (§
 
   const ZOD_BY_TOOL: Record<string, z.ZodTypeAny> = {
     entity_query: entityQueryInput,
+    property_catalog: propertyCatalogInput,
     entity_get: entityGetInput,
     entity_create: entityCreateInput,
     entity_update: entityUpdateInput,
@@ -574,6 +659,16 @@ describe('routineToolDefs: реестр прогона рутины (V1.10, ру
     }
     // Чекпойнт — исключение из того же круга: он остаётся рутине всегда (рулинг В2)
     expect(routineToolDefs(defs, ref('act')).map((d) => d.name)).toContain('orbis_checkpoint');
+  });
+
+  test('property_catalog рутине ДОСТУПЕН в обоих режимах: fullScopeOnly — про скоуп гранта, не про фон', async () => {
+    // §А9-4 закрывает каталог фоновому ИСПОЛНИТЕЛЮ по гранту (`worker`), а рутина работает
+    // над графом владельца от его имени и обязана его видеть — тот же довод, по которому
+    // ей открыты все прочие чтения. `routineToolAllowed` признака не смотрит вовсе.
+    const defs = await registryFor(userB);
+    for (const mode of ['propose', 'act'] as const) {
+      expect(routineToolDefs(defs, ref(mode)).map((d) => d.name)).toContain('property_catalog');
+    }
   });
 
   test('act с пустым allowed_tools: рутина остаётся с чтениями и базой (чекпойнт + вопрос)', async () => {

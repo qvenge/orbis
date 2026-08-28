@@ -9,5 +9,7 @@ export * from './contract-ids';
 // зовёт серверный golden приёмки §С8-1; удаляется целиком Задачей 23.
 export * from './legacy-field-map';
 export * from './property-type';
+// Модель-обращённая поверхность реестра (§А9-1): имя attach_*-тула и схема его data.
+export * from './tool-schema';
 export * from './types';
 export * from './value-schema';

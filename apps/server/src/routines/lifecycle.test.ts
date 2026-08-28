@@ -113,7 +113,7 @@ async function seedProposal(
     operations: [
       {
         tool: 'entity_update',
-        input: { id: task.id, aspects: { 'orbis/task': { status: 'planned' } } },
+        input: { id: task.id, props: { 'orbis/task_status': 'planned' } },
       },
     ],
   });
@@ -187,10 +187,10 @@ async function editedChildrenOf(parentId: string): Promise<string[]> {
   return [...(rows as unknown as Array<{ id: string }>)].map((r) => r.id);
 }
 
-/** Правка одного поля предложения `seedProposal`: строка `(0, orbis/task, status)`. */
+/** Правка одной строки предложения `seedProposal`: строка `(0, orbis/task_status)` (§А1-1). */
 function statusEdit(value: string): ProposalEdits {
   return editsSchema.parse({
-    fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value }],
+    fields: [{ index: 0, field: 'orbis/task_status', value }],
   });
 }
 
