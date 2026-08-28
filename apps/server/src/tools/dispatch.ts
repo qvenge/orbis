@@ -1516,11 +1516,11 @@ async function autonomySummary(
     // запись в тот миг, когда аспект появится, и замок держит их на любом объекте.
     const aboutRoutine =
       carriesRoutineAspect(op.tool, op.input) || head?.aspects.includes(ROUTINE_ASPECT) === true;
-    // ИСТОЧНИК ФРАЗ О ЗНАЧЕНИЯХ. Обычно это сам патч. Но у навешивания носителя (Р-12-5)
-    // значимы не свойства вызова, а ИТОГОВЫЕ: их в патче может не быть ни одного, а вооружают
-    // запись именно они — «сделай эту заметку рутиной» на боевых значениях, лежащих со времён
-    // снятия аспекта. Владельцу надо видеть, ЧЕМ оживает рутина, а не пустую фразу.
-    const named = byCarrier?.armedBy ?? routine;
+    // ИСТОЧНИК ФРАЗ О ЗНАЧЕНИЯХ. Обычно это сам патч. Но у ОЖИВЛЕНИЯ выключателем (Р-12-5 —
+    // аспект, Р-12-6 — архив) значимы не свойства вызова, а ИТОГОВЫЕ: их в патче может не быть
+    // ни одного, а вооружают запись именно они — боевые значения лежат на ней с тех пор, как
+    // её выключили. Владельцу надо видеть, ЧЕМ оживает рутина, а не пустую фразу.
+    const named = byCarrier?.revives?.values ?? routine;
     const facts: string[] = [];
     const mode = named[ROUTINE_MODE_PROPERTY];
     if (typeof mode === 'string') facts.push(`режим ${mode}`);
@@ -1544,9 +1544,11 @@ async function autonomySummary(
     // Снятие носителя — не снятие значений (Р9), и называть его «снимает режим» было бы
     // враньём: режим и белый список уцелеют в `props`, работать перестанет сама рутина.
     if (byCarrier?.detached === true) facts.push('снимает аспект рутины');
-    // Обратная сторона того же (Р-12-5): значения уже лежат, вызов возвращает им носитель —
-    // и запись оживает рутиной с правами, перечисленными выше.
-    if (byCarrier?.armedBy != null) facts.push('навешивает аспект рутины');
+    // Обратная сторона того же: значения уже лежат, вызов щёлкает выключателем — и запись
+    // оживает рутиной с правами, перечисленными выше. Выключатель называется свой, а не
+    // общими словами: «вернули из архива» и «сделали рутиной» — разные события для владельца.
+    if (byCarrier?.revives?.switch === 'aspect') facts.push('навешивает аспект рутины');
+    if (byCarrier?.revives?.switch === 'archive') facts.push('возвращает из архива');
     const subject = aboutRoutine
       ? `Автономия рутины «${title}»`
       : `Свойства доверенности рутины на записи «${title}»`;
@@ -1571,12 +1573,18 @@ interface CarrierAutonomyChange {
   /** снятие самого аспекта рутины у ВООРУЖЁННОЙ записи: значения уцелеют, рутина — нет */
   detached: boolean;
   /**
-   * Навешивание аспекта рутины на ГОТОВЫЕ боевые значения (рулинг Р-12-5) — итоговые значения
-   * доверенности, которыми запись станет вооружена; `null` — навешивания нет. Поле НЕСЁТ
-   * значения, а не флаг, потому что их читает сводка: владельцу нужно видеть, чем именно
-   * оживает рутина, а в патче этих свойств может не быть вовсе.
+   * Чем вызов ОЖИВЛЯЕТ вооружённую рутину и на каких значениях; `null` — не оживляет.
+   *
+   * Живой рутину делают ТРИ условия (`activeRoutines`, `agent-loop/queries.ts`): аспект на
+   * строке, `orbis/routine_stage: active` и `NOT archived`. Два из них — выключатели, которые
+   * щёлкаются мимо свойств доверенности и потому мимо гейта формы: `aspects.attach` (рулинг
+   * Р-12-5) и `archived: false` (рулинг Р-12-6). Третий, `stage`, ушёл владельцу (Р-12-4).
+   *
+   * Поле НЕСЁТ значения, а не флаг, потому что их читает сводка: владельцу нужно видеть, ЧЕМ
+   * именно оживает рутина, а в патче этих свойств может не быть вовсе — они лежат на записи
+   * с тех пор, как её выключили.
    */
-  armedBy: Record<string, unknown> | null;
+  revives: { switch: 'aspect' | 'archive'; values: Record<string, unknown> } | null;
 }
 
 /**
@@ -1588,6 +1596,12 @@ interface CarrierAutonomyChange {
  * значения уже лежат (они переживают снятие аспекта, Р9), и вооружённая рутина оживает без
  * единого свойства в payload'е. Симметрия обязательна: владельца, подтвердившего «снимает
  * аспект рутины», следующий молчаливый `attach` возвращал бы к тому же, с чего он начал.
+ *
+ * СЮДА ЖЕ — ВОЗВРАТ ИЗ АРХИВА (`archived: false`, рулинг Р-12-6), хотя носителя он не трогает.
+ * Место общее не по механике, а по вопросу: отбор прогонов (`activeRoutines`) требует трёх
+ * условий — аспект, `stage: active`, `NOT archived`, — и любой выключатель, возвращающий
+ * запись в этот отбор, оживляет вооружённую рутину одинаково молча. Разводить их по разным
+ * функциям значило бы завести второй ответ на один вопрос.
  *
  * Почему это отдельная проверка ПО БД, а не факт классификатора: носитель отвечает на вопрос
  * «что станет с доверенностью» только вместе с текущим состоянием цели.
@@ -1657,7 +1671,8 @@ async function autonomyChangedByCarrier(
   type Probe =
     | { index: number; id: string; kind: 'replace'; data: Record<string, unknown> }
     | { index: number; id: string; kind: 'detach' }
-    | { index: number; id: string; kind: 'attach'; patch: Record<string, unknown> };
+    | { index: number; id: string; kind: 'attach'; patch: Record<string, unknown> }
+    | { index: number; id: string; kind: 'unarchive'; patch: Record<string, unknown> };
   const probes: Probe[] = [];
   for (const [index, op] of ops.entries()) {
     if (!isRecord(op.input)) continue;
@@ -1675,6 +1690,12 @@ async function autonomyChangedByCarrier(
       probes.push({ index, id: op.input.id, kind: 'detach' });
     } else if (namesRoutineAspect(op.input, 'attach')) {
       probes.push({ index, id: op.input.id, kind: 'attach', patch: op.input });
+    } else if (op.input.archived === false) {
+      // Возврат из архива — второй выключатель (Р-12-6). Стоит ПОСЛЕ веток аспекта: вызов,
+      // делающий и то и другое, уже поднят веткой выше, и второй записи о нём не нужно.
+      // `archived: true` сюда не попадает намеренно — это выключение, ряд §7.10 «архивация»
+      // держит его сам, а направление у него противоположное (Р-12-4).
+      probes.push({ index, id: op.input.id, kind: 'unarchive', patch: op.input });
     }
   }
   const out = new Map<number, CarrierAutonomyChange>();
@@ -1682,7 +1703,12 @@ async function autonomyChangedByCarrier(
 
   const rows = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
     tx
-      .select({ id: entities.id, props: entities.props, aspects: entities.aspects })
+      .select({
+        id: entities.id,
+        props: entities.props,
+        aspects: entities.aspects,
+        archived: entities.archived,
+      })
       .from(entities)
       .where(
         inArray(
@@ -1709,7 +1735,30 @@ async function autonomyChangedByCarrier(
       // боевые значения, и снять их тем же вызовом.
       const future = propsAfterPatch(props, probe.patch);
       if (autonomyArmed(future)) {
-        out.set(probe.index, { removed: [], detached: false, armedBy: future });
+        out.set(probe.index, {
+          removed: [],
+          detached: false,
+          revives: { switch: 'aspect', values: future },
+        });
+      }
+      continue;
+    }
+    if (probe.kind === 'unarchive') {
+      // ВОЗВРАТ ИЗ АРХИВА (рулинг Р-12-6): `NOT archived` — третье условие отбора прогонов,
+      // и снятие архива возвращает вооружённую act-рутину в работу ровно так же, как
+      // навешивание аспекта. Гейт формы этого не видит: `archived` доверенности не касается.
+      //
+      // Оживление считается только там, где оно РЕАЛЬНО происходит: запись должна быть
+      // архивной (иначе вызов ничего не переключает) и уже нести аспект рутины (без носителя
+      // она в отбор не попадёт, сколько бы боевых значений на ней ни лежало).
+      if (!row.archived || !isCarrier) continue;
+      const future = propsAfterPatch(props, probe.patch);
+      if (autonomyArmed(future)) {
+        out.set(probe.index, {
+          removed: [],
+          detached: false,
+          revives: { switch: 'archive', values: future },
+        });
       }
       continue;
     }
@@ -1722,7 +1771,7 @@ async function autonomyChangedByCarrier(
     // есть сообщение о снятии того, чего нет, — тогда как `detach` у неё проходил молча.
     if (!autonomyArmed(props)) continue;
     if (probe.kind === 'detach') {
-      out.set(probe.index, { removed: [], detached: true, armedBy: null });
+      out.set(probe.index, { removed: [], detached: true, revives: null });
       continue;
     }
     const data = probe.data;
@@ -1735,7 +1784,7 @@ async function autonomyChangedByCarrier(
     // ОБЕСЦЕНЕННОЕ записи в карте не адресует, но её ПОРОЖДАЕТ: отдельной фразы владельцу оно
     // не требует (новое значение сводка назовёт из самого патча), а операцию — требует.
     if (removed.length > 0 || devalued.length > 0) {
-      out.set(probe.index, { removed, detached: false, armedBy: null });
+      out.set(probe.index, { removed, detached: false, revives: null });
     }
   }
   return out;

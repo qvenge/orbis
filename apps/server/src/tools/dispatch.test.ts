@@ -2541,6 +2541,105 @@ describe('V1: выдача автономии рутине из чата → pen
     expect(noop.status).toBe('ok');
   });
 
+  test('ВОЗВРАТ ИЗ АРХИВА вооружённой act-рутины → подтверждение; обычной записи и безоружной — ok (седьмой путь, Р-12-6)', async () => {
+    // Отбор прогонов (`activeRoutines`) требует трёх условий: аспект, stage active и NOT
+    // archived. Замок держал первое (Р-12-5) и не держал третье: `entity_update
+    // {archived:false}` возвращал вооружённую act-рутину в работу молча — ряд §7.10 смотрит
+    // только `archived === true`. Воспроизведено живьём до правки: status ok, карточки нет.
+    async function archive(id: string): Promise<void> {
+      await withIdentity(db, userA, (tx) =>
+        tx.update(entities).set({ archived: true }).where(eq(entities.id, id)),
+      );
+    }
+    async function archivedOfRow(id: string): Promise<boolean | undefined> {
+      const rows = await withIdentity(db, userA, (tx) =>
+        tx.select({ archived: entities.archived }).from(entities).where(eq(entities.id, id)),
+      );
+      return rows[0]?.archived;
+    }
+
+    const armed = await seedEntity(userA, {
+      title: 'Архивная вооружённая',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
+      },
+    });
+    await archive(armed.id);
+    const revive = await dispatchTool(ctxFor(), 'entity_update', {
+      id: armed.id,
+      archived: false,
+    });
+    expect(revive.status).toBe('pending_confirmation');
+    if (revive.status !== 'pending_confirmation') return;
+    // Карточка называет, ЧЕМ рутина возвращается в работу: свойств в патче нет ни одного.
+    expect(revive.card).toMatchObject({
+      summary:
+        'Автономия рутины «Архивная вооружённая»: режим act, инструменты: entity_update, возвращает из архива',
+    });
+    expect(await archivedOfRow(armed.id)).toBe(true);
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ, БЕЗОРУЖНАЯ РУТИНА: та же форма вызова, отличие ровно одно —
+    // значения мирные. Возвращать в работу propose-рутину модель вправе молча.
+    const calm = await seedEntity(userA, {
+      title: 'Архивная propose-рутина',
+      tags: [],
+      aspects: { 'orbis/routine': routine() },
+    });
+    await archive(calm.id);
+    const calmBack = await dispatchTool(ctxFor(), 'entity_update', {
+      id: calm.id,
+      archived: false,
+    });
+    expect(calmBack.status).toBe('ok');
+    expect(await archivedOfRow(calm.id)).toBe(false);
+
+    // ТРЕТЬЯ: обычная запись с боевыми ЗНАЧЕНИЯМИ, но БЕЗ аспекта рутины (Р9). Без носителя
+    // она в отбор прогонов не попадёт, сколько бы прав на ней ни лежало, — оживлять нечего.
+    const ghost = await seedEntity(userA, { title: 'Архивная бывшая рутина', tags: [] });
+    await withIdentity(db, userA, (tx) =>
+      tx
+        .update(entities)
+        .set({
+          archived: true,
+          props: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] },
+        })
+        .where(eq(entities.id, ghost.id)),
+    );
+    const ghostBack = await dispatchTool(ctxFor(), 'entity_update', {
+      id: ghost.id,
+      archived: false,
+    });
+    expect(ghostBack.status).toBe('ok');
+
+    // ЧЕТВЁРТАЯ: запись НЕ архивна — вызов ничего не переключает, оживления нет. Уровень
+    // считается по изменению итогового состояния, а не по наличию поля в payload'е.
+    const live = await seedEntity(userA, {
+      title: 'Живая вооружённая',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
+      },
+    });
+    const noop = await dispatchTool(ctxFor(), 'entity_update', {
+      id: live.id,
+      archived: false,
+    });
+    expect(noop.status).toBe('ok');
+
+    // ПЯТАЯ: АРХИВАЦИЯ той же рутины замком не тронута — её держит ряд §7.10 «архивация =
+    // мягкое удаление», и направление у неё противоположное (выключение, Р-12-4).
+    const archiving = await dispatchTool(ctxFor(), 'entity_update', {
+      id: live.id,
+      archived: true,
+    });
+    expect(archiving.status).toBe('pending_confirmation');
+    if (archiving.status !== 'pending_confirmation') return;
+    // Сводка у неё — фолбэк по имени тула, и это ровно то, что доказывает разделение: карточку
+    // требует ряд архивации, а замок автономии про этот вызов не говорит ничего.
+    expect(archiving.card).toMatchObject({ summary: 'entity_update' });
+  });
+
   test('«отнимать нечего» — ОДИН ответ у обоих видов снятия носителя (Minor-2 фикс-раунда 4)', async () => {
     // Безоружная рутина (propose, список ЕСТЬ и он пуст). `detach` у неё проходил молча, а
     // безобидный attach с новым временем сообщал «снимает белый список» — снятие того, чего
