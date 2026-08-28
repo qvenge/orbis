@@ -335,11 +335,20 @@ export async function createPending(
   const threadId = args.threadId ?? (await ensureGlobalThread(tx, args.actor.userId));
   // У вопроса тула нет — `pendingSummary` вернул бы `undefined` в summary карточки и в
   // «Требуется подтверждение: undefined»; сводка вопроса — сам вопрос, усечённый
+  //
+  // ПУСТАЯ сводка считается ОТСУТСТВУЮЩЕЙ, а не сводкой (фикс-раунд 2, N-1). `??` этого не
+  // делает: `''` не nullish, и вызывающий, у которого сводка не собралась, молча получал
+  // карточку без единого сведения и строку ленты «Требуется подтверждение: » — то есть
+  // владельцу предлагали нажать «Принять», не сказав над чем. Гейт стоит ЗДЕСЬ, а не только
+  // у сегодняшнего вызывающего: пустая строка — это осечка ЛЮБОГО сборщика сводки, и
+  // фолбэк по имени тула честнее пустоты.
+  const explicit = args.summary?.trim();
   const summary =
-    args.summary ??
-    (args.kind === 'question'
-      ? questionSummary(args.question)
-      : pendingSummary(args.tool, args.input));
+    explicit !== undefined && explicit.length > 0
+      ? explicit
+      : args.kind === 'question'
+        ? questionSummary(args.question)
+        : pendingSummary(args.tool, args.input);
   const card: Card = args.card ?? {
     kind: 'confirmation_card',
     mode: 'explicit',

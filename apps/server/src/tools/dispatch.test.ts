@@ -2042,6 +2042,116 @@ describe('V1: выдача автономии рутине из чата → pen
     });
   });
 
+  test('сводка НАЗЫВАЕТ СНЯТИЕ: unset доверенности даёт карточку с текстом, а не пустую (N-1)', async () => {
+    // Фикс-раунд 1 научил замок видеть `unset`, а сводка осталась читать только `props`:
+    // вызов поднимал уровень и отдавал ПУСТУЮ строку — владелец видел «Требуется
+    // подтверждение: » и карточку без единого сведения о том, что он подтверждает.
+    const armed = await seedEntity(userA, {
+      title: 'Утренний обзор',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
+      },
+    });
+
+    // A. Только снятие белого списка.
+    const stripOnly = await dispatchTool(ctxFor(), 'entity_update', {
+      id: armed.id,
+      unset: ['orbis/allowed_tools'],
+    });
+    expect(stripOnly.status).toBe('pending_confirmation');
+    if (stripOnly.status !== 'pending_confirmation') return;
+    expect(stripOnly.card).toMatchObject({
+      summary: 'Автономия рутины «Утренний обзор»: снимает белый список',
+    });
+    // Строка ленты тоже не пуста — её владелец читает раньше карточки.
+    const feed = await messagesIn(userA, entityThreadId(userA, armed.id));
+    expect(feed.some((m) => m.content === 'Требуется подтверждение: ')).toBe(false);
+
+    // B. Смешанный патч: карточка обязана назвать И выдачу, И снятие — прежде она
+    // рассказывала МЕНЬШЕ, чем делает вызов.
+    const mixed = await dispatchTool(ctxFor(), 'entity_update', {
+      id: armed.id,
+      props: { 'orbis/routine_mode': 'act' },
+      unset: ['orbis/allowed_tools'],
+    });
+    expect(mixed.status).toBe('pending_confirmation');
+    if (mixed.status !== 'pending_confirmation') return;
+    expect(mixed.card).toMatchObject({
+      summary: 'Автономия рутины «Утренний обзор»: режим act, снимает белый список',
+    });
+
+    // C. Снятие режима называется своим именем, а не «белым списком».
+    const mode = await dispatchTool(ctxFor(), 'entity_update', {
+      id: armed.id,
+      unset: ['orbis/routine_mode'],
+    });
+    expect(mode.status).toBe('pending_confirmation');
+    if (mode.status !== 'pending_confirmation') return;
+    expect(mode.card).toMatchObject({
+      summary: 'Автономия рутины «Утренний обзор»: снимает режим',
+    });
+
+    // Граф не тронут ни одним из трёх: уровень explicit — до approve ничего не пишется.
+    const after = await propsOfRow(armed.id);
+    expect(after['orbis/routine_mode']).toBe('act');
+    expect(after['orbis/allowed_tools']).toEqual(['entity_update']);
+  });
+
+  test('РАЗОРУЖЕНИЕ ЗАМЕНОЙ НОСИТЕЛЯ: attach без allowed_tools на вооружённой рутине → подтверждение (Р-12-2)', async () => {
+    // `attach_*` заменяет носитель целиком (§А7-4): свойство, не названное в `data`,
+    // снимается. По ФОРМЕ вызова этого не видно — различает только состояние цели.
+    const armed = await seedEntity(userA, {
+      title: 'Вооружённая рутина',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_create'] }),
+      },
+    });
+
+    const disarm = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: armed.id,
+      data: routineProps(), // mode propose, белый список НЕ назван → он будет стёрт
+    });
+    expect(disarm.status).toBe('pending_confirmation');
+    if (disarm.status !== 'pending_confirmation') return;
+    expect(disarm.card).toMatchObject({
+      summary: 'Автономия рутины «Вооружённая рутина»: режим propose, снимает белый список',
+    });
+    // Ничего не записано: белый список на месте, режим прежний.
+    const kept = await propsOfRow(armed.id);
+    expect(kept['orbis/allowed_tools']).toEqual(['entity_create']);
+    expect(kept['orbis/routine_mode']).toBe('act');
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: тот же вызов на БЕЗОРУЖНОЙ рутине снимать нечего — он
+    // исполняется без карточки. Без этой половины проба ловила бы любой attach подряд.
+    const plain = await seedEntity(userA, {
+      title: 'Безоружная рутина',
+      tags: [],
+      aspects: { 'orbis/routine': routine() },
+    });
+    const harmless = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: plain.id,
+      data: routineProps(),
+    });
+    expect(harmless.status).toBe('ok');
+
+    // И третья: признак носителя обязателен (Р9) — запись со значениями доверенности, но
+    // БЕЗ аспекта рутины, разоружаемой рутиной не считается.
+    const ghost = await seedEntity(userA, { title: 'Бывшая рутина', tags: [] });
+    await withIdentity(db, userA, (tx) =>
+      tx
+        .update(entities)
+        .set({ props: { 'orbis/routine_mode': 'act', 'orbis/allowed_tools': ['entity_update'] } })
+        .where(eq(entities.id, ghost.id)),
+    );
+    const onGhost = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: ghost.id,
+      data: routineProps(),
+    });
+    expect(onGhost.status).toBe('ok');
+  });
+
   test('entity_update рутины с mode act → pending_confirmation; режим в графе прежний', async () => {
     const target = await seedEntity(userA, {
       title: 'Вечерний разбор',

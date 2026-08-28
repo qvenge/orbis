@@ -531,6 +531,39 @@ describe('rejectPendingTx: гашение в ЧУЖОЙ транзакции (Ш
 
 // V1.5/V1.6/V1.8: pending предложения рутины несёт источник 'routine' и прогон, а отказ —
 // причину: «заменено новым прогоном» обязано быть отличимо от «владелец отказался».
+describe('сводка карточки: пустая строка — это ОТСУТСТВИЕ сводки, а не сводка', () => {
+  test('summary: "" (и пробельная) → фолбэк по тулу; непустая — как передана', async () => {
+    // Фикс-раунд 2 (N-1): `??` пустую строку не отсеивает — она не nullish, — и вызывающий,
+    // у которого сводка не собралась, отдавал владельцу карточку без единого сведения и
+    // строку ленты «Требуется подтверждение: ». Гейт стоит здесь, у ВСЕХ вызывающих, а не
+    // только у того, чья сборка сегодня чинена: пустая сводка — осечка любого сборщика.
+    const target = await seedEntity(userA, { title: 'Цель пустой сводки', tags: [] });
+    const summaryOf = async (summary: string | undefined): Promise<string> => {
+      const { card } = await withIdentity(db, userA, (tx) =>
+        createPending(tx, {
+          actor: { userId: userA, kind: 'ai', source: 'chat' },
+          tool: 'entity_update',
+          input: { id: target.id, archived: true },
+          level: 'explicit-confirmation',
+          dedupeKey: newId(), // своя запись на каждый прогон — идемпотентность тут ни при чём
+          ...(summary !== undefined && { summary }),
+          clock,
+        }),
+      );
+      return card.kind === 'confirmation_card' ? card.summary : '';
+    };
+
+    // Фолбэк по имени тула — то же, что при отсутствии ключа вовсе.
+    expect(await summaryOf('')).toBe('entity_update');
+    expect(await summaryOf('   ')).toBe('entity_update');
+    expect(await summaryOf(undefined)).toBe('entity_update');
+    // Обе стороны границы: непустая сводка доезжает как есть и фолбэком не подменяется.
+    expect(await summaryOf('Автономия рутины «X»: снимает белый список')).toBe(
+      'Автономия рутины «X»: снимает белый список',
+    );
+  });
+});
+
 describe('атрибуция рутины: source routine, run_id и причина отказа', () => {
   test('pending с source=routine и run_id: approve исполняет с runId → action журнала несёт run_id и source routine', async () => {
     const target = await seedEntity(userA, { title: 'Цель предложения рутины', tags: [] });

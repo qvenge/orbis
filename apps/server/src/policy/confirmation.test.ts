@@ -449,6 +449,13 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
     expect(factsFromToolCall(CREATE_DEF, created).grantsAutonomy).toBe(false);
     expect(levelOf(CREATE_DEF, created)).toBe('execute');
 
+    // attach с mode propose ПРАВ НЕ ВЫДАЁТ — это про КЛАССИФИКАТОР, и только про него.
+    // ОЖИДАНИЕ ПЕРЕПИСАНО ФИКС-РАУНДОМ 2 (рулинг Р-12-2): прежде эта строка означала «такой
+    // вызов исполняется без подтверждения», и это было неправдой про систему — тот же
+    // вызов на ВООРУЖЁННОЙ рутине стирает её белый список заменой носителя (§А7-4).
+    // Разоружение по-прежнему требует карточки, но видит его не классификатор (он чист и
+    // состояния не знает), а диспатч — `autonomyStrippedByAttach`; пин обеих сторон живёт
+    // на живой БД в `dispatch.test.ts`.
     const attach = { entity_id: newId(), data: routine() };
     expect(factsFromToolCall(ATTACH_DEF, attach).grantsAutonomy).toBe(false);
     expect(levelOf(ATTACH_DEF, attach)).toBe('execute');

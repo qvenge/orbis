@@ -112,7 +112,7 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/bank_txn_id', false],
     ],
     aiInstructions:
-      'orbis/amount — строка decimal (например "340.00"), всегда положительная; знак задаёт orbis/direction. orbis/finance_category — ссылка на сущность-категорию: резолви её через entity_query по синонимам («aspect=orbis/category, orbis/aliases=такси»). orbis/occurred_on — дата операции в таймзоне пользователя. orbis/bank_txn_id заполняется ТОЛЬКО импортом банковской выписки — никогда не выставляй его сам.',
+      'orbis/amount — строка decimal (например "340.00"), всегда положительная; знак задаёт orbis/direction. orbis/finance_category — ссылка на сущность-категорию: резолви её через entity_query по синонимам («aspect=orbis/category, orbis/aliases=такси»). orbis/occurred_on — дата операции в таймзоне пользователя. Тождество операции банка (orbis/bank_txn_id) в этом туле не показано намеренно: его заполняет только импорт выписки.',
     tagMappings: ['expense', 'income', 'payment', 'cost'],
     viewConfig: {
       keyFields: ['orbis/amount', 'orbis/direction', 'orbis/finance_category'],
@@ -223,7 +223,7 @@ const ENTRIES: readonly AspectEntry[] = [
       ['orbis/unit', false],
     ],
     aiInstructions:
-      'Применяй, когда у намерения есть измеримая цель («накопить 300000», «прочитать 24 книги»). orbis/target_value — decimal-строка, строго больше нуля. orbis/progress_source описывает, ОТКУДА берётся факт: query — дерево запроса по сущностям, aggregate — count (считает сущности; field при нём ЗАПРЕЩЁН, не передавай его) либо sum/latest (field ОБЯЗАТЕЛЕН — key свойства, например orbis/amount). orbis/unit — непустая подпись единицы, если она есть. orbis/current_value считает сервер, обходя граф; никогда не задавай и не правь его сам.',
+      'Применяй, когда у намерения есть измеримая цель («накопить 300000», «прочитать 24 книги»). orbis/target_value — decimal-строка, строго больше нуля. orbis/progress_source описывает, ОТКУДА берётся факт: query — дерево запроса по сущностям, aggregate — count (считает сущности; field при нём ЗАПРЕЩЁН, не передавай его) либо sum/latest (field ОБЯЗАТЕЛЕН — key свойства, например orbis/amount). orbis/unit — непустая подпись единицы, если она есть. Текущего значения (orbis/current_value) в туле нет намеренно: его считает сервер, обходя граф.',
     tagMappings: ['goal'],
     viewConfig: {
       keyFields: ['orbis/target_value', 'orbis/current_value', 'orbis/unit'],
