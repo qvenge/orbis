@@ -6,13 +6,21 @@
 // Вместе они закрывают контракт-заглушку shared/contracts/confirmation-policy.test.ts
 // (describe.skip удалён этой задачей).
 import { describe, expect, test } from 'bun:test';
-import { newId } from '@orbis/shared';
+import {
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_PROPERTY_META,
+  legacyFieldToProperty,
+  newId,
+} from '@orbis/shared';
 import type { RegistrySnapshot } from '../registry/load';
 import { AGENT_VERB_NAMES, buildToolDefs } from '../tools/registry';
 import {
+  AUTONOMY_PROPERTIES,
   classifyToolCall,
   entityUpdatePreviewDiff,
   factsFromToolCall,
+  ROUTINE_MODE_PROPERTY,
+  ROUTINE_TOOLS_PROPERTY,
   type ToolCallFacts,
 } from './confirmation';
 
@@ -420,6 +428,25 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
         UPDATE_DEF,
         { id: newId(), props: { 'orbis/routine_mode': 'act' }, unset: ['orbis/allowed_tools'] },
       ],
+      // НАБОР ЦЕЛИКОМ (attach/create): назвать белый список — уже выдача, при ЛЮБОМ режиме.
+      // Иначе проходила двухшаговая эскалация: шаг 1 молча раздаёт инструменты propose-рутине,
+      // шаг 2 просит только `act`, и карточка вооружения про инструменты молчит по правилу
+      // «у update молчание значит прежний» — владелец подтверждает, не увидев, чем вооружает.
+      [
+        'attach_orbis_routine с allowed_tools при mode propose',
+        ATTACH_DEF,
+        { entity_id: newId(), data: routine({ 'orbis/allowed_tools': ['entity_create'] }) },
+      ],
+      [
+        'entity_create propose-рутины СРАЗУ с белым списком',
+        CREATE_DEF,
+        {
+          title: 'Рождена вооружённой',
+          tags: [],
+          props: routine({ 'orbis/allowed_tools': ['entity_create'] }),
+          aspects: ['orbis/routine'],
+        },
+      ],
     ];
     for (const [name, def, input] of cases) {
       expect(factsFromToolCall(def, input).grantsAutonomy).toBe(true);
@@ -449,13 +476,14 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
     expect(factsFromToolCall(CREATE_DEF, created).grantsAutonomy).toBe(false);
     expect(levelOf(CREATE_DEF, created)).toBe('execute');
 
-    // attach с mode propose ПРАВ НЕ ВЫДАЁТ — это про КЛАССИФИКАТОР, и только про него.
-    // ОЖИДАНИЕ ПЕРЕПИСАНО ФИКС-РАУНДОМ 2 (рулинг Р-12-2): прежде эта строка означала «такой
-    // вызов исполняется без подтверждения», и это было неправдой про систему — тот же
-    // вызов на ВООРУЖЁННОЙ рутине стирает её белый список заменой носителя (§А7-4).
-    // Разоружение по-прежнему требует карточки, но видит его не классификатор (он чист и
-    // состояния не знает), а диспатч — `autonomyStrippedByAttach`; пин обеих сторон живёт
-    // на живой БД в `dispatch.test.ts`.
+    // attach с mode propose И БЕЗ белого списка ПРАВ НЕ ВЫДАЁТ — это про КЛАССИФИКАТОР, и
+    // только про него. ОЖИДАНИЕ ПЕРЕПИСАНО ФИКС-РАУНДОМ 2 (рулинг Р-12-2): прежде эта строка
+    // означала «такой вызов исполняется без подтверждения», и это было неправдой про
+    // систему — тот же вызов на ВООРУЖЁННОЙ рутине стирает её белый список заменой носителя
+    // (§А7-4) или гасит её режим эхом. Разоружение по-прежнему требует карточки, но видит
+    // его не классификатор (он чист и состояния не знает), а диспатч —
+    // `autonomyDisarmedByCarrier`, который держит и четвёртый путь (снятие аспекта рутины у
+    // вооружённой, Р-12-3); пин обеих сторон живёт на живой БД в `dispatch.test.ts`.
     const attach = { entity_id: newId(), data: routine() };
     expect(factsFromToolCall(ATTACH_DEF, attach).grantsAutonomy).toBe(false);
     expect(levelOf(ATTACH_DEF, attach)).toBe('execute');
@@ -519,5 +547,47 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
 
     // Ряд 1 первее автономии: незнакомый тул не исполняется ни на каком уровне
     expect(classifyToolCall(facts({ known: false, grantsAutonomy: true }))).toBe('forbidden');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Адреса доверенности ≡ реестр (Minor-4 фикс-раунда 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * `ROUTINE_MODE_PROPERTY`/`ROUTINE_TOOLS_PROPERTY` объявлены ОДИН раз, но объявление само по
+ * себе не гарантирует, что оно называет ЖИВЫЕ свойства реестра: разъедься константа с ним —
+ * и гейт §7.10 смотрел бы на адрес, которого нет, молча отвечая `execute` на любую правку
+ * доверенности. Читатели-литералы, до которых константа дойти НЕ МОЖЕТ (`legacy-field-map`
+ * живёт в `@orbis/shared` и на `apps/server` ссылаться не вправе), связаны с ней здесь пином
+ * — он и заменяет им импорт.
+ */
+describe('адреса доверенности ≡ реестр (Minor-4)', () => {
+  const routineAspect = BUILTIN_ASPECT_DEFS.find((a) => a.id === 'orbis/routine');
+
+  test('обе константы — свойства аспекта orbis/routine; режим обязателен, белый список нет', () => {
+    const required = new Map(
+      (routineAspect?.properties ?? []).map((r) => [r.propertyId, r.required]),
+    );
+    expect(required.get(ROUTINE_MODE_PROPERTY)).toBe(true);
+    expect(required.get(ROUTINE_TOOLS_PROPERTY)).toBe(false);
+    // Обязательность — не мелочь: на ней стоит довод, почему «назвать белый список = выдача»
+    // не шумит (`grantsByCarrier`), и почему консервативный вариант пробы был отклонён.
+    expect([...AUTONOMY_PROPERTIES]).toEqual([ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY]);
+  });
+
+  test('переходная карта @orbis/shared ведёт на те же два адреса', () => {
+    expect(legacyFieldToProperty('orbis/routine', 'mode')).toBe(ROUTINE_MODE_PROPERTY);
+    expect(legacyFieldToProperty('orbis/routine', 'allowed_tools')).toBe(ROUTINE_TOOLS_PROPERTY);
+  });
+
+  test('оба свойства — скаляр и список строк: сравнение значений по JSON точное', () => {
+    // Довод докблока `sameAutonomyValue` (tools/dispatch.ts): порядок ключей объекта
+    // сравнение не подводит, потому что объектов среди значений доверенности нет. Стань
+    // одно из них `json` — довод перестанет быть правдой, и упадёт здесь.
+    const kinds = AUTONOMY_PROPERTIES.map(
+      (id) => BUILTIN_PROPERTY_META.find((p) => p.id === id)?.type.kind,
+    );
+    expect(kinds).toEqual(['select', 'text']);
   });
 });

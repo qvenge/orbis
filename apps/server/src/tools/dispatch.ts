@@ -834,25 +834,29 @@ async function runMutation(
   // рутины с `mode: act` уезжают в системный слой прогона целиком, и правка их AI/агентом без
   // подтверждения обходила бы замок, который держит гейт grantsAutonomy. Проверка по БД
   // (объект — рутина в act), а не по форме: аспекта рутины в таком патче нет.
+  //
+  // Спрашивается ВСЕГДА, а не только пока уровень ещё не поднят: с фикс-раунда 3 ответ едет
+  // не только в уровень, но и в СВОДКУ карточки, и прежнее короткое замыкание на уже
+  // поднятом уровне отняло бы у владельца половину сведений — «подтверди автономию» без
+  // «заодно правят инструкцию». Цена — один SELECT, и только когда операции вообще трогают
+  // `title`/`body`: иначе функция уходит по пустому списку id, не сходив в БД.
   const ops = batchPayload?.operations ?? [{ tool, input: payload }];
   const ownerKnows = ctx.actorKind === 'owner';
-  const instructionOf =
-    ownerKnows || classified === 'explicit-confirmation'
-      ? []
-      : await actRoutineInstructionTargets(ctx, ops);
-  // РАЗОРУЖЕНИЕ ЗАМЕНОЙ НОСИТЕЛЯ (рулинг Р-12-2): `attach_orbis_routine` уносит свойства
-  // доверенности, которых нет в его `data` (§А7-4), и делает это МОЛЧА — в форме вызова
-  // снятия не видно, оно есть только в разнице с текущим состоянием. Замок §7.10 такой
-  // вход классифицировал как `execute`, то есть AI одним вызовом гасил режим и стирал белый
-  // список без карточки — ровно то, что запрещено делать через `unset`, только третьим
-  // путём. Правило замка сформулировано по СМЫСЛУ действия, а не по имени тула, поэтому
-  // проверка стоит здесь: классификатор чист, а состояние знает диспатч.
+  const instructionOf = ownerKnows ? [] : await actRoutineInstructionTargets(ctx, ops);
+  // РАЗОРУЖЕНИЕ ЧЕРЕЗ НОСИТЕЛЬ (рулинги Р-12-2 и Р-12-3). Два вызова разоружают рутину
+  // МОЛЧА, потому что в их ФОРМЕ снятия не видно — оно есть только в разнице с текущим
+  // состоянием: `attach_orbis_routine` заменяет носитель целиком (§А7-4), а
+  // `entity_update {aspects:{detach:['orbis/routine']}}` уносит сам носитель, оставляя
+  // значения (Р9). Замок §7.10 оба классифицировал как `execute`, то есть AI одним вызовом
+  // гасил режим и стирал белый список без карточки — ровно то, что запрещено делать через
+  // `unset`, только в обход. Правило замка сформулировано по СМЫСЛУ действия, а не по имени
+  // тула, поэтому проверка стоит здесь: классификатор чист, а состояние знает диспатч.
   //
   // Владельцу карточка не нужна и здесь: он разоружает свою рутину, глядя на неё, и ряд
   // автономии §7.10 для `owner` не срабатывает по той же причине.
   const disarmed = ownerKnows
-    ? new Map<string, string[]>()
-    : await autonomyStrippedByAttach(ctx, ops);
+    ? new Map<number, CarrierDisarm>()
+    : await autonomyDisarmedByCarrier(ctx, ops);
   const level: ConfirmationLevel =
     instructionOf.length > 0 || disarmed.size > 0 ? 'explicit-confirmation' : classified;
 
@@ -916,23 +920,25 @@ async function runMutation(
     // payload'ом (уже envelope-валидированным; имена операций batch сверены с реестром);
     // до approve ничего не записано ни в граф, ни в журнал §7.8. Исполнение и
     // ревалидацию текущего состояния делает approve (policy/pending.ts)
-    const pending = await withIdentity(ctx.db, ctx.actorUserId, async (tx) =>
-      createPending(tx, {
+    const pending = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+      // Карточка обязана называть, ЧТО подтверждается, — а не имя тула: снятие замка (как и
+      // его установка) — осознанный акт человека (B1-2). Называется ВСЁ, что подняло
+      // уровень: и правка автономии (V1.10 — режим, белый список и то, что СНИМАЕТСЯ), и
+      // правка инструкции act-рутины (C1b-1). Фразы СКЛЕИВАЮТСЯ, а не вытесняют друг друга:
+      // до фикс-раунда 3 ветка инструкции требовала «снятий нет», и в пачке «переименовать
+      // act-рутину + разоружить её attach'ем» правка заголовка не называлась вовсе.
+      // Условие автономии шире `grantsAutonomy`: разоружение через носитель фактов
+      // классификатора не меняет, а карточку требует ровно так же (Р-12-2, Р-12-3).
+      const summaryParts: string[] = [];
+      if (facts.grantsAutonomy || disarmed.size > 0) {
+        summaryParts.push(await autonomySummary(tx, ops, disarmed));
+      }
+      if (instructionOf.length > 0) {
+        summaryParts.push(`Инструкция act-рутины: правка «${instructionOf.join('», «')}»`);
+      }
+      return createPending(tx, {
         threadId: ctx.threadId,
-        // Правка автономии (V1.10): карточка обязана называть, ЧТО подтверждается — режим,
-        // белый список и то, что СНИМАЕТСЯ, — а не имя тула: снятие замка (как и его
-        // установка) — осознанный акт человека (B1-2). Условие шире `grantsAutonomy`:
-        // разоружение заменой носителя фактов классификатора не меняет, а карточку
-        // требует ровно так же (Р-12-2).
-        ...((facts.grantsAutonomy || disarmed.size > 0) && {
-          summary: await autonomySummary(tx, ops, disarmed),
-        }),
-        // Правка инструкции act-рутины (C1b-1) — тем же языком: кого и что правят
-        ...(!facts.grantsAutonomy &&
-          disarmed.size === 0 &&
-          instructionOf.length > 0 && {
-            summary: `Инструкция act-рутины: правка «${instructionOf.join('», «')}»`,
-          }),
+        ...(summaryParts.length > 0 && { summary: summaryParts.join('; ') }),
         // Грант едет в pending-запись: подтверждать будет владелец кнопкой, но
         // атрибуция исполнения остаётся за ТЕМ, кто попросил (§7.8, D11 + С2)
         actor: {
@@ -951,8 +957,8 @@ async function runMutation(
         // не плодит вторую карточку (одиночная мутация без batch_id → без дедупа)
         ...(batchPayload !== undefined && { dedupeKey: batchPayload.batch_id }),
         clock: ctx.clock,
-      }),
-    );
+      });
+    });
     return { status: 'pending_confirmation', pendingId: pending.pendingId, card: pending.card };
   }
 
@@ -1438,9 +1444,14 @@ const AUTONOMY_LABEL: Record<string, string> = {
  * называла МЕНЬШЕ, чем делает вызов. Читатель обязан ходить туда же, куда гейт, — иначе
  * унификация адресов (`AUTONOMY_PROPERTIES`) закрывает половину класса и создаёт вторую.
  *
- * `stripped` — снятия, которых В ПАТЧЕ НЕ ВИДНО: замена носителя (`attach_*`, §А7-4) уносит
- * свойства, которых нет в её `data`, и узнать их можно только по текущему состоянию цели
- * (считает `autonomyStrippedByAttach`, там же довод про БД).
+ * `disarmed` — то, чего В ПАТЧЕ НЕ ВИДНО: носитель (`attach_*` заменяет его целиком, §А7-4;
+ * `aspects.detach` уносит совсем, Р9) отнимает доверенность разницей с текущим состоянием, и
+ * узнать её можно только по БД (считает `autonomyDisarmedByCarrier`, там же довод).
+ *
+ * Ключ у него — ИНДЕКС ОПЕРАЦИИ, а не id цели, и это исправление фикс-раунда 3: по id снятие
+ * прилипало к ЛЮБОЙ операции над той же рутиной, и пачка «переименовать + разоружить
+ * attach'ем» рассказывала владельцу «переименование снимает белый список» — неправда про
+ * операцию, которая доверенности не касается вовсе.
  *
  * ПУСТОЙ строки функция не возвращает никогда: её зовут только когда доверенность
  * действительно тронута, и «нечего сказать» тут означало бы осечку сборки, а не отсутствие
@@ -1450,10 +1461,10 @@ const AUTONOMY_LABEL: Record<string, string> = {
 async function autonomySummary(
   tx: Tx,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
-  stripped: ReadonlyMap<string, string[]> = new Map(),
+  disarmed: ReadonlyMap<number, CarrierDisarm> = new Map(),
 ): Promise<string> {
   const parts: string[] = [];
-  for (const op of ops) {
+  for (const [index, op] of ops.entries()) {
     if (!isRecord(op.input)) continue;
     // Доверенность лежит там же, где её читает гейт (§А9-1): у attach — в `data` по key
     // свойства, у create/update — в `props`. Второе место чтения разъехалось бы с гейтом, и
@@ -1466,15 +1477,20 @@ async function autonomySummary(
         : op.tool === 'attach_orbis_routine'
           ? op.input.entity_id
           : undefined;
-    // Снятое ЯВНО (`unset` правки) и снятое ФОРМОЙ операции (замена носителя attach'ем).
+    // Снятое ЯВНО (`unset` правки) и снятое ФОРМОЙ ЭТОЙ ЖЕ операции (носитель).
     const unset = Array.isArray(op.input.unset)
       ? op.input.unset.filter((v): v is string => typeof v === 'string')
       : [];
+    const byCarrier = disarmed.get(index);
     const removed = [
       ...AUTONOMY_PROPERTIES.filter((p) => unset.includes(p)),
-      ...(typeof targetId === 'string' ? (stripped.get(targetId) ?? []) : []),
+      ...(byCarrier?.removed ?? []),
     ];
-    if (!grantsRoutineAutonomy(op.tool, op.input) && removed.length === 0) continue;
+    // Обесцененное (`act` → `propose` при живом свойстве) отдельной фразы не требует: новое
+    // значение уже названо ниже из самого патча — но операцию в сводку пускает.
+    const touches =
+      grantsRoutineAutonomy(op.tool, op.input) || removed.length > 0 || byCarrier !== undefined;
+    if (!touches) continue;
 
     const title =
       typeof targetId === 'string'
@@ -1502,6 +1518,9 @@ async function autonomySummary(
     if (removed.length > 0) {
       facts.push(`снимает ${removed.map((p) => AUTONOMY_LABEL[p] ?? p).join(' и ')}`);
     }
+    // Снятие носителя — не снятие значений (Р9), и называть его «снимает режим» было бы
+    // враньём: режим и белый список уцелеют в `props`, работать перестанет сама рутина.
+    if (byCarrier?.detached === true) facts.push('снимает аспект рутины');
     parts.push(
       `Автономия рутины «${title}»: ${facts.length > 0 ? facts.join(', ') : 'правка доверенности'}`,
     );
@@ -1510,36 +1529,81 @@ async function autonomySummary(
   return parts.length > 0 ? parts.join('; ') : 'Правка автономии рутины';
 }
 
+/** Что ОДНА операция отнимает у доверенности рутины через её носитель. */
+interface CarrierDisarm {
+  /** свойства доверенности, которых замена носителя лишает запись целиком */
+  removed: string[];
+  /** свойства, чьё ЗНАЧЕНИЕ замена носителя перезаписывает (`act` → `propose`) */
+  devalued: string[];
+  /** снятие самого аспекта рутины у ВООРУЖЁННОЙ записи: значения уцелеют, рутина — нет */
+  detached: boolean;
+}
+
 /**
- * Рутины, у которых ЭТОТ вызов СНИМАЕТ свойства доверенности заменой носителя (рулинг
- * Р-12-2): id цели → снятые свойства. Пусто — снимать нечего.
+ * Что ЭТОТ вызов отнимает у доверенности рутины через НОСИТЕЛЬ (рулинги Р-12-2 и Р-12-3):
+ * ИНДЕКС ОПЕРАЦИИ в `ops` → отнятое. Пусто — отнимать нечего.
  *
- * Почему это отдельная проверка ПО БД, а не факт классификатора. `attach_*` заменяет носитель
- * целиком (§А7-4): свойство аспекта, не названное в `data`, снимается. Значит «разоружает ли
- * этот вызов» — вопрос не к ФОРМЕ вызова, а к текущему состоянию цели: один и тот же
- * `attach_orbis_routine {routine_stage, routine_at, routine_mode:'propose'}` на вооружённой
- * рутине стирает белый список, а на безоружной не делает ничего. Классификатор §7.10 по
- * построению чист (типизированные факты вызова, без БД), поэтому состояние спрашивает
- * диспатч — ровно там же и тем же способом, что `actRoutineInstructionTargets` строкой ниже.
+ * Почему это отдельная проверка ПО БД, а не факт классификатора: носитель отвечает на вопрос
+ * «что станет с доверенностью» только вместе с текущим состоянием цели.
+ *  - `attach_*` заменяет носитель целиком (§А7-4): свойство аспекта, не названное в `data`,
+ *    СНИМАЕТСЯ, а названное с другим значением — ОБЕСЦЕНИВАЕТСЯ. Один и тот же
+ *    `attach_orbis_routine {routine_stage, routine_at, routine_mode:'propose'}` на
+ *    вооружённой рутине разоружает её, а на безоружной не делает ничего.
+ *  - `entity_update {aspects:{detach:['orbis/routine']}}` значений не трогает (Р9), но уносит
+ *    САМ НОСИТЕЛЬ: режим и белый список остаются в `props`, а рутина перестаёт быть рутиной.
+ *    Разоружение это или уборка мусора — видно только по тому, была ли она вооружена.
+ * Классификатор §7.10 по построению чист (типизированные факты вызова, без БД), поэтому
+ * состояние спрашивает диспатч — ровно там же и тем же способом, что
+ * `actRoutineInstructionTargets` строкой ниже.
+ *
+ * ОБЕСЦЕНИВАНИЕ считается наравне со снятием, и это фикс-раунд 3. Прежде проба спрашивала
+ * только «пропало ли свойство», и модель гасила act-режим ЭХОМ: `entity_get` показывал ей
+ * белый список, она повторяла его в `data` вместе с `routine_mode: 'propose'` — свойства на
+ * месте, снятого ноль, карточки нет. Тот же переход через `entity_update` карточку требовал:
+ * замок держал смысл на одном пути и не держал на соседнем.
  *
  * Консервативный вариант («attach без названных свойств доверенности поднимает уровень
  * всегда») отклонён: `orbis/routine_mode` обязателен в аспекте, поэтому единственным
  * наблюдаемым случаем стал бы `allowed_tools`, и заведение обычной propose-рутины через
  * attach начало бы требовать подтверждения на ровном месте. Лишняя карточка дешевле
  * молчаливого разоружения — но не там, где точный ответ стоит один SELECT по PK.
+ *
+ * ЧЕГО ЭТОТ `SELECT` НЕ ГАРАНТИРУЕТ — сказано вслух вместо переноса (Important-3 ре-ревью).
+ * Он идёт СВОЕЙ транзакцией и ДО записи, поэтому прочитанное состояние авторитетно только на
+ * момент чтения:
+ *  1. Между пробой и записью состояние может измениться. Сам AI окна не открывает —
+ *     вооружить рутину без карточки он не может, — но его открывает владелец: пока он жмёт
+ *     «Принять» на запрос вооружения, MCP-агент в цикле шлёт разоружающий attach, проба
+ *     видит ещё безоружную рутину и отвечает «отнимать нечего».
+ *  2. Внутри batch проба читает состояние ДО пачки, а не после предыдущих её операций:
+ *     `[entity_update {props:{allowed_tools:[…]}}, attach без allowed_tools]` даёт карточку
+ *     «инструменты: …», хотя итог пачки — пустая доверенность. Направление здесь безопасное
+ *     (прав меньше, чем обещано), но обещано неточно.
+ * Закрыть это можно только перепроверкой в ТОЙ ЖЕ транзакции, что и запись (строка там уже
+ * под `FOR UPDATE`), то есть вторым представлением правила §7.10 внутри исполнителя. Цена
+ * признана выше выигрыша: окно требует ОДНОВРЕМЕННОГО действия владельца, а исполнитель,
+ * научившийся отвечать «нужна карточка», перестал бы быть единственным местом записи.
+ * ТА ЖЕ ОГОВОРКА ЦЕЛИКОМ ОТНОСИТСЯ К `actRoutineInstructionTargets` НИЖЕ: у него та же форма
+ * (свой `SELECT` до записи) и та же неназванная гонка.
  */
-async function autonomyStrippedByAttach(
+async function autonomyDisarmedByCarrier(
   ctx: ToolCallCtx,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
-): Promise<Map<string, string[]>> {
-  const probes: Array<{ id: string; kept: ReadonlySet<string> }> = [];
-  for (const op of ops) {
-    if (op.tool !== 'attach_orbis_routine' || !isRecord(op.input)) continue;
-    if (typeof op.input.entity_id !== 'string') continue;
-    const data = isRecord(op.input.data) ? op.input.data : {};
-    probes.push({ id: op.input.entity_id, kept: new Set(Object.keys(data)) });
+): Promise<Map<number, CarrierDisarm>> {
+  // `data: null` — снятие носителя целиком (`aspects.detach`); объект — замена носителя.
+  const probes: Array<{ index: number; id: string; data: Record<string, unknown> | null }> = [];
+  for (const [index, op] of ops.entries()) {
+    if (!isRecord(op.input)) continue;
+    if (op.tool === 'attach_orbis_routine') {
+      if (typeof op.input.entity_id !== 'string') continue;
+      const data = isRecord(op.input.data) ? op.input.data : {};
+      probes.push({ index, id: op.input.entity_id, data });
+    } else if (op.tool === 'entity_update' && detachesRoutineAspect(op.input)) {
+      if (typeof op.input.id !== 'string') continue;
+      probes.push({ index, id: op.input.id, data: null });
+    }
   }
-  const out = new Map<string, string[]>();
+  const out = new Map<number, CarrierDisarm>();
   if (probes.length === 0) return out;
 
   const rows = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
@@ -1563,12 +1627,54 @@ async function autonomyStrippedByAttach(
     // без него запись, КОГДА-ТО бывшая рутиной, читалась бы как разоружаемая рутина.
     if (!row.aspects.includes(ROUTINE_ASPECT)) continue;
     const props = row.props as Record<string, unknown>;
-    const removed = AUTONOMY_PROPERTIES.filter(
-      (property) => Object.hasOwn(props, property) && !probe.kept.has(property),
+    if (probe.data === null) {
+      // Снятие носителя разоружает только ВООРУЖЁННУЮ: у безоружной рутины отнимать нечего,
+      // и требовать за уборку карточку значило бы поднимать уровень на ровном месте.
+      if (armedRoutine(props)) {
+        out.set(probe.index, { removed: [], devalued: [], detached: true });
+      }
+      continue;
+    }
+    const data = probe.data;
+    const held = AUTONOMY_PROPERTIES.filter((property) => Object.hasOwn(props, property));
+    const removed = held.filter((property) => !Object.hasOwn(data, property));
+    const devalued = held.filter(
+      (property) =>
+        Object.hasOwn(data, property) && !sameAutonomyValue(props[property], data[property]),
     );
-    if (removed.length > 0) out.set(probe.id, removed);
+    if (removed.length > 0 || devalued.length > 0) {
+      out.set(probe.index, { removed, devalued, detached: false });
+    }
   }
   return out;
+}
+
+/** Снимает ли патч сам аспект рутины: `aspects.detach` — контракт `entity_update` (§А9-1). */
+function detachesRoutineAspect(input: Record<string, unknown>): boolean {
+  const aspects = input.aspects;
+  if (!isRecord(aspects)) return false;
+  const detach = aspects.detach;
+  return Array.isArray(detach) && detach.includes(ROUTINE_ASPECT);
+}
+
+/**
+ * Вооружена ли рутина ПО СОСТОЯНИЮ (рулинг Р-12-3): act-режим ИЛИ непустой белый список.
+ * Пустой список вооружением не считается — действовать им всё равно нечем, и рутина с
+ * `mode: propose` и `allowed_tools: []` безоружна ровно так же, как без свойства вовсе.
+ */
+function armedRoutine(props: Record<string, unknown>): boolean {
+  const tools = props[ROUTINE_TOOLS_PROPERTY];
+  return props[ROUTINE_MODE_PROPERTY] === 'act' || (Array.isArray(tools) && tools.length > 0);
+}
+
+/**
+ * Одно ли это значение свойства доверенности. Сравнение по JSON, а не `===`: белый список —
+ * МАССИВ, и ссылочное равенство отвечало бы «изменилось» на любом эхе. Порядок ключей
+ * сравнение не подводит: по реестру оба свойства — скаляр (`select`) и список строк, объектов
+ * среди них нет (соответствие констант реестру пиннится в `confirmation.test.ts`).
+ */
+function sameAutonomyValue(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
 /**

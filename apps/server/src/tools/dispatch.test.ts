@@ -2064,9 +2064,17 @@ describe('V1: выдача автономии рутине из чата → pen
     expect(stripOnly.card).toMatchObject({
       summary: 'Автономия рутины «Утренний обзор»: снимает белый список',
     });
-    // Строка ленты тоже не пуста — её владелец читает раньше карточки.
-    const feed = await messagesIn(userA, entityThreadId(userA, armed.id));
-    expect(feed.some((m) => m.content === 'Требуется подтверждение: ')).toBe(false);
+    // Строка ленты — её владелец читает раньше карточки, и она обязана нести ТО ЖЕ. Тред
+    // берётся тот, в который пишет `createPending`: `ctxFor()` без `threadId` кладёт запись
+    // в ГЛОБАЛЬНЫЙ тред, и прежняя проверка (по треду сущности, отрицанием) читала пустой
+    // массив — она не могла провалиться ни при какой мутации сводки.
+    const feed = await messagesIn(
+      userA,
+      await withIdentity(db, userA, (tx) => ensureGlobalThread(tx, userA)),
+    );
+    expect(feed.find((m) => m.id === stripOnly.pendingId)?.content).toBe(
+      'Требуется подтверждение: Автономия рутины «Утренний обзор»: снимает белый список',
+    );
 
     // B. Смешанный патч: карточка обязана назвать И выдачу, И снятие — прежде она
     // рассказывала МЕНЬШЕ, чем делает вызов.
@@ -2150,6 +2158,188 @@ describe('V1: выдача автономии рутине из чата → pen
       data: routineProps(),
     });
     expect(onGhost.status).toBe('ok');
+  });
+
+  test('ЭХО ДОВЕРЕННОСТИ через attach: повтор белого списка и гашение режима → подтверждение (фикс-раунд 3)', async () => {
+    // Проба «пропало ли свойство» ловила только СНЯТИЕ. Модель делает `entity_get`, видит
+    // белый список и повторяет его эхом в `data` — свойство на месте, а act-режим гаснет тем
+    // же вызовом и МОЛЧА. Тот же переход через `entity_update` карточку требовал: замок
+    // держал смысл на одном пути и не держал на соседнем.
+    const armed = await seedEntity(userA, {
+      title: 'Эхо-рутина',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_create'] }),
+      },
+    });
+    const echo = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: armed.id,
+      data: routineProps({
+        'orbis/routine_mode': 'propose',
+        'orbis/allowed_tools': ['entity_create'],
+      }),
+    });
+    expect(echo.status).toBe('pending_confirmation');
+    if (echo.status !== 'pending_confirmation') return;
+    expect(echo.card).toMatchObject({
+      summary: 'Автономия рутины «Эхо-рутина»: режим propose, инструменты: entity_create',
+    });
+    expect((await propsOfRow(armed.id))['orbis/routine_mode']).toBe('act');
+
+    // ОБЕСЦЕНИВАНИЕ БЕЗ СНЯТИЯ: белого списка у рутины нет вовсе, снимать нечего — гаснет
+    // ТОЛЬКО режим, и «снятого» в разнице с состоянием по-прежнему ноль.
+    const actOnly = await seedEntity(userA, {
+      title: 'Только режим',
+      tags: [],
+      aspects: { 'orbis/routine': routine({ mode: 'act' }) },
+    });
+    const quench = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: actOnly.id,
+      data: routineProps(),
+    });
+    expect(quench.status).toBe('pending_confirmation');
+    if (quench.status !== 'pending_confirmation') return;
+    expect(quench.card).toMatchObject({
+      summary: 'Автономия рутины «Только режим»: режим propose, инструменты: нет',
+    });
+    expect((await propsOfRow(actOnly.id))['orbis/routine_mode']).toBe('act');
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: тот же attach на propose-рутине без белого списка ничего в
+    // доверенности не меняет → исполняется молча. Без неё проба ловила бы любой attach.
+    const same = await seedEntity(userA, {
+      title: 'Ничего не меняет',
+      tags: [],
+      aspects: { 'orbis/routine': routine() },
+    });
+    const noop = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: same.id,
+      data: routineProps(),
+    });
+    expect(noop.status).toBe('ok');
+  });
+
+  test('ВООРУЖЕНИЕ БЕЗ act: attach/create, НАЗЫВАЮЩИЕ белый список, — выдача доверенности (двухшаговая эскалация)', async () => {
+    // Шаг 1 двухшаговой эскалации: модель молча расширяет доверенность (`propose` +
+    // белый список), шаг 2 просит только режим — и карточка вооружения про инструменты
+    // молчит по правилу «у update молчание значит прежний». Владелец подтверждал `act`,
+    // не увидев, ЧЕМ рутина вооружена.
+    const target = await seedEntity(userA, { title: 'Тихое вооружение', tags: [] });
+    const step1 = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: target.id,
+      data: routineProps({ 'orbis/allowed_tools': ['entity_create', 'entity_update'] }),
+    });
+    expect(step1.status).toBe('pending_confirmation');
+    if (step1.status !== 'pending_confirmation') return;
+    expect(step1.card).toMatchObject({
+      summary:
+        'Автономия рутины «Тихое вооружение»: режим propose, инструменты: entity_create, entity_update',
+    });
+    expect(await aspectsOfRow(target.id)).toEqual([]);
+
+    // Тот же смысл через `entity_create` — тот же ответ: носитель здесь тоже кладётся
+    // ЦЕЛИКОМ, и propose-рутина, рождённая сразу с белым списком, это то же вооружение.
+    const created = await dispatchTool(ctxFor(), 'entity_create', {
+      title: 'Рождена вооружённой',
+      tags: [],
+      props: routineProps({ 'orbis/allowed_tools': ['entity_create'] }),
+      aspects: ['orbis/routine'],
+    });
+    expect(created.status).toBe('pending_confirmation');
+    if (created.status !== 'pending_confirmation') return;
+    expect(created.card).toMatchObject({
+      summary: 'Автономия рутины «Рождена вооружённой»: режим propose, инструменты: entity_create',
+    });
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: обычная propose-рутина белого списка не называет — ни один
+    // из двух путей карточки не требует. Иначе правило ловило бы всякое заведение рутины.
+    const plainAttach = await seedEntity(userA, { title: 'Обычная через attach', tags: [] });
+    const okAttach = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: plainAttach.id,
+      data: routineProps(),
+    });
+    expect(okAttach.status).toBe('ok');
+    const okCreate = await dispatchTool(ctxFor(), 'entity_create', {
+      title: 'Обычная через create',
+      tags: [],
+      props: routineProps(),
+      aspects: ['orbis/routine'],
+    });
+    expect(okCreate.status).toBe('ok');
+  });
+
+  test('СНЯТИЕ АСПЕКТА РУТИНЫ: detach у вооружённой → подтверждение, у безоружной → ok (четвёртый путь)', async () => {
+    // `aspects.detach` значений НЕ трогает (Р9): режим и белый список уцелеют в `props`, а
+    // рутина исчезнет из носителей — то есть перестанет работать. Для владельца это то же
+    // разоружение, только четвёртым путём.
+    const armed = await seedEntity(userA, {
+      title: 'Рутина под снос',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
+      },
+    });
+    const detach = await dispatchTool(ctxFor(), 'entity_update', {
+      id: armed.id,
+      aspects: { detach: ['orbis/routine'] },
+    });
+    expect(detach.status).toBe('pending_confirmation');
+    if (detach.status !== 'pending_confirmation') return;
+    expect(detach.card).toMatchObject({
+      summary: 'Автономия рутины «Рутина под снос»: снимает аспект рутины',
+    });
+    expect(await aspectsOfRow(armed.id)).toContain('orbis/routine');
+
+    // Вооружённость белым списком — тоже вооружённость: режим propose, но инструменты выданы.
+    const listed = await seedEntity(userA, {
+      title: 'Только список',
+      tags: [],
+      aspects: { 'orbis/routine': routine({ allowed_tools: ['entity_update'] }) },
+    });
+    const detachListed = await dispatchTool(ctxFor(), 'entity_update', {
+      id: listed.id,
+      aspects: { detach: ['orbis/routine'] },
+    });
+    expect(detachListed.status).toBe('pending_confirmation');
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: у БЕЗОРУЖНОЙ рутины (propose, список пуст) снятие аспекта
+    // доверенности не касается — исполняется молча.
+    const unarmed = await seedEntity(userA, {
+      title: 'Безоружная под снос',
+      tags: [],
+      aspects: { 'orbis/routine': routine() },
+    });
+    const ok = await dispatchTool(ctxFor(), 'entity_update', {
+      id: unarmed.id,
+      aspects: { detach: ['orbis/routine'] },
+    });
+    expect(ok.status).toBe('ok');
+    expect(await aspectsOfRow(unarmed.id)).toEqual([]);
+  });
+
+  test('сводка адресуется ОПЕРАЦИЕЙ, а не id цели; правка инструкции называется рядом со снятием', async () => {
+    // Снятие приписывалось id ЦЕЛИ: соседняя операция по той же рутине — переименование,
+    // доверенности не касающееся, — получала фразу «снимает белый список». А правка
+    // инструкции act-рутины из сводки выпадала вовсе: её ветка требовала «снятий нет».
+    const armed = await seedEntity(userA, {
+      title: 'Общая цель',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
+      },
+    });
+    const batch = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id: armed.id, title: 'Переименовано' } },
+        { tool: 'attach_orbis_routine', input: { entity_id: armed.id, data: routineProps() } },
+      ],
+    });
+    expect(batch.status).toBe('pending_confirmation');
+    if (batch.status !== 'pending_confirmation') return;
+    expect(batch.card).toMatchObject({
+      summary:
+        'Автономия рутины «Общая цель»: режим propose, снимает белый список; Инструкция act-рутины: правка «Общая цель»',
+    });
   });
 
   test('entity_update рутины с mode act → pending_confirmation; режим в графе прежний', async () => {

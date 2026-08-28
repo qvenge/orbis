@@ -29,6 +29,7 @@ import {
 } from '../llm/context';
 import { ROUTINE_SYSTEM_PROMPT, routineModeSection } from '../llm/prompts/routine-v2';
 import type { LLMMessage } from '../llm/types';
+import { ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY } from '../policy/confirmation';
 import type { RejectReason } from '../policy/pending';
 import { decisionsNoun } from './constants';
 
@@ -287,8 +288,8 @@ export async function buildRoutineContext(
     // Переставлять из-за неё нечего: блока продолжений у раннера нет.
     await todaySectionFor(tx, input.ownerId, (input.clock ?? (() => new Date()))()),
     routineModeSection({
-      mode: routine.props['orbis/routine_mode'],
-      allowedTools: routine.props['orbis/allowed_tools'] ?? [],
+      mode: routine.props[ROUTINE_MODE_PROPERTY],
+      allowedTools: routine.props[ROUTINE_TOOLS_PROPERTY] ?? [],
       runId: input.run.id,
       bucket: input.run.bucket,
     }),

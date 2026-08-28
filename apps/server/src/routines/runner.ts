@@ -37,6 +37,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { toolResultMessage } from '../llm/context';
 import type { LLMMessage, LLMResponse, LLMToolCall, LLMToolDef } from '../llm/types';
+import { ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY } from '../policy/confirmation';
 import { dispatchTool, type ToolCallCtx, type ToolDispatchResult } from '../tools/dispatch';
 import { buildToolRegistry, type RoutineRef, routineToolDefs } from '../tools/registry';
 import { ROUTINE_MAX_STEPS, RUN_DEADLINE_MS } from './constants';
@@ -225,8 +226,8 @@ async function prepareAndLoop(
   const routineRef: RoutineRef = {
     id: routine.id,
     runId,
-    mode: routine.props['orbis/routine_mode'],
-    allowedTools: new Set(routine.props['orbis/allowed_tools'] ?? []),
+    mode: routine.props[ROUTINE_MODE_PROPERTY],
+    allowedTools: new Set(routine.props[ROUTINE_TOOLS_PROPERTY] ?? []),
   };
   const { threadId, system, messages, tools } = await withIdentity(deps.db, ownerId, async (tx) => {
     const thread = await ensureEntityThread(tx, ownerId, routine.id);
@@ -295,7 +296,7 @@ async function modelLoop(
   },
 ): Promise<Verdict> {
   const { args, toolCtx, verbCtx, usage } = run;
-  const mode = args.routine.props['orbis/routine_mode'];
+  const mode = args.routine.props[ROUTINE_MODE_PROPERTY];
   const convo: LLMMessage[] = [...run.messages];
 
   for (let step = 1; ; step++) {
