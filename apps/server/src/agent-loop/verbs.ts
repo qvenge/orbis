@@ -177,7 +177,13 @@ function wireEntityAt(results: unknown[], index: number): WireEntity | null {
   if (typeof row !== 'object' || row === null) return null;
   const wire = row as Partial<WireEntity>;
   if (typeof wire.id !== 'string') return null;
-  if (typeof wire.aspectsMap !== 'object' || wire.aspectsMap === null) return null;
+  // Признак «это сущность» — НОВАЯ пара колонок (§А1-1), а не проекция `aspectsMap`:
+  // проекция уходит из wire-формы вместе со старым носителем, и проверка по ней однажды
+  // отвергла бы КАЖДУЮ сущность, превратив штатный replay в `replayMismatch`. Множество
+  // проверяемого то же: у сущности обе колонки есть всегда, у чужой строки результата
+  // (origins, счётчик) — ни одной.
+  if (typeof wire.props !== 'object' || wire.props === null) return null;
+  if (!Array.isArray(wire.aspects)) return null;
   return wire as WireEntity;
 }
 
@@ -576,8 +582,16 @@ async function claimTask(
   // …и ключ ОДНОГО исполнителя: audit-id считается по владельцу и batch_id, поэтому
   // второй грант того же владельца, повторив id первого, получил бы на replay его прогон
   // и начал бы писать в него шаги. Тикет здесь совпадает — различает только грант.
-  const runGrantId = runWire.aspectsMap['orbis/agent-run']?.grant_id;
-  if (runGrantId !== grant.id) {
+  //
+  // Читается НОВАЯ правда сохранённого ответа (§А1-1) под признаком носителя — тем же
+  // способом, что и у соседей (`savedRunMatches`, счётчик шага, статус тикета в
+  // `closeRun`). Через `aspectsMap` этого делать нельзя, и не из вкусовщины: проекция
+  // уходит из wire-формы вместе со старым носителем, и чтение по ней стало бы
+  // `undefined` — то есть КАЖДЫЙ честный повтор захвата получал бы «использован другим
+  // исполнителем» вместо своего же сохранённого ответа (§7.8). Греп-маркер старой формы
+  // (`aspects(_legacy)?\s*->`) такое место не ловит вовсе, поэтому оно и переведено руками.
+  const runIsRun = runWire.aspects.includes('orbis/agent-run');
+  if (!runIsRun || runWire.props['orbis/grant'] !== grant.id) {
     return err('CONFLICT', 'id вызова уже использован другим исполнителем — возьми новый', {
       tool: 'orbis_claim_task',
       id: batchId,
@@ -598,6 +612,9 @@ async function claimTask(
       id: ticketWire.id,
       title: ticketWire.title,
       body: ticketWire.body,
+      // Старая карта здесь — КОНТРАКТ ТУЛА, а не внутреннее чтение: поле `ticket.aspects`
+      // ответа `orbis_claim_task` (`contracts/agent-loop.ts`) читает МОДЕЛЬ, и её форму
+      // меняет перевод тулов (Задача 13c), а не перевод серверных читателей.
       aspects: ticketWire.aspectsMap,
     },
     project,

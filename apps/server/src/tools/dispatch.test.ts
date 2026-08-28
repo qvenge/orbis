@@ -8,6 +8,7 @@ import { eq, inArray, sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
+  divergentEntityRow,
   freshUserId,
   requireEnv,
   seedCustomAspect,
@@ -1889,11 +1890,16 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
   /** Рутина в минимальной валидной форме (V1.1) — автономии не выдаёт (mode propose). */
   const ROUTINE_DATA = { stage: 'active', at: '07:00', mode: 'propose' };
 
-  /** Сколько живых рутин у владельца — тем же условием, что считает гейт лимита. */
+  /**
+   * Сколько живых рутин у владельца — ТЕМ ЖЕ условием, что считает гейт лимита
+   * (`countRoutines`, dispatch.ts). Условие повторено дословно намеренно: разъехавшись, оно
+   * перестало бы ловить мутацию гейта — сьют считал бы по своему правилу и не заметил бы,
+   * что боевое читает не ту колонку.
+   */
   async function routineCountOf(owner: string): Promise<number> {
     const rows = await withIdentity(db, owner, (tx) =>
       tx.execute(
-        sql`SELECT count(*)::int AS n FROM entities WHERE NOT archived AND aspects_legacy ? 'orbis/routine'`,
+        sql`SELECT count(*)::int AS n FROM entities WHERE NOT archived AND 'orbis/routine' = ANY(aspects)`,
       ),
     );
     return Number((rows as unknown as Array<{ n: number }>)[0]?.n ?? 0);
@@ -1941,6 +1947,57 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
         await dispatchTool(ctxFor({ actorUserId: owner }), 'attach_orbis_routine', {
           entity_id: second.id,
           data: ROUTINE_DATA,
+        })
+      ).status,
+    ).toBe('ok');
+  });
+
+  // Проба расхождением колонок (§А1-1): рутина объявлена ТОЛЬКО новой формой — аспект
+  // лежит списком `aspects[]`, старая карта пуста. Пока обе колонки согласованы, «какую
+  // читает гейт лимита» поведением не наблюдаемо; здесь они говорят разное, и читатель
+  // старой карты пропустил бы вторую рутину сверх лимита.
+  test('лимит считает рутину, объявленную только новой формой — и её же правку лимитом не считает', async () => {
+    const owner = freshUserId();
+    const ghostRoutine = newId();
+    await withIdentity(db, owner, (tx) =>
+      tx.insert(entities).values(
+        divergentEntityRow({
+          ownerId: owner,
+          id: ghostRoutine,
+          title: 'Рутина только в props',
+          props: {
+            'orbis/routine_stage': 'active',
+            'orbis/routine_at': '07:00',
+            'orbis/routine_mode': 'propose',
+          },
+          aspects: ['orbis/routine'],
+        }),
+      ),
+    );
+    // Проба видит её тем же условием, что и гейт (см. докблок `routineCountOf`).
+    expect(await routineCountOf(owner)).toBe(1);
+
+    const oneRoutine = ctxFor({
+      actorUserId: owner,
+      entitlements: () => ({ allowed: true, limit: 1 }),
+    });
+    const target = await seedEntity(owner, { title: 'Кандидат во вторую рутину', tags: [] });
+    expectError(
+      await dispatchTool(oneRoutine, 'attach_orbis_routine', {
+        entity_id: target.id,
+        data: ROUTINE_DATA,
+      }),
+      'LIMIT',
+    );
+
+    // Обратная сторона границы: правка САМОЙ этой рутины лимитом не считается — её
+    // «уже рутина» решает второй читатель (`routinesAmong`), и он обязан узнать ту же
+    // строку. Прочитай он старую карту — правка получила бы LIMIT на ровном месте.
+    expect(
+      (
+        await dispatchTool(oneRoutine, 'attach_orbis_routine', {
+          entity_id: ghostRoutine,
+          data: { ...ROUTINE_DATA, at: '08:00' },
         })
       ).status,
     ).toBe('ok');

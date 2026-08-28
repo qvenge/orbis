@@ -452,6 +452,12 @@ async function materializeTemplate(
  * Свойства расписания инстанса: перечень Р-28 из свойств шаблона, где `orbis/start_at` —
  * дата инстанса со временем суток шаблона (в его таймзоне), а `orbis/end_at` сдвинут той
  * же длительностью. `orbis/recurrence` в перечень не входит и потому не переносится.
+ *
+ * Ветки «иначе» у `end_at` НЕТ, и это точный перевод, а не пропуск: до реформы весь аспект
+ * копировался спредом ДО проверки типа, поэтому нестроковый `end_at` уезжал в инстанс как
+ * есть, а пересчёт и удаление касались только строкового. Перечень выше копирует его тем
+ * же образом; трогать значение, которого прежний код не трогал, значило бы поменять
+ * поведение на пути, куда боевая запись не доходит (ajv отвергает нестроковый timestamp).
  */
 function instanceScheduleProps(
   props: Record<string, unknown>,
@@ -468,10 +474,6 @@ function instanceScheduleProps(
     const templEnd = new Date(endAt).getTime();
     if (Number.isNaN(templEnd)) delete out['orbis/end_at'];
     else out['orbis/end_at'] = new Date(start.getTime() + (templEnd - templStart)).toISOString();
-  } else {
-    // Нестроковый конец интервала инстанс не наследует: старая форма клала его в аспект
-    // только вместе с пересчётом, а без пересчёта он означал бы конец ШАБЛОНА.
-    delete out['orbis/end_at'];
   }
   return out;
 }

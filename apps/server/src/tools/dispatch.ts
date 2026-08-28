@@ -1689,7 +1689,13 @@ function entityCard(
   keyFieldsMap: Map<string, string[]>,
   undoActionId: string | undefined,
 ): Card {
-  const aspects = Object.keys(e.aspectsMap);
+  // Список аспектов — из НОВОЙ правды (§А1-1): он и есть то, чем аспект стал.
+  const aspects = e.aspects;
+  // А вот ЗНАЧЕНИЯ ключевых полей читаются проекцией, и это не пропуск перевода: ключи
+  // карточки — имена ПОЛЕЙ старой формы (см. `keyFieldsByAspect` выше: id свойства уже
+  // переведён в имя поля через `propertyToLegacyField`), потому что по ним web ищет
+  // подпись (`fieldLabel`). Перевод карточки на id свойств — это смена КОНТРАКТА
+  // карточки, а не чтения, и делается он вместе с web (Задача 13c).
   const keyFields: Record<string, unknown> = {};
   for (const aspectId of aspects) {
     for (const field of keyFieldsMap.get(aspectId) ?? []) {

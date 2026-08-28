@@ -113,6 +113,11 @@ export type ProgressSource = z.infer<typeof progressSourceSchema>;
  * то есть цель со старым текстом показывается владельцу С ОШИБКОЙ, как и раньше, а не
  * теряет полосу прогресса молча. Конвертера текста не заводится — база пересевается
  * (рулинг 23.08).
+ *
+ * ДАТА СМЕРТИ у ветки та же, что у её половины в реестре, и живёт она одним абзацем —
+ * докблок `PROGRESS_QUERY_SCHEMA` (`packages/shared/src/registry/builtin-properties.ts`):
+ * обе снимаются, когда `git grep translateProgressSource` и `git grep legacyAspectsPatch`
+ * дают ноль. Второго списка условий здесь нет намеренно — он разъехался бы с первым.
  */
 const progressQuerySchema = z.union([
   queryAstSchema,
@@ -341,6 +346,8 @@ export async function computeGoalProgress(
   // источник записан старой формой (переходная карта заворачивает текст именно в неё).
   // Считать по нему нечего, и молчать нельзя — владельцу нужен тот же `invalid_query`,
   // который он видел до реформы на непонятном запросе.
+  // Ветка СНИМАЕТСЯ вместе со второй половиной `anyOf` в реестре — условие момента там же
+  // (докблок `progressQuerySchema` выше ссылается на него одним адресом).
   if ('text' in src.query) {
     const text = src.query.text;
     logFailure(

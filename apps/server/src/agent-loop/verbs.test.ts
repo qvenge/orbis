@@ -11,8 +11,10 @@ import type {
   MyQueueResult,
   RunStepResult,
 } from '@orbis/shared';
-import { newId } from '@orbis/shared';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { batchAuditMessageId, newId } from '@orbis/shared';
+import { eq } from 'drizzle-orm';
+import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { chatMessages } from '../db/schema';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { answerPendingQuestion } from '../policy/pending';
@@ -171,6 +173,33 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
   let grantId = '';
   let otherGrantId = '';
   let projectId = '';
+
+  /**
+   * Правка СОХРАНЁННОГО ответа (§7.8) админ-DSN — мимо исполнителя, как расходящаяся
+   * строка `entities` у соседних проб. Иначе форму снимка не выбрать: обе колонки в нём
+   * согласованы по построению, и «какую читает replay» поведением не наблюдаемо.
+   */
+  async function patchSavedResults(
+    callId: string,
+    edit: (results: Array<Record<string, unknown>>) => Array<Record<string, unknown>>,
+  ): Promise<void> {
+    const auditId = batchAuditMessageId(owner, callId);
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      const rows = await admin
+        .select({ metadata: chatMessages.metadata })
+        .from(chatMessages)
+        .where(eq(chatMessages.id, auditId));
+      const md = rows[0]?.metadata as { results?: Array<Record<string, unknown>> } | undefined;
+      if (md?.results === undefined) throw new Error(`снимок ответа ${auditId} не найден`);
+      await admin
+        .update(chatMessages)
+        .set({ metadata: { ...md, results: edit(md.results) } })
+        .where(eq(chatMessages.id, auditId));
+    } finally {
+      await adminClient.end();
+    }
+  }
 
   /** Свежий тикет проекта, назначенный основному гранту. */
   async function makeTicket(title = 'Тикет для захвата', status = 'planned'): Promise<string> {
@@ -350,6 +379,60 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     expect(c2.run_id).toBe(c1.run_id);
     expect(await childrenOf(owner, ticketId)).toEqual([c1.run_id]);
     expect(c2.history).toEqual([]); // сам прогон в свою же историю не попадает
+  });
+
+  // Проба той самой границы, которой греп-маркер старой формы НЕ видит: сохранённый ответ
+  // (§7.8) — это ЗАМОРОЖЕННЫЙ снимок wire-формы, и проекция `aspectsMap` уходит из неё
+  // вместе со старым носителем (13c/21). Пока обе колонки согласованы, «какую из них
+  // читает replay» поведением не наблюдаемо вовсе — поэтому снимок правится админ-DSN
+  // мимо исполнителя, ровно как расходящаяся строка `entities` у соседних проб.
+  //  • снимок БЕЗ проекции обязан узнаваться (иначе каждый честный повтор захвата получал
+  //    бы «использован другим исполнителем» вместо своего же ответа);
+  //  • снимок, где прогон перестал нести свой аспект, узнаваться НЕ обязан — под id лежит
+  //    не прогон, и отдать его за прогон значило бы соврать про состояние.
+  test('replay захвата читает сохранённый ответ НОВОЙ формой: снимок без проекции узнаётся, снимок без аспекта прогона — нет', async () => {
+    const ticketA = await makeTicket('Захват со снимком без проекции');
+    const callA = newId();
+    const c1 = okResult<ClaimTaskResult>(
+      await dispatchTool(worker(owner, grantId), 'orbis_claim_task', {
+        ticket_id: ticketA,
+        id: callA,
+      }),
+    );
+    await patchSavedResults(callA, (results) => {
+      for (const row of results) delete row.aspectsMap;
+      return results;
+    });
+    const c2 = okResult<ClaimTaskResult>(
+      await dispatchTool(worker(owner, grantId), 'orbis_claim_task', {
+        ticket_id: ticketA,
+        id: callA,
+      }),
+    );
+    expect(c2.replayed).toBe(true);
+    expect(c2.run_id).toBe(c1.run_id);
+
+    const ticketB = await makeTicket('Захват со снимком без аспекта прогона');
+    const callB = newId();
+    okResult<ClaimTaskResult>(
+      await dispatchTool(worker(owner, grantId), 'orbis_claim_task', {
+        ticket_id: ticketB,
+        id: callB,
+      }),
+    );
+    await patchSavedResults(callB, (results) => {
+      const run = results[1];
+      if (run === undefined) throw new Error('в снимке нет строки прогона');
+      // Грант в `props` на месте — различает случай ТОЛЬКО признак носителя.
+      expect((run.props as Record<string, unknown>)['orbis/grant']).toBe(grantId);
+      run.aspects = (run.aspects as string[]).filter((a) => a !== 'orbis/agent-run');
+      return results;
+    });
+    const r = await dispatchTool(worker(owner, grantId), 'orbis_claim_task', {
+      ticket_id: ticketB,
+      id: callB,
+    });
+    expect(errorCode(r)).toBe('CONFLICT');
   });
 
   test('тот же id вызова на ДРУГОМ тикете — CONFLICT, чужой прогон агенту не отдаётся', async () => {
