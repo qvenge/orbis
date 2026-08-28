@@ -27,7 +27,7 @@ import { routineTick, startRoutineScheduler } from './scheduler';
 requireEnv();
 
 const { db, client } = appDb();
-const { aspectsOf, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
+const { propsOf, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
 
 /** 07:30 мск 18 августа 2026: бакет 07:00 наступил полчаса назад. */
 const T0 = new Date('2026-08-18T04:30:00.000Z');
@@ -109,20 +109,21 @@ function deps(provider: LLMProvider, clock: () => Date = () => T0): RoutineDeps 
   return { db, provider, model: MODEL, clock };
 }
 
-interface RunAspect {
-  outcome: string;
-  bucket: string;
-  attempt: number;
-  report?: string;
-  fail_note?: string;
+/** Свойства прогона (§А1-1) в объёме, который читают тесты планировщика. */
+interface RunProps {
+  'orbis/run_outcome': string;
+  'orbis/run_bucket': string;
+  'orbis/run_attempt': number;
+  'orbis/run_report'?: string;
+  'orbis/fail_note'?: string;
 }
 
-async function runAspect(owner: string, runId: string): Promise<RunAspect> {
-  return (await aspectsOf(owner, runId))['orbis/agent-run'] as unknown as RunAspect;
+async function runAspect(owner: string, runId: string): Promise<RunProps> {
+  return (await propsOf(owner, runId)) as unknown as RunProps;
 }
 
 async function stage(owner: string, routineId: string): Promise<string> {
-  return (await aspectsOf(owner, routineId))['orbis/routine']?.stage as string;
+  return (await propsOf(owner, routineId))['orbis/routine_stage'] as string;
 }
 
 async function runsOf(owner: string, routineId: string) {
@@ -154,8 +155,12 @@ describe('routineTick: бакет в таймзоне владельца, «со
     expect(first.owners).toBeGreaterThanOrEqual(1);
     expect(first.started).toContain(runId);
     const run = await runAspect(owner, runId);
-    expect(run).toMatchObject({ outcome: 'finished', bucket: BUCKET, attempt: 1 });
-    expect(run.report).toBe('Утро спокойное, планов нет.');
+    expect(run).toMatchObject({
+      'orbis/run_outcome': 'finished',
+      'orbis/run_bucket': BUCKET,
+      'orbis/run_attempt': 1,
+    });
+    expect(run['orbis/run_report']).toBe('Утро спокойное, планов нет.');
     expect(provider.requests).toHaveLength(1);
     // Секция режима в системном слое несёт бакет — модель знает, «за какое утро» работает
     expect(provider.requests[0]?.system).toContain(BUCKET);
@@ -207,7 +212,7 @@ describe('routineTick: бакет в таймзоне владельца, «со
       expect(['replay', 'id_conflict', 'running', 'done']).toContain(lost[0]?.reason);
       expect(provider.requests).toHaveLength(1);
       expect((await runsOf(owner, routineId)).map((r) => r.id)).toEqual([runId]);
-      expect((await runAspect(owner, runId)).outcome).toBe('finished');
+      expect((await runAspect(owner, runId))['orbis/run_outcome']).toBe('finished');
     }
   });
 
@@ -218,9 +223,13 @@ describe('routineTick: бакет в таймзоне владельца, «со
     const lateProvider = new ScriptedProvider([endTurn('догнал')]);
     const caught = await routineTick(deps(lateProvider, () => new Date('2026-08-18T09:00:00Z')));
     expect(caught.started).toContain(routineRunId(lateRoutine, BUCKET, 1));
-    expect((await runAspect(late, routineRunId(lateRoutine, BUCKET, 1))).outcome).toBe('finished');
+    expect((await runAspect(late, routineRunId(lateRoutine, BUCKET, 1)))['orbis/run_outcome']).toBe(
+      'finished',
+    );
     // Вчерашний и позавчерашний бакеты за окном — их нет вовсе (пропуск виден отсутствием)
-    expect((await runsOf(late, lateRoutine)).map((r) => r.run.bucket)).toEqual([BUCKET]);
+    expect((await runsOf(late, lateRoutine)).map((r) => r.props['orbis/run_bucket'])).toEqual([
+      BUCKET,
+    ]);
 
     // Проснулся в 14:00 мск — окно истекло: ни прогона, ни записи о пропуске
     const missed = await newOwner();
@@ -245,8 +254,13 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
 
     const t1 = await routineTick(deps(provider));
     expect(t1.started).toContain(idOf(1));
-    expect(await runAspect(owner, idOf(1))).toMatchObject({ outcome: 'failed', attempt: 1 });
-    expect((await runAspect(owner, idOf(1))).fail_note).toContain('AI-провайдер недоступен');
+    expect(await runAspect(owner, idOf(1))).toMatchObject({
+      'orbis/run_outcome': 'failed',
+      'orbis/run_attempt': 1,
+    });
+    expect((await runAspect(owner, idOf(1)))['orbis/fail_note']).toContain(
+      'AI-провайдер недоступен',
+    );
 
     // Пауза перед второй попыткой — RETRY_DELAYS_MS[0] от finished_at первой
     expect(RETRY_DELAYS_MS[0]).toBe(5 * 60_000);
@@ -256,7 +270,10 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
 
     const t3 = await routineTick(deps(provider, () => minutes(6)));
     expect(t3.started).toContain(idOf(2));
-    expect(await runAspect(owner, idOf(2))).toMatchObject({ outcome: 'failed', attempt: 2 });
+    expect(await runAspect(owner, idOf(2))).toMatchObject({
+      'orbis/run_outcome': 'failed',
+      'orbis/run_attempt': 2,
+    });
 
     // Пауза перед третьей — RETRY_DELAYS_MS[1] (15 мин) от finished_at второй (T0+6)
     expect(RETRY_DELAYS_MS[1]).toBe(15 * 60_000);
@@ -265,7 +282,10 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
 
     const t5 = await routineTick(deps(provider, () => minutes(22)));
     expect(t5.started).toContain(idOf(3));
-    expect(await runAspect(owner, idOf(3))).toMatchObject({ outcome: 'failed', attempt: 3 });
+    expect(await runAspect(owner, idOf(3))).toMatchObject({
+      'orbis/run_outcome': 'failed',
+      'orbis/run_attempt': 3,
+    });
     expect(provider.requests).toHaveLength(MAX_ATTEMPTS);
 
     // Стоп-кран: три плановых сбоя подряд → пауза с записью в тред рутины
@@ -324,7 +344,9 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
 
     const tick = await routineTick(deps(provider));
     expect(tick.swept).toBeGreaterThanOrEqual(1);
-    expect((await runAspect(owner, routineRunId(routineId, BUCKET, 1))).outcome).toBe('failed');
+    expect((await runAspect(owner, routineRunId(routineId, BUCKET, 1)))['orbis/run_outcome']).toBe(
+      'failed',
+    );
     // Стоп-кран сработал в тике, а не дожидался «живого» сбоя: рутина на паузе, с записью
     expect(tick.paused).toContain(routineId);
     expect(await stage(owner, routineId)).toBe('paused');
@@ -375,13 +397,13 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
     // Приостановленная — не рассматривается вовсе, живая — «уже идёт»
     expect(t1.skipped.filter((s) => s.routineId === paused)).toEqual([]);
     expect(t1.skipped).toContainEqual({ routineId: busy, bucket: BUCKET, reason: 'running' });
-    expect((await runAspect(owner, busyRun)).outcome).toBe('running');
+    expect((await runAspect(owner, busyRun))['orbis/run_outcome']).toBe('running');
     // Зависший закрыт подметанием failed — и только ПОТОМ тик решал по бакету: решение
     // «backoff», а не «running», значит подметание отработало раньше
     expect(t1.swept).toBeGreaterThanOrEqual(1);
     const sweptRun = await runAspect(owner, stuckRun);
-    expect(sweptRun.outcome).toBe('failed');
-    expect(sweptRun.fail_note).toContain('прогон прерван');
+    expect(sweptRun['orbis/run_outcome']).toBe('failed');
+    expect(sweptRun['orbis/fail_note']).toContain('прогон прерван');
     expect(t1.skipped).toContainEqual({ routineId: stuck, bucket: BUCKET, reason: 'backoff' });
     expect(provider.requests).toHaveLength(0);
 
@@ -389,13 +411,13 @@ describe('routineTick: ретраи и стоп-кран (V1.3, V1.12, приё�
     const t2 = await routineTick(deps(provider, () => minutes(5)));
     expect(t2.started).toContain(routineRunId(stuck, BUCKET, 2));
     expect(await runAspect(owner, routineRunId(stuck, BUCKET, 2))).toMatchObject({
-      outcome: 'finished',
-      attempt: 2,
+      'orbis/run_outcome': 'finished',
+      'orbis/run_attempt': 2,
     });
     expect(provider.requests).toHaveLength(1);
     // Живой прогон всё так же идёт: тик его не трогает
     expect(t2.skipped).toContainEqual({ routineId: busy, bucket: BUCKET, reason: 'running' });
-    expect((await runAspect(owner, busyRun)).outcome).toBe('running');
+    expect((await runAspect(owner, busyRun))['orbis/run_outcome']).toBe('running');
   });
 });
 
@@ -442,7 +464,7 @@ describe('startRoutineScheduler: интервал, наложение, оста�
     const scheduler = startRoutineScheduler(deps(provider), { intervalMs: 20 });
     await until(() => calls === 1);
     // Прогон создан и идёт; интервал уже мог тикнуть повторно — наложение пропущено
-    expect((await runAspect(owner, runId)).outcome).toBe('running');
+    expect((await runAspect(owner, runId))['orbis/run_outcome']).toBe('running');
 
     let stopped = false;
     const stopping = scheduler.stop().then(() => {
@@ -455,8 +477,8 @@ describe('startRoutineScheduler: интервал, наложение, оста�
     await stopping;
 
     const run = await runAspect(owner, runId);
-    expect(run.outcome).toBe('failed');
-    expect(run.fail_note).toBe('прогон остановлен при выключении процесса');
+    expect(run['orbis/run_outcome']).toBe('failed');
+    expect(run['orbis/fail_note']).toBe('прогон остановлен при выключении процесса');
     // Модель вызвана один раз: после рубильника новых шагов нет, новых тиков тоже
     expect(calls).toBe(1);
     await sleep(60);

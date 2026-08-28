@@ -44,17 +44,24 @@ export async function postDueInstances(deps: PostDueDeps): Promise<{ posted: num
   // Фаза чтения (короткий tx под RLS): due-инстансы. occurred_on — 'YYYY-MM-DD',
   // лексикографическое сравнение = хронологическое (как в binding.ts). ORDER BY —
   // детерминированный порядок batch'ей.
+  //
+  // Признак носителя `'orbis/financial' = ANY(e.aspects)` обязателен (Р9): снятие аспекта
+  // финансов НЕ уносит из `props` ни `orbis/planned`, ни `orbis/occurred_on`, тогда как из
+  // старой карты они уходили вместе с аспектом. Без него сущность, переставшая быть
+  // операцией, получала бы системный переход «план → факт» и привязку к конверту.
+  // Форма `planned` — единая на систему (РП-9): «отсутствие = false».
   const due = await withIdentity(db, ownerId, async (tx) => {
     const rows = (await tx.execute(sql`
       SELECT e.id FROM entities e
       WHERE e.owner_id = ${ownerId} AND NOT e.archived
-        AND e.aspects_legacy->'orbis/financial'->>'planned' = 'true'
-        AND e.aspects_legacy->'orbis/financial'->>'occurred_on' <= ${today}
+        AND 'orbis/financial' = ANY(e.aspects)
+        AND coalesce((e.props->>'orbis/planned')::boolean, false) = true
+        AND e.props->>'orbis/occurred_on' <= ${today}
         AND EXISTS (
           SELECT 1 FROM relations r
           WHERE r.target_id = e.id AND r.role = ${ROLE_INSTANCE_OF}
         )
-      ORDER BY e.aspects_legacy->'orbis/financial'->>'occurred_on', e.id
+      ORDER BY e.props->>'orbis/occurred_on', e.id
     `)) as unknown as Array<{ id: string }>;
     return rows.map((r) => r.id);
   });
@@ -74,8 +81,12 @@ export async function postDueInstances(deps: PostDueDeps): Promise<{ posted: num
         mechanism: 'materialize',
         operations: [
           {
+            // Внутренняя форма правки (§А1-1): плоский патч по свойству, а не карта аспекта.
+            // `false` пишется ЗНАЧЕНИЕМ, а не `unset`: «переход состоялся» и «про план
+            // ничего не сказано» — разные факты, и запросы отличают их только записанным
+            // `false` (РП-9 говорит о ЧТЕНИИ «отсутствие = false», не о записи).
             tool: 'entity_update',
-            input: { id, aspects: { 'orbis/financial': { planned: false } } },
+            input: { id, props: { 'orbis/planned': false } },
           },
         ],
         batchId: postFinancialBatchId(id),

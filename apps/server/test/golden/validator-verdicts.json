@@ -1128,8 +1128,7 @@
       }
     },
     "legacyVerdict": "reject",
-    "newVerdict": "ok",
-    "expectedDiff": "QUERY_AST_FORM"
+    "newVerdict": "reject"
   },
   {
     "name": "orbis/project: stage active",

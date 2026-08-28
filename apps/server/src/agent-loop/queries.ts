@@ -2,10 +2,74 @@
 // Запросы круга исполнителя (§4.14, С7): читающие проверки и выборки, которыми
 // пользуются гейты и глаголы. Все — под уже открытым `withIdentity`-tx вызывающего
 // (RLS владельца), собственных мутаций здесь нет.
-import type { AgentRunAspect, RoutineAspect, RunSummary } from '@orbis/shared';
+import type { AgentRunAspect, AgentRunStep, RoutineAspect, RunSummary } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import { hierarchicalRolesSql } from '../registry/roles';
+
+/**
+ * Значения ПРОГОНА по id свойств (§А1-1/§А8) — то, чем после реформы говорит вся зона
+ * исполнителя вместо аспект-объекта `AgentRunAspect`.
+ *
+ * Типы взяты у полей прежнего аспекта дословно: реформа переименовала АДРЕС, а не смысл,
+ * и второй набор типов рядом с первым разъехался бы с ним на первой же правке словаря.
+ * Поэтому здесь `AgentRunAspect['<поле>']`, а не переписанные руками формы.
+ *
+ * `project_id` не переехал: §А8 его удаляет (замена — вычисляемые `orbis/parent_project`
+ * и `orbis/root_project`).
+ */
+export interface RunProps {
+  'orbis/grant'?: AgentRunAspect['grant_id'];
+  'orbis/run_routine'?: AgentRunAspect['routine_id'];
+  'orbis/run_bucket'?: AgentRunAspect['bucket'];
+  'orbis/run_attempt'?: AgentRunAspect['attempt'];
+  'orbis/fail_note'?: AgentRunAspect['fail_note'];
+  'orbis/run_proposal'?: AgentRunAspect['proposal'];
+  'orbis/undecided'?: AgentRunAspect['undecided'];
+  'orbis/run_outcome': AgentRunAspect['outcome'];
+  'orbis/run_started_at': AgentRunAspect['started_at'];
+  'orbis/run_finished_at'?: AgentRunAspect['finished_at'];
+  'orbis/last_step_at': AgentRunAspect['last_step_at'];
+  'orbis/step_count': AgentRunAspect['step_count'];
+  'orbis/run_steps': AgentRunStep[];
+  'orbis/session_url'?: AgentRunAspect['session_url'];
+  'orbis/run_report'?: AgentRunAspect['report'];
+  'orbis/run_checkpoint'?: AgentRunAspect['checkpoint'];
+  'orbis/run_reply'?: AgentRunAspect['reply'];
+  'orbis/run_usage'?: AgentRunAspect['usage'];
+  'orbis/abandon_note'?: AgentRunAspect['abandon_note'];
+}
+
+/** Значения РУТИНЫ по id свойств (§А8) — та же подмена адреса, что у прогона. */
+export interface RoutineProps {
+  'orbis/routine_stage': RoutineAspect['stage'];
+  'orbis/routine_at': RoutineAspect['at'];
+  'orbis/routine_days'?: RoutineAspect['days'];
+  'orbis/routine_mode': RoutineAspect['mode'];
+  'orbis/allowed_tools'?: RoutineAspect['allowed_tools'];
+}
+
+/** Значения ТИКЕТА, которые читает круг исполнителя: задача плюс назначение (§А8). */
+export interface TicketProps {
+  'orbis/task_status'?: string;
+  'orbis/priority'?: string;
+  'orbis/due_date'?: string;
+  'orbis/executor'?: string;
+  'orbis/grant'?: string;
+  'orbis/assignee'?: string;
+  'orbis/may_close'?: boolean;
+}
+
+/**
+ * Проба назначения гранту в форме containment по `props` (§А1-1).
+ *
+ * `executor: 'agent'` в пробе не декоративен: при `executor='human'` grant_id запрещён
+ * инвариантом (assertAssignment), но проба обязана быть точной сама по себе — назначение
+ * человеку не даёт прав никакому гранту.
+ */
+function assignedToGrant(grantId: string): string {
+  return JSON.stringify({ 'orbis/executor': 'agent', 'orbis/grant': grantId });
+}
 
 /**
  * Инвариант 2 спеки: «скоуп worker не может тронуть чужое». Периметр записи фонового
@@ -19,13 +83,12 @@ import { hierarchicalRolesSql } from '../registry/roles';
  * как в грамматике §6: родитель — `source_id`, ребёнок — `target_id`). Список ролей —
  * подзапрос по реестру, а не литерал: роль с признаком `hierarchical` заводится операциями
  * реестра, и написанная в коде четвёрка её не увидела бы.
- * Проверка назначения — containment по колонке `aspects_legacy` (индекс
- * `entities_aspects_legacy_gin`),
- * а не разбор json-полей: так условие остаётся индексируемым.
- *
- * `executor: 'agent'` в пробе не декоративен: при `executor='human'` grant_id запрещён
- * инвариантом (assertAssignment), но проба обязана быть точной сама по себе — назначение
- * человеку не даёт прав никакому гранту.
+ * Проверка назначения — containment по колонке `props` (индекс `entities_props_gin`), а не
+ * разбор `->>`-полей: так условие остаётся индексируемым. Рядом с ним обязателен признак
+ * носителя `'orbis/assignment' = ANY(t.aspects)` (Р9): снятие аспекта назначения НЕ уносит
+ * из `props` ни `orbis/executor`, ни `orbis/grant`, тогда как из старой карты они уходили
+ * вместе с аспектом, — без признака грант писал бы в тред тикета, у которого назначение
+ * уже снято.
  *
  * Архивные не годятся ни целью, ни тикетом-основанием: архив — «убрано с глаз», и писать
  * туда исполнителю нечего. Цель присоединяется JOIN'ом, поэтому несуществующий id даёт
@@ -38,16 +101,14 @@ export async function isWorkerThreadTarget(
   grantId: string,
   entityId: string,
 ): Promise<boolean> {
-  const assigned = JSON.stringify({
-    'orbis/assignment': { executor: 'agent', grant_id: grantId },
-  });
   const rows = await tx.execute(
     sql`SELECT 1 AS ok
         FROM entities t
         JOIN entities target ON target.id = ${entityId}::uuid AND NOT target.archived
         WHERE t.owner_id = ${ownerId}::uuid
           AND NOT t.archived
-          AND t.aspects_legacy @> ${assigned}::jsonb
+          AND 'orbis/assignment' = ANY(t.aspects)
+          AND t.props @> ${assignedToGrant(grantId)}::jsonb
           AND (
             t.id = target.id
             OR EXISTS (
@@ -73,8 +134,10 @@ export async function isWorkerThreadTarget(
 export interface TicketRow {
   id: string;
   title: string;
-  /** Старая карта аспектов (§А1-1): носитель до «Пересева мира». */
-  aspectsLegacy: Record<string, Record<string, unknown>>;
+  /** Значения строки по id свойств (§А1-1) — читаются под признаком носителя. */
+  props: TicketProps;
+  /** Список интерпретаций: он и есть признак носителя. */
+  aspects: string[];
   updatedAt: Date;
 }
 
@@ -83,11 +146,12 @@ export interface TicketDetail {
   id: string;
   title: string;
   body: string;
-  /** Старая карта аспектов (§А1-1): носитель до «Пересева мира». */
-  aspectsLegacy: Record<string, Record<string, unknown>>;
+  /** Значения строки по id свойств (§А1-1). */
+  props: TicketProps;
+  aspects: string[];
 }
 
-/** Строка прогона: сам аспект + идентичность сущности (заголовок для карточек). */
+/** Строка прогона: его свойства + идентичность сущности (заголовок для карточек). */
 export interface RunRow {
   id: string;
   title: string;
@@ -98,7 +162,12 @@ export interface RunRow {
    * кому архив важен (обзор рутины: откаченный прогон не «ждёт»), тот смотрит сюда.
    */
   archived: boolean;
-  run: AgentRunAspect;
+  /**
+   * Свойства прогона. Признака носителя рядом нет НАМЕРЕННО: каждая выборка строк прогона
+   * в этом файле уже требует `'orbis/agent-run' = ANY(aspects)` в WHERE, и вторая проверка
+   * на стороне JS была бы тавтологией.
+   */
+  props: RunProps;
 }
 
 /** Проект в объёме ответа на захват: тело несёт раздел «Процесс» (С10). */
@@ -117,7 +186,8 @@ export interface RoutineRow {
   id: string;
   title: string;
   body: string;
-  routine: RoutineAspect;
+  /** Свойства рутины; признак носителя, как и у прогона, стоит в WHERE каждой выборки. */
+  props: RoutineProps;
 }
 
 /** Сырые строки sql-шаблона drizzle — приводим к своим формам одной точкой. */
@@ -127,13 +197,14 @@ function toTicketRow(row: RawRow): TicketRow {
   return {
     id: row.id as string,
     title: row.title as string,
-    aspectsLegacy: row.aspects_legacy as Record<string, Record<string, unknown>>,
+    props: row.props as TicketProps,
+    aspects: row.aspects as string[],
     updatedAt: row.updated_at as Date,
   };
 }
 
 /**
- * Аспект прогона валидирован ajv на записи (стадия 2 executor'а по реестру), поэтому
+ * Свойства прогона валидированы ajv на записи (стадия 2 executor'а по реестру), поэтому
  * приведение честно: другой формы в колонке быть не может. Прецедент — `actorKind as
  * ActorKind` в executor'е при чтении собственной же записи.
  */
@@ -143,40 +214,43 @@ function toRunRow(row: RawRow): RunRow {
     title: row.title as string,
     createdAt: row.created_at as Date,
     archived: row.archived === true,
-    run: row.run as AgentRunAspect,
+    props: row.props as RunProps,
   };
 }
 
-/** Та же честность приведения, что у прогона: аспект рутины валидирован ajv на записи. */
+/** Та же честность приведения, что у прогона: свойства рутины валидированы ajv на записи. */
 function toRoutineRow(row: RawRow): RoutineRow {
   return {
     id: row.id as string,
     title: row.title as string,
     body: row.body as string,
-    routine: row.routine as RoutineAspect,
+    props: row.props as RoutineProps,
   };
 }
 
 /**
- * Тикеты, назначенные гранту (очередь исполнителя). Containment по КОЛОНКЕ `aspects_legacy`
- * (`@>`) — покрыт GIN-индексом entities_aspects_legacy_gin; разбор json-полей (`->>`) сделал бы
- * условие неиндексируемым. `executor: 'agent'` в пробе обязателен: назначение человеку
- * не даёт прав никакому гранту (та же логика, что в isWorkerThreadTarget).
+ * Тикеты, назначенные гранту (очередь исполнителя). Containment по КОЛОНКЕ `props` (`@>`) —
+ * покрыт GIN-индексом entities_props_gin; разбор `->>`-полей сделал бы условие
+ * неиндексируемым. `executor: 'agent'` в пробе обязателен: назначение человеку не даёт прав
+ * никакому гранту (та же логика, что в isWorkerThreadTarget).
+ *
+ * Признаков носителя ДВА, и оба переводят по одному предикату старой формы: containment по
+ * старой карте требовал КЛЮЧА `orbis/assignment`, а `aspects_legacy ? 'orbis/task'` —
+ * ключа задачи. В `props` значения переживают снятие аспекта (Р9), поэтому без обоих
+ * признаков в очередь попадали бы записи, назначением или задачей быть переставшие.
  *
  * Архивные исключены: архив — это «убрано с глаз», а не «сделай». Статус тикета в отбор
  * НЕ входит намеренно — очередь показывает и `waiting`/`done` с пометкой claimable=false:
  * агенту важно видеть, что тикет у него есть и почему его нельзя взять.
  */
 export async function assignedTickets(tx: Tx, grantId: string): Promise<TicketRow[]> {
-  const assigned = JSON.stringify({
-    'orbis/assignment': { executor: 'agent', grant_id: grantId },
-  });
   const rows = await tx.execute(
-    sql`SELECT id, title, aspects_legacy, updated_at
+    sql`SELECT id, title, props, aspects, updated_at
         FROM entities
         WHERE NOT archived
-          AND aspects_legacy @> ${assigned}::jsonb
-          AND aspects_legacy ? 'orbis/task'
+          AND 'orbis/assignment' = ANY(aspects)
+          AND 'orbis/task' = ANY(aspects)
+          AND props @> ${assignedToGrant(grantId)}::jsonb
         ORDER BY updated_at DESC`,
   );
   return (rows as unknown as RawRow[]).map(toTicketRow);
@@ -190,8 +264,8 @@ export async function assignedTickets(tx: Tx, grantId: string): Promise<TicketRo
  */
 export async function ticketById(tx: Tx, ticketId: string): Promise<TicketDetail | null> {
   const rows = await tx.execute(
-    sql`SELECT id, title, body, aspects_legacy FROM entities
-        WHERE id = ${ticketId}::uuid AND NOT archived AND aspects_legacy ? 'orbis/task'`,
+    sql`SELECT id, title, body, props, aspects FROM entities
+        WHERE id = ${ticketId}::uuid AND NOT archived AND 'orbis/task' = ANY(aspects)`,
   );
   const row = (rows as unknown as RawRow[])[0];
   if (row === undefined) return null;
@@ -199,7 +273,8 @@ export async function ticketById(tx: Tx, ticketId: string): Promise<TicketDetail
     id: row.id as string,
     title: row.title as string,
     body: row.body as string,
-    aspectsLegacy: row.aspects_legacy as Record<string, Record<string, unknown>>,
+    props: row.props as TicketProps,
+    aspects: row.aspects as string[],
   };
 }
 
@@ -238,12 +313,12 @@ export async function parentProject(tx: Tx, ticketId: string): Promise<ProjectRo
  */
 export async function runsOfParent(tx: Tx, parentId: string): Promise<RunRow[]> {
   const rows = await tx.execute(
-    sql`SELECT e.id, e.title, e.created_at, e.archived, e.aspects_legacy -> 'orbis/agent-run' AS run
+    sql`SELECT e.id, e.title, e.created_at, e.archived, e.props
         FROM entities e
         JOIN relations r ON r.target_id = e.id
         WHERE r.source_id = ${parentId}::uuid
           AND r.role IN (${hierarchicalRolesSql()})
-          AND e.aspects_legacy ? 'orbis/agent-run'
+          AND 'orbis/agent-run' = ANY(e.aspects)
         ORDER BY e.created_at ASC`,
   );
   return (rows as unknown as RawRow[]).map(toRunRow);
@@ -262,17 +337,19 @@ export const runsOfTicket = runsOfParent;
  * между двумя чтениями, и запуск классифицировал бы идущий прогон как отработанный слот.
  * Запрос остаётся для точечного чтения слота (экраны, диагностика).
  *
- * Containment по колонке `aspects_legacy` (индекс `entities_aspects_legacy_gin`), а не
- * разбор json-полей.
+ * Containment по колонке `props` (индекс `entities_props_gin`), а не разбор `->>`-полей;
+ * признак носителя `'orbis/agent-run' = ANY(aspects)` переводит требование КЛЮЧА аспекта,
+ * которое containment по старой карте нёс в себе (Р9).
  * Архивные НЕ исключаются намеренно: убранный с глаз прогон всё равно занимает свой слот,
  * иначе архивация прогона молча разрешала бы прогнать бакет заново.
  */
 export async function runsForBucket(tx: Tx, routineId: string, bucket: string): Promise<RunRow[]> {
-  const ofBucket = JSON.stringify({ 'orbis/agent-run': { routine_id: routineId, bucket } });
+  const ofBucket = JSON.stringify({ 'orbis/run_routine': routineId, 'orbis/run_bucket': bucket });
   const rows = await tx.execute(
-    sql`SELECT id, title, created_at, archived, aspects_legacy -> 'orbis/agent-run' AS run
+    sql`SELECT id, title, created_at, archived, props
         FROM entities
-        WHERE aspects_legacy @> ${ofBucket}::jsonb
+        WHERE 'orbis/agent-run' = ANY(aspects)
+          AND props @> ${ofBucket}::jsonb
         ORDER BY created_at ASC`,
   );
   return (rows as unknown as RawRow[]).map(toRunRow);
@@ -286,11 +363,13 @@ export async function runsForBucket(tx: Tx, routineId: string, bucket: string): 
  * глаз», и рутина, которой нет на экранах, не должна ходить в фоне.
  */
 export async function activeRoutines(tx: Tx): Promise<RoutineRow[]> {
-  const active = JSON.stringify({ 'orbis/routine': { stage: 'active' } });
+  const active = JSON.stringify({ 'orbis/routine_stage': 'active' });
   const rows = await tx.execute(
-    sql`SELECT id, title, body, aspects_legacy -> 'orbis/routine' AS routine
+    sql`SELECT id, title, body, props
         FROM entities
-        WHERE NOT archived AND aspects_legacy @> ${active}::jsonb
+        WHERE NOT archived
+          AND 'orbis/routine' = ANY(aspects)
+          AND props @> ${active}::jsonb
         ORDER BY created_at ASC`,
   );
   return (rows as unknown as RawRow[]).map(toRoutineRow);
@@ -306,9 +385,9 @@ export async function activeRoutines(tx: Tx): Promise<RoutineRow[]> {
  */
 export async function routineById(tx: Tx, id: string): Promise<RoutineRow | null> {
   const rows = await tx.execute(
-    sql`SELECT id, title, body, aspects_legacy -> 'orbis/routine' AS routine
+    sql`SELECT id, title, body, props
         FROM entities
-        WHERE id = ${id}::uuid AND NOT archived AND aspects_legacy ? 'orbis/routine'`,
+        WHERE id = ${id}::uuid AND NOT archived AND 'orbis/routine' = ANY(aspects)`,
   );
   const row = (rows as unknown as RawRow[])[0];
   return row === undefined ? null : toRoutineRow(row);
@@ -333,12 +412,13 @@ export async function routineById(tx: Tx, id: string): Promise<RoutineRow | null
  * секунды), и лексикографическое сравнение врало бы на первом же таком значении.
  */
 export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
-  const running = JSON.stringify({ 'orbis/agent-run': { outcome: 'running' } });
+  const running = JSON.stringify({ 'orbis/run_outcome': 'running' });
   const rows = await tx.execute(
-    sql`SELECT id, title, created_at, archived, aspects_legacy -> 'orbis/agent-run' AS run
+    sql`SELECT id, title, created_at, archived, props
         FROM entities
-        WHERE aspects_legacy @> ${running}::jsonb
-          AND (aspects_legacy -> 'orbis/agent-run' ->> 'last_step_at')::timestamptz < ${before.toISOString()}::timestamptz
+        WHERE 'orbis/agent-run' = ANY(aspects)
+          AND props @> ${running}::jsonb
+          AND (props ->> 'orbis/last_step_at')::timestamptz < ${before.toISOString()}::timestamptz
         ORDER BY created_at ASC`,
   );
   return (rows as unknown as RawRow[]).map(toRunRow);
@@ -347,8 +427,8 @@ export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
 /**
  * Прогон по id (глаголы шага, чекпойнта и итога). Чужой и несуществующий неразличимы —
  * оба null, как у тикета: по той же причине, что и там (не быть оракулом чужого графа).
- * Условие `aspects_legacy ? 'orbis/agent-run'` не декоративно: без него id любой сущности
- * владельца проходил бы за прогон, и глагол падал бы на разборе пустого аспекта.
+ * Условие `'orbis/agent-run' = ANY(aspects)` не декоративно: без него id любой сущности
+ * владельца проходил бы за прогон, и глагол падал бы на разборе пустых свойств.
  *
  * Архивный прогон — структурно «прогона нет»: шаги и итог дописывать некуда, раз владелец
  * убрал запись (в том числе откатив собственный захват). Подметание при этом его ВИДИТ
@@ -356,9 +436,9 @@ export async function staleRuns(tx: Tx, before: Date): Promise<RunRow[]> {
  */
 export async function runById(tx: Tx, runId: string): Promise<RunRow | null> {
   const rows = await tx.execute(
-    sql`SELECT id, title, created_at, archived, aspects_legacy -> 'orbis/agent-run' AS run
+    sql`SELECT id, title, created_at, archived, props
         FROM entities
-        WHERE id = ${runId}::uuid AND NOT archived AND aspects_legacy ? 'orbis/agent-run'`,
+        WHERE id = ${runId}::uuid AND NOT archived AND 'orbis/agent-run' = ANY(aspects)`,
   );
   const row = (rows as unknown as RawRow[])[0];
   return row === undefined ? null : toRunRow(row);
@@ -367,12 +447,12 @@ export async function runById(tx: Tx, runId: string): Promise<RunRow | null> {
 /** Тикет прогона — его родитель по иерархической связи. Прогон-сирота даёт null. */
 export async function ticketOfRun(tx: Tx, runId: string): Promise<TicketRow | null> {
   const rows = await tx.execute(
-    sql`SELECT e.id, e.title, e.aspects_legacy, e.updated_at
+    sql`SELECT e.id, e.title, e.props, e.aspects, e.updated_at
         FROM entities e
         JOIN relations r ON r.source_id = e.id
         WHERE r.target_id = ${runId}::uuid
           AND r.role IN (${hierarchicalRolesSql()})
-          AND e.aspects_legacy ? 'orbis/task'
+          AND 'orbis/task' = ANY(e.aspects)
         LIMIT 1`,
   );
   const row = (rows as unknown as RawRow[])[0];
@@ -387,39 +467,50 @@ const SUMMARY_STEPS = 10;
  * wire-форме значит «этого не было», а не «есть, но undefined».
  */
 export function runSummary(row: RunRow): RunSummary {
-  const r = row.run;
+  const p = row.props;
+  const finishedAt = p['orbis/run_finished_at'];
+  const report = p['orbis/run_report'];
+  const checkpoint = p['orbis/run_checkpoint'];
+  const reply = p['orbis/run_reply'];
+  const abandonNote = p['orbis/abandon_note'];
+  const sessionUrl = p['orbis/session_url'];
+  const routineId = p['orbis/run_routine'];
+  const bucket = p['orbis/run_bucket'];
+  const attempt = p['orbis/run_attempt'];
+  const failNote = p['orbis/fail_note'];
+  const proposal = p['orbis/run_proposal'];
   return {
     id: row.id,
-    outcome: r.outcome,
-    started_at: r.started_at,
-    step_count: r.step_count,
-    last_steps: r.steps.slice(-SUMMARY_STEPS),
-    ...(r.finished_at !== undefined && { finished_at: r.finished_at }),
-    ...(r.report !== undefined && { report: r.report }),
-    ...(r.checkpoint !== undefined && { checkpoint: r.checkpoint }),
-    ...(r.reply !== undefined && { reply: r.reply }),
-    ...(r.abandon_note !== undefined && { abandon_note: r.abandon_note }),
-    ...(r.session_url !== undefined && { session_url: r.session_url }),
+    outcome: p['orbis/run_outcome'],
+    started_at: p['orbis/run_started_at'],
+    step_count: p['orbis/step_count'],
+    last_steps: p['orbis/run_steps'].slice(-SUMMARY_STEPS),
+    ...(finishedAt !== undefined && { finished_at: finishedAt }),
+    ...(report !== undefined && { report }),
+    ...(checkpoint !== undefined && { checkpoint }),
+    ...(reply !== undefined && { reply }),
+    ...(abandonNote !== undefined && { abandon_note: abandonNote }),
+    ...(sessionUrl !== undefined && { session_url: sessionUrl }),
     // V1: рутинная половина сводки. Субъект и слот отвечают на «что было вчера в 07:00»,
     // fail_note и статус предложения — на «почему в графе ничего не изменилось».
-    ...(r.routine_id !== undefined && { routine_id: r.routine_id }),
-    ...(r.bucket !== undefined && { bucket: r.bucket }),
-    ...(r.attempt !== undefined && { attempt: r.attempt }),
-    ...(r.fail_note !== undefined && { fail_note: r.fail_note }),
-    // Пачка осталась неразобранной (D42 ОЧ.6). Снятый флажок лежит в аспекте значением
+    ...(routineId !== undefined && { routine_id: routineId }),
+    ...(bucket !== undefined && { bucket }),
+    ...(attempt !== undefined && { attempt }),
+    ...(failNote !== undefined && { fail_note: failNote }),
+    // Пачка осталась неразобранной (D42 ОЧ.6). Снятый флажок лежит в свойстве значением
     // `false`, но в сводку не едет: для читателя истории «разобрано» и «пачки не было» —
     // одно и то же, а `undecided: false` заставляло бы его различать несуществующее.
-    ...(r.undecided === true && { undecided: true as const }),
+    ...(p['orbis/undecided'] === true && { undecided: true as const }),
     // Расхождения предусловия (proposal.mismatches) в сводку НЕ едут: это материал экрана
     // предложения, а в хвосте истории они раздували бы каждый ответ раннера чужим разбором.
-    ...(r.proposal !== undefined && {
+    ...(proposal !== undefined && {
       proposal: {
-        pending_id: r.proposal.pending_id,
-        status: r.proposal.status,
-        ...(r.proposal.decided_at !== undefined && { decided_at: r.proposal.decided_at }),
+        pending_id: proposal.pending_id,
+        status: proposal.status,
+        ...(proposal.decided_at !== undefined && { decided_at: proposal.decided_at }),
         // След правки владельца (Ш1.8) — часть судьбы предложения, а не разбор
         // расхождений: история рутины обязана отличать «принял» от «принял, переписав»
-        ...(r.proposal.edited_from !== undefined && { edited_from: r.proposal.edited_from }),
+        ...(proposal.edited_from !== undefined && { edited_from: proposal.edited_from }),
       },
     }),
   };

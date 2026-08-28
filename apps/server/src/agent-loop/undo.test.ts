@@ -23,7 +23,7 @@ import { createCallerFactory } from '../trpc';
 requireEnv();
 
 const { db, client } = appDb();
-const { seedEntity, link, aspectsOf, workerGrant, worker } = agentLoopHelpers(db);
+const { link, propsOf, seedEntity, worker, workerGrant } = agentLoopHelpers(db);
 const createCaller = createCallerFactory(appRouter);
 
 /** Шаги идут позже захвата — порядок «последнего действия» в журнале однозначен. */
@@ -123,9 +123,9 @@ describe('«отмени последнее» гасит шаг агента (п
   });
 
   test('ai.undoLast() владельца откатывает ПОСЛЕДНИЙ шаг: step_count назад, steps без него', async () => {
-    const before = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(before.step_count).toBe(2);
-    expect((before.steps as AnyRecord[]).map((s) => s.seq)).toEqual([1, 2]);
+    const before = (await propsOf(owner, runId)) as AnyRecord;
+    expect(before['orbis/step_count']).toBe(2);
+    expect((before['orbis/run_steps'] as AnyRecord[]).map((s) => s.seq)).toEqual([1, 2]);
 
     // Владелец зовёт тот же «отмени последнее», что и для своих действий — глагол агента
     // никакой особой кнопки не требует
@@ -133,9 +133,9 @@ describe('«отмени последнее» гасит шаг агента (п
     expect(undone.ok).toBe(true);
     expect(undone.actionId).toBe(secondStepId);
 
-    const after = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(after.step_count).toBe(1);
-    expect(after.steps).toEqual([
+    const after = (await propsOf(owner, runId)) as AnyRecord;
+    expect(after['orbis/step_count']).toBe(1);
+    expect(after['orbis/run_steps']).toEqual([
       {
         seq: 1,
         at: iso(T1),
@@ -145,7 +145,7 @@ describe('«отмени последнее» гасит шаг агента (п
       },
     ]);
     // Прогон отменой не закрывается: владелец убрал шаг, а не работу
-    expect(after.outcome).toBe('running');
+    expect(after['orbis/run_outcome']).toBe('running');
   });
 
   test('журнал append-only: отмена не правит запись шага, а дописывает undo-сообщение (§4.6)', async () => {
@@ -175,8 +175,8 @@ describe('«отмени последнее» гасит шаг агента (п
       }),
     );
     expect(next.step_count).toBe(2);
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect((run.steps as AnyRecord[]).map((s) => s.summary)).toEqual([
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect((run['orbis/run_steps'] as AnyRecord[]).map((s) => s.summary)).toEqual([
       'Прочитал задание',
       'Переделал шаг после отмены',
     ]);

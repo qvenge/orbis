@@ -32,7 +32,6 @@
 // полчаса после отката. Поэтому для рутинного прогона откат инвертирует ТОЛЬКО работу,
 // конфликты ищет только по её сущностям, а прогон помечает архивом ЯВНОЙ операцией: тот же
 // признак, по которому экран прогона (RunFeed) читает откаченный прогон ADE.
-import type { AgentRunAspect } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
@@ -42,6 +41,7 @@ import type { ActionOperation, ActionRecord } from '../executor/types';
 import { isUndone, undoAction } from '../executor/undo';
 import { closeOpenOfRun } from '../routines/lifecycle';
 import type { RollbackConflict, WireRollbackResult } from '../wire';
+import type { RunProps } from './queries';
 
 /** Боевой синк — один инстанс на модуль (состояния не хранит), как в dispatch.ts. */
 const sink = makeChatJournalSink();
@@ -163,11 +163,11 @@ const ROUTINE_POLICY: RollbackPolicy = {
   note: ROUTINE_ROLLBACK_NOTE,
 };
 
-/** Что известно о сущности прогона: чей он, убран ли уже в архив и сам аспект. `null` — прогона нет. */
+/** Что известно о сущности прогона: чей он, убран ли уже в архив и его свойства. `null` — прогона нет. */
 interface RunFacts {
   routineId: string | undefined;
   archived: boolean;
-  run: AgentRunAspect;
+  props: RunProps;
 }
 
 /**
@@ -180,29 +180,24 @@ interface RunFacts {
  * Форма предиката — `= ANY(e.aspects)`, а НЕ `= ANY((SELECT …))`: подзапросная форма
  * падает «malformed array literal», и это не стилистика, а проверенная ловушка.
  *
- * `run` пока берётся из ПРОЕКЦИИ `aspects_legacy`, и это названо вслух: его потребитель —
- * `closeOpenOfRun` (routines/lifecycle.ts), чей вход это доменный тип `AgentRunAspect`
- * (вложенные `proposal`/`steps`). Собирать его здесь обратно из `props` значило бы завести
- * второй, встречный перевод рядом с единственной проекцией — ровно то, что реформа убирает.
- * Уйдёт вместе с переводом самих рутин; до тех пор проекция для этого и живёт.
+ * Наследство прогона (`props`) читается из НОВОЙ правды целиком: его потребитель —
+ * `closeOpenOfRun` (routines/lifecycle.ts) — с Задачи 10b принимает свойства по id, и
+ * встречного перевода в аспект-объект больше нигде нет.
  */
 async function runFacts(tx: Tx, runId: string): Promise<RunFacts | null> {
   const rows = await tx.execute(
-    sql`SELECT e.archived,
-               e.props ->> 'orbis/run_routine' AS routine_id,
-               e.aspects_legacy -> 'orbis/agent-run' AS run
+    sql`SELECT e.archived, e.props ->> 'orbis/run_routine' AS routine_id, e.props
         FROM entities e
         WHERE e.id = ${runId}::uuid AND 'orbis/agent-run' = ANY(e.aspects)`,
   );
   const row = (rows as unknown as Array<Record<string, unknown>>)[0];
   if (row === undefined) return null;
-  // Аспект валидирован ajv на записи (стадия 2 executor'а) — приведение честно, как в queries.ts
-  const run = row.run as AgentRunAspect;
+  // Свойства валидированы ajv на записи (стадия 2 executor'а) — приведение честно, как в queries.ts
   const routineId = row.routine_id;
   return {
     routineId: typeof routineId === 'string' ? routineId : undefined,
     archived: row.archived === true,
-    run,
+    props: row.props as RunProps,
   };
 }
 
@@ -449,7 +444,7 @@ export async function rollbackRun(
         ownerId: actorUserId,
         routineId: plan.closeOpen.routineId,
         runId,
-        run: plan.closeOpen.run,
+        props: plan.closeOpen.props,
         reason: 'stale',
         questionNote: 'Вопрос прогона снят: прогон откачен',
       },

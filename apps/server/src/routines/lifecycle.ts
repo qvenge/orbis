@@ -42,7 +42,13 @@ import {
 } from '@orbis/shared';
 import type { BodyDoc } from '@orbis/shared/doc';
 import { sql } from 'drizzle-orm';
-import { type RunRow, runById, runSummary, runsOfParent } from '../agent-loop/queries';
+import {
+  type RunProps,
+  type RunRow,
+  runById,
+  runSummary,
+  runsOfParent,
+} from '../agent-loop/queries';
 import type { Clock } from '../budget/aggregates';
 import { appendMessage } from '../chat/messages';
 import { ensureEntityThread } from '../chat/threads';
@@ -199,20 +205,26 @@ const ACCOUNTING_ACTOR: PatchActor = { kind: 'ai', source: 'system' };
 type PatchResult = { ok: true } | { ok: false; error: StructuredError };
 
 /**
- * Патч аспекта прогона/рутины одним execute.
+ * Патч свойств прогона/рутины одним execute (§А1-1).
+ *
+ * Ключи патча — id СВОЙСТВ, и тип у них открытый (`Record<string, unknown>`), а не союз
+ * двух аспектов, как было до реформы. Это не послабление типизации, а прямое следствие
+ * §А2-1: словарь свойств расширяется владельцем операциями реестра, и закрытый союз в коде
+ * закрыл бы собственное свойство рутины ещё до того, как оно появится. Что значение годится
+ * свойству, а механизм вправе его писать, решает исполнитель по реестру (стадии 2 и §А2-5),
+ * а не эта сигнатура.
  *
  * Ошибка возвращается, а не логируется здесь: `CONFLICT` по предусловию для всех
  * вызывающих — не сбой, а «состояние изменилось, и правило говорит не трогать» (владелец
  * ответил на вопрос; рутину уже поставил на паузу конкурент; предложение решил второй
  * экран). Логировать это как ошибку значило бы засыпать лог штатными исходами.
  */
-async function patchAspect(
+async function patchRun(
   deps: RoutineWriteDeps,
   args: {
     ownerId: string;
     id: string;
-    aspect: 'orbis/agent-run' | 'orbis/routine';
-    patch: Record<string, unknown>;
+    props: Record<string, unknown>;
     precondition?: Array<Record<string, unknown>>;
     actor?: PatchActor;
   },
@@ -235,7 +247,7 @@ async function patchAspect(
           input: {
             id: args.id,
             ...(args.precondition !== undefined && { precondition: args.precondition }),
-            aspects: { [args.aspect]: args.patch },
+            props: args.props,
           },
         },
       ],
@@ -274,7 +286,7 @@ export async function supersedeOpen(
       ownerId: args.ownerId,
       routineId: args.routineId,
       runId: row.id,
-      run: row.run,
+      props: row.props,
       reason: 'superseded',
       // Владелец видит в треде, почему вопрос пропал из «ждут меня» (V1.8)
       questionNote: 'Вопрос прошлого прогона снят: рутина сработала заново',
@@ -330,18 +342,20 @@ export async function closeOpenOfRun(
     ownerId: string;
     routineId: string;
     runId: string;
-    run: AgentRunAspect;
+    /** Свойства прогона (§А1-1) — те же, что отдаёт `runsOfParent`/`runFacts`. */
+    props: RunProps;
     reason: Extract<RejectReason, 'superseded' | 'stale'>;
     /** Текст системной записи в тред рутины при снятии вопроса — он же текст судьбы вопросов пачки. */
     questionNote: string;
   },
 ): Promise<{ proposal: boolean; question: boolean; units: number }> {
-  const { ownerId, routineId, runId, run, reason } = args;
+  const { ownerId, routineId, runId, props, reason } = args;
   const out = { proposal: false, question: false, units: 0 };
   const now = deps.clock().toISOString();
+  const proposal = props['orbis/run_proposal'];
 
-  if (run.proposal?.status === 'pending') {
-    const closed = await closeProposalOfRun(deps, { ownerId, proposal: run.proposal, reason });
+  if (proposal?.status === 'pending') {
+    const closed = await closeProposalOfRun(deps, { ownerId, proposal, reason });
     // `null` — гасить нечего: карточка исчезла, уже исполнена или решена ЧУЖОЙ причиной.
     // Статус на прогоне пишет тот, чей reason стоит в reject-строке (она — источник
     // правды, V1.8): наше «заменено» поверх его «отклонил» соврало бы владельцу про его
@@ -353,12 +367,11 @@ export async function closeOpenOfRun(
       // поле `proposal.status` грамматика предусловий адресовать не умеет, а целый объект
       // умеет — и если решение владельца легло между чтением и патчем, CONFLICT оставит
       // его статус нетронутым.
-      const patched = await patchAspect(deps, {
+      const patched = await patchRun(deps, {
         ownerId,
         id: runId,
-        aspect: 'orbis/agent-run',
-        patch: {
-          proposal: {
+        props: {
+          'orbis/run_proposal': {
             pending_id: closed.pendingId,
             status: reason,
             decided_at: now,
@@ -369,7 +382,7 @@ export async function closeOpenOfRun(
             ...(closed.editedFrom !== undefined && { edited_from: closed.editedFrom }),
           },
         },
-        precondition: [{ property: 'orbis/run_proposal', in: [run.proposal] }],
+        precondition: [{ property: 'orbis/run_proposal', in: [proposal] }],
       });
       if (patched.ok) out.proposal = true;
       else if (patched.error.code !== 'CONFLICT') {
@@ -378,12 +391,11 @@ export async function closeOpenOfRun(
     }
   }
 
-  if (run.outcome === 'checkpoint') {
-    const patched = await patchAspect(deps, {
+  if (props['orbis/run_outcome'] === 'checkpoint') {
+    const patched = await patchRun(deps, {
       ownerId,
       id: runId,
-      aspect: 'orbis/agent-run',
-      patch: { outcome: 'stale' },
+      props: { 'orbis/run_outcome': 'stale' },
       // Под замком исход мог уже стать `answered` (владелец ответил секунду назад) —
       // тогда снимать вопрос нельзя: ответ важнее нового прогона
       precondition: [{ property: 'orbis/run_outcome', in: ['checkpoint'] }],
@@ -412,16 +424,15 @@ export async function closeOpenOfRun(
   // ничего, но флажок стоит — его не снял тот, кто решил последнюю единицу (сбой-лестница
   // §5, признанная цена), и починить это обязан следующий проход. `complete:false` не
   // снимает ничего: часть пачки могла остаться открытой, и «разобрано» было бы враньём.
-  if ((units.closed > 0 || run.undecided === true) && units.complete) {
+  if ((units.closed > 0 || props['orbis/undecided'] === true) && units.complete) {
     // Снятие — ЗАПИСЬ `false`, а не удаление ключа: предиката «поля нет» у грамматики §6
     // не существует, и запросом «разобранную пачку» иначе не отличить от неразобранной.
     // Актор системный (§9.6, инвариант 5): пиши мы его от владельца, «отмени последнее»
     // после «Принять» сняло бы флажок вместо действия (undoLast пропускает `system`).
-    const patched = await patchAspect(deps, {
+    const patched = await patchRun(deps, {
       ownerId,
       id: runId,
-      aspect: 'orbis/agent-run',
-      patch: { undecided: false },
+      props: { 'orbis/undecided': false },
       actor: { ...ACCOUNTING_ACTOR, runId },
     });
     if (!patched.ok) {
@@ -630,25 +641,27 @@ export async function pauseIfFailing(
     runs: await runsOfParent(tx, args.routineId),
     cut: await lastPauseCut(tx, args.ownerId, args.routineId),
   }));
-  const planned = runs.filter((r) => r.run.bucket !== undefined && !isManualBucket(r.run.bucket));
+  const planned = runs.filter((r) => {
+    const bucket = r.props['orbis/run_bucket'];
+    return bucket !== undefined && !isManualBucket(bucket);
+  });
   // Граница — позиция учтённого провала в порядке создания (runsOfParent: created_at ASC);
   // если его среди плановых нет (запись без run_id либо про чужой id) — считаем все
   const cutIndex = cut === undefined ? -1 : planned.findIndex((r) => r.id === cut);
   const fresh = planned.slice(cutIndex + 1);
   const tail = fresh.slice(-CONSECUTIVE_FAILURES_TO_PAUSE);
   if (tail.length < CONSECUTIVE_FAILURES_TO_PAUSE) return { paused: false };
-  if (!tail.every((r) => r.run.outcome === 'failed')) return { paused: false };
+  if (!tail.every((r) => r.props['orbis/run_outcome'] === 'failed')) return { paused: false };
   const lastCounted = tail[tail.length - 1];
   if (lastCounted === undefined) return { paused: false }; // недостижимо: длина проверена
 
   // Предусловие `stage: active` — не оптимизация, а сериализация: два прогона, упавших
   // почти одновременно, иначе оба записали бы паузу и оба положили бы запись в тред.
   // Проигравший получает CONFLICT и честно отвечает `paused: false` — паузу поставил не он.
-  const paused = await patchAspect(deps, {
+  const paused = await patchRun(deps, {
     ownerId: args.ownerId,
     id: args.routineId,
-    aspect: 'orbis/routine',
-    patch: { stage: 'paused' },
+    props: { 'orbis/routine_stage': 'paused' },
     precondition: [{ property: 'orbis/routine_stage', in: ['active'] }],
   });
   if (!paused.ok) {
@@ -763,18 +776,20 @@ async function startBucketRunLocked(
   // (done). С одним снимком исход согласован: читали до коммита конкурента → идём в execute
   // и проигрываем там (replay/id_conflict); после → видим его running.
   const all = await withIdentity(deps.db, ownerId, (tx) => runsOfParent(tx, routine.id));
-  const ofBucket = all.filter((r) => r.run.bucket === bucket);
+  const ofBucket = all.filter((r) => r.props['orbis/run_bucket'] === bucket);
 
-  if (all.some((r) => r.run.outcome === 'running')) return skip('running');
+  if (all.some((r) => r.props['orbis/run_outcome'] === 'running')) return skip('running');
   // Идущих больше нет, значит любой не-failed исход слота — терминальный: слот отработан
-  if (ofBucket.some((r) => r.run.outcome !== 'failed')) return skip('done');
-  const failed = ofBucket.filter((r) => r.run.outcome === 'failed');
+  if (ofBucket.some((r) => r.props['orbis/run_outcome'] !== 'failed')) return skip('done');
+  const failed = ofBucket.filter((r) => r.props['orbis/run_outcome'] === 'failed');
   if (failed.length >= MAX_ATTEMPTS) return skip('attempts');
   if (failed.length > 0) {
     const delay =
       RETRY_DELAYS_MS[failed.length - 1] ?? RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1] ?? 0;
     const lastFailedAt = Math.max(
-      ...failed.map((r) => Date.parse(r.run.finished_at ?? r.run.started_at)),
+      ...failed.map((r) =>
+        Date.parse(r.props['orbis/run_finished_at'] ?? r.props['orbis/run_started_at']),
+      ),
     );
     if (lastFailedAt + delay > now.getTime()) return skip('backoff');
   }
@@ -820,7 +835,7 @@ async function startManualRunLocked(
   const { ownerId, routine, timeZone } = args;
   const now = deps.clock();
   const all = await withIdentity(deps.db, ownerId, (tx) => runsOfParent(tx, routine.id));
-  if (all.some((r) => r.run.outcome === 'running')) return skip('running');
+  if (all.some((r) => r.props['orbis/run_outcome'] === 'running')) return skip('running');
   if (overRunsPerDay(deps, ownerId, all, wallClockIn(now, timeZone).date)) return skip('limit');
 
   // Те же `now` — и в ключе (manual:<ISO>), и в started_at/created_at прогона: два чтения
@@ -857,12 +872,10 @@ function overRunsPerDay(
   // Отказ резолвера — «прогонов на этом плане нет вовсе»: считать уже нечего
   if (!decision.allowed) return true;
   if (decision.limit === null) return false; // безлимитный план (сегодняшний 'dev')
-  const planned = runs.filter(
-    (r) =>
-      r.run.bucket !== undefined &&
-      !isManualBucket(r.run.bucket) &&
-      r.run.bucket.startsWith(localDate),
-  );
+  const planned = runs.filter((r) => {
+    const bucket = r.props['orbis/run_bucket'];
+    return bucket !== undefined && !isManualBucket(bucket) && bucket.startsWith(localDate);
+  });
   return planned.length >= decision.limit;
 }
 
@@ -1086,23 +1099,23 @@ export async function answerRoutineCheckpoint(
   // Чужой, несуществующий и ТИКЕТНЫЙ прогон здесь неразличимы намеренно: у тикетного своя
   // процедура (agentRun.answerCheckpoint), и отвечать на него отсюда — не «нельзя», а
   // «не тем ключом»; NOT_FOUND сообщает ровно это, не рассказывая про чужой граф.
-  if (row === null || row.run.routine_id === undefined) {
+  if (row === null || row.props['orbis/run_routine'] === undefined) {
     throw new ExecError('NOT_FOUND', 'прогон рутины не найден', { runId: args.runId });
   }
-  if (row.run.outcome !== 'checkpoint') {
-    throw new ExecError('CONFLICT', `прогон не ждёт ответа (${row.run.outcome})`, {
+  const outcome = row.props['orbis/run_outcome'];
+  if (outcome !== 'checkpoint') {
+    throw new ExecError('CONFLICT', `прогон не ждёт ответа (${outcome})`, {
       runId: args.runId,
-      outcome: row.run.outcome,
+      outcome,
     });
   }
 
-  const patched = await patchAspect(deps, {
+  const patched = await patchRun(deps, {
     ownerId: args.ownerId,
     id: args.runId,
-    aspect: 'orbis/agent-run',
-    patch: {
-      reply: { text: args.answer, at: deps.clock().toISOString() },
-      outcome: 'answered',
+    props: {
+      'orbis/run_reply': { text: args.answer, at: deps.clock().toISOString() },
+      'orbis/run_outcome': 'answered',
     },
     precondition: [{ property: 'orbis/run_outcome', in: ['checkpoint'] }],
     actor: { kind: 'owner', source: 'ui', runId: args.runId },
@@ -1266,8 +1279,8 @@ export async function proposalView(
     // в треде рутины, а не превратиться в «прогон не найден»
     const row = await runRowAnyArchive(tx, args.runId);
     if (row === null) return null;
-    const routineId = row.run.routine_id;
-    const proposal = row.run.proposal;
+    const routineId = row.props['orbis/run_routine'];
+    const proposal = row.props['orbis/run_proposal'];
     if (routineId === undefined || proposal === undefined) return null;
 
     const stored = await storedProposal(tx, proposal.pending_id);
@@ -1280,7 +1293,7 @@ export async function proposalView(
       status: proposal.status,
       // Проза предложения живёт в карточке, а `report` прогона — её же копия (propose.ts
       // кладёт explanation обоими путями). Карточка первична: она — то, что видел владелец.
-      explanation: stored.explanation ?? row.run.report ?? '',
+      explanation: stored.explanation ?? row.props['orbis/run_report'] ?? '',
       ...(proposal.decided_at !== undefined && { decidedAt: proposal.decided_at }),
       ...(proposal.mismatches !== undefined && { mismatches: proposal.mismatches }),
       ...(proposal.edited_from !== undefined && { editedFrom: proposal.edited_from }),
@@ -1294,19 +1307,25 @@ export async function proposalView(
   });
 }
 
-/** Прогон по id С архивными — только для чтения предложения (см. proposalView). */
+/**
+ * Прогон по id С архивными — только для чтения предложения (см. proposalView).
+ *
+ * Признак носителя `'orbis/agent-run' = ANY(aspects)` тот же, что у `runById`: без него
+ * id любой сущности владельца прошёл бы за прогон, а свойства прогона переживают снятие
+ * аспекта (Р9), и на такой строке карточка предложения нарисовалась бы из старых значений.
+ */
 async function runRowAnyArchive(
   tx: Tx,
   runId: string,
-): Promise<{ run: AgentRunAspect; archived: boolean } | null> {
+): Promise<{ props: RunProps; archived: boolean } | null> {
   const rows = await tx.execute(
-    sql`SELECT archived, aspects_legacy -> 'orbis/agent-run' AS run
+    sql`SELECT archived, props
         FROM entities
-        WHERE id = ${runId}::uuid AND aspects_legacy ? 'orbis/agent-run'`,
+        WHERE id = ${runId}::uuid AND 'orbis/agent-run' = ANY(aspects)`,
   );
   const row = (rows as unknown as Array<Record<string, unknown>>)[0];
   if (row === undefined) return null;
-  return { run: row.run as AgentRunAspect, archived: row.archived === true };
+  return { props: row.props as RunProps, archived: row.archived === true };
 }
 
 /**
@@ -1419,7 +1438,7 @@ async function liveProposalRuns(tx: Tx, entityId: string): Promise<string[]> {
     if (row.run_id === null) continue;
     const found = await runRowAnyArchive(tx, row.run_id);
     if (found === null || found.archived) continue;
-    const proposal = found.run.proposal;
+    const proposal = found.props['orbis/run_proposal'];
     if (proposal === undefined || proposal.status !== 'pending') continue;
     if (proposal.pending_id !== row.id) continue;
     runIds.push(row.run_id);
@@ -1770,12 +1789,16 @@ async function createEditedProposal(
   return withIdentity(deps.db, ownerId, async (tx) => {
     await acquirePendingLock(tx, parentId);
     const row = await runById(tx, runId);
-    if (row === null || row.run.routine_id === undefined || row.run.proposal === undefined) {
+    if (
+      row === null ||
+      row.props['orbis/run_routine'] === undefined ||
+      row.props['orbis/run_proposal'] === undefined
+    ) {
       // Прогон уехал в архив (откат) между чтением и правкой — тот же ответ, что у
       // решения по откаченному прогону, а не выдуманный статус
       throw new ExecError('NOT_FOUND', 'прогон рутины не найден', { runId });
     }
-    const live = row.run.proposal;
+    const live = row.props['orbis/run_proposal'];
     if (live.pending_id !== parentId) return { kind: 'moved' };
     if (live.status !== 'pending') return { kind: 'decided', status: live.status };
 
@@ -1812,10 +1835,10 @@ async function createEditedProposal(
         kind: 'proposal_card',
         pendingId: childId,
         runId,
-        routineId: row.run.routine_id,
+        routineId: row.props['orbis/run_routine'],
         summary,
         // Проза — прежняя: владелец поправил значения, а не объяснение рутины
-        explanation: stored.explanation ?? row.run.report ?? '',
+        explanation: stored.explanation ?? row.props['orbis/run_report'] ?? '',
         editedFrom: parentId,
       },
     });
@@ -1825,7 +1848,7 @@ async function createEditedProposal(
 
 /**
  * Шаг 2 лестницы: указатель прогона переезжает на правленое предложение — CAS на ВЕСЬ
- * объект `proposal`, как у всякой записи его судьбы. Отдельная транзакция: `patchAspect`
+ * объект `proposal`, как у всякой записи его судьбы. Отдельная транзакция: `patchRun`
  * идёт через executor, а тот открывает собственную.
  *
  * Возвращает предложение, которым прогон живёт ПОСЛЕ попытки: своё при выигранном CAS и
@@ -1841,11 +1864,10 @@ async function pointAtEdited(
     status: 'pending',
     edited_from: args.from.pending_id,
   };
-  const patched = await patchAspect(deps, {
+  const patched = await patchRun(deps, {
     ownerId: args.ownerId,
     id: args.runId,
-    aspect: 'orbis/agent-run',
-    patch: { proposal: next },
+    props: { 'orbis/run_proposal': next },
     precondition: [{ property: 'orbis/run_proposal', in: [args.from] }],
     // `system`, как у пометки судьбы (см. PatchActor): это бухгалтерия прогона, и «отмени
     // последнее» после «Принять» обязано снять план, а не переезд указателя
@@ -1867,13 +1889,14 @@ async function pointAtEdited(
  */
 async function readProposal(db: Db, ownerId: string, runId: string): Promise<RunProposal> {
   const row = await withIdentity(db, ownerId, (tx) => runById(tx, runId));
-  if (row === null || row.run.routine_id === undefined) {
+  if (row === null || row.props['orbis/run_routine'] === undefined) {
     throw new ExecError('NOT_FOUND', 'прогон рутины не найден', { runId });
   }
-  if (row.run.proposal === undefined) {
+  const proposal = row.props['orbis/run_proposal'];
+  if (proposal === undefined) {
     throw new ExecError('NOT_FOUND', 'у прогона нет предложения', { runId });
   }
-  return row.run.proposal;
+  return proposal;
 }
 
 /** Статус предложения прогона СЕЙЧАС — перечитывается после проигранной гонки. */
@@ -1883,7 +1906,7 @@ async function currentStatus(
   runId: string,
 ): Promise<ProposalStatus | undefined> {
   const row = await withIdentity(db, ownerId, (tx) => runById(tx, runId));
-  return row?.run.proposal?.status;
+  return row?.props['orbis/run_proposal']?.status;
 }
 
 /**
@@ -2051,12 +2074,11 @@ async function settleProposal(
   },
 ): Promise<{ written: true } | { written: false; proposalStatus: ProposalStatus }> {
   const mismatches = args.mismatches ?? args.proposal.mismatches;
-  const patched = await patchAspect(deps, {
+  const patched = await patchRun(deps, {
     ownerId: args.ownerId,
     id: args.runId,
-    aspect: 'orbis/agent-run',
-    patch: {
-      proposal: {
+    props: {
+      'orbis/run_proposal': {
         pending_id: args.proposal.pending_id,
         status: args.status,
         decided_at: deps.clock().toISOString(),
@@ -2394,14 +2416,13 @@ async function settleUndecided(
 ): Promise<void> {
   try {
     const row = await withIdentity(deps.db, ownerId, (tx) => runRowAnyArchive(tx, runId));
-    if (row?.run.undecided !== true) return;
+    if (row?.props['orbis/undecided'] !== true) return;
     const units = await withIdentity(deps.db, ownerId, (tx) => listRunUnits(tx, ownerId, runId));
     if (units.some((u) => u.fate === 'open')) return;
-    const patched = await patchAspect(deps, {
+    const patched = await patchRun(deps, {
       ownerId,
       id: runId,
-      aspect: 'orbis/agent-run',
-      patch: { undecided: false },
+      props: { 'orbis/undecided': false },
       actor: { ...ACCOUNTING_ACTOR, runId },
     });
     if (!patched.ok) {

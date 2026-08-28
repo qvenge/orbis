@@ -58,11 +58,11 @@ async function contextOf(
         id: routineId,
         title: 'Утренний обзор',
         body: INSTRUCTION,
-        routine: {
-          stage: 'active',
-          at: '07:00',
-          mode,
-          ...(allowedTools !== undefined && { allowed_tools: allowedTools }),
+        props: {
+          'orbis/routine_stage': 'active',
+          'orbis/routine_at': '07:00',
+          'orbis/routine_mode': mode,
+          ...(allowedTools !== undefined && { 'orbis/allowed_tools': allowedTools }),
         },
       },
       run: { id: RUN_ID, bucket: '2026-08-17T07:00' },

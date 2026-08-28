@@ -41,7 +41,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const owner = freshUserId();
-const { actionsOf, aspectsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } =
+const { actionsOf, propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } =
   agentLoopHelpers(db);
 const createCaller = createCallerFactory(appRouter);
 
@@ -123,13 +123,14 @@ async function trpcError(p: Promise<unknown>): Promise<TRPCError> {
   throw new Error('ожидался TRPCError, вызов успешен');
 }
 
-interface RunAspect {
-  outcome: string;
-  bucket?: string;
-  report?: string;
-  fail_note?: string;
-  reply?: { text: string; at: string };
-  proposal?: {
+/** Свойства прогона (§А1-1) в объёме, который читает этот сьют. */
+interface RunProps {
+  'orbis/run_outcome': string;
+  'orbis/run_bucket'?: string;
+  'orbis/run_report'?: string;
+  'orbis/fail_note'?: string;
+  'orbis/run_reply'?: { text: string; at: string };
+  'orbis/run_proposal'?: {
     pending_id: string;
     status: string;
     decided_at?: string;
@@ -138,8 +139,8 @@ interface RunAspect {
   };
 }
 
-async function runAspect(runId: string): Promise<RunAspect> {
-  return (await aspectsOf(owner, runId))['orbis/agent-run'] as unknown as RunAspect;
+async function runAspect(runId: string): Promise<RunProps> {
+  return (await propsOf(owner, runId)) as unknown as RunProps;
 }
 
 /** Сообщение ленты по id — им экран рутины и показывает предложение владельцу. */
@@ -158,15 +159,15 @@ function cardOf(msg: { metadata?: unknown } | undefined): { summary?: string } |
 }
 
 async function taskStatus(taskId: string): Promise<unknown> {
-  return (await aspectsOf(owner, taskId))['orbis/task']?.status;
+  return (await propsOf(owner, taskId))['orbis/task_status'];
 }
 
 /** Ждём, пока фоновый раннер закроет прогон: fire-and-forget ответа не даёт. */
-async function waitClosed(runId: string, timeoutMs = 2000): Promise<RunAspect> {
+async function waitClosed(runId: string, timeoutMs = 2000): Promise<RunProps> {
   const until = Date.now() + timeoutMs;
   for (;;) {
     const aspect = await runAspect(runId);
-    if (aspect.outcome !== 'running') return aspect;
+    if (aspect['orbis/run_outcome'] !== 'running') return aspect;
     if (Date.now() > until) throw new Error(`прогон ${runId} не закрыт за ${timeoutMs} мс`);
     await Bun.sleep(20);
   }
@@ -204,7 +205,7 @@ async function pointRunAt(runId: string, pendingId: string, status: string): Pro
     actorUserId: owner,
     actorKind: 'owner',
     source: 'system',
-    // Как на боевом пути (lifecycle.patchAspect): указатель предложения — служебное
+    // Как на боевом пути (lifecycle.patchRun): указатель предложения — служебное
     // свойство прогона (§А2-5), и пишет его глагол исполнителя.
     mechanism: 'verb',
     runId,
@@ -258,8 +259,8 @@ async function proposed(title: string): Promise<Proposed> {
   const started = await callerWith(provider).routine.runNow({ routineId });
   expect(started.runId).toBe(runId);
   const aspect = await waitClosed(runId);
-  expect(aspect.outcome).toBe('finished');
-  const pendingId = aspect.proposal?.pending_id;
+  expect(aspect['orbis/run_outcome']).toBe('finished');
+  const pendingId = aspect['orbis/run_proposal']?.pending_id;
   if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
   return { routineId, taskId, runId, pendingId };
 }
@@ -295,8 +296,8 @@ async function proposedWithBody(title: string): Promise<Proposed> {
   ]);
   await callerWith(provider).routine.runNow({ routineId });
   const aspect = await waitClosed(runId);
-  expect(aspect.outcome).toBe('finished');
-  const pendingId = aspect.proposal?.pending_id;
+  expect(aspect['orbis/run_outcome']).toBe('finished');
+  const pendingId = aspect['orbis/run_proposal']?.pending_id;
   if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
   return { routineId, taskId, runId, pendingId };
 }
@@ -350,8 +351,8 @@ async function proposedBodyChange(
   ]);
   await callerWith(provider).routine.runNow({ routineId });
   const aspect = await waitClosed(runId);
-  expect(aspect.outcome).toBe('finished');
-  const pendingId = aspect.proposal?.pending_id;
+  expect(aspect['orbis/run_outcome']).toBe('finished');
+  const pendingId = aspect['orbis/run_proposal']?.pending_id;
   if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
   return { routineId, taskId, runId, pendingId };
 }
@@ -469,7 +470,7 @@ async function plannedProposed(title: string, routineId?: string): Promise<Plann
   const end = await runRoutineRun(deps(provider), { ownerId: owner, routine, runId, bucket });
   expect(end).toEqual({ outcome: 'finished' });
   const aspect = await runAspect(runId);
-  const pendingId = aspect.proposal?.pending_id;
+  const pendingId = aspect['orbis/run_proposal']?.pending_id;
   if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
   return { routineId: rid, taskId, runId, pendingId, bucket, routineTitle };
 }
@@ -493,8 +494,8 @@ async function proposedOps(
   ]);
   await callerWith(provider).routine.runNow({ routineId });
   const aspect = await waitClosed(runId);
-  expect(aspect.outcome).toBe('finished');
-  const pendingId = aspect.proposal?.pending_id;
+  expect(aspect['orbis/run_outcome']).toBe('finished');
+  const pendingId = aspect['orbis/run_proposal']?.pending_id;
   if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
   return { routineId, runId, pendingId };
 }
@@ -568,8 +569,8 @@ describe('routine.runNow', () => {
 
     // Ответ пришёл ДО модели: прогон уже в графе и ещё идёт
     const running = await runAspect(runId);
-    expect(running.outcome).toBe('running');
-    expect(running.bucket).toBe(MANUAL_BUCKET);
+    expect(running['orbis/run_outcome']).toBe('running');
+    expect(running['orbis/run_bucket']).toBe(MANUAL_BUCKET);
 
     const conflict = await trpcError(c.routine.runNow({ routineId }));
     expect(conflict.code).toBe('CONFLICT');
@@ -577,8 +578,8 @@ describe('routine.runNow', () => {
 
     release();
     const closed = await waitClosed(runId);
-    expect(closed.outcome).toBe('finished');
-    expect(closed.proposal?.status).toBe('pending');
+    expect(closed['orbis/run_outcome']).toBe('finished');
+    expect(closed['orbis/run_proposal']?.status).toBe('pending');
   });
 
   test('несуществующая рутина → NOT_FOUND', async () => {
@@ -609,7 +610,7 @@ describe('routine.runNow', () => {
     const c = callerWith(provider, { manualRuns: registry });
 
     expect(await c.routine.runNow({ routineId })).toEqual({ runId });
-    expect((await runAspect(runId)).outcome).toBe('running');
+    expect((await runAspect(runId))['orbis/run_outcome']).toBe('running');
     // Дожидаемся, пока раннер дойдёт до модели: рубильник должен застать прогон ПОСРЕДИ шага
     // (до первого шага он закрылся бы тем же исходом, но не проверил бы ожидание shutdown)
     const until = Date.now() + 3_000;
@@ -629,12 +630,12 @@ describe('routine.runNow', () => {
     await stopping;
 
     const closed = await runAspect(runId);
-    expect(closed.outcome).toBe('failed');
-    expect(closed.fail_note).toBe('прогон остановлен при выключении процесса');
+    expect(closed['orbis/run_outcome']).toBe('failed');
+    expect(closed['orbis/fail_note']).toBe('прогон остановлен при выключении процесса');
     // После рубильника второго шага не было
     expect(calls).toBe(1);
     // Рутина НЕ на паузе: ручной прогон в стоп-кране не участвует
-    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('active');
+    expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('active');
 
     // Под уже дёрнутым рубильником runNow прогон не заводит — CONFLICT «сервер
     // останавливается», прогонов у рутины по-прежнему один (S-2)
@@ -665,7 +666,7 @@ describe('routine.answerCheckpoint', () => {
       ]),
     ]);
     await callerWith(provider).routine.runNow({ routineId });
-    expect((await waitClosed(runId)).outcome).toBe('checkpoint');
+    expect((await waitClosed(runId))['orbis/run_outcome']).toBe('checkpoint');
 
     const answered = await callerLater().routine.answerCheckpoint({
       runId,
@@ -674,8 +675,8 @@ describe('routine.answerCheckpoint', () => {
     expect(answered).toEqual({ runId });
 
     const aspect = await runAspect(runId);
-    expect(aspect.outcome).toBe('answered');
-    expect(aspect.reply?.text).toBe('Да, перенеси на 10:00');
+    expect(aspect['orbis/run_outcome']).toBe('answered');
+    expect(aspect['orbis/run_reply']?.text).toBe('Да, перенеси на 10:00');
 
     const answerActions = (await actionsOf(owner)).filter(
       (a) => a.run_id === runId && a.source === 'ui',
@@ -695,8 +696,8 @@ describe('routine.answerCheckpoint', () => {
     expect(rolled.ok).toBe(true);
     if (!rolled.ok) throw new Error('ожидался успешный откат');
     expect(rolled.undone).toEqual([]);
-    expect((await runAspect(runId)).reply?.text).toBe('Да, перенеси на 10:00');
-    expect((await runAspect(runId)).outcome).toBe('answered');
+    expect((await runAspect(runId))['orbis/run_reply']?.text).toBe('Да, перенеси на 10:00');
+    expect((await runAspect(runId))['orbis/run_outcome']).toBe('answered');
     expect(await isArchived(runId)).toBe(true);
   });
 
@@ -745,8 +746,8 @@ describe('routine.proposal / decideProposal', () => {
     expect(await taskStatus(taskId)).toBe('planned');
 
     const aspect = await runAspect(runId);
-    expect(aspect.proposal?.status).toBe('approved');
-    expect(typeof aspect.proposal?.decided_at).toBe('string');
+    expect(aspect['orbis/run_proposal']?.status).toBe('approved');
+    expect(typeof aspect['orbis/run_proposal']?.decided_at).toBe('string');
     expect((await caller().routine.proposal({ runId }))?.status).toBe('approved');
 
     const again = await caller().routine.decideProposal({ runId, pendingId, decision: 'approve' });
@@ -776,11 +777,13 @@ describe('routine.proposal / decideProposal', () => {
     expect(await rejectReason(pendingId)).toBe('stale');
 
     const aspect = await runAspect(runId);
-    expect(aspect.proposal?.status).toBe('stale');
+    expect(aspect['orbis/run_proposal']?.status).toBe('stale');
     // Единица расхождения на прогоне — СВОЙСТВО (§А7-4), как и в самом предусловии (§А7-3).
-    expect(aspect.proposal?.mismatches?.[0]).toMatchObject({ property: 'orbis/task_status' });
-    expect(aspect.proposal?.mismatches?.[0]?.note).toContain('ожидали');
-    expect(aspect.proposal?.mismatches?.[0]?.note).toContain('done');
+    expect(aspect['orbis/run_proposal']?.mismatches?.[0]).toMatchObject({
+      property: 'orbis/task_status',
+    });
+    expect(aspect['orbis/run_proposal']?.mismatches?.[0]?.note).toContain('ожидали');
+    expect(aspect['orbis/run_proposal']?.mismatches?.[0]?.note).toContain('done');
 
     const view = await caller().routine.proposal({ runId });
     expect(view?.status).toBe('stale');
@@ -807,8 +810,8 @@ describe('routine.proposal / decideProposal', () => {
     ]);
     await callerWith(provider).routine.runNow({ routineId });
     const closed = await waitClosed(runId);
-    expect(closed.outcome).toBe('finished');
-    const pendingId = closed.proposal?.pending_id;
+    expect(closed['orbis/run_outcome']).toBe('finished');
+    const pendingId = closed['orbis/run_proposal']?.pending_id;
     if (pendingId === undefined) throw new Error('прогон закрыт без предложения');
 
     // Владелец тронул НЕ тело, а статус — updated_at бампит любая правка сущности
@@ -834,8 +837,8 @@ describe('routine.proposal / decideProposal', () => {
     expect((body as unknown as Array<{ body: string }>)[0]?.body).not.toBe('Описание от рутины');
     expect(await rejectReason(pendingId)).toBe('stale');
     const aspect = await runAspect(runId);
-    expect(aspect.proposal?.status).toBe('stale');
-    expect(aspect.proposal?.mismatches).toEqual([
+    expect(aspect['orbis/run_proposal']?.status).toBe('stale');
+    expect(aspect['orbis/run_proposal']?.mismatches).toEqual([
       // У расхождения тела свойства в §А8 нет (тело — не свойство), поэтому нота несёт
       // заведомо неизвестный id той же формы, что и переходная карта: `orbis/<поле>`.
       { property: 'orbis/body', note: 'тело изменено после составления предложения' },
@@ -856,13 +859,13 @@ describe('routine.proposal / decideProposal', () => {
     expect(decided).toEqual({ status: 'rejected' });
     expect(await taskStatus(taskId)).toBe('inbox');
     expect(await rejectReason(pendingId)).toBe('owner');
-    expect((await runAspect(runId)).proposal?.status).toBe('rejected');
+    expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('rejected');
   });
 
   test('предложение, погашенное новым прогоном, решению не поддаётся → already со статусом superseded', async () => {
     const { routineId, taskId, runId, pendingId } = await proposed('Записаться к врачу');
     await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newId() });
-    expect((await runAspect(runId)).proposal?.status).toBe('superseded');
+    expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('superseded');
 
     expect(
       await caller().routine.decideProposal({ runId, pendingId, decision: 'approve' }),
@@ -894,7 +897,7 @@ describe('routine.proposal / decideProposal', () => {
     });
     // Ни исполнения, ни отказа: решение адресовано не тому, чем прогон живёт
     expect(await taskStatus(taskId)).toBe('inbox');
-    expect((await runAspect(runId)).proposal?.status).toBe('pending');
+    expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('pending');
     expect(await rejectReason(pendingId)).toBeUndefined();
 
     // «Отклонить» чужим адресом — тот же отказ, а не отказ живого предложения
@@ -906,7 +909,7 @@ describe('routine.proposal / decideProposal', () => {
       liveStatus: 'pending',
       reason: 'superseded',
     });
-    expect((await runAspect(runId)).proposal?.status).toBe('pending');
+    expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('pending');
 
     // Живое предложение своим адресом решается как прежде
     expect(await caller().routine.decideProposal({ runId, pendingId, decision: 'reject' })).toEqual(
@@ -919,7 +922,7 @@ describe('routine.proposal / decideProposal', () => {
     expect(await caller().routine.decideProposal({ runId, pendingId, decision: 'reject' })).toEqual(
       { status: 'rejected' },
     );
-    expect((await runAspect(runId)).proposal?.status).toBe('rejected');
+    expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('rejected');
 
     /**
      * Порядок проверок в `decideProposal` — не косметика: сверка адреса стоит ДО проверки
@@ -1054,11 +1057,11 @@ describe('routine.proposal / decideProposal', () => {
     expect(await rejectReason(pendingId)).toBe('edited');
 
     const aspect = await runAspect(runId);
-    const editedId = aspect.proposal?.pending_id;
+    const editedId = aspect['orbis/run_proposal']?.pending_id;
     if (editedId === undefined) throw new Error('прогон без предложения');
     expect(editedId).not.toBe(pendingId);
-    expect(aspect.proposal?.status).toBe('approved');
-    expect(aspect.proposal?.edited_from).toBe(pendingId);
+    expect(aspect['orbis/run_proposal']?.status).toBe('approved');
+    expect(aspect['orbis/run_proposal']?.edited_from).toBe(pendingId);
     // id правленого детерминирован содержимым правки: тот же тап — тот же pending
     expect(editedId).toBe(
       pendingMessageId(owner, `edit:${pendingId}:${editsHash(editsSchema.parse(edits))}`),
@@ -1096,7 +1099,7 @@ describe('routine.proposal / decideProposal', () => {
       ]),
     ]);
     await callerWith(provider).routine.runNow({ routineId });
-    expect((await waitClosed(runId)).outcome).toBe('finished');
+    expect((await waitClosed(runId))['orbis/run_outcome']).toBe('finished');
 
     const view = await caller().routine.proposal({ runId });
     // Русская подпись роли `subitem` из встроенного реестра — «Подпункт»
@@ -1143,7 +1146,7 @@ describe('routine.proposal / decideProposal', () => {
     });
     expect(applied.status).toBe('applied');
 
-    const editedId = (await runAspect(runId)).proposal?.pending_id;
+    const editedId = (await runAspect(runId))['orbis/run_proposal']?.pending_id;
     if (editedId === undefined) throw new Error('прогон без предложения');
     const editedView = await caller().routine.proposal({ runId });
     if (editedView === null) throw new Error('правленое предложение не найдено');
@@ -1203,9 +1206,9 @@ describe('routine.proposal / decideProposal', () => {
     expect(await taskStatus(taskId)).toBe('planned');
     expect(await rejectReason(pendingId)).toBeUndefined();
     const aspect = await runAspect(runId);
-    expect(aspect.proposal?.pending_id).toBe(pendingId);
-    expect(aspect.proposal?.status).toBe('approved');
-    expect(aspect.proposal?.edited_from).toBeUndefined();
+    expect(aspect['orbis/run_proposal']?.pending_id).toBe(pendingId);
+    expect(aspect['orbis/run_proposal']?.status).toBe('approved');
+    expect(aspect['orbis/run_proposal']?.edited_from).toBeUndefined();
   });
 
   test('правки при «Отклонить» → VALIDATION: отклонение ничего не применяет, и делать вид, что правки учтены, нельзя', async () => {
@@ -1223,7 +1226,7 @@ describe('routine.proposal / decideProposal', () => {
     // Ни отказа, ни правленого предложения: отказ входа стоит до всякой записи
     expect(await rejectReason(pendingId)).toBeUndefined();
     expect(await pendingCount(runId)).toBe(1);
-    expect((await runAspect(runId)).proposal?.status).toBe('pending');
+    expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('pending');
     expect(await taskStatus(taskId)).toBe('inbox');
   });
 
@@ -1249,13 +1252,13 @@ describe('routine.proposal / decideProposal', () => {
     expect(decided.bodyChanged).toBe(false);
 
     const aspect = await runAspect(runId);
-    const editedId = aspect.proposal?.pending_id;
+    const editedId = aspect['orbis/run_proposal']?.pending_id;
     if (editedId === undefined) throw new Error('прогон без предложения');
     // Устарело ПРАВЛЕНОЕ — карточка обязана узнать своё среди двух
     expect(decided.pendingId).toBe(editedId);
     expect(editedId).not.toBe(pendingId);
-    expect(aspect.proposal?.status).toBe('stale');
-    expect(aspect.proposal?.edited_from).toBe(pendingId);
+    expect(aspect['orbis/run_proposal']?.status).toBe('stale');
+    expect(aspect['orbis/run_proposal']?.edited_from).toBe(pendingId);
     expect(await rejectReason(editedId)).toBe('stale');
     expect(await rejectReason(pendingId)).toBe('edited');
 
@@ -1284,11 +1287,11 @@ describe('routine.proposal / decideProposal', () => {
     // Лестница дошла до применения: исходное погашено, правленое живо, указатель на нём —
     // иначе владельцу было бы некуда возвращаться со своей правкой
     const aspect = await runAspect(runId);
-    const editedId = aspect.proposal?.pending_id;
+    const editedId = aspect['orbis/run_proposal']?.pending_id;
     if (editedId === undefined) throw new Error('прогон без предложения');
     expect(editedId).not.toBe(pendingId);
-    expect(aspect.proposal?.status).toBe('pending');
-    expect(aspect.proposal?.edited_from).toBe(pendingId);
+    expect(aspect['orbis/run_proposal']?.status).toBe('pending');
+    expect(aspect['orbis/run_proposal']?.edited_from).toBe(pendingId);
     expect(await rejectReason(pendingId)).toBe('edited');
     expect(await rejectReason(editedId)).toBeUndefined();
 
@@ -1317,7 +1320,7 @@ describe('routine.proposal / decideProposal', () => {
         },
       }),
     );
-    const editedId = (await runAspect(runId)).proposal?.pending_id;
+    const editedId = (await runAspect(runId))['orbis/run_proposal']?.pending_id;
     if (editedId === undefined) throw new Error('прогон без предложения');
 
     expect(
@@ -1329,9 +1332,9 @@ describe('routine.proposal / decideProposal', () => {
     ).toEqual({ status: 'rejected' });
     expect(await rejectReason(editedId)).toBe('owner');
     const aspect = await runAspect(runId);
-    expect(aspect.proposal?.status).toBe('rejected');
+    expect(aspect['orbis/run_proposal']?.status).toBe('rejected');
     // Судьба меняется, происхождение — нет
-    expect(aspect.proposal?.edited_from).toBe(pendingId);
+    expect(aspect['orbis/run_proposal']?.edited_from).toBe(pendingId);
     expect(await taskStatus(taskId)).toBe('inbox');
   });
 
@@ -1521,8 +1524,8 @@ describe('routine.proposal: дифф тела предложения', () => {
       }),
     );
     const aspect = await runAspect(runId);
-    expect(aspect.proposal?.status).toBe('pending');
-    const editedId = aspect.proposal?.pending_id;
+    expect(aspect['orbis/run_proposal']?.status).toBe('pending');
+    const editedId = aspect['orbis/run_proposal']?.pending_id;
     if (editedId === undefined) throw new Error('прогон без предложения');
 
     const view = await caller().routine.proposal({ runId });
@@ -1626,7 +1629,7 @@ describe('routine.proposalsForEntity', () => {
       },
     ]);
     await archiveRun(archived.runId);
-    expect((await runAspect(archived.runId)).proposal?.status).toBe('pending');
+    expect((await runAspect(archived.runId))['orbis/run_proposal']?.status).toBe('pending');
 
     const open = await caller().routine.proposalsForEntity({ entityId: taskId });
     expect(open.map((v) => v.pendingId)).toEqual([live.pendingId]);
@@ -1653,13 +1656,13 @@ describe('routine.proposalsForEntity', () => {
         },
       }),
     );
-    const editedId = (await runAspect(runId)).proposal?.pending_id;
+    const editedId = (await runAspect(runId))['orbis/run_proposal']?.pending_id;
     if (editedId === undefined) throw new Error('прогон без предложения');
     expect(editedId).not.toBe(pendingId);
     // Оба сообщения лежат в ленте и оба несут операции по этой записи — отличает их только
     // указатель прогона
     expect(await pendingCount(runId)).toBe(2);
-    expect((await runAspect(runId)).proposal?.status).toBe('pending');
+    expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('pending');
 
     const open = await caller().routine.proposalsForEntity({ entityId: taskId });
     expect(open).toHaveLength(1);
@@ -1787,8 +1790,8 @@ describe('откат рутинного прогона: decideProposal(approve) 
 
     // Бухгалтерия прогона на месте: исход, судьба предложения, связь с рутиной
     const aspect = await runAspect(runId);
-    expect(aspect.outcome).toBe('finished');
-    expect(aspect.proposal?.status).toBe('approved');
+    expect(aspect['orbis/run_outcome']).toBe('finished');
+    expect(aspect['orbis/run_proposal']?.status).toBe('approved');
     // Маркер отката — архив (RunFeed показывает «в архиве»); карточка предложения при этом
     // остаётся читаемой и знает про архив (ProposalCard: «Принято, затем откачено»)
     expect(await isArchived(runId)).toBe(true);
@@ -1822,7 +1825,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
     // Сегодняшний прогон той же рутины: relation parent трогает рутину, гашение —
     // прошлый прогон; ни то, ни другое — не сущности работы вчерашнего прогона
     const today = await plannedProposed('Купить хлеб', yesterday.routineId);
-    expect((await runAspect(today.runId)).proposal?.status).toBe('pending');
+    expect((await runAspect(today.runId))['orbis/run_proposal']?.status).toBe('pending');
 
     const rolled = await rollbackRun(db, { actorUserId: owner, runId: yesterday.runId });
     expect(rolled.ok).toBe(true);
@@ -1830,7 +1833,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
     expect(await isArchived(yesterday.runId)).toBe(true);
     // Сегодняшний прогон и его предложение не задеты
     expect(await isArchived(today.runId)).toBe(false);
-    expect((await runAspect(today.runId)).proposal?.status).toBe('pending');
+    expect((await runAspect(today.runId))['orbis/run_proposal']?.status).toBe('pending');
     expect(await taskStatus(today.taskId)).toBe('inbox');
   });
 
@@ -1861,7 +1864,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
 
   test('откат прогона с ОТКРЫТЫМ предложением: pending отклонён причиной stale, статус на прогоне stale, прогон в архиве; decideProposal → NOT_FOUND, обзор не считает его открытым (хвост ре-ревью)', async () => {
     const { routineId, taskId, runId, pendingId } = await proposed('Полить цветы');
-    expect((await runAspect(runId)).proposal?.status).toBe('pending');
+    expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('pending');
     expect((await caller().routine.overview({ routineId })).openProposal).toBe(true);
 
     const rolled = await rollbackRun(db, { actorUserId: owner, runId });
@@ -1871,8 +1874,8 @@ describe('откат рутинного прогона: decideProposal(approve) 
     // Открытое погашено: карточке больше нечего предлагать
     expect(await rejectReason(pendingId)).toBe('stale');
     const aspect = await runAspect(runId);
-    expect(aspect.proposal?.status).toBe('stale');
-    expect(aspect.proposal?.decided_at).toBeDefined();
+    expect(aspect['orbis/run_proposal']?.status).toBe('stale');
+    expect(aspect['orbis/run_proposal']?.decided_at).toBeDefined();
     expect(await isArchived(runId)).toBe(true);
     // Карточка читается (архивный прогон отдаётся) и знает и статус, и архив
     const view = await caller().routine.proposal({ runId });
@@ -1892,7 +1895,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
       undone: [],
       note: ROUTINE_ROLLBACK_NOTE,
     });
-    expect((await runAspect(runId)).proposal?.status).toBe('stale');
+    expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('stale');
   });
 
   test('откат прогона с НЕОТВЕЧЕННЫМ вопросом: исход stale + запись в тред рутины, прогон в архиве; answerCheckpoint → NOT_FOUND, обзор не считает «ждёт» (хвост ре-ревью)', async () => {
@@ -1910,7 +1913,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
 
     const rolled = await rollbackRun(db, { actorUserId: owner, runId });
     expect(rolled.ok).toBe(true);
-    expect((await runAspect(runId)).outcome).toBe('stale');
+    expect((await runAspect(runId))['orbis/run_outcome']).toBe('stale');
     expect(await isArchived(runId)).toBe(true);
     const notes = await withIdentity(db, owner, (tx) =>
       tx.execute(
@@ -1963,7 +1966,7 @@ describe('откат рутинного прогона: decideProposal(approve) 
     expect(undone.ok).toBe(true);
     expect(await taskStatus(taskId)).toBe('inbox');
     // Статус предложения — бухгалтерия прогона (source system): «отмени последнее» её не видит
-    expect((await runAspect(runId)).proposal?.status).toBe('approved');
+    expect((await runAspect(runId))['orbis/run_proposal']?.status).toBe('approved');
     // Отменён именно batch предложения — откат прогона после этого пропускает его
     const rolled = await rollbackRun(db, { actorUserId: owner, runId });
     expect(rolled.ok).toBe(true);
@@ -1993,8 +1996,8 @@ describe('откат рутинного прогона: decideProposal(approve) 
     expect(await taskStatus(taskId)).toBe('inbox');
     // Бухгалтерия прогона на месте, вместе со следом правки
     const aspect = await runAspect(runId);
-    expect(aspect.proposal?.status).toBe('approved');
-    expect(aspect.proposal?.edited_from).toBe(pendingId);
+    expect(aspect['orbis/run_proposal']?.status).toBe('approved');
+    expect(aspect['orbis/run_proposal']?.edited_from).toBe(pendingId);
     expect(await isArchived(runId)).toBe(true);
   });
 
@@ -2016,8 +2019,8 @@ describe('откат рутинного прогона: decideProposal(approve) 
     expect(await taskStatus(taskId)).toBe('inbox');
     // Снят план, а не пометка: статус предложения и след правки на прогоне не тронуты
     const aspect = await runAspect(runId);
-    expect(aspect.proposal?.status).toBe('approved');
-    expect(aspect.proposal?.edited_from).toBe(pendingId);
+    expect(aspect['orbis/run_proposal']?.status).toBe('approved');
+    expect(aspect['orbis/run_proposal']?.edited_from).toBe(pendingId);
     const rolled = await rollbackRun(db, { actorUserId: owner, runId });
     expect(rolled.ok).toBe(true);
     if (!rolled.ok) throw new Error('ожидался успешный откат');
@@ -2224,7 +2227,7 @@ async function flagPatches(runId: string) {
 
 /** Флажок пачки на прогоне: `undefined` — ключа нет вовсе (пачки не было). */
 async function undecidedOf(runId: string): Promise<boolean | undefined> {
-  return ((await aspectsOf(owner, runId))['orbis/agent-run'] as { undecided?: boolean }).undecided;
+  return ((await propsOf(owner, runId)) as { 'orbis/undecided'?: boolean })['orbis/undecided'];
 }
 
 describe('routine.decideDeferred: отложенное действие (D42 §6)', () => {
@@ -2410,7 +2413,7 @@ describe('routine.decideDeferred: отложенное действие (D42 §6
       callerLater().routine.decideDeferred({ pendingId: proposal.pendingId, decision: 'approve' }),
     );
     expect(err.code).toBe('BAD_REQUEST');
-    expect((await runAspect(proposal.runId)).proposal?.status).toBe('pending');
+    expect((await runAspect(proposal.runId))['orbis/run_proposal']?.status).toBe('pending');
   });
 
   test('несуществующая единица → NOT_FOUND', async () => {
@@ -2742,8 +2745,8 @@ describe('routine.decideAll', () => {
     expect(summary[0]?.status).toBe('applied');
     expect(await isArchived(unit.targetId)).toBe(true);
     // План предложения не исполнен, статус на прогоне прежний
-    expect((await runAspect(p.runId)).proposal?.status).toBe('pending');
-    expect((await aspectsOf(owner, p.taskId))['orbis/task']?.status).toBe('inbox');
+    expect((await runAspect(p.runId))['orbis/run_proposal']?.status).toBe('pending');
+    expect((await propsOf(owner, p.taskId))['orbis/task_status']).toBe('inbox');
 
     const decided = await callerLater().routine.decideProposal({
       runId: p.runId,
@@ -2751,8 +2754,8 @@ describe('routine.decideAll', () => {
       decision: 'approve',
     });
     expect(decided.status).toBe('applied');
-    expect((await runAspect(p.runId)).proposal?.status).toBe('approved');
-    expect((await aspectsOf(owner, p.taskId))['orbis/task']?.status).toBe('planned');
+    expect((await runAspect(p.runId))['orbis/run_proposal']?.status).toBe('approved');
+    expect((await propsOf(owner, p.taskId))['orbis/task_status']).toBe('planned');
   }, 20_000);
 
   test('два одновременных «Принять все»: обе сводки вернулись, применение одно — журнал не вырос (N replay’ев)', async () => {

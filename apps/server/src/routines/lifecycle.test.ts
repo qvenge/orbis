@@ -4,7 +4,6 @@
 // тред рутины и хвост истории.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import {
-  type AgentRunAspect,
   entityThreadId,
   isManualBucket,
   newId,
@@ -14,7 +13,7 @@ import {
 } from '@orbis/shared';
 import { eq, sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
-import { runsOfParent } from '../agent-loop/queries';
+import { type RunProps, runsOfParent } from '../agent-loop/queries';
 import { rollbackRun } from '../agent-loop/rollback';
 import { closeRoutineRun, type VerbCtx } from '../agent-loop/verbs';
 import { chatMessages, entities } from '../db/schema';
@@ -60,7 +59,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const owner = freshUserId();
-const { actionsOf, aspectsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } =
+const { actionsOf, propsOf, routineCtx, seedEntity, seedRoutine, seedRoutineRun } =
   agentLoopHelpers(db);
 
 beforeAll(async () => {
@@ -119,10 +118,10 @@ async function seedProposal(
     ],
   });
   if (r.status !== 'ok') throw new Error(`seedProposal: ${JSON.stringify(r)}`);
-  const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as {
-    proposal?: { pending_id?: string };
+  const run = (await propsOf(owner, runId)) as {
+    'orbis/run_proposal'?: { pending_id?: string };
   };
-  const pendingId = run.proposal?.pending_id;
+  const pendingId = run['orbis/run_proposal']?.pending_id;
   if (pendingId === undefined) throw new Error('seedProposal: прогон без предложения');
   return { runId, taskId: task.id, pendingId };
 }
@@ -196,16 +195,17 @@ function statusEdit(value: string): ProposalEdits {
 }
 
 async function taskStatusOf(taskId: string): Promise<unknown> {
-  return (await aspectsOf(owner, taskId))['orbis/task']?.status;
+  return (await propsOf(owner, taskId))['orbis/task_status'];
 }
 
 /** Предложение прогона так, как его видит граф. */
 async function proposalOf(runId: string): Promise<Record<string, unknown>> {
-  const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as {
-    proposal?: Record<string, unknown>;
+  const run = (await propsOf(owner, runId)) as {
+    'orbis/run_proposal'?: Record<string, unknown>;
   };
-  if (run.proposal === undefined) throw new Error(`у прогона ${runId} нет предложения`);
-  return run.proposal;
+  const proposal = run['orbis/run_proposal'];
+  if (proposal === undefined) throw new Error(`у прогона ${runId} нет предложения`);
+  return proposal;
 }
 
 /**
@@ -279,10 +279,10 @@ describe('supersedeOpen: новый прогон гасит незакрытое
     const out = await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: newRunId });
     expect(out).toEqual({ superseded: 1, staled: 0 });
 
-    const run = (await aspectsOf(owner, oldRunId))['orbis/agent-run'] as {
-      proposal?: { pending_id: string; status: string };
+    const run = (await propsOf(owner, oldRunId)) as {
+      'orbis/run_proposal'?: { pending_id: string; status: string };
     };
-    expect(run.proposal?.status).toBe('superseded');
+    expect(run['orbis/run_proposal']?.status).toBe('superseded');
 
     // Причина отказа отличима от кнопки владельца (V1.8): в треде рутины лежит
     // reject-строка именно с reason 'superseded'
@@ -314,9 +314,9 @@ describe('supersedeOpen: новый прогон гасит незакрытое
     const out = await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: currentId });
     expect(out).toEqual({ superseded: 0, staled: 1 });
 
-    expect((await aspectsOf(owner, askedId))['orbis/agent-run']?.outcome).toBe('stale');
+    expect((await propsOf(owner, askedId))['orbis/run_outcome']).toBe('stale');
     // текущий прогон — не «прошлый»: его гасить нельзя ни при каких условиях
-    expect((await aspectsOf(owner, currentId))['orbis/agent-run']?.outcome).toBe('running');
+    expect((await propsOf(owner, currentId))['orbis/run_outcome']).toBe('running');
 
     const rows = await threadRows(routineId);
     const note = rows.find((r) => (r.metadata as { type?: string }).type === 'routine_stale');
@@ -328,10 +328,10 @@ describe('supersedeOpen: новый прогон гасит незакрытое
   test('предложение уже отклонил владелец (reject-строка reason owner), статус на прогоне ещё pending → гашение НЕ переписывает его на superseded', async () => {
     const routineId = await seedRoutine(owner);
     const { runId: oldRunId } = await seedProposal(routineId, '2026-08-16T07:00');
-    const run = (await aspectsOf(owner, oldRunId))['orbis/agent-run'] as {
-      proposal?: { pending_id: string; status: string };
+    const run = (await propsOf(owner, oldRunId)) as {
+      'orbis/run_proposal'?: { pending_id: string; status: string };
     };
-    const pendingId = run.proposal?.pending_id;
+    const pendingId = run['orbis/run_proposal']?.pending_id;
     if (pendingId === undefined) throw new Error('у прогона нет предложения');
     // Окно V1.8: владелец нажал «отклонить» (reject-строка с reason 'owner' уже лежит), а
     // decideProposal (Задача 11) ещё не дописал статус на прогон — он по-прежнему pending
@@ -348,10 +348,10 @@ describe('supersedeOpen: новый прогон гасит незакрытое
 
     // Статус пишет тот, чей reason в reject-строке: «заменено» поверх «владелец отклонил»
     // соврало бы про его решение — прогон остался таким, каким его оставит decideProposal
-    const after = (await aspectsOf(owner, oldRunId))['orbis/agent-run'] as {
-      proposal?: { status: string };
+    const after = (await propsOf(owner, oldRunId)) as {
+      'orbis/run_proposal'?: { status: string };
     };
-    expect(after.proposal?.status).toBe('pending');
+    expect(after['orbis/run_proposal']?.status).toBe('pending');
     const reject = (await threadRows(routineId)).find(
       (r) => (r.metadata as { type?: string }).type === 'confirmation_rejected',
     );
@@ -386,7 +386,7 @@ describe('supersedeOpen: новый прогон гасит незакрытое
     expect(
       await supersedeOpen(deps(), { ownerId: owner, routineId, exceptRunId: laterId }),
     ).toEqual({ superseded: 0, staled: 0 });
-    expect((await aspectsOf(owner, asked.runId))['orbis/agent-run']?.outcome).toBe('stale');
+    expect((await propsOf(owner, asked.runId))['orbis/run_outcome']).toBe('stale');
   });
 });
 
@@ -405,8 +405,9 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     };
   }
 
-  async function runAspect(runId: string): Promise<AgentRunAspect> {
-    return (await aspectsOf(owner, runId))['orbis/agent-run'] as unknown as AgentRunAspect;
+  /** Свойства прогона (§А1-1) — вход `closeOpenOfRun` и снимок для проб гонок. */
+  async function runProps(runId: string): Promise<RunProps> {
+    return (await propsOf(owner, runId)) as unknown as RunProps;
   }
 
   async function unitsOf(runId: string) {
@@ -466,7 +467,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
       ownerId: owner,
       routineId,
       runId,
-      run: await runAspect(runId),
+      props: await runProps(runId),
       reason: 'superseded',
       questionNote: SUPERSEDE_NOTE,
     });
@@ -521,20 +522,20 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
       ownerId: owner,
       routineId,
       runId,
-      run: await runAspect(runId),
+      props: await runProps(runId),
       reason: 'superseded',
       questionNote: SUPERSEDE_NOTE,
     });
     expect(out).toEqual({ proposal: true, question: true, units: 0 });
     expect((await proposalOf(runId)).status).toBe('superseded');
     expect(await rejectReasonOf(pendingId)).toBe('superseded');
-    expect((await runAspect(runId)).outcome).toBe('stale');
+    expect((await runProps(runId))['orbis/run_outcome']).toBe('stale');
     const note = (await threadRows(routineId)).find(
       (r) => (r.metadata as { type?: string; run_id?: string }).type === 'routine_stale',
     );
     expect(note?.content).toBe(SUPERSEDE_NOTE);
     // Единиц у прогона нет вовсе — снимать флажок нечем и незачем
-    expect((await runAspect(runId)).undecided).toBeUndefined();
+    expect((await runProps(runId))['orbis/undecided']).toBeUndefined();
     expect(await clearingActions(runId)).toHaveLength(0);
   });
 
@@ -557,13 +558,13 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
         })
       ).status,
     ).toBe('ok');
-    expect((await runAspect(runId)).undecided).toBe(true);
+    expect((await runProps(runId))['orbis/undecided']).toBe(true);
 
     const out = await closeOpenOfRun(deps(), {
       ownerId: owner,
       routineId,
       runId,
-      run: await runAspect(runId),
+      props: await runProps(runId),
       reason: 'superseded',
       questionNote: SUPERSEDE_NOTE,
     });
@@ -577,7 +578,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
 
     // Снятие — ЗАПИСЬ `false`, а не удаление ключа: предиката «поля нет» у грамматики §6
     // нет, и разобранную пачку иначе нечем отличить запросом от неразобранной
-    expect((await runAspect(runId)).undecided).toBe(false);
+    expect((await runProps(runId))['orbis/undecided']).toBe(false);
     const clearing = await clearingActions(runId);
     expect(clearing).toHaveLength(1);
     // §9.6: все писатели флажка — system, иначе «отмени последнее» после «Принять» снимало
@@ -591,7 +592,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
         ownerId: owner,
         routineId,
         runId,
-        run: await runAspect(runId),
+        props: await runProps(runId),
         reason: 'superseded',
         questionNote: SUPERSEDE_NOTE,
       }),
@@ -616,7 +617,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
       ownerId: owner,
       routineId,
       runId,
-      run: await runAspect(runId),
+      props: await runProps(runId),
       reason: 'superseded',
       questionNote: SUPERSEDE_NOTE,
     });
@@ -646,21 +647,21 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     const question = await askUnit(routineId, runId, 'Кому отдать разбор писем?');
     // Снимок прочитан ДО ответа — ровно та гонка, которую сторожит предусловие `outcome`:
     // владелец ответил, пока мы читали, и терминальный вопрос гасить уже нельзя
-    const snapshot = await runAspect(runId);
+    const snapshot = await runProps(runId);
     await answerRoutineCheckpoint(deps(), { ownerId: owner, runId, answer: 'не переносим' });
 
     const out = await closeOpenOfRun(deps(), {
       ownerId: owner,
       routineId,
       runId,
-      run: snapshot,
+      props: snapshot,
       reason: 'superseded',
       questionNote: SUPERSEDE_NOTE,
     });
     expect(out).toEqual({ proposal: false, question: false, units: 1 });
 
     // Ответ владельца цел: исход не переписан на `stale`, записи о снятии в треде нет
-    expect((await runAspect(runId)).outcome).toBe('answered');
+    expect((await runProps(runId))['orbis/run_outcome']).toBe('answered');
     expect(
       (await threadRows(routineId)).some(
         (r) => (r.metadata as { type?: string }).type === 'routine_stale',
@@ -686,7 +687,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
         })
       ).status,
     ).toBe('ok');
-    expect((await runAspect(runId)).undecided).toBe(true);
+    expect((await runProps(runId))['orbis/undecided']).toBe(true);
 
     // Владелец разобрал пачку сам: одну единицу принял, вторую отклонил СВОЕЙ причиной
     expect(
@@ -701,7 +702,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
       ownerId: owner,
       routineId,
       runId,
-      run: await runAspect(runId),
+      props: await runProps(runId),
       reason: 'superseded',
       questionNote: SUPERSEDE_NOTE,
     });
@@ -717,7 +718,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     ).toBe('Подтверждение отклонено');
 
     // Гасить было нечего, но открытых не осталось — вторая половина правила снятия
-    expect((await runAspect(runId)).undecided).toBe(false);
+    expect((await runProps(runId))['orbis/undecided']).toBe(false);
     expect(await clearingActions(runId)).toHaveLength(1);
   });
 
@@ -748,7 +749,7 @@ describe('closeOpenOfRun: гашение пачки списком (D42 ОЧ.8)'
     expect((await unitsOf(runId)).every((u) => u.fate !== 'open')).toBe(true);
     expect(await archivedOf(defer.targetId)).toBe(false);
     // Откаченный прогон не держит на владельце ни кнопок, ни сигнала о неразобранном
-    expect((await runAspect(runId)).undecided).toBe(false);
+    expect((await runProps(runId))['orbis/undecided']).toBe(false);
   });
 });
 
@@ -768,11 +769,11 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
     await seedFailed(routineId, '2026-08-15T07:00', 1);
     await seedFailed(routineId, '2026-08-16T07:00', 2);
     expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
-    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('active');
+    expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('active');
 
     await seedFailed(routineId, '2026-08-17T07:00', 3);
     expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: true });
-    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('paused');
+    expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('paused');
 
     const notes = (await threadRows(routineId)).filter(
       (r) => (r.metadata as { type?: string }).type === 'routine_paused',
@@ -801,7 +802,7 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
     await seedFailed(routineId, '2026-08-16T07:00', 3);
 
     expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
-    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('active');
+    expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('active');
   });
 
   test('после снятия паузы владельцем старые провалы не считаются: один новый failed → паузы нет, ещё два → пауза снова (C1a-6)', async () => {
@@ -838,14 +839,14 @@ describe('pauseIfFailing: стоп-кран после трёх (V1.12)', () => 
     // и попытки 2–3 бакета смогут случиться
     await seedFailed(routineId, '2026-08-18T07:00', 5);
     expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
-    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('active');
+    expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('active');
 
     // Ещё два новых подряд — три новых, пауза снова, вторая запись с новой границей
     await seedFailed(routineId, '2026-08-19T07:00', 6);
     expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: false });
     await seedFailed(routineId, '2026-08-20T07:00', 7);
     expect(await pauseIfFailing(deps(), { ownerId: owner, routineId })).toEqual({ paused: true });
-    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('paused');
+    expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('paused');
     const notes = (await threadRows(routineId)).filter(
       (r) => (r.metadata as { type?: string }).type === 'routine_paused',
     );
@@ -1164,18 +1165,18 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
     expect(first).toEqual({ started: true, runId: routineRunId(routineId, bucket, 1), bucket });
     if (!first.started) throw new Error('unreachable');
 
-    const run = (await aspectsOf(owner, first.runId))['orbis/agent-run'] as Record<string, unknown>;
+    const run = (await propsOf(owner, first.runId)) as Record<string, unknown>;
     expect(run).toMatchObject({
-      routine_id: routineId,
-      bucket,
-      attempt: 1,
-      outcome: 'running',
-      started_at: T0.toISOString(),
-      last_step_at: T0.toISOString(),
-      step_count: 0,
-      steps: [],
+      'orbis/run_routine': routineId,
+      'orbis/run_bucket': bucket,
+      'orbis/run_attempt': 1,
+      'orbis/run_outcome': 'running',
+      'orbis/run_started_at': T0.toISOString(),
+      'orbis/last_step_at': T0.toISOString(),
+      'orbis/step_count': 0,
+      'orbis/run_steps': [],
     });
-    expect(run.grant_id).toBeUndefined();
+    expect(run['orbis/grant']).toBeUndefined();
     // Связь рутина→прогон — тем же batch'ем: прогон виден в истории рутины
     expect((await runsOf(routineId)).map((r) => r.id)).toEqual([first.runId]);
     // …и она несёт РОЛЬ `run` (§А4-3), а не общий `subitem`: прогон рутины — не её подпункт
@@ -1278,11 +1279,9 @@ describe("startBucketRun: прогон бакета одним batch'ем (V1.3,
       args,
     );
     expect(second).toEqual({ started: true, runId: routineRunId(routineId, bucket, 2), bucket });
-    expect(
-      (await aspectsOf(owner, routineRunId(routineId, bucket, 2)))['orbis/agent-run'],
-    ).toMatchObject({
-      attempt: 2,
-      outcome: 'running',
+    expect(await propsOf(owner, routineRunId(routineId, bucket, 2))).toMatchObject({
+      'orbis/run_attempt': 2,
+      'orbis/run_outcome': 'running',
     });
 
     // Попытка 2 провалилась спустя минуту — отсчёт следующей паузы (15 мин) от ЕЁ finished_at
@@ -1454,11 +1453,14 @@ describe('startManualRun: ручной прогон — свой ключ, не 
     });
     const bucket = `manual:${T0.toISOString()}`;
     expect(first).toEqual({ started: true, runId: routineRunId(routineId, bucket, 1), bucket });
-    const run = (await aspectsOf(owner, routineRunId(routineId, bucket, 1)))[
-      'orbis/agent-run'
-    ] as Record<string, unknown>;
-    expect(run).toMatchObject({ routine_id: routineId, bucket, attempt: 1, outcome: 'running' });
-    expect(isManualBucket(run.bucket as string)).toBe(true);
+    const run = await propsOf(owner, routineRunId(routineId, bucket, 1));
+    expect(run).toMatchObject({
+      'orbis/run_routine': routineId,
+      'orbis/run_bucket': bucket,
+      'orbis/run_attempt': 1,
+      'orbis/run_outcome': 'running',
+    });
+    expect(isManualBucket(run['orbis/run_bucket'] as string)).toBe(true);
     // Свой batch_id: action создания НЕ под routineRunBatchId (это не плановый слот)
     const planned = (await actionsOf(owner)).find(
       (a: ActionRecord) => a.id === routineRunBatchId(routineId, bucket, 1),
@@ -1514,9 +1516,9 @@ describe('startManualRun: ручной прогон — свой ключ, не 
     if (!out.started) throw new Error(`ручной прогон не заведён: ${out.reason}`);
     expect(out.bucket).toBe(`manual:${T0.toISOString()}`);
     // Второе чтение часов дало бы started_at на миллисекунду позже ключа — тикающие часы это ловят
-    const run = (await aspectsOf(owner, out.runId))['orbis/agent-run'] as Record<string, unknown>;
-    expect(run.started_at).toBe(T0.toISOString());
-    expect(run.last_step_at).toBe(T0.toISOString());
+    const run = (await propsOf(owner, out.runId)) as Record<string, unknown>;
+    expect(run['orbis/run_started_at']).toBe(T0.toISOString());
+    expect(run['orbis/last_step_at']).toBe(T0.toISOString());
     const rows = await withIdentity(db, owner, (tx) =>
       tx.select({ createdAt: entities.createdAt }).from(entities).where(eq(entities.id, out.runId)),
     );
@@ -1528,7 +1530,7 @@ describe('startManualRun: ручной прогон — свой ключ, не 
 // Правка предложения (Ш1.8): `edited_from` — след того, что предложение родилось из
 // правки владельца. Писателя поля ещё нет, но оба пересборщика объекта `proposal`
 // (settleProposal и closeOpenOfRun) обязаны протаскивать его уже сейчас: патч они
-// собирают руками, `patchAspect` принимает `Record<string, unknown>` — забытое поле
+// собирают руками, `patchRun` принимает `Record<string, unknown>` — забытое поле
 // оторвалось бы молча, и тип этого не поймает.
 // ---------------------------------------------------------------------------
 

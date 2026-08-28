@@ -121,8 +121,10 @@ export async function routineTick(deps: RoutineDeps): Promise<TickResult> {
           continue;
         }
         const due = dueBuckets({
-          at: routine.routine.at,
-          ...(routine.routine.days !== undefined && { days: routine.routine.days }),
+          at: routine.props['orbis/routine_at'],
+          ...(routine.props['orbis/routine_days'] !== undefined && {
+            days: routine.props['orbis/routine_days'],
+          }),
           timeZone,
           now: deps.clock(),
         });

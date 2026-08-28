@@ -12,6 +12,13 @@
 // собственных keyword'а без валидации: в strict-режиме незнакомый ключ схемы БРОСАЕТ при
 // компиляции, а `x-orbis-type` (копия типа, ref Р1) и `x-orbis-decimal` (границы decimal)
 // в схеме есть у каждого свойства.
+//
+// `allowUnionTypes` — снят ровно один запрет strict-режима, и снят он про СХЕМУ, а не про
+// данные: `strictTypes` запрещает форму `type: ['string','number','boolean']`, которой
+// канон Q-AST описывает литерал предиката (`query/ast-json-schema.ts`, `SCALAR`). С Задачи
+// 10b канон подставлен в схему свойства `orbis/progress_source`, и без этой опции ajv
+// БРОСАЕТ на компиляции — то есть цель нельзя было бы ни записать, ни отвергнуть. Строгость
+// проверки значений при этом не меняется: union по-прежнему валидируется как union.
 import {
   type AspectDefinition,
   type DecimalBounds,
@@ -27,7 +34,7 @@ import { Ajv, type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import { decCmp } from '../budget/decimal';
 
-const ajv = new Ajv({ strict: true, allErrors: true });
+const ajv = new Ajv({ strict: true, allowUnionTypes: true, allErrors: true });
 addFormats(ajv);
 ajv.addKeyword({ keyword: X_ORBIS_TYPE });
 ajv.addKeyword({ keyword: X_ORBIS_DECIMAL });

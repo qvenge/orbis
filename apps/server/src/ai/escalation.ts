@@ -56,6 +56,9 @@ const FINANCIAL = 'orbis/financial';
 /** Слитое свойство категории (§А8/В1): его объявляют и транзакция, и конверт. */
 const FINANCE_CATEGORY = 'orbis/finance_category';
 const MEMORY = 'orbis/memory';
+/** Поля правила памяти после реформы — свойства по id, не поля внутри аспект-ключа. */
+const MEMORY_KIND = 'orbis/memory_kind';
+const RULE_SCOPE = 'orbis/rule_scope';
 const CATEGORY = 'orbis/category';
 /** Окно скана журнала и окно подавления повторного предложения — §7.8, 30 дней. */
 const WINDOW_DAYS = 30;
@@ -290,7 +293,7 @@ async function categoryTitleOf(tx: Tx, id: string): Promise<string | undefined> 
   const rows = await tx
     .select({ title: entities.title })
     .from(entities)
-    .where(and(eq(entities.id, id), sql`${entities.aspectsLegacy} ? ${CATEGORY}`));
+    .where(and(eq(entities.id, id), sql`${CATEGORY} = ANY(${entities.aspects})`));
   return rows[0]?.title;
 }
 
@@ -320,10 +323,14 @@ async function hasEquivalentRule(tx: Tx, pattern: string, categoryTitle: string)
     .from(entities)
     .where(
       and(
-        sql`${entities.aspectsLegacy} ? ${MEMORY}`,
+        // Признак носителя обязателен (Р9): снятие аспекта памяти НЕ уносит из `props`
+        // ни `orbis/memory_kind`, ни `orbis/rule_scope`, а из старой карты значения
+        // уходили вместе с аспектом. Без него уже снятое правило продолжало бы глушить
+        // предложение нового.
+        sql`${MEMORY} = ANY(${entities.aspects})`,
         eq(entities.archived, false),
-        sql`${entities.aspectsLegacy} -> ${MEMORY} ->> 'kind' = 'rule'`,
-        sql`${entities.aspectsLegacy} -> ${MEMORY} ->> 'scope' = ${FINANCIAL}`,
+        sql`${entities.props} ->> ${MEMORY_KIND} = 'rule'`,
+        sql`${entities.props} ->> ${RULE_SCOPE} = ${FINANCIAL}`,
       ),
     );
   return rows.some((r) => {

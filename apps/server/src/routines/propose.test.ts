@@ -27,7 +27,7 @@ const { db, client } = appDb();
 const owner = freshUserId();
 const {
   actionsOf,
-  aspectsOf,
+  propsOf,
   routineCtx,
   seedEntity,
   seedRoutine,
@@ -178,18 +178,21 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     ]);
 
     // Прогон закрыт ТЕМ ЖЕ вызовом: исход и судьба предложения — одним патчем
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'];
-    expect(run?.outcome).toBe('finished');
-    expect(run?.report).toBe(EXPLANATION);
-    expect(run?.proposal).toEqual({ pending_id: result.pending_id, status: 'pending' });
+    const run = await propsOf(owner, runId);
+    expect(run['orbis/run_outcome']).toBe('finished');
+    expect(run['orbis/run_report']).toBe(EXPLANATION);
+    expect(run['orbis/run_proposal']).toEqual({ pending_id: result.pending_id, status: 'pending' });
     // Само предложение — НЕ единица пачки (D42, приёмка 11): его запись живёт под тем же
     // `run_id`, но явного `kind` не несёт, и проба `undecided` её не видит. Иначе каждый
     // propose-прогон попадал бы в блок «Пачка решений» списка «Рутины» и в счётчик
     // `overview.undecided`, хотя разбирать в нём нечего: предложение решается своим путём
-    expect(run?.undecided).toBeUndefined();
+    expect(run['orbis/undecided']).toBeUndefined();
 
     // До решения владельца граф не тронут
-    expect((await aspectsOf(owner, taskId))['orbis/task']).toEqual({ status: 'inbox' });
+    expect(await propsOf(owner, taskId)).toMatchObject({ 'orbis/task_status': 'inbox' });
+    // `toEqual` по всему набору свойств не годится: у тикета есть ещё назначение и
+    // вычисленные предки. Смысл прежней проверки — «хвоста прошлого ожидания нет».
+    expect(await propsOf(owner, taskId)).not.toHaveProperty('orbis/waiting_for');
   });
 
   test('терминальный propose поверх открытого вопроса: прогон finished с proposal И undecided:true (второй путь закрытия, Р-5 / D42 ОЧ.6)', async () => {
@@ -222,11 +225,11 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     if (r.status !== 'ok') return;
     const result = r.result as ProposeResult;
 
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'];
-    expect(run?.outcome).toBe('finished');
-    expect(run?.proposal).toEqual({ pending_id: result.pending_id, status: 'pending' });
+    const run = await propsOf(owner, runId);
+    expect(run['orbis/run_outcome']).toBe('finished');
+    expect(run['orbis/run_proposal']).toEqual({ pending_id: result.pending_id, status: 'pending' });
     // Предложение и пачка на одном прогоне уживаются: их читают разные экраны
-    expect(run?.undecided).toBe(true);
+    expect(run['orbis/undecided']).toBe(true);
     // В треде рутины две карточки — вопрос и предложение; в счёт `undecided` идёт первая
     expect(await pendingsInRoutineThread(routineId)).toBe(2);
   });
@@ -256,8 +259,8 @@ describe('orbis_propose: предложение и предусловия (V1.6,
 
     const applied = await approvePending(db, { ownerId: owner, pendingId, clock: () => T0 });
     expect(applied.ok).toBe(true);
-    expect((await aspectsOf(owner, taskId))['orbis/task']?.status).toBe('planned');
-    expect((await aspectsOf(owner, otherId))['orbis/task']?.status).toBe('done');
+    expect((await propsOf(owner, taskId))['orbis/task_status']).toBe('planned');
+    expect((await propsOf(owner, otherId))['orbis/task_status']).toBe('done');
 
     // ОДИН action на всё предложение (batch), атрибуция — прогон рутины (V1.6)
     const actions = (await actionsOf(owner)).filter((a) => a.source === 'routine');
@@ -269,8 +272,14 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     // Инвариант 9: у принятого предложения тот же откат, что у любого прогона
     const rolled = await rollbackRun(db, { actorUserId: owner, runId });
     expect(rolled.ok).toBe(true);
-    expect((await aspectsOf(owner, taskId))['orbis/task']).toEqual({ status: 'inbox' });
-    expect((await aspectsOf(owner, otherId))['orbis/task']).toEqual({ status: 'inbox' });
+    expect(await propsOf(owner, taskId)).toMatchObject({ 'orbis/task_status': 'inbox' });
+    // `toEqual` по всему набору свойств не годится: у тикета есть ещё назначение и
+    // вычисленные предки. Смысл прежней проверки — «хвоста прошлого ожидания нет».
+    expect(await propsOf(owner, taskId)).not.toHaveProperty('orbis/waiting_for');
+    expect(await propsOf(owner, otherId)).toMatchObject({ 'orbis/task_status': 'inbox' });
+    // `toEqual` по всему набору свойств не годится: у тикета есть ещё назначение и
+    // вычисленные предки. Смысл прежней проверки — «хвоста прошлого ожидания нет».
+    expect(await propsOf(owner, otherId)).not.toHaveProperty('orbis/waiting_for');
   });
 
   test('предусловие снимается по `props`, а не по проекции: форма значения у них РАЗНАЯ (orbis/progress_source)', async () => {
@@ -337,10 +346,8 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     // И «Принять» проходит: граф с тех пор не менялся.
     const applied = await approvePending(db, { ownerId: owner, pendingId });
     expect(applied.ok).toBe(true);
-    const after = await aspectsOf(owner, goal.id);
-    expect((after['orbis/goal'] as Record<string, unknown>).progress_source).toMatchObject({
-      aggregate: 'latest',
-    });
+    const after = await propsOf(owner, goal.id);
+    expect(after['orbis/progress_source']).toMatchObject({ aggregate: 'latest' });
   });
 
   test('ручная правка до approve → CONFLICT precondition_failed с mismatches, ничего не применено (инвариант 8) — и для поля, которого не было', async () => {
@@ -388,7 +395,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
       { property: 'orbis/task_status', expected: ['inbox'], actual: 'in_progress' },
     ]);
     // «Всё или ничего»: соседняя операция того же предложения тоже не применилась
-    expect((await aspectsOf(owner, untouchedId))['orbis/task']?.status).toBe('inbox');
+    expect((await propsOf(owner, untouchedId))['orbis/task_status']).toBe('inbox');
 
     // Сценарий 2: владелец заполнил поле, которого при снятии предусловия НЕ БЫЛО
     const second = await liveRoutine();
@@ -428,7 +435,7 @@ describe('orbis_propose: предложение и предусловия (V1.6,
     expect(details2.mismatches).toEqual([
       { property: 'orbis/due_date', expected: 'absent', actual: '2026-09-01' },
     ]);
-    expect((await aspectsOf(owner, dueId))['orbis/task']?.due_date).toBe('2026-09-01');
+    expect((await propsOf(owner, dueId))['orbis/due_date']).toBe('2026-09-01');
   });
 });
 
@@ -491,7 +498,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
 
     // Ни один отказ формы не завёл pending и не закрыл прогон
     expect(await pendingsInRoutineThread(routineId)).toBe(0);
-    expect((await aspectsOf(owner, runId))['orbis/agent-run']?.outcome).toBe('running');
+    expect((await propsOf(owner, runId))['orbis/run_outcome']).toBe('running');
   });
 
   test('операция над рутиной, прогоном или с orbis/assignment (статически и по id из БД) → VALIDATION proposal_forbidden_target (приёмка 8)', async () => {
@@ -551,7 +558,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     }
 
     expect(await pendingsInRoutineThread(routineId)).toBe(0);
-    expect((await aspectsOf(owner, runId))['orbis/agent-run']?.outcome).toBe('running');
+    expect((await propsOf(owner, runId))['orbis/run_outcome']).toBe('running');
   });
 
   test('от chat и mcp → VALIDATION (routineOnly); в реестре чата и MCP orbis_propose нет; в WORKER_SCOPE_TOOLS нет', async () => {
@@ -621,9 +628,12 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     expect(secondResult.pending_id).toBe(firstResult.pending_id);
 
     expect(await pendingsInRoutineThread(routineId)).toBe(1);
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'];
-    expect(run?.outcome).toBe('finished');
-    expect(run?.proposal).toEqual({ pending_id: firstResult.pending_id, status: 'pending' });
+    const run = await propsOf(owner, runId);
+    expect(run['orbis/run_outcome']).toBe('finished');
+    expect(run['orbis/run_proposal']).toEqual({
+      pending_id: firstResult.pending_id,
+      status: 'pending',
+    });
 
     // Повтор БЕЗ ключа идемпотентности — тоже replay: прогон уже закрыт ЭТИМ предложением,
     // и узнаёт его предпроверка по детерминированному pendingId, а не по ключу вызова
@@ -674,7 +684,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     expectError(clash, 'CONFLICT');
     expect(errorOf(clash).message).toContain('id вызова уже использован');
     // Прогон жив, pending лежит и НЕ отклонён
-    expect((await aspectsOf(owner, runId))['orbis/agent-run']?.outcome).toBe('running');
+    expect((await propsOf(owner, runId))['orbis/run_outcome']).toBe('running');
     expect(await pendingsInRoutineThread(routineId)).toBe(1);
 
     const again = await dispatchTool(ctx, 'orbis_propose', {
@@ -688,9 +698,9 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     const result = again.result as ProposeResult;
     expect(result.replayed).toBe(true);
     expect(await pendingsInRoutineThread(routineId)).toBe(1);
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'];
-    expect(run?.outcome).toBe('finished');
-    expect(run?.proposal).toEqual({ pending_id: result.pending_id, status: 'pending' });
+    const run = await propsOf(owner, runId);
+    expect(run['orbis/run_outcome']).toBe('finished');
+    expect(run['orbis/run_proposal']).toEqual({ pending_id: result.pending_id, status: 'pending' });
 
     // Предложение действующее: «Принять» исполняет его
     const applied = await approvePending(db, {
@@ -699,7 +709,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       clock: () => T0,
     });
     expect(applied.ok).toBe(true);
-    expect((await aspectsOf(owner, taskId))['orbis/task']?.status).toBe('planned');
+    expect((await propsOf(owner, taskId))['orbis/task_status']).toBe('planned');
   });
 
   test('лежащий pending уже отклонён → повтор предложения не replayed, а CONFLICT proposal_already_rejected; прогон не закрыт (B2)', async () => {
@@ -745,7 +755,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     expect((errorOf(again).details as { reason?: string }).reason).toBe(
       'proposal_already_rejected',
     );
-    expect((await aspectsOf(owner, runId))['orbis/agent-run']?.outcome).toBe('running');
+    expect((await propsOf(owner, runId))['orbis/run_outcome']).toBe('running');
     expect(await pendingsInRoutineThread(routineId)).toBe(1);
   });
 
@@ -781,9 +791,9 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     expect(errorOf(r).message).toContain('прогон завершён (failed)');
     expect(await pendingsInRoutineThread(routineId)).toBe(0);
     // Исход прогона предложением не переписан
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'];
-    expect(run?.outcome).toBe('failed');
-    expect(run?.proposal).toBeUndefined();
+    const run = await propsOf(owner, runId);
+    expect(run['orbis/run_outcome']).toBe('failed');
+    expect(run['orbis/run_proposal']).toBeUndefined();
   });
 
   test('run_id не тот, из которого сделан вызов → VALIDATION, pending НЕ создан', async () => {
@@ -805,7 +815,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
     expect(errorOf(r).message).toContain('не тому прогону');
     expect(await pendingsInRoutineThread(routineId)).toBe(0);
     expect(await pendingsInRoutineThread(other.routineId)).toBe(0);
-    expect((await aspectsOf(owner, other.runId))['orbis/agent-run']?.outcome).toBe('running');
+    expect((await propsOf(owner, other.runId))['orbis/run_outcome']).toBe('running');
   });
 
   test('и грант, и рутина в контексте → VALIDATION (ровно один субъект, V1.5)', async () => {
@@ -914,7 +924,7 @@ describe('orbis_propose: форма и запрет по объекту (V1.6, �
       'proposal_conflicting_operations',
     );
     expect(await pendingsInRoutineThread(first.routineId)).toBe(0);
-    expect((await aspectsOf(owner, first.runId))['orbis/agent-run']?.outcome).toBe('running');
+    expect((await propsOf(owner, first.runId))['orbis/run_outcome']).toBe('running');
 
     // Тело единственной операцией по сущности — законно; CAS снят сервером
     const ok = await dispatchTool(first.ctx, 'orbis_propose', {

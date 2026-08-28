@@ -17,7 +17,7 @@ import { createCallerFactory } from '../trpc';
 requireEnv();
 
 const { db, client } = appDb();
-const { seedEntity, link, aspectsOf, actionsOf, workerGrant, worker } = agentLoopHelpers(db);
+const { actionsOf, link, propsOf, seedEntity, worker, workerGrant } = agentLoopHelpers(db);
 const createCaller = createCallerFactory(appRouter);
 
 const MINUTE = 60_000;
@@ -97,9 +97,9 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     const runId = claim.run_id;
     const question = 'Какую библиотеку взять — zod или valibot?';
     await dispatchTool(worker(owner, grantId), 'orbis_checkpoint', { run_id: runId, question });
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({
-      status: 'waiting',
-      waiting_for: question,
+    expect(await propsOf(owner, ticketId)).toMatchObject({
+      'orbis/task_status': 'waiting',
+      'orbis/waiting_for': question,
     });
 
     const answer = 'Бери zod — он уже в зависимостях.';
@@ -126,12 +126,12 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
 
     // …и это проверяется движением, а не счётом: одно «отмени последнее» снимает обе правки
     await a.ai.undoLast();
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({
-      status: 'waiting',
-      waiting_for: question,
+    expect(await propsOf(owner, ticketId)).toMatchObject({
+      'orbis/task_status': 'waiting',
+      'orbis/waiting_for': question,
     });
-    expect((await aspectsOf(owner, runId))['orbis/agent-run']?.reply).toBeUndefined();
-    expect((await aspectsOf(owner, runId))['orbis/agent-run']?.outcome).toBe('checkpoint');
+    expect((await propsOf(owner, runId))['orbis/run_reply']).toBeUndefined();
+    expect((await propsOf(owner, runId))['orbis/run_outcome']).toBe('checkpoint');
 
     // Отвечаем заново — и следующий захват видит ответ в истории прогонов (приёмка 8)
     await a.agentRun.answerCheckpoint({ ticketId, runId, answer });
@@ -154,7 +154,7 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
       run_id: claim.run_id,
       report: 'Готово, проверь',
     });
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'waiting' });
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'waiting' });
     const out = await a.agentRun.answerCheckpoint({
       ticketId,
       runId: claim.run_id,
@@ -177,10 +177,10 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
       a.agentRun.answerCheckpoint({ ticketId, runId: claim.run_id, answer: 'Ответ в пустоту' }),
     );
     expect(e.code).toBe('CONFLICT');
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({
-      status: 'in_progress',
+    expect(await propsOf(owner, ticketId)).toMatchObject({
+      'orbis/task_status': 'in_progress',
     });
-    expect((await aspectsOf(owner, claim.run_id))['orbis/agent-run']?.reply).toBeUndefined();
+    expect((await propsOf(owner, claim.run_id))['orbis/run_reply']).toBeUndefined();
   });
 
   // Таймаут поднят с дефолтных 5 с: тест ходит в живую БД, и под ПАРАЛЛЕЛЬНЫМ прогоном
@@ -217,11 +217,11 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
     );
     expect(e.code).toBe('CONFLICT');
     // Ответ первого прогона на месте (тот, что был дан вовремя), второго — нет
-    expect(
-      ((await aspectsOf(owner, first.run_id))['orbis/agent-run']?.reply as AnyRecord).text,
-    ).toBe('Ответ первому');
-    expect((await aspectsOf(owner, second.run_id))['orbis/agent-run']?.reply).toBeUndefined();
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'waiting' });
+    expect(((await propsOf(owner, first.run_id))['orbis/run_reply'] as AnyRecord).text).toBe(
+      'Ответ первому',
+    );
+    expect((await propsOf(owner, second.run_id))['orbis/run_reply']).toBeUndefined();
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'waiting' });
   }, 20_000);
 
   test('прогон чужого тикета → NOT_FOUND, ничего не записано', async () => {
@@ -238,7 +238,7 @@ describe('agentRun.answerCheckpoint (С3, приёмка 8)', () => {
       a.agentRun.answerCheckpoint({ ticketId: second, runId: claim.run_id, answer: 'Не туда' }),
     );
     expect(e.code).toBe('NOT_FOUND');
-    expect((await aspectsOf(owner, claim.run_id))['orbis/agent-run']?.reply).toBeUndefined();
+    expect((await propsOf(owner, claim.run_id))['orbis/run_reply']).toBeUndefined();
   });
 });
 
@@ -304,16 +304,20 @@ describe('agentRun.sweep (С6)', () => {
     expect(screenOut).toEqual({ swept: 1 });
     expect(queueOut.swept).toBe(1);
 
-    const screenTicket = (await aspectsOf(viaScreen, screen.ticketId))['orbis/task'] as AnyRecord;
-    const queueTicket = (await aspectsOf(viaQueue, queue.ticketId))['orbis/task'] as AnyRecord;
-    expect(screenTicket).toEqual(queueTicket);
-    expect(screenTicket).toMatchObject({ status: 'planned' });
+    const screenTicket = (await propsOf(viaScreen, screen.ticketId)) as AnyRecord;
+    const queueTicket = (await propsOf(viaQueue, queue.ticketId)) as AnyRecord;
+    // Грант у двух владельцев СВОЙ (`orbis/grant` — часть назначения), поэтому сравниваются
+    // те свойства, которые подметание и правит; равенство целиком сравнивало бы id грантов.
+    const { 'orbis/grant': _screenGrant, ...screenRest } = screenTicket;
+    const { 'orbis/grant': _queueGrant, ...queueRest } = queueTicket;
+    expect(screenRest).toEqual(queueRest);
+    expect(screenTicket).toMatchObject({ 'orbis/task_status': 'planned' });
 
-    const screenRun = (await aspectsOf(viaScreen, screen.runId))['orbis/agent-run'] as AnyRecord;
-    const queueRun = (await aspectsOf(viaQueue, queue.runId))['orbis/agent-run'] as AnyRecord;
-    expect(screenRun.outcome).toBe('abandoned');
-    expect(queueRun.outcome).toBe('abandoned');
-    expect(screenRun.abandon_note).toBe(queueRun.abandon_note as string);
+    const screenRun = (await propsOf(viaScreen, screen.runId)) as AnyRecord;
+    const queueRun = (await propsOf(viaQueue, queue.runId)) as AnyRecord;
+    expect(screenRun['orbis/run_outcome']).toBe('abandoned');
+    expect(queueRun['orbis/run_outcome']).toBe('abandoned');
+    expect(screenRun['orbis/abandon_note']).toBe(queueRun['orbis/abandon_note'] as string);
 
     // Атрибуция: с экрана подметает владелец, из очереди — агент; source у обоих
     // системный (обслуживание инварианта 6, а не решение актора — «отмени последнее»

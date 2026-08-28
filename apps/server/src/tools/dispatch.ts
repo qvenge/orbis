@@ -62,6 +62,7 @@ import { ExecError } from '../errors';
 import { execute } from '../executor/executor';
 import { ROUTINE_UNTOUCHABLE_OBJECTS, routineUntouchableError } from '../executor/invariants';
 import { makeChatJournalSink } from '../executor/journal';
+import { propertyOfLegacyField } from '../executor/legacy-form';
 import type { ActorKind, JournalSink, JournalWrite, WireEntity } from '../executor/types';
 import { undoLast } from '../executor/undo';
 import type { GrantRef } from '../oauth/grants';
@@ -1190,7 +1191,12 @@ async function snapshotDeferredUnit(
   for (const [aspect, patch] of Object.entries(aspects ?? {})) {
     if (patch === null) continue; // снятие аспекта `buildUpdate` уже отверг выше
     for (const [field, after] of Object.entries(patch)) {
-      const before = current.aspectsLegacy[aspect]?.[field];
+      // «Было» читается из НОВОЙ правды по id свойства — тем же резолвом, которым снимает
+      // предусловия `buildUpdate` (иначе карточка показала бы владельцу одно «было», а CAS
+      // сверял бы другое). Признак носителя обязателен (Р9): значение переживает снятие
+      // аспекта, и без него карточка обещала бы «было» там, где аспекта на строке нет.
+      const property = propertyOfLegacyField(targets.reg, aspect, field);
+      const before = current.aspects.includes(aspect) ? current.props[property] : undefined;
       rows.push({
         aspect,
         field,
@@ -1379,7 +1385,10 @@ async function autonomySummary(
  * пусто, если таких нет. Смотрит только `entity_update` с `body`/`bodyDoc`/`title`: правка
  * расписания и режима идёт другими полями (её держит grantsAutonomy), пауза и метки
  * содержания автономии не меняют. Условие «рутина в act» — по БД, containment'ом по колонке
- * `aspects_legacy` (индекс `entities_aspects_legacy_gin`), под tx актора (RLS).
+ * `props` (индекс `entities_props_gin`) под признаком носителя, под tx актора (RLS).
+ * Признак обязателен (Р9): `orbis/routine_mode` переживает снятие аспекта рутины, и без
+ * него правка заголовка обычной записи, когда-то бывшей рутиной, читалась бы как правка
+ * инструкции act-рутины.
  */
 async function actRoutineInstructionTargets(
   ctx: ToolCallCtx,
@@ -1393,13 +1402,17 @@ async function actRoutineInstructionTargets(
     if (typeof i.id === 'string') ids.push(i.id);
   }
   if (ids.length === 0) return [];
-  const actRoutine = JSON.stringify({ [ROUTINE_ASPECT]: { mode: 'act' } });
+  const actRoutine = JSON.stringify({ 'orbis/routine_mode': 'act' });
   return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
     const rows = await tx
       .select({ title: entities.title })
       .from(entities)
       .where(
-        and(inArray(entities.id, ids), sql`${entities.aspectsLegacy} @> ${actRoutine}::jsonb`),
+        and(
+          inArray(entities.id, ids),
+          sql`${ROUTINE_ASPECT} = ANY(${entities.aspects})`,
+          sql`${entities.props} @> ${actRoutine}::jsonb`,
+        ),
       );
     return rows.map((r) => r.title);
   });
@@ -1446,8 +1459,9 @@ const ASSIGNMENT_ASPECT = 'orbis/assignment';
  *
  * Цели читаются одним SELECT по id — тем же способом и в том же месте конвейера, что и
  * `actRoutineInstructionTargets` строкой выше (своей транзакции пре-чек не заводит, RLS —
- * под `withIdentity` актора). Containment по `aspects_legacy` тут не нужен: у пре-чека на руках
- * готовые id, а запретных аспектов четыре.
+ * под `withIdentity` актора). Containment тут не нужен: у пре-чека на руках готовые id, а
+ * запретных аспектов четыре — читается СПИСОК `aspects[]`, то есть ровно то, чем аспект
+ * теперь и является (§А1-1).
  *
  * Пре-чек разбирает ВСЕ формы операции, включая те, до которых таблица §7.10 сегодня его не
  * доводит (связи и attach классифицируются как `execute`, batch рутине закрыт совсем): он —
@@ -1493,22 +1507,20 @@ export async function routineDeferForbidden(
 
   const rows = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
     tx
-      .select({ id: entities.id, aspectsLegacy: entities.aspectsLegacy })
+      .select({ id: entities.id, aspects: entities.aspects })
       .from(entities)
       .where(inArray(entities.id, ids)),
   );
-  const aspectsById = new Map(rows.map((r) => [r.id, r.aspectsLegacy as Record<string, unknown>]));
+  const aspectsById = new Map(rows.map((r) => [r.id, r.aspects]));
   // Невидимой цели (её нет или она чужая) пре-чек не касается: NOT_FOUND — честный ответ
   // исполнения, и подменять его отказом по объекту значило бы разглашать, что строка есть.
   const untouchable = (id: string): boolean => {
     const aspects = aspectsById.get(id);
-    return (
-      aspects !== undefined && ROUTINE_UNTOUCHABLE_OBJECTS.some((a) => aspects[a] !== undefined)
-    );
+    return aspects !== undefined && ROUTINE_UNTOUCHABLE_OBJECTS.some((a) => aspects.includes(a));
   };
 
   for (const id of entityTargets) {
-    if (untouchable(id) || aspectsById.get(id)?.[ASSIGNMENT_ASPECT] !== undefined) {
+    if (untouchable(id) || aspectsById.get(id)?.includes(ASSIGNMENT_ASPECT) === true) {
       return routineUntouchableError().message;
     }
   }
@@ -1537,7 +1549,7 @@ async function entityHead(
 /** Сколько живых рутин у актора (под RLS его же tx): архивные лимит не занимают. */
 async function countRoutines(tx: Tx): Promise<number> {
   const rows = await tx.execute(
-    sql`SELECT count(*)::int AS n FROM entities WHERE NOT archived AND aspects_legacy ? 'orbis/routine'`,
+    sql`SELECT count(*)::int AS n FROM entities WHERE NOT archived AND 'orbis/routine' = ANY(aspects)`,
   );
   return Number((rows as unknown as Array<{ n: number }>)[0]?.n ?? 0);
 }
@@ -1549,7 +1561,7 @@ async function routinesAmong(tx: Tx, ids: string[]): Promise<Set<string>> {
   const rows = await tx
     .select({ id: entities.id })
     .from(entities)
-    .where(and(inArray(entities.id, ids), sql`${entities.aspectsLegacy} ? 'orbis/routine'`));
+    .where(and(inArray(entities.id, ids), sql`'orbis/routine' = ANY(${entities.aspects})`));
   return new Set(rows.map((r) => r.id));
 }
 

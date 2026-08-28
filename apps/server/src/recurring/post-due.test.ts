@@ -4,10 +4,19 @@
 // идемпотентный batch с детерминированным batch_id = postFinancialBatchId(instance_id),
 // авто-привязка к конверту — бюджет-хуком executor'а (A4) в том же action.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { newId, postFinancialBatchId, recurringInstanceId } from '@orbis/shared';
+import { newId, postFinancialBatchId, ROLE_INSTANCE_OF, recurringInstanceId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  adminDb,
+  appDb,
+  divergentEntityRow,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { envelopeForCategory } from '../budget/aggregates';
+import { entities, relations } from '../db/schema';
+import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type {
@@ -115,13 +124,11 @@ async function adminRows(query: ReturnType<typeof sql>): Promise<Array<Record<st
   }
 }
 
-/** orbis/financial сущности — истина в БД (админ-DSN). */
-async function finOf(id: string): Promise<Record<string, unknown>> {
-  const rows = await adminRows(
-    sql`SELECT aspects_legacy->'orbis/financial' AS fin FROM entities WHERE id = ${id}`,
-  );
+/** Свойства сущности (§А1-1) — истина в БД (админ-DSN). */
+async function propsOf(id: string): Promise<Record<string, unknown>> {
+  const rows = await adminRows(sql`SELECT props FROM entities WHERE id = ${id}`);
   if (rows.length === 0) throw new Error(`сущность ${id} не найдена`);
-  return rows[0]?.fin as Record<string, unknown>;
+  return rows[0]?.props as Record<string, unknown>;
 }
 
 /** Живые budget-parent'ы транзакции. */
@@ -130,7 +137,7 @@ async function budgetParents(txnId: string): Promise<string[]> {
     sql`SELECT r.source_id FROM relations r
         JOIN entities e ON e.id = r.source_id
         WHERE r.target_id = ${txnId} AND r.relation_type = 'parent'
-          AND e.aspects_legacy ? 'orbis/budget'
+          AND 'orbis/budget' = ANY(e.aspects)
         ORDER BY r.source_id`,
   );
   return rows.map((r) => r.source_id as string);
@@ -142,13 +149,14 @@ async function budgetParents(txnId: string): Promise<string[]> {
  */
 async function spentOf(envelopeId: string): Promise<string> {
   const rows = await adminRows(
-    sql`SELECT COALESCE(SUM((e.aspects_legacy->'orbis/financial'->>'amount')::numeric), 0)::text AS spent
+    sql`SELECT COALESCE(SUM((e.props->>'orbis/amount')::numeric), 0)::text AS spent
         FROM relations r
         JOIN entities e ON e.id = r.target_id
         WHERE r.source_id = ${envelopeId} AND r.relation_type = 'parent'
           AND NOT e.archived
-          AND e.aspects_legacy->'orbis/financial'->>'direction' = 'expense'
-          AND (e.aspects_legacy->'orbis/financial'->>'planned') IS DISTINCT FROM 'true'`,
+          AND 'orbis/financial' = ANY(e.aspects)
+          AND e.props->>'orbis/direction' = 'expense'
+          AND coalesce((e.props->>'orbis/planned')::boolean, false) = false`,
   );
   return rows[0]?.spent as string;
 }
@@ -195,18 +203,18 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const instanceId = recurringInstanceId(templateId, '2026-07-01');
 
     // До перехода: инстанс planned и в spent НЕ входит (§2.8 «исключительно прогноз»)
-    expect((await finOf(instanceId)).planned).toBe(true);
+    expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
     expect(await spentOf(envelopeId)).toBe('0');
 
     const r = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
     expect(r.posted).toBe(1);
 
     // planned снят, остальные поля financial не тронуты (shallow-merge §9.2)
-    const fin = await finOf(instanceId);
-    expect(fin.planned).toBe(false);
-    expect(fin.amount).toBe('500.00');
-    expect(fin.occurred_on).toBe('2026-07-01');
-    expect(fin.recurring).toBe(true);
+    const fin = await propsOf(instanceId);
+    expect(fin['orbis/planned']).toBe(false);
+    expect(fin['orbis/amount']).toBe('500.00');
+    expect(fin['orbis/occurred_on']).toBe('2026-07-01');
+    expect(fin['orbis/recurring']).toBe(true);
 
     // привязан к конверту (A4: хук executor'а в том же action) и вошёл в spent
     expect(await budgetParents(instanceId)).toEqual([envelopeId]);
@@ -250,11 +258,15 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     const r = await postDueInstances({ db, ownerId: user, today: '2026-07-02' });
     expect(r.posted).toBe(2); // 07-01 (просрочен) и 07-02 (сегодня)
 
-    expect((await finOf(recurringInstanceId(templateId, '2026-07-01'))).planned).toBe(false);
-    expect((await finOf(recurringInstanceId(templateId, '2026-07-02'))).planned).toBe(false);
+    expect((await propsOf(recurringInstanceId(templateId, '2026-07-01')))['orbis/planned']).toBe(
+      false,
+    );
+    expect((await propsOf(recurringInstanceId(templateId, '2026-07-02')))['orbis/planned']).toBe(
+      false,
+    );
     // будущий (07-03) остаётся прогнозом
     const tomorrowInstance = recurringInstanceId(templateId, '2026-07-03');
-    expect((await finOf(tomorrowInstance)).planned).toBe(true);
+    expect((await propsOf(tomorrowInstance))['orbis/planned']).toBe(true);
     // Приёмка §7.2, первое предложение: «инстанс на завтра материализован с planned=true
     // и НЕ входит в spent». К конверту он привязан (§2.3 привязывает и planned) — значит
     // из spent его исключает именно planned, а не отсутствие привязки: 500+500, не 1500.
@@ -267,12 +279,12 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
       (await envelopeForCategory(db, user, { categoryId: cat, date: '2026-07-03' }))?.spent,
     ).toBe('1000.00');
     // ручная покупка не тронута, batch для неё не заводился
-    expect((await finOf(manual.id)).planned).toBe(true);
+    expect((await propsOf(manual.id))['orbis/planned']).toBe(true);
     expect(await actionById(postFinancialBatchId(manual.id))).toBeUndefined();
     // шаблон не тронут: financial шаблона без occurred_on/planned
-    const templFin = await finOf(templateId);
-    expect(templFin.planned).toBeUndefined();
-    expect(templFin.occurred_on).toBeUndefined();
+    const templFin = await propsOf(templateId);
+    expect(templFin['orbis/planned']).toBeUndefined();
+    expect(templFin['orbis/occurred_on']).toBeUndefined();
   });
 
   test('повторный вызов идемпотентен: posted не растёт; после ручного возврата planned=true — replay по audit-PK, ничего не применяется', async () => {
@@ -303,7 +315,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     );
     const third = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
     expect(third.posted).toBe(0);
-    expect((await finOf(instanceId)).planned).toBe(true);
+    expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
     expect(await actionMessageCount(postFinancialBatchId(instanceId))).toBe(1);
   });
 
@@ -319,7 +331,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
 
     const r = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
     expect(r.posted).toBe(0);
-    expect((await finOf(instanceId)).planned).toBe(true);
+    expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
     expect(await actionById(postFinancialBatchId(instanceId))).toBeUndefined();
   });
 
@@ -348,7 +360,7 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     expect(r.posted).toBe(1);
     // transition снял planned И привязал к конверту (binding-операция дописана A4-хуком
     // в ТОТ ЖЕ action — виден relation_create в операциях batch)
-    expect((await finOf(instanceId)).planned).toBe(false);
+    expect((await propsOf(instanceId))['orbis/planned']).toBe(false);
     expect(await budgetParents(instanceId)).toEqual([envelopeId]);
     const batchId = postFinancialBatchId(instanceId);
     const action = await actionById(batchId);
@@ -358,13 +370,13 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
     // undoAction по детерминированному action_id (undoLast системные пропускает)
     const u = await undoAction(db, { actorUserId: user, actionId: batchId });
     expect(u.ok).toBe(true);
-    expect((await finOf(instanceId)).planned).toBe(true);
+    expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
     expect(await budgetParents(instanceId)).toEqual([]); // прежняя (пустая) привязка
 
     // Undo «липкий»: batch_id детерминирован → повтор postDue реплеится по audit-PK
     const again = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
     expect(again.posted).toBe(0);
-    expect((await finOf(instanceId)).planned).toBe(true);
+    expect((await propsOf(instanceId))['orbis/planned']).toBe(true);
   });
 
   // Таймаут поднят с дефолтных 5 с: тест ходит в живую БД, и под ПАРАЛЛЕЛЬНЫМ прогоном
@@ -386,11 +398,80 @@ describe('postDueInstances (03-budget §2.8): переход planned→fact', ()
 
       // Ровно один применил переход; второй сошёлся в replay по audit-PK (01 §3.3)
       expect(a.posted + b.posted).toBe(1);
-      expect((await finOf(instanceId)).planned).toBe(false);
+      expect((await propsOf(instanceId))['orbis/planned']).toBe(false);
       expect(await budgetParents(instanceId)).toEqual([envelopeId]);
       expect(await actionMessageCount(postFinancialBatchId(instanceId))).toBe(1);
     }
   }, 20_000);
+
+  // Проба расхождением колонок (§А1-1): обе границы отбора «due-инстанс» проверяются по
+  // отдельности, и каждая своей строкой.
+  //  • НЕТ аспекта финансов, значения в `props` остались (Р9 — detach значений не трогает):
+  //    старая карта такое состояние не выражала, а `props` выражают. Без признака носителя
+  //    сущность, операцией быть переставшая, получила бы системный переход «план → факт».
+  //  • ЕСТЬ аспект, но `planned` не стоит: граница РП-9 «отсутствие = false». Ослабь её —
+  //    и переход применился бы к обычному факту, ещё раз привязав его к конверту.
+  test('снятый аспект финансов и не-planned инстанс переход не получают (Р9, РП-9)', async () => {
+    const user = freshUserId();
+    const cat = newId();
+    const detached = newId();
+    const notPlanned = newId();
+
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values([
+        divergentEntityRow({
+          ownerId: user,
+          id: detached,
+          title: 'Инстанс без аспекта финансов',
+          props: {
+            'orbis/amount': '100.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': cat,
+            'orbis/occurred_on': '2026-07-01',
+            'orbis/planned': true,
+            'orbis/recurring': true,
+          },
+          aspects: [],
+        }),
+        divergentEntityRow({
+          ownerId: user,
+          id: notPlanned,
+          title: 'Инстанс уже факт',
+          props: {
+            'orbis/amount': '100.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': cat,
+            'orbis/occurred_on': '2026-07-01',
+            'orbis/recurring': true,
+          },
+          aspects: ['orbis/financial'],
+        }),
+      ]),
+    );
+    // Оба — экземпляры повторяющегося: без этого ребра их отсёк бы соседний предикат,
+    // и проба проверяла бы не то, что называет.
+    const templateId = (
+      await createEntity(user, { title: 'Шаблон пробы', tags: [], aspects: { 'orbis/note': {} } })
+    ).id;
+    await withIdentity(db, user, (tx) =>
+      tx.insert(relations).values(
+        [detached, notPlanned].map((target) => ({
+          id: newId(),
+          sourceId: templateId,
+          targetId: target,
+          role: ROLE_INSTANCE_OF,
+          relationType: 'derived_from',
+        })),
+      ),
+    );
+
+    const r = await postDueInstances({ db, ownerId: user, today: '2026-07-01' });
+    expect(r.posted).toBe(0);
+    // Ни одна строка не тронута: у первой `planned` остался `true`, у второй его как не
+    // было, так и нет (переход записал бы `false`).
+    expect((await propsOf(detached))['orbis/planned']).toBe(true);
+    expect((await propsOf(notPlanned))['orbis/planned']).toBeUndefined();
+  });
 });
 
 describe('tRPC budget.postDue (заготовка роутера, наполнение — A6)', () => {
@@ -422,7 +503,7 @@ describe('tRPC budget.postDue (заготовка роутера, наполне
     const caller = createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
     const r = await caller.budget.postDue();
     expect(r.posted).toBe(1);
-    expect((await finOf(instanceId)).planned).toBe(false);
+    expect((await propsOf(instanceId))['orbis/planned']).toBe(false);
     expect(await budgetParents(instanceId)).toEqual([envelope.id]);
 
     // Мутационная поверхность tRPC — поверхность владельца (§9.3)

@@ -39,7 +39,6 @@ import { chatMessages, entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import { propertyOfLegacyField } from '../executor/legacy-form';
-import type { AspectsMap } from '../executor/normalize';
 import { createPending, rejectedReason, rejectPending } from '../policy/pending';
 import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import type { ToolCallCtx, ToolDispatchResult } from '../tools/dispatch';
@@ -315,7 +314,11 @@ export async function runPropose(
     // оставляет прогон running, а pending — ждать повтора с новым `id` (см. шапку).
     const alive = await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
       const row = await runById(tx, routine.runId);
-      return row !== null && row.run.routine_id === routine.id && row.run.outcome === 'running';
+      return (
+        row !== null &&
+        row.props['orbis/run_routine'] === routine.id &&
+        row.props['orbis/run_outcome'] === 'running'
+      );
     });
     if (!alive) {
       await rejectPending(ctx.db, {
@@ -368,21 +371,22 @@ async function checkRun(
 ): Promise<RunCheck> {
   const row = await runById(tx, runId);
   if (row === null) return { error: err('NOT_FOUND', 'прогон не найден', { run_id: runId }) };
-  if (row.run.routine_id !== routineId) {
+  if (row.props['orbis/run_routine'] !== routineId) {
     return { error: err('CONFLICT', 'прогон принадлежит другой рутине', { run_id: runId }) };
   }
-  if (row.run.outcome === 'running') return 'running';
-  if (row.run.proposal?.pending_id === pendingId) {
+  if (row.props['orbis/run_outcome'] === 'running') return 'running';
+  if (row.props['orbis/run_proposal']?.pending_id === pendingId) {
     // Размер берём из САМОГО предложения, а не из повторного вызова: ответ описывает то,
     // что лежит в треде владельца, а не то, что модель прислала во второй раз.
     const n = await storedOperationCount(tx, pendingId);
     if (n !== null) return { kind: 'replay', operations: n };
   }
   return {
-    error: err('CONFLICT', `прогон завершён (${row.run.outcome}) — предложение не принимается`, {
-      run_id: runId,
-      outcome: row.run.outcome,
-    }),
+    error: err(
+      'CONFLICT',
+      `прогон завершён (${row.props['orbis/run_outcome']}) — предложение не принимается`,
+      { run_id: runId, outcome: row.props['orbis/run_outcome'] },
+    ),
   };
 }
 
@@ -463,9 +467,10 @@ function collides(
 }
 
 interface TargetRow {
-  aspectsLegacy: AspectsMap;
   /** Новая правда значений (§А1-1) — по ней снимаются предусловия: их единица теперь свойство. */
   props: Record<string, unknown>;
+  /** Список интерпретаций — он же признак носителя при чтении значений. */
+  aspects: string[];
   updatedAt: Date;
 }
 
@@ -508,8 +513,8 @@ export async function loadTargets(
   const found = await tx
     .select({
       id: entities.id,
-      aspectsLegacy: entities.aspectsLegacy,
       props: entities.props,
+      aspects: entities.aspects,
       updatedAt: entities.updatedAt,
     })
     .from(entities)
@@ -521,8 +526,8 @@ export async function loadTargets(
     );
   for (const row of found) {
     rows.set(row.id, {
-      aspectsLegacy: row.aspectsLegacy as AspectsMap,
       props: row.props as Record<string, unknown>,
+      aspects: row.aspects,
       updatedAt: row.updatedAt,
     });
   }
@@ -537,7 +542,7 @@ export async function loadTargets(
     // вовсе — рутиной или прогоном сущность делает её собственное состояние, а не форма
     // операции.
     for (const aspectId of FORBIDDEN_TARGET_ASPECTS) {
-      if (row.aspectsLegacy[aspectId] !== undefined) {
+      if (row.aspects.includes(aspectId)) {
         return {
           error: forbiddenTarget(
             w.index,
@@ -562,9 +567,9 @@ export async function loadTargets(
  * Патч приходит СТАРОЙ картой (её шлёт рутина, и её же читает карточка предложения), а
  * предусловие снимается по СВОЙСТВУ (§А7-3): каждое поле переводится в id тем же резолвом,
  * которым переводит его сам исполнитель (`propertyOfLegacyField`), и текущее значение
- * берётся из `props` — новой правды строки. Через `aspects_legacy` это делать нельзя:
- * проекция обратима не везде (`orbis/progress_source` едет в неё развёрнутой обёрткой), и
- * снятое по ней предусловие не совпало бы с тем, что сверяет executor.
+ * берётся из `props` — новой правды строки. Через проекцию `aspects_legacy` это делать
+ * нельзя: она обратима не везде (`orbis/progress_source` едет в неё развёрнутой обёрткой),
+ * и снятое по ней предусловие не совпало бы с тем, что сверяет executor.
  *
  * Патч тела едет со своим существующим CAS (§5.2) — `expectedUpdatedAt` текущей строки:
  * предусловия о теле ничего не знают, и без него правка тела затирала бы чужую.

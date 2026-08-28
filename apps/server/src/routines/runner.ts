@@ -133,12 +133,16 @@ export async function runRoutineRun(deps: RoutineDeps, args: RunRoutineRunArgs):
   // создаёт другой код (Задача 10/11), и между созданием и запуском цикла может пройти
   // время — например, если процесс подобрал прогон после рестарта.
   const row = await withIdentity(deps.db, ownerId, (tx) => runById(tx, runId));
-  if (row === null || row.run.routine_id !== routine.id || row.run.outcome !== 'running') {
+  if (
+    row === null ||
+    row.props['orbis/run_routine'] !== routine.id ||
+    row.props['orbis/run_outcome'] !== 'running'
+  ) {
     // Прогона нет, он чужой или уже закрыт (подметание успело раньше). Модель не гоним и
     // ничего не переписываем: закрывший знал о прогоне столько же, сколько мы.
     return { outcome: 'failed', reason: 'aborted' };
   }
-  const startedAt = Date.parse(row.run.started_at);
+  const startedAt = Date.parse(row.props['orbis/run_started_at']);
 
   const usage: UsageTotals = { inputTokens: 0, outputTokens: 0, requestCount: 0 };
   let verdict: Verdict;
@@ -221,8 +225,8 @@ async function prepareAndLoop(
   const routineRef: RoutineRef = {
     id: routine.id,
     runId,
-    mode: routine.routine.mode,
-    allowedTools: new Set(routine.routine.allowed_tools ?? []),
+    mode: routine.props['orbis/routine_mode'],
+    allowedTools: new Set(routine.props['orbis/allowed_tools'] ?? []),
   };
   const { threadId, system, messages, tools } = await withIdentity(deps.db, ownerId, async (tx) => {
     const thread = await ensureEntityThread(tx, ownerId, routine.id);
@@ -291,7 +295,7 @@ async function modelLoop(
   },
 ): Promise<Verdict> {
   const { args, toolCtx, verbCtx, usage } = run;
-  const mode = args.routine.routine.mode;
+  const mode = args.routine.props['orbis/routine_mode'];
   const convo: LLMMessage[] = [...run.messages];
 
   for (let step = 1; ; step++) {
@@ -435,7 +439,11 @@ async function runStillOurs(
   ownerId: string,
 ): Promise<boolean> {
   const row = await withIdentity(deps.db, ownerId, (tx) => runById(tx, args.runId));
-  return row !== null && row.run.routine_id === args.routine.id && row.run.outcome === 'running';
+  return (
+    row !== null &&
+    row.props['orbis/run_routine'] === args.routine.id &&
+    row.props['orbis/run_outcome'] === 'running'
+  );
 }
 
 /**
@@ -538,7 +546,7 @@ async function settle(
   return end;
 }
 
-/** Расход в форме аспекта; ничего не потрачено — ключа нет (а не нули). */
+/** Расход в форме свойства `orbis/run_usage`; ничего не потрачено — ключа нет (а не нули). */
 function usageInput(usage?: UsageTotals): RunUsageInput | undefined {
   if (usage === undefined || usage.requestCount === 0) return undefined;
   return { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens };
@@ -563,7 +571,8 @@ async function patchRunUsage(
       operations: [
         {
           tool: 'entity_update',
-          input: { id: args.runId, aspects: { 'orbis/agent-run': { usage: value } } },
+          // Внутренняя форма правки (§А1-1): плоское свойство по id.
+          input: { id: args.runId, props: { 'orbis/run_usage': value } },
         },
       ],
       clock: deps.clock,

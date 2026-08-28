@@ -7,13 +7,23 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId, type RunSummary } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  divergentEntityRow,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
+import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import {
   activeRoutines,
+  assignedTickets,
   parentProject,
+  type RunProps,
+  type RunRow,
   routineById,
   runSummary,
   runsForBucket,
@@ -59,8 +69,8 @@ describe('runsForBucket: прогоны слота рутины (V1.3)', () => {
       runsForBucket(tx, routineId, '2026-08-17T07:00'),
     );
     expect(rows.map((r) => r.id)).toEqual([first.runId, retry.runId]);
-    expect(rows.map((r) => r.run.attempt)).toEqual([1, 2]);
-    expect(rows.every((r) => r.run.routine_id === routineId)).toBe(true);
+    expect(rows.map((r) => r.props['orbis/run_attempt'])).toEqual([1, 2]);
+    expect(rows.every((r) => r.props['orbis/run_routine'] === routineId)).toBe(true);
     expect(rows.map((r) => r.id)).not.toContain(next.runId);
     expect(rows.map((r) => r.id)).not.toContain(alien.runId);
 
@@ -228,11 +238,11 @@ describe('activeRoutines / routineById (V1.13)', () => {
     expect(rows[0]?.title).toBe('Утренний обзор');
     // Тело — это и есть инструкция прогону (V1.1): без него раннеру нечего сказать модели
     expect(rows[0]?.body).toBe('Пройди по задачам дня и предложи план.');
-    expect(rows[0]?.routine).toEqual({
-      stage: 'active',
-      at: '07:00',
-      mode: 'act',
-      allowed_tools: ['entity_update'],
+    expect(rows[0]?.props).toEqual({
+      'orbis/routine_stage': 'active',
+      'orbis/routine_at': '07:00',
+      'orbis/routine_mode': 'act',
+      'orbis/allowed_tools': ['entity_update'],
     });
     expect(rows.map((x) => x.id)).not.toContain(paused);
     expect(rows.map((x) => x.id)).not.toContain(archived);
@@ -259,16 +269,176 @@ describe('activeRoutines / routineById (V1.13)', () => {
     expect(row?.body).toBe('Закрой день: что сделано, что перенести.');
     // Приостановленная читается по id намеренно: пауза — про запуск по расписанию,
     // а не про видимость (иначе экран рутины не смог бы её показать)
-    expect(row?.routine).toEqual({
-      stage: 'paused',
-      at: '21:30',
-      mode: 'propose',
-      days: ['mo', 'fr'],
+    expect(row?.props).toEqual({
+      'orbis/routine_stage': 'paused',
+      'orbis/routine_at': '21:30',
+      'orbis/routine_mode': 'propose',
+      'orbis/routine_days': ['mo', 'fr'],
     });
 
     expect(await withIdentity(db, owner, (tx) => routineById(tx, task.id))).toBeNull();
     expect(await withIdentity(db, owner, (tx) => routineById(tx, alien))).toBeNull();
     expect(await withIdentity(db, owner, (tx) => routineById(tx, newId()))).toBeNull();
+  });
+});
+
+describe('assignedTickets: очередь исполнителя читает НОВУЮ правду (§А1-1)', () => {
+  // Проба расхождением: на интервале дуальной записи обе колонки заполняет один писатель,
+  // поэтому перевод читателя с одной на другую поведением НЕ наблюдаем, пока они равны.
+  // Здесь они говорят РАЗНОЕ — и обе стороны границы обязаны краснеть по отдельности:
+  // «вернуть всё» ловит строка со снятым аспектом, «вернуть ничего» — строка, назначение
+  // которой записано только в новой форме.
+  const owner = freshUserId();
+  const grantId = newId();
+  const otherGrantId = newId();
+  const byProps = newId();
+  const byLegacyOnly = newId();
+  const detachedAssignment = newId();
+  const notATask = newId();
+  const otherGrant = newId();
+
+  beforeAll(async () => {
+    const row = (
+      id: string,
+      title: string,
+      props: Record<string, unknown>,
+      aspects: string[],
+      legacy: Record<string, Record<string, unknown>> = {},
+    ) => divergentEntityRow({ ownerId: owner, id, title, props, aspects, legacy });
+
+    await withIdentity(db, owner, (tx) =>
+      tx.insert(entities).values([
+        // Назначение и задача — только в НОВОЙ форме; старая карта пуста.
+        row(
+          byProps,
+          'Тикет новой формы',
+          {
+            'orbis/task_status': 'planned',
+            'orbis/executor': 'agent',
+            'orbis/grant': grantId,
+            'orbis/priority': 'high',
+            'orbis/due_date': '2026-08-20',
+          },
+          ['orbis/task', 'orbis/assignment'],
+        ),
+        // Зеркальная строка: назначение записано ТОЛЬКО старой картой. Читатель новой
+        // правды её видеть не должен — иначе он читает не ту колонку.
+        row(byLegacyOnly, 'Тикет только старой карты', {}, [], {
+          'orbis/task': { status: 'planned' },
+          'orbis/assignment': { executor: 'agent', grant_id: grantId },
+        }),
+        // Аспект назначения СНЯТ, значения остались (Р9). Без признака носителя эта
+        // строка попала бы в очередь — то есть агент получил бы работу, которую с него
+        // сняли.
+        row(
+          detachedAssignment,
+          'Назначение снято, значения остались',
+          {
+            'orbis/task_status': 'planned',
+            'orbis/executor': 'agent',
+            'orbis/grant': grantId,
+          },
+          ['orbis/task'],
+        ),
+        // Задачей быть перестала — та же проверка со второй стороны.
+        row(
+          notATask,
+          'Задача снята, значения остались',
+          {
+            'orbis/task_status': 'planned',
+            'orbis/executor': 'agent',
+            'orbis/grant': grantId,
+          },
+          ['orbis/assignment'],
+        ),
+        // Чужой грант: containment по значению, а не по одному лишь ключу.
+        row(
+          otherGrant,
+          'Тикет чужого гранта',
+          {
+            'orbis/task_status': 'planned',
+            'orbis/executor': 'agent',
+            'orbis/grant': otherGrantId,
+          },
+          ['orbis/task', 'orbis/assignment'],
+        ),
+      ]),
+    );
+  });
+
+  test('в очередь входит строка, назначенная в props под обоими аспектами; строка старой карты — нет', async () => {
+    const rows = await withIdentity(db, owner, (tx) => assignedTickets(tx, grantId));
+    expect(rows.map((r) => r.id)).toEqual([byProps]);
+    expect(rows[0]?.props['orbis/priority']).toBe('high');
+    expect(rows[0]?.props['orbis/due_date']).toBe('2026-08-20');
+    expect(rows[0]?.aspects.sort()).toEqual(['orbis/assignment', 'orbis/task']);
+  });
+
+  test('снятый аспект (назначения или задачи) убирает строку из очереди, хотя значения в props остались (Р9)', async () => {
+    const ids = (await withIdentity(db, owner, (tx) => assignedTickets(tx, grantId))).map(
+      (r) => r.id,
+    );
+    expect(ids).not.toContain(detachedAssignment);
+    expect(ids).not.toContain(notATask);
+    expect(ids).not.toContain(otherGrant);
+  });
+});
+
+describe('runSummary: шестнадцать полей читаются по id свойств (§А8)', () => {
+  test('каждое поле сводки берётся из своего свойства, а не из аспект-объекта', () => {
+    const pendingId = newId();
+    const props: RunProps = {
+      'orbis/run_outcome': 'checkpoint',
+      'orbis/run_started_at': iso(T0),
+      'orbis/run_finished_at': iso(new Date(T0.getTime() + MINUTE)),
+      'orbis/last_step_at': iso(T0),
+      'orbis/step_count': 2,
+      'orbis/run_steps': [
+        { seq: 1, at: iso(T0), summary: 'первый', external: false },
+        { seq: 2, at: iso(T0), summary: 'второй', external: true },
+      ],
+      'orbis/run_report': 'отчёт',
+      'orbis/run_checkpoint': { question: 'вопрос?', asked_at: iso(T0) },
+      'orbis/run_reply': { text: 'ответ', at: iso(T0) },
+      'orbis/abandon_note': 'брошен',
+      'orbis/session_url': 'https://example.test/s/1',
+      'orbis/run_routine': '01a04700-0000-7000-8000-000000000001',
+      'orbis/run_bucket': '2026-08-17T07:00',
+      'orbis/run_attempt': 3,
+      'orbis/fail_note': 'сбой',
+      'orbis/undecided': true,
+      'orbis/run_proposal': { pending_id: pendingId, status: 'stale', decided_at: iso(T0) },
+    };
+    const row: RunRow = {
+      id: '01a04700-0000-7000-8000-0000000000ff',
+      title: 'Прогон',
+      createdAt: T0,
+      archived: false,
+      props,
+    };
+
+    const summary = runSummary(row);
+    // Полный состав сравнивается ЦЕЛИКОМ: потерянное поле обязано краснеть так же громко,
+    // как лишнее (мутация «убрать одно чтение» иначе прошла бы незамеченной).
+    expect(summary).toEqual({
+      id: row.id,
+      outcome: 'checkpoint',
+      started_at: iso(T0),
+      step_count: 2,
+      last_steps: props['orbis/run_steps'],
+      finished_at: iso(new Date(T0.getTime() + MINUTE)),
+      report: 'отчёт',
+      checkpoint: { question: 'вопрос?', asked_at: iso(T0) },
+      reply: { text: 'ответ', at: iso(T0) },
+      abandon_note: 'брошен',
+      session_url: 'https://example.test/s/1',
+      routine_id: '01a04700-0000-7000-8000-000000000001',
+      bucket: '2026-08-17T07:00',
+      attempt: 3,
+      fail_note: 'сбой',
+      undecided: true,
+      proposal: { pending_id: pendingId, status: 'stale', decided_at: iso(T0) },
+    });
   });
 });
 

@@ -67,8 +67,49 @@ const MAX_ATTEMPTS = 3;
 // audit-сообщение batch пишется тем же tx, что операции executor'а (§7.8).
 const sink = makeChatJournalSink();
 
-type AspectsMap = Record<string, Record<string, unknown>>;
 type TemplateRow = typeof entities.$inferSelect;
+
+/**
+ * ЯВНЫЙ перечень наследуемых инстансом свойств РАСПИСАНИЯ (Р-28) — весь аспект
+ * `orbis/schedule` без `orbis/recurrence`: правило повторения принадлежит шаблону, и
+ * инстанс, унёсший его с собой, сам стал бы шаблоном (§3.3).
+ *
+ * Перечень, а не «всё, что было минус одно», потому что в новой форме «всё, что было» —
+ * это ВСЕ `props` строки: у шаблона-задачи там лежат `orbis/task_status` и `orbis/priority`,
+ * у шаблона-транзакции — `orbis/bank_txn_id`. Копирование по остаточному принципу молча
+ * порождало бы инстансы с чужими свойствами; закрытый список делает наследование решением.
+ *
+ * `orbis/start_at` и `orbis/end_at` в перечне ЕСТЬ, но копируются не как есть: их
+ * пересчитывает `instanceScheduleProps` — дата инстанса со временем суток шаблона.
+ */
+const INHERITED_SCHEDULE_PROPERTIES: readonly string[] = [
+  'orbis/start_at',
+  'orbis/end_at',
+  'orbis/duration_min',
+  'orbis/all_day',
+  'orbis/location',
+  'orbis/timezone',
+];
+
+/**
+ * ЯВНЫЙ перечень наследуемых инстансом свойств ФИНАНСОВ (Р-28). Шесть, а не десять:
+ *  • `orbis/occurred_on`, `orbis/planned`, `orbis/recurring` инстанс получает СВОИ
+ *    (дата инстанса, `true`, `true` — §5.4/§3.3), а не шаблонные;
+ *  • `orbis/bank_txn_id` не наследуется вовсе: это тождество ОДНОЙ строки банковской
+ *    выписки, и общий идентификатор у всех инстансов объявил бы их одной операцией —
+ *    дедуп импорта (§3.4.1 п.3) считал бы повтором каждую.
+ */
+const INHERITED_FINANCIAL_PROPERTIES: readonly string[] = [
+  'orbis/amount',
+  'orbis/currency',
+  'orbis/direction',
+  'orbis/finance_category',
+  'orbis/payment_method',
+  'orbis/counterparty',
+];
+
+const SCHEDULE_ASPECT = 'orbis/schedule';
+const FINANCIAL_ASPECT = 'orbis/financial';
 
 // Стеночные часы владельца — экспортированы: планировщик рутин (routines/schedule.ts)
 // считает бакеты 'YYYY-MM-DDTЧЧ:ММ' в таймзоне владельца теми же двумя функциями, что
@@ -286,7 +327,11 @@ export async function materializeInstances(deps: MaterializeDeps): Promise<{ cre
       .where(
         and(
           eq(entities.archived, false),
-          sql`${entities.aspectsLegacy} -> 'orbis/schedule' -> 'recurrence' IS NOT NULL`,
+          // Признак носителя обязателен (Р9): `orbis/recurrence` остаётся в `props` и
+          // после снятия аспекта расписания, а из старой карты уходил вместе с ним.
+          // Без него сущность, расписания лишившаяся, продолжала бы плодить инстансы.
+          sql`${SCHEDULE_ASPECT} = ANY(${entities.aspects})`,
+          sql`${entities.props} -> 'orbis/recurrence' IS NOT NULL`,
         ),
       );
     const settings = await tx
@@ -316,22 +361,25 @@ async function materializeTemplate(
   from: string,
   to: string,
 ): Promise<number> {
-  const aspects = template.aspectsLegacy as AspectsMap;
-  const schedule = aspects['orbis/schedule'];
-  if (!schedule || typeof schedule.start_at !== 'string') return 0;
+  // Признак носителя здесь не повторяется: строки отобрал SELECT выше, где
+  // `'orbis/schedule' = ANY(aspects)` уже стоит, — вторая проверка была бы тавтологией.
+  const props = template.props as Record<string, unknown>;
+  const startAt = props['orbis/start_at'];
+  if (typeof startAt !== 'string') return 0;
 
-  // Таймзона дат инстансов: orbis/schedule.timezone шаблона, фолбэк — таймзона
+  // Таймзона дат инстансов: orbis/timezone шаблона, фолбэк — таймзона
   // пользователя (§5.4); мусорная зона деградирует до фолбэка, не роняя запрос
-  const tzRaw = typeof schedule.timezone === 'string' ? schedule.timezone : undefined;
+  const tzProp = props['orbis/timezone'];
+  const tzRaw = typeof tzProp === 'string' ? tzProp : undefined;
   const timezone = tzRaw !== undefined && isValidTimeZone(tzRaw) ? tzRaw : userTimezone;
-  const startInstant = new Date(schedule.start_at);
+  const startInstant = new Date(startAt);
   if (Number.isNaN(startInstant.getTime())) return 0;
   // seriesStart = локальная дата start_at шаблона в этой таймзоне; time — время суток
   const wall = wallClockIn(startInstant, timezone);
 
   let dates: string[];
   try {
-    dates = expandRecurrence(schedule.recurrence as RecurrenceRule, wall.date, from, to);
+    dates = expandRecurrence(props['orbis/recurrence'] as RecurrenceRule, wall.date, from, to);
   } catch (e) {
     // Битое правило (RangeError, fail-fast A2): пропускаем ШАБЛОН, а не роняем весь
     // запрос вызывающего — остальные шаблоны материализуются (закреплено тестом).
@@ -369,9 +417,7 @@ async function materializeTemplate(
 
     // Один batch на шаблон: create+relation каждой даты; derived_from в том же batch
     // легитимирует financial-инвариант инстанса (recurring=true без recurrence, §3.3)
-    const operations = missing.flatMap((date) =>
-      instanceOps(template, schedule, timezone, wall, date),
-    );
+    const operations = missing.flatMap((date) => instanceOps(template, timezone, wall, date));
     const r = await execute(
       db,
       {
@@ -402,42 +448,67 @@ async function materializeTemplate(
   return 0;
 }
 
+/**
+ * Свойства расписания инстанса: перечень Р-28 из свойств шаблона, где `orbis/start_at` —
+ * дата инстанса со временем суток шаблона (в его таймзоне), а `orbis/end_at` сдвинут той
+ * же длительностью. `orbis/recurrence` в перечень не входит и потому не переносится.
+ */
+function instanceScheduleProps(
+  props: Record<string, unknown>,
+  start: Date,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const propertyId of INHERITED_SCHEDULE_PROPERTIES) {
+    if (Object.hasOwn(props, propertyId)) out[propertyId] = props[propertyId];
+  }
+  out['orbis/start_at'] = start.toISOString();
+  const endAt = props['orbis/end_at'];
+  if (typeof endAt === 'string') {
+    const templStart = new Date(props['orbis/start_at'] as string).getTime();
+    const templEnd = new Date(endAt).getTime();
+    if (Number.isNaN(templEnd)) delete out['orbis/end_at'];
+    else out['orbis/end_at'] = new Date(start.getTime() + (templEnd - templStart)).toISOString();
+  } else {
+    // Нестроковый конец интервала инстанс не наследует: старая форма клала его в аспект
+    // только вместе с пересчётом, а без пересчёта он означал бы конец ШАБЛОНА.
+    delete out['orbis/end_at'];
+  }
+  return out;
+}
+
 /** Пара операций batch для одной даты: entity_create инстанса + derived_from шаблон→инстанс. */
 function instanceOps(
   template: TemplateRow,
-  schedule: Record<string, unknown>,
   timezone: string,
   wall: WallClock,
   date: string,
 ): Array<{ tool: string; input: unknown }> {
   const id = recurringInstanceId(template.id, date);
   const start = instantOfLocal(date, wall.time, timezone);
+  const templateProps = template.props as Record<string, unknown>;
 
-  // orbis/schedule инстанса: копия шаблона без recurrence, start_at — дата инстанса
-  // со временем суток шаблона (в его таймзоне); end_at сдвигается той же длительностью
-  const instSchedule: Record<string, unknown> = { ...schedule, start_at: start.toISOString() };
-  delete instSchedule.recurrence;
-  if (typeof schedule.end_at === 'string') {
-    const templStart = new Date(schedule.start_at as string).getTime();
-    const templEnd = new Date(schedule.end_at).getTime();
-    if (Number.isNaN(templEnd)) delete instSchedule.end_at;
-    else instSchedule.end_at = new Date(start.getTime() + (templEnd - templStart)).toISOString();
-  }
-
-  const instAspects: AspectsMap = { 'orbis/schedule': instSchedule as Record<string, unknown> };
-  const fin = (template.aspectsLegacy as AspectsMap)['orbis/financial'];
-  if (fin) {
+  const props: Record<string, unknown> = instanceScheduleProps(templateProps, start);
+  const aspects: string[] = [SCHEDULE_ASPECT];
+  if (template.aspects.includes(FINANCIAL_ASPECT)) {
+    for (const propertyId of INHERITED_FINANCIAL_PROPERTIES) {
+      if (Object.hasOwn(templateProps, propertyId)) props[propertyId] = templateProps[propertyId];
+    }
     // §5.4/§3.3: occurred_on = дата инстанса, planned=true (до перехода в факт),
     // recurring=true (инстанс шаблона); к конверту инстанс авто-привязывается бюджет-
     // хуком executor'а уже при создании (A4, 03-budget §2.3) — planned не входит в spent
-    instAspects['orbis/financial'] = { ...fin, occurred_on: date, planned: true, recurring: true };
+    props['orbis/occurred_on'] = date;
+    props['orbis/planned'] = true;
+    props['orbis/recurring'] = true;
+    aspects.push(FINANCIAL_ASPECT);
   }
 
+  // Внутренняя форма создания (§А1-1): плоские `props` плюс СПИСОК аспектов.
   const input: Record<string, unknown> = {
     id,
     title: template.title,
     tags: template.tags,
-    aspects: instAspects,
+    props,
+    aspects,
   };
   if (template.emoji !== null) input.emoji = template.emoji;
 

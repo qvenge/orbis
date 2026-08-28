@@ -16,15 +16,15 @@ requireEnv();
 const { db, client } = appDb();
 const MINUTE = 60_000;
 const {
-  seedEntity,
-  link,
-  aspectsOf,
   actionsOf,
-  workerGrant,
-  worker,
+  link,
+  propsOf,
   routineCtx,
+  seedEntity,
   seedRoutine,
   seedRoutineRun,
+  worker,
+  workerGrant,
 } = agentLoopHelpers(db);
 
 function minutesBefore(n: number): string {
@@ -110,22 +110,22 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
     expect(swept).toBe(2);
 
     // Без эффекта — безопасно перезапустить: planned, хвост waiting_for снят
-    const cleanTask = (await aspectsOf(owner, clean.ticketId))['orbis/task'] as AnyRecord;
-    expect(cleanTask.status).toBe('planned');
-    expect(cleanTask.waiting_for).toBeUndefined();
+    const cleanTask = (await propsOf(owner, clean.ticketId)) as AnyRecord;
+    expect(cleanTask['orbis/task_status']).toBe('planned');
+    expect(cleanTask['orbis/waiting_for']).toBeUndefined();
 
     // Эффект был — человек разбирает остатки: waiting + описание в waiting_for
-    const dirtyTask = (await aspectsOf(owner, dirty.ticketId))['orbis/task'] as AnyRecord;
-    expect(dirtyTask.status).toBe('waiting');
-    expect(String(dirtyTask.waiting_for)).toContain('оборван');
-    expect(String(dirtyTask.waiting_for)).toContain('Создал ветку fix/parser');
+    const dirtyTask = (await propsOf(owner, dirty.ticketId)) as AnyRecord;
+    expect(dirtyTask['orbis/task_status']).toBe('waiting');
+    expect(String(dirtyTask['orbis/waiting_for'])).toContain('оборван');
+    expect(String(dirtyTask['orbis/waiting_for'])).toContain('Создал ветку fix/parser');
 
     for (const runId of [clean.runId, dirty.runId]) {
-      const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-      expect(run.outcome).toBe('abandoned');
-      expect(run.finished_at).toBe(iso(T0));
-      expect(String(run.abandon_note)).toContain('оборван');
-      expect(String(run.abandon_note)).toContain('31');
+      const run = (await propsOf(owner, runId)) as AnyRecord;
+      expect(run['orbis/run_outcome']).toBe('abandoned');
+      expect(run['orbis/run_finished_at']).toBe(iso(T0));
+      expect(String(run['orbis/abandon_note'])).toContain('оборван');
+      expect(String(run['orbis/abandon_note'])).toContain('31');
     }
 
     // Журнал §7.8: обслуживание инварианта, а не решение актора — source system,
@@ -164,18 +164,18 @@ describe('sweepStaleRuns (С6, инвариант 6)', () => {
     });
     expect(swept).toBe(1);
 
-    const freshRun = (await aspectsOf(owner, fresh.runId))['orbis/agent-run'] as AnyRecord;
-    expect(freshRun.outcome).toBe('running');
-    expect(freshRun.abandon_note).toBeUndefined();
-    expect((await aspectsOf(owner, fresh.ticketId))['orbis/task']).toMatchObject({
-      status: 'in_progress',
+    const freshRun = (await propsOf(owner, fresh.runId)) as AnyRecord;
+    expect(freshRun['orbis/run_outcome']).toBe('running');
+    expect(freshRun['orbis/abandon_note']).toBeUndefined();
+    expect(await propsOf(owner, fresh.ticketId)).toMatchObject({
+      'orbis/task_status': 'in_progress',
     });
 
-    const detachedRun = (await aspectsOf(owner, detached.runId))['orbis/agent-run'] as AnyRecord;
-    expect(detachedRun.outcome).toBe('abandoned');
+    const detachedRun = (await propsOf(owner, detached.runId)) as AnyRecord;
+    expect(detachedRun['orbis/run_outcome']).toBe('abandoned');
     // Тикет уже не в работе — статус ему сервер не переписывает
-    expect((await aspectsOf(owner, detached.ticketId))['orbis/task']).toMatchObject({
-      status: 'planned',
+    expect(await propsOf(owner, detached.ticketId)).toMatchObject({
+      'orbis/task_status': 'planned',
     });
 
     // Повторное подметание ничего не находит: подобранный прогон терминален
@@ -278,14 +278,14 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
 
     // Прогон A помечен, прогон B живёт, а тикет остался при СВОЁМ прогоне: подметание
     // старого хвоста не имеет права выбить из работы того, кто работает сейчас.
-    expect((await aspectsOf(owner, runA))['orbis/agent-run']).toMatchObject({
-      outcome: 'abandoned',
+    expect(await propsOf(owner, runA)).toMatchObject({
+      'orbis/run_outcome': 'abandoned',
     });
-    expect((await aspectsOf(owner, runB))['orbis/agent-run']).toMatchObject({
-      outcome: 'running',
+    expect(await propsOf(owner, runB)).toMatchObject({
+      'orbis/run_outcome': 'running',
     });
-    expect((await aspectsOf(owner, ticket.id))['orbis/task']).toMatchObject({
-      status: 'in_progress',
+    expect(await propsOf(owner, ticket.id)).toMatchObject({
+      'orbis/task_status': 'in_progress',
     });
 
     // …и живой прогон закрывается штатно, а не зависает до собственного подметания
@@ -321,11 +321,11 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
       staleAfterMs: RUN_STALE_AFTER_MS,
     });
     expect(swept).toBe(1);
-    expect((await aspectsOf(owner, runId))['orbis/agent-run']).toMatchObject({
-      outcome: 'abandoned',
+    expect(await propsOf(owner, runId)).toMatchObject({
+      'orbis/run_outcome': 'abandoned',
     });
     // Тикет не остался висеть в работе с прогоном, которого на экранах уже нет
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'planned' });
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'planned' });
   });
 
   test('очередь гранта A метёт брошенный прогон гранта B: подметание — про владельца, не про грант', async () => {
@@ -346,8 +346,8 @@ describe('sweepStaleRuns: тикет чинится только по ПОСЛЕ
     expect((r.result as MyQueueResult).swept).toBe(1);
     // Тикет гранта B в очередь гранта A не попал — метут прогоны, а видят только своё
     expect((r.result as MyQueueResult).tickets.map((t) => t.id)).not.toContain(foreign.ticketId);
-    expect((await aspectsOf(owner, foreign.runId))['orbis/agent-run']).toMatchObject({
-      outcome: 'abandoned',
+    expect(await propsOf(owner, foreign.runId)).toMatchObject({
+      'orbis/run_outcome': 'abandoned',
     });
   });
 });
@@ -383,30 +383,28 @@ describe('sweepStaleRuns: рутинный прогон закрывается �
 
     // Рутинный прогон: процесс остановлен — это ПРОВАЛ попытки бакета (её перезапустит
     // ретрай раннера), а не «брошенная работа», которую владелец пойдёт разбирать
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.outcome).toBe('failed');
-    expect(String(run.fail_note)).toContain('прогон прерван');
-    expect(String(run.fail_note)).toContain('31 мин');
-    expect(run.abandon_note).toBeUndefined();
-    expect(run.finished_at).toBe(iso(T0));
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/run_outcome']).toBe('failed');
+    expect(String(run['orbis/fail_note'])).toContain('прогон прерван');
+    expect(String(run['orbis/fail_note'])).toContain('31 мин');
+    expect(run['orbis/abandon_note']).toBeUndefined();
+    expect(run['orbis/run_finished_at']).toBe(iso(T0));
     // Пачки у этого прогона нет — патч прежний: флажок ставит только проба, нашедшая
     // открытую единицу, а не сам факт подметания рутинного прогона
-    expect(run.undecided).toBeUndefined();
+    expect(run['orbis/undecided']).toBeUndefined();
     // Сама рутина подметанием не трогается: тикетной логики у неё нет вовсе
-    expect((await aspectsOf(owner, routineId))['orbis/routine']).toMatchObject({
-      stage: 'active',
-      mode: 'propose',
+    expect(await propsOf(owner, routineId)).toMatchObject({
+      'orbis/routine_stage': 'active',
+      'orbis/routine_mode': 'propose',
     });
 
     // Грантовый прогон того же владельца — прежний исход и прежняя починка тикета
-    const ticketRunAspect = (await aspectsOf(owner, ticketRun.runId))[
-      'orbis/agent-run'
-    ] as AnyRecord;
-    expect(ticketRunAspect.outcome).toBe('abandoned');
-    expect(String(ticketRunAspect.abandon_note)).toContain('оборван');
-    expect(ticketRunAspect.fail_note).toBeUndefined();
-    expect((await aspectsOf(owner, ticketRun.ticketId))['orbis/task']).toMatchObject({
-      status: 'planned',
+    const ticketRunProps = await propsOf(owner, ticketRun.runId);
+    expect(ticketRunProps['orbis/run_outcome']).toBe('abandoned');
+    expect(String(ticketRunProps['orbis/abandon_note'])).toContain('оборван');
+    expect(ticketRunProps['orbis/fail_note']).toBeUndefined();
+    expect(await propsOf(owner, ticketRun.ticketId)).toMatchObject({
+      'orbis/task_status': 'planned',
     });
   });
 });
@@ -441,10 +439,10 @@ describe('sweepStaleRuns: пачка переживает смерть проц�
     });
     expect(swept).toBe(1);
 
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.outcome).toBe('failed');
-    expect(String(run.fail_note)).toContain('прогон прерван');
-    expect(run.undecided).toBe(true);
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/run_outcome']).toBe('failed');
+    expect(String(run['orbis/fail_note'])).toContain('прогон прерван');
+    expect(run['orbis/undecided']).toBe(true);
 
     // Единицы подметание НЕ трогает: они переживают прогон и ждут решения владельца либо
     // гашения следующим прогоном (ОЧ.8). «Подмели» значит «закрыли прогон», а не «сняли

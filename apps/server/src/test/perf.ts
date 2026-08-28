@@ -353,16 +353,26 @@ export async function seedPerfFixture(db: Db, ownerId: string): Promise<void> {
         id: perfGoalId(ownerId),
         title: 'Цель перф-фикстуры: расходы года',
         tags: ['goal'],
-        aspects: {
-          'orbis/goal': {
-            progress_source: {
-              query: 'aspect=orbis/financial, direction=expense',
-              aggregate: 'sum',
-              field: 'amount',
+        // Внутренняя форма (§А1-1) — и она же ЕДИНСТВЕННАЯ, которой цель заводится с
+        // Задачи 10b: `progress_source.query` хранится Q-AST (§А5-2/Р12), а старая карта
+        // аспектов кладёт туда неразобранный блок `{text}`, по которому расчёт честно
+        // отвечает `invalid_query`. Дерево написано руками — оно и есть форма хранения.
+        props: {
+          'orbis/progress_source': {
+            query: {
+              filter: {
+                and: [
+                  { aspect: 'orbis/financial' },
+                  { prop: 'orbis/direction', op: 'eq', value: 'expense' },
+                ],
+              },
             },
-            target_value: '1000000.00',
+            aggregate: 'sum',
+            field: 'amount',
           },
+          'orbis/target_value': '1000000.00',
         },
+        aspects: ['orbis/goal'],
       },
     },
   ]);

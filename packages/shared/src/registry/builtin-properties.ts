@@ -25,6 +25,7 @@
  */
 import type { z } from 'zod';
 import { RULE_NEAREST_ANCESTOR } from '../constants';
+import { queryAstJsonSchema } from '../query/ast-json-schema';
 import { type PropertyDefinition, propertyDefinitionSchema } from './property-type';
 import type { SelectOption } from './types';
 
@@ -67,34 +68,60 @@ const RECURRENCE_SCHEMA = {
 };
 
 /**
+ * Тело канона Q-AST без служебных ключей верхнего уровня: `$schema` (в подсхеме ajv в
+ * strict-режиме его не ждут) и `$defs` (переезжает в корень `PROGRESS_SOURCE_SCHEMA` —
+ * `$ref: '#/$defs/node'` отсчитывается от КОРНЯ компилируемой схемы, а корнем здесь
+ * становится схема свойства, а не сам канон).
+ */
+const { $schema: _AST_DIALECT, $defs: QUERY_AST_DEFS, ...QUERY_AST_BODY } = queryAstJsonSchema;
+
+/**
+ * Сохранённый запрос источника прогресса (§А5-2): ДЕРЕВО, а не текст.
+ *
+ * Вторая ветка — `{text}` — не послабление, а та самая форма, которую §А5-2 оставляет
+ * НЕРАЗОБРАННОМУ блоку («показывается с ошибкой, как сегодня»). В неё же заворачивает
+ * старый текст переходная карта (`legacy-field-map.translateLegacyValue`), а значит она
+ * доезжает до записи с каждого ещё не переведённого пути — старой карты аспектов из web и
+ * тулов (перевод — Задача 13c). Убрав её, реестр отвергал бы создание цели из UI ещё до
+ * того, как UI научится говорить деревом. Расчёт прогресса такой источник НЕ считает:
+ * `goals/progress.ts` отдаёт по нему честный `invalid_query` — конвертера старого текста
+ * не заводится (база пересевается).
+ */
+const PROGRESS_QUERY_SCHEMA = {
+  anyOf: [
+    QUERY_AST_BODY,
+    {
+      type: 'object',
+      properties: { text: { type: 'string', minLength: 1 } },
+      required: ['text'],
+      additionalProperties: false,
+    },
+  ],
+};
+
+/**
  * `goal.progress_source` — `aspects.ts:131-142`. Дискриминируемый союз, а не объект с
  * `.refine`: правило «field обязателен для sum и latest» обязано дожить до ajv, который
- * валидирует по реестру. Внутренний `query` хранится Q-AST (Р12/§А5-2), поэтому здесь он
- * объект, а не строка.
+ * валидирует по реестру. Внутренний `query` хранится Q-AST (Р12/§А5-2) — с Задачи 10b
+ * подставлен канон (`queryAstJsonSchema`), а не голое `{type:'object'}`: форму хранения
+ * принимают вместе с тем, кто её читает, и читатель (`goals/progress.ts`) переведён.
  *
- * `query` намеренно остаётся `{type:'object'}`, а НЕ подставленной `queryAstJsonSchema`.
- * Задача 8 (канон Q-AST) сузила `scope` и `ref.target`, но это поле не тронула, и вот
- * почему: подстановка сюда схемы канона — решение о ФОРМЕ ХРАНЕНИЯ `progress_source`, и
- * принимать его надо вместе с тем, кто эту форму читает. Читает её `goals/progress.ts`
- * (сегодня — строкой через `parseQuery`, `:264-282`), а переводит на Q-AST Задача 9b
- * вместе с переключением компилятора. Сузить схему раньше значило бы объявить в реестре
- * форму, которой ни один потребитель ещё не пишет и не читает.
- *
- * **Владелец сужения — Задача 9b** (при переводе `goals/progress.ts` на Q-AST);
- * `queryAstJsonSchema` для подстановки уже готова (`query/ast-json-schema.ts`).
+ * `$defs` стоит в КОРНЕ схемы свойства, потому что ajv резолвит `#/$defs/node` от корня
+ * скомпилированной схемы; схема свойства и есть тот корень (`propertyValueJsonSchema` для
+ * kind `json` отдаёт `type.schema` как есть).
  */
 const PROGRESS_SOURCE_SCHEMA = {
   anyOf: [
     {
       type: 'object',
-      properties: { query: { type: 'object' }, aggregate: { const: 'count' } },
+      properties: { query: PROGRESS_QUERY_SCHEMA, aggregate: { const: 'count' } },
       required: ['query', 'aggregate'],
       additionalProperties: false,
     },
     {
       type: 'object',
       properties: {
-        query: { type: 'object' },
+        query: PROGRESS_QUERY_SCHEMA,
         aggregate: { type: 'string', enum: ['sum', 'latest'] },
         field: { type: 'string', minLength: 1 },
       },
@@ -102,6 +129,7 @@ const PROGRESS_SOURCE_SCHEMA = {
       additionalProperties: false,
     },
   ],
+  $defs: QUERY_AST_DEFS,
 };
 
 /** `agent-run.proposal` — `aspects.ts:234-254`. */

@@ -1544,14 +1544,20 @@ describe('V1: выдача автономии рутине из чата → pen
     ...over,
   });
 
-  async function aspectsOf(id: string): Promise<Record<string, unknown>> {
+  /** Список аспектов строки (§А1-1): «право писать в граф не выдано» — это пустой список. */
+  async function aspectsOfRow(id: string): Promise<string[]> {
     const rows = await withIdentity(db, userA, (tx) =>
-      tx
-        .select({ aspectsLegacy: entities.aspectsLegacy })
-        .from(entities)
-        .where(eq(entities.id, id)),
+      tx.select({ aspects: entities.aspects }).from(entities).where(eq(entities.id, id)),
     );
-    return (rows[0]?.aspectsLegacy ?? {}) as Record<string, unknown>;
+    return rows[0]?.aspects ?? [];
+  }
+
+  /** Значения строки по id свойства (§А1-1) — что именно легло в граф. */
+  async function propsOfRow(id: string): Promise<Record<string, unknown>> {
+    const rows = await withIdentity(db, userA, (tx) =>
+      tx.select({ props: entities.props }).from(entities).where(eq(entities.id, id)),
+    );
+    return (rows[0]?.props ?? {}) as Record<string, unknown>;
   }
 
   test('attach_orbis_routine с mode act → pending_confirmation, карточка в треде, граф не тронут', async () => {
@@ -1574,7 +1580,7 @@ describe('V1: выдача автономии рутине из чата → pen
       summary: 'Автономия рутины «Утренний обзор»: режим act, инструменты: нет',
     });
     // Право писать в граф не выдано до подтверждения владельца
-    expect(await aspectsOf(target.id)).toEqual({});
+    expect(await aspectsOfRow(target.id)).toEqual([]);
     const msgs = await messagesIn(userA, threadId);
     expect(msgs.length).toBe(1);
     expect(msgs[0]?.id).toBe(r.pendingId);
@@ -1696,8 +1702,7 @@ describe('V1: выдача автономии рутине из чата → pen
       aspects: { 'orbis/routine': { mode: 'act' } },
     });
     expect(r.status).toBe('pending_confirmation');
-    const stored = (await aspectsOf(target.id))['orbis/routine'] as { mode?: string } | undefined;
-    expect(stored?.mode).toBe('propose');
+    expect((await propsOfRow(target.id))['orbis/routine_mode']).toBe('propose');
   });
 
   test('attach_orbis_routine с mode propose автономии не выдаёт → ok, аспект записан', async () => {
@@ -1708,8 +1713,7 @@ describe('V1: выдача автономии рутине из чата → pen
       data: routine(),
     });
     expect(r.status).toBe('ok');
-    const stored = (await aspectsOf(target.id))['orbis/routine'] as { mode?: string } | undefined;
-    expect(stored?.mode).toBe('propose');
+    expect((await propsOfRow(target.id))['orbis/routine_mode']).toBe('propose');
   });
 });
 
@@ -1994,7 +1998,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
   test('act с allowed_tools [entity_update]: правка ПРОГОНА (свой run: reply/outcome) → FORBIDDEN_LEVEL routine_untouchable; бухгалтерия system проходит (A-1)', async () => {
     // Рутина знает свой run_id (он в системном слое промпта) — подделать «ответ владельца»
     // или закрыть прогон она не должна ни своим, ни чужим прогоном
-    const { seedRoutine, seedRoutineRun, aspectsOf } = agentLoopHelpers(db);
+    const { propsOf, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
     const routineId = await seedRoutine(userA, {
       routine: { mode: 'act', allowed_tools: ['entity_update'] },
     });
@@ -2016,9 +2020,9 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
       aspects: { 'orbis/agent-run': { outcome: 'finished' } },
     });
     expectError(closed, 'FORBIDDEN_LEVEL');
-    const run = (await aspectsOf(userA, runId))['orbis/agent-run'];
-    expect(run?.outcome).toBe('running');
-    expect(run?.reply).toBeUndefined();
+    const run = await propsOf(userA, runId);
+    expect(run['orbis/run_outcome']).toBe('running');
+    expect(run['orbis/run_reply']).toBeUndefined();
 
     // Та же запись шага бухгалтерией (system) — как её пишет раннер — проходит.
     // Механизм `verb` (§А4-4) обязателен: `step_count` — служебное свойство прогона
@@ -2059,7 +2063,7 @@ describe('гейт режима рутины (V1.10, инварианты 4–5)
 // ---------------------------------------------------------------------------
 
 describe('объектный пре-чек рутинной мутации (D42 ОЧ.4)', () => {
-  const { routineCtx, seedRoutine, seedRoutineRun, aspectsOf } = agentLoopHelpers(db);
+  const { propsOf, routineCtx, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
   /** Субъект-рутина в act с часами сьюта (у `routineCtx` свой T0 круга исполнителя). */
   const rt = (allowed: string[], over: Partial<ToolCallCtx> = {}) =>
     routineCtx(userA, 'act', allowed, { clock: () => T0, ...over });
@@ -2132,8 +2136,8 @@ describe('объектный пре-чек рутинной мутации (D42 
     );
 
     // Ничего не записано: ни чужой режим, ни аспект на кандидате
-    expect((await aspectsOf(userA, other))['orbis/routine']?.mode).toBe('propose');
-    expect((await aspectsOf(userA, plain.id))['orbis/routine']).toBeUndefined();
+    expect((await propsOf(userA, other))['orbis/routine_mode']).toBe('propose');
+    expect(await propsOf(userA, plain.id)).toEqual({});
   });
 
   test('правка инструкции act-рутины из фона → отказ на диспатче (пере-использован actRoutineInstructionTargets)', async () => {
@@ -2147,6 +2151,27 @@ describe('объектный пре-чек рутинной мутации (D42 
       await dispatchTool(ctx, 'entity_update', { id: actRoutine, body: 'Новая инструкция' }),
       'инструкции act-рутины',
     );
+  });
+
+  // Проба расхождением колонок (§А1-1): `orbis/routine_mode: 'act'` лежит в `props`, а
+  // аспекта рутины на строке НЕТ (так выглядит запись после detach — Р9). Старая карта
+  // такое состояние не выражала: containment по ней требовал ключа аспекта. Без признака
+  // носителя правка заголовка обычной записи, когда-то бывшей act-рутиной, читалась бы
+  // как правка инструкции act-рутины и получала бы отказ на ровном месте.
+  test('значения act-рутины БЕЗ её аспекта правку не запрещают (Р9)', async () => {
+    const ghost = await seedEntity(userA, { title: 'Бывшая act-рутина', tags: [] });
+    await withIdentity(db, userA, (tx) =>
+      tx
+        .update(entities)
+        .set({ props: { 'orbis/routine_mode': 'act', 'orbis/routine_stage': 'active' } })
+        .where(eq(entities.id, ghost.id)),
+    );
+    const ctx = rt(['entity_update']);
+
+    // Запрета нет: пре-чек молчит, и вызов уходит своим обычным путём (отложка).
+    expect(await routineDeferForbidden(ctx, [], { grantsAutonomy: false }, [])).toBeNull();
+    const r = await dispatchTool(ctx, 'entity_update', { id: ghost.id, title: 'Просто заметка' });
+    expect(r.status).not.toBe('error');
   });
 
   test('связь концом в рутине или прогоне → отказ пре-чека; конец-НАЗНАЧЕНИЕ связь не запрещает', async () => {

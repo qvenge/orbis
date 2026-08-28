@@ -22,9 +22,14 @@
 //    конца, и наружу уезжают только они: агрегат считает SQL через `::numeric`, а
 //    процент клиент выводит из тех же строк точным BigInt (§3.3). Числа с плавающей
 //    точкой контракт этой функции не пересекают вовсе.
-import { type GoalAspect, goalAspectSchema } from '@orbis/shared';
-import { aspectsNamedInQueryAst, type QueryAst, resolveLegacyFieldId } from '@orbis/shared/query';
+import {
+  aspectsNamedInQueryAst,
+  type QueryAst,
+  queryAstSchema,
+  resolveLegacyFieldId,
+} from '@orbis/shared/query';
 import type { SQL } from 'drizzle-orm';
+import { z } from 'zod';
 import { decRatio } from '../budget/decimal';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
@@ -36,15 +41,15 @@ import {
   compileSumAst,
 } from '../query/compile-ast';
 import { queryContext } from '../query/context';
-import { parseQueryText, parseRegistryOf } from '../query/parse-text';
+import { parseRegistryOf } from '../query/parse-text';
 
 /**
  * Почему прогресс не посчитался. Один литерал был бы враньём разной степени:
  * пользователю нужно понимать, чинить ли ему запрос, имя поля или ждать движок.
  * - `array_field` — поле внутри JSONB-массива (`sets[].weight`): осознанное
  *   ограничение механизма целей (§12 п.6), а не поломка цели;
- * - `invalid_query` — `progress_source.query` не разобрался грамматикой §6.1 или не
- *   скомпилировался структурно (например `children_of=this` вне контекста);
+ * - `invalid_query` — `progress_source.query` хранит неразобранный блок `{text}` вместо
+ *   дерева (§А5-2) или не скомпилировался структурно (`children_of=this` вне контекста);
  * - `invalid_field` — поле агрегата не нашлось в каталоге, неоднозначно без `aspect=`
  *   или не числовое (для sum и latest набор типов один);
  * - `compute_failed` — расчёт сорвался уже ПОСЛЕ компиляции: либо запрос дошёл до БД и
@@ -83,6 +88,67 @@ export interface GoalProgress {
 }
 
 const GOAL_ASPECT = 'orbis/goal';
+const PROGRESS_SOURCE = 'orbis/progress_source';
+const TARGET_VALUE = 'orbis/target_value';
+
+/**
+ * Источник прогресса в форме СВОЙСТВ (§А1-1): `orbis/progress_source` + `orbis/target_value`.
+ *
+ * Отдельный тип, а не `GoalAspect` из старых zod-схем, потому что запрос внутри — ДЕРЕВО
+ * (§А5-2/Р12), а старая схема объявляет его строкой. Со снятием `schemas/aspects.ts`
+ * (Задача 23) второго описания этой формы не останется вовсе.
+ */
+export interface GoalSource {
+  progressSource: ProgressSource;
+  targetValue: string;
+}
+
+export type ProgressSource = z.infer<typeof progressSourceSchema>;
+
+/**
+ * Запрос источника: ДЕРЕВО канона (§А5-2/Р12) либо НЕРАЗОБРАННЫЙ блок `{text}` — та же
+ * пара веток, что стоит в json-схеме свойства `orbis/progress_source` (реестр).
+ *
+ * Вторая ветка не переживает расчёт: по ней `computeGoalProgress` отдаёт `invalid_query`,
+ * то есть цель со старым текстом показывается владельцу С ОШИБКОЙ, как и раньше, а не
+ * теряет полосу прогресса молча. Конвертера текста не заводится — база пересевается
+ * (рулинг 23.08).
+ */
+const progressQuerySchema = z.union([
+  queryAstSchema,
+  z.object({ text: z.string().min(1) }).strict(),
+]);
+
+/**
+ * Форма значения `orbis/progress_source` на ЧТЕНИИ. Дублирует json-схему реестра
+ * (`builtin-properties.ts`), и это осознанно: реестр стоит на записи, а расчёт обязан
+ * пережить строку, записанную мимо исполнителя (drift реестра, ручная правка) — fail-soft,
+ * а не исключением.
+ */
+const progressSourceSchema = z.discriminatedUnion('aggregate', [
+  z.object({ query: progressQuerySchema, aggregate: z.literal('count') }).strict(),
+  z
+    .object({
+      query: progressQuerySchema,
+      aggregate: z.enum(['sum', 'latest']),
+      field: z.string().min(1),
+    })
+    .strict(),
+]);
+
+/**
+ * Целевое число — decimal-строка строго > 0: сервер на неё делит, и ноль с минусом смысла
+ * не имеют. Паттерн — тот же, что у `positiveDecimal` старой схемы (`schemas/aspects.ts`).
+ */
+const targetValueSchema = z
+  .string()
+  .regex(/^(?!0+(\.0+)?$)\d+(\.\d+)?$/, 'строго положительная decimal-строка');
+
+/** Источник цели целиком: обе половины обязательны, как и в §А8 у аспекта `orbis/goal`. */
+const goalSourceSchema = z.object({
+  progressSource: progressSourceSchema,
+  targetValue: targetValueSchema,
+});
 
 /**
  * Счётчик уже показанных отказов — СТРОГО in-memory, и это ограничение, а не вкус.
@@ -153,7 +219,7 @@ const KEY_SEP = '\u0000';
  * `diag` кладут ТОЛЬКО там, где он стабилен при неизменной цели, — меняющийся диагноз
  * убил бы сам дедуп, ради которого всё и заведено. Разбивка по местам:
  * - `array_field` — имя поля: другого содержания у этого отказа нет;
- * - `parse` — сам запрос (текст ошибки грамматики — его функция, брать можно любой из двух);
+ * - `parse` — сам неразобранный текст: другого содержания у этого отказа нет;
  * - `compile_field`, `compile_query` — текст ошибки компилятора: он называет поле и тип,
  *   своих меняющихся значений не несёт;
  * - `aspect_schema` — сообщение zod: чем именно аспект не подошёл схеме;
@@ -208,15 +274,20 @@ export async function goalProgressFor(
   ownerId: string,
   entity: WireEntity,
 ): Promise<GoalProgress | undefined> {
-  const raw = entity.aspectsMap[GOAL_ASPECT];
-  if (raw === undefined) return undefined;
-  const goal = goalAspectSchema.safeParse(raw);
+  // Признак носителя (Р9): значения `orbis/progress_source` и `orbis/target_value`
+  // остаются в `props` и после снятия аспекта цели, а старая карта теряла их вместе с ним.
+  // Без признака полоса прогресса рисовалась бы у записи, целью быть переставшей.
+  if (!entity.aspects.includes(GOAL_ASPECT)) return undefined;
+  const goal = goalSourceSchema.safeParse({
+    progressSource: entity.props[PROGRESS_SOURCE],
+    targetValue: entity.props[TARGET_VALUE],
+  });
   if (!goal.success) {
     logFailure(
       'aspect_schema',
       goal.error.message,
       entity.id,
-      `аспект ${GOAL_ASPECT} не проходит свою же схему — прогресса не будет`,
+      `свойства аспекта ${GOAL_ASPECT} не проходят свою же форму — прогресса не будет`,
       goal.error,
     );
     return undefined;
@@ -236,10 +307,10 @@ export async function goalProgressFor(
 export async function computeGoalProgress(
   tx: Tx,
   ctx: CompileCtx,
-  goal: GoalAspect,
+  goal: GoalSource,
 ): Promise<GoalProgress> {
-  const target = goal.target_value;
-  const src = goal.progress_source;
+  const target = goal.targetValue;
+  const src = goal.progressSource;
   // Сущность-хозяин query-блока: у `CompileCtx` поле НЕОБЯЗАТЕЛЬНОЕ («контекста нет»), а
   // журналу нужен один вид отсутствия — иначе строка лога отличалась бы от вызывающего.
   const goalId = ctx.thisEntityId ?? null;
@@ -265,22 +336,23 @@ export async function computeGoalProgress(
     return failed('array_field');
   }
 
-  // `progress_source.query` остаётся ТЕКСТОМ (хранение дерева — Задача 10b), поэтому он
-  // разбирается на каждом чтении цели — той же единственной точкой, что и запросы тулов:
-  // цель, написанная старой формой, обязана читаться ровно так же, как смарт-лист.
-  let ast: QueryAst;
-  try {
-    ast = parseQueryText(src.query, ctx);
-  } catch (e) {
-    if (!(e instanceof ExecError)) throw e;
+  // `progress_source.query` ХРАНИТСЯ деревом (§А5-2/Р12): разбора текста здесь больше нет
+  // вовсе. Осталась одна ветка — неразобранный блок `{text}`: так выглядит цель, чей
+  // источник записан старой формой (переходная карта заворачивает текст именно в неё).
+  // Считать по нему нечего, и молчать нельзя — владельцу нужен тот же `invalid_query`,
+  // который он видел до реформы на непонятном запросе.
+  if ('text' in src.query) {
+    const text = src.query.text;
     logFailure(
       'parse',
-      src.query,
+      text,
       goalId,
-      `отказ invalid_query: запрос '${src.query}' не разобрался грамматикой §6.1 — ${e.message}`,
+      `отказ invalid_query: источник цели хранит неразобранный запрос '${text}', ` +
+        'а не дерево (§А5-2) — конвертера старого текста нет, источник переписывается заново',
     );
     return failed('invalid_query');
   }
+  const ast: QueryAst = src.query;
 
   // Имя поля агрегата резолвится ДО компиляции и своим ярлыком: у компилятора канона на
   // руках был бы только id, и «нет такого свойства» стало бы неотличимо от неизвестного id
@@ -323,7 +395,7 @@ export async function computeGoalProgress(
       'compile_query',
       e.message,
       goalId,
-      `отказ invalid_query: запрос '${src.query}' не скомпилировался — ${e.message}`,
+      `отказ invalid_query: запрос ${JSON.stringify(src.query)} не скомпилировался — ${e.message}`,
     );
     return failed('invalid_query');
   }

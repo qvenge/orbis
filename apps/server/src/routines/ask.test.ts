@@ -21,7 +21,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const owner = freshUserId();
-const { aspectsOf, routineCtx, seedRoutine, seedRoutineRun, workerGrant, worker } =
+const { propsOf, routineCtx, seedRoutine, seedRoutineRun, worker, workerGrant } =
   agentLoopHelpers(db);
 
 beforeAll(async () => {
@@ -65,7 +65,7 @@ async function pendingsIn(threadId: string) {
 }
 
 async function outcomeOf(runId: string): Promise<unknown> {
-  return (await aspectsOf(owner, runId))['orbis/agent-run']?.outcome;
+  return (await propsOf(owner, runId))['orbis/run_outcome'];
 }
 
 function expectError(r: Awaited<ReturnType<typeof dispatchTool>>, code: string): void {

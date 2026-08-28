@@ -25,17 +25,16 @@ requireEnv();
 
 const { db, client } = appDb();
 const {
-  seedEntity,
-  link,
-  aspectsOf,
-  propsOf,
-  childrenOf,
   actionsOf,
-  workerGrant,
-  worker,
+  childrenOf,
+  link,
+  propsOf,
   routineCtx,
+  seedEntity,
   seedRoutine,
   seedRoutineRun,
+  worker,
+  workerGrant,
 } = agentLoopHelpers(db);
 
 function okResult<T>(r: Awaited<ReturnType<typeof dispatchTool>>): T {
@@ -216,23 +215,23 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     expect(c.history).toEqual([]);
     expect(c.replayed).toBe(false);
 
-    const ticketAspects = await aspectsOf(owner, ticketId);
-    expect((ticketAspects['orbis/task'] as { status?: string }).status).toBe('in_progress');
+    const ticketProps = await propsOf(owner, ticketId);
+    expect(ticketProps['orbis/task_status']).toBe('in_progress');
 
-    const runAspects = await aspectsOf(owner, c.run_id);
-    expect(runAspects['orbis/agent-run']).toMatchObject({
-      grant_id: grantId,
-      outcome: 'running',
-      step_count: 0,
-      started_at: iso(T0),
-      last_step_at: iso(T0),
-      steps: [],
+    const runProps = await propsOf(owner, c.run_id);
+    expect(runProps).toMatchObject({
+      'orbis/grant': grantId,
+      'orbis/run_outcome': 'running',
+      'orbis/step_count': 0,
+      'orbis/run_started_at': iso(T0),
+      'orbis/last_step_at': iso(T0),
+      'orbis/run_steps': [],
     });
     // §А8 УДАЛЯЕТ денормализацию проекта на прогон: свойства `project_id` в реестре нет,
     // его заменяют вычисляемые `orbis/parent_project`/`orbis/root_project` (правило
     // `nearest_ancestor`). Захват его больше не пишет — иначе получил бы
     // `UNKNOWN_PROPERTY` и не состоялся бы вовсе.
-    expect(runAspects['orbis/agent-run']).not.toHaveProperty('project_id');
+    expect(runProps).not.toHaveProperty('orbis/project_id');
 
     // НОВАЯ правда строки (§А1-1) на боевом пути глагола: значения лежат плоско по id
     // свойства, а не парой «аспект + поле». Читается КОЛОНКА `props`, а не перевод старой
@@ -313,8 +312,8 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
       expect(await childrenOf(owner, id)).toHaveLength(0);
     }
     // Статусы не сдвинулись
-    expect((await aspectsOf(owner, waiting))['orbis/task']).toMatchObject({ status: 'waiting' });
-    expect((await aspectsOf(owner, done))['orbis/task']).toMatchObject({ status: 'done' });
+    expect(await propsOf(owner, waiting)).toMatchObject({ 'orbis/task_status': 'waiting' });
+    expect(await propsOf(owner, done)).toMatchObject({ 'orbis/task_status': 'done' });
   });
 
   test('чужой тикет (RLS) → NOT_FOUND', async () => {
@@ -373,7 +372,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     expect(errorCode(r)).toBe('CONFLICT');
     // Второй тикет не тронут: replay ничего не применял, а мы ничего не отдали
     expect(await childrenOf(owner, second)).toHaveLength(0);
-    expect((await aspectsOf(owner, second))['orbis/task']).toMatchObject({ status: 'planned' });
+    expect(await propsOf(owner, second)).toMatchObject({ 'orbis/task_status': 'planned' });
     expect(await childrenOf(owner, first)).toEqual([c1.run_id]);
   });
 
@@ -423,7 +422,7 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     });
     expect(errorCode(r)).toBe('CONFLICT');
     expect(await childrenOf(owner, ticketId)).toHaveLength(0);
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'planned' });
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'planned' });
   });
 
   test('orbis_claim_task тикета с историей: history содержит прошлый прогон с reply', async () => {
@@ -569,12 +568,12 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     );
     expect(second.step_count).toBe(2);
 
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.outcome).toBe('running');
-    expect(run.step_count).toBe(2);
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/run_outcome']).toBe('running');
+    expect(run['orbis/step_count']).toBe(2);
     // Отметка живости растёт с шагами — по ней подметание отличает работу от обрыва (С6)
-    expect(run.last_step_at).toBe(iso(T2));
-    expect(run.steps).toEqual([
+    expect(run['orbis/last_step_at']).toBe(iso(T2));
+    expect(run['orbis/run_steps']).toEqual([
       {
         seq: 1,
         at: iso(T1),
@@ -619,9 +618,9 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
       }),
     );
     expect(b).toEqual(a);
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.step_count).toBe(1);
-    expect(run.steps).toHaveLength(1);
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/step_count']).toBe(1);
+    expect(run['orbis/run_steps']).toHaveLength(1);
   });
 
   test('гонка шагов: два одновременных orbis_run_step на один прогон — оба ok, step_count 2, оба шага на месте (серверный ретрай CAS по step_count)', async () => {
@@ -634,9 +633,9 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
       ]);
       expect([a.status, b.status]).toEqual(['ok', 'ok']);
 
-      const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-      expect(run.step_count).toBe(2);
-      const steps = run.steps as Array<{ seq: number; summary: string }>;
+      const run = (await propsOf(owner, runId)) as AnyRecord;
+      expect(run['orbis/step_count']).toBe(2);
+      const steps = run['orbis/run_steps'] as Array<{ seq: number; summary: string }>;
       expect(steps.map((s) => s.seq)).toEqual([1, 2]);
       expect(new Set(steps.map((s) => s.summary))).toEqual(new Set(['шаг A', 'шаг B']));
     }
@@ -656,9 +655,9 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
       );
       expect(results.map((r) => r.status)).toEqual(['ok', 'ok', 'ok', 'ok']);
 
-      const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-      expect(run.step_count).toBe(4);
-      const steps = run.steps as Array<{ seq: number; summary: string }>;
+      const run = (await propsOf(owner, runId)) as AnyRecord;
+      expect(run['orbis/step_count']).toBe(4);
+      const steps = run['orbis/run_steps'] as Array<{ seq: number; summary: string }>;
       expect(steps.map((s) => s.seq)).toEqual([1, 2, 3, 4]);
       expect(new Set(steps.map((s) => s.summary))).toEqual(new Set(summaries));
     }
@@ -684,22 +683,26 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     expect(c.ticket_id).toBe(ticketId);
     expect(c.ticket_status).toBe('waiting');
 
-    const task = (await aspectsOf(owner, ticketId))['orbis/task'] as AnyRecord;
-    expect(task.status).toBe('waiting');
-    expect(task.waiting_for).toBe(question);
+    const task = (await propsOf(owner, ticketId)) as AnyRecord;
+    expect(task['orbis/task_status']).toBe('waiting');
+    expect(task['orbis/waiting_for']).toBe(question);
 
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.outcome).toBe('checkpoint');
-    expect(run.finished_at).toBe(iso(T2));
-    expect(run.last_step_at).toBe(iso(T2));
-    expect(run.checkpoint).toEqual({ question, asked_at: iso(T2) });
-    expect(run.usage).toEqual({ input_tokens: 100, output_tokens: 20, cost_usd: 0.01 });
-    expect(run.session_url).toBe('https://agent.example/session/1');
-    expect(run.step_count).toBe(1); // чекпойнт шагов не дописывает
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/run_outcome']).toBe('checkpoint');
+    expect(run['orbis/run_finished_at']).toBe(iso(T2));
+    expect(run['orbis/last_step_at']).toBe(iso(T2));
+    expect(run['orbis/run_checkpoint']).toEqual({ question, asked_at: iso(T2) });
+    expect(run['orbis/run_usage']).toEqual({
+      input_tokens: 100,
+      output_tokens: 20,
+      cost_usd: 0.01,
+    });
+    expect(run['orbis/session_url']).toBe('https://agent.example/session/1');
+    expect(run['orbis/step_count']).toBe(1); // чекпойнт шагов не дописывает
     // Грантовый чекпойнт патч не менял и после D42: единиц пачки у внешнего исполнителя не
     // бывает (`orbis_ask` ему закрыт гейтом ОЧ.12), и флажок `undecided` на его прогоне
     // означал бы нерешённое, которого нет и разбирать которое владельцу негде
-    expect(run.undecided).toBeUndefined();
+    expect(run['orbis/undecided']).toBeUndefined();
 
     // Прогон и тикет меняются ОДНИМ action'ом: откат вернёт их вместе
     const action = (await actionsOf(owner)).find((a) => a.id === c.action_id);
@@ -722,16 +725,16 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     expect(f.ticket_id).toBe(ticketId);
     expect(f.ticket_status).toBe('waiting');
 
-    const task = (await aspectsOf(owner, ticketId))['orbis/task'] as AnyRecord;
-    expect(task.status).toBe('waiting');
-    expect(task.waiting_for).toBe(report);
-    expect(task.completed_at).toBeUndefined();
+    const task = (await propsOf(owner, ticketId)) as AnyRecord;
+    expect(task['orbis/task_status']).toBe('waiting');
+    expect(task['orbis/waiting_for']).toBe(report);
+    expect(task['orbis/completed_at']).toBeUndefined();
 
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.outcome).toBe('finished');
-    expect(run.report).toBe(report);
-    expect(run.finished_at).toBe(iso(T2));
-    expect(run.last_step_at).toBe(iso(T2));
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/run_outcome']).toBe('finished');
+    expect(run['orbis/run_report']).toBe(report);
+    expect(run['orbis/run_finished_at']).toBe(iso(T2));
+    expect(run['orbis/last_step_at']).toBe(iso(T2));
 
     // may_close=false, выставленный явно, ничем не отличается от отсутствия поля
     const denied = await claimed('Право закрытия отозвано явно', false);
@@ -742,8 +745,8 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
       }),
     );
     expect(d.ticket_status).toBe('waiting');
-    expect((await aspectsOf(owner, denied.ticketId))['orbis/task']).toMatchObject({
-      status: 'waiting',
+    expect(await propsOf(owner, denied.ticketId)).toMatchObject({
+      'orbis/task_status': 'waiting',
     });
   });
 
@@ -760,15 +763,46 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     );
     expect(f.ticket_status).toBe('done');
 
-    const task = (await aspectsOf(owner, ticketId))['orbis/task'] as AnyRecord;
-    expect(task.status).toBe('done');
+    const task = (await propsOf(owner, ticketId)) as AnyRecord;
+    expect(task['orbis/task_status']).toBe('done');
     // completed_at ставит сам executor (§3.2) — глагол его не подставляет
-    expect(task.completed_at).toBe(iso(T2));
-    expect(task.waiting_for).toBeUndefined();
+    expect(task['orbis/completed_at']).toBe(iso(T2));
+    expect(task['orbis/waiting_for']).toBeUndefined();
 
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.outcome).toBe('finished');
-    expect(run.report).toBe('Готово, тикет можно закрывать.');
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/run_outcome']).toBe('finished');
+    expect(run['orbis/run_report']).toBe('Готово, тикет можно закрывать.');
+  });
+
+  // Проба расхождением колонок (§А1-1): аспект НАЗНАЧЕНИЯ снят, `orbis/may_close: true` в
+  // `props` остался (Р9 — detach значений не трогает). Старая карта теряла право закрытия
+  // вместе с аспектом; без признака носителя агент закрывал бы тикет `done` по праву,
+  // которое владелец уже снял. Предусловия по `orbis/executor`/`orbis/grant` снятие
+  // переживают, поэтому сам батч проходит — различает случай только признак.
+  test('снятый аспект назначения снимает и право закрытия, хотя may_close остался в props (Р9)', async () => {
+    const { ticketId, runId } = await claimed('Работа с отозванным правом', true);
+    const r = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: ticketId, aspects: { detach: ['orbis/assignment'] } },
+        },
+      ],
+    });
+    if (!r.ok) throw new Error(`аспект не снят: ${r.error.code} ${r.error.message}`);
+    expect((await propsOf(owner, ticketId))['orbis/may_close']).toBe(true);
+
+    const f = okResult<FinishResult>(
+      await dispatchTool(worker(owner, grantId, { clock: () => T2 }), 'orbis_finish', {
+        run_id: runId,
+        report: 'Готово, проверь.',
+      }),
+    );
+    expect(f.ticket_status).toBe('waiting');
+    expect((await propsOf(owner, ticketId))['orbis/task_status']).toBe('waiting');
   });
 
   test('повтор orbis_finish с тем же id — replay: тот же ответ, вторая работа не делалась (§7.8, С7)', async () => {
@@ -789,10 +823,10 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     // Ровно один action на оба вызова — второй раз ничего не применялось
     expect((await actionsOf(owner)).filter((x) => x.id === callId)).toHaveLength(1);
 
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.outcome).toBe('finished');
-    expect(run.finished_at).toBe(iso(T2));
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'waiting' });
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/run_outcome']).toBe('finished');
+    expect(run['orbis/run_finished_at']).toBe(iso(T2));
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'waiting' });
   });
 
   test('повтор orbis_checkpoint с тем же id — replay: тот же ответ, второй вопрос не задан', async () => {
@@ -809,9 +843,9 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     expect(b).toEqual(a);
     expect(b.ticket_status).toBe('waiting');
     expect((await actionsOf(owner)).filter((x) => x.id === callId)).toHaveLength(1);
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({
-      status: 'waiting',
-      waiting_for: question,
+    expect(await propsOf(owner, ticketId)).toMatchObject({
+      'orbis/task_status': 'waiting',
+      'orbis/waiting_for': question,
     });
   });
 
@@ -839,9 +873,9 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
       }),
     );
     expect(b).toEqual(a);
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.step_count).toBe(1);
-    expect(run.outcome).toBe('finished');
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/step_count']).toBe(1);
+    expect(run['orbis/run_outcome']).toBe('finished');
   });
 
   test('терминальность (инвариант 5): после checkpoint, finish и подметания orbis_run_step и orbis_finish → CONFLICT со ссылкой на исход', async () => {
@@ -866,10 +900,10 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     );
     expect(finishAfterCheckpoint.code).toBe('CONFLICT');
     expect((finishAfterCheckpoint.details as AnyRecord).outcome).toBe('checkpoint');
-    const cpRun = (await aspectsOf(owner, cp.runId))['orbis/agent-run'] as AnyRecord;
-    expect(cpRun.outcome).toBe('checkpoint');
-    expect(cpRun.step_count).toBe(0);
-    expect(cpRun.report).toBeUndefined();
+    const cpRun = (await propsOf(owner, cp.runId)) as AnyRecord;
+    expect(cpRun['orbis/run_outcome']).toBe('checkpoint');
+    expect(cpRun['orbis/step_count']).toBe(0);
+    expect(cpRun['orbis/run_report']).toBeUndefined();
 
     const fin = await claimed('Терминальность итога');
     await dispatchTool(worker(owner, grantId, { clock: () => T1 }), 'orbis_finish', {
@@ -957,10 +991,10 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
 
     // Batch откатился целиком: ни исхода прогона, ни отчёта — иначе прогон был бы
     // терминален, а тикет об этом не знал
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.outcome).toBe('running');
-    expect(run.report).toBeUndefined();
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'planned' });
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/run_outcome']).toBe('running');
+    expect(run['orbis/run_report']).toBeUndefined();
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'planned' });
   });
 
   test('владелец переназначил тикет другому гранту между захватом и итогом → orbis_finish CONFLICT, тикет и прогон не тронуты', async () => {
@@ -982,15 +1016,15 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     expect(e.code).toBe('CONFLICT');
 
     // Batch откатился целиком: тикет остался в работе и с чужим назначением, прогон — running
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({
-      status: 'in_progress',
+    expect(await propsOf(owner, ticketId)).toMatchObject({
+      'orbis/task_status': 'in_progress',
     });
-    expect((await aspectsOf(owner, ticketId))['orbis/assignment']).toMatchObject({
-      grant_id: otherGrantId,
+    expect(await propsOf(owner, ticketId)).toMatchObject({
+      'orbis/grant': otherGrantId,
     });
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.outcome).toBe('running');
-    expect(run.report).toBeUndefined();
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/run_outcome']).toBe('running');
+    expect(run['orbis/run_report']).toBeUndefined();
   });
 
   test('архивированный тикет: orbis_claim_task → NOT_FOUND, прогон не создан', async () => {
@@ -1003,7 +1037,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
       ),
     ).toBe('NOT_FOUND');
     expect(await childrenOf(owner, ticketId)).toHaveLength(0);
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'planned' });
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'planned' });
   });
 
   test('архивированный прогон: orbis_run_step → NOT_FOUND (для глаголов прогона больше нет)', async () => {
@@ -1018,7 +1052,7 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
         }),
       ),
     ).toBe('NOT_FOUND');
-    expect((await aspectsOf(owner, runId))['orbis/agent-run']).toMatchObject({ step_count: 0 });
+    expect(await propsOf(owner, runId)).toMatchObject({ 'orbis/step_count': 0 });
   });
 
   test('прогон другого гранта: orbis_run_step/checkpoint/finish → CONFLICT «другому субъекту»; чужой владелец и несуществующий прогон → NOT_FOUND', async () => {
@@ -1035,9 +1069,9 @@ describe('Глаголы II: шаг, чекпойнт, итог (С3, С5, С8, 
     expect(
       errorCode(await dispatchTool(foreign, 'orbis_finish', { run_id: runId, report: 'готово' })),
     ).toBe('CONFLICT');
-    expect((await aspectsOf(owner, runId))['orbis/agent-run']).toMatchObject({
-      outcome: 'running',
-      step_count: 0,
+    expect(await propsOf(owner, runId)).toMatchObject({
+      'orbis/run_outcome': 'running',
+      'orbis/step_count': 0,
     });
 
     // Чужой (RLS) и несуществующий прогон неразличимы намеренно: оба NOT_FOUND
@@ -1138,17 +1172,17 @@ describe('субъект прогона — рутина (V1.5)', () => {
     expect(c.ticket_id).toBeUndefined();
     expect(c.ticket_status).toBeUndefined();
 
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.outcome).toBe('checkpoint');
-    expect(run.checkpoint).toEqual({
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/run_outcome']).toBe('checkpoint');
+    expect(run['orbis/run_checkpoint']).toEqual({
       question: 'Заводить задачу на разбор писем?',
       asked_at: iso(T0),
     });
-    expect(run.routine_id).toBe(routineId);
-    expect(run.grant_id).toBeUndefined();
+    expect(run['orbis/run_routine']).toBe(routineId);
+    expect(run['orbis/grant']).toBeUndefined();
     // Единиц пачки у этого прогона нет — флажка тоже нет (не `false`): ставит его только
     // проба, нашедшая открытое, а «прогон без пачки» и «пачка разобрана» — разные события
-    expect(run.undecided).toBeUndefined();
+    expect(run['orbis/undecided']).toBeUndefined();
 
     // Бухгалтерия прогона (Р-7): актор — внутренний AI, источник — system, прогон адресован
     const action = (await actionsOf(owner)).find((a) => a.id === c.action_id);
@@ -1174,10 +1208,10 @@ describe('субъект прогона — рутина (V1.5)', () => {
       await runAgentVerb(ctx, 'orbis_run_step', { run_id: runId, summary: 'Собрал предложение' }),
     );
     expect(second.step_count).toBe(2);
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.step_count).toBe(2);
-    expect((run.steps as AnyRecord[]).map((s) => s.seq)).toEqual([1, 2]);
-    expect(run.last_step_at).toBe(iso(T1));
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/step_count']).toBe(2);
+    expect((run['orbis/run_steps'] as AnyRecord[]).map((s) => s.seq)).toEqual([1, 2]);
+    expect(run['orbis/last_step_at']).toBe(iso(T1));
 
     // Чужой субъект — не «не найдено», а конфликт: прогон есть, но он не этой рутины
     const otherId = await seedRoutine(owner, { title: 'Соседняя рутина' });
@@ -1189,7 +1223,7 @@ describe('субъект прогона — рутина (V1.5)', () => {
     );
     expect(e.code).toBe('CONFLICT');
     expect(e.message).toContain('другому субъекту');
-    expect(((await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord).step_count).toBe(2);
+    expect((await propsOf(owner, runId))['orbis/step_count']).toBe(2);
 
     // Модели тот же глагол закрыт — даже вписанный владельцем в allowed_tools (V1.5)
     const denied = errorOf(
@@ -1199,7 +1233,7 @@ describe('субъект прогона — рутина (V1.5)', () => {
       }),
     );
     expect(denied.code).toBe('FORBIDDEN_LEVEL');
-    expect(((await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord).step_count).toBe(2);
+    expect((await propsOf(owner, runId))['orbis/step_count']).toBe(2);
   });
 
   test('closeRoutineRun: finished с отчётом и failed с fail_note; повтор с тем же id — replay', async () => {
@@ -1213,10 +1247,10 @@ describe('субъект прогона — рутина (V1.5)', () => {
       report: 'Предложение отправлено владельцу',
     });
     expect(fin.status).toBe('ok');
-    const finRun = (await aspectsOf(owner, good.runId))['orbis/agent-run'] as AnyRecord;
-    expect(finRun.outcome).toBe('finished');
-    expect(finRun.report).toBe('Предложение отправлено владельцу');
-    expect(finRun.finished_at).toBe(iso(T0));
+    const finRun = (await propsOf(owner, good.runId)) as AnyRecord;
+    expect(finRun['orbis/run_outcome']).toBe('finished');
+    expect(finRun['orbis/run_report']).toBe('Предложение отправлено владельцу');
+    expect(finRun['orbis/run_finished_at']).toBe(iso(T0));
 
     const callId = newId();
     const failed = okResult<FinishResult>(
@@ -1227,10 +1261,10 @@ describe('субъект прогона — рутина (V1.5)', () => {
         id: callId,
       }),
     );
-    const failedRun = (await aspectsOf(owner, bad.runId))['orbis/agent-run'] as AnyRecord;
-    expect(failedRun.outcome).toBe('failed');
-    expect(failedRun.fail_note).toBe('модель вернула отказ на третьем шаге');
-    expect(failedRun.abandon_note).toBeUndefined();
+    const failedRun = (await propsOf(owner, bad.runId)) as AnyRecord;
+    expect(failedRun['orbis/run_outcome']).toBe('failed');
+    expect(failedRun['orbis/fail_note']).toBe('модель вернула отказ на третьем шаге');
+    expect(failedRun['orbis/abandon_note']).toBeUndefined();
 
     // Повтор ТОГО ЖЕ вызова (§7.8) отдаёт сохранённый ответ, а не второй action
     const replay = okResult<FinishResult>(
@@ -1260,9 +1294,9 @@ describe('субъект прогона — рутина (V1.5)', () => {
         report: 'Разобрал день, один вопрос оставил владельцу.',
       }),
     );
-    const openRun = (await aspectsOf(owner, open.runId))['orbis/agent-run'] as AnyRecord;
-    expect(openRun.outcome).toBe('finished');
-    expect(openRun.undecided).toBe(true);
+    const openRun = (await propsOf(owner, open.runId)) as AnyRecord;
+    expect(openRun['orbis/run_outcome']).toBe('finished');
+    expect(openRun['orbis/undecided']).toBe(true);
     // Ровно один action на прогон — закрывающий: бухгалтерской дозаписи флажка следом нет
     expect(
       (await actionsOf(owner)).filter((a) => a.run_id === open.runId).map((a) => a.id),
@@ -1288,9 +1322,9 @@ describe('субъект прогона — рутина (V1.5)', () => {
         })
       ).status,
     ).toBe('ok');
-    const decidedRun = (await aspectsOf(owner, decided.runId))['orbis/agent-run'] as AnyRecord;
-    expect(decidedRun.outcome).toBe('finished');
-    expect(decidedRun.undecided).toBeUndefined();
+    const decidedRun = (await propsOf(owner, decided.runId)) as AnyRecord;
+    expect(decidedRun['orbis/run_outcome']).toBe('finished');
+    expect(decidedRun['orbis/undecided']).toBeUndefined();
   });
 
   test('orbis_checkpoint рутинного прогона с открытой единицей: терминальный вопрос И пачка сосуществуют — {outcome:checkpoint, undecided:true} одним патчем (ОЧ.6, приёмка 9)', async () => {
@@ -1309,10 +1343,10 @@ describe('субъект прогона — рутина (V1.5)', () => {
         question,
       }),
     );
-    const run = (await aspectsOf(owner, runId))['orbis/agent-run'] as AnyRecord;
-    expect(run.outcome).toBe('checkpoint');
-    expect(run.checkpoint).toEqual({ question, asked_at: iso(T0) });
-    expect(run.undecided).toBe(true);
+    const run = (await propsOf(owner, runId)) as AnyRecord;
+    expect(run['orbis/run_outcome']).toBe('checkpoint');
+    expect(run['orbis/run_checkpoint']).toEqual({ question, asked_at: iso(T0) });
+    expect(run['orbis/undecided']).toBe(true);
     // Одним action'ом и прежним актором — те же два довода, что у closeRoutineRun выше
     expect((await actionsOf(owner)).filter((a) => a.run_id === runId).map((a) => a.id)).toEqual([
       c.action_id,
@@ -1373,12 +1407,12 @@ describe('субъект прогона — рутина (V1.5)', () => {
     );
     expect(fin.ticket_id).toBe(ticket.id);
     expect(fin.ticket_status).toBe('waiting');
-    const run = (await aspectsOf(grantOwner, claim.run_id))['orbis/agent-run'] as AnyRecord;
-    expect(run.grant_id).toBe(grantId);
-    expect(run.routine_id).toBeUndefined();
-    expect((await aspectsOf(grantOwner, ticket.id))['orbis/task']).toMatchObject({
-      status: 'waiting',
-      waiting_for: 'Готово, проверь',
+    const run = (await propsOf(grantOwner, claim.run_id)) as AnyRecord;
+    expect(run['orbis/grant']).toBe(grantId);
+    expect(run['orbis/run_routine']).toBeUndefined();
+    expect(await propsOf(grantOwner, ticket.id)).toMatchObject({
+      'orbis/task_status': 'waiting',
+      'orbis/waiting_for': 'Готово, проверь',
     });
   });
 });

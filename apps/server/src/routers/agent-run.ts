@@ -77,10 +77,12 @@ export const agentRunRouter = router({
               ticketId: input.ticketId,
             });
           }
-          if (ticket.aspectsLegacy['orbis/task']?.status !== 'waiting') {
+          // Признак носителя стоит в SQL `ticketOfRun` (`'orbis/task' = ANY(e.aspects)`),
+          // поэтому статус читается прямо из свойств строки.
+          if (ticket.props['orbis/task_status'] !== 'waiting') {
             throw new ExecError('CONFLICT', 'тикет не ждёт ответа — отвечать не на что', {
               ticketId: input.ticketId,
-              status: ticket.aspectsLegacy['orbis/task']?.status,
+              status: ticket.props['orbis/task_status'],
             });
           }
           // Отвечают ПОСЛЕДНЕМУ прогону тикета. Все прошлые прогоны терминальны, и
@@ -96,7 +98,7 @@ export const agentRunRouter = router({
               lastRunId: runs.at(-1)?.id,
             });
           }
-          return run.run.outcome;
+          return run.props['orbis/run_outcome'];
         });
         // Открытый ВОПРОС ответ закрывает: исход `checkpoint` → `answered` (V1, D38) — иначе
         // отвеченный прогон вечно сидел бы в блоке «Ждут ответа» списка «Рутины» и в его
@@ -137,11 +139,9 @@ export const agentRunRouter = router({
                       in: answersQuestion ? ['checkpoint'] : ['finished', 'abandoned'],
                     },
                   ],
-                  aspects: {
-                    'orbis/agent-run': {
-                      reply: { text: input.answer, at: new Date().toISOString() },
-                      ...(answersQuestion && { outcome: 'answered' }),
-                    },
+                  props: {
+                    'orbis/run_reply': { text: input.answer, at: new Date().toISOString() },
+                    ...(answersQuestion && { 'orbis/run_outcome': 'answered' }),
                   },
                 },
               },
@@ -153,8 +153,10 @@ export const agentRunRouter = router({
                   // второй экран владельца, и второй ответ поверх первого затёр бы его
                   precondition: [{ property: 'orbis/task_status', in: ['waiting'] }],
                   // Уходя из waiting — снимаем waiting_for (конвенция среза, как в
-                  // подметании и итоге): вопрос рядом с `planned` читался бы как открытый
-                  aspects: { 'orbis/task': { status: 'planned', waiting_for: null } },
+                  // подметании и итоге): вопрос рядом с `planned` читался бы как открытый.
+                  // Снятие — ЯВНЫЙ `unset`: `null` в новой форме законное значение (§А1-1)
+                  props: { 'orbis/task_status': 'planned' },
+                  unset: ['orbis/waiting_for'],
                 },
               },
             ],

@@ -268,25 +268,27 @@ async function candidateWindow(
   to: string,
 ): Promise<Map<string, Candidate[]>> {
   const rows = (await tx.execute(sql`
-    SELECT id, title, aspects_legacy->'orbis/financial' AS fin
+    SELECT id, title, props
     FROM entities
     WHERE owner_id = ${ownerId} AND NOT archived
-      AND aspects_legacy ? 'orbis/financial'
-      AND aspects_legacy->'orbis/schedule'->'recurrence' IS NULL
-      AND aspects_legacy->'orbis/financial'->>'occurred_on' >= ${from}
-      AND aspects_legacy->'orbis/financial'->>'occurred_on' <= ${to}
-    ORDER BY aspects_legacy->'orbis/financial'->>'occurred_on', id
-  `)) as unknown as Array<{ id: string; title: string; fin: Record<string, unknown> }>;
+      AND 'orbis/financial' = ANY(aspects)
+      AND NOT ('orbis/schedule' = ANY(aspects) AND props->'orbis/recurrence' IS NOT NULL)
+      AND props->>'orbis/occurred_on' >= ${from}
+      AND props->>'orbis/occurred_on' <= ${to}
+    ORDER BY props->>'orbis/occurred_on', id
+  `)) as unknown as Array<{ id: string; title: string; props: Record<string, unknown> }>;
 
   const buckets = new Map<string, Candidate[]>();
   for (const row of rows) {
+    // Признак носителя не нужен: `'orbis/financial' = ANY(aspects)` в WHERE уже отобрал
+    // строки, где аспект приложен, — второй проверкой была бы тавтология.
     const {
-      amount,
-      direction,
-      occurred_on: occurredOn,
-      counterparty,
-      bank_txn_id: bankTxnId,
-    } = row.fin;
+      'orbis/amount': amount,
+      'orbis/direction': direction,
+      'orbis/occurred_on': occurredOn,
+      'orbis/counterparty': counterparty,
+      'orbis/bank_txn_id': bankTxnId,
+    } = row.props;
     if (
       typeof amount !== 'string' ||
       typeof direction !== 'string' ||
@@ -301,7 +303,7 @@ async function candidateWindow(
       occurredOn,
       title: row.title,
       ...(typeof counterparty === 'string' && { counterparty }),
-      // bank_txn_id аспекта → bankTxnId кандидата: даёт данные ветке «совпавший
+      // orbis/bank_txn_id → bankTxnId кандидата: даёт данные ветке «совпавший
       // bank txn id» isProbableDuplicate (§3.4.1 п.3 — независимо от текста)
       ...(typeof bankTxnId === 'string' && { bankTxnId }),
     };
@@ -319,9 +321,9 @@ async function candidateWindow(
  */
 async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCategory[]> {
   const rows = (await tx.execute(sql`
-    SELECT id, title, aspects_legacy->'orbis/category'->'aliases' AS aliases
+    SELECT id, title, props->'orbis/aliases' AS aliases
     FROM entities
-    WHERE owner_id = ${ownerId} AND NOT archived AND aspects_legacy ? 'orbis/category'
+    WHERE owner_id = ${ownerId} AND NOT archived AND 'orbis/category' = ANY(aspects)
     ORDER BY id
   `)) as unknown as Array<{ id: string; title: string; aliases: unknown }>;
   return rows.map((r) => ({
@@ -341,19 +343,23 @@ async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCate
  * правки едет вместе с заголовком (иначе конфликт двух правил на один паттерн импорт
  * разрешал бы иначе, чем быстрый ввод).
  *
- * Первый jsonb-предикат — containment `aspects_legacy ? 'orbis/memory'`: под него подходит
- * entities_aspects_gin, тогда как один `->>`-фильтр индексом не покрывается и каждый
- * import.review сканировал бы ВСЕ неархивные сущности владельца (после CSV-импортов это
- * тысячи строк). Тот же приём у ai/escalation.ts (hasEquivalentRule) и llm/context.ts.
+ * Первый предикат — принадлежность аспекта списку `aspects[]`: `->>`-фильтры по `props`
+ * индексом не покрываются, и каждый import.review сканировал бы ВСЕ неархивные сущности
+ * владельца (после CSV-импортов это тысячи строк). Тот же приём у ai/escalation.ts
+ * (hasEquivalentRule) и llm/context.ts.
+ *
+ * Признак носителя обязателен ещё и по существу (Р9): `orbis/rule_scope` остаётся в
+ * `props` после снятия аспекта памяти, тогда как из старой карты значение уходило вместе
+ * с аспектом. Без него снятая с сущности «память» продолжала бы править категории импорта.
  */
 async function memoryRules(tx: Tx, ownerId: string): Promise<FastPathRule[]> {
   const rows = (await tx.execute(sql`
     SELECT title, updated_at
     FROM entities
     WHERE owner_id = ${ownerId} AND NOT archived
-      AND aspects_legacy ? 'orbis/memory'
-      AND aspects_legacy->'orbis/memory'->>'kind' = 'rule'
-      AND aspects_legacy->'orbis/memory'->>'scope' = 'orbis/financial'
+      AND 'orbis/memory' = ANY(aspects)
+      AND props->>'orbis/memory_kind' = 'rule'
+      AND props->>'orbis/rule_scope' = 'orbis/financial'
     ORDER BY id
   `)) as unknown as Array<{ title: string; updated_at: unknown }>;
   return rows.map((r) => ({ title: r.title, updatedAt: toIsoTime(r.updated_at) }));
@@ -480,7 +486,14 @@ function isWireEntity(result: unknown): result is WireEntity {
  * «Конверт-родитель» — то же множество, что у хука, инварианта и агрегатов
  * (`LEGACY_PARENT_ROLES` с источником-конвертом, интервал 7a→0017, §13.7): карточка импорта
  * обязана считать «без конверта» так же, как считает его экран бюджета, иначе владелец
- * увидит в итоге импорта одно число, а во вкладке Budget — другое.
+ * увидит в итоге импорта одно число, а во вкладке Budget — другое. С Задачи 10b признак
+ * «источник — конверт» здесь тот же, что у остальных четырёх читателей
+ * (`'orbis/budget' = ANY(p.aspects)`) — перечень расхождений держит `legacyParentRolesSql`.
+ *
+ * Признак `'orbis/financial' = ANY(e.aspects)` на ЦЕЛИ — не перестраховка: `orbis/budget`
+ * делит с `orbis/financial` свойство `orbis/finance_category` (В1 §А8), и без него в
+ * «без конверта» попал бы сам конверт, случайно оказавшийся в списке созданных импортом.
+ * Старая карта различала это адресом аспекта, `props` — нет.
  */
 async function unbudgetedOf(
   db: Db,
@@ -494,16 +507,17 @@ async function unbudgetedOf(
   );
   const rows = await withIdentity(db, ownerId, async (tx) => {
     return (await tx.execute(sql`
-      SELECT e.aspects_legacy->'orbis/financial'->>'category_ref' AS category_ref,
+      SELECT e.props->>'orbis/finance_category' AS category_ref,
              count(*)::int AS count
       FROM entities e
       WHERE e.id IN (${ids})
-        AND e.aspects_legacy->'orbis/financial'->>'category_ref' IS NOT NULL
+        AND 'orbis/financial' = ANY(e.aspects)
+        AND e.props->>'orbis/finance_category' IS NOT NULL
         AND NOT EXISTS (
           SELECT 1 FROM relations r
           JOIN entities p ON p.id = r.source_id
           WHERE r.target_id = e.id AND r.role IN (${legacyParentRolesSql()})
-            AND p.aspects_legacy ? 'orbis/budget' AND NOT p.archived
+            AND 'orbis/budget' = ANY(p.aspects) AND NOT p.archived
         )
       GROUP BY 1
       ORDER BY 1
@@ -555,7 +569,7 @@ async function assertAdoptTargets(
       sql`, `,
     );
     const rows = (await tx.execute(sql`
-      SELECT id, archived, (aspects_legacy ? 'orbis/financial') AS financial
+      SELECT id, archived, ('orbis/financial' = ANY(aspects)) AS financial
       FROM entities
       WHERE owner_id = ${ownerId} AND id IN (${ids})
     `)) as unknown as Array<{ id: string; archived: boolean; financial: boolean }>;

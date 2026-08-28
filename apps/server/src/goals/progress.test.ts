@@ -3,17 +3,20 @@
 // агрегат считает SQL под RLS-identity владельца, поэтому подделать движок нечем —
 // сущности готовятся ЧЕРЕЗ роутер (единственный путь мутаций), читается — как в бою.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { GoalAspect } from '@orbis/shared';
+import type { QueryAst } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import * as schema from '../db/schema';
 import { withIdentity } from '../db/with-identity';
+import { execute } from '../executor/executor';
+import type { CompileCtx } from '../query/compile-ast';
 import { queryContext } from '../query/context';
+import { parseQueryText } from '../query/parse-text';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
-import { computeGoalProgress, type GoalProgressUnsupported } from './progress';
+import { computeGoalProgress, type GoalProgressUnsupported, type GoalSource } from './progress';
 
 requireEnv();
 
@@ -47,12 +50,101 @@ async function createIncome(caller: Caller, title: string, amount: string, tags:
   return caller.entity.create({ input: { title, ...income(amount, tags) }, source: 'ui' });
 }
 
+/**
+ * Источник цели, каким его пишут ФИКСТУРЫ: запрос ТЕКСТОМ. Хранится он деревом
+ * (§А5-2/Р12), но сверять глазами дерево из десятка узлов невозможно, поэтому текст
+ * остаётся языком фикстуры, а разбор делает тест (`toGoalSource`), а не расчёт.
+ */
+type SourceFixture =
+  | { query: string; aggregate: 'count' }
+  | { query: string; aggregate: 'sum' | 'latest'; field: string };
+type GoalFixture = { progress_source: SourceFixture; target_value: string };
+
+/**
+ * Фикстура → источник цели в форме СВОЙСТВ (§А1-1).
+ *
+ * Неразбираемый текст НЕ роняет фикстуру, а остаётся неразобранным блоком `{text}` — ровно
+ * той формой, которую §А5-2 оставляет неразобранному запросу и в которую заворачивает
+ * старый текст переходная карта. По ней расчёт обязан ответить `invalid_query`, и тесты
+ * отказов ниже ждут именно этого.
+ */
+function toGoalSource(fx: GoalFixture, ctx: CompileCtx): GoalSource {
+  let query: QueryAst | { text: string };
+  try {
+    query = parseQueryText(fx.progress_source.query, ctx);
+  } catch {
+    query = { text: fx.progress_source.query };
+  }
+  return {
+    progressSource: { ...fx.progress_source, query } as GoalSource['progressSource'],
+    targetValue: fx.target_value,
+  };
+}
+
 /** Расчёт как в бою: под identity владельца, контекст компиляции — тот же queryContext. */
-function progressOf(user: string, goal: GoalAspect, thisEntityId: string | null = null) {
+function progressOf(user: string, goal: GoalFixture, thisEntityId: string | null = null) {
   return withIdentity(db, user, async (tx) => {
     const cctx = await queryContext(tx, user, thisEntityId);
-    return computeGoalProgress(tx, cctx, goal);
+    return computeGoalProgress(tx, cctx, toGoalSource(goal, cctx));
   });
+}
+
+/**
+ * Цель в графе — через executor НОВОЙ внутренней формой (`props` + список аспектов).
+ *
+ * Не `caller.entity.create`: контракт ТУЛА (`entityCreateInput`) знает только старую карту
+ * аспектов, а она кладёт в `orbis/progress_source` неразобранный блок `{text}` — цель
+ * получилась бы заведомо несчитаемой. Перевод тулов и web — Задача 13c; до неё цель новой
+ * формы заводится ровно так.
+ */
+async function createGoal(
+  user: string,
+  fx: GoalFixture & { title: string; tags?: string[]; unit?: string },
+): Promise<{ id: string }> {
+  const source = await withIdentity(db, user, async (tx) =>
+    toGoalSource(fx, await queryContext(tx, user, null)),
+  );
+  const r = await execute(db, {
+    actorUserId: user,
+    actorKind: 'owner',
+    source: 'ui',
+    operations: [
+      {
+        tool: 'entity_create',
+        input: {
+          title: fx.title,
+          tags: fx.tags ?? [],
+          props: {
+            'orbis/progress_source': source.progressSource,
+            'orbis/target_value': source.targetValue,
+            ...(fx.unit !== undefined && { 'orbis/unit': fx.unit }),
+          },
+          aspects: ['orbis/goal'],
+        },
+      },
+    ],
+  });
+  if (!r.ok) throw new Error(`цель не создана: ${r.error.code} ${r.error.message}`);
+  return r.results[0] as { id: string };
+}
+
+/** Смена источника у существующей цели — тем же путём и той же формой, что и создание. */
+async function updateGoalSource(user: string, id: string, fx: SourceFixture): Promise<void> {
+  const source = await withIdentity(db, user, async (tx) =>
+    toGoalSource({ progress_source: fx, target_value: '100' }, await queryContext(tx, user, null)),
+  );
+  const r = await execute(db, {
+    actorUserId: user,
+    actorKind: 'owner',
+    source: 'ui',
+    operations: [
+      {
+        tool: 'entity_update',
+        input: { id, props: { 'orbis/progress_source': source.progressSource } },
+      },
+    ],
+  });
+  if (!r.ok) throw new Error(`источник не обновлён: ${r.error.code} ${r.error.message}`);
 }
 
 /**
@@ -155,7 +247,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
     // из created_at или из физического порядка строк, ответ был бы 80.5.
     await caller.entity.update({ id: first.id, title: 'Взнос 1 (уточнён)' });
 
-    const goal: GoalAspect = {
+    const goal: GoalFixture = {
       progress_source: {
         query: 'aspect=orbis/financial, tags=loan',
         aggregate: 'latest',
@@ -172,7 +264,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
     const empty = await progressOf(user, {
       ...goal,
       progress_source: { ...goal.progress_source, query: 'aspect=orbis/financial, tags=nothing' },
-    } as GoalAspect);
+    } as GoalFixture);
     expect(empty.current).toBe('0');
     expect(empty.unsupported).toBeUndefined();
   });
@@ -212,6 +304,46 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
     expect(p.current).toBe('150000.00');
     expect(p.target).toBe('100000.00');
     expect(p.unsupported).toBeUndefined();
+  });
+});
+
+describe('computeGoalProgress: источник хранится ДЕРЕВОМ (§А5-2/Р12)', () => {
+  test('дерево-литерал считается, а ЗАКОННЫЙ текст того же запроса — нет: конвертера старого текста нет', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await createIncome(caller, 'Отложил', '100.00', ['savings']);
+
+    // Дерево написано РУКАМИ, мимо парсера: иначе тест доказывал бы совпадение парсера с
+    // самим собой, а не то, что расчёт принимает канон.
+    const ast: QueryAst = {
+      filter: {
+        and: [{ aspect: 'orbis/financial' }, { tag: 'savings' }],
+      },
+    };
+    const byAst = await withIdentity(db, user, async (tx) =>
+      computeGoalProgress(tx, await queryContext(tx, user, null), {
+        progressSource: { query: ast, aggregate: 'sum', field: 'amount' },
+        targetValue: '1000.00',
+      }),
+    );
+    expect(byAst.current).toBe('100.00');
+    expect(byAst.unsupported).toBeUndefined();
+
+    // Та же выборка, но записанная ТЕКСТОМ грамматики — законным, разбираемым текстом.
+    // Расчёт его не разбирает: неразобранный блок §А5-2 отдаёт `invalid_query`, а не
+    // тихий ноль и не результат. Обе стороны границы обязаны краснеть по отдельности.
+    const byText = await withIdentity(db, user, async (tx) =>
+      computeGoalProgress(tx, await queryContext(tx, user, null), {
+        progressSource: {
+          query: { text: 'aspect=orbis/financial, tags=savings' },
+          aggregate: 'sum',
+          field: 'amount',
+        },
+        targetValue: '1000.00',
+      }),
+    );
+    expect(byText.unsupported).toBe('invalid_query');
+    expect(byText.current).toBe('0');
   });
 });
 
@@ -255,19 +387,11 @@ describe('computeGoalProgress: изоляция владельца', () => {
     });
     expect(latest.current).toBe('100.00');
 
-    // Тот же путь, но через боевой роутер целиком
-    const goal = await callerFor(me).entity.create({
-      input: {
-        title: 'Накопить',
-        tags: [],
-        aspects: {
-          'orbis/goal': {
-            progress_source: { ...source, aggregate: 'sum', field: 'amount' },
-            target_value: '1000.00',
-          },
-        },
-      },
-      source: 'ui',
+    // Тот же путь, но через боевое чтение целиком
+    const goal = await createGoal(me, {
+      title: 'Накопить',
+      progress_source: { ...source, aggregate: 'sum', field: 'amount' },
+      target_value: '1000.00',
     });
     const got = await callerFor(me).entity.get({ id: goal.id });
     expect(got.goalProgress?.current).toBe('100.00');
@@ -349,9 +473,9 @@ describe('computeGoalProgress: честные отказы вместо паде
     );
     expect(broken.unsupported).toBe('invalid_query');
     expect(broken.current).toBe('0');
-    expect(brokenLog.some((l) => l.includes('invalid_query') && l.includes('грамматикой'))).toBe(
-      true,
-    );
+    expect(
+      brokenLog.some((l) => l.includes('invalid_query') && l.includes('неразобранный запрос')),
+    ).toBe(true);
 
     // `this` вне контекста сущности — структурная ошибка компиляции, тоже мягкая.
     // Здесь `this` ОБЯЗАН остаться NULL: он и есть предмет проверки. Порядок тестов этой
@@ -388,7 +512,7 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
       await admin.client.end();
     }
 
-    const goal: GoalAspect = {
+    const goal: GoalFixture = {
       progress_source: {
         query: 'aspect=orbis/financial, tags=drift',
         aggregate: 'sum',
@@ -404,7 +528,7 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
     // Без savepoint упавший statement перевёл бы её в aborted и убил entity.get.
     const stillReadable = await withIdentity(db, user, async (tx) => {
       const cctx = await queryContext(tx, user, null);
-      await computeGoalProgress(tx, cctx, goal);
+      await computeGoalProgress(tx, cctx, toGoalSource(goal, cctx));
       const rows = await tx.execute(sql`SELECT count(*)::text AS n FROM entities`);
       return (rows[0] as { n: string }).n;
     });
@@ -458,27 +582,57 @@ describe('computeGoalProgress: отказ САМОГО SQL не роняет ч�
 });
 
 describe('entity.get: прогресс приезжает с целью и только с ней', () => {
+  test('снятый аспект цели гасит полосу, хотя источник и цель остались в props (Р9)', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await createIncome(caller, 'Отложил', '75000.00', ['savings']);
+    const goal = await createGoal(user, {
+      title: 'Цель, с которой снимут аспект',
+      progress_source: {
+        query: 'aspect=orbis/financial, direction=income, tags=savings',
+        aggregate: 'sum',
+        field: 'amount',
+      },
+      target_value: '300000.00',
+    });
+    expect((await caller.entity.get({ id: goal.id })).goalProgress).toEqual({
+      current: '75000.00',
+      target: '300000.00',
+    });
+
+    // Снятие аспекта значений НЕ трогает (Р9): `orbis/progress_source` и
+    // `orbis/target_value` остаются в `props`. Старая карта теряла их вместе с аспектом —
+    // и читатель без признака носителя рисовал бы полосу у записи, целью быть переставшей.
+    const r = await execute(db, {
+      actorUserId: user,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        { tool: 'entity_update', input: { id: goal.id, aspects: { detach: ['orbis/goal'] } } },
+      ],
+    });
+    if (!r.ok) throw new Error(`аспект не снят: ${r.error.code} ${r.error.message}`);
+
+    const after = await caller.entity.get({ id: goal.id });
+    expect(after.goalProgress).toBeUndefined();
+    expect(after.entity.props['orbis/progress_source']).toBeDefined();
+    expect(after.entity.props['orbis/target_value']).toBe('300000.00');
+  });
+
   test('цель получает goalProgress, обычная сущность — нет', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     await createIncome(caller, 'Отложил', '75000.00', ['savings']);
-    const goal = await caller.entity.create({
-      input: {
-        title: 'Накопить 300 000 ₽',
-        tags: ['goal'],
-        aspects: {
-          'orbis/goal': {
-            progress_source: {
-              query: 'aspect=orbis/financial, direction=income, tags=savings',
-              aggregate: 'sum',
-              field: 'amount',
-            },
-            target_value: '300000.00',
-            unit: '₽',
-          },
-        },
+    const goal = await createGoal(user, {
+      title: 'Накопить 300 000 ₽',
+      tags: ['goal'],
+      progress_source: {
+        query: 'aspect=orbis/financial, direction=income, tags=savings',
+        aggregate: 'sum',
+        field: 'amount',
       },
-      source: 'ui',
+      target_value: '300000.00',
+      unit: '₽',
     });
 
     const got = await caller.entity.get({ id: goal.id });
@@ -501,18 +655,11 @@ describe('entity.get: прогресс приезжает с целью и то�
   test('`this` в источнике прогресса — сама цель (children_of=this считает подзадачи)', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    const goal = await caller.entity.create({
-      input: {
-        title: 'Прочитать 24 книги',
-        tags: ['goal'],
-        aspects: {
-          'orbis/goal': {
-            progress_source: { query: 'children_of=this, status=done', aggregate: 'count' },
-            target_value: '24',
-          },
-        },
-      },
-      source: 'ui',
+    const goal = await createGoal(user, {
+      title: 'Прочитать 24 книги',
+      tags: ['goal'],
+      progress_source: { query: 'children_of=this, status=done', aggregate: 'count' },
+      target_value: '24',
     });
     for (const [title, status] of [
       ['Хоббит', 'done'],
@@ -537,18 +684,11 @@ describe('entity.get: прогресс приезжает с целью и то�
   test('испорченный источник прогресса не мешает открыть цель', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    const goal = await caller.entity.create({
-      input: {
-        title: 'Цель с мусорным запросом',
-        tags: ['goal'],
-        aspects: {
-          'orbis/goal': {
-            progress_source: { query: '%%% не запрос', aggregate: 'count' },
-            target_value: '10',
-          },
-        },
-      },
-      source: 'ui',
+    const goal = await createGoal(user, {
+      title: 'Цель с мусорным запросом',
+      tags: ['goal'],
+      progress_source: { query: '%%% не запрос', aggregate: 'count' },
+      target_value: '10',
     });
 
     const got = await caller.entity.get({ id: goal.id });
@@ -563,18 +703,10 @@ describe('entity.get: прогресс приезжает с целью и то�
       input: { title: 'Обычная заметка', tags: [], aspects: { 'orbis/note': {} } },
       source: 'ui',
     });
-    const goal = await caller.entity.create({
-      input: {
-        title: 'Цель',
-        tags: [],
-        aspects: {
-          'orbis/goal': {
-            progress_source: { query: 'aspect=orbis/note', aggregate: 'count' },
-            target_value: '10',
-          },
-        },
-      },
-      source: 'ui',
+    const goal = await createGoal(user, {
+      title: 'Цель',
+      progress_source: { query: 'aspect=orbis/note', aggregate: 'count' },
+      target_value: '10',
     });
 
     // Отдельный клиент на ОДНО соединение со счётчиком запросов на уровне драйвера:
@@ -627,21 +759,14 @@ describe('entity.get: прогресс приезжает с целью и то�
 
 describe('логи отказа: конфигурационный отказ не молчит и не льётся потоком', () => {
   /** Цель с заданным источником: важен id — именно он попадает в лог и в ключ дросселя. */
-  function goalWith(caller: Caller, title: string, source: GoalAspect['progress_source']) {
-    return caller.entity.create({
-      input: {
-        title,
-        tags: [],
-        aspects: { 'orbis/goal': { progress_source: source, target_value: '100' } },
-      },
-      source: 'ui',
-    });
+  function goalWith(user: string, title: string, source: SourceFixture) {
+    return createGoal(user, { title, progress_source: source, target_value: '100' });
   }
 
   test('повторный отказ той же цели по той же причине логируется один раз', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    const goal = await goalWith(caller, 'Цель с опечаткой в поле', {
+    const goal = await goalWith(user, 'Цель с опечаткой в поле', {
       query: 'aspect=orbis/financial, direction=income',
       aggregate: 'sum',
       field: 'amountt',
@@ -662,7 +787,7 @@ describe('логи отказа: конфигурационный отказ н�
   test('новая беда той же цели в том же месте печатается, а не гасится устаревшей', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    const goal = await goalWith(caller, 'Цель, которую чинят', {
+    const goal = await goalWith(user, 'Цель, которую чинят', {
       query: 'aspect=orbis/financial, direction=income',
       aggregate: 'sum',
       field: 'amountt',
@@ -678,18 +803,13 @@ describe('логи отказа: конфигурационный отказ н�
     // дедупа знал только место и цель, эта строка не напечаталась бы вовсе, а на сотом
     // чтении перепечаталась бы старая — про уже исправленное `amountt`. Лог с устаревшим
     // диагнозом хуже пустого: по нему чинят не то.
-    await caller.entity.update({
-      id: goal.id,
-      aspects: {
-        'orbis/goal': {
-          progress_source: {
-            query: 'aspect=orbis/financial, direction=income',
-            aggregate: 'sum',
-            field: 'counterparty',
-          },
-          target_value: '100',
-        },
-      },
+    // Правка — тоже НОВОЙ формой (`props` по id свойства): старая карта положила бы в
+    // источник неразобранный блок `{text}`, и «новая беда» оказалась бы не той, которую
+    // проверяет тест (`invalid_field` выродился бы в `invalid_query`).
+    await updateGoalSource(user, goal.id, {
+      query: 'aspect=orbis/financial, direction=income',
+      aggregate: 'sum',
+      field: 'counterparty',
     });
 
     const [got, second] = await captureErrors(() => caller.entity.get({ id: goal.id }));
@@ -707,7 +827,7 @@ describe('логи отказа: конфигурационный отказ н�
     // Самая вероятная жалоба владельца — «прогресс не считается, а почему, не понять».
     // До этого теста три ярлыка из четырёх не оставляли на сервере ни строки, и разбор
     // жалобы начинался с чтения аспекта в базе руками.
-    const cases: Array<[GoalProgressUnsupported, GoalAspect['progress_source']]> = [
+    const cases: Array<[GoalProgressUnsupported, SourceFixture]> = [
       [
         'array_field',
         { query: 'aspect=orbis/category', aggregate: 'sum', field: 'aliases[].weight' },
@@ -720,7 +840,7 @@ describe('логи отказа: конфигурационный отказ н�
     ];
 
     for (const [label, source] of cases) {
-      const goal = await goalWith(caller, `Цель: ${label}`, source);
+      const goal = await goalWith(user, `Цель: ${label}`, source);
       const [got, logged] = await captureErrors(() => caller.entity.get({ id: goal.id }));
       expect(got.goalProgress?.unsupported).toBe(label);
       const mine = logged.filter((l) => l.includes(goal.id));
@@ -732,7 +852,7 @@ describe('логи отказа: конфигурационный отказ н�
   test('аспект, не прошедший свою схему, тоже не молчит — хотя ярлыка у него нет', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
-    const goal = await goalWith(caller, 'Цель с дрейфом схемы', {
+    const goal = await goalWith(user, 'Цель с дрейфом схемы', {
       query: 'aspect=orbis/financial',
       aggregate: 'count',
     });
@@ -743,7 +863,7 @@ describe('логи отказа: конфигурационный отказ н�
     const admin = adminDb();
     try {
       await admin.db.execute(
-        sql`UPDATE entities SET aspects_legacy = jsonb_set(aspects_legacy, '{orbis/goal,target_value}', '"0"') WHERE id = ${goal.id}`,
+        sql`UPDATE entities SET props = jsonb_set(props, '{orbis/target_value}', '"0"') WHERE id = ${goal.id}`,
       );
     } finally {
       await admin.client.end();

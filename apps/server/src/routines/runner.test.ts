@@ -27,7 +27,7 @@ requireEnv();
 
 const { db, client } = appDb();
 const owner = freshUserId();
-const { actionsOf, aspectsOf, seedEntity, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
+const { actionsOf, propsOf, seedEntity, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
 
 const MODEL = 'scripted-model';
 const EXPLANATION = 'Задача висит в инбоксе третий день — предлагаю взять её сегодня.';
@@ -163,19 +163,20 @@ async function run(
   });
 }
 
-interface RunAspect {
-  outcome: string;
-  report?: string;
-  fail_note?: string;
-  step_count: number;
-  steps: Array<{ summary: string; action_id?: string }>;
-  usage?: { input_tokens?: number; output_tokens?: number };
-  proposal?: { pending_id: string; status: string };
-  checkpoint?: { question: string };
+/** Свойства прогона (§А1-1) в объёме, который читают тесты раннера. */
+interface RunProps {
+  'orbis/run_outcome': string;
+  'orbis/run_report'?: string;
+  'orbis/fail_note'?: string;
+  'orbis/step_count': number;
+  'orbis/run_steps': Array<{ summary: string; action_id?: string }>;
+  'orbis/run_usage'?: { input_tokens?: number; output_tokens?: number };
+  'orbis/run_proposal'?: { pending_id: string; status: string };
+  'orbis/run_checkpoint'?: { question: string };
 }
 
-async function runAspect(runId: string): Promise<RunAspect> {
-  return (await aspectsOf(owner, runId))['orbis/agent-run'] as unknown as RunAspect;
+async function runAspect(runId: string): Promise<RunProps> {
+  return (await propsOf(owner, runId)) as unknown as RunProps;
 }
 
 async function usageRows() {
@@ -230,15 +231,15 @@ describe('runRoutineRun: режим propose (V1.5, V1.6)', () => {
     expect(end).toEqual({ outcome: 'finished' });
 
     const aspect = await runAspect(runId);
-    expect(aspect.outcome).toBe('finished');
-    expect(aspect.report).toBe(EXPLANATION);
-    expect(aspect.proposal?.status).toBe('pending');
+    expect(aspect['orbis/run_outcome']).toBe('finished');
+    expect(aspect['orbis/run_report']).toBe(EXPLANATION);
+    expect(aspect['orbis/run_proposal']?.status).toBe('pending');
     // Терминальный тул шага не пишет: его исход и есть запись. В ленте — один шаг чтения.
-    expect(aspect.step_count).toBe(1);
-    expect(aspect.steps[0]?.summary).toBe('entity_query: ok');
+    expect(aspect['orbis/step_count']).toBe(1);
+    expect(aspect['orbis/run_steps'][0]?.summary).toBe('entity_query: ok');
 
     // Расход §4.7: и в дневном счётчике, и в аспекте прогона
-    expect(aspect.usage).toEqual({ input_tokens: 20, output_tokens: 10 });
+    expect(aspect['orbis/run_usage']).toEqual({ input_tokens: 20, output_tokens: 10 });
     const rows = await usageRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]?.inputTokens).toBe(20);
@@ -276,8 +277,8 @@ describe('runRoutineRun: режим propose (V1.5, V1.6)', () => {
     expect(end).toEqual({ outcome: 'failed', reason: 'no_proposal' });
 
     const aspect = await runAspect(runId);
-    expect(aspect.outcome).toBe('failed');
-    expect(aspect.fail_note).toMatch(/без предложения/);
+    expect(aspect['orbis/run_outcome']).toBe('failed');
+    expect(aspect['orbis/fail_note']).toMatch(/без предложения/);
   });
 
   test('лимит шагов: propose → failed steps; потолок СВОЙ (ROUTINE_MAX_STEPS), вызовов провайдера ровно столько (D42 ОЧ.10)', async () => {
@@ -295,7 +296,7 @@ describe('runRoutineRun: режим propose (V1.5, V1.6)', () => {
 
     const end = await run(provider, { routineId, runId, bucket });
     expect(end).toEqual({ outcome: 'failed', reason: 'steps' });
-    expect((await runAspect(runId)).fail_note).toMatch(/лимит шагов/);
+    expect((await runAspect(runId))['orbis/fail_note']).toMatch(/лимит шагов/);
     // Шаг потолка — ВЫЗОВ ПРОВАЙДЕРА (С9), поэтому счёт запросов и есть счёт шагов.
     // Второй ассерт — не тавтология: он и ловит возврат к чатовой константе. Будь потолок
     // всё ещё MAX_AGENT_STEPS (=8), прогон закрылся бы на восьмом вызове и хвост скрипта
@@ -318,8 +319,8 @@ describe('runRoutineRun: режим act (V1.10)', () => {
     });
     expect(end).toEqual({ outcome: 'finished' });
     const aspect = await runAspect(runId);
-    expect(aspect.outcome).toBe('finished');
-    expect(aspect.report).toBe('Всё в порядке, менять нечего.');
+    expect(aspect['orbis/run_outcome']).toBe('finished');
+    expect(aspect['orbis/run_report']).toBe('Всё в порядке, менять нечего.');
   });
 
   test('белый список: entity_update правит граф с source routine и run_id (rollbackRun откатывает); тул вне списка — отказ модели, а не сбой прогона', async () => {
@@ -348,10 +349,10 @@ describe('runRoutineRun: режим act (V1.10)', () => {
     expect(end).toEqual({ outcome: 'finished' });
 
     const aspect = await runAspect(runId);
-    expect(aspect.outcome).toBe('finished');
-    expect(aspect.step_count).toBe(2);
-    expect(aspect.steps[0]?.summary).toBe('attach_orbis_task: error');
-    expect(aspect.steps[1]?.summary).toBe('entity_update: ok');
+    expect(aspect['orbis/run_outcome']).toBe('finished');
+    expect(aspect['orbis/step_count']).toBe(2);
+    expect(aspect['orbis/run_steps'][0]?.summary).toBe('attach_orbis_task: error');
+    expect(aspect['orbis/run_steps'][1]?.summary).toBe('entity_update: ok');
 
     // Отказ доехал до модели tool-результатом, а не исключением
     const afterDenial = provider.requests[1]?.messages.at(-1)?.content ?? '';
@@ -359,7 +360,7 @@ describe('runRoutineRun: режим act (V1.10)', () => {
     expect(afterDenial).toContain('FORBIDDEN_LEVEL');
 
     // Правка в графе с атрибуцией рутины (Р-7): модельная мутация — source routine + run_id
-    expect((await aspectsOf(owner, taskId))['orbis/task']?.status).toBe('planned');
+    expect((await propsOf(owner, taskId))['orbis/task_status']).toBe('planned');
     const mutation = (await actionsOf(owner)).find(
       (a: ActionRecord) => a.source === 'routine' && a.entity_id === taskId,
     );
@@ -369,7 +370,7 @@ describe('runRoutineRun: режим act (V1.10)', () => {
 
     const rolled = await rollbackRun(db, { actorUserId: owner, runId });
     expect(rolled.ok).toBe(true);
-    expect((await aspectsOf(owner, taskId))['orbis/task']?.status).toBe('inbox');
+    expect((await propsOf(owner, taskId))['orbis/task_status']).toBe('inbox');
   });
 
   test('лимит шагов: act → finished с пометкой в отчёте; тот же потолок ROUTINE_MAX_STEPS', async () => {
@@ -384,7 +385,7 @@ describe('runRoutineRun: режим act (V1.10)', () => {
 
     const end = await run(provider, { routineId, runId, bucket });
     expect(end).toEqual({ outcome: 'finished' });
-    expect((await runAspect(runId)).report).toContain(STEP_LIMIT_NOTE);
+    expect((await runAspect(runId))['orbis/run_report']).toContain(STEP_LIMIT_NOTE);
     expect(provider.requests).toHaveLength(ROUTINE_MAX_STEPS);
   });
 
@@ -402,8 +403,10 @@ describe('runRoutineRun: режим act (V1.10)', () => {
     const end = await run(new ScriptedProvider([cut]), { routineId, runId, bucket });
     expect(end).toEqual({ outcome: 'finished' });
     const aspect = await runAspect(runId);
-    expect(aspect.report?.startsWith('Разобрал инбокс и начал переносить сроки, но')).toBe(true);
-    expect(aspect.report).toContain(MAX_TOKENS_NOTE);
+    expect(
+      aspect['orbis/run_report']?.startsWith('Разобрал инбокс и начал переносить сроки, но'),
+    ).toBe(true);
+    expect(aspect['orbis/run_report']).toContain(MAX_TOKENS_NOTE);
   });
 
   test('сводка шага содержательна (D42): orbis_ask → «спросил: „…"» с усечением, отложка → «отложено: <сводка карточки>»; прочее — прежняя пара «имя: исход»', async () => {
@@ -434,8 +437,8 @@ describe('runRoutineRun: режим act (V1.10)', () => {
     expect(end).toEqual({ outcome: 'finished' });
 
     const aspect = await runAspect(runId);
-    expect(aspect.step_count).toBe(4);
-    expect(aspect.steps.map((st) => st.summary)).toEqual([
+    expect(aspect['orbis/step_count']).toBe(4);
+    expect(aspect['orbis/run_steps'].map((st) => st.summary)).toEqual([
       `спросил: «${short}»`,
       `спросил: «${`${long.slice(0, 119)}…`}»`,
       'отложено: Архивация: «Прошлогодний отчёт»',
@@ -467,10 +470,10 @@ describe('runRoutineRun: вопрос владельцу и гашение не�
     );
     expect(asked).toEqual({ outcome: 'checkpoint' });
     const askedAspect = await runAspect(askedId);
-    expect(askedAspect.outcome).toBe('checkpoint');
-    expect(askedAspect.checkpoint?.question).toBe('Переносить ли встречу с Ирой?');
+    expect(askedAspect['orbis/run_outcome']).toBe('checkpoint');
+    expect(askedAspect['orbis/run_checkpoint']?.question).toBe('Переносить ли встречу с Ирой?');
     // расход дописан отдельным патчем: прогон закрыл глагол, usage знает только раннер
-    expect(askedAspect.usage).toEqual({ input_tokens: 10, output_tokens: 5 });
+    expect(askedAspect['orbis/run_usage']).toEqual({ input_tokens: 10, output_tokens: 5 });
 
     const secondBucket = nextBucket();
     const { runId: nextId } = await seedRoutineRun(owner, {
@@ -500,7 +503,7 @@ describe('runRoutineRun: вопрос владельцу и гашение не�
       { routineId, runId: nextId, bucket: secondBucket },
     );
     expect(next).toEqual({ outcome: 'finished' });
-    expect((await runAspect(askedId)).outcome).toBe('stale');
+    expect((await runAspect(askedId))['orbis/run_outcome']).toBe('stale');
   });
 
   test('история: второй прогон видит в контексте предложение первого и его статус', async () => {
@@ -565,10 +568,10 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     // ручной прогон между плановыми: он тоже failed, но стоп-кран его не считает
     await failedRun('manual:2026-08-17T12:30:00.000Z', 2);
     await failedRun(nextBucket(), 3);
-    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('active');
+    expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('active');
 
     await failedRun(nextBucket(), 4);
-    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('paused');
+    expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('paused');
 
     // Владелец снял паузу и проверяет починку кнопкой: ручной прогон упал снова — но он
     // не повод для оценки стоп-крана (V1.3), иначе тот же тап вернул бы паузу по хвосту
@@ -587,7 +590,7 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     expect(unpaused.ok).toBe(true);
     const manual = await failedRun('manual:2026-08-17T13:00:00.000Z', 5);
     expect(manual).toEqual({ outcome: 'failed', reason: 'provider' });
-    expect((await aspectsOf(owner, routineId))['orbis/routine']?.stage).toBe('active');
+    expect((await propsOf(owner, routineId))['orbis/routine_stage']).toBe('active');
   });
 
   test('отказ модели → failed refusal', async () => {
@@ -596,9 +599,12 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     const { runId } = await seedRoutineRun(owner, { routineId, bucket });
     const end = await run(new ScriptedProvider([refusal()]), { routineId, runId, bucket });
     expect(end).toEqual({ outcome: 'failed', reason: 'refusal' });
-    expect((await runAspect(runId)).outcome).toBe('failed');
+    expect((await runAspect(runId))['orbis/run_outcome']).toBe('failed');
     // токены шага-отказа честно отмечены
-    expect((await runAspect(runId)).usage).toEqual({ input_tokens: 10, output_tokens: 5 });
+    expect((await runAspect(runId))['orbis/run_usage']).toEqual({
+      input_tokens: 10,
+      output_tokens: 5,
+    });
   });
 
   test('дедлайн проверяется между шагами: часы скакнули на 11 минут → failed deadline', async () => {
@@ -618,7 +624,7 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     const end = await run(provider, { routineId, runId, bucket }, { clock: () => now });
     expect(end).toEqual({ outcome: 'failed', reason: 'deadline' });
     expect(inner.requests).toHaveLength(1); // второго обращения к модели не было
-    expect((await runAspect(runId)).fail_note).toMatch(/дедлайн/);
+    expect((await runAspect(runId))['orbis/fail_note']).toMatch(/дедлайн/);
   });
 
   test('процесс выключают: signal.abort между шагами → failed aborted', async () => {
@@ -636,7 +642,7 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     const end = await run(provider, { routineId, runId, bucket }, { signal: ac.signal });
     expect(end).toEqual({ outcome: 'failed', reason: 'aborted' });
     expect(inner.requests).toHaveLength(1);
-    expect((await runAspect(runId)).fail_note).toMatch(/выключении процесса/);
+    expect((await runAspect(runId))['orbis/fail_note']).toMatch(/выключении процесса/);
   });
 
   test('исчерпанный лимит → failed limit, провайдер не вызван (инвариант 13, приёмка 15)', async () => {
@@ -653,9 +659,9 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     expect(end).toEqual({ outcome: 'failed', reason: 'limit' });
     expect(provider.requests).toHaveLength(0);
     const aspect = await runAspect(runId);
-    expect(aspect.outcome).toBe('failed');
-    expect(aspect.fail_note).toMatch(/лимит/);
-    expect(aspect.usage).toBeUndefined();
+    expect(aspect['orbis/run_outcome']).toBe('failed');
+    expect(aspect['orbis/fail_note']).toMatch(/лимит/);
+    expect(aspect['orbis/run_usage']).toBeUndefined();
   });
 
   test('внутренняя ошибка раннера (журнал упал на записи шага) → прогон закрыт failed internal, а не оставлен running; если падает и закрытие — исключение уходит наверх', async () => {
@@ -673,10 +679,10 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     expect(end).toEqual({ outcome: 'failed', reason: 'internal' });
     expect(provider.requests).toHaveLength(1);
     const aspect = await runAspect(runId);
-    expect(aspect.outcome).toBe('failed');
-    expect(aspect.fail_note).toMatch(/^внутренняя ошибка раннера: журнал недоступен/);
+    expect(aspect['orbis/run_outcome']).toBe('failed');
+    expect(aspect['orbis/fail_note']).toMatch(/^внутренняя ошибка раннера: журнал недоступен/);
     // токены сделанного шага — честный расход, и в аспекте тоже
-    expect(aspect.usage).toEqual({ input_tokens: 10, output_tokens: 5 });
+    expect(aspect['orbis/run_usage']).toEqual({ input_tokens: 10, output_tokens: 5 });
 
     // Журнал не поднимается вовсе: закрыть прогон нечем — исключение пробрасывается
     // (тик ловит), прогон остаётся running и достаётся подметанию
@@ -692,7 +698,7 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     await expect(
       run(provider2, { routineId, runId: runId2, bucket: bucket2 }, { sink: faultySink(99) }),
     ).rejects.toThrow('журнал недоступен');
-    expect((await runAspect(runId2)).outcome).toBe('running');
+    expect((await runAspect(runId2))['orbis/run_outcome']).toBe('running');
   });
 
   test('исключение ДО цикла модели (журнал упал в гашении прошлого предложения) → прогон закрыт failed internal, провайдер не вызван (C1a-2)', async () => {
@@ -709,7 +715,7 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
       bucket: pastBucket,
     });
     expect(pastEnd).toEqual({ outcome: 'finished' });
-    expect((await runAspect(pastRunId)).proposal?.status).toBe('pending');
+    expect((await runAspect(pastRunId))['orbis/run_proposal']?.status).toBe('pending');
 
     const bucket = nextBucket();
     const { runId } = await seedRoutineRun(owner, {
@@ -722,11 +728,11 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     expect(end).toEqual({ outcome: 'failed', reason: 'internal' });
     expect(provider.requests).toHaveLength(0);
     const aspect = await runAspect(runId);
-    expect(aspect.outcome).toBe('failed');
-    expect(aspect.fail_note).toMatch(/^внутренняя ошибка раннера: журнал недоступен/);
+    expect(aspect['orbis/run_outcome']).toBe('failed');
+    expect(aspect['orbis/fail_note']).toMatch(/^внутренняя ошибка раннера: журнал недоступен/);
     // Гашение прошло наполовину: карточка отклонена (не через синк), статус на прогоне —
     // нет; следующий прогон допишет его (supersedeOpen идемпотентен по alreadyRejected)
-    expect((await runAspect(pastRunId)).proposal?.status).toBe('pending');
+    expect((await runAspect(pastRunId))['orbis/run_proposal']?.status).toBe('pending');
   });
 
   test('терминальный тул отказал при живом прогоне (VALIDATION) → отказ ушёл модели, цикл продолжился, следующий orbis_propose закрыл прогон', async () => {
@@ -760,11 +766,11 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     expect(afterDenial).toContain('VALIDATION');
 
     const aspect = await runAspect(runId);
-    expect(aspect.outcome).toBe('finished');
-    expect(aspect.proposal?.status).toBe('pending');
+    expect(aspect['orbis/run_outcome']).toBe('finished');
+    expect(aspect['orbis/run_proposal']?.status).toBe('pending');
     // терминальный тул шага не пишет — ни удачный, ни отклонённый
-    expect(aspect.step_count).toBe(0);
-    expect(aspect.usage).toEqual({ input_tokens: 20, output_tokens: 10 });
+    expect(aspect['orbis/step_count']).toBe(0);
+    expect(aspect['orbis/run_usage']).toEqual({ input_tokens: 20, output_tokens: 10 });
   });
 
   test('прогон закрыт чужой рукой посреди цикла: терминальный тул → CONFLICT → foreign, RunEnd aborted, второго закрытия и дозаписи расхода нет', async () => {
@@ -785,10 +791,10 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     expect(inner.requests).toHaveLength(1);
     const aspect = await runAspect(runId);
     // исход и заметка — чужие, раннер их не переписал; расход в аспект не дописывал
-    expect(aspect.outcome).toBe('failed');
-    expect(aspect.fail_note).toBe('закрыт подметанием');
-    expect(aspect.usage).toBeUndefined();
-    expect(aspect.proposal).toBeUndefined();
+    expect(aspect['orbis/run_outcome']).toBe('failed');
+    expect(aspect['orbis/fail_note']).toBe('закрыт подметанием');
+    expect(aspect['orbis/run_usage']).toBeUndefined();
+    expect(aspect['orbis/run_proposal']).toBeUndefined();
     // но дневной счётчик честен: обращение к модели было
     expect((await usageRows())[0]?.requestCount).toBe(requestsBefore + 1);
   });
@@ -810,9 +816,9 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     expect(end).toEqual({ outcome: 'failed', reason: 'aborted' });
     expect(inner.requests).toHaveLength(1); // второго обращения к модели не было
     const aspect = await runAspect(runId);
-    expect(aspect.fail_note).toBe('закрыт подметанием');
-    expect(aspect.step_count).toBe(0);
-    expect(aspect.usage).toBeUndefined();
+    expect(aspect['orbis/fail_note']).toBe('закрыт подметанием');
+    expect(aspect['orbis/step_count']).toBe(0);
+    expect(aspect['orbis/run_usage']).toBeUndefined();
   });
 
   test('прогон уже закрыт чужой рукой (подметание) → раннер молча выходит, ничего не переписывая', async () => {
@@ -828,6 +834,8 @@ describe('runRoutineRun: сбои и стоп-кран (V1.12)', () => {
     const end = await run(provider, { routineId, runId, bucket });
     expect(end).toEqual({ outcome: 'failed', reason: 'aborted' });
     expect(provider.requests).toHaveLength(0);
-    expect((await runAspect(runId)).fail_note).toBe('прогон прерван: нет шагов дольше 30 мин');
+    expect((await runAspect(runId))['orbis/fail_note']).toBe(
+      'прогон прерван: нет шагов дольше 30 мин',
+    );
   });
 });

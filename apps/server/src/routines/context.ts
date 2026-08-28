@@ -16,7 +16,8 @@
 // Роль 'system' в messages ЗАПРЕЩЕНА (контракт провайдера — ai-sdk.ts бросает): и
 // история, и «сработала рутина» едут как 'user'. Инвариант «messages начинается с user»
 // здесь держится по построению — оба сообщения user.
-import type { ProposalStatus, RoutineAspect, RunSummary } from '@orbis/shared';
+import type { ProposalStatus, RunOutcome, RunSummary } from '@orbis/shared';
+import type { RoutineProps } from '../agent-loop/queries';
 import type { Tx } from '../db/with-identity';
 import {
   anchorBlock,
@@ -79,12 +80,12 @@ export interface RoutineHistoryUnit {
   answer?: string; // fate:'answered'
 }
 
-/** Рутина в объёме контекста: расписание и права — в аспекте, задание — в теле (V1.1). */
+/** Рутина в объёме контекста: расписание и права — свойствами, задание — в теле (V1.1). */
 export interface RoutineContextRoutine {
   id: string;
   title: string;
   body: string;
-  routine: RoutineAspect;
+  props: RoutineProps;
 }
 
 export interface BuildRoutineContextInput {
@@ -117,8 +118,15 @@ const PROPOSAL_STATUS_LABEL: Record<ProposalStatus, string> = {
   stale: 'снято: состояние изменилось',
 };
 
-/** Метки исходов прогона для строки истории. */
-const OUTCOME_LABEL: Record<string, string> = {
+/**
+ * Метки исходов прогона для строки истории.
+ *
+ * `Record<RunOutcome, …>` — ИСЧЕРПЫВАЮЩИЙ по вариантам свойства `orbis/run_outcome`: новый
+ * вариант в словаре обязан ловиться КОМПИЛЯТОРОМ, а не рантаймом. С открытым
+ * `Record<string, string>` пропущенный исход просто уезжал бы моделью в историю своим
+ * ключом (`stale` вместо «вопрос снят…»), и заметить это было бы нечем.
+ */
+const OUTCOME_LABEL: Record<RunOutcome, string> = {
   running: 'идёт',
   checkpoint: 'задан вопрос, ответа нет',
   finished: 'завершён',
@@ -223,7 +231,7 @@ function historyLine(item: RoutineHistoryItem): string {
   const r = item.run;
   const parts: string[] = [];
   const slot = r.bucket ?? r.started_at;
-  parts.push(`— ${slot}: ${OUTCOME_LABEL[r.outcome] ?? r.outcome}`);
+  parts.push(`— ${slot}: ${OUTCOME_LABEL[r.outcome]}`);
 
   const explanation = item.explanation ?? (r.proposal !== undefined ? r.report : undefined);
   if (explanation !== undefined) parts.push(`предлагал: ${quote(explanation)}`);
@@ -279,8 +287,8 @@ export async function buildRoutineContext(
     // Переставлять из-за неё нечего: блока продолжений у раннера нет.
     await todaySectionFor(tx, input.ownerId, (input.clock ?? (() => new Date()))()),
     routineModeSection({
-      mode: routine.routine.mode,
-      allowedTools: routine.routine.allowed_tools ?? [],
+      mode: routine.props['orbis/routine_mode'],
+      allowedTools: routine.props['orbis/allowed_tools'] ?? [],
       runId: input.run.id,
       bucket: input.run.bucket,
     }),

@@ -144,6 +144,32 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     expect(got[0]?.status).toBe('done');
   });
 
+  // Проба расхождением колонок (§А1-1): аспект задачи СНЯТ, `orbis/task_status` в `props`
+  // остался (Р9 — detach значений не трогает). Старая карта теряла статус вместе с
+  // аспектом; без признака носителя чип продолжал бы зачёркивать «сделанное» у записи,
+  // задачей быть переставшей.
+  test('снятый аспект задачи обнуляет статус подсказки, хотя значение осталось в props (Р9)', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const e = await seedEntity(caller, {
+      title: 'Купить сыр',
+      aspects: { 'orbis/task': { status: 'done' } },
+    });
+    expect((await caller.entity.suggest({ term: 'купить сыр' }))[0]?.status).toBe('done');
+
+    const detached = await caller.entity.update({
+      id: e.id,
+      aspects: { 'orbis/task': null },
+    });
+    expect(detached.props['orbis/task_status']).toBe('done');
+
+    const got = await caller.entity.suggest({ term: 'купить сыр' });
+    expect(got.map((x) => x.id)).toEqual([e.id]);
+    expect(got[0]?.status).toBeNull();
+    // Тот же ответ у пачки чипов: обе процедуры читают один `toSuggestion`.
+    expect((await caller.entity.resolveRefs({ ids: [e.id] }))[0]?.status).toBeNull();
+  });
+
   test('статус задачи приезжает ПЛОСКИМ полем, emoji и archived — тоже', async () => {
     const caller = callerFor(freshUserId());
     const e = await seedEntity(caller, {

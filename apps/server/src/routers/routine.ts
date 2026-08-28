@@ -410,10 +410,10 @@ export const routineRouter = router({
         // Рутина на паузе не сработает вовсе (activeRoutines её не отбирает), и показывать
         // ей «следующее срабатывание» значило бы обещать то, чего не будет
         const next =
-          routine.routine.stage === 'active'
+          routine.props['orbis/routine_stage'] === 'active'
             ? nextBucketAt({
-                at: routine.routine.at,
-                days: routine.routine.days,
+                at: routine.props['orbis/routine_at'],
+                days: routine.props['orbis/routine_days'],
                 timeZone,
                 now: clockOf(ctx)(),
               })
@@ -429,15 +429,15 @@ export const routineRouter = router({
           lastRun: last === undefined ? null : runSummary(last),
           // «Ждут меня» (V1.9) — обычное равенство по исходу: состоянием вопроса
           // сделан сам исход прогона, отдельной сущности «вопрос» в срезе нет
-          waiting: live.filter((r) => r.run.outcome === 'checkpoint').length,
-          openProposal: live.some((r) => r.run.proposal?.status === 'pending'),
+          waiting: live.filter((r) => r.props['orbis/run_outcome'] === 'checkpoint').length,
+          openProposal: live.some((r) => r.props['orbis/run_proposal']?.status === 'pending'),
           // Пачка считается АСПЕКТНЫМ ФИЛЬТРОМ по уже прочитанным прогонам (С8 ревью
           // спеки) — тем же способом, что и `waiting`, и без единой пробы по треду:
           // GIN-проба на прогон стоила бы Seq Scan под RLS (докблок `listRunUnits`) на
           // каждое открытие экрана рутины. Цена — цифра означает «у стольких прогонов
           // осталась неразобранная пачка», а не «столько единиц ждёт»: точное число
           // ЕДИНИЦ читается одной пробой на экране прогона (`runUnits`), где оно и нужно
-          undecided: live.filter((r) => r.run.undecided === true).length,
+          undecided: live.filter((r) => r.props['orbis/undecided'] === true).length,
         };
       } catch (e) {
         if (e instanceof ExecError) throw execErrorToTRPC(e);

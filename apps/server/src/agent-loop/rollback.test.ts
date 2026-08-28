@@ -21,7 +21,7 @@ import { sweepStaleRuns } from './sweep';
 requireEnv();
 
 const { db, client } = appDb();
-const { seedEntity, link, aspectsOf, actionsOf, workerGrant, worker } = agentLoopHelpers(db);
+const { actionsOf, link, seedEntity, worker, workerGrant } = agentLoopHelpers(db);
 const createCaller = createCallerFactory(appRouter);
 
 const MINUTE = 60_000;
@@ -120,7 +120,7 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     const finish = okResult<FinishResult>(
       await dispatchTool(ctx, 'orbis_finish', { run_id: runId, report: 'Готово, проверь' }),
     );
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'waiting' });
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'waiting' });
 
     const out = await rollbackRun(db, { actorUserId: owner, runId });
 
@@ -130,7 +130,10 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     expect(out.note).toBe(ROLLBACK_NOTE);
     // Тикет — в том состоянии, в котором его застал захват (inverse захвата), а не в
     // in_progress: откат снимает ВЕСЬ прогон, а не последний его глагол
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toEqual({ status: 'planned' });
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'planned' });
+    // `toEqual` по всему набору свойств не годится: у тикета есть ещё назначение и
+    // вычисленные предки. Смысл прежней проверки — «хвоста прошлого ожидания нет».
+    expect(await propsOf(owner, ticketId)).not.toHaveProperty('orbis/waiting_for');
     // Восстановлена НОВАЯ правда (§А1-1), а не только её проекция: единица отката —
     // свойство, и проверять надо ту колонку, из которой проекция и считается
     const props = await propsOf(owner, ticketId);
@@ -166,7 +169,10 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     // Подметание — часть истории прогона, а не «чужое изменение»: «отмени последнее» его
     // пропускает (source=system), точечный откат прогона обязан его включать
     expect(out.undone).toEqual([sweepAction.id, step.action_id, claim.action_id]);
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toEqual({ status: 'planned' });
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'planned' });
+    // `toEqual` по всему набору свойств не годится: у тикета есть ещё назначение и
+    // вычисленные предки. Смысл прежней проверки — «хвоста прошлого ожидания нет».
+    expect(await propsOf(owner, ticketId)).not.toHaveProperty('orbis/waiting_for');
     expect(await isArchived(owner, runId)).toBe(true);
   });
 
@@ -200,10 +206,10 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     );
     // Ничего не откачено: ни одного undo-сообщения и состояния на месте
     expect(await undoMessages(owner)).toBe(undoneBefore);
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({ status: 'planned' });
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'planned' });
     // Ответ владельца на месте: вопрос закрыт исходом `answered` (V1, D38), не снят откатом
-    expect((await aspectsOf(owner, runId))['orbis/agent-run']).toMatchObject({
-      outcome: 'answered',
+    expect(await propsOf(owner, runId)).toMatchObject({
+      'orbis/run_outcome': 'answered',
     });
     expect(await isArchived(owner, runId)).toBe(false);
   });
@@ -242,9 +248,9 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     // перестраховка инварианта 7: лучше лишняя строка конфликта, чем затёртая правка
     // владельца в том же свойстве
     expect(await undoMessages(owner)).toBe(undoneBefore);
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toMatchObject({
-      status: 'waiting',
-      priority: 'high',
+    expect(await propsOf(owner, ticketId)).toMatchObject({
+      'orbis/task_status': 'waiting',
+      'orbis/priority': 'high',
     });
     expect(await isArchived(owner, runId)).toBe(false);
   });
@@ -273,7 +279,10 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     // весь откат встал бы «частичным» на ровном месте
     expect(out.undone).toEqual([finish.action_id, claim.action_id]);
     expect(out.undone).not.toContain(step.action_id);
-    expect((await aspectsOf(owner, ticketId))['orbis/task']).toEqual({ status: 'planned' });
+    expect(await propsOf(owner, ticketId)).toMatchObject({ 'orbis/task_status': 'planned' });
+    // `toEqual` по всему набору свойств не годится: у тикета есть ещё назначение и
+    // вычисленные предки. Смысл прежней проверки — «хвоста прошлого ожидания нет».
+    expect(await propsOf(owner, ticketId)).not.toHaveProperty('orbis/waiting_for');
     expect(await isArchived(owner, runId)).toBe(true);
   });
 

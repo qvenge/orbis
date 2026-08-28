@@ -23,6 +23,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import {
   adminDb,
   appDb,
+  divergentEntityRow,
   freshUserId,
   legacyEntityColumns,
   requireEnv,
@@ -155,7 +156,7 @@ async function rawFinancialCount(user: string): Promise<number> {
   try {
     const rows = (await admin.execute(sql`
       SELECT count(*)::int AS count FROM entities
-      WHERE owner_id = ${user} AND aspects_legacy ? 'orbis/financial'
+      WHERE owner_id = ${user} AND 'orbis/financial' = ANY(aspects)
     `)) as unknown as Array<{ count: number }>;
     return rows[0]?.count ?? 0;
   } finally {
@@ -169,7 +170,7 @@ async function financialEntities(user: string) {
     tx
       .select({ id: entities.id, title: entities.title, archived: entities.archived })
       .from(entities)
-      .where(and(eq(entities.ownerId, user), sql`aspects_legacy ? 'orbis/financial'`))
+      .where(and(eq(entities.ownerId, user), sql`'orbis/financial' = ANY(aspects)`))
       .orderBy(entities.title),
   );
 }
@@ -282,6 +283,36 @@ describe('import.review: статусы строк (§3.4.1)', () => {
 
     const archived = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
     expect(archived.rows[0]?.suggestedCategoryRef).toBeUndefined();
+  });
+
+  // Проба расхождением колонок (§А1-1): аспект памяти СНЯТ, а значения `orbis/memory_kind`
+  // и `orbis/rule_scope` в `props` остались — так выглядит строка после detach (Р9, снятие
+  // аспекта значений не трогает). Старая карта такое состояние выразить не могла: она
+  // теряла значения вместе с ключом аспекта. Без признака носителя в `memoryRules` снятое
+  // правило продолжало бы категоризировать выписку — и ни один тест выше этого не увидел бы.
+  test('снятый аспект памяти правило выключает, хотя его значения остались в props (Р9)', async () => {
+    const { user } = await freshOwner();
+    const caller = ownerCaller(user);
+    const row = makeRow({
+      occurredOn: '2026-05-13',
+      amount: '843.00',
+      counterparty: 'SBOL ПЯТЁРОЧКА 843',
+    });
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values(
+        divergentEntityRow({
+          ownerId: user,
+          id: newId(),
+          title: 'пятерочка → Еда',
+          props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/financial' },
+          // Аспекта памяти НЕТ — правило снято, значения пережили снятие.
+          aspects: [],
+        }),
+      ),
+    );
+
+    const seen = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
+    expect(seen.rows[0]?.suggestedCategoryRef).toBeUndefined();
   });
 
   // Конфликт «один паттерн — разные категории» штатно рождает эскалация §7.8: её гейты
@@ -968,6 +999,59 @@ describe('import.confirm: атомарная группа и origins (§3.4, §4
     expect(second.entityIds).toEqual(first.entityIds);
     expect(await financialEntities(user)).toHaveLength(1);
     expect(await rawOrigins(user)).toHaveLength(1);
+  });
+
+  // Проба расхождением колонок (§А1-1): конверт объявлен ТОЛЬКО новой формой — аспект
+  // лежит списком `aspects[]`, старая карта пуста. И бюджет-хук, и карточка импорта
+  // обязаны видеть его одинаково; читатель старой карты объявил бы такую транзакцию
+  // «без конверта», а экран Budget показал бы её привязанной — то самое расхождение
+  // пятерых читателей, которое дважды стоило владельцу денег (C1 Задачи 7a).
+  test('конверт, объявленный только новой формой, попадает в «с конвертом» и у хука, и у карточки', async () => {
+    const { user, foodId } = await freshOwner();
+    const caller = ownerCaller(user);
+    const envelopeId = newId();
+    await withIdentity(db, user, (tx) =>
+      tx.insert(entities).values(
+        divergentEntityRow({
+          ownerId: user,
+          id: envelopeId,
+          title: 'Конверт Еда (только props)',
+          props: {
+            'orbis/finance_category': foodId,
+            'orbis/limit': '10000.00',
+            'orbis/currency': 'RUB',
+            'orbis/period_start': '2026-05-01',
+            'orbis/period_end': '2026-05-31',
+          },
+          aspects: ['orbis/budget'],
+        }),
+      ),
+    );
+
+    const food = makeRow({
+      occurredOn: '2026-05-03',
+      amount: '340.00',
+      counterparty: 'Обед',
+      rowIndex: 0,
+    });
+    const r = await caller.import.confirm({
+      batchId: newId(),
+      namespace: NS,
+      fileHash: FILE_A,
+      items: [{ row: food, action: 'create', categoryRef: foodId }],
+    });
+    expect(r.created).toBe(1);
+    expect(r.unbudgeted).toEqual([]);
+
+    // Привязка действительно есть — иначе пустой `unbudgeted` мог бы значить «карточка
+    // вообще ничего не посчитала», а не «конверт нашёлся».
+    const parents = await withIdentity(db, user, (tx) =>
+      tx
+        .select({ sourceId: relations.sourceId })
+        .from(relations)
+        .where(eq(relations.relationType, 'parent')),
+    );
+    expect(parents.map((x) => x.sourceId)).toEqual([envelopeId]);
   });
 
   test('без конверта → unbudgeted по категориям; с конвертом — привязка хуком A4', async () => {

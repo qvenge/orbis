@@ -40,8 +40,9 @@ export interface SweepArgs {
  */
 function abandonNote(run: RunRow, idleMs: number): string {
   const minutes = idleMinutes(idleMs);
-  const last = run.run.steps.at(-1);
-  const external = run.run.steps.filter((s) => s.external).length;
+  const steps = run.props['orbis/run_steps'];
+  const last = steps.at(-1);
+  const external = steps.filter((s) => s.external).length;
   return (
     `Прогон оборван (нет шагов ${minutes} мин). Последний шаг: «${last?.summary ?? '—'}»; ` +
     `шагов с внешним эффектом: ${external}. ` +
@@ -86,7 +87,7 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
   for (const run of stale) {
     // Субъект прогона (V1.4) решает и исход, и то, есть ли вообще тикетная половина:
     // родитель рутинного прогона — сама рутина, тикета у него нет по устройству.
-    const isRoutineRun = run.run.routine_id !== undefined;
+    const isRoutineRun = run.props['orbis/run_routine'] !== undefined;
     const ticket = isRoutineRun
       ? null
       : await withIdentity(db, args.ownerId, (tx) => ticketOfRun(tx, run.id));
@@ -101,11 +102,12 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
         const runs = await runsOfParent(tx, ticket.id);
         return runs.at(-1)?.id === run.id;
       }));
-    const idleMs = now.getTime() - new Date(run.run.last_step_at).getTime();
+    const lastStepAt = run.props['orbis/last_step_at'];
+    const idleMs = now.getTime() - new Date(lastStepAt).getTime();
     const note = isRoutineRun ? failNote(idleMs) : abandonNote(run, idleMs);
     // «Тронул ли внешнее» решает не последний шаг, а весь прогон: агент мог создать
     // ветку первым шагом и упасть на пятом — остатки от этого никуда не делись (С6).
-    const hasEffect = run.run.steps.some((s) => s.external);
+    const hasEffect = run.props['orbis/run_steps'].some((s) => s.external);
     // Флажок пачки (D42 ОЧ.6, С1 ревью): смерть процесса не имеет права потерять «у этого
     // прогона осталось нерешённое». Для рутины подметание — не экзотика, а ШТАТНЫЙ конец
     // прогона: «рестарт и сон — основной вид сбоя» (V1.12) на засыпающем инстансе. Не
@@ -135,22 +137,25 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
           // шаг, и тогда прогон живой, а не брошенный.
           precondition: [
             { property: 'orbis/run_outcome', in: ['running'] },
-            { property: 'orbis/last_step_at', in: [run.run.last_step_at] },
+            { property: 'orbis/last_step_at', in: [lastStepAt] },
           ],
-          aspects: {
-            'orbis/agent-run': {
-              // Заметка ложится в СВОЁ поле исхода: `abandon_note` читается экранами как
-              // «работа брошена, разберите остатки», а `fail_note` — как «попытка не
-              // удалась»; одно поле на два разных события врало бы обоим.
-              ...(isRoutineRun
-                ? // Флажок — в ТОТ ЖЕ CAS-патч, что исход: отдельной записью он либо
-                  // проиграл бы гонку тому же предусловию, либо лёг бы на прогон, который
-                  // подмести не удалось. Пишется только `true` — «нерешённого нет» флажком
-                  // не отмечается (снятие — работа процедур решения и гашения, ОЧ.6)
-                  { outcome: 'failed', fail_note: note, ...(undecided && { undecided: true }) }
-                : { outcome: 'abandoned', abandon_note: note }),
-              finished_at: now.toISOString(),
-            },
+          // Внутренняя форма правки (§А1-1): плоские свойства по id.
+          props: {
+            // Заметка ложится в СВОЁ свойство исхода: `orbis/abandon_note` читается
+            // экранами как «работа брошена, разберите остатки», а `orbis/fail_note` — как
+            // «попытка не удалась»; одно свойство на два разных события врало бы обоим.
+            ...(isRoutineRun
+              ? // Флажок — в ТОТ ЖЕ CAS-патч, что исход: отдельной записью он либо
+                // проиграл бы гонку тому же предусловию, либо лёг бы на прогон, который
+                // подмести не удалось. Пишется только `true` — «нерешённого нет» флажком
+                // не отмечается (снятие — работа процедур решения и гашения, ОЧ.6)
+                {
+                  'orbis/run_outcome': 'failed',
+                  'orbis/fail_note': note,
+                  ...(undecided && { 'orbis/undecided': true }),
+                }
+              : { 'orbis/run_outcome': 'abandoned', 'orbis/abandon_note': note }),
+            'orbis/run_finished_at': now.toISOString(),
           },
         },
       },
@@ -158,25 +163,20 @@ export async function sweepStaleRuns(db: Db, args: SweepArgs): Promise<{ swept: 
 
     // Тикет чинится, только если он ДЕЙСТВИТЕЛЬНО висит в работе: владелец мог вернуть
     // его руками, и переписывать его статус задним числом сервер права не имеет.
-    if (
-      ticket !== null &&
-      isLastRun &&
-      ticket.aspectsLegacy['orbis/task']?.status === 'in_progress'
-    ) {
+    if (ticket !== null && isLastRun && ticket.props['orbis/task_status'] === 'in_progress') {
       operations.push({
         tool: 'entity_update',
         input: {
           id: ticket.id,
           precondition: [{ property: 'orbis/task_status', in: ['in_progress'] }],
-          aspects: {
-            'orbis/task': hasEffect
-              ? // Эффект был — возврат в planned запрещён (С6): он стёр бы факт, что
-                // работа велась, и следующий агент наткнулся бы на чужую ветку
-                { status: 'waiting', waiting_for: note }
-              : // Эффекта не было — безопасно перезапустить; чужой хвост waiting_for
-                // снимаем (null удаляет поле при merge аспекта)
-                { status: 'planned', waiting_for: null },
-          },
+          ...(hasEffect
+            ? // Эффект был — возврат в planned запрещён (С6): он стёр бы факт, что
+              // работа велась, и следующий агент наткнулся бы на чужую ветку
+              { props: { 'orbis/task_status': 'waiting', 'orbis/waiting_for': note } }
+            : // Эффекта не было — безопасно перезапустить; чужой хвост waiting_for
+              // снимаем ЯВНЫМ `unset`: `null` в новой форме — законное значение, а не
+              // распоряжение стереть (§А1-1)
+              { props: { 'orbis/task_status': 'planned' }, unset: ['orbis/waiting_for'] }),
         },
       });
     }

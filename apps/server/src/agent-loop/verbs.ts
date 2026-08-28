@@ -10,7 +10,6 @@
 // `execute`. Журнал §7.8 с актором-агентом, inverse, Undo и карточки достаются даром,
 // а правило «один путь мутаций» (§9.1) не двоится. Собственных INSERT/UPDATE здесь нет.
 import {
-  type AgentRunAspect,
   type CheckpointInput,
   type CheckpointResult,
   type ClaimTaskInput,
@@ -51,6 +50,7 @@ import type { AGENT_VERB_NAMES } from '../tools/registry';
 import {
   assignedTickets,
   parentProject,
+  type RunProps,
   type RunRow,
   runById,
   runSummary,
@@ -107,18 +107,10 @@ export function actorOf(subject: RunSubject): {
     : { actorKind: 'ai', source: 'system', mechanism: 'verb' };
 }
 
-/** Поле аспекта прогона, которым он привязан к субъекту (V1.4). */
-export function subjectField(s: RunSubject): 'grant_id' | 'routine_id' {
-  return s.kind === 'grant' ? 'grant_id' : 'routine_id';
-}
-
 /**
- * То же самое СВОЙСТВОМ (§А7-3) — адрес привязки к субъекту в предусловии CAS.
- *
- * Отдельная функция, а не перевод `subjectField` картой: у гранта и у рутины это два разных
- * свойства словаря (`orbis/grant` — слитое, его носят и назначение, и прогон), и одной
- * строкой имя поля в id не превращается. Ветка та же, что у `subjectField`, но список
- * значений другой, поэтому разъехаться они не могут молча — обе перечисляют оба случая.
+ * СВОЙСТВО, которым прогон привязан к субъекту (V1.4, §А7-3) — один адрес и для чтения, и
+ * для предусловия CAS. У гранта и у рутины это два разных свойства словаря (`orbis/grant`
+ * — слитое, его носят и назначение, и прогон).
  */
 export function subjectProperty(s: RunSubject): 'orbis/grant' | 'orbis/run_routine' {
   return s.kind === 'grant' ? 'orbis/grant' : 'orbis/run_routine';
@@ -241,7 +233,7 @@ type RunLookup =
 async function readRun(ctx: VerbCtx, runId: string): Promise<RunLookup> {
   const row = await withIdentity(ctx.db, ctx.ownerId, (tx) => runById(tx, runId));
   if (row === null) return { error: err('NOT_FOUND', 'прогон не найден', { run_id: runId }) };
-  if (row.run[subjectField(ctx.subject)] !== subjectId(ctx.subject)) {
+  if (row.props[subjectProperty(ctx.subject)] !== subjectId(ctx.subject)) {
     return {
       error: err('CONFLICT', 'прогон принадлежит другому субъекту', { run_id: runId }),
     };
@@ -281,23 +273,25 @@ function terminalError(
  * своего же результата, и агент считал бы работу несделанной.
  */
 function terminalBeforeWrite(
-  run: AgentRunAspect,
+  props: RunProps,
   runId: string,
   callId: string | undefined,
   tail: string,
 ): ToolDispatchResult | null {
-  if (run.outcome === 'running' || callId !== undefined) return null;
-  return terminalError(runId, run.outcome, closeNote(run), tail);
+  const outcome = props['orbis/run_outcome'];
+  if (outcome === 'running' || callId !== undefined) return null;
+  return terminalError(runId, outcome, closeNote(props), tail);
 }
 
 /**
- * Заметка о том, ЧЕМ кончился прогон, для details отказа. Две колонки, а не одна:
- * `abandon_note` пишет подметание грантового прогона (С6), `fail_note` — рутинного (V1.12)
- * и раннер при сбое. Читая только первую, отказ по рутинному прогону молчал бы о причине —
- * ровно там, где она единственное, что объясняет «почему мою работу не приняли».
+ * Заметка о том, ЧЕМ кончился прогон, для details отказа. Два свойства, а не одно:
+ * `orbis/abandon_note` пишет подметание грантового прогона (С6), `orbis/fail_note` —
+ * рутинного (V1.12) и раннер при сбое. Читая только первое, отказ по рутинному прогону
+ * молчал бы о причине — ровно там, где она единственное, что объясняет «почему мою работу
+ * не приняли».
  */
-function closeNote(run: AgentRunAspect): string | undefined {
-  return run.abandon_note ?? run.fail_note;
+function closeNote(props: RunProps): string | undefined {
+  return props['orbis/abandon_note'] ?? props['orbis/fail_note'];
 }
 
 /**
@@ -307,15 +301,15 @@ function closeNote(run: AgentRunAspect): string | undefined {
  */
 function terminalFromPrecondition(
   details: unknown,
-  run: AgentRunAspect,
+  props: RunProps,
   runId: string,
   tail: string,
 ): ToolDispatchResult {
   const actual = (details as { actual?: unknown } | null)?.actual;
   return terminalError(
     runId,
-    typeof actual === 'string' ? actual : run.outcome,
-    closeNote(run),
+    typeof actual === 'string' ? actual : props['orbis/run_outcome'],
+    closeNote(props),
     tail,
   );
 }
@@ -328,11 +322,16 @@ function savedRunMatches(
   outcome: string,
 ): boolean {
   if (wire === null || wire.id !== runId) return false;
-  const saved = wire.aspectsMap['orbis/agent-run'];
+  // Признак носителя (Р9): сохранённый ответ читается как ПРОГОН только если аспект на
+  // нём есть — значения `orbis/grant`/`orbis/run_outcome` пережили бы его снятие.
+  if (!wire.aspects.includes('orbis/agent-run')) return false;
   // Субъект — как в захвате: replay отдаёт сохранённый ответ, не спрашивая, кто пришёл.
   // Исход — против переиспользования id между глаголами: под id чекпойнта лежит прогон
   // в `checkpoint`, и отдать его как результат шага значило бы соврать про состояние.
-  return saved?.[subjectField(subject)] === subjectId(subject) && saved?.outcome === outcome;
+  return (
+    wire.props[subjectProperty(subject)] === subjectId(subject) &&
+    wire.props['orbis/run_outcome'] === outcome
+  );
 }
 
 /**
@@ -411,8 +410,10 @@ async function myQueue(ctx: VerbCtx, grant: GrantRef): Promise<ToolDispatchResul
     const rows = await assignedTickets(tx, grant.id);
     const out: QueueTicket[] = [];
     for (const row of rows) {
-      const task = row.aspectsLegacy['orbis/task'] ?? {};
-      const status = task.status as TaskStatus;
+      // Признак носителя стоит в SQL выборки (`assignedTickets`), поэтому здесь читаются
+      // просто свойства строки.
+      const task = row.props;
+      const status = task['orbis/task_status'] as TaskStatus;
       const project = await parentProject(tx, row.id);
       const runs = await runsOfParent(tx, row.id);
       const last = runs.at(-1);
@@ -421,8 +422,8 @@ async function myQueue(ctx: VerbCtx, grant: GrantRef): Promise<ToolDispatchResul
         title: row.title,
         status,
         claimable: CLAIMABLE_STATUSES.includes(status),
-        ...(typeof task.priority === 'string' && { priority: task.priority }),
-        ...(typeof task.due_date === 'string' && { due_date: task.due_date }),
+        ...(typeof task['orbis/priority'] === 'string' && { priority: task['orbis/priority'] }),
+        ...(typeof task['orbis/due_date'] === 'string' && { due_date: task['orbis/due_date'] }),
         ...(project !== null && { project: { id: project.id, title: project.title } }),
         ...(last !== undefined && { last_run: runSummary(last) }),
       });
@@ -476,7 +477,7 @@ async function claimTask(
           { property: 'orbis/executor', in: ['agent'] },
           { property: 'orbis/grant', in: [grant.id] },
         ],
-        aspects: { 'orbis/task': { status: 'in_progress' } },
+        props: { 'orbis/task_status': 'in_progress' },
       },
     },
     {
@@ -485,35 +486,36 @@ async function claimTask(
         id: runId,
         title: `Прогон: ${ticket.title}`,
         tags: [],
-        aspects: {
-          'orbis/agent-run': {
-            grant_id: grant.id,
-            // ДЕНОРМАЛИЗАЦИЯ ПРОЕКТА СНЯТА (§А8): поля `project_id` в реестре свойств нет —
-            // его заменяют вычисляемые `orbis/parent_project`/`orbis/root_project`. Писать
-            // его дальше нельзя: с переходом валидации на реестр значение уезжает под
-            // неизвестным id и получает `UNKNOWN_PROPERTY` — то есть захват тикета отказал
-            // бы целиком.
-            //
-            // Считает их правило `nearest_ancestor` (движок — `executor/ancestors.ts`), и
-            // на прогоне они появляются сами: связь «тикет → прогон» иерархическая, и её
-            // создание ниже в этом же batch запускает пересчёт поддерева.
-            //
-            // ЦЕНА, НАЗВАННАЯ ВСЛУХ: блок «Последние прогоны» в заготовке тела проекта
-            // (`seed/project-body.ts`) фильтрует по `project_id`, которого больше никто не
-            // пишет. С Задачи 9b он отдаёт не пустой список, а ОТКАЗ `UNKNOWN_FIELD`:
-            // серверный разбор перешёл на реестр свойств, а удалённого §А8 поля в нём нет
-            // — и молчаливая пустота на несуществующее имя как раз то, против чего §А5-3ж.
-            // Чинится это переписыванием тела на `orbis/parent_project` в Задаче 21.
-            // Убирать блок здесь нельзя: тела проектов уже написаны, и вычищать их правкой
-            // шаблона значило бы менять чужой текст.
-            outcome: 'running',
-            started_at: nowIso,
-            last_step_at: nowIso,
-            step_count: 0,
-            steps: [],
-            ...(input.session_url !== undefined && { session_url: input.session_url }),
-          },
+        // Внутренняя форма создания (§А1-1): плоские `props` по id свойства плюс СПИСОК
+        // аспектов, которые сущность несёт.
+        props: {
+          'orbis/grant': grant.id,
+          // ДЕНОРМАЛИЗАЦИЯ ПРОЕКТА СНЯТА (§А8): поля `project_id` в реестре свойств нет —
+          // его заменяют вычисляемые `orbis/parent_project`/`orbis/root_project`. Писать
+          // его дальше нельзя: с переходом валидации на реестр значение уезжает под
+          // неизвестным id и получает `UNKNOWN_PROPERTY` — то есть захват тикета отказал
+          // бы целиком.
+          //
+          // Считает их правило `nearest_ancestor` (движок — `executor/ancestors.ts`), и
+          // на прогоне они появляются сами: связь «тикет → прогон» иерархическая, и её
+          // создание ниже в этом же batch запускает пересчёт поддерева.
+          //
+          // ЦЕНА, НАЗВАННАЯ ВСЛУХ: блок «Последние прогоны» в заготовке тела проекта
+          // (`seed/project-body.ts`) фильтрует по `project_id`, которого больше никто не
+          // пишет. С Задачи 9b он отдаёт не пустой список, а ОТКАЗ `UNKNOWN_FIELD`:
+          // серверный разбор перешёл на реестр свойств, а удалённого §А8 поля в нём нет
+          // — и молчаливая пустота на несуществующее имя как раз то, против чего §А5-3ж.
+          // Чинится это переписыванием тела на `orbis/parent_project` в Задаче 21.
+          // Убирать блок здесь нельзя: тела проектов уже написаны, и вычищать их правкой
+          // шаблона значило бы менять чужой текст.
+          'orbis/run_outcome': 'running',
+          'orbis/run_started_at': nowIso,
+          'orbis/last_step_at': nowIso,
+          'orbis/step_count': 0,
+          'orbis/run_steps': [],
+          ...(input.session_url !== undefined && { 'orbis/session_url': input.session_url }),
         },
+        aspects: ['orbis/agent-run'],
       },
     },
     {
@@ -648,12 +650,12 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
   for (let attempt = 0; attempt < STEP_CAS_ATTEMPTS; attempt++) {
     const found = await readRun(ctx, input.run_id);
     if (found.error !== undefined) return found.error;
-    const run = found.run.run;
+    const run = found.run.props;
     const terminal = terminalBeforeWrite(run, input.run_id, input.id, tail);
     if (terminal !== null) return terminal;
 
     const now = ctx.clock();
-    const n = run.step_count;
+    const n = run['orbis/step_count'];
     const step = {
       seq: n + 1,
       at: iso(now),
@@ -679,12 +681,11 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
                 // CAS: конкурентный шаг успел лечь → CONFLICT → перечитать и повторить
                 { property: 'orbis/step_count', in: [n] },
               ],
-              aspects: {
-                'orbis/agent-run': {
-                  steps: [...run.steps, step],
-                  step_count: n + 1,
-                  last_step_at: iso(now),
-                },
+              // Внутренняя форма правки (§А1-1): плоские свойства по id.
+              props: {
+                'orbis/run_steps': [...run['orbis/run_steps'], step],
+                'orbis/step_count': n + 1,
+                'orbis/last_step_at': iso(now),
               },
             },
           },
@@ -703,7 +704,7 @@ async function runStep(ctx: VerbCtx, input: RunStepInput): Promise<ToolDispatchR
         return replayMismatch('orbis_run_step', batchId);
       }
       // Счётчик — из сохранённого ответа, а не локальное n+1: правда о прогоне лежит там
-      const saved = runWire.aspectsMap['orbis/agent-run']?.step_count;
+      const saved = runWire.props['orbis/step_count'];
       const result: RunStepResult = {
         run_id: runWire.id,
         step_count: typeof saved === 'number' ? saved : n + 1,
@@ -766,7 +767,13 @@ async function hasOpenUnits(ctx: VerbCtx, runId: string): Promise<boolean> {
 
 /** Патч тикета вместе с его собственными предусловиями (у итога — право на `done`). */
 interface TicketUpdate {
-  aspects: Record<string, unknown>;
+  /** Значения по id свойств (§А1-1). */
+  props: Record<string, unknown>;
+  /**
+   * ЯВНОЕ снятие свойства. Отдельным списком, а не `null` в `props`: `null` в новой форме
+   * — законное значение json-свойства, а не распоряжение стереть (контракт `entityPropsPatch`).
+   */
+  unset?: string[];
   /** Сверх общего «тикет ещё в работе». */
   precondition?: EntityUpdatePreconditionItem[];
 }
@@ -822,7 +829,7 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   const run = found.run;
   // Терминальность отдаётся сразу только без ключа идемпотентности: с ним вызов идёт в
   // executor, потому что повтор ТОГО ЖЕ вызова обязан вернуть свой сохранённый ответ.
-  const terminal = terminalBeforeWrite(run.run, args.run_id, args.id, args.terminalTail);
+  const terminal = terminalBeforeWrite(run.props, args.run_id, args.id, args.terminalTail);
   if (terminal !== null) return terminal;
 
   // Тикет ищется ТОЛЬКО грантовому прогону: у рутинного его нет по устройству, и общий
@@ -855,14 +862,12 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
       input: {
         id: run.id,
         precondition: runStillMine(ctx.subject),
-        aspects: {
-          'orbis/agent-run': {
-            ...args.runPatch(now),
-            finished_at: iso(now),
-            last_step_at: iso(now),
-            ...(args.usage !== undefined && { usage: args.usage }),
-            ...(args.session_url !== undefined && { session_url: args.session_url }),
-          },
+        props: {
+          ...args.runPatch(now),
+          'orbis/run_finished_at': iso(now),
+          'orbis/last_step_at': iso(now),
+          ...(args.usage !== undefined && { 'orbis/run_usage': args.usage }),
+          ...(args.session_url !== undefined && { 'orbis/session_url': args.session_url }),
         },
       },
     },
@@ -883,7 +888,8 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
           { property: 'orbis/grant', in: [ctx.subject.grant.id] },
           ...(ticketUpdate.precondition ?? []),
         ],
-        aspects: { 'orbis/task': ticketUpdate.aspects },
+        props: ticketUpdate.props,
+        ...(ticketUpdate.unset !== undefined && { unset: ticketUpdate.unset }),
       },
     });
   }
@@ -905,7 +911,7 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
       const property = preconditionProperty(r.error.details);
       // Свежий id на уже закрытом прогоне — тот же ответ, что дала бы предпроверка
       if (property === 'orbis/run_outcome') {
-        return terminalFromPrecondition(r.error.details, run.run, args.run_id, args.terminalTail);
+        return terminalFromPrecondition(r.error.details, run.props, args.run_id, args.terminalTail);
       }
       // Одно сообщение на остальные предусловия — как в захвате: агент не исправит ни
       // статус тикета, ни снятое право закрытия, а разбор остаётся в details.
@@ -933,7 +939,11 @@ async function closeRun(ctx: VerbCtx, args: CloseRunArgs): Promise<ToolDispatchR
   }
 
   const ticketWire = wireEntityAt(r.results, 1);
-  const status = ticketWire?.aspectsMap['orbis/task']?.status;
+  // Признак носителя (Р9): статус читается как СТАТУС ЗАДАЧИ только пока аспект на месте.
+  const status =
+    ticketWire?.aspects.includes('orbis/task') === true
+      ? ticketWire.props['orbis/task_status']
+      : undefined;
   if (
     ticketWire === null ||
     ticketWire.id !== ticket.id ||
@@ -975,15 +985,17 @@ async function checkpoint(ctx: VerbCtx, input: CheckpointInput): Promise<ToolDis
     terminalTail: 'чекпойнт не принимается',
     outcome: 'checkpoint',
     runPatch: (now) => ({
-      outcome: 'checkpoint',
-      checkpoint: { question: input.question, asked_at: iso(now) },
+      'orbis/run_outcome': 'checkpoint',
+      'orbis/run_checkpoint': { question: input.question, asked_at: iso(now) },
       // Флажок — ТЕМ ЖЕ патчем, что исход (довод тот же, что у `proposal` в
       // closeRoutineRun): отдельной дозаписью он дал бы миг «прогон закрыт, а нерешённого
       // при нём нет» — ровно то состояние, по которому бейдж решает, звать ли владельца.
       // Актор патча при этом прежний (`{ai, system}`, `actorOf`) — инвариант §9.6.
-      ...(undecided && { undecided: true }),
+      ...(undecided && { 'orbis/undecided': true }),
     }),
-    ticketUpdate: () => ({ aspects: { status: 'waiting', waiting_for: input.question } }),
+    ticketUpdate: () => ({
+      props: { 'orbis/task_status': 'waiting', 'orbis/waiting_for': input.question },
+    }),
     expected: ['waiting'],
   });
   // Ответ — CheckpointResult, сужение FinishResult: `ticket_status` у чекпойнта всегда
@@ -1015,20 +1027,27 @@ async function finish(ctx: VerbCtx, input: FinishInput): Promise<ToolDispatchRes
     ...(input.session_url !== undefined && { session_url: input.session_url }),
     terminalTail: 'итог не принимается',
     outcome: 'finished',
-    runPatch: () => ({ outcome: 'finished', report: input.report }),
+    runPatch: () => ({
+      'orbis/run_outcome': 'finished',
+      'orbis/run_report': input.report,
+    }),
     ticketUpdate: (ticket) =>
       // Отсутствие may_close = запрет (С8): ajv default'ов не применяет, и «не сказано» —
-      // это «нельзя», а не «можно».
-      ticket.aspectsLegacy['orbis/assignment']?.may_close === true
+      // это «нельзя», а не «можно». Признак носителя обязателен и здесь: `ticketOfRun`
+      // требует лишь `orbis/task`, а `orbis/may_close` переживает снятие аспекта
+      // назначения (Р9) — без признака право закрытия читалось бы у тикета, назначение с
+      // которого владелец уже снял.
+      ticket.aspects.includes('orbis/assignment') && ticket.props['orbis/may_close'] === true
         ? {
             // Право сверяется ещё раз под замком: владелец мог снять may_close между
             // нашим чтением и записью, и тогда `done` стал бы решением агента, а не его.
             precondition: [{ property: 'orbis/may_close', in: [true] }],
             // Уходя из waiting — снимаем waiting_for (конвенция среза, как в подметании):
             // вопрос прошлого чекпойнта рядом с `done` читался бы как незакрытый.
-            aspects: { status: 'done', waiting_for: null },
+            props: { 'orbis/task_status': 'done' },
+            unset: ['orbis/waiting_for'],
           }
-        : { aspects: { status: 'waiting', waiting_for: input.report } },
+        : { props: { 'orbis/task_status': 'waiting', 'orbis/waiting_for': input.report } },
     expected: ['waiting', 'done'],
   });
 }
@@ -1079,15 +1098,15 @@ export async function closeRoutineRun(
     terminalTail: 'итог не принимается',
     outcome: args.outcome,
     runPatch: () => ({
-      outcome: args.outcome,
-      ...(args.report !== undefined && { report: args.report }),
-      ...(args.failNote !== undefined && { fail_note: args.failNote }),
-      ...(args.proposal !== undefined && { proposal: args.proposal }),
+      'orbis/run_outcome': args.outcome,
+      ...(args.report !== undefined && { 'orbis/run_report': args.report }),
+      ...(args.failNote !== undefined && { 'orbis/fail_note': args.failNote }),
+      ...(args.proposal !== undefined && { 'orbis/run_proposal': args.proposal }),
       // Флажок пачки — тем же патчем и по тому же доводу, что судьба предложения выше.
       // Пишется ТОЛЬКО `true`: «нерешённого нет» и «пачки не было» здесь одно и то же
       // событие, а `false` на аспекте значит «пачка была и разобрана» — это уже запись
       // процедур решения и гашения, а не закрытия прогона.
-      ...(undecided && { undecided: true }),
+      ...(undecided && { 'orbis/undecided': true }),
     }),
   });
 }

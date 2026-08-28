@@ -12,7 +12,13 @@ import {
 } from '@orbis/shared';
 import { parseQueryAny, type QueryFilterNode, toParseRegistry } from '@orbis/shared/query';
 import { and, eq, inArray } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import {
+  appDb,
+  divergentEntityRow,
+  freshUserId,
+  requireEnv,
+  truncateAll,
+} from '../../test/helpers';
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
@@ -48,11 +54,15 @@ async function createTemplate(
     tags?: string[];
     aspects: Record<string, Record<string, unknown>>;
   },
+  // `orbis/bank_txn_id` — служебное свойство (§А2-5): его пишет только импорт, и шаблон с
+  // ним иначе как этим механизмом не завести (гейт `SYSTEM_WRITABLE_MECHANISMS`).
+  mechanism: 'user' | 'import' = 'user',
 ): Promise<string> {
   const r = await execute(db, {
     actorUserId: owner,
     actorKind: 'owner',
     source: 'system',
+    mechanism,
     operations: [{ tool: 'entity_create', input: { tags: [], ...input } }],
   });
   if (!r.ok) throw new Error(`шаблон не создан: ${r.error.code} ${r.error.message}`);
@@ -393,6 +403,165 @@ describe('materializeInstances (01 §5.4)', () => {
       today: '2026-07-01',
     });
     expect(r.created).toBe(0);
+  });
+
+  test('Р-28: перечень наследуемых свойств ЯВНЫЙ — инстанс транзакции получает ровно его, без bank_txn_id', async () => {
+    const owner = freshUserId();
+    const categoryRef = crypto.randomUUID();
+    const templateId = await createTemplate(
+      owner,
+      {
+        title: 'Аренда с полным набором полей',
+        aspects: {
+          'orbis/schedule': { ...dailySchedule('2026-07-01'), location: 'Дом', all_day: false },
+          'orbis/financial': {
+            amount: '340.00',
+            currency: 'RUB',
+            direction: 'expense',
+            category_ref: categoryRef,
+            payment_method: 'card',
+            counterparty: 'Арендодатель',
+            // Идентификатор строки ВЫПИСКИ: он про одну операцию банка, и наследовать его
+            // каждому инстансу значило бы объявить их все одной и той же операцией.
+            bank_txn_id: 'stmt-2026-07-777',
+            recurring: true,
+          },
+        },
+      },
+      'import',
+    );
+
+    const r = await materializeInstances({
+      db,
+      ownerId: owner,
+      from: '2026-07-01',
+      to: '2026-07-01',
+      today: '2026-07-01',
+    });
+    expect(r.created).toBe(1);
+
+    const [row] = await ownEntities(owner, [recurringInstanceId(templateId, '2026-07-01')]);
+    if (row === undefined) throw new Error('инстанс не создан');
+    // Множество ключей сравнивается ЦЕЛИКОМ, а не по одному: перечень Р-28 закрыт, и
+    // «лишнее унаследованное свойство» обязано краснеть так же громко, как потерянное.
+    expect(Object.keys(row.props as Record<string, unknown>).sort()).toEqual([
+      'orbis/all_day',
+      'orbis/amount',
+      'orbis/counterparty',
+      'orbis/currency',
+      'orbis/direction',
+      'orbis/finance_category',
+      'orbis/location',
+      'orbis/occurred_on',
+      'orbis/payment_method',
+      'orbis/planned',
+      'orbis/recurring',
+      'orbis/start_at',
+      'orbis/timezone',
+    ]);
+    const props = row.props as Record<string, unknown>;
+    expect(props['orbis/occurred_on']).toBe('2026-07-01');
+    expect(props['orbis/planned']).toBe(true);
+    expect(props['orbis/recurring']).toBe(true);
+    expect(props['orbis/finance_category']).toBe(categoryRef);
+    expect([...row.aspects].sort()).toEqual(['orbis/financial', 'orbis/schedule']);
+  });
+
+  // Проба расхождением колонок (§А1-1): признак носителя проверяется с ОБЕИХ сторон.
+  //  • `orbis/recurrence` в `props` БЕЗ аспекта расписания — так выглядит строка после
+  //    detach (Р9). Старая карта теряла правило вместе с аспектом, `props` его хранят:
+  //    без признака сущность, расписания лишённая, продолжала бы плодить инстансы;
+  //  • финансовые значения БЕЗ аспекта финансов на живом шаблоне: перечень Р-28 не должен
+  //    попасть в инстанс, иначе он родится «транзакцией», которой шаблон уже не является.
+  test('снятый аспект отменяет и сам шаблон, и наследование финансов (Р9)', async () => {
+    const owner = freshUserId();
+    const ghost = crypto.randomUUID();
+    await withIdentity(db, owner, (tx) =>
+      tx.insert(entities).values(
+        divergentEntityRow({
+          ownerId: owner,
+          id: ghost,
+          title: 'Расписание снято, правило осталось',
+          props: {
+            'orbis/start_at': '2026-07-01T09:00:00+03:00',
+            'orbis/timezone': 'Europe/Moscow',
+            'orbis/recurrence': { freq: 'daily', interval: 1 },
+          },
+          aspects: [],
+        }),
+      ),
+    );
+
+    const templateId = await createTemplate(owner, {
+      title: 'Шаблон без аспекта финансов',
+      aspects: { 'orbis/schedule': dailySchedule('2026-07-01') },
+    });
+    // Финансовые значения кладём мимо аспекта — так же, как их оставил бы detach.
+    await withIdentity(db, owner, (tx) =>
+      tx
+        .update(entities)
+        .set({
+          props: {
+            'orbis/start_at': '2026-07-01T06:00:00.000Z',
+            'orbis/timezone': 'Europe/Moscow',
+            'orbis/recurrence': { freq: 'daily', interval: 1 },
+            'orbis/amount': '340.00',
+            'orbis/direction': 'expense',
+            'orbis/finance_category': crypto.randomUUID(),
+          },
+        })
+        .where(eq(entities.id, templateId)),
+    );
+
+    const r = await materializeInstances({
+      db,
+      ownerId: owner,
+      from: '2026-07-01',
+      to: '2026-07-01',
+      today: '2026-07-01',
+    });
+    // Ровно один инстанс: у сущности без аспекта расписания его нет вовсе.
+    expect(r.created).toBe(1);
+    const rows = await ownEntities(owner, [
+      recurringInstanceId(templateId, '2026-07-01'),
+      recurringInstanceId(ghost, '2026-07-01'),
+    ]);
+    expect(rows.map((x) => x.id)).toEqual([recurringInstanceId(templateId, '2026-07-01')]);
+    const [row] = rows;
+    if (row === undefined) throw new Error('инстанс не создан');
+    expect(Object.keys(row.props as Record<string, unknown>).sort()).toEqual([
+      'orbis/start_at',
+      'orbis/timezone',
+    ]);
+    expect([...row.aspects]).toEqual(['orbis/schedule']);
+  });
+
+  test('Р-28: инстанс задачи-шаблона несёт только расписание — ни финансовых свойств, ни статуса задачи', async () => {
+    const owner = freshUserId();
+    const templateId = await createTemplate(owner, {
+      title: 'Полить цветы',
+      aspects: {
+        'orbis/schedule': dailySchedule('2026-07-01'),
+        'orbis/task': { status: 'in_progress', priority: 'high', effort_min: 15 },
+      },
+    });
+
+    const r = await materializeInstances({
+      db,
+      ownerId: owner,
+      from: '2026-07-01',
+      to: '2026-07-01',
+      today: '2026-07-01',
+    });
+    expect(r.created).toBe(1);
+
+    const [row] = await ownEntities(owner, [recurringInstanceId(templateId, '2026-07-01')]);
+    if (row === undefined) throw new Error('инстанс не создан');
+    expect(Object.keys(row.props as Record<string, unknown>).sort()).toEqual([
+      'orbis/start_at',
+      'orbis/timezone',
+    ]);
+    expect([...row.aspects]).toEqual(['orbis/schedule']);
   });
 });
 

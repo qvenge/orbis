@@ -33,8 +33,6 @@ export type AnyRecord = Record<string, unknown>;
 export interface AgentLoopHelpers {
   seedEntity: (owner: string, input: Record<string, unknown>) => Promise<WireEntity>;
   link: (owner: string, sourceId: string, targetId: string, role: RelationRoleId) => Promise<void>;
-  /** Старая карта аспектов строки (§А1-1): читает `aspects_legacy`. */
-  aspectsOf: (owner: string, id: string) => Promise<Record<string, AnyRecord>>;
   /** Свойства строки по id (§А1-1) — то, чем аспекты сущности являются в новой форме. */
   propsOf: (owner: string, id: string) => Promise<AnyRecord>;
   childrenOf: (owner: string, parentId: string) => Promise<string[]>;
@@ -128,18 +126,6 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
       ],
     });
     if (!r.ok) throw new Error(`link: ${r.error.code} ${r.error.message}`);
-  }
-
-  async function aspectsOf(owner: string, id: string): Promise<Record<string, AnyRecord>> {
-    const rows = await withIdentity(db, owner, (tx) =>
-      tx
-        .select({ aspectsLegacy: entities.aspectsLegacy })
-        .from(entities)
-        .where(eq(entities.id, id)),
-    );
-    const row = rows[0];
-    if (!row) throw new Error(`сущность ${id} не найдена`);
-    return row.aspectsLegacy as Record<string, AnyRecord>;
   }
 
   /**
@@ -315,7 +301,6 @@ export function agentLoopHelpers(db: Db): AgentLoopHelpers {
   return {
     seedEntity,
     link,
-    aspectsOf,
     propsOf,
     childrenOf,
     actionsOf,

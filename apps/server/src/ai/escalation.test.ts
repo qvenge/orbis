@@ -179,7 +179,7 @@ async function actionById(actionId: string): Promise<ActionRecord> {
 
 async function categoryRefOf(txnId: string): Promise<string | undefined> {
   const rows = await adminRows(
-    sql`SELECT aspects_legacy -> 'orbis/financial' ->> 'category_ref' AS ref
+    sql`SELECT props ->> 'orbis/finance_category' AS ref
         FROM entities WHERE id = ${txnId}`,
   );
   return rows[0]?.ref as string | undefined;
@@ -274,6 +274,27 @@ describe('эскалация повторных исправлений кате�
     const rule = await createRule(user);
     const archive = { id: rule.id, archived: true };
     ok(await execute(db, req(user, [{ tool: 'entity_update', input: archive }]), { sink }));
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    await recategorize(user, await createTxn(user, 'Пятёрочка', food), fun);
+    expect((await cardsOf(user, 'memory_rule_suggestion')).length).toBe(1);
+  });
+
+  // Проба расхождением колонок (§А1-1): аспект памяти СНЯТ, `orbis/memory_kind` и
+  // `orbis/rule_scope` в `props` остались (Р9). Старая карта теряла их вместе с аспектом,
+  // и снятое правило перестало бы подавлять предложение — новая форма обязана вести себя
+  // так же, а без признака носителя правило глушило бы предложение вечно.
+  test('5b. правило со СНЯТЫМ аспектом памяти не подавляет, хотя его значения в props остались (Р9)', async () => {
+    const { user, food, fun } = await freshOwner();
+    const rule = await createRule(user);
+    ok(
+      await execute(
+        db,
+        req(user, [
+          { tool: 'entity_update', input: { id: rule.id, aspects: { detach: ['orbis/memory'] } } },
+        ]),
+        { sink },
+      ),
+    );
     await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
     await recategorize(user, await createTxn(user, 'Пятёрочка', food), fun);
     expect((await cardsOf(user, 'memory_rule_suggestion')).length).toBe(1);
