@@ -16,6 +16,7 @@ import type { RegistrySnapshot } from '../registry/load';
 import { AGENT_VERB_NAMES, buildToolDefs } from '../tools/registry';
 import {
   AUTONOMY_PROPERTIES,
+  autonomyArmed,
   classifyToolCall,
   entityUpdatePreviewDiff,
   factsFromToolCall,
@@ -496,6 +497,31 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
     expect(factsFromToolCall(UPDATE_DEF, reschedule).grantsAutonomy).toBe(false);
     expect(levelOf(UPDATE_DEF, reschedule)).toBe('execute');
 
+    // ПУСТОЙ белый список в НАБОРЕ выдачей не является: он ничего не разрешает, и рутина с
+    // `allowed_tools: []` безоружна так же, как без свойства вовсе. Ответ у набора и у пробы
+    // состояния (`autonomyArmed`, она же считает вооружённость по БД) обязан быть ОДИН —
+    // иначе владельца просят подтвердить выдачу ничего (Н-1 ре-ревью фикс-раунда 3).
+    const attachEmpty = {
+      entity_id: newId(),
+      data: routine({ 'orbis/allowed_tools': [] }),
+    };
+    expect(factsFromToolCall(ATTACH_DEF, attachEmpty).grantsAutonomy).toBe(false);
+    expect(levelOf(ATTACH_DEF, attachEmpty)).toBe('execute');
+    const createEmpty = {
+      title: 'Пустой список',
+      tags: [],
+      props: routine({ 'orbis/allowed_tools': [] }),
+      aspects: ['orbis/routine'],
+    };
+    expect(factsFromToolCall(CREATE_DEF, createEmpty).grantsAutonomy).toBe(false);
+    // …а ОДИН элемент — уже выдача (тот же вход, длина списка другая).
+    const attachOne = { entity_id: newId(), data: routine({ 'orbis/allowed_tools': ['x'] }) };
+    expect(factsFromToolCall(ATTACH_DEF, attachOne).grantsAutonomy).toBe(true);
+    // В ПАТЧЕ пустой список — наоборот, выдача: там это не «инструментов нет», а «ОТНЯТЬ
+    // инструменты у живой рутины». Набор описывает состояние, патч — переход.
+    const patchEmpty = { id: newId(), props: { 'orbis/allowed_tools': [] } };
+    expect(factsFromToolCall(UPDATE_DEF, patchEmpty).grantsAutonomy).toBe(true);
+
     // Чужое свойство — не доверенность рутины
     const foreign = { id: newId(), props: { 'orbis/task_status': 'done' } };
     expect(factsFromToolCall(UPDATE_DEF, foreign).grantsAutonomy).toBe(false);
@@ -572,13 +598,34 @@ describe('адреса доверенности ≡ реестр (Minor-4)', () 
     expect(required.get(ROUTINE_MODE_PROPERTY)).toBe(true);
     expect(required.get(ROUTINE_TOOLS_PROPERTY)).toBe(false);
     // Обязательность — не мелочь: на ней стоит довод, почему «назвать белый список = выдача»
-    // не шумит (`grantsByCarrier`), и почему консервативный вариант пробы был отклонён.
+    // не шумит (`autonomyArmed`), и почему консервативный вариант пробы был отклонён.
     expect([...AUTONOMY_PROPERTIES]).toEqual([ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY]);
   });
 
   test('переходная карта @orbis/shared ведёт на те же два адреса', () => {
     expect(legacyFieldToProperty('orbis/routine', 'mode')).toBe(ROUTINE_MODE_PROPERTY);
     expect(legacyFieldToProperty('orbis/routine', 'allowed_tools')).toBe(ROUTINE_TOOLS_PROPERTY);
+  });
+
+  test('вооружённость считает ОДНА функция: набор и состояние отвечают одинаково', () => {
+    // `autonomyArmed` зовут двое: гейт (набор из payload'а) и проба состояния по БД
+    // (`autonomyDisarmedByCarrier`). Пока формулы стояли врозь, `allowed_tools: []` был
+    // «выдачей» у одного и «безоружностью» у другого.
+    for (const values of [
+      { [ROUTINE_MODE_PROPERTY]: 'act' },
+      { [ROUTINE_TOOLS_PROPERTY]: ['entity_create'] },
+      { [ROUTINE_MODE_PROPERTY]: 'act', [ROUTINE_TOOLS_PROPERTY]: [] },
+    ]) {
+      expect([values, autonomyArmed(values)]).toEqual([values, true]);
+    }
+    for (const values of [
+      {},
+      { [ROUTINE_MODE_PROPERTY]: 'propose' },
+      { [ROUTINE_TOOLS_PROPERTY]: [] },
+      { [ROUTINE_MODE_PROPERTY]: 'propose', [ROUTINE_TOOLS_PROPERTY]: [] },
+    ]) {
+      expect([values, autonomyArmed(values)]).toEqual([values, false]);
+    }
   });
 
   test('оба свойства — скаляр и список строк: сравнение значений по JSON точное', () => {

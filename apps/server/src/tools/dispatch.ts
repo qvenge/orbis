@@ -68,6 +68,7 @@ import { undoLast } from '../executor/undo';
 import type { GrantRef } from '../oauth/grants';
 import {
   AUTONOMY_PROPERTIES,
+  autonomyArmed,
   type ConfirmationLevel,
   classifyToolCall,
   entityUpdatePreviewDiff,
@@ -1453,6 +1454,12 @@ const AUTONOMY_LABEL: Record<string, string> = {
  * attach'ем» рассказывала владельцу «переименование снимает белый список» — неправда про
  * операцию, которая доверенности не касается вовсе.
  *
+ * ОБЪЕКТ называется честно, и это исправление фикс-раунда 4: значения доверенности живут
+ * независимо от аспекта (Р9), поэтому вызов вправе положить белый список на запись, рутиной не
+ * являющуюся, — и фраза «Автономия рутины «Не рутина»» врала владельцу про то, над чем его
+ * просят нажать «Принять». Уровень при этом прежний: значения вооружат запись в тот миг, когда
+ * аспект появится, и замок держит их на любом объекте — меняется только подпись.
+ *
  * ПУСТОЙ строки функция не возвращает никогда: её зовут только когда доверенность
  * действительно тронута, и «нечего сказать» тут означало бы осечку сборки, а не отсутствие
  * события. Fail-closed — назвать событие общими словами (createPending на всякий случай
@@ -1492,12 +1499,23 @@ async function autonomySummary(
       grantsRoutineAutonomy(op.tool, op.input) || removed.length > 0 || byCarrier !== undefined;
     if (!touches) continue;
 
+    const head = typeof targetId === 'string' ? await entityHead(tx, targetId) : undefined;
     const title =
       typeof targetId === 'string'
-        ? ((await entityHead(tx, targetId))?.title ?? `${targetId.slice(0, 8)}…`)
+        ? (head?.title ?? `${targetId.slice(0, 8)}…`)
         : typeof op.input.title === 'string'
           ? op.input.title
           : 'новая рутина';
+    // Карточка обязана честно называть ОБЪЕКТ. Свойства доверенности живут независимо от
+    // аспекта (Р9), поэтому модель вправе положить `orbis/allowed_tools` на что угодно — и
+    // прежде такой вызов давал «Автономия рутины «Не рутина»», то есть карточка врала про то,
+    // над чем владельца просят нажать «Принять». Рутиной запись считается, если операция сама
+    // навешивает аспект (attach, `aspects`/`aspects.attach` — `carriesRoutineAspect`) или он
+    // уже на строке. Цели не видно (её нет или она чужая) — рутиной звать не за что:
+    // исполнение ответит NOT_FOUND. Уровень это НЕ трогает: значения доверенности вооружают
+    // запись в тот миг, когда аспект появится, и замок держит их на любом объекте.
+    const aboutRoutine =
+      carriesRoutineAspect(op.tool, op.input) || head?.aspects.includes(ROUTINE_ASPECT) === true;
     const facts: string[] = [];
     const mode = routine[ROUTINE_MODE_PROPERTY];
     if (typeof mode === 'string') facts.push(`режим ${mode}`);
@@ -1521,20 +1539,26 @@ async function autonomySummary(
     // Снятие носителя — не снятие значений (Р9), и называть его «снимает режим» было бы
     // враньём: режим и белый список уцелеют в `props`, работать перестанет сама рутина.
     if (byCarrier?.detached === true) facts.push('снимает аспект рутины');
-    parts.push(
-      `Автономия рутины «${title}»: ${facts.length > 0 ? facts.join(', ') : 'правка доверенности'}`,
-    );
+    const subject = aboutRoutine
+      ? `Автономия рутины «${title}»`
+      : `Свойства доверенности рутины на записи «${title}»`;
+    parts.push(`${subject}: ${facts.length > 0 ? facts.join(', ') : 'правка доверенности'}`);
   }
   // Fail-closed: сюда попадают только вызовы, тронувшие доверенность (см. шапку).
   return parts.length > 0 ? parts.join('; ') : 'Правка автономии рутины';
 }
 
-/** Что ОДНА операция отнимает у доверенности рутины через её носитель. */
+/**
+ * Что ОДНА операция отнимает у доверенности рутины через её носитель.
+ *
+ * САМО НАЛИЧИЕ записи в карте значит «эта операция отнимает» — поля лишь перечисляют то, что
+ * можно НАЗВАТЬ владельцу отдельной фразой. Обесценивание (`act` → `propose` при живом
+ * свойстве) фразы не требует — новое значение сводка назовёт из самого патча, — но запись
+ * порождает, и потому у него своего поля здесь нет: write-only поле не проверяется ничем.
+ */
 interface CarrierDisarm {
   /** свойства доверенности, которых замена носителя лишает запись целиком */
   removed: string[];
-  /** свойства, чьё ЗНАЧЕНИЕ замена носителя перезаписывает (`act` → `propose`) */
-  devalued: string[];
   /** снятие самого аспекта рутины у ВООРУЖЁННОЙ записи: значения уцелеют, рутина — нет */
   detached: boolean;
 }
@@ -1579,12 +1603,22 @@ interface CarrierDisarm {
  *     `[entity_update {props:{allowed_tools:[…]}}, attach без allowed_tools]` даёт карточку
  *     «инструменты: …», хотя итог пачки — пустая доверенность. Направление здесь безопасное
  *     (прав меньше, чем обещано), но обещано неточно.
- * Закрыть это можно только перепроверкой в ТОЙ ЖЕ транзакции, что и запись (строка там уже
- * под `FOR UPDATE`), то есть вторым представлением правила §7.10 внутри исполнителя. Цена
- * признана выше выигрыша: окно требует ОДНОВРЕМЕННОГО действия владельца, а исполнитель,
- * научившийся отвечать «нужна карточка», перестал бы быть единственным местом записи.
+ * Закрывается это перепроверкой в ТОЙ ЖЕ транзакции, что и запись, и механизм для неё в
+ * кодовой базе УЖЕ ЕСТЬ — CAS-предусловие §А7-3 (`assertPrecondition`, `executor/executor.ts`,
+ * сверка под `FOR UPDATE`): диспатч мог бы приложить прочитанные пробой значения
+ * предусловием, и знать §7.10 исполнителю для этого не нужно. Технической невозможности здесь
+ * НЕТ, и утверждать обратное было бы ложью (Н-3 ре-ревью фикс-раунда 3).
+ *
+ * НЕ СДЕЛАНО ПО ЦЕНЕ, и цена такая. Предусловие меняет РЕДКУЮ гонку на РЕДКИЙ ЖЁСТКИЙ отказ:
+ * вызов, к которому оно приложено, упирается в `precondition_failed` посреди пачки, которую
+ * владелец УЖЕ подтвердил, — то есть проигрыш гонки превращается в оборванное на середине
+ * подтверждённое действие, и разбирать его придётся человеку. Гонка же требует
+ * ОДНОВРЕМЕННОГО действия владельца (он в этот миг смотрит на экран автономии), а батч-половина
+ * ошибается в безопасную сторону. Размен признан невыгодным; когда §7.10 станет данными
+ * (часть Б, `assign_level`), решать это будет правило, а не эта функция.
+ *
  * ТА ЖЕ ОГОВОРКА ЦЕЛИКОМ ОТНОСИТСЯ К `actRoutineInstructionTargets` НИЖЕ: у него та же форма
- * (свой `SELECT` до записи) и та же неназванная гонка.
+ * (свой `SELECT` до записи) и та же гонка; коротко она названа и на месте.
  */
 async function autonomyDisarmedByCarrier(
   ctx: ToolCallCtx,
@@ -1630,9 +1664,7 @@ async function autonomyDisarmedByCarrier(
     if (probe.data === null) {
       // Снятие носителя разоружает только ВООРУЖЁННУЮ: у безоружной рутины отнимать нечего,
       // и требовать за уборку карточку значило бы поднимать уровень на ровном месте.
-      if (armedRoutine(props)) {
-        out.set(probe.index, { removed: [], devalued: [], detached: true });
-      }
+      if (autonomyArmed(props)) out.set(probe.index, { removed: [], detached: true });
       continue;
     }
     const data = probe.data;
@@ -1642,9 +1674,10 @@ async function autonomyDisarmedByCarrier(
       (property) =>
         Object.hasOwn(data, property) && !sameAutonomyValue(props[property], data[property]),
     );
-    if (removed.length > 0 || devalued.length > 0) {
-      out.set(probe.index, { removed, devalued, detached: false });
-    }
+    // ОБЕСЦЕНЕННОЕ записи в карте не адресует, но её ПОРОЖДАЕТ: отдельной фразы владельцу оно
+    // не требует (новое значение сводка назовёт из самого патча), а операцию — требует.
+    if (removed.length > 0 || devalued.length > 0)
+      out.set(probe.index, { removed, detached: false });
   }
   return out;
 }
@@ -1655,16 +1688,6 @@ function detachesRoutineAspect(input: Record<string, unknown>): boolean {
   if (!isRecord(aspects)) return false;
   const detach = aspects.detach;
   return Array.isArray(detach) && detach.includes(ROUTINE_ASPECT);
-}
-
-/**
- * Вооружена ли рутина ПО СОСТОЯНИЮ (рулинг Р-12-3): act-режим ИЛИ непустой белый список.
- * Пустой список вооружением не считается — действовать им всё равно нечем, и рутина с
- * `mode: propose` и `allowed_tools: []` безоружна ровно так же, как без свойства вовсе.
- */
-function armedRoutine(props: Record<string, unknown>): boolean {
-  const tools = props[ROUTINE_TOOLS_PROPERTY];
-  return props[ROUTINE_MODE_PROPERTY] === 'act' || (Array.isArray(tools) && tools.length > 0);
 }
 
 /**
@@ -1686,6 +1709,11 @@ function sameAutonomyValue(a: unknown, b: unknown): boolean {
  * Признак обязателен (Р9): `orbis/routine_mode` переживает снятие аспекта рутины, и без
  * него правка заголовка обычной записи, когда-то бывшей рутиной, читалась бы как правка
  * инструкции act-рутины.
+ *
+ * ГОНКА ТА ЖЕ, что у `autonomyDisarmedByCarrier` выше, и здесь она названа своими словами, а
+ * не одной перекрёстной ссылкой: `SELECT` идёт СВОЕЙ транзакцией и ДО записи, поэтому рутина,
+ * переведённая в `act` между пробой и записью, правку своей инструкции этим гейтом не
+ * задержит. Разбор цены и отказа от CAS-предусловия — в докблоке той функции.
  */
 async function actRoutineInstructionTargets(
   ctx: ToolCallCtx,
@@ -1835,9 +1863,9 @@ export async function routineDeferForbidden(
 async function entityHead(
   tx: Tx,
   id: string,
-): Promise<{ title: string; archived: boolean } | undefined> {
+): Promise<{ title: string; archived: boolean; aspects: string[] } | undefined> {
   const rows = await tx
-    .select({ title: entities.title, archived: entities.archived })
+    .select({ title: entities.title, archived: entities.archived, aspects: entities.aspects })
     .from(entities)
     .where(eq(entities.id, id));
   return rows[0];

@@ -2301,8 +2301,8 @@ describe('V1: выдача автономии рутине из чата → pen
     });
     expect(detachListed.status).toBe('pending_confirmation');
 
-    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: у БЕЗОРУЖНОЙ рутины (propose, список пуст) снятие аспекта
-    // доверенности не касается — исполняется молча.
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ, ГРУБАЯ: у БЕЗОРУЖНОЙ рутины (propose, свойства списка нет)
+    // снятие аспекта доверенности не касается — исполняется молча.
     const unarmed = await seedEntity(userA, {
       title: 'Безоружная под снос',
       tags: [],
@@ -2314,6 +2314,121 @@ describe('V1: выдача автономии рутине из чата → pen
     });
     expect(ok.status).toBe('ok');
     expect(await aspectsOfRow(unarmed.id)).toEqual([]);
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ, ТОНКАЯ: список ЕСТЬ, но ПУСТ. Ровно это и есть решение
+    // `autonomyArmed` («пустой список вооружением не считается»), и без этого ряда мутация
+    // `tools.length >= 0` выживала: грубая сторона выше её не различает.
+    const emptyList = await seedEntity(userA, {
+      title: 'Пустой список под снос',
+      tags: [],
+      aspects: { 'orbis/routine': routine({ allowed_tools: [] }) },
+    });
+    // Фикстура обязана НЕСТИ проверяемое: если бы сид потерял ключ, ряд стал бы копией грубого.
+    expect((await propsOfRow(emptyList.id))['orbis/allowed_tools']).toEqual([]);
+    const okEmpty = await dispatchTool(ctxFor(), 'entity_update', {
+      id: emptyList.id,
+      aspects: { detach: ['orbis/routine'] },
+    });
+    expect(okEmpty.status).toBe('ok');
+    expect(await aspectsOfRow(emptyList.id)).toEqual([]);
+  });
+
+  test('ПУСТОЙ белый список — не вооружение: один ответ у набора и у состояния (фикс-раунд 4)', async () => {
+    // Набор отвечал «выдача» (свойство названо), состояние — «безоружна» (список пуст):
+    // владельца просили подтвердить выдачу НИЧЕГО — «инструменты: нет». Ответ теперь один,
+    // и считает его одна функция `autonomyArmed`.
+    const viaAttach = await seedEntity(userA, { title: 'Пустой список через attach', tags: [] });
+    const attachEmpty = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: viaAttach.id,
+      data: routineProps({ 'orbis/allowed_tools': [] }),
+    });
+    expect(attachEmpty.status).toBe('ok');
+
+    const createEmpty = await dispatchTool(ctxFor(), 'entity_create', {
+      title: 'Пустой список через create',
+      tags: [],
+      props: routineProps({ 'orbis/allowed_tools': [] }),
+      aspects: ['orbis/routine'],
+    });
+    expect(createEmpty.status).toBe('ok');
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: тот же вход с ОДНИМ элементом — выдача, карточка обязательна.
+    const one = await seedEntity(userA, { title: 'Один инструмент', tags: [] });
+    const attachOne = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: one.id,
+      data: routineProps({ 'orbis/allowed_tools': ['entity_create'] }),
+    });
+    expect(attachOne.status).toBe('pending_confirmation');
+
+    // И третья: ОПУСТОШЕНИЕ непустого списка заменой носителя — разоружение, карточка нужна.
+    // «Пустой список не вооружает» и «опустошить список можно молча» — разные утверждения.
+    const armed = await seedEntity(userA, {
+      title: 'Опустошаемая',
+      tags: [],
+      aspects: { 'orbis/routine': routine({ allowed_tools: ['entity_create'] }) },
+    });
+    const emptied = await dispatchTool(ctxFor(), 'attach_orbis_routine', {
+      entity_id: armed.id,
+      data: routineProps({ 'orbis/allowed_tools': [] }),
+    });
+    expect(emptied.status).toBe('pending_confirmation');
+    if (emptied.status !== 'pending_confirmation') return;
+    expect(emptied.card).toMatchObject({
+      summary: 'Автономия рутины «Опустошаемая»: режим propose, инструменты: нет',
+    });
+    expect((await propsOfRow(armed.id))['orbis/allowed_tools']).toEqual(['entity_create']);
+  });
+
+  test('карточка честно называет ОБЪЕКТ: свойства доверенности на записи без аспекта рутины — не «автономия рутины»', async () => {
+    // Значения живут независимо от аспекта (Р9), поэтому модель вправе положить белый список
+    // на что угодно. Уровень это поднимает (значения вооружат запись, как только аспект
+    // появится), но карточка «Автономия рутины «Не рутина»» врала про объект.
+    const created = await dispatchTool(ctxFor(), 'entity_create', {
+      title: 'Не рутина',
+      tags: [],
+      props: { 'orbis/allowed_tools': ['entity_create'] },
+    });
+    expect(created.status).toBe('pending_confirmation');
+    if (created.status !== 'pending_confirmation') return;
+    expect(created.card).toMatchObject({
+      summary: 'Свойства доверенности рутины на записи «Не рутина»: инструменты: entity_create',
+    });
+
+    // Правка ЖИВОЙ записи без аспекта рутины — тем же языком.
+    const note = await seedEntity(userA, { title: 'Просто заметка', tags: [] });
+    const upd = await dispatchTool(ctxFor(), 'entity_update', {
+      id: note.id,
+      props: { 'orbis/routine_mode': 'act' },
+    });
+    expect(upd.status).toBe('pending_confirmation');
+    if (upd.status !== 'pending_confirmation') return;
+    expect(upd.card).toMatchObject({
+      summary: 'Свойства доверенности рутины на записи «Просто заметка»: режим act',
+    });
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: тот же набор С аспектом рутины — «Автономия рутины», и
+    // навешивание аспекта ТОЙ ЖЕ операцией (aspects.attach) считается наравне.
+    const asRoutine = await dispatchTool(ctxFor(), 'entity_create', {
+      title: 'Настоящая рутина',
+      tags: [],
+      props: routineProps({ 'orbis/allowed_tools': ['entity_create'] }),
+      aspects: ['orbis/routine'],
+    });
+    expect(asRoutine.status).toBe('pending_confirmation');
+    if (asRoutine.status !== 'pending_confirmation') return;
+    expect(asRoutine.card).toMatchObject({
+      summary: 'Автономия рутины «Настоящая рутина»: режим propose, инструменты: entity_create',
+    });
+    const becomes = await dispatchTool(ctxFor(), 'entity_update', {
+      id: note.id,
+      props: { 'orbis/routine_mode': 'act' },
+      aspects: { attach: ['orbis/routine'] },
+    });
+    expect(becomes.status).toBe('pending_confirmation');
+    if (becomes.status !== 'pending_confirmation') return;
+    expect(becomes.card).toMatchObject({
+      summary: 'Автономия рутины «Просто заметка»: режим act',
+    });
   });
 
   test('сводка адресуется ОПЕРАЦИЕЙ, а не id цели; правка инструкции называется рядом со снятием', async () => {
