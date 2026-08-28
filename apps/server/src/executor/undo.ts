@@ -10,6 +10,7 @@ import { sql } from 'drizzle-orm';
 import { appendMessage } from '../chat/messages';
 import type { Db } from '../db/client';
 import { type Tx, withIdentity } from '../db/with-identity';
+import { unmarkRefSources } from '../registry/ref';
 import { ExecError } from './errors';
 import { execute } from './executor';
 import type { ActionRecord, ExecuteErr, ExecuteOk, ExecuteRequest, ExecuteResult } from './types';
@@ -101,6 +102,27 @@ async function findLastUndoable(tx: Tx): Promise<FoundAction | undefined> {
  * `unset`/`aspects:{attach,detach}` (внутренняя форма §А1-1), и exec-надмножество их
  * принимает; менять её здесь, не тронув контракт, нельзя.
  */
+/**
+ * Источники, которым отменяемое действие поставило `needs-review` при архивации цели ссылки
+ * (§А6-3, рулинг Р-11-1). Читаются из строки журнала `ref_sources_marked`, которую пишет
+ * `applyRefEffects`.
+ *
+ * Форма нагрузки разбирается ЗАЩИТНО: журнал append-only, и в нём лежат записи, сделанные до
+ * этого коммита, — у них строки `ref_sources_marked` нет вовсе либо она несёт прежнее поле
+ * `marked` (счётчик). Ни то ни другое не должно ронять откат: неизвестная форма означает
+ * «снимать нечего», а не исключение.
+ */
+function markedRefSources(action: ActionRecord): string[] {
+  const out: string[] = [];
+  for (const op of action.operations) {
+    if (op.op !== 'ref_sources_marked') continue;
+    const sources = (op.payload as { sources?: unknown }).sources;
+    if (!Array.isArray(sources)) continue;
+    for (const id of sources) if (typeof id === 'string') out.push(id);
+  }
+  return out;
+}
+
 async function applyUndo(db: Db, actorUserId: string, found: FoundAction): Promise<ExecuteResult> {
   const { action, threadId } = found;
   if (action.inverse.length === 0) {
@@ -129,6 +151,12 @@ async function applyUndo(db: Db, actorUserId: string, found: FoundAction): Promi
             actionId: action.id,
           });
         }
+        // Снятие пометки `needs-review`, поставленной архивацией цели ссылки (Р-11-1).
+        // ЗДЕСЬ, а не в inverse, по двум причинам сразу: inverse исполняется ТУЛАМИ, а «снять
+        // тег у списка сущностей» тулом не выражается; и делать это надо ПОСЛЕ применения
+        // inverse — цель к этому моменту уже разархивирована, и условие «не осталось ссылок
+        // на архивную цель» внутри `unmarkRefSources` считается по восстановленному графу.
+        await unmarkRefSources(tx, actorUserId, markedRefSources(action));
         await appendMessage(tx, {
           id: newId(),
           threadId, // тот же тред, где записано отменяемое действие

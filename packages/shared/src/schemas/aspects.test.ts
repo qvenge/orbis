@@ -84,6 +84,11 @@ describe('схемы аспектов (01 §3.1–§3.7)', () => {
     expect(s.safeParse({ ...base, limit: '-1.00' }).success).toBe(false);
   });
   test('orbis/memory: kind обязателен', () => {
+    // `scope` здесь — ЛЮБАЯ строка намеренно: `ASPECT_SCHEMAS` — старый zod-валидатор
+    // golden-корпуса (§С8-1), он про ФОРМУ ключа, а не про существование цели. Ссылку на
+    // контракт (§А8/В3: `orbis/rule_scope` — `registry_ref{target: contract}`) проверяет
+    // сервер, и её проба живёт в `registry/ref.test.ts`. Значение НЕ переводится на
+    // `orbis/money-movement` вслед за остальными: пусть видно, что схеме оно безразлично.
     expect(
       ASPECT_SCHEMAS['orbis/memory'].safeParse({ kind: 'rule', scope: 'orbis/financial' }).success,
     ).toBe(true);

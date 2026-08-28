@@ -12,6 +12,7 @@ import {
   BUILTIN_RELATION_ROLE_META,
   newId,
 } from '@orbis/shared';
+import { assertStaticQuery } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -137,6 +138,28 @@ async function refEdges(
   });
 }
 
+/** Сущности владельца с таким заголовком — проба «записи НЕ появилось». */
+async function titledCount(user: string, title: string): Promise<number> {
+  return await withIdentity(db, user, async (tx) => {
+    const rows = (await tx.execute(
+      sql`SELECT count(*)::int AS n FROM entities WHERE title = ${title}`,
+    )) as unknown as Array<{ n: number }>;
+    return rows[0]?.n ?? 0;
+  });
+}
+
+/** Значения свойств строки — правда сущности (§А1-1), а не её проекция. */
+async function propsOf(user: string, entityId: string): Promise<Record<string, unknown>> {
+  return await withIdentity(db, user, async (tx) => {
+    const rows = (await tx.execute(
+      sql`SELECT props FROM entities WHERE id = ${entityId}::uuid`,
+    )) as unknown as Array<{ props: Record<string, unknown> }>;
+    const row = rows[0];
+    if (row === undefined) throw new Error('сущность не найдена');
+    return row.props;
+  });
+}
+
 async function tagsOf(user: string, entityId: string): Promise<string[]> {
   return await withIdentity(db, user, async (tx) => {
     const rows = (await tx.execute(
@@ -209,6 +232,11 @@ test('ref: значение вне множества target — VALIDATION REF_
   expect(err(r).code).toBe('VALIDATION');
   expect(reasonOf(r)).toBe('REF_TARGET');
   expect(err(r).message).toContain('цель не в множестве target');
+  // ОТКАТ ПОЛОН: проверка целей стоит ПОСЛЕ стадии 5, то есть строка успевает лечь в tx —
+  // и обязана уйти вместе с ней. Без этого утверждения рефактор, уносящий `applyRefEffects`
+  // за транзакцию (прецедент в дереве есть — `maybeSuggestRule` работает пост-коммитно), не
+  // окрасил бы ни одного теста, а отказанные записи начали бы персистить.
+  expect(await titledCount(user, 'Обед')).toBe(0);
 
   // Несуществующая (и чужая — RLS их не различает) цель называется своей причиной
   const missing = await execute(
@@ -368,6 +396,35 @@ test('ref: архивация цели помечает источники needs
   );
   expect(rename.ok).toBe(true);
   expect(await refEdges(user, two)).toEqual([{ target: food, property: 'orbis/finance_category' }]);
+  // ЗАГОЛОВОК ПРАВКИ ТОЖЕ ОТКАЧЕН, и это половина границы: без ДРУГОЙ, законной цели
+  // рядом «откатилось» неотличимо от «и так не менялось» — на успехе значение стало бы
+  // `spare`, и утверждение о `food` покраснело бы.
+  const spare = await createCategory(user, 'Досуг');
+  const swapped = await execute(
+    db,
+    req(user, [
+      {
+        tool: 'entity_update',
+        input: {
+          id: two,
+          title: 'Ужин переименованный',
+          props: { 'orbis/finance_category': food },
+        },
+      },
+    ]),
+  );
+  expect(reasonOf(swapped)).toBe('REF_TARGET');
+  expect((await propsOf(user, two))['orbis/finance_category']).toBe(food);
+  expect(await titledCount(user, 'Ужин переименованный')).toBe(0);
+  expect(await refEdges(user, two)).toEqual([{ target: food, property: 'orbis/finance_category' }]);
+  const legal = await execute(
+    db,
+    req(user, [
+      { tool: 'entity_update', input: { id: two, props: { 'orbis/finance_category': spare } } },
+    ]),
+  );
+  expect(legal.ok).toBe(true);
+  expect((await propsOf(user, two))['orbis/finance_category']).toBe(spare);
 });
 
 test('ref/registry_ref: run_routine принимает только рутину; rule_scope — контракт из CONTRACT_IDS_V1', async () => {
@@ -495,9 +552,30 @@ test('ref: два ссылочных свойства на одну цель —
     ]),
   );
   if (!both.ok) throw new Error(JSON.stringify(both.error));
-  const edges = await refEdges(user, (both.results[0] as WireEntity).id);
+  const source = (both.results[0] as WireEntity).id;
+  const edges = await refEdges(user, source);
   expect(edges).toHaveLength(1);
   expect(edges[0]?.target).toBe(food);
+
+  // ГЛАВНОЕ: снятие ОДНОЙ из двух ссылок не должно уносить общее ребро — вторая жива, и её
+  // источник обязан остаться видимым для §А6-3. Ребро пересобирается с подписью выжившего
+  // свойства (находка Important-1 гейт-ревью: раньше здесь оставался ноль рёбер).
+  const dropped = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: source, unset: ['orbis/rule_target'] } }]),
+  );
+  expect(dropped.ok).toBe(true);
+  expect(await refEdges(user, source)).toEqual([
+    { target: food, property: 'orbis/finance_category' },
+  ]);
+
+  // …и пометка при архивации цели до источника доходит — то, что терялось вместе с ребром
+  const archived = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: food, archived: true } }]),
+  );
+  expect(archived.ok).toBe(true);
+  expect(await tagsOf(user, source)).toEqual(['needs-review']);
 });
 
 test('ref: undo правки категории возвращает и свойство, и зеркало-ребро', async () => {
@@ -527,4 +605,73 @@ test('ref: undo правки категории возвращает и свой
   );
   expect(back.props['orbis/finance_category']).toBe(food);
   expect(await refEdges(user, txn)).toEqual([{ target: food, property: 'orbis/finance_category' }]);
+});
+
+test('ref: undo архивации цели снимает needs-review — и только у тех, кого пометила эта операция (Р-11-1)', async () => {
+  const user = freshUserId();
+  const sink = makeChatJournalSink();
+  const food = await createCategory(user, 'Еда');
+  const fun = await createCategory(user, 'Развлечения');
+  const onlyFood = await createTxn(user, 'Обед', food);
+  // Второй источник ссылается на ОБЕ категории: `finance_category` и `rule_target` — цели
+  // разные, значит и рёбра разные, и пометки приходят порознь.
+  const both = await createTxn(user, 'Ужин', food);
+  const linked = await execute(
+    db,
+    req(user, [
+      { tool: 'entity_update', input: { id: both, props: { 'orbis/rule_target': fun } } },
+    ]),
+    { sink },
+  );
+  expect(linked.ok).toBe(true);
+
+  // ПОРЯДОК АРХИВАЦИЙ ВАЖЕН: «Еда» первой — тогда ОБА источника попадают в её список
+  // помеченных; «Развлечения» второй — «Ужин» уже помечен, и в ЕЁ список не попадает.
+  const archiveFood = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: food, archived: true } }]),
+    { sink },
+  );
+  if (!archiveFood.ok) throw new Error(JSON.stringify(archiveFood.error));
+  const archiveFun = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: fun, archived: true } }]),
+    { sink },
+  );
+  if (!archiveFun.ok) throw new Error(JSON.stringify(archiveFun.error));
+  expect(await tagsOf(user, onlyFood)).toEqual(['needs-review']);
+  expect(await tagsOf(user, both)).toEqual(['needs-review']);
+
+  const undone = await undoAction(db, { actorUserId: user, actionId: archiveFood.actionId });
+  expect(undone.ok).toBe(true);
+  // У «Обеда» архивных целей не осталось — тег снят.
+  expect(await tagsOf(user, onlyFood)).toEqual([]);
+  // У «Ужина» ОСТАЛАСЬ ссылка на архивные «Развлечения»: он в списке помеченных этой
+  // операцией, но снимать у него нечего — иначе откат одной архивации стирал бы след другой.
+  expect(await tagsOf(user, both)).toEqual(['needs-review']);
+
+  // НАЗВАННЫЙ ОСТАТОК рулинга Р-11-1: снимаем только у тех, кому пометили ЭТОЙ операцией, —
+  // «Ужин» во второй список не попал (был уже помечен), и её откат тега не снимет. Тег
+  // остаётся консервативным следом «требует разбора»; правило выбрано так намеренно, чтобы
+  // откат не стирал пометку, поставленную человеком руками.
+  const undoneToo = await undoAction(db, { actorUserId: user, actionId: archiveFun.actionId });
+  expect(undoneToo.ok).toBe(true);
+  expect(await tagsOf(user, both)).toEqual(['needs-review']);
+});
+
+test('ref: каждый встроенный target статичен — гейт §А6-1 выполним по построению словаря', () => {
+  // Обязательство докблока `compileCtxOf` («today/timeZone множеством цели не читаются»)
+  // стоит на статичности `ref.target`. Боевой гейт при записи ОПРЕДЕЛЕНИЯ ставит Задача 15;
+  // до неё встроенный словарь — единственное, что можно проверить, и он проверяется.
+  const refs = BUILTIN_PROPERTY_META.filter((p) => p.type.kind === 'ref');
+  expect(refs.length).toBeGreaterThanOrEqual(4);
+  let withTarget = 0;
+  for (const def of refs) {
+    if (def.type.kind !== 'ref' || def.type.target === undefined) continue;
+    withTarget += 1;
+    for (const ast of Array.isArray(def.type.target) ? def.type.target : [def.type.target]) {
+      expect(() => assertStaticQuery(ast)).not.toThrow();
+    }
+  }
+  expect(withTarget).toBe(refs.length);
 });

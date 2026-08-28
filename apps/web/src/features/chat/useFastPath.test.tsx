@@ -70,7 +70,7 @@ const rules = [
     id: 'rule-1',
     title: 'кофе → Развлечения',
     updatedAt: '2026-07-20T10:00:00.000Z',
-    aspectsMap: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+    aspectsMap: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
   },
 ];
 

@@ -621,7 +621,7 @@ const createdEntity = {
   bodyRefs: [],
   tags: [],
   meta: {},
-  aspectsMap: { 'orbis/memory': { kind: 'rule', scope: 'orbis/financial' } },
+  aspectsMap: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
   props: {},
   aspects: [],
   queryRefs: [],

@@ -217,7 +217,11 @@ test('generic: незнакомый ключ печатается как ест�
 // больше не распознаётся» не было нигде: запись оставалась в «Памяти AI» и выглядела
 // живой, хотя ни fast-path, ни резолв импорта её уже не применяли.
 const memory = (kind: string, title: string) =>
-  ({ ...base, title, aspectsMap: { 'orbis/memory': { kind, scope: 'orbis/financial' } } }) as never;
+  ({
+    ...base,
+    title,
+    aspectsMap: { 'orbis/memory': { kind, scope: 'orbis/money-movement' } },
+  }) as never;
 
 test('память: правило с распознанным форматом предупреждения не показывает', () => {
   render(

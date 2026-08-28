@@ -73,6 +73,14 @@ function uuidArray(ids: readonly string[]): SQL {
   )}]::uuid[]`;
 }
 
+/** `ARRAY[$1, $2]::text[]` — id свойств в подписи зеркала лежат текстом. */
+function textArray(values: readonly string[]): SQL {
+  return sql`ARRAY[${sql.join(
+    values.map((v) => sql`${v}`),
+    sql`, `,
+  )}]::text[]`;
+}
+
 /** Альтернативные множества цели (§А6-1): одно, список или «любая сущность владельца». */
 function targetsOf(type: RefType): QueryAst[] {
   if (type.target === undefined) return [];
@@ -236,14 +244,24 @@ export interface RefPropChange {
 }
 
 /**
- * Ссылочные свойства, чьё зеркало операция обязана пересобрать: и те, чьё значение
- * изменилось, и те, которых патч КОСНУЛСЯ, не изменив.
+ * Ссылочные свойства к синхронизации зеркал: либо ВСЕ ссылочные свойства сущности, либо ни
+ * одного. Признак «есть работа» — хотя бы одно свойство, чьё значение изменилось ИЛИ которого
+ * патч КОСНУЛСЯ, не изменив.
  *
- * Второе — не перестраховка, а способ починки расхождения (правило 3 §10): ребро производно,
- * и единственный момент, когда сервер вправе привести его к правде, — запись этого свойства.
- * Считай мы только изменившиеся, ребро, разъехавшееся со значением (внешняя правка, снятая
- * миграция, сбой), не чинилось бы уже никогда — повторная запись того же значения проходила
- * бы мимо.
+ * Почему «касание» тоже считается работой — это способ починки расхождения (правило 3 §10):
+ * ребро производно, и единственный момент, когда сервер вправе привести его к правде, —
+ * запись этого свойства. Считай мы только изменившиеся, ребро, разъехавшееся со значением
+ * (внешняя правка, снятая миграция, сбой), не чинилось бы уже никогда: повторная запись того
+ * же значения проходила бы мимо.
+ *
+ * ПОЧЕМУ ВСЕ, А НЕ ТОЛЬКО ЗАТРОНУТЫЕ. До 0017 `rel_uniq` стоит на тройке с переходной
+ * колонкой `relation_type`, поэтому пара (источник, цель) вмещает ОДНО ребро роли `ref` — и
+ * два ссылочных свойства, смотрящих на одну цель, ДЕЛЯТ его. Синхронизируй мы только
+ * затронутое свойство, снятие ОДНОЙ из двух ссылок сносило бы общее ребро, а вторая, живая,
+ * оставалась бы без зеркала — и её источник переставал бы получать `needs-review` при
+ * архивации цели (§А6-3), выпадал из обратного обхода импорта и из секции «Связанное». Это
+ * потеря КОРРЕКТНОСТИ, а не скорости, и чинится она ровно здесь: полный список свойств даёт
+ * `syncRefMirror` возможность восстановить общее ребро вставкой после удаления.
  */
 export function changedRefProps(
   reg: RegistrySnapshot,
@@ -251,16 +269,17 @@ export function changedRefProps(
   after: Record<string, unknown>,
   touched: ReadonlySet<string>,
 ): RefPropChange[] {
-  const out: RefPropChange[] = [];
+  const all: RefPropChange[] = [];
+  let hasWork = false;
   for (const propertyId of new Set([...Object.keys(before), ...Object.keys(after), ...touched])) {
     if (reg.properties.get(propertyId)?.type.kind !== 'ref') continue;
     const wasIds = refIds(before[propertyId]);
     const nowIds = refIds(after[propertyId]);
     const same = wasIds.length === nowIds.length && wasIds.every((id, i) => id === nowIds[i]);
-    if (same && !touched.has(propertyId)) continue;
-    out.push({ propertyId, after: after[propertyId] });
+    if (!same || touched.has(propertyId)) hasWork = true;
+    all.push({ propertyId, after: after[propertyId] });
   }
-  return out;
+  return hasWork ? all : [];
 }
 
 /**
@@ -270,6 +289,14 @@ export function changedRefProps(
  * Сверка идёт с РЕАЛЬНЫМИ строками, а не с «состоянием до»: только так расхождение чинится
  * (см. `changedRefProps`). Отсюда же идемпотентность — повторный вызов на неизменном
  * состоянии не пишет ничего.
+ *
+ * ДВЕ ФАЗЫ, И ПОРЯДОК ИХ СУЩЕСТВЕНЕН: сначала удаляются ВСЕ устаревшие рёбра, потом
+ * вставляются недостающие. Причина — общее ребро двух свойств (до 0017 `rel_uniq` вмещает
+ * одно ребро роли `ref` на пару концов): при обходе «удалил-вставил по одному свойству за
+ * раз» вставка живого свойства пришлась бы на ещё не удалённое чужое ребро, получила бы
+ * `ON CONFLICT DO NOTHING`, а следующее удаление снесло бы его совсем. `changedRefProps`
+ * приносит сюда ВСЕ ссылочные свойства сущности именно затем, чтобы у второй фазы был полный
+ * список кандидатов.
  *
  * `ownerId` стоит в обоих запросах, хотя RLS уже скоупит выдачу: та же защита в глубину, что
  * у пересчёта предков (`executor/ancestors.ts`), — под админским подключением (сиды,
@@ -285,33 +312,43 @@ export async function syncRefMirror(
   changed: readonly RefPropChange[],
   reg: RegistrySnapshot,
 ): Promise<void> {
-  for (const { propertyId, after } of changed) {
-    if (reg.properties.get(propertyId)?.type.kind !== 'ref') continue;
-    const desired = refIds(after);
-    const existing = (await tx.execute(sql`
-      SELECT target_id FROM relations
-       WHERE source_id = ${entityId}::uuid AND role = ${ROLE_REF}
-         AND meta->>'property' = ${propertyId}`)) as unknown as Array<{ target_id: string }>;
-    const have = new Set(existing.map((r) => r.target_id));
-    const stale = [...have].filter((id) => !desired.includes(id));
-    const fresh = desired.filter((id) => !have.has(id));
+  const wanted = changed.filter((c) => reg.properties.get(c.propertyId)?.type.kind === 'ref');
+  if (wanted.length === 0) return;
+  const properties = wanted.map((c) => c.propertyId);
 
-    if (stale.length > 0) {
-      await tx.execute(sql`
-        DELETE FROM relations
-         WHERE source_id = ${entityId}::uuid AND role = ${ROLE_REF}
-           AND meta->>'property' = ${propertyId}
-           AND target_id = ANY(${uuidArray(stale)})
-           AND EXISTS (SELECT 1 FROM entities e
-                        WHERE e.id = relations.source_id AND e.owner_id = ${ownerId}::uuid)`);
-    }
-    for (const targetId of fresh) {
-      // ПЕРЕХОДНОЕ (до 0017): `rel_uniq` стоит на тройке с колонкой `relation_type`, а не с
-      // ролью, поэтому пара (источник, цель) вмещает ОДНО ребро роли `ref` — даже если на ту
-      // же цель ссылаются два разных свойства. Тогда подпись достаётся тому, кто записался
-      // первым, а второе свойство остаётся без своего ребра: его значение при этом целое
-      // (истина — свойство), потеряна только скорость обратного обхода. Отказывать здесь
-      // нельзя — запись законна; 0017 снимает ограничение вместе с колонкой.
+  // Один снимок зеркал сущности на обе фазы: их единицы, а по одному SELECT на свойство
+  // платила бы каждая правка транзакции.
+  const existing = (await tx.execute(sql`
+    SELECT target_id, meta->>'property' AS property FROM relations
+     WHERE source_id = ${entityId}::uuid AND role = ${ROLE_REF}
+       AND meta->>'property' = ANY(${textArray(properties)})`)) as unknown as Array<{
+    target_id: string;
+    property: string;
+  }>;
+
+  // Фаза 1: снять рёбра, которым в значениях свойств больше нет соответствия.
+  const desiredOf = new Map(wanted.map((c) => [c.propertyId, new Set(refIds(c.after))]));
+  const stale = existing.filter((r) => desiredOf.get(r.property)?.has(r.target_id) !== true);
+  if (stale.length > 0) {
+    await tx.execute(sql`
+      DELETE FROM relations
+       WHERE source_id = ${entityId}::uuid AND role = ${ROLE_REF}
+         AND (target_id, meta->>'property') IN (${sql.join(
+           stale.map((r) => sql`(${r.target_id}::uuid, ${r.property})`),
+           sql`, `,
+         )})
+         AND EXISTS (SELECT 1 FROM entities e
+                      WHERE e.id = relations.source_id AND e.owner_id = ${ownerId}::uuid)`);
+  }
+
+  // Фаза 2: вставить недостающие. `remaining` считается по ЦЕЛИ, а не по паре
+  // (цель, свойство): до 0017 ребро на паре концов одно, и второе свойство, смотрящее на ту
+  // же цель, своего ребра не получит — но и не потеряет чужое (см. докблок).
+  const remaining = new Set(existing.filter((r) => !stale.includes(r)).map((r) => r.target_id));
+  for (const { propertyId, after } of wanted) {
+    for (const targetId of refIds(after)) {
+      if (remaining.has(targetId)) continue;
+      remaining.add(targetId);
       await tx.execute(sql`
         INSERT INTO relations (id, source_id, target_id, role, relation_type, meta,
                                created_at, updated_at)
@@ -336,13 +373,16 @@ export async function syncRefMirror(
  * `updated_at` НЕ двигается — по той же причине, что у пересчёта предков: это не правка
  * владельца, а следствие чужого действия, и сдвиг метки ронял бы CAS соседней правки.
  *
- * Возвращает число ПОМЕЧЕННЫХ строк: журналу нужен факт пометки, а не факт вызова.
+ * Возвращает id ПОМЕЧЕННЫХ строк — ровно тех, кому тег поставила ЭТА операция. Список точен
+ * благодаря гейту `NOT (… = ANY(tags))`: источник, у которого тег уже стоял, в `RETURNING` не
+ * попадает. Он уезжает в журнал и по нему же откат снимает пометку (Р-11-1, см.
+ * `unmarkRefSources`), поэтому счётчиком тут не обойтись.
  */
 export async function markRefSourcesNeedsReview(
   tx: Tx,
   ownerId: string,
   archivedTargetId: string,
-): Promise<number> {
+): Promise<string[]> {
   const rows = (await tx.execute(sql`
     UPDATE entities e
        SET tags = e.tags || ARRAY[${NEEDS_REVIEW_TAG}]::text[]
@@ -352,5 +392,41 @@ export async function markRefSourcesNeedsReview(
                     WHERE r.target_id = ${archivedTargetId}::uuid
                       AND r.role = ${ROLE_REF} AND r.source_id = e.id)
     RETURNING e.id`)) as unknown as Array<{ id: string }>;
-  return rows.length;
+  return rows.map((r) => r.id);
+}
+
+/**
+ * Снятие пометки `needs-review` при откате архивации (рулинг координатора Р-11-1).
+ *
+ * ПОЧЕМУ ОТКАТ ВООБЩЕ СНИМАЕТ ТЕГ. §А6-3 про undo молчит, а правило ветки «undo — полный
+ * откат операции» — нет. Цена молчания названа: случайная архивация ходовой категории метит
+ * сотни источников, undo возвращает категорию, а теги остаются навсегда — массового снятия в
+ * v1 нет. Если владелец решит, что «тег снимает только человек», инверсия убирается одной
+ * веткой в `undo.ts`, а список id в журнале остаётся полезным для аудита.
+ *
+ * Снимается тег ТОЛЬКО у тех, кому его поставила отменяемая операция (список из журнала), и
+ * ТОЛЬКО если у источника не осталось ни одной ссылки на архивную цель. Второе условие — не
+ * перестраховка: тег один на все причины, и источник, помеченный сперва архивацией цели A, а
+ * потом ссылающийся ещё и на архивную B, при откате A обязан остаться помеченным — иначе
+ * откат одной операции стирал бы след другой.
+ *
+ * Возвращает id строк, с которых тег снят: тем же журналом мерится, что откат сработал.
+ */
+export async function unmarkRefSources(
+  tx: Tx,
+  ownerId: string,
+  sourceIds: readonly string[],
+): Promise<string[]> {
+  if (sourceIds.length === 0) return [];
+  const rows = (await tx.execute(sql`
+    UPDATE entities e
+       SET tags = array_remove(e.tags, ${NEEDS_REVIEW_TAG})
+     WHERE e.owner_id = ${ownerId}::uuid
+       AND e.id = ANY(${uuidArray(sourceIds)})
+       AND ${NEEDS_REVIEW_TAG} = ANY(e.tags)
+       AND NOT EXISTS (SELECT 1 FROM relations r
+                         JOIN entities t ON t.id = r.target_id
+                        WHERE r.source_id = e.id AND r.role = ${ROLE_REF} AND t.archived)
+    RETURNING e.id`)) as unknown as Array<{ id: string }>;
+  return rows.map((r) => r.id);
 }

@@ -19,7 +19,9 @@ const mem = (id: string, title: string, kind: 'rule' | 'fact') => ({
   bodyRefs: [],
   tags: [],
   meta: {},
-  aspectsMap: { 'orbis/memory': kind === 'rule' ? { kind, scope: 'orbis/financial' } : { kind } },
+  aspectsMap: {
+    'orbis/memory': kind === 'rule' ? { kind, scope: 'orbis/money-movement' } : { kind },
+  },
   props: {},
   aspects: [],
   queryRefs: [],
