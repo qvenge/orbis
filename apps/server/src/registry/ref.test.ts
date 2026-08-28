@@ -23,7 +23,7 @@ import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/type
 import { undoAction } from '../executor/undo';
 import type { CompileCtx } from '../query/compile-ast';
 import { loadRegistry, type RegistrySnapshot } from './load';
-import { refTargetMembershipSql, syncRefMirror } from './ref';
+import { changedRefProps, refTargetMembershipSql, syncRefMirror } from './ref';
 
 requireEnv();
 
@@ -699,10 +699,15 @@ test('ref: перечень — у всех встроенных ref-свойс�
   expect(withoutTarget).toEqual([]);
 });
 
-test('ref: вычисляемые ссылки зеркал не получают — правка категории у записи под проектом не вешает ребро на проект (Р-11-2)', async () => {
-  const user = freshUserId();
-  const first = await createCategory(user, 'Еда');
-  const second = await createCategory(user, 'Развлечения');
+/**
+ * Запись ПОД ПРОЕКТОМ со ссылкой на категорию: правило `nearest_ancestor` проставляет ей
+ * вычисляемые `orbis/parent_project`/`orbis/root_project`, то есть ссылочные свойства,
+ * которых владелец не писал. Ровно эта обстановка нужна обеим пробам Р-11-2.
+ */
+async function txnUnderProject(
+  user: string,
+): Promise<{ project: string; txn: string; category: string }> {
+  const category = await createCategory(user, 'Еда');
   const project = okEntity(
     await execute(
       db,
@@ -713,23 +718,27 @@ test('ref: вычисляемые ссылки зеркал не получаю�
         },
       ]),
     ),
-  );
-  const txn = await createTxn(user, 'Обед', first);
+  ).id;
+  const txn = await createTxn(user, 'Обед', category);
   const linked = await execute(
     db,
     req(user, [
-      {
-        tool: 'relation_create',
-        input: { source_id: project.id, target_id: txn, role: 'subitem' },
-      },
+      { tool: 'relation_create', input: { source_id: project, target_id: txn, role: 'subitem' } },
     ]),
   );
   expect(linked.ok).toBe(true);
-  // Фикстура ЗАШЛА в проверяемый путь: правило `nearest_ancestor` действительно проставило
-  // вычисляемые ссылки на проект — без этого тест зеленел бы на пустом месте.
+  // Обстановка ЗАШЛА в проверяемый путь: вычисляемые ссылки на проект действительно
+  // проставлены — без этого обе пробы ниже зеленели бы на пустом месте.
   const computed = await propsOf(user, txn);
-  expect(computed['orbis/parent_project']).toBe(project.id);
-  expect(computed['orbis/root_project']).toBe(project.id);
+  expect(computed['orbis/parent_project']).toBe(project);
+  expect(computed['orbis/root_project']).toBe(project);
+  return { project, txn, category };
+}
+
+test('ref: правка категории у записи под проектом не вешает ребро на проект, и архивация проекта её не метит (Р-11-2)', async () => {
+  const user = freshUserId();
+  const { project, txn } = await txnUnderProject(user);
+  const second = await createCategory(user, 'Развлечения');
 
   // Рядовая операция финансов: смена категории. Она — единственная правка ссылки, и втянуть
   // за собой вычисляемые соседние ссылки не должна.
@@ -748,7 +757,7 @@ test('ref: вычисляемые ссылки зеркал не получаю�
   // ставит, архивация категории — ставит.
   const archivedProject = await execute(
     db,
-    req(user, [{ tool: 'entity_update', input: { id: project.id, archived: true } }]),
+    req(user, [{ tool: 'entity_update', input: { id: project, archived: true } }]),
   );
   expect(archivedProject.ok).toBe(true);
   expect(await tagsOf(user, txn)).toEqual([]);
@@ -759,22 +768,31 @@ test('ref: вычисляемые ссылки зеркал не получаю�
   );
   expect(archivedCategory.ok).toBe(true);
   expect(await tagsOf(user, txn)).toEqual(['needs-review']);
+});
 
-  // ВТОРОЙ конец того же правила — гейт САМОГО писателя. Через исполнитель вычисляемое
-  // свойство до него не доходит (список отбирает `changedRefProps`), поэтому вызываем
-  // `syncRefMirror` напрямую с рукописным списком: так проверяется, что запрет живёт и там,
-  // а не только у производителя списка. Без этой пробы гейт писателя был бы украшением.
+test('ref: конец-ПРОИЗВОДИТЕЛЬ Р-11-2 — changedRefProps не отдаёт вычисляемые ссылки', () => {
+  // Проба чистая (без БД) и целится в ОДИН конец правила: сквозной тест выше её не заменяет
+  // — там сработал бы и гейт писателя, и по красноте было бы не понять, который из двух.
+  const project = '019e4466-dddd-7e07-b5d4-64be9721da51';
+  const category = '019e4466-eeee-7e07-b5d4-64be9721da51';
+  const before = { 'orbis/parent_project': project, 'orbis/root_project': project };
+  const after = { ...before, 'orbis/finance_category': category };
+  const changed = changedRefProps(GOLDEN_REG, before, after, new Set(['orbis/finance_category']));
+  expect(changed).toEqual([{ propertyId: 'orbis/finance_category', after: category }]);
+});
+
+test('ref: конец-ПИСАТЕЛЬ Р-11-2 — syncRefMirror вычисляемое свойство не отражает даже по прямому списку', async () => {
+  // Через исполнитель вычисляемое свойство до писателя не доходит (список отбирает
+  // `changedRefProps`), поэтому список тут рукописный. Гейт писателя недостижим боевым
+  // путём СЕГОДНЯ, но он связывает будущего производителя списка (правило `mirror_relation`
+  // строкой реестра, часть Б) — и без этой пробы был бы украшением.
+  const user = freshUserId();
+  const { project, txn, category } = await txnUnderProject(user);
   await withIdentity(db, user, async (tx) => {
     const reg = await loadRegistry(tx, user);
-    await syncRefMirror(
-      tx,
-      user,
-      txn,
-      [{ propertyId: 'orbis/root_project', after: project.id }],
-      reg,
-    );
+    await syncRefMirror(tx, user, txn, [{ propertyId: 'orbis/root_project', after: project }], reg);
   });
   expect(await refEdges(user, txn)).toEqual([
-    { target: second, property: 'orbis/finance_category' },
+    { target: category, property: 'orbis/finance_category' },
   ]);
 });
