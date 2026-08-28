@@ -12,7 +12,7 @@ import {
   BUILTIN_RELATION_ROLE_META,
   newId,
 } from '@orbis/shared';
-import { assertStaticQuery } from '@orbis/shared/query';
+import { assertStaticQuery, type QueryAst } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -22,8 +22,8 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import type { CompileCtx } from '../query/compile-ast';
-import type { RegistrySnapshot } from './load';
-import { refTargetMembershipSql } from './ref';
+import { loadRegistry, type RegistrySnapshot } from './load';
+import { refTargetMembershipSql, syncRefMirror } from './ref';
 
 requireEnv();
 
@@ -659,19 +659,122 @@ test('ref: undo архивации цели снимает needs-review — и �
   expect(await tagsOf(user, both)).toEqual(['needs-review']);
 });
 
-test('ref: каждый встроенный target статичен — гейт §А6-1 выполним по построению словаря', () => {
+/** Встроенные `ref`-свойства с объявленным множеством цели: (id, один вариант `target`). */
+function builtinRefTargets(): Array<[string, QueryAst]> {
+  const out: Array<[string, QueryAst]> = [];
+  for (const def of BUILTIN_PROPERTY_META) {
+    if (def.type.kind !== 'ref' || def.type.target === undefined) continue;
+    const targets = Array.isArray(def.type.target) ? def.type.target : [def.type.target];
+    for (const ast of targets) out.push([def.id, ast]);
+  }
+  return out;
+}
+
+test('ref: каждый объявленный встроенный target статичен — гейт §А6-1 выполним по построению словаря', () => {
   // Обязательство докблока `compileCtxOf` («today/timeZone множеством цели не читаются»)
   // стоит на статичности `ref.target`. Боевой гейт при записи ОПРЕДЕЛЕНИЯ ставит Задача 15;
   // до неё встроенный словарь — единственное, что можно проверить, и он проверяется.
-  const refs = BUILTIN_PROPERTY_META.filter((p) => p.type.kind === 'ref');
-  expect(refs.length).toBeGreaterThanOrEqual(4);
-  let withTarget = 0;
-  for (const def of refs) {
-    if (def.type.kind !== 'ref' || def.type.target === undefined) continue;
-    withTarget += 1;
-    for (const ast of Array.isArray(def.type.target) ? def.type.target : [def.type.target]) {
-      expect(() => assertStaticQuery(ast)).not.toThrow();
+  //
+  // Проверяются РОВНО те, у кого `target` объявлен: `target: undefined` — законная форма
+  // (`targetsOf` читает её как «ограничения нет, остаётся существование под RLS»), и падать
+  // на ней тестом ПРО СТАТИЧНОСТЬ значило бы уводить разбирающегося не туда. Сколько их
+  // сегодня — отдельное утверждение ниже, со своей причиной в имени.
+  const targets = builtinRefTargets();
+  expect(targets.length).toBeGreaterThanOrEqual(4);
+  for (const [propertyId, ast] of targets) {
+    try {
+      assertStaticQuery(ast);
+    } catch (e) {
+      throw new Error(`target свойства «${propertyId}» не статичен: ${String(e)}`);
     }
   }
-  expect(withTarget).toBe(refs.length);
+});
+
+test('ref: перечень — у всех встроенных ref-свойств сегодня объявлен target (не правило, а состав словаря)', () => {
+  // Это ПЕРЕЧЕНЬ, а не запрет: свойство без `target` законно, и его появление обязано
+  // покраснеть здесь — с внятным сообщением «вот кто без цели», — а не в пробе статичности.
+  const withoutTarget = BUILTIN_PROPERTY_META.filter(
+    (p) => p.type.kind === 'ref' && p.type.target === undefined,
+  ).map((p) => p.id);
+  expect(withoutTarget).toEqual([]);
+});
+
+test('ref: вычисляемые ссылки зеркал не получают — правка категории у записи под проектом не вешает ребро на проект (Р-11-2)', async () => {
+  const user = freshUserId();
+  const first = await createCategory(user, 'Еда');
+  const second = await createCategory(user, 'Развлечения');
+  const project = okEntity(
+    await execute(
+      db,
+      req(user, [
+        {
+          tool: 'entity_create',
+          input: { title: 'Проект', tags: [], aspects: { 'orbis/project': { stage: 'active' } } },
+        },
+      ]),
+    ),
+  );
+  const txn = await createTxn(user, 'Обед', first);
+  const linked = await execute(
+    db,
+    req(user, [
+      {
+        tool: 'relation_create',
+        input: { source_id: project.id, target_id: txn, role: 'subitem' },
+      },
+    ]),
+  );
+  expect(linked.ok).toBe(true);
+  // Фикстура ЗАШЛА в проверяемый путь: правило `nearest_ancestor` действительно проставило
+  // вычисляемые ссылки на проект — без этого тест зеленел бы на пустом месте.
+  const computed = await propsOf(user, txn);
+  expect(computed['orbis/parent_project']).toBe(project.id);
+  expect(computed['orbis/root_project']).toBe(project.id);
+
+  // Рядовая операция финансов: смена категории. Она — единственная правка ссылки, и втянуть
+  // за собой вычисляемые соседние ссылки не должна.
+  const recategorized = await execute(
+    db,
+    req(user, [
+      { tool: 'entity_update', input: { id: txn, props: { 'orbis/finance_category': second } } },
+    ]),
+  );
+  expect(recategorized.ok).toBe(true);
+  expect(await refEdges(user, txn)).toEqual([
+    { target: second, property: 'orbis/finance_category' },
+  ]);
+
+  // §А6-3 срабатывает на ссылку ВЛАДЕЛЬЦА, а не на кэш иерархии: архивация проекта тегов не
+  // ставит, архивация категории — ставит.
+  const archivedProject = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: project.id, archived: true } }]),
+  );
+  expect(archivedProject.ok).toBe(true);
+  expect(await tagsOf(user, txn)).toEqual([]);
+
+  const archivedCategory = await execute(
+    db,
+    req(user, [{ tool: 'entity_update', input: { id: second, archived: true } }]),
+  );
+  expect(archivedCategory.ok).toBe(true);
+  expect(await tagsOf(user, txn)).toEqual(['needs-review']);
+
+  // ВТОРОЙ конец того же правила — гейт САМОГО писателя. Через исполнитель вычисляемое
+  // свойство до него не доходит (список отбирает `changedRefProps`), поэтому вызываем
+  // `syncRefMirror` напрямую с рукописным списком: так проверяется, что запрет живёт и там,
+  // а не только у производителя списка. Без этой пробы гейт писателя был бы украшением.
+  await withIdentity(db, user, async (tx) => {
+    const reg = await loadRegistry(tx, user);
+    await syncRefMirror(
+      tx,
+      user,
+      txn,
+      [{ propertyId: 'orbis/root_project', after: project.id }],
+      reg,
+    );
+  });
+  expect(await refEdges(user, txn)).toEqual([
+    { target: second, property: 'orbis/finance_category' },
+  ]);
 });
