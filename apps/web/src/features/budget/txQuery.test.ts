@@ -1,13 +1,16 @@
 // Task B5 (03-budget §3.3): buildTxQuery — чистый билдер строки грамматики §6.1
 // для экрана «Транзакции». Тесты на состав клауз И на кавычки/экранирование
 // (урок бэклога об экранировании тегов: значения с ,/|/& — в кавычки).
-import { aspectJsonSchema, BUILTIN_ASPECT_IDS, buildFieldCatalog, parseQuery } from '@orbis/shared';
+import { parseQueryAst } from '@orbis/shared/query';
 import { expect, test } from 'vitest';
+import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
+import { BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY } from '../../test/registry';
 import { buildTxQuery, monthRange, TX_PAGE_SIZE } from './txQuery';
 
-const catalog = buildFieldCatalog(
-  BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
-);
+// Разбор — НОВОЙ грамматикой (§А5-3), без моста старой формы: доказательство перевода в том,
+// что текст билдера разбирается каноном, а не в том, что экран открылся (мост принял бы и
+// непереведённую строку, и тест зеленел бы при невыполненной работе).
+const registry = buildQueryRegistry(BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY).parse;
 
 test('monthRange: полный календарный месяц, включая февраль и високосный год', () => {
   expect(monthRange('2026-06')).toEqual({ start: '2026-06-01', end: '2026-06-30' });
@@ -16,9 +19,9 @@ test('monthRange: полный календарный месяц, включая
   expect(monthRange('2028-02')).toEqual({ start: '2028-02-01', end: '2028-02-29' });
 });
 
-test('минимальный запрос: только месяц — aspect + occurred_on-диапазон + сортировка + limit', () => {
+test('минимальный запрос: только месяц — aspect + диапазон даты + сортировка + limit', () => {
   expect(buildTxQuery({ month: '2026-06' })).toBe(
-    'aspect=orbis/financial, occurred_on=2026-06-01..2026-06-30, sortBy=occurred_on:desc, limit=200',
+    'aspect=orbis/financial, orbis/occurred_on=2026-06-01..2026-06-30, sortBy=orbis/occurred_on:desc, limit=200',
   );
 });
 
@@ -33,9 +36,10 @@ test('все фильтры §3.3: категория, направление, p
     search: 'кофе',
   });
   expect(q).toBe(
-    'aspect=orbis/financial, occurred_on=2026-06-01..2026-06-30, ' +
-      'category_ref=019d48ea-4188-765d-8e96-93a0ad9c262a, direction=expense, planned=!true, ' +
-      'amount=500..2000, search=кофе, sortBy=occurred_on:desc, limit=200',
+    'aspect=orbis/financial, orbis/occurred_on=2026-06-01..2026-06-30, ' +
+      'orbis/finance_category=019d48ea-4188-765d-8e96-93a0ad9c262a, orbis/direction=expense, ' +
+      'orbis/planned=!true, orbis/amount=500..2000, search=кофе, ' +
+      'sortBy=orbis/occurred_on:desc, limit=200',
   );
 });
 
@@ -43,18 +47,17 @@ test('все фильтры §3.3: категория, направление, p
 // post-due и confirmPurchase) — `planned=false` компилировался бы в `IN ('false')` и скрывал
 // бы рукописные транзакции. Фильтр «Факт» обязан быть noneOf `!true`: NULL проходит
 // (решение 10 компилятора), семантика совпадает с серверными агрегатами coalesce(...,false).
-test('фильтр «Факт»: planned=false → noneOf planned=!true, записи без ключа planned не отсеиваются', () => {
+test('фильтр «Факт»: planned=false → отрицание true, записи без ключа planned не отсеиваются', () => {
   const q = buildTxQuery({ month: '2026-06', planned: false });
-  expect(q).toContain('planned=!true');
-  expect(q).not.toContain('planned=false');
-  // round-trip: строка парсится, условие — именно noneOf('true'), а не anyOf('false')
-  const r = parseQuery(q, catalog);
+  expect(q).toContain('orbis/planned=!true');
+  expect(q).not.toContain('orbis/planned=false');
+  // round-trip: строка разбирается каноном, и узел — именно ОТРИЦАНИЕ равенства `true`,
+  // а не равенство `false` (§А5-7: `not(eq true)` пропускает отсутствие ключа).
+  const r = parseQueryAst(q, registry);
   expect(r.ok).toBe(true);
-  if (r.ok) {
-    const f = r.ast.filters.find((x) => x.kind === 'field' && x.field === 'planned');
-    expect(f && f.kind === 'field' ? f.condition : null).toEqual({
-      kind: 'noneOf',
-      values: [{ kind: 'literal', value: 'true' }],
+  if (r.ok && r.ast.filter !== null && 'and' in r.ast.filter) {
+    expect(r.ast.filter.and).toContainEqual({
+      not: { prop: 'orbis/planned', op: 'eq', value: true },
     });
   }
 });
@@ -67,22 +70,22 @@ test('limit (C6): по умолчанию TX_PAGE_SIZE=200, явное окно 
   const q = buildTxQuery({ month: '2026-06', limit: TX_PAGE_SIZE * 2 });
   expect(q).toContain('limit=400');
   expect(q).not.toContain('limit=200');
-  // Строка с нестандартным окном остаётся валидной для грамматики §6.1
-  const r = parseQuery(q, catalog);
+  // Строка с нестандартным окном остаётся валидной для канона §А5-3
+  const r = parseQueryAst(q, registry);
   expect(r.ok).toBe(true);
   if (r.ok) expect(r.ast.limit).toBe(400);
 });
 
-test('одна граница суммы — строгое сравнение >/< (у грамматики §6.1 нет >=)', () => {
-  expect(buildTxQuery({ month: '2026-06', amountFrom: '500' })).toContain('amount>500');
-  expect(buildTxQuery({ month: '2026-06', amountTo: '2000' })).toContain('amount<2000');
-  expect(buildTxQuery({ month: '2026-06', amountFrom: '500' })).not.toContain('amount=');
+test('одна граница суммы — строгое сравнение >/< (билдер включающих границ не строит)', () => {
+  expect(buildTxQuery({ month: '2026-06', amountFrom: '500' })).toContain('orbis/amount>500');
+  expect(buildTxQuery({ month: '2026-06', amountTo: '2000' })).toContain('orbis/amount<2000');
+  expect(buildTxQuery({ month: '2026-06', amountFrom: '500' })).not.toContain('orbis/amount=');
 });
 
 test('planned=true и направление income', () => {
   const q = buildTxQuery({ month: '2026-06', direction: 'income', planned: true });
-  expect(q).toContain('direction=income');
-  expect(q).toContain('planned=true');
+  expect(q).toContain('orbis/direction=income');
+  expect(q).toContain('orbis/planned=true');
 });
 
 test('экранирование поиска: запятая/|/&/кавычка/краевые пробелы — значение в кавычках', () => {
@@ -103,8 +106,11 @@ test('экранирование бэкслеша (fix round B5): \\ в кавы
   expect(buildTxQuery({ month: '2026-06', search: 'кофе, эклер\\' })).toContain(
     String.raw`search="кофе, эклер\\"`,
   );
-  // Бэкслеш без прочих спецсимволов — квотирования не требует, уходит как есть
-  expect(buildTxQuery({ month: '2026-06', search: 'кофе\\' })).toContain('search=кофе\\');
+  // Бэкслеш квотируется и сам по себе: вне кавычек он экранирует следующий символ, и
+  // `search=кофе\` съел бы разделитель перед `sortBy` (прежняя `quoteValue` его пропускала).
+  expect(buildTxQuery({ month: '2026-06', search: 'кофе\\' })).toContain(
+    String.raw`search="кофе\\"`,
+  );
 });
 
 test('round-trip: строка билдера с «опасным» поиском парсится грамматикой без ошибок', () => {
@@ -127,8 +133,11 @@ test('round-trip: строка билдера с «опасным» поиско
       amountTo: '99999.99',
       search,
     });
-    const r = parseQuery(q, catalog);
+    const r = parseQueryAst(q, registry);
     expect(r.ok, `не распарсилось: ${q}`).toBe(true);
-    if (r.ok) expect(r.ast.search).toBe(search); // инъекция невозможна: поиск остался значением
+    // Инъекция невозможна: поиск остался ЗНАЧЕНИЕМ узла `{search}`, а не конструкцией.
+    if (r.ok && r.ast.filter !== null && 'and' in r.ast.filter) {
+      expect(r.ast.filter.and).toContainEqual({ search });
+    }
   }
 });

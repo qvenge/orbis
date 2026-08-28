@@ -5,7 +5,10 @@ import { type RouterOutputs, trpc } from '../../trpc';
 
 type QueryEntity = RouterOutputs['entity']['query'][number];
 
-export const CATEGORIES_QUERY = 'aspect=orbis/category, sortBy=title:asc, limit=200';
+// `orbis/title` — namespaced key core-свойства (§А1-3), а не голое `title`: голым словом
+// грамматика называет ПАРАМЕТР ЗАГОЛОВКА выдачи, и `sortBy=title:asc` она отвергает как
+// «слово грамматики» — переименованием полей аспекта такой адрес не чинится.
+export const CATEGORIES_QUERY = 'aspect=orbis/category, sortBy=orbis/title:asc, limit=200';
 
 export type CategoryOption = {
   id: string;

@@ -14,7 +14,8 @@ import { trpc } from '../../trpc';
 import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME } from './memoryRules';
 import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from './useChatThread';
 
-const CATEGORY_QUERY = { query: 'aspect=orbis/category' } as const;
+/** Экспортирован ради пиннинга: боевой текст обязан разбираться каноном (§А5-3). */
+export const CATEGORY_QUERY = { query: 'aspect=orbis/category' } as const;
 
 /**
  * «Сегодня» в таймзоне пользователя (§7.5): без этого parseFastPath берёт UTC-дату, и ввод

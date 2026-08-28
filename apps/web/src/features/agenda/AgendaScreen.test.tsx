@@ -5,12 +5,16 @@
 // «Сегодня» на клиенте шва не имеет — фикстуры строятся ОТНОСИТЕЛЬНО todayISO(TZ)
 // и addDays (прецедент TransactionsScreen.test.tsx), поэтому тест не протухает.
 import { addDays } from '@orbis/shared';
+import { parseQueryAst } from '@orbis/shared/query';
+import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { App } from '../../App';
 import { ActiveScreen } from '../../app/router';
+import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
+import { BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY } from '../../test/registry';
 import { todayISO } from '../budget/useBudget';
 import { AgendaScreen } from './AgendaScreen';
 import {
@@ -102,9 +106,9 @@ beforeEach(() => {
   });
 });
 
-// --- строки грамматики (§6.1) ---------------------------------------------------------
+// --- строки грамматики (§А5-3) ---------------------------------------------------------
 
-test('Agenda шлёт три запроса грамматики §6.1 дословно', async () => {
+test('Agenda шлёт три запроса канона §А5-3 дословно', async () => {
   const { calls } = renderWithProviders(<AgendaScreen />, agendaHandler({}));
 
   await waitFor(() =>
@@ -116,16 +120,45 @@ test('Agenda шлёт три запроса грамматики §6.1 досл�
 
   // Окно §4.1: только orbis/schedule, сегодня+7, потолок 200 (K18)
   expect(queries).toContain(
-    'aspect=orbis/schedule, start_at=today|next_7d, sortBy=start_at:asc, limit=200',
+    'aspect=orbis/schedule, orbis/start_at=today|next_7d, sortBy=orbis/start_at:asc, limit=200',
   );
-  // §4.2 п.1 — due_date не материализуемое поле, дешёвый путь, отдельный запрос (K16)
+  // §4.2 п.1 — orbis/due_date не материализуемое поле, дешёвый путь, отдельный запрос (K16)
   expect(queries).toContain(
-    'aspect=orbis/task, due_date=overdue, status=!done&!cancelled, sortBy=due_date:asc, limit=200',
+    'aspect=orbis/task, orbis/due_date=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=200',
   );
   // §4.2 п.2 — два aspect= в одном запросе (K14): чистые события сюда не попадают
   expect(queries).toContain(
-    'aspect=orbis/task, aspect=orbis/schedule, start_at=overdue, status=!done&!cancelled, sortBy=start_at:asc, limit=200',
+    'aspect=orbis/task, aspect=orbis/schedule, orbis/start_at=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/start_at:asc, limit=200',
   );
+});
+
+/**
+ * Три текста Agenda РАВНЫ эталонным key-формам `AGENDA_QUERY_TEXTS` (§А5-5) — байт в байт.
+ *
+ * Эталон живёт в фикстурах канона и там же проверен на обратимость печати
+ * (`print.test.ts`), поэтому равенство здесь означает: запрос Agenda и есть тот текст,
+ * который канон обещал разбирать и печатать обратно. Сверять «на глаз» было нечем: три
+ * строки различаются одним словом каждая.
+ */
+test('тексты Agenda равны эталонным key-формам AGENDA_QUERY_TEXTS', () => {
+  expect(AGENDA_DAYS_QUERY).toBe(AGENDA_QUERY_TEXTS.days);
+  expect(AGENDA_OVERDUE_DUE_QUERY).toBe(AGENDA_QUERY_TEXTS.overdueDue);
+  expect(AGENDA_OVERDUE_START_QUERY).toBe(AGENDA_QUERY_TEXTS.overdueStart);
+});
+
+/**
+ * И разбираются НОВОЙ грамматикой без отката к мосту (§А5-3ж).
+ *
+ * Проверка отдельная от равенства выше и стоит именно на `parseQueryAst`: серверный разбор
+ * принимает и старую форму (`parseQueryAny`, мост до Задачи 21), поэтому «Agenda работает»
+ * не доказывает перевода — непереведённый текст уехал бы в старую ветку молча.
+ */
+test('тексты Agenda разбираются каноном §А5-3 без отката к мосту', () => {
+  const registry = buildQueryRegistry(BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY).parse;
+  for (const query of [AGENDA_DAYS_QUERY, AGENDA_OVERDUE_DUE_QUERY, AGENDA_OVERDUE_START_QUERY]) {
+    const r = parseQueryAst(query, registry);
+    expect(r.ok, query).toBe(true);
+  }
 });
 
 // --- приёмка §8 -----------------------------------------------------------------------

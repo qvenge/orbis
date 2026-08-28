@@ -12,6 +12,7 @@ import { Input } from '../../ui/Input';
 import { Sheet } from '../../ui/Sheet';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
+import { CATEGORIES_QUERY } from './categories';
 import { invalidateBudget } from './useBudget';
 
 /** Границы календарного месяца 'YYYY-MM' — дефолт периода конверта (§3.1). */
@@ -51,10 +52,10 @@ export function EnvelopeCreateSheet({
   const utils = trpc.useUtils();
   const settings = trpc.user.getSettings.useQuery();
   // Список категорий-сущностей (§3.1: выбор из стартового набора или своей)
-  const categoriesQ = trpc.entity.query.useQuery(
-    { query: 'aspect=orbis/category, sortBy=title:asc, limit=200' },
-    { enabled: open },
-  );
+  // Общая константа, а не свой литерал: инлайн-дубль этой строки пережил перевод на
+  // namespaced key ровно потому, что правка `categories.ts` его не касалась (опись боевых
+  // текстов, `ast-fixtures.ts` — «инлайн-дубль CATEGORIES_QUERY»).
+  const categoriesQ = trpc.entity.query.useQuery({ query: CATEGORIES_QUERY }, { enabled: open });
   const create = trpc.entity.create.useMutation();
 
   const categories = categoriesQ.data ?? [];

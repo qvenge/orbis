@@ -1,11 +1,11 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
-import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { parseBody, serializeBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Editor } from '@tiptap/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { installCrashTrap, renderWithProviders } from '../../../test/harness';
+import { registryReply } from '../../../test/registry';
 import { Toaster } from '../../../ui/Toast';
 import { BodyEditor } from '../BodyEditor';
 import { EditorShell, isBodyGesture } from '../EditorShell';
@@ -45,7 +45,6 @@ vi.mock('../../query-builder/QueryBlockEditor', async (orig) => {
 // Реестр аспектов — настоящий (как в editor.test.tsx и query-builder.test.tsx): с пустым
 // каталогом ЛЮБОЙ блок падал бы плашкой qb-error, и «виджет живой» проходило бы по ложной
 // причине.
-const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) }));
 
 /**
  * СТРОГИЙ мок: `entity.query` отвечает только про ТОТ ЗАПРОС, о котором спросили. Мок,
@@ -55,7 +54,8 @@ const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSche
 const lists =
   (byQuery: Record<string, { id: string; title: string }[]>) =>
   (path: string, input: unknown): unknown => {
-    if (path === 'aspect.list') return realAspects;
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
     if (path === 'entity.query') return byQuery[(input as { query: string }).query] ?? [];
     return {};
   };

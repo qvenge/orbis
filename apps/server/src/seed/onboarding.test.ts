@@ -8,12 +8,18 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  aspectDefinitionSchema,
   aspectJsonSchema,
   BUILTIN_ASPECT_IDS,
+  BUILTIN_PROPERTY_META,
+  BUILTIN_RELATION_ROLE_META,
   buildFieldCatalog,
   categoryAspectSchema,
   parseQuery,
+  ROLE_DEPENDENCY,
 } from '@orbis/shared';
+import { OWNER_LOCALE, parseQueryAst, toParseRegistry } from '@orbis/shared/query';
+import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
 import { TRPCError } from '@trpc/server';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -951,5 +957,70 @@ describe('aspect.list (§9.1): реестр builtin + свои', () => {
     for (const id of BUILTIN_ASPECT_IDS) expect(ids).toContain(id);
     const builtins = list.filter((a) => (BUILTIN_ASPECT_IDS as readonly string[]).includes(a.id));
     expect(builtins.every((a) => a.ownerId === null)).toBe(true);
+  });
+});
+
+describe('aspect.properties (§А2-1/§А4-2): реестры свойств и ролей владельца', () => {
+  test('отдаёт встроенные свойства и роли в порядке rank, ownerId у встроенных — null', async () => {
+    const caller = callerFor(freshUserId());
+    const { properties, roles } = await caller.aspect.properties();
+
+    // Словари ЦЕЛИКОМ: каталог полей web строится по ним, и недостача любого свойства
+    // означает поле, по которому запрос собрать нельзя (§А5-3а).
+    expect(properties.length).toBe(BUILTIN_PROPERTY_META.length);
+    expect(roles.length).toBe(BUILTIN_RELATION_ROLE_META.length);
+    for (const id of ['orbis/task_status', 'orbis/title', 'orbis/created_at']) {
+      expect(properties.map((p) => p.id)).toContain(id);
+    }
+    expect(roles.map((r) => r.id)).toContain(ROLE_DEPENDENCY);
+
+    // Порядок наблюдаем: по нему конструктор рисует строки полей и список сортировки.
+    const ranks = properties.map((p) => p.rank);
+    expect(ranks).toEqual([...ranks].sort((a, b) => a - b));
+    expect(properties.every((p) => p.ownerId === null)).toBe(true);
+
+    // Тип едет ЦЕЛИКОМ, а не обеднённым словарём старого каталога: по нему web решает,
+    // какие операторы предлагать (`time` упорядочен, `json` не фильтруется вовсе).
+    const at = properties.find((p) => p.id === 'orbis/routine_at');
+    expect(at?.type.kind).toBe('time');
+  });
+
+  test('снимок разбора из выдачи резолвит имена канона §А5-3', async () => {
+    const caller = callerFor(freshUserId());
+    const [{ properties, roles }, aspects] = await Promise.all([
+      caller.aspect.properties(),
+      caller.aspect.list(),
+    ]);
+    // Ровно та сборка, которую делает web (`buildQueryRegistry`): выдачи двух ручек
+    // достаточно, чтобы разобрать боевой текст без единого обращения к БД.
+    const reg = toParseRegistry(
+      {
+        properties: new Map(properties.map((p) => [p.id, p])),
+        aspects: new Map(
+          aspects.map((a) => [
+            a.id,
+            aspectDefinitionSchema.parse({
+              id: a.id,
+              ownerId: a.ownerId,
+              key: a.key,
+              label: a.label,
+              description: a.description,
+              properties: a.properties,
+              aiInstructions: a.aiInstructions,
+              tagMappings: a.tagMappings,
+              implements: [],
+              viewConfig: a.viewConfig ?? { keyFields: [] },
+              module: a.module,
+              service: a.service,
+              rank: a.rank,
+            }),
+          ]),
+        ),
+        roles: new Map(roles.map((r) => [r.id, r])),
+      },
+      OWNER_LOCALE,
+    );
+    const parsed = parseQueryAst(AGENDA_QUERY_TEXTS.overdueDue, reg);
+    expect(parsed.ok).toBe(true);
   });
 });

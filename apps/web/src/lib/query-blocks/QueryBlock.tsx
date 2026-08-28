@@ -43,8 +43,11 @@ export function QueryBlock({
   title?: string;
   onConfigure?: () => void;
 }) {
-  const { catalog } = useFieldCatalog();
-  const parsed = useMemo(() => (catalog ? parseBlock(query, catalog) : null), [catalog, query]);
+  const { registry } = useFieldCatalog();
+  const parsed = useMemo(
+    () => (registry ? parseBlock(query, registry.parse) : null),
+    [registry, query],
+  );
   const ok = parsed?.ok === true;
   /**
    * Чем разрешается `this` в клаузах `children_of=`/`parents_of=` (§6.1). Ставит контекст тот,
@@ -75,7 +78,11 @@ export function QueryBlock({
       // всего, а без неё чинить его пришлось бы правкой всего body руками.
       <Card role="alert" data-testid="qb-error" className="border-danger">
         <p className="text-danger text-sm">Ошибка запроса: {parsed.error.message}</p>
-        <p className="text-text-muted text-xs">позиция {parsed.error.position}</p>
+        {/* Позиция необязательна по типу отказа канона: печатать «позиция undefined» —
+            хуже, чем не печатать её вовсе. Сегодня текстовый разбор ставит её всегда. */}
+        {parsed.error.position !== undefined && (
+          <p className="text-text-muted text-xs">позиция {parsed.error.position}</p>
+        )}
         {onConfigure && (
           <div className="mt-2 flex justify-end">
             <ConfigureButton onClick={onConfigure} />

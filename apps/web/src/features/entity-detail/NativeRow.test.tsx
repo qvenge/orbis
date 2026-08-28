@@ -70,7 +70,7 @@ test('financial: бейдж — НАЗВАНИЕ категории, а не uui
   expect(screen.queryByText(CAT_FOOD)).toBeNull();
   // Источник категорий — тот же запрос (и тот же кэш), что у пикера D3b: второго нет
   expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-    query: 'aspect=orbis/category, sortBy=title:asc, limit=200',
+    query: 'aspect=orbis/category, sortBy=orbis/title:asc, limit=200',
   });
 });
 

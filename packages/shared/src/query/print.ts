@@ -55,7 +55,18 @@ function escapeQuotes(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-function quote(value: string): string {
+/**
+ * Значение → текст запроса: кавычки ставятся ровно там, где без них разбор вернул бы ДРУГОЕ
+ * дерево (см. `needsQuote`).
+ *
+ * Экспортирована ради строителей текста в `apps/web` (`browser/query.ts`, `budget/txQuery.ts`):
+ * они собирают запрос из ввода владельца — тега и строки поиска, — и до Задачи 21 несут
+ * ТЕКСТ, а не AST, то есть печатают его мимо `printQueryAst`. Своя копия правила квотирования
+ * там уже была и уже разошлась с грамматикой: `quoteValue` (`txQuery.ts`) не знала про пробел,
+ * а `buildFilterQuery` не квотировала вовсе — два боевых текста описи (`SYNTAX`) родились
+ * именно так. Одно правило на печать и на сборку — второму разъехаться уже не с чем.
+ */
+export function quoteQueryValue(value: string): string {
   return needsQuote(value) ? `"${escapeQuotes(value)}"` : value;
 }
 
@@ -101,7 +112,7 @@ function names(reg: ParseRegistry, form: QueryPrintForm): Names {
 }
 
 function printScalar(value: QueryScalar): string {
-  if (typeof value === 'string') return quote(value);
+  if (typeof value === 'string') return quoteQueryValue(value);
   return String(value);
 }
 
@@ -161,7 +172,7 @@ function asTagList(nodes: readonly QueryFilterNode[]): string[] | null {
 }
 
 function printTagList(tags: readonly string[]): string {
-  return `tags=${tags.map(quote).join('|')}`;
+  return `tags=${tags.map(quoteQueryValue).join('|')}`;
 }
 
 function printNode(node: QueryFilterNode, n: Names): string {
@@ -232,12 +243,12 @@ function printNode(node: QueryFilterNode, n: Names): string {
   }
   if ('has' in node) return `has=${n.prop(node.has)}`;
   if ('aspect' in node) return `aspect=${n.aspect(node.aspect)}`;
-  if ('tag' in node) return `tags=${quote(node.tag)}`;
-  if ('search' in node) return `search=${quote(node.search)}`;
+  if ('tag' in node) return `tags=${quoteQueryValue(node.tag)}`;
+  if ('search' in node) return `search=${quoteQueryValue(node.search)}`;
   if ('archived' in node) return `archived=${node.archived}`;
   if ('class' in node) return `class=${node.class.contract}:${node.class.set}`;
   const rel = node.rel;
-  const target = rel.of === undefined ? '' : `=${quote(rel.of)}`;
+  const target = rel.of === undefined ? '' : `=${quoteQueryValue(rel.of)}`;
   const via = rel.via === undefined ? '' : ` via=${n.role(rel.via)}`;
   // Ребро с условием на дальний конец плоским текстом НЕ выражается — ни в положительной
   // форме («покажи заблокированные живой работой» грамматика v1 сказать не умеет), ни в
@@ -271,6 +282,6 @@ export function printQueryAst(ast: QueryAst, reg: ParseRegistry, form: QueryPrin
   }
   if (ast.limit !== undefined) parts.push(`limit=${ast.limit}`);
   if (ast.display !== undefined) parts.push(`display=${ast.display}`);
-  if (ast.title !== undefined) parts.push(`title=${quote(ast.title)}`);
+  if (ast.title !== undefined) parts.push(`title=${quoteQueryValue(ast.title)}`);
   return parts.join(', ');
 }

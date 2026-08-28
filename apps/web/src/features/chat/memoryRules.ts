@@ -7,9 +7,14 @@
 // кэш обязан кто-то освежать точечно; вторая строка запроса рядом означала бы второй
 // кэш, и правило, только что подтверждённое пользователем, молча не работало бы.
 
-/** Активные правила владельца: `orbis/memory`, `kind=rule`, `scope=orbis/financial`. */
+/**
+ * Активные правила владельца: аспект `orbis/memory`, род записи «правило», область — Финансы.
+ *
+ * Имена свойств — namespaced key реестра (§А5-3а): голых `kind`/`scope` в реестре нет вовсе,
+ * их место заняли `orbis/memory_kind` и `orbis/rule_scope` (В7 инвентаря).
+ */
 export const MEMORY_RULES_QUERY = {
-  query: 'aspect=orbis/memory, kind=rule, scope=orbis/financial',
+  query: 'aspect=orbis/memory, orbis/memory_kind=rule, orbis/rule_scope=orbis/financial',
 } as const;
 
 /** Правила меняются редко (эскалация §7.8) — держим их в кэше 5 минут, а не 30 секунд. */

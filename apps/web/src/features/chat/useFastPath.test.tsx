@@ -1,23 +1,24 @@
-import {
-  aspectJsonSchema,
-  BUILTIN_ASPECT_IDS,
-  buildFieldCatalog,
-  parseQuery,
-  retryCreateId,
-} from '@orbis/shared';
+import { retryCreateId } from '@orbis/shared';
+import { parseQueryAst } from '@orbis/shared/query';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { getQueryKey } from '@trpc/react-query';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
+import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
 import { useRetryBuffer } from '../../state/retry';
 import { mockLink, trpcError } from '../../test/harness';
+import { BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { type ChatMessage, chatThreadKey } from './useChatThread';
 import { useFastPath } from './useFastPath';
 
 const CATEGORY_QUERY = { query: 'aspect=orbis/category' };
-const RULES_QUERY = { query: 'aspect=orbis/memory, kind=rule, scope=orbis/financial' };
+// Литерал СВОЙ, а не импорт из `memoryRules.ts`: съедь обе стороны вместе — и подмена
+// запроса перестала бы наблюдаться тестом вовсе.
+const RULES_QUERY = {
+  query: 'aspect=orbis/memory, orbis/memory_kind=rule, orbis/rule_scope=orbis/financial',
+};
 
 function threadMsgs(qc: QueryClient): ChatMessage[] {
   const data = qc.getQueryData(chatThreadKey('t1')) as { pages: ChatMessage[][] } | undefined;
@@ -124,14 +125,13 @@ test('уверенный паттерн онлайн → entity.create(source:fa
   });
 });
 
-// Запрос правил обязан быть валиден в грамматике §6.1 (kind/scope резолвятся из схемы
-// аспекта orbis/memory): опечатка здесь оставила бы быстрый ввод на одних алиасах, а
-// отказ запроса ещё и проглатывается — фича приехала бы мёртвой молча.
-test('запрос memory-правил разбирается грамматикой §6.1', () => {
-  const catalog = buildFieldCatalog(
-    BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
-  );
-  expect(parseQuery(RULES_QUERY.query, catalog).ok).toBe(true);
+// Запрос правил обязан разбираться НОВОЙ грамматикой §А5-3 (имена свойств — namespaced key
+// реестра): опечатка здесь оставила бы быстрый ввод на одних алиасах, а отказ запроса ещё и
+// проглатывается — фича приехала бы мёртвой молча. Разбор строгий, без моста старой формы:
+// мост принял бы и непереведённый `kind=rule`, и тест зеленел бы при невыполненной работе.
+test('запрос memory-правил разбирается НОВОЙ грамматикой §А5-3, без отката к мосту', () => {
+  const registry = buildQueryRegistry(BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY).parse;
+  expect(parseQueryAst(RULES_QUERY.query, registry).ok).toBe(true);
 });
 
 // 01-arch §7.5: memory-правила применяются и в детерминированном пути. Правило
@@ -146,7 +146,7 @@ test('memory-правила грузятся в ctx парсера и перек
   await act(async () => {
     await result.current.submit('кофе 300');
   });
-  // Запрос правил ушёл ровно в форме aspect=orbis/memory, kind=rule, scope=orbis/financial.
+  // Запрос правил ушёл ровно в key-форме реестра (см. RULES_QUERY выше).
   expect(
     calls.some(
       (c) =>

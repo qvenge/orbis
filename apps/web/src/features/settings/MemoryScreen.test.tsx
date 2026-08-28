@@ -65,7 +65,7 @@ test('MemoryScreen: правило и факт списком, запрос aspe
   expect(screen.getByText('Работаю из дома по пятницам')).toBeInTheDocument();
   // Строка ассертится ТОЧНО: повтор sortBy= — ошибка парсера грамматики (K10).
   expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-    query: 'aspect=orbis/memory, sortBy=updated_at:desc, limit=50',
+    query: 'aspect=orbis/memory, sortBy=orbis/updated_at:desc, limit=50',
   });
 });
 

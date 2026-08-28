@@ -100,6 +100,23 @@ export function effectiveLabel(label: Record<string, string>, locale: string): s
   return label[locale] ?? label.en ?? (Object.values(label)[0] as string);
 }
 
+/**
+ * Локаль владельца — та, в которой резолвятся ЗАКАВЫЧЕННЫЕ подписи имён (§А5-3б) и в которой
+ * печатается label-форма (`print.ts`).
+ *
+ * Своей колонки у неё нет: `user_settings` хранит таймзону, валюту и начало недели, но не
+ * язык. Дом у константы ОДИН — здесь, рядом с `ParseRegistry`, чьей второй половиной она и
+ * является. Раньше она стояла литералом на сервере (`query/parse-text.ts`), и это было
+ * законно ровно пока разбор жил в одном процессе: с Задачи 10c текст запроса разбирает ещё и
+ * браузер (конструктор запросов, виджет блока), а две локали означали бы текст, который
+ * клиент принимает, а сервер отвергает, — и наоборот.
+ *
+ * Значение наблюдаемо в одном случае — когда в тексте стоит `"подпись"` вместо ключа;
+ * ключевая форма (весь корпус боевых текстов) от локали не зависит вовсе. Правило fallback —
+ * §А2-1: локаль → en → любая, поэтому промах даёт английскую подпись, а не отказ.
+ */
+export const OWNER_LOCALE = 'ru';
+
 // ─────────────────────────── Коды отказов ───────────────────────────
 
 export const QUERY_PARSE_CODES = [
@@ -483,13 +500,25 @@ export function isListPropertyType(type: PropertyType): boolean {
   return 'cardinality' in type && type.cardinality === 'many';
 }
 
-/** Есть ли у типа линейный порядок: только у него осмысленны `>`, `<` и диапазон. */
-function isOrdered(type: PropertyType): boolean {
-  return ['number', 'decimal', 'date', 'timestamp', 'time'].includes(type.kind);
+/**
+ * Есть ли у типа линейный порядок: только у него осмысленны `>`, `<` и диапазон.
+ *
+ * Экспортирована по той же причине, что `isListPropertyType`: это решение ЯЗЫКА, а не
+ * парсера. Конструктор запросов в web предлагает операторы сравнения ровно тем свойствам,
+ * которым их разрешает разбор, и своя копия списка типов разошлась бы с этой на первом же
+ * новом типе — форма показала бы оператор, которым набранное перестало бы сохраняться.
+ */
+export function isOrderedPropertyKind(kind: PropertyType['kind']): boolean {
+  return ['number', 'decimal', 'date', 'timestamp', 'time'].includes(kind);
 }
 
-function acceptsDateToken(type: PropertyType): boolean {
-  return type.kind === 'date' || type.kind === 'timestamp';
+/**
+ * Принимает ли свойство относительное время (`today`, `overdue`, …) вместо литерала.
+ * Экспортирована на том же основании: форма подставляет токены только туда, где их примет
+ * разбор (§А5-7).
+ */
+export function acceptsDateTokenKind(kind: PropertyType['kind']): boolean {
+  return kind === 'date' || kind === 'timestamp';
 }
 
 /**
@@ -555,7 +584,7 @@ function parseBound(prop: PropertyDefinition, el: Part): Bound {
   if (el.text === '') fail('SYNTAX', 'пустой элемент значения', el.offset);
   const raw = el.text.startsWith('"') ? null : el.text;
   if (raw !== null && DATE_TOKENS.has(raw)) {
-    if (!acceptsDateToken(prop.type)) {
+    if (!acceptsDateTokenKind(prop.type.kind)) {
       fail(
         'TYPE',
         `относительное время '${raw}' применимо только к свойствам типа date/timestamp; '${prop.key}' — ${prop.type.kind}`,
@@ -721,7 +750,7 @@ function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
   const eqOp = listy ? ('contains' as const) : ('eq' as const);
 
   if (t.op === '>' || t.op === '<' || t.op === '>=' || t.op === '<=') {
-    if (!isOrdered(prop.type) || listy) {
+    if (!isOrderedPropertyKind(prop.type.kind) || listy) {
       fail(
         'TYPE',
         `оператор '${t.op}' применим к свойствам с линейным порядком; '${prop.key}' — ${prop.type.kind}${listy ? ' (список)' : ''}`,
@@ -745,7 +774,7 @@ function parsePropNode(prop: PropertyDefinition, t: Token): QueryFilterNode {
 
   const dots = findRangeDots(t.value);
   if (dots !== -1) {
-    if (!isOrdered(prop.type) || listy) {
+    if (!isOrderedPropertyKind(prop.type.kind) || listy) {
       fail(
         'TYPE',
         `диапазон применим к свойствам с линейным порядком; '${prop.key}' — ${prop.type.kind}`,

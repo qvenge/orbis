@@ -1,5 +1,4 @@
 import { SEED_SMART_LISTS } from '@orbis/server/src/seed/smart-lists';
-import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { DOC_EXTENSIONS, parseBody, serializeBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -9,6 +8,7 @@ import type { Editor } from '@tiptap/react';
 import { useState } from 'react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { installCrashTrap, renderWithProviders } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { BodyEditor, htmlToPlainParagraphs } from './BodyEditor';
 import { BODY_PLACEHOLDER } from './body-box';
 import { EditorShell } from './EditorShell';
@@ -20,9 +20,9 @@ const KUPIT = '0f8fad5b-d9cb-469f-a165-70867728950e';
 
 // Реестр аспектов — настоящий (как в detail.test.tsx): с пустым каталогом любой блок падал бы
 // плашкой qb-error, и «первый кадр рисует виджет» проходило бы по ложной причине.
-const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) }));
 const handler = (path: string) => {
-  if (path === 'aspect.list') return realAspects;
+  const reg = registryReply(path);
+  if (reg !== undefined) return reg;
   if (path === 'entity.query') return [];
   // Резолв подписей чипа и поиск `@` — пустыми списками, а не `{}`: форма ответа у обоих
   // массив, и объект уронил бы рисование чипа и строк меню на `.map` (замерено пробой).

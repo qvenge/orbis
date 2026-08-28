@@ -34,22 +34,28 @@ const OVERDUE_LIMIT = 200;
 // Заводя новый путь записи в граф, инвалидируй entity.query, иначе строка провисит минуту.
 const AGENDA_STALE_MS = 60_000;
 
-/** §4.1: дневное окно — только сущности с orbis/schedule, сортировка по времени. */
-export const AGENDA_DAYS_QUERY = `aspect=orbis/schedule, start_at=today|next_7d, sortBy=start_at:asc, limit=${WINDOW_LIMIT}`;
+/**
+ * §4.1: дневное окно — только сущности с orbis/schedule, сортировка по времени.
+ *
+ * Имена свойств — namespaced key реестра (§А5-3а), а не голые имена полей аспекта: голое имя
+ * новая грамматика не резолвит вовсе. Три текста дословно равны `AGENDA_QUERY_TEXTS`
+ * (`@orbis/shared/query/fixtures`) — равенство пиннится тестом, а не соблюдается на глаз.
+ */
+export const AGENDA_DAYS_QUERY = `aspect=orbis/schedule, orbis/start_at=today|next_7d, sortBy=orbis/start_at:asc, limit=${WINDOW_LIMIT}`;
 
 /**
  * §4.2 п.1 — незакрытые задачи с прошедшим сроком. due_date НЕ материализуемое поле
  * (materialize.ts MATERIALIZABLE_FIELDS), поэтому запрос идёт дешёвым путём и держится
- * ОТДЕЛЬНО от start_at=overdue, который проходит через двухфазный каркас материализации (K16).
+ * ОТДЕЛЬНО от orbis/start_at=overdue, который проходит через двухфазный каркас материализации (K16).
  */
-export const AGENDA_OVERDUE_DUE_QUERY = `aspect=orbis/task, due_date=overdue, status=!done&!cancelled, sortBy=due_date:asc, limit=${OVERDUE_LIMIT}`;
+export const AGENDA_OVERDUE_DUE_QUERY = `aspect=orbis/task, orbis/due_date=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=${OVERDUE_LIMIT}`;
 
 /**
  * §4.2 п.2 — незакрытые scheduled-задачи, время которых прошло. Два aspect= в одном
  * запросе грамматика принимает (K14) — и именно они отсекают чистые события (§4.2:
  * прошедшее время события не означает «пропущено», приёмка §8.1).
  */
-export const AGENDA_OVERDUE_START_QUERY = `aspect=orbis/task, aspect=orbis/schedule, start_at=overdue, status=!done&!cancelled, sortBy=start_at:asc, limit=${OVERDUE_LIMIT}`;
+export const AGENDA_OVERDUE_START_QUERY = `aspect=orbis/task, aspect=orbis/schedule, orbis/start_at=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/start_at:asc, limit=${OVERDUE_LIMIT}`;
 
 function aspectOf(e: AgendaEntity, id: string): Record<string, unknown> | undefined {
   return (e.aspectsMap as Record<string, Record<string, unknown> | undefined>)[id];
@@ -117,7 +123,7 @@ export type AgendaDay = { date: string; entities: AgendaEntity[] };
 /**
  * Дневные секции §4.1: 8 дней от «сегодня», сущности разложены по локальному дню
  * `start_at`. Шаблоны recurring отфильтрованы; внутри дня all_day идут первыми,
- * дальше сохраняется порядок сервера (sortBy=start_at:asc — Array#sort стабилен).
+ * дальше сохраняется порядок сервера (sortBy=orbis/start_at:asc — Array#sort стабилен).
  */
 export function useAgendaDays(): {
   days: AgendaDay[];

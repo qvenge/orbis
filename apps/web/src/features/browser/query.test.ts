@@ -9,10 +9,11 @@ import {
   queryBlocks,
 } from './query';
 
-test('browserQuery включает limit и сортировку по updated_at desc', () => {
+test('browserQuery включает limit и сортировку по orbis/updated_at desc', () => {
   const q = browserQuery({ limit: 50, filters: '' });
   expect(q).toContain('limit=50');
-  expect(q).toContain('sortBy=updated_at:desc');
+  // Namespaced key core-свойства (§А5-3а): голое `updated_at` новая грамматика не резолвит.
+  expect(q).toContain('sortBy=orbis/updated_at:desc');
 });
 
 test('browserQuery дописывает фильтры перед limit', () => {
@@ -25,14 +26,24 @@ test('buildFilterQuery собирает строку из выбранных ф�
   const s = buildFilterQuery({
     tags: ['работа', 'дом'],
     aspects: ['orbis/task'],
-    status: 'inbox',
-    priority: null,
     createdFrom: null,
     createdTo: null,
   });
   expect(s).toContain('tags=работа|дом');
   expect(s).toContain('aspect=orbis/task');
-  expect(s).toContain('status=inbox');
+});
+
+// Тег владельца с пробелом — отдельный класс отказа описи (вердикт SYNTAX): пробел стал
+// разделителем КОНСТРУКЦИЙ (§А5-3), и незакавыченный тег рвал запрос надвое. Проверяем на
+// самом тексте, а не на «страница открылась»: без кавычек `tags=личные` и `дела` — два слова.
+test('buildFilterQuery квотирует тег с пробелом', () => {
+  const s = buildFilterQuery({
+    tags: ['личные дела'],
+    aspects: [],
+    createdFrom: null,
+    createdTo: null,
+  });
+  expect(s).toContain('tags="личные дела"');
 });
 
 test('firstQueryBlock извлекает первый {{query:...}} из body', () => {

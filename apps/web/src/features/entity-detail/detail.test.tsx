@@ -1,5 +1,4 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
-import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
 import { onlineManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -13,6 +12,7 @@ import {
   renderWithProviders,
   trpcError,
 } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { Toaster } from '../../ui/Toast';
 import { queryBlocks } from '../browser/query';
@@ -708,7 +708,7 @@ test('financial: category_ref — выбор из категорий с назв
   expect(select).toHaveDisplayValue('Еда');
   // Список категорий берётся тем же запросом, что и экраны Budget (один кэш)
   expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-    query: 'aspect=orbis/category, sortBy=title:asc, limit=200',
+    query: 'aspect=orbis/category, sortBy=orbis/title:asc, limit=200',
   });
 });
 
@@ -848,9 +848,8 @@ test('нефинансовая сущность: поля прежние (инп
 });
 
 // --- query-блоки body (02-core-os §3.4) ------------------------------------------------
-// Реестр аспектов — настоящий (schema из @orbis/shared), поэтому каталог полей грамматики
-// в тесте тот же, что в проде: битая клауза упала бы плашкой qb-error, а не молча.
-const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) }));
+// Реестры настоящие (`registryReply`), поэтому каталог полей и разбор имён в тесте те же,
+// что в проде: битая конструкция упала бы плашкой qb-error, а не молча.
 const found = (title: string) => ({
   id: title,
   ownerId: 'u',
@@ -881,7 +880,8 @@ test('detail рендерит КАЖДЫЙ query-блок body: у Daily Plannin
         relations: [],
         thread: null,
       };
-    if (path === 'aspect.list') return realAspects;
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
     if (path === 'entity.query') {
       // Задача из приёмки §8.4: срок сегодня, статус in_progress — попадает ровно в «Сегодня».
       const q = (input as { query: string }).query;
@@ -921,7 +921,8 @@ test('query-блок с `this` на detail получает контекст о�
         relations: [],
         thread: null,
       };
-    if (path === 'aspect.list') return realAspects;
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
     if (path === 'entity.query') return [found('Тикет')];
     return {};
   });
@@ -1206,7 +1207,8 @@ const bodyHandler =
     if (path === 'entity.get')
       return { entity: { ...entity, body, bodyDoc: parseBody(body) }, relations: [], thread: null };
     if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
-    if (path === 'aspect.list') return realAspects;
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
     if (path === 'entity.query') return [found('Разобрать Inbox')];
     return {};
   };
@@ -3521,7 +3523,7 @@ const NEXT_BUCKET_AT = '2026-08-19T04:00:00.000Z';
 /**
  * Прогоны рутины приезжают ТЕМ ЖЕ `entity.query`, что и прогоны тикета (Р-8), — и отличаются
  * от них ровно тем, что гранта у них нет вовсе: работу делал внутренний исполнитель.
- * Порядок — как у сервера (`sortBy=created_at:desc`): последний прогон стоит первым.
+ * Порядок — как у сервера (`sortBy=orbis/created_at:desc`): последний прогон стоит первым.
  */
 const ROUTINE_RUN_DONE = {
   ...RUN,

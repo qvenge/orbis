@@ -26,7 +26,8 @@ import { envelopeView } from './EnvelopeCard';
 import { AMOUNT_RE, toDecimal2 } from './moneyInput';
 import { invalidateBudget, todayISO } from './useBudget';
 
-const RECENT_QUERY = 'aspect=orbis/financial, sortBy=occurred_on:desc, limit=20';
+/** Экспортирован ради пиннинга: боевой текст обязан разбираться каноном (§А5-3). */
+export const RECENT_QUERY = 'aspect=orbis/financial, sortBy=orbis/occurred_on:desc, limit=20';
 const MAX_PILLS = 5;
 
 const FIELD_CLS =

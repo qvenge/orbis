@@ -153,7 +153,7 @@ test('пилюли: уникальные категории из последн�
       String((c.input as { query: string }).query).includes('orbis/financial'),
   );
   expect(q?.input).toEqual({
-    query: 'aspect=orbis/financial, sortBy=occurred_on:desc, limit=20',
+    query: 'aspect=orbis/financial, sortBy=orbis/occurred_on:desc, limit=20',
   });
 
   const pills = screen.getAllByTestId('category-pill');

@@ -1,4 +1,3 @@
-import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { DOC_EXTENSIONS, parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -6,6 +5,7 @@ import { getSchema } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
 import { afterEach, expect, test, vi } from 'vitest';
 import { installCrashTrap, renderWithProviders, trpcError } from '../../../test/harness';
+import { registryReply } from '../../../test/registry';
 import { Toaster } from '../../../ui/Toast';
 import { BodyEditor } from '../BodyEditor';
 import { BODY_PLACEHOLDER } from '../body-box';
@@ -17,7 +17,6 @@ import { suggestionExtensions } from './suggestion';
 // Реестр аспектов — настоящий (как в editor.test.tsx и query-widget.test.tsx): с пустым
 // каталогом ЛЮБОЙ блок падал бы плашкой qb-error, и «смарт-лист встал живым» проходило бы
 // по ложной причине.
-const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) }));
 
 type Suggestion = { id: string; title: string; emoji: string | null; status: string | null };
 const suggestion = (id: string, title: string): Suggestion => ({
@@ -47,7 +46,8 @@ const api =
     createFails?: boolean;
   }) =>
   (path: string, input: unknown): unknown => {
-    if (path === 'aspect.list') return realAspects;
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
     if (path === 'entity.query') return opts.byQuery?.[(input as { query: string }).query] ?? [];
     if (path === 'entity.suggest') {
       const term = (input as { term?: unknown }).term;

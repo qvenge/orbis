@@ -1,4 +1,3 @@
-import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { DOC_EXTENSIONS, parseBody, serializeBody } from '@orbis/shared/doc';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -6,15 +5,16 @@ import { getSchema } from '@tiptap/core';
 import type { Editor } from '@tiptap/react';
 import { expect, test, vi } from 'vitest';
 import { installCrashTrap, renderWithProviders } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { BodyEditor } from './BodyEditor';
 import { EDITOR_EXTENSIONS } from './extensions';
 
 // Реестр аспектов — настоящий (как в editor.test.tsx и slash.test.tsx): с пустым каталогом
 // любой смарт-лист падал бы плашкой qb-error, и тесты про NodeSelection на живом блоке
 // проходили бы по ложной причине.
-const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) }));
 const handler = (path: string): unknown => {
-  if (path === 'aspect.list') return realAspects;
+  const reg = registryReply(path);
+  if (reg !== undefined) return reg;
   if (path === 'entity.query') return [];
   return {};
 };

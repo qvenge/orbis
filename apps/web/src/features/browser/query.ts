@@ -1,27 +1,38 @@
+import { quoteQueryValue } from '@orbis/shared/query';
+
 export type FilterState = {
   tags: string[];
   aspects: string[];
-  status: string | null;
-  priority: string | null;
-  createdFrom: string | null; // ISO date
+  /**
+   * Границы создания в форме `YYYY-MM-DD`.
+   *
+   * ИЗВЕСТНЫЙ ОСТАТОК, названный вслух и НЕ заведённый реформой: `orbis/created_at` —
+   * свойство типа timestamp, и разбор ждёт от него полный момент ISO 8601, а не день. Дата
+   * без времени отвергалась и старой грамматикой (опись боевых текстов, `ast-fixtures.ts`:
+   * «ломается в самом старом парсере»), так что поведение здесь ровно прежнее. Живёт это
+   * поле сегодня без единого производителя: `Filters` заполняет только `tags`, и построить
+   * такой запрос из интерфейса нельзя ни одним действием.
+   */
+  createdFrom: string | null;
   createdTo: string | null;
 };
 
 export function buildFilterQuery(f: FilterState): string {
-  // Грамматика §6.1: клаузы через запятую; OR внутри значения — '|'; сравнения строгие '>'/'<'.
+  // Грамматика §А5-3: конструкции через запятую; OR внутри значения — '|'; сравнения строгие.
+  // Имена свойств — namespaced key реестра (§А5-3а), значения тегов — через общий квотировщик
+  // печати (`quoteQueryValue`): пробел стал разделителем конструкций, и тег владельца
+  // «личные дела» без кавычек рвал запрос надвое.
   const clauses: string[] = [];
-  if (f.tags.length) clauses.push(`tags=${f.tags.join('|')}`);
+  if (f.tags.length) clauses.push(`tags=${f.tags.map(quoteQueryValue).join('|')}`);
   for (const a of f.aspects) clauses.push(`aspect=${a}`);
-  if (f.status) clauses.push(`status=${f.status}`);
-  if (f.priority) clauses.push(`priority=${f.priority}`);
-  if (f.createdFrom) clauses.push(`created_at>${f.createdFrom}`);
-  if (f.createdTo) clauses.push(`created_at<${f.createdTo}`);
+  if (f.createdFrom) clauses.push(`orbis/created_at>${f.createdFrom}`);
+  if (f.createdTo) clauses.push(`orbis/created_at<${f.createdTo}`);
   return clauses.join(', ');
 }
 
 export function browserQuery({ limit, filters }: { limit: number; filters: string }): string {
   const base = filters ? `${filters}, ` : '';
-  return `${base}sortBy=updated_at:desc, limit=${limit}`;
+  return `${base}sortBy=orbis/updated_at:desc, limit=${limit}`;
 }
 
 /** Кусок body для рендера: обычный текст (markdown) либо {{query:...}}-блок (виджет). */

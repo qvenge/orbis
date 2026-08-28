@@ -36,14 +36,23 @@ export function runAspect(run: TicketRun): Record<string, unknown> | undefined {
   return run.aspectsMap[RUN_ASPECT];
 }
 
+/**
+ * Прогоны тикета: дети роли иерархии с аспектом прогона, последний первым.
+ *
+ * Именованной функцией, а не литералом внутри хука: текст боевой, и его разбор каноном
+ * (§А5-3) пиннится отдельным тестом — иначе непереведённое имя свойства уехало бы в мост
+ * старой формы молча, и «экран открылся» доказывало бы ровно ничего.
+ */
+export function ticketRunsQuery(ticketId: string): string {
+  return `children_of=${ticketId}, aspect=${RUN_ASPECT}, sortBy=orbis/created_at:desc, limit=20`;
+}
+
 export function useTicketRuns(
   ticketId: string,
   enabled: boolean,
 ): { runs: TicketRun[]; lastRun: TicketRun | undefined; isLoading: boolean } {
   const q = trpc.entity.query.useQuery(
-    {
-      query: `children_of=${ticketId}, aspect=${RUN_ASPECT}, sortBy=created_at:desc, limit=20`,
-    },
+    { query: ticketRunsQuery(ticketId) },
     // enabled: у записи без назначения прогонов не бывает по построению — платить за них
     // запросом с КАЖДОГО открытия записи не за что.
     //
@@ -68,6 +77,6 @@ export function useTicketRuns(
   // Array.isArray — та же защита, что в TransactionsScreen и CategoryField: секция живёт на
   // общем detail-экране, и неожиданная форма ответа не должна ронять всю страницу.
   const runs = Array.isArray(q.data) ? q.data : [];
-  // sortBy=created_at:desc — последний прогон стоит ПЕРВЫМ.
+  // sortBy=orbis/created_at:desc — последний прогон стоит ПЕРВЫМ.
   return { runs, lastRun: runs[0], isLoading: q.isLoading };
 }

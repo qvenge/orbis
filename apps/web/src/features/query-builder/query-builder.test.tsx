@@ -1,9 +1,9 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
-import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { parseBody, serializeBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
 import { installCrashTrap, type MockHandler, renderWithProviders } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { BodyEditor } from '../entity-editor/BodyEditor';
 import { QueryTextEditor } from './QueryTextEditor';
 
@@ -11,9 +11,8 @@ import { QueryTextEditor } from './QueryTextEditor';
 // ассерты остаются зелёными, а прогон падает кодом 1. Ставится файлом, не глобально: см. harness.
 installCrashTrap();
 
-// Реестр аспектов — настоящий: каталог полей грамматики в тесте тот же, что в проде,
-// иначе «невалидный блок» в тесте оказался бы валидным в продукте (и наоборот).
-const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) }));
+// Реестры настоящие: каталог полей и разбор имён в тесте те же, что в проде, иначе
+// «неразбираемый блок» в тесте оказался бы разбираемым в продукте (и наоборот).
 
 /**
  * Хозяин виджетов — РЕДАКТОР, а не detail-экран.
@@ -30,7 +29,8 @@ const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSche
  * что он показывает, что отдаёт наружу и куда возвращается фокус.
  */
 const handler: MockHandler = (path) => {
-  if (path === 'aspect.list') return realAspects;
+  const reg = registryReply(path);
+  if (reg !== undefined) return reg;
   if (path === 'entity.query') return [];
   return {};
 };
@@ -108,7 +108,9 @@ test('сохранение формы без изменений документ
 test('правка формы заменяет только этот блок', async () => {
   const s = mountBody(TWO_BLOCKS);
   const dialog = await openBlockEditor(1);
-  fireEvent.change(await within(dialog).findByLabelText('Лимит'), { target: { value: '5' } });
+  fireEvent.change(await within(dialog).findByLabelText('Лимит выдачи'), {
+    target: { value: '5' },
+  });
   fireEvent.click(within(dialog).getByRole('button', { name: 'Сохранить' }));
 
   await waitFor(() => expect(s.onChange).toHaveBeenCalled());
@@ -222,7 +224,7 @@ test('кнопка «Настроить» — настоящая кнопка с
 
 // --- сам редактор ----------------------------------------------------------------------
 
-const editorHandler: MockHandler = (path) => (path === 'aspect.list' ? realAspects : {});
+const editorHandler: MockHandler = (path) => registryReply(path) ?? {};
 
 // Radix сам проставляет content'у aria-describedby на свой Description; примитив ui/Dialog
 // его не рендерит, поэтому ссылка вела в никуда — скринридер объявлял бы модалку с

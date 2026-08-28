@@ -21,8 +21,11 @@ import { Skeleton } from '../../ui/Skeleton';
 import { EntityRow } from '../browser/EntityRow';
 import { useEntities } from '../browser/useEntities';
 
-/** Единственная клауза фильтра: sortBy/limit дописывает browserQuery (см. шапку). */
-const MEMORY_FILTER = 'aspect=orbis/memory';
+/**
+ * Единственная конструкция фильтра: sortBy/limit дописывает browserQuery (см. шапку).
+ * Экспортирован ради пиннинга: боевой текст обязан разбираться каноном (§А5-3).
+ */
+export const MEMORY_FILTER = 'aspect=orbis/memory';
 
 const ROW_CLASS =
   'flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50';

@@ -1,10 +1,22 @@
-import { type FieldCatalog, type ParseResult, parseQuery } from '@orbis/shared';
+import { type ParseAstResult, type ParseRegistry, parseQueryAny } from '@orbis/shared/query';
 
-export { buildCatalogFromAspects } from './catalog';
-
-// Снимаем обёртку {{query:...}}; на вход parseQuery идёт содержимое (§2: обёртку парсер НЕ снимает).
-export function parseBlock(blockText: string, catalog: FieldCatalog): ParseResult {
+/**
+ * Разбор ТЕЛА блока: обёртку `{{query:…}}` снимаем здесь, внутрь идёт содержимое (§2: обёртку
+ * парсер не снимает).
+ *
+ * Грамматика — канон §А5-3 с переходным мостом старой формы, ровно как на сервере
+ * (`query/parse-text.ts`). Мост здесь ОБЯЗАТЕЛЕН до Задачи 21, и это не поблажка: тела
+ * сидированных смарт-листов и заготовка проекта написаны старой грамматикой и переводятся
+ * Задачей 21, а сервер их исполняет. Разбирай экран строго — и каждый сидированный список
+ * встретил бы владельца красной плашкой при живом ответе сервера, то есть web и сервер
+ * расходились бы в том, какой запрос считается верным.
+ *
+ * Отказ, который увидит человек, при этом ВСЕГДА от новой грамматики (`parseQueryAny`): старая
+ * умирает, и учить по её сообщениям значит учить неправде. Неизвестное имя свойства — отказ с
+ * позицией, а не молчаливый ноль результатов (§А5-3ж).
+ */
+export function parseBlock(blockText: string, reg: ParseRegistry): ParseAstResult {
   const m = blockText.match(/\{\{query:([\s\S]*?)\}\}/);
   const inner = (m ? (m[1] ?? '') : blockText).trim();
-  return parseQuery(inner, catalog);
+  return parseQueryAny(inner, reg);
 }

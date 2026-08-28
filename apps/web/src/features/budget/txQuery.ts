@@ -1,6 +1,8 @@
-// Task B5 (03-budget §3.3): чистый билдер строки грамматики §6.1 для экрана
+import { quoteQueryValue } from '@orbis/shared/query';
+
+// Task B5 (03-budget §3.3): чистый билдер строки грамматики §А5-3 для экрана
 // «Транзакции» — потребитель №3 query-движка. Периода-агрегата не нужно: месяц
-// передаётся абсолютным диапазоном date-поля аспекта occurred_on=<от>..<до>
+// передаётся абсолютным диапазоном date-свойства orbis/occurred_on=<от>..<до>
 // (расширение грамматики этого же таска). Никакой логики запросов в компонентах —
 // строка собирается здесь и покрыта юнит-тестами на кавычки/экранирование
 // (урок бэклога об экранировании тегов).
@@ -19,7 +21,7 @@ export type TxFilters = {
   month: string;
   /** Окно выдачи: TX_PAGE_SIZE * page (растущее окно C6); по умолчанию первая страница. */
   limit?: number;
-  /** id категории → category_ref=<uuid>; null/undefined — все категории. */
+  /** id категории → orbis/finance_category=<uuid>; null/undefined — все категории. */
   categoryId?: string | null;
   direction?: 'expense' | 'income' | null;
   planned?: boolean | null;
@@ -37,33 +39,32 @@ export function monthRange(month: string): { start: string; end: string } {
 }
 
 /**
- * Экранирование значения по лексике §6.1: `,`/`|`/`&`/`"`/краевые пробелы →
- * значение целиком в двойных кавычках; внутри — `\` → `\\` (первым! иначе двойное
- * экранирование кавычек) и `"` → `\"` (fix round B5: хвостовой `\` без `\\`-экрана
- * съедал бы закрывающую кавычку). Вне кавычек `\` — литерал, экран не нужен.
+ * Строка запроса §А5-3 для экрана «Транзакции» (§3.3): фильтры → конструкции через запятую.
+ *
+ * Имена свойств — namespaced key реестра (§А5-3а): голых `occurred_on`/`category_ref` в
+ * реестре нет, а `category_ref` вдобавок слит с `orbis/finance_category` (В1 инвентаря).
+ *
+ * Квотирование значения — общий `quoteQueryValue` печати, а не своя функция: прежняя
+ * `quoteValue` брала в кавычки только `,`/`|`/`&`/`"` и краевые пробелы, а с §А5-3 пробел
+ * стал РАЗДЕЛИТЕЛЕМ конструкций — поисковый ввод «кофе эклер» уезжал голым и рвал запрос
+ * надвое (опись боевых текстов, вердикт `SYNTAX`).
  */
-export function quoteValue(v: string): string {
-  if (!/[,|&"]/.test(v) && v === v.trim()) return v;
-  return `"${v.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
-}
-
-/** Строка запроса §6.1 для экрана «Транзакции» (§3.3): фильтры → клаузы через запятую. */
 export function buildTxQuery(f: TxFilters): string {
   const { start, end } = monthRange(f.month);
-  const clauses = [`aspect=orbis/financial`, `occurred_on=${start}..${end}`];
-  if (f.categoryId) clauses.push(`category_ref=${f.categoryId}`);
-  if (f.direction) clauses.push(`direction=${f.direction}`);
-  // «Факт» — noneOf `planned=!true` (IS NULL OR NOT IN ('true'), решение 10 компилятора):
+  const clauses = [`aspect=orbis/financial`, `orbis/occurred_on=${start}..${end}`];
+  if (f.categoryId) clauses.push(`orbis/finance_category=${f.categoryId}`);
+  if (f.direction) clauses.push(`orbis/direction=${f.direction}`);
+  // «Факт» — noneOf `orbis/planned=!true` (IS NULL OR NOT IN ('true'), решение 10 компилятора):
   // quick-add/fast-path/LLM ключ planned не пишут (только post-due/confirmPurchase ставят),
   // а `planned=false` компилировался бы в IN ('false') и скрывал бы рукописные транзакции.
   // Семантика согласована с серверными агрегатами: отсутствие ключа = факт (coalesce(...,false)).
-  if (f.planned === true) clauses.push('planned=true');
-  else if (f.planned === false) clauses.push('planned=!true');
-  // Обе границы — диапазон (включительно, §6.1); одна — строгое сравнение (>= в грамматике нет)
-  if (f.amountFrom && f.amountTo) clauses.push(`amount=${f.amountFrom}..${f.amountTo}`);
-  else if (f.amountFrom) clauses.push(`amount>${f.amountFrom}`);
-  else if (f.amountTo) clauses.push(`amount<${f.amountTo}`);
-  if (f.search && f.search.trim() !== '') clauses.push(`search=${quoteValue(f.search)}`);
-  clauses.push('sortBy=occurred_on:desc', `limit=${f.limit ?? TX_PAGE_SIZE}`);
+  if (f.planned === true) clauses.push('orbis/planned=true');
+  else if (f.planned === false) clauses.push('orbis/planned=!true');
+  // Обе границы — диапазон (включительно, §А5-7); одна — строгое сравнение
+  if (f.amountFrom && f.amountTo) clauses.push(`orbis/amount=${f.amountFrom}..${f.amountTo}`);
+  else if (f.amountFrom) clauses.push(`orbis/amount>${f.amountFrom}`);
+  else if (f.amountTo) clauses.push(`orbis/amount<${f.amountTo}`);
+  if (f.search && f.search.trim() !== '') clauses.push(`search=${quoteQueryValue(f.search)}`);
+  clauses.push('sortBy=orbis/occurred_on:desc', `limit=${f.limit ?? TX_PAGE_SIZE}`);
   return clauses.join(', ');
 }

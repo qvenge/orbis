@@ -25,11 +25,11 @@ export function QueryBlockEditor({
   onSave: (query: string) => void;
   onCancel: () => void;
 }) {
-  const { catalog } = useFieldCatalog();
+  const { registry } = useFieldCatalog();
   // Не null — открыт строковый редактор с этим текстом (переход «редактировать как текст»).
   const [text, setText] = useState<string | null>(null);
 
-  if (catalog === null) {
+  if (registry === null) {
     return (
       <Dialog
         open
@@ -47,7 +47,7 @@ export function QueryBlockEditor({
 
   // Форма управляет только тем блоком, который она умеет напечатать обратно: и разбор, и
   // печать проверяются ДО открытия — иначе первое же сохранение потеряло бы конструкцию.
-  if (text === null && parseForForm(initial, catalog) !== null) {
+  if (text === null && parseForForm(initial, registry) !== null) {
     return (
       <QueryBuilderForm
         initial={initial}

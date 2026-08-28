@@ -338,7 +338,9 @@ test(
         expect(txQueryCalls(calls)).toContain(buildTxQuery({ month: MONTH, categoryId: 'cat-1' })),
       { timeout: 10_000 },
     );
-    const withNewFilter = txQueryCalls(calls).filter((q) => q.includes('category_ref=cat-1'));
+    const withNewFilter = txQueryCalls(calls).filter((q) =>
+      q.includes('orbis/finance_category=cat-1'),
+    );
     expect(withNewFilter).toEqual([buildTxQuery({ month: MONTH, categoryId: 'cat-1' })]);
     await waitRows(200);
   },

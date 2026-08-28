@@ -1,38 +1,46 @@
 /**
- * Визуальная форма-редактор query-блока (02-core-os §3.4, грамматика 01-architecture §6.1).
+ * Визуальная форма-редактор query-блока (02-core-os §3.4, канон Q-AST §А5-7).
  *
- * Состояние формы — сам разобранный AST: форма правит его узлы на месте и печатает обратно
- * `serializeQuery`. Второго хранилища у блока нет — строка в body и есть состояние (§3.4).
+ * Состояние формы — сам разобранный `QueryAst`: форма правит его узлы на месте и печатает
+ * обратно `printQueryAst` в КЛЮЧЕВОЙ форме (§А5-2 — key канон). Второго хранилища у блока нет
+ * — строка в body и есть состояние (§3.4); хранение самого AST в узле документа приедет
+ * Задачей 21.
  *
  * Правило «без изменений — байт-в-байт» (Р3): совпала печать текущего AST с печатью
- * исходного — наверх уходит ИСХОДНАЯ строка. Сериализатор по построению даёт одну строку,
- * а все шесть сидированных smart lists многострочные: без этого правила «открыл форму и
- * ничего не менял» переписывало бы запись схлопнутым блоком.
+ * исходного — наверх уходит ИСХОДНАЯ строка. Оно же и есть единственная защита сидированных
+ * тел от переписывания: они многострочные и написаны СТАРОЙ грамматикой (перевод — Задача 21),
+ * а печать даёт одну строку в key-форме. Открыл и ничего не менял — запись не тронута;
+ * поправил лимит — блок переехал в канон целиком, и это правильно: половину строки в старой
+ * форме, половину в новой не разберёт никто.
  *
- * Форма требует валидного парса; невалидный блок — забота строкового редактора (§3.4,
- * выбор редактора делает QueryBlockEditor).
+ * Форма требует РАЗБИРАЕМОГО блока; неразбираемый — забота строкового редактора (§3.4, выбор
+ * редактора делает QueryBlockEditor).
  */
 
-import type { QueryAst, QueryDisplayMode, QueryFilter, QuerySortDirection } from '@orbis/shared';
+import type { QueryAst, QueryDisplayMode, QueryFilterNode } from '@orbis/shared/query';
+import { isExcludeBlockedSugar } from '@orbis/shared/query';
 import { useId, useMemo, useState } from 'react';
-import { aspectLabel } from '../../lib/field-labels';
+import type { QueryRegistry } from '../../lib/query-blocks/catalog';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { Button } from '../../ui/Button';
 import { Dialog } from '../../ui/Dialog';
 import { FIELD_CLS, FieldRow, ROW_BUTTON_CLS } from './FieldRows';
 import {
   aspectsOf,
-  type FieldNode,
+  excludeBlockedNode,
+  fieldNodeView,
   fieldRef,
-  isFieldNode,
+  labelOfText,
   parseForForm,
   printQuery,
-  sortableFieldNames,
-  visibleFieldNames,
+  sortableFieldIds,
+  topNodes,
+  visibleFieldIds,
+  withNodes,
 } from './model';
 
-type Filters = QueryFilter[];
-type PatchFilters = (fn: (filters: Filters) => Filters) => void;
+type Nodes = QueryFilterNode[];
+type PatchNodes = (fn: (nodes: Nodes) => Nodes) => void;
 
 export function QueryBuilderForm({
   initial,
@@ -44,18 +52,18 @@ export function QueryBuilderForm({
   onSave: (query: string) => void;
   onCancel: () => void;
   /**
-   * Переход в строковый редактор. Аргумент — ТЕКУЩАЯ сериализация формы (§3.4: «тот же
-   * редактор с текущей сериализацией»): без него набранное в форме терялось бы на переходе.
+   * Переход в строковый редактор. Аргумент — ТЕКУЩАЯ печать формы (§3.4: «тот же редактор с
+   * текущей сериализацией»): без него набранное в форме терялось бы на переходе.
    */
   onEditAsText: (query: string) => void;
 }) {
-  const { catalog, aspectIds } = useFieldCatalog();
+  const { registry } = useFieldCatalog();
   const initialAst = useMemo(
-    () => (catalog ? parseForForm(initial, catalog) : null),
-    [catalog, initial],
+    () => (registry ? parseForForm(initial, registry) : null),
+    [registry, initial],
   );
 
-  // Состояние заводится, как только приехал каталог: до него разобрать блок нечем.
+  // Состояние заводится, как только приехал реестр: до него разобрать блок нечем.
   // Прямо в теле рендера, без useEffect — идиома «черновик vs серверное значение» detail.
   const [ast, setAst] = useState<QueryAst | null>(null);
   const [limitText, setLimitText] = useState('');
@@ -67,16 +75,16 @@ export function QueryBuilderForm({
   // `limit` живёт отдельной строкой, а не числом в AST: набирая «50» поверх «30», человек
   // проходит через пустую строку. Пустая — это «лимита нет», конструкция просто уходит из
   // AST. Непустое непечатаемое (`0`, дробное) в AST не попадает вовсе: отказ формулируется
-  // здесь и по НАБРАННОМУ значению — подсунуть сериализатору NaN ради его исключения
-  // значило бы объяснять человеку его же ввод служебным словом.
+  // здесь и по НАБРАННОМУ значению — подсунуть печати NaN ради его исключения значило бы
+  // объяснять человеку его же ввод служебным словом.
   const limit = useMemo<{ value?: number; error: string | null }>(() => {
     const raw = limitText.trim();
     if (raw === '') return { error: null };
     const value = Number.parseInt(raw, 10);
     if (!/^\d+$/.test(raw) || value <= 0) {
-      // Формулировка — дословно парсерская (parse.ts, parseLimit): одна ошибка обязана
-      // звучать одинаково, откуда бы человек к ней ни пришёл.
-      return { error: `limit должен быть целым числом больше 0, получено '${raw}'` };
+      // Формулировка — дословно разборная (`parse-ast.ts`, ветка `limit`): одна ошибка
+      // обязана звучать одинаково, откуда бы человек к ней ни пришёл.
+      return { error: `limit: целое больше 0, получено '${raw}'` };
     }
     return { value, error: null };
   }, [limitText]);
@@ -88,25 +96,25 @@ export function QueryBuilderForm({
   }, [ast, limit.value]);
 
   const printed = useMemo(
-    () => (effective && catalog ? printQuery(effective, catalog) : null),
-    [effective, catalog],
+    () => (effective && registry ? printQuery(effective, registry) : null),
+    [effective, registry],
   );
   const initialPrinted = useMemo(
-    () => (initialAst && catalog ? printQuery(initialAst, catalog) : null),
-    [initialAst, catalog],
+    () => (initialAst && registry ? printQuery(initialAst, registry) : null),
+    [initialAst, registry],
   );
 
   let body: React.ReactNode;
-  if (catalog === null) {
-    // Каталог едет tRPC (реестр живёт в БД). До него ни разобрать блок, ни показать поля.
+  if (registry === null) {
+    // Реестр едет tRPC (он живёт в БД). До него ни разобрать блок, ни показать поля.
     body = (
       <p role="status" className="py-6 text-center text-sm text-text-secondary">
         Загрузка…
       </p>
     );
   } else if (ast === null || effective === null || printed === null) {
-    // Каталог есть, а AST нет — блок не разобрался или не печатается обратно. Штатно сюда
-    // не попадают (редактор выбирает форму только для таких, что и то и другое), но врать
+    // Реестр есть, а AST нет — блок не разобрался или не печатается обратно. Штатно сюда не
+    // попадают (редактор выбирает форму только для таких, что и то и другое), но врать
     // «Загрузка…» в этом состоянии нельзя: выход — тот же строковый редактор в футере.
     body = (
       <p role="alert" className="py-6 text-center text-danger text-sm">
@@ -120,14 +128,13 @@ export function QueryBuilderForm({
         setAst={setAst}
         limitText={limitText}
         setLimitText={setLimitText}
-        aspectIds={aspectIds}
-        catalog={catalog}
+        registry={registry}
       />
     );
   }
 
   // Что мешает записи: отказ по лимиту считаем мы (см. выше), всё остальное — печать с
-  // обратным разбором (непечатаемый AST, неоднозначное имя поля, пустая граница сравнения).
+  // обратным разбором (`}}` в значении, пустая граница сравнения, дерево вне грамматики v1).
   const formError = limit.error ?? printed?.error ?? null;
   const blocked = printed === null || printed.text === null || formError !== null;
 
@@ -181,47 +188,55 @@ function FormBody({
   setAst,
   limitText,
   setLimitText,
-  aspectIds,
-  catalog,
+  registry,
 }: {
   ast: QueryAst;
   setAst: (fn: (prev: QueryAst | null) => QueryAst | null) => void;
   limitText: string;
   setLimitText: (v: string) => void;
-  aspectIds: string[];
-  catalog: NonNullable<ReturnType<typeof useFieldCatalog>['catalog']>;
+  registry: QueryRegistry;
 }) {
   const patch = (next: Partial<QueryAst>): void =>
     setAst((prev) => (prev === null ? prev : { ...prev, ...next }));
-  const patchFilters: PatchFilters = (fn) =>
-    setAst((prev) => (prev === null ? prev : { ...prev, filters: fn(prev.filters) }));
+  const patchNodes: PatchNodes = (fn) =>
+    setAst((prev) => (prev === null ? prev : withNodes(prev, fn(topNodes(prev)))));
 
-  const selected = useMemo(() => new Set(aspectsOf(ast)), [ast]);
-  const aspectOptions = useMemo(
-    () => [...new Set([...aspectIds, ...selected])],
-    [aspectIds, selected],
+  const nodes = useMemo(() => topNodes(ast), [ast]);
+  const selected = useMemo(() => new Set(aspectsOf(nodes)), [nodes]);
+  const aspectOptions = useMemo(() => {
+    const known = new Map(
+      registry.aspects.map((a) => [a.id, labelOfText(a.label, registry.parse.locale)]),
+    );
+    // Аспект, названный в запросе, но исчезнувший из реестра, обязан остаться видимым:
+    // иначе снять его было бы нечем, а запрос молча носил бы фильтр, которого не видно.
+    for (const id of selected) if (!known.has(id)) known.set(id, id);
+    return [...known.entries()];
+  }, [registry, selected]);
+  const fieldIds = useMemo(
+    () => visibleFieldIds(nodes, registry, selected),
+    [nodes, registry, selected],
   );
-  const fieldNames = useMemo(() => visibleFieldNames(ast, catalog), [ast, catalog]);
+  const orHintId = useId();
 
   return (
     <div className="flex flex-col gap-4">
       <Section title="Аспекты">
         <div className="flex flex-wrap gap-x-4 gap-y-1">
-          {aspectOptions.map((id) => (
+          {aspectOptions.map(([id, label]) => (
             <label key={id} className="flex items-center gap-1 text-sm text-text">
               <input
                 type="checkbox"
                 checked={selected.has(id)}
                 className="size-4 accent-accent"
                 onChange={() =>
-                  patchFilters((list) =>
+                  patchNodes((list) =>
                     selected.has(id)
-                      ? list.filter((f) => !(f.kind === 'aspect' && f.aspect === id))
-                      : [...list, { kind: 'aspect', aspect: id }],
+                      ? list.filter((n) => !('aspect' in n && n.aspect === id))
+                      : [...list, { aspect: id }],
                   )
                 }
               />
-              {aspectLabel(id)}
+              {label}
             </label>
           ))}
         </div>
@@ -232,40 +247,59 @@ function FormBody({
           kind="tags"
           singular="Тег"
           addLabel="Добавить тег"
-          ast={ast}
-          onFilters={patchFilters}
+          nodes={nodes}
+          onNodes={patchNodes}
         />
         <TagList
           kind="excludeTags"
           singular="Исключённый тег"
           addLabel="Добавить исключённый тег"
-          ast={ast}
-          onFilters={patchFilters}
+          nodes={nodes}
+          onNodes={patchNodes}
         />
       </Section>
 
       <Section title="Поля">
-        {fieldNames.map((name) => {
-          const field = fieldRef(name, catalog, selected);
-          const nodes = ast.filters.flatMap((f, index) =>
-            isFieldNode(f) && f.field === name ? [{ node: f as FieldNode, index }] : [],
-          );
-          const rows: Array<{ node: FieldNode | null; index: number | null }> =
-            nodes.length > 0 ? nodes : [{ node: null, index: null }];
-          return rows.map((row, k) => (
+        {fieldIds.map((id) => {
+          const field = fieldRef(id, registry);
+          if (field === null) return null;
+          const rows = nodes.flatMap((node, index) => {
+            const view = fieldNodeView(node);
+            return view !== null && view.prop === id ? [{ view, index }] : [];
+          });
+          const display: Array<{ view: ReturnType<typeof fieldNodeView>; index: number | null }> =
+            rows.length > 0 ? rows : [{ view: null, index: null }];
+          return display.map((row, k) => (
             <FieldRow
-              // biome-ignore lint/suspicious/noArrayIndexKey: ключ — МЕСТО строки среди строк поля, а не индекс узла в AST: заведение фильтра меняет index с null на число, и ключ по нему пересоздавал бы строку, выбрасывая фокус из селекта ровно в момент выбора
-              key={`${name}#${k}`}
+              // biome-ignore lint/suspicious/noArrayIndexKey: ключ — МЕСТО строки среди строк свойства, а не индекс узла: заведение фильтра меняет index с null на число, и ключ по нему пересоздавал бы строку, выбрасывая фокус из селекта ровно в момент выбора
+              key={`${id}#${k}`}
               field={field}
-              // Несколько узлов по одному полю — законны (`amount>100, amount<500`), а
+              // Несколько узлов по одному свойству — законны (`amount>100, amount<500`), а
               // одинаковые доступные имена — нет: подпись получает номер.
-              label={rows.length > 1 ? `${name} #${k + 1}` : name}
-              node={row.node}
+              label={display.length > 1 ? `${field.label} #${k + 1}` : field.label}
+              view={row.view}
               index={row.index}
-              onFilters={patchFilters}
+              onNodes={patchNodes}
             />
           ));
         })}
+        {/*
+          Кнопка есть и погашена НАМЕРЕННО: OR между разными свойствами канон выражает
+          (§А5-7, узел `{or}`), а плоский текст грамматики v1 — нет (§А5-3д), и блок до
+          Задачи 21 хранит именно текст. Спрятать её значило бы скрыть от человека, что
+          возможность существует; дать нажать — собрать запрос, который не сохранится.
+        */}
+        <button
+          type="button"
+          disabled
+          aria-describedby={orHintId}
+          className={`${ROW_BUTTON_CLS} self-start disabled:cursor-not-allowed disabled:opacity-40`}
+        >
+          ИЛИ между полями
+        </button>
+        <p id={orHintId} className="text-2xs text-text-muted">
+          Будет доступно после перехода блока на AST.
+        </p>
       </Section>
 
       <Section title="Связи">
@@ -273,47 +307,33 @@ function FormBody({
           kind="children_of"
           label="Дети сущности"
           idLabel="Id сущности (дети)"
-          ast={ast}
-          onFilters={patchFilters}
+          nodes={nodes}
+          onNodes={patchNodes}
         />
         <RelationRows
           kind="parents_of"
           label="Родители сущности"
           idLabel="Id сущности (родители)"
-          ast={ast}
-          onFilters={patchFilters}
+          nodes={nodes}
+          onNodes={patchNodes}
         />
       </Section>
 
       <Section title="Отбор">
-        <label className="flex items-center gap-2 text-sm text-text">
-          <input
-            type="checkbox"
-            checked={ast.filters.some((f) => f.kind === 'excludeBlocked')}
-            className="size-4 accent-accent"
-            onChange={(e) =>
-              patchFilters((list) =>
-                e.target.checked
-                  ? [...list, { kind: 'excludeBlocked' }]
-                  : list.filter((f) => f.kind !== 'excludeBlocked'),
-              )
-            }
-          />
-          Скрыть заблокированные
-        </label>
+        <BlockedCheckbox registry={registry} nodes={nodes} onNodes={patchNodes} />
         <LabeledControl label="Архивные">
           {(id) => (
             <select
               id={id}
               className={FIELD_CLS}
-              value={ast.filters.find((f) => f.kind === 'archived')?.value ?? ''}
+              value={nodes.flatMap((n) => ('archived' in n ? [n.archived] : []))[0] ?? ''}
               onChange={(e) => {
                 const v = e.target.value;
-                patchFilters((list) => {
-                  const rest = list.filter((f) => f.kind !== 'archived');
-                  // Узел допускает ровно true|any (§6.1); пустое значение — это его отсутствие.
+                patchNodes((list) => {
+                  const rest = list.filter((n) => !('archived' in n));
+                  // Узел допускает ровно true|any (§А5-7); пустое значение — его отсутствие.
                   if (v !== 'true' && v !== 'any') return rest;
-                  return [...rest, { kind: 'archived', value: v }];
+                  return [...rest, { archived: v }];
                 });
               }}
             >
@@ -326,7 +346,7 @@ function FormBody({
       </Section>
 
       <Section title="Сортировка">
-        <SortRows ast={ast} catalog={catalog} onPatch={patch} />
+        <SortRows ast={ast} registry={registry} onPatch={patch} />
       </Section>
 
       <Section title="Вывод">
@@ -335,14 +355,23 @@ function FormBody({
             <input
               id={id}
               className={FIELD_CLS}
-              value={ast.search ?? ''}
-              onChange={(e) =>
-                patch({ search: e.target.value === '' ? undefined : e.target.value })
-              }
+              value={nodes.flatMap((n) => ('search' in n ? [n.search] : []))[0] ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                patchNodes((list) => {
+                  // `search` в каноне — УЗЕЛ фильтра, а не параметр проекции (§А5-7), и
+                  // пустая строка ему запрещена схемой: «поиска нет» — это отсутствие узла.
+                  const rest = list.filter((n) => !('search' in n));
+                  return v === '' ? rest : [...rest, { search: v }];
+                });
+              }}
             />
           )}
         </LabeledControl>
-        <LabeledControl label="Лимит">
+        {/* «Лимит выдачи», а не «Лимит»: с §А5-3а свойство конверта `orbis/limit` («Лимит»)
+            стало адресуемым и получает в форме собственную строку — два одноимённых
+            контрола в одной форме недостижимы ни клавиатурой, ни скринридером. */}
+        <LabeledControl label="Лимит выдачи">
           {(id) => (
             <input
               id={id}
@@ -393,6 +422,44 @@ function FormBody({
   );
 }
 
+/**
+ * «Скрыть заблокированные» — текстовый сахар `excludeBlocked=true` (§А5-3): в дереве это
+ * отрицание ребра `dependency` с условием на дальний конец, и собран он из id РЕЕСТРА.
+ *
+ * Узел строит сам разбор (`excludeBlockedNode`), а не литералы формы: «что такое закрытая
+ * работа» — знание языка, и второй его копии здесь быть не должно. Реестр без роли или без
+ * `orbis/task_status` даёт `null` — тогда контрола нет вовсе, и это честнее галочки, которая
+ * записала бы ссылку на несуществующую роль.
+ */
+function BlockedCheckbox({
+  registry,
+  nodes,
+  onNodes,
+}: {
+  registry: QueryRegistry;
+  nodes: Nodes;
+  onNodes: PatchNodes;
+}) {
+  const sugar = useMemo(() => excludeBlockedNode(registry), [registry]);
+  const isSugar = (node: QueryFilterNode): boolean =>
+    'not' in node && 'rel' in node.not && isExcludeBlockedSugar(node.not.rel, registry.parse);
+  if (sugar === null) return null;
+  const checked = nodes.some(isSugar);
+  return (
+    <label className="flex items-center gap-2 text-sm text-text">
+      <input
+        type="checkbox"
+        checked={checked}
+        className="size-4 accent-accent"
+        onChange={(e) =>
+          onNodes((list) => (e.target.checked ? [...list, sugar] : list.filter((n) => !isSugar(n))))
+        }
+      />
+      Скрыть заблокированные
+    </label>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <fieldset className="flex flex-col gap-2">
@@ -435,6 +502,28 @@ function LabeledControl({
   );
 }
 
+/** Теги одной группы: `{tag}` либо `{or:[{tag}…]}`, у исключений — под `{not}` (§А5-7). */
+function tagValues(node: QueryFilterNode, kind: 'tags' | 'excludeTags'): string[] | null {
+  const negated = 'not' in node;
+  if (negated !== (kind === 'excludeTags')) return null;
+  const inner = 'not' in node ? node.not : node;
+  if ('tag' in inner) return [inner.tag];
+  if (!('or' in inner)) return null;
+  const values: string[] = [];
+  for (const child of inner.or) {
+    if (!('tag' in child)) return null;
+    values.push(child.tag);
+  }
+  return values;
+}
+
+function tagNode(kind: 'tags' | 'excludeTags', values: readonly string[]): QueryFilterNode {
+  const leaves: QueryFilterNode[] = values.map((tag) => ({ tag }));
+  const inner: QueryFilterNode =
+    leaves.length === 1 ? (leaves[0] as QueryFilterNode) : { or: leaves };
+  return kind === 'excludeTags' ? { not: inner } : inner;
+}
+
 /**
  * Список тегов одной конструкции (`tags=` / `excludeTags=`). Конструкция повторяется в
  * запросе (два `tags=` — это AND двух OR-групп), поэтому рисуются ВСЕ её узлы; новую группу
@@ -444,21 +533,22 @@ function TagList({
   kind,
   singular,
   addLabel,
-  ast,
-  onFilters,
+  nodes,
+  onNodes,
 }: {
   kind: 'tags' | 'excludeTags';
   singular: string;
   addLabel: string;
-  ast: QueryAst;
-  onFilters: PatchFilters;
+  nodes: Nodes;
+  onNodes: PatchNodes;
 }) {
-  const groups = ast.filters.flatMap((f, index) =>
-    f.kind === kind ? [{ index, values: f.values }] : [],
-  );
-  // Плоский список «значение → его место в AST»: ключи строк позиционные, поэтому очистка
-  // последнего тега (узел исчезает, остаётся строка-заготовка) не пересоздаёт <input>
-  // и не отнимает у него фокус посреди набора.
+  const groups = nodes.flatMap((node, index) => {
+    const values = tagValues(node, kind);
+    return values === null ? [] : [{ index, values }];
+  });
+  // Плоский список «значение → его место в дереве»: ключи строк позиционные, поэтому очистка
+  // последнего тега (узел исчезает, остаётся строка-заготовка) не пересоздаёт <input> и не
+  // отнимает у него фокус посреди набора.
   const rows = groups.flatMap((g) =>
     g.values.map((value, valueIndex) => ({ node: g.index, valueIndex, value })),
   );
@@ -466,35 +556,30 @@ function TagList({
     rows.length > 0 ? rows : [{ node: null, valueIndex: 0, value: '' }];
 
   const editValue = (row: (typeof display)[number], next: string): void =>
-    onFilters((list) => {
-      if (row.node === null) return next === '' ? list : [...list, { kind, values: [next] }];
+    onNodes((list) => {
+      if (row.node === null) return next === '' ? list : [...list, tagNode(kind, [next])];
       // Пустое значение — это «значения нет». Стёртое единственное убирает конструкцию
-      // целиком, симметрично снятию последней галочки у enum-поля: иначе сохранился бы
+      // целиком, симметрично снятию последней галочки у поля-варианта: иначе сохранился бы
       // разбирающийся, но бессмысленный `tags=""`. Пустое среди нескольких остаётся видимым
       // (и снимается крестиком) — сдвигать соседей под курсором было бы хуже.
       const group = groups.find((g) => g.index === row.node);
-      if (next === '' && group?.values.length === 1) {
+      if (group === undefined) return list;
+      if (next === '' && group.values.length === 1) {
         return list.filter((_, k) => k !== row.node);
       }
-      return list.map((f, k) =>
-        k === row.node && (f.kind === 'tags' || f.kind === 'excludeTags')
-          ? { ...f, values: f.values.map((v, j) => (j === row.valueIndex ? next : v)) }
-          : f,
-      );
+      const values = group.values.map((v, j) => (j === row.valueIndex ? next : v));
+      return list.map((n, k) => (k === row.node ? tagNode(kind, values) : n));
     });
 
   const removeValue = (row: (typeof display)[number]): void =>
-    onFilters((list) => {
-      if (row.node === null) return list;
+    onNodes((list) => {
       const group = groups.find((g) => g.index === row.node);
-      // Последнее значение группы — вместе с самой группой: `tags=` грамматика не выражает,
-      // и serializeQuery на пустом списке бросает.
-      if (group?.values.length === 1) return list.filter((_, k) => k !== row.node);
-      return list.map((f, k) =>
-        k === row.node && (f.kind === 'tags' || f.kind === 'excludeTags')
-          ? { ...f, values: f.values.filter((_, j) => j !== row.valueIndex) }
-          : f,
-      );
+      if (group === undefined) return list;
+      // Последнее значение группы — вместе с самой группой: пустой список тегов канон не
+      // выражает (`min(1)` в схеме `or`).
+      if (group.values.length === 1) return list.filter((_, k) => k !== row.node);
+      const values = group.values.filter((_, j) => j !== row.valueIndex);
+      return list.map((n, k) => (k === row.node ? tagNode(kind, values) : n));
     });
 
   return (
@@ -527,14 +612,10 @@ function TagList({
         type="button"
         className={`${ROW_BUTTON_CLS} self-start`}
         onClick={() =>
-          onFilters((list) => {
+          onNodes((list) => {
             const last = groups.at(-1);
-            if (last === undefined) return [...list, { kind, values: [''] }];
-            return list.map((f, k) =>
-              k === last.index && (f.kind === 'tags' || f.kind === 'excludeTags')
-                ? { ...f, values: [...f.values, ''] }
-                : f,
-            );
+            if (last === undefined) return [...list, tagNode(kind, [''])];
+            return list.map((n, k) => (k === last.index ? tagNode(kind, [...last.values, '']) : n));
           })
         }
       >
@@ -545,34 +626,40 @@ function TagList({
 }
 
 /**
- * `children_of=` / `parents_of=`: `this` либо конкретный id (§6.1). Пикера сущности в фазе
+ * `children_of=` / `parents_of=`: `this` либо конкретный id (§А5-7). Пикера сущности в фазе
  * нет — id вводится руками.
  *
  * `this` из web РАБОТАЕТ: экран сущности передаёт контекст блока (ThisEntityProvider вокруг
- * тела в DetailScreen → thisEntityId в entity.query). Прежнее предупреждение «клиент не
- * передаёт thisEntityId» устарело вместе с самим недостатком. Остаётся оговорка про
- * ПЕРЕЕЗД блока: тому же тексту, прочитанному вне ТЕЛА записи (Browser, бейдж закреплённого
- * списка), контекст не передаётся намеренно — `this` там означал бы «запись, из чьего тела блок
+ * тела в DetailScreen → thisEntityId в entity.query). Остаётся оговорка про ПЕРЕЕЗД блока:
+ * тому же тексту, прочитанному вне ТЕЛА записи (Browser, бейдж закреплённого списка),
+ * контекст не передаётся намеренно — `this` там означал бы «запись, из чьего тела блок
  * скопировали», а не «текущий экран», и по-прежнему ответит ошибкой.
  */
 function RelationRows({
   kind,
   label,
   idLabel,
-  ast,
-  onFilters,
+  nodes,
+  onNodes,
 }: {
   kind: 'children_of' | 'parents_of';
   label: string;
   idLabel: string;
-  ast: QueryAst;
-  onFilters: PatchFilters;
+  nodes: Nodes;
+  onNodes: PatchNodes;
 }) {
-  const nodes = ast.filters.flatMap((f, index) => (f.kind === kind ? [{ index, of: f.of }] : []));
-  const rows: Array<{
-    index: number | null;
-    of: { kind: 'this' } | { kind: 'id'; id: string } | null;
-  }> = nodes.length > 0 ? nodes : [{ index: null, of: null }];
+  const found = nodes.flatMap((node, index) =>
+    'rel' in node && node.rel.kind === kind ? [{ index, of: node.rel.of }] : [],
+  );
+  const rows: Array<{ index: number | null; of: string | null }> =
+    found.length > 0 ? found : [{ index: null, of: null }];
+
+  const write = (index: number | null, node: QueryFilterNode | null): void =>
+    onNodes((list) => {
+      if (node === null) return index === null ? list : list.filter((_, i) => i !== index);
+      if (index === null) return [...list, node];
+      return list.map((n, i) => (i === index ? node : n));
+    });
 
   return (
     <>
@@ -589,20 +676,11 @@ function RelationRows({
                 <select
                   id={id}
                   className={FIELD_CLS}
-                  value={row.of?.kind ?? ''}
+                  value={row.of === null ? '' : row.of === 'this' ? 'this' : 'id'}
                   onChange={(e) => {
                     const v = e.target.value;
-                    onFilters((list) => {
-                      if (v === '') {
-                        return row.index === null ? list : list.filter((_, i) => i !== row.index);
-                      }
-                      const node: QueryFilter = {
-                        kind,
-                        of: v === 'this' ? { kind: 'this' } : { kind: 'id', id: '' },
-                      };
-                      if (row.index === null) return [...list, node];
-                      return list.map((f, i) => (i === row.index ? node : f));
-                    });
+                    if (v === '') write(row.index, null);
+                    else write(row.index, { rel: { kind, of: v === 'this' ? 'this' : '' } });
                   }}
                 >
                   <option value="">нет</option>
@@ -611,22 +689,16 @@ function RelationRows({
                 </select>
               )}
             </LabeledControl>
-            {row.of?.kind === 'id' && (
+            {row.of !== null && row.of !== 'this' && (
               <input
                 aria-label={rowIdLabel}
-                value={row.of.id}
+                value={row.of}
                 placeholder="00000000-0000-0000-0000-000000000000"
                 className={`${FIELD_CLS} w-full`}
-                onChange={(e) =>
-                  onFilters((list) =>
-                    list.map((f, i) =>
-                      i === row.index ? { kind, of: { kind: 'id', id: e.target.value } } : f,
-                    ),
-                  )
-                }
+                onChange={(e) => write(row.index, { rel: { kind, of: e.target.value } })}
               />
             )}
-            {row.of?.kind === 'this' && (
+            {row.of === 'this' && (
               <p role="status" className="text-text-muted text-xs">
                 `this` — запись, в теле которой лежит блок. Вне записи (Browser, бейдж закреплённого
                 списка) такой блок ответит ошибкой «this вне контекста сущности».
@@ -642,16 +714,17 @@ function RelationRows({
 /** Упорядоченный список сортировки: перестановка кнопками — DnD в проекте нет и не заводим. */
 function SortRows({
   ast,
-  catalog,
+  registry,
   onPatch,
 }: {
   ast: QueryAst;
-  catalog: NonNullable<ReturnType<typeof useFieldCatalog>['catalog']>;
+  registry: QueryRegistry;
   onPatch: (next: Partial<QueryAst>) => void;
 }) {
   const sort = ast.sortBy ?? [];
-  const options = useMemo(() => sortableFieldNames(ast, catalog), [ast, catalog]);
+  const options = useMemo(() => sortableFieldIds(registry), [registry]);
   const addId = useId();
+  const nameOf = (id: string): string => fieldRef(id, registry)?.label ?? id;
 
   const write = (next: typeof sort): void =>
     onPatch({ sortBy: next.length === 0 ? undefined : next });
@@ -659,7 +732,7 @@ function SortRows({
   return (
     <div className="flex flex-col gap-2">
       {sort.map((s, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: порядок значим (§6.1), и одно поле может стоять в sortBy дважды — личность строки задаёт место
+        // biome-ignore lint/suspicious/noArrayIndexKey: порядок значим (§А5-7), и одно свойство может стоять в sortBy дважды — личность строки задаёт место
         <div key={i} className="flex items-center gap-1">
           <select
             aria-label={`Поле сортировки ${i + 1}`}
@@ -669,23 +742,21 @@ function SortRows({
               write(sort.map((x, k) => (k === i ? { ...x, field: e.target.value } : x)))
             }
           >
-            {/* Текущее значение — всегда в списке: снятый aspect= делает своё поле
-                неоднозначным, но выбрасывать его из селекта значило бы менять запрос молча. */}
-            {[...new Set([s.field, ...options])].map((name) => (
-              <option key={name} value={name}>
-                {name}
+            {/* Текущее значение — всегда в списке: свойство могло исчезнуть из реестра, но
+                выбрасывать его из селекта значило бы менять запрос молча. */}
+            {[...new Set([s.field, ...options])].map((id) => (
+              <option key={id} value={id}>
+                {nameOf(id)}
               </option>
             ))}
           </select>
           <select
             aria-label={`Направление ${i + 1}`}
-            value={s.direction}
+            value={s.dir}
             className={`${FIELD_CLS} w-28 shrink-0`}
             onChange={(e) =>
               write(
-                sort.map((x, k) =>
-                  k === i ? { ...x, direction: e.target.value as QuerySortDirection } : x,
-                ),
+                sort.map((x, k) => (k === i ? { ...x, dir: e.target.value as 'asc' | 'desc' } : x)),
               )
             }
           >
@@ -729,15 +800,15 @@ function SortRows({
           value=""
           className={`${FIELD_CLS} min-w-0 flex-1`}
           onChange={(e) =>
-            e.target.value !== '' && write([...sort, { field: e.target.value, direction: 'asc' }])
+            e.target.value !== '' && write([...sort, { field: e.target.value, dir: 'asc' }])
           }
         >
           <option value="">—</option>
           {options
-            .filter((name) => !sort.some((s) => s.field === name))
-            .map((name) => (
-              <option key={name} value={name}>
-                {name}
+            .filter((id) => !sort.some((s) => s.field === id))
+            .map((id) => (
+              <option key={id} value={id}>
+                {nameOf(id)}
               </option>
             ))}
         </select>

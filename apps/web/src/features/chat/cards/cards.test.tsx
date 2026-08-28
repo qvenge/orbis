@@ -500,7 +500,7 @@ test('entity_card: категория показана НАЗВАНИЕМ, а н
   expect(card).not.toHaveTextContent('c1');
   // Тот же запрос категорий, что у пикера D3b (один кэш, второго источника нет)
   expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-    query: 'aspect=orbis/category, sortBy=title:asc, limit=200',
+    query: 'aspect=orbis/category, sortBy=orbis/title:asc, limit=200',
   });
 });
 

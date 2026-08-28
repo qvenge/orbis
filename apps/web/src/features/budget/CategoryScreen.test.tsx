@@ -247,7 +247,7 @@ test('транзакции: entity.query по детям конверта, Nativ
   // limit — явной клаузой первой страницы (C6), не серверный дефолт 500
   const q = calls.find((c) => c.path === 'entity.query');
   expect(q?.input).toEqual({
-    query: 'children_of=env-1, aspect=orbis/financial, sortBy=occurred_on:desc, limit=200',
+    query: 'children_of=env-1, aspect=orbis/financial, sortBy=orbis/occurred_on:desc, limit=200',
   });
 
   // Заголовок секции — период текущего конверта (мокап §3.2: «Транзакции июня»)
@@ -346,7 +346,7 @@ test('пагинация (C6): ровно limit детей конверта → 
     .filter((c) => c.path === 'entity.query')
     .map((c) => (c.input as { query: string }).query);
   expect(queries).toContain(
-    'children_of=env-1, aspect=orbis/financial, sortBy=occurred_on:desc, limit=400',
+    'children_of=env-1, aspect=orbis/financial, sortBy=orbis/occurred_on:desc, limit=400',
   );
   // 250 < 400 → кнопка исчезла, счётчик честный
   expect(screen.queryByRole('button', { name: 'Показать ещё' })).toBeNull();

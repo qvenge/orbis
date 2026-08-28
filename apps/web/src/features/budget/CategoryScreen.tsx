@@ -88,6 +88,17 @@ function txTitle(start: string | null, end: string | null): string {
   return `Транзакции ${ddmm(start)} – ${ddmm(end)}`;
 }
 
+/**
+ * Транзакции конверта: дети конверта с финансовым аспектом, свежие первыми, окно `limit`.
+ *
+ * Именованной функцией, а не литералом внутри компонента: текст боевой, и его разбор каноном
+ * (§А5-3) пиннится отдельным тестом — иначе непереведённое имя свойства уехало бы в мост
+ * старой формы молча, и «экран открылся» доказывало бы ровно ничего.
+ */
+export function envelopeTransactionsQuery(envelopeId: string, limit: number): string {
+  return `children_of=${envelopeId}, aspect=orbis/financial, sortBy=orbis/occurred_on:desc, limit=${limit}`;
+}
+
 export function CategoryScreen({ categoryId }: { categoryId: string }) {
   const [quickAdd, setQuickAdd] = useState(false);
   const settings = trpc.user.getSettings.useQuery();
@@ -113,9 +124,7 @@ export function CategoryScreen({ categoryId }: { categoryId: string }) {
   // кадр ушёл бы за N×TX_PAGE_SIZE записей нового конверта.
   const limit = TX_PAGE_SIZE * (pagedEnvelope === envelopeId ? page : 1);
   const txQ = trpc.entity.query.useQuery(
-    {
-      query: `children_of=${envelopeId ?? ''}, aspect=orbis/financial, sortBy=occurred_on:desc, limit=${limit}`,
-    },
+    { query: envelopeTransactionsQuery(envelopeId ?? '', limit) },
     // keepPreviousData: догрузка «показать ещё» меняет ключ запроса — без него список
     // на кадр подменялся бы скелетоном вместо того, чтобы дорасти
     { enabled: envelopeId !== undefined, placeholderData: keepPreviousData },

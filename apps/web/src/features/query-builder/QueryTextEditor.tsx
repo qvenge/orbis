@@ -10,7 +10,8 @@
 // импортирует и без него, — импорт из `@orbis/shared/doc` стоил бы тут ноль байт. Решение
 // верное, но обосновывать его числом, которого нет, значит подсунуть следующему читателю
 // ложную опору (ревью раунда 2).
-import { BLOCK_END, parseQuery } from '@orbis/shared';
+import { BLOCK_END } from '@orbis/shared';
+import { parseQueryAny } from '@orbis/shared/query';
 import { useId, useMemo, useRef, useState } from 'react';
 import { useFieldCatalog } from '../../lib/query-blocks/useFieldCatalog';
 import { Button } from '../../ui/Button';
@@ -57,7 +58,7 @@ export function QueryTextEditor({
   const errorId = useId();
   const brokenId = useId();
 
-  const { catalog } = useFieldCatalog();
+  const { registry } = useFieldCatalog();
   // В поле лежит ВНУТРЕННОСТЬ {{query:…}} — обёртку приставит сериализация документа. Края
   // текста разбору не помеха, а вот в атрибут ноды они уезжают как есть, и это НАМЕРЕННО:
   // сидированные блоки многострочны, и подстриженный край переписал бы их одной строкой при
@@ -73,9 +74,12 @@ export function QueryTextEditor({
   //
   // Поблажки parseBlock на обёртку тут быть НЕ должно: вставленный целиком блок она разобрала
   // бы молча, а сохранение вложило бы {{query: внутрь {{query:.
+  // Разбор с мостом старой формы, как на сервере (`parseQueryAny`): редактор обязан считать
+  // верным ровно то, что примет `entity.query`, — иначе сидированный блок краснел бы здесь
+  // при живом ответе сервера. Сообщение при отказе всегда от НОВОЙ грамматики.
   const parsed = useMemo(
-    () => (catalog ? parseQuery(text.trim(), catalog) : null),
-    [catalog, text],
+    () => (registry ? parseQueryAny(text.trim(), registry.parse) : null),
+    [registry, text],
   );
   const error = parsed?.ok === false ? parsed.error : null;
   // Проверяем ВЕСЬ текст поля, а не тримленный: у `}}` на краю разбора может и не быть, а
@@ -127,8 +131,10 @@ export function QueryTextEditor({
           // role="status", а не alert: сообщение пересчитывается на каждый символ, и
           // ассертивная озвучка перебивала бы собственный набор пользователя.
           <p id={errorId} role="status" data-testid="query-text-error" className="text-sm">
-            <span className="text-danger">{error.message}</span>{' '}
-            <span className="text-text-muted">— позиция {error.position}</span>
+            <span className="text-danger">{error.message}</span>
+            {error.position !== undefined && (
+              <span className="text-text-muted"> — позиция {error.position}</span>
+            )}
           </p>
         )}
         {breaksBlock && (

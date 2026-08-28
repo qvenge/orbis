@@ -1,23 +1,33 @@
 /**
- * Секция «Поля» формы-редактора: по строке на каждый узел отбора, привязанный к полю
- * (равенство/отрицание, сравнение, диапазон — §6.1), плюс пустая строка на поле, по
- * которому фильтра ещё нет.
+ * Секция «Поля» формы-редактора: по строке на каждый узел канона, привязанный к свойству
+ * (список значений, отрицание списка, сравнение, диапазон — §А5-7), плюс пустая строка на
+ * свойство, по которому фильтра ещё нет.
  *
- * Строка — на УЗЕЛ, а не на поле: `amount>100, amount<500` — два законных узла по одному
- * полю, и одна строка на поле молча выбросила бы второй при сохранении.
+ * Строка — на УЗЕЛ, а не на свойство: `orbis/amount>100, orbis/amount<500` — два законных
+ * узла по одному свойству, и одна строка на свойство молча выбросила бы второй при записи.
+ *
+ * ДОСТУПНОЕ ИМЯ КОНТРОЛА — ПОДПИСЬ СВОЙСТВА, а не его ключ, и это СНЯТИЕ прежнего рулинга
+ * («имя контрола обязано остаться именем поля грамматики — тем самым, что уедет в текст
+ * блока»). Рулинг держался на том, что в тексте стояло голое имя поля аспекта (`status=`), то
+ * есть ровно то слово, которое человек и видел. С §А5-3а в тексте стоит namespaced key
+ * (`orbis/task_status=`) — машинная ручка, которую человеку читать незачем; она осталась в
+ * строке рядом, но `aria-hidden`. Слепой пользователь теперь слышит «Статус», а не
+ * «orbis/task_status».
  */
 
-import type { QueryDateToken, QueryFieldValue, QueryFilter } from '@orbis/shared';
+import type { QueryBound, QueryDateToken, QueryFilterNode } from '@orbis/shared/query';
 import { useId, useRef } from 'react';
-import { fieldLabel } from '../../lib/field-labels';
 import {
-  defaultComparable,
-  defaultValues,
-  type FieldNode,
+  boundNode,
+  defaultValue,
+  type FieldNodeView,
   type FieldRef,
   isComparable,
   isDateLike,
   listedValues,
+  listNode,
+  type Operator,
+  rangeNode,
 } from './model';
 
 /** Плотное поле формы: примитивов Select/Checkbox в src/ui нет — своя строка на своём элементе. */
@@ -27,9 +37,6 @@ export const FIELD_CLS =
 export const ROW_BUTTON_CLS =
   'shrink-0 cursor-pointer rounded-control border border-line px-2 py-1 text-text-secondary text-xs transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
 
-/** Значение селекта операторов; пустая строка — «фильтра по этому полю нет». */
-type Operator = '' | 'anyOf' | 'noneOf' | '>' | '<' | 'range';
-
 const DATE_TOKEN_LABELS: Array<[QueryDateToken, string]> = [
   ['today', 'сегодня'],
   ['overdue', 'просрочено'],
@@ -37,57 +44,45 @@ const DATE_TOKEN_LABELS: Array<[QueryDateToken, string]> = [
   ['after_7d', 'позже 7 дней'],
 ];
 
-function operatorOf(node: FieldNode | null): Operator {
-  if (node === null) return '';
-  if (node.kind === 'range') return 'range';
-  if (node.kind === 'comparison') return node.op;
-  return node.condition.kind;
+/** Относительное время вместо литерала (§А5-7). */
+function isToken(value: QueryBound): value is { token: QueryDateToken } {
+  return typeof value === 'object' && value !== null && 'token' in value;
 }
 
-/**
- * Новый узел под выбранный оператор. Значения переносятся там, где они означают то же
- * самое («любое из» ↔ «ни одно из» — один и тот же список), и заводятся заново там, где
- * смысл другой: список литералов не превратить в границу сравнения, не выдумав числа.
- */
-function buildNode(op: Exclude<Operator, ''>, field: FieldRef, prev: FieldNode | null): FieldNode {
-  if (op === 'anyOf' || op === 'noneOf') {
-    const values = prev?.kind === 'field' ? prev.condition.values : defaultValues(field);
-    return { kind: 'field', field: field.name, condition: { kind: op, values } };
-  }
-  if (op === 'range') {
-    const bound = prev?.kind === 'comparison' ? prev.value : defaultComparable(field);
-    return { kind: 'range', field: field.name, min: { ...bound }, max: { ...bound } };
-  }
-  const value = prev?.kind === 'range' ? prev.min : defaultComparable(field);
-  return { kind: 'comparison', field: field.name, op, value };
+/** Текст литерала для поля ввода; у токена литерала нет — там пусто. */
+function literalText(value: QueryBound): string {
+  return isToken(value) ? '' : String(value);
+}
+
+/** Совпадает ли значение с ключом варианта: `orbis/planned=true` приезжает флагом, не строкой. */
+function sameValue(value: QueryBound, key: string): boolean {
+  return !isToken(value) && String(value) === key;
 }
 
 export function FieldRow({
   field,
   label,
-  node,
+  view,
   index,
-  onFilters,
+  onNodes,
 }: {
   field: FieldRef;
-  /** Подпись строки: имя поля, а при нескольких узлах по нему — с номером (имена уникальны). */
+  /** Подпись строки: подпись свойства, а при нескольких узлах по нему — с номером. */
   label: string;
-  node: FieldNode | null;
-  /** Индекс узла в `ast.filters`; null — строка-заготовка, узла ещё нет. */
+  view: FieldNodeView | null;
+  /** Индекс узла в плоском списке конструкций; null — строка-заготовка, узла ещё нет. */
   index: number | null;
-  onFilters: (fn: (filters: QueryFilter[]) => QueryFilter[]) => void;
+  onNodes: (fn: (nodes: QueryFilterNode[]) => QueryFilterNode[]) => void;
 }) {
   const id = useId();
-  const gloss = fieldLabel(field.name);
-  const operator = operatorOf(node);
+  const operator: Operator = view?.op ?? '';
 
   /**
    * Оператор списка, с которым строка жила последний раз. Узел исчезает от стирания
-   * ПОСЛЕДНЕГО значения (пустой список грамматика не выражает), и повторный ввод заводит
-   * его заново уже без узла — литеральный `'anyOf'` здесь переворачивал бы смысл: «заменить,
-   * что именно исключаем» (снял `!done`, поставил `cancelled`) превращало `status=!done` в
-   * `status=cancelled`, то есть отбор смарт-листа значил бы обратное. Память живёт в строке,
-   * а не в AST: в AST этого узла в тот момент нет вовсе.
+   * ПОСЛЕДНЕГО значения (пустой список канон не выражает — `min(1)` в схеме), и повторный
+   * ввод заводит его заново уже без узла: литеральный `'anyOf'` здесь переворачивал бы смысл
+   * («заменить, что именно исключаем» превращало `!done` в `done`). Память живёт в строке, а
+   * не в AST: в AST этого узла в тот момент нет вовсе.
    *
    * Ref, а не state: значение только сопровождает узел и само по себе ничего не рисует —
    * перерисовка от него была бы кадром без единого изменения на экране.
@@ -95,61 +90,54 @@ export function FieldRow({
   const listKind = useRef<'anyOf' | 'noneOf'>('anyOf');
   if (operator === 'anyOf' || operator === 'noneOf') listKind.current = operator;
 
+  /** Запись узла на место строки: `null` — конструкции больше нет. */
+  function writeNode(next: QueryFilterNode | null): void {
+    onNodes((list) => {
+      if (next === null) return index === null ? list : list.filter((_, i) => i !== index);
+      if (index === null) return [...list, next];
+      return list.map((n, i) => (i === index ? next : n));
+    });
+  }
+
   /**
    * Запись списка значений — одним путём и для существующего узла, и для строки-заготовки:
-   * галочки enum видны ДО того, как фильтр заведён (иначе «снял последнюю галочку» прятало
-   * бы весь набор значений, и вернуть его было бы нечем, кроме селекта операторов).
+   * варианты видны ДО того, как фильтр заведён (иначе «снял последнюю галочку» прятало бы
+   * весь набор значений, и вернуть его было бы нечем, кроме селекта операторов).
    */
-  function writeValues(values: QueryFieldValue[]): void {
-    onFilters((list) => {
-      // Пустой список грамматика не выражает (`status=` — ошибка), и serializeQuery на нём
-      // бросает: «значений не осталось» здесь означает «фильтра нет».
-      if (values.length === 0) return index === null ? list : list.filter((_, i) => i !== index);
-      const kind = node?.kind === 'field' ? node.condition.kind : listKind.current;
-      const built: FieldNode = { kind: 'field', field: field.name, condition: { kind, values } };
-      if (index === null) return [...list, built];
-      return list.map((f, i) => (i === index ? built : f));
-    });
+  function writeValues(values: QueryBound[]): void {
+    if (values.length === 0) {
+      writeNode(null);
+      return;
+    }
+    const kind =
+      operator === 'noneOf' ? 'noneOf' : operator === 'anyOf' ? 'anyOf' : listKind.current;
+    writeNode(listNode(field, kind, values));
   }
 
   function changeOperator(next: Operator): void {
-    onFilters((list) => {
-      if (next === '') {
-        // «Нет фильтра» — ЯВНЫЙ отказ от конструкции, а не побочный эффект стирания
-        // значения: следующий фильтр по этому полю строка заводит с чистого листа, иначе
-        // галочка после сброса тихо возвращала бы отрицание, которого уже не просили.
-        listKind.current = 'anyOf';
-        return index === null ? list : list.filter((_, i) => i !== index);
-      }
-      const built = buildNode(next, field, node);
-      if (index === null) return [...list, built];
-      return list.map((f, i) => (i === index ? built : f));
-    });
-  }
-
-  function replaceNode(next: FieldNode | null): void {
-    if (index === null) return;
-    onFilters((list) =>
-      next === null
-        ? list.filter((_, i) => i !== index)
-        : list.map((f, i) => (i === index ? next : f)),
-    );
+    if (next === '') {
+      // «Нет фильтра» — ЯВНЫЙ отказ от конструкции, а не побочный эффект стирания значения:
+      // следующий фильтр по этому свойству строка заводит с чистого листа, иначе галочка
+      // после сброса тихо возвращала бы отрицание, которого уже не просили.
+      listKind.current = 'anyOf';
+      writeNode(null);
+      return;
+    }
+    writeNode(buildNode(next, field, view));
   }
 
   return (
     <div className="flex flex-col gap-1 border-line border-t pt-2 first:border-t-0 first:pt-0">
       <div className="flex items-center gap-2">
         <span className="flex min-w-0 flex-1 items-baseline gap-1">
-          <label htmlFor={id} className="truncate font-mono text-text-secondary text-xs">
+          <label htmlFor={id} className="truncate text-sm text-text">
             {label}
           </label>
-          {gloss !== field.name && (
-            // Русская подпись — РЯДОМ с <label>, а не внутри: доступное имя контрола обязано
-            // остаться именем поля грамматики — тем самым, что уедет в текст блока.
-            <span aria-hidden className="truncate text-2xs text-text-muted">
-              {gloss}
-            </span>
-          )}
+          {/* Ключ — машинная ручка имени в тексте блока (§А5-3а). Он РЯДОМ и aria-hidden:
+              читать его вслух незачем, а видеть — да, ровно он уедет в текст. */}
+          <span aria-hidden className="truncate font-mono text-2xs text-text-muted">
+            {field.key}
+          </span>
         </span>
         <select
           id={id}
@@ -160,49 +148,52 @@ export function FieldRow({
           <option value="">нет фильтра</option>
           <option value="anyOf">любое из</option>
           <option value="noneOf">ни одно из</option>
-          {/* Сравнения — только там, где их принимает парсер: числа, date-поля аспектов и
-              core-timestamp. Timestamp-поля аспектов операторами не сравниваются (§6.1). */}
+          {/* Сравнения — только там, где их принимает разбор: у типов с линейным порядком
+              (§А5-7). Список исключён: у него порядка нет. */}
           {isComparable(field) && (
             <>
-              <option value=">">больше</option>
-              <option value="<">меньше</option>
+              <option value="gt">больше</option>
+              <option value="lt">меньше</option>
               <option value="range">диапазон</option>
             </>
           )}
         </select>
       </div>
-      {/* Значения видны и БЕЗ узла: у enum это набор галочек, у строк и чисел — пустая
+      {/* Значения видны и БЕЗ узла: у вариантов это набор галочек, у строк и чисел — пустая
           строка-заготовка, которую заводит первый символ. Дате заготовка не полагается:
           пустой литерал там означает «переключился на точное значение», а не «значения нет». */}
-      {(node?.kind === 'field' || (node === null && !isDateLike(field))) && (
+      {(operator === 'anyOf' || operator === 'noneOf' || (view === null && !isDateLike(field))) && (
         <ConditionValues
           field={field}
           label={label}
-          values={node?.kind === 'field' ? node.condition.values : []}
+          values={view === null ? [] : view.values}
           onValues={writeValues}
         />
       )}
-      {node?.kind === 'comparison' && (
-        <ComparableInput
+      {(operator === 'gt' || operator === 'lt') && view !== null && (
+        <BoundInput
           field={field}
           label={`${label}: значение`}
-          value={node.value.value}
-          onValue={(value) => replaceNode({ ...node, value: { ...node.value, value } })}
+          dateLabel={`${label}: дата`}
+          value={view.from ?? ''}
+          onValue={(value) => writeNode(boundNode(field, operator, value))}
         />
       )}
-      {node?.kind === 'range' && (
+      {operator === 'range' && view !== null && (
         <div className="flex gap-2">
-          <ComparableInput
+          <BoundInput
             field={field}
             label={`${label}: от`}
-            value={node.min.value}
-            onValue={(value) => replaceNode({ ...node, min: { ...node.min, value } })}
+            dateLabel={`${label}: от, дата`}
+            value={view.from ?? ''}
+            onValue={(value) => writeNode(rangeNode(field, value, view.to ?? ''))}
           />
-          <ComparableInput
+          <BoundInput
             field={field}
             label={`${label}: до`}
-            value={node.max.value}
-            onValue={(value) => replaceNode({ ...node, max: { ...node.max, value } })}
+            dateLabel={`${label}: до, дата`}
+            value={view.to ?? ''}
+            onValue={(value) => writeNode(rangeNode(field, view.from ?? '', value))}
           />
         </div>
       )}
@@ -210,33 +201,90 @@ export function FieldRow({
   );
 }
 
-/** Граница сравнения/диапазона: у дат — календарь, у core-timestamp — ISO 8601 руками. */
-function ComparableInput({
+/**
+ * Новый узел под выбранный оператор. Значения переносятся там, где они означают то же самое
+ * («любое из» ↔ «ни одно из» — один и тот же список), и заводятся заново там, где смысл
+ * другой: список литералов не превратить в границу сравнения, не выдумав числа.
+ */
+function buildNode(
+  op: Exclude<Operator, ''>,
+  field: FieldRef,
+  prev: FieldNodeView | null,
+): QueryFilterNode {
+  if (op === 'anyOf' || op === 'noneOf') {
+    const values = prev !== null && prev.values.length > 0 ? prev.values : [defaultValue(field)];
+    return listNode(field, op, values);
+  }
+  const carried = prev?.from ?? null;
+  if (op === 'range') {
+    const bound = carried ?? '';
+    return rangeNode(field, bound, prev?.to ?? bound);
+  }
+  return boundNode(field, op, carried ?? '');
+}
+
+/** Одна граница сравнения/диапазона либо одно значение списка. */
+function BoundInput({
   field,
   label,
+  dateLabel,
   value,
   onValue,
 }: {
   field: FieldRef;
+  /** Доступное имя единственного контрола (у дат — селекта «токен или точное значение»). */
   label: string;
-  value: string;
-  onValue: (v: string) => void;
+  /** Доступное имя поля точного значения — оно появляется рядом с селектом токенов. */
+  dateLabel: string;
+  value: QueryBound;
+  onValue: (v: QueryBound) => void;
 }) {
-  const date = !field.core && field.type === 'date';
+  if (!isDateLike(field)) {
+    return (
+      <input
+        aria-label={label}
+        type={field.kind === 'date' ? 'date' : 'text'}
+        inputMode={field.kind === 'number' || field.kind === 'decimal' ? 'decimal' : undefined}
+        placeholder={field.kind === 'time' ? 'ЧЧ:ММ' : undefined}
+        value={literalText(value)}
+        onChange={(e) => onValue(e.target.value)}
+        className={`${FIELD_CLS} w-full`}
+      />
+    );
+  }
   return (
-    <input
-      aria-label={label}
-      type={date ? 'date' : 'text'}
-      inputMode={date || field.core ? undefined : 'decimal'}
-      placeholder={field.core ? '2026-07-02T09:00:00Z' : undefined}
-      value={value}
-      onChange={(e) => onValue(e.target.value)}
-      className={`${FIELD_CLS} w-full`}
-    />
+    <>
+      <select
+        aria-label={label}
+        value={isToken(value) ? value.token : 'exact'}
+        className={`${FIELD_CLS} min-w-0 flex-1`}
+        onChange={(e) => {
+          const picked = e.target.value;
+          onValue(picked === 'exact' ? '' : { token: picked as QueryDateToken });
+        }}
+      >
+        {DATE_TOKEN_LABELS.map(([token, text]) => (
+          <option key={token} value={token}>
+            {text}
+          </option>
+        ))}
+        <option value="exact">точное значение</option>
+      </select>
+      {!isToken(value) && (
+        <input
+          aria-label={dateLabel}
+          type={field.kind === 'date' ? 'date' : 'text'}
+          placeholder={field.kind === 'timestamp' ? '2026-07-02T09:00:00Z' : undefined}
+          value={literalText(value)}
+          onChange={(e) => onValue(e.target.value)}
+          className={`${FIELD_CLS} min-w-0 flex-1`}
+        />
+      )}
+    </>
   );
 }
 
-/** Значения «любое из» / «ни одно из»: галочки у enum, токены у дат, список строк иначе. */
+/** Значения «любое из» / «ни одно из»: галочки у вариантов, токены у дат, список строк иначе. */
 function ConditionValues({
   field,
   label,
@@ -244,35 +292,36 @@ function ConditionValues({
   onValues,
 }: {
   field: FieldRef;
-  /** Подпись строки (с номером, если узлов по полю несколько) — основа имён всех значений. */
+  /** Подпись строки (с номером, если узлов по свойству несколько) — основа имён всех значений. */
   label: string;
-  values: QueryFieldValue[];
-  onValues: (values: QueryFieldValue[]) => void;
+  values: QueryBound[];
+  onValues: (values: QueryBound[]) => void;
 }) {
   const listed = listedValues(field);
   if (listed !== null) {
     return (
       <div className="flex flex-wrap gap-x-3 gap-y-1 pl-1">
-        {listed.map((v) => {
-          const checked = values.some((x) => x.kind === 'literal' && x.value === v);
+        {listed.map((option) => {
+          const checked = values.some((v) => sameValue(v, option.key));
           return (
-            <label key={v} className="flex items-center gap-1 text-sm text-text">
+            <label key={option.key} className="flex items-center gap-1 text-sm text-text">
               <input
                 type="checkbox"
-                // Значения enum повторяются между полями (`true`/`false` у четырёх boolean),
-                // поэтому доступное имя несёт поле — иначе в форме четыре кнопки «true».
-                aria-label={`${label}: ${v}`}
+                // Подписи вариантов повторяются между свойствами (`true`/`false` у четырёх
+                // флагов), поэтому доступное имя несёт подпись свойства — иначе в форме
+                // четыре одноимённые галочки.
+                aria-label={`${label}: ${option.label}`}
                 checked={checked}
                 className="size-4 accent-accent"
                 onChange={() =>
                   onValues(
                     checked
-                      ? values.filter((x) => !(x.kind === 'literal' && x.value === v))
-                      : [...values, { kind: 'literal', value: v }],
+                      ? values.filter((v) => !sameValue(v, option.key))
+                      : [...values, option.key],
                   )
                 }
               />
-              {v}
+              {option.label}
             </label>
           );
         })}
@@ -280,17 +329,17 @@ function ConditionValues({
     );
   }
 
-  // Узла ещё нет — рисуем пустую строку-заготовку: значение набирается прямо в ней, и она
-  // же остаётся под курсором, когда единственное значение стёрли (позиционные ключи не дают
+  // Узла ещё нет — рисуем пустую строку-заготовку: значение набирается прямо в ней, и она же
+  // остаётся под курсором, когда единственное значение стёрли (позиционные ключи не дают
   // <input> пересоздаться, иначе фокус улетал бы в body посреди правки).
   const empty = values.length === 0;
-  const rows: QueryFieldValue[] = empty ? [{ kind: 'literal', value: '' }] : values;
+  const rows: QueryBound[] = empty ? [''] : values;
 
   /** Пустой текст = «значения нет»: единственное стёртое убирает конструкцию целиком. */
-  function editValue(i: number, next: QueryFieldValue): void {
+  function editValue(i: number, next: QueryBound): void {
     // У дат пустой литерал — это «переключился с токена на точное значение», а не «стёр»:
     // трактуй его как отсутствие значения, и выбор «точное значение» удалял бы фильтр.
-    const cleared = !isDateLike(field) && next.kind === 'literal' && next.value === '';
+    const cleared = !isDateLike(field) && !isToken(next) && String(next) === '';
     if (empty) {
       onValues(cleared ? [] : [next]);
       return;
@@ -310,10 +359,10 @@ function ConditionValues({
           key={i}
           className="flex items-center gap-2"
         >
-          <ValueInput
+          <BoundInput
             field={field}
-            label={label}
-            index={i}
+            label={`${label}: значение ${i + 1}`}
+            dateLabel={`${label}: дата ${i + 1}`}
             value={value}
             onValue={(next) => editValue(i, next)}
           />
@@ -330,76 +379,16 @@ function ConditionValues({
         </div>
       ))}
       {/* У заготовки кнопки «добавить» нет: второе пустое значение рядом с первым пустым
-          ничего не добавляет, а `field=""` в строке блока — уже добавляет. */}
+          ничего не добавляет, а `key=""` в строке блока — уже добавляет. */}
       {!empty && (
         <button
           type="button"
           className={`${ROW_BUTTON_CLS} self-start`}
-          onClick={() => onValues([...values, ...defaultValues(field)])}
+          onClick={() => onValues([...values, defaultValue(field)])}
         >
           Добавить значение: {label}
         </button>
       )}
     </div>
-  );
-}
-
-/** Одно значение списка: у date/timestamp — относительный токен или точное значение (§6.1). */
-function ValueInput({
-  field,
-  label,
-  index,
-  value,
-  onValue,
-}: {
-  field: FieldRef;
-  /** Подпись строки поля — с номером, если узлов по этому полю несколько. */
-  label: string;
-  index: number;
-  value: QueryFieldValue;
-  onValue: (v: QueryFieldValue) => void;
-}) {
-  if (!isDateLike(field)) {
-    return (
-      <input
-        aria-label={`${label}: значение ${index + 1}`}
-        value={value.kind === 'literal' ? value.value : value.token}
-        onChange={(e) => onValue({ kind: 'literal', value: e.target.value })}
-        className={`${FIELD_CLS} w-full`}
-      />
-    );
-  }
-  return (
-    <>
-      <select
-        aria-label={`${label}: значение ${index + 1}`}
-        value={value.kind === 'date_token' ? value.token : 'exact'}
-        className={`${FIELD_CLS} min-w-0 flex-1`}
-        onChange={(e) => {
-          const picked = e.target.value;
-          onValue(
-            picked === 'exact'
-              ? { kind: 'literal', value: '' }
-              : { kind: 'date_token', token: picked as QueryDateToken },
-          );
-        }}
-      >
-        {DATE_TOKEN_LABELS.map(([token, label]) => (
-          <option key={token} value={token}>
-            {label}
-          </option>
-        ))}
-        <option value="exact">точное значение</option>
-      </select>
-      {value.kind === 'literal' && (
-        <input
-          aria-label={`${label}: дата ${index + 1}`}
-          type={field.type === 'date' ? 'date' : 'text'}
-          value={value.value}
-          onChange={(e) => onValue({ kind: 'literal', value: e.target.value })}
-          className={`${FIELD_CLS} min-w-0 flex-1`}
-        />
-      )}
-    </>
   );
 }

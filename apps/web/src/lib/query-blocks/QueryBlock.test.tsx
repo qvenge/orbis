@@ -1,25 +1,10 @@
 import { screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
 import { renderWithProviders } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { QueryBlock } from './QueryBlock';
 import { ThisEntityProvider } from './this-entity';
 
-const aspectsResp = [
-  {
-    id: 'orbis/task',
-    ownerId: null,
-    name: 'Task',
-    namespace: 'orbis',
-    description: null,
-    icon: '✅',
-    schema: { type: 'object', properties: {} },
-    aiInstructions: null,
-    tagMappings: [],
-    aggregations: null,
-    viewConfig: null,
-    createdAt: 'x',
-  },
-];
 const ent = (id: string) => ({
   id,
   ownerId: 'u',
@@ -40,7 +25,8 @@ const ent = (id: string) => ({
 
 test('валидный блок → список сущностей + счётчик; entity.query получил inner', async () => {
   const { calls } = renderWithProviders(<QueryBlock query="tags=work" title="Работа" />, (path) => {
-    if (path === 'aspect.list') return aspectsResp;
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
     if (path === 'entity.query') return [ent('a'), ent('b')];
     return {};
   });
@@ -52,7 +38,8 @@ test('валидный блок → список сущностей + счётч
 
 test('без title (DetailScreen) → счётчик с подписью «Совпадений: N», а не голое число', async () => {
   renderWithProviders(<QueryBlock query="tags=work" />, (path) => {
-    if (path === 'aspect.list') return aspectsResp;
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
     if (path === 'entity.query') return [ent('a'), ent('b')];
     return {};
   });
@@ -63,7 +50,8 @@ test('без title (DetailScreen) → счётчик с подписью «Со�
 // Daily Planning (§3.3) рендерились бы тремя безымянными карточками.
 test('заголовок берётся из title= самого блока, когда пропа нет', async () => {
   const { calls } = renderWithProviders(<QueryBlock query="tags=work, title=Сегодня" />, (path) => {
-    if (path === 'aspect.list') return aspectsResp;
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
     if (path === 'entity.query') return [ent('a')];
     return {};
   });
@@ -78,7 +66,8 @@ test('заголовок берётся из title= самого блока, к�
 
 test('невалидный блок → красная плашка с позицией, без списка и без вызова entity.query (§6.4)', async () => {
   const { calls } = renderWithProviders(<QueryBlock query="foo" title="Битый" />, (path) => {
-    if (path === 'aspect.list') return aspectsResp;
+    const reg = registryReply(path);
+    if (reg !== undefined) return reg;
     throw new Error(`unexpected ${path}`); // entity.query не должен вызываться
   });
   // Ждём плашку ошибки: к этому моменту регрессный вызов entity.query успел бы зарегистрироваться.
@@ -101,7 +90,8 @@ test('внутри ThisEntityProvider entity.query получает thisEntityId
       <QueryBlock query="children_of=this, aspect=orbis/task" />
     </ThisEntityProvider>,
     (path) => {
-      if (path === 'aspect.list') return aspectsResp;
+      const reg = registryReply(path);
+      if (reg !== undefined) return reg;
       if (path === 'entity.query') return [ent('a')];
       return {};
     },
@@ -119,7 +109,8 @@ test('без провайдера поля thisEntityId в запросе нет
   const { calls } = renderWithProviders(
     <QueryBlock query="children_of=this, aspect=orbis/task" />,
     (path) => {
-      if (path === 'aspect.list') return aspectsResp;
+      const reg = registryReply(path);
+      if (reg !== undefined) return reg;
       if (path === 'entity.query') return [];
       return {};
     },

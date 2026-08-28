@@ -1,218 +1,404 @@
 /**
- * Модель формы-редактора query-блока: что грамматика §6.1 позволяет собрать из полей
- * каталога и как AST формы превращается обратно в строку блока.
+ * Модель формы-редактора query-блока: что канон §А5-7 позволяет собрать плоским сахаром
+ * грамматики v1 и как дерево формы превращается обратно в строку блока.
  *
- * Состояние формы — сам `QueryAst`, а не своя структура: любое отображение «AST → поля
- * формы → AST» теряло бы конструкции, которых в отображении нет (два `tags=`, второе
- * сравнение по тому же полю). Форма правит узлы на месте, порядок массива сохраняется,
- * а всё, чего её контролы не покрывают, доезжает до сериализации нетронутым.
+ * Состояние формы — сам `QueryAst`, а не своя структура: любое отображение «AST → поля формы
+ * → AST» теряло бы конструкции, которых в отображении нет (два `tags=`, второе сравнение по
+ * тому же свойству). Форма правит узлы на месте, порядок сохраняется, а всё, чего её контролы
+ * не покрывают, доезжает до печати нетронутым.
+ *
+ * ГРАНИЦА ФОРМЫ, названная вслух: блок до Задачи 21 хранит ТЕКСТ, а текст грамматики v1
+ * плоский (§А5-3д) — скобок в нём нет. Поэтому форма работает с ВЕРХНИМ уровнем дерева как со
+ * списком конструкций, а OR допускает только внутри одного свойства (`{or:[…]}` по значениям).
+ * OR между разными свойствами она собрать не даёт вовсе: собранное было бы невыразимо текстом
+ * и не сохранилось бы (кнопка «ИЛИ между полями» в `QueryBuilderForm` погашена именно этим).
+ *
+ * ДВА ИСТОЧНИКА ЗНАНИЯ О СВОЙСТВЕ, и это не дубль. Тип берётся из КАТАЛОГА
+ * (`buildCatalogFromRegistry`, поле `kind`): там он приходит из `PropertyType` реестра, без
+ * единой эвристики по тексту регэкспа, которой держался старый каталог по JSON Schema.
+ * Подпись, ключ и варианты `select` берутся из самой декларации свойства — у каталога подписей
+ * нет вовсе (`enumValues` несёт только ключи), а форма обязана показывать человеку подпись, а
+ * не машинную ручку. Носители свойства считаются по декларациям аспектов, а НЕ по
+ * `FieldInfo.aspect`: то поле заполнено только у свойств с ЕДИНСТВЕННЫМ носителем
+ * (`orbis/currency` живёт на двух, и там оно пусто), а видимость строки обязана работать и
+ * для них.
  */
 
-import type {
-  FieldCatalog,
-  FieldInfo,
-  FieldType,
-  QueryAst,
-  QueryComparableValue,
-  QueryFieldValue,
-  QueryFilter,
-} from '@orbis/shared';
-import { CORE_FIELDS, parseQuery, serializeQuery } from '@orbis/shared';
+import type { PropertyKind } from '@orbis/shared';
+import { BLOCK_END } from '@orbis/shared';
+import type { QueryAst, QueryBound, QueryFilterNode, QueryScalar } from '@orbis/shared/query';
+import {
+  acceptsDateTokenKind,
+  isListPropertyType,
+  isOrderedPropertyKind,
+  parseQueryAny,
+  parseQueryAst,
+  printQueryAst,
+} from '@orbis/shared/query';
+import type { QueryRegistry } from '../../lib/query-blocks/catalog';
 
-/** Узлы отбора, привязанные к имени поля (§6.1): равенство/отрицание, сравнение, диапазон. */
-export type FieldNode = Extract<QueryFilter, { kind: 'field' | 'comparison' | 'range' }>;
+/** Оператор строки поля. Пустая строка — «фильтра по этому свойству нет». */
+export type Operator = '' | 'anyOf' | 'noneOf' | 'gt' | 'lt' | 'range';
 
-export function isFieldNode(f: QueryFilter): f is FieldNode {
-  return f.kind === 'field' || f.kind === 'comparison' || f.kind === 'range';
+/** Разобранная строка поля: одно свойство, один оператор, его значения. */
+export interface FieldNodeView {
+  prop: string;
+  op: Exclude<Operator, ''>;
+  /** Значения списка — только у `anyOf`/`noneOf`. */
+  values: QueryBound[];
+  /** Левая граница `range` либо единственная граница `gt`/`lt`. */
+  from: QueryBound | null;
+  /** Правая граница `range`. */
+  to: QueryBound | null;
 }
-
-/** Поле в терминах формы: тип для выбора контрола + признаки, влияющие на разрешённые формы. */
-export interface FieldRef {
-  name: string;
-  type: FieldType;
-  /** created_at/updated_at — только они сравниваются как timestamp (§6.1). */
-  core: boolean;
-  enumValues?: string[];
-}
-
-const CORE_NAMES = Object.keys(CORE_FIELDS) as Array<keyof typeof CORE_FIELDS>;
 
 /**
- * Занято ли имя ключом грамматики §6.1. Спрашиваем сам парсер на одноимённом каталоге из
- * одного поля, а не копируем список ключей третий раз (он уже продублирован в parse.ts и
- * serialize.ts): копия молча разъехалась бы с грамматикой, а поле-призрак в форме — это
- * `limit=100` вместо фильтра по `orbis/budget.limit`, то есть фильтр, исчезнувший без
- * ошибки. Каталог тут искусственный именно поэтому: настоящий подмешал бы к ответу ещё и
- * неоднозначность имени, а это другой вопрос и другой ответ формы.
+ * Верхний уровень фильтра как ПЛОСКИЙ список конструкций — ровно то, что печатается текстом
+ * через запятую. `null` — фильтра нет, одиночный узел — список из одного.
  */
-const reservedCache = new Map<string, boolean>();
-export function isReservedKey(name: string): boolean {
-  const cached = reservedCache.get(name);
-  if (cached !== undefined) return cached;
-  const probe: FieldCatalog = { fields: { [name]: [{ aspect: 'orbis/probe', type: 'string' }] } };
-  const r = parseQuery(`${name}=orbis_probe`, probe);
-  const reserved = !(r.ok && r.ast.filters.length === 1 && r.ast.filters[0]?.kind === 'field');
-  reservedCache.set(name, reserved);
-  return reserved;
+export function topNodes(ast: QueryAst): QueryFilterNode[] {
+  if (ast.filter === null) return [];
+  return 'and' in ast.filter ? [...ast.filter.and] : [ast.filter];
 }
 
-/** Аспекты, названные в запросе (`aspect=`) — они же резолвят неоднозначные имена полей. */
-export function aspectsOf(ast: QueryAst): string[] {
-  return ast.filters.flatMap((f) => (f.kind === 'aspect' ? [f.aspect] : []));
+/** Обратная сборка: список конструкций → корень фильтра. */
+export function withNodes(ast: QueryAst, nodes: QueryFilterNode[]): QueryAst {
+  const filter: QueryFilterNode | null =
+    nodes.length === 0 ? null : nodes.length === 1 ? (nodes[0] as QueryFilterNode) : { and: nodes };
+  return { ...ast, filter };
 }
 
-/** Описание поля с учётом выбранных аспектов; неизвестное имя деградирует до строки. */
-export function fieldRef(
-  name: string,
-  catalog: FieldCatalog,
-  selected: ReadonlySet<string>,
-): FieldRef {
-  if (name === 'created_at' || name === 'updated_at') {
-    return { name, type: CORE_FIELDS[name], core: true };
+/** id аспектов, названных `aspect=` — по ним видны свойства их носителей. */
+export function aspectsOf(nodes: readonly QueryFilterNode[]): string[] {
+  return nodes.flatMap((n) => ('aspect' in n ? [n.aspect] : []));
+}
+
+// ─────────────────────────── Строка поля ───────────────────────────
+
+/** Лист «свойство равно значению» — из них складываются списки `anyOf`/`noneOf`. */
+function eqLeaf(node: QueryFilterNode): { prop: string; value: QueryBound } | null {
+  if (!('prop' in node)) return null;
+  if (node.op !== 'eq' && node.op !== 'contains') return null;
+  return { prop: node.prop, value: node.value as QueryBound };
+}
+
+/** `{or:[…]}` по ОДНОМУ свойству — единственная форма OR, выразимая плоским текстом. */
+function sameProp(
+  nodes: readonly QueryFilterNode[],
+): { prop: string; values: QueryBound[] } | null {
+  const values: QueryBound[] = [];
+  let prop: string | null = null;
+  for (const node of nodes) {
+    const leaf = eqLeaf(node);
+    if (!leaf) return null;
+    if (prop !== null && prop !== leaf.prop) return null;
+    prop = leaf.prop;
+    values.push(leaf.value);
   }
-  const infos = catalog.fields[name] ?? [];
-  // Неоднозначное имя (`currency` живёт в двух аспектах) резолвится по выбранным aspect=,
-  // как это делает парсер; не разрешилось — берём первое описание, чтобы было чем рисовать
-  // контрол. О самой неоднозначности скажет проверка печати: там сообщение парсера дословно.
-  const narrowed = infos.length > 1 ? infos.filter((i) => selected.has(i.aspect)) : infos;
-  const info: FieldInfo | undefined = narrowed.length === 1 ? narrowed[0] : infos[0];
-  const ref: FieldRef = { name, type: info?.type ?? 'string', core: false };
-  if (info?.enumValues) ref.enumValues = info.enumValues;
+  return prop === null ? null : { prop, values };
+}
+
+/** Положительная (не отрицаемая) часть строки поля. */
+function positive(node: QueryFilterNode): FieldNodeView | null {
+  if ('or' in node) {
+    const same = sameProp(node.or);
+    if (same === null) return null;
+    return { prop: same.prop, op: 'anyOf', values: same.values, from: null, to: null };
+  }
+  if (!('prop' in node)) return null;
+  const base = { prop: node.prop, values: [] as QueryBound[], from: null, to: null };
+  switch (node.op) {
+    case 'eq':
+    case 'contains':
+      return { ...base, op: 'anyOf', values: [node.value as QueryBound] };
+    // `in` каноничен, но текстом не порождается: его вход — `ast:` тула (§А5-4). Показываем
+    // тем же списком, что и `or`, — печать у них одна (`p=a|b`).
+    case 'in':
+      return { ...base, op: 'anyOf', values: [...(node.value as QueryScalar[])] };
+    // `p!=v` и `p=!v` — одно «не равно» с разной текстовой формой. Строка показывает их
+    // одинаково, а правка значений печатает `=!v` — ту форму, которую собирает сама форма.
+    case 'ne':
+      return { ...base, op: 'noneOf', values: [node.value as QueryBound] };
+    case 'gt':
+      return { ...base, op: 'gt', from: node.value as QueryBound };
+    case 'lt':
+      return { ...base, op: 'lt', from: node.value as QueryBound };
+    default: {
+      const range = node.value as { from?: QueryBound; to?: QueryBound };
+      return { ...base, op: 'range', from: range.from ?? null, to: range.to ?? null };
+    }
+  }
+}
+
+/** Узел → строка поля; `null` — конструкция не про свойство (аспект, тег, связь, поиск). */
+export function fieldNodeView(node: QueryFilterNode): FieldNodeView | null {
+  if ('not' in node) {
+    const inner = positive(node.not);
+    // Отрицание форма выражает только над списком значений: `!(a>5)` плоский текст не
+    // печатает, и строки такой узел не получает — он доезжает до печати нетронутым.
+    if (inner === null || inner.op !== 'anyOf') return null;
+    return { ...inner, op: 'noneOf' };
+  }
+  return positive(node);
+}
+
+// ─────────────────────────── Свойство в терминах формы ───────────────────────────
+
+export interface FieldRef {
+  /** id свойства — то, что лежит в узле `{prop}` канона (§А5-7). */
+  id: string;
+  /** namespaced key — машинная ручка имени в тексте запроса (§А5-3а). */
+  key: string;
+  /** Подпись в локали владельца — доступное имя контрола (§А2-1). */
+  label: string;
+  kind: PropertyKind;
+  /** Списочное свойство: равенство у него — вхождение элемента (`contains`). */
+  list: boolean;
+  /** Варианты `select` в порядке `rank`: хранится `key`, показывается `label`. */
+  options?: Array<{ key: string; label: string }>;
+}
+
+/**
+ * Подпись записи реестра в локали читателя: локаль → en → любая (§А2-1). Правило то же, что у
+ * `effectiveLabel` разбора, и именно поэтому оно повторено здесь одной строкой, а не позвано:
+ * там оно применяется к записи РЕЕСТРА, а форме нужны ещё и подписи ВАРИАНТОВ `select`,
+ * которые записью реестра не являются.
+ */
+export function labelOfText(text: Record<string, string>, locale: string): string {
+  return text[locale] ?? text.en ?? (Object.values(text)[0] as string);
+}
+
+/**
+ * Свойство в терминах формы; `null` — такого id в реестре нет (запрос пережил удаление
+ * свойства). Каталог и словарь свойств строятся из одного снимка, поэтому расходиться им
+ * негде — но молча подставлять выдуманный тип нельзя, и потому исход именной.
+ */
+export function fieldRef(id: string, reg: QueryRegistry): FieldRef | null {
+  const def = reg.parse.properties.get(id);
+  const kind = reg.catalog.fields[id]?.[0]?.kind;
+  if (def === undefined || kind === undefined) return null;
+  const ref: FieldRef = {
+    id,
+    key: def.key,
+    label: labelOfText(def.label, reg.parse.locale),
+    kind,
+    list: isListPropertyType(def.type),
+  };
+  if (def.type.kind === 'select') {
+    ref.options = [...def.type.options]
+      .sort((a, b) => a.rank - b.rank)
+      .map((o) => ({ key: o.key, label: labelOfText(o.label, reg.parse.locale) }));
+  }
   return ref;
 }
 
 /**
- * Имена полей, которым форма рисует строки: core-поля, поля выбранных аспектов и поля, на
- * которые уже есть узлы (снятый аспект не должен прятать живой фильтр — иначе он уехал бы
- * в body невидимым). Порядок каталога — по аспектам в порядке реестра, внутри — по схеме.
+ * Core-проекции (§А1-3), которым форма рисует строку фильтра наравне с доменными свойствами:
+ * носителя-аспекта у них нет, и без явного списка они не появились бы ни при одном `aspect=`.
  *
- * Поля типа `unfilterable` (объект `orbis/schedule.recurrence`, разнотипный union
- * `orbis/goal.progress_source`) отсеиваются: грамматика фильтра для них не определена, и
- * контрол печатал бы строку, которую парсер отказывается разбирать, — форма предлагала бы
- * выбор, который гарантированно не сохранится. Поля типа `array` (`orbis/category.aliases`)
- * ОСТАЮТСЯ: у них честный containment-предикат, обычное равенство их и фильтрует.
- * На узел, уже стоящий в AST, отказ не может распространиться иначе: непарсящееся поле не
- * доходит до формы вовсе (`parseForForm` вернёт null, и откроется строковый редактор),
- * поэтому `used` не содержит нефильтруемых имён и фильтр по типу не прячет живой узел.
- *
- * Второй зазор — он тут ЕСТЬ, и сегодня не стреляет. Тип спрашивается через `fieldRef`, а
- * тот при НЕразрешённой неоднозначности берёт `infos[0]`, тогда как парсер в этом же месте
- * отказывает («неоднозначное поле … уточните запрос через aspect=»). Разойтись они могут
- * ровно в одном случае: имя живёт в двух аспектах и **оба выбраны** (`aspect=orbis/financial,
- * aspect=orbis/budget`) — выбирать между описаниями форме нечем, и она берёт первое по
- * каталогу. Сегодня решение от порядка не зависит вовсе: неоднозначных имён в реестре два
- * (`category_ref`, `currency`), и оба — `string` в обоих аспектах. Зазор начнёт стрелять,
- * если одно имя окажется скаляром в одном аспекте и не-скаляром в другом: строка поля
- * появится или исчезнет по порядку каталога, а не по правилу. Тихой потери и тогда не
- * будет — такой запрос не печатается вовсе, `printQuery` отдаёт дословный отказ парсера про
- * неоднозначность, — но правило станет случайным, и назвать его придётся явно.
- * `sortableFieldNames` этого зазора не имеет: он выбрасывает неоднозначные имена ДО того,
- * как спросит тип.
+ * Двух других core-проекций здесь нет, и обе отсутствуют НАМЕРЕННО:
+ *  - `orbis/archived` — у него в форме свой контрол («Архивные», три состояния грамматики
+ *    `archived=true|any`), а вторая строка по тому же свойству дала бы два узла, спорящих
+ *    друг с другом в одном запросе;
+ *  - `orbis/title` — фильтром он и раньше не предлагался (ключ `title=` в позиции фильтра
+ *    занят параметром заголовка выдачи), а отбор по заголовку продукт делает через `search=`
+ *    — подстрокой, а не точным равенством. Namespaced key снял ЗАПРЕТ (`orbis/title=Дом`
+ *    разбирается), но не сделал точное совпадение заголовка осмысленным выбором в форме.
+ *    Сортировке `orbis/title` доступен по-прежнему (`sortableFieldIds`).
  */
-export function visibleFieldNames(ast: QueryAst, catalog: FieldCatalog): string[] {
-  const selected = new Set(aspectsOf(ast));
-  const used = new Set(ast.filters.filter(isFieldNode).map((f) => f.field));
-  const names: string[] = [...CORE_NAMES];
-  for (const [name, infos] of Object.entries(catalog.fields)) {
-    if (names.includes(name) || isReservedKey(name)) continue;
-    if (!(used.has(name) || infos.some((i) => selected.has(i.aspect)))) continue;
-    // Тип спрашиваем ровно так же, как его выберет контрол (fieldRef), — иначе список имён
-    // и нарисованная по нему строка расходились бы на неоднозначном имени.
-    if (fieldRef(name, catalog, selected).type === 'unfilterable') continue;
-    names.push(name);
+const CORE_FIELD_IDS: readonly string[] = ['orbis/created_at', 'orbis/updated_at'];
+
+/** Свойство → аспекты-носители (§А3-1): по ним решается видимость строки. */
+function carrierIndex(reg: QueryRegistry): Map<string, Set<string>> {
+  const carriers = new Map<string, Set<string>>();
+  for (const aspect of reg.aspects) {
+    for (const ref of aspect.properties) {
+      const set = carriers.get(ref.propertyId);
+      if (set) set.add(aspect.id);
+      else carriers.set(ref.propertyId, new Set([aspect.id]));
+    }
   }
-  return names;
+  return carriers;
 }
 
 /**
- * Имена, доступные сортировке (§6.1): каталог `sortBy` шире фильтров ровно на core-`title`,
- * но уже по типу — линейного порядка нет ни у массива, ни у объекта/union, и парсер по
- * обоим отказывает (`sortBy: по полю 'aliases' сортировать нельзя — это 'массив'`). Отсюда
- * асимметрия с фильтрами: `array` там разрешён, здесь — нет. Неоднозначные имена
- * отсеиваются — `sortBy=currency:asc` без `aspect=` не разберётся так же, как фильтр.
+ * Свойства, которым форма рисует строки: core-проекции, свойства выбранных аспектов и те, по
+ * которым уже есть узел (снятый аспект не должен прятать живой фильтр — иначе он уехал бы в
+ * блок невидимым). Порядок — `rank` реестра.
+ *
+ * Вложенный объект (`orbis/recurrence`, `orbis/progress_source`) отсеивается: выразимого
+ * грамматикой фильтра у него нет, и контрол предлагал бы выбор, который заведомо не
+ * сохранится. Списочные свойства (`orbis/aliases`) ОСТАЮТСЯ — у них честный `contains`.
  */
-export function sortableFieldNames(ast: QueryAst, catalog: FieldCatalog): string[] {
-  const selected = new Set(aspectsOf(ast));
-  const names: string[] = [...CORE_NAMES, 'title'];
-  for (const [name, infos] of Object.entries(catalog.fields)) {
-    if (names.includes(name) || isReservedKey(name)) continue;
-    if (infos.length !== 1 && infos.filter((i) => selected.has(i.aspect)).length !== 1) continue;
-    const { type } = fieldRef(name, catalog, selected);
-    if (type === 'array' || type === 'unfilterable') continue;
-    names.push(name);
+export function visibleFieldIds(
+  nodes: readonly QueryFilterNode[],
+  reg: QueryRegistry,
+  selected: ReadonlySet<string>,
+): string[] {
+  const used = new Set<string>();
+  for (const node of nodes) {
+    const view = fieldNodeView(node);
+    if (view !== null) used.add(view.prop);
   }
-  return names;
+  const carriers = carrierIndex(reg);
+  const ids: string[] = [];
+  for (const def of reg.properties) {
+    const owners = carriers.get(def.id);
+    const shown =
+      CORE_FIELD_IDS.includes(def.id) ||
+      used.has(def.id) ||
+      (owners !== undefined && [...owners].some((a) => selected.has(a)));
+    if (!shown) continue;
+    const ref = fieldRef(def.id, reg);
+    if (ref === null || ref.kind === 'json') continue;
+    ids.push(def.id);
+  }
+  return ids;
 }
 
 /**
- * Допустимо ли поле в сравнении `>`/`<` и диапазоне `..` (§6.1): числовые поля, date-поля
- * аспектов и core-timestamp. Timestamp-поля аспектов (`start_at`, `end_at`, `completed_at`)
- * операторами не сравниваются — предложи их форма, строка перестала бы разбираться.
+ * Свойства, доступные сортировке (§А5-3): у списка и вложенного объекта линейного порядка нет,
+ * и разбор по обоим отказывает («по свойству … сортировать нельзя»). Отсюда асимметрия с
+ * фильтрами: списочное свойство там разрешено, здесь — нет.
+ *
+ * Список НЕ сужается выбранными аспектами — как и раньше: сортировать осмысленно и по
+ * свойству, которого нет в `aspect=` (отбор по тегам, порядок по сумме).
  */
+export function sortableFieldIds(reg: QueryRegistry): string[] {
+  const ids: string[] = [];
+  for (const def of reg.properties) {
+    const ref = fieldRef(def.id, reg);
+    if (ref === null || ref.list || ref.kind === 'json') continue;
+    ids.push(def.id);
+  }
+  return ids;
+}
+
+/** Допустим ли оператор сравнения: решает ЯЗЫК (`isOrderedPropertyKind`), а не форма. */
 export function isComparable(ref: FieldRef): boolean {
-  if (ref.core) return ref.type === 'timestamp';
-  if (ref.type === 'date') return true;
-  return ref.type === 'number' || ref.type === 'integer' || ref.type === 'decimal';
+  return !ref.list && isOrderedPropertyKind(ref.kind);
 }
 
-/** Значения, которые поле принимает списком: enum как есть, boolean — как enum из двух. */
-export function listedValues(ref: FieldRef): string[] | null {
-  if (ref.enumValues) return ref.enumValues;
-  return ref.type === 'boolean' ? ['true', 'false'] : null;
+/** Значения, которые свойство принимает списком: варианты `select`, у boolean — два флага. */
+export function listedValues(ref: FieldRef): Array<{ key: string; label: string }> | null {
+  if (ref.options) return ref.options;
+  // У boolean вариантов в реестре нет, и подписью служит сам литерал грамматики: он же
+  // уезжает в текст блока, и переводить его словом «да» значило бы показать одно, а
+  // записать другое.
+  return ref.kind === 'boolean'
+    ? [
+        { key: 'true', label: 'true' },
+        { key: 'false', label: 'false' },
+      ]
+    : null;
 }
 
-/** Даты выражаются относительными токенами (§6.1) — они же дефолт нового условия. */
+/** Принимает ли свойство относительное время вместо литерала (§А5-7). */
 export function isDateLike(ref: FieldRef): boolean {
-  return ref.type === 'date' || ref.type === 'timestamp';
+  return acceptsDateTokenKind(ref.kind);
 }
 
-/** Стартовое значение нового условия: осмысленное для типа и всегда печатаемое. */
-export function defaultValues(ref: FieldRef): QueryFieldValue[] {
+/**
+ * Стартовое значение нового условия: осмысленное для типа и всегда печатаемое.
+ *
+ * Литералы форма держит СТРОКАМИ, даже у чисел и флагов: в поле ввода лежит текст, и
+ * приведение его к числу на каждый набранный символ делало бы «12.» и «-» непечатаемыми
+ * посреди набора. Печать строки даёт тот же текст (`orbis/amount>1000`), а тип проверяет
+ * обратный разбор — там, где ошибку видно человеку.
+ */
+export function defaultValue(ref: FieldRef): QueryBound {
   const listed = listedValues(ref);
-  if (listed) return [{ kind: 'literal', value: listed[0] as string }];
-  if (isDateLike(ref)) return [{ kind: 'date_token', token: 'today' }];
-  return [{ kind: 'literal', value: '' }];
+  if (listed) return listed[0]?.key ?? '';
+  if (isDateLike(ref)) return { token: 'today' };
+  return '';
 }
 
-/** Стартовая граница сравнения/диапазона — по типу значения, который примет парсер (§6.1). */
-export function defaultComparable(ref: FieldRef): QueryComparableValue {
-  if (ref.core) return { kind: 'timestamp', value: '' };
-  if (ref.type === 'date') return { kind: 'date', value: '' };
-  return { kind: 'decimal', value: '' };
+// ─────────────────────────── Сборка узлов ───────────────────────────
+
+/** Узел списка значений: у списочного свойства равенство — вхождение элемента (§А5-7). */
+export function listNode(
+  ref: FieldRef,
+  op: 'anyOf' | 'noneOf',
+  values: readonly QueryBound[],
+): QueryFilterNode {
+  const eq = ref.list ? ('contains' as const) : ('eq' as const);
+  const leaves: QueryFilterNode[] = values.map((value) => ({ prop: ref.id, op: eq, value }));
+  const inner: QueryFilterNode =
+    leaves.length === 1 ? (leaves[0] as QueryFilterNode) : { or: leaves };
+  return op === 'noneOf' ? { not: inner } : inner;
 }
+
+/**
+ * Узел сахара `excludeBlocked=true` — «скрыть заблокированные живой работой» (§А5-3).
+ *
+ * Строит его САМ РАЗБОР, а не литералы формы: сахар — это конкретные id роли и свойства из
+ * реестра плюс набор значений «закрытая работа», и вторая копия этого знания в web разошлась
+ * бы с языком молча (ровно тот довод, по которому печать спрашивает `isExcludeBlockedSugar` у
+ * парсера, а не сверяет своими литералами). `null` — в реестре нет роли `dependency` или
+ * свойства `orbis/task_status`: тогда контрола в форме нет вовсе, и это честнее галочки,
+ * которая записала бы ссылку в никуда.
+ */
+export function excludeBlockedNode(reg: QueryRegistry): QueryFilterNode | null {
+  const r = parseQueryAst('excludeBlocked=true', reg.parse);
+  return r.ok ? r.ast.filter : null;
+}
+
+/** Узел строгого сравнения (§А5-7: включающая граница выражается `range`). */
+export function boundNode(ref: FieldRef, op: 'gt' | 'lt', value: QueryBound): QueryFilterNode {
+  return { prop: ref.id, op, value };
+}
+
+export function rangeNode(ref: FieldRef, from: QueryBound, to: QueryBound): QueryFilterNode {
+  return { prop: ref.id, op: 'range', value: { from, to } };
+}
+
+// ─────────────────────────── Печать и разбор ───────────────────────────
 
 export type Printed = {
-  /** Строка блока; null — сериализатор отказался печатать AST вовсе. */
+  /** Строка блока; null — печатать нельзя (см. `error`). */
   text: string | null;
   /** Почему строку нельзя записывать; null — всё в порядке. */
   error: string | null;
 };
 
 /**
- * AST формы → строка блока с проверкой, что она разберётся обратно. Двойная проверка не
- * лишняя: сериализатор ловит непечатаемый AST (пустой список значений, `limit` не целым,
- * `}}` в значении), а обратный разбор — то, чего он проверить не может, потому что не
- * знает каталога: неоднозначное имя без `aspect=`, пустое или нечисловое значение
- * сравнения. Оба случая обязаны быть видны ДО записи в body, а не красной плашкой после.
+ * AST формы → текст блока в КЛЮЧЕВОЙ форме (§А5-2: key — канон) с проверкой, что он
+ * разберётся обратно НОВОЙ грамматикой.
+ *
+ * Обратный разбор не лишний: печать ТОТАЛЬНА (`printQueryAst` печатает любое дерево, в том
+ * числе скобками), а грамматика v1 плоская — дерево, которое форма собрать не даёт, но
+ * которое приехало из блока, обязано быть видно ДО записи, а не красной плашкой после.
+ * Разбор здесь СТРОГИЙ (`parseQueryAst`, без моста старой формы): форма печатает канон, и
+ * принимать от себя же текст, который живёт только благодаря мосту, ей незачем.
+ *
+ * `}}` проверяется отдельно и ДО разбора: парсер его принимает молча (`tags=a}}b`
+ * разбирается), а рендерер тела закроет обёртку блока на первом вхождении — хвост запроса
+ * уехал бы текстом заметки. Это про РАЗМЕТКУ, а не про грамматику, поэтому и сообщение своё.
  */
-export function printQuery(ast: QueryAst, catalog: FieldCatalog): Printed {
-  let text: string;
-  try {
-    text = serializeQuery(ast);
-  } catch (e) {
-    return { text: null, error: e instanceof Error ? e.message : String(e) };
+export function printQuery(ast: QueryAst, reg: QueryRegistry): Printed {
+  const text = printQueryAst(ast, reg.parse, 'key');
+  if (text.includes(BLOCK_END)) {
+    return {
+      text: null,
+      error: `Сочетание «${BLOCK_END}» закрывает блок: уберите его из значения.`,
+    };
   }
-  const back = parseQuery(text, catalog);
+  const back = parseQueryAst(text, reg.parse);
   return { text, error: back.ok ? null : back.error.message };
 }
 
 /**
- * AST для формы: строка обязана и разобраться, и напечататься обратно. Не напечаталась —
- * форма таким блоком не управляет, и вызывающий обязан открыть строковый редактор
- * (иначе первое же сохранение молча потеряло бы конструкцию).
+ * AST для формы: текст обязан и разобраться, и напечататься обратно. Не напечатался — форма
+ * таким блоком не управляет, и вызывающий обязан открыть строковый редактор (иначе первое же
+ * сохранение молча потеряло бы конструкцию).
+ *
+ * Разбор здесь С МОСТОМ (`parseQueryAny`): тела сидированных смарт-листов до Задачи 21
+ * написаны старой грамматикой, и без моста «Настроить» открывал бы на них текстовый редактор
+ * вместо формы. Печатается такой блок уже КЛЮЧЕВОЙ формой — но наружу она уходит только
+ * вместе с настоящей правкой (правило Р3 в `QueryBuilderForm`).
  */
-export function parseForForm(initial: string, catalog: FieldCatalog): QueryAst | null {
-  const r = parseQuery(initial.trim(), catalog);
+export function parseForForm(initial: string, reg: QueryRegistry): QueryAst | null {
+  const r = parseQueryAny(initial.trim(), reg.parse);
   if (!r.ok) return null;
-  return printQuery(r.ast, catalog).text === null ? null : r.ast;
+  return printQuery(r.ast, reg).text === null ? null : r.ast;
 }

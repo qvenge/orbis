@@ -1,17 +1,16 @@
 import { DAILY_PLANNING_BODY, UPCOMING_BODY } from '@orbis/server/src/seed/smart-lists';
-import { aspectJsonSchema, BUILTIN_ASPECT_IDS } from '@orbis/shared';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { queryBlocks } from '../browser/query';
 import { QueryBuilderForm } from './QueryBuilderForm';
 
-// Реестр настоящий: каталог полей формы обязан совпадать с каталогом прода — иначе форма
-// предлагала бы поля, которых сервер не знает, и прятала бы те, что есть.
-const realAspects = BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) }));
-const aspectsHandler: MockHandler = (path) => (path === 'aspect.list' ? realAspects : {});
+// Реестры настоящие: каталог полей формы обязан совпадать с каталогом прода — иначе форма
+// предлагала бы свойства, которых сервер не знает, и прятала бы те, что есть.
+const aspectsHandler: MockHandler = (path) => registryReply(path) ?? {};
 
-/** Монтирует форму и ждёт каталог (он приезжает tRPC, как у виджета). */
+/** Монтирует форму и ждёт реестр (он приезжает tRPC, как у виджета). */
 async function openForm(initial: string): Promise<{
   onSave: ReturnType<typeof vi.fn>;
   onCancel: ReturnType<typeof vi.fn>;
@@ -29,9 +28,9 @@ async function openForm(initial: string): Promise<{
     />,
     aspectsHandler,
   );
-  // Ждём именно КОНТРОЛ формы: кнопки футера нарисованы и в состоянии загрузки каталога,
+  // Ждём именно КОНТРОЛ формы: кнопки футера нарисованы и в состоянии загрузки реестра,
   // и ожидание по ним пропускало бы тест вперёд, к пустой форме.
-  await screen.findByLabelText('Лимит');
+  await screen.findByLabelText('Лимит выдачи');
   return { onSave, onCancel, onEditAsText };
 }
 
@@ -47,15 +46,16 @@ function saved(onSave: ReturnType<typeof vi.fn>): string {
 
 test('форма открывается разобранным запросом и сохраняет его без изменений байт-в-байт', async () => {
   const initial =
-    'aspect=orbis/task, status=inbox, sortBy=created_at:desc, display=list, title=Inbox';
+    'aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox';
   const { onSave } = await openForm(initial);
   save();
   expect(onSave).toHaveBeenCalledWith(initial);
 });
 
 // Приёмочный пункт фазы (Р3): все шесть сидированных smart lists многострочные, с
-// 9-пробельными отступами continuation-строк. Сериализатор по построению даёт ОДНУ строку,
-// поэтому «открыл форму и ничего не менял» обязано отдавать исходную строку дословно.
+// 9-пробельными отступами continuation-строк, и написаны СТАРОЙ грамматикой (перевод — Задача
+// 21). Печать даёт ОДНУ строку в key-форме, поэтому «открыл форму и ничего не менял» обязано
+// отдавать исходную строку дословно — иначе форма переписывала бы сид при первом же открытии.
 test('многострочный блок сидированного smart list переживает форму байт-в-байт', async () => {
   const initial = queryBlocks(DAILY_PLANNING_BODY)[1] as string;
   expect(initial).toContain('\n'); // страховка: блок и правда многострочный
@@ -74,9 +74,24 @@ test('многострочный блок с limit= переживает фор�
   expect(saved(onSave)).toBe(initial);
 });
 
-test('смена лимита меняет сериализованную строку', async () => {
+// Оборотная сторона Р3: НАСТОЯЩАЯ правка сидированного блока печатает его целиком в
+// key-форме. Половина строки в старой грамматике и половина в новой не разобралась бы ничем,
+// поэтому «перевести при первой правке» — единственный целостный исход.
+test('правка сидированного блока переводит его в key-форму целиком', async () => {
+  const initial = queryBlocks(DAILY_PLANNING_BODY)[0] as string;
+  expect(initial).toContain('status=inbox'); // сид написан старой грамматикой
+  const { onSave } = await openForm(initial);
+  fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '5' } });
+  save();
+  const text = saved(onSave);
+  expect(text).toContain('orbis/task_status=inbox');
+  expect(text).toContain('limit=5');
+  expect(text).not.toContain(' status=');
+});
+
+test('смена лимита меняет напечатанную строку', async () => {
   const { onSave } = await openForm('aspect=orbis/task, limit=30');
-  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '50' } });
+  fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '50' } });
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task, limit=50');
 });
@@ -85,7 +100,7 @@ test('смена лимита меняет сериализованную стр
 // набрал человек, — не служебное значение, которым форма объясняется сама с собой.
 test('нецелый лимит блокирует сохранение, а не печатает битую строку', async () => {
   const { onSave } = await openForm('aspect=orbis/task, limit=30');
-  const limit = screen.getByLabelText('Лимит');
+  const limit = screen.getByLabelText('Лимит выдачи');
 
   fireEvent.change(limit, { target: { value: '0' } });
   expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
@@ -107,254 +122,292 @@ test('нецелый лимит блокирует сохранение, а не
 // и сохранение остаётся доступным.
 test('очистка лимита убирает конструкцию, а не гасит сохранение', async () => {
   const { onSave } = await openForm('aspect=orbis/task, limit=30');
-  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '' } });
+  fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '' } });
   expect(screen.getByRole('button', { name: 'Сохранить' })).toBeEnabled();
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task');
 });
 
-// Главное свойство архитектуры «строка на УЗЕЛ, а не на поле»: два сравнения по одному полю
-// и две AND-группы тегов — законные конструкции (парсер их не запрещает), и правка чего-то
-// третьего обязана оставить их на месте. Заодно — что доступные имена их различают: два
-// одинаковых имени на экране означают, что до второго узла не добраться ни клавиатурой, ни
-// скринридером.
-test('два узла по одному полю и две группы тегов переживают правку лимита', async () => {
-  const initial = 'tags=a|b, tags=c, amount>100, amount<500';
+// Главное свойство архитектуры «строка на УЗЕЛ, а не на свойство»: два сравнения по одному
+// свойству и две AND-группы тегов — законные конструкции, и правка чего-то третьего обязана
+// оставить их на месте. Заодно — что доступные имена их различают: два одинаковых имени на
+// экране означают, что до второго узла не добраться ни клавиатурой, ни скринридером.
+test('два узла по одному свойству и две группы тегов переживают правку лимита', async () => {
+  const initial = 'tags=a|b, tags=c, orbis/amount>100, orbis/amount<500';
   const { onSave } = await openForm(initial);
 
-  expect(screen.getByLabelText('amount #1: значение')).toHaveValue('100');
-  expect(screen.getByLabelText('amount #2: значение')).toHaveValue('500');
+  expect(screen.getByLabelText('Сумма #1: значение')).toHaveValue('100');
+  expect(screen.getByLabelText('Сумма #2: значение')).toHaveValue('500');
   expect(screen.getByLabelText('Тег 1')).toHaveValue('a');
   expect(screen.getByLabelText('Тег 2')).toHaveValue('b');
   expect(screen.getByLabelText('Тег 3')).toHaveValue('c');
 
-  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '7' } });
+  fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '7' } });
   save();
   expect(saved(onSave)).toBe(`${initial}, limit=7`);
 });
 
-// Тот же случай для узлов со списками значений: два enum-узла по одному полю дают ДВА набора
-// галочек, и без номера строки они звались бы одинаково.
-test('два списочных узла по одному полю различимы по имени и правятся раздельно', async () => {
-  const initial = 'aspect=orbis/task, status=inbox, status=!done';
+// Тот же случай для узлов со списками значений: два узла-варианта по одному свойству дают ДВА
+// набора галочек, и без номера строки они звались бы одинаково.
+test('два списочных узла по одному свойству различимы по имени и правятся раздельно', async () => {
+  const initial = 'aspect=orbis/task, orbis/task_status=inbox, orbis/task_status=!done';
   const { onSave } = await openForm(initial);
-  expect(screen.getByLabelText('status #1: inbox')).toBeChecked();
-  expect(screen.getByLabelText('status #2: done')).toBeChecked();
-  expect(screen.getByLabelText('status #1: done')).not.toBeChecked();
+  expect(screen.getByLabelText('Состояние задачи #1: Входящие')).toBeChecked();
+  expect(screen.getByLabelText('Состояние задачи #2: Сделана')).toBeChecked();
+  expect(screen.getByLabelText('Состояние задачи #1: Сделана')).not.toBeChecked();
 
-  fireEvent.click(screen.getByLabelText('status #2: cancelled'));
+  fireEvent.click(screen.getByLabelText('Состояние задачи #2: Отменена'));
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, status=inbox, status=!done&!cancelled');
+  expect(saved(onSave)).toBe(
+    'aspect=orbis/task, orbis/task_status=inbox, orbis/task_status=!done&!cancelled',
+  );
 });
 
-test('поля аспекта появляются после выбора аспекта', async () => {
+// Доступное имя контрола — ПОДПИСЬ свойства (§А2-1), а машинный ключ стоит рядом и
+// aria-hidden: прежний рулинг «имя контрола = имя поля грамматики» снят вместе с тем, что
+// в тексте стояло человеческое слово. Скринридер обязан называть «Состояние задачи».
+test('доступное имя строки — подпись свойства, а ключ — видимая подсказка рядом', async () => {
+  await openForm('aspect=orbis/task');
+  expect(screen.getByLabelText('Состояние задачи')).toBeInTheDocument();
+  expect(screen.queryByLabelText('orbis/task_status')).toBeNull();
+  expect(screen.getByText('orbis/task_status')).toHaveAttribute('aria-hidden', 'true');
+});
+
+test('свойства аспекта появляются после выбора аспекта', async () => {
   await openForm('aspect=orbis/financial');
-  expect(screen.getByLabelText('amount')).toBeInTheDocument();
+  expect(screen.getByLabelText('Сумма')).toBeInTheDocument();
 });
 
-test('снятие аспекта убирает его поля, установка — возвращает', async () => {
+test('снятие аспекта убирает его свойства, установка — возвращает', async () => {
   const { onSave } = await openForm('aspect=orbis/task');
-  expect(screen.queryByLabelText('amount')).toBeNull();
-  fireEvent.click(screen.getByLabelText('Финансы'));
-  expect(screen.getByLabelText('amount')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Сумма')).toBeNull();
+  fireEvent.click(screen.getByLabelText('Финансовая операция'));
+  expect(screen.getByLabelText('Сумма')).toBeInTheDocument();
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task, aspect=orbis/financial');
 });
 
-// Поле orbis/budget.limit в каталоге есть, но в грамматике невыразимо: ключ limit= занят
-// параметром выдачи (PRD 01 §6.1). Предложи его форма — фильтр молча исчез бы при печати.
-test('затенённое ключом грамматики поле limit не предлагается', async () => {
-  await openForm('aspect=orbis/budget');
-  expect(screen.getByLabelText('carryover')).toBeInTheDocument();
-  expect(screen.queryByLabelText('limit')).toBeNull();
+// БЫЛО НАОБОРОТ до реформы: свойство конверта `limit` в грамматике §6.1 было невыразимо —
+// ключ `limit=` занят параметром выдачи, и форма его прятала. Namespaced key (§А5-3а) снял
+// затенение по построению: `orbis/limit>1000` однозначен по слэшу, и строка обязана быть.
+test('свойство orbis/limit больше не затенено словом грамматики', async () => {
+  const { onSave } = await openForm('aspect=orbis/budget');
+  expect(screen.getByLabelText('Перенос остатка')).toBeInTheDocument();
+  const row = screen.getByLabelText('Лимит');
+  fireEvent.change(row, { target: { value: 'gt' } });
+  fireEvent.change(screen.getByLabelText('Лимит: значение'), { target: { value: '1000' } });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/budget, orbis/limit>1000');
 });
 
-// orbis/schedule.recurrence — объект: грамматика фильтра для него не определена, парсер
-// отказывает с позицией. Предложи его форма — человек набрал бы значение, а сохранение
-// упёрлось бы в отказ разбора: выбор, который гарантированно не собирается.
-test('нефильтруемое поле-объект не предлагается', async () => {
+// orbis/recurrence — вложенный объект: фильтра, выразимого грамматикой, для него нет, и
+// разбор отказывает с позицией. Предложи его форма — человек набрал бы значение, а
+// сохранение упёрлось бы в отказ: выбор, который гарантированно не собирается.
+test('нефильтруемое свойство-объект не предлагается', async () => {
   await openForm('aspect=orbis/schedule');
-  expect(screen.getByLabelText('location')).toBeInTheDocument();
-  expect(screen.queryByLabelText('recurrence')).toBeNull();
+  expect(screen.getByLabelText('Место')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Повторение')).toBeNull();
 });
 
-// Тот же отказ у разнотипного union orbis/goal.progress_source — причина другая, ветка одна.
-test('нефильтруемое поле-union не предлагается', async () => {
+// Тот же отказ у orbis/progress_source — причина другая, ветка одна.
+test('нефильтруемое свойство-union не предлагается', async () => {
   await openForm('aspect=orbis/goal');
-  expect(screen.getByLabelText('target_value')).toBeInTheDocument();
-  expect(screen.queryByLabelText('progress_source')).toBeNull();
+  expect(screen.getByLabelText('Целевое значение')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Источник прогресса')).toBeNull();
 });
 
-// Граница отказа: массив скаляров (orbis/category.aliases) фильтруется containment'ом
-// «массив содержит значение» — обычным равенством, тем же контролом, что строка. Отсеки
-// форма и его заодно с объектами, и резолв категории по синониму («такси» → «Транспорт»)
-// остался бы недоступен из UI, хотя грамматика его выражает.
-test('поле-массив предлагается и печатает обычное равенство', async () => {
+// Граница отказа: список скаляров (orbis/aliases) фильтруется вхождением элемента —
+// обычным равенством, тем же контролом, что строка. Отсеки форма и его заодно с объектами,
+// и резолв категории по синониму («такси» → «Транспорт») остался бы недоступен из UI.
+test('списочное свойство предлагается и печатает обычное равенство', async () => {
   const { onSave } = await openForm('aspect=orbis/category');
-  fireEvent.change(screen.getByLabelText('aliases: значение 1'), { target: { value: 'такси' } });
+  fireEvent.change(screen.getByLabelText('Синонимы: значение 1'), { target: { value: 'такси' } });
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/category, aliases=такси');
+  expect(saved(onSave)).toBe('aspect=orbis/category, orbis/aliases=такси');
 });
 
-test('enum-поле правится галочками значений', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, status=inbox');
-  fireEvent.click(screen.getByLabelText('status: inbox'));
-  fireEvent.click(screen.getByLabelText('status: done'));
+// Варианты `select` показываются ПОДПИСЬЮ, а хранится ключ: в тексте блока обязан оказаться
+// `inbox`, а человек обязан прочитать «Входящие».
+test('свойство-вариант правится галочками: подпись видна, ключ уезжает в текст', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, orbis/task_status=inbox');
+  fireEvent.click(screen.getByLabelText('Состояние задачи: Входящие'));
+  fireEvent.click(screen.getByLabelText('Состояние задачи: Сделана'));
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, status=done');
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/task_status=done');
 });
 
-// Пустой список значений — исключение сериализатора: снятие последней галочки обязано
-// убирать саму конструкцию, а не печатать `status=`.
+// Пустой список значений канон не выражает (`min(1)` у `or`): снятие последней галочки
+// обязано убирать саму конструкцию, а не печатать `orbis/task_status=`.
 test('снятие последнего значения убирает конструкцию целиком', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, status=inbox');
-  fireEvent.click(screen.getByLabelText('status: inbox'));
+  const { onSave } = await openForm('aspect=orbis/task, orbis/task_status=inbox');
+  fireEvent.click(screen.getByLabelText('Состояние задачи: Входящие'));
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task');
 });
 
 // «Заменить, что именно исключаем» — бытовой путь: снял старое значение, поставил новое.
-// Снятие последнего убирает узел (иначе печаталось бы `status=`), и без памяти строки
-// повторный ввод заводил его заново жёстким «любое из»: `status=!done` превращался в
-// `status=cancelled` — отбор смарт-листа значил бы ровно обратное тому, что просили.
-test('перезаведение значения сохраняет «ни одно из» (enum)', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, status=!done');
-  fireEvent.click(screen.getByLabelText('status: done'));
-  fireEvent.click(screen.getByLabelText('status: cancelled'));
+// Снятие последнего убирает узел, и без памяти строки повторный ввод заводил его заново
+// жёстким «любое из»: `!done` превращался в `cancelled` — отбор значил бы ровно обратное.
+test('перезаведение значения сохраняет «ни одно из» (свойство-вариант)', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, orbis/task_status=!done');
+  fireEvent.click(screen.getByLabelText('Состояние задачи: Сделана'));
+  fireEvent.click(screen.getByLabelText('Состояние задачи: Отменена'));
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, status=!cancelled');
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/task_status=!cancelled');
 });
 
-// Тот же механизм у строкового поля: там узел исчезает от стирания текста, а возвращается
-// первым же символом — селект операторов при этом даже не трогают.
-test('перезаведение значения сохраняет «ни одно из» (строковое поле)', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, waiting_for=!Иван');
-  const value = screen.getByLabelText('waiting_for: значение 1');
+// Тот же механизм у текстового свойства: там узел исчезает от стирания текста, а
+// возвращается первым же символом — селект операторов при этом даже не трогают.
+test('перезаведение значения сохраняет «ни одно из» (текстовое свойство)', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, orbis/waiting_for=!Иван');
+  const value = screen.getByLabelText('Ждём: значение 1');
   fireEvent.change(value, { target: { value: '' } });
-  fireEvent.change(screen.getByLabelText('waiting_for: значение 1'), {
-    target: { value: 'Пётр' },
-  });
+  fireEvent.change(screen.getByLabelText('Ждём: значение 1'), { target: { value: 'Пётр' } });
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, waiting_for=!Пётр');
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/waiting_for=!Пётр');
 });
 
 // Граница памяти: «нет фильтра» в селекте — ЯВНЫЙ отказ от конструкции, а не побочный
 // эффект стирания значения. После него строка начинается с чистого листа — «любое из».
 test('явное «нет фильтра» сбрасывает запомненный оператор строки', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, status=!done');
-  fireEvent.change(screen.getByLabelText('status'), { target: { value: '' } });
-  fireEvent.click(screen.getByLabelText('status: cancelled'));
+  const { onSave } = await openForm('aspect=orbis/task, orbis/task_status=!done');
+  fireEvent.change(screen.getByLabelText('Состояние задачи'), { target: { value: '' } });
+  fireEvent.click(screen.getByLabelText('Состояние задачи: Отменена'));
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, status=cancelled');
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/task_status=cancelled');
 });
 
 test('отрицание сохраняется &-формой', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, status=!done&!cancelled');
-  fireEvent.click(screen.getByLabelText('status: cancelled'));
+  const { onSave } = await openForm('aspect=orbis/task, orbis/task_status=!done&!cancelled');
+  fireEvent.click(screen.getByLabelText('Состояние задачи: Отменена'));
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, status=!done');
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/task_status=!done');
 });
 
 test('переключение «любое из» → «ни одно из» меняет форму значения', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, status=inbox');
-  fireEvent.change(screen.getByLabelText('status'), { target: { value: 'noneOf' } });
+  const { onSave } = await openForm('aspect=orbis/task, orbis/task_status=inbox');
+  fireEvent.change(screen.getByLabelText('Состояние задачи'), { target: { value: 'noneOf' } });
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, status=!inbox');
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/task_status=!inbox');
 });
 
-test('date-поле правится относительными токенами', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, due_date=today|overdue');
-  fireEvent.change(screen.getByLabelText('due_date: значение 2'), { target: { value: 'next_7d' } });
+test('date-свойство правится относительными токенами', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, orbis/due_date=today|overdue');
+  fireEvent.change(screen.getByLabelText('Срок: значение 2'), { target: { value: 'next_7d' } });
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, due_date=today|next_7d');
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/due_date=today|next_7d');
 });
 
-test('date-поле принимает точную дату вместо токена', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, due_date=today');
-  fireEvent.change(screen.getByLabelText('due_date: значение 1'), { target: { value: 'exact' } });
-  fireEvent.change(screen.getByLabelText('due_date: дата 1'), { target: { value: '2026-08-04' } });
+test('date-свойство принимает точную дату вместо токена', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, orbis/due_date=today');
+  fireEvent.change(screen.getByLabelText('Срок: значение 1'), { target: { value: 'exact' } });
+  fireEvent.change(screen.getByLabelText('Срок: дата 1'), { target: { value: '2026-08-04' } });
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, due_date=2026-08-04');
+  expect(saved(onSave)).toBe('aspect=orbis/task, orbis/due_date=2026-08-04');
 });
 
-test('числовое поле правится сравнением', async () => {
-  const { onSave } = await openForm('aspect=orbis/financial, amount>1000');
-  fireEvent.change(screen.getByLabelText('amount: значение'), { target: { value: '2000' } });
+test('числовое свойство правится сравнением', async () => {
+  const { onSave } = await openForm('aspect=orbis/financial, orbis/amount>1000');
+  fireEvent.change(screen.getByLabelText('Сумма: значение'), { target: { value: '2000' } });
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/financial, amount>2000');
+  expect(saved(onSave)).toBe('aspect=orbis/financial, orbis/amount>2000');
 });
 
-test('числовое поле правится диапазоном', async () => {
-  const { onSave } = await openForm('aspect=orbis/financial, amount=500..2000');
-  fireEvent.change(screen.getByLabelText('amount: до'), { target: { value: '3000' } });
+test('числовое свойство правится диапазоном', async () => {
+  const { onSave } = await openForm('aspect=orbis/financial, orbis/amount=500..2000');
+  fireEvent.change(screen.getByLabelText('Сумма: до'), { target: { value: '3000' } });
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/financial, amount=500..3000');
+  expect(saved(onSave)).toBe('aspect=orbis/financial, orbis/amount=500..3000');
+});
+
+// ДОЛГ ГЕЙТА ЗАДАЧИ 8, закрытый здесь: тип свойства форма берёт из РЕЕСТРА (`kind`), а не из
+// обеднённого словаря старого каталога, где `time` приезжал строкой. Возьми она `type` —
+// сравнения по времени пропали бы из селекта, хотя разбор их принимает (§А5-7: у `time` есть
+// линейный порядок). `orbis/routine_at` — единственное свойство типа `time` в реестре.
+test('свойство типа time сравнимо: оператор берётся по kind реестра', async () => {
+  const { onSave } = await openForm('aspect=orbis/routine');
+  fireEvent.change(screen.getByLabelText('Время запуска'), { target: { value: 'gt' } });
+  fireEvent.change(screen.getByLabelText('Время запуска: значение'), {
+    target: { value: '09:30' },
+  });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/routine, orbis/routine_at>09:30');
 });
 
 test('сортировка переставляется кнопками', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, sortBy=priority:desc|due_date:asc');
+  const { onSave } = await openForm(
+    'aspect=orbis/task, sortBy=orbis/priority:desc|orbis/due_date:asc',
+  );
   fireEvent.click(screen.getByRole('button', { name: 'Переместить ниже: строка 1' }));
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, sortBy=due_date:asc|priority:desc');
+  expect(saved(onSave)).toBe('aspect=orbis/task, sortBy=orbis/due_date:asc|orbis/priority:desc');
 });
 
-// Одно поле дважды в sortBy парсер разрешает; имя кнопки по полю сделало бы обе строки
-// неразличимыми, поэтому имена строит номер строки — он в этом списке и есть смысл.
-test('повтор поля в сортировке не делает кнопки одноимёнными', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, sortBy=priority:desc|priority:asc');
+// Одно свойство дважды в sortBy разбор разрешает; имя кнопки по свойству сделало бы обе
+// строки неразличимыми, поэтому имена строит номер строки — он в этом списке и есть смысл.
+test('повтор свойства в сортировке не делает кнопки одноимёнными', async () => {
+  const { onSave } = await openForm(
+    'aspect=orbis/task, sortBy=orbis/priority:desc|orbis/priority:asc',
+  );
   expect(screen.getByRole('button', { name: 'Переместить выше: строка 2' })).toBeEnabled();
   fireEvent.click(screen.getByRole('button', { name: 'Убрать из сортировки: строка 1' }));
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, sortBy=priority:asc');
+  expect(saved(onSave)).toBe('aspect=orbis/task, sortBy=orbis/priority:asc');
 });
 
-test('удаление последнего поля сортировки убирает параметр', async () => {
-  const { onSave } = await openForm('aspect=orbis/task, sortBy=priority:desc');
+test('удаление последнего свойства сортировки убирает параметр', async () => {
+  const { onSave } = await openForm('aspect=orbis/task, sortBy=orbis/priority:desc');
   fireEvent.click(screen.getByRole('button', { name: 'Убрать из сортировки: строка 1' }));
   save();
   expect(saved(onSave)).toBe('aspect=orbis/task');
 });
 
-// Сортировка уже фильтров по типу: линейного порядка нет ни у массива, ни у объекта/union,
-// и парсер отказывает по обоим (`sortBy=aliases:asc` — «это 'массив'»).
+// Сортировка уже фильтров по типу: линейного порядка нет ни у списка, ни у объекта, и разбор
+// отказывает по обоим («по свойству … сортировать нельзя»).
 //
-// Все три аспекта названы в запросе НАМЕРЕННО, хотя сегодня селект и так берёт имена из
-// всего каталога независимо от `aspect=`. На одном `aspect=orbis/category` отсутствие
-// `recurrence` и `progress_source` доказывало бы ровно это свойство селекта, а не отказ по
-// типу: почини кто-нибудь сужение сортировки до выбранных аспектов — и две трети теста
-// выродились бы в тавтологию, продолжая зеленеть. Соседние поля тех же аспектов стоят
-// положительным контролем: раз `spend_class`, `location` и `target_value` в селекте есть,
-// значит каталог доехал и отсеян именно тип.
-test('в сортировку не предлагаются ни массив, ни объект, ни union', async () => {
+// Все три аспекта названы в запросе НАМЕРЕННО, хотя селект и так берёт имена из всего
+// реестра независимо от `aspect=`. На одном `aspect=orbis/category` отсутствие «Повторения» и
+// «Источника прогресса» доказывало бы ровно это свойство селекта, а не отказ по типу: почини
+// кто-нибудь сужение сортировки до выбранных аспектов — и две трети теста выродились бы в
+// тавтологию, продолжая зеленеть. Соседние свойства тех же аспектов стоят положительным
+// контролем: раз «Класс траты», «Место» и «Целевое значение» в селекте есть, значит реестр
+// доехал и отсеян именно тип.
+test('в сортировку не предлагаются ни список, ни объект, ни union', async () => {
   await openForm('aspect=orbis/category, aspect=orbis/schedule, aspect=orbis/goal');
   const add = screen.getByLabelText('Добавить поле сортировки');
-  for (const name of ['spend_class', 'location', 'target_value']) {
+  for (const name of ['Класс траты', 'Место', 'Целевое значение']) {
     expect(within(add).getByRole('option', { name })).toBeInTheDocument();
   }
-  for (const name of ['aliases', 'recurrence', 'progress_source']) {
+  for (const name of ['Синонимы', 'Повторение', 'Источник прогресса']) {
     expect(within(add).queryByRole('option', { name })).toBeNull();
   }
 });
 
-test('в сортировку добавляется core-поле title, недоступное фильтру', async () => {
+// `orbis/title` доступен сортировке, но строки фильтра не получает (см. `CORE_FIELD_IDS`):
+// отбор по заголовку продукт делает через `search=`. «Заголовок» на экране ровно один — поле
+// параметра выдачи, а не селект операторов.
+test('в сортировку добавляется core-свойство «Заголовок», недоступное фильтру', async () => {
   const { onSave } = await openForm('aspect=orbis/task');
+  expect(screen.getByLabelText('Заголовок').tagName).toBe('INPUT');
   fireEvent.change(screen.getByLabelText('Добавить поле сортировки'), {
-    target: { value: 'title' },
+    target: { value: 'orbis/title' },
   });
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/task, sortBy=title:asc');
+  expect(saved(onSave)).toBe('aspect=orbis/task, sortBy=orbis/title:asc');
 });
 
+// Печать канона выражает исключение тега общим отрицанием (`!tags=`), а не сахаром
+// `excludeTags=`: оба текста разбираются в ОДНО дерево, и второй формы у печати нет.
 test('теги и исключения тегов правятся списками', async () => {
   const { onSave } = await openForm('tags=work');
   fireEvent.change(screen.getByLabelText('Тег 1'), { target: { value: 'дом' } });
   fireEvent.click(screen.getByRole('button', { name: 'Добавить исключённый тег' }));
   fireEvent.change(screen.getByLabelText('Исключённый тег 1'), { target: { value: 'архив' } });
   save();
-  expect(saved(onSave)).toBe('tags=дом, excludeTags=архив');
+  expect(saved(onSave)).toBe('tags=дом, !tags=архив');
 });
 
-// Симметрия с enum-путём (снял последнюю галочку — узла нет): стёртое до пустоты
+// Симметрия с путём вариантов (снял последнюю галочку — узла нет): стёртое до пустоты
 // единственное значение убирает конструкцию, а не печатает разбирающийся, сохраняемый и
 // бессмысленный `tags=""`. Поле при этом остаётся под курсором — строка-заготовка занимает
 // то же место, и <input> не пересоздаётся.
@@ -368,36 +421,48 @@ test('стёртый единственный тег убирает констр
   expect(saved(onSave)).toBe('aspect=orbis/task');
 });
 
-test('стёртое единственное строковое значение убирает конструкцию и не отнимает фокус', async () => {
-  const { onSave } = await openForm('aspect=orbis/financial, counterparty=Магнит');
-  const input = screen.getByLabelText('counterparty: значение 1');
+test('стёртое единственное текстовое значение убирает конструкцию и не отнимает фокус', async () => {
+  const { onSave } = await openForm('aspect=orbis/financial, orbis/counterparty=Магнит');
+  const input = screen.getByLabelText('Контрагент: значение 1');
   input.focus();
   fireEvent.change(input, { target: { value: '' } });
-  expect(screen.getByLabelText('counterparty: значение 1')).toHaveFocus();
+  expect(screen.getByLabelText('Контрагент: значение 1')).toHaveFocus();
   save();
   expect(saved(onSave)).toBe('aspect=orbis/financial');
 });
 
-// Значение строкового поля набирается прямо в строке-заготовке: фильтра ещё нет, узел
+// Значение текстового свойства набирается прямо в строке-заготовке: фильтра ещё нет, узел
 // заводит первый же символ.
 test('строка-заготовка заводит фильтр с первого символа', async () => {
   const { onSave } = await openForm('aspect=orbis/financial');
-  fireEvent.change(screen.getByLabelText('counterparty: значение 1'), {
+  fireEvent.change(screen.getByLabelText('Контрагент: значение 1'), {
     target: { value: 'Магнит' },
   });
   save();
-  expect(saved(onSave)).toBe('aspect=orbis/financial, counterparty=Магнит');
+  expect(saved(onSave)).toBe('aspect=orbis/financial, orbis/counterparty=Магнит');
 });
 
 // Minor 7: переход «заготовка → узел» не должен пересоздавать строку — иначе выбор оператора
 // с клавиатуры выбрасывал бы фокус в body, то есть терял место в форме.
 test('выбор оператора не отнимает фокус у строки поля', async () => {
   await openForm('aspect=orbis/task');
-  const select = screen.getByLabelText('effort_min');
+  const select = screen.getByLabelText('Трудоёмкость, мин');
   select.focus();
-  fireEvent.change(select, { target: { value: '>' } });
-  expect(screen.getByLabelText('effort_min')).toHaveFocus();
-  expect(screen.getByLabelText('effort_min: значение')).toBeInTheDocument();
+  fireEvent.change(select, { target: { value: 'gt' } });
+  expect(screen.getByLabelText('Трудоёмкость, мин')).toHaveFocus();
+  expect(screen.getByLabelText('Трудоёмкость, мин: значение')).toBeInTheDocument();
+});
+
+// OR между РАЗНЫМИ свойствами канон выражает, а плоский текст грамматики v1 — нет (§А5-3д), и
+// блок до Задачи 21 хранит текст. Кнопка обязана быть видна и погашена: спрятать её значило
+// бы скрыть, что возможность существует, а дать нажать — собрать запрос, который не
+// сохранится.
+test('кнопка «ИЛИ между полями» видна, погашена и объясняет причину', async () => {
+  await openForm('aspect=orbis/task');
+  const button = screen.getByRole('button', { name: 'ИЛИ между полями' });
+  expect(button).toBeDisabled();
+  const hintId = button.getAttribute('aria-describedby') as string;
+  expect(document.getElementById(hintId)).toHaveTextContent('после перехода блока на AST');
 });
 
 test('excludeBlocked и archived правятся своими контролами', async () => {
@@ -431,6 +496,15 @@ test('заголовок с запятой печатается в кавычк�
   expect(saved(onSave)).toBe('aspect=orbis/task, title="Дом, милый дом"');
 });
 
+// Значение с ПРОБЕЛОМ — отдельный класс отказа канона (§А5-3: пробел разделяет конструкции).
+// Форма обязана закавычить его сама: иначе сохранённый ею же блок перестал бы разбираться.
+test('заголовок с пробелом печатается в кавычках', async () => {
+  const { onSave } = await openForm('aspect=orbis/task');
+  fireEvent.change(screen.getByLabelText('Заголовок'), { target: { value: 'Мои задачи' } });
+  save();
+  expect(saved(onSave)).toBe('aspect=orbis/task, title="Мои задачи"');
+});
+
 test('режим отображения и поиск сохраняются', async () => {
   const { onSave } = await openForm('aspect=orbis/task');
   fireEvent.change(screen.getByLabelText('Режим отображения'), { target: { value: 'compact' } });
@@ -439,20 +513,20 @@ test('режим отображения и поиск сохраняются', a
   expect(saved(onSave)).toBe('aspect=orbis/task, search=отчёт, display=compact');
 });
 
-// Неоднозначное имя (`currency` живёт в orbis/financial и orbis/budget) резолвится по
-// aspect= в том же запросе: убери аспект — и строка перестанет разбираться. Форма обязана
-// сказать об этом до записи, а не отдать битый блок в body.
-test('снятие аспекта у неоднозначного поля блокирует сохранение с объяснением', async () => {
-  const { onSave } = await openForm('aspect=orbis/financial, currency=KZT');
-  fireEvent.click(screen.getByLabelText('Финансы'));
-  expect(screen.getByTestId('qb-form-error')).toHaveTextContent(/неоднозначное поле 'currency'/);
-  expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+// БЫЛО НАОБОРОТ до реформы: `currency` живёт в orbis/financial и orbis/budget, и снятие
+// аспекта делало имя неоднозначным — форма гасила сохранение с объяснением. С §А5-3а в
+// дереве лежит id свойства, а печатается его namespaced key: неоднозначности нет по
+// построению, и снятие аспекта запрос больше не ломает.
+test('снятие аспекта у прежде неоднозначного свойства сохранение не блокирует', async () => {
+  const { onSave } = await openForm('aspect=orbis/financial, orbis/currency=KZT');
+  fireEvent.click(screen.getByLabelText('Финансовая операция'));
+  expect(screen.queryByTestId('qb-form-error')).toBeNull();
   save();
-  expect(onSave).not.toHaveBeenCalled();
+  expect(saved(onSave)).toBe('orbis/currency=KZT');
 });
 
 // `}}` закрыл бы обёртку {{query: … }} раньше времени, и рендерер body разрезал бы блок на
-// части. Сериализатор на таком AST бросает — форма обязана показать отказ, а не упасть.
+// части. Разбор его принимает молча — значит запрет обязан стоять отдельно от грамматики.
 test('«}}» в значении блокирует сохранение, а не рвёт обёртку блока', async () => {
   const { onSave } = await openForm('aspect=orbis/task, title=Дом');
   fireEvent.change(screen.getByLabelText('Заголовок'), { target: { value: 'Дом}}хвост' } });
@@ -462,9 +536,20 @@ test('«}}» в значении блокирует сохранение, а н�
   expect(onSave).not.toHaveBeenCalled();
 });
 
-test('«Редактировать как текст» отдаёт ТЕКУЩУЮ сериализацию, а не исходную строку', async () => {
+// Пустая граница сравнения печатается, но обратно не разбирается: отказ обязан быть виден ДО
+// записи, а не красной плашкой виджета после неё.
+test('пустая граница сравнения блокирует сохранение отказом разбора', async () => {
+  const { onSave } = await openForm('aspect=orbis/financial, orbis/amount>1000');
+  fireEvent.change(screen.getByLabelText('Сумма: значение'), { target: { value: '' } });
+  expect(screen.getByTestId('qb-form-error')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Сохранить' })).toBeDisabled();
+  save();
+  expect(onSave).not.toHaveBeenCalled();
+});
+
+test('«Редактировать как текст» отдаёт ТЕКУЩУЮ печать, а не исходную строку', async () => {
   const { onEditAsText } = await openForm('aspect=orbis/task, limit=30');
-  fireEvent.change(screen.getByLabelText('Лимит'), { target: { value: '7' } });
+  fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '7' } });
   fireEvent.click(screen.getByRole('button', { name: 'Редактировать как текст' }));
   expect(onEditAsText).toHaveBeenCalledWith('aspect=orbis/task, limit=7');
 });
@@ -475,7 +560,7 @@ test('неразбираемый блок форма называет своим
   const onSave = vi.fn();
   renderWithProviders(
     <QueryBuilderForm
-      initial="status="
+      initial="orbis/task_status="
       onSave={onSave}
       onCancel={vi.fn()}
       onEditAsText={vi.fn()}
@@ -498,19 +583,21 @@ test('«Отмена» и Esc отдают отказ вызывающему', a
 // Доступность: ревью фаз B и C ловило именно её. Каждый контрол обязан иметь связанную
 // подпись — проверяем на выборке из всех типов контролов формы.
 test('у контролов формы есть связанные подписи', async () => {
-  await openForm('aspect=orbis/task, status=inbox, due_date=today, sortBy=priority:desc');
+  await openForm(
+    'aspect=orbis/task, orbis/task_status=inbox, orbis/due_date=today, sortBy=orbis/priority:desc',
+  );
   for (const label of [
     'Задача',
-    'Лимит',
+    'Лимит выдачи',
     'Заголовок',
     'Поиск по тексту',
     'Режим отображения',
     'Архивные',
     'Скрыть заблокированные',
     'Дети сущности',
-    'status',
-    'status: inbox',
-    'due_date: значение 1',
+    'Состояние задачи',
+    'Состояние задачи: Входящие',
+    'Срок: значение 1',
     'Поле сортировки 1',
     'Направление 1',
     'Тег 1',

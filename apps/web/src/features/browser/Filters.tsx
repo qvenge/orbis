@@ -6,8 +6,6 @@ import { buildFilterQuery, type FilterState } from './query';
 const EMPTY: FilterState = {
   tags: [],
   aspects: [],
-  status: null,
-  priority: null,
   createdFrom: null,
   createdTo: null,
 };
