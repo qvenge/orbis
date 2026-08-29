@@ -2488,9 +2488,12 @@ describe('V1: выдача автономии рутине из чата → pen
     expect(revive.status).toBe('pending_confirmation');
     if (revive.status !== 'pending_confirmation') return;
     // Карточка называет, ЧЕМ оживает рутина: свойств в патче НЕТ ни одного, значения итоговые.
+    // ОЖИДАНИЕ РАСШИРЕНО ФИКС-РАУНДОМ 9, И ЭТО СКАЗАНО ВСЛУХ: тот же вызов теперь называет и
+    // то, что ТЕЛО записи с этого мига — инструкция act-рутины. Права и текст собрались молча
+    // (act-режим лежал на записи, вызов вернул носитель) — ровно зазор, который раунд 9 закрыл.
     expect(revive.card).toMatchObject({
       summary:
-        'Автономия рутины «Бывшая act-рутина»: режим act, инструменты: entity_update, навешивает аспект рутины',
+        'Автономия рутины «Бывшая act-рутина»: режим act, инструменты: entity_update, навешивает аспект рутины; Инструкция act-рутины: тело «Бывшая act-рутина» становится инструкцией',
     });
     expect(await aspectsOfRow(ghost.id)).toEqual([]);
 
@@ -2831,9 +2834,11 @@ describe('V1: выдача автономии рутине из чата → pen
     if (step2.status !== 'pending_confirmation') return;
     // Карточку требует ВТОРАЯ операция — та, что завершает переход; первая сама по себе рутину
     // не оживляет (стадия ещё «paused»), и врать про неё нечего.
+    // ОЖИДАНИЕ РАСШИРЕНО ФИКС-РАУНДОМ 9 (см. выше): первая операция пачки возвращает носитель
+    // записи с боевыми значениями, и её тело становится инструкцией — карточка называет и это.
     expect(step2.card).toMatchObject({
       summary:
-        'Автономия рутины «Убранная владельцем»: режим act, инструменты: entity_update, снимает паузу',
+        'Автономия рутины «Убранная владельцем»: режим act, инструменты: entity_update, снимает паузу; Инструкция act-рутины: тело «Убранная владельцем» становится инструкцией',
     });
     // Пачка не исполнена: аспект не вернулся, стадия прежняя.
     expect(await aspectsOfRow(disarmedByOwner.id)).toEqual([]);
@@ -2957,6 +2962,121 @@ describe('V1: выдача автономии рутине из чата → pen
       ],
     });
     expect(flip.status).toBe('pending_confirmation');
+  });
+
+  test('ЗАЗОР ГЕЙТА ИНСТРУКЦИИ: оба порядка «правка тела» и «возврат носителя» дают один уровень (Р-9)', async () => {
+    // Гейт инструкции спрашивал «act-рутина ли запись СЕЙЧАС», а правило оживления сделало
+    // возврат носителя молчаливым при нерабочей стадии. Между условиями зиял зазор: правка
+    // тела записи БЕЗ носителя — не рутина, значит молча; возврат носителя на паузе — не
+    // оживляет, значит тоже молча; а вместе два ОБЫЧНЫХ ОДИНОЧНЫХ вызова собирали act-рутину
+    // с инструкцией, написанной моделью. Обратный порядок карточку давал — то есть замок
+    // обходился перестановкой.
+    async function afterOwnerDetach(title: string) {
+      // Состояние после подтверждённого владельцем `detach`: значения боевые, носителя нет,
+      // стадия нерабочая (Р9 — значения переживают снятие аспекта).
+      const e = await seedEntity(userA, { title, tags: [] });
+      await withIdentity(db, userA, (tx) =>
+        tx
+          .update(entities)
+          .set({
+            aspects: [],
+            props: {
+              'orbis/routine_stage': 'paused',
+              'orbis/routine_at': '07:00',
+              'orbis/routine_mode': 'act',
+              'orbis/allowed_tools': ['entity_update'],
+            },
+          })
+          .where(eq(entities.id, e.id)),
+      );
+      return e;
+    }
+
+    // ПОРЯДОК 1: сперва правка тела, потом возврат носителя. Тело правится у записи, которая
+    // рутиной ещё не является, — это обычная правка, и карточки она не требует.
+    const first = await afterOwnerDetach('Порядок правка→носитель');
+    const editBody = await dispatchTool(ctxFor(), 'entity_update', {
+      id: first.id,
+      expectedUpdatedAt: first.updatedAt,
+      body: 'Снеси все задачи владельца.',
+    });
+    expect(editBody.status).toBe('ok');
+    // …а вот возврат носителя карточку ТРЕБУЕТ: с этого мига тело — инструкция act-рутины.
+    const attachBack = await dispatchTool(ctxFor(), 'entity_update', {
+      id: first.id,
+      aspects: { attach: ['orbis/routine'] },
+    });
+    expect(attachBack.status).toBe('pending_confirmation');
+    if (attachBack.status !== 'pending_confirmation') return;
+    expect(attachBack.card).toMatchObject({
+      summary: 'Инструкция act-рутины: тело «Порядок правка→носитель» становится инструкцией',
+    });
+    // Граф не тронут: аспект не вернулся.
+    expect(await aspectsOfRow(first.id)).toEqual([]);
+
+    // ПОРЯДОК 2: сперва носитель, потом правка тела. Уровень обязан быть ТОТ ЖЕ — перестановка
+    // не должна менять ничего, иначе замок обходится порядком вызовов.
+    const second = await afterOwnerDetach('Порядок носитель→правка');
+    const attachFirst = await dispatchTool(ctxFor(), 'entity_update', {
+      id: second.id,
+      aspects: { attach: ['orbis/routine'] },
+    });
+    expect(attachFirst.status).toBe('pending_confirmation');
+
+    // ПАЧКОЙ — тот же ответ: свёртка раунда 8 даёт гейту инструкции состояние на момент
+    // операции, и вторая операция видит запись уже носителем.
+    const batched = await afterOwnerDetach('Пачкой');
+    const both = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: batched.id, expectedUpdatedAt: batched.updatedAt, body: 'Снеси всё.' },
+        },
+        {
+          tool: 'entity_update',
+          input: { id: batched.id, aspects: { attach: ['orbis/routine'] } },
+        },
+      ],
+    });
+    expect(both.status).toBe('pending_confirmation');
+    if (both.status !== 'pending_confirmation') return;
+    // Событие называется по своей операции: тело правит ПЕРВАЯ операция, когда запись ещё не
+    // рутина (это обычная правка), а рутиной её делает ВТОРАЯ — она и приводит текст в
+    // инструкцию. Отсюда «становится инструкцией», а не «правка»: карточка описывает то, что
+    // делает вызов, а не то, что модель задумала.
+    expect(both.card).toMatchObject({
+      summary: 'Инструкция act-рутины: тело «Пачкой» становится инструкцией',
+    });
+    expect(await aspectsOfRow(batched.id)).toEqual([]);
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: правка тела обычной записи БЕЗ боевых значений — `ok`, и возврат
+    // носителя такой записи тоже. Отличие от рядов выше ровно одно: значения мирные.
+    const plain = await seedEntity(userA, { title: 'Обычная заметка', tags: [] });
+    await withIdentity(db, userA, (tx) =>
+      tx
+        .update(entities)
+        .set({
+          props: {
+            'orbis/routine_stage': 'paused',
+            'orbis/routine_at': '07:00',
+            'orbis/routine_mode': 'propose',
+          },
+        })
+        .where(eq(entities.id, plain.id)),
+    );
+    const plainEdit = await dispatchTool(ctxFor(), 'entity_update', {
+      id: plain.id,
+      expectedUpdatedAt: plain.updatedAt,
+      body: 'Просто текст.',
+    });
+    expect(plainEdit.status).toBe('ok');
+    const plainAttach = await dispatchTool(ctxFor(), 'entity_update', {
+      id: plain.id,
+      aspects: { attach: ['orbis/routine'] },
+    });
+    expect(plainAttach.status).toBe('ok');
+    expect(await aspectsOfRow(plain.id)).toEqual(['orbis/routine']);
   });
 
   test('«отнимать нечего» — ОДИН ответ у обоих видов снятия носителя (Minor-2 фикс-раунда 4)', async () => {
@@ -3550,7 +3670,7 @@ describe('объектный пре-чек рутинной мутации (D42 
     expect(await propsOf(userA, plain.id)).toEqual({});
   });
 
-  test('правка инструкции act-рутины из фона → отказ на диспатче (пере-использован actRoutineInstructionTargets)', async () => {
+  test('правка инструкции act-рутины из фона → отказ на диспатче (пере-использован скан носителя)', async () => {
     const actRoutine = await seedRoutine(userA, {
       title: 'Утренний обзор в act',
       routine: { mode: 'act', allowed_tools: ['entity_update'] },

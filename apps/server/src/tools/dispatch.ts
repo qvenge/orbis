@@ -844,7 +844,6 @@ async function runMutation(
   // `title`/`body`: иначе функция уходит по пустому списку id, не сходив в БД.
   const ops = batchPayload?.operations ?? [{ tool, input: payload }];
   const ownerKnows = ctx.actorKind === 'owner';
-  const instructionOf = ownerKnows ? [] : await actRoutineInstructionTargets(ctx, ops);
   // РАЗОРУЖЕНИЕ ЧЕРЕЗ НОСИТЕЛЬ (рулинги Р-12-2 и Р-12-3). Два вызова разоружают рутину
   // МОЛЧА, потому что в их ФОРМЕ снятия не видно — оно есть только в разнице с текущим
   // состоянием: `attach_orbis_routine` заменяет носитель целиком (§А7-4), а
@@ -857,9 +856,13 @@ async function runMutation(
   // Владельцу карточка не нужна и здесь: он разоружает свою рутину, глядя на неё, и ряд
   // автономии §7.10 для `owner` не срабатывает по той же причине.
   const scan: CarrierScan = ownerKnows
-    ? { changes: new Map(), carrierAtOp: new Map() }
+    ? emptyCarrierScan()
     : await autonomyChangedByCarrier(ctx, ops);
   const disarmed = scan.changes;
+  // Гейт инструкции act-рутины (C1b-1) читается из ТОГО ЖЕ скана: вопрос «чем станет текст
+  // этой записи» задаётся тому же свёрнутому состоянию, что и вопрос об оживлении, — иначе
+  // между двумя правилами снова появится зазор, который закрывался перестановкой вызовов.
+  const instructionOf = [...scan.instructionAtOp.values()];
   const level: ConfirmationLevel =
     instructionOf.length > 0 || disarmed.size > 0 ? 'explicit-confirmation' : classified;
 
@@ -870,7 +873,12 @@ async function runMutation(
   // разберёт его позже. Уровень `execute` пре-чек не смотрит: там ничего не откладывается, и
   // запрет держит стадия 4 executor'а своим отказом — тем же кодом и с тем же `reason`.
   if (ctx.source === 'routine' && level !== 'execute') {
-    const forbidden = await routineDeferForbidden(ctx, ops, facts, instructionOf);
+    const forbidden = await routineDeferForbidden(
+      ctx,
+      ops,
+      facts,
+      instructionOf.map((touch) => touch.title),
+    );
     if (forbidden !== null) {
       // `reason` — та же пара, что у запрета по объекту в executor'е: код FORBIDDEN_LEVEL
       // перегружен шестью источниками, и различать их в тестах и UI больше нечем
@@ -936,8 +944,18 @@ async function runMutation(
       if (facts.grantsAutonomy || disarmed.size > 0) {
         summaryParts.push(await autonomySummary(tx, ops, scan));
       }
-      if (instructionOf.length > 0) {
-        summaryParts.push(`Инструкция act-рутины: правка «${instructionOf.join('», «')}»`);
+      // Правку и СТАНОВЛЕНИЕ владельцу надо назвать по-разному: «правка» про запись, текста
+      // которой этот вызов не касался, была бы неправдой — её тело написали раньше и молча,
+      // а этот вызов делает его инструкцией.
+      for (const reason of ['edit', 'becomes'] as const) {
+        const titles = instructionOf.filter((touch) => touch.reason === reason);
+        if (titles.length === 0) continue;
+        const names = titles.map((touch) => touch.title).join('», «');
+        summaryParts.push(
+          reason === 'edit'
+            ? `Инструкция act-рутины: правка «${names}»`
+            : `Инструкция act-рутины: тело «${names}» становится инструкцией`,
+        );
       }
       return createPending(tx, {
         threadId: ctx.threadId,
@@ -1481,7 +1499,7 @@ const AUTONOMY_LABEL: Record<string, string> = {
 async function autonomySummary(
   tx: Tx,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
-  scan: CarrierScan = { changes: new Map(), carrierAtOp: new Map() },
+  scan: CarrierScan = emptyCarrierScan(),
 ): Promise<string> {
   const parts: string[] = [];
   for (const [index, op] of ops.entries()) {
@@ -1660,8 +1678,9 @@ interface CarrierAutonomyChange {
  *    вызова это «заведи рутину», а по состоянию — либо обычное заведение, либо возврат к жизни
  *    act-рутины с прежним белым списком. Различает их только вопрос к ИТОГОВЫМ значениям.
  * Классификатор §7.10 по построению чист (типизированные факты вызова, без БД), поэтому
- * состояние спрашивает диспатч — ровно там же и тем же способом, что
- * `actRoutineInstructionTargets` строкой ниже.
+ * состояние спрашивает диспатч — и ОДНИМ чтением на оба гейта: тем же свёрнутым состоянием
+ * отвечает и гейт инструкции act-рутины (C1b-1, `instructionAtOp`), у которого прежде был свой
+ * `SELECT` и свой момент, а между двумя моментами — зазор (фикс-раунд 9).
  *
  * ОБЕСЦЕНИВАНИЕ считается наравне со снятием, и это фикс-раунд 3. Прежде проба спрашивала
  * только «пропало ли свойство», и модель гасила act-режим ЭХОМ: `entity_get` показывал ей
@@ -1711,8 +1730,10 @@ interface CarrierAutonomyChange {
  * ошибается в безопасную сторону. Размен признан невыгодным; когда §7.10 станет данными
  * (часть Б, `assign_level`), решать это будет правило, а не эта функция.
  *
- * ТА ЖЕ ОГОВОРКА ЦЕЛИКОМ ОТНОСИТСЯ К `actRoutineInstructionTargets` НИЖЕ: у него та же форма
- * (свой `SELECT` до записи) и та же гонка; коротко она названа и на месте.
+ * ТА ЖЕ ОГОВОРКА ОТНОСИТСЯ И К ГЕЙТУ ИНСТРУКЦИИ act-рутины: с фикс-раунда 9 он отвечает по
+ * этому же свёрнутому состоянию (`instructionAtOp`), то есть делит с оживлением и один
+ * `SELECT`, и одну гонку — act-режим, выставленный между пробой и записью, правку инструкции
+ * этим гейтом не задержит.
  */
 async function autonomyChangedByCarrier(
   ctx: ToolCallCtx,
@@ -1720,11 +1741,12 @@ async function autonomyChangedByCarrier(
 ): Promise<CarrierScan> {
   const out = new Map<number, CarrierAutonomyChange>();
   const carrierAtOp = new Map<number, boolean>();
+  const instructionAtOp = new Map<number, InstructionTouch>();
   // ПЕРВЫЙ ПРОХОД — по форме: есть ли о чём спрашивать БД и кого спрашивать. Идентификаторы
   // собираются ШИРЕ проб: состояние цели внутри пачки двигают и операции, сами по себе
   // карточки не требующие (постановка на паузу, архивация), а свернуть надо все.
   const touched = new Set<string>();
-  let hasProbe = false;
+  let needsState = false;
   for (const op of ops) {
     if (!isRecord(op.input)) continue;
     const id =
@@ -1738,17 +1760,19 @@ async function autonomyChangedByCarrier(
     if (
       op.tool === 'attach_orbis_routine' ||
       namesRoutineAspect(op.input, 'detach') ||
-      touchesRevivalSwitch(op.input)
+      touchesRevivalSwitch(op.input) ||
+      editsInstruction(op.input)
     ) {
-      hasProbe = true;
+      needsState = true;
     }
   }
-  if (!hasProbe) return { changes: out, carrierAtOp };
+  if (!needsState) return { changes: out, carrierAtOp, instructionAtOp };
 
   const rows = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
     tx
       .select({
         id: entities.id,
+        title: entities.title,
         props: entities.props,
         aspects: entities.aspects,
         archived: entities.archived,
@@ -1778,6 +1802,7 @@ async function autonomyChangedByCarrier(
       carrier: row.aspects.includes(ROUTINE_ASPECT),
       archived: row.archived,
       props: row.props as Record<string, unknown>,
+      title: row.title,
     };
     state.set(id, fresh);
     return fresh;
@@ -1794,7 +1819,10 @@ async function autonomyChangedByCarrier(
       const data = isRecord(op.input.data) ? op.input.data : {};
       const taken = carrierReplaced(now, data);
       if (taken !== null) out.set(index, taken);
-      state.set(id, afterAttachRoutine(now, data));
+      const next = afterAttachRoutine(now, data);
+      const touch = instructionTouched(now, next, false);
+      if (touch !== null) instructionAtOp.set(index, touch);
+      state.set(id, next);
       continue;
     }
     if (op.tool !== 'entity_update') continue;
@@ -1814,9 +1842,49 @@ async function autonomyChangedByCarrier(
       const revived = revivedByPatch(now, patch);
       if (revived !== null) out.set(index, revived);
     }
-    state.set(id, afterUpdate(now, patch));
+    const next = afterUpdate(now, patch);
+    const touch = instructionTouched(now, next, editsInstruction(patch));
+    if (touch !== null) instructionAtOp.set(index, touch);
+    state.set(id, next);
   }
-  return { changes: out, carrierAtOp };
+  return { changes: out, carrierAtOp, instructionAtOp };
+}
+
+/** Правит ли патч ТЕКСТ записи — тело или заголовок (V1.10, C1b-1). */
+function editsInstruction(input: Record<string, unknown>): boolean {
+  return input.body !== undefined || input.bodyDoc !== undefined || input.title !== undefined;
+}
+
+/**
+ * Стал ли ТЕКСТ записи инструкцией act-рутины ЭТОЙ операцией; `null` — нет.
+ *
+ * Вопрос задан состоянию ПОСЛЕ операции, и это исправление фикс-раунда 9 (Important-1
+ * ре-ревью раунда 8). Прежний гейт спрашивал «act-рутина ли цель СЕЙЧАС», и между ним и
+ * правилом оживления зиял зазор: правка тела записи БЕЗ носителя — не рутина, значит молча;
+ * возврат носителя записи на паузе — не оживляет, значит тоже молча; а вместе два обычных
+ * одиночных вызова собирали act-рутину с инструкцией, написанной моделью. Замок обходился
+ * перестановкой: обратный порядок карточку давал.
+ *
+ * Признак носителя обязателен (Р9): `orbis/routine_mode` переживает снятие аспекта, и без него
+ * правка заголовка обычной записи, когда-то бывшей рутиной, читалась бы как правка инструкции.
+ * Именно поэтому мало спросить «изменился ли текст» — вопрос про то, ЧЕМ этот текст станет.
+ */
+function instructionTouched(
+  before: TargetState,
+  after: TargetState,
+  edited: boolean,
+): InstructionTouch | null {
+  const actAfter = after.carrier && after.props[ROUTINE_MODE_PROPERTY] === 'act';
+  if (!actAfter) return null;
+  if (edited) return { title: before.title, reason: 'edit' };
+  const actBefore = before.carrier && before.props[ROUTINE_MODE_PROPERTY] === 'act';
+  if (actBefore) return null;
+  // СТАНОВЛЕНИЕ значимо ровно тогда, когда act-режим УЖЕ ЛЕЖАЛ на записи, а вызов лишь вернул
+  // ей носитель: тогда права и текст собираются молча, мимо гейта формы, — это и есть зазор.
+  // Если режим приносит сам вызов (`attach` с `mode:'act'` в `data`, патч по свойству), его
+  // держит гейт формы, и вторая фраза была бы шумом на каждом заведении act-рутины.
+  if (before.props[ROUTINE_MODE_PROPERTY] !== 'act') return null;
+  return { title: before.title, reason: 'becomes' };
 }
 
 /**
@@ -1831,6 +1899,21 @@ async function autonomyChangedByCarrier(
 interface CarrierScan {
   changes: Map<number, CarrierAutonomyChange>;
   carrierAtOp: Map<number, boolean>;
+  /**
+   * Гейт инструкции act-рутины (V1.10, C1b-1) — ЗДЕСЬ ЖЕ, а не своим запросом, и это фикс-раунд
+   * 9. Прежде он спрашивал «является ли запись act-рутиной СЕЙЧАС» отдельным `SELECT`'ом, и
+   * между ним и правилом оживления был зазор: правка тела записи БЕЗ носителя проходила молча
+   * (не рутина), возврат носителя на паузе — тоже молча (не оживляет), а вместе они собирали
+   * act-рутину с инструкцией от модели. Обратный порядок карточку давал, то есть замок
+   * обходился перестановкой. Вопрос теперь один и задаётся состоянию ПОСЛЕ операции — тому же
+   * свёрнутому, что и у оживления.
+   */
+  instructionAtOp: Map<number, InstructionTouch>;
+}
+
+/** Пустой результат скана — для путей, где состояние не спрашивают (владелец, умолчания). */
+function emptyCarrierScan(): CarrierScan {
+  return { changes: new Map(), carrierAtOp: new Map(), instructionAtOp: new Map() };
 }
 
 /** Состояние цели НА МОМЕНТ ОПЕРАЦИИ — ровно то, что читают предикаты замка. */
@@ -1838,6 +1921,23 @@ interface TargetState {
   carrier: boolean;
   archived: boolean;
   props: Record<string, unknown>;
+  /** Заголовок ДО операции: им карточка называет рутину, и переименование его не сдвигает. */
+  title: string;
+}
+
+/**
+ * Операция, после которой ТЕКСТ записи (тело и заголовок) — инструкция act-рутины, и привела
+ * его туда ЭТА операция. Два способа, и владельцу это разные события:
+ *  - `edit` — текст правят у записи, которая act-рутиной уже была или становится ею тем же
+ *    вызовом (C1b-1: инструкция уезжает в системный слой прогона целиком);
+ *  - `becomes` — текст не трогают, но запись СТАНОВИТСЯ act-рутиной, и её готовое тело с этого
+ *    мига и есть инструкция. Модель пишет тело обычной записи (никакой замок этого не держит и
+ *    держать не должен), а следующим вызовом возвращает носитель — и владелец, нажимая
+ *    «возобновить мою рутину», запускает инструкцию, написанную моделью.
+ */
+interface InstructionTouch {
+  title: string;
+  reason: 'edit' | 'becomes';
 }
 
 /**
@@ -1914,6 +2014,9 @@ function afterUpdate(now: TargetState, patch: Record<string, unknown>): TargetSt
       : now.carrier || namesRoutineAspect(patch, 'attach'),
     archived: typeof patch.archived === 'boolean' ? patch.archived : now.archived,
     props: propsAfterPatch(now.props, patch),
+    // Заголовок для карточки берётся ДО правки — владелец узнаёт рутину по имени, которое
+    // видит у себя, а не по тому, которое ей предлагает дать модель.
+    title: now.title,
   };
 }
 
@@ -1931,7 +2034,7 @@ function afterAttachRoutine(now: TargetState, data: Record<string, unknown>): Ta
   for (const property of [ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY, ROUTINE_STAGE_PROPERTY]) {
     delete props[property];
   }
-  return { carrier: true, archived: now.archived, props: { ...props, ...data } };
+  return { carrier: true, archived: now.archived, props: { ...props, ...data }, title: now.title };
 }
 
 /**
@@ -1997,49 +2100,6 @@ function sameAutonomyValue(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Заголовки act-рутин, чью ИНСТРУКЦИЮ (тело/заголовок) правят операции (V1.10, C1b-1) —
- * пусто, если таких нет. Смотрит только `entity_update` с `body`/`bodyDoc`/`title`: правка
- * расписания и режима идёт другими полями (её держит grantsAutonomy), пауза и метки
- * содержания автономии не меняют. Условие «рутина в act» — по БД, containment'ом по колонке
- * `props` (индекс `entities_props_gin`) под признаком носителя, под tx актора (RLS).
- * Признак обязателен (Р9): `orbis/routine_mode` переживает снятие аспекта рутины, и без
- * него правка заголовка обычной записи, когда-то бывшей рутиной, читалась бы как правка
- * инструкции act-рутины.
- *
- * ГОНКА ТА ЖЕ, что у `autonomyChangedByCarrier` выше, и здесь она названа своими словами, а
- * не одной перекрёстной ссылкой: `SELECT` идёт СВОЕЙ транзакцией и ДО записи, поэтому рутина,
- * переведённая в `act` между пробой и записью, правку своей инструкции этим гейтом не
- * задержит. Разбор цены и отказа от CAS-предусловия — в докблоке той функции.
- */
-async function actRoutineInstructionTargets(
-  ctx: ToolCallCtx,
-  ops: ReadonlyArray<{ tool: string; input: unknown }>,
-): Promise<string[]> {
-  const ids: string[] = [];
-  for (const op of ops) {
-    if (op.tool !== 'entity_update' || !isRecord(op.input)) continue;
-    const i = op.input;
-    if (i.body === undefined && i.bodyDoc === undefined && i.title === undefined) continue;
-    if (typeof i.id === 'string') ids.push(i.id);
-  }
-  if (ids.length === 0) return [];
-  const actRoutine = JSON.stringify({ [ROUTINE_MODE_PROPERTY]: 'act' });
-  return withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-    const rows = await tx
-      .select({ title: entities.title })
-      .from(entities)
-      .where(
-        and(
-          inArray(entities.id, ids),
-          sql`${ROUTINE_ASPECT} = ANY(${entities.aspects})`,
-          sql`${entities.props} @> ${actRoutine}::jsonb`,
-        ),
-      );
-    return rows.map((r) => r.title);
-  });
-}
-
-/**
  * Аспект назначения — четвёртый запретный объект рутины рядом с `ROUTINE_UNTOUCHABLE_OBJECTS`:
  * раздавать исполнителю работу — не то же самое, что править рутину, но запрещено рутине по
  * той же причине.
@@ -2079,7 +2139,7 @@ const ASSIGNMENT_ASPECT = 'orbis/assignment';
  * из них, иначе он будет чинить не то.
  *
  * Цели читаются одним SELECT по id — тем же способом и в том же месте конвейера, что и
- * `actRoutineInstructionTargets` строкой выше (своей транзакции пре-чек не заводит, RLS —
+ * пробой носителя выше (своей транзакции пре-чек не заводит, RLS —
  * под `withIdentity` актора). Containment тут не нужен: у пре-чека на руках готовые id, а
  * запретных аспектов четыре — читается СПИСОК `aspects[]`, то есть ровно то, чем аспект
  * теперь и является (§А1-1).
