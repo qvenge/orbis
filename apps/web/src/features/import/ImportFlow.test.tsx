@@ -14,7 +14,7 @@ import {
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
+import { type MockHandler, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { BudgetScreen } from '../budget/BudgetScreen';
 import { ImportFlow } from './ImportFlow';
 
@@ -72,23 +72,8 @@ const CONFIRM_RESULT: ImportConfirmResult = {
   unbudgeted: [{ categoryRef: C_FOOD, count: 2 }],
 };
 
-const category = (id: string, title: string, icon: string) => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: { 'orbis/category': { icon } },
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+const category = (id: string, title: string, icon: string) =>
+  wireEntity({ id, title, props: { 'orbis/icon': icon }, aspects: ['orbis/category'] });
 
 const settings = {
   timezone: 'Europe/Moscow',

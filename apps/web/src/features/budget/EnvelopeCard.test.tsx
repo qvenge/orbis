@@ -1,11 +1,17 @@
 // Task B2: карточка конверта (03-budget §3.1 пороги, §2.4 «—/день», §2.9 фазы,
 // §2.6 carryover-бейдж) + EnvelopeCreateSheet (создание конверта → entity.create
 // с аспектом orbis/budget, инвалидация budget, тост ошибки уникальности §2.1).
+
 import type { BudgetOverview, EnvelopeStatus } from '@orbis/shared';
+import { legacyAspectsToProps } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders } from '../../test/harness';
+import {
+  type MockHandler,
+  renderWithProviders,
+  wireEntity as wireFixture,
+} from '../../test/harness';
 import { useToastStore } from '../../ui/toast-store';
 import { BudgetScreen } from './BudgetScreen';
 import { EnvelopeCard, envelopeLevel, envelopePercent } from './EnvelopeCard';
@@ -13,23 +19,21 @@ import { EnvelopeCreateSheet } from './EnvelopeCreateSheet';
 
 // --- фикстуры -------------------------------------------------------------------------
 
-const wireEntity = (id: string, title: string, aspects: Record<string, unknown> = {}) => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: aspects,
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+/**
+ * Строка выдачи в ОБЕИХ формах сразу: `props`+`aspects` (§А1-1) и старая карта — проекция
+ * той же пары (`wireEntity`). Аргументом остаётся карта, потому что экраны Финансов читают
+ * её до Задачи 13c; `props` из неё выводит ТА ЖЕ таблица §А8, которой перевод делает сервер
+ * (`legacyAspectsToProps`), — второго списка соответствий здесь не заводится, и разъехаться
+ * двум формам негде.
+ */
+const wireEntity = (id: string, title: string, aspects: Record<string, unknown> = {}) => {
+  const translated = legacyAspectsToProps(aspects as Record<string, Record<string, unknown>>);
+  return wireFixture({
+    ...{ id, title },
+    props: translated.ok ? translated.props : {},
+    aspects: Object.keys(aspects),
+  });
+};
 
 function status(over: {
   spent: string;

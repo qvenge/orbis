@@ -41,7 +41,8 @@ import { PinVersionDialog, VersionsCard } from './VersionsCard';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 
-const GOAL = 'orbis/goal';
+/** Единица прогресса цели — СВОЙСТВО (§А1-1), а не поле аспекта `orbis/goal`. */
+const GOAL_UNIT = 'orbis/unit';
 const TASK = 'orbis/task';
 const ASSIGNMENT = 'orbis/assignment';
 const PROJECT = 'orbis/project';
@@ -159,10 +160,10 @@ export function DetailScreen({ entityId }: { entityId: string }) {
    * выражено флагом `enabled` — запрос уйдёт, когда станет известно, о чём спрашивать.
    */
   const loaded = get.data?.entity;
-  const isTicket =
-    loaded !== undefined &&
-    loaded.aspectsMap[TASK] !== undefined &&
-    loaded.aspectsMap[ASSIGNMENT] !== undefined;
+  // Гейты блоков — по СПИСКУ аспектов записи (§А1-1), а не по наличию ключа в карте полей:
+  // аспект перестал быть владельцем полей (Р9), и его наличие теперь отдельный факт —
+  // навешенный аспект без единого заполненного свойства прежде был неотличим от снятого.
+  const isTicket = (loaded?.aspects.includes(TASK) && loaded.aspects.includes(ASSIGNMENT)) === true;
   /**
    * V1.14. Рутина открывается ТЕМ ЖЕ экраном: тело — инструкция исполнителю, «Детали» — карточка
    * аспекта и история прогонов, «Тред» — обсуждение и карточки предложений. Своего экрана у неё
@@ -172,7 +173,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
    * рутины — такая же дочерняя запись с аспектом `orbis/agent-run`, и второй выборки для неё
    * заводить незачем.
    */
-  const isRoutine = loaded !== undefined && loaded.aspectsMap[ROUTINE_ASPECT] !== undefined;
+  const isRoutine = loaded?.aspects.includes(ROUTINE_ASPECT) === true;
   const { runs, lastRun } = useTicketRuns(entityId, isTicket || isRoutine);
 
   /**
@@ -191,8 +192,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   // процессом (деплой Render роняет контейнер посреди цикла) и остаётся `running` навсегда, а
   // сервер до следующего тика планировщика об этом не узнает. Владелец, открывший рутину,
   // чинит это сам, ничего об этом не зная.
-  const sweepTarget =
-    isTicket || isRoutine || (loaded !== undefined && loaded.aspectsMap[PROJECT] !== undefined);
+  const sweepTarget = isTicket || isRoutine || loaded?.aspects.includes(PROJECT) === true;
   const sweep = trpc.agentRun.sweep.useMutation({
     // Подметание МЕНЯЕТ граф (тикеты возвращаются в planned, прогоны становятся abandoned) —
     // экран обязан показать результат сразу, а не через минуту протухания списков. Но только
@@ -253,10 +253,9 @@ export function DetailScreen({ entityId }: { entityId: string }) {
   //
   // Полоса прогресса — единственное исключение, и осознанное: у цели прогресс это то, ради чего
   // её открывают, и «50%, 150 000 из 300 000» во второй вкладке ухудшило бы главный экран целей
-  // ради чистоты раскладки. Единица достаётся из аспекта ЗДЕСЬ, заново: в AspectCards она
-  // бралась из тела цикла по аспектам, а цикла тут нет.
-  const goalUnit = (entity.aspectsMap as Record<string, Record<string, unknown> | undefined>)[GOAL]
-    ?.unit;
+  // ради чистоты раскладки. Единица — свойство записи (§А1-1), и достаётся она по своему id,
+  // а не «из аспекта цели»: аспекта у значения больше нет.
+  const goalUnit = entity.props[GOAL_UNIT];
   const entityTab = (
     <div className="flex flex-col gap-6 px-4 pb-10 pt-5 md:px-6">
       {/* Notion-style шапка страницы: крупная emoji-иконка над заголовком. Нет emoji —
@@ -314,9 +313,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           прогон→прогон внутри вкладки меняет лишь проп, — а лента держит своё состояние
           (открытое подтверждение отката, результат прошлого). Без key оно переехало бы на
           соседний прогон. */}
-      {entity.aspectsMap[RUN_ASPECT] !== undefined && (
-        <RunFeed key={`run-${entity.id}`} entity={entity} />
-      )}
+      {entity.aspects.includes(RUN_ASPECT) && <RunFeed key={`run-${entity.id}`} entity={entity} />}
       {/* Тело — РАЗМОНТИРУЕМОЕ по key. То же правило, что несла прежняя секция тела, и по той
           же причине, только цена ошибки выросла: роутер монтирует DetailScreen БЕЗ key
           (router.tsx), переход entity→entity меняет лишь проп, — а `useBodySave` при смене
@@ -354,7 +351,7 @@ export function DetailScreen({ entityId }: { entityId: string }) {
           именно этим жестом задача становится тикетом. И у любой записи, где назначение уже
           ЕСТЬ: сервер orbis/task для него не требует, а общая карточка свойств аспект прячет —
           без этой ветки назначение на заметке было бы невидимо и неснимаемо. */}
-      {(entity.aspectsMap[TASK] !== undefined || entity.aspectsMap[ASSIGNMENT] !== undefined) && (
+      {(entity.aspects.includes(TASK) || entity.aspects.includes(ASSIGNMENT)) && (
         <AssignmentCard entity={entity} />
       )}
       <AspectCards entity={entity} />

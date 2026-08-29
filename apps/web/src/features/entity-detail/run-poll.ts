@@ -6,22 +6,25 @@
 // опрос выключает — дальше данные меняет только владелец, и обычной инвалидации достаточно.
 
 /**
- * Тот же id, что `RUN_ASPECT` в useTicketRuns.ts, — литералом, а не импортом: useTicketRuns
- * сам подключает этот модуль, и импорт в обратную сторону замыкал бы цикл модулей.
+ * Исход прогона — id СВОЙСТВА (§А1-1), литералом, а не импортом: `useTicketRuns` сам
+ * подключает этот модуль, и импорт в обратную сторону замыкал бы цикл модулей. Дубль
+ * намеренный и остаётся им.
+ *
+ * Признак «это вообще прогон» отдельного ключа больше не требует: у сущности, которая не
+ * прогон, свойства исхода нет — прежде для того же ответа приходилось сперва найти аспект в
+ * карте, а потом поле в нём.
  */
-const RUN_ASPECT = 'orbis/agent-run';
+const RUN_OUTCOME = 'orbis/run_outcome';
 
 /** Период опроса. Три секунды: шаг модели дольше, а лишний запрос дешевле застывшего экрана. */
 export const RUN_POLL_MS = 3000;
 
 /**
- * Интервал `refetchInterval` react-query по аспектам сущности: число, пока это идущий прогон,
- * `false` — иначе (не прогон, терминален, данных ещё нет). Функция чистая — её и проверяет
- * тест; подключение — useEntityDetail (экран прогона) и useTicketRuns (последний прогон
- * рутины/тикета: от него зависит блок состояния и кнопка «Прогнать сейчас»).
+ * Интервал `refetchInterval` react-query по свойствам сущности: число, пока это идущий
+ * прогон, `false` — иначе (не прогон, терминален, данных ещё нет). Функция чистая — её и
+ * проверяет тест; подключение — useEntityDetail (экран прогона) и useTicketRuns (последний
+ * прогон рутины/тикета: от него зависит блок состояния и кнопка «Прогнать сейчас»).
  */
-export function runPollInterval(aspects: Record<string, unknown> | undefined): number | false {
-  const run = aspects?.[RUN_ASPECT];
-  if (typeof run !== 'object' || run === null) return false;
-  return (run as { outcome?: unknown }).outcome === 'running' ? RUN_POLL_MS : false;
+export function runPollInterval(props: Record<string, unknown> | undefined): number | false {
+  return props?.[RUN_OUTCOME] === 'running' ? RUN_POLL_MS : false;
 }

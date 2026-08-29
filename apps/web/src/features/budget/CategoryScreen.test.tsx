@@ -3,34 +3,38 @@
 // мини-тренд по budget.categoryTrend (простые div-бары + штрих лимита), транзакции
 // конверта (children_of, NativeRow §3.6, 🔁 у recurring-инстансов), quick-add с
 // предзаданной категорией (B4, §3.6).
+
 import type { CategoryTrendPoint, EnvelopeStatus } from '@orbis/shared';
+import { legacyAspectsToProps } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { App } from '../../App';
 import { installHistorySync } from '../../app/history';
 import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders } from '../../test/harness';
+import {
+  type MockHandler,
+  renderWithProviders,
+  wireEntity as wireFixture,
+} from '../../test/harness';
 import { CategoryScreen } from './CategoryScreen';
 
 // --- фикстуры -------------------------------------------------------------------------
 
-const ent = (id: string, title: string, aspects: Record<string, unknown> = {}, body = '') => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body,
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: aspects,
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+/**
+ * Строка выдачи в ОБЕИХ формах сразу: `props`+`aspects` (§А1-1) и старая карта — проекция
+ * той же пары (`wireEntity`). Аргументом остаётся карта, потому что экраны Финансов читают
+ * её до Задачи 13c; `props` из неё выводит ТА ЖЕ таблица §А8, которой перевод делает сервер
+ * (`legacyAspectsToProps`), — второго списка соответствий здесь не заводится, и разъехаться
+ * двум формам негде.
+ */
+const ent = (id: string, title: string, aspects: Record<string, unknown> = {}, body = '') => {
+  const translated = legacyAspectsToProps(aspects as Record<string, Record<string, unknown>>);
+  return wireFixture({
+    ...{ id, title, body },
+    props: translated.ok ? translated.props : {},
+    aspects: Object.keys(aspects),
+  });
+};
 
 const category = ent(
   'cat-1',

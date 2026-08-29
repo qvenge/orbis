@@ -1,8 +1,8 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
 import type { MockHandler } from '../../test/harness';
-import { renderWithProviders, trpcError } from '../../test/harness';
-import { registryReply } from '../../test/registry';
+import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { BUILTIN_REGISTRY, registryReply } from '../../test/registry';
 import { NativeRow } from './NativeRow';
 
 /**
@@ -12,30 +12,22 @@ import { NativeRow } from './NativeRow';
  */
 const registryHandler: MockHandler = (path) => registryReply(path) ?? {};
 
-const base = {
-  id: 'e1',
-  ownerId: 'u',
-  title: 'Обед',
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-};
-
 // Категория-сущность в форме ответа entity.query (тот же список, что у пикера D3b).
-const category = (id: string, title: string) => ({
-  ...base,
-  id,
-  title,
-  aspectsMap: { 'orbis/category': { icon: '🍔' } },
-});
+const category = (id: string, title: string) =>
+  wireEntity({ id, title, props: { 'orbis/icon': '🍔' }, aspects: ['orbis/category'] });
 
-const financial = (fields: Record<string, unknown>) =>
-  ({ ...base, aspectsMap: { 'orbis/financial': fields } }) as never;
+/**
+ * Финансовая строка: значения — плоско в `props` по id свойства, аспект — СПИСКОМ (§А1-1).
+ * Форму собирает фабрика производителя, а не рукописный объект.
+ */
+const financial = (props: Record<string, unknown>) =>
+  wireEntity({ id: 'e1', title: 'Обед', props, aspects: ['orbis/financial'] }) as never;
+
+const row = (
+  props: Record<string, unknown>,
+  aspects: string[],
+  over: Record<string, unknown> = {},
+) => wireEntity({ id: 'e1', title: 'Обед', props, aspects, ...over }) as never;
 
 const CAT_FOOD = 'a3d6d4b2-7f3a-4a1f-9c1e-2d5b8f0a1c77';
 // Ссылка в категорию, которой в списке нет — запасной вариант «показать uuid».
@@ -44,7 +36,11 @@ const CAT_GHOST = 'd1f0c8e5-4b2a-4d6e-8f01-9a7c3b5e2d44';
 test('financial: сумма с минусом и тоном danger', () => {
   renderWithProviders(
     <NativeRow
-      entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_FOOD })}
+      entity={financial({
+        'orbis/amount': '340.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': CAT_FOOD,
+      })}
       onToggleTask={() => {}}
     />,
     registryHandler,
@@ -57,7 +53,11 @@ test('financial: сумма с минусом и тоном danger', () => {
 test('financial: income → плюс и позитивный тон', () => {
   renderWithProviders(
     <NativeRow
-      entity={financial({ amount: '340.00', direction: 'income', category_ref: 'cat-salary' })}
+      entity={financial({
+        'orbis/amount': '340.00',
+        'orbis/direction': 'income',
+        'orbis/finance_category': 'cat-salary',
+      })}
       onToggleTask={() => {}}
     />,
     registryHandler,
@@ -72,7 +72,11 @@ test('financial: income → плюс и позитивный тон', () => {
 test('financial: бейдж — НАЗВАНИЕ категории, а не uuid (D6c п.2)', async () => {
   const { calls } = renderWithProviders(
     <NativeRow
-      entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_FOOD })}
+      entity={financial({
+        'orbis/amount': '340.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': CAT_FOOD,
+      })}
       onToggleTask={() => {}}
     />,
     (path) => (path === 'entity.query' ? [category(CAT_FOOD, 'Еда')] : {}),
@@ -92,11 +96,19 @@ test('financial: категории нет в списке → uuid как за�
   renderWithProviders(
     <>
       <NativeRow
-        entity={financial({ amount: '10.00', direction: 'expense', category_ref: CAT_FOOD })}
+        entity={financial({
+          'orbis/amount': '10.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CAT_FOOD,
+        })}
         onToggleTask={() => {}}
       />
       <NativeRow
-        entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_GHOST })}
+        entity={financial({
+          'orbis/amount': '340.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': CAT_GHOST,
+        })}
         onToggleTask={() => {}}
       />
     </>,
@@ -116,7 +128,11 @@ test('financial: пока категории грузятся, бейджа с u
   });
   renderWithProviders(
     <NativeRow
-      entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_FOOD })}
+      entity={financial({
+        'orbis/amount': '340.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': CAT_FOOD,
+      })}
       onToggleTask={() => {}}
     />,
     (path) => (path === 'entity.query' ? categories : {}),
@@ -132,7 +148,7 @@ test('financial: пока категории грузятся, бейджа с u
 test('нефинансовая строка список категорий не запрашивает', async () => {
   const { calls } = renderWithProviders(
     <NativeRow
-      entity={{ ...base, aspectsMap: { 'orbis/task': { status: 'inbox' } } } as never}
+      entity={row({ 'orbis/task_status': 'inbox' }, ['orbis/task'])}
       onToggleTask={() => {}}
     />,
     registryHandler,
@@ -144,9 +160,7 @@ test('нефинансовая строка список категорий не
 test('task: рендерит чекбокс', () => {
   renderWithProviders(
     <NativeRow
-      entity={
-        { ...base, aspectsMap: { 'orbis/task': { status: 'inbox', priority: 'high' } } } as never
-      }
+      entity={row({ 'orbis/task_status': 'inbox', 'orbis/priority': 'high' }, ['orbis/task'])}
       onToggleTask={() => {}}
     />,
     registryHandler,
@@ -154,12 +168,59 @@ test('task: рендерит чекбокс', () => {
   expect(screen.getByRole('checkbox')).toBeInTheDocument();
 });
 
+/**
+ * «Первый аспект» generic-строки — первый по RANK РЕЕСТРА, а не первый ключ объекта.
+ *
+ * Прежде порядок задавала карта `aspects_legacy`, то есть порядок, в котором аспекты
+ * навешивали: одна и та же запись показывала разные поля у двух владельцев, и поймать это
+ * было нечем. `entity.aspects` так же неупорядочен — поэтому порядок берётся у выдачи
+ * реестра (она сортирована по `rank`, §А2-2).
+ */
+test('generic: строку подписывает аспект с наименьшим rank, а не первый в списке записи', async () => {
+  // `orbis/note` (rank 4) объявлен ПОСЛЕ `orbis/repo` (rank 11) — если бы порядок брался у
+  // записи, шапка показала бы поля репозитория.
+  renderWithProviders(
+    <NativeRow
+      entity={row({ 'orbis/repo_url': 'https://git/x', 'orbis/content_type': 'markdown' }, [
+        'orbis/repo',
+        'orbis/note',
+      ])}
+      onToggleTask={() => {}}
+    />,
+    registryHandler,
+  );
+  expect(await screen.findByText('Вид текста:')).toBeInTheDocument();
+  expect(screen.queryByText('URL репозитория:')).toBeNull();
+});
+
+test('generic: состав keyFields берётся из СНИМКА реестра, а не из статики кода', async () => {
+  // Подмена `view_config.keyFields` в ответе реестра обязана менять шапку: иначе состав
+  // строки задавала бы вторая правда, которую владелец поменять не может.
+  const patched = {
+    ...BUILTIN_REGISTRY,
+    aspects: BUILTIN_REGISTRY.aspects.map((a) =>
+      a.id === 'orbis/note'
+        ? { ...a, viewConfig: { ...a.viewConfig, keyFields: ['orbis/pinned'] } }
+        : a,
+    ),
+  };
+  renderWithProviders(
+    <NativeRow
+      entity={row({ 'orbis/content_type': 'markdown', 'orbis/pinned': true }, ['orbis/note'])}
+      onToggleTask={() => {}}
+    />,
+    (path) => (path === 'registry.effective' ? patched : (registryReply(path) ?? {})),
+  );
+  expect(await screen.findByText('Закреплена:')).toBeInTheDocument();
+  expect(screen.queryByText('Вид текста:')).toBeNull();
+  // Значение печатается ПО ТИПУ свойства: у булева это «да», а не `true`.
+  expect(screen.getByText('да')).toBeInTheDocument();
+});
+
 test('generic: 2-3 keyFields из реестра', () => {
   renderWithProviders(
     <NativeRow
-      entity={
-        { ...base, aspectsMap: { 'orbis/note': { content_type: 'text', pinned: true } } } as never
-      }
+      entity={row({ 'orbis/content_type': 'text', 'orbis/pinned': true }, ['orbis/note'])}
       onToggleTask={() => {}}
     />,
     registryHandler,
@@ -174,18 +235,14 @@ test('generic: 2-3 keyFields из реестра', () => {
 test('generic: незаполненное keyField не печатается прочерком', async () => {
   renderWithProviders(
     <NativeRow
-      entity={
+      entity={row(
         {
-          ...base,
-          aspectsMap: {
-            'orbis/goal': {
-              progress_source: { query: 'q', aggregate: 'count' },
-              target_value: '300000.00',
-              unit: '₽',
-            },
-          },
-        } as never
-      }
+          'orbis/progress_source': { query: { filter: {} }, aggregate: 'count' },
+          'orbis/target_value': '300000.00',
+          'orbis/unit': '₽',
+        },
+        ['orbis/goal'],
+      )}
       onToggleTask={() => {}}
     />,
     registryHandler,
@@ -204,12 +261,7 @@ test('generic: незаполненное keyField не печатается п�
 test('generic: ключи подписаны по-русски, а не сырой латиницей', async () => {
   renderWithProviders(
     <NativeRow
-      entity={
-        {
-          ...base,
-          aspectsMap: { 'orbis/goal': { target_value: '300000.00', unit: '₽' } },
-        } as never
-      }
+      entity={row({ 'orbis/target_value': '300000.00', 'orbis/unit': '₽' }, ['orbis/goal'])}
       onToggleTask={() => {}}
     />,
     registryHandler,
@@ -231,7 +283,7 @@ test('generic: ключи подписаны по-русски, а не сыро
 test('generic: поле, которого не знал прежний словарь, подписано реестром', async () => {
   renderWithProviders(
     <NativeRow
-      entity={{ ...base, aspectsMap: { 'orbis/note': { content_type: 'text' } } } as never}
+      entity={row({ 'orbis/content_type': 'text' }, ['orbis/note'])}
       onToggleTask={() => {}}
     />,
     registryHandler,
@@ -245,10 +297,11 @@ test('generic: поле, которого не знал прежний слов�
 // больше не распознаётся» не было нигде: запись оставалась в «Памяти AI» и выглядела
 // живой, хотя ни fast-path, ни резолв импорта её уже не применяли.
 const memory = (kind: string, title: string) =>
-  ({
-    ...base,
+  wireEntity({
+    id: 'e1',
     title,
-    aspectsMap: { 'orbis/memory': { kind, scope: 'orbis/money-movement' } },
+    props: { 'orbis/memory_kind': kind, 'orbis/rule_scope': 'orbis/money-movement' },
+    aspects: ['orbis/memory'],
   }) as never;
 
 test('память: правило с распознанным форматом предупреждения не показывает', () => {
@@ -346,7 +399,11 @@ test('память: в списке (без inline-правки) предупр�
 test('категория: отказ списка категорий — бейджа нет, uuid не печатается', async () => {
   renderWithProviders(
     <NativeRow
-      entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_FOOD })}
+      entity={financial({
+        'orbis/amount': '340.00',
+        'orbis/direction': 'expense',
+        'orbis/finance_category': CAT_FOOD,
+      })}
       onToggleTask={() => {}}
     />,
     (path) => {

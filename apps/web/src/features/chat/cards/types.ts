@@ -1,3 +1,12 @@
+/**
+ * Карточка записи (02 §2.3). Оба адреса — НОВОЙ правды (§А1-1), и это не косметика:
+ * `aspects` — просто список навешенного (полей у него больше нет, Р9), а ключи `keyFields`
+ * это id СВОЙСТВ (`orbis/amount`), а не имена полей старой схемы. Собирает их
+ * `keyFieldsByAspect`/`entityCard` (`tools/dispatch.ts`) по `view_config.keyFields` реестра
+ * и `props` записи; подпись каждому ставит реестр (§А9-2), а не словарь в коде. Прежние
+ * ключи (`category_ref`, `occurred_on`) не совпадали ни с одним ключом ответа — и строка
+ * остатка конверта не рисовалась НИКОГДА.
+ */
 export type EntityCardData = {
   kind: 'entity_card';
   entityId: string;
@@ -13,6 +22,12 @@ export type QueryResultData = {
   entityIds: string[];
   aggregate?: { op: 'sum' | 'count'; value: string };
 };
+/**
+ * Плашка подтверждения. Ключ `diff` — id СВОЙСТВА либо имя поля записи (`title`, `tags`,
+ * `aspects`): производитель (`entityUpdatePreviewDiff`, `policy/confirmation.ts`) раскрывает
+ * `props`/`unset` ПОШТУЧНО (§А7-4), потому что одна строка «props: {объект} → {объект}» не
+ * называла бы, что именно подтверждают. Подпись ставит реестр (§А9-2).
+ */
 export type ConfirmationData = {
   kind: 'confirmation_card';
   mode: 'preview' | 'explicit';

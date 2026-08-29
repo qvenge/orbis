@@ -10,7 +10,7 @@
 import { formatDate, plural } from '../../lib/format';
 import { trpc } from '../../trpc';
 import { Badge } from '../../ui/Badge';
-import { RUN_OUTCOME_LABELS, runAspect, type TicketRun } from './useTicketRuns';
+import { RUN_OUTCOME_LABELS, type TicketRun } from './useTicketRuns';
 
 /**
  * Судьба предложения строкой истории (V1.6). Исход прогона о ней не говорит НИЧЕГО: «готово»
@@ -65,21 +65,26 @@ export function RunsList({
       </p>
       <ul className="flex flex-col">
         {runs.map((run) => {
-          const a = runAspect(run) ?? {};
-          const outcome = typeof a.outcome === 'string' ? a.outcome : '';
-          const startedAt = typeof a.started_at === 'string' ? a.started_at : run.createdAt;
-          const steps = typeof a.step_count === 'number' ? a.step_count : 0;
+          // Значения прогона — плоско в `props` по id свойства (§А1-1).
+          const a = run.props;
+          const outcome = typeof a['orbis/run_outcome'] === 'string' ? a['orbis/run_outcome'] : '';
+          const startedAt =
+            typeof a['orbis/run_started_at'] === 'string'
+              ? a['orbis/run_started_at']
+              : run.createdAt;
+          const steps = typeof a['orbis/step_count'] === 'number' ? a['orbis/step_count'] : 0;
           // Статус предложения — из аспекта прогона (он источник правды о судьбе, V1.6):
           // отдельного запроса строка истории не стоит. Незнакомое значение печатаем сырым —
           // та же честная деградация, что у исходов.
+          const rawProposal = a['orbis/run_proposal'];
           const proposal =
-            typeof a.proposal === 'object' && a.proposal !== null
-              ? (a.proposal as { status?: unknown }).status
+            typeof rawProposal === 'object' && rawProposal !== null
+              ? (rawProposal as { status?: unknown }).status
               : undefined;
           const proposalLabel =
             typeof proposal === 'string' ? (PROPOSAL_LABELS[proposal] ?? proposal) : undefined;
           // Грант — ПОДПИСЬЮ: сырой uuid в строке истории не отвечает на вопрос «кто это делал».
-          const grant = grants.data?.find((g) => g.id === a.grant_id);
+          const grant = grants.data?.find((g) => g.id === a['orbis/grant']);
           return (
             <li key={run.id}>
               <button
@@ -104,7 +109,7 @@ export function RunsList({
                     чего-то ждут. Числа единиц в нём нет намеренно — у списка их не бывает
                     (флажок скалярный, ОЧ.6), а проба на каждую строку стоила бы Seq Scan под
                     RLS; точное число читается на экране самого прогона. */}
-                {a.undecided === true && <Badge tone="accent">пачка решений</Badge>}
+                {a['orbis/undecided'] === true && <Badge tone="accent">пачка решений</Badge>}
                 <span className="text-text-secondary">· {stepsLabel(steps)}</span>
                 {showGrant && grant !== undefined && (
                   <span className="break-words text-text-secondary">· {grant.label}</span>

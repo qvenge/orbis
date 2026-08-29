@@ -3,7 +3,7 @@ import { lazy, Suspense } from 'react';
 import { expect, test, vi } from 'vitest';
 import { App } from '../App';
 import { useNav } from '../state/navigation';
-import { type MockHandler, renderWithProviders } from '../test/harness';
+import { type MockHandler, renderWithProviders, wireEntity } from '../test/harness';
 import { ChunkErrorBoundary } from './ChunkErrorBoundary';
 import { installChunkReload } from './chunk-reload';
 import { ActiveScreen } from './router';
@@ -152,23 +152,13 @@ test('вкладка Budget: сперва ScreenFallback, потом сам эк
 // Второй разрез: экран сущности. Доказательство лени здесь не в заглушке (её титул «…»
 // совпадает с собственным кадром загрузки DetailScreen, DetailScreen.tsx:79), а в том, что
 // на первом синхронном кадре экран не успел сделать НИ ОДНОГО запроса: модуля ещё нет.
-const detailEntity = {
+const detailEntity = wireEntity({
   id: 'e1',
-  ownerId: 'u',
   title: 'Задача',
-  emoji: null,
   body: 'тело',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: { 'orbis/task': { status: 'inbox' } },
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: '2026-07-05T00:00:00.000Z',
-  updatedAt: '2026-07-05T10:00:00.000Z',
-  archived: false,
-};
+  props: { 'orbis/task_status': 'inbox' },
+  aspects: ['orbis/task'],
+});
 const detailHandler: MockHandler = (path) => {
   if (path === 'entity.get')
     return { entity: detailEntity, relations: [], thread: { threadId: 'th1', messages: [] } };

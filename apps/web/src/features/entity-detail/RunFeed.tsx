@@ -21,7 +21,7 @@ import { ProposalCard } from '../chat/cards/ProposalCard';
 import { num, obj, str } from './aspect-read';
 import { RoutineQuestionBlock } from './RoutineQuestionBlock';
 import { RunDecisionsBlock } from './RunDecisionsBlock';
-import { RUN_ASPECT, RUN_OUTCOME_LABELS } from './useTicketRuns';
+import { RUN_OUTCOME_LABELS } from './useTicketRuns';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 
@@ -159,30 +159,33 @@ export function RunFeed({ entity }: { entity: Entity }) {
   const cancelId = useId();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
 
-  const run = entity.aspectsMap[RUN_ASPECT] ?? {};
-  const outcome = str(run.outcome) ?? '';
-  const grantId = str(run.grant_id);
-  const startedAt = str(run.started_at);
-  const finishedAt = str(run.finished_at);
-  const steps = readSteps(run.steps);
-  const checkpoint = obj(run.checkpoint);
+  // Значения прогона — плоско в `props` по id свойства (§А1-1): «сперва аспект, потом поле в
+  // нём» больше нет, адрес у значения ОДИН и тот же во всех местах — здесь, в запросах, в
+  // тулах и в журнале.
+  const run = entity.props;
+  const outcome = str(run['orbis/run_outcome']) ?? '';
+  const grantId = str(run['orbis/grant']);
+  const startedAt = str(run['orbis/run_started_at']);
+  const finishedAt = str(run['orbis/run_finished_at']);
+  const steps = readSteps(run['orbis/run_steps']);
+  const checkpoint = obj(run['orbis/run_checkpoint']);
   const question = str(checkpoint?.question);
-  const reply = obj(run.reply);
+  const reply = obj(run['orbis/run_reply']);
   const replyText = str(reply?.text);
   /**
    * Поля прогона РУТИНЫ (V1). Исполнитель у него внутренний и всегда один, поэтому вместо
    * гранта в шапке стоит сама рутина, а вместо одного лишь «начат» — слот расписания, за
    * который прогон отвечает, и номер попытки.
    */
-  const routineId = str(run.routine_id);
-  const bucket = str(run.bucket);
-  const attempt = num(run.attempt);
-  const failNote = str(run.fail_note);
-  const proposal = obj(run.proposal);
-  const usage = usageLine(run.usage);
-  const sessionUrl = str(run.session_url);
-  const report = str(run.report);
-  const abandonNote = str(run.abandon_note);
+  const routineId = str(run['orbis/run_routine']);
+  const bucket = str(run['orbis/run_bucket']);
+  const attempt = num(run['orbis/run_attempt']);
+  const failNote = str(run['orbis/fail_note']);
+  const proposal = obj(run['orbis/run_proposal']);
+  const usage = usageLine(run['orbis/run_usage']);
+  const sessionUrl = str(run['orbis/session_url']);
+  const report = str(run['orbis/run_report']);
+  const abandonNote = str(run['orbis/abandon_note']);
 
   // Список доступов — ПО УЖЕ ЖИВОМУ ключу кэша (он же у карточки назначения и истории
   // прогонов): свою сеть лента добавляет только там, где грант вообще есть.

@@ -15,7 +15,7 @@ import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { str, strArray } from './aspect-read';
 import { useEntityUpdate } from './useEntityDetail';
-import { RUN_OUTCOME_LABELS, runAspect, type TicketRun } from './useTicketRuns';
+import { RUN_OUTCOME_LABELS, type TicketRun } from './useTicketRuns';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 
@@ -85,8 +85,9 @@ export function RoutineStatusBlock({
   const utils = trpc.useUtils();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
 
-  const routine = entity.aspectsMap[ROUTINE_ASPECT] ?? {};
-  const paused = str(routine.stage) === 'paused';
+  // Значения рутины — плоско в `props` по id свойства (§А1-1).
+  const routine = entity.props;
+  const paused = str(routine['orbis/routine_stage']) === 'paused';
 
   /**
    * Состояние — ОДНИМ запросом (V1.14): следующее срабатывание считается по расписанию,
@@ -119,12 +120,12 @@ export function RoutineStatusBlock({
   // патч, откат при отказе и инвалидация графа уже написаны там (useEntityUpdate).
   const { mutation: update } = useEntityUpdate(entity.id);
 
-  const run = lastRun === undefined ? undefined : runAspect(lastRun);
-  const outcome = str(run?.outcome);
+  const run = lastRun?.props;
+  const outcome = str(run?.['orbis/run_outcome']);
   // «Идёт» — по ПОСЛЕДНЕМУ прогону: больше одного running на рутину сервер не заводит (V1.3),
   // поэтому идущий прогон всегда самый свежий.
   const running = outcome === 'running';
-  const startedAt = str(run?.started_at) ?? lastRun?.createdAt;
+  const startedAt = str(run?.['orbis/run_started_at']) ?? lastRun?.createdAt;
 
   /**
    * Следующее срабатывание. Пауза отвечает на этот вопрос САМА и без сервера: рутина на паузе
@@ -155,9 +156,12 @@ export function RoutineStatusBlock({
       aria-label="Состояние рутины"
       className="flex flex-col gap-2 rounded-control border border-line bg-surface-2/40 p-4"
     >
-      <Row label="Режим">{modeLabel(str(routine.mode), strArray(routine.allowed_tools))}</Row>
+      <Row label="Режим">
+        {modeLabel(str(routine['orbis/routine_mode']), strArray(routine['orbis/allowed_tools']))}
+      </Row>
       <Row label="Расписание">
-        {str(routine.at) ?? '—'} · {daysLabel(strArray(routine.days))}
+        {str(routine['orbis/routine_at']) ?? '—'} ·{' '}
+        {daysLabel(strArray(routine['orbis/routine_days']))}
       </Row>
       <Row label="Следующее срабатывание">{next}</Row>
       {/* Неразобранная пачка (D42) — рядом со «следующим срабатыванием» и по той же причине:
@@ -218,9 +222,10 @@ export function RoutineStatusBlock({
             update.mutate(
               {
                 id: entity.id,
-                // Патч мержится по полям (§9.2): расписание, режим и права пауза не трогает —
-                // возобновлённая рутина обязана вернуться ровно к прежнему расписанию.
-                aspects: { [ROUTINE_ASPECT]: { stage: paused ? 'active' : 'paused' } },
+                // Патч мержится по КЛЮЧАМ свойств (§А1-1): расписание, режим и права пауза
+                // не трогает — возобновлённая рутина обязана вернуться ровно к прежнему
+                // расписанию.
+                props: { 'orbis/routine_stage': paused ? 'active' : 'paused' },
               },
               // Колбэк уровня ВЫЗОВА: обзор гасит только он, потому что общая обвязка
               // entity.update о рутинах ничего не знает и знать не должна.

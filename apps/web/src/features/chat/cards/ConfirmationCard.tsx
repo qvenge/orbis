@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { invalidateGraph } from '../../../lib/invalidate';
+import { fieldLabel } from '../../../lib/registry/labels';
+import { useRegistry } from '../../../lib/registry/useRegistry';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
@@ -18,6 +20,14 @@ export function ConfirmationCard({
   now?: number; // инъектируемое время (детерминизм тестов); по умолчанию — настенные часы
 }) {
   const [resolved, setResolved] = useState<null | 'approved' | 'rejected'>(null);
+  /**
+   * Подписи строк диффа — из реестра (§А9-2). Ключи в `diff` это id СВОЙСТВ и имена полей
+   * записи (`entityUpdatePreviewDiff` раскрывает `props`/`unset` ПОШТУЧНО с §А7-4), и
+   * печатать их как есть значило бы просить владельца подтвердить `orbis/task_status` —
+   * машинный адрес там, где соседняя карточка того же треда пишет «Состояние задачи».
+   * Промах реестра оставляет сырой адрес: значение существует, и потерять его хуже.
+   */
+  const registry = useRegistry();
   const [postError, setPostError] = useState<string | null>(null);
   // Клиентский expiry — только UI; approve всё равно ревалидирует на сервере (D-a).
   const expired = now - new Date(createdAt).getTime() > EXPIRY_MS;
@@ -47,7 +57,7 @@ export function ConfirmationCard({
         <dl className="flex flex-col gap-1 text-xs">
           {Object.entries(card.diff).map(([field, { before, after }]) => (
             <div key={field} className="flex gap-2">
-              <dt>{field}:</dt>
+              <dt>{fieldLabel(registry, field)}:</dt>
               <dd className="text-danger line-through">{String(before)}</dd>
               <dd className="text-accent">{String(after)}</dd>
             </div>

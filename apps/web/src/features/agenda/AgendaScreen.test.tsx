@@ -13,7 +13,7 @@ import { App } from '../../App';
 import { ActiveScreen } from '../../app/router';
 import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
 import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
+import { type MockHandler, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { todayISO } from '../budget/useBudget';
 import { AgendaScreen } from './AgendaScreen';
@@ -47,23 +47,13 @@ const dayLabel = (day: string) =>
     new Date(`${day}T00:00:00Z`),
   );
 
-const ent = (id: string, title: string, aspects: Record<string, Record<string, unknown>>) => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: aspects,
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+/**
+ * Строка выдачи `entity.query`: значения — плоско в `props` по id свойства, аспекты —
+ * СПИСКОМ (§А1-1). Форму собирает фабрика производителя (`wireEntity`), поэтому старая карта
+ * в фикстуре — проекция этой же пары, а не второй рукописный источник.
+ */
+const ent = (id: string, title: string, props: Record<string, unknown>, aspects: string[]) =>
+  wireEntity({ id, title, props, aspects });
 
 const settings = {
   timezone: TZ,
@@ -166,9 +156,9 @@ test('тексты Agenda разбираются каноном §А5-3 без �
 test('§8.1: прошедшее чистое событие не попадает ни в «Просроченное», ни в дневные секции', async () => {
   // Событие вчера: обе выборки «Просроченного» требуют aspect=orbis/task, поэтому
   // сервер его не отдаст; окно дней клиент режет сам — вчерашний день вне горизонта.
-  const past = ent('ev-past', 'Прошедший созвон', {
-    'orbis/schedule': { start_at: at(yesterday, '10:00') },
-  });
+  const past = ent('ev-past', 'Прошедший созвон', { 'orbis/start_at': at(yesterday, '10:00') }, [
+    'orbis/schedule',
+  ]);
   renderWithProviders(<AgendaScreen />, agendaHandler({ days: [past] }));
 
   await waitFor(() => expect(daySection(today)).toBeInTheDocument());
@@ -177,9 +167,12 @@ test('§8.1: прошедшее чистое событие не попадае�
 });
 
 test('§8.2: незакрытая задача с прошедшим due_date — в «Просроченном» и не в дневных секциях', async () => {
-  const task = ent('t1', 'Закончить API', {
-    'orbis/task': { status: 'in_progress', due_date: yesterday },
-  });
+  const task = ent(
+    't1',
+    'Закончить API',
+    { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
+    ['orbis/task'],
+  );
   renderWithProviders(<AgendaScreen />, agendaHandler({ overdueDue: [task] }));
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
@@ -189,10 +182,16 @@ test('§8.2: незакрытая задача с прошедшим due_date �
 });
 
 test('§8.3: task+schedule с обеими прошедшими датами — одна строка «Просроченного»', async () => {
-  const both = ent('t2', 'Подтвердить созвон', {
-    'orbis/task': { status: 'planned', due_date: addDays(today, -3) },
-    'orbis/schedule': { start_at: at(yesterday, '09:00') },
-  });
+  const both = ent(
+    't2',
+    'Подтвердить созвон',
+    {
+      'orbis/task_status': 'planned',
+      'orbis/due_date': addDays(today, -3),
+      'orbis/start_at': at(yesterday, '09:00'),
+    },
+    ['orbis/task', 'orbis/schedule'],
+  );
   // Сущность приходит В ОБЕИХ выборках — слияние по id (§4.2)
   renderWithProviders(
     <AgendaScreen />,
@@ -206,13 +205,22 @@ test('§8.3: task+schedule с обеими прошедшими датами —
 
 test('§8.3: сортировка «Просроченного» — старейшие сверху по более ранней из дат', async () => {
   // У 'later' due_date новее, но start_at старее — релевантная дата = более ранняя
-  const later = ent('t-late', 'Позже по сроку', {
-    'orbis/task': { status: 'planned', due_date: addDays(today, -1) },
-    'orbis/schedule': { start_at: at(addDays(today, -10), '09:00') },
-  });
-  const older = ent('t-old', 'Просрочено давно', {
-    'orbis/task': { status: 'planned', due_date: addDays(today, -5) },
-  });
+  const later = ent(
+    't-late',
+    'Позже по сроку',
+    {
+      'orbis/task_status': 'planned',
+      'orbis/due_date': addDays(today, -1),
+      'orbis/start_at': at(addDays(today, -10), '09:00'),
+    },
+    ['orbis/task', 'orbis/schedule'],
+  );
+  const older = ent(
+    't-old',
+    'Просрочено давно',
+    { 'orbis/task_status': 'planned', 'orbis/due_date': addDays(today, -5) },
+    ['orbis/task'],
+  );
   renderWithProviders(
     <AgendaScreen />,
     agendaHandler({ overdueDue: [later, older], overdueStart: [later] }),
@@ -223,10 +231,12 @@ test('§8.3: сортировка «Просроченного» — старе�
 });
 
 test('§8.4: задача с orbis/schedule попадает в свой день', async () => {
-  const scheduled = ent('t3', 'Врач', {
-    'orbis/task': { status: 'planned' },
-    'orbis/schedule': { start_at: at(tomorrow, '14:00') },
-  });
+  const scheduled = ent(
+    't3',
+    'Врач',
+    { 'orbis/task_status': 'planned', 'orbis/start_at': at(tomorrow, '14:00') },
+    ['orbis/task', 'orbis/schedule'],
+  );
   renderWithProviders(<AgendaScreen />, agendaHandler({ days: [scheduled] }));
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Врач']));
@@ -237,15 +247,15 @@ test('§8.4: задача с orbis/schedule попадает в свой ден�
 // --- §4.1: шаблоны, пустые дни, порядок внутри дня ------------------------------------
 
 test('§4.1: recurring-шаблон скрыт, инстанс виден', async () => {
-  const template = ent('tpl', 'Стендап (шаблон)', {
-    'orbis/schedule': {
-      start_at: at(today, '09:00'),
-      recurrence: { freq: 'daily', interval: 1 },
-    },
-  });
-  const instance = ent('inst', 'Стендап', {
-    'orbis/schedule': { start_at: at(today, '09:00') },
-  });
+  const template = ent(
+    'tpl',
+    'Стендап (шаблон)',
+    { 'orbis/start_at': at(today, '09:00'), 'orbis/recurrence': { freq: 'daily', interval: 1 } },
+    ['orbis/schedule'],
+  );
+  const instance = ent('inst', 'Стендап', { 'orbis/start_at': at(today, '09:00') }, [
+    'orbis/schedule',
+  ]);
   renderWithProviders(<AgendaScreen />, agendaHandler({ days: [template, instance] }));
 
   await waitFor(() => expect(rowTitles(daySection(today))).toEqual(['Стендап']));
@@ -253,7 +263,7 @@ test('§4.1: recurring-шаблон скрыт, инстанс виден', asyn
 });
 
 test('§4.1: горизонт — 8 секций, пустой день показывает «день свободен»', async () => {
-  const event = ent('ev', 'Стендап', { 'orbis/schedule': { start_at: at(today, '09:00') } });
+  const event = ent('ev', 'Стендап', { 'orbis/start_at': at(today, '09:00') }, ['orbis/schedule']);
   renderWithProviders(<AgendaScreen />, agendaHandler({ days: [event] }));
 
   await waitFor(() => expect(screen.getAllByTestId(/^agenda-day-/)).toHaveLength(8));
@@ -266,13 +276,16 @@ test('§4.1: горизонт — 8 секций, пустой день пока
 test('§4.1: all_day — в начале дня с пометкой «весь день», далее по времени start_at', async () => {
   // Сервер уже отсортировал по start_at:asc; all_day поднимается клиентом
   const days = [
-    ent('e1', 'Стендап', { 'orbis/schedule': { start_at: at(today, '09:00') } }),
-    ent('e2', 'Отпуск: день 1', {
-      'orbis/schedule': { start_at: at(today, '00:00'), all_day: true },
-    }),
-    ent('e3', 'Врач', {
-      'orbis/schedule': { start_at: at(today, '14:00'), end_at: at(today, '15:30') },
-    }),
+    ent('e1', 'Стендап', { 'orbis/start_at': at(today, '09:00') }, ['orbis/schedule']),
+    ent('e2', 'Отпуск: день 1', { 'orbis/start_at': at(today, '00:00'), 'orbis/all_day': true }, [
+      'orbis/schedule',
+    ]),
+    ent(
+      'e3',
+      'Врач',
+      { 'orbis/start_at': at(today, '14:00'), 'orbis/end_at': at(today, '15:30') },
+      ['orbis/schedule'],
+    ),
   ];
   renderWithProviders(<AgendaScreen />, agendaHandler({ days }));
 
@@ -287,16 +300,23 @@ test('§4.1: all_day — в начале дня с пометкой «весь �
 test('§4.2: recurring-шаблон не висит в «Просроченном» (фильтр действует и там)', async () => {
   // Якорный start_at шаблона в прошлом и его due_date старше живой задачи: сними фильтр —
   // шаблон встанет ПЕРВОЙ строкой секции и счётчик покажет 2.
-  const template = ent('tpl', 'Стендап (шаблон)', {
-    'orbis/task': { status: 'planned', due_date: addDays(today, -3) },
-    'orbis/schedule': {
-      start_at: at(addDays(today, -10), '09:00'),
-      recurrence: { freq: 'daily', interval: 1 },
+  const template = ent(
+    'tpl',
+    'Стендап (шаблон)',
+    {
+      'orbis/task_status': 'planned',
+      'orbis/due_date': addDays(today, -3),
+      'orbis/start_at': at(addDays(today, -10), '09:00'),
+      'orbis/recurrence': { freq: 'daily', interval: 1 },
     },
-  });
-  const task = ent('t1', 'Закончить API', {
-    'orbis/task': { status: 'planned', due_date: yesterday },
-  });
+    ['orbis/task', 'orbis/schedule'],
+  );
+  const task = ent(
+    't1',
+    'Закончить API',
+    { 'orbis/task_status': 'planned', 'orbis/due_date': yesterday },
+    ['orbis/task'],
+  );
   renderWithProviders(
     <AgendaScreen />,
     agendaHandler({ overdueDue: [template, task], overdueStart: [template] }),
@@ -312,10 +332,16 @@ test('§4.2: recurring-шаблон не висит в «Просроченно�
 test('§4.2: строка «Просроченного» подписана релевантной датой, а не будущим сроком', async () => {
   // start_at вчера, due_date послезавтра: сущность просрочена по РАСПИСАНИЮ, и подпись
   // строки обязана показывать именно эту дату (EntityRow справа печатает due_date).
-  const task = ent('t1', 'Подтвердить созвон', {
-    'orbis/task': { status: 'planned', due_date: addDays(today, 2) },
-    'orbis/schedule': { start_at: at(yesterday, '09:00') },
-  });
+  const task = ent(
+    't1',
+    'Подтвердить созвон',
+    {
+      'orbis/task_status': 'planned',
+      'orbis/due_date': addDays(today, 2),
+      'orbis/start_at': at(yesterday, '09:00'),
+    },
+    ['orbis/task', 'orbis/schedule'],
+  );
   renderWithProviders(<AgendaScreen />, agendaHandler({ overdueStart: [task] }));
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
@@ -327,9 +353,12 @@ test('§4.2: строка «Просроченного» подписана ре
 test('§4.2 (D2b): в строке «Просроченного» дата печатается ровно один раз', async () => {
   // Самая частая строка секции — задача со сроком вчера. Своя подпись слева и мета
   // EntityRow справа печатали ОДНУ И ТУ ЖЕ дату: «был 24 июл. … 24 июл.».
-  const task = ent('t1', 'Закончить API', {
-    'orbis/task': { status: 'in_progress', due_date: yesterday },
-  });
+  const task = ent(
+    't1',
+    'Закончить API',
+    { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
+    ['orbis/task'],
+  );
   renderWithProviders(<AgendaScreen />, agendaHandler({ overdueDue: [task] }));
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
@@ -342,10 +371,17 @@ test('§4.2 (D2c): у просроченного платежа сумма ос�
   // EntityRow выбирает мету по приоритету: financial → СУММА (не дата). Дублирования
   // даты в такой строке нет вовсе, поэтому подавление меты D2b здесь только съедало бы
   // сумму — единственное, ради чего строка платежа и открывается.
-  const payment = ent('t1', 'Оплатить интернет', {
-    'orbis/task': { status: 'planned', due_date: yesterday },
-    'orbis/financial': { amount: '1200.00', direction: 'expense' },
-  });
+  const payment = ent(
+    't1',
+    'Оплатить интернет',
+    {
+      'orbis/task_status': 'planned',
+      'orbis/due_date': yesterday,
+      'orbis/amount': '1200.00',
+      'orbis/direction': 'expense',
+    },
+    ['orbis/task', 'orbis/financial'],
+  );
   renderWithProviders(<AgendaScreen />, agendaHandler({ overdueDue: [payment] }));
 
   await waitFor(() => expect(overdueSection()).toBeInTheDocument());
@@ -362,7 +398,9 @@ test('§4.2 (D2c): у просроченного платежа сумма ос�
 // то есть у владельца с несовпадающей зоной ночные строки расходились с заголовком секции.
 
 test('дневная секция: у события дата справа не печатается — её печатает сама секция', async () => {
-  const event = ent('e1', 'Созвон', { 'orbis/schedule': { start_at: at(tomorrow, '14:00') } });
+  const event = ent('e1', 'Созвон', { 'orbis/start_at': at(tomorrow, '14:00') }, [
+    'orbis/schedule',
+  ]);
   renderWithProviders(<AgendaScreen />, agendaHandler({ days: [event] }));
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Созвон']));
@@ -374,10 +412,16 @@ test('дневная секция: у события дата справа не 
 test('дневная секция: срок, СОВПАВШИЙ с днём секции, не печатается второй раз', async () => {
   // Самая частая строка дня: запланированная задача со сроком на этот же день. Секция
   // уже подписана датой, слева стоит время — третья печать той же даты была шумом.
-  const scheduled = ent('t5', 'Врач', {
-    'orbis/task': { status: 'planned', due_date: tomorrow },
-    'orbis/schedule': { start_at: at(tomorrow, '14:00') },
-  });
+  const scheduled = ent(
+    't5',
+    'Врач',
+    {
+      'orbis/task_status': 'planned',
+      'orbis/due_date': tomorrow,
+      'orbis/start_at': at(tomorrow, '14:00'),
+    },
+    ['orbis/task', 'orbis/schedule'],
+  );
   renderWithProviders(<AgendaScreen />, agendaHandler({ days: [scheduled] }));
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Врач']));
@@ -388,10 +432,16 @@ test('дневная секция: срок, СОВПАВШИЙ с днём се
 test('дневная секция: срок, отличающийся от дня секции, остаётся — это не дубль, а факт', async () => {
   // Встреча завтра, а сдать работу нужно послезавтра: правая мета несёт НОВОЕ знание.
   const dayAfter = addDays(today, 2);
-  const scheduled = ent('t3', 'Врач', {
-    'orbis/task': { status: 'planned', due_date: dayAfter },
-    'orbis/schedule': { start_at: at(tomorrow, '14:00') },
-  });
+  const scheduled = ent(
+    't3',
+    'Врач',
+    {
+      'orbis/task_status': 'planned',
+      'orbis/due_date': dayAfter,
+      'orbis/start_at': at(tomorrow, '14:00'),
+    },
+    ['orbis/task', 'orbis/schedule'],
+  );
   renderWithProviders(<AgendaScreen />, agendaHandler({ days: [scheduled] }));
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Врач']));
@@ -399,10 +449,16 @@ test('дневная секция: срок, отличающийся от дн�
 });
 
 test('дневная секция: у платежа сумма остаётся — подавлять нечего (как в «Просроченном»)', async () => {
-  const payment = ent('t4', 'Аренда', {
-    'orbis/schedule': { start_at: at(tomorrow, '09:00') },
-    'orbis/financial': { amount: '1200.00', direction: 'expense' },
-  });
+  const payment = ent(
+    't4',
+    'Аренда',
+    {
+      'orbis/start_at': at(tomorrow, '09:00'),
+      'orbis/amount': '1200.00',
+      'orbis/direction': 'expense',
+    },
+    ['orbis/schedule', 'orbis/financial'],
+  );
   renderWithProviders(<AgendaScreen />, agendaHandler({ days: [payment] }));
 
   await waitFor(() => expect(rowTitles(daySection(tomorrow))).toEqual(['Аренда']));
@@ -412,7 +468,9 @@ test('дневная секция: у платежа сумма остаётся
 test('дефолт меты EntityRow не менялся: в Browser строка по-прежнему печатает дату', async () => {
   // Дефолт пропа общий с Browser — правка Повестки не имеет права его сдвинуть.
   const { EntityRow } = await import('../browser/EntityRow');
-  const task = ent('b1', 'Отчёт', { 'orbis/task': { status: 'planned', due_date: tomorrow } });
+  const task = ent('b1', 'Отчёт', { 'orbis/task_status': 'planned', 'orbis/due_date': tomorrow }, [
+    'orbis/task',
+  ]);
   renderWithProviders(<EntityRow entity={task} />);
   expect(screen.getByText(dayLabel(tomorrow))).toBeInTheDocument();
 });
@@ -443,10 +501,13 @@ test('D2c: шапка и плашка ошибки называют экран �
 test('настройки ещё грузятся → скелетон, а не раскладка в таймзоне браузера', async () => {
   // Выборки пришли, user.getSettings висит: группировать по дням и считать локальный
   // день start_at сейчас нечем (§4 «сегодня» — в таймзоне пользователя).
-  const event = ent('e1', 'Стендап', { 'orbis/schedule': { start_at: at(today, '09:00') } });
-  const task = ent('t1', 'Закончить API', {
-    'orbis/task': { status: 'planned', due_date: yesterday },
-  });
+  const event = ent('e1', 'Стендап', { 'orbis/start_at': at(today, '09:00') }, ['orbis/schedule']);
+  const task = ent(
+    't1',
+    'Закончить API',
+    { 'orbis/task_status': 'planned', 'orbis/due_date': yesterday },
+    ['orbis/task'],
+  );
   const { calls } = renderWithProviders(<AgendaScreen />, (path, input) => {
     if (path === 'user.getSettings') return new Promise(() => {}); // настройки не приходят
     if (path === 'entity.query') {
@@ -470,7 +531,9 @@ test('настройки ещё грузятся → скелетон, а не �
 
 test('«Просроченное»: при упоре в потолок счётчик показывает «200+», а не молчит', async () => {
   const many = Array.from({ length: 200 }, (_, i) =>
-    ent(`t${i}`, `Задача ${i}`, { 'orbis/task': { status: 'planned', due_date: yesterday } }),
+    ent(`t${i}`, `Задача ${i}`, { 'orbis/task_status': 'planned', 'orbis/due_date': yesterday }, [
+      'orbis/task',
+    ]),
   );
   renderWithProviders(<AgendaScreen />, agendaHandler({ overdueDue: many }));
 
@@ -480,7 +543,7 @@ test('«Просроченное»: при упоре в потолок счёт
 // --- навигация ------------------------------------------------------------------------
 
 test('тап по строке пушит detail в стек вкладки agenda', async () => {
-  const event = ent('e1', 'Стендап', { 'orbis/schedule': { start_at: at(today, '09:00') } });
+  const event = ent('e1', 'Стендап', { 'orbis/start_at': at(today, '09:00') }, ['orbis/schedule']);
   renderWithProviders(<AgendaScreen />, agendaHandler({ days: [event] }));
 
   await waitFor(() => expect(rowTitles(daySection(today))).toEqual(['Стендап']));
@@ -519,9 +582,12 @@ function overdueRoundTripHandler(task: ReturnType<typeof ent>, state: { closed: 
 }
 
 test('§8.2: «Готово» на detail-экране убирает задачу из «Просроченного» после «Назад»', async () => {
-  const task = ent('t1', 'Закончить API', {
-    'orbis/task': { status: 'in_progress', due_date: yesterday },
-  });
+  const task = ent(
+    't1',
+    'Закончить API',
+    { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
+    ['orbis/task'],
+  );
   const state = { closed: false };
   renderWithProviders(<ActiveScreen />, overdueRoundTripHandler(task, state));
 
@@ -538,9 +604,12 @@ test('§8.2: «Готово» на detail-экране убирает задач
 });
 
 test('§8.2: архивация на detail-экране убирает задачу из «Просроченного» после «Назад»', async () => {
-  const task = ent('t1', 'Закончить API', {
-    'orbis/task': { status: 'in_progress', due_date: yesterday },
-  });
+  const task = ent(
+    't1',
+    'Закончить API',
+    { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
+    ['orbis/task'],
+  );
   const state = { closed: false }; // архив сервер тоже исключает из выборок
   renderWithProviders(<ActiveScreen />, overdueRoundTripHandler(task, state));
 
@@ -571,9 +640,12 @@ function onChatTab() {
   });
 }
 
-const overdueTask = ent('t1', 'Закончить API', {
-  'orbis/task': { status: 'in_progress', due_date: yesterday },
-});
+const overdueTask = ent(
+  't1',
+  'Закончить API',
+  { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
+  ['orbis/task'],
+);
 
 test('бейдж Agenda: просроченное>0 → число в tab-bar И sidebar, вкладка не открыта', async () => {
   onChatTab();
@@ -621,9 +693,12 @@ test('D2b: отказ ОДНОЙ из двух выборок → бейджа �
   // start_at упал, due_date вернул строку: «1» на бейдже читалось бы как полная картина,
   // хотя часть просроченного не пришла. Заниженный счётчик хуже отсутствующего
   // (прецедент Budget: ошибка alertCount → бейджа нет).
-  const task = ent('t1', 'Закончить API', {
-    'orbis/task': { status: 'in_progress', due_date: yesterday },
-  });
+  const task = ent(
+    't1',
+    'Закончить API',
+    { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
+    ['orbis/task'],
+  );
   renderWithProviders(<App />, (path, input) => {
     if (path === 'user.getSettings') return settings;
     if (path === 'entity.query') {
@@ -647,7 +722,9 @@ test('D2b: отказ ОДНОЙ из двух выборок → бейджа �
 test('бейдж при упоре в потолок показывает «200+», а не усечённое число', async () => {
   onChatTab();
   const many = Array.from({ length: 200 }, (_, i) =>
-    ent(`t${i}`, `Задача ${i}`, { 'orbis/task': { status: 'planned', due_date: yesterday } }),
+    ent(`t${i}`, `Задача ${i}`, { 'orbis/task_status': 'planned', 'orbis/due_date': yesterday }, [
+      'orbis/task',
+    ]),
   );
   renderWithProviders(<App />, agendaHandler({ overdueDue: many }));
 

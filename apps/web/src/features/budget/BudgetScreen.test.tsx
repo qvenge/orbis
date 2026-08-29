@@ -3,27 +3,11 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { App } from '../../App';
 import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
+import { type MockHandler, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { BudgetScreen } from './BudgetScreen';
 import { monthShift } from './useBudget';
 
-const ent = (id: string, title: string) => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: {},
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+const ent = (id: string, title: string) => wireEntity({ id, title });
 
 const envelope = (
   id: string,

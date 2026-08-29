@@ -3,7 +3,7 @@ import { afterEach, expect, test } from 'vitest';
 import { App } from '../App';
 import { installHistorySync } from '../app/history';
 import { useNav } from '../state/navigation';
-import { renderWithProviders } from '../test/harness';
+import { renderWithProviders, wireEntity } from '../test/harness';
 
 // Этап 3: кнопка «Назад» в ScreenHeader — на ОДИН уровень (не сброс до корня).
 // Слайс 3 (D18): кнопка ведёт через историю браузера, поэтому стек в тесте набирается
@@ -12,23 +12,7 @@ import { renderWithProviders } from '../test/harness';
 const E1 = '11111111-1111-4111-8111-111111111111';
 const E2 = '22222222-2222-4222-8222-222222222222';
 
-const ent = (id: string, title: string) => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: {},
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+const ent = (id: string, title: string) => wireEntity({ id, title });
 
 const handler = (path: string, input: unknown) => {
   if (path === 'user.getSettings')

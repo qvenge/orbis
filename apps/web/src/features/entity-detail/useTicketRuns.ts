@@ -11,6 +11,13 @@ import { runPollInterval } from './run-poll';
 /** Прогон в объёме списка — ровно то, что отдаёт `entity.query` (без bodyDoc и связей). */
 export type TicketRun = RouterOutputs['entity']['query'][number];
 
+/**
+ * Аспект прогона — он же узел `aspect=` запроса выше и гейт блоков экрана. ЗНАЧЕНИЯ прогона
+ * им больше не достаются: они лежат плоско в `props` по id свойства (§А1-1), и прежний
+ * `runAspect(run)` — шаг, которого не осталось. Читатели (`RunsList`, `RunFeed`, блоки
+ * ожидания и состояния) адресуют их теми же id, что запросы, тулы и журнал:
+ * `run.props['orbis/run_outcome']`.
+ */
 export const RUN_ASPECT = 'orbis/agent-run';
 
 /**
@@ -30,11 +37,6 @@ export const RUN_OUTCOME_LABELS: Record<string, string> = {
   answered: 'отвечено',
   stale: 'снят',
 };
-
-/** Аспект прогона у сущности из выдачи; `undefined` — сущность не прогон. */
-export function runAspect(run: TicketRun): Record<string, unknown> | undefined {
-  return run.aspectsMap[RUN_ASPECT];
-}
 
 /**
  * Прогоны тикета: дети роли иерархии с аспектом прогона, последний первым.
@@ -70,7 +72,7 @@ export function useTicketRuns(
       refetchInterval: (query) => {
         const rows = query.state.data;
         const last = Array.isArray(rows) ? rows[0] : undefined;
-        return last === undefined ? false : runPollInterval(last.aspectsMap);
+        return last === undefined ? false : runPollInterval(last.props);
       },
     },
   );

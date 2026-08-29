@@ -3,14 +3,16 @@ import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
 import { onlineManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
 import {
   installCrashTrap,
   type MockHandler,
   renderWithProviders,
   trpcError,
+  wireEntity,
 } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { trpc } from '../../trpc';
@@ -40,6 +42,12 @@ function BodyProbe() {
   return <span data-testid="body-probe">{JSON.stringify(q.data?.entity.bodyDoc ?? null)}</span>;
 }
 
+/** Пробник `props` из ТОГО ЖЕ ключа кэша, что читает экран: показывает финальное состояние. */
+function PropsProbe() {
+  const q = trpc.entity.get.useQuery(detailGetInput('e1'));
+  return <span data-testid="props-probe">{JSON.stringify(q.data?.entity.props ?? {})}</span>;
+}
+
 /**
  * Неотправленный черновик прошлой сессии на диске: ключ — договор, поэтому выписан строкой.
  * Владелец в ключе — тот же, что у записи ниже: черновики скоупятся по нему (draft-storage).
@@ -58,27 +66,20 @@ function seedDraft(doc: BodyDoc, baseUpdatedAt: string, rejected = false): void 
   );
 }
 
-const entity = {
+// Форма ответа — фабрикой производителя (`wireEntity`), а не рукописным объектом: старая
+// карта аспектов в ней ПРОЕКЦИЯ `props`+`aspects`, и разъехаться двум формам негде.
+const entity = wireEntity({
   id: 'e1',
-  ownerId: 'u',
   title: 'Задача',
-  emoji: null,
   body: 'тело',
   // `bodyDoc` — часть контракта detail: include просит его всегда, а сервер собирает документ
   // даже для записей без колонки (readBodyDoc). Без него экран не поднял бы редактор НИКОГДА —
   // и половина файла была бы зелена по причине, которой в проде не существует.
   bodyDoc: parseBody('тело'),
-  bodyRefs: [],
   tags: ['work'],
-  meta: {},
-  aspectsMap: { 'orbis/task': { status: 'inbox', priority: 'high' } },
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: '2026-07-05T00:00:00.000Z',
-  updatedAt: '2026-07-05T10:00:00.000Z',
-  archived: false,
-};
+  props: { 'orbis/task_status': 'inbox', 'orbis/priority': 'high' },
+  aspects: ['orbis/task'],
+});
 
 beforeEach(() => {
   localStorage.clear();
@@ -201,22 +202,31 @@ test('чекбокс task → entity.update status=done + completed_at', async (
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update')
-      return { ...entity, aspectsMap: { 'orbis/task': { status: 'done', completed_at: 'now' } } };
+      return {
+        ...entity,
+        props: { 'orbis/task_status': 'done', 'orbis/completed_at': 'now' },
+      };
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   // Этап 3: title теперь и в ScreenHeader (h1), и в NativeRow — целимся в шапку.
   await waitFor(() => expect(screen.getByRole('heading', { name: 'Задача' })).toBeInTheDocument());
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
   await waitFor(() => {
     const c = calls.find((x) => x.path === 'entity.update');
+    // Адрес значения — id СВОЙСТВА (§А1-1), а не пара «аспект + поле»: ровно этот адрес
+    // сервер и принимает, и старая пара уехала бы в переходный мост вместо прямого пути.
     const input = c?.input as {
       id: string;
-      aspects: { 'orbis/task': { status: string; completed_at?: unknown } };
+      props: Record<string, unknown>;
+      unset?: string[];
     };
     expect(input.id).toBe('e1');
-    expect(input.aspects['orbis/task'].status).toBe('done');
-    expect(input.aspects['orbis/task'].completed_at).toBeTruthy();
+    expect(input.props['orbis/task_status']).toBe('done');
+    expect(input.props['orbis/completed_at']).toBeTruthy();
+    // Вопрос исполнителя снимается СПИСКОМ, а не `null` в значении: `null` — законное
+    // значение json-свойства, и совмещать их одним ключом больше нечем.
+    expect(input.unset).toContain('orbis/waiting_for');
   });
 });
 
@@ -246,7 +256,7 @@ test('нетронутый редактор подхватывает правк�
     }
     if (path === 'entity.update') return entity;
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   await openEditor();
   await expectEditorText('тело');
@@ -285,7 +295,7 @@ test('набранное в редакторе переживает чужую �
     }
     if (path === 'entity.update') return entity;
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   const field = await editorField();
   await userEvent.click(field);
@@ -328,7 +338,7 @@ test('409 правки тела: откат кэша к прежнему body + 
       }
       if (path === 'entity.update') throw trpcError('CONFLICT');
       if (path === 'aspect.list') return [];
-      return {};
+      return registryReply(path) ?? {};
     },
   );
   await screen.findByTestId('draft-banner');
@@ -393,7 +403,7 @@ test('подзадачи: список из entity.get; после создан�
       };
     }
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован; тело здесь ни при чём
   expect(screen.queryByTestId('subtask')).toBeNull();
@@ -447,7 +457,7 @@ test('создание подзадачи инвалидирует entity.query 
       }
       if (path === 'entity.query') return [];
       if (path === 'aspect.list') return [];
-      return {};
+      return registryReply(path) ?? {};
     },
   );
   await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован; тело здесь ни при чём
@@ -495,7 +505,7 @@ test('подзадача создана, а связь упала: списки 
       if (path === 'relation.create') throw trpcError('INTERNAL_SERVER_ERROR');
       if (path === 'entity.query') return [];
       if (path === 'aspect.list') return [];
-      return {};
+      return registryReply(path) ?? {};
     },
   );
   await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован; тело здесь ни при чём
@@ -531,7 +541,7 @@ test('inline правка заголовка уходит в entity.update с н
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') return { ...entity, title: 'кофе → Транспорт' };
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   const field = await screen.findByLabelText('Заголовок');
   fireEvent.change(field, { target: { value: 'кофе → Транспорт' } });
@@ -570,7 +580,7 @@ function externalTitleChange(): { handler: MockHandler; getCalls: () => number }
       }
       if (path === 'entity.update') return renamed;
       if (path === 'aspect.list') return [];
-      return {};
+      return registryReply(path) ?? {};
     },
   };
 }
@@ -609,7 +619,7 @@ function externalStatusChange(): { handler: MockHandler; getCalls: () => number 
   let getCalls = 0;
   const done = {
     ...entity,
-    aspectsMap: { 'orbis/task': { status: 'done', priority: 'high' } },
+    props: { 'orbis/task_status': 'done', 'orbis/priority': 'high' },
     updatedAt: '2026-07-05T11:00:00.000Z',
   };
   return {
@@ -625,31 +635,34 @@ function externalStatusChange(): { handler: MockHandler; getCalls: () => number 
       }
       if (path === 'entity.update') return done;
       if (path === 'aspect.list') return [];
-      return {};
+      return registryReply(path) ?? {};
     },
   };
 }
 
-test('поле аспекта подхватывает внешнее изменение значения (статус после чекбокса)', async () => {
+test('поле свойства подхватывает внешнее изменение значения (статус после чекбокса)', async () => {
   const { handler } = externalStatusChange();
   renderWithProviders(<DetailScreen entityId="e1" />, handler);
-  const field = await screen.findByLabelText('orbis/task status');
+  // Контрол ищется по ПОДПИСИ свойства из реестра — тем же словом, которое видит владелец.
+  const field = await screen.findByLabelText('Состояние задачи');
   expect(field).toHaveValue('inbox');
 
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
-  await waitFor(() => expect(screen.getByLabelText('orbis/task status')).toHaveValue('done'));
+  await waitFor(() => expect(screen.getByLabelText('Состояние задачи')).toHaveValue('done'));
 });
 
-test('незакоммиченный ввод в поле аспекта переживает внешнее изменение', async () => {
+test('незакоммиченный ввод в поле свойства переживает внешнее изменение', async () => {
   const { handler, getCalls } = externalStatusChange();
   renderWithProviders(<DetailScreen entityId="e1" />, handler);
-  const field = await screen.findByLabelText('orbis/task status');
+  // Проба идёт по ТЕКСТОВОМУ свойству: черновик живёт только у контрола со свободным вводом
+  // (`select` берёт значение прямо из props и черновика не держит вовсе).
+  const field = await screen.findByLabelText('Ждём');
   // Печатаем, но НЕ сохраняем (blur не было) — правка пользователя ещё жива
-  fireEvent.change(field, { target: { value: 'in_progress' } });
+  fireEvent.change(field, { target: { value: 'ответа коллеги' } });
 
   fireEvent.click(screen.getByRole('checkbox', { name: /готово/i }));
   await waitFor(() => expect(getCalls()).toBeGreaterThan(1)); // рефетч с чужим статусом пришёл
-  expect(screen.getByLabelText('orbis/task status')).toHaveValue('in_progress');
+  expect(screen.getByLabelText('Ждём')).toHaveValue('ответа коллеги');
 });
 
 // --- пикер категории для financial-сущности (sign-off владельца K6, D3b) ---------------
@@ -658,37 +671,21 @@ test('незакоммиченный ввод в поле аспекта пер�
 const CAT_FOOD = 'a3d6d4b2-7f3a-4a1f-9c1e-2d5b8f0a1c77';
 const CAT_FUN = 'b8e1c9a4-2d5e-4c3b-8f7a-1e9d0c2b3a55';
 
-const finEntity = {
+const finEntity = wireEntity({
   ...entity,
   title: 'Кофе Хауз',
-  aspectsMap: {
-    'orbis/financial': {
-      amount: '340.00',
-      currency: 'RUB',
-      direction: 'expense',
-      occurred_on: '2026-07-20',
-      category_ref: CAT_FOOD,
-    },
+  props: {
+    'orbis/amount': '340.00',
+    'orbis/currency': 'RUB',
+    'orbis/direction': 'expense',
+    'orbis/occurred_on': '2026-07-20',
+    'orbis/finance_category': CAT_FOOD,
   },
-};
-
-const category = (id: string, title: string) => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: { 'orbis/category': {} },
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
+  aspects: ['orbis/financial'],
 });
+
+const category = (id: string, title: string) =>
+  wireEntity({ id, title, aspects: ['orbis/category'] });
 
 const finHandler = (path: string) => {
   if (path === 'entity.get')
@@ -696,12 +693,12 @@ const finHandler = (path: string) => {
   if (path === 'entity.query') return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
   if (path === 'entity.update') return finEntity;
   if (path === 'aspect.list') return [];
-  return {};
+  return registryReply(path) ?? {};
 };
 
 test('financial: category_ref — выбор из категорий с названиями, а не UUID в инпуте', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, finHandler);
-  const select = await screen.findByLabelText('orbis/financial category_ref');
+  const select = await screen.findByLabelText('Категория');
   expect(select.tagName).toBe('SELECT');
   await screen.findByRole('option', { name: 'Развлечения' });
   // Показано НАЗВАНИЕ выбранной категории (displayValue у select — текст выбранной опции)
@@ -714,15 +711,17 @@ test('financial: category_ref — выбор из категорий с назв
 
 test('financial: выбор категории шлёт entity.update с новым category_ref', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, finHandler);
-  const select = await screen.findByLabelText('orbis/financial category_ref');
+  const select = await screen.findByLabelText('Категория');
   await screen.findByRole('option', { name: 'Развлечения' }); // список категорий доехал
   fireEvent.change(select, { target: { value: CAT_FUN } });
   await waitFor(() => {
     const c = calls.find((x) => x.path === 'entity.update');
+    // Адрес — id СВОЙСТВА (§А1-1): `orbis/finance_category` носят и Финансы, и Бюджет (В1),
+    // и пара «аспект + поле» выбрать между ними не могла.
     expect(c?.input).toEqual({
       id: 'e1',
       expectedUpdatedAt: '2026-07-05T10:00:00.000Z',
-      aspects: { 'orbis/financial': { category_ref: CAT_FUN } },
+      props: { 'orbis/finance_category': CAT_FUN },
     });
   });
 });
@@ -736,9 +735,9 @@ test('financial: запрос категорий упал → «Не удало�
       return { entity: finEntity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
-  const select = await screen.findByLabelText('orbis/financial category_ref');
+  const select = await screen.findByLabelText('Категория');
   await waitFor(() => expect(select).toHaveDisplayValue('Не удалось загрузить категории'));
   expect(select).not.toHaveDisplayValue('Категория не найдена');
 });
@@ -746,9 +745,7 @@ test('financial: запрос категорий упал → «Не удало�
 test('financial: список пришёл, а ссылка ведёт мимо него → «Категория не найдена»', async () => {
   const orphan = {
     ...finEntity,
-    aspectsMap: {
-      'orbis/financial': { ...finEntity.aspectsMap['orbis/financial'], category_ref: 'gone' },
-    },
+    props: { ...finEntity.props, 'orbis/finance_category': 'gone' },
   };
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
@@ -756,9 +753,9 @@ test('financial: список пришёл, а ссылка ведёт мимо 
     if (path === 'entity.query')
       return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
-  const select = await screen.findByLabelText('orbis/financial category_ref');
+  const select = await screen.findByLabelText('Категория');
   await screen.findByRole('option', { name: 'Развлечения' }); // список доехал целым
   expect(select).toHaveDisplayValue('Категория не найдена');
 });
@@ -770,18 +767,16 @@ test('financial: список пришёл, а ссылка ведёт мимо 
 test('financial: без категории при упавшем запросе — «Без категории», а не отказ', async () => {
   const noCategory = {
     ...finEntity,
-    aspectsMap: {
-      'orbis/financial': { ...finEntity.aspectsMap['orbis/financial'], category_ref: '' },
-    },
+    props: { ...finEntity.props, 'orbis/finance_category': '' },
   };
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: noCategory, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
-  const select = await screen.findByLabelText('orbis/financial category_ref');
+  const select = await screen.findByLabelText('Категория');
   await waitFor(() => expect(select).toHaveDisplayValue('Без категории'));
 });
 
@@ -791,9 +786,7 @@ test('financial: рефетч списка упал, но список уже е
   let queries = 0;
   const orphan = {
     ...finEntity,
-    aspectsMap: {
-      'orbis/financial': { ...finEntity.aspectsMap['orbis/financial'], category_ref: 'gone' },
-    },
+    props: { ...finEntity.props, 'orbis/finance_category': 'gone' },
   };
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
@@ -805,9 +798,9 @@ test('financial: рефетч списка упал, но список уже е
     }
     if (path === 'entity.update') return orphan;
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
-  const select = await screen.findByLabelText('orbis/financial category_ref');
+  const select = await screen.findByLabelText('Категория');
   await screen.findByRole('option', { name: 'Развлечения' }); // список доехал целым
   // Любая правка сущности инвалидирует entity.query (useEntityUpdate.onSettled) — рефетч
   // падает, но data остаётся: state = error + непустой список. Правка берётся самая дешёвая из
@@ -823,50 +816,60 @@ test('financial: рефетч списка упал, но список уже е
 
 // (в) офлайн-пауза: fetchStatus='paused' даёт isLoading===false при status='pending' —
 // по isLoading подпись срывалась в «Категория не найдена» на целой транзакции.
+/**
+ * Обёртка «уйти в офлайн ПОСЛЕ реестра, но ДО списка категорий».
+ *
+ * Прямой `setOnline(false)` перед рендером больше не годится: форма свойств строится по
+ * РЕЕСТРУ, а его запрос офлайн тоже встаёт на паузу — карточка вышла бы пустой, и проба
+ * проверяла бы отсутствие формы, а не подпись пикера. Флаг состояния, а не один эффект:
+ * гонку «AspectCards уже смонтировался и успел сходить за категориями онлайн» иначе не
+ * закрыть — запрос уходит в том же коммите, в котором эффект только собирается сработать.
+ */
+function CardsOfflineAfterRegistry({ entity }: { entity: typeof finEntity }) {
+  const registry = useRegistry();
+  const [offline, setOffline] = useState(false);
+  useEffect(() => {
+    if (registry.data !== undefined && !offline) {
+      onlineManager.setOnline(false);
+      setOffline(true);
+    }
+  }, [registry.data, offline]);
+  return offline ? <AspectCards entity={entity} /> : null;
+}
+
 test('financial: офлайн-пауза списка категорий — «Загрузка…», а не «Категория не найдена»', async () => {
-  onlineManager.setOnline(false);
   try {
-    renderWithProviders(<AspectCards entity={finEntity} />, finHandler);
-    const select = await screen.findByLabelText('orbis/financial category_ref');
+    renderWithProviders(<CardsOfflineAfterRegistry entity={finEntity} />, finHandler);
+    const select = await screen.findByLabelText('Категория');
     expect(select).toHaveDisplayValue('Загрузка…');
   } finally {
     onlineManager.setOnline(true);
   }
 });
 
-test('нефинансовая сущность: поля прежние (инпут), список категорий не запрашивается', async () => {
+test('нефинансовая сущность: контрол по типу свойства, список категорий не запрашивается', async () => {
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') return entity;
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
-  const field = await screen.findByLabelText('orbis/task status');
-  expect(field.tagName).toBe('INPUT');
+  // Тип свойства решает контрол: у `orbis/task_status` он `select` (варианты закрыты
+  // реестром), у `orbis/waiting_for` — свободный текст. Прежде оба были одним инпутом,
+  // потому что форма выводилась из ЗНАЧЕНИЯ, а не из объявления.
+  const status = await screen.findByLabelText('Состояние задачи');
+  expect(status.tagName).toBe('SELECT');
+  expect(screen.getByLabelText('Ждём').tagName).toBe('INPUT');
+  // Пикер ссылки монтируется только там, где свойство есть в составе аспекта: у задачи
+  // категории нет, и сети за списком не уходит.
   expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
 });
 
 // --- query-блоки body (02-core-os §3.4) ------------------------------------------------
 // Реестры настоящие (`registryReply`), поэтому каталог полей и разбор имён в тесте те же,
 // что в проде: битая конструкция упала бы плашкой qb-error, а не молча.
-const found = (title: string) => ({
-  id: title,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: {},
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+const found = (title: string) => wireEntity({ id: title, title });
 
 // §3.4 нормирует: «Каждый {{query:...}}-блок в body рендерится виджетом». Это же условие —
 // продуктовая половина приёмки 02-core-os §8.4 («задача видна в Daily Planning»): список
@@ -876,7 +879,7 @@ test('detail рендерит КАЖДЫЙ query-блок body: у Daily Plannin
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get')
       return {
-        entity: { ...entity, title: 'Daily Planning', body: DAILY_PLANNING_BODY, aspectsMap: {} },
+        entity: { ...entity, title: 'Daily Planning', body: DAILY_PLANNING_BODY, aspects: [] },
         relations: [],
         thread: null,
       };
@@ -887,7 +890,7 @@ test('detail рендерит КАЖДЫЙ query-блок body: у Daily Plannin
       const q = (input as { query: string }).query;
       return q.includes('due_date=today|overdue') ? [found('Разобрать Inbox')] : [];
     }
-    return {};
+    return registryReply(path) ?? {};
   });
 
   // Три виджета — по одному на блок, каждый со своим заголовком из title= (§3.4).
@@ -917,14 +920,14 @@ test('query-блок с `this` на detail получает контекст о�
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return {
-        entity: { ...entity, body, bodyDoc: parseBody(body), aspectsMap: {} },
+        entity: { ...entity, body, bodyDoc: parseBody(body), aspects: [] },
         relations: [],
         thread: null,
       };
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
     if (path === 'entity.query') return [found('Тикет')];
-    return {};
+    return registryReply(path) ?? {};
   });
   await waitFor(() => expect(screen.getByTestId('qb-count')).toBeInTheDocument());
   expect(screen.queryByTestId('qb-error')).not.toBeInTheDocument();
@@ -990,7 +993,7 @@ const menuHandler: MockHandler = (path) => {
     return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
   if (path === 'entity.update') return entity;
   if (path === 'aspect.list') return [];
-  return {};
+  return registryReply(path) ?? {};
 };
 
 test('меню ⋮: «Скопировать ссылку» кладёт абсолютный адрес сущности в буфер', async () => {
@@ -1066,7 +1069,7 @@ const twoEntitiesHandler: MockHandler = (path, input) => {
   }
   if (path === 'entity.update') return entity;
   if (path === 'aspect.list') return [];
-  return {};
+  return registryReply(path) ?? {};
 };
 
 test('меню ⋮: плашка с ручной ссылкой не переезжает на другую сущность', async () => {
@@ -1150,7 +1153,7 @@ test('меню ⋮: у архивной сущности пункт зовётс
     if (path === 'entity.get') return { entity: archived, relations: [], thread: null };
     if (path === 'entity.update') return archived;
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   await openDetailMenu();
   expect(screen.queryByRole('menuitem', { name: 'Архивировать' })).toBeNull();
@@ -1175,7 +1178,7 @@ test('conflict-баннер: клик «Обновить» → refetch entity.ge
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') throw trpcError('CONFLICT');
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
   await screen.findByText(/Изменено в другом месте — обновите/);
@@ -1210,7 +1213,7 @@ const bodyHandler =
     const reg = registryReply(path);
     if (reg !== undefined) return reg;
     if (path === 'entity.query') return [found('Разобрать Inbox')];
-    return {};
+    return registryReply(path) ?? {};
   };
 
 test('body показан разметкой, а не сырым текстом: правка не навязана', async () => {
@@ -1391,7 +1394,7 @@ function bodyConflictHandler(seen: unknown[]): MockHandler {
       return entity;
     }
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   };
 }
 
@@ -1449,19 +1452,22 @@ test('409 правки тела не гаснет от переименован�
 
 // --- три таба: Сущность · Детали · Тред (Задача 15) ----------------------------------------
 
-const GOAL_ENTITY = {
+const GOAL_ENTITY = wireEntity({
   ...entity,
   id: 'e1',
   title: 'Накопить на отпуск',
   emoji: '🎯',
-  aspectsMap: {
-    'orbis/goal': {
-      progress_source: { query: 'aspect=orbis/financial', aggregate: 'sum', field: 'amount' },
-      target_value: '300000.00',
-      unit: '₽',
+  props: {
+    'orbis/progress_source': {
+      query: { filter: { aspect: 'orbis/financial' } },
+      aggregate: 'sum',
+      field: 'orbis/amount',
     },
+    'orbis/target_value': '300000.00',
+    'orbis/unit': '₽',
   },
-};
+  aspects: ['orbis/goal'],
+});
 
 /** Полный экран: аспекты, подзадача, блокировка и backlink — чтобы было чему разъезжаться. */
 const richHandler: MockHandler = (path, input) => {
@@ -1499,6 +1505,211 @@ const richHandler: MockHandler = (path, input) => {
   return registryReply(path) ?? {};
 };
 
+/**
+ * Форма записи строится ПО РЕЕСТРУ, а не по заполненным значениям (§А9-2).
+ *
+ * Разница видна ровно на пустом поле: у задачи без срока строки «Срок» на экране НЕ БЫЛО
+ * вовсе — цикл шёл по `aspects[аспект][поле]`, — и поставить срок из формы было нечем.
+ */
+test('AspectCards: у задачи без срока поле «Срок» показано пустым и редактируемо', async () => {
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, richHandler);
+  const section = await screen.findByTestId('aspect-orbis/task');
+  const due = await within(section).findByLabelText('Срок');
+  // Значения нет — контрол пуст, но он ЕСТЬ, и это дата, а не свободный текст.
+  expect(due).toHaveValue('');
+  expect(due).toHaveAttribute('type', 'date');
+
+  fireEvent.change(due, { target: { value: '2026-09-01' } });
+  fireEvent.blur(due);
+  await waitFor(() =>
+    expect(calls.find((c) => c.path === 'entity.update')?.input).toMatchObject({
+      id: 'e1',
+      props: { 'orbis/due_date': '2026-09-01' },
+    }),
+  );
+});
+
+test('AspectCards: состав и ПОРЯДОК строк — из реестра, а не из заполненных значений', async () => {
+  renderWithProviders(<DetailScreen entityId="e1" />, richHandler);
+  const section = await screen.findByTestId('aspect-orbis/task');
+  const labels = [...section.querySelectorAll('dt')].map((dt) => dt.textContent);
+  // Ровно шесть свойств аспекта «Задача» в порядке `rank` ссылки — включая четыре, у которых
+  // на этой записи значения нет.
+  expect(labels).toEqual([
+    'Состояние задачи',
+    'Приоритет',
+    'Срок',
+    'Когда завершена',
+    'Трудоёмкость, мин',
+    'Ждём',
+  ]);
+});
+
+test('AspectCards: boolean — чекбокс, а вычисляемое свойство — только чтение с пометкой', async () => {
+  // Цель несёт `orbis/current_value` (`model_writable: false` — кэш расчёта) и аспект
+  // расписания с булевым «Весь день»: два разных ответа на вопрос «чем это правят».
+  const entityWithBoth = wireEntity({
+    ...GOAL_ENTITY,
+    props: { ...GOAL_ENTITY.props, 'orbis/current_value': '150000.00', 'orbis/all_day': true },
+    aspects: ['orbis/goal', 'orbis/schedule'],
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get') return { entity: entityWithBoth, relations: [], thread: null };
+    return registryReply(path) ?? {};
+  });
+  const goalSection = await screen.findByTestId('aspect-orbis/goal');
+  const current = within(goalSection).getByTestId('prop-orbis/current_value');
+  expect(current).toHaveTextContent('150000.00');
+  expect(current).toHaveTextContent('вычисляется');
+  // Правки у него нет вовсе: контрола в строке не появляется.
+  expect(within(goalSection).queryByLabelText('Текущее значение')).toBeNull();
+
+  const allDay = within(screen.getByTestId('aspect-orbis/schedule')).getByLabelText('Весь день');
+  expect(allDay).toHaveAttribute('type', 'checkbox');
+  expect(allDay).toBeChecked();
+  // Слова 'true' на экране нет — прежняя форма печатала его в инпуте.
+  expect(screen.queryByDisplayValue('true')).toBeNull();
+});
+
+/**
+ * Гейты блоков — по СПИСКУ аспектов (§А1-1), а не по наличию значения.
+ *
+ * Разница не теоретическая: аспект перестал быть владельцем полей (Р9), и «навешен» — теперь
+ * отдельный факт. Рутина, у которой ещё ничего не настроено, и задача, назначенная без
+ * заполненных свойств, — законные состояния графа, и на прежней проверке («в карте есть
+ * ключ») они были неотличимы от снятого аспекта: блок состояния и карточка назначения
+ * исчезали с экрана, а вместе с ними — единственный способ их поправить.
+ */
+test('блоки видны у аспекта БЕЗ единого заполненного свойства', async () => {
+  const bareRoutine = wireEntity({
+    ...entity,
+    id: 'rt0',
+    title: 'Пустая рутина',
+    aspects: ['orbis/routine'],
+  });
+  const bareTicket = wireEntity({
+    ...entity,
+    id: 'tk0',
+    title: 'Ничьё назначение',
+    aspects: ['orbis/task', 'orbis/assignment'],
+  });
+  const handler =
+    (target: unknown): MockHandler =>
+    (path) => {
+      if (path === 'entity.get') return { entity: target, relations: [], thread: null };
+      if (path === 'entity.query') return [];
+      if (path === 'agentRun.sweep') return { swept: 0 };
+      if (path === 'routine.overview')
+        return { nextBucketAt: null, lastRun: null, waiting: 0, openProposal: false, undecided: 0 };
+      return registryReply(path) ?? {};
+    };
+
+  const routine = renderWithProviders(<DetailScreen entityId="rt0" />, handler(bareRoutine));
+  expect(await screen.findByTestId('routine-status')).toBeInTheDocument();
+  routine.unmount();
+
+  renderWithProviders(<DetailScreen entityId="tk0" />, handler(bareTicket));
+  const card = await screen.findByTestId('assignment-card');
+  // Назначение ЕСТЬ (аспект навешен), исполнитель не назван — и снять его есть чем. На
+  // прежней проверке карточка исчезала целиком: запись, которую агент считает своей, была
+  // владельцу невидима и неснимаема.
+  expect(within(card).getByRole('button', { name: 'Снять назначение' })).toBeEnabled();
+});
+
+test('AspectCards: значение без носителя показано секцией «Свойства», а не потеряно', async () => {
+  // Снятие аспекта значений НЕ трогает (Р9), и своё свойство владельца носителя не имеет
+  // вовсе. Спрятать такую строку значило бы: значение участвует в запросах и агрегатах, а
+  // владелец не может ни увидеть его, ни снять.
+  const orphan = wireEntity({
+    ...entity,
+    props: { 'orbis/task_status': 'inbox', 'orbis/amount': '340.00' },
+    aspects: ['orbis/task'],
+  });
+  renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.get') return { entity: orphan, relations: [], thread: null };
+    return registryReply(path) ?? {};
+  });
+  const free = await screen.findByTestId('aspect-free');
+  expect(within(free).getByText('Сумма')).toBeInTheDocument();
+  expect(within(free).getByLabelText('Сумма')).toHaveValue('340.00');
+  // И это не «всё уехало в „Свойства“»: строка своего аспекта осталась в его секции.
+  expect(
+    within(screen.getByTestId('aspect-orbis/task')).getByLabelText('Состояние задачи'),
+  ).toBeInTheDocument();
+});
+
+test('useEntityDetail: снятие свойства шлёт unset; кэш теряет ключ, а не получает null', async () => {
+  const withWaiting = wireEntity({
+    ...entity,
+    props: { 'orbis/task_status': 'waiting', 'orbis/waiting_for': 'ответа коллеги' },
+    aspects: ['orbis/task'],
+  });
+  const { calls } = renderWithProviders(
+    <>
+      <PropsProbe />
+      <DetailScreen entityId="e1" />
+    </>,
+    (path) => {
+      if (path === 'entity.get') return { entity: withWaiting, relations: [], thread: null };
+      // Ответ мутации НЕ приходит НАМЕРЕННО: проверяется ОПТИМИСТИЧНЫЙ патч, а осевшая
+      // мутация перечитала бы граф (`onSettled`) и вернула эхо сервера — то есть проверка
+      // была бы про фикстуру, а не про патч.
+      if (path === 'entity.update') return new Promise(() => {});
+      return registryReply(path) ?? {};
+    },
+  );
+  const field = await screen.findByLabelText('Ждём');
+  fireEvent.change(field, { target: { value: '' } });
+  fireEvent.blur(field);
+
+  await waitFor(() => {
+    const input = calls.find((c) => c.path === 'entity.update')?.input as {
+      props?: Record<string, unknown>;
+      unset?: string[];
+    };
+    // Снятие уезжает СПИСКОМ, а не `null` в значении: `null` — законное значение
+    // json-свойства, и совмещать их одним ключом больше нечем (§А1-1).
+    expect(input.unset).toEqual(['orbis/waiting_for']);
+    expect(input.props).toBeUndefined();
+  });
+  // Оптимистичный патч УДАЛЯЕТ ключ. `null` в кэше читался бы формой как «значение есть,
+  // оно пустое» — а сервер тем временем удалил ключ.
+  await waitFor(() => {
+    const props = JSON.parse(screen.getByTestId('props-probe').textContent ?? '{}');
+    expect('orbis/waiting_for' in props).toBe(false);
+  });
+});
+
+test('useEntityDetail: снятие аспекта шлёт aspects.detach и значений НЕ теряет (Р9)', async () => {
+  const { calls } = renderWithProviders(
+    <>
+      <PropsProbe />
+      <DetailScreen entityId="e1" />
+    </>,
+    (path) => {
+      if (path === 'entity.get') return { entity, relations: [], thread: null };
+      // Ответ мутации НЕ приходит НАМЕРЕННО — см. соседний тест.
+      if (path === 'entity.update') return new Promise(() => {});
+      return registryReply(path) ?? {};
+    },
+  );
+  const section = await screen.findByTestId('aspect-orbis/task');
+  fireEvent.click(within(section).getByRole('button', { name: 'Снять orbis/task' }));
+
+  await waitFor(() => {
+    const input = calls.find((c) => c.path === 'entity.update')?.input as {
+      aspects: { detach?: string[] };
+    };
+    expect(input.aspects.detach).toEqual(['orbis/task']);
+  });
+  // Аспект — интерпретация, а не владелец поля: значения переживают снятие и переезжают
+  // в секцию «Свойства».
+  const free = await screen.findByTestId('aspect-free');
+  expect(within(free).getByLabelText('Состояние задачи')).toBeInTheDocument();
+  const props = JSON.parse(screen.getByTestId('props-probe').textContent ?? '{}');
+  expect(props['orbis/task_status']).toBe('inbox');
+});
+
 test('карточка аспекта подписана СЛОВОМ из реестра — и секция, и строка свойства', async () => {
   // Обе подписи на одном экране и из одного источника: заголовок секции — label аспекта,
   // строка — label свойства, к которому старое имя поля (`status`) переводится таблицей.
@@ -1519,7 +1730,7 @@ test('на «Сущности» — emoji, заголовок и тело; ка�
     if (path === 'entity.get')
       return { entity: { ...entity, emoji: '🎯' }, relations: [], thread: null };
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
   expect(within(panel).getByText('🎯')).toBeInTheDocument();
@@ -1562,13 +1773,14 @@ test('полоса прогресса цели осталась на «Сущн�
         goalProgress: { current: '150000.00', target: '300000.00' },
       };
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
   const bar = within(panel).getByTestId('goal-progress');
   expect(within(bar).getByText('150 000 / 300 000')).toBeInTheDocument();
-  // Единица достаётся из entity.aspectsMap заново: в AspectCards она бралась из тела цикла по
-  // аспектам, а цикла на «Сущности» нет — потеряться ей проще простого.
+  // Единица достаётся из `entity.props` заново, по своему id: в карточках свойств она
+  // бралась из тела цикла по аспектам, а цикла на «Сущности» нет — потеряться ей проще
+  // простого.
   expect(within(bar).getByText('₽')).toBeInTheDocument();
   // Второй полосы в «Деталях» нет: два ответа на вопрос «как оно идёт» — это уже вопрос,
   // которому верить.
@@ -1606,7 +1818,7 @@ test('вкладка «Тред» живой не держится: её зап�
     if (path === 'chat.ensureThread') return { threadId: 'th1' };
     if (path === 'chat.listMessages') return [];
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   await screen.findByRole('tab', { name: 'Тред' });
   const threadCalls = () => calls.filter((c) => c.path === 'chat.listMessages');
@@ -1634,7 +1846,7 @@ const threadHandler: MockHandler = (path) => {
   if (path === 'chat.ensureThread') return { threadId: 'th-ensured' };
   if (path === 'chat.listMessages') return [];
   if (path === 'aspect.list') return [];
-  return {};
+  return registryReply(path) ?? {};
 };
 
 test('открытие «Треда» заводит тред сущности — ровно один раз, и под StrictMode тоже', async () => {
@@ -1766,7 +1978,7 @@ test('без документа пункта «Править как markdown» 
     if (path === 'entity.get')
       return { entity: { ...entity, bodyDoc: null }, relations: [], thread: null };
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   await openDetailMenu();
   expect(screen.queryByRole('menuitem', { name: 'Править как markdown' })).toBeNull();
@@ -1791,7 +2003,7 @@ test('тумблер markdown открывается с тем, что НАБР�
       return { entity: { ...entity, body: 'тело', bodyDoc: parseBody('тело') }, relations: [] };
     if (path === 'entity.update') throw trpcError('INTERNAL_SERVER_ERROR');
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   const field = await editorField();
   await userEvent.click(field);
@@ -1817,7 +2029,7 @@ test('ВНУТРИ ПАУЗЫ «Применить» без единой пра�
       return { entity: { ...entity, body: 'тело', bodyDoc: parseBody('тело') }, relations: [] };
     if (path === 'entity.update') throw trpcError('INTERNAL_SERVER_ERROR');
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   const field = await editorField();
   await userEvent.click(field);
@@ -1858,7 +2070,7 @@ test('набранное, которое редактор НЕ отдал отк
         gates.push({ fail });
       });
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   const field = await editorField();
   await userEvent.click(field);
@@ -1910,7 +2122,7 @@ test('«Отмена» в тумблере не возвращает текст,
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
     if (path === 'entity.update') throw trpcError('CONFLICT');
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   const field = await editorField();
   await userEvent.click(field);
@@ -1994,7 +2206,7 @@ test('«Обновить» из режима разметки не заслон�
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
     if (path === 'entity.update') throw trpcError('CONFLICT');
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   const field = await editorField();
   await userEvent.click(field);
@@ -2043,7 +2255,7 @@ test('ничего не трогали: приехавшее тело не за�
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
     if (path === 'entity.update') return entity;
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   await openEditor(); // редактор поднят, но НИ ОДНОГО нажатия в нём не было
   await expectEditorText('тело');
@@ -2076,7 +2288,7 @@ test('выход из разметки ТЕМ ЖЕ пунктом меню не 
       return { entity: { ...entity, body: 'тело', bodyDoc: parseBody('тело') }, relations: [] };
     if (path === 'entity.update') throw trpcError('INTERNAL_SERVER_ERROR');
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   const field = await editorField();
   await userEvent.click(field);
@@ -2113,7 +2325,7 @@ test('ВТОРОЙ заход в разметку после отказанно�
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
     if (path === 'entity.update') throw trpcError('CONFLICT');
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   const field = await editorField();
   await userEvent.click(field);
@@ -2213,7 +2425,7 @@ test('плашки и индикатор тела живут ВНЕ вкладо
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') throw trpcError('CONFLICT');
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
 
   // Баннер черновика — первым: он появляется сам, без единого жеста человека.
@@ -2339,7 +2551,7 @@ test('режим «править как markdown» не переезжает н
       };
     }
     if (path === 'aspect.list') return [];
-    return {};
+    return registryReply(path) ?? {};
   });
   await openDetailMenu();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Править как markdown' }));
@@ -2391,7 +2603,7 @@ test('смена записи размонтирует тело и досыла�
       }
       if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
       if (path === 'aspect.list') return [];
-      return {};
+      return registryReply(path) ?? {};
     },
   );
   // Премиса: соседняя запись УЖЕ в кэше, то есть переход пройдёт без скелетона (см. CachedE2).
@@ -2445,44 +2657,39 @@ const GRANT = {
 };
 
 /** Прогон приезжает из entity.query — без bodyDoc и связей: запрос списка их не просит. */
-const RUN = {
+const RUN = wireEntity({
   id: 'r1',
-  ownerId: 'u',
   title: 'Прогон: Починить парсер',
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: {
-    props: {},
-    aspects: [],
-    queryRefs: [],
-    'orbis/agent-run': {
-      grant_id: GRANT_ID,
-      outcome: 'checkpoint',
-      started_at: '2026-08-17T10:00:00.000Z',
-      last_step_at: '2026-08-17T10:05:00.000Z',
-      step_count: 3,
-      steps: [],
-      checkpoint: { question: 'Какую БД брать?', asked_at: '2026-08-17T10:05:00.000Z' },
+  props: {
+    'orbis/grant': GRANT_ID,
+    'orbis/run_outcome': 'checkpoint',
+    'orbis/run_started_at': '2026-08-17T10:00:00.000Z',
+    'orbis/last_step_at': '2026-08-17T10:05:00.000Z',
+    'orbis/step_count': 3,
+    'orbis/run_steps': [],
+    'orbis/run_checkpoint': {
+      question: 'Какую БД брать?',
+      asked_at: '2026-08-17T10:05:00.000Z',
     },
   },
+  aspects: ['orbis/agent-run'],
   createdAt: '2026-08-17T10:00:00.000Z',
   updatedAt: '2026-08-17T10:05:00.000Z',
-  archived: false,
-};
+});
 
-/** `may_close` в аспекте НЕТ — отсутствие и есть false (С8): это и проверяет чекбокс. */
-const TICKET = {
+/** `orbis/may_close` НЕ заполнен — отсутствие и есть false (С8): это и проверяет чекбокс. */
+const TICKET = wireEntity({
   ...entity,
   id: 't1',
   title: 'Починить парсер',
-  aspectsMap: {
-    'orbis/task': { status: 'waiting', waiting_for: 'Какую БД брать?' },
-    'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID },
+  props: {
+    'orbis/task_status': 'waiting',
+    'orbis/waiting_for': 'Какую БД брать?',
+    'orbis/executor': 'agent',
+    'orbis/grant': GRANT_ID,
   },
-};
+  aspects: ['orbis/task', 'orbis/assignment'],
+});
 
 function adeHandler(opts: { entity?: unknown; runs?: unknown[] } = {}): MockHandler {
   const target = opts.entity ?? TICKET;
@@ -2494,7 +2701,7 @@ function adeHandler(opts: { entity?: unknown; runs?: unknown[] } = {}): MockHand
     if (path === 'agentRun.sweep') return { swept: 0 };
     if (path === 'agentRun.answerCheckpoint') return { ticket: target, run: RUN };
     if (path === 'entity.update') return target;
-    return {};
+    return registryReply(path) ?? {};
   };
 }
 
@@ -2514,15 +2721,13 @@ function TicketOnWarmCache() {
 }
 
 /** Второй тикет — тот же экран, другой проп: переход внутри вкладки монтирования не меняет. */
-const TICKET_B = {
+const TICKET_B = wireEntity({
   ...TICKET,
   id: 't2',
   title: 'Собрать релиз',
-  aspectsMap: {
-    'orbis/task': { status: 'waiting', waiting_for: 'Тегать ли rc?' },
-    'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID },
-  },
-};
+  props: { ...TICKET.props, 'orbis/waiting_for': 'Тегать ли rc?' },
+  aspects: TICKET.aspects,
+});
 
 function TwoTickets() {
   const [id, setId] = useState('t1');
@@ -2570,7 +2775,7 @@ describe('ADE: тикет', () => {
     );
   });
 
-  test('таб «Детали»: карточка назначения показывает грант «worker-1» и may_close; смена may_close → entity.update с aspects.orbis/assignment', async () => {
+  test('таб «Детали»: карточка назначения показывает грант «worker-1» и may_close; смена may_close → entity.update с props по id свойств', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
     const details = await screen.findByRole('tabpanel', { name: 'Детали' });
     const card = within(details).getByTestId('assignment-card');
@@ -2579,20 +2784,20 @@ describe('ADE: тикет', () => {
     expect(await within(card).findByText('worker-1')).toBeInTheDocument();
 
     const mayClose = within(card).getByRole('checkbox', { name: 'Может закрывать сам' });
-    expect(mayClose).not.toBeChecked(); // поля в аспекте нет — значит false (С8)
+    expect(mayClose).not.toBeChecked(); // свойства нет — значит false (С8)
     await userEvent.click(mayClose);
     await userEvent.click(within(card).getByRole('button', { name: 'Сохранить' }));
 
     await waitFor(() => {
       const input = calls.find((c) => c.path === 'entity.update')?.input as {
         id: string;
-        aspects: Record<string, Record<string, unknown>>;
+        props: Record<string, unknown>;
       };
       expect(input.id).toBe('t1');
-      expect(input.aspects['orbis/assignment']).toEqual({
-        executor: 'agent',
-        grant_id: GRANT_ID,
-        may_close: true,
+      expect(input.props).toEqual({
+        'orbis/executor': 'agent',
+        'orbis/grant': GRANT_ID,
+        'orbis/may_close': true,
       });
     });
 
@@ -2601,12 +2806,12 @@ describe('ADE: тикет', () => {
     expect(within(details).queryByTestId('aspect-orbis/assignment')).toBeNull();
   });
 
-  test('переключение агент → человек уходит с grant_id:null; «Снять назначение» снимает аспект целиком', async () => {
+  test('переключение агент → человек снимает грант через unset; «Снять назначение» снимает аспект целиком', async () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="t1" />, adeHandler());
     const card = within(await screen.findByRole('tabpanel', { name: 'Детали' })).getByTestId(
       'assignment-card',
     );
-    // Выбранный доступ подставлен из аспекта: сохранение без касания списка обязано оставить
+    // Выбранный доступ подставлен из свойства: сохранение без касания списка обязано оставить
     // тикет у того же агента.
     expect(within(card).getByLabelText('Доступ агента')).toHaveValue(GRANT_ID);
 
@@ -2614,38 +2819,36 @@ describe('ADE: тикет', () => {
     await userEvent.click(within(card).getByRole('button', { name: 'Сохранить' }));
     await waitFor(() => {
       const input = calls.find((c) => c.path === 'entity.update')?.input as {
-        aspects: Record<string, Record<string, unknown> | null>;
+        props: Record<string, unknown>;
+        unset: string[];
       };
-      // grant_id:null ОБЯЗАТЕЛЕН: пару (human, grant_id) сервер считает рассогласованием и
-      // отвечает VALIDATION, а патч мержится по полям — без null прежний грант пережил бы
-      // переключение.
-      expect(input.aspects['orbis/assignment']).toEqual({
-        executor: 'human',
-        grant_id: null,
-        may_close: null,
-      });
+      // СНЯТИЕ гранта обязательно: пару (human, grant) сервер считает рассогласованием и
+      // отвечает VALIDATION, а патч мержится по ключам — без снятия прежний грант пережил бы
+      // переключение. И снимается он списком `unset`, а не `null` в значении (§А1-1).
+      expect(input.props).toEqual({ 'orbis/executor': 'human' });
+      expect(input.unset).toEqual(['orbis/grant', 'orbis/may_close']);
     });
 
     await userEvent.click(within(card).getByRole('button', { name: 'Снять назначение' }));
     await waitFor(() => {
       const last = calls.filter((c) => c.path === 'entity.update').at(-1)?.input as {
-        aspects: Record<string, unknown>;
+        aspects: { detach?: string[] };
       };
-      expect(last.aspects['orbis/assignment']).toBeNull();
+      // Снятие аспекта — `detach` (§А1-1), а не `null` вместо карты полей: снятие
+      // интерпретации значений не трогает (Р9).
+      expect(last.aspects.detach).toEqual(['orbis/assignment']);
     });
   });
 
   test('прогон завершён: заголовок «Готово, проверьте» и вторая кнопка — «Закрыть тикет»', async () => {
+    const { 'orbis/run_checkpoint': _asked, ...withoutCheckpoint } = RUN.props;
     const finished = {
       ...RUN,
-      aspectsMap: {
-        'orbis/agent-run': {
-          ...RUN.aspectsMap['orbis/agent-run'],
-          outcome: 'finished',
-          checkpoint: undefined,
-          finished_at: '2026-08-17T10:30:00.000Z',
-          report: 'Парсер починен, тесты зелёные.',
-        },
+      props: {
+        ...withoutCheckpoint,
+        'orbis/run_outcome': 'finished',
+        'orbis/run_finished_at': '2026-08-17T10:30:00.000Z',
+        'orbis/run_report': 'Парсер починен, тесты зелёные.',
       },
     };
     const { calls } = renderWithProviders(
@@ -2663,12 +2866,15 @@ describe('ADE: тикет', () => {
     await waitFor(() => {
       const input = calls.find((c) => c.path === 'entity.update')?.input as {
         id: string;
-        aspects: Record<string, Record<string, unknown>>;
+        props: Record<string, unknown>;
+        unset: string[];
       };
       expect(input.id).toBe('t1');
-      // waiting_for снимается вместе с уходом из waiting — конвенция среза: вопрос рядом с
+      // Вопрос снимается вместе с уходом из waiting — конвенция среза: вопрос рядом с
       // закрытым тикетом читался бы как открытый (так же поступает сервер на своих выходах).
-      expect(input.aspects['orbis/task']).toEqual({ status: 'done', waiting_for: null });
+      // Снятие — СПИСКОМ `unset`, а не `null` в значении (§А1-1).
+      expect(input.props).toEqual({ 'orbis/task_status': 'done' });
+      expect(input.unset).toEqual(['orbis/waiting_for']);
     });
   });
 
@@ -2688,13 +2894,15 @@ describe('ADE: тикет', () => {
   });
 
   test('тикет не в waiting → чекпойнт-блока нет; заметка без orbis/task → назначения и прогонов нет', async () => {
-    const working = {
+    const working = wireEntity({
       ...TICKET,
-      aspectsMap: {
-        'orbis/task': { status: 'in_progress' },
-        'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID },
+      props: {
+        'orbis/task_status': 'in_progress',
+        'orbis/executor': 'agent',
+        'orbis/grant': GRANT_ID,
       },
-    };
+      aspects: ['orbis/task', 'orbis/assignment'],
+    });
     const first = renderWithProviders(
       <DetailScreen entityId="t1" />,
       adeHandler({ entity: working }),
@@ -2706,7 +2914,7 @@ describe('ADE: тикет', () => {
     expect(await screen.findByTestId('run-r1')).toBeInTheDocument();
     first.unmount();
 
-    const note = { ...entity, id: 'n1', aspectsMap: { 'orbis/note': {} } };
+    const note = wireEntity({ ...entity, id: 'n1', props: {}, aspects: ['orbis/note'] });
     const { calls } = renderWithProviders(
       <DetailScreen entityId="n1" />,
       adeHandler({ entity: note }),
@@ -2761,11 +2969,12 @@ describe('ADE: тикет', () => {
   test('orbis/assignment без orbis/task: карточка назначения видна (иначе назначение не снять)', async () => {
     // Сервер назначения на не-задаче не запрещает (invariants.ts), а прячь мы карточку —
     // владелец видел бы запись, которую агент считает своей, и не мог бы это отменить.
-    const assignedNote = {
+    const assignedNote = wireEntity({
       ...entity,
       id: 'n2',
-      aspectsMap: { 'orbis/assignment': { executor: 'agent', grant_id: GRANT_ID } },
-    };
+      props: { 'orbis/executor': 'agent', 'orbis/grant': GRANT_ID },
+      aspects: ['orbis/assignment'],
+    });
     renderWithProviders(<DetailScreen entityId="n2" />, adeHandler({ entity: assignedNote }));
     await screen.findByRole('tabpanel', { name: 'Детали' });
     const card = await screen.findByTestId('assignment-card');
@@ -2805,7 +3014,7 @@ describe('ADE: тикет', () => {
       if (path === 'oauth.listGrants') return [GRANT];
       if (path === 'aspect.list') return [];
       if (path === 'agentRun.sweep') return { swept: 0 };
-      return {};
+      return registryReply(path) ?? {};
     });
     // Премиса: у первого тикета прогон ЕСТЬ и виден — иначе проверка ниже зелена сама собой.
     expect(await screen.findByTestId('run-r1')).toBeInTheDocument();
@@ -2841,7 +3050,7 @@ describe('ADE: тикет', () => {
       if (path === 'oauth.listGrants') return [GRANT];
       if (path === 'aspect.list') return [];
       if (path === 'agentRun.sweep') return { swept: 0 };
-      return {};
+      return registryReply(path) ?? {};
     });
     // Прогрев: сходить на t2 и вернуться. Без него переход идёт через кадр, где записи ещё нет,
     // а `isTicket` ложен, — блок снимается сам собой, и проверка была бы зелена и без key.
@@ -2874,12 +3083,13 @@ describe('ADE: тикет', () => {
       createdAt: '2026-08-17T10:00:00.000Z',
       updatedAt: '2026-08-17T10:00:00.000Z',
     });
-    const subtask = {
+    const subtask = wireEntity({
       ...entity,
       id: 's1',
       title: 'Написать тест',
-      aspectsMap: { 'orbis/task': { status: 'inbox' } },
-    };
+      props: { 'orbis/task_status': 'inbox' },
+      aspects: ['orbis/task'],
+    });
     renderWithProviders(<DetailScreen entityId="t1" />, (path, input) => {
       if (path === 'entity.get') {
         const { id } = input as { id: string };
@@ -2895,7 +3105,7 @@ describe('ADE: тикет', () => {
       if (path === 'oauth.listGrants') return [GRANT];
       if (path === 'aspect.list') return [];
       if (path === 'agentRun.sweep') return { swept: 0 };
-      return {};
+      return registryReply(path) ?? {};
     });
     const details = await screen.findByRole('tabpanel', { name: 'Детали' });
     // Прогон не попадает в подзадачи НИ НА ОДНОМ кадре: роль известна из самой связи, и
@@ -2920,12 +3130,13 @@ describe('ADE: тикет', () => {
       createdAt: '2026-08-17T10:00:00.000Z',
       updatedAt: '2026-08-17T10:00:00.000Z',
     });
-    const ticket = {
+    const ticket = wireEntity({
       ...entity,
       id: 'tk1',
       title: 'Починить парсер',
-      aspectsMap: { 'orbis/task': { status: 'inbox' } },
-    };
+      props: { 'orbis/task_status': 'inbox' },
+      aspects: ['orbis/task'],
+    });
     renderWithProviders(<DetailScreen entityId="t1" />, (path, input) => {
       if (path === 'entity.get') {
         const { id } = input as { id: string };
@@ -2941,7 +3152,7 @@ describe('ADE: тикет', () => {
       if (path === 'oauth.listGrants') return [GRANT];
       if (path === 'aspect.list') return [];
       if (path === 'agentRun.sweep') return { swept: 0 };
-      return {};
+      return registryReply(path) ?? {};
     });
     const details = await screen.findByRole('tabpanel', { name: 'Детали' });
     await waitFor(() => expect(within(details).getAllByTestId('subtask')).toHaveLength(1));
@@ -2966,26 +3177,27 @@ const RUN_STEPS = [
   { seq: 2, at: '2026-08-17T10:02:00.000Z', summary: 'Завёл ветку fix/parser', external: true },
 ];
 
-const RUN_ASPECT_FINISHED = {
-  grant_id: GRANT_ID,
-  outcome: 'finished',
-  started_at: '2026-08-17T10:00:00.000Z',
-  finished_at: '2026-08-17T10:04:00.000Z',
-  last_step_at: '2026-08-17T10:03:00.000Z',
-  step_count: 3,
-  steps: RUN_STEPS,
-  report: 'Парсер починен, тесты зелёные.',
-  usage: { input_tokens: 12000, output_tokens: 3400, cost_usd: 0.42 },
-  session_url: 'https://agent.example/session/r1',
+const RUN_PROPS_FINISHED = {
+  'orbis/grant': GRANT_ID,
+  'orbis/run_outcome': 'finished',
+  'orbis/run_started_at': '2026-08-17T10:00:00.000Z',
+  'orbis/run_finished_at': '2026-08-17T10:04:00.000Z',
+  'orbis/last_step_at': '2026-08-17T10:03:00.000Z',
+  'orbis/step_count': 3,
+  'orbis/run_steps': RUN_STEPS,
+  'orbis/run_report': 'Парсер починен, тесты зелёные.',
+  'orbis/run_usage': { input_tokens: 12000, output_tokens: 3400, cost_usd: 0.42 },
+  'orbis/session_url': 'https://agent.example/session/r1',
 };
 
 /** Сам прогон в объёме detail (entity.get): с телом и bodyDoc, как любая запись графа. */
-const RUN_ENTITY = {
+const RUN_ENTITY = wireEntity({
   ...entity,
   id: 'r1',
   title: 'Прогон: Починить парсер',
-  aspectsMap: { 'orbis/agent-run': RUN_ASPECT_FINISHED },
-};
+  props: RUN_PROPS_FINISHED,
+  aspects: ['orbis/agent-run'],
+});
 
 /**
  * Записка успешного отката приходит С СЕРВЕРА (agent-loop/rollback.ts ROLLBACK_NOTE) — здесь
@@ -3007,7 +3219,7 @@ function runHandler(opts: { run?: unknown; rollback?: unknown } = {}): MockHandl
     if (path === 'aspect.list') return [];
     if (path === 'agentRun.rollback')
       return opts.rollback ?? { ok: true, undone: ['a1', 'a2'], note: ROLLBACK_NOTE };
-    return {};
+    return registryReply(path) ?? {};
   };
 }
 
@@ -3051,17 +3263,18 @@ describe('ADE: прогон', () => {
   });
 
   test('вопрос, ответ владельца и записка обрыва — отдельными блоками', async () => {
+    const { 'orbis/run_report': _report, ...withoutReport } = RUN_PROPS_FINISHED;
     const abandoned = {
       ...RUN_ENTITY,
-      aspectsMap: {
-        'orbis/agent-run': {
-          ...RUN_ASPECT_FINISHED,
-          outcome: 'abandoned',
-          report: undefined,
-          checkpoint: { question: 'Какую БД брать?', asked_at: '2026-08-17T10:02:30.000Z' },
-          reply: { text: 'Postgres', at: '2026-08-17T10:02:50.000Z' },
-          abandon_note: 'Исполнитель молчал 30 минут — прогон подмели.',
+      props: {
+        ...withoutReport,
+        'orbis/run_outcome': 'abandoned',
+        'orbis/run_checkpoint': {
+          question: 'Какую БД брать?',
+          asked_at: '2026-08-17T10:02:30.000Z',
         },
+        'orbis/run_reply': { text: 'Postgres', at: '2026-08-17T10:02:50.000Z' },
+        'orbis/abandon_note': 'Исполнитель молчал 30 минут — прогон подмели.',
       },
     };
     renderWithProviders(<DetailScreen entityId="r1" />, runHandler({ run: abandoned }));
@@ -3161,17 +3374,12 @@ describe('ADE: прогон', () => {
   });
 
   test('идущий прогон: откат недоступен', async () => {
-    const running = {
-      ...RUN_ENTITY,
-      aspectsMap: {
-        'orbis/agent-run': {
-          ...RUN_ASPECT_FINISHED,
-          outcome: 'running',
-          finished_at: undefined,
-          report: undefined,
-        },
-      },
-    };
+    const {
+      'orbis/run_finished_at': _finished,
+      'orbis/run_report': _report,
+      ...started
+    } = RUN_PROPS_FINISHED;
+    const running = { ...RUN_ENTITY, props: { ...started, 'orbis/run_outcome': 'running' } };
     renderWithProviders(<DetailScreen entityId="r1" />, runHandler({ run: running }));
     const feed = await screen.findByTestId('run-feed');
     expect(within(feed).getByText('идёт')).toBeInTheDocument();
@@ -3185,18 +3393,19 @@ describe('ADE: прогон', () => {
     // с подсказкой «откатывать нечего» — то есть врал бы про уже сделанный откат.
     // Но и бейдж, и подсказка говорят про АРХИВ, а не про откат: в архив прогон кладёт и
     // «Архивировать» из меню ⋮, и такой прогон приходит сюда с целым аспектом и всеми шагами.
+    const {
+      'orbis/run_finished_at': _finished,
+      'orbis/run_report': _report,
+      ...started
+    } = RUN_PROPS_FINISHED;
     const rolledBack = {
       ...RUN_ENTITY,
       archived: true,
-      aspectsMap: {
-        'orbis/agent-run': {
-          ...RUN_ASPECT_FINISHED,
-          outcome: 'running',
-          finished_at: undefined,
-          report: undefined,
-          step_count: 0,
-          steps: [],
-        },
+      props: {
+        ...started,
+        'orbis/run_outcome': 'running',
+        'orbis/step_count': 0,
+        'orbis/run_steps': [],
       },
     };
     renderWithProviders(<DetailScreen entityId="r1" />, runHandler({ run: rolledBack }));
@@ -3212,9 +3421,7 @@ describe('ADE: прогон', () => {
     // строку текстом можно (иногда это опечатка), сделать кликабельной — нельзя.
     const evil = {
       ...RUN_ENTITY,
-      aspectsMap: {
-        'orbis/agent-run': { ...RUN_ASPECT_FINISHED, session_url: 'javascript:alert(1)' },
-      },
+      props: { ...RUN_PROPS_FINISHED, 'orbis/session_url': 'javascript:alert(1)' },
     };
     renderWithProviders(<DetailScreen entityId="r1" />, runHandler({ run: evil }));
     const feed = await screen.findByTestId('run-feed');
@@ -3266,7 +3473,7 @@ function versionsHandler(
         createdAt: '2026-08-17T12:00:00.000Z',
       };
     if (path === 'version.restore') return (opts.restore ?? (() => entity))();
-    return {};
+    return registryReply(path) ?? {};
   };
 }
 
@@ -3297,7 +3504,7 @@ const twoEntitiesVersionsHandler: MockHandler = (path, input) => {
   if (path === 'aspect.list') return [];
   if (path === 'version.list')
     return (input as { entityId: string }).entityId === 'e1' ? VERSIONS : [VERSION_E2];
-  return {};
+  return registryReply(path) ?? {};
 };
 
 /** Как роутер: `<DetailScreen entityId={top.id} />` монтируется БЕЗ key (router.tsx). */
@@ -3513,24 +3720,21 @@ describe('ADE: версии', () => {
  * Рутина в объёме detail (entity.get): «что делать» лежит в ТЕЛЕ, в аспекте — только
  * расписание и права (V1.1). `days` непуст — иначе не проверить, что дни вообще печатаются.
  */
-const ROUTINE = {
+const ROUTINE = wireEntity({
   ...entity,
   id: 'rt1',
   title: 'Утренний разбор',
-  aspectsMap: {
-    'orbis/routine': {
-      stage: 'active',
-      at: '07:00',
-      days: ['mo', 'we', 'fr'],
-      mode: 'propose',
-    },
+  props: {
+    'orbis/routine_stage': 'active',
+    'orbis/routine_at': '07:00',
+    'orbis/routine_days': ['mo', 'we', 'fr'],
+    'orbis/routine_mode': 'propose',
   },
-};
+  aspects: ['orbis/routine'],
+});
 
-/** Рутина-фикстура: поля аспекта разные от теста к тесту, форма записи — одна. */
-type RoutineFixture = Omit<typeof entity, 'aspectsMap'> & {
-  aspectsMap: { 'orbis/routine': Record<string, unknown> };
-};
+/** Рутина-фикстура: свойства разные от теста к тесту, форма записи — одна. */
+type RoutineFixture = typeof ROUTINE;
 
 /** Момент следующего срабатывания — из routine.overview, часы там серверные (V1.14). */
 const NEXT_BUCKET_AT = '2026-08-19T04:00:00.000Z';
@@ -3540,42 +3744,40 @@ const NEXT_BUCKET_AT = '2026-08-19T04:00:00.000Z';
  * от них ровно тем, что гранта у них нет вовсе: работу делал внутренний исполнитель.
  * Порядок — как у сервера (`sortBy=orbis/created_at:desc`): последний прогон стоит первым.
  */
-const ROUTINE_RUN_DONE = {
+const ROUTINE_RUN_DONE = wireEntity({
   ...RUN,
   id: 'rr2',
   title: 'Прогон: Утренний разбор',
-  aspectsMap: {
-    'orbis/agent-run': {
-      routine_id: 'rt1',
-      bucket: '2026-08-18T07:00',
-      attempt: 1,
-      outcome: 'finished',
-      started_at: '2026-08-18T04:00:00.000Z',
-      finished_at: '2026-08-18T04:02:00.000Z',
-      step_count: 2,
-      steps: [],
-    },
+  props: {
+    'orbis/run_routine': 'rt1',
+    'orbis/run_bucket': '2026-08-18T07:00',
+    'orbis/run_attempt': 1,
+    'orbis/run_outcome': 'finished',
+    'orbis/run_started_at': '2026-08-18T04:00:00.000Z',
+    'orbis/run_finished_at': '2026-08-18T04:02:00.000Z',
+    'orbis/step_count': 2,
+    'orbis/run_steps': [],
   },
-};
+  aspects: ['orbis/agent-run'],
+});
 
-const ROUTINE_RUN_FAILED = {
+const ROUTINE_RUN_FAILED = wireEntity({
   ...RUN,
   id: 'rr1',
   title: 'Прогон: Утренний разбор',
-  aspectsMap: {
-    'orbis/agent-run': {
-      routine_id: 'rt1',
-      bucket: '2026-08-17T07:00',
-      attempt: 3,
-      outcome: 'failed',
-      fail_note: 'провайдер не ответил',
-      started_at: '2026-08-17T04:00:00.000Z',
-      finished_at: '2026-08-17T04:01:00.000Z',
-      step_count: 1,
-      steps: [],
-    },
+  props: {
+    'orbis/run_routine': 'rt1',
+    'orbis/run_bucket': '2026-08-17T07:00',
+    'orbis/run_attempt': 3,
+    'orbis/run_outcome': 'failed',
+    'orbis/fail_note': 'провайдер не ответил',
+    'orbis/run_started_at': '2026-08-17T04:00:00.000Z',
+    'orbis/run_finished_at': '2026-08-17T04:01:00.000Z',
+    'orbis/step_count': 1,
+    'orbis/run_steps': [],
   },
-};
+  aspects: ['orbis/agent-run'],
+});
 
 /**
  * Обработчик экрана рутины. `stage` держится ПЕРЕМЕННОЙ, а не константой: пауза — это
@@ -3586,10 +3788,10 @@ function routineHandler(
   opts: { entity?: RoutineFixture; runs?: unknown[]; overview?: unknown } = {},
 ): MockHandler {
   const base = opts.entity ?? ROUTINE;
-  let stage = (base.aspectsMap['orbis/routine'] as { stage: string }).stage;
+  let stage = base.props['orbis/routine_stage'] as string;
   const current = () => ({
     ...base,
-    aspectsMap: { 'orbis/routine': { ...base.aspectsMap['orbis/routine'], stage } },
+    props: { ...base.props, 'orbis/routine_stage': stage },
   });
   return (path, input) => {
     if (path === 'entity.get') return { entity: current(), relations: [], thread: null };
@@ -3608,10 +3810,8 @@ function routineHandler(
       );
     if (path === 'routine.runNow') return { runId: 'rr9' };
     if (path === 'entity.update') {
-      const patch = (input as { aspects?: Record<string, { stage?: string }> }).aspects?.[
-        'orbis/routine'
-      ];
-      if (patch?.stage !== undefined) stage = patch.stage;
+      const patch = (input as { props?: Record<string, unknown> }).props?.['orbis/routine_stage'];
+      if (typeof patch === 'string') stage = patch;
       return current();
     }
     // Часовой пояс владельца — тот же шов, что у ленты прогона и истории: без него время
@@ -3620,7 +3820,7 @@ function routineHandler(
     if (path === 'aspect.list') return [];
     if (path === 'oauth.listGrants') return [GRANT];
     if (path === 'agentRun.sweep') return { swept: 0 };
-    return {};
+    return registryReply(path) ?? {};
   };
 }
 
@@ -3667,17 +3867,16 @@ describe('V1: рутина', () => {
   });
 
   test('режим act печатает разрешённые инструменты; рутина на паузе — «на паузе» вместо времени', async () => {
-    const acting = {
+    const acting = wireEntity({
       ...ROUTINE,
-      aspectsMap: {
-        'orbis/routine': {
-          stage: 'paused',
-          at: '21:30',
-          mode: 'act',
-          allowed_tools: ['entity_update', 'thread_post'],
-        },
+      props: {
+        'orbis/routine_stage': 'paused',
+        'orbis/routine_at': '21:30',
+        'orbis/routine_mode': 'act',
+        'orbis/allowed_tools': ['entity_update', 'thread_post'],
       },
-    };
+      aspects: ['orbis/routine'],
+    });
     renderWithProviders(<DetailScreen entityId="rt1" />, routineHandler({ entity: acting }));
     const status = await screen.findByTestId('routine-status');
     // «действует» без списка инструментов — это «действует как угодно»: право владелец читает
@@ -3710,26 +3909,21 @@ describe('V1: рутина', () => {
     await waitFor(() => {
       const input = calls.find((c) => c.path === 'entity.update')?.input as {
         id: string;
-        aspects: Record<string, Record<string, unknown>>;
+        props: Record<string, unknown>;
       };
       expect(input.id).toBe('rt1');
-      // Патч мержится по полям: расписание и права пауза не трогает.
-      expect(input.aspects['orbis/routine']).toEqual({ stage: 'paused' });
+      // Патч мержится по КЛЮЧАМ свойств: расписание и права пауза не трогает.
+      expect(input.props).toEqual({ 'orbis/routine_stage': 'paused' });
     });
     expect(await screen.findByRole('button', { name: 'Возобновить' })).toBeInTheDocument();
   });
 
   test('идёт прогон — «Прогнать сейчас» заблокирована; отказ сервера показан текстом', async () => {
+    const { 'orbis/run_finished_at': _finished, ...started } = ROUTINE_RUN_DONE.props;
     const running = {
       ...ROUTINE_RUN_DONE,
       id: 'rr3',
-      aspectsMap: {
-        'orbis/agent-run': {
-          ...ROUTINE_RUN_DONE.aspectsMap['orbis/agent-run'],
-          outcome: 'running',
-          finished_at: undefined,
-        },
-      },
+      props: { ...started, 'orbis/run_outcome': 'running' },
     };
     const busy = renderWithProviders(
       <DetailScreen entityId="rt1" />,
@@ -3775,25 +3969,30 @@ describe('V1: рутина', () => {
 // а результат режима «предлагает» — карточка предложения с самими правками.
 
 /** Прогон рутины в объёме detail. Аспект от теста к тесту разный, форма записи — одна. */
-const routineRunEntity = (aspect: Record<string, unknown>, archived = false) => ({
-  ...entity,
-  id: 'rr1',
-  title: 'Прогон: Утренний разбор',
-  archived,
-  aspectsMap: { 'orbis/agent-run': aspect },
-});
+const routineRunEntity = (props: Record<string, unknown>, archived = false) =>
+  wireEntity({
+    ...entity,
+    id: 'rr1',
+    title: 'Прогон: Утренний разбор',
+    archived,
+    props,
+    aspects: ['orbis/agent-run'],
+  });
 
 const ROUTINE_RUN_CHECKPOINT = {
-  routine_id: 'rt1',
-  bucket: '2026-08-18T07:00',
-  attempt: 1,
-  outcome: 'checkpoint',
-  started_at: '2026-08-18T04:00:00.000Z',
-  step_count: 1,
-  steps: [
+  'orbis/run_routine': 'rt1',
+  'orbis/run_bucket': '2026-08-18T07:00',
+  'orbis/run_attempt': 1,
+  'orbis/run_outcome': 'checkpoint',
+  'orbis/run_started_at': '2026-08-18T04:00:00.000Z',
+  'orbis/step_count': 1,
+  'orbis/run_steps': [
     { seq: 1, at: '2026-08-18T04:00:30.000Z', summary: 'Прочитал инструкцию', external: false },
   ],
-  checkpoint: { question: 'Переносить ли встречу с врачом?', asked_at: '2026-08-18T04:01:00.000Z' },
+  'orbis/run_checkpoint': {
+    question: 'Переносить ли встречу с врачом?',
+    asked_at: '2026-08-18T04:01:00.000Z',
+  },
 };
 
 /** Предложение в форме `routine.proposal` (ProposalView): строки — по ПОЛЮ, а не по операции. */
@@ -3825,7 +4024,7 @@ const PROPOSAL_VIEW = {
 
 function routineRunHandler(
   opts: {
-    aspect?: Record<string, unknown>;
+    props?: Record<string, unknown>;
     proposal?: unknown;
     decide?: unknown;
     archived?: boolean;
@@ -3836,7 +4035,7 @@ function routineRunHandler(
     overview?: unknown;
   } = {},
 ): MockHandler {
-  const run = routineRunEntity(opts.aspect ?? ROUTINE_RUN_CHECKPOINT, opts.archived ?? false);
+  const run = routineRunEntity(opts.props ?? ROUTINE_RUN_CHECKPOINT, opts.archived ?? false);
   return (path, input) => {
     if (path === 'entity.get') {
       const { id } = input as { id: string };
@@ -3910,15 +4109,15 @@ describe('V1: прогон рутины', () => {
     const { calls } = renderWithProviders(
       <DetailScreen entityId="rr1" />,
       routineRunHandler({
-        aspect: {
+        props: {
           ...ROUTINE_RUN_CHECKPOINT,
-          outcome: 'finished',
-          checkpoint: undefined,
-          finished_at: '2026-08-18T04:02:00.000Z',
-          proposal: { pending_id: 'p1', status: 'pending' },
+          'orbis/run_outcome': 'finished',
+          'orbis/run_checkpoint': undefined,
+          'orbis/run_finished_at': '2026-08-18T04:02:00.000Z',
+          'orbis/run_proposal': { pending_id: 'p1', status: 'pending' },
           // `orbis_propose` кладёт объяснение и в отчёт прогона, и в карточку (propose.ts) —
           // фикстура повторяет это дословно, иначе не поймать дубль на экране.
-          report: PROPOSAL_VIEW.explanation,
+          'orbis/run_report': PROPOSAL_VIEW.explanation,
         },
         proposal: PROPOSAL_VIEW,
         decide: {
@@ -3966,13 +4165,13 @@ describe('V1: прогон рутины', () => {
     const failed = renderWithProviders(
       <DetailScreen entityId="rr1" />,
       routineRunHandler({
-        aspect: {
+        props: {
           ...ROUTINE_RUN_CHECKPOINT,
-          outcome: 'failed',
-          attempt: 3,
-          checkpoint: undefined,
-          fail_note: 'провайдер не ответил',
-          finished_at: '2026-08-18T04:01:00.000Z',
+          'orbis/run_outcome': 'failed',
+          'orbis/run_attempt': 3,
+          'orbis/run_checkpoint': undefined,
+          'orbis/fail_note': 'провайдер не ответил',
+          'orbis/run_finished_at': '2026-08-18T04:01:00.000Z',
         },
       }),
     );
@@ -3989,10 +4188,10 @@ describe('V1: прогон рутины', () => {
     const answered = renderWithProviders(
       <DetailScreen entityId="rr1" />,
       routineRunHandler({
-        aspect: {
+        props: {
           ...ROUTINE_RUN_CHECKPOINT,
-          outcome: 'answered',
-          reply: { text: 'Перенеси на пятницу', at: '2026-08-18T06:00:00.000Z' },
+          'orbis/run_outcome': 'answered',
+          'orbis/run_reply': { text: 'Перенеси на пятницу', at: '2026-08-18T06:00:00.000Z' },
         },
       }),
     );
@@ -4007,7 +4206,9 @@ describe('V1: прогон рутины', () => {
 
     const stale = renderWithProviders(
       <DetailScreen entityId="rr1" />,
-      routineRunHandler({ aspect: { ...ROUTINE_RUN_CHECKPOINT, outcome: 'stale' } }),
+      routineRunHandler({
+        props: { ...ROUTINE_RUN_CHECKPOINT, 'orbis/run_outcome': 'stale' },
+      }),
     );
     feed = await screen.findByTestId('run-feed');
     expect(within(feed).getByText('снят')).toBeInTheDocument();
@@ -4024,7 +4225,7 @@ describe('V1: прогон рутины', () => {
     const rolledBack = renderWithProviders(
       <DetailScreen entityId="rr1" />,
       routineRunHandler({
-        aspect: { ...ROUTINE_RUN_CHECKPOINT, outcome: 'stale' },
+        props: { ...ROUTINE_RUN_CHECKPOINT, 'orbis/run_outcome': 'stale' },
         archived: true,
       }),
     );
@@ -4049,9 +4250,7 @@ describe('V1: прогон рутины', () => {
     const withProposal = (id: string, proposal: Record<string, unknown>) => ({
       ...ROUTINE_RUN_DONE,
       id,
-      aspectsMap: {
-        'orbis/agent-run': { ...ROUTINE_RUN_DONE.aspectsMap['orbis/agent-run'], proposal },
-      },
+      props: { ...ROUTINE_RUN_DONE.props, 'orbis/run_proposal': proposal },
     });
     renderWithProviders(
       <DetailScreen entityId="rt1" />,
@@ -4134,10 +4333,10 @@ const batchAction2 = (over: Record<string, unknown> = {}) =>
 /** Прогон с неразобранной пачкой: закончился обычным `finished`, флажок стоит (ОЧ.6). */
 const RUN_WITH_BATCH = {
   ...ROUTINE_RUN_CHECKPOINT,
-  outcome: 'finished',
-  checkpoint: undefined,
-  finished_at: '2026-08-18T04:02:00.000Z',
-  undecided: true,
+  'orbis/run_outcome': 'finished',
+  'orbis/run_checkpoint': undefined,
+  'orbis/run_finished_at': '2026-08-18T04:02:00.000Z',
+  'orbis/undecided': true,
 };
 
 /** Обзор рутины НА ПАУЗЕ: `nextBucketAt: null` — сработать ей нечем (RoutineOverview). */
@@ -4154,7 +4353,7 @@ describe('D42: пачка решений на экране прогона', () =
     const full = renderWithProviders(
       <DetailScreen entityId="rr1" />,
       routineRunHandler({
-        aspect: RUN_WITH_BATCH,
+        props: RUN_WITH_BATCH,
         units: [
           batchQuestion(),
           batchAction(),
@@ -4192,7 +4391,7 @@ describe('D42: пачка решений на экране прогона', () =
     const noFlag = renderWithProviders(
       <DetailScreen entityId="rr1" />,
       routineRunHandler({
-        aspect: { ...RUN_WITH_BATCH, undecided: undefined },
+        props: { ...RUN_WITH_BATCH, 'orbis/undecided': undefined },
         units: [batchAction({ fate: 'approved' })],
       }),
     );
@@ -4203,7 +4402,7 @@ describe('D42: пачка решений на экране прогона', () =
     // прогон говорит «неразобрано», и пустое место читалось бы как «уже разобрано».
     const flagOnly = renderWithProviders(
       <DetailScreen entityId="rr1" />,
-      routineRunHandler({ aspect: RUN_WITH_BATCH }),
+      routineRunHandler({ props: RUN_WITH_BATCH }),
     );
     expect(await screen.findByTestId('run-decisions')).toHaveTextContent('Единиц пачки нет');
     flagOnly.unmount();
@@ -4211,7 +4410,7 @@ describe('D42: пачка решений на экране прогона', () =
     // Ни флажка, ни единиц — блока нет вовсе: заголовок на каждом прогоне был бы шумом.
     const empty = renderWithProviders(
       <DetailScreen entityId="rr1" />,
-      routineRunHandler({ aspect: { ...RUN_WITH_BATCH, undecided: undefined } }),
+      routineRunHandler({ props: { ...RUN_WITH_BATCH, 'orbis/undecided': undefined } }),
     );
     await screen.findByTestId('run-feed');
     await waitFor(() => expect(empty.calls.some((c) => c.path === 'routine.runUnits')).toBe(true));
@@ -4222,7 +4421,7 @@ describe('D42: пачка решений на экране прогона', () =
     const many = renderWithProviders(
       <DetailScreen entityId="rr1" />,
       routineRunHandler({
-        aspect: RUN_WITH_BATCH,
+        props: RUN_WITH_BATCH,
         units: [
           batchAction(),
           batchAction2(),
@@ -4277,7 +4476,7 @@ describe('D42: пачка решений на экране прогона', () =
     // путь (ОЧ.11), и кнопка, которой нечего делать, обещала бы разбор, которого не будет.
     renderWithProviders(
       <DetailScreen entityId="rr1" />,
-      routineRunHandler({ aspect: RUN_WITH_BATCH, units: [batchQuestion()] }),
+      routineRunHandler({ props: RUN_WITH_BATCH, units: [batchQuestion()] }),
     );
     const questionsOnly = await screen.findByTestId('run-decisions');
     await within(questionsOnly).findByTestId('question-card');
@@ -4290,7 +4489,7 @@ describe('D42: пачка решений на экране прогона', () =
     // читалась бы как отказ кнопки.
     renderWithProviders(
       <DetailScreen entityId="rr1" />,
-      routineRunHandler({ aspect: RUN_WITH_BATCH, units: [batchAction()], decideAll: [] }),
+      routineRunHandler({ props: RUN_WITH_BATCH, units: [batchAction()], decideAll: [] }),
     );
     const block = await screen.findByTestId('run-decisions');
     await userEvent.click(within(block).getByRole('button', { name: 'Принять все' }));
@@ -4302,7 +4501,7 @@ describe('D42: пачка решений на экране прогона', () =
   test('«Продолжить сейчас» зовёт runNow и ведёт на новый прогон; при неотвеченном терминальном вопросе — сперва предупреждение (приёмка 9, В3); на паузе кнопки нет, есть плашка (С2)', async () => {
     const plain = renderWithProviders(
       <DetailScreen entityId="rr1" />,
-      routineRunHandler({ aspect: RUN_WITH_BATCH, units: [batchAction()] }),
+      routineRunHandler({ props: RUN_WITH_BATCH, units: [batchAction()] }),
     );
     let block = await screen.findByTestId('run-decisions');
     // Терминального вопроса у прогона нет — гасить нечего, и лишний диалог был бы поборами
@@ -4325,7 +4524,7 @@ describe('D42: пачка решений на экране прогона', () =
     const risky = renderWithProviders(
       <DetailScreen entityId="rr1" />,
       routineRunHandler({
-        aspect: { ...ROUTINE_RUN_CHECKPOINT, undecided: true },
+        props: { ...ROUTINE_RUN_CHECKPOINT, 'orbis/undecided': true },
         units: [batchQuestion()],
       }),
     );
@@ -4347,7 +4546,7 @@ describe('D42: пачка решений на экране прогона', () =
     renderWithProviders(
       <DetailScreen entityId="rr1" />,
       routineRunHandler({
-        aspect: RUN_WITH_BATCH,
+        props: RUN_WITH_BATCH,
         units: [batchAction()],
         overview: PAUSED_OVERVIEW,
       }),
@@ -4365,7 +4564,7 @@ describe('D42: пачка решений на экране прогона', () =
     renderWithProviders(
       <DetailScreen entityId="rr1" />,
       routineRunHandler({
-        aspect: { ...ROUTINE_RUN_CHECKPOINT, undecided: true },
+        props: { ...ROUTINE_RUN_CHECKPOINT, 'orbis/undecided': true },
         units: [batchQuestion()],
       }),
     );
@@ -4381,20 +4580,18 @@ describe('D42: пачка решений на экране прогона', () =
   });
 
   test('история прогонов: у прогона с неразобранной пачкой — свой бейдж, отдельный от «ждёт решения» предложения (С8)', async () => {
-    const withAspect = (id: string, over: Record<string, unknown>) => ({
+    const withProps = (id: string, over: Record<string, unknown>) => ({
       ...ROUTINE_RUN_DONE,
       id,
-      aspectsMap: {
-        'orbis/agent-run': { ...ROUTINE_RUN_DONE.aspectsMap['orbis/agent-run'], ...over },
-      },
+      props: { ...ROUTINE_RUN_DONE.props, ...over },
     });
     renderWithProviders(
       <DetailScreen entityId="rt1" />,
       routineHandler({
         runs: [
-          withAspect('rb1', { undecided: true }),
-          withAspect('rb2', { proposal: { pending_id: 'p1', status: 'pending' } }),
-          withAspect('rb3', {}),
+          withProps('rb1', { 'orbis/undecided': true }),
+          withProps('rb2', { 'orbis/run_proposal': { pending_id: 'p1', status: 'pending' } }),
+          withProps('rb3', {}),
         ],
       }),
     );
@@ -4665,25 +4862,30 @@ describe('слой предложения', () => {
 
   test('развёрнутая плашка прячет и «Детали»: поле-близнец «статус» недоступно, свёрнутая — возвращает (смоук Н-2)', async () => {
     /**
-     * Ловушка, замеренная живым смоуком, а не выведенная. Поле «статус» в «Деталях» и строка
-     * правки «статус» в слое ВЫГЛЯДЯТ ОДИНАКОВО (общий `FIELD_CLASS` — сделано нарочно Задачей
-     * 10, чтобы владелец узнавал поле) и стоят в одном скролле. Но первое пишет в граф
-     * НЕМЕДЛЕННО, а второе применяется только по «Принять»: правка не в той из двух строк
-     * записала `status: done` за ~1 с без подтверждения, сдвинула `updated_at` и сделала
-     * предложение stale — вместе с набранными, но не отправленными правками.
+     * Ловушка, замеренная живым смоуком, а не выведенная. Поле «Состояние задачи» в «Деталях»
+     * и строка правки того же свойства в слое ВЫГЛЯДЯТ ОДИНАКОВО (общий `FIELD_CLASS` —
+     * сделано нарочно Задачей 10, чтобы владелец узнавал поле) и стоят в одном скролле. Но
+     * первое пишет в граф НЕМЕДЛЕННО, а второе применяется только по «Принять»: правка не в
+     * той из двух строк записала `done` за ~1 с без подтверждения, сдвинула `updated_at` и
+     * сделала предложение stale — вместе с набранными, но не отправленными правками.
+     *
+     * ИМЕНА у них с этой задачи РАЗНЫЕ, и это не ослабление ловушки: форма записи называет
+     * строку подписью свойства из реестра («Состояние задачи»), а слой предложения адресует
+     * `field` операции и показывает его как есть (`orbis/task_status`). Глазу они по-прежнему
+     * близнецы — а именно глаз и промахивался.
      *
      * Проверяется КЛАСС, а не роль. В jsdom таблиц стилей нет, `.hidden` ни во что не
      * вычисляется, и `getByRole` нашёл бы спрятанное поле как ни в чём не бывало — то есть
      * ассерт по доступности был бы зелен и на снятом классе. Класс же и есть тот договор,
      * которым экран прячет (см. `proposalOpen` в DetailScreen).
      */
-    renderWithProviders(<DetailScreen entityId="e1" />, overlayHandler());
+    const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, overlayHandler());
     const plate = await screen.findByTestId('proposal-plate');
     const tabs = screen.getByTestId('entity-tabs');
 
     // Премиса ловушки, без которой тест ничего не утверждает: близнец РЕАЛЬНО существует и
     // зовётся ТОЧНО ТАК ЖЕ, что строка правки в слое, — и живёт он именно под узлом вкладок.
-    const twin = within(tabs).getByLabelText('orbis/task status');
+    const twin = within(tabs).getByLabelText('Состояние задачи');
     expect(twin).toHaveValue('inbox');
     // Свёрнутая плашка ничего не прячет: до неё владелец правит «Детали» как раньше.
     expect(tabs).not.toHaveClass('hidden');
@@ -4694,14 +4896,21 @@ describe('слой предложения', () => {
     expect(tabs).toHaveClass('hidden');
     // Близнец не размонтирован, а спрятан: вкладка «Детали» держится живой (keepMounted), и
     // размонтирование стоило бы её запросов при каждом развороте плашки.
-    expect(within(tabs).getByLabelText('orbis/task status')).toBe(twin);
+    expect(within(tabs).getByLabelText('Состояние задачи')).toBe(twin);
 
     // Свернул — вернулось всё, и ровно то же самое: «Детали» правятся как до слоя.
     togglePlate(plate);
     expect(tabs).not.toHaveClass('hidden');
     fireEvent.change(twin, { target: { value: 'done' } });
-    fireEvent.blur(twin);
-    expect(twin).toHaveValue('done');
+    // Вторая половина ловушки, теперь проверяемая прямо: близнец пишет в граф НЕМЕДЛЕННО
+    // (у `select` — по выбору, без blur), и адрес у правки — id свойства. Ради этого
+    // «Детали» под развёрнутой плашкой и прячут.
+    await waitFor(() =>
+      expect(calls.find((c) => c.path === 'entity.update')?.input).toMatchObject({
+        id: 'e1',
+        props: { 'orbis/task_status': 'done' },
+      }),
+    );
   });
 
   test('правка значения поля в строке → edits.fields в вызове decideProposal; принятое сворачивает слой и обновляет ленту треда (приёмки 6, 9)', async () => {

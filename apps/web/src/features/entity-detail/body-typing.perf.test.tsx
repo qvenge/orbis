@@ -32,7 +32,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
-import { renderWithProviders } from '../../test/harness';
+import { renderWithProviders, wireEntity } from '../../test/harness';
 import { DetailScreen } from './DetailScreen';
 
 /** Бытовое тело: сорок блоков с жирным и курсивом — тот размер, на котором в коде уже замерена
@@ -42,24 +42,7 @@ const BODY = Array.from(
   (_, i) => `Абзац номер ${i} с **жирным** словом и _курсивом_ для веса разбора.`,
 ).join('\n\n');
 
-const entity = {
-  id: 'e1',
-  ownerId: 'u',
-  title: 'Задача',
-  emoji: null,
-  body: BODY,
-  bodyDoc: parseBody(BODY),
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: {},
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: '2026-07-05T00:00:00.000Z',
-  updatedAt: '2026-07-05T10:00:00.000Z',
-  archived: false,
-};
+const entity = wireEntity({ id: 'e1', title: 'Задача', body: BODY, bodyDoc: parseBody(BODY) });
 
 beforeEach(() => {
   localStorage.clear();

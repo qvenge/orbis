@@ -4,32 +4,36 @@
 // (UUIDv7 ОДИН на открытие экрана: повтор после ошибки шлёт тот же id; CONFLICT —
 // честная ошибка + новый id, уроки B4), needsSetup-форма первого месяца (§5 edge case:
 // доход + оценки по категориям → те же rows).
+import { legacyAspectsToProps } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { installHistorySync } from '../../app/history';
 import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
+import {
+  type MockHandler,
+  renderWithProviders,
+  trpcError,
+  wireEntity as wireFixture,
+} from '../../test/harness';
 import { RolloverScreen } from './RolloverScreen';
 
 // --- фикстуры -------------------------------------------------------------------------
 
-const ent = (id: string, title: string, aspects: Record<string, unknown> = {}) => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: aspects,
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+/**
+ * Строка выдачи в ОБЕИХ формах сразу: `props`+`aspects` (§А1-1) и старая карта — проекция
+ * той же пары (`wireEntity`). Аргументом остаётся карта, потому что экраны Финансов читают
+ * её до Задачи 13c; `props` из неё выводит ТА ЖЕ таблица §А8, которой перевод делает сервер
+ * (`legacyAspectsToProps`), — второго списка соответствий здесь не заводится, и разъехаться
+ * двум формам негде.
+ */
+const ent = (id: string, title: string, aspects: Record<string, unknown> = {}) => {
+  const translated = legacyAspectsToProps(aspects as Record<string, Record<string, unknown>>);
+  return wireFixture({
+    ...{ id, title },
+    props: translated.ok ? translated.props : {},
+    aspects: Object.keys(aspects),
+  });
+};
 
 const categories = [
   ent('cat-1', 'Еда', { 'orbis/category': { icon: '🍔' } }),

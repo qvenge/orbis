@@ -26,7 +26,6 @@ import {
   UNIT_FATE_NOTES,
 } from '../chat/cards/unit-text';
 import { obj, str } from './aspect-read';
-import { RUN_ASPECT } from './useTicketRuns';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 /** Строка сводки «Принять все»: судьба единицы плюс её адрес (lifecycle.ts DecideAllItem). */
@@ -111,8 +110,9 @@ function UnitStub({ unit }: { unit: RunUnitView }) {
  * его проба была бы лишней на каждом открытии чужого экрана.
  */
 export function RunDecisionsBlock({ entity }: { entity: Entity }) {
-  const run = entity.aspectsMap[RUN_ASPECT] ?? {};
-  const routineId = str(run.routine_id);
+  // Значения прогона — плоско в `props` по id свойства (§А1-1).
+  const run = entity.props;
+  const routineId = str(run['orbis/run_routine']);
   if (routineId === undefined) return null;
   return (
     <RunBatch
@@ -120,11 +120,12 @@ export function RunDecisionsBlock({ entity }: { entity: Entity }) {
       routineId={routineId}
       // Сверка ЯВНАЯ, а не через разбор аспекта: `aspect-read` boolean не умеет (Р-18), и
       // «поле есть» означало бы «неразобрано» в том числе у `undecided: false`.
-      flagged={run.undecided === true}
+      flagged={run['orbis/undecided'] === true}
       // В3: новый прогон гасит всё нерешённое прошлого (ОЧ.8), включая ТЕРМИНАЛЬНЫЙ вопрос,
       // на который ещё не ответили. Условие — то же, что читает лента прогона выше.
       terminalUnanswered={
-        str(run.outcome) === 'checkpoint' && str(obj(run.reply)?.text) === undefined
+        str(run['orbis/run_outcome']) === 'checkpoint' &&
+        str(obj(run['orbis/run_reply'])?.text) === undefined
       }
     />
   );

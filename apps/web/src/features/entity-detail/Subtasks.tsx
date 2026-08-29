@@ -70,7 +70,15 @@ export function Subtasks({ parentId, relations }: { parentId: string; relations:
     let created = false;
     try {
       await create.mutateAsync({
-        input: { id, title, tags: [], aspects: { 'orbis/task': { status: 'inbox' } } },
+        // Новая форма (§А1-1): свойства плоско по id, аспекты — списком того, с чем
+        // сущность рождается (`detach` у создания невыразим — снимать ещё нечего).
+        input: {
+          id,
+          title,
+          tags: [],
+          props: { 'orbis/task_status': 'inbox' },
+          aspects: ['orbis/task'],
+        },
         source: 'quick_capture',
       });
       created = true;

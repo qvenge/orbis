@@ -1,4 +1,5 @@
 import type { AppRouter } from '@orbis/server/src/router';
+import { BUILTIN_ASPECT_DEFS, propertyToLegacyField } from '@orbis/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type RenderResult, render } from '@testing-library/react';
 import { TRPCClientError, type TRPCLink } from '@trpc/client';
@@ -132,4 +133,107 @@ export function renderWithProviders(
   );
   const result = render(opts.strict ? <StrictMode>{tree}</StrictMode> : tree);
   return Object.assign(result, { calls });
+}
+
+/**
+ * Сущность в wire-форме — ровно теми ключами, которыми её пишет ПРОИЗВОДИТЕЛЬ
+ * (`apps/server/src/wire.ts`, `toWireEntity`).
+ *
+ * Зачем фабрика вообще. Каждый сьют держал свою рукописную «сущность», и ключи в ней были
+ * те, которые понадобились автору теста, — а не те, которые пишет сервер. Пока web читал
+ * одну карту, это сходило с рук; с переездом значений в `props` (§А1-1) ровно эта привычка
+ * дала 138 красных тестов на пустом месте: у фикстур не было ни `props`, ни `aspects`, и
+ * первый же читатель падал на `undefined.includes`. Форма ответа обязана быть ОДНА, и
+ * задаваться она должна там же, где производитель, — а не двадцатью семью копиями.
+ *
+ * `bodyDoc` фабрика НЕ кладёт: производитель кладёт его только по явному `include`
+ * (`toWireEntity(row, includeBodyDoc)`), то есть в ответе `entity.get` детали — и нигде
+ * больше. Сьют, которому документ нужен, дописывает его сам.
+ *
+ * `meta` фабрика кладёт пустым: мешок снят §А1-3 и в web его не читает ни один модуль, но из
+ * wire-формы его убирает только Задача 13c — а до тех пор `WireEntity` его ТРЕБУЕТ, и фикстура
+ * без него не подставилась бы в проп компонента. Дом у этого ключа теперь ровно один, и
+ * умирает он одной правкой.
+ */
+export interface WireEntityFixture {
+  id: string;
+  ownerId: string;
+  title: string;
+  emoji: string | null;
+  body: string;
+  /**
+   * Документ тела. Объявлен ОПЦИОНАЛЬНЫМ и умолчания не имеет: производитель кладёт его
+   * только по явному `include` (ответ `entity.get` детали), и фикстура списка с документом
+   * обещала бы форму, которой `entity.query` не отдаёт никогда.
+   */
+  bodyDoc?: { v: number; doc: Record<string, unknown> } | null;
+  bodyRefs: string[];
+  tags: string[];
+  /** Новая правда §А1-1: значения плоско по id свойства. */
+  props: Record<string, unknown>;
+  /** Новая правда §А1-1: аспекты — список навешенного, без полей. */
+  aspects: string[];
+  queryRefs: string[];
+  /** Мешок §А1-3: снят по смыслу, из wire уходит Задачей 13c (см. шапку). */
+  meta: Record<string, unknown>;
+  /** Старая карта — ПРОЕКЦИЯ `props`+`aspects` (см. `legacyAspectsOf`), до Задачи 13c. */
+  aspectsMap: Record<string, Record<string, unknown>>;
+  createdAt: string;
+  updatedAt: string;
+  archived: boolean;
+}
+
+/**
+ * Старая карта аспектов из новой правды — тем же правилом, что у сервера
+ * (`executor/legacy-form.ts`, `projectLegacyAspects`): обход по АСПЕКТАМ сущности, поле —
+ * по переходной таблице §А8, свойство без пары в неё не попадает, аспект без единого
+ * значения остаётся пустым ключом («аспект приложен» — факт).
+ *
+ * Считается, а не пишется руками, ровно потому, что рукописная вторая форма и есть тот
+ * дефект, который эта фабрика закрывает: разъехавшись, `props` и карта дали бы сьют, где
+ * один экран видит значение, а соседний — нет.
+ */
+function legacyAspectsOf(
+  props: Record<string, unknown>,
+  aspects: string[],
+): Record<string, Record<string, unknown>> {
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const aspectId of aspects) {
+    const fields: Record<string, unknown> = {};
+    const def = BUILTIN_ASPECT_DEFS.find((a) => a.id === aspectId);
+    for (const ref of def?.properties ?? []) {
+      if (!Object.hasOwn(props, ref.propertyId)) continue;
+      const field = propertyToLegacyField(ref.propertyId, aspectId);
+      if (field !== undefined) fields[field] = props[ref.propertyId];
+    }
+    out[aspectId] = fields;
+  }
+  return out;
+}
+
+/**
+ * Фикстура сущности: обязательны `id` и `title` (без них строка не бывает), остальное —
+ * умолчания производителя. `aspectsMap` подставляется проекцией и переопределять её незачем.
+ */
+export function wireEntity(
+  over: Partial<WireEntityFixture> & { id: string; title: string },
+): WireEntityFixture {
+  const props = over.props ?? {};
+  const aspects = over.aspects ?? [];
+  return {
+    ownerId: 'u',
+    emoji: null,
+    body: '',
+    bodyRefs: [],
+    tags: [],
+    queryRefs: [],
+    meta: {},
+    createdAt: '2026-07-05T00:00:00.000Z',
+    updatedAt: '2026-07-05T10:00:00.000Z',
+    archived: false,
+    ...over,
+    props,
+    aspects,
+    aspectsMap: over.aspectsMap ?? legacyAspectsOf(props, aspects),
+  };
 }

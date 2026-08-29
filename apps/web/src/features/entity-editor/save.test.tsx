@@ -5,7 +5,7 @@ import { getSchema } from '@tiptap/core';
 import { Node as PMNode } from '@tiptap/pm/model';
 import { useState } from 'react';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { installCrashTrap, renderWithProviders, trpcError } from '../../test/harness';
+import { installCrashTrap, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { trpc } from '../../trpc';
 import { detailGetInput } from '../entity-detail/useEntityDetail';
 import { SaveIndicator, SLOW_SAVE_MS } from './SaveIndicator';
@@ -1067,22 +1067,14 @@ test('оптимистичный патч кладёт документ в кэ�
   }
 
   const server = {
-    id: 'e1',
-    ownerId: 'u',
-    title: 'Запись',
-    emoji: null,
-    body: 'тело',
-    bodyDoc: BASE,
-    bodyRefs: [],
-    tags: [],
-    meta: {},
-    aspectsMap: {},
-    props: {},
-    aspects: [],
-    queryRefs: [],
-    createdAt: '2026-08-14T09:00:00.000Z',
-    updatedAt: ENTITY.updatedAt,
-    archived: false,
+    ...wireEntity({
+      id: 'e1',
+      title: 'Запись',
+      body: 'тело',
+      bodyDoc: BASE,
+      createdAt: '2026-08-14T09:00:00.000Z',
+      updatedAt: ENTITY.updatedAt,
+    }),
   };
   renderWithProviders(
     <>

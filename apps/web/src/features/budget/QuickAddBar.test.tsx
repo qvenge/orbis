@@ -4,31 +4,35 @@
 // полный выбор раскрытием, title опционален (пусто → «<категория> <сумма>»),
 // client-UUIDv7 один раз на открытие формы (повтор после ошибки шлёт тот же id),
 // успех → карточка-результат с остатком конверта и Undo (actionId из ответа create).
+import { legacyAspectsToProps } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
+import {
+  type MockHandler,
+  renderWithProviders,
+  trpcError,
+  wireEntity as wireFixture,
+} from '../../test/harness';
 import { QuickAddBar } from './QuickAddBar';
 
 // --- фикстуры -------------------------------------------------------------------------
 
-const ent = (id: string, title: string, aspects: Record<string, unknown> = {}) => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: aspects,
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+/**
+ * Строка выдачи в ОБЕИХ формах сразу: `props`+`aspects` (§А1-1) и старая карта — проекция
+ * той же пары (`wireEntity`). Аргументом остаётся карта, потому что экраны Финансов читают
+ * её до Задачи 13c; `props` из неё выводит ТА ЖЕ таблица §А8, которой перевод делает сервер
+ * (`legacyAspectsToProps`), — второго списка соответствий здесь не заводится, и разъехаться
+ * двум формам негде.
+ */
+const ent = (id: string, title: string, aspects: Record<string, unknown> = {}) => {
+  const translated = legacyAspectsToProps(aspects as Record<string, Record<string, unknown>>);
+  return wireFixture({
+    ...{ id, title },
+    props: translated.ok ? translated.props : {},
+    aspects: Object.keys(aspects),
+  });
+};
 
 const cat = (id: string, title: string, icon: string | null = null) =>
   ent(id, title, { 'orbis/category': icon ? { icon } : {} });

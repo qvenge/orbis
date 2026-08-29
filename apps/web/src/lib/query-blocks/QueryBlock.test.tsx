@@ -1,27 +1,11 @@
 import { screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
-import { renderWithProviders } from '../../test/harness';
+import { renderWithProviders, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { QueryBlock } from './QueryBlock';
 import { ThisEntityProvider } from './this-entity';
 
-const ent = (id: string) => ({
-  id,
-  ownerId: 'u',
-  title: id,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: {},
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+const ent = (id: string) => wireEntity({ id, title: id });
 
 test('валидный блок → список сущностей + счётчик; entity.query получил inner', async () => {
   const { calls } = renderWithProviders(<QueryBlock query="tags=work" title="Работа" />, (path) => {

@@ -38,8 +38,36 @@ export function detailGetInput(id: string): RouterInputs['entity']['get'] {
   return { id, include: DETAIL_INCLUDE };
 }
 
-// Оптимистичное применение entity_update-патча поверх кэша (§9.2 shallow-merge аспектов;
-// null-ключ = снятие аспекта). updatedAt НЕ трогаем — истинное значение принесёт refetch.
+/**
+ * Разбор `aspects` НОВОЙ формы (§А1-1): `{attach, detach}`.
+ *
+ * Разбор, а не приведение типом, потому что вход роутера — union: до Задачи 13c он принимает
+ * и старую карту «аспект → поля», которой этот экран больше не шлёт (шлют ещё Финансы и
+ * `MemoryRuleCard`, но через СВОИ мутации, не через эту обвязку). Пустые списки на месте
+ * незаполненных полей делают патч тотальным: «ключа нет» и «список пуст» здесь одно и то же.
+ */
+function aspectPatchOf(input: UpdateInput['aspects']): { attach: string[]; detach: string[] } {
+  const patch = input as { attach?: unknown; detach?: unknown } | undefined;
+  const list = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  return { attach: list(patch?.attach), detach: list(patch?.detach) };
+}
+
+/**
+ * Оптимистичное применение entity_update-патча поверх кэша — НОВОЙ формой (§А1-1):
+ * `props` ставит значения, `unset` их снимает, `aspects.attach|detach` меняет интерпретацию.
+ * `updatedAt` НЕ трогаем — истинное значение принесёт refetch.
+ *
+ * Снятое свойство именно УДАЛЯЕТСЯ из `props`, а не превращается в `null`. Разница
+ * наблюдаема: `null` — законное значение json-свойства, и строка формы, увидев его, показала
+ * бы «значение есть, оно пустое» вместо «значения нет» — а сервер тем временем удалил ключ.
+ * Прежний патч оставлял `null` (`aspects[a][f] = null`), и карточка назначения знала об этом
+ * особым правилом («проверка на строку, а не на „не пусто“»).
+ *
+ * Снятие аспекта значений НЕ трогает (Р9): аспект — интерпретация, а не владелец поля.
+ * Прежний патч удалял с ним всю карту полей — то есть показывал владельцу потерю фактов,
+ * которой на сервере не происходило.
+ */
 function applyPatch(entity: Entity, input: UpdateInput): Entity {
   const next: Entity = { ...entity };
   if (input.title !== undefined) next.title = input.title;
@@ -53,13 +81,16 @@ function applyPatch(entity: Entity, input: UpdateInput): Entity {
     // До ответа сервера просмотр показывает прежний текст — это заметно только при отказе сети.
   }
   if (input.archived !== undefined) next.archived = input.archived;
-  if (input.aspects) {
-    const aspects: Record<string, Record<string, unknown>> = { ...entity.aspectsMap };
-    for (const [key, value] of Object.entries(input.aspects)) {
-      if (value === null) delete aspects[key];
-      else aspects[key] = { ...(aspects[key] ?? {}), ...value };
-    }
-    next.aspectsMap = aspects;
+  if (input.props !== undefined || input.unset !== undefined) {
+    const props: Record<string, unknown> = { ...entity.props };
+    for (const [propertyId, value] of Object.entries(input.props ?? {})) props[propertyId] = value;
+    for (const propertyId of input.unset ?? []) delete props[propertyId];
+    next.props = props;
+  }
+  if (input.aspects !== undefined) {
+    const { attach, detach } = aspectPatchOf(input.aspects);
+    const kept = entity.aspects.filter((id) => !detach.includes(id));
+    next.aspects = [...kept, ...attach.filter((id) => !kept.includes(id))];
   }
   return next;
 }
@@ -259,7 +290,7 @@ export function useEntityDetail(entityId: string) {
   const get = trpc.entity.get.useQuery(detailGetInput(entityId), {
     // Идущий прогон опрашивается сам (run-poll.ts): экран прогона после «Прогнать сейчас»
     // иначе застывал бы на «идёт · 0 шагов» до перезагрузки. Для остальных записей — false.
-    refetchInterval: (query) => runPollInterval(query.state.data?.entity.aspectsMap),
+    refetchInterval: (query) => runPollInterval(query.state.data?.entity.props),
   });
   const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
   /**
@@ -271,27 +302,31 @@ export function useEntityDetail(entityId: string) {
   useNoteRegistryVersion(get.data?.registryVersion);
   const entity = get.data?.entity;
 
-  // Чекбокс task (§3.6): status=done + completed_at (optimistic + откат при ошибке).
+  /**
+   * Чекбокс task (§3.6): `orbis/task_status` + `orbis/completed_at` (optimistic + откат при
+   * ошибке).
+   *
+   * СНЯТИЕ вопроса исполнителя (`orbis/waiting_for`) уезжает списком `unset`, а не `null` в
+   * значении: `null` — законное значение json-свойства (докблок `entityPropsPatch`), и
+   * прежняя карта аспектов совмещала их одним ключом. Обе стороны чекбокса требуют снятия
+   * одинаково: и `done`, и возврат в `inbox` уводят задачу ИЗ waiting, а патч свойств
+   * мержится по ключам — без явного снятия вопрос исполнителя пережил бы галочку и висел бы
+   * на закрытой задаче, читаясь как открытый. Сервер делает ровно это на ВСЕХ своих выходах
+   * из waiting (routers/agent-run.ts:129-131, agent-loop/sweep.ts:111); правка из UI не
+   * должна быть исключением. Для задачи, которая в waiting не была, снимать нечего — лишний
+   * `unset` ничего не меняет.
+   *
+   * Возврат в `inbox` снимает и `orbis/completed_at`: момент закрытия у открытой задачи —
+   * факт, которого не было.
+   */
   function toggleTask(done: boolean) {
     mutation.mutate({
       id: entityId,
-      aspects: {
-        'orbis/task': {
-          status: done ? 'done' : 'inbox',
-          completed_at: done ? new Date().toISOString() : null,
-          /**
-           * `waiting_for: null` — конвенция ADE-среза 1, и обе стороны чекбокса её требуют
-           * одинаково: и `done`, и возврат в `inbox` уводят задачу ИЗ waiting, а патч
-           * аспектов мержится по полям (normalize.ts) — без явного null вопрос исполнителя
-           * пережил бы снятие галочки и висел бы на закрытой задаче, читаясь как открытый.
-           * Сервер делает ровно это на ВСЕХ своих выходах из waiting
-           * (routers/agent-run.ts:129-131, agent-loop/sweep.ts:111); правка из UI не должна
-           * быть исключением. Для задачи, которая в waiting не была, поле и так пусто —
-           * лишний null ничего не меняет.
-           */
-          waiting_for: null,
-        },
+      props: {
+        'orbis/task_status': done ? 'done' : 'inbox',
+        ...(done ? { 'orbis/completed_at': new Date().toISOString() } : {}),
       },
+      unset: done ? ['orbis/waiting_for'] : ['orbis/completed_at', 'orbis/waiting_for'],
     });
   }
 

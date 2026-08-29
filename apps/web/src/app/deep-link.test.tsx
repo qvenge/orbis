@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { App } from '../App';
 import { DetailScreen } from '../features/entity-detail/DetailScreen';
 import { type ScreenRef, type Tab, useNav } from '../state/navigation';
-import { renderWithProviders, trpcError } from '../test/harness';
+import { renderWithProviders, trpcError, wireEntity } from '../test/harness';
 import { installHistorySync, openDeepLink } from './history';
 
 // §1.3: вход снаружи. Приложение, открытое по ссылке, показывает нужный экран; ссылка на
@@ -20,23 +20,7 @@ const E2 = '22222222-2222-4222-8222-222222222222';
 const T1 = '33333333-3333-4333-8333-333333333333';
 const C1 = '44444444-4444-4444-8444-444444444444';
 
-const ent = (id: string, title: string) => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: {},
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+const ent = (id: string, title: string) => wireEntity({ id, title });
 
 const handler = (path: string, input: unknown) => {
   if (path === 'user.getSettings')

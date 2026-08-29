@@ -1,5 +1,25 @@
+// Свойства записи — форма, ПОСТРОЕННАЯ ПО РЕЕСТРУ (§А9-2), а не по тому, что в записи
+// заполнено.
+//
+// Что это меняет для владельца. Прежде цикл шёл по карте `aspects[аспект][поле]`, то есть по
+// ЗАПОЛНЕННЫМ значениям: у задачи без срока строки «Срок» на экране не было вовсе — поставить
+// срок из формы было нечем, приходилось звать AI или ждать, пока поле появится само. Теперь
+// секцию рисует АСПЕКТ, а строки — его состав свойств из реестра: незаполненные показаны
+// пустыми и правятся, порядок — `rank` ссылки аспекта на свойство, контрол — тип свойства
+// (`PropertyControl`), право на правку — флаги §А2-5.
+//
+// Отсюда же и зависимость от снимка: пока реестр не приехал, состав формы неизвестен, и строк
+// нет. Рисовать в этот момент «то, что заполнено» значило бы показать ВТОРУЮ форму той же
+// записи — короче настоящей и с другим порядком строк.
+//
+// Правки уезжают НОВОЙ формой (§А1-1): значение — `props` по id свойства, снятие — `unset`,
+// снятие аспекта — `aspects.detach`. Старой карты «аспект → поля» этот экран больше не шлёт.
+import type { AspectDefinition, PropertyDefinition } from '@orbis/shared';
 import { useState } from 'react';
+import { FIELD_CLASS } from '../../lib/registry/controls';
+import { valueText } from '../../lib/registry/format';
 import { aspectLabel, fieldLabel, type RegistryLookup } from '../../lib/registry/labels';
+import { PropertyControl } from '../../lib/registry/PropertyControl';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -9,98 +29,110 @@ import { useEntityUpdate } from './useEntityDetail';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
 
-const FINANCIAL = 'orbis/financial';
-const CATEGORY_REF = 'category_ref';
+/**
+ * Категория операции — единственное свойство со СВОИМ контролом на этом экране: её выбирают
+ * из списка, а не вписывают uuid'ом руками (K6).
+ *
+ * Это одна из пяти копий пикера ссылки в web, и снимает её Задача 13c — общим `RefField` по
+ * `ref.target` из реестра. До неё копия остаётся здесь, а не заменяется чипом только для
+ * чтения: смена категории с записи — живой жест владельца, и отнимать его на одну задачу
+ * дороже, чем подержать копию.
+ */
+const FINANCE_CATEGORY = 'orbis/finance_category';
 
 /**
  * Аспекты, у которых на экране ЕСТЬ СВОЯ карточка (ADE-срез 1): назначение исполнителя
  * (AssignmentCard) и прогон агента (RunsList на тикете, лента шагов на самом прогоне).
  *
- * Дело не в дублировании вида, а в правке. Общая карточка предлагает инпут на каждое скалярное
- * поле, и правка `executor` в обход инварианта исполнителя (executor=agent ⇔ живой grant_id,
- * invariants.ts:295-326) отдавала бы VALIDATION на каждом втором нажатии; поля прогона и вовсе
- * пишет только агент — вручную их править нечем и незачем.
+ * Дело не в дублировании вида, а в правке. Общая карточка предлагает контрол на каждое
+ * правимое свойство, и правка `orbis/executor` в обход инварианта исполнителя (executor=agent
+ * ⇔ живой grant, invariants.ts:295-326) отдавала бы VALIDATION на каждом втором нажатии.
+ * Свойства прогона от этого не зависят — они `system_writable` и без того только для чтения,
+ * — но лента шагов рассказывает о прогоне несравнимо больше, чем девятнадцать строк.
  */
 const HIDDEN_ASPECT_CARDS = new Set(['orbis/assignment', 'orbis/agent-run']);
 
-// Тихий инпут-в-строке-свойства: тот же вид у текстового поля и у пикера категории.
-// Экспортом — слою предложения на записи (Ш1.3): строка правки предложения обязана
-// выглядеть ровно как строка свойства, иначе владелец читал бы их как разные вещи.
-export const FIELD_CLASS =
-  'w-full rounded-md bg-transparent px-2 py-1 text-sm text-text outline-none transition hover:bg-surface-2 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/40';
-
-// Восстановление типа поля из исходного значения (правка идёт как строка из Input).
-// Нескалярное сюда не доходит вовсе — такие поля не редактируются (см. isScalar).
-export function coerce(original: unknown, raw: string): unknown {
-  if (typeof original === 'number') return Number(raw);
-  if (typeof original === 'boolean') return raw === 'true';
-  return raw;
-}
-
 /**
- * Правится ли значение строкой в инпуте. Инпут отдаёт СТРОКУ, и обратно в объект или
- * массив она не превращается ничем: до этой проверки объектный `progress_source` цели
- * рисовался как `[object Object]` (String(value)), а blur слал эту строку и получал
- * жёсткий VALIDATION от ajv — поле выглядело сломанным на КАЖДОЙ цели (обязательное
- * поле аспекта). То же касалось `orbis/schedule.recurrence` и `orbis/category.aliases`,
- * поэтому чинится общий случай, а не цель: редактируемо ровно то, что скаляр.
+ * Модуль, чьи агрегаты считает сервер и которые протухают от правки любого его свойства.
+ *
+ * Признак — `module` СВОЙСТВА из реестра, а не список id: остаток конверта двигают и сумма, и
+ * категория, и признак плана, и дата операции, а перечисление их руками разъезжалось бы с
+ * реестром при каждом новом поле Финансов. Прежде инвалидация висела на одной категории, и
+ * правка суммы оставляла бейдж вкладки и остаток конверта вчерашними.
  */
-export function isScalar(v: unknown): boolean {
-  return (
-    v === null ||
-    v === undefined ||
-    typeof v === 'string' ||
-    typeof v === 'number' ||
-    typeof v === 'boolean'
-  );
-}
+const AGGREGATED_MODULE = 'finance';
 
-/**
- * Показ нескалярного значения. Прятать поле нельзя: «поправьте в источнике query»
- * (GoalProgress) — пустой совет, если самого query на экране нет. Список скаляров
- * читается через запятую, всё прочее — компактным JSON: это и есть та форма, в которой
- * значение уедет обратно на сервер, и по ней видно опечатку в запросе.
- */
-export function readOnlyText(value: unknown): string {
-  // Пустой список — прочерк, а не пустое место: `aliases: ` без значения читается как
-  // сломанная строка, а не как «алиасов нет».
-  if (Array.isArray(value) && value.length === 0) return '—';
-  if (Array.isArray(value) && value.every(isScalar))
-    return value.map((v) => String(v ?? '')).join(', ');
-  return JSON.stringify(value) ?? String(value);
-}
-
-// Карточки установленных аспектов: типизированная inline-правка полей (§5.2 — та же
-// optimistic + expectedUpdatedAt, что и body; правка подлежит Undo журнала сервера) и
-// снятие аспекта целиком (aspects:{id:null}).
-//
-// Полосы прогресса цели здесь БОЛЬШЕ НЕТ: карточки уехали на вкладку «Детали», а прогресс
-// остался на «Сущности» — у цели он и есть то, ради чего её открывают, и прятать «50%,
-// 150 000 из 300 000» во вторую вкладку значило бы ухудшить главный экран целей ради
-// чистоты раскладки (Задача 15). Рисует его теперь DetailScreen, доставая `unit` из
-// `entity.aspectsMap['orbis/goal']` напрямую.
 export function AspectCards({ entity }: { entity: Entity }) {
   const { mutation, conflict } = useEntityUpdate(entity.id);
   const utils = trpc.useUtils();
-  // Подписи секций и строк — из реестра (§А9-2), ОДНИМ снимком на все карточки: он же
-  // уходит пропом в строки, чтобы каждая из них не подписывалась на снимок отдельно.
+  // Подписи, состав формы и типы контролов — из ОДНОГО снимка на все карточки: он же уходит
+  // пропом в строки, чтобы каждая из них не подписывалась на снимок отдельно.
   const registry = useRegistry();
-  const aspects = entity.aspectsMap as Record<string, Record<string, unknown>>;
+  const props = entity.props as Record<string, unknown>;
 
-  // Смена категории (sign-off владельца K6) — обычный entity.update: перепривязку
-  // транзакции к конверту делает серверный хук (фаза A), клиент ничего не связывает.
-  // Бюджетные агрегаты после этого протухли — инвалидируем их тем же приёмом, что
-  // экраны Budget (invalidateBudget); entity.get/entity.query обновит useEntityUpdate.
-  function setCategory(categoryId: string) {
+  /**
+   * Аспекты записи в порядке реестра. Порядок наблюдаем: секции стоят так же, как строки
+   * каталога полей в конструкторе запросов и как поля в промпте, — «как легло в объект»
+   * означало бы «как вернул SELECT».
+   */
+  const attached = new Set(entity.aspects);
+  const carriers = (registry.data?.aspects ?? []).filter((a) => attached.has(a.id));
+
+  /**
+   * Свойства, у которых на этой записи нет носителя: свои свойства владельца, следы снятых
+   * аспектов (Р9: снятие аспекта значений не трогает) и §А10-3 — значение под id свойства,
+   * которого в снимке уже нет. Показываются отдельной секцией, а не прячутся: спрятанное
+   * значение продолжает участвовать в запросах и агрегатах, и владелец не может ни увидеть
+   * его, ни снять.
+   *
+   * Носителями считаются ВСЕ навешенные аспекты, включая те, у кого своя карточка: иначе
+   * девятнадцать свойств прогона всплыли бы в «Свойствах» ровно потому, что их секция скрыта.
+   */
+  const carried = new Set(carriers.flatMap((a) => a.properties.map((p) => p.propertyId)));
+  const free = Object.keys(props)
+    .filter((id) => !carried.has(id))
+    .sort((a, b) => {
+      const ra = registry.property(a)?.rank;
+      const rb = registry.property(b)?.rank;
+      // Свойства без строки в снимке — последними и по алфавиту: `rank` у них взять негде,
+      // а произвольный порядок делал бы секцию разной на двух перезагрузках.
+      if (ra === undefined || rb === undefined)
+        return (ra === undefined ? 1 : 0) - (rb === undefined ? 1 : 0) || a.localeCompare(b);
+      return ra - rb || a.localeCompare(b);
+    });
+
+  /**
+   * Правка одного свойства. `undefined` из контрола — СНЯТЬ (`unset`), а не «записать
+   * пусто»: `null` — законное значение json-свойства, и подмена одного другим навсегда
+   * запретила бы его записывать (докблок `entityPropsPatch`).
+   *
+   * Метка версии шлётся для единообразия с прочими правками экрана; 409 она здесь не даёт
+   * никогда — гейт §5.2 стоит под условием `body || bodyDoc` (см. `checksVersion`), и правку
+   * свойств сервер проводит по LWW.
+   */
+  function writeProp(propertyId: string, value: unknown | undefined) {
+    const aggregated = registry.property(propertyId)?.module === AGGREGATED_MODULE;
     mutation.mutate(
       {
         id: entity.id,
         expectedUpdatedAt: entity.updatedAt,
-        aspects: { [FINANCIAL]: { [CATEGORY_REF]: categoryId } },
+        ...(value === undefined ? { unset: [propertyId] } : { props: { [propertyId]: value } }),
       },
-      { onSuccess: () => void invalidateBudget(utils) },
+      // Агрегаты модуля считает сервер, и `invalidateGraph` о них не знает (он про
+      // entity.query/get/count) — после правки они протухли.
+      aggregated ? { onSuccess: () => void invalidateBudget(utils) } : undefined,
     );
   }
+
+  const row = (propertyId: string) => (
+    <PropertyRow
+      key={propertyId}
+      registry={registry}
+      propertyId={propertyId}
+      value={props[propertyId]}
+      onChange={(v) => writeProp(propertyId, v)}
+    />
+  );
 
   return (
     <div className="flex flex-col gap-2">
@@ -109,87 +141,117 @@ export function AspectCards({ entity }: { entity: Entity }) {
           Аспект изменён в другом месте — обновите.
         </p>
       )}
-      {/* Notion-style свойства: секция без карточной рамки, значения — тихие инпуты
+      {/* Notion-style свойства: секция без карточной рамки, значения — тихие контролы
           без бордера (hover подсказывает редактируемость). */}
-      {/* Фильтр по ПАРАМ, а не правка `aspects`: объект приехал из кэша React Query, и удаление
-          ключа из него испортило бы данные всем, кто читает тот же ключ. */}
-      {Object.entries(aspects)
-        .filter(([aspectId]) => !HIDDEN_ASPECT_CARDS.has(aspectId))
-        .map(([aspectId, fields]) => (
+      {carriers
+        .filter((a) => !HIDDEN_ASPECT_CARDS.has(a.id))
+        .map((aspect) => (
           <section
-            key={aspectId}
-            data-testid={`aspect-${aspectId}`}
+            key={aspect.id}
+            data-testid={`aspect-${aspect.id}`}
             className="flex flex-col gap-1"
           >
             <div className="flex items-center justify-between">
               <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">
-                {aspectLabel(registry, aspectId)}
+                {aspectLabel(registry, aspect.id)}
               </p>
               <Button
                 variant="ghost"
                 size="sm"
                 className="text-xs text-text-muted"
-                aria-label={`Снять ${aspectId}`}
-                onClick={() => mutation.mutate({ id: entity.id, aspects: { [aspectId]: null } })}
+                aria-label={`Снять ${aspect.id}`}
+                // Снятие аспекта ЗНАЧЕНИЙ не трогает (Р9): аспект — интерпретация, а не
+                // владелец поля, и его снятие не повод терять факт владельца. Строки уедут
+                // в секцию «Свойства» — там их и можно снять по одной.
+                onClick={() => mutation.mutate({ id: entity.id, aspects: { detach: [aspect.id] } })}
               >
                 Снять аспект
               </Button>
             </div>
             <dl className="grid grid-cols-[minmax(7rem,max-content)_1fr] items-center gap-x-3 gap-y-0.5 text-sm">
-              {Object.entries(fields).map(([field, value]) =>
-                // Единственное поле с собственным контролом: категория финансовой записи
-                // выбирается из списка, а не вписывается UUID'ом руками (K6). Прочие
-                // поля аспектов не трогаем — правка только пути category_ref.
-                aspectId === FINANCIAL && field === CATEGORY_REF ? (
-                  <CategoryField
-                    key={field}
-                    registry={registry}
-                    value={typeof value === 'string' ? value : ''}
-                    onSelect={setCategory}
-                  />
-                ) : !isScalar(value) ? (
-                  <ReadOnlyField
-                    key={field}
-                    registry={registry}
-                    aspectId={aspectId}
-                    field={field}
-                    value={value}
-                  />
-                ) : (
-                  <AspectField
-                    key={field}
-                    registry={registry}
-                    aspectId={aspectId}
-                    field={field}
-                    value={value}
-                    onSave={(raw) =>
-                      mutation.mutate({
-                        id: entity.id,
-                        expectedUpdatedAt: entity.updatedAt,
-                        aspects: { [aspectId]: { [field]: coerce(value, raw) } },
-                      })
-                    }
-                  />
-                ),
-              )}
+              {orderedProperties(aspect).map((ref) => row(ref.propertyId))}
             </dl>
           </section>
         ))}
+      {free.length > 0 && (
+        <section data-testid="aspect-free" className="flex flex-col gap-1">
+          <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">Свойства</p>
+          <dl className="grid grid-cols-[minmax(7rem,max-content)_1fr] items-center gap-x-3 gap-y-0.5 text-sm">
+            {free.map((id) => row(id))}
+          </dl>
+        </section>
+      )}
     </div>
   );
 }
 
+/** Состав аспекта в объявленном порядке; при равенстве `rank` — по id (тот же тие-брейк, что у выдачи реестра). */
+function orderedProperties(aspect: AspectDefinition): AspectDefinition['properties'] {
+  return [...aspect.properties].sort(
+    (a, b) => a.rank - b.rank || a.propertyId.localeCompare(b.propertyId),
+  );
+}
+
 /**
- * Пикер категории для orbis/financial.category_ref (K6): показывает НАЗВАНИЯ категорий,
- * а не идентификатор. Список — тот же запрос и тот же кэш, что у экранов Budget.
- * Смонтирован только на financial-сущностях, поэтому запрос категорий не уходит с
+ * Строка «подпись — контрол». Подпись — из реестра ВСЕГДА, включая строку, у которой самого
+ * свойства в снимке нет: `fieldLabel` в этом случае показывает сырой адрес, и это честнее
+ * пустого места — значение существует.
+ */
+function PropertyRow({
+  registry,
+  propertyId,
+  value,
+  onChange,
+}: {
+  registry: RegistryLookup;
+  propertyId: string;
+  value: unknown;
+  onChange: (v: unknown | undefined) => void;
+}) {
+  const def = registry.property(propertyId);
+  return (
+    <>
+      <dt className="text-text-muted">{fieldLabel(registry, propertyId)}</dt>
+      <dd>
+        {def === undefined ? (
+          // Свойства нет в снимке (§А10-3: строка реестра снята, значения остались).
+          // Правки нет — тип неизвестен, и любой контрол здесь угадывал бы форму значения.
+          <span
+            data-testid={`prop-${propertyId}`}
+            className="break-words px-2 py-1 text-sm text-text-secondary"
+          >
+            {valueText(value)}
+          </span>
+        ) : propertyId === FINANCE_CATEGORY ? (
+          <CategoryField
+            def={def}
+            registry={registry}
+            value={typeof value === 'string' ? value : ''}
+            onSelect={onChange}
+          />
+        ) : (
+          <PropertyControl def={def} value={value} onChange={onChange} />
+        )}
+      </dd>
+    </>
+  );
+}
+
+/**
+ * Пикер категории для `orbis/finance_category` (K6): показывает НАЗВАНИЯ категорий, а не
+ * идентификатор. Список — тот же запрос и тот же кэш, что у экранов Budget. Смонтирован
+ * только там, где свойство есть в составе аспекта, поэтому запрос категорий не уходит с
  * каждого detail-экрана.
+ *
+ * Пятая копия пикера ссылки; общий `RefField` по `ref.target` — Задача 13c (см. шапку файла).
  */
 function CategoryField({
+  def,
   registry,
   value,
   onSelect,
 }: {
+  def: PropertyDefinition;
   registry: RegistryLookup;
   value: string;
   onSelect: (id: string) => void;
@@ -201,91 +263,72 @@ function CategoryField({
   const known = categories.some((c) => c.id === value);
 
   return (
-    <>
-      <dt className="text-text-muted">{fieldLabel(registry, CATEGORY_REF, FINANCIAL)}</dt>
-      <dd>
-        <select
-          aria-label={`${FINANCIAL} ${CATEGORY_REF}`}
-          value={value}
-          onChange={(e) => {
-            if (e.target.value !== value) onSelect(e.target.value);
-          }}
-          className={FIELD_CLASS}
-        >
-          {/* Своя опция под текущее значение, пока список грузится или ссылка ведёт
-              в архивную/удалённую категорию: иначе select показал бы пустоту и первым
-              же изменением молча переставил категорию.
-              Порядок веток (D5d п.5):
-              1) пустой category_ref — свойство САМОЙ транзакции, а не беда со списком:
-                 «Без категории» обязано пережить и отказ, и загрузку;
-              2) отказ показываем, только если данных нет вовсе: v5 сохраняет data при
-                 ошибке рефетча, и на известном списке правда — «ссылка ведёт в никуда»
-                 (приём RolloverScreen: isError отдельно от пустоты);
-              3) isPending, а не isLoading: офлайн-пауза (fetchStatus:'paused') даёт
-                 isLoading===false, и подпись срывалась в «не найдена» на целой записи. */}
-          {!known && (
-            <option value={value}>
-              {value === ''
-                ? 'Без категории'
-                : q.isError && categories.length === 0
-                  ? 'Не удалось загрузить категории'
-                  : q.isPending
-                    ? 'Загрузка…'
-                    : 'Категория не найдена'}
-            </option>
-          )}
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.icon ? `${c.icon} ` : ''}
-              {c.title}
-            </option>
-          ))}
-        </select>
-      </dd>
-    </>
+    <select
+      // Имя контрола — ПОДПИСЬ свойства из реестра, как у всех прочих строк формы: пара
+      // машинных адресов («orbis/financial category_ref»), стоявшая здесь раньше,
+      // прочитывалась скринридером именно так, как написана.
+      aria-label={fieldLabel(registry, def.id)}
+      data-testid={`prop-${def.id}`}
+      data-kind="ref"
+      value={value}
+      onChange={(e) => {
+        if (e.target.value !== value) onSelect(e.target.value);
+      }}
+      className={FIELD_CLASS}
+    >
+      {/* Своя опция под текущее значение, пока список грузится или ссылка ведёт
+          в архивную/удалённую категорию: иначе select показал бы пустоту и первым
+          же изменением молча переставил категорию.
+          Порядок веток (D5d п.5):
+          1) пустой category_ref — свойство САМОЙ транзакции, а не беда со списком:
+             «Без категории» обязано пережить и отказ, и загрузку;
+          2) отказ показываем, только если данных нет вовсе: v5 сохраняет data при
+             ошибке рефетча, и на известном списке правда — «ссылка ведёт в никуда»
+             (приём RolloverScreen: isError отдельно от пустоты);
+          3) isPending, а не isLoading: офлайн-пауза (fetchStatus:'paused') даёт
+             isLoading===false, и подпись срывалась в «не найдена» на целой записи. */}
+      {!known && (
+        <option value={value}>
+          {value === ''
+            ? 'Без категории'
+            : q.isError && categories.length === 0
+              ? 'Не удалось загрузить категории'
+              : q.isPending
+                ? 'Загрузка…'
+                : 'Категория не найдена'}
+        </option>
+      )}
+      {categories.map((c) => (
+        <option key={c.id} value={c.id}>
+          {c.icon ? `${c.icon} ` : ''}
+          {c.title}
+        </option>
+      ))}
+    </select>
   );
 }
 
-/**
- * Нескалярное значение — read-only строка вместо инпута (см. isScalar). Отступы те же,
- * что у FIELD_CLASS, чтобы значения свойств стояли на одной вертикали; hover/фокус —
- * нет, и это ровно то, что нужно сказать глазу: здесь не правят.
- */
-function ReadOnlyField({
-  registry,
-  aspectId,
-  field,
-  value,
-}: {
-  registry: RegistryLookup;
-  aspectId: string;
-  field: string;
-  value: unknown;
-}) {
-  return (
-    <>
-      <dt className="text-text-muted">{fieldLabel(registry, field, aspectId)}</dt>
-      <dd
-        data-testid={`aspect-value-${aspectId}-${field}`}
-        className="break-words px-2 py-1 text-sm text-text-secondary"
-      >
-        {readOnlyText(value)}
-      </dd>
-    </>
-  );
+// Восстановление типа поля из исходного значения (правка идёт как строка из Input).
+// Нескалярное сюда не доходит вовсе — такие строки не редактируются (см. `isScalar`).
+export function coerce(original: unknown, raw: string): unknown {
+  if (typeof original === 'number') return Number(raw);
+  if (typeof original === 'boolean') return raw === 'true';
+  return raw;
 }
 
 /**
- * Строка «поле → значение» с тихой правкой по blur.
+ * Строка «поле → значение» с тихой правкой по blur — для СЛОЯ ПРЕДЛОЖЕНИЯ (Ш1.3).
+ *
+ * Родитель у неё с этой задачи ОДИН: на самой записи строки рисует `PropertyRow` выше, и
+ * контрол там выбирается по типу свойства из реестра. У строки предложения такого выбора
+ * нет и быть не может: она правит `after` ОПЕРАЦИИ, а адресом там бывает и поле самой
+ * записи (`title`, `tags`), у которого строки реестра в срезе А нет вовсе. Поэтому здесь
+ * остаётся прежнее правило — «правится то, что скаляр», а тип восстанавливается из
+ * исходного значения (`coerce`).
  *
  * Компонент НИЧЕГО не сохраняет сам: `onSave(raw)` отдаёт сырую строку из инпута, а что с
- * ней делать — дело родителя. На самой записи родитель шлёт `entity.update` немедленно
- * (см. AspectCards выше); в слое предложения (Ш1.3) — кладёт в буфер правок, потому что
- * граф там двигает «Принять», а не набор в поле. Ровно ради второго родителя компонент и
- * экспортирован: своя копия строки правки разошлась бы с этой видом и поведением.
- *
- * Правится только СКАЛЯР (см. isScalar): инпут отдаёт строку, а обратно в объект или массив
- * она не превращается ничем.
+ * ней делать — дело родителя (слой кладёт правку в буфер, потому что граф там двигает
+ * «Принять», а не набор в поле).
  */
 export function AspectField({
   registry,
@@ -296,8 +339,8 @@ export function AspectField({
 }: {
   /**
    * Снимок реестра для подписи поля (§А9-2) — ПРОПОМ, а не своим `useRegistry()` внутри:
-   * компонент экспортирован и живёт вторым родителем в слое предложения (Ш1.3), где строк
-   * на экране десятки, и свой хук в каждой из них подписал бы на снимок каждую строку.
+   * строк предложения на экране десятки, и свой хук в каждой из них подписал бы на снимок
+   * каждую строку.
    */
   registry: RegistryLookup;
   /**
@@ -319,11 +362,10 @@ export function AspectField({
   const [draft, setDraft] = useState(initial);
   const [serverValue, setServerValue] = useState(initial);
 
-  // D6c п.3: значение аспекта сменилось извне (наш же save, чекбокс «Готово» в шапке,
-  // правка с другого устройства) — подхватываем его, но ТОЛЬКО если черновик не трогали.
-  // Иначе текст, который владелец печатает прямо сейчас, был бы затёрт. Приём тот же,
-  // что у редактора тела (BodyEditor подменяет содержимое только вне фокуса): сравнение с
-  // последним известным серверным значением в рендере, а не useEffect на каждый рендер.
+  // D6c п.3: значение сменилось извне — подхватываем его, но ТОЛЬКО если черновик не
+  // трогали. Иначе текст, который владелец печатает прямо сейчас, был бы затёрт. Приём тот
+  // же, что у редактора тела (BodyEditor подменяет содержимое только вне фокуса): сравнение
+  // с последним известным серверным значением в рендере, а не useEffect на каждый рендер.
   if (initial !== serverValue) {
     setServerValue(initial);
     if (draft === serverValue) setDraft(initial);

@@ -81,16 +81,18 @@ export function useFastPath(threadId: string) {
   type SettingsOut = ReturnType<typeof utils.user.getSettings.getData>;
   function mapCtx(cats: QueryOut, settings: SettingsOut, rules: QueryOut): FastPathCtx {
     const categories: FastPathCategory[] = (cats ?? []).map((e) => {
-      const meta = (e.aspectsMap?.['orbis/category'] ?? {}) as {
-        aliases?: string[];
-        spend_class?: string;
-      };
+      // Значения — плоско в `props` по id свойства (§А1-1); аспект `orbis/category` тут уже
+      // сказан самим запросом (`CATEGORY_QUERY`), и второй раз его спрашивать не у чего.
+      const aliases = e.props['orbis/aliases'];
+      const spendClass = e.props['orbis/spend_class'];
       // title — для резолва категории, названной в memory-правиле (§7.8: id в правиле нет).
       return {
         id: e.id,
         title: e.title,
-        aliases: meta.aliases ?? [],
-        spendClass: meta.spend_class,
+        aliases: Array.isArray(aliases)
+          ? aliases.filter((a): a is string => typeof a === 'string')
+          : [],
+        ...(typeof spendClass === 'string' ? { spendClass } : {}),
       };
     });
     return {

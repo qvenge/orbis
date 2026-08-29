@@ -3,7 +3,7 @@ import { afterEach, expect, test } from 'vitest';
 import { App } from './App';
 import { useNav } from './state/navigation';
 import { useRetryBuffer } from './state/retry';
-import { renderWithProviders } from './test/harness';
+import { renderWithProviders, wireEntity } from './test/harness';
 
 afterEach(() => {
   localStorage.clear();
@@ -80,23 +80,7 @@ test('закреплённая из sidebar открывается в browser-с
     if (path === 'user.getSettings') return { pinnedEntities: [{ id: 'p1', order: 0 }] };
     if (path === 'entity.get')
       return {
-        entity: {
-          id: 'p1',
-          ownerId: 'u',
-          title: 'Закреп',
-          emoji: null,
-          body: '',
-          bodyRefs: [],
-          tags: [],
-          meta: {},
-          aspectsMap: {},
-          props: {},
-          aspects: [],
-          queryRefs: [],
-          createdAt: 'x',
-          updatedAt: 'y',
-          archived: false,
-        },
+        entity: wireEntity({ id: 'p1', title: 'Закреп' }),
         relations: [],
         thread: null,
       };

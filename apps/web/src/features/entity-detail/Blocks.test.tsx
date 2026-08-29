@@ -2,42 +2,35 @@ import { parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
-import { renderWithProviders, trpcError } from '../../test/harness';
+import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { trpc } from '../../trpc';
 import { DetailScreen } from './DetailScreen';
 
 // Task D5: секции 7 «Блокировки» (02-core-os §3.5.7) и 8 «Связанное (backlinks)» (§3.5.8)
 // на detail-экране. Файл покрывает обе секции — так назван Test-пункт брифа D5.
 
-type Aspects = Record<string, Record<string, unknown>>;
+const ent = (
+  id: string,
+  title: string,
+  props: Record<string, unknown> = {},
+  aspects: string[] = [],
+) =>
+  wireEntity({
+    id,
+    title,
+    // `bodyDoc` — часть контракта detail (include всегда просит его, а сервер собирает
+    // документ даже для записей без колонки). Без него экран показывал бы тело первым кадром
+    // и НИКОГДА не поднимал редактор — то есть тесты этого файла были бы зелены по причине,
+    // которой в проде не существует.
+    bodyDoc: parseBody(''),
+    props,
+    aspects,
+  });
 
-const ent = (id: string, title: string, aspects: Aspects = {}) => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  // `bodyDoc` — часть контракта detail (include всегда просит его, а сервер собирает документ
-  // даже для записей без колонки). Без него экран показывал бы тело первым кадром и НИКОГДА не
-  // поднимал редактор — то есть тесты этого файла были бы зелены по причине, которой в проде
-  // не существует.
-  bodyDoc: parseBody(''),
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: aspects,
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: '2026-07-05T00:00:00.000Z',
-  updatedAt: '2026-07-05T10:00:00.000Z',
-  archived: false,
-});
-
-const self = ent('e1', 'Задача', { 'orbis/task': { status: 'inbox' } });
+const self = ent('e1', 'Задача', { 'orbis/task_status': 'inbox' }, ['orbis/task']);
 const outgoing = ent('t1', 'Ждёт меня');
-const liveBlocker = ent('b1', 'Живой блокер', { 'orbis/task': { status: 'inbox' } });
-const doneBlocker = ent('b2', 'Закрытый блокер', { 'orbis/task': { status: 'done' } });
+const liveBlocker = ent('b1', 'Живой блокер', { 'orbis/task_status': 'inbox' }, ['orbis/task']);
+const doneBlocker = ent('b2', 'Закрытый блокер', { 'orbis/task_status': 'done' }, ['orbis/task']);
 const found = ent('x1', 'Найденная сущность');
 
 const rel = (id: string, sourceId: string, targetId: string, role: string) => ({
@@ -45,6 +38,8 @@ const rel = (id: string, sourceId: string, targetId: string, role: string) => ({
   sourceId,
   targetId,
   role,
+  // `meta` у СВЯЗИ жива и после реформы: мешок сняли у сущности (§А1-3), а `toWireRelation`
+  // это поле по-прежнему пишет.
   meta: {},
   createdAt: '2026-07-05T00:00:00.000Z',
   updatedAt: '2026-07-05T00:00:00.000Z',
@@ -58,7 +53,7 @@ const sugg = (e: ReturnType<typeof ent>) => ({
   id: e.id,
   title: e.title,
   emoji: e.emoji,
-  status: (e.aspectsMap['orbis/task']?.status as string | undefined) ?? null,
+  status: (e.props['orbis/task_status'] as string | undefined) ?? null,
   archived: e.archived,
 });
 

@@ -1,30 +1,14 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
-import { renderWithProviders, trpcError } from '../../test/harness';
+import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { Toaster } from '../../ui/Toast';
 import { useToastStore } from '../../ui/toast-store';
 import { EntityList } from './EntityList';
 import { PinnedList } from './PinnedList';
 import { QuickCapture } from './QuickCapture';
 
-const ent = (id: string, title: string) => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: {},
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+const ent = (id: string, title: string) => wireEntity({ id, title });
 
 beforeEach(() => {
   localStorage.clear();

@@ -7,11 +7,9 @@ import { openEntity } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { useEntityUpdate } from './useEntityDetail';
-import { runAspect, type TicketRun } from './useTicketRuns';
+import type { TicketRun } from './useTicketRuns';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
-
-const TASK = 'orbis/task';
 
 /**
  * Заголовок — по исходу ПОСЛЕДНЕГО прогона, а не по статусу тикета: `waiting` у всех трёх
@@ -45,9 +43,10 @@ export function TicketWaitingBlock({
   });
   const { mutation: update } = useEntityUpdate(entity.id);
 
-  const task = entity.aspectsMap[TASK];
-  const run = lastRun === undefined ? undefined : runAspect(lastRun);
-  const outcome = typeof run?.outcome === 'string' ? run.outcome : undefined;
+  // Значения — плоско в `props` по id свойства (§А1-1): и состояние тикета, и исход прогона.
+  const status = entity.props['orbis/task_status'];
+  const runOutcome = lastRun?.props['orbis/run_outcome'];
+  const outcome = typeof runOutcome === 'string' ? runOutcome : undefined;
   /**
    * Условие показа — «тикет ждёт И прогон уже НЕ идёт». Идущий прогон сюда не попадает
    * намеренно: агент перечитывает ответ только на следующем захвате (`claimTask`), а сервер
@@ -55,7 +54,7 @@ export function TicketWaitingBlock({
    * (routers/agent-run.ts:104-113). Кнопка, которая гарантированно отказывает, хуже её отсутствия.
    */
   if (
-    task?.status !== 'waiting' ||
+    status !== 'waiting' ||
     lastRun === undefined ||
     outcome === undefined ||
     outcome === 'running'
@@ -66,7 +65,8 @@ export function TicketWaitingBlock({
   // Текст для человека — ОДИН, в `waiting_for` тикета: туда его кладут все три пути сервера
   // (вопрос чекпойнта, отчёт итога, записка подметания). Второго источника у экрана нет
   // намеренно — разъехаться им было бы негде.
-  const waitingFor = typeof task.waiting_for === 'string' ? task.waiting_for : '';
+  const question = entity.props['orbis/waiting_for'];
+  const waitingFor = typeof question === 'string' ? question : '';
   const pending = answerCheckpoint.isPending || update.isPending;
   const failure = answerCheckpoint.isError
     ? answerCheckpoint.error.message
@@ -134,13 +134,16 @@ export function TicketWaitingBlock({
               update.mutate({
                 id: entity.id,
                 expectedUpdatedAt: entity.updatedAt,
-                // `waiting_for: null` — конвенция среза: уходя из waiting, вопрос снимают, иначе
-                // он остался бы висеть на закрытом тикете и читался бы как открытый. Сервер
-                // делает ровно это на всех СВОИХ выходах из waiting (routers/agent-run.ts:129-131,
-                // agent-loop/sweep.ts:111); правка из UI не должна быть исключением.
-                // `completed_at` не шлём: его проставляет сам переход в done
-                // (executor/normalize.ts:57-68).
-                aspects: { [TASK]: { status: 'done', waiting_for: null } },
+                props: { 'orbis/task_status': 'done' },
+                // Снятие вопроса уезжает СПИСКОМ `unset`, а не `null` в значении (§А1-1):
+                // `null` — законное значение json-свойства, и совмещать их одним ключом
+                // больше нечем. Конвенция среза прежняя: уходя из waiting, вопрос снимают,
+                // иначе он остался бы висеть на закрытом тикете и читался бы как открытый.
+                // Сервер делает ровно это на всех СВОИХ выходах из waiting
+                // (routers/agent-run.ts:129-131, agent-loop/sweep.ts:111); правка из UI не
+                // должна быть исключением. `orbis/completed_at` не шлём: его проставляет сам
+                // переход в done (executor/normalize.ts:57-68).
+                unset: ['orbis/waiting_for'],
               })
             }
           >

@@ -42,6 +42,7 @@ import { useEffect, useRef, useState } from 'react';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { invalidateGraph } from '../../lib/invalidate';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
+import { isScalar, valueText as rawValueText } from '../../lib/registry/format';
 import type { RegistryLookup } from '../../lib/registry/labels';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { openEntity } from '../../state/navigation';
@@ -63,7 +64,7 @@ import {
 import { EditorShell } from '../entity-editor/EditorShell';
 import { sameDoc } from '../entity-editor/strip-ids';
 import type { BodyDoc } from '../entity-editor/useBodySave';
-import { AspectField, coerce, isScalar, readOnlyText } from './AspectCards';
+import { AspectField, coerce } from './AspectCards';
 
 type DetailEntity = RouterOutputs['entity']['get']['entity'];
 type ProposalView = RouterOutputs['routine']['proposalsForEntity'][number];
@@ -133,12 +134,13 @@ function editableRow(op: ProposalRow): boolean {
 }
 
 /**
- * Значение строкой. Скаляр — как в карточке ленты, нескалярное — как на самой записи
- * (`readOnlyText`): владелец видит `progress_source` цели или `aliases` категории в той же
- * форме, в какой они стоят в свойствах, а не в двух разных.
+ * Значение строкой. Скаляр — как в карточке ленты, нескалярное — тем же показом «без
+ * объявления типа» (`rawValueText`), которым его рисует форма записи у свойства, чьей строки
+ * в реестре нет: владелец видит `progress_source` цели или `aliases` категории в одной и той
+ * же форме, а не в двух разных.
  */
 function valueText(value: unknown): string {
-  return isScalar(value) ? fmt(value) : readOnlyText(value);
+  return isScalar(value) ? fmt(value) : rawValueText(value);
 }
 
 /**

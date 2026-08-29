@@ -7,7 +7,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeEach, expect, test } from 'vitest';
 import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
 import { useRetryBuffer } from '../../state/retry';
-import { mockLink, trpcError } from '../../test/harness';
+import { mockLink, trpcError, wireEntity } from '../../test/harness';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { type ChatMessage, chatThreadKey } from './useChatThread';
@@ -52,26 +52,29 @@ function wrapper(handler: (path: string, input: unknown) => unknown) {
 
 const settings = { defaultCurrency: 'RUB' };
 const categories = [
-  {
+  wireEntity({
     id: 'cat-food',
     title: 'Еда',
-    aspectsMap: { 'orbis/category': { aliases: ['обед', 'еда', 'кофе'], spend_class: 'variable' } },
-  },
-  {
+    props: { 'orbis/aliases': ['обед', 'еда', 'кофе'], 'orbis/spend_class': 'variable' },
+    aspects: ['orbis/category'],
+  }),
+  wireEntity({
     id: 'cat-fun',
     title: 'Развлечения',
-    aspectsMap: { 'orbis/category': { aliases: ['развлечения'], spend_class: 'variable' } },
-  },
+    props: { 'orbis/aliases': ['развлечения'], 'orbis/spend_class': 'variable' },
+    aspects: ['orbis/category'],
+  }),
 ];
 // Memory-правила владельца (§7.5): заголовок — вся машиночитаемая часть правила (D3a),
 // updatedAt приезжает в wire-форме сущности и разрешает конфликт правил (applyMemoryRules).
 const rules = [
-  {
+  wireEntity({
     id: 'rule-1',
     title: 'кофе → Развлечения',
     updatedAt: '2026-07-20T10:00:00.000Z',
-    aspectsMap: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
-  },
+    props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/money-movement' },
+    aspects: ['orbis/memory'],
+  }),
 ];
 
 const assistantReply = {

@@ -1,7 +1,12 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../../state/navigation';
-import { type MockHandler, renderWithProviders, trpcError } from '../../../test/harness';
+import {
+  type MockHandler,
+  renderWithProviders,
+  trpcError,
+  wireEntity,
+} from '../../../test/harness';
 import { registryReply } from '../../../test/registry';
 import { smoothAuditText } from '../format-audit';
 import { MEMORY_RULES_QUERY } from '../memoryRules';
@@ -219,6 +224,32 @@ describe('confirmation explicit actions (детерминированное вр
     );
   });
 
+  test('confirmation: строка диффа подписана СЛОВОМ из реестра, а не id свойства', async () => {
+    // Ключи `diff` — id свойств (`entityUpdatePreviewDiff` раскрывает `props` поштучно,
+    // §А7-4). Печатать их как есть значило бы просить владельца подтвердить
+    // `orbis/task_status` — машинный адрес там, где соседняя карточка того же треда пишет
+    // «Состояние задачи».
+    renderWithProviders(
+      <div>
+        {renderCards(
+          msg([
+            {
+              kind: 'confirmation_card',
+              mode: 'explicit',
+              pendingId: 'p3',
+              summary: 'Закрыть задачу',
+              diff: { 'orbis/task_status': { before: 'inbox', after: 'done' } },
+            },
+          ]),
+        )}
+      </div>,
+      (path) => registryReply(path) ?? {},
+    );
+    const card = await screen.findByTestId('confirmation-card');
+    expect(await within(card).findByText('Состояние задачи:')).toBeInTheDocument();
+    expect(card).not.toHaveTextContent('orbis/task_status');
+  });
+
   test('confirmation explicit: Отменить → ai.reject(pendingId)', async () => {
     const { calls } = renderWithProviders(
       <div>
@@ -339,30 +370,17 @@ const finCard = {
 
 // EnvelopeStatus «после записи»: сервер уже учёл транзакцию (spent включает 340)
 const envStatus = {
-  envelope: {
+  envelope: wireEntity({
     id: 'env1',
-    ownerId: 'u',
     title: 'Конверт Еда',
-    emoji: null,
-    body: '',
-    bodyRefs: [],
-    tags: [],
-    meta: {},
-    aspectsMap: {
-      props: {},
-      aspects: [],
-      queryRefs: [],
-      'orbis/budget': {
-        category_ref: 'c1',
-        limit: '10000.00',
-        period_start: '2026-07-01',
-        period_end: '2026-07-31',
-      },
+    props: {
+      'orbis/finance_category': 'c1',
+      'orbis/limit': '10000.00',
+      'orbis/period_start': '2026-07-01',
+      'orbis/period_end': '2026-07-31',
     },
-    createdAt: 'x',
-    updatedAt: 'y',
-    archived: false,
-  },
+    aspects: ['orbis/budget'],
+  }),
   category: { id: 'c1', title: 'Еда', icon: null, color: null },
   spent: '1940.00',
   effectiveLimit: '10000.00',
@@ -470,23 +488,12 @@ test('после Undo строка остатка снимается вмест�
 
 // D6c п.2 (живой смоук D6b): в сетке полей карточки печаталось «категория: 7d5e3a94-…».
 // Название было только в строке остатка конверта, а её нет у транзакции без конверта.
-const categoryEntity = {
+const categoryEntity = wireEntity({
   id: 'c1',
-  ownerId: 'u',
   title: 'Еда',
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: { 'orbis/category': { icon: '🍔' } },
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-};
+  props: { 'orbis/icon': '🍔' },
+  aspects: ['orbis/category'],
+});
 
 // Конверта у записи нет (null) — ровно случай смоука: строки остатка не будет,
 // и название категории обязано прийти из самой карточки.
@@ -633,23 +640,12 @@ const suggestion = {
   categoryTitle: 'Развлечения',
 };
 
-const createdEntity = {
+const createdEntity = wireEntity({
   id: 'mem1',
-  ownerId: 'u',
   title: 'кофе → Развлечения',
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-};
+  props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/money-movement' },
+  aspects: ['orbis/memory'],
+});
 
 // id созданных сущностей из журнала вызовов — клиентский UUID кнопки «Запомнить».
 const createIds = (calls: { path: string; input: unknown }[]): string[] =>

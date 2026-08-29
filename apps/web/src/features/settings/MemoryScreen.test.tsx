@@ -6,29 +6,20 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { App } from '../../App';
 import { useNav } from '../../state/navigation';
-import { renderWithProviders, trpcError } from '../../test/harness';
+import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { MemoryScreen } from './MemoryScreen';
 import { SettingsScreen } from './SettingsScreen';
 
-const mem = (id: string, title: string, kind: 'rule' | 'fact') => ({
-  id,
-  ownerId: 'u',
-  title,
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: {
-    'orbis/memory': kind === 'rule' ? { kind, scope: 'orbis/money-movement' } : { kind },
-  },
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-});
+const mem = (id: string, title: string, kind: string) =>
+  wireEntity({
+    id,
+    title,
+    props: {
+      'orbis/memory_kind': kind,
+      ...(kind === 'rule' ? { 'orbis/rule_scope': 'orbis/money-movement' } : {}),
+    },
+    aspects: ['orbis/memory'],
+  });
 
 const rule = mem('r1', 'кофе → Развлечения', 'rule');
 const fact = mem('f1', 'Работаю из дома по пятницам', 'fact');

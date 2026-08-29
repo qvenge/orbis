@@ -1,6 +1,6 @@
 import { screen } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { renderWithProviders } from '../../test/harness';
+import { renderWithProviders, wireEntity } from '../../test/harness';
 import { DetailScreen } from './DetailScreen';
 import { RUN_POLL_MS, runPollInterval } from './run-poll';
 
@@ -8,40 +8,36 @@ import { RUN_POLL_MS, runPollInterval } from './run-poll';
 
 describe('runPollInterval', () => {
   test('идущий прогон → RUN_POLL_MS; терминальный, не прогон, нет данных → false', () => {
-    expect(runPollInterval({ 'orbis/agent-run': { outcome: 'running' } })).toBe(RUN_POLL_MS);
+    // Адрес исхода — id СВОЙСТВА (§А1-1): «сперва аспект, потом поле в нём» больше нет.
+    expect(runPollInterval({ 'orbis/run_outcome': 'running' })).toBe(RUN_POLL_MS);
     for (const outcome of ['finished', 'checkpoint', 'failed', 'answered', 'stale', 'abandoned']) {
-      expect(runPollInterval({ 'orbis/agent-run': { outcome } })).toBe(false);
+      expect(runPollInterval({ 'orbis/run_outcome': outcome })).toBe(false);
     }
-    expect(runPollInterval({ 'orbis/task': { status: 'inbox' } })).toBe(false);
+    // Не прогон: свойства исхода у сущности нет вовсе.
+    expect(runPollInterval({ 'orbis/task_status': 'inbox' })).toBe(false);
     expect(runPollInterval(undefined)).toBe(false);
-    expect(runPollInterval({ 'orbis/agent-run': null as unknown as Record<string, unknown> })).toBe(
-      false,
-    );
   });
 });
 
-const RUN_ASPECT = {
-  routine_id: 'rt1',
-  bucket: 'manual:2026-08-18T12:00:00.000Z',
-  outcome: 'running',
-  started_at: '2026-08-18T12:00:00.000Z',
-  last_step_at: '2026-08-18T12:00:00.000Z',
-  step_count: 0,
-  steps: [],
+const RUN_PROPS = {
+  'orbis/run_routine': 'rt1',
+  'orbis/run_bucket': 'manual:2026-08-18T12:00:00.000Z',
+  'orbis/run_outcome': 'running',
+  'orbis/run_started_at': '2026-08-18T12:00:00.000Z',
+  'orbis/last_step_at': '2026-08-18T12:00:00.000Z',
+  'orbis/step_count': 0,
+  'orbis/run_steps': [],
 };
 
-const RUN_ENTITY = {
+const RUN_ENTITY = wireEntity({
   id: 'r1',
   title: 'Прогон: Утренний обзор — вручную',
-  body: '',
   bodyDoc: null,
-  emoji: null,
-  tags: [],
-  archived: false,
-  aspectsMap: { 'orbis/agent-run': RUN_ASPECT },
+  props: RUN_PROPS,
+  aspects: ['orbis/agent-run'],
   createdAt: '2026-08-18T12:00:00.000Z',
   updatedAt: '2026-08-18T12:00:00.000Z',
-};
+});
 
 describe('экран прогона', () => {
   afterEach(() => vi.useRealTimers());
@@ -54,10 +50,7 @@ describe('экран прогона', () => {
     const { calls } = renderWithProviders(<DetailScreen entityId="r1" />, (path, input) => {
       if (path === 'entity.get' && (input as { id: string }).id === 'r1') {
         return {
-          entity: {
-            ...RUN_ENTITY,
-            aspectsMap: { 'orbis/agent-run': { ...RUN_ASPECT, outcome } },
-          },
+          entity: { ...RUN_ENTITY, props: { ...RUN_PROPS, 'orbis/run_outcome': outcome } },
           relations: [],
           thread: null,
         };

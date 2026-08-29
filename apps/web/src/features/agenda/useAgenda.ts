@@ -57,35 +57,41 @@ export const AGENDA_OVERDUE_DUE_QUERY = `aspect=orbis/task, orbis/due_date=overd
  */
 export const AGENDA_OVERDUE_START_QUERY = `aspect=orbis/task, aspect=orbis/schedule, orbis/start_at=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/start_at:asc, limit=${OVERDUE_LIMIT}`;
 
-function aspectOf(e: AgendaEntity, id: string): Record<string, unknown> | undefined {
-  return (e.aspectsMap as Record<string, Record<string, unknown> | undefined>)[id];
-}
-
-function stringField(e: AgendaEntity, aspect: string, field: string): string | null {
-  const v = aspectOf(e, aspect)?.[field];
+/**
+ * Значения — плоско в `props` по id свойства (§А1-1): те же адреса, что в текстах запросов
+ * выше (`orbis/start_at`, `orbis/due_date`). Прежде запрос спрашивал одним именем, а клиент
+ * читал ответ другим («аспект + поле»), и переименование поля рвало ровно одну из двух
+ * половин — молча.
+ */
+function stringProp(e: AgendaEntity, propertyId: string): string | null {
+  const v = e.props[propertyId];
   return typeof v === 'string' ? v : null;
 }
 
-export const startAt = (e: AgendaEntity) => stringField(e, 'orbis/schedule', 'start_at');
-export const endAt = (e: AgendaEntity) => stringField(e, 'orbis/schedule', 'end_at');
-export const dueDate = (e: AgendaEntity) => stringField(e, 'orbis/task', 'due_date');
-export const isAllDay = (e: AgendaEntity) => aspectOf(e, 'orbis/schedule')?.all_day === true;
+export const startAt = (e: AgendaEntity) => stringProp(e, 'orbis/start_at');
+export const endAt = (e: AgendaEntity) => stringProp(e, 'orbis/end_at');
+export const dueDate = (e: AgendaEntity) => stringProp(e, 'orbis/due_date');
+export const isAllDay = (e: AgendaEntity) => e.props['orbis/all_day'] === true;
 
 /**
  * Есть ли у сущности `orbis/financial`. Нужно «Просроченному»: EntityRow выбирает мету
  * по приоритету financial → сумма, иначе дата. Дату строка секции печатает сама, сумму —
  * нет, поэтому подавлять чужую мету можно только у НЕфинансовых строк (§4.2).
+ *
+ * Признак — СПИСОК аспектов, а не «в карте есть ключ»: у операции без единого заполненного
+ * поля (её оставляет импорт до резолва) ключ карты был пуст, и мета EntityRow — сумма —
+ * печаталась бы поверх даты секции.
  */
-export const isFinancial = (e: AgendaEntity) => aspectOf(e, 'orbis/financial') !== undefined;
+export const isFinancial = (e: AgendaEntity) => e.aspects.includes('orbis/financial');
 
 /**
- * §4.1: шаблон recurring — сущность с заданным `orbis/schedule.recurrence`; в Agenda
- * скрыт (инстансы recurrence не несут — materialize.ts). Грамматика «поле IS NULL»
- * не выражает, поэтому фильтр только клиентский. Действует и в «Просроченном»:
- * иначе якорный start_at шаблона висел бы там вечно.
+ * §4.1: шаблон recurring — сущность с заданным `orbis/recurrence`; в Agenda скрыт (инстансы
+ * recurrence не несут — materialize.ts). Грамматика «поле IS NULL» не выражает, поэтому
+ * фильтр только клиентский. Действует и в «Просроченном»: иначе якорный start_at шаблона
+ * висел бы там вечно.
  */
 export function isRecurringTemplate(e: AgendaEntity): boolean {
-  return aspectOf(e, 'orbis/schedule')?.recurrence !== undefined;
+  return e.props['orbis/recurrence'] !== undefined;
 }
 
 function intl(tz: string | undefined, opts: Intl.DateTimeFormatOptions, locale: string) {

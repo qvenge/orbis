@@ -1,25 +1,12 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
-import { renderWithProviders, trpcError } from '../../test/harness';
+import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { EntityRef } from './EntityRef';
 
-const entity = {
+const entity = wireEntity({
   id: '0f8b1c2d-3e4a-5b6c-7d8e-9f0a1b2c3d4e',
-  ownerId: 'u',
   title: 'Обед с командой',
-  emoji: null,
-  body: '',
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: {},
-  props: {},
-  aspects: [],
-  queryRefs: [],
-  createdAt: 'x',
-  updatedAt: 'y',
-  archived: false,
-};
+});
 
 test('loading → skeleton (role=status), success → title', async () => {
   renderWithProviders(<EntityRef id={entity.id} />, (path) => {

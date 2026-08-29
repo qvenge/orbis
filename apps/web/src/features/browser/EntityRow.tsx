@@ -33,11 +33,13 @@ export function formatDay(value: string): string {
  * `true`: Browser (EntityList) прежний, поведение по умолчанию не менялось.
  */
 export function EntityRow({ entity, showMeta = true }: { entity: Entity; showMeta?: boolean }) {
-  const aspects = entity.aspectsMap as Record<string, Record<string, unknown>>;
-  const task = aspects['orbis/task'];
-  const financial = aspects['orbis/financial'];
-  const schedule = aspects['orbis/schedule'];
-  const done = task?.status === 'done';
+  // Род строки — по СПИСКУ аспектов, значения — плоско в `props` по id свойства (§А1-1).
+  // Прежде и то, и другое читалось из одной карты, и «аспект навешен» было неотличимо от
+  // «в аспекте что-то заполнено»: задача без единого свойства оставалась без глифа.
+  const props = entity.props;
+  const aspects = new Set(entity.aspects);
+  const task = aspects.has('orbis/task');
+  const done = props['orbis/task_status'] === 'done';
 
   const leading = entity.emoji ? (
     <span aria-hidden className="w-5 text-center leading-none">
@@ -53,21 +55,23 @@ export function EntityRow({ entity, showMeta = true }: { entity: Entity; showMet
     <FileText size={16} className="w-5 shrink-0 text-text-muted/70" aria-hidden />
   );
 
+  const due = props['orbis/due_date'];
+  const startAt = props['orbis/start_at'];
   let meta: React.ReactNode = null;
-  if (financial) {
+  if (aspects.has('orbis/financial')) {
     const money = formatMoney(
-      String(financial.amount ?? '0'),
-      (financial.direction as 'expense' | 'income') ?? 'expense',
+      String(props['orbis/amount'] ?? '0'),
+      (props['orbis/direction'] as 'expense' | 'income') ?? 'expense',
     );
     meta = (
       <span className={`text-xs font-medium tabular-nums ${AMOUNT_TONE_CLASS[money.tone]}`}>
         {money.text}
       </span>
     );
-  } else if (task && typeof task.due_date === 'string') {
-    meta = <span className="text-xs text-text-muted">{formatDay(task.due_date)}</span>;
-  } else if (schedule && typeof schedule.start_at === 'string') {
-    meta = <span className="text-xs text-text-muted">{formatDay(schedule.start_at)}</span>;
+  } else if (task && typeof due === 'string') {
+    meta = <span className="text-xs text-text-muted">{formatDay(due)}</span>;
+  } else if (aspects.has('orbis/schedule') && typeof startAt === 'string') {
+    meta = <span className="text-xs text-text-muted">{formatDay(startAt)}</span>;
   }
 
   return (
@@ -76,7 +80,7 @@ export function EntityRow({ entity, showMeta = true }: { entity: Entity; showMet
       <span className={`flex-1 truncate ${done ? 'text-text-muted line-through' : ''}`}>
         {entity.title}
       </span>
-      {task && typeof task.priority === 'string' && task.priority === 'high' && !done && (
+      {task && props['orbis/priority'] === 'high' && !done && (
         <span
           role="img"
           aria-label="высокий приоритет"

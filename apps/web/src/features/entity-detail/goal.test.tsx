@@ -5,41 +5,32 @@ import { parseBody } from '@orbis/shared/doc';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
-import { type MockHandler, renderWithProviders } from '../../test/harness';
+import { type MockHandler, renderWithProviders, wireEntity } from '../../test/harness';
 import { registryReply } from '../../test/registry';
 import { QuickCapture } from '../browser/QuickCapture';
 import { DetailScreen } from './DetailScreen';
 
-const goal = {
+const goal = wireEntity({
   id: 'g1',
-  ownerId: 'u',
   title: 'Накопить на отпуск',
-  emoji: null,
-  body: '',
   // Часть контракта detail (include просит документ всегда): без него редактор не встал бы
   // никогда, и зелень файла держалась бы на состоянии, которого в проде не бывает.
   bodyDoc: parseBody(''),
-  bodyRefs: [],
-  tags: [],
-  meta: {},
-  aspectsMap: {
-    props: {},
-    aspects: [],
-    queryRefs: [],
-    'orbis/goal': {
-      progress_source: {
-        query: 'aspect=orbis/financial direction=income',
-        aggregate: 'sum',
-        field: 'amount',
-      },
-      target_value: '300000.00',
-      unit: '₽',
+  props: {
+    // Источник прогресса — ДЕРЕВО Q-AST (§А5-2), а не строка грамматики: строку кладёт
+    // только переходная обёртка `{text}`, и производитель новой формы её не пишет.
+    'orbis/progress_source': {
+      query: { filter: { aspect: 'orbis/financial', props: { 'orbis/direction': 'income' } } },
+      aggregate: 'sum',
+      field: 'orbis/amount',
     },
+    'orbis/target_value': '300000.00',
+    'orbis/unit': '₽',
   },
+  aspects: ['orbis/goal'],
   createdAt: '2026-08-01T00:00:00.000Z',
   updatedAt: '2026-08-01T10:00:00.000Z',
-  archived: false,
-};
+});
 
 /** Хелпера handlerWithGoal в проекте нет — обработчик здесь один и inline (прецедент detail.test.tsx). */
 function goalHandler(goalProgress: unknown, entity: unknown = goal): MockHandler {
@@ -131,10 +122,11 @@ test('отрицательное текущее значение не теряе
 test('у не-цели полосы прогресса нет вовсе', async () => {
   const task = {
     ...goal,
-    aspectsMap: { 'orbis/task': { status: 'inbox', priority: 'high' } },
+    props: { 'orbis/task_status': 'inbox', 'orbis/priority': 'high' },
+    aspects: ['orbis/task'],
   };
   renderWithProviders(<DetailScreen entityId="g1" />, goalHandler(undefined, task));
-  expect(await screen.findByLabelText('orbis/task status')).toBeInTheDocument();
+  expect(await screen.findByLabelText('Состояние задачи')).toBeInTheDocument();
   expect(screen.queryByRole('progressbar')).toBeNull();
   expect(screen.queryByTestId('goal-progress')).toBeNull();
 });
@@ -192,37 +184,38 @@ test('четыре причины не сваливаются в одну фра
 // слал строку и получал VALIDATION. Чинится общий случай: массивы (orbis/category.aliases),
 // объекты (orbis/schedule.recurrence) — тем же правилом.
 
-test('объектное поле аспекта показано read-only, а не редактируемым [object Object]', async () => {
+test('json-свойство показано read-only, а не редактируемым [object Object]', async () => {
   renderWithProviders(
     <DetailScreen entityId="g1" />,
     goalHandler({ current: '0', target: '300000.00' }),
   );
-  // Скалярные поля остаются редактируемыми
-  expect(await screen.findByLabelText('orbis/goal target_value')).toBeInTheDocument();
-  // Объект — нет инпута и никакого [object Object]
-  expect(screen.queryByLabelText('orbis/goal progress_source')).toBeNull();
+  // Свойство с набираемым типом (`decimal`) остаётся редактируемым
+  expect(await screen.findByLabelText('Целевое значение')).toBeInTheDocument();
+  // `json` контролом не набирают: ни инпута, ни [object Object]
+  expect(screen.queryByLabelText('Источник прогресса')).toBeNull();
   expect(screen.queryByDisplayValue('[object Object]')).toBeNull();
-  const ro = screen.getByTestId('aspect-value-orbis/goal-progress_source');
+  const ro = screen.getByTestId('prop-orbis/progress_source');
   expect(ro.tagName).not.toBe('INPUT');
   // Read-only строка подписана ТЕМ ЖЕ источником, что и редактируемая рядом (§А9-2): без
-  // этого в одной сетке стояли бы «Целевое значение» и сырой `progress_source`.
+  // этого в одной сетке стояли бы «Целевое значение» и сырой `orbis/progress_source`.
   expect(await screen.findByText('Источник прогресса')).toBeInTheDocument();
   expect(screen.getByText('Целевое значение')).toBeInTheDocument();
   // Значение видно целиком: «поправьте query» бессмысленно, если query не показан
-  expect(ro.textContent ?? '').toContain('aspect=orbis/financial direction=income');
+  expect(ro.textContent ?? '').toContain('orbis/direction');
 });
 
 test('массив строк показан списком через запятую, а не Array.toString в инпуте', async () => {
   const category = {
     ...goal,
-    aspectsMap: { 'orbis/category': { aliases: ['кофе', 'кофейня'], icon: '☕' } },
+    props: { 'orbis/aliases': ['кофе', 'кофейня'], 'orbis/icon': '☕' },
+    aspects: ['orbis/category'],
   };
   renderWithProviders(<DetailScreen entityId="g1" />, goalHandler(undefined, category));
-  expect(await screen.findByLabelText('orbis/category icon')).toBeInTheDocument();
-  expect(screen.queryByLabelText('orbis/category aliases')).toBeNull();
-  expect(screen.getByTestId('aspect-value-orbis/category-aliases')).toHaveTextContent(
-    'кофе, кофейня',
-  );
+  expect(await screen.findByLabelText('Иконка')).toBeInTheDocument();
+  // Список СВОБОДНОГО текста контролом не набирают (однострочной формы у него нет) —
+  // показывается перечислением.
+  expect(screen.queryByLabelText('Синонимы')).toBeNull();
+  expect(screen.getByTestId('prop-orbis/aliases')).toHaveTextContent('кофе, кофейня');
 });
 
 // Категория финансовой записи — ЕДИНСТВЕННОЕ поле со своим контролом (пикер вместо инпута),
@@ -232,20 +225,25 @@ test('массив строк показан списком через запя�
 test('поле со своим контролом (категория) подписано тем же реестром', async () => {
   const tx = {
     ...goal,
-    aspectsMap: { 'orbis/financial': { amount: '340.00', category_ref: 'c1' } },
+    props: { 'orbis/amount': '340.00', 'orbis/finance_category': 'c1' },
+    aspects: ['orbis/financial'],
   };
   renderWithProviders(<DetailScreen entityId="g1" />, goalHandler(undefined, tx));
   expect(await screen.findByText('Категория')).toBeInTheDocument();
   expect(screen.queryByText('category_ref')).toBeNull();
-  // Соседняя строка того же аспекта — обычным инпутом и тоже со словом из реестра.
+  // Соседняя строка того же аспекта — контролом по типу и тоже со словом из реестра.
   expect(screen.getByText('Сумма')).toBeInTheDocument();
 });
 
 // Пустой список — «алиасов нет», а не сломанная строка без значения.
 test('пустой массив показан прочерком, а не пустотой', async () => {
-  const category = { ...goal, aspectsMap: { 'orbis/category': { aliases: [], icon: '☕' } } };
+  const category = {
+    ...goal,
+    props: { 'orbis/aliases': [], 'orbis/icon': '☕' },
+    aspects: ['orbis/category'],
+  };
   renderWithProviders(<DetailScreen entityId="g1" />, goalHandler(undefined, category));
-  expect(await screen.findByTestId('aspect-value-orbis/category-aliases')).toHaveTextContent('—');
+  expect(await screen.findByTestId('prop-orbis/aliases')).toHaveTextContent('—');
 });
 
 // --- Р17: прогресс обновляется после добавления подходящей сущности -----------------------
