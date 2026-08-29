@@ -1601,7 +1601,11 @@ test('фикстуры: ни одного `aspectsMap:` и `meta:` в apps/web/s
   `aspectsMap`/`meta` — tsc web зелёный; UI-роутер со старой картой `aspects` → VALIDATION;
   `export` v2 читается обратно (round-trip на фикстуре).
 - [ ] **Шаг 2:** реализация. — [ ] **Шаг 3:** PASS всех сьютов, web build, `check-lazy-chunks`;
-  `bun scripts/check-legacy-form.ts`: `aspectsMap`/`aspects_legacy` — только `executor/legacy-form.ts`
+  `bun scripts/check-legacy-form.ts`: **`aspectsMap`** (имя карты в wire) — только `executor/legacy-form.ts`
+  и его тест. **`aspects_legacy` (имя КОЛОНКИ) под эту приёмку не подпадает** (рулинг Р-13c-1): дуальную
+  запись исполнителя и проекцию `projectLegacyAspects` план держит до Задачи 23 явно (строка 138), а саму
+  колонку снимает миграция 0017 — в срезе её ещё нет. Прежняя формулировка требовала снять то, что план
+  тем же текстом велит сохранить
   и его тест; коммит `feat(web): Финансы, импорт на props по id; пикер ref по kind — одна реализация; wire без карты аспектов и meta; UI-контракт без старой карты; дамп v2 (§А6-1, §А9-2)`.
 
 ---
