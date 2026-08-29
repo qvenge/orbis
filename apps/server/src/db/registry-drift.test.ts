@@ -5,14 +5,20 @@
 // приложения NOINHERIT, гранты висят на authenticated), а забытый GRANT новой таблице даёт
 // 42501 ещё до всякой политики.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { hasRegistryDrift } from '@orbis/shared';
+import { hasRegistryDrift, newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
-import { adminDb, appDb, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { withIdentity } from '../db/with-identity';
+import { approvePending } from '../policy/pending';
+import { effectiveRegistry } from '../registry/cache';
+import { type RegistryDeltaRow, threeWayMerge, UNKNOWN_PREV_SYSTEM } from '../registry/deltas';
+import { createDriftConflictUnits } from '../registry/merge-conflict';
 import {
   checkRegistryDrift,
   REGISTRY_DELTAS_QUERY,
   reportRegistryDriftOnStartup,
 } from './registry-drift';
+import { codeSystemDefinitions } from './seed-registries';
 
 requireEnv();
 
@@ -286,5 +292,97 @@ describe('reportRegistryDriftOnStartup: провал ≠ «дрейфа нет»
       wait: async () => {},
     });
     expect(r).toEqual({ status: 'unknown' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §А3-3: конфликты трёхстороннего слияния → единицы пачки (Задача 15)
+// ---------------------------------------------------------------------------
+
+describe('конфликты пересева становятся единицами пачки (§А3-3)', () => {
+  const owner = freshUserId();
+
+  test('«вариант рядом с похожим» → единица пачки с aspect_delta_set; approve применяет дельту', async () => {
+    // Владелец добавил в `orbis/content_type` два своих варианта. У первого подпись
+    // совпадает с системным «Markdown», ключ — другой: это ровно тот ряд §А3-3, где
+    // молчаливого правильного ответа нет («слить их может только владелец»). Второй
+    // ни на что не похож и обязан пережить разбор — иначе «слить» стоило бы владельцу
+    // настройки, о которой его не спрашивали.
+    const row: RegistryDeltaRow = {
+      id: newId(),
+      ownerId: owner,
+      targetKind: 'aspect',
+      targetId: 'orbis/note',
+      baseVersion: 0,
+      delta: {
+        selectOptions: {
+          'orbis/content_type': {
+            add: [
+              { key: 'md', label: { ru: 'Markdown' }, rank: 10 },
+              { key: 'table', label: { ru: 'Таблица' }, rank: 11 },
+            ],
+          },
+        },
+      },
+    };
+    const { merged, conflicts } = threeWayMerge(UNKNOWN_PREV_SYSTEM, codeSystemDefinitions(), row);
+    expect(conflicts.map((c) => c.kind)).toEqual(['variant-merge']);
+    // Ключи пары — СТРУКТУРНО: единица собирается по ним, а не разбором человеческого текста.
+    expect(conflicts[0]?.option).toEqual({ mine: 'md', theirs: 'markdown' });
+
+    const ids = await withIdentity(db, owner, (tx) =>
+      createDriftConflictUnits(tx, {
+        ownerId: owner,
+        systemVersion: 7,
+        deltaRowId: row.id,
+        merged,
+        conflicts,
+      }),
+    );
+    expect(ids).toHaveLength(1);
+    const pendingId = ids[0] as string;
+
+    const rows = (await withIdentity(db, owner, (tx) =>
+      tx.execute(sql`SELECT content, metadata FROM chat_messages WHERE id = ${pendingId}::uuid`),
+    )) as unknown as Array<{ content: string; metadata: Record<string, unknown> }>;
+    const pending = (rows[0]?.metadata as { pending: Record<string, unknown> }).pending;
+    // Единица — ОТ СИСТЕМЫ: у деплойного слияния актора нет вовсе (находка 46).
+    expect(pending).toMatchObject({ actor_kind: 'system', source: 'system', kind: 'action' });
+    expect(pending.tool).toBe('aspect_delta_set');
+    // «Слить» = принять: в нагрузке ПОХОЖЕГО варианта уже нет, а непохожий остался.
+    const input = pending.input as { aspect: string; delta: Record<string, unknown> };
+    expect(input.aspect).toBe('orbis/note');
+    const added = (input.delta.selectOptions as Record<string, { add: Array<{ key: string }> }>)[
+      'orbis/content_type'
+    ]?.add;
+    expect(added?.map((o) => o.key)).toEqual(['table']);
+
+    // Повторный прогон пересева той же версии второй карточки не кладёт.
+    const again = await withIdentity(db, owner, (tx) =>
+      createDriftConflictUnits(tx, {
+        ownerId: owner,
+        systemVersion: 7,
+        deltaRowId: row.id,
+        merged,
+        conflicts,
+      }),
+    );
+    expect(again).toEqual([pendingId]);
+    const count = (await withIdentity(db, owner, (tx) =>
+      tx.execute(sql`SELECT id FROM chat_messages
+                     WHERE metadata @> '{"pending":{"tool":"aspect_delta_set"}}'::jsonb`),
+    )) as unknown as unknown[];
+    expect(count).toHaveLength(1);
+
+    // approve ПРИМЕНЯЕТ дельту обычным конвейером — своего пути записи у конфликта нет.
+    const approved = await approvePending(db, { ownerId: owner, pendingId });
+    expect(approved.ok).toBe(true);
+    const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
+    const options = reg.properties.get('orbis/content_type')?.type;
+    const keys =
+      options?.kind === 'select' ? options.options.map((o: { key: string }) => o.key) : [];
+    expect(keys).toContain('table');
+    expect(keys).not.toContain('md');
+    expect(keys).toContain('markdown');
   });
 });

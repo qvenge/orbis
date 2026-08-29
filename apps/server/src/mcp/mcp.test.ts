@@ -427,7 +427,7 @@ describe('/mcp: харднинг транспорта (405/413, Task 10b)', () =
 // ---------------------------------------------------------------------------
 
 describe('/mcp tools/list (§9.2)', () => {
-  test('состав = публичный реестр: 10 публичных core (с thread_post и property_catalog) + 5 глаголов + 12 attach_*, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
+  test('состав = публичный реестр: 10 публичных core + 5 реестровых + 5 глаголов + 12 attach_*, без internalOnly и routineOnly; имена/описания/схемы дословно', async () => {
     const agent = await connectAgent(mainUrl());
     try {
       const { tools } = await agent.listTools();
@@ -449,6 +449,14 @@ describe('/mcp tools/list (§9.2)', () => {
         // и внешнему агенту с `full` он адресован так же, как чату владельца.
         'property_catalog',
         'thread_post',
+        // Тулы реестра (§А10-2): `fullScopeOnly` закрывает их ФОНУ, а полному доступу они
+        // адресованы — это те же операции, что у владельца в чате и в UI. Гейт УРОВНЯ
+        // подтверждения (§7.10: слияние и дельта — карточка) ставит Задача 16.
+        'property_create',
+        'property_update',
+        'property_merge',
+        'aspect_delta_set',
+        'aspect_delta_remove',
         // Глаголы исполнителя (§9.3): грант есть у любого MCP-вызова, поэтому agentOnly
         // список не сужает — сужает его только скоуп (тест worker ниже)
         'orbis_my_queue',
@@ -489,9 +497,9 @@ describe('/mcp tools/list (§9.2)', () => {
       // сочиняет и ничего не теряет, кроме отсечения internalOnly
       const defs = await withIdentity(db, owner, (tx) => buildToolRegistry(tx, owner));
       const publicDefs = defs.filter((d) => d.internalOnly !== true && d.routineOnly !== true);
-      // builtin-набор: 32 − 3 internalOnly − 2 routineOnly = 27
+      // builtin-набор: 37 − 3 internalOnly − 2 routineOnly = 32
       expect(tools).toHaveLength(publicDefs.length);
-      expect(tools).toHaveLength(27);
+      expect(tools).toHaveLength(32);
       for (const def of publicDefs) {
         const tool = tools.find((t) => t.name === def.name);
         expect(tool).toBeDefined();
@@ -753,6 +761,13 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
         // §А9-4/РП-14: `fullScopeOnly` — исключение из «чтения открыты все». Каталог
         // свойств это карта поверхности ВЛАДЕЛЬЦА, фону она не адресована.
         'property_catalog',
+        // Тем же признаком закрыты пять тулов реестра: фоновый исполнитель работает над
+        // ЗАДАЧЕЙ владельца, а не над устройством его системы (§А9-4).
+        'property_create',
+        'property_update',
+        'property_merge',
+        'aspect_delta_set',
+        'aspect_delta_remove',
       ]) {
         expect(names).not.toContain(name);
       }
@@ -796,6 +811,40 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
       expect(r.isError).toBe(false);
       const rows = (r.payload.result as { properties: Array<{ key: string }> }).properties;
       expect(rows.map((p) => p.key)).toContain('orbis/finance_category');
+    } finally {
+      await full.close();
+    }
+  });
+
+  test('tools/call property_merge worker-грантом → isError, FORBIDDEN_LEVEL; полному доступу тот же вызов доезжает до операции', async () => {
+    // Список — не единственная линия: имя тула можно угадать, и вызов обязан отказать сам.
+    //
+    // ЧЕМ ИМЕННО ОТКАЗ ДЕРЖИТСЯ СЕГОДНЯ — сказано точно, потому что мутационная проба это
+    // проверила: снятие `fullScopeOnly` у пяти реестровых дефов НЕ роняет этот тест. Отказ
+    // приходит от общего правила скоупа («мутация не из `WORKER_SCOPE_TOOLS`»), а флаг у
+    // них — ВТОРАЯ линия и объявление адресата (§А9-4), которое станет несущим у первого
+    // читающего тула реестра (у `property_catalog` оно несущее уже сегодня — тест выше).
+    // Пин самого объявления живёт в `tools/registry.test.ts`.
+    const agent = await connectAgent(mainUrl(), WORKER_TOKEN);
+    try {
+      for (const name of ['property_create', 'property_merge', 'aspect_delta_set']) {
+        const r = await callTool(agent, name, { source: 'a', into: 'b' });
+        expect(r.isError).toBe(true);
+        expect((r.payload.error as { code?: string }).code).toBe('FORBIDDEN_LEVEL');
+      }
+    } finally {
+      await agent.close();
+    }
+    // Полному доступу отказ приходит ДОМЕННЫЙ (свойств с такими именами нет), а не по
+    // правам: запрет адресован скоупу, а не тулу.
+    const full = await connectAgent(mainUrl());
+    try {
+      const r = await callTool(full, 'property_merge', {
+        source: 'user/net-a',
+        into: 'user/net-b',
+      });
+      expect(r.isError).toBe(true);
+      expect((r.payload.error as { code?: string }).code).toBe('NOT_FOUND');
     } finally {
       await full.close();
     }

@@ -52,6 +52,7 @@ import {
   undoLastInput,
   userQueryInput,
 } from './registry';
+import { REGISTRY_TOOL_NAMES } from './registry-tools';
 
 requireEnv();
 
@@ -142,7 +143,7 @@ const BUILTIN_ATTACH_NAMES = BUILTIN_ASPECT_DEFS.filter((a) => !a.service).map((
 );
 
 describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
-  test('builtin-реестр (userB без кастомных): 13 core (с property_catalog) + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* = 32', async () => {
+  test('builtin-реестр (userB без кастомных): 13 core + 5 реестровых + 5 глаголов + orbis_propose + orbis_ask + 12 attach_* = 37', async () => {
     const defs = await registryFor(userB);
     const names = defs.map((d) => d.name);
     for (const name of CORE_NAMES) expect(names).toContain(name);
@@ -161,7 +162,7 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     // Счётчик — ПРОИЗВОДНЫЙ от эталона реестра тулов (`test/golden/tool-registry.json`):
     // эталон снят при чистом сиде и он же сторожит состав. Второе число, написанное здесь
     // руками, разошлось бы с ним молча — и «сколько тулов у модели» перестало бы иметь один
-    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 32 тула, пиннит `registry-golden`.
+    // ответ. Что эталон вообще НЕ ПУСТ и что в нём именно 37 тулов, пиннит `registry-golden`.
     expect(defs.length).toBe(TOOL_REGISTRY_GOLDEN.length);
     // дублей имён нет
     expect(new Set(names).size).toBe(names.length);
@@ -200,14 +201,31 @@ describe('buildToolRegistry: состав (§9.2 + §7.6)', () => {
     }
   });
 
-  test('fullScopeOnly: true РОВНО у property_catalog (§А9-4) — и он при этом чтение', async () => {
-    // Признак нужен именно потому, что тул читающий: правило «чтения открыты все» его бы
-    // пропустило, и `worker` получил бы карту поверхности владельца целиком.
+  test('fullScopeOnly: true у property_catalog и пяти тулов реестра (§А9-4) — и ни у кого больше', async () => {
+    // У каталога признак нужен именно потому, что тул ЧИТАЮЩИЙ: правило «чтения открыты
+    // все» его бы пропустило, и `worker` получил бы карту поверхности владельца целиком.
+    // У тулов реестра он отвечает на другой вопрос — кому этот тул вообще адресован:
+    // мутации фону закрывает и `WORKER_SCOPE_TOOLS`, а устройство системы владельца —
+    // не то, над чем фоновый исполнитель работает (§А9-4, РП-14).
+    //
+    // ЧЕСТНО О СИЛЕ ЭТОГО ПИНА: у пяти реестровых тулов флаг сегодня НЕ НЕСУЩИЙ — снятие
+    // его не меняет ни списка, ни вызова (мутационная проба Задачи 15), потому что оба
+    // гейта отказывают им уже по правилу «мутация не из `WORKER_SCOPE_TOOLS`». Это пин
+    // ОБЪЯВЛЕНИЯ, а не поведения, и он станет несущим у первого ЧИТАЮЩЕГО тула реестра —
+    // ровно как у `property_catalog`, где он несущий уже сейчас.
     const defs = await registryFor(userB);
+    // Порядок — тот, в котором тулы стоят в реестре (`buildToolDefs`), и он наблюдаем:
+    // по нему же снят эталон снимка.
     expect(defs.filter((d) => d.fullScopeOnly === true).map((d) => d.name)).toEqual([
       'property_catalog',
+      'property_create',
+      'property_update',
+      'property_merge',
+      'aspect_delta_set',
+      'aspect_delta_remove',
     ]);
     expect(defOf(defs, 'property_catalog').kind).toBe('read');
+    for (const name of REGISTRY_TOOL_NAMES) expect(defOf(defs, name).kind).toBe('mutate');
   });
 
   test('internalOnly: true только у user_query, import_csv_start и undo_last (§9.2: MCP не отдаются)', async () => {
@@ -668,6 +686,21 @@ describe('routineToolDefs: реестр прогона рутины (V1.10, ру
     const defs = await registryFor(userB);
     for (const mode of ['propose', 'act'] as const) {
       expect(routineToolDefs(defs, ref(mode)).map((d) => d.name)).toContain('property_catalog');
+    }
+  });
+
+  test('тулы реестра рутине act ДОПУСТИМЫ по allowed_tools: fullScopeOnly — про скоуп гранта, не про фон', async () => {
+    // `routineToolAllowed` признака не смотрит вовсе (тот же довод, что у property_catalog):
+    // рутина работает над графом владельца от его имени. Что при этом СЛУЧИТСЯ с уровнем
+    // подтверждения (§7.10: та же операция от рутины — отложенная единица пачки) — вопрос
+    // Задачи 16; здесь пиннится только доступность по белому списку.
+    const defs = await registryFor(userB);
+    for (const name of REGISTRY_TOOL_NAMES) {
+      expect(routineToolDefs(defs, ref('act', [name])).map((d) => d.name)).toContain(name);
+      // Без записи в белом списке — недоступны: инвариант 5 V1 держится и для реестра.
+      expect(routineToolDefs(defs, ref('act')).map((d) => d.name)).not.toContain(name);
+      // В режиме propose мутации закрыты все, включая реестровые.
+      expect(routineToolDefs(defs, ref('propose', [name])).map((d) => d.name)).not.toContain(name);
     }
   });
 

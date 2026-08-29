@@ -34,6 +34,7 @@ import type { Tx } from '../db/with-identity';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import { MAX_PROPOSAL_OPERATIONS, MAX_RUN_UNITS } from '../routines/constants';
+import { REGISTRY_TOOLS } from './registry-tools';
 
 export interface OrbisToolDef {
   name: string; // 'entity_query' | ... | 'attach_orbis_task' | ...
@@ -1249,6 +1250,10 @@ export function buildToolDefs(reg: RegistrySnapshot): OrbisToolDef[] {
     .sort((a, b) => a.rank - b.rank || a.key.localeCompare(b.key));
   return [
     ...CORE_TOOLS,
+    // Тулы реестра (§А10-2) — отдельным набором, а не строками в CORE_TOOLS: у них общий
+    // признак `fullScopeOnly` и общая судьба (гейт уровня §7.10 — Задача 16), и набор,
+    // который можно назвать одним именем, дешевле пяти разбросанных дефов.
+    ...REGISTRY_TOOLS,
     ...AGENT_VERB_TOOLS,
     PROPOSE_TOOL,
     ASK_TOOL,

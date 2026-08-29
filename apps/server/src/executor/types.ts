@@ -205,6 +205,12 @@ export interface ActionRecord {
   // В отличие от origin-вариантов, version_pinned в записи НАБЛЮДАЕМ: version.pin —
   // одиночный (не batch) вызывающий, его action ложится в журнал этим типом, и по нему
   // «отмени последнее» находит закрепление. version_deleted достижим только как inverse.
+  //
+  // property_created / property_updated / property_merged / aspect_delta_set /
+  // aspect_delta_removed — операции РЕЕСТРА (§А10-2, §А2-7, §А3-2). У них `entity_id: null`:
+  // меняется устройство системы, а не запись в графе, и подставлять сюда «какую-нибудь»
+  // сущность значило бы, что «отмени последнее» покажет владельцу чужой заголовок.
+  // Аддитивность та же, что у origin/version: исчерпывающих switch по полю в коде нет.
   type:
     | 'entity_created'
     | 'entity_updated'
@@ -214,6 +220,11 @@ export interface ActionRecord {
     | 'origin_deleted'
     | 'version_pinned'
     | 'version_deleted'
+    | 'property_created'
+    | 'property_updated'
+    | 'property_merged'
+    | 'aspect_delta_set'
+    | 'aspect_delta_removed'
     | 'batch';
   entity_id: string | null;
   actor_user_id: string;

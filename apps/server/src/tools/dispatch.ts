@@ -89,6 +89,7 @@ import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
+import { reportMergeConflictUnit } from '../registry/merge-conflict';
 import { runAsk } from '../routines/ask';
 import { CORE_FIELD_LABELS, MAX_RUN_UNITS } from '../routines/constants';
 import { buildUpdate, loadTargets, runPropose } from '../routines/propose';
@@ -108,6 +109,7 @@ import {
   userQueryInput,
   WORKER_SCOPE_TOOLS,
 } from './registry';
+import { REGISTRY_TOOL_ENVELOPES } from './registry-tools';
 
 /** Резолв имени в глагол исполнителя (§9.3) — набор имён живёт в реестре, не здесь. */
 function isAgentVerb(name: string): name is AgentVerbName {
@@ -1018,7 +1020,13 @@ async function runMutation(
     },
     { sink: capture?.sink ?? sink },
   );
-  if (!r.ok) return { status: 'error', error: r.error };
+  if (!r.ok) {
+    // Конфликт значений при слиянии свойств (§А10-2): само слияние откачено целиком, и
+    // карточку разбора кладёт ОТДЕЛЬНАЯ транзакция — иначе она откатилась бы вместе с ним.
+    // На любом другом отказе вызов — no-op (см. `reportMergeConflictUnit`).
+    await reportMergeConflictUnit(ctx.db, ctx.actorUserId, r.error);
+    return { status: 'error', error: r.error };
+  }
 
   // id action'а для actions-резюме (Task 9): та же семантика, что у undoActionId
   // карточки — идемпотентный replay ничего не журналил, action этого вызова нет
@@ -2352,6 +2360,9 @@ const MUTATION_ENVELOPES: Record<string, z.ZodTypeAny> = {
   entity_update: entityUpdateInput,
   relation_create: relationCreateInput,
   relation_delete: relationDeleteInput,
+  // Тулы реестра (§А10-2): их схемы живут рядом с дефами (`tools/registry-tools.ts`), и
+  // копии здесь нет намеренно — парность двух представлений там держится соседством строк.
+  ...REGISTRY_TOOL_ENVELOPES,
 };
 
 /**

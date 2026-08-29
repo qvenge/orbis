@@ -15,6 +15,7 @@ import {
   batchExecuteInput,
   type EntityUpdatePrecondition,
   type EntityUpdatePreconditionItem,
+  effectiveLabel,
   entityCreateExecInput,
   entityUpdateExecInput,
   newId,
@@ -35,6 +36,7 @@ import {
   canonicalizeBody,
   DOC_SCHEMA_VERSION,
 } from '@orbis/shared/doc';
+import { OWNER_LOCALE } from '@orbis/shared/query';
 import { and, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import {
@@ -58,6 +60,21 @@ import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
 import {
+  type CreatePropertyInput,
+  createProperty,
+  lockOwnerRegistry,
+  type MergeInverse,
+  mergeProperty,
+  type PropertyRow,
+  readAspectDelta,
+  readOwnProperty,
+  removeAspectDelta,
+  restorePropertyRow,
+  setAspectDelta,
+  undoMerge,
+  updateProperty,
+} from '../registry/ops';
+import {
   assertReferenceProps,
   changedRefProps,
   markRefSourcesNeedsReview,
@@ -65,6 +82,14 @@ import {
   syncRefMirror,
 } from '../registry/ref';
 import { projectBodyTemplate } from '../seed/project-body';
+import {
+  aspectDeltaRemoveInput,
+  aspectDeltaSetInput,
+  propertyCreateInput,
+  propertyMergeInput,
+  propertyUpdateInput,
+  REGISTRY_TOOL_NAMES,
+} from '../tools/registry-tools';
 // Date→ISO живёт ТОЛЬКО в wire.ts (Task 12); executor использует те же функции
 import { toWireEntity as toWire, toWireRelation } from '../wire';
 import { PROJECT_ASPECT, recomputeProjectAncestors } from './ancestors';
@@ -171,11 +196,12 @@ interface ExecCtx {
  * законная в понедельник, во вторник не оказывалась вне цели. Поля здесь потому, что их
  * требует ОБЩИЙ контекст компилятора, а не потому, что их кто-то спросит.
  *
- * Чем это обязательство держится СЕГОДНЯ: тестом `ref.test.ts` («каждый встроенный
- * `ref.target` статичен»), который гоняет `assertStaticQuery` по всем встроенным ссылочным
- * свойствам. Гейт на ПУТИ ЗАПИСИ определения (своё свойство владельца) ставит Задача 15 — до
- * неё боевых вызовов `assertStaticQuery` в дереве нет, и пин по встроенному словарю — всё,
- * что тут можно проверить честно.
+ * Чем это обязательство держится СЕГОДНЯ: гейтом на ПУТИ ЗАПИСИ определения
+ * (`registry/ops.ts`, `assertRegistryQuery` — он зовёт `assertStaticQuery` на `scope` и на
+ * `ref.target` своего свойства владельца, до INSERT'а), плюс тестом `ref.test.ts` («каждый
+ * встроенный `ref.target` статичен») по встроенному словарю. До Задачи 15 боевых
+ * вызывающих у `assertStaticQuery` не было ни одного, и пин по словарю был всем, что тут
+ * можно было проверить честно.
  */
 function compileCtxOf(ctx: ExecCtx): Promise<CompileCtx> {
   ctx.compileCtx ??= (async () => {
@@ -191,8 +217,19 @@ function compileCtxOf(ctx: ExecCtx): Promise<CompileCtx> {
   return ctx.compileCtx;
 }
 
+/**
+ * Исход операции РЕЕСТРА (§А10-2): ни сущность, ни связь — реестр меняется, а граф нет.
+ * Отдельный тип, а не приведение чужого: в публичном контракте §9.2 такого ответа не было,
+ * и «сущность без полей» читалась бы как пустой результат.
+ */
+export type WireRegistryResult =
+  | { property: string; key: string }
+  | { property: string }
+  | { source: string; into: string; rewrittenEntities: number; rewrittenQueries: number }
+  | { aspect: string };
+
 interface OpOutcome {
-  result: WireEntity | WireRelation | WireOrigin | WireEntityVersion;
+  result: WireEntity | WireRelation | WireOrigin | WireEntityVersion | WireRegistryResult;
   replay?: boolean;
 }
 
@@ -396,6 +433,9 @@ export async function execute(
       // §2.3 войти не могут. А замку он НУЖЕН: предикат контура теперь смотрит на id
       // свойств financial/budget по реестру, а не на имена полей во входе (Р-27).
       const registry = await effectiveRegistry(tx, req.actorUserId);
+      // Замок РЕЕСТРА — ПЕРВЫЙ из двух (см. lockOwnerRegistry): порядок «реестр → бюджет»
+      // глобален, и переставить его местами значит завести цикл ожидания.
+      await lockRegistry(tx, req.actorUserId, [single]);
       // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
       await lockBudgetContour(tx, registry, req.actorUserId, [single]);
       const ctx: ExecCtx = {
@@ -518,6 +558,8 @@ async function executeBatch(
       // Снимок реестра — ДО замка контура (см. одиночный путь: плановые SELECT'ы в цикл
       // ожидания не входят, а предикат контура без реестра неполон — Р-27)
       const registry = await effectiveRegistry(tx, req.actorUserId);
+      // Замок РЕЕСТРА — ПЕРВЫЙ из двух, тем же порядком, что и на одиночном пути
+      await lockRegistry(tx, req.actorUserId, ops);
       // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
       await lockBudgetContour(tx, registry, req.actorUserId, ops);
       const ctx: ExecCtx = {
@@ -756,6 +798,30 @@ function isAspectsPatchInput(value: object): value is { attach?: string[]; detac
  * Реентерабельность делает повторный захват в `assertEnvelopeUnique` бесплатным — снимать
  * его там не нужно (и нельзя: конверты пишутся и путями, которые сюда не заходят).
  */
+/**
+ * Трогает ли вызов реестр владельца — тот же приём, что у бюджет-контура: вложенный batch
+ * разворачивается, потому что замок берётся ДО стадий и про его содержимое знает только
+ * форма входа.
+ *
+ * Обратные операции (`property_row_restore`, `property_merge_undo`) в наборе ОБЯЗАНЫ быть:
+ * откат пишет в те же таблицы, и без замка он встал бы в очередь позже конкурента, который
+ * уже держит бюджетный, — то есть ровно тот цикл, ради которого порядок и заведён.
+ */
+function touchesRegistry(op: { tool: string; input: unknown }): boolean {
+  if (REGISTRY_OPS.has(op.tool)) return true;
+  if (op.tool !== 'batch_execute') return false;
+  const env = op.input as { operations?: Array<{ tool: string; input: unknown }> } | null;
+  return (env?.operations ?? []).some((inner) => touchesRegistry(inner));
+}
+
+async function lockRegistry(
+  tx: Tx,
+  ownerId: string,
+  ops: ReadonlyArray<{ tool: string; input: unknown }>,
+): Promise<void> {
+  if (ops.some(touchesRegistry)) await lockOwnerRegistry(tx, ownerId);
+}
+
 async function lockBudgetContour(
   tx: Tx,
   reg: RegistrySnapshot,
@@ -782,6 +848,13 @@ async function prepareOp(
   if (tool === 'entity_origin_delete') return prepareOriginDelete(ctx, input);
   if (tool === 'entity_version_pin') return prepareVersionPin(ctx, input, batch);
   if (tool === 'entity_version_delete') return prepareVersionDelete(ctx, input);
+  if (tool === 'property_create') return preparePropertyCreate(ctx, input);
+  if (tool === 'property_update') return preparePropertyUpdate(ctx, input);
+  if (tool === 'property_merge') return preparePropertyMerge(ctx, input);
+  if (tool === 'aspect_delta_set') return prepareAspectDeltaSet(ctx, input);
+  if (tool === 'aspect_delta_remove') return prepareAspectDeltaRemove(ctx, input);
+  if (tool === 'property_row_restore') return preparePropertyRowRestore(ctx, input);
+  if (tool === 'property_merge_undo') return preparePropertyMergeUndo(ctx, input);
   if (tool.startsWith('attach_')) {
     const aspectId = resolveAttachAspect(ctx.registry, tool);
     if (aspectId) return prepareAttach(ctx, tool, aspectId, input, batch);
@@ -2833,6 +2906,272 @@ async function prepareVersionDelete(ctx: ExecCtx, rawInput: unknown): Promise<Pr
       // операции требует минимум { id }, а полная форма его содержит и не заводит в
       // закрытом union OpOutcome вырожденного типа ради одного поля.
       return { result: toWireEntityVersion(gone) };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Операции реестра (§А10-2, §А2-7, §А3-2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Имена, при которых транзакция берёт замок реестра. Пять публичных тулов плюс две
+ * ВНУТРЕННИЕ обратные операции — те же две, что перечислены ниже: их зовёт только undo.ts
+ * через `execute` во внутреннем режиме, в `CORE_TOOLS` их нет, и `dispatchTool` их не
+ * резолвит (реестр тулов не знает таких имён).
+ */
+const REGISTRY_OPS: ReadonlySet<string> = new Set([
+  ...REGISTRY_TOOL_NAMES,
+  'property_row_restore',
+  'property_merge_undo',
+]);
+
+/**
+ * ВНУТРЕННЯЯ обратная операция для `property_create` и `property_update` сразу (§7.8).
+ * Живёт ЗДЕСЬ и в `CORE_TOOLS` не регистрируется — как origin- и version-операции выше:
+ * снаружи она недостижима, а inverse журнала исполняется через тот же конвейер.
+ *
+ * `row: null` означает «строки не было» — то есть удалить. Форма строки разбирается здесь
+ * нестрого (`record`), а по существу — строгой `propertyDefinitionSchema` уже внутри
+ * `restorePropertyRow`: журнал append-only, и записи в нём старше любой сегодняшней схемы.
+ */
+const propertyRowRestoreInput = z
+  .object({ id: z.string().min(1), row: z.record(z.unknown()).nullable() })
+  .strict();
+
+/** ВНУТРЕННЯЯ обратная операция слияния — ОДНА на всё, что слияние сделало (§А10-2). */
+const propertyMergeUndoInput = z
+  .object({
+    source: z.string().min(1),
+    into: z.string().min(1),
+    sourceRow: z
+      .object({
+        status: z.enum(['active', 'proposed', 'deprecated']),
+        mergedInto: z.string().nullable(),
+      })
+      .strict(),
+    values: z.array(
+      z
+        .object({
+          entityId: z.string().uuid(),
+          source: z.unknown(),
+          hadInto: z.boolean(),
+          into: z.unknown(),
+        })
+        .strict(),
+    ),
+    compacted: z.array(z.string()),
+    registry: z.array(z.object({ id: z.string(), scope: z.unknown(), type: z.unknown() }).strict()),
+    progress: z.array(z.object({ entityId: z.string().uuid(), value: z.unknown() }).strict()),
+    bodies: z.array(
+      z.object({ entityId: z.string().uuid(), body: z.string(), bodyDoc: z.unknown() }).strict(),
+    ),
+  })
+  .strict();
+
+/**
+ * ПОЧЕМУ ИНВЕРС ЭТИХ ОПЕРАЦИЙ ДОПИСЫВАЕТСЯ В `apply`, А НЕ СЧИТАЕТСЯ В `prepare`.
+ *
+ * У всех остальных операций конвейера обратная нагрузка известна заранее: прежнее состояние
+ * читает стадия 3. У реестровых — нет, и это не лень: id заведённого свойства выбирает сама
+ * операция, а карта «сущность → прежние значения» слияния снимается ТЕМ ЖЕ снапшотом, что
+ * и UPDATE (CTE с `FOR UPDATE`, см. `mergeProperty`). Снять её отдельным SELECT'ом на стадии
+ * 3 значило бы получить список, в который не попадёт запись, изменённая между чтением и
+ * записью, — то есть inverse, откатывающий НЕ ВСЁ.
+ *
+ * Безопасно это потому, что журнал собирается ПОСЛЕ всех `apply` (`writeJournal` и
+ * `aggregateInverse` зовутся из `execute`/`executeBatch` за последним применением), и между
+ * prepare и этим моментом `journal.inverse` не читает никто.
+ */
+function registryPlan(type: ActionRecord['type'], tool: string, title: string): JournalPlan {
+  return { type, entityId: null, tool, title, operations: [], inverse: [] };
+}
+
+async function preparePropertyCreate(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(propertyCreateInput, rawInput, 'property_create');
+  const journal = registryPlan(
+    'property_created',
+    'property_create',
+    `Заведено свойство «${effectiveLabel(input.label as Record<string, string>, OWNER_LOCALE)}»`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const created = await createProperty(
+        applyCtx.tx,
+        applyCtx.req.actorUserId,
+        input as unknown as CreatePropertyInput,
+      );
+      journal.operations.push({ op: 'property_create', payload: { ...input, id: created.id } });
+      journal.inverse.push({
+        op: 'property_row_restore',
+        payload: { id: created.id, row: null },
+      });
+      return { result: { property: created.id, key: created.key } };
+    },
+  };
+}
+
+async function preparePropertyUpdate(ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(propertyUpdateInput, rawInput, 'property_update');
+  // Стадия 3: адрес свойства резолвится по СНИМКУ транзакции — модель адресует своё
+  // свойство ключом (`user/effort`), а строка реестра лежит под uuid (Р3).
+  const def = resolvePropertyRef(ctx.registry, input.id);
+  const id = def?.id ?? input.id;
+  const journal = registryPlan('property_updated', 'property_update', `Правка свойства «${id}»`);
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const before = await readOwnProperty(applyCtx.tx, applyCtx.req.actorUserId, id);
+      await updateProperty(applyCtx.tx, applyCtx.req.actorUserId, id, {
+        ...(input.label !== undefined && { label: input.label }),
+        ...(input.description !== undefined && { description: input.description }),
+        ...(input.scope !== undefined && { scope: input.scope as never }),
+        ...(input.rank !== undefined && { rank: input.rank }),
+        ...(input.status !== undefined && { status: input.status }),
+      });
+      journal.operations.push({ op: 'property_update', payload: { ...input, id } });
+      journal.inverse.push({
+        op: 'property_row_restore',
+        payload: { id, row: (before ?? null) as unknown as Record<string, unknown> | null },
+      });
+      return { result: { property: id } };
+    },
+  };
+}
+
+async function preparePropertyMerge(ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(propertyMergeInput, rawInput, 'property_merge');
+  const source = resolvePropertyRef(ctx.registry, input.source)?.id ?? input.source;
+  const into = resolvePropertyRef(ctx.registry, input.into)?.id ?? input.into;
+  const journal = registryPlan(
+    'property_merged',
+    'property_merge',
+    `Свойства слиты: ${source} → ${into}`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const merged = await mergeProperty(applyCtx.tx, applyCtx.req.actorUserId, {
+        source,
+        into,
+      });
+      journal.operations.push({
+        op: 'property_merge',
+        payload: {
+          source,
+          into,
+          rewritten_entities: merged.rewrittenEntities,
+          rewritten_queries: merged.rewrittenQueries,
+        },
+      });
+      // ОДИН inverse на всю операцию (§А10-2): значения, ссылки, компактация и сама строка
+      // возвращаются одним шагом — частичного отката слияния не бывает.
+      journal.inverse.push({
+        op: 'property_merge_undo',
+        payload: merged.inverse as unknown as Record<string, unknown>,
+      });
+      return {
+        result: {
+          source,
+          into,
+          rewrittenEntities: merged.rewrittenEntities,
+          rewrittenQueries: merged.rewrittenQueries,
+        },
+      };
+    },
+  };
+}
+
+async function prepareAspectDeltaSet(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(aspectDeltaSetInput, rawInput, 'aspect_delta_set');
+  const journal = registryPlan(
+    'aspect_delta_set',
+    'aspect_delta_set',
+    `Настройка аспекта «${input.aspect}»`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const before = await readAspectDelta(applyCtx.tx, applyCtx.req.actorUserId, input.aspect);
+      await setAspectDelta(applyCtx.tx, applyCtx.req.actorUserId, input.aspect, input.delta);
+      journal.operations.push({ op: 'aspect_delta_set', payload: { ...input } });
+      // Отмена настройки — это ПРЕЖНЯЯ настройка, а если её не было — снятие. Обе формы
+      // выражаются существующими операциями: своей обратной у дельты нет и не нужно.
+      journal.inverse.push(
+        before === null
+          ? { op: 'aspect_delta_remove', payload: { aspect: input.aspect } }
+          : { op: 'aspect_delta_set', payload: { aspect: input.aspect, delta: before } },
+      );
+      return { result: { aspect: input.aspect } };
+    },
+  };
+}
+
+async function prepareAspectDeltaRemove(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(aspectDeltaRemoveInput, rawInput, 'aspect_delta_remove');
+  const journal = registryPlan(
+    'aspect_delta_removed',
+    'aspect_delta_remove',
+    `Настройка аспекта «${input.aspect}» снята`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      const before = await readAspectDelta(applyCtx.tx, applyCtx.req.actorUserId, input.aspect);
+      await removeAspectDelta(applyCtx.tx, applyCtx.req.actorUserId, input.aspect);
+      journal.operations.push({ op: 'aspect_delta_remove', payload: { ...input } });
+      if (before !== null) {
+        journal.inverse.push({
+          op: 'aspect_delta_set',
+          payload: { aspect: input.aspect, delta: before },
+        });
+      }
+      return { result: { aspect: input.aspect } };
+    },
+  };
+}
+
+async function preparePropertyRowRestore(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(propertyRowRestoreInput, rawInput, 'property_row_restore');
+  const journal = registryPlan(
+    'property_updated',
+    'property_row_restore',
+    `Возврат строки свойства «${input.id}»`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      await restorePropertyRow(
+        applyCtx.tx,
+        applyCtx.req.actorUserId,
+        input.id,
+        (input.row ?? null) as PropertyRow | null,
+      );
+      return { result: { property: input.id } };
+    },
+  };
+}
+
+async function preparePropertyMergeUndo(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+  const input = parseEnvelope(propertyMergeUndoInput, rawInput, 'property_merge_undo');
+  const journal = registryPlan(
+    'property_merged',
+    'property_merge_undo',
+    `Слияние ${input.source} → ${input.into} отменено`,
+  );
+  return {
+    journal,
+    async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
+      await undoMerge(applyCtx.tx, applyCtx.req.actorUserId, input as unknown as MergeInverse);
+      return {
+        result: {
+          source: input.source,
+          into: input.into,
+          rewrittenEntities: input.values.length,
+          rewrittenQueries: input.registry.length + input.progress.length + input.bodies.length,
+        },
+      };
     },
   };
 }

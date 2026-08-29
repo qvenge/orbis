@@ -29,6 +29,7 @@ import {
   approvePending,
   askDedupeKey,
   createPending,
+  createSystemPending,
   deferDedupeKey,
   listRunUnits,
   type RunUnit,
@@ -1490,5 +1491,86 @@ describe('listRunUnits: контракт по identity (Minor-1 ревью За�
     const mismatched = await withIdentity(db, userA, (tx) => listRunUnits(tx, userB, runId));
     expect(mismatched.map((u) => u.pendingId)).toEqual([pendingId]);
     expect(mismatched[0]?.fate).toBe('open');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Единица пачки ОТ СИСТЕМЫ (находка 46, §А3-3/§А10-2)
+// ---------------------------------------------------------------------------
+
+describe('createSystemPending: запись без актора', () => {
+  const owner = freshUserId();
+
+  test('атрибуция system в записи; approve исполняет ОТ ВЛАДЕЛЬЦА и остаётся видимым в ленте', async () => {
+    const entity = await seedEntity(owner, { title: 'Цель системной единицы', tags: [] });
+    const { id } = await withIdentity(db, owner, (tx) =>
+      createSystemPending(tx, {
+        ownerId: owner,
+        tool: 'entity_update',
+        input: { id: entity.id, title: 'Переименовано системной единицей' },
+        summary: 'Система предлагает переименовать',
+        clock,
+      }),
+    );
+
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.select().from(chatMessages).where(eq(chatMessages.id, id)),
+    );
+    const pending = (rows[0]?.metadata as { pending: Record<string, unknown> }).pending;
+    // Обе половины атрибуции — `system`: у деплойного слияния и у конфликта значений актора
+    // нет вовсе, и подставить сюда владельца значило бы написать в журнале, что это он попросил.
+    expect(pending).toMatchObject({ actor_kind: 'system', source: 'system', kind: 'action' });
+    // Карточка — обычная explicit-confirmation: единица пачки ездит тем же носителем.
+    expect((rows[0]?.metadata as { cards: Array<{ mode: string }> }).cards[0]?.mode).toBe(
+      'explicit',
+    );
+
+    const r = await approvePending(db, { ownerId: owner, pendingId: id });
+    expect(r.ok).toBe(true);
+
+    // ИСПОЛНЕНИЕ атрибутируется ВЛАДЕЛЬЦУ: `source: 'system'` спрятал бы действие из ленты
+    // (`chat/messages.ts`) и из «отмени последнее» (`findLastUndoable` пропускает системные),
+    // то есть владелец не смог бы отменить то, что сам и подтвердил.
+    const audit = await withIdentity(db, owner, (tx) =>
+      tx
+        .select()
+        .from(chatMessages)
+        .where(eq(chatMessages.id, batchAuditMessageId(owner, id))),
+    );
+    const action = (audit[0]?.metadata as { actions: ActionRecord[] }).actions[0];
+    expect(action?.actor_kind).toBe('owner');
+    expect(action?.source).toBe('ui');
+  });
+
+  test('повтор с тем же dedupeKey возвращает ТУ ЖЕ карточку, а не вторую', async () => {
+    const key = `probe:${newId()}`;
+    const first = await withIdentity(db, owner, (tx) =>
+      createSystemPending(tx, {
+        ownerId: owner,
+        tool: 'entity_update',
+        input: { id: newId(), title: 'x' },
+        summary: 'проба дедупа',
+        dedupeKey: key,
+        clock,
+      }),
+    );
+    const second = await withIdentity(db, owner, (tx) =>
+      createSystemPending(tx, {
+        ownerId: owner,
+        tool: 'entity_update',
+        input: { id: newId(), title: 'y' },
+        summary: 'проба дедупа',
+        dedupeKey: key,
+        clock,
+      }),
+    );
+    expect(second.id).toBe(first.id);
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.select().from(chatMessages).where(eq(chatMessages.id, first.id)),
+    );
+    // Журнал append-only: сохранён payload ПЕРВОГО запроса (§4.6).
+    expect(
+      (rows[0]?.metadata as { pending: { input: { title: string } } }).pending.input.title,
+    ).toBe('x');
   });
 });

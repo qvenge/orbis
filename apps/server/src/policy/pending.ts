@@ -110,8 +110,15 @@ const pendingRecord = z
     question: questionText.optional(),
     /** Готовые ответы кнопками (kind:'question'), до четырёх — как в `askInput`. */
     options: questionOptions.optional(),
-    actor_kind: z.enum(['owner', 'ai', 'agent']),
-    source: z.enum(['chat', 'mcp', 'routine']),
+    /**
+     * КТО ПОСТАВИЛ ЗАПИСЬ, а не кто её исполнит. `system` (находка 46, §А3-3/§А10-2) — сама
+     * система: конфликт трёхстороннего слияния на пересеве и конфликт значений при слиянии
+     * свойств рождаются БЕЗ актора вовсе, и подставлять им владельца значило бы написать в
+     * журнале, что это он попросил. Исполняет одобренную единицу владелец — см. развилку в
+     * `approvePending`.
+     */
+    actor_kind: z.enum(['owner', 'ai', 'agent', 'system']),
+    source: z.enum(['chat', 'mcp', 'routine', 'system']),
     /**
      * Грант исходного вызова (С2) — вторая половина той же атрибуции: approve владельца
      * исполняет план от имени запросившего, и владелец обязан видеть, КАКОЙ доступ его
@@ -196,8 +203,9 @@ export type PendingRecord = z.infer<typeof pendingRecord>;
 
 export interface PendingActor {
   userId: string; // владелец графа (D11)
-  kind: ActorKind;
-  source: 'chat' | 'mcp' | 'routine';
+  /** `system` — единица, поставленная самой системой (см. `createSystemPending`). */
+  kind: ActorKind | 'system';
+  source: 'chat' | 'mcp' | 'routine' | 'system';
   /** Грант, от имени которого пришёл запрос (С2); нет у чата и UI — там актор сам владелец. */
   grantId?: string;
   /** Прогон рутины, предложивший план (V1.6); есть только у source 'routine'. */
@@ -396,6 +404,55 @@ export async function createPending(
     },
   });
   return { pendingId, card };
+}
+
+/**
+ * ЕДИНИЦА ПАЧКИ ОТ САМОЙ СИСТЕМЫ (находка 46) — там, где актора нет вовсе.
+ *
+ * Два повода, и оба про реестр. Трёхстороннее слияние на пересеве (§А3-3) находит, что
+ * системное определение разошлось с настройкой владельца; слияние свойств (§А10-2) находит
+ * записи, у которых заполнены оба свойства разными значениями. Ни то, ни другое никто не
+ * «попросил»: первое случается на деплое, второе — внутри операции, которая целиком
+ * откатывается. `createPending` требует актора, и подставить ему владельца было бы ложью в
+ * журнале — отсюда отдельный вход и `system` в обоих полях атрибуции.
+ *
+ * ОТ `createPending` ОТЛИЧАЕТСЯ ТОЛЬКО АКТОРОМ. Уровень у системной единицы один —
+ * `explicit-confirmation`: другого у pending не бывает (§7.10), и параметра тут нет
+ * намеренно — вызывающему нечего выбирать. Всё остальное — идемпотентность по PK,
+ * append-only судьба, approve сохранённого payload'а — работает как есть, ради чего
+ * носитель и переиспользован.
+ *
+ * `dedupeKey` НЕ декоративен: конфликт слияния на пересеве считается заново при КАЖДОМ
+ * прогоне сида, и без детерминированного PK повторный деплой клал бы владельцу вторую
+ * карточку о том же самом. Не задан — серверный uuidv7 (повод разовый, дедупить нечего).
+ */
+export async function createSystemPending(
+  tx: Tx,
+  args: {
+    ownerId: string;
+    /** Тред карточки; нет → глобальный тред владельца (§А3-3 требует именно его). */
+    threadId?: string;
+    tool: string;
+    input: unknown;
+    summary: string;
+    card?: Card;
+    dedupeKey?: string;
+    clock?: () => Date;
+  },
+): Promise<{ id: string }> {
+  const { pendingId } = await createPending(tx, {
+    ...(args.threadId !== undefined && { threadId: args.threadId }),
+    actor: { userId: args.ownerId, kind: 'system', source: 'system' },
+    level: 'explicit-confirmation',
+    kind: 'action',
+    tool: args.tool,
+    input: args.input,
+    summary: args.summary,
+    ...(args.card !== undefined && { card: args.card }),
+    ...(args.dedupeKey !== undefined && { dedupeKey: args.dedupeKey }),
+    ...(args.clock !== undefined && { clock: args.clock }),
+  });
+  return { id: pendingId };
 }
 
 /**
@@ -669,8 +726,15 @@ export async function approvePending(
       db,
       {
         actorUserId: args.ownerId,
-        actorKind: found.pending.actor_kind,
-        source: found.pending.source,
+        // СИСТЕМНАЯ единица исполняется ОТ ВЛАДЕЛЬЦА, и это развилка, а не приведение
+        // типов. `system` в записи отвечает на вопрос «кто поставил» — конфликт слияния
+        // поставить некому. Запись же делает рука владельца, нажавшая «Принять», и журнал
+        // §7.8 обязан показывать именно её: с `source: 'system'` действие ушло бы из ленты
+        // (`chat/messages.ts` прячет системный audit) и мимо «отмени последнее»
+        // (`findLastUndoable` пропускает `source='system'`) — то есть владелец не смог бы
+        // отменить то, что сам и подтвердил.
+        actorKind: found.pending.actor_kind === 'system' ? 'owner' : found.pending.actor_kind,
+        source: found.pending.source === 'system' ? 'ui' : found.pending.source,
         // Грант исходного вызова доживает до исполнения (С2): подтвердил владелец, но в
         // журнале §7.8 видно, КАКОЙ доступ этот план попросил
         actorGrantId: found.pending.actor_grant_id,

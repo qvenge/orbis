@@ -48,6 +48,7 @@ import {
   type SystemDefinitions,
   threeWayMerge,
 } from '../registry/deltas';
+import { createDriftConflictUnits } from '../registry/merge-conflict';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import * as schema from './schema';
 
@@ -320,6 +321,16 @@ export async function mergeRegistryDeltas(
             ...conflicts.map(registryConflictLine),
           ].join('\n'),
           metadata: { type: 'registry-merge', systemVersion, target: row.targetId, conflicts },
+        });
+        // Заметка РАССКАЗЫВАЕТ обо всех конфликтах, единица пачки ПРЕДЛАГАЕТ решить те, где
+        // выбор ещё остался (§А3-3, Задача 15). Тем же tx и по той же причине, что заметка:
+        // порознь возможен исход «дельта слита, а разобрать её владельцу не предложили».
+        await createDriftConflictUnits(tx, {
+          ownerId: row.ownerId,
+          systemVersion,
+          deltaRowId: row.id,
+          merged,
+          conflicts,
         });
       });
       all.push(...conflicts);

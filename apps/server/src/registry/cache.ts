@@ -3,19 +3,32 @@
 // ЕДИНСТВЕННЫЙ ВХОД К ЭФФЕКТИВНОМУ РЕЕСТРУ (§А10-1): система ⊕ строки владельца ⊕ его
 // дельты, с процессным кешем по ключу `(владелец, его версия, системная версия)`.
 //
-// ОДНО МНОЖЕСТВО — ОДИН ЧИТАТЕЛЬ. Эффективный реестр читают ОДИННАДЦАТЬ файлов боевого
-// кода, тринадцатью вызовами (у исполнителя их два — одиночный путь и batch):
-//   grep -rc 'effectiveRegistry(' apps/server/src --include='*.ts' | grep -v test | grep -v ':0'
-//   → export.ts:1, routers/registry.ts:1, agent-loop/verbs.ts:1, seed/onboarding.ts:1,
-//     tools/registry.ts:1, llm/context.ts:1, tools/dispatch.ts:1, routines/propose.ts:1,
-//     routines/lifecycle.ts:1, executor/executor.ts:2, query/context.ts:1
+// ОДНО МНОЖЕСТВО — ОДИН ЧИТАТЕЛЬ. Эффективный реестр читают ДВЕНАДЦАТЬ файлов боевого
+// кода, ЧЕТЫРНАДЦАТЬЮ вызовами (у исполнителя их два — одиночный путь и batch; у роутера
+// реестра тоже два — снимок ответа и граф зависимостей). Свой файл из счёта исключён: в нём
+// объявление и вот эта строка, а не читатели.
+//   grep -rc 'effectiveRegistry(' apps/server/src --include='*.ts' \
+//     | grep -v test | grep -v ':0' | grep -v 'registry/cache.ts'
+//   → entity-read.ts:1, export.ts:1, routers/registry.ts:2, agent-loop/verbs.ts:1,
+//     seed/onboarding.ts:1, tools/registry.ts:1, llm/context.ts:1, tools/dispatch.ts:1,
+//     routines/propose.ts:1, routines/lifecycle.ts:1, executor/executor.ts:2,
+//     query/context.ts:1
 // ЧЕТЫРЕ СБОРКИ РЕЕСТРА ТУЛОВ входят сюда двумя адресами: `tools/dispatch.ts` зовёт
 // напрямую, а `mcp/server.ts`, `ai/send-message.ts` и `routines/runner.ts` — через
 // `buildToolRegistry` (`tools/registry.ts`), и потому видят ровно то же множество и
-// обновляются ровно тогда же. Сырое чтение строк (`loadRegistryRows`, `loadRegistryDeltas`)
-// вызывается РОВНО отсюда:
-//   grep -rn 'loadRegistryRows(\|loadRegistryDeltas(' apps/server/src --include='*.ts'
-//   → два объявления в load.ts и два вызова в этом файле, больше ничего.
+// обновляются ровно тогда же.
+//
+// СЫРОЕ ЧТЕНИЕ СТРОК (`loadRegistryRows`, `loadRegistryDeltas`) вызывается ОТСЮДА И ИЗ
+// ОПЕРАЦИЙ РЕЕСТРА, и второй адрес — не дыра в правиле, а его следствие:
+//   grep -rn 'loadRegistryRows(\|loadRegistryDeltas(' apps/server/src --include='*.ts' \
+//     | grep -v test | grep -v 'registry/cache.ts'
+//   → два объявления в `load.ts` и ЧЕТЫРЕ вызова в `registry/ops.ts`, больше ничего.
+// Операции реестра (Задача 15) — единственные, кто читает реестр ВНУТРИ ПИШУЩЕЙ транзакции,
+// а её кеш обходит стороной по построению (`txHasWritten` ниже): зови они `effectiveRegistry`,
+// они получили бы тот же четвёрочный SELECT через лишний слой. И главное — операции идут
+// пачкой, и свойство, заведённое операцией N, обязано быть видно операции N+1; снимок,
+// снятый исполнителем ДО стадий, этого не показывает. Сложение системы с дельтами при этом
+// общее (`applyDeltas`) — второй суммы не заведено.
 //
 // ЗАЧЕМ КЕШ. До него каждый вызов делал четыре SELECT'а (три реестра + версия) и разбирал
 // ~100 строк строгими zod-схемами. Это цена НА КАЖДЫЙ вызов тула, на каждый запрос и на
