@@ -12,7 +12,7 @@ import { withIdentity } from '../db/with-identity';
 import { approvePending } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
 import { type RegistryDeltaRow, threeWayMerge, UNKNOWN_PREV_SYSTEM } from '../registry/deltas';
-import { createDriftConflictUnits } from '../registry/merge-conflict';
+import { createDriftConflictUnits, DRIFT_MERGE_EFFECT } from '../registry/merge-conflict';
 import {
   checkRegistryDrift,
   REGISTRY_DELTAS_QUERY,
@@ -349,6 +349,11 @@ describe('конфликты пересева становятся единиц�
     // Единица — ОТ СИСТЕМЫ: у деплойного слияния актора нет вовсе (находка 46).
     expect(pending).toMatchObject({ actor_kind: 'system', source: 'system', kind: 'action' });
     expect(pending.tool).toBe('aspect_delta_set');
+    // ТЕКСТ КАРТОЧКИ ЗАПИННЕН, и не косметики ради: он уже был неправдой один раз
+    // («записи будут указывать на общий ключ» — approve значений не трогает). Сверка идёт
+    // с ТОЙ ЖЕ константой, которую подставляет писатель, поэтому разъехаться обещанию и
+    // поведению нечем: за поведение отвечает ассерция ниже.
+    expect(String(rows[0]?.content)).toContain(DRIFT_MERGE_EFFECT);
     // «Слить» = принять: в нагрузке ПОХОЖЕГО варианта уже нет, а непохожий остался.
     const input = pending.input as { aspect: string; delta: Record<string, unknown> };
     expect(input.aspect).toBe('orbis/note');
@@ -374,6 +379,17 @@ describe('конфликты пересева становятся единиц�
     )) as unknown as unknown[];
     expect(count).toHaveLength(1);
 
+    // Запись, у которой уже стоит спорный вариант, — та самая, о судьбе которой карточка и
+    // говорит. Кладётся прямым INSERT'ом: валидатор до применения дельты варианта «md» не
+    // знает, а вопрос теста — что с ЗАПИСЬЮ станет после approve, а не как она появилась.
+    const withOldVariant = newId();
+    await withIdentity(db, owner, (tx) =>
+      tx.execute(sql`
+        INSERT INTO entities (id, owner_id, title, props, aspects, tags)
+        VALUES (${withOldVariant}::uuid, ${owner}::uuid, 'Заметка со старым вариантом',
+                '{"orbis/content_type":"md"}'::jsonb, ARRAY['orbis/note'], ARRAY[]::text[])`),
+    );
+
     // approve ПРИМЕНЯЕТ дельту обычным конвейером — своего пути записи у конфликта нет.
     const approved = await approvePending(db, { ownerId: owner, pendingId });
     expect(approved.ok).toBe(true);
@@ -384,5 +400,12 @@ describe('конфликты пересева становятся единиц�
     expect(keys).toContain('table');
     expect(keys).not.toContain('md');
     expect(keys).toContain('markdown');
+    // ВТОРАЯ ПОЛОВИНА ОБЕЩАНИЯ: карточка говорит, что записи со старым вариантом останутся
+    // с ним, — и они остаются. Если однажды «слить» научится переносить значения, падёт
+    // именно эта ассерция, и текст придётся переписать вместе с ней.
+    const stillOld = (await withIdentity(db, owner, (tx) =>
+      tx.execute(sql`SELECT props FROM entities WHERE id = ${withOldVariant}::uuid`),
+    )) as unknown as Array<{ props: Record<string, unknown> }>;
+    expect(stillOld[0]?.props).toMatchObject({ 'orbis/content_type': 'md' });
   });
 });

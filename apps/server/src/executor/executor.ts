@@ -2966,6 +2966,10 @@ const propertyMergeUndoInput = z
     bodies: z.array(
       z.object({ entityId: z.string().uuid(), body: z.string(), bodyDoc: z.unknown() }).strict(),
     ),
+    // ОПЦИОНАЛЬНО, и это не небрежность: журнал append-only (§4.6), и действия, записанные
+    // до появления четвёртого рода держателей (дельты), ключа `deltas` не несут вовсе.
+    // Требовать его значило бы сделать неоткатываемыми вчерашние слияния владельца.
+    deltas: z.array(z.object({ id: z.string().uuid(), delta: z.unknown() }).strict()).optional(),
   })
   .strict();
 
@@ -3174,7 +3178,11 @@ async function preparePropertyMergeUndo(_ctx: ExecCtx, rawInput: unknown): Promi
           source: input.source,
           into: input.into,
           rewrittenEntities: input.values.length,
-          rewrittenQueries: input.registry.length + input.progress.length + input.bodies.length,
+          rewrittenQueries:
+            input.registry.length +
+            input.progress.length +
+            input.bodies.length +
+            (input.deltas?.length ?? 0),
         },
       };
     },

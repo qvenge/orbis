@@ -291,9 +291,14 @@ export async function restorePropertyRow(
         { property: id, values: used.values, refs: used.refs },
       );
     }
-    await assertRegistryStaysReadable(tx, ownerId, id, null);
+    // Адресуем `existing.id`, а не входной `id`. Сегодня они совпадают всегда (операция
+    // внутренняя, идентификатор приезжает из журнала уже резолвленным), то есть это не
+    // починка бага, а дисциплина: `readOwnProperty` принимает и key, и первый же
+    // вызывающий, передавший ключ, получил бы `WHERE id = <key>` — промах по нулю строк
+    // молча, без единой ошибки.
+    await assertRegistryStaysReadable(tx, ownerId, existing.id, null);
     await tx.execute(sql`
-      DELETE FROM property_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${id}`);
+      DELETE FROM property_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${existing.id}`);
     await bumpOwnerRegistryVersion(tx, ownerId);
     return;
   }
@@ -606,7 +611,7 @@ async function propertyUsage(
 ): Promise<{ values: number; refs: number }> {
   const rows = (await tx.execute(sql`
     SELECT count(*)::int AS n FROM entities WHERE props ? ${id}`)) as unknown as { n: number }[];
-  const holders = await collectQueryHolders(tx, ownerId);
+  const holders = await collectPropertyHolders(tx, ownerId);
   // ССЫЛКА ИЩЕТСЯ ПО ОБОИМ ИМЕНАМ, и это не перестраховка. Держатель-ДЕРЕВО называет
   // свойство id (§А5-7), а держатель-ТЕКСТ (`{{query:…}}` в теле) — только key (§А5-3а), и
   // uuid в тексте не нашёлся бы никогда: `KEY_TOKEN_RE` требует слэша, которого в uuid нет.
@@ -699,22 +704,38 @@ export async function updateProperty(
 }
 
 // ---------------------------------------------------------------------------
-// Держатели Q-AST: кто ссылается на свойство (§А3-5, §А10-2)
+// КТО СТОИТ НА СВОЙСТВЕ: полный перечень держателей (§А3-5, §А10-2, §А10-3)
 // ---------------------------------------------------------------------------
 
 /**
- * Место, где лежит Q-AST со ссылками на свойства, и сами ссылки.
+ * Место, которое АДРЕСУЕТ свойство, и имена, которыми оно его называет.
  *
- * ТРИ РОДА держателей, и это ПОЛНЫЙ перечень для среза А:
- *  - `registry` — `scope` и `ref.target` СВОЕЙ строки реестра;
- *  - `progress_source` — значение свойства `orbis/progress_source` на записи (§А5-2);
+ * ЭТО ОТВЕТ НА ВОПРОС «КТО СТОИТ НА СВОЙСТВЕ», а не «где лежит Q-AST», и разница
+ * оплачена: пока перечень описывал только держателей ДЕРЕВА, `propertyUsage` и слияние
+ * брали его как полный ответ — и не видели дельту аспекта, которая свойство адресует, но
+ * Q-AST не содержит. Из-за этого слияние оставляло аспект стоять на поглощённой строке, а
+ * физическое удаление §А10-3 роняло строку из-под живой ссылки.
+ *
+ * ЧЕТЫРЕ РОДА, и это ПОЛНЫЙ перечень для среза А:
+ *  - `registry` — `scope` и `ref.target` СВОЕЙ строки реестра (дерево, адрес — id);
+ *  - `progress_source` — значение свойства `orbis/progress_source` на записи (§А5-2;
+ *    дерево, адрес — id);
  *  - `body` — блок `{{query:…}}` в теле записи. Он несёт ТЕКСТ запроса, а не дерево, и
  *    ссылка в нём — namespaced key (§А5-3а). С Задачи 21 таких обходов не будет: тела
- *    найдёт `query_refs`; до неё — честный обход тел владельца.
+ *    найдёт `query_refs`; до неё — честный обход тел владельца;
+ *  - `delta` — строка `registry_deltas` (§А3-2). Дерева не несёт вовсе, но адресует
+ *    свойства пятью полями: `properties.add[].propertyId`, `properties.hide[]`,
+ *    `properties.relaxRequired[]`, КЛЮЧИ `properties.rank{}` и КЛЮЧИ `selectOptions{}`.
+ *
+ * ПРИЗНАК, ПО КОТОРОМУ СЛЕДУЮЩИЙ ЧИТАТЕЛЬ ПОЙМЁТ, ЧТО ПЕРЕЧЕНЬ УСТАРЕЛ: появилось место,
+ * хранящее идентификатор свойства (в колонке, в jsonb, в тексте) и переживающее операции
+ * над реестром. Подписка и правило части Б — ровно такие; они и будут пятым и шестым.
+ * Проверяется это не памятью, а согласием двух половин: `registry/deps-graph.ts` строит
+ * рёбра по ТОМУ ЖЕ множеству мест, и разойтись им нельзя.
  */
-export interface QueryHolder {
-  kind: 'registry' | 'progress_source' | 'body';
-  /** id строки реестра либо id сущности. */
+export interface PropertyHolder {
+  kind: 'registry' | 'progress_source' | 'body' | 'delta';
+  /** id строки реестра, id сущности либо id строки `registry_deltas`. */
   id: string;
   /** id и key свойств, названные этим держателем. */
   properties: string[];
@@ -748,16 +769,28 @@ function propertyNamesInBody(body: string, out: Set<string>): void {
   }
 }
 
+/** Имена свойств, названные ДЕЛЬТОЙ аспекта: пять полей, перечисленных у `PropertyHolder`. */
+function propertyNamesInDelta(delta: unknown, out: Set<string>): void {
+  if (typeof delta !== 'object' || delta === null) return;
+  const d = delta as AspectDelta;
+  for (const ref of d.properties?.add ?? []) out.add(ref.propertyId);
+  for (const id of d.properties?.hide ?? []) out.add(id);
+  for (const id of d.properties?.relaxRequired ?? []) out.add(id);
+  for (const id of Object.keys(d.properties?.rank ?? {})) out.add(id);
+  for (const id of Object.keys(d.selectOptions ?? {})) out.add(id);
+}
+
 /**
- * Полный перечень держателей Q-AST владельца — вход и графа зависимостей (§А3-5), и
- * переписывания ссылок при слиянии (§А10-2).
+ * Полный перечень держателей свойства у владельца — вход и графа зависимостей (§А3-5), и
+ * переписывания ссылок при слиянии (§А10-2), и пробы «на нём ничего не держится» (§А10-3).
  *
- * ОДИН обход на оба вопроса намеренно: «кто на свойстве стоит» и «что переписать при
- * слиянии» — это один и тот же список мест, и разъехались бы они первым же новым родом
- * держателя (например, подпиской части Б).
+ * ОДИН обход на три вопроса намеренно: «кто на свойстве стоит», «что переписать при
+ * слиянии» и «можно ли удалить строку» — это один и тот же список мест, и разъехались бы
+ * они первым же новым родом держателя. Ровно это и случилось с дельтой: она была видна
+ * графу зависимостей и невидима слиянию.
  */
-export async function collectQueryHolders(tx: Tx, ownerId: string): Promise<QueryHolder[]> {
-  const out: QueryHolder[] = [];
+export async function collectPropertyHolders(tx: Tx, ownerId: string): Promise<PropertyHolder[]> {
+  const out: PropertyHolder[] = [];
 
   const regRows = (await tx.execute(sql`
     SELECT id, scope, type FROM property_definitions
@@ -788,7 +821,109 @@ export async function collectQueryHolders(tx: Tx, ownerId: string): Promise<Quer
     propertyNamesInBody(String(r.body ?? ''), names);
     if (names.size > 0) out.push({ kind: 'body', id: r.id as string, properties: [...names] });
   }
+
+  // Дельты — четвёртый род. Читаются ВСЕ цели, а не только `aspect`: строка вида
+  // `property`/`contract` в срезе А появиться не может (тулов нет), но обход, отбирающий
+  // по `target_kind`, промолчал бы о ней ровно тогда, когда она всё-таки появится.
+  const deltaRows = (await tx.execute(sql`
+    SELECT id, delta FROM registry_deltas WHERE owner_id = ${ownerId}::uuid`)) as unknown as RawRow[];
+  for (const r of deltaRows) {
+    const names = new Set<string>();
+    propertyNamesInDelta(r.delta, names);
+    if (names.size > 0) out.push({ kind: 'delta', id: r.id as string, properties: [...names] });
+  }
   return out;
+}
+
+/**
+ * Проверить и нормализовать адреса свойств в дельте: каждый обязан резолвиться в реестре,
+ * и в строку он ложится ИДЕНТИФИКАТОРОМ.
+ *
+ * Резолв принимает и id, и key — тем же правилом, что вся граница операций реестра: модель
+ * и владелец называют свойство тем именем, которым его видели, а у пользовательского они
+ * разные (Р3). Отказ — `DELTA_UNKNOWN_PROPERTY`, с именем, которое не сошлось.
+ */
+function normalizeDeltaAddresses(
+  delta: AspectDelta,
+  properties: ReadonlyMap<string, PropertyDefinition>,
+  aspectId: string,
+): AspectDelta {
+  const byName = new Map<string, string>();
+  for (const def of properties.values()) {
+    byName.set(def.id, def.id);
+    // Своя строка перекрывает встроенную — `ORDER BY owner_id NULLS FIRST` у `load.ts`.
+    byName.set(def.key, def.id);
+  }
+  const resolve = (name: string): string => {
+    const id = byName.get(name);
+    if (id === undefined) {
+      throw new ExecError(
+        'VALIDATION',
+        `свойства «${name}» нет в реестре — дельта аспекта ${aspectId} не поставлена`,
+        { reason: 'DELTA_UNKNOWN_PROPERTY', aspect: aspectId, property: name },
+      );
+    }
+    return id;
+  };
+  // Переименование делает `rewriteDelta`: множество имён — все адреса дельты, цель у
+  // каждого своя, поэтому обходим по одному. Одна функция на два вызова тут не выйдет —
+  // там одно имя на всё, здесь у каждого своё.
+  const names = new Set<string>();
+  propertyNamesInDelta(delta, names);
+  let out = delta;
+  for (const name of names) {
+    const id = resolve(name);
+    if (id !== name) out = rewriteDelta(out, new Set([name]), id) as AspectDelta;
+  }
+  return out;
+}
+
+/**
+ * Переписать имя свойства в ДЕЛЬТЕ (§А3-2) — по всем пяти адресующим полям.
+ *
+ * Цель — ИДЕНТИФИКАТОР, как у дерева: дельта хранит канон, а не текст запроса, и
+ * `applyDeltas` ищет свойство в словаре по id (`properties.get(add.propertyId)`).
+ *
+ * СТОЛКНОВЕНИЕ КЛЮЧЕЙ разрешается в пользу УЖЕ СУЩЕСТВУЮЩЕЙ записи цели: если владелец
+ * настроил и поглощаемое, и поглощающее (переставил ранг обоим, добавил вариантов обоим),
+ * после переименования два ключа схлопнулись бы в один. Побеждает настройка ЦЕЛИ — она
+ * относится к свойству, которое остаётся жить; настройка поглощённого исчезает вместе с
+ * ним. Молчаливого слияния двух настроек здесь нет намеренно: сложить `add`-списки
+ * вариантов можно только зная, одно ли это понятие, а это знает владелец (§А3-3).
+ */
+function rewriteDelta(delta: unknown, from: ReadonlySet<string>, to: string): unknown {
+  if (typeof delta !== 'object' || delta === null) return delta;
+  const d = delta as AspectDelta;
+  const rename = (id: string): string => (from.has(id) ? to : id);
+  /** Переименование КЛЮЧЕЙ карты: запись цели, если она уже была, не затирается. */
+  const renameKeys = <T>(map: Record<string, T> | undefined): Record<string, T> | undefined => {
+    if (map === undefined) return undefined;
+    const out: Record<string, T> = {};
+    for (const [id, value] of Object.entries(map)) if (!from.has(id)) out[id] = value;
+    for (const [id, value] of Object.entries(map)) {
+      if (from.has(id) && out[to] === undefined) out[to] = value;
+    }
+    return out;
+  };
+  const properties = d.properties;
+  const nextProperties =
+    properties === undefined
+      ? undefined
+      : {
+          ...(properties.add !== undefined && {
+            add: properties.add.map((ref) => ({ ...ref, propertyId: rename(ref.propertyId) })),
+          }),
+          ...(properties.hide !== undefined && { hide: properties.hide.map(rename) }),
+          ...(properties.relaxRequired !== undefined && {
+            relaxRequired: properties.relaxRequired.map(rename),
+          }),
+          ...(properties.rank !== undefined && { rank: renameKeys(properties.rank) }),
+        };
+  return {
+    ...d,
+    ...(nextProperties !== undefined && { properties: nextProperties }),
+    ...(d.selectOptions !== undefined && { selectOptions: renameKeys(d.selectOptions) }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -818,6 +953,8 @@ export interface MergeInverse {
   progress: Array<{ entityId: string; value: unknown }>;
   /** Записи с переписанным телом: прежние `body` и `body_doc` целиком. */
   bodies: Array<{ entityId: string; body: string; bodyDoc: unknown }>;
+  /** Строки `registry_deltas` с переписанными адресами: прежняя дельта целиком. */
+  deltas: Array<{ id: string; delta: unknown }>;
 }
 
 export interface MergeResult {
@@ -1052,12 +1189,13 @@ export async function mergeProperty(
   // вовсе (Р10), а появится она — переименование обязано будет пройти по тем же держателям.
   const astTarget = into.id;
   const textTarget = into.key;
-  const holders = (await collectQueryHolders(tx, ownerId)).filter((h) =>
+  const holders = (await collectPropertyHolders(tx, ownerId)).filter((h) =>
     h.properties.some((p) => names.has(p)),
   );
   const registry: MergeInverse['registry'] = [];
   const progress: MergeInverse['progress'] = [];
   const bodies: MergeInverse['bodies'] = [];
+  const deltas: MergeInverse['deltas'] = [];
 
   for (const holder of holders) {
     if (holder.kind === 'registry') {
@@ -1091,6 +1229,21 @@ export async function mergeProperty(
          WHERE id = ${holder.id}::uuid`);
       continue;
     }
+    if (holder.kind === 'delta') {
+      const rows = (await tx.execute(sql`
+        SELECT delta FROM registry_deltas
+        WHERE owner_id = ${ownerId}::uuid AND id = ${holder.id}::uuid FOR UPDATE
+      `)) as unknown as RawRow[];
+      const row = rows[0];
+      if (row === undefined) continue;
+      deltas.push({ id: holder.id, delta: row.delta });
+      await tx.execute(sql`
+        UPDATE registry_deltas SET delta = ${JSON.stringify(
+          rewriteDelta(row.delta, names, astTarget),
+        )}::jsonb
+         WHERE owner_id = ${ownerId}::uuid AND id = ${holder.id}::uuid`);
+      continue;
+    }
     const rows = (await tx.execute(sql`
       SELECT body, body_doc FROM entities WHERE id = ${holder.id}::uuid FOR UPDATE
     `)) as unknown as RawRow[];
@@ -1122,7 +1275,7 @@ export async function mergeProperty(
 
   return {
     rewrittenEntities: values.length,
-    rewrittenQueries: registry.length + progress.length + bodies.length,
+    rewrittenQueries: registry.length + progress.length + bodies.length + deltas.length,
     inverse: {
       source: source.id,
       into: into.id,
@@ -1132,6 +1285,7 @@ export async function mergeProperty(
       registry,
       progress,
       bodies,
+      deltas,
     },
   };
 }
@@ -1177,6 +1331,11 @@ function rewriteBodyDoc(doc: unknown, from: ReadonlySet<string>, to: string): un
  * неотменяемому слиянию тысячи записей.
  */
 export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Promise<void> {
+  // `iv.deltas` разбирается ЗАЩИТНО по той же причине, что `ref_sources_marked` в
+  // `executor/undo.ts`: журнал append-only, и в нём лежат записи, сделанные до появления
+  // четвёртого рода держателей. Отсутствие ключа означает «дельт не переписывали», а не
+  // исключение на откате действия, которое владелец сделал вчера.
+  const deltaRows = Array.isArray(iv.deltas) ? iv.deltas : [];
   for (const v of iv.values) {
     // Ключ цели возвращается ТОЧНО в прежнее состояние: было значение — кладём его, не было
     // ключа вовсе — снимаем. `props - into || {source: …}` без этой развилки оставлял бы
@@ -1214,6 +1373,11 @@ export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Prom
              body_doc = ${b.bodyDoc === null ? null : JSON.stringify(b.bodyDoc)}::jsonb,
              updated_at = now()
        WHERE id = ${b.entityId}::uuid`);
+  }
+  for (const d of deltaRows) {
+    await tx.execute(sql`
+      UPDATE registry_deltas SET delta = ${JSON.stringify(d.delta)}::jsonb
+       WHERE owner_id = ${ownerId}::uuid AND id = ${d.id}::uuid`);
   }
   for (const id of iv.compacted) {
     await tx.execute(sql`
@@ -1274,6 +1438,15 @@ export async function setAspectDelta(
   if (!rows.aspects.has(aspectId)) {
     throw new ExecError('NOT_FOUND', `аспекта ${aspectId} нет в реестре`, { aspect: aspectId });
   }
+  // АДРЕСА СВОЙСТВ В ДЕЛЬТЕ ПРОВЕРЯЮТСЯ И НОРМАЛИЗУЮТСЯ К id, а не пишутся как пришли.
+  //
+  // Проверка — тот же принцип «не заводить висячих ссылок», которым живёт §А10-3, и он
+  // дешевле, чем чинить их потом: `applyDeltas` на неизвестный `propertyId` НЕ падает —
+  // она молча пушит ссылку в состав аспекта, и владелец видит поле, у которого нет
+  // определения. Нормализация — вторая половина того же: дельта хранит канон, а
+  // `applyDeltas` ищет свойство в словаре ПО id (`properties.get`), то есть записанный
+  // ключом адрес не резолвился бы никогда и молча.
+  const normalized = normalizeDeltaAddresses(parsed.data, rows.properties, aspectId);
   const versions = await readRegistryVersions(tx, ownerId);
   const existing = await loadRegistryDeltas(tx, ownerId);
   const probe = [
@@ -1284,7 +1457,7 @@ export async function setAspectDelta(
       targetKind: 'aspect' as const,
       targetId: aspectId,
       baseVersion: versions.systemVersion,
-      delta: parsed.data,
+      delta: normalized,
     },
   ];
   // Отказ `applyDeltas` — уже ExecError с точной причиной (DELTA_PROPERTY_PRESENT,
@@ -1297,7 +1470,7 @@ export async function setAspectDelta(
   await tx.execute(sql`
     INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
     VALUES (${newId()}::uuid, ${ownerId}::uuid, 'aspect', ${aspectId},
-            ${versions.systemVersion}, ${JSON.stringify(parsed.data)}::jsonb)
+            ${versions.systemVersion}, ${JSON.stringify(normalized)}::jsonb)
     ON CONFLICT (owner_id, target_kind, target_id)
       DO UPDATE SET delta = EXCLUDED.delta, base_version = EXCLUDED.base_version`);
   await bumpOwnerRegistryVersion(tx, ownerId);

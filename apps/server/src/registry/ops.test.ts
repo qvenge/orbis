@@ -1397,3 +1397,174 @@ describe('границы записи определения (фикс-раун�
     expect((await propertyRowByKey(edge2, 'user/in-batch'))?.status).toBe('active');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Фикс-раунд 3: дельта — ЧЕТВЁРТЫЙ род держателей (§А3-2 × §А10-2 × §А10-3)
+// ---------------------------------------------------------------------------
+
+describe('дельта аспекта как держатель свойства (фикс-раунд 3)', () => {
+  const holderOwner = freshUserId();
+
+  function runH(tool: string, input: unknown): Promise<ExecuteResult> {
+    return execute(
+      db,
+      {
+        actorUserId: holderOwner,
+        actorKind: 'owner',
+        source: 'ui',
+        operations: [{ tool, input }],
+      },
+      { sink },
+    );
+  }
+
+  async function mkProp(key: string): Promise<string> {
+    const r = ok(
+      await runH('property_create', {
+        key,
+        label: { ru: key },
+        description: { ru: key },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    return (r.results[0] as { property: string }).property;
+  }
+
+  /** Состав аспекта КАК ЕГО ВИДИТ ЧИТАТЕЛЬ — через эффективный снимок, не через строку. */
+  async function taskRefs(): Promise<Array<{ propertyId: string; required: boolean }>> {
+    const reg = await withIdentity(db, holderOwner, (tx) => effectiveRegistry(tx, holderOwner));
+    return (reg.aspects.get('orbis/task')?.properties ?? []).map((r) => ({
+      propertyId: r.propertyId,
+      required: r.required,
+    }));
+  }
+
+  test('слияние переписывает адрес в ДЕЛЬТЕ: аспект называет цель, а не поглощённое', async () => {
+    const p = await mkProp('user/holder-p');
+    const q = await mkProp('user/holder-q');
+    ok(
+      await runH('aspect_delta_set', {
+        aspect: 'orbis/task',
+        delta: { properties: { add: [{ propertyId: p, required: false, rank: 70 }] } },
+      }),
+    );
+    expect((await taskRefs()).map((r) => r.propertyId)).toContain(p);
+
+    const merged = ok(await runH('property_merge', { source: p, into: q }));
+    const refs = await taskRefs();
+    // Аспект перестал называть поглощённое и назвал цель — иначе он стоял бы на строке со
+    // статусом `deprecated`, а отчёт операции говорил бы «успех».
+    expect(refs.map((r) => r.propertyId)).not.toContain(p);
+    expect(refs.map((r) => r.propertyId)).toContain(q);
+    // Дельта — держатель наравне с остальными, и она посчитана в отчёте операции.
+    expect((merged.results[0] as { rewrittenQueries: number }).rewrittenQueries).toBe(1);
+
+    // Откат возвращает дельту байт-в-байт вместе со всем остальным (ОДИН inverse).
+    const undone = await undoAction(db, {
+      actorUserId: holderOwner,
+      actionId: merged.actionId,
+    });
+    expect(undone.ok).toBe(true);
+    expect((await taskRefs()).map((r) => r.propertyId)).toContain(p);
+  });
+
+  test('required: true — после слияния аспект РАБОТАЕТ, а не запирается насмерть', async () => {
+    // Самый дорогой из трёх сценариев. Со старым кодом выхода не было ни одного: назвать
+    // поглощённое — `DEPRECATED`, не назвать — `REQUIRED`, назвать цель — снова `REQUIRED`
+    // на поглощённом. Владелец не мог завести или поправить НИ ОДНОЙ задачи, пока сам не
+    // догадается снять дельту.
+    const p = await mkProp('user/req-p');
+    const q = await mkProp('user/req-q');
+    ok(
+      await runH('aspect_delta_set', {
+        aspect: 'orbis/task',
+        delta: { properties: { add: [{ propertyId: p, required: true, rank: 71 }] } },
+      }),
+    );
+    ok(await runH('property_merge', { source: p, into: q }));
+
+    const refs = await taskRefs();
+    expect(refs.find((r) => r.propertyId === q)).toEqual({ propertyId: q, required: true });
+    expect(refs.some((r) => r.propertyId === p)).toBe(false);
+
+    // ГЛАВНОЕ: запись по аспекту проходит. Проверяется боевым путём — тулом `attach_*`,
+    // который собирается из того же эффективного определения и валидируется им же.
+    const entity = newId();
+    ok(await runH('entity_create', { id: entity, title: 'Задача после слияния', tags: [] }));
+    const attached = await runH('attach_orbis_task', {
+      entity_id: entity,
+      data: { 'orbis/task_status': 'inbox', [q]: 3 },
+    });
+    // Отказ печатается ЦЕЛИКОМ: `toBe(true)` на исходе операции сказал бы «false» и ни
+    // слова о том, почему аспект не принял запись, — а в этом тесте вопрос ровно в этом.
+    if (!attached.ok) {
+      throw new Error(`attach отказал: ${attached.error.code} ${attached.error.message}`);
+    }
+    const row = await withIdentity(db, holderOwner, (tx) =>
+      tx.execute(sql`SELECT props FROM entities WHERE id = ${entity}::uuid`),
+    );
+    expect((row as unknown as Array<{ props: Record<string, unknown> }>)[0]?.props).toMatchObject({
+      [q]: 3,
+    });
+  });
+
+  test('отклонение proposed, на который ССЫЛАЕТСЯ ДЕЛЬТА, строку не удаляет (§А10-3)', async () => {
+    // Второй, незакрытый вход в то же «висение», что чинилось для тел: `applyDeltas` на
+    // несуществующий `propertyId` не падает — она молча пушит ссылку в состав аспекта, и
+    // владелец видит поле, у которого нет определения.
+    const created = ok(
+      await runH('property_create', {
+        key: 'user/delta-held',
+        label: { ru: 'Под дельтой' },
+        description: { ru: 'Предложение, названное дельтой' },
+        type: { kind: 'number' },
+        status: 'proposed',
+      }),
+    );
+    const id = (created.results[0] as { property: string }).property;
+    ok(
+      await runH('aspect_delta_set', {
+        aspect: 'orbis/note',
+        delta: { properties: { add: [{ propertyId: id, required: false, rank: 72 }] } },
+      }),
+    );
+    ok(await runH('property_update', { id, status: 'deprecated' }));
+    const row = await propertyRowByKey(holderOwner, 'user/delta-held');
+    expect(row).toBeDefined();
+    expect(row?.status).toBe('deprecated');
+  });
+
+  test('дельта на НЕСУЩЕСТВУЮЩЕЕ свойство отвергнута; ключ нормализуется в id', async () => {
+    const e = err(
+      await runH('aspect_delta_set', {
+        aspect: 'orbis/task',
+        delta: {
+          properties: { add: [{ propertyId: 'user/net-takogo', required: false, rank: 73 }] },
+        },
+      }),
+    );
+    expect((e.details as { reason?: string }).reason).toBe('DELTA_UNKNOWN_PROPERTY');
+
+    // Адрес принимается и КЛЮЧОМ, но в строку ложится идентификатором: `applyDeltas` ищет
+    // свойство в словаре по id, и записанный ключом адрес не резолвился бы никогда.
+    const byKey = await mkProp('user/by-key-prop');
+    ok(
+      await runH('aspect_delta_set', {
+        aspect: 'orbis/memory',
+        delta: {
+          properties: { add: [{ propertyId: 'user/by-key-prop', required: false, rank: 74 }] },
+        },
+      }),
+    );
+    const stored = (await withIdentity(db, holderOwner, (tx) =>
+      tx.execute(sql`SELECT delta FROM registry_deltas
+                     WHERE owner_id = ${holderOwner}::uuid AND target_id = 'orbis/memory'`),
+    )) as unknown as Array<{ delta: { properties: { add: Array<{ propertyId: string }> } } }>;
+    expect(stored[0]?.delta.properties.add[0]?.propertyId).toBe(byKey);
+    const reg = await withIdentity(db, holderOwner, (tx) => effectiveRegistry(tx, holderOwner));
+    expect((reg.aspects.get('orbis/memory')?.properties ?? []).map((r) => r.propertyId)).toContain(
+      byKey,
+    );
+  });
+});

@@ -20,7 +20,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import { effectiveRegistry } from '../registry/cache';
 import { dependantsOf, dependencyGraph } from '../registry/deps-graph';
 import { reportMergeConflictUnit } from '../registry/merge-conflict';
-import { collectQueryHolders } from '../registry/ops';
+import { collectPropertyHolders } from '../registry/ops';
 import {
   aspectDeltaRemoveInput,
   aspectDeltaSetInput,
@@ -116,7 +116,13 @@ export const registryRouter = router({
     ({ ctx, input }): Promise<{ property: string; dependants: string[] }> =>
       withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
         const reg = await effectiveRegistry(tx, ctx.actorUserId);
-        const holders = await collectQueryHolders(tx, ctx.actorUserId);
+        // В `queryRefs` едут ТОЛЬКО держатели-СУЩНОСТИ (источник прогресса и тело). Строки
+        // реестра и дельты граф выводит из СНИМКА сам — рёбрами `scope`/`ref.target`/`aspect`
+        // (дельта уже сложена в эффективное определение). Передай их сюда — и одна и та же
+        // зависимость пришла бы дважды, вторым родом ребра и от узла-строки реестра.
+        const holders = (await collectPropertyHolders(tx, ctx.actorUserId)).filter(
+          (h) => h.kind === 'progress_source' || h.kind === 'body',
+        );
         const graph = dependencyGraph(reg, {
           queryRefs: new Map(holders.map((h) => [h.id, h.properties])),
         });
