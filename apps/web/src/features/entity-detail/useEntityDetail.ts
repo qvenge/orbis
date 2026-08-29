@@ -141,9 +141,25 @@ function settleBodyDraft(vars: UpdateInput, err?: unknown): void {
     markDraftRejected(vars.id);
 }
 
-// Общая optimistic-concurrency обвязка entity.update (§5.2): optimistic-патч + откат при
-// любой ошибке; CONFLICT (409, из STALE_VERSION) → флаг conflict для сообщения «обновите».
-export function useEntityUpdate(entityId: string) {
+/**
+ * Общая optimistic-concurrency обвязка entity.update (§5.2): optimistic-патч + откат при
+ * любой ошибке; CONFLICT (409, из STALE_VERSION) → флаг conflict для сообщения «обновите».
+ *
+ * `onSettled` — довесок вызывающего к УРОВНЮ МУТАЦИИ, а не поштучный колбэк `mutate`.
+ * Разница ровно та, что уже описана у `settleBodyDraft` выше: поштучные колбэки (второй
+ * аргумент `mutate`) библиотека зовёт только при ЖИВЫХ слушателях
+ * (`@tanstack/query-core`, `mutationObserver.js`: `if (this.#mutateOptions && this.hasListeners())`),
+ * а экран записи размонтируется на первом же переходе — роутер рисует только активную
+ * вкладку. Правка, за которой человек сразу ушёл на соседнюю вкладку, теряла бы свой
+ * побочный эффект молча; на уровне мутации он исполняется ВСЕГДА.
+ *
+ * Аргумент — `vars` отправки, а не замыкание вызывающего: колбэк переживает размонтирование
+ * и обязан решать по тому, ЧТО УЕХАЛО, а не по тому, что было на экране в момент рендера.
+ */
+export function useEntityUpdate(
+  entityId: string,
+  opts: { onSettled?: (vars: UpdateInput) => void } = {},
+) {
   const utils = trpc.useUtils();
   const input = detailGetInput(entityId);
   const [conflict, setConflict] = useState(false);
@@ -280,7 +296,12 @@ export function useEntityUpdate(entityId: string) {
     // и backlinks и в строках query_result чата (EntityRef читает ключ {id} без include,
     // backlinks приезжают внутри ответа соседа — точечный ключ detail не задевал ни то,
     // ни другое).
-    onSettled: () => invalidateGraph(utils),
+    onSettled: (_data, _err, vars) => {
+      invalidateGraph(utils);
+      // Довесок вызывающего — здесь же, на уровне мутации (см. докблок хука): у Финансов это
+      // гашение агрегатов модуля, которые `invalidateGraph` не покрывает по построению.
+      opts.onSettled?.(vars);
+    },
   });
 
   return { mutation, conflict, dismissConflict: () => setConflict(false) };

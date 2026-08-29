@@ -62,12 +62,40 @@ const HIDDEN_ASPECT_CARDS = new Set(['orbis/assignment', 'orbis/agent-run']);
  */
 const AGGREGATED_MODULE = 'finance';
 
+/**
+ * Тронула ли ОТПРАВЛЕННАЯ правка хоть одно свойство модуля с серверными агрегатами.
+ *
+ * Считается по `vars` мутации, а не по замыканию строки: колбэк исполняется на уровне
+ * мутации и переживает размонтирование экрана, а значит обязан решать по тому, ЧТО УЕХАЛО.
+ * Снятие (`unset`) двигает агрегаты ровно так же, как запись, — оба списка сюда и входят.
+ */
+function touchesAggregatedModule(
+  reg: RegistryLookup,
+  vars: { props?: Record<string, unknown>; unset?: string[] },
+): boolean {
+  const touched = [...Object.keys(vars.props ?? {}), ...(vars.unset ?? [])];
+  return touched.some((propertyId) => reg.property(propertyId)?.module === AGGREGATED_MODULE);
+}
+
 export function AspectCards({ entity }: { entity: Entity }) {
-  const { mutation, conflict } = useEntityUpdate(entity.id);
   const utils = trpc.useUtils();
   // Подписи, состав формы и типы контролов — из ОДНОГО снимка на все карточки: он же уходит
   // пропом в строки, чтобы каждая из них не подписывалась на снимок отдельно.
   const registry = useRegistry();
+  const { mutation, conflict } = useEntityUpdate(entity.id, {
+    /**
+     * Агрегаты модуля считает сервер, и `invalidateGraph` о них не знает по построению (он
+     * про `entity.query/get/count`) — после правки они протухли.
+     *
+     * УРОВЕНЬ МУТАЦИИ, а не поштучный колбэк `mutate`: правка «Суммы» и немедленный переход
+     * на вкладку Бюджета размонтируют этот экран (роутер рисует только активную вкладку), и
+     * поштучный колбэк библиотека не позвала бы вовсе — остаток конверта и бейдж вкладки
+     * остались бы вчерашними ровно в том сюжете, ради которого механизм и написан.
+     */
+    onSettled: (vars) => {
+      if (touchesAggregatedModule(registry, vars)) void invalidateBudget(utils);
+    },
+  });
   const props = entity.props as Record<string, unknown>;
 
   /**
@@ -111,17 +139,11 @@ export function AspectCards({ entity }: { entity: Entity }) {
    * свойств сервер проводит по LWW.
    */
   function writeProp(propertyId: string, value: unknown | undefined) {
-    const aggregated = registry.property(propertyId)?.module === AGGREGATED_MODULE;
-    mutation.mutate(
-      {
-        id: entity.id,
-        expectedUpdatedAt: entity.updatedAt,
-        ...(value === undefined ? { unset: [propertyId] } : { props: { [propertyId]: value } }),
-      },
-      // Агрегаты модуля считает сервер, и `invalidateGraph` о них не знает (он про
-      // entity.query/get/count) — после правки они протухли.
-      aggregated ? { onSuccess: () => void invalidateBudget(utils) } : undefined,
-    );
+    mutation.mutate({
+      id: entity.id,
+      expectedUpdatedAt: entity.updatedAt,
+      ...(value === undefined ? { unset: [propertyId] } : { props: { [propertyId]: value } }),
+    });
   }
 
   const row = (propertyId: string) => (

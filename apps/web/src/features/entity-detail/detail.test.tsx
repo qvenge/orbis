@@ -893,6 +893,60 @@ const taskedFin = wireEntity({
   aspects: ['orbis/financial', 'orbis/task'],
 });
 
+/**
+ * Экран записи, который можно снять с монтирования, не трогая пробник бюджета.
+ *
+ * Ровно этот сюжет и ломается на поштучном колбэке: правка «Суммы» → немедленный переход на
+ * вкладку Бюджета → роутер размонтирует Детали (рисуется только активная вкладка) → у мутации
+ * не остаётся живых слушателей, и `@tanstack/query-core` поштучные колбэки при этом НЕ зовёт.
+ */
+function CardsUntilHidden({ entity: target }: { entity: typeof taskedFin }) {
+  const [hidden, setHidden] = useState(false);
+  return (
+    <>
+      <BudgetProbe />
+      <button type="button" data-testid="leave-screen" onClick={() => setHidden(true)}>
+        уйти с экрана
+      </button>
+      {!hidden && <AspectCards entity={target} />}
+    </>
+  );
+}
+
+test('правка Финансов гасит агрегаты, даже если экран размонтирован до ответа сервера', async () => {
+  // Ответ сервера держим за нитку: правка обязана уйти, экран — исчезнуть, и только потом
+  // мутация оседает. На поштучном `onSuccess` инвалидации в этот момент уже не случается.
+  let settle: (value: unknown) => void = () => {};
+  const pending = new Promise((resolve) => {
+    settle = resolve;
+  });
+  const { calls } = renderWithProviders(<CardsUntilHidden entity={taskedFin} />, (path) => {
+    if (path === 'budget.alertCount') return 0;
+    if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
+    if (path === 'entity.update') return pending;
+    return registryReply(path) ?? {};
+  });
+  const budgetReads = () => calls.filter((c) => c.path === 'budget.alertCount').length;
+  await waitFor(() => expect(budgetReads()).toBe(1));
+
+  const amount = await screen.findByLabelText('Сумма');
+  fireEvent.change(amount, { target: { value: '420.00' } });
+  fireEvent.blur(amount);
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.update')).toBe(true));
+
+  // Ушли с экрана ДО ответа: карточек больше нет, пробник бюджета жив. Размонтирование —
+  // состоянием внутри дерева, а не `rerender` обёртки: тот заменил бы КОРЕНЬ, потеряв
+  // провайдеры tRPC вместе с самим кэшем, за которым проба и следит.
+  fireEvent.click(screen.getByTestId('leave-screen'));
+  expect(screen.queryByLabelText('Сумма')).toBeNull();
+
+  await act(async () => {
+    settle(taskedFin);
+    await pending;
+  });
+  await waitFor(() => expect(budgetReads()).toBeGreaterThan(1));
+});
+
 test('правка свойства Финансов гасит бюджетные агрегаты, правка чужого свойства — нет', async () => {
   const { calls } = renderWithProviders(
     <>
@@ -910,14 +964,20 @@ test('правка свойства Финансов гасит бюджетны
   await waitFor(() => expect(budgetReads()).toBe(1));
 
   // (а) чужой модуль (`orbis/task_status` — Планировщик): граф протух, бюджет — нет.
+  const graphReads = () => calls.filter((c) => c.path === 'entity.query').length;
+  // Список категорий пикера — единственное чтение графа в этой пробе; дожидаемся его, иначе
+  // «стало два» ниже могло бы засчитать сам первый запрос.
+  await waitFor(() => expect(graphReads()).toBe(1));
   const status = await screen.findByLabelText('Состояние задачи');
   fireEvent.change(status, { target: { value: 'done' } });
-  await waitFor(() => expect(calls.some((c) => c.path === 'entity.update')).toBe(true));
-  // Оседание мутации вместе с её onSettled: без выдержки «бюджет не перечитан» было бы
-  // истинно просто потому, что ответ ещё не пришёл.
-  await act(async () => {
-    await new Promise((r) => setTimeout(r, 50));
-  });
+  /**
+   * Ждём НАБЛЮДАЕМОГО СЛЕДА оседания, а не стенных часов: `onSettled` мутации зовёт
+   * `invalidateGraph`, тот гасит `entity.query`, и живой запрос категорий перечитывается
+   * вторым вызовом. Выдержка `setTimeout` на её месте давала ЛОЖНУЮ ЗЕЛЕНЬ: с медленным
+   * ответом сервера (замерено на 200 мс) проверка ниже успевала пройти до того, как колбэк
+   * вообще случился, — то есть тест был зелен и при «инвалидировать всегда».
+   */
+  await waitFor(() => expect(graphReads()).toBe(2));
   expect(budgetReads()).toBe(1);
 
   // (б) свойство Финансов: агрегаты обязаны перечитаться.
