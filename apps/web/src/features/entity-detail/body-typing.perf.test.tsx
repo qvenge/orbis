@@ -61,7 +61,6 @@ test.runIf(process.env.PERF === '1')(
     renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
       if (path === 'entity.get') return { entity, relations: [], thread: null };
       if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
-      if (path === 'aspect.list') return [];
       return {};
     });
     fireEvent.click(await screen.findByTestId('editor-preview'));

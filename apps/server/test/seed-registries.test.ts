@@ -13,7 +13,9 @@ import {
 import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
 import { seedRegistries } from '../src/db/seed-registries';
-import { adminDb, requireEnv } from './helpers';
+import { withIdentity } from '../src/db/with-identity';
+import { effectiveRegistry } from '../src/registry/cache';
+import { adminDb, appDb, requireEnv } from './helpers';
 
 requireEnv();
 
@@ -258,6 +260,69 @@ describe('сид трёх реестров', () => {
         (SELECT id FROM chat_threads WHERE owner_id = ${owner}::uuid)`);
       await db.execute(sql`DELETE FROM chat_threads WHERE owner_id = ${owner}::uuid`);
       await db.execute(sql`DELETE FROM user_settings WHERE owner_id = ${owner}::uuid`);
+      await raw.end();
+      await client.end();
+    }
+  }, 30_000);
+
+  /**
+   * СЛИЯНИЕ ОБЯЗАНО ОСТАВЛЯТЬ ДЕЛЬТУ ПРИМЕНИМОЙ (ре-ревью фикс-раунда 1, Important-A) —
+   * проверяется единственным способом, который что-то значит: реестр владельца ЧИТАЕТСЯ
+   * после пересева.
+   *
+   * Фикстура собрана на встроенных данных, дрейф не нужен: `orbis/task_status` несёт
+   * варианты …/`done` «Сделана»/`cancelled` «Отменена», и дельта добавляет свой
+   * `cancelled` с подписью «Сделана». При отставшем `base_version` новыми считаются ВСЕ
+   * варианты, и поиск похожего по подписи находит `done` РАНЬШЕ, чем совпавший по ключу
+   * `cancelled`. Пока проверка ключа шла внутри этого поиска, слияние оставляло дубль
+   * ключа в дельте — и `applyDeltas` отказывал на каждом чтении реестра, а повторный
+   * пересев молчал, потому что `base_version` уже переехал.
+   */
+  test('слитая дельта применима: реестр владельца читается, повторный пересев ничего не добавляет', async () => {
+    const { db, client } = adminDb();
+    const app = appDb();
+    const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
+    const owner = crypto.randomUUID();
+    try {
+      await db.execute(sql`TRUNCATE registry_deltas`);
+      await db.execute(sql`
+        INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+        VALUES (gen_random_uuid(), ${owner}::uuid, 'aspect', 'orbis/task', 1,
+                ${JSON.stringify({
+                  selectOptions: {
+                    'orbis/task_status': {
+                      add: [{ key: 'cancelled', label: { ru: 'Сделана' }, rank: 99 }],
+                    },
+                  },
+                })}::jsonb)`);
+
+      const first = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+
+      // ГЛАВНОЕ И ПЕРВЫМ: снимок эффективных определений собирается, а не отказывает.
+      // Именно эта строка отличает «слияние сработало» от «слияние доложило конфликт и
+      // оставило дельту неприменимой», и стоит она ДО проверок текста отчёта намеренно —
+      // иначе мутация правила падала бы на формулировке, не дойдя до сути.
+      const reg = await withIdentity(app.db, owner, (tx) => effectiveRegistry(tx, owner));
+      const status = reg.properties.get('orbis/task_status');
+      if (status?.type.kind !== 'select') throw new Error('orbis/task_status перестал быть select');
+      expect(status.type.options.filter((o) => o.key === 'cancelled')).toHaveLength(1);
+      expect(first.conflicts.map((c) => c.kind)).toEqual(['variant-merge']);
+      expect(first.conflicts[0]?.detail).toContain('с тем же ключом');
+
+      // Повторный пересев: дельта уже пуста, добавить ему нечего.
+      const again = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      expect(again.conflicts).toEqual([]);
+      const rows = (await db.execute(
+        sql`SELECT delta FROM registry_deltas WHERE owner_id = ${owner}::uuid`,
+      )) as unknown as { delta: unknown }[];
+      expect(rows[0]?.delta).toEqual({});
+    } finally {
+      await db.execute(sql`DELETE FROM registry_deltas WHERE owner_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM chat_messages WHERE thread_id IN
+        (SELECT id FROM chat_threads WHERE owner_id = ${owner}::uuid)`);
+      await db.execute(sql`DELETE FROM chat_threads WHERE owner_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM user_settings WHERE owner_id = ${owner}::uuid`);
+      await app.client.end();
       await raw.end();
       await client.end();
     }

@@ -575,7 +575,6 @@ function overdueRoundTripHandler(task: ReturnType<typeof ent>, state: { closed: 
       return task;
     }
     if (path === 'relation.listFor') return [];
-    if (path === 'aspect.list') return [];
     return {};
   };
   return handler;

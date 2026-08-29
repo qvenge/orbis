@@ -265,7 +265,6 @@ test('прогресс обновляется после создания сущ
       current = '200000.00'; // сервер посчитает прогресс заново на следующем чтении
       return { ...goal, id: 'new' };
     }
-    if (path === 'aspect.list') return [];
     return {};
   };
   renderWithProviders(

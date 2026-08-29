@@ -101,7 +101,6 @@ function handler(fx: Fixture) {
     }
     if (path === 'relation.delete')
       return fx.onRelationDelete ? fx.onRelationDelete() : { ok: true };
-    if (path === 'aspect.list') return [];
     return {};
   };
 }

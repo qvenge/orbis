@@ -1,8 +1,13 @@
 // apps/server/src/router.ts
-// Сборка appRouter (§9.1): entity/relation/chat/ai — Task 12; user/aspect — Task 13.
+// Сборка appRouter (§9.1): entity/relation/chat/ai — Task 12; user — Task 13.
+//
+// Ручки `aspect.list` здесь БОЛЬШЕ НЕТ (гейт-ревью Задачи 14): её последний читатель,
+// экран настроек, переехал на `registry.effective` ещё Задачей 13a, и с тех пор она была
+// мёртвой — а на её мнимой живости держалось объяснение, почему колонка `schema` не видит
+// дельт. Реестр аспектов отдаёт `registry.effective`: там три словаря, версия снимка и
+// эффективные определения (система ⊕ строки владельца ⊕ дельты).
 import { agentRunRouter } from './routers/agent-run';
 import { aiRouter } from './routers/ai';
-import { aspectRouter } from './routers/aspect';
 import { budgetRouter } from './routers/budget';
 import { chatRouter } from './routers/chat';
 import { entityRouter } from './routers/entity';
@@ -24,7 +29,6 @@ export const appRouter = router({
   chat: chatRouter,
   ai: aiRouter,
   user: userRouter,
-  aspect: aspectRouter,
   // Эффективный реестр владельца одним ответом и с версией снимка (§А9-2): по нему web
   // строит подписи, формы и каталог полей — вместо рукописных словарей в коде.
   registry: registryRouter,

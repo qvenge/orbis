@@ -7,28 +7,16 @@
  * «неразбираемый блок» в тесте оказался бы разбираемым в продукте (и наоборот), а карточка
  * подписывала бы поле словом, которого владелец не увидит.
  *
- * До Задачи 13a ответов было ДВА (`aspect.list` + `aspect.properties`); теперь реестр едет
- * одним (`registry.effective`), а `aspect.list` остался ради экрана настроек.
+ * До Задачи 13a ответов было ДВА (`aspect.list` + `aspect.properties`); Задача 13a свела их
+ * в один (`registry.effective`), а гейт-ревью Задачи 14 сняло `aspect.list` и на сервере:
+ * читателей у неё не осталось ни одного.
  */
 
-import type { AspectId } from '@orbis/shared';
 import {
-  aspectJsonSchema,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
 } from '@orbis/shared';
-
-/**
- * Ответ `aspect.list`: декларация аспекта плюс поля, которые дописывает wire-форма.
- * `schema` остаётся в выдаче (Р-24) и здесь строится тем же генератором, что на сервере.
- */
-export const BUILTIN_WIRE_ASPECTS = BUILTIN_ASPECT_DEFS.map((a) => ({
-  ...a,
-  schema: aspectJsonSchema(a.id as AspectId),
-  aggregations: null,
-  createdAt: '2026-01-01T00:00:00.000Z',
-}));
 
 /**
  * Ответ `registry.effective`: три словаря владельца и версия снимка.
@@ -50,7 +38,6 @@ export const BUILTIN_REGISTRY = {
  * «не моё дело» значило бы отвечать за чужие пути.
  */
 export function registryReply(path: string): unknown | undefined {
-  if (path === 'aspect.list') return BUILTIN_WIRE_ASPECTS;
   if (path === 'registry.effective') return BUILTIN_REGISTRY;
   return undefined;
 }

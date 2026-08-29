@@ -90,7 +90,6 @@ test('настройки не монтируют неактивные вклад
   const { calls } = renderWithProviders(<SettingsScreen />, (path) => {
     if (path === 'user.getSettings') return settings;
     if (path === 'oauth.listGrants') return [];
-    if (path === 'aspect.list') return [];
     if (path === 'view.list') return [];
     return {};
   });

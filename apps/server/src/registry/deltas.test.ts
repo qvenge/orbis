@@ -546,16 +546,99 @@ describe('база слияния выбирается по base_version (§А3-
         ]),
       ]),
     );
+    // Ключ СВОБОДЕН, а подпись совпадает с системным вариантом `meh` («Так себе»): именно
+    // здесь база и решает, считать ли системный вариант новым. Ключ занятый проверяется
+    // отдельно — он снимает свой вариант при любой базе (тест ниже).
     const delta = {
-      selectOptions: { 'user/mood': { add: [{ key: 'meh', label: { ru: 'Средне' }, rank: 5 }] } },
+      selectOptions: {
+        'user/mood': { add: [{ key: 'so-so', label: { ru: 'так себе' }, rank: 5 }] },
+      },
     };
     expect(threeWayMerge(system, system, row('aspect', 'orbis/note', delta, 7)).conflicts).toEqual(
       [],
     );
     const stale = row('aspect', 'orbis/note', delta, 1);
+    const merged = threeWayMerge(baseSystemFor(system, stale, 7), system, stale);
+    expect(merged.conflicts.map((c) => c.kind)).toEqual(['variant-merge']);
+    // Оба варианта остаются — ключи разные, применению это не мешает.
+    expect(merged.merged).toEqual(delta);
+  });
+
+  /**
+   * ЗАНЯТЫЙ КЛЮЧ СИЛЬНЕЕ ПОХОЖЕЙ ПОДПИСИ (ре-ревью фикс-раунда 1, Important-A).
+   *
+   * Вход подобран так, что поиск «похожего» ошибается: старый вариант совпадает по ПОДПИСИ
+   * и стоит в списке РАНЬШЕ нового, совпавшего по КЛЮЧУ. Пока проверка ключа шла внутри
+   * поиска похожего, широкая база переворачивала вердикт с «снять свой вариант» на
+   * «оставить оба», и дельта становилась НЕПРИМЕНИМОЙ: `applyDeltas` отказывал
+   * `DELTA_OPTION_PRESENT` на каждом чтении, а `base_version` к тому моменту уже переехал —
+   * повторный пересев расхождения не видел и молчал.
+   */
+  test('свой вариант с занятым ключом снимается при ЛЮБОЙ базе, даже когда раньше стоит похожий по подписи', () => {
+    const withReview = selectProperty([{ key: 'review', label: 'На проверке', rank: 1 }]);
+    const withBoth = selectProperty([
+      { key: 'review', label: 'На проверке', rank: 1 },
+      { key: 'in_review', label: 'В ревью', rank: 2 },
+    ]);
+    const prev = systemOf(snapshotWith([withReview]));
+    const next = systemOf(snapshotWith([withBoth]));
+    // Ключ совпадает с НОВЫМ системным вариантом, подпись — со СТАРЫМ (регистр не в счёт).
+    const delta = {
+      selectOptions: {
+        'user/mood': { add: [{ key: 'in_review', label: { ru: 'на проверке' }, rank: 9 }] },
+      },
+    };
+    const staleRow = row('aspect', 'orbis/note', delta, 1);
+
+    for (const [name, base] of [
+      ['точная база', prev],
+      ['пустая база', baseSystemFor(prev, staleRow, 7)],
+    ] as const) {
+      const { merged, conflicts } = threeWayMerge(base, next, staleRow);
+      expect(
+        conflicts.map((c) => c.kind),
+        name,
+      ).toEqual(['variant-merge']);
+      expect(conflicts[0]?.detail, name).toContain('с тем же ключом');
+      // Вердикт один и тот же при обеих базах: свой вариант снят.
+      expect(merged, name).toEqual({});
+      // И слитая дельта ПРИМЕНИМА — ради этого всё и делается.
+      expect(() =>
+        applyDeltas(snapshotWith([withBoth]), [row('aspect', 'orbis/note', merged)]),
+      ).not.toThrow();
+    }
+    // Контроль, что проба не вырождена: пустая база действительно шире точной —
+    // «похожий по подписи» на другом ключе при ней конфликтует, при точной нет.
+    const otherKey = {
+      selectOptions: {
+        'user/mood': { add: [{ key: 'checking', label: { ru: 'на проверке' }, rank: 9 }] },
+      },
+    };
+    expect(threeWayMerge(prev, next, row('aspect', 'orbis/note', otherKey, 7)).conflicts).toEqual(
+      [],
+    );
     expect(
-      threeWayMerge(baseSystemFor(system, stale, 7), system, stale).conflicts.map((c) => c.kind),
-    ).toEqual(['variant-merge']);
+      threeWayMerge(UNKNOWN_PREV_SYSTEM, next, row('aspect', 'orbis/note', otherKey, 1)).conflicts
+        .length,
+    ).toBe(1);
+  });
+
+  test('ключ, занятый СТАРЫМ системным вариантом, тоже снимается — иначе дельта неприменима', () => {
+    // Точная база, вариант не «свежий»: раньше такая дельта проходила слияние молча и
+    // ложилась обратно в базу неприменимой.
+    const system = systemOf(
+      snapshotWith([selectProperty([{ key: 'good', label: 'Хорошо', rank: 1 }])]),
+    );
+    const delta = {
+      selectOptions: { 'user/mood': { add: [{ key: 'good', label: { ru: 'Отлично' }, rank: 9 }] } },
+    };
+    const { merged, conflicts } = threeWayMerge(
+      system,
+      system,
+      row('aspect', 'orbis/note', delta, 7),
+    );
+    expect(conflicts.map((c) => c.kind)).toEqual(['variant-merge']);
+    expect(merged).toEqual({});
   });
 
   test('предпросмотр отставшую дельту тоже не пропускает', () => {

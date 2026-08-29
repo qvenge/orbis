@@ -59,7 +59,6 @@ describe('экран прогона', () => {
       if (path === 'entity.get') {
         return { entity: { id: (input as { id: string }).id, title: 'Утренний обзор' } };
       }
-      if (path === 'aspect.list') return [];
       if (path === 'routine.proposal') return null;
       return {};
     });

@@ -971,18 +971,6 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
   });
 });
 
-describe('aspect.list (§9.1): реестр builtin + свои', () => {
-  test('возвращает встроенный реестр, отсортирован по id, builtin — ownerId null', async () => {
-    const caller = callerFor(freshUserId());
-    const list = await caller.aspect.list();
-    const ids = list.map((a) => a.id);
-    expect(ids).toEqual([...ids].sort()); // сортировка по id
-    for (const id of BUILTIN_ASPECT_IDS) expect(ids).toContain(id);
-    const builtins = list.filter((a) => (BUILTIN_ASPECT_IDS as readonly string[]).includes(a.id));
-    expect(builtins.every((a) => a.ownerId === null)).toBe(true);
-  });
-});
-
 describe('registry.effective (§А9-2): эффективный реестр владельца одним ответом', () => {
   test('отдаёт встроенные свойства, аспекты и роли в порядке rank, ownerId у встроенных — null', async () => {
     const caller = callerFor(freshUserId());

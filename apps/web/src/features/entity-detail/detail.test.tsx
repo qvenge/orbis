@@ -207,7 +207,6 @@ test('чекбокс task → entity.update status=done + completed_at', async (
         ...entity,
         props: { 'orbis/task_status': 'done', 'orbis/completed_at': 'now' },
       };
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   // Этап 3: title теперь и в ScreenHeader (h1), и в NativeRow — целимся в шапку.
@@ -256,7 +255,6 @@ test('нетронутый редактор подхватывает правк�
       };
     }
     if (path === 'entity.update') return entity;
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   await openEditor();
@@ -295,7 +293,6 @@ test('набранное в редакторе переживает чужую �
       };
     }
     if (path === 'entity.update') return entity;
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -338,7 +335,6 @@ test('409 правки тела: откат кэша к прежнему body + 
         return new Promise(() => {});
       }
       if (path === 'entity.update') throw trpcError('CONFLICT');
-      if (path === 'aspect.list') return [];
       return registryReply(path) ?? {};
     },
   );
@@ -403,7 +399,6 @@ test('подзадачи: подпункт рождается ЗАДАЧЕЙ; с
         updatedAt: '2026-07-05T00:00:00.000Z',
       };
     }
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   await screen.findByRole('heading', { name: 'Задача' }); // экран отрисован; тело здесь ни при чём
@@ -477,7 +472,6 @@ test('создание подзадачи инвалидирует entity.query 
         };
       }
       if (path === 'entity.query') return [];
-      if (path === 'aspect.list') return [];
       return registryReply(path) ?? {};
     },
   );
@@ -525,7 +519,6 @@ test('подзадача создана, а связь упала: списки 
       }
       if (path === 'relation.create') throw trpcError('INTERNAL_SERVER_ERROR');
       if (path === 'entity.query') return [];
-      if (path === 'aspect.list') return [];
       return registryReply(path) ?? {};
     },
   );
@@ -561,7 +554,6 @@ test('inline правка заголовка уходит в entity.update с н
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') return { ...entity, title: 'кофе → Транспорт' };
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const field = await screen.findByLabelText('Заголовок');
@@ -600,7 +592,6 @@ function externalTitleChange(): { handler: MockHandler; getCalls: () => number }
         };
       }
       if (path === 'entity.update') return renamed;
-      if (path === 'aspect.list') return [];
       return registryReply(path) ?? {};
     },
   };
@@ -655,7 +646,6 @@ function externalStatusChange(): { handler: MockHandler; getCalls: () => number 
         };
       }
       if (path === 'entity.update') return done;
-      if (path === 'aspect.list') return [];
       return registryReply(path) ?? {};
     },
   };
@@ -713,7 +703,6 @@ const finHandler = (path: string) => {
     return { entity: finEntity, relations: [], thread: { threadId: 'th1', messages: [] } };
   if (path === 'entity.query') return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
   if (path === 'entity.update') return finEntity;
-  if (path === 'aspect.list') return [];
   return registryReply(path) ?? {};
 };
 
@@ -763,7 +752,6 @@ test('financial: запрос категорий упал → «Не удало�
     if (path === 'entity.get')
       return { entity: finEntity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const select = await screen.findByLabelText('Категория');
@@ -781,7 +769,6 @@ test('financial: список пришёл, а ссылка ведёт мимо 
       return { entity: orphan, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.query')
       return [category(CAT_FOOD, 'Еда'), category(CAT_FUN, 'Развлечения')];
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const select = await screen.findByLabelText('Категория');
@@ -802,7 +789,6 @@ test('financial: без категории при упавшем запросе 
     if (path === 'entity.get')
       return { entity: noCategory, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const select = await screen.findByLabelText('Категория');
@@ -826,7 +812,6 @@ test('financial: рефетч списка упал, но список уже е
       throw trpcError('INTERNAL_SERVER_ERROR');
     }
     if (path === 'entity.update') return orphan;
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const select = await screen.findByLabelText('Категория');
@@ -881,7 +866,6 @@ test('нефинансовая сущность: контрол по типу с
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') return entity;
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   // Тип свойства решает контрол: у `orbis/task_status` он `select` (варианты закрыты
@@ -1189,7 +1173,6 @@ const menuHandler: MockHandler = (path) => {
   if (path === 'entity.get')
     return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
   if (path === 'entity.update') return entity;
-  if (path === 'aspect.list') return [];
   return registryReply(path) ?? {};
 };
 
@@ -1265,7 +1248,6 @@ const twoEntitiesHandler: MockHandler = (path, input) => {
     };
   }
   if (path === 'entity.update') return entity;
-  if (path === 'aspect.list') return [];
   return registryReply(path) ?? {};
 };
 
@@ -1349,7 +1331,6 @@ test('меню ⋮: у архивной сущности пункт зовётс
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get') return { entity: archived, relations: [], thread: null };
     if (path === 'entity.update') return archived;
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   await openDetailMenu();
@@ -1374,7 +1355,6 @@ test('conflict-баннер: клик «Обновить» → refetch entity.ge
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') throw trpcError('CONFLICT');
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   fireEvent.click(await screen.findByRole('button', { name: 'Оставить моё' }));
@@ -1590,7 +1570,6 @@ function bodyConflictHandler(seen: unknown[]): MockHandler {
       if ((input as { bodyDoc?: unknown }).bodyDoc !== undefined) throw trpcError('CONFLICT');
       return entity;
     }
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   };
 }
@@ -1928,7 +1907,6 @@ test('на «Сущности» — emoji, заголовок и тело; ка�
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: { ...entity, emoji: '🎯' }, relations: [], thread: null };
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
@@ -1971,7 +1949,6 @@ test('полоса прогресса цели осталась на «Сущн�
         thread: null,
         goalProgress: { current: '150000.00', target: '300000.00' },
       };
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const panel = await screen.findByRole('tabpanel', { name: 'Сущность' });
@@ -2016,7 +1993,6 @@ test('вкладка «Тред» живой не держится: её зап�
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'chat.ensureThread') return { threadId: 'th1' };
     if (path === 'chat.listMessages') return [];
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   await screen.findByRole('tab', { name: 'Тред' });
@@ -2044,7 +2020,6 @@ const threadHandler: MockHandler = (path) => {
     return { entity, relations: [], thread: { threadId: 'th-formula', messages: [] } };
   if (path === 'chat.ensureThread') return { threadId: 'th-ensured' };
   if (path === 'chat.listMessages') return [];
-  if (path === 'aspect.list') return [];
   return registryReply(path) ?? {};
 };
 
@@ -2176,7 +2151,6 @@ test('без документа пункта «Править как markdown» 
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: { ...entity, bodyDoc: null }, relations: [], thread: null };
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   await openDetailMenu();
@@ -2201,7 +2175,6 @@ test('тумблер markdown открывается с тем, что НАБР�
     if (path === 'entity.get')
       return { entity: { ...entity, body: 'тело', bodyDoc: parseBody('тело') }, relations: [] };
     if (path === 'entity.update') throw trpcError('INTERNAL_SERVER_ERROR');
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -2227,7 +2200,6 @@ test('ВНУТРИ ПАУЗЫ «Применить» без единой пра�
     if (path === 'entity.get')
       return { entity: { ...entity, body: 'тело', bodyDoc: parseBody('тело') }, relations: [] };
     if (path === 'entity.update') throw trpcError('INTERNAL_SERVER_ERROR');
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -2268,7 +2240,6 @@ test('набранное, которое редактор НЕ отдал отк
       return new Promise((_settle, fail) => {
         gates.push({ fail });
       });
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -2320,7 +2291,6 @@ test('«Отмена» в тумблере не возвращает текст,
     if (path === 'entity.get')
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
     if (path === 'entity.update') throw trpcError('CONFLICT');
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -2404,7 +2374,6 @@ test('«Обновить» из режима разметки не заслон�
     if (path === 'entity.get')
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
     if (path === 'entity.update') throw trpcError('CONFLICT');
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -2453,7 +2422,6 @@ test('ничего не трогали: приехавшее тело не за�
     if (path === 'entity.get')
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
     if (path === 'entity.update') return entity;
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   await openEditor(); // редактор поднят, но НИ ОДНОГО нажатия в нём не было
@@ -2486,7 +2454,6 @@ test('выход из разметки ТЕМ ЖЕ пунктом меню не 
     if (path === 'entity.get')
       return { entity: { ...entity, body: 'тело', bodyDoc: parseBody('тело') }, relations: [] };
     if (path === 'entity.update') throw trpcError('INTERNAL_SERVER_ERROR');
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -2523,7 +2490,6 @@ test('ВТОРОЙ заход в разметку после отказанно�
     if (path === 'entity.get')
       return { entity: serve.outside ? outside : entity, relations: [], thread: null };
     if (path === 'entity.update') throw trpcError('CONFLICT');
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   const field = await editorField();
@@ -2623,7 +2589,6 @@ test('плашки и индикатор тела живут ВНЕ вкладо
     if (path === 'entity.get')
       return { entity, relations: [], thread: { threadId: 'th1', messages: [] } };
     if (path === 'entity.update') throw trpcError('CONFLICT');
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
 
@@ -2749,7 +2714,6 @@ test('режим «править как markdown» не переезжает н
         thread: null,
       };
     }
-    if (path === 'aspect.list') return [];
     return registryReply(path) ?? {};
   });
   await openDetailMenu();
@@ -2801,7 +2765,6 @@ test('смена записи размонтирует тело и досыла�
         };
       }
       if (path === 'entity.update') return { ...entity, updatedAt: '2026-07-05T11:00:00.000Z' };
-      if (path === 'aspect.list') return [];
       return registryReply(path) ?? {};
     },
   );
@@ -2896,7 +2859,6 @@ function adeHandler(opts: { entity?: unknown; runs?: unknown[] } = {}): MockHand
     if (path === 'entity.get') return { entity: target, relations: [], thread: null };
     if (path === 'entity.query') return opts.runs ?? [RUN];
     if (path === 'oauth.listGrants') return [GRANT];
-    if (path === 'aspect.list') return [];
     if (path === 'agentRun.sweep') return { swept: 0 };
     if (path === 'agentRun.answerCheckpoint') return { ticket: target, run: RUN };
     if (path === 'entity.update') return target;
@@ -3257,7 +3219,6 @@ describe('ADE: тикет', () => {
       if (path === 'entity.query')
         return (input as { query: string }).query.includes('t2') ? [] : [RUN];
       if (path === 'oauth.listGrants') return [GRANT];
-      if (path === 'aspect.list') return [];
       if (path === 'agentRun.sweep') return { swept: 0 };
       return registryReply(path) ?? {};
     });
@@ -3293,7 +3254,6 @@ describe('ADE: тикет', () => {
       if (path === 'entity.query')
         return (input as { query: string }).query.includes('t2') ? [runB] : [RUN];
       if (path === 'oauth.listGrants') return [GRANT];
-      if (path === 'aspect.list') return [];
       if (path === 'agentRun.sweep') return { swept: 0 };
       return registryReply(path) ?? {};
     });
@@ -3348,7 +3308,6 @@ describe('ADE: тикет', () => {
       }
       if (path === 'entity.query') return [RUN];
       if (path === 'oauth.listGrants') return [GRANT];
-      if (path === 'aspect.list') return [];
       if (path === 'agentRun.sweep') return { swept: 0 };
       return registryReply(path) ?? {};
     });
@@ -3395,7 +3354,6 @@ describe('ADE: тикет', () => {
       }
       if (path === 'entity.query') return [RUN];
       if (path === 'oauth.listGrants') return [GRANT];
-      if (path === 'aspect.list') return [];
       if (path === 'agentRun.sweep') return { swept: 0 };
       return registryReply(path) ?? {};
     });
@@ -3461,7 +3419,6 @@ function runHandler(opts: { run?: unknown; rollback?: unknown } = {}): MockHandl
       return id === 'r1' ? { entity: target, relations: [], thread: null } : { entity: TICKET };
     }
     if (path === 'oauth.listGrants') return [GRANT];
-    if (path === 'aspect.list') return [];
     if (path === 'agentRun.rollback')
       return opts.rollback ?? { ok: true, undone: ['a1', 'a2'], note: ROLLBACK_NOTE };
     return registryReply(path) ?? {};
@@ -3706,7 +3663,6 @@ function versionsHandler(
 ): MockHandler {
   return (path, input) => {
     if (path === 'entity.get') return { entity, relations: [], thread: null };
-    if (path === 'aspect.list') return [];
     if (path === 'version.list') return opts.versions ?? VERSIONS;
     if (path === 'version.pin')
       return {
@@ -3746,7 +3702,6 @@ const twoEntitiesVersionsHandler: MockHandler = (path, input) => {
       thread: null,
     };
   }
-  if (path === 'aspect.list') return [];
   if (path === 'version.list')
     return (input as { entityId: string }).entityId === 'e1' ? VERSIONS : [VERSION_E2];
   return registryReply(path) ?? {};
@@ -4062,7 +4017,6 @@ function routineHandler(
     // Часовой пояс владельца — тот же шов, что у ленты прогона и истории: без него время
     // печаталось бы в зоне машины, и проверка даты зависела бы от того, где идёт прогон.
     if (path === 'user.getSettings') return { timezone: 'UTC' };
-    if (path === 'aspect.list') return [];
     if (path === 'oauth.listGrants') return [GRANT];
     if (path === 'agentRun.sweep') return { swept: 0 };
     return registryReply(path) ?? {};
@@ -4356,7 +4310,6 @@ function routineRunHandler(
       };
     }
     if (path === 'user.getSettings') return { timezone: 'UTC' };
-    if (path === 'aspect.list') return [];
     if (path === 'routine.proposal') return opts.proposal ?? null;
     if (path === 'routine.decideProposal')
       return opts.decide ?? { status: 'applied', actionId: 'a1' };
@@ -5065,7 +5018,6 @@ function overlayHandler(
       return opts.decide ?? { status: 'applied', actionId: 'a1' };
     if (path === 'entity.update') return entity;
     if (path === 'chat.listMessages') return [];
-    if (path === 'aspect.list') return [];
     // Реестр НАСТОЯЩИЙ: по нему подписаны и строки плашки, и инпуты правки (§А9-2).
     return registryReply(path) ?? {};
   };

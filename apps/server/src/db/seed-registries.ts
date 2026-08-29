@@ -125,11 +125,13 @@ export async function seedRegistries(sql: Sql, adminDsn: string): Promise<SeedRe
       VALUES
         (${a.id}, NULL, ${a.key}, ${sql.json(j(a.label))}, ${sql.json(j(a.description))},
          ${sql.json(j(a.properties))}, ${sql.json(j(a.implements))},
-         -- Колонка schema — носитель СТАРОЙ формы до миграции 0017 (Р-24). Её читателей
-         -- осталось ДВА, и путь записи в них не входит: экран настроек (aspect.list) и
-         -- loadAspectToolRows. Стадия 2 исполнителя валидирует по эффективному снимку
-         -- (assertEntityProps, Задача 12), а вход attach_*-тула собирает
-         -- aspectToolJsonSchema (tools/registry.ts) — тоже из снимка.
+         -- Колонка schema — носитель СТАРОЙ формы до миграции 0017 (Р-24). ЖИВЫХ читателей
+         -- ЗНАЧЕНИЯ у неё НОЛЬ: стадия 2 исполнителя валидирует по эффективному снимку
+         -- (assertEntityProps, Задача 12), вход attach_*-тула собирает aspectToolJsonSchema
+         -- (tools/registry.ts) — тоже из снимка, ручка aspect.list снята гейт-ревью Задачи
+         -- 14, а loadAspectToolRows колонку SELECT-ит, но её значение не читает никто.
+         -- Пишется она здесь потому, что колонка NOT NULL и живёт до 0017; снимает её
+         -- Задача 23 вместе со старым путём валидации.
          ${sql.json(j(legacyAspectJsonSchema(a.id as AspectId)))},
          ${a.aiInstructions}, ${a.tagMappings}, ${sql.json(j(a.viewConfig))},
          ${a.module}, ${a.service}, ${a.rank})

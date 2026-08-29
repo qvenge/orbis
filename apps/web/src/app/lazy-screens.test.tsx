@@ -162,7 +162,6 @@ const detailEntity = wireEntity({
 const detailHandler: MockHandler = (path) => {
   if (path === 'entity.get')
     return { entity: detailEntity, relations: [], thread: { threadId: 'th1', messages: [] } };
-  if (path === 'aspect.list') return [];
   return {};
 };
 
