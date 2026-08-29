@@ -50,7 +50,8 @@ async function seedEntity(
     title: string;
     emoji?: string;
     archived?: boolean;
-    aspects?: Record<string, Record<string, unknown>>;
+    props?: Record<string, unknown>;
+    aspects?: string[];
   },
 ) {
   const created = await caller.entity.create({
@@ -58,6 +59,7 @@ async function seedEntity(
       title: over.title,
       tags: [],
       ...(over.emoji !== undefined && { emoji: over.emoji }),
+      ...(over.props !== undefined && { props: over.props }),
       ...(over.aspects !== undefined && { aspects: over.aspects }),
     },
     source: 'fast_path',
@@ -137,7 +139,10 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     const caller = callerFor(freshUserId());
     await seedEntity(caller, {
       title: 'Купить хлеб',
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: {
+        'orbis/task_status': 'done',
+      },
+      aspects: ['orbis/task'],
     });
     const got = await caller.entity.suggest({ term: 'куп' });
     expect(titles(got)).toEqual(['Купить хлеб']);
@@ -153,13 +158,16 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     const caller = callerFor(user);
     const e = await seedEntity(caller, {
       title: 'Купить сыр',
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: { 'orbis/task_status': 'done' },
+      aspects: ['orbis/task'],
     });
     expect((await caller.entity.suggest({ term: 'купить сыр' }))[0]?.status).toBe('done');
 
     const detached = await caller.entity.update({
       id: e.id,
-      aspects: { 'orbis/task': null },
+      // Снятие аспекта НОВОЙ формой (§А1-1): значений оно не трогает (Р9) — статус остаётся
+      // на записи, а подсказка перестаёт его показывать, потому что носителя больше нет.
+      aspects: { detach: ['orbis/task'] },
     });
     expect(detached.props['orbis/task_status']).toBe('done');
 
@@ -175,7 +183,10 @@ describe('entity.suggest (§6.1 не трогаем: своя процедура
     const e = await seedEntity(caller, {
       title: 'Купить молоко',
       emoji: '🥛',
-      aspects: { 'orbis/task': { status: 'inbox' } },
+      props: {
+        'orbis/task_status': 'inbox',
+      },
+      aspects: ['orbis/task'],
     });
     expect(await caller.entity.suggest({ term: 'куп' })).toEqual([
       { id: e.id, title: 'Купить молоко', emoji: '🥛', status: 'inbox', archived: false },
@@ -327,7 +338,10 @@ describe('entity.resolveRefs (заголовки чипов одним запр�
     const caller = callerFor(freshUserId());
     const a = await seedEntity(caller, {
       title: 'Сделанная',
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: {
+        'orbis/task_status': 'done',
+      },
+      aspects: ['orbis/task'],
     });
     expect((await caller.entity.resolveRefs({ ids: [a.id] }))[0]?.status).toBe('done');
   });

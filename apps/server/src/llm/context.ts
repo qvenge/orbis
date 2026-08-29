@@ -32,7 +32,9 @@ import type { Tx } from '../db/with-identity';
 import { readEntity } from '../entity-read';
 import type { ActionRecord } from '../executor/types';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
+import { loadRegistry } from '../registry/load';
 import { loadAspectToolRows } from '../tools/registry';
+import { toLlmEntity } from '../wire';
 import { SYSTEM_PROMPT_V4, TOOL_RESULT_MARKER } from './prompts/v4';
 import type { LLMMessage } from './types';
 
@@ -296,11 +298,23 @@ export async function anchorBlock(
     `title: ${flatten(entity.title)}`,
   ];
   if (entity.tags.length > 0) lines.push(`tags: ${entity.tags.map(flatten).join(', ')}`);
-  const aspectIds = Object.keys(entity.aspectsMap);
-  if (aspectIds.length > 0) {
-    // Данные аспектов компактным JSON: статус задачи/суммы и т.п. — рабочий контекст
-    const parts = aspectIds.map((id) => `${id} ${JSON.stringify(entity.aspectsMap[id])}`);
-    lines.push(`аспекты: ${parts.join('; ')}`);
+  /**
+   * Значения — ПЛОСКО и ПО KEY (§А9-2, Р12 «key для машин»), той же проекцией, что печатает
+   * сущность в ответе любого тула (`toLlmEntity`). Прежде здесь стояла старая карта
+   * `{аспект: {поле: значение}}`; она ушла из wire-формы вместе с последним читателем
+   * (Задача 13c), и второй, свой перевод «свойство → имя для модели» здесь означал бы,
+   * что модель читает поле одним именем в якоре и пишет другим в туле.
+   *
+   * Реестр читается прямо здесь, а не приезжает параметром: якорь собирается один раз на
+   * ход разговора (и один раз на прогон рутины), а проносить снимок через две чужих
+   * сигнатуры ради одной строки значило бы связать сборщик контекста с порядком загрузки
+   * реестра у обоих вызывающих.
+   */
+  const llm = toLlmEntity(entity, await loadRegistry(tx, ownerId));
+  if (llm.aspects.length > 0) lines.push(`аспекты: ${llm.aspects.join(', ')}`);
+  if (Object.keys(llm.props).length > 0) {
+    // Компактным JSON: статус задачи, суммы и сроки — рабочий контекст, а не украшение.
+    lines.push(`свойства: ${JSON.stringify(llm.props)}`);
   }
   if (entity.body) {
     lines.push(

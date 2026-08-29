@@ -1,7 +1,11 @@
-// Общий список категорий Budget: запрос §6.1 + маппинг wire-сущности в опцию выбора.
-// Делят QuickAddBar (§3.6: пилюли/полный выбор) и TransactionsScreen (§3.3: фильтр
-// категории + Sheet рекатегоризации) — один запрос, один кэш tRPC.
-import { type RouterOutputs, trpc } from '../../trpc';
+// Список категорий Budget как СМАРТ-ЛИСТ: боевой текст §6.1 + маппинг wire-сущности в
+// опцию показа. Делят экраны, которым нужны НАЗВАНИЯ категорий рядом со строками, —
+// пилюли быстрой записи (§3.6), фильтр и бейджи «Транзакций» (§3.3), перенос остатков,
+// сверка импорта. ВЫБОР категории живёт не здесь: пикер один на все ссылочные свойства
+// (`lib/entity-ref/RefField.tsx`, §А6-1) и берёт множество из реестра, а не из текста.
+import { useRefTitle } from '../../lib/entity-ref/RefField';
+import { useRegistry } from '../../lib/registry/useRegistry';
+import type { RouterOutputs } from '../../trpc';
 
 type QueryEntity = RouterOutputs['entity']['query'][number];
 
@@ -10,65 +14,47 @@ type QueryEntity = RouterOutputs['entity']['query'][number];
 // «слово грамматики» — переименованием полей аспекта такой адрес не чинится.
 export const CATEGORIES_QUERY = 'aspect=orbis/category, sortBy=orbis/title:asc, limit=200';
 
+/** Свойство-ссылка на категорию (§А8, В1: одно на операцию и на конверт). */
+export const FINANCE_CATEGORY = 'orbis/finance_category';
+
 export type CategoryOption = {
   id: string;
   title: string;
   icon: string | null;
-  /** `orbis/category.color` (#RRGGBB, §3.6 реестра) — подсветка бейджа §3.3. */
+  /** `orbis/color` (#RRGGBB, §А8) — подсветка бейджа §3.3. */
   color: string | null;
 };
 
 /**
  * Название категории по её id (D6c п.2): поверхности, где раньше печатался сырой
- * category_ref (шапка detail, сетка полей карточки чата). Источник — ТОТ ЖЕ запрос и
- * тот же кэш, что у пикера категории (CATEGORIES_QUERY): второго источника категорий
- * в приложении нет.
+ * `category_ref` (шапка detail, сетка полей карточки чата).
  *
- * Ссылка в неизвестную категорию → возвращается сам ref: uuid — запасной вариант,
- * а не пустое место, иначе значение поля молча исчезало бы.
+ * Своей реализации у неё БОЛЬШЕ НЕТ: это `useRefTitle` по свойству `orbis/finance_category`,
+ * то есть тот же список, что показывает пикер (§А6-1) — и потому одно название у поля, у
+ * бейджа и у выбора. Обёртка оставлена ради двух вызывающих (`NativeRow`, `EntityCard`):
+ * им нужна ровно категория, и знать про реестр им незачем.
  *
- * `isPending` (D6d п.1) отличает «ещё грузится» от «не найдена»: на холодном кэше
- * (вход в detail из Chat/Browser) список категорий доезжает за ~200 мс, и без этого
- * признака запасной uuid успевал мелькнуть и подмениться названием. Потребитель обязан
- * НЕ рисовать бейдж/строку поля, пока `isPending`.
- *
- * `isError` (уборочная фаза) — третье состояние: список НЕ доехал вовсе (сеть или
- * BAD_REQUEST парсера запроса на непересеянном реестре аспектов). Названия у нас нет и
- * не будет, поэтому печатать uuid — та же ложь, что мелькающий uuid на загрузке; условие
- * `!found` обязательно: TanStack v5 сохраняет прежние data при отказе РЕФЕТЧА, и на уже
- * известном списке правда — «название есть», а не «ошибка».
+ * Три состояния (`isPending`/`isError`) и правило запасного uuid — у `useRefTitle`.
  */
 export function useCategoryTitle(categoryRef: string): {
   title: string;
   isPending: boolean;
   isError: boolean;
 } {
-  // enabled: непустой ref — с нефинансовых сущностей запрос категорий не уходит вовсе
-  // (та же бережливость, что у пикера AspectCards, смонтированного только на financial).
-  const q = trpc.entity.query.useQuery(
-    { query: CATEGORIES_QUERY },
-    { enabled: categoryRef !== '' },
-  );
-  // Array.isArray — та же защита от неожиданной формы ответа, что в TransactionsScreen.
-  const found = (Array.isArray(q.data) ? q.data : []).find((e) => e.id === categoryRef);
-  return {
-    title: found?.title ?? categoryRef,
-    // Отключённый запрос (пустой ref) у TanStack Query тоже в статусе pending — но там и
-    // показывать нечего, поэтому загрузкой считается только непустой ref. Ошибка чтения
-    // pending снимает — она отдельное состояние ниже.
-    isPending: categoryRef !== '' && q.isPending && !q.isError,
-    isError: categoryRef !== '' && q.isError && found === undefined,
-  };
+  const registry = useRegistry();
+  return useRefTitle(registry.property(FINANCE_CATEGORY), categoryRef);
 }
 
 export function toOption(e: QueryEntity): CategoryOption {
-  const cat = (e.aspectsMap as Record<string, { icon?: unknown; color?: unknown } | undefined>)[
-    'orbis/category'
-  ];
+  // Значения — плоско по id свойства (§А1-1). Признак носителя (`aspects`) здесь НЕ
+  // спрашивается намеренно: `orbis/icon` и `orbis/color` остаются на записи и после снятия
+  // аспекта «Категория» (Р9), а пикер рисует то, что у записи есть.
+  const icon = e.props['orbis/icon'];
+  const color = e.props['orbis/color'];
   return {
     id: e.id,
     title: e.title,
-    icon: typeof cat?.icon === 'string' && cat.icon !== '' ? cat.icon : null,
-    color: typeof cat?.color === 'string' && cat.color !== '' ? cat.color : null,
+    icon: typeof icon === 'string' && icon !== '' ? icon : null,
+    color: typeof color === 'string' && color !== '' ? color : null,
   };
 }

@@ -16,23 +16,28 @@
 // это честная ошибка с перегенерацией id, а НЕ успех.
 import {
   type CsvMapping,
+  effectiveLabel,
   type ImportConfirmItem,
   type ImportConfirmResult,
   type ImportReviewRow,
   MAX_IMPORT_ROWS,
   newId,
+  OWNER_LOCALE,
 } from '@orbis/shared';
 import { TRPCClientError } from '@trpc/client';
 import { useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
+import { useRefOptions } from '../../lib/entity-ref/RefField';
 import { invalidateGraph } from '../../lib/invalidate';
+import { fieldLabel } from '../../lib/registry/labels';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import { closeToBudgetOverview, useNav } from '../../state/navigation';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
-import { CATEGORIES_QUERY, toOption } from '../budget/categories';
+import { FINANCE_CATEGORY, toOption } from '../budget/categories';
 import { invalidateBudget } from '../budget/useBudget';
 import {
   decodeCsvBytes,
@@ -41,6 +46,7 @@ import {
   parseCsv,
   toCanonicalRows,
 } from './csv-parse';
+import { AMOUNT, BANK_TXN_ID, COUNTERPARTY, DIRECTION, OCCURRED_ON } from './money-movement';
 import { csvNamespace } from './namespace';
 import { ReviewTable } from './ReviewTable';
 
@@ -460,10 +466,32 @@ function MappingForm({
   onChange: (draft: MappingDraft) => void;
   onSubmit: () => void;
 }) {
+  const registry = useRegistry();
   const options = Array.from({ length: columns }, (_, i) => {
     const name = (header[i] ?? '').trim();
     return { value: i, label: name === '' ? `Колонка ${i + 1}` : `${i + 1} · ${name}` };
   });
+
+  /**
+   * Колонки выписки называются ТЕМИ ЖЕ ИМЕНАМИ, что и поля, в которые они лягут (§А9-2):
+   * подпись берётся из реестра по id свойства money-movement (`orbis/occurred_on`,
+   * `orbis/counterparty`, `orbis/amount`, `orbis/bank_txn_id`), а «расход»/«приход» — из
+   * ВАРИАНТОВ свойства `orbis/direction`.
+   *
+   * До этой правки все шесть слов были вписаны в код формы, и переименование поля
+   * владельцем (§А10-2 — бесплатная операция) разводило имя колонки в импорте с именем
+   * того же поля на карточке записи: одна и та же величина звалась бы по-разному в двух
+   * местах приложения.
+   */
+  const column = (propertyId: string) => `Колонка «${fieldLabel(registry, propertyId)}»`;
+  const directionLabel = (key: string) => {
+    const def = registry.property(DIRECTION);
+    const option =
+      def?.type.kind === 'select' ? def.type.options.find((o) => o.key === key) : undefined;
+    // Промах — сам key: реестр ещё едет либо вариант снят. Показать машинное имя честнее,
+    // чем выдуманное здесь слово (то же правило, что у `fieldLabel`).
+    return option === undefined ? key : effectiveLabel(option.label, OWNER_LOCALE);
+  };
 
   const columnSelect = (
     label: string,
@@ -498,7 +526,7 @@ function MappingForm({
       )}
       <Card className="flex flex-col gap-2">
         <p className="text-sm text-text-secondary">Проверьте, как разложены колонки выписки.</p>
-        {columnSelect('Колонка даты', draft.date, (i) => onChange({ ...draft, date: i ?? 0 }))}
+        {columnSelect(column(OCCURRED_ON), draft.date, (i) => onChange({ ...draft, date: i ?? 0 }))}
         <label className="flex items-center gap-2 text-sm">
           <span className="w-44 shrink-0 text-text-secondary">Формат даты</span>
           <select
@@ -516,7 +544,7 @@ function MappingForm({
             ))}
           </select>
         </label>
-        {columnSelect('Колонка контрагента', draft.counterparty, (i) =>
+        {columnSelect(column(COUNTERPARTY), draft.counterparty, (i) =>
           onChange({ ...draft, counterparty: i ?? 0 }),
         )}
         <label className="flex items-center gap-2 text-sm">
@@ -530,23 +558,26 @@ function MappingForm({
             className={FIELD_CLS}
           >
             <option value="sign">одна колонка со знаком</option>
-            <option value="separate_columns">раздельные расход и приход</option>
+            <option value="separate_columns">
+              раздельные {directionLabel('expense').toLowerCase()} и{' '}
+              {directionLabel('income').toLowerCase()}
+            </option>
           </select>
         </label>
         {draft.direction === 'sign' ? (
-          columnSelect('Колонка суммы', draft.amount, (i) => onChange({ ...draft, amount: i ?? 0 }))
+          columnSelect(column(AMOUNT), draft.amount, (i) => onChange({ ...draft, amount: i ?? 0 }))
         ) : (
           <>
-            {columnSelect('Колонка расхода', draft.debit, (i) =>
+            {columnSelect(`Колонка «${directionLabel('expense')}»`, draft.debit, (i) =>
               onChange({ ...draft, debit: i ?? 0 }),
             )}
-            {columnSelect('Колонка прихода', draft.credit, (i) =>
+            {columnSelect(`Колонка «${directionLabel('income')}»`, draft.credit, (i) =>
               onChange({ ...draft, credit: i ?? 0 }),
             )}
           </>
         )}
         {columnSelect(
-          'Колонка ID операции банка',
+          column(BANK_TXN_ID),
           draft.bankTxnId,
           (i) => onChange({ ...draft, bankTxnId: i }),
           true,
@@ -639,10 +670,12 @@ function ResultCard({
   result: ImportConfirmResult;
   alreadyImported: number;
 }) {
-  const categoriesQ = trpc.entity.query.useQuery({ query: CATEGORIES_QUERY });
-  const byId = new Map(
-    (Array.isArray(categoriesQ.data) ? categoriesQ.data : []).map(toOption).map((c) => [c.id, c]),
-  );
+  // Тот же список, что показывает пикер строки сверки (`RefField` по цели свойства из
+  // реестра, §А6-1), и тот же ключ кеша: к пятому шагу он уже прогрет третьим, и лишнего
+  // запроса за теми же категориями не уходит.
+  const registry = useRegistry();
+  const { options } = useRefOptions(registry.property(FINANCE_CATEGORY));
+  const byId = new Map(options.map(toOption).map((c) => [c.id, c]));
   // «пропущено» — усыновлённые дубли + строки ⟳, которые в payload не уходили вовсе
   const skipped = result.adopted + alreadyImported;
   const unbudgetedTotal = result.unbudgeted.reduce((sum, u) => sum + u.count, 0);

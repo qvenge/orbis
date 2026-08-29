@@ -247,7 +247,11 @@ describe('import.review: статусы строк (§3.4.1)', () => {
       input: {
         title: 'пятерочка → Еда',
         tags: [],
-        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
+        props: {
+          'orbis/memory_kind': 'rule',
+          'orbis/rule_scope': 'orbis/money-movement',
+        },
+        aspects: ['orbis/memory'],
       },
       source: 'ui',
     });
@@ -272,7 +276,11 @@ describe('import.review: статусы строк (§3.4.1)', () => {
       input: {
         title: 'пятерочка → Еда',
         tags: [],
-        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
+        props: {
+          'orbis/memory_kind': 'rule',
+          'orbis/rule_scope': 'orbis/money-movement',
+        },
+        aspects: ['orbis/memory'],
       },
       source: 'ui',
     });
@@ -333,7 +341,11 @@ describe('import.review: статусы строк (§3.4.1)', () => {
         input: {
           title,
           tags: [],
-          aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
+          props: {
+            'orbis/memory_kind': 'rule',
+            'orbis/rule_scope': 'orbis/money-movement',
+          },
+          aspects: ['orbis/memory'],
         },
         source: 'ui' as const,
       });
@@ -371,7 +383,11 @@ describe('import.review: статусы строк (§3.4.1)', () => {
       input: {
         title: 'кофе → Транспорт',
         tags: [],
-        aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
+        props: {
+          'orbis/memory_kind': 'rule',
+          'orbis/rule_scope': 'orbis/money-movement',
+        },
+        aspects: ['orbis/memory'],
       },
       source: 'ui',
     });
@@ -1542,9 +1558,7 @@ describe('import.confirm: валюта выписки (§5 «Чужая валю
     expect(confirmed.created).toBe(2);
     for (const id of confirmed.entityIds) {
       const e = await caller.entity.get({ id });
-      expect((e.entity.aspectsMap['orbis/financial'] as Record<string, unknown>).currency).toBe(
-        'USD',
-      );
+      expect(e.entity.props['orbis/currency']).toBe('USD');
     }
   });
 
@@ -1559,9 +1573,7 @@ describe('import.confirm: валюта выписки (§5 «Чужая валю
       items: [{ row, action: 'create', categoryRef: foodId }],
     });
     const e = await caller.entity.get({ id: confirmed.entityIds[0] as string });
-    expect(
-      (e.entity.aspectsMap['orbis/financial'] as Record<string, unknown>).currency,
-    ).toBeUndefined();
+    expect(e.entity.props['orbis/currency']).toBeUndefined();
   });
 
   test('валюта участвует в выборе конверта: USD-строка не липнет к рублёвому конверту', async () => {
@@ -1572,15 +1584,14 @@ describe('import.confirm: валюта выписки (§5 «Чужая валю
       input: {
         title: 'Еда — июнь',
         tags: [],
-        aspects: {
-          'orbis/budget': {
-            category_ref: foodId,
-            limit: '30000.00',
-            currency: 'RUB',
-            period_start: '2026-06-01',
-            period_end: '2026-06-30',
-          },
+        props: {
+          'orbis/finance_category': foodId,
+          'orbis/limit': '30000.00',
+          'orbis/currency': 'RUB',
+          'orbis/period_start': '2026-06-01',
+          'orbis/period_end': '2026-06-30',
         },
+        aspects: ['orbis/budget'],
       },
       source: 'ui',
     });

@@ -14,7 +14,7 @@
 //
 // Правки уезжают НОВОЙ формой (§А1-1): значение — `props` по id свойства, снятие — `unset`,
 // снятие аспекта — `aspects.detach`. Старой карты «аспект → поля» этот экран больше не шлёт.
-import type { AspectDefinition, PropertyDefinition } from '@orbis/shared';
+import type { AspectDefinition } from '@orbis/shared';
 import { useState } from 'react';
 import { FIELD_CLASS } from '../../lib/registry/controls';
 import { valueText } from '../../lib/registry/format';
@@ -23,22 +23,10 @@ import { PropertyControl } from '../../lib/registry/PropertyControl';
 import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
-import { CATEGORIES_QUERY, toOption } from '../budget/categories';
 import { invalidateBudget } from '../budget/useBudget';
 import { useEntityUpdate } from './useEntityDetail';
 
 type Entity = RouterOutputs['entity']['get']['entity'];
-
-/**
- * Категория операции — единственное свойство со СВОИМ контролом на этом экране: её выбирают
- * из списка, а не вписывают uuid'ом руками (K6).
- *
- * Это одна из пяти копий пикера ссылки в web, и снимает её Задача 13c — общим `RefField` по
- * `ref.target` из реестра. До неё копия остаётся здесь, а не заменяется чипом только для
- * чтения: смена категории с записи — живой жест владельца, и отнимать его на одну задачу
- * дороже, чем подержать копию.
- */
-const FINANCE_CATEGORY = 'orbis/finance_category';
 
 /**
  * Аспекты, у которых на экране ЕСТЬ СВОЯ карточка (ADE-срез 1): назначение исполнителя
@@ -63,16 +51,38 @@ const HIDDEN_ASPECT_CARDS = new Set(['orbis/assignment', 'orbis/agent-run']);
 const AGGREGATED_MODULE = 'finance';
 
 /**
- * Тронула ли ОТПРАВЛЕННАЯ правка хоть одно свойство модуля с серверными агрегатами.
+ * Тронула ли ОТПРАВЛЕННАЯ правка то, от чего зависят серверные агрегаты.
  *
  * Считается по `vars` мутации, а не по замыканию строки: колбэк исполняется на уровне
  * мутации и переживает размонтирование экрана, а значит обязан решать по тому, ЧТО УЕХАЛО.
  * Снятие (`unset`) двигает агрегаты ровно так же, как запись, — оба списка сюда и входят.
+ *
+ * ЧЛЕНСТВО В АСПЕКТЕ — ВТОРОЙ ВХОД, и его отсутствие было дефектом. Серверные агрегаты
+ * Финансов ключуются не только на значениях, но и на самом факте аспекта
+ * (`budget/aggregates.ts`: `spent` считает записи с `orbis/financial`, привязку к конверту
+ * снимает `unbindOps` на detach). Пока признак считался по одним `props`/`unset`, «Снять
+ * аспект» отвечало `false`: операция выпадала из `spent`, конверт переставал гаситься, а
+ * бейдж вкладки жил неверным до перезагрузки страницы — наблюдатель `useBudgetAlertCount`
+ * смонтирован в оболочке приложения и сам не протухает.
+ *
+ * Правка аспекта гасит агрегаты ВСЕГДА, каким бы аспект ни был, и это не перестраховка:
+ * зависимость живёт на СЕРВЕРЕ, а не в реестре. `orbis/schedule` не объявляет ни одного
+ * свойства модуля Финансов — и всё же его `orbis/recurrence` превращает операцию в шаблон,
+ * который `spent` не считает. Правило «по модулю свойств аспекта» пропустило бы ровно этот
+ * случай, а список аспектов-исключений в коде разъехался бы с сервером при первом же новом
+ * агрегате. Цена ошибки в другую сторону — один лишний `budget.invalidate()` на редкий
+ * осознанный жест.
  */
 function touchesAggregatedModule(
   reg: RegistryLookup,
-  vars: { props?: Record<string, unknown>; unset?: string[] },
+  vars: {
+    props?: Record<string, unknown>;
+    unset?: string[];
+    aspects?: { attach?: string[]; detach?: string[] };
+  },
 ): boolean {
+  const aspects = vars.aspects;
+  if ((aspects?.attach?.length ?? 0) > 0 || (aspects?.detach?.length ?? 0) > 0) return true;
   const touched = [...Object.keys(vars.props ?? {}), ...(vars.unset ?? [])];
   return touched.some((propertyId) => reg.property(propertyId)?.module === AGGREGATED_MODULE);
 }
@@ -246,89 +256,14 @@ function PropertyRow({
           >
             {valueText(value)}
           </span>
-        ) : propertyId === FINANCE_CATEGORY ? (
-          <CategoryField
-            def={def}
-            registry={registry}
-            value={typeof value === 'string' ? value : ''}
-            onSelect={onChange}
-          />
         ) : (
+          // Контрол ОДИН на все типы, включая `ref`: пикер категории (K6) переехал в общий
+          // `RefField` по цели свойства из реестра (§А6-1) вместе с четырьмя своими копиями
+          // на экранах Финансов и импорта.
           <PropertyControl def={def} value={value} onChange={onChange} />
         )}
       </dd>
     </>
-  );
-}
-
-/**
- * Пикер категории для `orbis/finance_category` (K6): показывает НАЗВАНИЯ категорий, а не
- * идентификатор. Список — тот же запрос и тот же кэш, что у экранов Budget. Смонтирован
- * только там, где свойство есть в составе аспекта, поэтому запрос категорий не уходит с
- * каждого detail-экрана.
- *
- * Пятая копия пикера ссылки; общий `RefField` по `ref.target` — Задача 13c (см. шапку файла).
- */
-function CategoryField({
-  def,
-  registry,
-  value,
-  onSelect,
-}: {
-  def: PropertyDefinition;
-  registry: RegistryLookup;
-  value: string;
-  onSelect: (id: string) => void;
-}) {
-  const q = trpc.entity.query.useQuery({ query: CATEGORIES_QUERY });
-  // Array.isArray — та же защита, что в TransactionsScreen: карточка живёт на общем
-  // detail-экране, и неожиданная форма ответа не должна ронять всю страницу.
-  const categories = (Array.isArray(q.data) ? q.data : []).map(toOption);
-  const known = categories.some((c) => c.id === value);
-
-  return (
-    <select
-      // Имя контрола — ПОДПИСЬ свойства из реестра, как у всех прочих строк формы: пара
-      // машинных адресов («orbis/financial category_ref»), стоявшая здесь раньше,
-      // прочитывалась скринридером именно так, как написана.
-      aria-label={fieldLabel(registry, def.id)}
-      data-testid={`prop-${def.id}`}
-      data-kind="ref"
-      value={value}
-      onChange={(e) => {
-        if (e.target.value !== value) onSelect(e.target.value);
-      }}
-      className={FIELD_CLASS}
-    >
-      {/* Своя опция под текущее значение, пока список грузится или ссылка ведёт
-          в архивную/удалённую категорию: иначе select показал бы пустоту и первым
-          же изменением молча переставил категорию.
-          Порядок веток (D5d п.5):
-          1) пустой category_ref — свойство САМОЙ транзакции, а не беда со списком:
-             «Без категории» обязано пережить и отказ, и загрузку;
-          2) отказ показываем, только если данных нет вовсе: v5 сохраняет data при
-             ошибке рефетча, и на известном списке правда — «ссылка ведёт в никуда»
-             (приём RolloverScreen: isError отдельно от пустоты);
-          3) isPending, а не isLoading: офлайн-пауза (fetchStatus:'paused') даёт
-             isLoading===false, и подпись срывалась в «не найдена» на целой записи. */}
-      {!known && (
-        <option value={value}>
-          {value === ''
-            ? 'Без категории'
-            : q.isError && categories.length === 0
-              ? 'Не удалось загрузить категории'
-              : q.isPending
-                ? 'Загрузка…'
-                : 'Категория не найдена'}
-        </option>
-      )}
-      {categories.map((c) => (
-        <option key={c.id} value={c.id}>
-          {c.icon ? `${c.icon} ` : ''}
-          {c.title}
-        </option>
-      ))}
-    </select>
   );
 }
 

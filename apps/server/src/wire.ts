@@ -38,12 +38,9 @@ export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity
     ...(includeBodyDoc ? { bodyDoc: (row.bodyDoc ?? null) as WireEntity['bodyDoc'] } : {}),
     bodyRefs: row.bodyRefs,
     tags: row.tags,
-    meta: row.meta as Record<string, unknown>, // jsonb — как есть, не трогаем
     props: row.props as Record<string, unknown>,
     aspects: row.aspects,
     queryRefs: row.queryRefs,
-    // Старая карта наружу под новым именем: имя `aspects` заняла новая правда (§А1-1).
-    aspectsMap: row.aspectsLegacy as Record<string, Record<string, unknown>>,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     archived: row.archived,
@@ -57,16 +54,13 @@ export function toWireEntity(row: EntityRow, includeBodyDoc = false): WireEntity
  *  - `props` адресованы **key** свойства, а не id. Модель обязана писать тем же именем,
  *    которым читала (`props` тулов, `unset`, `entity_query`), а id ПОЛЬЗОВАТЕЛЬСКОГО
  *    свойства — uuid, и до модели он доезжать не должен;
- *  - `meta` нет вовсе: мешок снят (§А1-3), и печатать пустой объект значило бы обещать
- *    модели место, куда можно писать мимо реестра;
- *  - старой карты аспектов (`aspectsMap`) нет: аспект перестал быть владельцем полей (Р5),
- *    и вторая, вложенная копия тех же значений учила бы модель адресовать поле парой
- *    «аспект + имя» — формой, которой в реестре свойств нет;
  *  - `ownerId` и `queryRefs` не едут: первое модель знает по построению (это владелец
  *    вызова), второе — служебный индекс ссылок тела, читателя у него в чате нет.
  *
- * Внутренний wire (`toWireEntity`) остаётся по id и с картой: web строит формы и контролы
- * по реестру и адресует значения id (§А9-2, асимметрия названа спекой).
+ * Внутренний wire (`toWireEntity`) остаётся по id: web строит формы и контролы по реестру
+ * и адресует значения id (§А9-2, асимметрия названа спекой). Мешка `meta` и старой карты
+ * аспектов нет НИ В ОДНОЙ из двух проекций — обе сняты Задачей 13c вместе с последними
+ * читателями; разница между проекциями теперь ровно одна: адрес значения (key против id).
  *
  * Свойство, которого нет в снимке, печатается ПОД СВОИМ id: значение существует, и молча
  * потерять его хуже, чем показать машинным адресом. Такое бывает ровно у следа переезда —
@@ -136,16 +130,13 @@ export function toWireEntityFromSql(row: Record<string, unknown>): WireEntity {
       body: row.body,
       bodyRefs: row.body_refs,
       tags: row.tags,
-      meta: row.meta,
-      // Новая правда (§А1-1) и старая карта — обе из выдачи и обе под своими именами:
-      // алиас `aspects_legacy AS aspects` снят вместе с появлением писателя `props`
-      // (см. ENTITY_COLUMNS). Пока колонок здесь не было, списочные пути отдавали пустую
+      // Только НОВАЯ правда (§А1-1): списочное чтение обязано нести ровно тот же состав,
+      // что и одиночное. Пока этих колонок здесь не было, списочные пути отдавали пустую
       // новую форму при том, что одиночное чтение отдавало правду, — и ни один тест этого
       // не пиннил.
       props: row.props,
       aspects: row.aspects,
       queryRefs: row.query_refs,
-      aspectsLegacy: row.aspects_legacy,
       createdAt: toDate(row.created_at),
       updatedAt: toDate(row.updated_at),
       archived: row.archived,

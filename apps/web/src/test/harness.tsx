@@ -1,5 +1,4 @@
 import type { AppRouter } from '@orbis/server/src/router';
-import { BUILTIN_ASPECT_DEFS, propertyToLegacyField } from '@orbis/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { type RenderResult, render } from '@testing-library/react';
 import { TRPCClientError, type TRPCLink } from '@trpc/client';
@@ -150,10 +149,11 @@ export function renderWithProviders(
  * (`toWireEntity(row, includeBodyDoc)`), то есть в ответе `entity.get` детали — и нигде
  * больше. Сьют, которому документ нужен, дописывает его сам.
  *
- * `meta` фабрика кладёт пустым: мешок снят §А1-3 и в web его не читает ни один модуль, но из
- * wire-формы его убирает только Задача 13c — а до тех пор `WireEntity` его ТРЕБУЕТ, и фикстура
- * без него не подставилась бы в проп компонента. Дом у этого ключа теперь ровно один, и
- * умирает он одной правкой.
+ * Мешка `meta` и старой карты `aspectsMap` здесь БОЛЬШЕ НЕТ: Задача 13c сняла обе из
+ * wire-формы вместе с последними читателями (§А1-3, §А1-1). Фикстура, которая их пишет,
+ * теперь описывает форму, которой производитель не отдаёт, — и ловит это страж
+ * `test/fixtures.test.ts` по исходнику, а не тип: лишний ключ в объектном литерале tsc
+ * отвергает, но `...over` и `as` его проносят молча.
  */
 export interface WireEntityFixture {
   id: string;
@@ -174,58 +174,17 @@ export interface WireEntityFixture {
   /** Новая правда §А1-1: аспекты — список навешенного, без полей. */
   aspects: string[];
   queryRefs: string[];
-  /** Мешок §А1-3: снят по смыслу, из wire уходит Задачей 13c (см. шапку). */
-  meta: Record<string, unknown>;
-  /** Старая карта — ПРОЕКЦИЯ `props`+`aspects` (см. `legacyAspectsOf`), до Задачи 13c. */
-  aspectsMap: Record<string, Record<string, unknown>>;
   createdAt: string;
   updatedAt: string;
   archived: boolean;
 }
 
 /**
- * Старая карта аспектов из новой правды: обход по АСПЕКТАМ сущности, имя поля — по
- * переходной таблице §А8 (`propertyToLegacyField`), аспект без единого значения остаётся
- * пустым ключом («аспект приложен» — факт).
- *
- * Считается, а не пишется руками, ровно потому, что рукописная вторая форма и есть тот
- * дефект, который эта фабрика закрывает: разъехавшись, `props` и карта дали бы сьют, где
- * один экран видит значение, а соседний — нет.
- *
- * Это ПОДМНОЖЕСТВО серверной проекции (`executor/legacy-form.ts`, `projectLegacyAspects`), а
- * не она сама, и три расхождения названы вслух — иначе первая же фикстура за их границей
- * молча разошлась бы с продуктом:
- *  1. свойство БЕЗ пары в §А8 сервер всё равно кладёт в карту, под локальной частью своего
- *     key (`legacyFieldOfProperty`: так заводит поле конструктор аспекта владельца), а
- *     здесь оно просто выбрасывается;
- *  2. сервер разворачивает формы значений обратно (`untranslateLegacyValue`: обёртка
- *     `{query: {text}}` у `orbis/progress_source` снимается), здесь значение едет как есть;
- *  3. сервер идёт по ЖИВОМУ снимку реестра, здесь — по `BUILTIN_ASPECT_DEFS`.
- * Сегодня ни одно из трёх не наблюдаемо: в сьютах web только встроенные аспекты, а
- * `orbis/progress_source` во всех фикстурах уже в форме Q-AST (разворот — no-op). Вся карта
- * уходит из wire Задачей 13c вместе с этой функцией.
- */
-function legacyAspectsOf(
-  props: Record<string, unknown>,
-  aspects: string[],
-): Record<string, Record<string, unknown>> {
-  const out: Record<string, Record<string, unknown>> = {};
-  for (const aspectId of aspects) {
-    const fields: Record<string, unknown> = {};
-    const def = BUILTIN_ASPECT_DEFS.find((a) => a.id === aspectId);
-    for (const ref of def?.properties ?? []) {
-      if (!Object.hasOwn(props, ref.propertyId)) continue;
-      const field = propertyToLegacyField(ref.propertyId, aspectId);
-      if (field !== undefined) fields[field] = props[ref.propertyId];
-    }
-    out[aspectId] = fields;
-  }
-  return out;
-}
-
-/**
  * Фикстура сущности: обязательны `id` и `title` (без них строка не бывает), остальное —
- * умолчания производителя. `aspectsMap` подставляется проекцией и переопределять её незачем.
+ * умолчания производителя.
+ *
+ * `props` и `aspects` разложены ПОСЛЕ `...over` намеренно: они обязаны быть в объекте
+ * всегда, даже когда вызывающий их не назвал, — читатель падал бы на `undefined.includes`.
  */
 export function wireEntity(
   over: Partial<WireEntityFixture> & { id: string; title: string },
@@ -239,13 +198,11 @@ export function wireEntity(
     bodyRefs: [],
     tags: [],
     queryRefs: [],
-    meta: {},
     createdAt: '2026-07-05T00:00:00.000Z',
     updatedAt: '2026-07-05T10:00:00.000Z',
     archived: false,
     ...over,
     props,
     aspects,
-    aspectsMap: over.aspectsMap ?? legacyAspectsOf(props, aspects),
   };
 }

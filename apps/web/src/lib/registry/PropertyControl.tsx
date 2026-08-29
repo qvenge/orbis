@@ -14,6 +14,7 @@
 import { effectiveLabel, OWNER_LOCALE, type PropertyDefinition } from '@orbis/shared';
 import { useState } from 'react';
 import { EntityRef } from '../entity-ref/EntityRef';
+import { RefField } from '../entity-ref/RefField';
 import {
   COMPUTED_NOTE,
   type ControlKind,
@@ -48,7 +49,7 @@ export function PropertyControl({
   const label = effectiveLabel(def.label, OWNER_LOCALE);
   const mode = writeModeOf(def);
   const kind = controlKindOf(def);
-  const locked = readOnly || mode !== 'editable' || kind === 'readonly' || kind === 'ref';
+  const locked = readOnly || mode !== 'editable' || kind === 'readonly';
 
   if (locked) {
     return (
@@ -73,6 +74,15 @@ export function PropertyControl({
     );
   }
 
+  /**
+   * Ссылка правится ПИКАЛКОЙ по цели свойства (§А6-1, ref Р6) — той же, что стоит в формах
+   * Финансов и в сверке импорта. До Задачи 13c `ref` попадал в ветку `locked` выше: цель
+   * жила только в реестре, а спросить у неё список было нечем, и владелец видел ссылку, но
+   * не мог её сменить. ЧИТАЕТСЯ она по-прежнему чипом (`EntityRef`) — в ветке `locked`:
+   * `orbis/parent_project` и `orbis/root_project` считает правило (`model_writable: false`),
+   * и пикер у них означал бы обещание правки, которую сервер отвергнет.
+   */
+  if (kind === 'ref') return <RefField def={def} label={label} value={value} onChange={onChange} />;
   if (kind === 'boolean')
     return <BooleanControl def={def} label={label} value={value} onChange={onChange} />;
   if (kind === 'select')

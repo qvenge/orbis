@@ -4,38 +4,30 @@
 // полный выбор раскрытием, title опционален (пусто → «<категория> <сумма>»),
 // client-UUIDv7 один раз на открытие формы (повтор после ошибки шлёт тот же id),
 // успех → карточка-результат с остатком конверта и Undo (actionId из ответа create).
-import { legacyAspectsToProps } from '@orbis/shared';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { beforeEach, expect, test } from 'vitest';
 import { useNav } from '../../state/navigation';
-import {
-  type MockHandler,
-  renderWithProviders,
-  trpcError,
-  wireEntity as wireFixture,
-} from '../../test/harness';
+import { type MockHandler, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { registryReply } from '../../test/registry';
+import { trpc } from '../../trpc';
 import { QuickAddBar } from './QuickAddBar';
 
 // --- фикстуры -------------------------------------------------------------------------
 
 /**
- * Строка выдачи в ОБЕИХ формах сразу: `props`+`aspects` (§А1-1) и старая карта — проекция
- * той же пары (`wireEntity`). Аргументом остаётся карта, потому что экраны Финансов читают
- * её до Задачи 13c; `props` из неё выводит ТА ЖЕ таблица §А8, которой перевод делает сервер
- * (`legacyAspectsToProps`), — второго списка соответствий здесь не заводится, и разъехаться
- * двум формам негде.
+ * Строка выдачи в форме ПРОИЗВОДИТЕЛЯ (§А1-1): значения плоско по id свойства, аспекты —
+ * списком навешенного. Старой карты «аспект → поля» в wire-форме больше нет (Задача 13c).
  */
-const ent = (id: string, title: string, aspects: Record<string, unknown> = {}) => {
-  const translated = legacyAspectsToProps(aspects as Record<string, Record<string, unknown>>);
-  return wireFixture({
-    ...{ id, title },
-    props: translated.ok ? translated.props : {},
-    aspects: Object.keys(aspects),
-  });
-};
+const ent = (
+  id: string,
+  title: string,
+  props: Record<string, unknown> = {},
+  aspects: string[] = [],
+) => wireEntity({ id, title, props, aspects });
 
 const cat = (id: string, title: string, icon: string | null = null) =>
-  ent(id, title, { 'orbis/category': icon ? { icon } : {} });
+  ent(id, title, icon ? { 'orbis/icon': icon } : {}, ['orbis/category']);
 
 const categories = [
   cat('cat-1', 'Еда', '🍔'),
@@ -47,14 +39,17 @@ const categories = [
 ];
 
 const tx = (id: string, categoryRef: string) =>
-  ent(id, `tx-${id}`, {
-    'orbis/financial': {
-      amount: '100.00',
-      direction: 'expense',
-      occurred_on: '2026-07-20',
-      category_ref: categoryRef,
+  ent(
+    id,
+    `tx-${id}`,
+    {
+      'orbis/amount': '100.00',
+      'orbis/direction': 'expense',
+      'orbis/occurred_on': '2026-07-20',
+      'orbis/finance_category': categoryRef,
     },
-  });
+    ['orbis/financial'],
+  );
 
 // Последние 20 транзакций: уникальные category_ref по порядку —
 // cat-2, cat-1, cat-3, cat-4, cat-5, cat-6 → пилюли берут первые 5 (без «Прочее»).
@@ -78,15 +73,18 @@ const settings = {
 };
 
 const envelopeStatus = {
-  envelope: ent('env-1', 'Конверт «Еда» 2026-07', {
-    'orbis/budget': {
-      category_ref: 'cat-1',
-      limit: '30000.00',
-      currency: 'RUB',
-      period_start: '2026-07-01',
-      period_end: '2026-07-31',
+  envelope: ent(
+    'env-1',
+    'Конверт «Еда» 2026-07',
+    {
+      'orbis/finance_category': 'cat-1',
+      'orbis/limit': '30000.00',
+      'orbis/currency': 'RUB',
+      'orbis/period_start': '2026-07-01',
+      'orbis/period_end': '2026-07-31',
     },
-  }),
+    ['orbis/budget'],
+  ),
   category: { id: 'cat-1', title: 'Еда', icon: '🍔', color: null },
   spent: '21600.00',
   effectiveLimit: '30000.00',
@@ -103,20 +101,27 @@ const okCreate: CreateBehavior = (input) => {
 };
 
 const handler =
-  (over: { create?: CreateBehavior; envelope?: unknown } = {}): MockHandler =>
+  (over: { create?: CreateBehavior; envelope?: unknown; undo?: () => unknown } = {}): MockHandler =>
   (path, input) => {
     if (path === 'user.getSettings') return settings;
     if (path === 'entity.query') {
-      const q = (input as { query: string }).query;
-      if (q.includes('orbis/category')) return categories;
-      if (q.includes('orbis/financial')) return recent;
+      // Три вопроса, две формы входа: список НЕДАВНИХ операций и список категорий для
+      // ПИЛЮЛЬ — боевые тексты смарт-листов, множество ПИКЕРА — Q-AST цели свойства из
+      // реестра (§А6-1). Формы разные, и подменять одну другой нельзя: пикер получил бы
+      // список операций.
+      const { query, ast } = input as { query?: string; ast?: { filter?: { aspect?: string } } };
+      if (ast?.filter?.aspect === 'orbis/category') return categories;
+      if (query?.includes('orbis/category')) return categories;
+      if (query?.includes('orbis/financial')) return recent;
       return [];
     }
     if (path === 'entity.create') return (over.create ?? okCreate)(input);
     if (path === 'budget.envelopeForCategory')
       return over.envelope === undefined ? envelopeStatus : over.envelope;
-    if (path === 'ai.undo') return { ok: true, actionId: 'act-1', results: [] };
-    return {};
+    if (path === 'ai.undo')
+      return over.undo ? over.undo() : { ok: true, actionId: 'act-1', results: [] };
+    // Реестр НАСТОЯЩИЙ: по нему пикер узнаёт цель свойства `orbis/finance_category`.
+    return registryReply(path) ?? {};
   };
 
 beforeEach(() => {
@@ -134,8 +139,17 @@ function createCalls(calls: { path: string; input: unknown }[]) {
     .map((c) => c.input as { input: Record<string, unknown>; source: string });
 }
 
-function finOf(call: { input: Record<string, unknown> }) {
-  return (call.input.aspects as Record<string, Record<string, unknown>>)['orbis/financial'];
+/**
+ * Свойства отправки — плоско по id (§А1-1). Читаются они здесь ТЕМ ЖЕ адресом, каким их
+ * пишет форма: старой карты «аспект → поля» отправитель больше не знает.
+ */
+function propsOf(call: { input: Record<string, unknown> }) {
+  return call.input.props as Record<string, unknown>;
+}
+
+/** Аспекты отправки — СПИСОК навешиваемого (§А1-1). */
+function aspectsOf(call: { input: Record<string, unknown> }) {
+  return call.input.aspects as string[] | undefined;
 }
 
 async function submitAmount(amount: string, pill?: string | RegExp) {
@@ -183,14 +197,18 @@ test('ввод «340» + пилюля → entity.create: amount "340.00", expens
   if (!call) throw new Error('нет вызова create');
   expect(call.source).toBe('quick_capture');
   expect(typeof call.input.id).toBe('string'); // client-UUID
-  const fin = finOf(call);
-  expect(fin).toMatchObject({
-    amount: '340.00',
-    direction: 'expense',
-    currency: 'RUB',
-    category_ref: 'cat-1',
+  const props = propsOf(call);
+  expect(props).toMatchObject({
+    'orbis/amount': '340.00',
+    'orbis/direction': 'expense',
+    'orbis/currency': 'RUB',
+    'orbis/finance_category': 'cat-1',
   });
-  expect(String(fin?.occurred_on)).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  expect(String(props['orbis/occurred_on'])).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  // ЗАПИСЬ С НУЛЯ: аспект навешивается ЯВНО. Старая карта вешала его самим фактом ключа —
+  // на этой подмене формы отправитель и терял носитель молча (регрессия жеста 13b), а
+  // быстрая запись без `orbis/financial` не попадает ни в список транзакций, ни в spent.
+  expect(aspectsOf(call)).toEqual(['orbis/financial']);
 });
 
 test('переключатель [+доход] → direction income', async () => {
@@ -202,7 +220,7 @@ test('переключатель [+доход] → direction income', async () =
   await submitAmount('150000', /Еда/);
   await waitFor(() => expect(createCalls(calls)).toHaveLength(1));
   const call = createCalls(calls)[0];
-  expect(call && finOf(call)?.direction).toBe('income');
+  expect(call && propsOf(call)['orbis/direction']).toBe('income');
 });
 
 test('запятая = точка: «12,5» → amount "12.50" (decimal-строка, без float)', async () => {
@@ -212,7 +230,7 @@ test('запятая = точка: «12,5» → amount "12.50" (decimal-стро
   await submitAmount('12,5', /Еда/);
   await waitFor(() => expect(createCalls(calls)).toHaveLength(1));
   const call = createCalls(calls)[0];
-  expect(call && finOf(call)?.amount).toBe('12.50');
+  expect(call && propsOf(call)['orbis/amount']).toBe('12.50');
 });
 
 test('невалидная сумма: [Записать] неактивна без суммы/категории', async () => {
@@ -260,14 +278,17 @@ test('«Все категории» раскрывает select со всеми 
 
   expect(screen.queryByLabelText('Категория')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Все категории' }));
-  const select = screen.getByLabelText('Категория');
-  expect(select.querySelectorAll('option')).toHaveLength(categories.length + 1); // + placeholder
+  const select = await screen.findByLabelText('Категория');
+  // + пустой вариант «Не выбрано»: единственный способ снять ссылку из формы.
+  await waitFor(() =>
+    expect(select.querySelectorAll('option')).toHaveLength(categories.length + 1),
+  );
 
   fireEvent.change(select, { target: { value: 'cat-6' } });
   await submitAmount('99');
   await waitFor(() => expect(createCalls(calls)).toHaveLength(1));
   const call = createCalls(calls)[0];
-  expect(call && finOf(call)?.category_ref).toBe('cat-6');
+  expect(call && propsOf(call)['orbis/finance_category']).toBe('cat-6');
 });
 
 // --- идемпотентность (урок бэклога): UUID один раз на открытие формы --------------------
@@ -399,6 +420,74 @@ test('Undo зовёт ai.undo с actionId из ответа create; карточ
   expect(screen.queryByRole('button', { name: 'Отменить' })).toBeNull();
 });
 
+/**
+ * Бар быстрой записи, который можно снять с монтирования, не трогая пробник бюджета.
+ *
+ * Ровно этот сюжет и ломался: [Отменить] → немедленный уход на другую вкладку → роутер
+ * размонтирует Бюджет (рисуется только активная вкладка) → у мутации `ai.undo` не остаётся
+ * живых слушателей, а поштучные колбэки `mutate` `@tanstack/query-core` при этом НЕ зовёт
+ * (`mutationObserver.js:77`). Гашение агрегатов висело именно там, поэтому конверты и бейдж
+ * оставались со СПИСАННОЙ суммой, которой в графе уже нет, — и жили так до перезагрузки:
+ * `useBudgetAlertCount` смонтирован в оболочке приложения и сам не протухает.
+ */
+function BudgetProbe() {
+  const q = trpc.budget.alertCount.useQuery({});
+  return <span data-testid="budget-probe">{String(q.data ?? '')}</span>;
+}
+
+function BarUntilHidden() {
+  const [hidden, setHidden] = useState(false);
+  return (
+    <>
+      <BudgetProbe />
+      <button type="button" data-testid="leave-screen" onClick={() => setHidden(true)}>
+        уйти с экрана
+      </button>
+      {!hidden && <QuickAddBar />}
+    </>
+  );
+}
+
+test('отмена записи гасит агрегаты, даже если экран размонтирован до ответа ai.undo', async () => {
+  // Ответ сервера держим за нитку: отмена обязана уйти, экран — исчезнуть, и только потом
+  // мутация оседает. На поштучном `onSuccess` инвалидации в этот момент уже не случается.
+  let settle: (value: unknown) => void = () => {};
+  const pending = new Promise((resolve) => {
+    settle = resolve;
+  });
+  const { calls } = renderWithProviders(
+    <BarUntilHidden />,
+    handler({ undo: () => pending as unknown }),
+  );
+  const budgetReads = () => calls.filter((c) => c.path === 'budget.alertCount').length;
+  await waitFor(() => expect(budgetReads()).toBe(1));
+  await waitFor(() => expect(screen.getAllByTestId('category-pill').length).toBeGreaterThan(0));
+
+  await submitAmount('340', /Еда/);
+  await screen.findByTestId('quickadd-result');
+  // Успешная запись сама гасит агрегаты — считаем ЭТОТ рубеж, чтобы «перечитали» ниже не
+  // засчитало гашение от создания.
+  await waitFor(() => expect(budgetReads()).toBeGreaterThan(1));
+  const beforeUndo = budgetReads();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Отменить' }));
+  await waitFor(() => expect(calls.some((c) => c.path === 'ai.undo')).toBe(true));
+
+  // Ушли с экрана ДО ответа: бара больше нет, пробник бюджета жив. Размонтирование —
+  // состоянием внутри дерева, а не `rerender` обёртки: тот заменил бы КОРЕНЬ, потеряв
+  // провайдеры tRPC вместе с самим кэшем, за которым проба и следит.
+  fireEvent.click(screen.getByTestId('leave-screen'));
+  expect(screen.queryByTestId('quickadd-bar')).toBeNull();
+
+  await act(async () => {
+    settle({ ok: true, actionId: 'act-1', results: [] });
+    await pending;
+  });
+  // Наблюдаемый след оседания — ПЕРЕЧИТЫВАНИЕ бюджета, а не выдержка по часам: на стенных
+  // часах проба зеленела бы и под сломанным механизмом при достаточно быстром ответе.
+  await waitFor(() => expect(budgetReads()).toBeGreaterThan(beforeUndo));
+});
+
 // --- предзаданная категория (экран категории, §3.2/§3.6) -------------------------------
 
 test('preset: пилюль и запроса недавних нет, category_ref зафиксирован', async () => {
@@ -421,6 +510,6 @@ test('preset: пилюль и запроса недавних нет, category_r
   await submitAmount('340');
   await waitFor(() => expect(createCalls(calls)).toHaveLength(1));
   const call = createCalls(calls)[0];
-  expect(call && finOf(call)?.category_ref).toBe('cat-1');
+  expect(call && propsOf(call)['orbis/finance_category']).toBe('cat-1');
   expect(call?.input.title).toBe('Еда 340');
 });

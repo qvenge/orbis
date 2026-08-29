@@ -15,6 +15,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { BudgetScreen } from '../budget/BudgetScreen';
 import { ImportFlow } from './ImportFlow';
 
@@ -95,7 +96,9 @@ function handler(over: Partial<Record<string, MockHandler>> = {}): MockHandler {
     if (path === 'import.analyze') return { mapping: MAPPING, confidence: 0.9 };
     if (path === 'import.review') return { rows: reviewRows(input) };
     if (path === 'import.confirm') return CONFIRM_RESULT;
-    return {};
+    // Реестр НАСТОЯЩИЙ: по нему подписаны колонки маппинга (§А9-2) и по нему же пикер
+    // категории узнаёт своё множество — ЦЕЛЬ свойства `orbis/finance_category` (§А6-1).
+    return registryReply(path) ?? {};
   };
 }
 
@@ -258,8 +261,8 @@ test('маппинг правится вручную: неверные коло�
   await waitFor(() => expect(screen.getByTestId('import-error')).toBeInTheDocument());
   expect(calls.some((c) => c.path === 'import.review')).toBe(false);
 
-  fireEvent.change(screen.getByLabelText('Колонка контрагента'), { target: { value: '1' } });
-  fireEvent.change(screen.getByLabelText('Колонка суммы'), { target: { value: '2' } });
+  fireEvent.change(screen.getByLabelText('Колонка «Контрагент»'), { target: { value: '1' } });
+  fireEvent.change(screen.getByLabelText('Колонка «Сумма»'), { target: { value: '2' } });
   fireEvent.click(screen.getByTestId('mapping-submit'));
   await waitFor(() => expect(screen.getByTestId('review-counters')).toBeInTheDocument());
   const rows = (calls.find((c) => c.path === 'import.review')?.input as ImportReviewInput).rows;
@@ -296,8 +299,12 @@ test('headerless + неверный AI-маппинг: правка колоно
   pickFile(noHeader);
   await waitFor(() => expect(screen.getByLabelText('Строк заголовка')).toHaveValue(1));
 
-  fireEvent.change(screen.getByLabelText('Колонка контрагента'), { target: { value: '1' } });
-  fireEvent.change(screen.getByLabelText('Колонка суммы'), { target: { value: '2' } });
+  // `find`, а не `get`: подписи колонок — из реестра (§А9-2), и до его ответа форма честно
+  // показывает сырой адрес свойства, а не выдуманное слово.
+  fireEvent.change(await screen.findByLabelText('Колонка «Контрагент»'), {
+    target: { value: '1' },
+  });
+  fireEvent.change(screen.getByLabelText('Колонка «Сумма»'), { target: { value: '2' } });
   fireEvent.click(screen.getByTestId('mapping-submit'));
   await waitFor(() => expect(screen.getByTestId('review-counters')).toBeInTheDocument());
 

@@ -30,12 +30,20 @@ export function QuickCapture({ context }: { context: CaptureContext }) {
     const title = text.trim();
     if (!title || isPending) return;
     const id = newId();
-    const aspects = context.kind === 'root' ? undefined : { 'orbis/task': { status: 'inbox' } };
+    // НОВАЯ форма (§А1-1): статус — плоским свойством, аспект — ЯВНЫМ списком. Старая карта
+    // вешала `orbis/task` самим фактом ключа `status`; без списка запись под родителем
+    // родилась бы не задачей — без чекбокса и мимо Повестки.
+    const subtask = context.kind !== 'root';
     const tags: string[] = [];
     // Ошибка мутации — toast, введённый текст НЕ очищается (ввод не теряется).
     try {
       const ent = await create.mutateAsync({
-        input: { id, title, tags, ...(aspects ? { aspects } : {}) },
+        input: {
+          id,
+          title,
+          tags,
+          ...(subtask ? { props: { 'orbis/task_status': 'inbox' }, aspects: ['orbis/task'] } : {}),
+        },
         source: 'quick_capture',
       });
       if (context.kind === 'entity') {

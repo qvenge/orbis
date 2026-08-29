@@ -15,6 +15,7 @@ import {
   buildFieldCatalog,
   categoryAspectSchema,
   parseQuery,
+  propertyToLegacyField,
   ROLE_DEPENDENCY,
 } from '@orbis/shared';
 import { OWNER_LOCALE, parseQueryAst, toParseRegistry } from '@orbis/shared/query';
@@ -87,6 +88,23 @@ afterAll(async () => {
   await client.end();
 });
 
+/**
+ * Свойства записи под СТАРЫМИ именами полей аспекта — из новой правды (§А1-1). Нужна ровно
+ * там, где проверка идёт схемой аспекта старой формы (`categoryAspectSchema`, Р-24): второй
+ * таблицы соответствий здесь не заводится — имена даёт та же §А8, что и серверу.
+ */
+function legacyFields(
+  row: { props: Record<string, unknown> },
+  aspectId: string,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [propertyId, value] of Object.entries(row.props)) {
+    const field = propertyToLegacyField(propertyId, aspectId);
+    if (field !== undefined) out[field] = value;
+  }
+  return out;
+}
+
 describe('user.seedOnboarding (02 §7): состав и одноразовость', () => {
   test('создаёт ровно 12+6 сущностей, настройки и глобальный тред; повтор → {seeded:false}, count не растёт', async () => {
     const user = freshUserId();
@@ -148,27 +166,23 @@ describe('категории §7.1', () => {
     const rows = await caller.entity.query({ query: 'tags=category, sortBy=created_at:asc' });
     expect(rows.length).toBe(12);
     for (const r of rows) {
-      const cat = r.aspectsMap['orbis/category'];
-      expect(() => categoryAspectSchema.parse(cat)).not.toThrow();
+      // Схема аспекта старой формы (Р-24) говорит СТАРЫМИ именами полей, а строка приезжает
+      // новой правдой (§А1-1): проекция — той же таблицей §А8, которой её делает сервер.
+      expect(() => categoryAspectSchema.parse(legacyFields(r, 'orbis/category'))).not.toThrow();
     }
 
     // Доходные (Зарплата/Фриланс): ключа spend_class нет (не null — иначе ajv упадёт)
     const salary = rows.find((r) => r.title === 'Зарплата');
     expect(salary).toBeDefined();
-    expect('spend_class' in (salary?.aspectsMap['orbis/category'] as object)).toBe(false);
+    expect(salary?.props['orbis/spend_class']).toBeUndefined();
 
     // Расходная «Еда»: точные aliases и spend_class
     const food = rows.find((r) => r.title === 'Еда');
-    const foodAspect = food?.aspectsMap['orbis/category'] as {
-      spend_class?: string;
-      aliases?: string[];
-      icon?: string;
-      color?: string;
-    };
-    expect(foodAspect.spend_class).toBe('discretionary');
-    expect(foodAspect.icon).toBe('🍔');
-    expect(foodAspect.color).toBe('#e0885a');
-    expect(foodAspect.aliases).toEqual([
+    const foodProps = food?.props ?? {};
+    expect(foodProps['orbis/spend_class']).toBe('discretionary');
+    expect(foodProps['orbis/icon']).toBe('🍔');
+    expect(foodProps['orbis/color']).toBe('#e0885a');
+    expect(foodProps['orbis/aliases']).toEqual([
       'еда',
       'food',
       'продукты',
@@ -490,7 +504,11 @@ describe('горизонты показывают обещанное (§3.3, E4)
       input: {
         title: 'Обычная задача',
         tags: [],
-        aspects: { 'orbis/task': { status: 'planned', due_date: '2026-12-31' } },
+        props: {
+          'orbis/task_status': 'planned',
+          'orbis/due_date': '2026-12-31',
+        },
+        aspects: ['orbis/task'],
       },
       source: 'ui',
     });
@@ -499,12 +517,18 @@ describe('горизонты показывают обещанное (§3.3, E4)
         input: {
           title: 'Пробежать 100 км',
           tags: [],
-          aspects: {
-            'orbis/goal': {
-              progress_source: { query: 'aspect=orbis/task, status=done', aggregate: 'count' },
-              target_value: '100',
+          props: {
+            // Новая форма значения (§А5-2): запрос — ДЕРЕВО, а неразобранный текст едет
+            // обёрткой `{text}`. Старый вход исполнителя оборачивал строку сам
+            // (`translateLegacyValue`); прямая запись `props` через него не идёт, и строкой
+            // здесь значение не прошло бы схему свойства.
+            'orbis/progress_source': {
+              query: { text: 'aspect=orbis/task, status=done' },
+              aggregate: 'count',
             },
+            'orbis/target_value': '100',
           },
+          aspects: ['orbis/goal'],
         },
         source: 'ui',
       })

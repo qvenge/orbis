@@ -68,11 +68,12 @@ function callerFor(user: string) {
   return createCaller({ actorUserId: user, actorKind: 'owner', db, clientVersion: null });
 }
 
-type Aspects = Record<string, Record<string, unknown>>;
+/** Форма создания §А1-1: значения плоско по id свойства, аспекты — списком навешенного. */
+type NewForm = { props?: Record<string, unknown>; aspects?: string[] };
 
-async function createEntity(user: string, title: string, aspects: Aspects): Promise<string> {
+async function createEntity(user: string, title: string, form: NewForm): Promise<string> {
   const e = await callerFor(user).entity.create({
-    input: { title, tags: [], aspects },
+    input: { title, tags: [], ...form },
     source: 'ui',
   });
   return e.id;
@@ -98,7 +99,8 @@ describe('приёмка 02-core-os §8.1: прошедшее чистое со�
   test('вчерашнее событие без orbis/task: нет в обеих выборках «Просроченного», есть в Browser', async () => {
     const user = freshUserId();
     const event = await createEntity(user, 'Прошедший созвон', {
-      'orbis/schedule': { start_at: at(yesterday, '10:00') },
+      props: { 'orbis/start_at': at(yesterday, '10:00') },
+      aspects: ['orbis/schedule'],
     });
 
     // Обе выборки §4.2 требуют aspect=orbis/task — чистое событие отсекается ими обеими.
@@ -116,13 +118,17 @@ describe('приёмка 02-core-os §8.1: прошедшее чистое со�
     // (иначе первый тест проходил бы и при сломанном start_at=overdue).
     const user = freshUserId();
     const event = await createEntity(user, 'Созвон, ставший задачей', {
-      'orbis/schedule': { start_at: at(yesterday, '10:00') },
+      props: { 'orbis/start_at': at(yesterday, '10:00') },
+      aspects: ['orbis/schedule'],
     });
     expect((await idsOf(user, OVERDUE_START_QUERY)).has(event)).toBe(false);
 
     await callerFor(user).entity.update({
       id: event,
-      aspects: { 'orbis/task': { status: 'planned' } },
+      props: {
+        'orbis/task_status': 'planned',
+      },
+      aspects: { attach: ['orbis/task'] },
     });
     expect((await idsOf(user, OVERDUE_START_QUERY)).has(event)).toBe(true);
   });
@@ -134,11 +140,16 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
   test('появляется независимо от наличия schedule', async () => {
     const user = freshUserId();
     const bare = await createEntity(user, 'Закончить API', {
-      'orbis/task': { status: 'in_progress', due_date: yesterday },
+      props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
+      aspects: ['orbis/task'],
     });
     const scheduled = await createEntity(user, 'Оплатить интернет', {
-      'orbis/task': { status: 'planned', due_date: yesterday },
-      'orbis/schedule': { start_at: at(tomorrow, '09:00') }, // расписание в БУДУЩЕМ
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/due_date': yesterday,
+        'orbis/start_at': at(tomorrow, '09:00'), // расписание в БУДУЩЕМ
+      },
+      aspects: ['orbis/task', 'orbis/schedule'],
     });
 
     const overdue = await idsOf(user, OVERDUE_DUE_QUERY);
@@ -151,13 +162,17 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
   test('после done исчезает', async () => {
     const user = freshUserId();
     const task = await createEntity(user, 'Закончить API', {
-      'orbis/task': { status: 'in_progress', due_date: yesterday },
+      props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
+      aspects: ['orbis/task'],
     });
     expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(task)).toBe(true);
 
     await callerFor(user).entity.update({
       id: task,
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: {
+        'orbis/task_status': 'done',
+      },
+      aspects: { attach: ['orbis/task'] },
     });
     expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(task)).toBe(false);
   });
@@ -165,13 +180,17 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
   test('после переноса срока исчезает', async () => {
     const user = freshUserId();
     const task = await createEntity(user, 'Закончить API', {
-      'orbis/task': { status: 'in_progress', due_date: yesterday },
+      props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
+      aspects: ['orbis/task'],
     });
     expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(task)).toBe(true);
 
     await callerFor(user).entity.update({
       id: task,
-      aspects: { 'orbis/task': { due_date: tomorrow } },
+      props: {
+        'orbis/due_date': tomorrow,
+      },
+      aspects: { attach: ['orbis/task'] },
     });
     expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(task)).toBe(false);
   });
@@ -179,7 +198,8 @@ describe('приёмка 02-core-os §8.2: задача с просроченн�
   test('после архивации исчезает', async () => {
     const user = freshUserId();
     const task = await createEntity(user, 'Закончить API', {
-      'orbis/task': { status: 'in_progress', due_date: yesterday },
+      props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': yesterday },
+      aspects: ['orbis/task'],
     });
     expect((await idsOf(user, OVERDUE_DUE_QUERY)).has(task)).toBe(true);
 
@@ -196,8 +216,12 @@ describe('приёмка 02-core-os §8.3: task+schedule с обеими про�
   test('сущность приходит в обеих выборках, в каждой — ровно одной строкой', async () => {
     const user = freshUserId();
     const both = await createEntity(user, 'Подтвердить созвон', {
-      'orbis/task': { status: 'planned', due_date: addDays(today, -3) },
-      'orbis/schedule': { start_at: at(yesterday, '09:00') },
+      props: {
+        'orbis/task_status': 'planned',
+        'orbis/due_date': addDays(today, -3),
+        'orbis/start_at': at(yesterday, '09:00'),
+      },
+      aspects: ['orbis/task', 'orbis/schedule'],
     });
 
     const byDue = await callerFor(user).entity.query({ query: OVERDUE_DUE_QUERY });
@@ -215,10 +239,12 @@ describe('приёмка 02-core-os §8.4: задача с одним due_date',
   test('без schedule: видна в Daily Planning и Upcoming, но не в дневном окне Agenda', async () => {
     const user = freshUserId();
     const dueToday = await createEntity(user, 'Разобрать Inbox', {
-      'orbis/task': { status: 'in_progress', due_date: today },
+      props: { 'orbis/task_status': 'in_progress', 'orbis/due_date': today },
+      aspects: ['orbis/task'],
     });
     const dueTomorrow = await createEntity(user, 'Позвонить в банк', {
-      'orbis/task': { status: 'planned', due_date: tomorrow },
+      props: { 'orbis/task_status': 'planned', 'orbis/due_date': tomorrow },
+      aspects: ['orbis/task'],
     });
 
     // сид-списки владельца (02 §3.3) — задачи там видны обе, каждая в своём списке
@@ -234,21 +260,23 @@ describe('приёмка 02-core-os §8.4: задача с одним due_date',
   test('после добавления orbis/schedule появляется в дневном окне', async () => {
     const user = freshUserId();
     const task = await createEntity(user, 'Врач', {
-      'orbis/task': { status: 'planned', due_date: tomorrow },
+      props: { 'orbis/task_status': 'planned', 'orbis/due_date': tomorrow },
+      aspects: ['orbis/task'],
     });
     expect((await idsOf(user, DAYS_QUERY)).has(task)).toBe(false);
 
     await callerFor(user).entity.update({
       id: task,
-      aspects: { 'orbis/schedule': { start_at: at(tomorrow, '14:00') } },
+      props: {
+        'orbis/start_at': at(tomorrow, '14:00'),
+      },
+      aspects: { attach: ['orbis/schedule'] },
     });
 
     const rows = await callerFor(user).entity.query({ query: DAYS_QUERY });
     const row = rows.find((r) => r.id === task);
     expect(row).toBeDefined();
     // «в соответствующем дне»: раскладку по секциям делает клиент по этому же start_at
-    expect((row?.aspectsMap['orbis/schedule'] as { start_at?: string } | undefined)?.start_at).toBe(
-      at(tomorrow, '14:00'),
-    );
+    expect(row?.props['orbis/start_at']).toBe(at(tomorrow, '14:00'));
   });
 });

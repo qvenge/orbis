@@ -206,11 +206,11 @@ export async function readEntity(
         UNION
         SELECT id FROM ref_side
       )
-      SELECT e.id, e.owner_id, e.title, e.emoji, e.body, e.body_refs, e.tags, e.meta,
+      SELECT e.id, e.owner_id, e.title, e.emoji, e.body, e.body_refs, e.tags,
              -- Столбцы те же, что в SELECT-листе компилятора (§6): их ждёт
              -- toWireEntityFromSql, и списочное чтение обязано нести ту же новую форму,
              -- что и одиночное (иначе backlinks молча отдают пустые props/aspects).
-             e.props, e.aspects, e.query_refs, e.aspects_legacy,
+             e.props, e.aspects, e.query_refs,
              e.created_at, e.updated_at, e.archived,
              rel_side.id IS NOT NULL AS via_relation,
              rel_side.incoming AS via_incoming,

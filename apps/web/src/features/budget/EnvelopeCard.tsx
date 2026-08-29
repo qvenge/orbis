@@ -100,20 +100,20 @@ export interface EnvelopeViewModel {
   sym: string;
   /** `↩ +1 200` / `↩ −800`; null при нулевом/отсутствующем carryover (§2.6). */
   carryoverText: string | null;
-  /** Аспект orbis/budget конверта (limit, period_start/period_end, …). */
+  /** Свойства конверта плоско по id (`orbis/limit`, `orbis/period_start`, …). */
   budget: Record<string, unknown>;
 }
 
 export function envelopeView(status: EnvelopeStatus): EnvelopeViewModel {
   const { category, phase } = status;
-  const budget =
-    (status.envelope.aspectsMap as Record<string, Record<string, unknown> | undefined>)[
-      'orbis/budget'
-    ] ?? {};
-  const currency = typeof budget.currency === 'string' ? budget.currency : 'RUB';
+  // Плоские `props` по id свойства (§А1-1) вместо вложенной карты аспекта.
+  const budget = status.envelope.props;
+  const currency = typeof budget['orbis/currency'] === 'string' ? budget['orbis/currency'] : 'RUB';
   const sym = CURRENCY_SYMBOL[currency] ?? currency;
-  const carryover = typeof budget.carryover === 'string' ? budget.carryover : undefined;
-  const periodStart = typeof budget.period_start === 'string' ? budget.period_start : '';
+  const carryoverRaw = budget['orbis/carryover'];
+  const carryover = typeof carryoverRaw === 'string' ? carryoverRaw : undefined;
+  const periodStartRaw = budget['orbis/period_start'];
+  const periodStart = typeof periodStartRaw === 'string' ? periodStartRaw : '';
 
   // §2.9а: до начала периода пороги не применяются — нейтральный пустой бар
   const level = phase === 'upcoming' ? 'norm' : envelopeLevel(status.spent, status.effectiveLimit);

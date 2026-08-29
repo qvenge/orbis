@@ -3,37 +3,17 @@
 // с аспектом orbis/budget, инвалидация budget, тост ошибки уникальности §2.1).
 
 import type { BudgetOverview, EnvelopeStatus } from '@orbis/shared';
-import { legacyAspectsToProps } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
-import {
-  type MockHandler,
-  renderWithProviders,
-  wireEntity as wireFixture,
-} from '../../test/harness';
+import { type MockHandler, renderWithProviders, wireEntity } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { useToastStore } from '../../ui/toast-store';
 import { BudgetScreen } from './BudgetScreen';
 import { EnvelopeCard, envelopeLevel, envelopePercent } from './EnvelopeCard';
 import { EnvelopeCreateSheet } from './EnvelopeCreateSheet';
 
 // --- фикстуры -------------------------------------------------------------------------
-
-/**
- * Строка выдачи в ОБЕИХ формах сразу: `props`+`aspects` (§А1-1) и старая карта — проекция
- * той же пары (`wireEntity`). Аргументом остаётся карта, потому что экраны Финансов читают
- * её до Задачи 13c; `props` из неё выводит ТА ЖЕ таблица §А8, которой перевод делает сервер
- * (`legacyAspectsToProps`), — второго списка соответствий здесь не заводится, и разъехаться
- * двум формам негде.
- */
-const wireEntity = (id: string, title: string, aspects: Record<string, unknown> = {}) => {
-  const translated = legacyAspectsToProps(aspects as Record<string, Record<string, unknown>>);
-  return wireFixture({
-    ...{ id, title },
-    props: translated.ok ? translated.props : {},
-    aspects: Object.keys(aspects),
-  });
-};
 
 function status(over: {
   spent: string;
@@ -48,15 +28,20 @@ function status(over: {
   color?: string | null;
 }): EnvelopeStatus {
   return {
-    envelope: wireEntity('e1', 'Еда — июль', {
-      'orbis/budget': {
-        category_ref: 'cat-1',
-        limit: over.effectiveLimit,
-        currency: over.currency ?? 'RUB',
-        period_start: over.periodStart ?? '2026-07-01',
-        period_end: over.periodEnd ?? '2026-07-31',
-        ...(over.carryover !== undefined ? { carryover: over.carryover } : {}),
+    // Форма — РОВНО та, что отдаёт производитель (§А1-1): значения плоско по id свойства,
+    // аспекты списком. Ключ `orbis/finance_category` один на конверт и операцию (В1).
+    envelope: wireEntity({
+      id: 'e1',
+      title: 'Еда — июль',
+      props: {
+        'orbis/finance_category': 'cat-1',
+        'orbis/limit': over.effectiveLimit,
+        'orbis/currency': over.currency ?? 'RUB',
+        'orbis/period_start': over.periodStart ?? '2026-07-01',
+        'orbis/period_end': over.periodEnd ?? '2026-07-31',
+        ...(over.carryover !== undefined ? { 'orbis/carryover': over.carryover } : {}),
       },
+      aspects: ['orbis/budget'],
     }),
     category: { id: 'cat-1', title: 'Еда', icon: '🍔', color: over.color ?? null },
     spent: over.spent,
@@ -266,8 +251,13 @@ test('тап по карточке пушит экран budget-category в ст
 // --- EnvelopeCreateSheet ------------------------------------------------------------------
 
 const categories = [
-  wireEntity('c1', 'Еда', { 'orbis/category': { icon: '🍔' } }),
-  wireEntity('c2', 'Транспорт', { 'orbis/category': {} }),
+  wireEntity({
+    id: 'c1',
+    title: 'Еда',
+    props: { 'orbis/icon': '🍔' },
+    aspects: ['orbis/category'],
+  }),
+  wireEntity({ id: 'c2', title: 'Транспорт', aspects: ['orbis/category'] }),
 ];
 
 const settings = {
@@ -285,11 +275,13 @@ const sheetHandler =
     if (path === 'entity.query') return categories;
     if (path === 'entity.create') {
       if (createImpl) return createImpl(input);
-      return wireEntity('env-new', 'Конверт');
+      return wireEntity({ id: 'env-new', title: 'Конверт' });
     }
     if (path === 'budget.overview') return emptyOverview;
     if (path === 'budget.postDue') return { posted: 0 };
-    return {};
+    // Реестр НАСТОЯЩИЙ: множество пикера — ЦЕЛЬ свойства `orbis/finance_category` (§А6-1),
+    // и без снимка спрашивать нечего — список остался бы пустым при любой реализации.
+    return registryReply(path) ?? {};
   };
 
 test('сабмит шлёт валидный orbis/budget-аспект: явная currency, период = месяц по умолчанию', async () => {
@@ -309,16 +301,20 @@ test('сабмит шлёт валидный orbis/budget-аспект: явна
   expect(create).toBeDefined();
   const payload = create?.input as {
     source: string;
-    input: { title: string; aspects: Record<string, Record<string, unknown>> };
+    input: { title: string; props: Record<string, unknown>; aspects: string[] };
   };
   expect(payload.source).toBe('ui');
-  expect(payload.input.aspects['orbis/budget']).toEqual({
-    category_ref: 'c1',
-    limit: '5000',
-    currency: 'RUB', // явная defaultCurrency — корректность держит сервер (A7)
-    period_start: '2026-07-01',
-    period_end: '2026-07-31',
+  // НОВАЯ форма (§А1-1): значения плоско по id свойства.
+  expect(payload.input.props).toEqual({
+    'orbis/finance_category': 'c1',
+    'orbis/limit': '5000',
+    'orbis/currency': 'RUB', // явная defaultCurrency — корректность держит сервер (A7)
+    'orbis/period_start': '2026-07-01',
+    'orbis/period_end': '2026-07-31',
   });
+  // Аспект — ЯВНЫМ навешиванием: старая карта вешала его самим фактом ключа, новая форма
+  // требует списка, и без него конверт родился бы записью без единого аспекта.
+  expect(payload.input.aspects).toEqual(['orbis/budget']);
   expect(payload.input.title).toContain('Еда');
 });
 
@@ -339,14 +335,15 @@ test('произвольный период: два date-инпута уходя
 
   await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
   const payload = calls.find((c) => c.path === 'entity.create')?.input as {
-    input: { aspects: Record<string, Record<string, unknown>> };
+    input: { props: Record<string, unknown>; aspects: string[] };
   };
-  expect(payload.input.aspects['orbis/budget']).toMatchObject({
-    category_ref: 'c2',
-    limit: '15000.50',
-    period_start: '2026-08-10',
-    period_end: '2026-08-24',
+  expect(payload.input.props).toMatchObject({
+    'orbis/finance_category': 'c2',
+    'orbis/limit': '15000.50',
+    'orbis/period_start': '2026-08-10',
+    'orbis/period_end': '2026-08-24',
   });
+  expect(payload.input.aspects).toEqual(['orbis/budget']);
 });
 
 test('невалидный лимит (не decimal-строка) блокирует сабмит', async () => {

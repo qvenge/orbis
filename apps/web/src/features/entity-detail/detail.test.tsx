@@ -22,6 +22,7 @@ import { useChatThread } from '../chat/useChatThread';
 import { resetEnsuredThreads } from '../chat/useEnsuredThread';
 import { AspectCards } from './AspectCards';
 import { DetailScreen } from './DetailScreen';
+import { RoutineStatusBlock } from './RoutineStatusBlock';
 import { detailGetInput } from './useEntityDetail';
 
 // Экран монтирует редактор, NodeView'ы виджетов и меню в портале — обработчики событий, из
@@ -703,9 +704,14 @@ test('financial: category_ref — выбор из категорий с назв
   await screen.findByRole('option', { name: 'Развлечения' });
   // Показано НАЗВАНИЕ выбранной категории (displayValue у select — текст выбранной опции)
   expect(select).toHaveDisplayValue('Еда');
-  // Список категорий берётся тем же запросом, что и экраны Budget (один кэш)
+  // Множество берётся ЦЕЛЬЮ свойства из реестра (§А6-1) — тем же запросом и тем же кешем,
+  // что у бейджа шапки и у форм Финансов: второго источника категорий в приложении нет.
   expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-    query: 'aspect=orbis/category, sortBy=orbis/title:asc, limit=200',
+    ast: {
+      filter: { aspect: 'orbis/category' },
+      sortBy: [{ field: 'orbis/title', dir: 'asc' }],
+      limit: 200,
+    },
   });
 });
 
@@ -727,9 +733,12 @@ test('financial: выбор категории шлёт entity.update с нов�
 });
 
 // D5c п.4: упавший запрос списка и живая ссылка на исчезнувшую категорию — РАЗНЫЕ беды.
-// Общий текст «Категория не найдена» на отказе сети врал бы про целую транзакцию, что
-// связь с категорией потеряна (приём RolloverScreen: ветка isError отдельно от пустоты).
-test('financial: запрос категорий упал → «Не удалось загрузить категории», а не «не найдена»', async () => {
+// Общий текст на отказе сети врал бы про целую транзакцию, что связь с категорией потеряна
+// (приём RolloverScreen: ветка isError отдельно от пустоты). Слова у общего пикера
+// (`RefField`) НЕЙТРАЛЬНЫЕ — контрол один на все ссылочные свойства, и склонять подпись
+// свойства по падежам («Без Рутина прогона») он не умеет; различимость трёх состояний,
+// ради которой правило и написано, сохранена дословно.
+test('financial: запрос категорий упал → «Не удалось загрузить список», а не «не найдено»', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
     if (path === 'entity.get')
       return { entity: finEntity, relations: [], thread: { threadId: 'th1', messages: [] } };
@@ -738,11 +747,11 @@ test('financial: запрос категорий упал → «Не удало�
     return registryReply(path) ?? {};
   });
   const select = await screen.findByLabelText('Категория');
-  await waitFor(() => expect(select).toHaveDisplayValue('Не удалось загрузить категории'));
-  expect(select).not.toHaveDisplayValue('Категория не найдена');
+  await waitFor(() => expect(select).toHaveDisplayValue('Не удалось загрузить список'));
+  expect(select).not.toHaveDisplayValue('Не найдено');
 });
 
-test('financial: список пришёл, а ссылка ведёт мимо него → «Категория не найдена»', async () => {
+test('financial: список пришёл, а ссылка ведёт мимо него → «Не найдено»', async () => {
   const orphan = {
     ...finEntity,
     props: { ...finEntity.props, 'orbis/finance_category': 'gone' },
@@ -757,14 +766,14 @@ test('financial: список пришёл, а ссылка ведёт мимо 
   });
   const select = await screen.findByLabelText('Категория');
   await screen.findByRole('option', { name: 'Развлечения' }); // список доехал целым
-  expect(select).toHaveDisplayValue('Категория не найдена');
+  expect(select).toHaveDisplayValue('Не найдено');
 });
 
 // D5d п.5: три дефекта одной цепочки подписи «своей» опции пикера.
 
-// (а) пустой category_ref — не «беда со списком»: подпись «Без категории» обязана
-// пережить упавший запрос, иначе транзакция без категории выглядит как сломанная связь.
-test('financial: без категории при упавшем запросе — «Без категории», а не отказ', async () => {
+// (а) пустая ссылка — не «беда со списком»: подпись «Не выбрано» обязана пережить упавший
+// запрос, иначе транзакция без категории выглядит как сломанная связь.
+test('financial: без категории при упавшем запросе — «Не выбрано», а не отказ', async () => {
   const noCategory = {
     ...finEntity,
     props: { ...finEntity.props, 'orbis/finance_category': '' },
@@ -777,12 +786,12 @@ test('financial: без категории при упавшем запросе 
     return registryReply(path) ?? {};
   });
   const select = await screen.findByLabelText('Категория');
-  await waitFor(() => expect(select).toHaveDisplayValue('Без категории'));
+  await waitFor(() => expect(select).toHaveDisplayValue('Не выбрано'));
 });
 
 // (б) v5 сохраняет data при ошибке РЕФЕТЧА: список категорий известен целиком, и
 // «Не удалось загрузить категории» врало бы — ссылка действительно ведёт в никуда.
-test('financial: рефетч списка упал, но список уже есть → «Категория не найдена»', async () => {
+test('financial: рефетч списка упал, но список уже есть → «Не найдено»', async () => {
   let queries = 0;
   const orphan = {
     ...finEntity,
@@ -811,7 +820,7 @@ test('financial: рефетч списка упал, но список уже е
   fireEvent.blur(title);
 
   await waitFor(() => expect(queries).toBeGreaterThan(1));
-  expect(select).toHaveDisplayValue('Категория не найдена');
+  expect(select).toHaveDisplayValue('Не найдено');
 });
 
 // (в) офлайн-пауза: fetchStatus='paused' даёт isLoading===false при status='pending' —
@@ -937,6 +946,53 @@ test('правка Финансов гасит агрегаты, даже есл
   // Ушли с экрана ДО ответа: карточек больше нет, пробник бюджета жив. Размонтирование —
   // состоянием внутри дерева, а не `rerender` обёртки: тот заменил бы КОРЕНЬ, потеряв
   // провайдеры tRPC вместе с самим кэшем, за которым проба и следит.
+  fireEvent.click(screen.getByTestId('leave-screen'));
+  expect(screen.queryByLabelText('Сумма')).toBeNull();
+
+  await act(async () => {
+    settle(taskedFin);
+    await pending;
+  });
+  await waitFor(() => expect(budgetReads()).toBeGreaterThan(1));
+});
+
+/**
+ * СНЯТИЕ АСПЕКТА — ВТОРОЙ ВХОД в те же агрегаты, и до Задачи 13c он не гасил ничего.
+ *
+ * `touchesAggregatedModule` считал признак по одним `props`/`unset`, а «Снять аспект» шлёт
+ * `aspects.detach` — то есть отвечал `false`. Между тем серверные агрегаты Финансов
+ * ключуются на самом ЧЛЕНСТВЕ (`budget/aggregates.ts`), и на detach сервер снимает привязку
+ * к конверту (`unbindOps`): операция выпадает из `spent`, бюджет перестаёт гаситься, а бейдж
+ * вкладки врёт до перезагрузки страницы — наблюдатель `useBudgetAlertCount` смонтирован в
+ * оболочке приложения и сам не протухает.
+ *
+ * Экран при этом РАЗМОНТИРОВАН до ответа сервера: снятие аспекта и уход на вкладку Бюджета —
+ * тот же сюжет, что у правки суммы, и колбэк уровня вызова здесь не позвали бы вовсе.
+ */
+test('снятие аспекта Финансов гасит агрегаты, даже если экран размонтирован до ответа', async () => {
+  let settle: (value: unknown) => void = () => {};
+  const pending = new Promise((resolve) => {
+    settle = resolve;
+  });
+  const { calls } = renderWithProviders(<CardsUntilHidden entity={taskedFin} />, (path) => {
+    if (path === 'budget.alertCount') return 0;
+    if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
+    if (path === 'entity.update') return pending;
+    return registryReply(path) ?? {};
+  });
+  const budgetReads = () => calls.filter((c) => c.path === 'budget.alertCount').length;
+  await waitFor(() => expect(budgetReads()).toBe(1));
+
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Снять аспект «Финансовая операция»' }),
+  );
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.update')).toBe(true));
+  // Уехал именно detach, а не правка значений: иначе проба зеленела бы по чужому признаку.
+  expect(calls.find((c) => c.path === 'entity.update')?.input).toEqual({
+    id: taskedFin.id,
+    aspects: { detach: ['orbis/financial'] },
+  });
+
   fireEvent.click(screen.getByTestId('leave-screen'));
   expect(screen.queryByLabelText('Сумма')).toBeNull();
 
@@ -3993,6 +4049,12 @@ function routineHandler(
   };
 }
 
+/** Пробник обзора рутины: живой читатель `routine.overview` вне блока состояния. */
+function OverviewProbe() {
+  const q = trpc.routine.overview.useQuery({ routineId: 'rt1' });
+  return <span data-testid="overview-probe">{String(q.data?.nextBucketAt ?? '')}</span>;
+}
+
 /** Рутина на ТЁПЛОМ кэше — ради двойного прогона эффектов (см. TicketOnWarmCache). */
 function RoutineOnWarmCache() {
   const q = trpc.entity.get.useQuery(detailGetInput('rt1'));
@@ -4085,6 +4147,61 @@ describe('V1: рутина', () => {
       expect(input.props).toEqual({ 'orbis/routine_stage': 'paused' });
     });
     expect(await screen.findByRole('button', { name: 'Возобновить' })).toBeInTheDocument();
+  });
+
+  /**
+   * ОБЗОР РУТИНЫ ГАСИТСЯ НА УРОВНЕ МУТАЦИИ, а не поштучным колбэком `mutate`.
+   *
+   * Прежде `onSettled: invalidateOverview` стоял вторым аргументом `mutate`, и такие колбэки
+   * `@tanstack/query-core` зовёт только пока у наблюдателя есть слушатели
+   * (`mutationObserver.js:77`). «Возобновить» + немедленный уход с экрана оставляли
+   * `overview.nextBucketAt` посчитанным НА ПАУЗЕ, то есть `null`, — и владелец видел
+   * «Следующее срабатывание: —» у живой рутины. Само по себе это чинит `refetchOnMount`, но
+   * не раньше, чем истечёт `staleTime` (30 с): возврат на экран внутри окна показывает ту же
+   * неправду.
+   */
+  function BlockUntilHidden({ entity: target }: { entity: RoutineFixture }) {
+    const [hidden, setHidden] = useState(false);
+    return (
+      <>
+        <OverviewProbe />
+        <button type="button" data-testid="leave-screen" onClick={() => setHidden(true)}>
+          уйти с экрана
+        </button>
+        {!hidden && <RoutineStatusBlock entity={target as never} lastRun={undefined} />}
+      </>
+    );
+  }
+
+  test('«Возобновить» гасит обзор рутины, даже если экран размонтирован до ответа', async () => {
+    let settle: (value: unknown) => void = () => {};
+    const pending = new Promise((resolve) => {
+      settle = resolve;
+    });
+    const paused = {
+      ...ROUTINE,
+      props: { ...ROUTINE.props, 'orbis/routine_stage': 'paused' },
+    } as RoutineFixture;
+    const base = routineHandler({ entity: paused });
+    const { calls } = renderWithProviders(<BlockUntilHidden entity={paused} />, (path, input) =>
+      path === 'entity.update' ? pending : base(path, input),
+    );
+    const overviewReads = () => calls.filter((c) => c.path === 'routine.overview').length;
+    await waitFor(() => expect(overviewReads()).toBe(1));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Возобновить' }));
+    await waitFor(() => expect(calls.some((c) => c.path === 'entity.update')).toBe(true));
+
+    // Ушли с экрана ДО ответа: блока больше нет, пробник обзора жив.
+    fireEvent.click(screen.getByTestId('leave-screen'));
+    expect(screen.queryByRole('button', { name: 'Возобновить' })).toBeNull();
+
+    await act(async () => {
+      settle(paused);
+      await pending;
+    });
+    // Наблюдаемый след оседания — ПЕРЕЧИТЫВАНИЕ обзора, а не выдержка по часам.
+    await waitFor(() => expect(overviewReads()).toBeGreaterThan(1));
   });
 
   test('идёт прогон — «Прогнать сейчас» заблокирована; отказ сервера показан текстом', async () => {

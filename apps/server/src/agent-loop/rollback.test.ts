@@ -226,7 +226,10 @@ describe('rollbackRun (С12, инвариант 7)', () => {
     // часами. Правка ложится в журнал МЕЖДУ действиями прогона, и окно предпроверки «после
     // последнего действия» её бы не увидело
     const a = createCaller({ actorUserId: owner, actorKind: 'owner', db, clientVersion: null });
-    await a.entity.update({ id: ticketId, aspects: { 'orbis/task': { priority: 'high' } } });
+    await a.entity.update({
+      id: ticketId,
+      props: { 'orbis/priority': 'high' },
+    });
     const edit = (await actionsOf(owner)).find((x) => x.source === 'ui' && x.run_id === undefined);
     if (edit === undefined) throw new Error('правка владельца не попала в журнал');
 

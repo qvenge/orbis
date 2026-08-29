@@ -53,7 +53,10 @@ describe('version.pin / version.list / version.restore (С11)', () => {
         title: 'Док',
         tags: [],
         body: '# Раз\n\n- два\n',
-        aspects: { 'orbis/task': { status: 'planned' } },
+        props: {
+          'orbis/task_status': 'planned',
+        },
+        aspects: ['orbis/task'],
       },
       source: 'quick_capture',
     });
@@ -77,7 +80,10 @@ describe('version.pin / version.list / version.restore (С11)', () => {
       id,
       expectedUpdatedAt: e1.entity.updatedAt,
       body: '# Совсем другое',
-      aspects: { 'orbis/task': { status: 'waiting' } },
+      props: {
+        'orbis/task_status': 'waiting',
+      },
+      aspects: { attach: ['orbis/task'] },
     });
     const e2 = await a.entity.get({ id, include: ['body', 'bodyDoc'] });
     expect(e2.entity.body).not.toBe(e1.entity.body);
@@ -88,7 +94,8 @@ describe('version.pin / version.list / version.restore (С11)', () => {
     });
     expect(restored.body).toBe(canonicalizeBody('# Раз\n\n- два\n').body);
     // Инвариант 8: откат трогает ТОЛЬКО тело — аспекты остаются текущими (С11),
-    expect(restored.aspectsMap['orbis/task']).toEqual({ status: 'waiting' });
+    expect(restored.props['orbis/task_status']).toBe('waiting');
+    expect(restored.aspects).toEqual(['orbis/task']);
     // …как и связи: снимок их не хранит и восстановление не переписывает граф
     const after = await a.entity.get({ id, include: ['relations'] });
     expect(after.relations?.map((r) => r.targetId)).toEqual([neighbour]);

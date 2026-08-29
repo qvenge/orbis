@@ -5,56 +5,53 @@
 // предзаданной категорией (B4, §3.6).
 
 import type { CategoryTrendPoint, EnvelopeStatus } from '@orbis/shared';
-import { legacyAspectsToProps } from '@orbis/shared';
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test } from 'vitest';
 import { App } from '../../App';
 import { installHistorySync } from '../../app/history';
 import { useNav } from '../../state/navigation';
-import {
-  type MockHandler,
-  renderWithProviders,
-  wireEntity as wireFixture,
-} from '../../test/harness';
+import { type MockHandler, renderWithProviders, wireEntity } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { CategoryScreen } from './CategoryScreen';
 
 // --- фикстуры -------------------------------------------------------------------------
 
 /**
- * Строка выдачи в ОБЕИХ формах сразу: `props`+`aspects` (§А1-1) и старая карта — проекция
- * той же пары (`wireEntity`). Аргументом остаётся карта, потому что экраны Финансов читают
- * её до Задачи 13c; `props` из неё выводит ТА ЖЕ таблица §А8, которой перевод делает сервер
- * (`legacyAspectsToProps`), — второго списка соответствий здесь не заводится, и разъехаться
- * двум формам негде.
+ * Строка выдачи в форме ПРОИЗВОДИТЕЛЯ (§А1-1): значения плоско по id свойства, аспекты —
+ * списком навешенного. Старой карты «аспект → поля» в wire-форме больше нет (Задача 13c),
+ * и фикстура, написанная по ней, описывала бы форму, которой сервер не отдаёт.
  */
-const ent = (id: string, title: string, aspects: Record<string, unknown> = {}, body = '') => {
-  const translated = legacyAspectsToProps(aspects as Record<string, Record<string, unknown>>);
-  return wireFixture({
-    ...{ id, title, body },
-    props: translated.ok ? translated.props : {},
-    aspects: Object.keys(aspects),
-  });
-};
+const ent = (
+  id: string,
+  title: string,
+  props: Record<string, unknown> = {},
+  aspects: string[] = [],
+  body = '',
+) => wireEntity({ id, title, body, props, aspects });
 
 const category = ent(
   'cat-1',
   'Еда',
-  { 'orbis/category': { icon: '🍔' } },
+  { 'orbis/icon': '🍔' },
+  ['orbis/category'],
   'Бизнес-ланчи — сюда, не в Развлечения',
 );
 
 // 21 600 / 30 000 = 72% → warn; limit 28 800 + carryover 1 200 = effectiveLimit 30 000 (§2.4)
 const envelopeStatus: EnvelopeStatus = {
-  envelope: ent('env-1', 'Конверт «Еда» 2026-07', {
-    'orbis/budget': {
-      category_ref: 'cat-1',
-      limit: '28800.00',
-      currency: 'RUB',
-      period_start: '2026-07-01',
-      period_end: '2026-07-31',
-      carryover: '1200.00',
+  envelope: ent(
+    'env-1',
+    'Конверт «Еда» 2026-07',
+    {
+      'orbis/finance_category': 'cat-1',
+      'orbis/limit': '28800.00',
+      'orbis/currency': 'RUB',
+      'orbis/period_start': '2026-07-01',
+      'orbis/period_end': '2026-07-31',
+      'orbis/carryover': '1200.00',
     },
-  }),
+    ['orbis/budget'],
+  ),
   category: { id: 'cat-1', title: 'Еда', icon: '🍔', color: null },
   spent: '21600.00',
   effectiveLimit: '30000.00',
@@ -70,23 +67,29 @@ const trend: CategoryTrendPoint[] = [
 ];
 
 const transactions = [
-  ent('t1', 'Перекрёсток', {
-    'orbis/financial': {
-      amount: '2340.00',
-      direction: 'expense',
-      occurred_on: '2026-07-13',
-      category_ref: 'cat-1',
+  ent(
+    't1',
+    'Перекрёсток',
+    {
+      'orbis/amount': '2340.00',
+      'orbis/direction': 'expense',
+      'orbis/occurred_on': '2026-07-13',
+      'orbis/finance_category': 'cat-1',
     },
-  }),
-  ent('t2', 'Пятёрочка', {
-    'orbis/financial': {
-      amount: '1890.00',
-      direction: 'expense',
-      occurred_on: '2026-07-11',
-      category_ref: 'cat-1',
-      recurring: true,
+    ['orbis/financial'],
+  ),
+  ent(
+    't2',
+    'Пятёрочка',
+    {
+      'orbis/amount': '1890.00',
+      'orbis/direction': 'expense',
+      'orbis/occurred_on': '2026-07-11',
+      'orbis/finance_category': 'cat-1',
+      'orbis/recurring': true,
     },
-  }),
+    ['orbis/financial'],
+  ),
 ];
 
 const settings = {
@@ -130,13 +133,16 @@ const handler =
     if (path === 'entity.query') return over.transactions ?? transactions;
     if (path === 'entity.create') {
       // Эхо wire-сущности (как сервер): карточка результата B4 читает ОТВЕТ, не форму
-      const create = (input as { input: { id: string; title: string; aspects: unknown } }).input;
+      const create = (
+        input as { input: { id: string; title: string; props?: Record<string, unknown> } }
+      ).input;
       return {
-        ...ent(create.id, create.title, create.aspects as Record<string, unknown>),
+        ...ent(create.id, create.title, create.props ?? {}, ['orbis/financial']),
         actionId: 'act-1',
       };
     }
-    return {};
+    // Реестр НАСТОЯЩИЙ: по нему строится и подпись поля, и множество пикера ссылки (§А6-1).
+    return registryReply(path) ?? {};
   };
 
 beforeEach(() => {
@@ -278,19 +284,20 @@ test('транзакции: entity.query по детям конверта, Nativ
 // конвертом ему не место — иначе список показывал бы строку, которой нет в spent того же
 // конверта. ИНСТАНС шаблона (financial.recurring без recurrence) — операция, остаётся.
 
-const recurringTemplate = ent('tpl', 'Аренда', {
-  'orbis/financial': {
-    amount: '50000.00',
-    direction: 'expense',
-    occurred_on: '2026-07-05',
-    category_ref: 'cat-1',
-    recurring: true,
+const recurringTemplate = ent(
+  'tpl',
+  'Аренда',
+  {
+    'orbis/amount': '50000.00',
+    'orbis/direction': 'expense',
+    'orbis/occurred_on': '2026-07-05',
+    'orbis/finance_category': 'cat-1',
+    'orbis/recurring': true,
+    'orbis/start_at': '2026-07-05T09:00:00Z',
+    'orbis/recurrence': { freq: 'monthly', interval: 1 },
   },
-  'orbis/schedule': {
-    start_at: '2026-07-05T09:00:00Z',
-    recurrence: { freq: 'monthly', interval: 1 },
-  },
-});
+  ['orbis/financial', 'orbis/schedule'],
+);
 
 test('шаблон recurring среди детей конверта скрыт, его инстанс — виден (D20)', async () => {
   renderWithProviders(
@@ -315,19 +322,25 @@ test('пагинация (C6): ровно limit детей конверта → 
   timeout: 30_000,
 }, async () => {
   const all = Array.from({ length: 250 }, (_, i) =>
-    ent(`m${i}`, `Операция ${i}`, {
-      'orbis/financial': {
-        amount: '10.00',
-        direction: 'expense',
-        occurred_on: '2026-07-10',
-        category_ref: 'cat-1',
+    ent(
+      `m${i}`,
+      `Операция ${i}`,
+      {
+        'orbis/amount': '10.00',
+        'orbis/direction': 'expense',
+        'orbis/occurred_on': '2026-07-10',
+        'orbis/finance_category': 'cat-1',
       },
-    }),
+      ['orbis/financial'],
+    ),
   );
   const base = handler();
   const paged: MockHandler = (path, input) => {
-    if (path === 'entity.query') {
-      const q = (input as { query: string }).query;
+    // Только ТЕКСТОВЫЙ запрос — это список транзакций конверта; выдача по `ast` — множество
+    // пикера ссылки (§А6-1), и подменять её страницей операций значило бы отвечать на чужой
+    // вопрос (пикер показал бы двести транзакций вместо категорий).
+    const q = (input as { query?: string }).query;
+    if (path === 'entity.query' && q !== undefined) {
       const limit = Number(/limit=(\d+)/.exec(q)?.[1] ?? all.length);
       return all.slice(0, limit);
     }
@@ -360,15 +373,18 @@ test('пагинация (C6): ровно limit детей конверта → 
 test('произвольный период конверта (§2.9): подзаголовок и заголовок транзакций — диапазон дат', async () => {
   const arbitrary: EnvelopeStatus = {
     ...envelopeStatus,
-    envelope: ent('env-1', 'Конверт «Еда» отпуск', {
-      'orbis/budget': {
-        category_ref: 'cat-1',
-        limit: '28800.00',
-        currency: 'RUB',
-        period_start: '2026-08-10',
-        period_end: '2026-08-24',
+    envelope: ent(
+      'env-1',
+      'Конверт «Еда» отпуск',
+      {
+        'orbis/finance_category': 'cat-1',
+        'orbis/limit': '28800.00',
+        'orbis/currency': 'RUB',
+        'orbis/period_start': '2026-08-10',
+        'orbis/period_end': '2026-08-24',
       },
-    }),
+      ['orbis/budget'],
+    ),
   } as EnvelopeStatus;
   renderWithProviders(<CategoryScreen categoryId="cat-1" />, handler({ envelope: arbitrary }));
   await waitFor(() => expect(screen.getByTestId('category-envelope')).toBeInTheDocument());
@@ -404,16 +420,19 @@ test('[+ запись] показывает quick-add с зафиксирова�
   fireEvent.click(screen.getByRole('button', { name: 'Записать' }));
   await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
   const call = calls.find((c) => c.path === 'entity.create')?.input as {
-    input: { title: string; aspects: Record<string, Record<string, unknown>> };
+    input: { title: string; props: Record<string, unknown>; aspects: string[] };
     source: string;
   };
   expect(call.source).toBe('quick_capture');
   expect(call.input.title).toBe('Еда 340');
-  expect(call.input.aspects['orbis/financial']).toMatchObject({
-    amount: '340.00',
-    direction: 'expense',
-    category_ref: 'cat-1',
+  expect(call.input.props).toMatchObject({
+    'orbis/amount': '340.00',
+    'orbis/direction': 'expense',
+    'orbis/finance_category': 'cat-1',
   });
+  // Аспект — ЯВНЫМ навешиванием (§А1-1): без него быстрая запись родила бы запись, которой
+  // нет ни в списке транзакций, ни в spent конверта.
+  expect(call.input.aspects).toEqual(['orbis/financial']);
 });
 
 // --- интеграция с router: budget-category в стеке рендерит CategoryScreen -------------------

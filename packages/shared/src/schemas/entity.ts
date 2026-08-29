@@ -15,16 +15,14 @@ export const entitySchema = z.object({
     .optional(),
   bodyRefs: z.array(z.string().uuid()).default([]),
   tags: z.array(z.string()).default([]),
-  meta: z.record(z.any()).default({}),
-  // ПЕРЕХОДНАЯ форма (§А1-1): новая правда (`props` по id свойства, `aspects` списком,
-  // `queryRefs`) едет рядом со старой картой, переименованной в `aspectsMap`. Пара
-  // `aspectsMap`/`meta` уходит из wire-формы вместе со старым носителем — там же, где
-  // web перестаёт её читать; до тех пор обе обязаны быть в схеме, иначе `entitySchema.parse`
-  // молча срезал бы карту у каждого ответа.
+  // НОВАЯ и единственная правда значений (§А1-1): `props` по id свойства, `aspects`
+  // списком навешенного, `queryRefs` — индекс ссылок тела. Мешок `meta` (§А1-3) и старая
+  // карта `aspectsMap` из wire-формы СНЯТЫ (Задача 13c): читателей у них не осталось ни
+  // одного, а `z.object` без `.passthrough()` срезает всё лишнее — то есть схема и есть
+  // гарантия, что вторая форма не поедет наружу молча.
   props: z.record(z.unknown()).default({}),
   aspects: z.array(z.string()).default([]),
   queryRefs: z.array(z.string()).default([]),
-  aspectsMap: z.record(z.any()).default({}),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   archived: z.boolean().default(false),

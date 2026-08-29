@@ -514,7 +514,9 @@ test('entity_card: поля подписаны СЛОВАМИ реестра, а
   );
   const card = await screen.findByTestId('entity-card');
   expect(await within(card).findByText('Сумма')).toBeInTheDocument();
-  expect(within(card).getByText('Категория')).toBeInTheDocument();
+  // `find`, а не `get`: строка категории ждёт ДВУХ ответов — снимка реестра (в нём цель
+  // ссылки) и выдачи по этой цели, — и появляется кадром позже подписей соседей.
+  expect(await within(card).findByText('Категория')).toBeInTheDocument();
   expect(card).not.toHaveTextContent('orbis/amount');
   expect(card).not.toHaveTextContent('orbis/finance_category');
 });
@@ -526,9 +528,15 @@ test('entity_card: категория показана НАЗВАНИЕМ, а н
   const card = await screen.findByTestId('entity-card');
   await waitFor(() => expect(card).toHaveTextContent('Еда'));
   expect(card).not.toHaveTextContent('c1');
-  // Тот же запрос категорий, что у пикера D3b (один кэш, второго источника нет)
+  // Тот же запрос, что у ОБЩЕГО пикера ссылки (`RefField`): один кеш, второго источника
+  // названий категорий нет. Форма — Q-AST цели свойства из реестра (§А6-1), а не текст:
+  // множество задаёт реестр, и печатать его в грамматику незачем.
   expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-    query: 'aspect=orbis/category, sortBy=orbis/title:asc, limit=200',
+    ast: {
+      filter: { aspect: 'orbis/category' },
+      sortBy: [{ field: 'orbis/title', dir: 'asc' }],
+      limit: 200,
+    },
   });
 });
 
@@ -681,13 +689,25 @@ describe('memory_rule_suggestion (детерминированное время)
     fireEvent.click(screen.getByRole('button', { name: 'Запомнить' }));
     await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
     const input = calls.find((c) => c.path === 'entity.create')?.input as {
-      input: { id: string; title: string; tags: string[]; body?: string; aspects: unknown };
+      input: {
+        id: string;
+        title: string;
+        tags: string[];
+        body?: string;
+        props: unknown;
+        aspects: unknown;
+      };
       source: string;
     };
     expect(input.input.title).toBe('кофе → Развлечения');
-    expect(input.input.aspects).toEqual({
-      'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' },
+    // НОВАЯ форма (§А1-1): свойства плоско по id, аспект — ЯВНЫМ навешиванием. Старая
+    // карта вешала носитель сама, и без `aspects` правило родилось бы записью, которой
+    // слой памяти чата не видит.
+    expect(input.input.props).toEqual({
+      'orbis/memory_kind': 'rule',
+      'orbis/rule_scope': 'orbis/money-movement',
     });
+    expect(input.input.aspects).toEqual(['orbis/memory']);
     expect(input.input.tags).toEqual([]);
     expect(input.input.body).toBeTruthy(); // короткое пояснение, откуда правило взялось
     expect(input.source).toBe('ui');

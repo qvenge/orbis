@@ -71,7 +71,15 @@ describe('registry.effective (§А9-2)', () => {
     // пришлось бы держать в голове.
     const id = newId();
     await a.entity.create({
-      input: { id, title: 'Запись', tags: [], aspects: { 'orbis/task': { status: 'inbox' } } },
+      input: {
+        id,
+        title: 'Запись',
+        tags: [],
+        props: {
+          'orbis/task_status': 'inbox',
+        },
+        aspects: ['orbis/task'],
+      },
       source: 'quick_capture',
     });
     const got = await a.entity.get({ id });

@@ -12,6 +12,26 @@ import { NativeRow } from './NativeRow';
  */
 const registryHandler: MockHandler = (path) => registryReply(path) ?? {};
 
+/**
+ * Реестр + выдача категорий. Реестр обязателен ДАЖЕ там, где тест проверяет только бейдж:
+ * множество категорий пикер и подпись ссылки берут из ЦЕЛИ свойства `orbis/finance_category`
+ * (§А6-1), то есть без снимка реестра спрашивать нечего — и строка честно остаётся в
+ * состоянии «ещё грузится».
+ */
+const withCategories =
+  (categories: unknown): MockHandler =>
+  (path) =>
+    path === 'entity.query' ? categories : (registryReply(path) ?? {});
+
+/** Q-AST выдачи пикера: цель `orbis/finance_category` ⊕ проекция (`RefField.refQueryAst`). */
+const CATEGORY_PICKER_AST = {
+  ast: {
+    filter: { aspect: 'orbis/category' },
+    sortBy: [{ field: 'orbis/title', dir: 'asc' }],
+    limit: 200,
+  },
+};
+
 // Категория-сущность в форме ответа entity.query (тот же список, что у пикера D3b).
 const category = (id: string, title: string) =>
   wireEntity({ id, title, props: { 'orbis/icon': '🍔' }, aspects: ['orbis/category'] });
@@ -79,14 +99,13 @@ test('financial: бейдж — НАЗВАНИЕ категории, а не uui
       })}
       onToggleTask={() => {}}
     />,
-    (path) => (path === 'entity.query' ? [category(CAT_FOOD, 'Еда')] : {}),
+    withCategories([category(CAT_FOOD, 'Еда')]),
   );
   expect(await screen.findByText('Еда')).toBeInTheDocument();
   expect(screen.queryByText(CAT_FOOD)).toBeNull();
-  // Источник категорий — тот же запрос (и тот же кэш), что у пикера D3b: второго нет
-  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
-    query: 'aspect=orbis/category, sortBy=orbis/title:asc, limit=200',
-  });
+  // Источник категорий — тот же запрос (и тот же кэш), что у ОБЩЕГО пикера ссылки: второго
+  // нет. Форма — Q-AST цели свойства из реестра (§А6-1), а не текст грамматики.
+  expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual(CATEGORY_PICKER_AST);
 });
 
 // D6d п.2: прежняя версия утверждала uuid в DOM сразу после рендера — а он там и так есть,
@@ -112,7 +131,7 @@ test('financial: категории нет в списке → uuid как за�
         onToggleTask={() => {}}
       />
     </>,
-    (path) => (path === 'entity.query' ? [category(CAT_FOOD, 'Еда')] : {}),
+    withCategories([category(CAT_FOOD, 'Еда')]),
   );
   // Обе строки делят один запрос и один кэш — «Еда» доказывает, что список уже разрешён.
   expect(await screen.findByText('Еда')).toBeInTheDocument();
@@ -135,7 +154,7 @@ test('financial: пока категории грузятся, бейджа с u
       })}
       onToggleTask={() => {}}
     />,
-    (path) => (path === 'entity.query' ? categories : {}),
+    withCategories(categories),
   );
   // Значение ещё неизвестно — бейджа нет вовсе (ни uuid, ни пустой пилюли).
   expect(screen.queryByText(CAT_FOOD)).toBeNull();
@@ -408,7 +427,7 @@ test('категория: отказ списка категорий — бей�
     />,
     (path) => {
       if (path === 'entity.query') throw trpcError('INTERNAL_SERVER_ERROR');
-      return {};
+      return registryReply(path) ?? {};
     },
   );
   await screen.findByTestId('native-financial');

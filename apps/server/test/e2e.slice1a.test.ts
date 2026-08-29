@@ -122,20 +122,19 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
         id: newId(),
         title: 'Обед',
         tags: ['expense'],
-        aspects: {
-          'orbis/financial': {
-            amount: '340.00',
-            direction: 'expense',
-            category_ref: foodId,
-            occurred_on: '2026-07-03',
-          },
+        props: {
+          'orbis/amount': '340.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': foodId,
+          'orbis/occurred_on': '2026-07-03',
         },
+        aspects: ['orbis/financial'],
       },
     });
     obedId = obed.id;
     expect(() => entitySchema.parse(obed)).not.toThrow();
     // decimal хранится строкой без искажений IEEE-754 (§13.6)
-    expect(obed.aspectsMap['orbis/financial']?.amount).toBe('340.00');
+    expect(obed.props['orbis/amount']).toBe('340.00');
 
     // В глобальном треде появилось audit-сообщение с action создания и его inverse (§7.8)
     const msgs = await a.chat.listMessages({ threadId: globalA });
@@ -163,34 +162,35 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
         id: newId(),
         title: 'Купить кроссовки',
         tags: ['task'],
-        aspects: {
-          // `due_date` — СЕГОДНЯ, и это не украшение фикстуры: на нём стоит единственная
-          // проверка ОСМЫСЛЕННОСТИ выдачи моста (шаг 4b). Без срока блок «Сегодня» отбирал
-          // бы пусто, и любой ассерт над пустым списком проходил бы при любом поведении
-          // компилятора — ровно та инертность, которую нашёл предфильтр (I-3).
-          'orbis/task': { status: 'inbox', due_date: TODAY },
+        props: {
+          // `orbis/due_date` — СЕГОДНЯ, и это не украшение фикстуры: на нём стоит
+          // единственная проверка ОСМЫСЛЕННОСТИ выдачи моста (шаг 4b). Без срока блок
+          // «Сегодня» отбирал бы пусто, и любой ассерт над пустым списком проходил бы при
+          // любом поведении компилятора — ровно та инертность, которую нашёл предфильтр (I-3).
+          'orbis/task_status': 'inbox',
+          'orbis/due_date': TODAY,
           // planned-операция §3.3 обязана иметь дату occurred_on
-          'orbis/financial': {
-            amount: '5000.00',
-            direction: 'expense',
-            category_ref: clothingId,
-            planned: true,
-            occurred_on: '2026-07-05',
-          },
-          'orbis/schedule': { start_at: '2026-07-05T10:00:00Z' },
+          'orbis/amount': '5000.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': clothingId,
+          'orbis/planned': true,
+          'orbis/occurred_on': '2026-07-05',
+          'orbis/start_at': '2026-07-05T10:00:00Z',
         },
+        // Три аспекта — ЯВНЫМ списком: старая карта вешала их самим фактом ключей.
+        aspects: ['orbis/task', 'orbis/financial', 'orbis/schedule'],
       },
     });
     sneakersId = sneakers.id;
     expect(() => entitySchema.parse(sneakers)).not.toThrow();
     // Три аспекта на одной сущности — cross-aspect (§2.4)
-    expect(Object.keys(sneakers.aspectsMap).sort()).toEqual([
+    expect([...sneakers.aspects].sort()).toEqual([
       'orbis/financial',
       'orbis/schedule',
       'orbis/task',
     ]);
-    expect(sneakers.aspectsMap['orbis/task']?.status).toBe('inbox');
-    expect(sneakers.aspectsMap['orbis/financial']?.planned).toBe(true);
+    expect(sneakers.props['orbis/task_status']).toBe('inbox');
+    expect(sneakers.props['orbis/planned']).toBe(true);
   });
 
   // ── Шаг 4: query Inbox-блока Daily Planning + count без limit ───────────────
@@ -225,7 +225,8 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
         id: newId(),
         title: 'Продлить страховку',
         tags: ['task'],
-        aspects: { 'orbis/task': { status: 'inbox', due_date: addDays(TODAY, 30) } },
+        props: { 'orbis/task_status': 'inbox', 'orbis/due_date': addDays(TODAY, 30) },
+        aspects: ['orbis/task'],
       },
     });
     laterId = later.id;
@@ -274,10 +275,10 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     // Переход в done проставляет completed_at сервером (§3.2)
     const done = await a.entity.update({
       id: sneakersId,
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: { 'orbis/task_status': 'done' },
     });
-    expect(done.aspectsMap['orbis/task']?.status).toBe('done');
-    expect(typeof done.aspectsMap['orbis/task']?.completed_at).toBe('string');
+    expect(done.props['orbis/task_status']).toBe('done');
+    expect(typeof done.props['orbis/completed_at']).toBe('string');
 
     // actionId действия-обновления — из audit-сообщения глобального треда (§7.8)
     const before = await a.chat.listMessages({ threadId: globalA });
@@ -295,8 +296,8 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
 
     // Статус вернулся к inbox, completed_at снят (inverse восстановил ключ целиком, §7.8)
     const reverted = await a.entity.get({ id: sneakersId });
-    expect(reverted.entity.aspectsMap['orbis/task']?.status).toBe('inbox');
-    expect(reverted.entity.aspectsMap['orbis/task']?.completed_at).toBeUndefined();
+    expect(reverted.entity.props['orbis/task_status']).toBe('inbox');
+    expect(reverted.entity.props['orbis/completed_at']).toBeUndefined();
 
     // Undo добавил в тред undo-сообщение {type:'undo', undoes}
     const after = await a.chat.listMessages({ threadId: globalA });
@@ -321,7 +322,8 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
         id: newId(),
         title: 'Дождаться зарплаты',
         tags: ['task'],
-        aspects: { 'orbis/task': { status: 'inbox' } },
+        props: { 'orbis/task_status': 'inbox' },
+        aspects: ['orbis/task'],
       },
     });
     blockerId = blocker.id;
@@ -359,7 +361,8 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   test('шаг 7: exportData(A) — 22 сущности, 3 связи (dependency + два зеркала ref), 1 тред, 8 сообщений (вкл. audit и undo)', async () => {
     const exp = await a.user.exportData();
     expect(exp.format).toBe('orbis-export');
-    expect(exp.version).toBe(1);
+    // v2 (§С5): сущности новой формы плюс строки реестров ВЛАДЕЛЬЦА (Задача 13c).
+    expect(exp.version).toBe(2);
 
     // 18 сидов + «Обед» + «купить кроссовки» + «Продлить страховку» (контроль шага 4b) +
     // «Дождаться зарплаты» = 22
@@ -374,8 +377,8 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
 
     // decimal «Обеда» сохранён строкой без искажений (§13.6, персистентный JSON)
     const obed = exp.entities.find((e) => e.id === obedId);
-    expect(obed?.aspectsMap['orbis/financial']?.amount).toBe('340.00');
-    expect(obed?.aspectsMap['orbis/financial']?.occurred_on).toBe('2026-07-03');
+    expect(obed?.props['orbis/amount']).toBe('340.00');
+    expect(obed?.props['orbis/occurred_on']).toBe('2026-07-03');
 
     // Три связи: одна роли `dependency` (шаг 6) и два зеркала ссылочных свойств (§А6-2) —
     // «Обед» и «купить кроссовки» несут `orbis/finance_category`, и на каждую категорию
@@ -447,6 +450,6 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     expect(aExp.relations.length).toBe(3);
     // «купить кроссовки» так и осталась inbox (B её не отменял/менял)
     const aSneakers = aExp.entities.find((e) => e.id === sneakersId);
-    expect(aSneakers?.aspectsMap['orbis/task']?.status).toBe('inbox');
+    expect(aSneakers?.props['orbis/task_status']).toBe('inbox');
   });
 });

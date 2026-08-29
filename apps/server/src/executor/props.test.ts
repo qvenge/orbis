@@ -222,8 +222,9 @@ describe('исполнитель пишет props/aspects[] (§А1-1)', () => {
       category_ref: CATEGORY_A,
       occurred_on: '2026-08-26',
     });
-    // Мешок `meta` больше не пишется вовсе (§А1-1): колонка доживает до 0017 пустой
-    expect(e.meta).toEqual({});
+    // Мешка `meta` в wire-форме больше нет вовсе (§А1-3, Задача 13c): колонка доживает до
+    // 0017 пустой, но наружу не едет — и убедиться в этом можно только по самой форме.
+    expect('meta' in e).toBe(false);
   });
 
   test('entity_create с новой формой {props, aspects:[…]} (exec-вход) → та же строка; key и id принимаются', async () => {
@@ -1300,14 +1301,12 @@ describe('списочные пути несут новую форму', () => {
     expect(queried.props).toEqual(single.props);
     expect(queried.aspects).toEqual(single.aspects);
     expect(queried.queryRefs).toEqual(single.queryRefs);
-    expect(queried.aspectsMap).toEqual(single.aspectsMap);
 
     // Расхождение одиночного и списочного чтения — молчаливое: списки ВЫГЛЯДЯТ рабочими,
     // просто новая форма в них пуста. Поэтому сравниваются все три поля целиком.
     expect(listed.props).toEqual(single.props);
     expect(listed.aspects).toEqual(single.aspects);
     expect(listed.queryRefs).toEqual(single.queryRefs);
-    expect(listed.aspectsMap).toEqual(single.aspectsMap);
     expect(listed.props).toEqual({ 'orbis/task_status': 'planned', 'orbis/priority': 'high' });
   });
 });

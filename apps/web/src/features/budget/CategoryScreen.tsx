@@ -131,25 +131,27 @@ export function CategoryScreen({ categoryId }: { categoryId: string }) {
   );
 
   // Решение D20 (как на экране «Транзакции»): сущность-ШАБЛОН повторяющейся операции
-  // (задан orbis/schedule.recurrence) — не факт траты. Сервер не считает её в spent даже
+  // (задано `orbis/recurrence`) — не факт траты. Сервер не считает её в spent даже
   // при висящей parent-связи на конверт (отдельный фильтр в spentByEnvelope), поэтому
   // строка шаблона под конвертом противоречила бы его же spent. Фильтр клиентский —
   // грамматика §6.3 «поле IS NULL» не выражает; хелпер общий с Agenda.
-  // ИНСТАНСЫ шаблона (orbis/financial.recurring БЕЗ recurrence) остаются со своей 🔁.
+  // ИНСТАНСЫ шаблона (`orbis/recurring` БЕЗ `orbis/recurrence`) остаются со своей 🔁.
   const visible = (txQ.data ?? []).filter((e) => !isRecurringTemplate(e));
 
   const category = catQ.data?.entity;
-  const catAspect = category
-    ? (category.aspectsMap as Record<string, Record<string, unknown> | undefined>)['orbis/category']
-    : undefined;
-  const icon = typeof catAspect?.icon === 'string' ? catAspect.icon : null;
+  // Значение — плоско по id свойства (§А1-1); носителя не спрашиваем (Р9: значок остаётся
+  // на записи и после снятия аспекта «Категория»).
+  const iconRaw = category?.props['orbis/icon'];
+  const icon = typeof iconRaw === 'string' ? iconRaw : null;
   const threadId = catQ.data?.thread?.threadId;
   const body = category?.body ?? '';
 
   const status = envQ.data; // EnvelopeStatus | null (нет конверта на дату) | undefined (грузится)
   const view = status ? envelopeView(status) : null;
-  const start = typeof view?.budget.period_start === 'string' ? view.budget.period_start : null;
-  const end = typeof view?.budget.period_end === 'string' ? view.budget.period_end : null;
+  const startRaw = view?.budget['orbis/period_start'];
+  const endRaw = view?.budget['orbis/period_end'];
+  const start = typeof startRaw === 'string' ? startRaw : null;
+  const end = typeof endRaw === 'string' ? endRaw : null;
   const subtitle = start && end ? periodLabel(start, end) : monthTitle(date.slice(0, 7));
 
   return (
@@ -261,7 +263,9 @@ export function CategoryScreen({ categoryId }: { categoryId: string }) {
 // «Лимит N ↩ ±M», «Доступно R ~P/день». Пороги/фазы — общий envelopeView (EnvelopeCard).
 function EnvelopeSummary({ status, view }: { status: EnvelopeStatus; view: EnvelopeViewModel }) {
   const { level, percent, mark, barColor, paceText, sym, carryoverText, budget } = view;
-  const limit = typeof budget.limit === 'string' ? budget.limit : null;
+  // Значение — плоско по id свойства (§А1-1); `budget` теперь и есть `props` конверта.
+  const limitRaw = budget['orbis/limit'];
+  const limit = typeof limitRaw === 'string' ? limitRaw : null;
 
   return (
     <Card
@@ -350,13 +354,11 @@ function TrendSection({ points }: { points: CategoryTrendPoint[] }) {
 }
 
 // Строка транзакции: дата DD.MM + native-рендер §3.6 (NativeRow) + 🔁 у recurring-инстанса
-// (признак: aspects['orbis/financial'].recurring === true). Тап → push detail сущности.
+// (признак: `orbis/recurring` === true). Тап → push detail сущности.
 function TransactionRow({ entity }: { entity: QueryEntity }) {
-  const fin = (entity.aspectsMap as Record<string, Record<string, unknown> | undefined>)[
-    'orbis/financial'
-  ];
-  const occurredOn = typeof fin?.occurred_on === 'string' ? fin.occurred_on : null;
-  const recurring = fin?.recurring === true;
+  const occurredOnRaw = entity.props['orbis/occurred_on'];
+  const occurredOn = typeof occurredOnRaw === 'string' ? occurredOnRaw : null;
+  const recurring = entity.props['orbis/recurring'] === true;
 
   return (
     <button

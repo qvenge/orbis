@@ -1,7 +1,7 @@
 // Интеграционные тесты executor'а (Task 9): реальная БД под withIdentity, без моков.
 // Env: DATABASE_URL (orbis_app, RLS enforced) + DATABASE_URL_ADMIN (truncate/сид).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { newId } from '@orbis/shared';
+import { newId, propertyToLegacyField } from '@orbis/shared';
 import { canonicalizeBody, DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import { sql } from 'drizzle-orm';
 import {
@@ -61,11 +61,24 @@ function first<T>(items: readonly T[]): T {
   return v;
 }
 
-/** Данные аспекта с внятным падением, если аспекта нет. */
-function aspectOf(source: { aspectsMap: Record<string, Record<string, unknown>> }, id: string) {
-  const a = source.aspectsMap[id];
-  if (a === undefined) throw new Error(`ожидался аспект ${id}`);
-  return a;
+/**
+ * Данные аспекта в СТАРЫХ именах полей — из новой правды (§А1-1), с внятным падением, если
+ * аспект не навешен.
+ *
+ * Проекция, а не чтение готовой карты: `aspectsMap` ушла из wire-формы вместе с последним
+ * читателем (Задача 13c). Имена берёт ТА ЖЕ таблица §А8, которой перевод делает сервер
+ * (`propertyToLegacyField`), — второй таблицы соответствий в репозитории нет, и разъехаться
+ * проекции теста с проекцией продукта негде. Сам сьют остаётся на СТАРОМ входе исполнителя
+ * намеренно: он проверяет именно его (union формы живёт до «Пересева мира», РП-2).
+ */
+function aspectOf(source: { props: Record<string, unknown>; aspects: string[] }, id: string) {
+  if (!source.aspects.includes(id)) throw new Error(`ожидался аспект ${id}`);
+  const out: Record<string, unknown> = {};
+  for (const [propertyId, value] of Object.entries(source.props)) {
+    const field = propertyToLegacyField(propertyId, id);
+    if (field !== undefined) out[field] = value;
+  }
+  return out;
 }
 
 async function countEntities(id: string): Promise<number> {
@@ -331,7 +344,7 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
       req('entity_update', { id: e.id, aspects: { 'orbis/task': null } }),
     );
     const e2 = firstEntity(detached);
-    expect('orbis/task' in e2.aspectsMap).toBe(false);
+    expect(e2.aspects.includes('orbis/task')).toBe(false);
   });
 
   test('5c. результат merge валидируется ajv: удаление обязательного поля → VALIDATION', async () => {
@@ -422,10 +435,10 @@ describe('executor: entity_update — merge аспектов §9.2', () => {
     expect(a.ok).toBe(true);
     expect(b.ok).toBe(true);
     const rows = await withIdentity(db, userA, (tx) =>
-      tx.execute(sql`SELECT aspects_legacy FROM entities WHERE id = ${e.id}`),
+      tx.execute(sql`SELECT props, aspects FROM entities WHERE id = ${e.id}`),
     );
-    const stored = rows[0]?.aspects_legacy as Record<string, Record<string, unknown>>;
-    const task = aspectOf({ aspectsMap: stored }, 'orbis/task');
+    const stored = rows[0] as { props: Record<string, unknown>; aspects: string[] };
+    const task = aspectOf(stored, 'orbis/task');
     expect(task.status).toBe('in_progress'); // правка A не потеряна
     expect(task.due_date).toBe('2026-07-05'); // правка B не потеряна
     expect(task.priority).toBe('low'); // исходное поле цело
@@ -933,7 +946,7 @@ describe('ADE-срез 1: инварианты назначения и засе�
     const undone = await undoAction(db, { actorUserId: userA, actionId });
     expect(undone.ok).toBe(true);
     const after = firstEntity(undone);
-    expect(after.aspectsMap['orbis/project']).toBeUndefined(); // аспект снят
+    expect(after.aspects.includes('orbis/project')).toBe(false); // аспект снят
     expect(await bodyOf(e.id)).toBe(''); // и заготовка вместе с ним
   });
 

@@ -97,7 +97,7 @@ const DEFAULT_LIMIT = 500;
  * него: `compile.ts` удаляется в Задаче 9b, и импорт умер бы вместе с ним.
  */
 const ENTITY_COLUMNS =
-  'id, owner_id, title, emoji, body, body_refs, tags, meta, props, aspects, query_refs, aspects_legacy, created_at, updated_at, archived';
+  'id, owner_id, title, emoji, body, body_refs, tags, props, aspects, query_refs, created_at, updated_at, archived';
 
 /** UUID сущности — та же форма, что у `REL_TARGET_PATTERN` канона (§А5-7). */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

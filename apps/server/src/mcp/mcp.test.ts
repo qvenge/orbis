@@ -647,7 +647,10 @@ describe('/mcp: паттерн «что нового» (§9.3, сценарий 
       input: {
         title: 'Отчёт за квартал',
         tags: [],
-        aspects: { 'orbis/task': { status: 'inbox' } },
+        props: {
+          'orbis/task_status': 'inbox',
+        },
+        aspects: ['orbis/task'],
       },
       source: 'quick_capture',
     });

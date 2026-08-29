@@ -269,7 +269,11 @@ describe('dispatchTool: мутации через executor (§9.2; уровни 
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') return;
     const e = r.result as WireEntity;
-    expect(e.aspectsMap['orbis/task']).toEqual({ status: 'in_progress', priority: 'high' });
+    expect(e.props).toMatchObject({
+      'orbis/task_status': 'in_progress',
+      'orbis/priority': 'high',
+    });
+    expect(e.aspects).toContain('orbis/task');
     expect(r.card?.kind).toBe('entity_card');
     if (r.card?.kind === 'entity_card') {
       expect(r.card.keyFields).toEqual({

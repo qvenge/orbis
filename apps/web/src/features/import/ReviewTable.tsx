@@ -4,30 +4,33 @@
 //
 // Разметка — не <table> (таблиц в приложении нет вовсе): Card + flex-строки, как в
 // RolloverScreen. Виртуализации нет (её нет нигде в приложении), поэтому строка
-// держится дешёвой: никаких запросов и подписок на строку.
+// держится дешёвой: пикер категории у всех строк ходит ОДНИМ запросом — ключ кеша у него
+// один (цель свойства из реестра), сколько бы строк его ни спросило.
 //
 // Инвариант, ради которого написана половина файла: НИ ОДНА строка не теряется молча.
 // ⟳ структурно не может попасть в payload (actionOf возвращает 'skip' по статусу, а не
 // по состоянию переключателей), ✓ без категории не выбрасывается, а блокирует кнопку
 // с явным счётчиком ожидания.
-import type { CanonicalRow, ImportConfirmItem, ImportReviewRow } from '@orbis/shared';
+import type {
+  CanonicalRow,
+  ImportConfirmItem,
+  ImportReviewRow,
+  PropertyDefinition,
+} from '@orbis/shared';
 import { useState } from 'react';
+import { RefField } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
-import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Spinner } from '../../ui/Spinner';
-import { CATEGORIES_QUERY, type CategoryOption, toOption } from '../budget/categories';
+import { FINANCE_CATEGORY } from '../budget/categories';
 import { ddmm } from '../budget/EnvelopeCard';
 
 type RowAction = 'create' | 'adopt' | 'skip';
 
 const TONE_CLASS: Record<MoneyTone, string> = { danger: 'text-danger', positive: 'text-success' };
-
-// Общая строка нативной выпадашки (примитива Select в src/ui нет) — образец §3.3
-const FIELD_CLS =
-  'rounded-control border border-line bg-surface px-2 py-1 text-xs text-text transition focus-visible:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40';
 
 const STATUS_ICON: Record<ImportReviewRow['status'], string> = {
   new: '✓',
@@ -82,10 +85,11 @@ export function ReviewTable({
   pending: boolean;
   onConfirm: (items: ImportConfirmItem[]) => void;
 }) {
-  const categoriesQ = trpc.entity.query.useQuery({ query: CATEGORIES_QUERY });
-  const categories: CategoryOption[] = (
-    Array.isArray(categoriesQ.data) ? categoriesQ.data : []
-  ).map(toOption);
+  // Выбор категории — ОБЩИЙ пикер по цели свойства из реестра (§А6-1): своего списка у
+  // таблицы сверки больше нет. Определение читается ОДИН раз здесь и раздаётся строкам —
+  // каждая строка иначе спрашивала бы снимок сама.
+  const registry = useRegistry();
+  const categoryDef = registry.property(FINANCE_CATEGORY);
 
   // Ручные переключения поверх дефолтов; ключ — externalId строки (уникален в файле)
   const [actions, setActions] = useState<Record<string, RowAction>>({});
@@ -137,7 +141,7 @@ export function ReviewTable({
             row={row}
             action={actionOf(row)}
             categoryRef={categoryOf(row)}
-            categories={categories}
+            categoryDef={categoryDef}
             onCategory={(ref) => setCategoryRefs((s) => ({ ...s, [row.externalId]: ref }))}
             onToggle={() =>
               setActions((s) => ({
@@ -193,14 +197,14 @@ function Row({
   row,
   action,
   categoryRef,
-  categories,
+  categoryDef,
   onCategory,
   onToggle,
 }: {
   row: ImportReviewRow;
   action: RowAction;
   categoryRef: string;
-  categories: CategoryOption[];
+  categoryDef: PropertyDefinition | undefined;
   onCategory: (ref: string) => void;
   onToggle: () => void;
 }) {
@@ -228,21 +232,18 @@ function Row({
 
       {action === 'skip' ? (
         <span className="shrink-0 text-xs text-text-muted">уже импортирована</span>
+      ) : categoryDef === undefined ? (
+        // Реестр ещё едет: пустой список читался бы как «категорий нет».
+        <span className="shrink-0 text-xs text-text-muted">Загрузка…</span>
       ) : (
-        <select
-          aria-label={`Категория «${title}»`}
-          value={categoryRef}
-          onChange={(e) => onCategory(e.target.value)}
-          className={`${FIELD_CLS} max-w-36 shrink-0`}
-        >
-          <option value="">❓ выбрать</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.icon ? `${c.icon} ` : ''}
-              {c.title}
-            </option>
-          ))}
-        </select>
+        <span className="max-w-36 shrink-0">
+          <RefField
+            def={categoryDef}
+            label={`Категория «${title}»`}
+            value={categoryRef}
+            onChange={(v) => onCategory(typeof v === 'string' ? v : '')}
+          />
+        </span>
       )}
 
       {/* Переключатель существует только когда есть кого усыновлять (duplicateOf) */}

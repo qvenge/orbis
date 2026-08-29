@@ -9,7 +9,12 @@ import {
   entitySuggestInput,
   entityUpdateUiInput,
 } from '@orbis/shared';
-import type { QueryAst } from '@orbis/shared/query';
+import {
+  QUERY_TREE_DEPTH_CAP,
+  type QueryAst,
+  queryAstSchema,
+  queryTreeExceedsDepth,
+} from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
 import { inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -83,21 +88,65 @@ function compileAstOrThrow(
 function runQueryWithMaterialization<T>(
   db: Db,
   actorUserId: string,
-  input: { query: string; thisEntityId?: string },
+  input: QueryInput,
   run: (tx: Tx, ast: QueryAst, cctx: CompileCtx) => Promise<T>,
 ): Promise<T> {
   return queryWithMaterialization({
     db,
     actorUserId,
     thisEntityId: input.thisEntityId ?? null,
-    parse: (cctx) => parseOrThrow(input.query, cctx),
+    // Дерево со входа `ast` идёт мимо разбора — как у тула (§А5-4, «два входа, один путь»):
+    // дальше окно материализации, компиляция и выдача у обеих форм одни.
+    parse: (cctx) => input.ast ?? parseOrThrow(input.query as string, cctx),
     run,
   });
 }
 
-const querySignature = z
-  .object({ query: z.string().min(1), thisEntityId: z.string().uuid().optional() })
-  .strict();
+/**
+ * Вход чтений `entity.query`/`entity.count`: текст грамматики ИЛИ готовый Q-AST — РОВНО
+ * ОДНО из двух, той же дисциплиной, что у тула (`entityQueryInput`, §А5-4).
+ *
+ * Второй вход завела Задача 13c ради пикера ссылочных свойств: цель `ref` объявлена в
+ * реестре ДЕРЕВОМ (`{kind:'ref', target: Q-AST}`, §А6-1), а плоский текст §А5-3 дерева не
+ * выражает — печать `or`/`not` даёт скобочную форму, которую разбор честно отвергает.
+ * Печатать цель в текст, чтобы сервер разобрал её обратно, значило бы пропускать её через
+ * форму, в которую она не помещается: половина законных целей отказывала бы на пикере.
+ *
+ * ГЛУБИНА ПРОВЕРЯЕТСЯ ДО СХЕМЫ, и порядок здесь — суть, а не стиль (тот же довод, что у
+ * `assertQueryTreeDepth` тула): `queryAstSchema` рекурсивна через `z.lazy` и на достаточно
+ * глубоком входе исчерпывает стек ВНУТРИ собственного разбора — то есть проверка, стоящая
+ * после схемы, не выполнилась бы никогда. `z.preprocess` — единственное место конвейера
+ * tRPC, которое работает раньше схемы.
+ */
+const querySignature = z.preprocess(
+  (raw) => {
+    const ast =
+      typeof raw === 'object' && raw !== null ? (raw as { ast?: unknown }).ast : undefined;
+    // Меряется ДЕРЕВО, а не конверт: число в отказе обязано быть тем же, что считает код.
+    if (queryTreeExceedsDepth(ast, QUERY_TREE_DEPTH_CAP)) {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message:
+          `дерево запроса вложено глубже ${QUERY_TREE_DEPTH_CAP} уровней — ` +
+          'столько не нужно ни одному осмысленному запросу',
+      });
+    }
+    return raw;
+  },
+  z
+    .object({
+      query: z.string().min(1).optional(),
+      ast: queryAstSchema.optional(),
+      thisEntityId: z.string().uuid().optional(),
+    })
+    .strict()
+    .refine(
+      (v) => (v.query === undefined) !== (v.ast === undefined),
+      'entity.query принимает ровно одно: текст запроса (query) ИЛИ готовое дерево (ast)',
+    ),
+);
+
+type QueryInput = z.infer<typeof querySignature>;
 
 /** Строка чипа/пункта меню: РОВНО то, что рисуется, — не сущность целиком. */
 export interface EntitySuggestion {

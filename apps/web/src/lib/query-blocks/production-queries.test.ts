@@ -19,6 +19,9 @@
  * перевод не наш, и мост живёт ради них.
  */
 
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseQueryAst } from '@orbis/shared/query';
 import { expect, test } from 'vitest';
 import {
@@ -38,6 +41,42 @@ import { NEW_QUERY_BLOCK } from '../../features/entity-editor/slash/items';
 import { MEMORY_FILTER } from '../../features/settings/MemoryScreen';
 import { BUILTIN_REGISTRY } from '../../test/registry';
 import { buildQueryRegistry } from './catalog';
+
+/**
+ * Текст множества категорий — ЦЕЛИКОМ и ИЗ модуля, а не переписанный сюда: копия сверялась
+ * бы с копией. Целиком, а не по префиксу `aspect=orbis/category`, потому что префикс — это
+ * ещё и ДРУГОЙ боевой запрос: быстрый путь чата берёт категории без сортировки и потолка
+ * (`useFastPath.CATEGORY_QUERY`, он в описи выше своей строкой). Одинаковое начало не
+ * делает их одним текстом.
+ */
+const CATEGORY_SET_TEXT = CATEGORIES_QUERY;
+
+/** Признак контрола ссылки в разметке — его ставит `RefField` и по нему же его ищут тесты. */
+const REF_CONTROL_MARK = 'data-kind="ref"';
+
+/** Корень `src` — тем же приёмом, что у стража фикстур (`test/fixtures.test.ts`). */
+const SRC = join(fileURLToPath(import.meta.url), '..', '..', '..');
+
+/**
+ * Исходники web БЕЗ тестов: тест вправе содержать образец запрещённой формы — он её и
+ * проверяет (тот же довод, что у allowlist'а `scripts/check-legacy-form.ts`).
+ */
+function sourceFiles(): { path: string; code: string }[] {
+  const out: { path: string; code: string }[] = [];
+  const walk = (dir: string, prefix: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, `${prefix}${entry.name}/`);
+        continue;
+      }
+      if (!/\.tsx?$/.test(entry.name) || /\.test\.tsx?$/.test(entry.name)) continue;
+      out.push({ path: `${prefix}${entry.name}`, code: readFileSync(full, 'utf8') });
+    }
+  };
+  walk(SRC, '');
+  return out;
+}
 
 const registry = buildQueryRegistry(BUILTIN_REGISTRY).parse;
 
@@ -113,15 +152,47 @@ test.each(PRODUCTION_TEXTS)('%s разбирается каноном §А5-3 б
 });
 
 /**
- * ИНЛАЙН-ДУБЛЬ, который правкой источника не чинился: `EnvelopeCreateSheet` носил свою копию
- * `CATEGORIES_QUERY`, и перевод `categories.ts` его не касался вовсе (опись, вердикт
- * `RESERVED`). Копии больше нет — лист берёт общую константу, и мутация «вернуть литерал»
- * наблюдаема здесь: строка `sortBy=title:asc` в этом файле отсутствует.
+ * ОДИН ДОМ У СТРОКИ КАТЕГОРИЙ — правило, а не разовая уборка.
+ *
+ * История: `EnvelopeCreateSheet` носил ИНЛАЙН-ДУБЛЬ `CATEGORIES_QUERY`, и перевод
+ * `categories.ts` на namespaced key его не касался вовсе — дубль пережил правку молча
+ * (опись, вердикт `RESERVED`). Задача 13c сняла у листа конверта саму надобность в списке
+ * (выбор идёт общим `RefField` по цели свойства из реестра), но правило осталось прежним и
+ * стало шире: текст множества категорий существует В ОДНОМ месте на весь web.
+ *
+ * Проверяется ИСХОДНИК, а не поведение: копия, набранная заново, зелена во всех экранных
+ * тестах — она возвращает те же строки. Увидеть её можно только в тексте.
  */
-test('инлайн-дубль запроса категорий снят: у листа конверта своей строки нет', async () => {
-  const source = await import('../../features/budget/EnvelopeCreateSheet?raw');
-  expect(source.default).toContain('CATEGORIES_QUERY');
-  expect(source.default).not.toContain('aspect=orbis/category');
+test('строка множества категорий живёт в ОДНОМ файле', () => {
+  const offenders = sourceFiles()
+    .filter(({ code }) => code.includes(CATEGORY_SET_TEXT))
+    .map(({ path }) => path);
+  expect(offenders).toEqual(['features/budget/categories.ts']);
+
+  // Положительный контроль ПРАВИЛА: обход обязан видеть текст там, где он есть. Без него
+  // пустой список файлов (промах пути, сменившееся расширение) читался бы как «дублей нет».
+  const scanned = sourceFiles();
+  expect(scanned.length).toBeGreaterThan(100);
+  expect(scanned.some(({ code }) => code.includes(CATEGORY_SET_TEXT))).toBe(true);
+});
+
+/**
+ * ОДНА РЕАЛИЗАЦИЯ ПИКЕРА ССЫЛКИ (§А6-1, ref Р6).
+ *
+ * До Задачи 13c «выбрать сущность» было написано пять раз (карточка записи, быстрая запись,
+ * форма конверта, лист рекатегоризации, сверка импорта), и все пять умели ровно одно
+ * множество — категории. Признак пикера в разметке — атрибут `data-kind="ref"`: его ставит
+ * контрол ссылки, и по нему же его находят тесты экранов.
+ *
+ * Тест ловит ВОЗВРАТ КОПИИ, а не факт существования файла: второй контрол ссылки, где бы он
+ * ни появился, красит эту проверку — и красит именно тем, что копия существует, а не тем,
+ * что она чем-то плоха.
+ */
+test('контрол ссылки — ровно одна реализация на весь web', () => {
+  const offenders = sourceFiles()
+    .filter(({ code }) => code.includes(REF_CONTROL_MARK))
+    .map(({ path }) => path);
+  expect(offenders).toEqual(['lib/entity-ref/RefField.tsx']);
 });
 
 /**

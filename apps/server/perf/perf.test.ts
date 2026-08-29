@@ -170,15 +170,16 @@ function fastPathCreateInput() {
       id: newId(),
       title: 'кофе 340',
       tags: [],
-      aspects: {
-        'orbis/financial': {
-          amount: '340.00',
-          direction: 'expense',
-          currency: 'RUB',
-          category_ref: perfEnvelopeCategoryId(user),
-          occurred_on: today,
-        },
+      // Роутер владельца принимает только НОВУЮ форму (§А1-1, Задача 13c): значения плоско
+      // по id свойства, аспект — явным списком.
+      props: {
+        'orbis/amount': '340.00',
+        'orbis/direction': 'expense',
+        'orbis/currency': 'RUB',
+        'orbis/finance_category': perfEnvelopeCategoryId(user),
+        'orbis/occurred_on': today,
       },
+      aspects: ['orbis/financial'],
     },
     source: 'fast_path' as const,
   };
@@ -231,7 +232,7 @@ test('фикстура наполнена: гейт меряет данные, �
   );
   expect(parent).toBeDefined();
   const envelope = await caller.entity.get({ id: parent?.sourceId ?? '', include: [] });
-  expect(Object.keys(envelope.entity.aspectsMap)).toContain('orbis/budget');
+  expect(envelope.entity.aspects).toContain('orbis/budget');
 
   // Цель: мерить надо ПОСЧИТАННЫЙ прогресс. Расчёт fail-soft (goals/progress.ts) — на
   // конфигурационном отказе (`invalid_query`, `invalid_field`, `array_field`) он выходит

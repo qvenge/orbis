@@ -28,8 +28,11 @@ import { keepPreviousData } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, Repeat, Tag } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { ScreenHeader } from '../../app/ScreenHeader';
+import { RefField } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import { invalidateGraph } from '../../lib/invalidate';
+import { aspectLabel } from '../../lib/registry/labels';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import { useNav } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -40,7 +43,7 @@ import { Skeleton } from '../../ui/Skeleton';
 import { useToast } from '../../ui/toast-store';
 import { isRecurringTemplate } from '../agenda/useAgenda';
 import { currentMonth, monthTitle } from './BudgetScreen';
-import { CATEGORIES_QUERY, type CategoryOption, toOption } from './categories';
+import { CATEGORIES_QUERY, type CategoryOption, FINANCE_CATEGORY, toOption } from './categories';
 import { ddmm } from './EnvelopeCard';
 import { buildTxQuery, TX_PAGE_SIZE } from './txQuery';
 import { invalidateBudget, monthShift } from './useBudget';
@@ -94,6 +97,8 @@ export function TransactionsScreen() {
   const setAmountTo = resetPageAnd(setAmountToRaw);
   const setSearch = resetPageAnd(setSearchRaw);
 
+  const registry = useRegistry();
+  const categoryDef = registry.property(FINANCE_CATEGORY);
   const categoriesQ = trpc.entity.query.useQuery({ query: CATEGORIES_QUERY });
   const categories: CategoryOption[] = (
     Array.isArray(categoriesQ.data) ? categoriesQ.data : []
@@ -137,8 +142,12 @@ export function TransactionsScreen() {
   const [recatFor, setRecatFor] = useState<QueryEntity | null>(null);
 
   function recategorize(entity: QueryEntity, catId: string) {
+    // НОВАЯ форма правки (§А1-1): одно свойство по id. Навешивания аспекта здесь нет и не
+    // нужно — в отличие от быстрой записи и формы конверта, где запись рождается с нуля:
+    // строки этого списка приходят запросом `aspect=orbis/financial` (`buildTxQuery`), то
+    // есть носитель у них уже есть по построению выборки.
     update.mutate(
-      { id: entity.id, aspects: { 'orbis/financial': { category_ref: catId } } },
+      { id: entity.id, props: { [FINANCE_CATEGORY]: catId } },
       { onSuccess: () => setRecatFor(null) },
     );
   }
@@ -148,7 +157,12 @@ export function TransactionsScreen() {
   // где добавление orbis/schedule.recurrence делает операцию шаблоном (и корректно
   // отвязывает от конверта — хук фазы A); подсказка — тостом.
   function makeRecurring(entity: QueryEntity) {
-    show('Добавьте аспект Schedule с правилом повторения — операция станет шаблоном');
+    // Имя аспекта — ПОДПИСЬЮ из реестра (§А9-2), а не словом «Schedule» в коде: подпись
+    // владелец вправе переименовать бесплатно (§А10-2), и подсказка, зовущая аспект иначе,
+    // чем зовёт его карточка на экране записи, ведёт не туда.
+    show(
+      `Добавьте аспект «${aspectLabel(registry, 'orbis/schedule')}» с правилом повторения — операция станет шаблоном`,
+    );
     const { activeTab, push } = useNav.getState();
     push(activeTab, { kind: 'entity', id: entity.id });
   }
@@ -296,20 +310,21 @@ export function TransactionsScreen() {
       >
         <div className="flex flex-col gap-1 pt-6">
           <p className="truncate text-sm text-text-secondary">{recatFor?.title}</p>
-          {categories.map((c) => (
-            <button
-              key={c.id}
-              type="button"
+          {/* ОБЩИЙ пикер по цели свойства из реестра (§А6-1): своего списка категорий у
+              листа рекатегоризации больше нет. */}
+          {categoryDef === undefined ? (
+            <span className="text-sm text-text-muted">Загрузка…</span>
+          ) : (
+            <RefField
+              def={categoryDef}
+              label="Категория"
               disabled={update.isPending}
-              onClick={() => {
-                if (recatFor) recategorize(recatFor, c.id);
+              value={recatFor === null ? '' : (recatFor.props[FINANCE_CATEGORY] ?? '')}
+              onChange={(v) => {
+                if (recatFor !== null && typeof v === 'string') recategorize(recatFor, v);
               }}
-              className="cursor-pointer rounded-control px-2 py-1.5 text-left text-sm transition hover:bg-surface-2 focus-visible:ring-2 focus-visible:ring-accent/60"
-            >
-              {c.icon ? `${c.icon} ` : ''}
-              {c.title}
-            </button>
-          ))}
+            />
+          )}
         </div>
       </Sheet>
     </div>
@@ -317,9 +332,7 @@ export function TransactionsScreen() {
 }
 
 function categoryOf(e: QueryEntity, byId: Map<string, CategoryOption>): CategoryOption | undefined {
-  const ref = (e.aspectsMap as Record<string, { category_ref?: unknown } | undefined>)[
-    'orbis/financial'
-  ]?.category_ref;
+  const ref = e.props[FINANCE_CATEGORY];
   return typeof ref === 'string' ? byId.get(ref) : undefined;
 }
 
@@ -336,14 +349,14 @@ function TxRow({
   onRecategorize: () => void;
   onMakeRecurring: () => void;
 }) {
-  const fin = (entity.aspectsMap as Record<string, Record<string, unknown> | undefined>)[
-    'orbis/financial'
-  ];
-  const occurredOn = typeof fin?.occurred_on === 'string' ? fin.occurred_on : null;
-  const recurring = fin?.recurring === true;
+  // Значения — плоско по id свойства (§А1-1).
+  const props = entity.props;
+  const occurredOn =
+    typeof props['orbis/occurred_on'] === 'string' ? props['orbis/occurred_on'] : null;
+  const recurring = props['orbis/recurring'] === true;
   const money = formatMoney(
-    String(fin?.amount ?? '0'),
-    (fin?.direction as 'expense' | 'income') ?? 'expense',
+    String(props['orbis/amount'] ?? '0'),
+    props['orbis/direction'] === 'income' ? 'income' : 'expense',
   );
   const touchStart = useRef<{ x: number; y: number } | null>(null);
 

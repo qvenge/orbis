@@ -5,14 +5,16 @@
 // currency уходит ЯВНОЙ (defaultCurrency, если пользователь не сменил) — корректность
 // комбинации §2.1 держит серверная нормализация NULL→defaultCurrency (бэклог A7).
 import { type FormEvent, useState } from 'react';
+import { RefField, useRefTitle } from '../../lib/entity-ref/RefField';
 import { invalidateGraph } from '../../lib/invalidate';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import { trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Input } from '../../ui/Input';
 import { Sheet } from '../../ui/Sheet';
 import { Spinner } from '../../ui/Spinner';
 import { useToast } from '../../ui/toast-store';
-import { CATEGORIES_QUERY } from './categories';
+import { FINANCE_CATEGORY } from './categories';
 import { invalidateBudget } from './useBudget';
 
 /** Границы календарного месяца 'YYYY-MM' — дефолт периода конверта (§3.1). */
@@ -24,9 +26,6 @@ function monthRange(month: string): { start: string; end: string } {
 
 const DECIMAL_RE = /^\d+(\.\d+)?$/; // лимит — неотрицательная decimal-строка (схема аспекта)
 const CURRENCY_RE = /^[A-Za-z]{3}$/;
-
-const FIELD_CLS =
-  'rounded-control border border-line bg-surface px-3 py-2 text-sm text-text transition focus-visible:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40';
 
 export function EnvelopeCreateSheet({
   open,
@@ -51,14 +50,15 @@ export function EnvelopeCreateSheet({
   const { show } = useToast();
   const utils = trpc.useUtils();
   const settings = trpc.user.getSettings.useQuery();
-  // Список категорий-сущностей (§3.1: выбор из стартового набора или своей)
-  // Общая константа, а не свой литерал: инлайн-дубль этой строки пережил перевод на
-  // namespaced key ровно потому, что правка `categories.ts` его не касалась (опись боевых
-  // текстов, `ast-fixtures.ts` — «инлайн-дубль CATEGORIES_QUERY»).
-  const categoriesQ = trpc.entity.query.useQuery({ query: CATEGORIES_QUERY }, { enabled: open });
+  // Выбор категории (§3.1) — ОБЩИЙ пикер по цели свойства из реестра (§А6-1): своего списка
+  // у формы конверта больше нет. Свойство здесь то же, что у операции (`orbis/finance_category`,
+  // В1 слил их в одно), поэтому конверт получил пикер, которого ему никто не писал.
+  const registry = useRegistry();
+  const categoryDef = registry.property(FINANCE_CATEGORY);
+  // Название выбранной категории — для имени конверта; тот же список, тот же кеш.
+  const categoryTitle = useRefTitle(categoryDef, categoryId);
   const create = trpc.entity.create.useMutation();
 
-  const categories = categoriesQ.data ?? [];
   const effectiveCurrency = (currency ?? settings.data?.defaultCurrency ?? 'RUB').toUpperCase();
   const valid =
     categoryId !== '' &&
@@ -71,23 +71,30 @@ export function EnvelopeCreateSheet({
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!valid || create.isPending) return;
-    const category = categories.find((c) => c.id === categoryId);
     const periodLabel =
       start === defaults.start && end === defaults.end ? month : `${start}..${end}`;
+    // Название категории в имени конверта — только когда оно ИЗВЕСТНО: `useRefTitle` на
+    // промахе отдаёт сам uuid, и «Конверт «019d48ea-…»» был бы хуже безымянного.
+    const named = categoryTitle.title !== categoryId;
     try {
       await create.mutateAsync({
         input: {
-          title: category ? `Конверт «${category.title}» ${periodLabel}` : `Конверт ${periodLabel}`,
+          title: named
+            ? `Конверт «${categoryTitle.title}» ${periodLabel}`
+            : `Конверт ${periodLabel}`,
           tags: [],
-          aspects: {
-            'orbis/budget': {
-              category_ref: categoryId,
-              limit,
-              currency: effectiveCurrency,
-              period_start: start,
-              period_end: end,
-            },
+          // НОВАЯ форма отправки (§А1-1): значения плоско по id свойства, аспект — ЯВНЫМ
+          // навешиванием. В старой карте ключ `orbis/budget` вешал аспект самим фактом
+          // записи поля; здесь такого не бывает, и без `aspects` конверт родился бы
+          // записью без единого аспекта — то есть не конвертом.
+          props: {
+            [FINANCE_CATEGORY]: categoryId,
+            'orbis/limit': limit,
+            'orbis/currency': effectiveCurrency,
+            'orbis/period_start': start,
+            'orbis/period_end': end,
           },
+          aspects: ['orbis/budget'],
         },
         source: 'ui',
       });
@@ -106,30 +113,20 @@ export function EnvelopeCreateSheet({
       <form onSubmit={submit} className="flex h-full flex-col gap-3 pt-6">
         <h2 className="text-base font-semibold">Новый конверт</h2>
 
-        <label className="flex flex-col gap-1 text-xs text-text-secondary">
+        <div className="flex flex-col gap-1 text-xs text-text-secondary">
           Категория
-          <select
-            aria-label="Категория"
-            value={categoryId}
-            onChange={(e) => setCategoryId(e.target.value)}
-            className={FIELD_CLS}
-          >
-            <option value="" disabled>
-              {categoriesQ.isLoading ? 'Загрузка…' : 'Выберите категорию'}
-            </option>
-            {categories.map((c) => {
-              const icon = (c.aspectsMap as Record<string, { icon?: unknown } | undefined>)[
-                'orbis/category'
-              ]?.icon;
-              return (
-                <option key={c.id} value={c.id}>
-                  {typeof icon === 'string' && icon !== '' ? `${icon} ` : ''}
-                  {c.title}
-                </option>
-              );
-            })}
-          </select>
-        </label>
+          {categoryDef === undefined ? (
+            // Реестр ещё едет: показать пустой список значило бы «категорий нет».
+            <span className="text-sm text-text-muted">Загрузка…</span>
+          ) : (
+            <RefField
+              def={categoryDef}
+              label="Категория"
+              value={categoryId}
+              onChange={(v) => setCategoryId(typeof v === 'string' ? v : '')}
+            />
+          )}
+        </div>
 
         <div className="flex gap-2">
           <label

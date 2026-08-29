@@ -58,14 +58,13 @@ type Caller = ReturnType<typeof callerFor>;
 function income(categoryRef: string, amount: string, tags: string[], occurredOn = '2026-07-04') {
   return {
     tags,
-    aspects: {
-      'orbis/financial': {
-        amount,
-        direction: 'income',
-        category_ref: categoryRef,
-        occurred_on: occurredOn,
-      },
+    props: {
+      'orbis/amount': amount,
+      'orbis/direction': 'income',
+      'orbis/finance_category': categoryRef,
+      'orbis/occurred_on': occurredOn,
     },
+    aspects: ['orbis/financial'],
   };
 }
 
@@ -218,14 +217,13 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
       input: {
         title: 'Продукты',
         tags: ['savings'],
-        aspects: {
-          'orbis/financial': {
-            amount: '3000.00',
-            direction: 'expense',
-            category_ref: await ensureCategory(user),
-            occurred_on: '2026-07-04',
-          },
+        props: {
+          'orbis/amount': '3000.00',
+          'orbis/direction': 'expense',
+          'orbis/finance_category': await ensureCategory(user),
+          'orbis/occurred_on': '2026-07-04',
         },
+        aspects: ['orbis/financial'],
       },
       source: 'ui',
     });
@@ -249,12 +247,12 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
     const caller = callerFor(user);
     for (const title of ['Хоббит', 'Дюна', 'Сиддхартха']) {
       await caller.entity.create({
-        input: { title, tags: ['book'], aspects: { 'orbis/note': {} } },
+        input: { title, tags: ['book'], aspects: ['orbis/note'] },
         source: 'ui',
       });
     }
     await caller.entity.create({
-      input: { title: 'Не книга', tags: ['idea'], aspects: { 'orbis/note': {} } },
+      input: { title: 'Не книга', tags: ['idea'], aspects: ['orbis/note'] },
       source: 'ui',
     });
 
@@ -680,7 +678,7 @@ describe('entity.get: прогресс приезжает с целью и то�
     });
 
     const plain = await caller.entity.create({
-      input: { title: 'Обычная заметка', tags: [], aspects: { 'orbis/note': {} } },
+      input: { title: 'Обычная заметка', tags: [], aspects: ['orbis/note'] },
       source: 'ui',
     });
     const gotPlain = await caller.entity.get({ id: plain.id });
@@ -702,7 +700,7 @@ describe('entity.get: прогресс приезжает с целью и то�
       ['Сиддхартха', 'in_progress'],
     ] as const) {
       const child = await caller.entity.create({
-        input: { title, tags: [], aspects: { 'orbis/task': { status } } },
+        input: { title, tags: [], props: { 'orbis/task_status': status }, aspects: ['orbis/task'] },
         source: 'ui',
       });
       await caller.relation.create({
@@ -735,7 +733,7 @@ describe('entity.get: прогресс приезжает с целью и то�
     const user = freshUserId();
     const caller = callerFor(user);
     const plain = await caller.entity.create({
-      input: { title: 'Обычная заметка', tags: [], aspects: { 'orbis/note': {} } },
+      input: { title: 'Обычная заметка', tags: [], aspects: ['orbis/note'] },
       source: 'ui',
     });
     const goal = await createGoal(user, {

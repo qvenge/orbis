@@ -1,10 +1,16 @@
 // apps/server/src/export.test.ts
-// Интеграционные тесты Task 13: экспорт графа (01 §9.4, D8) через createCallerFactory.
-// Все чтения — одним withIdentity-tx, RLS ограничивает владельцем; встроенные аспекты
-// НЕ экспортируются (только owner_id = актор).
+// Интеграционные тесты Task 13: экспорт графа (01 §9.4, §С5, D8) через createCallerFactory.
+// Все чтения — одним withIdentity-tx, RLS ограничивает владельцем; встроенные строки
+// реестров НЕ экспортируются (только owner_id = актор).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { entitySchema } from '@orbis/shared';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../test/helpers';
+import {
+  aspectDefinitionSchema,
+  entitySchema,
+  propertyDefinitionSchema,
+  relationRoleDefinitionSchema,
+} from '@orbis/shared';
+import { sql } from 'drizzle-orm';
+import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../test/helpers';
 import { appRouter } from './router';
 import { createCallerFactory } from './trpc';
 
@@ -33,12 +39,24 @@ describe('user.exportData (§9.4)', () => {
 
     const exp = await caller.user.exportData();
     expect(exp.format).toBe('orbis-export');
-    expect(exp.version).toBe(1);
+    // Версия 2 — не косметика: сущности едут НОВОЙ формой (§А1-1), и читатель обязан уметь
+    // отличить её от дампа v1, где та же запись описана несовместимо (карта аспектов).
+    expect(exp.version).toBe(2);
     expect(typeof exp.exportedAt).toBe('string');
     expect(exp.exportedAt.endsWith('Z')).toBe(true);
 
     expect(exp.entities.length).toBe(18);
-    for (const e of exp.entities) expect(() => entitySchema.parse(e)).not.toThrow();
+    for (const e of exp.entities) {
+      expect(() => entitySchema.parse(e)).not.toThrow();
+      // Форма — новая и ТОЛЬКО новая: старой карты и мешка `meta` в дампе нет вовсе.
+      expect('aspectsMap' in e).toBe(false);
+      expect('meta' in e).toBe(false);
+    }
+    // Значения адресованы id свойства, а не парой «аспект + поле»: сидированная категория
+    // «Еда» несёт `orbis/icon` — на старой форме этого ключа в дампе не было бы.
+    const food = exp.entities.find((e) => e.title === 'Еда');
+    expect(food?.props['orbis/icon']).toBe('🍔');
+    expect(food?.aspects).toContain('orbis/category');
 
     expect(exp.userSettings).not.toBeNull();
     expect(exp.userSettings?.timezone).toBe('Europe/Moscow');
@@ -46,8 +64,62 @@ describe('user.exportData (§9.4)', () => {
     expect(exp.chatThreads.length).toBe(1);
     expect(exp.chatThreads[0]?.entityId).toBeNull(); // глобальный тред
 
-    // Встроенные аспекты не экспортируются §9.4 (кастомных нет → 0)
-    expect(exp.aspectDefinitions.length).toBe(0);
+    // Встроенные строки реестров не экспортируются §С5 (своих у владельца нет → 0).
+    // Все три реестра, а не один: молчаливо потерять свой словарь так же дорого, как граф.
+    expect(exp.propertyDefinitions).toEqual([]);
+    expect(exp.aspectDefinitions).toEqual([]);
+    expect(exp.relationRoleDefinitions).toEqual([]);
+  });
+
+  /**
+   * ROUND-TRIP дампа v2: то, что выгрузилось, разбирается ОБРАТНО каноническими схемами —
+   * теми же, которыми реестр и граф читает сервер.
+   *
+   * Проверяется именно ОБРАТНЫЙ разбор, а не «поля на месте»: схемы `z.object` срезают всё,
+   * чего в них нет, и сверка «разобранное === выгруженное» ловит две беды разом — лишний
+   * ключ, который переживёт выгрузку и потеряется на чтении, и недостающий, без которого
+   * запись не соберётся. Первое и есть то, чем была старая карта в дампе v1.
+   *
+   * Фикстура несёт СВОЮ строку реестра владельца: без неё все три списка пусты, и
+   * round-trip был бы истинным на пустом месте.
+   */
+  test('дамп v2 читается обратно: сущности и строки реестров владельца разбираются каноном', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    // Своё свойство владельца — прямым INSERT'ом от админа: операций реестра в срезе А ещё
+    // нет (они — Задача 15), а дамп обязан уметь выгрузить строку, которая уже бывает.
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.execute(sql`
+        INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+        VALUES (${crypto.randomUUID()}, ${user}::uuid, 'user/sleep-hours',
+                ${JSON.stringify({ ru: 'Часов сна', en: 'Sleep hours' })}::jsonb,
+                ${JSON.stringify({ ru: 'Сколько спал', en: 'How long the sleep was' })}::jsonb,
+                ${JSON.stringify({ kind: 'number' })}::jsonb, 1000)`);
+    } finally {
+      await adminClient.end();
+    }
+
+    const exp = await caller.user.exportData();
+    expect(exp.propertyDefinitions).toHaveLength(1);
+    expect(exp.propertyDefinitions[0]?.key).toBe('user/sleep-hours');
+    // Встроенные строки в дамп по-прежнему не попали — иначе их было бы под сотню.
+    expect(exp.propertyDefinitions.every((p) => p.ownerId === user)).toBe(true);
+
+    for (const row of exp.propertyDefinitions) {
+      expect(propertyDefinitionSchema.parse(row)).toEqual(row);
+    }
+    for (const row of exp.aspectDefinitions) {
+      expect(aspectDefinitionSchema.parse(row)).toEqual(row);
+    }
+    for (const row of exp.relationRoleDefinitions) {
+      expect(relationRoleDefinitionSchema.parse(row)).toEqual(row);
+    }
+    for (const e of exp.entities) {
+      expect(entitySchema.parse(e)).toEqual(e);
+    }
   });
 
   test('экспорт другого пользователя (без сидирования) — пуст (RLS скоупит владельцем)', async () => {

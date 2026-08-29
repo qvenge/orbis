@@ -283,13 +283,12 @@ describe('chat.listMessages: audit системной материализаци
       input: {
         title: 'Ежедневный шаблон',
         tags: [],
-        aspects: {
-          'orbis/schedule': {
-            start_at: `${today}T09:00:00+03:00`,
-            timezone: 'Europe/Moscow',
-            recurrence: { freq: 'daily', interval: 1 },
-          },
+        props: {
+          'orbis/start_at': `${today}T09:00:00+03:00`,
+          'orbis/timezone': 'Europe/Moscow',
+          'orbis/recurrence': { freq: 'daily', interval: 1 },
         },
+        aspects: ['orbis/schedule'],
       },
       source: 'fast_path',
     });

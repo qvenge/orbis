@@ -308,7 +308,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
       // Разрешение нюанса: владелец, оставив инструкцию, двигает статус (сигнал агенту)
       await ownerCaller.entity.update({
         id: task1Id,
-        aspects: { 'orbis/task': { status: 'in_progress' } },
+        props: { 'orbis/task_status': 'in_progress' },
       });
 
       // Теперь тот же курсор ловит задачу — updated_at пересёк курсор
@@ -396,7 +396,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
     // Владелец повторным update возвращает статус в done
     await ownerCaller.entity.update({
       id: task1Id,
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: { 'orbis/task_status': 'done' },
     });
     expect(taskStatus(await entityRow(task1Id))).toBe('done');
   });

@@ -4,6 +4,7 @@ import { RELATION_ROLE_IDS } from '../constants';
 import {
   attachAspectInput,
   batchExecuteInput,
+  entityCreateExecInput,
   entityCreateInput,
   entityCreateUiInput,
   entityGetInput,
@@ -36,32 +37,29 @@ describe('entityCreateInput', () => {
     expect(r.success).toBe(true);
   });
 
-  test('старая карта аспектов и `meta` контрактом ТУЛА больше не принимаются (§А9-1)', () => {
-    // Обе формы — то, чем модель писала мимо реестра: `meta` не проверялась ничем, а карта
+  test('старую карту аспектов и `meta` не принимают НИ тул, НИ роутер владельца (§А9-1, 13c)', () => {
+    // Обе формы — то, чем писали мимо реестра: `meta` не проверялась ничем, а карта
     // адресовала поле парой «аспект + имя», которой в реестре свойств нет.
-    expect(
-      entityCreateInput.safeParse({
-        title: 'x',
-        tags: [],
-        aspects: { 'orbis/task': { status: 'inbox' } },
-      }).success,
-    ).toBe(false);
+    const legacy = { title: 'x', tags: [], aspects: { 'orbis/task': { status: 'inbox' } } };
+    expect(entityCreateInput.safeParse(legacy).success).toBe(false);
     expect(
       entityCreateInput.safeParse({ title: 'x', tags: [], meta: { raw: 'кроссовки 8000' } })
         .success,
     ).toBe(false);
-    // …а НАДМНОЖЕСТВО tRPC-роутера старую карту принимает — до Задачи 13c (web не переведён).
-    expect(
-      entityCreateUiInput.safeParse({
-        title: 'x',
-        tags: [],
-        aspects: { 'orbis/task': { status: 'inbox' } },
-      }).success,
-    ).toBe(true);
-    // `meta` не принимает и оно: мешок снят везде (§А1-3), а не спрятан за вторым входом.
+    // НАДМНОЖЕСТВО tRPC-роутера — тоже нет, с Задачи 13c: последний web-отправитель старой
+    // карты (`MemoryRuleCard`) переведён, и оставленный вход принимал бы форму, которой
+    // никто не шлёт, — то есть форму, за которой не следит ни один тест.
+    expect(entityCreateUiInput.safeParse(legacy).success).toBe(false);
     expect(
       entityCreateUiInput.safeParse({ title: 'x', tags: [], meta: { raw: 'x' } }).success,
     ).toBe(false);
+    // Новая форма проходит ОБЕ схемы: у роутера и тула вход теперь один и тот же.
+    const modern = { title: 'x', tags: [], props: { 'orbis/task_status': 'inbox' } };
+    expect(entityCreateInput.safeParse(modern).success).toBe(true);
+    expect(entityCreateUiInput.safeParse(modern).success).toBe(true);
+    // …и старую карту по-прежнему принимает ВНУТРЕННЕЕ надмножество исполнителя: серверные
+    // пути мимо тулов переводятся до «Пересева мира» (РП-2), и вход у них свой.
+    expect(entityCreateExecInput.safeParse(legacy).success).toBe(true);
   });
 
   test('tags обязателен (§9.2: string[]*)', () => {
@@ -94,14 +92,19 @@ describe('entityUpdateInput', () => {
     expect(r.success).toBe(true);
   });
 
-  test('старая карта аспектов контрактом ТУЛА не принимается, UI-надмножеством — да', () => {
+  test('старую карту аспектов не принимают НИ тул, НИ роутер владельца — только исполнитель', () => {
     const legacy = { id: UUID, aspects: { 'orbis/task': { status: 'done' }, 'orbis/note': null } };
     expect(entityUpdateInput.safeParse(legacy).success).toBe(false);
-    expect(entityUpdateUiInput.safeParse(legacy).success).toBe(true);
-    // Новая форма проходит ОБЕ схемы: перевод потребителя не ломает соседа.
+    // 13c: формы правки web говорят `props`/`unset`/`aspects.{attach,detach}` — карту роутер
+    // владельца отвергает разбором, а не раскладывает по свойствам молча.
+    expect(entityUpdateUiInput.safeParse(legacy).success).toBe(false);
+    // Внутреннее надмножество исполнителя её ещё принимает (РП-2, до «Пересева мира»).
+    expect(entityUpdateExecInput.safeParse(legacy).success).toBe(true);
+    // Новая форма проходит ВСЕ три схемы: перевод потребителя не ломает соседа.
     const modern = { id: UUID, props: { 'orbis/task_status': 'done' } };
     expect(entityUpdateInput.safeParse(modern).success).toBe(true);
     expect(entityUpdateUiInput.safeParse(modern).success).toBe(true);
+    expect(entityUpdateExecInput.safeParse(modern).success).toBe(true);
   });
 
   test('precondition контракту ТУЛА неизвестен — модель не подставляет CAS сама (§А7-3)', () => {

@@ -31,33 +31,42 @@ describe('wire-сериализация (решение 12 плана)', () => {
     }
   });
 
-  test('aspectsMap = карта из aspects_legacy; props/aspects/queryRefs едут (пока пустые); meta едет', async () => {
+  test('wire-форма несёт ТОЛЬКО новую правду: props/aspects/queryRefs; ни meta, ни старой карты', async () => {
     const { db, client } = appDb();
     const owner = freshUserId();
     const id = crypto.randomUUID();
     try {
       const row = await withIdentity(db, owner, async (tx) => {
-        // Прямой INSERT, а не исполнитель: до Задачи 4b он в новые колонки не пишет, и
-        // проверять надо именно перенос НОСИТЕЛЯ — что карта уезжает из `aspects_legacy`,
-        // а `aspects` наружу отдаётся списком, а не картой.
+        // Прямой INSERT, а не исполнитель: строка нарочно несёт СТАРЫЕ носители
+        // заполненными (`meta`, `aspects_legacy`) рядом с новыми — иначе «наружу не едет»
+        // было бы истинно просто потому, что и внутри пусто.
         await tx.execute(
           sql`INSERT INTO entities (id, owner_id, title, meta, aspects_legacy, props, aspects, query_refs)
               VALUES (${id}, ${owner}, 'носитель',
                       ${JSON.stringify({ source: 'проба' })}::jsonb,
                       ${JSON.stringify({ 'orbis/task': { status: 'todo' } })}::jsonb,
-                      '{}'::jsonb, '{}'::text[], '{}'::text[])`,
+                      ${JSON.stringify({ 'orbis/task_status': 'todo' })}::jsonb,
+                      ARRAY['orbis/task']::text[], '{}'::text[])`,
         );
         const rows = await tx.query.entities.findMany({ where: (e, { eq }) => eq(e.id, id) });
         return rows[0];
       });
       if (!row) throw new Error('строка не прочитана после INSERT');
       const wire = toWireEntity(row);
-      expect(wire.aspectsMap).toEqual({ 'orbis/task': { status: 'todo' } });
-      expect(wire.meta).toEqual({ source: 'проба' });
-      expect(wire.props).toEqual({});
-      expect(wire.aspects).toEqual([]);
+      // Обе колонки в строке ЗАПОЛНЕНЫ (см. INSERT выше) — и наружу не едет ни одна: это и
+      // есть проверяемое утверждение, а не следствие пустых данных (§А1-1, §А1-3).
+      expect(row.aspectsLegacy).toEqual({ 'orbis/task': { status: 'todo' } });
+      expect(row.meta).toEqual({ source: 'проба' });
+      expect('aspectsMap' in wire).toBe(false);
+      expect('meta' in wire).toBe(false);
+      expect(wire.props).toEqual({ 'orbis/task_status': 'todo' });
+      expect(wire.aspects).toEqual(['orbis/task']);
       expect(wire.queryRefs).toEqual([]);
-      expect(() => entitySchema.parse(wire)).not.toThrow();
+      // Схема wire-формы `.strict()` не объявлена, но `z.object` срезает лишнее: разбор —
+      // вторая гарантия того, что старая пара наружу не проедет.
+      const parsed = entitySchema.parse(wire);
+      expect('aspectsMap' in parsed).toBe(false);
+      expect('meta' in parsed).toBe(false);
     } finally {
       await client.end();
     }

@@ -273,7 +273,7 @@ test('backlinks категории: транзакции и правила па�
   const user = freshUserId();
   const caller = callerFor(user);
   const category = await caller.entity.create({
-    input: { title: 'Еда', tags: [], aspects: { 'orbis/category': {} } },
+    input: { title: 'Еда', tags: [], aspects: ['orbis/category'] },
     source: 'fast_path',
   });
   const created = async (input: Record<string, unknown>): Promise<string> => {

@@ -36,9 +36,10 @@ const ROW_CLASS =
  * мёртвое правило было неотличимо от рабочего. Источник неканоничных заголовков не только
  * рука владельца: модель тоже создаёт memory-сущности, а формат ей нигде не задан.
  */
-function isBrokenRule(e: { title: string; aspectsMap: unknown }): boolean {
-  const memory = (e.aspectsMap as Record<string, { kind?: unknown } | undefined>)['orbis/memory'];
-  return memory?.kind === 'rule' && parseRuleTitle(e.title) === null;
+function isBrokenRule(e: { title: string; props: Record<string, unknown> }): boolean {
+  // Род записи памяти — плоское свойство `orbis/memory_kind` (§А1-1, §А8), а не поле
+  // вложенной карты аспекта.
+  return e.props['orbis/memory_kind'] === 'rule' && parseRuleTitle(e.title) === null;
 }
 
 /** Detail открывается в ТЕКУЩЕМ табе (экран памяти живёт в его же стеке). */

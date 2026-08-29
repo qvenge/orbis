@@ -116,9 +116,19 @@ export function RoutineStatusBlock({
       openEntity(runId);
     },
   });
-  // Пауза — обычная правка аспекта, и идёт она общей обвязкой entity.update: оптимистичный
-  // патч, откат при отказе и инвалидация графа уже написаны там (useEntityUpdate).
-  const { mutation: update } = useEntityUpdate(entity.id);
+  /**
+   * Пауза — обычная правка свойства, и идёт она общей обвязкой entity.update: оптимистичный
+   * патч, откат при отказе и инвалидация графа уже написаны там (useEntityUpdate).
+   *
+   * Гашение ОБЗОРА — на уровне мутации (`onSettled` хука), а не в поштучном колбэке `mutate`.
+   * Прежде оно висело вторым аргументом `mutate`, и такие колбэки `@tanstack/query-core`
+   * зовёт только пока у наблюдателя есть слушатели (`mutationObserver.js:77`): «Возобновить»
+   * и немедленный уход с экрана оставляли `overview.nextBucketAt` посчитанным НА ПАУЗЕ, то
+   * есть `null`, — и владелец видел «Следующее срабатывание: —» у живой рутины. Окно тут
+   * ограничено `staleTime` обзора (30 с) и `refetchOnMount` чинит его сам, но чинит поздно и
+   * не всегда: возврат на экран внутри окна показывает ту же неправду.
+   */
+  const { mutation: update } = useEntityUpdate(entity.id, { onSettled: invalidateOverview });
 
   const run = lastRun?.props;
   const outcome = str(run?.['orbis/run_outcome']);
@@ -219,18 +229,13 @@ export function RoutineStatusBlock({
           variant="outline"
           disabled={update.isPending}
           onClick={() =>
-            update.mutate(
-              {
-                id: entity.id,
-                // Патч мержится по КЛЮЧАМ свойств (§А1-1): расписание, режим и права пауза
-                // не трогает — возобновлённая рутина обязана вернуться ровно к прежнему
-                // расписанию.
-                props: { 'orbis/routine_stage': paused ? 'active' : 'paused' },
-              },
-              // Колбэк уровня ВЫЗОВА: обзор гасит только он, потому что общая обвязка
-              // entity.update о рутинах ничего не знает и знать не должна.
-              { onSettled: invalidateOverview },
-            )
+            update.mutate({
+              id: entity.id,
+              // Патч мержится по КЛЮЧАМ свойств (§А1-1): расписание, режим и права пауза
+              // не трогает — возобновлённая рутина обязана вернуться ровно к прежнему
+              // расписанию.
+              props: { 'orbis/routine_stage': paused ? 'active' : 'paused' },
+            })
           }
         >
           {paused ? 'Возобновить' : 'Пауза'}

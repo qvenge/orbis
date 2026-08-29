@@ -4,6 +4,7 @@
 // результат → wire, ошибки executor'а → TRPCError (§9.1, §5.2, §6.4).
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { entitySchema, entityThreadId, globalThreadId } from '@orbis/shared';
+import { QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { TRPCError } from '@trpc/server';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
@@ -49,7 +50,10 @@ describe('entity.create / entity.get (§9.2)', () => {
         title: 'Разобрать входящие',
         tags: ['Task', 'task'],
         body: 'Текст задачи',
-        aspects: { 'orbis/task': { status: 'inbox' } },
+        props: {
+          'orbis/task_status': 'inbox',
+        },
+        aspects: ['orbis/task'],
       },
       source: 'fast_path',
     });
@@ -63,7 +67,8 @@ describe('entity.create / entity.get (§9.2)', () => {
 
     const got = await caller.entity.get({ id: created.id });
     expect(got.entity).toEqual(createdEntity);
-    expect(got.entity.aspectsMap['orbis/task']).toEqual({ status: 'inbox' });
+    expect(got.entity.props['orbis/task_status']).toBe('inbox');
+    expect(got.entity.aspects).toEqual(['orbis/task']);
     // include default — body+relations; backlinks/thread не запрошены (§9.2)
     expect(got.relations).toEqual([]);
     expect(got.backlinks).toBeUndefined();
@@ -253,7 +258,14 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
     const user = freshUserId();
     const caller = callerFor(user);
     const created = await caller.entity.create({
-      input: { title: 'Входящая задача', tags: [], aspects: { 'orbis/task': { status: 'inbox' } } },
+      input: {
+        title: 'Входящая задача',
+        tags: [],
+        props: {
+          'orbis/task_status': 'inbox',
+        },
+        aspects: ['orbis/task'],
+      },
       source: 'fast_path',
     });
     const rows = await caller.entity.query({
@@ -263,12 +275,81 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
     expect(() => entitySchema.parse(rows[0])).not.toThrow(); // wire-форма и у query-выдачи
   });
 
+  /**
+   * ВТОРОЙ ВХОД чтения — готовое дерево (§А5-4). Его завела Задача 13c ради пикера
+   * ссылочных свойств: цель `ref` объявлена в реестре ДЕРЕВОМ (§А6-1), а плоский текст
+   * §А5-3 дерева не выражает — печать `or`/`not` даёт скобочную форму, которую разбор
+   * честно отвергает. Печатать цель в текст, чтобы сервер разобрал её обратно, значило бы
+   * пропускать её через форму, в которую она не помещается.
+   */
+  test('entity.query со входом `ast`: то же дерево, что разобрал бы текст, — та же выдача', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const created = await caller.entity.create({
+      input: {
+        title: 'Задача деревом',
+        tags: [],
+        props: { 'orbis/task_status': 'inbox' },
+        aspects: ['orbis/task'],
+      },
+      source: 'ui',
+    });
+    await caller.entity.create({ input: { title: 'Просто заметка', tags: [] }, source: 'ui' });
+
+    const byText = await caller.entity.query({ query: 'aspect=orbis/task' });
+    const byAst = await caller.entity.query({ ast: { filter: { aspect: 'orbis/task' } } });
+    expect(byAst.map((r) => r.id)).toEqual([created.id]);
+    // Формы РАЗНЫЕ, путь ОДИН: расхождение выдач означало бы два компилятора.
+    expect(byAst.map((r) => r.id)).toEqual(byText.map((r) => r.id));
+    // …и то же у счётчика: сигнатура у обоих чтений общая.
+    expect(await caller.entity.count({ ast: { filter: { aspect: 'orbis/task' } } })).toEqual({
+      count: 1,
+    });
+  });
+
+  test('РОВНО одно из двух: и текст, и дерево — отказ; ни одного — тоже', async () => {
+    const caller = callerFor(freshUserId());
+    // Два непустых входа — это два РАЗНЫХ запроса в одном вызове, и молчаливый выбор
+    // победителя был бы невидимым отбором «не того» (§С8-3).
+    const both = await trpcError(
+      caller.entity.query({ query: 'aspect=orbis/task', ast: { filter: null } }),
+    );
+    expect(both.code).toBe('BAD_REQUEST');
+    const neither = await trpcError(caller.entity.query({}));
+    expect(neither.code).toBe('BAD_REQUEST');
+  });
+
+  /**
+   * Кап глубины — ГРАНИЦА ЯЗЫКА, а не страховка от падения, и мутация это показала:
+   * со снятым гейтом дерево в 128 уровней проходит и zod, и компилятор, и Postgres —
+   * отказ приходит только от нас. Ниже по конвейеру пороги на порядки выше (докблок
+   * `QUERY_TREE_DEPTH_CAP`), и запас между ними — то, ради чего кап и стоит первым.
+   */
+  test('дерево глубже капа — структурный отказ с НАЗВАННЫМ числом (§А5-7)', async () => {
+    const caller = callerFor(freshUserId());
+    // Кап меряется по ДЕРЕВУ; строим вдвое глубже него, чтобы проба не зависела от того,
+    // считает ли конверт сам код.
+    let deep: unknown = { tag: 'дом' };
+    for (let i = 0; i < QUERY_TREE_DEPTH_CAP * 2; i++) deep = { not: deep };
+    const e = await trpcError(caller.entity.query({ ast: { filter: deep } as never }));
+    expect(e.code).toBe('BAD_REQUEST');
+    // Названо ИМЕННО то число, которое код и меряет.
+    expect(e.message).toContain(String(QUERY_TREE_DEPTH_CAP));
+  });
+
   test('count игнорирует limit (бейджи 02 §3.2), query — нет', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     for (const title of ['Одна', 'Две', 'Три']) {
       await caller.entity.create({
-        input: { title, tags: [], aspects: { 'orbis/task': { status: 'inbox' } } },
+        input: {
+          title,
+          tags: [],
+          props: {
+            'orbis/task_status': 'inbox',
+          },
+          aspects: ['orbis/task'],
+        },
         source: 'fast_path',
       });
     }
@@ -351,7 +432,14 @@ describe('CAS-предусловие не протекает в tRPC (entity.upd
     const user = freshUserId();
     const caller = callerFor(user);
     const created = await caller.entity.create({
-      input: { title: 'Тикет', tags: [], aspects: { 'orbis/task': { status: 'planned' } } },
+      input: {
+        title: 'Тикет',
+        tags: [],
+        props: {
+          'orbis/task_status': 'planned',
+        },
+        aspects: ['orbis/task'],
+      },
       source: 'fast_path',
     });
 
@@ -360,12 +448,15 @@ describe('CAS-предусловие не протекает в tRPC (entity.upd
         id: created.id,
         // @ts-expect-error: precondition — параметр exec-схемы, вход роутера его не знает
         precondition: [{ property: 'orbis/task_status', in: ['planned'] }],
-        aspects: { 'orbis/task': { status: 'in_progress' } },
+        props: {
+          'orbis/task_status': 'in_progress',
+        },
+        aspects: { attach: ['orbis/task'] },
       }),
     );
     expect(e.code).toBe('BAD_REQUEST');
 
     const after = await caller.entity.get({ id: created.id });
-    expect(after.entity.aspectsMap['orbis/task']).toEqual({ status: 'planned' });
+    expect(after.entity.props['orbis/task_status']).toBe('planned');
   });
 });

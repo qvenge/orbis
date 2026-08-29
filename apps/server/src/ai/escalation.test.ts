@@ -99,7 +99,9 @@ async function createTxn(user: string, title: string, categoryRef: string): Prom
 async function recategorize(user: string, txnId: string, categoryRef: string): Promise<void> {
   await ownerCaller(user).entity.update({
     id: txnId,
-    aspects: { 'orbis/financial': { category_ref: categoryRef } },
+    // Правка ОДНОГО свойства по id (§А1-1): носитель у транзакции уже есть, навешивать
+    // нечего — и `aspects` у правки означал бы не то же, что у создания.
+    props: { 'orbis/finance_category': categoryRef },
   });
 }
 
@@ -384,11 +386,11 @@ describe('эскалация повторных исправлений кате�
 
     const spy = spyOn(console, 'error').mockImplementation(() => {});
     try {
-      // UI-роутер СТАРОЙ картой намеренно: до Задач 13c и 18 web шлёт именно её, и
-      // дешёвый гейт вызова (`categoryInInput`) обязан читать обе формы.
+      // UI-роутер НОВОЙ формой: старой карты он не принимает с Задачи 13c, и дешёвый гейт
+      // вызова (`categoryInInput`) обязан читать её же.
       const updated = await ownerCaller(user).entity.update({
         id: b,
-        aspects: { 'orbis/financial': { category_ref: fun } },
+        props: { 'orbis/finance_category': fun },
       });
       expect(updated.id).toBe(b);
       // правка категории закоммичена, несмотря на сбой эскалации

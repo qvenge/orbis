@@ -5,8 +5,11 @@ import type { Entity } from '../schemas/entity';
  * «грамматика → SQL» (PRD 01 §6.2) и контрактных тестов `src/contracts/`.
  *
  * Состав: задачи с разными status/priority/due_date, заметка, финансовые записи.
- * Формы аспектов — по PRD 01 §3 (схемы аспектов кодируются в Слайсе 1; здесь
- * `aspectsMap` — плоские образцы, согласованные с нормативными таблицами §3.1–§3.4).
+ * Форма — НОВАЯ правда §А1-1: значения плоско в `props` по id свойства, `aspects` —
+ * список навешенного. Старая карта `{аспект: {поле: значение}}` снята Задачей 13c вместе
+ * с уходом `aspectsMap` из wire-формы; перевод сделан ТОЙ ЖЕ функцией, которой его делает
+ * сервер (`legacyAspectsToProps`, `registry/legacy-field-map.ts`), — второго перевода
+ * одних и тех же полей в репозитории нет.
  * Каждая фикстура обязана проходить `entitySchema` — см. `fixtures.test.ts`.
  */
 
@@ -22,17 +25,6 @@ export const FIXTURE_CATEGORY_INCOME_ID = '019d48ea-5100-7b31-9c22-40d1a2e37f88'
 /** Категория-сущность «Спорт». */
 export const FIXTURE_CATEGORY_SPORT_ID = '019d48ea-6a00-7c42-8d17-51e2b3f48a99';
 
-/**
- * Новая правда (§А1-1) в этих фикстурах ПУСТА: писатель `props`/`aspects[]` появляется
- * следующей задачей, а здесь важна ровно старая карта — по ней строятся golden запросов.
- * Хелпером, а не тремя строками в каждой из десяти записей: удалять его — одно движение.
- */
-const emptyNewForm = (): Pick<Entity, 'props' | 'aspects' | 'queryRefs'> => ({
-  props: {},
-  aspects: [],
-  queryRefs: [],
-});
-
 export const queryFixtures: Entity[] = [
   {
     // Задача: in_progress / high / срок сегодня-около — для status=, priority=, due_date=today.
@@ -43,16 +35,14 @@ export const queryFixtures: Entity[] = [
     body: 'Черновик к вечеру, финал после ревью.',
     bodyRefs: [],
     tags: ['task', 'work'],
-    meta: {},
-    ...emptyNewForm(),
-    aspectsMap: {
-      'orbis/task': {
-        status: 'in_progress',
-        priority: 'high',
-        due_date: '2026-07-03',
-        effort_min: 120,
-      },
+    props: {
+      'orbis/task_status': 'in_progress',
+      'orbis/priority': 'high',
+      'orbis/due_date': '2026-07-03',
+      'orbis/effort_min': 120,
     },
+    aspects: ['orbis/task'],
+    queryRefs: [],
     createdAt: '2026-06-28T09:15:00Z',
     updatedAt: '2026-07-02T18:40:00Z',
     archived: false,
@@ -66,28 +56,22 @@ export const queryFixtures: Entity[] = [
     body: 'К субботней пробежке. Модель выбрана в [[entity:019e4466-1000-7e07-b5d4-64be9721da51|Wishlist: бег]].',
     bodyRefs: ['019e4466-1000-7e07-b5d4-64be9721da51'],
     tags: ['task', 'expense', 'running'],
-    meta: {},
-    ...emptyNewForm(),
-    aspectsMap: {
-      'orbis/task': {
-        status: 'planned',
-        priority: 'medium',
-        due_date: '2026-07-11',
-      },
-      'orbis/schedule': {
-        start_at: '2026-07-11T00:00:00+03:00',
-        all_day: true,
-        timezone: 'Europe/Moscow',
-      },
-      'orbis/financial': {
-        amount: '8000.00',
-        currency: 'RUB',
-        direction: 'expense',
-        category_ref: FIXTURE_CATEGORY_CLOTHES_ID,
-        occurred_on: '2026-07-11',
-        planned: true,
-      },
+    props: {
+      'orbis/task_status': 'planned',
+      'orbis/priority': 'medium',
+      'orbis/due_date': '2026-07-11',
+      'orbis/start_at': '2026-07-11T00:00:00+03:00',
+      'orbis/all_day': true,
+      'orbis/timezone': 'Europe/Moscow',
+      'orbis/amount': '8000.00',
+      'orbis/currency': 'RUB',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': '019d48ea-2e00-7a52-876a-c301529b0456',
+      'orbis/occurred_on': '2026-07-11',
+      'orbis/planned': true,
     },
+    aspects: ['orbis/task', 'orbis/schedule', 'orbis/financial'],
+    queryRefs: [],
     createdAt: '2026-06-08T19:24:11Z',
     updatedAt: '2026-06-08T19:24:11Z',
     archived: false,
@@ -101,13 +85,11 @@ export const queryFixtures: Entity[] = [
     body: '',
     bodyRefs: [],
     tags: ['task'],
-    meta: {},
-    ...emptyNewForm(),
-    aspectsMap: {
-      'orbis/task': {
-        status: 'inbox',
-      },
+    props: {
+      'orbis/task_status': 'inbox',
     },
+    aspects: ['orbis/task'],
+    queryRefs: [],
     createdAt: '2026-07-01T07:02:00Z',
     updatedAt: '2026-07-01T07:02:00Z',
     archived: false,
@@ -121,16 +103,14 @@ export const queryFixtures: Entity[] = [
     body: '',
     bodyRefs: [],
     tags: ['task', 'home'],
-    meta: {},
-    ...emptyNewForm(),
-    aspectsMap: {
-      'orbis/task': {
-        status: 'done',
-        priority: 'low',
-        due_date: '2026-06-28',
-        completed_at: '2026-06-28T18:05:00Z',
-      },
+    props: {
+      'orbis/task_status': 'done',
+      'orbis/priority': 'low',
+      'orbis/due_date': '2026-06-28',
+      'orbis/completed_at': '2026-06-28T18:05:00Z',
     },
+    aspects: ['orbis/task'],
+    queryRefs: [],
     createdAt: '2026-06-20T10:00:00Z',
     updatedAt: '2026-06-28T18:05:00Z',
     archived: false,
@@ -144,16 +124,14 @@ export const queryFixtures: Entity[] = [
     body: 'Запросил 25 июня, обещали до конца месяца.',
     bodyRefs: [],
     tags: ['task', 'work'],
-    meta: {},
-    ...emptyNewForm(),
-    aspectsMap: {
-      'orbis/task': {
-        status: 'waiting',
-        priority: 'medium',
-        due_date: '2026-06-30',
-        waiting_for: 'бухгалтерия',
-      },
+    props: {
+      'orbis/task_status': 'waiting',
+      'orbis/priority': 'medium',
+      'orbis/due_date': '2026-06-30',
+      'orbis/waiting_for': 'бухгалтерия',
     },
+    aspects: ['orbis/task'],
+    queryRefs: [],
     createdAt: '2026-06-25T12:30:00Z',
     updatedAt: '2026-06-30T09:00:00Z',
     archived: false,
@@ -167,14 +145,12 @@ export const queryFixtures: Entity[] = [
     body: 'Заменён новым планом.',
     bodyRefs: [],
     tags: ['task'],
-    meta: {},
-    ...emptyNewForm(),
-    aspectsMap: {
-      'orbis/task': {
-        status: 'cancelled',
-        priority: 'low',
-      },
+    props: {
+      'orbis/task_status': 'cancelled',
+      'orbis/priority': 'low',
     },
+    aspects: ['orbis/task'],
+    queryRefs: [],
     createdAt: '2026-05-02T08:00:00Z',
     updatedAt: '2026-06-15T14:20:00Z',
     archived: true,
@@ -188,14 +164,12 @@ export const queryFixtures: Entity[] = [
     body: '- Грузия, сентябрь\n- Алтай, июль\n- Проверить визовые требования',
     bodyRefs: [],
     tags: ['note', 'travel'],
-    meta: {},
-    ...emptyNewForm(),
-    aspectsMap: {
-      'orbis/note': {
-        content_type: 'markdown',
-        pinned: true,
-      },
+    props: {
+      'orbis/content_type': 'markdown',
+      'orbis/pinned': true,
     },
+    aspects: ['orbis/note'],
+    queryRefs: [],
     createdAt: '2026-06-10T21:45:00Z',
     updatedAt: '2026-06-29T22:10:00Z',
     archived: false,
@@ -209,20 +183,18 @@ export const queryFixtures: Entity[] = [
     body: '',
     bodyRefs: [],
     tags: ['expense', 'food'],
-    meta: {},
-    ...emptyNewForm(),
-    aspectsMap: {
-      'orbis/financial': {
-        amount: '340.00',
-        currency: 'RUB',
-        direction: 'expense',
-        category_ref: FIXTURE_CATEGORY_FOOD_ID,
-        occurred_on: '2026-06-13',
-        planned: false,
-        payment_method: 'card',
-        counterparty: 'Кафе у дома',
-      },
+    props: {
+      'orbis/amount': '340.00',
+      'orbis/currency': 'RUB',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': '019d48ea-4188-765d-8e96-93a0ad9c262a',
+      'orbis/occurred_on': '2026-06-13',
+      'orbis/planned': false,
+      'orbis/payment_method': 'card',
+      'orbis/counterparty': 'Кафе у дома',
     },
+    aspects: ['orbis/financial'],
+    queryRefs: [],
     createdAt: '2026-06-13T13:10:00Z',
     updatedAt: '2026-06-13T13:10:00Z',
     archived: false,
@@ -236,19 +208,17 @@ export const queryFixtures: Entity[] = [
     body: '',
     bodyRefs: [],
     tags: ['income'],
-    meta: {},
-    ...emptyNewForm(),
-    aspectsMap: {
-      'orbis/financial': {
-        amount: '150000.00',
-        currency: 'RUB',
-        direction: 'income',
-        category_ref: FIXTURE_CATEGORY_INCOME_ID,
-        occurred_on: '2026-06-30',
-        planned: false,
-        counterparty: 'ООО «Ромашка»',
-      },
+    props: {
+      'orbis/amount': '150000.00',
+      'orbis/currency': 'RUB',
+      'orbis/direction': 'income',
+      'orbis/finance_category': '019d48ea-5100-7b31-9c22-40d1a2e37f88',
+      'orbis/occurred_on': '2026-06-30',
+      'orbis/planned': false,
+      'orbis/counterparty': 'ООО «Ромашка»',
     },
+    aspects: ['orbis/financial'],
+    queryRefs: [],
     createdAt: '2026-06-30T10:00:00Z',
     updatedAt: '2026-06-30T10:00:00Z',
     archived: false,
@@ -262,18 +232,16 @@ export const queryFixtures: Entity[] = [
     body: '',
     bodyRefs: [],
     tags: ['expense', 'health'],
-    meta: {},
-    ...emptyNewForm(),
-    aspectsMap: {
-      'orbis/financial': {
-        amount: '2000.00',
-        currency: 'RUB',
-        direction: 'expense',
-        category_ref: FIXTURE_CATEGORY_SPORT_ID,
-        occurred_on: '2026-07-10',
-        planned: true,
-      },
+    props: {
+      'orbis/amount': '2000.00',
+      'orbis/currency': 'RUB',
+      'orbis/direction': 'expense',
+      'orbis/finance_category': '019d48ea-6a00-7c42-8d17-51e2b3f48a99',
+      'orbis/occurred_on': '2026-07-10',
+      'orbis/planned': true,
     },
+    aspects: ['orbis/financial'],
+    queryRefs: [],
     createdAt: '2026-07-01T16:00:00Z',
     updatedAt: '2026-07-01T16:00:00Z',
     archived: false,

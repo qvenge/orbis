@@ -187,7 +187,20 @@ export interface MyQueueResult {
 export interface ClaimTaskResult {
   run_id: string;
   action_id: string;
-  ticket: { id: string; title: string; body: string; aspects: Record<string, unknown> };
+  /**
+   * Задание в форме, которую видит МОДЕЛЬ (§А9-2, Р12 «key для машин»): значения плоско в
+   * `props` по key свойства, `aspects` — список навешенного. Старой карты
+   * `{аспект: {поле: значение}}` здесь больше нет: она ушла из wire-формы вместе с
+   * последним читателем (Задача 13c), и адрес поля у чтения и у записи (`entity_update`,
+   * `props`) теперь ОДИН.
+   */
+  ticket: {
+    id: string;
+    title: string;
+    body: string;
+    props: Record<string, unknown>;
+    aspects: string[];
+  };
   project: { id: string; title: string; body: string } | null;
   /** Тело проекта с разделом «Процесс» (С10); null — тикет вне проекта. */
   process: string | null;

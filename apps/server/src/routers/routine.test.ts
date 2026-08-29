@@ -1848,7 +1848,10 @@ describe('откат рутинного прогона: decideProposal(approve) 
     // а `ownerSets` (execute без синка) правит только состояние
     await callerLater().entity.update({
       id: taskId,
-      aspects: { 'orbis/task': { status: 'done' } },
+      props: {
+        'orbis/task_status': 'done',
+      },
+      aspects: { attach: ['orbis/task'] },
     });
 
     const rolled = await rollbackRun(db, { actorUserId: owner, runId });

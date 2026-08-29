@@ -45,8 +45,10 @@ import type {
 } from '../executor/types';
 import type { GrantRef } from '../oauth/grants';
 import { listRunUnits } from '../policy/pending';
+import { loadRegistry } from '../registry/load';
 import type { ToolDispatchResult } from '../tools/dispatch';
 import type { AGENT_VERB_NAMES } from '../tools/registry';
+import { toLlmEntity } from '../wire';
 import {
   assignedTickets,
   parentProject,
@@ -178,10 +180,10 @@ function wireEntityAt(results: unknown[], index: number): WireEntity | null {
   const wire = row as Partial<WireEntity>;
   if (typeof wire.id !== 'string') return null;
   // Признак «это сущность» — НОВАЯ пара колонок (§А1-1), а не проекция `aspectsMap`:
-  // проекция уходит из wire-формы вместе со старым носителем, и проверка по ней однажды
-  // отвергла бы КАЖДУЮ сущность, превратив штатный replay в `replayMismatch`. Множество
-  // проверяемого то же: у сущности обе колонки есть всегда, у чужой строки результата
-  // (origins, счётчик) — ни одной.
+  // проекции в wire-форме больше нет вовсе (снята Задачей 13c), и проверка по ней отвергала
+  // бы КАЖДУЮ сущность, превращая штатный replay в `replayMismatch`. Множество проверяемого
+  // то же: у сущности обе колонки есть всегда, у чужой строки результата (origins,
+  // счётчик) — ни одной.
   if (typeof wire.props !== 'object' || wire.props === null) return null;
   if (!Array.isArray(wire.aspects)) return null;
   return wire as WireEntity;
@@ -585,14 +587,11 @@ async function claimTask(
   //
   // Читается НОВАЯ правда сохранённого ответа (§А1-1) под признаком носителя — тем же
   // способом, что и у соседей (`savedRunMatches`, счётчик шага, статус тикета в
-  // `closeRun`). Через `aspectsMap` этого делать нельзя, и не из вкусовщины: проекция
-  // уходит из wire-формы вместе со старым носителем, и чтение по ней ОТКАЗЫВАЛО БЫ МОЛЧА —
-  // `undefined` вместо гранта, то есть КАЖДЫЙ честный повтор захвата получал бы
-  // «использован другим исполнителем» вместо своего же сохранённого ответа (§7.8).
-  // Переведено именно поэтому — потому что это чтение в РЕШАЮЩЕМ пути, а не потому, что
-  // гейт слеп: `aspectsMap` он видит маркером `aspects-legacy` и ведёт по нему отчёт до
-  // Задачи 13c (Р-П-4, `scripts/check-legacy-form.ts`). Мимо проходит только ПЕРВЫЙ
-  // маркер — путь по старой карте (`aspects(_legacy)?\s*->`), которого здесь нет.
+  // `closeRun`). Старой карты в wire-форме нет вовсе (снята Задачей 13c), и чтение по ней
+  // ОТКАЗЫВАЛО БЫ МОЛЧА — `undefined` вместо гранта, то есть КАЖДЫЙ честный повтор захвата
+  // получал бы «использован другим исполнителем» вместо своего же сохранённого ответа
+  // (§7.8). Переведено это было раньше самого снятия — потому что чтение стоит в РЕШАЮЩЕМ
+  // пути, а не потому, что того требовал греп-гейт.
   const runIsRun = runWire.aspects.includes('orbis/agent-run');
   if (!runIsRun || runWire.props['orbis/grant'] !== grant.id) {
     return err('CONFLICT', 'id вызова уже использован другим исполнителем — возьми новый', {
@@ -603,22 +602,28 @@ async function claimTask(
   }
   const actualRunId = runWire.id;
 
-  const history = await withIdentity(ctx.db, ctx.ownerId, async (tx) => {
+  const { history, ticketForModel } = await withIdentity(ctx.db, ctx.ownerId, async (tx) => {
     const runs = await runsOfParent(tx, ticket.id);
-    return runs.filter((row) => row.id !== actualRunId).map(runSummary);
+    return {
+      history: runs.filter((row) => row.id !== actualRunId).map(runSummary),
+      // Задание для МОДЕЛИ печатается той же проекцией, что и любая сущность в ответе тула
+      // (§А9-2, Р12): `props` по key, `aspects` списком. Прежде здесь ехала старая карта
+      // `{аспект: {поле: значение}}` из wire-формы; она снята Задачей 13c, и второй перевод
+      // «свойство → имя для модели» дал бы агенту поле, которое он прочитал одним именем, а
+      // записать обязан другим.
+      ticketForModel: toLlmEntity(ticketWire, await loadRegistry(tx, ctx.ownerId)),
+    };
   });
 
   const result: ClaimTaskResult = {
     run_id: actualRunId,
     action_id: r.actionId,
     ticket: {
-      id: ticketWire.id,
-      title: ticketWire.title,
-      body: ticketWire.body,
-      // Старая карта здесь — КОНТРАКТ ТУЛА, а не внутреннее чтение: поле `ticket.aspects`
-      // ответа `orbis_claim_task` (`contracts/agent-loop.ts`) читает МОДЕЛЬ, и её форму
-      // меняет перевод тулов (Задача 13c), а не перевод серверных читателей.
-      aspects: ticketWire.aspectsMap,
+      id: ticketForModel.id,
+      title: ticketForModel.title,
+      body: ticketForModel.body ?? '',
+      props: ticketForModel.props,
+      aspects: ticketForModel.aspects,
     },
     project,
     // Процесс проекта — это его тело (С10): агент читает раздел «Процесс» при захвате.

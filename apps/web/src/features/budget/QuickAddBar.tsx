@@ -13,14 +13,16 @@
 import { newId } from '@orbis/shared';
 import { TRPCClientError } from '@trpc/client';
 import { type FormEvent, useState } from 'react';
+import { RefField } from '../../lib/entity-ref/RefField';
 import { formatAmount } from '../../lib/format';
 import { invalidateGraph } from '../../lib/invalidate';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
 import { Input } from '../../ui/Input';
 import { Spinner } from '../../ui/Spinner';
-import { CATEGORIES_QUERY, type CategoryOption, toOption } from './categories';
+import { CATEGORIES_QUERY, type CategoryOption, FINANCE_CATEGORY, toOption } from './categories';
 import { envelopeView } from './EnvelopeCard';
 // Валидация/нормализация суммы — общий moneyInput.ts (§3.6, делится с Rollover B6)
 import { AMOUNT_RE, toDecimal2 } from './moneyInput';
@@ -29,9 +31,6 @@ import { invalidateBudget, todayISO } from './useBudget';
 /** Экспортирован ради пиннинга: боевой текст обязан разбираться каноном (§А5-3). */
 export const RECENT_QUERY = 'aspect=orbis/financial, sortBy=orbis/occurred_on:desc, limit=20';
 const MAX_PILLS = 5;
-
-const FIELD_CLS =
-  'rounded-control border border-line bg-surface px-3 py-2 text-sm text-text transition focus-visible:outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/40';
 
 /** Успешная запись: данные карточки-результата (остаток конверта + Undo, §3.6). */
 type QuickAddResult = {
@@ -59,7 +58,26 @@ export function QuickAddBar({
     { enabled: preset === undefined },
   );
   const create = trpc.entity.create.useMutation();
-  const undo = trpc.ai.undo.useMutation();
+  /**
+   * Гашение кэша отмены — НА УРОВНЕ МУТАЦИИ, а не в поштучном колбэке, и это дефект, а не
+   * уборка. `mutate` зовёт `onSuccess`/`onError` вызова только пока у наблюдателя есть
+   * слушатели (`mutationObserver.js:77`, @tanstack/query-core 5.101.2): отмена быстрой
+   * записи и немедленный уход с вкладки оставляли конверты и бейдж со СПИСАННОЙ суммой,
+   * которой в графе уже нет. Самовосстановления у этого нет: `useBudgetAlertCount`
+   * смонтирован в оболочке приложения (`app/SidebarNav.tsx`), наблюдатель не умирает,
+   * `refetchOnWindowFocus` выключен — неверный бейдж жил бы до перезагрузки страницы.
+   *
+   * `onSettled`, а не `onSuccess`: перечитать правду после неудавшейся отмены безвредно, а
+   * пропустить успех, доехавший после размонтирования, — нет.
+   */
+  const undo = trpc.ai.undo.useMutation({
+    onSettled: () => {
+      void invalidateBudget(utils);
+      invalidateGraph(utils);
+    },
+  });
+  const registry = useRegistry();
+  const categoryDef = registry.property(FINANCE_CATEGORY);
 
   const [direction, setDirection] = useState<'expense' | 'income'>('expense');
   const [amount, setAmount] = useState('');
@@ -80,9 +98,7 @@ export function QuickAddBar({
   // Пилюли (§3.6): уникальные category_ref последних 20 транзакций по порядку, максимум 5.
   const recentRefs: string[] = [];
   for (const e of Array.isArray(recentQ.data) ? recentQ.data : []) {
-    const ref = (e.aspectsMap as Record<string, { category_ref?: unknown } | undefined>)[
-      'orbis/financial'
-    ]?.category_ref;
+    const ref = e.props[FINANCE_CATEGORY];
     if (typeof ref === 'string' && !recentRefs.includes(ref)) recentRefs.push(ref);
   }
   const pills = recentRefs
@@ -107,15 +123,18 @@ export function QuickAddBar({
           id: entityId,
           title: finalTitle,
           tags: [],
-          aspects: {
-            'orbis/financial': {
-              amount: dec,
-              direction,
-              currency: settings.data?.defaultCurrency ?? 'RUB',
-              occurred_on: date,
-              category_ref: categoryId,
-            },
+          // НОВАЯ форма отправки (§А1-1): значения плоско по id свойства, аспект — ЯВНЫМ
+          // навешиванием. Старая карта вешала `orbis/financial` самим фактом ключа; здесь
+          // такого нет, и без `aspects` быстрая запись родила бы запись без единого
+          // аспекта — то есть не операцию: ни в списке транзакций, ни в spent конверта.
+          props: {
+            'orbis/amount': dec,
+            'orbis/direction': direction,
+            'orbis/currency': settings.data?.defaultCurrency ?? 'RUB',
+            'orbis/occurred_on': date,
+            [FINANCE_CATEGORY]: categoryId,
           },
+          aspects: ['orbis/financial'],
         },
         source: 'quick_capture',
       });
@@ -136,11 +155,11 @@ export function QuickAddBar({
 
     // Всё для карточки — из ОТВЕТА: при replay (повтор после сбоя с отредактированной
     // формой) сервер вернул ранее записанную сущность, стейт формы ей не обязан совпадать.
-    const fin = ((created.aspectsMap ?? {}) as Record<string, Record<string, unknown> | undefined>)[
-      'orbis/financial'
-    ];
-    const createdRef = typeof fin?.category_ref === 'string' ? fin.category_ref : categoryId;
-    const createdOn = typeof fin?.occurred_on === 'string' ? fin.occurred_on : date;
+    const createdProps = created.props;
+    const refValue = createdProps[FINANCE_CATEGORY];
+    const onValue = createdProps['orbis/occurred_on'];
+    const createdRef = typeof refValue === 'string' ? refValue : categoryId;
+    const createdOn = typeof onValue === 'string' ? onValue : date;
 
     await invalidateBudget(utils);
     invalidateGraph(utils); // списки транзакций (§5.1) + открытый detail (Р17)
@@ -163,14 +182,12 @@ export function QuickAddBar({
   }
 
   function onUndo(actionId: string) {
+    // Поштучные колбэки остались ровно на том, что живёт вместе с экраном: пометка карточки
+    // «Отменено» и текст ошибки — состояние ЭТОЙ формы, и умереть вместе с ней им и следует.
     undo.mutate(
       { actionId },
       {
-        onSuccess: () => {
-          setResult((r) => (r ? { ...r, undone: true } : r));
-          void invalidateBudget(utils);
-          invalidateGraph(utils);
-        },
+        onSuccess: () => setResult((r) => (r ? { ...r, undone: true } : r)),
         onError: () => setError('Не удалось отменить'),
       },
     );
@@ -229,28 +246,25 @@ export function QuickAddBar({
                   {c.title}
                 </button>
               ))}
-              {/* Полный выбор — раскрытием (§3.6): native select по образцу EnvelopeCreateSheet */}
-              {!showAll ? (
-                <Button variant="ghost" size="sm" onClick={() => setShowAll(true)}>
+              {/* Полный выбор — раскрытием (§3.6): ОБЩИЙ пикер по цели свойства из реестра
+                  (§А6-1). Своего списка у быстрой записи больше нет — пилюли ниже строятся
+                  по последним операциям, а не по множеству категорий. */}
+              {!showAll || categoryDef === undefined ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={categoryDef === undefined}
+                  onClick={() => setShowAll(true)}
+                >
                   Все категории
                 </Button>
               ) : (
-                <select
-                  aria-label="Категория"
+                <RefField
+                  def={categoryDef}
+                  label="Категория"
                   value={categoryId}
-                  onChange={(e) => setCategoryId(e.target.value)}
-                  className={FIELD_CLS}
-                >
-                  <option value="" disabled>
-                    {categoriesQ.isLoading ? 'Загрузка…' : 'Выберите категорию'}
-                  </option>
-                  {categories.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.icon ? `${c.icon} ` : ''}
-                      {c.title}
-                    </option>
-                  ))}
-                </select>
+                  onChange={(v) => setCategoryId(typeof v === 'string' ? v : '')}
+                />
               )}
             </div>
           )}

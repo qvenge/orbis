@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, expect, test, vi } from 'vitest';
 import { renderWithProviders } from '../../test/harness';
+import { BUILTIN_REGISTRY } from '../../test/registry';
 import { AspectsList } from './AspectsList';
 import { ExportButton } from './ExportButton';
 import { GeneralForm } from './GeneralForm';
@@ -103,8 +104,11 @@ test('настройки не монтируют неактивные вклад
 
   // Положительный контроль В ТОМ ЖЕ ТЕСТЕ: открытая вкладка свой запрос ШЛЁТ — иначе молчание
   // выше означало бы лишь, что эти вкладки не спрашивают ничего и никогда.
+  // Вкладка «Аспекты» читает ЭФФЕКТИВНЫЙ реестр (§А9-2), а не строку таблицы `aspect.list`:
+  // состав аспекта приходит ссылками `properties[]`, а не восстанавливается из колонки
+  // `schema` старой формы.
   fireEvent.click(screen.getByRole('tab', { name: 'Аспекты' }));
-  await waitFor(() => expect(paths()).toContain('aspect.list'));
+  await waitFor(() => expect(paths()).toContain('registry.effective'));
   expect(paths()).not.toContain('oauth.listGrants');
 });
 
@@ -123,14 +127,16 @@ test('ExportButton формирует Blob с format:orbis-export', async () => 
     path === 'user.exportData'
       ? {
           format: 'orbis-export',
-          version: 1,
+          version: 2,
           exportedAt: 'x',
           entities: [],
           relations: [],
           chatThreads: [],
           chatMessages: [],
           userSettings: settings,
+          propertyDefinitions: [],
           aspectDefinitions: [],
+          relationRoleDefinitions: [],
         }
       : {},
   );
@@ -142,29 +148,39 @@ test('ExportButton формирует Blob с format:orbis-export', async () => 
 });
 
 // Реформа свойств: у аспекта четвёрка имён id/key/label/description, подпись — per-locale,
-// иконка — в `view_config`. Колонок `name` и `icon` больше нет, и экран обязан читать новую
-// форму, а не тихо рисовать пустые карточки (`a.name` на новой строке — undefined, и React
-// показал бы аспект без имени, ничего не сломав).
-test('AspectsList рендерит label.ru и иконку из viewConfig, а не снятые name/icon', async () => {
+// иконка — в `view_config`, СОСТАВ — ссылки `properties[]`. Источник экрана — эффективный
+// реестр (§А9-2), а не строка таблицы `aspect.list` с колонкой `schema` старой формы: по
+// ней состав пришлось бы восстанавливать из JSON-схемы, то есть догадкой о том, что уже
+// объявлено рядом.
+test('AspectsList: подпись, иконка и СОСТАВ свойств — из эффективного реестра', async () => {
   const aspect = {
     id: 'orbis/task',
     ownerId: null,
     key: 'orbis/task',
     label: { ru: 'Задача', en: 'Task' },
     description: { ru: 'Действие со сроком', en: 'Action with a due date' },
-    properties: [],
-    schema: {},
+    // Порядок НАРОЧНО обратный `rank`: экран обязан показать состав в объявленном порядке,
+    // а не в том, как строки легли в массив.
+    properties: [
+      { propertyId: 'orbis/due_date', required: false, rank: 20 },
+      { propertyId: 'orbis/task_status', required: true, rank: 10 },
+    ],
     aiInstructions: null,
     tagMappings: [],
-    aggregations: null,
+    implements: [],
     viewConfig: { keyFields: [], icon: '✅' },
     module: null,
     service: false,
     rank: 2,
-    createdAt: '2026-08-26T00:00:00.000Z',
   };
-  renderWithProviders(<AspectsList />, (path) => (path === 'aspect.list' ? [aspect] : {}));
+  renderWithProviders(<AspectsList />, (path) =>
+    path === 'registry.effective'
+      ? { version: '1.0', properties: BUILTIN_REGISTRY.properties, aspects: [aspect], roles: [] }
+      : {},
+  );
   expect(await screen.findByText('Задача')).toBeInTheDocument();
   expect(screen.getByText('orbis/task')).toBeInTheDocument();
   expect(screen.getByText('✅')).toBeInTheDocument();
+  // Состав — ПОДПИСЯМИ свойств из реестра и в порядке `rank`, а не id и не порядком массива.
+  expect(screen.getByTestId('aspect-props-orbis/task')).toHaveTextContent('Состояние задачи, Срок');
 });

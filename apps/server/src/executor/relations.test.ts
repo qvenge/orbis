@@ -458,7 +458,7 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
       await execute(db, req('entity_update', { id: x.id, title: 'Будущий конверт' })),
     );
     const entity = rows.results[0] as WireEntity;
-    expect('orbis/budget' in entity.aspectsMap).toBe(false);
+    expect(entity.aspects.includes('orbis/budget')).toBe(false);
   });
 
   test('11c. entity_update.aspects с orbis/budget — тот же второй вход, что 11a: INVARIANT single_budget_parent', async () => {
@@ -479,7 +479,7 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
     expect(invariantOf(r)).toBe('single_budget_parent');
     // Аспект не приклеился
     const rows = ok(await execute(db, req('entity_update', { id: x.id, title: 'X (update)' })));
-    expect('orbis/budget' in (rows.results[0] as WireEntity).aspectsMap).toBe(false);
+    expect((rows.results[0] as WireEntity).aspects.includes('orbis/budget')).toBe(false);
   });
 
   test('11d. entity_update.aspects с orbis/budget: детей с другим конвертом нет → разрешён; detach бюджета не проверяется', async () => {
@@ -496,13 +496,13 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
         req('entity_update', { id: x.id, aspects: { 'orbis/budget': budgetData() } }),
       ),
     );
-    expect('orbis/budget' in (attached.results[0] as WireEntity).aspectsMap).toBe(true);
+    expect((attached.results[0] as WireEntity).aspects.includes('orbis/budget')).toBe(true);
 
     // detach (null) не создаёт второго budget-parent'а — инвариант не должен мешать
     const detached = ok(
       await execute(db, req('entity_update', { id: x.id, aspects: { 'orbis/budget': null } })),
     );
-    expect('orbis/budget' in (detached.results[0] as WireEntity).aspectsMap).toBe(false);
+    expect((detached.results[0] as WireEntity).aspects.includes('orbis/budget')).toBe(false);
   });
 
   test('11b. attach orbis/budget: financial-дети без другого конверта → attach разрешён', async () => {
@@ -517,7 +517,7 @@ describe('target_max_incoming роли envelope-binding (§А4-2; замена �
       await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetProps() })),
     );
     const entity = r.results[0] as WireEntity;
-    expect('orbis/budget' in entity.aspectsMap).toBe(true);
+    expect(entity.aspects.includes('orbis/budget')).toBe(true);
   });
 
   test('11. конкурентные привязки к двум конвертам (Promise.all) → ровно одна живая envelope-binding', async () => {
@@ -1086,7 +1086,7 @@ describe('интервал 7a→0017: конверт-родитель по СТ�
     const r = ok(
       await execute(db, req('attach_orbis_budget', { entity_id: x.id, data: budgetProps() })),
     );
-    expect('orbis/budget' in (r.results[0] as WireEntity).aspectsMap).toBe(true);
+    expect((r.results[0] as WireEntity).aspects.includes('orbis/budget')).toBe(true);
     expect(await legacyBudgetParents(txn.id)).toEqual([env1.id]);
   });
 
