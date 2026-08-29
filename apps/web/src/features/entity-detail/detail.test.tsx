@@ -361,7 +361,7 @@ test('409 правки тела: откат кэша к прежнему body + 
 // сетевой запрос на каждое открытие detail. Инвалидация после создания переехала на тот
 // же ключ entity.get — иначе созданная подзадача не появлялась бы в списке.
 
-test('подзадачи: список из entity.get; после создания — рефетч того же ключа, без relation.listFor', async () => {
+test('подзадачи: подпункт рождается ЗАДАЧЕЙ; список из entity.get; рефетч того же ключа, без relation.listFor', async () => {
   let childId: string | null = null;
   const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path, input) => {
     if (path === 'entity.get') {
@@ -412,6 +412,26 @@ test('подзадачи: список из entity.get; после создан�
   const field = screen.getByLabelText('Новая подзадача');
   fireEvent.change(field, { target: { value: 'Купить молоко' } });
   fireEvent.keyDown(field, { key: 'Enter' });
+
+  /**
+   * ЗАПИСЬ С НУЛЯ: аспект задачи навешивается ЯВНО (§А1-1). Это БОЕВОЙ путь заведения
+   * подпункта — единственный: `QuickCapture` смонтирован только на корне Browser
+   * (`BrowserScreen.tsx`, `context={{kind:'root'}}`), и его ветка подпункта сегодня мертва.
+   *
+   * Потеря списка наблюдаема не отказом, а ТИШИНОЙ: запись рождается со
+   * `orbis/task_status: 'inbox'`, но без носителя — чекбокса у неё нет, в Повестку она не
+   * попадает, смарт-лист `aspect=orbis/task` (тот самый `SUBTASK_PROBE` ниже) её не видит,
+   * — и при этом секция подзадач её ПОКАЗЫВАЕТ, потому что отбирает по роли связи.
+   * Три соседние пробы секции сверяют роль, инвалидацию и тост; payload не трогала ни одна
+   * (ре-ревью фикс-раунда 1, Important-1 продолжение).
+   */
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
+  const createInput = calls.find((c) => c.path === 'entity.create')?.input as {
+    input: { title: string; props?: Record<string, unknown>; aspects?: string[] };
+    source: string;
+  };
+  expect(createInput.input.aspects).toEqual(['orbis/task']);
+  expect(createInput.input.props).toEqual({ 'orbis/task_status': 'inbox' });
 
   expect(await screen.findByTestId('subtask')).toBeInTheDocument();
   expect(await screen.findByRole('button', { name: 'Купить молоко' })).toBeInTheDocument();

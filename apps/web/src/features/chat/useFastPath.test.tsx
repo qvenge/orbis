@@ -113,8 +113,8 @@ afterEach(() => {
   Object.defineProperty(navigator, 'onLine', { value: true, configurable: true });
 });
 
-test('уверенный паттерн онлайн → entity.create(source:fast_path)', async () => {
-  const { Wrap, calls } = wrapper((path, input) => {
+test('уверенный паттерн онлайн → entity.create(source:fast_path) и карточка со списком аспектов', async () => {
+  const { Wrap, calls, qc } = wrapper((path, input) => {
     if (path === 'entity.create') return { id: 'e1', title: 'обед' };
     return handlerBase(path, input);
   });
@@ -126,6 +126,20 @@ test('уверенный паттерн онлайн → entity.create(source:fa
     const c = calls.find((x) => x.path === 'entity.create');
     expect(c?.input).toMatchObject({ source: 'fast_path' });
   });
+
+  /**
+   * АСПЕКТ В СИНТЕТИЧЕСКОЙ КАРТОЧКЕ — не украшение метаданных: по `card.aspects` карточка
+   * решает, показывать ли строку «осталось N ₽» (`EntityCard`, `isFinancial` → `wantRemaining`).
+   * Потеря списка наблюдаема ТИШИНОЙ: карточка рисуется, запись создаётся, остатка нет.
+   * Мутационная проба ре-ревью показала, что до этой проверки сьют web был к ней слеп
+   * целиком (фикс-раунд 2, F7).
+   *
+   * САМ payload создания (`create.aspects`) пиннится в `@orbis/shared`
+   * (`fast-path/fast-path.test.ts`) — там его и строит `parseFastPath`; здесь проверяется
+   * ровно то, что кладёт этот хук.
+   */
+  const card = (threadMsgs(qc)[0]?.metadata as { cards?: { aspects?: string[] }[] })?.cards?.[0];
+  expect(card?.aspects).toEqual(['orbis/financial']);
 });
 
 // Запрос правил обязан разбираться НОВОЙ грамматикой §А5-3 (имена свойств — namespaced key
