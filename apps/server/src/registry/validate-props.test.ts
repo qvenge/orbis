@@ -3,6 +3,7 @@
 // decCmp, поведение общего кеша валидаторов.
 import { describe, expect, test } from 'bun:test';
 import { BUILTIN_ASPECT_DEFS, BUILTIN_PROPERTY_META, type PropertyDefinition } from '@orbis/shared';
+import { QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { type PropsRegistry, validateEntityProps } from './validate-props';
 
 const REG: PropsRegistry = {
@@ -115,6 +116,46 @@ describe('validateEntityProps: коды нарушений', () => {
     expect(validateEntityProps(REG, { props: { 'orbis/priority': 'high' }, aspects: [] })).toEqual(
       [],
     );
+  });
+  /**
+   * ГЛУБИНА ЗНАЧЕНИЯ: своё нарушение и СВОЙ ПОРЯДОК — гейт стоит перед ajv (Р-13c-2).
+   *
+   * Различить порядок можно только на глубине, где рекурсивен САМ ajv: замер даёт
+   * `RangeError` начиная с 20 000 уровней (на 10 000 он ещё ПРИНИМАЕТ значение — та самая
+   * полоса, в которой отравленное значение ложилось в jsonb и убивало чтение цели).
+   * Стоит гейт первым — отказ наш, с нашим кодом и нашим числом; стоит он после ajv — до
+   * него дело не доходит вовсе, и наружу уезжает переполнение стека.
+   *
+   * Проба ЮНИТ-уровня намеренно: на этой глубине рекурсивные помощники интеграционного
+   * сьюта (фикстурная обвязка `seedCategoriesOfInput`) исчерпывают стек сами, и проба там
+   * меряла бы их запас, а не наш порядок.
+   */
+  test('значение глубже капа: код VALUE_TOO_DEEP, и гейт стоит ПЕРЕД ajv', () => {
+    const AJV_BREAKS_AT = 20_000;
+    let node: unknown = { tag: 'дом' };
+    for (let i = 0; i < AJV_BREAKS_AT; i++) node = { not: node };
+
+    expect(
+      validateEntityProps(REG, {
+        props: { 'orbis/progress_source': { query: { filter: node }, aggregate: 'count' } },
+        aspects: [],
+      }),
+    ).toEqual([
+      { code: 'VALUE_TOO_DEEP', propertyId: 'orbis/progress_source', cap: QUERY_TREE_DEPTH_CAP },
+    ]);
+
+    // Законная форма тем же путём проходит — проверка не запрещает нормальную цель.
+    expect(
+      validateEntityProps(REG, {
+        props: {
+          'orbis/progress_source': {
+            query: { filter: { aspect: 'orbis/task' } },
+            aggregate: 'count',
+          },
+        },
+        aspects: [],
+      }),
+    ).toEqual([]);
   });
 });
 
