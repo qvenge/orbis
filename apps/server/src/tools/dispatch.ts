@@ -75,6 +75,7 @@ import {
   factsFromToolCall,
   grantsRoutineAutonomy,
   ROUTINE_MODE_PROPERTY,
+  ROUTINE_STAGE_PROPERTY,
   ROUTINE_TOOLS_PROPERTY,
 } from '../policy/confirmation';
 import { createPending, deferDedupeKey, listRunUnits, operationsNoun } from '../policy/pending';
@@ -1425,6 +1426,17 @@ async function gateRoutinesMax(
  * Человеческое имя свойства доверенности для карточки. Ключи — те же константы, что читает
  * гейт (§7.10): третьего письменного представления адреса здесь нет, только подпись к нему.
  */
+/**
+ * Как назвать владельцу переключённый выключатель отбора. Ключи — те же, что у
+ * `RevivalSwitch`: третьего письменного представления списка выключателей здесь нет.
+ */
+const REVIVAL_PHRASE: Record<RevivalSwitch, string> = {
+  aspect: 'навешивает аспект рутины',
+  archive: 'возвращает из архива',
+  unpause: 'снимает паузу',
+  activate: 'переводит в рабочую стадию',
+};
+
 const AUTONOMY_LABEL: Record<string, string> = {
   [ROUTINE_MODE_PROPERTY]: 'режим',
   [ROUTINE_TOOLS_PROPERTY]: 'белый список',
@@ -1545,10 +1557,12 @@ async function autonomySummary(
     // враньём: режим и белый список уцелеют в `props`, работать перестанет сама рутина.
     if (byCarrier?.detached === true) facts.push('снимает аспект рутины');
     // Обратная сторона того же: значения уже лежат, вызов щёлкает выключателем — и запись
-    // оживает рутиной с правами, перечисленными выше. Выключатель называется свой, а не
-    // общими словами: «вернули из архива» и «сделали рутиной» — разные события для владельца.
-    if (byCarrier?.revives?.switch === 'aspect') facts.push('навешивает аспект рутины');
-    if (byCarrier?.revives?.switch === 'archive') facts.push('возвращает из архива');
+    // оживает рутиной с правами, перечисленными выше. Каждый выключатель называется СВОИМ
+    // именем и все, что щёлкнуты: «вернули из архива», «сняли паузу» и «сделали рутиной» —
+    // разные события для владельца, и вызов вправе сделать несколько разом.
+    for (const revived of byCarrier?.revives?.switches ?? []) {
+      facts.push(REVIVAL_PHRASE[revived]);
+    }
     const subject = aboutRoutine
       ? `Автономия рутины «${title}»`
       : `Свойства доверенности рутины на записи «${title}»`;
@@ -1567,6 +1581,17 @@ async function autonomySummary(
  * патча, — но запись порождает, и потому у него своего поля здесь нет: write-only поле не
  * проверяется ничем (Н-5 ре-ревью фикс-раунда 3).
  */
+/**
+ * Выключатель отбора прогонов, который вызов переводит в положение «работает».
+ *
+ * УСЛОВИЙ ОТБОРА ТРИ, а членов здесь ЧЕТЫРЕ, и это не расхождение: у стадии два наблюдаемых
+ * входа в рабочее положение — из паузы (`paused → active`) и из «стадии не было вовсе»
+ * (свойство необязательно у записи, ещё не бывшей рутиной), — и владельцу это РАЗНЫЕ слова.
+ * Сказать «снимает паузу» про запись, которая на паузе не стояла, значило бы соврать в
+ * карточке ровно так же, как «Автономия рутины «Не рутина»» врала про объект.
+ */
+type RevivalSwitch = 'aspect' | 'archive' | 'unpause' | 'activate';
+
 interface CarrierAutonomyChange {
   /** свойства доверенности, которых замена носителя лишает запись целиком */
   removed: string[];
@@ -1576,15 +1601,17 @@ interface CarrierAutonomyChange {
    * Чем вызов ОЖИВЛЯЕТ вооружённую рутину и на каких значениях; `null` — не оживляет.
    *
    * Живой рутину делают ТРИ условия (`activeRoutines`, `agent-loop/queries.ts`): аспект на
-   * строке, `orbis/routine_stage: active` и `NOT archived`. Два из них — выключатели, которые
-   * щёлкаются мимо свойств доверенности и потому мимо гейта формы: `aspects.attach` (рулинг
-   * Р-12-5) и `archived: false` (рулинг Р-12-6). Третий, `stage`, ушёл владельцу (Р-12-4).
+   * строке, `NOT archived` и `orbis/routine_stage: 'active'`. Ни одно не выражается свойствами
+   * доверенности, поэтому все три щёлкаются мимо гейта формы; рулинги Р-12-5 (аспект), Р-12-6
+   * (архив) и Р-12-4 в исправленной редакции (снятие паузы) требуют за них карточку.
    *
-   * Поле НЕСЁТ значения, а не флаг, потому что их читает сводка: владельцу нужно видеть, ЧЕМ
-   * именно оживает рутина, а в патче этих свойств может не быть вовсе — они лежат на записи
-   * с тех пор, как её выключили.
+   * Выключателей СПИСОК, а не один: вызов вправе щёлкнуть несколько разом
+   * (`{archived:false, props:{routine_stage:'active'}}`), и назвать владельцу надо все — иначе
+   * карточка расскажет о половине сделанного. Поле НЕСЁТ значения, а не флаг, потому что их
+   * читает сводка: владельцу нужно видеть, ЧЕМ именно оживает рутина, а в патче этих свойств
+   * может не быть вовсе — они лежат на записи с тех пор, как её выключили.
    */
-  revives: { switch: 'aspect' | 'archive'; values: Record<string, unknown> } | null;
+  revives: { switches: RevivalSwitch[]; values: Record<string, unknown> } | null;
 }
 
 /**
@@ -1597,11 +1624,21 @@ interface CarrierAutonomyChange {
  * единого свойства в payload'е. Симметрия обязательна: владельца, подтвердившего «снимает
  * аспект рутины», следующий молчаливый `attach` возвращал бы к тому же, с чего он начал.
  *
- * СЮДА ЖЕ — ВОЗВРАТ ИЗ АРХИВА (`archived: false`, рулинг Р-12-6), хотя носителя он не трогает.
- * Место общее не по механике, а по вопросу: отбор прогонов (`activeRoutines`) требует трёх
- * условий — аспект, `stage: active`, `NOT archived`, — и любой выключатель, возвращающий
- * запись в этот отбор, оживляет вооружённую рутину одинаково молча. Разводить их по разным
- * функциям значило бы завести второй ответ на один вопрос.
+ * СЮДА ЖЕ — ВСЕ ВЫКЛЮЧАТЕЛИ ОТБОРА, хотя носителя два из них не трогают: возврат из архива
+ * (`archived: false`, Р-12-6) и снятие паузы (`orbis/routine_stage: 'active'`, Р-12-4 в
+ * исправленной редакции). Место общее не по механике, а по вопросу: отбор прогонов
+ * (`activeRoutines`) требует трёх условий — носитель, `NOT archived`, `stage: 'active'`, — и
+ * любой выключатель, возвращающий запись в этот отбор, оживляет вооружённую рутину одинаково
+ * молча. Разводить их по разным функциям значило бы завести второй ответ на один вопрос.
+ *
+ * СПРАШИВАЕТСЯ ОТБОР ЦЕЛИКОМ, А НЕ ВЫКЛЮЧАТЕЛЬ ПО ОТДЕЛЬНОСТИ, и это исправление раунда 7
+ * (Minor-1 ре-ревью раунда 6). Прежняя формулировка обещала «оживление считается только там,
+ * где оно РЕАЛЬНО происходит», а проверяла два условия из трёх — и архивная рутина, которая
+ * ЕЩЁ И на паузе, получала карточку «возвращает из архива», хотя в отбор всё равно не
+ * попадала. Теперь считается ПЕРЕХОД: `liveRoutine` на состоянии ДО и на состоянии ПОСЛЕ
+ * патча, карточка — только когда «не работала» стало «работает» и запись при этом вооружена.
+ * Обратная сторона того же сужения: навесить аспект записи, у которой нет рабочей стадии,
+ * можно молча — рутиной она работать не станет, а вызов, который её включит, упрётся в замок.
  *
  * Почему это отдельная проверка ПО БД, а не факт классификатора: носитель отвечает на вопрос
  * «что станет с доверенностью» только вместе с текущим состоянием цели.
@@ -1671,8 +1708,7 @@ async function autonomyChangedByCarrier(
   type Probe =
     | { index: number; id: string; kind: 'replace'; data: Record<string, unknown> }
     | { index: number; id: string; kind: 'detach' }
-    | { index: number; id: string; kind: 'attach'; patch: Record<string, unknown> }
-    | { index: number; id: string; kind: 'unarchive'; patch: Record<string, unknown> };
+    | { index: number; id: string; kind: 'revive'; patch: Record<string, unknown> };
   const probes: Probe[] = [];
   for (const [index, op] of ops.entries()) {
     if (!isRecord(op.input)) continue;
@@ -1688,14 +1724,12 @@ async function autonomyChangedByCarrier(
     // совпадает, а разводить порядок применения аспектов ради невыразимого намерения не за что.
     if (namesRoutineAspect(op.input, 'detach')) {
       probes.push({ index, id: op.input.id, kind: 'detach' });
-    } else if (namesRoutineAspect(op.input, 'attach')) {
-      probes.push({ index, id: op.input.id, kind: 'attach', patch: op.input });
-    } else if (op.input.archived === false) {
-      // Возврат из архива — второй выключатель (Р-12-6). Стоит ПОСЛЕ веток аспекта: вызов,
-      // делающий и то и другое, уже поднят веткой выше, и второй записи о нём не нужно.
-      // `archived: true` сюда не попадает намеренно — это выключение, ряд §7.10 «архивация»
-      // держит его сам, а направление у него противоположное (Р-12-4).
-      probes.push({ index, id: op.input.id, kind: 'unarchive', patch: op.input });
+    } else if (touchesRevivalSwitch(op.input)) {
+      // Все три выключателя отбора — ОДНОЙ пробой: щёлкнуть их можно и порознь, и разом, а
+      // вопрос у них общий («заработает ли вооружённая рутина после этого вызова»), и второго
+      // ответа на него заводить не за что. Выключения (`archived: true`, пауза) сюда не
+      // попадают: их направление — сужение, разбор в докблоке `grantsRoutineAutonomy`.
+      probes.push({ index, id: op.input.id, kind: 'revive', patch: op.input });
     }
   }
   const out = new Map<number, CarrierAutonomyChange>();
@@ -1725,41 +1759,36 @@ async function autonomyChangedByCarrier(
     if (row === undefined) continue;
     const props = row.props as Record<string, unknown>;
     const isCarrier = row.aspects.includes(ROUTINE_ASPECT);
-    if (probe.kind === 'attach') {
-      // ВЫДАЧА НОСИТЕЛЕМ (рулинг Р-12-5): значения доверенности переживают снятие аспекта (Р9)
-      // и живут на любой записи, поэтому «сделать эту запись рутиной» — самостоятельный акт
-      // вооружения, даже когда в патче нет ни одного свойства. Аспект уже на строке — выдавать
-      // нечего: доверенность этим вызовом не двигается.
-      if (isCarrier) continue;
-      // Вопрос задаётся ИТОГОВОМУ состоянию, а не одной половине вызова: патч может и добавить
-      // боевые значения, и снять их тем же вызовом.
-      const future = propsAfterPatch(props, probe.patch);
-      if (autonomyArmed(future)) {
-        out.set(probe.index, {
-          removed: [],
-          detached: false,
-          revives: { switch: 'aspect', values: future },
-        });
-      }
-      continue;
-    }
-    if (probe.kind === 'unarchive') {
-      // ВОЗВРАТ ИЗ АРХИВА (рулинг Р-12-6): `NOT archived` — третье условие отбора прогонов,
-      // и снятие архива возвращает вооружённую act-рутину в работу ровно так же, как
-      // навешивание аспекта. Гейт формы этого не видит: `archived` доверенности не касается.
+    if (probe.kind === 'revive') {
+      // ОЖИВЛЕНИЕ ВЫКЛЮЧАТЕЛЕМ (рулинги Р-12-5, Р-12-6 и Р-12-4 в исправленной редакции).
       //
-      // Оживление считается только там, где оно РЕАЛЬНО происходит: запись должна быть
-      // архивной (иначе вызов ничего не переключает) и уже нести аспект рутины (без носителя
-      // она в отбор не попадёт, сколько бы боевых значений на ней ни лежало).
-      if (!row.archived || !isCarrier) continue;
+      // Вопрос задаётся НЕ выключателю по отдельности, а ОТБОРУ ЦЕЛИКОМ: карточка нужна там,
+      // где вызов переводит запись ИЗ «не работает» В «работает» и она при этом вооружена.
+      // Проверять выключатели порознь — значит врать в обе стороны сразу: архивная рутина,
+      // которая ещё и на паузе, получала карточку «возвращает из архива», хотя в отбор всё
+      // равно не попадёт (Minor-1 ре-ревью фикс-раунда 6), а рутина, оживающая ДВУМЯ
+      // выключателями разом, была бы названа половиной. Условия отбора — ровно три, и они
+      // читаются одной функцией `liveRoutine`, общей с этим разбором.
       const future = propsAfterPatch(props, probe.patch);
-      if (autonomyArmed(future)) {
-        out.set(probe.index, {
-          removed: [],
-          detached: false,
-          revives: { switch: 'archive', values: future },
-        });
+      const willCarry = isCarrier || namesRoutineAspect(probe.patch, 'attach');
+      const willArchive =
+        typeof probe.patch.archived === 'boolean' ? probe.patch.archived : row.archived;
+      const before = liveRoutine(isCarrier, row.archived, props);
+      const after = liveRoutine(willCarry, willArchive, future);
+      if (before || !after || !autonomyArmed(future)) continue;
+      // Названы ВСЕ выключатели, которые этот вызов перевёл в рабочее положение: владелец
+      // читает карточку, а не диф, и «вернули из архива» ≠ «сняли паузу» ≠ «сделали рутиной».
+      const switches: RevivalSwitch[] = [];
+      if (!isCarrier && willCarry) switches.push('aspect');
+      if (row.archived && !willArchive) switches.push('archive');
+      if (
+        props[ROUTINE_STAGE_PROPERTY] !== 'active' &&
+        future[ROUTINE_STAGE_PROPERTY] === 'active'
+      ) {
+        // Из паузы и из «стадии не было» — один выключатель, но разные слова владельцу.
+        switches.push(props[ROUTINE_STAGE_PROPERTY] === 'paused' ? 'unpause' : 'activate');
       }
+      out.set(probe.index, { removed: [], detached: false, revives: { switches, values: future } });
       continue;
     }
     // Признак носителя обязателен (Р9): значения доверенности переживают снятие аспекта, и
@@ -1788,6 +1817,31 @@ async function autonomyChangedByCarrier(
     }
   }
   return out;
+}
+
+/**
+ * РАБОТАЕТ ЛИ запись как рутина — ровно три условия отбора прогонов (`activeRoutines`,
+ * `agent-loop/queries.ts`): носитель на строке, не в архиве, `orbis/routine_stage: 'active'`.
+ *
+ * Функция одна на «до» и «после»: замок поднимает уровень на ПЕРЕХОДЕ между ними, и считать
+ * два конца перехода разными формулами значило бы завести ту самую вторую правду, на которой
+ * ветку ловили каждый раунд. Второго представления списка условий в коде нет — отбор в SQL и
+ * эта функция обязаны сойтись, и расхождение видно первым же тестом оживления.
+ */
+function liveRoutine(carrier: boolean, archived: boolean, props: Record<string, unknown>): boolean {
+  return carrier && !archived && props[ROUTINE_STAGE_PROPERTY] === 'active';
+}
+
+/**
+ * Трогает ли патч хоть один выключатель отбора В СТОРОНУ РАБОТЫ. Сюда нужен грубый фильтр —
+ * кого вообще спрашивать у БД; точный ответ даёт разбор строки (`liveRoutine` на обоих концах).
+ * Выключения (`archived: true`, `stage: 'paused'`) не считаются: их направление — сужение прав.
+ */
+function touchesRevivalSwitch(input: Record<string, unknown>): boolean {
+  if (namesRoutineAspect(input, 'attach')) return true;
+  if (input.archived === false) return true;
+  const props = isRecord(input.props) ? input.props : {};
+  return props[ROUTINE_STAGE_PROPERTY] === 'active';
 }
 
 /** Называет ли патч аспект рутины этой стороной: `aspects.attach`/`detach` (§А9-1). */

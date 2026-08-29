@@ -21,6 +21,7 @@ import {
   entityUpdatePreviewDiff,
   factsFromToolCall,
   ROUTINE_MODE_PROPERTY,
+  ROUTINE_STAGE_PROPERTY,
   ROUTINE_TOOLS_PROPERTY,
   type ToolCallFacts,
 } from './confirmation';
@@ -597,6 +598,12 @@ describe('адреса доверенности ≡ реестр (Minor-4)', () 
     );
     expect(required.get(ROUTINE_MODE_PROPERTY)).toBe(true);
     expect(required.get(ROUTINE_TOOLS_PROPERTY)).toBe(false);
+    // Стадия живёт в том же доме, но ВНЕ множества доверенности: она выключатель, а не право.
+    // Пин ловит и её расхождение с реестром, и попадание в `AUTONOMY_PROPERTIES` — от второго
+    // гейт формы начал бы требовать карточку на постановку рутины на паузу, то есть на
+    // СУЖЕНИЕ прав (разбор направлений — в докблоке `grantsRoutineAutonomy`).
+    expect(required.get(ROUTINE_STAGE_PROPERTY)).toBe(true);
+    expect(AUTONOMY_PROPERTIES).not.toContain(ROUTINE_STAGE_PROPERTY);
     // Обязательность — не мелочь: на ней стоит довод, почему «назвать белый список = выдача»
     // не шумит (`autonomyArmed`), и почему консервативный вариант пробы был отклонён.
     expect([...AUTONOMY_PROPERTIES]).toEqual([ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY]);

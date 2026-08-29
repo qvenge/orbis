@@ -2426,12 +2426,39 @@ describe('V1: выдача автономии рутине из чата → pen
     });
     expect(becomes.status).toBe('pending_confirmation');
     if (becomes.status !== 'pending_confirmation') return;
-    // ОЖИДАНИЕ ПЕРЕПИСАНО ФИКС-РАУНДОМ 5 (Р-12-5), И ЭТО СКАЗАНО ВСЛУХ: тот же вызов теперь
-    // называет и НАВЕШИВАНИЕ носителя — запись становится живой act-рутиной, а не просто
-    // получает свойства. Прежняя строка была не неправдой, а неполнотой: шестой путь тогда не
-    // был закрыт, и фикстура задевала его, ничего про него не требуя.
+    // ОЖИДАНИЕ ПЕРЕПИСЫВАЕТСЯ ВТОРОЙ РАЗ, И ЭТО СКАЗАНО ВСЛУХ. Раунд 5 добавил сюда фразу
+    // «навешивает аспект рутины»; раунд 7 её УБРАЛ, и это СУЖЕНИЕ поведения, принятого ревью.
+    // Причина: проба теперь спрашивает не выключатель по отдельности, а ОТБОР ЦЕЛИКОМ, а у
+    // этой заметки нет `orbis/routine_stage` — навесив аспект, она рутиной РАБОТАТЬ не станет
+    // и в `activeRoutines` не попадёт. Оживления не случилось, называть его нечем; правку
+    // доверенности карточка по-прежнему называет — её держит гейт формы.
+    // Дыры сужение не открывает: сторона ниже показывает, что вызов, который РЕАЛЬНО включает
+    // такую запись, карточку требует.
     expect(becomes.card).toMatchObject({
-      summary: 'Автономия рутины «Просто заметка»: режим act, навешивает аспект рутины',
+      summary: 'Автономия рутины «Просто заметка»: режим act',
+    });
+    // Тот самый вызов: стадии не было — вызов ставит рабочую, и запись оживает вооружённой.
+    // Слово выбрано по прежнему значению: «переводит в рабочую стадию», а не «снимает паузу» —
+    // на паузе она не стояла.
+    await withIdentity(db, userA, (tx) =>
+      tx
+        .update(entities)
+        .set({
+          aspects: ['orbis/routine'],
+          props: { 'orbis/routine_at': '07:00', 'orbis/routine_mode': 'act' },
+        })
+        .where(eq(entities.id, note.id)),
+    );
+    const switchOn = await dispatchTool(ctxFor(), 'entity_update', {
+      id: note.id,
+      props: { 'orbis/routine_stage': 'active' },
+    });
+    expect(switchOn.status).toBe('pending_confirmation');
+    if (switchOn.status !== 'pending_confirmation') return;
+    expect(switchOn.card).toMatchObject({
+      // Сводка называет ИТОГОВУЮ доверенность (режим act), а не свойства патча — в патче одна
+      // стадия. Ровно за этим `revives` и несёт значения, а не флаг.
+      summary: 'Автономия рутины «Просто заметка»: режим act, переводит в рабочую стадию',
     });
   });
 
@@ -2638,6 +2665,122 @@ describe('V1: выдача автономии рутине из чата → pen
     // Сводка у неё — фолбэк по имени тула, и это ровно то, что доказывает разделение: карточку
     // требует ряд архивации, а замок автономии про этот вызов не говорит ничего.
     expect(archiving.card).toMatchObject({ summary: 'entity_update' });
+  });
+
+  test('СНЯТИЕ ПАУЗЫ у вооружённой act-рутины → подтверждение; постановка на паузу и безоружная — ok (восьмой путь, Р-12-4 исправленный)', async () => {
+    // У выключателя `stage` ДВА направления, и рулинг Р-12-4 сперва заклеймил его одним:
+    // пауза сужает права (остаётся у владельца), а СНЯТИЕ паузы — эскалация, и её замок обязан
+    // видеть так же, как разархивацию. Воспроизведено до правки: status ok, карточки нет,
+    // stage стал active, `activeRoutines` начала отдавать эту рутину.
+    async function stageOf(id: string): Promise<unknown> {
+      return (await propsOfRow(id))['orbis/routine_stage'];
+    }
+
+    const paused = await seedEntity(userA, {
+      title: 'Приостановленная вооружённая',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({
+          stage: 'paused',
+          mode: 'act',
+          allowed_tools: ['entity_update'],
+        }),
+      },
+    });
+    const unpause = await dispatchTool(ctxFor(), 'entity_update', {
+      id: paused.id,
+      props: { 'orbis/routine_stage': 'active' },
+    });
+    expect(unpause.status).toBe('pending_confirmation');
+    if (unpause.status !== 'pending_confirmation') return;
+    expect(unpause.card).toMatchObject({
+      summary:
+        'Автономия рутины «Приостановленная вооружённая»: режим act, инструменты: entity_update, снимает паузу',
+    });
+    expect(await stageOf(paused.id)).toBe('paused');
+
+    // НАПРАВЛЕНИЕ ЗНАЧИМО: постановка на паузу той же вооружённой рутины — СУЖЕНИЕ прав, и
+    // карточки не требует (Р-12-4, эта половина осталась у владельца). Без этой стороны замок
+    // ловил бы любую правку стадии и требовал подтверждения на выключение.
+    const live = await seedEntity(userA, {
+      title: 'Живая вооружённая для паузы',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
+      },
+    });
+    const pause = await dispatchTool(ctxFor(), 'entity_update', {
+      id: live.id,
+      props: { 'orbis/routine_stage': 'paused' },
+    });
+    expect(pause.status).toBe('ok');
+    expect(await stageOf(live.id)).toBe('paused');
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: снятие паузы у БЕЗОРУЖНОЙ рутины — обычная операция. Отличие от
+    // первого ряда ровно одно: значения мирные.
+    const calm = await seedEntity(userA, {
+      title: 'Приостановленная propose-рутина',
+      tags: [],
+      aspects: { 'orbis/routine': routine({ stage: 'paused' }) },
+    });
+    const calmOn = await dispatchTool(ctxFor(), 'entity_update', {
+      id: calm.id,
+      props: { 'orbis/routine_stage': 'active' },
+    });
+    expect(calmOn.status).toBe('ok');
+    expect(await stageOf(calm.id)).toBe('active');
+
+    // ТРЕТЬЯ: вызов, который «снимает паузу» УЖЕ работающей рутине, ничего не переключает —
+    // оживления нет. Уровень считается по ПЕРЕХОДУ, а не по наличию поля в payload'е.
+    const already = await seedEntity(userA, {
+      title: 'Уже работает',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
+      },
+    });
+    const noop = await dispatchTool(ctxFor(), 'entity_update', {
+      id: already.id,
+      props: { 'orbis/routine_stage': 'active' },
+    });
+    expect(noop.status).toBe('ok');
+
+    // ЧЕТВЁРТАЯ (Minor-1 ре-ревью раунда 6): архивная И на паузе — снятие ОДНОГО выключателя
+    // в отбор её не возвращает, и карточка «возвращает из архива» была бы неправдой о
+    // последствиях. Прежде проба спрашивала выключатели порознь и такую карточку выдавала.
+    const both = await seedEntity(userA, {
+      title: 'Архивная и на паузе',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({
+          stage: 'paused',
+          mode: 'act',
+          allowed_tools: ['entity_update'],
+        }),
+      },
+    });
+    await withIdentity(db, userA, (tx) =>
+      tx.update(entities).set({ archived: true }).where(eq(entities.id, both.id)),
+    );
+    const halfWay = await dispatchTool(ctxFor(), 'entity_update', { id: both.id, archived: false });
+    expect(halfWay.status).toBe('ok');
+
+    // ПЯТАЯ: а ОБА выключателя разом — оживление, и карточка называет ОБА. Половина сделанного
+    // в карточке была бы тем же классом лжи, что и половина операции.
+    await withIdentity(db, userA, (tx) =>
+      tx.update(entities).set({ archived: true }).where(eq(entities.id, both.id)),
+    );
+    const bothOn = await dispatchTool(ctxFor(), 'entity_update', {
+      id: both.id,
+      archived: false,
+      props: { 'orbis/routine_stage': 'active' },
+    });
+    expect(bothOn.status).toBe('pending_confirmation');
+    if (bothOn.status !== 'pending_confirmation') return;
+    expect(bothOn.card).toMatchObject({
+      summary:
+        'Автономия рутины «Архивная и на паузе»: режим act, инструменты: entity_update, возвращает из архива, снимает паузу',
+    });
   });
 
   test('«отнимать нечего» — ОДИН ответ у обоих видов снятия носителя (Minor-2 фикс-раунда 4)', async () => {
