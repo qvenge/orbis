@@ -151,7 +151,18 @@ function corePropertyOf(field: string): string | undefined {
  *    `aspects_legacy`, которую до миграции 0017 читают карточки аспектов и шапка записи.
  *    Перевод идёт по ТОЙ ЖЕ таблице `@orbis/shared`, которой его делает сервер
  *    (`legacyAspectsToProps`): второй таблицы здесь нет и не заводится;
- *  - имя колонки записи (`archived`) БЕЗ аспекта — core-проекция §А1-3 (см. `corePropertyOf`).
+ *  - имя колонки записи (`archived`) — core-проекция §А1-3 (см. `corePropertyOf`).
+ *
+ * ПОРЯДОК форм — не вкус, а закрытие дыры (Important-1 гейт-ревью 13a). Аспект-подсказка
+ * ПРОБУЕТСЯ, но не обрывает резолв: у поля записи носителя нет вовсе, и вызывающий, который
+ * подставил вместо «аспекта нет» пустую строку или чужой аспект, до этой правки уводил
+ * `archived` в сырой ключ — притом что прежний словарь показывал ему «архив». Промах по
+ * аспекту означает ровно «носителя не нашли», а не «искать больше негде».
+ *
+ * Единственная цена — свойство КАСТОМНОГО аспекта, названное ровно как колонка записи
+ * (`title`): оно получит подпись core-проекции «Заголовок». Плата принята сознательно:
+ * список core закрыт четырьмя именами, три из которых (`archived`, `created_at`,
+ * `updated_at`) полем аспекта не бывают, а альтернатива — машинный ключ на живом экране.
  *
  * Отдельная функция от `fieldLabel` нужна ровно одному читателю — строке предложения: у неё
  * есть ЗАПАСНОЙ текст сервера (`summary`), и «реестр не знает» для неё не то же самое, что
@@ -164,8 +175,8 @@ export function propertyIdOf(
 ): string | undefined {
   const direct = reg.property(field);
   if (direct !== undefined) return direct.id;
-  if (aspectId !== undefined) return legacyFieldToProperty(aspectId, field);
-  return corePropertyOf(field);
+  const carried = aspectId === undefined ? undefined : legacyFieldToProperty(aspectId, field);
+  return carried ?? corePropertyOf(field);
 }
 
 /**

@@ -300,8 +300,17 @@ export function AspectField({
    * на экране десятки, и свой хук в каждой из них подписал бы на снимок каждую строку.
    */
   registry: RegistryLookup;
-  /** Идёт только в aria-label: без него у пяти инпутов подряд одно имя на всех. */
-  aspectId: string;
+  /**
+   * Аспект-НОСИТЕЛЬ поля; `undefined` — носителя нет вовсе (поле самой записи в плашке
+   * предложения). Работает на два: подсказка резолву подписи (старое имя поля переводится
+   * в id свойства по паре «аспект + поле») и различитель в `aria-label` — без него у пяти
+   * инпутов подряд одно имя на всех.
+   *
+   * Пустой строкой «носителя нет» НЕ выражается: `''` — это не аспект, и подставлять его
+   * значило бы сказать резолву «носитель есть, вот он», уведя поле записи в сырой ключ
+   * (Important-1 гейт-ревью 13a).
+   */
+  aspectId?: string;
   field: string;
   value: unknown;
   onSave: (raw: string) => void;
@@ -327,7 +336,7 @@ export function AspectField({
       <dt className="text-text-muted">{fieldLabel(registry, field, aspectId)}</dt>
       <dd>
         <input
-          aria-label={`${aspectId} ${field}`}
+          aria-label={aspectId === undefined ? field : `${aspectId} ${field}`}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => draft !== initial && onSave(draft)}

@@ -4458,16 +4458,37 @@ const OVERLAY_DIFF_UNITS = [
   { kind: 'removed', before: 'забрать посылку' },
 ];
 
-/** Строка правки поля аспекта — форма ProposalOperationView (lifecycle.ts). */
+/**
+ * Строка правки СВОЙСТВА — форма ProposalOperationView ровно та, что отдаёт сервер
+ * (`routines/lifecycle.ts` `updateRows`): адрес — id свойства, ключа `aspect` нет вовсе
+ * (с Задачи 12 строка адресуется свойством, а не парой «аспект + поле»), `summary` несёт
+ * тот же сырой адрес. Прежняя редакция фикстуры писала пару руками — форму, которой сервер
+ * не производит ни в одной ветке, и правка из плашки уезжала бы на сервер под адресом,
+ * который тот не признаёт.
+ */
 const statusRow = (over: Record<string, unknown> = {}) => ({
   index: 0,
   tool: 'entity_update',
   entity: { id: 'e1', title: 'Задача' },
-  aspect: 'orbis/task',
-  field: 'status',
+  field: 'orbis/task_status',
   before: 'inbox',
   after: 'done',
-  summary: '«Задача»: orbis/task.status',
+  summary: '«Задача»: orbis/task_status',
+  ...over,
+});
+
+/**
+ * Строка правки поля САМОЙ ЗАПИСИ — второй род правимой строки плашки: адрес у неё — имя
+ * колонки (`title`), носителя-аспекта нет вовсе, и подпись ей даёт core-проекция §А1-3.
+ * Производитель — тот же `updateRows`, ветка `CORE_FIELD_LABELS`.
+ */
+const titleRow = (over: Record<string, unknown> = {}) => ({
+  index: 0,
+  tool: 'entity_update',
+  entity: { id: 'e1', title: 'Задача' },
+  field: 'title',
+  after: 'Задача (перенесена)',
+  summary: '«Задача»: заголовок',
   ...over,
 });
 
@@ -4479,6 +4500,18 @@ const overlayBodyRow = (over: Record<string, unknown> = {}) => ({
   field: 'body',
   after: PROPOSED_BODY,
   summary: '«Задача»: тело',
+  ...over,
+});
+
+/** Второе поле записи в той же операции: архивация. `before` — снятое предусловие. */
+const archivedRow = (over: Record<string, unknown> = {}) => ({
+  index: 0,
+  tool: 'entity_update',
+  entity: { id: 'e1', title: 'Задача' },
+  field: 'archived',
+  before: false,
+  after: true,
+  summary: '«Задача»: архив',
   ...over,
 });
 
@@ -4517,7 +4550,8 @@ function overlayHandler(
     if (path === 'entity.update') return entity;
     if (path === 'chat.listMessages') return [];
     if (path === 'aspect.list') return [];
-    return {};
+    // Реестр НАСТОЯЩИЙ: по нему подписаны и строки плашки, и инпуты правки (§А9-2).
+    return registryReply(path) ?? {};
   };
 }
 
@@ -4571,7 +4605,7 @@ describe('слой предложения', () => {
     expect(diff).toHaveTextContent('забрать посылку');
     // Строка поля: «было» из снятого предусловия и предложенное значение — правимым полем.
     expect(plate).toHaveTextContent('inbox');
-    expect(within(plate).getByLabelText('orbis/task status')).toHaveValue('done');
+    expect(within(plate).getByLabelText('orbis/task_status')).toHaveValue('done');
     expect(within(plate).getByRole('button', { name: 'Принять' })).toBeInTheDocument();
     expect(within(plate).getByRole('button', { name: 'Отклонить' })).toBeInTheDocument();
 
@@ -4585,6 +4619,35 @@ describe('слой предложения', () => {
     expect(screen.getByTestId('entity-tabs')).not.toHaveClass('hidden');
     await expectEditorHas('и хвост');
     expect(within(plate).queryByTestId('proposal-body-diff')).toBeNull();
+  });
+
+  test('правимая строка поля САМОЙ ЗАПИСИ подписана реестром, а не сырым ключом (§А1-3)', async () => {
+    /**
+     * Пятая точка показа подписи — инпут правки В ПЛАШКЕ, и до фикс-раунда она была
+     * единственной, куда подпись не доезжала. Строка предложения адресует поле записи именем
+     * колонки (`title`, `archived`), носителя-аспекта у него нет вовсе, а плашка подставляла
+     * вместо «носителя нет» ПУСТУЮ СТРОКУ — и резолв обрывался на промахе по аспекту, не
+     * дойдя до правила core-проекций. Владелец видел «Заголовок» строкой выше и сырое `title`
+     * подписью инпута прямо под ней; для `archived` это была ещё и регрессия — прежний
+     * словарь показывал ему «архив».
+     *
+     * Подписей у правимой строки ДВЕ (сама строка и её инпут), и обе обязаны быть словом:
+     * именно расхождение двух подписей одного поля на одном экране здесь и ловится, поэтому
+     * проверяется ЧИСЛО вхождений, а не факт наличия.
+     */
+    renderWithProviders(
+      <DetailScreen entityId="e1" />,
+      overlayHandler({ proposals: [proposalFor({ operations: [titleRow(), archivedRow()] })] }),
+    );
+    const plate = await screen.findByTestId('proposal-plate');
+    togglePlate(plate);
+
+    expect(await within(plate).findAllByText('Заголовок')).toHaveLength(2);
+    expect(within(plate).getAllByText('В архиве')).toHaveLength(2);
+    // Сырых адресов на экране не осталось ни одного — ни в строке, ни под ней.
+    expect(plate).not.toHaveTextContent('archived');
+    // Правится именно она: инпут адресован полем записи и несёт предложенное значение.
+    expect(within(plate).getByLabelText('title')).toHaveValue('Задача (перенесена)');
   });
 
   test('развёрнутая плашка прячет и «Детали»: поле-близнец «статус» недоступно, свёрнутая — возвращает (смоук Н-2)', async () => {
@@ -4614,7 +4677,7 @@ describe('слой предложения', () => {
 
     togglePlate(plate);
     // Оба поля теперь на экране разом — и вот тут второе обязано быть недоступно.
-    expect(within(plate).getByLabelText('orbis/task status')).toHaveValue('done');
+    expect(within(plate).getByLabelText('orbis/task_status')).toHaveValue('done');
     expect(tabs).toHaveClass('hidden');
     // Близнец не размонтирован, а спрятан: вкладка «Детали» держится живой (keepMounted), и
     // размонтирование стоило бы её запросов при каждом развороте плашки.
@@ -4639,7 +4702,7 @@ describe('слой предложения', () => {
     const plate = await screen.findByTestId('proposal-plate');
     togglePlate(plate);
     expect(screen.getByTestId('entity-tabs')).toHaveClass('hidden');
-    const input = await within(plate).findByLabelText('orbis/task status');
+    const input = await within(plate).findByLabelText('orbis/task_status');
     await userEvent.clear(input);
     await userEvent.type(input, 'in_progress');
     fireEvent.blur(input);
@@ -4655,8 +4718,12 @@ describe('слой предложения', () => {
         runId: 'run1',
         pendingId: 'p1',
         decision: 'approve',
+        // Адрес правки — ТОТ ЖЕ, что у строки предложения: `index` + id свойства, без
+        // `aspect`. Ключ строки сервер собирает из этой же пары (`routines/edits.ts`
+        // `rowKeysOf`), и пара «аспект + старое имя поля» не совпала бы там ни с одной
+        // строкой — правка получила бы `edit_row_not_editable`.
         edits: {
-          fields: [{ index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' }],
+          fields: [{ index: 0, field: 'orbis/task_status', value: 'in_progress' }],
         },
       }),
     );
@@ -5137,7 +5204,7 @@ describe('режим правки тела в слое', () => {
     // Редактор ровно один — у строки тела, и он же единственный первый кадр.
     expect(within(plate).getAllByTestId('editor-preview')).toHaveLength(1);
     // …а правка значения на месте: её у строки статуса никто не забирал.
-    expect(within(plate).getByLabelText('orbis/task status')).toHaveValue('done');
+    expect(within(plate).getByLabelText('orbis/task_status')).toHaveValue('done');
 
     fireEvent.click(within(plate).getByTestId('editor-preview'));
     await within(plate).findByTestId('body-editor', undefined, EDITOR_READY);
@@ -5154,7 +5221,7 @@ describe('режим правки тела в слое', () => {
     expect(within(plate).getAllByTestId('proposal-body-diff')).toHaveLength(1);
 
     // И обе половины правки уезжают вместе: тело документом, значение — своей строкой.
-    const input = within(plate).getByLabelText('orbis/task status');
+    const input = within(plate).getByLabelText('orbis/task_status');
     await userEvent.clear(input);
     await userEvent.type(input, 'in_progress');
     fireEvent.blur(input);
@@ -5166,8 +5233,6 @@ describe('режим правки тела в слое', () => {
     };
     expect(edits.body).toHaveLength(1);
     expect(edits.body?.[0]?.index).toBe(0);
-    expect(edits.fields).toEqual([
-      { index: 0, aspect: 'orbis/task', field: 'status', value: 'in_progress' },
-    ]);
+    expect(edits.fields).toEqual([{ index: 0, field: 'orbis/task_status', value: 'in_progress' }]);
   }, 30_000);
 });

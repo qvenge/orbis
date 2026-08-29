@@ -57,6 +57,20 @@ test('поле САМОЙ записи резолвится по закрыто�
   expect(fieldLabel(reg, 'body')).toBe('body');
 });
 
+test('промах по АСПЕКТУ не обрывает резолв: поле записи находит свою core-проекцию', () => {
+  // Вызывающий, выразивший «носителя нет» пустой строкой или подставивший чужой аспект,
+  // всё равно обязан получить подпись: у поля записи носителя нет вовсе, и промах по
+  // аспекту значит «носителя не нашли», а не «искать больше негде». До фикс-раунда 13a
+  // резолв обрывался здесь, и плашка предложения печатала владельцу сырое `archived`.
+  expect(propertyIdOf(reg, 'archived', '')).toBe('orbis/archived');
+  expect(fieldLabel(reg, 'archived', 'orbis/note')).toBe('В архиве');
+  expect(fieldLabel(reg, 'title', '')).toBe('Заголовок');
+  // Обратная сторона: поля, которого нет ни у аспекта, ни среди core-проекций, правило не
+  // выдумывает — иначе «поле записи» стало бы свалкой для любого промаха.
+  expect(propertyIdOf(reg, 'status', '')).toBeUndefined();
+  expect(propertyIdOf(reg, 'body', 'orbis/note')).toBeUndefined();
+});
+
 test('носитель свойства — из реестра; у core-проекции его нет', () => {
   expect(reg.carrierOf('orbis/task_status')?.id).toBe('orbis/task');
   expect(reg.carrierOf('orbis/archived')).toBeUndefined();
