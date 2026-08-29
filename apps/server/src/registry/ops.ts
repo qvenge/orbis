@@ -242,11 +242,18 @@ const ROW_COLUMNS = sql`id, key, label, description, type, status, storage, scop
 export async function readOwnProperty(
   tx: Tx,
   ownerId: string,
-  id: string,
+  idOrKey: string,
 ): Promise<PropertyRow | undefined> {
+  // АДРЕС РЕЗОЛВИТСЯ ЗДЕСЬ, ЗАПРОСОМ В ТРАНЗАКЦИИ, а не по снимку реестра. Снимок
+  // исполнитель снимает ДО стадий, и свойство, заведённое предыдущей операцией той же
+  // пачки, в нём отсутствует — резолв по снимку отвечал бы `NOT_FOUND` на ключ, который
+  // владелец только что и завёл. `id = $1 OR key = $1` неоднозначности не даёт: и то и
+  // другое уникально среди строк владельца (`property_definitions_custom_uniq`,
+  // `…_custom_key`), а пересечение id одного свойства с key другого требовало бы key в
+  // форме uuid — `NAMESPACED_KEY_RE` такого не принимает (слэш обязателен).
   const rows = (await tx.execute(sql`
     SELECT ${ROW_COLUMNS} FROM property_definitions
-    WHERE owner_id = ${ownerId}::uuid AND id = ${id}`)) as unknown as RawRow[];
+    WHERE owner_id = ${ownerId}::uuid AND (id = ${idOrKey} OR key = ${idOrKey})`)) as unknown as RawRow[];
   const row = rows[0];
   return row === undefined ? undefined : toPropertyRow(row);
 }
@@ -268,15 +275,20 @@ export async function restorePropertyRow(
   row: PropertyRow | null,
 ): Promise<void> {
   if (row === null) {
+    // Строку удаляем — значит нужен её `key`: ссылка на неё в теле записана ключом, и без
+    // него проба «на ней ничего не держится» слепа ровно на текстовых держателей.
+    const existing = await readOwnProperty(tx, ownerId, id);
+    if (existing === undefined) return; // строки уже нет — откат идемпотентен
     // Страховка, а не логика: строку создало отменяемое действие, и значений у неё быть не
     // может. Если они появились ПОСЛЕ (кто-то успел записать), физическое удаление осиротило
     // бы их — отказываем fail-closed, откат целиком не применяется.
-    const used = await propertyUsage(tx, ownerId, id);
-    if (used.values > 0) {
+    const used = await propertyUsage(tx, ownerId, id, existing.key);
+    if (used.values > 0 || used.refs > 0) {
       throw new ExecError(
         'INVARIANT',
-        `свойство ${id} нельзя удалить откатом: значений на записях — ${used.values}`,
-        { property: id, values: used.values },
+        `свойство ${id} нельзя удалить откатом: значений на записях — ${used.values}, ` +
+          `ссылок в запросах — ${used.refs}`,
+        { property: id, values: used.values, refs: used.refs },
       );
     }
     await assertRegistryStaysReadable(tx, ownerId, id, null);
@@ -449,9 +461,13 @@ export function slugFromLabel(label: LocalizedText): string {
  * Свободный key в пространстве ВИДИМОГО владельцу (встроенные ∪ свои, §А2-4).
  *
  * Уникальность БД проверяет две половины по отдельности (`property_definitions_builtin_key`
- * и `…_custom_key`), и пересечение между ними индексом не выражается — то есть свой
- * `orbis/task_status` база примет молча, а `resolvePropertyRef` начнёт отдавать по одному
- * имени два разных свойства. Эту половину и проверяет функция.
+ * и `…_custom_key`), и пересечение между ними индексом не выражается — то есть своя строка
+ * с ключом встроенного легла бы молча, а `resolvePropertyRef` начал бы отдавать по одному
+ * имени два разных свойства. Правило здесь — «уникален среди ВИДИМОГО», и оно шире, чем то,
+ * что сегодня достижимо: гейт namespace (`createProperty` выше) закрыл явную форму, а
+ * автослаг и так кладёт в `user/`, поэтому пересечение со встроенными сейчас недостижимо, и
+ * на практике функция разводит СВОИ строки между собой. Проверка остаётся полной намеренно:
+ * она выражает правило, а не сегодняшнее совпадение namespace'ов.
  */
 function freeKey(reg: RegistrySnapshot, wanted: string): string {
   const taken = new Set([...reg.properties.values()].map((d) => d.key));
@@ -514,6 +530,26 @@ export async function createProperty(
     }
   }
 
+  // ЯВНЫЙ KEY — ТОЛЬКО В `user/` (§А2-1: «слаг в namespace автора»; автор здесь владелец).
+  //
+  // Форма входа шире по построению — она же описывает и системные строки, — и без гейта
+  // модель, глядя на каталог из `orbis/*`, завела бы `orbis/priority` как своё. Сегодня это
+  // прошло бы (ключ ещё не занят), а следующий релиз посеял бы встроенный `orbis/priority` —
+  // и по правилу «своя строка перекрывает системную» (`ORDER BY owner_id NULLS FIRST`,
+  // `registry/load.ts`) свойство владельца МОЛЧА подменило бы встроенное во всех запросах,
+  // промптах и `attach_*`-данных, возможно с другим типом. Отказ на занятом ключе от этого
+  // не спасает: он смотрит на то, что занято СЕГОДНЯ.
+  //
+  // Условие расширения названо, чтобы следующий читатель не гадал: namespace приложения
+  // (`<app>/`, §А3-3) появится вместе с самими приложениями — тогда сюда приедет проверка
+  // «автор = владелец ∨ автор = это приложение», а не снятие гейта.
+  if (input.key !== undefined && !input.key.startsWith('user/')) {
+    throw new ExecError(
+      'VALIDATION',
+      `свои свойства живут в namespace user/ — «${input.key}» занимает чужой (§А2-1)`,
+      { reason: 'KEY_NAMESPACE', key: input.key },
+    );
+  }
   const key = freeKey(reg, input.key ?? `user/${slugFromLabel(input.label)}`);
   // Явный key владельца НЕ разводится суффиксом молча: он его назвал, и «завёл user/effort,
   // получил user/effort-2» — это подмена адреса, о которой он узнает из текста запроса.
@@ -566,13 +602,20 @@ async function propertyUsage(
   tx: Tx,
   ownerId: string,
   id: string,
+  key: string,
 ): Promise<{ values: number; refs: number }> {
   const rows = (await tx.execute(sql`
     SELECT count(*)::int AS n FROM entities WHERE props ? ${id}`)) as unknown as { n: number }[];
   const holders = await collectQueryHolders(tx, ownerId);
+  // ССЫЛКА ИЩЕТСЯ ПО ОБОИМ ИМЕНАМ, и это не перестраховка. Держатель-ДЕРЕВО называет
+  // свойство id (§А5-7), а держатель-ТЕКСТ (`{{query:…}}` в теле) — только key (§А5-3а), и
+  // uuid в тексте не нашёлся бы никогда: `KEY_TOKEN_RE` требует слэша, которого в uuid нет.
+  // Спрашивая один id, физическое удаление §А10-3 сносило бы строку из-под живой ссылки в
+  // теле — то самое «висение», которое §А10-3 обещает невозможным. Слияние тот же вопрос
+  // задаёт двумя именами (`names` ниже), и разойтись этим двум местам нельзя.
   return {
     values: Number(rows[0]?.n ?? 0),
-    refs: holders.filter((h) => h.properties.includes(id)).length,
+    refs: holders.filter((h) => h.properties.includes(id) || h.properties.includes(key)).length,
   };
 }
 
@@ -612,15 +655,31 @@ export async function updateProperty(
     throw new ExecError('NOT_FOUND', `свойства ${id} нет среди ваших`, { property: id });
   }
 
+  if (row.mergedInto !== null) {
+    // Строка поглощена (§А10-2): значений у неё нет, они уехали в цель. Правка — и особенно
+    // `status: 'active'` — воскресила бы её В ПОЛУСОСТОЯНИЕ: активная, пустая, с целым
+    // указателем `merged_into`. Новые значения писались бы в неё и расходились с целью, а
+    // починить это слиянием нельзя — `MERGE_ALREADY_MERGED` отказывает ровно на этой паре.
+    // Законный путь назад ровно один, и отказ на него указывает.
+    throw new ExecError(
+      'VALIDATION',
+      `${id} поглощено свойством ${row.mergedInto}: правится не оно, а цель; ` +
+        `вернуть его можно только отменой слияния`,
+      { reason: 'PROPERTY_MERGED', property: id, successor: row.mergedInto },
+    );
+  }
+
   const scope = patch.scope === undefined ? row.scope : patch.scope;
   assertDeclaration(row.type, scope);
 
   if (patch.status === 'deprecated' && row.status === 'proposed') {
-    const used = await propertyUsage(tx, ownerId, id);
+    const used = await propertyUsage(tx, ownerId, row.id, row.key);
     if (used.values === 0 && used.refs === 0) {
-      await assertRegistryStaysReadable(tx, ownerId, id, null);
+      // Дальше адресуем ТОЛЬКО `row.id`: во вход мог прийти key (см. `readOwnProperty`),
+      // и `WHERE id = <key>` не задел бы ни одной строки — молча, без единой ошибки.
+      await assertRegistryStaysReadable(tx, ownerId, row.id, null);
       await tx.execute(sql`
-        DELETE FROM property_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${id}`);
+        DELETE FROM property_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${row.id}`);
       await bumpOwnerRegistryVersion(tx, ownerId);
       return;
     }
@@ -634,7 +693,7 @@ export async function updateProperty(
     rank: patch.rank ?? row.rank,
     status: patch.status ?? row.status,
   };
-  await assertRegistryStaysReadable(tx, ownerId, id, next);
+  await assertRegistryStaysReadable(tx, ownerId, row.id, next);
   await insertRow(tx, ownerId, next, { restore: true });
   await bumpOwnerRegistryVersion(tx, ownerId);
 }
@@ -783,11 +842,14 @@ export interface MergeValueConflict {
  * стадии исполнителя. Значит гарантия двухслойная и обе части нужны: внутри операции ничего
  * не успевает записаться по порядку запросов, а всё, что записали ПРЕДЫДУЩИЕ операции той же
  * пачки, снимает откат транзакции (отказ уходит из `execute` через `ExecError`, и
- * `withIdentity` откатывает tx целиком). Отдельной функцией она вынесена не ради стадии, а
- * потому, что тот же вопрос задаёт отчёт о конфликте (`registry/merge-conflict.ts`) — второй
- * экземпляр предиката однажды ответил бы иначе, чем слияние.
+ * `withIdentity` откатывает tx целиком).
+ *
+ * ВЫЗЫВАЮЩИЙ ОДИН, и второго не обещается: отчёт о конфликте
+ * (`registry/merge-conflict.ts`) читает уже готовый `details` отказа, а не спрашивает
+ * заново. Функцией это вынесено ради имени: «что считается конфликтом» — отдельное
+ * правило §А10-2, и в теле операции оно потерялось бы среди её шагов.
  */
-export async function mergeValueConflicts(
+async function mergeValueConflicts(
   tx: Tx,
   source: string,
   into: string,
@@ -805,8 +867,23 @@ export function resolveMergePair(
   reg: RegistrySnapshot,
   input: { source: string; into: string },
 ): { source: PropertyDefinition; into: PropertyDefinition } {
-  const source = reg.properties.get(input.source);
-  const into = reg.properties.get(input.into);
+  // Адрес — id ИЛИ key: модель и владелец называют свойство тем именем, которым его видели,
+  // а у пользовательского они разные (Р3). Снимок сюда приходит СВЕЖИЙ (`currentRegistry`
+  // читает строки в этой же транзакции), поэтому свойство, заведённое предыдущей операцией
+  // пачки, резолвится наравне с остальными.
+  const byKeyOrId = (name: string): PropertyDefinition | undefined => {
+    const byId = reg.properties.get(name);
+    if (byId !== undefined) return byId;
+    let found: PropertyDefinition | undefined;
+    for (const def of reg.properties.values()) {
+      // Своя строка перекрывает встроенную — то же правило, что у `resolvePropertyRef`:
+      // строки идут `ORDER BY owner_id NULLS FIRST`, значит последняя запись и есть своя.
+      if (def.key === name && (found === undefined || found.ownerId === null)) found = def;
+    }
+    return found;
+  };
+  const source = byKeyOrId(input.source);
+  const into = byKeyOrId(input.into);
   if (source === undefined || into === undefined) {
     throw new ExecError('NOT_FOUND', 'одного из свойств слияния нет в реестре', {
       source: input.source,
@@ -957,9 +1034,24 @@ export async function mergeProperty(
     into: r.had_into === true ? r.old_into : null,
   }));
 
-  // Ссылки. Множество имён — id и key поглощённого; цель всегда id: он неизменяем, а key
-  // цели владелец вправе переименовать завтра (Р3), и ссылка стала бы висячей.
+  // Ссылки. Множество ИМЁН ИСТОЧНИКА — id и key: в дереве §А5-7 лежат id, но `entity_query`
+  // принимает и key, а текст запроса в теле — ТОЛЬКО key. Искать одно из двух значило бы
+  // переписать половину ссылок и оставить вторую указывать на поглощённое.
+  //
+  // А вот ЦЕЛЬ У ДВУХ РОДОВ ДЕРЖАТЕЛЕЙ РАЗНАЯ, и это не мелочь оформления:
+  //  - ДЕРЕВО (`scope`, `ref.target`, значение `progress_source`) адресует свойство
+  //    ИДЕНТИФИКАТОРОМ (§А5-7: «в дереве лежат id, не подписи»), туда едет `into.id`;
+  //  - ТЕКСТ блока `{{query:…}}` адресует его ТОЛЬКО ключом (§А5-3а), и разбор резолвит
+  //    свойство по `key` либо по закавыченной подписи — id он не знает вовсе
+  //    (`parse-ast.ts`, индекс `byPropertyKey`). У пользовательского свойства id — uuid
+  //    (Р3), поэтому подстановка id в текст даёт `UNKNOWN_FIELD` НАВСЕГДА: смарт-лист
+  //    владельца после «успешного» слияния перестаёт разбираться, а отчёт операции говорит
+  //    «успех». На встроенных это не всплывало бы никогда — там id совпадает с key.
   const names = new Set([source.id, source.key]);
+  // Ссылка на key живой цели висячей не станет: операции «переименовать key» в срезе А нет
+  // вовсе (Р10), а появится она — переименование обязано будет пройти по тем же держателям.
+  const astTarget = into.id;
+  const textTarget = into.key;
   const holders = (await collectQueryHolders(tx, ownerId)).filter((h) =>
     h.properties.some((p) => names.has(p)),
   );
@@ -974,8 +1066,8 @@ export async function mergeProperty(
         WHERE owner_id = ${ownerId}::uuid AND id = ${holder.id}`)) as unknown as RawRow[];
       const row = rows[0];
       if (row === undefined) continue;
-      const nextScope = rewriteAst(row.scope ?? null, names, into.id);
-      const nextType = rewriteAst(row.type, names, into.id);
+      const nextScope = rewriteAst(row.scope ?? null, names, astTarget);
+      const nextType = rewriteAst(row.type, names, astTarget);
       registry.push({ id: holder.id, scope: row.scope ?? null, type: row.type });
       await tx.execute(sql`
         UPDATE property_definitions
@@ -994,7 +1086,7 @@ export async function mergeProperty(
       await tx.execute(sql`
         UPDATE entities
            SET props = props || jsonb_build_object(${PROGRESS_SOURCE}::text,
-                 ${JSON.stringify(rewriteAst(row.value, names, into.id))}::jsonb),
+                 ${JSON.stringify(rewriteAst(row.value, names, astTarget))}::jsonb),
                updated_at = now()
          WHERE id = ${holder.id}::uuid`);
       continue;
@@ -1006,10 +1098,10 @@ export async function mergeProperty(
     if (row === undefined) continue;
     const body = String(row.body ?? '');
     bodies.push({ entityId: holder.id, body, bodyDoc: row.body_doc ?? null });
-    const nextDoc = rewriteBodyDoc(row.body_doc ?? null, names, into.id);
+    const nextDoc = rewriteBodyDoc(row.body_doc ?? null, names, textTarget);
     await tx.execute(sql`
       UPDATE entities
-         SET body = ${rewriteQueryText(body, names, into.id)},
+         SET body = ${rewriteQueryText(body, names, textTarget)},
              body_doc = ${nextDoc === null ? null : JSON.stringify(nextDoc)}::jsonb,
              updated_at = now()
        WHERE id = ${holder.id}::uuid`);

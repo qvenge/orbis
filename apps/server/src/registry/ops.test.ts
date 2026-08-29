@@ -4,6 +4,7 @@
 // как они ведут себя с ДАННЫМИ ВЛАДЕЛЬЦА, а не про форму входа.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
+import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import type { Tx } from '../db/with-identity';
@@ -204,19 +205,27 @@ describe('property_create / property_update: жизненный цикл propose
   });
 
   test('ЯВНЫЙ занятый key — отказ, а не тихий суффикс (адрес называет владелец)', async () => {
+    ok(
+      await run('property_create', {
+        key: 'user/taken-probe',
+        label: { ru: 'Занятое' },
+        description: { ru: 'Первое с этим ключом' },
+        type: { kind: 'text' },
+        status: 'active',
+      }),
+    );
     const e = err(
       await run('property_create', {
-        // Занят встроенным: уникальность БД разведена по `owner_id IS NULL`, и своя строка
-        // с этим ключом легла бы молча, а `resolvePropertyRef` начал бы отдавать два разных
-        // свойства по одному имени.
-        key: 'orbis/task_status',
-        label: { ru: 'Свой статус' },
-        description: { ru: 'Дубль' },
+        key: 'user/taken-probe',
+        label: { ru: 'Дубль' },
+        description: { ru: 'Второе с тем же ключом' },
         type: { kind: 'text' },
         status: 'active',
       }),
     );
     expect(e.code).toBe('VALIDATION');
+    // Отказ ПРИЛОЖЕНИЯ, а не 23505 из индекса: владельцу нужно имя причины, а не номер
+    // ограничения. Автослаг в этом же случае развёл бы суффиксом — разница намеренная.
     expect((e.details as { reason?: string }).reason).toBe('KEY_TAKEN');
   });
 
@@ -490,6 +499,7 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     );
     const sourceId = (source.results[0] as { property: string }).property;
     const intoId = (into.results[0] as { property: string }).property;
+    const intoKey = (into.results[0] as { key: string }).key;
 
     // Ссылочное свойство, чья ЦЕЛЬ упоминает поглощаемое свойство.
     ok(
@@ -603,9 +613,27 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
       JSON.stringify((await propertyRowByKey(mergeOwner, 'user/hard-task'))?.type),
     ).not.toContain(sourceId);
     expect(JSON.stringify((await ownEntity(goal)).props)).toContain(intoId);
-    // Тело: переписан ТОЛЬКО блок запроса; то же слово в прозе — не ссылка.
+    // ТЕЛО: сверяется НЕ подстрокой, а РАЗБОРОМ — единственным потребителем этого текста.
+    // Подстрочная сверка зеленела бы на форме, которую грамматика не читает: в текст блока
+    // §А5-3а адресует свойство ТОЛЬКО ключом, и подставленный туда uuid дал бы
+    // `UNKNOWN_FIELD` навсегда — смарт-лист владельца после «успешного» слияния перестал бы
+    // разбираться, а отчёт операции говорил бы «успех».
     const bodyAfter = String((await ownEntity(withBody)).body);
-    expect(bodyAfter).toContain(`{{query: aspect=orbis/task, ${intoId}=5}}`);
+    const block = /\{\{query:([\s\S]*?)\}\}/.exec(bodyAfter)?.[1];
+    expect(block).toBeDefined();
+    const parseReg = toParseRegistry(
+      await withIdentity(db, mergeOwner, (tx) => effectiveRegistry(tx, mergeOwner)),
+      'ru',
+    );
+    const parsed = parseQueryAst(block as string, parseReg);
+    expect(parsed.ok).toBe(true);
+    // И разобралось оно именно в ЦЕЛЬ, а не во что попало.
+    expect(JSON.stringify(parsed.ok === true ? parsed.ast : {})).toContain(intoId);
+    // Контроль осмысленности пробы: тот же текст с id вместо ключа разбор НЕ принимает —
+    // значит зелень выше добыта формой, а не снисходительностью парсера.
+    const withIdInstead = (block as string).replace(intoKey, intoId);
+    expect(parseQueryAst(withIdInstead, parseReg).ok).toBe(false);
+    // Переписан ТОЛЬКО блок запроса; то же слово в прозе — не ссылка.
     expect(bodyAfter).toContain('упоминание user/effort в прозе');
     // Соседняя строка со `scope` не тронута.
     expect((await propertyRowByKey(mergeOwner, 'user/untouched-scope'))?.scope).toMatchObject({
@@ -1221,5 +1249,151 @@ describe('property_merge: границы операции (фикс-раунд 1
     const e = err(await runEdge('property_merge', { source: x, into: z }));
     expect((e.details as { reason?: string; side?: string }).reason).toBe('MERGE_ALREADY_MERGED');
     expect((e.details as { side?: string }).side).toBe('source');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Фикс-раунд 2: висячая ссылка, чужой namespace, воскрешение поглощённого
+// ---------------------------------------------------------------------------
+
+describe('границы записи определения (фикс-раунд 2)', () => {
+  const edge2 = freshUserId();
+
+  function run2(tool: string, input: unknown): Promise<ExecuteResult> {
+    return execute(
+      db,
+      { actorUserId: edge2, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      { sink },
+    );
+  }
+
+  test('отклонение proposed, на который ССЫЛАЕТСЯ ТЕЛО, строку не удаляет (§А10-3)', async () => {
+    // Держатель-тело называет свойство КЛЮЧОМ, а не id (§А5-3а). Проба «на нём ничего не
+    // держится», спрашивающая один id, такую ссылку не видит — и физическое удаление
+    // оставило бы в теле вечный `UNKNOWN_FIELD`, то самое «висение», которое §А10-3
+    // обещает невозможным.
+    const created = ok(
+      await run2('property_create', {
+        key: 'user/half-baked',
+        label: { ru: 'Недопечённое' },
+        description: { ru: 'Предложение со ссылкой в теле' },
+        type: { kind: 'number' },
+        status: 'proposed',
+      }),
+    );
+    const id = (created.results[0] as { property: string }).property;
+    ok(
+      await run2('entity_create', {
+        title: 'Смарт-лист на предложение',
+        tags: [],
+        body: 'Список\n\n{{query: aspect=orbis/task, user/half-baked=1}}',
+      }),
+    );
+    ok(await run2('property_update', { id, status: 'deprecated' }));
+    const row = await propertyRowByKey(edge2, 'user/half-baked');
+    expect(row).toBeDefined();
+    expect(row?.status).toBe('deprecated');
+  });
+
+  test('отклонение proposed БЕЗ ссылок по-прежнему удаляет строку (проба не переусердствовала)', async () => {
+    const created = ok(
+      await run2('property_create', {
+        key: 'user/really-unused',
+        label: { ru: 'Совсем ненужное' },
+        description: { ru: 'Ни значений, ни ссылок' },
+        type: { kind: 'number' },
+        status: 'proposed',
+      }),
+    );
+    const id = (created.results[0] as { property: string }).property;
+    ok(await run2('property_update', { id, status: 'deprecated' }));
+    expect(await propertyRowByKey(edge2, 'user/really-unused')).toBeUndefined();
+  });
+
+  test('явный key вне namespace user/ отвергнут — иначе релиз молча перекрылся бы своей строкой', async () => {
+    const e = err(
+      await run2('property_create', {
+        key: 'orbis/brand-new-prop',
+        label: { ru: 'Как будто встроенное' },
+        description: { ru: 'Захват чужого namespace' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    expect((e.details as { reason?: string }).reason).toBe('KEY_NAMESPACE');
+    expect(await propertyRowByKey(edge2, 'orbis/brand-new-prop')).toBeUndefined();
+    // Автослаг и так кладёт в `user/` — сужение тронуло только явную форму.
+    const auto = ok(
+      await run2('property_create', {
+        label: { en: 'Auto Slug Prop' },
+        description: { ru: 'Без явного ключа' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    expect((auto.results[0] as { key: string }).key).toBe('user/auto-slug-prop');
+  });
+
+  test('поглощённую строку нельзя воскресить правкой — отказ указывает на отмену слияния', async () => {
+    const mk = async (key: string): Promise<string> => {
+      const r = ok(
+        await run2('property_create', {
+          key,
+          label: { ru: key },
+          description: { ru: key },
+          type: { kind: 'number' },
+          status: 'active',
+        }),
+      );
+      return (r.results[0] as { property: string }).property;
+    };
+    const a = await mk('user/revive-a');
+    const b = await mk('user/revive-b');
+    const merged = ok(await run2('property_merge', { source: a, into: b }));
+
+    const e = err(await run2('property_update', { id: a, status: 'active' }));
+    expect((e.details as { reason?: string }).reason).toBe('PROPERTY_MERGED');
+    expect((e.details as { successor?: string }).successor).toBe(b);
+    // Полусостояния не возникло: строка как была поглощённой, так и осталась.
+    const row = (await withIdentity(db, edge2, (tx) =>
+      tx.execute(sql`SELECT status, merged_into FROM property_definitions
+                     WHERE owner_id = ${edge2}::uuid AND id = ${a}`),
+    )) as unknown as Array<Record<string, unknown>>;
+    expect(row[0]).toMatchObject({ status: 'deprecated', merged_into: b });
+    // Путь назад, на который указывает отказ, РАБОТАЕТ — иначе это была бы ловушка.
+    const undone = await undoAction(db, { actorUserId: edge2, actionId: merged.actionId });
+    expect(undone.ok).toBe(true);
+    ok(await run2('property_update', { id: a, label: { ru: 'Снова правится' } }));
+  });
+
+  test('адрес операции резолвится ВНУТРИ пачки: свойство, заведённое соседней операцией, видно по key', async () => {
+    // Снимок реестра исполнитель снимает ДО стадий, и резолв по нему отвечал бы NOT_FOUND
+    // на ключ, который владелец завёл предыдущей операцией той же пачки, — при том что
+    // докблок `currentRegistry` обещает обратное.
+    const r = await execute(
+      db,
+      {
+        actorUserId: edge2,
+        actorKind: 'owner',
+        source: 'ui',
+        batchId: newId(),
+        operations: [
+          {
+            tool: 'property_create',
+            input: {
+              key: 'user/in-batch',
+              label: { ru: 'В пачке' },
+              description: { ru: 'Заведено и тут же поправлено' },
+              type: { kind: 'number' },
+              status: 'proposed',
+            },
+          },
+          { tool: 'property_update', input: { id: 'user/in-batch', status: 'active' } },
+        ],
+      },
+      { sink },
+    );
+    expect(r.ok).toBe(true);
+    expect((await propertyRowByKey(edge2, 'user/in-batch'))?.status).toBe('active');
   });
 });

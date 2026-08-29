@@ -3012,18 +3012,24 @@ async function preparePropertyCreate(_ctx: ExecCtx, rawInput: unknown): Promise<
   };
 }
 
-async function preparePropertyUpdate(ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+async function preparePropertyUpdate(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
   const input = parseEnvelope(propertyUpdateInput, rawInput, 'property_update');
-  // Стадия 3: адрес свойства резолвится по СНИМКУ транзакции — модель адресует своё
-  // свойство ключом (`user/effort`), а строка реестра лежит под uuid (Р3).
-  const def = resolvePropertyRef(ctx.registry, input.id);
-  const id = def?.id ?? input.id;
-  const journal = registryPlan('property_updated', 'property_update', `Правка свойства «${id}»`);
+  const journal = registryPlan(
+    'property_updated',
+    'property_update',
+    `Правка свойства «${input.id}»`,
+  );
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const before = await readOwnProperty(applyCtx.tx, applyCtx.req.actorUserId, id);
-      await updateProperty(applyCtx.tx, applyCtx.req.actorUserId, id, {
+      // АДРЕС РЕЗОЛВИТ САМА ОПЕРАЦИЯ, в своей транзакции (`readOwnProperty`: id ИЛИ key), а
+      // не снимок реестра. Снимок снят ДО стадий, и свойство, заведённое предыдущей
+      // операцией той же пачки, в нём отсутствует — резолв по нему отвечал бы `NOT_FOUND`
+      // на ключ, который владелец только что и завёл.
+      const before = await readOwnProperty(applyCtx.tx, applyCtx.req.actorUserId, input.id);
+      const id = before?.id ?? input.id;
+      journal.title = `Правка свойства «${id}»`;
+      await updateProperty(applyCtx.tx, applyCtx.req.actorUserId, input.id, {
         ...(input.label !== undefined && { label: input.label }),
         ...(input.description !== undefined && { description: input.description }),
         ...(input.scope !== undefined && { scope: input.scope as never }),
@@ -3040,22 +3046,21 @@ async function preparePropertyUpdate(ctx: ExecCtx, rawInput: unknown): Promise<P
   };
 }
 
-async function preparePropertyMerge(ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
+async function preparePropertyMerge(_ctx: ExecCtx, rawInput: unknown): Promise<PreparedOp> {
   const input = parseEnvelope(propertyMergeInput, rawInput, 'property_merge');
-  const source = resolvePropertyRef(ctx.registry, input.source)?.id ?? input.source;
-  const into = resolvePropertyRef(ctx.registry, input.into)?.id ?? input.into;
   const journal = registryPlan(
     'property_merged',
     'property_merge',
-    `Свойства слиты: ${source} → ${into}`,
+    `Свойства слиты: ${input.source} → ${input.into}`,
   );
   return {
     journal,
     async apply(applyCtx: ExecCtx): Promise<OpOutcome> {
-      const merged = await mergeProperty(applyCtx.tx, applyCtx.req.actorUserId, {
-        source,
-        into,
-      });
+      // Адрес резолвит сама операция, в своей транзакции (см. `preparePropertyUpdate`):
+      // `resolveMergePair` принимает и id, и key, а снимок исполнителя пачку не видит.
+      const merged = await mergeProperty(applyCtx.tx, applyCtx.req.actorUserId, input);
+      const { source, into } = merged.inverse;
+      journal.title = `Свойства слиты: ${source} → ${into}`;
       journal.operations.push({
         op: 'property_merge',
         payload: {
