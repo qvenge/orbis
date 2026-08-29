@@ -3079,6 +3079,151 @@ describe('V1: выдача автономии рутине из чата → pen
     expect(await aspectsOfRow(plain.id)).toEqual(['orbis/routine']);
   });
 
+  test('СВОДКА не двоит рутину и называет объект НА МОМЕНТ операции в обе стороны (фикс-раунд 10)', async () => {
+    // Скан отвечает ПО ОПЕРАЦИЯМ, а фраза говорит О РУТИНЕ: две операции одной пачки, правящие
+    // текст одной act-рутины, давали «правка «X», «X»». Снятый одним запросом гейт дублей не
+    // знал — переезд на пооперационный ответ принёс их вместе с точностью момента.
+    const twice = await seedEntity(userA, {
+      title: 'Правят дважды',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
+      },
+    });
+    const dup = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id: twice.id, title: 'Раз' } },
+        { tool: 'entity_update', input: { id: twice.id, body: 'Два' } },
+      ],
+    });
+    expect(dup.status).toBe('pending_confirmation');
+    if (dup.status !== 'pending_confirmation') return;
+    expect(dup.card).toMatchObject({
+      summary: 'Инструкция act-рутины: правка «Правят дважды»',
+    });
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: ДВЕ РАЗНЫЕ act-рутины в одной пачке по-прежнему называются обе —
+    // дедупликация схлопывает повторы, а не перечень.
+    const other = await seedEntity(userA, {
+      title: 'Вторая рутина',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
+      },
+    });
+    const twoRoutines = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id: twice.id, title: 'Раз' } },
+        { tool: 'entity_update', input: { id: other.id, title: 'Два' } },
+      ],
+    });
+    expect(twoRoutines.status).toBe('pending_confirmation');
+    if (twoRoutines.status !== 'pending_confirmation') return;
+    expect(twoRoutines.card).toMatchObject({
+      summary: 'Инструкция act-рутины: правка «Правят дважды», «Вторая рутина»',
+    });
+
+    // ЕДИНИЦА ФРАЗЫ — «повод + рутина», а не рутина: одна и та же запись законно попадает и в
+    // `becomes` (первая операция возвращает носитель записи с боевыми значениями), и в `edit`
+    // (вторая правит её тело), и это ДВА разных события для владельца. Схлопни дедупликация
+    // по заголовку — одно из них пропало бы молча.
+    const bothReasons = await seedEntity(userA, { title: 'Оба повода', tags: [] });
+    await withIdentity(db, userA, (tx) =>
+      tx
+        .update(entities)
+        .set({
+          aspects: [],
+          props: {
+            'orbis/routine_stage': 'paused',
+            'orbis/routine_at': '07:00',
+            'orbis/routine_mode': 'act',
+            'orbis/allowed_tools': ['entity_update'],
+          },
+        })
+        .where(eq(entities.id, bothReasons.id)),
+    );
+    const twoReasons = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: bothReasons.id, aspects: { attach: ['orbis/routine'] } },
+        },
+        { tool: 'entity_update', input: { id: bothReasons.id, body: 'Новое тело.' } },
+      ],
+    });
+    expect(twoReasons.status).toBe('pending_confirmation');
+    if (twoReasons.status !== 'pending_confirmation') return;
+    expect(twoReasons.card).toMatchObject({
+      summary:
+        'Инструкция act-рутины: правка «Оба повода»; Инструкция act-рутины: тело «Оба повода» становится инструкцией',
+    });
+
+    // СУБЪЕКТ НА МОМЕНТ ОПЕРАЦИИ — В ОБЕ СТОРОНЫ. Первая операция снимает носитель, вторая
+    // правит доверенность у записи, которая рутиной УЖЕ НЕ ЯВЛЯЕТСЯ: звать её рутиной значило
+    // бы врать про объект (рулинг раунда 4). Прежде `false` от скана не перебивал `true` из
+    // допачечной строки — цепочка работала только в одну сторону.
+    const stripped = await seedEntity(userA, {
+      title: 'Сняли и правят',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({ mode: 'act', allowed_tools: ['entity_update'] }),
+      },
+    });
+    const chain = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: stripped.id, aspects: { detach: ['orbis/routine'] } },
+        },
+        {
+          tool: 'entity_update',
+          input: { id: stripped.id, props: { 'orbis/allowed_tools': ['entity_create'] } },
+        },
+      ],
+    });
+    expect(chain.status).toBe('pending_confirmation');
+    if (chain.status !== 'pending_confirmation') return;
+    expect(chain.card).toMatchObject({
+      summary:
+        'Автономия рутины «Сняли и правят»: снимает аспект рутины; Свойства доверенности рутины на записи «Сняли и правят»: инструменты: entity_create',
+    });
+
+    // …и обратное направление той же цепочки не сломано: у операции ПОСЛЕ навешивания носителя
+    // субъект — рутина, хотя допачечная строка аспекта ещё не знает.
+    const gains = await seedEntity(userA, { title: 'Навесили и правят', tags: [] });
+    await withIdentity(db, userA, (tx) =>
+      tx
+        .update(entities)
+        .set({
+          props: {
+            'orbis/routine_stage': 'paused',
+            'orbis/routine_at': '07:00',
+            'orbis/routine_mode': 'propose',
+          },
+        })
+        .where(eq(entities.id, gains.id)),
+    );
+    const gained = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id: gains.id, aspects: { attach: ['orbis/routine'] } } },
+        {
+          tool: 'entity_update',
+          input: { id: gains.id, props: { 'orbis/allowed_tools': ['entity_create'] } },
+        },
+      ],
+    });
+    expect(gained.status).toBe('pending_confirmation');
+    if (gained.status !== 'pending_confirmation') return;
+    expect(gained.card).toMatchObject({
+      summary: 'Автономия рутины «Навесили и правят»: инструменты: entity_create',
+    });
+  });
+
   test('«отнимать нечего» — ОДИН ответ у обоих видов снятия носителя (Minor-2 фикс-раунда 4)', async () => {
     // Безоружная рутина (propose, список ЕСТЬ и он пуст). `detach` у неё проходил молча, а
     // безобидный attach с новым временем сообщал «снимает белый список» — снятие того, чего
