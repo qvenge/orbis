@@ -1469,7 +1469,11 @@ export function aspectToolJsonSchema(aspect: AspectDefinition, reg: { properties
   input: { q?: string; aspect?: string; module?: string; status?: 'active'|'proposed'|'deprecated'; contract?: string /* инертен в А */ },
   result: { properties: { id, key, label, description, type, status, module, usage: { aspects: string[] /* носители */, entities: number } }[] } }
 // LLM entity_create input: { id?, title, emoji?, body?, tags?, props?: Record<string /*key|id*/, unknown>, aspects?: string[] /* attach */ }
-// LLM entity_update input: { id, expectedUpdatedAt?, title?, …, props?, unset?: string[], aspects?: { attach?: string[]; detach?: string[] }, archived?, precondition? }
+// LLM entity_update input: { id, expectedUpdatedAt?, title?, …, props?, unset?: string[], aspects?: { attach?: string[]; detach?: string[] }, archived? }
+// БЕЗ `precondition` (рулинг Р-12-1, гейт Задачи 12): §А9-1 перечисляет для контрактов тулов только `props` и `aspects`,
+// а `precondition` по §А7-3 — СЕРВЕРНЫЙ рычаг (захват тикета, предложение, отложка). Непротекание CAS держится тем,
+// что strict-контракт тула поля не знает и отклоняет его: модель, подставляющая предусловие сама, подделывала бы
+// гонку, ради защиты от которой сервер и снимает его с прочитанной строки. Поле живёт в `entityUpdateExecInput`.
 // резолв key→id на границе (resolvePropertyRef из 4b); неизвестный key → VALIDATION UNKNOWN_PROPERTY с подсказкой ближайшего key
 // wire.ts: export function toLlmEntity(row, reg): { id, title, emoji, body, bodyRefs, tags, props: Record<key, unknown>, aspects: string[], createdAt, updatedAt, archived }
 ```
