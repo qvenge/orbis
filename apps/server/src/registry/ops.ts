@@ -279,27 +279,32 @@ export async function restorePropertyRow(
         { property: id, values: used.values },
       );
     }
+    await assertRegistryStaysReadable(tx, ownerId, id, null);
     await tx.execute(sql`
       DELETE FROM property_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${id}`);
     await bumpOwnerRegistryVersion(tx, ownerId);
     return;
   }
+  // ОТКАТ ТОЖЕ ПРОХОДИТ ПРОБУ, хотя возвращает состояние, которое когда-то было читаемым.
+  // Между записью и откатом мир двигался: `scope` сняли, а освободившееся место заняла
+  // дельта аспекта — и возврат `scope` замкнул бы §А3-4 (`SCOPE_DUPLICATE`). Из двух
+  // исходов выбран громкий: неприменимый откат — это отказ, который владелец видит и
+  // разбирает, а нечитаемый реестр — это замок снаружи всего графа.
+  await assertRegistryStaysReadable(tx, ownerId, id, row);
   await insertRow(tx, ownerId, row, { restore: true });
   await bumpOwnerRegistryVersion(tx, ownerId);
 }
 
-async function insertRow(
-  tx: Tx,
-  ownerId: string,
-  row: PropertyRow,
-  opts: { restore?: boolean } = {},
-): Promise<void> {
-  // Отказ строгой схемы здесь — это отказ ДО записи: реестр, который сам не разбирается
-  // собственной схемой, до валидации данных доезжать не должен (тот же fail-closed, что в
-  // `load.ts`). Проверяется собранная строка целиком, а не отдельные поля: дефекты вроде
-  // «select без вариантов» видны только на ней.
-  // `createdAt` в схему определения не входит (её форма — то, что читает реестр, а не то,
-  // что лежит в колонках), поэтому строгий разбор идёт по строке БЕЗ него.
+/**
+ * Строка → ОПРЕДЕЛЕНИЕ, каким его увидит читатель реестра, со строгим разбором.
+ *
+ * Отказ здесь — это отказ ДО записи: реестр, который сам не разбирается собственной схемой,
+ * до валидации данных доезжать не должен (тот же fail-closed, что в `load.ts`). Проверяется
+ * собранная строка ЦЕЛИКОМ, а не отдельные поля: дефекты вроде «select без вариантов» видны
+ * только на ней. `createdAt` в схему определения не входит (её форма — то, что читает
+ * реестр, а не то, что лежит в колонках), поэтому разбор идёт по строке БЕЗ него.
+ */
+function definitionOf(row: PropertyRow, ownerId: string): PropertyDefinition {
   const { createdAt: _createdAt, ...definition } = row;
   const parsed = propertyDefinitionSchema.safeParse({ ...definition, ownerId });
   if (!parsed.success) {
@@ -308,6 +313,58 @@ async function insertRow(
       issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`),
     });
   }
+  return parsed.data;
+}
+
+/**
+ * БУДЕТ ЛИ РЕЕСТР ЧИТАЕМ ПОСЛЕ ЭТОЙ ПРАВКИ — проба будущего снимка, ДО записи.
+ *
+ * ЗАЧЕМ ОНА НУЖНА ОБЕИМ СТОРОНАМ. §А3-4 разводит два механизма «где показывается свойство»:
+ * дельта аспекта ИЛИ `scope`, называющий тот же аспект. Двойное объявление `applyDeltas`
+ * считает ошибкой и отказывает FAIL-CLOSED НА КАЖДОМ ЧТЕНИИ реестра (`SCOPE_DUPLICATE`), а
+ * читают реестр все: `execute()` берёт снимок ПЕРВЫМ делом, до стадий, — значит после такой
+ * записи у владельца перестают работать и правка, и снятие дельты, и ДАЖЕ ОТКАТ. Дверей в
+ * эту комнату две — со стороны дельты (`setAspectDelta`) и со стороны `scope`
+ * (`createProperty`/`updateProperty`/откат правки), и закрытая одна означает незакрытую
+ * комнату. Поэтому проба ОБЩАЯ и стоит на обеих.
+ *
+ * Складывается ровно то, что сложит читатель: сырые строки владельца с подставленной сюда
+ * правкой, плюс его живые дельты, через тот же `applyDeltas`. Второго правила «что считать
+ * противоречием» не заводится — оно одно, и живёт у читателя.
+ *
+ * `next: null` — правка УДАЛЯЕТ строку (отклонение `proposed` §А10-3, откат создания).
+ */
+async function assertRegistryStaysReadable(
+  tx: Tx,
+  ownerId: string,
+  id: string,
+  next: PropertyRow | null,
+): Promise<void> {
+  const rows = await loadRegistryRows(tx, ownerId);
+  const deltas = await loadRegistryDeltas(tx, ownerId);
+  const versions = await readRegistryVersions(tx, ownerId);
+  const properties = new Map(rows.properties);
+  if (next === null) properties.delete(id);
+  else properties.set(next.id, definitionOf(next, ownerId));
+  applyDeltas(
+    {
+      properties,
+      aspects: rows.aspects,
+      roles: rows.roles,
+      ownerVersion: versions.ownerVersion,
+      systemVersion: versions.systemVersion,
+    },
+    deltas,
+  );
+}
+
+async function insertRow(
+  tx: Tx,
+  ownerId: string,
+  row: PropertyRow,
+  opts: { restore?: boolean } = {},
+): Promise<void> {
+  definitionOf(row, ownerId);
   // ON CONFLICT нужен только откату (строку могли не удалить, а изменить); создание идёт по
   // пустому месту, и конфликт там означал бы занятый id — о нём молчать нельзя.
   const conflict = opts.restore
@@ -482,6 +539,7 @@ export async function createProperty(
     flags: {},
     createdAt: new Date().toISOString(),
   };
+  await assertRegistryStaysReadable(tx, ownerId, row.id, row);
   await insertRow(tx, ownerId, row);
   await bumpOwnerRegistryVersion(tx, ownerId);
   return { id: row.id, key: row.key };
@@ -560,6 +618,7 @@ export async function updateProperty(
   if (patch.status === 'deprecated' && row.status === 'proposed') {
     const used = await propertyUsage(tx, ownerId, id);
     if (used.values === 0 && used.refs === 0) {
+      await assertRegistryStaysReadable(tx, ownerId, id, null);
       await tx.execute(sql`
         DELETE FROM property_definitions WHERE owner_id = ${ownerId}::uuid AND id = ${id}`);
       await bumpOwnerRegistryVersion(tx, ownerId);
@@ -575,6 +634,7 @@ export async function updateProperty(
     rank: patch.rank ?? row.rank,
     status: patch.status ?? row.status,
   };
+  await assertRegistryStaysReadable(tx, ownerId, id, next);
   await insertRow(tx, ownerId, next, { restore: true });
   await bumpOwnerRegistryVersion(tx, ownerId);
 }
@@ -716,9 +776,16 @@ export interface MergeValueConflict {
 }
 
 /**
- * Записи, на которых слияние не имеет молчаливого правильного ответа (§А10-2). Отдельная
- * функция, а не ветка внутри `mergeProperty`: её зовёт СТАДИЯ 4 исполнителя — до первой
- * записи, чтобы «ничего не применено» держалось по построению, а не по откату.
+ * Записи, на которых слияние не имеет молчаливого правильного ответа (§А10-2).
+ *
+ * ЧЕМ ДЕРЖИТСЯ «НИЧЕГО НЕ ПРИМЕНЕНО» — точно, без приукрашивания. Функция зовётся ПЕРВЫМ
+ * запросом самого `mergeProperty`, то есть до первой записи ЭТОЙ операции, а не на отдельной
+ * стадии исполнителя. Значит гарантия двухслойная и обе части нужны: внутри операции ничего
+ * не успевает записаться по порядку запросов, а всё, что записали ПРЕДЫДУЩИЕ операции той же
+ * пачки, снимает откат транзакции (отказ уходит из `execute` через `ExecError`, и
+ * `withIdentity` откатывает tx целиком). Отдельной функцией она вынесена не ради стадии, а
+ * потому, что тот же вопрос задаёт отчёт о конфликте (`registry/merge-conflict.ts`) — второй
+ * экземпляр предиката однажды ответил бы иначе, чем слияние.
  */
 export async function mergeValueConflicts(
   tx: Tx,
@@ -758,6 +825,46 @@ export function resolveMergePair(
       `${source.id} — встроенное свойство: поглощать можно только свои (§А3-2)`,
       { reason: 'MERGE_BUILTIN', source: source.id },
     );
+  }
+  // Д2: ХРАНИЛИЩЕ ЦЕЛИ. Слияние переносит значение внутри `props`
+  // (`props = (props - source) || {into: props->source}`), а у core-проекций (§А1-3,
+  // `storage: 'core'` — `orbis/title`, `orbis/archived`, `orbis/created_at`,
+  // `orbis/updated_at`) значение живёт в КОЛОНКЕ. Такое слияние проходило бы «успешно»,
+  // кладя значение в `props` по адресу, которого там никто не читает: у записи оказались бы
+  // ДВЕ несогласованные правды под одним реестровым именем, а обещание операции («значения
+  // переехали в цель») не выполнялось бы вовсе. Проверяются ОБА конца: у своей строки
+  // `storage` сегодня всегда `props`, но правило говорит о хранилище, а не о происхождении.
+  for (const [side, def] of [
+    ['source', source],
+    ['into', into],
+  ] as const) {
+    if (def.storage !== 'props') {
+      throw new ExecError(
+        'VALIDATION',
+        `${def.id} хранится колонкой (storage: ${def.storage}) — слияние переносит только ` +
+          `значения из props`,
+        { reason: 'MERGE_STORAGE', side, property: def.id, storage: def.storage },
+      );
+    }
+  }
+  // Д3: НИ ОДИН КОНЕЦ НЕ ДОЛЖЕН БЫТЬ УЖЕ ПОГЛОЩЁН. Компактация (§А10-2) выпрямляет цепочку
+  // только в одну сторону — «слили в то, что потом слили дальше»; обратный порядок («слить
+  // в уже поглощённое») дал бы `a → b → c` в два шага, а на «не длиннее одного» стоят
+  // резолвер (`db/schema.ts`, Р10) и обоснование ацикличности (`registry/deps-graph.ts`).
+  // Отказ, а не молчаливый перевод на преемника: журнал обязан говорить, во что слили, тем
+  // же именем, которое назвал владелец. Поглощённый ИСТОЧНИК запрещён по той же мерке —
+  // значений у него нет, и повторное слияние только переставило бы указатель.
+  for (const [side, def] of [
+    ['source', source],
+    ['into', into],
+  ] as const) {
+    if (def.mergedInto !== null) {
+      throw new ExecError(
+        'VALIDATION',
+        `${def.id} уже поглощено свойством ${def.mergedInto} — сливайте с ним`,
+        { reason: 'MERGE_ALREADY_MERGED', side, property: def.id, successor: def.mergedInto },
+      );
+    }
   }
   if (JSON.stringify(source.type) !== JSON.stringify(into.type)) {
     // Типы сравниваются ЦЕЛИКОМ, а не по `kind`: `select` с разными наборами вариантов и
@@ -962,6 +1069,20 @@ function rewriteBodyDoc(doc: unknown, from: ReadonlySet<string>, to: string): un
  * значения (не «прибавить», не «поменять местами»), поэтому второй прогон той же нагрузки
  * оставляет базу ровно там же, где первый. Это не украшение: undo применяется через тот же
  * конвейер, что и всё остальное, и повтор его нагрузки — обычное дело при ретрае транспорта.
+ *
+ * ОБРАТНАЯ СТОРОНА ТОГО ЖЕ СВОЙСТВА, названная вслух: это LWW-откат (§7.8), и правку,
+ * сделанную ПОСЛЕ слияния, он молча теряет. `merge A→B`, потом `entity_update B=42`, потом
+ * undo — и вместо 42 вернётся `{A: 5}`. Так устроен весь undo Orbis («восстанавливает
+ * зафиксированное в журнале состояние ПОВЕРХ текущего», `executor/types.ts`), и слияние
+ * здесь не исключение — но масштаб у него другой: одна отмена трогает все записи владельца
+ * со слитым свойством сразу.
+ *
+ * ЗАМЕТНАЯ АСИММЕТРИЯ между двумя обратными операциями реестра, и она НЕ случайна:
+ * `restorePropertyRow` отказывается удалять строку, у которой появились значения
+ * («не осироти данные»), а здесь такой страховки нет и быть не может — откат слияния
+ * возвращает значения НА МЕСТО, а не удаляет их, и отказывать ему значило бы запретить
+ * отмену там, где она как раз и нужна. Цена — потерянная поздняя правка; она предпочтена
+ * неотменяемому слиянию тысячи записей.
  */
 export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Promise<void> {
   for (const v of iv.values) {
@@ -1117,6 +1238,15 @@ export async function removeAspectDelta(tx: Tx, ownerId: string, aspectId: strin
  * (`executor/relations.ts`): совпавший ключ слил бы две несвязанные очереди.
  *
  * Замок реентерабелен, поэтому пачка из пяти операций реестра берёт его один раз.
+ *
+ * ЧЕГО ЭТОТ ЗАМОК НЕ ДЕЛАЕТ. Он сериализует операции ВЛАДЕЛЬЦА между собой — те, что идут
+ * через исполнителя. Пересев (`db/seed-registries.ts`) пишет system-строки и сливает дельты
+ * админским подключением и этого замка НЕ БЕРЁТ: он идёт на деплое, вне запроса, и своей
+ * сериализации у пары «пересев ∥ операция владельца» сегодня нет. Общего вреда это не несёт
+ * (пересев трогает `owner_id IS NULL`, операции — свои строки), а единственное пересечение —
+ * `registry_deltas`: слияние на пересеве переписывает ту же строку, которую владелец мог
+ * править секунду назад. Условие, при котором это перестанет быть допустимым: у пересева
+ * появится шаг, читающий строки владельца и решающий по ним, — тогда замок нужен и там.
  */
 export async function lockOwnerRegistry(tx: Tx, ownerId: string): Promise<void> {
   await tx.execute(

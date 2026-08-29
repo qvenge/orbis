@@ -1032,3 +1032,194 @@ describe('property_merge при конфликте значений (§А10-2)',
     expect(merged[0]?.props).toEqual({ [into]: 1 });
   });
 });
+
+// ---------------------------------------------------------------------------
+// §А3-4: двойное объявление «где показывается свойство» — обе двери (фикс-раунд 1)
+// ---------------------------------------------------------------------------
+
+describe('дельта и scope не могут объявить одно свойство на одном аспекте (§А3-4)', () => {
+  const dupOwner = freshUserId();
+
+  function runDup(tool: string, input: unknown): Promise<ExecuteResult> {
+    return execute(
+      db,
+      { actorUserId: dupOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      { sink },
+    );
+  }
+
+  /** Читаемость реестра — вопрос, который задаёт КАЖДЫЙ вызов исполнителя, а не только тест. */
+  async function registryReadable(): Promise<boolean> {
+    const r = await runDup('entity_create', { title: 'проба читаемости', tags: [] });
+    return r.ok;
+  }
+
+  test('сперва ДЕЛЬТА, потом scope: правка отвергнута — иначе реестр перестал бы читаться', async () => {
+    const created = ok(
+      await runDup('property_create', {
+        key: 'user/dup-a',
+        label: { ru: 'Двойное А' },
+        description: { ru: 'Проба §А3-4' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const id = (created.results[0] as { property: string }).property;
+    ok(
+      await runDup('aspect_delta_set', {
+        aspect: 'orbis/note',
+        delta: { properties: { add: [{ propertyId: id, required: false, rank: 50 }] } },
+      }),
+    );
+
+    const e = err(
+      await runDup('property_update', { id, scope: { filter: { aspect: 'orbis/note' } } }),
+    );
+    expect((e.details as { reason?: string }).reason).toBe('SCOPE_DUPLICATE');
+    // ГЛАВНОЕ: реестр после отказа ЧИТАЕТСЯ. Проверяется не чтением снимка в тесте, а любым
+    // вызовом исполнителя — он берёт снимок ПЕРВЫМ делом, и именно этот путь запирался бы.
+    expect(await registryReadable()).toBe(true);
+    // И обе починки на месте: снять дельту и поставить scope по-прежнему можно.
+    ok(await runDup('aspect_delta_remove', { aspect: 'orbis/note' }));
+    ok(await runDup('property_update', { id, scope: { filter: { aspect: 'orbis/note' } } }));
+  });
+
+  test('сперва scope, потом ДЕЛЬТА: отвергнута дельта (вторая дверь в ту же комнату)', async () => {
+    const created = ok(
+      await runDup('property_create', {
+        key: 'user/dup-b',
+        label: { ru: 'Двойное Б' },
+        description: { ru: 'Проба §А3-4, обратный порядок' },
+        type: { kind: 'number' },
+        status: 'active',
+        scope: { filter: { aspect: 'orbis/task' } },
+      }),
+    );
+    const id = (created.results[0] as { property: string }).property;
+    const e = err(
+      await runDup('aspect_delta_set', {
+        aspect: 'orbis/task',
+        delta: { properties: { add: [{ propertyId: id, required: false, rank: 51 }] } },
+      }),
+    );
+    expect((e.details as { reason?: string }).reason).toBe('SCOPE_DUPLICATE');
+    expect(await registryReadable()).toBe(true);
+  });
+
+  test('ОТКАТ, ведущий в то же состояние, тоже отвергается — громко, а не замком', async () => {
+    // Сценарий, до которого не доводит ни один прямой путь: scope сняли, освободившееся
+    // место заняла дельта — и возврат scope откатом замкнул бы §А3-4.
+    const created = ok(
+      await runDup('property_create', {
+        key: 'user/dup-c',
+        label: { ru: 'Двойное В' },
+        description: { ru: 'Проба отката' },
+        type: { kind: 'number' },
+        status: 'active',
+        scope: { filter: { aspect: 'orbis/memory' } },
+      }),
+    );
+    const id = (created.results[0] as { property: string }).property;
+    const dropped = ok(await runDup('property_update', { id, scope: null }));
+    ok(
+      await runDup('aspect_delta_set', {
+        aspect: 'orbis/memory',
+        delta: { properties: { add: [{ propertyId: id, required: false, rank: 52 }] } },
+      }),
+    );
+    const undone = await undoAction(db, { actorUserId: dupOwner, actionId: dropped.actionId });
+    expect(undone.ok).toBe(false);
+    expect(undone.ok === false && (undone.error.details as { reason?: string }).reason).toBe(
+      'SCOPE_DUPLICATE',
+    );
+    // Отказ отката — исход, который владелец видит и разбирает; нечитаемый реестр — нет.
+    expect(await registryReadable()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §А10-2: чего слияние не делает (фикс-раунд 1)
+// ---------------------------------------------------------------------------
+
+describe('property_merge: границы операции (фикс-раунд 1)', () => {
+  const edgeOwner = freshUserId();
+
+  function runEdge(tool: string, input: unknown): Promise<ExecuteResult> {
+    return execute(
+      db,
+      { actorUserId: edgeOwner, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      { sink },
+    );
+  }
+
+  async function mk(key: string, type: unknown): Promise<string> {
+    const r = ok(
+      await runEdge('property_create', {
+        key,
+        label: { ru: key },
+        description: { ru: key },
+        type,
+        status: 'active',
+      }),
+    );
+    return (r.results[0] as { property: string }).property;
+  }
+
+  test('слияние в core-проекцию отвергнуто: значение уехало бы в props, где его никто не читает', async () => {
+    // `orbis/title` — storage: 'core' (§А1-3): значение живёт в КОЛОНКЕ. Слияние переносит
+    // значение внутри `props`, то есть положило бы его по адресу, который читателю неведом,
+    // и у записи стало бы две несогласованные правды под одним реестровым именем.
+    const source = await mk('user/my-title', { kind: 'text' });
+    const entity = newId();
+    ok(
+      await runEdge('entity_create', {
+        id: entity,
+        title: 'настоящий заголовок',
+        tags: [],
+        props: { [source]: 'мой заголовок' },
+      }),
+    );
+    const e = err(await runEdge('property_merge', { source, into: 'orbis/title' }));
+    expect((e.details as { reason?: string; side?: string }).reason).toBe('MERGE_STORAGE');
+    expect((e.details as { side?: string }).side).toBe('into');
+    // Ничего не тронуто: колонка своя, props свой.
+    const rows = (await withIdentity(db, edgeOwner, (tx) =>
+      tx.execute(sql`SELECT title, props FROM entities WHERE id = ${entity}::uuid`),
+    )) as unknown as Array<{ title: string; props: Record<string, unknown> }>;
+    expect(rows[0]?.title).toBe('настоящий заголовок');
+    expect(rows[0]?.props).toEqual({ [source]: 'мой заголовок' });
+  });
+
+  test('слияние В УЖЕ ПОГЛОЩЁННОЕ отвергнуто — цепочка не растёт вторым способом', async () => {
+    const a = await mk('user/edge-a', { kind: 'number' });
+    const b = await mk('user/edge-b', { kind: 'number' });
+    const c = await mk('user/edge-c', { kind: 'number' });
+    ok(await runEdge('property_merge', { source: b, into: c }));
+    // Обратный компактации порядок: b уже поглощено, и слияние в него дало бы a → b → c.
+    const e = err(await runEdge('property_merge', { source: a, into: b }));
+    expect((e.details as { reason?: string; side?: string }).reason).toBe('MERGE_ALREADY_MERGED');
+    expect((e.details as { side?: string; successor?: string }).side).toBe('into');
+    expect((e.details as { successor?: string }).successor).toBe(c);
+    // Указатель a не появился, глубина цепочки — по-прежнему один шаг.
+    const rows = (await withIdentity(db, edgeOwner, (tx) =>
+      tx.execute(sql`SELECT id, merged_into FROM property_definitions
+                     WHERE owner_id = ${edgeOwner}::uuid AND id IN (${a}, ${b}, ${c})`),
+    )) as unknown as Array<{ id: string; merged_into: string | null }>;
+    const byId = new Map(rows.map((r) => [r.id, r.merged_into]));
+    expect(byId.get(a)).toBeNull();
+    expect(byId.get(b)).toBe(c);
+    expect(byId.get(c)).toBeNull();
+    // Сливать в преемника — можно: отказ адресован цепочке, а не операции.
+    ok(await runEdge('property_merge', { source: a, into: c }));
+  });
+
+  test('ПОГЛОЩЁННОЕ не бывает и источником: значений у него нет, а указатель переставился бы', async () => {
+    const x = await mk('user/edge-x', { kind: 'number' });
+    const y = await mk('user/edge-y', { kind: 'number' });
+    const z = await mk('user/edge-z', { kind: 'number' });
+    ok(await runEdge('property_merge', { source: x, into: y }));
+    const e = err(await runEdge('property_merge', { source: x, into: z }));
+    expect((e.details as { reason?: string; side?: string }).reason).toBe('MERGE_ALREADY_MERGED');
+    expect((e.details as { side?: string }).side).toBe('source');
+  });
+});
