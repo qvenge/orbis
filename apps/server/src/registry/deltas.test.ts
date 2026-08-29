@@ -7,12 +7,14 @@ import { BUILTIN_ASPECT_DEFS, BUILTIN_PROPERTY_META, type PropertyDefinition } f
 import { ExecError } from '../errors';
 import {
   applyDeltas,
+  baseSystemFor,
   previewMergeConflicts,
   RELAXABLE_REQUIRED_PROPERTY_IDS,
   type RegistryDeltaRow,
   relaxWhitelistViolations,
   type SystemDefinitions,
   threeWayMerge,
+  UNKNOWN_PREV_SYSTEM,
 } from './deltas';
 import type { RegistrySnapshot } from './load';
 
@@ -45,8 +47,9 @@ function row(
   targetKind: RegistryDeltaRow['targetKind'],
   targetId: string,
   delta: unknown,
+  baseVersion = 1,
 ): RegistryDeltaRow {
-  return { id: 'd1', ownerId: OWNER, targetKind, targetId, baseVersion: 1, delta };
+  return { id: 'd1', ownerId: OWNER, targetKind, targetId, baseVersion, delta };
 }
 
 /** Код отказа и его ПРИЧИНА: коды реформы закрыты (errors.ts), причина едет в details. */
@@ -483,10 +486,85 @@ describe('threeWayMerge: система поехала под живой дел�
       ),
     });
     expect(
-      previewMergeConflicts(prev, systemOf(nextSnapshot), [
-        row('aspect', 'orbis/task', { properties: { hide: ['orbis/effort_min'] } }),
-        row('property', 'orbis/priority', { label: { ru: 'Важность' } }),
-      ]).map((c) => c.kind),
+      previewMergeConflicts(
+        prev,
+        systemOf(nextSnapshot),
+        [
+          row('aspect', 'orbis/task', { properties: { hide: ['orbis/effort_min'] } }),
+          row('property', 'orbis/priority', { label: { ru: 'Важность' } }),
+        ],
+        1,
+      ).map((c) => c.kind),
     ).toEqual(['hidden-required']);
+  });
+});
+
+/**
+ * ОТСТАВШИЙ `base_version` (Important-1 гейт-ревью): снимок БД описывает ОДНУ системную
+ * версию, и дельте, писавшейся против другой, он стороной «до» не годится. Путь достижим
+ * штатно — упавший или убитый посреди цикла сид оставляет часть строк неслитыми, и
+ * следующий прогон видит для них `prev == next`, то есть «система не менялась».
+ */
+describe('база слияния выбирается по base_version (§А3-3)', () => {
+  test('версия совпала — база это снимок БД; не совпала — пустая база', () => {
+    const prev = systemOf(snapshotWith());
+    expect(baseSystemFor(prev, row('aspect', 'orbis/task', {}, 7), 7)).toBe(prev);
+    expect(baseSystemFor(prev, row('aspect', 'orbis/task', {}, 6), 7)).toBe(UNKNOWN_PREV_SYSTEM);
+    // Забегание вперёд (дельта опирается на версию новее снимка) — тоже «неизвестно»:
+    // правило про СОВПАДЕНИЕ, а не про «не старше».
+    expect(baseSystemFor(prev, row('aspect', 'orbis/task', {}, 8), 7)).toBe(UNKNOWN_PREV_SYSTEM);
+  });
+
+  test('prev == next и отставшая дельта: скрытие ОБЯЗАТЕЛЬНОГО свойства доложено конфликтом', () => {
+    // Ровно проба ревьюера: обе стороны системы одинаковы, `orbis/task_status` обязателен
+    // и сейчас, и «тогда». С точной базой перехода нет — и не должно быть; с отставшей
+    // базой молчать нельзя: состояния, против которого писали дельту, не сохранено нигде.
+    const system = systemOf(snapshotWith());
+    const hide = { properties: { hide: ['orbis/task_status'] } };
+
+    const exact = threeWayMerge(system, system, row('aspect', 'orbis/task', hide, 7));
+    expect(exact.conflicts).toEqual([]);
+    expect(exact.merged).toEqual(hide);
+
+    const stale = threeWayMerge(
+      baseSystemFor(system, row('aspect', 'orbis/task', hide, 1), 7),
+      system,
+      row('aspect', 'orbis/task', hide, 1),
+    );
+    expect(stale.conflicts.map((c) => c.kind)).toEqual(['hidden-required']);
+    expect(stale.conflicts[0]?.propertyId).toBe('orbis/task_status');
+    // Скрытие снято — обязательное поле вернулось в состав аспекта.
+    expect(stale.merged).toEqual({});
+  });
+
+  test('отставшая дельта: свой вариант select рядом с системным — конфликт даже без дрейфа', () => {
+    const system = systemOf(
+      snapshotWith([
+        selectProperty([
+          { key: 'good', label: 'Хорошо', rank: 1 },
+          { key: 'meh', label: 'Так себе', rank: 2 },
+        ]),
+      ]),
+    );
+    const delta = {
+      selectOptions: { 'user/mood': { add: [{ key: 'meh', label: { ru: 'Средне' }, rank: 5 }] } },
+    };
+    expect(threeWayMerge(system, system, row('aspect', 'orbis/note', delta, 7)).conflicts).toEqual(
+      [],
+    );
+    const stale = row('aspect', 'orbis/note', delta, 1);
+    expect(
+      threeWayMerge(baseSystemFor(system, stale, 7), system, stale).conflicts.map((c) => c.kind),
+    ).toEqual(['variant-merge']);
+  });
+
+  test('предпросмотр отставшую дельту тоже не пропускает', () => {
+    const system = systemOf(snapshotWith());
+    const stale = row('aspect', 'orbis/task', { properties: { hide: ['orbis/task_status'] } }, 1);
+    expect(previewMergeConflicts(system, system, [stale], 7).map((c) => c.kind)).toEqual([
+      'hidden-required',
+    ]);
+    // Та же дельта с актуальной базой конфликтов не даёт — правило про базу, не про поле.
+    expect(previewMergeConflicts(system, system, [{ ...stale, baseVersion: 7 }], 7)).toEqual([]);
   });
 });

@@ -8,6 +8,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { appRouter } from '../router';
@@ -320,4 +321,23 @@ test('backlinks категории: транзакции и правила па�
   const labels = new Map((got.backlinks ?? []).map((b) => [b.entity.id, b.viaLabel]));
   expect(labels.get(txn)).toBe('Категория');
   expect(labels.get(rule)).toBe('Назначаемая категория');
+
+  // ДЕЛЬТА ПОДПИСИ ВСТРОЕННОГО СВОЙСТВА ДОЕЗЖАЕТ СЮДА (§А3-2, Р19 — прямое назначение
+  // `PropertyDelta`; гейт-ревью Задачи 14, Important-2). Пока подписи брались сырым
+  // запросом по таблице, переопределение владельца до этой секции не доходило: строка в
+  // `property_definitions` не менялась, менялась только дельта.
+  await withIdentity(db, user, async (tx) => {
+    await tx.execute(sql`
+      INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+      SELECT gen_random_uuid(), ${user}::uuid, 'property', 'orbis/finance_category',
+             (SELECT version FROM registry_system WHERE id = 1),
+             '{"label":{"ru":"Статья расходов"}}'::jsonb`);
+    // Инкремент — В ТОЙ ЖЕ транзакции, что мутация реестра (§А10-1).
+    await bumpOwnerRegistryVersion(tx, user);
+  });
+  const afterDelta = await caller.entity.get({ id: category.id, include: ['backlinks'] });
+  const afterLabels = new Map((afterDelta.backlinks ?? []).map((b) => [b.entity.id, b.viaLabel]));
+  expect(afterLabels.get(txn)).toBe('Статья расходов');
+  // Соседняя подпись, которой дельта не касалась, осталась системной.
+  expect(afterLabels.get(rule)).toBe('Назначаемая категория');
 });

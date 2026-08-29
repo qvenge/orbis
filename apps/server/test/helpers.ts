@@ -212,8 +212,15 @@ export async function seedCustomAspect(ownerId: string, spec: CustomAspectSpec):
         properties = EXCLUDED.properties, schema = EXCLUDED.schema,
         ai_instructions = EXCLUDED.ai_instructions, view_config = EXCLUDED.view_config`);
 
-    // Реестр владельца изменился — версия обязана сдвинуться тем же подключением
-    // (§А10-1): иначе снимок в кеше процесса останется без этого аспекта.
+    // Реестр владельца изменился — версия обязана сдвинуться (§А10-1), иначе снимок в
+    // кеше процесса останется без этого аспекта.
+    //
+    // ОГОВОРКА, чтобы фикстура не читалась как образец инварианта: §А10-1 требует
+    // инкремент В ТОЙ ЖЕ ТРАНЗАКЦИИ, что мутация, а здесь три autocommit-стейтмента
+    // подряд на одном подключении — транзакции у хелпера нет вовсе. Для фикстуры это
+    // безразлично (никто не наблюдает её промежуточные состояния), но писателю реестра
+    // так писать НЕЛЬЗЯ: образец транзакционного инкремента — `registry/cache.test.ts`,
+    // где INSERT дельты и `bumpOwnerRegistryVersion` идут одним `withIdentity`.
     await bumpOwnerRegistryVersion(db, ownerId);
   } finally {
     await client.end();

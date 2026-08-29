@@ -5,13 +5,7 @@
 // entitySchema всегда несёт body), include управляет доп. секциями.
 // Вызывается ТОЛЬКО под withIdentity (RLS, §4.10); ошибки — ExecError (роутер
 // мапит в TRPCError, диспатч — в структурированный error-результат).
-import {
-  type EntityGetUiInput,
-  entityThreadId,
-  type LocalizedText,
-  ROLE_MENTION,
-  ROLE_REF,
-} from '@orbis/shared';
+import { type EntityGetUiInput, entityThreadId, ROLE_MENTION, ROLE_REF } from '@orbis/shared';
 import { readBodyDoc } from '@orbis/shared/doc';
 import { desc, eq, or, sql } from 'drizzle-orm';
 import type { WireChatMessage } from './chat/messages';
@@ -19,7 +13,8 @@ import { chatMessages, entities, relations } from './db/schema';
 import type { Tx } from './db/with-identity';
 import { ExecError } from './errors';
 import type { WireEntity, WireRelation } from './executor/types';
-import { effectivePropertiesSql, effectiveRolesSql } from './registry/roles';
+import { effectiveRegistry } from './registry/cache';
+import type { RegistrySnapshot } from './registry/load';
 import { toWireChatMessage, toWireEntity, toWireEntityFromSql, toWireRelation } from './wire';
 
 /**
@@ -65,44 +60,46 @@ const BACKLINKS_LIMIT = 100;
 const MENTION_LABEL = 'упоминание';
 
 /**
- * Русские подписи сторон роли `mention` из ЭФФЕКТИВНОГО реестра (своя строка владельца
- * перекрывает встроенную). Отсутствие строки — сломанный реестр, а не штатный случай, но
- * ронять чтение сущности из-за подписи нельзя: вызывающий подставит id роли, и владелец
- * увидит, что именно не найдено.
+ * Русские подписи сторон роли `mention` из ЭФФЕКТИВНОГО реестра — ИЗ СНИМКА, а не своим
+ * SQL'ом (гейт-ревью Important-2).
+ *
+ * Прежде здесь стоял точечный запрос по `effectiveRolesSql()`. Он давал ту же строку,
+ * пока «эффективное определение» означало «система ⊕ свои строки»; с приходом дельт
+ * (§А3-2) означать это перестало — подпись, переопределённая дельтой, до сырого запроса
+ * не доезжает, и секция «Связанное» показывала бы системное имя там, где владелец задал
+ * своё. Снимок с Задачи 14 дёшев (процессный кеш по версии), поэтому расхождение
+ * устранено, а не задокументировано.
+ *
+ * Отсутствие строки — сломанный реестр, а не штатный случай, но ронять чтение сущности
+ * из-за подписи нельзя: вызывающий подставит id роли, и владелец увидит, что не найдено.
  */
-async function mentionSideLabels(tx: Tx): Promise<{ source: string; target: string } | undefined> {
-  const rows = (await tx.execute(sql`
-    SELECT d.source_label, d.target_label FROM ${effectiveRolesSql()} d
-     WHERE d.id = ${ROLE_MENTION}`)) as unknown as Array<{
-    source_label: LocalizedText;
-    target_label: LocalizedText;
-  }>;
-  const def = rows[0];
+function mentionSideLabels(reg: RegistrySnapshot): { source: string; target: string } | undefined {
+  const def = reg.roles.get(ROLE_MENTION);
   if (def === undefined) return undefined;
   // Русской подписи может не быть у СВОЕЙ роли владельца (реестр требует хотя бы одну
   // локаль, а не именно ru) — тогда честнее показать id роли, чем пустую строку.
   return {
-    source: def.source_label.ru ?? ROLE_MENTION,
-    target: def.target_label.ru ?? ROLE_MENTION,
+    source: def.sourceLabel.ru ?? ROLE_MENTION,
+    target: def.targetLabel.ru ?? ROLE_MENTION,
   };
 }
 
 /**
- * Русские подписи СВОЙСТВ по их id — из эффективного реестра (§А6-2): ими подписаны
- * ссылочные обратные связи. Спрашивается ТОЛЬКО когда в секции есть хоть одно ребро `ref`.
+ * Русские подписи СВОЙСТВ по их id — из СНИМКА эффективного реестра (§А6-2): ими подписаны
+ * ссылочные обратные связи. По той же причине, что у подписей ролей выше: переопределение
+ * подписи встроенного свойства дельтой (`PropertyDelta`, Р19) — это её прямое назначение,
+ * и сырой запрос его не видел бы.
  *
  * Свойство, которого в реестре нет, подписи не получает (карта его просто не содержит), и
- * вызывающий подставит id: сломанный реестр не должен ронять чтение сущности — ровно то же
- * правило, что у подписей ролей выше.
+ * вызывающий подставит id: сломанный реестр не должен ронять чтение сущности.
  */
-async function propertyLabels(tx: Tx, ids: readonly string[]): Promise<Map<string, string>> {
-  const rows = (await tx.execute(sql`
-    SELECT d.id, d.label FROM ${effectivePropertiesSql()} d
-     WHERE d.id IN (${sql.join(
-       ids.map((id) => sql`${id}`),
-       sql`, `,
-     )})`)) as unknown as Array<{ id: string; label: LocalizedText }>;
-  return new Map(rows.flatMap((r) => (r.label.ru === undefined ? [] : [[r.id, r.label.ru]])));
+function propertyLabels(reg: RegistrySnapshot, ids: readonly string[]): Map<string, string> {
+  return new Map(
+    ids.flatMap((id) => {
+      const label = reg.properties.get(id)?.label.ru;
+      return label === undefined ? [] : [[id, label] as [string, string]];
+    }),
+  );
 }
 
 export interface EntityReadResult {
@@ -230,9 +227,11 @@ export async function readEntity(
     // Подписи сторон — одним запросом и ТОЛЬКО когда в секции есть хоть одна связь: у
     // упоминаний из тела роли нет вовсе, и на большинстве открытий detail запрос не уходит.
     const shown = refs.slice(0, BACKLINKS_LIMIT);
-    const sides = shown.some((r) => r.via_relation === true)
-      ? await mentionSideLabels(tx)
-      : undefined;
+    //
+    // Снимок реестра берётся ЛЕНИВО и ОДИН на обе подписи: у большинства открытий секция
+    // пуста, и платить за него нечем; когда подписывать есть что, второй снимок в той же
+    // транзакции разошёлся бы с первым не мог, но стоил бы лишней сверки версии.
+    const needsSides = shown.some((r) => r.via_relation === true);
     // Подписи свойств — тем же правилом «только если есть кого подписывать»; берутся по
     // ПОКАЗЫВАЕМЫМ строкам, а не по всей выдаче: усечённая строка подписи не получит.
     const properties = [
@@ -240,8 +239,11 @@ export async function readEntity(
         shown.flatMap((r) => (typeof r.via_property === 'string' ? [r.via_property] : [])),
       ),
     ];
+    const reg =
+      needsSides || properties.length > 0 ? await effectiveRegistry(tx, ownerId) : undefined;
+    const sides = needsSides && reg !== undefined ? mentionSideLabels(reg) : undefined;
     const propertyLabelById =
-      properties.length > 0 ? await propertyLabels(tx, properties) : new Map<string, string>();
+      reg === undefined ? new Map<string, string>() : propertyLabels(reg, properties);
     // Ссылка свойства сильнее связи, связь — сильнее упоминания: у сущности, пришедшей
     // сразу двумя путями, строка ОДНА, и подписана она самым точным из них — тем, который
     // называет ИМЕННО ЧЕМ на нас сослались.

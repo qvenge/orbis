@@ -40,6 +40,7 @@ import postgres, { type Sql } from 'postgres';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
 import {
+  baseSystemFor,
   type RegistryConflict,
   type RegistryDeltaRow,
   type RegistryDeltaTargetKind,
@@ -124,8 +125,11 @@ export async function seedRegistries(sql: Sql, adminDsn: string): Promise<SeedRe
       VALUES
         (${a.id}, NULL, ${a.key}, ${sql.json(j(a.label))}, ${sql.json(j(a.description))},
          ${sql.json(j(a.properties))}, ${sql.json(j(a.implements))},
-         -- Колонка schema — носитель СТАРОЙ формы до миграции 0017 (Р-24): по ней
-         -- валидирует стадия 2 исполнителя и из неё собирается вход attach_*-тула.
+         -- Колонка schema — носитель СТАРОЙ формы до миграции 0017 (Р-24). Её читателей
+         -- осталось ДВА, и путь записи в них не входит: экран настроек (aspect.list) и
+         -- loadAspectToolRows. Стадия 2 исполнителя валидирует по эффективному снимку
+         -- (assertEntityProps, Задача 12), а вход attach_*-тула собирает
+         -- aspectToolJsonSchema (tools/registry.ts) — тоже из снимка.
          ${sql.json(j(legacyAspectJsonSchema(a.id as AspectId)))},
          ${a.aiInstructions}, ${a.tagMappings}, ${sql.json(j(a.viewConfig))},
          ${a.module}, ${a.service}, ${a.rank})
@@ -246,7 +250,12 @@ export function codeSystemDefinitions(): SystemDefinitions {
  * реестр владельца нечитаемым (`applyDeltas` отказывает fail-closed на каждом чтении), и
  * тихо пропустить её значило бы спрятать факт ровно в тот момент, когда на него смотрит
  * человек. Уже слитые строки при этом остаются слитыми (транзакция на строку), а
- * недоделанные сохраняют `base_version < version` и доедут следующим прогоном.
+ * недоделанные сохраняют `base_version < version` и доедут следующим прогоном — доедут
+ * КОРРЕКТНО, а не как получится: у отставшей строки снимок БД перестал быть её стороной
+ * «до», и `baseSystemFor` подставляет ей пустую базу вместо чужой (см. его докблок).
+ * Без этого повторный прогон сливал бы пропущенную строку вслепую: `prev == next` для неё
+ * значит «система не менялась», и скрытие ставшего обязательным свойства уехало бы
+ * владельцу молча.
  */
 export async function mergeRegistryDeltas(
   sql: Sql,
@@ -282,7 +291,12 @@ export async function mergeRegistryDeltas(
         baseVersion: r.base_version as number,
         delta: r.delta,
       };
-      const { merged, conflicts } = threeWayMerge(prevSystem, nextSystem, row);
+      // База «до» — снимок БД, но ТОЛЬКО для дельты, которая на него и опиралась.
+      // Отставший `base_version` (пропущенное слияние — упавший сид, убитый процесс)
+      // означает, что состояния, против которого писали дельту, больше нет нигде;
+      // `baseSystemFor` подставляет пустую базу, и правила §А3-3 срабатывают широко.
+      const base = baseSystemFor(prevSystem, row, systemVersion - 1);
+      const { merged, conflicts } = threeWayMerge(base, nextSystem, row);
       await db.transaction(async (tx) => {
         await tx.execute(
           drizzleSql`UPDATE registry_deltas

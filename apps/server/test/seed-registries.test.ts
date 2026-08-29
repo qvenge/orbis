@@ -214,6 +214,55 @@ describe('сид трёх реестров', () => {
     }
   }, 30_000);
 
+  /**
+   * ОТСТАВШИЙ `base_version` — пропущенное прошлым прогоном слияние (Important-1
+   * гейт-ревью). Дрейфа в базе НЕТ вовсе: system-строки совпадают с кодом, то есть
+   * `prev == next`, и точная база не увидела бы никакого перехода. Но дельта писалась
+   * против ДРУГОЙ, уже не сохранённой нигде версии — и молча слить её нельзя.
+   *
+   * Путь достижим ровно тем способом, который описан порядком восстановления: сид упал
+   * или процесс убит посреди цикла, часть строк переехала на новую версию, часть осталась
+   * на старой; следующий прогон встречает вторую половину.
+   */
+  test('дельта с отставшим base_version сливается по широкому правилу, а не вслепую', async () => {
+    const { db, client } = adminDb();
+    const raw = postgres(process.env.DATABASE_URL_ADMIN as string, { max: 1 });
+    const owner = crypto.randomUUID();
+    try {
+      await db.execute(sql`TRUNCATE registry_deltas`);
+      // base_version НАМЕРЕННО отстал на несколько прогонов; система при этом в порядке.
+      await db.execute(sql`
+        INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+        VALUES (gen_random_uuid(), ${owner}::uuid, 'aspect', 'orbis/task', 1,
+                ${JSON.stringify({ properties: { hide: ['orbis/task_status'] } })}::jsonb)`);
+
+      const result = await seedRegistries(raw, process.env.DATABASE_URL_ADMIN as string);
+      // Скрытие ОБЯЗАТЕЛЬНОГО свойства доложено конфликтом и снято — а не уехало молча.
+      expect(result.conflicts.map((c) => c.kind)).toEqual(['hidden-required']);
+      expect(result.conflicts[0]?.propertyId).toBe('orbis/task_status');
+      const rows = (await db.execute(
+        sql`SELECT delta, base_version FROM registry_deltas WHERE owner_id = ${owner}::uuid`,
+      )) as unknown as { delta: unknown; base_version: number }[];
+      expect(rows[0]?.delta).toEqual({});
+      expect(rows[0]?.base_version).toBe(result.version);
+      // Владельцу сказано той же транзакцией.
+      const notes = (await db.execute(
+        sql`SELECT m.metadata FROM chat_messages m JOIN chat_threads t ON t.id = m.thread_id
+             WHERE t.owner_id = ${owner}::uuid`,
+      )) as unknown as { metadata: Record<string, unknown> }[];
+      expect(notes).toHaveLength(1);
+      expect(notes[0]?.metadata.type).toBe('registry-merge');
+    } finally {
+      await db.execute(sql`DELETE FROM registry_deltas WHERE owner_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM chat_messages WHERE thread_id IN
+        (SELECT id FROM chat_threads WHERE owner_id = ${owner}::uuid)`);
+      await db.execute(sql`DELETE FROM chat_threads WHERE owner_id = ${owner}::uuid`);
+      await db.execute(sql`DELETE FROM user_settings WHERE owner_id = ${owner}::uuid`);
+      await raw.end();
+      await client.end();
+    }
+  }, 30_000);
+
   // Версия проверяется ОТНОСИТЕЛЬНО: `truncateAll` строку registry_system не трогает
   // намеренно (одна строка, PK = 1), а `db:prepare` уже сеял до начала прогона — абсолютное
   // значение здесь зависело бы от того, сколько раз базу готовили.

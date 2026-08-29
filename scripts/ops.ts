@@ -144,7 +144,15 @@ async function check(): Promise<number> {
         unknown
       >[];
       const prevSystem = await readSystemDefinitions(tx);
-      return { rows: out, deltaRows, prevSystem };
+      // Версия, которую ОПИСЫВАЕТ снимок выше: только дельте с этим `base_version` он
+      // годится стороной «до» (`baseSystemFor`). Читается тем же снапшотом — иначе номер
+      // и строки были бы из разных моментов.
+      const [version] = await tx<{ version: number }[]>`
+        SELECT version FROM registry_system WHERE id = 1`;
+      if (version === undefined) {
+        throw new Error('check: в registry_system нет строки id=1 — база без миграции 0014');
+      }
+      return { rows: out, deltaRows, prevSystem, prevVersion: version.version };
     });
     const rows = read.rows;
     const drift = diffBuiltinRegistries(rows);
@@ -161,6 +169,7 @@ async function check(): Promise<number> {
           delta: r.delta,
         }),
       ),
+      read.prevVersion,
     );
     for (const kind of REGISTRY_KINDS) {
       const d = drift[kind];
