@@ -24,8 +24,10 @@
 //    точкой контракт этой функции не пересекают вовсе.
 import {
   aspectsNamedInQueryAst,
+  QUERY_TREE_DEPTH_CAP,
   type QueryAst,
   queryAstSchema,
+  queryTreeExceedsDepth,
   resolveLegacyFieldId,
 } from '@orbis/shared/query';
 import type { SQL } from 'drizzle-orm';
@@ -230,6 +232,9 @@ const KEY_SEP = '\u0000';
  * - `compile_field`, `compile_query` — текст ошибки компилятора: он называет поле и тип,
  *   своих меняющихся значений не несёт;
  * - `aspect_schema` — сообщение zod: чем именно аспект не подошёл схеме;
+ * - `source_too_deep` — САМ КАП (`QUERY_TREE_DEPTH_CAP`): диагноз здесь один на все такие
+ *   значения и по построению не меняется, а глубина отвергнутого дерева менялась бы от
+ *   правки к правке и убила бы дедуп;
  * - `aggregate` — ВИД агрегата, а не текст ошибки БД: тот несёт значение сорвавшей
  *   строки («invalid input syntax for type numeric: "не число"»), а оно меняется от
  *   правки соседней сущности, к самой цели отношения не имеющей;
@@ -285,8 +290,34 @@ export async function goalProgressFor(
   // остаются в `props` и после снятия аспекта цели, а старая карта теряла их вместе с ним.
   // Без признака полоса прогресса рисовалась бы у записи, целью быть переставшей.
   if (!entity.aspects.includes(GOAL_ASPECT)) return undefined;
+  /**
+   * ВХОД-ДЕРЕВА 3 (страховка чтения). СТРАХОВКА ГЛУБИНЫ ПЕРЕД РАЗБОРОМ — вторая половина
+   * рулинга Р-13c-2.
+   *
+   * `progressSourceSchema` рекурсивна через `queryAstSchema` (`z.lazy`), и на достаточно
+   * глубоком значении она не возвращает ошибку, а БРОСАЕТ `RangeError` — переполнение
+   * стека, которое `safeParse` не ловит по построению (он ловит `ZodError`). Без этой
+   * ветки такое значение отдавало бы 500 на КАЖДОМ `entity.get` цели, то есть fail-soft,
+   * ради которого написан весь `logFailure` ниже, не срабатывал бы вовсе.
+   *
+   * Записать такое значение с этой задачи нельзя (гейт стоит в `validate-props.ts`), но
+   * страховка нужна ровно потому, что путь записи — не единственный источник строки:
+   * сид, миграция и правка jsonb руками идут мимо валидатора. Кап тот же, и меряется то же,
+   * что там, — значение целиком.
+   */
+  const source = entity.props[PROGRESS_SOURCE];
+  if (queryTreeExceedsDepth(source, QUERY_TREE_DEPTH_CAP)) {
+    logFailure(
+      'source_too_deep',
+      String(QUERY_TREE_DEPTH_CAP),
+      entity.id,
+      `значение ${PROGRESS_SOURCE} вложено глубже ${QUERY_TREE_DEPTH_CAP} уровней — ` +
+        'разбор такой формы переполняет стек, прогресса не будет',
+    );
+    return undefined;
+  }
   const goal = goalSourceSchema.safeParse({
-    progressSource: entity.props[PROGRESS_SOURCE],
+    progressSource: source,
     targetValue: entity.props[TARGET_VALUE],
   });
   if (!goal.success) {

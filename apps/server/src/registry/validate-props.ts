@@ -30,6 +30,7 @@ import {
   X_ORBIS_DECIMAL,
   X_ORBIS_TYPE,
 } from '@orbis/shared';
+import { QUERY_TREE_DEPTH_CAP, queryTreeExceedsDepth } from '@orbis/shared/query';
 import { Ajv, type ValidateFunction } from 'ajv';
 import addFormats from 'ajv-formats';
 import { decCmp } from '../budget/decimal';
@@ -49,7 +50,8 @@ export type PropsViolation =
   | { code: 'TYPE'; propertyId: string; message: string }
   | { code: 'REQUIRED'; aspectId: string; propertyId: string }
   | { code: 'UNKNOWN_ASPECT'; aspectId: string }
-  | { code: 'DEPRECATED'; propertyId: string };
+  | { code: 'DEPRECATED'; propertyId: string }
+  | { code: 'VALUE_TOO_DEEP'; propertyId: string; cap: number };
 
 // Кэш скомпилированных валидаторов ПО ТЕКСТУ СХЕМЫ (§А7-1: «кеш по тексту схемы
 // сохраняется»; приём перенесён из `executor/aspects-validate.ts:46-67`). Ключ там —
@@ -172,6 +174,38 @@ export function validateEntityProps(
   const violations: PropsViolation[] = [];
 
   for (const [propertyId, value] of Object.entries(entity.props)) {
+    /**
+     * ВХОД-ДЕРЕВА 3. ГЛУБИНА ЗНАЧЕНИЯ — ПЕРВОЙ, до всякого рекурсивного читателя. Порядок здесь и есть
+     * суть проверки, а не стиль.
+     *
+     * ЗАМЕР (проба ре-ревью, воспроизведена на `orbis/progress_source`): цепочка `not`
+     * глубиной 10 000 уровней (80 КБ — `JSON.parse` её переваривает) ПРОХОДИТ ajv записи и
+     * ложится в jsonb, а zod чтения (`goals/progress.ts`, `progressQuerySchema` → та же
+     * рекурсия `z.lazy`) падает на ней `RangeError: Maximum call stack size exceeded`.
+     * `safeParse` от этого не спасает — он ловит `ZodError`, а не переполнение стека, — и
+     * `entity.get` такой цели отдаёт 500 НАВСЕГДА: чинить нечем, кроме правки jsonb руками.
+     * На 20 000 уровней бросает уже сам ajv, то есть без этой проверки рекурсивен и
+     * валидатор записи.
+     *
+     * Доступно это МОДЕЛИ: у `orbis/progress_source` нет `flags`, а отказ записи даёт
+     * только `model_writable === false` (`executor/props.ts`), — значит свойство пишется
+     * обычным `entity_create`/`entity_update`/`attach_orbis_goal` (рулинг Р-13c-2).
+     *
+     * Проверка ОБЩАЯ на все свойства, а не список из одного: «значение с Q-AST внутри»
+     * реестр отдельным признаком не помечает, и перечисление таких свойств в коде
+     * разъехалось бы с реестром при первом же новом. Кап тот же, что у дерева запроса
+     * (`QUERY_TREE_DEPTH_CAP`), и второй константы не заводится: самое глубокое законное
+     * значение словаря — это и есть Q-AST, у всего остального вложенность единицы уровней.
+     *
+     * МЕРЯЕТСЯ ЗНАЧЕНИЕ ЦЕЛИКОМ, вместе с конвертом (`{query, aggregate}`), а не дерево
+     * внутри него: в jsonb ложится и на каждом чтении разворачивается именно значение, и
+     * число в отказе обязано быть тем, которое считает код. Цена названа: у Q-AST, лежащего
+     * ВНУТРИ свойства, запас на два уровня меньше, чем у того же дерева, присланного тулу.
+     */
+    if (queryTreeExceedsDepth(value, QUERY_TREE_DEPTH_CAP)) {
+      violations.push({ code: 'VALUE_TOO_DEEP', propertyId, cap: QUERY_TREE_DEPTH_CAP });
+      continue;
+    }
     const def = reg.properties.get(propertyId);
     if (def === undefined) {
       violations.push({ code: 'UNKNOWN_PROPERTY', propertyId });

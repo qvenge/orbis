@@ -89,6 +89,12 @@ export async function loadRegistryVersions(tx: Tx, ownerId: string): Promise<Reg
  * снимок обязан быть одинаковым и под админским подключением (сиды, миграции, скрипты),
  * где политик нет вовсе.
  */
+/**
+ * ВХОД-ДЕРЕВА 4 (БЕЗ ГЕЙТА): `type.target` и `scope` строки `property_definitions` — это
+ * Q-AST, и `propertyDefinitionSchema` ниже разбирает их рекурсией `z.lazy`. Гейта глубины
+ * перед ним нет намеренно — обоснование и признак «момент настал» в шапке
+ * `queryFilterNodeSchema` (`@orbis/shared`, `query/ast.ts`), пункт 4.
+ */
 export async function loadRegistry(tx: Tx, ownerId: string): Promise<RegistrySnapshot> {
   // Запросы идут ПОСЛЕДОВАТЕЛЬНО, а не Promise.all: транзакция живёт на одном соединении,
   // и параллельные запросы по нему сериализуются в лучшем случае, а в худшем — путают

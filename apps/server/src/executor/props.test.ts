@@ -19,7 +19,7 @@ import {
   type PropertyType,
   writableFromTool,
 } from '@orbis/shared';
-import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
+import { parseQueryAst, QUERY_TREE_DEPTH_CAP, toParseRegistry } from '@orbis/shared/query';
 import { eq, sql } from 'drizzle-orm';
 import corpus from '../../test/golden/validator-verdicts.json';
 import {
@@ -1241,6 +1241,62 @@ describe('валидация по реестру (§А7-1)', () => {
       aspects: ['orbis/task'],
     });
     expect(violationsOf(typed).map((v) => v.code)).toEqual(['TYPE']);
+  });
+
+  /**
+   * ОТРАВЛЕННОЕ ЗНАЧЕНИЕ НЕ ЛОЖИТСЯ (рулинг Р-13c-2, сторона ЗАПИСИ).
+   *
+   * Замер, ради которого проверка написана: цепочка `not` глубиной 10 000 уровней (80 КБ,
+   * `JSON.parse` её переваривает) ПРОХОДИЛА ajv записи и ложилась в jsonb, а zod чтения
+   * (`goals/progress.ts`) падал на ней `RangeError` — переполнением стека, которого
+   * `safeParse` не ловит. Итог: `entity.get` такой цели отдавал 500 навсегда, чинить —
+   * только правкой jsonb руками. Свойство при этом пишется моделью обычным путём: у
+   * `orbis/progress_source` нет `flags`, запрещающих запись.
+   *
+   * Глубина берётся ВДВОЕ больше капа, а не «кап + 1»: проба не должна зависеть от того,
+   * считает ли код конверт значения вместе с деревом.
+   */
+  test('значение глубже капа отвергается ЗАПИСЬЮ, а не падает на чтении (Р-13c-2)', async () => {
+    let node: unknown = { tag: 'дом' };
+    for (let i = 0; i < QUERY_TREE_DEPTH_CAP * 2; i++) node = { not: node };
+
+    const denied = await run('entity_create', {
+      title: 'Цель с отравленным источником',
+      tags: [],
+      props: {
+        'orbis/progress_source': { query: { filter: node }, aggregate: 'count' },
+        'orbis/target_value': '100',
+      },
+      aspects: ['orbis/goal'],
+    });
+    expect(denied.ok).toBe(false);
+    expect(violationsOf(denied)).toContainEqual({
+      code: 'VALUE_TOO_DEEP',
+      propertyId: 'orbis/progress_source',
+      cap: QUERY_TREE_DEPTH_CAP,
+    });
+    // Названо ИМЕННО то число, которое код и меряет.
+    if (denied.ok) throw new Error('ожидался отказ');
+    expect(denied.error.message).toContain(String(QUERY_TREE_DEPTH_CAP));
+
+    // Проверка стоит ПЕРЕД ajv, а не после: на 20 000 уровней бросает уже сам ajv, и без
+    // неё отказ пришёл бы не от нас. Признак — отказ структурный (`VALIDATION`), а не 500.
+    expect(denied.error.code).toBe('VALIDATION');
+
+    // Мелкая цель тем же путём проходит — проверка не запрещает законную форму.
+    const okGoal = await run('entity_create', {
+      title: 'Обычная цель',
+      tags: [],
+      props: {
+        'orbis/progress_source': {
+          query: { filter: { aspect: 'orbis/task' } },
+          aggregate: 'count',
+        },
+        'orbis/target_value': '100',
+      },
+      aspects: ['orbis/goal'],
+    });
+    expect(okGoal.ok).toBe(true);
   });
 });
 

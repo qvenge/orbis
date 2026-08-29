@@ -52,5 +52,10 @@ function describe(violation: ReturnType<typeof validateEntityProps>[number] | un
       return `аспект «${violation.aspectId}» требует свойство «${violation.propertyId}»`;
     case 'TYPE':
       return `значение «${violation.propertyId}»: ${violation.message}`;
+    case 'VALUE_TOO_DEEP':
+      return (
+        `значение «${violation.propertyId}» вложено глубже ${violation.cap} уровней — ` +
+        'столько не нужно ни одному осмысленному значению'
+      );
   }
 }

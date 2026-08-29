@@ -3,7 +3,7 @@
 // агрегат считает SQL под RLS-identity владельца, поэтому подделать движок нечем —
 // сущности готовятся ЧЕРЕЗ роутер (единственный путь мутаций), читается — как в бою.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import type { QueryAst } from '@orbis/shared/query';
+import { QUERY_TREE_DEPTH_CAP, type QueryAst } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
@@ -916,5 +916,61 @@ describe('логи отказа: конфигурационный отказ н�
     expect(got.goalProgress).toBeUndefined();
     expect(got.entity.title).toBe('Цель с дрейфом схемы');
     expect(logged.filter((l) => l.includes(goal.id)).length).toBe(1);
+  });
+
+  /**
+   * УЖЕ ЛЕЖАЩЕЕ отравленное значение читается БЕЗ 500 (рулинг Р-13c-2, сторона ЧТЕНИЯ).
+   *
+   * Запись такого значения с Задачи 13c отвергает валидатор (`validate-props.ts`,
+   * `VALUE_TOO_DEEP`), но путь записи — не единственный источник строки: сид, миграция и
+   * правка jsonb руками идут мимо него. Поэтому значение кладётся ИМЕННО так — админским
+   * DSN, минуя исполнителя: иначе проба проверяла бы гейт записи второй раз, а не то, ради
+   * чего написана.
+   *
+   * Что было без страховки (замер ре-ревью): `progressSourceSchema` рекурсивна через
+   * `z.lazy`, и на 10 000 уровней она БРОСАЕТ `RangeError` — переполнение стека, которого
+   * `safeParse` не ловит. `entity.get` этой цели отдавал 500 НАВСЕГДА, и fail-soft ветка
+   * `logFailure` до него не доходила.
+   *
+   * Проверяются обе половины исхода: экран открывается (запись отдаётся, прогресса нет) И
+   * отказ не молчит — в логе ровно одна строка про эту цель.
+   */
+  test('уже лежащее значение глубже капа: чтение fail-soft, а не 500 (Р-13c-2)', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    const goal = await goalWith(user, 'Цель с отравленным источником', {
+      query: 'aspect=orbis/financial',
+      aggregate: 'count',
+    });
+    /**
+     * Глубина взята ИЗ ЗАМЕРА полосы, а не «кап + 1»: на 10 000 уровней (80 КБ) ajv записи
+     * значение ПРИНИМАЛ, а zod чтения падал `RangeError`. Мельче — беда невоспроизводима
+     * (`z.lazy` справляется, и снятие гейта дало бы просто посчитанный прогресс), глубже
+     * 20 000 — бросает уже ajv, то есть проверялась бы чужая граница, а не наша.
+     */
+    const POISON_DEPTH = 10_000;
+    let node: unknown = { tag: 'дом' };
+    for (let i = 0; i < POISON_DEPTH; i++) node = { not: node };
+    const poisoned = JSON.stringify({ query: { filter: node }, aggregate: 'count' });
+    const admin = adminDb();
+    try {
+      await admin.db.execute(
+        sql`UPDATE entities
+            SET props = jsonb_set(props, '{orbis/progress_source}', ${poisoned}::jsonb)
+            WHERE id = ${goal.id}`,
+      );
+    } finally {
+      await admin.client.end();
+    }
+
+    // Без страховки этот вызов БРОСАЕТ (`RangeError` из `z.lazy`) и уезжает 500-й, а не
+    // возвращает запись без прогресса, — то есть проверяется именно отсутствие 500.
+    const [got, logged] = await captureErrors(() => caller.entity.get({ id: goal.id }));
+    expect(got.entity.title).toBe('Цель с отравленным источником');
+    expect(got.goalProgress).toBeUndefined();
+    const mine = logged.filter((l) => l.includes(goal.id));
+    expect(mine.length).toBe(1);
+    // Строка лога называет причину и кап — по ней владелец сервера и поймёт, что чинить.
+    expect(mine[0]).toContain(String(QUERY_TREE_DEPTH_CAP));
   });
 });
