@@ -40,7 +40,8 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { makeChatJournalSink } from '../executor/journal';
 import { carrierAspects, resolvePropertyRef } from '../executor/props';
 import { createPending, rejectedReason, rejectPending } from '../policy/pending';
-import { loadRegistry, type RegistrySnapshot } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import type { ToolCallCtx, ToolDispatchResult } from '../tools/dispatch';
 import { editsNoun } from './constants';
 import { countProposalRows } from './edits';
@@ -550,7 +551,7 @@ export async function loadTargets(
   // Снимок реестра берётся ЗДЕСЬ, вместе со строками, и уезжает вызывающему: предусловия
   // снимаются по нему же (`buildUpdate`), и второй снимок, взятый отдельно, мог бы
   // разойтись с первым на правке реестра между двумя чтениями.
-  const reg = await loadRegistry(tx, ownerId);
+  const reg = await effectiveRegistry(tx, ownerId);
   const wanted: Array<{ index: number; tool: string; id: string }> = [];
   for (const [index, op] of parsed.entries()) {
     if (op.tool === 'entity_update') {

@@ -45,11 +45,24 @@ import {
   describeRoleAccess,
   drizzleBackfillIo,
 } from '../apps/server/src/db/backfill-body-doc';
-import { REGISTRY_DRIFT_QUERIES } from '../apps/server/src/db/registry-drift';
+import {
+  REGISTRY_DELTAS_QUERY,
+  REGISTRY_DRIFT_QUERIES,
+} from '../apps/server/src/db/registry-drift';
 import * as schema from '../apps/server/src/db/schema';
-import { seedRegistries, seedRegistriesReport } from '../apps/server/src/db/seed-registries';
+import {
+  codeSystemDefinitions,
+  readSystemDefinitions,
+  seedRegistries,
+  seedRegistriesReport,
+} from '../apps/server/src/db/seed-registries';
 import { issuePatGrant } from '../apps/server/src/oauth/grants';
 import { PAT_USAGE, parsePatArgs } from '../apps/server/src/oauth/pat-args';
+import {
+  previewMergeConflicts,
+  type RegistryDeltaRow,
+  registryConflictLine,
+} from '../apps/server/src/registry/deltas';
 
 const KEYCHAIN_ACCOUNT = 'orbis';
 const KEYCHAIN_SERVICE = 'orbis-prod-admin';
@@ -118,14 +131,37 @@ async function withDb<T>(fn: (sql: postgres.Sql) => Promise<T>): Promise<T> {
  */
 async function check(): Promise<number> {
   return withDb(async (sql) => {
-    const rows = await sql.begin('isolation level repeatable read read only', async (tx) => {
+    const read = await sql.begin('isolation level repeatable read read only', async (tx) => {
       const out = {} as RegistryDbRows;
       for (const kind of REGISTRY_KINDS) {
         out[kind] = (await tx.unsafe(REGISTRY_DRIFT_QUERIES[kind])) as unknown as RegistryDbRow[];
       }
-      return out;
+      // Дельты и системные определения читаются ТЕМ ЖЕ снапшотом, что и строки дрейфа:
+      // предпросмотр конфликтов (§А3-3) отвечает на вопрос «что даст пересев ИЗ ЭТОГО
+      // состояния», и состояние обязано быть одно на весь ответ.
+      const deltaRows = (await tx.unsafe(REGISTRY_DELTAS_QUERY)) as unknown as Record<
+        string,
+        unknown
+      >[];
+      const prevSystem = await readSystemDefinitions(tx);
+      return { rows: out, deltaRows, prevSystem };
     });
+    const rows = read.rows;
     const drift = diffBuiltinRegistries(rows);
+    const conflicts = previewMergeConflicts(
+      read.prevSystem,
+      codeSystemDefinitions(),
+      read.deltaRows.map(
+        (r): RegistryDeltaRow => ({
+          id: r.id as string,
+          ownerId: r.owner_id as string,
+          targetKind: r.target_kind as RegistryDeltaRow['targetKind'],
+          targetId: r.target_id as string,
+          baseVersion: r.base_version as number,
+          delta: r.delta,
+        }),
+      ),
+    );
     for (const kind of REGISTRY_KINDS) {
       const d = drift[kind];
       const bad = d.missing.length + d.drifted.length + d.extra.length;
@@ -135,12 +171,24 @@ async function check(): Promise<number> {
     }
     for (const line of registryDriftReport(drift)) console.log(line);
     console.log(
+      `${conflicts.length === 0 ? '✓' : '✗'} дельты: строк ${read.deltaRows.length}, ` +
+        `конфликтов слияния ${conflicts.length}`,
+    );
+    for (const line of conflicts.map(registryConflictLine)) console.log(line);
+    console.log(
       hasRegistryDrift(drift)
         ? '\nНедостающее и расходящееся чинится: bun scripts/ops.ts seed-registries\n' +
             'ЛИШНИЕ строки пересев не убирает — что с ними делать, решает человек.'
         : '\nРеестры в проде совпадают с кодом.',
     );
-    return hasRegistryDrift(drift) ? 1 : 0;
+    if (conflicts.length > 0) {
+      console.log(
+        'Конфликты (§А3-3) пересев НЕ отменяет: он их разрешит по правилам слияния и\n' +
+          'положит владельцу системную заметку в глобальный тред. Список выше — ровно то,\n' +
+          'что там окажется.',
+      );
+    }
+    return hasRegistryDrift(drift) || conflicts.length > 0 ? 1 : 0;
   });
 }
 
@@ -195,9 +243,13 @@ async function migrateOp(): Promise<number> {
 
 /** Тот же сид, что `scripts/seed-registries.ts`, но с секретом из Ключницы. */
 async function seedRegistriesOp(): Promise<number> {
-  await withDb(async (sql) => {
-    console.log(seedRegistriesReport(await seedRegistries(sql)));
-  });
+  const dsn = readDsn();
+  const sql = postgres(dsn, { max: 1 });
+  try {
+    for (const line of seedRegistriesReport(await seedRegistries(sql, dsn))) console.log(line);
+  } finally {
+    await sql.end();
+  }
   return 0;
 }
 

@@ -6,7 +6,9 @@ import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { loadRegistry, type RegistrySnapshot } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
+import { bumpOwnerRegistryVersion } from '../registry/version';
 import { type PropertyCatalogRow, runPropertyCatalog } from './property-catalog';
 
 requireEnv();
@@ -42,6 +44,9 @@ async function seedProperty(spec: {
               ${JSON.stringify({ kind: 'number' })}::jsonb, ${spec.status}, 'props',
               ${spec.module ?? null}, 200, '{}'::jsonb)
       ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO NOTHING`);
+    // Правка реестра двигает его версию тем же путём, что боевой писатель (§А10-1):
+    // без этого кеш эффективных определений отдал бы снимок без нового свойства.
+    await bumpOwnerRegistryVersion(admin.db, owner);
   } finally {
     await admin.client.end();
   }
@@ -80,7 +85,7 @@ beforeAll(async () => {
       aspects: [],
     });
   });
-  reg = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
 });
 
 afterAll(async () => {

@@ -45,7 +45,7 @@ import type {
 } from '../executor/types';
 import type { GrantRef } from '../oauth/grants';
 import { listRunUnits } from '../policy/pending';
-import { loadRegistry } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
 import type { ToolDispatchResult } from '../tools/dispatch';
 import type { AGENT_VERB_NAMES } from '../tools/registry';
 import { toLlmEntity } from '../wire';
@@ -611,7 +611,7 @@ async function claimTask(
       // `{аспект: {поле: значение}}` из wire-формы; она снята Задачей 13c, и второй перевод
       // «свойство → имя для модели» дал бы агенту поле, которое он прочитал одним именем, а
       // записать обязан другим.
-      ticketForModel: toLlmEntity(ticketWire, await loadRegistry(tx, ctx.ownerId)),
+      ticketForModel: toLlmEntity(ticketWire, await effectiveRegistry(tx, ctx.ownerId)),
     };
   });
 

@@ -31,7 +31,8 @@ import { sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { aspectDefinitions } from '../db/schema';
 import type { Tx } from '../db/with-identity';
-import { loadRegistry, type RegistrySnapshot } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import { MAX_PROPOSAL_OPERATIONS, MAX_RUN_UNITS } from '../routines/constants';
 
 export interface OrbisToolDef {
@@ -1148,9 +1149,9 @@ const CORE_TOOLS: OrbisToolDef[] = [
  * Строка реестра аспектов в объёме, нужном СЛОЮ ИНСТРУКЦИЙ ПРОМПТА (`llm/context.ts`).
  *
  * Реестру тулов и карточкам она больше не нужна: с Задачи 12 они собираются из снимка
- * `loadRegistry` — того же, по которому валидируется запись. Здесь остался ровно один
+ * `effectiveRegistry` — того же, по которому валидируется запись. Здесь остался ровно один
  * читатель — секция «Инструкции активных аспектов»: ей нужны `id` и `aiInstructions`, но не
- * нужен `ownerId`, а `loadRegistry` без него не зовётся (снимок скоупится и под админским
+ * нужен `ownerId`, а `effectiveRegistry` без него не зовётся (снимок скоупится и под админским
  * подключением, где политик RLS нет вовсе).
  */
 export interface AspectToolRow {
@@ -1257,5 +1258,5 @@ export function buildToolDefs(reg: RegistrySnapshot): OrbisToolDef[] {
 
 /** Собирает реестр: core-тулы §9.2 + attach_<aspect> для каждого неслужебного аспекта (§7.6). */
 export async function buildToolRegistry(tx: Tx, ownerId: string): Promise<OrbisToolDef[]> {
-  return buildToolDefs(await loadRegistry(tx, ownerId));
+  return buildToolDefs(await effectiveRegistry(tx, ownerId));
 }

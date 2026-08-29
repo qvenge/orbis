@@ -13,7 +13,8 @@ import {
   truncateAll,
 } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
-import { loadRegistry } from './load';
+import { bumpOwnerRegistryVersion } from '../registry/version';
+import { effectiveRegistry } from './cache';
 
 requireEnv();
 
@@ -58,7 +59,7 @@ afterAll(async () => {
 });
 
 test('снимок несёт систему целиком: 77 свойств, 13 аспектов, 11 ролей', async () => {
-  const snap = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  const snap = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
   for (const p of BUILTIN_PROPERTY_META) expect(snap.properties.has(p.id)).toBe(true);
   for (const id of BUILTIN_ASPECT_IDS) expect(snap.aspects.has(id)).toBe(true);
   for (const id of RELATION_ROLE_IDS) expect(snap.roles.has(id)).toBe(true);
@@ -70,7 +71,7 @@ test('снимок несёт систему целиком: 77 свойств, 
 });
 
 test('система ⊕ СВОИ: свой аспект и его свойства видны, чужие — нет (RLS)', async () => {
-  const snap = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  const snap = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
   expect(snap.aspects.get('user/sleep-log')?.ownerId).toBe(owner);
   expect(snap.properties.get('user/hours')?.ownerId).toBe(owner);
   // Чужой аспект того же namespace невидим — его отсекает не фильтр запроса, а политика.
@@ -90,7 +91,8 @@ test('своё определение с id встроенного ПЕРЕКР�
       INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
       VALUES ('orbis/priority', ${owner}::uuid, 'orbis/priority', '{"ru":"Важность"}'::jsonb,
               '{"ru":"Своя важность"}'::jsonb, '{"kind":"text"}'::jsonb, 1)`);
-    const snap = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+    await bumpOwnerRegistryVersion(admin, owner); // мутация реестра двигает версию (§А10-1)
+    const snap = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
     const overridden = snap.properties.get('orbis/priority');
     expect(overridden?.ownerId).toBe(owner);
     expect(overridden?.label.ru).toBe('Важность');
@@ -135,15 +137,19 @@ test('key уникален среди СВОИХ: два свойства вла
 });
 
 test('версии: системная — из registry_system, владельца — из user_settings (0 без строки)', async () => {
-  const noSettings = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  // СВОЙ владелец, а не общий `owner` файла: у того строку настроек уже завёл инкремент
+  // версии, которым сопровождается всякая мутация реестра (§А10-1), — а проверяется здесь
+  // ровно случай «строки настроек нет вовсе».
+  const virgin = freshUserId();
+  const noSettings = await withIdentity(db, virgin, (tx) => effectiveRegistry(tx, virgin));
   expect(noSettings.systemVersion).toBeGreaterThan(0); // сид db:prepare уже был
   expect(noSettings.ownerVersion).toBe(0); // строки настроек у владельца нет
 
-  await withIdentity(db, owner, (tx) =>
+  await withIdentity(db, virgin, (tx) =>
     tx.execute(sql`INSERT INTO user_settings (owner_id, registry_version)
-                   VALUES (${owner}::uuid, 7)`),
+                   VALUES (${virgin}::uuid, 7)`),
   );
-  const withSettings = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  const withSettings = await withIdentity(db, virgin, (tx) => effectiveRegistry(tx, virgin));
   expect(withSettings.ownerVersion).toBe(7);
   expect(withSettings.systemVersion).toBe(noSettings.systemVersion);
 });

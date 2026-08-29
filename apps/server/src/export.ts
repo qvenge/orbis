@@ -11,7 +11,7 @@ import type { WireChatMessage } from './chat/messages';
 import { chatMessages, chatThreads, entities, relations, userSettings } from './db/schema';
 import type { Tx } from './db/with-identity';
 import type { WireEntity, WireRelation } from './executor/types';
-import { loadRegistry } from './registry/load';
+import { effectiveRegistry } from './registry/cache';
 import {
   toWireChatMessage,
   toWireEntity,
@@ -58,7 +58,7 @@ export interface OrbisExport {
 /**
  * Строки реестра, принадлежащие ВЛАДЕЛЬЦУ, в порядке `rank`, при равенстве — id.
  *
- * Снимок берётся `loadRegistry`, а не своим SELECT'ом, и это не экономия строк: у перевода
+ * Снимок берётся `effectiveRegistry`, а не своим SELECT'ом, и это не экономия строк: у перевода
  * строки таблицы в декларацию есть ровно одно место (`registry/load.ts`), и второе,
  * заведённое ради дампа, разъехалось бы с ним молча — дамп начал бы описывать реестр
  * формой, которой приложение не пользуется.
@@ -99,7 +99,7 @@ export async function exportData(
     .select()
     .from(userSettings)
     .where(eq(userSettings.ownerId, ownerId));
-  const registry = await loadRegistry(tx, ownerId);
+  const registry = await effectiveRegistry(tx, ownerId);
 
   return {
     format: 'orbis-export',

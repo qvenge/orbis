@@ -5,8 +5,8 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { RELATION_ROLE_IDS } from '@orbis/shared';
 import { appDb, freshUserId, requireEnv, seedCustomAspect, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
+import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
-import { loadRegistry } from '../registry/load';
 import { projectLegacyAspects, projectLegacyRelationType, rowFromLegacy } from './legacy-form';
 import { LEGACY_PARENT_ROLES } from './relations';
 
@@ -24,7 +24,7 @@ beforeAll(async () => {
     label: { ru: 'Сон', en: 'Sleep' },
     properties: [{ key: 'hours', type: { kind: 'number' }, required: true }],
   });
-  reg = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
 });
 
 afterAll(async () => {

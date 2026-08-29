@@ -23,13 +23,32 @@
 // на старую версию»), а не то, что вправе решить сид. Отчёт `ops.ts check` называет такие
 // строки поимённо.
 import {
+  type AspectDefinition,
   type AspectId,
+  aspectDefinitionSchema,
   BUILTIN_ASPECT_DEFS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   legacyAspectJsonSchema,
+  type PropertyDefinition,
+  propertyDefinitionSchema,
+  registryMergeNoteId,
 } from '@orbis/shared';
-import type { Sql } from 'postgres';
+import { sql as drizzleSql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres, { type Sql } from 'postgres';
+import { appendMessageIdempotent } from '../chat/messages';
+import { ensureGlobalThread } from '../chat/threads';
+import {
+  type RegistryConflict,
+  type RegistryDeltaRow,
+  type RegistryDeltaTargetKind,
+  registryConflictLine,
+  type SystemDefinitions,
+  threeWayMerge,
+} from '../registry/deltas';
+import { bumpOwnerRegistryVersion } from '../registry/version';
+import * as schema from './schema';
 
 /**
  * `sql.json` типизирован под `JSONValue` postgres.js, а декларации реестров — обычные
@@ -46,6 +65,10 @@ export interface SeedRegistriesResult {
   aspects: number;
   /** Версия system-реестров ПОСЛЕ сида — она же ключ инвалидации кешей (§А10-1). */
   version: number;
+  /** Дельт, пересчитанных трёхсторонним слиянием под новую системную версию (§А3-3). */
+  mergedDeltas: number;
+  /** Конфликты слияния — они же содержимое системной заметки владельцу (§А3-3). */
+  conflicts: RegistryConflict[];
 }
 
 /**
@@ -54,7 +77,12 @@ export interface SeedRegistriesResult {
  * `sql` — админское подключение: RLS запрещает запись строк с `owner_id IS NULL` любой
  * роли, кроме обходящей политики.
  */
-export async function seedRegistries(sql: Sql): Promise<SeedRegistriesResult> {
+export async function seedRegistries(sql: Sql, adminDsn: string): Promise<SeedRegistriesResult> {
+  // Системное определение ДО пересева — первая из трёх сторон слияния (§А3-3). Снимается
+  // ДО upsert'ов и только оно: `nextSystem` берётся из кода (`BUILTIN_*`), а дельты живут
+  // в своей таблице и пересевом не трогаются.
+  const prevSystem = await readSystemDefinitions(sql);
+
   for (const p of BUILTIN_PROPERTY_META) {
     await sql`
       INSERT INTO property_definitions
@@ -122,15 +150,180 @@ export async function seedRegistries(sql: Sql): Promise<SeedRegistriesResult> {
     // об этом нельзя: инкремент «не нашёл» строку тихо, а кеши остались бы на нулевой версии.
     throw new Error('seed-registries: в registry_system нет строки id=1 — база без миграции 0014');
   }
+
+  const merge = await mergeRegistryDeltas(sql, adminDsn, prevSystem, row.version);
   return {
     properties: BUILTIN_PROPERTY_META.length,
     roles: BUILTIN_RELATION_ROLE_META.length,
     aspects: BUILTIN_ASPECT_DEFS.length,
     version: row.version,
+    mergedDeltas: merge.merged,
+    conflicts: merge.conflicts,
   };
 }
 
+/** Системные определения из БД (`owner_id IS NULL`) — сторона «до» трёхстороннего слияния. */
+export async function readSystemDefinitions(sql: Sql): Promise<SystemDefinitions> {
+  const propertyRows = await sql<Record<string, unknown>[]>`
+    SELECT id, owner_id, key, label, description, type, status, storage, scope,
+           merged_into, module, rank, flags
+    FROM property_definitions WHERE owner_id IS NULL`;
+  const aspectRows = await sql<Record<string, unknown>[]>`
+    SELECT id, owner_id, key, label, description, properties, ai_instructions, tag_mappings,
+           implements, view_config, module, service, rank
+    FROM aspect_definitions WHERE owner_id IS NULL`;
+  const properties = new Map<string, PropertyDefinition>();
+  for (const r of propertyRows) {
+    properties.set(
+      r.id as string,
+      propertyDefinitionSchema.parse({
+        id: r.id,
+        ownerId: r.owner_id,
+        key: r.key,
+        label: r.label,
+        description: r.description,
+        type: r.type,
+        status: r.status,
+        storage: r.storage,
+        scope: r.scope,
+        mergedInto: r.merged_into,
+        module: r.module,
+        rank: r.rank,
+        flags: r.flags,
+      }),
+    );
+  }
+  const aspects = new Map<string, AspectDefinition>();
+  for (const r of aspectRows) {
+    aspects.set(
+      r.id as string,
+      aspectDefinitionSchema.parse({
+        id: r.id,
+        ownerId: r.owner_id,
+        key: r.key,
+        label: r.label,
+        description: r.description,
+        properties: r.properties,
+        aiInstructions: r.ai_instructions,
+        tagMappings: r.tag_mappings,
+        implements: r.implements,
+        viewConfig: r.view_config,
+        module: r.module,
+        service: r.service,
+        rank: r.rank,
+      }),
+    );
+  }
+  return { properties, aspects };
+}
+
+/** Системные определения ИЗ КОДА — сторона «после»; та самая, что упала в базу выше. */
+export function codeSystemDefinitions(): SystemDefinitions {
+  return {
+    properties: new Map(BUILTIN_PROPERTY_META.map((p) => [p.id, p])),
+    aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+  };
+}
+
+/**
+ * ТРЁХСТОРОННЕЕ СЛИЯНИЕ ЖИВЫХ ДЕЛЬТ ПОСЛЕ ПЕРЕСЕВА (§А3-3).
+ *
+ * Идёт ПОСЛЕ upsert'ов и инкремента системной версии, потому что новая версия — это и есть
+ * новый `base_version` дельт: пока она не записана, «на что теперь опирается дельта»
+ * ответить нечем.
+ *
+ * Каждая дельта переписывается СВОЕЙ транзакцией вместе с инкрементом версии владельца
+ * (§А10-1) — иначе процесс приложения, поднятый на этой же базе, продолжил бы отдавать из
+ * кеша снимок, собранный по старой дельте. Одна транзакция на дельту, а не одна на всё:
+ * дельты разных владельцев независимы, и падение на чужой строке не должно откатывать уже
+ * слитое.
+ *
+ * Конфликты НЕ становятся единицами пачки D42 — это Задача 15 (`createPending` требует
+ * актора, а у деплойного слияния его нет, находка 46). Здесь они уезжают в отчёт вызывающему
+ * и в системную заметку глобального треда владельца.
+ *
+ * НЕРАЗБИРАЕМАЯ ДЕЛЬТА РОНЯЕТ СИД, и это выбор, а не недосмотр: такая строка УЖЕ делает
+ * реестр владельца нечитаемым (`applyDeltas` отказывает fail-closed на каждом чтении), и
+ * тихо пропустить её значило бы спрятать факт ровно в тот момент, когда на него смотрит
+ * человек. Уже слитые строки при этом остаются слитыми (транзакция на строку), а
+ * недоделанные сохраняют `base_version < version` и доедут следующим прогоном.
+ */
+export async function mergeRegistryDeltas(
+  sql: Sql,
+  adminDsn: string,
+  prevSystem: SystemDefinitions,
+  systemVersion: number,
+): Promise<{ merged: number; conflicts: RegistryConflict[] }> {
+  const rows = await sql<Record<string, unknown>[]>`
+    SELECT id, owner_id, target_kind, target_id, base_version, delta
+    FROM registry_deltas WHERE base_version < ${systemVersion}
+    ORDER BY owner_id, target_kind, target_id`;
+  if (rows.length === 0) return { merged: 0, conflicts: [] };
+
+  const nextSystem = codeSystemDefinitions();
+  // ВТОРОЕ ПОДКЛЮЧЕНИЕ ТОЙ ЖЕ АДМИНСКОЙ РОЛЬЮ, а не drizzle поверх `sql`, — и это не
+  // аккуратность, а обход доказанного дефекта. `drizzle(client)` меняет сериализацию
+  // параметров у САМОГО клиента postgres.js: первый же drizzle-запрос по нему ломает
+  // следующий запрос сида с `sql.json(...)` — «The string argument must be of type string,
+  // received an instance of Object» на закешированном prepared-statement (проверено пробоем:
+  // upsert → drizzle SELECT 1 → тот же upsert падает; без drizzle между ними — не падает).
+  // Держать в сиде ОДИН стиль запросов и писать заметку сырым SQL было бы вторым
+  // экземпляром `appendMessageIdempotent`; дешевле второе соединение.
+  const mergeClient = postgres(adminDsn, { max: 1 });
+  const db = drizzle(mergeClient, { schema });
+  const all: RegistryConflict[] = [];
+  try {
+    for (const r of rows) {
+      const row: RegistryDeltaRow = {
+        id: r.id as string,
+        ownerId: r.owner_id as string,
+        targetKind: r.target_kind as RegistryDeltaTargetKind,
+        targetId: r.target_id as string,
+        baseVersion: r.base_version as number,
+        delta: r.delta,
+      };
+      const { merged, conflicts } = threeWayMerge(prevSystem, nextSystem, row);
+      await db.transaction(async (tx) => {
+        await tx.execute(
+          drizzleSql`UPDATE registry_deltas
+                       SET delta = ${JSON.stringify(merged)}::jsonb, base_version = ${systemVersion}
+                     WHERE id = ${row.id}::uuid`,
+        );
+        await bumpOwnerRegistryVersion(tx, row.ownerId);
+        if (conflicts.length === 0) return;
+        // Заметка — ТОЙ ЖЕ транзакцией, что переписывает дельту. Порознь возможен исход
+        // «дельта слита, а владельцу не сказали»: следующий прогон её уже не найдёт
+        // (`base_version` переехал на текущую версию) и промолчит навсегда.
+        const threadId = await ensureGlobalThread(tx, row.ownerId);
+        await appendMessageIdempotent(tx, {
+          id: registryMergeNoteId(row.id, systemVersion),
+          threadId,
+          role: 'system',
+          content: [
+            `Обновление системных определений разошлось с вашими настройками (${conflicts.length}):`,
+            ...conflicts.map(registryConflictLine),
+          ].join('\n'),
+          metadata: { type: 'registry-merge', systemVersion, target: row.targetId, conflicts },
+        });
+      });
+      all.push(...conflicts);
+    }
+  } finally {
+    await mergeClient.end();
+  }
+  return { merged: rows.length, conflicts: all };
+}
+
 /** Одна строка отчёта — одинаковая у `db:prepare` и у `ops.ts seed-registries`. */
-export function seedRegistriesReport(r: SeedRegistriesResult): string {
-  return `seed-registries: свойств ${r.properties}, ролей ${r.roles}, аспектов ${r.aspects}; версия system-реестров ${r.version}`;
+export function seedRegistriesReport(r: SeedRegistriesResult): string[] {
+  return [
+    `seed-registries: свойств ${r.properties}, ролей ${r.roles}, аспектов ${r.aspects}; ` +
+      `версия system-реестров ${r.version}; дельт слито ${r.mergedDeltas}`,
+    ...(r.conflicts.length === 0
+      ? []
+      : [
+          `КОНФЛИКТЫ СЛИЯНИЯ (${r.conflicts.length}) — владельцу отправлена системная заметка:`,
+          ...r.conflicts.map(registryConflictLine),
+        ]),
+  ];
 }

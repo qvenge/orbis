@@ -13,6 +13,23 @@ export function globalThreadId(ownerId: string): string {
   return uuidv5(`${ownerId.toLowerCase()}:global-thread`, ORBIS_NAMESPACE);
 }
 
+/**
+ * Системная заметка о конфликтах трёхстороннего слияния (§А3-3): один id на пару «строка
+ * дельты + системная версия».
+ *
+ * Ключ по СТРОКЕ ДЕЛЬТЫ, а не по владельцу: заметка пишется ТОЙ ЖЕ транзакцией, что
+ * переписывает эту дельту (`db/seed-registries.ts`), — иначе возможен исход «дельта слита,
+ * а владельцу не сказали»: следующий прогон уже не найдёт её (`base_version` переехал) и
+ * промолчит навсегда. Ключ по владельцу заставил бы вторую конфликтную дельта-строку
+ * попасть в ту же (уже записанную) заметку и потерять свои конфликты.
+ *
+ * Детерминированность — идемпотентность ретрая этой транзакции: `appendMessageIdempotent`
+ * по занятому id возвращает исходную строку вместо второй копии.
+ */
+export function registryMergeNoteId(deltaRowId: string, systemVersion: number): string {
+  return uuidv5(`registry-merge:${deltaRowId.toLowerCase()}:${systemVersion}`, ORBIS_NAMESPACE);
+}
+
 export function entityThreadId(ownerId: string, entityId: string): string {
   return uuidv5(
     `${ownerId.toLowerCase()}:entity-thread:${entityId.toLowerCase()}`,

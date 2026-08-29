@@ -18,6 +18,7 @@ import { chatMessages } from '../db/schema';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import { answerPendingQuestion } from '../policy/pending';
+import { bumpOwnerRegistryVersion } from '../registry/version';
 import { type AnyRecord, agentLoopHelpers, iso, T0 } from '../test/agent-loop-helpers';
 import { dispatchTool, type ToolCallCtx } from '../tools/dispatch';
 import { sweepStaleRuns } from './sweep';
@@ -331,6 +332,9 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
                 ${JSON.stringify({ ru: 'Пометка', en: 'Note' })}::jsonb,
                 ${JSON.stringify({ ru: 'Пометка владельца', en: "The owner's note" })}::jsonb,
                 ${JSON.stringify({ kind: 'text' })}::jsonb, 1001)`);
+      // Мутация реестра двигает версию тем же путём, что боевой писатель (§А10-1): без
+      // этого кеш эффективных определений не увидел бы нового свойства владельца.
+      await bumpOwnerRegistryVersion(admin, owner);
     } finally {
       await adminClient.end();
     }

@@ -17,6 +17,7 @@ import {
   processingMessageId,
   questionStaleMessageId,
   recurringInstanceId,
+  registryMergeNoteId,
   rejectMessageId,
   routineRunBatchId,
   routineRunId,
@@ -180,6 +181,18 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
     const b = newId();
     expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
     expect(a < b || a.slice(0, 13) === b.slice(0, 13)).toBe(true);
+  });
+  test('registryMergeNoteId (§А3-3): детерминирован строкой дельты и версией, lowercase, без пересечений', () => {
+    const delta = '019DED47-D100-717A-8307-A5B7A5BE722F';
+    const id = registryMergeNoteId(delta, 7);
+    expect(id).toBe(registryMergeNoteId(delta.toLowerCase(), 7));
+    // Другая системная версия — ДРУГАЯ заметка: конфликты у неё уже другие.
+    expect(id).not.toBe(registryMergeNoteId(delta, 8));
+    // Ключ по строке дельты, а не по владельцу: второй конфликтной дельте нужна своя
+    // заметка, иначе её конфликты потерялись бы в идемпотентном реплее первой.
+    expect(id).not.toBe(registryMergeNoteId('019ded47-d100-717a-8307-a5b7a5be7230', 7));
+    expect(id).not.toBe(delta.toLowerCase());
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   });
   test('константа namespace дословно из PRD', () => {
     expect(ORBIS_NAMESPACE).toBe('cb339e97-82d7-4d16-91c6-942d42df7054');

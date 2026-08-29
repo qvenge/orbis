@@ -22,6 +22,7 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { approvePending } from '../policy/pending';
+import { bumpOwnerRegistryVersion } from '../registry/version';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { dispatchTool, routineDeferForbidden, routineGate, type ToolCallCtx } from './dispatch';
 import { buildToolRegistry, type RoutineRef } from './registry';
@@ -582,6 +583,7 @@ describe('LLM-контракты entity_create/entity_update на свойств
                 ${JSON.stringify({ ru: 'Как прошёл день' })}::jsonb,
                 ${JSON.stringify({ kind: 'number' })}::jsonb, 'active', 'props', 300, '{}'::jsonb)
         ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO NOTHING`);
+      await bumpOwnerRegistryVersion(admin.db, owner); // мутация реестра двигает версию (§А10-1)
     } finally {
       await admin.client.end();
     }

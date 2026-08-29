@@ -31,7 +31,7 @@ import { type GoalProgress, goalProgressFor } from '../goals/progress';
 import { type CompileCtx, compileCountAst, compileQueryAst } from '../query/compile-ast';
 import { parseQueryText } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
-import { loadRegistryVersions } from '../registry/load';
+import { readRegistryVersions } from '../registry/version';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { registryVersionOf, toWireEntityFromSql } from '../wire';
 
@@ -289,12 +289,12 @@ export const entityRouter = router({
              * устареть, — и клиентский кеш реестра инвалидируется несовпадением этой
              * строки с той, под которой он сложен (`['registry', version]`, §А9-2).
              *
-             * Отдельный запрос `loadRegistryVersions`, а не полный `loadRegistry`: ради
+             * Отдельный запрос `readRegistryVersions`, а не полный `effectiveRegistry`: ради
              * одного числа тянуть 77 свойств, 13 аспектов и 11 ролей на каждое открытие
              * записи дороже самой записи. Цена — один точечный SELECT в той же tx.
              */
             const registryVersion = registryVersionOf(
-              await loadRegistryVersions(tx, ctx.actorUserId),
+              await readRegistryVersions(tx, ctx.actorUserId),
             );
             return goalProgress === undefined
               ? { ...result, registryVersion }

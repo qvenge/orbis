@@ -87,7 +87,8 @@ import {
 } from '../query/compile-ast';
 import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
-import { loadRegistry, type RegistrySnapshot } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import { runAsk } from '../routines/ask';
 import { CORE_FIELD_LABELS, MAX_RUN_UNITS } from '../routines/constants';
 import { buildUpdate, loadTargets, runPropose } from '../routines/propose';
@@ -187,7 +188,7 @@ export async function dispatchTool(
       // определения тулов, резолвятся ключи свойств на границе и печатается LLM-проекция.
       // Второй снимок, взятый отдельно, мог бы разойтись с первым на правке реестра между
       // двумя чтениями (тот же довод, что у `loadTargets` предложения).
-      const reg = await loadRegistry(tx, ctx.actorUserId);
+      const reg = await effectiveRegistry(tx, ctx.actorUserId);
       const defs = buildToolDefs(reg);
       const def = defs.find((d) => d.name === name);
       if (!def) return { kind: 'unknown' };

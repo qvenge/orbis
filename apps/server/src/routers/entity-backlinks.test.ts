@@ -9,6 +9,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { execute } from '../executor/executor';
+import { bumpOwnerRegistryVersion } from '../registry/version';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -128,6 +129,7 @@ test('backlinks: секция «Связанное» подписывает на
              '{"ru":"Ссылается на нас"}'::jsonb, target_label,
              hierarchical, constraints, "symmetric", module, rank
         FROM relation_role_definitions WHERE id = 'mention' AND owner_id IS NULL`);
+    await bumpOwnerRegistryVersion(admin, user); // мутация реестра двигает версию (§А10-1)
   } finally {
     await adminClient.end();
   }

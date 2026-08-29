@@ -16,7 +16,8 @@ import {
 import { sql } from 'drizzle-orm';
 import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { withIdentity } from '../db/with-identity';
-import { loadRegistry } from './load';
+import { bumpOwnerRegistryVersion } from '../registry/version';
+import { effectiveRegistry } from './cache';
 import { hierarchicalRoles, hierarchicalRolesSql } from './roles';
 
 requireEnv();
@@ -40,7 +41,7 @@ async function fromSql(owner: string): Promise<string[]> {
 
 test('иерархические роли: подзапрос и снимок реестра дают один список', async () => {
   const owner = freshUserId();
-  const snapshot = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  const snapshot = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
   expect(await fromSql(owner)).toEqual(hierarchicalRoles(snapshot).sort());
   // Встроенный состав §А4-3: `envelope-binding` в семейство иерархии НЕ входит
   expect(await fromSql(owner)).toEqual(['category-parent', 'run', 'subitem', 'ticket']);
@@ -50,16 +51,19 @@ test('своя строка роли перекрывает встроенную
   const owner = freshUserId();
   // Реестровых операций ещё нет (Задача 15) — своя строка кладётся напрямую, как это
   // делает админский сид системных строк.
-  await withIdentity(db, owner, (tx) =>
-    tx.execute(sql`
+  await withIdentity(db, owner, async (tx) => {
+    await tx.execute(sql`
       INSERT INTO relation_role_definitions
         (id, owner_id, key, label, description, source_label, target_label,
          hierarchical, constraints, "symmetric", module, rank)
       SELECT id, ${owner}::uuid, key, label, description, source_label, target_label,
              false, constraints, "symmetric", module, rank
-        FROM relation_role_definitions WHERE id = 'subitem' AND owner_id IS NULL`),
-  );
-  const snapshot = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+        FROM relation_role_definitions WHERE id = 'subitem' AND owner_id IS NULL`);
+    // Инкремент версии — В ТОЙ ЖЕ транзакции, что и мутация реестра (§А10-1): именно так
+    // обязан писать всякий писатель, и фикстура не исключение.
+    await bumpOwnerRegistryVersion(tx, owner);
+  });
+  const snapshot = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
   expect(hierarchicalRoles(snapshot).sort()).toEqual(['category-parent', 'run', 'ticket']);
   expect(await fromSql(owner)).toEqual(['category-parent', 'run', 'ticket']);
 });
@@ -77,7 +81,7 @@ test('своя строка роли перекрывает встроенную
  */
 test('каждая поимённая роль указывает на ту роль, чьё имя носит (подпись из сида)', async () => {
   const owner = freshUserId();
-  const reg = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
   const labelOf = (id: string): string | undefined => reg.roles.get(id)?.label.ru;
   expect(labelOf(ROLE_SUBITEM)).toBe('Подпункт');
   expect(labelOf(ROLE_TICKET)).toBe('Тикет');

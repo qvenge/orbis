@@ -14,7 +14,8 @@ import type { Tx } from '../src/db/with-identity';
 import { execute } from '../src/executor/executor';
 import { type LegacyRow, rowFromLegacy } from '../src/executor/legacy-form';
 import type { ExecuteRequest, ExecuteResult, ExecutorDeps } from '../src/executor/types';
-import { loadRegistry } from '../src/registry/load';
+import { effectiveRegistry } from '../src/registry/cache';
+import { bumpOwnerRegistryVersion } from '../src/registry/version';
 
 export function requireEnv(): void {
   for (const k of ['DATABASE_URL', 'DATABASE_URL_ADMIN']) {
@@ -76,6 +77,31 @@ export async function truncateAll(): Promise<void> {
   // инкремент версии в сидере (UPDATE … WHERE id = 1 не нашёл бы строки). Поэтому тесты
   // версии сида пишутся ОТНОСИТЕЛЬНО — `after === before + 1`, а не абсолютом.
   await client.end();
+}
+
+/**
+ * ФИКСТУРА ПРАВИТ РЕЕСТР — ЗНАЧИТ, ДВИГАЕТ ВЕРСИЮ (§А10-1).
+ *
+ * Прямой INSERT строки реестра из теста — такая же мутация реестра, как операция владельца,
+ * и с Задачи 14 её видимость решает не база, а версия: снимок эффективных определений
+ * кешируется процессом по ключу `(владелец, его версия, системная)` (`registry/cache.ts`).
+ * Фикстура, забывшая позвать эту функцию, получит снимок БЕЗ своей строки — молча, и тест
+ * будет проверять не то, что написано в его имени.
+ *
+ * Функция — та же самая, что зовёт боевой писатель (`bumpOwnerRegistryVersion`), а не
+ * «сброс кеша для тестов»: сброс был бы вторым механизмом инвалидации, которого в бою нет,
+ * и зелень на нём ничего не говорила бы о проде.
+ *
+ * Своё подключение админской ролью: у фикстур транзакции на руках нет, а строка настроек
+ * владельца может ещё не существовать (UPSERT внутри её заводит).
+ */
+export async function bumpRegistryVersion(ownerId: string): Promise<number> {
+  const { db, client } = adminDb();
+  try {
+    return await bumpOwnerRegistryVersion(db, ownerId);
+  } finally {
+    await client.end();
+  }
 }
 
 /** Одно свойство кастомного аспекта: локальное имя поля + тип из словаря §А2-2. */
@@ -185,6 +211,10 @@ export async function seedCustomAspect(ownerId: string, spec: CustomAspectSpec):
         key = EXCLUDED.key, label = EXCLUDED.label, description = EXCLUDED.description,
         properties = EXCLUDED.properties, schema = EXCLUDED.schema,
         ai_instructions = EXCLUDED.ai_instructions, view_config = EXCLUDED.view_config`);
+
+    // Реестр владельца изменился — версия обязана сдвинуться тем же подключением
+    // (§А10-1): иначе снимок в кеше процесса останется без этого аспекта.
+    await bumpOwnerRegistryVersion(db, ownerId);
   } finally {
     await client.end();
   }
@@ -218,7 +248,7 @@ export async function legacyEntityColumns(
   ownerId: string,
   aspectsLegacy: LegacyAspects,
 ): Promise<LegacyRow> {
-  return rowFromLegacy(await loadRegistry(tx, ownerId), aspectsLegacy);
+  return rowFromLegacy(await effectiveRegistry(tx, ownerId), aspectsLegacy);
 }
 
 /** Строка `entities` с РАЗОШЕДШИМИСЯ колонками — вход `divergentEntityRow`. */

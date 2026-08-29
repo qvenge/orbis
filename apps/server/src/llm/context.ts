@@ -32,7 +32,7 @@ import type { Tx } from '../db/with-identity';
 import { readEntity } from '../entity-read';
 import type { ActionRecord } from '../executor/types';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
-import { loadRegistry } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
 import { loadAspectToolRows } from '../tools/registry';
 import { toLlmEntity } from '../wire';
 import { SYSTEM_PROMPT_V4, TOOL_RESULT_MARKER } from './prompts/v4';
@@ -310,7 +310,7 @@ export async function anchorBlock(
    * сигнатуры ради одной строки значило бы связать сборщик контекста с порядком загрузки
    * реестра у обоих вызывающих.
    */
-  const llm = toLlmEntity(entity, await loadRegistry(tx, ownerId));
+  const llm = toLlmEntity(entity, await effectiveRegistry(tx, ownerId));
   if (llm.aspects.length > 0) lines.push(`аспекты: ${llm.aspects.join(', ')}`);
   if (Object.keys(llm.props).length > 0) {
     // Компактным JSON: статус задачи, суммы и сроки — рабочий контекст, а не украшение.

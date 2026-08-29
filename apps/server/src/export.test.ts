@@ -11,6 +11,7 @@ import {
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../test/helpers';
+import { bumpOwnerRegistryVersion } from './registry/version';
 import { appRouter } from './router';
 import { createCallerFactory } from './trpc';
 
@@ -119,6 +120,9 @@ describe('user.exportData (§9.4)', () => {
                 ${JSON.stringify({ ru: 'Своя роль владельца', en: "The owner's own role" })}::jsonb,
                 ${JSON.stringify({ ru: 'Событие', en: 'Event' })}::jsonb,
                 ${JSON.stringify({ ru: 'Сон', en: 'Sleep' })}::jsonb, 1000)`);
+      // Реестр владельца изменился — версия обязана сдвинуться (§А10-1), иначе снимок
+      // эффективных определений останется в кеше процесса без этих трёх строк.
+      await bumpOwnerRegistryVersion(admin, user);
     } finally {
       await adminClient.end();
     }

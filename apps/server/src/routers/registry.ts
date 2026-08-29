@@ -13,12 +13,14 @@
 // реестра нет вовсе.
 import type { AspectDefinition, PropertyDefinition, RelationRoleDefinition } from '@orbis/shared';
 import { withIdentity } from '../db/with-identity';
-import { loadRegistry } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
 import { protectedProcedure, router } from '../trpc';
 import { registryVersionOf } from '../wire';
 
 /**
- * Эффективный реестр владельца: система ⊕ его собственные строки (⊕ дельты — с Задачи 14).
+ * Эффективный реестр владельца: система ⊕ его собственные строки ⊕ его дельты (§А3-2).
+ * Складывает их `registry/cache.ts` — роутер про дельты не знает и знать не должен: форма
+ * ответа одна и та же, меняется только содержимое строк.
  *
  * `label`/`description` едут ПОЛНЫМИ per-locale картами, а не одной строкой: локаль выбирает
  * читатель (`effectiveLabel`), и свёртка на сервере означала бы новый запрос на каждую смену
@@ -26,8 +28,7 @@ import { registryVersionOf } from '../wire';
  *
  * Форма ОБЩАЯ для встроенных и пользовательских строк — это `PropertyDefinition` реестра, а
  * не «встроенные + добавки»: пользовательское свойство приходит сюда ровно тем же полем
- * массива, что и `orbis/task_status`, и дельты Задачи 14 меняют содержимое строк, а не форму
- * ответа.
+ * массива, что и `orbis/task_status`, и дельта меняет содержимое строк, а не форму ответа.
  */
 export interface WireRegistry {
   /** `<системная>.<владельца>` — ключ кеша и единственный повод перечитать (§А10-1). */
@@ -51,7 +52,7 @@ export const registryRouter = router({
   effective: protectedProcedure.query(
     ({ ctx }): Promise<WireRegistry> =>
       withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-        const reg = await loadRegistry(tx, ctx.actorUserId);
+        const reg = await effectiveRegistry(tx, ctx.actorUserId);
         return {
           version: registryVersionOf(reg),
           properties: byRank(reg.properties),

@@ -1,7 +1,7 @@
 // apps/server/src/query/context.ts
 // CompileCtx запроса (§А5-7) — общий хелпер роутера entity (tRPC) и диспатча тулов
-// LLM/MCP (tools/dispatch.ts): снимок реестров — на запрос (§А10-1, кеш по (owner,
-// version) заводит Задача 14); timezone — из user_settings владельца (RLS скоупит
+// LLM/MCP (tools/dispatch.ts): снимок реестров — на запрос (§А10-1, из процессного кеша по
+// `(владелец, его версия, системная)` — `registry/cache.ts`); timezone — из user_settings владельца (RLS скоупит
 // выборку), без строки (онбординг-сидирование — Task 13 1a) — дефолт 'Europe/Moscow';
 // today — «сегодня» в этой таймзоне (en-CA даёт ровно YYYY-MM-DD). Вызывается ТОЛЬКО
 // под withIdentity.
@@ -15,7 +15,7 @@
 import { eq } from 'drizzle-orm';
 import { userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
-import { loadRegistry } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
 import type { CompileCtx } from './compile-ast';
 
 /** Дефолт таймзоны при отсутствующей строке настроек (онбординг ещё не пройден). */
@@ -64,7 +64,7 @@ export async function queryContext(
   actorUserId: string,
   thisEntityId: string | null,
 ): Promise<CompileCtx> {
-  const reg = await loadRegistry(tx, actorUserId);
+  const reg = await effectiveRegistry(tx, actorUserId);
   const timeZone = await ownerTimeZone(tx, actorUserId);
   return { ownerId: actorUserId, reg, thisEntityId, today: todayInTimeZone(timeZone), timeZone };
 }

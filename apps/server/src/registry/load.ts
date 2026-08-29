@@ -1,13 +1,14 @@
 // apps/server/src/registry/load.ts
 //
-// Снимок эффективных реестров владельца: system-строки ⊕ его собственные. Один раз на
-// транзакцию исполнителя: с вехи B (Задача 4b) он ЕДИНСТВЕННЫЙ — прежний `loadAspectRegistry`
-// по колонке `aspect_definitions.schema` из пути записи ушёл вместе со старым валидатором.
+// СЫРОЕ ЧТЕНИЕ реестров владельца: system-строки ⊕ его собственные, БЕЗ дельт и БЕЗ кеша.
+// Единственный вызывающий — `registry/cache.ts`; всё остальное приложение читает реестр
+// через `effectiveRegistry`, который поверх этих строк накладывает дельты (§А3-2) и держит
+// процессный кеш по версии (§А10-1).
 //
-// ДЕЛЬТ здесь ещё нет: `registry_deltas` заводит эта же миграция, но применяет их Задача 14
-// (там же появится и кеш по ключу `(owner, version)`). Версии снимаются уже сейчас — обе,
-// системная и владельца: без них кеш нечем будет инвалидировать, а снимать их задним
-// числом значит второй раз обходить те же таблицы.
+// Почему функция названа `loadRegistryRows`, а не `effectiveRegistry`. Разница между «строки как
+// они лежат» и «эффективное определение» наблюдаема: скрытое дельтой свойство здесь ЕСТЬ, а
+// у читателя его быть не должно. Имя без слова `Rows` приглашало бы звать этот вход из
+// нового кода — и половина приложения тихо перестала бы видеть настройки владельца.
 //
 // Строки ПРОХОДЯТ через строгие схемы `@orbis/shared`: реестр, который сам не разбирается
 // собственной схемой, до валидации данных доезжать не должен. Отказ здесь — fail-closed:
@@ -22,11 +23,16 @@ import {
 } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
+import type { RegistryDeltaRow, RegistryDeltaTargetKind } from './deltas';
 
-export interface RegistrySnapshot {
+/** Три словаря реестра без версии — то, что даёт сырое чтение строк. */
+export interface RegistryDictionaries {
   properties: Map<string, PropertyDefinition>;
   aspects: Map<string, AspectDefinition>;
   roles: Map<string, RelationRoleDefinition>;
+}
+
+export interface RegistrySnapshot extends RegistryDictionaries {
   /** `user_settings.registry_version`; 0 — у владельца ещё нет строки настроек. */
   ownerVersion: number;
   /** `registry_system.version` — её двигает сид (§А10-1). */
@@ -36,46 +42,6 @@ export interface RegistrySnapshot {
 /** Строка любого реестра как её отдаёт SELECT: ключи — имена колонок (snake_case). */
 interface Row {
   [column: string]: unknown;
-}
-
-/** Обе половины версии реестра (§А10-1): системная и владельца. */
-export interface RegistryVersions {
-  ownerVersion: number;
-  systemVersion: number;
-}
-
-/**
- * Версия реестра владельца ОДНИМ запросом — без самих словарей.
- *
- * Отдельный вход нужен читателям, которым словари не нужны вовсе: `entity.get` кладёт версию
- * в ответ, чтобы клиентский кеш реестра было чем инвалидировать (§А10-1), и грузить ради
- * одного числа 77 свойств, 13 аспектов и 11 ролей на каждое открытие записи было бы дороже
- * самой записи. `loadRegistry` ниже зовёт этот же запрос — второго места, знающего, ГДЕ
- * лежат обе половины версии, быть не должно.
- *
- * Один запрос, а не два: обе половины — точечные чтения по первичному ключу, и лишний
- * round-trip по соединению транзакции стоит дороже, чем два подзапроса в одном плане.
- */
-export async function loadRegistryVersions(tx: Tx, ownerId: string): Promise<RegistryVersions> {
-  const rows = (await tx.execute(sql`
-    SELECT (SELECT version FROM registry_system WHERE id = 1) AS system_version,
-           (SELECT registry_version FROM user_settings WHERE owner_id = ${ownerId}::uuid)
-             AS owner_version`)) as unknown as Row[];
-  const row = rows[0];
-  return {
-    // Строки настроек может не быть вовсе (владелец не проходил онбординг) — это законный
-    // случай, а не отказ: реестр у него ровно системный, и версия его половины нулевая.
-    ownerVersion: (row?.owner_version as number | null | undefined) ?? 0,
-    // А вот системной строки не быть НЕ может: её кладёт миграция 0014. Молча подставить
-    // ноль значило бы выдать «база без миграций» за «сида ещё не было».
-    systemVersion: (() => {
-      const version = row?.system_version as number | null | undefined;
-      if (version === null || version === undefined) {
-        throw new Error('loadRegistry: в registry_system нет строки id=1 — база без миграции 0014');
-      }
-      return version;
-    })(),
-  };
 }
 
 /**
@@ -88,14 +54,15 @@ export async function loadRegistryVersions(tx: Tx, ownerId: string): Promise<Reg
  * RLS сама скоупит выдачу под `withIdentity`, но условие по `owner_id` стоит и в запросе:
  * снимок обязан быть одинаковым и под админским подключением (сиды, миграции, скрипты),
  * где политик нет вовсе.
- */
-/**
+ *
  * ВХОД-ДЕРЕВА 4 (БЕЗ ГЕЙТА): `type.target` и `scope` строки `property_definitions` — это
  * Q-AST, и `propertyDefinitionSchema` ниже разбирает их рекурсией `z.lazy`. Гейта глубины
  * перед ним нет намеренно — обоснование и признак «момент настал» в шапке
- * `queryFilterNodeSchema` (`@orbis/shared`, `query/ast.ts`), пункт 4.
+ * `queryFilterNodeSchema` (`@orbis/shared`, `query/ast.ts`), пункт 4. Задача 14 проверила
+ * условие заново: `registry_deltas` пишет только слияние на пересеве, дельта Q-AST не
+ * несёт — основание «снаружи в реестр не пишет никто» устояло.
  */
-export async function loadRegistry(tx: Tx, ownerId: string): Promise<RegistrySnapshot> {
+export async function loadRegistryRows(tx: Tx, ownerId: string): Promise<RegistryDictionaries> {
   // Запросы идут ПОСЛЕДОВАТЕЛЬНО, а не Promise.all: транзакция живёт на одном соединении,
   // и параллельные запросы по нему сериализуются в лучшем случае, а в худшем — путают
   // порядок с `SET LOCAL`. Реестров три, каждый — один индексный проход.
@@ -117,7 +84,6 @@ export async function loadRegistry(tx: Tx, ownerId: string): Promise<RegistrySna
     FROM relation_role_definitions
     WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
     ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
-  const versions = await loadRegistryVersions(tx, ownerId);
 
   const properties = new Map<string, PropertyDefinition>();
   for (const r of propertyRows) {
@@ -184,5 +150,29 @@ export async function loadRegistry(tx: Tx, ownerId: string): Promise<RegistrySna
     );
   }
 
-  return { properties, aspects, roles, ...versions };
+  return { properties, aspects, roles };
+}
+
+/**
+ * Дельты владельца (§А3-2). Отдельным чтением, а не соединением с реестрами: дельта
+ * адресует строку целиком (`target_kind` + `target_id`), а не колонку, и складывать её с
+ * определением умеет `applyDeltas` — в SQL это правило пришлось бы написать второй раз.
+ *
+ * Встроенных дельт не бывает по определению (`owner_id NOT NULL` в 0014), поэтому условие
+ * по владельцу здесь ровно одно и совпадает с политикой RLS `owner_owns_row`.
+ */
+export async function loadRegistryDeltas(tx: Tx, ownerId: string): Promise<RegistryDeltaRow[]> {
+  const rows = (await tx.execute(sql`
+    SELECT id, owner_id, target_kind, target_id, base_version, delta
+    FROM registry_deltas
+    WHERE owner_id = ${ownerId}::uuid
+    ORDER BY target_kind, target_id`)) as unknown as Row[];
+  return rows.map((r) => ({
+    id: r.id as string,
+    ownerId: r.owner_id as string,
+    targetKind: r.target_kind as RegistryDeltaTargetKind,
+    targetId: r.target_id as string,
+    baseVersion: r.base_version as number,
+    delta: r.delta,
+  }));
 }

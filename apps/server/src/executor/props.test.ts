@@ -37,8 +37,10 @@ import { withIdentity } from '../db/with-identity';
 import { readEntity } from '../entity-read';
 import { ROUTINE_STAGE_PROPERTY } from '../policy/confirmation';
 import { compileQueryAst } from '../query/compile-ast';
-import { loadRegistry, type RegistrySnapshot } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import type { PropsViolation } from '../registry/validate-props';
+import { bumpOwnerRegistryVersion } from '../registry/version';
 import { toWireEntity, toWireEntityFromSql } from '../wire';
 import { touchesBudgetContour } from './executor';
 import { makeChatJournalSink } from './journal';
@@ -171,10 +173,11 @@ beforeAll(async () => {
               ${JSON.stringify({ ru: 'Сколько часов владелец спал' })}::jsonb,
               ${JSON.stringify({ kind: 'number' })}::jsonb, 'active', 'props', 100, '{}'::jsonb)
       ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO NOTHING`);
+    await bumpOwnerRegistryVersion(admin.db, owner); // мутация реестра двигает версию (§А10-1)
   } finally {
     await admin.client.end();
   }
-  reg = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
 });
 
 afterAll(async () => {

@@ -20,7 +20,7 @@ import {
 } from '../../test/helpers';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
-import { loadRegistry } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
 import { makeChatJournalSink } from './journal';
 import type {
   ActionOperation,
@@ -239,7 +239,7 @@ test('имя правила в журнале — то же, что во flags.c
   const sink = new InMemoryJournalSink();
   await relate(owner, p.id, task.id, 'subitem', {}, sink);
 
-  const reg = await withIdentity(db, owner, (tx) => loadRegistry(tx, owner));
+  const reg = await withIdentity(db, owner, (tx) => effectiveRegistry(tx, owner));
   const fromRegistry = reg.properties.get('orbis/parent_project')?.flags.computed?.rule;
   // Отсутствие флага — это НЕ «правило не задано», а сломанный сид: без него движок не
   // объявлен вовсе. Проверяем строкой, а не `?.`, иначе тест был бы зелен на пустом реестре.

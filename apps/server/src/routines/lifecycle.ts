@@ -80,7 +80,8 @@ import {
   stalePendingQuestion,
 } from '../policy/pending';
 import { wallClockIn } from '../recurring/materialize';
-import { loadRegistry, type RegistrySnapshot } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import {
   CONSECUTIVE_FAILURES_TO_PAUSE,
   CORE_FIELD_LABELS,
@@ -2672,7 +2673,7 @@ async function describeOperations(
   const titles = await titlesOf(tx, referencedIds(operations));
   // Снимок реестра нужен строке СВЯЗИ: роль подписывает реестр (Ч10-С3). Строкам правки он
   // больше не нужен — адреса свойств в сохранённом payload'е уже id (`buildUpdate`).
-  const reg = await loadRegistry(tx, ownerId);
+  const reg = await effectiveRegistry(tx, ownerId);
   const bodies = await proposalBodyRows(tx, operations, args);
   const rows: ProposalOperationView[] = [];
   for (const [index, op] of operations.entries()) {

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { bumpOwnerRegistryVersion } from '../registry/version';
 import { appRouter } from '../router';
 import { createCallerFactory } from '../trpc';
 
@@ -100,6 +101,7 @@ describe('registry.effective (§А9-2)', () => {
         SELECT id, ${other}::uuid, key, '{"ru":"Дело","en":"Deed"}'::jsonb, description,
                properties, ai_instructions, tag_mappings, view_config, module, service, rank
           FROM aspect_definitions WHERE id = 'orbis/task' AND owner_id IS NULL`);
+      await bumpOwnerRegistryVersion(admin, other); // мутация реестра двигает версию (§А10-1)
     } finally {
       await adminClient.end();
     }

@@ -55,7 +55,8 @@ import { type Tx, withIdentity } from '../db/with-identity';
 import { resolveEntitlement } from '../entitlements';
 import type { CompileCtx } from '../query/compile-ast';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
-import { loadRegistry, type RegistrySnapshot } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import {
   assertReferenceProps,
   changedRefProps,
@@ -394,7 +395,7 @@ export async function execute(
       // определений не берут ни строковых, ни advisory-блокировок, то есть в цикл ожидания
       // §2.3 войти не могут. А замку он НУЖЕН: предикат контура теперь смотрит на id
       // свойств financial/budget по реестру, а не на имена полей во входе (Р-27).
-      const registry = await loadRegistry(tx, req.actorUserId);
+      const registry = await effectiveRegistry(tx, req.actorUserId);
       // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
       await lockBudgetContour(tx, registry, req.actorUserId, [single]);
       const ctx: ExecCtx = {
@@ -516,7 +517,7 @@ async function executeBatch(
       if (beforeStages) await beforeStages(tx);
       // Снимок реестра — ДО замка контура (см. одиночный путь: плановые SELECT'ы в цикл
       // ожидания не входят, а предикат контура без реестра неполон — Р-27)
-      const registry = await loadRegistry(tx, req.actorUserId);
+      const registry = await effectiveRegistry(tx, req.actorUserId);
       // Замок бюджет-контура — ДО стадий и любых строковых блокировок (см. lockBudgetContour)
       await lockBudgetContour(tx, registry, req.actorUserId, ops);
       const ctx: ExecCtx = {

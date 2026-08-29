@@ -13,7 +13,7 @@ const admin = process.env.DATABASE_URL_ADMIN;
 if (!admin) throw new Error('seed-registries: DATABASE_URL_ADMIN не задан');
 const sql = postgres(admin, { max: 1 });
 try {
-  console.log(seedRegistriesReport(await seedRegistries(sql)));
+  for (const line of seedRegistriesReport(await seedRegistries(sql, admin))) console.log(line);
 } finally {
   await sql.end();
 }

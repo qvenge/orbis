@@ -21,7 +21,8 @@ import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers'
 import { entities, relations } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { rowFromLegacy } from '../executor/legacy-form';
-import { loadRegistry, type RegistrySnapshot } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import { type CompileCtx, compileCountAst, compileQueryAst } from './compile-ast';
 
 requireEnv();
@@ -558,7 +559,7 @@ function datasetRows(
 
 beforeAll(async () => {
   await truncateAll(); // санкционировано: локальная тестовая БД
-  reg = await withIdentity(db, USER_A, (tx) => loadRegistry(tx, USER_A));
+  reg = await withIdentity(db, USER_A, (tx) => effectiveRegistry(tx, USER_A));
   await withIdentity(db, USER_A, async (tx) => {
     await tx.insert(entities).values(datasetRows(reg, DATASET_A));
     await tx.insert(relations).values(RELATIONS_A);
@@ -940,7 +941,7 @@ const ID_C = {
 describe('служебные аспекты: спрятаны, пока не названы; список — колонка service реестра', () => {
   beforeAll(async () => {
     await withIdentity(db, USER_C, async (tx) => {
-      const own = await loadRegistry(tx, USER_C);
+      const own = await effectiveRegistry(tx, USER_C);
       await tx.insert(entities).values(
         datasetRows(own, [
           {
@@ -1021,7 +1022,7 @@ const ID_D = {
 describe('children_of/parents_of: семейство иерархии из реестра, а не схлопнутый parent', () => {
   beforeAll(async () => {
     await withIdentity(db, USER_D, async (tx) => {
-      const own = await loadRegistry(tx, USER_D);
+      const own = await effectiveRegistry(tx, USER_D);
       await tx.insert(entities).values(
         datasetRows(own, [
           {
@@ -1142,7 +1143,7 @@ const BRANCH_ID = chainId(900);
 describe('descendants_of/ancestors_of: обход по одной роли и кап глубины 32', () => {
   beforeAll(async () => {
     await withIdentity(db, USER_E, async (tx) => {
-      const own = await loadRegistry(tx, USER_E);
+      const own = await effectiveRegistry(tx, USER_E);
       const rows: DatasetRow[] = [];
       for (let i = 0; i <= CHAIN_LENGTH; i++) {
         rows.push({

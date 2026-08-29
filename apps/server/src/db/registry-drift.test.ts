@@ -8,7 +8,11 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { hasRegistryDrift } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { adminDb, appDb, requireEnv, truncateAll } from '../../test/helpers';
-import { checkRegistryDrift, reportRegistryDriftOnStartup } from './registry-drift';
+import {
+  checkRegistryDrift,
+  REGISTRY_DELTAS_QUERY,
+  reportRegistryDriftOnStartup,
+} from './registry-drift';
 
 requireEnv();
 
@@ -206,6 +210,38 @@ test('кастомные строки владельца сверку не тр�
     expect(hasRegistryDrift(await checkRegistryDrift(db))).toBe(false);
   } finally {
     await admin.db.execute(sql`DELETE FROM property_definitions WHERE owner_id IS NOT NULL`);
+  }
+});
+
+/**
+ * ДЕЛЬТЫ ПОД РОЛЬЮ ПРИЛОЖЕНИЯ НЕ ВИДНЫ — и это причина, по которой предпросмотр конфликтов
+ * слияния (§А3-3) живёт в `ops.ts check`, а не в /health.
+ *
+ * Утверждение проверяемое, а не пояснительное: политика `owner_owns_row` (0014) скоупит
+ * `registry_deltas` по `auth.uid()`, у стартовой проверки актора нет вовсе, и «конфликтов
+ * ноль» в /health означало бы не «их нет», а «их некому увидеть». Проба ниже кладёт живую
+ * дельту и показывает обе стороны: админская роль её видит, роль приложения — нет.
+ */
+test('registry_deltas: админ видит строку, роль приложения — ни одной (RLS без актора)', async () => {
+  const owner = crypto.randomUUID();
+  try {
+    await admin.db.execute(
+      sql`INSERT INTO registry_deltas (id, owner_id, target_kind, target_id, base_version, delta)
+          VALUES (gen_random_uuid(), ${owner}::uuid, 'aspect', 'orbis/task', 1,
+                  '{"label":{"ru":"Дело"}}'::jsonb)`,
+    );
+    const byAdmin = (await admin.db.execute(
+      sql.raw(REGISTRY_DELTAS_QUERY),
+    )) as unknown as unknown[];
+    expect(byAdmin.length).toBeGreaterThan(0);
+
+    const byApp = await db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL ROLE authenticated`);
+      return (await tx.execute(sql.raw(REGISTRY_DELTAS_QUERY))) as unknown as unknown[];
+    });
+    expect(byApp.length).toBe(0);
+  } finally {
+    await admin.db.execute(sql`DELETE FROM registry_deltas WHERE owner_id = ${owner}::uuid`);
   }
 });
 

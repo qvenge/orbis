@@ -22,7 +22,8 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult, WireEntity } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import type { CompileCtx } from '../query/compile-ast';
-import { loadRegistry, type RegistrySnapshot } from './load';
+import { effectiveRegistry } from './cache';
+import type { RegistrySnapshot } from './load';
 import { changedRefProps, refTargetMembershipSql, syncRefMirror } from './ref';
 
 requireEnv();
@@ -789,7 +790,7 @@ test('ref: конец-ПИСАТЕЛЬ Р-11-2 — syncRefMirror вычисля�
   const user = freshUserId();
   const { project, txn, category } = await txnUnderProject(user);
   await withIdentity(db, user, async (tx) => {
-    const reg = await loadRegistry(tx, user);
+    const reg = await effectiveRegistry(tx, user);
     await syncRefMirror(tx, user, txn, [{ propertyId: 'orbis/root_project', after: project }], reg);
   });
   expect(await refEdges(user, txn)).toEqual([

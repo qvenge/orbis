@@ -23,7 +23,7 @@ import { ensureGlobalThread } from '../chat/threads';
 import { entities, userSettings } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { rowFromLegacy } from '../executor/legacy-form';
-import { loadRegistry } from '../registry/load';
+import { effectiveRegistry } from '../registry/cache';
 import { SEED_CATEGORIES } from './categories';
 import {
   SEED_HORIZON_LISTS,
@@ -102,7 +102,7 @@ export async function seedOnboarding(
   // `aspects`) и старая карта, которую пока читают доменные модули и web. Через одну
   // проекцию, а не двумя литералами: разъехавшиеся формы одной и той же категории —
   // это молчаливое расхождение, которое нашлось бы уже на чужом красном тесте.
-  const reg = await loadRegistry(tx, ownerId);
+  const reg = await effectiveRegistry(tx, ownerId);
   const categoryRows = SEED_CATEGORIES.map((c) => ({
     id: seedCategoryId(ownerId, c.slug),
     ownerId,
