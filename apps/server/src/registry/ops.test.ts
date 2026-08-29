@@ -1568,3 +1568,143 @@ describe('дельта аспекта как держатель свойства
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Фикс-раунд 4: слияние не запирает реестр молча (§А3-2 × §А3-4 × §А10-2)
+// ---------------------------------------------------------------------------
+
+describe('слияние отказывает громко, если после него реестр не читается', () => {
+  const lockOwner2 = freshUserId();
+
+  function runL(tool: string, input: unknown): Promise<ExecuteResult> {
+    return execute(
+      db,
+      { actorUserId: lockOwner2, actorKind: 'owner', source: 'ui', operations: [{ tool, input }] },
+      { sink },
+    );
+  }
+
+  async function mkProp(key: string, over: Record<string, unknown> = {}): Promise<string> {
+    const r = ok(
+      await runL('property_create', {
+        key,
+        label: { ru: key },
+        description: { ru: key },
+        type: { kind: 'number' },
+        status: 'active',
+        ...over,
+      }),
+    );
+    return (r.results[0] as { property: string }).property;
+  }
+
+  /** Читается ли реестр — вопросом, который задаёт КАЖДЫЙ вызов исполнителя. */
+  async function registryReadable(): Promise<boolean> {
+    return (await runL('entity_create', { title: 'проба читаемости', tags: [] })).ok;
+  }
+
+  test('ДВЕРЬ 1: дельта объявляет ОБА свойства — отказ, а не DELTA_PROPERTY_PRESENT навсегда', async () => {
+    // По отдельности всё законно: одна дельта вправе добавить на аспект два своих свойства.
+    // После переименования обе ссылки `add[]` указывали бы на одну цель, и `applyDeltas`
+    // бросала бы `DELTA_PROPERTY_PRESENT` на КАЖДОМ чтении реестра — заперт не аспект, а
+    // весь граф владельца, включая снятие дельты и откат самого слияния.
+    const p = await mkProp('user/door1-p');
+    const q = await mkProp('user/door1-q');
+    ok(
+      await runL('aspect_delta_set', {
+        aspect: 'orbis/task',
+        delta: {
+          properties: {
+            add: [
+              { propertyId: p, required: false, rank: 80 },
+              { propertyId: q, required: false, rank: 81 },
+            ],
+          },
+        },
+      }),
+    );
+
+    const e = err(await runL('property_merge', { source: p, into: q }));
+    expect(e.code).toBe('REGISTRY_CONFLICT');
+    expect((e.details as { reason?: string }).reason).toBe('MERGE_REGISTRY_UNREADABLE');
+    // Причина исходного отказа доезжает целиком — иначе владельцу нечем понять, ЧТО
+    // разбирать в настройке.
+    expect(JSON.stringify((e.details as { cause?: unknown }).cause)).toContain(
+      'DELTA_PROPERTY_PRESENT',
+    );
+
+    // Ничего не применено И реестр читается — обе половины, потому что вторая тут дороже.
+    expect(await registryReadable()).toBe(true);
+    const rows = (await withIdentity(db, lockOwner2, (tx) =>
+      tx.execute(sql`SELECT id, status, merged_into FROM property_definitions
+                     WHERE owner_id = ${lockOwner2}::uuid AND id IN (${p}, ${q})`),
+    )) as unknown as Array<Record<string, unknown>>;
+    for (const row of rows) expect(row).toMatchObject({ status: 'active', merged_into: null });
+    // И выход есть: разобрав настройку, владелец сливает как хотел.
+    ok(
+      await runL('aspect_delta_set', {
+        aspect: 'orbis/task',
+        delta: { properties: { add: [{ propertyId: q, required: false, rank: 81 }] } },
+      }),
+    );
+    ok(await runL('property_merge', { source: p, into: q }));
+  });
+
+  test('ДВЕРЬ 2: одно через дельту, другое через scope — тот же громкий отказ (§А3-4)', async () => {
+    // Третья дверь в §А3-4: две первые (правка и откат) закрыты пробой ДО записи, а слияние
+    // въезжало в то же состояние мимо неё.
+    const p = await mkProp('user/door2-p');
+    const q = await mkProp('user/door2-q', { scope: { filter: { aspect: 'orbis/goal' } } });
+    ok(
+      await runL('aspect_delta_set', {
+        aspect: 'orbis/goal',
+        delta: { properties: { add: [{ propertyId: p, required: false, rank: 82 }] } },
+      }),
+    );
+
+    const e = err(await runL('property_merge', { source: p, into: q }));
+    expect(e.code).toBe('REGISTRY_CONFLICT');
+    expect((e.details as { reason?: string }).reason).toBe('MERGE_REGISTRY_UNREADABLE');
+    expect(JSON.stringify((e.details as { cause?: unknown }).cause)).toContain('SCOPE_DUPLICATE');
+    expect(await registryReadable()).toBe(true);
+    const row = (await withIdentity(db, lockOwner2, (tx) =>
+      tx.execute(sql`SELECT status, merged_into FROM property_definitions
+                     WHERE owner_id = ${lockOwner2}::uuid AND id = ${p}`),
+    )) as unknown as Array<Record<string, unknown>>;
+    expect(row[0]).toMatchObject({ status: 'active', merged_into: null });
+  });
+
+  test('обычное слияние под дельтой проба НЕ трогает (отказ адресный, а не «на всякий случай»)', async () => {
+    const p = await mkProp('user/ok-p');
+    const q = await mkProp('user/ok-q');
+    ok(
+      await runL('aspect_delta_set', {
+        aspect: 'orbis/note',
+        delta: { properties: { add: [{ propertyId: p, required: false, rank: 83 }] } },
+      }),
+    );
+    ok(await runL('property_merge', { source: p, into: q }));
+    const reg = await withIdentity(db, lockOwner2, (tx) => effectiveRegistry(tx, lockOwner2));
+    expect((reg.aspects.get('orbis/note')?.properties ?? []).map((r) => r.propertyId)).toContain(q);
+  });
+
+  test('MERGE_TYPE называет то, что сравнивал, а не один kind', async () => {
+    const a = await mkProp('user/type-num-a');
+    const r = ok(
+      await runL('property_create', {
+        key: 'user/type-num-b',
+        label: { ru: 'С границей' },
+        description: { ru: 'Тот же kind, другой конфиг' },
+        type: { kind: 'number', min: 0 },
+        status: 'active',
+      }),
+    );
+    const b = (r.results[0] as { property: string }).property;
+    const e = err(await runL('property_merge', { source: a, into: b }));
+    expect((e.details as { reason?: string }).reason).toBe('MERGE_TYPE');
+    // Прежнее сообщение печатало «number и number» — по нему нельзя было понять, что
+    // разошлось. Теперь в тексте видна сама разница.
+    expect(e.message).toContain('"min":0');
+    expect((e.details as { sourceType?: unknown }).sourceType).toEqual({ kind: 'number' });
+  });
+});

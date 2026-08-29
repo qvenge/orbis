@@ -116,12 +116,21 @@ export const registryRouter = router({
     ({ ctx, input }): Promise<{ property: string; dependants: string[] }> =>
       withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
         const reg = await effectiveRegistry(tx, ctx.actorUserId);
-        // В `queryRefs` едут ТОЛЬКО держатели-СУЩНОСТИ (источник прогресса и тело). Строки
-        // реестра и дельты граф выводит из СНИМКА сам — рёбрами `scope`/`ref.target`/`aspect`
-        // (дельта уже сложена в эффективное определение). Передай их сюда — и одна и та же
-        // зависимость пришла бы дважды, вторым родом ребра и от узла-строки реестра.
+        // Отсеиваются ТОЛЬКО держатели-ДЕЛЬТЫ, и это единственный верный отсев: их `id` —
+        // uuid строки `registry_deltas`, который владельцу нечем истолковать, а сама
+        // зависимость уже приехала в граф ребром `aspect` (дельта сложена в эффективное
+        // определение снимком).
+        //
+        // Держатели-СТРОКИ РЕЕСТРА остаются, и это исправление регресса: собственные рёбра
+        // графа `scope`/`ref.target` ведут в АСПЕКТЫ, а не в свойства, поэтому род
+        // `registry` — ЕДИНСТВЕННЫЙ источник факта «`ref.target` свойства A называет
+        // свойство B». Фильтр `prop` внутри цели ссылки законен (`assertScopeShape` стоит
+        // только на `scope`), то есть такая зависимость реальна, и без неё ручка отвечала бы
+        // «на свойстве не стоит никто» при живом ссылочном свойстве, чьё множество цели на
+        // нём и держится. Дубля от этого не возникает: `dependantsOf` собирает `from` в Set,
+        // а узел-строка реестра и узел-аспект — разные `from`.
         const holders = (await collectPropertyHolders(tx, ctx.actorUserId)).filter(
-          (h) => h.kind === 'progress_source' || h.kind === 'body',
+          (h) => h.kind !== 'delta',
         );
         const graph = dependencyGraph(reg, {
           queryRefs: new Map(holders.map((h) => [h.id, h.properties])),

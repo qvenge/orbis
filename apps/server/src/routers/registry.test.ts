@@ -115,3 +115,61 @@ describe('registry.effective (§А9-2)', () => {
     ).toBe('Задача');
   });
 });
+
+describe('registry.dependants: честные зависимости (§А3-5, §С1-3 п.10)', () => {
+  const depOwner = freshUserId();
+  const dep = callerFor(depOwner);
+
+  test('ссылочное свойство, чья ЦЕЛЬ называет другое свойство, в ответе есть', async () => {
+    // Единственный источник факта «свойство A стоит на свойстве B» — держатель рода
+    // `registry`: собственные рёбра графа (`scope`, `ref.target`) ведут в АСПЕКТЫ, а не в
+    // свойства. Отсеять его значит отвечать владельцу «на нём не стоит никто» ровно тогда,
+    // когда на свойстве держится множество цели живой ссылки.
+    const target = await dep.registry.createProperty({
+      key: 'user/dep-target',
+      label: { ru: 'Цель зависимости' },
+      description: { ru: 'На него ссылаются' },
+      type: { kind: 'number' },
+      status: 'active',
+    });
+    const targetId = (target as { property: string }).property;
+    const holder = await dep.registry.createProperty({
+      key: 'user/dep-holder',
+      label: { ru: 'Держатель ссылки' },
+      description: { ru: 'Его цель фильтрует по dep-target' },
+      type: {
+        kind: 'ref',
+        target: {
+          filter: {
+            and: [{ aspect: 'orbis/task' }, { prop: targetId, op: 'gt', value: 1 }],
+          },
+        },
+      },
+      status: 'active',
+    });
+    const holderId = (holder as { property: string }).property;
+
+    const answer = await dep.registry.dependants({ property: 'user/dep-target' });
+    expect(answer.property).toBe(targetId);
+    expect(answer.dependants).toContain(holderId);
+  });
+
+  test('дельта аспекта в ответ НЕ едет строкой `registry_deltas` — только аспектом', async () => {
+    // У держателя-дельты `id` — uuid строки настройки, владельцу нечем его истолковать; сама
+    // зависимость приезжает ребром `aspect`, потому что дельта уже сложена в снимок.
+    const prop = await dep.registry.createProperty({
+      key: 'user/dep-in-delta',
+      label: { ru: 'Под дельтой' },
+      description: { ru: 'Добавлено к аспекту настройкой' },
+      type: { kind: 'number' },
+      status: 'active',
+    });
+    const propId = (prop as { property: string }).property;
+    await dep.registry.setAspectDelta({
+      aspect: 'orbis/note',
+      delta: { properties: { add: [{ propertyId: propId, required: false, rank: 90 }] } },
+    });
+    const answer = await dep.registry.dependants({ property: propId });
+    expect(answer.dependants).toEqual(['orbis/note']);
+  });
+});
