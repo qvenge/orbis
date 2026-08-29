@@ -35,6 +35,7 @@ import { runStillMine, subjectProperty } from '../agent-loop/verbs';
 import { entities } from '../db/schema';
 import { withIdentity } from '../db/with-identity';
 import { readEntity } from '../entity-read';
+import { ROUTINE_STAGE_PROPERTY } from '../policy/confirmation';
 import { compileQueryAst } from '../query/compile-ast';
 import { loadRegistry, type RegistrySnapshot } from '../registry/load';
 import type { PropsViolation } from '../registry/validate-props';
@@ -1641,9 +1642,25 @@ describe('golden-близнец писателей предусловий (§А7
         if (m?.[1] !== undefined) named.add(m[1]);
       }
     }
-    // Не пустой набор — иначе проверка «все известны» проходила бы на нуле имён.
-    expect(named.size).toBeGreaterThanOrEqual(10);
+    // Не пустой набор — иначе проверка «все известны» проходила бы на нуле имён. Порог 9, а не
+    // 10, с фикс-раунда 8: адресов по-прежнему десять, но один писатель называет свой
+    // КОНСТАНТОЙ, а не литералом (`routines/lifecycle.ts` перешла на общий
+    // `ROUTINE_STAGE_PROPERTY` — дом адреса один, `policy/confirmation.ts`). Литеральный скан
+    // его не видит, поэтому он проверяется отдельной строкой ниже; понижать порог молча было
+    // бы подгонкой, а сканировать идентификаторы подряд — ложными срабатываниями: `property:`
+    // встречается и в НОТАХ расхождения предложения, где `BODY_NOTE_PROPERTY` — синтетический
+    // маркер (`orbis/body`), а не свойство реестра.
+    expect(named.size).toBeGreaterThanOrEqual(9);
     expect([...named].filter((id) => !known.has(id))).toEqual([]);
+
+    // Десятый адрес — тот самый, названный константой. Проверяется СИЛЬНЕЕ литерала: сама
+    // константа пиннится к реестру в `confirmation.test.ts`, а здесь закреплено, что писатель
+    // ровно один и что адрес есть в словаре.
+    expect(known.has(ROUTINE_STAGE_PROPERTY)).toBe(true);
+    const byConstant = sources.filter(({ lines }) =>
+      lines.some((line) => /\bproperty:\s*ROUTINE_STAGE_PROPERTY\b/.test(line)),
+    );
+    expect(byConstant.map((entry) => entry.path)).toEqual(['routines/lifecycle.ts']);
 
     // Вычисляемый адрес субъекта прогона литералом не ловится — проверяем вызовом обеих
     // веток: `orbis/grant` (слитое свойство, В1) и `orbis/run_routine`.

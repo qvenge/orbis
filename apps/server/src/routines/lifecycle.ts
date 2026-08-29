@@ -64,6 +64,7 @@ import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
 import type { ActorKind, JournalSink, MutationSource } from '../executor/types';
 import type { LLMProvider } from '../llm/types';
+import { ROUTINE_STAGE_PROPERTY } from '../policy/confirmation';
 import {
   type AnswerQuestionResult,
   acquirePendingLock,
@@ -667,8 +668,8 @@ export async function pauseIfFailing(
   const paused = await patchRun(deps, {
     ownerId: args.ownerId,
     id: args.routineId,
-    props: { 'orbis/routine_stage': 'paused' },
-    precondition: [{ property: 'orbis/routine_stage', in: ['active'] }],
+    props: { [ROUTINE_STAGE_PROPERTY]: 'paused' },
+    precondition: [{ property: ROUTINE_STAGE_PROPERTY, in: ['active'] }],
   });
   if (!paused.ok) {
     // CONFLICT — рутина уже на паузе (её поставил конкурент либо прошлый сбой): штатный

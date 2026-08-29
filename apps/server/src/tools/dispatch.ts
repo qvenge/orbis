@@ -856,9 +856,10 @@ async function runMutation(
   //
   // Владельцу карточка не нужна и здесь: он разоружает свою рутину, глядя на неё, и ряд
   // автономии §7.10 для `owner` не срабатывает по той же причине.
-  const disarmed = ownerKnows
-    ? new Map<number, CarrierAutonomyChange>()
+  const scan: CarrierScan = ownerKnows
+    ? { changes: new Map(), carrierAtOp: new Map() }
     : await autonomyChangedByCarrier(ctx, ops);
+  const disarmed = scan.changes;
   const level: ConfirmationLevel =
     instructionOf.length > 0 || disarmed.size > 0 ? 'explicit-confirmation' : classified;
 
@@ -933,7 +934,7 @@ async function runMutation(
       // классификатора не меняет, а карточку требует ровно так же (Р-12-2, Р-12-3).
       const summaryParts: string[] = [];
       if (facts.grantsAutonomy || disarmed.size > 0) {
-        summaryParts.push(await autonomySummary(tx, ops, disarmed));
+        summaryParts.push(await autonomySummary(tx, ops, scan));
       }
       if (instructionOf.length > 0) {
         summaryParts.push(`Инструкция act-рутины: правка «${instructionOf.join('», «')}»`);
@@ -1480,7 +1481,7 @@ const AUTONOMY_LABEL: Record<string, string> = {
 async function autonomySummary(
   tx: Tx,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
-  disarmed: ReadonlyMap<number, CarrierAutonomyChange> = new Map(),
+  scan: CarrierScan = { changes: new Map(), carrierAtOp: new Map() },
 ): Promise<string> {
   const parts: string[] = [];
   for (const [index, op] of ops.entries()) {
@@ -1500,7 +1501,7 @@ async function autonomySummary(
     const unset = Array.isArray(op.input.unset)
       ? op.input.unset.filter((v): v is string => typeof v === 'string')
       : [];
-    const byCarrier = disarmed.get(index);
+    const byCarrier = scan.changes.get(index);
     const removed = [
       ...AUTONOMY_PROPERTIES.filter((p) => unset.includes(p)),
       ...(byCarrier?.removed ?? []),
@@ -1526,8 +1527,12 @@ async function autonomySummary(
     // уже на строке. Цели не видно (её нет или она чужая) — рутиной звать не за что:
     // исполнение ответит NOT_FOUND. Уровень это НЕ трогает: значения доверенности вооружают
     // запись в тот миг, когда аспект появится, и замок держит их на любом объекте.
+    // Носитель НА МОМЕНТ ОПЕРАЦИИ (с учётом предыдущих операций пачки) — первее строки из БД:
+    // внутри пачки строка ещё допачечная, и уже навешенную рутину сводка звала «записью».
     const aboutRoutine =
-      carriesRoutineAspect(op.tool, op.input) || head?.aspects.includes(ROUTINE_ASPECT) === true;
+      carriesRoutineAspect(op.tool, op.input) ||
+      scan.carrierAtOp.get(index) ||
+      head?.aspects.includes(ROUTINE_ASPECT) === true;
     // ИСТОЧНИК ФРАЗ О ЗНАЧЕНИЯХ. Обычно это сам патч. Но у ОЖИВЛЕНИЯ выключателем (Р-12-5 —
     // аспект, Р-12-6 — архив) значимы не свойства вызова, а ИТОГОВЫЕ: их в патче может не быть
     // ни одного, а вооружают запись именно они — боевые значения лежат на ней с тех пор, как
@@ -1637,8 +1642,10 @@ interface CarrierAutonomyChange {
  * ЕЩЁ И на паузе, получала карточку «возвращает из архива», хотя в отбор всё равно не
  * попадала. Теперь считается ПЕРЕХОД: `liveRoutine` на состоянии ДО и на состоянии ПОСЛЕ
  * патча, карточка — только когда «не работала» стало «работает» и запись при этом вооружена.
- * Обратная сторона того же сужения: навесить аспект записи, у которой нет рабочей стадии,
- * можно молча — рутиной она работать не станет, а вызов, который её включит, упрётся в замок.
+ * Обратная сторона того же сужения: навесить аспект записи, у которой стадия НЕ рабочая, можно
+ * молча — рутиной она работать не станет, а вызов, который её включит, упрётся в замок. На
+ * практике это ровно случай `stage: 'paused'`: `orbis/routine_stage` у аспекта ОБЯЗАТЕЛЕН, и
+ * `attach` записи вовсе без стадии до замка не доходит — его отвергает валидатор (`REQUIRED`).
  *
  * Почему это отдельная проверка ПО БД, а не факт классификатора: носитель отвечает на вопрос
  * «что станет с доверенностью» только вместе с текущим состоянием цели.
@@ -1670,17 +1677,23 @@ interface CarrierAutonomyChange {
  *
  * ЧЕГО ЭТОТ `SELECT` НЕ ГАРАНТИРУЕТ — сказано вслух вместо переноса (Important-3 ре-ревью).
  * Он идёт СВОЕЙ транзакцией и ДО записи, поэтому прочитанное состояние авторитетно только на
- * момент чтения:
+ * момент чтения — но что из этого следует, за раунды менялось, и вот как обстоит сейчас:
  *  1. Между пробой и записью состояние может измениться. Сам AI окна не открывает —
  *     вооружить рутину без карточки он не может, — но его открывает владелец: пока он жмёт
  *     «Принять» на запрос вооружения, MCP-агент в цикле шлёт разоружающий attach, проба
  *     видит ещё безоружную рутину и отвечает «отнимать нечего».
- *  2. Внутри batch проба читает состояние ДО пачки, а не после предыдущих её операций:
- *     `[entity_update {props:{allowed_tools:[…]}}, attach без allowed_tools]` даёт карточку
- *     «инструменты: …», хотя итог пачки — пустая доверенность. Направление здесь безопасное
- *     (прав меньше, чем обещано), но обещано неточно.
- * Закрывается это перепроверкой в ТОЙ ЖЕ транзакции, что и запись, и знать §7.10 исполнителю
- * для этого не нужно: сверить прочитанные пробой значения умеет CAS-предусловие §А7-3
+ *  2. ВНУТРИПАЧЕЧНАЯ половина ЗАКРЫТА фикс-раундом 8, и прежняя запись здесь («направление
+ *     безопасное — прав меньше, чем обещано») была ОПРОВЕРГНУТА живой пробой: с переходной
+ *     формулировкой раунда 7 направление стало НЕбезопасным — пачка из двух операций,
+ *     переключающих по одному выключателю каждая, возвращала вооружённую act-рутину в работу
+ *     БЕЗ КАРТОЧКИ. Теперь строка читается по-прежнему один раз, но состояние СВОРАЧИВАЕТСЯ
+ *     по ходу пачки, и каждая операция спрашивается о своём моменте.
+ *     Свёртка моделирует ровно то, что читают предикаты замка: носитель, признак архива и три
+ *     адреса свойств. Она НЕ моделирует `entity_create` (строки ещё нет) — и не обязана:
+ *     создание с боевыми значениями поднимает уровень гейтом формы, а безоружное вооружить
+ *     может только операция, трогающая свойства доверенности, то есть снова гейт формы.
+ * ОСТАВШИЙСЯ ПУНКТ 1 закрывается перепроверкой в ТОЙ ЖЕ транзакции, что и запись, и знать
+ * §7.10 исполнителю для этого не нужно: сверить прочитанные пробой значения умеет CAS-предусловие §А7-3
  * (`assertPrecondition`, `executor/executor.ts`, сверка под `FOR UPDATE`). Технической
  * невозможности здесь НЕТ, и утверждать обратное было бы ложью (Н-3 ре-ревью фикс-раунда 3).
  *
@@ -1704,36 +1717,33 @@ interface CarrierAutonomyChange {
 async function autonomyChangedByCarrier(
   ctx: ToolCallCtx,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
-): Promise<Map<number, CarrierAutonomyChange>> {
-  type Probe =
-    | { index: number; id: string; kind: 'replace'; data: Record<string, unknown> }
-    | { index: number; id: string; kind: 'detach' }
-    | { index: number; id: string; kind: 'revive'; patch: Record<string, unknown> };
-  const probes: Probe[] = [];
-  for (const [index, op] of ops.entries()) {
+): Promise<CarrierScan> {
+  const out = new Map<number, CarrierAutonomyChange>();
+  const carrierAtOp = new Map<number, boolean>();
+  // ПЕРВЫЙ ПРОХОД — по форме: есть ли о чём спрашивать БД и кого спрашивать. Идентификаторы
+  // собираются ШИРЕ проб: состояние цели внутри пачки двигают и операции, сами по себе
+  // карточки не требующие (постановка на паузу, архивация), а свернуть надо все.
+  const touched = new Set<string>();
+  let hasProbe = false;
+  for (const op of ops) {
     if (!isRecord(op.input)) continue;
-    if (op.tool === 'attach_orbis_routine') {
-      if (typeof op.input.entity_id !== 'string') continue;
-      const data = isRecord(op.input.data) ? op.input.data : {};
-      probes.push({ index, id: op.input.entity_id, kind: 'replace', data });
-      continue;
-    }
-    if (op.tool !== 'entity_update' || typeof op.input.id !== 'string') continue;
-    // Патологический `{attach:[…], detach:[…]}` одним вызовом разбирается как СНЯТИЕ: оба
-    // вида спрашивают у состояния одно (`autonomyArmed`), и на вооружённой записи ответ у них
-    // совпадает, а разводить порядок применения аспектов ради невыразимого намерения не за что.
-    if (namesRoutineAspect(op.input, 'detach')) {
-      probes.push({ index, id: op.input.id, kind: 'detach' });
-    } else if (touchesRevivalSwitch(op.input)) {
-      // Все три выключателя отбора — ОДНОЙ пробой: щёлкнуть их можно и порознь, и разом, а
-      // вопрос у них общий («заработает ли вооружённая рутина после этого вызова»), и второго
-      // ответа на него заводить не за что. Выключения (`archived: true`, пауза) сюда не
-      // попадают: их направление — сужение, разбор в докблоке `grantsRoutineAutonomy`.
-      probes.push({ index, id: op.input.id, kind: 'revive', patch: op.input });
+    const id =
+      op.tool === 'attach_orbis_routine'
+        ? op.input.entity_id
+        : op.tool === 'entity_update'
+          ? op.input.id
+          : undefined;
+    if (typeof id !== 'string') continue;
+    touched.add(id);
+    if (
+      op.tool === 'attach_orbis_routine' ||
+      namesRoutineAspect(op.input, 'detach') ||
+      touchesRevivalSwitch(op.input)
+    ) {
+      hasProbe = true;
     }
   }
-  const out = new Map<number, CarrierAutonomyChange>();
-  if (probes.length === 0) return out;
+  if (!hasProbe) return { changes: out, carrierAtOp };
 
   const rows = await withIdentity(ctx.db, ctx.actorUserId, (tx) =>
     tx
@@ -1744,79 +1754,184 @@ async function autonomyChangedByCarrier(
         archived: entities.archived,
       })
       .from(entities)
-      .where(
-        inArray(
-          entities.id,
-          probes.map((p) => p.id),
-        ),
-      ),
+      .where(inArray(entities.id, [...touched])),
   );
   const byId = new Map(rows.map((r) => [r.id, r]));
-  for (const probe of probes) {
-    const row = byId.get(probe.id);
+
+  // ВТОРОЙ ПРОХОД — ПО ПОРЯДКУ ОПЕРАЦИЙ, со свёрнутым состоянием цели. Каждая операция
+  // спрашивается о состоянии НА СВОЙ МОМЕНТ, а не о допачечном, и это фикс-раунд 8: пока
+  // строка читалась один раз и до пачки, вопрос «стала ли запись живой» каждая операция
+  // честно отвечала «нет» — переключала-то она ОДИН выключатель из трёх, — и пачка из двух
+  // операций возвращала вооружённую act-рутину в работу молча (блокер ре-ревью раунда 7).
+  const state = new Map<string, TargetState>();
+  const stateOf = (id: string): TargetState | undefined => {
+    const known = state.get(id);
+    if (known !== undefined) return known;
+    const row = byId.get(id);
     // Невидимой цели (её нет или она чужая) касаться нечем: двигать доверенность не у чего, а
-    // исполнение ответит честным NOT_FOUND.
-    if (row === undefined) continue;
-    const props = row.props as Record<string, unknown>;
-    const isCarrier = row.aspects.includes(ROUTINE_ASPECT);
-    if (probe.kind === 'revive') {
-      // ОЖИВЛЕНИЕ ВЫКЛЮЧАТЕЛЕМ (рулинги Р-12-5, Р-12-6 и Р-12-4 в исправленной редакции).
-      //
-      // Вопрос задаётся НЕ выключателю по отдельности, а ОТБОРУ ЦЕЛИКОМ: карточка нужна там,
-      // где вызов переводит запись ИЗ «не работает» В «работает» и она при этом вооружена.
-      // Проверять выключатели порознь — значит врать в обе стороны сразу: архивная рутина,
-      // которая ещё и на паузе, получала карточку «возвращает из архива», хотя в отбор всё
-      // равно не попадёт (Minor-1 ре-ревью фикс-раунда 6), а рутина, оживающая ДВУМЯ
-      // выключателями разом, была бы названа половиной. Условия отбора — ровно три, и они
-      // читаются одной функцией `liveRoutine`, общей с этим разбором.
-      const future = propsAfterPatch(props, probe.patch);
-      const willCarry = isCarrier || namesRoutineAspect(probe.patch, 'attach');
-      const willArchive =
-        typeof probe.patch.archived === 'boolean' ? probe.patch.archived : row.archived;
-      const before = liveRoutine(isCarrier, row.archived, props);
-      const after = liveRoutine(willCarry, willArchive, future);
-      if (before || !after || !autonomyArmed(future)) continue;
-      // Названы ВСЕ выключатели, которые этот вызов перевёл в рабочее положение: владелец
-      // читает карточку, а не диф, и «вернули из архива» ≠ «сняли паузу» ≠ «сделали рутиной».
-      const switches: RevivalSwitch[] = [];
-      if (!isCarrier && willCarry) switches.push('aspect');
-      if (row.archived && !willArchive) switches.push('archive');
-      if (
-        props[ROUTINE_STAGE_PROPERTY] !== 'active' &&
-        future[ROUTINE_STAGE_PROPERTY] === 'active'
-      ) {
-        // Из паузы и из «стадии не было» — один выключатель, но разные слова владельцу.
-        switches.push(props[ROUTINE_STAGE_PROPERTY] === 'paused' ? 'unpause' : 'activate');
+    // исполнение ответит честным NOT_FOUND. Сюда же попадает цель, СОЗДАВАЕМАЯ этой же пачкой:
+    // строки ещё нет, но и защищать нечего — `entity_create` с боевыми значениями поднимает
+    // уровень гейтом ФОРМЫ (`autonomyArmed` по `props`), а безоружное создание вооружить может
+    // только операция, трогающая свойства доверенности, то есть снова гейт формы.
+    if (row === undefined) return undefined;
+    const fresh: TargetState = {
+      carrier: row.aspects.includes(ROUTINE_ASPECT),
+      archived: row.archived,
+      props: row.props as Record<string, unknown>,
+    };
+    state.set(id, fresh);
+    return fresh;
+  };
+
+  for (const [index, op] of ops.entries()) {
+    if (!isRecord(op.input)) continue;
+    if (op.tool === 'attach_orbis_routine') {
+      const id = op.input.entity_id;
+      if (typeof id !== 'string') continue;
+      const now = stateOf(id);
+      if (now === undefined) continue;
+      carrierAtOp.set(index, now.carrier);
+      const data = isRecord(op.input.data) ? op.input.data : {};
+      const taken = carrierReplaced(now, data);
+      if (taken !== null) out.set(index, taken);
+      state.set(id, afterAttachRoutine(now, data));
+      continue;
+    }
+    if (op.tool !== 'entity_update') continue;
+    const id = op.input.id;
+    if (typeof id !== 'string') continue;
+    const now = stateOf(id);
+    if (now === undefined) continue;
+    carrierAtOp.set(index, now.carrier);
+    const patch = op.input;
+    if (namesRoutineAspect(patch, 'detach')) {
+      // Признак носителя обязателен (Р9): значения доверенности переживают снятие аспекта, и
+      // без него запись, КОГДА-ТО бывшая рутиной, читалась бы как разоружаемая рутина.
+      if (now.carrier && autonomyArmed(now.props)) {
+        out.set(index, { removed: [], detached: true, revives: null });
       }
-      out.set(probe.index, { removed: [], detached: false, revives: { switches, values: future } });
-      continue;
+    } else if (touchesRevivalSwitch(patch)) {
+      const revived = revivedByPatch(now, patch);
+      if (revived !== null) out.set(index, revived);
     }
-    // Признак носителя обязателен (Р9): значения доверенности переживают снятие аспекта, и
-    // без него запись, КОГДА-ТО бывшая рутиной, читалась бы как разоружаемая рутина.
-    if (!isCarrier) continue;
-    // «ОТНИМАТЬ НЕЧЕГО» — ОДИН ответ на оба вида снятия (Minor-2 ре-ревью фикс-раунда 4).
-    // Прежде `detach` спрашивал `autonomyArmed`, а замена носителя считала по наличию ключа, и
-    // безоружная рутина с `allowed_tools: []` получала карточку «снимает белый список» — то
-    // есть сообщение о снятии того, чего нет, — тогда как `detach` у неё проходил молча.
-    if (!autonomyArmed(props)) continue;
-    if (probe.kind === 'detach') {
-      out.set(probe.index, { removed: [], detached: true, revives: null });
-      continue;
-    }
-    const data = probe.data;
-    const held = AUTONOMY_PROPERTIES.filter((property) => Object.hasOwn(props, property));
-    const removed = held.filter((property) => !Object.hasOwn(data, property));
-    const devalued = held.filter(
-      (property) =>
-        Object.hasOwn(data, property) && !sameAutonomyValue(props[property], data[property]),
-    );
-    // ОБЕСЦЕНЕННОЕ записи в карте не адресует, но её ПОРОЖДАЕТ: отдельной фразы владельцу оно
-    // не требует (новое значение сводка назовёт из самого патча), а операцию — требует.
-    if (removed.length > 0 || devalued.length > 0) {
-      out.set(probe.index, { removed, detached: false, revives: null });
-    }
+    state.set(id, afterUpdate(now, patch));
   }
-  return out;
+  return { changes: out, carrierAtOp };
+}
+
+/**
+ * Что проба узнала об операциях вызова.
+ *
+ * `carrierAtOp` — РУТИНА ЛИ объект операции на её момент, с учётом предыдущих операций пачки.
+ * Отдельным полем, а не выводом из `changes`, потому что вопрос другой: `changes` решают,
+ * поднимать ли уровень, а этот ответ решает, как НАЗВАТЬ объект в карточке. Пока сводка
+ * спрашивала строку из БД, внутри пачки она видела допачечное состояние и звала уже
+ * навешенную рутину «записью» — тот же класс, что и блокер раунда 7, только в тексте.
+ */
+interface CarrierScan {
+  changes: Map<number, CarrierAutonomyChange>;
+  carrierAtOp: Map<number, boolean>;
+}
+
+/** Состояние цели НА МОМЕНТ ОПЕРАЦИИ — ровно то, что читают предикаты замка. */
+interface TargetState {
+  carrier: boolean;
+  archived: boolean;
+  props: Record<string, unknown>;
+}
+
+/**
+ * Что замена носителя (`attach_*`, §А7-4) ОТНИМАЕТ у доверенности; `null` — не отнимает.
+ *
+ * «ОТНИМАТЬ НЕЧЕГО» — ОДИН ответ на оба вида снятия (Minor-2 ре-ревью фикс-раунда 4): прежде
+ * `detach` спрашивал `autonomyArmed`, а замена носителя считала по наличию ключа, и безоружная
+ * рутина с `allowed_tools: []` получала карточку «снимает белый список» — сообщение о снятии
+ * того, чего нет, — тогда как `detach` у неё проходил молча.
+ */
+function carrierReplaced(
+  now: TargetState,
+  data: Record<string, unknown>,
+): CarrierAutonomyChange | null {
+  if (!now.carrier || !autonomyArmed(now.props)) return null;
+  const held = AUTONOMY_PROPERTIES.filter((property) => Object.hasOwn(now.props, property));
+  const removed = held.filter((property) => !Object.hasOwn(data, property));
+  const devalued = held.filter(
+    (property) =>
+      Object.hasOwn(data, property) && !sameAutonomyValue(now.props[property], data[property]),
+  );
+  // ОБЕСЦЕНЕННОЕ записи в карте не адресует, но её ПОРОЖДАЕТ: отдельной фразы владельцу оно
+  // не требует (новое значение сводка назовёт из самого патча), а операцию — требует.
+  if (removed.length === 0 && devalued.length === 0) return null;
+  return { removed, detached: false, revives: null };
+}
+
+/**
+ * Оживляет ли патч ВООРУЖЁННУЮ рутину (рулинги Р-12-5, Р-12-6 и Р-12-4 в исправленной
+ * редакции); `null` — не оживляет.
+ *
+ * Вопрос задаётся НЕ выключателю по отдельности, а ОТБОРУ ЦЕЛИКОМ: карточка нужна там, где
+ * вызов переводит запись ИЗ «не работает» В «работает» и она при этом вооружена. Проверять
+ * выключатели порознь — значит врать в обе стороны сразу: архивная рутина, которая ещё и на
+ * паузе, получала карточку «возвращает из архива», хотя в отбор всё равно не попадёт (Minor-1
+ * ре-ревью раунда 6), а рутина, оживающая ДВУМЯ выключателями разом, была бы названа
+ * половиной. Условия отбора — ровно три, и читает их одна `liveRoutine`, общая с обоими
+ * концами перехода.
+ */
+function revivedByPatch(
+  now: TargetState,
+  patch: Record<string, unknown>,
+): CarrierAutonomyChange | null {
+  if (liveRoutine(now.carrier, now.archived, now.props)) return null;
+  const next = afterUpdate(now, patch);
+  if (!liveRoutine(next.carrier, next.archived, next.props)) return null;
+  if (!autonomyArmed(next.props)) return null;
+  // Названы ВСЕ выключатели, которые этот вызов перевёл в рабочее положение: владелец читает
+  // карточку, а не диф, и «вернули из архива» ≠ «сняли паузу» ≠ «сделали рутиной».
+  const switches: RevivalSwitch[] = [];
+  if (!now.carrier && next.carrier) switches.push('aspect');
+  if (now.archived && !next.archived) switches.push('archive');
+  if (
+    now.props[ROUTINE_STAGE_PROPERTY] !== 'active' &&
+    next.props[ROUTINE_STAGE_PROPERTY] === 'active'
+  ) {
+    // Из паузы и из «стадии не было» — один выключатель, но разные слова владельцу.
+    switches.push(now.props[ROUTINE_STAGE_PROPERTY] === 'paused' ? 'unpause' : 'activate');
+  }
+  return { removed: [], detached: false, revives: { switches, values: next.props } };
+}
+
+/**
+ * Состояние цели ПОСЛЕ `entity_update`. Одна функция и на «что будет» у пробы, и на свёртку
+ * пачки: разъедься они, вопрос об отборе задавался бы одному состоянию, а следующая операция
+ * видела бы другое.
+ */
+function afterUpdate(now: TargetState, patch: Record<string, unknown>): TargetState {
+  return {
+    // Патологический `{attach:[…], detach:[…]}` одним вызовом читается как СНЯТИЕ — тем же
+    // порядком, каким его разбирает проба выше.
+    carrier: namesRoutineAspect(patch, 'detach')
+      ? false
+      : now.carrier || namesRoutineAspect(patch, 'attach'),
+    archived: typeof patch.archived === 'boolean' ? patch.archived : now.archived,
+    props: propsAfterPatch(now.props, patch),
+  };
+}
+
+/**
+ * Состояние цели ПОСЛЕ `attach_orbis_routine`: носитель заменяется ЦЕЛИКОМ (§А7-4), и
+ * свойство аспекта, не названное в `data`, снимается.
+ *
+ * Свёртка чистит ровно ТРИ адреса, которые читают предикаты замка, а не весь состав аспекта из
+ * реестра: расписание и дни на ответ не влияют, а их список здесь стал бы вторым письменным
+ * представлением состава носителя. Настоящий состав знает исполнитель (`replaceAspectProps`,
+ * `executor/props.ts`).
+ */
+function afterAttachRoutine(now: TargetState, data: Record<string, unknown>): TargetState {
+  const props = { ...now.props };
+  for (const property of [ROUTINE_MODE_PROPERTY, ROUTINE_TOOLS_PROPERTY, ROUTINE_STAGE_PROPERTY]) {
+    delete props[property];
+  }
+  return { carrier: true, archived: now.archived, props: { ...props, ...data } };
 }
 
 /**

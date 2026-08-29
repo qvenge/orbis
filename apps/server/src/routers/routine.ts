@@ -19,6 +19,7 @@ import { routineById, runSummary, runsOfParent } from '../agent-loop/queries';
 import { defaultAiDeps } from '../ai/send-message';
 import { withIdentity } from '../db/with-identity';
 import { ExecError, execErrorToTRPC } from '../errors';
+import { ROUTINE_STAGE_PROPERTY } from '../policy/confirmation';
 import { type AnswerQuestionResult, listRunUnits, type RunUnit } from '../policy/pending';
 import { ownerTimeZone } from '../query/context';
 import { editsSchema } from '../routines/edits';
@@ -410,7 +411,7 @@ export const routineRouter = router({
         // Рутина на паузе не сработает вовсе (activeRoutines её не отбирает), и показывать
         // ей «следующее срабатывание» значило бы обещать то, чего не будет
         const next =
-          routine.props['orbis/routine_stage'] === 'active'
+          routine.props[ROUTINE_STAGE_PROPERTY] === 'active'
             ? nextBucketAt({
                 at: routine.props['orbis/routine_at'],
                 days: routine.props['orbis/routine_days'],

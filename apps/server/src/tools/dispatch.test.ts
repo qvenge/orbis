@@ -2783,6 +2783,182 @@ describe('V1: выдача автономии рутине из чата → pen
     });
   });
 
+  test('ПАЧКА НЕ ОБХОДИТ ПЕРЕХОД, вариант А: ноль карточек за два вызова (блокер раунда 7)', async () => {
+    // Раунд 7 заменил вопрос «щёлкнут ли выключатель» на «стала ли запись живой», но строку
+    // цели проба читала ОДИН раз и ДО пачки. Внутри пачки каждая операция видела одно и то же
+    // допачечное состояние и честно отвечала «после — не работает»: переключала-то она ОДИН
+    // выключатель из трёх. Пачка целиком переключала два и проходила молча.
+
+    // --- ВАРИАНТ А: ноль карточек за два вызова ---
+    // Стартовое состояние — то, что остаётся после подтверждённого владельцем `detach`:
+    // аспекта нет, значения боевые, стадия рабочая (Р9).
+    const disarmedByOwner = await seedEntity(userA, { title: 'Убранная владельцем', tags: [] });
+    await withIdentity(db, userA, (tx) =>
+      tx
+        .update(entities)
+        .set({
+          aspects: [],
+          props: {
+            'orbis/routine_stage': 'active',
+            'orbis/routine_at': '07:00',
+            'orbis/routine_mode': 'act',
+            'orbis/allowed_tools': ['entity_update'],
+          },
+        })
+        .where(eq(entities.id, disarmedByOwner.id)),
+    );
+    // Шаг 1 — постановка на паузу: сужение, карточки нет и быть не должно.
+    const step1 = await dispatchTool(ctxFor(), 'entity_update', {
+      id: disarmedByOwner.id,
+      props: { 'orbis/routine_stage': 'paused' },
+    });
+    expect(step1.status).toBe('ok');
+    // Шаг 2 — пачка, переключающая ДВА выключателя: аспект и стадию.
+    const step2 = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: disarmedByOwner.id, aspects: { attach: ['orbis/routine'] } },
+        },
+        {
+          tool: 'entity_update',
+          input: { id: disarmedByOwner.id, props: { 'orbis/routine_stage': 'active' } },
+        },
+      ],
+    });
+    expect(step2.status).toBe('pending_confirmation');
+    if (step2.status !== 'pending_confirmation') return;
+    // Карточку требует ВТОРАЯ операция — та, что завершает переход; первая сама по себе рутину
+    // не оживляет (стадия ещё «paused»), и врать про неё нечего.
+    expect(step2.card).toMatchObject({
+      summary:
+        'Автономия рутины «Убранная владельцем»: режим act, инструменты: entity_update, снимает паузу',
+    });
+    // Пачка не исполнена: аспект не вернулся, стадия прежняя.
+    expect(await aspectsOfRow(disarmedByOwner.id)).toEqual([]);
+    expect((await propsOfRow(disarmedByOwner.id))['orbis/routine_stage']).toBe('paused');
+  });
+
+  test('ПАЧКА НЕ ОБХОДИТ ПЕРЕХОД, вариант Б: архив и пауза сняты двумя операциями одной пачки', async () => {
+    // --- ВАРИАНТ Б: один вызов, `detach` не нужен ---
+    // Архивная И приостановленная вооружённая act-рутина — «владелец выключил на время».
+    const offTwice = await seedEntity(userA, {
+      title: 'Выключенная дважды',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({
+          stage: 'paused',
+          mode: 'act',
+          allowed_tools: ['entity_update'],
+        }),
+      },
+    });
+    await withIdentity(db, userA, (tx) =>
+      tx.update(entities).set({ archived: true }).where(eq(entities.id, offTwice.id)),
+    );
+    const bothSwitches = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id: offTwice.id, archived: false } },
+        {
+          tool: 'entity_update',
+          input: { id: offTwice.id, props: { 'orbis/routine_stage': 'active' } },
+        },
+      ],
+    });
+    expect(bothSwitches.status).toBe('pending_confirmation');
+    if (bothSwitches.status !== 'pending_confirmation') return;
+    expect(bothSwitches.card).toMatchObject({
+      summary:
+        'Автономия рутины «Выключенная дважды»: режим act, инструменты: entity_update, снимает паузу',
+    });
+
+    // ВТОРАЯ СТОРОНА ГРАНИЦЫ: пачка, которая переключает выключатели, но рутину так и не
+    // оживляет (стадия остаётся «paused»), проходит молча — свёртка не превратилась в
+    // «карточку на любую пачку про рутину».
+    const stillOff = await seedEntity(userA, {
+      title: 'Так и не включена',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({
+          stage: 'paused',
+          mode: 'act',
+          allowed_tools: ['entity_update'],
+        }),
+      },
+    });
+    await withIdentity(db, userA, (tx) =>
+      tx.update(entities).set({ archived: true }).where(eq(entities.id, stillOff.id)),
+    );
+    const halfWay = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id: stillOff.id, archived: false } },
+        // Вторая операция — расписание: не доверенность, не выключатель и не ИНСТРУКЦИЯ
+        // act-рутины (правку заголовка держит свой гейт C1b-1, и он смазал бы пробу).
+        {
+          tool: 'entity_update',
+          input: { id: stillOff.id, props: { 'orbis/routine_at': '09:00' } },
+        },
+      ],
+    });
+    expect(halfWay.status).toBe('ok');
+
+    // СВЁРТКА ВИДИТ И `attach_orbis_routine`, а не только `entity_update`. Наблюдаемо это на
+    // СУБЪЕКТЕ карточки: аспект навешивает первая операция пачки, вторая правит доверенность —
+    // и назвать цель «записью» было бы неправдой уже на её момент. Первая операция карточки не
+    // требует (носитель кладётся мирным), вторую поднимает гейт формы.
+    const becomingRoutine = await seedEntity(userA, { title: 'Станет рутиной пачкой', tags: [] });
+    const attachThenArm = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        {
+          tool: 'attach_orbis_routine',
+          input: { entity_id: becomingRoutine.id, data: routineProps({}) },
+        },
+        {
+          tool: 'entity_update',
+          input: { id: becomingRoutine.id, props: { 'orbis/routine_mode': 'act' } },
+        },
+      ],
+    });
+    expect(attachThenArm.status).toBe('pending_confirmation');
+    if (attachThenArm.status !== 'pending_confirmation') return;
+    expect(attachThenArm.card).toMatchObject({
+      summary: 'Автономия рутины «Станет рутиной пачкой»: режим act',
+    });
+
+    // И ТРЕТЬЯ: свёртка читает ОБЕ стороны — пачка, оживляющая рутину и тут же гасящая её
+    // обратно, карточку всё равно требует (первая операция оживление совершила).
+    // Fail-closed: замок отвечает на действие, а не на намерение пачки в целом.
+    const onOff = await seedEntity(userA, {
+      title: 'Включили и выключили',
+      tags: [],
+      aspects: {
+        'orbis/routine': routine({
+          stage: 'paused',
+          mode: 'act',
+          allowed_tools: ['entity_update'],
+        }),
+      },
+    });
+    const flip = await dispatchTool(ctxFor(), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        {
+          tool: 'entity_update',
+          input: { id: onOff.id, props: { 'orbis/routine_stage': 'active' } },
+        },
+        {
+          tool: 'entity_update',
+          input: { id: onOff.id, props: { 'orbis/routine_stage': 'paused' } },
+        },
+      ],
+    });
+    expect(flip.status).toBe('pending_confirmation');
+  });
+
   test('«отнимать нечего» — ОДИН ответ у обоих видов снятия носителя (Minor-2 фикс-раунда 4)', async () => {
     // Безоружная рутина (propose, список ЕСТЬ и он пуст). `detach` у неё проходил молча, а
     // безобидный attach с новым временем сообщал «снимает белый список» — снятие того, чего

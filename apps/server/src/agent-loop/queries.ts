@@ -5,6 +5,7 @@
 import type { AgentRunAspect, AgentRunStep, RoutineAspect, RunSummary } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
+import { ROUTINE_STAGE_PROPERTY } from '../policy/confirmation';
 import { hierarchicalRolesSql } from '../registry/roles';
 
 /**
@@ -363,7 +364,7 @@ export async function runsForBucket(tx: Tx, routineId: string, bucket: string): 
  * глаз», и рутина, которой нет на экранах, не должна ходить в фоне.
  */
 export async function activeRoutines(tx: Tx): Promise<RoutineRow[]> {
-  const active = JSON.stringify({ 'orbis/routine_stage': 'active' });
+  const active = JSON.stringify({ [ROUTINE_STAGE_PROPERTY]: 'active' });
   const rows = await tx.execute(
     sql`SELECT id, title, body, props
         FROM entities
