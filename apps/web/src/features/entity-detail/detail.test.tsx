@@ -4503,13 +4503,26 @@ const overlayBodyRow = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-/** Второе поле записи в той же операции: архивация. `before` — снятое предусловие. */
+/**
+ * Второе поле записи в той же операции: архивация.
+ *
+ * `before` у core-строки ПРЕДЛОЖЕНИЯ нет — это форма производителя, а не упущение фикстуры:
+ * ветка `CORE_FIELD_LABELS` в `updateRows` (`routines/lifecycle.ts`) кладёт только `after`,
+ * потому что предусловий у полей вне аспектов предложение не снимает вовсе (тот же факт
+ * назван в `ProposalOverlay`: «У полей вне аспектов предусловия нет вовсе»). Такая строка
+ * едет одним «станет», и первая редакция этой фикстуры, дописавшая `before: false`, обещала
+ * читателю ветку продукта, которой не существует.
+ *
+ * С отложенным действием это НЕ путать: там core-строка `before` как раз несёт
+ * (`snapshotDeferredUnit` читает снятое им же предусловие — `routers/routine.test.ts` пиннит
+ * ровно `{field:'archived', before:'false', after:'true'}`), и фикстура `DEFERRED_CARD` в
+ * `cards.test.tsx` повторяет именно эту, ДРУГУЮ форму. Два производителя — две формы.
+ */
 const archivedRow = (over: Record<string, unknown> = {}) => ({
   index: 0,
   tool: 'entity_update',
   entity: { id: 'e1', title: 'Задача' },
   field: 'archived',
-  before: false,
   after: true,
   summary: '«Задача»: архив',
   ...over,
@@ -4719,9 +4732,9 @@ describe('слой предложения', () => {
         pendingId: 'p1',
         decision: 'approve',
         // Адрес правки — ТОТ ЖЕ, что у строки предложения: `index` + id свойства, без
-        // `aspect`. Ключ строки сервер собирает из этой же пары (`routines/edits.ts`
-        // `rowKeysOf`), и пара «аспект + старое имя поля» не совпала бы там ни с одной
-        // строкой — правка получила бы `edit_row_not_editable`.
+        // `aspect`. Правку с аспектом сервер отбивает НА ВХОДЕ, не доходя до сверки ключей:
+        // `assertRowExists` (`routines/edits.ts`) отвергает любой непустой `aspect` кодом
+        // `edit_key_missing` — строк по аспектам в предложении больше нет (§А1-1).
         edits: {
           fields: [{ index: 0, field: 'orbis/task_status', value: 'in_progress' }],
         },
