@@ -866,6 +866,67 @@ test('нефинансовая сущность: контрол по типу с
   expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
 });
 
+/**
+ * Агрегаты Финансов протухают от правки ЛЮБОГО свойства модуля — и только его.
+ *
+ * Признак — `module` СВОЙСТВА из реестра, а не список id: остаток конверта двигают и сумма,
+ * и категория, и признак плана, и дата операции. Прежде инвалидация висела на одной
+ * категории, и правка суммы оставляла бейдж вкладки и остаток конверта вчерашними; а
+ * безусловная инвалидация после каждой правки означала бы пересчёт бюджета от переименования
+ * задачи. Обе половины проверяются здесь одной пробой: без положительной выключенный
+ * механизм переживает сьют, без отрицательной его переживает «инвалидировать всегда».
+ */
+function BudgetProbe() {
+  const q = trpc.budget.alertCount.useQuery({});
+  return <span data-testid="budget-probe">{String(q.data ?? '')}</span>;
+}
+
+const taskedFin = wireEntity({
+  ...entity,
+  title: 'Кофе Хауз',
+  props: {
+    'orbis/amount': '340.00',
+    'orbis/direction': 'expense',
+    'orbis/finance_category': CAT_FOOD,
+    'orbis/task_status': 'inbox',
+  },
+  aspects: ['orbis/financial', 'orbis/task'],
+});
+
+test('правка свойства Финансов гасит бюджетные агрегаты, правка чужого свойства — нет', async () => {
+  const { calls } = renderWithProviders(
+    <>
+      <BudgetProbe />
+      <AspectCards entity={taskedFin} />
+    </>,
+    (path) => {
+      if (path === 'budget.alertCount') return 0;
+      if (path === 'entity.query') return [category(CAT_FOOD, 'Еда')];
+      if (path === 'entity.update') return taskedFin;
+      return registryReply(path) ?? {};
+    },
+  );
+  const budgetReads = () => calls.filter((c) => c.path === 'budget.alertCount').length;
+  await waitFor(() => expect(budgetReads()).toBe(1));
+
+  // (а) чужой модуль (`orbis/task_status` — Планировщик): граф протух, бюджет — нет.
+  const status = await screen.findByLabelText('Состояние задачи');
+  fireEvent.change(status, { target: { value: 'done' } });
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.update')).toBe(true));
+  // Оседание мутации вместе с её onSettled: без выдержки «бюджет не перечитан» было бы
+  // истинно просто потому, что ответ ещё не пришёл.
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 50));
+  });
+  expect(budgetReads()).toBe(1);
+
+  // (б) свойство Финансов: агрегаты обязаны перечитаться.
+  const amount = screen.getByLabelText('Сумма');
+  fireEvent.change(amount, { target: { value: '420.00' } });
+  fireEvent.blur(amount);
+  await waitFor(() => expect(budgetReads()).toBeGreaterThan(1));
+});
+
 // --- query-блоки body (02-core-os §3.4) ------------------------------------------------
 // Реестры настоящие (`registryReply`), поэтому каталог полей и разбор имён в тесте те же,
 // что в проде: битая конструкция упала бы плашкой qb-error, а не молча.
@@ -1694,7 +1755,9 @@ test('useEntityDetail: снятие аспекта шлёт aspects.detach и з
     },
   );
   const section = await screen.findByTestId('aspect-orbis/task');
-  fireEvent.click(within(section).getByRole('button', { name: 'Снять orbis/task' }));
+  // Имя кнопки — ПОДПИСЬЮ аспекта из реестра: «Снять orbis/task» скринридер читал машинным
+  // адресом ровно там, где заголовок секции рядом подписан словом.
+  fireEvent.click(within(section).getByRole('button', { name: 'Снять аспект «Задача»' }));
 
   await waitFor(() => {
     const input = calls.find((c) => c.path === 'entity.update')?.input as {
@@ -2804,6 +2867,52 @@ describe('ADE: тикет', () => {
     // Второй карточки того же аспекта в общем списке свойств НЕТ: у назначения свой контрол,
     // и сырой инпут рядом правил бы то же поле мимо инварианта исполнителя.
     expect(within(details).queryByTestId('aspect-orbis/assignment')).toBeNull();
+  });
+
+  test('назначение С НУЛЯ навешивает аспект: «Сохранить» шлёт aspects.attach вместе со свойствами', async () => {
+    /**
+     * Регрессия жеста, а не косметика. В старой карте запись ключа
+     * `aspects: {'orbis/assignment': …}` навешивала носитель ЗАОДНО со значениями, и
+     * «Сохранить» на неназначенной задаче делала два дела разом. В новой форме (§А1-1) это
+     * разные вещи, и без явного `attach` свойства легли бы СВОБОДНЫМИ: карточка продолжала
+     * бы говорить «Не назначен» (признак — список аспектов), а грант не смог бы забрать
+     * тикет — периметр исполнителя отбирает очередь по `'orbis/assignment' = ANY(aspects)`.
+     *
+     * Все три соседние пробы назначения гоняют тикет, у которого аспект УЖЕ навешен, — путь
+     * «назначить с нуля» до этой пробы не проходил ни один тест.
+     */
+    const plainTask = wireEntity({
+      ...entity,
+      id: 'p1',
+      title: 'Ещё ничья задача',
+      props: { 'orbis/task_status': 'inbox' },
+      aspects: ['orbis/task'],
+    });
+    const { calls } = renderWithProviders(
+      <DetailScreen entityId="p1" />,
+      adeHandler({ entity: plainTask, runs: [] }),
+    );
+    const card = await screen.findByTestId('assignment-card');
+    // Премиса: назначения ЕЩЁ НЕТ — иначе проба не отличала бы «навесил» от «уже было».
+    expect(within(card).getByText('Не назначен')).toBeInTheDocument();
+
+    await userEvent.click(within(card).getByRole('radio', { name: 'Агент' }));
+    await userEvent.selectOptions(within(card).getByLabelText('Доступ агента'), GRANT_ID);
+    await userEvent.click(within(card).getByRole('button', { name: 'Сохранить' }));
+
+    await waitFor(() => {
+      const input = calls.find((c) => c.path === 'entity.update')?.input as {
+        props: Record<string, unknown>;
+        aspects: { attach?: string[] };
+      };
+      expect(input.aspects.attach).toEqual(['orbis/assignment']);
+      // …и значения уехали ТЕМ ЖЕ вызовом: навешивание без них оставило бы носитель пустым.
+      expect(input.props).toEqual({
+        'orbis/executor': 'agent',
+        'orbis/grant': GRANT_ID,
+        'orbis/may_close': false,
+      });
+    });
   });
 
   test('переключение агент → человек снимает грант через unset; «Снять назначение» снимает аспект целиком', async () => {
