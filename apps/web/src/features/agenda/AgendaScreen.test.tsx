@@ -14,7 +14,7 @@ import { ActiveScreen } from '../../app/router';
 import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError } from '../../test/harness';
-import { BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY } from '../../test/registry';
+import { BUILTIN_REGISTRY } from '../../test/registry';
 import { todayISO } from '../budget/useBudget';
 import { AgendaScreen } from './AgendaScreen';
 import {
@@ -154,7 +154,7 @@ test('тексты Agenda равны эталонным key-формам AGENDA_
  * не доказывает перевода — непереведённый текст уехал бы в старую ветку молча.
  */
 test('тексты Agenda разбираются каноном §А5-3 без отката к мосту', () => {
-  const registry = buildQueryRegistry(BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY).parse;
+  const registry = buildQueryRegistry(BUILTIN_REGISTRY).parse;
   for (const query of [AGENDA_DAYS_QUERY, AGENDA_OVERDUE_DUE_QUERY, AGENDA_OVERDUE_START_QUERY]) {
     const r = parseQueryAst(query, registry);
     expect(r.ok, query).toBe(true);

@@ -4,13 +4,13 @@
 import { parseQueryAst } from '@orbis/shared/query';
 import { expect, test } from 'vitest';
 import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
-import { BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY } from '../../test/registry';
+import { BUILTIN_REGISTRY } from '../../test/registry';
 import { buildTxQuery, monthRange, TX_PAGE_SIZE } from './txQuery';
 
 // Разбор — НОВОЙ грамматикой (§А5-3), без моста старой формы: доказательство перевода в том,
 // что текст билдера разбирается каноном, а не в том, что экран открылся (мост принял бы и
 // непереведённую строку, и тест зеленел бы при невыполненной работе).
-const registry = buildQueryRegistry(BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY).parse;
+const registry = buildQueryRegistry(BUILTIN_REGISTRY).parse;
 
 test('monthRange: полный календарный месяц, включая февраль и високосный год', () => {
   expect(monthRange('2026-06')).toEqual({ start: '2026-06-01', end: '2026-06-30' });

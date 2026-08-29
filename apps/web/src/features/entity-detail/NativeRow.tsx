@@ -1,7 +1,8 @@
 import { BUILTIN_ASPECT_META, parseRuleTitle } from '@orbis/shared';
 import { useState } from 'react';
-import { fieldLabel } from '../../lib/field-labels';
 import { formatMoney, type MoneyTone } from '../../lib/format';
+import { fieldLabel } from '../../lib/registry/labels';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import type { RouterOutputs } from '../../trpc';
 import { Badge } from '../../ui/Badge';
 import { Checkbox } from '../../ui/Checkbox';
@@ -181,6 +182,10 @@ export function NativeRow({
   onSaveTitle?: (title: string) => void;
 }) {
   const aspects = entity.aspectsMap as Record<string, Record<string, unknown>>;
+  // Подписи — из реестра (§А9-2). Хук зовётся ДО веток рода строки: ветвление на
+  // task/financial/schedule идёт ниже по данным, и вызов хука внутри ветки нарушил бы
+  // правило порядка хуков на первой же смене аспекта у открытой записи.
+  const registry = useRegistry();
 
   const task = aspects['orbis/task'];
   if (task) {
@@ -238,11 +243,15 @@ export function NativeRow({
   }
 
   // generic: первые 2–3 keyFields установленного аспекта из реестра — ЗАПОЛНЕННЫЕ,
-  // подписанные ПО-РУССКИ тем же словарём, что карточки аспектов и карточки чата
-  // (lib/field-labels). Без него шапка печатала сырой ключ ровно над карточкой, где то же
-  // поле подписано словом: у цели «target_value: 300000.00» стояло над «цель: 300000.00»
-  // — одно значение, два имени, на одном экране. Ключа нет в словаре (кастомный аспект) —
-  // печатается как есть: честная деградация, а не пустая подпись.
+  // подписанные ПО-РУССКИ тем же источником, что карточки аспектов и карточки чата
+  // (реестр, §А9-2). Без подписи шапка печатала сырой ключ ровно над карточкой, где то же
+  // поле подписано словом: у цели «target_value: 300000.00» стояло над «Целевое значение:
+  // 300000.00» — одно значение, два имени, на одном экране. Свойства нет в реестре
+  // (кастомный аспект) — печатается как есть: честная деградация, а не пустая подпись.
+  //
+  // Имена полей здесь СТАРЫЕ (`target_value`), потому что и список `keyFieldsFor`, и сама
+  // карта значений (`aspects_legacy`) — старой формы; аспект-носитель известен, и перевод
+  // в id свойства делает `fieldLabel` той же таблицей, что сервер.
   // Отбор по наличию значения повторяет правило сервера, который собирает keyFields
   // чат-карточек из того же реестра и незаполненные поля пропускает
   // (tools/dispatch.ts: `if (value !== undefined) keyFields[field] = value`).
@@ -263,7 +272,7 @@ export function NativeRow({
       <dl className="flex gap-2 text-xs text-text-secondary">
         {fields.map((k) => (
           <div key={k} className="flex gap-1">
-            <dt>{fieldLabel(k)}:</dt>
+            <dt>{fieldLabel(registry, k, firstAspect)}:</dt>
             <dd>{String(firstFields?.[k] ?? '—')}</dd>
           </div>
         ))}

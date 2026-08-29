@@ -8,7 +8,7 @@
 //
 // Здесь только ТЕКСТ — без JSX и без политики показа: что сворачивать, что прятать и в каком
 // порядке рисовать, каждое место решает само.
-import { aspectLabel, fieldLabel } from '../../../lib/field-labels';
+import { fieldLabel, type RegistryLookup } from '../../../lib/registry/labels';
 import type { RouterOutputs } from '../../../trpc';
 
 /** Единица пачки С СУДЬБОЙ — ровно то, что отдаёт `routine.runUnits` (Р-10). */
@@ -84,13 +84,19 @@ export function questionFateNote(unit: Pick<RunUnitView, 'fate' | 'answer'>): st
 }
 
 /**
- * Подпись строки «было → станет». Поле аспекта — парой по-русски («Задача · статус»); поле
- * САМОЙ ЗАПИСИ (заголовок, метки, архив) — одним `fieldLabel`: аспекта у такой строки нет
- * вовсе, его не кладёт производитель (`snapshotDeferredUnit`), и выдуманный разделитель
- * «· » перед пустым местом читался бы как потерянное слово.
+ * Подпись строки «было → станет» — ОДНИМ именем поля.
+ *
+ * Пары «Аспект · поле» здесь больше нет, и это не упрощение показа, а форма данных: строка
+ * отложенного действия адресуется СВОЙСТВОМ (§А1-1), ключа `aspect` производитель
+ * (`tools/dispatch.ts`, `snapshotDeferredUnit`) не кладёт вовсе с Задачи 12 — ни у поля
+ * аспекта, ни у поля самой записи. Прежняя ветка с разделителем «· » была недостижима, а
+ * держал её на плаву фикстура теста, писавшая `aspect` руками.
+ *
+ * Слово — из РЕЕСТРА (§А9-2), поэтому читатель снимка идёт первым аргументом: модуль чистый
+ * (его зовут и карточка ленты, и блок пачки на экране прогона), React ему недоступен, а
+ * своей копии подписей у него быть не должно — это ровно тот второй словарь, который
+ * реформа и убирает.
  */
-export function unitRowLabel(row: { aspect?: string; field: string }): string {
-  return row.aspect === undefined
-    ? fieldLabel(row.field)
-    : `${aspectLabel(row.aspect)} · ${fieldLabel(row.field)}`;
+export function unitRowLabel(reg: RegistryLookup, row: { field: string }): string {
+  return fieldLabel(reg, row.field);
 }

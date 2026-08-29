@@ -1,10 +1,10 @@
 import { OWNER_LOCALE } from '@orbis/shared/query';
 import { expect, test } from 'vitest';
-import { BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY } from '../../test/registry';
+import { BUILTIN_REGISTRY } from '../../test/registry';
 import { buildQueryRegistry, registryOf } from './catalog';
 import { parseBlock } from './parse';
 
-const registry = buildQueryRegistry(BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY);
+const registry = buildQueryRegistry(BUILTIN_REGISTRY);
 
 test('buildQueryRegistry ключует каталог по id свойства, а тип берёт из реестра', () => {
   // Ключ каталога — id свойства (§А5-7: его несёт узел `{prop}`), а не имя поля аспекта.
@@ -21,23 +21,26 @@ test('buildQueryRegistry собирает снимок разбора: свой�
   expect(registry.parse.roles.get('dependency')?.key).toBe('dependency');
 });
 
-// Половина снимка — не реестр: без одного из словарей разбор врал бы `UNKNOWN_FIELD` там, где
-// имя просто ещё не доехало, а сборка «как есть» уронила бы экран на `undefined.map`.
-test('registryOf: неполный снимок даёт null, полный — реестр', () => {
-  expect(
-    registryOf(BUILTIN_WIRE_ASPECTS, { properties: BUILTIN_WIRE_REGISTRY.properties }),
-  ).toBeNull();
-  expect(registryOf(BUILTIN_WIRE_ASPECTS, { roles: BUILTIN_WIRE_REGISTRY.roles })).toBeNull();
-  expect(registryOf(undefined, BUILTIN_WIRE_REGISTRY)).toBeNull();
-  expect(registryOf(BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY)).not.toBeNull();
+// «Снимка ещё нет» и «снимок пустой» — разные вещи, и разница наблюдаема: по пустому каталогу
+// блок нарисовался бы красной плашкой «неизвестное свойство», то есть неправдой о запросе, а
+// по отсутствующему — честной загрузкой. Половины снимка (свойства без ролей) больше не
+// бывает вовсе: три словаря едут одним ответом (§А9-2), и проверять её было бы нечего.
+test('registryOf: без ответа — null, с ответом — реестр', () => {
+  expect(registryOf(undefined)).toBeNull();
+  const reg = registryOf(BUILTIN_REGISTRY);
+  expect(reg).not.toBeNull();
+  expect(reg?.properties.length).toBe(BUILTIN_REGISTRY.properties.length);
+  expect(reg?.aspects.length).toBe(BUILTIN_REGISTRY.aspects.length);
 });
 
-// Колонка `view_config` nullable, и `null` означает «аспект без раскладки карточки». Форме
-// запроса она не нужна вовсе, а разбор строгой схемой на ней падал бы — и уронил бы весь
-// экран: error boundary у приложения нет.
-test('buildQueryRegistry переживает аспект без viewConfig', () => {
-  const wire = BUILTIN_WIRE_ASPECTS.map((a) => ({ ...a, viewConfig: null }));
-  expect(() => buildQueryRegistry(wire, BUILTIN_WIRE_REGISTRY)).not.toThrow();
+// Аспект приезжает ДЕКЛАРАЦИЕЙ §А3-1, а не wire-строкой таблицы: у него нет колонки `schema`
+// и есть `implements`/`viewConfig`, и собирать декларацию обратно разбором на клиенте больше
+// не нужно. Проба — на поле, которого в прежнем ответе (`aspect.list`) не было вовсе.
+test('аспекты каталога — декларации реестра, а не строки таблицы', () => {
+  const task = registry.parse.aspects.get('orbis/task');
+  expect(task?.implements).toEqual([]);
+  expect(task?.viewConfig.keyFields).toContain('orbis/task_status');
+  expect(task).not.toHaveProperty('schema');
 });
 
 test('parseBlock снимает обёртку и разбирает блок новой грамматикой', () => {

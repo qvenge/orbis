@@ -2,6 +2,7 @@ import type { JSONContent } from '@tiptap/core';
 import { TRPCClientError } from '@trpc/client';
 import { useRef, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
+import { useNoteRegistryVersion } from '../../lib/registry/useRegistry';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
 // Листовые модули: своих рантайм-зависимостей у них нет вовсе, и схему редактора они не тянут
 // (стережёт save.test.tsx). Зачем они здесь — см. `settleBodyDraft` ниже.
@@ -261,6 +262,13 @@ export function useEntityDetail(entityId: string) {
     refetchInterval: (query) => runPollInterval(query.state.data?.entity.aspectsMap),
   });
   const { mutation, conflict, dismissConflict } = useEntityUpdate(entityId);
+  /**
+   * Версия реестра из ответа (§А10-1): по ней инвалидируется клиентский снимок подписей и
+   * каталога полей (`useRegistry`). Экран записи — главный её носитель: `entity.get`
+   * уходит отсюда после КАЖДОЙ правки графа (`invalidateGraph`), то есть ровно тогда, когда
+   * снимок мог устареть, и подписи карточек аспектов обновляются без перезагрузки.
+   */
+  useNoteRegistryVersion(get.data?.registryVersion);
   const entity = get.data?.entity;
 
   // Чекбокс task (§3.6): status=done + completed_at (optimistic + откат при ошибке).

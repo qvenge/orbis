@@ -1495,9 +1495,24 @@ const richHandler: MockHandler = (path, input) => {
   }
   if (path === 'entity.resolveRefs') return [];
   if (path === 'entity.update') return entity;
-  if (path === 'aspect.list') return [];
-  return {};
+  // Реестр НАСТОЯЩИЙ: по нему подписаны и секции аспектов, и строки свойств (§А9-2).
+  return registryReply(path) ?? {};
 };
+
+test('карточка аспекта подписана СЛОВОМ из реестра — и секция, и строка свойства', async () => {
+  // Обе подписи на одном экране и из одного источника: заголовок секции — label аспекта,
+  // строка — label свойства, к которому старое имя поля (`status`) переводится таблицей.
+  // Без реестра владелец читал бы здесь `orbis/task` над `status` — то есть два машинных
+  // адреса там, где раньше стояли слова.
+  renderWithProviders(<DetailScreen entityId="e1" />, richHandler);
+  const section = await screen.findByTestId('aspect-orbis/task');
+  expect(await within(section).findByText('Задача')).toBeInTheDocument();
+  expect(within(section).getByText('Состояние задачи')).toBeInTheDocument();
+  expect(section).not.toHaveTextContent('orbis/task_status');
+  // Заголовок секции — именно подпись, а не id: id остаётся в data-testid и в aria-label
+  // кнопки снятия, и проверка выше без этой строки прошла бы на сыром `orbis/task`.
+  expect(within(section).queryByText('orbis/task')).toBeNull();
+});
 
 test('на «Сущности» — emoji, заголовок и тело; карточек аспектов там НЕТ', async () => {
   renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
@@ -3789,15 +3804,16 @@ const PROPOSAL_VIEW = {
   status: 'pending',
   explanation: 'Два дела просрочены — предлагаю перенести срок на сегодня.',
   operations: [
+    // Форма ПРОИЗВОДИТЕЛЯ (`routines/lifecycle.ts`): адрес — id свойства, ключа `aspect` у
+    // строки нет вовсе с Задачи 12, `summary` несёт тот же сырой адрес.
     {
       index: 0,
       tool: 'entity_update',
       entity: { id: 'e2', title: 'Купить билеты' },
-      aspect: 'orbis/task',
-      field: 'due_date',
+      field: 'orbis/due_date',
       before: '2026-08-10',
       after: '2026-08-19',
-      summary: '«Купить билеты»: orbis/task.due_date',
+      summary: '«Купить билеты»: orbis/due_date',
     },
     {
       index: 1,
@@ -3856,7 +3872,9 @@ function routineRunHandler(
         }
       );
     if (path === 'routine.runNow') return { runId: 'rr9' };
-    return {};
+    // Подписи строк предложения и разбора расхождений едут реестром (§А9-2): без него экран
+    // печатал бы владельцу сырые id свойств.
+    return registryReply(path) ?? {};
   };
 }
 
@@ -3913,7 +3931,7 @@ describe('V1: прогон рутины', () => {
     const card = await screen.findByTestId('proposal-card');
 
     // Владелец принимает СПИСОК ПРАВОК, а не пересказ модели (V1.14): поле, «было» и «станет».
-    expect(card).toHaveTextContent('срок');
+    await waitFor(() => expect(card).toHaveTextContent('Задача · Срок'));
     expect(card).toHaveTextContent('2026-08-10');
     expect(card).toHaveTextContent('2026-08-19');
     expect(await within(card).findByText('Купить билеты')).toBeInTheDocument();
@@ -3939,7 +3957,7 @@ describe('V1: прогон рутины', () => {
     // показывают, чем именно, а не плашку ошибки.
     const stale = await within(card).findByTestId('proposal-stale');
     expect(stale).toHaveTextContent('состояние изменилось');
-    expect(stale).toHaveTextContent('статус');
+    expect(stale).toHaveTextContent('Задача · Состояние задачи');
     expect(stale).toHaveTextContent('inbox');
     expect(stale).toHaveTextContent('done');
   });
@@ -4243,7 +4261,7 @@ describe('D42: пачка решений на экране прогона', () =
     // Протухшая названа СВОИМ текстом: в сводке из трёх строк «устарело» без имени единицы
     // не отвечает на вопрос «что именно».
     expect(summary).toHaveTextContent('Срок: «Купить билеты»');
-    expect(summary).toHaveTextContent('статус');
+    expect(summary).toHaveTextContent('Задача · Состояние задачи');
     expect(summary).toHaveTextContent('inbox');
     expect(summary).toHaveTextContent('done');
     // Судьбы — С СЕРВЕРА и после своего же нажатия (Р-10): пачка перечитывается, а не

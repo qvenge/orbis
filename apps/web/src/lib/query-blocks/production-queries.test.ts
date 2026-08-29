@@ -36,10 +36,10 @@ import { CATEGORY_QUERY } from '../../features/chat/useFastPath';
 import { ticketRunsQuery } from '../../features/entity-detail/useTicketRuns';
 import { NEW_QUERY_BLOCK } from '../../features/entity-editor/slash/items';
 import { MEMORY_FILTER } from '../../features/settings/MemoryScreen';
-import { BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY } from '../../test/registry';
+import { BUILTIN_REGISTRY } from '../../test/registry';
 import { buildQueryRegistry } from './catalog';
 
-const registry = buildQueryRegistry(BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY).parse;
+const registry = buildQueryRegistry(BUILTIN_REGISTRY).parse;
 
 /** uuid из корпуса фикстур — подставляется туда, где текст собирается вокруг id сущности. */
 const ID = '019d48ea-4188-765d-8e96-93a0ad9c262a';

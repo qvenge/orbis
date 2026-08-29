@@ -11,6 +11,7 @@
 // двумя местами, и одно событие обязано выглядеть в них одинаково.
 import { useId, useState } from 'react';
 import { invalidateGraph } from '../../lib/invalidate';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import { openEntity } from '../../state/navigation';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -142,6 +143,9 @@ function RunBatch({
   terminalUnanswered: boolean;
 }) {
   const utils = trpc.useUtils();
+  // Разбор расхождений в сводке пачки подписан теми же словами реестра, что и карточки под
+  // ней (§А9-2): владелец читает сводку и карточки подряд.
+  const registry = useRegistry();
   const cancelId = useId();
   const [confirm, setConfirm] = useState(false);
   /**
@@ -228,7 +232,7 @@ function RunBatch({
         text: unit === undefined ? i.pendingId : unitText(unit),
         // Тело приезжает флагом (РП-10) — разворачиваем той же функцией, что и все прочие
         // места показа: иначе «устарело по телу» стояло бы здесь с пустым списком причин.
-        rows: divergenceRows(i),
+        rows: divergenceRows(registry, i),
       };
     });
   const failure = decideAll.isError

@@ -9,6 +9,7 @@ import { entityRouter } from './routers/entity';
 // `import` — зарезервированное слово JS: ключ роутера так назвать можно, переменную нет
 import { importRouter } from './routers/import';
 import { oauthRouter } from './routers/oauth';
+import { registryRouter } from './routers/registry';
 import { relationRouter } from './routers/relation';
 import { routineRouter } from './routers/routine';
 import { userRouter } from './routers/user';
@@ -24,6 +25,9 @@ export const appRouter = router({
   ai: aiRouter,
   user: userRouter,
   aspect: aspectRouter,
+  // Эффективный реестр владельца одним ответом и с версией снимка (§А9-2): по нему web
+  // строит подписи, формы и каталог полей — вместо рукописных словарей в коде.
+  registry: registryRouter,
   budget: budgetRouter,
   import: importRouter,
   // Закреплённые версии тела (С11): страховка владельца перед работой агента

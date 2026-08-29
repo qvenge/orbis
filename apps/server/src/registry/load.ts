@@ -38,6 +38,46 @@ interface Row {
   [column: string]: unknown;
 }
 
+/** Обе половины версии реестра (§А10-1): системная и владельца. */
+export interface RegistryVersions {
+  ownerVersion: number;
+  systemVersion: number;
+}
+
+/**
+ * Версия реестра владельца ОДНИМ запросом — без самих словарей.
+ *
+ * Отдельный вход нужен читателям, которым словари не нужны вовсе: `entity.get` кладёт версию
+ * в ответ, чтобы клиентский кеш реестра было чем инвалидировать (§А10-1), и грузить ради
+ * одного числа 77 свойств, 13 аспектов и 11 ролей на каждое открытие записи было бы дороже
+ * самой записи. `loadRegistry` ниже зовёт этот же запрос — второго места, знающего, ГДЕ
+ * лежат обе половины версии, быть не должно.
+ *
+ * Один запрос, а не два: обе половины — точечные чтения по первичному ключу, и лишний
+ * round-trip по соединению транзакции стоит дороже, чем два подзапроса в одном плане.
+ */
+export async function loadRegistryVersions(tx: Tx, ownerId: string): Promise<RegistryVersions> {
+  const rows = (await tx.execute(sql`
+    SELECT (SELECT version FROM registry_system WHERE id = 1) AS system_version,
+           (SELECT registry_version FROM user_settings WHERE owner_id = ${ownerId}::uuid)
+             AS owner_version`)) as unknown as Row[];
+  const row = rows[0];
+  return {
+    // Строки настроек может не быть вовсе (владелец не проходил онбординг) — это законный
+    // случай, а не отказ: реестр у него ровно системный, и версия его половины нулевая.
+    ownerVersion: (row?.owner_version as number | null | undefined) ?? 0,
+    // А вот системной строки не быть НЕ может: её кладёт миграция 0014. Молча подставить
+    // ноль значило бы выдать «база без миграций» за «сида ещё не было».
+    systemVersion: (() => {
+      const version = row?.system_version as number | null | undefined;
+      if (version === null || version === undefined) {
+        throw new Error('loadRegistry: в registry_system нет строки id=1 — база без миграции 0014');
+      }
+      return version;
+    })(),
+  };
+}
+
 /**
  * ORDER BY owner_id NULLS FIRST: при коллизии id собственное определение ПЕРЕКРЫВАЕТ
  * встроенное — так же, как это делал прежний реестр аспектов. Уникальность БД этого не
@@ -71,12 +111,7 @@ export async function loadRegistry(tx: Tx, ownerId: string): Promise<RegistrySna
     FROM relation_role_definitions
     WHERE owner_id IS NULL OR owner_id = ${ownerId}::uuid
     ORDER BY owner_id NULLS FIRST`)) as unknown as Row[];
-  const ownerRows = (await tx.execute(
-    sql`SELECT registry_version FROM user_settings WHERE owner_id = ${ownerId}::uuid`,
-  )) as unknown as Row[];
-  const systemRows = (await tx.execute(
-    sql`SELECT version FROM registry_system WHERE id = 1`,
-  )) as unknown as Row[];
+  const versions = await loadRegistryVersions(tx, ownerId);
 
   const properties = new Map<string, PropertyDefinition>();
   for (const r of propertyRows) {
@@ -143,22 +178,5 @@ export async function loadRegistry(tx: Tx, ownerId: string): Promise<RegistrySna
     );
   }
 
-  const ownerRow = ownerRows[0];
-  const systemRow = systemRows[0];
-  return {
-    properties,
-    aspects,
-    roles,
-    // Строки настроек может не быть вовсе (владелец не проходил онбординг) — это законный
-    // случай, а не отказ: реестр у него ровно системный, и версия его половины нулевая.
-    ownerVersion: (ownerRow?.registry_version as number | undefined) ?? 0,
-    // А вот системной строки не быть НЕ может: её кладёт миграция 0014. Молча подставить
-    // ноль значило бы выдать «база без миграций» за «сида ещё не было».
-    systemVersion: (() => {
-      if (systemRow === undefined) {
-        throw new Error('loadRegistry: в registry_system нет строки id=1 — база без миграции 0014');
-      }
-      return systemRow.version as number;
-    })(),
-  };
+  return { properties, aspects, roles, ...versions };
 }

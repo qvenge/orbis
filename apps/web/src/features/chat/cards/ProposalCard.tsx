@@ -23,6 +23,7 @@ import { useState } from 'react';
 import { EntityRef } from '../../../lib/entity-ref/EntityRef';
 import { formatDate } from '../../../lib/format';
 import { invalidateGraph } from '../../../lib/invalidate';
+import { useRegistry } from '../../../lib/registry/useRegistry';
 import { openEntity } from '../../../state/navigation';
 import { type RouterOutputs, trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
@@ -171,6 +172,8 @@ export function ProposalCard({
   threadId?: string;
 }) {
   const utils = trpc.useUtils();
+  // Подписи строк предложения и разбора расхождений — из реестра (§А9-2).
+  const registry = useRegistry();
   const queryClient = useQueryClient();
   const tz = trpc.user.getSettings.useQuery().data?.timezone;
   const proposal = trpc.routine.proposal.useQuery({ runId });
@@ -202,7 +205,7 @@ export function ProposalCard({
       // Принятое предложение правит и деньги (перенос категории, сумма, статус траты) —
       // бюджетные агрегаты живут своим ключом и в invalidateGraph не входят (ConfirmationCard).
       if (result.status === 'applied') void utils.budget.invalidate();
-      setDecidedRows(result.status === 'stale' ? divergenceRows(result) : null);
+      setDecidedRows(result.status === 'stale' ? divergenceRows(registry, result) : null);
       setReplacedReason(result.status === 'replaced' ? result.reason : null);
       /**
        * Лента треда живёт СВОИМ ключом react-query, и `invalidateGraph` его не касается
@@ -227,7 +230,7 @@ export function ProposalCard({
   const staleRows =
     decidedRows ??
     (view?.status === 'stale' && view.mismatches !== undefined
-      ? view.mismatches.map((m) => ({ key: noteKey(m), text: noteText(m) }))
+      ? view.mismatches.map((m) => ({ key: noteKey(m), text: noteText(registry, m) }))
       : null);
 
   /**
@@ -294,7 +297,7 @@ export function ProposalCard({
                 // Ключ — ПАРОЙ (операция + поле): у одной операции `entity_update` строк
                 // столько, сколько полей она правит, и `index` у них общий (task-11-report).
                 <li
-                  key={`${op.index}:${op.aspect ?? ''}:${op.field ?? ''}`}
+                  key={`${op.index}:${op.field ?? ''}`}
                   className="flex flex-wrap items-baseline gap-x-2 border-line/60 border-b py-1 last:border-b-0"
                 >
                   {op.entity !== undefined && (
@@ -302,7 +305,7 @@ export function ProposalCard({
                       <EntityRef id={op.entity.id} onOpen={openEntity} />
                     </span>
                   )}
-                  <span className="text-text-secondary">{rowLabel(op)}</span>
+                  <span className="text-text-secondary">{rowLabel(registry, op)}</span>
                   {units !== undefined ? (
                     <CollapsedBodyDiff units={units} entityId={op.entity?.id} />
                   ) : (

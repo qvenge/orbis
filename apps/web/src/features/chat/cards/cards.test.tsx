@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../../state/navigation';
 import { type MockHandler, renderWithProviders, trpcError } from '../../../test/harness';
+import { registryReply } from '../../../test/registry';
 import { smoothAuditText } from '../format-audit';
 import { MEMORY_RULES_QUERY } from '../memoryRules';
 import { type ChatMessage, useChatThread } from '../useChatThread';
@@ -48,7 +49,7 @@ test('entity_card: Undo зовёт ai.undo(undoActionId) и гасит карт�
             entityId: 'e1',
             title: 'Обед',
             aspects: ['orbis/financial'],
-            keyFields: { amount: '340.00', direction: 'expense' },
+            keyFields: { 'orbis/amount': '340.00', 'orbis/direction': 'expense' },
             undoActionId: 'act1',
           },
         ]),
@@ -322,11 +323,16 @@ const finCard = {
   entityId: 'e1',
   title: 'Обед 340',
   aspects: ['orbis/financial'],
+  // Адреса — id СВОЙСТВ: ровно так их кладёт и сервер (`keyFieldsOf` по `view_config`),
+  // и быстрый ввод (`fastPathCard` — все `props` создания). Имена полей старой схемы,
+  // стоявшие здесь до Задачи 13a, не совпадали НИ С ОДНИМ ключом настоящего ответа, и
+  // карточка с ними была фикстурой невозможного: строка остатка конверта, которую этот
+  // сьют проверяет, в продукте не рисовалась вовсе.
   keyFields: {
-    amount: '340.00',
-    direction: 'expense',
-    category_ref: 'c1',
-    occurred_on: '2026-07-13',
+    'orbis/amount': '340.00',
+    'orbis/direction': 'expense',
+    'orbis/finance_category': 'c1',
+    'orbis/occurred_on': '2026-07-13',
   },
   undoActionId: 'act1',
 };
@@ -424,7 +430,7 @@ test('нефинансовая карточка без category_ref остато
 test('income-карточка остаток НЕ запрашивает (§4.1 — остаток про расход)', async () => {
   const incomeCard = {
     ...finCard,
-    keyFields: { ...finCard.keyFields, direction: 'income' },
+    keyFields: { ...finCard.keyFields, 'orbis/direction': 'income' },
   };
   const { calls } = renderWithProviders(<div>{renderCards(msg([incomeCard]))}</div>, (path) =>
     path === 'budget.envelopeForCategory' ? envStatus : {},
@@ -437,7 +443,7 @@ test('income-карточка остаток НЕ запрашивает (§4.1 
 test('planned-карточка остаток НЕ запрашивает — записи в spent ещё нет (§2.7)', async () => {
   const plannedCard = {
     ...finCard,
-    keyFields: { ...finCard.keyFields, planned: true },
+    keyFields: { ...finCard.keyFields, 'orbis/planned': true },
   };
   const { calls } = renderWithProviders(<div>{renderCards(msg([plannedCard]))}</div>, (path) =>
     path === 'budget.envelopeForCategory' ? envStatus : {},
@@ -488,8 +494,23 @@ const categoryEntity = {
 const noEnvelope = (path: string, categories: unknown) => {
   if (path === 'budget.envelopeForCategory') return null;
   if (path === 'entity.query') return categories;
-  return {};
+  // Реестр НАСТОЯЩИЙ: подписи полей карточки берутся из него (§А9-2).
+  return registryReply(path) ?? {};
 };
+
+test('entity_card: поля подписаны СЛОВАМИ реестра, а не id свойств (§А9-2)', async () => {
+  // Сетка «подпись: значение» — единственное место карточки, где виден адрес свойства.
+  // До Задачи 13a словарь подписей не знал ни одного из этих ключей (они сменились на id
+  // свойств Задачей 12), и владелец читал в ленте `orbis/amount` вместо «Сумма».
+  renderWithProviders(<div>{renderCards(msg([finCard]))}</div>, (path) =>
+    noEnvelope(path, [categoryEntity]),
+  );
+  const card = await screen.findByTestId('entity-card');
+  expect(await within(card).findByText('Сумма')).toBeInTheDocument();
+  expect(within(card).getByText('Категория')).toBeInTheDocument();
+  expect(card).not.toHaveTextContent('orbis/amount');
+  expect(card).not.toHaveTextContent('orbis/finance_category');
+});
 
 test('entity_card: категория показана НАЗВАНИЕМ, а не uuid (D6c п.2)', async () => {
   const { calls } = renderWithProviders(<div>{renderCards(msg([finCard]))}</div>, (path) =>
@@ -512,7 +533,7 @@ test('entity_card: категории нет в списке → uuid как з�
     ...finCard,
     entityId: 'e2',
     title: 'Кино 500',
-    keyFields: { ...finCard.keyFields, category_ref: 'c-неизвестная' },
+    keyFields: { ...finCard.keyFields, 'orbis/finance_category': 'c-неизвестная' },
   };
   renderWithProviders(<div>{renderCards(msg([finCard, ghostCard]))}</div>, (path) =>
     noEnvelope(path, [categoryEntity]),
@@ -831,26 +852,33 @@ const PROPOSAL_CARD = {
  * `before: 'absent'`: литерал значит «поля не было», и напечатать его сырым словом значило бы
  * показать владельцу выдуманное текущее значение.
  */
+/**
+ * Строки предложения РОВНО в той форме, в которой их отдаёт сервер (`routines/lifecycle.ts`):
+ * адрес — id свойства, ключа `aspect` нет вовсе (с Задачи 12 строка адресуется свойством,
+ * а не парой «аспект + поле»), `summary` — запасной текст с тем же сырым адресом.
+ *
+ * До Задачи 13a фикстура писала `aspect` и старое имя поля руками — форму, которой сервер не
+ * производит ни в одном пути. Подписи в тесте выходили русскими, а в продукте карточка
+ * печатала владельцу `«Купить билеты»: orbis/due_date`.
+ */
 const PROPOSAL_OPERATIONS = [
   {
     index: 0,
     tool: 'entity_update',
     entity: { id: 'e1', title: 'Купить билеты' },
-    aspect: 'orbis/task',
-    field: 'due_date',
+    field: 'orbis/due_date',
     before: '2026-08-10',
     after: '2026-08-19',
-    summary: '«Купить билеты»: orbis/task.due_date',
+    summary: '«Купить билеты»: orbis/due_date',
   },
   {
     index: 1,
     tool: 'entity_update',
     entity: { id: 'e2', title: 'Позвонить врачу' },
-    aspect: 'orbis/task',
-    field: 'status',
+    field: 'orbis/task_status',
     before: 'absent',
     after: 'inbox',
-    summary: '«Позвонить врачу»: orbis/task.status',
+    summary: '«Позвонить врачу»: orbis/task_status',
   },
 ];
 
@@ -875,7 +903,7 @@ const proposalHandler =
       const op = PROPOSAL_OPERATIONS.find((o) => o.entity.id === id);
       return { entity: { id, title: op?.entity.title ?? `T-${id}` } };
     }
-    return {};
+    return registryReply(path) ?? {};
   };
 
 test('proposal_card: список операций с русскими подписями полей, объяснение прозой и обе кнопки при pending', async () => {
@@ -887,11 +915,14 @@ test('proposal_card: список операций с русскими подп�
   expect(await within(card).findByText('Позвонить врачу')).toBeInTheDocument();
   // Объяснение — то, ради чего карточку читают: что рутина увидела и почему предлагает это.
   expect(card).toHaveTextContent('Два дела просрочены');
-  // Подписи полей — по-русски (fieldLabel), а не сырыми ключами схемы.
-  expect(card).toHaveTextContent('срок');
+  // Подписи полей — из реестра (§А9-2), парой «аспект-носитель · свойство», а не сырым id
+  // и не запасным текстом сервера: `summary` несёт ровно тот же адрес, что и `field`.
+  expect(card).toHaveTextContent('Задача · Срок');
   expect(card).toHaveTextContent('2026-08-10');
   expect(card).toHaveTextContent('2026-08-19');
-  expect(card).toHaveTextContent('статус');
+  expect(card).toHaveTextContent('Задача · Состояние задачи');
+  expect(card).not.toHaveTextContent('orbis/due_date');
+  expect(card).not.toHaveTextContent('orbis/task_status');
   // `before: 'absent'` — «поля не было», а не значение «absent».
   expect(card).toHaveTextContent('(не было)');
   expect(card).not.toHaveTextContent('absent');
@@ -1059,7 +1090,7 @@ test('proposal_card: у статуса stale расхождения показа
   const card = await screen.findByTestId('proposal-card');
   const stale = await within(card).findByTestId('proposal-stale');
   expect(stale).toHaveTextContent('состояние изменилось');
-  expect(stale).toHaveTextContent('статус');
+  expect(stale).toHaveTextContent('Задача · Состояние задачи');
   expect(stale).toHaveTextContent('ожидали «inbox», сейчас «done»');
   // Два «Устарело» подряд читались бы как два разных сообщения об одном и том же.
   expect(within(card).getAllByText(/Устарело/)).toHaveLength(1);
@@ -1381,11 +1412,12 @@ const DEFERRED_CARD = {
   runId: 'rr9',
   routineId: 'rt9',
   summary: 'Архивация: «Старый проект»',
+  // Обе строки — В ФОРМЕ ПРОИЗВОДИТЕЛЯ (`snapshotDeferredUnit`): адрес один, ключа `aspect`
+  // нет ни у поля аспекта, ни у поля записи. Поле аспекта адресуется id свойства, поле
+  // записи — именем колонки (`archived`), и вторая форма здесь НЕ для красоты: у неё
+  // свой путь резолва (core-проекция §А1-3), и без неё он остался бы непроверенным.
   rows: [
-    { aspect: 'orbis/task', field: 'status', before: 'inbox', after: 'done' },
-    // Поле САМОЙ ЗАПИСИ: аспекта у строки нет вовсе (tools/dispatch.ts snapshotDeferredUnit).
-    // В расхождении оно приезжает core-свойством `orbis/archived` (§А1-3) и подписывается тем
-    // же одним словом — см. тест ниже: носителя-аспекта у core-проекции нет ни там, ни здесь.
+    { field: 'orbis/task_status', before: 'inbox', after: 'done' },
     { field: 'archived', before: 'false', after: 'true' },
   ],
 };
@@ -1418,7 +1450,7 @@ const unitsHandler =
   (path) => {
     if (path === 'routine.runUnits') return units;
     if (path === 'chat.listMessages') return [];
-    return mutations[path] ?? {};
+    return mutations[path] ?? registryReply(path) ?? {};
   };
 
 test('question_card открытый: варианты кнопками и свободное поле; клик варианта шлёт текст и индекс; после ответа — свёрнутая строка-итог (судьба С СЕРВЕРА)', async () => {
@@ -1515,17 +1547,18 @@ test('deferred_action_card: строки «было → станет» с рус
         bodyChanged: false,
       };
     }
-    return {};
+    return registryReply(path) ?? {};
   });
   const card = await screen.findByTestId('deferred-action-card');
   expect(await within(card).findByRole('button', { name: 'Принять' })).toBeInTheDocument();
   expect(card).toHaveTextContent('Архивация: «Старый проект»');
-  // Подписи строк — по-русски: поле аспекта парой «Аспект · поле»…
-  expect(card).toHaveTextContent('Задача · статус');
+  // Подписи строк — из реестра, по-русски и по ОБОИМ родам адреса: свойство аспекта…
+  await waitFor(() => expect(card).toHaveTextContent('Состояние задачи'));
+  expect(card).not.toHaveTextContent('orbis/task_status');
   expect(card).toHaveTextContent('inbox');
   expect(card).toHaveTextContent('done');
-  // …а поле САМОЙ ЗАПИСИ — одним fieldLabel: аспекта у него нет (Р0-7)
-  expect(card).toHaveTextContent('архив');
+  // …и поле САМОЙ ЗАПИСИ, чей адрес — имя колонки: реестр знает его core-проекцией §А1-3.
+  expect(card).toHaveTextContent('В архиве');
   expect(card).not.toHaveTextContent('archived');
 
   fireEvent.click(within(card).getByRole('button', { name: 'Принять' }));
@@ -1539,7 +1572,7 @@ test('deferred_action_card: строки «было → станет» с рус
   const stale = await within(card).findByTestId('deferred-stale');
   // Core-свойство колонки читается по-русски, а не машинным id (§А1-3): носителя-аспекта у
   // него нет, и выдумывать его подписи больше нечем — псевдо-аспект снят Задачей 5.
-  expect(stale).toHaveTextContent('архив: ожидали false, сейчас true');
+  expect(stale).toHaveTextContent('В архиве: ожидали false, сейчас true');
   expect(stale).not.toHaveTextContent('orbis/archived');
   // Судьба приехала с сервера: карточка свернулась, кнопок нет…
   expect(await within(card).findByText(/— устарело/)).toBeInTheDocument();

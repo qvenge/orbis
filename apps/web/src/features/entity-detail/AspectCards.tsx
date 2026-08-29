@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { aspectLabel, fieldLabel } from '../../lib/field-labels';
+import { aspectLabel, fieldLabel, type RegistryLookup } from '../../lib/registry/labels';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import { type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
 import { CATEGORIES_QUERY, toOption } from '../budget/categories';
@@ -81,6 +82,9 @@ export function readOnlyText(value: unknown): string {
 export function AspectCards({ entity }: { entity: Entity }) {
   const { mutation, conflict } = useEntityUpdate(entity.id);
   const utils = trpc.useUtils();
+  // Подписи секций и строк — из реестра (§А9-2), ОДНИМ снимком на все карточки: он же
+  // уходит пропом в строки, чтобы каждая из них не подписывалась на снимок отдельно.
+  const registry = useRegistry();
   const aspects = entity.aspectsMap as Record<string, Record<string, unknown>>;
 
   // Смена категории (sign-off владельца K6) — обычный entity.update: перепривязку
@@ -119,7 +123,7 @@ export function AspectCards({ entity }: { entity: Entity }) {
           >
             <div className="flex items-center justify-between">
               <p className="text-2xs font-medium uppercase tracking-wide text-text-muted">
-                {aspectLabel(aspectId)}
+                {aspectLabel(registry, aspectId)}
               </p>
               <Button
                 variant="ghost"
@@ -139,14 +143,22 @@ export function AspectCards({ entity }: { entity: Entity }) {
                 aspectId === FINANCIAL && field === CATEGORY_REF ? (
                   <CategoryField
                     key={field}
+                    registry={registry}
                     value={typeof value === 'string' ? value : ''}
                     onSelect={setCategory}
                   />
                 ) : !isScalar(value) ? (
-                  <ReadOnlyField key={field} aspectId={aspectId} field={field} value={value} />
+                  <ReadOnlyField
+                    key={field}
+                    registry={registry}
+                    aspectId={aspectId}
+                    field={field}
+                    value={value}
+                  />
                 ) : (
                   <AspectField
                     key={field}
+                    registry={registry}
                     aspectId={aspectId}
                     field={field}
                     value={value}
@@ -173,7 +185,15 @@ export function AspectCards({ entity }: { entity: Entity }) {
  * Смонтирован только на financial-сущностях, поэтому запрос категорий не уходит с
  * каждого detail-экрана.
  */
-function CategoryField({ value, onSelect }: { value: string; onSelect: (id: string) => void }) {
+function CategoryField({
+  registry,
+  value,
+  onSelect,
+}: {
+  registry: RegistryLookup;
+  value: string;
+  onSelect: (id: string) => void;
+}) {
   const q = trpc.entity.query.useQuery({ query: CATEGORIES_QUERY });
   // Array.isArray — та же защита, что в TransactionsScreen: карточка живёт на общем
   // detail-экране, и неожиданная форма ответа не должна ронять всю страницу.
@@ -182,7 +202,7 @@ function CategoryField({ value, onSelect }: { value: string; onSelect: (id: stri
 
   return (
     <>
-      <dt className="text-text-muted">{fieldLabel(CATEGORY_REF)}</dt>
+      <dt className="text-text-muted">{fieldLabel(registry, CATEGORY_REF, FINANCIAL)}</dt>
       <dd>
         <select
           aria-label={`${FINANCIAL} ${CATEGORY_REF}`}
@@ -232,17 +252,19 @@ function CategoryField({ value, onSelect }: { value: string; onSelect: (id: stri
  * нет, и это ровно то, что нужно сказать глазу: здесь не правят.
  */
 function ReadOnlyField({
+  registry,
   aspectId,
   field,
   value,
 }: {
+  registry: RegistryLookup;
   aspectId: string;
   field: string;
   value: unknown;
 }) {
   return (
     <>
-      <dt className="text-text-muted">{fieldLabel(field)}</dt>
+      <dt className="text-text-muted">{fieldLabel(registry, field, aspectId)}</dt>
       <dd
         data-testid={`aspect-value-${aspectId}-${field}`}
         className="break-words px-2 py-1 text-sm text-text-secondary"
@@ -266,11 +288,18 @@ function ReadOnlyField({
  * она не превращается ничем.
  */
 export function AspectField({
+  registry,
   aspectId,
   field,
   value,
   onSave,
 }: {
+  /**
+   * Снимок реестра для подписи поля (§А9-2) — ПРОПОМ, а не своим `useRegistry()` внутри:
+   * компонент экспортирован и живёт вторым родителем в слое предложения (Ш1.3), где строк
+   * на экране десятки, и свой хук в каждой из них подписал бы на снимок каждую строку.
+   */
+  registry: RegistryLookup;
   /** Идёт только в aria-label: без него у пяти инпутов подряд одно имя на всех. */
   aspectId: string;
   field: string;
@@ -295,7 +324,7 @@ export function AspectField({
   // начинаются с одной вертикали независимо от длины лейбла (лейблы выровнены вправо).
   return (
     <>
-      <dt className="text-text-muted">{fieldLabel(field)}</dt>
+      <dt className="text-text-muted">{fieldLabel(registry, field, aspectId)}</dt>
       <dd>
         <input
           aria-label={`${aspectId} ${field}`}

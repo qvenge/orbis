@@ -15,6 +15,7 @@
 // говорили?», а здесь разговора за спиной нет — владелец разбирает пачку утром, и решает он
 // не пересказ, а перечень полей.
 import { useState } from 'react';
+import { useRegistry } from '../../../lib/registry/useRegistry';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
@@ -36,6 +37,8 @@ export function DeferredActionCard({
     pendingId: card.pendingId,
     threadId,
   });
+  // Подписи строк и разбора расхождений — из реестра (§А9-2).
+  const registry = useRegistry();
   /**
    * Развёрнуты ли строки решённой карточки. Локально В САМОЙ карточке — тот же довод, что у
    * `QuestionCard`: снаружи от разворота не зависит ничего, а у карточки в ленте родителя с
@@ -59,7 +62,7 @@ export function DeferredActionCard({
 
   const decide = trpc.routine.decideDeferred.useMutation({
     onSuccess: (result) => {
-      setStaleRows(result.status === 'stale' ? divergenceRows(result) : null);
+      setStaleRows(result.status === 'stale' ? divergenceRows(registry, result) : null);
       setAlreadyFate(result.status === 'already' ? result.fate : null);
       // Бюджет перечитывается только у ПРИМЕНЁННОГО: отложенная правка могла тронуть сумму,
       // категорию или статус траты (см. `settled`).
@@ -132,13 +135,13 @@ export function DeferredActionCard({
       {(!resolved || expanded) && (
         <ul data-testid="deferred-rows" className="flex flex-col gap-1 text-sm">
           {card.rows.map((row) => (
-            // Ключ — ПАРОЙ (аспект + поле): одна единица правит несколько полей, и поле
-            // аспекта может совпасть по имени с полем самой записи.
+            // Ключ — сам адрес поля: с Задачи 12 он один на все роды строк (id свойства
+            // либо имя поля записи), и совпасть два адреса в одной единице не могут.
             <li
-              key={`${row.aspect ?? ''}:${row.field}`}
+              key={row.field}
               className="flex flex-wrap items-baseline gap-x-2 border-line/60 border-b py-1 last:border-b-0"
             >
-              <span className="text-text-secondary">{unitRowLabel(row)}</span>
+              <span className="text-text-secondary">{unitRowLabel(registry, row)}</span>
               <span className="flex flex-wrap items-baseline gap-x-1">
                 {/* «Было» — снятое ПРЕДУСЛОВИЕ, а не значение сейчас (ОЧ.13). У полей, которых
                     у цели не было, предусловия нет вовсе — такая строка едет одним «станет». */}

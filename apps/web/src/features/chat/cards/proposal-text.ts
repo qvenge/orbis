@@ -11,13 +11,8 @@
 // чистый перенос, после второго потребителя он дорожает. Здесь только ТЕКСТ — без JSX и без
 // политики показа: что резать, что прятать и в каком порядке рисовать, каждое место решает
 // само (лента режет дифф до трёх блоков, запись показывает весь).
-import {
-  BODY_NOTE_PROPERTY,
-  BUILTIN_ASPECT_IDS,
-  legacyFieldToProperty,
-  propertyToLegacyField,
-} from '@orbis/shared';
-import { aspectLabel, fieldLabel } from '../../../lib/field-labels';
+import { BODY_NOTE_PROPERTY, legacyFieldToProperty } from '@orbis/shared';
+import { propertyIdOf, type RegistryLookup } from '../../../lib/registry/labels';
 import type { RouterOutputs } from '../../../trpc';
 
 type ProposalView = NonNullable<RouterOutputs['routine']['proposal']>;
@@ -77,14 +72,24 @@ export function beforeText(value: unknown): string {
 }
 
 /**
- * Подпись строки. Поле аспекта — по-русски (`orbis/task` + `due_date` → «Задача · срок»);
- * всё остальное (создание записи, связь, поля вне аспектов) — запасным текстом сервера: он
- * уже собран из тех же имён, а второй словарь на клиенте разошёлся бы с ним первой же схемой.
+ * Подпись строки предложения: подпись свойства из реестра, а если реестр этого адреса не
+ * знает — запасной текст сервера (`summary`).
+ *
+ * Почему именно так, а не «сырой адрес». Строка предложения бывает трёх родов: правка
+ * свойства (`field` — id свойства, §А1-1), правка поля записи (`title`, `tags`, `body`,
+ * `emoji`) и операция без единой видимой правки (создание, связь) — у последней `field` нет
+ * вовсе. У полей `body`/`tags`/`emoji` свойства в срезе А нет, зато `summary` сервера уже
+ * несёт их русские имена (`CORE_FIELD_LABELS`), и печатать вместо «тело» слово `body` было
+ * бы шагом назад. Поэтому запасной текст — не заглушка, а ответ для тех адресов, о которых
+ * реестр молчит; своего словаря этих слов на клиенте по-прежнему нет.
+ *
+ * Ключ `aspect` у строки предложения сервер не пишет с Задачи 12 (`routines/lifecycle.ts`:
+ * «строка на СВОЙСТВО, а не на пару»), поэтому прежней ветки с парой «Аспект · поле» здесь
+ * больше нет — она была недостижима.
  */
-export function rowLabel(op: ProposalRow): string {
-  return op.aspect !== undefined && op.field !== undefined
-    ? `${aspectLabel(op.aspect)} · ${fieldLabel(op.field)}`
-    : op.summary;
+export function rowLabel(reg: RegistryLookup, op: ProposalRow): string {
+  const property = op.field === undefined ? undefined : propertyIdOf(reg, op.field);
+  return property === undefined ? op.summary : propertyLabel(reg, property);
 }
 
 /** Чего ждало предложение: список допустимых значений либо «поля не было». */
@@ -106,37 +111,32 @@ export type ProposalNote =
   | { aspect: string; field: string; note: string };
 
 /**
- * id свойства → пара «аспект + поле», под которой у подписи ЕСТЬ русское имя; `aspect`
- * отсутствует, когда носителя-аспекта нет вовсе.
+ * Подпись свойства: «Аспект-носитель · Свойство» либо одно имя, когда носителя нет.
  *
- * Подписи в `lib/field-labels` знают старые имена полей — на реестр их переводит Задача 13a.
- * До неё расхождение, названное свойством, читалось бы как «task_status: ожидали done»
- * вместо «Задача · статус: …». Перевод идёт по ТОЙ ЖЕ таблице соответствий `@orbis/shared`,
- * что и весь остальной срез; второй таблицы здесь нет и не заводится.
+ * Носителя даёт РЕЕСТР (`carrierOf`), а не переходная карта старой формы, по которой пара
+ * собиралась раньше: карта знает только тринадцать встроенных аспектов и умирает Задачей 23,
+ * а у свойства владельца носителя в ней нет вовсе — и расхождение по нему читалось бы без
+ * единого слова о том, где это поле живёт.
  *
- * Аспекта нет у core-проекций (§А1-3: `orbis/archived` отложенной архивации) и у свободных
- * свойств владельца. Прежде им подставлялся псевдо-аспект `orbis/entity` либо пустая строка —
- * два разных способа сказать «носителя нет», из которых один печатался словом «Запись», а
- * второй — пустым местом перед разделителем. Теперь способ один: аспекта просто нет, и
- * подпись — одно имя поля (ровно как у строк отложенной единицы, `unitRowLabel`).
+ * Носителя нет у core-проекций (§А1-3: `orbis/archived` отложенной архивации) и у свободных
+ * свойств владельца — тогда подпись одна (ровно как у строк отложенной единицы,
+ * `unitRowLabel`). Прежде таким строкам подставлялся псевдо-аспект `orbis/entity` либо
+ * пустая строка — два разных способа сказать «носителя нет», из которых один печатался
+ * словом «Запись», а второй — пустым местом перед разделителем.
  *
- * Слитое свойство (В1) имеет два носителя; берётся первый — от выбора зависит только слово
+ * Слитое свойство (В1) имеет двух носителей; берётся первый — от выбора зависит только слово
  * слева от точки, а не смысл строки.
+ *
+ * Свойства, которого в снимке нет вовсе (снято, реестр ещё едет), — короткое имя из его id:
+ * `user/часы` читается как «часы», а не как машинный адрес с namespace.
  */
-export function legacyPairOf(propertyId: string): { aspect?: string; field: string } {
-  for (const aspect of BUILTIN_ASPECT_IDS) {
-    const field = propertyToLegacyField(propertyId, aspect);
-    if (field !== undefined) return { aspect, field };
-  }
-  return { field: propertyId.split('/').at(-1) ?? propertyId };
-}
-
-/** Подпись свойства: «Задача · статус» либо одно имя, когда носителя-аспекта нет. */
-export function propertyLabel(propertyId: string): string {
-  const pair = legacyPairOf(propertyId);
-  return pair.aspect === undefined
-    ? fieldLabel(pair.field)
-    : `${aspectLabel(pair.aspect)} · ${fieldLabel(pair.field)}`;
+export function propertyLabel(reg: RegistryLookup, propertyId: string): string {
+  const def = reg.property(propertyId);
+  if (def === undefined) return propertyId.split('/').at(-1) ?? propertyId;
+  const carrier = reg.carrierOf(def.id);
+  return carrier === undefined
+    ? reg.label(def.id)
+    : `${reg.label(carrier.id)} · ${reg.label(def.id)}`;
 }
 
 /**
@@ -153,10 +153,10 @@ function notePropertyOf(m: ProposalNote): string {
  * Строка разбора из аспекта прогона (нота уже словами). Обе формы: свойство (§А7-4) и
  * прежняя пара «аспект + поле».
  */
-export function noteText(m: ProposalNote): string {
+export function noteText(reg: RegistryLookup, m: ProposalNote): string {
   const property = notePropertyOf(m);
   if (property === BODY_NOTE_PROPERTY) return BODY_MISMATCH_TEXT;
-  return `${propertyLabel(property)}: ${m.note}`;
+  return `${propertyLabel(reg, property)}: ${m.note}`;
 }
 
 /** Ключ строки списка — свойство: одно и то же расхождение в обеих формах даёт один ключ. */
@@ -165,8 +165,8 @@ export function noteKey(m: ProposalNote): string {
 }
 
 /** Строка разбора расхождения из ответа `decideProposal` (сырые значения). */
-export function mismatchText(m: Mismatch): string {
-  return `${propertyLabel(m.property)}: ожидали ${expectedText(m.expected)}, сейчас ${fmt(m.actual)}`;
+export function mismatchText(reg: RegistryLookup, m: Mismatch): string {
+  return `${propertyLabel(reg, m.property)}: ожидали ${expectedText(m.expected)}, сейчас ${fmt(m.actual)}`;
 }
 
 /** Готовая строка списка «что разошлось»: ключ React и текст владельцу. */
@@ -184,15 +184,18 @@ export type StaleRow = { key: string; text: string };
  * операции один), и порядок виден только в тесте — но фиксированный порядок дешевле
  * объяснимого.
  */
-export function divergenceRows(divergence: {
-  mismatches: readonly Mismatch[];
-  bodyChanged: boolean;
-}): StaleRow[] {
+export function divergenceRows(
+  reg: RegistryLookup,
+  divergence: {
+    mismatches: readonly Mismatch[];
+    bodyChanged: boolean;
+  },
+): StaleRow[] {
   const rows: StaleRow[] = divergence.bodyChanged
     ? [{ key: BODY_NOTE_PROPERTY, text: BODY_MISMATCH_TEXT }]
     : [];
   for (const m of divergence.mismatches) {
-    rows.push({ key: m.property, text: mismatchText(m) });
+    rows.push({ key: m.property, text: mismatchText(reg, m) });
   }
   return rows;
 }

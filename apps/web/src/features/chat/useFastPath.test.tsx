@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect, test } from 'vitest';
 import { buildQueryRegistry } from '../../lib/query-blocks/catalog';
 import { useRetryBuffer } from '../../state/retry';
 import { mockLink, trpcError } from '../../test/harness';
-import { BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY } from '../../test/registry';
+import { BUILTIN_REGISTRY } from '../../test/registry';
 import { trpc } from '../../trpc';
 import { type ChatMessage, chatThreadKey } from './useChatThread';
 import { useFastPath } from './useFastPath';
@@ -130,7 +130,7 @@ test('уверенный паттерн онлайн → entity.create(source:fa
 // проглатывается — фича приехала бы мёртвой молча. Разбор строгий, без моста старой формы:
 // мост принял бы и непереведённый `kind=rule`, и тест зеленел бы при невыполненной работе.
 test('запрос memory-правил разбирается НОВОЙ грамматикой §А5-3, без отката к мосту', () => {
-  const registry = buildQueryRegistry(BUILTIN_WIRE_ASPECTS, BUILTIN_WIRE_REGISTRY).parse;
+  const registry = buildQueryRegistry(BUILTIN_REGISTRY).parse;
   expect(parseQueryAst(RULES_QUERY.query, registry).ok).toBe(true);
 });
 

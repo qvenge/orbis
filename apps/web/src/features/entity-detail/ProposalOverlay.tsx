@@ -42,6 +42,8 @@ import { useEffect, useRef, useState } from 'react';
 import { EntityRef } from '../../lib/entity-ref/EntityRef';
 import { invalidateGraph } from '../../lib/invalidate';
 import { ThisEntityProvider } from '../../lib/query-blocks/this-entity';
+import type { RegistryLookup } from '../../lib/registry/labels';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import { openEntity } from '../../state/navigation';
 import { type RouterInputs, type RouterOutputs, trpc } from '../../trpc';
 import { Button } from '../../ui/Button';
@@ -275,6 +277,9 @@ function ProposalPlate({
 }) {
   const utils = trpc.useUtils();
   const queryClient = useQueryClient();
+  // Подписи строк и разбора расхождений — из реестра (§А9-2); ОДИН снимок на всю плашку,
+  // дальше уходит пропом в строки.
+  const registry = useRegistry();
   /**
    * Буфер правок значений — ПО КЛЮЧУ СТРОКИ, а не массивом: владелец правит одно поле
    * несколько раз (набрал, стёр, набрал заново), и массив копил бы дубли, которые сервер
@@ -321,7 +326,7 @@ function ProposalPlate({
       // Принятое предложение правит и деньги (перенос категории, сумма, статус траты) —
       // бюджетные агрегаты живут своим ключом и в invalidateGraph не входят.
       if (result.status === 'applied') void utils.budget.invalidate();
-      setStaleRows(result.status === 'stale' ? divergenceRows(result) : null);
+      setStaleRows(result.status === 'stale' ? divergenceRows(registry, result) : null);
       onAnswer(result.status === 'replaced' ? result.reason : null);
       /**
        * Список предложений записи о решении сам не узнает — перечитываем его явно; вместе с
@@ -470,6 +475,7 @@ function ProposalPlate({
                 <ProposalRowView
                   key={rowKey(op)}
                   op={op}
+                  registry={registry}
                   entityId={entityId}
                   hasCurrentDoc={currentDoc !== null}
                   bodyOpen={editingBody.includes(op.index)}
@@ -576,6 +582,7 @@ const NO_BODY_EDIT_FOREIGN = 'Текст правится на самой зап
  */
 function ProposalRowView({
   op,
+  registry,
   entityId,
   hasCurrentDoc,
   bodyOpen,
@@ -587,6 +594,12 @@ function ProposalRowView({
   onEdit,
 }: {
   op: ProposalRow;
+  /**
+   * Снимок реестра для подписи строки (§А9-2) — ПРОПОМ из плашки, а не своим `useRegistry()`:
+   * строк в предложении столько, сколько полей оно правит, и подписка на снимок в каждой из
+   * них перерисовывала бы весь список на каждое обновление кеша реестра.
+   */
+  registry: RegistryLookup;
   /** Запись, на которой стоит слой: у ЕЁ тела есть сторона «было» для клиентского диффа. */
   entityId: string;
   hasCurrentDoc: boolean;
@@ -665,7 +678,7 @@ function ProposalRowView({
             <EntityRef id={op.entity.id} onOpen={openEntity} />
           </span>
         )}
-        <span className="text-text-secondary">{rowLabel(op)}</span>
+        <span className="text-text-secondary">{rowLabel(registry, op)}</span>
         {/* «Было» — снятое ПРЕДУСЛОВИЕ, а не значение сейчас: именно с ним предложение
             сверится на «Принять» (V1.7). У полей вне аспектов предусловия нет вовсе. */}
         {op.before !== undefined && (
@@ -703,6 +716,7 @@ function ProposalRowView({
       ) : editing ? null : editable ? (
         <dl className={FIELD_GRID}>
           <AspectField
+            registry={registry}
             aspectId={op.aspect ?? ''}
             field={op.field ?? ''}
             // Показываем ПРАВЛЕНОЕ, если владелец эту строку уже трогал: иначе свернул и

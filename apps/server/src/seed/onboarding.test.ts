@@ -8,7 +8,6 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  aspectDefinitionSchema,
   aspectJsonSchema,
   BUILTIN_ASPECT_IDS,
   BUILTIN_PROPERTY_META,
@@ -960,15 +959,16 @@ describe('aspect.list (§9.1): реестр builtin + свои', () => {
   });
 });
 
-describe('aspect.properties (§А2-1/§А4-2): реестры свойств и ролей владельца', () => {
-  test('отдаёт встроенные свойства и роли в порядке rank, ownerId у встроенных — null', async () => {
+describe('registry.effective (§А9-2): эффективный реестр владельца одним ответом', () => {
+  test('отдаёт встроенные свойства, аспекты и роли в порядке rank, ownerId у встроенных — null', async () => {
     const caller = callerFor(freshUserId());
-    const { properties, roles } = await caller.aspect.properties();
+    const { properties, roles, aspects } = await caller.registry.effective();
 
     // Словари ЦЕЛИКОМ: каталог полей web строится по ним, и недостача любого свойства
     // означает поле, по которому запрос собрать нельзя (§А5-3а).
     expect(properties.length).toBe(BUILTIN_PROPERTY_META.length);
     expect(roles.length).toBe(BUILTIN_RELATION_ROLE_META.length);
+    expect(aspects.length).toBe(BUILTIN_ASPECT_IDS.length);
     for (const id of ['orbis/task_status', 'orbis/title', 'orbis/created_at']) {
       expect(properties.map((p) => p.id)).toContain(id);
     }
@@ -985,37 +985,17 @@ describe('aspect.properties (§А2-1/§А4-2): реестры свойств и 
     expect(at?.type.kind).toBe('time');
   });
 
-  test('снимок разбора из выдачи резолвит имена канона §А5-3', async () => {
+  test('снимок разбора из ОДНОЙ выдачи резолвит имена канона §А5-3', async () => {
     const caller = callerFor(freshUserId());
-    const [{ properties, roles }, aspects] = await Promise.all([
-      caller.aspect.properties(),
-      caller.aspect.list(),
-    ]);
-    // Ровно та сборка, которую делает web (`buildQueryRegistry`): выдачи двух ручек
-    // достаточно, чтобы разобрать боевой текст без единого обращения к БД.
+    // Ровно та сборка, которую делает web (`buildQueryRegistry`): выдачи ОДНОЙ ручки
+    // достаточно, чтобы разобрать боевой текст без единого обращения к БД. До Задачи 13a
+    // ручек было две (`aspect.list` + `aspect.properties`), и аспект приходилось собирать
+    // обратно в декларацию разбором wire-строки — здесь он уже декларация.
+    const { properties, roles, aspects } = await caller.registry.effective();
     const reg = toParseRegistry(
       {
         properties: new Map(properties.map((p) => [p.id, p])),
-        aspects: new Map(
-          aspects.map((a) => [
-            a.id,
-            aspectDefinitionSchema.parse({
-              id: a.id,
-              ownerId: a.ownerId,
-              key: a.key,
-              label: a.label,
-              description: a.description,
-              properties: a.properties,
-              aiInstructions: a.aiInstructions,
-              tagMappings: a.tagMappings,
-              implements: [],
-              viewConfig: a.viewConfig ?? { keyFields: [] },
-              module: a.module,
-              service: a.service,
-              rank: a.rank,
-            }),
-          ]),
-        ),
+        aspects: new Map(aspects.map((a) => [a.id, a])),
         roles: new Map(roles.map((r) => [r.id, r])),
       },
       OWNER_LOCALE,

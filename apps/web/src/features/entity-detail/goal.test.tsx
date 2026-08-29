@@ -6,6 +6,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { useNav } from '../../state/navigation';
 import { type MockHandler, renderWithProviders } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { QuickCapture } from '../browser/QuickCapture';
 import { DetailScreen } from './DetailScreen';
 
@@ -45,8 +46,8 @@ function goalHandler(goalProgress: unknown, entity: unknown = goal): MockHandler
   return (path) => {
     if (path === 'entity.get')
       return { entity, relations: [], backlinks: [], thread: null, goalProgress };
-    if (path === 'aspect.list') return [];
-    return {};
+    // Реестр НАСТОЯЩИЙ: по нему подписаны и строки свойств, и шапка записи (§А9-2).
+    return registryReply(path) ?? {};
   };
 }
 
@@ -72,7 +73,7 @@ test('карточка цели показывает прогресс, един�
   );
   expect(await screen.findByText('150 000 / 300 000')).toBeInTheDocument();
   // Единица — в самой подписи прогресса: шапка страницы (NativeRow, generic-строка §3.6)
-  // печатает сырой `unit: ₽` из реестра и тоже даёт совпадение по '₽'.
+  // печатает «Единица: ₽» и тоже даёт совпадение по '₽', поэтому ищем внутри полосы.
   expect(within(screen.getByTestId('goal-progress')).getByText('₽')).toBeInTheDocument();
   const bar = screen.getByRole('progressbar');
   expect(bar).toHaveAttribute('aria-valuenow', '50');
@@ -203,6 +204,10 @@ test('объектное поле аспекта показано read-only, а 
   expect(screen.queryByDisplayValue('[object Object]')).toBeNull();
   const ro = screen.getByTestId('aspect-value-orbis/goal-progress_source');
   expect(ro.tagName).not.toBe('INPUT');
+  // Read-only строка подписана ТЕМ ЖЕ источником, что и редактируемая рядом (§А9-2): без
+  // этого в одной сетке стояли бы «Целевое значение» и сырой `progress_source`.
+  expect(await screen.findByText('Источник прогресса')).toBeInTheDocument();
+  expect(screen.getByText('Целевое значение')).toBeInTheDocument();
   // Значение видно целиком: «поправьте query» бессмысленно, если query не показан
   expect(ro.textContent ?? '').toContain('aspect=orbis/financial direction=income');
 });
@@ -218,6 +223,22 @@ test('массив строк показан списком через запя�
   expect(screen.getByTestId('aspect-value-orbis/category-aliases')).toHaveTextContent(
     'кофе, кофейня',
   );
+});
+
+// Категория финансовой записи — ЕДИНСТВЕННОЕ поле со своим контролом (пикер вместо инпута),
+// и подпись ему ставит тот же реестр, что и соседним строкам: своя ветка рендера — не повод
+// для своего словаря. Проба нужна отдельно, потому что мимо `AspectField` этот путь идёт
+// целиком.
+test('поле со своим контролом (категория) подписано тем же реестром', async () => {
+  const tx = {
+    ...goal,
+    aspectsMap: { 'orbis/financial': { amount: '340.00', category_ref: 'c1' } },
+  };
+  renderWithProviders(<DetailScreen entityId="g1" />, goalHandler(undefined, tx));
+  expect(await screen.findByText('Категория')).toBeInTheDocument();
+  expect(screen.queryByText('category_ref')).toBeNull();
+  // Соседняя строка того же аспекта — обычным инпутом и тоже со словом из реестра.
+  expect(screen.getByText('Сумма')).toBeInTheDocument();
 });
 
 // Пустой список — «алиасов нет», а не сломанная строка без значения.

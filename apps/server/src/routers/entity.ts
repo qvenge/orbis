@@ -26,8 +26,9 @@ import { type GoalProgress, goalProgressFor } from '../goals/progress';
 import { type CompileCtx, compileCountAst, compileQueryAst } from '../query/compile-ast';
 import { parseQueryText } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
+import { loadRegistryVersions } from '../registry/load';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
-import { toWireEntityFromSql } from '../wire';
+import { registryVersionOf, toWireEntityFromSql } from '../wire';
 
 // Боевой синк — один инстанс на модуль: makeChatJournalSink состояния не хранит,
 // а тред/сообщение он пишет тем же tx, что executor (§7.8).
@@ -214,25 +215,48 @@ export const entityRouter = router({
   // его же переиспользует диспатч тулов LLM/MCP (tools/dispatch.ts, 1b Task 4).
   get: protectedProcedure
     .input(entityGetUiInput)
-    .query(async ({ ctx, input }): Promise<EntityReadResult & { goalProgress?: GoalProgress }> => {
-      try {
-        return await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
-          const result = await readEntity(tx, ctx.actorUserId, input);
-          // Прогресс цели (§11.3) — АДДИТИВНОЕ поле поверх формы readEntity, и добавляется
-          // оно здесь, а не в самом readEntity: та форма — общий контракт с LLM/MCP-диспатчем
-          // (tools/dispatch.ts), и всё, что в неё положено, уезжает в контекст модели.
-          // Прогресс — материал прогресс-бара, модели он не нужен. Прецедент аддитивного
-          // поля с явной аннотацией — actionId у create выше.
-          // Той же tx: расчёт читает граф под уже установленной identity (RLS), своей
-          // транзакции не открывает. Обычная сущность в него не заходит вовсе.
-          const goalProgress = await goalProgressFor(tx, ctx.actorUserId, result.entity);
-          return goalProgress === undefined ? result : { ...result, goalProgress };
-        });
-      } catch (e) {
-        if (e instanceof ExecError) throw execErrorToTRPC(e);
-        throw e;
-      }
-    }),
+    .query(
+      async ({
+        ctx,
+        input,
+      }): Promise<EntityReadResult & { goalProgress?: GoalProgress; registryVersion: string }> => {
+        try {
+          return await withIdentity(ctx.db, ctx.actorUserId, async (tx) => {
+            const result = await readEntity(tx, ctx.actorUserId, input);
+            // Прогресс цели (§11.3) — АДДИТИВНОЕ поле поверх формы readEntity, и добавляется
+            // оно здесь, а не в самом readEntity: та форма — общий контракт с
+            // LLM/MCP-диспатчем (tools/dispatch.ts), и всё, что в неё положено, уезжает в
+            // контекст модели. Прогресс — материал прогресс-бара, модели он не нужен.
+            // Прецедент аддитивного поля с явной аннотацией — actionId у create выше.
+            // Той же tx: расчёт читает граф под уже установленной identity (RLS), своей
+            // транзакции не открывает. Обычная сущность в него не заходит вовсе.
+            const goalProgress = await goalProgressFor(tx, ctx.actorUserId, result.entity);
+            /**
+             * Версия реестра (§А10-1) — второе аддитивное поле, и по тому же правилу: в
+             * `readEntity` её класть нельзя (контракт с диспатчем тулов, модели она не
+             * нужна). Едет она ЗДЕСЬ, а не отдельной ручкой, потому что клиенту нужен не
+             * опрос версии, а ПОВОД перечитать реестр: `entity.get` уходит после каждой
+             * правки графа (invalidateGraph), то есть ровно тогда, когда снимок мог
+             * устареть, — и клиентский кеш реестра инвалидируется несовпадением этой
+             * строки с той, под которой он сложен (`['registry', version]`, §А9-2).
+             *
+             * Отдельный запрос `loadRegistryVersions`, а не полный `loadRegistry`: ради
+             * одного числа тянуть 77 свойств, 13 аспектов и 11 ролей на каждое открытие
+             * записи дороже самой записи. Цена — один точечный SELECT в той же tx.
+             */
+            const registryVersion = registryVersionOf(
+              await loadRegistryVersions(tx, ctx.actorUserId),
+            );
+            return goalProgress === undefined
+              ? { ...result, registryVersion }
+              : { ...result, goalProgress, registryVersion };
+          });
+        } catch (e) {
+          if (e instanceof ExecError) throw execErrorToTRPC(e);
+          throw e;
+        }
+      },
+    ),
 
   query: protectedProcedure.input(querySignature).query(({ ctx, input }) =>
     runQueryWithMaterialization(ctx.db, ctx.actorUserId, input, async (tx, ast, cctx) => {

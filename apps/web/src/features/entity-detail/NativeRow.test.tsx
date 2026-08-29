@@ -1,7 +1,16 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
+import type { MockHandler } from '../../test/harness';
 import { renderWithProviders, trpcError } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { NativeRow } from './NativeRow';
+
+/**
+ * Подписи полей шапка берёт из реестра (§А9-2), и он приезжает tRPC — значит рендерить её
+ * надо под провайдерами даже там, где никакой другой сети в тесте нет. Реестр НАСТОЯЩИЙ:
+ * слово, которым тест проверяет подпись, обязано быть тем же, что увидит владелец.
+ */
+const registryHandler: MockHandler = (path) => registryReply(path) ?? {};
 
 const base = {
   id: 'e1',
@@ -38,6 +47,7 @@ test('financial: сумма с минусом и тоном danger', () => {
       entity={financial({ amount: '340.00', direction: 'expense', category_ref: CAT_FOOD })}
       onToggleTask={() => {}}
     />,
+    registryHandler,
   );
   const amount = screen.getByTestId('native-amount');
   expect(amount.textContent?.startsWith('−')).toBe(true);
@@ -50,6 +60,7 @@ test('financial: income → плюс и позитивный тон', () => {
       entity={financial({ amount: '340.00', direction: 'income', category_ref: 'cat-salary' })}
       onToggleTask={() => {}}
     />,
+    registryHandler,
   );
   const amount = screen.getByTestId('native-amount');
   expect(amount.textContent?.startsWith('+')).toBe(true);
@@ -124,31 +135,34 @@ test('нефинансовая строка список категорий не
       entity={{ ...base, aspectsMap: { 'orbis/task': { status: 'inbox' } } } as never}
       onToggleTask={() => {}}
     />,
+    registryHandler,
   );
   await screen.findByRole('checkbox');
   expect(calls.some((c) => c.path === 'entity.query')).toBe(false);
 });
 
 test('task: рендерит чекбокс', () => {
-  render(
+  renderWithProviders(
     <NativeRow
       entity={
         { ...base, aspectsMap: { 'orbis/task': { status: 'inbox', priority: 'high' } } } as never
       }
       onToggleTask={() => {}}
     />,
+    registryHandler,
   );
   expect(screen.getByRole('checkbox')).toBeInTheDocument();
 });
 
 test('generic: 2-3 keyFields из реестра', () => {
-  render(
+  renderWithProviders(
     <NativeRow
       entity={
         { ...base, aspectsMap: { 'orbis/note': { content_type: 'text', pinned: true } } } as never
       }
       onToggleTask={() => {}}
     />,
+    registryHandler,
   );
   expect(screen.getByTestId('native-generic')).toBeInTheDocument();
 });
@@ -157,8 +171,8 @@ test('generic: 2-3 keyFields из реестра', () => {
 // правило, по которому сервер собирает keyFields чат-карточек (tools/dispatch.ts).
 // У цели `current_value` не пишет НИКТО (прогресс считается на каждом чтении), и шапка
 // печатала вечный `current_value: —` прямо над полосой с настоящим числом.
-test('generic: незаполненное keyField не печатается прочерком', () => {
-  render(
+test('generic: незаполненное keyField не печатается прочерком', async () => {
+  renderWithProviders(
     <NativeRow
       entity={
         {
@@ -174,18 +188,21 @@ test('generic: незаполненное keyField не печатается п�
       }
       onToggleTask={() => {}}
     />,
+    registryHandler,
   );
-  expect(screen.getByText('цель:')).toBeInTheDocument();
-  expect(screen.getByText('единица:')).toBeInTheDocument();
-  expect(screen.queryByText('сейчас:')).toBeNull();
+  // `find`, а не `get`: подписи приезжают реестром (§А9-2), то есть асинхронно — до первого
+  // ответа шапка честно показывает сырые адреса свойств.
+  expect(await screen.findByText('Целевое значение:')).toBeInTheDocument();
+  expect(screen.getByText('Единица:')).toBeInTheDocument();
+  expect(screen.queryByText('Текущее значение:')).toBeNull();
   expect(screen.queryByText('—')).toBeNull();
 });
 
-// Волна правок финального ревью (M1): шапка подписывает поля тем же словарём, что карточка
-// аспекта прямо под ней. До этого у цели «target_value: 300000.00» стояло над «цель:
-// 300000.00» — одно поле с двумя именами на одном экране.
-test('generic: ключи подписаны по-русски, а не сырой латиницей', () => {
-  render(
+// Волна правок финального ревью (M1): шапка подписывает поля тем же источником, что карточка
+// аспекта прямо под ней. До этого у цели «target_value: 300000.00» стояло над «Целевое
+// значение: 300000.00» — одно поле с двумя именами на одном экране.
+test('generic: ключи подписаны по-русски, а не сырой латиницей', async () => {
+  renderWithProviders(
     <NativeRow
       entity={
         {
@@ -195,21 +212,32 @@ test('generic: ключи подписаны по-русски, а не сыро
       }
       onToggleTask={() => {}}
     />,
+    registryHandler,
   );
+  // Сначала ЖДЁМ подпись из реестра, и только потом проверяем отсутствие сырой: без
+  // ожидания оба `queryByText` были бы истинны и до прихода реестра (там стоит
+  // `orbis/target_value:`, а не `target_value:`), то есть тест не мог бы упасть вовсе.
+  expect(await screen.findByText('Целевое значение:')).toBeInTheDocument();
+  expect(screen.getByText('Единица:')).toBeInTheDocument();
   expect(screen.queryByText('target_value:')).toBeNull();
   expect(screen.queryByText('unit:')).toBeNull();
 });
 
-// Кастомный аспект в словаре не значится — подпись деградирует до самого ключа, а не
-// до пустого места.
-test('generic: незнакомый ключ печатается как есть', () => {
-  render(
+// Поле, которого в прежнем рукописном словаре подписей не было вовсе: `content_type` печатался
+// сырым не потому, что подписи ему не полагалось, а потому, что словарь его не знал. Реестр
+// знает КАЖДОЕ свойство, и пробел закрылся сам — проба стоит здесь именно на этом поле.
+// Деградация до сырого адреса никуда не делась и проверяется там, где она достижима:
+// `lib/registry/labels.test.ts` (свойства нет в снимке) и `proposal-text.test.ts`.
+test('generic: поле, которого не знал прежний словарь, подписано реестром', async () => {
+  renderWithProviders(
     <NativeRow
       entity={{ ...base, aspectsMap: { 'orbis/note': { content_type: 'text' } } } as never}
       onToggleTask={() => {}}
     />,
+    registryHandler,
   );
-  expect(screen.getByText('content_type:')).toBeInTheDocument();
+  expect(await screen.findByText('Вид текста:')).toBeInTheDocument();
+  expect(screen.queryByText('content_type:')).toBeNull();
 });
 
 // Уборочная фаза (E4): вся машиночитаемая часть memory-правила лежит в title (K19.4),
@@ -224,23 +252,25 @@ const memory = (kind: string, title: string) =>
   }) as never;
 
 test('память: правило с распознанным форматом предупреждения не показывает', () => {
-  render(
+  renderWithProviders(
     <NativeRow
       entity={memory('rule', 'кофе → Развлечения')}
       onToggleTask={() => {}}
       onSaveTitle={() => {}}
     />,
+    registryHandler,
   );
   expect(screen.queryByTestId('title-warning')).toBeNull();
 });
 
 test('память: правку правила в текст без разделителя видно сразу — предупреждение', () => {
-  render(
+  renderWithProviders(
     <NativeRow
       entity={memory('rule', 'кофе это развлечения')}
       onToggleTask={() => {}}
       onSaveTitle={() => {}}
     />,
+    registryHandler,
   );
   expect(screen.getByTestId('title-warning')).toBeInTheDocument();
 });
@@ -249,12 +279,13 @@ test('память: правку правила в текст без разде�
 // ломает рабочее правило прямо в поле и обязан увидеть это сразу. Проверка по
 // сохранённому значению (warn(value)) все прежние тесты проходила.
 test('память: предупреждение появляется на ЧЕРНОВИКЕ, без сохранения', () => {
-  render(
+  renderWithProviders(
     <NativeRow
       entity={memory('rule', 'кофе → Развлечения')}
       onToggleTask={() => {}}
       onSaveTitle={() => {}}
     />,
+    registryHandler,
   );
   expect(screen.queryByTestId('title-warning')).toBeNull();
   fireEvent.change(screen.getByTestId('title-edit'), {
@@ -264,12 +295,13 @@ test('память: предупреждение появляется на ЧЕ�
 });
 
 test('память: предупреждение доступно скринридеру и связано с полем', () => {
-  render(
+  renderWithProviders(
     <NativeRow
       entity={memory('rule', 'кофе это развлечения')}
       onToggleTask={() => {}}
       onSaveTitle={() => {}}
     />,
+    registryHandler,
   );
   const warning = screen.getByTestId('title-warning');
   expect(warning).toHaveAttribute('role', 'status');
@@ -277,29 +309,34 @@ test('память: предупреждение доступно скринри
 });
 
 test('память: клавиатурная стрелка «->» правилом считается — предупреждения нет', () => {
-  render(
+  renderWithProviders(
     <NativeRow
       entity={memory('rule', 'кофе -> Развлечения')}
       onToggleTask={() => {}}
       onSaveTitle={() => {}}
     />,
+    registryHandler,
   );
   expect(screen.queryByTestId('title-warning')).toBeNull();
 });
 
 test('память: у ФАКТА формата правила нет — предупреждения быть не должно', () => {
-  render(
+  renderWithProviders(
     <NativeRow
       entity={memory('fact', 'Работаю из дома по пятницам')}
       onToggleTask={() => {}}
       onSaveTitle={() => {}}
     />,
+    registryHandler,
   );
   expect(screen.queryByTestId('title-warning')).toBeNull();
 });
 
 test('память: в списке (без inline-правки) предупреждения нет — правит только Detail', () => {
-  render(<NativeRow entity={memory('rule', 'кофе это развлечения')} onToggleTask={() => {}} />);
+  renderWithProviders(
+    <NativeRow entity={memory('rule', 'кофе это развлечения')} onToggleTask={() => {}} />,
+    registryHandler,
+  );
   expect(screen.queryByTestId('title-warning')).toBeNull();
 });
 

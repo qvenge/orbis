@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { fieldLabel } from '../../../lib/field-labels';
 import { formatAmount } from '../../../lib/format';
 import { invalidateGraph } from '../../../lib/invalidate';
+import { fieldLabel } from '../../../lib/registry/labels';
+import { useRegistry } from '../../../lib/registry/useRegistry';
 import { useNav } from '../../../state/navigation';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
@@ -24,6 +25,9 @@ export function EntityCard({
   const push = useNav((s) => s.push);
   const activeTab = useNav((s) => s.activeTab);
   const utils = trpc.useUtils();
+  // Подписи полей — из реестра (§А9-2): ключи `keyFields` это id СВОЙСТВ, и словарь имён
+  // старой схемы, живший здесь раньше, не знал ни одного из них.
+  const registry = useRegistry();
 
   // Остаток конверта (03-budget §4.1, B7): для financial-записи ПОСЛЕ подтверждения
   // сервером — «→ <категория> · осталось N ₽» по category_ref и occurred_on ЗАПИСИ.
@@ -32,9 +36,16 @@ export function EntityCard({
   // Только ФАКТИЧЕСКИЙ РАСХОД (ревью B7): у income остаток — шум, planned в spent
   // не входит (§2.7) — показывать «осталось» без самой записи было бы враньём.
   const isFinancial = card.aspects.includes('orbis/financial');
-  const categoryRef = card.keyFields.category_ref;
-  const occurredOn = card.keyFields.occurred_on;
-  const { direction, planned } = card.keyFields;
+  // Адреса — id СВОЙСТВ, а не имена полей старой схемы: с Задачи 12 карточку собирает
+  // `keyFieldsOf` по `view_config.keyFields` реестра, где лежат именно id (§А9-2), и то же
+  // самое кладёт быстрый ввод (`useFastPath`, `fastPathCard`). Прежние ключи
+  // (`category_ref`, `occurred_on`, `direction`, `planned`) не совпадали ни с одним ключом
+  // ответа, поэтому строка остатка конверта не рисовалась НИКОГДА, а категория показывалась
+  // uuid'ом — молча, потому что промах словаря печатает ключ как есть.
+  const categoryRef = card.keyFields['orbis/finance_category'];
+  const occurredOn = card.keyFields['orbis/occurred_on'];
+  const direction = card.keyFields['orbis/direction'];
+  const planned = card.keyFields['orbis/planned'];
   const wantRemaining =
     confirmed &&
     !undone &&
@@ -95,13 +106,13 @@ export function EntityCard({
       {/* Свойства — тихая сетка «подпись: значение», числа таблично. */}
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">
         {Object.entries(card.keyFields).map(([k, v]) => {
-          const isCategory = k === 'category_ref' && typeof v === 'string';
+          const isCategory = k === 'orbis/finance_category' && typeof v === 'string';
           // Ни на загрузке, ни на отказе списка категорий строку не рисуем: печатать
           // uuid — та же ложь, что мелькающий uuid (уборочная фаза).
           if (isCategory && (categoryPending || categoryFailed)) return null;
           return (
             <div key={k} className="col-span-2 grid grid-cols-subgrid">
-              <dt className="text-text-muted">{fieldLabel(k)}</dt>
+              <dt className="text-text-muted">{fieldLabel(registry, k)}</dt>
               <dd className="text-text tabular-nums">{isCategory ? categoryTitle : String(v)}</dd>
             </div>
           );
