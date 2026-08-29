@@ -81,7 +81,7 @@ test('QuickCapture: title-only через entity.create(source:quick_capture) б
   });
 });
 
-test('QuickCapture внутри записи: связь с родителем несёт роль subitem (§А4-3)', async () => {
+test('QuickCapture внутри записи: подпункт рождается ЗАДАЧЕЙ, связь несёт роль subitem (§А4-3)', async () => {
   // Ветка `context.kind === 'entity'`: быстрая запись внутри записи заводит ПОДПУНКТ.
   // Роль здесь не украшение — по ней секция подзадач и отбирает детей, а прогон
   // исполнителя (роль `run`) в неё попасть не должен.
@@ -91,6 +91,22 @@ test('QuickCapture внутри записи: связь с родителем �
   );
   fireEvent.change(screen.getByLabelText(/быстрая запись/i), { target: { value: 'подзадача' } });
   fireEvent.submit(screen.getByTestId('quick-capture-form'));
+
+  /**
+   * ЗАПИСЬ С НУЛЯ: аспект задачи навешивается ЯВНО (§А1-1).
+   *
+   * Старая карта вешала `orbis/task` самим фактом ключа `status`; новая форма требует
+   * списка, и потеря его наблюдаема не отказом, а ТИШИНОЙ: подпункт рождается без чекбокса,
+   * мимо Повестки и мимо смарт-листа `aspect=orbis/task`. До этой пробы сьют был к такой
+   * потере слеп целиком — проверялась только роль связи (гейт-ревью 13c, Important-1).
+   */
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
+  const create = calls.find((c) => c.path === 'entity.create')?.input as {
+    input: { title: string; props?: Record<string, unknown>; aspects?: string[] };
+  };
+  expect(create.input.aspects).toEqual(['orbis/task']);
+  expect(create.input.props).toEqual({ 'orbis/task_status': 'inbox' });
+
   await waitFor(() =>
     expect(calls.find((c) => c.path === 'relation.create')?.input).toEqual({
       source_id: 'p1',

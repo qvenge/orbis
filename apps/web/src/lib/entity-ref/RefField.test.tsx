@@ -11,7 +11,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
 import { PropertyControl } from '../registry/PropertyControl';
-import { REF_OPTIONS_LIMIT, RefField, useRefTitle } from './RefField';
+import { REF_OPTIONS_LIMIT, RefField, refQueryAst, useRefTitle } from './RefField';
 
 /** Определение свойства из ЖИВОГО встроенного реестра — того же, что едет в бою. */
 function def(id: string): PropertyDefinition {
@@ -62,6 +62,28 @@ test('множество берётся ЦЕЛЬЮ свойства: катег�
   );
   // ТОТ ЖЕ компонент — ДРУГОЕ множество: цель пришла из объявления свойства, а не из кода.
   expect(asked).toEqual([{ ast: { filter: { aspect: 'orbis/routine' }, ...PROJECTION } }]);
+});
+
+/**
+ * Союз целей (§А6-1: `target` бывает СПИСКОМ альтернативных множеств) — чистая проверка
+ * `refQueryAst`, без рендера: он и есть место, где список сворачивается в дерево.
+ */
+test('союз целей: несколько множеств → `or`; член без предиката распускает союз', () => {
+  const cats = { filter: { aspect: 'orbis/category' } } as const;
+  const routines = { filter: { aspect: 'orbis/routine' } } as const;
+
+  expect(refQueryAst([cats, routines], '')?.filter).toEqual({
+    or: [{ aspect: 'orbis/category' }, { aspect: 'orbis/routine' }],
+  });
+
+  // «Любая сущность ∪ категории» = «любая сущность». Выброси мы пустой предикат из союза —
+  // множество СУЗИЛОСЬ бы до соседа, то есть пикер показал бы меньше, чем даёт реестр.
+  expect(refQueryAst([{ filter: null }, cats], '')?.filter).toBeNull();
+  // …и поиск в таком союзе остаётся единственным условием, а не «сосед И поиск».
+  expect(refQueryAst([{ filter: null }, cats], 'еда')?.filter).toEqual({ search: 'еда' });
+
+  // Одиночная цель ведёт себя как прежде — союза из одного не строится.
+  expect(refQueryAst(cats, '')?.filter).toEqual({ aspect: 'orbis/category' });
 });
 
 test('в списке ТОЛЬКО то, что вернула цель: чужая запись своей опции не получает', async () => {

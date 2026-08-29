@@ -62,6 +62,13 @@ const REF_SORT: QueryAst['sortBy'] = [{ field: 'orbis/title', dir: 'asc' }];
  *
  * `target` может быть списком альтернативных множеств (§А6-1) — тогда это `or` по ним:
  * «ссылка ведёт в любое из».
+ *
+ * ЧЛЕН СПИСКА С `filter: null` РАСПУСКАЕТ ВЕСЬ СОЮЗ, а не выбрасывается из него. «Любая
+ * сущность ∪ категории» — это «любая сущность»; выбросив пустой предикат, объединение
+ * СУЗИЛОСЬ бы до соседа, то есть пикер молча показал бы меньше, чем разрешает реестр, —
+ * ровно тот «невидимый отбор не того», против которого §С8-3. Сегодня недостижимо (все
+ * встроенные цели одиночные), но правило дешевле оговорки: список целей — это часть §А6-1,
+ * и первая же пользовательская цель пришла бы сюда без предупреждения.
  */
 export function refQueryAst(
   target: QueryAst | QueryAst[] | undefined,
@@ -69,15 +76,15 @@ export function refQueryAst(
 ): QueryAst | null {
   if (target === undefined) return null;
   const targets = Array.isArray(target) ? target : [target];
-  const filters = targets.flatMap((t) => (t.filter === null ? [] : [t.filter]));
   // Цель без единого предиката — это «любая сущность владельца», и это законно: `filter`
   // канона nullable именно затем (§А5-7).
-  const scope: QueryFilterNode | null =
-    filters.length === 0
-      ? null
-      : filters.length === 1
-        ? (filters[0] as QueryFilterNode)
-        : { or: filters };
+  const anyEntity = targets.length === 0 || targets.some((t) => t.filter === null);
+  const filters = targets.flatMap((t) => (t.filter === null ? [] : [t.filter]));
+  const scope: QueryFilterNode | null = anyEntity
+    ? null
+    : filters.length === 1
+      ? (filters[0] as QueryFilterNode)
+      : { or: filters };
   const term = search.trim();
   const filter: QueryFilterNode | null =
     term === '' ? scope : scope === null ? { search: term } : { and: [scope, { search: term }] };

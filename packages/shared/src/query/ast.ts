@@ -328,8 +328,15 @@ const relSchema = z.discriminatedUnion('kind', [
  * ЧЕГО ЭТОТ ГЕЙТ НЕ ДЕЛАЕТ — он про ФОРМУ, а не про ГЛУБИНУ. Капа здесь нет и быть не
  * может: `z.lazy` спускается рекурсивно, и достаточно глубокий вход исчерпывает стек
  * РАНЬШЕ любого условия, которое можно поставить внутри схемы. Поэтому глубину стережёт
- * `queryTreeExceedsDepth` (кап `QUERY_TREE_DEPTH_CAP`) — явным обходом и ДО zod, на входе
- * `ast:` тула (`tools/dispatch.ts`), единственном месте, где дерево приходит снаружи.
+ * `queryTreeExceedsDepth` (кап `QUERY_TREE_DEPTH_CAP`) — явным обходом и ДО zod.
+ *
+ * ВХОДОВ У ДЕРЕВА СНАРУЖИ ДВА, и гейт стоит перед каждым: `ast:` тула `entity_query`
+ * (`tools/dispatch.ts`, `assertQueryTreeDepth` — первым действием, до схемы) и `ast:`
+ * роутера `entity.query`/`entity.count` (`routers/entity.ts`, `querySignature` через
+ * `z.preprocess` — единственное место конвейера tRPC, работающее раньше схемы). Второй
+ * завела Задача 13c ради пикера ссылочных свойств: цель `ref` объявлена деревом (§А6-1), а
+ * плоский текст §А5-3 дерева не выражает. Предикат у обоих ОДИН, отличаются только обёртки
+ * отказа (`ExecError` у тула, `TRPCError` у роутера).
  */
 export const queryFilterNodeSchema: z.ZodType<QueryFilterNode, z.ZodTypeDef, unknown> = z.lazy(
   () =>

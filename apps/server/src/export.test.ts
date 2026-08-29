@@ -88,25 +88,53 @@ describe('user.exportData (§9.4)', () => {
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
-    // Своё свойство владельца — прямым INSERT'ом от админа: операций реестра в срезе А ещё
-    // нет (они — Задача 15), а дамп обязан уметь выгрузить строку, которая уже бывает.
+    // Свои строки владельца — прямым INSERT'ом от админа: операций реестра в срезе А ещё
+    // нет (они — Задача 15), а дамп обязан уметь выгрузить строки, которые уже бывают.
+    // По одной в КАЖДЫЙ из трёх реестров: на пустом списке цикл сверки ниже был бы истинным
+    // ни о чём, и потерянный реестр прошёл бы незамеченным (гейт-ревью 13c, Minor-4).
+    const propertyId = crypto.randomUUID();
+    const aspectId = crypto.randomUUID();
+    const roleId = crypto.randomUUID();
     const { db: admin, client: adminClient } = adminDb();
     try {
       await admin.execute(sql`
         INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
-        VALUES (${crypto.randomUUID()}, ${user}::uuid, 'user/sleep-hours',
+        VALUES (${propertyId}, ${user}::uuid, 'user/sleep-hours',
                 ${JSON.stringify({ ru: 'Часов сна', en: 'Sleep hours' })}::jsonb,
                 ${JSON.stringify({ ru: 'Сколько спал', en: 'How long the sleep was' })}::jsonb,
                 ${JSON.stringify({ kind: 'number' })}::jsonb, 1000)`);
+      await admin.execute(sql`
+        INSERT INTO aspect_definitions
+          (id, owner_id, key, label, description, properties, tag_mappings, view_config, rank)
+        VALUES (${aspectId}, ${user}::uuid, 'user/sleep-log',
+                ${JSON.stringify({ ru: 'Сон', en: 'Sleep' })}::jsonb,
+                ${JSON.stringify({ ru: 'Запись о сне', en: 'A sleep record' })}::jsonb,
+                ${JSON.stringify([{ propertyId, required: false, rank: 10 }])}::jsonb,
+                '{}'::text[], ${JSON.stringify({ keyFields: [propertyId] })}::jsonb, 1000)`);
+      await admin.execute(sql`
+        INSERT INTO relation_role_definitions
+          (id, owner_id, key, label, description, source_label, target_label, rank)
+        VALUES (${roleId}, ${user}::uuid, 'sleeps-after',
+                ${JSON.stringify({ ru: 'Сон после', en: 'Sleeps after' })}::jsonb,
+                ${JSON.stringify({ ru: 'Своя роль владельца', en: "The owner's own role" })}::jsonb,
+                ${JSON.stringify({ ru: 'Событие', en: 'Event' })}::jsonb,
+                ${JSON.stringify({ ru: 'Сон', en: 'Sleep' })}::jsonb, 1000)`);
     } finally {
       await adminClient.end();
     }
 
     const exp = await caller.user.exportData();
-    expect(exp.propertyDefinitions).toHaveLength(1);
-    expect(exp.propertyDefinitions[0]?.key).toBe('user/sleep-hours');
-    // Встроенные строки в дамп по-прежнему не попали — иначе их было бы под сотню.
-    expect(exp.propertyDefinitions.every((p) => p.ownerId === user)).toBe(true);
+    // Ровно по одной строке в каждом реестре: встроенные (их под сотню) в дамп не попали.
+    expect(exp.propertyDefinitions.map((r) => r.key)).toEqual(['user/sleep-hours']);
+    expect(exp.aspectDefinitions.map((r) => r.key)).toEqual(['user/sleep-log']);
+    expect(exp.relationRoleDefinitions.map((r) => r.key)).toEqual(['sleeps-after']);
+    for (const row of [
+      ...exp.propertyDefinitions,
+      ...exp.aspectDefinitions,
+      ...exp.relationRoleDefinitions,
+    ]) {
+      expect(row.ownerId).toBe(user);
+    }
 
     for (const row of exp.propertyDefinitions) {
       expect(propertyDefinitionSchema.parse(row)).toEqual(row);

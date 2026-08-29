@@ -12,7 +12,7 @@ import type {
   RunStepResult,
 } from '@orbis/shared';
 import { batchAuditMessageId, newId } from '@orbis/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { chatMessages } from '../db/schema';
 import { execute } from '../executor/executor';
@@ -306,6 +306,56 @@ describe('orbis_claim_task: атомарный захват (С7, инвариа
     expect(action?.actor_grant_id).toBe(grantId);
     expect(action?.actor_kind).toBe('agent');
     expect(action?.source).toBe('mcp');
+  });
+
+  /**
+   * ЗАДАНИЕ ПЕЧАТАЕТСЯ ПО KEY, А НЕ ПО ID (§А9-2, Р12 «key для машин»).
+   *
+   * У всех ВСТРОЕННЫХ свойств key совпадает с id, поэтому на них подмена
+   * `ticketForModel.props` → `ticketWire.props` неразличима ни поведением, ни tsc (обе
+   * стороны — `Record<string, unknown>`). Окно открывает СВОЁ свойство владельца: его id —
+   * uuid, а key — `user/…`, и адрес, который увидит модель, обязан быть вторым: она пишет
+   * тем же именем, которым читала (`entity_update.props`), а uuid реестра до неё доезжать
+   * не должен.
+   *
+   * Строка реестра кладётся прямым INSERT'ом от админа: операций реестра в срезе А ещё нет
+   * (Задача 15), а свойство владельца уже бывает — тот же приём, что в `export.test.ts`.
+   */
+  test('ответ захвата печатает props по KEY: своё свойство владельца — под `user/…`, не под uuid', async () => {
+    const propertyId = crypto.randomUUID();
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.execute(sql`
+        INSERT INTO property_definitions (id, owner_id, key, label, description, type, rank)
+        VALUES (${propertyId}, ${owner}::uuid, 'user/ticket-note',
+                ${JSON.stringify({ ru: 'Пометка', en: 'Note' })}::jsonb,
+                ${JSON.stringify({ ru: 'Пометка владельца', en: "The owner's note" })}::jsonb,
+                ${JSON.stringify({ kind: 'text' })}::jsonb, 1001)`);
+    } finally {
+      await adminClient.end();
+    }
+
+    const ticketId = await makeTicket('Тикет со своим свойством');
+    const written = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        { tool: 'entity_update', input: { id: ticketId, props: { [propertyId]: 'смотри тред' } } },
+      ],
+    });
+    if (!written.ok) throw new Error(`своё свойство не записалось: ${JSON.stringify(written)}`);
+
+    const c = okResult<ClaimTaskResult>(
+      await dispatchTool(worker(owner, grantId), 'orbis_claim_task', { ticket_id: ticketId }),
+    );
+    // В графе значение лежит под id (§А1-1) — а модели уезжает под key.
+    expect((await propsOf(owner, ticketId))[propertyId]).toBe('смотри тред');
+    expect(c.ticket.props['user/ticket-note']).toBe('смотри тред');
+    expect(c.ticket.props).not.toHaveProperty(propertyId);
+    // Встроенные свойства едут тем же адресом — проекция одна на всё задание.
+    expect(c.ticket.props['orbis/task_status']).toBe('in_progress');
+    expect(c.ticket.aspects).toContain('orbis/task');
   });
 
   test('инвариант 1: два одновременных захвата одного тикета — ровно один получает работу, второй CONFLICT', async () => {
