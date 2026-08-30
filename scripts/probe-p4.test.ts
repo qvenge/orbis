@@ -8,7 +8,18 @@
 //
 // Прогоняется корневым `bun run test` (хвост `bun test scripts/`), как и тест греп-гейта.
 import { expect, test } from 'bun:test';
-import { chooseProvider, duplicatePairs, type PropertyRow, similarity } from './probe-p4.ts';
+import { MAX_TOKENS_NOTE, STEP_LIMIT_NOTE } from '../apps/server/src/ai/send-message.ts';
+import type { RunEnd } from '../apps/server/src/routines/runner.ts';
+import { BUILTIN_PROPERTY_META } from '../packages/shared/src/registry/builtin-properties.ts';
+import {
+  chooseProvider,
+  duplicatePairs,
+  HEURISTIC_ACCURACY_NOTE,
+  measurementUsable,
+  type PropertyRow,
+  SIMILARITY_THRESHOLD,
+  similarity,
+} from './probe-p4.ts';
 
 // ---------------------------------------------------------------------------
 // Выбор провайдера: два исхода вместо трёх (Important-1 гейт-ревью)
@@ -146,4 +157,128 @@ test('поглощённые и deprecated строки выбывают из о
   );
   expect(duplicatePairs(deprecated).vsBuiltin).toHaveLength(0);
   expect(duplicatePairs(deprecated).own).toHaveLength(1);
+});
+
+// ---------------------------------------------------------------------------
+// Годность замера: исход прогона садовника (Important-A ре-ревью)
+// ---------------------------------------------------------------------------
+
+const finished: RunEnd = { outcome: 'finished' };
+
+test('годен РОВНО один исход: finished без причины и без пометки об обрыве', () => {
+  expect(measurementUsable(finished, 'Свёл два свойства, сирот нет.').ok).toBe(true);
+  expect(measurementUsable(finished, undefined).ok).toBe(true);
+});
+
+test('failed по ЛЮБОЙ причине — замер не состоялся, а не «ноль сведённых»', () => {
+  // Цикл рутины ловит сбой провайдера сам и наружу не бросает: «кредиты кончились на
+  // садовнике» приходит сюда обычным возвратом. Без этой ветки мёртвый садовник давал
+  // «0 сведённых» и вердикт из воздуха — причём в одну сторону, «сужать Р14».
+  for (const reason of [
+    'provider',
+    'deadline',
+    'limit',
+    'refusal',
+    'aborted',
+    'internal',
+    'steps',
+    'no_proposal',
+  ] as const) {
+    const u = measurementUsable({ outcome: 'failed', reason }, undefined);
+    expect([reason, u.ok]).toEqual([reason, false]);
+  }
+});
+
+test('checkpoint — тоже НЕ замер, хотя для act-рутины это штатный исход', () => {
+  const u = measurementUsable({ outcome: 'checkpoint' }, undefined);
+  expect(u.ok).toBe(false);
+  if (u.ok) return;
+  // Причина названа по существу: словарь обойдён не весь, знаменатель неполон.
+  expect(u.reason).toContain('checkpoint');
+});
+
+test('finished, но отчёт с пометкой об обрыве — прогон не довёл работу до конца', () => {
+  // RunEnd этого не показывает вовсе: в режиме act обе ветки возвращают голый
+  // {outcome:'finished'}, и единственный след обрыва — пометка в отчёте.
+  for (const note of [STEP_LIMIT_NOTE, MAX_TOKENS_NOTE]) {
+    expect(measurementUsable(finished, `Начал разбирать словарь…\n\n${note}`).ok).toBe(false);
+  }
+  // Позитивный контроль: обычный отчёт пометок не содержит и годен.
+  expect(measurementUsable(finished, 'Начал разбирать словарь и закончил.').ok).toBe(true);
+});
+
+test('finished с причиной — тоже не годен (RunEnd вправе принести её и с успехом)', () => {
+  expect(measurementUsable({ outcome: 'finished', reason: 'steps' }, undefined).ok).toBe(false);
+});
+
+// ---------------------------------------------------------------------------
+// Точность мерки измерена, а не предположена (Important-B / Р-17-5)
+// ---------------------------------------------------------------------------
+
+test('цифры точности в тексте владельцу — не украшение: они воспроизводятся прогоном по реестру', () => {
+  // Текст обещает «77 свойств, 2926 пар, 17 пересекли порог». Обещание проверяется здесь же:
+  // разъехавшись с реестром, оно превратилось бы в докблок-неправду — четвёртый рецидив ветки.
+  const rows = BUILTIN_PROPERTY_META;
+  const ru = (t: Record<string, string>): string => t.ru ?? t.en ?? Object.values(t)[0] ?? '';
+  let pairs = 0;
+  let crossed = 0;
+  for (let i = 0; i < rows.length; i += 1) {
+    for (let j = i + 1; j < rows.length; j += 1) {
+      const x = rows[i];
+      const y = rows[j];
+      if (x === undefined || y === undefined) continue;
+      pairs += 1;
+      const s = similarity(
+        `${ru(x.label)} ${ru(x.description)}`,
+        `${ru(y.label)} ${ru(y.description)}`,
+      );
+      if (s >= SIMILARITY_THRESHOLD) crossed += 1;
+    }
+  }
+  expect([rows.length, pairs, crossed]).toEqual([77, 2926, 17]);
+  expect(HEURISTIC_ACCURACY_NOTE).toContain('77');
+  expect(HEURISTIC_ACCURACY_NOTE).toContain('2926');
+  expect(HEURISTIC_ACCURACY_NOTE).toContain('17');
+});
+
+test('текст владельцу говорит, что верных среди них НОЛЬ и что решает он, а не скрипт', () => {
+  // Без этих двух утверждений список кандидатов читался бы как измеренная доля дублей —
+  // ровно то, чего Р-17-5 запрещает.
+  expect(HEURISTIC_ACCURACY_NOTE).toContain('ВЕРНЫХ среди них 0');
+  expect(HEURISTIC_ACCURACY_NOTE).toContain('принимает он');
+  expect(HEURISTIC_ACCURACY_NOTE).toContain('вердикта по этой цифре не выносит');
+});
+
+test('списки пар отсортированы по убыванию счёта — их читает человек', () => {
+  const rows: PropertyRow[] = [
+    row({
+      id: 'p-a',
+      key: 'user/a',
+      label: { ru: 'Начало периода' },
+      description: { ru: 'Первый день периода бюджета' },
+    }),
+    row({
+      id: 'p-b',
+      key: 'user/b',
+      label: { ru: 'Конец периода' },
+      description: { ru: 'Последний день периода бюджета' },
+    }),
+    row({
+      id: 'p-c',
+      key: 'user/c',
+      label: { ru: 'Усилие' },
+      description: { ru: 'Сколько сил отнимет дело' },
+    }),
+    row({
+      id: 'p-d',
+      key: 'user/d',
+      label: { ru: 'Уровень усилия' },
+      description: { ru: 'Сколько сил отнимет дело' },
+    }),
+  ];
+  const own = duplicatePairs(rows).own;
+  expect(own.length).toBeGreaterThan(1);
+  for (let i = 1; i < own.length; i += 1) {
+    expect(own[i - 1]?.score ?? 0).toBeGreaterThanOrEqual(own[i]?.score ?? 0);
+  }
 });
