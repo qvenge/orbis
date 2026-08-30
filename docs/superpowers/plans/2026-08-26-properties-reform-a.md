@@ -1808,9 +1808,11 @@ test('страж «ряды 1–6 не сдвинулись» зелёный; н
   `chat/cards/MemoryRuleCard.tsx:6, :93-104` (шлёт `props` — уже с 13c; текст формата — убрать),
   `settings/MemoryScreen.tsx:25, :36-39, :56`, `entity-detail/NativeRow.tsx:161-165`, `chat/cards/types.ts:32`,
   `tools/registry.ts:233`; `packages/shared/src/contracts/tools.ts` + `executor/legacy-form.ts`
-  (`fromLegacyInput` и union легаси-входа в exec-надмножествах СНИМАЮТСЯ — внутренних вызывателей
-  старой карты больше нет; в `legacy-form.ts` остаются только проекции `projectLegacyAspects`/
-  `projectLegacyRelationType`/`rowFromLegacy` до Задачи 23); `scripts/check-legacy-form.ts` (маркер
+  (**ПЕРЕНЕСЕНО в Задачу 23 рулингом Р-18-1**: посылка «внутренних вызывателей старой карты больше
+  нет» ОПРОВЕРГНУТА замером — их было два (`import/review.ts:759`, `routines/lifecycle.ts:929`),
+  оба переведены на `props` в этой задаче; но union держат **493 фикстуры в 49 сьютах**, а снять
+  его наполовину нельзя — старая карта прошла бы zod и молча игнорировалась. Задача 23 удаляет
+  `legacy-form.ts` целиком, и те же 49 сьютов правятся там одним движением); `scripts/check-legacy-form.ts` (маркер
   `rule-parser` — без `rulePatternFromTitle`); тесты `fast-path.test` (22), `import.test`,
   `escalation.test`, `ai.test`, web `MemoryScreen`/`cards`.
 - Класс «записанное, но молча мёртвое правило» исчезает: правило без `rule_pattern` или с
@@ -1824,7 +1826,7 @@ test('переименование категории: правило живо (
 test('convertLegacyRules: "пятёрочка → Продукты" → свойства; "мусор без разделителя" → needs-review; второй прогон — no-op', …)
 test('escalation: дубль правила ищется по (rule_pattern, rule_target); patternFromTransactionTitle("ЯНДЕКС.ТАКСИ 450") = "яндекс такси"', …)
 test('web MemoryScreen/NativeRow/MemoryRuleCard: строка правила из свойств; parseRuleTitle в дереве отсутствует (греп-тест)', …)
-test('exec-вход: старая карта aspects → VALIDATION (union снят); fromLegacyInput не экспортируется', …)
+// ПЕРЕНЕСЕНО в Задачу 23 (Р-18-1) вместе со снятием union — здесь не реализуется
 ```
 - [ ] **Шаг 2:** реализация. — [ ] **Шаг 3:** PASS всех сьютов; коммит
   `feat(memory): правило памяти — свойства rule_pattern/rule_target/rule_scope, title генерируется, один селектор вместо четырёх копий, парсер заголовка удалён; легаси-вход исполнителя снят (В7, §А8, §А12-6)`.
@@ -1990,7 +1992,10 @@ greps и EXPLAIN держат друг друга).
 **Файлы:**
 - Создать: `apps/server/src/db/migrations/0017_reform_contract.sql` (+snapshot), `apps/server/src/seed/world.ts`
   (+test) — единая точка засева графа владельца через `execute()`
-- Изменить/удалить: `apps/server/src/executor/legacy-form.ts` (УДАЛИТЬ + `packages/shared/src/registry/legacy-field-map.ts`,
+- Изменить/удалить: `apps/server/src/executor/legacy-form.ts` (УДАЛИТЬ + **union легаси-входа и
+  `fromLegacyInput` в exec-надмножествах `contracts/tools.ts` — перенос из Задачи 18 по Р-18-1:
+  правятся 493 фикстуры в 49 сьютах плюс приёмочный тест «старая карта aspects → VALIDATION;
+  `fromLegacyInput` не экспортируется»** + `packages/shared/src/registry/legacy-field-map.ts`,
   `legacyAspectJsonSchema`; `schemas/aspects.ts` zod-схемы аспектов УДАЛИТЬ — golden `validator-verdicts`
   замораживается: `legacyVerdict` становится литералом в JSON, тест сверяет только `newVerdict`),
   `db/schema.ts` (`aspectsLegacy`, `meta`, `relationType` — снять; `aspect_definitions.schema` — снять),
