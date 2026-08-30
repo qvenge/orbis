@@ -422,9 +422,18 @@ test('все 13 keyFields и tagMappings перенесены и равны aspe
       if (id === undefined) throw new Error(`${aspectId}: keyField ${f} не переведён`);
       return id;
     });
-    expect(`${aspectId}: ${def.viewConfig.keyFields.join(',')}`).toBe(
-      `${aspectId}: ${expectedKeyFields.join(',')}`,
-    );
+    // ОДНО ИМЕНОВАННОЕ ИСКЛЮЧЕНИЕ — `orbis/memory`, и оно того же рода, что снятые отсюда
+    // `aiInstructions` (рулинг Р-1-1): перенесённое значение описывало СНЯТУЮ форму, и
+    // равенство со старым реестром закрепляло бы именно её. Прежний ряд `[kind, scope]` был
+    // осмыслен, пока правая часть правила жила в заголовке: показывать было нечего, кроме
+    // рода и области. После В7 у правила есть образец и цель — то, ради чего владелец
+    // открывает список; область в ряд не помещается и уходит. Замена пину — ниже по файлу,
+    // отдельным утверждением с точным составом.
+    if (aspectId !== 'orbis/memory') {
+      expect(`${aspectId}: ${def.viewConfig.keyFields.join(',')}`).toBe(
+        `${aspectId}: ${expectedKeyFields.join(',')}`,
+      );
+    }
     expect(def.viewConfig.icon).toBe(meta.icon);
     expect(def.tagMappings).toEqual(meta.tagMappings);
     // `aiInstructions` СЮДА БОЛЬШЕ НЕ ВХОДЯТ (рулинг Р-1-1, Задача 12): перенесённые
@@ -437,6 +446,24 @@ test('все 13 keyFields и tagMappings перенесены и равны aspe
     expect((def.label.ru ?? '').length).toBeGreaterThan(0);
     expect((def.description.en ?? '').length).toBeGreaterThan(0);
   }
+});
+
+/**
+ * Замена перенесённому ряду `keyFields` у `orbis/memory` (исключение выше, В7).
+ *
+ * Состав ЗДЕСЬ, а не «не равно старому»: ряд читают три поверхности сразу — строка списка,
+ * карточка чата и шапка записи, — и «что владелец видит у правила, не открывая его»
+ * обязано быть одним утверждением, а не следствием чужого снимка.
+ */
+test('keyFields памяти — образец и цель правила, а не область (В7)', () => {
+  expect(defsById.get('orbis/memory')?.viewConfig.keyFields).toEqual([
+    'orbis/memory_kind',
+    'orbis/rule_pattern',
+    'orbis/rule_target',
+  ]);
+  // И обратная половина: снятая область из ряда действительно ушла — иначе утверждение выше
+  // прошло бы и на списке из четырёх.
+  expect(defsById.get('orbis/memory')?.viewConfig.keyFields).not.toContain('orbis/rule_scope');
 });
 
 /**

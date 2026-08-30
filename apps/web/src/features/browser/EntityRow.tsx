@@ -1,5 +1,7 @@
 import { CheckCircle2, Circle, FileText } from 'lucide-react';
+import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
+import { useRegistry } from '../../lib/registry/useRegistry';
 import type { RouterOutputs } from '../../trpc';
 
 type Entity = RouterOutputs['entity']['query'][number];
@@ -41,6 +43,35 @@ export function EntityRow({ entity, showMeta = true }: { entity: Entity; showMet
   const task = aspects.has('orbis/task');
   const done = props['orbis/task_status'] === 'done';
 
+  /**
+   * ПРАВИЛО ПАМЯТИ ПОКАЗЫВАЕТСЯ ИЗ СВОЙСТВ (В7) — та же граница, что у слоя памяти
+   * промпта (`server/llm/context.ts`) и у строки Detail (`NativeRow`): подпись
+   * пересобирается тогда и только тогда, когда у правила ЕСТЬ ЦЕЛЬ.
+   *
+   * Иначе экран «Память AI» — единственное место, куда владелец приходит СПЕЦИАЛЬНО
+   * ревизовать правила, — показывал бы сохранённый заголовок, то есть имя категории,
+   * которое могло устареть после её переименования. Смысл В7 в том, что подпись
+   * ПРОИЗВОДНАЯ, а не копия; один экран на копии — это место, где владелец видит неправду.
+   *
+   * Хук безусловен (правило порядка хуков), но пустая ссылка выдачу НЕ поднимает
+   * (`useRefTitle`: `refId === ''` гасит запрос) — на нефинансовых и непамятных списках
+   * сеть не трогается вовсе.
+   */
+  const registry = useRegistry();
+  const ruleTarget = props['orbis/memory_kind'] === 'rule' ? props['orbis/rule_target'] : undefined;
+  const ruleTargetRef = typeof ruleTarget === 'string' ? ruleTarget : '';
+  const rulePattern = props['orbis/rule_pattern'];
+  const {
+    title: ruleTargetTitle,
+    isPending: rulePending,
+    isError: ruleFailed,
+  } = useRefTitle(registry.property('orbis/rule_target'), ruleTargetRef);
+  const isRule = ruleTargetRef !== '' && typeof rulePattern === 'string' && rulePattern !== '';
+  // Название цели показываем только РАЗЫМЕНОВАННЫМ: пока список грузится или не доехал,
+  // сырой uuid — та же ложь, что мелькающее имя (D6d п.1).
+  const ruleTargetResolved =
+    isRule && !rulePending && !ruleFailed && ruleTargetTitle !== ruleTargetRef;
+
   const leading = entity.emoji ? (
     <span aria-hidden className="w-5 text-center leading-none">
       {entity.emoji}
@@ -77,9 +108,13 @@ export function EntityRow({ entity, showMeta = true }: { entity: Entity; showMet
   return (
     <>
       {leading}
-      <span className={`flex-1 truncate ${done ? 'text-text-muted line-through' : ''}`}>
-        {entity.title}
+      <span
+        data-testid={isRule ? 'entity-row-rule' : undefined}
+        className={`flex-1 truncate ${done ? 'text-text-muted line-through' : ''}`}
+      >
+        {isRule ? rulePattern : entity.title}
       </span>
+      {ruleTargetResolved && <span className="text-xs text-text-muted">{ruleTargetTitle}</span>}
       {task && props['orbis/priority'] === 'high' && !done && (
         <span
           role="img"

@@ -7,6 +7,7 @@ import { beforeEach, expect, test } from 'vitest';
 import { App } from '../../App';
 import { useNav } from '../../state/navigation';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
+import { registryReply } from '../../test/registry';
 import { MemoryScreen } from './MemoryScreen';
 import { SettingsScreen } from './SettingsScreen';
 
@@ -60,6 +61,51 @@ test('MemoryScreen: правило и факт списком, запрос aspe
   expect(calls.find((c) => c.path === 'entity.query')?.input).toEqual({
     query: 'aspect=orbis/memory, sortBy=orbis/updated_at:desc, limit=50',
   });
+});
+
+/**
+ * ПОДПИСЬ ПРАВИЛА — ПРОИЗВОДНАЯ, А НЕ КОПИЯ (В7). Экран памяти — единственное место, куда
+ * владелец приходит СПЕЦИАЛЬНО ревизовать правила, и до этой правки он был единственной из
+ * трёх поверхностей, читавшей сохранённый `title`: после переименования категории он
+ * показывал имя, которого в графе уже нет.
+ *
+ * Заголовок в фикстуре НАМЕРЕННО устарел («… → Кафе», категория давно «Продукты»): пока он
+ * лжёт, видно, что строка собрана из свойств, а не взята из колонки.
+ */
+test('MemoryScreen: строка правила собрана из свойств — образец и АКТУАЛЬНОЕ имя категории', async () => {
+  const target = 'a3d6d4b2-7f3a-4a1f-9c1e-2d5b8f0a1c77';
+  const stale = wireEntity({
+    id: 'r9',
+    title: 'пятерочка → Кафе',
+    props: {
+      'orbis/memory_kind': 'rule',
+      'orbis/rule_scope': 'orbis/money-movement',
+      'orbis/rule_pattern': 'пятерочка',
+      'orbis/rule_target': target,
+    },
+    aspects: ['orbis/memory'],
+  });
+  const category = wireEntity({
+    id: target,
+    title: 'Продукты',
+    props: {},
+    aspects: ['orbis/category'],
+  });
+  renderWithProviders(<MemoryScreen />, (path, input) => {
+    // Два разных `entity.query`: список памяти идёт строкой грамматики, выдача цели ссылки
+    // — деревом (`ast`). Различаем по форме входа, как это делает и сам сервер.
+    if (path === 'entity.query') {
+      return (input as { query?: string }).query === undefined ? [category] : [stale];
+    }
+    return registryReply(path) ?? {};
+  });
+  await waitFor(() => expect(screen.getByTestId('entity-row-rule')).toHaveTextContent('пятерочка'));
+  await waitFor(() => expect(screen.getByText('Продукты')).toBeInTheDocument());
+  // Устаревшая подпись НЕ показывается — ни целиком, ни именем внутри неё.
+  expect(screen.queryByText('пятерочка → Кафе')).toBeNull();
+  expect(screen.getByTestId('memory-row').textContent).not.toContain('Кафе');
+  // И сырой uuid цели наружу не выходит (D6d п.1).
+  expect(screen.getByTestId('memory-row').textContent).not.toContain(target);
 });
 
 test('MemoryScreen: пояснение, что AI помнит и как этим управлять', async () => {

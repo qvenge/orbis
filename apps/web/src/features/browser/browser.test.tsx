@@ -30,10 +30,17 @@ test('EntityList: первая страница 50 через entity.query; «е
   });
   await waitFor(() => expect(screen.getAllByTestId('entity-row')).toHaveLength(50));
   fireEvent.click(screen.getByRole('button', { name: /ещё/i }));
+  // Отбор по ПУТИ обязателен: в журнале вызовов лежат не только `entity.query` (строка
+  // сущности читает снимок реестра — `registry.effective` идёт без входа вовсе), и слепой
+  // перебор всех вызовов падал бы на чужом входе вместо ответа на свой вопрос.
   await waitFor(() =>
-    expect(calls.some((c) => (c.input as { query: string }).query.includes('limit=100'))).toBe(
-      true,
-    ),
+    expect(
+      calls.some(
+        (c) =>
+          c.path === 'entity.query' &&
+          String((c.input as { query?: string } | undefined)?.query ?? '').includes('limit=100'),
+      ),
+    ).toBe(true),
   );
 });
 
