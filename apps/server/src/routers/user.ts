@@ -1,8 +1,10 @@
 // apps/server/src/routers/user.ts
 // Роутер user (§9.1): онбординг-сидирование (02 §7), настройки §7.3/§4.4, экспорт §9.4.
-// Только трансляция: сид/экспорт — примитивы seed/onboarding.ts и export.ts под одним
-// withIdentity-tx (RLS §4.10). user_settings — конфигурация, НЕ сущность: пишется напрямую,
-// не через executor/журнал (§2.2).
+// Только трансляция: сид/экспорт — примитивы seed/onboarding.ts и export.ts (RLS §4.10).
+// Экспорт и настройки идут одним withIdentity-tx; сид с Задачи 17 — ДВУМЯ транзакциями
+// (граф прямыми вставками, садовник словаря через исполнителя), и обе держит `seedOwner`:
+// роутер не вправе знать, сколько их, — иначе следующая фаза сева потребует правки и здесь.
+// user_settings — конфигурация, НЕ сущность: пишется напрямую, не через executor/журнал (§2.2).
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { userSettings } from '../db/schema';
@@ -10,7 +12,7 @@ import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
 import { exportData, type OrbisExport } from '../export';
 import { isValidTimeZone } from '../query/context';
-import { seedOnboarding } from '../seed/onboarding';
+import { seedOwner } from '../seed/onboarding';
 import { ownerOnlyProcedure, protectedProcedure, router } from '../trpc';
 import { toWireUserSettings, type WireUserSettings } from '../wire';
 
@@ -41,10 +43,10 @@ const updateSettingsInput = z
 export const userRouter = router({
   // §9.3: сид/настройки/экспорт — управление аккаунтом, PAT-агенту закрыто (ownerOnly);
   // read-путь getSettings остаётся protectedProcedure — агенту нужны timezone/currency.
-  // Идемпотентно (02 §7): { seeded: false } — уже было. Один withIdentity-tx.
-  seedOnboarding: ownerOnlyProcedure.mutation(({ ctx }) =>
-    withIdentity(ctx.db, ctx.actorUserId, (tx) => seedOnboarding(tx, ctx.actorUserId)),
-  ),
+  // Идемпотентно (02 §7): { seeded: false } — уже было. ДВЕ транзакции, а не одна: граф
+  // онбординга пишется прямыми вставками под withIdentity, садовник словаря — через
+  // исполнителя после её коммита (рулинг Р-17-1, разбор — в докблоке seedOwner).
+  seedOnboarding: ownerOnlyProcedure.mutation(({ ctx }) => seedOwner(ctx.db, ctx.actorUserId)),
 
   getSettings: protectedProcedure.query(
     ({ ctx }): Promise<WireUserSettings> =>

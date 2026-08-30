@@ -33,7 +33,7 @@ afterAll(async () => {
 });
 
 describe('user.exportData (§9.4)', () => {
-  test('после сидирования: 18 сущностей, настройки, глобальный тред, 0 aspectDefinitions', async () => {
+  test('после сидирования: 19 сущностей, настройки, глобальный тред, 0 aspectDefinitions', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
@@ -46,7 +46,7 @@ describe('user.exportData (§9.4)', () => {
     expect(typeof exp.exportedAt).toBe('string');
     expect(exp.exportedAt.endsWith('Z')).toBe(true);
 
-    expect(exp.entities.length).toBe(18);
+    expect(exp.entities.length).toBe(19);
     for (const e of exp.entities) {
       expect(() => entitySchema.parse(e)).not.toThrow();
       // Форма — новая и ТОЛЬКО новая: старой карты и мешка `meta` в дампе нет вовсе.

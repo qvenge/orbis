@@ -20,11 +20,13 @@ import { ORBIS_NAMESPACE } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
 import { ensureGlobalThread } from '../chat/threads';
+import type { Db } from '../db/client';
 import { entities, userSettings } from '../db/schema';
-import type { Tx } from '../db/with-identity';
+import { type Tx, withIdentity } from '../db/with-identity';
 import { rowFromLegacy } from '../executor/legacy-form';
 import { effectiveRegistry } from '../registry/cache';
 import { SEED_CATEGORIES } from './categories';
+import { seedGardener } from './gardener';
 import {
   SEED_HORIZON_LISTS,
   SEED_ROUTINES_LIST,
@@ -58,9 +60,46 @@ export interface SeedResult {
 }
 
 /**
- * Сидирование стартового набора владельца. Вызывается роутером user.seedOnboarding и
- * переиспользуется 1c при первом логине. clock инъектируется для детерминизма тестов;
- * created_at/updated_at сущностей и настроек — clock() (тред получает defaultNow БД).
+ * ПОЛНЫЙ сид владельца — единственная точка входа боевой ручки `user.seedOnboarding`.
+ *
+ * Он двухфазный, и фазы РАЗНЫЕ по природе, а не просто «две части одного цикла»:
+ *   1. граф онбординга (12 категорий → 6 смарт-листов → настройки → глобальный тред) —
+ *      ОДНОЙ транзакцией, прямыми вставками мимо исполнителя (решение 6, см. шапку файла);
+ *   2. садовник словаря (§А2-7, Р17) — ОТДЕЛЬНОЙ транзакцией ЧЕРЕЗ исполнителя, потому что
+ *      он несёт доверенность рутины и обязан пройти валидатор реестра (см. `seed/gardener.ts`).
+ *
+ * ПОЧЕМУ ДВЕ ТРАНЗАКЦИИ, А НЕ ОДНА. `seedOnboarding` первым делом берёт `FOR UPDATE` на
+ * строке настроек, а `execute` открывает СВОЮ транзакцию на другом соединении: вложив второе
+ * в первое, мы получили бы дедлок на первом же заходе владельца. Разрыв атомарности при этом
+ * ничего не ломает — вторая фаза идемпотентна пробой по PK и досевается следующим заходом
+ * (докблок `seedGardener`).
+ *
+ * ПОРЯДОК ФАЗ ЗНАЧИМ: садовник — рутина, и в смарт-листе «Рутины» он должен появиться уже
+ * при первом открытии сайдбара; список сеется первой фазой, поэтому садовник идёт после неё.
+ *
+ * `SeedResult` отвечает про ПЕРВУЮ фазу («онбординг проходил?») и намеренно не превращается
+ * в счётчик: `seeded: false` с досеянным садовником — это законный и ожидаемый исход
+ * повторного захода, а не расхождение.
+ */
+export async function seedOwner(
+  db: Db,
+  ownerId: string,
+  clock: () => Date = () => new Date(),
+): Promise<SeedResult> {
+  const result = await withIdentity(db, ownerId, (tx) => seedOnboarding(tx, ownerId, clock));
+  await seedGardener(db, ownerId, clock);
+  return result;
+}
+
+/**
+ * ПЕРВАЯ ФАЗА сида: граф онбординга внутри УЖЕ ОТКРЫТОЙ транзакции. clock инъектируется для
+ * детерминизма тестов; created_at/updated_at сущностей и настроек — clock() (тред получает
+ * defaultNow БД).
+ *
+ * ЭТО НЕ «ВЕСЬ СИД» — с Задачи 17 полный сид владельца зовётся `seedOwner` (см. её докблок),
+ * и боевая ручка идёт только через неё. Прямой вызов остаётся законным ровно для фикстур,
+ * которым нужен граф без садовника (`test/perf.ts` и сьюты, где рутина только мешала бы), —
+ * но «засидил владельца» он больше не означает.
  */
 export async function seedOnboarding(
   tx: Tx,

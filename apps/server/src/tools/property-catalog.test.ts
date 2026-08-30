@@ -22,6 +22,13 @@ const FREE_ID = 'user/p-sleep';
 const FREE_KEY = 'user/sleep-hours';
 /** Предложенное свойство (§А2-7): в промпт не входит, видно ТОЛЬКО отсюда. */
 const PROPOSED_ID = 'user/p-mood';
+/**
+ * Второе предложенное — ЗАЛЕЖАВШЕЕСЯ (заведено 40 дней назад). Нужно ровно ради того, чтобы
+ * фильтр возраста было чем отличить от «отдаёт всё»: с одной строкой в фикстуре
+ * `olderThanDays` зеленел бы и полностью сломанным (фикстура из одной строки прячет форму).
+ */
+const STALE_PROPOSED_ID = 'user/p-tempo';
+const STALE_PROPOSED_AT = new Date(Date.now() - 40 * 86_400_000);
 
 let reg: RegistrySnapshot;
 
@@ -32,17 +39,21 @@ async function seedProperty(spec: {
   description: string;
   status: 'active' | 'proposed' | 'deprecated';
   module?: string | null;
+  /** Когда строку завели: фильтр возраста `olderThanDays` читает именно эту колонку. */
+  createdAt?: Date;
 }): Promise<void> {
   const admin = adminDb();
   try {
     await admin.db.execute(sql`
       INSERT INTO property_definitions
-        (id, owner_id, key, label, description, type, status, storage, module, rank, flags)
+        (id, owner_id, key, label, description, type, status, storage, module, rank, flags,
+         created_at)
       VALUES (${spec.id}, ${owner}, ${spec.key},
               ${JSON.stringify({ ru: spec.label })}::jsonb,
               ${JSON.stringify({ ru: spec.description })}::jsonb,
               ${JSON.stringify({ kind: 'number' })}::jsonb, ${spec.status}, 'props',
-              ${spec.module ?? null}, 200, '{}'::jsonb)
+              ${spec.module ?? null}, 200, '{}'::jsonb,
+              ${(spec.createdAt ?? new Date()).toISOString()}::timestamptz)
       ON CONFLICT (owner_id, id) WHERE owner_id IS NOT NULL DO NOTHING`);
     // Правка реестра двигает его версию тем же путём, что боевой писатель (§А10-1):
     // без этого кеш эффективных определений отдал бы снимок без нового свойства.
@@ -67,6 +78,14 @@ beforeAll(async () => {
     label: 'Настроение',
     description: 'Как прошёл день по ощущениям',
     status: 'proposed',
+  });
+  await seedProperty({
+    id: STALE_PROPOSED_ID,
+    key: 'user/tempo',
+    label: 'Темп',
+    description: 'Насколько быстро шла работа',
+    status: 'proposed',
+    createdAt: STALE_PROPOSED_AT,
   });
   // Две сущности со значением свободного свойства и одна — чужая (её счётчик видеть нельзя).
   await withIdentity(db, owner, async (tx) => {
@@ -93,9 +112,17 @@ afterAll(async () => {
   await client.end();
 });
 
-function run(input: Parameters<typeof runPropertyCatalog>[2]): Promise<PropertyCatalogRow[]> {
+/**
+ * Часы вызова — инъекция, а не `new Date()`: фильтр `olderThanDays` мерит возраст строки от
+ * ЭТОГО момента, и без сдвига часов проверить его можно было бы только подделкой `created_at`
+ * в базе (то есть проверкой не того, что делает боевой путь).
+ */
+function run(
+  input: Parameters<typeof runPropertyCatalog>[2],
+  now: Date = new Date(),
+): Promise<PropertyCatalogRow[]> {
   return withIdentity(db, owner, async (tx) => {
-    const r = await runPropertyCatalog(tx, reg, input, 'ru');
+    const r = await runPropertyCatalog(tx, reg, input, 'ru', { ownerId: owner, now });
     return r.properties;
   });
 }
@@ -126,7 +153,7 @@ describe('property_catalog: фильтры (§А9-3)', () => {
   });
 
   test('status=proposed отдаёт ТОЛЬКО предложенные; по умолчанию видны все статусы', async () => {
-    expect(keysOf(await run({ status: 'proposed' }))).toEqual(['user/mood']);
+    expect(keysOf(await run({ status: 'proposed' }))).toEqual(['user/mood', 'user/tempo']);
     // Приёмка брифа: `status=proposed` на встроенном каталоге пусто — все 77 строк active.
     expect(await run({ status: 'proposed', module: 'finance' })).toEqual([]);
     const all = await run({});
@@ -163,6 +190,47 @@ describe('property_catalog: фильтры (§А9-3)', () => {
     // «таких свойств нет», и это была бы ложь про несуществующий пока механизм.
     const withContract = await run({ contract: 'orbis/money-movement' });
     expect(keysOf(withContract)).toEqual(keysOf(await run({})));
+  });
+
+  test('orphans=true — свойство БЕЗ носителя И БЕЗ значений; обе половины проверяются порознь', async () => {
+    // Фикстура держит все три различимых случая, иначе фильтр «И» неотличим от «ИЛИ»:
+    //  - user/mood: носителей нет, значений нет            → сирота;
+    //  - user/sleep-hours: носителей нет, но ДВА значения   → не сирота (по значениям);
+    //  - orbis/finance_category: значений нет, но ДВА носителя → не сирота (по носителям).
+    const orphans = keysOf(await run({ orphans: true }));
+    expect(orphans).toContain('user/mood');
+    expect(orphans).not.toContain(FREE_KEY);
+    expect(orphans).not.toContain('orbis/finance_category');
+
+    // Комбинируется с остальными: сироты среди предложенных — это уже отчёт садовника.
+    expect(keysOf(await run({ orphans: true, status: 'proposed' }))).toEqual([
+      'user/mood',
+      'user/tempo',
+    ]);
+    // `orphans: false` — это НЕ «покажи неосиротевшие», а отсутствие фильтра.
+    expect(keysOf(await run({ orphans: false }))).toEqual(keysOf(await run({})));
+  });
+
+  test('olderThanDays отбирает по created_at СТРОКИ: 14 дней ловит залежавшееся предложение и не ловит свежее', async () => {
+    // Ровно то, что нужно садовнику (§А2-7): `proposed` старше двух недель.
+    expect(keysOf(await run({ status: 'proposed', olderThanDays: 14 }))).toEqual(['user/tempo']);
+    // Порог — граница, а не «отдай всё»: 41 день старше сорокадневной строки, и выдача пуста.
+    expect(await run({ status: 'proposed', olderThanDays: 41 })).toEqual([]);
+    // 0 дней = «заведено раньше, чем сейчас» — обе строки; ключ при этом не «выключен».
+    expect(keysOf(await run({ status: 'proposed', olderThanDays: 0 }))).toEqual([
+      'user/mood',
+      'user/tempo',
+    ]);
+    // Возраст мерится от ЧАСОВ ВЫЗОВА: сдвинув «сейчас» на 20 дней вперёд, тот же порог
+    // ловит и свежую строку — это пин на источник времени, а не на now() базы.
+    expect(
+      keysOf(
+        await run(
+          { status: 'proposed', olderThanDays: 14 },
+          new Date(Date.now() + 20 * 86_400_000),
+        ),
+      ),
+    ).toEqual(['user/mood', 'user/tempo']);
   });
 
   test('фильтры комбинируются: q + aspect (аспект действительно сужает выдачу слова)', async () => {

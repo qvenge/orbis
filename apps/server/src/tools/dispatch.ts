@@ -560,7 +560,12 @@ async function runRead(
     const parsed = parseEnvelope(propertyCatalogInput, input, 'property_catalog');
     return {
       status: 'ok',
-      result: await runPropertyCatalog(tx, reg, parsed, OWNER_LOCALE),
+      // Часы вызова, а не `now()` БД: фильтр возраста (`olderThanDays`) обязан мерить время
+      // тем же источником, которым его мерит весь остальной прогон.
+      result: await runPropertyCatalog(tx, reg, parsed, OWNER_LOCALE, {
+        ownerId: ctx.actorUserId,
+        now: (ctx.clock ?? (() => new Date()))(),
+      }),
     };
   }
   if (name === 'import_csv_start') {

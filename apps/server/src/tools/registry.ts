@@ -556,6 +556,19 @@ const propertyCatalogJsonSchema = {
       type: 'string',
       description: 'контракты появятся позже — сейчас параметр ничего не сужает',
     },
+    orphans: {
+      type: 'boolean',
+      description:
+        'только сироты: свойство не объявлено НИ ОДНИМ аспектом и не заполнено НИ У ОДНОЙ ' +
+        'записи. false = как без фильтра',
+    },
+    olderThanDays: {
+      type: 'integer',
+      minimum: 0,
+      description:
+        'только свойства, заведённые раньше чем N дней назад; вместе со status:"proposed" — ' +
+        'предложения, которые давно ждут решения',
+    },
   },
   additionalProperties: false,
 };
@@ -1098,7 +1111,8 @@ const CORE_TOOLS: OrbisToolDef[] = [
       'ни в одном attach_*-туле — свободные свойства и предложенные (proposed) видны только ' +
       'отсюда. Возвращает key (им и пиши значение в props), подпись, смысл, тип с вариантами, ' +
       'аспекты-носители и сколько записей это свойство уже заполнили. Фильтры: q (слово), ' +
-      'aspect, module, status.',
+      'aspect, module, status, orphans (свойства без носителя и без значений), olderThanDays ' +
+      '(заведённые раньше чем N дней назад).',
     inputJsonSchema: propertyCatalogJsonSchema,
     kind: 'read',
     // Карта поверхности владельца целиком — фоновому исполнителю она не адресована (§А9-4)

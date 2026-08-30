@@ -33,6 +33,29 @@ export const propertyCatalogInput = z
     module: z.string().min(1).optional(),
     status: z.enum(['active', 'proposed', 'deprecated']).optional(),
     contract: z.string().min(1).optional(),
+    /**
+     * Сироты (§А2-7, отчёт садовника): свойство, которого не объявляет НИ ОДИН аспект и у
+     * которого нет НИ ОДНОГО значения. Оба условия обязательны вместе — по одному они
+     * отвечают на другие вопросы (свойство без носителя, но со значениями — след переезда;
+     * свойство с носителем и нулём значений — просто незаполненное поле, см. `PropertyUsage`).
+     *
+     * Булев флаг, а не `orphans: 'only' | 'exclude'`: обратный отбор («покажи неосиротевшие»)
+     * — это каталог без фильтра, и второе имя того же ответа модель толковала бы как третий
+     * режим. `false` поэтому значит ровно то же, что отсутствие ключа.
+     */
+    orphans: z.boolean().optional(),
+    /**
+     * Возраст СТРОКИ реестра в днях: старше — попадает в выдачу. Ради отчёта садовника о
+     * `proposed` старше 14 дней (§А2-7), но фильтр намеренно не привязан к статусу: «когда
+     * это завели» — вопрос о любой строке, и связка со статусом делается вторым ключом
+     * (`status: 'proposed', olderThanDays: 14`), а не зашита в имя.
+     *
+     * `created_at` НЕ входит в `PropertyDefinition` (§А2-1 её не несёт) и читается отдельным
+     * запросом к `property_definitions`: это единственное поле каталога, которого нет в
+     * снимке реестра, и добавлять его в снимок ради одного фильтра значило бы платить
+     * лишней колонкой на каждом вызове любого тула.
+     */
+    olderThanDays: z.number().int().min(0).optional(),
   })
   .strict();
 export type PropertyCatalogInput = z.infer<typeof propertyCatalogInput>;
@@ -116,6 +139,45 @@ async function usageCounts(tx: Tx, propertyIds: string[]): Promise<Map<string, n
 }
 
 /**
+ * Строки реестра, заведённые ДО указанного момента — одним запросом на всю выдачу.
+ *
+ * Отдельный поход в `property_definitions` тут не «второе мнение о том, что в реестре есть»
+ * (в шапке ветки каталога сказано, что второго мнения быть не должно): состав выдачи по-
+ * прежнему решает СНИМОК, а этот запрос отвечает на вопрос, которого в снимке нет вовсе —
+ * когда строку завели. Поэтому и фильтрует он по УЖЕ отобранным id, а не по таблице целиком:
+ * строка, которой нет в снимке (скрытая дельтой), из-за возраста в выдаче не появится.
+ *
+ * `owner_id IS NULL OR owner_id = …` — тот же предикат, что у `loadRegistryRows`: у
+ * встроенных строк `created_at` тоже есть (его ставит сид), и молча выкинуть их значило бы
+ * отвечать «встроенных свойств старше двух недель не бывает».
+ *
+ * Граница приходит ГОТОВОЙ датой, а не считается здесь из `now()` БД: часы вызова — те же,
+ * что у прогона рутины и у метеринга (`ToolCallCtx.clock`), и второй источник времени сделал
+ * бы фильтр непроверяемым тестом с инъецированными часами.
+ */
+async function createdBefore(
+  tx: Tx,
+  ownerId: string,
+  propertyIds: string[],
+  boundary: Date,
+): Promise<Set<string>> {
+  if (propertyIds.length === 0) return new Set();
+  const rows = (await tx.execute(sql`
+    WITH ids AS (
+      SELECT array_agg(k)::text[] AS arr
+      FROM jsonb_array_elements_text(${JSON.stringify(propertyIds)}::jsonb) AS t(k)
+    )
+    SELECT id
+    FROM ids, property_definitions d
+    WHERE d.id = ANY(ids.arr)
+      AND (d.owner_id IS NULL OR d.owner_id = ${ownerId}::uuid)
+      AND d.created_at < ${boundary.toISOString()}::timestamptz`)) as unknown as Array<{
+    id: string;
+  }>;
+  return new Set(rows.map((r) => r.id));
+}
+
+/**
  * Каталог свойств владельца (§А9-3): системные ∪ свои, отфильтрованные и с `usage`.
  *
  * Порядок выдачи — `rank` СЛОВАРЯ свойств (§А2-1), то есть порядок объявления в реестре.
@@ -133,6 +195,7 @@ export async function runPropertyCatalog(
   reg: RegistrySnapshot,
   input: PropertyCatalogInput,
   locale: string,
+  args: { ownerId: string; now: Date },
 ): Promise<PropertyCatalogResult> {
   // Носители — общей `carrierAspects` (она же держит запрет по объекту в предложении):
   // второй обход тех же ссылок разошёлся бы с первым молча. Она отдаёт id аспекта, а
@@ -163,8 +226,33 @@ export async function runPropertyCatalog(
     tx,
     selected.map((d) => d.id),
   );
+
+  // ДВА ФИЛЬТРА ПОСЛЕ ЗАПРОСОВ, А НЕ В ЦИКЛЕ ВЫШЕ, и порядок здесь вынужденный: `orphans`
+  // спрашивает про `usage`, а его половину (`entities`) знает только `usageCounts`; поставь
+  // фильтр раньше — и считать пришлось бы по одному свойству за запрос. `olderThanDays` идёт
+  // тем же путём по другой причине: возраст лежит в таблице, а не в снимке, и его тоже
+  // спрашивают одним запросом на всю выдачу.
+  const aged =
+    input.olderThanDays === undefined
+      ? undefined
+      : await createdBefore(
+          tx,
+          args.ownerId,
+          selected.map((d) => d.id),
+          new Date(args.now.getTime() - input.olderThanDays * 86_400_000),
+        );
+
+  const shown = selected.filter((def) => {
+    if (input.orphans === true) {
+      if ((counts.get(def.id) ?? 0) !== 0) return false;
+      if (carriersOf(def.id).length !== 0) return false;
+    }
+    if (aged !== undefined && !aged.has(def.id)) return false;
+    return true;
+  });
+
   return {
-    properties: selected.map((def) => ({
+    properties: shown.map((def) => ({
       id: def.id,
       key: def.key,
       label: effectiveLabel(def.label, locale),

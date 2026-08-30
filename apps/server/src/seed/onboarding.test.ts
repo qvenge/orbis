@@ -110,13 +110,13 @@ function legacyFields(
 }
 
 describe('user.seedOnboarding (02 §7): состав и одноразовость', () => {
-  test('создаёт ровно 12+6 сущностей, настройки и глобальный тред; повтор → {seeded:false}, count не растёт', async () => {
+  test('создаёт ровно 12+6+садовник сущностей, настройки и глобальный тред; повтор → {seeded:false}, count не растёт', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
 
     const first = await caller.user.seedOnboarding();
     expect(first).toEqual({ seeded: true });
-    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
 
     // Глобальный тред — с NULL entity_id (§4.5)
     const { db: admin, client: adminClient } = adminDb();
@@ -132,7 +132,7 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
     // Одноразовость §7: повторный вызов ничего не добавляет
     const second = await caller.user.seedOnboarding();
     expect(second).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
   });
 
   test('конкурентные два seedOnboarding под разными коннекшнами → без дублей (детерминированные id + ON CONFLICT)', async () => {
@@ -153,7 +153,7 @@ describe('user.seedOnboarding (02 §7): состав и одноразовост
         clientVersion: null,
       });
       await Promise.all([callerA.user.seedOnboarding(), callerB.user.seedOnboarding()]);
-      expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+      expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
     } finally {
       await a.client.end();
       await b.client.end();
@@ -223,14 +223,14 @@ describe('категории §7.1', () => {
  * стоит на общей стадии 2 конвейера, а сид пишет строки НАПРЯМУЮ, мимо executor'а — то есть
  * стадию 2 он не проходит вовсе, и запрет его сломать не может ПО ПОСТРОЕНИЮ. Но именно
  * поэтому нужна проба: неисполнимость правила на этом пути значит, что нарушить его сид мог
- * бы МОЛЧА, и восемнадцать посеянных строк оказались бы единственными в системе носителями
+ * бы МОЛЧА, и девятнадцать посеянных строк оказались бы единственными в системе носителями
  * второй правды. Здесь посеянное прогоняется через тот же валидатор, что и запись владельца.
  *
  * Core-значения сид пишет ЗАКОННО и пишет их в КОЛОНКИ (`title`, `created_at`, `updated_at`
- * у каждой из 18 строк) — проба это и показывает: колонки заполнены, а `props` о них молчит.
+ * у каждой из 19 строк) — проба это и показывает: колонки заполнены, а `props` о них молчит.
  */
 describe('сид против запрета core-проекций в props (§А1-3, единица 15-бис)', () => {
-  test('все 18 посеянных строк проходят валидатор реестра: core-значения — в колонках, в props их нет', async () => {
+  test('все 19 посеянных строк проходят валидатор реестра: core-значения — в колонках, в props их нет', async () => {
     const user = freshUserId();
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
@@ -257,7 +257,7 @@ describe('сид против запрета core-проекций в props (§�
       }));
     });
 
-    expect(rows.length).toBe(18);
+    expect(rows.length).toBe(19);
     for (const row of rows) {
       expect([row.title, row.violations]).toEqual([row.title, []]);
       // Прямая половина того же утверждения: значение колонки есть, а адреса в props нет.
@@ -671,11 +671,11 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
     // Откат к состоянию «до E4»: горизонтов нет, закреплены только три старых списка
     await deleteHorizons(user, HORIZONS);
     await caller.user.updateSettings({ pinnedEntities: basePins(user) });
-    expect(await counts(user)).toEqual({ entities: 16, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 17, settings: 1, threads: 1 });
 
     // Guard возвращает { seeded: false }, но бэкфилл дописывает недостающее
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
     expect((await caller.entity.query({ query: 'tags=smart-list' })).length).toBe(6);
     expect((await caller.user.getSettings()).pinnedEntities).toEqual([
       ...basePins(user),
@@ -686,7 +686,7 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
     // Ещё два повтора — ни новых сущностей, ни второго закрепления «Года»
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
     expect((await caller.user.getSettings()).pinnedEntities.length).toBe(5);
   });
 
@@ -696,11 +696,11 @@ describe('горизонты планирования: бэкфилл (§7.2, E4
     await caller.user.seedOnboarding();
 
     await deleteHorizons(user, ['horizon-life']);
-    expect(await counts(user)).toEqual({ entities: 17, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
     const settingsBefore = await caller.user.getSettings();
 
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
     const settingsAfter = await caller.user.getSettings();
     expect(settingsAfter.pinnedEntities).toEqual(settingsBefore.pinnedEntities);
     // «Год» уже закреплён — updated_at настроек бэкфилл не сдвигает
@@ -823,11 +823,11 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     // Откат к состоянию «до V1»: списка нет, в сайдбаре четыре прежних закрепления
     await deleteRoutinesList(user);
     await caller.user.updateSettings({ pinnedEntities: pinsBeforeV1(user) });
-    expect(await counts(user)).toEqual({ entities: 17, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
 
     // Guard отдаёт { seeded: false } — досев живёт в его же ветке
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
     const list = (await caller.entity.query({ query: 'tags=smart-list' })).find(
       (r) => r.id === seedSmartListId(user, 'routines'),
     );
@@ -841,7 +841,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     // Ещё два повтора — ни второй сущности, ни второго закрепления
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-    expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+    expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
     expect((await caller.user.getSettings()).pinnedEntities.length).toBe(5);
   });
 
@@ -1000,7 +1000,7 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
       const repeated = await routinesBody(user);
       expect(repeated.body).toBe(ROUTINES_LIST_BODY);
       expect(repeated.updatedAt.toISOString()).toBe(after.updatedAt.toISOString());
-      expect(await counts(user)).toEqual({ entities: 18, settings: 1, threads: 1 });
+      expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
     });
 
     test('ПРАВЛЕНОЕ владельцем тело не трогается никогда — ни телом, ни body_doc', async () => {

@@ -75,14 +75,15 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   });
 
   // ── Шаг 1: онбординг-сид A ────────────────────────────────────────────────
-  test('шаг 1: seedOnboarding(A) — 18 сущностей, настройки, глобальный тред', async () => {
+  test('шаг 1: seedOnboarding(A) — 19 сущностей (12 категорий + 6 списков + садовник словаря), настройки, глобальный тред', async () => {
     const seeded = await a.user.seedOnboarding();
     expect(seeded).toEqual({ seeded: true });
 
     // Идемпотентность §7: повтор ничего не создаёт
     expect(await a.user.seedOnboarding()).toEqual({ seeded: false });
 
-    // 12 категорий + 6 smart lists (три исходных, два горизонта E4, «Рутины» V1.9) = 18
+    // 12 категорий + 6 smart lists (три исходных, два горизонта E4, «Рутины» V1.9) +
+    // садовник словаря (§А2-7, Задача 17) = 19
     const cats = await a.entity.query({ query: 'tags=category' });
     expect(cats.length).toBe(12);
     const lists = await a.entity.query({ query: 'tags=smart-list' });
@@ -250,7 +251,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
       expect(typeof count).toBe('number');
     }
     // ОСМЫСЛЕННОСТЬ ВЫДАЧИ, а не «вызов не бросил». Блок «Сегодня» отбирает РОВНО одну
-    // сущность графа — задачу со сроком сегодня; всё остальное (18 сидированных, расход
+    // сущность графа — задачу со сроком сегодня; всё остальное (19 сидированных, расход
     // «Обед») в него не попадает ни по аспекту, ни по сроку. Точный набор, а не «непусто»
     // и не «все с аспектом task»: обе крайности — пустая выдача и выдача целиком — обязаны
     // краснеть, и обе краснеют (проверено двумя противоположными мутациями `tokenCond`).
@@ -358,15 +359,15 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   });
 
   // ── Шаг 7: экспорт содержит ВЕСЬ граф A (сущности, связи, сообщения, настройки) ─
-  test('шаг 7: exportData(A) — 22 сущности, 3 связи (dependency + два зеркала ref), 1 тред, 8 сообщений (вкл. audit и undo)', async () => {
+  test('шаг 7: exportData(A) — 23 сущности, 3 связи (dependency + два зеркала ref), 1 тред, 8 сообщений (вкл. audit и undo)', async () => {
     const exp = await a.user.exportData();
     expect(exp.format).toBe('orbis-export');
     // v2 (§С5): сущности новой формы плюс строки реестров ВЛАДЕЛЬЦА (Задача 13c).
     expect(exp.version).toBe(2);
 
-    // 18 сидов + «Обед» + «купить кроссовки» + «Продлить страховку» (контроль шага 4b) +
-    // «Дождаться зарплаты» = 22
-    expect(exp.entities.length).toBe(22);
+    // 19 сидов + «Обед» + «купить кроссовки» + «Продлить страховку» (контроль шага 4b) +
+    // «Дождаться зарплаты» = 23
+    expect(exp.entities.length).toBe(23);
     for (const e of exp.entities) expect(() => entitySchema.parse(e)).not.toThrow();
     const expIds = new Set(exp.entities.map((e) => e.id));
     expect(expIds.has(obedId)).toBe(true);
@@ -436,9 +437,9 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     const foreign = await trpcError(b.ai.undo({ actionId: updateActionId }));
     expect(foreign.code).toBe('NOT_FOUND');
 
-    // Срез изоляции №3: экспорт B — только его 18 сидов, без данных A
+    // Срез изоляции №3: экспорт B — только его 19 сидов, без данных A
     const bExp = await b.user.exportData();
-    expect(bExp.entities.length).toBe(18);
+    expect(bExp.entities.length).toBe(19);
     expect(bExp.relations.length).toBe(0);
     expect(bExp.chatThreads.length).toBe(1);
     expect(bExp.chatMessages.length).toBe(0);
@@ -446,7 +447,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
 
     // Граф A не тронут вмешательствами B (перекрёстная проверка изоляции)
     const aExp = await a.user.exportData();
-    expect(aExp.entities.length).toBe(22);
+    expect(aExp.entities.length).toBe(23);
     expect(aExp.relations.length).toBe(3);
     // «купить кроссовки» так и осталась inbox (B её не отменял/менял)
     const aSneakers = aExp.entities.find((e) => e.id === sneakersId);
