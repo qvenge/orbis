@@ -3,7 +3,15 @@
 // Политика §7.10 подключена (Task 5): уровень мутации назначает classifyToolCall
 // (policy/confirmation, юнит-тесты там же); здесь — поведение уровней через dispatch.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { entityThreadId, newId } from '@orbis/shared';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_PROPERTY_META,
+  entityThreadId,
+  newId,
+  type PropertyDefinition,
+} from '@orbis/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import {
   adminDb,
@@ -22,12 +30,20 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { approvePending } from '../policy/pending';
+import type { RegistrySnapshot } from '../registry/load';
 import { bumpOwnerRegistryVersion } from '../registry/version';
 import { appRouter } from '../router';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
 import { createCallerFactory } from '../trpc';
-import { dispatchTool, routineDeferForbidden, routineGate, type ToolCallCtx } from './dispatch';
+import {
+  dispatchTool,
+  registryOperationSummary,
+  routineDeferForbidden,
+  routineGate,
+  type ToolCallCtx,
+} from './dispatch';
 import { buildToolRegistry, type RoutineRef } from './registry';
+import { REGISTRY_TOOL_NAMES } from './registry-tools';
 
 requireEnv();
 
@@ -708,6 +724,17 @@ describe('dispatchTool: политика подтверждений §7.10 (за
       })),
     });
     expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation') return;
+    // ФОЛБЭК НЕ ПОТЕРЯН И СЧЁТ НЕ ЗАДВОЕН (ре-ревью фикс-раунда 1 Задачи 16). В этой пачке
+    // сводке собираться не из чего — ни реестра, ни автономии, — и масштаб говорит
+    // `pendingSummary`. Приписка «— в пачке из N» сюда не приезжает по построению: она живёт
+    // в той же ветке, что и собранная сводка, а собранной сводки здесь нет.
+    expect(r.card).toEqual({
+      kind: 'confirmation_card',
+      mode: 'explicit',
+      pendingId: r.pendingId,
+      summary: '11 операций',
+    });
     const rows = await withIdentity(db, userA, (tx) =>
       tx.select({ id: entities.id }).from(entities).where(inArray(entities.id, ids)),
     );
@@ -2046,7 +2073,7 @@ describe('V1: выдача автономии рутине из чата → pen
     expect(batch.status).toBe('pending_confirmation');
     if (batch.status !== 'pending_confirmation') return;
     expect(batch.card).toMatchObject({
-      summary: 'Автономия рутины «Вечерний разбор»: инструменты: нет',
+      summary: 'Автономия рутины «Вечерний разбор»: инструменты: нет — в пачке из 2 операции',
     });
   });
 
@@ -2846,7 +2873,7 @@ describe('V1: выдача автономии рутине из чата → pen
     // записи с боевыми значениями, и её тело становится инструкцией — карточка называет и это.
     expect(step2.card).toMatchObject({
       summary:
-        'Автономия рутины «Убранная владельцем»: режим act, инструменты: entity_update, снимает паузу; Инструкция act-рутины: тело «Убранная владельцем» становится инструкцией',
+        'Автономия рутины «Убранная владельцем»: режим act, инструменты: entity_update, снимает паузу; Инструкция act-рутины: тело «Убранная владельцем» становится инструкцией — в пачке из 2 операции',
     });
     // Пачка не исполнена: аспект не вернулся, стадия прежняя.
     expect(await aspectsOfRow(disarmedByOwner.id)).toEqual([]);
@@ -2884,7 +2911,7 @@ describe('V1: выдача автономии рутине из чата → pen
     if (bothSwitches.status !== 'pending_confirmation') return;
     expect(bothSwitches.card).toMatchObject({
       summary:
-        'Автономия рутины «Выключенная дважды»: режим act, инструменты: entity_update, снимает паузу',
+        'Автономия рутины «Выключенная дважды»: режим act, инструменты: entity_update, снимает паузу — в пачке из 2 операции',
     });
 
     // ВТОРАЯ СТОРОНА ГРАНИЦЫ: пачка, которая переключает выключатели, но рутину так и не
@@ -2939,7 +2966,7 @@ describe('V1: выдача автономии рутине из чата → pen
     expect(attachThenArm.status).toBe('pending_confirmation');
     if (attachThenArm.status !== 'pending_confirmation') return;
     expect(attachThenArm.card).toMatchObject({
-      summary: 'Автономия рутины «Станет рутиной пачкой»: режим act',
+      summary: 'Автономия рутины «Станет рутиной пачкой»: режим act — в пачке из 2 операции',
     });
 
     // И ТРЕТЬЯ: свёртка читает ОБЕ стороны — пачка, оживляющая рутину и тут же гасящая её
@@ -3054,7 +3081,8 @@ describe('V1: выдача автономии рутине из чата → pen
     // инструкцию. Отсюда «становится инструкцией», а не «правка»: карточка описывает то, что
     // делает вызов, а не то, что модель задумала.
     expect(both.card).toMatchObject({
-      summary: 'Инструкция act-рутины: тело «Пачкой» становится инструкцией',
+      summary:
+        'Инструкция act-рутины: тело «Пачкой» становится инструкцией — в пачке из 2 операции',
     });
     expect(await aspectsOfRow(batched.id)).toEqual([]);
 
@@ -3108,7 +3136,7 @@ describe('V1: выдача автономии рутине из чата → pen
     expect(dup.status).toBe('pending_confirmation');
     if (dup.status !== 'pending_confirmation') return;
     expect(dup.card).toMatchObject({
-      summary: 'Инструкция act-рутины: правка «Правят дважды»',
+      summary: 'Инструкция act-рутины: правка «Правят дважды» — в пачке из 2 операции',
     });
 
     // ВТОРАЯ СТОРОНА ГРАНИЦЫ: ДВЕ РАЗНЫЕ act-рутины в одной пачке по-прежнему называются обе —
@@ -3130,7 +3158,8 @@ describe('V1: выдача автономии рутине из чата → pen
     expect(twoRoutines.status).toBe('pending_confirmation');
     if (twoRoutines.status !== 'pending_confirmation') return;
     expect(twoRoutines.card).toMatchObject({
-      summary: 'Инструкция act-рутины: правка «Правят дважды», «Вторая рутина»',
+      summary:
+        'Инструкция act-рутины: правка «Правят дважды», «Вторая рутина» — в пачке из 2 операции',
     });
 
     // ЕДИНИЦА ФРАЗЫ — «повод + рутина», а не рутина: одна и та же запись законно попадает и в
@@ -3166,7 +3195,7 @@ describe('V1: выдача автономии рутине из чата → pen
     if (twoReasons.status !== 'pending_confirmation') return;
     expect(twoReasons.card).toMatchObject({
       summary:
-        'Инструкция act-рутины: правка «Оба повода»; Инструкция act-рутины: тело «Оба повода» становится инструкцией',
+        'Инструкция act-рутины: правка «Оба повода»; Инструкция act-рутины: тело «Оба повода» становится инструкцией — в пачке из 2 операции',
     });
 
     // СУБЪЕКТ НА МОМЕНТ ОПЕРАЦИИ — В ОБЕ СТОРОНЫ. Первая операция снимает носитель, вторая
@@ -3197,7 +3226,7 @@ describe('V1: выдача автономии рутине из чата → pen
     if (chain.status !== 'pending_confirmation') return;
     expect(chain.card).toMatchObject({
       summary:
-        'Автономия рутины «Сняли и правят»: снимает аспект рутины; Свойства доверенности рутины на записи «Сняли и правят»: инструменты: entity_create',
+        'Автономия рутины «Сняли и правят»: снимает аспект рутины; Свойства доверенности рутины на записи «Сняли и правят»: инструменты: entity_create — в пачке из 2 операции',
     });
 
     // …и обратное направление той же цепочки не сломано: у операции ПОСЛЕ навешивания носителя
@@ -3228,7 +3257,8 @@ describe('V1: выдача автономии рутине из чата → pen
     expect(gained.status).toBe('pending_confirmation');
     if (gained.status !== 'pending_confirmation') return;
     expect(gained.card).toMatchObject({
-      summary: 'Автономия рутины «Навесили и правят»: инструменты: entity_create',
+      summary:
+        'Автономия рутины «Навесили и правят»: инструменты: entity_create — в пачке из 2 операции',
     });
   });
 
@@ -3300,7 +3330,7 @@ describe('V1: выдача автономии рутине из чата → pen
     if (batch.status !== 'pending_confirmation') return;
     expect(batch.card).toMatchObject({
       summary:
-        'Автономия рутины «Общая цель»: режим propose, снимает белый список; Инструкция act-рутины: правка «Общая цель»',
+        'Автономия рутины «Общая цель»: режим propose, снимает белый список; Инструкция act-рутины: правка «Общая цель» — в пачке из 2 операции',
     });
   });
 
@@ -4332,7 +4362,7 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect(r.card).toEqual({
       kind: 'confirmation_card',
       mode: 'preview',
-      summary: 'Заведено свойство «Усилие» (предложение)',
+      summary: 'Заведение свойства «Усилие» (предложение)',
     });
     const created = r.result as { property: string; key: string };
     expect((await registryRow(owner, created.property))?.status).toBe('proposed');
@@ -4425,11 +4455,12 @@ describe('§С2-1: мутации реестра — уровень подтве
     if (r.status !== 'pending_confirmation' || r.card.kind !== 'confirmation_card') {
       throw new Error('ожидалась карточка-запрос');
     }
-    // Обе фразы, склеенные «; » — и ни одна не потеряна.
-    expect(r.card.summary).toContain('Слияние свойств: «Усилие» → «Уровень усилия»');
-    expect(r.card.summary).toContain('Автономия рутины');
-    // …и масштаб пачки не потерян вместе с фолбэком «N операций».
-    expect(r.card.summary).toContain('в пачке из 2 операции'); // operationsNoun: 2 → «операции»
+    // ПОЛНАЯ строка, а не префиксы: проба на `toContain('Автономия рутины')` зеленела бы и
+    // с испорченным хвостом фразы — именно тем, который называет владельцу режим.
+    expect(r.card.summary).toBe(
+      'Автономия рутины «Вооружённая рутина»: режим propose; ' +
+        'Слияние свойств: «Усилие» → «Уровень усилия» — в пачке из 2 операции',
+    );
     // Ни слияние, ни разоружение до подтверждения не применены.
     expect((await registryRow(owner, source.id))?.merged_into).toBeNull();
   });
@@ -4574,7 +4605,140 @@ describe('§С2-1: мутации реестра — уровень подтве
     expect(create.card).toEqual({
       kind: 'confirmation_card',
       mode: 'preview',
-      summary: 'Заведено свойство «Агентское» (предложение)',
+      summary: 'Заведение свойства «Агентское» (предложение)',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Правила сводки мутации реестра: нейтральность ко времени и перечень карточек
+// (ре-ревью фикс-раунда 1 Задачи 16)
+// ---------------------------------------------------------------------------
+
+describe('сводка мутации реестра: правила, а не случаи (§С2-1)', () => {
+  /** Своё свойство владельца в снимке: у него id-uuid и своя подпись (§А2-1, Р3). */
+  const ownProp = (id: string, ru: string) => ({
+    ...(BUILTIN_PROPERTY_META.find((p) => p.id === 'orbis/priority') as PropertyDefinition),
+    id,
+    key: `user/${ru}`,
+    ownerId: newId(),
+    label: { ru },
+  });
+  const SOURCE = '019e4466-1111-7e07-b5d4-64be9721da01';
+  const INTO = '019e4466-2222-7e07-b5d4-64be9721da02';
+  const REG: RegistrySnapshot = {
+    properties: new Map([
+      ...BUILTIN_PROPERTY_META.map((p) => [p.id, p] as const),
+      [SOURCE, ownProp(SOURCE, 'Усилие')],
+      [INTO, ownProp(INTO, 'Уровень усилия')],
+    ]),
+    aspects: new Map(BUILTIN_ASPECT_DEFS.map((a) => [a.id, a])),
+    roles: new Map(),
+    ownerVersion: 1,
+    systemVersion: 1,
+  };
+
+  /**
+   * ГОЛОВЫ ФРАЗ — отглагольные существительные, и это ПРАВИЛО (докблок
+   * `registryOperationSummary`): одна и та же строка уезжает и на карточку, где действие уже
+   * исполнено (`preview`), и на две, где оно ЕЩЁ НЕ произошло (запрос, отложенная единица).
+   * Прошедшее время правдиво в одном случае из трёх, а в двух других сообщает «уже
+   * случилось» там, где СПРАШИВАЮТ разрешение.
+   *
+   * Список закрытый и расширяется ОСОЗНАННО: шестая операция реестра, названная «Заведено» /
+   * «Слито» / «Создано», уронит проверку и заставит перечитать это правило, а не молча
+   * принесёт ту же ошибку заново. Ровно она и была найдена ре-ревью фикс-раунда 1.
+   */
+  const NEUTRAL_HEADS: ReadonlySet<string> = new Set([
+    'Заведение',
+    'Правка',
+    'Слияние',
+    'Настройка',
+    'Сброс',
+  ]);
+  const headOf = (phrase: string): string => phrase.split(' ')[0] ?? '';
+
+  test('фразы сводки нейтральны ко времени: голова каждой — отглагольное существительное', () => {
+    // Фикстуры ведутся ОТ РЕЕСТРА ТУЛОВ, а не списком в тесте: шестой реестровый тул без
+    // фикстуры уронит первую же строку, и фразу для него придётся написать осознанно.
+    const payloads: Record<string, Record<string, unknown>> = {
+      property_create: { label: { ru: 'Усилие' }, status: 'proposed' },
+      property_update: { id: SOURCE, label: { ru: 'Усилие' } },
+      property_merge: { source: SOURCE, into: INTO },
+      aspect_delta_set: { aspect: 'orbis/task', delta: { icon: '📌' } },
+      aspect_delta_remove: { aspect: 'orbis/task' },
+    };
+    expect(Object.keys(payloads).sort()).toEqual([...REGISTRY_TOOL_NAMES].sort());
+
+    // Golden фраз целиком — рядом с правилом: он показывает, ЧТО именно правило разрешает.
+    const phrases = Object.fromEntries(
+      [...REGISTRY_TOOL_NAMES].map((tool) => [
+        tool,
+        registryOperationSummary(REG, tool, payloads[tool] as Record<string, unknown>),
+      ]),
+    );
+    expect(phrases).toEqual({
+      property_create: 'Заведение свойства «Усилие» (предложение)',
+      property_update: 'Правка свойства «Усилие»',
+      property_merge: 'Слияние свойств: «Усилие» → «Уровень усилия»',
+      aspect_delta_set: 'Настройка аспекта «Задача»',
+      aspect_delta_remove: 'Сброс настройки аспекта «Задача»',
+    });
+
+    for (const [tool, phrase] of Object.entries(phrases)) {
+      expect([tool, NEUTRAL_HEADS.has(headOf(phrase))]).toEqual([tool, true]);
+    }
+
+    // ПРОБА НЕ ВАКУУМНА: снятая формулировка прошедшего времени правилом ОТВЕРГАЕТСЯ.
+    // Без этой строки тест зеленел бы и на правиле «голова — любое слово».
+    for (const past of [
+      'Заведено свойство «Усилие»',
+      'Слито свойство «Усилие»',
+      'Создано свойство «Усилие»',
+    ]) {
+      expect([past, NEUTRAL_HEADS.has(headOf(past))]).toEqual([past, false]);
+    }
+  });
+
+  /**
+   * МЕСТА СБОРКИ КАРТОЧЕК — ПЕРЕЧЕНЬ ЗАКРЫТ. Дефект «докблок пересчитал карточки и ошибся»
+   * случался в этой задаче ДВАЖДЫ, и оба раза он был формы «место сборки карточки, которое
+   * сводку не звало». Греп по вызовам `registryOperationSummary` такой дефект не видит ПО
+   * ПОСТРОЕНИЮ — он ловит что угодно, кроме того, что уже дважды случилось. Поэтому пин идёт
+   * по местам сборки САМИХ карточек: появится пятое — тест разойдётся, и решать про него
+   * придётся осознанно.
+   *
+   * Сверяются СТРОКИ, а не номера: номера съезжают от любой правки выше, и пин пришлось бы
+   * чинить каждый раз, ничего при этом не проверяя.
+   */
+  test('места сборки карточек — перечень закрыт: четыре, и три из четырёх идут через сводку', () => {
+    const CARD = /kind:\s*'(confirmation_card|deferred_action_card)'/;
+    const isComment = (line: string): boolean =>
+      line.trimStart().startsWith('*') || line.trimStart().startsWith('//');
+    // Подстановки шаблонной строки схлопываются в `<expr>`: сравнивается ФОРМА места сборки,
+    // а не текст выражения внутри неё, — иначе правка сводки пачки чинила бы этот пин, ничего
+    // при этом не проверяя.
+    const shape = (line: string): string => line.trim().replace(/\$\{[^}]*\}/g, '<expr>');
+    const sites = ['tools/dispatch.ts', 'policy/pending.ts'].flatMap((path) =>
+      readFileSync(join(import.meta.dir, '..', path), 'utf8')
+        .split('\n')
+        .flatMap((line) =>
+          !isComment(line) && CARD.test(line) ? [`${path}: ${shape(line)}`] : [],
+        ),
+    );
+    expect(sites).toEqual([
+      // 4. preview ПАЧКИ — единственное место без сводки: у группы пополевого diff'а нет,
+      //    её содержание и есть масштаб (решение, разобранное в докблоке сводки)
+      "tools/dispatch.ts: card: { kind: 'confirmation_card', mode: 'preview', summary: `<expr> <expr>` },",
+      // 1. preview ОДИНОЧНОГО вызова — зовёт сводку
+      "tools/dispatch.ts: kind: 'confirmation_card',",
+      // 3. отложенная единица пачки D42 — зовёт сводку через snapshotRegistryUnit
+      "tools/dispatch.ts: kind: 'deferred_action_card',",
+      // 2. карточка-ЗАПРОС: собирается здесь, а сводку ей передаёт диспатч (summaryParts)
+      "policy/pending.ts: kind: 'confirmation_card',",
+    ]);
+    // Не вырожденно: регулярка действительно находит карточку, а не молчит на всём подряд.
+    expect(CARD.test("      kind: 'confirmation_card',")).toBe(true);
+    expect(CARD.test("      kind: 'entity_card',")).toBe(false);
   });
 });
