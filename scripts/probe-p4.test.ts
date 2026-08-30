@@ -8,9 +8,12 @@
 //
 // Прогоняется корневым `bun run test` (хвост `bun test scripts/`), как и тест греп-гейта.
 import { expect, test } from 'bun:test';
-import { MAX_TOKENS_NOTE, STEP_LIMIT_NOTE } from '../apps/server/src/ai/send-message.ts';
-import { ROUTINE_MAX_STEPS } from '../apps/server/src/routines/constants.ts';
-import { REPORT_CAP, type RunEnd } from '../apps/server/src/routines/runner.ts';
+import {
+  LLM_REFUSAL_CODE,
+  MAX_TOKENS_NOTE,
+  STEP_LIMIT_NOTE,
+} from '../apps/server/src/ai/send-message.ts';
+import { isReportTruncated, REPORT_CAP, type RunEnd } from '../apps/server/src/routines/runner.ts';
 import { BUILTIN_PROPERTY_META } from '../packages/shared/src/registry/builtin-properties.ts';
 import {
   chooseProvider,
@@ -166,10 +169,10 @@ test('поглощённые и deprecated строки выбывают из о
 // ---------------------------------------------------------------------------
 
 const finished: RunEnd = { outcome: 'finished' };
-/** Годный прогон: короткий непустой отчёт, шагов меньше потолка. */
-const goodRun = { report: 'Свёл два свойства, сирот нет.', stepCount: 3 };
+/** Годный прогон: короткий непустой отчёт. */
+const goodRun = { report: 'Свёл два свойства, сирот нет.' };
 
-test('годен РОВНО один исход: finished без причины, отчёт непустой и не обрезан, шагов меньше потолка', () => {
+test('годен РОВНО один исход: finished без причины, отчёт непустой и не обрезан', () => {
   expect(measurementUsable(finished, goodRun).ok).toBe(true);
 });
 
@@ -203,51 +206,48 @@ test('finished с причиной — тоже не годен (RunEnd впра
   expect(measurementUsable({ outcome: 'finished', reason: 'steps' }, goodRun).ok).toBe(false);
 });
 
-test('упор в лимит шагов виден СТРУКТУРНО — по step_count, без единого слова в отчёте', () => {
-  // Раунд 3: прежде этот признак читался только из текста, а текст обрезается (тест ниже).
-  // Счётчик шагов пишет раннер тем же патчем, что исход, и он не обрезается ничем.
-  const u = measurementUsable(finished, {
-    report: 'Всё разобрал, дублей нет.',
-    stepCount: ROUTINE_MAX_STEPS,
-  });
-  expect(u.ok).toBe(false);
-  if (u.ok) return;
-  expect(u.reason).toContain('лимит шагов');
-  // Позитивный контроль границы: на шаг меньше — годен.
-  expect(
-    measurementUsable(finished, { report: 'Всё разобрал.', stepCount: ROUTINE_MAX_STEPS - 1 }).ok,
-  ).toBe(true);
+test('годность НЕ зависит от числа вызовов тулов: структурного носителя обрыва у прогона нет', () => {
+  // Раунд 3 объявил `orbis/step_count` структурным признаком упора в лимит шагов — и это
+  // была ошибка: он считает НЕТЕРМИНАЛЬНЫЕ ВЫЗОВЫ ТУЛОВ, а ROUTINE_MAX_STEPS ограничивает
+  // обращения К ПРОВАЙДЕРУ (несколько tool_use одним ответом — ОДИН шаг). Признак ошибался в
+  // обе стороны, и проверка снята. Тест сторожит, что она не вернулась: годность решается
+  // исходом, пустотой, обрезкой и пометкой — и ничем больше.
+  expect(measurementUsable(finished, { report: 'Позвал каталог 13 раз, всё свёл.' }).ok).toBe(true);
 });
 
 test('ОБРЕЗАННЫЙ отчёт не годен: пометка обрыва живёт в хвосте, а cap режет ровно хвост', () => {
   // Ровно тот сценарий, который прошёл мимо раунда 2: max_tokens по определению означает
-  // текст на потолке модели, отчёт переваливает REPORT_CAP, `cap` срезает пометку — и
-  // проверка по тексту говорит «годен» именно там, где ветка и нужна.
-  const u = measurementUsable(finished, { report: 'а'.repeat(REPORT_CAP), stepCount: 2 });
+  // текст на потолке модели, отчёт переваливает потолок, `cap` срезает пометку — и проверка
+  // по тексту говорит «годен» именно там, где ветка и нужна.
+  const u = measurementUsable(finished, { report: 'а'.repeat(REPORT_CAP) });
   expect(u.ok).toBe(false);
   if (u.ok) return;
   expect(u.reason).toContain('обрезан');
   // Позитивный контроль границы: на символ короче потолка — годен.
-  expect(measurementUsable(finished, { report: 'б'.repeat(REPORT_CAP - 1), stepCount: 2 }).ok).toBe(
-    true,
-  );
+  expect(measurementUsable(finished, { report: 'б'.repeat(REPORT_CAP - 1) }).ok).toBe(true);
+});
+
+test('обрезка спрашивается ПРАВИЛОМ раннера, а не сравнением с числом в пробе', () => {
+  // Экспорт числа отдал бы `length >= REPORT_CAP` — условие, выведенное из устройства `cap`
+  // и потому обязанное меняться вместе с резаком. Предикат живёт рядом с резаком; тест
+  // связывает обе стороны, чтобы проба и раннер не разъехались молча.
+  expect(isReportTruncated('а'.repeat(REPORT_CAP))).toBe(true);
+  expect(isReportTruncated('б'.repeat(REPORT_CAP - 1))).toBe(false);
+  // Законное многоточие в конце короткого отчёта обрезкой НЕ считается.
+  expect(isReportTruncated('Свёл два свойства…')).toBe(false);
 });
 
 test('ПУСТОЙ отчёт не годен: прогон без текста и без вызовов ничего не измерил', () => {
   for (const report of [undefined, '', '   ', '\n\n']) {
-    expect([report, measurementUsable(finished, { report, stepCount: 0 }).ok]).toEqual([
-      report,
-      false,
-    ]);
+    expect([report, measurementUsable(finished, { report }).ok]).toEqual([report, false]);
   }
 });
 
 test('пометка обрыва в тексте — последняя линия (единственная у max_tokens)', () => {
   for (const note of [STEP_LIMIT_NOTE, MAX_TOKENS_NOTE]) {
-    expect(
-      measurementUsable(finished, { report: `Начал разбирать словарь…\n\n${note}`, stepCount: 2 })
-        .ok,
-    ).toBe(false);
+    expect(measurementUsable(finished, { report: `Начал разбирать словарь…\n\n${note}` }).ok).toBe(
+      false,
+    );
   }
 });
 
@@ -286,12 +286,14 @@ test('processing и replayed — цикл не гонялся, сценарий 
 });
 
 test('отказ модели ловится СТРУКТУРНО — по коду карточки, а не по тексту ответа', () => {
+  // Код берётся КОНСТАНТОЙ из места рождения карточки (`send-message.ts`), а не копией
+  // строки: разъехавшись, копия либо перестала бы видеть отказы, либо выбросила бы корпус.
   const u = scenarioUsable(
-    answer({ cards: [{ kind: 'error_card', code: 'LLM_REFUSAL', message: 'не буду' }] }),
+    answer({ cards: [{ kind: 'error_card', code: LLM_REFUSAL_CODE, message: 'не буду' }] }),
   );
   expect(u.ok).toBe(false);
   if (u.ok) return;
-  expect(u.reason).toContain('LLM_REFUSAL');
+  expect(u.reason).toContain(LLM_REFUSAL_CODE);
 });
 
 test('потолок токенов и лимит шагов ЧАТА — сценарий не состоялся (возвращаются без исключения)', () => {

@@ -48,6 +48,7 @@ import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { routineById } from '../apps/server/src/agent-loop/queries';
 import {
+  LLM_REFUSAL_CODE,
   MAX_TOKENS_NOTE,
   type SendMessageResult,
   STEP_LIMIT_NOTE,
@@ -59,9 +60,8 @@ import { withIdentity } from '../apps/server/src/db/with-identity';
 import { type LLMProviderEnv, makeLLMProvider } from '../apps/server/src/llm/provider';
 import type { LLMProvider } from '../apps/server/src/llm/types';
 import { approvePending } from '../apps/server/src/policy/pending';
-import { ROUTINE_MAX_STEPS } from '../apps/server/src/routines/constants';
 import { startBucketRun } from '../apps/server/src/routines/lifecycle';
-import { REPORT_CAP, type RunEnd, runRoutineRun } from '../apps/server/src/routines/runner';
+import { isReportTruncated, type RunEnd, runRoutineRun } from '../apps/server/src/routines/runner';
 import { GARDENER_SLUG, GARDENER_TITLE, seedRoutineId } from '../apps/server/src/seed/gardener';
 import { seedOwner } from '../apps/server/src/seed/onboarding';
 
@@ -101,6 +101,14 @@ export const HEURISTIC_ACCURACY_NOTE = [
   'КАНДИДАТЫ на глаз владельцу, а не измеренная доля дублей: решение «дубль или нет»',
   'принимает он, а скрипт вердикта по этой цифре не выносит и кода выхода ею не выставляет.',
 ].join('\n');
+
+/**
+ * СКОЛЬКО СЦЕНАРИЕВ В КОРПУСЕ П1. Проверяется, а не выводится из длины файла: цифры П4
+ * удельные («на обращение»), и корпус другого размера даёт числа, НЕСРАВНИМЫЕ с П1 — а
+ * сравнимость и есть весь смысл переноса корпуса в assets побайтно. Урезанный файл дал бы
+ * «первую цифру» с тем же апломбом, что полный, и никто бы этого не заметил.
+ */
+const CORPUS_SIZE = 20;
 
 interface CorpusTask {
   n: number;
@@ -195,13 +203,9 @@ export function chooseProvider(env: LLMProviderEnv): ProviderChoice {
 
 export type Usable = { ok: true } | { ok: false; reason: string };
 
-/**
- * Прогон садовника в объёме, по которому судят о годности замера. `stepCount` здесь не ради
- * любопытства: это ЕДИНСТВЕННЫЙ признак упора в лимит шагов, который не живёт в тексте.
- */
+/** Прогон садовника в объёме, по которому судят о годности замера. */
 export interface GardenerRun {
   report: string | undefined;
-  stepCount: number;
 }
 
 /**
@@ -214,9 +218,9 @@ export interface GardenerRun {
  * ОДНОСТОРОННЯЯ — в сторону «сужать Р14». Сценарий не краевой: ровно так проба и умерла в
  * первый раз.
  *
- * ГОДЕН РОВНО ОДИН ИСХОД: `finished` без причины, с НЕПУСТЫМ и НЕОБРЕЗАННЫМ отчётом и без
- * упора в лимит шагов. Ниже — ВСЕ способы, которыми «не годен» доходит до пробы, и чем
- * каждый ловится; перечень собран по возвратам, а не по тому, где удобно проверять.
+ * ГОДЕН РОВНО ОДИН ИСХОД: `finished` без причины, с НЕПУСТЫМ и НЕОБРЕЗАННЫМ отчётом. Ниже —
+ * ВСЕ способы, которыми «не годен» доходит до пробы, и чем каждый ловится; перечень собран по
+ * возвратам, а не по тому, где удобно проверять.
  *
  *  1. `failed` (provider/deadline/limit/refusal/aborted/internal) — поле `outcome`.
  *  2. **`checkpoint` — ТОЖЕ несостоявшийся замер**, хотя для `act`-рутины исход штатный.
@@ -224,24 +228,34 @@ export interface GardenerRun {
  *     и «сколько он не свёл» по такому прогону — домысел. Штатность говорит о рутине, а не о
  *     пробе: пробе нужен ПОЛНЫЙ обход, иначе знаменатель неполон.
  *  3. `finished` с `reason` — поле `reason` (сегодня такой формы нет; проверка fail-closed).
- *  4. **Упор в лимит шагов — по `orbis/step_count`, а НЕ по тексту.** Это исправление
- *     раунда 3: прежде признак читался только из отчёта, а отчёт обрезается (см. 5). Счётчик
- *     шагов пишет раннер тем же патчем, что исход, и ничем не обрезается.
- *  5. **Отчёт ОБРЕЗАН (`length >= REPORT_CAP`) — не годен, и это fail-closed, а не
- *     педантизм.** `cap` в `settle` дописывает пометку обрыва в КОНЕЦ и режет ровно хвост:
- *     на отчёте длиннее потолка пометка теряется молча. Отличить «обрезанный без пометки» от
- *     «обрезанного с пометкой» нечем, поэтому обрезанный отчёт годным не считается вовсе.
- *  6. Отчёт ПУСТ или отсутствует — прогон без текста и без вызовов ничего не измерил
+ *  4. Отчёт ПУСТ или отсутствует — прогон без текста и без вызовов ничего не измерил
  *     (`settle` пустой отчёт не пишет вовсе, поэтому сюда он приходит как `undefined`).
- *  7. Пометка обрыва в тексте — последняя линия, единственная для `max_tokens`.
+ *  5. **Отчёт ОБРЕЗАН (`isReportTruncated`) — не годен, и это fail-closed, а не педантизм.**
+ *     `cap` в `settle` дописывает пометку обрыва в КОНЕЦ и режет ровно хвост: на отчёте
+ *     длиннее потолка пометка теряется молча. Отличить «обрезанный без пометки» от
+ *     «обрезанного с пометкой» нечем, поэтому обрезанный отчёт годным не считается вовсе.
+ *     Спрашивается ПРАВИЛОМ, живущим рядом с резаком, а не сравнением с числом: условие
+ *     выведено из устройства `cap` и при смене резака обязано меняться вместе с ним.
+ *  6. Пометки `STEP_LIMIT_NOTE` / `MAX_TOKENS_NOTE` в тексте — единственный носитель обоих
+ *     обрывов (см. долг ниже).
  *
- * ЧТО НАЗВАНО ЧЕСТНО И НЕ ПОЧИНЕНО ЗДЕСЬ: у `max_tokens` СТРУКТУРНОГО носителя нет вовсе.
- * В режиме `act` и потолок токенов, и лимит шагов возвращают голый `{outcome:'finished'}`, и
- * единственный след потолка — текст отчёта. Лимит шагов удалось увести в структуру
- * (`step_count`), потолок токенов — нет: `run_usage.output_tokens` это СУММА по шагам, она
- * не равна `MAX_OUTPUT_TOKENS` ни необходимо, ни достаточно. Проба закрывает дыру
- * fail-closed'ом по обрезке (пункт 5), но настоящее лечение — поле исхода в аспекте прогона,
- * то есть правка РАННЕРА, а не пробы. Записано координатору как находка.
+ * ДОЛГ, НАЗВАННЫЙ ЧЕСТНО И НЕ ЗАКРЫТЫЙ ЗДЕСЬ: у ОБОИХ обрывов — и у потолка токенов, и у
+ * лимита шагов — СТРУКТУРНОГО носителя в строке прогона нет. В режиме `act` обе ветки
+ * возвращают голый `{outcome:'finished'}`, а в аспекте прогона поля исхода нет:
+ *  • `orbis/step_count` НЕ ГОДИТСЯ и намеренно здесь не используется. Он растёт на каждый
+ *    НЕТЕРМИНАЛЬНЫЙ ВЫЗОВ ТУЛА (`runner.ts` → `runAgentVerb('orbis_run_step')`), а
+ *    `ROUTINE_MAX_STEPS` ограничивает обращения К ПРОВАЙДЕРУ — докблок самой константы
+ *    говорит это прямым текстом («несколько tool_use одним ответом считаются ОДНИМ шагом»).
+ *    Признак ошибается в ОБЕ стороны: здоровый прогон с 13 тулами в одном ответе дал бы
+ *    «упёрся в лимит (13 из 12)» и заблокировал бы замер, а настоящий упор (12 ответов по
+ *    одному тулу) дал бы `step_count = 11` и промолчал. Раунд 3 объявил его структурным
+ *    исправлением — это была ошибка, и она снята вместе с проверкой;
+ *  • `orbis/run_usage` тоже не годится: это `{input_tokens, output_tokens}`, СУММА по шагам,
+ *    не равная `MAX_OUTPUT_TOKENS` ни необходимо, ни достаточно; счётчика обращений к
+ *    провайдеру в прогоне нет вовсе (`requestCount` уходит в дневной `ai_usage`).
+ * Оба обрыва поэтому ловятся ТЕКСТОМ (пункт 6) с fail-closed'ом по обрезке (пункт 5).
+ * Настоящее лечение — поле исхода в аспекте прогона, то есть правка РАННЕРА и реестра, а не
+ * пробы. Записано долгом координатору; за скоупом Задачи 17.
  */
 export function measurementUsable(end: RunEnd, run: GardenerRun): Usable {
   if (end.outcome === 'checkpoint') {
@@ -260,13 +274,6 @@ export function measurementUsable(end: RunEnd, run: GardenerRun): Usable {
   if (end.reason !== undefined) {
     return { ok: false, reason: `прогон садовника завершён с причиной «${end.reason}»` };
   }
-  // СТРУКТУРНЫЙ признак упора в лимит шагов — раньше текстовых: он не обрезается.
-  if (run.stepCount >= ROUTINE_MAX_STEPS) {
-    return {
-      ok: false,
-      reason: `садовник упёрся в лимит шагов (${run.stepCount} из ${ROUTINE_MAX_STEPS}) — работа не доведена до конца`,
-    };
-  }
   if (run.report === undefined || run.report.trim() === '') {
     return {
       ok: false,
@@ -274,10 +281,11 @@ export function measurementUsable(end: RunEnd, run: GardenerRun): Usable {
         'у прогона садовника пустой отчёт — прогон без текста и без вызовов ничего не измерил',
     };
   }
-  if (run.report.length >= REPORT_CAP) {
+  if (isReportTruncated(run.report)) {
     return {
       ok: false,
-      reason: `отчёт садовника обрезан по потолку ${REPORT_CAP} — пометка обрыва живёт в хвосте, и отличить оборванный прогон от полного нечем`,
+      reason:
+        'отчёт садовника обрезан резаком раннера — пометка обрыва живёт в хвосте, и отличить оборванный прогон от полного нечем',
     };
   }
   for (const [note, what] of [
@@ -328,9 +336,9 @@ export function scenarioUsable(result: SendMessageResult): Usable {
         typeof card === 'object' &&
         card !== null &&
         (card as { kind?: unknown }).kind === 'error_card' &&
-        (card as { code?: unknown }).code === 'LLM_REFUSAL'
+        (card as { code?: unknown }).code === LLM_REFUSAL_CODE
       ) {
-        return { ok: false, reason: 'модель отказалась отвечать (LLM_REFUSAL)' };
+        return { ok: false, reason: `модель отказалась отвечать (${LLM_REFUSAL_CODE})` };
       }
     }
   }
@@ -469,9 +477,14 @@ async function main(): Promise<number> {
   const provider = choice.provider;
 
   const corpus = JSON.parse(readFileSync(CORPUS_PATH, 'utf8')) as CorpusTask[];
-  if (!Array.isArray(corpus) || corpus.length === 0) {
-    console.error(`probe-p4: корпус пуст: ${CORPUS_PATH}`);
-    return 1;
+  if (!Array.isArray(corpus) || corpus.length !== CORPUS_SIZE) {
+    console.error(
+      `probe-p4: корпус не тот — ${Array.isArray(corpus) ? corpus.length : 'не массив'} сценариев вместо ${CORPUS_SIZE} (${CORPUS_PATH}).`,
+    );
+    console.error(
+      'Замер не состоялся (это код 2, а не сбой пробы): удельные цифры по другому корпусу несравнимы с П1.',
+    );
+    return 2;
   }
 
   const { db, client } = makeDb({ max: 3 });
@@ -507,8 +520,13 @@ async function main(): Promise<number> {
     console.log(`probe-p4: провайдер ${provider.modelId}, владелец пробы ${owner}`);
     const seeded = await seedOwner(db, owner);
     // Возврат сида тоже проверяется: владелец свежий, `seeded: false` означало бы, что
-    // онбординг уже был, — то есть замер идёт по чужому графу.
-    if (!seeded.seeded) throw new Error('сид владельца пробы не отработал (seeded: false)');
+    // онбординг уже был, — то есть замер пошёл бы по чужому графу. Это КОД 2, а не 1:
+    // «замер не состоялся», а не «проба сломалась», — та же граница, что у отсутствия ключа.
+    if (!seeded.seeded) {
+      console.error('probe-p4: сид владельца пробы вернул seeded: false — граф не наш.');
+      console.error('Замер не состоялся (это код 2, а не сбой пробы).');
+      throw new ProbeAbort(2);
+    }
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
 
     const deps = { provider, model: provider.modelId };
@@ -571,9 +589,18 @@ async function main(): Promise<number> {
       { db, provider, model: provider.modelId, clock },
       { ownerId: owner, routine: { id: routineId, title: GARDENER_TITLE }, bucket },
     );
-    if (!started.started) throw new Error(`прогон садовника не заведён: ${started.reason}`);
+    // Оба исхода — того же класса, что сид выше: мерить нечем, а не сломалось.
+    if (!started.started) {
+      console.error(`probe-p4: прогон садовника не заведён — ${started.reason}.`);
+      console.error('Замер не состоялся (это код 2, а не сбой пробы).');
+      throw new ProbeAbort(2);
+    }
     const routine = await withIdentity(db, owner, (tx) => routineById(tx, routineId));
-    if (routine === null) throw new Error('садовник не найден — сид не отработал');
+    if (routine === null) {
+      console.error('probe-p4: садовник не найден — сид не отработал.');
+      console.error('Замер не состоялся (это код 2, а не сбой пробы).');
+      throw new ProbeAbort(2);
+    }
     // `clock` у RoutineDeps ОБЯЗАТЕЛЕН, и забыть его здесь можно молча: каталог `scripts/`
     // не входит в `include` ни одного tsconfig, то есть `bun run typecheck` этот файл не
     // видит. Первый прогон пробы упал ровно на этом — `deps.clock is not a function`.
@@ -582,15 +609,10 @@ async function main(): Promise<number> {
       { ownerId: owner, routine, runId: started.runId, bucket },
     );
     const runRows = (await withIdentity(db, owner, (tx) =>
-      tx.execute(sql`SELECT props ->> 'orbis/run_report' AS report,
-                            COALESCE((props ->> 'orbis/step_count')::int, 0) AS step_count
-                       FROM entities
+      tx.execute(sql`SELECT props ->> 'orbis/run_report' AS report FROM entities
                       WHERE id = ${started.runId}::uuid`),
-    )) as unknown as Array<{ report: string | null; step_count: number }>;
-    const usable = measurementUsable(end, {
-      report: runRows[0]?.report ?? undefined,
-      stepCount: Number(runRows[0]?.step_count ?? 0),
-    });
+    )) as unknown as Array<{ report: string | null }>;
+    const usable = measurementUsable(end, { report: runRows[0]?.report ?? undefined });
     console.log(
       `probe-p4: прогон садовника — ${end.outcome}${end.reason ? ` (${end.reason})` : ''}`,
     );
@@ -609,9 +631,11 @@ async function main(): Promise<number> {
       tx.execute(sql`SELECT id, metadata FROM chat_messages
                       WHERE metadata @> ${JSON.stringify({ pending: { run_id: started.runId, kind: 'action' } })}::jsonb`),
     )) as unknown as Array<{ id: string; metadata: { pending: { tool?: string } } }>;
+    // Считаются СЛИЯНИЯ, а не единицы вообще: владельцу это цифра про садовника, и общий
+    // счёт врал бы тем сильнее, чем больше в пачке единиц другого рода (вопросы, правки).
+    const mergeUnits = units.filter((u) => u.metadata.pending.tool === 'property_merge');
     let merged = 0;
-    for (const unit of units) {
-      if (unit.metadata.pending.tool !== 'property_merge') continue;
+    for (const unit of mergeUnits) {
       const r = await approvePending(db, { ownerId: owner, pendingId: unit.id });
       if (r.ok) merged += 1;
       else console.error(`  единица ${unit.id}: не применена — ${r.error.code} ${r.error.message}`);
@@ -661,7 +685,12 @@ async function main(): Promise<number> {
     console.log('');
     console.log('— пары СВОИХ строк (их садовник в принципе может свести) —');
     printPairs('  до садовника', pairsBefore.own);
-    console.log(`  садовник предложил слияний: ${units.length}, принято владельцем: ${merged}`);
+    console.log(
+      `  садовник предложил слияний: ${mergeUnits.length}, принято владельцем: ${merged}` +
+        (units.length > mergeUnits.length
+          ? ` (всего единиц в пачке прогона: ${units.length})`
+          : ''),
+    );
     printPairs('  после разбора пачки', pairsAfter.own);
     console.log('');
     console.log('— пары СВОЕГО против ВСТРОЕННОГО (садовник свести их НЕ МОЖЕТ) —');

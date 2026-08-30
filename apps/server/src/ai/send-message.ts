@@ -60,6 +60,17 @@ export const STEP_LIMIT_NOTE = '[цикл остановлен: достигну
  */
 export const MAX_TOKENS_NOTE = '[ответ обрезан: достигнут потолок токенов]';
 
+/**
+ * Код `error_card` отказа модели (stopReason refusal) — КОНСТАНТА, а не литерал на месте.
+ *
+ * Второй читатель — проба П4: по этому коду она отличает «модель отказалась отвечать»
+ * (сценарий не состоялся) от карточки неудачного ВЫЗОВА ТУЛА, которая едет с кодом
+ * `ExecError` и означает законное поведение модели, которое проба и меряет. Различие
+ * держится на одной строке, и вторая её копия разъехалась бы с этой молча — тогда проба
+ * либо перестала бы видеть отказы, либо выбросила бы половину корпуса.
+ */
+export const LLM_REFUSAL_CODE = 'LLM_REFUSAL';
+
 /** Текст error_card при отказе модели (stopReason refusal). */
 export const REFUSAL_NOTE = 'модель отказалась отвечать';
 
@@ -364,7 +375,7 @@ async function runAgentLoop(
       // tool-вызовы шага-отказа НЕ исполняются, цикл не продолжается. Токены шага
       // уже отметрены (честный расход).
       if (response.stopReason === 'refusal') {
-        cards.push({ kind: 'error_card', code: 'LLM_REFUSAL', message: REFUSAL_NOTE });
+        cards.push({ kind: 'error_card', code: LLM_REFUSAL_CODE, message: REFUSAL_NOTE });
         const parsed = extractSuggestions(response.content);
         suggestions = parsed.suggestions;
         finalText = parsed.text;
