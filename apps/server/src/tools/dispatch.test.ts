@@ -4369,18 +4369,69 @@ describe('§С2-1: мутации реестра — уровень подтве
     });
     expect(r.status).toBe('pending_confirmation');
     if (r.status !== 'pending_confirmation') return;
+    // КАРТОЧКА НАЗЫВАЕТ СОДЕРЖАНИЕ, А НЕ ИМЯ ТУЛА (гейт-ревью Задачи 16). §С8-11 требует у
+    // слияния и дельты ДИФФ Ш1 — форму, в которой владелец ВИДИТ, что подтверждает;
+    // «Требуется подтверждение: property_merge» не отвечает на этот вопрос и обучает жать
+    // «Принять» вслепую. Фраза — той же функцией и по тому же снимку, что у карточки
+    // preview и у отложенной единицы.
     expect(r.card).toEqual({
       kind: 'confirmation_card',
       mode: 'explicit',
       pendingId: r.pendingId,
-      summary: 'property_merge',
+      summary: 'Слияние свойств: «Усилие» → «Уровень усилия»',
     });
+    // Пробы «не имя тула» и «не адрес» — обе стороны границы, а не одна: uuid в карточке
+    // владельцу так же нечем истолковать, как и `property_merge`.
+    if (r.card.kind !== 'confirmation_card') throw new Error('ожидалась карточка-запрос');
+    expect(r.card.summary).not.toContain('property_merge');
+    expect(r.card.summary).not.toContain(source.id);
+    // Строка ЛЕНТЫ — то, что владелец видит в треде, а не только payload карточки.
+    const line = (await messagesIn(owner, threadId)).find((m) => m.id === r.pendingId);
+    expect(String(line?.content)).toBe(
+      'Требуется подтверждение: Слияние свойств: «Усилие» → «Уровень усилия»',
+    );
     // ДО подтверждения в реестре не изменилось ничего — ни `merged_into`, ни версия строки.
     expect((await registryRow(owner, source.id))?.merged_into).toBeNull();
 
     // Отказ ведёт к выходу: подтверждение владельца исполняет ровно этот вызов.
     await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
     expect((await registryRow(owner, source.id))?.merged_into).toBe(into.id);
+  });
+
+  test('склейка поводов: пачка «слить свойства + разоружить act-рутину» называет ОБА, а не вытесняет одно другим', async () => {
+    // Довод — тот же, по которому фикс-раунд 3 Задачи 12 переводил ветку инструкции со
+    // «вместо» на «склеиваются»: владелец подписывает ВСЁ, что подняло уровень. Здесь
+    // поводов два и они из разных ветвей — реестр (ряд 4a §С2-1) и автономия (V1.10).
+    const owner = freshUserId();
+    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const source = await ownProperty(owner, 'Усилие');
+    const into = await ownProperty(owner, 'Уровень усилия');
+    const routineId = await seedRoutine(owner, {
+      title: 'Вооружённая рутина',
+      routine: { mode: 'act', allowed_tools: ['entity_update'] },
+    });
+
+    const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'batch_execute', {
+      batch_id: newId(),
+      operations: [
+        { tool: 'property_merge', input: { source: source.id, into: into.id } },
+        {
+          tool: 'entity_update',
+          input: { id: routineId, props: { 'orbis/routine_mode': 'propose' } },
+        },
+      ],
+    });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'confirmation_card') {
+      throw new Error('ожидалась карточка-запрос');
+    }
+    // Обе фразы, склеенные «; » — и ни одна не потеряна.
+    expect(r.card.summary).toContain('Слияние свойств: «Усилие» → «Уровень усилия»');
+    expect(r.card.summary).toContain('Автономия рутины');
+    // …и масштаб пачки не потерян вместе с фолбэком «N операций».
+    expect(r.card.summary).toContain('в пачке из 2 операции'); // operationsNoun: 2 → «операции»
+    // Ни слияние, ни разоружение до подтверждения не применены.
+    expect((await registryRow(owner, source.id))?.merged_into).toBeNull();
   });
 
   test('property_merge от рутины (садовник) → отложенная единица пачки D42 в треде рутины, прогон продолжается', async () => {
