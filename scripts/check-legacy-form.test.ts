@@ -17,7 +17,13 @@ import { afterAll, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { ALLOWLIST, LEGACY_MARKERS, type MarkerReport, scan } from './check-legacy-form.ts';
+import {
+  ALLOWLIST,
+  LEGACY_MARKERS,
+  type MarkerReport,
+  scan,
+  scanMarker,
+} from './check-legacy-form.ts';
 
 const SCRIPT = join(import.meta.dir, 'check-legacy-form.ts');
 const dirs: string[] = [];
@@ -342,4 +348,35 @@ test('у каждой записи allowlist есть непустая прич�
   for (const e of ALLOWLIST) {
     expect(e.reason.trim().length).toBeGreaterThan(0);
   }
+});
+
+/**
+ * ЕДИНСТВЕННАЯ проба этого файла ПО РАБОЧЕМУ ДЕРЕВУ — и исключение из его правила
+ * (см. шапку) названо явно.
+ *
+ * Правило «синтетическое дерево» защищает от привязки к ЦИФРАМ, которые двигает каждая
+ * задача среза. Здесь цифра не двигается: парсер заголовка правила УДАЛЁН (Задача 18, В7),
+ * машиночитаемая часть правила уехала в свойства, и `parseRuleTitle`/`formatRuleTitle` в
+ * дереве не может быть больше никогда — ни одного, кроме образцов в самом гейте и в этом
+ * файле (оба в allowlist). Это закрытая дверь, а не счётчик, и проверять её на синтетике
+ * бессмысленно: синтетика подтвердила бы работу регулярки, а вопрос — про РЕПОЗИТОРИЙ.
+ *
+ * Проверяется ТОЛЬКО маркер `rule-parser`: остальные маркеры описывают формы, которые срез
+ * ещё переводит, и их совпадения законны до Задачи 23.
+ */
+test('rule-parser: парсера заголовка правила в рабочем дереве нет (кроме образцов в allowlist)', () => {
+  const root = join(import.meta.dir, '..');
+  const marker = LEGACY_MARKERS.find((m) => m.id === 'rule-parser');
+  expect(marker).toBeDefined();
+  if (marker === undefined) return;
+  const report = scanMarker(marker, root);
+  // `hits` — совпадения ВНЕ allowlist: это и есть то, что считает приёмка.
+  expect(report.hits.map((h) => `${h.path}:${h.line}`)).toEqual([]);
+  // Проба ЗНАЧИМА только если регулярка вообще что-то находит: образцы в самом гейте и в
+  // этом файле обязаны попасться (они в allowlist) — иначе зелёный ноль означал бы
+  // сломанный поиск, а не убранный парсер.
+  expect([...report.allowed.keys()].sort()).toEqual([
+    'scripts/check-legacy-form.test.ts',
+    'scripts/check-legacy-form.ts',
+  ]);
 });

@@ -212,12 +212,22 @@ async function freshOwner(): Promise<{ user: string; food: string; fun: string }
   return { user, food, fun };
 }
 
-/** Активное memory-правило «пятерочка → Развлечения» (scope=orbis/financial). */
-async function createRule(user: string): Promise<WireEntity> {
+/**
+ * Активное memory-правило «пятерочка → <категория>» в форме СВОЙСТВ (В7): образец и цель —
+ * значения, а не части заголовка. Заголовок здесь — генерируемая подпись, и гейт
+ * эквивалентности его не читает вовсе.
+ */
+async function createRule(user: string, targetId: string): Promise<WireEntity> {
   return createEntity(user, {
     title: 'пятерочка → Развлечения',
     tags: [],
-    aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/money-movement' } },
+    props: {
+      'orbis/memory_kind': 'rule',
+      'orbis/rule_scope': 'orbis/money-movement',
+      'orbis/rule_pattern': 'пятерочка',
+      'orbis/rule_target': targetId,
+    },
+    aspects: ['orbis/memory'],
   });
 }
 
@@ -258,7 +268,7 @@ describe('эскалация повторных исправлений кате�
 
   test('4. активное эквивалентное правило уже есть → предложения нет', async () => {
     const { user, food, fun } = await freshOwner();
-    await createRule(user);
+    await createRule(user, fun);
     await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
     await recategorize(user, await createTxn(user, 'Пятёрочка', food), fun);
     expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
@@ -271,15 +281,54 @@ describe('эскалация повторных исправлений кате�
   // предложение УЖЕ созданного правила, а повторное «Запомнить» рождало вторую сущность.
   test('4b. эквивалентное правило подавляет и при служебном токене внутри заголовка', async () => {
     const { user, food, fun } = await freshOwner();
-    await createRule(user);
+    await createRule(user, fun);
     await recategorize(user, await createTxn(user, '1234 CARD ПЯТЁРОЧКА', food), fun);
     await recategorize(user, await createTxn(user, '5678 CARD ПЯТЕРОЧКА', food), fun);
     expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
   });
 
+  // ПРИЁМКА ЗАДАЧИ 18: дубль ищется по ПАРЕ СВОЙСТВ (`orbis/rule_pattern`,
+  // `orbis/rule_target`), а не по разбору заголовка. Две половины, и обе наблюдаемы:
+  //  • ЦЕЛЬ ПО ID — переименование категории «эквивалентность» не ломает. Прежде правая
+  //    часть сравнивалась НАЗВАНИЕМ, и после переименования гейт переставал видеть уже
+  //    созданное правило: приходило предложение того же самого правила, а «Запомнить»
+  //    рождало вторую одноимённую сущность;
+  //  • ОБРАЗЕЦ ИЗ СВОЙСТВА — заголовок правила на гейт больше не влияет вовсе.
+  test('4c. дубль ищется по (rule_pattern, rule_target): переименование цели гейт не ломает', async () => {
+    const { user, food, fun } = await freshOwner();
+    const rule = await createRule(user, fun);
+    // Заголовок правила ЛЖЁТ (владелец переписал подпись), а свойства целы — гейт обязан
+    // смотреть на свойства: иначе правка подписи молча воскрешала бы предложение.
+    ok(
+      await execute(
+        db,
+        req(user, [{ tool: 'entity_update', input: { id: rule.id, title: 'моя пометка' } }]),
+        { sink },
+      ),
+    );
+    ok(
+      await execute(
+        db,
+        req(user, [{ tool: 'entity_update', input: { id: fun, title: 'Досуг' } }]),
+        { sink },
+      ),
+    );
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    await recategorize(user, await createTxn(user, 'Пятёрочка', food), fun);
+    expect(await cardsOf(user, 'memory_rule_suggestion')).toEqual([]);
+  });
+
+  test('4d. правило с тем же образцом, но ДРУГОЙ целью — не дубль, предложение приходит', async () => {
+    const { user, food, fun } = await freshOwner();
+    await createRule(user, food); // «пятерочка → Еда»: цель не та, в которую переносят
+    await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
+    await recategorize(user, await createTxn(user, 'Пятёрочка', food), fun);
+    expect((await cardsOf(user, 'memory_rule_suggestion')).length).toBe(1);
+  });
+
   test('5. архивное правило не подавляет (архивная память из контекста исключена, §7.4)', async () => {
     const { user, food, fun } = await freshOwner();
-    const rule = await createRule(user);
+    const rule = await createRule(user, fun);
     const archive = { id: rule.id, archived: true };
     ok(await execute(db, req(user, [{ tool: 'entity_update', input: archive }]), { sink }));
     await recategorize(user, await createTxn(user, 'ПЯТЕРОЧКА 843', food), fun);
@@ -293,7 +342,7 @@ describe('эскалация повторных исправлений кате�
   // так же, а без признака носителя правило глушило бы предложение вечно.
   test('5b. правило со СНЯТЫМ аспектом памяти не подавляет, хотя его значения в props остались (Р9)', async () => {
     const { user, food, fun } = await freshOwner();
-    const rule = await createRule(user);
+    const rule = await createRule(user, fun);
     ok(
       await execute(
         db,

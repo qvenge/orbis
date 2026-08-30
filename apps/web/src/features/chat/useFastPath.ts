@@ -5,6 +5,7 @@ import {
   newId,
   parseFastPath,
   retryCreateId,
+  ruleAppliesTo,
 } from '@orbis/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { TRPCClientError } from '@trpc/client';
@@ -12,7 +13,7 @@ import { invalidateGraph } from '../../lib/invalidate';
 import { useFlushBuffer, useOnline, useRetryBuffer } from '../../state/retry';
 import { isConflict, mapSendError } from '../../state/retry-send';
 import { trpc } from '../../trpc';
-import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME } from './memoryRules';
+import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME, RULES_SCOPE } from './memoryRules';
 import { type ChatMessage, chatThreadKey, upsertNewest, useSendMessage } from './useChatThread';
 
 /** Экспортирован ради пиннинга: боевой текст обязан разбираться каноном (§А5-3). */
@@ -99,9 +100,18 @@ export function useFastPath(threadId: string) {
       categories,
       defaultCurrency: settings?.defaultCurrency ?? 'RUB',
       today: todayIn(settings?.timezone),
-      // Заголовок правила уходит в парсер КАК ЕСТЬ (разбирает его shared, не клиент);
-      // updatedAt — арбитр конфликта двух правил на один паттерн (applyMemoryRules).
-      rules: (rules ?? []).map((e) => ({ title: e.title, updatedAt: e.updatedAt })),
+      // Правило приезжает СВОЙСТВАМИ (В7): образец и id категории, а не заголовок с
+      // разделителем — парсера заголовка нет больше нигде. Область отсекается здесь
+      // (`ruleAppliesTo`), а не запросом: дизъюнкцию «эта область ИЛИ никакой» грамматика
+      // не выражает, а сервер отбирает именно так (см. memoryRules.ts).
+      // updatedAt — арбитр конфликта двух правил на один образец (applyMemoryRules).
+      rules: (rules ?? []).flatMap((e) => {
+        if (!ruleAppliesTo(e.props['orbis/rule_scope'], RULES_SCOPE)) return [];
+        const pattern = e.props['orbis/rule_pattern'];
+        const targetId = e.props['orbis/rule_target'];
+        if (typeof pattern !== 'string' || typeof targetId !== 'string') return [];
+        return [{ pattern, targetId, updatedAt: e.updatedAt }];
+      }),
     };
   }
 

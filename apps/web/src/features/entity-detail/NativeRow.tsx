@@ -1,5 +1,5 @@
-import { parseRuleTitle } from '@orbis/shared';
 import { useState } from 'react';
+import { useRefTitle } from '../../lib/entity-ref/RefField';
 import { formatMoney, type MoneyTone } from '../../lib/format';
 import { displayText } from '../../lib/registry/format';
 import { fieldLabel } from '../../lib/registry/labels';
@@ -23,38 +23,38 @@ const TITLE_CLASS = 'text-xl font-semibold tracking-tight';
 /**
  * Заголовок строки: статичный текст без onSaveTitle (списки транзакций CategoryScreen) и
  * inline-редактор с ним (Detail, DF п.3). Правка title обязана существовать: 02-core-os
- * §2.7 — «правка памяти = правка обычной сущности (title, поля аспекта, body)», а вся
- * машиночитаемая часть memory-правила лежит именно в title (K19.4). Отдельного экрана не
- * заводим — тот же inline-паттерн, что у body и полей аспектов.
+ * §2.7 — «правка памяти = правка обычной сущности (title, поля аспекта, body)».
+ * Отдельного экрана не заводим — тот же inline-паттерн, что у body и полей аспектов.
+ *
+ * ПРЕДУПРЕЖДЕНИЯ О ФОРМАТЕ ЗДЕСЬ БОЛЬШЕ НЕТ, и это не упрощение: механизм `warn` был
+ * заведён ровно под одного вызывающего — подсказку «правило не распознано» у memory-правила
+ * (его смысл жил в заголовке и ломался одним символом). После В7 смысл правила живёт в
+ * свойствах, заголовок стал генерируемой подписью, и ломать правкой заголовка стало нечего;
+ * оставленный механизм был бы веткой без единственного вызывателя.
  */
 function Title({
   value,
   onSave,
   className = '',
-  warn,
 }: {
   value: string;
   onSave?: (title: string) => void;
   className?: string;
-  /** Предупреждение под строкой ввода по ТЕКУЩЕМУ черновику; null — всё в порядке. */
-  warn?: (draft: string) => string | null;
 }) {
   if (onSave === undefined) {
     return <span className={`flex-1 ${TITLE_CLASS} ${className}`}>{value}</span>;
   }
-  return <TitleEditor value={value} onSave={onSave} className={className} warn={warn} />;
+  return <TitleEditor value={value} onSave={onSave} className={className} />;
 }
 
 function TitleEditor({
   value,
   onSave,
   className,
-  warn,
 }: {
   value: string;
   onSave: (title: string) => void;
   className: string;
-  warn?: (draft: string) => string | null;
 }) {
   const [draft, setDraft] = useState(value);
   const [serverValue, setServerValue] = useState(value);
@@ -67,11 +67,10 @@ function TitleEditor({
     if (draft === serverValue) setDraft(value);
   }
 
-  const input = (
+  return (
     <input
       aria-label="Заголовок"
       data-testid="title-edit"
-      {...(warn !== undefined ? { 'aria-describedby': 'title-format-warning' } : {})}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
       // Пустой заголовок сущности не бывает (entityUpdateInput: title.min(1)) — вместо
@@ -83,28 +82,60 @@ function TitleEditor({
       className={`min-w-0 flex-1 rounded-md bg-transparent px-1 ${TITLE_CLASS} outline-none transition hover:bg-surface-2/60 focus-visible:bg-surface-2/70 focus-visible:ring-2 focus-visible:ring-accent/30 ${className}`}
     />
   );
-  // Без warn вёрстка прежняя — строка остаётся одной flex-ячейкой (её делят сумма, бейдж
-  // и чекбокс соседних веток). Колонку заводим только там, где предупреждение возможно.
-  if (warn === undefined) return input;
-  const warning = warn(draft);
+}
+
+/**
+ * Строка памяти AI. У ПРАВИЛА она собирается ИЗ СВОЙСТВ (В7): образец —
+ * `orbis/rule_pattern`, назначаемая категория — `orbis/rule_target` (ссылка), и её
+ * название разыменовывается при показе. Именно поэтому переименование категории здесь
+ * видно сразу: до реформы правая часть правила была сохранённой СТРОКОЙ, и экран
+ * показывал прежнее имя, которого в графе уже не было.
+ *
+ * Заголовок остаётся inline-редактируемым (§2.7 — правка памяти это правка обычной
+ * записи), но смысла правила он больше не несёт: это генерируемая подпись. Сам образец
+ * правится карточкой свойства, как любое другое значение.
+ *
+ * Отдельный компонент, а не ветка внутри NativeRow: хук разыменования ссылки обязан быть
+ * безусловным (та же причина, что у FinancialRow).
+ */
+function MemoryRow({
+  title,
+  props,
+  onSaveTitle,
+}: {
+  title: string;
+  props: Record<string, unknown>;
+  onSaveTitle?: (title: string) => void;
+}) {
+  const registry = useRegistry();
+  const kind = props['orbis/memory_kind'];
+  const pattern = props['orbis/rule_pattern'];
+  const targetRef = props['orbis/rule_target'];
+  const {
+    title: targetTitle,
+    isPending: targetPending,
+    isError: targetFailed,
+  } = useRefTitle(
+    registry.property('orbis/rule_target'),
+    typeof targetRef === 'string' ? targetRef : '',
+  );
+  const isRule = kind === 'rule';
   return (
-    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-      {input}
-      {warning !== null && (
-        // text-alert — документированная AA-пара (5.18:1); --color-warning объявлен как
-        // цвет ЗАЛИВКИ бара Budget и на белом листе даёт 3.18:1 — самый нечитаемый текст
-        // на экране у сообщения, ради видимости которого правка и делалась.
-        // role=status + aria-describedby: при правке с клавиатуры/скринридером
-        // предупреждение иначе не объявляется вовсе.
-        <p
-          id="title-format-warning"
-          role="status"
-          data-testid="title-warning"
-          className="px-1 text-xs text-alert"
-        >
-          {warning}
-        </p>
+    <div className="flex items-center gap-2" data-testid="native-memory">
+      <Title value={title} onSave={onSaveTitle} />
+      {isRule && typeof pattern === 'string' && pattern !== '' && (
+        <span data-testid="memory-rule-pattern" className="truncate text-sm text-text-secondary">
+          {pattern}
+        </span>
       )}
+      {/* Пока список категорий грузится, названия нет — бейджа нет вовсе (D6d п.1):
+          иначе на холодном кэше мелькал бы сырой uuid и подменялся названием. */}
+      {isRule &&
+        typeof targetRef === 'string' &&
+        targetRef !== '' &&
+        !targetPending &&
+        !targetFailed && <Badge>{targetTitle}</Badge>}
+      {typeof kind === 'string' && <Badge>{kind}</Badge>}
     </div>
   );
 }
@@ -153,21 +184,6 @@ function FinancialRow({
   );
 }
 
-/**
- * Формат правила «паттерн → категория» (shared/memory/rule.ts) — тот же разбор, что в резолве.
- *
- * Текст говорит ровно правду: мёртвым нераспознанное правило становится в
- * ДЕТЕРМИНИРОВАННЫХ путях (быстрый ввод, резолв импорта, гейт эскалации), а в системный
- * промпт оно уезжает как есть — в разговоре модель его всё равно учтёт. Подсказка формата
- * даёт НАБИРАЕМЫЙ вариант разделителя: U+2192 с клавиатуры не набрать, ради чего разбор
- * и научили понимать «->».
- */
-function ruleFormatWarning(draft: string): string | null {
-  return parseRuleTitle(draft) === null
-    ? 'Формат правила не распознан — нужно «паттерн -> категория». Быстрый ввод и импорт такое правило не применят (AI учтёт его только в разговоре)'
-    : null;
-}
-
 // §3.6 нативный рендер строки сущности: ветки task / financial / schedule / generic.
 // onSaveTitle — опционален: с ним заголовок становится inline-редактором (Detail),
 // без него остаётся текстом (строки транзакций CategoryScreen).
@@ -210,23 +226,8 @@ export function NativeRow({
     return <FinancialRow title={entity.title} props={props} onSaveTitle={onSaveTitle} />;
   }
 
-  // Память AI: у ПРАВИЛА весь машиночитаемый смысл лежит в заголовке (K19.4), а inline-правка
-  // ломает его одним символом — стрелку U+2192 с клавиатуры не набрать. Признака «формат не
-  // распознан» не было нигде: запись оставалась в списке «Память AI» и выглядела живой, хотя
-  // ни fast-path, ни резолв импорта её уже не применяли. Предупреждение считается по ЧЕРНОВИКУ,
-  // то есть видно до сохранения; у факта формата нет — предупреждать не о чем.
   if (aspects.has('orbis/memory')) {
-    const kind = props['orbis/memory_kind'];
-    return (
-      <div className="flex items-start gap-2" data-testid="native-memory">
-        <Title
-          value={entity.title}
-          onSave={onSaveTitle}
-          warn={kind === 'rule' ? ruleFormatWarning : undefined}
-        />
-        {typeof kind === 'string' && <Badge>{kind}</Badge>}
-      </div>
-    );
+    return <MemoryRow title={entity.title} props={props} onSaveTitle={onSaveTitle} />;
   }
 
   if (aspects.has('orbis/schedule')) {

@@ -16,9 +16,7 @@ import { useFastPath } from './useFastPath';
 const CATEGORY_QUERY = { query: 'aspect=orbis/category' };
 // Литерал СВОЙ, а не импорт из `memoryRules.ts`: съедь обе стороны вместе — и подмена
 // запроса перестала бы наблюдаться тестом вовсе.
-const RULES_QUERY = {
-  query: 'aspect=orbis/memory, orbis/memory_kind=rule, orbis/rule_scope=orbis/money-movement',
-};
+const RULES_QUERY = { query: 'aspect=orbis/memory, orbis/memory_kind=rule' };
 
 function threadMsgs(qc: QueryClient): ChatMessage[] {
   const data = qc.getQueryData(chatThreadKey('t1')) as { pages: ChatMessage[][] } | undefined;
@@ -65,14 +63,35 @@ const categories = [
     aspects: ['orbis/category'],
   }),
 ];
-// Memory-правила владельца (§7.5): заголовок — вся машиночитаемая часть правила (D3a),
-// updatedAt приезжает в wire-форме сущности и разрешает конфликт правил (applyMemoryRules).
+// Memory-правила владельца (§7.5) в форме СВОЙСТВ (В7): образец и id категории; заголовок
+// — генерируемая подпись, и парсера у него больше нет. updatedAt приезжает в wire-форме
+// сущности и разрешает конфликт правил (applyMemoryRules).
 const rules = [
   wireEntity({
     id: 'rule-1',
     title: 'кофе → Развлечения',
     updatedAt: '2026-07-20T10:00:00.000Z',
-    props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/money-movement' },
+    props: {
+      'orbis/memory_kind': 'rule',
+      'orbis/rule_scope': 'orbis/money-movement',
+      'orbis/rule_pattern': 'кофе',
+      'orbis/rule_target': 'cat-fun',
+    },
+    aspects: ['orbis/memory'],
+  }),
+  // Правило ЧУЖОЙ области приезжает в выдачу (запрос области не фильтрует — грамматика
+  // дизъюнкцию не выражает) и обязано быть отсеяно клиентом: иначе быстрый ввод стал бы
+  // применять правила, которых сервер в своей области не видит.
+  wireEntity({
+    id: 'rule-2',
+    title: 'кофе → Еда',
+    updatedAt: '2026-07-21T10:00:00.000Z',
+    props: {
+      'orbis/memory_kind': 'rule',
+      'orbis/rule_scope': 'orbis/progress',
+      'orbis/rule_pattern': 'кофе',
+      'orbis/rule_target': 'cat-food',
+    },
     aspects: ['orbis/memory'],
   }),
 ];
@@ -175,6 +194,8 @@ test('memory-правила грузятся в ctx парсера и перек
       input: { props: Record<string, unknown> };
     };
     // Новая форма создания (§А9-1): категория — свойство по id, а не поле аспекта.
+    // 'cat-fun' — цель правила СВОЕЙ области: правило чужой области (rule-2, свежее и с
+    // тем же образцом) отсеяно клиентом, иначе победило бы оно и дало бы 'cat-food'.
     expect(created.input.props['orbis/finance_category']).toBe('cat-fun');
   });
 });

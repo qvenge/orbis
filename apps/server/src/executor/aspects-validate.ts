@@ -14,8 +14,9 @@
 // СПИСОК нарушений (владелец правит форму целиком, и отказ по одному полю за раз превращает
 // одну правку в пять заходов), а конвейер оперирует бросками ExecError. Перевод одного в
 // другое обязан быть один на все три точки записи — create, update, attach.
+import { type MemoryRuleViolation, ruleViolations } from '../memory/rules';
 import type { RegistrySnapshot } from '../registry/load';
-import { validateEntityProps } from '../registry/validate-props';
+import { type PropsViolation, validateEntityProps } from '../registry/validate-props';
 import { ExecError } from './errors';
 import type { EntityState } from './props';
 
@@ -31,7 +32,14 @@ import type { EntityState } from './props';
  * потребители кодов (карточка отказа, глаголы) читают структуру, а не разбирают текст.
  */
 export function assertEntityProps(reg: RegistrySnapshot, state: EntityState): void {
-  const violations = validateEntityProps(reg, state);
+  // Форма правила памяти (§А8 «fail-closed», В7) проверяется ВТОРЫМ списком, а не внутри
+  // валидатора реестра: обязательность там безусловная (пара «аспект → свойство»), а здесь
+  // она условная — «если род записи правило». Граница названа в `memory/rules.ts`
+  // (`ruleViolations`): условные ограничения выражает `requires_when` части Б.
+  const violations: Array<PropsViolation | MemoryRuleViolation> = [
+    ...validateEntityProps(reg, state),
+    ...ruleViolations(state),
+  ];
   if (violations.length === 0) return;
   const first = violations[0];
   throw new ExecError('VALIDATION', `запись не проходит реестр свойств: ${describe(first)}`, {
@@ -39,7 +47,7 @@ export function assertEntityProps(reg: RegistrySnapshot, state: EntityState): vo
   });
 }
 
-function describe(violation: ReturnType<typeof validateEntityProps>[number] | undefined): string {
+function describe(violation: PropsViolation | MemoryRuleViolation | undefined): string {
   if (violation === undefined) return 'нарушение не названо'; // недостижимо: список непуст
   switch (violation.code) {
     case 'UNKNOWN_PROPERTY':
@@ -66,6 +74,21 @@ function describe(violation: ReturnType<typeof validateEntityProps>[number] | un
         `свойство «${violation.propertyId}» хранится колонкой записи (storage: ` +
         `${violation.storage}) — в props его значению места нет: пишите его своим полем ` +
         'вызова (title, archived), время записи ставит сервер'
+      );
+    // Оба отказа НАЗЫВАЮТ ВЫХОД (иначе автор записи уйдёт искать обходной путь): у правила
+    // памяти машиночитаемая часть живёт в свойствах, и класть её в заголовок больше некуда
+    // — заголовок стал генерируемой подписью, которую никто не разбирает.
+    case 'RULE_WITHOUT_PATTERN':
+      return (
+        'запись памяти рода «rule» без свойства «orbis/rule_pattern» не совпала бы ни с ' +
+        'чем: положите образец в orbis/rule_pattern (заголовок правила больше не ' +
+        'разбирается) — либо запишите это фактом, orbis/memory_kind: fact'
+      );
+    case 'RULE_WITHOUT_TARGET':
+      return (
+        `правило области «${violation.scope}» без свойства «orbis/rule_target» нечего ` +
+        'подставить: положите ссылку на категорию в orbis/rule_target — либо снимите ' +
+        'orbis/rule_scope, и правило станет глобальным (его читает только память промпта)'
       );
   }
 }

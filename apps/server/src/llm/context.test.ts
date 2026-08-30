@@ -10,6 +10,7 @@ import { newId } from '@orbis/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
   appDb,
+  executeWithFixtureCategories as execute,
   freshUserId,
   legacyEntityColumns,
   requireEnv,
@@ -248,6 +249,69 @@ describe('buildContext — слой 2: память с капом и приор�
     expect(ctx.system).not.toContain('FACT-00');
     // archived не инжектится
     expect(ctx.system).not.toContain('ARCHIVED-MEM');
+  });
+
+  // ПРИЁМКА ЗАДАЧИ 18 (В7). Строка ПРАВИЛА в канале собирается ИЗ СВОЙСТВ при чтении:
+  // образец — `orbis/rule_pattern`, правая часть — заголовок записи по ССЫЛКЕ
+  // `orbis/rule_target`. До реформы правая часть была сохранённой СТРОКОЙ в заголовке
+  // правила, и переименование категории делало её ложью — модель видела в памяти имя,
+  // которого в графе уже нет, и предлагала владельцу несуществующую категорию.
+  //
+  // Сохранённая подпись здесь НАМЕРЕННО оставлена устаревшей («… → Еда»): пока она в
+  // колонке лжёт, видно, что канал собран из свойств, а не взят из title.
+  test('правило: подпись в канале собирается из свойств и переживает переименование категории', async () => {
+    const user5 = freshUserId();
+    const category = newId();
+    const ruleId = newId();
+    // Категорию заводит фикстурный помощник (обстановка, не предмет проверки), поэтому
+    // здесь только правило; сразу после — переименование в «Еда», чтобы обе подписи
+    // (сохранённая и собираемая) стартовали одинаковыми и расхождение стало наблюдаемым.
+    const one = (input: Record<string, unknown>, tool = 'entity_create') => ({
+      actorUserId: user5,
+      actorKind: 'owner' as const,
+      source: 'ui' as const,
+      operations: [{ tool, input }],
+    });
+    const created = await execute(
+      db,
+      one({
+        id: ruleId,
+        title: 'пятерочка → Еда',
+        tags: [],
+        props: {
+          'orbis/memory_kind': 'rule',
+          'orbis/rule_scope': 'orbis/money-movement',
+          'orbis/rule_pattern': 'пятерочка',
+          'orbis/rule_target': category,
+        },
+        aspects: ['orbis/memory'],
+      }),
+    );
+    expect(created.ok).toBe(true);
+    expect((await execute(db, one({ id: category, title: 'Еда' }, 'entity_update'))).ok).toBe(true);
+
+    const before = await withIdentity(db, user5, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, user5);
+      return buildContext(tx, { ownerId: user5, threadId });
+    });
+    expect(memoryLines(before.system)).toEqual(['— [rule][orbis/money-movement] пятерочка → Еда']);
+
+    const renamed = await execute(db, one({ id: category, title: 'Продукты' }, 'entity_update'));
+    expect(renamed.ok).toBe(true);
+    const after = await withIdentity(db, user5, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, user5);
+      return buildContext(tx, { ownerId: user5, threadId });
+    });
+    expect(memoryLines(after.system)).toEqual([
+      '— [rule][orbis/money-movement] пятерочка → Продукты',
+    ]);
+    // Правило ЖИВО, а сохранённая подпись в КОЛОНКЕ осталась прежней — именно её показал
+    // бы канал, если бы читал `title`. Без этой половины тест не отличал бы «собрано из
+    // свойств» от «title заодно переписался».
+    const [stored] = await withIdentity(db, user5, (tx) =>
+      tx.select({ title: entities.title }).from(entities).where(eq(entities.id, ruleId)),
+    );
+    expect(stored?.title).toBe('пятерочка → Еда');
   });
 
   test(`body памяти обрезается превью ${MEMORY_BODY_PREVIEW} символов`, async () => {

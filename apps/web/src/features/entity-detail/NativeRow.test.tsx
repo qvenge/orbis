@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { expect, test } from 'vitest';
 import type { MockHandler } from '../../test/harness';
 import { renderWithProviders, trpcError, wireEntity } from '../../test/harness';
@@ -311,88 +311,48 @@ test('generic: поле, которого не знал прежний слов�
   expect(screen.queryByText('content_type:')).toBeNull();
 });
 
-// Уборочная фаза (E4): вся машиночитаемая часть memory-правила лежит в title (K19.4),
-// а inline-правка заголовка позволяет сломать формат одним символом. Признака «правило
-// больше не распознаётся» не было нигде: запись оставалась в «Памяти AI» и выглядела
-// живой, хотя ни fast-path, ни резолв импорта её уже не применяли.
-const memory = (kind: string, title: string) =>
+/**
+ * ПРАВИЛО ПАМЯТИ ПОСЛЕ В7: строка собирается ИЗ СВОЙСТВ — образец `orbis/rule_pattern` и
+ * бейдж категории по ССЫЛКЕ `orbis/rule_target`. Предупреждения о формате заголовка здесь
+ * больше нет и быть не может: правило без образца НЕЗАПИСУЕМО (сервер, fail-closed), а
+ * заголовок стал генерируемой подписью, которую никто не разбирает.
+ */
+const memory = (kind: string, title: string, over: Record<string, unknown> = {}) =>
   wireEntity({
     id: 'e1',
     title,
-    props: { 'orbis/memory_kind': kind, 'orbis/rule_scope': 'orbis/money-movement' },
+    props: { 'orbis/memory_kind': kind, 'orbis/rule_scope': 'orbis/money-movement', ...over },
     aspects: ['orbis/memory'],
   }) as never;
 
-test('память: правило с распознанным форматом предупреждения не показывает', () => {
+/** Выдача цели `orbis/rule_target` — тот же множественный резолв, что у категорий. */
+const RULE_TARGET_CATEGORY = wireEntity({
+  id: CAT_FOOD,
+  title: 'Еда',
+  props: {},
+  aspects: ['orbis/category'],
+});
+
+test('память: строка правила собрана из свойств — образец и бейдж категории по ссылке', async () => {
   renderWithProviders(
     <NativeRow
-      entity={memory('rule', 'кофе → Развлечения')}
+      entity={memory('rule', 'пятерочка → СТАРОЕ ИМЯ', {
+        'orbis/rule_pattern': 'пятерочка',
+        'orbis/rule_target': CAT_FOOD,
+      })}
       onToggleTask={() => {}}
       onSaveTitle={() => {}}
     />,
-    registryHandler,
+    withCategories([RULE_TARGET_CATEGORY]),
   );
-  expect(screen.queryByTestId('title-warning')).toBeNull();
+  expect(screen.getByTestId('memory-rule-pattern')).toHaveTextContent('пятерочка');
+  // Название категории — АКТУАЛЬНОЕ, по ссылке; сохранённая подпись в заголовке при этом
+  // устарела, и именно её показал бы экран, если бы строка по-прежнему бралась из title.
+  await waitFor(() => expect(screen.getByText('Еда')).toBeInTheDocument());
+  expect(screen.getByTestId('native-memory').textContent).not.toContain(CAT_FOOD);
 });
 
-test('память: правку правила в текст без разделителя видно сразу — предупреждение', () => {
-  renderWithProviders(
-    <NativeRow
-      entity={memory('rule', 'кофе это развлечения')}
-      onToggleTask={() => {}}
-      onSaveTitle={() => {}}
-    />,
-    registryHandler,
-  );
-  expect(screen.getByTestId('title-warning')).toBeInTheDocument();
-});
-
-// Заявленное поведение — предупреждение по ЧЕРНОВИКУ, то есть ДО сохранения: владелец
-// ломает рабочее правило прямо в поле и обязан увидеть это сразу. Проверка по
-// сохранённому значению (warn(value)) все прежние тесты проходила.
-test('память: предупреждение появляется на ЧЕРНОВИКЕ, без сохранения', () => {
-  renderWithProviders(
-    <NativeRow
-      entity={memory('rule', 'кофе → Развлечения')}
-      onToggleTask={() => {}}
-      onSaveTitle={() => {}}
-    />,
-    registryHandler,
-  );
-  expect(screen.queryByTestId('title-warning')).toBeNull();
-  fireEvent.change(screen.getByTestId('title-edit'), {
-    target: { value: 'кофе это развлечения' },
-  });
-  expect(screen.getByTestId('title-warning')).toBeInTheDocument();
-});
-
-test('память: предупреждение доступно скринридеру и связано с полем', () => {
-  renderWithProviders(
-    <NativeRow
-      entity={memory('rule', 'кофе это развлечения')}
-      onToggleTask={() => {}}
-      onSaveTitle={() => {}}
-    />,
-    registryHandler,
-  );
-  const warning = screen.getByTestId('title-warning');
-  expect(warning).toHaveAttribute('role', 'status');
-  expect(screen.getByTestId('title-edit')).toHaveAttribute('aria-describedby', warning.id);
-});
-
-test('память: клавиатурная стрелка «->» правилом считается — предупреждения нет', () => {
-  renderWithProviders(
-    <NativeRow
-      entity={memory('rule', 'кофе -> Развлечения')}
-      onToggleTask={() => {}}
-      onSaveTitle={() => {}}
-    />,
-    registryHandler,
-  );
-  expect(screen.queryByTestId('title-warning')).toBeNull();
-});
-
-test('память: у ФАКТА формата правила нет — предупреждения быть не должно', () => {
+test('память: у ФАКТА образца и категории нет — только заголовок и бейдж рода', () => {
   renderWithProviders(
     <NativeRow
       entity={memory('fact', 'Работаю из дома по пятницам')}
@@ -401,15 +361,29 @@ test('память: у ФАКТА формата правила нет — пр�
     />,
     registryHandler,
   );
-  expect(screen.queryByTestId('title-warning')).toBeNull();
+  expect(screen.queryByTestId('memory-rule-pattern')).toBeNull();
+  expect(screen.getByTestId('native-memory')).toHaveTextContent('fact');
 });
 
-test('память: в списке (без inline-правки) предупреждения нет — правит только Detail', () => {
-  renderWithProviders(
-    <NativeRow entity={memory('rule', 'кофе это развлечения')} onToggleTask={() => {}} />,
-    registryHandler,
-  );
-  expect(screen.queryByTestId('title-warning')).toBeNull();
+// Механизм предупреждения о формате снят вместе с парсером: он держался на разборе
+// заголовка и был его единственным вызывающим. Греп-проба, чтобы возврат был заметен.
+test('память: предупреждения о формате заголовка больше нет ни у правила, ни у факта', () => {
+  for (const kind of ['rule', 'fact']) {
+    const { unmount } = renderWithProviders(
+      <NativeRow
+        entity={memory(kind, 'кофе это развлечения', {
+          'orbis/rule_pattern': 'кофе',
+          'orbis/rule_target': CAT_FOOD,
+        })}
+        onToggleTask={() => {}}
+        onSaveTitle={() => {}}
+      />,
+      withCategories([RULE_TARGET_CATEGORY]),
+    );
+    expect(screen.queryByTestId('title-warning')).toBeNull();
+    expect(screen.getByTestId('title-edit')).not.toHaveAttribute('aria-describedby');
+    unmount();
+  }
 });
 
 // Уборочная фаза: третье состояние названия категории. При ОТКАЗЕ загрузки списка

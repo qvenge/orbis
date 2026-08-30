@@ -44,8 +44,10 @@ export type ImportReviewData = { kind: 'import_review' };
 // 01-arch §7.8: эскалация повторных исправлений категории в правило памяти.
 // Производитель — apps/server/src/ai/escalation.ts; поля обязаны ДОСЛОВНО совпадать с
 // серверным union (apps/server/src/tools/registry.ts) — типы намеренно не общие.
-// ruleText — готовый заголовок будущей memory-сущности (formatRuleTitle);
-// pattern — ключ подавления по сходству на сервере, клиент его НЕ нормализует.
+// ruleText — ГЕНЕРИРУЕМАЯ ПОДПИСЬ будущей memory-сущности (`formatRuleLabel`, сервер): она
+// уезжает в `title` записи и обратно никем не разбирается — машиночитаемая часть правила
+// лежит в свойствах (В7). pattern — и ключ подавления по сходству на сервере, и значение
+// `orbis/rule_pattern` создаваемого правила; клиент его НЕ нормализует.
 export type MemoryRuleSuggestionData = {
   kind: 'memory_rule_suggestion';
   ruleText: string;

@@ -243,6 +243,8 @@ describe('import.review: статусы строк (§3.4.1)', () => {
     const before = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
     expect(before.rows[0]?.suggestedCategoryRef).toBeUndefined(); // без правила — [❓ выбрать]
 
+    // Правило — СВОЙСТВАМИ (В7): образец и id категории, а не текст заголовка. Заголовок
+    // здесь генерируемая подпись, и резолв импорта его не читает вовсе.
     await caller.entity.create({
       input: {
         title: 'пятерочка → Еда',
@@ -250,6 +252,8 @@ describe('import.review: статусы строк (§3.4.1)', () => {
         props: {
           'orbis/memory_kind': 'rule',
           'orbis/rule_scope': 'orbis/money-movement',
+          'orbis/rule_pattern': 'пятерочка',
+          'orbis/rule_target': foodId,
         },
         aspects: ['orbis/memory'],
       },
@@ -279,6 +283,8 @@ describe('import.review: статусы строк (§3.4.1)', () => {
         props: {
           'orbis/memory_kind': 'rule',
           'orbis/rule_scope': 'orbis/money-movement',
+          'orbis/rule_pattern': 'пятерочка',
+          'orbis/rule_target': foodId,
         },
         aspects: ['orbis/memory'],
       },
@@ -299,7 +305,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
   // теряла значения вместе с ключом аспекта. Без признака носителя в `memoryRules` снятое
   // правило продолжало бы категоризировать выписку — и ни один тест выше этого не увидел бы.
   test('снятый аспект памяти правило выключает, хотя его значения остались в props (Р9)', async () => {
-    const { user } = await freshOwner();
+    const { user, foodId } = await freshOwner();
     const caller = ownerCaller(user);
     const row = makeRow({
       occurredOn: '2026-05-13',
@@ -312,7 +318,12 @@ describe('import.review: статусы строк (§3.4.1)', () => {
           ownerId: user,
           id: newId(),
           title: 'пятерочка → Еда',
-          props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/money-movement' },
+          props: {
+            'orbis/memory_kind': 'rule',
+            'orbis/rule_scope': 'orbis/money-movement',
+            'orbis/rule_pattern': 'пятерочка',
+            'orbis/rule_target': foodId,
+          },
           // Аспекта памяти НЕТ — правило снято, значения пережили снятие.
           aspects: [],
         }),
@@ -336,7 +347,7 @@ describe('import.review: статусы строк (§3.4.1)', () => {
       amount: '843.00',
       counterparty: 'SBOL ПЯТЁРОЧКА 843',
     });
-    const rule = (title: string) =>
+    const rule = (title: string, targetId: string) =>
       caller.entity.create({
         input: {
           title,
@@ -344,19 +355,21 @@ describe('import.review: статусы строк (§3.4.1)', () => {
           props: {
             'orbis/memory_kind': 'rule',
             'orbis/rule_scope': 'orbis/money-movement',
+            'orbis/rule_pattern': 'пятерочка',
+            'orbis/rule_target': targetId,
           },
           aspects: ['orbis/memory'],
         },
         source: 'ui' as const,
       });
 
-    // Порядок важен: по алфавиту «пятерочка → Еда» < «пятерочка → Транспорт», то есть
-    // лексикографический tie-break вернул бы отменённую пользователем Еду.
-    await rule('пятерочка → Еда');
+    // Порядок важен: последний ключ сортировки — id категории, и он тут НЕ решает;
+    // решает свежесть, иначе отменённая пользователем категория вернулась бы обратно.
+    await rule('пятерочка → Еда', foodId);
     const first = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
     expect(first.rows[0]?.suggestedCategoryRef).toBe(foodId);
 
-    await rule('пятерочка → Транспорт');
+    await rule('пятерочка → Транспорт', transportId);
     const second = await caller.import.review({ rows: [row], fileHash: FILE_A, namespace: NS });
     expect(second.rows[0]?.suggestedCategoryRef).toBe(transportId);
   });
@@ -386,6 +399,8 @@ describe('import.review: статусы строк (§3.4.1)', () => {
         props: {
           'orbis/memory_kind': 'rule',
           'orbis/rule_scope': 'orbis/money-movement',
+          'orbis/rule_pattern': 'кофе',
+          'orbis/rule_target': transportId,
         },
         aspects: ['orbis/memory'],
       },

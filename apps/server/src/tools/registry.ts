@@ -259,8 +259,10 @@ export type Card =
   // 01-arch §7.8 (Task D3a): эскалация повторных исправлений категории. Обе карточки
   // пишет ai/escalation.ts; поля обязаны ДОСЛОВНО совпадать с web-типами, которые
   // объявит D3b (chat/cards/types.ts) — union'ы сервера и web намеренно не общие.
-  // ruleText — готовый заголовок будущей memory-сущности (formatRuleTitle), кнопка
-  // «Запомнить» отправляет его обычным entity.create; categoryTitle показывается в тексте.
+  // ruleText — ГЕНЕРИРУЕМАЯ ПОДПИСЬ будущей memory-сущности (`memory/rules.ts`,
+  // formatRuleLabel): кнопка «Запомнить» кладёт её в `title` обычным entity.create, а сам
+  // смысл правила уезжает свойствами (pattern → `orbis/rule_pattern`, toCategoryId →
+  // `orbis/rule_target`). categoryTitle показывается в тексте сообщения.
   | {
       kind: 'memory_rule_suggestion';
       ruleText: string;

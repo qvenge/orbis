@@ -926,18 +926,22 @@ async function createRun(
             id: runId,
             title: args.title,
             tags: [],
-            aspects: {
-              'orbis/agent-run': {
-                routine_id: args.routine.id,
-                bucket: args.bucket,
-                attempt: args.attempt,
-                outcome: 'running',
-                started_at: nowIso,
-                last_step_at: nowIso,
-                step_count: 0,
-                steps: [],
-              },
+            // НОВАЯ форма (§А1-1): значения — плоско в `props` по id свойства, аспект —
+            // пометкой в списке. Старую карту исполнитель больше не принимает (Задача 18
+            // сняла её union из exec-надмножеств), и старт прогона был ОДНИМ ИЗ ДВУХ
+            // последних её отправителей на сервере. Имена свойств — §А8; читатели прогона
+            // (`пауза`, `подметание`, `ответ на чекпойнт`) ходят по этим же адресам.
+            props: {
+              'orbis/run_routine': args.routine.id,
+              'orbis/run_bucket': args.bucket,
+              'orbis/run_attempt': args.attempt,
+              'orbis/run_outcome': 'running',
+              'orbis/run_started_at': nowIso,
+              'orbis/last_step_at': nowIso,
+              'orbis/step_count': 0,
+              'orbis/run_steps': [],
             },
+            aspects: ['orbis/agent-run'],
           },
         },
         {

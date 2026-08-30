@@ -1,13 +1,12 @@
 import type { EntityCreateInput } from '../contracts/tools';
 import { newId } from '../ids';
 import { normalizeCounterparty } from '../import/normalize';
-import { parseRuleTitle } from '../memory/rule';
 
 /**
- * `title` ОБЯЗАТЕЛЕН: правило памяти ссылается на категорию НАЗВАНИЕМ (§7.8, D3a), и
- * категория без title для applyMemoryRules неотличима от несуществующей — правило по ней
- * молча игнорировалось бы. Все точки сборки контекста title кладут, так что обязательность
- * ничего не ломает, зато пропуск ловится на typecheck, а не тишиной в резолве.
+ * `title` ОБЯЗАТЕЛЕН, хотя правило теперь ссылается на категорию ПО ID (В7): по названию
+ * категорию по-прежнему ищет вторая ступень резолва — алиасы (`findCategory` сравнивает
+ * слово входа со списком `aliases`, а сама категория показывается заголовком). Пропуск
+ * ловится на typecheck, а не тишиной в резолве.
  */
 export type FastPathCategory = {
   id: string;
@@ -16,15 +15,37 @@ export type FastPathCategory = {
   spendClass?: string;
 };
 /**
- * Активное memory-правило владельца (`orbis/memory`, `kind=rule`, `scope=orbis/financial`)
- * в форме, которую понимает applyMemoryRules:
- *  - `title` — КАК ЕСТЬ: вся машиночитаемая часть правила живёт в заголовке, и разбирает
- *    его только applyMemoryRules — вызывающий парсингом не занимается;
+ * Активное memory-правило владельца в форме, которую понимает applyMemoryRules. Все три
+ * поля — ЗНАЧЕНИЯ СВОЙСТВ записи (В7), заголовок сюда не едет вовсе:
+ *  - `pattern` — `orbis/rule_pattern`: текст, по которому правило узнаёт ввод. До реформы
+ *    его выковыривал из заголовка парсер, и заголовок без разделителя означал молча
+ *    мёртвое правило; теперь правило без образца незаписываемо (`memory/rules.ts`);
+ *  - `targetId` — `orbis/rule_target`: id категории. ИМЕННО ID, а не название: правило
+ *    переживает переименование категории, и второго резолва по строке здесь больше нет;
  *  - `updatedAt` — ISO-время правки правила (`WireEntity.updatedAt`); обязательно, потому
- *    что при конфликте двух правил с одинаковым паттерном побеждает САМОЕ СВЕЖЕЕ, и оба
- *    потребителя (fast-path и резолв импорта) обязаны отвечать одинаково.
+ *    что при конфликте двух правил с одним образцом побеждает САМОЕ СВЕЖЕЕ, и оба
+ *    потребителя (быстрый ввод и резолв импорта) обязаны отвечать одинаково.
  */
-export type FastPathRule = { title: string; updatedAt: string };
+export type FastPathRule = { pattern: string; targetId: string; updatedAt: string };
+
+/**
+ * Правило применимо к области: та же область ЛИБО правило глобально (области нет вовсе —
+ * «пусто = глобально», реестр аспекта памяти).
+ *
+ * Предикат объявлен ЗДЕСЬ, потому что сторон у него две и они на разных языках: сервер
+ * выражает его в SQL (`memory/select.ts`, `memoryRulesWhere`), клиент — этой функцией, и
+ * запрос грамматики §А5-3 дизъюнкцию «равно ИЛИ отсутствует» выразить не может (скобок в
+ * v1 нет). Отбирать одинаково они обязаны: расхождение здесь означает правило, которое
+ * работает в импорте и не работает в быстром вводе, — ровно тот молчаливый разъезд, ради
+ * которого предикат вообще стал общим. Схождение двух сторон пиннится тестом
+ * (`memory/select.test.ts`) на одном наборе строк.
+ *
+ * Ключ, ПРИСУТСТВУЮЩИЙ со значением `null`, глобальным правилом НЕ считается: в SQL
+ * `NOT props ? key` на нём ложно, и вторая сторона обязана отвечать так же.
+ */
+export function ruleAppliesTo(ruleScope: unknown, scope: string): boolean {
+  return ruleScope === undefined ? true : ruleScope === scope;
+}
 export type FastPathCtx = {
   categories: FastPathCategory[];
   defaultCurrency: string;
@@ -95,18 +116,20 @@ export function findCategory(words: string[], cats: FastPathCategory[]): FastPat
  *    слова — канонический пример спеки «бар → Развлечения» перехватывал «барбершоп», то
  *    есть правило активно портило категоризацию; соседняя ступень той же категоризации
  *    (резолв по алиасам, findCategory) всегда сравнивала по целому слову;
- *  - из подошедших побеждает САМОЕ СПЕЦИФИЧНОЕ — с самым длинным паттерном; при равной
- *    длине — САМОЕ СВЕЖЕЕ по updatedAt, и только затем лексикография заголовка (порядок
- *    обязан быть полным: web и сервер читают правила в разном порядке).
- *    Свежесть здесь — не украшение: два активных правила с одним паттерном и разными
+ *  - из подошедших побеждает САМОЕ СПЕЦИФИЧНОЕ — с самым длинным образцом; при равной
+ *    длине — САМОЕ СВЕЖЕЕ по updatedAt, и только затем лексикография id категории
+ *    (порядок обязан быть ПОЛНЫМ: web и сервер читают правила в разном порядке, и
+ *    неполный порядок дал бы им разные ответы на одних и тех же данных).
+ *    Свежесть здесь — не украшение: два активных правила с одним образцом и разными
  *    категориями штатно рождает эскалация §7.8 (её гейты пропускают новую пару категорий),
  *    и по алфавиту победило бы то СТАРОЕ правило, которое пользователь только что
  *    исправил, — «Запомнил» на экране, а быстрый ввод и импорт ставят прежнюю категорию;
- *  - правило ссылается на категорию названием (id в правиле нет): резолв по title
- *    категории через ту же нормализацию; правило с ненайденной категорией просто
- *    ИГНОРИРУЕТСЯ (пробуем следующее, затем алиасы) — переименование категории не
- *    имеет права ронять резолв;
- *  - нераспознанный заголовок (нет стрелки, пустой паттерн) — не правило.
+ *  - правило ссылается на категорию ПО ID (`orbis/rule_target`, В7): переименование
+ *    категории правило больше не отвязывает, и два одноимённых конверта различимы.
+ *    Правило, чья категория не в словаре (заархивирована, снесена, не приехала в
+ *    контекст), просто ИГНОРИРУЕТСЯ — пробуем следующее, затем алиасы;
+ *  - правило с пустым образцом — не правило (записать такое нельзя, `memory/rules.ts`;
+ *    ветка держит данные, записанные ДО fail-closed, и прямые записи в БД).
  */
 /**
  * Токены паттерна идут во входе подряд и целиком. Обе строки уже нормализованы
@@ -126,36 +149,56 @@ export function applyMemoryRules(
   const haystack = normalizeCounterparty(input);
   if (haystack === '') return null;
 
-  const matched: Array<{
-    title: string;
-    updatedAt: string;
-    pattern: string;
-    categoryTitle: string;
-  }> = [];
+  const matched: Array<{ updatedAt: string; pattern: string; targetId: string }> = [];
   for (const rule of rules) {
-    const parsed = parseRuleTitle(rule.title);
-    if (parsed === null) continue;
-    const pattern = normalizeCounterparty(parsed.pattern);
+    // Образец нормализуется И ЗДЕСЬ, а не только на записи: его значение — обычное
+    // текстовое свойство, и владелец вправе поправить его руками в любом регистре.
+    const pattern = normalizeCounterparty(rule.pattern);
     if (pattern === '' || !matchesByToken(haystack, pattern)) continue;
-    matched.push({
-      title: rule.title,
-      updatedAt: rule.updatedAt,
-      pattern,
-      categoryTitle: parsed.categoryTitle,
-    });
+    matched.push({ updatedAt: rule.updatedAt, pattern, targetId: rule.targetId });
   }
   matched.sort((a, b) => {
     if (a.pattern.length !== b.pattern.length) return b.pattern.length - a.pattern.length;
     if (a.updatedAt !== b.updatedAt) return a.updatedAt < b.updatedAt ? 1 : -1;
-    if (a.title === b.title) return 0;
-    return a.title < b.title ? -1 : 1;
+    if (a.targetId === b.targetId) return 0;
+    return a.targetId < b.targetId ? -1 : 1;
   });
 
   for (const rule of matched) {
-    const wanted = normalizeCounterparty(rule.categoryTitle);
-    if (wanted === '') continue;
-    const category = cats.find((c) => normalizeCounterparty(c.title) === wanted);
+    const category = cats.find((c) => c.id === rule.targetId);
     if (category !== undefined) return category;
+  }
+  return null;
+}
+
+/**
+ * ПОРЯДОК СТУПЕНЕЙ РЕЗОЛВА КАТЕГОРИИ — именованный параметр, а не порядок строк в двух
+ * файлах (§7.5: «подтверждённое пользователем исправление обязано перекрывать словарь
+ * категорий, иначе „кофе“ продолжит уходить в Еду»).
+ *
+ * ОСТАТОК C С НАЗВАННОЙ ГРАНИЦЕЙ (правило 5 §С1-4, «почему кодом»; R24). Порядок шагов
+ * категоризации — это правило-данные, и в части Б его выражает декларация модуля. В срезе
+ * А выражать его нечем: языка правил каталога ещё нет, а зашивать порядок дважды (в
+ * быстром вводе и в резолве импорта) — ровно та вторая копия знания, которую реформа
+ * убирает. Ступени разъезжались уже: резолв импорта до Task D4 знал ТОЛЬКО алиасы, и на
+ * реальной выписке правила владельца в импорте не работали вовсе. Поэтому порядок —
+ * ОДНА константа с двумя вызывающими; появится язык — переедет в декларацию целиком.
+ */
+export const RESOLVE_ORDER = ['rules', 'aliases'] as const;
+export type ResolveStep = (typeof RESOLVE_ORDER)[number];
+
+/**
+ * Прогон ступеней резолва в порядке RESOLVE_ORDER. Ступени приходят ЛЕНИВЫМИ: вторая не
+ * считается, если ответила первая, — иначе смена порядка меняла бы ещё и объём работы.
+ */
+export function resolveCategoryInOrder(
+  steps: {
+    [K in ResolveStep]: () => FastPathCategory | null;
+  },
+): FastPathCategory | null {
+  for (const step of RESOLVE_ORDER) {
+    const found = steps[step]();
+    if (found !== null) return found;
   }
   return null;
 }
@@ -205,11 +248,11 @@ export function parseFastPath(text: string, ctx: FastPathCtx): FastPathResult {
   const title = textWords.join(' ').trim();
   if (!title) return { ok: false, reason: 'no_match' };
 
-  // Правила памяти — ДО алиасов (§7.5): подтверждённое пользователем исправление
-  // обязано перекрывать словарь категорий, иначе «кофе» продолжит уходить в Еду.
-  const category =
-    applyMemoryRules(title, ctx.rules ?? [], ctx.categories) ??
-    findCategory(textWords, ctx.categories);
+  // Порядок ступеней — RESOLVE_ORDER, один на быстрый ввод и резолв импорта.
+  const category = resolveCategoryInOrder({
+    rules: () => applyMemoryRules(title, ctx.rules ?? [], ctx.categories),
+    aliases: () => findCategory(textWords, ctx.categories),
+  });
   if (!category) return { ok: false, reason: 'unknown_category' };
 
   const today = ctx.today ?? new Date().toISOString().slice(0, 10);

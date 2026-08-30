@@ -3,8 +3,10 @@
 // исправлений категории она пишет системное сообщение с этой карточкой.
 //
 // «Запомнить» — обычный entity.create, своей процедуры у кнопки НЕТ: правило это
-// сущность с аспектом orbis/memory {kind:'rule', scope:'orbis/financial'}, а вся
-// машиночитаемая часть правила лежит в title (packages/shared/src/memory/rule.ts).
+// сущность с аспектом orbis/memory, а машиночитаемая часть правила лежит в СВОЙСТВАХ
+// (`orbis/rule_pattern`, `orbis/rule_target`, `orbis/rule_scope` — В7). `title` при этом
+// — генерируемая подпись: сервер уже собрал её в `ruleText`, и второй сборки формата на
+// клиенте нет намеренно (формат подписи никто не разбирает обратно).
 // «Не надо» — ai.declineMemoryRule: chat_messages append-only (§4.6), поэтому отказ
 // не правит карточку, а пишется НОВЫМ системным сообщением (K4), которое заодно
 // подавляет повторное предложение по этой паре категорий.
@@ -14,7 +16,7 @@ import { invalidateGraph } from '../../../lib/invalidate';
 import { trpc } from '../../../trpc';
 import { Button } from '../../../ui/Button';
 import { Card } from '../../../ui/Card';
-import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME } from '../memoryRules';
+import { MEMORY_RULES_QUERY, MEMORY_RULES_STALE_TIME, RULES_SCOPE } from '../memoryRules';
 import type { MemoryRuleSuggestionData } from './types';
 
 /** Тот же 24ч visual-expiry, что у ConfirmationCard (D-a). */
@@ -98,12 +100,18 @@ export function MemoryRuleCard({
         // Короткое пояснение, откуда правило взялось: пользователь курирует память
         // сам (§7.4), и через месяц строка «кофе → Развлечения» должна объясняться.
         body: `Правило создано из повторных исправлений категории на «${card.categoryTitle}».`,
-        // НОВАЯ форма отправки (§А1-1): свойства плоско по id, аспект — ЯВНЫМ навешиванием.
-        // Старая карта вешала `orbis/memory` самим фактом ключа; без `aspects` правило
-        // родилось бы записью, которую слой памяти чата не видит вовсе (`loadMemory`).
-        // Полная форма правила (образец и правая часть — свойствами, В7) приезжает
-        // Задачей 18; до неё карточка шлёт ровно то же, что и раньше, но по-новому.
-        props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/money-movement' },
+        // ПОЛНАЯ форма правила (§А1-1, В7): свойства плоско по id, аспект — ЯВНЫМ
+        // навешиванием. Образец и категория — своими свойствами, а не текстом заголовка:
+        // без `orbis/rule_pattern` сервер запись просто не примет (fail-closed), а
+        // `orbis/rule_target` держит категорию ССЫЛКОЙ — правило переживает её
+        // переименование. Значения берутся из карточки: `pattern` уже нормализован
+        // сервером, а `toCategoryId` — та самая категория, в которую владелец переносил.
+        props: {
+          'orbis/memory_kind': 'rule',
+          'orbis/rule_scope': RULES_SCOPE,
+          'orbis/rule_pattern': card.pattern,
+          'orbis/rule_target': card.toCategoryId,
+        },
         aspects: ['orbis/memory'],
       },
       source: 'ui',

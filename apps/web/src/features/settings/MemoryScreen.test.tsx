@@ -95,16 +95,17 @@ test('MemoryScreen: отказ запроса — плашка ошибки, а 
   expect(screen.queryByTestId('memory-empty')).toBeNull();
 });
 
-// Уборочная фаза: в список приходят СПЕЦИАЛЬНО ревизовать память, и мёртвое правило
-// (заголовок без разделителя) было там неотличимо от рабочего.
-test('MemoryScreen: правило со сломанным форматом помечено в списке', async () => {
-  const broken = mem('r2', 'кофе это развлечения', 'rule');
+// ЗНАЧКА «ФОРМАТ» БОЛЬШЕ НЕТ, и это не потеря диагностики, а исчезновение класса: он
+// показывал правило, записанное и молча мёртвое (заголовок без разделителя), а после В7
+// такое правило НЕЗАПИСУЕМО — образец обязателен, категория ссылкой. Признак, который не
+// может сработать, — мёртвая ветка; проба стоит, чтобы возврат был заметен.
+test('MemoryScreen: пометки «формат» нет ни у одной строки — класс закрыт на записи', async () => {
+  const prose = mem('r2', 'кофе это развлечения', 'rule');
   renderWithProviders(<MemoryScreen />, (path) =>
-    path === 'entity.query' ? [rule, broken, fact] : {},
+    path === 'entity.query' ? [rule, prose, fact] : {},
   );
   await waitFor(() => expect(screen.getAllByTestId('memory-row')).toHaveLength(3));
-  const marks = screen.getAllByTestId('memory-broken');
-  expect(marks).toHaveLength(1); // ни у рабочего правила, ни у факта пометки нет
+  expect(screen.queryAllByTestId('memory-broken')).toHaveLength(0);
 });
 
 test('раздел «Память AI» в настройках пушит экран памяти в активный таб', async () => {

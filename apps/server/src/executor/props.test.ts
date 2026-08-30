@@ -1768,6 +1768,155 @@ describe('golden-близнец писателей предусловий (§А7
  * тем, что каждый путь до неё реально доходит. Четвёртый вход — слияние — закрыт Задачей 15
  * (`MERGE_STORAGE`, `registry/ops.test.ts`).
  */
+/**
+ * FAIL-CLOSED ФОРМЫ ПРАВИЛА ПАМЯТИ (В7, §А8): «невалидное правило незаписываемо», а не
+ * «записано и молча мёртво».
+ *
+ * До этой задачи машиночитаемая часть правила жила в ЗАГОЛОВКЕ, и заголовок без разделителя
+ * проходил запись целиком: правило лежало в «Памяти AI», выглядело рабочим и не применялось
+ * НИ ОДНИМ детерминированным путём (быстрый ввод, резолв импорта, гейт эскалации). Класс
+ * закрывается здесь — на записи, а не показом значка.
+ *
+ * Пробы стоят на ВСЕХ ТРЁХ путях записи по тому же доводу, что у core-проекций: гейт живёт в
+ * общей стадии 2 (`assertEntityProps`), но «общая» — это утверждение о конвейере, и
+ * проверяется оно только тем, что каждый путь до неё реально доходит. Цель ВНЕ множества
+ * категорий закрыта другим механизмом и проверяется у него (`registry/ref.test.ts`,
+ * `REF_TARGET`): это работа валидатора ссылок по `target` свойства, а не формы правила.
+ */
+describe('правило памяти без образца — отказ на всех путях записи (В7, §А8)', () => {
+  const RULE_TARGET_CATEGORY = '019e4466-dddd-7e07-b5d4-64be9721da54';
+
+  function ruleProps(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      'orbis/memory_kind': 'rule',
+      'orbis/rule_pattern': 'пятерочка',
+      'orbis/rule_scope': 'orbis/money-movement',
+      'orbis/rule_target': RULE_TARGET_CATEGORY,
+      ...over,
+    };
+  }
+
+  test('entity_create: полное правило записывается — свойства по id, подпись в колонке title', async () => {
+    const e = entityOf(
+      await run('entity_create', {
+        title: 'пятерочка → Продукты',
+        tags: [],
+        props: ruleProps(),
+        aspects: ['orbis/memory'],
+      }),
+    );
+    expect(e.title).toBe('пятерочка → Продукты');
+    const row = await rowOf(e.id);
+    expect(row.props).toMatchObject(ruleProps());
+    expect(row.aspects).toEqual(['orbis/memory']);
+    // Подпись живёт КОЛОНКОЙ: `orbis/title` в `props` закрыт (CORE_IN_PROPS, §А1-3).
+    expect(Object.keys(row.props)).not.toContain('orbis/title');
+  });
+
+  test('entity_create: правило без orbis/rule_pattern → VALIDATION, строки нет', async () => {
+    const entityId = newId();
+    const props = ruleProps();
+    delete props['orbis/rule_pattern'];
+    const denied = await run('entity_create', {
+      id: entityId,
+      title: 'мусор без разделителя',
+      tags: [],
+      props,
+      aspects: ['orbis/memory'],
+    });
+    expect(denied.ok).toBe(false);
+    if (denied.ok) return;
+    expect(denied.error.code).toBe('VALIDATION');
+    expect(violationsOf(denied)).toContainEqual({ code: 'RULE_WITHOUT_PATTERN' });
+    // Отказ НАЗЫВАЕТ ВЫХОД — иначе автор записи уйдёт искать обходной путь.
+    expect(denied.error.message).toContain('orbis/rule_pattern');
+    const rows = await withIdentity(db, owner, (tx) =>
+      tx.select({ id: entities.id }).from(entities).where(eq(entities.id, entityId)),
+    );
+    expect(rows.length).toBe(0);
+  });
+
+  test('entity_create: денежное правило без orbis/rule_target → VALIDATION (подставлять нечего)', async () => {
+    const props = ruleProps();
+    delete props['orbis/rule_target'];
+    const denied = await run('entity_create', {
+      title: 'пятерочка → ?',
+      tags: [],
+      props,
+      aspects: ['orbis/memory'],
+    });
+    expect(violationsOf(denied)).toContainEqual({
+      code: 'RULE_WITHOUT_TARGET',
+      scope: 'orbis/money-movement',
+    });
+  });
+
+  test('entity_update: снятие образца у живого правила → VALIDATION, значение остаётся', async () => {
+    const e = entityOf(
+      await run('entity_create', {
+        title: 'пятерочка → Продукты',
+        tags: [],
+        props: ruleProps(),
+        aspects: ['orbis/memory'],
+      }),
+    );
+    const denied = await run('entity_update', { id: e.id, unset: ['orbis/rule_pattern'] });
+    expect(violationsOf(denied)).toContainEqual({ code: 'RULE_WITHOUT_PATTERN' });
+    expect((await rowOf(e.id)).props['orbis/rule_pattern']).toBe('пятерочка');
+
+    // ВТОРАЯ ФОРМА ТОГО ЖЕ НАМЕРЕНИЯ: не «снять образец», а «стать правилом» уже после
+    // создания. Проверяется отдельно, потому что гейт смотрит на ИТОГОВОЕ состояние, и
+    // путь сюда другой — patch без единого свойства правила в нём самом.
+    const note = entityOf(await run('entity_create', { title: 'Просто запись', tags: [] }));
+    const becameRule = await run('entity_update', {
+      id: note.id,
+      props: { 'orbis/memory_kind': 'rule' },
+      aspects: { attach: ['orbis/memory'] },
+    });
+    expect(violationsOf(becameRule)).toContainEqual({ code: 'RULE_WITHOUT_PATTERN' });
+  });
+
+  test('attach_orbis_memory: третий путь закрыт тем же кодом', async () => {
+    const e = entityOf(await run('entity_create', { title: 'Заметка', tags: [] }));
+    const denied = await run('attach_orbis_memory', {
+      entity_id: e.id,
+      data: { 'orbis/memory_kind': 'rule' },
+    });
+    expect(violationsOf(denied)).toContainEqual({ code: 'RULE_WITHOUT_PATTERN' });
+
+    // attach ЗАМЕНЯЕТ носитель целиком — и этим же может СНЯТЬ образец у готового правила:
+    // не назвал в `data` — значит снять. Путь закрыт тем же гейтом по итоговому состоянию.
+    const rule = entityOf(
+      await run('entity_create', {
+        title: 'пятерочка → Продукты',
+        tags: [],
+        props: ruleProps(),
+        aspects: ['orbis/memory'],
+      }),
+    );
+    const wiped = await run('attach_orbis_memory', {
+      entity_id: rule.id,
+      data: { 'orbis/memory_kind': 'rule' },
+    });
+    expect(violationsOf(wiped)).toContainEqual({ code: 'RULE_WITHOUT_PATTERN' });
+    expect((await rowOf(rule.id)).props['orbis/rule_pattern']).toBe('пятерочка');
+  });
+
+  // Половина «факта» обязана остаться свободной: у факта образца не бывает, и гейт,
+  // задевший его, запретил бы владельцу записать в память обычное знание о себе.
+  test('факт памяти без образца пишется свободно', async () => {
+    const e = entityOf(
+      await run('entity_create', {
+        title: 'Владелец не ест мясо',
+        tags: [],
+        props: { 'orbis/memory_kind': 'fact' },
+        aspects: ['orbis/memory'],
+      }),
+    );
+    expect((await rowOf(e.id)).props).toEqual({ 'orbis/memory_kind': 'fact' });
+  });
+});
+
 describe('core-проекция в props — отказ на всех путях записи (§А1-3, единица 15-бис)', () => {
   const CORE_VALUES: Record<string, unknown> = {
     'orbis/archived': true,

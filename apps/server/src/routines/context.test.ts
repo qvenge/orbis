@@ -79,7 +79,14 @@ describe('buildRoutineContext: системный слой (V1.5)', () => {
       title: 'Не назначать встречи до 10 утра',
       body: 'Утро — для работы над задачами.',
       tags: [],
-      aspects: { 'orbis/memory': { kind: 'rule', scope: 'orbis/recurrence' } },
+      // Правило с областью, но БЕЗ цели: законно (цель обязательна только у денежных —
+      // подставлять категорию есть куда только там). Образец обязателен у любого (В7).
+      props: {
+        'orbis/memory_kind': 'rule',
+        'orbis/rule_scope': 'orbis/recurrence',
+        'orbis/rule_pattern': 'встреча',
+      },
+      aspects: ['orbis/memory'],
     });
 
     const { system } = await contextOf(routineId);

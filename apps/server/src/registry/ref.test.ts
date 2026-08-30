@@ -320,7 +320,13 @@ test('ref: установка/смена/снятие создаёт/перен�
             title: 'пятёрочка → Еда',
             tags: [],
             aspects: ['orbis/memory'],
-            props: { 'orbis/memory_kind': 'rule', 'orbis/rule_target': food },
+            // Образец обязателен у любого правила (В7, fail-closed): предмет проверки
+            // здесь — зеркало ссылки, а не форма правила, поэтому он просто заполнен.
+            props: {
+              'orbis/memory_kind': 'rule',
+              'orbis/rule_pattern': 'пятерочка',
+              'orbis/rule_target': food,
+            },
           },
         },
       ]),
@@ -457,6 +463,7 @@ test('ref/registry_ref: run_routine принимает только рутину
   expect(err(run).message).toContain('цель не в множестве target');
 
   // registry_ref{target: contract}: шим интервала А→Б-1 (РП-6)
+  const category = await createCategory(user, 'Продукты');
   const okScope = await execute(
     db,
     req(user, [
@@ -466,7 +473,12 @@ test('ref/registry_ref: run_routine принимает только рутину
           title: 'пятёрочка → Продукты',
           tags: [],
           aspects: ['orbis/memory'],
-          props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/money-movement' },
+          props: {
+            'orbis/memory_kind': 'rule',
+            'orbis/rule_scope': 'orbis/money-movement',
+            'orbis/rule_pattern': 'пятерочка',
+            'orbis/rule_target': category,
+          },
         },
       },
     ]),
@@ -482,7 +494,13 @@ test('ref/registry_ref: run_routine принимает только рутину
           title: 'мусор → Продукты',
           tags: [],
           aspects: ['orbis/memory'],
-          props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/nope' },
+          // Образец заполнен НАМЕРЕННО: без него стадия 2 ответила бы раньше
+          // (RULE_WITHOUT_PATTERN), и проба перестала бы проверять валидатор ссылок.
+          props: {
+            'orbis/memory_kind': 'rule',
+            'orbis/rule_scope': 'orbis/nope',
+            'orbis/rule_pattern': 'мусор',
+          },
         },
       },
     ]),

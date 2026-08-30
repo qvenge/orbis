@@ -18,7 +18,6 @@ import {
   applyMemoryRules,
   batchAuditMessageId,
   type CanonicalRow,
-  type ContractIdV1,
   csvMappingToolJsonSchema,
   externalRowId,
   type FastPathCategory,
@@ -38,6 +37,7 @@ import {
   newId,
   normalizeCounterparty,
   ROLE_REF,
+  resolveCategoryInOrder,
 } from '@orbis/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { recordUsage } from '../ai/metering';
@@ -54,6 +54,8 @@ import { makeChatJournalSink } from '../executor/journal';
 import { legacyParentRolesSql } from '../executor/relations';
 import type { ExecuteRequest, WireEntity } from '../executor/types';
 import type { LLMRequest, LLMResponse } from '../llm/types';
+import { CONTRACT_MONEY_MOVEMENT, RULE_PATTERN, RULE_TARGET } from '../memory/rules';
+import { memoryRulesWhere } from '../memory/select';
 import type { Card } from '../tools/registry';
 
 // Синк один на модуль (как rollover/post-due): состояния не хранит, audit-сообщение
@@ -66,14 +68,6 @@ const sink = makeChatJournalSink();
  * ПОДПИСЬ на ребре, и разъехавшись, они дали бы «без конверта» пустым при целых данных.
  */
 const PROP_FINANCE_CATEGORY = 'orbis/finance_category';
-
-/**
- * Область действия денежных correction-правил (§А8/В3): `orbis/rule_scope` — это
- * `registry_ref{target: contract}`, и с Задачи 11 сервер проверяет значение против
- * `contract_definitions ∪ CONTRACT_IDS_V1`. Прежний `orbis/financial` был id АСПЕКТА и
- * теперь честно отвергается записью — селектор обязан спрашивать контракт.
- */
-const CONTRACT_MONEY_MOVEMENT = 'orbis/money-movement' satisfies ContractIdV1;
 
 /**
  * Зависимости review/confirm (у analyze резолвер входит в AiDeps): резолвер §8 —
@@ -353,33 +347,36 @@ async function categoryDictionary(tx: Tx, ownerId: string): Promise<FastPathCate
 }
 
 /**
- * Активные correction-правила владельца (`orbis/memory`, `kind=rule`,
- * `scope=orbis/money-movement`) — вся машиночитаемая часть правила живёт в title (K19.4),
- * разбирает его shared. Порядок стабилен (`ORDER BY id`), но на результат не влияет:
- * приоритет правил задаёт applyMemoryRules — в том числе по updated_at, поэтому время
- * правки едет вместе с заголовком (иначе конфликт двух правил на один паттерн импорт
- * разрешал бы иначе, чем быстрый ввод).
+ * Активные correction-правила владельца — ЧЕРЕЗ ЕДИНЫЙ СЕЛЕКТОР (`memory/select.ts`).
+ * Своей копии предиката здесь больше нет: копий было четыре, и одна из них (слой памяти
+ * промпта) читала другую колонку.
  *
- * Первый предикат — принадлежность аспекта списку `aspects[]`: `->>`-фильтры по `props`
- * индексом не покрываются, и каждый import.review сканировал бы ВСЕ неархивные сущности
- * владельца (после CSV-импортов это тысячи строк). Тот же приём у ai/escalation.ts
- * (hasEquivalentRule) и llm/context.ts.
+ * Машиночитаемая часть правила приезжает СВОЙСТВАМИ (В7): образец и id категории, а не
+ * заголовок с разделителем. Заголовок здесь не читается вовсе — он стал генерируемой
+ * подписью.
  *
- * Признак носителя обязателен ещё и по существу (Р9): `orbis/rule_scope` остаётся в
- * `props` после снятия аспекта памяти, тогда как из старой карты значение уходило вместе
- * с аспектом. Без него снятая с сущности «память» продолжала бы править категории импорта.
+ * Порядок стабилен (`ORDER BY id`), но на результат не влияет: приоритет правил задаёт
+ * applyMemoryRules — в том числе по updated_at, поэтому время правки едет вместе с
+ * правилом (иначе конфликт двух правил на один образец импорт разрешал бы иначе, чем
+ * быстрый ввод). Строки без образца или без цели отбрасываются здесь, а не в shared:
+ * записать такое правило больше нельзя (`memory/rules.ts` — fail-closed), но данные,
+ * записанные прямым SQL, до резолва доходить не должны.
  */
 async function memoryRules(tx: Tx, ownerId: string): Promise<FastPathRule[]> {
   const rows = (await tx.execute(sql`
-    SELECT title, updated_at
+    SELECT props ->> ${RULE_PATTERN} AS pattern,
+           props ->> ${RULE_TARGET}  AS target_id,
+           updated_at
     FROM entities
-    WHERE owner_id = ${ownerId} AND NOT archived
-      AND 'orbis/memory' = ANY(aspects)
-      AND props->>'orbis/memory_kind' = 'rule'
-      AND props->>'orbis/rule_scope' = ${CONTRACT_MONEY_MOVEMENT}
+    WHERE owner_id = ${ownerId} AND ${memoryRulesWhere(CONTRACT_MONEY_MOVEMENT)}
     ORDER BY id
-  `)) as unknown as Array<{ title: string; updated_at: unknown }>;
-  return rows.map((r) => ({ title: r.title, updatedAt: toIsoTime(r.updated_at) }));
+  `)) as unknown as Array<{ pattern: unknown; target_id: unknown; updated_at: unknown }>;
+  const rules: FastPathRule[] = [];
+  for (const r of rows) {
+    if (typeof r.pattern !== 'string' || typeof r.target_id !== 'string') continue;
+    rules.push({ pattern: r.pattern, targetId: r.target_id, updatedAt: toIsoTime(r.updated_at) });
+  }
+  return rules;
 }
 
 /**
@@ -402,17 +399,21 @@ function toIsoTime(value: unknown): string {
  * Правила ПЕРЕД алиасами — обязательство фазы C (Task C2 отложил его до появления
  * формата правила в D3a): на реальной выписке алиасы не покрывают имён мерчантов
  * («ПЯТЁРОЧКА», «OZON»), и полезной категоризацию импорта делают именно правила.
+ * Сам ПОРЯДОК ступеней — общая константа `RESOLVE_ORDER` (shared), а не порядок строк
+ * здесь: вторым его вызывающим стоит быстрый ввод, и разъехаться им нельзя.
  */
 function suggestCategoryRef(
   counterparty: string,
   categories: FastPathCategory[],
   rules: FastPathRule[],
 ): string | undefined {
-  const byRule = applyMemoryRules(counterparty, rules, categories);
-  if (byRule !== null) return byRule.id;
   const normalized = normalizeCounterparty(counterparty);
-  if (normalized === '') return undefined;
-  return findCategory(normalized.split(' '), categories)?.id;
+  return (
+    resolveCategoryInOrder({
+      rules: () => applyMemoryRules(counterparty, rules, categories),
+      aliases: () => (normalized === '' ? null : findCategory(normalized.split(' '), categories)),
+    })?.id ?? undefined
+  );
 }
 
 /**
@@ -756,21 +757,26 @@ export async function confirmImport(
           id: entityId,
           title: counterparty === '' ? `Операция ${item.row.occurredOn}` : counterparty,
           tags: [],
-          aspects: {
-            'orbis/financial': {
-              amount: item.row.amount,
-              direction: item.row.direction,
-              category_ref: item.categoryRef,
-              occurred_on: item.row.occurredOn,
-              // Валюта выписки — явно (см. шапку confirmImport); нет значения (старый
-              // клиент) — ключа нет вовсе, и всё трактуется как валюта владельца.
-              ...(input.currency !== undefined && { currency: input.currency.toUpperCase() }),
-              ...(counterparty !== '' && { counterparty }),
-              // Пусто/отсутствует — ключа нет вовсе (не писать undefined/пустую строку):
-              // схема аспекта требует непустую строку, а дедуп пустой ID не сравнивает
-              ...(bankTxnId !== undefined && bankTxnId !== '' && { bank_txn_id: bankTxnId }),
-            },
+          // НОВАЯ форма (§А1-1): значения — плоско в `props` по id свойства, аспект —
+          // пометкой в списке. Старую карту исполнитель больше не принимает вовсе
+          // (Задача 18): её union снят из exec-надмножеств, и вход этим путём получил бы
+          // отказ схемы. Импорт был ОДНИМ ИЗ ДВУХ последних её отправителей на сервере.
+          props: {
+            'orbis/amount': item.row.amount,
+            'orbis/direction': item.row.direction,
+            [PROP_FINANCE_CATEGORY]: item.categoryRef,
+            'orbis/occurred_on': item.row.occurredOn,
+            // Валюта выписки — явно (см. шапку confirmImport); нет значения (старый
+            // клиент) — ключа нет вовсе, и всё трактуется как валюта владельца.
+            ...(input.currency !== undefined && {
+              'orbis/currency': input.currency.toUpperCase(),
+            }),
+            ...(counterparty !== '' && { 'orbis/counterparty': counterparty }),
+            // Пусто/отсутствует — ключа нет вовсе (не писать undefined/пустую строку):
+            // тип свойства требует непустую строку, а дедуп пустой ID не сравнивает
+            ...(bankTxnId !== undefined && bankTxnId !== '' && { 'orbis/bank_txn_id': bankTxnId }),
           },
+          aspects: ['orbis/financial'],
         },
       },
       { tool: 'entity_origin_create', input: { entity_id: entityId, ...origin } },

@@ -24,7 +24,6 @@ export {
 export * from './fast-path';
 export * from './ids';
 export * from './import/normalize';
-export * from './memory/rule';
 export * from './nav/links';
 // Старая грамматика §6.1 живёт в корневом барреле до Задачи 21 (РП-11): её `QueryAst`
 // прямо сейчас держат серверный компилятор, материализация и конструктор запросов в web.

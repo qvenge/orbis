@@ -25,12 +25,20 @@
 //
 // §Б7-6: промпт v4 приезжает в канал ДВУМЯ кусками (PROMPT_BODY + CONTINUATIONS_BLOCK) —
 // блок продолжений обязан быть последним для модели, а не последним в тексте константы.
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { excludeInfraSystemRows } from '../chat/messages';
 import { chatMessages, entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { readEntity } from '../entity-read';
 import type { ActionRecord } from '../executor/types';
+import {
+  formatRuleLabel,
+  MEMORY_KIND,
+  RULE_PATTERN,
+  RULE_SCOPE,
+  RULE_TARGET,
+} from '../memory/rules';
+import { memoryEntitiesWhere } from '../memory/select';
 import { ownerTimeZone, todayInTimeZone } from '../query/context';
 import { effectiveRegistry } from '../registry/cache';
 import { loadAspectToolRows } from '../tools/registry';
@@ -55,8 +63,6 @@ export const ANCHOR_BODY_PREVIEW = 500;
  * колонки не ограничено, а системный канал — ресурс прогона.
  */
 export const ANCHOR_INSTRUCTION_CAP = 8000;
-
-const MEMORY_ASPECT = 'orbis/memory';
 
 /**
  * Заголовок блока продолжений — точная подстрока SYSTEM_PROMPT_V4.
@@ -172,7 +178,14 @@ export function toolResultMessage(toolName: string, result: unknown): LLMMessage
 
 export interface MemoryItem {
   id: string;
-  title: string;
+  /**
+   * Подпись строки памяти. У факта — заголовок записи; у правила — подпись, СОБРАННАЯ ИЗ
+   * СВОЙСТВ при чтении (образец + актуальное название категории по ссылке), а не колонка
+   * `title`. Разница наблюдаема ровно там, где до реформы правило и ломалось:
+   * переименование категории делало сохранённый заголовок ложью, и модель видела в памяти
+   * старое имя, которого на экране владельца уже нет.
+   */
+  label: string;
   body: string;
   kind: 'rule' | 'fact';
   scope: string;
@@ -188,12 +201,21 @@ export const MEMORY_SECTION_HEADER =
   'Память о пользователе (факты и правила; учитывай их в ответах и действиях):';
 
 /**
- * Активные memory-сущности владельца (RLS текущего tx). Простой SELECT по
- * `aspects_legacy ? 'orbis/memory'` вместо прогона через query-компилятор §6 —
- * фильтр тривиален, а сортировка приоритета (§7.4) всё равно доменная:
- * kind=rule раньше fact, scoped раньше глобальных, затем свежесть updated_at.
- * «Недавно использованные» из §7.4 в MVP приближены updated_at (использование
- * памяти отдельно не трекается — осознанное упрощение слайса 1b).
+ * Активные memory-сущности владельца (RLS текущего tx). Простой SELECT по общему селектору
+ * (`memory/select.ts`) вместо прогона через query-компилятор §6 — фильтр тривиален, а
+ * сортировка приоритета (§7.4) всё равно доменная: kind=rule раньше fact, scoped раньше
+ * глобальных, затем свежесть updated_at. «Недавно использованные» из §7.4 в MVP
+ * приближены updated_at (использование памяти отдельно не трекается — осознанное
+ * упрощение слайса 1b).
+ *
+ * ЭТО БЫЛО ПОСЛЕДНЕЕ ЧТЕНИЕ СТАРОЙ КАРТЫ НА СЕРВЕРЕ. Слой памяти брал род и область из
+ * `aspects_legacy`, а три остальных потребителя правил — уже из `props`, и запись со
+ * снятым аспектом (значения в `props` остаются, Р9) промпту показывалась, а резолву — нет.
+ *
+ * ДВА ЗАПРОСА, А НЕ JOIN, намеренно: цель правила — ссылка, и разыменовать её в SQL
+ * пришлось бы приведением `props ->> 'orbis/rule_target'` к uuid. Значение свойства
+ * приводит валидатор ссылок на ЗАПИСИ, но строка, положенная прямым SQL, уронила бы
+ * приведением ВЕСЬ сбор контекста — то есть чат целиком, из-за одной кривой строки.
  */
 export async function loadMemory(tx: Tx): Promise<MemoryItem[]> {
   const rows = await tx
@@ -201,22 +223,46 @@ export async function loadMemory(tx: Tx): Promise<MemoryItem[]> {
       id: entities.id,
       title: entities.title,
       body: entities.body,
-      aspectsLegacy: entities.aspectsLegacy,
+      props: entities.props,
       updatedAt: entities.updatedAt,
     })
     .from(entities)
-    .where(and(sql`${entities.aspectsLegacy} ? ${MEMORY_ASPECT}`, eq(entities.archived, false)));
+    .where(memoryEntitiesWhere());
+
+  const targetIds = new Set<string>();
+  for (const r of rows) {
+    const target = (r.props as Record<string, unknown>)[RULE_TARGET];
+    if (typeof target === 'string') targetIds.add(target);
+  }
+  const targetTitles = await titlesByIdOf(tx, [...targetIds]);
 
   const items: MemoryItem[] = rows.map((r) => {
-    const mem = (r.aspectsLegacy as Record<string, Record<string, unknown>>)[MEMORY_ASPECT] ?? {};
+    const props = r.props as Record<string, unknown>;
+    const kind = props[MEMORY_KIND] === 'rule' ? 'rule' : 'fact';
+    const pattern = props[RULE_PATTERN];
+    const target = props[RULE_TARGET];
+    /**
+     * Подпись правила пересобирается ЗДЕСЬ — но ТОЛЬКО когда есть что пересобирать, то
+     * есть у правила есть и образец, и РАЗЫМЕНОВАННАЯ цель.
+     *
+     * Условие узкое намеренно. Сохранённая подпись лжёт ровно в одном случае — цель
+     * переименовали, — и чинить надо его. У правила без цели (глобальное, не денежное)
+     * заголовок несёт формулировку прозой («Не назначать встречи до 10 утра»), а
+     * `orbis/rule_pattern` — лишь текст, по которому правило узнаёт ввод; подменив
+     * заголовок образцом, слой памяти выбросил бы саму формулировку. Цель, которой нет в
+     * выборке (снесена), тоже возвращает к заголовку: «образец → пусто» беднее его.
+     */
+    const targetTitle = typeof target === 'string' ? targetTitles.get(target) : undefined;
+    const label =
+      kind === 'rule' && typeof pattern === 'string' && pattern.trim() !== '' && targetTitle
+        ? formatRuleLabel(pattern, targetTitle)
+        : r.title;
     return {
       id: r.id,
-      title: r.title,
+      label,
       body: r.body,
-      // Схема аспекта §3.7 гарантирует enum на attach-пути; прямые записи
-      // сводим fail-safe к 'fact' (не к потере строки)
-      kind: mem.kind === 'rule' ? 'rule' : 'fact',
-      scope: typeof mem.scope === 'string' ? mem.scope : '',
+      kind,
+      scope: typeof props[RULE_SCOPE] === 'string' ? (props[RULE_SCOPE] as string) : '',
       updatedAt: r.updatedAt,
     };
   });
@@ -231,6 +277,16 @@ export async function loadMemory(tx: Tx): Promise<MemoryItem[]> {
     return a.id < b.id ? 1 : -1; // детерминированный tie-break (uuidv7 ~ время)
   });
   return items.slice(0, MEMORY_CAP);
+}
+
+/** Заголовки записей по id — разыменование ссылок правил (одна выборка на весь слой). */
+async function titlesByIdOf(tx: Tx, ids: string[]): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const rows = await tx
+    .select({ id: entities.id, title: entities.title })
+    .from(entities)
+    .where(inArray(entities.id, ids));
+  return new Map(rows.map((r) => [r.id, r.title]));
 }
 
 /**
@@ -252,7 +308,7 @@ export function memoryLine(m: MemoryItem): string {
   const scope = m.scope ? `[${m.scope}]` : '';
   const flatBody = flatten(m.body);
   const body = flatBody ? `: ${preview(flatBody, MEMORY_BODY_PREVIEW)}` : '';
-  return `— [${m.kind}]${scope} ${flatten(m.title)}${body}`;
+  return `— [${m.kind}]${scope} ${flatten(m.label)}${body}`;
 }
 
 // ---------------------------------------------------------------------------

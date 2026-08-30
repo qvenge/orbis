@@ -651,7 +651,12 @@ const suggestion = {
 const createdEntity = wireEntity({
   id: 'mem1',
   title: 'кофе → Развлечения',
-  props: { 'orbis/memory_kind': 'rule', 'orbis/rule_scope': 'orbis/money-movement' },
+  props: {
+    'orbis/memory_kind': 'rule',
+    'orbis/rule_scope': 'orbis/money-movement',
+    'orbis/rule_pattern': 'Кофе Хауз 12',
+    'orbis/rule_target': TO_CAT,
+  },
   aspects: ['orbis/memory'],
 });
 
@@ -699,13 +704,18 @@ describe('memory_rule_suggestion (детерминированное время)
       };
       source: string;
     };
+    // `title` — ГЕНЕРИРУЕМАЯ подпись, собранная сервером (ruleText карточки): клиент её не
+    // складывает и обратно не разбирает.
     expect(input.input.title).toBe('кофе → Развлечения');
-    // НОВАЯ форма (§А1-1): свойства плоско по id, аспект — ЯВНЫМ навешиванием. Старая
-    // карта вешала носитель сама, и без `aspects` правило родилось бы записью, которой
-    // слой памяти чата не видит.
+    // ПОЛНАЯ форма правила (§А1-1, В7): свойства плоско по id, аспект — ЯВНЫМ навешиванием.
+    // Образец и категория — своими свойствами: без `orbis/rule_pattern` сервер запись не
+    // примет (fail-closed), а `orbis/rule_target` держит категорию ССЫЛКОЙ, поэтому
+    // переименование её правило не отвязывает. Оба значения приезжают ИЗ КАРТОЧКИ.
     expect(input.input.props).toEqual({
       'orbis/memory_kind': 'rule',
       'orbis/rule_scope': 'orbis/money-movement',
+      'orbis/rule_pattern': suggestion.pattern,
+      'orbis/rule_target': TO_CAT,
     });
     expect(input.input.aspects).toEqual(['orbis/memory']);
     expect(input.input.tags).toEqual([]);

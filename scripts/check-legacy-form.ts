@@ -122,8 +122,13 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
     id: 'bare-field',
     pattern: String.raw`(\{\{query:|aspect=|sortBy=)[^}'"\n]*\b(status|stage|priority|kind|scope|outcome|undecided|due_date|start_at|occurred_on|planned|amount|direction|category_ref)=`,
   },
-  // rulePatternFromTitle переезжает в server/memory/rules.ts как patternFromTransactionTitle —
-  // это законное имя, и маркером оно не является.
+  // Парсер заголовка правила УДАЛЁН (Задача 18, В7): образец и цель уехали в свойства
+  // (`orbis/rule_pattern`, `orbis/rule_target`), заголовок стал генерируемой подписью.
+  // Маркер с этого момента обязан давать НОЛЬ вне allowlist — и это проверяется по
+  // рабочему дереву (`check-legacy-form.test.ts`), а не только на синтетике.
+  // `rulePatternFromTitle` переехала в `server/memory/rules.ts` под честным именем
+  // `patternFromTransactionTitle` (она про заголовок ТРАНЗАКЦИИ) — маркером не является;
+  // `formatRuleLabel` — новая генерация подписи, тоже не она.
   { id: 'rule-parser', pattern: String.raw`parseRuleTitle|formatRuleTitle` },
   { id: 'pseudo-aspect', pattern: String.raw`ENTITY_PSEUDO_ASPECT|'orbis/entity'` },
   { id: 'service-const', pattern: String.raw`SERVICE_ASPECT_IDS` },

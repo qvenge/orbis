@@ -17,23 +17,27 @@
 // подавление повтора идёт тем же 30-дневным сканом, что и подавление по уже
 // отправленному предложению (зеркало rejectPending §7.10).
 import {
-  type ContractIdV1,
   counterpartySimilarity,
   DUP_SIMILARITY_THRESHOLD,
-  formatRuleTitle,
   memoryRuleDeclinedId,
   memoryRuleSuggestionId,
   normalizeCounterparty,
-  parseRuleTitle,
-  rulePatternFromTitle,
 } from '@orbis/shared';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { appendMessageIdempotent } from '../chat/messages';
 import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { entities } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
 import type { ActionRecord } from '../executor/types';
+import {
+  CONTRACT_MONEY_MOVEMENT,
+  formatRuleLabel,
+  patternFromTransactionTitle,
+  RULE_PATTERN,
+  RULE_TARGET,
+} from '../memory/rules';
+import { memoryRulesWhere } from '../memory/select';
 import type { CompileCtx } from '../query/compile-ast';
 import { queryContext } from '../query/context';
 import { refTargetMembershipSql } from '../registry/ref';
@@ -56,18 +60,8 @@ import type { Card } from '../tools/registry';
  * аспект-ключа и стала свойством по id — эвристика читает её по новому адресу, оставаясь
  * той же эвристикой.
  */
-const FINANCIAL = 'orbis/financial';
 /** Слитое свойство категории (§А8/В1): его объявляют и транзакция, и конверт. */
 const FINANCE_CATEGORY = 'orbis/finance_category';
-const MEMORY = 'orbis/memory';
-/** Поля правила памяти после реформы — свойства по id, не поля внутри аспект-ключа. */
-const MEMORY_KIND = 'orbis/memory_kind';
-const RULE_SCOPE = 'orbis/rule_scope';
-/**
- * Область денежных правил памяти (§А8/В3): `orbis/rule_scope` стал ссылкой на КОНТРАКТ, и
- * прежний `orbis/financial` (id аспекта) сервер с Задачи 11 не принимает.
- */
-const CONTRACT_MONEY_MOVEMENT = 'orbis/money-movement' satisfies ContractIdV1;
 /** Окно скана журнала и окно подавления повторного предложения — §7.8, 30 дней. */
 const WINDOW_DAYS = 30;
 /** «После двух одинаковых исправлений» (§7.8), считая текущее. */
@@ -111,21 +105,18 @@ function categoryOf(payload: Record<string, unknown>): string | undefined {
 }
 
 /**
- * Та же категория, но во ВХОДЕ операции, а не в журнале, — и вот тут форм ДВЕ.
+ * Та же категория, но во ВХОДЕ операции, а не в журнале. Адрес ОДИН — `props` (§А9-1).
  *
- * Читается вход тулов, UI и серверных путей. У ТУЛА форма с Задачи 12 одна — `props`
- * (§А9-1), а надмножества tRPC и executor'а остаются union'ом (`entityUpdateUiInput` /
- * `entityUpdateExecInput`): web шлёт старую карту `{аспект: {поле: …}}` до Задач 13c и 18.
- * Один адрес здесь означал бы, что дешёвый гейт вызова молча перестаёт срабатывать ровно на
- * том пути, которым правку категории делает владелец из UI, — эскалация просто выключилась
- * бы, ничем это не показав. Вторая ветка умирает вместе с переводом web.
+ * Форм тут было две, и вторая (старая карта `{аспект: {поле: …}}`) умерла вместе с
+ * ПЕРЕВОДОМ ОТПРАВИТЕЛЕЙ: правку категории делают ровно два пути — web (переведён Задачей
+ * 13c) и подтверждение CSV-импорта (переведено Задачей 18, `import/review.ts`), и оба шлют
+ * `props`. Union старой карты в exec-надмножестве при этом ЖИВ до «Пересева мира» (РП-3):
+ * его держат фикстуры сьютов, а не отправители. Ветка здесь снята именно поэтому — она
+ * отвечала бы на форму, которой ни один живой вызов больше не присылает, и первый же тест
+ * на ней подтверждал бы работоспособность мёртвого пути.
  */
 function categoryInInput(input: Record<string, unknown>): string | undefined {
-  const fromProps = categoryOf(input);
-  if (fromProps !== undefined) return fromProps;
-  const aspects = input.aspects as Record<string, Record<string, unknown> | null> | undefined;
-  const ref = aspects?.[FINANCIAL]?.category_ref;
-  return typeof ref === 'string' ? ref : undefined;
+  return categoryOf(input);
 }
 
 /**
@@ -275,7 +266,7 @@ async function journalRecategorizations(
  * выписки сырое сравнение не срабатывает именно в самом частом реальном случае (один
  * мерчант, разные числовые хвосты): ('ПЯТЕРОЧКА 843','ПЯТЕРОЧКА 999') = 0.769,
  * ('ЯНДЕКС.ТАКСИ 450','ЯНДЕКС.ТАКСИ 1200') = 0.824 — обе ниже порога 0.85, хотя
- * rulePatternFromTitle у обеих сторон даёт ОДИН паттерн.
+ * patternFromTransactionTitle у обеих сторон даёт ОДИН образец.
  *
  * Запасного пути по сырым заголовкам НЕТ (D5b п.1): он давал ложные пары через
  * containment — counterpartySimilarity('ПЯТЕРОЧКА 843','843') = 1.0 (общий токен «843»
@@ -287,7 +278,7 @@ async function journalRecategorizations(
  */
 function sameCorrection(a: string, b: string): boolean {
   return (
-    counterpartySimilarity(rulePatternFromTitle(a), rulePatternFromTitle(b)) >=
+    counterpartySimilarity(patternFromTransactionTitle(a), patternFromTransactionTitle(b)) >=
     DUP_SIMILARITY_THRESHOLD
   );
 }
@@ -298,7 +289,10 @@ async function titleOf(tx: Tx, id: string): Promise<string | undefined> {
 }
 
 /**
- * Название категории — оно и есть связь правила с категорией (см. shared/memory/rule.ts).
+ * Название категории — для ТЕКСТА предложения и генерируемой подписи правила. Связью
+ * правила с категорией оно быть перестало (В7): связь — ссылка `orbis/rule_target` по id,
+ * поэтому переименование категории правило больше не отвязывает, а подпись пересобирается
+ * при чтении (`llm/context.ts`).
  *
  * «Что такое категория» здесь БОЛЬШЕ НЕ РЕШАЕТСЯ: множество берётся из `target` свойства
  * `orbis/finance_category` (§А6-1) — того самого, чью правку эскалация и разбирает. Прежде
@@ -341,39 +335,33 @@ async function titlesOf(tx: Tx, ids: string[]): Promise<string[]> {
 }
 
 /**
- * Активное (неархивное — §7.4) правило того же смысла уже есть. Эквивалентность:
- * тот же паттерн после normalizeCounterparty (той же нормализации, которой D4
- * сопоставляет правило со входом, K12) и то же название категории без учёта регистра.
+ * Активное (неархивное — §7.4) правило того же смысла уже есть. Эквивалентность — ПАРА
+ * СВОЙСТВ (В7): тот же образец после normalizeCounterparty и ТА ЖЕ ЦЕЛЬ ПО ID.
  *
- * Нормализация применяется к ОБЕИМ сторонам (уборочная фаза): аргумент `pattern` приходит
- * из `rulePatternFromTitle`, и до канонизации паттерна (решение 2) сравнение сводилось
- * к `normalizeCounterparty(pattern) === pattern` — для заголовков вида «1234 CARD
- * ПЯТЁРОЧКА» гейт не видел уже созданного правила. Симметричная форма верна и для старых
- * правил, чьи заголовки записаны до канонизации.
+ * Сравнение цели по id, а не по названию, чинит два молчаливых расхождения сразу:
+ * переименованная категория переставала быть «той же» (гейт не видел уже созданного
+ * правила и предлагал его снова), а два одноимённых конверта были неразличимы.
+ *
+ * Нормализация применяется к ОБЕИМ сторонам: аргумент `pattern` приходит из
+ * `patternFromTransactionTitle`, а `orbis/rule_pattern` — обычное текстовое свойство,
+ * которое владелец вправе поправить руками в любом регистре.
+ *
+ * Отбор — общий селектор (`memory/select.ts`), а не своя копия предиката. Признак
+ * носителя в нём обязателен по существу (Р9): снятие аспекта памяти НЕ уносит из `props`
+ * ни `orbis/memory_kind`, ни `orbis/rule_scope`, и без аспекта уже снятое правило
+ * продолжало бы глушить предложение нового.
  */
-async function hasEquivalentRule(tx: Tx, pattern: string, categoryTitle: string): Promise<boolean> {
+async function hasEquivalentRule(tx: Tx, pattern: string, targetId: string): Promise<boolean> {
   const rows = await tx
-    .select({ title: entities.title })
+    .select({ props: entities.props })
     .from(entities)
-    .where(
-      and(
-        // Признак носителя обязателен (Р9): снятие аспекта памяти НЕ уносит из `props`
-        // ни `orbis/memory_kind`, ни `orbis/rule_scope`, а из старой карты значения
-        // уходили вместе с аспектом. Без него уже снятое правило продолжало бы глушить
-        // предложение нового.
-        sql`${MEMORY} = ANY(${entities.aspects})`,
-        eq(entities.archived, false),
-        sql`${entities.props} ->> ${MEMORY_KIND} = 'rule'`,
-        sql`${entities.props} ->> ${RULE_SCOPE} = ${CONTRACT_MONEY_MOVEMENT}`,
-      ),
-    );
+    .where(memoryRulesWhere(CONTRACT_MONEY_MOVEMENT));
+  const wanted = normalizeCounterparty(pattern);
   return rows.some((r) => {
-    const parsed = parseRuleTitle(r.title);
-    if (parsed === null) return false;
-    return (
-      normalizeCounterparty(parsed.pattern) === normalizeCounterparty(pattern) &&
-      parsed.categoryTitle.trim().toLowerCase() === categoryTitle.trim().toLowerCase()
-    );
+    const props = r.props as Record<string, unknown>;
+    if (props[RULE_TARGET] !== targetId) return false;
+    const rulePattern = props[RULE_PATTERN];
+    return typeof rulePattern === 'string' && normalizeCounterparty(rulePattern) === wanted;
   });
 }
 
@@ -459,7 +447,7 @@ async function considerOne(
 ): Promise<SuggestRuleResult> {
   const title = await titleOf(tx, rc.entityId);
   if (title === undefined) return { suggested: false, reason: 'entity_not_found' };
-  const pattern = rulePatternFromTitle(title);
+  const pattern = patternFromTransactionTitle(title);
   // «SBOL 1234» → пустой паттерн: правилом такое стать не может, и без этого гейта
   // две «пустые» строки дали бы counterpartySimilarity === 1 (normalize.ts §7)
   if (pattern === '') return { suggested: false, reason: 'empty_pattern' };
@@ -488,11 +476,11 @@ async function considerOne(
   const same = otherTitles.filter((t) => sameCorrection(title, t)).length;
   if (same + 1 < MIN_CORRECTIONS) return { suggested: false, reason: 'not_repeated' };
 
-  if (await hasEquivalentRule(tx, pattern, categoryTitle)) {
+  if (await hasEquivalentRule(tx, pattern, rc.to)) {
     return { suggested: false, reason: 'rule_exists' };
   }
 
-  const ruleText = formatRuleTitle({ pattern, categoryTitle });
+  const ruleText = formatRuleLabel(pattern, categoryTitle);
   // Решение K3: дискриминант карточки — kind. Поля обязаны дословно совпадать с
   // web-типом MemoryRuleSuggestionData (задача D3b) — union'ы намеренно не общие.
   const card: Card = {
