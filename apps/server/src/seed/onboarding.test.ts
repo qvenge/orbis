@@ -13,6 +13,7 @@ import {
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
   buildFieldCatalog,
+  CORE_PROPERTY_IDS,
   categoryAspectSchema,
   parseQuery,
   propertyToLegacyField,
@@ -24,6 +25,9 @@ import { TRPCError } from '@trpc/server';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
 import { entities } from '../db/schema';
+import { withIdentity } from '../db/with-identity';
+import { effectiveRegistry } from '../registry/cache';
+import { validateEntityProps } from '../registry/validate-props';
 import { appRouter } from '../router';
 import { SEED_CATEGORIES } from '../seed/categories';
 import { ROUTINES_LIST_BODY_BEFORE_BATCH, seedSmartListId } from '../seed/onboarding';
@@ -209,6 +213,60 @@ describe('категории §7.1', () => {
     expect(SEED_CATEGORIES.length).toBe(12);
     const slugs = new Set(SEED_CATEGORIES.map((c) => c.slug));
     expect(slugs.size).toBe(12);
+  });
+});
+
+/**
+ * ПУТЬ СИДА ПРОТИВ ЗАПРЕТА CORE-ПРОЕКЦИЙ (единица 15-бис, §А1-3).
+ *
+ * Запрет «core-свойству нет места в `props`» (`CORE_IN_PROPS`, `registry/validate-props.ts`)
+ * стоит на общей стадии 2 конвейера, а сид пишет строки НАПРЯМУЮ, мимо executor'а — то есть
+ * стадию 2 он не проходит вовсе, и запрет его сломать не может ПО ПОСТРОЕНИЮ. Но именно
+ * поэтому нужна проба: неисполнимость правила на этом пути значит, что нарушить его сид мог
+ * бы МОЛЧА, и восемнадцать посеянных строк оказались бы единственными в системе носителями
+ * второй правды. Здесь посеянное прогоняется через тот же валидатор, что и запись владельца.
+ *
+ * Core-значения сид пишет ЗАКОННО и пишет их в КОЛОНКИ (`title`, `created_at`, `updated_at`
+ * у каждой из 18 строк) — проба это и показывает: колонки заполнены, а `props` о них молчит.
+ */
+describe('сид против запрета core-проекций в props (§А1-3, единица 15-бис)', () => {
+  test('все 18 посеянных строк проходят валидатор реестра: core-значения — в колонках, в props их нет', async () => {
+    const user = freshUserId();
+    const caller = callerFor(user);
+    await caller.user.seedOnboarding();
+
+    const rows = await withIdentity(db, user, async (tx) => {
+      const reg = await effectiveRegistry(tx, user);
+      const seeded = await tx
+        .select({
+          id: entities.id,
+          title: entities.title,
+          props: entities.props,
+          aspects: entities.aspects,
+          createdAt: entities.createdAt,
+        })
+        .from(entities);
+      return seeded.map((row) => ({
+        title: row.title,
+        createdAt: row.createdAt,
+        propKeys: Object.keys(row.props as Record<string, unknown>),
+        violations: validateEntityProps(reg, {
+          props: row.props as Record<string, unknown>,
+          aspects: row.aspects,
+        }),
+      }));
+    });
+
+    expect(rows.length).toBe(18);
+    for (const row of rows) {
+      expect([row.title, row.violations]).toEqual([row.title, []]);
+      // Прямая половина того же утверждения: значение колонки есть, а адреса в props нет.
+      expect(row.title.length).toBeGreaterThan(0);
+      expect(row.createdAt).toBeInstanceOf(Date);
+      for (const id of CORE_PROPERTY_IDS) {
+        expect([row.title, id, row.propKeys.includes(id)]).toEqual([row.title, id, false]);
+      }
+    }
   });
 });
 

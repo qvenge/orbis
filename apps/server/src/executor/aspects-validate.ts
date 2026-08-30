@@ -57,5 +57,15 @@ function describe(violation: ReturnType<typeof validateEntityProps>[number] | un
         `значение «${violation.propertyId}» вложено глубже ${violation.cap} уровней — ` +
         'столько не нужно ни одному осмысленному значению'
       );
+    case 'CORE_IN_PROPS':
+      // Отказ НАЗЫВАЕТ ВЫХОД: у core-проекции есть законный путь записи, и он один — то же
+      // имя в своём поле вызова (`title`/`archived` у `entity_create`/`entity_update`),
+      // а `created_at`/`updated_at` ставит сервер. Без этой половины отказ отправлял бы
+      // модель искать другой способ положить значение туда же.
+      return (
+        `свойство «${violation.propertyId}» хранится колонкой записи (storage: ` +
+        `${violation.storage}) — в props его значению места нет: пишите его своим полем ` +
+        'вызова (title, archived), время записи ставит сервер'
+      );
   }
 }

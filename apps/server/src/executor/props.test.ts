@@ -1751,3 +1751,102 @@ describe('golden-близнец писателей предусловий (§А7
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Единица «15-бис»: core-проекция в `props` (§А1-3)
+// ---------------------------------------------------------------------------
+
+/**
+ * ВТОРАЯ ПРАВДА ПОД ОДНИМ ИМЕНЕМ — закрытый вход, а не теоретический.
+ *
+ * Четыре core-проекции (§А1-3) хранятся колонками; `entity_update {props:{'orbis/title':…}}`
+ * до этой правки ПРИНИМАЛСЯ живьём (проба Задачи 15), и запись уносила `title` в колонке и
+ * `orbis/title` в `props` — расходящиеся навсегда, потому что второе не читает ни один путь.
+ *
+ * Пробы стоят на ВСЕХ ТРЁХ путях записи, а не на одном: гейт живёт в общей стадии 2
+ * (`validateEntityProps`), но «общая» — это утверждение о конвейере, и проверяется оно только
+ * тем, что каждый путь до неё реально доходит. Четвёртый вход — слияние — закрыт Задачей 15
+ * (`MERGE_STORAGE`, `registry/ops.test.ts`).
+ */
+describe('core-проекция в props — отказ на всех путях записи (§А1-3, единица 15-бис)', () => {
+  const CORE_VALUES: Record<string, unknown> = {
+    'orbis/archived': true,
+    'orbis/title': 'Вторая правда',
+    'orbis/created_at': '2026-08-26T10:00:00.000Z',
+    'orbis/updated_at': '2026-08-26T10:00:00.000Z',
+  };
+
+  test('entity_create: каждое из четырёх core-свойств в props → CORE_IN_PROPS, строки нет', async () => {
+    for (const [id, value] of Object.entries(CORE_VALUES)) {
+      const entityId = newId();
+      const denied = await run('entity_create', {
+        id: entityId,
+        title: 'Заголовок в колонке',
+        tags: [],
+        props: { [id]: value },
+      });
+      expect([id, denied.ok]).toEqual([id, false]);
+      expect([id, violationsOf(denied)]).toEqual([
+        id,
+        [{ code: 'CORE_IN_PROPS', propertyId: id, storage: 'core' }],
+      ]);
+      // Отказ ДО записи: фантомной строки после него не остаётся.
+      const rows = await withIdentity(db, owner, (tx) =>
+        tx.select({ id: entities.id }).from(entities).where(eq(entities.id, entityId)),
+      );
+      expect([id, rows.length]).toEqual([id, 0]);
+    }
+  });
+
+  test('entity_update: тот же отказ; колонка при этом остаётся ЕДИНСТВЕННОЙ правдой', async () => {
+    const e = entityOf(await run('entity_create', { title: 'Настоящий заголовок', tags: [] }));
+    const denied = await run('entity_update', { id: e.id, props: { 'orbis/title': 'Подмена' } });
+    expect(denied.ok).toBe(false);
+    expect(violationsOf(denied)).toEqual([
+      { code: 'CORE_IN_PROPS', propertyId: 'orbis/title', storage: 'core' },
+    ]);
+    const row = await rowOf(e.id);
+    expect(Object.keys(row.props)).not.toContain('orbis/title');
+
+    // ОТКАЗ ВЕДЁТ К ВЫХОДУ: то же намерение своим полем вызова исполняется — и меняет
+    // именно ту правду, которую читают все (колонку), а не заводит вторую.
+    const renamed = entityOf(await run('entity_update', { id: e.id, title: 'Подмена' }));
+    expect(renamed.title).toBe('Подмена');
+    expect(Object.keys((await rowOf(e.id)).props)).not.toContain('orbis/title');
+    // Архивация — тем же способом, своим полем; `orbis/archived` в props так же закрыт.
+    const archiveDenied = await run('entity_update', {
+      id: e.id,
+      props: { 'orbis/archived': true },
+    });
+    expect(violationsOf(archiveDenied)).toEqual([
+      { code: 'CORE_IN_PROPS', propertyId: 'orbis/archived', storage: 'core' },
+    ]);
+    expect(ok(await run('entity_update', { id: e.id, archived: true })).ok).toBe(true);
+  });
+
+  test('attach_*: третий путь появления значений закрыт тем же кодом', async () => {
+    const e = entityOf(await run('entity_create', { title: 'Ночь', tags: [] }));
+    const denied = await run('attach_user_sleep_log', {
+      entity_id: e.id,
+      data: { 'user/hours': 7, 'orbis/title': 'Подмена через носитель' },
+    });
+    expect(denied.ok).toBe(false);
+    expect(violationsOf(denied)).toContainEqual({
+      code: 'CORE_IN_PROPS',
+      propertyId: 'orbis/title',
+      storage: 'core',
+    });
+  });
+
+  test('предусловие CAS по core-свойству НЕ задето: адрес в реестре остаётся живым', async () => {
+    // Гейт запрещает core-свойству ЗНАЧЕНИЕ в `props`, а не сам адрес: §А1-3 завёл его ради
+    // Q-AST, подписи и предусловий, и запрет, задевший бы их, отнял бы у реформы её же цель.
+    const e = entityOf(await run('entity_create', { title: 'Цель предусловия', tags: [] }));
+    const byTitle = await run('entity_update', {
+      id: e.id,
+      precondition: [{ property: 'orbis/title', in: ['Цель предусловия'] }],
+      tags: ['помечена'],
+    });
+    expect(entityOf(byTitle).tags).toEqual(['помечена']);
+  });
+});

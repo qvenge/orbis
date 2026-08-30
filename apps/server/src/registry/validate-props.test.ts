@@ -2,7 +2,12 @@
 // Валидатор записи по реестру свойств (§А7-1): коды нарушений, границы decimal через
 // decCmp, поведение общего кеша валидаторов.
 import { describe, expect, test } from 'bun:test';
-import { BUILTIN_ASPECT_DEFS, BUILTIN_PROPERTY_META, type PropertyDefinition } from '@orbis/shared';
+import {
+  BUILTIN_ASPECT_DEFS,
+  BUILTIN_PROPERTY_META,
+  CORE_PROPERTY_IDS,
+  type PropertyDefinition,
+} from '@orbis/shared';
 import { QUERY_TREE_DEPTH_CAP } from '@orbis/shared/query';
 import { type PropsRegistry, validateEntityProps } from './validate-props';
 
@@ -281,5 +286,51 @@ describe('календарь — hasValidCalendar, а не ajv (Р-9b-5)', () =>
         }),
       ),
     ).toEqual([]);
+  });
+});
+
+/**
+ * ЕДИНИЦА «15-БИС»: CORE-ПРОЕКЦИЯ В `props` — ОТКАЗ (§А1-3).
+ *
+ * Четыре свойства ядра (`storage: 'core'`) хранятся КОЛОНКАМИ `entities`, а реестр даёт им
+ * лишь единый адрес для Q-AST, предусловий и подписи. Записанное в `props` значение под тем
+ * же реестровым именем не читает НИ ОДИН боевой путь — то есть у записи появляется вторая
+ * правда, невидимая всем читателям и вечная. Задача 15 закрыла вход со стороны слияния
+ * (`MERGE_STORAGE`, `registry/ops.ts`); здесь закрывается вход со стороны обычной записи —
+ * общим валидатором, через который идут все три пути (`entity_create`, `entity_update`,
+ * `attach_*`, живые пробы — `executor/props.test.ts`).
+ */
+describe('core-проекция в props — CORE_IN_PROPS (§А1-3, единица 15-бис)', () => {
+  test('каждое из четырёх core-свойств отвергается, даже со значением ПРАВИЛЬНОГО типа', () => {
+    const values: Record<string, unknown> = {
+      'orbis/archived': false,
+      'orbis/title': 'Дом',
+      'orbis/created_at': '2026-08-26T10:00:00.000Z',
+      'orbis/updated_at': '2026-08-26T10:00:00.000Z',
+    };
+    for (const id of CORE_PROPERTY_IDS) {
+      expect([id, validateEntityProps(REG, { props: { [id]: values[id] }, aspects: [] })]).toEqual([
+        id,
+        [{ code: 'CORE_IN_PROPS', propertyId: id, storage: 'core' }],
+      ]);
+    }
+  });
+
+  test('правило — по `storage` реестра, а не по списку имён в коде', () => {
+    // Список `CORE_PROPERTY_IDS` — производная того же поля: разъедься они, отказ смотрел бы
+    // на имена, которых в реестре уже нет (или пропускал бы новую core-проекцию).
+    const core = BUILTIN_PROPERTY_META.filter((p) => p.storage === 'core').map((p) => p.id);
+    expect(core).toEqual([...CORE_PROPERTY_IDS]);
+    // Обратная сторона границы: доменное свойство (`storage: 'props'`) тем же входом проходит.
+    expect(validateEntityProps(REG, { props: { 'orbis/priority': 'high' }, aspects: [] })).toEqual(
+      [],
+    );
+  });
+
+  test('отказ стоит РАНЬШЕ проверки типа: причина — «не тот дом», а не «не то значение»', () => {
+    // Иначе владелец (и модель) чинили бы формат вместо адреса — и чинили бы вечно.
+    expect(codes(validateEntityProps(REG, { props: { 'orbis/title': 42 }, aspects: [] }))).toEqual([
+      'CORE_IN_PROPS',
+    ]);
   });
 });

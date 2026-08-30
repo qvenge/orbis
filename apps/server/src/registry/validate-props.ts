@@ -51,7 +51,8 @@ export type PropsViolation =
   | { code: 'REQUIRED'; aspectId: string; propertyId: string }
   | { code: 'UNKNOWN_ASPECT'; aspectId: string }
   | { code: 'DEPRECATED'; propertyId: string }
-  | { code: 'VALUE_TOO_DEEP'; propertyId: string; cap: number };
+  | { code: 'VALUE_TOO_DEEP'; propertyId: string; cap: number }
+  | { code: 'CORE_IN_PROPS'; propertyId: string; storage: PropertyDefinition['storage'] };
 
 // Кэш скомпилированных валидаторов ПО ТЕКСТУ СХЕМЫ (§А7-1: «кеш по тексту схемы
 // сохраняется»; приём перенесён из `executor/aspects-validate.ts:46-67`). Ключ там —
@@ -215,6 +216,36 @@ export function validateEntityProps(
     const def = reg.properties.get(propertyId);
     if (def === undefined) {
       violations.push({ code: 'UNKNOWN_PROPERTY', propertyId });
+      continue;
+    }
+    /**
+     * ДОМ ЗНАЧЕНИЯ (§А1-3) — раньше и статуса, и типа: у core-проекций (`storage: 'core'` —
+     * `orbis/title`, `orbis/archived`, `orbis/created_at`, `orbis/updated_at`) значение
+     * живёт в КОЛОНКЕ `entities`, а реестр даёт им лишь единый адрес для Q-AST, предусловий
+     * CAS и подписи.
+     *
+     * Записанное в `props` под тем же реестровым именем не читает НИ ОДИН боевой путь: они
+     * все ходят в колонку (`corePropertyValue`, `executor/executor.ts`; `CORE_COLUMNS`,
+     * `query/compile-ast.ts`). То есть у записи появлялась бы ВТОРАЯ ПРАВДА под одним
+     * именем — невидимая читателям, неотменяемая обычными средствами и вечная: `title` в
+     * колонке и `orbis/title` в `props` расходятся молча, а на вопрос «какой у записи
+     * заголовок» система отвечает первым, показывая владельцу не то, что он писал.
+     *
+     * Задача 15 закрыла этот же дефект со стороны СЛИЯНИЯ (`MERGE_STORAGE`, `registry/ops.ts`
+     * — тот же вопрос о хранилище, заданный обоим концам). Здесь закрыт вход со стороны
+     * ОБЫЧНОЙ ЗАПИСИ, и место выбрано так, чтобы вход был один: `validateEntityProps` —
+     * общая стадия 2 для всех трёх путей (`entity_create`, `entity_update`, `attach_*`,
+     * `executor/aspects-validate.ts`), причём проверяется ИТОГОВОЕ состояние, а не патч.
+     *
+     * ПРАВИЛО ПО `storage`, А НЕ ПО СПИСКУ ИМЁН: `CORE_PROPERTY_IDS` — производная того же
+     * поля реестра, и список в коде разошёлся бы с ним на первой же новой core-проекции.
+     *
+     * ПУТЬ СИДА НЕ ЗАДЕТ: сид пишет core-значения в КОЛОНКИ (`title`, `created_at` —
+     * `seed/onboarding.ts` кладёт строку напрямую, `rowFromLegacy` переводит только поля
+     * аспектов), а не в `props`; проба — `seed/onboarding.test.ts`.
+     */
+    if (def.storage !== 'props') {
+      violations.push({ code: 'CORE_IN_PROPS', propertyId, storage: def.storage });
       continue;
     }
     if (def.status === 'deprecated') {
