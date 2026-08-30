@@ -9,7 +9,8 @@
 // Прогоняется корневым `bun run test` (хвост `bun test scripts/`), как и тест греп-гейта.
 import { expect, test } from 'bun:test';
 import { MAX_TOKENS_NOTE, STEP_LIMIT_NOTE } from '../apps/server/src/ai/send-message.ts';
-import type { RunEnd } from '../apps/server/src/routines/runner.ts';
+import { ROUTINE_MAX_STEPS } from '../apps/server/src/routines/constants.ts';
+import { REPORT_CAP, type RunEnd } from '../apps/server/src/routines/runner.ts';
 import { BUILTIN_PROPERTY_META } from '../packages/shared/src/registry/builtin-properties.ts';
 import {
   chooseProvider,
@@ -18,6 +19,7 @@ import {
   measurementUsable,
   type PropertyRow,
   SIMILARITY_THRESHOLD,
+  scenarioUsable,
   similarity,
 } from './probe-p4.ts';
 
@@ -164,10 +166,11 @@ test('поглощённые и deprecated строки выбывают из о
 // ---------------------------------------------------------------------------
 
 const finished: RunEnd = { outcome: 'finished' };
+/** Годный прогон: короткий непустой отчёт, шагов меньше потолка. */
+const goodRun = { report: 'Свёл два свойства, сирот нет.', stepCount: 3 };
 
-test('годен РОВНО один исход: finished без причины и без пометки об обрыве', () => {
-  expect(measurementUsable(finished, 'Свёл два свойства, сирот нет.').ok).toBe(true);
-  expect(measurementUsable(finished, undefined).ok).toBe(true);
+test('годен РОВНО один исход: finished без причины, отчёт непустой и не обрезан, шагов меньше потолка', () => {
+  expect(measurementUsable(finished, goodRun).ok).toBe(true);
 });
 
 test('failed по ЛЮБОЙ причине — замер не состоялся, а не «ноль сведённых»', () => {
@@ -184,31 +187,122 @@ test('failed по ЛЮБОЙ причине — замер не состоялс
     'steps',
     'no_proposal',
   ] as const) {
-    const u = measurementUsable({ outcome: 'failed', reason }, undefined);
+    const u = measurementUsable({ outcome: 'failed', reason }, goodRun);
     expect([reason, u.ok]).toEqual([reason, false]);
   }
 });
 
 test('checkpoint — тоже НЕ замер, хотя для act-рутины это штатный исход', () => {
-  const u = measurementUsable({ outcome: 'checkpoint' }, undefined);
+  const u = measurementUsable({ outcome: 'checkpoint' }, goodRun);
   expect(u.ok).toBe(false);
   if (u.ok) return;
-  // Причина названа по существу: словарь обойдён не весь, знаменатель неполон.
   expect(u.reason).toContain('checkpoint');
 });
 
-test('finished, но отчёт с пометкой об обрыве — прогон не довёл работу до конца', () => {
-  // RunEnd этого не показывает вовсе: в режиме act обе ветки возвращают голый
-  // {outcome:'finished'}, и единственный след обрыва — пометка в отчёте.
-  for (const note of [STEP_LIMIT_NOTE, MAX_TOKENS_NOTE]) {
-    expect(measurementUsable(finished, `Начал разбирать словарь…\n\n${note}`).ok).toBe(false);
-  }
-  // Позитивный контроль: обычный отчёт пометок не содержит и годен.
-  expect(measurementUsable(finished, 'Начал разбирать словарь и закончил.').ok).toBe(true);
+test('finished с причиной — тоже не годен (RunEnd вправе принести её и с успехом)', () => {
+  expect(measurementUsable({ outcome: 'finished', reason: 'steps' }, goodRun).ok).toBe(false);
 });
 
-test('finished с причиной — тоже не годен (RunEnd вправе принести её и с успехом)', () => {
-  expect(measurementUsable({ outcome: 'finished', reason: 'steps' }, undefined).ok).toBe(false);
+test('упор в лимит шагов виден СТРУКТУРНО — по step_count, без единого слова в отчёте', () => {
+  // Раунд 3: прежде этот признак читался только из текста, а текст обрезается (тест ниже).
+  // Счётчик шагов пишет раннер тем же патчем, что исход, и он не обрезается ничем.
+  const u = measurementUsable(finished, {
+    report: 'Всё разобрал, дублей нет.',
+    stepCount: ROUTINE_MAX_STEPS,
+  });
+  expect(u.ok).toBe(false);
+  if (u.ok) return;
+  expect(u.reason).toContain('лимит шагов');
+  // Позитивный контроль границы: на шаг меньше — годен.
+  expect(
+    measurementUsable(finished, { report: 'Всё разобрал.', stepCount: ROUTINE_MAX_STEPS - 1 }).ok,
+  ).toBe(true);
+});
+
+test('ОБРЕЗАННЫЙ отчёт не годен: пометка обрыва живёт в хвосте, а cap режет ровно хвост', () => {
+  // Ровно тот сценарий, который прошёл мимо раунда 2: max_tokens по определению означает
+  // текст на потолке модели, отчёт переваливает REPORT_CAP, `cap` срезает пометку — и
+  // проверка по тексту говорит «годен» именно там, где ветка и нужна.
+  const u = measurementUsable(finished, { report: 'а'.repeat(REPORT_CAP), stepCount: 2 });
+  expect(u.ok).toBe(false);
+  if (u.ok) return;
+  expect(u.reason).toContain('обрезан');
+  // Позитивный контроль границы: на символ короче потолка — годен.
+  expect(measurementUsable(finished, { report: 'б'.repeat(REPORT_CAP - 1), stepCount: 2 }).ok).toBe(
+    true,
+  );
+});
+
+test('ПУСТОЙ отчёт не годен: прогон без текста и без вызовов ничего не измерил', () => {
+  for (const report of [undefined, '', '   ', '\n\n']) {
+    expect([report, measurementUsable(finished, { report, stepCount: 0 }).ok]).toEqual([
+      report,
+      false,
+    ]);
+  }
+});
+
+test('пометка обрыва в тексте — последняя линия (единственная у max_tokens)', () => {
+  for (const note of [STEP_LIMIT_NOTE, MAX_TOKENS_NOTE]) {
+    expect(
+      measurementUsable(finished, { report: `Начал разбирать словарь…\n\n${note}`, stepCount: 2 })
+        .ok,
+    ).toBe(false);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Сценарий корпуса: признак берётся из ВОЗВРАТА sendMessage (Important-2 раунда 3)
+// ---------------------------------------------------------------------------
+
+function answer(over: { content?: string; cards?: unknown[]; replayed?: boolean } = {}) {
+  return {
+    assistantMessage: {
+      id: 'm-1',
+      threadId: 't-1',
+      role: 'assistant' as const,
+      content: over.content ?? 'Готово, завёл поле «энергия».',
+      metadata: { cards: over.cards ?? [] },
+      createdAt: '2026-08-30T00:00:00.000Z',
+    },
+    actions: [],
+    pending: [],
+    replayed: over.replayed ?? false,
+  };
+}
+
+test('состоявшийся сценарий — позитивный контроль (иначе всё ниже пинит пустоту)', () => {
+  expect(scenarioUsable(answer()).ok).toBe(true);
+  // Карточка ошибки ТУЛА — законное поведение модели, которое проба и меряет: не отбрасываем.
+  expect(
+    scenarioUsable(answer({ cards: [{ kind: 'error_card', code: 'VALIDATION', message: 'ой' }] }))
+      .ok,
+  ).toBe(true);
+});
+
+test('processing и replayed — цикл не гонялся, сценарий в знаменатель не идёт', () => {
+  expect(scenarioUsable({ status: 'processing' }).ok).toBe(false);
+  expect(scenarioUsable(answer({ replayed: true })).ok).toBe(false);
+});
+
+test('отказ модели ловится СТРУКТУРНО — по коду карточки, а не по тексту ответа', () => {
+  const u = scenarioUsable(
+    answer({ cards: [{ kind: 'error_card', code: 'LLM_REFUSAL', message: 'не буду' }] }),
+  );
+  expect(u.ok).toBe(false);
+  if (u.ok) return;
+  expect(u.reason).toContain('LLM_REFUSAL');
+});
+
+test('потолок токенов и лимит шагов ЧАТА — сценарий не состоялся (возвращаются без исключения)', () => {
+  // Проверено формой возврата: `sendMessage` бросает ровно один класс — недоступность
+  // провайдера, — а эти два исхода приходят обычным ответом и прежде считались «+0 свойств».
+  for (const note of [MAX_TOKENS_NOTE, STEP_LIMIT_NOTE]) {
+    expect([note, scenarioUsable(answer({ content: `Начал…\n\n${note}` })).ok]).toEqual([
+      note,
+      false,
+    ]);
+  }
 });
 
 // ---------------------------------------------------------------------------

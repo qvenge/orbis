@@ -53,8 +53,17 @@ const defaultSink = makeChatJournalSink();
  */
 const TERMINAL_TOOLS: ReadonlySet<string> = new Set(['orbis_propose', 'orbis_checkpoint']);
 
-/** Потолки текстовых полей аспекта прогона (schemas/aspects.ts) — обрезаем ДО записи. */
-const REPORT_CAP = 20_000;
+/**
+ * Потолки текстовых полей аспекта прогона (schemas/aspects.ts) — обрезаем ДО записи.
+ *
+ * `REPORT_CAP` ЭКСПОРТИРОВАН, и у экспорта один читатель с конкретной нуждой: проба П4
+ * (`scripts/probe-p4.ts`) обязана отличить полный отчёт от обрезанного. Пометки обрыва
+ * (`STEP_LIMIT_NOTE`, `MAX_TOKENS_NOTE`) `cap` дописывает В КОНЕЦ, а режет ровно хвост —
+ * значит на отчёте длиннее потолка признак обрыва теряется молча, и читатель, доверившийся
+ * тексту, назовёт оборванный прогон успешным. Своя копия числа у пробы разъехалась бы с этим
+ * при первой правке потолка; сравнение с константой — нет.
+ */
+export const REPORT_CAP = 20_000;
 const FAIL_NOTE_CAP = 2_000;
 const STEP_SUMMARY_CAP = 500;
 

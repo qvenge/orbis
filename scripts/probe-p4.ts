@@ -47,15 +47,21 @@ import { join } from 'node:path';
 import { newId } from '@orbis/shared';
 import { sql } from 'drizzle-orm';
 import { routineById } from '../apps/server/src/agent-loop/queries';
-import { MAX_TOKENS_NOTE, STEP_LIMIT_NOTE, sendMessage } from '../apps/server/src/ai/send-message';
+import {
+  MAX_TOKENS_NOTE,
+  type SendMessageResult,
+  STEP_LIMIT_NOTE,
+  sendMessage,
+} from '../apps/server/src/ai/send-message';
 import { ensureGlobalThread } from '../apps/server/src/chat/threads';
 import { makeDb } from '../apps/server/src/db/client';
 import { withIdentity } from '../apps/server/src/db/with-identity';
 import { type LLMProviderEnv, makeLLMProvider } from '../apps/server/src/llm/provider';
 import type { LLMProvider } from '../apps/server/src/llm/types';
 import { approvePending } from '../apps/server/src/policy/pending';
+import { ROUTINE_MAX_STEPS } from '../apps/server/src/routines/constants';
 import { startBucketRun } from '../apps/server/src/routines/lifecycle';
-import { type RunEnd, runRoutineRun } from '../apps/server/src/routines/runner';
+import { REPORT_CAP, type RunEnd, runRoutineRun } from '../apps/server/src/routines/runner';
 import { GARDENER_SLUG, GARDENER_TITLE, seedRoutineId } from '../apps/server/src/seed/gardener';
 import { seedOwner } from '../apps/server/src/seed/onboarding';
 
@@ -190,29 +196,54 @@ export function chooseProvider(env: LLMProviderEnv): ProviderChoice {
 export type Usable = { ok: true } | { ok: false; reason: string };
 
 /**
- * ДОВЁЛ ЛИ САДОВНИК РАБОТУ ДО КОНЦА. Ответ решает, есть ли вообще замер, — и потому спрашивается
- * ЯВНО, а не выводится из того, что вызов вернулся без исключения.
+ * Прогон садовника в объёме, по которому судят о годности замера. `stepCount` здесь не ради
+ * любопытства: это ЕДИНСТВЕННЫЙ признак упора в лимит шагов, который не живёт в тексте.
+ */
+export interface GardenerRun {
+  report: string | undefined;
+  stepCount: number;
+}
+
+/**
+ * ДОВЁЛ ЛИ САДОВНИК РАБОТУ ДО КОНЦА. Ответ решает, есть ли вообще замер, — и потому
+ * спрашивается ЯВНО, а не выводится из того, что вызов вернулся без исключения.
  *
  * ЗАЧЕМ. Цикл рутины ловит сбой провайдера САМ и наружу не бросает (`routines/runner.ts`):
  * «кредиты кончились на садовнике» выглядит как обычный возврат `RunEnd`. Проба, которая
- * исход только печатала, шла дальше и считала долю несведённых дублей ПО МЁРТВОМУ САДОВНИКУ —
- * то есть ноль сведённых. Ошибка при этом ОДНОСТОРОННЯЯ: пустой словарь давал «0 %, порог не
- * превышен, код 0», а один-единственный кандидат в дубли — «100 %, порог превышен, сужать
- * Р14, код 3». Самый последствийный вердикт из несостоявшегося замера. Сценарий не краевой:
- * ровно так проба и умерла в первый раз — кредиты кончились под конец корпуса.
+ * исход только печатала, шла дальше и считала по МЁРТВОМУ САДОВНИКУ. Ошибка при этом
+ * ОДНОСТОРОННЯЯ — в сторону «сужать Р14». Сценарий не краевой: ровно так проба и умерла в
+ * первый раз.
  *
- * ГОДЕН РОВНО ОДИН ИСХОД: `finished` без причины и без пометки об обрыве. Остальные:
- *  - `failed` (provider/deadline/limit/refusal/aborted/internal) — работа не сделана;
- *  - **`checkpoint` — ТОЖЕ несостоявшийся замер, хотя для `act`-рутины это штатный исход.**
- *    Садовник остановился вопросом, не дойдя до конца словаря: часть дублей он не смотрел, и
- *    «сколько он не свёл» по такому прогону — не измерение, а домысел. Штатность исхода
- *    говорит о рутине, а не о пробе: пробе нужен ПОЛНЫЙ обход, иначе знаменатель неполон;
- *  - `finished`, но отчёт несёт `STEP_LIMIT_NOTE`/`MAX_TOKENS_NOTE` — прогон упёрся в потолок
- *    шагов или токенов и оборван на полуслове. `RunEnd` этого не показывает вовсе (в режиме
- *    `act` обе ветки возвращают голый `{outcome:'finished'}`), поэтому пометку приходится
- *    читать из отчёта — теми же константами, которыми её ставит раннер, а не их копией.
+ * ГОДЕН РОВНО ОДИН ИСХОД: `finished` без причины, с НЕПУСТЫМ и НЕОБРЕЗАННЫМ отчётом и без
+ * упора в лимит шагов. Ниже — ВСЕ способы, которыми «не годен» доходит до пробы, и чем
+ * каждый ловится; перечень собран по возвратам, а не по тому, где удобно проверять.
+ *
+ *  1. `failed` (provider/deadline/limit/refusal/aborted/internal) — поле `outcome`.
+ *  2. **`checkpoint` — ТОЖЕ несостоявшийся замер**, хотя для `act`-рутины исход штатный.
+ *     Садовник остановился вопросом, не дойдя до конца словаря: часть дублей он не смотрел,
+ *     и «сколько он не свёл» по такому прогону — домысел. Штатность говорит о рутине, а не о
+ *     пробе: пробе нужен ПОЛНЫЙ обход, иначе знаменатель неполон.
+ *  3. `finished` с `reason` — поле `reason` (сегодня такой формы нет; проверка fail-closed).
+ *  4. **Упор в лимит шагов — по `orbis/step_count`, а НЕ по тексту.** Это исправление
+ *     раунда 3: прежде признак читался только из отчёта, а отчёт обрезается (см. 5). Счётчик
+ *     шагов пишет раннер тем же патчем, что исход, и ничем не обрезается.
+ *  5. **Отчёт ОБРЕЗАН (`length >= REPORT_CAP`) — не годен, и это fail-closed, а не
+ *     педантизм.** `cap` в `settle` дописывает пометку обрыва в КОНЕЦ и режет ровно хвост:
+ *     на отчёте длиннее потолка пометка теряется молча. Отличить «обрезанный без пометки» от
+ *     «обрезанного с пометкой» нечем, поэтому обрезанный отчёт годным не считается вовсе.
+ *  6. Отчёт ПУСТ или отсутствует — прогон без текста и без вызовов ничего не измерил
+ *     (`settle` пустой отчёт не пишет вовсе, поэтому сюда он приходит как `undefined`).
+ *  7. Пометка обрыва в тексте — последняя линия, единственная для `max_tokens`.
+ *
+ * ЧТО НАЗВАНО ЧЕСТНО И НЕ ПОЧИНЕНО ЗДЕСЬ: у `max_tokens` СТРУКТУРНОГО носителя нет вовсе.
+ * В режиме `act` и потолок токенов, и лимит шагов возвращают голый `{outcome:'finished'}`, и
+ * единственный след потолка — текст отчёта. Лимит шагов удалось увести в структуру
+ * (`step_count`), потолок токенов — нет: `run_usage.output_tokens` это СУММА по шагам, она
+ * не равна `MAX_OUTPUT_TOKENS` ни необходимо, ни достаточно. Проба закрывает дыру
+ * fail-closed'ом по обрезке (пункт 5), но настоящее лечение — поле исхода в аспекте прогона,
+ * то есть правка РАННЕРА, а не пробы. Записано координатору как находка.
  */
-export function measurementUsable(end: RunEnd, report: string | undefined): Usable {
+export function measurementUsable(end: RunEnd, run: GardenerRun): Usable {
   if (end.outcome === 'checkpoint') {
     return {
       ok: false,
@@ -229,12 +260,86 @@ export function measurementUsable(end: RunEnd, report: string | undefined): Usab
   if (end.reason !== undefined) {
     return { ok: false, reason: `прогон садовника завершён с причиной «${end.reason}»` };
   }
+  // СТРУКТУРНЫЙ признак упора в лимит шагов — раньше текстовых: он не обрезается.
+  if (run.stepCount >= ROUTINE_MAX_STEPS) {
+    return {
+      ok: false,
+      reason: `садовник упёрся в лимит шагов (${run.stepCount} из ${ROUTINE_MAX_STEPS}) — работа не доведена до конца`,
+    };
+  }
+  if (run.report === undefined || run.report.trim() === '') {
+    return {
+      ok: false,
+      reason:
+        'у прогона садовника пустой отчёт — прогон без текста и без вызовов ничего не измерил',
+    };
+  }
+  if (run.report.length >= REPORT_CAP) {
+    return {
+      ok: false,
+      reason: `отчёт садовника обрезан по потолку ${REPORT_CAP} — пометка обрыва живёт в хвосте, и отличить оборванный прогон от полного нечем`,
+    };
+  }
   for (const [note, what] of [
     [STEP_LIMIT_NOTE, 'упёрся в лимит шагов'],
     [MAX_TOKENS_NOTE, 'оборван по потолку токенов'],
   ] as const) {
-    if (report?.includes(note)) {
+    if (run.report.includes(note)) {
       return { ok: false, reason: `прогон садовника ${what} — работа не доведена до конца` };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * СОСТОЯЛСЯ ЛИ СЦЕНАРИЙ КОРПУСА — по ВОЗВРАТУ `ai.sendMessage`, а не по отсутствию исключения.
+ *
+ * ЗАЧЕМ. Бросает `sendMessage` ровно один класс — недоступность провайдера. Отказ модели,
+ * потолок токенов и лимит шагов чата (`MAX_AGENT_STEPS`) возвращаются НОРМАЛЬНО, и
+ * оборванный сценарий печатался как «+0 свойств», попадая в знаменатель 20. Это занижало
+ * ЕДИНСТВЕННУЮ цифру, которая ещё выносит вердикт, — то есть ошибка односторонняя, теперь в
+ * сторону «сужать не надо»: скрипт молча пропустил бы настоящую проблему.
+ *
+ * ВСЕ СПОСОБЫ, КОТОРЫМИ «НЕ СОСТОЯЛСЯ» ДОХОДИТ ДО ПРОБЫ:
+ *  1. `{status:'processing'}` — цикл ведёт другой прогон, наш ход не исполнялся. СТРУКТУРНО.
+ *  2. `replayed: true` — вернулся готовый ответ, цикл не гонялся вовсе. СТРУКТУРНО. С
+ *     уникальным `newId()` недостижимо, и проверка стоит именно поэтому: fail-closed.
+ *  3. Отказ модели — `error_card` с кодом `LLM_REFUSAL` в `metadata.cards` ответа.
+ *     СТРУКТУРНО, и код здесь РАЗЛИЧАЕТ: карточку с любым другим кодом кладёт неудачный
+ *     вызов тула (`send-message.ts`), а это законное поведение модели, которое проба и
+ *     меряет, — ошибиться значило бы выбросить половину корпуса.
+ *  4. Потолок токенов и лимит шагов чата — пометками в `assistantMessage.content`. Носитель
+ *     ТЕКСТОВЫЙ, и это названо вслух; но в отличие от отчёта прогона он НЕ ОБРЕЗАЕТСЯ:
+ *     чатовый путь пишет `content` в колонку без `cap`, пометка дописывается в конец и
+ *     доезжает целиком. Структурного носителя у этих двух исходов нет — та же дыра, что у
+ *     `max_tokens` садовника, и лечится она там же, в источнике.
+ */
+export function scenarioUsable(result: SendMessageResult): Usable {
+  if ('status' in result) {
+    return { ok: false, reason: 'ответ ещё готовится (processing) — ход не исполнялся' };
+  }
+  if (result.replayed) {
+    return { ok: false, reason: 'вернулся готовый ответ (replayed) — цикл модели не гонялся' };
+  }
+  const cards = (result.assistantMessage.metadata as { cards?: unknown }).cards;
+  if (Array.isArray(cards)) {
+    for (const card of cards) {
+      if (
+        typeof card === 'object' &&
+        card !== null &&
+        (card as { kind?: unknown }).kind === 'error_card' &&
+        (card as { code?: unknown }).code === 'LLM_REFUSAL'
+      ) {
+        return { ok: false, reason: 'модель отказалась отвечать (LLM_REFUSAL)' };
+      }
+    }
+  }
+  for (const [note, what] of [
+    [STEP_LIMIT_NOTE, 'упёрся в лимит шагов чата'],
+    [MAX_TOKENS_NOTE, 'оборван по потолку токенов'],
+  ] as const) {
+    if (result.assistantMessage.content.includes(note)) {
+      return { ok: false, reason: `ход ${what} — сценарий не доведён до конца` };
     }
   }
   return { ok: true };
@@ -400,20 +505,37 @@ async function main(): Promise<number> {
   let exitCode = 0;
   try {
     console.log(`probe-p4: провайдер ${provider.modelId}, владелец пробы ${owner}`);
-    await seedOwner(db, owner);
+    const seeded = await seedOwner(db, owner);
+    // Возврат сида тоже проверяется: владелец свежий, `seeded: false` означало бы, что
+    // онбординг уже был, — то есть замер идёт по чужому графу.
+    if (!seeded.seeded) throw new Error('сид владельца пробы не отработал (seeded: false)');
     const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
 
     const deps = { provider, model: provider.modelId };
     let failed = 0;
     for (const task of corpus) {
       const before = ownOf(await dictionaryRows()).length;
+      let answer: SendMessageResult;
       try {
-        await sendMessage(db, deps, { ownerId: owner, id: newId(), threadId, content: task.text });
+        answer = await sendMessage(db, deps, {
+          ownerId: owner,
+          id: newId(),
+          threadId,
+          content: task.text,
+        });
       } catch (e) {
         failed += 1;
         console.error(
           `  #${task.n} (${task.class}): СБОЙ — ${e instanceof Error ? e.message : String(e)}`,
         );
+        continue;
+      }
+      // Исключение — лишь ОДИН из способов не состояться; остальные приходят возвратом
+      // (см. `scenarioUsable`). Оборванный сценарий в знаменатель не попадает.
+      const scenario = scenarioUsable(answer);
+      if (!scenario.ok) {
+        failed += 1;
+        console.error(`  #${task.n} (${task.class}): СЦЕНАРИЙ НЕ СОСТОЯЛСЯ — ${scenario.reason}`);
         continue;
       }
       const after = ownOf(await dictionaryRows()).length;
@@ -460,10 +582,15 @@ async function main(): Promise<number> {
       { ownerId: owner, routine, runId: started.runId, bucket },
     );
     const runRows = (await withIdentity(db, owner, (tx) =>
-      tx.execute(sql`SELECT props ->> 'orbis/run_report' AS report FROM entities
+      tx.execute(sql`SELECT props ->> 'orbis/run_report' AS report,
+                            COALESCE((props ->> 'orbis/step_count')::int, 0) AS step_count
+                       FROM entities
                       WHERE id = ${started.runId}::uuid`),
-    )) as unknown as Array<{ report: string | null }>;
-    const usable = measurementUsable(end, runRows[0]?.report ?? undefined);
+    )) as unknown as Array<{ report: string | null; step_count: number }>;
+    const usable = measurementUsable(end, {
+      report: runRows[0]?.report ?? undefined,
+      stepCount: Number(runRows[0]?.step_count ?? 0),
+    });
     console.log(
       `probe-p4: прогон садовника — ${end.outcome}${end.reason ? ` (${end.reason})` : ''}`,
     );
