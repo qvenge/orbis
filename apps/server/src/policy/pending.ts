@@ -675,6 +675,70 @@ function toOperations(pending: PendingRecord): Array<{ tool: string; input: unkn
   return [{ tool: pending.tool, input: pending.input }];
 }
 
+/** Сколько записей назвать в сводке поимённо: карточка — строка ленты, а не отчёт. */
+const NAMED_IN_SUMMARY = 3;
+
+interface MergeConflictDetails {
+  reason?: unknown;
+  source?: unknown;
+  into?: unknown;
+  entities?: Array<{ entityId?: unknown }>;
+}
+
+/**
+ * Единица пачки о неслучившемся слиянии — В СВОЕЙ транзакции, поверх отката слияния.
+ *
+ * ДОМ — ЗДЕСЬ (переезд Задачи 16). Слияние, нашедшее записи с двумя разными значениями, НЕ
+ * ПРИМЕНЯЕТ НИЧЕГО: его транзакция откатывается целиком, и карточка, записанная в ней,
+ * откатилась бы вместе с ней. Значит единицу кладёт тот, у кого на руках `Db`, — вызывающий
+ * `execute`. Таких вызывающих ТРИ, и перечислять их по одному было бы ошибкой того же
+ * класса, что уже ловили в этой ветке: тул (`tools/dispatch.ts`), ручка владельца
+ * (`routers/registry.ts`) и — с §С2-1, где мутация реестра ни для какого актора не бывает
+ * молчаливой, — `approvePending` НИЖЕ, через который теперь идут слияния из чата и от MCP.
+ * Последний накрывает все настоящие и будущие пути исполнения сохранённого payload'а разом
+ * (кнопка владельца, «Принять» единицы пачки, «Принять все»), поэтому дом и переехал сюда:
+ * в `registry/merge-conflict.ts` он был бы циклом модулей (тот файл зовёт этот).
+ *
+ * `tool`/`input` единицы — ТО ЖЕ САМОЕ слияние: разобрав конфликт (стерев лишнее значение
+ * там, где оба заполнены), владелец жмёт «Принять», и слияние идёт заново. Единица,
+ * несущая «сообщение о проблеме» вместо действия, потребовала бы от него второй раз найти
+ * и повторить операцию вручную.
+ *
+ * Дедуп — по ПАРЕ свойств и СОСТАВУ конфликтующих записей: повторная попытка того же
+ * слияния возвращает ту же карточку (второй такой же в ленте не появляется), а попытка
+ * после частичного разбора — новую, потому что и разбирать в ней осталось другое.
+ */
+export async function reportMergeConflictUnit(
+  db: Db,
+  ownerId: string,
+  error: StructuredError,
+): Promise<void> {
+  if (error.code !== 'REGISTRY_CONFLICT') return;
+  const details = (error.details ?? {}) as MergeConflictDetails;
+  if (details.reason !== 'MERGE_VALUES') return;
+  const source = String(details.source ?? '');
+  const into = String(details.into ?? '');
+  const ids = (details.entities ?? [])
+    .map((e) => String(e.entityId ?? ''))
+    .filter((id) => id !== '');
+  if (source === '' || into === '' || ids.length === 0) return;
+
+  const named = ids.slice(0, NAMED_IN_SUMMARY).join(', ');
+  const tail = ids.length > NAMED_IN_SUMMARY ? ` и ещё ${ids.length - NAMED_IN_SUMMARY}` : '';
+  await withIdentity(db, ownerId, (tx) =>
+    createSystemPending(tx, {
+      ownerId,
+      tool: 'property_merge',
+      input: { source, into },
+      summary:
+        `Слияние ${source} → ${into} остановлено: у ${ids.length} записей заполнены оба ` +
+        `свойства разными значениями (${named}${tail}). Уберите лишнее и подтвердите — ` +
+        `слияние пойдёт заново.`,
+      dedupeKey: `merge-conflict:${source}:${into}:${unitHash(ids)}`,
+    }),
+  );
+}
+
 /**
  * Одобрение §7.10: исполнить СОХРАНЁННЫЙ payload, не повторяя вызов модели.
  * Порядок проверок: (1) pending виден под RLS (чужой и несуществующий → единый
@@ -765,6 +829,14 @@ export async function approvePending(
         },
       },
     );
+
+    // КОНФЛИКТ ЗНАЧЕНИЙ ПРИ СЛИЯНИИ (§А10-2) — карточка разбора владельцу, отдельной
+    // транзакцией поверх отката. С §С2-1 (Задача 16) слияние из чата и от MCP исполняется
+    // именно здесь, а не в диспатче: до неё этот отказ разбирала граница вызова, и без
+    // этой строки владелец, подтвердивший слияние карточкой, получал бы голый
+    // REGISTRY_CONFLICT без единого следа причины. Функция безопасна на ЛЮБОМ отказе — не
+    // тот код или не та причина, и она молча ничего не делает.
+    if (!r.ok) await reportMergeConflictUnit(db, args.ownerId, r.error);
 
     // Эскалация повторных исправлений (§7.8) — ВТОРАЯ точка вызова (уборочная фаза,
     // решение 4). Батч из 11+ операций classifyToolCall уводит в explicit-confirmation,

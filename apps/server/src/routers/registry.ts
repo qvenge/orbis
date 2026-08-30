@@ -17,9 +17,9 @@ import { withIdentity } from '../db/with-identity';
 import { execErrorToTRPC } from '../errors';
 import { execute } from '../executor/executor';
 import { makeChatJournalSink } from '../executor/journal';
+import { reportMergeConflictUnit } from '../policy/pending';
 import { effectiveRegistry } from '../registry/cache';
 import { dependantsOf, dependencyGraph } from '../registry/deps-graph';
-import { reportMergeConflictUnit } from '../registry/merge-conflict';
 import { collectPropertyHolders } from '../registry/ops';
 import {
   aspectDeltaRemoveInput,

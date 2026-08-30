@@ -835,16 +835,22 @@ describe('/mcp: скоуп worker (С7, §4.14)', () => {
     } finally {
       await agent.close();
     }
-    // Полному доступу отказ приходит ДОМЕННЫЙ (свойств с такими именами нет), а не по
-    // правам: запрет адресован скоупу, а не тулу.
+    // Полному доступу тот же вызов доезжает до ПОЛИТИКИ, а не упирается в права: запрет
+    // адресован скоупу, а не тулу.
+    //
+    // ОЖИДАНИЕ ПЕРЕПИСАНО ЗАДАЧЕЙ 16 (§С2-1): прежде здесь стоял доменный `NOT_FOUND`
+    // («свойств с такими именами нет») — вызов исполнялся сразу и падал в операции. Теперь
+    // мутация реестра ни для какого актора не бывает молчаливой: ряд 4a поднимает её до
+    // `explicit-confirmation`, и до операции она доходит только с подтверждения владельца.
+    // Довод теста от этого не изменился — изменился ответ, которым он подтверждается.
     const full = await connectAgent(mainUrl());
     try {
       const r = await callTool(full, 'property_merge', {
         source: 'user/net-a',
         into: 'user/net-b',
       });
-      expect(r.isError).toBe(true);
-      expect((r.payload.error as { code?: string }).code).toBe('NOT_FOUND');
+      expect(r.isError).toBe(false);
+      expect(r.payload.status).toBe('pending_confirmation');
     } finally {
       await full.close();
     }

@@ -23,7 +23,9 @@ import type { ActionRecord, WireEntity } from '../executor/types';
 import { issuePatGrant, verifyBearer } from '../oauth/grants';
 import { approvePending } from '../policy/pending';
 import { bumpOwnerRegistryVersion } from '../registry/version';
+import { appRouter } from '../router';
 import { agentLoopHelpers } from '../test/agent-loop-helpers';
+import { createCallerFactory } from '../trpc';
 import { dispatchTool, routineDeferForbidden, routineGate, type ToolCallCtx } from './dispatch';
 import { buildToolRegistry, type RoutineRef } from './registry';
 
@@ -3850,7 +3852,9 @@ describe('объектный пре-чек рутинной мутации (D42 
     const ctx = rt(['entity_update']);
 
     // Запрета нет: пре-чек молчит, и вызов уходит своим обычным путём (отложка).
-    expect(await routineDeferForbidden(ctx, [], { grantsAutonomy: false }, [])).toBeNull();
+    expect(
+      await routineDeferForbidden(ctx, [], { grantsAutonomy: false, reconfigures: 'none' }, []),
+    ).toBeNull();
     const r = await dispatchTool(ctx, 'entity_update', { id: ghost.id, title: 'Просто заметка' });
     expect(r.status).not.toBe('error');
   });
@@ -3876,7 +3880,7 @@ describe('объектный пре-чек рутинной мутации (D42 
       { tool, input: { source_id: source, target_id: target, role: 'mention' } },
     ];
     const check = (ops: Array<{ tool: string; input: Record<string, unknown> }>) =>
-      routineDeferForbidden(ctx, ops, { grantsAutonomy: false }, []);
+      routineDeferForbidden(ctx, ops, { grantsAutonomy: false, reconfigures: 'none' }, []);
 
     // Цель связи — рутина; источник — прогон: направление запрета не меняет
     expect(await check(link('relation_create', note.id, routineId))).toContain(
@@ -4225,5 +4229,301 @@ describe('отложка небезопасного действия рутин�
     // Дедуп ключуется batch_id: две одиночные архивации без него — две РАЗНЫЕ карточки
     const pendings = await pendingsIn(owner, threadId);
     expect(pendings).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §С2-1: класс подтверждения мутаций реестра (приёмка §С8-11, Задача 16)
+// ---------------------------------------------------------------------------
+
+/**
+ * «Молчаливых мутаций реестра не существует ни для какого актора» — живые пути каждого ряда
+ * таблицы §С2-1. Ответы самого классификатора пиннятся юнитами (`policy/confirmation.test.ts`);
+ * здесь проверяется, что вызов ДОХОДИТ до них и что за уровнем следует обещанное поведение:
+ * карточка, единица пачки или отказ по объекту.
+ */
+describe('§С2-1: мутации реестра — уровень подтверждения на живых путях (приёмка §С8-11)', () => {
+  const { routineCtx, seedRoutine, seedRoutineRun } = agentLoopHelpers(db);
+
+  /** Своё свойство владельца — через ту же операцию исполнителя, что зовут тул и роутер. */
+  async function ownProperty(owner: string, ru: string): Promise<{ id: string; key: string }> {
+    const r = await execute(db, {
+      actorUserId: owner,
+      actorKind: 'owner',
+      source: 'ui',
+      operations: [
+        {
+          tool: 'property_create',
+          input: {
+            label: { ru },
+            description: { ru: `Смысл «${ru}»` },
+            type: { kind: 'number' },
+            status: 'active',
+          },
+        },
+      ],
+    });
+    if (!r.ok) throw new Error(`ownProperty: ${r.error.code} ${r.error.message}`);
+    // Результат операции реестра — `{property, key}` (`executor.ts`), а не `{id}`.
+    const out = r.results[0] as { property: string; key: string };
+    return { id: out.property, key: out.key };
+  }
+
+  /** Строка реестра как она лежит: пробой «мутация НЕ применилась» служит она, а не ответ. */
+  async function registryRow(owner: string, id: string) {
+    const rows = (await withIdentity(db, owner, (tx) =>
+      tx.execute(sql`
+        SELECT label, status, merged_into FROM property_definitions
+         WHERE owner_id = ${owner}::uuid AND id = ${id}`),
+    )) as unknown as Array<{ label: Record<string, string>; status: string; merged_into: unknown }>;
+    return rows[0];
+  }
+
+  async function deltaRowsOf(owner: string): Promise<number> {
+    const rows = (await withIdentity(db, owner, (tx) =>
+      tx.execute(
+        sql`SELECT count(*)::int AS n FROM registry_deltas WHERE owner_id = ${owner}::uuid`,
+      ),
+    )) as unknown as Array<{ n: number }>;
+    return Number(rows[0]?.n ?? 0);
+  }
+
+  /** Живой прогон живой act-рутины с названным белым списком — «садовник словаря». */
+  async function gardener(owner: string, allowed: string[]) {
+    const routineId = await seedRoutine(owner, {
+      title: 'Садовник словаря',
+      routine: { mode: 'act', allowed_tools: allowed },
+    });
+    const { runId } = await seedRoutineRun(owner, { routineId, bucket: '2026-08-26T09:00' });
+    const ctx = routineCtx(owner, 'act', allowed, {
+      clock: () => T0,
+      routine: { id: routineId, runId, mode: 'act', allowedTools: new Set(allowed) },
+    });
+    const threadId = await withIdentity(db, owner, (tx) =>
+      ensureEntityThread(tx, owner, routineId),
+    );
+    return { ctx, routineId, runId, threadId };
+  }
+
+  async function pendingsOf(owner: string, threadId: string) {
+    return (await messagesIn(owner, threadId)).filter(
+      (m) => (m.metadata as { pending?: unknown }).pending !== undefined,
+    );
+  }
+
+  test('property_create proposed из чата (actor model) → preview: исполнено + карточка; от владельца через UI-роутер → execute без карточки', async () => {
+    const owner = freshUserId();
+    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const input = {
+      label: { ru: 'Усилие' },
+      description: { ru: 'Сколько сил отнимет дело' },
+      type: { kind: 'number' as const },
+      status: 'proposed' as const,
+    };
+
+    const r = await dispatchTool(
+      ctxFor({ actorUserId: owner, threadId }),
+      'property_create',
+      input,
+    );
+    // preview §7.10 — ИНФОРМАЦИОННЫЙ: действие исполнено, владельцу показана карточка.
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect(r.card).toEqual({
+      kind: 'confirmation_card',
+      mode: 'preview',
+      summary: 'Заведено свойство «Усилие» (предложение)',
+    });
+    const created = r.result as { property: string; key: string };
+    expect((await registryRow(owner, created.property))?.status).toBe('proposed');
+    // Карточка-запрос при этом НЕ рождалась: preview ничего не откладывает.
+    expect(await pendingsOf(owner, threadId)).toHaveLength(0);
+
+    // Тот же вызов рукой владельца — UI-роутером МИМО диспатча и политики (§С2-1 ряд 1
+    // адресует preview не-владельцу). Проба не подменяет роутер своим `execute`: она зовёт
+    // ту самую процедуру, которой пользуется экран.
+    const caller = createCallerFactory(appRouter)({
+      actorUserId: owner,
+      actorKind: 'owner',
+      db,
+      clientVersion: null,
+    });
+    const byOwner = (await caller.registry.createProperty({
+      ...input,
+      label: { ru: 'Усилие владельца' },
+      status: 'active',
+    })) as { property: string };
+    expect((await registryRow(owner, byOwner.property))?.status).toBe('active');
+    expect(await pendingsOf(owner, threadId)).toHaveLength(0);
+  });
+
+  test('property_merge из чата → explicit-confirmation: карточка-запрос, реестр НЕ тронут; approve исполняет', async () => {
+    const owner = freshUserId();
+    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const source = await ownProperty(owner, 'Усилие');
+    const into = await ownProperty(owner, 'Уровень усилия');
+
+    const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'property_merge', {
+      source: source.id,
+      into: into.id,
+    });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation') return;
+    expect(r.card).toEqual({
+      kind: 'confirmation_card',
+      mode: 'explicit',
+      pendingId: r.pendingId,
+      summary: 'property_merge',
+    });
+    // ДО подтверждения в реестре не изменилось ничего — ни `merged_into`, ни версия строки.
+    expect((await registryRow(owner, source.id))?.merged_into).toBeNull();
+
+    // Отказ ведёт к выходу: подтверждение владельца исполняет ровно этот вызов.
+    await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    expect((await registryRow(owner, source.id))?.merged_into).toBe(into.id);
+  });
+
+  test('property_merge от рутины (садовник) → отложенная единица пачки D42 в треде рутины, прогон продолжается', async () => {
+    const owner = freshUserId();
+    const source = await ownProperty(owner, 'Усилие');
+    const into = await ownProperty(owner, 'Уровень усилия');
+    const { ctx, routineId, runId, threadId } = await gardener(owner, ['property_merge']);
+
+    const r = await dispatchTool(ctx, 'property_merge', { source: source.id, into: into.id });
+    // «Прогон продолжается» — это ответ pending_confirmation вместо FORBIDDEN_LEVEL: модель
+    // получает честное «отложено» и делает следующий шаг (D42 ОЧ.4).
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation') return;
+    expect(r.card).toEqual({
+      kind: 'deferred_action_card',
+      pendingId: r.pendingId,
+      runId,
+      routineId,
+      // Владелец читает пачку ПОДПИСЯМИ, а не адресами: «019e4466-…» ему не отвечает.
+      summary: 'Слияние свойств: «Усилие» → «Уровень усилия»',
+      rows: [{ field: 'property_merge', before: 'Усилие', after: 'Уровень усилия' }],
+    });
+
+    const pendings = await pendingsOf(owner, threadId);
+    expect(pendings).toHaveLength(1);
+    const record = (pendings[0]?.metadata as { pending: Record<string, unknown> }).pending;
+    expect(record.kind).toBe('action');
+    expect(record.run_id).toBe(runId);
+    expect(record.tool).toBe('property_merge');
+    // Payload уезжает БАЙТ-В-БАЙТ: предусловий у операций реестра нет — свежее состояние
+    // перечитывает сама операция под замком реестра (см. докблок snapshotRegistryUnit).
+    expect(record.input).toEqual({ source: source.id, into: into.id });
+    // Реестр до решения владельца не тронут.
+    expect((await registryRow(owner, source.id))?.merged_into).toBeNull();
+
+    // Ретрай того же шага не плодит вторую единицу — общий механизм отложки жив и здесь.
+    const again = await dispatchTool(ctx, 'property_merge', { into: into.id, source: source.id });
+    expect(again.status).toBe('pending_confirmation');
+    if (again.status !== 'pending_confirmation') return;
+    expect(again.pendingId).toBe(r.pendingId);
+    expect(await pendingsOf(owner, threadId)).toHaveLength(1);
+
+    // …а «Принять» исполняет отложенное — путь до конца, а не тупик.
+    await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    expect((await registryRow(owner, source.id))?.merged_into).toBe(into.id);
+  });
+
+  test('property_update(status) от рутины — тоже отложенная единица: «было → станет» по полю патча', async () => {
+    const owner = freshUserId();
+    const target = await ownProperty(owner, 'Черновое свойство');
+    const { ctx, threadId } = await gardener(owner, ['property_update']);
+
+    const r = await dispatchTool(ctx, 'property_update', { id: target.id, status: 'deprecated' });
+    expect(r.status).toBe('pending_confirmation');
+    if (r.status !== 'pending_confirmation' || r.card.kind !== 'deferred_action_card') {
+      throw new Error('ожидалась отложенная единица');
+    }
+    expect(r.card.summary).toBe('Правка свойства «Черновое свойство»');
+    expect(r.card.rows).toEqual([{ before: 'active', field: 'status', after: 'deprecated' }]);
+    expect(await pendingsOf(owner, threadId)).toHaveLength(1);
+    expect((await registryRow(owner, target.id))?.status).toBe('active');
+  });
+
+  test('aspect_delta_set по ВСТРОЕННОМУ аспекту от рутины → отказ по объекту, единица НЕ рождается', async () => {
+    // §С2-1 ряд 3 («`implements` встроенных аспектов, роли created_by: system, определения
+    // чужих модулей»): в срезе А из перечисленного достижимы встроенные строки реестра —
+    // `implements` пустует до части Б, роли тулами не адресуются (см. юнит-тест-tripwire в
+    // `confirmation.test.ts`). Правило написано по АДРЕСУ объекта и накрывает их все.
+    const owner = freshUserId();
+    const { ctx, threadId } = await gardener(owner, ['aspect_delta_set', 'aspect_delta_remove']);
+
+    for (const [tool, input] of [
+      ['aspect_delta_set', { aspect: 'orbis/task', delta: { label: { ru: 'Дела' } } }],
+      ['aspect_delta_remove', { aspect: 'orbis/task' }],
+      // Машинерия делегирования — тот же отказ: скрыв `orbis/routine_mode` из аспекта
+      // рутины, фон убрал бы доверенность с глаз владельца.
+      [
+        'aspect_delta_set',
+        { aspect: 'orbis/routine', delta: { properties: { hide: ['orbis/routine_mode'] } } },
+      ],
+    ] as const) {
+      const r = await dispatchTool(ctx, tool, input);
+      expectError(r, 'FORBIDDEN_LEVEL');
+      if (r.status !== 'error') continue;
+      expect((r.error.details as { reason?: string }).reason).toBe('routine_untouchable');
+      expect(r.error.message).toContain('перенастройка системного объекта');
+      // Выход назван в самом отказе — иначе агент чинил бы не то.
+      expect(r.error.message).toContain('orbis_ask');
+    }
+    // Ни единицы в пачке, ни дельты в реестре: «не откладывается никогда».
+    expect(await pendingsOf(owner, threadId)).toHaveLength(0);
+    expect(await deltaRowsOf(owner)).toBe(0);
+  });
+
+  test('тот же aspect_delta_set из ЧАТА → карточка-запрос, а не молчаливое исполнение', async () => {
+    // Запрет по объекту адресован ФОНУ; в чате владелец стоит рядом и решает карточкой.
+    const owner = freshUserId();
+    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const r = await dispatchTool(ctxFor({ actorUserId: owner, threadId }), 'aspect_delta_set', {
+      aspect: 'orbis/task',
+      delta: { icon: '📌' },
+    });
+    expect(r.status).toBe('pending_confirmation');
+    expect(await deltaRowsOf(owner)).toBe(0);
+    if (r.status !== 'pending_confirmation') return;
+    await approvePending(db, { ownerId: owner, pendingId: r.pendingId });
+    expect(await deltaRowsOf(owner)).toBe(1);
+  });
+
+  test('MCP-агент с полным грантом отвечает так же, как чат: правила §7.10 едины (§9.3)', async () => {
+    // Классификатор по `source` не ветвится намеренно — внешний агент не должен получать
+    // более широкие права, придя другим транспортом. Пин на обоих концах шкалы.
+    const owner = freshUserId();
+    const threadId = await withIdentity(db, owner, (tx) => ensureGlobalThread(tx, owner));
+    const source = await ownProperty(owner, 'Усилие');
+    const into = await ownProperty(owner, 'Уровень усилия');
+    const token = await issuePatGrant(db, { ownerId: owner, scope: 'full', label: 'полный' });
+    const identity = await verifyBearer(db, token);
+    if (identity === null) throw new Error('выданный full-PAT не прошёл verifyBearer');
+    const ctx = ctxFor({
+      actorUserId: owner,
+      actorKind: 'agent',
+      source: 'mcp',
+      threadId,
+      grant: { id: identity.grantId, scope: identity.scope, label: identity.label },
+    });
+
+    const merge = await dispatchTool(ctx, 'property_merge', { source: source.id, into: into.id });
+    expect(merge.status).toBe('pending_confirmation');
+    expect((await registryRow(owner, source.id))?.merged_into).toBeNull();
+
+    const create = await dispatchTool(ctx, 'property_create', {
+      label: { ru: 'Агентское' },
+      description: { ru: 'Заведено внешним агентом' },
+      type: { kind: 'text' },
+      status: 'proposed',
+    });
+    expect(create.status).toBe('ok');
+    if (create.status !== 'ok') return;
+    expect(create.card).toEqual({
+      kind: 'confirmation_card',
+      mode: 'preview',
+      summary: 'Заведено свойство «Агентское» (предложение)',
+    });
   });
 });

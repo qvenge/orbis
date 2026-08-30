@@ -985,9 +985,18 @@ describe('property_merge при конфликте значений (§А10-2)',
       { sink },
     );
 
-    const r = await call('property_merge', { source, into });
-    expect(r.status).toBe('error');
-    expect(r.status === 'error' && r.error.code).toBe('REGISTRY_CONFLICT');
+    // ПУТЬ ИЗМЕНИЛСЯ ЗАДАЧЕЙ 16, А ИСХОД — НЕТ. С §С2-1 мутация реестра ни для какого
+    // актора не бывает молчаливой: слияние из чата поднимается до карточки-запроса и
+    // исполняется на «Принять» (`approvePending`), а не в диспатче. Значит и конфликт
+    // всплывает там же — вместе с единицей разбора, которую кладёт та же граница.
+    // Прежде здесь стоял немедленный `error/REGISTRY_CONFLICT`; проверяется по-прежнему
+    // одно и то же: отказ с тем же кодом, ничего не применено, карточка разбора в ленте.
+    const asked = await call('property_merge', { source, into });
+    expect(asked.status).toBe('pending_confirmation');
+    if (asked.status !== 'pending_confirmation') throw new Error('ожидалась карточка-запрос');
+    const r = await approvePending(db, { ownerId: conflictOwner, pendingId: asked.pendingId });
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error.code).toBe('REGISTRY_CONFLICT');
 
     // «НИЧЕГО НЕ ПРИМЕНЕНО» — проверяется именно «ничего»: частично слитое хуже отказа.
     // Запись БЕЗ конфликта соблазнительнее всего переписать «заодно», и вот она.
@@ -1007,9 +1016,12 @@ describe('property_merge при конфликте значений (§А10-2)',
 
     // Единица пачки — от СИСТЕМЫ (актора у конфликта нет), в глобальном треде, и несёт то же
     // самое слияние: разобрав значения, владелец жмёт «Принять», и оно идёт заново.
+    // Отбор СУЖЕН Задачей 16 по актору: рядом теперь лежит и карточка-запрос §7.10 того же
+    // тула (её попросил владелец через чат), а единица разбора — системная, её ставить
+    // некому. Без сужения проба считала бы обе и молча зеленела бы на чужой записи.
     const pendings = (await withIdentity(db, conflictOwner, (tx) =>
       tx.execute(sql`SELECT id, content, metadata FROM chat_messages
-                     WHERE metadata @> '{"pending":{"tool":"property_merge"}}'::jsonb`),
+                     WHERE metadata @> '{"pending":{"tool":"property_merge","actor_kind":"system"}}'::jsonb`),
     )) as unknown as Array<{ id: string; content: string; metadata: Record<string, unknown> }>;
     expect(pendings).toHaveLength(1);
     const pending = (pendings[0]?.metadata as { pending: Record<string, unknown> }).pending;
@@ -1022,12 +1034,18 @@ describe('property_merge при конфликте значений (§А10-2)',
     });
     expect(String(pendings[0]?.content)).toContain(clashing);
 
-    // Повтор того же слияния возвращает ТУ ЖЕ карточку, а не плодит вторую.
-    const again = await call('property_merge', { source, into });
-    expect(again.status).toBe('error');
+    // Повтор того же слияния возвращает ТУ ЖЕ карточку разбора, а не плодит вторую.
+    const askedAgain = await call('property_merge', { source, into });
+    expect(askedAgain.status).toBe('pending_confirmation');
+    if (askedAgain.status !== 'pending_confirmation') throw new Error('ожидалась карточка');
+    const again = await approvePending(db, {
+      ownerId: conflictOwner,
+      pendingId: askedAgain.pendingId,
+    });
+    expect(again.ok).toBe(false);
     const after = (await withIdentity(db, conflictOwner, (tx) =>
       tx.execute(sql`SELECT id FROM chat_messages
-                     WHERE metadata @> '{"pending":{"tool":"property_merge"}}'::jsonb`),
+                     WHERE metadata @> '{"pending":{"tool":"property_merge","actor_kind":"system"}}'::jsonb`),
     )) as unknown as unknown[];
     expect(after).toHaveLength(1);
 

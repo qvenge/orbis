@@ -12,17 +12,22 @@ import {
   legacyFieldToProperty,
   newId,
 } from '@orbis/shared';
+import { ROUTINE_UNTOUCHABLE_OBJECTS } from '../executor/invariants';
+import type { ActorKind } from '../executor/types';
 import type { RegistrySnapshot } from '../registry/load';
 import { AGENT_VERB_NAMES, buildToolDefs } from '../tools/registry';
+import { REGISTRY_TOOL_NAMES } from '../tools/registry-tools';
 import {
   AUTONOMY_PROPERTIES,
   autonomyArmed,
   classifyToolCall,
   entityUpdatePreviewDiff,
   factsFromToolCall,
+  type Reconfigures,
   ROUTINE_MODE_PROPERTY,
   ROUTINE_STAGE_PROPERTY,
   ROUTINE_TOOLS_PROPERTY,
+  reconfiguresOf,
   type ToolCallFacts,
 } from './confirmation';
 
@@ -37,6 +42,7 @@ function facts(over: Partial<ToolCallFacts> = {}): ToolCallFacts {
     archives: false,
     isBatch: false,
     grantsAutonomy: false,
+    reconfigures: 'none',
     ...over,
   };
 }
@@ -180,6 +186,7 @@ describe('глаголы исполнителя и thread_post → execute (ин
         archives: false,
         isBatch: false,
         grantsAutonomy: false,
+        reconfigures: 'none',
       });
 
       // explicitCommand — единственный акторный вход, способный сдвинуть уровень
@@ -205,6 +212,7 @@ describe('factsFromToolCall: извлечение фактов формы выз
       archives: true,
       isBatch: false,
       grantsAutonomy: false,
+      reconfigures: 'none',
     });
   });
 
@@ -236,6 +244,7 @@ describe('factsFromToolCall: извлечение фактов формы выз
       archives: false,
       isBatch: false,
       grantsAutonomy: false,
+      reconfigures: 'none',
     });
   });
 
@@ -255,6 +264,7 @@ describe('factsFromToolCall: извлечение фактов формы выз
       isBatch: true,
       batchSize: 2,
       grantsAutonomy: false,
+      reconfigures: 'none',
     });
   });
 
@@ -574,6 +584,292 @@ describe('автономия рутине → explicit-confirmation (V1.10, ин
 
     // Ряд 1 первее автономии: незнакомый тул не исполняется ни на каком уровне
     expect(classifyToolCall(facts({ known: false, grantsAutonomy: true }))).toBe('forbidden');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §С2-1: класс подтверждения мутаций реестра — ряды 4a/4b (Задача 16)
+// ---------------------------------------------------------------------------
+
+/**
+ * «Молчаливых мутаций реестра не существует ни для какого актора» (§С2-1, норматив Б1).
+ * Здесь пиннится ОТВЕТ КЛАССИФИКАТОРА на каждый ряд таблицы; живые пути — `dispatch.test.ts`
+ * (чат, рутина, UI-роутер) и `mcp.test.ts` (скоуп worker).
+ */
+describe('§С2-1: перенастраивает поверхность или права — reconfiguresOf и ряды 4a/4b', () => {
+  const OWN = '019e4466-1111-7e07-b5d4-64be9721da01'; // id своей строки реестра — uuid (Р3)
+  const OTHER = '019e4466-2222-7e07-b5d4-64be9721da02';
+  const CREATE_INPUT = {
+    label: { ru: 'Усилие' },
+    description: { ru: 'Сколько сил отнимет' },
+    type: { kind: 'number' },
+    status: 'proposed' as const,
+  };
+  const defOf = (name: string) => ({ name, kind: 'mutate' as const });
+  const levelFor = (name: string, input: unknown, actorKind: ActorKind = 'ai') =>
+    classifyToolCall({
+      ...factsFromToolCall(defOf(name), input),
+      actorKind,
+      explicitCommand: false,
+    });
+
+  test('пять тулов реестра разложены по трём ответам; всё прочее — none', () => {
+    // ПЕРЕХОДЫ, а не формы вызова (вывод десяти фикс-раундов Задачи 12): каждая строка —
+    // один переход защищаемого состояния «что владелец видит и что система делает».
+    const cases: Array<[string, string, unknown, Reconfigures]> = [
+      ['1. родилась своя строка', 'property_create', CREATE_INPUT, 'own-property'],
+      [
+        '2. сменилась подпись своей строки',
+        'property_update',
+        { id: OWN, label: { ru: 'Усилие' } },
+        'own-property',
+      ],
+      [
+        '2. сменились область показа и место в порядке',
+        'property_update',
+        { id: OWN, scope: { filter: { aspect: 'orbis/task' } }, rank: 7 },
+        'own-property',
+      ],
+      [
+        '3. сменился СТАТУС своей строки',
+        'property_update',
+        { id: OWN, status: 'active' },
+        'behavior-delta',
+      ],
+      [
+        '4. слились два своих свойства',
+        'property_merge',
+        { source: OWN, into: OTHER },
+        'behavior-delta',
+      ],
+      [
+        '5. дельта поверх СВОЕГО аспекта',
+        'aspect_delta_set',
+        { aspect: 'user/sleep-log', delta: { icon: '😴' } },
+        'behavior-delta',
+      ],
+      [
+        '6. снятие дельты СВОЕГО аспекта',
+        'aspect_delta_remove',
+        { aspect: 'user/sleep-log' },
+        'behavior-delta',
+      ],
+      [
+        '7. правка ВСТРОЕННОГО свойства',
+        'property_update',
+        { id: 'orbis/priority', label: { ru: 'Важность' } },
+        'system-object',
+      ],
+      [
+        '7. встроенное свойство ЦЕЛЬЮ слияния',
+        'property_merge',
+        { source: OWN, into: 'orbis/title' },
+        'system-object',
+      ],
+      [
+        '7. встроенное свойство ИСТОЧНИКОМ слияния',
+        'property_merge',
+        { source: 'orbis/priority', into: OWN },
+        'system-object',
+      ],
+      [
+        '7. дельта поверх ВСТРОЕННОГО аспекта',
+        'aspect_delta_set',
+        { aspect: 'orbis/task', delta: { label: { ru: 'Дела' } } },
+        'system-object',
+      ],
+      [
+        '7. снятие дельты встроенного аспекта',
+        'aspect_delta_remove',
+        { aspect: 'orbis/note' },
+        'system-object',
+      ],
+    ];
+    for (const [what, tool, input, expected] of cases) {
+      expect([what, reconfiguresOf(tool, input)]).toEqual([what, expected]);
+      expect([what, factsFromToolCall(defOf(tool), input).reconfigures]).toEqual([what, expected]);
+    }
+    // Обратная сторона границы: тулы графа реестра не трогают, и ряды 4a/4b на них молчат.
+    for (const [tool, input] of [
+      ['entity_update', { id: newId(), title: 'x' }],
+      ['entity_create', { title: 'x', tags: [] }],
+      ['attach_orbis_task', { entity_id: newId(), data: {} }],
+      ['relation_create', { source_id: newId(), target_id: newId(), role: 'subitem' }],
+    ] as const) {
+      expect([tool, reconfiguresOf(tool, input)]).toEqual([tool, 'none']);
+    }
+  });
+
+  test('машинерия делегирования: дельта поверх orbis/routine, agent-run и assignment — тоже system-object', () => {
+    // Реконфигурация ОПРЕДЕЛЕНИЯ этих аспектов — тот же переход, что запрещён рутине над их
+    // ЗАПИСЯМИ (`ROUTINE_UNTOUCHABLE_OBJECTS` ∪ `orbis/assignment`), только другой дверью:
+    // скрыв `orbis/routine_mode` из аспекта, фон убрал бы доверенность с глаз владельца.
+    // Отдельного списка для этого не заведено — правило по адресу накрывает их само, и этот
+    // тест сторожит, что накрывает.
+    for (const aspect of [...ROUTINE_UNTOUCHABLE_OBJECTS, 'orbis/assignment']) {
+      expect([aspect, reconfiguresOf('aspect_delta_set', { aspect, delta: {} })]).toEqual([
+        aspect,
+        'system-object',
+      ]);
+    }
+    // Ни один из тринадцати встроенных аспектов не считается своим — перечень закрыт.
+    for (const aspect of BUILTIN_ASPECT_DEFS) {
+      expect([aspect.id, reconfiguresOf('aspect_delta_remove', { aspect: aspect.id })]).toEqual([
+        aspect.id,
+        'system-object',
+      ]);
+    }
+  });
+
+  test('`implements` встроенных аспектов сегодня ПУСТ (§Б2) — правило накрывает их адресом', () => {
+    // Tripwire к §С2-1: спека называет «`implements` встроенных аспектов» отдельным
+    // объектом запрета. В срезе А поле объявлено и пустует (часть Б), поэтому ветки по нему
+    // здесь НЕТ — её нечем было бы достичь, а пин на недостижимом пути ничего не сторожит.
+    // Наполнится `implements` — упадёт эта строка, и правило придётся перечитать: сегодня
+    // все тринадцать носителей будущих привязок и так `system-object` (тест выше), а
+    // аспекты владельца (`user/…`) привязки получат вместе с частью Б.
+    expect(BUILTIN_ASPECT_DEFS.every((a) => a.implements.length === 0)).toBe(true);
+  });
+
+  test('ряд 4a: behavior-delta и system-object → explicit-confirmation ДЛЯ ЛЮБОГО актора', () => {
+    const heavy: Array<[string, unknown]> = [
+      ['property_update', { id: OWN, status: 'deprecated' }],
+      ['property_merge', { source: OWN, into: OTHER }],
+      ['aspect_delta_set', { aspect: 'orbis/task', delta: { icon: '📌' } }],
+      ['aspect_delta_remove', { aspect: 'orbis/task' }],
+    ];
+    for (const [tool, input] of heavy) {
+      for (const actorKind of ['ai', 'agent', 'owner'] as const) {
+        expect([tool, actorKind, levelFor(tool, input, actorKind)]).toEqual([
+          tool,
+          actorKind,
+          'explicit-confirmation',
+        ]);
+      }
+    }
+  });
+
+  test('ряд 4b: своя строка от AI/агента → preview, от владельца → execute', () => {
+    for (const [tool, input] of [
+      ['property_create', CREATE_INPUT],
+      ['property_update', { id: OWN, label: { ru: 'Усилие' } }],
+    ] as const) {
+      for (const actorKind of ['ai', 'agent'] as const) {
+        expect([tool, actorKind, levelFor(tool, input, actorKind)]).toEqual([
+          tool,
+          actorKind,
+          'preview',
+        ]);
+      }
+      // Владелец делает это сам — подтверждать некому (тот же довод, что у ряда автономии).
+      // Живьём владелец сюда и не доходит: `routers/registry.ts` зовёт `execute` напрямую.
+      expect([tool, levelFor(tool, input, 'owner')]).toEqual([tool, 'execute']);
+    }
+  });
+
+  test('ряд 4a стоит ВЫШЕ 4b: пачка «своё свойство + слияние» подтверждается целиком', () => {
+    const batch = {
+      batch_id: newId(),
+      operations: [
+        { tool: 'property_create', input: CREATE_INPUT },
+        { tool: 'property_merge', input: { source: OWN, into: OTHER } },
+      ],
+    };
+    const f = factsFromToolCall({ name: 'batch_execute', kind: 'mutate' }, batch);
+    expect(f.reconfigures).toBe('behavior-delta');
+    expect(classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false })).toBe(
+      'explicit-confirmation',
+    );
+  });
+
+  test('ряд 4b НЕ гасит ряд масштаба: 11 операций с property_create внутри → explicit-confirmation', () => {
+    // Стой 4b рядом с 4a, первое совпадение сверху отдало бы пачке `preview`, то есть
+    // исполнило бы одиннадцать операций и лишь показало diff.
+    const batch = {
+      batch_id: newId(),
+      operations: [
+        { tool: 'property_create', input: CREATE_INPUT },
+        ...Array.from({ length: 10 }, () => ({
+          tool: 'entity_create',
+          input: { title: 'x', tags: [] },
+        })),
+      ],
+    };
+    const f = factsFromToolCall({ name: 'batch_execute', kind: 'mutate' }, batch);
+    expect([f.reconfigures, f.batchSize]).toEqual(['own-property', 11]);
+    expect(classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false })).toBe(
+      'explicit-confirmation',
+    );
+  });
+
+  test('ряд 4b НЕ гасит замок автономии: пачка «своё свойство + act-рутина» → explicit-confirmation', () => {
+    const batch = {
+      batch_id: newId(),
+      operations: [
+        { tool: 'property_create', input: CREATE_INPUT },
+        {
+          tool: 'attach_orbis_routine',
+          input: { entity_id: newId(), data: { [ROUTINE_MODE_PROPERTY]: 'act' } },
+        },
+      ],
+    };
+    const f = factsFromToolCall({ name: 'batch_execute', kind: 'mutate' }, batch);
+    expect([f.reconfigures, f.grantsAutonomy]).toEqual(['own-property', true]);
+    expect(classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false })).toBe(
+      'explicit-confirmation',
+    );
+  });
+
+  test('ряд 3 остаётся первее: архивирующий вызов с реестром в пачке — тот же explicit-confirmation', () => {
+    // Ряд 4a даёт тот же уровень, поэтому наблюдаемо ровно одно: новые ряды не ПОНИЖАЮТ
+    // ничего, что таблица уже подняла (граница проверяется и сверху, и снизу).
+    const batch = {
+      batch_id: newId(),
+      operations: [
+        { tool: 'entity_update', input: { id: newId(), archived: true } },
+        { tool: 'property_create', input: CREATE_INPUT },
+      ],
+    };
+    const f = factsFromToolCall({ name: 'batch_execute', kind: 'mutate' }, batch);
+    expect([f.archives, f.reconfigures]).toEqual([true, 'own-property']);
+    expect(classifyToolCall({ ...f, actorKind: 'ai', explicitCommand: false })).toBe(
+      'explicit-confirmation',
+    );
+  });
+
+  test('мусор вместо конверта — самый тяжёлый ответ, а не самый лёгкий (fail-closed)', () => {
+    for (const input of [null, 'строка', 42, ['список']]) {
+      expect([input, reconfiguresOf('property_update', input)]).toEqual([input, 'system-object']);
+    }
+    // Адрес не той формы — тоже чужой: свой это либо uuid, либо `user/…` (§А2-1).
+    for (const id of ['effort', 'orbis/effort', 'app-x/effort', '', 42, null, undefined]) {
+      expect([id, reconfiguresOf('property_update', { id, label: { ru: 'x' } })]).toEqual([
+        id,
+        'system-object',
+      ]);
+    }
+    // …а обе своих формы адреса — свои (обратная сторона той же границы).
+    for (const id of [OWN, 'user/effort']) {
+      expect([id, reconfiguresOf('property_update', { id, label: { ru: 'x' } })]).toEqual([
+        id,
+        'own-property',
+      ]);
+    }
+  });
+
+  test('перечень тулов реестра берётся у реестра, а не переписан здесь литералами', () => {
+    // Шестой тул реестра, заведённый без правки `reconfiguresOf`, получит `system-object`
+    // (fail-closed ветка switch'а), а не молчаливое `none`, — и упадёт вот на этой строке.
+    expect([...REGISTRY_TOOL_NAMES].sort()).toEqual([
+      'aspect_delta_remove',
+      'aspect_delta_set',
+      'property_create',
+      'property_merge',
+      'property_update',
+    ]);
+    for (const tool of REGISTRY_TOOL_NAMES) {
+      expect([tool, reconfiguresOf(tool, {})]).not.toEqual([tool, 'none']);
+    }
   });
 });
 

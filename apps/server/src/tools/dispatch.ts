@@ -17,6 +17,7 @@ import {
   batchExecuteInput,
   budgetStatusInput,
   type EntityUpdatePreconditionItem,
+  effectiveLabel,
   entityCreateInput,
   entityGetInput,
   entityQueryInput,
@@ -74,6 +75,7 @@ import {
   entityUpdatePreviewDiff,
   factsFromToolCall,
   grantsRoutineAutonomy,
+  type Reconfigures,
   ROUTINE_MODE_PROPERTY,
   ROUTINE_STAGE_PROPERTY,
   ROUTINE_TOOLS_PROPERTY,
@@ -89,7 +91,8 @@ import { parseQueryText, parseRegistryOf } from '../query/parse-text';
 import { queryWithMaterialization } from '../recurring/with-materialization';
 import { effectiveRegistry } from '../registry/cache';
 import type { RegistrySnapshot } from '../registry/load';
-import { reportMergeConflictUnit } from '../registry/merge-conflict';
+
+import { readAspectDelta } from '../registry/ops';
 import { runAsk } from '../routines/ask';
 import { CORE_FIELD_LABELS, MAX_RUN_UNITS } from '../routines/constants';
 import { buildUpdate, loadTargets, runPropose } from '../routines/propose';
@@ -109,7 +112,7 @@ import {
   userQueryInput,
   WORKER_SCOPE_TOOLS,
 } from './registry';
-import { REGISTRY_TOOL_ENVELOPES } from './registry-tools';
+import { REGISTRY_TOOL_ENVELOPES, REGISTRY_TOOL_NAMES } from './registry-tools';
 
 /** Резолв имени в глагол исполнителя (§9.3) — набор имён живёт в реестре, не здесь. */
 function isAgentVerb(name: string): name is AgentVerbName {
@@ -290,6 +293,8 @@ export async function dispatchTool(
         isBatch: false,
         // Незнакомому тулу нечего выдавать: ряд «!known» первый в таблице, факт не влияет
         grantsAutonomy: false,
+        // …и перенастраивать ему тоже нечего: имени нет в реестре, объекта у вызова нет
+        reconfigures: 'none',
       });
       const gated = levelGate(level, name, `неизвестный тул «${name}» — вызов запрещён (§7.10)`);
       if (gated !== null) return gated;
@@ -1020,13 +1025,17 @@ async function runMutation(
     },
     { sink: capture?.sink ?? sink },
   );
-  if (!r.ok) {
-    // Конфликт значений при слиянии свойств (§А10-2): само слияние откачено целиком, и
-    // карточку разбора кладёт ОТДЕЛЬНАЯ транзакция — иначе она откатилась бы вместе с ним.
-    // На любом другом отказе вызов — no-op (см. `reportMergeConflictUnit`).
-    await reportMergeConflictUnit(ctx.db, ctx.actorUserId, r.error);
-    return { status: 'error', error: r.error };
-  }
+  // КАРТОЧКИ РАЗБОРА КОНФЛИКТА СЛИЯНИЯ ЗДЕСЬ БОЛЬШЕ НЕТ, И ЭТО НЕ ПОТЕРЯ. До Задачи 16
+  // `property_merge` из чата исполнялся ЭТОЙ строкой, и конфликт значений (§А10-2)
+  // разбирала она же. С §С2-1 слияние — `behavior-delta`: ряд 4a поднимает его до
+  // `explicit-confirmation` ДЛЯ ЛЮБОГО актора, значит до `execute` оно здесь не доходит ни
+  // одним путём (batch тоже: пачка сворачивается по самой тяжёлой операции). Вызов остался
+  // бы МЁРТВЫМ адресом, а обещание докблока — неправдой. Дом карточки переехал туда, где
+  // сохранённый payload теперь и исполняется, — в `approvePending` (`policy/pending.ts`),
+  // и оттуда он накрывает и кнопку владельца, и «Принять» единицы пачки. Вернуть строку
+  // сюда придётся ровно при одном условии: если таблица §7.10 однажды снова начнёт давать
+  // мутации реестра уровень `execute` или `preview`.
+  if (!r.ok) return { status: 'error', error: r.error };
 
   // id action'а для actions-резюме (Task 9): та же семантика, что у undoActionId
   // карточки — идемпотентный replay ничего не журналил, action этого вызова нет
@@ -1071,9 +1080,12 @@ async function runMutation(
 
   const result = r.results[0];
   if (level === 'preview') {
-    // Одиночный preview: MVP-таблицей §7.10 сейчас недостижим (preview даёт только
-    // batch), но семантика уровня общая — при эволюции таблицы ветка готова: diff
-    // entity_update — прежние значения vs новые из inverse журнала (§7.8)
+    // Одиночный preview СТАЛ ДОСТИЖИМ Задачей 16: ряд 4b §С2-1 («своя строка реестра от
+    // AI») — первый и пока единственный, кто им отвечает на не-batch вызов. Прежняя
+    // редакция этой приписки («MVP-таблицей недостижим») была верна до него и снята вместе
+    // с поводом. Diff по-прежнему строится только у `entity_update` — прежние значения
+    // против новых из inverse журнала (§7.8); у операций реестра пополевого diff'а нет, и
+    // называет правку сводка.
     const entry = capture?.entries[0];
     const diff =
       def.name === 'entity_update' && entry !== undefined
@@ -1085,8 +1097,16 @@ async function runMutation(
       card: {
         kind: 'confirmation_card',
         mode: 'preview',
+        // Сводка НАЗЫВАЕТ СДЕЛАННОЕ, а не имя тула: preview исполняет действие и лишь
+        // показывает его владельцу, и «property_create» в ленте не отвечает на вопрос
+        // «что у меня в системе изменилось». Имя тула остаётся запасным ответом для
+        // форм, у которых своей фразы ещё нет.
         summary:
-          def.name === 'entity_update' ? `Обновление «${(result as WireEntity).title}»` : def.name,
+          def.name === 'entity_update'
+            ? `Обновление «${(result as WireEntity).title}»`
+            : REGISTRY_TOOL_NAMES.has(def.name) && isRecord(payload)
+              ? registryOperationSummary(reg, def.name, payload)
+              : def.name,
         ...(diff !== undefined && { diff }),
       },
       ...(actionId !== undefined && { actionId }),
@@ -1112,6 +1132,62 @@ async function runMutation(
     ...(card !== undefined && { card }),
     ...(actionId !== undefined && { actionId }),
   };
+}
+
+/**
+ * КАК НАЗВАТЬ ВЛАДЕЛЬЦУ МУТАЦИЮ РЕЕСТРА — одной фразой и ОДНОЙ функцией на обе карточки:
+ * `preview` чатового пути (§С2-1 ряд 4b, исполнено и показано) и отложенную единицу пачки
+ * (ряд 2, ждёт решения). Владелец видит их в одной ленте, и два разных обозначения одного и
+ * того же действия читались бы как два разных действия — тот же довод, по которому у строки
+ * снятия свойства литерал общий с предложением рутины.
+ *
+ * ИМЕНА — ПОДПИСИ ИЗ РЕЕСТРА, а не адреса: id своей строки это uuid (Р3), и «019e4466-…» в
+ * карточке не отвечает на вопрос, что владельцу предлагают. Снимок передаёт вызывающий —
+ * чатовый путь свой, допакетный (свежее взять неоткуда: операция уже исполнена), отложка
+ * свой, снятый в той же транзакции. У создания подпись берётся из ВЫЗОВА: строки в снимке
+ * ещё нет по построению.
+ *
+ * ИЗВЕСТНОЕ РАСХОЖДЕНИЕ, НАЗВАННОЕ ВСЛУХ: заголовок ДЕЙСТВИЯ в журнале (§7.8, `registryPlan`
+ * в `executor/executor.ts`) у правки свойства говорит `«<id>»`, а не подпись. Владелец видит
+ * его в audit-строке рядом с этой карточкой. Расхождение не чинится здесь: заголовок журнала
+ * — территория Задачи 15, и правка его тянет за собой снимок в исполнителе; остаток записан
+ * в отчёт.
+ */
+function registryOperationSummary(
+  reg: RegistrySnapshot,
+  tool: string,
+  payload: Record<string, unknown>,
+): string {
+  const named = (label: unknown, fallback: unknown): string =>
+    isRecord(label)
+      ? effectiveLabel(label as Record<string, string>, OWNER_LOCALE)
+      : String(fallback);
+  const propertyName = (address: unknown): string => {
+    if (typeof address !== 'string') return String(address);
+    const def = resolvePropertyRef(reg, address);
+    return def === undefined ? address : effectiveLabel(def.label, OWNER_LOCALE);
+  };
+  const aspectName = (address: unknown): string => {
+    if (typeof address !== 'string') return String(address);
+    const def = reg.aspects.get(address);
+    return def === undefined ? address : effectiveLabel(def.label, OWNER_LOCALE);
+  };
+  switch (tool) {
+    case 'property_create': {
+      const proposed = payload.status === 'proposed' ? ' (предложение)' : '';
+      return `Заведено свойство «${named(payload.label, tool)}»${proposed}`;
+    }
+    case 'property_update':
+      return `Правка свойства «${propertyName(payload.id)}»`;
+    case 'property_merge':
+      return `Слияние свойств: «${propertyName(payload.source)}» → «${propertyName(payload.into)}»`;
+    case 'aspect_delta_set':
+      return `Настройка аспекта «${aspectName(payload.aspect)}»`;
+    case 'aspect_delta_remove':
+      return `Сброс настройки аспекта «${aspectName(payload.aspect)}»`;
+  }
+  // Недостижимо: зовётся только под `REGISTRY_TOOL_NAMES`, и switch перечисляет все пять.
+  return tool;
 }
 
 /** Строка карточки отложенного действия — «было → станет» по одному полю (ОЧ.13). */
@@ -1267,6 +1343,9 @@ async function snapshotDeferredUnit(
 ): Promise<
   { input: unknown; summary: string; rows: DeferredRow[] } | { error: ToolDispatchResult }
 > {
+  if (REGISTRY_TOOL_NAMES.has(tool) && isRecord(payload)) {
+    return await snapshotRegistryUnit(tx, ownerId, tool, payload);
+  }
   if (tool !== 'entity_update' || !isRecord(payload)) {
     return {
       error: errorResult(
@@ -1354,6 +1433,94 @@ async function snapshotDeferredUnit(
     summary: payload.archived === true ? `Архивация: «${title}»` : `Правка: «${title}»`,
     rows,
   };
+}
+
+/**
+ * ЕДИНИЦА ПАЧКИ ДЛЯ МУТАЦИИ РЕЕСТРА (§С2-1, Задача 16): та же отложка, но объект другой —
+ * не запись графа, а строка реестра владельца.
+ *
+ * ПРЕДУСЛОВИЙ ЗДЕСЬ НЕТ, И ЭТО НЕ УПУЩЕНИЕ. У правки графа отложка обязана снять CAS при
+ * ПОСТАНОВКЕ (ОЧ.13), потому что исполнение на «Принять» иначе затрёт правку владельца,
+ * сделанную тем временем. У операций реестра эту работу делает САМА ОПЕРАЦИЯ и делает её в
+ * момент исполнения: `registry/ops.ts` берёт `lockOwnerRegistry`, перечитывает строки и
+ * отвечает `PROPERTY_MERGED`, `MERGE_ALREADY_MERGED`, `MERGE_VALUES`, `BUILTIN_IMMUTABLE`,
+ * `PROPOSED_CAP` по СВЕЖЕМУ состоянию. Снимать предусловия поверх этого значило бы завести
+ * второе мнение о том, что считается «состояние изменилось», — и первое же расхождение
+ * двух мнений владелец увидел бы как отказ на кнопке там, где операция была законна.
+ * Поэтому `input` уезжает в pending-запись БАЙТ-В-БАЙТ таким, каким его прислала модель.
+ *
+ * «БЫЛО → СТАНЕТ» ЧИТАЕТСЯ ИЗ ЭФФЕКТИВНОГО РЕЕСТРА — того же снимка, по которому владелец
+ * видит свои свойства (§А3-2, система ⊕ его строки ⊕ дельты). Имена в строках — ПОДПИСИ, а
+ * не адреса: пачку читает владелец, и «019e4466-…» в карточке не отвечает на вопрос, что
+ * ему предлагают. Адрес при этом не теряется — он остаётся в `input`, который и исполнится.
+ */
+async function snapshotRegistryUnit(
+  tx: Tx,
+  ownerId: string,
+  tool: string,
+  payload: Record<string, unknown>,
+): Promise<{ input: unknown; summary: string; rows: DeferredRow[] }> {
+  const reg = await effectiveRegistry(tx, ownerId);
+  const summary = registryOperationSummary(reg, tool, payload);
+  const propertyName = (address: unknown): string => {
+    if (typeof address !== 'string') return String(address);
+    const def = resolvePropertyRef(reg, address);
+    return def === undefined ? address : effectiveLabel(def.label, OWNER_LOCALE);
+  };
+
+  switch (tool) {
+    case 'property_merge':
+      return {
+        input: payload,
+        summary,
+        // Одна строка, а не две: у слияния меняется ОДНО — то, каким свойством описаны
+        // значения; «было» и «станет» тут буквальны.
+        rows: [
+          {
+            field: 'property_merge',
+            before: propertyName(payload.source),
+            after: propertyName(payload.into),
+          },
+        ],
+      };
+    case 'property_update': {
+      const current = resolvePropertyRef(reg, String(payload.id));
+      const rows: DeferredRow[] = [];
+      // Поля патча — ровно те, что объявляет `propertyUpdateInput` (`tools/registry-tools.ts`);
+      // `id` — адрес, а не правка, и в строки не идёт (тот же приём, что в preview-диффе).
+      for (const field of ['label', 'description', 'scope', 'rank', 'status'] as const) {
+        if (!(field in payload)) continue;
+        const before = current === undefined ? undefined : current[field];
+        rows.push({
+          ...(before !== undefined && before !== null && { before: rowValue(before) }),
+          field,
+          after: rowValue(payload[field]),
+        });
+      }
+      return { input: payload, summary, rows };
+    }
+    case 'aspect_delta_set':
+    case 'aspect_delta_remove': {
+      const before = await readAspectDelta(tx, ownerId, String(payload.aspect));
+      return {
+        input: payload,
+        summary,
+        rows: [
+          {
+            field: 'delta',
+            ...(before !== null && { before: rowValue(before) }),
+            after: tool === 'aspect_delta_set' ? rowValue(payload.delta) : DEFERRED_UNSET_VALUE,
+          },
+        ],
+      };
+    }
+  }
+  // `property_create` — ЕДИНСТВЕННЫЙ из пяти, который сюда не доходит, и не потому, что
+  // забыт: он даёт `own-property` → `preview` (§С2-1 ряд 1 адресован владельцу через чат), а
+  // `preview` фон не откладывает и не исполняет — его снимает инвариант 5 в `runMutation`.
+  // Ветка оставлена fail-closed, а не собрана «на всякий случай»: карточка, которую нечем
+  // показать владельцу, хуже честного отказа (блокер Б3 ревью спеки).
+  return { input: payload, summary, rows: [{ field: tool, after: rowValue(payload) }] };
 }
 
 /**
@@ -2164,10 +2331,15 @@ const ASSIGNMENT_ASPECT = 'orbis/assignment';
  * `orbis/assignment`»), и для фонового актора выбран fail-closed: отказ виден агенту явно, он
  * о нём доложит, цена узкая, откат — одна строка.
  *
- * Первые две проверки — не про executor вовсе, а про пачку: «Принять все» одним нажатием
- * сняло бы замок V1.10 мимоходом, если бы выдача автономии или правка инструкции act-рутины
- * умели откладываться. Такое рутина обязана либо делать в лицо владельцу (чат, где он тут же
- * смотрит на карточку), либо не делать.
+ * Первые ТРИ проверки — не про executor вовсе, а про пачку: «Принять все» одним нажатием
+ * сняло бы замок мимоходом, если бы выдача автономии, правка инструкции act-рутины или
+ * перенастройка системного объекта реестра (§С2-1 ряд 3, Задача 16) умели откладываться.
+ * Такое рутина обязана либо делать в лицо владельцу (чат, где он тут же смотрит на карточку),
+ * либо не делать. У третьей проверки есть и вторая половина, которой нет у первых двух: у
+ * операций реестра запрета по объекту НА СТАДИИ 4 нет вовсе — `assertRoutineUntouchable`
+ * стережёт аспекты ЗАПИСЕЙ, а не строки реестра, — то есть здесь это не зеркало, а
+ * единственный рубеж. Тем важнее, что уровень до него доводит: `system-object` поднимает ряд
+ * 4a до `explicit-confirmation`, и `level !== 'execute'` выполняется всегда.
  *
  * Порядок проверок значим: у операции может сойтись сразу несколько поводов (правка `mode`
  * ЧУЖОЙ рутины — это и автономия, и запретная цель), и назвать агенту надо самый содержательный
@@ -2188,7 +2360,7 @@ const ASSIGNMENT_ASPECT = 'orbis/assignment';
 export async function routineDeferForbidden(
   ctx: ToolCallCtx,
   ops: ReadonlyArray<{ tool: string; input: unknown }>,
-  facts: { grantsAutonomy: boolean },
+  facts: { grantsAutonomy: boolean; reconfigures: Reconfigures },
   instructionOf: readonly string[],
 ): Promise<string | null> {
   if (facts.grantsAutonomy) {
@@ -2196,6 +2368,19 @@ export async function routineDeferForbidden(
   }
   if (instructionOf.length > 0) {
     return `правка инструкции act-рутины из фона не откладывается: «${instructionOf.join('», «')}» (V1.10)`;
+  }
+  // ТРЕТИЙ ПОВОД — ЗАПРЕТ ПО ОБЪЕКТУ РЕЕСТРА (§С2-1 ряд 3, Задача 16). Встроенное свойство,
+  // встроенный аспект и всё, что приедет с частью Б (`implements`, роли `created_by: system`,
+  // определения чужих модулей), фон не перенастраивает НИКОГДА — ни сейчас, ни отложенной
+  // единицей. Довод тот же, что у двух поводов выше: «Принять все» одним нажатием сняло бы
+  // замок мимоходом, а анти-цель 3 (§С2-3) запрещает рутине «тихо перенастроить, что видит
+  // владелец». Свои строки владельца сюда не попадают — их правка откладывается штатно.
+  //
+  // ВЫХОД У АГЕНТА ЕСТЬ, и отказ его называет: `orbis_ask`/`orbis_checkpoint` открыты рутине
+  // В ЛЮБОМ РЕЖИМЕ (`ROUTINE_BASE_TOOLS`, `tools/registry.ts`) — фон говорит владельцу, чего
+  // хочет, и тот делает это сам либо подтверждает в чате. Отказ без выхода был бы ловушкой.
+  if (facts.reconfigures === 'system-object') {
+    return 'перенастройка системного объекта (встроенное свойство, встроенный аспект) из фона не откладывается: устройство системы меняет владелец, а не прогон (§С2-1). Скажите ему об этом — orbis_ask открыт в любом режиме';
   }
 
   // Цель правки и конец связи — разные множества запретных аспектов, и это не небрежность:
