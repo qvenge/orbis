@@ -484,6 +484,14 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
       threadId: globalThreadId(owner),
       content: 'что по задачам?',
     });
+    // Сужение union'а ОБЯЗАТЕЛЬНО, а не косметика: `SendMessageResult` это
+    // `SendMessageAnswer | SendMessageProcessing`, и `assistantMessage` есть только у
+    // первой ветки. Без сужения строка ниже была враньём в типах — и враньём НЕВИДИМЫМ:
+    // `apps/server/tsconfig.json` держит `include: ["src"]`, поэтому `test/` не проходит
+    // typecheck вовсе, хотя ВХОДИТ в `bun run test`. Отдельная проверка «ответ, а не
+    // processing» здесь и по существу нужна: у ретрая живого прогона ответа нет, и
+    // молчаливое `undefined.role` дало бы TypeError вместо внятного отказа.
+    if ('status' in r) throw new Error(`ожидался полный ответ, получен ${JSON.stringify(r)}`);
     expect(r.assistantMessage.role).toBe('assistant');
     expect(cardsOf(r.assistantMessage).some((c) => c.kind === 'query_result')).toBe(true);
     expect(scripted.requests).toHaveLength(2); // никакого реального LLM — только скрипт

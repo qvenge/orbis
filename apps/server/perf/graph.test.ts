@@ -22,7 +22,13 @@ import { sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
 import { recomputeProjectAncestors } from '../src/executor/ancestors';
 import { compileCountAst, compileQueryAst } from '../src/query/compile-ast';
-import { loadRegistry, type RegistrySnapshot } from '../src/registry/load';
+// `loadRegistry` не существует с тех пор, как чтение реестра переехало в кеш
+// (`registry/cache.ts:effectiveRegistry`, коммит 472470e). Файл гоняется только скриптом
+// `test:perf:graph` — вне `bun run test`, — поэтому переименование прошло мимо него молча,
+// и ЕДИНСТВЕННЫЙ измеритель приёмки 13 (П6) не запускался вовсе: прогон падал на импорте
+// (`SyntaxError: Export named 'loadRegistry' not found`, 0 pass / 1 fail).
+import { effectiveRegistry } from '../src/registry/cache';
+import type { RegistrySnapshot } from '../src/registry/load';
 import {
   ensureGraphFixture,
   GRAPH_DEPTH,
@@ -121,7 +127,7 @@ beforeAll(async () => {
   );
   expect(fixture.entities).toBe(GRAPH_ENTITIES);
   expect(fixture.relations).toBe(GRAPH_RELATIONS);
-  reg = await withIdentity(db, GRAPH_OWNER_ID, (tx) => loadRegistry(tx, GRAPH_OWNER_ID));
+  reg = await withIdentity(db, GRAPH_OWNER_ID, (tx) => effectiveRegistry(tx, GRAPH_OWNER_ID));
   subtreeRoot = graphNodeId(SUBTREE_ROOT_LEVEL, Math.floor(graphLevelSize(SUBTREE_ROOT_LEVEL) / 2));
   const rows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
     ...(await tx.execute(
