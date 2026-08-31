@@ -314,6 +314,53 @@ describe('buildContext — слой 2: память с капом и приор�
     expect(stored?.title).toBe('пятерочка → Еда');
   });
 
+  /**
+   * ГРАНИЦА ТОГО ЖЕ ПРАВИЛА, и до этой пробы она держалась ОДНИМ ДОКБЛОКОМ: цель у правила
+   * ЕСТЬ, но не разыменовывается (запись снесена). Подпись обязана остаться одним образцом,
+   * а НЕ откатиться к сохранённому заголовку — тот несёт имя категории, которой в графе уже
+   * нет, и откат к нему показал бы модели ровно то, что задача убирает.
+   *
+   * Предыдущая редакция `loadMemory` откатывалась к заголовку именно здесь; ни один тест
+   * этого не ловил (`context.test.ts` был 25/0 в обе стороны).
+   */
+  test('правило со СНЕСЁННОЙ целью: подпись — один образец, а не устаревший заголовок', async () => {
+    const user6 = freshUserId();
+    const category = newId();
+    const one = (input: Record<string, unknown>, tool = 'entity_create') => ({
+      actorUserId: user6,
+      actorKind: 'owner' as const,
+      source: 'ui' as const,
+      operations: [{ tool, input }],
+    });
+    const created = await execute(
+      db,
+      one({
+        title: 'пятерочка → Еда',
+        tags: [],
+        props: {
+          'orbis/memory_kind': 'rule',
+          'orbis/rule_scope': 'orbis/money-movement',
+          'orbis/rule_pattern': 'пятерочка',
+          'orbis/rule_target': category,
+        },
+        aspects: ['orbis/memory'],
+      }),
+    );
+    expect(created.ok).toBe(true);
+    // Сносим цель ПРЯМЫМ SQL: через исполнителя ссылку не оборвать (валидатор целей не
+    // даст), а строка, оставшаяся без цели, в графе владельца возможна — ровно этот случай
+    // проба и описывает.
+    await withIdentity(db, user6, (tx) => tx.delete(entities).where(eq(entities.id, category)));
+
+    const ctx = await withIdentity(db, user6, async (tx) => {
+      const threadId = await ensureGlobalThread(tx, user6);
+      return buildContext(tx, { ownerId: user6, threadId });
+    });
+    expect(memoryLines(ctx.system)).toEqual(['— [rule][orbis/money-movement] пятерочка']);
+    // Именно НЕ заголовок: он в колонке цел и назвал бы снесённую категорию.
+    expect(ctx.system).not.toContain('пятерочка → Еда');
+  });
+
   test(`body памяти обрезается превью ${MEMORY_BODY_PREVIEW} символов`, async () => {
     const user2 = freshUserId();
     await createMemory(user2, {

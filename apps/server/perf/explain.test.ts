@@ -41,8 +41,16 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { type SQL, sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
+import { MEMORY_ASPECT } from '../src/memory/rules';
+import { memoryEntitiesWhere } from '../src/memory/select';
 import { compileCountAst } from '../src/query/compile-ast';
-import { loadRegistry, type RegistrySnapshot } from '../src/registry/load';
+// `loadRegistry` не существует с тех пор, как чтение реестра переехало в кеш
+// (`registry/cache.ts:effectiveRegistry`). Файл гоняется вне `bun run test`, поэтому
+// переименование прошло мимо него молча: до этой правки прогон падал ещё на импорте —
+// `SyntaxError: Export named 'loadRegistry' not found`. Чинится здесь, потому что иначе
+// переносить сюда замер было бы некуда (Задача 18, ре-ревью).
+import { effectiveRegistry } from '../src/registry/cache';
+import type { RegistrySnapshot } from '../src/registry/load';
 import {
   ensureGraphFixture,
   GRAPH_ENTITIES,
@@ -66,7 +74,7 @@ beforeAll(async () => {
       ` (${fixture.seeded ? 'засеян' : 'взят из кеша'})`,
   );
   expect(fixture.entities).toBe(GRAPH_ENTITIES);
-  reg = await withIdentity(db, GRAPH_OWNER_ID, (tx) => loadRegistry(tx, GRAPH_OWNER_ID));
+  reg = await withIdentity(db, GRAPH_OWNER_ID, (tx) => effectiveRegistry(tx, GRAPH_OWNER_ID));
 }, 900_000);
 
 afterAll(async () => {
@@ -154,6 +162,63 @@ test('вердикт по entities_aspects_gin: горячий запрос — 
   );
   expect(typeof v.chosen).toBe('boolean');
   expect(typeof v.usable).toBe('boolean');
+}, 300_000);
+
+/**
+ * ФОРМА ПРЕДИКАТА НОСИТЕЛЯ ПАМЯТИ (Задача 18, `src/memory/select.ts`) — здесь, а не в
+ * юнит-сьюте селектора, и это переезд по ре-ревью, а не украшение.
+ *
+ * Проба жила в `src/memory/select.test.ts` и была зелёной навсегда: она снимала EXPLAIN под
+ * АДМИН-соединением, дописав `owner_id = '…'` ОБЫЧНЫМ предикатом, — то есть имитировала RLS
+ * тем, чем RLS не является. Под ролью приложения тот же отбор приходит security qual'ом
+ * политики `owner_owns_row`, и вывод менялся на противоположный. Ровно та ловушка, о
+ * которой предупреждает шапка этого файла.
+ *
+ * Три вопроса разведены, как и положено здесь:
+ *  1. под ролью приложения обе формы дают ОДИН план и GIN не берут — значит выбор формы
+ *     боевому пути не помогает и не мешает (селектор читается на каждое сообщение
+ *     владельца, поэтому обещать ему ускорение было бы враньём);
+ *  2. под админ-DSN GIN берёт ТОЛЬКО `@>` — у `элемент = ANY(массив)` индексируемого
+ *     оператора нет вовсе. Этим путём ходят сиды, `scripts/ops.ts` и обслуживающие
+ *     скрипты, и это единственная настоящая причина держать форму `@>`;
+ *  3. причина недостижимости под ролью приложения — не селективность, а `proleakproof`;
+ *     она пиннится отдельным тестом ниже.
+ *
+ * Предикат берётся ИЗ КОДА (`memoryEntitiesWhere`), а не переписывается сюда строкой:
+ * проба о форме, списанной руками, переставала бы говорить о боевом запросе с первой же
+ * правкой селектора.
+ */
+test('форма предиката памяти: под ролью приложения обе равны, под админом GIN берёт только `@>`', async () => {
+  const withContains = sql`SELECT count(*) FROM entities WHERE ${memoryEntitiesWhere()}`;
+  const withAnyElement = sql`SELECT count(*) FROM entities WHERE NOT archived AND ${MEMORY_ASPECT} = ANY(aspects)`;
+
+  const app = {
+    contains: (await planOf(withContains, false)).includes('entities_aspects_gin'),
+    anyElement: (await planOf(withAnyElement, false)).includes('entities_aspects_gin'),
+  };
+  const forced = {
+    contains: (await planOf(withContains, true)).includes('entities_aspects_gin'),
+    anyElement: (await planOf(withAnyElement, true)).includes('entities_aspects_gin'),
+  };
+  const admin = {
+    contains: (await adminPlanOf(withContains)).includes('entities_aspects_gin'),
+    anyElement: (await adminPlanOf(withAnyElement)).includes('entities_aspects_gin'),
+  };
+  console.log(
+    `explain: предикат памяти — под ролью приложения @>=${app.contains} =ANY=${app.anyElement}` +
+      ` (enable_seqscan=off: @>=${forced.contains} =ANY=${forced.anyElement});` +
+      ` под админ-DSN @>=${admin.contains} =ANY=${admin.anyElement}`,
+  );
+
+  // 1. Боевой путь: форма не решает НИЧЕГО — обе одинаково не берут GIN.
+  expect(`app: @>=${app.contains} =ANY=${app.anyElement}`).toBe('app: @>=false =ANY=false');
+  // …и даже принудительно индекс под этой ролью недостижим (иначе «не выбран» читалось бы
+  // как «планировщик посчитал невыгодным», а это другой диагноз).
+  expect(`forced: @>=${forced.contains} =ANY=${forced.anyElement}`).toBe(
+    'forced: @>=false =ANY=false',
+  );
+  // 2. Админ-DSN: вот здесь форма и решает — это и есть причина выбора `@>`.
+  expect(`admin: @>=${admin.contains} =ANY=${admin.anyElement}`).toBe('admin: @>=true =ANY=false');
 }, 300_000);
 
 test('вердикт по entities_query_refs_gin: писателя ещё нет (рулинг Р-П-1)', async () => {
