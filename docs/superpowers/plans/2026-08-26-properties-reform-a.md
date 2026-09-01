@@ -2146,8 +2146,14 @@ export async function seedOwnerWorld(db, ownerId, deps): Promise<{ created: numb
   гранты целы). **Шаг 5:** `test:perf` (перезамер), `check-lazy-chunks`, `lint`, `typecheck`;
   коммит `feat: «Пересев мира» — миграция 0017 (contract), старая форма снята, сиды через исполнителя, греп-гейт §А12-2 падающий в CI, EXPLAIN-приёмка, ops reset-world, тела сидов и PRD §С10 одним коммитом (§А12, приёмка §С8-10)`.
 - [ ] **Шаг 6 — прод (по чек-листу runbook §1; выполняет оркестратор с владельцем):**
-  (0) ветка зелёная полным сьютом, ff-мерж в `main`, CI зелёный; проверка `autoDeploy` через
-  `mcp__render__get_service`/`list_deploys` (деплоя на мерж НЕ было); (1) `bun scripts/ops.ts ping`;
+  (0) **сначала выключить автодеплой** (Р-23-0: РП-1 Задачей 0 НЕ исполнялся — при АФК-прогоне в
+  `main` ничего не мержилось, `render.yaml` не менялся; Render MCP 2026-09-02 показал `autoDeploy:
+  "yes"` у сервиса `orbis`): docs-коммит `autoDeploy: false` сервису `orbis` в `render.yaml` прямо в
+  `main` (сам вызовет безвредный деплой текущего `main` — дождаться его конца), затем
+  `mcp__render__get_service` → `autoDeploy: "no"`; если Blueprint-sync не подхватил — тумблер
+  Settings → Build & Deploy → Auto-Deploy в дашборде через браузер. Только после «no»: ветка зелёная
+  полным сьютом, ff-мерж в `main`, CI зелёный; `list_deploys` — деплоя на мерж НЕ было;
+  (1) `bun scripts/ops.ts ping`;
   (2) `ops.ts check` (ожидаемо: drift — реестры новой формы ещё не засеяны — это не отказ);
   (3) `ops.ts migrate` — 0014…0017 (Supabase pooler, prepared statements: после миграции —
   Restart сервиса неизбежен); (4) `ops.ts reset-world --confirm <PROD_REF>`; (5) `ops.ts check` → ok;
@@ -2194,8 +2200,9 @@ export async function seedOwnerWorld(db, ownerId, deps): Promise<{ created: numb
 
 ## Порядок деплоя (кратко; подробно — Задача 23 Шаг 6 и runbook §1 из диффа Задачи 22)
 
-Автодеплой выключен с Задачи 0 (РП-1, проверка через Render MCP) → все задачи мержатся в `main`
-без выкатки → после Задачи 23: зелёный полный сьют → `ops.ts ping` → `check` → `migrate`
+Автодеплой по РП-1 должен был выключить Задача 0, но этого не случилось (АФК-режим: в `main`
+ничего не мержилось; Render MCP 2026-09-02 — `autoDeploy: "yes"`) — выключается первым действием
+Шага 6 Задачи 23 (Р-23-0) → после Задачи 23: зелёный полный сьют → `ops.ts ping` → `check` → `migrate`
 (0014–0017) → `reset-world` → `check` → ручной deploy + Restart → `/health` → `autoDeploy` обратно
 → заход владельца → смоук (Задача 24). Пересев ТОЛЬКО после зелёного сьюта в ветке (§С9-6, урок D42).
 
