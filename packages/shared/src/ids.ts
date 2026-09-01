@@ -30,6 +30,22 @@ export function registryMergeNoteId(deltaRowId: string, systemVersion: number): 
   return uuidv5(`registry-merge:${deltaRowId.toLowerCase()}:${systemVersion}`, ORBIS_NAMESPACE);
 }
 
+/**
+ * PK заметки, в которую спасают черновик тела, набранный ЧУЖОЙ версией схемы (§А11-2).
+ *
+ * Детерминирован парой «запись + `savedAt` черновика», а не `newId()` на клик, и по той же
+ * причине, что у `retryCreateId`: ответ на УСПЕШНЫЙ запрос теряется (сеть моргнула, вкладку
+ * закрыли), клиент показывает отказ, человек жмёт кнопку второй раз — и со случайным id в графе
+ * появилась бы ВТОРАЯ заметка с тем же текстом. С детерминированным повтор попадает в
+ * идемпотентный replay сервера (§5.3) и возвращает ту же строку.
+ *
+ * Ключ переживает и перезагрузку вкладки: `savedAt` лежит на диске вместе с черновиком. И он же
+ * РАЗЛИЧАЕТ черновики одной записи — спасать второй черновик в ту же заметку было бы потерей.
+ */
+export function bodyDraftNoteId(entityId: string, savedAt: string): string {
+  return uuidv5(`body-draft-note:${entityId.toLowerCase()}:${savedAt}`, ORBIS_NAMESPACE);
+}
+
 export function entityThreadId(ownerId: string, entityId: string): string {
   return uuidv5(
     `${ownerId.toLowerCase()}:entity-thread:${entityId.toLowerCase()}`,

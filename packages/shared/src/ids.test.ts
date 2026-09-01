@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   answerMessageId,
   batchAuditMessageId,
+  bodyDraftNoteId,
   entityThreadId,
   globalThreadId,
   isManualBucket,
@@ -19,6 +20,7 @@ import {
   recurringInstanceId,
   registryMergeNoteId,
   rejectMessageId,
+  retryCreateId,
   routineRunBatchId,
   routineRunId,
 } from './ids';
@@ -103,6 +105,22 @@ describe('детерминированные ID (01 §5.4, §4.5, §7.8)', () =>
     expect(manualBucket('2026-08-18T09:12:00.000Z')).toBe('manual:2026-08-18T09:12:00.000Z');
     expect(isManualBucket(manualBucket('2026-08-18T09:12:00.000Z'))).toBe(true);
     expect(isManualBucket('2026-08-18T07:00')).toBe(false);
+  });
+  test('bodyDraftNoteId (§А11-2): детерминирован записью и меткой черновика, lowercase, без пересечений', () => {
+    // Ключ переживает и потерянный ответ, и перезагрузку вкладки: `savedAt` лежит на диске
+    // вместе с черновиком, поэтому повтор «сохранить в заметку» попадает в идемпотентный replay
+    // сервера, а не заводит вторую заметку с тем же текстом.
+    const entity = '00000000-0000-7000-8000-0000000000d4';
+    const savedAt = '2030-01-01T00:00:02.000Z';
+    expect(bodyDraftNoteId(entity, savedAt)).toBe(bodyDraftNoteId(entity.toUpperCase(), savedAt));
+    // Метка входит в ключ: два разных черновика одной записи — две разные заметки.
+    expect(bodyDraftNoteId(entity, savedAt)).not.toBe(
+      bodyDraftNoteId(entity, '2030-01-01T00:00:03.000Z'),
+    );
+    expect(bodyDraftNoteId(entity, savedAt)).not.toBe(retryCreateId(entity));
+    expect(bodyDraftNoteId(entity, savedAt)).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
   });
   test('формулы тредов детерминированы и различны', () => {
     const owner = '00000000-0000-4000-8000-00000000000a';

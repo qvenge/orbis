@@ -1,4 +1,5 @@
 import { DAILY_PLANNING_BODY } from '@orbis/server/src/seed/smart-lists';
+import { bodyDraftNoteId } from '@orbis/shared';
 import { type BodyDoc, parseBody, serializeBody } from '@orbis/shared/doc';
 import { onlineManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -2709,6 +2710,10 @@ test('черновик чужой версии предлагают ДРУГИМ
   // Кнопок, которые обещали бы отправку, здесь нет: сервер отверг бы документ терминально.
   expect(within(banner).queryByRole('button', { name: 'Оставить моё' })).toBeNull();
   expect(within(banner).queryByRole('button', { name: 'Отбросить' })).toBeNull();
+  // Обещание не больше правды: у черновиков есть срок хранения (30 дней, draft-storage), и
+  // уборка снесёт черновик до всякого следующего предложения. Безоговорочное «предложат снова»
+  // было бы ложью — оговорка обязана стоять в тексте.
+  expect(banner).toHaveTextContent(/срок хранения/i);
 });
 
 test('«сохранить в заметку» уносит текст плоским body и снимает черновик с диска', async () => {
@@ -2732,6 +2737,30 @@ test('«сохранить в заметку» уносит текст плос�
   expect(screen.queryByTestId('draft-banner')).toBeNull();
 });
 
+test('id заметки детерминирован черновиком: повтор после потерянного ответа не плодит вторую', async () => {
+  // Ответ на УСПЕШНЫЙ запрос теряется (сеть моргнула, вкладку закрыли) — клиент видит отказ,
+  // человек жмёт кнопку второй раз. Со случайным id в графе появилась бы вторая заметка с тем
+  // же текстом; с детерминированным повтор попадает в идемпотентный replay сервера.
+  seedDraft(foreignDraft('черновик из будущего'), 'СТАРАЯ-МЕТКА');
+  const { savedAt } = JSON.parse(localStorage.getItem(DRAFT_KEY) as string) as { savedAt: string };
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, (path) => {
+    if (path === 'entity.create') throw trpcError('INTERNAL_SERVER_ERROR', 'ответ потерялся');
+    return bodyHandler('тело')(path, undefined);
+  });
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Сохранить в заметку' }));
+  await screen.findByText(/Не удалось сохранить заметку/);
+  fireEvent.click(screen.getByRole('button', { name: 'Сохранить в заметку' }));
+
+  const created = () => calls.filter((c) => c.path === 'entity.create');
+  await waitFor(() => expect(created()).toHaveLength(2));
+  const ids = created().map((c) => (c.input as { input: { id?: string } }).input.id);
+  // Ключ — запись плюс метка черновика: он переживает и перезагрузку вкладки, а не только
+  // повтор в этой сессии.
+  expect(ids[0]).toBe(bodyDraftNoteId('e1', savedAt));
+  expect(ids[1]).toBe(ids[0]);
+});
+
 test('заметка не сохранилась — черновик остаётся на диске, и человек видит отказ', async () => {
   // Единственное жёсткое требование спеки: текст не теряется ни в одной ветке. Сними черновик
   // до ответа сервера — и отказ мутации оставил бы человека без текста вообще.
@@ -2747,6 +2776,40 @@ test('заметка не сохранилась — черновик остаё
   await waitFor(() => expect(banner).toHaveTextContent(/не удалось сохранить заметку/i));
   expect(localStorage.getItem(DRAFT_KEY)).not.toBeNull();
   expect(within(banner).getByRole('button', { name: 'Сохранить в заметку' })).toBeInTheDocument();
+});
+
+test('в заметку доезжает ПИСАНЫЙ текст: содержимое неизвестного АТРИБУТА — нет', async () => {
+  // Граница выжимки, а не победа. Писаный текст пакет собирает из `node.text` плюс два
+  // поимённых спецслучая (`rawBlock.attrs.markdown`, `queryBlock.attrs.query`), и текст в
+  // ЛЮБОМ другом атрибуте незнакомой ноды в заметку не попадает — а «сохранить в заметку» по
+  // успеху снимает черновик с диска, то есть теряет это содержимое ВЕТКОЙ СПАСЕНИЯ.
+  // Тест пинит сегодняшнее поведение, чтобы докблок `draftAsText` не был обещанием сверх фактов.
+  seedDraft(
+    {
+      v: 999,
+      doc: {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: 'обычный абзац' }] },
+          { type: 'unknownBlock', content: [{ type: 'text', text: 'текст внутри незнакомой' }] },
+          { type: 'unknownAttrBlock', attrs: { payload: 'СМЫСЛ-В-АТРИБУТЕ' } },
+        ],
+      },
+    },
+    'СТАРАЯ-МЕТКА',
+  );
+  const { calls } = renderWithProviders(<DetailScreen entityId="e1" />, bodyHandler('тело'));
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Сохранить в заметку' }));
+
+  await waitFor(() => expect(calls.some((c) => c.path === 'entity.create')).toBe(true));
+  const sent = calls.find((c) => c.path === 'entity.create')?.input as {
+    input: { body?: string };
+  };
+  // Половина, которую выжимка ДЕРЖИТ: текст незнакомой ноды доезжает вместе с обычным абзацем.
+  expect(sent.input.body).toBe('обычный абзац\n\nтекст внутри незнакомой');
+  // …и половина, которую НЕ держит.
+  expect(sent.input.body).not.toContain('СМЫСЛ-В-АТРИБУТЕ');
 });
 
 test('«открыть серверное тело» убирает баннер, но черновик с диска НЕ стирает', async () => {

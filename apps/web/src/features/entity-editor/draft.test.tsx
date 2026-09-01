@@ -1561,3 +1561,69 @@ test('«открыть серверное тело» снимает предло
   expect(stored().doc).toEqual(FUTURE);
   expect(s.updates()).toEqual([]);
 });
+
+// --- слот на диске заперт, пока судьба ЧУЖОГО черновика не решена (гейт-ревью, Critical) -----
+//
+// Слот на диске ОДИН на запись. Снятие баннера («открыть серверное тело») — это «решу позже», а
+// не решение: черновик остаётся лежать, и первое же автосохранение поверх серверного тела
+// затёрло бы его молча — текстом, который человек набрал, НИ РАЗУ НЕ УВИДЕВ старого (превью
+// баннер не рисует). Размен назван прямо: лучше не прикрыть страховкой новый набор (он на экране
+// и уезжает на сервер как обычно) чем стереть старый, которого нет больше нигде.
+
+test('после «открыть серверное тело» автосохранение НЕ затирает черновик чужой версии', async () => {
+  // Отказ сети (500) — чтобы черновик набранного ОСТАЛСЯ на диске и было видно, что именно
+  // лежит в слоте: успешное сохранение снимает страховку само, и слот был бы пуст в обоих мирах.
+  seed(FUTURE);
+  const s = mount({ entity: ENTITY, respond: fail500 });
+  await tick();
+  await s.dismiss();
+  expect(s.api().pendingDraft, 'премиса: предложение снято').toBeNull();
+
+  // Человек правит серверное тело — обычный набор, обычная пауза.
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(s.updates(), 'премиса: правка ушла на сервер как обычно').toHaveLength(1);
+  expect((s.input(0) as { bodyDoc: BodyDoc }).bodyDoc).toEqual(TWO);
+
+  // …а слот по-прежнему держит текст, которого больше нигде нет.
+  expect(raw(), 'черновик чужой версии не стёрт').not.toBeNull();
+  expect(stored().doc).toEqual(FUTURE);
+  await s.unmount();
+
+  // И следующее открытие записи предлагает его снова — «предложат снова» баннера не ложь.
+  const back = mount({ entity: ENTITY, respond: fail500 });
+  await tick();
+  expect(back.api().pendingDraft?.doc).toEqual(FUTURE);
+  expect(back.api().pendingDraft?.foreignSchema).toBe(true);
+});
+
+test('решённая судьба чужого черновика возвращает слоту страховку', async () => {
+  // Обратная сторона запора: механизм обязан отпираться, иначе запись теряет страховку навсегда.
+  // Отпирает его ровно то, что снимает черновик с диска: «сохранить в заметку» экрана зовёт
+  // `discardPendingDraft` по успеху мутации заметки.
+  seed(FUTURE);
+  const s = mount({ entity: ENTITY, respond: fail500 });
+  await tick();
+  await s.discard();
+  expect(raw(), 'премиса: черновик снят с диска').toBeNull();
+
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(stored().doc).toEqual(TWO);
+});
+
+test('запор слота не переезжает на соседнюю запись', async () => {
+  // Запор принадлежит ЗАПИСИ, а не хуку: уйди человек с записи с чужим черновиком на соседнюю,
+  // и та осталась бы без страховки молча — при том что своего чужого черновика у неё нет.
+  seed(FUTURE);
+  const s = mount({ entity: ENTITY, respond: fail500 });
+  await tick();
+  await s.set({ id: 'e2', entity: SECOND });
+  await tick();
+
+  s.api().onDocChange(TWO);
+  await tick(SAVE_PAUSE);
+  expect(stored(`orbis:body-draft:${OWNER}:e2`).doc).toEqual(TWO);
+  // …а черновик первой записи цел: соседка его не трогала.
+  expect(stored().doc).toEqual(FUTURE);
+});
