@@ -133,6 +133,25 @@ export const LEGACY_MARKERS: ReadonlyArray<LegacyMarker> = [
   { id: 'pseudo-aspect', pattern: String.raw`ENTITY_PSEUDO_ASPECT|'orbis/entity'` },
   { id: 'service-const', pattern: String.raw`SERVICE_ASPECT_IDS` },
   { id: 'prop-type-heur', pattern: String.raw`\bpropType\(` },
+  // Старая плоская грамматика §6.1 УДАЛЕНА Задачей 21b целиком: четыре модуля
+  // (`grammar`/`parse`/`serialize`/`legacy-bridge`), их тесты, `buildFieldCatalog` и
+  // эвристика `propType`. Маркер ловит и ИМПОРТ несуществующего модуля, и любое из имён,
+  // которые он отдавал: имя, вернувшееся в код, означает воскресшую вторую грамматику, а
+  // единственный текст запроса с этого момента — key-форма канона (§А5-3).
+  //
+  // Обязан давать НОЛЬ вне allowlist НАВСЕГДА, и это проверяется по РАБОЧЕМУ дереву
+  // (`check-legacy-form.test.ts`), а не только на синтетике: закрытая дверь, а не счётчик.
+  {
+    id: 'legacy-grammar',
+    pattern: String.raw`query/(grammar|serialize|legacy-bridge)|\bparseQueryAny\b|\bserializeQuery\b|\bbuildFieldCatalog\b|\blegacyAstToQueryAst\b|\blegacyCatalogFromRegistry\b`,
+    // КОММЕНТАРИИ СНЯТЫ, и это не поблажка. Удалённое надо объяснять там, где его больше
+    // нет: докблоки `parse-text.ts`, `bind-query.ts`, `catalog.ts` и обоих баррелей
+    // называют мост и старые модули поимённо — иначе следующий читатель не узнает, почему
+    // форма текста ровно одна. Маркер ловит ИМЯ, ВЕРНУВШЕЕСЯ В КОД: импорт, вызов, экспорт.
+    // Снимается строка, КОТОРАЯ ЦЕЛИКОМ комментарий (начинается с `//`, `*` или `/*`), а не
+    // всякая, где комментарий встретился: код с хвостовым `// …` остаётся под гейтом.
+    exclude: [/^\s*(?:\/\/|\*|\/\*).*$/],
+  },
 ];
 
 export type AllowEntry = {

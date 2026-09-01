@@ -269,7 +269,8 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
       source: 'fast_path',
     });
     const rows = await caller.entity.query({
-      query: 'aspect=orbis/task, status=inbox, sortBy=created_at:desc, display=list, title=Inbox',
+      query:
+        'aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox',
     });
     expect(rows.map((r) => r.id)).toEqual([created.id]);
     expect(() => entitySchema.parse(rows[0])).not.toThrow(); // wire-форма и у query-выдачи
@@ -353,7 +354,7 @@ describe('entity.query / entity.count (§6.3–6.4)', () => {
         source: 'fast_path',
       });
     }
-    const q = 'aspect=orbis/task, status=inbox, limit=1';
+    const q = 'aspect=orbis/task, orbis/task_status=inbox, limit=1';
     expect((await caller.entity.query({ query: q })).length).toBe(1);
     expect(await caller.entity.count({ query: q })).toEqual({ count: 3 });
   });

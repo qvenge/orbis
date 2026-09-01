@@ -53,18 +53,22 @@ test('parseBlock снимает обёртку и разбирает блок н
   }
 });
 
-// Мост старой формы обязан работать и на клиенте: тела сидированных смарт-листов до Задачи 21
-// написаны голыми именами полей, и без моста каждый такой блок краснел бы плашкой при живом
-// ответе сервера (`entity.query` их исполняет).
-test('parseBlock принимает СТАРУЮ форму текста через мост', () => {
-  const r = parseBlock('{{query:aspect=orbis/task, status=inbox}}', registry.parse);
+// Клиент и сервер обязаны считать верным ОДНО И ТО ЖЕ. Мост старой формы стоял здесь, пока
+// тела сидированных смарт-листов были написаны голыми именами полей; Задача 21b перевела их
+// в key-форму и мост удалила — теперь старая форма получает такой же отказ, как на сервере, и
+// расхождения «экран красный при живом ответе сервера» быть не может ни в одну сторону.
+test('parseBlock: key-форма разбирается в канон; СТАРАЯ форма — отказ, как и на сервере', () => {
+  const r = parseBlock('{{query:aspect=orbis/task, orbis/task_status=inbox}}', registry.parse);
   expect(r.ok).toBe(true);
-  // Мост отдаёт КАНОН: имя разрешено в id свойства реестра, а не оставлено голым.
+  // Разбор отдаёт КАНОН: имя разрешено в id свойства реестра, а не оставлено голым.
   if (r.ok) {
     expect(r.ast.filter).toEqual({
       and: [{ aspect: 'orbis/task' }, { prop: 'orbis/task_status', op: 'eq', value: 'inbox' }],
     });
   }
+  const legacy = parseBlock('{{query:aspect=orbis/task, status=inbox}}', registry.parse);
+  expect(legacy.ok).toBe(false);
+  if (!legacy.ok) expect(legacy.error.code).toBe('UNKNOWN_FIELD');
 });
 
 test('parseBlock: неизвестное свойство → отказ с кодом и позицией, а не пустой список', () => {

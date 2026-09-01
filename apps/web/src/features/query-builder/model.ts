@@ -30,7 +30,6 @@ import {
   acceptsDateTokenKind,
   isListPropertyType,
   isOrderedPropertyKind,
-  parseQueryAny,
   parseQueryAst,
   printQueryAst,
 } from '@orbis/shared/query';
@@ -388,13 +387,12 @@ export function printQuery(ast: QueryAst, reg: QueryRegistry): Printed {
  * таким блоком не управляет, и вызывающий обязан открыть строковый редактор (иначе первое же
  * сохранение молча потеряло бы конструкцию).
  *
- * Разбор здесь С МОСТОМ (`parseQueryAny`): тела сидированных смарт-листов до Задачи 21
- * написаны старой грамматикой, и без моста «Настроить» открывал бы на них текстовый редактор
- * вместо формы. Печатается такой блок уже КЛЮЧЕВОЙ формой — но наружу она уходит только
- * вместе с настоящей правкой (правило Р3 в `QueryBuilderForm`).
+ * Разбор СТРОГИЙ: тела сидированных смарт-листов переведены в key-форму (Задача 21b), и
+ * мост старой грамматики, который держал «Настроить» открытым на них формой, а не текстовым
+ * редактором, удалён вместе с ней.
  */
 export function parseForForm(initial: string, reg: QueryRegistry): QueryAst | null {
-  const r = parseQueryAny(initial.trim(), reg.parse);
+  const r = parseQueryAst(initial.trim(), reg.parse);
   if (!r.ok) return null;
   return printQuery(r.ast, reg).text === null ? null : r.ast;
 }

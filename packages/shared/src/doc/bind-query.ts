@@ -13,16 +13,16 @@
  * key-форма ЭТОГО ЖЕ дерева, либо `ast === null` и `text` — исходная строка блока. Третьего
  * состояния не бывает, и обе стороны проверяются тестом.
  *
- * Разбор идёт `parseQueryAny` (обе формы текста), а не строгим `parseQueryAst`, и это
- * ВРЕМЕННО: сидированные тела (§3.3 PRD) до Задачи 21b написаны старой грамматикой, и строгий
- * разбор встретил бы владельца красной плашкой на каждом сидированном списке при живом ответе
- * сервера. Признак, по которому следующий читатель поймёт, что момент настал: `parseQueryAny`
- * исчез вместе с `query/legacy-bridge.ts` — тогда здесь остаётся `parseQueryAst`.
+ * Разбор СТРОГИЙ (`parseQueryAst`): другой формы текста запроса больше нет. Мост старой
+ * грамматики стоял здесь ровно до тех пор, пока сидированные тела (§3.3 PRD) были написаны
+ * ею; Задача 21b перевела их в key-форму и удалила мост вместе с `query/legacy-bridge.ts`.
+ * Текст, который строгий разбор не принял, блоком не становится — он остаётся в `text` с
+ * `ast: null`, и владелец видит отказ с позицией, а не молчание.
  */
 import type { JSONContent } from '@tiptap/core';
 import {
   type ParseRegistry,
-  parseQueryAny,
+  parseQueryAst,
   printQueryAst,
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
@@ -65,7 +65,7 @@ function bindAttrs(attrs: Record<string, unknown>, reg: ParseRegistry): QueryBlo
     // Пустой текст НЕ разбирается намеренно (Р-21-8): `parseQueryAst('')` отвечает
     // `{filter: null}` — законным деревом «весь корпус владельца», — и пустая заготовка молча
     // сменила бы смысл на «все сущности». Незакрытый блок остаётся незакрытым.
-    const parsed = parseQueryAny(text, reg);
+    const parsed = parseQueryAst(text, reg);
     if (parsed.ok) ast = parsed.ast;
   }
   if (ast === undefined) return { ast: null, text };

@@ -946,19 +946,18 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
     if (refused.status === 'error') expect(refused.error.message).toContain('64');
   });
 
-  // Мост старой грамматики (переходный, умирает в Задаче 21): тексты сидов и Agenda ещё
-  // старой формы, и сервер обязан читать ОБЕ. Проверяется РАВЕНСТВО ВЫДАЧИ, а не «обе не
-  // упали»: мост, отдающий другое дерево, был бы хуже отказа.
-  test('entity_query: старая форма текста и новая дают ОДИН результат', async () => {
+  // Мост старой грамматики удалён (Задача 21b) вместе с последним текстом, написанным ею.
+  // Проверяется не «упало», а ФОРМА ОТКАЗА: старое имя поля обязано получить `UNKNOWN_FIELD`
+  // с позицией, а не молчаливый ноль результатов (§А5-3ж) — молчание модель истолковала бы
+  // как «таких сущностей нет» и пошла бы дальше по неверной ветке.
+  test('entity_query: старая форма текста — отказ с позицией, а не пустая выдача', async () => {
     const created = await seedEntity(userA, {
       title: 'Мост',
       tags: ['qtest-bridge'],
       aspects: { 'orbis/task': { status: 'inbox' } },
     });
-    // Вторая сущность под тем же тегом — КОНТРОЛЬ, и без неё тест односторонний: с одной
-    // строкой в выборке «мост перевёл условие по статусу» и «мост его молча выбросил» дают
-    // ОДИН И ТОТ ЖЕ ответ. Тот же класс, что в e2e (I-3): тест различает только то, что
-    // есть в фикстуре.
+    // Вторая сущность под тем же тегом — КОНТРОЛЬ: без неё «условие по статусу отработало»
+    // и «условие молча выброшено» дают один и тот же ответ на выборке из одной строки.
     await seedEntity(userA, {
       title: 'Мост: закрытая',
       tags: ['qtest-bridge'],
@@ -969,13 +968,19 @@ describe('dispatchTool: чтения без политики (§7.10, ряд «r
       expect(r.status).toBe('ok');
       return r.status === 'ok' ? (r.result as WireEntity[]).map((e) => e.id) : [];
     };
-    const fresh = await ids('tags=qtest-bridge, orbis/task_status=inbox');
-    const legacy = await ids('tags=qtest-bridge, aspect=orbis/task, status=inbox');
-    // Точный набор: условие по статусу обязано ОТСЕЯТЬ закрытую, а не просто «не упасть».
-    expect(legacy).toEqual([created.id]);
-    expect(legacy).toEqual(fresh);
-    // И тег ловит обе — то есть выборка была из чего сужать.
+    // Key-форма: условие по статусу ОТСЕИВАЕТ закрытую, а не просто «не падает».
+    expect(await ids('tags=qtest-bridge, orbis/task_status=inbox')).toEqual([created.id]);
     expect((await ids('tags=qtest-bridge')).length).toBe(2);
+
+    const legacy = await dispatchTool(ctxFor(), 'entity_query', {
+      query: 'tags=qtest-bridge, aspect=orbis/task, status=inbox',
+    });
+    expect(legacy.status).toBe('error');
+    if (legacy.status === 'error') {
+      expect(legacy.error.message).toContain("'status'");
+      expect((legacy.error.details as { reason?: string }).reason).toBe('UNKNOWN_FIELD');
+      expect((legacy.error.details as { position?: number }).position).toBeGreaterThan(0);
+    }
   });
 
   test('entity_get: include по умолчанию body+relations; несуществующий id → NOT_FOUND', async () => {
@@ -1315,7 +1320,7 @@ describe('dispatchTool: user_query материализует окно запр�
       },
     });
     const r = await dispatchTool(ctxFor({ actorUserId: userC }), 'user_query', {
-      query: 'aspect=orbis/financial, occurred_on=next_7d',
+      query: 'aspect=orbis/financial, orbis/occurred_on=next_7d',
       aggregate: 'sum',
       field: 'amount',
     });
@@ -1326,7 +1331,7 @@ describe('dispatchTool: user_query материализует окно запр�
     expect(r.result).toBe('150.00');
 
     const count = await dispatchTool(ctxFor({ actorUserId: userC }), 'user_query', {
-      query: 'aspect=orbis/financial, occurred_on=next_7d',
+      query: 'aspect=orbis/financial, orbis/occurred_on=next_7d',
       aggregate: 'count',
     });
     expect(count.status).toBe('ok');

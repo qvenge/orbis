@@ -8,18 +8,14 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  aspectJsonSchema,
   BUILTIN_ASPECT_IDS,
   BUILTIN_PROPERTY_META,
   BUILTIN_RELATION_ROLE_META,
-  buildFieldCatalog,
   CORE_PROPERTY_IDS,
   categoryAspectSchema,
-  parseQuery,
   propertyToLegacyField,
   ROLE_DEPENDENCY,
 } from '@orbis/shared';
-import { DOC_SCHEMA_VERSION } from '@orbis/shared/doc';
 import { OWNER_LOCALE, parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { AGENDA_QUERY_TEXTS } from '@orbis/shared/query/fixtures';
 import { TRPCError } from '@trpc/server';
@@ -31,12 +27,13 @@ import { effectiveRegistry } from '../registry/cache';
 import { validateEntityProps } from '../registry/validate-props';
 import { appRouter } from '../router';
 import { SEED_CATEGORIES } from '../seed/categories';
-import { ROUTINES_LIST_BODY_BEFORE_BATCH, seedSmartListId } from '../seed/onboarding';
+import { seedSmartListId } from '../seed/onboarding';
 import {
   ALL_TASKS_BODY,
   DAILY_PLANNING_BODY,
   HORIZON_LIFE_BODY,
   HORIZON_YEAR_BODY,
+  ROUTINES_BATCH_QUERY,
   ROUTINES_LIST_BODY,
   SEED_HORIZON_LISTS,
   SEED_SMART_LISTS,
@@ -168,7 +165,7 @@ describe('категории §7.1', () => {
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
-    const rows = await caller.entity.query({ query: 'tags=category, sortBy=created_at:asc' });
+    const rows = await caller.entity.query({ query: 'tags=category, sortBy=orbis/created_at:asc' });
     expect(rows.length).toBe(12);
     for (const r of rows) {
       // Схема аспекта старой формы (Р-24) говорит СТАРЫМИ именами полей, а строка приезжает
@@ -272,8 +269,19 @@ describe('сид против запрета core-проекций в props (§�
 });
 
 describe('smart lists §7.2 / §3.3', () => {
-  test('body всех шести списков — байт-в-байт равен блокам 02 §3.3, в порядке документа', () => {
-    // Извлекаем ```markdown-блоки §3.3 из PRD и сверяем с константами сида
+  test('проза шести списков — байт-в-байт равна блокам 02 §3.3, в порядке документа', () => {
+    // ЧТО ЗДЕСЬ СРАВНИВАЕТСЯ И ЧЕГО НЕ ХВАТАЕТ — вслух, потому что пин ослаблен НАМЕРЕННО.
+    //
+    // Тела сидов переведены в key-форму канона (§А5-3), а §3.3 PRD до пересева (Задача 23,
+    // где `docs/prd/**` едет одним коммитом с сидами) держит прежнюю запись запросов.
+    // Байтовое сравнение целых тел с этого момента невыполнимо, а сравнить две ФОРМЫ
+    // запроса семантически больше нечем: мост старой грамматики удалён этой же задачей —
+    // он и был единственным, кто умел прочитать обе.
+    //
+    // Поэтому сравнивается ВСЁ, КРОМЕ содержимого query-блоков: проза, заголовки, порядок
+    // абзацев, число блоков и их места в тексте. Это ловит ровно тот дрейф, ради которого
+    // пин заводили (тело сида и §3.3 разъехались), и не ловит только запись запроса —
+    // которую в Задаче 23 обязан вернуть байтовый пин целых тел.
     const prdPath = join(import.meta.dir, '../../../../docs/prd/02-core-os.md');
     const prd = readFileSync(prdPath, 'utf8');
     const blocks = [...prd.matchAll(/```markdown\n([\s\S]*?)\n```/g)].map((m) => {
@@ -281,21 +289,45 @@ describe('smart lists §7.2 / §3.3', () => {
       if (block === undefined) throw new Error('markdown-блок без группы захвата');
       return block;
     });
+    /** Тело с содержимым запросов, заменённым на порядковый номер блока. */
+    const masked = (body: string): string => {
+      let n = 0;
+      return body.replace(/\{\{query:[\s\S]*?\}\}/g, () => {
+        n += 1;
+        return `{{query:#${n}}}`;
+      });
+    };
     // Первые шесть markdown-блоков документа — §3.3, ровно в порядке SEED_SMART_LISTS:
     // три исходных списка, два верхних горизонта планирования (E4), «Рутины» (V1.9).
-    expect(blocks.slice(0, SEED_SMART_LISTS.length)).toEqual(SEED_SMART_LISTS.map((s) => s.body));
+    expect(blocks.slice(0, SEED_SMART_LISTS.length).map(masked)).toEqual(
+      SEED_SMART_LISTS.map((s) => masked(s.body)),
+    );
     // Поимённо — чтобы падение называло виновника, а не «массивы не равны»
-    expect(blocks[0]).toBe(DAILY_PLANNING_BODY);
-    expect(blocks[1]).toBe(UPCOMING_BODY);
-    expect(blocks[2]).toBe(ALL_TASKS_BODY);
-    expect(blocks[3]).toBe(HORIZON_YEAR_BODY);
-    expect(blocks[4]).toBe(HORIZON_LIFE_BODY);
-    expect(blocks[5]).toBe(ROUTINES_LIST_BODY);
+    expect(masked(blocks[0] as string)).toBe(masked(DAILY_PLANNING_BODY));
+    expect(masked(blocks[1] as string)).toBe(masked(UPCOMING_BODY));
+    expect(masked(blocks[2] as string)).toBe(masked(ALL_TASKS_BODY));
+    expect(masked(blocks[3] as string)).toBe(masked(HORIZON_YEAR_BODY));
+    expect(masked(blocks[4] as string)).toBe(masked(HORIZON_LIFE_BODY));
+    expect(masked(blocks[5] as string)).toBe(masked(ROUTINES_LIST_BODY));
+    // Контроль осмысленности маски: она обязана что-то прятать, иначе сравнение выше
+    // зеленело бы, вообще ничего не проверив про блоки.
+    expect(masked(ROUTINES_LIST_BODY)).toContain('{{query:#3}}');
+    expect(masked(ROUTINES_LIST_BODY)).not.toContain('orbis/undecided');
   });
 
-  test('все {{query:}}-блоки шести списков парсятся собственным парсером (страховка от опечатки)', () => {
-    const catalog = buildFieldCatalog(
-      BUILTIN_ASPECT_IDS.map((id) => ({ id, schema: aspectJsonSchema(id) })),
+  test('все {{query:}}-блоки шести списков разбираются СТРОГИМ каноном против ЖИВОГО реестра', async () => {
+    // Реестр — из ручки, а не из фикстуры: страховка от опечатки в сиде стоит ровно
+    // столько, сколько стоит её словарь, а сидированный блок увидит именно тот реестр,
+    // который отдаёт сервер.
+    const caller = callerFor(freshUserId());
+    const { properties, roles, aspects } = await caller.registry.effective();
+    const reg = toParseRegistry(
+      {
+        properties: new Map(properties.map((p) => [p.id, p])),
+        aspects: new Map(aspects.map((a) => [a.id, a])),
+        roles: new Map(roles.map((r) => [r.id, r])),
+      },
+      OWNER_LOCALE,
     );
     // Ожидаемое число блоков в каждом теле — потеря блока при правке body не пройдёт молча
     const expectedBlocks: Record<SeedSmartList['slug'], number> = {
@@ -310,7 +342,10 @@ describe('smart lists §7.2 / §3.3', () => {
     for (const list of SEED_SMART_LISTS) {
       const blocks = queryBlocksOf(list.body);
       expect(blocks.length).toBe(expectedBlocks[list.slug]);
-      for (const block of blocks) expect(parseQuery(block, catalog).ok).toBe(true);
+      for (const block of blocks) {
+        const parsed = parseQueryAst(block, reg);
+        expect([list.slug, block, parsed.ok]).toEqual([list.slug, block, true]);
+      }
     }
   });
 
@@ -352,7 +387,9 @@ describe('smart lists §7.2 / §3.3', () => {
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
-    const rows = await caller.entity.query({ query: 'tags=smart-list, sortBy=created_at:asc' });
+    const rows = await caller.entity.query({
+      query: 'tags=smart-list, sortBy=orbis/created_at:asc',
+    });
     expect(rows.length).toBe(6);
     for (const r of rows) expect(r.tags).toEqual(['smart-list']);
 
@@ -375,7 +412,9 @@ describe('smart lists §7.2 / §3.3', () => {
     const caller = callerFor(user);
     await caller.user.seedOnboarding();
 
-    const rows = await caller.entity.query({ query: 'tags=smart-list, sortBy=created_at:asc' });
+    const rows = await caller.entity.query({
+      query: 'tags=smart-list, sortBy=orbis/created_at:asc',
+    });
     const byId = new Map(rows.map((r) => [r.id, r]));
     const expected: Array<[string, string, string]> = [
       ['horizon-year', 'Год', '🎯'],
@@ -802,7 +841,9 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
     const caller = callerFor(user);
     expect(await caller.user.seedOnboarding()).toEqual({ seeded: true });
 
-    const rows = await caller.entity.query({ query: 'tags=smart-list, sortBy=created_at:asc' });
+    const rows = await caller.entity.query({
+      query: 'tags=smart-list, sortBy=orbis/created_at:asc',
+    });
     expect(rows.length).toBe(6);
     const routines = rows.find((r) => r.id === seedSmartListId(user, 'routines'));
     expect(routines?.title).toBe('Рутины');
@@ -932,19 +973,36 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
   });
 
   // Решение 6 плана — самое чувствительное место среза. Тело «Рутин» у существующего
-  // владельца могло быть правлено руками, и сид чужого не переписывает: UPDATE только при
-  // байт-в-байт совпадении со СТАРЫМ сидом.
+  // владельца могло быть правлено руками, и сид чужого не переписывает: он ДОПИСЫВАЕТ
+  // недостающий блок, а признак «недостаёт» спрашивает у документа, а не у байтов (§А12-3).
   describe('бэкфилл тела: третий блок существующему владельцу', () => {
-    /** Тело списка «Рутины», его `body_doc` и отметка правки — админским DSN, мимо RLS. */
+    /**
+     * Тело «Рутин» БЕЗ блока пачки — состояние владельца, засиденного до D42.
+     *
+     * ВЫЧИСЛЯЕТСЯ ИЗ СИДА, а не заморожено копией. Копия («править нельзя никогда») была
+     * платой за побайтовый признак и первой же сменой формы запроса превращалась в мусор:
+     * сравнить key-форму нового сида со старой грамматикой в теле владельца нельзя ни при
+     * какой правке литерала. Признак теперь спрашивает документ, и образец «до» честно
+     * получается из «после» снятием ровно того блока, который бэкфилл и дописывает.
+     */
+    const BATCH_BLOCK = `\n\n{{query:${ROUTINES_BATCH_QUERY}}}`;
+    const ROUTINES_BODY_WITHOUT_BATCH = (() => {
+      const at = ROUTINES_LIST_BODY.indexOf(BATCH_BLOCK);
+      if (at < 0) throw new Error('в теле «Рутин» нет блока пачки — образец «до» не построить');
+      return ROUTINES_LIST_BODY.slice(0, at);
+    })();
+
+    /** Тело списка «Рутины», его `body_doc`, индекс запросов и отметка правки — админским DSN. */
     async function routinesBody(
       user: string,
-    ): Promise<{ body: string; bodyDoc: unknown; updatedAt: Date }> {
+    ): Promise<{ body: string; bodyDoc: unknown; queryRefs: string[]; updatedAt: Date }> {
       const { db: admin, client: adminClient } = adminDb();
       try {
         const rows = await admin
           .select({
             body: entities.body,
             bodyDoc: entities.bodyDoc,
+            queryRefs: entities.queryRefs,
             updatedAt: entities.updatedAt,
           })
           .from(entities)
@@ -959,7 +1017,15 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
       }
     }
 
-    /** Откат тела к состоянию «до D42» + непустой body_doc, как у читанной записи. */
+    /**
+     * Откат строки к состоянию «как у владельца, засиденного ДО D42»: тело без третьего
+     * блока и ПУСТЫЕ производные колонки.
+     *
+     * `body_doc = NULL` и `query_refs = {}` здесь не украшение, а предмет проверки: сид до
+     * этой задачи писал только `body`, и предикат, спрашивающий колонку `query_refs`, у
+     * такого владельца был бы ложен ВСЕГДА — то есть бэкфилл молча выключился бы ровно на
+     * тех, ради кого он существует (рулинг Р-21b-5).
+     */
     async function setRoutinesBody(user: string, body: string): Promise<void> {
       const { db: admin, client: adminClient } = adminDb();
       try {
@@ -967,7 +1033,9 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
           .update(entities)
           .set({
             body,
-            bodyDoc: { v: DOC_SCHEMA_VERSION, doc: { type: 'doc', content: [] } },
+            bodyDoc: null,
+            bodyRefs: [],
+            queryRefs: [],
             // Отметка правки — заведомо в прошлом: по её сдвигу видно, ЗАДЕЛ ли UPDATE
             // строку, и «повтор — no-op» проверяется фактом, а не совпадением тел
             updatedAt: new Date('2026-08-01T00:00:00.000Z'),
@@ -980,41 +1048,76 @@ describe('смарт-лист «Рутины» (§3.3, §7.2, V1.9, D42)', () =>
       }
     }
 
-    test('СТАРОЕ сид-тело → обновлено новым, body_doc сброшен в NULL; повтор — no-op (строка не тронута)', async () => {
+    test('бэкфилл D42: тело владельца с блоком пачки — no-op; без блока — блок добавлен; текст владельца не затёрт', async () => {
       const user = freshUserId();
       const caller = callerFor(user);
       await caller.user.seedOnboarding();
-      await setRoutinesBody(user, ROUTINES_LIST_BODY_BEFORE_BATCH);
 
+      // 1. Свежесидированное тело блок пачки УЖЕ несёт — бэкфилл обязан промолчать.
+      const seeded = await routinesBody(user);
+      expect(seeded.queryRefs).toContain('orbis/undecided');
       expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
-      const after = await routinesBody(user);
-      expect(after.body).toBe(ROUTINES_LIST_BODY);
-      // body_doc = NULL — ленивая переконверсия: старый документ описывал ДВА блока, и
-      // оставить его значило бы показывать владельцу тело без третьего
-      expect(after.bodyDoc).toBeNull();
-      expect(after.updatedAt.toISOString()).not.toBe('2026-08-01T00:00:00.000Z');
+      const untouched = await routinesBody(user);
+      expect(untouched.body).toBe(ROUTINES_LIST_BODY);
+      expect(untouched.updatedAt.toISOString()).toBe(seeded.updatedAt.toISOString());
 
-      // Идемпотентно по построению: тело больше не равно старому сиду, условие не
-      // совпадёт — и `updated_at` стоит на месте, то есть строку никто не переписал
-      // (иначе web-синк LWW дёргал бы список на каждом старте сессии)
+      // 2. Владелец «до D42»: тело без третьего блока, производные колонки пусты — ровно
+      //    то, что оставлял сид до этой задачи.
+      await setRoutinesBody(user, ROUTINES_BODY_WITHOUT_BATCH);
+      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+      const filled = await routinesBody(user);
+      expect(filled.body).toBe(ROUTINES_LIST_BODY);
+      // Блок доехал не только в markdown: документ собран и ПРИВЯЗАН, индекс заполнен —
+      // иначе следующий обход держателей свойства этот список не нашёл бы.
+      expect(filled.bodyDoc).not.toBeNull();
+      expect(filled.queryRefs).toContain('orbis/undecided');
+      expect(filled.updatedAt.toISOString()).not.toBe('2026-08-01T00:00:00.000Z');
+
+      // 3. Идемпотентность построением: блок в теле есть — строку больше никто не трогает.
       expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
       const repeated = await routinesBody(user);
       expect(repeated.body).toBe(ROUTINES_LIST_BODY);
-      expect(repeated.updatedAt.toISOString()).toBe(after.updatedAt.toISOString());
+      expect(repeated.updatedAt.toISOString()).toBe(filled.updatedAt.toISOString());
       expect(await counts(user)).toEqual({ entities: 19, settings: 1, threads: 1 });
     });
 
-    test('ПРАВЛЕНОЕ владельцем тело не трогается никогда — ни телом, ни body_doc', async () => {
+    test('ПРАВЛЕНОЕ владельцем тело: блок ДОПИСАН, а написанное владельцем цело', async () => {
+      // Байтовый признак здесь отказывал: любая правка владельца — и бэкфилл молчал
+      // навсегда. Признак «блока нет» отвечает на нужный вопрос, а дописывание в конец
+      // сохраняет чужой текст (перезапись уничтожила бы его без следа — версий у
+      // мимо-executor'ного сида нет).
       const user = freshUserId();
       const caller = callerFor(user);
       await caller.user.seedOnboarding();
-      const edited = `${ROUTINES_LIST_BODY_BEFORE_BATCH}\n\nМоя заметка: не трогать.`;
-      await setRoutinesBody(user, edited);
+      const note = 'Моя заметка: не трогать.';
+      await setRoutinesBody(user, `${ROUTINES_BODY_WITHOUT_BATCH}\n\n${note}`);
 
       expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
       const after = await routinesBody(user);
-      expect(after.body).toBe(edited);
-      expect(after.bodyDoc).not.toBeNull();
+      expect(after.body).toContain(note);
+      expect(after.body).toContain(`{{query:${ROUTINES_BATCH_QUERY}}}`);
+      expect(after.queryRefs).toContain('orbis/undecided');
+      // Блок дописан В КОНЕЦ: заметка владельца осталась там, где он её написал.
+      expect(after.body.indexOf(note)).toBeLessThan(after.body.indexOf('orbis/undecided'));
+      expect(queryBlocksOf(after.body).length).toBe(3);
+    });
+
+    test('свой блок владельца на то же свойство считается пачкой — сид второй не навязывает', async () => {
+      // Признак спрашивает АДРЕС СВОЙСТВА, а не заголовок и не текст: владелец, собравший
+      // свой список отложенного, второй такой же блок получить не должен.
+      const user = freshUserId();
+      const caller = callerFor(user);
+      await caller.user.seedOnboarding();
+      await setRoutinesBody(
+        user,
+        `${ROUTINES_BODY_WITHOUT_BATCH}\n\n{{query:aspect=orbis/agent-run, orbis/undecided=true, sortBy=orbis/updated_at:desc, display=list, title=Отложенное}}`,
+      );
+
+      expect(await caller.user.seedOnboarding()).toEqual({ seeded: false });
+      const after = await routinesBody(user);
+      expect(queryBlocksOf(after.body).length).toBe(3);
+      expect(after.body).not.toContain('Пачка решений');
+      expect(after.updatedAt.toISOString()).toBe('2026-08-01T00:00:00.000Z');
     });
 
     test('владелец, засиденный ДО «Рутин» вовсе: досев вставляет список сразу с тремя блоками', async () => {

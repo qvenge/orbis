@@ -39,6 +39,7 @@
 // «снимать ли индекс» из этого НЕ следует автоматически: под админ-DSN ходят сиды, скрипты
 // и `ops.ts`, и для них индексы работают. Решение — за владельцем спеки и Задачей 23.
 import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { bindQueryBlocks, parseBody, queryRefsFromDoc } from '@orbis/shared/doc';
 import { type SQL, sql } from 'drizzle-orm';
 import { withIdentity } from '../src/db/with-identity';
 import { MEMORY_ASPECT } from '../src/memory/rules';
@@ -49,7 +50,7 @@ import { compileCountAst } from '../src/query/compile-ast';
 // переименование прошло мимо него молча: до этой правки прогон падал ещё на импорте —
 // `SyntaxError: Export named 'loadRegistry' not found`. Чинится здесь, потому что иначе
 // переносить сюда замер было бы некуда (Задача 18, ре-ревью).
-import { effectiveRegistry } from '../src/registry/cache';
+import { effectiveRegistry, parseRegistryOfSnapshot } from '../src/registry/cache';
 import type { RegistrySnapshot } from '../src/registry/load';
 import {
   ensureGraphFixture,
@@ -231,23 +232,78 @@ test('форма предиката памяти: под ролью прилож
   expect(`admin: @>=${admin.contains} =ANY=${admin.anyElement}`).toBe('admin: @>=true =ANY=false');
 }, 300_000);
 
-test('вердикт по entities_query_refs_gin: писателя ещё нет (рулинг Р-П-1)', async () => {
-  // Колонка `query_refs` пуста у всех строк: её писатель появляется только в Задаче 21
-  // (ссылки внутри тел). Поэтому индекс ИЗЪЯТ из правила «неподтверждённый снимается», а
-  // вердикт по нему снимается в Задаче 23 — здесь печатается то, что можно измерить сейчас.
-  const rows = await withIdentity(db, GRAPH_OWNER_ID, async (tx) => [
-    ...(await tx.execute(sql`
-      SELECT count(*) FILTER (WHERE query_refs <> '{}') AS filled FROM entities
-       WHERE owner_id = ${GRAPH_OWNER_ID}::uuid`)),
-  ]);
-  const filled = Number((rows[0] as { filled?: unknown })?.filled);
-  const query = sql`SELECT count(*) FROM entities e WHERE query_refs @> ARRAY['019eb2f4-1a00-7b6e-9c01-5d2f8a3b4c10']`;
+test('вердикт по entities_query_refs_gin: колонка заполнена, вердикт снят', async () => {
+  // ДО Задачи 21b здесь стояло `expect(filled).toBe(0)` с объяснением «писателя ещё нет».
+  // Писатель появился (21a завела `query_refs`, 21b — сиды и слияние), а утверждение
+  // осталось бы зелёным навсегда: корпус объёма пишется прямым INSERT'ом с `queryRefs: []`
+  // и живого писателя не зовёт вовсе. То есть вердикт снимался бы с ПУСТОЙ колонки — на
+  // пустом индексе планировщик не выбирает ничего, и «не используется» означало бы
+  // «нечего искать», а не «RLS не пускает». Файл вне `bun run test`, и покраснеть этому
+  // было негде (класс дефекта 12 ветки).
+  //
+  // Поэтому колонка заполняется здесь — и ЗНАЧЕНИЕМ ИЗ БОЕВОГО ПРОИЗВОДИТЕЛЯ
+  // (`queryRefsFromDoc` по привязанному документу), а не выдуманным массивом: индекс должен
+  // мерить то, что кладёт продукт. Строки — те же RARE-узлы, что и у остальных вердиктов
+  // (каждая RARE_EVERY-я), поэтому селективность сравнима.
+  const parseReg = parseRegistryOfSnapshot(reg);
+  const body = `{{query:aspect=${RARE_ASPECT}, ${RARE_PROPERTY}=${RARE_VALUE}}}`;
+  const refs = queryRefsFromDoc(bindQueryBlocks(parseBody(body), parseReg));
+  // Страховка осмысленности: производитель обязан вернуть НЕПУСТОЙ индекс — иначе
+  // заполнение ниже записало бы `{}` и вердикт снова снимался бы с пустой колонки.
+  expect(refs).toContain(RARE_PROPERTY);
+
+  const { db: admin, client: adminClient } = adminDb();
+  let filled = 0;
+  try {
+    // СБРОС ПЕРЕД ЗАМЕРОМ, а не «заполним, если пусто». Корпус кешируется между прогонами
+    // (`ensureGraphFixture` сверяет только счётчики строк), и без сброса второй прогон
+    // проходил бы на колонке, заполненной первым, — то есть проверка «колонка непуста»
+    // зеленела бы и при снятом заполнении. Проверено мутацией: без этого сброса снятие
+    // UPDATE ниже прогон не краснило.
+    await admin.execute(sql`
+      UPDATE entities SET query_refs = '{}'
+       WHERE owner_id = ${GRAPH_OWNER_ID}::uuid AND query_refs <> '{}'`);
+    const before = (await admin.execute(sql`
+      SELECT count(*)::int AS n FROM entities
+       WHERE owner_id = ${GRAPH_OWNER_ID}::uuid AND query_refs <> '{}'`)) as unknown as {
+      n: number;
+    }[];
+    // Заодно утверждение о САМОМ КОРПУСЕ: он пишется прямым INSERT'ом и колонку не трогает.
+    expect(before[0]?.n).toBe(0);
+
+    await admin.execute(sql`
+      UPDATE entities SET query_refs = ${sql.join(
+        [
+          sql`ARRAY[`,
+          sql.join(
+            refs.map((r) => sql`${r}`),
+            sql`, `,
+          ),
+          sql`]::text[]`,
+        ],
+        sql``,
+      )}
+       WHERE owner_id = ${GRAPH_OWNER_ID}::uuid AND props ? ${RARE_PROPERTY}`);
+    const after = (await admin.execute(sql`
+      SELECT count(*)::int AS n FROM entities
+       WHERE owner_id = ${GRAPH_OWNER_ID}::uuid AND query_refs <> '{}'`)) as unknown as {
+      n: number;
+    }[];
+    filled = after[0]?.n ?? 0;
+  } finally {
+    await adminClient.end();
+  }
+  expect(filled).toBeGreaterThan(0);
+
+  const query = sql`SELECT count(*) FROM entities e WHERE query_refs @> ARRAY[${RARE_PROPERTY}]::text[]`;
   const v = await verdictFor(
     'entities_query_refs_gin',
     query,
-    `query_refs заполнены у ${filled} строк из ${GRAPH_ENTITIES} — писатель приезжает в Задаче 21`,
+    `query_refs заполнены у ${filled} строк из ${GRAPH_ENTITIES}; ищется ${RARE_PROPERTY}`,
   );
-  expect(filled).toBe(0);
+  // Как и у остальных вердиктов: тест не решает, снимать ли индекс, — он утверждает, что
+  // вердикт снят по НЕПУСТОЙ колонке и однозначен. Решение — Задача 23.
+  expect(typeof v.chosen).toBe('boolean');
   expect(typeof v.usable).toBe('boolean');
 }, 300_000);
 

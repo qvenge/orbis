@@ -114,15 +114,16 @@ const BUDGETS_MS: Record<string, number> = {
 // одном месте без правки в другом возвращает дефект, ради которого сторож и написан.
 
 // Список Browser'а: страница на 50 незакрытых задач.
-const LIST50_QUERY = 'aspect=orbis/task, status=!done, sortBy=updated_at:desc, limit=50';
+const LIST50_QUERY =
+  'aspect=orbis/task, orbis/task_status=!done, sortBy=orbis/updated_at:desc, limit=50';
 
 // Бейдж smart list «Inbox» (02-core-os §3.3): count без limit.
-const BADGE_QUERY = 'aspect=orbis/task, status=inbox';
+const BADGE_QUERY = 'aspect=orbis/task, orbis/task_status=inbox';
 
 // Горизонт Agenda — дословно AGENDA_DAYS_QUERY клиента
 // (apps/web/src/features/agenda/useAgenda.ts): мерить надо то, что реально уходит.
 const AGENDA_DAYS_QUERY =
-  'aspect=orbis/schedule, start_at=today|next_7d, sortBy=start_at:asc, limit=200';
+  'aspect=orbis/schedule, orbis/start_at=today|next_7d, sortBy=orbis/start_at:asc, limit=200';
 
 // Состав detail-чтения — ровно тот, что уходит с экрана сущности
 // (apps/web/src/features/entity-detail/useEntityDetail.ts, DETAIL_INCLUDE).

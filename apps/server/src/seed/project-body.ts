@@ -5,8 +5,14 @@
 /**
  * Заготовка тела проекта (С10): проза процесса + живые query-блоки. Засевается executor'ом,
  * когда на сущность приходит orbis/project при пустом теле — путь один для чата, MCP и UI.
- * Тикеты — дети проекта; прогоны — внуки (проект → тикет → прогон), поэтому их достаёт не
- * связь, а плоское поле project_id самого прогона.
+ *
+ * ТИКЕТЫ — ДЕТИ ПРОЕКТА, ПРОГОНЫ — ВНУКИ (проект → тикет → прогон), и связь их не достаёт:
+ * `children_of=` спускается ровно на один уровень. Раньше их доставало плоское поле
+ * `project_id` самого прогона — ручная денормализация, которую §А8 УДАЛИЛ вместе со строкой
+ * реестра; с тех пор блок отвечал не пустым списком, а отказом `UNKNOWN_FIELD`. Теперь
+ * прогон адресуется ВЫЧИСЛЯЕМЫМ свойством `orbis/parent_project` (правило `nearest_ancestor`,
+ * движок — `executor/ancestors.ts`): оно ставится на каждую сущность под проектом, то есть
+ * знает и про внуков, и его не надо писать руками.
  *
  * ВЕЗДЕ ПОДСТАВЛЕН UUID, а не `this`, — и это про место чтения, а не про грамматику. `this`
  * разрешается только из контекста сущности (`query/compile-ast.ts`, `relTarget`), то есть работает,
@@ -16,9 +22,11 @@
  * тела блок скопировали», а не «текущий экран»), блок отвечает структурной ошибкой. Проект
  * уже известен в момент засева, и заготовке незачем зависеть от того, откуда на неё смотрят.
  *
- * Шаблон КАНОНИЧЕН (проверено project-body.test.ts): executor кладёт в тело результат
- * canonicalizeBody, и любое расхождение сдвигало бы заготовку на первом же сохранении.
- * Отсюда, в частности, отсутствие завершающего перевода строки: канон его снимает.
+ * Шаблон КАНОНИЧЕН И НАПИСАН KEY-ФОРМОЙ ПЕЧАТИ (проверено `project-body.test.ts`): executor
+ * кладёт в тело результат `parseBody → bindQueryBlocks → serializeBody`, и любое расхождение
+ * сдвигало бы заготовку на первом же сохранении. Отсюда, в частности, отсутствие
+ * завершающего перевода строки (канон его снимает), отсутствие пробела после `{{query:` и
+ * кавычки у многословных заголовков — их ставит `quoteQueryValue`, а не автор шаблона.
  */
 export function projectBodyTemplate(projectId: string): string {
   return [
@@ -28,18 +36,18 @@ export function projectBodyTemplate(projectId: string): string {
     '',
     '## В работе',
     '',
-    `{{query: children_of=${projectId}, aspect=orbis/task, status=in_progress, sortBy=updated_at:desc, display=list, title=В работе}}`,
+    `{{query:children_of=${projectId}, aspect=orbis/task, orbis/task_status=in_progress, sortBy=orbis/updated_at:desc, display=list, title="В работе"}}`,
     '',
     '## Ждут меня',
     '',
-    `{{query: children_of=${projectId}, aspect=orbis/task, status=waiting, sortBy=updated_at:asc, display=list, title=Ждут меня}}`,
+    `{{query:children_of=${projectId}, aspect=orbis/task, orbis/task_status=waiting, sortBy=orbis/updated_at:asc, display=list, title="Ждут меня"}}`,
     '',
     '## Бэклог',
     '',
-    `{{query: children_of=${projectId}, aspect=orbis/task, status=inbox|planned, sortBy=priority:desc|created_at:asc, display=list, title=Бэклог}}`,
+    `{{query:children_of=${projectId}, aspect=orbis/task, orbis/task_status=inbox|planned, sortBy=orbis/priority:desc|orbis/created_at:asc, display=list, title=Бэклог}}`,
     '',
     '## Последние прогоны',
     '',
-    `{{query: aspect=orbis/agent-run, project_id=${projectId}, sortBy=created_at:desc, limit=10, display=compact, title=Последние прогоны}}`,
+    `{{query:aspect=orbis/agent-run, orbis/parent_project=${projectId}, sortBy=orbis/created_at:desc, limit=10, display=compact, title="Последние прогоны"}}`,
   ].join('\n');
 }

@@ -88,9 +88,10 @@ test('сохранение изменённого текста заменяет 
   );
 });
 
-// Р3, сквозная проверка. Сидированные списки многострочные, с 9-пробельными отступами
-// continuation-строк, а сериализатор по построению даёт ОДНУ строку: пересборка блока из
-// формы схлопнула бы их — «ничего не менял, а запись переписалась».
+// Р3, сквозная проверка: «открыл форму валидного блока и нажал Сохранить» не обязано
+// давать правку документа. Сид написан печатью (`seed-canon.test.ts`), поэтому схлопывать
+// здесь уже нечего — но правило сторожит не только сид: любая пересборка блока из формы
+// пометила бы запись изменённой и подняла бы фантомное автосохранение.
 test('сохранение формы без изменений документ не трогает', async () => {
   const s = mountBody(DAILY_PLANNING_BODY);
   const dialog = await openBlockEditor(1);
@@ -101,7 +102,7 @@ test('сохранение формы без изменений документ
 
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   // Правка, не меняющая смысла, до сохранения не доезжает вовсе (сравнение по смыслу в
-  // BodyEditor): схлопнись многострочный блок в одну строку — тут была бы правка.
+  // BodyEditor): пересоберись блок иначе, чем он записан, — тут была бы правка.
   expect(s.onChange).not.toHaveBeenCalled();
 });
 
@@ -254,13 +255,17 @@ test('поле редактора имеет доступное имя и фок
 // показывать красную плашку — «почини то, чего уже нет».
 test('сообщение об ошибке пересчитывается по мере правки', async () => {
   renderWithProviders(
-    <QueryTextEditor initial="tags=work, status=" onSave={() => {}} onCancel={() => {}} />,
+    <QueryTextEditor
+      initial="tags=work, orbis/task_status="
+      onSave={() => {}}
+      onCancel={() => {}}
+    />,
     editorHandler,
   );
   const field = await screen.findByLabelText('Текст запроса');
   await screen.findByTestId('query-text-error');
 
-  fireEvent.change(field, { target: { value: 'tags=work, status=inbox' } });
+  fireEvent.change(field, { target: { value: 'tags=work, orbis/task_status=inbox' } });
   await waitFor(() => expect(screen.queryByTestId('query-text-error')).toBeNull());
 });
 

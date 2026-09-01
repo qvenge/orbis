@@ -676,7 +676,7 @@ describe('/mcp: паттерн «что нового» (§9.3, сценарий 
     const agent = await connectAgent(mainUrl());
     try {
       // До обновления владельцем курсор задачу НЕ находит (сравнение моментов §6.1)
-      const before = await callTool(agent, 'entity_query', { query: `updated_at>${cursor}` });
+      const before = await callTool(agent, 'entity_query', { query: `orbis/updated_at>${cursor}` });
       expect(before.isError).toBe(false);
       expect((before.payload.result as WireEntity[]).map((e) => e.id)).not.toContain(task.id);
 
@@ -684,7 +684,7 @@ describe('/mcp: паттерн «что нового» (§9.3, сценарий 
       await ownerCaller.entity.update({ id: task.id, title: 'Отчёт за квартал (срочно)' });
 
       // 1) entity_query по курсору находит изменённую сущность
-      const found = await callTool(agent, 'entity_query', { query: `updated_at>${cursor}` });
+      const found = await callTool(agent, 'entity_query', { query: `orbis/updated_at>${cursor}` });
       expect(found.isError).toBe(false);
       expect((found.payload.result as WireEntity[]).map((e) => e.id)).toContain(task.id);
 

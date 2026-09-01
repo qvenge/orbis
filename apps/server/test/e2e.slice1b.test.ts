@@ -301,7 +301,9 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
       cursor0 = new Date(Date.parse(updatedAt) + 1).toISOString();
 
       // До правки статуса: курсор задачу НЕ находит — инструкция в треде updated_at не двигала
-      const before = await callTool(agent, 'entity_query', { query: `updated_at>${cursor0}` });
+      const before = await callTool(agent, 'entity_query', {
+        query: `orbis/updated_at>${cursor0}`,
+      });
       expect(before.isError).toBe(false);
       expect((before.payload.result as WireEntity[]).map((e) => e.id)).not.toContain(task1Id);
 
@@ -312,7 +314,7 @@ describe('e2e слайс 1b: агент через MCP ведёт проект �
       });
 
       // Теперь тот же курсор ловит задачу — updated_at пересёк курсор
-      const after = await callTool(agent, 'entity_query', { query: `updated_at>${cursor0}` });
+      const after = await callTool(agent, 'entity_query', { query: `orbis/updated_at>${cursor0}` });
       expect(after.isError).toBe(false);
       expect((after.payload.result as WireEntity[]).map((e) => e.id)).toContain(task1Id);
     } finally {

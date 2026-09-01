@@ -36,14 +36,15 @@ const at = (day: string, time: string) => `${day}T${time}:00+03:00`;
 // Скопированы дословно; на web-стороне они пиннятся тестом «Agenda шлёт три запроса
 // грамматики §6.1 дословно», поэтому расхождение поймает та проверка, а не молчание.
 
-const DAYS_QUERY = 'aspect=orbis/schedule, start_at=today|next_7d, sortBy=start_at:asc, limit=200';
+const DAYS_QUERY =
+  'aspect=orbis/schedule, orbis/start_at=today|next_7d, sortBy=orbis/start_at:asc, limit=200';
 const OVERDUE_DUE_QUERY =
-  'aspect=orbis/task, due_date=overdue, status=!done&!cancelled, sortBy=due_date:asc, limit=200';
+  'aspect=orbis/task, orbis/due_date=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=200';
 const OVERDUE_START_QUERY =
-  'aspect=orbis/task, aspect=orbis/schedule, start_at=overdue, status=!done&!cancelled, sortBy=start_at:asc, limit=200';
+  'aspect=orbis/task, aspect=orbis/schedule, orbis/start_at=overdue, orbis/task_status=!done&!cancelled, sortBy=orbis/start_at:asc, limit=200';
 
 /** Browser без фильтров (apps/web/src/features/browser/query.ts browserQuery). */
-const BROWSER_QUERY = 'sortBy=updated_at:desc, limit=50';
+const BROWSER_QUERY = 'sortBy=orbis/updated_at:desc, limit=50';
 
 /** N-й {{query:}}-блок body smart-list'а — тот же разбор, что в onboarding.test.ts. */
 function queryBlock(body: string, index: number): string {

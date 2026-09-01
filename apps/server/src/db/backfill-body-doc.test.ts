@@ -108,12 +108,34 @@ test('конвертирует тела без документа и повто�
 
 test('проекция сконвертированного совпадает с исходным body', async () => {
   await truncateAll();
-  const body = 'текст\n\n{{query: aspect=orbis/task, status=inbox}}';
+  const body = 'текст\n\n{{query:aspect=orbis/task, orbis/task_status=inbox}}';
   const id = await insertBody(body);
   await backfillBodyDoc(io);
   const row = await readRow(id);
   expect(row.body).toBe(body); // тело уже канон — бэкфилл его не трогает
   expect(serializeBody(row.bodyDoc as never)).toBe(body);
+});
+
+test('ИЗВЕСТНЫЙ ПРЕДЕЛ: конверсия не привязывает блоки и не пишет query_refs', async () => {
+  // Это НЕ дефект, который забыли, а граница, названная вслух и потому проверяемая.
+  // Бэкфилл ходит админ-DSN по ВСЕМ владельцам сразу, реестра у него нет ни одного, а
+  // привязка блока к реестру — операция владельца (`bindQueryBlocks`). Поэтому документ
+  // приезжает с `ast: null` и индекс адресов остаётся пустым.
+  //
+  // ЧТО ЭТО ЗНАЧИТ ДЛЯ ПРОДУКТА: сконвертированная строка не видна перечню держателей
+  // свойства (`collectPropertyHolders` ищет по `query_refs`) до первого сохранения тела
+  // через исполнителя. Пересев Задачи 23 снимает вопрос целиком — строк без документа не
+  // остаётся вовсе. Тест стоит здесь, чтобы предел нельзя было принять за случайность:
+  // измени кто-нибудь поведение, красное покажет, что граница сдвинулась.
+  await truncateAll();
+  const id = await insertBody('{{query:aspect=orbis/task, orbis/task_status=inbox}}');
+  await backfillBodyDoc(io);
+  const rows = (await admin.execute(
+    sql`SELECT body_doc, query_refs FROM entities WHERE id = ${id}`,
+  )) as unknown as Array<{ body_doc: unknown; query_refs: string[] }>;
+  const row = rows[0] as { body_doc: unknown; query_refs: string[] };
+  expect(JSON.stringify(row.body_doc)).toContain('"ast":null');
+  expect(row.query_refs).toEqual([]);
 });
 
 test('бэкфилл выравнивает body до канона', async () => {
@@ -166,7 +188,7 @@ test('инвариант пары держится на всём тронуто�
     '',
     '# Заголовок',
     '* раз\n* два',
-    'текст\n\n{{query: aspect=orbis/task, status=inbox}}',
+    'текст\n\n{{query:aspect=orbis/task, orbis/task_status=inbox}}',
     '<div>непонятое</div>',
     'a\r\nb',
     '| a | b |\n|---|---|\n| x \\| y | z |',

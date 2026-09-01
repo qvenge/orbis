@@ -38,6 +38,15 @@ import {
   propertyDefinitionSchema,
 } from '@orbis/shared';
 import {
+  type BodyDoc,
+  bindQueryBlocks,
+  bodyRefsFromDoc,
+  parseBody,
+  queryRefsFromDoc,
+  readBodyDoc,
+  serializeBody,
+} from '@orbis/shared/doc';
+import {
   assertStaticQuery,
   QUERY_TREE_DEPTH_CAP,
   type QueryAst,
@@ -45,9 +54,10 @@ import {
   queryTreeExceedsDepth,
   ScopeNotStaticError,
 } from '@orbis/shared/query';
-import { sql } from 'drizzle-orm';
+import { type SQL, sql } from 'drizzle-orm';
 import type { Tx } from '../db/with-identity';
 import { ExecError } from '../errors';
+import { parseRegistryOfSnapshot } from './cache';
 import { type AspectDelta, applyDeltas, aspectDeltaSchema } from './deltas';
 import { loadRegistryDeltas, loadRegistryRows, type RegistrySnapshot } from './load';
 import { bumpOwnerRegistryVersion, readRegistryVersions } from './version';
@@ -612,12 +622,13 @@ async function propertyUsage(
   const rows = (await tx.execute(sql`
     SELECT count(*)::int AS n FROM entities WHERE props ? ${id}`)) as unknown as { n: number }[];
   const holders = await collectPropertyHolders(tx, ownerId);
-  // ССЫЛКА ИЩЕТСЯ ПО ОБОИМ ИМЕНАМ, и это не перестраховка. Держатель-ДЕРЕВО называет
-  // свойство id (§А5-7), а держатель-ТЕКСТ (`{{query:…}}` в теле) — только key (§А5-3а), и
-  // uuid в тексте не нашёлся бы никогда: `KEY_TOKEN_RE` требует слэша, которого в uuid нет.
-  // Спрашивая один id, физическое удаление §А10-3 сносило бы строку из-под живой ссылки в
-  // теле — то самое «висение», которое §А10-3 обещает невозможным. Слияние тот же вопрос
-  // задаёт двумя именами (`names` ниже), и разойтись этим двум местам нельзя.
+  // ССЫЛКА ИЩЕТСЯ ПО ОБОИМ ИМЕНАМ, и это не перестраховка. В дереве §А5-7 лежит id, но
+  // дерево приезжает и снаружи — входом `ast:` тула и значением `progress_source`, — а
+  // резолвер границы принимает и key (`resolvePropertyRef`), и никто такое дерево к id не
+  // нормализует. Значит и в `query_refs`, и в значении цели адрес может оказаться ключом.
+  // Спрашивая один id, физическое удаление §А10-3 сносило бы строку из-под живой ссылки —
+  // то самое «висение», которое §А10-3 обещает невозможным. Слияние тот же вопрос задаёт
+  // двумя именами (`names` ниже), и разойтись этим двум местам нельзя.
   return {
     values: Number(rows[0]?.n ?? 0),
     refs: holders.filter((h) => h.properties.includes(id) || h.properties.includes(key)).length,
@@ -720,9 +731,20 @@ export async function updateProperty(
  *  - `registry` — `scope` и `ref.target` СВОЕЙ строки реестра (дерево, адрес — id);
  *  - `progress_source` — значение свойства `orbis/progress_source` на записи (§А5-2;
  *    дерево, адрес — id);
- *  - `body` — блок `{{query:…}}` в теле записи. Он несёт ТЕКСТ запроса, а не дерево, и
- *    ссылка в нём — namespaced key (§А5-3а). С Задачи 21 таких обходов не будет: тела
- *    найдёт `query_refs`; до неё — честный обход тел владельца;
+ *  - `body` — query-блок в теле записи. Блок несёт ДЕРЕВО (§А11-1), и адреса из этого
+ *    дерева денормализованы в колонку `query_refs` — по ней держатели и ищутся. Обхода
+ *    markdown здесь больше нет: он не отличал адрес от строки (любое `a/b` внутри блока,
+ *    включая написанный владельцем `title=`, считалось ссылкой) и не видел адресацию
+ *    закавыченной подписью (§А5-3а). ЦЕНА, названная вслух: перечень ровно настолько полон,
+ *    насколько полна колонка, — писатель тела, её не заполняющий, делает свою запись
+ *    невидимой и для слияния, и для пробы §А10-3. Писателей ЧЕТВЕРО, и колонку пишут ТРИ:
+ *    исполнитель (`executor/body-fields.ts`), сид (`seed/onboarding.ts`) и само слияние
+ *    вместе с откатом (ниже в этом файле). Четвёртый — разовая конверсия корпуса
+ *    `db/backfill-body-doc.ts` — НЕ пишет её и блоки не привязывает: реестра у неё нет, она
+ *    идёт админ-DSN по всем владельцам сразу. Строка, сконвертированная ею, для перечня
+ *    невидима до первого сохранения тела через исполнителя; расхождение известное
+ *    (`backfill-body-doc.test.ts` его пиннит) и снимается пересевом Задачи 23, после
+ *    которого строк без документа не остаётся вовсе;
  *  - `delta` — строка `registry_deltas` (§А3-2). Дерева не несёт вовсе, но адресует
  *    свойства пятью полями: `properties.add[].propertyId`, `properties.hide[]`,
  *    `properties.relaxRequired[]`, КЛЮЧИ `properties.rank{}` и КЛЮЧИ `selectOptions{}`.
@@ -759,15 +781,13 @@ function propertyNamesInAst(value: unknown, out: Set<string>): void {
   }
 }
 
-/** Имена свойств в ТЕКСТЕ запроса тела: namespaced key как отдельный токен. */
+/**
+ * Namespaced key как отдельный токен — для переписывания имени в ТЕКСТЕ неразобранного
+ * блока (у него дерева нет, и адрес в нём только текстом).
+ *
+ * Замена токенная, а не подстрочная: `user/effort` не должен ловиться в `user/effort-2`.
+ */
 const KEY_TOKEN_RE = /[a-z][a-z0-9-]*\/[a-z][a-z0-9_-]*/g;
-const QUERY_BLOCK_RE = /\{\{query:([\s\S]*?)\}\}/g;
-
-function propertyNamesInBody(body: string, out: Set<string>): void {
-  for (const block of body.matchAll(QUERY_BLOCK_RE)) {
-    for (const token of (block[1] ?? '').matchAll(KEY_TOKEN_RE)) out.add(token[0]);
-  }
-}
 
 /** Имена свойств, названные ДЕЛЬТОЙ аспекта: пять полей, перечисленных у `PropertyHolder`. */
 function propertyNamesInDelta(delta: unknown, out: Set<string>): void {
@@ -814,12 +834,14 @@ export async function collectPropertyHolders(tx: Tx, ownerId: string): Promise<P
     }
   }
 
+  // `query_refs` несёт адреса ИЗ ДЕРЕВА: id свойств и ролей, id аспектов, а у связей —
+  // uuid цели (`children_of=<id>`). Всё, что не резолвится в свойство, дальше отсеется само
+  // — и у слияния (множество имён источника), и у графа зависимостей (`byAlias`).
   const bodyRows = (await tx.execute(sql`
-    SELECT id, body FROM entities WHERE body LIKE '%{{query:%'`)) as unknown as RawRow[];
+    SELECT id, query_refs FROM entities WHERE query_refs <> '{}'`)) as unknown as RawRow[];
   for (const r of bodyRows) {
-    const names = new Set<string>();
-    propertyNamesInBody(String(r.body ?? ''), names);
-    if (names.size > 0) out.push({ kind: 'body', id: r.id as string, properties: [...names] });
+    const names = (r.query_refs ?? []) as string[];
+    if (names.length > 0) out.push({ kind: 'body', id: r.id as string, properties: [...names] });
   }
 
   // Дельты — четвёртый род. Читаются ВСЕ цели, а не только `aspect`: строка вида
@@ -987,8 +1009,22 @@ export interface MergeInverse {
   registry: Array<{ id: string; scope: unknown; type: unknown }>;
   /** Записи с переписанным `orbis/progress_source`: прежнее значение. */
   progress: Array<{ entityId: string; value: unknown }>;
-  /** Записи с переписанным телом: прежние `body` и `body_doc` целиком. */
-  bodies: Array<{ entityId: string; body: string; bodyDoc: unknown }>;
+  /**
+   * Записи с переписанным телом: прежние `body`, `body_doc` и ОБА индекса имён целиком.
+   *
+   * Индексы лежат в inverse СНИМКОМ, а не пересчитываются на откате из восстановленного
+   * документа. Пересчёт дал бы «правильное» значение вместо ПРЕЖНЕГО, а это разные вещи:
+   * `body_refs` денормализован и по корпусу местами расходится с телом (`db/backfill-body-doc.ts`
+   * переписывает текст и сам индекс не пересчитывает — задокументировано его тестом), и
+   * откат, «чинящий» такую строку, перестал бы быть байт-в-байт.
+   */
+  bodies: Array<{
+    entityId: string;
+    body: string;
+    bodyDoc: unknown;
+    bodyRefs?: string[];
+    queryRefs?: string[];
+  }>;
   /** Строки `registry_deltas` с переписанными адресами: прежняя дельта целиком. */
   deltas: Array<{ id: string; delta: unknown }>;
 }
@@ -1138,6 +1174,21 @@ export function resolveMergePair(
   return { source, into };
 }
 
+/**
+ * `ARRAY[$1, $2]::text[]` — каждый элемент параметром.
+ *
+ * Своя копия по той же причине, что у близнецов в `query/compile-ast.ts` и `registry/ref.ts`:
+ * массив JS шаблон `sql` drizzle разворачивает в КОРТЕЖ `($1,…,$N)`, а `record` к `text[]`
+ * не приводится — запрос падает `cannot cast type record to text[]` уже на исполнении
+ * (проверено: этот UPDATE так и упал до правки).
+ */
+function textArray(values: readonly string[]): SQL {
+  return sql`ARRAY[${sql.join(
+    values.map((v) => sql`${v}`),
+    sql`, `,
+  )}]::text[]`;
+}
+
 /** Переписать имена свойств внутри произвольного JSON-дерева (`prop`/`has`/`field`). */
 function rewriteAst(value: unknown, from: ReadonlySet<string>, to: string): unknown {
   if (Array.isArray(value)) return value.map((v) => rewriteAst(v, from, to));
@@ -1150,18 +1201,6 @@ function rewriteAst(value: unknown, from: ReadonlySet<string>, to: string): unkn
         : rewriteAst(v, from, to);
   }
   return out;
-}
-
-/**
- * Переписать имя свойства ВНУТРИ блоков `{{query:…}}` текста.
- *
- * Замена токенная, а не подстрочная: `user/effort` не должен ловиться в `user/effort-2`.
- * И только внутри блока: тот же текст в прозе — не ссылка, а слово, и трогать его нельзя.
- */
-function rewriteQueryText(text: string, from: ReadonlySet<string>, to: string): string {
-  return text.replace(QUERY_BLOCK_RE, (block) =>
-    block.replace(KEY_TOKEN_RE, (token) => (from.has(token) ? to : token)),
-  );
 }
 
 /**
@@ -1179,7 +1218,8 @@ export async function mergeProperty(
   ownerId: string,
   input: { source: string; into: string },
 ): Promise<MergeResult> {
-  const { source, into } = resolveMergePair(await currentRegistry(tx, ownerId), input);
+  const reg = await currentRegistry(tx, ownerId);
+  const { source, into } = resolveMergePair(reg, input);
   const conflicts = await mergeValueConflicts(tx, source.id, into.id);
   if (conflicts.length > 0) {
     throw new ExecError(
@@ -1234,6 +1274,10 @@ export async function mergeProperty(
   // вовсе (Р10), а появится она — переименование обязано будет пройти по тем же держателям.
   const astTarget = into.id;
   const textTarget = into.key;
+  // Снимок разбора — из ТОГО ЖЕ реестра, которым резолвилась пара: печать key-формы блока
+  // обязана знать `into.key`, а собранный после слияния снимок читал бы уже поглощённую
+  // строку.
+  const parseReg = parseRegistryOfSnapshot(reg);
   const holders = (await collectPropertyHolders(tx, ownerId)).filter((h) =>
     h.properties.some((p) => names.has(p)),
   );
@@ -1290,17 +1334,45 @@ export async function mergeProperty(
       continue;
     }
     const rows = (await tx.execute(sql`
-      SELECT body, body_doc FROM entities WHERE id = ${holder.id}::uuid FOR UPDATE
+      SELECT body, body_doc, body_refs, query_refs FROM entities
+       WHERE id = ${holder.id}::uuid FOR UPDATE
     `)) as unknown as RawRow[];
     const row = rows[0];
     if (row === undefined) continue;
     const body = String(row.body ?? '');
-    bodies.push({ entityId: holder.id, body, bodyDoc: row.body_doc ?? null });
-    const nextDoc = rewriteBodyDoc(row.body_doc ?? null, names, textTarget);
+    bodies.push({
+      entityId: holder.id,
+      body,
+      bodyDoc: row.body_doc ?? null,
+      bodyRefs: (row.body_refs ?? []) as string[],
+      queryRefs: (row.query_refs ?? []) as string[],
+    });
+    // ПРАВДА ТЕЛА — ДОКУМЕНТ (§А11-1), и переписывается он первым; `body` пересобирается из
+    // него печатью, а не вторым регэкспом по markdown. Два независимых переписывания одной
+    // вещи разъезжаются молча — ровно это и случилось: атрибут блока сменил имя, регэксп по
+    // `body` продолжал работать, а документ переставал переписываться вовсе.
+    //
+    // `readBodyDoc` берёт на себя и строку без документа (`body_doc IS NULL` — ленивая
+    // конверсия): она собирается из markdown и привязывается тем же реестром. Слияние
+    // МАТЕРИАЛИЗУЕТ такой документ, и это названная цена: операция, переписывающая имена,
+    // которые документ и держит, не может оставить «ещё не сконвертировано» — иначе
+    // следующее чтение собрало бы документ из УЖЕ переписанного текста, а первое
+    // сохранение вернуло бы его в базу как правду, минуя проверку слияния.
+    const nextDoc = bindQueryBlocks(
+      rewriteBodyDoc(
+        readBodyDoc(row.body_doc ?? null, body, parseReg),
+        names,
+        astTarget,
+        textTarget,
+      ),
+      parseReg,
+    );
     await tx.execute(sql`
       UPDATE entities
-         SET body = ${rewriteQueryText(body, names, textTarget)},
-             body_doc = ${nextDoc === null ? null : JSON.stringify(nextDoc)}::jsonb,
+         SET body = ${serializeBody(nextDoc)},
+             body_doc = ${JSON.stringify(nextDoc)}::jsonb,
+             body_refs = ${textArray(bodyRefsFromDoc(nextDoc))},
+             query_refs = ${textArray(queryRefsFromDoc(nextDoc))},
              updated_at = now()
        WHERE id = ${holder.id}::uuid`);
   }
@@ -1361,22 +1433,48 @@ export async function mergeProperty(
   };
 }
 
-/** Тот же токенный перенос имени, но по атрибутам `queryBlock` структурного тела. */
-function rewriteBodyDoc(doc: unknown, from: ReadonlySet<string>, to: string): unknown {
-  if (Array.isArray(doc)) return doc.map((d) => rewriteBodyDoc(d, from, to));
-  if (typeof doc !== 'object' || doc === null) return doc;
-  const rec = doc as Record<string, unknown>;
-  if (rec.type === 'queryBlock') {
-    const attrs = (rec.attrs ?? {}) as Record<string, unknown>;
-    if (typeof attrs.query === 'string') {
-      const rewritten = attrs.query.replace(KEY_TOKEN_RE, (t) => (from.has(t) ? to : t));
-      return { ...rec, attrs: { ...attrs, query: rewritten } };
+/**
+ * Перенос имени по query-блокам СТРУКТУРНОГО тела — по ОБЕИМ формам блока сразу.
+ *
+ * Форм две, и цели у них разные (то же различение, что у реестровых держателей выше):
+ * `ast` — правда, и адресует свойство ИДЕНТИФИКАТОРОМ (§А5-7); `text` — печать этого
+ * дерева, и адресует его ТОЛЬКО ключом (§А5-3а). Одной ветки мало ни в одну сторону:
+ * блок без дерева (не разобрался) живёт текстом, и не переписать его значило бы оставить
+ * висячее имя; блок с деревом печатается заново привязкой, и его `text` здесь — лишь
+ * промежуточное состояние.
+ *
+ * Возвращает ДОКУМЕНТ, а не произвольный JSON: вход всегда `BodyDoc`, и типизировать его
+ * `unknown`, как было, значило разрешить звать это по колонке `body_doc` напрямую — то
+ * есть по значению, которое может оказаться и `null`, и документом чужой версии.
+ */
+function rewriteBodyDoc(
+  doc: BodyDoc,
+  from: ReadonlySet<string>,
+  astTo: string,
+  textTo: string,
+): BodyDoc {
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (typeof node !== 'object' || node === null) return node;
+    const rec = node as Record<string, unknown>;
+    if (rec.type === 'queryBlock') {
+      const attrs = (rec.attrs ?? {}) as Record<string, unknown>;
+      return {
+        ...rec,
+        attrs: {
+          ...attrs,
+          ast: attrs.ast == null ? attrs.ast : rewriteAst(attrs.ast, from, astTo),
+          ...(typeof attrs.text === 'string' && {
+            text: attrs.text.replace(KEY_TOKEN_RE, (t) => (from.has(t) ? textTo : t)),
+          }),
+        },
+      };
     }
-    return doc;
-  }
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(rec)) out[k] = rewriteBodyDoc(v, from, to);
-  return out;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rec)) out[k] = walk(v);
+    return out;
+  };
+  return { v: doc.v, doc: walk(doc.doc) as BodyDoc['doc'] };
 }
 
 /**
@@ -1438,10 +1536,25 @@ export async function undoMerge(tx: Tx, ownerId: string, iv: MergeInverse): Prom
        WHERE id = ${p.entityId}::uuid`);
   }
   for (const b of iv.bodies) {
+    // Индексы имён возвращаются ТЕМ ЖЕ UPDATE, что и тело. Не вернуть их значило бы
+    // оставить расхождение, ПЕРЕЖИВШЕЕ транзакцию: тело от старого состояния, `query_refs`
+    // от нового — и держателя, которого слияние переписало, следующий обход по колонке уже
+    // не нашёл бы.
+    //
+    // Ключи читаются ЗАЩИТНО по той же причине, что `iv.deltas` выше: журнал append-only, и
+    // слияния, записанные до этой задачи, обоих индексов не несут. Для них честный запасной
+    // ход — пересчёт из ВОССТАНОВЛЕННОГО документа (а при его отсутствии — из markdown,
+    // где привязки нет и `query_refs` пусты по построению).
+    const restored: BodyDoc | null = (b.bodyDoc ?? null) === null ? null : (b.bodyDoc as BodyDoc);
+    const fallbackDoc = restored ?? parseBody(b.body);
+    const bodyRefs = Array.isArray(b.bodyRefs) ? b.bodyRefs : bodyRefsFromDoc(fallbackDoc);
+    const queryRefs = Array.isArray(b.queryRefs) ? b.queryRefs : queryRefsFromDoc(fallbackDoc);
     await tx.execute(sql`
       UPDATE entities
          SET body = ${b.body},
-             body_doc = ${b.bodyDoc === null ? null : JSON.stringify(b.bodyDoc)}::jsonb,
+             body_doc = ${restored === null ? null : JSON.stringify(restored)}::jsonb,
+             body_refs = ${textArray(bodyRefs)},
+             query_refs = ${textArray(queryRefs)},
              updated_at = now()
        WHERE id = ${b.entityId}::uuid`);
   }

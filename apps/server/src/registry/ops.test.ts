@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { newId } from '@orbis/shared';
 import { parseQueryAst, toParseRegistry } from '@orbis/shared/query';
 import { sql } from 'drizzle-orm';
-import { appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { adminDb, appDb, freshUserId, requireEnv, truncateAll } from '../../test/helpers';
+import { entities } from '../db/schema';
 import type { Tx } from '../db/with-identity';
 import { withIdentity } from '../db/with-identity';
 import { execute } from '../executor/executor';
@@ -14,8 +15,11 @@ import { makeChatJournalSink } from '../executor/journal';
 import type { ExecuteRequest, ExecuteResult } from '../executor/types';
 import { undoAction } from '../executor/undo';
 import { approvePending } from '../policy/pending';
+import { seedOnboarding, seedSmartListId } from '../seed/onboarding';
+import { SEED_SMART_LISTS } from '../seed/smart-lists';
 import { dispatchTool, type ToolDispatchResult } from '../tools/dispatch';
 import { effectiveRegistry } from './cache';
+import { collectPropertyHolders } from './ops';
 import { readRegistryVersions } from './version';
 
 requireEnv();
@@ -474,6 +478,46 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
     return row;
   }
 
+  /** Та же строка, но с ОБОИМИ индексами имён: их пишет тот же UPDATE, что и тело. */
+  async function ownEntityRefs(id: string): Promise<{
+    body: string;
+    body_doc: unknown;
+    body_refs: string[];
+    query_refs: string[];
+  }> {
+    const rows = (await withIdentity(db, mergeOwner, (tx) =>
+      tx.execute(sql`SELECT body, body_doc, body_refs, query_refs FROM entities
+                     WHERE id = ${id}::uuid`),
+    )) as unknown as Array<Record<string, unknown>>;
+    const row = rows[0];
+    if (row === undefined) throw new Error(`сущности ${id} нет`);
+    return {
+      body: String(row.body ?? ''),
+      body_doc: row.body_doc ?? null,
+      body_refs: (row.body_refs ?? []) as string[],
+      query_refs: (row.query_refs ?? []) as string[],
+    };
+  }
+
+  /** Query-блоки документа по порядку: сверять надо АТРИБУТЫ, а не подстроку в JSON. */
+  function queryBlocksOf(doc: unknown, expected: number): Array<{ ast: unknown; text: unknown }> {
+    const found: Array<{ ast: unknown; text: unknown }> = [];
+    const walk = (node: unknown): void => {
+      if (typeof node !== 'object' || node === null) return;
+      const rec = node as Record<string, unknown>;
+      if (rec.type === 'queryBlock') {
+        const attrs = (rec.attrs ?? {}) as Record<string, unknown>;
+        found.push({ ast: attrs.ast ?? null, text: attrs.text ?? null });
+      }
+      for (const child of (rec.content ?? []) as unknown[]) walk(child);
+    };
+    walk((doc as { doc?: unknown })?.doc);
+    if (found.length !== expected) {
+      throw new Error(`ожидалось ${expected} query-блоков, найдено ${found.length}`);
+    }
+    return found;
+  }
+
   test('значения переписаны, merged_into проставлен, AST в progress_source/ref.target переписан; undo → байт-в-байт', async () => {
     // `scope` в этот перечень войти НЕ МОЖЕТ: форма №24 допускает в нём только `aspect=`
     // и `tags=`, то есть ссылки на СВОЙСТВО там не бывает. Реестровую сторону переписывания
@@ -652,6 +696,193 @@ describe('property_merge (§А10-2, приёмка §С8-5)', () => {
       before.refType as never,
     );
     expect(await ownRow(sourceId)).toMatchObject({ merged_into: null, status: 'active' });
+  });
+
+  test('merge свойства переписывает ast и text блока и обновляет query_refs — и в прямой ветке, и в откате', async () => {
+    // Сторож ДВУХ дыр сразу, и обе тихие.
+    //  1. `body_doc` — ПРАВДА тела (§А11-1), а колонка `body` лишь её проекция. Слияние,
+    //     переписавшее проекцию и не тронувшее дерево, оставляет запись, у которой чтение
+    //     с `include=bodyDoc` показывает СТАРОЕ свойство, а первое же сохранение из
+    //     редактора возвращает старый `ast` и в `body` — то есть откатывает слияние.
+    //  2. `body_refs`/`query_refs` — индексы имён, названных телом. Операция, которая эти
+    //     имена и переписывает, обязана переписать индекс: иначе слияние делает колонку
+    //     устаревшей ровно на тех записях, ради которых её и завели.
+    const source = ok(
+      await runMerge('property_create', {
+        key: 'user/weight',
+        label: { ru: 'Вес' },
+        description: { ru: 'Поглощаемое' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const into = ok(
+      await runMerge('property_create', {
+        key: 'user/mass',
+        label: { ru: 'Масса' },
+        description: { ru: 'Цель слияния' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const sourceId = (source.results[0] as { property: string }).property;
+    const intoId = (into.results[0] as { property: string }).property;
+    const intoKey = (into.results[0] as { key: string }).key;
+
+    const mentioned = newId();
+    const listId = newId();
+    ok(
+      await execute(
+        db,
+        {
+          actorUserId: mergeOwner,
+          actorKind: 'owner',
+          source: 'ui',
+          batchId: newId(),
+          operations: [
+            { tool: 'entity_create', input: { id: mentioned, title: 'Упомянутая', tags: [] } },
+            {
+              tool: 'entity_create',
+              input: {
+                id: listId,
+                title: 'Список с блоком',
+                tags: [],
+                // Упоминание в теле — чтобы `body_refs` был НЕпустым: пустой массив
+                // «сохранился» бы и при полностью потерянном пересчёте.
+                //
+                // ВТОРОЙ блок НЕ разбирается (`display=мозаика` — не режим отображения) и
+                // потому живёт ТЕКСТОМ. Он здесь не для полноты: у неразобранного блока
+                // дерева нет, переписать имя в нём можно только по тексту, и без него
+                // текстовая ветка переписывания осталась бы без сторожа (проверено
+                // мутацией — снятие ветки не краснело).
+                body:
+                  `Заметка [[entity:${mentioned}]]\n\n` +
+                  '{{query:aspect=orbis/task, user/weight=5}}\n\n' +
+                  '{{query:user/weight=5, display=мозаика}}',
+              },
+            },
+          ],
+        },
+        { sink },
+      ),
+    );
+
+    const before = await ownEntityRefs(listId);
+    // Предусловие: блок ПРИВЯЗАН и адресует именно источник — иначе всё ниже зеленело бы
+    // на пустом месте.
+    expect(JSON.stringify(before.body_doc)).toContain(sourceId);
+    expect(before.query_refs).toContain(sourceId);
+    expect(before.body_refs).toEqual([mentioned]);
+
+    const merged = ok(await runMerge('property_merge', { source: sourceId, into: intoId }));
+
+    const after = await ownEntityRefs(listId);
+    const [block, unparsed] = queryBlocksOf(after.body_doc, 2) as [
+      { ast: unknown; text: unknown },
+      { ast: unknown; text: unknown },
+    ];
+    expect(JSON.stringify(block.ast)).toContain(intoId);
+    expect(JSON.stringify(block.ast)).not.toContain(sourceId);
+    // `text` блока — печать ЭТОГО дерева: цель у дерева id, у печати key (§А5-3а).
+    expect(block.text).toBe(`aspect=orbis/task, ${intoKey}=5`);
+    // Неразобранный блок: дерева нет, имя переписано ПО ТЕКСТУ — иначе после «успешного»
+    // слияния в теле осталось бы висячее имя поглощённого свойства.
+    expect(unparsed.ast).toBeNull();
+    expect(unparsed.text).toBe(`${intoKey}=5, display=мозаика`);
+    expect(String(after.body)).toContain(`{{query:aspect=orbis/task, ${intoKey}=5}}`);
+    expect(String(after.body)).toContain(`{{query:${intoKey}=5, display=мозаика}}`);
+    expect(after.query_refs).toContain(intoId);
+    expect(after.query_refs).not.toContain(sourceId);
+    // Упоминание тем же UPDATE не потеряно.
+    expect(after.body_refs).toEqual([mentioned]);
+
+    // ОТКАТ возвращает все четыре колонки, а не две: расхождение, пережившее транзакцию,
+    // не отличалось бы от исходного состояния ничем, кроме индекса.
+    const undone = await undoAction(db, {
+      actorUserId: mergeOwner,
+      actionId: merged.actionId,
+    });
+    expect(undone.ok).toBe(true);
+    const back = await ownEntityRefs(listId);
+    expect(back.body).toBe(before.body);
+    expect(back.body_doc).toEqual(before.body_doc as never);
+    expect(back.query_refs).toEqual(before.query_refs);
+    expect(back.body_refs).toEqual(before.body_refs);
+  });
+
+  test('держатели тела берутся из query_refs: имя свойства ВНУТРИ ЗНАЧЕНИЯ — не адрес', async () => {
+    // Держатели тела ищутся ПО ИНДЕКСУ `query_refs` (он собран из дерева), а не токенным
+    // обходом текста блока. Обход не отличал адрес от строки: любое `a/b` внутри блока —
+    // включая заголовок, который владелец написал про себя, — считалось ссылкой на
+    // свойство. Такая запись попадала в держатели, ей двигали `updated_at`, её считали в
+    // отчёте операции («переписано запросов: 2») и переписывали ей текст.
+    const source = ok(
+      await runMerge('property_create', {
+        key: 'user/net-weight',
+        label: { ru: 'Вес нетто' },
+        description: { ru: 'Поглощаемое' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const into = ok(
+      await runMerge('property_create', {
+        key: 'user/gross-weight',
+        label: { ru: 'Вес брутто' },
+        description: { ru: 'Цель слияния' },
+        type: { kind: 'number' },
+        status: 'active',
+      }),
+    );
+    const sourceId = (source.results[0] as { property: string }).property;
+    const intoId = (into.results[0] as { property: string }).property;
+
+    const holder = newId();
+    const bystander = newId();
+    ok(
+      await execute(
+        db,
+        {
+          actorUserId: mergeOwner,
+          actorKind: 'owner',
+          source: 'ui',
+          batchId: newId(),
+          operations: [
+            {
+              tool: 'entity_create',
+              input: {
+                id: holder,
+                title: 'Настоящий держатель',
+                tags: [],
+                body: '{{query:aspect=orbis/task, user/net-weight=5}}',
+              },
+            },
+            {
+              tool: 'entity_create',
+              input: {
+                id: bystander,
+                title: 'Просто похожий заголовок',
+                tags: [],
+                // Имя свойства стоит в ЗНАЧЕНИИ `title=`, а не в позиции поля.
+                body: '{{query:aspect=orbis/task, title="Про user/net-weight"}}',
+              },
+            },
+          ],
+        },
+        { sink },
+      ),
+    );
+    const bystanderBefore = await ownEntityRefs(bystander);
+    // Контроль осмысленности: имя действительно ЕСТЬ в тексте блока — и всё же не адрес.
+    expect(bystanderBefore.body).toContain('user/net-weight');
+    expect(bystanderBefore.query_refs).not.toContain(sourceId);
+
+    const merged = ok(await runMerge('property_merge', { source: sourceId, into: intoId }));
+    // Один держатель тела, а не два: соседняя запись в перечень не попала.
+    expect((merged.results[0] as { rewrittenQueries: number }).rewrittenQueries).toBe(1);
+    const bystanderAfter = await ownEntityRefs(bystander);
+    expect(bystanderAfter.body).toBe(bystanderBefore.body);
+    expect((await ownEntityRefs(holder)).query_refs).toContain(intoId);
   });
 
   test('типы не совпадают — VALIDATION MERGE_TYPE, ничего не тронуто', async () => {
@@ -1724,5 +1955,66 @@ describe('слияние отказывает громко, если после 
     // разошлось. Теперь в тексте видна сама разница.
     expect(e.message).toContain('"min":0');
     expect((e.details as { sourceType?: unknown }).sourceType).toEqual({ kind: 'number' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Держатели свойства: перечень мест, адресующих свойство (§А3-5, §А10-2, §А10-3)
+// ---------------------------------------------------------------------------
+
+describe('collectPropertyHolders: род `body` — по индексу query_refs', () => {
+  test('collectPropertyHolders на query_refs не теряет ни одного смарт-листа', async () => {
+    // ГЛАВНЫЕ ДЕРЖАТЕЛИ ВЛАДЕЛЬЦА — сидированные смарт-листы: шесть тел, одиннадцать
+    // блоков, и стоят они на встроенных свойствах, которые владелец как раз и сливает со
+    // своими. Перевод перечня с обхода markdown на колонку `query_refs` потерял бы их все
+    // разом, если бы сид колонку не заполнял: чтение документ собирает, но в БД не пишет,
+    // и колонка осталась бы пустой навсегда. Потеря была бы ТИХОЙ — слияние отчиталось бы
+    // «переписано запросов: 0», а проба §А10-3 разрешила бы удалить строку из-под живого
+    // списка.
+    const seedUser = freshUserId();
+    await withIdentity(db, seedUser, (tx) => seedOnboarding(tx, seedUser));
+
+    const holders = await withIdentity(db, seedUser, (tx) => collectPropertyHolders(tx, seedUser));
+    const bodies = new Map(
+      holders.filter((h) => h.kind === 'body').map((h) => [h.id, h.properties]),
+    );
+    for (const list of SEED_SMART_LISTS) {
+      const id = seedSmartListId(seedUser, list.slug);
+      expect([list.slug, bodies.has(id)]).toEqual([list.slug, true]);
+    }
+    // …и это перечень АДРЕСОВ, а не «функция вернула массив»: у «Рутин» обязаны быть все
+    // четыре свойства, которыми её блоки фильтруют и сортируют.
+    const routines = bodies.get(seedSmartListId(seedUser, 'routines')) ?? [];
+    expect([...routines].sort()).toEqual(
+      expect.arrayContaining([
+        'orbis/routine_stage',
+        'orbis/run_outcome',
+        'orbis/run_started_at',
+        'orbis/undecided',
+      ]),
+    );
+  });
+
+  test('тело, записанное МИМО индекса, держателем не считается — вот чем оплачен перевод', async () => {
+    // Обратная сторона перевода, названная вслух: перечень теперь ровно настолько полон,
+    // насколько полна колонка. Писатель тела, который её не заполняет, делает свою запись
+    // невидимой для слияния и для пробы §А10-3 — и это ровно та причина, по которой сид
+    // (`smartListRow`) и слияние (`mergeProperty`) её теперь пишут.
+    const dark = freshUserId();
+    const hidden = newId();
+    const { db: admin, client: adminClient } = adminDb();
+    try {
+      await admin.insert(entities).values({
+        id: hidden,
+        ownerId: dark,
+        title: 'Тело мимо индекса',
+        body: '{{query:aspect=orbis/task, orbis/task_status=inbox}}',
+        tags: [],
+      });
+    } finally {
+      await adminClient.end();
+    }
+    const holders = await withIdentity(db, dark, (tx) => collectPropertyHolders(tx, dark));
+    expect(holders.filter((h) => h.kind === 'body').map((h) => h.id)).not.toContain(hidden);
   });
 });

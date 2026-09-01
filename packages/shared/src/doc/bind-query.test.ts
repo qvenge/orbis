@@ -27,7 +27,7 @@ const bound = (md: string) => bindQueryBlocks(parseBody(md), REG) as unknown as 
 
 describe('bindQueryBlocks — привязка блока к реестру (Р-21-1)', () => {
   test('текст блока превращается в ast по реестру; опечатка оставляет блок неразобранным', () => {
-    const ok = block(bound('{{query: aspect=orbis/task, status=inbox}}'));
+    const ok = block(bound('{{query:aspect=orbis/task, orbis/task_status=inbox}}'));
     expect(ok.ast).not.toBeNull();
     // Не «просто не null»: дерево обязано нести именно то, что написано в блоке.
     expect(JSON.stringify(ok.ast)).toContain('orbis/task_status');
@@ -40,12 +40,14 @@ describe('bindQueryBlocks — привязка блока к реестру (Р-
   });
 
   test('инвариант формы: ast !== null ⟹ text — key-форма ЭТОГО ast; ast === null ⟹ text исходный', () => {
-    const ok = block(bound('{{query: aspect=orbis/task, status=inbox}}'));
+    // Вход НАМЕРЕННО написан не той формой, которую печатает канон: подпись вместо ключа и
+    // лишние пробелы. Иначе «text — печать этого ast» выполнялось бы тождественно, и
+    // проверка не отличила бы привязку от «текст оставили как был».
+    const ok = block(bound('{{query:aspect=orbis/task,  "Состояние задачи"=inbox}}'));
     if (ok.ast === null) throw new Error('блок обязан был разобраться');
     expect(ok.text).toBe(printQueryAst(ok.ast, REG, 'key'));
-    // Обратная сторона инварианта: печать УЖЕ не равна исходной строке — старое имя `status`
-    // приведено к key-форме, и именно это делает дифф нечувствительным к переименованиям.
-    expect(ok.text).not.toBe(' aspect=orbis/task, status=inbox');
+    expect(ok.text).toBe('aspect=orbis/task, orbis/task_status=inbox');
+    expect(ok.text).not.toBe('aspect=orbis/task,  "Состояние задачи"=inbox');
 
     const bad = block(bound('{{query: aspekt=orbis/task}}'));
     expect(bad.ast).toBeNull();
@@ -53,7 +55,10 @@ describe('bindQueryBlocks — привязка блока к реестру (Р-
   });
 
   test('привязка идемпотентна: второй проход не двигает ни ast, ни text', () => {
-    const once = bindQueryBlocks(parseBody('{{query: aspect=orbis/task, status=inbox}}'), REG);
+    const once = bindQueryBlocks(
+      parseBody('{{query:aspect=orbis/task, orbis/task_status=inbox}}'),
+      REG,
+    );
     const twice = bindQueryBlocks(once, REG);
     expect(twice).toEqual(once);
     // Документ без блоков не пересобирается вовсе — иначе каждое чтение давало бы новый
@@ -163,7 +168,7 @@ describe('bindQueryBlocks — привязка блока к реестру (Р-
 
 describe('queryRefsFromDoc — индекс адресов, названных блоками', () => {
   test('блок с orbis/task_status и children_of=<uuid> — refs несут оба', () => {
-    const doc = bound(`{{query: aspect=orbis/task, status=inbox, children_of=${UUID}}}`);
+    const doc = bound(`{{query:aspect=orbis/task, orbis/task_status=inbox, children_of=${UUID}}}`);
     const refs = queryRefsFromDoc(doc as never);
     expect(refs).toContain('orbis/task_status');
     expect(refs).toContain('orbis/task');
@@ -211,7 +216,7 @@ describe('дифф Ш1 меряет key-формой: подпись реест�
     // привязки ОДНОГО текста ДВУМЯ реестрами, различающимися подписью. Печатай привязка
     // label-форму — `text` разошёлся бы, и переименование свойства в реестре приезжало бы
     // владельцу правкой его тела.
-    const md = 'Заголовок\n\n{{query: aspect=orbis/task, status=inbox}}';
+    const md = 'Заголовок\n\n{{query:aspect=orbis/task, orbis/task_status=inbox}}';
     const before = bindQueryBlocks(parseBody(md), withLabel('Статус'));
     const after = bindQueryBlocks(parseBody(md), withLabel('Состояние задачи'));
 
@@ -243,7 +248,10 @@ describe('readBodyDoc: конверсия v1 → v2 по дереву', () => {
 
   test('query-блок v1 приезжает с ast, а не пустым', () => {
     const stored = v1([
-      { type: 'queryBlock', attrs: { id: 'блок-2', query: ' aspect=orbis/task, status=inbox' } },
+      {
+        type: 'queryBlock',
+        attrs: { id: 'блок-2', query: 'aspect=orbis/task, orbis/task_status=inbox' },
+      },
     ]);
     const got = readBodyDoc(stored, '', REG) as unknown as BodyLike;
     expect(got.v).toBe(DOC_SCHEMA_VERSION);

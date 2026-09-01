@@ -212,7 +212,10 @@ describe('канон: body в БД — производная документа
         content: [
           { type: 'paragraph', content: [{ type: 'text', text: 'текст' }] },
           // Блок из редактора приезжает НЕПРИВЯЗАННЫМ: web реестра в документ не кладёт (Р-21-7).
-          { type: 'queryBlock', attrs: { ast: null, text: ' aspect=orbis/task, status=inbox' } },
+          {
+            type: 'queryBlock',
+            attrs: { ast: null, text: 'aspect=orbis/task, orbis/task_status=inbox' },
+          },
         ],
       },
     };
@@ -836,23 +839,26 @@ describe('версия документа сверяется НА ЗАПИСИ (
  */
 describe('query_refs — во ВСЕХ пяти точках записи тела', () => {
   /**
-   * Ожидаемые адреса заготовки проекта — ПОЛНЫМ списком, а не «содержит»: три её блока
-   * разбираются (аспект, статус, три поля сортировки и сам проект в `children_of`), четвёртый
-   * не разбирается вовсе (`project_id` §А8 удаляет — переводит Задача 21b), и его имена в
-   * индекс не попадают. Список целиком ловит и недобор, и лишнее.
+   * Ожидаемые адреса заготовки проекта — ПОЛНЫМ списком, а не «содержит»: разбираются ВСЕ
+   * ЧЕТЫРЕ её блока, и четвёртый — с Задачи 21b, которая перевела его с удалённого §А8
+   * поля `project_id` на вычисляемое `orbis/parent_project`. До неё он не разбирался вовсе,
+   * и `orbis/agent-run` с `orbis/parent_project` в индекс не попадали — то есть этот список
+   * сторожит и перевод заготовки тоже. Список целиком ловит и недобор, и лишнее.
    */
   const seedRefs = (id: string) =>
     [
       id,
+      'orbis/agent-run',
+      'orbis/created_at',
+      'orbis/parent_project',
+      'orbis/priority',
       'orbis/task',
       'orbis/task_status',
       'orbis/updated_at',
-      'orbis/priority',
-      'orbis/created_at',
     ].sort();
 
   test('1. create со строковым телом', async () => {
-    const { entity } = await createOne('{{query: aspect=orbis/task, status=inbox}}');
+    const { entity } = await createOne('{{query:aspect=orbis/task, orbis/task_status=inbox}}');
     expect([...(await rowOf(entity.id)).query_refs].sort()).toEqual([
       'orbis/task',
       'orbis/task_status',

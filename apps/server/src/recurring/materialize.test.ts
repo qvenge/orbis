@@ -10,7 +10,7 @@ import {
   BUILTIN_RELATION_ROLE_META,
   recurringInstanceId,
 } from '@orbis/shared';
-import { parseQueryAny, type QueryFilterNode, toParseRegistry } from '@orbis/shared/query';
+import { parseQueryAst, type QueryFilterNode, toParseRegistry } from '@orbis/shared/query';
 import { and, eq, inArray } from 'drizzle-orm';
 import {
   appDb,
@@ -568,10 +568,10 @@ describe('materializeInstances (01 §5.4)', () => {
 describe('materializationWindow — детект окна по ДЕРЕВУ (чистая функция, ноль запросов к БД)', () => {
   const today = '2026-07-10';
   /**
-   * Окно по ТЕКСТУ запроса: разбор — боевой (`parseQueryAny`, обе формы), реестр —
-   * встроенный. Через текст, а не через собранное руками дерево, намеренно: окно считается
-   * по тому, что реально приезжает из продукта, и подставленное дерево скрыло бы, если бы
-   * разбор клал предикат под другой узел.
+   * Окно по ТЕКСТУ запроса: разбор — боевой (`parseQueryAst`, единственная форма текста),
+   * реестр — встроенный. Через текст, а не через собранное руками дерево, намеренно: окно
+   * считается по тому, что реально приезжает из продукта, и подставленное дерево скрыло бы,
+   * если бы разбор клал предикат под другой узел.
    */
   const REG = toParseRegistry(
     {
@@ -582,7 +582,7 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
     'ru',
   );
   const win = (query: string) => {
-    const parsed = parseQueryAny(query, REG);
+    const parsed = parseQueryAst(query, REG);
     if (!parsed.ok) throw new Error(`${parsed.error.code}: ${parsed.error.message}`);
     return materializationWindow(parsed.ast, today);
   };
@@ -590,40 +590,40 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
   const winAst = (filter: QueryFilterNode) => materializationWindow({ filter }, today);
 
   test('запрос без date/timestamp-условий — окна нет', () => {
-    expect(win('aspect=orbis/task, status=inbox')).toBeNull();
+    expect(win('aspect=orbis/task, orbis/task_status=inbox')).toBeNull();
     expect(win('tags=work, limit=10')).toBeNull();
   });
 
   test('date-токены дают явный диапазон; overdue/открытый низ → от сегодня', () => {
-    expect(win('start_at=today')).toEqual({ from: today, to: today });
-    expect(win('start_at=next_7d')).toEqual({ from: today, to: '2026-07-17' });
-    expect(win('start_at=after_7d')).toEqual({ from: '2026-07-18', to: '2026-07-24' });
-    expect(win('occurred_on=overdue')).toEqual({ from: today, to: today });
+    expect(win('orbis/start_at=today')).toEqual({ from: today, to: today });
+    expect(win('orbis/start_at=next_7d')).toEqual({ from: today, to: '2026-07-17' });
+    expect(win('orbis/start_at=after_7d')).toEqual({ from: '2026-07-18', to: '2026-07-24' });
+    expect(win('orbis/occurred_on=overdue')).toEqual({ from: today, to: today });
   });
 
   test('объединение условий — минимальный from, максимальный to', () => {
-    expect(win('start_at=today|next_7d')).toEqual({ from: today, to: '2026-07-17' });
-    expect(win('start_at=next_7d, occurred_on=after_7d')).toEqual({
+    expect(win('orbis/start_at=today|next_7d')).toEqual({ from: today, to: '2026-07-17' });
+    expect(win('orbis/start_at=next_7d, orbis/occurred_on=after_7d')).toEqual({
       from: today,
       to: '2026-07-24',
     });
   });
 
   test('литеральная дата на date-поле — окно этого дня', () => {
-    expect(win('occurred_on=2026-07-12')).toEqual({ from: '2026-07-12', to: '2026-07-12' });
+    expect(win('orbis/occurred_on=2026-07-12')).toEqual({ from: '2026-07-12', to: '2026-07-12' });
   });
 
   test('условие по НЕ-датному свойству окна не даёт', () => {
-    expect(win('status=inbox')).toBeNull();
+    expect(win('orbis/task_status=inbox')).toBeNull();
   });
 
   test('абсолютный диапазон date-поля (B5, бэклог A): occurred_on=a..b → окно [a; b]', () => {
-    expect(win('occurred_on=2026-06-01..2026-07-20')).toEqual({
+    expect(win('orbis/occurred_on=2026-06-01..2026-07-20')).toEqual({
       from: '2026-06-01',
       to: '2026-07-20',
     });
     // Горизонт +14д обрезает materializeInstances — окно тут не клампится (как раньше)
-    expect(win('occurred_on=2026-07-01..2026-12-31')).toEqual({
+    expect(win('orbis/occurred_on=2026-07-01..2026-12-31')).toEqual({
       from: '2026-07-01',
       to: '2026-12-31',
     });
@@ -631,9 +631,9 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
 
   test('абсолютные сравнения date-поля (B5): > — от следующего дня до горизонта; < — открытый низ', () => {
     // occurred_on>X: строго после X; верх не ограничен → горизонт +14д от сегодня
-    expect(win('occurred_on>2026-07-12')).toEqual({ from: '2026-07-13', to: '2026-07-24' });
+    expect(win('orbis/occurred_on>2026-07-12')).toEqual({ from: '2026-07-13', to: '2026-07-24' });
     // occurred_on<X: открытый низ — только сегодня и будущее (как overdue), верх — день до X
-    expect(win('occurred_on<2026-07-15')).toEqual({ from: today, to: '2026-07-14' });
+    expect(win('orbis/occurred_on<2026-07-15')).toEqual({ from: today, to: '2026-07-14' });
     // Односторонний range (`<=`/`>=` канона): открытая граница берётся оттуда же. Форма
     // ТОЛЬКО новая — `<=` старая грамматика не выражает вовсе, и мост тут не помогает.
     expect(win('orbis/occurred_on<=2026-07-15')).toEqual({ from: today, to: '2026-07-15' });
@@ -641,15 +641,21 @@ describe('materializationWindow — детект окна по ДЕРЕВУ (ч�
   });
 
   test('диапазон/сравнение НЕ-датных свойств окна не дают (amount, updated_at)', () => {
-    expect(win('amount=500..2000')).toBeNull();
-    expect(win('updated_at>2026-07-01T00:00:00Z')).toBeNull();
+    expect(win('orbis/amount=500..2000')).toBeNull();
+    expect(win('orbis/updated_at>2026-07-01T00:00:00Z')).toBeNull();
   });
 
   test('срок задачи (orbis/due_date) окно ДАЁТ — на нём стоят «Сегодня» и «Ближайшие 7 дней»', () => {
     // Раньше окно давал только соседний start_at, и recurring-задача со сроком в списке
     // «Сегодня» не материализовалась вовсе — список молча показывал меньше.
-    expect(win('aspect=orbis/task, due_date=today|overdue')).toEqual({ from: today, to: today });
-    expect(win('aspect=orbis/task, due_date=next_7d')).toEqual({ from: today, to: '2026-07-17' });
+    expect(win('aspect=orbis/task, orbis/due_date=today|overdue')).toEqual({
+      from: today,
+      to: today,
+    });
+    expect(win('aspect=orbis/task, orbis/due_date=next_7d')).toEqual({
+      from: today,
+      to: '2026-07-17',
+    });
   });
 
   test('ветка or даёт окно наравне с and: показаться может любая', () => {
@@ -709,7 +715,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
       aspects: { 'orbis/schedule': dailySchedule(today) },
     });
 
-    const results = await caller.entity.query({ query: 'start_at=next_7d' });
+    const results = await caller.entity.query({ query: 'orbis/start_at=next_7d' });
     const ids = new Set(results.map((r) => r.id));
     // Инстансы сегодняшнего и завтрашнего дня материализованы и попали в выдачу
     expect(ids.has(recurringInstanceId(templateId, today))).toBe(true);
@@ -717,7 +723,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     expect(results.length).toBe(9);
 
     // count тем же окном видит те же строки (материализация уже идемпотентна)
-    const { count } = await caller.entity.count({ query: 'start_at=next_7d' });
+    const { count } = await caller.entity.count({ query: 'orbis/start_at=next_7d' });
     expect(count).toBe(9);
   });
 
@@ -753,7 +759,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     const r = await dispatchTool(
       { db, actorUserId: owner, actorKind: 'ai', source: 'chat', explicitCommand: false },
       'entity_query',
-      { query: 'start_at=next_7d' },
+      { query: 'orbis/start_at=next_7d' },
     );
     expect(r.status).toBe('ok');
     if (r.status !== 'ok') throw new Error('unreachable');
@@ -789,7 +795,7 @@ describe('хук entity.query/count (§5.4: любой запрос диапаз
     });
 
     const results = await caller.entity.query({
-      query: `aspect=orbis/financial, occurred_on=${from}..${to}, sortBy=occurred_on:asc`,
+      query: `aspect=orbis/financial, orbis/occurred_on=${from}..${to}, sortBy=orbis/occurred_on:asc`,
     });
     const ids = new Set(results.map((r) => r.id));
     // Окно [from; to] ∩ горизонт: инстансы от from до today+14 включительно

@@ -25,16 +25,12 @@ export * from './fast-path';
 export * from './ids';
 export * from './import/normalize';
 export * from './nav/links';
-// Старая грамматика §6.1 живёт в корневом барреле до Задачи 21 (РП-11): её `QueryAst`
-// прямо сейчас держат серверный компилятор, материализация и конструктор запросов в web.
-// КАНОН Q-AST (§А5-7) заведён Задачей 8 РЯДОМ и выходит отдельным входом
-// `@orbis/shared/query`: имена `QueryAst`, `QueryDateToken`, `QuerySortField` и
-// `QueryDisplayMode` в этом барреле уже заняты, а два `export *` с общим именем — не
-// «последний побеждает», а ошибка типизации TS2308. Задача 9b переключает потребителей,
-// Задача 21 сносит старую грамматику, и канон переезжает сюда под теми же именами.
-export * from './query/grammar';
-export * from './query/parse';
-export * from './query/serialize';
+// КАНОН Q-AST (§А5-7) — здесь и в сабпате `@orbis/shared/query`. Старая грамматика §6.1
+// (`query/grammar`, `query/parse`, `query/serialize`, `query/legacy-bridge`) удалена
+// Задачей 21b вместе с последним потребителем; имена `QueryAst`, `QueryDateToken`,
+// `QuerySortField` и `QueryDisplayMode`, которые она здесь занимала, освободились, и канон
+// въехал под ними — переименовывать было нечего.
+export * from './query';
 export * from './recurrence';
 export * from './registry';
 export * from './schemas/aspects';

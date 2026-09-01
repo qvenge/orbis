@@ -1400,7 +1400,7 @@ describe('routine.proposal: дифф тела предложения', () => {
     // блок приехал бы владельцу как `changed`: одна сторона несёт старое имя `status`, другая
     // key-форму `orbis/task_status`. Реестр обе стороны берут из одного снимка
     // (`lifecycle.ts` → `proposalBodyRows(..., reg)`), и это ровно то, что проверяется.
-    const block = '{{query: aspect=orbis/task, status=inbox}}';
+    const block = '{{query:aspect=orbis/task, orbis/task_status=inbox}}';
     const { runId } = await proposedBodyChange(
       'Список дел',
       `Заголовок\n\n${block}`,

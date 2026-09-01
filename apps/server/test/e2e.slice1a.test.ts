@@ -198,7 +198,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
   test('шаг 4: Inbox-блок находит задачу; count без limit совпадает с query', async () => {
     // Дословный Inbox-блок из тела Daily Planning (02 §3.3)
     const inbox =
-      'aspect=orbis/task, status=inbox, sortBy=created_at:desc, display=list, title=Inbox';
+      'aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox';
     const rows = await a.entity.query({ query: inbox });
     expect(rows.map((r) => r.id)).toEqual([sneakersId]);
     expect(() => entitySchema.parse(rows[0])).not.toThrow();
@@ -339,7 +339,7 @@ describe('e2e слайс 1a: день из 02 §5 (два пользовател
     // Переходная колонка — производная от роли и до 0017 едет рядом
     expect(rel.relationType).toBe('blocks');
 
-    const openTasks = 'aspect=orbis/task, status=!done&!cancelled';
+    const openTasks = 'aspect=orbis/task, orbis/task_status=!done&!cancelled';
     // Без excludeBlocked видны все открытые задачи (после undo шага 5 их три: кроссовки,
     // блокер и контрольная «Продлить страховку» из шага 4b)
     const all = await a.entity.query({ query: openTasks });

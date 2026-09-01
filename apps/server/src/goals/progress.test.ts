@@ -230,7 +230,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
 
     const p = await progressOf(user, {
       progress_source: {
-        query: 'aspect=orbis/financial, direction=income, tags=savings',
+        query: 'aspect=orbis/financial, orbis/direction=income, tags=savings',
         aggregate: 'sum',
         field: 'amount',
       },
@@ -304,7 +304,7 @@ describe('computeGoalProgress: агрегаты §11.3', () => {
     const user = freshUserId();
     const p = await progressOf(user, {
       progress_source: {
-        query: 'aspect=orbis/financial, direction=income, tags=savings',
+        query: 'aspect=orbis/financial, orbis/direction=income, tags=savings',
         aggregate: 'sum',
         field: 'amount',
       },
@@ -451,7 +451,7 @@ describe('computeGoalProgress: честные отказы вместо паде
     const user = freshUserId();
     const typo = await progressOf(user, {
       progress_source: {
-        query: 'aspect=orbis/financial, direction=income',
+        query: 'aspect=orbis/financial, orbis/direction=income',
         aggregate: 'sum',
         field: 'amountt',
       },
@@ -462,7 +462,7 @@ describe('computeGoalProgress: честные отказы вместо паде
     // Нечисловое поле — тот же класс отказа, но не падение
     const text = await progressOf(user, {
       progress_source: {
-        query: 'aspect=orbis/financial, direction=income',
+        query: 'aspect=orbis/financial, orbis/direction=income',
         aggregate: 'sum',
         field: 'counterparty',
       },
@@ -473,7 +473,7 @@ describe('computeGoalProgress: честные отказы вместо паде
     // latest требует тот же числовой тип, что и sum
     const latestText = await progressOf(user, {
       progress_source: {
-        query: 'aspect=orbis/financial, direction=income',
+        query: 'aspect=orbis/financial, orbis/direction=income',
         aggregate: 'latest',
         field: 'counterparty',
       },
@@ -622,7 +622,7 @@ describe('entity.get: прогресс приезжает с целью и то�
     const goal = await createGoal(user, {
       title: 'Цель, с которой снимут аспект',
       progress_source: {
-        query: 'aspect=orbis/financial, direction=income, tags=savings',
+        query: 'aspect=orbis/financial, orbis/direction=income, tags=savings',
         aggregate: 'sum',
         field: 'amount',
       },
@@ -660,7 +660,7 @@ describe('entity.get: прогресс приезжает с целью и то�
       title: 'Накопить 300 000 ₽',
       tags: ['goal'],
       progress_source: {
-        query: 'aspect=orbis/financial, direction=income, tags=savings',
+        query: 'aspect=orbis/financial, orbis/direction=income, tags=savings',
         aggregate: 'sum',
         field: 'amount',
       },
@@ -691,7 +691,7 @@ describe('entity.get: прогресс приезжает с целью и то�
     const goal = await createGoal(user, {
       title: 'Прочитать 24 книги',
       tags: ['goal'],
-      progress_source: { query: 'children_of=this, status=done', aggregate: 'count' },
+      progress_source: { query: 'children_of=this, orbis/task_status=done', aggregate: 'count' },
       target_value: '24',
     });
     for (const [title, status] of [
@@ -821,7 +821,7 @@ describe('логи отказа: конфигурационный отказ н�
     const user = freshUserId();
     const caller = callerFor(user);
     const goal = await goalWith(user, 'Цель с опечаткой в поле', {
-      query: 'aspect=orbis/financial, direction=income',
+      query: 'aspect=orbis/financial, orbis/direction=income',
       aggregate: 'sum',
       field: 'amountt',
     });
@@ -842,7 +842,7 @@ describe('логи отказа: конфигурационный отказ н�
     const user = freshUserId();
     const caller = callerFor(user);
     const goal = await goalWith(user, 'Цель, которую чинят', {
-      query: 'aspect=orbis/financial, direction=income',
+      query: 'aspect=orbis/financial, orbis/direction=income',
       aggregate: 'sum',
       field: 'amountt',
     });
@@ -861,7 +861,7 @@ describe('логи отказа: конфигурационный отказ н�
     // источник неразобранный блок `{text}`, и «новая беда» оказалась бы не той, которую
     // проверяет тест (`invalid_field` выродился бы в `invalid_query`).
     await updateGoalSource(user, goal.id, {
-      query: 'aspect=orbis/financial, direction=income',
+      query: 'aspect=orbis/financial, orbis/direction=income',
       aggregate: 'sum',
       field: 'counterparty',
     });
@@ -889,7 +889,11 @@ describe('логи отказа: конфигурационный отказ н�
       ['invalid_query', { query: '%%% не запрос', aggregate: 'count' }],
       [
         'invalid_field',
-        { query: 'aspect=orbis/financial, direction=income', aggregate: 'sum', field: 'amountt' },
+        {
+          query: 'aspect=orbis/financial, orbis/direction=income',
+          aggregate: 'sum',
+          field: 'amountt',
+        },
       ],
     ];
 

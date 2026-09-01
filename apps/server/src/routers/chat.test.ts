@@ -293,7 +293,7 @@ describe('chat.listMessages: audit системной материализаци
       source: 'fast_path',
     });
     // Запрос диапазона дат → материализация пишет batch-audit (source='system') в журнал
-    await caller.entity.query({ query: 'start_at=next_7d' });
+    await caller.entity.query({ query: 'orbis/start_at=next_7d' });
 
     const sourceOf = (m: { metadata: Record<string, unknown> }): unknown =>
       (m.metadata.actions as Array<{ source?: unknown }> | undefined)?.[0]?.source;

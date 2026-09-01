@@ -290,11 +290,27 @@ test('опись боевых текстов: вердикт и флаги ка�
     Object.values(PRODUCTION_QUERY_STATS.byVerdict).reduce((a, b) => a + b, 0);
   expect(covered).toBe(PRODUCTION_QUERY_STATS.total);
 
-  // Шесть адресов, которые разбираются уже сегодня, названы поимённо: «разбирается» — это
-  // утверждение о КОНКРЕТНЫХ местах, а не число, которое можно подогнать.
+  // Адреса, которые разбираются каноном, названы ПОИМЁННО: «разбирается» — это утверждение
+  // о КОНКРЕТНЫХ местах, а не число, которое можно подогнать. Пятнадцать из них — тела сидов
+  // и заготовка проекта, переведённые Задачей 21b: до неё они все были `UNKNOWN_FIELD`.
   expect(PRODUCTION_QUERY_TEXTS.filter((e) => e.verdict === null).map((e) => e.where)).toEqual([
     'apps/web/src/features/chat/useFastPath.ts:17 (CATEGORY_QUERY)',
     'apps/web/src/features/settings/MemoryScreen.tsx:25 (MEMORY_FILTER)',
+    'apps/server/src/seed/smart-lists.ts:24 (daily-planning, блок 1 «Inbox»)',
+    'apps/server/src/seed/smart-lists.ts:26 (daily-planning, блок 2 «Сегодня»)',
+    'apps/server/src/seed/smart-lists.ts:28 (daily-planning, блок 3 «Ожидание»)',
+    'apps/server/src/seed/smart-lists.ts:32 (upcoming, блок 1 «Ближайшие 7 дней»)',
+    'apps/server/src/seed/smart-lists.ts:34 (upcoming, блок 2 «Позже»)',
+    'apps/server/src/seed/smart-lists.ts:36 (all-tasks)',
+    'apps/server/src/seed/smart-lists.ts:59 (horizon-year «Цели»)',
+    'apps/server/src/seed/smart-lists.ts:69 (horizon-life)',
+    'apps/server/src/seed/smart-lists.ts:114 (routines, блок 1 «Ждут ответа»)',
+    'apps/server/src/seed/smart-lists.ts:116 (routines, блок 2 «Активные рутины»)',
+    'apps/server/src/seed/smart-lists.ts:110 (ROUTINES_BATCH_QUERY, блок 3 «Пачка решений»)',
+    'apps/server/src/seed/project-body.ts:39 (тело проекта, блок «В работе»)',
+    'apps/server/src/seed/project-body.ts:43 (тело проекта, блок «Ждут меня»)',
+    'apps/server/src/seed/project-body.ts:47 (тело проекта, блок «Бэклог»)',
+    'apps/server/src/seed/project-body.ts:51 (тело проекта, блок «Последние прогоны»)',
     'apps/server/src/tools/registry.ts:846 (описание тула entity_query, пример 1)',
     'apps/server/src/llm/prompts/v4.ts:58 (шпаргалка грамматики, пример 1)',
     'apps/server/src/llm/prompts/routine-v2.ts:83 (шпаргалка грамматики рутин, пример 1)',

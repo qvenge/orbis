@@ -1464,7 +1464,7 @@ test('тело из одного {{query:…}} — «Заметки…» над 
   // который видно каждый день.
   renderWithProviders(
     <DetailScreen entityId="e1" />,
-    bodyHandler('{{query: aspect=orbis/task, status=inbox, title=Inbox}}'),
+    bodyHandler('{{query:aspect=orbis/task, orbis/task_status=inbox, title=Inbox}}'),
   );
   await screen.findByTestId('qb-count');
   expect(screen.getByTestId('editor-preview')).not.toHaveTextContent('Заметки…');
@@ -1502,7 +1502,8 @@ test('клик по выделенному тексту тела редакто�
   await screen.findByTestId('body-editor', undefined, EDITOR_READY);
 });
 
-const BODY_WITH_BLOCK = 'Утренний обзор\n\n{{query: aspect=orbis/task, status=inbox, title=Inbox}}';
+const BODY_WITH_BLOCK =
+  'Утренний обзор\n\n{{query:aspect=orbis/task, orbis/task_status=inbox, title=Inbox}}';
 const BODY_TEXT_BLOCK_TEXT = `${BODY_WITH_BLOCK}\n\nи хвост после блока`;
 
 /** b стоит в документе ПОСЛЕ a. */

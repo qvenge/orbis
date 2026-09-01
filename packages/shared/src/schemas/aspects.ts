@@ -149,7 +149,8 @@ export const goalAspectSchema = z
 
 // ─── ADE-срез 1 (спека 2026-08-14, С4) ────────────────────────────────────────
 // Поле жизненного цикла названо `stage`, а не `status`: второе поле `status` в реестре сделало бы
-// каждый запрос `status=…` без `aspect=` неоднозначным (query/parse.ts resolveField), включая
+// каждый запрос по подписи «Статус» без `aspect=` неоднозначным (query/parse-ast.ts,
+// резолв закавыченной подписи), включая
 // сохранённые владельцем блоки. То же — `outcome` у прогона.
 export const projectAspectSchema = z
   .object({ stage: z.enum(['active', 'paused', 'done']) })

@@ -2,11 +2,15 @@
 // ЕДИНСТВЕННАЯ точка серверного разбора ТЕКСТА запроса (§А5-3 → §А5-7).
 //
 // Через неё идут все четверо: tRPC `entity.query`/`entity.count`, тул `entity_query`, тул
-// `user_query` и источник прогресса цели. Точка одна не ради красоты: разбор принимает ДВЕ
-// формы текста (новую грамматику и старую через мост, `@orbis/shared/query`), и второй его
-// копией у любого из потребителей одна половина продукта читала бы старые тексты, а другая
-// — нет. Именно так и выглядел бы отказ, который никто не воспроизведёт: Agenda работает,
-// а тот же запрос из чата — нет.
+// `user_query` и источник прогресса цели. Точка одна не ради красоты: у разбора есть
+// НАСТРОЙКИ (локаль резолва подписей), и второй его копией у любого из потребителей одна
+// половина продукта читала бы тексты, которые другая отвергает. Именно так и выглядел бы
+// отказ, который никто не воспроизведёт: Agenda работает, а тот же запрос из чата — нет.
+//
+// ФОРМА ТЕКСТА ТЕПЕРЬ ОДНА. До Задачи 21b здесь стоял мост `parseQueryAny`, принимавший и
+// старую плоскую грамматику §6.1: боевые тексты (тела сидов, заготовка проекта) были
+// написаны ею. Тексты переведены в key-форму той же задачей, мост удалён вместе со старой
+// грамматикой, и разбор стал СТРОГИМ — старая форма получает честный отказ с позицией.
 //
 // Отказ — всегда `ExecError('VALIDATION')` с позицией в `details`: роутер разворачивает его
 // в `TRPCError` (клиент рисует красную плашку по `{message, position}`), диспатч тулов — в
@@ -15,7 +19,7 @@
 import {
   OWNER_LOCALE,
   type ParseRegistry,
-  parseQueryAny,
+  parseQueryAst,
   type QueryAst,
   toParseRegistry,
 } from '@orbis/shared/query';
@@ -43,7 +47,7 @@ export function parseRegistryOf(ctx: CompileCtx): ParseRegistry {
  * лежит в `ctx.reg` — второе его чтение стоило бы пять запросов к БД на каждый разбор.
  */
 export function parseQueryText(text: string, ctx: CompileCtx): QueryAst {
-  const parsed = parseQueryAny(text, parseRegistryOf(ctx));
+  const parsed = parseQueryAst(text, parseRegistryOf(ctx));
   if (parsed.ok) return parsed.ast;
   throw new ExecError('VALIDATION', parsed.error.message, {
     reason: parsed.error.code,

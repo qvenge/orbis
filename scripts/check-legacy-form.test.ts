@@ -14,7 +14,7 @@
 // `test` добавлен хвост `&& bun test scripts/`. Без него этот файл не запускал бы никто —
 // ни локально, ни в CI.
 import { afterAll, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -274,6 +274,15 @@ const SAMPLES: ReadonlyArray<{
   },
   { id: 'service-const', lines: ['const a = SERVICE_ASPECT_IDS;'] },
   { id: 'prop-type-heur', lines: ['const a = propType(x);'] },
+  {
+    id: 'legacy-grammar',
+    lines: [
+      "import { parseQuery } from './query/grammar';",
+      'const a = parseQueryAny(t, reg);',
+      'const b = serializeQuery(ast);',
+      'const c = buildFieldCatalog(defs);',
+    ],
+  },
 ];
 
 test('позитивный контроль: у каждого маркера есть образец', () => {
@@ -341,6 +350,7 @@ test('имена маркеров — договор: на них ссылают
     'pseudo-aspect',
     'service-const',
     'prop-type-heur',
+    'legacy-grammar',
   ]);
 });
 
@@ -364,6 +374,34 @@ test('у каждой записи allowlist есть непустая прич�
  * Проверяется ТОЛЬКО маркер `rule-parser`: остальные маркеры описывают формы, которые срез
  * ещё переводит, и их совпадения законны до Задачи 23.
  */
+test('старая грамматика удалена: ни импортов grammar/parse/serialize/legacy-bridge, ни их имён', () => {
+  // Вторая проба ПО РАБОЧЕМУ ДЕРЕВУ, и по той же причине, что у `rule-parser` выше: цифра
+  // здесь не двигается. Старая плоская грамматика §6.1 удалена Задачей 21b целиком —
+  // четыре модуля, их тесты и оба каталожных имени, — и появиться снова не может ни при
+  // какой задаче среза: текст запроса с этого момента ровно один, key-форма канона.
+  const root = join(import.meta.dir, '..');
+  const marker = LEGACY_MARKERS.find((m) => m.id === 'legacy-grammar');
+  expect(marker).toBeDefined();
+  if (marker === undefined) return;
+  const report = scanMarker(marker, root);
+  expect(report.hits.map((h) => `${h.path}:${h.line}`)).toEqual([]);
+  // Проба ЗНАЧИМА только если регулярка вообще что-то находит: образцы В ЭТОМ ФАЙЛЕ обязаны
+  // попасться (он в allowlist) — иначе зелёный ноль означал бы сломанный поиск, а не
+  // удалённую грамматику. Их ровно четыре — по числу строк синтетического образца.
+  expect([...report.allowed.entries()]).toEqual([['scripts/check-legacy-form.test.ts', 4]]);
+  // САМ ГЕЙТ в этот список НЕ входит, в отличие от `rule-parser`, и причина проверяемая:
+  // его строка `pattern` записывает границы слов как `\bparseQueryAny\b`, то есть перед
+  // `p` в файле стоит буква `b` — границы слова там нет, и регулярка собственную запись не
+  // находит. Ждать его здесь значило бы ждать совпадения, которого не бывает.
+  // И ФАЙЛОВ этих в дереве нет — ни одного: имя могло исчезнуть, а модуль остаться мёртвым.
+  for (const name of ['grammar', 'parse', 'serialize', 'legacy-bridge']) {
+    expect([name, existsSync(join(root, 'packages/shared/src/query', `${name}.ts`))]).toEqual([
+      name,
+      false,
+    ]);
+  }
+});
+
 test('rule-parser: парсера заголовка правила в рабочем дереве нет (кроме образцов в allowlist)', () => {
   const root = join(import.meta.dir, '..');
   const marker = LEGACY_MARKERS.find((m) => m.id === 'rule-parser');

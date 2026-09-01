@@ -625,10 +625,11 @@ export const INEXPRESSIBLE_QUERY_TEXTS: readonly { text: string; code: QueryPars
  *    вокруг них нет, и собрать его пришлось бы выдумав. Переименование имён в этих строках
  *    — работа Задачи 19 (её бриф уже называет `v4.ts:57-62, :78` и `routine-v2.ts:82-87`),
  *    но опись запросов о них не свидетельствует;
- *  - `SmartListSave.tsx:18` собственного текста не имеет — он оборачивает в `{{query:…}}`
- *    строку из Browser, покрытую записями `browser/query.ts`.
+ *  - `SmartListSave.tsx` собственного текста не имел — он оборачивал в `{{query:…}}` строку
+ *    из Browser, покрытую записями `browser/query.ts`; сам компонент снят Задачей 21b как
+ *    механизм без вызывателя (причина — в докблоке `BrowserScreen.tsx`).
  */
-export type QueryTextOwner = '9b' | '10c' | '19' | '9b/21' | 'заморожен';
+export type QueryTextOwner = '9b' | '10c' | '19' | '21b' | '9b/21' | 'заморожен';
 
 export interface ProductionQueryText {
   /** Файл и строка — по ним перевод сверяется с кодом. */
@@ -653,9 +654,13 @@ export interface ProductionQueryText {
   /** Кто переводит адрес (Задача среза); `заморожен` — править нельзя вообще. */
   owner: QueryTextOwner;
   /**
-   * Текст — ЗАМОРОЖЕННЫЙ образец сверки: `onboarding.ts:290` сравнивает тело владельца с
-   * ним БАЙТ-В-БАЙТ (бэкфилл D42), и правка молча выключит бэкфилл. Перевод сида «Рутин»
-   * обязан завести ВТОРУЮ константу рядом, а не трогать эту (`onboarding.ts:231-245`).
+   * Текст — ЗАМОРОЖЕННЫЙ образец сверки, который нельзя править ни при какой правке кода.
+   *
+   * СЕГОДНЯ ТАКИХ АДРЕСОВ НЕТ, и поле оставлено вместе с объяснением. Единственными были два
+   * блока `ROUTINES_LIST_BODY_BEFORE_BATCH`: бэкфилл D42 сравнивал тело владельца с ними
+   * БАЙТ-В-БАЙТ, и правка молча выключила бы его. Задача 21b сняла и константу, и саму нужду
+   * в ней — признак бэкфилла спрашивает АДРЕС СВОЙСТВА в документе, а не байты (§А12-3), и
+   * переживает любую смену формы запроса.
    */
   frozen?: true;
   /** Текст собирается из ввода: что именно ломает разбор. */
@@ -800,144 +805,124 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
     owner: '10c',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:10 (daily-planning, блок 1 «Inbox»)',
-    text: ' aspect=orbis/task, status=inbox,\n         sortBy=created_at:desc, display=list, title=Inbox',
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: false,
-    coreNames: ['created_at'],
-    owner: '9b',
-  },
-  {
-    where: 'apps/server/src/seed/smart-lists.ts:13 (daily-planning, блок 2 «Сегодня»)',
-    text: ' aspect=orbis/task, due_date=today|overdue, status=!done&!cancelled&!waiting,\n         excludeBlocked=true, sortBy=priority:desc|due_date:asc,\n         display=list, title=Сегодня',
-    verdict: 'UNKNOWN_FIELD',
+    where: 'apps/server/src/seed/smart-lists.ts:24 (daily-planning, блок 1 «Inbox»)',
+    text: 'aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox',
+    verdict: null,
     spaceRisk: false,
     coreNames: [],
-    owner: '9b',
+    owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:17 (daily-planning, блок 3 «Ожидание»)',
-    text: ' aspect=orbis/task, status=waiting,\n         sortBy=updated_at:asc, display=compact, title=Ожидание',
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: false,
-    coreNames: ['updated_at'],
-    owner: '9b',
-  },
-  {
-    where: 'apps/server/src/seed/smart-lists.ts:22 (upcoming, блок 1 «Ближайшие 7 дней»)',
-    text: ' aspect=orbis/task, due_date=next_7d, status=!done&!cancelled,\n         sortBy=due_date:asc|priority:desc, display=list, title=Ближайшие 7 дней',
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: true,
-    coreNames: [],
-    owner: '9b',
-  },
-  {
-    where: 'apps/server/src/seed/smart-lists.ts:25 (upcoming, блок 2 «Позже»)',
-    text: ' aspect=orbis/task, due_date=after_7d, status=!done&!cancelled,\n         sortBy=due_date:asc, limit=30, display=compact, title=Позже',
-    verdict: 'UNKNOWN_FIELD',
+    where: 'apps/server/src/seed/smart-lists.ts:26 (daily-planning, блок 2 «Сегодня»)',
+    text: 'aspect=orbis/task, orbis/due_date=today|overdue, orbis/task_status=!done&!cancelled&!waiting, excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc, display=list, title=Сегодня',
+    verdict: null,
     spaceRisk: false,
     coreNames: [],
-    owner: '9b',
+    owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:28 (all-tasks)',
-    text: ' aspect=orbis/task, status=!done&!cancelled,\n         sortBy=updated_at:desc, display=list, title=Все незакрытые задачи',
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: true,
-    coreNames: ['updated_at'],
-    owner: '9b',
-  },
-  {
-    where: 'apps/server/src/seed/smart-lists.ts:52 (horizon-year «Цели»)',
-    text: ' aspect=orbis/goal, sortBy=updated_at:desc, display=list, title=Цели',
-    verdict: 'UNKNOWN_FIELD',
+    where: 'apps/server/src/seed/smart-lists.ts:28 (daily-planning, блок 3 «Ожидание»)',
+    text: 'aspect=orbis/task, orbis/task_status=waiting, sortBy=orbis/updated_at:asc, display=compact, title=Ожидание',
+    verdict: null,
     spaceRisk: false,
-    coreNames: ['updated_at'],
-    owner: '9b',
-  },
-  {
-    where: 'apps/server/src/seed/smart-lists.ts:62 (horizon-life)',
-    text: ' tags=life, sortBy=updated_at:desc, display=list, title=Ценности и зоны ответственности',
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: true,
-    coreNames: ['updated_at'],
-    owner: '9b',
-  },
-  {
-    where: 'apps/server/src/seed/smart-lists.ts:95 (routines, блок 1 «Ждут ответа»)',
-    text: ' aspect=orbis/agent-run, outcome=checkpoint, sortBy=started_at:asc, display=list, title=Ждут ответа',
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: true,
     coreNames: [],
-    owner: '9b',
+    owner: '21b',
   },
   {
-    where: 'apps/server/src/seed/smart-lists.ts:97 (routines, блок 2 «Активные рутины»)',
-    text: ' aspect=orbis/routine, stage=active, sortBy=updated_at:desc, display=list, title=Активные рутины',
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: true,
-    coreNames: ['updated_at'],
-    owner: '9b',
-  },
-  {
-    where: 'apps/server/src/seed/smart-lists.ts:99 (routines, блок 3 «Пачка решений»)',
-    text: ' aspect=orbis/agent-run, undecided=true, sortBy=started_at:asc, display=list, title=Пачка решений',
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: true,
-    coreNames: [],
-    owner: '9b',
-  },
-  {
-    where: 'apps/server/src/seed/project-body.ts:31 (тело проекта, блок «В работе»)',
-    text: ` children_of=${TX_UUID}, aspect=orbis/task, status=in_progress, sortBy=updated_at:desc, display=list, title=В работе`,
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: true,
-    coreNames: ['updated_at'],
-    owner: '9b',
-  },
-  {
-    where: 'apps/server/src/seed/project-body.ts:35 (тело проекта, блок «Ждут меня»)',
-    text: ` children_of=${TX_UUID}, aspect=orbis/task, status=waiting, sortBy=updated_at:asc, display=list, title=Ждут меня`,
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: true,
-    coreNames: ['updated_at'],
-    owner: '9b',
-  },
-  {
-    where: 'apps/server/src/seed/project-body.ts:39 (тело проекта, блок «Бэклог»)',
-    text: ` children_of=${TX_UUID}, aspect=orbis/task, status=inbox|planned, sortBy=priority:desc|created_at:asc, display=list, title=Бэклог`,
-    verdict: 'UNKNOWN_FIELD',
+    where: 'apps/server/src/seed/smart-lists.ts:32 (upcoming, блок 1 «Ближайшие 7 дней»)',
+    text: 'aspect=orbis/task, orbis/due_date=next_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"',
+    verdict: null,
     spaceRisk: false,
-    coreNames: ['created_at'],
-    owner: '9b',
-  },
-  {
-    where: 'apps/server/src/seed/project-body.ts:43 (тело проекта, блок «Последние прогоны»)',
-    text: ` aspect=orbis/agent-run, project_id=${TX_UUID}, sortBy=created_at:desc, limit=10, display=compact, title=Последние прогоны`,
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: true,
-    coreNames: ['created_at'],
-    owner: '9b',
-  },
-  {
-    where:
-      'apps/server/src/seed/onboarding.ts:248 (ROUTINES_LIST_BODY_BEFORE_BATCH, блок 1) — ПРАВИТЬ НЕЛЬЗЯ',
-    text: ' aspect=orbis/agent-run, outcome=checkpoint, sortBy=started_at:asc, display=list, title=Ждут ответа',
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: true,
     coreNames: [],
-    owner: 'заморожен',
-    frozen: true,
+    owner: '21b',
   },
   {
-    where:
-      'apps/server/src/seed/onboarding.ts:250 (ROUTINES_LIST_BODY_BEFORE_BATCH, блок 2) — ПРАВИТЬ НЕЛЬЗЯ',
-    text: ' aspect=orbis/routine, stage=active, sortBy=updated_at:desc, display=list, title=Активные рутины',
-    verdict: 'UNKNOWN_FIELD',
-    spaceRisk: true,
-    coreNames: ['updated_at'],
-    owner: 'заморожен',
-    frozen: true,
+    where: 'apps/server/src/seed/smart-lists.ts:34 (upcoming, блок 2 «Позже»)',
+    text: 'aspect=orbis/task, orbis/due_date=after_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '21b',
+  },
+  {
+    where: 'apps/server/src/seed/smart-lists.ts:36 (all-tasks)',
+    text: 'aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, display=list, title="Все незакрытые задачи"',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '21b',
+  },
+  {
+    where: 'apps/server/src/seed/smart-lists.ts:59 (horizon-year «Цели»)',
+    text: 'aspect=orbis/goal, sortBy=orbis/updated_at:desc, display=list, title=Цели',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '21b',
+  },
+  {
+    where: 'apps/server/src/seed/smart-lists.ts:69 (horizon-life)',
+    text: 'tags=life, sortBy=orbis/updated_at:desc, display=list, title="Ценности и зоны ответственности"',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '21b',
+  },
+  {
+    where: 'apps/server/src/seed/smart-lists.ts:114 (routines, блок 1 «Ждут ответа»)',
+    text: 'aspect=orbis/agent-run, orbis/run_outcome=checkpoint, sortBy=orbis/run_started_at:asc, display=list, title="Ждут ответа"',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '21b',
+  },
+  {
+    where: 'apps/server/src/seed/smart-lists.ts:116 (routines, блок 2 «Активные рутины»)',
+    text: 'aspect=orbis/routine, orbis/routine_stage=active, sortBy=orbis/updated_at:desc, display=list, title="Активные рутины"',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '21b',
+  },
+  {
+    where: 'apps/server/src/seed/smart-lists.ts:110 (ROUTINES_BATCH_QUERY, блок 3 «Пачка решений»)',
+    text: 'aspect=orbis/agent-run, orbis/undecided=true, sortBy=orbis/run_started_at:asc, display=list, title="Пачка решений"',
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '21b',
+  },
+  {
+    where: 'apps/server/src/seed/project-body.ts:39 (тело проекта, блок «В работе»)',
+    text: `children_of=${TX_UUID}, aspect=orbis/task, orbis/task_status=in_progress, sortBy=orbis/updated_at:desc, display=list, title="В работе"`,
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '21b',
+  },
+  {
+    where: 'apps/server/src/seed/project-body.ts:43 (тело проекта, блок «Ждут меня»)',
+    text: `children_of=${TX_UUID}, aspect=orbis/task, orbis/task_status=waiting, sortBy=orbis/updated_at:asc, display=list, title="Ждут меня"`,
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '21b',
+  },
+  {
+    where: 'apps/server/src/seed/project-body.ts:47 (тело проекта, блок «Бэклог»)',
+    text: `children_of=${TX_UUID}, aspect=orbis/task, orbis/task_status=inbox|planned, sortBy=orbis/priority:desc|orbis/created_at:asc, display=list, title=Бэклог`,
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '21b',
+  },
+  {
+    where: 'apps/server/src/seed/project-body.ts:51 (тело проекта, блок «Последние прогоны»)',
+    text: `aspect=orbis/agent-run, orbis/parent_project=${TX_UUID}, sortBy=orbis/created_at:desc, limit=10, display=compact, title="Последние прогоны"`,
+    verdict: null,
+    spaceRisk: false,
+    coreNames: [],
+    owner: '21b',
   },
   {
     where: 'apps/server/src/test/perf.ts:324 (progress_source перф-фикстуры цели, гейт D21)',
@@ -1074,16 +1059,20 @@ export const PRODUCTION_QUERY_TEXTS: readonly ProductionQueryText[] = [
  * разбивка тоже точные). Любая правка описи обязана пройти через эти числа.
  */
 export const PRODUCTION_QUERY_STATS = {
-  total: 49,
-  /** Разбирается новым парсером уже сегодня. */
-  parses: 6,
-  byVerdict: { UNKNOWN_FIELD: 39, SYNTAX: 2, RESERVED: 2 },
+  total: 47,
+  /** Разбирается каноном уже сегодня. */
+  parses: 21,
+  byVerdict: { UNKNOWN_FIELD: 22, SYNTAX: 2, RESERVED: 2 },
   /** Незакавыченное значение с пробелом — не чинится переименованием полей. */
-  spaceRisk: 14,
+  spaceRisk: 3,
   /** Называет core-свойство голым именем — перевод по отдельной таблице §А1-3. */
-  coreNames: 20,
-  /** Замороженные образцы сверки: править нельзя вообще. */
-  frozen: 2,
+  coreNames: 9,
+  /**
+   * Замороженные образцы сверки: править нельзя вообще. НОЛЬ с Задачи 21b — оба таких
+   * адреса были блоками `ROUTINES_LIST_BODY_BEFORE_BATCH`, а бэкфилл D42 перестал сверять
+   * тело байтами (§А12-3), и константа удалена.
+   */
+  frozen: 0,
   /** Текст собирается из ввода — ломает не сам литерал, а подстановка. */
   dynamic: 2,
 } as const;

@@ -17,17 +17,21 @@
 //      вставка тем же PK блокируется на неподтверждённой строке и гасится конфликтом
 //      (§5.4), дубль невозможен по построению.
 import { ORBIS_NAMESPACE } from '@orbis/shared';
-import { sql } from 'drizzle-orm';
+import { queryRefsFromDoc, readBodyDoc } from '@orbis/shared/doc';
+import { type SQL, sql } from 'drizzle-orm';
 import { v5 as uuidv5 } from 'uuid';
 import { ensureGlobalThread } from '../chat/threads';
 import type { Db } from '../db/client';
 import { entities, userSettings } from '../db/schema';
 import { type Tx, withIdentity } from '../db/with-identity';
+import { bodyFieldsFromMarkdown } from '../executor/body-fields';
 import { rowFromLegacy } from '../executor/legacy-form';
-import { effectiveRegistry } from '../registry/cache';
+import { effectiveRegistry, parseRegistryOfSnapshot } from '../registry/cache';
+import type { RegistrySnapshot } from '../registry/load';
 import { SEED_CATEGORIES } from './categories';
 import { seedGardener } from './gardener';
 import {
+  ROUTINES_BATCH_QUERY,
   SEED_HORIZON_LISTS,
   SEED_ROUTINES_LIST,
   SEED_SMART_LISTS,
@@ -54,6 +58,20 @@ export const BUDGET_VIEW_ID = 'orbis-budget';
 // entity.count, и count пересчитывается на КАЖДОЙ инвалидации графа; «Год» этого стоит
 // (цели — то, ради чего фаза существует), периодическая ревизия «Жизни» — нет.
 const PINNED_HORIZON_SLUG = 'horizon-year';
+
+/** Свойство, которым адресуется «пачка решений» (D42) — признак бэкфилла тела «Рутин». */
+const PROP_UNDECIDED = 'orbis/undecided';
+
+/**
+ * `ARRAY[$1, $2]::text[]` — каждый элемент параметром: массив JS шаблон `sql` drizzle
+ * разворачивает в кортеж `($1,…,$N)`, а `record` к `text[]` не приводится.
+ */
+function textArray(values: readonly string[]): SQL {
+  return sql`ARRAY[${sql.join(
+    values.map((v) => sql`${v}`),
+    sql`, `,
+  )}]::text[]`;
+}
 
 export interface SeedResult {
   seeded: boolean; // false — уже было (одноразовость §7)
@@ -107,6 +125,11 @@ export async function seedOnboarding(
   clock: () => Date = () => new Date(),
 ): Promise<SeedResult> {
   const now = clock();
+  // Реестр снимается ДО guard'а: он нужен обеим ветвям — и первому севу (проекция категорий,
+  // тела смарт-листов), и бэкфиллам, которые из guard'а и выходят. Единственный адрес вызова
+  // `effectiveRegistry` в этом файле сохраняется — счёт читателей в докблоке `registry/cache.ts`
+  // ведётся грепом, и второй вызов сделал бы его ложным.
+  const reg = await effectiveRegistry(tx, ownerId);
 
   // Слой 1: guard. FOR UPDATE блокирует существующую строку настроек (защита от гонки с
   // updateSettings); если строки нет — идём сидировать, конкуренцию закрывает слой 2.
@@ -126,12 +149,12 @@ export async function seedOnboarding(
           WHERE owner_id = ${ownerId}
             AND NOT (${BUDGET_VIEW_ID} = ANY("installedViews"))`,
     );
-    await backfillHorizons(tx, ownerId, now);
-    await backfillRoutinesList(tx, ownerId, now);
+    await backfillHorizons(tx, ownerId, reg, now);
+    await backfillRoutinesList(tx, ownerId, reg, now);
     // Порядок не случаен, хотя оба и сходятся к одному: досев выше вставляет
     // отсутствующий список УЖЕ с новым телом, и условный UPDATE на него не срабатывает по
     // условию. В обратном порядке UPDATE зря шёл бы по ещё не созданной строке
-    await backfillRoutinesListBody(tx, ownerId, now);
+    await backfillRoutinesListBody(tx, ownerId, reg, now);
     return { seeded: false };
   }
 
@@ -141,7 +164,6 @@ export async function seedOnboarding(
   // `aspects`) и старая карта, которую пока читают доменные модули и web. Через одну
   // проекцию, а не двумя литералами: разъехавшиеся формы одной и той же категории —
   // это молчаливое расхождение, которое нашлось бы уже на чужом красном тесте.
-  const reg = await effectiveRegistry(tx, ownerId);
   const categoryRows = SEED_CATEGORIES.map((c) => ({
     id: seedCategoryId(ownerId, c.slug),
     ownerId,
@@ -161,7 +183,7 @@ export async function seedOnboarding(
 
   // 6 smart lists §7.2 — сущности с тегом smart-list и body-query-блоками (§3.3): три
   // исходных, два верхних горизонта планирования, «Год» и «Жизнь» (E4), и «Рутины» (V1.9).
-  const smartListRows = SEED_SMART_LISTS.map((s) => smartListRow(ownerId, s, now));
+  const smartListRows = SEED_SMART_LISTS.map((s) => smartListRow(ownerId, s, reg, now));
 
   // Одна вставка на все 18 сущностей: детерминированный порядок id снимает риск взаимной
   // блокировки конкурентных сидов (обе транзакции блокируются на первой общей строке).
@@ -201,14 +223,33 @@ export async function seedOnboarding(
   return { seeded: true };
 }
 
-/** Строка сущности smart list'а — одна форма для первого сида и для бэкфилла. */
-function smartListRow(ownerId: string, list: SeedSmartList, now: Date) {
+/**
+ * Строка сущности smart list'а — одна форма для первого сида и для бэкфилла.
+ *
+ * ЧЕТЫРЕ КОЛОНКИ ТЕЛА, А НЕ ОДНА, и считает их тот же `bodyFieldsFromMarkdown`, что и
+ * исполнитель. До этой задачи сид писал только `body`, и цена была не косметической:
+ * `query_refs` смарт-листов оставались пустыми навсегда (чтение документ собирает, но в БД
+ * не пишет), а именно по этой колонке ищет держателей свойства `collectPropertyHolders` —
+ * то есть слияние и проба §А10-3 не видели бы ШЕСТЬ главных держателей владельца.
+ * Заодно отпадает и ленивая конверсия: `body_doc` у сидированной строки есть с первой
+ * секунды, и предикат бэкфилла может спрашивать документ, а не сравнивать байты.
+ *
+ * `body` берётся ИЗ КОНВЕРТЕРА, а не из константы: расхождение между литералом сида и его
+ * каноном ловит `seed-canon.test.ts`, но если оно всё же появится, в базу обязан лечь канон
+ * — иначе первое сохранение из редактора сдвинуло бы тело, и «сид не переписывает чужое»
+ * сработало бы против самого сида.
+ */
+function smartListRow(ownerId: string, list: SeedSmartList, reg: RegistrySnapshot, now: Date) {
+  const fields = bodyFieldsFromMarkdown(list.body, reg);
   return {
     id: seedSmartListId(ownerId, list.slug),
     ownerId,
     title: list.title,
     emoji: list.emoji,
-    body: list.body,
+    body: fields.body,
+    bodyDoc: fields.bodyDoc,
+    bodyRefs: fields.bodyRefs,
+    queryRefs: fields.queryRefs,
     tags: ['smart-list'],
     createdAt: now,
     updatedAt: now,
@@ -238,10 +279,15 @@ function smartListRow(ownerId: string, list: SeedSmartList, now: Date) {
  * что у бэкфилла orbis-budget. Сидирование зовётся раз за сессию (OnboardingGate);
  * «удалить/открепить навсегда» здесь не выражается, а UI открепления сегодня и нет (02 §3.2).
  */
-async function backfillHorizons(tx: Tx, ownerId: string, now: Date): Promise<void> {
+async function backfillHorizons(
+  tx: Tx,
+  ownerId: string,
+  reg: RegistrySnapshot,
+  now: Date,
+): Promise<void> {
   await tx
     .insert(entities)
-    .values(SEED_HORIZON_LISTS.map((list) => smartListRow(ownerId, list, now)))
+    .values(SEED_HORIZON_LISTS.map((list) => smartListRow(ownerId, list, reg, now)))
     .onConflictDoNothing();
 
   await pinIfAbsent(tx, ownerId, seedSmartListId(ownerId, PINNED_HORIZON_SLUG), now);
@@ -259,75 +305,82 @@ async function backfillHorizons(tx: Tx, ownerId: string, now: Date): Promise<voi
  * отличает «никогда не было» от «удалено»). Общего у двух досевов ровно одно — вставка пина,
  * и она вынесена в pinIfAbsent, чтобы третья копия jsonb-SQL не разъехалась с первыми двумя.
  */
-async function backfillRoutinesList(tx: Tx, ownerId: string, now: Date): Promise<void> {
+async function backfillRoutinesList(
+  tx: Tx,
+  ownerId: string,
+  reg: RegistrySnapshot,
+  now: Date,
+): Promise<void> {
   await tx
     .insert(entities)
-    .values([smartListRow(ownerId, SEED_ROUTINES_LIST, now)])
+    .values([smartListRow(ownerId, SEED_ROUTINES_LIST, reg, now)])
     .onConflictDoNothing();
 
   await pinIfAbsent(tx, ownerId, seedSmartListId(ownerId, SEED_ROUTINES_LIST.slug), now);
 }
 
 /**
- * ЗАМОРОЖЕННАЯ ИСТОРИЯ: тело «Рутин» ДО третьего блока «Пачка решений» (D42) — двухблочное,
- * ровно как его получили владельцы V1. Литерал живёт здесь, а не в `smart-lists.ts`, потому
- * что это не сид, а образец для сверки: `smart-lists.ts` отвечает на вопрос «что мы сеем
- * сегодня», а этот файл — «что мы вправе переписать».
- *
- * ПРАВИТЬ ЕГО НЕЛЬЗЯ НИКОГДА, даже вслед за правкой сида: сравнение идёт БАЙТ-В-БАЙТ, и
- * подогнанный под новый сид литерал перестанет совпадать с тем, что лежит у владельца, —
- * бэкфилл молча выключится. Следующий блок в теле «Рутин» потребует не правки этой строки, а
- * ВТОРОЙ такой же константы рядом (по одной на каждую пройденную форму тела).
- *
- * Экспортирован ради теста бэкфилла: сымитировать владельца «до D42» можно только этим
- * телом, а второй его копией в тесте они разъехались бы при первой же опечатке.
- */
-export const ROUTINES_LIST_BODY_BEFORE_BATCH = `Рутины — то, что Orbis делает сам по расписанию, и то, что ждёт вашего ответа.
-
-{{query: aspect=orbis/agent-run, outcome=checkpoint, sortBy=started_at:asc, display=list, title=Ждут ответа}}
-
-{{query: aspect=orbis/routine, stage=active, sortBy=updated_at:desc, display=list, title=Активные рутины}}`;
-
-/**
  * Бэкфилл D42 (§7.2, §3.3): у владельца, засиденного ДО «Пачки решений», тело «Рутин»
  * двухблочное, и третьего блока он не увидит никогда — сущность уже есть, а ON CONFLICT DO
- * NOTHING соседнего досева тела не трогает. Значит нужен UPDATE, и это ПЕРВЫЙ UPDATE по
- * таблице `entities` во всём сиде: до сих пор сид только вставлял.
+ * NOTHING соседнего досева тела не трогает. Значит нужен UPDATE, и это единственный UPDATE
+ * по таблице `entities` во всём сиде.
  *
- * УСЛОВИЕ — БАЙТ-В-БАЙТ СОВПАДЕНИЕ СО СТАРЫМ СИДОМ, и это главное здесь. Тело смарт-листа
- * — обычная запись: владелец вправе дописать в неё свой блок, свой текст, свои заметки
- * (§3.3 прямо говорит, что система преднастроенные сущности не «защищает»). Перезапись
- * такого тела уничтожила бы его работу без следа и без возможности восстановления — версий
- * у мимо-executor'ного сида нет. Поэтому правило то же, что у остальных досевов («сид не
- * переписывает чужое», докблок `backfillHorizons`), только выраженное сравнением, а не
- * ON CONFLICT: трогаем ровно ту строку, которую сами и написали, и ни одну другую.
+ * ПРИЗНАК — «БЛОКА ПАЧКИ В ТЕЛЕ НЕТ», а не побайтовое равенство со старым сидом (§А12-3), и
+ * замена признака — не упрощение. Байтовое сравнение требовало ЗАМОРОЖЕННОЙ КОПИИ каждой
+ * пройденной формы тела рядом с сидом («править нельзя никогда, даже вслед за правкой
+ * сида»), и первая же смена формы запроса — вот эта, перевод сидов в key-форму, — сделала бы
+ * такую копию неотличимой от опечатки: тело владельца написано старой грамматикой, новый сид
+ * — печатью канона, и совпасть они не могут ни при какой правке литерала. Признак «блок уже
+ * есть» переживает смену формы, потому что спрашивает не текст, а АДРЕС свойства в дереве.
  *
- * `body_doc = NULL` — ленивая переконверсия: структурная правда тела (`readBodyDoc`)
- * описывала бы ДВА блока, и оставленный документ показал бы владельцу старое тело поверх
- * нового markdown'а. NULL означает «ещё не сконвертировано» (docblock колонки), и первый же
- * читатель соберёт документ заново из `body`. `body_before_doc` не трогается: это снимок
- * ДО разовой конверсии, а не «предыдущее тело».
+ * СПРАШИВАЕТСЯ ДОКУМЕНТ, А НЕ КОЛОНКА `query_refs`. Колонка — денормализация, и у владельца,
+ * засиденного до того, как сид начал её писать, она пуста при живом теле; `readBodyDoc`
+ * собирает документ из `body`, когда `body_doc` пуст, и привязывает блоки реестром — то есть
+ * отвечает на вопрос по тому, что у владельца ЕСТЬ, а не по тому, что мы надеялись записать.
  *
- * ИДЕМПОТЕНТНОСТЬ — построением, без флага и без счётчика: после первого UPDATE тело равно
- * НОВОМУ сиду, условие `body = <старый>` больше не выполняется ни разу.
+ * ТЕЛО ДОПИСЫВАЕТСЯ, А НЕ ПЕРЕЗАПИСЫВАЕТСЯ. Тело смарт-листа — обычная запись: владелец
+ * вправе дописать в неё свой блок, свой текст, свои заметки (§3.3 прямо говорит, что систему
+ * преднастроенные сущности не «защищают»). Перезапись уничтожила бы его работу без следа и
+ * без возможности восстановления — версий у мимо-executor'ного сида нет.
  *
- * `updated_at` двигается только при фактической правке (UPDATE либо задел строку, либо нет)
- * — иначе web-синк LWW дёргал бы список на каждом старте сессии.
+ * ИДЕМПОТЕНТНОСТЬ — построением, без флага и без счётчика: после дописывания блок в теле
+ * есть, и условие больше не выполняется ни разу. `updated_at` двигается только при
+ * фактической правке — иначе web-синк LWW дёргал бы список на каждом старте сессии.
  *
  * ЦЕНА, та же что у горизонтов: владелец, который стёр третий блок руками, получит его
- * назад — но ровно один раз, и только если стёр ТОЧНО до старого сида. Любая другая правка
- * тело сохраняет.
+ * назад — но ровно один раз и в конец тела, а не на прежнее место.
  */
-async function backfillRoutinesListBody(tx: Tx, ownerId: string, now: Date): Promise<void> {
-  await tx.execute(
-    sql`UPDATE entities
-        SET body = ${SEED_ROUTINES_LIST.body},
-            body_doc = NULL,
-            updated_at = ${now.toISOString()}::timestamptz
-        WHERE id = ${seedSmartListId(ownerId, SEED_ROUTINES_LIST.slug)}::uuid
-          AND owner_id = ${ownerId}
-          AND body = ${ROUTINES_LIST_BODY_BEFORE_BATCH}`,
-  );
+async function backfillRoutinesListBody(
+  tx: Tx,
+  ownerId: string,
+  reg: RegistrySnapshot,
+  now: Date,
+): Promise<void> {
+  const id = seedSmartListId(ownerId, SEED_ROUTINES_LIST.slug);
+  const rows = (await tx.execute(sql`
+    SELECT body, body_doc FROM entities
+     WHERE id = ${id}::uuid AND owner_id = ${ownerId} FOR UPDATE`)) as unknown as Array<{
+    body: string | null;
+    body_doc: unknown;
+  }>;
+  const row = rows[0];
+  if (row === undefined) return;
+
+  const body = String(row.body ?? '');
+  const doc = readBodyDoc(row.body_doc ?? null, body, parseRegistryOfSnapshot(reg));
+  // Адрес свойства «отложено» в ЛЮБОМ блоке тела — и есть «пачка уже показана». Спрашивается
+  // именно адрес: заголовок блока владелец вправе переписать, а свойство — нет.
+  if (queryRefsFromDoc(doc).includes(PROP_UNDECIDED)) return;
+
+  const next = bodyFieldsFromMarkdown(`${body}\n\n{{query:${ROUTINES_BATCH_QUERY}}}`, reg);
+  await tx.execute(sql`
+    UPDATE entities
+       SET body = ${next.body},
+           body_doc = ${JSON.stringify(next.bodyDoc)}::jsonb,
+           body_refs = ${textArray(next.bodyRefs)},
+           query_refs = ${textArray(next.queryRefs)},
+           updated_at = ${now.toISOString()}::timestamptz
+     WHERE id = ${id}::uuid AND owner_id = ${ownerId}`);
 }
 
 /**

@@ -780,9 +780,9 @@ describe('ADE-срез 1: инварианты назначения и засе�
     const body = await bodyOf(id);
     // Блок прогонов лежит в теле ДОСЛОВНО: `project_id` реестр не резолвит (§А8 это свойство
     // удаляет), поэтому привязка его не трогает и печать key-формой к нему не применяется.
-    // Проверено пробой: `parseQueryAny` и `parseQueryAst` дают UNKNOWN_FIELD одинаково — то
-    // есть блок не разбирался и ДО этой задачи. Заготовку переводит Задача 21b.
-    expect(body).toContain(`{{query: aspect=orbis/agent-run, project_id=${id}`);
+    // Прогоны — ВНУКИ проекта, и достаёт их вычисляемое `orbis/parent_project` (Задача 21b):
+    // плоского `project_id` реестр не знает с §А8, и блок на него отвечал `UNKNOWN_FIELD`.
+    expect(body).toContain(`{{query:aspect=orbis/agent-run, orbis/parent_project=${id},`);
     // Тикеты — по uuid проекта, а не по `this`: блок должен читаться и вне тела проекта
     // (закреплённый список, Browser), где контекст записи не передаётся (см. project-body.ts).
     // Имя статуса — key-форма: блок ПРИВЯЗАН к реестру, и `status=` в теле больше не лежит.

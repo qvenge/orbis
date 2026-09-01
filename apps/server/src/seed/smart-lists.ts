@@ -1,32 +1,39 @@
 // apps/server/src/seed/smart-lists.ts
 // Body шести преднастроенных smart lists — трёх исходных, двух верхних горизонтов
-// планирования (E4) и «Рутин» (V1.9) — БАЙТ-В-БАЙТ из 02-core-os §3.3 (template-литералы с сохранением
-// переносов строк и 9-пробельных отступов continuation-строк). Инвариант байт-в-байт
-// закреплён тестом (onboarding.test.ts сверяет с markdown-блоками §3.3 PRD, по порядку).
-// Query-блоки — строго по грамматике 01-architecture §6.1 (парсуемость проверена тестом).
+// планирования (E4) и «Рутин» (V1.9).
+//
+// ЗАПРОСЫ ЗДЕСЬ — KEY-ФОРМА КАНОНА (§А5-3), И НАПИСАНЫ ОНИ РОВНО ТАК, КАК ИХ ПЕЧАТАЕТ
+// `printQueryAst(ast, reg, 'key')`. Это не стилевое предпочтение, а условие, которое
+// проверяется: тело сида проходит `parseBody → bindQueryBlocks → serializeBody` без единого
+// изменения (`seed-canon.test.ts`). Отсюда три следствия, каждое из которых раньше было
+// иначе:
+//  - блок ОДНОСТРОЧНЫЙ. Печать собирает конструкции через `, ` в одну строку
+//    (`print.ts`, `parts.join`), поэтому девятипробельные continuation-строки прежних тел
+//    исчезли: любая из них вернулась бы после первого же сохранения;
+//  - ведущего пробела после `{{query:` НЕТ — печать его не производит;
+//  - КАВЫЧКИ У ЗАГОЛОВКОВ СТАВИТ ПЕЧАТЬ, а не мы: `quoteQueryValue` квотирует значение,
+//    в котором есть пробел или другой разделитель (`title="Ждут ответа"`), и не квотирует
+//    односложное (`title=Цели`). Снять кавычку «для красоты» значит разойтись с печатью.
+//
+// Имена свойств — namespaced key реестра (`orbis/task_status`, а не `status`): текст запроса
+// адресует свойство только ключом или закавыченной подписью (§А5-3а), и старых имён полей
+// аспектов разбор больше не знает вовсе.
 
 export const DAILY_PLANNING_BODY = `Утренний обзор: разобрать Inbox, пройтись по списку «Сегодня».
 
-{{query: aspect=orbis/task, status=inbox,
-         sortBy=created_at:desc, display=list, title=Inbox}}
+{{query:aspect=orbis/task, orbis/task_status=inbox, sortBy=orbis/created_at:desc, display=list, title=Inbox}}
 
-{{query: aspect=orbis/task, due_date=today|overdue, status=!done&!cancelled&!waiting,
-         excludeBlocked=true, sortBy=priority:desc|due_date:asc,
-         display=list, title=Сегодня}}
+{{query:aspect=orbis/task, orbis/due_date=today|overdue, orbis/task_status=!done&!cancelled&!waiting, excludeBlocked=true, sortBy=orbis/priority:desc|orbis/due_date:asc, display=list, title=Сегодня}}
 
-{{query: aspect=orbis/task, status=waiting,
-         sortBy=updated_at:asc, display=compact, title=Ожидание}}`;
+{{query:aspect=orbis/task, orbis/task_status=waiting, sortBy=orbis/updated_at:asc, display=compact, title=Ожидание}}`;
 
 export const UPCOMING_BODY = `Горизонт планирования: неделя и дальше.
 
-{{query: aspect=orbis/task, due_date=next_7d, status=!done&!cancelled,
-         sortBy=due_date:asc|priority:desc, display=list, title=Ближайшие 7 дней}}
+{{query:aspect=orbis/task, orbis/due_date=next_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc|orbis/priority:desc, display=list, title="Ближайшие 7 дней"}}
 
-{{query: aspect=orbis/task, due_date=after_7d, status=!done&!cancelled,
-         sortBy=due_date:asc, limit=30, display=compact, title=Позже}}`;
+{{query:aspect=orbis/task, orbis/due_date=after_7d, orbis/task_status=!done&!cancelled, sortBy=orbis/due_date:asc, limit=30, display=compact, title=Позже}}`;
 
-export const ALL_TASKS_BODY = `{{query: aspect=orbis/task, status=!done&!cancelled,
-         sortBy=updated_at:desc, display=list, title=Все незакрытые задачи}}`;
+export const ALL_TASKS_BODY = `{{query:aspect=orbis/task, orbis/task_status=!done&!cancelled, sortBy=orbis/updated_at:desc, display=list, title="Все незакрытые задачи"}}`;
 
 // ─────────────── Горизонты планирования (E4, слайс 3, 02 §3.3/§7.2) ───────────────
 // Лестница горизонтов «день → неделя → месяц → год → жизнь» доставляется тем, чего в ней
@@ -49,7 +56,7 @@ export const HORIZON_YEAR_BODY = `Горизонт «год»: цели. Год�
 
 Лестница горизонтов целиком: день — список «Daily Planning», неделя и месяц — список «Upcoming», год — этот список, жизнь — список «Жизнь». «Жизнь» не закреплена в сайдбаре: её находит Browser по тегу smart-list.
 
-{{query: aspect=orbis/goal, sortBy=updated_at:desc, display=list, title=Цели}}`;
+{{query:aspect=orbis/goal, sortBy=orbis/updated_at:desc, display=list, title=Цели}}`;
 
 export const HORIZON_LIFE_BODY = `Горизонт «жизнь»: не список задач, а вопросы ревизии. Перечитывать раз в год.
 
@@ -59,7 +66,7 @@ export const HORIZON_LIFE_BODY = `Горизонт «жизнь»: не спис
 
 Ответы держите отдельными сущностями и вешайте на них тег life — блок ниже соберёт их. Пока такого тега нет ни на одной сущности, блок честно покажет «ничего не найдено».
 
-{{query: tags=life, sortBy=updated_at:desc, display=list, title=Ценности и зоны ответственности}}`;
+{{query:tags=life, sortBy=orbis/updated_at:desc, display=list, title="Ценности и зоны ответственности"}}`;
 
 // ─────────────────── Рутины (V1.9/V1.14, 02 §3.3/§7.2) ───────────────────
 // Список — вся навигация к рутинам в V1: отдельного экрана «Рутины» нет, а прогонов,
@@ -78,25 +85,37 @@ export const HORIZON_LIFE_BODY = `Горизонт «жизнь»: не спис
 // сдвинула бы индексы блоков у читателей тела.
 //
 // ЦЕНА, КОТОРУЮ МЫ ПРИНИМАЕМ (Р-3, записана и в PRD 02 §3.3): сайдбарный бейдж считает
-// ТОЛЬКО первый блок, а «ИЛИ» между двумя условиями грамматика §6.1 не выражает — значит
+// ТОЛЬКО первый блок, а «ИЛИ» между РАЗНЫМИ свойствами плоский текст запроса не выражает
+// (§А5-3д — канон такой узел знает, печать в одну строку его не укладывает) — значит
 // цифра в сайдбаре по-прежнему про терминальные вопросы, а пачки видны, только когда список
 // открыт. Чинить это пришлось бы либо новой формой запроса, либо вторым правилом бейджа;
 // ни то ни другое одной цифры не стоит.
 //
 // ВСЕ ТРИ БЛОКА НАЗЫВАЮТ АСПЕКТ ЯВНО, и на то две причины. `orbis/agent-run` служебный
 // (02 §3.9): пока запрос не назвал его, компилятор вычитает служебные сущности из выдачи, и
-// блок молча показывал бы пусто. `stage=` неоднозначен (orbis/project и orbis/routine —
-// 01-architecture §6.1): запрос без `aspect=` не скомпилировался бы вовсе.
+// блок молча показывал бы пусто. А `aspect=` в блоке рутин — ещё и то, что отличает стадию
+// рутины от стадии проекта: свойства разные (`orbis/routine_stage` и `orbis/project_stage`),
+// но выборка без аспекта собрала бы обе сущности в один список.
 //
 // Сортировки разные по смыслу: ожидающие и пачки — по времени старта ВОЗРАСТАЮЩЕ (дольше
 // всех ждущее сверху, как «Ожидание» в Daily Planning), рутины — по недавней правке.
+/**
+ * Запрос третьего блока «Рутин» — отдельной константой, потому что у него ДВА потребителя:
+ * тело ниже и бэкфилл D42 (`onboarding.ts`), который дописывает этот блок владельцу, у
+ * которого его ещё нет. Второй литерал рядом означал бы, что «что мы сеем» и «что мы
+ * досеваем» расходятся при первой же правке запроса — и досев молча перестал бы совпадать
+ * с сидом.
+ */
+export const ROUTINES_BATCH_QUERY =
+  'aspect=orbis/agent-run, orbis/undecided=true, sortBy=orbis/run_started_at:asc, display=list, title="Пачка решений"';
+
 export const ROUTINES_LIST_BODY = `Рутины — то, что Orbis делает сам по расписанию, и то, что ждёт вашего ответа.
 
-{{query: aspect=orbis/agent-run, outcome=checkpoint, sortBy=started_at:asc, display=list, title=Ждут ответа}}
+{{query:aspect=orbis/agent-run, orbis/run_outcome=checkpoint, sortBy=orbis/run_started_at:asc, display=list, title="Ждут ответа"}}
 
-{{query: aspect=orbis/routine, stage=active, sortBy=updated_at:desc, display=list, title=Активные рутины}}
+{{query:aspect=orbis/routine, orbis/routine_stage=active, sortBy=orbis/updated_at:desc, display=list, title="Активные рутины"}}
 
-{{query: aspect=orbis/agent-run, undecided=true, sortBy=started_at:asc, display=list, title=Пачка решений}}`;
+{{query:${ROUTINES_BATCH_QUERY}}}`;
 
 export interface SeedSmartList {
   slug: 'daily-planning' | 'upcoming' | 'all-tasks' | 'horizon-year' | 'horizon-life' | 'routines';

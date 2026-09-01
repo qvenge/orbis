@@ -29,15 +29,12 @@ import {
 // Конверсия тела живёт в @orbis/shared/doc — ОДИН экземпляр правил разбора и сериализации
 // на сервер и клиент; своей копии у executor'а нет и быть не должно.
 import {
-  type BodyDoc,
   bindQueryBlocks,
   bodyDocError,
   bodyPairFromDoc,
   bodyRefsFromDoc,
   DOC_SCHEMA_VERSION,
-  parseBody,
   queryRefsFromDoc,
-  serializeBody,
 } from '@orbis/shared/doc';
 import { OWNER_LOCALE } from '@orbis/shared/query';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -97,6 +94,7 @@ import {
 import { toWireEntity as toWire, toWireRelation } from '../wire';
 import { PROJECT_ASPECT, recomputeProjectAncestors } from './ancestors';
 import { assertEntityProps } from './aspects-validate';
+import { bodyFieldsFromMarkdown } from './body-fields';
 import { ExecError } from './errors';
 import {
   assertAssignment,
@@ -1232,45 +1230,6 @@ function preserveBodyBeforeDoc(patch: EntityPatch, current: EntityRow): void {
   if (current.bodyDoc === null && current.bodyBeforeDoc === null) {
     patch.bodyBeforeDoc = current.body;
   }
-}
-
-/**
- * Три поля тела из markdown-строки: канон, документ и ссылки. ОДИН путь канонизации на всех,
- * кто кладёт в тело строку, — строковую ветку entity_create/entity_update и засев заготовки
- * проекта (С10). Второй экземпляр этих трёх строчек означал бы, что засеянное тело и
- * написанное автором считаются по разным правилам, и расхождение вылезло бы не здесь, а в
- * backlinks или в первом же пересчёте канона.
- *
- * Возвращает ПОЛЯ, а не пишет патч, потому что общая у трёх вызывающих только конверсия, а
- * семантика записи у каждого своя: create кладёт их в values (и вдобавок в body_before_doc по
- * своему правилу), update — в EntityPatch рядом с preserveBodyBeforeDoc, attach расширяет свой
- * узкий .set() ТОЛЬКО при засеве. Хелпер, пишущий патч, пришлось бы параметризовать всеми
- * тремя различиями — то есть вернуть их обратно вызывающим, но уже неявно.
- */
-function bodyFieldsFromMarkdown(
-  markdown: string,
-  reg: RegistrySnapshot,
-): {
-  body: string;
-  bodyDoc: BodyDoc;
-  bodyRefs: string[];
-  queryRefs: string[];
-} {
-  // КАНОН, а не строка входа: body — производная документа (вердикт Б1). Между разбором и
-  // печатью стоит ПРИВЯЗКА (Р-21-1): реестра у `canonicalizeBody` нет и быть не должно, а без
-  // привязки в `body_doc` уехали бы блоки без дерева, и единственным, кто их когда-либо
-  // разберёт, оказалось бы чтение — которое в БД не пишет.
-  const doc = bindQueryBlocks(parseBody(markdown), parseRegistryOfSnapshot(reg));
-  // Печать — ПОСЛЕ привязки: `text` блока стал key-формой, и `body` обязан её нести, иначе
-  // проекция разошлась бы с документом на первом же смарт-листе.
-  const body = serializeBody(doc);
-  // Ссылки — из ДЕРЕВА ∪ raw-блоков (Б2): backlinks не зависят от разбираемости тела.
-  return {
-    body,
-    bodyDoc: doc,
-    bodyRefs: bodyRefsFromDoc(doc),
-    queryRefs: queryRefsFromDoc(doc),
-  };
 }
 
 /**
@@ -3003,7 +2962,19 @@ const propertyMergeUndoInput = z
     registry: z.array(z.object({ id: z.string(), scope: z.unknown(), type: z.unknown() }).strict()),
     progress: z.array(z.object({ entityId: z.string().uuid(), value: z.unknown() }).strict()),
     bodies: z.array(
-      z.object({ entityId: z.string().uuid(), body: z.string(), bodyDoc: z.unknown() }).strict(),
+      z
+        .object({
+          entityId: z.string().uuid(),
+          body: z.string(),
+          bodyDoc: z.unknown(),
+          // Оба индекса ОПЦИОНАЛЬНЫ по той же причине, что `deltas` ниже: журнал
+          // append-only, и слияния, записанные до того, как их начали возвращать откатом,
+          // этих ключей не несут. `undoMerge` читает их защитно и пересчитывает из
+          // восстановленного документа.
+          bodyRefs: z.array(z.string()).optional(),
+          queryRefs: z.array(z.string()).optional(),
+        })
+        .strict(),
     ),
     // ОПЦИОНАЛЬНО, и это не небрежность: журнал append-only (§4.6), и действия, записанные
     // до появления четвёртого рода держателей (дельты), ключа `deltas` не несут вовсе.

@@ -214,7 +214,9 @@ describe('runRoutineRun: режим propose (V1.5, V1.6)', () => {
     const taskId = await seedTask('Разобрать инбокс');
 
     const provider = new ScriptedProvider([
-      toolUse([{ name: 'entity_query', input: { query: 'aspect=orbis/task, status=inbox' } }]),
+      toolUse([
+        { name: 'entity_query', input: { query: 'aspect=orbis/task, orbis/task_status=inbox' } },
+      ]),
       toolUse([
         {
           name: 'orbis_propose',

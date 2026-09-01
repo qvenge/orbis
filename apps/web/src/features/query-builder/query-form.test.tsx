@@ -1,5 +1,5 @@
 import { DAILY_PLANNING_BODY, UPCOMING_BODY } from '@orbis/server/src/seed/smart-lists';
-import { parseQueryAst } from '@orbis/shared/query';
+import { parseQueryAst, printQueryAst } from '@orbis/shared/query';
 import { FIXTURE_PARSE_REGISTRY as REG } from '@orbis/shared/query/fixtures';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { expect, test, vi } from 'vitest';
@@ -54,13 +54,29 @@ test('форма открывается разобранным запросом 
   expect(onSave).toHaveBeenCalledWith(initial);
 });
 
-// Приёмочный пункт фазы (Р3): все шесть сидированных smart lists многострочные, с
-// 9-пробельными отступами continuation-строк, и написаны СТАРОЙ грамматикой (перевод — Задача
-// 21). Печать даёт ОДНУ строку в key-форме, поэтому «открыл форму и ничего не менял» обязано
-// отдавать исходную строку дословно — иначе форма переписывала бы сид при первом же открытии.
-test('многострочный блок сидированного smart list переживает форму байт-в-байт', async () => {
+// Правило Р3 после перевода сидов в key-форму: сид печатью уже НЕ отличается, и на нём
+// правило стало тождеством. Живым оно остаётся там, где текст блока писал ЧЕЛОВЕК: пробелы
+// и кавычки печать нормализует, и «открыл форму, ничего не поменял, нажал Сохранить» без Р3
+// молча переписало бы чужой текст. Поэтому образец здесь — рукописный блок, отличающийся от
+// собственной печати ровно оформлением.
+test('рукописный блок, отличный от печати оформлением, переживает форму байт-в-байт', async () => {
+  const initial = 'aspect=orbis/task,   orbis/task_status=inbox,  limit=30';
+  // Страховка: печать этот текст И ПРАВДА меняет — иначе сверка ниже была бы тождеством.
+  const parsed = parseQueryAst(initial, REG);
+  expect(parsed.ok).toBe(true);
+  if (parsed.ok) expect(printQueryAst(parsed.ast, REG, 'key')).not.toBe(initial);
+  const { onSave } = await openForm(initial);
+  save();
+  expect(saved(onSave)).toBe(initial);
+});
+
+// Тот же Р3 на СИДЕ — теперь тождество, и это тоже утверждение: тело сида написано печатью
+// (`seed-canon.test.ts`), значит форма его не двигает ни с правилом, ни без него.
+test('блок сидированного smart list переживает форму байт-в-байт', async () => {
   const initial = queryBlocks(DAILY_PLANNING_BODY)[1] as string;
-  expect(initial).toContain('\n'); // страховка: блок и правда многострочный
+  const parsed = parseQueryAst(initial, REG);
+  expect(parsed.ok).toBe(true);
+  if (parsed.ok) expect(printQueryAst(parsed.ast, REG, 'key')).toBe(initial);
   const { onSave } = await openForm(initial);
   save();
   expect(saved(onSave)).toBe(initial);
@@ -76,19 +92,16 @@ test('многострочный блок с limit= переживает фор�
   expect(saved(onSave)).toBe(initial);
 });
 
-// Оборотная сторона Р3: НАСТОЯЩАЯ правка сидированного блока печатает его целиком в
-// key-форме. Половина строки в старой грамматике и половина в новой не разобралась бы ничем,
-// поэтому «перевести при первой правке» — единственный целостный исход.
-test('правка сидированного блока переводит его в key-форму целиком', async () => {
-  const initial = queryBlocks(DAILY_PLANNING_BODY)[0] as string;
-  expect(initial).toContain('status=inbox'); // сид написан старой грамматикой
+// Оборотная сторона Р3: НАСТОЯЩАЯ правка печатает блок ЦЕЛИКОМ, а не правит подстроку.
+// Оформление рукописного текста при этом теряется — и это правильный размен: половина
+// строки в одном виде и половина в другом не разобралась бы ничем.
+test('правка рукописного блока печатает его целиком, а не правит подстроку', async () => {
+  const initial = 'aspect=orbis/task,   orbis/task_status=inbox,  limit=30';
   const { onSave } = await openForm(initial);
   fireEvent.change(screen.getByLabelText('Лимит выдачи'), { target: { value: '5' } });
   save();
   const text = saved(onSave);
-  expect(text).toContain('orbis/task_status=inbox');
-  expect(text).toContain('limit=5');
-  expect(text).not.toContain(' status=');
+  expect(text).toBe('aspect=orbis/task, orbis/task_status=inbox, limit=5');
 });
 
 test('смена лимита меняет напечатанную строку', async () => {
